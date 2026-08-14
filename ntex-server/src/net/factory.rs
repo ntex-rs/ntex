@@ -38,7 +38,7 @@ struct Factory {
 
 pub(crate) fn create_boxed_factory<S>(name: String, factory: S) -> BoxServerService
 where
-    S: ServiceFactory<(), Io, InitCfg = SharedCfg> + 'static,
+    S: ServiceFactory<Io, St = (), InitCfg = SharedCfg> + 'static,
 {
     boxed::factory(ServerServiceFactory {
         name: Arc::from(name),
@@ -53,7 +53,7 @@ pub(crate) fn create_factory_service<F, R>(
 ) -> FactoryServiceType
 where
     F: AsyncFn(Config) -> R + Send + Clone + 'static,
-    R: ServiceFactory<(), Io, InitCfg = SharedCfg> + 'static,
+    R: ServiceFactory<Io, St = (), InitCfg = SharedCfg> + 'static,
 {
     let name: Arc<str> = Arc::from(name);
 
@@ -142,10 +142,11 @@ struct ServerServiceFactory<S> {
     factory: S,
 }
 
-impl<S> ServiceFactory<(), Io> for ServerServiceFactory<S>
+impl<S> ServiceFactory<Io> for ServerServiceFactory<S>
 where
-    S: ServiceFactory<(), Io, InitCfg = SharedCfg>,
+    S: ServiceFactory<Io, St = (), InitCfg = SharedCfg>,
 {
+    type St = ();
     type Res = ();
     type Error = ();
     type Service = ServerService<S::Service>;
@@ -165,18 +166,20 @@ struct ServerService<S> {
     inner: S,
 }
 
-impl<S, St> Service<St, Io> for ServerService<S>
+impl<S> Service for ServerService<S>
 where
-    S: Service<St, Io>,
+    S: Service<Req = Io>,
 {
+    type St = S::St;
+    type Req = Io;
     type Res = ();
     type Error = ();
 
-    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), ()> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), ()> {
         ctx.ready(&self.inner).await.map_err(|_| ())
     }
 
-    async fn call(&self, req: Io, ctx: Ctx<'_, Self, St>) -> Result<(), ()> {
+    async fn call(&self, req: Io, ctx: Ctx<'_, Self>) -> Result<(), ()> {
         ctx.call(&self.inner, req).await.map(|_| ()).map_err(|_| ())
     }
 

@@ -104,10 +104,10 @@ pub struct TimeoutService<S> {
 }
 
 impl<S> TimeoutService<S> {
-    pub fn new<T, St, Req>(timeout: T, service: S) -> Self
+    pub fn new<T>(timeout: T, service: S) -> Self
     where
         T: Into<Millis>,
-        S: Service<St, Req>,
+        S: Service,
     {
         TimeoutService {
             service,
@@ -116,14 +116,16 @@ impl<S> TimeoutService<S> {
     }
 }
 
-impl<S, St, Req> Service<St, Req> for TimeoutService<S>
+impl<S> Service for TimeoutService<S>
 where
-    S: Service<St, Req>,
+    S: Service,
 {
+    type St = S::St;
+    type Req = S::Req;
     type Res = S::Res;
     type Error = TimeoutError<S::Error>;
 
-    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, Self::Error> {
+    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self>) -> Result<S::Res, Self::Error> {
         if self.timeout.is_zero() {
             ctx.call(&self.service, req)
                 .await
@@ -137,7 +139,7 @@ where
     }
 
     ntex_service::forward_poll!(service, TimeoutError::Service);
-    ntex_service::forward_ready!(St, service, TimeoutError::Service);
+    ntex_service::forward_ready!(service, TimeoutError::Service);
     ntex_service::forward_shutdown!(service);
 }
 

@@ -300,8 +300,8 @@ where
 pub fn server<F, I, Sf, B>(factory: F) -> HttpServer<F, I, Sf, B>
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<Sf, (), Request>,
-    Sf: ServiceFactory<(), Request, InitCfg = SharedCfg> + 'static,
+    I: IntoServiceFactory<Sf, Request>,
+    Sf: ServiceFactory<Request, St = (), InitCfg = SharedCfg> + 'static,
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
     Sf::InitError: fmt::Debug,

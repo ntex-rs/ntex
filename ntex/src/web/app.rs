@@ -28,7 +28,7 @@ type FnStateFactory = Box<dyn Fn(Extensions) -> BoxFuture<'static, Result<Extens
 #[debug("App")]
 pub struct App<M, F, Err: ErrorRenderer = DefaultError> {
     middleware: M,
-    filter: ServiceChainFactory<F, (), WebRequest<Err>>,
+    filter: ServiceChainFactory<F, WebRequest<Err>>,
     services: Vec<Box<dyn AppServiceFactory<Err>>>,
     default: Option<Rc<HttpNewService<Err>>>,
     external: Vec<ResourceDef>,
@@ -83,8 +83,8 @@ impl<Err: ErrorRenderer> App<Identity, Filter<Err>, Err> {
 impl<M, T, Err> App<M, T, Err>
 where
     T: ServiceFactory<
-            (),
             WebRequest<Err>,
+            St = (),
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -289,10 +289,10 @@ where
     /// ```
     pub fn default_service<F, U>(mut self, f: F) -> Self
     where
-        F: IntoServiceFactory<U, (), WebRequest<Err>>,
+        F: IntoServiceFactory<U, WebRequest<Err>>,
         U: ServiceFactory<
-                (),
                 WebRequest<Err>,
+                St = (),
                 Res = WebResponse,
                 Error = Err::Container,
                 InitCfg = SharedCfg,
@@ -368,14 +368,14 @@ where
     ///         .route("/index.html", web::get().to(index));
     /// }
     /// ```
-    pub fn filter<S, U>(
+    pub fn filter<S>(
         self,
-        filter: U,
+        filter: impl IntoServiceFactory<S, WebRequest<Err>>,
     ) -> App<
         M,
         impl ServiceFactory<
-            (),
             WebRequest<Err>,
+            St = (),
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -385,13 +385,12 @@ where
     >
     where
         S: ServiceFactory<
-                (),
                 WebRequest<Err>,
+                St = (),
                 Res = WebRequest<Err>,
                 Error = Err::Container,
                 InitCfg = SharedCfg,
             >,
-        U: IntoServiceFactory<S, (), WebRequest<Err>>,
     {
         App {
             filter: self
@@ -469,10 +468,11 @@ where
 impl<M, F, Err> App<M, F, Err>
 where
     M: Middleware<AppService<F::Service, Err>, SharedCfg> + 'static,
-    M::Service: Service<(), WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    M::Service:
+        Service<St = (), Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
-            (),
             WebRequest<Err>,
+            St = (),
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -501,24 +501,25 @@ where
     pub fn finish(
         self,
     ) -> impl ServiceFactory<
-        (),
         Request,
+        St = (),
         Res = WebResponse,
         Error = Err::Container,
         InitCfg = SharedCfg,
         InitError = (),
     > {
-        IntoServiceFactory::<AppFactory<M, F, Err>, (), Request>::into_factory(self)
+        IntoServiceFactory::<AppFactory<M, F, Err>, Request>::into_factory(self)
     }
 }
 
-impl<M, F, Err> IntoServiceFactory<AppFactory<M, F, Err>, (), Request> for App<M, F, Err>
+impl<M, F, Err> IntoServiceFactory<AppFactory<M, F, Err>, Request> for App<M, F, Err>
 where
     M: Middleware<AppService<F::Service, Err>, SharedCfg> + 'static,
-    M::Service: Service<(), WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    M::Service:
+        Service<St = (), Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
-            (),
             WebRequest<Err>,
+            St = (),
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -550,7 +551,8 @@ impl<Err: ErrorRenderer> Filter<Err> {
     }
 }
 
-impl<Err: ErrorRenderer> ServiceFactory<(), WebRequest<Err>> for Filter<Err> {
+impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for Filter<Err> {
+    type St = ();
     type Res = WebRequest<Err>;
     type Error = Err::Container;
 
@@ -563,15 +565,17 @@ impl<Err: ErrorRenderer> ServiceFactory<(), WebRequest<Err>> for Filter<Err> {
     }
 }
 
-impl<Err: ErrorRenderer> Service<(), WebRequest<Err>> for Filter<Err> {
+impl<Err: ErrorRenderer> Service for Filter<Err> {
+    type St = ();
+    type Req = WebRequest<Err>;
     type Res = WebRequest<Err>;
     type Error = Err::Container;
 
     async fn call(
         &self,
         req: WebRequest<Err>,
-        _: Ctx<'_, Self, ()>,
-    ) -> Result<WebRequest<Err>, Err::Container> {
+        _: Ctx<'_, Self>,
+    ) -> Result<Self::Req, Self::Error> {
         Ok(req)
     }
 }

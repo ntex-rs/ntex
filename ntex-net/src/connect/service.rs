@@ -14,10 +14,10 @@ pub struct Connector<A, St = ()>(marker::PhantomData<(A, St)>);
 
 #[derive(Clone, Debug)]
 /// Basic tcp stream connector
-pub struct ConnectorService<A> {
+pub struct ConnectorService<A, St = ()> {
     cfg: Cfg<IoConfig>,
     shared: SharedCfg,
-    _t: marker::PhantomData<A>,
+    _t: marker::PhantomData<(A, St)>,
 }
 
 impl<A, St> Connector<A, St> {
@@ -33,7 +33,7 @@ impl<A> Default for Connector<A> {
     }
 }
 
-impl<A> ConnectorService<A> {
+impl<A, St> ConnectorService<A, St> {
     #[inline]
     /// Construct new connect service with default configuration
     pub fn new() -> Self {
@@ -57,7 +57,7 @@ impl<A> Default for ConnectorService<A> {
     }
 }
 
-impl<A: Address> ConnectorService<A> {
+impl<A: Address, St> ConnectorService<A, St> {
     /// Resolve and connect to remote host
     pub async fn connect<U>(&self, message: U) -> Result<Io, Error<ConnectError>>
     where
@@ -90,11 +90,12 @@ impl<A: Address> ConnectorService<A> {
     }
 }
 
-impl<A: Address, St> ServiceFactory<St, Connect<A>> for Connector<A, St> {
+impl<A: Address, St> ServiceFactory<Connect<A>> for Connector<A, St> {
+    type St = St;
     type Res = Io;
     type Error = Error<ConnectError>;
 
-    type Service = ConnectorService<A>;
+    type Service = ConnectorService<A, St>;
     type InitCfg = SharedCfg;
     type InitError = ConnectServiceError;
 
@@ -103,11 +104,13 @@ impl<A: Address, St> ServiceFactory<St, Connect<A>> for Connector<A, St> {
     }
 }
 
-impl<A: Address, St> Service<St, Connect<A>> for ConnectorService<A> {
+impl<A: Address, St> Service for ConnectorService<A, St> {
+    type St = St;
+    type Req = Connect<A>;
     type Res = Io;
     type Error = Error<ConnectError>;
 
-    async fn call(&self, req: Connect<A>, _: Ctx<'_, Self, St>) -> Result<Io, Self::Error> {
+    async fn call(&self, req: Connect<A>, _: Ctx<'_, Self>) -> Result<Io, Self::Error> {
         self.connect(req).await
     }
 }

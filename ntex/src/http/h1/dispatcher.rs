@@ -31,10 +31,12 @@ bitflags::bitflags! {
 
 pin_project_lite::pin_project! {
     /// Dispatcher for HTTP/1.1 protocol
-    pub struct Dispatcher<F, S: Service<(), Request>, B, C: Service<(), Control<F, S::Error>>>
+    pub struct Dispatcher<F, S, B, C>
     where
         F: 'static,
+        S: Service<St = (), Req = Request>,
         S::Error: 'static,
+        C: Service<St = (), Req = Control<F, S::Error>>,
     {
         st: State<F, C, S, B>,
         inner: DispatcherInner<F, C, S, B>,
@@ -45,12 +47,12 @@ pin_project_lite::pin_project! {
 enum State<F, C, S, B>
 where
     F: 'static,
-    S: Service<(), Request>,
+    S: Service<St = (), Req = Request>,
     S::Error: 'static,
-    C: Service<(), Control<F, S::Error>>,
+    C: Service<St = (), Req = Control<F, S::Error>>,
 {
-    CallPublish { fut: PipelineCall<S::Res, S::Error> },
-    CallControl { fut: PipelineCall<C::Res, C::Error> },
+    CallPublish { fut: PipelineCall<S> },
+    CallControl { fut: PipelineCall<C> },
     ReadRequest,
     ReadPayload,
     SendPayload { body: ResponseBody<B> },
@@ -73,8 +75,8 @@ struct DispatcherInner<F, C, S, B> {
 impl<F, S, B, C> Dispatcher<F, S, B, C>
 where
     F: Filter,
-    C: Service<(), Control<F, S::Error>, Res = ControlAck<F>>,
-    S: Service<(), Request>,
+    C: Service<St = (), Req = Control<F, S::Error>, Res = ControlAck<F>>,
+    S: Service<St = (), Req = Request>,
     S::Res: Into<Response<B>>,
     S::Error: ResponseError,
     B: MessageBody,
@@ -116,9 +118,9 @@ where
 impl<F, S, B, C> future::Future for Dispatcher<F, S, B, C>
 where
     F: Filter,
-    C: Service<(), Control<F, S::Error>, Res = ControlAck<F>> + 'static,
+    C: Service<St = (), Req = Control<F, S::Error>, Res = ControlAck<F>> + 'static,
     C::Error: error::Error,
-    S: Service<(), Request> + 'static,
+    S: Service<St = (), Req = Request> + 'static,
     S::Error: ResponseError + 'static,
     S::Res: Into<Response<B>>,
     B: MessageBody,
@@ -240,8 +242,8 @@ where
 impl<F, C, S, B> DispatcherInner<F, C, S, B>
 where
     F: Filter,
-    C: Service<(), Control<F, S::Error>, Res = ControlAck<F>> + 'static,
-    S: Service<(), Request> + 'static,
+    C: Service<St = (), Req = Control<F, S::Error>, Res = ControlAck<F>> + 'static,
+    S: Service<St = (), Req = Request> + 'static,
     S::Res: Into<Response<B>>,
     S::Error: ResponseError,
     B: MessageBody,
@@ -817,10 +819,10 @@ mod tests {
     pub(crate) fn h1<F, S, B>(
         stream: IoTest,
         service: F,
-    ) -> Dispatcher<Base, S, B, DefaultControlService>
+    ) -> Dispatcher<Base, S, B, DefaultControlService<F, S::Error>>
     where
-        F: IntoService<S, (), Request>,
-        S: Service<(), Request>,
+        F: IntoService<S>,
+        S: Service<St = (), Req = Request>,
         S::Res: Into<Response<B>>,
         S::Error: ResponseError + 'static,
         B: MessageBody,
@@ -839,15 +841,15 @@ mod tests {
             Rc::new(DispatcherConfig::new(
                 config.get(),
                 service.into_service(),
-                DefaultControlService,
+                DefaultControlService::new(),
             )),
         )
     }
 
     pub(crate) fn spawn_h1<F, S, B>(stream: IoTest, service: F)
     where
-        F: IntoService<S, (), Request>,
-        S: Service<(), Request> + 'static,
+        F: IntoService<S>,
+        S: Service<St = (), Req = Request> + 'static,
         S::Res: Into<Response<B>>,
         S::Error: ResponseError,
         B: MessageBody + 'static,

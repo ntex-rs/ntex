@@ -71,7 +71,7 @@ type BoxedSender =
 /// ```
 #[derive(Debug, Clone)]
 pub struct Client {
-    svc: Pipeline<BoxedSender, ()>,
+    svc: Pipeline<BoxedSender>,
     config: ClientConfig,
 }
 
@@ -89,10 +89,7 @@ impl Client {
         ClientBuilder::new()
     }
 
-    pub(crate) fn with_service(
-        svc: Pipeline<BoxedSender, ()>,
-        config: ClientConfig,
-    ) -> Self {
+    pub(crate) fn with_service(svc: Pipeline<BoxedSender>, config: ClientConfig) -> Self {
         Client { svc, config }
     }
 

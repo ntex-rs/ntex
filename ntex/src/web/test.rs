@@ -34,15 +34,19 @@ use crate::web::{FromRequest, HttpResponse, Responder, WebRequest, WebResponse};
 use crate::web::{config::WebAppConfig, service::AppState};
 
 /// Create service that always responds with `HttpResponse::Ok()`
-pub fn ok_service<Err: ErrorRenderer>()
--> impl Service<(), WebRequest<Err>, Res = WebResponse, Error = std::convert::Infallible> {
+pub fn ok_service<Err: ErrorRenderer>() -> impl Service<
+    St = (),
+    Req = WebRequest<Err>,
+    Res = WebResponse,
+    Error = std::convert::Infallible,
+> {
     default_service::<Err>(StatusCode::OK)
 }
 
 /// Create service that responds with response with specified status code
 pub fn default_service<Err: ErrorRenderer>(
     status_code: StatusCode,
-) -> impl Service<(), WebRequest<Err>, Res = WebResponse, Error = Infallible> {
+) -> impl Service<St = (), Req = WebRequest<Err>, Res = WebResponse, Error = Infallible> {
     fn_service(async move |req: WebRequest<Err>| {
         Ok::<_, Infallible>(req.into_response(HttpResponse::build(status_code).finish()))
     })
@@ -73,10 +77,10 @@ pub fn default_service<Err: ErrorRenderer>(
 /// ```
 pub async fn init_service<R, S, E>(
     app: R,
-) -> Pipeline<impl Service<(), Request, Res = WebResponse, Error = E>, ()>
+) -> Pipeline<impl Service<St = (), Req = Request, Res = WebResponse, Error = E>>
 where
-    R: IntoServiceFactory<S, (), Request>,
-    S: ServiceFactory<(), Request, Res = WebResponse, Error = E, InitCfg = SharedCfg>,
+    R: IntoServiceFactory<S, Request>,
+    S: ServiceFactory<Request, St = (), Res = WebResponse, Error = E, InitCfg = SharedCfg>,
     S::InitError: fmt::Debug,
 {
     let srv = app.into_factory();
@@ -113,9 +117,9 @@ where
 ///     assert_eq!(resp.status(), StatusCode::OK);
 /// }
 /// ```
-pub async fn call_service<S, R, E>(app: &Pipeline<S, ()>, req: R) -> S::Res
+pub async fn call_service<S, R, E>(app: &Pipeline<S>, req: R) -> S::Res
 where
-    S: Service<(), R, Res = WebResponse, Error = E>,
+    S: Service<St = (), Req = R, Res = WebResponse, Error = E>,
     E: fmt::Debug,
 {
     app.call(req, &()).await.unwrap()
@@ -146,9 +150,9 @@ where
 ///     assert_eq!(result, Bytes::from_static(b"welcome!"));
 /// }
 /// ```
-pub async fn read_response<S>(app: &Pipeline<S, ()>, req: Request) -> Bytes
+pub async fn read_response<S>(app: &Pipeline<S>, req: Request) -> Bytes
 where
-    S: Service<(), Request, Res = WebResponse>,
+    S: Service<St = (), Req = Request, Res = WebResponse>,
 {
     let mut resp = app
         .call(req, &())
@@ -245,9 +249,9 @@ where
 ///     let result: Person = test::read_response_json(&mut app, req).await;
 /// }
 /// ```
-pub async fn read_response_json<S, T>(app: &Pipeline<S, ()>, req: Request) -> T
+pub async fn read_response_json<S, T>(app: &Pipeline<S>, req: Request) -> T
 where
-    S: Service<(), Request, Res = WebResponse>,
+    S: Service<St = (), Req = Request, Res = WebResponse>,
     T: DeserializeOwned,
 {
     let body = read_response::<S>(app, req).await;
@@ -572,8 +576,8 @@ impl TestRequest {
 pub async fn server<F, I, S, B>(factory: F) -> TestServer
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, (), Request>,
-    S: ServiceFactory<(), Request, InitCfg = SharedCfg> + 'static,
+    I: IntoServiceFactory<S, Request>,
+    S: ServiceFactory<Request, St = (), InitCfg = SharedCfg> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Res: Into<HttpResponse<B>>,
@@ -610,8 +614,8 @@ where
 pub async fn server_with<F, I, S, B>(cfg: TestServerConfig, factory: F) -> TestServer
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, (), Request>,
-    S: ServiceFactory<(), Request, InitCfg = SharedCfg> + 'static,
+    I: IntoServiceFactory<S, Request>,
+    S: ServiceFactory<Request, St = (), InitCfg = SharedCfg> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Res: Into<HttpResponse<B>>,

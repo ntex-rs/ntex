@@ -1,7 +1,7 @@
 use std::io;
 
 use ntex::http::{StatusCode, header};
-use ntex::service::{IntoService, chain, fn_factory_with_config, fn_service, fn_shutdown};
+use ntex::service::{chain, fn_factory_with_config, fn_service, fn_shutdown};
 use ntex::util::{ByteString, Bytes};
 use ntex::web::{self, App, HttpRequest, HttpResponse, test, ws};
 use ntex::ws::error::WsClientError;
@@ -19,355 +19,352 @@ async fn service(msg: ws::Frame) -> Result<Option<ws::Message>, io::Error> {
     Ok(Some(msg))
 }
 
-// #[ntex::test]
-// async fn web_ws() {
-//     let _ = env_logger::try_init();
+#[ntex::test]
+async fn web_ws() {
+    let _ = env_logger::try_init();
 
-//     let srv = test::server(async || {
-//         App::new().service(web::resource("/").route(web::to(
-//             |req: HttpRequest| async move {
-//                 //ws::start::<_, _, &str, web::Error>(
-//                 ws::start(
-//                     req,
-//                     None,
-//                     fn_factory_with_config(|_| async {
-//                         Ok::<_, web::Error>(fn_service(service))
-//                     }),
-//                 )
-//                 .await
-//             },
-//         )))
-//     })
-//     .await;
+    let srv = test::server(async || {
+        App::new().service(web::resource("/").route(web::to(
+            async move |req: HttpRequest| {
+                ws::start(
+                    &req,
+                    None,
+                    fn_factory_with_config(|_: &ws::WsSink| async {
+                        Ok::<_, web::Error>(fn_service(service))
+                    }),
+                )
+                .await
+            },
+        )))
+    })
+    .await;
 
-//     // client service
-//     let (io, codec, _) = srv.ws().await.unwrap().into_inner();
-//     io.send(ws::Message::Text(ByteString::from_static("text")), &codec)
-//         .await
-//         .unwrap();
-//     let item = io.recv(&codec).await.unwrap().unwrap();
-//     assert_eq!(item, ws::Frame::Text(Bytes::from_static(b"text")));
+    // client service
+    let (io, codec, _) = srv.ws().await.unwrap().into_inner();
+    io.send(ws::Message::Text(ByteString::from_static("text")), &codec)
+        .await
+        .unwrap();
+    let item = io.recv(&codec).await.unwrap().unwrap();
+    assert_eq!(item, ws::Frame::Text(Bytes::from_static(b"text")));
 
-//     io.send(ws::Message::Binary("text".into()), &codec)
-//         .await
-//         .unwrap();
-//     let item = io.recv(&codec).await.unwrap().unwrap();
-//     assert_eq!(item, ws::Frame::Binary(Bytes::from_static(b"text")));
+    io.send(ws::Message::Binary("text".into()), &codec)
+        .await
+        .unwrap();
+    let item = io.recv(&codec).await.unwrap().unwrap();
+    assert_eq!(item, ws::Frame::Binary(Bytes::from_static(b"text")));
 
-//     io.send(ws::Message::Ping("text".into()), &codec)
-//         .await
-//         .unwrap();
-//     let item = io.recv(&codec).await.unwrap().unwrap();
-//     assert_eq!(item, ws::Frame::Pong("text".to_string().into()));
+    io.send(ws::Message::Ping("text".into()), &codec)
+        .await
+        .unwrap();
+    let item = io.recv(&codec).await.unwrap().unwrap();
+    assert_eq!(item, ws::Frame::Pong("text".to_string().into()));
 
-//     io.send(
-//         ws::Message::Close(Some(ws::CloseCode::Normal.into())),
-//         &codec,
-//     )
-//     .await
-//     .unwrap();
+    io.send(
+        ws::Message::Close(Some(ws::CloseCode::Normal.into())),
+        &codec,
+    )
+    .await
+    .unwrap();
 
-//     let item = io.recv(&codec).await.unwrap().unwrap();
-//     assert_eq!(item, ws::Frame::Close(Some(ws::CloseCode::Away.into())));
-// }
+    let item = io.recv(&codec).await.unwrap().unwrap();
+    assert_eq!(item, ws::Frame::Close(Some(ws::CloseCode::Away.into())));
+}
 
-// #[ntex::test]
-// async fn web_no_ws() {
-//     let srv = test::server(async || {
-//         App::new()
-//             .service(web::resource("/").route(web::to(|| async { HttpResponse::Ok() })))
-//             .service(web::resource("/ws_error").route(web::to(|| async {
-//                 Err::<HttpResponse, _>(io::Error::other("test"))
-//             })))
-//     })
-//     .await;
+#[ntex::test]
+async fn web_no_ws() {
+    let srv = test::server(async || {
+        App::new()
+            .service(web::resource("/").route(web::to(|| async { HttpResponse::Ok() })))
+            .service(web::resource("/ws_error").route(web::to(async || {
+                Err::<HttpResponse, _>(io::Error::other("test"))
+            })))
+    })
+    .await;
 
-//     let err = srv.ws().await.err().unwrap();
-//     assert!(matches!(
-//         err,
-//         WsClientError::InvalidResponseStatus(StatusCode::OK)
-//     ));
-//     assert_eq!(err.to_string(), "Invalid response status: 200 OK");
+    let err = srv.ws().await.err().unwrap();
+    assert!(matches!(
+        *err,
+        WsClientError::InvalidResponseStatus(StatusCode::OK)
+    ));
+    assert_eq!(err.to_string(), "Invalid response status: 200 OK");
 
-//     let err = srv.ws_at("/ws_error").await.err().unwrap();
-//     assert!(matches!(
-//         err,
-//         WsClientError::InvalidResponseStatus(StatusCode::INTERNAL_SERVER_ERROR)
-//     ));
-//     assert_eq!(
-//         err.to_string(),
-//         "Invalid response status: 500 Internal Server Error"
-//     );
-// }
+    let err = srv.ws_at("/ws_error").await.err().unwrap();
+    assert!(matches!(
+        *err,
+        WsClientError::InvalidResponseStatus(StatusCode::INTERNAL_SERVER_ERROR)
+    ));
+    assert_eq!(
+        err.to_string(),
+        "Invalid response status: 500 Internal Server Error"
+    );
+}
 
-// #[ntex::test]
-// async fn web_ws_after_pooled_post_request() {
-//     let srv = test::server(async || {
-//         App::new()
-//             .service(
-//                 web::resource("/").route(web::to(|req: HttpRequest| async move {
-//                     ws::start(
-//                         req,
-//                         None,
-//                         fn_factory_with_config(|_| async {
-//                             Ok::<_, web::Error>(fn_service(service))
-//                         }),
-//                     )
-//                     .await
-//                 })),
-//             )
-//             .service(
-//                 web::resource("/post")
-//                     .route(web::post().to(|| async { HttpResponse::Ok() })),
-//             )
-//     })
-//     .await;
+#[ntex::test]
+async fn web_ws_after_pooled_post_request() {
+    let srv = test::server(async || {
+        App::new()
+            .service(
+                web::resource("/").route(web::to(|req: HttpRequest| async move {
+                    ws::start(
+                        &req,
+                        None,
+                        fn_factory_with_config(async |_: &ws::WsSink| {
+                            Ok::<_, web::Error>(fn_service(service))
+                        }),
+                    )
+                    .await
+                })),
+            )
+            .service(
+                web::resource("/post")
+                    .route(web::post().to(|| async { HttpResponse::Ok() })),
+            )
+    })
+    .await;
 
-//     // a completed POST request releases its RequestHead back to the
-//     // thread-local message pool; a ws client built afterwards on the same
-//     // thread must not reuse the recycled POST method for its handshake
-//     let res = srv.post("/post").send().await.unwrap();
-//     assert_eq!(res.status(), StatusCode::OK);
+    // a completed POST request releases its RequestHead back to the
+    // thread-local message pool; a ws client built afterwards on the same
+    // thread must not reuse the recycled POST method for its handshake
+    let res = srv.post("/post").send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
 
-//     let (io, codec, _) = srv.ws().await.unwrap().into_inner();
-//     io.send(ws::Message::Text(ByteString::from_static("text")), &codec)
-//         .await
-//         .unwrap();
-//     let item = io.recv(&codec).await.unwrap().unwrap();
-//     assert_eq!(item, ws::Frame::Text(Bytes::from_static(b"text")));
-// }
+    let (io, codec, _) = srv.ws().await.unwrap().into_inner();
+    io.send(ws::Message::Text(ByteString::from_static("text")), &codec)
+        .await
+        .unwrap();
+    let item = io.recv(&codec).await.unwrap().unwrap();
+    assert_eq!(item, ws::Frame::Text(Bytes::from_static(b"text")));
+}
 
-// #[ntex::test]
-// async fn web_no_ws_2() {
-//     let srv = test::server(async || {
-//         App::new().service(
-//             web::resource("/")
-//                 .route(web::to(|| async { HttpResponse::Ok().body("Hello world") })),
-//         )
-//     })
-//     .await;
+#[ntex::test]
+async fn web_no_ws_2() {
+    let srv = test::server(async || {
+        App::new().service(
+            web::resource("/")
+                .route(web::to(|| async { HttpResponse::Ok().body("Hello world") })),
+        )
+    })
+    .await;
 
-//     let response = srv
-//         .get("/")
-//         .no_decompress()
-//         .header("test", "h2c")
-//         .header("connection", "upgrade, test")
-//         .set_connection_type(ntex::http::ConnectionType::Upgrade)
-//         .send()
-//         .await
-//         .unwrap();
-//     assert!(response.status().is_success());
-//     let body = response.body().await.unwrap();
-//     assert_eq!(body, b"Hello world");
-// }
+    let response = srv
+        .get("/")
+        .no_decompress()
+        .header("test", "h2c")
+        .header("connection", "upgrade, test")
+        .set_connection_type(ntex::http::ConnectionType::Upgrade)
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    let body = response.body().await.unwrap();
+    assert_eq!(body, b"Hello world");
+}
 
-// #[ntex::test]
-// async fn web_ws_client() {
-//     let srv = test::server(async || {
-//         App::new().service(web::resource("/").route(web::to(
-//             |req: HttpRequest| async move {
-//                 ws::start(
-//                     req,
-//                     None::<&str>,
-//                     fn_factory_with_config(|_| async {
-//                         Ok::<_, web::Error>(fn_service(service))
-//                     }),
-//                 )
-//                 .await
-//             },
-//         )))
-//     })
-//     .await;
+#[ntex::test]
+async fn web_ws_client() {
+    let srv = test::server(async || {
+        App::new().service(web::resource("/").route(web::to(
+            |req: HttpRequest| async move {
+                ws::start(
+                    &req,
+                    None,
+                    fn_factory_with_config(|_: &ws::WsSink| async {
+                        Ok::<_, web::Error>(fn_service(service))
+                    }),
+                )
+                .await
+            },
+        )))
+    })
+    .await;
 
-//     // client service
-//     let conn = srv.ws().await.unwrap();
-//     assert_eq!(conn.response().status(), StatusCode::SWITCHING_PROTOCOLS);
+    // client service
+    let conn = srv.ws().await.unwrap();
+    assert_eq!(conn.response().status(), StatusCode::SWITCHING_PROTOCOLS);
 
-//     let sink = conn.sink();
-//     let rx = conn.receiver();
+    let sink = conn.sink();
+    let rx = conn.receiver();
 
-//     sink.send(ws::Message::Text(ByteString::from_static("text")))
-//         .await
-//         .unwrap();
-//     let item = rx.recv().await.unwrap().unwrap();
-//     assert_eq!(item, ws::Frame::Text(Bytes::from_static(b"text")));
+    sink.send(ws::Message::Text(ByteString::from_static("text")))
+        .await
+        .unwrap();
+    let item = rx.recv().await.unwrap().unwrap();
+    assert_eq!(item, ws::Frame::Text(Bytes::from_static(b"text")));
 
-//     sink.send(ws::Message::Binary("text".into())).await.unwrap();
-//     let item = rx.recv().await.unwrap().unwrap();
-//     assert_eq!(item, ws::Frame::Binary(Bytes::from_static(b"text")));
+    sink.send(ws::Message::Binary("text".into())).await.unwrap();
+    let item = rx.recv().await.unwrap().unwrap();
+    assert_eq!(item, ws::Frame::Binary(Bytes::from_static(b"text")));
 
-//     sink.send(ws::Message::Ping("text".into())).await.unwrap();
-//     let item = rx.recv().await.unwrap().unwrap();
-//     assert_eq!(item, ws::Frame::Pong("text".to_string().into()));
+    sink.send(ws::Message::Ping("text".into())).await.unwrap();
+    let item = rx.recv().await.unwrap().unwrap();
+    assert_eq!(item, ws::Frame::Pong("text".to_string().into()));
 
-//     let on_disconnect = sink.on_disconnect();
+    let on_disconnect = sink.on_disconnect();
 
-//     sink.send(ws::Message::Close(Some(ws::CloseCode::Normal.into())))
-//         .await
-//         .unwrap();
-//     let item = rx.recv().await.unwrap().unwrap();
-//     assert_eq!(item, ws::Frame::Close(Some(ws::CloseCode::Away.into())));
+    sink.send(ws::Message::Close(Some(ws::CloseCode::Normal.into())))
+        .await
+        .unwrap();
+    let item = rx.recv().await.unwrap().unwrap();
+    assert_eq!(item, ws::Frame::Close(Some(ws::CloseCode::Away.into())));
 
-//     let item = rx.recv().await;
-//     assert!(item.is_none());
+    let item = rx.recv().await;
+    assert!(item.is_none());
 
-//     // TODO fix
-//     on_disconnect.await
-// }
+    // TODO fix
+    on_disconnect.await
+}
 
-// #[ntex::test]
-// async fn web_ws_subprotocol() {
-//     use ntex::service::cfg::SharedCfg;
-//     use ntex::time::Seconds;
-//     use ntex::ws::WsClient;
+#[ntex::test]
+async fn web_ws_subprotocol() {
+    use ntex::service::cfg::SharedCfg;
+    use ntex::time::Seconds;
+    use ntex::ws::WsClient;
 
-//     let srv = test::server(async || {
-//         App::new().service(web::resource("/").route(web::to(
-//             |req: HttpRequest| async move {
-//                 // choose first supported protocol, convert to owned String
-//                 let protocol: Option<String> = ws::subprotocols(&req)
-//                     .find(|p| *p == "my-subprotocol" || *p == "others-subprotocol")
-//                     .map(String::from);
+    let srv = test::server(async || {
+        App::new().service(web::resource("/").route(web::to(
+            |req: HttpRequest| async move {
+                // choose first supported protocol, convert to owned String
+                let protocol: Option<&str> = ws::subprotocols(&req)
+                    .find(|p| *p == "my-subprotocol" || *p == "others-subprotocol");
 
-//                 ws::start(
-//                     req,
-//                     protocol,
-//                     fn_factory_with_config(|_| async {
-//                         Ok::<_, web::Error>(fn_service(service))
-//                     }),
-//                 )
-//                 .await
-//             },
-//         )))
-//     })
-//     .await;
+                ws::start(
+                    &req,
+                    protocol,
+                    fn_factory_with_config(|_: &ws::WsSink| async {
+                        Ok::<_, web::Error>(fn_service(service))
+                    }),
+                )
+                .await
+            },
+        )))
+    })
+    .await;
 
-//     // client requests subprotocol
-//     let conn = WsClient::builder(srv.url("/"))
-//         .address(srv.addr())
-//         .timeout(Seconds(30))
-//         .protocols(["my-subprotocol"])
-//         .build(SharedCfg::default())
-//         .await
-//         .unwrap()
-//         .connect()
-//         .await
-//         .unwrap();
+    // client requests subprotocol
+    let conn = WsClient::builder(srv.url("/"))
+        .address(srv.addr())
+        .timeout(Seconds(30))
+        .protocols(["my-subprotocol"])
+        .build(SharedCfg::default())
+        .await
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
 
-//     assert_eq!(conn.response().status(), StatusCode::SWITCHING_PROTOCOLS);
-//     assert_eq!(
-//         conn.response()
-//             .headers()
-//             .get(header::SEC_WEBSOCKET_PROTOCOL)
-//             .map(|v| v.to_str().unwrap()),
-//         Some("my-subprotocol")
-//     );
-// }
+    assert_eq!(conn.response().status(), StatusCode::SWITCHING_PROTOCOLS);
+    assert_eq!(
+        conn.response()
+            .headers()
+            .get(header::SEC_WEBSOCKET_PROTOCOL)
+            .map(|v| v.to_str().unwrap()),
+        Some("my-subprotocol")
+    );
+}
 
-// #[ntex::test]
-// async fn web_ws_subprotocol_none() {
-//     use ntex::service::cfg::SharedCfg;
-//     use ntex::time::Seconds;
-//     use ntex::ws::WsClient;
+#[ntex::test]
+async fn web_ws_subprotocol_none() {
+    use ntex::service::cfg::SharedCfg;
+    use ntex::time::Seconds;
+    use ntex::ws::WsClient;
 
-//     let srv = test::server(async || {
-//         App::new().service(web::resource("/").route(web::to(
-//             |req: HttpRequest| async move {
-//                 // choose first supported protocol (none will match), convert to owned String
-//                 let protocol: Option<String> = ws::subprotocols(&req)
-//                     .find(|p| *p == "unsupported")
-//                     .map(String::from);
+    let srv = test::server(async || {
+        App::new().service(web::resource("/").route(web::to(
+            |req: HttpRequest| async move {
+                // choose first supported protocol (none will match), convert to owned String
+                let protocol: Option<&str> =
+                    ws::subprotocols(&req).find(|p| *p == "unsupported");
 
-//                 ws::start(
-//                     req,
-//                     protocol,
-//                     fn_factory_with_config(|_| async {
-//                         Ok::<_, web::Error>(fn_service(service))
-//                     }),
-//                 )
-//                 .await
-//             },
-//         )))
-//     })
-//     .await;
+                ws::start(
+                    &req,
+                    protocol,
+                    fn_factory_with_config(|_: &ws::WsSink| async {
+                        Ok::<_, web::Error>(fn_service(service))
+                    }),
+                )
+                .await
+            },
+        )))
+    })
+    .await;
 
-//     // client requests subprotocol that server doesn't support
-//     let conn = WsClient::builder(srv.url("/"))
-//         .address(srv.addr())
-//         .timeout(Seconds(30))
-//         .protocols(["my-subprotocol"])
-//         .build(SharedCfg::default())
-//         .await
-//         .unwrap()
-//         .connect()
-//         .await
-//         .unwrap();
+    // client requests subprotocol that server doesn't support
+    let conn = WsClient::builder(srv.url("/"))
+        .address(srv.addr())
+        .timeout(Seconds(30))
+        .protocols(["my-subprotocol"])
+        .build(SharedCfg::default())
+        .await
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
 
-//     assert_eq!(conn.response().status(), StatusCode::SWITCHING_PROTOCOLS);
-//     // no protocol header in response
-//     assert!(
-//         conn.response()
-//             .headers()
-//             .get(header::SEC_WEBSOCKET_PROTOCOL)
-//             .is_none()
-//     );
-// }
+    assert_eq!(conn.response().status(), StatusCode::SWITCHING_PROTOCOLS);
+    // no protocol header in response
+    assert!(
+        conn.response()
+            .headers()
+            .get(header::SEC_WEBSOCKET_PROTOCOL)
+            .is_none()
+    );
+}
 
-// #[ntex::test]
-// async fn web_ws_protocols_parsing() {
-//     use ntex::service::cfg::SharedCfg;
-//     use ntex::time::Seconds;
-//     use ntex::ws::WsClient;
+#[ntex::test]
+async fn web_ws_protocols_parsing() {
+    use ntex::service::cfg::SharedCfg;
+    use ntex::time::Seconds;
+    use ntex::ws::WsClient;
 
-//     let srv = test::server(async || {
-//         App::new().service(web::resource("/").route(web::to(
-//             |req: HttpRequest| async move {
-//                 // collect all requested protocols into owned Strings
-//                 let protocols: Vec<String> =
-//                     ws::subprotocols(&req).map(String::from).collect();
+    let srv = test::server(async || {
+        App::new().service(web::resource("/").route(web::to(
+            |req: HttpRequest| async move {
+                // collect all requested protocols into owned Strings
+                let protocols: Vec<String> =
+                    ws::subprotocols(&req).map(String::from).collect();
 
-//                 // choose based on priority
-//                 let protocol = protocols
-//                     .iter()
-//                     .find(|p| *p == "proto2")
-//                     .or_else(|| protocols.iter().find(|p| *p == "proto1"))
-//                     .cloned();
+                // choose based on priority
+                let protocol = protocols
+                    .iter()
+                    .find(|p| *p == "proto2")
+                    .or_else(|| protocols.iter().find(|p| *p == "proto1"))
+                    .map(|s| s.as_ref());
 
-//                 ws::start(
-//                     req,
-//                     protocol,
-//                     fn_factory_with_config(|_| async {
-//                         Ok::<_, web::Error>(fn_service(service))
-//                     }),
-//                 )
-//                 .await
-//             },
-//         )))
-//     })
-//     .await;
+                ws::start(
+                    &req,
+                    protocol,
+                    fn_factory_with_config(|_: &ws::WsSink| async {
+                        Ok::<_, web::Error>(fn_service(service))
+                    }),
+                )
+                .await
+            },
+        )))
+    })
+    .await;
 
-//     // client requests multiple protocols (comma-separated)
-//     let conn = WsClient::builder(srv.url("/"))
-//         .address(srv.addr())
-//         .timeout(Seconds(30))
-//         .protocols(["proto1", "proto2"])
-//         .build(SharedCfg::default())
-//         .await
-//         .unwrap()
-//         .connect()
-//         .await
-//         .unwrap();
+    // client requests multiple protocols (comma-separated)
+    let conn = WsClient::builder(srv.url("/"))
+        .address(srv.addr())
+        .timeout(Seconds(30))
+        .protocols(["proto1", "proto2"])
+        .build(SharedCfg::default())
+        .await
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
 
-//     assert_eq!(conn.response().status(), StatusCode::SWITCHING_PROTOCOLS);
-//     // server chooses proto2 (higher priority)
-//     assert_eq!(
-//         conn.response()
-//             .headers()
-//             .get(header::SEC_WEBSOCKET_PROTOCOL)
-//             .map(|v| v.to_str().unwrap()),
-//         Some("proto2")
-//     );
-// }
+    assert_eq!(conn.response().status(), StatusCode::SWITCHING_PROTOCOLS);
+    // server chooses proto2 (higher priority)
+    assert_eq!(
+        conn.response()
+            .headers()
+            .get(header::SEC_WEBSOCKET_PROTOCOL)
+            .map(|v| v.to_str().unwrap()),
+        Some("proto2")
+    );
+}
 
 #[ntex::test]
 async fn web_ws_shutdown_propagation() {
@@ -379,9 +376,9 @@ async fn web_ws_shutdown_propagation() {
             async move |req: HttpRequest| {
                 let shutdown_tx = shutdown_tx.clone();
                 ws::start(
-                    req,
+                    &req,
                     None,
-                    fn_factory_with_config::<(), _, _, _, _, _>(async move |_t: &ws::WsSink| {
+                    fn_factory_with_config(async move |_t: &ws::WsSink| {
                         let shutdown_tx = shutdown_tx.clone();
                         Ok::<_, web::Error>(chain(service).and_then(fn_shutdown(
                             async move || {

@@ -11,9 +11,9 @@ pub struct MapInitErr<Sf, F, Err> {
 
 impl<Sf, F, Err> MapInitErr<Sf, F, Err> {
     /// Create new `MapInitErr` combinator
-    pub(crate) fn new<St, Req>(sf: Sf, f: F) -> Self
+    pub(crate) fn new<Req>(sf: Sf, f: F) -> Self
     where
-        Sf: ServiceFactory<St, Req>,
+        Sf: ServiceFactory<Req>,
         F: Fn(Sf::InitError) -> Err,
     {
         Self {
@@ -50,11 +50,12 @@ where
     }
 }
 
-impl<Sf, St, Req, F, Err> ServiceFactory<St, Req> for MapInitErr<Sf, F, Err>
+impl<Sf, Req, F, Err> ServiceFactory<Req> for MapInitErr<Sf, F, Err>
 where
-    Sf: ServiceFactory<St, Req>,
+    Sf: ServiceFactory<Req>,
     F: Fn(Sf::InitError) -> Err + Clone,
 {
+    type St = Sf::St;
     type Res = Sf::Res;
     type Error = Sf::Error;
 
@@ -71,19 +72,17 @@ where
 #[cfg(test)]
 mod tests {
     use crate::{
-        IntoService, ServiceFactory, chain_factory, fn_factory_with_config, fn_service,
+        IntoService, ServiceFactory, chain, chain_factory, fn_factory_with_config,
+        fn_service, ustate_chain,
     };
 
     #[ntex::test]
     async fn map_init_err() {
-        let factory = chain_factory::<(), _, _>(fn_factory_with_config(|err: &bool| {
-            let err = *err;
-            async move {
-                if err {
-                    Err(())
-                } else {
-                    Ok(fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }))
-                }
+        let factory = chain_factory(fn_factory_with_config(async move |err: &bool| {
+            if *err {
+                Err(())
+            } else {
+                Ok(ustate_chain(async |i: usize| Ok::<_, ()>(i * 2)))
             }
         }))
         .map_init_err(|()| std::io::Error::other("err"))
@@ -96,14 +95,11 @@ mod tests {
 
     #[ntex::test]
     async fn map_init_err2() {
-        let factory = fn_factory_with_config::<(), _, _, _, _>(|err: &bool| {
-            let err = *err;
-            async move {
-                if err {
-                    Err(())
-                } else {
-                    Ok(fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }))
-                }
+        let factory = fn_factory_with_config(async |err: &bool| {
+            if *err {
+                Err(())
+            } else {
+                Ok(ustate_chain(async |i: usize| Ok::<_, ()>(i * 2)))
             }
         })
         .map_init_err(|()| std::io::Error::other("err"))

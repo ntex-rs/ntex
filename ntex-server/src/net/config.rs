@@ -309,8 +309,8 @@ impl ServiceRuntime {
     /// Panics if service with specified name is registered already
     pub fn service<T, F>(&self, name: &str, service: F) -> &Self
     where
-        F: IntoServiceFactory<T, (), Io>,
-        T: ServiceFactory<(), Io, InitCfg = SharedCfg> + 'static,
+        F: IntoServiceFactory<T, Io>,
+        T: ServiceFactory<Io, St = (), InitCfg = SharedCfg> + 'static,
         T::Service: 'static,
         T::InitError: fmt::Debug,
     {

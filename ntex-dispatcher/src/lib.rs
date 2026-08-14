@@ -49,7 +49,7 @@ pin_project_lite::pin_project! {
     /// and pass them to the service.
     pub struct Dispatcher<S, St, U>
     where
-        S: Service<St, DispatchItem<U>, Res = Option<Response<U>>>,
+        S: Service<St = St, Req = DispatchItem<U>, Res = Option<Response<U>>>,
         U: Encoder,
         U: Decoder,
         U: 'static,
@@ -72,13 +72,13 @@ bitflags::bitflags! {
 
 struct DispatcherInner<S, St, U>
 where
-    S: Service<St, DispatchItem<U>, Res = Option<Response<U>>>,
+    S: Service<St = St, Req = DispatchItem<U>, Res = Option<Response<U>>>,
     U: Encoder + Decoder + 'static,
 {
     st: DispatcherState,
     error: Option<S::Error>,
     shared: Rc<DispatcherShared<S, St, U>>,
-    response: Option<PipelineCall<S::Res, S::Error>>,
+    response: Option<PipelineCall<S>>,
     read_remains: u32,
     read_remains_prev: u32,
     read_max_timeout: Seconds,
@@ -86,12 +86,12 @@ where
 
 pub(crate) struct DispatcherShared<S, St, U>
 where
-    S: Service<St, DispatchItem<U>, Res = Option<Response<U>>>,
+    S: Service<St = St, Req = DispatchItem<U>, Res = Option<Response<U>>>,
     U: Encoder + Decoder,
 {
     io: IoBoxed,
     codec: U,
-    service: PipelineBinding<S, St, DispatchItem<U>>,
+    service: PipelineBinding<S>,
     flags: Cell<Flags>,
     error: Cell<Option<DispatcherError<S::Error, <U as Encoder>::Error>>>,
     inflight: Cell<u32>,
@@ -129,15 +129,11 @@ impl<S, U> From<Either<S, U>> for DispatcherError<S, U> {
 
 impl<S, St, U> Dispatcher<S, St, U>
 where
-    S: Service<St, DispatchItem<U>, Res = Option<Response<U>>> + 'static,
+    S: Service<St = St, Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
     U: Decoder + Encoder + 'static,
 {
     /// Construct new `Dispatcher` instance.
-    pub fn new<Io>(
-        io: Io,
-        codec: U,
-        service: PipelineBinding<S, St, DispatchItem<U>>,
-    ) -> Dispatcher<S, St, U>
+    pub fn new<Io>(io: Io, codec: U, service: PipelineBinding<S>) -> Dispatcher<S, St, U>
     where
         IoBoxed: From<Io>,
     {
@@ -173,7 +169,7 @@ where
 
 impl<S, St, U> DispatcherShared<S, St, U>
 where
-    S: Service<St, DispatchItem<U>, Res = Option<Response<U>>>,
+    S: Service<St = St, Req = DispatchItem<U>, Res = Option<Response<U>>>,
     U: Encoder + Decoder,
 {
     fn handle_result(&self, item: Result<S::Res, S::Error>, io: &IoBoxed, wake: bool) {
@@ -220,8 +216,8 @@ where
 
 impl<S, St, U> Future for Dispatcher<S, St, U>
 where
-    S: Service<St, DispatchItem<U>, Res = Option<Response<U>>> + 'static,
     St: 'static,
+    S: Service<St = St, Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
     U: Decoder + Encoder + 'static,
 {
     type Output = Result<(), S::Error>;
@@ -381,7 +377,7 @@ where
 
 impl<S, St, U> DispatcherInner<S, St, U>
 where
-    S: Service<St, DispatchItem<U>, Res = Option<Response<U>>> + 'static,
+    S: Service<St = St, Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
     St: 'static,
     U: Decoder + Encoder + 'static,
 {

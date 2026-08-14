@@ -37,8 +37,8 @@ struct Config {
 pub struct HttpServer<F, I, S, B>
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, (), Request>,
-    S: ServiceFactory<(), Request, InitCfg = SharedCfg>,
+    I: IntoServiceFactory<S, Request>,
+    S: ServiceFactory<Request, St = (), InitCfg = SharedCfg>,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Res: Into<Response<B>>,
@@ -54,8 +54,8 @@ where
 impl<F, I, S, B> HttpServer<F, I, S, B>
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, (), Request>,
-    S: ServiceFactory<(), Request, InitCfg = SharedCfg> + 'static,
+    I: IntoServiceFactory<S, Request>,
+    S: ServiceFactory<Request, St = (), InitCfg = SharedCfg> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Res: Into<Response<B>>,
@@ -411,8 +411,8 @@ where
 impl<F, I, S, B> HttpServer<F, I, S, B>
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, (), Request>,
-    S: ServiceFactory<(), Request, InitCfg = SharedCfg>,
+    I: IntoServiceFactory<S, Request>,
+    S: ServiceFactory<Request, St = (), InitCfg = SharedCfg>,
     S::Res: Into<Response<B>>,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,

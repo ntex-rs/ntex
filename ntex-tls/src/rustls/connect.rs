@@ -1,4 +1,4 @@
-use std::{fmt, io, sync::Arc};
+use std::{fmt, io, marker::PhantomData, sync::Arc};
 
 use ntex_error::Error;
 use ntex_io::{Io, Layer};
@@ -10,16 +10,17 @@ use tls_rustls::{ClientConfig, pki_types::ServerName};
 use crate::{TlsConfig, rustls::TlsClientFilter};
 
 /// Rustls connector factory
-pub struct TlsConnector<S> {
-    connector: S,
+pub struct TlsConnector<Sf> {
+    connector: Sf,
     config: Arc<ClientConfig>,
 }
 
 #[derive(Clone, Debug)]
-pub struct TlsConnectorService<S> {
+pub struct TlsConnectorService<S, St> {
     svc: S,
     cfg: Cfg<TlsConfig>,
     config: Arc<ClientConfig>,
+    st: PhantomData<St>,
 }
 
 impl<A: Address> From<Arc<ClientConfig>> for TlsConnector<Connector<A>> {
@@ -46,7 +47,7 @@ impl<A: Address> TlsConnector<Connector<A>> {
     }
 }
 
-impl<S: Clone> Clone for TlsConnector<S> {
+impl<Sf: Clone> Clone for TlsConnector<Sf> {
     fn clone(&self) -> Self {
         Self {
             config: self.config.clone(),
@@ -55,7 +56,7 @@ impl<S: Clone> Clone for TlsConnector<S> {
     }
 }
 
-impl<S: fmt::Debug> fmt::Debug for TlsConnector<S> {
+impl<Sf: fmt::Debug> fmt::Debug for TlsConnector<Sf> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TlsConnector(rustls)")
             .field("connector", &self.connector)
@@ -63,22 +64,22 @@ impl<S: fmt::Debug> fmt::Debug for TlsConnector<S> {
     }
 }
 
-impl<A, S, St> ServiceFactory<St, Connect<A>> for TlsConnector<S>
+impl<A, Sf> ServiceFactory<Connect<A>> for TlsConnector<Sf>
 where
     A: Address,
-    S: ServiceFactory<
-            St,
+    Sf: ServiceFactory<
             Connect<A>,
             Res = Io,
             Error = Error<ConnectError>,
             InitCfg = SharedCfg,
         >,
 {
+    type St = Sf::St;
     type Res = Io<Layer<TlsClientFilter>>;
     type Error = Error<ConnectError>;
-    type Service = TlsConnectorService<S::Service>;
+    type Service = TlsConnectorService<Sf::Service, Sf::St>;
     type InitCfg = SharedCfg;
-    type InitError = S::InitError;
+    type InitError = Sf::InitError;
 
     async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {
         let svc = self.connector.create(cfg).await?;
@@ -87,25 +88,28 @@ where
             svc,
             cfg: cfg.get(),
             config: self.config.clone(),
+            st: PhantomData,
         })
     }
 }
 
-impl<A: Address, S, St> Service<St, Connect<A>> for TlsConnectorService<S>
+impl<A: Address, S, St> Service for TlsConnectorService<S, St>
 where
-    S: Service<St, Connect<A>, Res = Io, Error = Error<ConnectError>>,
+    S: Service<St = St, Req = Connect<A>, Res = Io, Error = Error<ConnectError>>,
 {
+    type St = St;
+    type Req = Connect<A>;
     type Res = Io<Layer<TlsClientFilter>>;
     type Error = Error<ConnectError>;
 
-    ntex_service::forward_ready!(St, svc);
+    ntex_service::forward_ready!(svc);
     ntex_service::forward_poll!(svc);
     ntex_service::forward_shutdown!(svc);
 
     async fn call(
         &self,
         req: Connect<A>,
-        ctx: Ctx<'_, Self, St>,
+        ctx: Ctx<'_, Self>,
     ) -> Result<Self::Res, Self::Error> {
         let host = req.host().split(':').next().unwrap().to_owned();
 
@@ -172,7 +176,11 @@ mod tests {
             "{factory:?}"
         );
 
-        let srv = factory.pipeline(SharedCfg::default()).await.unwrap().bind();
+        let srv = factory
+            .pipeline(&SharedCfg::default())
+            .await
+            .unwrap()
+            .bind();
         // always ready
         assert!(lazy(|cx| srv.poll_ready(cx)).await.is_ready());
         let result = srv

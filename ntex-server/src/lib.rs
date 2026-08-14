@@ -38,7 +38,7 @@ impl WorkerId {
 /// Worker service factory.
 pub trait ServerConfiguration: Send + Clone + 'static {
     type Item: Send + 'static;
-    type Factory: ServiceFactory<(), Self::Item, InitCfg = ()> + 'static;
+    type Factory: ServiceFactory<Self::Item, St = (), InitCfg = ()> + 'static;
 
     /// Create service factory for handling `WorkerMessage<T>` messages.
     async fn create(&self) -> Result<Self::Factory, ()>;

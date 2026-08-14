@@ -115,7 +115,8 @@ impl fmt::Debug for StreamService {
     }
 }
 
-impl ServiceFactory<(), Connection> for StreamService {
+impl ServiceFactory<Connection> for StreamService {
+    type St = ();
     type Res = ();
     type Error = ();
     type Service = StreamServiceImpl;
@@ -166,11 +167,13 @@ impl fmt::Debug for StreamServiceImpl {
     }
 }
 
-impl Service<(), Connection> for StreamServiceImpl {
+impl Service for StreamServiceImpl {
+    type St = ();
+    type Req = Connection;
     type Res = ();
     type Error = ();
 
-    async fn ready(&self, ctx: ReadyCtx<'_, Self, ()>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
         if !self.conns.is_available() {
             self.conns.available().await;
         }
@@ -205,7 +208,7 @@ impl Service<(), Connection> for StreamServiceImpl {
         );
     }
 
-    async fn call(&self, con: Connection, ctx: Ctx<'_, Self, ()>) -> Result<(), ()> {
+    async fn call(&self, con: Connection, ctx: Ctx<'_, Self>) -> Result<(), ()> {
         if let Some((idx, name, cfg)) = self.tokens.get(&con.token) {
             let mut io = con.io;
             if let Some(ref f) = self.on_accept {

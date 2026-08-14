@@ -121,20 +121,22 @@ impl<St, F, Req> fmt::Debug for FnService<St, F, Req> {
     }
 }
 
-impl<St, F, Req, Res, Err> Service<St, Req> for FnService<St, F, Req>
+impl<St, F, Req, Res, Err> Service for FnService<St, F, Req>
 where
     F: AsyncFn(Req) -> Result<Res, Err>,
 {
+    type St = St;
+    type Req = Req;
     type Res = Res;
     type Error = Err;
 
     #[inline]
-    async fn call(&self, req: Req, _: Ctx<'_, Self, St>) -> Result<Res, Err> {
+    async fn call(&self, req: Req, _: Ctx<'_, Self>) -> Result<Res, Err> {
         (self.f)(req).await
     }
 }
 
-impl<St, F, Req, Res, Err> IntoService<FnService<St, F, Req>, St, Req> for F
+impl<St, F, Req, Res, Err> IntoService<FnService<St, F, Req>> for F
 where
     F: AsyncFn(Req) -> Result<Res, Err>,
 {
@@ -188,24 +190,27 @@ where
     }
 }
 
-impl<St, F, Req, Res, Err> Service<St, Req> for FnServiceFactory<St, F, Req, Res, Err, ()>
+impl<St, F, Req, Res, Err> Service for FnServiceFactory<St, F, Req, Res, Err, ()>
 where
     F: AsyncFn(Req) -> Result<Res, Err>,
 {
+    type St = St;
+    type Req = Req;
     type Res = Res;
     type Error = Err;
 
     #[inline]
-    async fn call(&self, req: Req, _: Ctx<'_, Self, St>) -> Result<Res, Err> {
+    async fn call(&self, req: Req, _: Ctx<'_, Self>) -> Result<Res, Err> {
         (self.f)(req).await
     }
 }
 
-impl<St, F, Req, Res, Err, Cfg> ServiceFactory<St, Req>
+impl<St, F, Req, Res, Err, Cfg> ServiceFactory<Req>
     for FnServiceFactory<St, F, Req, Res, Err, Cfg>
 where
     F: AsyncFn(Req) -> Result<Res, Err> + Clone,
 {
+    type St = St;
     type Res = Res;
     type Error = Err;
 
@@ -223,7 +228,7 @@ where
 }
 
 impl<St, F, Req, Res, Err, Cfg>
-    IntoServiceFactory<FnServiceFactory<St, F, Req, Res, Err, Cfg>, St, Req> for F
+    IntoServiceFactory<FnServiceFactory<St, F, Req, Res, Err, Cfg>, Req> for F
 where
     F: AsyncFn(Req) -> Result<Res, Err> + Clone,
 {
@@ -279,12 +284,13 @@ where
     }
 }
 
-impl<St, F, Cfg, S, Req, Err> ServiceFactory<St, Req>
+impl<St, F, Cfg, S, Req, Err> ServiceFactory<Req>
     for FnServiceConfig<St, F, Cfg, S, Req, Err>
 where
     F: AsyncFn(&Cfg) -> Result<S, Err>,
-    S: Service<St, Req>,
+    S: Service<St = St, Req = Req>,
 {
+    type St = S::St;
     type Res = S::Res;
     type Error = S::Error;
 
@@ -316,12 +322,13 @@ where
     }
 }
 
-impl<St, F, S, Req, E, C> ServiceFactory<St, Req> for FnServiceNoConfig<St, F, S, E, C>
+impl<St, F, S, Req, E, C> ServiceFactory<Req> for FnServiceNoConfig<St, F, S, E, C>
 where
     F: AsyncFn() -> Result<S, E>,
-    S: Service<St, Req>,
+    S: Service<St = St, Req = Req>,
     C: 'static,
 {
+    type St = St;
     type Res = S::Res;
     type Error = S::Error;
     type Service = S;
@@ -361,21 +368,23 @@ mod tests {
     use std::task::Poll;
 
     use super::*;
-    use crate::Pipeline;
+    use crate::{Pipeline, ustate_chain, ustate_chain_factory};
 
     #[ntex::test]
     async fn test_fn_service() {
-        let new_srv = fn_service(async |()| Ok::<_, ()>("srv")).clone();
+        let new_srv =
+            ustate_chain_factory(fn_service(async |()| Ok::<_, ()>("srv")).clone());
         let _ = format!("{new_srv:?}");
 
-        let srv = Pipeline::new(new_srv.create(&()).await.unwrap()).bind(());
+        let srv = Pipeline::new(new_srv.create(&()).await.unwrap()).bind();
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
         let _ = format!("{srv:?}");
 
-        let srv2 = Pipeline::new(new_srv.clone()).bind(());
+        let new_srv = ustate_chain(fn_service(async |()| Ok::<_, ()>("srv")));
+        let srv2 = Pipeline::new(new_srv.clone()).bind();
         let res = srv2.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
@@ -386,17 +395,19 @@ mod tests {
 
     #[ntex::test]
     async fn test_fn_service_comp() {
-        let new_srv = fn_service(|()| async { Ok::<_, ()>("srv") }).clone();
+        let new_srv =
+            ustate_chain_factory(fn_service(async |()| Ok::<_, ()>("srv"))).clone();
         let _ = format!("{new_srv:?}");
 
-        let srv = Pipeline::new(new_srv.create(&()).await.unwrap()).bind(());
+        let srv = Pipeline::new(new_srv.create(&()).await.unwrap()).bind();
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
         let _ = format!("{srv:?}");
 
-        let srv2 = Pipeline::new(new_srv.clone()).bind(());
+        let new_srv = ustate_chain(fn_service(async |()| Ok::<_, ()>("srv"))).clone();
+        let srv2 = Pipeline::new(new_srv.clone()).bind();
         let res = srv2.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
@@ -408,14 +419,14 @@ mod tests {
     #[ntex::test]
     async fn test_fn_service_service() {
         let srv = Pipeline::new(
-            fn_service(async |()| Ok::<_, ()>("srv"))
+            ustate_chain_factory(fn_service(async |()| Ok::<_, ()>("srv")))
                 .clone()
                 .create(&())
                 .await
                 .unwrap()
                 .clone(),
         )
-        .bind(());
+        .bind();
 
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
@@ -428,13 +439,13 @@ mod tests {
     async fn test_fn_service_with_config() {
         let new_srv = fn_factory_with_config(async move |cfg: &usize| {
             let cfg = *cfg;
-            Ok::<_, ()>(fn_service(
-                move |()| async move { Ok::<_, ()>(("srv", cfg)) },
-            ))
+            Ok::<_, ()>(ustate_chain(fn_service(async move |()| {
+                Ok::<_, ()>(("srv", cfg))
+            })))
         })
         .clone();
 
-        let srv = Pipeline::new(new_srv.create(&1).await.unwrap()).bind(());
+        let srv = Pipeline::new(new_srv.create(&1).await.unwrap()).bind();
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());

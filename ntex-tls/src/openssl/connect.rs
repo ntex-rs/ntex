@@ -1,4 +1,4 @@
-use std::io;
+use std::{io, marker::PhantomData};
 
 use ntex_error::Error;
 use ntex_io::{Filter, Io, Layer};
@@ -12,16 +12,17 @@ use super::{SslFilter, connect as connect_io};
 use crate::TlsConfig;
 
 #[derive(Clone, Debug)]
-pub struct SslConnector<S> {
-    connector: S,
+pub struct SslConnector<Sf> {
+    connector: Sf,
     openssl: OpensslConnector,
 }
 
 #[derive(Clone, Debug)]
-pub struct SslConnectorService<S> {
+pub struct SslConnectorService<S, St> {
     svc: S,
     cfg: Cfg<TlsConfig>,
     openssl: OpensslConnector,
+    st: PhantomData<St>,
 }
 
 impl<A: Address> SslConnector<Connector<A>> {
@@ -34,21 +35,21 @@ impl<A: Address> SslConnector<Connector<A>> {
     }
 }
 
-impl<A: Address, S, St> ServiceFactory<St, Connect<A>> for SslConnector<S>
+impl<A: Address, Sf> ServiceFactory<Connect<A>> for SslConnector<Sf>
 where
-    S: ServiceFactory<
-            St,
+    Sf: ServiceFactory<
             Connect<A>,
             Res = Io,
             Error = Error<ConnectError>,
             InitCfg = SharedCfg,
         >,
 {
+    type St = Sf::St;
     type Res = Io<Layer<SslFilter>>;
     type Error = Error<ConnectError>;
-    type Service = SslConnectorService<S::Service>;
+    type Service = SslConnectorService<Sf::Service, Sf::St>;
     type InitCfg = SharedCfg;
-    type InitError = S::InitError;
+    type InitError = Sf::InitError;
 
     async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {
         let svc = self.connector.create(cfg).await?;
@@ -57,11 +58,12 @@ where
             svc,
             cfg: cfg.get(),
             openssl: self.openssl.clone(),
+            st: PhantomData,
         })
     }
 }
 
-impl<S> SslConnectorService<S> {
+impl<S, St> SslConnectorService<S, St> {
     /// Establish a TLS connection on top of an existing I/O stream.
     pub async fn connect<F: Filter>(
         &self,
@@ -103,21 +105,23 @@ impl<S> SslConnectorService<S> {
     }
 }
 
-impl<A: Address, S, St> Service<St, Connect<A>> for SslConnectorService<S>
+impl<A: Address, S, St> Service for SslConnectorService<S, St>
 where
-    S: Service<St, Connect<A>, Res = Io, Error = Error<ConnectError>>,
+    S: Service<St = St, Req = Connect<A>, Res = Io, Error = Error<ConnectError>>,
 {
+    type St = St;
+    type Req = Connect<A>;
     type Res = Io<Layer<SslFilter>>;
     type Error = Error<ConnectError>;
 
-    ntex_service::forward_ready!(St, svc);
+    ntex_service::forward_ready!(svc);
     ntex_service::forward_poll!(svc);
     ntex_service::forward_shutdown!(svc);
 
     async fn call(
         &self,
         message: Connect<A>,
-        ctx: Ctx<'_, Self, St>,
+        ctx: Ctx<'_, Self>,
     ) -> Result<Self::Res, Self::Error> {
         let host = message.host().split(':').next().unwrap().to_string();
         let io = ctx.call(&self.svc, message).await?;
@@ -146,7 +150,7 @@ mod tests {
         // always ready
         assert!(srv.ready().await.is_ok());
         let result = srv
-            .call(Connect::new("").set_addr(Some(server.addr())))
+            .call(Connect::new("").set_addr(Some(server.addr())), &())
             .await;
         assert!(result.is_err());
         assert!(format!("{srv:?}").contains("SslConnector"));

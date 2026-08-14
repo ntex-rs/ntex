@@ -70,12 +70,12 @@ pub fn subprotocols(req: &HttpRequest) -> impl Iterator<Item = &str> {
 /// }
 /// ```
 pub async fn start<Sf>(
-    req: HttpRequest,
+    req: &HttpRequest,
     subprotocol: Option<&str>,
-    f: impl IntoServiceFactory<Sf, (), Frame>,
+    f: impl IntoServiceFactory<Sf, Frame>,
 ) -> Result<HttpResponse, Sf::InitError>
 where
-    Sf: ServiceFactory<(), Frame, Res = Option<Message>, InitCfg = WsSink> + 'static,
+    Sf: ServiceFactory<Frame, St = (), Res = Option<Message>, InitCfg = WsSink> + 'static,
     Sf::Error: fmt::Debug,
     Sf::InitError: From<HandshakeError> + fmt::Debug,
 {
@@ -99,13 +99,17 @@ where
 /// If `subprotocol` is `Some`, the `Sec-Websocket-Protocol` header will be included
 /// in the response with the chosen protocol. If `None`, the header is omitted.
 pub async fn start_with<Sf>(
-    req: HttpRequest,
+    req: &HttpRequest,
     subprotocol: Option<&str>,
-    f: impl IntoServiceFactory<Sf, (), DispatchItem<ws::Codec>>,
+    f: impl IntoServiceFactory<Sf, DispatchItem<ws::Codec>>,
 ) -> Result<HttpResponse, Sf::InitError>
 where
-    Sf: ServiceFactory<(), DispatchItem<ws::Codec>, Res = Option<Message>, InitCfg = WsSink>
-        + 'static,
+    Sf: ServiceFactory<
+            DispatchItem<ws::Codec>,
+            St = (),
+            Res = Option<Message>,
+            InitCfg = WsSink,
+        > + 'static,
     Sf::Error: fmt::Debug,
     Sf::InitError: From<HandshakeError>,
 {
@@ -157,22 +161,24 @@ struct DispatchService<S> {
     sink: WsSink,
 }
 
-impl<S, St, E> Service<St, DispatchItem<ws::Codec>> for DispatchService<S>
+impl<S, E> Service for DispatchService<S>
 where
-    S: Service<St, Frame, Res = Option<Message>, Error = WsError<E>>,
+    S: Service<Req = Frame, Res = Option<Message>, Error = WsError<E>>,
     E: fmt::Debug,
 {
+    type St = S::St;
+    type Req = DispatchItem<ws::Codec>;
     type Res = Option<Message>;
     type Error = WsError<E>;
 
-    crate::forward_ready!(St, srv);
+    crate::forward_ready!(srv);
     crate::forward_poll!(srv);
     crate::forward_shutdown!(srv);
 
     async fn call(
         &self,
         req: DispatchItem<ws::Codec>,
-        ctx: Ctx<'_, Self, St>,
+        ctx: Ctx<'_, Self>,
     ) -> Result<Self::Res, Self::Error> {
         match req {
             DispatchItem::Item(item) => {

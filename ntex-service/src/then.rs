@@ -17,21 +17,23 @@ impl<A, B> Then<A, B> {
     }
 }
 
-impl<A, B, St, Req> Service<St, Req> for Then<A, B>
+impl<A, B> Service for Then<A, B>
 where
-    A: Service<St, Req>,
-    B: Service<St, Result<A::Res, A::Error>, Error = A::Error>,
+    A: Service,
+    B: Service<Req = Result<A::Res, A::Error>, St = A::St, Error = A::Error>,
 {
+    type St = A::St;
+    type Req = A::Req;
     type Res = B::Res;
     type Error = B::Error;
 
     #[inline]
-    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<B::Res, B::Error> {
+    async fn call(&self, req: A::Req, ctx: Ctx<'_, Self>) -> Result<B::Res, B::Error> {
         ctx.call(&self.svc2, ctx.call(&self.svc1, req).await).await
     }
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
         util::ready(&self.svc1, &self.svc2, ctx).await
     }
 
@@ -61,17 +63,18 @@ impl<A, B> ThenFactory<A, B> {
     }
 }
 
-impl<A, B, St, Req> ServiceFactory<St, Req> for ThenFactory<A, B>
+impl<A, B, Req> ServiceFactory<Req> for ThenFactory<A, B>
 where
-    A: ServiceFactory<St, Req>,
+    A: ServiceFactory<Req>,
     B: ServiceFactory<
-            St,
             Result<A::Res, A::Error>,
+            St = A::St,
             Error = A::Error,
             InitCfg = A::InitCfg,
             InitError = A::InitError,
         >,
 {
+    type St = A::St;
     type Res = B::Res;
     type Error = A::Error;
 
@@ -98,11 +101,13 @@ mod tests {
     #[derive(Clone)]
     struct Srv1(Rc<Cell<usize>>, Rc<Cell<usize>>);
 
-    impl Service<(), Result<&'static str, &'static str>> for Srv1 {
+    impl Service for Srv1 {
+        type St = ();
+        type Req = Result<&'static str, &'static str>;
         type Res = &'static str;
         type Error = ();
 
-        async fn ready(&self, _: ReadyCtx<'_, Self, ()>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }
@@ -115,7 +120,7 @@ mod tests {
         async fn call(
             &self,
             req: Result<&'static str, &'static str>,
-            _: Ctx<'_, Self, ()>,
+            _: Ctx<'_, Self>,
         ) -> Result<&'static str, ()> {
             match req {
                 Ok(msg) => Ok(msg),
@@ -131,11 +136,13 @@ mod tests {
     #[derive(Clone)]
     struct Srv2(Rc<Cell<usize>>, Rc<Cell<usize>>);
 
-    impl Service<(), Result<&'static str, ()>> for Srv2 {
+    impl Service for Srv2 {
+        type St = ();
+        type Req = Result<&'static str, ()>;
         type Res = (&'static str, &'static str);
         type Error = ();
 
-        async fn ready(&self, _: ReadyCtx<'_, Self, ()>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }
@@ -148,7 +155,7 @@ mod tests {
         async fn call(
             &self,
             req: Result<&'static str, ()>,
-            _: Ctx<'_, Self, ()>,
+            _: Ctx<'_, Self>,
         ) -> Result<Self::Res, ()> {
             match req {
                 Ok(msg) => Ok((msg, "ok")),

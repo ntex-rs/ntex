@@ -48,7 +48,7 @@ struct AvailableConnection {
 pub(super) struct ConnectionPool(Rc<ConnectionPoolInner>);
 
 struct ConnectionPoolInner {
-    svc: Pipeline<Connector, ()>,
+    svc: Pipeline<Connector>,
     inner: Rc<RefCell<Inner>>,
     waiters: Rc<RefCell<Waiters>>,
     stop: Rc<Cell<Option<oneshot::Sender<()>>>>,
@@ -70,7 +70,7 @@ pub(super) struct Inner {
 
 impl ConnectionPool {
     pub(super) fn new(
-        svc: Pipeline<Connector, ()>,
+        svc: Pipeline<Connector>,
         conn_lifetime: Duration,
         conn_keep_alive: Duration,
         limit: usize,
@@ -141,12 +141,14 @@ impl fmt::Debug for ConnectionPool {
     }
 }
 
-impl Service<(), Connect> for ConnectionPool {
+impl Service for ConnectionPool {
+    type St = ();
+    type Req = Connect;
     type Res = Connection;
     type Error = Error<ConnectError>;
 
     #[inline]
-    async fn ready(&self, _: ReadyCtx<'_, Self, ()>) -> Result<(), Self::Error> {
+    async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
         self.0.svc.ready(&()).await
     }
 
@@ -162,11 +164,7 @@ impl Service<(), Connect> for ConnectionPool {
         self.0.svc.shutdown().await;
     }
 
-    async fn call(
-        &self,
-        req: Connect,
-        _: Ctx<'_, Self, ()>,
-    ) -> Result<Connection, Self::Error> {
+    async fn call(&self, req: Connect, _: Ctx<'_, Self>) -> Result<Self::Res, Self::Error> {
         log::trace!("{}: Get connection for {:?}", self.0.config.tag(), req.uri);
 
         let inner = self.0.inner.clone();
@@ -345,7 +343,7 @@ impl Inner {
 }
 
 async fn run_connection_pool(
-    svc: Pipeline<Connector, ()>,
+    svc: Pipeline<Connector>,
     inner: Rc<RefCell<Inner>>,
     waiters: Rc<RefCell<Waiters>>,
     config: SharedCfg,
@@ -430,7 +428,7 @@ pin_project_lite::pin_project! {
     struct OpenConnection {
         key: Key,
         #[pin]
-        fut: PipelineCall<IoBoxed, Error<ConnectError>>,
+        fut: PipelineCall<Connector>,
         uri: Uri,
         tx: Option<Waiter>,
         guard: Option<OpenGuard>,
@@ -444,7 +442,7 @@ impl OpenConnection {
         tx: Waiter,
         uri: Uri,
         inner: Rc<RefCell<Inner>>,
-        pipeline: &Pipeline<Connector, ()>,
+        pipeline: &Pipeline<Connector>,
         msg: Connect,
     ) {
         let fut = pipeline.call_static(msg, ());
@@ -670,7 +668,7 @@ mod tests {
             )
             .clone(),
         )
-        .bind(());
+        .bind();
 
         // uri must contain authority
         let req = Connect {

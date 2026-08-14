@@ -158,8 +158,8 @@ impl Connector {
     pub fn connector<T>(mut self, connector: T) -> Self
     where
         T: ServiceFactory<
-                (),
                 TcpConnect<Uri>,
+                St = (),
                 Error = Error<crate::connect::ConnectError>,
                 InitCfg = SharedCfg,
             > + 'static,
@@ -182,8 +182,8 @@ impl Connector {
     pub fn secure_connector<T>(mut self, connector: T) -> Self
     where
         T: ServiceFactory<
-                (),
                 TcpConnect<Uri>,
+                St = (),
                 Error = Error<crate::connect::ConnectError>,
                 InitCfg = SharedCfg,
             > + 'static,
@@ -202,7 +202,8 @@ impl Connector {
     }
 }
 
-impl ServiceFactory<(), Connect> for Connector {
+impl ServiceFactory<Connect> for Connector {
+    type St = ();
     type Res = Connection;
     type Error = Error<ClientError>;
     type Service = ConnectorService;
@@ -244,12 +245,14 @@ pub struct ConnectorService {
     ssl_pool: Option<ConnectionPool>,
 }
 
-impl Service<(), Connect> for ConnectorService {
+impl Service for ConnectorService {
+    type St = ();
+    type Req = Connect;
     type Res = Connection;
     type Error = Error<ClientError>;
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self, ()>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
         if let Some(ref ssl_pool) = self.ssl_pool {
             let (r1, r2) = join(ctx.ready(&self.tcp_pool), ctx.ready(ssl_pool)).await;
             r1.into_error()?;
@@ -278,7 +281,7 @@ impl Service<(), Connect> for ConnectorService {
     async fn call(
         &self,
         req: Connect,
-        ctx: Ctx<'_, Self, ()>,
+        ctx: Ctx<'_, Self>,
     ) -> Result<Self::Res, Self::Error> {
         with_service(self.cfg.service(), async {
             match req.uri.scheme_str() {
@@ -311,7 +314,7 @@ mod tests {
                 .await
                 .unwrap(),
         )
-        .bind(());
+        .bind();
         assert!(lazy(|cx| conn.poll_ready(cx).is_ready()).await);
         assert!(lazy(|cx| conn.poll_shutdown(cx).is_ready()).await);
     }

@@ -19,8 +19,7 @@ type HttpService<Err: ErrorRenderer> =
     BoxService<(), WebRequest<Err>, WebResponse, Err::Container>;
 type HttpNewService<Err: ErrorRenderer> =
     BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, SharedCfg, ()>;
-type ResourcePipeline<F, Err> =
-    ServiceChain<AndThen<F, ResourceRouter<Err>, WebRequest<Err>>, (), WebRequest<Err>>;
+type ResourcePipeline<F, Err> = ServiceChain<AndThen<F, ResourceRouter<Err>>>;
 
 /// *Resource* is an entry in resources table which corresponds to requested URL.
 ///
@@ -48,7 +47,7 @@ type ResourcePipeline<F, Err> =
 #[debug("Resource({rdef:?})")]
 pub struct Resource<Err: ErrorRenderer, M = Identity, T = Filter<Err>> {
     middleware: M,
-    filter: ServiceChainFactory<T, (), WebRequest<Err>>,
+    filter: ServiceChainFactory<T, WebRequest<Err>>,
     rdef: Vec<String>,
     name: Option<String>,
     routes: Vec<Route<Err>>,
@@ -76,8 +75,8 @@ impl<Err: ErrorRenderer> Resource<Err> {
 impl<Err, M, Sf> Resource<Err, M, Sf>
 where
     Sf: ServiceFactory<
-            (),
             WebRequest<Err>,
+            St = (),
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -246,15 +245,15 @@ where
     /// Register request filter.
     ///
     /// This is similar to `App's` filters, but filter get invoked on resource level.
-    pub fn filter<U, F>(
+    pub fn filter<U>(
         self,
-        filter: F,
+        filter: impl IntoServiceFactory<U, WebRequest<Err>>,
     ) -> Resource<
         Err,
         M,
         impl ServiceFactory<
-            (),
             WebRequest<Err>,
+            St = (),
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -263,13 +262,12 @@ where
     >
     where
         U: ServiceFactory<
-                (),
                 WebRequest<Err>,
+                St = (),
                 Res = WebRequest<Err>,
                 Error = Err::Container,
                 InitCfg = SharedCfg,
             >,
-        F: IntoServiceFactory<U, (), WebRequest<Err>>,
     {
         Resource {
             filter: self
@@ -309,12 +307,14 @@ where
     ///
     /// By default *405* response get returned. Resource does not use
     /// default handler from `App` or `Scope`.
-    pub fn default_service<F, S>(mut self, f: F) -> Self
+    pub fn default_service<S>(
+        mut self,
+        f: impl IntoServiceFactory<S, WebRequest<Err>>,
+    ) -> Self
     where
-        F: IntoServiceFactory<S, (), WebRequest<Err>>,
         S: ServiceFactory<
-                (),
                 WebRequest<Err>,
+                St = (),
                 Res = WebResponse,
                 Error = Err::Container,
                 InitCfg = SharedCfg,
@@ -334,15 +334,16 @@ where
 impl<Err, M, Sf> WebServiceFactory<Err> for Resource<Err, M, Sf>
 where
     Sf: ServiceFactory<
-            (),
             WebRequest<Err>,
+            St = (),
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
             InitError = (),
         > + 'static,
     M: Middleware<ResourcePipeline<Sf::Service, Err>, SharedCfg> + 'static,
-    M::Service: Service<(), WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    M::Service:
+        Service<St = (), Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     Err: ErrorRenderer,
 {
     fn register(mut self, config: &mut WebServiceConfig<Err>) {
@@ -389,26 +390,26 @@ where
 
 impl<Err, M, Sf>
     IntoServiceFactory<
-        ResourceServiceFactory<Err, M, ServiceChainFactory<Sf, (), WebRequest<Err>>>,
-        (),
+        ResourceServiceFactory<Err, M, ServiceChainFactory<Sf, WebRequest<Err>>>,
         WebRequest<Err>,
     > for Resource<Err, M, Sf>
 where
     Sf: ServiceFactory<
-            (),
             WebRequest<Err>,
+            St = (),
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
             InitError = (),
         > + 'static,
     M: Middleware<ResourcePipeline<Sf::Service, Err>, SharedCfg> + 'static,
-    M::Service: Service<(), WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    M::Service:
+        Service<St = (), Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     Err: ErrorRenderer,
 {
     fn into_factory(
         self,
-    ) -> ResourceServiceFactory<Err, M, ServiceChainFactory<Sf, (), WebRequest<Err>>> {
+    ) -> ResourceServiceFactory<Err, M, ServiceChainFactory<Sf, WebRequest<Err>>> {
         let router_factory = ResourceRouterFactory {
             state: None,
             routes: self.routes,
@@ -432,13 +433,14 @@ pub struct ResourceServiceFactory<Err: ErrorRenderer, M, F> {
     routing: ResourceRouterFactory<Err>,
 }
 
-impl<Err, M, F> ServiceFactory<(), WebRequest<Err>> for ResourceServiceFactory<Err, M, F>
+impl<Err, M, F> ServiceFactory<WebRequest<Err>> for ResourceServiceFactory<Err, M, F>
 where
     M: Middleware<ResourcePipeline<F::Service, Err>, SharedCfg> + 'static,
-    M::Service: Service<(), WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    M::Service:
+        Service<St = (), Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
-            (),
             WebRequest<Err>,
+            St = (),
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -446,6 +448,7 @@ where
         > + 'static,
     Err: ErrorRenderer,
 {
+    type St = ();
     type Res = WebResponse;
     type Error = Err::Container;
     type Service = M::Service;
@@ -465,9 +468,8 @@ struct ResourceRouterFactory<Err: ErrorRenderer> {
     state: Option<AppState>,
 }
 
-impl<Err: ErrorRenderer> ServiceFactory<(), WebRequest<Err>>
-    for ResourceRouterFactory<Err>
-{
+impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ResourceRouterFactory<Err> {
+    type St = ();
     type Res = WebResponse;
     type Error = Err::Container;
 
@@ -497,14 +499,16 @@ pub struct ResourceRouter<Err: ErrorRenderer> {
     default: Option<HttpService<Err>>,
 }
 
-impl<Err: ErrorRenderer> Service<(), WebRequest<Err>> for ResourceRouter<Err> {
+impl<Err: ErrorRenderer> Service for ResourceRouter<Err> {
+    type St = ();
+    type Req = WebRequest<Err>;
     type Res = WebResponse;
     type Error = Err::Container;
 
     async fn call(
         &self,
         mut req: WebRequest<Err>,
-        ctx: Ctx<'_, Self, ()>,
+        ctx: Ctx<'_, Self>,
     ) -> Result<Self::Res, Self::Error> {
         for route in &self.routes {
             if route.check(&mut req) {

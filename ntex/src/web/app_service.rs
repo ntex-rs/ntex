@@ -30,8 +30,8 @@ type FnStateFactory = Box<dyn Fn(Extensions) -> BoxFuture<'static, Result<Extens
 pub struct AppFactory<T, F, Err: ErrorRenderer>
 where
     F: ServiceFactory<
-            (),
             WebRequest<Err>,
+            St = (),
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -40,7 +40,7 @@ where
     Err: ErrorRenderer,
 {
     pub(super) middleware: Rc<T>,
-    pub(super) filter: ServiceChainFactory<F, (), WebRequest<Err>>,
+    pub(super) filter: ServiceChainFactory<F, WebRequest<Err>>,
     pub(super) extensions: RefCell<Option<Extensions>>,
     pub(super) state_factories: Rc<Vec<FnStateFactory>>,
     pub(super) services: Rc<RefCell<Vec<Box<dyn AppServiceFactory<Err>>>>>,
@@ -49,13 +49,14 @@ where
     pub(super) case_insensitive: bool,
 }
 
-impl<T, F, Err> ServiceFactory<(), Request> for AppFactory<T, F, Err>
+impl<T, F, Err> ServiceFactory<Request> for AppFactory<T, F, Err>
 where
     T: Middleware<AppService<F::Service, Err>, SharedCfg> + 'static,
-    T::Service: Service<(), WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    T::Service:
+        Service<St = (), Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
-            (),
             WebRequest<Err>,
+            St = (),
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -63,6 +64,7 @@ where
         >,
     Err: ErrorRenderer,
 {
+    type St = ();
     type Res = WebResponse;
     type Error = Err::Container;
 
@@ -170,7 +172,7 @@ where
 #[debug("AppFactoryService")]
 pub struct AppFactoryService<T, Err>
 where
-    T: Service<(), WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    T: Service<St = (), Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     Err: ErrorRenderer,
 {
     service: T,
@@ -179,23 +181,21 @@ where
     _t: marker::PhantomData<Err>,
 }
 
-impl<S, Err> Service<(), Request> for AppFactoryService<S, Err>
+impl<S, Err> Service for AppFactoryService<S, Err>
 where
-    S: Service<(), WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    S: Service<St = (), Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     Err: ErrorRenderer,
 {
+    type St = ();
+    type Req = Request;
     type Res = WebResponse;
     type Error = S::Error;
 
     crate::forward_poll!(service);
-    crate::forward_ready!((), service);
+    crate::forward_ready!(service);
     crate::forward_shutdown!(service);
 
-    async fn call(
-        &self,
-        req: Request,
-        ctx: Ctx<'_, Self, ()>,
-    ) -> Result<Self::Res, S::Error> {
+    async fn call(&self, req: Request, ctx: Ctx<'_, Self>) -> Result<Self::Res, S::Error> {
         let (head, payload) = req.into_parts();
 
         let req = if let Some(mut req) = self.state.config().get_request() {
@@ -220,7 +220,7 @@ where
 
 impl<T, Err> Drop for AppFactoryService<T, Err>
 where
-    T: Service<(), WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    T: Service<St = (), Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     Err: ErrorRenderer,
 {
     fn drop(&mut self) {
@@ -233,14 +233,16 @@ struct AppRouting<Err: ErrorRenderer> {
     default: Option<HttpService<Err>>,
 }
 
-impl<Err: ErrorRenderer> Service<(), WebRequest<Err>> for AppRouting<Err> {
+impl<Err: ErrorRenderer> Service for AppRouting<Err> {
+    type St = ();
+    type Req = WebRequest<Err>;
     type Res = WebResponse;
     type Error = Err::Container;
 
     async fn call(
         &self,
         mut req: WebRequest<Err>,
-        ctx: Ctx<'_, Self, ()>,
+        ctx: Ctx<'_, Self>,
     ) -> Result<WebResponse, Err::Container> {
         let res = self.router.recognize_checked(&mut req, |req, guards| {
             if let Some(guards) = guards {
@@ -272,16 +274,23 @@ pub struct AppService<F, Err: ErrorRenderer> {
     routing: AppRouting<Err>,
 }
 
-impl<F, Err> Service<(), WebRequest<Err>> for AppService<F, Err>
+impl<F, Err> Service for AppService<F, Err>
 where
-    F: Service<(), WebRequest<Err>, Res = WebRequest<Err>, Error = Err::Container>,
+    F: Service<
+            St = (),
+            Req = WebRequest<Err>,
+            Res = WebRequest<Err>,
+            Error = Err::Container,
+        >,
     Err: ErrorRenderer,
 {
+    type St = ();
+    type Req = WebRequest<Err>;
     type Res = WebResponse;
     type Error = Err::Container;
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self, ()>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
         let (ready1, ready2) =
             join(ctx.ready(&self.filter), ctx.ready(&self.routing)).await;
         ready1?;
@@ -297,7 +306,7 @@ where
     async fn call(
         &self,
         req: WebRequest<Err>,
-        ctx: Ctx<'_, Self, ()>,
+        ctx: Ctx<'_, Self>,
     ) -> Result<Self::Res, Self::Error> {
         let req = ctx.call(&self.filter, req).await?;
         ctx.call(&self.routing, req).await

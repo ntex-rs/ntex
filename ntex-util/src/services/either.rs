@@ -46,20 +46,21 @@ impl<ChooseFn, SFLeft, SFRight> fmt::Debug
     }
 }
 
-impl<St, Req, ChooseFn, SFLeft, SFRight> ServiceFactory<St, Req>
+impl<Req, ChooseFn, SFLeft, SFRight> ServiceFactory<Req>
     for EitherServiceFactory<ChooseFn, SFLeft, SFRight>
 where
     ChooseFn: Fn(&SFLeft::InitCfg) -> bool,
-    SFLeft: ServiceFactory<St, Req>,
+    SFLeft: ServiceFactory<Req>,
     SFRight: ServiceFactory<
-            St,
             Req,
+            St = SFLeft::St,
             Res = SFLeft::Res,
             Error = SFLeft::Error,
             InitCfg = SFLeft::InitCfg,
             InitError = SFLeft::InitError,
         >,
 {
+    type St = SFLeft::St;
     type Res = SFLeft::Res;
     type Error = SFLeft::Error;
     type InitCfg = SFLeft::InitCfg;
@@ -111,20 +112,18 @@ impl<SLeft, SRight> fmt::Debug for EitherService<SLeft, SRight> {
     }
 }
 
-impl<SLeft, SRight, St, Req> Service<St, Req> for EitherService<SLeft, SRight>
+impl<SL, SR> Service for EitherService<SL, SR>
 where
-    SLeft: Service<St, Req>,
-    SRight: Service<St, Req, Res = SLeft::Res, Error = SLeft::Error>,
+    SL: Service,
+    SR: Service<St = SL::St, Req = SL::Req, Res = SL::Res, Error = SL::Error>,
 {
-    type Res = SLeft::Res;
-    type Error = SLeft::Error;
+    type St = SL::St;
+    type Req = SL::Req;
+    type Res = SL::Res;
+    type Error = SL::Error;
 
     #[inline]
-    async fn call(
-        &self,
-        req: Req,
-        ctx: Ctx<'_, Self, St>,
-    ) -> Result<Self::Res, Self::Error> {
+    async fn call(&self, req: SL::Req, ctx: Ctx<'_, Self>) -> Result<SL::Res, SL::Error> {
         match self.svc {
             Either::Left(ref svc) => ctx.call(svc, req).await,
             Either::Right(ref svc) => ctx.call(svc, req).await,
@@ -132,7 +131,7 @@ where
     }
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
         match self.svc {
             Either::Left(ref svc) => ctx.ready(svc).await,
             Either::Right(ref svc) => ctx.ready(svc).await,

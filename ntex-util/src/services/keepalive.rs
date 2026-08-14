@@ -9,16 +9,16 @@ use crate::time::{Millis, Sleep, now, sleep};
 /// `KeepAlive` service factory
 ///
 /// Controls min time between requests.
-pub struct KeepAlive<F, R, E, C>
+pub struct KeepAlive<F, St, Req, E, C>
 where
     F: Fn() -> E + Clone,
 {
     f: F,
     ka: Millis,
-    _t: marker::PhantomData<(E, R, C)>,
+    _t: marker::PhantomData<(E, St, Req, C)>,
 }
 
-impl<F, R, E, C> KeepAlive<F, R, E, C>
+impl<F, St, Req, E, C> KeepAlive<F, St, Req, E, C>
 where
     F: Fn() -> E + Clone,
 {
@@ -35,7 +35,7 @@ where
     }
 }
 
-impl<F, R, E, C> Clone for KeepAlive<F, R, E, C>
+impl<F, St, Req, E, C> Clone for KeepAlive<F, St, Req, E, C>
 where
     F: Fn() -> E + Clone,
 {
@@ -48,7 +48,7 @@ where
     }
 }
 
-impl<F, R, E, C> fmt::Debug for KeepAlive<F, R, E, C>
+impl<F, St, Req, E, C> fmt::Debug for KeepAlive<F, St, Req, E, C>
 where
     F: Fn() -> E + Clone,
 {
@@ -60,14 +60,15 @@ where
     }
 }
 
-impl<St, Req, F, E, C> ServiceFactory<St, Req> for KeepAlive<F, Req, E, C>
+impl<F, St, Req, E, C> ServiceFactory<Req> for KeepAlive<F, St, Req, E, C>
 where
     F: Fn() -> E + Clone,
 {
+    type St = St;
     type Res = Req;
     type Error = E;
 
-    type Service = KeepAliveService<St, E, F>;
+    type Service = KeepAliveService<St, Req, E, F>;
     type InitCfg = C;
     type InitError = Infallible;
 
@@ -80,7 +81,7 @@ where
     }
 }
 
-pub struct KeepAliveService<St, E, F>
+pub struct KeepAliveService<St, Req, E, F>
 where
     F: Fn() -> E,
 {
@@ -88,10 +89,10 @@ where
     dur: Millis,
     sleep: Sleep,
     expire: Cell<time::Instant>,
-    _t: marker::PhantomData<(St, E)>,
+    _t: marker::PhantomData<(St, Req, E)>,
 }
 
-impl<St, E, F> KeepAliveService<St, E, F>
+impl<St, Req, E, F> KeepAliveService<St, Req, E, F>
 where
     F: Fn() -> E,
 {
@@ -108,7 +109,7 @@ where
     }
 }
 
-impl<St, E, F> fmt::Debug for KeepAliveService<St, E, F>
+impl<St, Req, E, F> fmt::Debug for KeepAliveService<St, Req, E, F>
 where
     F: Fn() -> E,
 {
@@ -121,14 +122,16 @@ where
     }
 }
 
-impl<St, Req, E, F> Service<St, Req> for KeepAliveService<St, E, F>
+impl<St, Req, E, F> Service for KeepAliveService<St, Req, E, F>
 where
     F: Fn() -> E,
 {
+    type St = St;
+    type Req = Req;
     type Res = Req;
     type Error = E;
 
-    async fn ready(&self, _: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
+    async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
         let expire = self.expire.get() + time::Duration::from(self.dur);
         if expire <= now() { Err((self.f)()) } else { Ok(()) }
     }
@@ -153,7 +156,7 @@ where
     }
 
     #[inline]
-    async fn call(&self, req: Req, _: Ctx<'_, Self, St>) -> Result<Req, E> {
+    async fn call(&self, req: Req, _: Ctx<'_, Self>) -> Result<Req, E> {
         self.expire.set(now());
         Ok(req)
     }

@@ -14,9 +14,9 @@ pub struct MapErr<S, F, E> {
 
 impl<S, F, E> MapErr<S, F, E> {
     /// Create new `MapErr` combinator
-    pub(crate) fn new<St, Req>(svc: S, f: F) -> Self
+    pub(crate) fn new(svc: S, f: F) -> Self
     where
-        S: Service<St, Req>,
+        S: Service,
         F: Fn(S::Error) -> E,
     {
         Self {
@@ -54,21 +54,23 @@ where
     }
 }
 
-impl<S, St, Req, F, E> Service<St, Req> for MapErr<S, F, E>
+impl<S, F, E> Service for MapErr<S, F, E>
 where
-    S: Service<St, Req>,
+    S: Service,
     F: Fn(S::Error) -> E,
 {
+    type St = S::St;
+    type Req = S::Req;
     type Res = S::Res;
     type Error = E;
 
     #[inline]
-    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, E> {
+    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self>) -> Result<S::Res, E> {
         ctx.call(&self.svc, req).await.map_err(|e| (self.f)(e))
     }
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), E> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), E> {
         ctx.ready(&self.svc).await.map_err(&self.f)
     }
 
@@ -92,9 +94,9 @@ pub struct MapErrFactory<Sf, F, E> {
 
 impl<Sf, F, E> MapErrFactory<Sf, F, E> {
     /// Create new `MapErr` new service instance
-    pub(crate) fn new<St, Req>(sf: Sf, f: F) -> Self
+    pub(crate) fn new<Req>(sf: Sf, f: F) -> Self
     where
-        Sf: ServiceFactory<St, Req>,
+        Sf: ServiceFactory<Req>,
         F: Fn(Sf::Error) -> E + Clone,
     {
         Self {
@@ -127,11 +129,12 @@ where
     }
 }
 
-impl<Sf, St, Req, F, E> ServiceFactory<St, Req> for MapErrFactory<Sf, F, E>
+impl<Sf, Req, F, E> ServiceFactory<Req> for MapErrFactory<Sf, F, E>
 where
-    Sf: ServiceFactory<St, Req>,
+    Sf: ServiceFactory<Req>,
     F: Fn(Sf::Error) -> E + Clone,
 {
+    type St = Sf::St;
     type Res = Sf::Res;
     type Error = E;
 
@@ -160,15 +163,17 @@ mod tests {
     #[derive(Debug, Clone)]
     struct Srv(bool, Rc<Cell<usize>>);
 
-    impl Service<(), ()> for Srv {
+    impl Service for Srv {
+        type St = ();
+        type Req = ();
         type Res = ();
         type Error = ();
 
-        async fn ready(&self, _: ReadyCtx<'_, Self, ()>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
             if self.0 { Err(()) } else { Ok(()) }
         }
 
-        async fn call(&self, _m: (), _: Ctx<'_, Self, ()>) -> Result<(), ()> {
+        async fn call(&self, _m: (), _: Ctx<'_, Self>) -> Result<(), ()> {
             Err(())
         }
 

@@ -9,7 +9,8 @@ use crate::service::{Ctx, Service, ServiceFactory, cfg::SharedCfg};
 /// Default control service
 pub struct DefaultControlService;
 
-impl ServiceFactory<(), h2::Control<H2Error>> for DefaultControlService {
+impl ServiceFactory<h2::Control<H2Error>> for DefaultControlService {
+    type St = ();
     type Res = h2::ControlAck;
     type Error = io::Error;
 
@@ -22,14 +23,16 @@ impl ServiceFactory<(), h2::Control<H2Error>> for DefaultControlService {
     }
 }
 
-impl Service<(), h2::Control<H2Error>> for DefaultControlService {
+impl Service for DefaultControlService {
+    type St = ();
+    type Req = h2::Control<H2Error>;
     type Res = h2::ControlAck;
     type Error = io::Error;
 
     async fn call(
         &self,
         msg: h2::Control<H2Error>,
-        _: Ctx<'_, Self, ()>,
+        _: Ctx<'_, Self>,
     ) -> Result<Self::Res, Self::Error> {
         log::trace!("HTTP/2 Control message: {msg:?}");
         Ok(msg.ack())

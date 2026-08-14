@@ -59,22 +59,24 @@ pub struct CompressMiddleware<S> {
     encoding: ContentEncoding,
 }
 
-impl<S, St, E> Service<St, WebRequest<E>> for CompressMiddleware<S>
+impl<S, E> Service for CompressMiddleware<S>
 where
-    S: Service<St, WebRequest<E>, Res = WebResponse>,
+    S: Service<Req = WebRequest<E>, Res = WebResponse>,
     E: ErrorRenderer,
 {
+    type St = S::St;
+    type Req = WebRequest<E>;
     type Res = WebResponse;
     type Error = S::Error;
 
     crate::forward_poll!(service);
-    crate::forward_ready!(St, service);
+    crate::forward_ready!(service);
     crate::forward_shutdown!(service);
 
     async fn call(
         &self,
         req: WebRequest<E>,
-        ctx: Ctx<'_, Self, St>,
+        ctx: Ctx<'_, Self>,
     ) -> Result<WebResponse, S::Error> {
         // negotiate content-encoding
         let encoding = if let Some(val) = req.headers().get(&ACCEPT_ENCODING) {

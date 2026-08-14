@@ -50,15 +50,17 @@ impl<S> InFlightService<S> {
     }
 }
 
-impl<S, St, Req> Service<St, Req> for InFlightService<S>
+impl<S> Service for InFlightService<S>
 where
-    S: Service<St, Req>,
+    S: Service,
 {
+    type St = S::St;
+    type Req = S::Req;
     type Res = S::Res;
     type Error = S::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), S::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), S::Error> {
         if self.count.is_available() {
             ctx.ready(&self.service).await
         } else {
@@ -69,7 +71,7 @@ where
     }
 
     #[inline]
-    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
+    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self>) -> Result<S::Res, S::Error> {
         ctx.ready(self).await?;
         let _guard = self.count.get();
         ctx.call(&self.service, req).await

@@ -280,10 +280,10 @@ impl Drop for WorkerAvailabilityTx {
 /// Service runner.
 ///
 /// The runner receives messages through an unbounded channel and processes them.
-struct ServiceRunner<F: ServiceFactory<(), Req>, Req> {
+struct ServiceRunner<F: ServiceFactory<Req>, Req> {
     name: String,
     factory: F,
-    svc: PipelineBinding<F::Service, (), Req>,
+    svc: PipelineBinding<F::Service>,
     reqs: Receiver<Req>,
     stop: Pin<Box<dyn Stream<Item = Shutdown>>>,
     availability: WorkerAvailabilityTx,
@@ -292,7 +292,7 @@ struct ServiceRunner<F: ServiceFactory<(), Req>, Req> {
 impl<F, Req> ServiceRunner<F, Req>
 where
     Req: Send + 'static,
-    F: ServiceFactory<(), Req, InitCfg = ()> + 'static,
+    F: ServiceFactory<Req, St = (), InitCfg = ()> + 'static,
 {
     async fn create(
         name: &String,

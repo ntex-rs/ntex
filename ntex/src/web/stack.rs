@@ -25,7 +25,7 @@ impl<S, Inner, Outer, Err> Middleware<S, SharedCfg> for WebStack<Inner, Outer, E
 where
     Inner: Middleware<S, SharedCfg>,
     Outer: Middleware<Inner::Service, SharedCfg>,
-    Outer::Service: Service<(), WebRequest<Err>, Res = WebResponse>,
+    Outer::Service: Service<St = (), Req = WebRequest<Err>, Res = WebResponse>,
 {
     type Service = WebMiddleware<Outer::Service, Err>;
 
@@ -55,12 +55,14 @@ where
     }
 }
 
-impl<S, Err> Service<(), WebRequest<Err>> for WebMiddleware<S, Err>
+impl<S, Err> Service for WebMiddleware<S, Err>
 where
-    S: Service<(), WebRequest<Err>, Res = WebResponse>,
+    S: Service<St = (), Req = WebRequest<Err>, Res = WebResponse>,
     Err: ErrorRenderer,
     Err::Container: From<S::Error>,
 {
+    type St = ();
+    type Req = WebRequest<Err>;
     type Res = WebResponse;
     type Error = Err::Container;
 
@@ -68,12 +70,12 @@ where
     async fn call(
         &self,
         req: WebRequest<Err>,
-        ctx: Ctx<'_, Self, ()>,
+        ctx: Ctx<'_, Self>,
     ) -> Result<Self::Res, Self::Error> {
         ctx.call(&self.svc, req).await.map_err(Into::into)
     }
 
     crate::forward_poll!(svc);
-    crate::forward_ready!((), svc);
+    crate::forward_ready!(svc);
     crate::forward_shutdown!(svc);
 }

@@ -19,18 +19,20 @@ impl Sender {
 }
 
 #[allow(unused_variables)]
-impl Service<(), ServiceRequest> for Sender {
+impl Service for Sender {
+    type St = ();
+    type Req = ServiceRequest;
     type Res = ServiceResponse;
     type Error = Error<ClientError>;
 
-    crate::forward_ready!((), connector);
+    crate::forward_ready!(connector);
     crate::forward_poll!(connector);
     crate::forward_shutdown!(connector);
 
     async fn call(
         &self,
         req: ServiceRequest,
-        ctx: Ctx<'_, Self, ()>,
+        ctx: Ctx<'_, Self>,
     ) -> Result<Self::Res, Self::Error> {
         let ServiceRequest {
             head,

@@ -252,8 +252,8 @@ pub(super) struct DispatcherConfig<S, C> {
     flags: Cell<Flags>,
     pub(super) idx: Cell<usize>,
     pub(super) config: Cfg<HttpServiceConfig>,
-    pub(super) service: Pipeline<S, ()>,
-    pub(super) control: Pipeline<C, ()>,
+    pub(super) service: Pipeline<S>,
+    pub(super) control: Pipeline<C>,
 }
 
 impl<S, C> DispatcherConfig<S, C> {

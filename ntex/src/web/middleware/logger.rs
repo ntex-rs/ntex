@@ -131,21 +131,23 @@ pub struct LoggerMiddleware<S> {
     service: S,
 }
 
-impl<S, St, E> Service<St, WebRequest<E>> for LoggerMiddleware<S>
+impl<S, E> Service for LoggerMiddleware<S>
 where
-    S: Service<St, WebRequest<E>, Res = WebResponse>,
+    S: Service<Req = WebRequest<E>, Res = WebResponse>,
 {
+    type St = S::St;
+    type Req = WebRequest<E>;
     type Res = WebResponse;
     type Error = S::Error;
 
     crate::forward_poll!(service);
-    crate::forward_ready!(St, service);
+    crate::forward_ready!(service);
     crate::forward_shutdown!(service);
 
     async fn call(
         &self,
         req: WebRequest<E>,
-        ctx: Ctx<'_, Self, St>,
+        ctx: Ctx<'_, Self>,
     ) -> Result<Self::Res, S::Error> {
         if self.inner.exclude.contains(req.path()) {
             ctx.call(&self.service, req).await
@@ -434,7 +436,7 @@ mod tests {
             srv.into_service(),
             &SharedCfg::default(),
         ))
-        .bind(());
+        .bind();
         assert!(lazy(|cx| srv.poll_ready(cx).is_ready()).await);
         assert!(lazy(|cx| srv.poll_shutdown(cx).is_ready()).await);
 

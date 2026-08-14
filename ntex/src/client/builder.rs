@@ -203,8 +203,12 @@ impl<M> ClientBuilder<M> {
     where
         T: Into<SharedCfg>,
         M: Middleware<Sender, ClientConfig>,
-        M::Service: Service<(), ServiceRequest, Res = ServiceResponse, Error = Error<ClientError>>
-            + 'static,
+        M::Service: Service<
+                St = (),
+                Req = ServiceRequest,
+                Res = ServiceResponse,
+                Error = Error<ClientError>,
+            > + 'static,
     {
         let cfg = cfg.into();
         self.config.cfg = cfg.clone();

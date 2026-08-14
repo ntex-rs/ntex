@@ -29,11 +29,8 @@ pub struct OneRequestService<S> {
     ready: Cell<bool>,
 }
 
-impl<S> OneRequestService<S> {
-    pub fn new<St, Req>(service: S) -> Self
-    where
-        S: Service<St, Req>,
-    {
+impl<S: Service> OneRequestService<S> {
+    pub fn new(service: S) -> Self {
         Self {
             service,
             ready: Cell::new(true),
@@ -42,15 +39,14 @@ impl<S> OneRequestService<S> {
     }
 }
 
-impl<S, St, Req> Service<St, Req> for OneRequestService<S>
-where
-    S: Service<St, Req>,
-{
+impl<S: Service> Service for OneRequestService<S> {
+    type St = S::St;
+    type Req = S::Req;
     type Res = S::Res;
     type Error = S::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), S::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), S::Error> {
         if !self.ready.get() {
             poll_fn(|cx| {
                 self.waker.register(cx.waker());
@@ -66,7 +62,7 @@ where
     }
 
     #[inline]
-    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
+    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self>) -> Result<S::Res, S::Error> {
         self.ready.set(false);
 
         let result = ctx.call(&self.service, req).await;

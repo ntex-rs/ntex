@@ -31,7 +31,7 @@ thread_local! {
 
 /// `WebSocket` client builder
 pub struct WsClient<F, T> {
-    connector: Pipeline<T, ()>,
+    connector: Pipeline<T>,
     head: Message<RequestHead>,
     addr: Option<net::SocketAddr>,
     max_size: usize,
@@ -79,8 +79,8 @@ impl WsClient<Base, ()> {
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
         F: Filter,
         T: ServiceFactory<
-                (),
                 Connect<Uri>,
+                St = (),
                 Res = Io<F>,
                 Error = Error<ConnectError>,
                 InitCfg = SharedCfg,
@@ -139,7 +139,7 @@ impl<F, T> WsClient<F, T> {
 impl<F, T> WsClient<F, T>
 where
     F: Filter,
-    T: Service<(), Connect<Uri>, Res = Io<F>, Error = Error<ConnectError>>,
+    T: Service<St = (), Req = Connect<Uri>, Res = Io<F>, Error = Error<ConnectError>>,
 {
     /// Complete request construction and connect to a websockets server.
     pub async fn connect(&self) -> Result<WsConnection<F>, Error<WsClientError>> {
@@ -330,8 +330,8 @@ impl WsClientBuilder<Base, ()> {
 impl<F, T> WsClientBuilder<F, T>
 where
     T: ServiceFactory<
-            (),
             Connect<Uri>,
+            St = (),
             Res = Io<F>,
             Error = Error<ConnectError>,
             InitCfg = SharedCfg,
@@ -520,8 +520,8 @@ where
     where
         F1: Filter,
         T1: ServiceFactory<
-                (),
                 Connect<Uri>,
+                St = (),
                 Res = Io<F1>,
                 Error = Error<ConnectError>,
                 InitCfg = SharedCfg,
@@ -779,7 +779,7 @@ impl WsConnection<Sealed> {
     /// Start client websockets service.
     pub async fn start<T>(self, service: T) -> Result<(), WsError<T::Error>>
     where
-        T: Service<(), ws::Frame, Res = Option<ws::Message>> + 'static,
+        T: Service<St = (), Req = ws::Frame, Res = Option<ws::Message>> + 'static,
     {
         let service = apply_fn(
             service.into_service().map_err(WsError::Service),

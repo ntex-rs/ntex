@@ -105,21 +105,23 @@ pub struct DefaultHeadersMiddleware<S> {
     inner: Rc<Inner>,
 }
 
-impl<S, St, E> Service<St, WebRequest<E>> for DefaultHeadersMiddleware<S>
+impl<S, E> Service for DefaultHeadersMiddleware<S>
 where
-    S: Service<St, WebRequest<E>, Res = WebResponse>,
+    S: Service<Req = WebRequest<E>, Res = WebResponse>,
 {
+    type St = S::St;
+    type Req = WebRequest<E>;
     type Res = WebResponse;
     type Error = S::Error;
 
     crate::forward_poll!(service);
-    crate::forward_ready!(St, service);
+    crate::forward_ready!(service);
     crate::forward_shutdown!(service);
 
     async fn call(
         &self,
         r: WebRequest<E>,
-        ctx: Ctx<'_, Self, St>,
+        ctx: Ctx<'_, Self>,
     ) -> Result<Self::Res, S::Error> {
         let mut res = ctx.call(&self.service, r).await?;
 
@@ -156,7 +158,7 @@ mod tests {
                 .header(CONTENT_TYPE, "0001")
                 .create(ok_service(), &SharedCfg::default()),
         )
-        .bind(());
+        .bind();
 
         assert!(lazy(|cx| mw.poll_ready(cx).is_ready()).await);
         assert!(lazy(|cx| mw.poll_shutdown(cx).is_ready()).await);
