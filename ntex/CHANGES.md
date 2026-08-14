@@ -1,5 +1,9 @@
 # Changes
 
+## [3.14.0] - 2026-08-14
+
+* Use new ServiceExt and ServiceFactoryExt
+
 ## [3.13.0] - 2026-08-09
 
 * Stop server when one of worker panics (stop_on_panic)

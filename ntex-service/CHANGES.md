@@ -1,5 +1,9 @@
 # Changes
 
+## [4.7.0] - 2026-08-14
+
+* Remove chain and chain_factory, move functionality to ServiceExt and ServiceFactoryExt
+
 ## [4.6.0] - 2026-03-05
 
 * Add `service` name to `SharedCfg`
