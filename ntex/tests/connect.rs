@@ -139,7 +139,7 @@ async fn test_openssl_read_before_error() {
 #[ntex::test]
 async fn test_schannel_string() {
     use ntex::{io::types::HttpProtocol, server::openssl};
-    use ntex_tls::schannel::{ClientConfig, PeerCert, TlsConnector, TlsConnector2};
+    use ntex_tls::schannel::{ClientConfig, PeerCert, TlsConnector};
     use tls_openssl::x509::X509;
 
     let srv = test_server(async || {
@@ -158,37 +158,12 @@ async fn test_schannel_string() {
     // schannel connector
     let conn = Pipeline::new(
         TlsConnector::with_config(config.clone())
-            .create(SharedCfg::new("CLIENT").into())
+            .create(&SharedCfg::new("CLIENT").into())
             .await
             .unwrap(),
     );
     let addr = format!("localhost:{}", srv.addr().port());
-    let io = conn.call(addr.into()).await.unwrap();
-    assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
-    assert_eq!(
-        io.query::<HttpProtocol>().get().unwrap(),
-        HttpProtocol::Http1
-    );
-    let cert = X509::from_pem(include_bytes!("cert.pem")).unwrap();
-    assert_eq!(
-        io.query::<PeerCert>().as_ref().unwrap().0,
-        cert.to_der().unwrap()
-    );
-    io.send(Bytes::from_static(b"test"), &BytesCodec)
-        .await
-        .unwrap();
-    let item = io.recv(&BytesCodec).await.unwrap().unwrap();
-    assert_eq!(item, Bytes::from_static(b"test"));
-
-    // schannel connector 2
-    let conn = Pipeline::new(
-        TlsConnector2::with_config(config)
-            .create(SharedCfg::default())
-            .await
-            .unwrap(),
-    );
-    let addr = format!("localhost:{}", srv.addr().port());
-    let io = conn.call(addr.into()).await.unwrap();
+    let io = conn.call(addr.into(), &()).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
     assert_eq!(
         io.query::<HttpProtocol>().get().unwrap(),
