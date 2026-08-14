@@ -449,12 +449,6 @@ where
         }
     }
 
-    #[deprecated(since = "3.2.0", note = "use `middleware()` instead")]
-    #[doc(hidden)]
-    pub fn wrap<U>(self, mw: U) -> App<WebStack<M, U, Err>, T, Err> {
-        self.middleware(mw)
-    }
-
     #[must_use]
     /// Use ascii case-insensitive routing.
     ///

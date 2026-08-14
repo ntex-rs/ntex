@@ -1,5 +1,9 @@
 # Changes
 
+## [4.0.0] - 2026-08-xx
+
+* Migrate to ntex-service 5
+
 ## [3.15.0] - 2026-08-09
 
 * Do not unwind reactor panics, forward handling to arbiter

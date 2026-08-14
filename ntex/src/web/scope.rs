@@ -379,12 +379,6 @@ where
             case_insensitive: self.case_insensitive,
         }
     }
-
-    #[doc(hidden)]
-    #[deprecated(since = "3.2.0", note = "use `middleware()` instead")]
-    pub fn wrap<U>(self, mw: U) -> Scope<Err, WebStack<M, U, Err>, T> {
-        self.middleware(mw)
-    }
 }
 
 impl<Err, M, T> WebServiceFactory<Err> for Scope<Err, M, T>

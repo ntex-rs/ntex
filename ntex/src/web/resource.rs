@@ -531,10 +531,8 @@ impl<Err: ErrorRenderer> Service for ResourceRouter<Err> {
 
 #[cfg(test)]
 mod tests {
-    use crate::http::header::{self, HeaderValue};
     use crate::http::{Method, StatusCode};
     use crate::time::{Millis, sleep};
-    use crate::web::middleware::DefaultHeaders;
     use crate::web::test::{TestRequest, call_service, init_service};
     use crate::web::{self, App, DefaultError, HttpResponse, guard, request::WebRequest};
     use crate::{service::fn_service, util::Ready};
@@ -558,30 +556,6 @@ mod tests {
         let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert!(filter.get());
-    }
-
-    #[crate::rt_test]
-    #[allow(deprecated)]
-    async fn test_middleware() {
-        let srv = init_service(
-            App::new().service(
-                web::resource("/test")
-                    .name("test")
-                    .middleware(
-                        DefaultHeaders::new()
-                            .header(header::CONTENT_TYPE, HeaderValue::from_static("0001")),
-                    )
-                    .route(web::get().to(|| async { HttpResponse::Ok() })),
-            ),
-        )
-        .await;
-        let req = TestRequest::with_uri("/test").to_request();
-        let resp = call_service(&srv, req).await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(
-            resp.headers().get(header::CONTENT_TYPE).unwrap(),
-            HeaderValue::from_static("0001")
-        );
     }
 
     #[crate::rt_test]

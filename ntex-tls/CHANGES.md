@@ -1,5 +1,9 @@
 # Changes
 
+## [4.0.0] - 2026-08-xx
+
+* Migrate to ntex-service 5
+
 ## [3.8.0] - 2026-07-17
 
 * Add `schannel` support #904

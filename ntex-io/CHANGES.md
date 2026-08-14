@@ -1,5 +1,9 @@
 # Changes
 
+## [4.0.0] - 2026-08-xx
+
+* Migrate to ntex-service 5
+
 ## [3.13.1] - 2026-06-21
 
 * Handle disconnect during Io::read() call

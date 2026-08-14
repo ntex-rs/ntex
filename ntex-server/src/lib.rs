@@ -19,9 +19,6 @@ pub use self::pool::WorkerPool;
 pub use self::server::Server;
 pub use self::wrk::{Worker, WorkerStatus, WorkerStop};
 
-#[deprecated(since = "3.10.0", note = "use ntex_rt::signals")]
-pub use ntex_rt::signals::{Signal, signal};
-
 /// Worker id
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct WorkerId(pub(crate) usize);
