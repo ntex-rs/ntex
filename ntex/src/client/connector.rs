@@ -1,6 +1,6 @@
 use std::{error::Error as StdError, task::Context, time::Duration};
 
-use crate::connect::{Connect as TcpConnect, Connector as TcpConnector};
+use crate::connect::{self, Connect as TcpConnect, Connector as TcpConnector};
 use crate::error::{Error, ErrorMapping, with_service};
 use crate::service::{
     Ctx, Pipeline, ReadyCtx, Service, ServiceFactory, apply_fn_factory, boxed,
@@ -160,7 +160,7 @@ impl Connector {
         T: ServiceFactory<
                 TcpConnect<Uri>,
                 St = (),
-                Error = Error<crate::connect::ConnectError>,
+                Error = Error<connect::ConnectError>,
                 InitCfg = SharedCfg,
             > + 'static,
         T::InitError: StdError,
@@ -184,7 +184,7 @@ impl Connector {
         T: ServiceFactory<
                 TcpConnect<Uri>,
                 St = (),
-                Error = Error<crate::connect::ConnectError>,
+                Error = Error<connect::ConnectError>,
                 InitCfg = SharedCfg,
             > + 'static,
         T::InitError: StdError,
