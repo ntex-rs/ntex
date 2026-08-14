@@ -1,5 +1,4 @@
-use std::future::Future;
-use std::{cell::Cell, convert::Infallible, fmt, marker, task::Context, task::Poll, time};
+use std::{cell::Cell, fmt, future::Future, marker, task::Context, task::Poll, time};
 
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
 
@@ -60,13 +59,18 @@ where
 {
     type Response = R;
     type Error = E;
-
     type Service = KeepAliveService<R, E, F>;
-    type InitError = Infallible;
+    type InitError = std::convert::Infallible;
+    type Data = ();
 
     #[inline]
-    fn create(&self, _: C) -> impl Future<Output = Result<Self::Service, Self::InitError>> {
-        Ready::Ok(KeepAliveService::new(self.ka, self.f.clone()))
+    async fn create(&self, _: C) -> Result<Self::Service, Self::InitError> {
+        Ok(KeepAliveService::new(self.ka, self.f.clone()))
+    }
+
+    #[inline]
+    async fn map_data(&self, _: &C, _: &Self::Data) -> Result<(), Self::InitError> {
+        Ok(())
     }
 }
 
@@ -111,9 +115,11 @@ where
 {
     type Response = R;
     type Error = E;
+    type Data = ();
 
     fn ready(
         &self,
+        _: &Self::Data,
         _: ServiceCtx<'_, Self>,
     ) -> impl Future<Output = Result<(), Self::Error>> {
         let expire = self.expire.get() + time::Duration::from(self.dur);
@@ -124,7 +130,7 @@ where
         }
     }
 
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
+    fn poll(&self, _: &Self::Data, cx: &mut Context<'_>) -> Result<(), Self::Error> {
         match self.sleep.poll_elapsed(cx) {
             Poll::Ready(()) => {
                 let now = now();
@@ -144,7 +150,12 @@ where
     }
 
     #[inline]
-    fn call(&self, req: R, _: ServiceCtx<'_, Self>) -> impl Future<Output = Result<R, E>> {
+    fn call(
+        &self,
+        req: R,
+        _: &Self::Data,
+        _: ServiceCtx<'_, Self>,
+    ) -> impl Future<Output = Result<R, E>> {
         self.expire.set(now());
         Ready::Ok(req)
     }
@@ -153,6 +164,8 @@ where
 #[cfg(test)]
 mod tests {
     use std::task::Poll;
+
+    use ntex_service::ServiceFactory;
 
     use super::*;
     use crate::future::lazy;
@@ -166,7 +179,7 @@ mod tests {
         assert!(format!("{factory:?}").contains("KeepAlive"));
         let _ = factory.clone();
 
-        let service = factory.pipeline(&()).await.unwrap().bind();
+        let service = factory.pipeline((), &()).await.unwrap().bind();
         assert!(format!("{service:?}").contains("KeepAliveService"));
 
         assert_eq!(service.call(1usize).await, Ok(1usize));

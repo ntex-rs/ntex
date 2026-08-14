@@ -1,12 +1,12 @@
 use std::{fmt, marker::PhantomData};
 
-use super::{IntoServiceFactory, ServiceFactory};
+use super::{IntoServiceFactory, Pipeline, Service, ServiceFactory};
 
 /// Adapt external config argument to a config for provided service factory
 ///
 /// Note that this function consumes the receiving service factory and returns
 /// a wrapped version of it.
-pub fn map_config<T, R, U, F, C, C2>(factory: U, f: F) -> MapConfig<T, F, C, C2>
+pub fn map_config<T, R, U, F, C, C2>(factory: U, f: F) -> MapConfig<T, F, C, C2, R>
 where
     T: ServiceFactory<R, C2>,
     U: IntoServiceFactory<T, R, C2>,
@@ -16,22 +16,22 @@ where
 }
 
 /// Replace config with unit
-pub fn unit_config<T, R, U>(factory: U) -> UnitConfig<T>
+pub fn unit_config<T, R, U>(factory: U) -> UnitConfig<T, R>
 where
-    T: ServiceFactory<R>,
-    U: IntoServiceFactory<T, R>,
+    T: ServiceFactory<R, ()>,
+    U: IntoServiceFactory<T, R, ()>,
 {
     UnitConfig::new(factory.into_factory())
 }
 
 /// `map_config()` adapter service factory
-pub struct MapConfig<A, F, C, C2> {
+pub struct MapConfig<A, F, C, C2, R> {
     a: A,
     f: F,
-    e: PhantomData<(C, C2)>,
+    e: PhantomData<fn(C, C2, R)>,
 }
 
-impl<A, F, C, C2> MapConfig<A, F, C, C2> {
+impl<A, F, C, C2, R> MapConfig<A, F, C, C2, R> {
     /// Create new `MapConfig` combinator
     pub(crate) fn new(a: A, f: F) -> Self {
         Self {
@@ -42,7 +42,7 @@ impl<A, F, C, C2> MapConfig<A, F, C, C2> {
     }
 }
 
-impl<A, F, C, C2> Clone for MapConfig<A, F, C, C2>
+impl<A, F, C, C2, R> Clone for MapConfig<A, F, C, C2, R>
 where
     A: Clone,
     F: Clone,
@@ -56,7 +56,7 @@ where
     }
 }
 
-impl<A, F, C, C2> fmt::Debug for MapConfig<A, F, C, C2>
+impl<A, F, C, C2, R> fmt::Debug for MapConfig<A, F, C, C2, R>
 where
     A: fmt::Debug,
 {
@@ -68,47 +68,79 @@ where
     }
 }
 
-impl<A, F, R, C, C2> ServiceFactory<R, C> for MapConfig<A, F, C, C2>
+impl<A, F, R, C, C2> ServiceFactory<R, C> for MapConfig<A, F, C, C2, R>
 where
     A: ServiceFactory<R, C2>,
     F: Fn(C) -> C2,
+    C: Clone,
 {
     type Response = A::Response;
     type Error = A::Error;
-
     type Service = A::Service;
     type InitError = A::InitError;
+    type Data = A::Data;
 
     async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
         self.a.create((self.f)(cfg)).await
+    }
+
+    async fn map_data(
+        &self,
+        cfg: &C,
+        data: &Self::Data,
+    ) -> Result<<Self::Service as Service<R>>::Data, Self::InitError> {
+        self.a.map_data(&(self.f)(cfg.clone()), data).await
+    }
+
+    async fn pipeline(
+        &self,
+        cfg: C,
+        data: &Self::Data,
+    ) -> Result<Pipeline<Self::Service, <Self::Service as Service<R>>::Data>, Self::InitError>
+    {
+        let cfg = (self.f)(cfg);
+        let svc_data = self.a.map_data(&cfg, data).await?;
+        Ok(Pipeline::new(self.a.create(cfg).await?, svc_data))
     }
 }
 
 #[derive(Clone, Debug)]
 /// `unit_config()` config combinator
-pub struct UnitConfig<A> {
+pub struct UnitConfig<A, R> {
     factory: A,
+    _t: PhantomData<fn(R)>,
 }
 
-impl<A> UnitConfig<A> {
+impl<A, R> UnitConfig<A, R> {
     /// Create new `UnitConfig` combinator
     pub(crate) fn new(factory: A) -> Self {
-        Self { factory }
+        Self {
+            factory,
+            _t: PhantomData,
+        }
     }
 }
 
-impl<A, R, C> ServiceFactory<R, C> for UnitConfig<A>
+impl<A, R, C> ServiceFactory<R, C> for UnitConfig<A, R>
 where
-    A: ServiceFactory<R>,
+    A: ServiceFactory<R, ()>,
 {
     type Response = A::Response;
     type Error = A::Error;
-
     type Service = A::Service;
     type InitError = A::InitError;
+    type Data = A::Data;
 
     async fn create(&self, _: C) -> Result<Self::Service, Self::InitError> {
         self.factory.create(()).await
+    }
+
+    async fn map_data(
+        &self,
+        _: &C,
+        data: &Self::Data,
+    ) -> Result<<Self::Service as Service<R>>::Data, Self::InitError> {
+        self.factory.map_data(&(), data).await
     }
 }
 
@@ -132,7 +164,7 @@ mod tests {
         )
         .clone();
 
-        let svc = factory.pipeline(&10).await.unwrap();
+        let svc = factory.pipeline(&10, &()).await.unwrap();
         assert_eq!(item.get(), 11);
         let _ = format!("{factory:?}");
 
@@ -143,7 +175,7 @@ mod tests {
     async fn test_unit_config() {
         let svc = unit_config(fn_service(|item: usize| async move { Ok::<_, ()>(item) }))
             .clone()
-            .pipeline(&10)
+            .pipeline(&10, &())
             .await
             .unwrap();
         assert_eq!(svc.call(1).await.unwrap(), 1);

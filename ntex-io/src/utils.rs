@@ -1,6 +1,6 @@
 use std::{cell::Cell, task::Poll, task::Waker};
 
-use ntex_service::{ServiceFactory, chain_factory, fn_service};
+use ntex_service::{Service, ServiceFactory, chain_factory, fn_service};
 use ntex_util::{future::Ready, task::LocalWaker};
 
 use crate::{Filter, Io, IoBoxed, IoCallbacks};
@@ -23,10 +23,12 @@ pub fn seal<F, S, C>(
     Response = S::Response,
     Error = S::Error,
     InitError = S::InitError,
+    Data = (),
 >
 where
     F: Filter,
-    S: ServiceFactory<IoBoxed, C>,
+    S: ServiceFactory<IoBoxed, C, Data = ()>,
+    S::Service: Service<IoBoxed, Data = ()>,
     C: Clone,
 {
     chain_factory(fn_service(|io: Io<F>| Ready::Ok(io.boxed())))
@@ -148,7 +150,7 @@ mod tests {
                 .unwrap();
             Ok::<_, ()>(())
         }))
-        .pipeline(())
+        .pipeline((), &())
         .await
         .unwrap();
         let _ = svc.call(Io::new(server, SharedCfg::default())).await;

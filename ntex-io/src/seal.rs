@@ -102,7 +102,7 @@ mod tests {
                 .unwrap();
             Ok::<_, ()>(())
         }))
-        .pipeline(())
+        .pipeline((), &())
         .await
         .unwrap();
 

@@ -66,6 +66,7 @@ where
 {
     type Response = WebResponse;
     type Error = S::Error;
+    type Data = S::Data;
 
     crate::forward_poll!(service);
     crate::forward_ready!(service);
@@ -74,6 +75,7 @@ where
     async fn call(
         &self,
         req: WebRequest<E>,
+        data: &Self::Data,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<WebResponse, S::Error> {
         // negotiate content-encoding
@@ -87,7 +89,7 @@ where
             ContentEncoding::Identity
         };
 
-        let resp = ctx.call(&self.service, req).await?;
+        let resp = ctx.call(&self.service, req, data).await?;
 
         let enc = if let Some(enc) = resp.response().get_encoding() {
             enc

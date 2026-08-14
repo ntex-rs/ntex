@@ -39,7 +39,7 @@ use super::{BoxedSender, ClientResponse, ServiceRequest};
 /// ```
 pub struct ClientRequest {
     request: ServiceRequest,
-    svc: Pipeline<BoxedSender>,
+    svc: Pipeline<BoxedSender, ()>,
     err: Option<HttpError>,
     #[cfg(feature = "cookie")]
     cookies: Option<CookieJar>,
@@ -47,7 +47,7 @@ pub struct ClientRequest {
 
 impl ClientRequest {
     /// Create new client request builder.
-    pub(super) fn new<U>(method: Method, uri: U, svc: Pipeline<BoxedSender>) -> Self
+    pub(super) fn new<U>(method: Method, uri: U, svc: Pipeline<BoxedSender, ()>) -> Self
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,

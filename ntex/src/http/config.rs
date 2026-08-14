@@ -248,20 +248,26 @@ bitflags::bitflags! {
     }
 }
 
-pub(super) struct DispatcherConfig<S, C> {
+pub(super) struct DispatcherConfig<S, C, SD, CD> {
     flags: Cell<Flags>,
     pub(super) idx: Cell<usize>,
     pub(super) config: Cfg<HttpServiceConfig>,
-    pub(super) service: Pipeline<S>,
-    pub(super) control: Pipeline<C>,
+    pub(super) service: Pipeline<S, SD>,
+    pub(super) control: Pipeline<C, CD>,
 }
 
-impl<S, C> DispatcherConfig<S, C> {
-    pub(super) fn new(config: Cfg<HttpServiceConfig>, service: S, control: C) -> Self {
+impl<S, C, SD, CD> DispatcherConfig<S, C, SD, CD> {
+    pub(super) fn new(
+        config: Cfg<HttpServiceConfig>,
+        service: S,
+        service_data: SD,
+        control: C,
+        control_data: CD,
+    ) -> Self {
         DispatcherConfig {
             idx: Cell::new(0),
-            service: service.into(),
-            control: control.into(),
+            service: Pipeline::new(service, service_data),
+            control: Pipeline::new(control, control_data),
             flags: Cell::new(Flags::empty()),
             config,
         }

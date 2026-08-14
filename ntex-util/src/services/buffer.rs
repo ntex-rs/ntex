@@ -1,9 +1,10 @@
 //! Service that buffers incoming requests.
 use std::cell::{Cell, RefCell};
-use std::task::{Poll, Waker, ready};
+use std::future::Future;
+use std::task::{Poll, Waker};
 use std::{collections::VecDeque, fmt, future::poll_fn, marker::PhantomData};
 
-use ntex_service::{Middleware, Pipeline, PipelineBinding, Service, ServiceCtx};
+use ntex_service::{Middleware, Service, ServiceCtx};
 
 use crate::channel::oneshot;
 
@@ -108,7 +109,7 @@ impl<E: std::fmt::Display + std::fmt::Debug> std::error::Error for BufferService
 pub struct BufferService<R, S: Service<R>> {
     size: usize,
     ready: Cell<bool>,
-    service: PipelineBinding<S, R>,
+    service: S,
     buf: RefCell<VecDeque<oneshot::Sender<oneshot::Sender<()>>>>,
     next_call: RefCell<Option<oneshot::Receiver<()>>>,
     cancel_on_shutdown: bool,
@@ -125,7 +126,7 @@ where
     pub fn new(size: usize, service: S) -> Self {
         Self {
             size,
-            service: Pipeline::new(service).bind(),
+            service,
             ready: Cell::new(false),
             buf: RefCell::new(VecDeque::with_capacity(size)),
             next_call: RefCell::default(),
@@ -185,19 +186,25 @@ where
 {
     type Response = S::Response;
     type Error = BufferServiceError<S::Error>;
+    type Data = S::Data;
 
-    async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(
+        &self,
+        data: &Self::Data,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<(), Self::Error> {
         // hold advancement until the last released task either makes a call or is dropped
         let next_call = self.next_call.borrow_mut().take();
         if let Some(next_call) = next_call {
             let _ = next_call.recv().await;
         }
 
+        let mut service_ready = std::pin::pin!(ctx.ready(&self.service, data));
         poll_fn(|cx| {
             let mut buffer = self.buf.borrow_mut();
 
             // handle inner service readiness
-            if self.service.poll_ready(cx)?.is_pending() {
+            if service_ready.as_mut().poll(cx)?.is_pending() {
                 if buffer.len() < self.size {
                     // buffer next request
                     self.ready.set(false);
@@ -229,7 +236,7 @@ where
         .await
     }
 
-    async fn shutdown(&self) {
+    async fn shutdown(&self, data: &Self::Data) {
         // hold advancement until the last released task either makes a call or is dropped
         let next_call = self.next_call.borrow_mut().take();
         if let Some(next_call) = next_call {
@@ -243,13 +250,6 @@ where
             }
 
             if !buffer.is_empty() {
-                if ready!(self.service.poll_ready(cx)).is_err() {
-                    log::error!(
-                        "Buffered inner service failed while buffer flushing on shutdown"
-                    );
-                    return Poll::Ready(());
-                }
-
                 while let Some(sender) = buffer.pop_front() {
                     let (next_call_tx, next_call_rx) = oneshot::channel();
                     if sender.send(next_call_tx).is_err()
@@ -269,17 +269,18 @@ where
         })
         .await;
 
-        self.service.shutdown().await;
+        self.service.shutdown(data).await;
     }
 
     async fn call(
         &self,
         req: R,
-        _: ServiceCtx<'_, Self>,
+        data: &Self::Data,
+        ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
         if self.ready.get() {
             self.ready.set(false);
-            Ok(self.service.call_nowait(req).await?)
+            Ok(ctx.call_nowait(&self.service, req, data).await?)
         } else {
             let (tx, rx) = oneshot::channel();
             self.buf.borrow_mut().push_back(tx);
@@ -291,7 +292,7 @@ where
             })?;
 
             // call service
-            Ok(self.service.call(req).await?)
+            Ok(ctx.call(&self.service, req, data).await?)
         }
     }
 
@@ -301,7 +302,7 @@ where
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unused_async_trait_impl)]
-    use ntex_service::{Pipeline, apply, fn_factory};
+    use ntex_service::{apply, fn_factory};
     use std::{rc::Rc, time::Duration};
 
     use super::*;
@@ -320,8 +321,13 @@ mod tests {
     impl Service<()> for TestService {
         type Response = ();
         type Error = ();
+        type Data = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(
+            &self,
+            _: &Self::Data,
+            _: ServiceCtx<'_, Self>,
+        ) -> Result<(), Self::Error> {
             poll_fn(|cx| {
                 self.0.waker.register(cx.waker());
                 if self.0.ready.get() {
@@ -333,7 +339,12 @@ mod tests {
             .await
         }
 
-        async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
+        async fn call(
+            &self,
+            _r: (),
+            _: &Self::Data,
+            _: ServiceCtx<'_, Self>,
+        ) -> Result<(), ()> {
             self.0.ready.set(false);
             self.0.count.set(self.0.count.get() + 1);
             Ok(())
@@ -348,8 +359,11 @@ mod tests {
             count: Cell::new(0),
         });
 
-        let srv =
-            Pipeline::new(BufferService::new(2, TestService(inner.clone())).clone()).bind();
+        let srv = ntex_service::Pipeline::new(
+            BufferService::new(2, TestService(inner.clone())).clone(),
+            (),
+        )
+        .bind();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let srv1 = srv.clone();
@@ -388,7 +402,11 @@ mod tests {
             count: Cell::new(0),
         });
 
-        let srv = Pipeline::new(BufferService::new(2, TestService(inner.clone()))).bind();
+        let srv = ntex_service::Pipeline::new(
+            BufferService::new(2, TestService(inner.clone())),
+            (),
+        )
+        .bind();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let _ = srv.call(()).await;
@@ -416,7 +434,7 @@ mod tests {
             fn_factory(|| async { Ok::<_, ()>(TestService(inner.clone())) }),
         );
 
-        let srv = srv.pipeline(&()).await.unwrap().bind();
+        let srv = srv.pipeline((), &()).await.unwrap().bind();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let srv1 = srv.clone();
@@ -464,7 +482,7 @@ mod tests {
             fn_factory(|| async { Ok::<_, ()>(TestService(inner.clone())) }),
         );
 
-        let srv = srv.pipeline(&()).await.unwrap().bind();
+        let srv = srv.pipeline((), &()).await.unwrap().bind();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let srv1 = srv.clone();

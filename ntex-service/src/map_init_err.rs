@@ -1,6 +1,6 @@
 use std::{fmt, marker::PhantomData};
 
-use super::ServiceFactory;
+use super::{Service, ServiceFactory};
 
 /// `MapInitErr` service combinator
 pub struct MapInitErr<A, R, C, F, E> {
@@ -57,19 +57,28 @@ where
 {
     type Response = A::Response;
     type Error = A::Error;
-
     type Service = A::Service;
     type InitError = E;
+    type Data = A::Data;
 
     #[inline]
     async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
-        self.a.create(cfg).await.map_err(|e| (self.f)(e))
+        self.a.create(cfg).await.map_err(&self.f)
+    }
+
+    #[inline]
+    async fn map_data(
+        &self,
+        cfg: &C,
+        data: &Self::Data,
+    ) -> Result<<Self::Service as Service<R>>::Data, Self::InitError> {
+        self.a.map_data(cfg, data).await.map_err(&self.f)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{ServiceFactory, chain_factory, fn_factory_with_config, fn_service};
+    use crate::{chain_factory, fn_factory_with_config, fn_service};
 
     #[ntex::test]
     async fn map_init_err() {
@@ -79,35 +88,39 @@ mod tests {
                 if err {
                     Err(())
                 } else {
-                    Ok(fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }))
+                    Ok(fn_service::<_, _, _, _>(|i: usize| async move {
+                        Ok::<_, ()>(i * 2)
+                    }))
                 }
             }
         }))
         .map_init_err(|()| std::io::Error::other("err"))
         .clone();
 
-        assert!(factory.create(&true).await.is_err());
-        assert!(factory.create(&false).await.is_ok());
+        assert!(factory.pipeline(&true, &()).await.is_err());
+        assert!(factory.pipeline(&false, &()).await.is_ok());
         let _ = format!("{factory:?}");
     }
 
     #[ntex::test]
     async fn map_init_err2() {
-        let factory = fn_factory_with_config(|err: &bool| {
+        let factory = chain_factory(fn_factory_with_config(|err: &bool| {
             let err = *err;
             async move {
                 if err {
                     Err(())
                 } else {
-                    Ok(fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }))
+                    Ok(fn_service::<_, _, _, _>(|i: usize| async move {
+                        Ok::<_, ()>(i * 2)
+                    }))
                 }
             }
-        })
+        }))
         .map_init_err(|()| std::io::Error::other("err"))
         .clone();
 
-        assert!(factory.create(&true).await.is_err());
-        assert!(factory.create(&false).await.is_ok());
+        assert!(factory.pipeline(&true, &()).await.is_err());
+        assert!(factory.pipeline(&false, &()).await.is_ok());
         let _ = format!("{factory:?}");
     }
 }

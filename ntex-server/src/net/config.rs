@@ -310,9 +310,9 @@ impl ServiceRuntime {
     pub fn service<T, F>(&self, name: &str, service: F) -> &Self
     where
         F: IntoServiceFactory<T, Io, SharedCfg>,
-        T: ServiceFactory<Io, SharedCfg> + 'static,
+        T: ServiceFactory<Io, SharedCfg, Data = ()> + 'static,
         T::Service: 'static,
-        T::InitError: fmt::Debug,
+        T::Error: fmt::Debug,
     {
         let mut inner = self.0.borrow_mut();
         if let Some(entry) = inner.names.get_mut(name) {

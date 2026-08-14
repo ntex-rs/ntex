@@ -33,9 +33,15 @@ where
         B: ServiceFactory<
                 BR,
                 AC,
-                Response = A::Response,
+                Data = A::Data,
                 Error = A::Error,
                 InitError = A::InitError,
+            >,
+        B::Service: Service<
+                BR,
+                Response = A::Response,
+                Error = A::Error,
+                Data = <A::Service as Service<AR>>::Data,
             >,
         F: IntoServiceFactory<B, BR, AC>,
     {
@@ -68,9 +74,11 @@ macro_rules! variant_impl_and ({$fac1_type:ident, $fac2_type:ident, $name:ident,
             /// Convert to a Variant with more request types
             pub fn $m_name<$name, $r_name, F>(self, factory: F) -> $fac2_type<V1, V1C, $($T,)+ $name, V1R, $($R,)+ $r_name>
             where $name: ServiceFactory<$r_name, V1C,
+                    Data = V1::Data, Error = V1::Error, InitError = V1::InitError>,
+                  $name::Service: Service<$r_name,
                     Response = V1::Response,
                     Error = V1::Error,
-                    InitError = V1::InitError>,
+                    Data = <V1::Service as Service<V1R>>::Data>,
                   F: IntoServiceFactory<$name, $r_name, V1C>,
             {
                 $fac2_type {
@@ -120,16 +128,17 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
     impl<V1, $($T,)+ V1R, $($R,)+> Service<$enum_type<V1R, $($R,)+>> for $srv_type<V1, $($T,)+ V1R, $($R,)+>
     where
         V1: Service<V1R>,
-        $($T: Service<$R, Response = V1::Response, Error = V1::Error>),+
+        $($T: Service<$R, Response = V1::Response, Error = V1::Error, Data = V1::Data>),+
     {
         type Response = V1::Response;
         type Error = V1::Error;
+        type Data = V1::Data;
 
-        async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, data: &Self::Data, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
             use std::{future::Future, pin::Pin};
 
-            let mut fut1 = ::std::pin::pin!(ctx.ready(&self.V1));
-            $(let mut $T = ::std::pin::pin!(ctx.ready(&self.$T));)+
+            let mut fut1 = ::std::pin::pin!(ctx.ready(&self.V1, data));
+            $(let mut $T = ::std::pin::pin!(ctx.ready(&self.$T, data));)+
 
             let mut ready: [bool; $num] = [false; $num];
 
@@ -150,21 +159,21 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
             }).await
         }
 
-        fn poll(&self, cx: &mut std::task::Context<'_>) -> Result<(), Self::Error> {
-            self.V1.poll(cx)?;
-            $(self.$T.poll(cx)?;)+
+        fn poll(&self, data: &Self::Data, cx: &mut std::task::Context<'_>) -> Result<(), Self::Error> {
+            self.V1.poll(data, cx)?;
+            $(self.$T.poll(data, cx)?;)+
             Ok(())
         }
 
-        async fn shutdown(&self) {
-            self.V1.shutdown().await;
-            $(self.$T.shutdown().await;)+
+        async fn shutdown(&self, data: &Self::Data) {
+            self.V1.shutdown(data).await;
+            $(self.$T.shutdown(data).await;)+
         }
 
-        async fn call(&self, req: $enum_type<V1R, $($R,)+>, ctx: ServiceCtx<'_, Self>) -> Result<Self::Response, Self::Error> {
+        async fn call(&self, req: $enum_type<V1R, $($R,)+>, data: &Self::Data, ctx: ServiceCtx<'_, Self>) -> Result<Self::Response, Self::Error> {
             match req {
-                $enum_type::V1(req) => ctx.call(&self.V1, req).await,
-                $($enum_type::$T(req) => ctx.call(&self.$T, req).await,)+
+                $enum_type::V1(req) => ctx.call(&self.V1, req, data).await,
+                $($enum_type::$T(req) => ctx.call(&self.$T, req, data).await,)+
             }
         }
     }
@@ -195,16 +204,21 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
         }
     }
 
-    impl<V1, V1C, $($T,)+ V1R, $($R,)+> ServiceFactory<$enum_type<V1R, $($R),+>, V1C> for $fac_type<V1, V1C, $($T,)+ V1R, $($R,)+>
+    impl<V1, V1C, $($T,)+ V1R, $($R,)+> ServiceFactory<$enum_type<V1R, $($R,)+>, V1C> for $fac_type<V1, V1C, $($T,)+ V1R, $($R,)+>
     where
         V1: ServiceFactory<V1R, V1C>,
         V1C: Clone,
-        $($T: ServiceFactory< $R, V1C, Response = V1::Response, Error = V1::Error, InitError = V1::InitError>),+
+        $($T: ServiceFactory<$R, V1C, Data = V1::Data, Error = V1::Error, InitError = V1::InitError>,
+          $T::Service: Service<$R,
+            Response = V1::Response,
+            Error = V1::Error,
+            Data = <V1::Service as Service<V1R>>::Data>),+
     {
         type Response = V1::Response;
         type Error = V1::Error;
         type Service = $srv_type<V1::Service, $($T::Service,)+ V1R, $($R,)+>;
         type InitError = V1::InitError;
+        type Data = V1::Data;
 
         async fn create(&self, cfg: V1C) -> Result<Self::Service, Self::InitError> {
             Ok($srv_type {
@@ -212,6 +226,16 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
                 $($T: self.$T.create(cfg.clone()).await?,)+
                 _t: PhantomData
             })
+        }
+
+        async fn map_data(
+            &self,
+            cfg: &V1C,
+            data: &Self::Data,
+        ) -> Result<<Self::Service as Service<$enum_type<V1R, $($R,)+>>>::Data, Self::InitError> {
+            let svc_data = self.V1.map_data(cfg, data).await?;
+            $(self.$T.map_data(cfg, data).await?;)+
+            Ok(svc_data)
         }
     }
 });
@@ -258,14 +282,24 @@ mod tests {
     impl Service<()> for Srv1 {
         type Response = usize;
         type Error = ();
+        type Data = ();
 
-        async fn ready(&self, _c: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(
+            &self,
+            _: &Self::Data,
+            _c: ServiceCtx<'_, Self>,
+        ) -> Result<(), Self::Error> {
             Ok(())
         }
 
-        async fn shutdown(&self) {}
+        async fn shutdown(&self, _: &Self::Data) {}
 
-        async fn call(&self, _r: (), _c: ServiceCtx<'_, Self>) -> Result<usize, ()> {
+        async fn call(
+            &self,
+            _r: (),
+            _: &Self::Data,
+            _c: ServiceCtx<'_, Self>,
+        ) -> Result<usize, ()> {
             Ok(1)
         }
     }
@@ -276,14 +310,24 @@ mod tests {
     impl Service<()> for Srv2 {
         type Response = usize;
         type Error = ();
+        type Data = ();
 
-        async fn ready(&self, _c: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(
+            &self,
+            _: &Self::Data,
+            _c: ServiceCtx<'_, Self>,
+        ) -> Result<(), Self::Error> {
             Ok(())
         }
 
-        async fn shutdown(&self) {}
+        async fn shutdown(&self, _: &Self::Data) {}
 
-        async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<usize, ()> {
+        async fn call(
+            &self,
+            _r: (),
+            _: &Self::Data,
+            _: ServiceCtx<'_, Self>,
+        ) -> Result<usize, ()> {
             Ok(2)
         }
     }
@@ -299,7 +343,7 @@ mod tests {
             .v3(fn_factory(|| async { Ok::<_, ()>(Srv2) }))
             .clone();
 
-        let service = factory.pipeline(&()).await.unwrap().clone();
+        let service = factory.pipeline((), &()).await.unwrap().clone();
         assert!(format!("{service:?}").contains("Variant"));
 
         assert!(crate::future::lazy(|cx| service.poll(cx)).await.is_ok());
@@ -319,15 +363,25 @@ mod tests {
         impl Service<()> for Srv5 {
             type Response = usize;
             type Error = ();
-            async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+            type Data = ();
+            async fn ready(
+                &self,
+                _: &Self::Data,
+                _: ServiceCtx<'_, Self>,
+            ) -> Result<(), Self::Error> {
                 time::sleep(time::Millis(50)).await;
                 time::sleep(time::Millis(50)).await;
                 time::sleep(time::Millis(50)).await;
                 time::sleep(time::Millis(50)).await;
                 Ok(())
             }
-            async fn shutdown(&self) {}
-            async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<usize, ()> {
+            async fn shutdown(&self, _: &Self::Data) {}
+            async fn call(
+                &self,
+                _r: (),
+                _: &Self::Data,
+                _: ServiceCtx<'_, Self>,
+            ) -> Result<usize, ()> {
                 Ok(2)
             }
         }
@@ -337,10 +391,10 @@ mod tests {
             .v3(fn_service(|()| crate::future::Ready::Ok::<_, ()>(2)));
         assert!(format!("{factory:?}").contains("Variant"));
 
-        let service = factory.clone().create(&()).await.unwrap().clone();
+        let service = factory.clone().pipeline((), &()).await.unwrap().clone();
         assert!(format!("{service:?}").contains("Variant"));
 
-        let service = factory.pipeline(&()).await.unwrap().clone();
+        let service = factory.pipeline((), &()).await.unwrap().clone();
         assert!(service.ready().await.is_ok());
         assert!(format!("{service:?}").contains("Variant"));
     }

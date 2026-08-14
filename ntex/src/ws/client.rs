@@ -29,8 +29,8 @@ thread_local! {
 }
 
 /// `WebSocket` client builder
-pub struct WsClient<F, T> {
-    connector: Pipeline<T>,
+pub struct WsClient<F, T, D = ()> {
+    connector: Pipeline<T, D>,
     head: Message<RequestHead>,
     addr: Option<net::SocketAddr>,
     max_size: usize,
@@ -77,13 +77,14 @@ impl WsClient<Base, ()> {
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
         F: Filter,
-        T: ServiceFactory<Connect<Uri>, SharedCfg, Response = Io<F>, Error = ConnectError>,
+        T: ServiceFactory<Connect<Uri>, SharedCfg, Data = ()>,
+        T::Service: Service<Connect<Uri>, Response = Io<F>, Error = ConnectError>,
     {
         WsClientBuilder::new(uri).connector(connector)
     }
 }
 
-impl<F, T> WsClient<F, T> {
+impl<F, T, D> WsClient<F, T, D> {
     /// Insert a header, replaces existing header.
     pub fn set_header<K, V>(&self, key: K, value: V) -> Result<(), HttpError>
     where
@@ -129,10 +130,10 @@ impl<F, T> WsClient<F, T> {
     }
 }
 
-impl<F, T> WsClient<F, T>
+impl<F, T, D> WsClient<F, T, D>
 where
     F: Filter,
-    T: Service<Connect<Uri>, Response = Io<F>, Error = ConnectError>,
+    T: Service<Connect<Uri>, Response = Io<F>, Error = ConnectError, Data = D>,
 {
     /// Complete request construction and connect to a websockets server.
     pub async fn connect(&self) -> Result<WsConnection<F>, WsClientError> {
@@ -261,7 +262,7 @@ where
     }
 }
 
-impl<F, T> fmt::Debug for WsClient<F, T> {
+impl<F, T, D> fmt::Debug for WsClient<F, T, D> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "\nWsClient {}:{}", self.head.method, self.head.uri)?;
         writeln!(f, "  headers:")?;
@@ -313,7 +314,8 @@ impl WsClientBuilder<Base, ()> {
 
 impl<F, T> WsClientBuilder<F, T>
 where
-    T: ServiceFactory<Connect<Uri>, SharedCfg, Response = Io<F>, Error = ConnectError>,
+    T: ServiceFactory<Connect<Uri>, SharedCfg, Data = ()>,
+    T::Service: Service<Connect<Uri>, Response = Io<F>, Error = ConnectError>,
 {
     /// Set socket address of the server.
     ///
@@ -497,7 +499,8 @@ where
     pub fn connector<F1, T1>(&mut self, connector: T1) -> WsClientBuilder<F1, T1>
     where
         F1: Filter,
-        T1: ServiceFactory<Connect<Uri>, SharedCfg, Response = Io<F1>, Error = ConnectError>,
+        T1: ServiceFactory<Connect<Uri>, SharedCfg, Data = ()>,
+        T1::Service: Service<Connect<Uri>, Response = Io<F1>, Error = ConnectError>,
     {
         let inner = self.inner.take().expect("cannot reuse WsClient builder");
 
@@ -560,7 +563,10 @@ where
     pub async fn build<U: Into<SharedCfg>>(
         &mut self,
         cfg: U,
-    ) -> Result<WsClient<F, T::Service>, WsClientBuilderError<T::InitError>> {
+    ) -> Result<
+        WsClient<F, T::Service, <T::Service as Service<Connect<Uri>>>::Data>,
+        WsClientBuilderError<T::InitError>,
+    > {
         if let Some(e) = self.err.take() {
             return Err(WsClientBuilderError::Http(e));
         }
@@ -635,12 +641,12 @@ where
 
         let connector = inner
             .connector
-            .create(cfg.into())
+            .pipeline(cfg.into(), &())
             .await
             .map_err(WsClientBuilderError::Connector)?;
 
         Ok(WsClient {
-            connector: connector.into(),
+            connector,
             head: inner.head,
             addr: inner.addr,
             max_size: inner.max_size,
@@ -729,15 +735,15 @@ impl WsConnection<Sealed> {
             let tx2 = tx.clone();
             let io = self.io.get_ref();
 
-            let result = self
-                .start(fn_service(move |item: ws::Frame| {
-                    match tx.send(Ok(item)) {
-                        Ok(()) => (),
-                        Err(_) => io.close(),
-                    }
-                    Ready::Ok::<Option<ws::Message>, ()>(None)
-                }))
-                .await;
+            let service = fn_service(move |item: ws::Frame| {
+                match tx.send(Ok(item)) {
+                    Ok(()) => (),
+                    Err(_) => io.close(),
+                }
+                Ready::Ok::<Option<ws::Message>, ()>(None)
+            });
+
+            let result = self.start(service).await;
 
             if let Err(e) = result {
                 let _ = tx2.send(Err(e));
@@ -751,6 +757,7 @@ impl WsConnection<Sealed> {
     pub async fn start<T, U>(self, service: U) -> Result<(), WsError<T::Error>>
     where
         T: Service<ws::Frame, Response = Option<ws::Message>> + 'static,
+        T::Data: Default,
         U: IntoService<T, ws::Frame>,
     {
         let service = apply_fn(

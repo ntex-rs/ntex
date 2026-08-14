@@ -1,7 +1,7 @@
 use std::{fmt, marker::PhantomData, sync::Arc};
 
 use ntex_io::Io;
-use ntex_service::{Service, ServiceCtx, ServiceFactory, boxed, cfg::SharedCfg};
+use ntex_service::{Pipeline, Service, ServiceCtx, ServiceFactory, boxed, cfg::SharedCfg};
 use ntex_util::future::BoxFuture;
 
 use super::{Config, Token, socket::Stream};
@@ -38,7 +38,8 @@ struct Factory {
 
 pub(crate) fn create_boxed_factory<S>(name: String, factory: S) -> BoxServerService
 where
-    S: ServiceFactory<Io, SharedCfg> + 'static,
+    S: ServiceFactory<Io, SharedCfg, Data = ()> + 'static,
+    S::Service: 'static,
 {
     boxed::factory(ServerServiceFactory {
         name: Arc::from(name),
@@ -53,7 +54,8 @@ pub(crate) fn create_factory_service<F, R>(
 ) -> FactoryServiceType
 where
     F: AsyncFn(Config) -> R + Send + Clone + 'static,
-    R: ServiceFactory<Io, SharedCfg> + 'static,
+    R: ServiceFactory<Io, SharedCfg, Data = ()> + 'static,
+    R::Service: 'static,
 {
     let name: Arc<str> = Arc::from(name);
 
@@ -144,24 +146,30 @@ struct ServerServiceFactory<S> {
 
 impl<S> ServiceFactory<Io, SharedCfg> for ServerServiceFactory<S>
 where
-    S: ServiceFactory<Io, SharedCfg>,
+    S: ServiceFactory<Io, SharedCfg, Data = ()>,
 {
     type Response = ();
     type Error = ();
     type Service = ServerService<S::Service>;
     type InitError = ();
+    type Data = ();
 
     async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
-        self.factory
-            .create(cfg)
+        let inner = self
+            .factory
+            .pipeline(cfg, &())
             .await
-            .map(|inner| ServerService { inner })
-            .map_err(|_| log::error!("Cannot construct {:?} service", self.name))
+            .map_err(|_| log::error!("Cannot construct {:?} service", self.name))?;
+        Ok(ServerService { inner })
+    }
+
+    async fn map_data(&self, _: &SharedCfg, _: &Self::Data) -> Result<(), Self::InitError> {
+        Ok(())
     }
 }
 
-struct ServerService<S> {
-    inner: S,
+struct ServerService<S: Service<Io>> {
+    inner: Pipeline<S, S::Data>,
 }
 
 impl<S> Service<Io> for ServerService<S>
@@ -170,16 +178,28 @@ where
 {
     type Response = ();
     type Error = ();
+    type Data = ();
 
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), ()> {
-        ctx.ready(&self.inner).await.map_err(|_| ())
+    async fn ready(&self, _: &Self::Data, _: ServiceCtx<'_, Self>) -> Result<(), ()> {
+        self.inner.ready().await.map_err(|_| ())
     }
 
-    async fn call(&self, req: Io, ctx: ServiceCtx<'_, Self>) -> Result<(), ()> {
-        ctx.call(&self.inner, req).await.map(|_| ()).map_err(|_| ())
+    async fn call(
+        &self,
+        req: Io,
+        _: &Self::Data,
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<(), ()> {
+        self.inner.call(req).await.map(|_| ()).map_err(|_| ())
     }
 
-    ntex_service::forward_shutdown!(inner);
+    async fn shutdown(&self, _: &Self::Data) {
+        self.inner.shutdown().await;
+    }
+
+    fn poll(&self, _: &Self::Data, cx: &mut std::task::Context<'_>) -> Result<(), ()> {
+        self.inner.poll(cx).map_err(|_| ())
+    }
 }
 
 // SAFETY: Send cannot be provided authomatically because of E and R params

@@ -65,14 +65,16 @@ where
 {
     type Response = WebResponse;
     type Error = Err::Container;
+    type Data = S::Data;
 
     #[inline]
     async fn call(
         &self,
         req: WebRequest<Err>,
+        data: &Self::Data,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
-        ctx.call(&self.svc, req).await.map_err(Into::into)
+        ctx.call(&self.svc, req, data).await.map_err(Into::into)
     }
 
     crate::forward_poll!(svc);

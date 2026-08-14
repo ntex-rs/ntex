@@ -122,18 +122,21 @@ where
 {
     type Response = S::Response;
     type Error = TimeoutError<S::Error>;
+    type Data = S::Data;
 
     async fn call(
         &self,
         request: R,
+        data: &Self::Data,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
         if self.timeout.is_zero() {
-            ctx.call(&self.service, request)
+            ctx.call(&self.service, request, data)
                 .await
                 .map_err(TimeoutError::Service)
         } else {
-            match select(sleep(self.timeout), ctx.call(&self.service, request)).await {
+            match select(sleep(self.timeout), ctx.call(&self.service, request, data)).await
+            {
                 Either::Left(()) => Err(TimeoutError::Timeout),
                 Either::Right(res) => res.map_err(TimeoutError::Service),
             }
@@ -168,8 +171,14 @@ mod tests {
     impl Service<()> for SleepService {
         type Response = ();
         type Error = SrvError;
+        type Data = ();
 
-        async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<(), SrvError> {
+        async fn call(
+            &self,
+            _r: (),
+            _: &Self::Data,
+            _: ServiceCtx<'_, Self>,
+        ) -> Result<(), SrvError> {
             crate::time::sleep(self.0).await;
             Ok::<_, SrvError>(())
         }
@@ -180,8 +189,10 @@ mod tests {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(50);
 
-        let timeout =
-            Pipeline::new(TimeoutService::new(resolution, SleepService(wait_time)).clone());
+        let timeout = Pipeline::new(
+            TimeoutService::new(resolution, SleepService(wait_time)).clone(),
+            (),
+        );
         assert_eq!(timeout.call(()).await, Ok(()));
         assert_eq!(timeout.ready().await, Ok(()));
         timeout.shutdown().await;
@@ -193,7 +204,7 @@ mod tests {
         let resolution = Duration::from_millis(0);
 
         let timeout =
-            Pipeline::new(TimeoutService::new(resolution, SleepService(wait_time)));
+            Pipeline::new(TimeoutService::new(resolution, SleepService(wait_time)), ());
         assert_eq!(timeout.call(()).await, Ok(()));
         assert_eq!(timeout.ready().await, Ok(()));
     }
@@ -204,7 +215,7 @@ mod tests {
         let wait_time = Duration::from_millis(500);
 
         let timeout =
-            Pipeline::new(TimeoutService::new(resolution, SleepService(wait_time)));
+            Pipeline::new(TimeoutService::new(resolution, SleepService(wait_time)), ());
         assert_eq!(timeout.call(()).await, Err(TimeoutError::Timeout));
     }
 
@@ -218,7 +229,7 @@ mod tests {
             Timeout::new(resolution).clone(),
             fn_factory(|| async { Ok::<_, ()>(SleepService(wait_time)) }),
         );
-        let srv = timeout.pipeline(&()).await.unwrap();
+        let srv = timeout.pipeline((), &()).await.unwrap();
 
         let res = srv.call(()).await.unwrap_err();
         assert_eq!(res, TimeoutError::Timeout);

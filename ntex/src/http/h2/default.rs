@@ -1,9 +1,9 @@
-use std::{future::Future, io};
+use std::io;
 
 use ntex_h2 as h2;
 
+use crate::http::error::H2Error;
 use crate::service::{Service, ServiceCtx, ServiceFactory, cfg::SharedCfg};
-use crate::{http::error::H2Error, util::Ready};
 
 #[derive(Debug, Default)]
 /// Default control service
@@ -14,25 +14,29 @@ impl ServiceFactory<h2::Control<H2Error>, SharedCfg> for DefaultControlService {
     type Error = io::Error;
     type Service = DefaultControlService;
     type InitError = io::Error;
+    type Data = ();
 
-    fn create(
-        &self,
-        _: SharedCfg,
-    ) -> impl Future<Output = Result<Self::Service, Self::InitError>> {
-        Ready::Ok(DefaultControlService)
+    async fn create(&self, _: SharedCfg) -> Result<Self::Service, Self::InitError> {
+        Ok(DefaultControlService)
+    }
+
+    async fn map_data(&self, _: &SharedCfg, _: &Self::Data) -> Result<(), Self::InitError> {
+        Ok(())
     }
 }
 
 impl Service<h2::Control<H2Error>> for DefaultControlService {
     type Response = h2::ControlAck;
     type Error = io::Error;
+    type Data = ();
 
-    fn call(
+    async fn call(
         &self,
         msg: h2::Control<H2Error>,
+        _: &Self::Data,
         _: ServiceCtx<'_, Self>,
-    ) -> impl Future<Output = Result<Self::Response, Self::Error>> {
+    ) -> Result<Self::Response, Self::Error> {
         log::trace!("HTTP/2 Control message: {msg:?}");
-        Ready::Ok(msg.ack())
+        Ok(msg.ack())
     }
 }

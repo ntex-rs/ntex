@@ -48,9 +48,14 @@ where
 {
     type Response = T::Response;
     type Error = T::Error;
+    type Data = T::Data;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(
+        &self,
+        data: &Self::Data,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<(), Self::Error> {
         if !self.ready.get() {
             poll_fn(|cx| {
                 self.waker.register(cx.waker());
@@ -62,18 +67,19 @@ where
             })
             .await;
         }
-        ctx.ready(&self.service).await
+        ctx.ready(&self.service, data).await
     }
 
     #[inline]
     async fn call(
         &self,
         req: R,
+        data: &Self::Data,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
         self.ready.set(false);
 
-        let result = ctx.call(&self.service, req).await;
+        let result = ctx.call(&self.service, req, data).await;
         self.ready.set(true);
         self.waker.wake();
         result
@@ -96,8 +102,14 @@ mod tests {
     impl Service<()> for SleepService {
         type Response = ();
         type Error = ();
+        type Data = ();
 
-        async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
+        async fn call(
+            &self,
+            _r: (),
+            _: &Self::Data,
+            _: ServiceCtx<'_, Self>,
+        ) -> Result<(), ()> {
             let _ = self.0.recv().await;
             Ok::<_, ()>(())
         }
@@ -107,7 +119,7 @@ mod tests {
     async fn test_oneshot() {
         let (tx, rx) = oneshot::channel();
 
-        let srv = Pipeline::new(OneRequestService::new(SleepService(rx))).bind();
+        let srv = Pipeline::new(OneRequestService::new(SleepService(rx)), ()).bind();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let srv2 = srv.clone();
@@ -137,7 +149,7 @@ mod tests {
             }),
         );
 
-        let srv = srv.pipeline(&()).await.unwrap().bind();
+        let srv = srv.pipeline((), &()).await.unwrap().bind();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let srv2 = srv.clone();
@@ -166,7 +178,7 @@ mod tests {
             }),
         );
 
-        let srv = srv.pipeline(&()).await.unwrap().bind();
+        let srv = srv.pipeline((), &()).await.unwrap().bind();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let srv2 = srv.clone();

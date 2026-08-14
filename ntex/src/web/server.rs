@@ -7,7 +7,7 @@ use tls_rustls::ServerConfig as RustlsServerConfig;
 
 use crate::http::{HttpService, Request, Response, ResponseError, body::MessageBody};
 use crate::server::{Server, ServerBuilder};
-use crate::service::{IntoServiceFactory, ServiceFactory, cfg::SharedCfg};
+use crate::service::{IntoServiceFactory, Service, ServiceFactory, cfg::SharedCfg};
 use crate::time::Seconds;
 
 struct Config {
@@ -38,10 +38,12 @@ pub struct HttpServer<F, I, S, B>
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<S, Request, SharedCfg>,
-    S: ServiceFactory<Request, SharedCfg>,
+    S: ServiceFactory<Request, SharedCfg, Data = ()>,
+    S::Service: Service<Request>,
     S::Error: ResponseError,
-    S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
+    S::Error: fmt::Debug,
+    S::InitError: fmt::Debug,
     B: MessageBody,
 {
     pub(super) factory: F,
@@ -55,10 +57,12 @@ impl<F, I, S, B> HttpServer<F, I, S, B>
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<S, Request, SharedCfg>,
-    S: ServiceFactory<Request, SharedCfg> + 'static,
+    S: ServiceFactory<Request, SharedCfg, Data = ()> + 'static,
+    S::Service: Service<Request>,
     S::Error: ResponseError,
-    S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
+    S::Error: fmt::Debug,
+    S::InitError: fmt::Debug,
     B: MessageBody + 'static,
 {
     #[must_use]
@@ -412,11 +416,12 @@ impl<F, I, S, B> HttpServer<F, I, S, B>
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<S, Request, SharedCfg>,
-    S: ServiceFactory<Request, SharedCfg>,
+    S: ServiceFactory<Request, SharedCfg, Data = ()>,
+    S::Service: Service<Request> + 'static,
     S::Error: ResponseError,
-    S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
-    S::Service: 'static,
+    S::Error: fmt::Debug,
+    S::InitError: fmt::Debug,
     B: MessageBody,
 {
     /// Start listening for incoming connections.

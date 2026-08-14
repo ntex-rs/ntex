@@ -130,6 +130,7 @@ impl<S, U> From<Either<S, U>> for DispatcherError<S, U> {
 impl<S, U> Dispatcher<S, U>
 where
     S: Service<DispatchItem<U>, Response = Option<Response<U>>> + 'static,
+    S::Data: Default,
     U: Decoder + Encoder + 'static,
 {
     /// Construct new `Dispatcher` instance.
@@ -151,7 +152,7 @@ where
             flags: Cell::new(flags),
             error: Cell::new(None),
             inflight: Cell::new(0),
-            service: Pipeline::new(service.into_service()).bind(),
+            service: Pipeline::new(service.into_service(), S::Data::default()).bind(),
         });
 
         Dispatcher {

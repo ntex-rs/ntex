@@ -93,9 +93,16 @@ where
     T: ServiceFactory<
             WebRequest<Err>,
             SharedCfg,
+            Data = (),
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
+        >,
+    T::Service: Service<
+            WebRequest<Err>,
+            Response = WebRequest<Err>,
+            Error = Err::Container,
+            Data = (),
         >,
     Err: ErrorRenderer,
 {
@@ -294,9 +301,16 @@ where
         S: ServiceFactory<
                 WebRequest<Err>,
                 SharedCfg,
+                Data = (),
                 Response = WebResponse,
                 Error = Err::Container,
             > + 'static,
+        S::Service: Service<
+                WebRequest<Err>,
+                Response = WebResponse,
+                Error = Err::Container,
+                Data = (),
+            >,
         S::InitError: fmt::Debug,
     {
         // create and configure default resource
@@ -325,6 +339,7 @@ where
         impl ServiceFactory<
             WebRequest<Err>,
             SharedCfg,
+            Data = (),
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
@@ -334,15 +349,22 @@ where
         U: ServiceFactory<
                 WebRequest<Err>,
                 SharedCfg,
+                Data = (),
                 Response = WebRequest<Err>,
                 Error = Err::Container,
+            >,
+        U::Service: Service<
+                WebRequest<Err>,
+                Response = WebRequest<Err>,
+                Error = Err::Container,
+                Data = (),
             >,
         F: IntoServiceFactory<U, WebRequest<Err>, SharedCfg>,
     {
         Scope {
             filter: self
                 .filter
-                .and_then(filter.into_factory().map_init_err(|_| ())),
+                .and_then(chain_factory(filter.into_factory()).map_init_err(|_| ())),
             middleware: self.middleware,
             rdef: self.rdef,
             state: self.state,
@@ -389,12 +411,20 @@ where
     T: ServiceFactory<
             WebRequest<Err>,
             SharedCfg,
+            Data = (),
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
         > + 'static,
+    T::Service: Service<
+            WebRequest<Err>,
+            Response = WebRequest<Err>,
+            Error = Err::Container,
+            Data = (),
+        >,
     M: Middleware<ScopeService<T::Service, Err>, SharedCfg> + 'static,
-    M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
+    M::Service:
+        Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container, Data = ()>,
     Err: ErrorRenderer,
 {
     fn register(mut self, config: &mut WebServiceConfig<Err>) {
@@ -479,22 +509,33 @@ impl<M, F, Err> ServiceFactory<WebRequest<Err>, SharedCfg>
     for ScopeServiceFactory<M, F, Err>
 where
     M: Middleware<ScopeService<F::Service, Err>, SharedCfg> + 'static,
-    M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
+    M::Service:
+        Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container, Data = ()>,
     F: ServiceFactory<
             WebRequest<Err>,
             SharedCfg,
+            Data = (),
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
         > + 'static,
+    F::Service: Service<
+            WebRequest<Err>,
+            Response = WebRequest<Err>,
+            Error = Err::Container,
+            Data = (),
+        >,
     Err: ErrorRenderer,
 {
     type Response = WebResponse;
     type Error = Err::Container;
     type Service = M::Service;
     type InitError = ();
+    type Data = ();
 
     async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
+        self.filter.map_data(&cfg, &()).await?;
+        self.routing.map_data(&cfg, &()).await?;
         Ok(self.middleware.create(
             ScopeService {
                 filter: self.filter.create(cfg.clone()).await?,
@@ -502,6 +543,10 @@ where
             },
             cfg,
         ))
+    }
+
+    async fn map_data(&self, _: &SharedCfg, _: &Self::Data) -> Result<(), Self::InitError> {
+        Ok(())
     }
 }
 
@@ -514,34 +559,48 @@ pub struct ScopeService<F, Err: ErrorRenderer> {
 
 impl<F, Err> Service<WebRequest<Err>> for ScopeService<F, Err>
 where
-    F: Service<WebRequest<Err>, Response = WebRequest<Err>, Error = Err::Container>,
+    F: Service<
+            WebRequest<Err>,
+            Response = WebRequest<Err>,
+            Error = Err::Container,
+            Data = (),
+        >,
     Err: ErrorRenderer,
 {
     type Response = WebResponse;
     type Error = Err::Container;
+    type Data = ();
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
-        let (ready1, ready2) =
-            join(ctx.ready(&self.filter), ctx.ready(&self.routing)).await;
+    async fn ready(
+        &self,
+        data: &Self::Data,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<(), Self::Error> {
+        let (ready1, ready2) = join(
+            ctx.ready(&self.filter, data),
+            ctx.ready(&self.routing, data),
+        )
+        .await;
         ready1?;
         ready2
     }
 
     #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
-        self.filter.poll(cx)?;
-        self.routing.poll(cx)
+    fn poll(&self, data: &Self::Data, cx: &mut Context<'_>) -> Result<(), Self::Error> {
+        self.filter.poll(data, cx)?;
+        self.routing.poll(data, cx)
     }
 
     #[inline]
     async fn call(
         &self,
         req: WebRequest<Err>,
+        data: &Self::Data,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
-        let req = ctx.call(&self.filter, req).await?;
-        ctx.call(&self.routing, req).await
+        let req = ctx.call(&self.filter, req, data).await?;
+        ctx.call(&self.routing, req, data).await
     }
 }
 
@@ -557,8 +616,9 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>, SharedCfg>
 {
     type Response = WebResponse;
     type Error = Err::Container;
-    type InitError = ();
     type Service = ScopeRouter<Err>;
+    type InitError = ();
+    type Data = ();
 
     async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
         // create http services
@@ -567,11 +627,13 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>, SharedCfg>
             router.case_insensitive();
         }
         for (path, factory, guards) in &mut self.services.iter() {
+            factory.map_data(&cfg, &()).await?;
             let service = factory.create(cfg.clone()).await?;
             router.rdef(path.clone(), service).2 = guards.borrow_mut().take();
         }
 
         let default = if let Some(ref default) = self.default {
+            default.map_data(&cfg, &()).await?;
             Some(default.create(cfg).await?)
         } else {
             None
@@ -582,6 +644,10 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>, SharedCfg>
             router: router.finish(),
             state: self.state.clone(),
         })
+    }
+
+    async fn map_data(&self, _: &SharedCfg, _: &Self::Data) -> Result<(), Self::InitError> {
+        Ok(())
     }
 }
 
@@ -594,10 +660,12 @@ struct ScopeRouter<Err: ErrorRenderer> {
 impl<Err: ErrorRenderer> Service<WebRequest<Err>> for ScopeRouter<Err> {
     type Response = WebResponse;
     type Error = Err::Container;
+    type Data = ();
 
     async fn call(
         &self,
         mut req: WebRequest<Err>,
+        data: &Self::Data,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
         let res = self.router.recognize_checked(&mut req, |req, guards| {
@@ -615,9 +683,9 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for ScopeRouter<Err> {
             if let Some(ref state) = self.state {
                 req.set_state_container(state.clone());
             }
-            ctx.call(srv, req).await
+            ctx.call(srv, req, data).await
         } else if let Some(ref default) = self.default {
-            ctx.call(default, req).await
+            ctx.call(default, req, data).await
         } else {
             let req = req.into_parts().0;
             Ok(WebResponse::new(Response::NotFound().finish(), req))

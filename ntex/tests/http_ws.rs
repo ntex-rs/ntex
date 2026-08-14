@@ -36,8 +36,13 @@ impl Clone for WsService {
 impl Service<(Request, Io, h1::Codec)> for WsService {
     type Response = ();
     type Error = io::Error;
+    type Data = ();
 
-    async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(
+        &self,
+        _: &Self::Data,
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<(), Self::Error> {
         self.set_polled();
         Ok(())
     }
@@ -45,6 +50,7 @@ impl Service<(Request, Io, h1::Codec)> for WsService {
     async fn call(
         &self,
         (req, io, codec): (Request, Io, h1::Codec),
+        _: &Self::Data,
         _: ServiceCtx<'_, Self>,
     ) -> Result<(), io::Error> {
         let res = handshake(req.head()).unwrap().message_body(());
@@ -85,7 +91,7 @@ async fn test_simple() {
         {
             let ws_service = ws_service.clone();
             async move || {
-                let ws_service = Pipeline::new(ws_service.clone());
+                let ws_service = Pipeline::new(ws_service.clone(), ());
                 HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
                     .control(move |req: h1::Control<_, _>| {
                         let ack = if let h1::Control::Upgrade(upg) = req {

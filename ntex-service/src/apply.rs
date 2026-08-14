@@ -3,6 +3,7 @@ use std::{fmt, marker};
 
 use crate::ctx::WaitersRef;
 use crate::dev::{ServiceChain, ServiceChainFactory};
+use crate::svc_fct::{ErrorOf, ServiceOf};
 use crate::{IntoService, IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
 
 /// Apply transform function to a service.
@@ -12,7 +13,7 @@ pub fn apply_fn<T, Req, F, In, Out, Err, U>(
 ) -> ServiceChain<Apply<T, Req, F, In, Out, Err>, In>
 where
     T: Service<Req>,
-    F: AsyncFn(In, &ApplyCtx<'_, T>) -> Result<Out, Err>,
+    F: AsyncFn(In, &ApplyCtx<'_, T, T::Data>) -> Result<Out, Err>,
     U: IntoService<T, Req>,
     Err: From<T::Error>,
 {
@@ -26,32 +27,41 @@ pub fn apply_fn_factory<T, Req, Cfg, F, In, Out, Err, U>(
 ) -> ServiceChainFactory<ApplyFactory<T, Req, Cfg, F, In, Out, Err>, In, Cfg>
 where
     T: ServiceFactory<Req, Cfg>,
-    F: AsyncFn(In, &ApplyCtx<'_, T::Service>) -> Result<Out, Err> + Clone,
+    F: AsyncFn(
+            In,
+            &ApplyCtx<
+                '_,
+                ServiceOf<T, Req, Cfg>,
+                <ServiceOf<T, Req, Cfg> as Service<Req>>::Data,
+            >,
+        ) -> Result<Out, Err>
+        + Clone,
     U: IntoServiceFactory<T, Req, Cfg>,
-    Err: From<T::Error>,
+    Err: From<ErrorOf<T, Req, Cfg>>,
 {
     crate::chain_factory(ApplyFactory::new(service.into_factory(), f))
 }
 
 #[derive(Debug)]
-pub struct ApplyCtx<'a, S> {
+pub struct ApplyCtx<'a, S, D = ()> {
     idx: u32,
     waiters: &'a WaitersRef,
     service: &'a S,
+    data: &'a D,
 }
 
-impl<'a, S> ApplyCtx<'a, S> {
+impl<'a, S, D> ApplyCtx<'a, S, D> {
     #[inline]
     /// Wait for service readiness and then call service.
     pub async fn call<R>(&self, req: R) -> Result<S::Response, S::Error>
     where
-        S: Service<R>,
+        S: Service<R, Data = D>,
         R: 'a,
     {
         let ctx = ServiceCtx::new(self.idx, self.waiters);
 
-        self.service.ready(ctx).await?;
-        self.service.call(req, ctx).await
+        ctx.ready(self.service, self.data).await?;
+        self.service.call(req, self.data, ctx).await
     }
 }
 
@@ -65,7 +75,7 @@ pub struct Apply<T, Req, F, In, Out, Err> {
 impl<T, Req, F, In, Out, Err> Apply<T, Req, F, In, Out, Err>
 where
     T: Service<Req>,
-    F: AsyncFn(In, &ApplyCtx<'_, T>) -> Result<Out, Err>,
+    F: AsyncFn(In, &ApplyCtx<'_, T, T::Data>) -> Result<Out, Err>,
     Err: From<T::Error>,
 {
     pub(crate) fn new(service: T, f: F) -> Self {
@@ -106,21 +116,23 @@ where
 impl<T, Req, F, In, Out, Err> Service<In> for Apply<T, Req, F, In, Out, Err>
 where
     T: Service<Req>,
-    F: AsyncFn(In, &ApplyCtx<'_, T>) -> Result<Out, Err>,
+    F: AsyncFn(In, &ApplyCtx<'_, T, T::Data>) -> Result<Out, Err>,
     Err: From<T::Error>,
 {
     type Response = Out;
     type Error = Err;
+    type Data = T::Data;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Err> {
-        ctx.ready(&self.service).await.map_err(From::from)
+    async fn ready(&self, data: &Self::Data, ctx: ServiceCtx<'_, Self>) -> Result<(), Err> {
+        ctx.ready(&self.service, data).await.map_err(From::from)
     }
 
     #[inline]
     async fn call(
         &self,
         req: In,
+        data: &Self::Data,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
         let (idx, waiters) = ctx.inner();
@@ -129,6 +141,7 @@ where
             idx,
             waiters,
             service: &self.service,
+            data,
         };
         (self.f)(req, &ctx).await
     }
@@ -141,7 +154,15 @@ where
 pub struct ApplyFactory<T, Req, Cfg, F, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg>,
-    F: AsyncFn(In, &ApplyCtx<'_, T::Service>) -> Result<Out, Err> + Clone,
+    F: AsyncFn(
+            In,
+            &ApplyCtx<
+                '_,
+                ServiceOf<T, Req, Cfg>,
+                <ServiceOf<T, Req, Cfg> as Service<Req>>::Data,
+            >,
+        ) -> Result<Out, Err>
+        + Clone,
 {
     service: T,
     f: F,
@@ -151,8 +172,16 @@ where
 impl<T, Req, Cfg, F, In, Out, Err> ApplyFactory<T, Req, Cfg, F, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg>,
-    F: AsyncFn(In, &ApplyCtx<'_, T::Service>) -> Result<Out, Err> + Clone,
-    Err: From<T::Error>,
+    F: AsyncFn(
+            In,
+            &ApplyCtx<
+                '_,
+                ServiceOf<T, Req, Cfg>,
+                <ServiceOf<T, Req, Cfg> as Service<Req>>::Data,
+            >,
+        ) -> Result<Out, Err>
+        + Clone,
+    Err: From<ErrorOf<T, Req, Cfg>>,
 {
     /// Create new `ApplyNewService` new service instance
     pub(crate) fn new(service: T, f: F) -> Self {
@@ -167,8 +196,16 @@ where
 impl<T, Req, Cfg, F, In, Out, Err> Clone for ApplyFactory<T, Req, Cfg, F, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg> + Clone,
-    F: AsyncFn(In, &ApplyCtx<'_, T::Service>) -> Result<Out, Err> + Clone,
-    Err: From<T::Error>,
+    F: AsyncFn(
+            In,
+            &ApplyCtx<
+                '_,
+                ServiceOf<T, Req, Cfg>,
+                <ServiceOf<T, Req, Cfg> as Service<Req>>::Data,
+            >,
+        ) -> Result<Out, Err>
+        + Clone,
+    Err: From<ErrorOf<T, Req, Cfg>>,
 {
     fn clone(&self) -> Self {
         Self {
@@ -182,8 +219,16 @@ where
 impl<T, Req, Cfg, F, In, Out, Err> fmt::Debug for ApplyFactory<T, Req, Cfg, F, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg> + fmt::Debug,
-    F: AsyncFn(In, &ApplyCtx<'_, T::Service>) -> Result<Out, Err> + Clone,
-    Err: From<T::Error>,
+    F: AsyncFn(
+            In,
+            &ApplyCtx<
+                '_,
+                ServiceOf<T, Req, Cfg>,
+                <ServiceOf<T, Req, Cfg> as Service<Req>>::Data,
+            >,
+        ) -> Result<Out, Err>
+        + Clone,
+    Err: From<ErrorOf<T, Req, Cfg>>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ApplyFactory")
@@ -197,14 +242,22 @@ impl<T, Req, Cfg, F, In, Out, Err> ServiceFactory<In, Cfg>
     for ApplyFactory<T, Req, Cfg, F, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg>,
-    F: AsyncFn(In, &ApplyCtx<'_, T::Service>) -> Result<Out, Err> + Clone,
-    Err: From<T::Error>,
+    F: AsyncFn(
+            In,
+            &ApplyCtx<
+                '_,
+                ServiceOf<T, Req, Cfg>,
+                <ServiceOf<T, Req, Cfg> as Service<Req>>::Data,
+            >,
+        ) -> Result<Out, Err>
+        + Clone,
+    Err: From<ErrorOf<T, Req, Cfg>>,
 {
     type Response = Out;
     type Error = Err;
-
-    type Service = Apply<T::Service, Req, F, In, Out, Err>;
+    type Service = Apply<ServiceOf<T, Req, Cfg>, Req, F, In, Out, Err>;
     type InitError = T::InitError;
+    type Data = T::Data;
 
     #[inline]
     async fn create(&self, cfg: Cfg) -> Result<Self::Service, Self::InitError> {
@@ -213,6 +266,15 @@ where
             f: self.f.clone(),
             r: marker::PhantomData,
         })
+    }
+
+    #[inline]
+    async fn map_data(
+        &self,
+        cfg: &Cfg,
+        data: &Self::Data,
+    ) -> Result<<Self::Service as Service<In>>::Data, Self::InitError> {
+        self.service.map_data(cfg, data).await
     }
 }
 
@@ -231,17 +293,23 @@ mod tests {
     impl Service<()> for Srv {
         type Response = ();
         type Error = ();
+        type Data = ();
 
-        async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
+        async fn call(
+            &self,
+            _r: (),
+            _: &Self::Data,
+            _: ServiceCtx<'_, Self>,
+        ) -> Result<(), ()> {
             Ok(())
         }
 
-        fn poll(&self, _: &mut Context<'_>) -> Result<(), Self::Error> {
+        fn poll(&self, _: &Self::Data, _: &mut Context<'_>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }
 
-        async fn shutdown(&self) {
+        async fn shutdown(&self, _: &Self::Data) {
             self.0.set(self.0.get() + 1);
         }
     }
@@ -265,7 +333,7 @@ mod tests {
             })
             .clone(),
         )
-        .into_pipeline();
+        .into_pipeline(());
 
         assert_eq!(srv.ready().await, Ok::<_, Err>(()));
 
@@ -289,7 +357,7 @@ mod tests {
                 Ok((req, ()))
             })
             .clone()
-            .into_pipeline();
+            .into_pipeline(());
 
         assert_eq!(srv.ready().await, Ok::<_, Err>(()));
 
@@ -315,7 +383,7 @@ mod tests {
             .clone(),
         );
 
-        let srv = new_srv.pipeline(&()).await.unwrap();
+        let srv = new_srv.pipeline(&(), &()).await.unwrap();
 
         assert_eq!(srv.ready().await, Ok::<_, Err>(()));
 
@@ -336,7 +404,7 @@ mod tests {
             })
             .clone();
 
-        let srv = new_srv.pipeline(&()).await.unwrap();
+        let srv = new_srv.pipeline(&(), &()).await.unwrap();
 
         assert_eq!(srv.ready().await, Ok::<_, Err>(()));
 

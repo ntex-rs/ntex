@@ -232,7 +232,7 @@ fn parts(parts: &mut Option<Inner>) -> &mut Inner {
 pub async fn server<F, R>(factory: F) -> TestServer
 where
     F: AsyncFn() -> R + Send + Clone + 'static,
-    R: ServiceFactory<Io, SharedCfg> + 'static,
+    R: ServiceFactory<Io, SharedCfg, Data = ()> + 'static,
 {
     server_with_config(
         factory,
@@ -276,7 +276,7 @@ where
 pub async fn server_with_config<F, R, U>(factory: F, cfg: U) -> TestServer
 where
     F: AsyncFn() -> R + Send + Clone + 'static,
-    R: ServiceFactory<Io, SharedCfg> + 'static,
+    R: ServiceFactory<Io, SharedCfg, Data = ()> + 'static,
     U: Into<SharedCfg>,
 {
     let sys = System::current().config();

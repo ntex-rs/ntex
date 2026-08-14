@@ -59,13 +59,18 @@ where
 {
     type Response = T::Response;
     type Error = T::Error;
+    type Data = T::Data;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(
+        &self,
+        data: &Self::Data,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<(), Self::Error> {
         if self.count.is_available() {
-            ctx.ready(&self.service).await
+            ctx.ready(&self.service, data).await
         } else {
-            crate::future::join(self.count.available(), ctx.ready(&self.service))
+            crate::future::join(self.count.available(), ctx.ready(&self.service, data))
                 .await
                 .1
         }
@@ -75,11 +80,12 @@ where
     async fn call(
         &self,
         req: R,
+        data: &Self::Data,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
-        ctx.ready(self).await?;
+        ctx.ready(self, data).await?;
         let _guard = self.count.get();
-        ctx.call(&self.service, req).await
+        ctx.call(&self.service, req, data).await
     }
 
     ntex_service::forward_poll!(service);
@@ -101,8 +107,14 @@ mod tests {
     impl Service<()> for SleepService {
         type Response = ();
         type Error = ();
+        type Data = ();
 
-        async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
+        async fn call(
+            &self,
+            _r: (),
+            _: &Self::Data,
+            _: ServiceCtx<'_, Self>,
+        ) -> Result<(), ()> {
             let _ = self.0.recv().await;
             Ok(())
         }
@@ -113,7 +125,7 @@ mod tests {
         let (tx, rx) = mpmc::unbounded();
         let counter = Rc::new(Cell::new(0));
 
-        let srv = Pipeline::new(InFlightService::new(1, SleepService(rx))).bind();
+        let srv = Pipeline::new(InFlightService::new(1, SleepService(rx)), ()).bind();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let counter2 = counter.clone();
@@ -177,7 +189,7 @@ mod tests {
             }),
         );
 
-        let srv = srv.pipeline(&()).await.unwrap().bind();
+        let srv = srv.pipeline((), &()).await.unwrap().bind();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let srv2 = srv.clone();
@@ -210,7 +222,7 @@ mod tests {
             }),
         );
 
-        let srv = srv.pipeline(&()).await.unwrap().bind();
+        let srv = srv.pipeline((), &()).await.unwrap().bind();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let srv2 = srv.clone();

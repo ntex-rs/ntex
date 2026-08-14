@@ -72,10 +72,12 @@ pub fn default_service<Err: ErrorRenderer>(
 /// ```
 pub async fn init_service<R, S, E>(
     app: R,
-) -> Pipeline<impl Service<Request, Response = WebResponse, Error = E>>
+) -> Pipeline<impl Service<Request, Response = WebResponse, Error = E, Data = ()>, ()>
 where
     R: IntoServiceFactory<S, Request, SharedCfg>,
-    S: ServiceFactory<Request, SharedCfg, Response = WebResponse, Error = E>,
+    S: ServiceFactory<Request, SharedCfg, Data = ()>,
+    S::Service: Service<Request, Response = WebResponse, Error = E, Data = ()>,
+    S::Error: fmt::Debug,
     S::InitError: fmt::Debug,
 {
     let srv = app.into_factory();
@@ -84,6 +86,7 @@ where
             .add(IoConfig::new())
             .add(WebAppConfig::new())
             .into(),
+        &(),
     )
     .await
     .unwrap()
@@ -112,7 +115,7 @@ where
 ///     assert_eq!(resp.status(), StatusCode::OK);
 /// }
 /// ```
-pub async fn call_service<S, R, E>(app: &Pipeline<S>, req: R) -> S::Response
+pub async fn call_service<S, R, E>(app: &Pipeline<S, S::Data>, req: R) -> S::Response
 where
     S: Service<R, Response = WebResponse, Error = E>,
     E: std::fmt::Debug,
@@ -145,7 +148,7 @@ where
 ///     assert_eq!(result, Bytes::from_static(b"welcome!"));
 /// }
 /// ```
-pub async fn read_response<S>(app: &Pipeline<S>, req: Request) -> Bytes
+pub async fn read_response<S>(app: &Pipeline<S, S::Data>, req: Request) -> Bytes
 where
     S: Service<Request, Response = WebResponse>,
 {
@@ -244,7 +247,7 @@ where
 ///     let result: Person = test::read_response_json(&mut app, req).await;
 /// }
 /// ```
-pub async fn read_response_json<S, T>(app: &Pipeline<S>, req: Request) -> T
+pub async fn read_response_json<S, T>(app: &Pipeline<S, S::Data>, req: Request) -> T
 where
     S: Service<Request, Response = WebResponse>,
     T: DeserializeOwned,
@@ -572,10 +575,12 @@ pub async fn server<F, I, S, B>(factory: F) -> TestServer
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<S, Request, SharedCfg>,
-    S: ServiceFactory<Request, SharedCfg> + 'static,
+    S: ServiceFactory<Request, SharedCfg, Data = ()> + 'static,
+    S::Service: Service<Request>,
     S::Error: ResponseError,
-    S::InitError: fmt::Debug,
     S::Response: Into<HttpResponse<B>>,
+    S::Error: fmt::Debug,
+    S::InitError: fmt::Debug,
     B: MessageBody + 'static,
 {
     server_with(TestServerConfig::default(), factory).await
@@ -610,10 +615,12 @@ pub async fn server_with<F, I, S, B>(cfg: TestServerConfig, factory: F) -> TestS
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<S, Request, SharedCfg>,
-    S: ServiceFactory<Request, SharedCfg> + 'static,
+    S: ServiceFactory<Request, SharedCfg, Data = ()> + 'static,
+    S::Service: Service<Request>,
     S::Error: ResponseError,
-    S::InitError: fmt::Debug,
     S::Response: Into<HttpResponse<B>>,
+    S::Error: fmt::Debug,
+    S::InitError: fmt::Debug,
     B: MessageBody + 'static,
 {
     let sys = System::current().config();
@@ -907,6 +914,7 @@ impl TestServerConfig {
 /// Test server controller
 pub struct TestServer {
     id: Uuid,
+    #[cfg_attr(not(feature = "ws"), allow(dead_code))]
     cfg: SharedCfg,
     addr: net::SocketAddr,
     client: Client,

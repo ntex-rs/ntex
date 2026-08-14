@@ -1,12 +1,12 @@
 //! `WebSockets` protocol support
-use std::{fmt, rc::Rc};
+use std::{fmt, marker::PhantomData, rc::Rc};
 
 pub use crate::ws::{CloseCode, CloseReason, Frame, Message, WsSink};
 
 use crate::http::{StatusCode, body::BodySize, h1, header};
 use crate::io::{DispatchItem, IoConfig, Reason};
 use crate::service::{
-    IntoServiceFactory, Service, ServiceCtx, ServiceFactory, chain_factory,
+    IntoServiceFactory, Pipeline, Service, ServiceCtx, ServiceFactory,
     fn_factory_with_config,
 };
 use crate::web::{HttpRequest, HttpResponse};
@@ -75,16 +75,17 @@ pub async fn start<T, F, P, Err>(
     factory: F,
 ) -> Result<HttpResponse, Err>
 where
-    T: ServiceFactory<Frame, WsSink, Response = Option<Message>> + 'static,
-    T::Error: fmt::Debug,
+    T: ServiceFactory<Frame, WsSink, Data = ()> + 'static,
+    T::Service: Service<Frame, Response = Option<Message>>,
+    <T::Service as Service<Frame>>::Error: fmt::Debug,
     F: IntoServiceFactory<T, Frame, WsSink>,
     P: AsRef<str>,
     Err: From<T::InitError> + From<HandshakeError>,
 {
-    let inner_factory = Rc::new(chain_factory(factory).map_err(WsError::Service));
+    let inner_factory = Rc::new(factory.into_factory());
 
     let factory = fn_factory_with_config(async move |sink: WsSink| {
-        let srv = inner_factory.create(sink.clone()).await?;
+        let srv = inner_factory.pipeline(sink.clone(), &()).await?;
         let sink = sink.clone();
 
         Ok::<_, T::InitError>(DispatchService { srv, sink })
@@ -104,9 +105,9 @@ pub async fn start_with<T, F, P, Err>(
     factory: F,
 ) -> Result<HttpResponse, Err>
 where
-    T: ServiceFactory<DispatchItem<ws::Codec>, WsSink, Response = Option<Message>>
-        + 'static,
-    T::Error: fmt::Debug,
+    T: ServiceFactory<DispatchItem<ws::Codec>, WsSink, Data = ()> + 'static,
+    T::Service: Service<DispatchItem<ws::Codec>, Response = Option<Message>>,
+    <T::Service as Service<DispatchItem<ws::Codec>>>::Error: fmt::Debug,
     F: IntoServiceFactory<T, DispatchItem<ws::Codec>, WsSink>,
     P: AsRef<str>,
     Err: From<T::InitError> + From<HandshakeError>,
@@ -137,7 +138,11 @@ where
     let sink = WsSink::new(io.get_ref(), codec.clone());
 
     // create ws service
-    let srv = factory.into_factory().create(sink.clone()).await?;
+    let srv = factory.into_factory().pipeline(sink.clone(), &()).await?;
+    let srv = PipelineService {
+        srv,
+        req: PhantomData,
+    };
     io.set_config(CFG.with(Clone::clone));
 
     // the h1 dispatcher may have started a headers-read timer on this IO;
@@ -154,27 +159,89 @@ where
 }
 
 /// Just a wrapper over a service handling WebSocket messages and propagating shutdown
-struct DispatchService<S> {
-    srv: S,
+struct PipelineService<S: Service<R>, R> {
+    srv: Pipeline<S, S::Data>,
+    req: PhantomData<fn(R)>,
+}
+
+impl<S, R> Service<R> for PipelineService<S, R>
+where
+    S: Service<R> + 'static,
+    R: 'static,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Data = ();
+
+    async fn ready(
+        &self,
+        _: &Self::Data,
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<(), Self::Error> {
+        self.srv.ready().await
+    }
+
+    async fn shutdown(&self, _: &Self::Data) {
+        self.srv.shutdown().await;
+    }
+
+    fn poll(
+        &self,
+        _: &Self::Data,
+        cx: &mut std::task::Context<'_>,
+    ) -> Result<(), Self::Error> {
+        self.srv.poll(cx)
+    }
+
+    async fn call(
+        &self,
+        req: R,
+        _: &Self::Data,
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        self.srv.call(req).await
+    }
+}
+
+struct DispatchService<S: Service<Frame>> {
+    srv: Pipeline<S, S::Data>,
     sink: WsSink,
 }
 
-impl<S, E> Service<DispatchItem<ws::Codec>> for DispatchService<S>
+impl<S> Service<DispatchItem<ws::Codec>> for DispatchService<S>
 where
-    S: Service<Frame, Response = Option<Message>, Error = WsError<E>>,
-    E: fmt::Debug,
+    S: Service<Frame, Response = Option<Message>>,
+    S::Error: fmt::Debug,
 {
     type Response = Option<Message>;
-    type Error = WsError<E>;
+    type Error = WsError<S::Error>;
+    type Data = ();
 
-    crate::forward_ready!(srv);
-    crate::forward_poll!(srv);
-    crate::forward_shutdown!(srv);
+    async fn ready(
+        &self,
+        _: &Self::Data,
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<(), Self::Error> {
+        self.srv.ready().await.map_err(WsError::Service)
+    }
+
+    fn poll(
+        &self,
+        _: &Self::Data,
+        cx: &mut std::task::Context<'_>,
+    ) -> Result<(), Self::Error> {
+        self.srv.poll(cx).map_err(WsError::Service)
+    }
+
+    async fn shutdown(&self, _: &Self::Data) {
+        self.srv.shutdown().await;
+    }
 
     async fn call(
         &self,
         req: DispatchItem<ws::Codec>,
-        ctx: ServiceCtx<'_, Self>,
+        _: &Self::Data,
+        _: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
         match req {
             DispatchItem::Item(item) => {
@@ -183,7 +250,7 @@ where
                 } else {
                     None
                 };
-                let result = ctx.call(&self.srv, item).await;
+                let result = self.srv.call(item).await.map_err(WsError::Service);
                 if let Some(s) = s {
                     rt::spawn(async move { s.io().close() });
                 }

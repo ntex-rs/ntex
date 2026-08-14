@@ -70,11 +70,16 @@ impl<Err: ErrorRenderer> fmt::Debug for Route<Err> {
 impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>, SharedCfg> for Route<Err> {
     type Response = WebResponse;
     type Error = Err::Container;
-    type InitError = ();
     type Service = RouteService<Err>;
+    type InitError = ();
+    type Data = ();
 
-    async fn create(&self, _: SharedCfg) -> Result<RouteService<Err>, ()> {
+    async fn create(&self, _: SharedCfg) -> Result<Self::Service, Self::InitError> {
         Ok(self.service())
+    }
+
+    async fn map_data(&self, _: &SharedCfg, _: &Self::Data) -> Result<(), Self::InitError> {
+        Ok(())
     }
 }
 
@@ -107,10 +112,12 @@ impl<Err: ErrorRenderer> fmt::Debug for RouteService<Err> {
 impl<Err: ErrorRenderer> Service<WebRequest<Err>> for RouteService<Err> {
     type Response = WebResponse;
     type Error = Err::Container;
+    type Data = ();
 
     async fn call(
         &self,
         req: WebRequest<Err>,
+        _: &Self::Data,
         _: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
         self.handler.call(req).await
@@ -271,7 +278,7 @@ mod m {
 
 #[cfg(test)]
 mod tests {
-    use ntex_service::ServiceFactory;
+    use ntex_service::Pipeline;
 
     use crate::http::{Method, StatusCode, header};
     use crate::time::{Millis, sleep};
@@ -379,7 +386,12 @@ mod tests {
         assert!(repr.contains("methods: [GET]"));
         assert!(repr.contains("guards: AllGuard()"));
 
-        assert!(route.create(SharedCfg::default()).await.is_ok());
+        assert!(
+            Pipeline::new(route, ())
+                .call(SharedCfg::default())
+                .await
+                .is_ok()
+        );
 
         let route_service = route.service();
         let repr = format!("{route_service:?}");

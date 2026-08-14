@@ -41,6 +41,7 @@ ntex = { path = "ntex" }
 ntex-bytes = { path = "ntex-bytes" }
 ntex-codec = { path = "ntex-codec" }
 ntex-error = { path = "ntex-error" }
+ntex-h2 = { path = "../ntex-h2" }
 ntex-io = { path = "ntex-io" }
 ntex-dispatcher = { path = "ntex-dispatcher" }
 ntex-net = { path = "ntex-net" }

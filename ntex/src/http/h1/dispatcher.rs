@@ -63,12 +63,16 @@ where
     Stop,
 }
 
-struct DispatcherInner<F, C, S, B> {
+struct DispatcherInner<F, C, S, B>
+where
+    S: Service<Request>,
+    C: Service<Control<F, S::Error>>,
+{
     io: Rc<Io<F>>,
     flags: Flags,
     disconnect: Option<ServiceDisconnectReason>,
     codec: Codec,
-    config: Rc<DispatcherConfig<S, C>>,
+    config: Rc<DispatcherConfig<S, C, S::Data, C::Data>>,
     payload: Option<(PayloadDecoder, bstream::Sender<PayloadError>)>,
     read_remains: u32,
     read_consumed: u32,
@@ -89,7 +93,7 @@ where
     pub(in crate::http) fn new(
         id: usize,
         io: Io<F>,
-        config: Rc<DispatcherConfig<S, C>>,
+        config: Rc<DispatcherConfig<S, C, S::Data, C::Data>>,
     ) -> Self {
         let codec = Codec::new(id, io.shared().get());
 

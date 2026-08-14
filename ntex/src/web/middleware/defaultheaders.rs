@@ -111,6 +111,7 @@ where
 {
     type Response = WebResponse;
     type Error = S::Error;
+    type Data = S::Data;
 
     crate::forward_poll!(service);
     crate::forward_ready!(service);
@@ -119,9 +120,10 @@ where
     async fn call(
         &self,
         req: WebRequest<E>,
+        data: &Self::Data,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
-        let mut res = ctx.call(&self.service, req).await?;
+        let mut res = ctx.call(&self.service, req, data).await?;
 
         // set response headers
         for (key, value) in &self.inner.headers {
@@ -155,6 +157,7 @@ mod tests {
             DefaultHeaders::new()
                 .header(CONTENT_TYPE, "0001")
                 .create(ok_service(), SharedCfg::default()),
+            (),
         )
         .bind();
 
@@ -175,6 +178,7 @@ mod tests {
             DefaultHeaders::new()
                 .header(CONTENT_TYPE, "0001")
                 .create(srv.into_service(), SharedCfg::default()),
+            (),
         );
         let resp = mw.call(req).await.unwrap();
         assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "0002");
@@ -201,6 +205,7 @@ mod tests {
             DefaultHeaders::new()
                 .content_type()
                 .create(srv.into_service(), SharedCfg::default()),
+            (),
         );
 
         let req = TestRequest::default().to_srv_request();

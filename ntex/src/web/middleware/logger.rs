@@ -137,6 +137,7 @@ where
 {
     type Response = WebResponse;
     type Error = S::Error;
+    type Data = S::Data;
 
     crate::forward_poll!(service);
     crate::forward_ready!(service);
@@ -145,10 +146,11 @@ where
     async fn call(
         &self,
         req: WebRequest<E>,
+        data: &Self::Data,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
         if self.inner.exclude.contains(req.path()) {
-            ctx.call(&self.service, req).await
+            ctx.call(&self.service, req, data).await
         } else {
             let time = time::SystemTime::now();
             let mut format = self.inner.format.clone();
@@ -157,7 +159,7 @@ where
                 unit.render_request(time, &req);
             }
 
-            let res = ctx.call(&self.service, req).await?;
+            let res = ctx.call(&self.service, req, data).await?;
             for unit in &mut format.0 {
                 unit.render_response(res.response());
             }
@@ -429,11 +431,10 @@ mod tests {
         let logger = Logger::new("%% %{User-Agent}i %{X-Test}o %{HOME}e %D %% test")
             .exclude("/test");
 
-        let srv = Pipeline::new(Middleware::create(
-            &logger,
-            srv.into_service(),
-            SharedCfg::default(),
-        ))
+        let srv = Pipeline::new(
+            Middleware::create(&logger, srv.into_service(), SharedCfg::default()),
+            (),
+        )
         .bind();
         assert!(lazy(|cx| srv.poll_ready(cx).is_ready()).await);
         assert!(lazy(|cx| srv.poll_shutdown(cx).is_ready()).await);

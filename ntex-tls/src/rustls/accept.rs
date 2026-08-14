@@ -1,11 +1,11 @@
-use std::{future::Future, io, sync::Arc};
+use std::{io, sync::Arc};
 
 use tls_rustls::ServerConfig;
 
 use ntex_io::{Filter, Io, Layer};
 use ntex_service::cfg::{Cfg, SharedCfg};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
-use ntex_util::{future::Ready, services::Counter};
+use ntex_util::services::Counter;
 
 use crate::{MAX_SSL_ACCEPT_COUNTER, TlsConfig, rustls::TlsServerFilter};
 
@@ -35,18 +35,20 @@ impl<F: Filter> ServiceFactory<Io<F>, SharedCfg> for TlsAcceptor {
     type Error = io::Error;
     type Service = TlsAcceptorService;
     type InitError = ();
+    type Data = ();
 
-    fn create(
-        &self,
-        cfg: SharedCfg,
-    ) -> impl Future<Output = Result<Self::Service, Self::InitError>> {
+    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
         MAX_SSL_ACCEPT_COUNTER.with(|conns| {
-            Ready::Ok(TlsAcceptorService {
+            Ok(TlsAcceptorService {
                 cfg: cfg.get(),
                 config: self.config.clone(),
                 conns: conns.clone(),
             })
         })
+    }
+
+    async fn map_data(&self, _: &SharedCfg, _: &Self::Data) -> Result<(), Self::InitError> {
+        Ok(())
     }
 }
 
@@ -61,8 +63,13 @@ pub struct TlsAcceptorService {
 impl<F: Filter> Service<Io<F>> for TlsAcceptorService {
     type Response = Io<Layer<TlsServerFilter, F>>;
     type Error = io::Error;
+    type Data = ();
 
-    async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(
+        &self,
+        _: &Self::Data,
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<(), Self::Error> {
         if !self.conns.is_available() {
             self.conns.available().await;
         }
@@ -72,6 +79,7 @@ impl<F: Filter> Service<Io<F>> for TlsAcceptorService {
     async fn call(
         &self,
         io: Io<F>,
+        _: &Self::Data,
         _: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
         let _guard = self.conns.get();

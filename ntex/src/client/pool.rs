@@ -47,7 +47,7 @@ struct AvailableConnection {
 pub(super) struct ConnectionPool(Rc<ConnectionPoolInner>);
 
 struct ConnectionPoolInner {
-    svc: Pipeline<Connector>,
+    svc: Pipeline<Connector, ()>,
     inner: Rc<RefCell<Inner>>,
     waiters: Rc<RefCell<Waiters>>,
     stop: Rc<Cell<Option<oneshot::Sender<()>>>>,
@@ -69,7 +69,7 @@ pub(super) struct Inner {
 
 impl ConnectionPool {
     pub(super) fn new(
-        svc: Pipeline<Connector>,
+        svc: Pipeline<Connector, ()>,
         conn_lifetime: Duration,
         conn_keep_alive: Duration,
         limit: usize,
@@ -143,19 +143,24 @@ impl fmt::Debug for ConnectionPool {
 impl Service<Connect> for ConnectionPool {
     type Response = Connection;
     type Error = ConnectError;
+    type Data = ();
 
     #[inline]
-    async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(
+        &self,
+        _: &Self::Data,
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<(), Self::Error> {
         self.0.svc.ready().await
     }
 
     #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
+    fn poll(&self, _: &Self::Data, cx: &mut Context<'_>) -> Result<(), Self::Error> {
         self.0.svc.poll(cx)
     }
 
     #[inline]
-    async fn shutdown(&self) {
+    async fn shutdown(&self, _: &Self::Data) {
         self.0.stop.take();
         self.0.inner.borrow_mut().stopped = true;
         self.0.svc.shutdown().await;
@@ -164,6 +169,7 @@ impl Service<Connect> for ConnectionPool {
     async fn call(
         &self,
         req: Connect,
+        _: &Self::Data,
         _: ServiceCtx<'_, Self>,
     ) -> Result<Connection, ConnectError> {
         log::trace!("{}: Get connection for {:?}", self.0.config.tag(), req.uri);
@@ -344,7 +350,7 @@ impl Inner {
 }
 
 async fn run_connection_pool(
-    svc: Pipeline<Connector>,
+    svc: Pipeline<Connector, ()>,
     inner: Rc<RefCell<Inner>>,
     waiters: Rc<RefCell<Waiters>>,
     config: SharedCfg,
@@ -443,7 +449,7 @@ impl OpenConnection {
         tx: Waiter,
         uri: Uri,
         inner: Rc<RefCell<Inner>>,
-        pipeline: &Pipeline<Connector>,
+        pipeline: &Pipeline<Connector, ()>,
         msg: Connect,
     ) {
         let fut = pipeline.call_static(msg);
@@ -652,22 +658,30 @@ mod tests {
     async fn test_basics() {
         let store = Rc::new(RefCell::new(Vec::new()));
         let store2 = store.clone();
+        let connector = Pipeline::new(
+            fn_service(move |req| {
+                let (client, server) = IoTest::create();
+                store2.borrow_mut().push((req, server));
+                Box::pin(async move {
+                    Ok(IoBoxed::from(nio::Io::new(client, SharedCfg::default())))
+                })
+            }),
+            (),
+        )
+        .call(())
+        .await
+        .unwrap();
 
         let pool = Pipeline::new(
             ConnectionPool::new(
-                Pipeline::new(boxed::service(fn_service(move |req| {
-                    let (client, server) = IoTest::create();
-                    store2.borrow_mut().push((req, server));
-                    Box::pin(async move {
-                        Ok(IoBoxed::from(nio::Io::new(client, SharedCfg::default())))
-                    })
-                }))),
+                Pipeline::new(boxed::service(connector), ()),
                 Duration::from_secs(10),
                 Duration::from_secs(10),
                 1,
                 SharedCfg::default(),
             )
             .clone(),
+            (),
         )
         .bind();
 

@@ -6,7 +6,7 @@
     clippy::must_use_candidate,
     clippy::missing_errors_doc
 )]
-use std::{rc::Rc, task::Context};
+use std::task::Context;
 
 mod and_then;
 mod apply;
@@ -24,6 +24,7 @@ mod map_err;
 mod map_init_err;
 mod middleware;
 mod pipeline;
+mod svc_fct;
 mod then;
 mod util;
 
@@ -35,6 +36,7 @@ pub use self::fn_shutdown::fn_shutdown;
 pub use self::map_config::{map_config, unit_config};
 pub use self::middleware::{Identity, Middleware, Stack, apply, fn_layer};
 pub use self::pipeline::{Pipeline, PipelineBinding, PipelineCall, PipelineSvc};
+pub use self::svc_fct::ServiceFactory;
 
 #[allow(unused_variables)]
 /// An asynchronous function from a `Request` to a `Response`.
@@ -76,8 +78,9 @@ pub use self::pipeline::{Pipeline, PipelineBinding, PipelineCall, PipelineSvc};
 /// impl Service<u8> for MyService {
 ///     type Response = u64;
 ///     type Error = Infallible;
+///     type Data = ();
 ///
-///     async fn call(&self, req: u8, ctx: ServiceCtx<'_, Self>) -> Result<Self::Response, Self::Error> {
+///     async fn call(&self, req: u8, _: &Self::Data, _: ServiceCtx<'_, Self>) -> Result<Self::Response, Self::Error> {
 ///         Ok(req as u64)
 ///     }
 /// }
@@ -99,6 +102,9 @@ pub trait Service<Req> {
     /// Errors produced by the service when checking readiness or executing call.
     type Error;
 
+    /// Data stored by the pipeline and passed to every service operation.
+    type Data;
+
     /// Processes a request and returns the response asynchronously.
     ///
     /// The `call` method can only be invoked within a pipeline, which enforces
@@ -108,6 +114,7 @@ pub trait Service<Req> {
     async fn call(
         &self,
         req: Req,
+        data: &Self::Data,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error>;
 
@@ -120,7 +127,11 @@ pub trait Service<Req> {
     ///
     /// **Note:** Pipeline readiness is maintained across all services in the pipeline.
     /// The pipeline can process requests only if every service in the pipeline is ready.
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(
+        &self,
+        data: &Self::Data,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<(), Self::Error> {
         Ok(())
     }
 
@@ -128,14 +139,14 @@ pub trait Service<Req> {
     /// Shuts down the service.
     ///
     /// Returns when the service has been properly shut down.
-    async fn shutdown(&self) {}
+    async fn shutdown(&self, data: &Self::Data) {}
 
     #[inline]
     /// Polls the service from the current async task.
     ///
     /// The service may perform asynchronous computations or
     /// maintain asynchronous state during polling.
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
+    fn poll(&self, data: &Self::Data, cx: &mut Context<'_>) -> Result<(), Self::Error> {
         Ok(())
     }
 
@@ -172,125 +183,41 @@ pub trait Service<Req> {
     }
 }
 
-/// A factory for creating `Service`s.
-///
-/// This is useful when new `Service`s must be produced dynamically. For example,
-/// a TCP server listener accepts new connections, constructs a new `Service` for
-/// each connection using the `ServiceFactory` trait, and uses that service to
-/// handle inbound requests.
-///
-/// `Config` represents the configuration type for the service factory.
-///
-/// Simple factories can often use [`fn_factory`] or [`fn_factory_with_config`]
-/// to reduce boilerplate.
-pub trait ServiceFactory<Req, Cfg = ()> {
-    /// Responses given by the created services.
-    type Response;
-
-    /// Errors produced by the created services.
-    type Error;
-
-    /// The type of `Service` produced by this factory.
-    type Service: Service<Req, Response = Self::Response, Error = Self::Error>;
-
-    /// Possible errors encountered during service construction.
-    type InitError;
-
-    /// Creates a new service asynchronously and returns it.
-    async fn create(&self, cfg: Cfg) -> Result<Self::Service, Self::InitError>;
-
-    #[inline]
-    /// Asynchronously creates a new service and wraps it in a container.
-    async fn pipeline(&self, cfg: Cfg) -> Result<Pipeline<Self::Service>, Self::InitError>
-    where
-        Self: Sized,
-    {
-        Ok(Pipeline::new(self.create(cfg).await?))
-    }
-
-    #[inline]
-    /// Returns a new service that maps this service's output to a different type.
-    fn map<F, Res>(
-        self,
-        f: F,
-    ) -> dev::ServiceChainFactory<dev::MapFactory<Self, F, Req, Res, Cfg>, Req, Cfg>
-    where
-        Self: Sized,
-        F: Fn(Self::Response) -> Res + Clone,
-    {
-        chain_factory(dev::MapFactory::new(self, f))
-    }
-
-    #[inline]
-    /// Transforms this service's error into another error,
-    /// producing a new service.
-    fn map_err<F, E>(
-        self,
-        f: F,
-    ) -> dev::ServiceChainFactory<dev::MapErrFactory<Self, Req, Cfg, F, E>, Req, Cfg>
-    where
-        Self: Sized,
-        F: Fn(Self::Error) -> E + Clone,
-    {
-        chain_factory(dev::MapErrFactory::new(self, f))
-    }
-
-    #[inline]
-    /// Maps this factory's initialization error to a different error,
-    /// returning a new service factory.
-    fn map_init_err<F, E>(
-        self,
-        f: F,
-    ) -> dev::ServiceChainFactory<dev::MapInitErr<Self, Req, Cfg, F, E>, Req, Cfg>
-    where
-        Self: Sized,
-        F: Fn(Self::InitError) -> E + Clone,
-    {
-        chain_factory(dev::MapInitErr::new(self, f))
-    }
-
-    /// Creates a boxed service factory.
-    fn boxed(
-        self,
-    ) -> boxed::BoxServiceFactory<Cfg, Req, Self::Response, Self::Error, Self::InitError>
-    where
-        Cfg: 'static,
-        Req: 'static,
-        Self: 'static + Sized,
-    {
-        boxed::factory(self)
-    }
-}
-
 impl<S, Req> Service<Req> for &S
 where
     S: Service<Req>,
 {
     type Response = S::Response;
     type Error = S::Error;
+    type Data = S::Data;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), S::Error> {
-        ctx.ready(&**self).await
+    async fn ready(
+        &self,
+        data: &Self::Data,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<(), S::Error> {
+        ctx.ready(&**self, data).await
     }
 
     #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), S::Error> {
-        (**self).poll(cx)
+    fn poll(&self, data: &Self::Data, cx: &mut Context<'_>) -> Result<(), S::Error> {
+        (**self).poll(data, cx)
     }
 
     #[inline]
-    async fn shutdown(&self) {
-        (**self).shutdown().await;
+    async fn shutdown(&self, data: &Self::Data) {
+        (**self).shutdown(data).await;
     }
 
     #[inline]
     async fn call(
         &self,
         request: Req,
+        data: &Self::Data,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
-        ctx.call_nowait(&**self, request).await
+        ctx.call_nowait(&**self, request, data).await
     }
 }
 
@@ -300,43 +227,35 @@ where
 {
     type Response = S::Response;
     type Error = S::Error;
+    type Data = S::Data;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), S::Error> {
-        ctx.ready(&**self).await
+    async fn ready(
+        &self,
+        data: &Self::Data,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<(), S::Error> {
+        ctx.ready(&**self, data).await
     }
 
     #[inline]
-    async fn shutdown(&self) {
-        (**self).shutdown().await;
+    async fn shutdown(&self, data: &Self::Data) {
+        (**self).shutdown(data).await;
     }
 
     #[inline]
     async fn call(
         &self,
         request: Req,
+        data: &Self::Data,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
-        ctx.call_nowait(&**self, request).await
+        ctx.call_nowait(&**self, request, data).await
     }
 
     #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), S::Error> {
-        (**self).poll(cx)
-    }
-}
-
-impl<S, Req, Cfg> ServiceFactory<Req, Cfg> for Rc<S>
-where
-    S: ServiceFactory<Req, Cfg>,
-{
-    type Response = S::Response;
-    type Error = S::Error;
-    type Service = S::Service;
-    type InitError = S::InitError;
-
-    async fn create(&self, cfg: Cfg) -> Result<Self::Service, Self::InitError> {
-        self.as_ref().create(cfg).await
+    fn poll(&self, data: &Self::Data, cx: &mut Context<'_>) -> Result<(), S::Error> {
+        (**self).poll(data, cx)
     }
 }
 

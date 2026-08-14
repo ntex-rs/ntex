@@ -59,6 +59,7 @@ where
 {
     type Response = S::Response;
     type Error = S::Error;
+    type Data = S::Data;
 
     ntex_service::forward_poll!(service);
     ntex_service::forward_ready!(service);
@@ -67,13 +68,14 @@ where
     async fn call(
         &self,
         mut request: R,
+        data: &Self::Data,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<S::Response, S::Error> {
         let mut policy = self.policy.clone();
         let mut cloned = policy.clone_request(&request);
 
         loop {
-            let result = ctx.call(&self.service, request).await;
+            let result = ctx.call(&self.service, request, data).await;
 
             cloned = if let Some(req) = cloned.take() {
                 if policy.retry(&req, &result).await {
@@ -151,8 +153,14 @@ mod tests {
     impl Service<()> for TestService {
         type Response = ();
         type Error = ();
+        type Data = ();
 
-        async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
+        async fn call(
+            &self,
+            _r: (),
+            _: &Self::Data,
+            _: ServiceCtx<'_, Self>,
+        ) -> Result<(), ()> {
             let cnt = self.0.get();
             if cnt == 0 {
                 Ok(())
@@ -169,6 +177,7 @@ mod tests {
         let svc = Pipeline::new(
             RetryService::new(DefaultRetryPolicy::default(), TestService(cnt.clone()))
                 .clone(),
+            (),
         );
         assert_eq!(svc.call(()).await, Err(()));
         assert_eq!(svc.ready().await, Ok(()));
@@ -179,14 +188,14 @@ mod tests {
             Retry::new(DefaultRetryPolicy::new(3)).clone(),
             fn_factory(|| async { Ok::<_, ()>(TestService(Rc::new(Cell::new(2)))) }),
         );
-        let srv = factory.pipeline(&()).await.unwrap();
+        let srv = factory.pipeline((), &()).await.unwrap();
         assert_eq!(srv.call(()).await, Ok(()));
 
         let factory = apply(
             Retry::new(DefaultRetryPolicy::new(3)).clone(),
             fn_factory(|| async { Ok::<_, ()>(TestService(Rc::new(Cell::new(2)))) }),
         );
-        let srv = factory.pipeline(&()).await.unwrap();
+        let srv = factory.pipeline((), &()).await.unwrap();
         assert_eq!(srv.call(()).await, Ok(()));
     }
 }

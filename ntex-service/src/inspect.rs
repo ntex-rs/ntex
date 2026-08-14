@@ -1,6 +1,7 @@
 use std::{fmt, task::Context};
 
 use super::{Service, ServiceCtx, ServiceFactory};
+use crate::svc_fct::{ErrorOf, ResponseOf, ServiceOf};
 
 /// Service for the `inspect` combinator.
 pub struct Inspect<S, F> {
@@ -52,10 +53,16 @@ where
 {
     type Response = S::Response;
     type Error = S::Error;
+    type Data = S::Data;
 
     #[inline]
-    async fn call(&self, r: R, ctx: ServiceCtx<'_, Self>) -> Result<S::Response, S::Error> {
-        ctx.call(&self.svc, r).await.inspect(&self.f)
+    async fn call(
+        &self,
+        r: R,
+        data: &Self::Data,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<S::Response, S::Error> {
+        ctx.call(&self.svc, r, data).await.inspect(&self.f)
     }
 
     crate::forward_ready!(svc);
@@ -113,39 +120,54 @@ where
 {
     type Response = S::Response;
     type Error = S::Error;
+    type Data = S::Data;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
-        ctx.ready(&self.svc).await.inspect_err(&self.f)
+    async fn ready(
+        &self,
+        data: &Self::Data,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<(), Self::Error> {
+        ctx.ready(&self.svc, data).await.inspect_err(&self.f)
     }
 
     #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
-        self.svc.poll(cx).inspect_err(&self.f)
+    fn poll(&self, data: &Self::Data, cx: &mut Context<'_>) -> Result<(), Self::Error> {
+        self.svc.poll(data, cx).inspect_err(&self.f)
     }
 
     #[inline]
-    async fn call(&self, r: R, ctx: ServiceCtx<'_, Self>) -> Result<S::Response, S::Error> {
-        ctx.call(&self.svc, r).await.inspect_err(&self.f)
+    async fn call(
+        &self,
+        r: R,
+        data: &Self::Data,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<S::Response, S::Error> {
+        ctx.call(&self.svc, r, data).await.inspect_err(&self.f)
     }
 
     crate::forward_shutdown!(svc);
 }
 
 /// Factory for the `inspect` combinator.
-pub struct InspectFactory<S, F> {
+pub struct InspectFactory<S, F, R> {
     s: S,
     f: F,
+    _t: std::marker::PhantomData<fn(R)>,
 }
 
-impl<S, F> InspectFactory<S, F> {
+impl<S, F, R> InspectFactory<S, F, R> {
     /// Create new `InspectFactory` factory instance.
     pub(crate) fn new(s: S, f: F) -> Self {
-        Self { s, f }
+        Self {
+            s,
+            f,
+            _t: std::marker::PhantomData,
+        }
     }
 }
 
-impl<S, F> Clone for InspectFactory<S, F>
+impl<S, F, R> Clone for InspectFactory<S, F, R>
 where
     S: Clone,
     F: Clone,
@@ -154,11 +176,12 @@ where
         Self {
             s: self.s.clone(),
             f: self.f.clone(),
+            _t: std::marker::PhantomData,
         }
     }
 }
 
-impl<S, F> fmt::Debug for InspectFactory<S, F>
+impl<S, F, R> fmt::Debug for InspectFactory<S, F, R>
 where
     S: fmt::Debug,
 {
@@ -170,16 +193,16 @@ where
     }
 }
 
-impl<S, F, R, C> ServiceFactory<R, C> for InspectFactory<S, F>
+impl<S, F, R, C> ServiceFactory<R, C> for InspectFactory<S, F, R>
 where
     S: ServiceFactory<R, C>,
-    F: Fn(&S::Response) + Clone,
+    F: Fn(&ResponseOf<S, R, C>) + Clone,
 {
     type Response = S::Response;
     type Error = S::Error;
-
-    type Service = Inspect<S::Service, F>;
+    type Service = Inspect<ServiceOf<S, R, C>, F>;
     type InitError = S::InitError;
+    type Data = S::Data;
 
     #[inline]
     async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
@@ -188,22 +211,36 @@ where
             f: self.f.clone(),
         })
     }
-}
 
-/// Factory for the `inspect_err` combinator.
-pub struct InspectErrFactory<S, F> {
-    s: S,
-    f: F,
-}
-
-impl<S, F> InspectErrFactory<S, F> {
-    /// Create new `InspectErrFactory` factory instance.
-    pub(crate) fn new(s: S, f: F) -> Self {
-        Self { s, f }
+    #[inline]
+    async fn map_data(
+        &self,
+        cfg: &C,
+        data: &Self::Data,
+    ) -> Result<<Self::Service as Service<R>>::Data, Self::InitError> {
+        self.s.map_data(cfg, data).await
     }
 }
 
-impl<S, F> Clone for InspectErrFactory<S, F>
+/// Factory for the `inspect_err` combinator.
+pub struct InspectErrFactory<S, F, R> {
+    s: S,
+    f: F,
+    _t: std::marker::PhantomData<fn(R)>,
+}
+
+impl<S, F, R> InspectErrFactory<S, F, R> {
+    /// Create new `InspectErrFactory` factory instance.
+    pub(crate) fn new(s: S, f: F) -> Self {
+        Self {
+            s,
+            f,
+            _t: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<S, F, R> Clone for InspectErrFactory<S, F, R>
 where
     S: Clone,
     F: Clone,
@@ -212,11 +249,12 @@ where
         Self {
             s: self.s.clone(),
             f: self.f.clone(),
+            _t: std::marker::PhantomData,
         }
     }
 }
 
-impl<S, F> fmt::Debug for InspectErrFactory<S, F>
+impl<S, F, R> fmt::Debug for InspectErrFactory<S, F, R>
 where
     S: fmt::Debug,
 {
@@ -228,16 +266,16 @@ where
     }
 }
 
-impl<S, F, R, C> ServiceFactory<R, C> for InspectErrFactory<S, F>
+impl<S, F, R, C> ServiceFactory<R, C> for InspectErrFactory<S, F, R>
 where
     S: ServiceFactory<R, C>,
-    F: Fn(&S::Error) + Clone,
+    F: Fn(&ErrorOf<S, R, C>) + Clone,
 {
     type Response = S::Response;
     type Error = S::Error;
-
-    type Service = InspectErr<S::Service, F>;
+    type Service = InspectErr<ServiceOf<S, R, C>, F>;
     type InitError = S::InitError;
+    type Data = S::Data;
 
     #[inline]
     async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
@@ -245,6 +283,15 @@ where
             svc,
             f: self.f.clone(),
         })
+    }
+
+    #[inline]
+    async fn map_data(
+        &self,
+        cfg: &C,
+        data: &Self::Data,
+    ) -> Result<<Self::Service as Service<R>>::Data, Self::InitError> {
+        self.s.map_data(cfg, data).await
     }
 }
 
@@ -262,16 +309,26 @@ mod tests {
     impl Service<()> for Srv {
         type Response = ();
         type Error = ();
+        type Data = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(
+            &self,
+            _: &Self::Data,
+            _: ServiceCtx<'_, Self>,
+        ) -> Result<(), Self::Error> {
             if self.1 { Err(()) } else { Ok(()) }
         }
 
-        async fn call(&self, _m: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
+        async fn call(
+            &self,
+            _m: (),
+            _: &Self::Data,
+            _: ServiceCtx<'_, Self>,
+        ) -> Result<(), ()> {
             if self.0 { Err(()) } else { Ok(()) }
         }
 
-        async fn shutdown(&self) {
+        async fn shutdown(&self, _: &Self::Data) {
             self.2.set(self.2.get() + 1);
         }
     }
@@ -282,7 +339,7 @@ mod tests {
         let cnt2 = cnt.clone();
         let srv = chain(Srv(false, false, cnt.clone()))
             .inspect(move |&()| cnt2.set(cnt2.get() + 1))
-            .into_pipeline();
+            .into_pipeline(());
         let res = srv.ready().await;
         assert_eq!(res, Ok(()));
 
@@ -296,7 +353,7 @@ mod tests {
         let cnt2 = cnt.clone();
         let srv = chain(Srv(true, true, cnt.clone()))
             .inspect_err(move |&()| cnt2.set(cnt2.get() + 1))
-            .into_pipeline();
+            .into_pipeline(());
         let res = srv.ready().await;
         assert_eq!(res, Err(()));
 
@@ -311,7 +368,7 @@ mod tests {
         let srv = chain(Srv(false, false, cnt.clone()))
             .inspect(move |&()| cnt2.set(cnt2.get() + 1))
             .clone()
-            .into_pipeline();
+            .into_pipeline(());
         let res = srv.call(()).await;
         assert!(res.is_ok());
 
@@ -328,7 +385,7 @@ mod tests {
         let srv = chain(Srv(false, true, cnt.clone()))
             .inspect_err(move |&()| cnt2.set(cnt2.get() + 1))
             .clone()
-            .into_pipeline();
+            .into_pipeline(());
         let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), ());
@@ -349,7 +406,7 @@ mod tests {
         }))
         .inspect(move |&()| cnt3.set(cnt3.get() + 1))
         .clone();
-        let srv = new_srv.pipeline(&()).await.unwrap();
+        let srv = new_srv.pipeline(&(), &()).await.unwrap();
         let res = srv.call(()).await;
         assert!(res.is_ok());
         let _ = format!("{new_srv:?}");
@@ -367,7 +424,7 @@ mod tests {
         }))
         .inspect_err(move |&()| cnt3.set(cnt3.get() + 1))
         .clone();
-        let srv = new_srv.pipeline(&()).await.unwrap();
+        let srv = new_srv.pipeline(&(), &()).await.unwrap();
         let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), ());

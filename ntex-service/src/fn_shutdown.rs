@@ -1,4 +1,4 @@
-use std::{cell::Cell, fmt, future::Future, future::ready, marker::PhantomData};
+use std::{cell::Cell, fmt, future::ready, marker::PhantomData};
 
 use crate::{Service, ServiceCtx, ServiceFactory};
 
@@ -14,6 +14,19 @@ where
 pub struct FnShutdown<Req, Err, F> {
     f_shutdown: Cell<Option<F>>,
     _t: PhantomData<(Req, Err)>,
+}
+
+pub struct FnShutdownService<Req, Err, F> {
+    f_shutdown: Cell<Option<F>>,
+    _t: PhantomData<(Req, Err)>,
+}
+
+impl<Req, Err, F> fmt::Debug for FnShutdownService<Req, Err, F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FnShutdownService")
+            .field("fn", &std::any::type_name::<F>())
+            .finish()
+    }
 }
 
 impl<Req, Err, F> FnShutdown<Req, Err, F> {
@@ -54,32 +67,39 @@ where
 {
     type Response = Req;
     type Error = Err;
-    type Service = FnShutdown<Req, Err, F>;
+    type Service = FnShutdownService<Req, Err, F>;
     type InitError = ();
+    type Data = ();
 
     #[inline]
-    fn create(&self, _: C) -> impl Future<Output = Result<Self::Service, Self::InitError>> {
+    async fn create(&self, _: C) -> Result<Self::Service, Self::InitError> {
         if let Some(f) = self.f_shutdown.take() {
             self.f_shutdown.set(Some(f.clone()));
-            ready(Ok(FnShutdown {
+            Ok(FnShutdownService {
                 f_shutdown: Cell::new(Some(f)),
                 _t: PhantomData,
-            }))
+            })
         } else {
             panic!("FnShutdown was used already");
         }
     }
+
+    #[inline]
+    async fn map_data(&self, _: &C, _: &Self::Data) -> Result<(), Self::InitError> {
+        Ok(())
+    }
 }
 
-impl<Req, Err, F> Service<Req> for FnShutdown<Req, Err, F>
+impl<Req, Err, F> Service<Req> for FnShutdownService<Req, Err, F>
 where
     F: AsyncFnOnce(),
 {
     type Response = Req;
     type Error = Err;
+    type Data = ();
 
     #[inline]
-    async fn shutdown(&self) {
+    async fn shutdown(&self, _: &Self::Data) {
         if let Some(f) = self.f_shutdown.take() {
             (f)().await;
         }
@@ -89,6 +109,7 @@ where
     fn call(
         &self,
         req: Req,
+        _: &Self::Data,
         _: ServiceCtx<'_, Self>,
     ) -> impl Future<Output = Result<Req, Err>> {
         ready(Ok(req))
@@ -115,7 +136,7 @@ mod tests {
         let pipe = chain_factory(srv)
             .and_then(on_shutdown)
             .clone()
-            .pipeline(())
+            .pipeline((), &())
             .await
             .unwrap();
 
@@ -136,20 +157,19 @@ mod tests {
     }
 
     #[ntex::test]
-    #[should_panic]
-    #[allow(clippy::should_panic_without_expect)]
-    async fn test_fn_shutdown_panic() {
+    async fn test_fn_shutdown_once() {
         let is_called = Rc::new(Cell::new(false));
         let is_called2 = is_called.clone();
         let on_shutdown = fn_shutdown::<(), (), _>(async move || {
             is_called2.set(true);
         });
 
-        let pipe = chain_factory(on_shutdown).pipeline(()).await.unwrap();
+        let pipe = chain_factory(on_shutdown).pipeline((), &()).await.unwrap();
         pipe.shutdown().await;
         assert!(is_called.get());
         assert!(!pipe.is_shutdown());
 
-        let _factory = pipe.get_ref().create(()).await;
+        pipe.get_ref().shutdown(&()).await;
+        assert!(is_called.get());
     }
 }

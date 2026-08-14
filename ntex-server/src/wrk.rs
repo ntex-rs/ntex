@@ -7,7 +7,7 @@ use atomic_waker::AtomicWaker;
 use core_affinity::CoreId;
 
 use ntex_rt::{Arbiter, spawn};
-use ntex_service::{Pipeline, PipelineBinding, Service, ServiceFactory};
+use ntex_service::{PipelineBinding, Service, ServiceFactory};
 use ntex_util::future::{Either, Stream, select, stream_recv};
 use ntex_util::time::{Millis, sleep, timeout_checked};
 
@@ -275,7 +275,7 @@ impl Drop for WorkerAvailabilityTx {
 /// Service worker
 ///
 /// Worker accepts message via unbounded channel and starts processing.
-struct WorkerSt<T, F: ServiceFactory<T>> {
+struct WorkerSt<T, F: ServiceFactory<T, ()>> {
     name: String,
     rx: Receiver<T>,
     stop: Pin<Box<dyn Stream<Item = Shutdown>>>,
@@ -286,7 +286,7 @@ struct WorkerSt<T, F: ServiceFactory<T>> {
 async fn run_worker<T, F>(mut svc: PipelineBinding<F::Service, T>, mut wrk: WorkerSt<T, F>)
 where
     T: Send + 'static,
-    F: ServiceFactory<T> + 'static,
+    F: ServiceFactory<T, (), Data = ()> + 'static,
 {
     loop {
         let mut recv = std::pin::pin!(wrk.rx.recv());
@@ -341,9 +341,9 @@ where
 
         // re-create service
         loop {
-            match select(wrk.factory.create(()), stream_recv(&mut wrk.stop)).await {
+            match select(wrk.factory.pipeline((), &()), stream_recv(&mut wrk.stop)).await {
                 Either::Left(Ok(service)) => {
-                    svc = Pipeline::new(service).bind();
+                    svc = service.bind();
                     break;
                 }
                 Either::Left(Err(_)) => sleep(Millis::ONE_SEC).await,
@@ -379,14 +379,14 @@ async fn create<T, F>(
 ) -> Result<(PipelineBinding<F::Service, T>, WorkerSt<T, F>), ()>
 where
     T: Send + 'static,
-    F: ServiceFactory<T> + 'static,
+    F: ServiceFactory<T, (), Data = ()> + 'static,
 {
     availability.set(false);
     let factory = factory?;
     let mut stop = Box::pin(stop);
 
-    let svc = match select(factory.create(()), stream_recv(&mut stop)).await {
-        Either::Left(Ok(svc)) => Pipeline::new(svc).bind(),
+    let svc = match select(factory.pipeline((), &()), stream_recv(&mut stop)).await {
+        Either::Left(Ok(svc)) => svc.bind(),
         Either::Right(Some(Shutdown { result, .. })) => {
             log::trace!("Shutdown uninitialized worker");
             let _ = result.send(false);

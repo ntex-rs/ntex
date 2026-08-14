@@ -1,4 +1,7 @@
+use std::marker::PhantomData;
+
 use super::{Service, ServiceCtx, ServiceFactory, util};
+use crate::svc_fct::{ErrorOf, ResponseOf, ServiceOf};
 
 #[derive(Debug, Clone)]
 /// Service for the `then` combinator, chaining a computation onto the end of
@@ -20,73 +23,108 @@ impl<A, B> Then<A, B> {
 impl<A, B, R> Service<R> for Then<A, B>
 where
     A: Service<R>,
-    B: Service<Result<A::Response, A::Error>, Error = A::Error>,
+    B: Service<Result<A::Response, A::Error>, Error = A::Error, Data = A::Data>,
 {
     type Response = B::Response;
     type Error = B::Error;
+    type Data = A::Data;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
-        util::ready(&self.svc1, &self.svc2, ctx).await
+    async fn ready(
+        &self,
+        data: &Self::Data,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<(), Self::Error> {
+        util::ready(&self.svc1, &self.svc2, data, data, ctx).await
     }
 
     #[inline]
-    fn poll(&self, cx: &mut std::task::Context<'_>) -> Result<(), Self::Error> {
-        self.svc1.poll(cx)?;
-        self.svc2.poll(cx)
+    fn poll(
+        &self,
+        data: &Self::Data,
+        cx: &mut std::task::Context<'_>,
+    ) -> Result<(), Self::Error> {
+        self.svc1.poll(data, cx)?;
+        self.svc2.poll(data, cx)
     }
 
     #[inline]
-    async fn shutdown(&self) {
-        util::shutdown(&self.svc1, &self.svc2).await;
+    async fn shutdown(&self, data: &Self::Data) {
+        util::shutdown(&self.svc1, &self.svc2, data, data).await;
     }
 
     #[inline]
     async fn call(
         &self,
         req: R,
+        data: &Self::Data,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
-        ctx.call(&self.svc2, ctx.call(&self.svc1, req).await).await
+        ctx.call(&self.svc2, ctx.call(&self.svc1, req, data).await, data)
+            .await
     }
 }
 
 #[derive(Debug, Clone)]
 /// `.then()` service factory combinator
-pub struct ThenFactory<A, B> {
+pub struct ThenFactory<A, B, R> {
     svc1: A,
     svc2: B,
+    _t: PhantomData<fn(R)>,
 }
 
-impl<A, B> ThenFactory<A, B> {
+impl<A, B, R> ThenFactory<A, B, R> {
     /// Create new factory for `Then` combinator
     pub(crate) fn new(svc1: A, svc2: B) -> Self {
-        Self { svc1, svc2 }
+        Self {
+            svc1,
+            svc2,
+            _t: PhantomData,
+        }
     }
 }
 
-impl<A, B, R, C> ServiceFactory<R, C> for ThenFactory<A, B>
+impl<A, B, R, C> ServiceFactory<R, C> for ThenFactory<A, B, R>
 where
     A: ServiceFactory<R, C>,
     B: ServiceFactory<
-            Result<A::Response, A::Error>,
+            Result<ResponseOf<A, R, C>, ErrorOf<A, R, C>>,
             C,
-            Error = A::Error,
+            Error = ErrorOf<A, R, C>,
             InitError = A::InitError,
+            Data = A::Data,
+        >,
+    B::Service: Service<
+            Result<ResponseOf<A, R, C>, ErrorOf<A, R, C>>,
+            Error = ErrorOf<A, R, C>,
+            Data = <A::Service as Service<R>>::Data,
         >,
     C: Clone,
 {
     type Response = B::Response;
-    type Error = A::Error;
-
-    type Service = Then<A::Service, B::Service>;
+    type Error = B::Error;
+    type Service = Then<
+        ServiceOf<A, R, C>,
+        ServiceOf<B, Result<ResponseOf<A, R, C>, ErrorOf<A, R, C>>, C>,
+    >;
     type InitError = A::InitError;
+    type Data = A::Data;
 
     async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
         Ok(Then {
             svc1: self.svc1.create(cfg.clone()).await?,
             svc2: self.svc2.create(cfg).await?,
         })
+    }
+
+    async fn map_data(
+        &self,
+        cfg: &C,
+        data: &Self::Data,
+    ) -> Result<<Self::Service as Service<R>>::Data, Self::InitError> {
+        let svc_data = self.svc1.map_data(cfg, data).await?;
+        self.svc2.map_data(cfg, data).await?;
+        Ok(svc_data)
     }
 }
 
@@ -104,13 +142,18 @@ mod tests {
     impl Service<Result<&'static str, &'static str>> for Srv1 {
         type Response = &'static str;
         type Error = ();
+        type Data = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(
+            &self,
+            _: &Self::Data,
+            _: ServiceCtx<'_, Self>,
+        ) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }
 
-        fn poll(&self, _: &mut Context<'_>) -> Result<(), Self::Error> {
+        fn poll(&self, _: &Self::Data, _: &mut Context<'_>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }
@@ -118,6 +161,7 @@ mod tests {
         async fn call(
             &self,
             req: Result<&'static str, &'static str>,
+            _: &Self::Data,
             _: ServiceCtx<'_, Self>,
         ) -> Result<&'static str, ()> {
             match req {
@@ -126,7 +170,7 @@ mod tests {
             }
         }
 
-        async fn shutdown(&self) {
+        async fn shutdown(&self, _: &Self::Data) {
             self.1.set(self.1.get() + 1);
         }
     }
@@ -137,13 +181,18 @@ mod tests {
     impl Service<Result<&'static str, ()>> for Srv2 {
         type Response = (&'static str, &'static str);
         type Error = ();
+        type Data = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(
+            &self,
+            _: &Self::Data,
+            _: ServiceCtx<'_, Self>,
+        ) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }
 
-        fn poll(&self, _: &mut Context<'_>) -> Result<(), Self::Error> {
+        fn poll(&self, _: &Self::Data, _: &mut Context<'_>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }
@@ -151,6 +200,7 @@ mod tests {
         async fn call(
             &self,
             req: Result<&'static str, ()>,
+            _: &Self::Data,
             _: ServiceCtx<'_, Self>,
         ) -> Result<Self::Response, ()> {
             match req {
@@ -159,7 +209,7 @@ mod tests {
             }
         }
 
-        async fn shutdown(&self) {
+        async fn shutdown(&self, _: &Self::Data) {
             self.1.set(self.1.get() + 1);
         }
     }
@@ -170,7 +220,7 @@ mod tests {
         let cnt_sht = Rc::new(Cell::new(0));
         let srv = chain(Srv1(cnt.clone(), cnt_sht.clone()))
             .then(Srv2(cnt.clone(), cnt_sht.clone()))
-            .into_pipeline();
+            .into_pipeline(());
         let res = srv.ready().await;
         assert_eq!(res, Ok(()));
         assert_eq!(cnt.get(), 2);
@@ -188,7 +238,7 @@ mod tests {
         let srv = chain(Srv1(cnt.clone(), Rc::new(Cell::new(0))))
             .then(Srv2(cnt, Rc::new(Cell::new(0))))
             .clone()
-            .into_pipeline();
+            .into_pipeline(());
 
         let res = srv.call(Ok("srv1")).await;
         assert!(res.is_ok());
@@ -213,7 +263,7 @@ mod tests {
                 async move { Ok(Srv2(cnt.clone(), Rc::new(Cell::new(0)))) }
             }))
             .clone();
-        let srv = factory.pipeline(&()).await.unwrap();
+        let srv = factory.pipeline(&(), &()).await.unwrap();
         let res = srv.call(Ok("srv1")).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "ok"));

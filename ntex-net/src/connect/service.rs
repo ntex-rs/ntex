@@ -1,10 +1,10 @@
-use std::{collections::VecDeque, future::Future, io, marker, net::SocketAddr};
+use std::{collections::VecDeque, io, marker, net::SocketAddr};
 
 use ntex_error::Error;
 use ntex_io::{Io, IoConfig, types};
 use ntex_service::cfg::{Cfg, SharedCfg};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
-use ntex_util::{future::Either, future::Ready, time::timeout_checked};
+use ntex_util::{future::Either, time::timeout_checked};
 
 use super::{Address, Connect, ConnectError, ConnectServiceError, resolve};
 
@@ -98,22 +98,26 @@ impl<T: Address> ServiceFactory<Connect<T>, SharedCfg> for Connector<T> {
     type Error = ConnectError;
     type Service = ConnectorService<T>;
     type InitError = ConnectServiceError;
+    type Data = ();
 
-    fn create(
-        &self,
-        cfg: SharedCfg,
-    ) -> impl Future<Output = Result<Self::Service, Self::InitError>> {
-        Ready::Ok(ConnectorService::with(cfg))
+    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
+        Ok(ConnectorService::with(cfg))
+    }
+
+    async fn map_data(&self, _: &SharedCfg, _: &Self::Data) -> Result<(), Self::InitError> {
+        Ok(())
     }
 }
 
 impl<T: Address> Service<Connect<T>> for ConnectorService<T> {
     type Response = Io;
     type Error = ConnectError;
+    type Data = ();
 
     async fn call(
         &self,
         req: Connect<T>,
+        _: &Self::Data,
         _: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
         self.connect(req).await
@@ -207,22 +211,26 @@ impl<T: Address> ServiceFactory<Connect<T>, SharedCfg> for Connector2<T> {
     type Error = Error<ConnectError>;
     type Service = ConnectorService2<T>;
     type InitError = ConnectServiceError;
+    type Data = ();
 
-    fn create(
-        &self,
-        cfg: SharedCfg,
-    ) -> impl Future<Output = Result<Self::Service, Self::InitError>> {
-        Ready::Ok(ConnectorService2::with(cfg))
+    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
+        Ok(ConnectorService2::with(cfg))
+    }
+
+    async fn map_data(&self, _: &SharedCfg, _: &Self::Data) -> Result<(), Self::InitError> {
+        Ok(())
     }
 }
 
 impl<T: Address> Service<Connect<T>> for ConnectorService2<T> {
     type Response = Io;
     type Error = Error<ConnectError>;
+    type Data = ();
 
     async fn call(
         &self,
         req: Connect<T>,
+        _: &Self::Data,
         _: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
         self.connect(req).await

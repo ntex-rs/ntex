@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use crate::router::{IntoPattern, ResourceDef};
 use crate::service::cfg::{Cfg, SharedCfg};
-use crate::service::{IntoServiceFactory, ServiceFactory, boxed};
+use crate::service::{IntoServiceFactory, Service, ServiceFactory, boxed};
 use crate::util::Extensions;
 
 use super::config::WebAppConfig;
@@ -177,10 +177,17 @@ impl<Err: ErrorRenderer> WebServiceConfig<Err> {
         S: ServiceFactory<
                 WebRequest<Err>,
                 SharedCfg,
+                Data = (),
                 Response = WebResponse,
                 Error = Err::Container,
                 InitError = (),
             > + 'static,
+        S::Service: Service<
+                WebRequest<Err>,
+                Response = WebResponse,
+                Error = Err::Container,
+                Data = (),
+            >,
     {
         self.services
             .push((rdef, boxed::factory(factory.into_factory()), guards, nested));
@@ -261,13 +268,20 @@ impl WebServiceAdapter {
         T: ServiceFactory<
                 WebRequest<Err>,
                 SharedCfg,
+                Data = (),
                 Response = WebResponse,
                 Error = Err::Container,
             > + 'static,
+        T::Service: Service<
+                WebRequest<Err>,
+                Response = WebResponse,
+                Error = Err::Container,
+                Data = (),
+            >,
         Err: ErrorRenderer,
     {
         WebServiceImpl {
-            srv: service.into_factory().map_init_err(|_| ()),
+            srv: crate::service::chain_factory(service.into_factory()).map_init_err(|_| ()),
             rdef: self.rdef,
             name: self.name,
             guards: self.guards,
@@ -287,10 +301,13 @@ where
     T: ServiceFactory<
             WebRequest<Err>,
             SharedCfg,
+            Data = (),
             Response = WebResponse,
             Error = Err::Container,
             InitError = (),
         > + 'static,
+    T::Service:
+        Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container, Data = ()>,
     Err: ErrorRenderer,
 {
     fn register(mut self, config: &mut WebServiceConfig<Err>) {

@@ -2,13 +2,17 @@ use std::{future::Future, future::poll_fn, pin, pin::Pin, task::Poll};
 
 use crate::{Service, ServiceCtx};
 
-pub(crate) async fn shutdown<A, AR, B, BR>(svc1: &A, svc2: &B)
-where
+pub(crate) async fn shutdown<A, AR, B, BR>(
+    svc1: &A,
+    svc2: &B,
+    data1: &A::Data,
+    data2: &B::Data,
+) where
     A: Service<AR>,
     B: Service<BR>,
 {
-    let mut fut1 = pin::pin!(svc1.shutdown());
-    let mut fut2 = pin::pin!(svc2.shutdown());
+    let mut fut1 = pin::pin!(svc1.shutdown(data1));
+    let mut fut2 = pin::pin!(svc2.shutdown(data2));
 
     let mut ready1 = false;
     let mut ready2 = false;
@@ -32,14 +36,16 @@ where
 pub(crate) async fn ready<S, A, AR, B, BR>(
     svc1: &A,
     svc2: &B,
+    data1: &A::Data,
+    data2: &B::Data,
     ctx: ServiceCtx<'_, S>,
 ) -> Result<(), A::Error>
 where
     A: Service<AR>,
     B: Service<BR, Error = A::Error>,
 {
-    let mut fut1 = pin::pin!(ctx.ready(svc1));
-    let mut fut2 = pin::pin!(ctx.ready(svc2));
+    let mut fut1 = pin::pin!(ctx.ready(svc1, data1));
+    let mut fut2 = pin::pin!(ctx.ready(svc2, data2));
 
     let mut ready1 = false;
     let mut ready2 = false;

@@ -20,10 +20,15 @@ where
     type Error = io::Error;
     type Service = DefaultControlService;
     type InitError = io::Error;
+    type Data = ();
 
     #[inline]
     async fn create(&self, _: SharedCfg) -> Result<Self::Service, Self::InitError> {
         Ok(DefaultControlService)
+    }
+
+    async fn map_data(&self, _: &SharedCfg, _: &Self::Data) -> Result<(), Self::InitError> {
+        Ok(())
     }
 }
 
@@ -34,11 +39,13 @@ where
 {
     type Response = ControlAck<F>;
     type Error = io::Error;
+    type Data = ();
 
     #[inline]
     async fn call(
         &self,
         req: Control<F, Err>,
+        _: &Self::Data,
         _: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
         Ok(req.ack())

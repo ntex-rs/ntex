@@ -147,8 +147,14 @@ impl Connector {
     /// Use custom connector to open un-secured connections.
     pub fn connector<T>(mut self, connector: T) -> Self
     where
-        T: ServiceFactory<TcpConnect<Uri>, SharedCfg, Error = crate::connect::ConnectError>
-            + 'static,
+        T: ServiceFactory<
+                TcpConnect<Uri>,
+                SharedCfg,
+                Data = (),
+                Error = crate::connect::ConnectError,
+            > + 'static,
+        T::Service:
+            Service<TcpConnect<Uri>, Error = crate::connect::ConnectError, Data = ()>,
         T::InitError: Error,
         IoBoxed: From<T::Response>,
     {
@@ -167,8 +173,14 @@ impl Connector {
     /// Use custom connector to open secure connections.
     pub fn secure_connector<T>(mut self, connector: T) -> Self
     where
-        T: ServiceFactory<TcpConnect<Uri>, SharedCfg, Error = crate::connect::ConnectError>
-            + 'static,
+        T: ServiceFactory<
+                TcpConnect<Uri>,
+                SharedCfg,
+                Data = (),
+                Error = crate::connect::ConnectError,
+            > + 'static,
+        T::Service:
+            Service<TcpConnect<Uri>, Error = crate::connect::ConnectError, Data = ()>,
         T::InitError: Error,
         IoBoxed: From<T::Response>,
     {
@@ -189,11 +201,12 @@ impl ServiceFactory<Connect, SharedCfg> for Connector {
     type Error = ConnectError;
     type Service = ConnectorService;
     type InitError = Box<dyn Error>;
+    type Data = ();
 
     async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
         let ssl_pool = if let Some(ref svc) = self.secure_svc {
             Some(ConnectionPool::new(
-                svc.create(cfg.clone()).await?.into(),
+                svc.pipeline(cfg.clone(), &()).await?,
                 self.conn_lifetime,
                 self.conn_keep_alive,
                 self.limit,
@@ -203,13 +216,17 @@ impl ServiceFactory<Connect, SharedCfg> for Connector {
             None
         };
         let tcp_pool = ConnectionPool::new(
-            self.svc.create(cfg.clone()).await?.into(),
+            self.svc.pipeline(cfg.clone(), &()).await?,
             self.conn_lifetime,
             self.conn_keep_alive,
             self.limit,
             cfg,
         );
         Ok(ConnectorService { tcp_pool, ssl_pool })
+    }
+
+    async fn map_data(&self, _: &SharedCfg, _: &Self::Data) -> Result<(), Self::InitError> {
+        Ok(())
     }
 }
 
@@ -223,48 +240,55 @@ pub struct ConnectorService {
 impl Service<Connect> for ConnectorService {
     type Response = Connection;
     type Error = ConnectError;
+    type Data = ();
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(
+        &self,
+        _: &Self::Data,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<(), Self::Error> {
         if let Some(ref ssl_pool) = self.ssl_pool {
-            let (r1, r2) = join(ctx.ready(&self.tcp_pool), ctx.ready(ssl_pool)).await;
+            let (r1, r2) =
+                join(ctx.ready(&self.tcp_pool, &()), ctx.ready(ssl_pool, &())).await;
             r1?;
             r2
         } else {
-            ctx.ready(&self.tcp_pool).await
+            ctx.ready(&self.tcp_pool, &()).await
         }
     }
 
     #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
-        self.tcp_pool.poll(cx)?;
+    fn poll(&self, _: &Self::Data, cx: &mut Context<'_>) -> Result<(), Self::Error> {
+        self.tcp_pool.poll(&(), cx)?;
         if let Some(ref ssl_pool) = self.ssl_pool {
-            ssl_pool.poll(cx)?;
+            ssl_pool.poll(&(), cx)?;
         }
         Ok(())
     }
 
-    async fn shutdown(&self) {
-        self.tcp_pool.shutdown().await;
+    async fn shutdown(&self, _: &Self::Data) {
+        self.tcp_pool.shutdown(&()).await;
         if let Some(ref ssl_pool) = self.ssl_pool {
-            ssl_pool.shutdown().await;
+            ssl_pool.shutdown(&()).await;
         }
     }
 
     async fn call(
         &self,
         req: Connect,
+        _: &Self::Data,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
         match req.uri.scheme_str() {
             Some("https" | "wss") => {
                 if let Some(ref conn) = self.ssl_pool {
-                    ctx.call(conn, req).await
+                    ctx.call(conn, req, &()).await
                 } else {
                     Err(ConnectError::SslIsNotSupported)
                 }
             }
-            _ => ctx.call(&self.tcp_pool, req).await,
+            _ => ctx.call(&self.tcp_pool, req, &()).await,
         }
     }
 }
@@ -276,13 +300,11 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_readiness() {
-        let conn = Pipeline::new(
-            Connector::default()
-                .create(SharedCfg::default())
-                .await
-                .unwrap(),
-        )
-        .bind();
+        let conn = Connector::default()
+            .pipeline(SharedCfg::default(), &())
+            .await
+            .unwrap()
+            .bind();
         assert!(lazy(|cx| conn.poll_ready(cx).is_ready()).await);
         assert!(lazy(|cx| conn.poll_shutdown(cx).is_ready()).await);
     }

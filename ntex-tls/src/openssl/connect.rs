@@ -34,23 +34,31 @@ impl<A: Address> SslConnector<Connector<A>> {
     }
 }
 
-impl<A: Address, S> ServiceFactory<Connect<A>, SharedCfg> for SslConnector<S>
+impl<A, S> ServiceFactory<Connect<A>, SharedCfg> for SslConnector<S>
 where
+    A: Address,
     S: ServiceFactory<Connect<A>, SharedCfg, Response = Io, Error = ConnectError>,
 {
     type Response = Io<Layer<SslFilter>>;
     type Error = ConnectError;
     type Service = SslConnectorService<S::Service>;
     type InitError = S::InitError;
+    type Data = S::Data;
 
     async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
-        let svc = self.connector.create(cfg.clone()).await?;
-
         Ok(SslConnectorService {
-            svc,
+            svc: self.connector.create(cfg.clone()).await?,
             cfg: cfg.get(),
             openssl: self.openssl.clone(),
         })
+    }
+
+    async fn map_data(
+        &self,
+        cfg: &SharedCfg,
+        data: &Self::Data,
+    ) -> Result<<Self::Service as Service<Connect<A>>>::Data, Self::InitError> {
+        self.connector.map_data(cfg, data).await
     }
 }
 
@@ -102,6 +110,7 @@ where
 {
     type Response = Io<Layer<SslFilter>>;
     type Error = ConnectError;
+    type Data = S::Data;
 
     ntex_service::forward_ready!(svc);
     ntex_service::forward_poll!(svc);
@@ -110,10 +119,11 @@ where
     async fn call(
         &self,
         message: Connect<A>,
+        data: &Self::Data,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
         let host = message.host().split(':').next().unwrap().to_string();
-        let io = ctx.call(&self.svc, message).await?;
+        let io = ctx.call(&self.svc, message, data).await?;
         self.connect(io, &host).await
     }
 }
@@ -141,23 +151,31 @@ impl<A: Address> SslConnector2<Connector2<A>> {
     }
 }
 
-impl<A: Address, S> ServiceFactory<Connect<A>, SharedCfg> for SslConnector2<S>
+impl<A, S> ServiceFactory<Connect<A>, SharedCfg> for SslConnector2<S>
 where
+    A: Address,
     S: ServiceFactory<Connect<A>, SharedCfg, Response = Io, Error = Error<ConnectError>>,
 {
     type Response = Io<Layer<SslFilter>>;
     type Error = Error<ConnectError>;
     type Service = SslConnectorService2<S::Service>;
     type InitError = S::InitError;
+    type Data = S::Data;
 
     async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
-        let svc = self.connector.create(cfg.clone()).await?;
-
         Ok(SslConnectorService2 {
-            svc,
+            svc: self.connector.create(cfg.clone()).await?,
             cfg: cfg.get(),
             openssl: self.openssl.clone(),
         })
+    }
+
+    async fn map_data(
+        &self,
+        cfg: &SharedCfg,
+        data: &Self::Data,
+    ) -> Result<<Self::Service as Service<Connect<A>>>::Data, Self::InitError> {
+        self.connector.map_data(cfg, data).await
     }
 }
 
@@ -209,6 +227,7 @@ where
 {
     type Response = Io<Layer<SslFilter>>;
     type Error = Error<ConnectError>;
+    type Data = S::Data;
 
     ntex_service::forward_ready!(svc);
     ntex_service::forward_poll!(svc);
@@ -217,10 +236,11 @@ where
     async fn call(
         &self,
         message: Connect<A>,
+        data: &Self::Data,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
         let host = message.host().split(':').next().unwrap().to_string();
-        let io = ctx.call(&self.svc, message).await?;
+        let io = ctx.call(&self.svc, message, data).await?;
         self.connect(io, &host).await
     }
 }
@@ -229,6 +249,7 @@ where
 mod tests {
     use super::*;
 
+    use ntex_service::ServiceFactory;
     use tls_openssl::ssl::SslMethod;
 
     #[ntex::test]
@@ -242,7 +263,7 @@ mod tests {
         let ssl = OpensslConnector::builder(SslMethod::tls()).unwrap();
         let factory = SslConnector::new(ssl.build()).clone();
 
-        let srv = factory.pipeline(SharedCfg::default()).await.unwrap();
+        let srv = factory.pipeline(SharedCfg::default(), &()).await.unwrap();
         // always ready
         assert!(srv.ready().await.is_ok());
         let result = srv
@@ -263,7 +284,7 @@ mod tests {
         let ssl = OpensslConnector::builder(SslMethod::tls()).unwrap();
         let factory = SslConnector2::new(ssl.build()).clone();
 
-        let srv = factory.pipeline(SharedCfg::default()).await.unwrap();
+        let srv = factory.pipeline(SharedCfg::default(), &()).await.unwrap();
         // always ready
         assert!(srv.ready().await.is_ok());
         let result = srv

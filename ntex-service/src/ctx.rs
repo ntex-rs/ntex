@@ -144,18 +144,21 @@ impl<'a, S> ServiceCtx<'a, S> {
     }
 
     /// Returns when the service is able to process requests.
-    pub async fn ready<T, R>(&self, svc: &'a T) -> Result<(), T::Error>
+    pub async fn ready<T, R>(&self, svc: &'a T, data: &T::Data) -> Result<(), T::Error>
     where
         T: Service<R>,
     {
         // check readiness and notify waiters
         ReadyCall {
             completed: false,
-            fut: svc.ready(ServiceCtx {
-                idx: self.idx,
-                waiters: self.waiters,
-                _t: marker::PhantomData,
-            }),
+            fut: svc.ready(
+                data,
+                ServiceCtx {
+                    idx: self.idx,
+                    waiters: self.waiters,
+                    _t: marker::PhantomData,
+                },
+            ),
             ctx: *self,
         }
         .await
@@ -163,15 +166,21 @@ impl<'a, S> ServiceCtx<'a, S> {
 
     #[inline]
     /// Wait for service readiness and then call service
-    pub async fn call<T, R>(&self, svc: &'a T, req: R) -> Result<T::Response, T::Error>
+    pub async fn call<T, R>(
+        &self,
+        svc: &'a T,
+        req: R,
+        data: &T::Data,
+    ) -> Result<T::Response, T::Error>
     where
         T: Service<R>,
         R: 'a,
     {
-        self.ready(svc).await?;
+        self.ready(svc, data).await?;
 
         svc.call(
             req,
+            data,
             ServiceCtx {
                 idx: self.idx,
                 waiters: self.waiters,
@@ -187,6 +196,7 @@ impl<'a, S> ServiceCtx<'a, S> {
         &self,
         svc: &'a T,
         req: R,
+        data: &T::Data,
     ) -> Result<T::Response, T::Error>
     where
         T: Service<R>,
@@ -194,6 +204,7 @@ impl<'a, S> ServiceCtx<'a, S> {
     {
         svc.call(
             req,
+            data,
             ServiceCtx {
                 idx: self.idx,
                 waiters: self.waiters,
@@ -269,8 +280,13 @@ mod tests {
     impl Service<&'static str> for Srv {
         type Response = &'static str;
         type Error = ();
+        type Data = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(
+            &self,
+            _: &Self::Data,
+            _: ServiceCtx<'_, Self>,
+        ) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             self.1.ready().await;
             Ok(())
@@ -279,6 +295,7 @@ mod tests {
         async fn call(
             &self,
             req: &'static str,
+            _: &Self::Data,
             ctx: ServiceCtx<'_, Self>,
         ) -> Result<Self::Response, Self::Error> {
             let _ = format!("{ctx:?}");
@@ -404,7 +421,7 @@ mod tests {
 
         let srv1 = Pipeline::from(Srv(cnt.clone(), con.wait())).bind();
         let srv2 = srv1.clone();
-        let _: Pipeline<_> = srv1.pipeline();
+        let _: Pipeline<_, _> = srv1.pipeline();
 
         let data1 = data.clone();
         ntex::rt::spawn(async move {

@@ -1,3 +1,4 @@
+use crate::service::PipelineSvc;
 use crate::{Service, ServiceCtx};
 
 #[cfg(feature = "compress")]
@@ -14,11 +15,14 @@ use super::{ClientConfig, ClientRawRequest, Connect, ServiceRequest, ServiceResp
 #[derive(Debug)]
 pub struct Sender {
     config: ClientConfig,
-    connector: ConnectorService,
+    connector: PipelineSvc<ConnectorService, ()>,
 }
 
 impl Sender {
-    pub(crate) fn new(connector: ConnectorService, config: ClientConfig) -> Self {
+    pub(crate) fn new(
+        connector: PipelineSvc<ConnectorService, ()>,
+        config: ClientConfig,
+    ) -> Self {
         Self { config, connector }
     }
 }
@@ -27,6 +31,7 @@ impl Sender {
 impl Service<ServiceRequest> for Sender {
     type Response = ServiceResponse;
     type Error = ClientError;
+    type Data = ();
 
     crate::forward_ready!(connector);
     crate::forward_poll!(connector);
@@ -35,6 +40,7 @@ impl Service<ServiceRequest> for Sender {
     async fn call(
         &self,
         req: ServiceRequest,
+        data: &Self::Data,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
         let ServiceRequest {
@@ -53,6 +59,7 @@ impl Service<ServiceRequest> for Sender {
                     addr,
                     uri: head.uri.clone(),
                 },
+                data,
             )
             .await?;
 

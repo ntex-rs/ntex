@@ -7,7 +7,7 @@ use crate::http::body::MessageBody;
 use crate::http::error::{BlockingError, ResponseError};
 use crate::http::header::ContentEncoding;
 use crate::http::{Method, Request, Response};
-use crate::service::{IntoServiceFactory, ServiceFactory, cfg::SharedCfg};
+use crate::service::{IntoServiceFactory, Service, ServiceFactory, cfg::SharedCfg};
 
 use super::error::ErrorRenderer;
 use super::extract::FromRequest;
@@ -301,10 +301,12 @@ pub fn server<F, I, S, B>(factory: F) -> HttpServer<F, I, S, B>
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<S, Request, SharedCfg>,
-    S: ServiceFactory<Request, SharedCfg> + 'static,
+    S: ServiceFactory<Request, SharedCfg, Data = ()> + 'static,
+    S::Service: Service<Request>,
     S::Error: ResponseError,
-    S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
+    S::Error: fmt::Debug,
+    S::InitError: fmt::Debug,
     B: MessageBody + 'static,
 {
     HttpServer::new(factory)
