@@ -20,7 +20,7 @@ type HttpService<Err: ErrorRenderer> =
 type HttpNewService<Err: ErrorRenderer> =
     BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, SharedCfg, ()>;
 type ResourcePipeline<F, Err> =
-    ServiceChain<AndThen<F, ResourceRouter<Err>>, (), WebRequest<Err>>;
+    ServiceChain<AndThen<F, ResourceRouter<Err>, WebRequest<Err>>, (), WebRequest<Err>>;
 
 /// *Resource* is an entry in resources table which corresponds to requested URL.
 ///
@@ -309,7 +309,7 @@ where
     ///
     /// By default *405* response get returned. Resource does not use
     /// default handler from `App` or `Scope`.
-    pub fn default_service<F, S, St>(mut self, f: F) -> Self
+    pub fn default_service<F, S>(mut self, f: F) -> Self
     where
         F: IntoServiceFactory<S, (), WebRequest<Err>>,
         S: ServiceFactory<

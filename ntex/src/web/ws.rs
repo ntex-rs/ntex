@@ -69,16 +69,15 @@ pub fn subprotocols(req: &HttpRequest) -> impl Iterator<Item = &str> {
 ///     ws::start(req, chosen, factory).await
 /// }
 /// ```
-pub async fn start<Sf, P, Err>(
+pub async fn start<Sf>(
     req: HttpRequest,
-    subprotocol: Option<P>,
+    subprotocol: Option<&str>,
     f: impl IntoServiceFactory<Sf, (), Frame>,
-) -> Result<HttpResponse, Err>
+) -> Result<HttpResponse, Sf::InitError>
 where
     Sf: ServiceFactory<(), Frame, Res = Option<Message>, InitCfg = WsSink> + 'static,
     Sf::Error: fmt::Debug,
-    P: AsRef<str>,
-    Err: From<Sf::InitError> + From<HandshakeError>,
+    Sf::InitError: From<HandshakeError> + fmt::Debug,
 {
     let inner_factory = Rc::new(chain_factory(f.into_factory()).map_err(WsError::Service));
 
@@ -99,24 +98,23 @@ where
 ///
 /// If `subprotocol` is `Some`, the `Sec-Websocket-Protocol` header will be included
 /// in the response with the chosen protocol. If `None`, the header is omitted.
-pub async fn start_with<Sf, P, Err>(
+pub async fn start_with<Sf>(
     req: HttpRequest,
-    subprotocol: Option<P>,
-    factory: impl IntoServiceFactory<Sf, (), DispatchItem<ws::Codec>>,
-) -> Result<HttpResponse, Err>
+    subprotocol: Option<&str>,
+    f: impl IntoServiceFactory<Sf, (), DispatchItem<ws::Codec>>,
+) -> Result<HttpResponse, Sf::InitError>
 where
     Sf: ServiceFactory<(), DispatchItem<ws::Codec>, Res = Option<Message>, InitCfg = WsSink>
         + 'static,
     Sf::Error: fmt::Debug,
-    P: AsRef<str>,
-    Err: From<Sf::InitError> + From<HandshakeError>,
+    Sf::InitError: From<HandshakeError>,
 {
     log::trace!("Start ws handshake verification for {:?}", req.path());
 
     // ws handshake
     let mut res = handshake(req.head())?;
     if let Some(protocol) = subprotocol {
-        res.set_header(header::SEC_WEBSOCKET_PROTOCOL, protocol.as_ref());
+        res.set_header(header::SEC_WEBSOCKET_PROTOCOL, protocol);
     }
     let res = res.finish().into_parts().0;
 
@@ -137,7 +135,7 @@ where
     let sink = WsSink::new(io.get_ref(), codec.clone());
 
     // create ws service
-    let srv = factory.into_factory().create(&sink).await?;
+    let srv = f.into_factory().create(&sink).await?;
     io.set_config(CFG.with(Clone::clone));
 
     // the h1 dispatcher may have started a headers-read timer on this IO;
@@ -146,7 +144,7 @@ where
 
     // start websockets service dispatcher
     rt::spawn(async move {
-        let res = crate::io::Dispatcher::new(io, codec, Pipeline::new(srv).bind(())).await;
+        let res = crate::io::Dispatcher::new(io, codec, Pipeline::new(srv).bind()).await;
         log::trace!("Ws handler is terminated: {res:?}");
     });
 

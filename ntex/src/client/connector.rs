@@ -2,7 +2,9 @@ use std::{error::Error as StdError, task::Context, time::Duration};
 
 use crate::connect::{Connect as TcpConnect, Connector as TcpConnector};
 use crate::error::{Error, ErrorMapping, with_service};
-use crate::service::{Ctx, ReadyCtx, Service, ServiceFactory, apply_fn_factory, boxed};
+use crate::service::{
+    Ctx, Pipeline, ReadyCtx, Service, ServiceFactory, apply_fn_factory, boxed,
+};
 use crate::{SharedCfg, http::Uri, io::IoBoxed, time::Seconds, util::join};
 
 use super::error::{ClientError, ConnectError};
@@ -210,7 +212,7 @@ impl ServiceFactory<(), Connect> for Connector {
     async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {
         let ssl_pool = if let Some(ref svc) = self.secure_svc {
             Some(ConnectionPool::new(
-                svc.create(cfg).await?.into(),
+                Pipeline::new(svc.create(cfg).await?),
                 self.conn_lifetime,
                 self.conn_keep_alive,
                 self.limit,
@@ -220,7 +222,7 @@ impl ServiceFactory<(), Connect> for Connector {
             None
         };
         let tcp_pool = ConnectionPool::new(
-            self.svc.create(cfg).await?.into(),
+            Pipeline::new(self.svc.create(cfg).await?),
             self.conn_lifetime,
             self.conn_keep_alive,
             self.limit,
@@ -305,11 +307,11 @@ mod tests {
     async fn test_readiness() {
         let conn = Pipeline::new(
             Connector::default()
-                .create(SharedCfg::default())
+                .create(&SharedCfg::default())
                 .await
                 .unwrap(),
         )
-        .bind();
+        .bind(());
         assert!(lazy(|cx| conn.poll_ready(cx).is_ready()).await);
         assert!(lazy(|cx| conn.poll_shutdown(cx).is_ready()).await);
     }

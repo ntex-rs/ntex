@@ -73,7 +73,7 @@ pub fn default_service<Err: ErrorRenderer>(
 /// ```
 pub async fn init_service<R, S, E>(
     app: R,
-) -> Pipeline<impl Service<(), Request, Res = WebResponse, Error = E>>
+) -> Pipeline<impl Service<(), Request, Res = WebResponse, Error = E>, ()>
 where
     R: IntoServiceFactory<S, (), Request>,
     S: ServiceFactory<(), Request, Res = WebResponse, Error = E, InitCfg = SharedCfg>,
@@ -113,7 +113,7 @@ where
 ///     assert_eq!(resp.status(), StatusCode::OK);
 /// }
 /// ```
-pub async fn call_service<S, R, E>(app: &Pipeline<S>, req: R) -> S::Res
+pub async fn call_service<S, R, E>(app: &Pipeline<S, ()>, req: R) -> S::Res
 where
     S: Service<(), R, Res = WebResponse, Error = E>,
     E: fmt::Debug,
@@ -146,7 +146,7 @@ where
 ///     assert_eq!(result, Bytes::from_static(b"welcome!"));
 /// }
 /// ```
-pub async fn read_response<S>(app: &Pipeline<S>, req: Request) -> Bytes
+pub async fn read_response<S>(app: &Pipeline<S, ()>, req: Request) -> Bytes
 where
     S: Service<(), Request, Res = WebResponse>,
 {
@@ -245,7 +245,7 @@ where
 ///     let result: Person = test::read_response_json(&mut app, req).await;
 /// }
 /// ```
-pub async fn read_response_json<S, T>(app: &Pipeline<S>, req: Request) -> T
+pub async fn read_response_json<S, T>(app: &Pipeline<S, ()>, req: Request) -> T
 where
     S: Service<(), Request, Res = WebResponse>,
     T: DeserializeOwned,

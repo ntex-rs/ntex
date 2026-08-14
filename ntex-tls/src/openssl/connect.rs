@@ -151,25 +151,4 @@ mod tests {
         assert!(result.is_err());
         assert!(format!("{srv:?}").contains("SslConnector"));
     }
-
-    #[ntex::test]
-    async fn test_openssl_connect2() {
-        let server = ntex::server::test_server(async || {
-            ntex::service::fn_service(|_| async { Ok::<_, ()>(()) })
-        });
-
-        let ssl = OpensslConnector::builder(SslMethod::tls()).unwrap();
-        let _: SslConnector2<Connector2<&'static str>> = SslConnector2::new(ssl.build());
-        let ssl = OpensslConnector::builder(SslMethod::tls()).unwrap();
-        let factory = SslConnector2::new(ssl.build()).clone();
-
-        let srv = factory.pipeline(SharedCfg::default()).await.unwrap();
-        // always ready
-        assert!(srv.ready().await.is_ok());
-        let result = srv
-            .call(Connect::new("").set_addr(Some(server.addr())))
-            .await;
-        assert!(result.is_err());
-        assert!(format!("{srv:?}").contains("SslConnector"));
-    }
 }

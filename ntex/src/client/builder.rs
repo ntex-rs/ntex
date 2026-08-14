@@ -4,7 +4,8 @@ use base64::{Engine, engine::general_purpose::STANDARD as base64};
 
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderName, HeaderValue};
-use crate::service::{Identity, Middleware, Service, ServiceFactory, Stack, boxed};
+use crate::service::boxed;
+use crate::service::{Identity, Middleware, Pipeline, Service, ServiceFactory, Stack};
 use crate::{SharedCfg, error::Error, time::Millis};
 
 use super::error::{ClientBuilderError, ClientError};
@@ -220,7 +221,7 @@ impl<M> ClientBuilder<M> {
                 .create(Sender::new(svc, config.clone()), &config),
         );
 
-        Ok(Client::with_service(svc.into(), config))
+        Ok(Client::with_service(Pipeline::new(svc), config))
     }
 }
 

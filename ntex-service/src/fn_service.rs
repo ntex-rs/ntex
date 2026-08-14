@@ -87,9 +87,9 @@ where
 ///     Ok(())
 /// }
 /// ```
-pub fn fn_factory_with_config<St, F, Cfg, Srv, Err>(
+pub fn fn_factory_with_config<St, F, Cfg, Srv, Req, Err>(
     f: F,
-) -> FnServiceConfig<St, F, Cfg, Srv, Err>
+) -> FnServiceConfig<St, F, Cfg, Srv, Req, Err>
 where
     F: AsyncFn(&Cfg) -> Result<Srv, Err>,
 {
@@ -233,29 +233,29 @@ where
     }
 }
 
-impl<St, F, Req, Res, Err, Cfg> IntoService<FnService<St, F, Req>, St, Req>
-    for FnServiceFactory<St, F, Req, Res, Err, Cfg>
-where
-    F: AsyncFn(Req) -> Result<Res, Err>,
-{
-    fn into_service(self) -> FnService<St, F, Req> {
-        FnService {
-            f: self.f,
-            _t: PhantomData,
-        }
-    }
-}
+// impl<St, F, Req, Res, Err, Cfg> IntoService<FnService<St, F, Req>, St, Req>
+//     for FnServiceFactory<St, F, Req, Res, Err, Cfg>
+// where
+//     F: AsyncFn(Req) -> Result<Res, Err>,
+// {
+//     fn into_service(self) -> FnService<St, F, Req> {
+//         FnService {
+//             f: self.f,
+//             _t: PhantomData,
+//         }
+//     }
+// }
 
 /// `ServiceFactory` for a `AsyncFn(Cfg) -> Result<Srv, Err>` function
-pub struct FnServiceConfig<St, F, Cfg, Srv, Err>
+pub struct FnServiceConfig<St, F, Cfg, Srv, Req, Err>
 where
     F: AsyncFn(&Cfg) -> Result<Srv, Err>,
 {
     f: F,
-    _t: PhantomData<(St, Cfg, Srv, Err)>,
+    _t: PhantomData<(St, Cfg, Srv, Req, Err)>,
 }
 
-impl<St, F, Cfg, Srv, Err> Clone for FnServiceConfig<St, F, Cfg, Srv, Err>
+impl<St, F, Cfg, Srv, Req, Err> Clone for FnServiceConfig<St, F, Cfg, Srv, Req, Err>
 where
     F: AsyncFn(&Cfg) -> Result<Srv, Err> + Clone,
 {
@@ -268,7 +268,7 @@ where
     }
 }
 
-impl<St, F, Cfg, Srv, Err> fmt::Debug for FnServiceConfig<St, F, Cfg, Srv, Err>
+impl<St, F, Cfg, Srv, Req, Err> fmt::Debug for FnServiceConfig<St, F, Cfg, Srv, Req, Err>
 where
     F: AsyncFn(&Cfg) -> Result<Srv, Err>,
 {
@@ -280,7 +280,7 @@ where
 }
 
 impl<St, F, Cfg, S, Req, Err> ServiceFactory<St, Req>
-    for FnServiceConfig<St, F, Cfg, S, Err>
+    for FnServiceConfig<St, F, Cfg, S, Req, Err>
 where
     F: AsyncFn(&Cfg) -> Result<S, Err>,
     S: Service<St, Req>,

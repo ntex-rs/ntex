@@ -1,3 +1,5 @@
+use std::marker::PhantomData;
+
 use super::{Ctx, ReadyCtx, Service, ServiceFactory, util};
 
 #[derive(Clone, Debug)]
@@ -5,19 +7,20 @@ use super::{Ctx, ReadyCtx, Service, ServiceFactory, util};
 /// of another service which completes successfully.
 ///
 /// This is created by the `ServiceExt::and_then` method.
-pub struct AndThen<A, B> {
+pub struct AndThen<A, B, Req> {
     svc1: A,
     svc2: B,
+    r: PhantomData<Req>,
 }
 
-impl<A, B> AndThen<A, B> {
+impl<A, B, Req> AndThen<A, B, Req> {
     /// Create new `AndThen` combinator
     pub(crate) fn new(svc1: A, svc2: B) -> Self {
-        Self { svc1, svc2 }
+        Self { svc1, svc2, r: PhantomData }
     }
 }
 
-impl<A, B, St, Req> Service<St, Req> for AndThen<A, B>
+impl<A, B, St, Req> Service<St, Req> for AndThen<A, B, Req>
 where
     A: Service<St, Req>,
     B: Service<St, A::Res, Error = A::Error>,
@@ -76,7 +79,7 @@ where
     type Res = B::Res;
     type Error = A::Error;
 
-    type Service = AndThen<A::Service, B::Service>;
+    type Service = AndThen<A::Service, B::Service, Req>;
     type InitCfg = A::InitCfg;
     type InitError = A::InitError;
 
@@ -85,6 +88,7 @@ where
         Ok(AndThen {
             svc1: self.svc1.create(cfg).await?,
             svc2: self.svc2.create(cfg).await?,
+            r: PhantomData
         })
     }
 }

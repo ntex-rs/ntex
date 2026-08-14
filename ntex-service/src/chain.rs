@@ -13,7 +13,7 @@ use crate::then::{Then, ThenFactory};
 use crate::{IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory};
 
 /// Constructs new chain with one service.
-pub fn chain<St, S, Req>(service: impl IntoService<S, St, Req>) -> ServiceChain<S, St, Req>
+pub fn chain<S, St, Req>(service: impl IntoService<S, St, Req>) -> ServiceChain<S, St, Req>
 where
     S: Service<St, Req>,
 {
@@ -52,7 +52,7 @@ impl<S: Service<St, Req>, St, Req> ServiceChain<S, St, Req> {
     ///
     /// Note that this function consumes the receiving service and returns a
     /// wrapped version of it.
-    pub fn and_then<Next, F>(self, service: F) -> ServiceChain<AndThen<S, Next>, St, Req>
+    pub fn and_then<Next, F>(self, service: F) -> ServiceChain<AndThen<S, Next, Req>, St, Req>
     where
         Self: Sized,
         F: IntoService<Next, St, Req>,
@@ -153,7 +153,7 @@ impl<S: Service<St, Req>, St, Req> ServiceChain<S, St, Req> {
     }
 
     /// Create service pipeline
-    pub fn into_pipeline(self) -> Pipeline<S> {
+    pub fn into_pipeline(self) -> Pipeline<S, St> {
         Pipeline::new(self.service)
     }
 }
@@ -350,7 +350,7 @@ impl<Sf: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Sf, St, Req> {
     pub async fn pipeline(
         &self,
         cfg: &Sf::InitCfg,
-    ) -> Result<Pipeline<Sf::Service>, Sf::InitError>
+    ) -> Result<Pipeline<Sf::Service, St>, Sf::InitError>
     where
         Self: Sized,
     {

@@ -23,7 +23,7 @@ async fn main() -> io::Result<()> {
     // openssl connector
     let connector = Pipeline::new(
         connect::openssl::SslConnector::new(builder.build())
-            .create(SharedCfg::default())
+            .create(&SharedCfg::default())
             .await
             .unwrap(),
     );

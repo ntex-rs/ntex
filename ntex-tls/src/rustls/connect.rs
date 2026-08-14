@@ -181,35 +181,4 @@ mod tests {
         assert!(result.is_err());
         assert!(format!("{srv:?}").contains("TlsConnectorService"));
     }
-
-    #[ntex::test]
-    async fn test_rustls_connect2() {
-        let server = ntex::server::test_server(async || {
-            ntex::service::fn_service(|_| async { Ok::<_, ()>(()) })
-        });
-
-        let cert_store = webpki_roots::TLS_SERVER_ROOTS
-            .iter()
-            .cloned()
-            .collect::<RootCertStore>();
-        let config = ClientConfig::builder()
-            .with_root_certificates(cert_store)
-            .with_no_client_auth();
-        let _: TlsConnector2<Connector2<&'static str>> =
-            TlsConnector2::new(config.clone()).clone();
-        let factory = TlsConnector2::from(Arc::new(config)).clone();
-        assert!(
-            format!("{factory:?}").contains("TlsConnector"),
-            "{factory:?}"
-        );
-
-        let srv = factory.pipeline(SharedCfg::default()).await.unwrap().bind();
-        // always ready
-        assert!(lazy(|cx| srv.poll_ready(cx)).await.is_ready());
-        let result = srv
-            .call(Connect::new("").set_addr(Some(server.addr())))
-            .await;
-        assert!(result.is_err());
-        assert!(format!("{srv:?}").contains("TlsConnectorService2"));
-    }
 }

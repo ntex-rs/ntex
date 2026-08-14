@@ -209,7 +209,7 @@ pub trait ServiceFactory<St, Req> {
     async fn pipeline(
         &self,
         cfg: &Self::InitCfg,
-    ) -> Result<Pipeline<Self::Service>, Self::InitError>
+    ) -> Result<Pipeline<Self::Service, St>, Self::InitError>
     where
         Self: Sized,
     {

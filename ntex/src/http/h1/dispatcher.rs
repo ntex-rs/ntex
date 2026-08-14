@@ -819,10 +819,10 @@ mod tests {
         service: F,
     ) -> Dispatcher<Base, S, B, DefaultControlService>
     where
-        F: IntoService<S, Request>,
-        S: Service<Request>,
+        F: IntoService<S, (), Request>,
+        S: Service<(), Request>,
+        S::Res: Into<Response<B>>,
         S::Error: ResponseError + 'static,
-        S::Response: Into<Response<B>>,
         B: MessageBody,
     {
         let config: SharedCfg = SharedCfg::new("DBG")
@@ -846,10 +846,10 @@ mod tests {
 
     pub(crate) fn spawn_h1<F, S, B>(stream: IoTest, service: F)
     where
-        F: IntoService<S, Request>,
-        S: Service<Request> + 'static,
+        F: IntoService<S, (), Request>,
+        S: Service<(), Request> + 'static,
+        S::Res: Into<Response<B>>,
         S::Error: ResponseError,
-        S::Response: Into<Response<B>>,
         B: MessageBody + 'static,
     {
         let config: SharedCfg = SharedCfg::new("DBG")

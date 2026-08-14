@@ -432,9 +432,9 @@ mod tests {
         let srv = Pipeline::new(Middleware::create(
             &logger,
             srv.into_service(),
-            SharedCfg::default(),
+            &SharedCfg::default(),
         ))
-        .bind();
+        .bind(());
         assert!(lazy(|cx| srv.poll_ready(cx).is_ready()).await);
         assert!(lazy(|cx| srv.poll_shutdown(cx).is_ready()).await);
 

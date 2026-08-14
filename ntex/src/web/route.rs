@@ -381,7 +381,7 @@ mod tests {
         assert!(repr.contains("methods: [GET]"));
         assert!(repr.contains("guards: AllGuard()"));
 
-        assert!(route.create(SharedCfg::default()).await.is_ok());
+        assert!(route.create(&SharedCfg::default()).await.is_ok());
 
         let route_service = route.service();
         let repr = format!("{route_service:?}");

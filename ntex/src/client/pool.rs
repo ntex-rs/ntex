@@ -48,7 +48,7 @@ struct AvailableConnection {
 pub(super) struct ConnectionPool(Rc<ConnectionPoolInner>);
 
 struct ConnectionPoolInner {
-    svc: Pipeline<Connector>,
+    svc: Pipeline<Connector, ()>,
     inner: Rc<RefCell<Inner>>,
     waiters: Rc<RefCell<Waiters>>,
     stop: Rc<Cell<Option<oneshot::Sender<()>>>>,
@@ -70,7 +70,7 @@ pub(super) struct Inner {
 
 impl ConnectionPool {
     pub(super) fn new(
-        svc: Pipeline<Connector>,
+        svc: Pipeline<Connector, ()>,
         conn_lifetime: Duration,
         conn_keep_alive: Duration,
         limit: usize,
@@ -345,7 +345,7 @@ impl Inner {
 }
 
 async fn run_connection_pool(
-    svc: Pipeline<Connector>,
+    svc: Pipeline<Connector, ()>,
     inner: Rc<RefCell<Inner>>,
     waiters: Rc<RefCell<Waiters>>,
     config: SharedCfg,
@@ -444,7 +444,7 @@ impl OpenConnection {
         tx: Waiter,
         uri: Uri,
         inner: Rc<RefCell<Inner>>,
-        pipeline: &Pipeline<Connector>,
+        pipeline: &Pipeline<Connector, ()>,
         msg: Connect,
     ) {
         let fut = pipeline.call_static(msg, ());
@@ -670,7 +670,7 @@ mod tests {
             )
             .clone(),
         )
-        .bind();
+        .bind(());
 
         // uri must contain authority
         let req = Connect {

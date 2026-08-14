@@ -20,7 +20,7 @@ async fn main() -> io::Result<()> {
     let connector = Pipeline::new(
         connect::rustls::TlsConnector::new(config.clone())
             .create(
-                SharedCfg::new("CLIENT")
+                &SharedCfg::new("CLIENT")
                     .add(TlsConfig::new().set_handshake_timeout(10))
                     .into(),
             )

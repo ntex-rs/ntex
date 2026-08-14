@@ -967,7 +967,7 @@ mod tests {
             .await;
 
         let req = TestRequest::with_uri("/app/t1/path1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
@@ -1252,7 +1252,7 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/app/v1/").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body = read_body(resp).await;
         assert_eq!(body, &b"https://youtube.com/watch/xxxxxx"[..]);

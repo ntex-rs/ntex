@@ -10,7 +10,7 @@ use super::{Address, Connect, ConnectError, ConnectServiceError, resolve};
 
 #[derive(Copy, Clone, Debug)]
 /// Basic tcp stream connector
-pub struct Connector<A>(marker::PhantomData<A>);
+pub struct Connector<A, St = ()>(marker::PhantomData<(A, St)>);
 
 #[derive(Clone, Debug)]
 /// Basic tcp stream connector
@@ -20,7 +20,7 @@ pub struct ConnectorService<A> {
     _t: marker::PhantomData<A>,
 }
 
-impl<A> Connector<A> {
+impl<A, St> Connector<A, St> {
     /// Construct new connect service with default configuration
     pub fn new() -> Self {
         Connector(marker::PhantomData)
@@ -90,7 +90,7 @@ impl<A: Address> ConnectorService<A> {
     }
 }
 
-impl<A: Address, St> ServiceFactory<St, Connect<A>> for Connector<A> {
+impl<A: Address, St> ServiceFactory<St, Connect<A>> for Connector<A, St> {
     type Res = Io;
     type Error = Error<ConnectError>;
 

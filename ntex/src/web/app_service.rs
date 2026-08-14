@@ -332,7 +332,7 @@ mod tests {
             )
             .await;
             let req = TestRequest::with_uri("/test").to_request();
-            let _ = app.call(req).await.unwrap();
+            let _ = app.call(req, &()).await.unwrap();
         }
         assert!(data.load(Ordering::Relaxed));
     }

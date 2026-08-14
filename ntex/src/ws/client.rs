@@ -31,7 +31,7 @@ thread_local! {
 
 /// `WebSocket` client builder
 pub struct WsClient<F, T> {
-    connector: Pipeline<T>,
+    connector: Pipeline<T, ()>,
     head: Message<RequestHead>,
     addr: Option<net::SocketAddr>,
     max_size: usize,
@@ -669,7 +669,7 @@ where
             .map_err(WsClientBuilderError::Connector)?;
 
         Ok(WsClient {
-            connector: connector.into(),
+            connector: Pipeline::new(connector),
             head: inner.head,
             addr: inner.addr,
             max_size: inner.max_size,
@@ -795,7 +795,7 @@ impl WsConnection<Sealed> {
             },
         );
 
-        Dispatcher::new(self.io, self.codec, Pipeline::new(service).bind(())).await
+        Dispatcher::new(self.io, self.codec, Pipeline::new(service).bind()).await
     }
 }
 

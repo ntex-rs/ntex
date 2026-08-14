@@ -287,7 +287,7 @@ mod tests {
         )
         .await;
         let req = TestRequest::default().to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
