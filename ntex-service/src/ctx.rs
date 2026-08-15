@@ -12,7 +12,7 @@ pub struct Ctx<'a, Svc: Service + ?Sized> {
 
 pub struct ReadyCtx<'a, Svc: Service + ?Sized> {
     idx: u32,
-    st: Option<&'a Svc::St>,
+    st: &'a Svc::St,
     waiters: &'a WaitersRef,
     _t: marker::PhantomData<Rc<Svc>>,
 }
@@ -28,7 +28,7 @@ pub(crate) struct WaitersRef {
 
 impl WaitersRef {
     pub(crate) fn new() -> (u32, Self) {
-        let mut waiters = slab::Slab::new();
+        let mut waiters = slab::Slab::with_capacity(16);
 
         (
             waiters.insert(None) as u32,
@@ -166,31 +166,7 @@ impl<'a, Svc: Service> Ctx<'a, Svc> {
         ReadyCall {
             completed: false,
             fut: svc.ready(ReadyCtx {
-                st: Some(self.st),
-                idx: self.idx,
-                waiters: self.waiters,
-                _t: marker::PhantomData,
-            }),
-            idx: self.idx,
-            waiters: self.waiters,
-        }
-        .await
-    }
-
-    /// Returns when the service is able to process requests.
-    pub(crate) async fn ready_with_st<S>(
-        &self,
-        svc: &'a S,
-        st: &'a S::St,
-    ) -> Result<(), S::Error>
-    where
-        S: Service,
-    {
-        // check readiness and notify waiters
-        ReadyCall {
-            completed: false,
-            fut: svc.ready(ReadyCtx {
-                st: Some(st),
+                st: self.st,
                 idx: self.idx,
                 waiters: self.waiters,
                 _t: marker::PhantomData,
@@ -215,31 +191,6 @@ impl<'a, Svc: Service> Ctx<'a, Svc> {
             Ctx {
                 idx: self.idx,
                 st: self.st,
-                waiters: self.waiters,
-                _t: marker::PhantomData,
-            },
-        )
-        .await
-    }
-
-    #[inline]
-    /// Wait for service readiness and then call service
-    pub(crate) async fn call_with_st<S>(
-        &self,
-        svc: &'a S,
-        req: S::Req,
-        st: &S::St,
-    ) -> Result<S::Res, S::Error>
-    where
-        S: Service,
-    {
-        self.ready_with_st(svc, st).await?;
-
-        svc.call(
-            req,
-            Ctx {
-                st,
-                idx: self.idx,
                 waiters: self.waiters,
                 _t: marker::PhantomData,
             },
@@ -285,16 +236,16 @@ impl<Svc: Service> fmt::Debug for Ctx<'_, Svc> {
 }
 
 impl<'a, Svc: Service> ReadyCtx<'a, Svc> {
-    pub(crate) fn new(idx: u32, waiters: &'a WaitersRef, st: Option<&'a Svc::St>) -> Self {
+    pub(crate) fn new(idx: u32, waiters: &'a WaitersRef, st: &'a Svc::St) -> Self {
         Self {
+            st,
             idx,
             waiters,
-            st,
             _t: marker::PhantomData,
         }
     }
 
-    pub(crate) fn inner(self) -> (u32, &'a WaitersRef, Option<&'a Svc::St>) {
+    pub(crate) fn inner(self) -> (u32, &'a WaitersRef, &'a Svc::St) {
         (self.idx, self.waiters, self.st)
     }
 
@@ -306,7 +257,7 @@ impl<'a, Svc: Service> ReadyCtx<'a, Svc> {
 
     #[inline]
     /// Application state
-    pub fn st(&'a self) -> Option<&'a Svc::St> {
+    pub fn st(&'a self) -> &'a Svc::St {
         self.st
     }
 
@@ -330,30 +281,6 @@ impl<'a, Svc: Service> ReadyCtx<'a, Svc> {
         .await
     }
 
-    /// Returns when the service is able to process requests.
-    pub(crate) async fn ready_with_st<S>(
-        &self,
-        svc: &'a S,
-        st: &'a S::St,
-    ) -> Result<(), S::Error>
-    where
-        S: Service,
-    {
-        // check readiness and notify waiters
-        ReadyCall {
-            completed: false,
-            fut: svc.ready(ReadyCtx {
-                st: Some(st),
-                idx: self.idx,
-                waiters: self.waiters,
-                _t: marker::PhantomData,
-            }),
-            idx: self.idx,
-            waiters: self.waiters,
-        }
-        .await
-    }
-
     #[inline]
     /// Call service without waiting for service readiness.
     pub async fn call<S>(&self, svc: &'a S, req: S::Req) -> Result<S::Res, S::Error>
@@ -361,19 +288,10 @@ impl<'a, Svc: Service> ReadyCtx<'a, Svc> {
         S: Service<St = Svc::St>,
         Svc::St: Default,
     {
-        let st2;
-
-        let st = if let Some(st) = self.st {
-            st
-        } else {
-            st2 = Svc::St::default();
-            &st2
-        };
-
         svc.call(
             req,
             Ctx {
-                st,
+                st: self.st,
                 idx: self.idx,
                 waiters: self.waiters,
                 _t: marker::PhantomData,
@@ -476,34 +394,30 @@ mod tests {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
 
-        let srv1 = Pipeline::new(Srv(cnt.clone(), con.wait()));
-        let srv2 = srv1.clone();
-
-        let srv1 = srv1.bind();
-        let res = lazy(|cx| srv1.poll_ready(cx)).await;
+        let srv = Pipeline::new(Srv(cnt.clone(), con.wait()));
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
         assert_eq!(cnt.get(), 1);
 
-        let srv2 = srv2.bind();
-        let res = lazy(|cx| srv2.poll_ready(cx)).await;
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
         assert_eq!(cnt.get(), 1);
 
         con.notify();
-        let res = lazy(|cx| srv1.poll_ready(cx)).await;
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
         assert_eq!(cnt.get(), 1);
 
-        let res = lazy(|cx| srv2.poll_ready(cx)).await;
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
         assert_eq!(cnt.get(), 2);
 
         con.notify();
-        let res = lazy(|cx| srv2.poll_ready(cx)).await;
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
         assert_eq!(cnt.get(), 2);
 
-        let res = lazy(|cx| srv1.poll_ready(cx)).await;
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
         assert_eq!(cnt.get(), 3);
     }
@@ -514,27 +428,25 @@ mod tests {
         let con = condition::Condition::new();
         let srv = Pipeline::new(Srv(cnt.clone(), con.wait()));
 
-        let srv1 = srv.clone();
-        let srv2 = srv1.clone().bind();
-
+        let srv1 = srv.bind();
         let (tx, rx) = oneshot::channel();
         spawn(async move {
-            select(rx, srv1.ready(&())).await;
+            select(rx, srv1.ready()).await;
             time::sleep(time::Millis(25000)).await;
         });
         time::sleep(time::Millis(250)).await;
 
-        let res = lazy(|cx| srv2.poll_ready(cx)).await;
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
 
         let _ = tx.send(());
         time::sleep(time::Millis(250)).await;
 
-        let res = lazy(|cx| srv2.poll_ready(cx)).await;
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
 
         con.notify();
-        let res = lazy(|cx| srv2.poll_ready(cx)).await;
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
     }
 
@@ -544,28 +456,26 @@ mod tests {
         let con = condition::Condition::new();
         let srv = Pipeline::new(Srv(cnt.clone(), con.wait()));
 
-        let srv1 = srv.clone().bind();
-        let srv2 = srv.clone().bind();
-
         let (tx, rx) = oneshot::channel();
+        let srv2 = srv.bind();
         spawn(async move {
-            select(rx, poll_fn(|cx| srv1.poll_ready(cx))).await;
-            poll_fn(|cx| srv1.poll_shutdown(cx)).await;
+            select(rx, srv2.ready()).await;
+            srv2.shutdown().await;
             time::sleep(time::Millis(25000)).await;
         });
         time::sleep(time::Millis(250)).await;
 
-        let res = lazy(|cx| srv2.poll_ready(cx)).await;
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
 
         let _ = tx.send(());
         time::sleep(time::Millis(250)).await;
 
-        let res = lazy(|cx| srv2.poll_ready(cx)).await;
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
 
         con.notify();
-        let res = lazy(|cx| srv2.poll_ready(cx)).await;
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
     }
 
@@ -574,7 +484,7 @@ mod tests {
     async fn test_pipeline_binding_after_shutdown() {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
-        let srv = Pipeline::new(Srv(cnt.clone(), con.wait())).bind();
+        let srv = Pipeline::new(Srv(cnt.clone(), con.wait()));
         poll_fn(|cx| srv.poll_shutdown(cx)).await;
         let _ = poll_fn(|cx| srv.poll_ready(cx)).await;
     }
@@ -586,21 +496,19 @@ mod tests {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
 
-        let srv1 = Pipeline::new(Srv(cnt.clone(), con.wait()));
-        let srv2 = srv1.clone();
-        let srv1 = srv1.bind();
-        let _: Pipeline<_> = srv1.pipeline();
+        let srv = Pipeline::new(Srv(cnt.clone(), con.wait()));
 
+        let srv1 = srv.bind();
         let data1 = data.clone();
         ntex::rt::spawn(async move {
-            let _ = poll_fn(|cx| srv1.poll_ready(cx)).await;
+            let _ = srv1.ready().await;
             let fut = srv1.call_nowait("srv1");
             assert!(format!("{fut:?}").contains("PipelineCall"));
             let i = fut.await.unwrap();
             data1.borrow_mut().push(i);
         });
 
-        let srv2 = srv2.bind();
+        let srv2 = srv.bind();
         let data2 = data.clone();
         ntex::rt::spawn(async move {
             let i = srv2.call("srv2").await.unwrap();

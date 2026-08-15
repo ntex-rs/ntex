@@ -13,48 +13,26 @@ use crate::then::{Then, ThenFactory};
 use crate::{IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory};
 
 /// Constructs new chain with one service.
-pub fn chain<S>(service: impl IntoService<S>) -> ServiceChain<S>
+pub fn chain<St, S>(service: impl IntoService<S>) -> ServiceChain<S>
 where
-    S: Service,
+    S: Service<St = St>,
 {
     ServiceChain {
         service: service.into_service(),
     }
 }
 
-/// Constructs new chain with one service.
-///
-/// Service state is hardcoded to `()`
-pub fn ustate_chain<S>(service: impl IntoService<S>) -> ServiceChain<S>
-where
-    S: Service<St = ()>,
-{
-    chain(service)
-}
-
 /// Constructs new chain factory with one service factory.
-pub fn chain_factory<Sf, Req>(
+pub fn chain_factory<St, Sf, Req>(
     factory: impl IntoServiceFactory<Sf, Req>,
 ) -> ServiceChainFactory<Sf, Req>
 where
-    Sf: ServiceFactory<Req>,
+    Sf: ServiceFactory<Req, St = St>,
 {
     ServiceChainFactory {
         factory: factory.into_factory(),
         _t: PhantomData,
     }
-}
-
-/// Constructs new chain factory with one service factory.
-///
-/// `ServiceFactory` state is hardcoded to `()`
-pub fn ustate_chain_factory<Sf, Req>(
-    factory: impl IntoServiceFactory<Sf, Req>,
-) -> ServiceChainFactory<Sf, Req>
-where
-    Sf: ServiceFactory<Req, St = ()>,
-{
-    chain_factory(factory)
 }
 
 /// Chain builder - chain allows to compose multiple service into one service.
@@ -164,7 +142,10 @@ impl<S: Service> ServiceChain<S> {
     }
 
     /// Create service pipeline
-    pub fn into_pipeline(self) -> Pipeline<S> {
+    pub fn into_pipeline(self) -> Pipeline<S>
+    where
+        S::St: Default,
+    {
         Pipeline::new(self.service)
     }
 }
@@ -348,12 +329,13 @@ impl<Sf: ServiceFactory<Req>, Req> ServiceChainFactory<Sf, Req> {
     }
 
     /// Create and return a new service value asynchronously and wrap into a container
-    pub async fn pipeline(
+    pub async fn pipeline<St>(
         &self,
         cfg: &Sf::InitCfg,
     ) -> Result<Pipeline<Sf::Service>, Sf::InitError>
     where
-        Self: Sized,
+        St: Default,
+        Sf: ServiceFactory<Req, St = St> + Sized,
     {
         Ok(Pipeline::new(self.factory.create(cfg).await?))
     }

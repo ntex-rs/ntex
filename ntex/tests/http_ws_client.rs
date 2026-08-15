@@ -4,7 +4,7 @@ use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpService, Response, body::BodySize, h1};
 use ntex::io::{DispatchItem, Dispatcher, IoConfig};
-use ntex::service::{Pipeline, cfg::SharedCfg, fn_factory_with_config, ustate_chain};
+use ntex::service::{Pipeline, cfg::SharedCfg, chain, fn_factory_with_config};
 use ntex::web::{self, App, HttpRequest};
 use ntex::ws::{self, handshake_response};
 use ntex::{time::Seconds, util::ByteString, util::Bytes, util::Ready};
@@ -47,7 +47,7 @@ async fn test_simple() {
                         Dispatcher::new(
                             io.seal(),
                             ws::Codec::default(),
-                            Pipeline::new(ustate_chain(ws_service)).bind(),
+                            Pipeline::new::<()>(ws_service),
                         )
                         .await
                     })
@@ -111,7 +111,7 @@ async fn test_transport() {
                         Dispatcher::new(
                             io.seal(),
                             ws::Codec::default(),
-                            Pipeline::new(ustate_chain(ws_service)).bind(),
+                            Pipeline::new::<()>(ws_service),
                         )
                         .await
                     })
@@ -159,7 +159,7 @@ async fn test_keepalive_timeout() {
                         Dispatcher::new(
                             io.seal(),
                             ws::Codec::default(),
-                            Pipeline::new(ustate_chain(ws_service)).bind(),
+                            Pipeline::new::<()>(ws_service),
                         )
                         .await
                     })
@@ -212,7 +212,7 @@ async fn test_upgrade_handler_with_await() {
                     &req,
                     None,
                     fn_factory_with_config(|_: &ws::WsSink| async {
-                        Ok::<_, web::Error>(ustate_chain(service))
+                        Ok::<_, web::Error>(chain(service))
                     }),
                 )
                 .await

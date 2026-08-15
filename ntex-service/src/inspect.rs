@@ -287,7 +287,7 @@ mod tests {
         let srv = chain(Srv(false, false, cnt.clone()))
             .inspect(move |&()| cnt2.set(cnt2.get() + 1))
             .into_pipeline();
-        let res = srv.ready(&()).await;
+        let res = srv.ready().await;
         assert_eq!(res, Ok(()));
 
         srv.shutdown().await;
@@ -301,7 +301,7 @@ mod tests {
         let srv = chain(Srv(true, true, cnt.clone()))
             .inspect_err(move |&()| cnt2.set(cnt2.get() + 1))
             .into_pipeline();
-        let res = srv.ready(&()).await;
+        let res = srv.ready().await;
         assert_eq!(res, Err(()));
 
         srv.shutdown().await;
@@ -316,7 +316,7 @@ mod tests {
             .inspect(move |&()| cnt2.set(cnt2.get() + 1))
             .clone()
             .into_pipeline();
-        let res = srv.call((), &()).await;
+        let res = srv.call(()).await;
         assert!(res.is_ok());
 
         let _ = format!("{srv:?}");
@@ -333,7 +333,7 @@ mod tests {
             .inspect_err(move |&()| cnt2.set(cnt2.get() + 1))
             .clone()
             .into_pipeline();
-        let res = srv.call((), &()).await;
+        let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), ());
 
@@ -354,7 +354,7 @@ mod tests {
         .inspect(move |&()| cnt3.set(cnt3.get() + 1))
         .clone();
         let srv = new_srv.pipeline(&()).await.unwrap();
-        let res = srv.call((), &()).await;
+        let res = srv.call(()).await;
         assert!(res.is_ok());
         let _ = format!("{new_srv:?}");
         srv.shutdown().await;
@@ -372,7 +372,7 @@ mod tests {
         .inspect_err(move |&()| cnt3.set(cnt3.get() + 1))
         .clone();
         let srv = new_srv.pipeline(&()).await.unwrap();
-        let res = srv.call((), &()).await;
+        let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), ());
         let _ = format!("{new_srv:?}");

@@ -157,7 +157,7 @@ mod tests {
         let srv = chain(Srv1(cnt.clone(), cnt_sht.clone()))
             .then(Srv2(cnt.clone(), cnt_sht.clone()))
             .into_pipeline();
-        let res = srv.ready(&()).await;
+        let res = srv.ready().await;
         assert_eq!(res, Ok(()));
         assert_eq!(cnt.get(), 2);
 
@@ -173,11 +173,11 @@ mod tests {
             .clone()
             .into_pipeline();
 
-        let res = srv.call(Ok("srv1"), &()).await;
+        let res = srv.call(Ok("srv1")).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "ok"));
 
-        let res = srv.call(Err("srv"), &()).await;
+        let res = srv.call(Err("srv")).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv2", "err"));
     }
@@ -197,11 +197,11 @@ mod tests {
             }))
             .clone();
         let srv = factory.pipeline(&()).await.unwrap();
-        let res = srv.call(Ok("srv1"), &()).await;
+        let res = srv.call(Ok("srv1")).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "ok"));
 
-        let res = srv.call(Err("srv"), &()).await;
+        let res = srv.call(Err("srv")).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv2", "err"));
     }

@@ -209,7 +209,11 @@ where
             .map_err(|e| log::error!("Cannot construct publish service: {e:?}"))?;
 
         let (tx, rx) = oneshot::channel();
-        let config = Rc::new(DispatcherConfig::new(cfg.get(), service, ()));
+        let config = Rc::new(DispatcherConfig::new(
+            cfg.get(),
+            service,
+            DefaultControlService,
+        ));
 
         Ok(H2ServiceHandler {
             config,
@@ -228,7 +232,7 @@ where
 #[debug("H2ServiceHandler")]
 pub struct H2ServiceHandler<F, S: Service, B, C> {
     cfg: SharedCfg,
-    config: Rc<DispatcherConfig<S, ()>>,
+    config: Rc<DispatcherConfig<S, DefaultControlService>>,
     control: Rc<C>,
     inflight: RefCell<HashSet<IoRef>>,
     rx: Cell<Option<oneshot::Receiver<()>>>,
@@ -259,7 +263,7 @@ where
 
     #[inline]
     async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
-        self.config.service.ready(&()).await.map_err(|e| {
+        self.config.service.ready().await.map_err(|e| {
             log::error!("Service readiness error: {e:?}");
             DispatchError::Service(Rc::new(e))
         })
@@ -336,7 +340,7 @@ where
     S::Res: Into<Response<B>>,
     S::Error: ResponseError,
     B: MessageBody,
-    C1: 'static,
+    C1: Service + 'static,
     C2: Service<St = (), Req = h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
     C2::Error: StdError,
 {
@@ -347,7 +351,7 @@ where
     Ok(())
 }
 
-struct PublishService<S: Service, B, C> {
+struct PublishService<S: Service, B, C: Service> {
     id: usize,
     io: IoRef,
     config: Rc<DispatcherConfig<S, C>>,
@@ -361,6 +365,7 @@ where
     S::Res: Into<Response<B>>,
     S::Error: ResponseError,
     B: MessageBody,
+    C: Service + 'static,
 {
     fn new(id: usize, io: IoRef, config: Rc<DispatcherConfig<S, C>>) -> Self {
         Self {
@@ -379,7 +384,7 @@ where
     S::Res: Into<Response<B>>,
     S::Error: ResponseError,
     B: MessageBody,
-    C: 'static,
+    C: Service + 'static,
 {
     type St = ();
     type Req = h2::Message;
@@ -494,7 +499,7 @@ where
         head.io = CurrentIo::Ref(io);
         head.id = self.id;
 
-        let (mut res, mut body) = match cfg.service.call(req, &()).await {
+        let (mut res, mut body) = match cfg.service.call(req).await {
             Ok(res) => res.into().into_parts(),
             Err(err) => {
                 let (res, body) = Response::from(&err).into_parts();

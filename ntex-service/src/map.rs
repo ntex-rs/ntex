@@ -177,11 +177,11 @@ mod tests {
     async fn test_service() {
         let cnt_sht = Rc::new(Cell::new(0));
         let srv = Pipeline::new(Srv(cnt_sht.clone()).map(|()| "ok").clone());
-        let res = srv.call((), &()).await;
+        let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
 
-        let res = srv.ready(&()).await;
+        let res = srv.ready().await;
         assert_eq!(res, Ok(()));
 
         srv.shutdown().await;
@@ -191,11 +191,11 @@ mod tests {
         let cnt_sht = Rc::new(Cell::new(0));
         let svc = Srv(cnt_sht.clone()).map(|()| "ok");
         let srv = Pipeline::new(&svc);
-        let res = srv.call((), &()).await;
+        let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
 
-        let res = srv.ready(&()).await;
+        let res = srv.ready().await;
         assert_eq!(res, Ok(()));
 
         srv.shutdown().await;
@@ -206,11 +206,11 @@ mod tests {
     #[ntex::test]
     async fn test_pipeline() {
         let srv = Pipeline::new(crate::chain(Srv::default()).map(|()| "ok").clone());
-        let res = srv.call((), &()).await;
+        let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
 
-        let res = srv.ready(&()).await;
+        let res = srv.ready().await;
         assert_eq!(res, Ok(()));
     }
 
@@ -220,7 +220,7 @@ mod tests {
             .map(|()| "ok")
             .clone();
         let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
-        let res = srv.call((), &()).await;
+        let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("ok"));
 
@@ -234,7 +234,7 @@ mod tests {
                 .map(|()| "ok")
                 .clone();
         let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
-        let res = srv.call((), &()).await;
+        let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("ok"));
 

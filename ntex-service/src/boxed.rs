@@ -64,7 +64,7 @@ trait ServiceObj {
         &'a self,
         idx: u32,
         waiters: &'a WaitersRef,
-        st: Option<&'a Self::St>,
+        st: &'a Self::St,
     ) -> BoxFuture<'a, (), Self::Error>;
 
     fn call<'a>(
@@ -92,7 +92,7 @@ where
         &'a self,
         idx: u32,
         waiters: &'a WaitersRef,
-        st: Option<&'a Self::St>,
+        st: &'a Self::St,
     ) -> BoxFuture<'a, (), Self::Error> {
         Box::pin(async move { ReadyCtx::<'a, S>::new(idx, waiters, st).ready(self).await })
     }

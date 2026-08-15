@@ -126,34 +126,33 @@ mod tests {
     use std::{cell::Cell, rc::Rc};
 
     use super::*;
-    use crate::fn_service;
 
     #[ntex::test]
     async fn test_map_config() {
         let item = Rc::new(Cell::new(1usize));
 
         let factory = map_config(
-            fn_service(async move |item: usize| Ok::<_, ()>(item)),
+            async move |item: usize| Ok::<_, ()>(item),
             |t: &usize| {
                 item.set(item.get() + *t);
             },
         )
         .clone();
 
-        let svc = factory.pipeline(&10).await.unwrap();
+        let svc = factory.pipeline::<()>(&10).await.unwrap();
         assert_eq!(item.get(), 11);
         let _ = format!("{factory:?}");
 
-        assert_eq!(svc.call(1, &()).await.unwrap(), 1);
+        assert_eq!(svc.call(1).await.unwrap(), 1);
     }
 
     #[ntex::test]
     async fn test_unit_config() {
-        let svc = unit_config(fn_service(async move |item: usize| Ok::<_, ()>(item)))
+        let svc = unit_config(async move |item: usize| Ok::<_, ()>(item))
             .clone()
-            .pipeline(&10)
+            .pipeline::<()>(&10)
             .await
             .unwrap();
-        assert_eq!(svc.call(1, &()).await.unwrap(), 1);
+        assert_eq!(svc.call(1).await.unwrap(), 1);
     }
 }

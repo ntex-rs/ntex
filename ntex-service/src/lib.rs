@@ -31,13 +31,13 @@ mod then;
 mod util;
 
 pub use self::apply::{apply_fn, apply_fn_factory};
-pub use self::chain::{chain, chain_factory, ustate_chain, ustate_chain_factory};
+pub use self::chain::{chain, chain_factory};
 pub use self::ctx::{Ctx, ReadyCtx};
 pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
 pub use self::fn_shutdown::fn_shutdown;
 pub use self::map_config::{map_config, unit_config};
 pub use self::middleware::{Identity, Middleware, Stack, apply, fn_layer};
-pub use self::pipeline::{Pipeline, PipelineBinding, PipelineCall, PipelineSvc};
+pub use self::pipeline::{Pipeline, PipelineBinding, PipelineCall};
 
 #[allow(unused_variables)]
 /// An asynchronous function from a `Request` to a `Response`.
@@ -186,6 +186,7 @@ pub trait Service {
 /// Simple factories can often use [`fn_factory`] or [`fn_factory_with_config`]
 /// to reduce boilerplate.
 pub trait ServiceFactory<Req> {
+    /// Shared service state that should be accessible during processing.
     type St;
 
     /// Responses given by the created services.
@@ -208,12 +209,13 @@ pub trait ServiceFactory<Req> {
 
     #[inline]
     /// Asynchronously creates a new service and wraps it in a container.
-    async fn pipeline(
+    async fn pipeline<St>(
         &self,
         cfg: &Self::InitCfg,
     ) -> Result<Pipeline<Self::Service>, Self::InitError>
     where
-        Self: Sized,
+        St: Default,
+        Self: ServiceFactory<Req, St = St> + Sized,
     {
         Ok(Pipeline::new(self.create(cfg).await?))
     }

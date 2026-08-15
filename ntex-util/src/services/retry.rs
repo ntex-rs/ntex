@@ -161,8 +161,8 @@ mod tests {
             RetryService::new(DefaultRetryPolicy::default(), TestService(cnt.clone()))
                 .clone(),
         );
-        assert_eq!(svc.call((), &()).await, Err(()));
-        assert_eq!(svc.ready(&()).await, Ok(()));
+        assert_eq!(svc.call(()).await, Err(()));
+        assert_eq!(svc.ready().await, Ok(()));
         svc.shutdown().await;
         assert_eq!(cnt.get(), 1);
 
@@ -171,13 +171,13 @@ mod tests {
             fn_factory(|| async { Ok::<_, ()>(TestService(Rc::new(Cell::new(2)))) }),
         );
         let srv = factory.pipeline(&()).await.unwrap();
-        assert_eq!(srv.call((), &()).await, Ok(()));
+        assert_eq!(srv.call(()).await, Ok(()));
 
         let factory = apply(
             Retry::new(DefaultRetryPolicy::new(3)).clone(),
             fn_factory(|| async { Ok::<_, ()>(TestService(Rc::new(Cell::new(2)))) }),
         );
         let srv = factory.pipeline(&()).await.unwrap();
-        assert_eq!(srv.call((), &()).await, Ok(()));
+        assert_eq!(srv.call(()).await, Ok(()));
     }
 }

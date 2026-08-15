@@ -224,7 +224,7 @@ where
 /// `Service` implementation for HTTP1 transport
 #[derive(derive_more::Debug)]
 #[debug("H1ServiceHandler")]
-pub struct H1ServiceHandler<F, S, B, C> {
+pub struct H1ServiceHandler<F, S: Service, B, C: Service> {
     config: Rc<DispatcherConfig<S, C>>,
     inflight: RefCell<HashSet<IoRef>>,
     rx: Cell<Option<oneshot::Receiver<()>>>,
@@ -250,7 +250,7 @@ where
     async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
         let cfg = self.config.as_ref();
 
-        let (ready1, ready2) = join(cfg.control.ready(&()), cfg.service.ready(&())).await;
+        let (ready1, ready2) = join(cfg.control.ready(), cfg.service.ready()).await;
         ready1.map_err(|e| {
             log::error!("Http control service readiness error: {e:?}");
             DispatchError::Control(Rc::new(e))
@@ -336,11 +336,7 @@ where
     B: MessageBody,
 {
     // Notify control service
-    let ack = config
-        .control
-        .call_nowait(Control::connect(id, io), ())
-        .await;
-
+    let ack = config.control.call_nowait(Control::connect(id, io)).await;
     match ack {
         Ok(ack) => {
             let ControlResult::Connect(io) = ack.result else {

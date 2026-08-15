@@ -175,11 +175,7 @@ mod tests {
             "{factory:?}"
         );
 
-        let srv = factory
-            .pipeline(&SharedCfg::default())
-            .await
-            .unwrap()
-            .bind();
+        let srv = factory.pipeline(&SharedCfg::default()).await.unwrap();
         // always ready
         assert!(lazy(|cx| srv.poll_ready(cx)).await.is_ready());
         let result = srv

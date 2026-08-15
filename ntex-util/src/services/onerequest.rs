@@ -101,21 +101,18 @@ mod tests {
         let (tx, rx) = oneshot::channel();
 
         let srv = Pipeline::new(OneRequestService::new(SleepService(rx)));
-        let srv1 = srv.clone().bind();
-        assert_eq!(lazy(|cx| srv1.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
-        let srv2 = srv.clone().bind();
+        let srv2 = srv.bind();
         ntex::rt::spawn(async move {
             let _ = srv2.call(()).await;
         });
         crate::time::sleep(Duration::from_millis(25)).await;
-        let srv2 = srv.clone().bind();
-        assert_eq!(lazy(|cx| srv2.poll_ready(cx)).await, Poll::Pending);
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
 
         let _ = tx.send(());
         crate::time::sleep(Duration::from_millis(25)).await;
-        let srv2 = srv.clone().bind();
-        assert_eq!(lazy(|cx| srv2.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         srv.shutdown().await;
     }
 
@@ -134,22 +131,18 @@ mod tests {
         );
 
         let srv = sf.pipeline(&()).await.unwrap();
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
-        let srv1 = srv.clone().bind();
-        assert_eq!(lazy(|cx| srv1.poll_ready(cx)).await, Poll::Ready(Ok(())));
-
-        let srv2 = srv.clone().bind();
+        let srv1 = srv.bind();
         ntex::rt::spawn(async move {
-            let _ = srv2.call(()).await;
+            let _ = srv1.call(()).await;
         });
         crate::time::sleep(Duration::from_millis(25)).await;
-        let srv2 = srv.clone().bind();
-        assert_eq!(lazy(|cx| srv2.poll_ready(cx)).await, Poll::Pending);
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
 
         let _ = tx.send(());
         crate::time::sleep(Duration::from_millis(25)).await;
-        let srv2 = srv.clone().bind();
-        assert_eq!(lazy(|cx| srv2.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
     }
 
     #[ntex::test]
@@ -167,20 +160,17 @@ mod tests {
         );
 
         let srv = sf.pipeline(&()).await.unwrap();
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
-        let srv1 = srv.clone().bind();
-        assert_eq!(lazy(|cx| srv1.poll_ready(cx)).await, Poll::Ready(Ok(())));
-
-        let srv2 = srv.clone().bind();
+        let srv1 = srv.bind();
         ntex::rt::spawn(async move {
-            let _ = srv2.call(()).await;
+            let _ = srv1.call(()).await;
         });
         crate::time::sleep(Duration::from_millis(25)).await;
-        let srv2 = srv.clone().bind();
-        assert_eq!(lazy(|cx| srv2.poll_ready(cx)).await, Poll::Pending);
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
 
         let _ = tx.send(());
         crate::time::sleep(Duration::from_millis(25)).await;
-        assert_eq!(lazy(|cx| srv2.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
     }
 }

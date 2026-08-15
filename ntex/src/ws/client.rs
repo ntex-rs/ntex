@@ -18,7 +18,7 @@ use crate::http::header::{self, AUTHORIZATION, HeaderMap, HeaderName, HeaderValu
 use crate::http::{ConnectionType, Message, Method, RequestHead, StatusCode, Uri};
 use crate::http::{body::BodySize, error::HttpError};
 use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, Layer, Reason, Sealed};
-use crate::service::{IntoService, Pipeline, apply_fn, fn_service};
+use crate::service::{Ctx, IntoService, Pipeline, apply_fn, fn_service};
 use crate::time::{Millis, timeout};
 use crate::{Service, ServiceFactory, SharedCfg, channel::mpsc, rt, ws};
 
@@ -29,8 +29,21 @@ thread_local! {
     static CFG: SharedCfg = SharedCfg::new("WS-CLIENT").into();
 }
 
+pub struct DefaultConnector;
+
+impl Service for DefaultConnector {
+    type St = ();
+    type Req = Connect<Uri>;
+    type Res = Io;
+    type Error = Error<ConnectError>;
+
+    async fn call(&self, _: Connect<Uri>, _: Ctx<'_, Self>) -> Result<Io, Self::Error> {
+        unreachable!()
+    }
+}
+
 /// `WebSocket` client builder
-pub struct WsClient<F, T> {
+pub struct WsClient<F, T: Service> {
     connector: Pipeline<T>,
     head: Message<RequestHead>,
     addr: Option<net::SocketAddr>,
@@ -62,7 +75,7 @@ struct Inner<F, T> {
     _t: marker::PhantomData<F>,
 }
 
-impl WsClient<Base, ()> {
+impl WsClient<Base, DefaultConnector> {
     /// Create new websocket client builder
     pub fn builder<U>(uri: U) -> WsClientBuilder<Base, Connector<Uri>>
     where
@@ -90,7 +103,7 @@ impl WsClient<Base, ()> {
     }
 }
 
-impl<F, T> WsClient<F, T> {
+impl<F, T: Service> WsClient<F, T> {
     /// Insert a header, replaces existing header.
     pub fn set_header<K, V>(&self, key: K, value: V) -> Result<(), HttpError>
     where
@@ -164,7 +177,7 @@ where
         let msg = Connect::new(head.uri.clone()).set_addr(self.addr);
         log::trace!("Open ws connection to {:?} addr: {:?}", head.uri, self.addr);
 
-        let io = self.connector.call(msg, &()).await.into_error()?;
+        let io = self.connector.call(msg).await.into_error()?;
         let tag = io.tag();
 
         // create Framed and send request
@@ -277,7 +290,7 @@ where
     }
 }
 
-impl<F, T> fmt::Debug for WsClient<F, T> {
+impl<F, T: Service> fmt::Debug for WsClient<F, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "\nWsClient {}:{}", self.head.method, self.head.uri)?;
         writeln!(f, "  headers:")?;
@@ -795,7 +808,7 @@ impl WsConnection<Sealed> {
             },
         );
 
-        Dispatcher::new(self.io, self.codec, Pipeline::new(service).bind()).await
+        Dispatcher::new(self.io, self.codec, Pipeline::new(service)).await
     }
 }
 

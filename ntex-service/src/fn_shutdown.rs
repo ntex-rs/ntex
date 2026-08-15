@@ -115,12 +115,12 @@ mod tests {
         let pipe = chain_factory(srv)
             .and_then(on_shutdown)
             .clone()
-            .pipeline(&())
+            .pipeline::<()>(&())
             .await
             .unwrap();
 
-        let res = pipe.call((), &()).await;
-        assert_eq!(pipe.ready(&()).await, Ok(()));
+        let res = pipe.call(()).await;
+        assert_eq!(pipe.ready().await, Ok(()));
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "pipe");
         assert!(!pipe.is_shutdown());
@@ -128,7 +128,6 @@ mod tests {
         assert!(is_called.get());
         assert!(!pipe.is_shutdown());
 
-        let pipe = pipe.bind();
         poll_fn(|cx| pipe.poll_shutdown(cx)).await;
         assert!(pipe.is_shutdown());
 
@@ -145,7 +144,10 @@ mod tests {
             is_called2.set(true);
         });
 
-        let pipe = chain_factory(on_shutdown).pipeline(&()).await.unwrap();
+        let pipe = chain_factory(on_shutdown)
+            .pipeline::<()>(&())
+            .await
+            .unwrap();
         pipe.shutdown().await;
         assert!(is_called.get());
         assert!(!pipe.is_shutdown());

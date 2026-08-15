@@ -6,7 +6,7 @@ use ntex::http::{
     HttpService, HttpServiceConfig, Request, Response, StatusCode, body, h1, test,
 };
 use ntex::io::{DispatchItem, Dispatcher, Io, IoConfig};
-use ntex::service::{Ctx, Pipeline, ReadyCtx, Service, cfg::SharedCfg, ustate_chain};
+use ntex::service::{Ctx, Pipeline, ReadyCtx, Service, cfg::SharedCfg};
 use ntex::time::{Millis, Seconds, sleep};
 use ntex::util::{ByteString, Bytes, Ready};
 use ntex::ws::{self, handshake, handshake_response};
@@ -57,13 +57,9 @@ impl Service for WsService {
         io.set_config(
             SharedCfg::new("WS-SRV").add(IoConfig::new().set_keepalive_timeout(Seconds(0))),
         );
-        Dispatcher::new(
-            io.seal(),
-            ws::Codec::new(),
-            Pipeline::new(ustate_chain(service)).bind(),
-        )
-        .await
-        .map_err(|_| panic!())
+        Dispatcher::new(io.seal(), ws::Codec::new(), Pipeline::new::<()>(service))
+            .await
+            .map_err(|_| panic!())
     }
 }
 
@@ -91,19 +87,19 @@ async fn test_simple() {
         {
             let ws_service = ws_service.clone();
             async move || {
-                let ws_service = Pipeline::new(ws_service.clone());
+                let ws_service = ws_service.clone();
                 HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
-                    .control(move |req: h1::Control<_, _>| {
+                    .control(async move |req: h1::Control<_, _>| {
                         let ack = if let h1::Control::Upgrade(upg) = req {
                             assert!(format!("{upg:?}").contains("Upgrade"));
-                            let ws_service = ws_service.clone();
-                            upg.handle(|req, io, codec| async move {
-                                ws_service.call((req, io, codec), &()).await
+                            let ws_service = Pipeline::new(ws_service.clone());
+                            upg.handle(async move |req, io, codec| {
+                                ws_service.call((req, io, codec)).await
                             })
                         } else {
                             req.ack()
                         };
-                        async move { Ok::<_, io::Error>(ack) }
+                        Ok::<_, io::Error>(ack)
                     })
             }
         },
@@ -377,11 +373,10 @@ async fn test_stale_timer_after_ws_upgrade() {
                                 Dispatcher::new(
                                     io.seal(),
                                     ws::Codec::new(),
-                                    Pipeline::new(InFlightService::new(
+                                    Pipeline::new::<()>(InFlightService::new(
                                         1,
                                         ntex::service::fn_service(slow_ws_service),
-                                    ))
-                                    .bind_state(()),
+                                    )),
                                 )
                                 .await
                                 .map_err(|_| panic!())

@@ -28,7 +28,7 @@ async fn main() -> io::Result<()> {
             .unwrap(),
     );
 
-    let io = connector.call("127.0.0.1:8443".into(), &()).await.unwrap();
+    let io = connector.call("127.0.0.1:8443".into()).await.unwrap();
     println!("Connected to ssl server");
     io.send(Bytes::from_static(b"hello"), &codec::BytesCodec)
         .await

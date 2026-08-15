@@ -333,11 +333,11 @@ pub(crate) mod tests {
         .await;
 
         let req = TestRequest::with_uri("/index.html").to_request();
-        let resp = srv.call(req, &()).await.unwrap();
+        let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
         let req = TestRequest::with_uri("/index.html?query=test").to_request();
-        let resp = srv.call(req, &()).await.unwrap();
+        let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
@@ -353,11 +353,11 @@ pub(crate) mod tests {
         .await;
 
         let req = TestRequest::with_uri("/none").to_request();
-        let resp = srv.call(req, &()).await.unwrap();
+        let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
         let req = TestRequest::with_uri("/some").to_request();
-        let resp = srv.call(req, &()).await.unwrap();
+        let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         if let ResponseBody::Body(Body::Bytes(b)) = resp.response().body() {
             let bytes: Bytes = b.clone();

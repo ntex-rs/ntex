@@ -15,6 +15,8 @@
 //!     println!("Response: {:?}", response);
 //! }
 //! ```
+use std::rc::Rc;
+
 mod builder;
 mod cfg;
 mod codec;
@@ -71,7 +73,7 @@ type BoxedSender =
 /// ```
 #[derive(Debug, Clone)]
 pub struct Client {
-    svc: Pipeline<BoxedSender>,
+    svc: Rc<Pipeline<BoxedSender>>,
     config: ClientConfig,
 }
 
@@ -90,12 +92,15 @@ impl Client {
     }
 
     pub(crate) fn with_service(svc: Pipeline<BoxedSender>, config: ClientConfig) -> Self {
-        Client { svc, config }
+        Client {
+            config,
+            svc: Rc::new(svc),
+        }
     }
 
     /// Returns when the client is ready to process requests.
     pub async fn ready(&self) -> Result<(), Error<error::ClientError>> {
-        self.svc.ready(&()).await
+        self.svc.ready().await
     }
 
     /// Construct HTTP request.
@@ -104,9 +109,7 @@ impl Client {
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
     {
-        let mut req =
-            ClientRequest::new(method, url, self.config.clone(), self.svc.clone());
-
+        let mut req = ClientRequest::new(method, url, self.config.clone(), self.svc.bind());
         for (key, value) in self.config.headers() {
             req = req.set_header_if_none(key.clone(), value.clone());
         }
