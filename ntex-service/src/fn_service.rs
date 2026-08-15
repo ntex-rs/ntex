@@ -39,10 +39,10 @@ where
 ///     });
 ///
 ///     // construct new service
-///     let srv = factory.pipeline(&()).await?;
+///     let srv = factory.pipeline::<()>(&()).await?;
 ///
 ///     // now we can use `div` service
-///     let result = srv.call((10, 20), &()).await?;
+///     let result = srv.call((10, 20)).await?;
 ///
 ///     println!("10 / 20 = {}", result);
 ///
@@ -78,9 +78,9 @@ where
 ///     });
 ///
 ///     // construct new service with config argument
-///     let srv = factory.pipeline(&10).await?;
+///     let srv = factory.pipeline::<()>(&10).await?;
 ///
-///     let result = srv.call(10, &()).await?;
+///     let result = srv.call(10).await?;
 ///     assert_eq!(result, 100);
 ///
 ///     println!("10 * 10 = {}", result);

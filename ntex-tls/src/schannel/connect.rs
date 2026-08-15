@@ -87,7 +87,6 @@ where
     type Error = Error<ConnectError>;
 
     ntex_service::forward_ready!(svc);
-    ntex_service::forward_poll!(svc);
     ntex_service::forward_shutdown!(svc);
 
     async fn call(
@@ -139,8 +138,8 @@ mod tests {
 
         let _: TlsConnector<Connector<&'static str>> = TlsConnector::new();
         let factory: TlsConnector<Connector<&'static str>> = TlsConnector::new();
-        let srv = factory.pipeline(&SharedCfg::default()).await.unwrap();
-        assert!(srv.ready(&()).await.is_ok());
+        let srv = factory.pipeline::<()>(&SharedCfg::default()).await.unwrap();
+        assert!(srv.ready().await.is_ok());
         let result = srv
             .call(Connect::new("").set_addr(Some(server.addr())), &())
             .await;
