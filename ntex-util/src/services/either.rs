@@ -216,13 +216,13 @@ mod tests {
     #[ntex::test]
     async fn test_success() {
         let svc = Pipeline::new(Either::left(Svc1).clone());
-        assert_eq!(svc.call((), &()).await, Ok("svc1"));
-        assert_eq!(svc.ready(&()).await, Ok(()));
+        assert_eq!(svc.call(()).await, Ok("svc1"));
+        assert_eq!(svc.ready().await, Ok(()));
         svc.shutdown().await;
 
         let svc = Pipeline::new(Either::right(Svc2).clone());
-        assert_eq!(svc.call((), &()).await, Ok("svc2"));
-        assert_eq!(svc.ready(&()).await, Ok(()));
+        assert_eq!(svc.call(()).await, Ok("svc2"));
+        assert_eq!(svc.ready().await, Ok(()));
         svc.shutdown().await;
 
         assert!(format!("{svc:?}").contains("EitherService"));
@@ -236,9 +236,9 @@ mod tests {
         assert!(format!("{factory:?}").contains("EitherServiceFactory"));
 
         let svc = factory.pipeline(&"svc1").await.unwrap();
-        assert_eq!(svc.call((), &()).await, Ok("svc1"));
+        assert_eq!(svc.call(()).await, Ok("svc1"));
 
         let svc = factory.pipeline(&"other").await.unwrap();
-        assert_eq!(svc.call((), &()).await, Ok("svc2"));
+        assert_eq!(svc.call(()).await, Ok("svc2"));
     }
 }

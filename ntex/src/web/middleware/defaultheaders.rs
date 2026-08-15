@@ -156,8 +156,7 @@ mod tests {
             DefaultHeaders::new()
                 .header(CONTENT_TYPE, "0001")
                 .create(ok_service(), &SharedCfg::default()),
-        )
-        .bind();
+        );
 
         assert!(lazy(|cx| mw.poll_ready(cx).is_ready()).await);
         assert!(lazy(|cx| mw.poll_shutdown(cx).is_ready()).await);
@@ -172,12 +171,12 @@ mod tests {
                 req.into_response(HttpResponse::Ok().header(CONTENT_TYPE, "0002").finish()),
             )
         };
-        let mw = Pipeline::new(
+        let mw = Pipeline::new::<()>(
             DefaultHeaders::new()
                 .header(CONTENT_TYPE, "0001")
                 .create(srv.into_service(), &SharedCfg::default()),
         );
-        let resp = mw.call(req, &()).await.unwrap();
+        let resp = mw.call(req).await.unwrap();
         assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "0002");
     }
 
@@ -198,14 +197,14 @@ mod tests {
         let srv = |req: WebRequest<DefaultError>| async move {
             Ok::<_, Error>(req.into_response(HttpResponse::Ok().finish()))
         };
-        let mw = Pipeline::new(
+        let mw = Pipeline::new::<()>(
             DefaultHeaders::new()
                 .content_type()
                 .create(srv.into_service(), &SharedCfg::default()),
         );
 
         let req = TestRequest::default().to_srv_request();
-        let resp = mw.call(req, &()).await.unwrap();
+        let resp = mw.call(req).await.unwrap();
         assert_eq!(
             resp.headers().get(CONTENT_TYPE).unwrap(),
             "application/octet-stream"

@@ -7,8 +7,8 @@ use ntex_h2::{self as h2};
 use crate::error::Error;
 use crate::http::uri::{Authority, Scheme, Uri};
 use crate::io::{IoBoxed, types::HttpProtocol};
-use crate::service::cfg::SharedCfg;
-use crate::service::{Ctx, Pipeline, PipelineCall, ReadyCtx, Service, boxed};
+use crate::service::{Ctx, Pipeline, PipelineBinding, PipelineCall, ReadyCtx, Service};
+use crate::service::{boxed, cfg::SharedCfg};
 use crate::util::{ByteString, Either, HashMap, HashSet, select};
 use crate::{channel::inplace, channel::oneshot, channel::pool, rt::spawn, time::now};
 
@@ -91,11 +91,12 @@ impl ConnectionPool {
             waker: inplace::channel(),
             waiters: waiters.clone(),
         }));
+        let svc_binding = svc.bind();
 
         // start connection pool
         let (stop, stop_rx) = oneshot::channel();
         crate::rt::spawn(run_connection_pool(
-            svc.clone(),
+            svc_binding,
             inner.clone(),
             waiters.clone(),
             config.clone(),
@@ -149,7 +150,7 @@ impl Service for ConnectionPool {
 
     #[inline]
     async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
-        self.0.svc.ready(&()).await
+        self.0.svc.ready().await
     }
 
     #[inline]
@@ -193,7 +194,7 @@ impl Service for ConnectionPool {
                 log::trace!("{}: Connecting to {:?}", self.0.config.tag(), req.uri);
                 let uri = req.uri.clone();
                 let (tx, rx) = waiters.borrow_mut().pool.channel();
-                OpenConnection::spawn(key, tx, uri, inner, &self.0.svc, req);
+                OpenConnection::spawn(key, tx, uri, inner, self.0.svc.call_static(req));
 
                 match rx.await {
                     Err(_) => Err(ConnectError::Disconnected(None).into()),
@@ -338,7 +339,7 @@ impl Inner {
 }
 
 async fn run_connection_pool(
-    svc: Pipeline<Connector>,
+    svc: PipelineBinding<Connector>,
     inner: Rc<RefCell<Inner>>,
     waiters: Rc<RefCell<Waiters>>,
     config: SharedCfg,
@@ -393,8 +394,7 @@ async fn run_connection_pool(
                                 tx,
                                 uri,
                                 inner.clone(),
-                                &svc,
-                                connect,
+                                svc.call_static(connect),
                             );
                         }
                     }
@@ -437,11 +437,8 @@ impl OpenConnection {
         tx: Waiter,
         uri: Uri,
         inner: Rc<RefCell<Inner>>,
-        pipeline: &Pipeline<Connector>,
-        msg: Connect,
+        fut: PipelineCall<Connector>,
     ) {
-        let fut = pipeline.call_static(msg, ());
-
         spawn(async move {
             OpenConnection {
                 tx: Some(tx),
@@ -662,8 +659,7 @@ mod tests {
                 SharedCfg::default(),
             )
             .clone(),
-        )
-        .bind();
+        );
 
         // uri must contain authority
         let req = Connect {

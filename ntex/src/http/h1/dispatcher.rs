@@ -59,7 +59,7 @@ where
     Stop,
 }
 
-struct DispatcherInner<F, C, S, B> {
+struct DispatcherInner<F, C: Service, S: Service, B> {
     io: Rc<Io<F>>,
     flags: Flags,
     disconnect: Option<ServiceDisconnectReason>,
@@ -712,13 +712,13 @@ where
 
     fn publish(&self, req: Request) -> State<F, C, S, B> {
         State::CallPublish {
-            fut: self.config.service.call_nowait(req, ()),
+            fut: self.config.service.call_nowait(req),
         }
     }
 
     fn control(&self, req: Control<F, S::Error>) -> State<F, C, S, B> {
         State::CallControl {
-            fut: self.config.control.call_nowait(req, ()),
+            fut: self.config.control.call_nowait(req),
         }
     }
 
@@ -730,31 +730,28 @@ where
     fn ctl_keepalive(&mut self, enabled: bool) -> State<F, C, S, B> {
         self.flags.insert(Flags::DISCONNECT_SENT);
         State::CallControl {
-            fut: self
-                .config
-                .control
-                .call_nowait(Control::keepalive(enabled), ()),
+            fut: self.config.control.call_nowait(Control::keepalive(enabled)),
         }
     }
 
     fn ctl_error(&mut self, err: S::Error) -> State<F, C, S, B> {
         self.flags.insert(Flags::DISCONNECT_SENT);
         State::CallControl {
-            fut: self.config.control.call_nowait(Control::err(err), ()),
+            fut: self.config.control.call_nowait(Control::err(err)),
         }
     }
 
     fn ctl_proto_err(&mut self, err: ProtocolError) -> State<F, C, S, B> {
         self.flags.insert(Flags::DISCONNECT_SENT);
         State::CallControl {
-            fut: self.config.control.call_nowait(Control::proto_err(err), ()),
+            fut: self.config.control.call_nowait(Control::proto_err(err)),
         }
     }
 
     fn ctl_peer_gone(&mut self, err: Option<io::Error>) -> State<F, C, S, B> {
         self.flags.insert(Flags::DISCONNECT_SENT);
         State::CallControl {
-            fut: self.config.control.call_nowait(Control::peer_gone(err), ()),
+            fut: self.config.control.call_nowait(Control::peer_gone(err)),
         }
     }
 
@@ -767,7 +764,7 @@ where
                 fut: self
                     .config
                     .control
-                    .call_nowait(Control::svc_disconnect(reason), ()),
+                    .call_nowait(Control::svc_disconnect(reason)),
             }
         }
     }
@@ -781,7 +778,7 @@ where
                 fut: self
                     .config
                     .control
-                    .call_nowait(Control::svc_disconnect(reason), ()),
+                    .call_nowait(Control::svc_disconnect(reason)),
             })
         } else {
             None

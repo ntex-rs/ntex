@@ -268,7 +268,7 @@ mod tests {
     use std::{cell::Cell, rc::Rc};
 
     use super::*;
-    use crate::{Ctx, Pipeline, ReadyCtx, fn_service};
+    use crate::{Ctx, Pipeline, ReadyCtx, chain_factory, fn_service};
 
     #[derive(Debug, Clone)]
     struct Mw(Rc<Cell<usize>>);
@@ -313,44 +313,44 @@ mod tests {
         )
         .clone();
 
-        let srv = Pipeline::new(factory.create(&()).await.unwrap().clone());
-        let res = srv.call(10, &()).await;
+        let srv = Pipeline::new::<()>(factory.create(&()).await.unwrap().clone());
+        let res = srv.call(10).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
         let _ = format!("{factory:?} {srv:?}");
 
-        assert_eq!(srv.ready(&()).await, Ok(()));
+        assert_eq!(srv.ready().await, Ok(()));
         srv.shutdown().await;
         assert_eq!(cnt_sht.get(), 2);
 
         let factory =
-            crate::chain_factory(fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }))
+            chain_factory(fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }))
                 .apply(Rc::new(Mw(Rc::new(Cell::new(0))).clone()))
                 .clone();
 
-        let srv = Pipeline::new(factory.create(&()).await.unwrap().clone());
-        let res = srv.call(10, &()).await;
+        let srv = Pipeline::new::<()>(factory.create(&()).await.unwrap().clone());
+        let res = srv.call(10).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
         let _ = format!("{factory:?} {srv:?}");
 
-        assert_eq!(srv.ready(&()).await, Ok(()));
+        assert_eq!(srv.ready().await, Ok(()));
     }
 
     #[ntex::test]
     async fn middleware_apply() {
         let cnt_sht = Rc::new(Cell::new(0));
         let factory = Mw(cnt_sht.clone())
-            .apply(fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }))
+            .apply(fn_service(async |i: usize| Ok::<_, ()>(i * 2)))
             .boxed();
 
-        let srv = factory.pipeline(&()).await.unwrap();
-        let res = srv.call(10, &()).await;
+        let srv = factory.pipeline::<()>(&()).await.unwrap();
+        let res = srv.call(10).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
         let _ = format!("{factory:?} {srv:?}");
 
-        assert_eq!(srv.ready(&()).await, Ok(()));
+        assert_eq!(srv.ready().await, Ok(()));
         srv.shutdown().await;
         assert_eq!(cnt_sht.get(), 2);
     }
@@ -358,17 +358,16 @@ mod tests {
     #[ntex::test]
     async fn middleware_chain() {
         let cnt_sht = Rc::new(Cell::new(0));
-        let factory =
-            crate::chain_factory(fn_service(async move |i: usize| Ok::<_, ()>(i * 2)))
-                .apply(Mw(cnt_sht.clone()).clone());
+        let factory = chain_factory(fn_service(async move |i: usize| Ok::<_, ()>(i * 2)))
+            .apply(Mw(cnt_sht.clone()).clone());
 
-        let srv = Pipeline::new(factory.create(&()).await.unwrap().clone());
-        let res = srv.call(10, &()).await;
+        let srv = Pipeline::new::<()>(factory.create(&()).await.unwrap().clone());
+        let res = srv.call(10).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
         let _ = format!("{factory:?} {srv:?}");
 
-        assert_eq!(srv.ready(&()).await, Ok(()));
+        assert_eq!(srv.ready().await, Ok(()));
         srv.shutdown().await;
         assert_eq!(cnt_sht.get(), 2);
     }
@@ -379,15 +378,15 @@ mod tests {
         let mw = Stack::new(Identity, Mw(cnt_sht.clone()));
         let _ = format!("{mw:?}");
 
-        let pl = Pipeline::new(Middleware::create(
+        let pl = Pipeline::new::<()>(Middleware::create(
             &mw,
             fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }),
             &(),
         ));
-        let res = pl.call(10, &()).await;
+        let res = pl.call(10).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
-        assert_eq!(pl.ready(&()).await, Ok(()));
+        assert_eq!(pl.ready().await, Ok(()));
         pl.shutdown().await;
         assert_eq!(cnt_sht.get(), 2);
     }
@@ -404,16 +403,16 @@ mod tests {
         .clone();
         let _ = format!("{mw:?}");
 
-        let svc = Pipeline::new(
+        let svc = Pipeline::new::<()>(
             mw.create(fn_service(async move |i: usize| Ok::<_, ()>(i * 2)), &()),
         );
 
-        let res = svc.call("test", &()).await;
+        let res = svc.call("test").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("test", 2));
         let _ = format!("{svc:?}");
 
-        assert_eq!(svc.ready(&()).await, Ok(()));
+        assert_eq!(svc.ready().await, Ok(()));
         svc.shutdown().await;
         assert_eq!(cnt_sht.get(), 1);
     }

@@ -137,7 +137,7 @@ mod tests {
     #[ntex::test]
     async fn test_openssl_connect() {
         let server = ntex::server::test_server(async || {
-            ntex::service::fn_service(|_| async { Ok::<_, ()>(()) })
+            ntex::service::fn_service(async |_| Ok::<_, ()>(()))
         });
 
         let ssl = OpensslConnector::builder(SslMethod::tls()).unwrap();
@@ -147,9 +147,9 @@ mod tests {
 
         let srv = factory.pipeline(&SharedCfg::default()).await.unwrap();
         // always ready
-        assert!(srv.ready(&()).await.is_ok());
+        assert!(srv.ready().await.is_ok());
         let result = srv
-            .call(Connect::new("").set_addr(Some(server.addr())), &())
+            .call(Connect::new("").set_addr(Some(server.addr())))
             .await;
         assert!(result.is_err());
         assert!(format!("{srv:?}").contains("SslConnector"));

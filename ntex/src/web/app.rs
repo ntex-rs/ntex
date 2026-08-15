@@ -591,11 +591,11 @@ mod tests {
             .await
             .unwrap();
         let req = TestRequest::with_uri("/test").to_request();
-        let resp = srv.call(req, &()).await.unwrap();
+        let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let req = TestRequest::with_uri("/blah").to_request();
-        let resp = srv.call(req, &()).await.unwrap();
+        let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
         let srv = App::new()
@@ -616,17 +616,17 @@ mod tests {
             .unwrap();
 
         let req = TestRequest::with_uri("/blah").to_request();
-        let resp = srv.call(req, &()).await.unwrap();
+        let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
 
         let req = TestRequest::with_uri("/test2").to_request();
-        let resp = srv.call(req, &()).await.unwrap();
+        let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let req = TestRequest::with_uri("/test2")
             .method(Method::POST)
             .to_request();
-        let resp = srv.call(req, &()).await.unwrap();
+        let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
@@ -642,7 +642,7 @@ mod tests {
         )
         .await;
         let req = TestRequest::default().to_request();
-        let resp = srv.call(req, &()).await.unwrap();
+        let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let srv = init_service(
@@ -655,7 +655,7 @@ mod tests {
         )
         .await;
         let req = TestRequest::default().to_request();
-        let res = srv.call(req, &()).await.unwrap();
+        let res = srv.call(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -675,7 +675,7 @@ mod tests {
         )
         .await;
         let req = TestRequest::default().to_request();
-        let resp = srv.call(req, &()).await.unwrap();
+        let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 

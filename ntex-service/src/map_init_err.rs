@@ -71,7 +71,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::{ServiceFactory, chain_factory, fn_factory_with_config, ustate_chain};
+    use crate::{ServiceFactory, chain_factory, fn_factory_with_config, fn_service};
 
     #[ntex::test]
     async fn map_init_err() {
@@ -79,14 +79,14 @@ mod tests {
             if *err {
                 Err(())
             } else {
-                Ok(ustate_chain(async |i: usize| Ok::<_, ()>(i * 2)))
+                Ok(fn_service(async |i: usize| Ok::<_, ()>(i * 2)))
             }
         }))
         .map_init_err(|()| std::io::Error::other("err"))
         .clone();
 
-        assert!(factory.create(&true).await.is_err());
-        assert!(factory.create(&false).await.is_ok());
+        assert!(factory.pipeline::<()>(&true).await.is_err());
+        assert!(factory.pipeline::<()>(&false).await.is_ok());
         let _ = format!("{factory:?}");
     }
 
@@ -96,14 +96,14 @@ mod tests {
             if *err {
                 Err(())
             } else {
-                Ok(ustate_chain(async |i: usize| Ok::<_, ()>(i * 2)))
+                Ok(fn_service(async |i: usize| Ok::<_, ()>(i * 2)))
             }
         })
         .map_init_err(|()| std::io::Error::other("err"))
         .clone();
 
-        assert!(factory.create(&true).await.is_err());
-        assert!(factory.create(&false).await.is_ok());
+        assert!(factory.pipeline::<()>(&true).await.is_err());
+        assert!(factory.pipeline::<()>(&false).await.is_ok());
         let _ = format!("{factory:?}");
     }
 }

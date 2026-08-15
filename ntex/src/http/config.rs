@@ -1,5 +1,6 @@
 use std::{cell::Cell, time};
 
+use crate::service::Service;
 use crate::service::cfg::{Cfg, CfgContext, Configuration};
 use crate::time::{Millis, Seconds, sleep};
 use crate::{io::cfg::FrameReadRate, service::Pipeline, util::BytePages, util::BytesMut};
@@ -248,7 +249,7 @@ bitflags::bitflags! {
     }
 }
 
-pub(super) struct DispatcherConfig<S, C> {
+pub(super) struct DispatcherConfig<S: Service, C: Service> {
     flags: Cell<Flags>,
     pub(super) idx: Cell<usize>,
     pub(super) config: Cfg<HttpServiceConfig>,
@@ -256,8 +257,12 @@ pub(super) struct DispatcherConfig<S, C> {
     pub(super) control: Pipeline<C>,
 }
 
-impl<S, C> DispatcherConfig<S, C> {
-    pub(super) fn new(config: Cfg<HttpServiceConfig>, service: S, control: C) -> Self {
+impl<S: Service, C: Service> DispatcherConfig<S, C> {
+    pub(super) fn new(config: Cfg<HttpServiceConfig>, service: S, control: C) -> Self
+    where
+        S::St: Default,
+        C::St: Default,
+    {
         DispatcherConfig {
             idx: Cell::new(0),
             service: Pipeline::new(service),

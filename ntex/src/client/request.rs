@@ -6,11 +6,10 @@ use coo_kie::{Cookie, CookieJar};
 use serde::Serialize;
 
 use crate::error::Error;
-use crate::http::body::Body;
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
-use crate::http::{ConnectionType, Method, Uri, Version};
-use crate::{Pipeline, time::Millis, util::Bytes, util::Stream};
+use crate::http::{ConnectionType, Method, Uri, Version, body::Body};
+use crate::{PipelineBinding, time::Millis, util::Bytes, util::Stream};
 
 use super::error::{ClientError, InvalidUrl};
 use super::{BoxedSender, ClientConfig, ClientResponse, ServiceRequest};
@@ -40,7 +39,7 @@ use super::{BoxedSender, ClientConfig, ClientResponse, ServiceRequest};
 /// ```
 pub struct ClientRequest {
     request: ServiceRequest,
-    svc: Pipeline<BoxedSender>,
+    svc: PipelineBinding<BoxedSender>,
     err: Option<HttpError>,
     cfg: ClientConfig,
     #[cfg(feature = "cookie")]
@@ -53,7 +52,7 @@ impl ClientRequest {
         method: Method,
         uri: U,
         cfg: ClientConfig,
-        svc: Pipeline<BoxedSender>,
+        svc: PipelineBinding<BoxedSender>,
     ) -> Self
     where
         Uri: TryFrom<U>,
@@ -400,7 +399,7 @@ impl ClientRequest {
     {
         self.prep_for_sending()?;
         *self.request.body() = body.into();
-        self.svc.call(self.request, &()).await.map(Into::into)
+        self.svc.call(self.request).await.map(Into::into)
     }
 
     /// Set a JSON body and generate `ClientRequest`.
@@ -410,7 +409,7 @@ impl ClientRequest {
     ) -> Result<ClientResponse, Error<ClientError>> {
         self.prep_for_sending()?;
         self.request.set_json(value)?;
-        self.svc.call(self.request, &()).await.map(Into::into)
+        self.svc.call(self.request).await.map(Into::into)
     }
 
     /// Set a urlencoded body and generate `ClientRequest`.
@@ -422,7 +421,7 @@ impl ClientRequest {
     ) -> Result<ClientResponse, Error<ClientError>> {
         self.prep_for_sending()?;
         self.request.set_form(value)?;
-        self.svc.call(self.request, &()).await.map(Into::into)
+        self.svc.call(self.request).await.map(Into::into)
     }
 
     /// Set an streaming body and generate `ClientRequest`.
@@ -436,13 +435,13 @@ impl ClientRequest {
     {
         self.prep_for_sending()?;
         self.request.set_stream(stream);
-        self.svc.call(self.request, &()).await.map(Into::into)
+        self.svc.call(self.request).await.map(Into::into)
     }
 
     /// Set an empty body and generate `ClientRequest`.
     pub async fn send(mut self) -> Result<ClientResponse, Error<ClientError>> {
         self.prep_for_sending()?;
-        self.svc.call(self.request, &()).await.map(Into::into)
+        self.svc.call(self.request).await.map(Into::into)
     }
 
     #[allow(unused_mut)]

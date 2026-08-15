@@ -64,7 +64,7 @@ async fn test_openssl_string() {
         .await
         .unwrap();
     let addr = format!("127.0.0.1:{}", srv.addr().port());
-    let io = conn.call(addr.into(), &()).await.unwrap();
+    let io = conn.call(addr.into()).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
     assert_eq!(
         io.query::<HttpProtocol>().get().unwrap(),
@@ -85,7 +85,7 @@ async fn test_openssl_string() {
         use ntex::error::ErrorDiagnostic;
 
         let addr = "127.0.0.1".to_string();
-        let err = conn.call(addr.into(), &()).await.err().unwrap();
+        let err = conn.call(addr.into()).await.err().unwrap();
         err.backtrace().unwrap().resolver().resolve();
         assert!(
             format!("{:?}", err.debug()).contains("ntex_net::connect::service::connect::"),
@@ -125,7 +125,7 @@ async fn test_openssl_read_before_error() {
             .unwrap(),
     );
     let addr = format!("127.0.0.1:{}", srv.addr().port());
-    let io = conn.call(addr.into(), &()).await.unwrap();
+    let io = conn.call(addr.into()).await.unwrap();
     let item = io.recv(&Rc::new(BytesCodec)).await.unwrap().unwrap();
     assert_eq!(item, Bytes::from_static(b"test"));
 
@@ -163,7 +163,7 @@ async fn test_schannel_string() {
             .unwrap(),
     );
     let addr = format!("localhost:{}", srv.addr().port());
-    let io = conn.call(addr.into(), &()).await.unwrap();
+    let io = conn.call(addr.into()).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
     assert_eq!(
         io.query::<HttpProtocol>().get().unwrap(),
@@ -219,7 +219,7 @@ async fn test_rustls_string() {
     );
     let addr = format!("localhost:{}", srv.addr().port());
 
-    let io = conn.call(addr.into(), &()).await.unwrap();
+    let io = conn.call(addr.into()).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
     assert_eq!(
         io.query::<HttpProtocol>().get().unwrap(),
@@ -485,17 +485,14 @@ async fn test_static_str() {
     });
 
     // original
-    let conn = Pipeline::new(ntex::connect::ConnectorService::new());
+    let conn = Pipeline::new::<()>(ntex::connect::ConnectorService::new());
 
-    let io = conn
-        .call(Connect::with("10", srv.addr()), &())
-        .await
-        .unwrap();
+    let io = conn.call(Connect::with("10", srv.addr())).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 
     let connect = Connect::new("127.0.0.1".to_owned());
-    let conn = Pipeline::new(ntex::connect::ConnectorService::new());
-    let io = conn.call(connect, &()).await;
+    let conn = Pipeline::new::<()>(ntex::connect::ConnectorService::new());
+    let io = conn.call(connect).await;
     assert!(io.is_err());
 }
 
@@ -512,11 +509,8 @@ async fn test_create() {
     time::sleep(time::Millis(100)).await;
 
     let factory = ntex::connect::Connector::new();
-    let conn = factory.pipeline(&SharedCfg::default()).await.unwrap();
-    let io = conn
-        .call(Connect::with("10", srv.addr()), &())
-        .await
-        .unwrap();
+    let conn = factory.pipeline::<()>(&SharedCfg::default()).await.unwrap();
+    let io = conn.call(Connect::with("10", srv.addr())).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }
 
@@ -536,7 +530,7 @@ async fn test_uri() {
     let addr =
         ntex::http::Uri::try_from(format!("https://localhost:{}", srv.addr().port()))
             .unwrap();
-    let io = conn.call(addr.into(), &()).await.unwrap();
+    let io = conn.call(addr.into()).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }
 
@@ -565,7 +559,7 @@ async fn test_rustls_uri() {
     let addr =
         ntex::http::Uri::try_from(format!("https://localhost:{}", srv.addr().port()))
             .unwrap();
-    let io = conn.call(addr.into(), &()).await.unwrap();
+    let io = conn.call(addr.into()).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }
 

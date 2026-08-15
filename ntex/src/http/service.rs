@@ -313,7 +313,7 @@ where
 /// `Service` implementation for http transport
 #[derive(derive_more::Debug)]
 #[debug("HttpServiceHandler")]
-pub struct HttpServiceHandler<F, S, B, C1, C2> {
+pub struct HttpServiceHandler<F, S: Service, B, C1: Service, C2> {
     cfg: SharedCfg,
     config: Rc<DispatcherConfig<S, C1>>,
     h2_control: Rc<C2>,
@@ -329,9 +329,11 @@ where
     S: Service<St = (), Req = Request> + 'static,
     S::Res: Into<Response<B>>,
     S::Error: ResponseError,
+    S::St: Default,
     B: MessageBody,
     C1: Service<St = (), Req = h1::Control<F, S::Error>, Res = h1::ControlAck<F>> + 'static,
     C1::Error: error::Error,
+    C1::St: Default,
     C2: ServiceFactory<
             h2::Control<H2Error>,
             St = (),
@@ -349,7 +351,7 @@ where
     async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
         let cfg = self.config.as_ref();
 
-        let (ready1, ready2) = join(cfg.control.ready(&()), cfg.service.ready(&())).await;
+        let (ready1, ready2) = join(cfg.control.ready(), cfg.service.ready()).await;
         ready1.map_err(|e| {
             log::error!("Http control service readiness error: {e:?}");
             DispatchError::Control(Rc::new(e))

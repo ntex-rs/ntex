@@ -181,7 +181,7 @@ mod tests {
     async fn test_ready() {
         let cnt_sht = Rc::new(Cell::new(0));
         let srv = Pipeline::new(Srv(true, cnt_sht.clone()).map_err(|()| "error"));
-        let res = srv.ready(&()).await;
+        let res = srv.ready().await;
         assert_eq!(res, Err("error"));
 
         srv.shutdown().await;
@@ -195,7 +195,7 @@ mod tests {
                 .map_err(|()| "error")
                 .clone(),
         );
-        let res = srv.call((), &()).await;
+        let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");
 
@@ -209,7 +209,7 @@ mod tests {
                 .map_err(|()| "error")
                 .clone(),
         );
-        let res = srv.call((), &()).await;
+        let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");
 
@@ -223,7 +223,7 @@ mod tests {
                 .map_err(|()| "error")
                 .clone();
         let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
-        let res = srv.call((), &()).await;
+        let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");
         let _ = format!("{new_srv:?}");
@@ -237,7 +237,7 @@ mod tests {
         .map_err(|()| "error")
         .clone();
         let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
-        let res = srv.call((), &()).await;
+        let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");
         let _ = format!("{new_srv:?}");

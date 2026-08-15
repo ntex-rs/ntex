@@ -1,6 +1,6 @@
 use std::{cell::Cell, task::Poll, task::Waker};
 
-use ntex_service::{ServiceFactory, chain_factory, fn_service};
+use ntex_service::{IntoServiceFactory, ServiceFactory, chain_factory};
 use ntex_util::task::LocalWaker;
 
 use crate::{Filter, Io, IoBoxed, IoCallbacks};
@@ -16,7 +16,7 @@ pub struct Decoded<T> {
 
 /// Service that converts any `Io<F>` stream to `IoBoxed` stream
 pub fn seal<F, Sf>(
-    sf: Sf,
+    f: impl IntoServiceFactory<Sf, IoBoxed>,
 ) -> impl ServiceFactory<
     Io<F>,
     St = Sf::St,
@@ -29,9 +29,9 @@ where
     F: Filter,
     Sf: ServiceFactory<IoBoxed>,
 {
-    chain_factory(fn_service(async |io: Io<F>| Ok(io.boxed())))
+    chain_factory(async |io: Io<F>| Ok(io.boxed()))
         .map_init_err(|()| unreachable!())
-        .and_then(sf)
+        .and_then(f.into_factory())
 }
 
 pub(crate) struct Extensions(Cell<Option<Box<ExtensionsInner>>>);
@@ -140,18 +140,18 @@ mod tests {
         client.remote_buffer_cap(1024);
         client.write("REQ");
 
-        let svc = seal(fn_service(|io: IoBoxed| async move {
+        let svc = seal(|io: IoBoxed| async move {
             let t = io.recv(&BytesCodec).await.unwrap().unwrap();
             assert_eq!(t, b"REQ".as_ref());
             io.send(Bytes::from_static(b"RES"), &BytesCodec)
                 .await
                 .unwrap();
             Ok::<_, ()>(())
-        }))
-        .pipeline(&())
+        })
+        .pipeline::<()>(&())
         .await
         .unwrap();
-        let _ = svc.call(Io::new(server, SharedCfg::default()), &()).await;
+        let _ = svc.call(Io::new(server, SharedCfg::default())).await;
 
         let buf = client.read().await.unwrap();
         assert_eq!(buf, b"RES".as_ref());

@@ -146,7 +146,7 @@ mod tests {
             .clone()
             .and_then(crate::boxed::service(Srv2(cnt.clone(), cnt_sht.clone())))
             .into_pipeline();
-        let res = srv.ready(&()).await;
+        let res = srv.ready().await;
         assert_eq!(res, Ok(()));
         assert_eq!(cnt.get(), 2);
 
@@ -164,7 +164,7 @@ mod tests {
                 .and_then(Srv2(cnt.clone(), Rc::new(Cell::new(0)))),
         )
         .into_pipeline();
-        let res = srv.ready(&()).await;
+        let res = srv.ready().await;
         assert_eq!(res, Ok(()));
         assert_eq!(cnt.get(), 2);
     }
@@ -175,7 +175,7 @@ mod tests {
         let srv = chain(Box::new(Srv1(cnt.clone(), Rc::new(Cell::new(0)))))
             .and_then(Srv2(cnt, Rc::new(Cell::new(0))))
             .into_pipeline();
-        let res = srv.call("srv1", &()).await;
+        let res = srv.call("srv1").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "srv2"));
     }
@@ -195,7 +195,7 @@ mod tests {
         .clone();
 
         let srv = new_srv.pipeline(&()).await.unwrap();
-        let res = srv.call("srv1", &()).await;
+        let res = srv.call("srv1").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "srv2"));
     }

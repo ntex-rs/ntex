@@ -368,65 +368,62 @@ mod tests {
     use std::task::Poll;
 
     use super::*;
-    use crate::{Pipeline, ustate_chain, ustate_chain_factory};
+    use crate::Pipeline;
 
     #[ntex::test]
     async fn test_fn_service() {
-        let new_srv =
-            ustate_chain_factory(fn_service(async |()| Ok::<_, ()>("srv")).clone());
+        let new_srv = fn_service(async |()| Ok::<_, ()>("srv")).clone();
         let _ = format!("{new_srv:?}");
 
-        let srv = Pipeline::new(new_srv.create(&()).await.unwrap()).bind();
+        let srv = Pipeline::new::<()>(new_srv.create(&()).await.unwrap());
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
         let _ = format!("{srv:?}");
 
-        let new_srv = ustate_chain(fn_service(async |()| Ok::<_, ()>("srv")));
-        let srv2 = Pipeline::new(new_srv.clone()).bind();
-        let res = srv2.call(()).await;
+        let new_srv = fn_service(async |()| Ok::<_, ()>("srv"));
+        let srv = Pipeline::new::<()>(new_srv.clone());
+        let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
-        let _ = format!("{srv2:?}");
+        let _ = format!("{srv:?}");
 
-        assert_eq!(lazy(|cx| srv2.poll_shutdown(cx)).await, Poll::Ready(()));
+        assert_eq!(lazy(|cx| srv.poll_shutdown(cx)).await, Poll::Ready(()));
     }
 
     #[ntex::test]
     async fn test_fn_service_comp() {
-        let new_srv =
-            ustate_chain_factory(fn_service(async |()| Ok::<_, ()>("srv"))).clone();
+        let new_srv = fn_service(async |()| Ok::<_, ()>("srv")).clone();
         let _ = format!("{new_srv:?}");
 
-        let srv = Pipeline::new(new_srv.create(&()).await.unwrap()).bind();
+        let srv = Pipeline::new::<()>(new_srv.create(&()).await.unwrap());
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
         let _ = format!("{srv:?}");
 
-        let new_srv = ustate_chain(fn_service(async |()| Ok::<_, ()>("srv"))).clone();
-        let srv2 = Pipeline::new(new_srv.clone()).bind();
-        let res = srv2.call(()).await;
+        let new_srv = fn_service(async |()| Ok::<_, ()>("srv")).clone();
+        let srv = Pipeline::new::<()>(new_srv.clone());
+        let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
-        let _ = format!("{srv2:?}");
+        let _ = format!("{srv:?}");
 
-        assert_eq!(lazy(|cx| srv2.poll_shutdown(cx)).await, Poll::Ready(()));
+        assert_eq!(lazy(|cx| srv.poll_shutdown(cx)).await, Poll::Ready(()));
     }
 
     #[ntex::test]
     async fn test_fn_service_service() {
-        let srv = Pipeline::new(
-            ustate_chain_factory(fn_service(async |()| Ok::<_, ()>("srv")))
+        let srv = Pipeline::new::<()>(
+            fn_service(async |()| Ok::<_, ()>("srv"))
                 .clone()
                 .create(&())
                 .await
                 .unwrap()
                 .clone(),
-        )
-        .bind();
+        );
 
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
@@ -439,13 +436,11 @@ mod tests {
     async fn test_fn_service_with_config() {
         let new_srv = fn_factory_with_config(async move |cfg: &usize| {
             let cfg = *cfg;
-            Ok::<_, ()>(ustate_chain(fn_service(async move |()| {
-                Ok::<_, ()>(("srv", cfg))
-            })))
+            Ok::<_, ()>(fn_service(async move |()| Ok::<_, ()>(("srv", cfg))))
         })
         .clone();
 
-        let srv = Pipeline::new(new_srv.create(&1).await.unwrap()).bind();
+        let srv = Pipeline::new::<()>(new_srv.create(&1).await.unwrap());
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());

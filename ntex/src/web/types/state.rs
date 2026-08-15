@@ -115,7 +115,7 @@ mod tests {
         .await;
 
         let req = TestRequest::default().to_request();
-        let resp = srv.call(req, &()).await.unwrap();
+        let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let srv = init_service(
@@ -126,7 +126,7 @@ mod tests {
         )
         .await;
         let req = TestRequest::default().to_request();
-        let res = srv.call(req, &()).await.unwrap();
+        let res = srv.call(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -191,7 +191,7 @@ mod tests {
             .await;
 
         let req = TestRequest::default().to_request();
-        let resp = srv.call(req, &()).await.unwrap();
+        let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         // different type
@@ -200,7 +200,7 @@ mod tests {
         )))
         .await;
         let req = TestRequest::default().to_request();
-        let res = srv.call(req, &()).await.unwrap();
+        let res = srv.call(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -218,7 +218,7 @@ mod tests {
         .await;
 
         let req = TestRequest::default().to_request();
-        let resp = srv.call(req, &()).await.unwrap();
+        let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 }

@@ -6,7 +6,7 @@ use std::{cell::Cell, fmt, future::Future, io, pin::Pin, rc::Rc};
 
 use ntex_codec::{Decoder, Encoder};
 use ntex_io::{Decoded, IoBoxed, IoStatusUpdate, RecvError};
-use ntex_service::{PipelineBinding, PipelineCall, Service};
+use ntex_service::{Pipeline, PipelineCall, Service};
 use ntex_util::{future::Either, spawn, time::Seconds};
 
 type Response<U> = <U as Encoder>::Item;
@@ -47,14 +47,14 @@ pub enum Reason<U: Encoder + Decoder> {
 pin_project_lite::pin_project! {
     /// Dispatcher - is a future that reads frames from bytes stream
     /// and pass them to the service.
-    pub struct Dispatcher<S, St, U>
+    pub struct Dispatcher<S, U>
     where
-        S: Service<St = St, Req = DispatchItem<U>, Res = Option<Response<U>>>,
+        S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>>,
         U: Encoder,
         U: Decoder,
         U: 'static,
     {
-        inner: DispatcherInner<S, St, U>,
+        inner: DispatcherInner<S, U>,
     }
 }
 
@@ -70,28 +70,28 @@ bitflags::bitflags! {
     }
 }
 
-struct DispatcherInner<S, St, U>
+struct DispatcherInner<S, U>
 where
-    S: Service<St = St, Req = DispatchItem<U>, Res = Option<Response<U>>>,
+    S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>>,
     U: Encoder + Decoder + 'static,
 {
     st: DispatcherState,
     error: Option<S::Error>,
-    shared: Rc<DispatcherShared<S, St, U>>,
+    shared: Rc<DispatcherShared<S, U>>,
     response: Option<PipelineCall<S>>,
     read_remains: u32,
     read_remains_prev: u32,
     read_max_timeout: Seconds,
 }
 
-pub(crate) struct DispatcherShared<S, St, U>
+pub(crate) struct DispatcherShared<S, U>
 where
-    S: Service<St = St, Req = DispatchItem<U>, Res = Option<Response<U>>>,
+    S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>>,
     U: Encoder + Decoder,
 {
     io: IoBoxed,
     codec: U,
-    service: PipelineBinding<S>,
+    service: Pipeline<S>,
     flags: Cell<Flags>,
     error: Cell<Option<DispatcherError<S::Error, <U as Encoder>::Error>>>,
     inflight: Cell<u32>,
@@ -127,13 +127,13 @@ impl<S, U> From<Either<S, U>> for DispatcherError<S, U> {
     }
 }
 
-impl<S, St, U> Dispatcher<S, St, U>
+impl<S, U> Dispatcher<S, U>
 where
-    S: Service<St = St, Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
+    S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
     U: Decoder + Encoder + 'static,
 {
     /// Construct new `Dispatcher` instance.
-    pub fn new<Io>(io: Io, codec: U, service: PipelineBinding<S>) -> Dispatcher<S, St, U>
+    pub fn new<Io>(io: Io, codec: U, service: Pipeline<S>) -> Dispatcher<S, U>
     where
         IoBoxed: From<Io>,
     {
@@ -167,9 +167,9 @@ where
     }
 }
 
-impl<S, St, U> DispatcherShared<S, St, U>
+impl<S, U> DispatcherShared<S, U>
 where
-    S: Service<St = St, Req = DispatchItem<U>, Res = Option<Response<U>>>,
+    S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>>,
     U: Encoder + Decoder,
 {
     fn handle_result(&self, item: Result<S::Res, S::Error>, io: &IoBoxed, wake: bool) {
@@ -214,10 +214,9 @@ where
     }
 }
 
-impl<S, St, U> Future for Dispatcher<S, St, U>
+impl<S, U> Future for Dispatcher<S, U>
 where
-    St: 'static,
-    S: Service<St = St, Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
+    S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
     U: Decoder + Encoder + 'static,
 {
     type Output = Result<(), S::Error>;
@@ -375,17 +374,16 @@ where
     }
 }
 
-impl<S, St, U> DispatcherInner<S, St, U>
+impl<S, U> DispatcherInner<S, U>
 where
-    S: Service<St = St, Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
-    St: 'static,
+    S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
     U: Decoder + Encoder + 'static,
 {
     fn call_service(&mut self, cx: &mut Context<'_>, item: DispatchItem<U>, nowait: bool) {
         let mut fut = if nowait {
             self.shared.service.call_nowait(item)
         } else {
-            self.shared.service.call(item)
+            self.shared.service.call_static(item)
         };
         let inflight = self.shared.inflight.get() + 1;
         self.shared.inflight.set(inflight);
@@ -684,7 +682,7 @@ mod tests {
         }
     }
 
-    impl<S, U> Dispatcher<S, (), U>
+    impl<S, U> Dispatcher<S, U>
     where
         S: Service<St = (), Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
         U: Decoder + Encoder + 'static,
@@ -706,7 +704,7 @@ mod tests {
                 flags: Cell::new(flags),
                 error: Cell::new(None),
                 inflight: Cell::new(0),
-                service: Pipeline::new(service).bind(),
+                service: Pipeline::new(service),
             });
 
             (

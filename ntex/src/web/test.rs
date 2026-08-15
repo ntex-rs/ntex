@@ -122,7 +122,7 @@ where
     S: Service<St = (), Req = R, Res = WebResponse, Error = E>,
     E: fmt::Debug,
 {
-    app.call(req, &()).await.unwrap()
+    app.call(req).await.unwrap()
 }
 
 /// Helper function that returns a response body of a `TestRequest`
@@ -155,7 +155,7 @@ where
     S: Service<St = (), Req = Request, Res = WebResponse>,
 {
     let mut resp = app
-        .call(req, &())
+        .call(req)
         .await
         .unwrap_or_else(|_| panic!("read_response failed at application call"));
 
@@ -1244,7 +1244,7 @@ mod tests {
         .await;
 
         let req = TestRequest::post().uri("/index.html").to_request();
-        let res = app.call(req, &()).await.unwrap();
+        let res = app.call(req).await.unwrap();
         assert!(res.status().is_success());
     }
 
@@ -1261,7 +1261,7 @@ mod tests {
         .await;
 
         let req = TestRequest::post().uri("/index.html").to_request();
-        let res = app.call(req, &()).await.unwrap();
+        let res = app.call(req).await.unwrap();
         assert!(res.status().is_success());
     }
 

@@ -304,8 +304,7 @@ mod tests {
                 .create(&SharedCfg::default())
                 .await
                 .unwrap(),
-        )
-        .bind();
+        );
         assert!(lazy(|cx| conn.poll_ready(cx).is_ready()).await);
         assert!(lazy(|cx| conn.poll_shutdown(cx).is_ready()).await);
     }

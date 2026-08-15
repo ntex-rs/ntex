@@ -300,15 +300,15 @@ mod tests {
             .v3(fn_factory(|| async { Ok::<_, ()>(Srv2) }))
             .clone();
 
-        let service = factory.pipeline(&()).await.unwrap().clone();
+        let service = factory.pipeline(&()).await.unwrap();
         assert!(format!("{service:?}").contains("Variant"));
 
-        assert!(service.ready(&()).await.is_ok());
+        assert!(service.ready().await.is_ok());
         service.shutdown().await;
 
-        assert_eq!(service.call(Variant3::V1(()), &()).await, Ok(1));
-        assert_eq!(service.call(Variant3::V2(()), &()).await, Ok(2));
-        assert_eq!(service.call(Variant3::V3(()), &()).await, Ok(2));
+        assert_eq!(service.call(Variant3::V1(())).await, Ok(1));
+        assert_eq!(service.call(Variant3::V2(())).await, Ok(2));
+        assert_eq!(service.call(Variant3::V3(())).await, Ok(2));
     }
 
     #[ntex::test]
@@ -342,8 +342,8 @@ mod tests {
         let service = factory.clone().create(&()).await.unwrap().clone();
         assert!(format!("{service:?}").contains("Variant"));
 
-        let service = factory.pipeline(&()).await.unwrap().clone();
-        assert!(service.ready(&()).await.is_ok());
+        let service = factory.pipeline(&()).await.unwrap();
+        assert!(service.ready().await.is_ok());
         assert!(format!("{service:?}").contains("Variant"));
     }
 }
