@@ -84,6 +84,8 @@ impl WaitersRef {
     where
         F: FnOnce(&mut Context<'_>) -> Poll<R>,
     {
+        self.get()[idx as usize] = Some(cx.waker().clone());
+
         // calculate owner for readiness check
         let cur = self.cur.get();
         let can_check = if cur == idx {
@@ -107,7 +109,6 @@ impl WaitersRef {
             if initial_run {
                 if result.is_pending() {
                     self.get_wakers().push(idx);
-                    self.get()[idx as usize] = Some(cx.waker().clone());
                 } else {
                     self.notify();
                 }
@@ -117,7 +118,6 @@ impl WaitersRef {
         } else {
             // other pipeline ownes readiness check process
             self.get_wakers().push(idx);
-            self.get()[idx as usize] = Some(cx.waker().clone());
             Poll::Pending
         }
     }
@@ -259,6 +259,22 @@ impl<'a, Svc: Service> ReadyCtx<'a, Svc> {
     /// Application state
     pub fn st(&'a self) -> &'a Svc::St {
         self.st
+    }
+
+    #[inline]
+    /// Execute a closure with the dispatcher's task `Context`.
+    pub fn with_context<F, R>(&'a self, f: F) -> R
+    where
+        F: FnOnce(&mut Context<'a>) -> R,
+    {
+        let wakers = self.waiters.get();
+        let mut ctx = if let Some(w) = wakers.get(0).and_then(|w| w.as_ref()) {
+            Context::from_waker(w)
+        } else {
+            Context::from_waker(Waker::noop())
+        };
+
+        f(&mut ctx)
     }
 
     /// Returns when the service is able to process requests.
