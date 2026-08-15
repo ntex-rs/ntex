@@ -230,6 +230,11 @@ mod tests {
             Ok(())
         }
 
+        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), ()> {
+            self.0.set(self.0.get() + 1);
+            Ok(())
+        }
+
         async fn shutdown(&self) {
             self.0.set(self.0.get() + 1);
         }
@@ -280,7 +285,7 @@ mod tests {
         assert_eq!(srv.ready(&()).await, Ok::<_, Err>(()));
 
         srv.shutdown().await;
-        assert_eq!(cnt_sht.get(), 1);
+        assert_eq!(cnt_sht.get(), 2);
 
         let res = srv.call("srv", &()).await;
         assert!(res.is_ok());
