@@ -1,5 +1,4 @@
-#![allow(dead_code)]
-use std::{cell::Cell, convert::Infallible, fmt, marker, time};
+use std::{cell::Cell, convert::Infallible, fmt, marker, task::Poll, time};
 
 use ntex_service::{Ctx, ReadyCtx, Service, ServiceFactory};
 
@@ -82,7 +81,7 @@ where
     F: Fn() -> E,
 {
     f: F,
-    dur: Millis,
+    dur: time::Duration,
     sleep: Sleep,
     expire: Cell<time::Instant>,
     _t: marker::PhantomData<(St, Req, E)>,
@@ -97,9 +96,9 @@ where
 
         KeepAliveService {
             f,
-            dur,
             expire,
             sleep: sleep(dur),
+            dur: time::Duration::from(dur),
             _t: marker::PhantomData,
         }
     }
@@ -127,29 +126,30 @@ where
     type Res = Req;
     type Error = E;
 
-    async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
-        let expire = self.expire.get() + time::Duration::from(self.dur);
-        if expire <= now() { Err((self.f)()) } else { Ok(()) }
+    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+        let expire = self.expire.get() + self.dur;
+        if expire <= now() {
+            Err((self.f)())
+        } else {
+            ctx.with_context(|cx| match self.sleep.poll_elapsed(cx) {
+                Poll::Ready(()) => {
+                    let now = now();
+                    let expire = self.expire.get() + self.dur;
+                    if expire <= now {
+                        Err((self.f)())
+                    } else {
+                        let expire = expire - now;
+                        self.sleep.reset(Millis(
+                            expire.as_millis().try_into().unwrap_or(u32::MAX),
+                        ));
+                        let _ = self.sleep.poll_elapsed(cx);
+                        Ok(())
+                    }
+                }
+                Poll::Pending => Ok(()),
+            })
+        }
     }
-
-    // fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
-    //     match self.sleep.poll_elapsed(cx) {
-    //         Poll::Ready(()) => {
-    //             let now = now();
-    //             let expire = self.expire.get() + time::Duration::from(self.dur);
-    //             if expire <= now {
-    //                 Err((self.f)())
-    //             } else {
-    //                 let expire = expire - now;
-    //                 self.sleep
-    //                     .reset(Millis(expire.as_millis().try_into().unwrap_or(u32::MAX)));
-    //                 let _ = self.sleep.poll_elapsed(cx);
-    //                 Ok(())
-    //             }
-    //         }
-    //         Poll::Pending => Ok(()),
-    //     }
-    // }
 
     #[inline]
     async fn call(&self, req: Req, _: Ctx<'_, Self>) -> Result<Req, E> {
@@ -160,30 +160,59 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::task::Poll;
+    use std::{pin::Pin, task::Context, task::Poll, task::ready};
+
+    use ntex_service::{Pipeline, boxed};
 
     use super::*;
-    use crate::future::lazy;
+    use crate::{channel::oneshot, spawn};
 
     #[derive(Debug, PartialEq)]
     struct TestErr;
 
+    struct Dispatcher {
+        p: Pipeline<boxed::BoxService<(), usize, usize, TestErr>>,
+        tx: Option<oneshot::Sender<()>>,
+    }
+
+    impl Future for Dispatcher {
+        type Output = ();
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            let mut this = self.as_mut();
+
+            if ready!(this.p.poll_ready(cx)).is_err() {
+                if let Some(tx) = this.tx.take() {
+                    let _ = tx.send(());
+                }
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        }
+    }
+
     #[ntex::test]
     async fn test_ka() {
-        let factory = KeepAlive::<_, (), usize, _, _>::new(Millis(100), || TestErr);
+        let factory = KeepAlive::new(Millis(100), || TestErr);
         assert!(format!("{factory:?}").contains("KeepAlive"));
         let _ = factory.clone();
 
-        let service = factory.pipeline(&()).await.unwrap();
-        assert!(format!("{service:?}").contains("KeepAliveService"));
+        let svc = factory.create(&()).await.unwrap();
+        assert!(format!("{svc:?}").contains("KeepAliveService"));
 
-        assert_eq!(service.call(1usize).await, Ok(1usize));
-        assert!(lazy(|cx| service.poll_ready(cx)).await.is_ready());
+        let p = Pipeline::new::<()>(boxed::service(svc));
+        assert_eq!(p.call(1usize).await, Ok(1usize));
+        let svc = p.bind();
 
-        sleep(Millis(500)).await;
-        assert_eq!(
-            lazy(|cx| service.poll_ready(cx)).await,
-            Poll::Ready(Err(TestErr))
-        );
+        let (tx, rx) = oneshot::channel();
+        spawn(Dispatcher { p, tx: Some(tx) }).detach();
+
+        sleep(Millis(50)).await;
+        assert_eq!(svc.call(1usize).await, Ok(1usize));
+
+        let res = rx.await;
+        assert_eq!(res, Ok(()));
+        assert_eq!(svc.ready().await, Err(TestErr));
     }
 }

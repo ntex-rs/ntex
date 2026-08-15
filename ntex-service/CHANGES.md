@@ -4,6 +4,8 @@
 
 * Add shared state management
 
+* Add ReadyCtx::with_context(), service can access dispatcher's task context
+
 * Use config ref for service factory creation
 
 * Remove Service::poll() method
