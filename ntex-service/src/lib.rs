@@ -1,10 +1,11 @@
 //! See [`Service`] docs for information on this crate's foundational trait.
 #![deny(clippy::pedantic)]
 #![allow(
-    clippy::type_complexity,
+    clippy::cast_possible_truncation,
     clippy::missing_fields_in_debug,
     clippy::must_use_candidate,
     clippy::missing_errors_doc,
+    clippy::type_complexity,
     clippy::unused_async,
     clippy::unused_async_trait_impl
 )]

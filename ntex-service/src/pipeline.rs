@@ -346,17 +346,6 @@ impl<S: Service> Drop for PipelineBinding<S> {
     }
 }
 
-impl<S: Service> Clone for PipelineBinding<S> {
-    #[inline]
-    fn clone(&self) -> Self {
-        Self {
-            pl: self.pl.clone(),
-            state: self.state.clone(),
-            st: cell::UnsafeCell::new(State::New),
-        }
-    }
-}
-
 impl<S: Service> Service for PipelineBinding<S> {
     type St = S::St;
     type Req = S::Req;
