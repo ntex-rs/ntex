@@ -181,11 +181,14 @@ mod tests {
         fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
             let mut this = self.as_mut();
 
-            let _ = ready!(this.p.poll_ready(cx));
-            if let Some(tx) = this.tx.take() {
-                let _ = tx.send(());
+            if ready!(this.p.poll_ready(cx)).is_err() {
+                if let Some(tx) = this.tx.take() {
+                    let _ = tx.send(());
+                }
+                Poll::Ready(())
+            } else {
+                Poll::Pending
             }
-            Poll::Ready(())
         }
     }
 
@@ -203,12 +206,13 @@ mod tests {
         let svc = p.bind();
 
         let (tx, rx) = oneshot::channel();
-
         spawn(Dispatcher { p, tx: Some(tx) }).detach();
+
+        sleep(Millis(50)).await;
+        assert_eq!(svc.call(1usize).await, Ok(1usize));
+
         let res = rx.await;
         assert_eq!(res, Ok(()));
-
-        sleep(Millis(100)).await;
         assert_eq!(svc.ready().await, Err(TestErr));
     }
 }
