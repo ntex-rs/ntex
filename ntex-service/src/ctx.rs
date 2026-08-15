@@ -1,4 +1,3 @@
-#![allow(clippy::cast_possible_truncation)]
 use std::task::{Context, Poll, Waker};
 use std::{cell, fmt, future::Future, marker, pin::Pin, rc::Rc};
 
@@ -477,13 +476,15 @@ mod tests {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
 
-        let srv1 = Pipeline::new(Srv(cnt.clone(), con.wait())).bind();
+        let srv1 = Pipeline::new(Srv(cnt.clone(), con.wait()));
         let srv2 = srv1.clone();
 
+        let srv1 = srv1.bind();
         let res = lazy(|cx| srv1.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
         assert_eq!(cnt.get(), 1);
 
+        let srv2 = srv2.bind();
         let res = lazy(|cx| srv2.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
         assert_eq!(cnt.get(), 1);
@@ -544,7 +545,7 @@ mod tests {
         let srv = Pipeline::new(Srv(cnt.clone(), con.wait()));
 
         let srv1 = srv.clone().bind();
-        let srv2 = srv1.clone();
+        let srv2 = srv.clone().bind();
 
         let (tx, rx) = oneshot::channel();
         spawn(async move {
@@ -585,8 +586,9 @@ mod tests {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
 
-        let srv1 = Pipeline::new(Srv(cnt.clone(), con.wait())).bind();
+        let srv1 = Pipeline::new(Srv(cnt.clone(), con.wait()));
         let srv2 = srv1.clone();
+        let srv1 = srv1.bind();
         let _: Pipeline<_> = srv1.pipeline();
 
         let data1 = data.clone();
@@ -598,6 +600,7 @@ mod tests {
             data1.borrow_mut().push(i);
         });
 
+        let srv2 = srv2.bind();
         let data2 = data.clone();
         ntex::rt::spawn(async move {
             let i = srv2.call("srv2").await.unwrap();

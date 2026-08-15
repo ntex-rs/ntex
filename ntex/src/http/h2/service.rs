@@ -1,6 +1,5 @@
-use std::cell::{Cell, RefCell};
 use std::error::Error as StdError;
-use std::{fmt, future::poll_fn, io, marker, mem, rc::Rc, task::Context};
+use std::{cell::Cell, cell::RefCell, fmt, future::poll_fn, io, marker, mem, rc::Rc};
 
 use ntex_h2::{self as h2, frame::StreamId, server};
 
@@ -264,14 +263,6 @@ where
             log::error!("Service readiness error: {e:?}");
             DispatchError::Service(Rc::new(e))
         })
-    }
-
-    #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
-        self.config
-            .service
-            .poll(cx)
-            .map_err(|e| DispatchError::Service(Rc::new(e)))
     }
 
     #[inline]

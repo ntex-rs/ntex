@@ -114,10 +114,6 @@ where
     type Res = Io<Layer<SslFilter>>;
     type Error = Error<ConnectError>;
 
-    ntex_service::forward_ready!(svc);
-    ntex_service::forward_poll!(svc);
-    ntex_service::forward_shutdown!(svc);
-
     async fn call(
         &self,
         message: Connect<A>,
@@ -127,6 +123,9 @@ where
         let io = ctx.call(&self.svc, message).await?;
         self.connect(io, &host).await
     }
+
+    ntex_service::forward_ready!(svc);
+    ntex_service::forward_shutdown!(svc);
 }
 
 #[cfg(test)]

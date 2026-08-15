@@ -1,4 +1,4 @@
-use std::{fmt, sync::Arc, task::Context};
+use std::{fmt, sync::Arc};
 
 use ntex_io::Io;
 use ntex_service::{Ctx, ReadyCtx, Service, ServiceFactory, boxed, cfg::SharedCfg};
@@ -189,14 +189,6 @@ impl Service for StreamServiceImpl {
             }
         }
 
-        Ok(())
-    }
-
-    #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
-        for svc in &self.services {
-            svc.poll(cx)?;
-        }
         Ok(())
     }
 

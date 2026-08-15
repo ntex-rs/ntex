@@ -1,6 +1,4 @@
 //! Either service allows to use different services for handling request
-use std::{fmt, task::Context};
-
 use ntex_service::{Ctx, ReadyCtx, Service, ServiceFactory};
 
 use crate::future::Either;
@@ -34,10 +32,10 @@ impl<ChooseFn, SFLeft, SFRight> EitherServiceFactory<ChooseFn, SFLeft, SFRight> 
     }
 }
 
-impl<ChooseFn, SFLeft, SFRight> fmt::Debug
+impl<ChooseFn, SFLeft, SFRight> std::fmt::Debug
     for EitherServiceFactory<ChooseFn, SFLeft, SFRight>
 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EitherServiceFactory")
             .field("left", &std::any::type_name::<SFLeft>())
             .field("right", &std::any::type_name::<SFRight>())
@@ -103,8 +101,8 @@ impl<SLeft, SRight> EitherService<SLeft, SRight> {
     }
 }
 
-impl<SLeft, SRight> fmt::Debug for EitherService<SLeft, SRight> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl<SLeft, SRight> std::fmt::Debug for EitherService<SLeft, SRight> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EitherService")
             .field("left", &std::any::type_name::<SLeft>())
             .field("right", &std::any::type_name::<SRight>())
@@ -143,14 +141,6 @@ where
         match self.svc {
             Either::Left(ref svc) => svc.shutdown().await,
             Either::Right(ref svc) => svc.shutdown().await,
-        }
-    }
-
-    #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
-        match self.svc {
-            Either::Left(ref svc) => svc.poll(cx),
-            Either::Right(ref svc) => svc.poll(cx),
         }
     }
 }

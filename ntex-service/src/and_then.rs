@@ -39,12 +39,6 @@ where
     }
 
     #[inline]
-    fn poll(&self, cx: &mut std::task::Context<'_>) -> Result<(), Self::Error> {
-        self.svc1.poll(cx)?;
-        self.svc2.poll(cx)
-    }
-
-    #[inline]
     async fn shutdown(&self) {
         util::shutdown(&self.svc1, &self.svc2).await;
     }
@@ -93,10 +87,8 @@ where
 }
 
 #[cfg(test)]
-#[allow(clippy::unused_async_trait_impl)]
 mod tests {
-    use ntex::util::lazy;
-    use std::{cell::Cell, rc::Rc, task::Context};
+    use std::{cell::Cell, rc::Rc};
 
     use crate::{Ctx, ReadyCtx, Service, chain, chain_factory, fn_factory};
 
@@ -110,11 +102,6 @@ mod tests {
         type Error = ();
 
         async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
-            self.0.set(self.0.get() + 1);
-            Ok(())
-        }
-
-        fn poll(&self, _: &mut Context<'_>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }
@@ -142,11 +129,6 @@ mod tests {
             Ok(())
         }
 
-        fn poll(&self, _: &mut Context<'_>) -> Result<(), Self::Error> {
-            self.0.set(self.0.get() + 1);
-            Ok(())
-        }
-
         async fn call(&self, req: &'static str, _: Ctx<'_, Self>) -> Result<Self::Res, ()> {
             Ok((req, "srv2"))
         }
@@ -167,9 +149,6 @@ mod tests {
         let res = srv.ready(&()).await;
         assert_eq!(res, Ok(()));
         assert_eq!(cnt.get(), 2);
-
-        lazy(|cx| srv.clone().poll(cx)).await.unwrap();
-        assert_eq!(cnt.get(), 4);
 
         srv.shutdown().await;
         assert_eq!(cnt_sht.get(), 2);

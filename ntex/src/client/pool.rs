@@ -153,11 +153,6 @@ impl Service for ConnectionPool {
     }
 
     #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
-        self.0.svc.poll(cx)
-    }
-
-    #[inline]
     async fn shutdown(&self) {
         self.0.stop.take();
         self.0.inner.borrow_mut().stopped = true;

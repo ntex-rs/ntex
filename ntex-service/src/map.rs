@@ -64,7 +64,6 @@ where
     type Error = S::Error;
 
     crate::forward_ready!(svc);
-    crate::forward_poll!(svc);
     crate::forward_shutdown!(svc);
 
     #[inline]

@@ -152,12 +152,6 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
             }).await
         }
 
-        fn poll(&self, cx: &mut std::task::Context<'_>) -> Result<(), Self::Error> {
-            self.V1.poll(cx)?;
-            $(self.$T.poll(cx)?;)+
-            Ok(())
-        }
-
         async fn shutdown(&self) {
             self.V1.shutdown().await;
             $(self.$T.shutdown().await;)+
@@ -309,7 +303,6 @@ mod tests {
         let service = factory.pipeline(&()).await.unwrap().clone();
         assert!(format!("{service:?}").contains("Variant"));
 
-        assert!(crate::future::lazy(|cx| service.poll(cx)).await.is_ok());
         assert!(service.ready(&()).await.is_ok());
         service.shutdown().await;
 

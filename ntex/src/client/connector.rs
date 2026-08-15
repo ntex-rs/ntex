@@ -1,4 +1,4 @@
-use std::{error::Error as StdError, task::Context, time::Duration};
+use std::{error::Error as StdError, time::Duration};
 
 use crate::connect::{self, Connect as TcpConnect, Connector as TcpConnector};
 use crate::error::{Error, ErrorMapping, with_service};
@@ -260,15 +260,6 @@ impl Service for ConnectorService {
         } else {
             ctx.ready(&self.tcp_pool).await.into_error()
         }
-    }
-
-    #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
-        self.tcp_pool.poll(cx).into_error()?;
-        if let Some(ref ssl_pool) = self.ssl_pool {
-            ssl_pool.poll(cx).into_error()?;
-        }
-        Ok(())
     }
 
     async fn shutdown(&self) {

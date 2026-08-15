@@ -59,10 +59,6 @@ where
     type Res = S::Res;
     type Error = S::Error;
 
-    ntex_service::forward_poll!(service);
-    ntex_service::forward_shutdown!(service);
-    ntex_service::forward_ready!(service);
-
     async fn call(&self, mut req: S::Req, ctx: Ctx<'_, Self>) -> Result<S::Res, S::Error> {
         let mut policy = self.policy.clone();
         let mut cloned = policy.clone_request(&req);
@@ -82,6 +78,9 @@ where
             }
         }
     }
+
+    ntex_service::forward_ready!(service);
+    ntex_service::forward_shutdown!(service);
 }
 
 #[derive(Copy, Clone, Debug)]

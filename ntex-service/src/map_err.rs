@@ -1,4 +1,4 @@
-use std::{fmt, marker::PhantomData, task::Context};
+use std::{fmt, marker::PhantomData};
 
 use super::{Ctx, ReadyCtx, Service, ServiceFactory};
 
@@ -72,11 +72,6 @@ where
     #[inline]
     async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), E> {
         ctx.ready(&self.svc).await.map_err(&self.f)
-    }
-
-    #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
-        self.svc.poll(cx).map_err(&self.f)
     }
 
     crate::forward_shutdown!(svc);
