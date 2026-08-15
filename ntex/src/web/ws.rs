@@ -172,7 +172,6 @@ where
     type Error = WsError<E>;
 
     crate::forward_ready!(srv);
-    crate::forward_poll!(srv);
     crate::forward_shutdown!(srv);
 
     async fn call(

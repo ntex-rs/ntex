@@ -1,9 +1,8 @@
-use std::future::Future;
-use std::{cell::Cell, convert::Infallible, fmt, marker, task::Context, task::Poll, time};
+#![allow(dead_code)]
+use std::{cell::Cell, convert::Infallible, fmt, marker, time};
 
 use ntex_service::{Ctx, ReadyCtx, Service, ServiceFactory};
 
-use crate::future::Ready;
 use crate::time::{Millis, Sleep, now, sleep};
 
 /// `KeepAlive` service factory
@@ -73,11 +72,8 @@ where
     type InitError = Infallible;
 
     #[inline]
-    fn create(
-        &self,
-        _: &C,
-    ) -> impl Future<Output = Result<Self::Service, Self::InitError>> {
-        Ready::Ok(KeepAliveService::new(self.ka, self.f.clone()))
+    async fn create(&self, _: &C) -> Result<Self::Service, Self::InitError> {
+        Ok(KeepAliveService::new(self.ka, self.f.clone()))
     }
 }
 
@@ -136,24 +132,24 @@ where
         if expire <= now() { Err((self.f)()) } else { Ok(()) }
     }
 
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
-        match self.sleep.poll_elapsed(cx) {
-            Poll::Ready(()) => {
-                let now = now();
-                let expire = self.expire.get() + time::Duration::from(self.dur);
-                if expire <= now {
-                    Err((self.f)())
-                } else {
-                    let expire = expire - now;
-                    self.sleep
-                        .reset(Millis(expire.as_millis().try_into().unwrap_or(u32::MAX)));
-                    let _ = self.sleep.poll_elapsed(cx);
-                    Ok(())
-                }
-            }
-            Poll::Pending => Ok(()),
-        }
-    }
+    // fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
+    //     match self.sleep.poll_elapsed(cx) {
+    //         Poll::Ready(()) => {
+    //             let now = now();
+    //             let expire = self.expire.get() + time::Duration::from(self.dur);
+    //             if expire <= now {
+    //                 Err((self.f)())
+    //             } else {
+    //                 let expire = expire - now;
+    //                 self.sleep
+    //                     .reset(Millis(expire.as_millis().try_into().unwrap_or(u32::MAX)));
+    //                 let _ = self.sleep.poll_elapsed(cx);
+    //                 Ok(())
+    //             }
+    //         }
+    //         Poll::Pending => Ok(()),
+    //     }
+    // }
 
     #[inline]
     async fn call(&self, req: Req, _: Ctx<'_, Self>) -> Result<Req, E> {

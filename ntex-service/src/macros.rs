@@ -17,23 +17,6 @@ macro_rules! forward_ready {
     };
 }
 
-/// An implementation of [`crate::Service::poll`] that forwards poll call to a field.
-#[macro_export]
-macro_rules! forward_poll {
-    ($field:ident) => {
-        #[inline]
-        fn poll(&self, cx: &mut std::task::Context<'_>) -> Result<(), Self::Error> {
-            self.$field.poll(cx).map_err(From::from)
-        }
-    };
-    ($field:ident, $err:expr) => {
-        #[inline]
-        fn poll(&self, cx: &mut std::task::Context<'_>) -> Result<(), Self::Error> {
-            self.$field.poll(cx).map_err($err)
-        }
-    };
-}
-
 /// An implementation of [`crate::Service::shutdown`] that forwards shutdown checks to a field.
 #[macro_export]
 macro_rules! forward_shutdown {

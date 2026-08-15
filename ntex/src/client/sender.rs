@@ -26,7 +26,6 @@ impl Service for Sender {
     type Error = Error<ClientError>;
 
     crate::forward_ready!(connector);
-    crate::forward_poll!(connector);
     crate::forward_shutdown!(connector);
 
     async fn call(

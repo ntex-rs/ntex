@@ -102,10 +102,6 @@ where
     type Res = Io<Layer<TlsClientFilter>>;
     type Error = Error<ConnectError>;
 
-    ntex_service::forward_ready!(svc);
-    ntex_service::forward_poll!(svc);
-    ntex_service::forward_shutdown!(svc);
-
     async fn call(
         &self,
         req: Connect<A>,
@@ -146,6 +142,9 @@ where
         .await
         .map_err(|e: Error<_>| e.set_service(self.cfg.service()))
     }
+
+    ntex_service::forward_ready!(svc);
+    ntex_service::forward_shutdown!(svc);
 }
 
 #[cfg(test)]

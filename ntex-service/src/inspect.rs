@@ -1,4 +1,4 @@
-use std::{fmt, task::Context};
+use std::fmt;
 
 use super::{Ctx, ReadyCtx, Service, ServiceFactory};
 
@@ -61,7 +61,6 @@ where
     }
 
     crate::forward_ready!(svc);
-    crate::forward_poll!(svc);
     crate::forward_shutdown!(svc);
 }
 
@@ -126,11 +125,6 @@ where
     #[inline]
     async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
         ctx.ready(&self.svc).await.inspect_err(&self.f)
-    }
-
-    #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
-        self.svc.poll(cx).inspect_err(&self.f)
     }
 
     crate::forward_shutdown!(svc);

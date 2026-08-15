@@ -198,7 +198,6 @@ impl<S: Service> Service for ServiceChain<S> {
     type Error = S::Error;
 
     crate::forward_ready!(service);
-    crate::forward_poll!(service);
     crate::forward_shutdown!(service);
 
     #[inline]

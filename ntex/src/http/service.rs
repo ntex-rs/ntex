@@ -1,4 +1,4 @@
-use std::{cell::Cell, cell::RefCell, error, fmt, marker, rc::Rc, task::Context};
+use std::{cell::Cell, cell::RefCell, error, fmt, marker, rc::Rc};
 
 use crate::io::{Filter, Io, IoRef, types};
 use crate::service::{Ctx, IntoServiceFactory, ReadyCtx, Service, ServiceFactory};
@@ -358,17 +358,6 @@ where
             log::error!("Http service readiness error: {e:?}");
             DispatchError::Service(Rc::new(e))
         })
-    }
-
-    #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
-        let cfg = self.config.as_ref();
-        cfg.control
-            .poll(cx)
-            .map_err(|e| DispatchError::Control(Rc::new(e)))?;
-        cfg.service
-            .poll(cx)
-            .map_err(|e| DispatchError::Service(Rc::new(e)))
     }
 
     async fn shutdown(&self) {

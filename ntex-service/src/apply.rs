@@ -126,7 +126,6 @@ where
         (self.f)(req, &ctx).await
     }
 
-    crate::forward_poll!(svc);
     crate::forward_shutdown!(svc);
 }
 
@@ -213,8 +212,7 @@ where
 #[cfg(test)]
 #[allow(clippy::unused_async_trait_impl)]
 mod tests {
-    use ntex::util::lazy;
-    use std::{cell::Cell, rc::Rc, task::Context};
+    use std::{cell::Cell, rc::Rc};
 
     use super::*;
     use crate::{chain, chain_factory, fn_factory};
@@ -229,11 +227,6 @@ mod tests {
         type Error = ();
 
         async fn call(&self, _r: (), _: Ctx<'_, Self>) -> Result<(), ()> {
-            Ok(())
-        }
-
-        fn poll(&self, _: &mut Context<'_>) -> Result<(), Self::Error> {
-            self.0.set(self.0.get() + 1);
             Ok(())
         }
 
@@ -264,9 +257,6 @@ mod tests {
         .into_pipeline();
 
         assert_eq!(srv.ready(&()).await, Ok::<_, Err>(()));
-
-        lazy(|cx| srv.poll(cx)).await.unwrap();
-        assert_eq!(cnt_sht.get(), 1);
 
         srv.shutdown().await;
         assert_eq!(cnt_sht.get(), 2);

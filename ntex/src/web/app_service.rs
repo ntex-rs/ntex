@@ -1,4 +1,4 @@
-use std::{cell::RefCell, marker, rc::Rc, task::Context};
+use std::{cell::RefCell, marker, rc::Rc};
 
 use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, Router};
@@ -191,7 +191,6 @@ where
     type Res = WebResponse;
     type Error = S::Error;
 
-    crate::forward_poll!(service);
     crate::forward_ready!(service);
     crate::forward_shutdown!(service);
 
@@ -298,11 +297,6 @@ where
     }
 
     #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
-        self.filter.poll(cx)?;
-        self.routing.poll(cx)
-    }
-
     async fn call(
         &self,
         req: WebRequest<Err>,
@@ -310,6 +304,11 @@ where
     ) -> Result<Self::Res, Self::Error> {
         let req = ctx.call(&self.filter, req).await?;
         ctx.call(&self.routing, req).await
+    }
+
+    async fn shutdown(&self) {
+        self.filter.shutdown().await;
+        self.routing.shutdown().await;
     }
 }
 

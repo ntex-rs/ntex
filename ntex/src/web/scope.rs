@@ -1,4 +1,4 @@
-use std::{cell::RefCell, fmt, rc::Rc, task::Context};
+use std::{cell::RefCell, fmt, rc::Rc};
 
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef, Router};
@@ -545,12 +545,6 @@ where
             join(ctx.ready(&self.filter), ctx.ready(&self.routing)).await;
         ready1?;
         ready2
-    }
-
-    #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
-        self.filter.poll(cx)?;
-        self.routing.poll(cx)
     }
 }
 

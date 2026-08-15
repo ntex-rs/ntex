@@ -8,7 +8,7 @@
     clippy::unused_async,
     clippy::unused_async_trait_impl
 )]
-use std::{rc::Rc, task::Context};
+use std::rc::Rc;
 
 mod and_then;
 mod apply;
@@ -139,15 +139,6 @@ pub trait Service {
     ///
     /// Returns when the service has been properly shut down.
     async fn shutdown(&self) {}
-
-    #[inline]
-    /// Polls the service from the current async task.
-    ///
-    /// The service may perform asynchronous computations or
-    /// maintain asynchronous state during polling.
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
-        Ok(())
-    }
 
     #[inline]
     /// Maps this service's output to a different type, returning a new service.
@@ -301,11 +292,6 @@ where
     }
 
     #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), S::Error> {
-        (**self).poll(cx)
-    }
-
-    #[inline]
     async fn shutdown(&self) {
         (**self).shutdown().await;
     }
@@ -338,11 +324,6 @@ where
     #[inline]
     async fn call(&self, req: S::Req, ctx: Ctx<'_, Self>) -> Result<S::Res, S::Error> {
         ctx.call_nowait(&**self, req).await
-    }
-
-    #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), S::Error> {
-        (**self).poll(cx)
     }
 }
 

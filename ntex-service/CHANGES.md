@@ -6,6 +6,8 @@
 
 * Use config ref for service factory creation
 
+* Remove Service::poll() method
+
 ## [4.6.0] - 2026-03-05
 
 * Add `service` name to `SharedCfg`

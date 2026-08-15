@@ -71,7 +71,6 @@ impl<S: Service> Service for OneRequestService<S> {
         result
     }
 
-    ntex_service::forward_poll!(service);
     ntex_service::forward_shutdown!(service);
 }
 

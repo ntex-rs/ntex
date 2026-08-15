@@ -107,18 +107,10 @@ impl<S: Service> Pipeline<S> {
     }
 
     #[inline]
-    pub fn poll(&self, cx: &mut Context<'_>) -> Result<(), S::Error>
-    where
-        S: Service,
-    {
-        self.state.svc.poll(cx)
-    }
-
-    #[inline]
     /// Get current pipeline.
     pub fn bind(self) -> PipelineBinding<S>
     where
-        S: Service + 'static,
+        S: 'static,
         S::St: Default,
     {
         PipelineBinding::new(self, S::St::default())
@@ -128,7 +120,7 @@ impl<S: Service> Pipeline<S> {
     /// Bind pipeline to a state.
     pub fn bind_state(self, st: S::St) -> PipelineBinding<S>
     where
-        S: Service + 'static,
+        S: 'static,
     {
         PipelineBinding::new(self, st)
     }
@@ -202,11 +194,6 @@ impl<S: Service> Service for PipelineSvc<S> {
     async fn shutdown(&self) {
         self.inner.shutdown().await;
     }
-
-    #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
-        self.inner.poll(cx)
-    }
 }
 
 impl<S> Clone for PipelineSvc<S> {
@@ -256,11 +243,6 @@ impl<S: Service + 'static> PipelineBinding<S> {
     /// Get pipeline
     pub fn pipeline(&self) -> Pipeline<S> {
         self.pl.clone()
-    }
-
-    #[inline]
-    pub fn poll(&self, cx: &mut Context<'_>) -> Result<(), S::Error> {
-        self.pl.poll(cx)
     }
 
     #[inline]
@@ -395,11 +377,6 @@ impl<S: Service> Service for PipelineBinding<S> {
     async fn shutdown(&self) {
         self.pl.shutdown().await;
     }
-
-    #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
-        self.pl.poll(cx)
-    }
 }
 
 impl<S> fmt::Debug for PipelineBinding<S>
@@ -484,8 +461,6 @@ where
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.as_mut();
 
-        this.pl.poll(cx)?;
-
         this.pl.state.waiters.run(this.pl.index, cx, |cx| {
             if this.fut.is_none() {
                 this.fut = Some((this.f)(this.pl, this.state));
@@ -503,7 +478,7 @@ where
 #[cfg(test)]
 #[allow(clippy::unused_async_trait_impl)]
 mod tests {
-    use std::{cell::Cell, future::poll_fn, rc::Rc};
+    use std::{cell::Cell, rc::Rc};
 
     use super::*;
 
@@ -556,9 +531,6 @@ mod tests {
         assert_eq!(res.unwrap(), "ok");
 
         let res = srv.ready(&()).await;
-        assert_eq!(res, Ok(()));
-
-        let res = poll_fn(|cx| Poll::Ready(srv.poll(cx))).await;
         assert_eq!(res, Ok(()));
 
         srv.shutdown().await;

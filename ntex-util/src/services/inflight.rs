@@ -77,7 +77,6 @@ where
         ctx.call(&self.service, req).await
     }
 
-    ntex_service::forward_poll!(service);
     ntex_service::forward_shutdown!(service);
 }
 

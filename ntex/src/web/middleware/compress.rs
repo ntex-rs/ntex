@@ -69,7 +69,6 @@ where
     type Res = WebResponse;
     type Error = S::Error;
 
-    crate::forward_poll!(service);
     crate::forward_ready!(service);
     crate::forward_shutdown!(service);
 

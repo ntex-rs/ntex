@@ -1,5 +1,5 @@
 #![allow(clippy::type_complexity)]
-use std::{fmt, future::Future, pin::Pin, task::Context};
+use std::{fmt, future::Future, pin::Pin};
 
 use crate::ctx::{Ctx, ReadyCtx, WaitersRef};
 use crate::{Service, ServiceFactory};
@@ -76,8 +76,6 @@ trait ServiceObj {
     ) -> BoxFuture<'a, Self::Res, Self::Error>;
 
     fn shutdown<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + 'a>>;
-
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error>;
 }
 
 impl<S> ServiceObj for S
@@ -117,11 +115,6 @@ where
                 .call_nowait(self, req)
                 .await
         })
-    }
-
-    #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
-        Service::poll(self, cx)
     }
 }
 
@@ -185,11 +178,6 @@ impl<St, Req, Res, Err> Service for BoxService<St, Req, Res, Err> {
     async fn call(&self, req: Req, ctx: Ctx<'_, Self>) -> Result<Res, Err> {
         let (idx, waiters, st) = ctx.inner();
         self.0.call(req, idx, waiters, st).await
-    }
-
-    #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
-        self.0.poll(cx)
     }
 }
 
