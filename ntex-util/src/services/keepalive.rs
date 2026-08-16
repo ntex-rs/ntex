@@ -210,6 +210,7 @@ mod tests {
 
         sleep(Millis(50)).await;
         assert_eq!(svc.call(1usize).await, Ok(1usize));
+        sleep(Millis(100)).await;
 
         let res = rx.await;
         assert_eq!(res, Ok(()));
