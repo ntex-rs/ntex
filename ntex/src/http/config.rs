@@ -1,7 +1,7 @@
 use std::{cell::Cell, time};
 
-use crate::service::Service;
 use crate::service::cfg::{Cfg, CfgContext, Configuration};
+use crate::service::{Service, State};
 use crate::time::{Millis, Seconds, sleep};
 use crate::{io::cfg::FrameReadRate, service::Pipeline, util::BytePages, util::BytesMut};
 
@@ -260,8 +260,8 @@ pub(super) struct DispatcherConfig<S: Service, C: Service> {
 impl<S: Service, C: Service> DispatcherConfig<S, C> {
     pub(super) fn new(config: Cfg<HttpServiceConfig>, service: S, control: C) -> Self
     where
-        S::St: Default,
-        C::St: Default,
+        S::St: State<S::Req>,
+        C::St: State<C::Req>,
     {
         DispatcherConfig {
             idx: Cell::new(0),

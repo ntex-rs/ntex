@@ -10,7 +10,7 @@ use crate::map_err::{MapErr, MapErrFactory};
 use crate::map_init_err::MapInitErr;
 use crate::middleware::{ApplyMiddleware, Middleware};
 use crate::then::{Then, ThenFactory};
-use crate::{IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory};
+use crate::{IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory, State};
 
 /// Constructs new chain with one service.
 pub fn chain<St, S>(service: impl IntoService<S>) -> ServiceChain<S>
@@ -144,7 +144,7 @@ impl<S: Service> ServiceChain<S> {
     /// Create service pipeline
     pub fn into_pipeline(self) -> Pipeline<S>
     where
-        S::St: Default,
+        S::St: State<S::Req>,
     {
         Pipeline::new(self.service)
     }
@@ -334,7 +334,7 @@ impl<Sf: ServiceFactory<Req>, Req> ServiceChainFactory<Sf, Req> {
         cfg: &Sf::InitCfg,
     ) -> Result<Pipeline<Sf::Service>, Sf::InitError>
     where
-        St: Default,
+        St: State<Req>,
         Sf: ServiceFactory<Req, St = St> + Sized,
     {
         Ok(Pipeline::new(self.factory.create(cfg).await?))

@@ -37,7 +37,7 @@ pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
 pub use self::fn_shutdown::fn_shutdown;
 pub use self::map_config::{map_config, unit_config};
 pub use self::middleware::{Identity, Middleware, Stack, apply, fn_layer};
-pub use self::pipeline::{Pipeline, PipelineBinding, PipelineCall};
+pub use self::pipeline::{Pipeline, PipelineBinding, PipelineCall, State};
 
 #[allow(unused_variables)]
 /// An asynchronous function from a `Request` to a `Response`.
@@ -214,7 +214,7 @@ pub trait ServiceFactory<Req> {
         cfg: &Self::InitCfg,
     ) -> Result<Pipeline<Self::Service>, Self::InitError>
     where
-        St: Default,
+        St: State<Req>,
         Self: ServiceFactory<Req, St = St> + Sized,
     {
         Ok(Pipeline::new(self.create(cfg).await?))

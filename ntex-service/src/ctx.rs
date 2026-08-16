@@ -27,19 +27,16 @@ pub(crate) struct WaitersRef {
 }
 
 impl WaitersRef {
-    pub(crate) fn new() -> (u32, Self) {
+    pub(crate) fn new() -> Self {
         let mut waiters = slab::Slab::with_capacity(16);
-
-        (
-            waiters.insert(None) as u32,
-            WaitersRef {
-                running: cell::Cell::new(false),
-                cur: cell::Cell::new(u32::MAX),
-                shutdown: cell::Cell::new(false),
-                indexes: cell::UnsafeCell::new(waiters),
-                wakers: cell::UnsafeCell::new(Vec::default()),
-            },
-        )
+        waiters.insert(None);
+        WaitersRef {
+            running: cell::Cell::new(false),
+            cur: cell::Cell::new(u32::MAX),
+            shutdown: cell::Cell::new(false),
+            indexes: cell::UnsafeCell::new(waiters),
+            wakers: cell::UnsafeCell::new(Vec::default()),
+        }
     }
 
     #[allow(clippy::mut_from_ref)]

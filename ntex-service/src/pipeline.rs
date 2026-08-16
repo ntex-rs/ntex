@@ -2,6 +2,21 @@ use std::{cell, fmt, future::Future, pin::Pin, ptr, rc::Rc, task::Context, task:
 
 use crate::{Ctx, IntoService, ReadyCtx, Service, ctx::WaitersRef};
 
+/// Trait for types that can serve as pipeline state.
+pub trait State<Req, Chained = ()>: Default {
+    #[inline]
+    /// Updates the state for a request.
+    fn check(&self, _: &Req) -> Option<Self> {
+        None
+    }
+
+    #[inline]
+    /// Crate new state from chained type.
+    fn create(_: &Chained) -> Self {
+        Self::default()
+    }
+}
+
 /// Container for a service.
 ///
 /// Container allows to call enclosed service and adds support of shared readiness.
@@ -13,7 +28,7 @@ struct PipelineState<S: Service> {
     s: S,
     waiters: WaitersRef,
     st: S::St,
-    st_check: Option<Box<dyn Fn(&S::St, &S::Req) -> Option<S::St>>>,
+    st_check: Box<dyn Fn(&S::St, &S::Req) -> Option<S::St>>,
     st_runtime: cell::UnsafeCell<RuntimeState<S::Error>>,
 }
 
@@ -49,12 +64,8 @@ impl<S: Service> PipelineState<S> {
     }
 
     fn st(&self, req: &S::Req) -> StateRef<'_, S::St> {
-        if let Some(f) = &self.st_check {
-            if let Some(s) = f(&self.st, req) {
-                StateRef::Owned(s)
-            } else {
-                StateRef::Ref(&self.st)
-            }
+        if let Some(s) = (self.st_check)(&self.st, req) {
+            StateRef::Owned(s)
         } else {
             StateRef::Ref(&self.st)
         }
@@ -66,16 +77,32 @@ impl<S: Service> Pipeline<S> {
     /// Construct new service pipeline instance.
     pub fn new<St>(f: impl IntoService<S>) -> Self
     where
-        St: Default,
         S: Service<St = St>,
+        S::St: State<S::Req>,
     {
-        let (_, waiters) = WaitersRef::new();
+        Self::create(f.into_service(), S::St::default())
+    }
+
+    #[inline]
+    /// Construct new service pipeline instance with state.
+    pub fn with<St, Chained>(f: impl IntoService<S>, chained: &Chained) -> Self
+    where
+        S: Service<St = St>,
+        S::St: State<S::Req, Chained>,
+    {
+        Self::create(f.into_service(), S::St::create(chained))
+    }
+
+    fn create<U>(s: S, st: S::St) -> Self
+    where
+        S::St: State<S::Req, U>,
+    {
         Pipeline {
             state: Rc::new(PipelineState {
-                waiters,
-                s: f.into_service(),
-                st: S::St::default(),
-                st_check: None,
+                s,
+                st,
+                waiters: WaitersRef::new(),
+                st_check: Box::new(|st: &S::St, req: &S::Req| st.check(req)),
                 st_runtime: cell::UnsafeCell::new(RuntimeState::New),
             }),
         }
@@ -434,3 +461,5 @@ where
         })
     }
 }
+
+impl<Req> State<Req> for () {}
