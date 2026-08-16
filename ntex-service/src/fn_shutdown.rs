@@ -1,4 +1,4 @@
-use std::{cell::Cell, fmt, marker::PhantomData};
+use std::{cell::Cell, convert::Infallible, fmt, marker::PhantomData};
 
 use crate::{Ctx, Service, ServiceFactory};
 
@@ -57,7 +57,7 @@ where
     type Error = Err;
     type Service = FnShutdown<St, F, Req, Err, Cfg>;
     type InitCfg = Cfg;
-    type InitError = ();
+    type InitError = Infallible;
 
     #[inline]
     async fn create(&self, _: &Cfg) -> Result<Self::Service, Self::InitError> {

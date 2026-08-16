@@ -13,12 +13,12 @@ use crate::{MAX_SSL_ACCEPT_COUNTER, TlsConfig, rustls::TlsServerFilter};
 /// Support `TLS` connections via rustls package
 ///
 /// `rust-tls` feature enables `TlsAcceptor` type
-pub struct TlsAcceptor<St> {
+pub struct TlsAcceptorFactory<St> {
     config: Arc<ServerConfig>,
     st: PhantomData<St>,
 }
 
-impl<St> TlsAcceptor<St> {
+impl<St> TlsAcceptorFactory<St> {
     /// Create rustls based `Acceptor` service factory
     pub fn new(config: Arc<ServerConfig>) -> Self {
         Self {
@@ -28,23 +28,23 @@ impl<St> TlsAcceptor<St> {
     }
 }
 
-impl<St> From<ServerConfig> for TlsAcceptor<St> {
+impl<St> From<ServerConfig> for TlsAcceptorFactory<St> {
     fn from(cfg: ServerConfig) -> Self {
         Self::new(Arc::new(cfg))
     }
 }
 
-impl<F: Filter, St> ServiceFactory<Io<F>> for TlsAcceptor<St> {
+impl<F: Filter, St> ServiceFactory<Io<F>> for TlsAcceptorFactory<St> {
     type St = St;
     type Res = Io<Layer<TlsServerFilter, F>>;
     type Error = io::Error;
-    type Service = TlsAcceptorService<F, St>;
+    type Service = TlsAcceptor<F, St>;
     type InitCfg = SharedCfg;
     type InitError = ();
 
     async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {
         MAX_SSL_ACCEPT_COUNTER.with(|conns| {
-            Ok(TlsAcceptorService {
+            Ok(TlsAcceptor {
                 cfg: cfg.get(),
                 config: self.config.clone(),
                 conns: conns.clone(),
@@ -56,14 +56,31 @@ impl<F: Filter, St> ServiceFactory<Io<F>> for TlsAcceptor<St> {
 
 #[derive(Debug)]
 /// `RusTLS` based `Acceptor` service
-pub struct TlsAcceptorService<F, St> {
+pub struct TlsAcceptor<F, St> {
     cfg: Cfg<TlsConfig>,
     config: Arc<ServerConfig>,
     conns: Counter,
     st: PhantomData<(F, St)>,
 }
 
-impl<F: Filter, St> Service for TlsAcceptorService<F, St> {
+impl<F, St> TlsAcceptor<F, St> {
+    pub fn new(config: Arc<ServerConfig>) -> Self {
+        MAX_SSL_ACCEPT_COUNTER.with(|conns| TlsAcceptor {
+            config,
+            cfg: Cfg::default(),
+            conns: conns.clone(),
+            st: PhantomData,
+        })
+    }
+}
+
+impl<F, St> From<ServerConfig> for TlsAcceptor<F, St> {
+    fn from(cfg: ServerConfig) -> Self {
+        Self::new(Arc::new(cfg))
+    }
+}
+
+impl<F: Filter, St> Service for TlsAcceptor<F, St> {
     type St = St;
     type Req = Io<F>;
     type Res = Io<Layer<TlsServerFilter, F>>;

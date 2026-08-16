@@ -911,7 +911,7 @@ async fn test_h1_gracefull_shutdown_2() {
     let srv = test_server(async move || {
         let tx = tx.clone();
         let count = count2.clone();
-        HttpService::new(async move |_: Request| {
+        HttpService::<(), _, _, _, _>::new(async move |_: Request| {
             let count = count.clone();
             count.fetch_add(1, Ordering::Relaxed);
             if count.load(Ordering::Relaxed) == 2 {

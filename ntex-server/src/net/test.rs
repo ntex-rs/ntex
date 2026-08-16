@@ -5,7 +5,7 @@ use std::{fmt, io, marker::PhantomData, net, thread, time};
 use ntex_io::{Io, IoConfig};
 use ntex_net::tcp_connect;
 use ntex_rt::System;
-use ntex_service::{ServiceFactory, cfg::SharedCfg};
+use ntex_service::{Pipeline, ServiceFactory, State, cfg::SharedCfg};
 use socket2::{Domain, SockAddr, Socket, Type};
 use uuid::Uuid;
 
@@ -30,10 +30,11 @@ impl<F, R> fmt::Debug for TestServerBuilder<F, R> {
     }
 }
 
-impl<F, R> TestServerBuilder<F, R>
+impl<F, Sf> TestServerBuilder<F, Sf>
 where
-    F: AsyncFn() -> R + Send + Clone + 'static,
-    R: ServiceFactory<Io, St = (), InitCfg = SharedCfg> + 'static,
+    F: AsyncFn() -> Sf + Send + Clone + 'static,
+    Sf: ServiceFactory<Io, InitCfg = SharedCfg> + 'static,
+    Sf::St: State<Io>,
 {
     #[must_use]
     /// Create test server builder
@@ -77,9 +78,16 @@ where
             let local_addr = tcp.local_addr().unwrap();
 
             sys.run(move || {
+                let cfg = config.clone();
                 let server = Server::builder()
-                    .listen("test", tcp, async move |_| factory().await)?
-                    .config("test", config)
+                    .listen("test", tcp, config, async move || {
+                        let sf = factory().await;
+                        let s = sf
+                            .create(&cfg)
+                            .await
+                            .map_err(|_| "Cannot start test server")?;
+                        Ok(Pipeline::new(s))
+                    })?
                     .workers(1)
                     .disable_signals()
                     .enable_affinity()

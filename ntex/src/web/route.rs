@@ -1,16 +1,14 @@
-use std::{fmt, mem, rc::Rc};
+use std::{error::Error, fmt, mem, rc::Rc};
 
 use crate::http::Method;
 use crate::service::{Ctx, Service, ServiceFactory, cfg::SharedCfg};
 
-use super::HttpResponse;
 use super::error::ErrorRenderer;
 use super::error_default::DefaultError;
 use super::extract::FromRequest;
 use super::guard::{self, AllGuard, Guard};
 use super::handler::{Handler, HandlerFn, HandlerWrapper};
-use super::request::WebRequest;
-use super::response::WebResponse;
+use super::{HttpResponse, request::WebRequest, response::WebResponse};
 
 /// Resource route definition
 ///
@@ -72,11 +70,11 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for Route<Err> {
     type Res = WebResponse;
     type Error = Err::Container;
 
-    type InitCfg = SharedCfg;
-    type InitError = ();
     type Service = RouteService<Err>;
+    type InitCfg = SharedCfg;
+    type InitError = Box<dyn Error>;
 
-    async fn create(&self, _: &SharedCfg) -> Result<RouteService<Err>, ()> {
+    async fn create(&self, _: &SharedCfg) -> Result<RouteService<Err>, Box<dyn Error>> {
         Ok(self.service())
     }
 }

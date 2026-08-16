@@ -166,7 +166,7 @@ mod tests {
                 let data = data.clone();
 
                 App::new().state(data).service(
-                    web::resource("/").to(|_data: super::State<TestData>| async { "ok" }),
+                    web::resource("/").to(async |_data: super::State<TestData>| "ok"),
                 )
             })
             .await;

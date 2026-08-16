@@ -139,7 +139,7 @@ where
     where
         F: AsyncFnOnce() -> Result<D, E> + 'static,
         D: 'static,
-        E: fmt::Debug,
+        E: fmt::Debug + 'static,
     {
         let state = Cell::new(Some(state));
 
@@ -149,8 +149,8 @@ where
             Box::pin(async move {
                 if let Some(state) = state.take() {
                     match state().await {
-                        Err(e) => {
-                            log::error!("Cannot construct state instance: {e:?}");
+                        Err(_) => {
+                            log::error!("Cannot construct state instance");
                             Err(())
                         }
                         Ok(st) => {
@@ -300,10 +300,11 @@ where
         U::InitError: fmt::Debug,
     {
         // create and configure default resource
-        self.default = Some(Rc::new(boxed::factory(
-            chain_factory(f)
-                .map_init_err(|e| log::error!("Cannot construct default service: {e:?}")),
-        )));
+        self.default = Some(Rc::new(boxed::factory(chain_factory(f).map_init_err(
+            |e| {
+                log::error!("Cannot construct default service: {e:?}");
+            },
+        ))));
 
         self
     }
@@ -550,9 +551,9 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for Filter<Err> {
     type Res = WebRequest<Err>;
     type Error = Err::Container;
 
+    type Service = Filter<Err>;
     type InitCfg = SharedCfg;
     type InitError = ();
-    type Service = Filter<Err>;
 
     async fn create(&self, _: &SharedCfg) -> Result<Self::Service, Self::InitError> {
         Ok(Filter(PhantomData))

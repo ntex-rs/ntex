@@ -1,18 +1,17 @@
-#![allow(clippy::missing_panics_doc)]
 use std::{fmt, io, net, sync::Arc};
 
 use ntex_io::Io;
 use ntex_rt::System;
-use ntex_service::{ServiceFactory, cfg::SharedCfg};
+use ntex_service::{Pipeline, Service, cfg::SharedCfg};
 use ntex_util::time::Millis;
 use socket2::{Domain, SockAddr, Socket, Type};
 
 use crate::{Server, WorkerPool};
 
 use super::accept::AcceptLoop;
-use super::config::{Config, ServiceConfig};
+use super::config::ServiceConfig;
 use super::factory::{self, FactoryServiceType};
-use super::factory::{OnAccept, OnAcceptWrapper, OnWorkerStart, OnWorkerStartWrapper};
+use super::onaccept::{OnAccept, OnAcceptWrapper, OnWorkerStart, OnWorkerStartWrapper};
 use super::{Connection, ServerStatus, Stream, StreamServer, Token, socket::Listener};
 
 /// Streaming service builder
@@ -220,10 +219,9 @@ impl ServerBuilder {
     ///
     /// This function get called during worker runtime configuration stage.
     /// It get executed in the worker thread.
-    pub fn on_worker_start<F, E>(mut self, f: F) -> Self
+    pub fn on_worker_start<F>(mut self, f: F) -> Self
     where
-        F: AsyncFn() -> Result<(), E> + Send + Clone + 'static,
-        E: fmt::Display + 'static,
+        F: AsyncFn() -> Result<(), &'static str> + Send + Clone + 'static,
     {
         self.on_worker_start.push(OnWorkerStartWrapper::create(f));
         self
@@ -242,13 +240,20 @@ impl ServerBuilder {
         self
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     /// Add new service to the server.
-    pub fn bind<F, U, N, R>(mut self, name: N, addr: U, factory: F) -> io::Result<Self>
+    pub fn bind<F, U, N, S>(
+        mut self,
+        name: N,
+        addr: U,
+        cfg: SharedCfg,
+        factory: F,
+    ) -> io::Result<Self>
     where
         U: net::ToSocketAddrs,
         N: AsRef<str>,
-        F: AsyncFn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io, St = (), InitCfg = SharedCfg> + 'static,
+        F: AsyncFn() -> Result<Pipeline<S>, &'static str> + Send + Clone + 'static,
+        S: Service<Req = Io> + 'static,
     {
         let sockets = bind_addr(addr, self.backlog)?;
 
@@ -257,7 +262,7 @@ impl ServerBuilder {
             let token = self.token.next();
             self.sockets
                 .push((token, name.as_ref().to_string(), Listener::from_tcp(lst)));
-            tokens.push((token, SharedCfg::default()));
+            tokens.push((token, cfg.clone()));
         }
 
         self.services.push(factory::create_factory_service(
@@ -271,12 +276,18 @@ impl ServerBuilder {
 
     #[cfg(unix)]
     /// Add new unix domain service to the server.
-    pub fn bind_uds<F, U, N, R>(self, name: N, addr: U, factory: F) -> io::Result<Self>
+    pub fn bind_uds<F, U, N, S>(
+        self,
+        name: N,
+        addr: U,
+        cfg: SharedCfg,
+        factory: F,
+    ) -> io::Result<Self>
     where
         N: AsRef<str>,
         U: AsRef<std::path::Path>,
-        F: AsyncFn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io, St = (), InitCfg = SharedCfg> + 'static,
+        F: AsyncFn() -> Result<Pipeline<S>, &'static str> + Send + Clone + 'static,
+        S: Service<Req = Io> + 'static,
     {
         use std::os::unix::net::UnixListener;
 
@@ -290,27 +301,28 @@ impl ServerBuilder {
         }
 
         let lst = UnixListener::bind(addr)?;
-        self.listen_uds(name, lst, factory)
+        self.listen_uds(name, lst, cfg, factory)
     }
 
     #[cfg(unix)]
     /// Add new unix domain service to the server.
     /// Useful when running as a systemd service and
     /// a socket FD can be acquired using the systemd crate.
-    pub fn listen_uds<F, N: AsRef<str>, R>(
+    pub fn listen_uds<F, N: AsRef<str>, S>(
         mut self,
         name: N,
         lst: std::os::unix::net::UnixListener,
+        cfg: SharedCfg,
         factory: F,
     ) -> io::Result<Self>
     where
-        F: AsyncFn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io, St = (), InitCfg = SharedCfg> + 'static,
+        F: AsyncFn() -> Result<Pipeline<S>, &'static str> + Send + Clone + 'static,
+        S: Service<Req = Io> + 'static,
     {
         let token = self.token.next();
         self.services.push(factory::create_factory_service(
             name.as_ref().to_string(),
-            vec![(token, SharedCfg::default())],
+            vec![(token, cfg)],
             factory,
         ));
         self.sockets
@@ -319,58 +331,26 @@ impl ServerBuilder {
     }
 
     /// Add new service to the server.
-    pub fn listen<F, N: AsRef<str>, R>(
+    pub fn listen<F, N: AsRef<str>, S>(
         mut self,
         name: N,
         lst: net::TcpListener,
+        cfg: SharedCfg,
         factory: F,
     ) -> io::Result<Self>
     where
-        F: AsyncFn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io, St = (), InitCfg = SharedCfg> + 'static,
+        F: AsyncFn() -> Result<Pipeline<S>, &'static str> + Send + Clone + 'static,
+        S: Service<Req = Io> + 'static,
     {
         let token = self.token.next();
         self.services.push(factory::create_factory_service(
             name.as_ref().to_string(),
-            vec![(token, SharedCfg::default())],
+            vec![(token, cfg)],
             factory,
         ));
         self.sockets
             .push((token, name.as_ref().to_string(), Listener::from_tcp(lst)));
         Ok(self)
-    }
-
-    #[must_use]
-    /// Set shared config for named service
-    ///
-    /// # Panics
-    ///
-    /// Panics if named service is not registered
-    pub fn config<N, U>(mut self, name: N, cfg: U) -> Self
-    where
-        N: AsRef<str>,
-        U: Into<SharedCfg>,
-    {
-        let cfg = cfg.into();
-        let mut token = None;
-        for sock in &self.sockets {
-            if sock.1 == name.as_ref() {
-                token = Some(sock.0);
-                break;
-            }
-        }
-
-        if let Some(token) = token {
-            for svc in &mut self.services {
-                if svc.name(token) == name.as_ref() {
-                    svc.set_config(token, cfg.clone());
-                }
-            }
-        } else {
-            panic!("Cannot find service by name {:?}", name.as_ref());
-        }
-
-        self
     }
 
     /// Starts processing incoming connections and return server controller.

@@ -1,6 +1,6 @@
 //! Various helpers for ntex applications to use during testing.
 use std::convert::Infallible;
-use std::{fmt, net, net::SocketAddr, rc::Rc, sync::mpsc, thread, time};
+use std::{fmt, io, net, net::SocketAddr, rc::Rc, sync::mpsc, thread, time};
 
 #[cfg(feature = "cookie")]
 use coo_kie::Cookie;
@@ -15,12 +15,13 @@ use crate::http::error::{HttpError, ResponseError};
 use crate::http::header::{CONTENT_TYPE, HeaderName, HeaderValue};
 use crate::http::test::TestRequest as HttpTestRequest;
 use crate::http::{
-    HttpService, HttpServiceConfig, Method, Payload, Request, StatusCode, Uri, Version,
+    HttpService, HttpServiceConfig, Method, Payload, Request, Response, StatusCode, Uri,
+    Version,
 };
 #[cfg(feature = "ws")]
 use crate::io::Sealed;
 use crate::router::{Path, ResourceDef};
-use crate::service::{IntoServiceFactory, Pipeline, fn_service};
+use crate::service::{FromState, IntoServiceFactory, Pipeline, State, fn_service};
 use crate::time::{Millis, Seconds, sleep};
 use crate::util::{Bytes, BytesMut, Extensions, Stream, stream_recv};
 #[cfg(feature = "ws")]
@@ -83,7 +84,7 @@ where
     S: ServiceFactory<Request, St = (), Res = WebResponse, Error = E, InitCfg = SharedCfg>,
     S::InitError: fmt::Debug,
 {
-    let srv = app.into_factory();
+    let srv = app.into_factory().map_init_err(|e| log::error!("{e:?}"));
     srv.pipeline(
         &SharedCfg::new("WEB")
             .add(IoConfig::new())
@@ -573,14 +574,15 @@ impl TestRequest {
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub async fn server<F, I, S, B>(factory: F) -> TestServer
+pub async fn server<F, I, Sf, B>(factory: F) -> TestServer
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, Request>,
-    S: ServiceFactory<Request, St = (), InitCfg = SharedCfg> + 'static,
-    S::Error: ResponseError,
-    S::InitError: fmt::Debug,
-    S::Res: Into<HttpResponse<B>>,
+    I: IntoServiceFactory<Sf, Request>,
+    Sf: ServiceFactory<Request, InitCfg = SharedCfg> + 'static,
+    Sf::St: State<Request> + FromState<()>,
+    Sf::Res: Into<Response<B>>,
+    Sf::Error: ResponseError,
+    Sf::InitError: fmt::Debug,
     B: MessageBody + 'static,
 {
     server_with(TestServerConfig::default(), factory).await
@@ -611,14 +613,15 @@ where
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub async fn server_with<F, I, S, B>(cfg: TestServerConfig, factory: F) -> TestServer
+pub async fn server_with<F, I, Sf, B>(cfg: TestServerConfig, factory: F) -> TestServer
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, Request>,
-    S: ServiceFactory<Request, St = (), InitCfg = SharedCfg> + 'static,
-    S::Error: ResponseError,
-    S::InitError: fmt::Debug,
-    S::Res: Into<HttpResponse<B>>,
+    I: IntoServiceFactory<Sf, Request>,
+    Sf: ServiceFactory<Request, InitCfg = SharedCfg> + 'static,
+    Sf::St: State<Request> + FromState<()>,
+    Sf::Res: Into<Response<B>>,
+    Sf::Error: ResponseError,
+    Sf::InitError: fmt::Debug,
     B: MessageBody + 'static,
 {
     let sys = System::current().config();
@@ -627,6 +630,13 @@ where
     let id = Uuid::now_v7();
     let (tx, rx) = mpsc::channel();
     log::debug!("Starting {name:?} web server {id:?}");
+
+    let factory = async move || {
+        factory()
+            .await
+            .into_factory()
+            .map_init_err(|e| io::Error::other(format!("{e:?}")))
+    };
 
     let ssl = match cfg.stream {
         StreamType::Tcp => false,
@@ -657,64 +667,73 @@ where
                 #[cfg(feature = "rustls")]
                 StreamType::Rustls(_) => true,
             };
+            let c = cfg.srv_cfg.clone().unwrap_or_else(|| {
+                SharedCfg::new("WEB-SRV")
+                    .add(IoConfig::new())
+                    .add(HttpServiceConfig::new().set_headers_read_rate(
+                        ctimeout,
+                        Seconds::ZERO,
+                        256,
+                    ))
+                    .add(WebAppConfig::with(
+                        &name,
+                        secure,
+                        local_addr,
+                        format!("{local_addr}"),
+                    ))
+                    .into()
+            });
 
             let srv = match cfg.stream {
                 StreamType::Tcp => match cfg.tp {
-                    HttpVer::Http1 => builder.listen("test", tcp, async move |_| {
-                        HttpService::h1(factory().await)
+                    HttpVer::Http1 => builder.listen("test", tcp, c, async move || {
+                        Ok(Pipeline::new(HttpService::h1(factory().await)))
                     }),
-                    HttpVer::Http2 => builder.listen("test", tcp, async move |_| {
-                        HttpService::h2(factory().await)
+                    HttpVer::Http2 => builder.listen("test", tcp, c, async move || {
+                        Ok(Pipeline::new(HttpService::h2(factory().await)))
                     }),
-                    HttpVer::Both => builder.listen("test", tcp, async move |_| {
-                        HttpService::new(factory().await)
+                    HttpVer::Both => builder.listen("test", tcp, c, async move || {
+                        Ok(Pipeline::new(HttpService::new(factory().await)))
                     }),
                 },
                 #[cfg(feature = "openssl")]
                 StreamType::Openssl(acceptor) => match cfg.tp {
-                    HttpVer::Http1 => builder.listen("test", tcp, async move |_| {
-                        HttpService::h1(factory().await).openssl(acceptor.clone())
+                    HttpVer::Http1 => builder.listen("test", tcp, c, async move || {
+                        Ok(Pipeline::new(
+                            HttpService::h1(factory().await).openssl(acceptor.clone()),
+                        ))
                     }),
-                    HttpVer::Http2 => builder.listen("test", tcp, async move |_| {
-                        HttpService::h2(factory().await).openssl(acceptor.clone())
+                    HttpVer::Http2 => builder.listen("test", tcp, c, async move || {
+                        Ok(Pipeline::new(
+                            HttpService::h2(factory().await).openssl(acceptor.clone()),
+                        ))
                     }),
-                    HttpVer::Both => builder.listen("test", tcp, async move |_| {
-                        HttpService::new(factory().await).openssl(acceptor.clone())
+                    HttpVer::Both => builder.listen("test", tcp, c, async move || {
+                        Ok(Pipeline::new(
+                            HttpService::new(factory().await).openssl(acceptor.clone()),
+                        ))
                     }),
                 },
                 #[cfg(feature = "rustls")]
                 StreamType::Rustls(config) => match cfg.tp {
-                    HttpVer::Http1 => builder.listen("test", tcp, async move |_| {
-                        HttpService::h1(factory().await).rustls(config.clone())
+                    HttpVer::Http1 => builder.listen("test", tcp, c, async move || {
+                        Ok(Pipeline::new(
+                            HttpService::h1(factory().await).rustls(config.clone()),
+                        ))
                     }),
-                    HttpVer::Http2 => builder.listen("test", tcp, async move |_| {
-                        HttpService::h2(factory().await).rustls(config.clone())
+                    HttpVer::Http2 => builder.listen("test", tcp, c, async move || {
+                        Ok(Pipeline::new(
+                            HttpService::h2(factory().await).rustls(config.clone()),
+                        ))
                     }),
-                    HttpVer::Both => builder.listen("test", tcp, async move |_| {
-                        HttpService::new(factory().await).rustls(config.clone())
+                    HttpVer::Both => builder.listen("test", tcp, c, async move || {
+                        Ok(Pipeline::new(
+                            HttpService::new(factory().await).rustls(config.clone()),
+                        ))
                     }),
                 },
             }
             .unwrap()
-            .config(
-                "test",
-                cfg.srv_cfg.clone().unwrap_or_else(|| {
-                    SharedCfg::new("WEB-SRV")
-                        .add(IoConfig::new())
-                        .add(HttpServiceConfig::new().set_headers_read_rate(
-                            ctimeout,
-                            Seconds::ZERO,
-                            256,
-                        ))
-                        .add(WebAppConfig::with(
-                            &name,
-                            secure,
-                            local_addr,
-                            format!("{local_addr}"),
-                        ))
-                        .into()
-                }),
-            )
             .run();
 
             tx.send((System::current(), srv, local_addr)).unwrap();

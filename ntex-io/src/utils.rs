@@ -30,7 +30,7 @@ where
     Sf: ServiceFactory<IoBoxed>,
 {
     chain_factory(async |io: Io<F>| Ok(io.boxed()))
-        .map_init_err(|()| unreachable!())
+        .map_init_err(|_| unreachable!())
         .and_then(f.into_factory())
 }
 

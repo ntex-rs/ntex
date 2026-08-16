@@ -12,7 +12,7 @@ mod connect;
 pub use self::connect::{SslConnector, SslConnectorService};
 
 mod accept;
-pub use self::accept::{SslAcceptor, SslAcceptorService};
+pub use self::accept::{SslAcceptor, SslAcceptorFactory};
 
 /// Connection's peer cert
 #[derive(Debug)]

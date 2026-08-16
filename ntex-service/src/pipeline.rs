@@ -3,18 +3,16 @@ use std::{cell, fmt, future::Future, pin::Pin, ptr, rc::Rc, task::Context, task:
 use crate::{Ctx, IntoService, ReadyCtx, Service, ctx::WaitersRef};
 
 /// Trait for types that can serve as pipeline state.
-pub trait State<Req, Chained = ()>: Default {
+pub trait State<Req>: Default {
     #[inline]
     /// Updates the state for a request.
     fn check(&self, _: &Req) -> Option<Self> {
         None
     }
+}
 
-    #[inline]
-    /// Crate new state from chained type.
-    fn create(_: &Chained) -> Self {
-        Self::default()
-    }
+pub trait FromState<St> {
+    fn from(st: &St) -> Self;
 }
 
 /// Container for a service.
@@ -88,14 +86,14 @@ impl<S: Service> Pipeline<S> {
     pub fn with<St, Chained>(f: impl IntoService<S>, chained: &Chained) -> Self
     where
         S: Service<St = St>,
-        S::St: State<S::Req, Chained>,
+        S::St: State<S::Req> + FromState<Chained>,
     {
-        Self::create(f.into_service(), S::St::create(chained))
+        Self::create(f.into_service(), S::St::from(chained))
     }
 
-    fn create<U>(s: S, st: S::St) -> Self
+    fn create(s: S, st: S::St) -> Self
     where
-        S::St: State<S::Req, U>,
+        S::St: State<S::Req>,
     {
         Pipeline {
             state: Rc::new(PipelineState {
@@ -463,3 +461,7 @@ where
 }
 
 impl<Req> State<Req> for () {}
+
+impl<St> FromState<St> for () {
+    fn from(_: &St) {}
+}

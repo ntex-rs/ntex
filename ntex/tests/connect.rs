@@ -39,16 +39,15 @@ async fn test_openssl_string() {
     let mut tcp = Some(tcp);
     let srv = build_test_server(async move |srv| {
         srv.listen("test", tcp.take().unwrap(), async |_| {
-            chain_factory(openssl::SslAcceptor::new(ssl_acceptor())).and_then(
-                fn_service(|io: Io<_>| async move {
+            chain(openssl::SslAcceptorService::new(ssl_acceptor())).and_then(fn_service(
+                |io: Io<_>| async move {
                     io.send(Bytes::from_static(b"test"), &BytesCodec)
                         .await
                         .unwrap();
                     assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "test");
                     Ok::<_, Box<dyn std::error::Error>>(())
-                })
-                .map_init_err(|_| ()),
-            )
+                },
+            ))
         })
         .unwrap()
     })

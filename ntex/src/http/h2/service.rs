@@ -1,9 +1,9 @@
-use std::error::Error as StdError;
-use std::{cell::Cell, cell::RefCell, fmt, future::poll_fn, io, marker, mem, rc::Rc};
+use std::{
+    cell::RefCell, error::Error as StdError, future::poll_fn, io, marker, mem, rc::Rc,
+};
 
 use ntex_h2::{self as h2, frame::StreamId, server};
 
-use crate::channel::oneshot;
 use crate::error::Error;
 use crate::http::body::{BodySize, MessageBody};
 use crate::http::config::DispatcherConfig;
@@ -12,33 +12,36 @@ use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::message::{CurrentIo, ResponseHead};
 use crate::http::{DateService, Method, Request, Response, StatusCode, Uri, Version};
 use crate::io::{Filter, Io, IoBoxed, IoRef, types};
-use crate::service::cfg::SharedCfg;
-use crate::service::{Ctx, IntoServiceFactory, ReadyCtx, Service, ServiceFactory};
-use crate::util::{Bytes, BytesMut, HashMap, HashSet};
+use crate::service::{Ctx, Pipeline, PipelineBinding, ReadyCtx, Service, ServiceFactory};
+use crate::service::{FromState, IntoService, IntoServiceFactory, State, cfg::SharedCfg};
+use crate::util::{Bytes, BytesMut, HashMap};
 
 use super::{DefaultControlService, payload::Payload, payload::PayloadSender};
 
 /// `ServiceFactory` implementation for HTTP2 transport
 #[derive(derive_more::Debug)]
 #[debug("H2Service")]
-pub struct H2Service<F, Sf, B, C> {
-    srv: Sf,
-    ctl: Rc<C>,
-    _t: marker::PhantomData<(F, B)>,
+pub struct H2Service<St, F, Sf, B, Ctl: Service = DefaultControlService> {
+    sf: Sf,
+    ctl: Pipeline<Ctl>,
+    config: DispatcherConfig,
+    _t: marker::PhantomData<(F, St, B)>,
 }
 
-impl<F, Sf, B> H2Service<F, Sf, B, DefaultControlService>
+impl<St, F, Sf, B> H2Service<St, F, Sf, B>
 where
-    Sf: ServiceFactory<Request, St = (), InitCfg = SharedCfg>,
+    Sf: ServiceFactory<Request, InitCfg = SharedCfg>,
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
+    Sf::InitError: StdError,
     B: MessageBody,
 {
     /// Create new `HttpService` instance with config.
-    pub(crate) fn new<U: IntoServiceFactory<Sf, Request>>(service: U) -> Self {
+    pub(crate) fn new(sf: impl IntoServiceFactory<Sf, Request>) -> Self {
         H2Service {
-            srv: service.into_factory(),
-            ctl: Rc::new(DefaultControlService),
+            sf: sf.into_factory(),
+            ctl: Pipeline::new(DefaultControlService),
+            config: DispatcherConfig::default(),
             _t: marker::PhantomData,
         }
     }
@@ -54,38 +57,26 @@ mod openssl {
 
     use super::*;
 
-    impl<F, Sf, B, C> H2Service<Layer<SslFilter, F>, Sf, B, C>
+    impl<St, F, Sf, B, Ctl> H2Service<St, Layer<SslFilter, F>, Sf, B, Ctl>
     where
         F: Filter,
-        Sf: ServiceFactory<Request, St = (), InitCfg = SharedCfg> + 'static,
-        Sf::Error: ResponseError,
-        Sf::InitError: fmt::Debug,
+        Sf: ServiceFactory<Request, InitCfg = SharedCfg> + 'static,
+        Sf::St: State<Request> + FromState<St>,
         Sf::Res: Into<Response<B>>,
+        Sf::Error: ResponseError,
+        Sf::InitError: StdError,
         B: MessageBody,
-        C: ServiceFactory<
-                h2::Control<H2Error>,
-                St = (),
-                InitCfg = SharedCfg,
-                Res = h2::ControlAck,
-            > + 'static,
-        C::Error: StdError,
-        C::InitError: fmt::Debug,
+        Ctl: Service<Req = h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
+        Ctl::Error: StdError,
     {
         /// Create ssl based service
         pub fn openssl(
             self,
             acceptor: ssl::SslAcceptor,
-        ) -> impl ServiceFactory<
-            Io<F>,
-            St = (),
-            Res = (),
-            Error = SslError<DispatchError>,
-            InitCfg = SharedCfg,
-            InitError = (),
-        > {
+        ) -> impl Service<St = St, Req = Io<F>, Res = (), Error = SslError<DispatchError>>
+        {
             SslAcceptor::new(acceptor)
                 .map_err(SslError::Ssl)
-                .map_init_err(|()| panic!())
                 .and_then(self.map_err(SslError::Service))
         }
     }
@@ -100,296 +91,197 @@ mod rustls {
     use super::*;
     use crate::{io::Layer, server::SslError};
 
-    impl<F, Sf, B, C> H2Service<Layer<TlsServerFilter, F>, Sf, B, C>
+    impl<St, F, Sf, B, Ctl> H2Service<St, Layer<TlsServerFilter, F>, Sf, B, Ctl>
     where
         F: Filter,
-        Sf: ServiceFactory<Request, St = (), InitCfg = SharedCfg> + 'static,
+        Sf: ServiceFactory<Request, InitCfg = SharedCfg> + 'static,
+        Sf::St: State<Request> + FromState<St>,
         Sf::Res: Into<Response<B>>,
         Sf::Error: ResponseError,
-        Sf::InitError: fmt::Debug,
+        Sf::InitError: StdError,
         B: MessageBody,
-        C: ServiceFactory<
-                h2::Control<H2Error>,
-                St = (),
-                InitCfg = SharedCfg,
-                Res = h2::ControlAck,
-            > + 'static,
-        C::Error: StdError,
-        C::InitError: fmt::Debug,
+        Ctl: Service<Req = h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
+        Ctl::Error: StdError,
     {
         /// Create openssl based service
         pub fn rustls(
             self,
             mut config: ServerConfig,
-        ) -> impl ServiceFactory<
-            Io<F>,
-            St = (),
-            Res = (),
-            Error = SslError<DispatchError>,
-            InitCfg = SharedCfg,
-            InitError = (),
-        > {
+        ) -> impl Service<St = St, Req = Io<F>, Res = (), Error = SslError<DispatchError>>
+        {
             let protos = vec!["h2".to_string().into()];
             config.alpn_protocols = protos;
 
-            TlsAcceptor::from(config)
+            TlsAcceptor::new(std::sync::Arc::new(config))
                 .map_err(|e| SslError::Ssl(Box::new(e)))
-                .map_init_err(|()| panic!())
                 .and_then(self.map_err(SslError::Service))
         }
     }
 }
 
-impl<F, Sf, B, C> H2Service<F, Sf, B, C>
+impl<St, F, Sf, B, Ctl> H2Service<St, F, Sf, B, Ctl>
 where
     F: Filter,
-    Sf: ServiceFactory<Request, St = (), InitCfg = SharedCfg> + 'static,
+    Sf: ServiceFactory<Request, InitCfg = SharedCfg> + 'static,
+    Sf::St: State<Request> + FromState<St>,
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
-    Sf::InitError: fmt::Debug,
+    Sf::InitError: StdError,
     B: MessageBody,
-    C: ServiceFactory<
-            h2::Control<H2Error>,
-            St = (),
-            Res = h2::ControlAck,
-            InitCfg = SharedCfg,
-        >,
-    C::Error: StdError,
-    C::InitError: fmt::Debug,
+    Ctl: Service<Req = h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
+    Ctl::Error: StdError,
 {
     /// Provide http/2 control service
-    pub fn control<CT>(self, ctl: CT) -> H2Service<F, Sf, B, CT>
+    pub fn control<U>(self, ctl: impl IntoService<U>) -> H2Service<F, St, Sf, B, U>
     where
-        CT: ServiceFactory<
-                h2::Control<H2Error>,
-                St = (),
-                Res = h2::ControlAck,
-                InitCfg = SharedCfg,
-            >,
-        CT::Error: StdError,
-        CT::InitError: fmt::Debug,
+        U: Service<Req = h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
+        U::St: State<U::Req>,
+        U::Error: StdError,
     {
         H2Service {
-            ctl: Rc::new(ctl),
-            srv: self.srv,
+            sf: self.sf,
+            ctl: Pipeline::new(ctl),
+            config: self.config,
             _t: marker::PhantomData,
         }
     }
 }
 
-impl<F, Sf, B, C> ServiceFactory<Io<F>> for H2Service<F, Sf, B, C>
+impl<St, F, Sf, B, Ctl> Service for H2Service<St, F, Sf, B, Ctl>
 where
     F: Filter,
-    Sf: ServiceFactory<Request, St = (), InitCfg = SharedCfg> + 'static,
-    Sf::Error: ResponseError,
-    Sf::InitError: fmt::Debug,
+    Sf: ServiceFactory<Request, InitCfg = SharedCfg> + 'static,
+    Sf::St: State<Request> + FromState<St>,
     Sf::Res: Into<Response<B>>,
+    Sf::Error: ResponseError,
+    Sf::InitError: StdError,
     B: MessageBody,
-    C: ServiceFactory<
-            h2::Control<H2Error>,
-            St = (),
-            Res = h2::ControlAck,
-            InitCfg = SharedCfg,
-        > + 'static,
-    C::Error: StdError,
-    C::InitError: fmt::Debug,
+    Ctl: Service<Req = h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
+    Ctl::Error: StdError,
 {
-    type St = ();
-    type Res = ();
-    type Error = DispatchError;
-    type InitCfg = SharedCfg;
-    type InitError = ();
-    type Service = H2ServiceHandler<F, Sf::Service, B, C>;
-
-    async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {
-        let service = self
-            .srv
-            .create(cfg)
-            .await
-            .map_err(|e| log::error!("Cannot construct publish service: {e:?}"))?;
-
-        let (tx, rx) = oneshot::channel();
-        let config = Rc::new(DispatcherConfig::new(
-            cfg.get(),
-            service,
-            DefaultControlService,
-        ));
-
-        Ok(H2ServiceHandler {
-            config,
-            cfg: cfg.clone(),
-            control: self.ctl.clone(),
-            inflight: RefCell::new(HashSet::default()),
-            rx: Cell::new(Some(rx)),
-            tx: Cell::new(Some(tx)),
-            _t: marker::PhantomData,
-        })
-    }
-}
-
-/// `Service` implementation for http/2 transport
-#[derive(derive_more::Debug)]
-#[debug("H2ServiceHandler")]
-pub struct H2ServiceHandler<F, S: Service, B, C> {
-    cfg: SharedCfg,
-    config: Rc<DispatcherConfig<S, DefaultControlService>>,
-    control: Rc<C>,
-    inflight: RefCell<HashSet<IoRef>>,
-    rx: Cell<Option<oneshot::Receiver<()>>>,
-    tx: Cell<Option<oneshot::Sender<()>>>,
-    _t: marker::PhantomData<(F, B)>,
-}
-
-impl<F, S, B, C> Service for H2ServiceHandler<F, S, B, C>
-where
-    F: Filter,
-    S: Service<St = (), Req = Request> + 'static,
-    S::Res: Into<Response<B>>,
-    S::Error: ResponseError,
-    B: MessageBody,
-    C: ServiceFactory<
-            h2::Control<H2Error>,
-            St = (),
-            Res = h2::ControlAck,
-            InitCfg = SharedCfg,
-        > + 'static,
-    C::Error: StdError,
-    C::InitError: fmt::Debug,
-{
-    type St = ();
+    type St = St;
     type Req = Io<F>;
     type Res = ();
     type Error = DispatchError;
 
     #[inline]
     async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
-        self.config.service.ready().await.map_err(|e| {
+        self.ctl.ready().await.map_err(|e| {
             log::error!("Service readiness error: {e:?}");
-            DispatchError::Service(Rc::new(e))
+            DispatchError::Control(Rc::new(e))
         })
     }
 
     #[inline]
     async fn shutdown(&self) {
-        self.config.shutdown();
-
         // check inflight connections
-        let inflight = {
-            let inflight = self.inflight.borrow();
-            for io in inflight.iter() {
-                io.notify_dispatcher();
-            }
-            inflight.len()
-        };
+        let inflight = self.config.shutdown();
         if inflight != 0 {
             log::trace!("Shutting down service, in-flight connections: {inflight}");
-            if let Some(rx) = self.rx.take() {
-                let _ = rx.await;
-            }
 
+            self.config.wait_shutdown().await;
             log::trace!("Shutting down is complected");
         }
 
-        self.config.service.shutdown().await;
+        self.ctl.shutdown().await;
     }
 
-    async fn call(&self, io: Io<F>, _: Ctx<'_, Self>) -> Result<Self::Res, Self::Error> {
-        let control = self.control.create(&self.cfg).await.map_err(|e| {
-            DispatchError::Control(crate::util::str_rc_error(format!(
-                "Cannot construct control service: {e:?}"
-            )))
-        })?;
+    async fn call(&self, io: Io<F>, ctx: Ctx<'_, Self>) -> Result<Self::Res, Self::Error> {
+        let cfg = io.shared();
+        let svc = self
+            .sf
+            .create(&cfg)
+            .await
+            .map_err(|e| {
+                log::error!("Cannot construct handler service: {e:?}");
+                DispatchError::Control(Rc::new(e))
+            })
+            .map(|svc| Pipeline::with(svc, ctx.st()))?;
 
         let id = self.config.next_id();
-        let inflight = {
-            let mut inflight = self.inflight.borrow_mut();
-            inflight.insert(io.get_ref());
-            inflight.len()
-        };
+        let ioref = io.get_ref();
+        let inflight = self.config.insert_io(&ioref);
         log::trace!(
             "{}: New http2 connection {id}, peer address {:?}, inflight: {inflight}",
             io.tag(),
             io.query::<types::PeerAddr>().get()
         );
 
-        let ioref = io.get_ref();
-        let result = handle(id, io.into(), control, self.config.clone()).await;
-        {
-            let mut inflight = self.inflight.borrow_mut();
-            inflight.remove(&ioref);
+        let result = handle(id, io.into(), svc, self.ctl.bind()).await;
 
-            if inflight.is_empty()
-                && let Some(tx) = self.tx.take()
-            {
-                let _ = tx.send(());
-            }
+        let inflight = self.config.remove_io(&ioref);
+        if inflight == 0 && self.config.is_shutdown() {
+            self.config.notify_shutdown()
         }
-
         result
     }
 }
 
-pub(in crate::http) async fn handle<S, B, C1, C2>(
+pub(in crate::http) async fn handle<S, B, Ctl>(
     id: usize,
     io: IoBoxed,
-    control: C2,
-    config: Rc<DispatcherConfig<S, C1>>,
+    svc: Pipeline<S>,
+    control: PipelineBinding<Ctl>,
 ) -> Result<(), DispatchError>
 where
-    S: Service<St = (), Req = Request> + 'static,
+    S: Service<Req = Request> + 'static,
     S::Res: Into<Response<B>>,
     S::Error: ResponseError,
     B: MessageBody,
-    C1: Service + 'static,
-    C2: Service<St = (), Req = h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
-    C2::Error: StdError,
+    Ctl: Service<Req = h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
+    Ctl::Error: StdError,
 {
     let ioref = io.get_ref();
 
-    let _ = server::handle_one(io, PublishService::new(id, ioref, config), control).await;
+    let _ = server::handle_one(
+        io,
+        Pipeline::new(PublishService::new(id, ioref, svc)),
+        control,
+    )
+    .await;
 
     Ok(())
 }
 
-struct PublishService<S: Service, B, C: Service> {
+struct PublishService<S: Service, B> {
     id: usize,
     io: IoRef,
-    config: Rc<DispatcherConfig<S, C>>,
+    svc: Pipeline<S>,
     streams: RefCell<HashMap<StreamId, PayloadSender>>,
     _t: marker::PhantomData<B>,
 }
 
-impl<S, B, C> PublishService<S, B, C>
+impl<S, B> PublishService<S, B>
 where
-    S: Service<St = (), Req = Request> + 'static,
+    S: Service<Req = Request> + 'static,
     S::Res: Into<Response<B>>,
     S::Error: ResponseError,
     B: MessageBody,
-    C: Service + 'static,
 {
-    fn new(id: usize, io: IoRef, config: Rc<DispatcherConfig<S, C>>) -> Self {
+    fn new(id: usize, io: IoRef, svc: Pipeline<S>) -> Self {
         Self {
             id,
             io,
-            config,
+            svc,
             streams: RefCell::new(HashMap::default()),
             _t: marker::PhantomData,
         }
     }
 }
 
-impl<S, B, C> Service for PublishService<S, B, C>
+impl<S, B> Service for PublishService<S, B>
 where
-    S: Service<St = (), Req = Request> + 'static,
+    S: Service<Req = Request> + 'static,
     S::Res: Into<Response<B>>,
     S::Error: ResponseError,
     B: MessageBody,
-    C: Service + 'static,
 {
     type St = ();
     type Req = h2::Message;
     type Res = ();
     type Error = H2Error;
+
+    crate::forward_shutdown!(svc);
 
     async fn call(
         &self,
@@ -469,8 +361,6 @@ where
             }
         };
 
-        let cfg = self.config.clone();
-
         log::trace!(
             "{}: {:?} got request (eof: {eof}): {pseudo:#?}\nheaders: {headers:#?}",
             self.io.tag(),
@@ -499,7 +389,7 @@ where
         head.io = CurrentIo::Ref(io);
         head.id = self.id;
 
-        let (mut res, mut body) = match cfg.service.call(req).await {
+        let (mut res, mut body) = match self.svc.call(req).await {
             Ok(res) => res.into().into_parts(),
             Err(err) => {
                 let (res, body) = Response::from(&err).into_parts();

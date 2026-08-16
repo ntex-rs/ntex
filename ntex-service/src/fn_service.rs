@@ -1,4 +1,4 @@
-use std::{fmt, marker::PhantomData};
+use std::{convert::Infallible, fmt, marker::PhantomData};
 
 use crate::{Ctx, IntoService, IntoServiceFactory, Service, ServiceFactory};
 
@@ -216,7 +216,7 @@ where
 
     type Service = FnService<St, F, Req>;
     type InitCfg = Cfg;
-    type InitError = ();
+    type InitError = Infallible;
 
     #[inline]
     async fn create(&self, _: &Cfg) -> Result<Self::Service, Self::InitError> {

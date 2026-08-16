@@ -323,8 +323,9 @@ where
     {
         // create and configure default resource
         self.default = Rc::new(RefCell::new(Some(Rc::new(boxed::factory(
-            chain_factory(f.into_factory())
-                .map_init_err(|e| log::error!("Cannot construct default service: {e:?}")),
+            chain_factory(f.into_factory()).map_init_err(|e| {
+                log::error!("Cannot construct default service: {e:?}");
+            }),
         )))));
 
         self
@@ -473,9 +474,9 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ResourceRouterFacto
     type Res = WebResponse;
     type Error = Err::Container;
 
+    type Service = ResourceRouter<Err>;
     type InitCfg = SharedCfg;
     type InitError = ();
-    type Service = ResourceRouter<Err>;
 
     async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {
         let default = if let Some(ref default) = self.default {

@@ -15,7 +15,7 @@ use crate::error::Error;
 use crate::io::Filter;
 use crate::io::{Io, IoConfig};
 use crate::server::Server;
-use crate::service::{ServiceFactory, cfg::SharedCfg};
+use crate::service::{Pipeline, Service, State, cfg::SharedCfg};
 #[cfg(feature = "ws")]
 use crate::ws::{WsClient, WsConnection, error::WsClientError};
 use crate::{rt::System, time::Millis, time::Seconds, time::sleep, util::Bytes};
@@ -229,10 +229,11 @@ fn parts(parts: &mut Option<Inner>) -> &mut Inner {
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub async fn server<F, R>(factory: F) -> TestServer
+pub async fn server<F, S>(factory: F) -> TestServer
 where
-    F: AsyncFn() -> R + Send + Clone + 'static,
-    R: ServiceFactory<Io, St = (), InitCfg = SharedCfg> + 'static,
+    F: AsyncFn() -> S + Send + Clone + 'static,
+    S: Service<St = (), Req = Io> + 'static,
+    S::St: State<Io>,
 {
     server_with_config(
         factory,
@@ -273,10 +274,11 @@ where
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub async fn server_with_config<F, R, U>(factory: F, cfg: U) -> TestServer
+pub async fn server_with_config<F, S, U>(factory: F, cfg: U) -> TestServer
 where
-    F: AsyncFn() -> R + Send + Clone + 'static,
-    R: ServiceFactory<Io, St = (), InitCfg = SharedCfg> + 'static,
+    F: AsyncFn() -> S + Send + Clone + 'static,
+    S: Service<St = (), Req = Io> + 'static,
+    S::St: State<Io>,
     U: Into<SharedCfg>,
 {
     let sys = System::current().config();
@@ -295,8 +297,9 @@ where
 
         sys.run(move || {
             let srv = crate::server::build()
-                .listen("test", tcp, async move |_| factory().await)?
-                .config("test", cfg)
+                .listen("test", tcp, cfg, async move || {
+                    Ok(Pipeline::new(factory().await))
+                })?
                 .workers(1)
                 .disable_signals()
                 .run();

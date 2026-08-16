@@ -3,7 +3,7 @@ use std::task::{Context, Poll, ready};
 use std::{error, future, io, marker, mem, pin::Pin, rc::Rc};
 
 use crate::io::{Decoded, Filter, Io, IoStatusUpdate, RecvError};
-use crate::service::{PipelineCall, Service};
+use crate::service::{Pipeline, PipelineBinding, PipelineCall, Service};
 use crate::{channel::bstream, time::Seconds, util::Either};
 
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
@@ -31,25 +31,21 @@ bitflags::bitflags! {
 
 pin_project_lite::pin_project! {
     /// Dispatcher for HTTP/1.1 protocol
-    pub struct Dispatcher<F, S, B, C>
+    pub struct Dispatcher<F, S, C, B>
     where
-        F: 'static,
-        S: Service<St = (), Req = Request>,
-        S::Error: 'static,
-        C: Service<St = (), Req = Control<F, S::Error>>,
+        S: Service<Req = Request>,
+        C: Service<Req = Control<F, S::Error>>,
     {
-        st: State<F, C, S, B>,
-        inner: DispatcherInner<F, C, S, B>,
+        st: State<F, S, C, B>,
+        inner: DispatcherInner<F, S, C, B>,
     }
 }
 
 #[derive(Debug)]
-enum State<F, C, S, B>
+enum State<F, S, C, B>
 where
-    F: 'static,
-    S: Service<St = (), Req = Request>,
-    S::Error: 'static,
-    C: Service<St = (), Req = Control<F, S::Error>>,
+    S: Service<Req = Request>,
+    C: Service<Req = Control<F, S::Error>>,
 {
     CallPublish { fut: PipelineCall<S> },
     CallControl { fut: PipelineCall<C> },
@@ -59,12 +55,14 @@ where
     Stop,
 }
 
-struct DispatcherInner<F, C: Service, S: Service, B> {
+struct DispatcherInner<F, S: Service, C: Service, B> {
     io: Rc<Io<F>>,
     flags: Flags,
+    service: Pipeline<S>,
+    control: PipelineBinding<C>,
     disconnect: Option<ServiceDisconnectReason>,
     codec: Codec,
-    config: Rc<DispatcherConfig<S, C>>,
+    config: DispatcherConfig,
     payload: Option<(PayloadDecoder, bstream::Sender<PayloadError>)>,
     read_remains: u32,
     read_consumed: u32,
@@ -72,25 +70,27 @@ struct DispatcherInner<F, C: Service, S: Service, B> {
     _t: marker::PhantomData<(S, B)>,
 }
 
-impl<F, S, B, C> Dispatcher<F, S, B, C>
+impl<F, S, C, B> Dispatcher<F, S, C, B>
 where
     F: Filter,
-    C: Service<St = (), Req = Control<F, S::Error>, Res = ControlAck<F>>,
-    S: Service<St = (), Req = Request>,
+    S: Service<Req = Request>,
     S::Res: Into<Response<B>>,
     S::Error: ResponseError,
+    C: Service<Req = Control<F, S::Error>, Res = ControlAck<F>>,
     B: MessageBody,
 {
     /// Construct new `Dispatcher` instance with outgoing messages stream.
     pub(in crate::http) fn new(
         id: usize,
         io: Io<F>,
-        config: Rc<DispatcherConfig<S, C>>,
+        service: Pipeline<S>,
+        control: PipelineBinding<C>,
+        config: DispatcherConfig,
     ) -> Self {
         let codec = Codec::new(id, io.shared().get());
 
         // slow-request timer
-        let (flags, max_timeout) = if let Some(cfg) = config.headers_read_rate() {
+        let (flags, max_timeout) = if let Some(cfg) = &codec.cfg.headers_read_rate {
             io.start_timer(cfg.timeout);
             (Flags::READ_HDRS_TIMEOUT, cfg.max_timeout)
         } else {
@@ -102,6 +102,8 @@ where
             inner: DispatcherInner {
                 flags,
                 codec,
+                service,
+                control,
                 config,
                 io: Rc::new(io),
                 payload: None,
@@ -115,14 +117,14 @@ where
     }
 }
 
-impl<F, S, B, C> future::Future for Dispatcher<F, S, B, C>
+impl<F, S, C, B> future::Future for Dispatcher<F, S, C, B>
 where
     F: Filter,
-    C: Service<St = (), Req = Control<F, S::Error>, Res = ControlAck<F>> + 'static,
-    C::Error: error::Error,
-    S: Service<St = (), Req = Request> + 'static,
-    S::Error: ResponseError + 'static,
+    S: Service<Req = Request> + 'static,
     S::Res: Into<Response<B>>,
+    S::Error: ResponseError + 'static,
+    C: Service<Req = Control<F, S::Error>, Res = ControlAck<F>> + 'static,
+    C::Error: error::Error,
     B: MessageBody,
 {
     type Output = Result<(), Rc<dyn error::Error>>;
@@ -239,16 +241,16 @@ where
     }
 }
 
-impl<F, C, S, B> DispatcherInner<F, C, S, B>
+impl<F, S, C, B> DispatcherInner<F, S, C, B>
 where
     F: Filter,
-    C: Service<St = (), Req = Control<F, S::Error>, Res = ControlAck<F>> + 'static,
-    S: Service<St = (), Req = Request> + 'static,
+    S: Service<Req = Request> + 'static,
     S::Res: Into<Response<B>>,
     S::Error: ResponseError,
+    C: Service<Req = Control<F, S::Error>, Res = ControlAck<F>> + 'static,
     B: MessageBody,
 {
-    fn poll_read_request(&mut self, cx: &mut Context<'_>) -> Poll<State<F, C, S, B>> {
+    fn poll_read_request(&mut self, cx: &mut Context<'_>) -> Poll<State<F, S, C, B>> {
         // stop dispatcher
         if self.config.is_shutdown() {
             log::trace!("{}: Service is shutting down", self.io.tag());
@@ -332,7 +334,7 @@ where
         &mut self,
         mut msg: Response<()>,
         body: ResponseBody<B>,
-    ) -> State<F, C, S, B> {
+    ) -> State<F, S, C, B> {
         log::trace!(
             "{}: Sending response: {:?} body: {:?}",
             self.io.tag(),
@@ -384,7 +386,7 @@ where
         &mut self,
         cx: &mut Context<'_>,
         body: &mut ResponseBody<B>,
-    ) -> Poll<State<F, C, S, B>> {
+    ) -> Poll<State<F, S, C, B>> {
         if self.io.is_closed() {
             return Poll::Ready(self.ctl_peer_gone(None));
         } else if self.disconnect.is_none()
@@ -431,7 +433,7 @@ where
 
     /// we might need to read more data into a request payload
     /// (ie service future can wait for payload data)
-    fn poll_request(&mut self, cx: &mut Context<'_>) -> Poll<State<F, C, S, B>> {
+    fn poll_request(&mut self, cx: &mut Context<'_>) -> Poll<State<F, S, C, B>> {
         if self.payload.is_some() {
             if let Some(st) = ready!(self.poll_request_payload(cx)) {
                 Poll::Ready(st)
@@ -459,7 +461,7 @@ where
     fn poll_request_payload(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<State<F, C, S, B>>> {
+    ) -> Poll<Option<State<F, S, C, B>>> {
         if let Err(err) = ready!(self.poll_request_payload_inner::<F>(None, cx)) {
             Poll::Ready(Some(match err {
                 Either::Left(e) => self.ctl_proto_err(e),
@@ -582,9 +584,9 @@ where
     fn handle_timeout(&mut self) -> Result<(), ProtocolError> {
         // check read rate
         let cfg = if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
-            &self.config.headers_read_rate()
+            &self.codec.cfg.headers_read_rate
         } else if self.flags.contains(Flags::READ_PL_TIMEOUT) {
-            &self.config.payload_read_rate()
+            &self.codec.cfg.payload_read_rate
         } else {
             return Ok(());
         };
@@ -638,7 +640,7 @@ where
     fn update_hdrs_timer(
         &mut self,
         decoded: &Decoded<(Request, PayloadType)>,
-    ) -> Option<State<F, C, S, B>> {
+    ) -> Option<State<F, S, C, B>> {
         // got parsed frame
         if decoded.item.is_some() {
             self.read_remains = 0;
@@ -654,16 +656,15 @@ where
         {
             // no new data, start keep-alive timer
             if self.codec.keepalive() {
-                if !self.flags.contains(Flags::READ_KA_TIMEOUT)
-                    && self.config.keep_alive_enabled()
+                if !self.flags.contains(Flags::READ_KA_TIMEOUT) && self.codec.cfg.ka_enabled
                 {
                     log::debug!(
                         "{}: Start keep-alive timer {:?}",
                         self.io.tag(),
-                        self.config.keep_alive()
+                        self.codec.cfg.keep_alive
                     );
                     self.flags.insert(Flags::READ_KA_TIMEOUT);
-                    self.io.start_timer(self.config.keep_alive());
+                    self.io.start_timer(self.codec.cfg.keep_alive);
                 }
             } else {
                 self.io.close();
@@ -671,7 +672,7 @@ where
             }
         } else if self.codec.is_reading_hdrs()
             && !self.flags.contains(Flags::READ_HDRS_TIMEOUT)
-            && let Some(cfg) = self.config.headers_read_rate()
+            && let Some(cfg) = &self.codec.cfg.headers_read_rate
         {
             log::debug!(
                 "{}: Start headers read timer {:?}",
@@ -697,7 +698,7 @@ where
         if self.flags.contains(Flags::READ_PL_TIMEOUT) {
             self.read_remains = decoded.remains as u32;
             self.read_consumed += decoded.consumed as u32;
-        } else if let Some(cfg) = self.config.payload_read_rate() {
+        } else if let Some(cfg) = &self.codec.cfg.payload_read_rate {
             log::debug!("{}: Start payload timer {:?}", self.io.tag(), cfg.timeout);
 
             // start payload timer
@@ -710,82 +711,76 @@ where
         }
     }
 
-    fn publish(&self, req: Request) -> State<F, C, S, B> {
+    fn publish(&self, req: Request) -> State<F, S, C, B> {
         State::CallPublish {
-            fut: self.config.service.call_nowait(req),
+            fut: self.service.call_nowait(req),
         }
     }
 
-    fn control(&self, req: Control<F, S::Error>) -> State<F, C, S, B> {
+    fn control(&self, req: Control<F, S::Error>) -> State<F, S, C, B> {
         State::CallControl {
-            fut: self.config.control.call_nowait(req),
+            fut: self.control.call_nowait(req),
         }
     }
 
-    fn ctl_upgrade(&mut self, req: Request) -> State<F, C, S, B> {
+    fn ctl_upgrade(&mut self, req: Request) -> State<F, S, C, B> {
         self.codec.reset_upgrade();
         self.control(Control::upgrade(req, self.io.clone(), self.codec.clone()))
     }
 
-    fn ctl_keepalive(&mut self, enabled: bool) -> State<F, C, S, B> {
+    fn ctl_keepalive(&mut self, enabled: bool) -> State<F, S, C, B> {
         self.flags.insert(Flags::DISCONNECT_SENT);
         State::CallControl {
-            fut: self.config.control.call_nowait(Control::keepalive(enabled)),
+            fut: self.control.call_nowait(Control::keepalive(enabled)),
         }
     }
 
-    fn ctl_error(&mut self, err: S::Error) -> State<F, C, S, B> {
+    fn ctl_error(&mut self, err: S::Error) -> State<F, S, C, B> {
         self.flags.insert(Flags::DISCONNECT_SENT);
         State::CallControl {
-            fut: self.config.control.call_nowait(Control::err(err)),
+            fut: self.control.call_nowait(Control::err(err)),
         }
     }
 
-    fn ctl_proto_err(&mut self, err: ProtocolError) -> State<F, C, S, B> {
+    fn ctl_proto_err(&mut self, err: ProtocolError) -> State<F, S, C, B> {
         self.flags.insert(Flags::DISCONNECT_SENT);
         State::CallControl {
-            fut: self.config.control.call_nowait(Control::proto_err(err)),
+            fut: self.control.call_nowait(Control::proto_err(err)),
         }
     }
 
-    fn ctl_peer_gone(&mut self, err: Option<io::Error>) -> State<F, C, S, B> {
+    fn ctl_peer_gone(&mut self, err: Option<io::Error>) -> State<F, S, C, B> {
         self.flags.insert(Flags::DISCONNECT_SENT);
         State::CallControl {
-            fut: self.config.control.call_nowait(Control::peer_gone(err)),
+            fut: self.control.call_nowait(Control::peer_gone(err)),
         }
     }
 
-    fn ctl_svc_disconnect(&mut self, reason: ServiceDisconnectReason) -> State<F, C, S, B> {
+    fn ctl_svc_disconnect(&mut self, reason: ServiceDisconnectReason) -> State<F, S, C, B> {
         if self.flags.contains(Flags::DISCONNECT_SENT) {
             self.stop()
         } else {
             self.flags.insert(Flags::DISCONNECT_SENT);
             State::CallControl {
-                fut: self
-                    .config
-                    .control
-                    .call_nowait(Control::svc_disconnect(reason)),
+                fut: self.control.call_nowait(Control::svc_disconnect(reason)),
             }
         }
     }
 
-    fn check_disconnect(&mut self) -> Option<State<F, C, S, B>> {
+    fn check_disconnect(&mut self) -> Option<State<F, S, C, B>> {
         if self.flags.contains(Flags::DISCONNECT_SENT) {
             Some(self.stop())
         } else if let Some(reason) = self.disconnect.take() {
             self.flags.insert(Flags::DISCONNECT_SENT);
             Some(State::CallControl {
-                fut: self
-                    .config
-                    .control
-                    .call_nowait(Control::svc_disconnect(reason)),
+                fut: self.control.call_nowait(Control::svc_disconnect(reason)),
             })
         } else {
             None
         }
     }
 
-    fn stop(&mut self) -> State<F, C, S, B> {
+    fn stop(&mut self) -> State<F, S, C, B> {
         log::debug!("{}: Dispatcher is stopped", self.io.tag());
 
         self.io.stop_timer();
@@ -806,7 +801,7 @@ mod tests {
     use crate::http::h1::{DefaultControlService, control::Reason};
     use crate::http::{ResponseHead, StatusCode, body};
     use crate::io::{self as nio, Base};
-    use crate::service::{IntoService, cfg::SharedCfg, fn_service};
+    use crate::service::{IntoService, State, cfg::SharedCfg, fn_service};
     use crate::util::{Bytes, BytesMut, lazy, stream_recv};
     use crate::{codec::Decoder, testing::IoTest, time::Millis, time::sleep};
 
@@ -816,15 +811,16 @@ mod tests {
     pub(crate) fn h1<F, S, B>(
         stream: IoTest,
         service: F,
-    ) -> Dispatcher<Base, S, B, DefaultControlService<Base, S::Error>>
+    ) -> Dispatcher<Base, S, DefaultControlService<Base, S::Error>, B>
     where
         F: IntoService<S>,
         S: Service<St = (), Req = Request>,
+        S::St: State<S::Req>,
         S::Res: Into<Response<B>>,
         S::Error: ResponseError + 'static,
         B: MessageBody,
     {
-        let config: SharedCfg = SharedCfg::new("DBG")
+        let cfg: SharedCfg = SharedCfg::new("DBG")
             .add(
                 HttpServiceConfig::new()
                     .set_keepalive(Seconds(5))
@@ -834,12 +830,10 @@ mod tests {
 
         Dispatcher::new(
             0,
-            nio::Io::new(stream, config.clone()),
-            Rc::new(DispatcherConfig::new(
-                config.get(),
-                service.into_service(),
-                DefaultControlService::new(),
-            )),
+            nio::Io::new(stream, cfg.clone()),
+            Pipeline::new(service.into_service()),
+            Pipeline::new(DefaultControlService::new()).bind(),
+            DispatcherConfig::default(),
         )
     }
 
@@ -847,11 +841,12 @@ mod tests {
     where
         F: IntoService<S>,
         S: Service<St = (), Req = Request> + 'static,
+        S::St: State<S::Req>,
         S::Res: Into<Response<B>>,
         S::Error: ResponseError,
         B: MessageBody + 'static,
     {
-        let config: SharedCfg = SharedCfg::new("DBG")
+        let cfg: SharedCfg = SharedCfg::new("DBG")
             .add(
                 HttpServiceConfig::new()
                     .set_keepalive(Seconds(5))
@@ -859,14 +854,12 @@ mod tests {
             )
             .into();
 
-        crate::rt::spawn(Dispatcher::<Base, S, B, _>::new(
+        crate::rt::spawn(Dispatcher::<Base, S, _, B>::new(
             0,
-            nio::Io::new(stream, config),
-            Rc::new(DispatcherConfig::new(
-                SharedCfg::default().get(),
-                service.into_service(),
-                DefaultControlService::new(),
-            )),
+            nio::Io::new(stream, cfg),
+            Pipeline::new(service.into_service()),
+            Pipeline::new(DefaultControlService::new()).bind(),
+            DispatcherConfig::default(),
         ));
     }
 
@@ -889,22 +882,19 @@ mod tests {
                     .set_client_timeout(Seconds(1)),
             )
             .into();
-        let cfg = config.get();
-        let mut h1 = Dispatcher::<_, _, _, _>::new(
+
+        let mut h1 = Dispatcher::new(
             0,
             nio::Io::new(server, config),
-            Rc::new(DispatcherConfig::new(
-                cfg,
-                fn_service(|_| {
-                    Box::pin(async { Ok::<_, io::Error>(Response::Ok().finish()) })
-                }),
-                fn_service(move |req: Control<_, _>| {
-                    if let Control::Request(_) = req {
-                        data2.set(true);
-                    }
-                    async move { Ok::<_, std::convert::Infallible>(req.ack()) }
-                }),
-            )),
+            Pipeline::new::<()>(async |_| Ok::<_, io::Error>(Response::Ok().finish())),
+            Pipeline::new::<()>(fn_service(async move |req: Control<_, _>| {
+                if let Control::Request(_) = req {
+                    data2.set(true);
+                }
+                Ok::<_, std::convert::Infallible>(req.ack())
+            }))
+            .bind(),
+            DispatcherConfig::default(),
         );
         sleep(Millis(50)).await;
         let _ = lazy(|cx| Pin::new(&mut h1).poll(cx)).await;
@@ -923,8 +913,8 @@ mod tests {
         client.remote_buffer_cap(1024);
         client.write("GET /test HTTP/1\r\n\r\n");
 
-        let mut h1 = h1(server, |_| {
-            Box::pin(async { Ok::<_, io::Error>(Response::Ok().finish()) })
+        let mut h1 = h1(server, async |_| {
+            Ok::<_, io::Error>(Response::Ok().finish())
         });
         sleep(Millis(50)).await;
         // required because io shutdown is async oper
@@ -947,7 +937,7 @@ mod tests {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
         let mut decoder = ClientCodec::new(true, SharedCfg::default().get());
-        spawn_h1(server, |_| async {
+        spawn_h1(server, async |_| {
             Ok::<_, io::Error>(Response::Ok().finish())
         });
 
@@ -976,7 +966,7 @@ mod tests {
         client.remote_buffer_cap(4096);
         let mut decoder = ClientCodec::new(true, SharedCfg::default().get());
 
-        spawn_h1(server, |mut req: Request| async move {
+        spawn_h1(server, async move |mut req: Request| {
             let mut p = req.take_payload();
             while (stream_recv(&mut p).await).is_some() {}
             Ok::<_, io::Error>(Response::Ok().finish())
@@ -1006,7 +996,7 @@ mod tests {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
         let mut decoder = ClientCodec::new(true, SharedCfg::default().get());
-        spawn_h1(server, |_| async {
+        spawn_h1(server, async |_| {
             sleep(Millis(100)).await;
             Ok::<_, io::Error>(Response::Ok().finish())
         });
@@ -1070,8 +1060,8 @@ mod tests {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
 
-        let mut h1 = h1(server, |_| {
-            Box::pin(async { Ok::<_, io::Error>(Response::Ok().finish()) })
+        let mut h1 = h1(server, async |_| {
+            Ok::<_, io::Error>(Response::Ok().finish())
         });
         h1.inner.io.set_config(
             SharedCfg::new("TEST")
@@ -1114,17 +1104,16 @@ mod tests {
 
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
-        spawn_h1(server, move |mut req: Request| {
+        spawn_h1(server, async move |mut req: Request| {
             let m = mark2.clone();
-            async move {
-                // read one chunk
-                let mut pl = req.take_payload();
-                let _ = stream_recv(&mut pl).await.unwrap().unwrap();
-                m.store(true, Ordering::Relaxed);
-                // sleep
-                sleep(Millis(999_999_000)).await;
-                Ok::<_, io::Error>(Response::Ok().finish())
-            }
+
+            // read one chunk
+            let mut pl = req.take_payload();
+            let _ = stream_recv(&mut pl).await.unwrap().unwrap();
+            m.store(true, Ordering::Relaxed);
+            // sleep
+            sleep(Millis(999_999_000)).await;
+            Ok::<_, io::Error>(Response::Ok().finish())
         });
 
         client.write("GET /test HTTP/1.1\r\nContent-Length: 1048576\r\n\r\n");
@@ -1170,11 +1159,9 @@ mod tests {
         }
 
         let (client, server) = IoTest::create();
-        let mut h1 = h1(server, move |_| {
+        let mut h1 = h1(server, async move |_| {
             let n = num2.clone();
-            Box::pin(async move {
-                Ok::<_, io::Error>(Response::Ok().message_body(Stream(n.clone())))
-            })
+            Ok::<_, io::Error>(Response::Ok().message_body(Stream(n.clone())))
         });
         let state = h1.inner.io.get_ref();
 
@@ -1229,10 +1216,8 @@ mod tests {
 
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
-        let mut h1 = h1(server, |_| {
-            Box::pin(async {
-                Ok::<_, io::Error>(Response::Ok().message_body(Stream(false)))
-            })
+        let mut h1 = h1(server, async |_| {
+            Ok::<_, io::Error>(Response::Ok().message_body(Stream(false)))
         });
 
         client.write("GET /test HTTP/1.1\r\n\r\n");
@@ -1308,22 +1293,19 @@ mod tests {
 
         let disp: Dispatcher<Base, _, _, _> = Dispatcher::new(
             0,
-            nio::Io::new(server, SharedCfg::default()),
-            Rc::new(DispatcherConfig::new(
-                config.get(),
-                svc.into_service(),
-                fn_service(move |msg: Control<_, _>| {
-                    if let Control::Disconnect(Reason::ProtocolError(ref err)) = msg
-                        && matches!(err.err(), ProtocolError::SlowPayloadTimeout)
-                    {
-                        err_mark2.store(
-                            err_mark2.load(Ordering::Relaxed) + 1,
-                            Ordering::Relaxed,
-                        );
-                    }
-                    async move { Ok::<_, io::Error>(msg.ack()) }
-                }),
-            )),
+            nio::Io::new(server, config),
+            Pipeline::new::<()>(svc.into_service()),
+            Pipeline::new::<()>(fn_service(move |msg: Control<_, _>| {
+                if let Control::Disconnect(Reason::ProtocolError(ref err)) = msg
+                    && matches!(err.err(), ProtocolError::SlowPayloadTimeout)
+                {
+                    err_mark2
+                        .store(err_mark2.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
+                }
+                async move { Ok::<_, io::Error>(msg.ack()) }
+            }))
+            .bind(),
+            DispatcherConfig::default(),
         );
         crate::rt::spawn(disp);
 

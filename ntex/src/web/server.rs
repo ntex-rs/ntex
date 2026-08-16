@@ -1,4 +1,4 @@
-use std::{fmt, io, marker::PhantomData, net, sync::Arc, sync::Mutex};
+use std::{error::Error, io, marker::PhantomData, net, sync::Arc, sync::Mutex};
 
 #[cfg(feature = "openssl")]
 use tls_openssl::ssl::{AlpnError, SslAcceptor, SslAcceptorBuilder};
@@ -7,12 +7,11 @@ use tls_rustls::ServerConfig as RustlsServerConfig;
 
 use crate::http::{HttpService, Request, Response, ResponseError, body::MessageBody};
 use crate::server::{Server, ServerBuilder};
-use crate::service::{IntoServiceFactory, ServiceFactory, cfg::SharedCfg};
-use crate::time::Seconds;
+use crate::service::{FromState, IntoServiceFactory, Pipeline, ServiceFactory, State};
+use crate::{SharedCfg, time::Seconds};
 
 struct Config {
     host: Option<String>,
-    cfg: SharedCfg,
 }
 
 /// An HTTP Server.
@@ -34,31 +33,33 @@ struct Config {
 /// ```
 #[derive(derive_more::Debug)]
 #[debug("HttpServer")]
-pub struct HttpServer<F, I, S, B>
+pub struct HttpServer<F, I, Sf, B>
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, Request>,
-    S: ServiceFactory<Request, St = (), InitCfg = SharedCfg>,
-    S::Error: ResponseError,
-    S::InitError: fmt::Debug,
-    S::Res: Into<Response<B>>,
+    I: IntoServiceFactory<Sf, Request>,
+    Sf: ServiceFactory<Request, InitCfg = SharedCfg>,
+    Sf::St: State<Request>,
+    Sf::Res: Into<Response<B>>,
+    Sf::Error: ResponseError,
+    Sf::InitError: Error,
     B: MessageBody,
 {
     pub(super) factory: F,
     config: Arc<Mutex<Config>>,
     backlog: i32,
     builder: ServerBuilder,
-    _t: PhantomData<(S, B)>,
+    _t: PhantomData<(Sf, B)>,
 }
 
-impl<F, I, S, B> HttpServer<F, I, S, B>
+impl<F, I, Sf, B> HttpServer<F, I, Sf, B>
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, Request>,
-    S: ServiceFactory<Request, St = (), InitCfg = SharedCfg> + 'static,
-    S::Error: ResponseError,
-    S::InitError: fmt::Debug,
-    S::Res: Into<Response<B>>,
+    I: IntoServiceFactory<Sf, Request>,
+    Sf: ServiceFactory<Request, InitCfg = SharedCfg> + 'static,
+    Sf::St: State<Request> + FromState<()>,
+    Sf::Res: Into<Response<B>>,
+    Sf::Error: ResponseError,
+    Sf::InitError: Error,
     B: MessageBody + 'static,
 {
     #[must_use]
@@ -66,10 +67,7 @@ where
     pub fn new(factory: F) -> Self {
         HttpServer {
             factory,
-            config: Arc::new(Mutex::new(Config {
-                host: None,
-                cfg: SharedCfg::default(),
-            })),
+            config: Arc::new(Mutex::new(Config { host: None })),
             backlog: 1024,
             builder: ServerBuilder::default(),
             _t: PhantomData,
@@ -199,28 +197,22 @@ where
         self
     }
 
-    #[must_use]
-    /// Set io config for named service.
-    pub fn config<T: Into<SharedCfg>>(self, cfg: T) -> Self {
-        self.config.lock().unwrap().cfg = cfg.into();
-        self
-    }
-
     /// Use listener for accepting incoming connection requests
     ///
     /// `HttpServer` does not change any configuration for `TcpListener`,
     /// it needs to be configured before passing it to `listen()` method.
-    pub fn listen(mut self, lst: net::TcpListener) -> io::Result<Self> {
-        let cfg = self.config.clone();
+    pub fn listen(mut self, lst: net::TcpListener, cfg: SharedCfg) -> io::Result<Self> {
         let factory = self.factory.clone();
         let addr = lst.local_addr().unwrap();
 
         self.builder = self.builder.listen(
             format!("ntex-web-service-{addr}"),
             lst,
-            async move |r| {
-                r.config(cfg.lock().unwrap().cfg.clone());
-                HttpService::new(factory().await)
+            cfg,
+            async move || {
+                Ok(Pipeline::new(HttpService::<(), _, _, _, _, _>::new(
+                    factory().await,
+                )))
             },
         )?;
         Ok(self)
@@ -233,27 +225,31 @@ where
     pub fn listen_openssl(
         self,
         lst: net::TcpListener,
+        cfg: SharedCfg,
         builder: SslAcceptorBuilder,
     ) -> io::Result<Self> {
-        self.listen_ssl_inner(lst, openssl_acceptor(builder)?)
+        self.listen_ssl_inner(lst, cfg, openssl_acceptor(builder)?)
     }
 
     #[cfg(feature = "openssl")]
     fn listen_ssl_inner(
         mut self,
         lst: net::TcpListener,
+        cfg: SharedCfg,
         acceptor: SslAcceptor,
     ) -> io::Result<Self> {
         let factory = self.factory.clone();
-        let cfg = self.config.clone();
         let addr = lst.local_addr().unwrap();
 
         self.builder = self.builder.listen(
             format!("ntex-web-service-{addr}"),
             lst,
-            async move |r| {
-                r.config(cfg.lock().unwrap().cfg.clone());
-                HttpService::new(factory().await).openssl(acceptor.clone())
+            cfg,
+            async move || {
+                Ok(Pipeline::new(
+                    HttpService::<(), _, _, _, _, _>::new(factory().await)
+                        .openssl(acceptor.clone()),
+                ))
             },
         )?;
         Ok(self)
@@ -266,27 +262,31 @@ where
     pub fn listen_rustls(
         self,
         lst: net::TcpListener,
+        cfg: SharedCfg,
         config: RustlsServerConfig,
     ) -> io::Result<Self> {
-        self.listen_rustls_inner(lst, config)
+        self.listen_rustls_inner(lst, cfg, config)
     }
 
     #[cfg(feature = "rustls")]
     fn listen_rustls_inner(
         mut self,
         lst: net::TcpListener,
+        cfg: SharedCfg,
         config: RustlsServerConfig,
     ) -> io::Result<Self> {
         let factory = self.factory.clone();
-        let cfg = self.config.clone();
         let addr = lst.local_addr().unwrap();
 
         self.builder = self.builder.listen(
             format!("ntex-web-rustls-service-{addr}"),
             lst,
-            async move |r| {
-                r.config(cfg.lock().unwrap().cfg.clone());
-                HttpService::new(factory().await).rustls(config.clone())
+            cfg,
+            async move || {
+                Ok(Pipeline::new(
+                    HttpService::<(), _, _, _, _, _>::new(factory().await)
+                        .rustls(config.clone()),
+                ))
             },
         )?;
         Ok(self)
@@ -295,11 +295,13 @@ where
     /// The socket address to bind.
     ///
     /// To bind multiple addresses this method can be called multiple times.
-    pub fn bind<A: net::ToSocketAddrs>(mut self, addr: A) -> io::Result<Self> {
-        let sockets = self.bind2(addr)?;
-
-        for lst in sockets {
-            self = self.listen(lst)?;
+    pub fn bind<A: net::ToSocketAddrs>(
+        mut self,
+        addr: A,
+        cfg: SharedCfg,
+    ) -> io::Result<Self> {
+        for lst in self.bind2(addr)? {
+            self = self.listen(lst, cfg.clone())?;
         }
 
         Ok(self)
@@ -338,6 +340,7 @@ where
     pub fn bind_openssl<A>(
         mut self,
         addr: A,
+        cfg: SharedCfg,
         builder: SslAcceptorBuilder,
     ) -> io::Result<Self>
     where
@@ -347,7 +350,7 @@ where
         let acceptor = openssl_acceptor(builder)?;
 
         for lst in sockets {
-            self = self.listen_ssl_inner(lst, acceptor.clone())?;
+            self = self.listen_ssl_inner(lst, cfg.clone(), acceptor.clone())?;
         }
 
         Ok(self)
@@ -360,11 +363,12 @@ where
     pub fn bind_rustls<A: net::ToSocketAddrs>(
         mut self,
         addr: A,
+        cfg: SharedCfg,
         config: &RustlsServerConfig,
     ) -> io::Result<Self> {
         let sockets = self.bind2(addr)?;
         for lst in sockets {
-            self = self.listen_rustls_inner(lst, config.clone())?;
+            self = self.listen_rustls_inner(lst, cfg.clone(), config.clone())?;
         }
         Ok(self)
     }
@@ -373,14 +377,18 @@ where
     /// Start listening for unix domain connections on existing listener.
     ///
     /// This method is available with `uds` feature.
-    pub fn listen_uds(mut self, lst: std::os::unix::net::UnixListener) -> io::Result<Self> {
-        let cfg = self.config.clone();
+    pub fn listen_uds(
+        mut self,
+        lst: std::os::unix::net::UnixListener,
+        cfg: SharedCfg,
+    ) -> io::Result<Self> {
         let factory = self.factory.clone();
         let addr = format!("ntex-web-service-{:?}", lst.local_addr()?);
 
-        self.builder = self.builder.listen_uds(addr, lst, async move |r| {
-            r.config(cfg.lock().unwrap().cfg.clone());
-            HttpService::new(factory().await)
+        self.builder = self.builder.listen_uds(addr, lst, cfg, async move || {
+            Ok(Pipeline::new(HttpService::<(), _, _, _, _, _>::new(
+                factory().await,
+            )))
         })?;
         Ok(self)
     }
@@ -389,34 +397,35 @@ where
     /// Start listening for incoming unix domain connections.
     ///
     /// This method is available with `uds` feature.
-    pub fn bind_uds<A>(mut self, addr: A) -> io::Result<Self>
+    pub fn bind_uds<A>(mut self, addr: A, cfg: SharedCfg) -> io::Result<Self>
     where
         A: AsRef<std::path::Path>,
     {
-        let cfg = self.config.clone();
         let factory = self.factory.clone();
 
         self.builder = self.builder.bind_uds(
             format!("ntex-web-service-{:?}", addr.as_ref().display()),
             addr,
-            async move |r| {
-                r.config(cfg.lock().unwrap().cfg.clone());
-                HttpService::new(factory().await)
+            cfg,
+            async move || {
+                Ok(Pipeline::new(HttpService::<(), _, _, _, _, _>::new(
+                    factory().await,
+                )))
             },
         )?;
         Ok(self)
     }
 }
 
-impl<F, I, S, B> HttpServer<F, I, S, B>
+impl<F, I, Sf, B> HttpServer<F, I, Sf, B>
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, Request>,
-    S: ServiceFactory<Request, St = (), InitCfg = SharedCfg>,
-    S::Res: Into<Response<B>>,
-    S::Error: ResponseError,
-    S::InitError: fmt::Debug,
-    S::Service: 'static,
+    I: IntoServiceFactory<Sf, Request>,
+    Sf: ServiceFactory<Request, InitCfg = SharedCfg> + 'static,
+    Sf::St: State<Request>,
+    Sf::Res: Into<Response<B>>,
+    Sf::Error: ResponseError,
+    Sf::InitError: Error,
     B: MessageBody,
 {
     /// Start listening for incoming connections.

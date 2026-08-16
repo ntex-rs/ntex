@@ -828,7 +828,7 @@ async fn middleware() {
 #[ntex::test]
 async fn test_h1_v2() {
     let srv = test_server(async move || {
-        HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::Ok().body(STR)))
+        HttpService::new(async |_| Ok::<_, io::Error>(Response::Ok().body(STR)))
     })
     .await;
 

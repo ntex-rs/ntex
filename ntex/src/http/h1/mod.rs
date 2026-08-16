@@ -14,7 +14,7 @@ pub use self::codec::Codec;
 pub use self::control::{Control, ControlAck};
 pub use self::decoder::{PayloadDecoder, PayloadItem, PayloadType};
 pub use self::default::DefaultControlService;
-pub use self::service::{H1Service, H1ServiceHandler};
+pub use self::service::H1Service;
 
 pub(super) use self::service::handle_io;
 use crate::{channel::bstream::Receiver, util::Bytes};

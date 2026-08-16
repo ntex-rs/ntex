@@ -13,44 +13,44 @@ use crate::{MAX_SSL_ACCEPT_COUNTER, TlsConfig, openssl::SslFilter};
 /// Support `TLS` server connections via openssl package
 ///
 /// `openssl` feature enables `Acceptor` type
-pub struct SslAcceptor<St> {
+pub struct SslAcceptorFactory<St> {
     acceptor: ssl::SslAcceptor,
     st: PhantomData<St>,
 }
 
-impl<St> SslAcceptor<St> {
+impl<St> SslAcceptorFactory<St> {
     /// Create default openssl acceptor service
     pub fn new(acceptor: ssl::SslAcceptor) -> Self {
-        SslAcceptor {
+        SslAcceptorFactory {
             acceptor,
             st: PhantomData,
         }
     }
 }
 
-impl<St> fmt::Debug for SslAcceptor<St> {
+impl<St> fmt::Debug for SslAcceptorFactory<St> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SslAcceptor").finish()
+        f.debug_struct("SslAcceptorFactory").finish()
     }
 }
 
-impl<St> From<ssl::SslAcceptor> for SslAcceptor<St> {
+impl<St> From<ssl::SslAcceptor> for SslAcceptorFactory<St> {
     fn from(acceptor: ssl::SslAcceptor) -> Self {
         Self::new(acceptor)
     }
 }
 
-impl<F: Filter, St> ServiceFactory<Io<F>> for SslAcceptor<St> {
+impl<F: Filter, St> ServiceFactory<Io<F>> for SslAcceptorFactory<St> {
     type St = St;
     type Res = Io<Layer<SslFilter, F>>;
     type Error = Box<dyn Error>;
-    type Service = SslAcceptorService<F, St>;
+    type Service = SslAcceptor<F, St>;
     type InitCfg = SharedCfg;
     type InitError = ();
 
     async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {
         MAX_SSL_ACCEPT_COUNTER.with(|conns| {
-            Ok(SslAcceptorService {
+            Ok(SslAcceptor {
                 acceptor: self.acceptor.clone(),
                 conns: conns.clone(),
                 cfg: cfg.get(),
@@ -64,14 +64,26 @@ impl<F: Filter, St> ServiceFactory<Io<F>> for SslAcceptor<St> {
 /// Support `TLS` server connections via openssl package
 ///
 /// `openssl` feature enables `Acceptor` type
-pub struct SslAcceptorService<F, St> {
+pub struct SslAcceptor<F, St> {
     acceptor: ssl::SslAcceptor,
     cfg: Cfg<TlsConfig>,
     conns: Counter,
     st: PhantomData<(F, St)>,
 }
 
-impl<F: Filter, St> Service for SslAcceptorService<F, St> {
+impl<F, St> SslAcceptor<F, St> {
+    /// Create default openssl acceptor service
+    pub fn new(acceptor: ssl::SslAcceptor) -> Self {
+        MAX_SSL_ACCEPT_COUNTER.with(|conns| SslAcceptor {
+            acceptor,
+            conns: conns.clone(),
+            cfg: Cfg::default(),
+            st: PhantomData,
+        })
+    }
+}
+
+impl<F: Filter, St> Service for SslAcceptor<F, St> {
     type St = St;
     type Req = Io<F>;
     type Res = Io<Layer<SslFilter, F>>;
@@ -88,7 +100,9 @@ impl<F: Filter, St> Service for SslAcceptorService<F, St> {
         let _guard = self.conns.get();
         let ctx_result = ssl::Ssl::new(self.acceptor.context());
 
-        time::timeout(self.cfg.handshake_timeout(), async {
+        let cfg: Cfg<TlsConfig> = io.shared().get();
+
+        time::timeout(cfg.handshake_timeout(), async {
             let ssl = ctx_result.map_err(super::map_to_ioerr)?;
             let inner = super::IoInner {
                 source: None,
@@ -123,7 +137,13 @@ impl<F: Filter, St> Service for SslAcceptorService<F, St> {
     }
 }
 
-impl<F, St> fmt::Debug for SslAcceptorService<F, St> {
+impl<F, St> From<ssl::SslAcceptor> for SslAcceptor<F, St> {
+    fn from(acceptor: ssl::SslAcceptor) -> Self {
+        Self::new(acceptor)
+    }
+}
+
+impl<F, St> fmt::Debug for SslAcceptor<F, St> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SslAcceptorService")
             .field("cfg", &self.cfg)
