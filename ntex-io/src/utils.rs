@@ -1,6 +1,6 @@
 use std::{cell::Cell, task::Poll, task::Waker};
 
-use ntex_service::{IntoServiceFactory, ServiceFactory, chain_factory};
+use ntex_service::{IntoServiceFactory, ServiceFactory, chain_factory, fn_service};
 use ntex_util::task::LocalWaker;
 
 use crate::{Filter, Io, IoBoxed, IoCallbacks};
@@ -29,7 +29,7 @@ where
     F: Filter,
     Sf: ServiceFactory<IoBoxed>,
 {
-    chain_factory(async |io: Io<F>| Ok(io.boxed()))
+    chain_factory(fn_service(async |io: Io<F>| Ok(io.boxed())))
         .map_init_err(|_| unreachable!())
         .and_then(f.into_factory())
 }

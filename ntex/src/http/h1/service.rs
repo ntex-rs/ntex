@@ -138,7 +138,7 @@ where
     Ctl::Error: Error,
 {
     /// Provide http/1 control service
-    pub fn control<U>(self, ctl: impl IntoService<U>) -> H1Service<F, St, Sf, B, U>
+    pub fn control<U>(self, ctl: impl IntoService<U>) -> H1Service<St, F, Sf, B, U>
     where
         U: Service<Req = Control<F, Sf::Error>, Res = ControlAck<F>>,
         U::St: State<Control<F, Sf::Error>>,

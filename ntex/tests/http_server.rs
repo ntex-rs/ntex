@@ -13,7 +13,7 @@ use ntex::http::{
 use ntex::http::{body, h1, h1::Control, test, test::server as test_server};
 use ntex::time::{Millis, Seconds, sleep, timeout};
 use ntex::util::{Bytes, Ready};
-use ntex::{SharedCfg, channel::oneshot, rt, service::fn_service, web::error};
+use ntex::{SharedCfg, chain_factory, channel::oneshot, fn_service, rt, web::error};
 
 #[ntex::test]
 async fn test_h1() {
@@ -66,11 +66,11 @@ async fn test_h1_2() {
 async fn test_expect_continue() {
     let srv = test::server_with_config(
         async || {
-            HttpService::h1(fn_service(|mut req: Request| async move {
+            HttpService::h1(async move |mut req: Request| {
                 let _ = req.payload().next().await;
                 Ok::<_, io::Error>(Response::Ok().finish())
-            }))
-            .control(fn_service(|req: Control<_, _>| async move {
+            })
+            .control(async move |req: Control<_, _>| {
                 sleep(Millis(20)).await;
                 let ack = if let Control::Expect(exc) = req {
                     if exc.get_ref().head().uri.query() == Some("yes=") {
@@ -85,7 +85,7 @@ async fn test_expect_continue() {
                     req.ack()
                 };
                 Ok::<_, std::convert::Infallible>(ack)
-            }))
+            })
         },
         SharedCfg::new("SRV")
             .add(HttpServiceConfig::new().set_keepalive(KeepAlive::Disabled)),
@@ -118,18 +118,20 @@ async fn test_chunked_payload() {
     let total_size: usize = chunk_sizes.iter().sum();
 
     let srv = test_server(async || {
-        HttpService::h1(fn_service(|mut request: Request| {
-            request
-                .take_payload()
-                .map(|res| match res {
-                    Ok(pl) => pl,
-                    Err(e) => panic!("Error reading payload: {e}"),
-                })
-                .fold(0usize, |acc, chunk| async move { acc + chunk.len() })
-                .map(|req_size| {
-                    Ok::<_, io::Error>(Response::Ok().body(format!("size={req_size}")))
-                })
-        }))
+        HttpService::h1(chain_factory::<(), _, _>(fn_service(
+            |mut request: Request| {
+                request
+                    .take_payload()
+                    .map(|res| match res {
+                        Ok(pl) => pl,
+                        Err(e) => panic!("Error reading payload: {e}"),
+                    })
+                    .fold(0usize, |acc, chunk| async move { acc + chunk.len() })
+                    .map(|req_size| {
+                        Ok::<_, io::Error>(Response::Ok().body(format!("size={req_size}")))
+                    })
+            },
+        )))
     })
     .await;
 
@@ -311,13 +313,13 @@ async fn test_http1_keepalive_after_response() {
     let srv = test::server_with_config(
         async move || {
             let ka = ka2.clone();
-            HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish())).control(
-                fn_service(async move |req: Control<_, _>| {
+            HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().finish())).control(
+                async move |req: Control<_, _>| {
                     if let Control::Disconnect(h1::control::Reason::KeepAlive(_)) = &req {
                         ka.store(true, Ordering::Release);
                     }
                     Ok::<_, std::convert::Infallible>(req.ack())
-                }),
+                },
             )
         },
         SharedCfg::new("SRV").add(
@@ -427,14 +429,12 @@ async fn test_http1_keepalive_disabled() {
 async fn test_http1_disable_payload_timer_after_whole_pl_has_been_read() {
     let srv = test::server_with_config(
         async || {
-            HttpService::h1(|mut req: Request| async move {
+            HttpService::h1(async move |mut req: Request| {
                 req.payload().recv().await;
                 sleep(Millis(1500)).await;
                 Ok::<_, io::Error>(Response::Ok().finish())
             })
-            .control(fn_service(move |msg: Control<_, _>| async move {
-                Ok::<_, io::Error>(msg.ack())
-            }))
+            .control(async |msg: Control<_, _>| Ok::<_, io::Error>(msg.ack()))
         },
         SharedCfg::new("SRV").add(
             HttpServiceConfig::new()
@@ -461,16 +461,17 @@ async fn test_http1_disable_payload_timer_after_whole_pl_has_been_read() {
 #[ntex::test]
 async fn test_http1_handle_not_consumed_payload() {
     let srv = test_server(async || {
-        HttpService::h1(|_| async move { Ok::<_, io::Error>(Response::Ok().finish()) })
-            .control(fn_service(move |msg: Control<_, _>| {
+        HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().finish())).control(
+            async |msg: Control<_, _>| {
                 if matches!(
                     msg,
                     Control::Disconnect(ntex::http::h1::control::Reason::ProtocolError(_))
                 ) {
                     panic!()
                 }
-                async move { Ok::<_, io::Error>(msg.ack()) }
-            }))
+                Ok::<_, io::Error>(msg.ack())
+            },
+        )
     })
     .await;
 
@@ -778,14 +779,14 @@ async fn test_h1_body_chunked_implicit() {
 #[ntex::test]
 async fn test_h1_response_http_error_handling() {
     let srv = test_server(async || {
-        HttpService::h1(fn_service(|_| {
+        HttpService::h1(async |_| {
             let broken_header = Bytes::from_static(b"\0\0\0");
-            Ready::Ok::<_, io::Error>(
+            Ok::<_, io::Error>(
                 Response::Ok()
                     .header(header::CONTENT_TYPE, &broken_header[..])
                     .body(STR),
             )
-        }))
+        })
     })
     .await;
 
