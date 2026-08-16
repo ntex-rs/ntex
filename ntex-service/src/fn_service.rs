@@ -136,12 +136,12 @@ where
     }
 }
 
-impl<St, F, Req, Res, Err> IntoService<FnService<St, F, Req>> for F
+impl<F, Req, Res, Err> IntoService<FnService<(), F, Req>> for F
 where
     F: AsyncFn(Req) -> Result<Res, Err>,
 {
     #[inline]
-    fn into_service(self) -> FnService<St, F, Req> {
+    fn into_service(self) -> FnService<(), F, Req> {
         FnService {
             f: self,
             _t: PhantomData,
