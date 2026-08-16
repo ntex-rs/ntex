@@ -208,7 +208,7 @@ mod tests {
         let (tx, rx) = oneshot::channel();
         spawn(Dispatcher { p, tx: Some(tx) }).detach();
 
-        sleep(Millis(50)).await;
+        sleep(Millis(25)).await;
         assert_eq!(svc.call(1usize).await, Ok(1usize));
         sleep(Millis(100)).await;
 
