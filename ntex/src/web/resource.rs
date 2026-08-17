@@ -36,7 +36,7 @@ type ResourcePipeline<F, Err> = ServiceChain<AndThen<F, ResourceRouter<Err>>, ()
 /// fn main() {
 ///     let app = App::new().service(
 ///         web::resource("/")
-///             .route(web::get().to(|| async { HttpResponse::Ok() })));
+///             .route(web::get().to(async || { HttpResponse::Ok() })));
 /// }
 /// ```
 ///
@@ -111,7 +111,7 @@ where
     ///         .service(
     ///             web::resource("/app")
     ///                 .guard(guard::Header("content-type", "text/json"))
-    ///                 .route(web::get().to(|| async { HttpResponse::MethodNotAllowed() }))
+    ///                 .route(web::get().to(async || { HttpResponse::MethodNotAllowed() }))
     ///         );
     /// }
     /// ```
@@ -172,7 +172,7 @@ where
     ///             web::route()
     ///                 .guard(guard::Any(guard::Get()).or(guard::Put()))
     ///                 .guard(guard::Header("Content-Type", "text/plain"))
-    ///                 .to(|| async { HttpResponse::Ok() }))
+    ///                 .to(async || { HttpResponse::Ok() }))
     ///     );
     /// }
     /// ```
@@ -520,7 +520,6 @@ mod tests {
     use crate::time::{Millis, sleep};
     use crate::web::test::{TestRequest, call_service, init_service};
     use crate::web::{self, App, DefaultError, HttpResponse, guard, request::WebRequest};
-    use crate::{service::fn_service, util::Ready};
 
     #[crate::rt_test]
     async fn test_filter() {
@@ -529,11 +528,11 @@ mod tests {
         let srv = init_service(
             App::new().service(
                 web::resource("/test")
-                    .filter(fn_service(move |req: WebRequest<_>| {
+                    .filter(async move |req: WebRequest<_>| {
                         filter2.set(true);
-                        Ready::Ok(req)
-                    }))
-                    .route(web::get().to(|| async { HttpResponse::Ok() })),
+                        Ok(req)
+                    })
+                    .route(web::get().to(async || HttpResponse::Ok())),
             ),
         )
         .await;
@@ -545,7 +544,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_to() {
-        let srv = init_service(App::new().service(web::resource("/test").to(|| async {
+        let srv = init_service(App::new().service(web::resource("/test").to(async || {
             sleep(Millis(100)).await;
             HttpResponse::Ok()
         })))
@@ -558,8 +557,7 @@ mod tests {
     #[crate::rt_test]
     async fn test_pattern() {
         let srv = init_service(
-            App::new()
-                .service(web::resource(["/test", "/test2"]).to(|| async { HttpResponse::Ok() })),
+            App::new().service(web::resource(["/test", "/test2"]).to(async || HttpResponse::Ok())),
         )
         .await;
         let req = TestRequest::with_uri("/test").to_request();
@@ -574,10 +572,8 @@ mod tests {
     async fn test_default_resource() {
         let srv = init_service(
             App::new()
-                .service(
-                    web::resource("/test").route(web::get().to(|| async { HttpResponse::Ok() })),
-                )
-                .default_service(|r: WebRequest<DefaultError>| async move {
+                .service(web::resource("/test").route(web::get().to(async || HttpResponse::Ok())))
+                .default_service(async move |r: WebRequest<DefaultError>| {
                     Ok(r.into_response(HttpResponse::BadRequest()))
                 }),
         )
@@ -595,8 +591,8 @@ mod tests {
         let srv = init_service(
             App::new().service(
                 web::resource("/test")
-                    .route(web::get().to(|| async { HttpResponse::Ok() }))
-                    .default_service(|r: WebRequest<DefaultError>| async move {
+                    .route(web::get().to(async || HttpResponse::Ok()))
+                    .default_service(async move |r: WebRequest<DefaultError>| {
                         Ok(r.into_response(HttpResponse::BadRequest()))
                     }),
             ),
@@ -621,17 +617,17 @@ mod tests {
                 .service(
                     web::resource("/test/{p}")
                         .guard(guard::Get())
-                        .to(|| async { HttpResponse::Ok() }),
+                        .to(async || HttpResponse::Ok()),
                 )
                 .service(
                     web::resource("/test/{p}")
                         .guard(guard::Put())
-                        .to(|| async { HttpResponse::Created() }),
+                        .to(async || HttpResponse::Created()),
                 )
                 .service(
                     web::resource("/test/{p}")
                         .guard(guard::Delete())
-                        .to(|| async { HttpResponse::NoContent() }),
+                        .to(async || HttpResponse::NoContent()),
                 ),
         )
         .await;

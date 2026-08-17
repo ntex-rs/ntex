@@ -153,6 +153,8 @@ where
 
         // check inflight connections
         let inflight = self.config.shutdown();
+        println!("=============== SHT ======== {inflight:?}");
+
         if inflight != 0 {
             log::trace!("Shutting down service, in-flight connections: {inflight}");
 
@@ -173,6 +175,7 @@ where
         let id = self.config.next_id();
         let ioref = io.get_ref();
         let inflight = self.config.insert_io(&ioref);
+        println!("=============== START ======== {inflight:?}");
 
         log::trace!(
             "{}: New http1 connection {id}, peer address {:?}, inflight: {}",
@@ -184,6 +187,11 @@ where
         let result = handle_io(id, io, svc, self.ctl.bind(), self.config.clone()).await;
 
         let inflight = self.config.remove_io(&ioref);
+        println!(
+            "=============== STOP ======== {inflight:?} = {:?}",
+            self.config.is_shutdown()
+        );
+
         if inflight == 0 && self.config.is_shutdown() {
             self.config.notify_shutdown()
         }

@@ -7,7 +7,7 @@ use ntex::io::{DispatchItem, Dispatcher, IoConfig};
 use ntex::service::{Pipeline, cfg::SharedCfg, chain, fn_factory_with_config};
 use ntex::web::{self, App, HttpRequest};
 use ntex::ws::{self, handshake_response};
-use ntex::{time::Seconds, util::ByteString, util::Bytes, util::Ready};
+use ntex::{time::Seconds, util::ByteString, util::Bytes};
 
 async fn ws_service(msg: DispatchItem<ws::Codec>) -> Result<Option<ws::Message>, io::Error> {
     let msg = match msg {
@@ -28,10 +28,10 @@ async fn ws_service(msg: DispatchItem<ws::Codec>) -> Result<Option<ws::Message>,
 #[ntex::test]
 async fn test_simple() {
     let srv = test_server(async || {
-        HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::NotFound())).h1_control(
-            |req: h1::Control<_, _>| async move {
+        HttpService::new(async |_| Ok::<_, io::Error>(Response::NotFound())).h1_control(
+            async move |req: h1::Control<_, _>| {
                 let ack = if let h1::Control::Upgrade(upg) = req {
-                    upg.handle(|req, io, codec| async move {
+                    upg.handle(async move |req, io, codec| {
                         let res = handshake_response(req.head()).finish();
 
                         // send handshake respone
@@ -85,10 +85,10 @@ async fn test_simple() {
 #[ntex::test]
 async fn test_transport() {
     let srv = test_server(async || {
-        HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::NotFound())).h1_control(
-            |req: h1::Control<_, _>| async move {
+        HttpService::new(async |_| Ok::<_, io::Error>(Response::NotFound())).h1_control(
+            async move |req: h1::Control<_, _>| {
                 let ack = if let h1::Control::Upgrade(upg) = req {
-                    upg.handle(|req, io, codec| async move {
+                    upg.handle(async move |req, io, codec| {
                         let res = handshake_response(req.head()).finish();
 
                         // send handshake respone
@@ -121,10 +121,10 @@ async fn test_transport() {
 #[ntex::test]
 async fn test_keepalive_timeout() {
     let srv = test_server(async || {
-        HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::NotFound())).control(
-            |req: h1::Control<_, _>| async move {
+        HttpService::h1(async |_| Ok::<_, io::Error>(Response::NotFound())).control(
+            async move |req: h1::Control<_, _>| {
                 let ack = if let h1::Control::Upgrade(upg) = req {
-                    upg.handle(|req, io, codec| async move {
+                    upg.handle(async move |req, io, codec| {
                         let res = handshake_response(req.head()).finish();
 
                         // send handshake respone
@@ -181,14 +181,14 @@ async fn test_upgrade_handler_with_await() {
 
     let srv = test_server(async || {
         HttpService::new(App::new().service(web::resource("/").route(web::to(
-            |req: HttpRequest| async move {
+            async move |req: HttpRequest| {
                 // some async context switch
                 ntex::time::sleep(ntex::time::Seconds::ZERO).await;
 
                 web::ws::start(
                     &req,
                     None,
-                    fn_factory_with_config(|_: &ws::WsSink| async {
+                    fn_factory_with_config(async |_: &ws::WsSink| {
                         Ok::<_, web::Error>(chain(service))
                     }),
                 )

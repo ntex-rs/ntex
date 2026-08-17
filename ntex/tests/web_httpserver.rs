@@ -24,7 +24,7 @@ async fn test_run() {
         sys.run(move || {
             let srv = HttpServer::new(async || {
                 App::new().service(
-                    web::resource("/").route(web::to(|| async { HttpResponse::Ok().body("test") })),
+                    web::resource("/").route(web::to(async || HttpResponse::Ok().body("test"))),
                 )
             })
             .workers(1)
@@ -119,7 +119,7 @@ async fn test_openssl() {
         sys.run(move || {
             let srv = HttpServer::new(async || {
                 App::new().service(web::resource("/").route(web::to(
-                    |req: HttpRequest| async move {
+                    async move |req: HttpRequest| {
                         assert!(req.app_config().secure());
                         HttpResponse::Ok().body("test")
                     },
@@ -214,7 +214,7 @@ async fn test_bind_uds() {
         sys.run(move || {
             let srv = HttpServer::new(async || {
                 App::new().service(
-                    web::resource("/").route(web::to(|| async { HttpResponse::Ok().body("test") })),
+                    web::resource("/").route(web::to(async || HttpResponse::Ok().body("test"))),
                 )
             })
             .workers(1)
@@ -233,15 +233,13 @@ async fn test_bind_uds() {
     use ntex::client;
 
     let client = client::Client::builder()
-        .connector::<&str>(
-            client::Connector::default().connector(ntex::service::fn_service(|_| async {
-                Ok(
-                    rt::unix_connect("/tmp/uds-test", ntex::SharedCfg::default())
-                        .await
-                        .map_err(ntex::connect::ConnectError::from)?,
-                )
-            })),
-        )
+        .connector::<&str>(client::Connector::default().connector(async |_| {
+            Ok(
+                rt::unix_connect("/tmp/uds-test", ntex::SharedCfg::default())
+                    .await
+                    .map_err(ntex::connect::ConnectError::from)?,
+            )
+        }))
         .build(ntex::SharedCfg::default())
         .await
         .unwrap();
@@ -269,7 +267,7 @@ async fn test_listen_uds() {
 
             let srv = HttpServer::new(async || {
                 App::new().service(
-                    web::resource("/").route(web::to(|| async { HttpResponse::Ok().body("test") })),
+                    web::resource("/").route(web::to(async || HttpResponse::Ok().body("test"))),
                 )
             })
             .workers(1)
@@ -288,15 +286,13 @@ async fn test_listen_uds() {
     use ntex::client;
 
     let client = client::Client::builder()
-        .connector::<&str>(
-            client::Connector::default().connector(ntex::service::fn_service(|_| async {
-                Ok(
-                    rt::unix_connect("/tmp/uds-test2", ntex::SharedCfg::default())
-                        .await
-                        .map_err(ntex::connect::ConnectError::from)?,
-                )
-            })),
-        )
+        .connector::<&str>(client::Connector::default().connector(async |_| {
+            Ok(
+                rt::unix_connect("/tmp/uds-test2", ntex::SharedCfg::default())
+                    .await
+                    .map_err(ntex::connect::ConnectError::from)?,
+            )
+        }))
         .build(ntex::SharedCfg::default())
         .await
         .unwrap();

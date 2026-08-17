@@ -6,7 +6,7 @@ use ntex::http::{HttpService, HttpServiceConfig, Request, Response, StatusCode, 
 use ntex::io::{DispatchItem, Dispatcher, Io, IoConfig};
 use ntex::service::{Ctx, Pipeline, ReadyCtx, Service, cfg::SharedCfg};
 use ntex::time::{Millis, Seconds, sleep};
-use ntex::util::{ByteString, Bytes, Ready};
+use ntex::util::{ByteString, Bytes};
 use ntex::ws::{self, handshake, handshake_response};
 
 struct WsService(Arc<Mutex<Cell<bool>>>);
@@ -85,7 +85,7 @@ async fn test_simple() {
             let ws_service = ws_service.clone();
             async move || {
                 let ws_service = ws_service.clone();
-                HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::NotFound())).control(
+                HttpService::h1(async |_| Ok::<_, io::Error>(Response::NotFound())).control(
                     async move |req: h1::Control<_, _>| {
                         let ack = if let h1::Control::Upgrade(upg) = req {
                             assert!(format!("{upg:?}").contains("Upgrade"));
@@ -268,10 +268,10 @@ async fn test_simple() {
 #[ntex::test]
 async fn test_transport() {
     let srv = test_server(async || {
-        HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::NotFound())).h1_control(
+        HttpService::new(async |_| Ok::<_, io::Error>(Response::NotFound())).h1_control(
             async move |req: h1::Control<_, _>| {
                 let ack = if let h1::Control::Upgrade(upg) = req {
-                    upg.handle(|req, io, codec| async move {
+                    upg.handle(async move |req, io, codec| {
                         let res = handshake_response(req.head()).finish();
 
                         // send handshake respone
@@ -352,10 +352,10 @@ async fn test_stale_timer_after_ws_upgrade() {
 
     let srv = test::server_with_config(
         async move || {
-            HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::NotFound())).control(
+            HttpService::h1(async |_| Ok::<_, io::Error>(Response::NotFound())).control(
                 move |req: h1::Control<_, _>| {
                     let ack = if let h1::Control::Upgrade(upg) = req {
-                        upg.handle(|req, io, codec| async move {
+                        upg.handle(async move |req, io, codec| {
                             let res = handshake(req.head()).unwrap().message_body(());
                             io.encode((res, body::BodySize::None).into(), &codec)
                                 .unwrap();

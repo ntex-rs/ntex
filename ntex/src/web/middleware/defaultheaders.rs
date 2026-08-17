@@ -19,8 +19,8 @@ use crate::web::{WebRequest, WebResponse};
 ///         .middleware(middleware::DefaultHeaders::new().header("X-Version", "0.2"))
 ///         .service(
 ///             web::resource("/test")
-///                 .route(web::get().to(|| async { HttpResponse::Ok() }))
-///                 .route(web::method(http::Method::HEAD).to(|| async { HttpResponse::MethodNotAllowed() }))
+///                 .route(web::get().to(async || { HttpResponse::Ok() }))
+///                 .route(web::method(http::Method::HEAD).to(async || { HttpResponse::MethodNotAllowed() }))
 ///         );
 /// }
 /// ```
@@ -140,7 +140,7 @@ where
 #[allow(unused_must_use)]
 mod tests {
     use super::*;
-    use crate::service::{IntoService, Pipeline};
+    use crate::service::{Pipeline, fn_service};
     use crate::util::lazy;
     use crate::web::test::{TestRequest, ok_service};
     use crate::web::{DefaultError, Error, HttpResponse};
@@ -161,15 +161,15 @@ mod tests {
         assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "0001");
 
         let req = TestRequest::default().to_srv_request();
-        let srv = |req: WebRequest<DefaultError>| async move {
+        let srv = fn_service(async move |req: WebRequest<DefaultError>| {
             Ok::<_, Error>(
                 req.into_response(HttpResponse::Ok().header(CONTENT_TYPE, "0002").finish()),
             )
-        };
-        let mw = Pipeline::new::<()>(
+        });
+        let mw = Pipeline::new(
             DefaultHeaders::new()
                 .header(CONTENT_TYPE, "0001")
-                .create(srv.into_service(), &SharedCfg::default()),
+                .create(srv, &SharedCfg::default()),
         );
         let resp = mw.call(req).await.unwrap();
         assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "0002");
@@ -189,13 +189,13 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_content_type() {
-        let srv = |req: WebRequest<DefaultError>| async move {
+        let srv = fn_service(async move |req: WebRequest<DefaultError>| {
             Ok::<_, Error>(req.into_response(HttpResponse::Ok().finish()))
-        };
-        let mw = Pipeline::new::<()>(
+        });
+        let mw = Pipeline::new(
             DefaultHeaders::new()
                 .content_type()
-                .create(srv.into_service(), &SharedCfg::default()),
+                .create(srv, &SharedCfg::default()),
         );
 
         let req = TestRequest::default().to_srv_request();

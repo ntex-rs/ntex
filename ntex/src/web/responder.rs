@@ -320,7 +320,7 @@ pub(crate) mod tests {
     #[crate::rt_test]
     async fn test_either_responder() {
         let srv = init_service(web::App::new().service(web::resource("/index.html").to(
-            |req: HttpRequest| async move {
+            async move |req: HttpRequest| {
                 if req.query_string().is_empty() {
                     Either::Left(HttpResponse::BadRequest())
                 } else {
@@ -343,8 +343,8 @@ pub(crate) mod tests {
     async fn test_option_responder() {
         let srv = init_service(
             web::App::new()
-                .service(web::resource("/none").to(|| async { Option::<&'static str>::None }))
-                .service(web::resource("/some").to(|| async { Some("some") })),
+                .service(web::resource("/none").to(async || Option::<&'static str>::None))
+                .service(web::resource("/some").to(async || Some("some"))),
         )
         .await;
 

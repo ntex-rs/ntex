@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 #![cfg(feature = "openssl")]
 use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 
@@ -7,9 +8,9 @@ use tls_openssl::ssl::{
 
 use ntex::client::{Client, Connector};
 use ntex::http::{HttpService, Version, test::server as test_server};
-use ntex::service::factory;
+use ntex::service::chain;
 use ntex::web::{self, App, HttpResponse};
-use ntex::{SharedCfg, time::Seconds, util::Ready};
+use ntex::{SharedCfg, time::Seconds};
 
 fn ssl_acceptor() -> SslAcceptor {
     // load ssl keys
@@ -39,16 +40,15 @@ async fn test_connection_reuse_h2() {
 
     let srv = test_server(async move || {
         let num2 = num2.clone();
-        factory(async move |io| {
+        chain(async move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
             Ok(io)
         })
         .and_then(
             HttpService::h2(
-                App::new()
-                    .service(web::resource("/").route(web::to(|| async { HttpResponse::Ok() }))),
+                App::new().service(web::resource("/").route(web::to(async || HttpResponse::Ok()))),
             )
-            .openssl(ssl_acceptor()), //.map_err(|_| ()),
+            .openssl(ssl_acceptor()),
         )
     })
     .await;

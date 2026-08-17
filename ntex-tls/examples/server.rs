@@ -1,7 +1,6 @@
 use std::io;
 
-use ntex::service::{factory, fn_service};
-use ntex::{codec, io::Io, server, util::Either};
+use ntex::{SharedCfg, chain, codec, io::Io, server, util::Either};
 use ntex_tls::openssl::{PeerCert, PeerCertChain, SslAcceptor};
 use tls_openssl::ssl::{self, SslFiletype, SslMethod, SslVerifyMode};
 
@@ -24,35 +23,40 @@ async fn main() -> io::Result<()> {
     let acceptor = builder.build();
 
     // start server
-    server::ServerBuilder::new()
-        .bind("basic", "127.0.0.1:8443", async move |_| {
-            chain(SslAcceptor::new(acceptor.clone())).and_then(fn_service(|io: Io<_>| async move {
-                println!("New client is connected");
-                if let Some(cert) = io.query::<PeerCert>().as_ref() {
-                    println!("Peer cert: {:?}", cert.0);
-                }
-                if let Some(cert) = io.query::<PeerCertChain>().as_ref() {
-                    println!("Peer cert chain: {:?}", cert.0);
-                }
-                loop {
-                    match io.recv(&codec::BytesCodec).await {
-                        Ok(Some(msg)) => {
-                            println!("Got message: {:?}", msg);
-                            io.send(msg, &codec::BytesCodec)
-                                .await
-                                .map_err(Either::into_inner)?;
-                        }
-                        Err(e) => {
-                            println!("Got error: {:?}", e);
-                            break;
-                        }
-                        Ok(None) => break,
+    server::build()
+        .bind(
+            "basic",
+            "127.0.0.1:8443",
+            SharedCfg::new("S"),
+            async move || {
+                chain(SslAcceptor::new(acceptor.clone())).and_then(async move |io: Io<_>| {
+                    println!("New client is connected");
+                    if let Some(cert) = io.query::<PeerCert>().as_ref() {
+                        println!("Peer cert: {:?}", cert.0);
                     }
-                }
-                println!("Client is disconnected");
-                Ok(())
-            }))
-        })?
+                    if let Some(cert) = io.query::<PeerCertChain>().as_ref() {
+                        println!("Peer cert chain: {:?}", cert.0);
+                    }
+                    loop {
+                        match io.recv(&codec::BytesCodec).await {
+                            Ok(Some(msg)) => {
+                                println!("Got message: {:?}", msg);
+                                io.send(msg, &codec::BytesCodec)
+                                    .await
+                                    .map_err(Either::into_inner)?;
+                            }
+                            Err(e) => {
+                                println!("Got error: {:?}", e);
+                                break;
+                            }
+                            Ok(None) => break,
+                        }
+                    }
+                    println!("Client is disconnected");
+                    Ok(())
+                })
+            },
+        )?
         .workers(1)
         .run()
         .await

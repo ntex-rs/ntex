@@ -27,7 +27,7 @@ async fn web_ws() {
                 ws::start(
                     &req,
                     None,
-                    fn_factory_with_config(|_: &ws::WsSink| async {
+                    fn_factory_with_config(async |_: &ws::WsSink| {
                         Ok::<_, web::Error>(fn_service(service))
                     }),
                 )
@@ -72,7 +72,7 @@ async fn web_ws() {
 async fn web_no_ws() {
     let srv = test::server(async || {
         App::new()
-            .service(web::resource("/").route(web::to(|| async { HttpResponse::Ok() })))
+            .service(web::resource("/").route(web::to(async || HttpResponse::Ok())))
             .service(web::resource("/ws_error").route(web::to(async || {
                 Err::<HttpResponse, _>(io::Error::other("test"))
             })))
@@ -102,7 +102,7 @@ async fn web_ws_after_pooled_post_request() {
     let srv = test::server(async || {
         App::new()
             .service(
-                web::resource("/").route(web::to(|req: HttpRequest| async move {
+                web::resource("/").route(web::to(async move |req: HttpRequest| {
                     ws::start(
                         &req,
                         None,
@@ -113,7 +113,7 @@ async fn web_ws_after_pooled_post_request() {
                     .await
                 })),
             )
-            .service(web::resource("/post").route(web::post().to(|| async { HttpResponse::Ok() })))
+            .service(web::resource("/post").route(web::post().to(async || HttpResponse::Ok())))
     })
     .await;
 
@@ -135,7 +135,7 @@ async fn web_ws_after_pooled_post_request() {
 async fn web_no_ws_2() {
     let srv = test::server(async || {
         App::new().service(
-            web::resource("/").route(web::to(|| async { HttpResponse::Ok().body("Hello world") })),
+            web::resource("/").route(web::to(async || HttpResponse::Ok().body("Hello world"))),
         )
     })
     .await;
@@ -158,11 +158,11 @@ async fn web_no_ws_2() {
 async fn web_ws_client() {
     let srv = test::server(async || {
         App::new().service(
-            web::resource("/").route(web::to(|req: HttpRequest| async move {
+            web::resource("/").route(web::to(async move |req: HttpRequest| {
                 ws::start(
                     &req,
                     None,
-                    fn_factory_with_config(|_: &ws::WsSink| async {
+                    fn_factory_with_config(async |_: &ws::WsSink| {
                         Ok::<_, web::Error>(fn_service(service))
                     }),
                 )
@@ -216,7 +216,7 @@ async fn web_ws_subprotocol() {
 
     let srv = test::server(async || {
         App::new().service(
-            web::resource("/").route(web::to(|req: HttpRequest| async move {
+            web::resource("/").route(web::to(async move |req: HttpRequest| {
                 // choose first supported protocol, convert to owned String
                 let protocol: Option<&str> = ws::subprotocols(&req)
                     .find(|p| *p == "my-subprotocol" || *p == "others-subprotocol");
@@ -224,7 +224,7 @@ async fn web_ws_subprotocol() {
                 ws::start(
                     &req,
                     protocol,
-                    fn_factory_with_config(|_: &ws::WsSink| async {
+                    fn_factory_with_config(async |_: &ws::WsSink| {
                         Ok::<_, web::Error>(fn_service(service))
                     }),
                 )
@@ -264,14 +264,14 @@ async fn web_ws_subprotocol_none() {
 
     let srv = test::server(async || {
         App::new().service(
-            web::resource("/").route(web::to(|req: HttpRequest| async move {
+            web::resource("/").route(web::to(async move |req: HttpRequest| {
                 // choose first supported protocol (none will match), convert to owned String
                 let protocol: Option<&str> = ws::subprotocols(&req).find(|p| *p == "unsupported");
 
                 ws::start(
                     &req,
                     protocol,
-                    fn_factory_with_config(|_: &ws::WsSink| async {
+                    fn_factory_with_config(async |_: &ws::WsSink| {
                         Ok::<_, web::Error>(fn_service(service))
                     }),
                 )
@@ -311,7 +311,7 @@ async fn web_ws_protocols_parsing() {
 
     let srv = test::server(async || {
         App::new().service(
-            web::resource("/").route(web::to(|req: HttpRequest| async move {
+            web::resource("/").route(web::to(async move |req: HttpRequest| {
                 // collect all requested protocols into owned Strings
                 let protocols: Vec<String> = ws::subprotocols(&req).map(String::from).collect();
 
@@ -325,7 +325,7 @@ async fn web_ws_protocols_parsing() {
                 ws::start(
                     &req,
                     protocol,
-                    fn_factory_with_config(|_: &ws::WsSink| async {
+                    fn_factory_with_config(async |_: &ws::WsSink| {
                         Ok::<_, web::Error>(fn_service(service))
                     }),
                 )

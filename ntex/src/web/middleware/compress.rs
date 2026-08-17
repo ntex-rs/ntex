@@ -20,8 +20,8 @@ use crate::web::{BodyEncoding, ErrorRenderer, WebRequest, WebResponse};
 ///         .middleware(middleware::Compress::default())
 ///         .service(
 ///             web::resource("/test")
-///                 .route(web::get().to(|| async { HttpResponse::Ok() }))
-///                 .route(web::head().to(|| async { HttpResponse::MethodNotAllowed() }))
+///                 .route(web::get().to(async || { HttpResponse::Ok() }))
+///                 .route(web::head().to(async || { HttpResponse::MethodNotAllowed() }))
 ///         );
 /// }
 /// ```

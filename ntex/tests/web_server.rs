@@ -12,7 +12,7 @@ use ntex::http::header::{
 };
 use ntex::http::{ConnectionType, HttpServiceConfig, Method, StatusCode, body::Body};
 use ntex::time::{Millis, Seconds, Sleep, sleep};
-use ntex::util::{Bytes, Ready, Stream};
+use ntex::util::{Bytes, Stream};
 use ntex::{SharedCfg, client, io::IoConfig};
 
 use ntex::web::{self, middleware::Compress, test};
@@ -79,8 +79,7 @@ impl Stream for TestBody {
 #[ntex::test]
 async fn test_body() {
     let srv = test::server(async || {
-        App::new()
-            .service(web::resource("/").route(web::to(|| async { HttpResponse::Ok().body(STR) })))
+        App::new().service(web::resource("/").route(web::to(async || HttpResponse::Ok().body(STR))))
     })
     .await;
 
@@ -97,7 +96,7 @@ async fn test_body_gzip() {
     let srv = test::server_with(test::config().h1(), async || {
         App::new()
             .middleware(Compress::new(ContentEncoding::Gzip))
-            .service(web::resource("/").route(web::to(|| async { HttpResponse::Ok().body(STR) })))
+            .service(web::resource("/").route(web::to(async || HttpResponse::Ok().body(STR))))
     })
     .await;
 
@@ -125,7 +124,7 @@ async fn test_body_gzip2() {
     let srv = test::server_with(test::config().h1(), async || {
         App::new()
             .middleware(Compress::new(ContentEncoding::Gzip))
-            .service(web::resource("/").route(web::to(|| async {
+            .service(web::resource("/").route(web::to(async || {
                 HttpResponse::Ok().body(STR).into_body::<Body>()
             })))
     })
@@ -155,12 +154,12 @@ async fn test_body_encoding_override() {
     let srv = test::server_with(test::config().h1(), async || {
         App::new()
             .middleware(Compress::new(ContentEncoding::Gzip))
-            .service(web::resource("/").route(web::to(|| async {
+            .service(web::resource("/").route(web::to(async || {
                 HttpResponse::Ok()
                     .encoding(ContentEncoding::Deflate)
                     .body(STR)
             })))
-            .service(web::resource("/raw").route(web::to(|| async {
+            .service(web::resource("/raw").route(web::to(async || {
                 let body = Body::Bytes(STR.into());
                 let mut response = HttpResponse::with_body(StatusCode::OK, body);
 
@@ -219,8 +218,8 @@ async fn test_body_gzip_large() {
         let data = srv_data.clone();
         App::new()
             .middleware(Compress::new(ContentEncoding::Gzip))
-            .service(web::resource("/").route(web::to(move || {
-                Ready::Ok::<_, io::Error>(HttpResponse::Ok().body(data.clone()))
+            .service(web::resource("/").route(web::to(async move || {
+                Ok::<_, io::Error>(HttpResponse::Ok().body(data.clone()))
             })))
     })
     .await;
@@ -257,8 +256,8 @@ async fn test_body_gzip_large_random() {
         let data = srv_data.clone();
         App::new()
             .middleware(Compress::new(ContentEncoding::Gzip))
-            .service(web::resource("/").route(web::to(move || {
-                Ready::Ok::<_, io::Error>(HttpResponse::Ok().body(data.clone()))
+            .service(web::resource("/").route(web::to(async move || {
+                Ok::<_, io::Error>(HttpResponse::Ok().body(data.clone()))
             })))
     })
     .await;
@@ -288,7 +287,7 @@ async fn test_body_chunked_implicit() {
     let srv = test::server_with(test::config().h1(), async || {
         App::new()
             .middleware(Compress::new(ContentEncoding::Gzip))
-            .service(web::resource("/").route(web::get().to(move || async {
+            .service(web::resource("/").route(web::get().to(async move || {
                 HttpResponse::Ok().streaming(TestBody::new(Bytes::from_static(STR.as_ref()), 24))
             })))
     })
@@ -319,12 +318,13 @@ async fn test_body_chunked_implicit() {
 
 #[ntex::test]
 async fn test_head_binary() {
-    let srv = test::server_with(test::config().h1(), async || {
-        App::new().service(web::resource("/").route(
-            web::head().to(move || async { HttpResponse::Ok().content_length(100).body(STR) }),
-        ))
-    })
-    .await;
+    let srv =
+        test::server_with(test::config().h1(), async || {
+            App::new().service(web::resource("/").route(
+                web::head().to(async move || HttpResponse::Ok().content_length(100).body(STR)),
+            ))
+        })
+        .await;
 
     let response = srv.head("/").send().await.unwrap();
     assert!(response.status().is_success());
@@ -342,7 +342,7 @@ async fn test_head_binary() {
 #[ntex::test]
 async fn test_no_chunking() {
     let srv = test::server_with(test::config().h1(), async || {
-        App::new().service(web::resource("/").route(web::to(move || async {
+        App::new().service(web::resource("/").route(web::to(async move || {
             HttpResponse::Ok()
                 .no_chunking()
                 .content_length(STR.len() as u64)
@@ -365,9 +365,7 @@ async fn test_body_deflate() {
     let srv = test::server_with(test::config().h1(), async || {
         App::new()
             .middleware(Compress::new(ContentEncoding::Deflate))
-            .service(
-                web::resource("/").route(web::to(move || async { HttpResponse::Ok().body(STR) })),
-            )
+            .service(web::resource("/").route(web::to(async move || HttpResponse::Ok().body(STR))))
     })
     .await;
 
@@ -395,7 +393,7 @@ async fn test_encoding() {
     let srv = test::server_with(test::config().h1(), async || {
         App::new()
             .middleware(Compress::default())
-            .service(web::resource("/").route(web::to(move |body: Bytes| async {
+            .service(web::resource("/").route(web::to(async move |body: Bytes| {
                 HttpResponse::Ok().body(body)
             })))
     })
@@ -421,7 +419,7 @@ async fn test_encoding() {
 #[ntex::test]
 async fn test_gzip_encoding() {
     let srv = test::server_with(test::config().h1(), async || {
-        App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
+        App::new().service(web::resource("/").route(web::to(async move |body: Bytes| {
             HttpResponse::Ok().body(body)
         })))
     })
@@ -448,7 +446,7 @@ async fn test_gzip_encoding() {
 async fn test_gzip_encoding_large() {
     let data = STR.repeat(10);
     let srv = test::server_with(test::config().h1(), async || {
-        App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
+        App::new().service(web::resource("/").route(web::to(async move |body: Bytes| {
             HttpResponse::Ok().body(body)
         })))
     })
@@ -480,7 +478,7 @@ async fn test_reading_gzip_encoding_large_random() {
         .collect::<String>();
 
     let srv = test::server_with(test::config().h1(), async || {
-        App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
+        App::new().service(web::resource("/").route(web::to(async move |body: Bytes| {
             HttpResponse::Ok().body(body)
         })))
     })
@@ -507,7 +505,7 @@ async fn test_reading_gzip_encoding_large_random() {
 #[ntex::test]
 async fn test_reading_deflate_encoding() {
     let srv = test::server_with(test::config().h1(), async || {
-        App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
+        App::new().service(web::resource("/").route(web::to(async move |body: Bytes| {
             HttpResponse::Ok().body(body)
         })))
     })
@@ -534,7 +532,7 @@ async fn test_reading_deflate_encoding() {
 async fn test_reading_deflate_encoding_large() {
     let data = STR.repeat(10);
     let srv = test::server_with(test::config().h1(), async || {
-        App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
+        App::new().service(web::resource("/").route(web::to(async move |body: Bytes| {
             HttpResponse::Ok().body(body)
         })))
     })
@@ -566,7 +564,7 @@ async fn test_reading_deflate_encoding_large_random() {
         .collect::<String>();
 
     let srv = test::server_with(test::config().h1(), async || {
-        App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
+        App::new().service(web::resource("/").route(web::to(async move |body: Bytes| {
             HttpResponse::Ok().body(body)
         })))
     })
@@ -602,7 +600,7 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
     let srv = test::server_with(
         test::config().rustls(rustls_utils::tls_acceptor()),
         async || {
-            App::new().service(web::resource("/").route(web::to(|bytes: Bytes| async {
+            App::new().service(web::resource("/").route(web::to(async |bytes: Bytes| {
                 HttpResponse::Ok()
                     .encoding(ContentEncoding::Identity)
                     .body(bytes)
@@ -644,7 +642,7 @@ async fn test_reading_deflate_encoding_large_random_rustls_h1() {
     let srv = test::server_with(
         test::config().rustls(rustls_utils::tls_acceptor()).h1(),
         async || {
-            App::new().service(web::resource("/").route(web::to(|bytes: Bytes| async {
+            App::new().service(web::resource("/").route(web::to(async |bytes: Bytes| {
                 HttpResponse::Ok()
                     .encoding(ContentEncoding::Identity)
                     .body(bytes)
@@ -686,7 +684,7 @@ async fn test_reading_deflate_encoding_large_random_rustls_h2() {
     let srv = test::server_with(
         test::config().rustls(rustls_utils::tls_acceptor()).h2(),
         async || {
-            App::new().service(web::resource("/").route(web::to(|bytes: Bytes| async {
+            App::new().service(web::resource("/").route(web::to(async |bytes: Bytes| {
                 HttpResponse::Ok()
                     .encoding(ContentEncoding::Identity)
                     .body(bytes)
@@ -722,7 +720,7 @@ async fn test_server_cookies() {
     use ntex::http::header::SET_COOKIE;
 
     let srv = test::server(async || {
-        App::new().service(web::resource("/").to(|| async {
+        App::new().service(web::resource("/").to(async || {
             HttpResponse::Ok()
                 .cookie(coo_kie::Cookie::build(("first", "first_value")).http_only(true))
                 .cookie(coo_kie::Cookie::new("second", "first_value"))
@@ -769,7 +767,7 @@ async fn test_slow_request() {
     use std::net;
 
     let srv = test::server_with(test::config().client_timeout(Seconds(1)), async || {
-        App::new().service(web::resource("/").route(web::to(|| async { HttpResponse::Ok() })))
+        App::new().service(web::resource("/").route(web::to(async || HttpResponse::Ok())))
     })
     .await;
 
@@ -911,12 +909,12 @@ async fn test_web_server() {
 async fn web_no_ws_with_response_payload() {
     let srv = test::server_with(test::config().h1(), async || {
         App::new()
-            .service(web::resource("/").route(web::get().to(move || async {
+            .service(web::resource("/").route(web::get().to(async move || {
                 HttpResponse::Ok().streaming(TestBody::new(Bytes::from_static(STR.as_ref()), 24))
             })))
             .service(
                 web::resource("/f")
-                    .route(web::get().to(move || async { HttpResponse::Ok().body(STR) })),
+                    .route(web::get().to(async move || HttpResponse::Ok().body(STR))),
             )
     })
     .await;

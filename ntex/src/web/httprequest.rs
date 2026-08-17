@@ -431,7 +431,7 @@ mod tests {
     #[crate::rt_test]
     async fn test_state() {
         let srv = init_service(App::new().state(10usize).service(web::resource("/").to(
-            |req: HttpRequest| async move {
+            async move |req: HttpRequest| {
                 if req.app_state::<usize>().is_some() {
                     HttpResponse::Ok()
                 } else {
@@ -446,7 +446,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let srv = init_service(App::new().state(10u32).service(web::resource("/").to(
-            |req: HttpRequest| async move {
+            async move |req: HttpRequest| {
                 if req.app_state::<usize>().is_some() {
                     HttpResponse::Ok()
                 } else {

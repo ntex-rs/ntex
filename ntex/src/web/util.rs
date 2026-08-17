@@ -44,8 +44,8 @@ use super::{HttpResponse, HttpResponseBuilder};
 ///
 /// let app = web::App::new().service(
 ///     web::resource("/users/{userid}/{friend}")
-///         .route(web::get().to(|| async { web::HttpResponse::Ok() }))
-///         .route(web::head().to(|| async { web::HttpResponse::MethodNotAllowed() }))
+///         .route(web::get().to(async || { web::HttpResponse::Ok() }))
+///         .route(web::head().to(async || { web::HttpResponse::MethodNotAllowed() }))
 /// );
 /// ```
 pub fn resource<T: IntoPattern, Err: ErrorRenderer>(path: T) -> Resource<Err> {
@@ -62,9 +62,9 @@ pub fn resource<T: IntoPattern, Err: ErrorRenderer>(path: T) -> Resource<Err> {
 ///
 /// let app = web::App::new().service(
 ///     web::scope("/{project_id}")
-///         .service(web::resource("/path1").to(|| async { web::HttpResponse::Ok() }))
-///         .service(web::resource("/path2").to(|| async { web::HttpResponse::Ok() }))
-///         .service(web::resource("/path3").to(|| async { web::HttpResponse::MethodNotAllowed() }))
+///         .service(web::resource("/path1").to(async || { web::HttpResponse::Ok() }))
+///         .service(web::resource("/path2").to(async || { web::HttpResponse::Ok() }))
+///         .service(web::resource("/path3").to(async || { web::HttpResponse::MethodNotAllowed() }))
 /// );
 /// ```
 ///
@@ -89,7 +89,7 @@ pub fn route<Err: ErrorRenderer>() -> Route<Err> {
 ///
 /// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
-///        .route(web::get().to(|| async { web::HttpResponse::Ok() }))
+///        .route(web::get().to(async || { web::HttpResponse::Ok() }))
 /// );
 /// ```
 ///
@@ -107,7 +107,7 @@ pub fn get<Err: ErrorRenderer>() -> Route<Err> {
 ///
 /// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
-///         .route(web::post().to(|| async { web::HttpResponse::Ok() }))
+///         .route(web::post().to(async || { web::HttpResponse::Ok() }))
 /// );
 /// ```
 ///
@@ -125,7 +125,7 @@ pub fn post<Err: ErrorRenderer>() -> Route<Err> {
 ///
 /// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
-///         .route(web::put().to(|| async { web::HttpResponse::Ok() }))
+///         .route(web::put().to(async || { web::HttpResponse::Ok() }))
 /// );
 /// ```
 ///
@@ -143,7 +143,7 @@ pub fn put<Err: ErrorRenderer>() -> Route<Err> {
 ///
 /// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
-///         .route(web::patch().to(|| async { web::HttpResponse::Ok() }))
+///         .route(web::patch().to(async || { web::HttpResponse::Ok() }))
 /// );
 /// ```
 ///
@@ -161,7 +161,7 @@ pub fn patch<Err: ErrorRenderer>() -> Route<Err> {
 ///
 /// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
-///         .route(web::delete().to(|| async { web::HttpResponse::Ok() }))
+///         .route(web::delete().to(async || { web::HttpResponse::Ok() }))
 /// );
 /// ```
 ///
@@ -179,7 +179,7 @@ pub fn delete<Err: ErrorRenderer>() -> Route<Err> {
 ///
 /// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
-///         .route(web::head().to(|| async { web::HttpResponse::Ok() }))
+///         .route(web::head().to(async || { web::HttpResponse::Ok() }))
 /// );
 /// ```
 ///
@@ -197,7 +197,7 @@ pub fn head<Err: ErrorRenderer>() -> Route<Err> {
 ///
 /// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
-///         .route(web::query().to(|| async { web::HttpResponse::Ok() }))
+///         .route(web::query().to(async || { web::HttpResponse::Ok() }))
 /// );
 /// ```
 ///
@@ -215,7 +215,7 @@ pub fn query<Err: ErrorRenderer>() -> Route<Err> {
 ///
 /// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
-///         .route(web::method(http::Method::GET).to(|| async { web::HttpResponse::Ok() }))
+///         .route(web::method(http::Method::GET).to(async || { web::HttpResponse::Ok() }))
 /// );
 /// ```
 ///
@@ -291,7 +291,7 @@ where
 /// async fn main() -> std::io::Result<()> {
 ///     web::server(
 ///         async || web::App::new()
-///             .service(web::resource("/").to(|| async { web::HttpResponse::Ok() })))
+///             .service(web::resource("/").to(async || { web::HttpResponse::Ok() })))
 ///         .bind("127.0.0.1:59090")?
 ///         .run()
 ///         .await

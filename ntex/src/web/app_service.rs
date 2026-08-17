@@ -323,7 +323,7 @@ mod tests {
             let app = init_service(
                 App::new()
                     .state(DropData(data.clone()))
-                    .service(web::resource("/test").to(|| async { HttpResponse::Ok() })),
+                    .service(web::resource("/test").to(async || HttpResponse::Ok())),
             )
             .await;
             let req = TestRequest::with_uri("/test").to_request();

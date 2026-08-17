@@ -60,7 +60,7 @@ pub fn default_service<Err: ErrorRenderer>(
 /// async fn test_init_service() {
 ///     let mut app = test::init_service(
 ///         App::new()
-///             .service(web::resource("/test").to(|| async { HttpResponse::Ok() }))
+///             .service(web::resource("/test").to(async || { HttpResponse::Ok() }))
 ///     ).await;
 ///
 ///     // Create request object
@@ -91,7 +91,7 @@ where
 /// async fn test_response() {
 ///     let mut app = test::init_service(
 ///         App::new()
-///             .service(web::resource("/test").to(|| async {
+///             .service(web::resource("/test").to(async || {
 ///                 HttpResponse::Ok()
 ///             }))
 ///     ).await;
@@ -123,7 +123,7 @@ where
 ///     let mut app = test::init_service(
 ///         App::new().service(
 ///             web::resource("/index.html")
-///                 .route(web::post().to(|| async {
+///                 .route(web::post().to(async || {
 ///                     HttpResponse::Ok().body("welcome!")
 ///                 })))
 ///     ).await;
@@ -165,7 +165,7 @@ where
 ///     let mut app = test::init_service(
 ///         App::new().service(
 ///             web::resource("/index.html")
-///                 .route(web::post().to(|| async {
+///                 .route(web::post().to(async || {
 ///                     HttpResponse::Ok().body("welcome!")
 ///                 })))
 ///     ).await;
@@ -219,7 +219,7 @@ where
 ///     let mut app = test::init_service(
 ///         App::new().service(
 ///             web::resource("/people")
-///                 .route(web::post().to(|person: web::Json<Person>| async {
+///                 .route(web::post().to(async |person: web::Json<Person>| {
 ///                     HttpResponse::Ok()
 ///                         .json(person.into_inner())})
 ///                     ))
@@ -1079,9 +1079,9 @@ mod tests {
         let app = init_service(
             App::new().service(
                 web::resource("/index.html")
-                    .route(web::put().to(|| async { HttpResponse::Ok().body("put!") }))
-                    .route(web::patch().to(|| async { HttpResponse::Ok().body("patch!") }))
-                    .route(web::delete().to(|| async { HttpResponse::Ok().body("delete!") })),
+                    .route(web::put().to(async || HttpResponse::Ok().body("put!")))
+                    .route(web::patch().to(async || HttpResponse::Ok().body("patch!")))
+                    .route(web::delete().to(async || HttpResponse::Ok().body("delete!"))),
             ),
         )
         .await;
@@ -1112,7 +1112,7 @@ mod tests {
         let app = init_service(
             App::new().service(
                 web::resource("/index.html")
-                    .route(web::post().to(|| async { HttpResponse::Ok().body("welcome!") })),
+                    .route(web::post().to(async || HttpResponse::Ok().body("welcome!"))),
             ),
         )
         .await;
@@ -1136,7 +1136,7 @@ mod tests {
     async fn test_response_json() {
         let app = init_service(
             App::new().service(web::resource("/people").route(web::post().to(
-                |person: web::types::Json<Person>| async {
+                async |person: web::types::Json<Person>| {
                     HttpResponse::Ok().json(&person.into_inner())
                 },
             ))),
@@ -1159,7 +1159,7 @@ mod tests {
     async fn test_request_response_form() {
         let app = init_service(
             App::new().service(web::resource("/people").route(web::post().to(
-                |person: web::types::Form<Person>| async {
+                async |person: web::types::Form<Person>| {
                     HttpResponse::Ok().json(&person.into_inner())
                 },
             ))),
@@ -1187,7 +1187,7 @@ mod tests {
     async fn test_request_response_json() {
         let app = init_service(
             App::new().service(web::resource("/people").route(web::post().to(
-                |person: web::types::Json<Person>| async {
+                async |person: web::types::Json<Person>| {
                     HttpResponse::Ok().json(&person.into_inner())
                 },
             ))),
@@ -1254,21 +1254,21 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_test_methods() {
-        let srv = server(|| async {
+        let srv = server(async || {
             App::new().service(
                 web::resource("/").route((
                     web::route()
                         .method(Method::PUT)
-                        .to(|| async { HttpResponse::Ok() }),
+                        .to(async || HttpResponse::Ok()),
                     web::route()
                         .method(Method::PATCH)
-                        .to(|| async { HttpResponse::Ok() }),
+                        .to(async || HttpResponse::Ok()),
                     web::route()
                         .method(Method::DELETE)
-                        .to(|| async { HttpResponse::Ok() }),
+                        .to(async || HttpResponse::Ok()),
                     web::route()
                         .method(Method::OPTIONS)
-                        .to(|| async { HttpResponse::Ok() }),
+                        .to(async || HttpResponse::Ok()),
                 )),
             )
         })

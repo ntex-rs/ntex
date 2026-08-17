@@ -278,7 +278,7 @@ mod tests {
         };
 
         let srv = init_service(App::new().configure(cfg).service(
-            web::resource("/").to(|_: web::types::State<usize>| async { HttpResponse::Ok() }),
+            web::resource("/").to(async |_: web::types::State<usize>| HttpResponse::Ok()),
         ))
         .await;
         let req = TestRequest::default().to_request();
@@ -296,7 +296,7 @@ mod tests {
                 })
                 .route(
                     "/test",
-                    web::get().to(|req: HttpRequest| async move {
+                    web::get().to(async move |req: HttpRequest| {
                         HttpResponse::Ok()
                             .body(format!("{}", req.url_for("youtube", ["12345"]).unwrap()))
                     }),
@@ -314,12 +314,9 @@ mod tests {
     async fn test_configure_service() {
         let srv = init_service(App::new().configure(|cfg| {
             cfg.service(
-                web::resource("/test").route(web::get().to(|| async { HttpResponse::Created() })),
+                web::resource("/test").route(web::get().to(async || HttpResponse::Created())),
             )
-            .route(
-                "/index.html",
-                web::get().to(|| async { HttpResponse::Ok() }),
-            );
+            .route("/index.html", web::get().to(async || HttpResponse::Ok()));
         }))
         .await;
 

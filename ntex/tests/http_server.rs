@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering};
-use std::{io, io::Read, io::Write, net};
+use std::{future::ready, io, io::Read, io::Write, net};
 
 use futures_util::{future::FutureExt, stream::StreamExt, stream::once};
 use regex::Regex;
@@ -10,8 +10,7 @@ use ntex::http::{
 };
 use ntex::http::{body, h1, h1::Control, test, test::server as test_server};
 use ntex::time::{Millis, Seconds, sleep, timeout};
-use ntex::util::{Bytes, Ready};
-use ntex::{SharedCfg, channel::oneshot, fn_service, rt, web::error};
+use ntex::{SharedCfg, channel::oneshot, fn_service, rt, util::Bytes, web::error};
 
 #[ntex::test]
 async fn test_h1() {
@@ -121,7 +120,7 @@ async fn test_chunked_payload() {
                     Ok(pl) => pl,
                     Err(e) => panic!("Error reading payload: {e}"),
                 })
-                .fold(0usize, |acc, chunk| async move { acc + chunk.len() })
+                .fold(0usize, async move |acc, chunk| acc + chunk.len())
                 .map(|req_size| Ok::<_, io::Error>(Response::Ok().body(format!("size={req_size}"))))
         }))
     })
@@ -688,7 +687,7 @@ async fn test_h1_head_binary2() {
 async fn test_h1_body_length() {
     let srv = test_server(async || {
         HttpService::h1(async |_| {
-            let body = once(Ready::Ok(Bytes::from_static(STR.as_ref())));
+            let body = once(ready(Ok(Bytes::from_static(STR.as_ref()))));
             Ok::<_, io::Error>(Response::Ok().body(body::SizedStream::new(STR.len() as u64, body)))
         })
     })
@@ -706,7 +705,7 @@ async fn test_h1_body_length() {
 async fn test_h1_body_chunked_explicit() {
     let srv = test_server(async || {
         HttpService::h1(async |_| {
-            let body = once(Ready::Ok::<_, io::Error>(Bytes::from_static(STR.as_ref())));
+            let body = once(ready(Ok::<_, io::Error>(Bytes::from_static(STR.as_ref()))));
             Ok::<_, io::Error>(
                 Response::Ok()
                     .header(header::TRANSFER_ENCODING, "chunked")
@@ -739,7 +738,7 @@ async fn test_h1_body_chunked_explicit() {
 async fn test_h1_body_chunked_implicit() {
     let srv = test_server(async || {
         HttpService::h1(async |_| {
-            let body = once(Ready::Ok::<_, io::Error>(Bytes::from_static(STR.as_ref())));
+            let body = once(ready(Ok::<_, io::Error>(Bytes::from_static(STR.as_ref()))));
             Ok::<_, io::Error>(Response::Ok().streaming(body))
         })
     })

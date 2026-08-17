@@ -5,7 +5,6 @@ use std::{cell::Cell, io, net, time::Duration};
 use ntex::codec::BytesCodec;
 use ntex::io::{FilterBuf, FilterLayer, Io};
 use ntex::server::test_server;
-use ntex::service::fn_service;
 use ntex::util::Bytes;
 
 /// Must be greater than or equal to `IoConfig::write_buf_threshold`
@@ -64,7 +63,7 @@ impl FilterLayer for BurstWriteFilter {
 #[ntex::test]
 async fn test_filter_large_write_during_read_processing() {
     let srv = test_server(async || {
-        fn_service(|io: Io| async move {
+        async move |io: Io| {
             let io = io.add_filter(BurstWriteFilter::default());
             // notify the client that the filter is installed
             io.send(Bytes::from_static(b"hi"), &BytesCodec)
@@ -75,7 +74,7 @@ async fn test_filter_large_write_during_read_processing() {
                 io.send(msg, &BytesCodec).await.unwrap();
             }
             Ok::<_, io::Error>(())
-        })
+        }
     });
 
     let mut client = net::TcpStream::connect(srv.addr()).unwrap();

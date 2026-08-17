@@ -24,7 +24,7 @@ impl<Err: ErrorRenderer> Route<Err> {
     /// Create new route which matches any request.
     pub fn new() -> Route<Err> {
         Route {
-            handler: Rc::new(HandlerWrapper::new(|| async { HttpResponse::NotFound() })),
+            handler: Rc::new(HandlerWrapper::new(async || HttpResponse::NotFound())),
             methods: Vec::new(),
             guards: Rc::default(),
         }
@@ -129,7 +129,7 @@ impl<Err: ErrorRenderer> Route<Err> {
     ///     web::route()
     ///         .method(ntex::http::Method::CONNECT)
     ///         .guard(guard::Header("content-type", "text/plain"))
-    ///         .to(|req: HttpRequest| async { HttpResponse::Ok() }))
+    ///         .to(async |req: HttpRequest| { HttpResponse::Ok() }))
     /// );
     /// # }
     /// ```
@@ -148,7 +148,7 @@ impl<Err: ErrorRenderer> Route<Err> {
     ///     web::route()
     ///         .guard(guard::Get())
     ///         .guard(guard::Header("content-type", "text/plain"))
-    ///         .to(|req: HttpRequest| async { HttpResponse::Ok() }))
+    ///         .to(async |req: HttpRequest| { HttpResponse::Ok() }))
     /// );
     /// # }
     /// ```
@@ -288,13 +288,13 @@ mod tests {
         let srv = init_service(
             App::new()
                 .service(web::resource("/test").route(vec![
-                        web::get().to(|| async { HttpResponse::Ok() }),
-                        web::put().to(|| async {
+                        web::get().to(async || { HttpResponse::Ok() }),
+                        web::put().to(async || {
                             Err::<HttpResponse, _>(
                                 error::ErrorBadRequest::<_, DefaultError>("err"),
                             )
                         }),
-                        web::post().to(|| async {
+                        web::post().to(async || {
                             sleep(Millis(100)).await;
                             HttpResponse::Created()
                         }),
@@ -302,13 +302,13 @@ mod tests {
                             .guard(guard::fn_guard(|req|
                                 req.headers().contains_key("content-type")
                             ))
-                            .to(|| async { HttpResponse::Conflict() }),
-                        web::delete().to(|| async {
+                            .to(async || { HttpResponse::Conflict() }),
+                        web::delete().to(async || {
                             sleep(Millis(100)).await;
                             Err::<HttpResponse, _>(error::ErrorBadRequest("err"))
                         }),
                     ]))
-                .service(web::resource("/json").route(web::get().to(|| async {
+                .service(web::resource("/json").route(web::get().to(async || {
                     sleep(Millis(25)).await;
                     web::types::Json(MyObject {
                         name: "test".to_string(),

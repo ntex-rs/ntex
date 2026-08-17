@@ -1,3 +1,4 @@
+use ntex::SharedCfg;
 use ntex::web::{self, HttpRequest};
 
 #[web::get("/resource1/{name}/index.html")]
@@ -31,12 +32,12 @@ async fn main() -> std::io::Result<()> {
             .service(
                 web::resource("/resource2/index.html")
                     .middleware(middleware::DefaultHeaders::new().header("X-Version-R2", "0.3"))
-                    .default_service(web::route().to(|| async { HttpResponse::MethodNotAllowed() }))
+                    .default_service(web::route().to(async || HttpResponse::MethodNotAllowed()))
                     .route(web::get().to(index_async)),
             )
-            .service(web::resource("/test1.html").to(|| async { "Test\r\n" }))
+            .service(web::resource("/test1.html").to(async || "Test\r\n"))
     })
-    .bind_uds("/tmp/uds-test")?
+    .bind_uds("/tmp/uds-test", SharedCfg::default())?
     .workers(1)
     .run()
     .await

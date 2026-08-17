@@ -399,14 +399,13 @@ impl fmt::Display for FormatDisplay<'_> {
 mod tests {
     use super::*;
     use crate::http::{StatusCode, header};
-    use crate::service::{IntoService, Pipeline};
-    use crate::util::lazy;
     use crate::web::test::{self, TestRequest};
     use crate::web::{DefaultError, Error};
+    use crate::{fn_service, service::Pipeline, util::lazy};
 
     #[crate::rt_test]
     async fn test_logger() {
-        let srv = |req: WebRequest<DefaultError>| async move {
+        let srv = fn_service(async move |req: WebRequest<DefaultError>| {
             Ok::<_, Error>(
                 req.into_response(
                     HttpResponse::build(StatusCode::OK)
@@ -414,7 +413,7 @@ mod tests {
                         .body("TEST"),
                 ),
             )
-        };
+        });
         let _logger = Logger::default();
         let logger =
             Logger::new("%% %{User-Agent}i %{X-Test}o %{HOME}e %D %% test").exclude("/test");

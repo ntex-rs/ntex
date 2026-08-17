@@ -21,7 +21,7 @@
 //!         web::route()
 //!              .guard(guard::Post())
 //!              .guard(guard::fn_guard(|head| head.method == Method::GET))
-//!              .to(|| async { HttpResponse::MethodNotAllowed() }))
+//!              .to(async || { HttpResponse::MethodNotAllowed() }))
 //!     );
 //! }
 //! ```
@@ -58,7 +58,7 @@ pub trait Guard {
 ///                 guard::fn_guard(
 ///                     |req| req.headers()
 ///                              .contains_key("content-type")))
-///             .to(|| async { HttpResponse::MethodNotAllowed() }))
+///             .to(async || { HttpResponse::MethodNotAllowed() }))
 ///     );
 /// }
 /// ```
@@ -114,7 +114,7 @@ where
 ///     App::new().service(web::resource("/index.html").route(
 ///         web::route()
 ///              .guard(guard::Any(guard::Get()).or(guard::Post()))
-///              .to(|| async { HttpResponse::MethodNotAllowed() }))
+///              .to(async || { HttpResponse::MethodNotAllowed() }))
 ///     );
 /// }
 /// ```
@@ -171,7 +171,7 @@ impl fmt::Debug for AnyGuard {
 ///         web::route()
 ///             .guard(
 ///                 guard::All(guard::Get()).and(guard::Header("content-type", "text/plain")))
-///             .to(|| async { HttpResponse::MethodNotAllowed() }))
+///             .to(async || { HttpResponse::MethodNotAllowed() }))
 ///     );
 /// }
 /// ```
@@ -357,7 +357,7 @@ impl Guard for HeaderGuard {
 ///     App::new().service(
 ///         web::resource("/index.html")
 ///             .guard(Host("www.rust-lang.org"))
-///             .to(|| async { HttpResponse::MethodNotAllowed() })
+///             .to(async || { HttpResponse::MethodNotAllowed() })
 ///     );
 /// }
 /// ```

@@ -12,7 +12,7 @@ use ntex::io::IoConfig;
 use ntex::service::{cfg::SharedCfg, chain, fn_layer};
 use ntex::web::middleware::Compress;
 use ntex::web::{self, App, BodyEncoding, Error, HttpRequest, HttpResponse, test};
-use ntex::{client, time::Millis, time::Seconds, time::sleep, util::Bytes, util::Ready};
+use ntex::{client, time::Millis, time::Seconds, time::sleep, util::Bytes};
 
 const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
@@ -97,7 +97,7 @@ async fn test_form() {
 #[ntex::test]
 async fn test_timeout() {
     let srv = test::server(async || {
-        App::new().service(web::resource("/").route(web::to(|| async {
+        App::new().service(web::resource("/").route(web::to(async || {
             sleep(Millis(5000)).await;
             HttpResponse::Ok().body(STR)
         })))
@@ -280,9 +280,9 @@ async fn test_connection_wait_queue() {
 
     let srv = test_server(async move || {
         let num2 = num2.clone();
-        chain(move |io| {
+        chain(async move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
-            Ready::Ok(io)
+            Ok(io)
         })
         .and_then(HttpService::new(App::new().service(
             web::resource("/").route(web::to(async || HttpResponse::Ok().body(STR))),

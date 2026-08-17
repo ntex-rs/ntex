@@ -43,9 +43,9 @@ type HttpNewService<Err: ErrorRenderer> =
 /// fn main() {
 ///     let app = App::new().service(
 ///         web::scope("/{project_id}/")
-///             .service(web::resource("/path1").to(|| async { HttpResponse::Ok() }))
-///             .service(web::resource("/path2").route(web::get().to(|| async { HttpResponse::Ok() })))
-///             .service(web::resource("/path3").route(web::head().to(|| async { HttpResponse::MethodNotAllowed() })))
+///             .service(web::resource("/path1").to(async || { HttpResponse::Ok() }))
+///             .service(web::resource("/path2").route(web::get().to(async || { HttpResponse::Ok() })))
+///             .service(web::resource("/path3").route(web::head().to(async || { HttpResponse::MethodNotAllowed() })))
 ///     );
 /// }
 /// ```
@@ -113,7 +113,7 @@ where
     ///         web::scope("/app")
     ///             .guard(guard::Header("content-type", "text/plain"))
     ///             .route("/test1", web::get().to(index))
-    ///             .route("/test2", web::post().to(|r: HttpRequest| async {
+    ///             .route("/test2", web::post().to(async |r: HttpRequest| {
     ///                 HttpResponse::MethodNotAllowed()
     ///             }))
     ///     );
@@ -184,8 +184,8 @@ where
     /// // this function could be located in different module
     /// fn config(cfg: &mut web::ServiceConfig) {
     ///     cfg.service(web::resource("/test")
-    ///         .route(web::get().to(|| async { HttpResponse::Ok() }))
-    ///         .route(web::head().to(|| async { HttpResponse::MethodNotAllowed() }))
+    ///         .route(web::get().to(async || { HttpResponse::Ok() }))
+    ///         .route(web::head().to(async || { HttpResponse::MethodNotAllowed() }))
     ///     );
     /// }
     ///
@@ -196,7 +196,7 @@ where
     ///             web::scope("/api")
     ///                 .configure(config)
     ///         )
-    ///         .route("/index.html", web::get().to(|| async { HttpResponse::Ok() }));
+    ///         .route("/index.html", web::get().to(async || { HttpResponse::Ok() }));
     /// }
     /// ```
     pub fn configure<F>(mut self, f: F) -> Self
@@ -271,7 +271,7 @@ where
     ///     let app = App::new().service(
     ///         web::scope("/app")
     ///             .route("/test1", web::get().to(index))
-    ///             .route("/test2", web::post().to(|| async { HttpResponse::MethodNotAllowed() }))
+    ///             .route("/test2", web::post().to(async || { HttpResponse::MethodNotAllowed() }))
     ///     );
     /// }
     /// ```
@@ -614,8 +614,7 @@ mod tests {
     use crate::http::body::{Body, ResponseBody};
     use crate::http::header::{CONTENT_TYPE, HeaderValue};
     use crate::http::{Method, StatusCode};
-    use crate::service::fn_service;
-    use crate::util::{Bytes, Ready};
+    use crate::util::Bytes;
     use crate::web::DefaultError;
     use crate::web::middleware::DefaultHeaders;
     use crate::web::request::WebRequest;
@@ -628,12 +627,12 @@ mod tests {
             App::new()
                 .service(
                     web::scope("/app")
-                        .service(web::resource("/path1").to(|| async { HttpResponse::Ok() })),
+                        .service(web::resource("/path1").to(async || HttpResponse::Ok())),
                 )
                 .service(
                     web::scope("/app2")
                         .case_insensitive_routing()
-                        .service(web::resource("/path1").to(|| async { HttpResponse::Ok() })),
+                        .service(web::resource("/path1").to(async || HttpResponse::Ok())),
                 ),
         )
         .await;
@@ -660,8 +659,8 @@ mod tests {
         let srv = init_service(
             App::new().service(
                 web::scope("/app")
-                    .service(web::resource("").to(|| async { HttpResponse::Ok() }))
-                    .service(web::resource("/").to(|| async { HttpResponse::Created() })),
+                    .service(web::resource("").to(async || HttpResponse::Ok()))
+                    .service(web::resource("/").to(async || HttpResponse::Created())),
             ),
         )
         .await;
@@ -680,8 +679,8 @@ mod tests {
         let srv = init_service(
             App::new().service(
                 web::scope(["/app", "/app2"])
-                    .service(web::resource("").to(|| async { HttpResponse::Ok() }))
-                    .service(web::resource("/").to(|| async { HttpResponse::Created() })),
+                    .service(web::resource("").to(async || HttpResponse::Ok()))
+                    .service(web::resource("/").to(async || HttpResponse::Created())),
             ),
         )
         .await;
@@ -702,7 +701,7 @@ mod tests {
     #[crate::rt_test]
     async fn test_scope_root2() {
         let srv = init_service(App::new().service(
-            web::scope("/app/").service(web::resource("").to(|| async { HttpResponse::Ok() })),
+            web::scope("/app/").service(web::resource("").to(async || HttpResponse::Ok())),
         ))
         .await;
 
@@ -720,7 +719,7 @@ mod tests {
         let srv = init_service(
             App::new().service(
                 web::scope(["/app/", "/app2/"])
-                    .service(web::resource("").to(|| async { HttpResponse::Ok() })),
+                    .service(web::resource("").to(async || HttpResponse::Ok())),
             ),
         )
         .await;
@@ -741,7 +740,7 @@ mod tests {
     #[crate::rt_test]
     async fn test_scope_root3() {
         let srv = init_service(App::new().service(
-            web::scope("/app/").service(web::resource("/").to(|| async { HttpResponse::Ok() })),
+            web::scope("/app/").service(web::resource("/").to(async || HttpResponse::Ok())),
         ))
         .await;
 
@@ -759,8 +758,8 @@ mod tests {
         let srv = init_service(
             App::new().service(
                 web::scope("app")
-                    .route("/path1", web::get().to(|| async { HttpResponse::Ok() }))
-                    .route("/path1", web::delete().to(|| async { HttpResponse::Ok() })),
+                    .route("/path1", web::get().to(async || HttpResponse::Ok()))
+                    .route("/path1", web::delete().to(async || HttpResponse::Ok())),
             ),
         )
         .await;
@@ -783,8 +782,8 @@ mod tests {
         let srv = init_service(
             App::new().service(
                 web::scope(["app", "app2"])
-                    .route("/path1", web::get().to(|| async { HttpResponse::Ok() }))
-                    .route("/path1", web::delete().to(|| async { HttpResponse::Ok() })),
+                    .route("/path1", web::get().to(async || HttpResponse::Ok()))
+                    .route("/path1", web::delete().to(async || HttpResponse::Ok())),
             ),
         )
         .await;
@@ -814,8 +813,8 @@ mod tests {
             App::new().service(
                 web::scope("app").service(
                     web::resource("path1")
-                        .route(web::get().to(|| async { HttpResponse::Ok() }))
-                        .route(web::delete().to(|| async { HttpResponse::Ok() })),
+                        .route(web::get().to(async || HttpResponse::Ok()))
+                        .route(web::delete().to(async || HttpResponse::Ok())),
                 ),
             ),
         )
@@ -845,14 +844,14 @@ mod tests {
                 .service(
                     web::scope("/app")
                         .guard(guard::Get())
-                        .service(web::resource("/path1").to(|| async { HttpResponse::Ok() })),
+                        .service(web::resource("/path1").to(async || HttpResponse::Ok())),
                 )
                 .service(
-                    web::scope("/app").guard(guard::Post()).service(
-                        web::resource("/path1").to(|| async { HttpResponse::NotModified() }),
-                    ),
+                    web::scope("/app")
+                        .guard(guard::Post())
+                        .service(web::resource("/path1").to(async || HttpResponse::NotModified())),
                 )
-                .service(web::resource("/app/path1").to(|| async { HttpResponse::NoContent() })),
+                .service(web::resource("/app/path1").to(async || HttpResponse::NoContent())),
         )
         .await;
 
@@ -878,7 +877,7 @@ mod tests {
     #[crate::rt_test]
     async fn test_scope_variable_segment() {
         let srv = init_service(App::new().service(web::scope("/ab-{project}").service(
-            web::resource("/path1").to(|r: HttpRequest| async move {
+            web::resource("/path1").to(async move |r: HttpRequest| {
                 HttpResponse::Ok().body(format!("project: {}", &r.match_info()["project"]))
             }),
         )))
@@ -901,7 +900,7 @@ mod tests {
     #[crate::rt_test]
     async fn test_scope_variable_segment2() {
         let srv = init_service(App::new().service(web::scope("/ab-{project}").service(
-            web::resource(["", "/"]).to(|r: HttpRequest| async move {
+            web::resource(["", "/"]).to(async move |r: HttpRequest| {
                 HttpResponse::Ok().body(format!("project: {}", &r.match_info()["project"]))
             }),
         )))
@@ -932,14 +931,9 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_nested_scope() {
-        let srv = init_service(
-            App::new().service(
-                web::scope("/app").service(
-                    web::scope("/t1")
-                        .service(web::resource("/path1").to(|| async { HttpResponse::Created() })),
-                ),
-            ),
-        )
+        let srv = init_service(App::new().service(web::scope("/app").service(
+            web::scope("/t1").service(web::resource("/path1").to(async || HttpResponse::Created())),
+        )))
         .await;
 
         let req = TestRequest::with_uri("/app/t1/path1").to_request();
@@ -949,14 +943,9 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_nested_scope_no_slash() {
-        let srv = init_service(
-            App::new().service(
-                web::scope("/app").service(
-                    web::scope("t1")
-                        .service(web::resource("/path1").to(|| async { HttpResponse::Created() })),
-                ),
-            ),
-        )
+        let srv = init_service(App::new().service(web::scope("/app").service(
+            web::scope("t1").service(web::resource("/path1").to(async || HttpResponse::Created())),
+        )))
         .await;
 
         let req = TestRequest::with_uri("/app/t1/path1").to_request();
@@ -970,8 +959,8 @@ mod tests {
             App::new().service(
                 web::scope("/app").service(
                     web::scope("/t1")
-                        .service(web::resource("").to(|| async { HttpResponse::Ok() }))
-                        .service(web::resource("/").to(|| async { HttpResponse::Created() })),
+                        .service(web::resource("").to(async || HttpResponse::Ok()))
+                        .service(web::resource("/").to(async || HttpResponse::Created())),
                 ),
             ),
         )
@@ -993,7 +982,7 @@ mod tests {
                 web::scope("/app").service(
                     web::scope("/t1")
                         .guard(guard::Get())
-                        .service(web::resource("/path1").to(|| async { HttpResponse::Ok() })),
+                        .service(web::resource("/path1").to(async || HttpResponse::Ok())),
                 ),
             ),
         )
@@ -1016,7 +1005,7 @@ mod tests {
     async fn test_nested_scope_with_variable_segment() {
         let srv = init_service(App::new().service(web::scope("/app").service(
             web::scope("/{project_id}").service(web::resource("/path1").to(
-                |r: HttpRequest| async move {
+                async move |r: HttpRequest| {
                     HttpResponse::Created()
                         .body(format!("project: {}", &r.match_info()["project_id"]))
                 },
@@ -1038,7 +1027,7 @@ mod tests {
     async fn test_nested2_scope_with_variable_segment() {
         let srv = init_service(App::new().service(web::scope("/app").service(
             web::scope("/{project}").service(web::scope("/{id}").service(
-                web::resource("/path1").to(|r: HttpRequest| async move {
+                web::resource("/path1").to(async move |r: HttpRequest| {
                     HttpResponse::Created().body(format!(
                         "project: {} - {}",
                         &r.match_info()["project"],
@@ -1068,8 +1057,8 @@ mod tests {
         let srv = init_service(
             App::new().service(
                 web::scope("/app")
-                    .service(web::resource("/path1").to(|| async { HttpResponse::Ok() }))
-                    .default_service(|r: WebRequest<DefaultError>| async move {
+                    .service(web::resource("/path1").to(async || HttpResponse::Ok()))
+                    .default_service(async move |r: WebRequest<DefaultError>| {
                         Ok(r.into_response(HttpResponse::BadRequest()))
                     }),
             ),
@@ -1087,18 +1076,18 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_default_resource_propagation() {
-        let srv =
-            init_service(
-                App::new()
-                    .service(web::scope("/app1").default_service(
-                        web::resource("").to(|| async { HttpResponse::BadRequest() }),
-                    ))
-                    .service(web::scope("/app2"))
-                    .default_service(|r: WebRequest<DefaultError>| async move {
-                        Ok(r.into_response(HttpResponse::MethodNotAllowed()))
-                    }),
-            )
-            .await;
+        let srv = init_service(
+            App::new()
+                .service(
+                    web::scope("/app1")
+                        .default_service(web::resource("").to(async || HttpResponse::BadRequest())),
+                )
+                .service(web::scope("/app2"))
+                .default_service(async move |r: WebRequest<DefaultError>| {
+                    Ok(r.into_response(HttpResponse::MethodNotAllowed()))
+                }),
+        )
+        .await;
 
         let req = TestRequest::with_uri("/non-exist").to_request();
         let resp = srv.call(req).await.unwrap();
@@ -1120,11 +1109,11 @@ mod tests {
         let srv = init_service(
             App::new().service(
                 web::scope("app")
-                    .filter(fn_service(move |req: WebRequest<_>| {
+                    .filter(async move |req: WebRequest<_>| {
                         filter2.set(true);
-                        Ready::Ok(req)
-                    }))
-                    .route("/test", web::get().to(|| async { HttpResponse::Ok() })),
+                        Ok(req)
+                    })
+                    .route("/test", web::get().to(async || HttpResponse::Ok())),
             ),
         )
         .await;
@@ -1144,8 +1133,7 @@ mod tests {
                             .header(CONTENT_TYPE, HeaderValue::from_static("0001")),
                     )
                     .service(
-                        web::resource("/test")
-                            .route(web::get().to(|| async { HttpResponse::Ok() })),
+                        web::resource("/test").route(web::get().to(async || HttpResponse::Ok())),
                     ),
             ),
         )
@@ -1164,7 +1152,7 @@ mod tests {
     async fn test_scope_config() {
         let srv = init_service(App::new().service(web::scope("/app").configure(|s| {
             s.state("teat");
-            s.route("/path1", web::get().to(|| async { HttpResponse::Ok() }));
+            s.route("/path1", web::get().to(async || HttpResponse::Ok()));
         })))
         .await;
 
@@ -1198,7 +1186,7 @@ mod tests {
     async fn test_scope_config_2() {
         let srv = init_service(App::new().service(web::scope("/app").configure(|s| {
             s.service(web::scope("/v1").configure(|s| {
-                s.route("/", web::get().to(|| async { HttpResponse::Ok() }));
+                s.route("/", web::get().to(async || HttpResponse::Ok()));
             }));
         })))
         .await;
@@ -1216,7 +1204,7 @@ mod tests {
                 s.external_resource("youtube", "https://youtube.com/watch/{video_id}");
                 s.route(
                     "/",
-                    web::get().to(|req: HttpRequest| async move {
+                    web::get().to(async move |req: HttpRequest| {
                         HttpResponse::Ok().body(
                             req.url_for("youtube", ["xxxxxx"])
                                 .unwrap()
@@ -1241,7 +1229,7 @@ mod tests {
     async fn test_url_for_nested() {
         let srv = init_service(App::new().service(web::scope("/a").service(
             web::scope("/b").service(web::resource("/c/{stuff}").name("c").route(web::get().to(
-                |req: HttpRequest| async move {
+                async move |req: HttpRequest| {
                     HttpResponse::Ok().body(format!("{}", req.url_for("c", ["12345"]).unwrap()))
                 },
             ))),

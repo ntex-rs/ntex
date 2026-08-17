@@ -8,7 +8,6 @@ use std::{net, sync::mpsc, thread, time};
 
 use ntex::server::{TestServer, build};
 use ntex::service::fn_service;
-use ntex::util::Ready;
 #[cfg(unix)]
 use ntex::{SharedCfg, codec::BytesCodec, io::Io, util::Bytes};
 
@@ -24,7 +23,7 @@ fn test_bind() {
                 .workers(1)
                 .disable_signals()
                 .bind("test", addr, SharedCfg::default(), async move || {
-                    fn_service(|_| Ready::Ok::<_, ()>(()))
+                    async |_| Ok::<_, ()>(())
                 })
                 .unwrap()
                 .run();
@@ -53,7 +52,7 @@ async fn test_listen() {
                 .disable_signals()
                 .workers(1)
                 .listen("test", lst, SharedCfg::default(), async move || {
-                    fn_service(|_| Ready::Ok::<_, ()>(()))
+                    async |_| Ok::<_, ()>(())
                 })
                 .unwrap()
                 .run();
@@ -86,10 +85,10 @@ async fn test_run() {
                 .workers(1)
                 .disable_signals()
                 .bind("test", addr, SharedCfg::new("SRV"), async move || {
-                    fn_service(|io: Io| async move {
+                    async move |io: Io| {
                         let _ = io.send(Bytes::from_static(b"test"), &BytesCodec).await;
                         Ok::<_, ()>(())
-                    })
+                    }
                 })
                 .unwrap()
                 .run();
@@ -175,9 +174,9 @@ fn test_on_worker_start() {
                     })
                     .await
                     .unwrap()
-                    .on_worker_start(move || {
+                    .on_worker_start(async move || {
                         let _ = num2.fetch_add(1, Relaxed);
-                        Ready::Ok::<_, io::Error>(())
+                        Ok::<_, io::Error>(())
                     })
                     .workers(1)
                     .run();
@@ -236,9 +235,9 @@ fn test_configure_async() {
                     })
                     .await
                     .unwrap()
-                    .on_worker_start(move || {
+                    .on_worker_start(async move || {
                         let _ = num2.fetch_add(1, Relaxed);
-                        Ready::Ok::<_, io::Error>(())
+                        Ok::<_, io::Error>(())
                     })
                     .workers(1)
                     .run();
@@ -280,11 +279,11 @@ fn test_panic_in_worker() {
                 .disable_signals()
                 .bind("test", addr, async move |_| {
                     let counter = counter.clone();
-                    fn_service(move |_| {
+                    async move |_| {
                         counter.fetch_add(1, Relaxed);
                         panic!();
-                        Ready::Ok::<_, ()>(())
-                    })
+                        Ok::<_, ()>(())
+                    }
                 })
                 .unwrap()
                 .run();
@@ -328,10 +327,10 @@ fn test_on_accept() {
             let srv = build()
                 .disable_signals()
                 .bind("test", addr, SharedCfg::default(), async move || {
-                    fn_service(|io: Io| async move {
+                    async move |io: Io| {
                         let _ = io.send(Bytes::from_static(b"test"), &BytesCodec).await;
                         Ok::<_, ()>(())
-                    })
+                    }
                 })
                 .unwrap()
                 .on_accept(async move |name, io| {
