@@ -290,9 +290,7 @@ impl DispatcherConfig {
 
     pub(super) fn insert_io(&self, io: &IoRef) -> usize {
         let mut inflight = self.0.inflight.borrow_mut();
-        println!("1 inflight == {:?}", inflight.len());
         inflight.insert(io.clone());
-        println!("2 inflight == {:?}", inflight.len());
         inflight.len()
     }
 

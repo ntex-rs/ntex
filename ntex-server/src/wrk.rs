@@ -345,9 +345,12 @@ where
 
             match select(fut, stream_recv(&mut self.stop)).await {
                 Either::Left(Ok(Some(item))) => {
+                    // got item
                     let _ = self.svc.call(item).await;
+                    continue;
                 }
                 Either::Left(Err(_)) => {
+                    // re-create service
                     ntex_rt::spawn(async move {
                         self.svc.shutdown().await;
                     });
@@ -356,7 +359,6 @@ where
                     self.availability.set(false);
 
                     let timeout = if timeout.is_zero() { STOP_TIMEOUT } else { timeout };
-
                     self.stop(timeout, Some(result)).await;
                     return;
                 }

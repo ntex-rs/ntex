@@ -218,7 +218,6 @@ where
         let id = self.config.next_id();
         let ioref = io.get_ref();
         let inflight = self.config.insert_io(&ioref);
-        println!("=============== START ======== {inflight:?}");
 
         let result = if io.query::<types::HttpProtocol>().get() == Some(types::HttpProtocol::Http2)
         {
@@ -240,8 +239,6 @@ where
         };
 
         let inflight = self.config.remove_io(&ioref);
-        println!("=============== STOP ======== {inflight:?}");
-
         if inflight == 0 && self.config.is_shutdown() {
             self.config.notify_shutdown()
         }
