@@ -1,14 +1,11 @@
-use std::os::windows::io::{
-    AsRawHandle, AsRawSocket, FromRawHandle, OwnedHandle, RawHandle,
-};
+use std::os::windows::io::{AsRawHandle, AsRawSocket, FromRawHandle, OwnedHandle, RawHandle};
 use std::{cell::Cell, fmt, io, net, ptr, sync::Arc};
 
 use windows_sys::Win32::{
     Foundation::{
         ERROR_BROKEN_PIPE, ERROR_HANDLE_EOF, ERROR_IO_INCOMPLETE, ERROR_MORE_DATA,
-        ERROR_NETNAME_DELETED, ERROR_NO_DATA, ERROR_PIPE_CONNECTED,
-        ERROR_PIPE_NOT_CONNECTED, INVALID_HANDLE_VALUE, NTSTATUS, RtlNtStatusToDosError,
-        WAIT_TIMEOUT,
+        ERROR_NETNAME_DELETED, ERROR_NO_DATA, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED,
+        INVALID_HANDLE_VALUE, NTSTATUS, RtlNtStatusToDosError, WAIT_TIMEOUT,
     },
     Storage::FileSystem::SetFileCompletionNotificationModes,
     System::{
@@ -17,9 +14,7 @@ use windows_sys::Win32::{
             PostQueuedCompletionStatus,
         },
         Threading::INFINITE,
-        WindowsProgramming::{
-            FILE_SKIP_COMPLETION_PORT_ON_SUCCESS, FILE_SKIP_SET_EVENT_ON_HANDLE,
-        },
+        WindowsProgramming::{FILE_SKIP_COMPLETION_PORT_ON_SUCCESS, FILE_SKIP_SET_EVENT_ON_HANDLE},
     },
 };
 
@@ -221,11 +216,7 @@ impl Reactor {
                     _ => Err(io::Error::from_raw_os_error(error.cast_signed())),
                 }
             };
-            handlers[overlapped.hnd as usize].completed(
-                overlapped.udata,
-                result,
-                overlapped_ptr,
-            );
+            handlers[overlapped.hnd as usize].completed(overlapped.udata, result, overlapped_ptr);
         }
         for hnd in handlers.iter_mut() {
             hnd.tick();
@@ -267,8 +258,7 @@ impl ReactorInner {
                 BOOL,
                 SetFileCompletionNotificationModes(
                     h,
-                    (FILE_SKIP_COMPLETION_PORT_ON_SUCCESS | FILE_SKIP_SET_EVENT_ON_HANDLE)
-                        as _
+                    (FILE_SKIP_COMPLETION_PORT_ON_SUCCESS | FILE_SKIP_SET_EVENT_ON_HANDLE) as _
                 )
             )?;
         }

@@ -72,11 +72,7 @@ impl crate::Reactor for Reactor {
         rx
     }
 
-    fn from_tcp_stream(
-        &self,
-        stream: std::net::TcpStream,
-        cfg: SharedCfg,
-    ) -> std::io::Result<Io> {
+    fn from_tcp_stream(&self, stream: std::net::TcpStream, cfg: SharedCfg) -> std::io::Result<Io> {
         stream.set_nodelay(true)?;
         Ok(Io::new(
             TcpStream(compio_net::TcpStream::from_std(stream)?),
@@ -85,11 +81,7 @@ impl crate::Reactor for Reactor {
     }
 
     #[cfg(unix)]
-    fn from_unix_stream(
-        &self,
-        stream: OsUnixStream,
-        cfg: SharedCfg,
-    ) -> std::io::Result<Io> {
+    fn from_unix_stream(&self, stream: OsUnixStream, cfg: SharedCfg) -> std::io::Result<Io> {
         Ok(Io::new(
             UnixStream(compio_net::UnixStream::from_std(stream)?),
             cfg,

@@ -161,10 +161,7 @@ impl Parse for MainArgs {
                         args.rt = Some(path);
                     }
                     value => {
-                        return Err(syn::Error::new_spanned(
-                            value,
-                            "`rt` value must be a type",
-                        ));
+                        return Err(syn::Error::new_spanned(value, "`rt` value must be a type"));
                     }
                 }
             } else {

@@ -21,9 +21,7 @@ pub use crate::bt::{Backtrace, BacktraceRaw, BacktraceResolver};
 pub use crate::error::Error;
 pub use crate::info::ErrorInfo;
 pub use crate::message::{ErrorMessage, ErrorMessageChained};
-pub use crate::message::{
-    fmt_diag, fmt_diag_string, fmt_diag_typ, fmt_err, fmt_err_string,
-};
+pub use crate::message::{fmt_diag, fmt_diag_string, fmt_diag_typ, fmt_err, fmt_err_string};
 pub use crate::utils::{ResultSignature, Retryable, Success, with_service};
 
 #[doc(hidden)]

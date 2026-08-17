@@ -39,14 +39,13 @@ impl<S: Service> OneRequestService<S> {
     }
 }
 
-impl<S: Service> Service for OneRequestService<S> {
-    type St = S::St;
+impl<S: Service<St>, St> Service<St> for OneRequestService<S> {
     type Req = S::Req;
     type Res = S::Res;
     type Error = S::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), S::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), S::Error> {
         if !self.ready.get() {
             poll_fn(|cx| {
                 self.waker.register(cx.waker());
@@ -62,7 +61,7 @@ impl<S: Service> Service for OneRequestService<S> {
     }
 
     #[inline]
-    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self>) -> Result<S::Res, S::Error> {
+    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
         self.ready.set(false);
 
         let result = ctx.call(&self.service, req).await;

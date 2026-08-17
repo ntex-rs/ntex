@@ -15,11 +15,11 @@ pub struct Decoded<T> {
 }
 
 /// Service that converts any `Io<F>` stream to `IoBoxed` stream
-pub fn seal<F, Sf>(
-    f: impl IntoServiceFactory<Sf, IoBoxed>,
+pub fn seal<F, Sf, St>(
+    f: impl IntoServiceFactory<Sf, St, IoBoxed>,
 ) -> impl ServiceFactory<
     Io<F>,
-    St = Sf::St,
+    St,
     Res = Sf::Res,
     Error = Sf::Error,
     InitCfg = Sf::InitCfg,
@@ -27,7 +27,7 @@ pub fn seal<F, Sf>(
 >
 where
     F: Filter,
-    Sf: ServiceFactory<IoBoxed>,
+    Sf: ServiceFactory<IoBoxed, St>,
 {
     chain_factory(fn_service(async |io: Io<F>| Ok(io.boxed())))
         .map_init_err(|_| unreachable!())

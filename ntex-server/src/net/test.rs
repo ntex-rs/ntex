@@ -5,22 +5,22 @@ use std::{fmt, io, marker::PhantomData, net, thread, time};
 use ntex_io::{Io, IoConfig};
 use ntex_net::tcp_connect;
 use ntex_rt::System;
-use ntex_service::{Pipeline, ServiceFactory, State, cfg::SharedCfg};
+use ntex_service::{ServiceFactory, State, cfg::SharedCfg};
 use socket2::{Domain, SockAddr, Socket, Type};
 use uuid::Uuid;
 
 use super::{Server, ServerBuilder};
 
 /// Test server builder
-pub struct TestServerBuilder<F, R> {
+pub struct TestServerBuilder<F, Sf, St> {
     id: Uuid,
     factory: F,
     config: SharedCfg,
     client_config: SharedCfg,
-    _t: PhantomData<R>,
+    _t: PhantomData<(Sf, St)>,
 }
 
-impl<F, R> fmt::Debug for TestServerBuilder<F, R> {
+impl<F, Sf, St> fmt::Debug for TestServerBuilder<F, Sf, St> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TestServerBuilder")
             .field("id", &self.id)
@@ -30,11 +30,11 @@ impl<F, R> fmt::Debug for TestServerBuilder<F, R> {
     }
 }
 
-impl<F, Sf> TestServerBuilder<F, Sf>
+impl<F, Sf, St> TestServerBuilder<F, Sf, St>
 where
     F: AsyncFn() -> Sf + Send + Clone + 'static,
-    Sf: ServiceFactory<Io, InitCfg = SharedCfg> + 'static,
-    Sf::St: State<Io>,
+    Sf: ServiceFactory<Io, St, InitCfg = SharedCfg> + 'static,
+    St: State<Io> + 'static,
 {
     #[must_use]
     /// Create test server builder
@@ -82,11 +82,9 @@ where
                 let server = Server::builder()
                     .listen("test", tcp, config, async move || {
                         let sf = factory().await;
-                        let s = sf
-                            .create(&cfg)
+                        sf.create(&cfg)
                             .await
-                            .map_err(|_| "Cannot start test server")?;
-                        Ok(Pipeline::new(s))
+                            .map_err(|_| "Cannot start test server")
                     })?
                     .workers(1)
                     .disable_signals()
@@ -146,7 +144,7 @@ where
 pub fn test_server<F, R>(factory: F) -> TestServer
 where
     F: AsyncFn() -> R + Send + Clone + 'static,
-    R: ServiceFactory<Io, St = (), InitCfg = SharedCfg> + 'static,
+    R: ServiceFactory<Io, InitCfg = SharedCfg> + 'static,
 {
     TestServerBuilder::new(factory).start()
 }

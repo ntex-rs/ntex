@@ -39,3 +39,12 @@ pub struct HeaderItem {
     pub origin: crate::util::ByteString,
     pub value: header::HeaderValue,
 }
+
+pub(crate) type HttpPipeline<St, B, Err> = crate::PipelineFactory<
+    St,
+    Request,
+    Response<B>,
+    Err,
+    crate::SharedCfg,
+    std::rc::Rc<dyn std::error::Error>,
+>;

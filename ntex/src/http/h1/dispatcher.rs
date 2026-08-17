@@ -1,9 +1,9 @@
 //! HTTP/1 protocol dispatcher
 use std::task::{Context, Poll, ready};
-use std::{error, future, io, marker, mem, pin::Pin, rc::Rc};
+use std::{error, future, io, mem, pin::Pin, rc::Rc};
 
 use crate::io::{Decoded, Filter, Io, IoStatusUpdate, RecvError};
-use crate::service::{Pipeline, PipelineBinding, PipelineCall, Service};
+use crate::service::{Pipeline, PipelineBinding, PipelineCall};
 use crate::{channel::bstream, time::Seconds, util::Either};
 
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
@@ -31,35 +31,33 @@ bitflags::bitflags! {
 
 pin_project_lite::pin_project! {
     /// Dispatcher for HTTP/1.1 protocol
-    pub struct Dispatcher<F, S, C, B>
-    where
-        S: Service<Req = Request>,
-        C: Service<Req = Control<F, S::Error>>,
-    {
-        st: State<F, S, C, B>,
-        inner: DispatcherInner<F, S, C, B>,
+    pub struct Dispatcher<F, B, Err> {
+        st: State<F, B, Err>,
+        inner: DispatcherInner<F, B, Err>,
     }
 }
 
 #[derive(Debug)]
-enum State<F, S, C, B>
-where
-    S: Service<Req = Request>,
-    C: Service<Req = Control<F, S::Error>>,
-{
-    CallPublish { fut: PipelineCall<S> },
-    CallControl { fut: PipelineCall<C> },
+enum State<F, B, Err> {
+    CallPublish {
+        fut: PipelineCall<Response<B>, Err>,
+    },
+    CallControl {
+        fut: PipelineCall<ControlAck<F>, Rc<dyn error::Error>>,
+    },
     ReadRequest,
     ReadPayload,
-    SendPayload { body: ResponseBody<B> },
+    SendPayload {
+        body: ResponseBody<B>,
+    },
     Stop,
 }
 
-struct DispatcherInner<F, S: Service, C: Service, B> {
+struct DispatcherInner<F, B, Err> {
     io: Rc<Io<F>>,
     flags: Flags,
-    service: Pipeline<S>,
-    control: PipelineBinding<C>,
+    service: Pipeline<Request, Response<B>, Err>,
+    control: PipelineBinding<Control<F, Err>, ControlAck<F>, Rc<dyn error::Error>>,
     disconnect: Option<ServiceDisconnectReason>,
     codec: Codec,
     config: DispatcherConfig,
@@ -67,24 +65,21 @@ struct DispatcherInner<F, S: Service, C: Service, B> {
     read_remains: u32,
     read_consumed: u32,
     read_max_timeout: Seconds,
-    _t: marker::PhantomData<(S, B)>,
+    // _t: marker::PhantomData<(S, B)>,
 }
 
-impl<F, S, C, B> Dispatcher<F, S, C, B>
+impl<F, B, Err> Dispatcher<F, B, Err>
 where
     F: Filter,
-    S: Service<Req = Request>,
-    S::Res: Into<Response<B>>,
-    S::Error: ResponseError,
-    C: Service<Req = Control<F, S::Error>, Res = ControlAck<F>>,
     B: MessageBody,
+    Err: ResponseError + 'static,
 {
     /// Construct new `Dispatcher` instance with outgoing messages stream.
     pub(in crate::http) fn new(
         id: usize,
         io: Io<F>,
-        service: Pipeline<S>,
-        control: PipelineBinding<C>,
+        service: Pipeline<Request, Response<B>, Err>,
+        control: PipelineBinding<Control<F, Err>, ControlAck<F>, Rc<dyn error::Error>>,
         config: DispatcherConfig,
     ) -> Self {
         let codec = Codec::new(id, io.shared().get());
@@ -111,21 +106,16 @@ where
                 read_consumed: 0,
                 read_max_timeout: max_timeout,
                 disconnect: None,
-                _t: marker::PhantomData,
             },
         }
     }
 }
 
-impl<F, S, C, B> future::Future for Dispatcher<F, S, C, B>
+impl<F, B, Err> future::Future for Dispatcher<F, B, Err>
 where
     F: Filter,
-    S: Service<Req = Request> + 'static,
-    S::Res: Into<Response<B>>,
-    S::Error: ResponseError + 'static,
-    C: Service<Req = Control<F, S::Error>, Res = ControlAck<F>> + 'static,
-    C::Error: error::Error,
     B: MessageBody,
+    Err: ResponseError + 'static,
 {
     type Output = Result<(), Rc<dyn error::Error>>;
 
@@ -138,7 +128,7 @@ where
                 // handle publish service responses
                 State::CallPublish { fut } => match Pin::new(fut).poll(cx) {
                     Poll::Ready(Ok(res)) => {
-                        let (res, body) = res.into().into_parts();
+                        let (res, body) = res.into_parts();
                         inner.send_response(res, body)
                     }
                     Poll::Ready(Err(err)) => inner.ctl_error(err),
@@ -166,8 +156,7 @@ where
                             inner.send_response(res, body.into())
                         }
                         ControlResult::Continue(req) => {
-                            let result =
-                                inner.io.encode_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
+                            let result = inner.io.encode_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
                             if let Err(err) = result {
                                 *this.st = inner.ctl_peer_gone(Some(err));
                                 continue;
@@ -185,12 +174,12 @@ where
                         }
                         ControlResult::Upgrade(req) => inner.ctl_upgrade(req),
                         ControlResult::UpgradeAck(req) => {
-                            inner.disconnect =
-                                Some(ServiceDisconnectReason::UpgradeHandled);
+                            inner.disconnect = Some(ServiceDisconnectReason::UpgradeHandled);
                             inner.publish(req)
                         }
-                        ControlResult::UpgradeHandled => inner
-                            .ctl_svc_disconnect(ServiceDisconnectReason::UpgradeHandled),
+                        ControlResult::UpgradeHandled => {
+                            inner.ctl_svc_disconnect(ServiceDisconnectReason::UpgradeHandled)
+                        }
                         ControlResult::UpgradeFailed(res, body) => {
                             inner.disconnect = Some(ServiceDisconnectReason::UpgradeFailed);
                             inner.send_response(res, body.into())
@@ -200,7 +189,7 @@ where
                     },
                     Poll::Ready(Err(err)) => {
                         log::error!("{}: Control plain error: {}", inner.io.tag(), err);
-                        return Poll::Ready(Err(Rc::new(err)));
+                        return Poll::Ready(Err(err));
                     }
                     Poll::Pending => {
                         // check for io changes, it could be close while waiting for service call
@@ -232,8 +221,7 @@ where
                 // shutdown io
                 State::Stop => {
                     return Poll::Ready(
-                        ready!(inner.io.poll_shutdown(cx))
-                            .map_err(crate::util::dyn_rc_error),
+                        ready!(inner.io.poll_shutdown(cx)).map_err(crate::util::dyn_rc_err),
                     );
                 }
             }
@@ -241,16 +229,13 @@ where
     }
 }
 
-impl<F, S, C, B> DispatcherInner<F, S, C, B>
+impl<F, B, Err> DispatcherInner<F, B, Err>
 where
     F: Filter,
-    S: Service<Req = Request> + 'static,
-    S::Res: Into<Response<B>>,
-    S::Error: ResponseError,
-    C: Service<Req = Control<F, S::Error>, Res = ControlAck<F>> + 'static,
     B: MessageBody,
+    Err: ResponseError + 'static,
 {
-    fn poll_read_request(&mut self, cx: &mut Context<'_>) -> Poll<State<F, S, C, B>> {
+    fn poll_read_request(&mut self, cx: &mut Context<'_>) -> Poll<State<F, B, Err>> {
         // stop dispatcher
         if self.config.is_shutdown() {
             log::trace!("{}: Service is shutting down", self.io.tag());
@@ -330,11 +315,7 @@ where
         Poll::Ready(st)
     }
 
-    fn send_response(
-        &mut self,
-        mut msg: Response<()>,
-        body: ResponseBody<B>,
-    ) -> State<F, S, C, B> {
+    fn send_response(&mut self, mut msg: Response<()>, body: ResponseBody<B>) -> State<F, B, Err> {
         log::trace!(
             "{}: Sending response: {:?} body: {:?}",
             self.io.tag(),
@@ -386,7 +367,7 @@ where
         &mut self,
         cx: &mut Context<'_>,
         body: &mut ResponseBody<B>,
-    ) -> Poll<State<F, S, C, B>> {
+    ) -> Poll<State<F, B, Err>> {
         if self.io.is_closed() {
             return Poll::Ready(self.ctl_peer_gone(None));
         } else if self.disconnect.is_none()
@@ -433,7 +414,7 @@ where
 
     /// we might need to read more data into a request payload
     /// (ie service future can wait for payload data)
-    fn poll_request(&mut self, cx: &mut Context<'_>) -> Poll<State<F, S, C, B>> {
+    fn poll_request(&mut self, cx: &mut Context<'_>) -> Poll<State<F, B, Err>> {
         if self.payload.is_some() {
             if let Some(st) = ready!(self.poll_request_payload(cx)) {
                 Poll::Ready(st)
@@ -443,9 +424,7 @@ where
         } else {
             // check for io changes, it could be close while waiting for service call
             match ready!(self.io.poll_status_update(cx)) {
-                IoStatusUpdate::KeepAlive | IoStatusUpdate::WriteBackpressure => {
-                    Poll::Pending
-                }
+                IoStatusUpdate::KeepAlive | IoStatusUpdate::WriteBackpressure => Poll::Pending,
                 IoStatusUpdate::PeerGone(e) => Poll::Ready(self.ctl_peer_gone(e)),
             }
         }
@@ -458,10 +437,7 @@ where
     }
 
     /// Process request's payload
-    fn poll_request_payload(
-        &mut self,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<State<F, S, C, B>>> {
+    fn poll_request_payload(&mut self, cx: &mut Context<'_>) -> Poll<Option<State<F, B, Err>>> {
         if let Err(err) = ready!(self.poll_request_payload_inner::<F>(None, cx)) {
             Poll::Ready(Some(match err {
                 Either::Left(e) => self.ctl_proto_err(e),
@@ -490,9 +466,7 @@ where
                 let mut updated = false;
                 loop {
                     let recv_result = io
-                        .map(|io| {
-                            io.poll_recv_decode(&self.payload.as_ref().unwrap().0, cx)
-                        })
+                        .map(|io| io.poll_recv_decode(&self.payload.as_ref().unwrap().0, cx))
                         .unwrap_or_else(|| {
                             self.io
                                 .poll_recv_decode(&self.payload.as_ref().unwrap().0, cx)
@@ -640,24 +614,19 @@ where
     fn update_hdrs_timer(
         &mut self,
         decoded: &Decoded<(Request, PayloadType)>,
-    ) -> Option<State<F, S, C, B>> {
+    ) -> Option<State<F, B, Err>> {
         // got parsed frame
         if decoded.item.is_some() {
             self.read_remains = 0;
-            self.flags.remove(
-                Flags::READ_KA_TIMEOUT | Flags::READ_HDRS_TIMEOUT | Flags::READ_PL_TIMEOUT,
-            );
+            self.flags
+                .remove(Flags::READ_KA_TIMEOUT | Flags::READ_HDRS_TIMEOUT | Flags::READ_PL_TIMEOUT);
         } else if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
             // received new data but not enough for parsing complete frame
             self.read_remains = decoded.remains as u32;
-        } else if self.read_remains == 0
-            && decoded.remains == 0
-            && !self.codec.is_reading_hdrs()
-        {
+        } else if self.read_remains == 0 && decoded.remains == 0 && !self.codec.is_reading_hdrs() {
             // no new data, start keep-alive timer
             if self.codec.keepalive() {
-                if !self.flags.contains(Flags::READ_KA_TIMEOUT) && self.codec.cfg.ka_enabled
-                {
+                if !self.flags.contains(Flags::READ_KA_TIMEOUT) && self.codec.cfg.ka_enabled {
                     log::debug!(
                         "{}: Start keep-alive timer {:?}",
                         self.io.tag(),
@@ -711,52 +680,52 @@ where
         }
     }
 
-    fn publish(&self, req: Request) -> State<F, S, C, B> {
+    fn publish(&self, req: Request) -> State<F, B, Err> {
         State::CallPublish {
             fut: self.service.call_nowait(req),
         }
     }
 
-    fn control(&self, req: Control<F, S::Error>) -> State<F, S, C, B> {
+    fn control(&self, req: Control<F, Err>) -> State<F, B, Err> {
         State::CallControl {
             fut: self.control.call_nowait(req),
         }
     }
 
-    fn ctl_upgrade(&mut self, req: Request) -> State<F, S, C, B> {
+    fn ctl_upgrade(&mut self, req: Request) -> State<F, B, Err> {
         self.codec.reset_upgrade();
         self.control(Control::upgrade(req, self.io.clone(), self.codec.clone()))
     }
 
-    fn ctl_keepalive(&mut self, enabled: bool) -> State<F, S, C, B> {
+    fn ctl_keepalive(&mut self, enabled: bool) -> State<F, B, Err> {
         self.flags.insert(Flags::DISCONNECT_SENT);
         State::CallControl {
             fut: self.control.call_nowait(Control::keepalive(enabled)),
         }
     }
 
-    fn ctl_error(&mut self, err: S::Error) -> State<F, S, C, B> {
+    fn ctl_error(&mut self, err: Err) -> State<F, B, Err> {
         self.flags.insert(Flags::DISCONNECT_SENT);
         State::CallControl {
             fut: self.control.call_nowait(Control::err(err)),
         }
     }
 
-    fn ctl_proto_err(&mut self, err: ProtocolError) -> State<F, S, C, B> {
+    fn ctl_proto_err(&mut self, err: ProtocolError) -> State<F, B, Err> {
         self.flags.insert(Flags::DISCONNECT_SENT);
         State::CallControl {
             fut: self.control.call_nowait(Control::proto_err(err)),
         }
     }
 
-    fn ctl_peer_gone(&mut self, err: Option<io::Error>) -> State<F, S, C, B> {
+    fn ctl_peer_gone(&mut self, err: Option<io::Error>) -> State<F, B, Err> {
         self.flags.insert(Flags::DISCONNECT_SENT);
         State::CallControl {
             fut: self.control.call_nowait(Control::peer_gone(err)),
         }
     }
 
-    fn ctl_svc_disconnect(&mut self, reason: ServiceDisconnectReason) -> State<F, S, C, B> {
+    fn ctl_svc_disconnect(&mut self, reason: ServiceDisconnectReason) -> State<F, B, Err> {
         if self.flags.contains(Flags::DISCONNECT_SENT) {
             self.stop()
         } else {
@@ -767,7 +736,7 @@ where
         }
     }
 
-    fn check_disconnect(&mut self) -> Option<State<F, S, C, B>> {
+    fn check_disconnect(&mut self) -> Option<State<F, B, Err>> {
         if self.flags.contains(Flags::DISCONNECT_SENT) {
             Some(self.stop())
         } else if let Some(reason) = self.disconnect.take() {
@@ -780,7 +749,7 @@ where
         }
     }
 
-    fn stop(&mut self) -> State<F, S, C, B> {
+    fn stop(&mut self) -> State<F, B, Err> {
         log::debug!("{}: Dispatcher is stopped", self.io.tag());
 
         self.io.stop_timer();
@@ -1299,8 +1268,7 @@ mod tests {
                 if let Control::Disconnect(Reason::ProtocolError(ref err)) = msg
                     && matches!(err.err(), ProtocolError::SlowPayloadTimeout)
                 {
-                    err_mark2
-                        .store(err_mark2.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
+                    err_mark2.store(err_mark2.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
                 }
                 async move { Ok::<_, io::Error>(msg.ack()) }
             }))

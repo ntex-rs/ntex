@@ -62,12 +62,7 @@ impl ConnectOps {
         })
     }
 
-    pub(crate) fn connect(
-        &self,
-        sock: Socket,
-        addr: SockAddr,
-        cfg: SharedCfg,
-    ) -> Receiver<Io> {
+    pub(crate) fn connect(&self, sock: Socket, addr: SockAddr, cfg: SharedCfg) -> Receiver<Io> {
         let result = if addr.is_ipv4() {
             Ok(SockAddr::from(net::SocketAddrV4::new(
                 net::Ipv4Addr::UNSPECIFIED,

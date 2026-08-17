@@ -50,12 +50,7 @@ impl<A: Address> TlsConnector<Connector<A>> {
 
 impl<A: Address, Sf> ServiceFactory<Connect<A>> for TlsConnector<Sf>
 where
-    Sf: ServiceFactory<
-            Connect<A>,
-            Res = Io,
-            Error = Error<ConnectError>,
-            InitCfg = SharedCfg,
-        >,
+    Sf: ServiceFactory<Connect<A>, Res = Io, Error = Error<ConnectError>, InitCfg = SharedCfg>,
 {
     type St = Sf::St;
     type Res = Io<Layer<SchannelFilter>>;

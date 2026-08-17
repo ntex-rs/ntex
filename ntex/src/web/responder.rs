@@ -5,9 +5,7 @@ use crate::http::header::{HeaderMap, HeaderName, HeaderValue};
 use crate::http::{Response, ResponseBuilder, StatusCode};
 use crate::util::{Bytes, BytesMut, Either};
 
-use super::error::{
-    DefaultError, ErrorContainer, ErrorRenderer, InternalError, WebResponseError,
-};
+use super::error::{DefaultError, ErrorContainer, ErrorRenderer, InternalError, WebResponseError};
 use super::httprequest::HttpRequest;
 
 #[allow(async_fn_in_trait)]
@@ -345,9 +343,7 @@ pub(crate) mod tests {
     async fn test_option_responder() {
         let srv = init_service(
             web::App::new()
-                .service(
-                    web::resource("/none").to(|| async { Option::<&'static str>::None }),
-                )
+                .service(web::resource("/none").to(|| async { Option::<&'static str>::None }))
                 .service(web::resource("/some").to(|| async { Some("some") })),
         )
         .await;
@@ -424,10 +420,9 @@ pub(crate) mod tests {
         );
 
         // InternalError
-        let resp: HttpResponse =
-            responder(InternalError::new("err", StatusCode::BAD_REQUEST))
-                .respond_to(&req)
-                .await;
+        let resp: HttpResponse = responder(InternalError::new("err", StatusCode::BAD_REQUEST))
+            .respond_to(&req)
+            .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
@@ -492,11 +487,10 @@ pub(crate) mod tests {
         assert_eq!(res.get_body_ref(), b"test");
 
         let req = TestRequest::default().to_http_request();
-        let res =
-            CustomResponder::<_, DefaultError>::new(("test".to_string(), StatusCode::OK))
-                .with_header("content-type", "json")
-                .respond_to(&req)
-                .await;
+        let res = CustomResponder::<_, DefaultError>::new(("test".to_string(), StatusCode::OK))
+            .with_header("content-type", "json")
+            .respond_to(&req)
+            .await;
         assert_eq!(res.status(), StatusCode::OK);
         assert_eq!(res.get_body_ref(), b"test");
         assert_eq!(

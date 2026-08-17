@@ -178,11 +178,7 @@ impl Storage {
     }
 
     #[inline]
-    pub(crate) fn from_stext(
-        addr: *const u8,
-        len: usize,
-        vtable: *const StorageVTable,
-    ) -> Storage {
+    pub(crate) fn from_stext(addr: *const u8, len: usize, vtable: *const StorageVTable) -> Storage {
         Storage {
             len,
             ptr: addr.cast_mut(),
@@ -228,9 +224,7 @@ impl Storage {
     pub(crate) fn as_ref(&self) -> &[u8] {
         unsafe {
             match self.kind() {
-                KIND_INLINE => {
-                    slice::from_raw_parts(self.inline_ptr_ro(), self.inline_len())
-                }
+                KIND_INLINE => slice::from_raw_parts(self.inline_ptr_ro(), self.inline_len()),
                 KIND_STEXT => slice::from_raw_parts(self.as_ptr(), self.len()),
                 _ => slice::from_raw_parts(self.ptr, self.len),
             }
@@ -250,9 +244,7 @@ impl Storage {
 
     pub(crate) fn len(&self) -> usize {
         match self.kind() {
-            KIND_STEXT => unsafe {
-                ((*self.st_vtable()).len)(self.st_addr(), self.st_len())
-            },
+            KIND_STEXT => unsafe { ((*self.st_vtable()).len)(self.st_addr(), self.st_len()) },
             KIND_INLINE => self.inline_len(),
             _ => self.len,
         }
@@ -310,9 +302,7 @@ impl Storage {
         let kind = self.kind();
         match kind {
             KIND_VEC => unsafe { (*self.shared_vec()).capacity() },
-            KIND_STEXT => unsafe {
-                ((*self.st_vtable()).len)(self.st_addr(), self.st_len())
-            },
+            KIND_STEXT => unsafe { ((*self.st_vtable()).len)(self.st_addr(), self.st_len()) },
             KIND_INLINE => INLINE_CAP,
             _ => self.len,
         }
@@ -439,8 +429,7 @@ impl Storage {
                     self.len = 0;
                 }
 
-                self.offset =
-                    NonZeroUsize::new_unchecked((offset << KIND_OFFSET_BITS) ^ KIND_VEC);
+                self.offset = NonZeroUsize::new_unchecked((offset << KIND_OFFSET_BITS) ^ KIND_VEC);
             }
             KIND_INLINE => {
                 assert!(start <= INLINE_CAP);
@@ -540,9 +529,7 @@ impl Storage {
             Storage { ..*self }
         } else {
             // ext storage
-            if let Some((addr, len)) =
-                ((*self.st_vtable()).clone)(self.st_addr(), self.st_len())
-            {
+            if let Some((addr, len)) = ((*self.st_vtable()).clone)(self.st_addr(), self.st_len()) {
                 Storage {
                     len,
                     ptr: addr.cast_mut(),
@@ -631,9 +618,7 @@ impl Storage {
                 (
                     ptr as usize,
                     (*ptr).ref_count.load(Relaxed),
-                    (*ptr).offset as usize
-                        + (*ptr).len as usize
-                        + (*ptr).remaining as usize,
+                    (*ptr).offset as usize + (*ptr).len as usize + (*ptr).remaining as usize,
                 )
             } else {
                 (0, 0, 0)

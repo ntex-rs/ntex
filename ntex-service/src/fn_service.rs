@@ -4,9 +4,7 @@ use crate::{Ctx, IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 #[inline]
 /// Create `ServiceFactory` for function
-pub fn fn_service<St, F, Req, Res, Err, Cfg>(
-    f: F,
-) -> FnServiceFactory<St, F, Req, Res, Err, Cfg>
+pub fn fn_service<F, Req, Res, Err, Cfg>(f: F) -> FnServiceFactory<F, Req, Res, Err, Cfg>
 where
     F: AsyncFn(Req) -> Result<Res, Err> + Clone,
 {
@@ -96,12 +94,12 @@ where
     FnServiceConfig { f, _t: PhantomData }
 }
 
-pub struct FnService<St, F, Req> {
+pub struct FnService<F, Req> {
     f: F,
-    _t: PhantomData<(St, Req)>,
+    _t: PhantomData<Req>,
 }
 
-impl<St, F, Req> Clone for FnService<St, F, Req>
+impl<F, Req> Clone for FnService<F, Req>
 where
     F: Clone,
 {
@@ -113,7 +111,7 @@ where
     }
 }
 
-impl<St, F, Req> fmt::Debug for FnService<St, F, Req> {
+impl<F, Req> fmt::Debug for FnService<F, Req> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FnService")
             .field("f", &std::any::type_name::<F>())
@@ -121,27 +119,26 @@ impl<St, F, Req> fmt::Debug for FnService<St, F, Req> {
     }
 }
 
-impl<St, F, Req, Res, Err> Service for FnService<St, F, Req>
+impl<F, St, Req, Res, Err> Service<St> for FnService<F, Req>
 where
     F: AsyncFn(Req) -> Result<Res, Err>,
 {
-    type St = St;
     type Req = Req;
     type Res = Res;
     type Error = Err;
 
     #[inline]
-    async fn call(&self, req: Req, _: Ctx<'_, Self>) -> Result<Res, Err> {
+    async fn call(&self, req: Req, _: Ctx<'_, Self, St>) -> Result<Res, Err> {
         (self.f)(req).await
     }
 }
 
-impl<St, F, Req, Res, Err> IntoService<FnService<St, F, Req>> for F
+impl<F, St, Req, Res, Err> IntoService<FnService<F, Req>, St> for F
 where
     F: AsyncFn(Req) -> Result<Res, Err>,
 {
     #[inline]
-    fn into_service(self) -> FnService<St, F, Req> {
+    fn into_service(self) -> FnService<F, Req> {
         FnService {
             f: self,
             _t: PhantomData,
@@ -149,15 +146,15 @@ where
     }
 }
 
-pub struct FnServiceFactory<St, F, Req, Res, Err, Cfg = ()>
+pub struct FnServiceFactory<F, Req, Res, Err, Cfg = ()>
 where
     F: AsyncFn(Req) -> Result<Res, Err>,
 {
     f: F,
-    _t: PhantomData<(St, Req, Cfg)>,
+    _t: PhantomData<(Req, Cfg)>,
 }
 
-impl<St, F, Req, Res, Err, Cfg> FnServiceFactory<St, F, Req, Res, Err, Cfg>
+impl<F, Req, Res, Err, Cfg> FnServiceFactory<F, Req, Res, Err, Cfg>
 where
     F: AsyncFn(Req) -> Result<Res, Err> + Clone,
 {
@@ -166,7 +163,7 @@ where
     }
 }
 
-impl<St, F, Req, Res, Err, Cfg> Clone for FnServiceFactory<St, F, Req, Res, Err, Cfg>
+impl<F, Req, Res, Err, Cfg> Clone for FnServiceFactory<F, Req, Res, Err, Cfg>
 where
     F: AsyncFn(Req) -> Result<Res, Err> + Clone,
 {
@@ -179,7 +176,7 @@ where
     }
 }
 
-impl<St, F, Req, Res, Err, Cfg> fmt::Debug for FnServiceFactory<St, F, Req, Res, Err, Cfg>
+impl<F, Req, Res, Err, Cfg> fmt::Debug for FnServiceFactory<F, Req, Res, Err, Cfg>
 where
     F: AsyncFn(Req) -> Result<Res, Err>,
 {
@@ -190,31 +187,28 @@ where
     }
 }
 
-impl<St, F, Req, Res, Err> Service for FnServiceFactory<St, F, Req, Res, Err, ()>
+impl<F, St, Req, Res, Err> Service<St> for FnServiceFactory<F, Req, Res, Err, ()>
 where
     F: AsyncFn(Req) -> Result<Res, Err>,
 {
-    type St = St;
     type Req = Req;
     type Res = Res;
     type Error = Err;
 
     #[inline]
-    async fn call(&self, req: Req, _: Ctx<'_, Self>) -> Result<Res, Err> {
+    async fn call(&self, req: Req, _: Ctx<'_, Self, St>) -> Result<Res, Err> {
         (self.f)(req).await
     }
 }
 
-impl<St, F, Req, Res, Err, Cfg> ServiceFactory<Req>
-    for FnServiceFactory<St, F, Req, Res, Err, Cfg>
+impl<F, St, Req, Res, Err, Cfg> ServiceFactory<Req, St> for FnServiceFactory<F, Req, Res, Err, Cfg>
 where
     F: AsyncFn(Req) -> Result<Res, Err> + Clone,
 {
-    type St = St;
     type Res = Res;
     type Error = Err;
 
-    type Service = FnService<St, F, Req>;
+    type Service = FnService<F, Req>;
     type InitCfg = Cfg;
     type InitError = Infallible;
 
@@ -227,29 +221,29 @@ where
     }
 }
 
-impl<St, F, Req, Res, Err, Cfg>
-    IntoServiceFactory<FnServiceFactory<St, F, Req, Res, Err, Cfg>, Req> for F
+impl<St, F, Req, Res, Err, Cfg> IntoServiceFactory<FnServiceFactory<F, Req, Res, Err, Cfg>, St, Req>
+    for F
 where
     F: AsyncFn(Req) -> Result<Res, Err> + Clone,
 {
     #[inline]
-    fn into_factory(self) -> FnServiceFactory<St, F, Req, Res, Err, Cfg> {
+    fn into_factory(self) -> FnServiceFactory<F, Req, Res, Err, Cfg> {
         FnServiceFactory::new(self)
     }
 }
 
-// impl<St, F, Req, Res, Err, Cfg> IntoService<FnService<St, F, Req>, St, Req>
-//     for FnServiceFactory<St, F, Req, Res, Err, Cfg>
-// where
-//     F: AsyncFn(Req) -> Result<Res, Err>,
-// {
-//     fn into_service(self) -> FnService<St, F, Req> {
-//         FnService {
-//             f: self.f,
-//             _t: PhantomData,
-//         }
-//     }
-// }
+impl<St, F, Req, Res, Err, Cfg> IntoService<FnService<F, Req>, St>
+    for FnServiceFactory<F, Req, Res, Err, Cfg>
+where
+    F: AsyncFn(Req) -> Result<Res, Err>,
+{
+    fn into_service(self) -> FnService<F, Req> {
+        FnService {
+            f: self.f,
+            _t: PhantomData,
+        }
+    }
+}
 
 /// `ServiceFactory` for a `AsyncFn(Cfg) -> Result<Srv, Err>` function
 pub struct FnServiceConfig<St, F, Cfg, Srv, Req, Err>
@@ -284,13 +278,11 @@ where
     }
 }
 
-impl<St, F, Cfg, S, Req, Err> ServiceFactory<Req>
-    for FnServiceConfig<St, F, Cfg, S, Req, Err>
+impl<St, F, Cfg, S, Req, Err> ServiceFactory<Req, St> for FnServiceConfig<St, F, Cfg, S, Req, Err>
 where
     F: AsyncFn(&Cfg) -> Result<S, Err>,
-    S: Service<St = St, Req = Req>,
+    S: Service<St, Req = Req>,
 {
-    type St = S::St;
     type Res = S::Res;
     type Error = S::Error;
 
@@ -322,13 +314,12 @@ where
     }
 }
 
-impl<St, F, S, Req, E, C> ServiceFactory<Req> for FnServiceNoConfig<St, F, S, E, C>
+impl<St, F, S, Req, E, C> ServiceFactory<Req, St> for FnServiceNoConfig<St, F, S, E, C>
 where
     F: AsyncFn() -> Result<S, E>,
-    S: Service<St = St, Req = Req>,
+    S: Service<St, Req = Req>,
     C: 'static,
 {
-    type St = St;
     type Res = S::Res;
     type Error = S::Error;
     type Service = S;

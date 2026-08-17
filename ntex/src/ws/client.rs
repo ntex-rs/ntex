@@ -18,7 +18,7 @@ use crate::http::header::{self, AUTHORIZATION, HeaderMap, HeaderName, HeaderValu
 use crate::http::{ConnectionType, Message, Method, RequestHead, StatusCode, Uri};
 use crate::http::{body::BodySize, error::HttpError};
 use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, Layer, Reason, Sealed};
-use crate::service::{Ctx, IntoService, Pipeline, apply_fn, fn_service};
+use crate::service::{IntoService, Pipeline, apply_fn, fn_service};
 use crate::time::{Millis, timeout};
 use crate::{Service, ServiceFactory, SharedCfg, channel::mpsc, rt, ws};
 
@@ -29,22 +29,9 @@ thread_local! {
     static CFG: SharedCfg = SharedCfg::new("WS-CLIENT").into();
 }
 
-pub struct DefaultConnector;
-
-impl Service for DefaultConnector {
-    type St = ();
-    type Req = Connect<Uri>;
-    type Res = Io;
-    type Error = Error<ConnectError>;
-
-    async fn call(&self, _: Connect<Uri>, _: Ctx<'_, Self>) -> Result<Io, Self::Error> {
-        unreachable!()
-    }
-}
-
 /// `WebSocket` client builder
-pub struct WsClient<F, T: Service> {
-    connector: Pipeline<T>,
+pub struct WsClient<F> {
+    connector: Pipeline<Connect<Uri>, Io<F>, Error<ConnectError>>,
     head: Message<RequestHead>,
     addr: Option<net::SocketAddr>,
     max_size: usize,
@@ -75,7 +62,7 @@ struct Inner<F, T> {
     _t: marker::PhantomData<F>,
 }
 
-impl WsClient<Base, DefaultConnector> {
+impl WsClient<Base> {
     /// Create new websocket client builder
     pub fn builder<U>(uri: U) -> WsClientBuilder<Base, Connector<Uri>>
     where
@@ -90,20 +77,19 @@ impl WsClient<Base, DefaultConnector> {
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
-        F: Filter,
+        F: Filter + 'static,
         T: ServiceFactory<
                 Connect<Uri>,
-                St = (),
                 Res = Io<F>,
                 Error = Error<ConnectError>,
                 InitCfg = SharedCfg,
-            >,
+            > + 'static,
     {
         WsClientBuilder::new(uri).connector(connector)
     }
 }
 
-impl<F, T: Service> WsClient<F, T> {
+impl<F> WsClient<F> {
     /// Insert a header, replaces existing header.
     pub fn set_header<K, V>(&self, key: K, value: V) -> Result<(), HttpError>
     where
@@ -125,11 +111,7 @@ impl<F, T: Service> WsClient<F, T> {
     }
 
     /// Set HTTP basic authorization header
-    pub fn set_basic_auth<U>(
-        &self,
-        username: U,
-        password: Option<&str>,
-    ) -> Result<(), HttpError>
+    pub fn set_basic_auth<U>(&self, username: U, password: Option<&str>) -> Result<(), HttpError>
     where
         U: fmt::Display,
     {
@@ -149,10 +131,9 @@ impl<F, T: Service> WsClient<F, T> {
     }
 }
 
-impl<F, T> WsClient<F, T>
+impl<F> WsClient<F>
 where
     F: Filter,
-    T: Service<St = (), Req = Connect<Uri>, Res = Io<F>, Error = Error<ConnectError>>,
 {
     /// Complete request construction and connect to a websockets server.
     pub async fn connect(&self) -> Result<WsConnection<F>, Error<WsClientError>> {
@@ -290,7 +271,7 @@ where
     }
 }
 
-impl<F, T: Service> fmt::Debug for WsClient<F, T> {
+impl<F> fmt::Debug for WsClient<F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "\nWsClient {}:{}", self.head.method, self.head.uri)?;
         writeln!(f, "  headers:")?;
@@ -342,13 +323,9 @@ impl WsClientBuilder<Base, ()> {
 
 impl<F, T> WsClientBuilder<F, T>
 where
-    T: ServiceFactory<
-            Connect<Uri>,
-            St = (),
-            Res = Io<F>,
-            Error = Error<ConnectError>,
-            InitCfg = SharedCfg,
-        >,
+    F: 'static,
+    T: ServiceFactory<Connect<Uri>, Res = Io<F>, Error = Error<ConnectError>, InitCfg = SharedCfg>
+        + 'static,
 {
     /// Set socket address of the server.
     ///
@@ -531,14 +508,13 @@ where
     /// Use custom connector.
     pub fn connector<F1, T1>(&mut self, connector: T1) -> WsClientBuilder<F1, T1>
     where
-        F1: Filter,
+        F1: Filter + 'static,
         T1: ServiceFactory<
                 Connect<Uri>,
-                St = (),
                 Res = Io<F1>,
                 Error = Error<ConnectError>,
                 InitCfg = SharedCfg,
-            >,
+            > + 'static,
     {
         let inner = self.inner.take().expect("cannot reuse WsClient builder");
 
@@ -565,8 +541,7 @@ where
     pub fn openssl(
         &mut self,
         connector: tls_openssl::ssl::SslConnector,
-    ) -> WsClientBuilder<Layer<openssl::SslFilter>, openssl::SslConnector<Connector<Uri>>>
-    {
+    ) -> WsClientBuilder<Layer<openssl::SslFilter>, openssl::SslConnector<Connector<Uri>>> {
         self.connector(openssl::SslConnector::new(connector))
     }
 
@@ -575,8 +550,7 @@ where
     pub fn rustls(
         &mut self,
         config: std::sync::Arc<tls_rustls::ClientConfig>,
-    ) -> WsClientBuilder<Layer<rustls::TlsClientFilter>, rustls::TlsConnector<Connector<Uri>>>
-    {
+    ) -> WsClientBuilder<Layer<rustls::TlsClientFilter>, rustls::TlsConnector<Connector<Uri>>> {
         self.connector(rustls::TlsConnector::from(config))
     }
 
@@ -601,7 +575,7 @@ where
     pub async fn build<U: Into<SharedCfg>>(
         &mut self,
         cfg: U,
-    ) -> Result<WsClient<F, T::Service>, WsClientBuilderError<T::InitError>> {
+    ) -> Result<WsClient<F>, WsClientBuilderError<T::InitError>> {
         if let Some(e) = self.err.take() {
             return Err(WsClientBuilderError::Http(e));
         }
@@ -638,12 +612,9 @@ where
             if let Some(ref mut jar) = self.cookies {
                 let mut cookie = String::new();
                 for c in jar.delta() {
-                    let name =
-                        percent_encode(c.name().as_bytes(), crate::http::helpers::USERINFO);
-                    let value = percent_encode(
-                        c.value().as_bytes(),
-                        crate::http::helpers::USERINFO,
-                    );
+                    let name = percent_encode(c.name().as_bytes(), crate::http::helpers::USERINFO);
+                    let value =
+                        percent_encode(c.value().as_bytes(), crate::http::helpers::USERINFO);
                     let _ = write!(cookie, "; {name}={value}");
                 }
                 inner.head.headers.insert(
@@ -792,7 +763,7 @@ impl WsConnection<Sealed> {
     /// Start client websockets service.
     pub async fn start<T>(self, service: T) -> Result<(), WsError<T::Error>>
     where
-        T: Service<St = (), Req = ws::Frame, Res = Option<ws::Message>> + 'static,
+        T: Service<Req = ws::Frame, Res = Option<ws::Message>> + 'static,
     {
         let service = apply_fn(
             service.into_service().map_err(WsError::Service),

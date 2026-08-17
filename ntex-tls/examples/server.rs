@@ -26,34 +26,32 @@ async fn main() -> io::Result<()> {
     // start server
     server::ServerBuilder::new()
         .bind("basic", "127.0.0.1:8443", async move |_| {
-            chain(SslAcceptor::new(acceptor.clone())).and_then(fn_service(
-                |io: Io<_>| async move {
-                    println!("New client is connected");
-                    if let Some(cert) = io.query::<PeerCert>().as_ref() {
-                        println!("Peer cert: {:?}", cert.0);
-                    }
-                    if let Some(cert) = io.query::<PeerCertChain>().as_ref() {
-                        println!("Peer cert chain: {:?}", cert.0);
-                    }
-                    loop {
-                        match io.recv(&codec::BytesCodec).await {
-                            Ok(Some(msg)) => {
-                                println!("Got message: {:?}", msg);
-                                io.send(msg, &codec::BytesCodec)
-                                    .await
-                                    .map_err(Either::into_inner)?;
-                            }
-                            Err(e) => {
-                                println!("Got error: {:?}", e);
-                                break;
-                            }
-                            Ok(None) => break,
+            chain(SslAcceptor::new(acceptor.clone())).and_then(fn_service(|io: Io<_>| async move {
+                println!("New client is connected");
+                if let Some(cert) = io.query::<PeerCert>().as_ref() {
+                    println!("Peer cert: {:?}", cert.0);
+                }
+                if let Some(cert) = io.query::<PeerCertChain>().as_ref() {
+                    println!("Peer cert chain: {:?}", cert.0);
+                }
+                loop {
+                    match io.recv(&codec::BytesCodec).await {
+                        Ok(Some(msg)) => {
+                            println!("Got message: {:?}", msg);
+                            io.send(msg, &codec::BytesCodec)
+                                .await
+                                .map_err(Either::into_inner)?;
                         }
+                        Err(e) => {
+                            println!("Got error: {:?}", e);
+                            break;
+                        }
+                        Ok(None) => break,
                     }
-                    println!("Client is disconnected");
-                    Ok(())
-                },
-            ))
+                }
+                println!("Client is disconnected");
+                Ok(())
+            }))
         })?
         .workers(1)
         .run()

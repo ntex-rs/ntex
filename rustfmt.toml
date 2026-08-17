@@ -1,4 +1,4 @@
-max_width = 92
+max_width = 100
 reorder_imports = true
 use_field_init_shorthand = true
 #chain_width = 60

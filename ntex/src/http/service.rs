@@ -1,54 +1,50 @@
 use std::{error::Error, marker, rc::Rc};
 
 use crate::io::{Filter, Io, types};
-use crate::service::{IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory};
-use crate::util::join;
+use crate::service::{
+    IntoService, IntoServiceFactory, Pipeline, PipelineFactory, Service, ServiceFactory,
+};
+use crate::util::{dyn_rc_err, join};
 use crate::{Ctx, FromState, ReadyCtx, SharedCfg, State};
 
-use super::error::{DispatchError, H2Error, HttpError, ResponseError};
+use super::error::{DispatchError, H2Error, ResponseError};
+use super::{HttpPipeline, h1, h2, request::Request, response::Response};
 use super::{body::MessageBody, config::DispatcherConfig};
-use super::{h1, h2, request::Request, response::Response};
 
 /// HTTP1.1/HTTP2 transport implementation
 #[derive(derive_more::Debug)]
 #[debug("HttpService")]
-pub struct HttpService<
-    St,
-    F,
-    Sf: ServiceFactory<Request>,
-    Sft,
-    B,
-    Ctl1: Service = h1::DefaultControlService<F, HttpError>,
-    Ctl2: Service = h2::DefaultControlService,
-> {
-    sf: Sf,
-    h1_ctl: Pipeline<Ctl1>,
-    h2_ctl: Pipeline<Ctl2>,
+pub struct HttpService<Hst, F, B, Err> {
+    sf: HttpPipeline<Hst, B, Err>,
+    h1_ctl: Pipeline<h1::Control<F, Err>, h1::ControlAck<F>, Rc<dyn Error>>,
+    h2_ctl: Pipeline<h2::Control<H2Error>, h2::ControlAck, Rc<dyn Error>>,
     config: DispatcherConfig,
-    _t: marker::PhantomData<(St, Sft, F, B)>,
+    _t: marker::PhantomData<(Hst, F, B)>,
 }
 
-impl<St, F, Sf, Sft, B>
-    HttpService<St, F, Sf, Sft, B, h1::DefaultControlService<F, HttpError>>
+impl<Hst, F, B, Err> HttpService<Hst, F, B, Err>
 where
     F: Filter,
-    Sf: ServiceFactory<Request, St = Sft, InitCfg = SharedCfg> + 'static,
-    Sf::St: State<Request>,
-    Sf::Res: Into<Response<B>>,
-    Sf::Error: ResponseError,
-    Sf::InitError: Error,
     B: MessageBody,
+    Err: ResponseError + 'static,
 {
     /// Create new `HttpService` instance.
-    pub fn new(
-        service: impl IntoServiceFactory<Sf, Request>,
-    ) -> HttpService<St, F, Sf, Sft, B, h1::DefaultControlService<F, Sf::Error>>
-//where
-        //Sf: ServiceFactory<Request, St = Ust>,
-        //Ust: State<Request>,
+    pub fn new<Sf, St>(
+        service: impl IntoServiceFactory<Sf, St, Request>,
+    ) -> HttpService<Hst, F, B, Err>
+    where
+        Sf: ServiceFactory<Request, St, Error = Err, InitCfg = SharedCfg> + 'static,
+        Sf::Res: Into<Response<B>>,
+        Sf::InitError: Error,
+        St: State<Request> + FromState<Hst>,
     {
         HttpService {
-            sf: service.into_factory(),
+            sf: PipelineFactory::new(
+                service
+                    .into_factory()
+                    .map(|res| res.into())
+                    .map_init_err(dyn_rc_err),
+            ),
             h1_ctl: Pipeline::new(h1::DefaultControlService::new()),
             h2_ctl: Pipeline::new(h2::DefaultControlService),
             config: DispatcherConfig::default(),
@@ -57,85 +53,69 @@ where
     }
 }
 
-impl<St, F, Sf, Sft, B> HttpService<St, F, Sf, Sft, B>
+impl<Hst, F, B, Err> HttpService<Hst, F, B, Err>
 where
     F: Filter,
-    Sf: ServiceFactory<Request, St = Sft, InitCfg = SharedCfg> + 'static,
-    Sf::St: State<Request>,
-    Sf::Res: Into<Response<B>>,
-    Sf::Error: ResponseError,
-    Sf::InitError: Error,
     B: MessageBody,
+    Err: ResponseError + 'static,
 {
     /// Create *http service* for HTTP/1 protocol.
-    pub fn h1(
-        sf: impl IntoServiceFactory<Sf, Request>,
-    ) -> h1::H1Service<St, F, Sf, B, h1::DefaultControlService<F, Sf::Error>>
-//where
-        //Sf: ServiceFactory<Request, St = Ust>,
-        //Ust: State<Request>,
+    pub fn h1<Sf, St>(sf: impl IntoServiceFactory<Sf, St, Request>) -> h1::H1Service<Hst, F, B, Err>
+    where
+        Sf: ServiceFactory<Request, St, Error = Err, InitCfg = SharedCfg> + 'static,
+        Sf::Res: Into<Response<B>>,
+        Sf::InitError: Error,
+        St: State<Request> + FromState<Hst>,
     {
         h1::H1Service::new(sf)
     }
 
     /// Create *http service* for HTTP/2 protocol.
-    pub fn h2(sf: impl IntoServiceFactory<Sf, Request>) -> h2::H2Service<St, F, Sf, B>
-//where
-        //Sf: ServiceFactory<Request, St = Ust>,
-        //Ust: State<Request>,
+    pub fn h2<Sf, St>(sf: impl IntoServiceFactory<Sf, St, Request>) -> h2::H2Service<Hst, F, B, Err>
+    where
+        Sf: ServiceFactory<Request, St, Error = Err, InitCfg = SharedCfg> + 'static,
+        Sf::Res: Into<Response<B>>,
+        Sf::InitError: Error,
+        St: State<Request> + FromState<Hst>,
     {
         h2::H2Service::new(sf)
     }
 }
 
-impl<St, F, Sf, Sft, B, Ctl1, Ctl2> HttpService<St, F, Sf, Sft, B, Ctl1, Ctl2>
+impl<Hst, F, B, Err> HttpService<Hst, F, B, Err>
 where
     F: Filter,
-    Sf: ServiceFactory<Request, St = Sft, InitCfg = SharedCfg> + 'static,
-    Sf::St: State<Request> + FromState<St>,
-    Sf::Res: Into<Response<B>>,
-    Sf::Error: ResponseError,
-    Sf::InitError: Error,
     B: MessageBody,
-    Ctl1: Service<Req = h1::Control<F, Sf::Error>, Res = h1::ControlAck<F>>,
-    Ctl1::Error: Error,
-    Ctl2: Service<Req = h2::Control<H2Error>, Res = h2::ControlAck>,
-    Ctl2::Error: Error,
+    Err: ResponseError + 'static,
 {
     /// Provide http/1 control service.
-    pub fn h1_control<Ctl>(
-        self,
-        ctl: impl IntoService<Ctl>,
-    ) -> HttpService<F, St, Sf, Sft, B, Ctl, Ctl2>
+    pub fn h1_control<St, Ctl>(self, ctl: impl IntoService<Ctl, St>) -> HttpService<Hst, F, B, Err>
     where
-        Ctl: Service<Req = h1::Control<F, Sf::Error>, Res = h1::ControlAck<F>>,
-        Ctl::St: State<Ctl::Req>,
-        Ctl::Error: Error,
+        St: State<h1::Control<F, Err>>,
+        Ctl: Service<St, Req = h1::Control<F, Err>, Res = h1::ControlAck<F>> + 'static,
+        Ctl::Error: Error + 'static,
     {
         HttpService {
             sf: self.sf,
             config: self.config,
-            h1_ctl: Pipeline::new(ctl.into_service()),
+            h1_ctl: Pipeline::new(ctl.into_service().map_err(dyn_rc_err)),
             h2_ctl: self.h2_ctl,
             _t: marker::PhantomData,
         }
     }
 
     /// Provide http/1 control service.
-    pub fn h2_control<Ctl>(
-        self,
-        ctl: impl IntoService<Ctl>,
-    ) -> HttpService<F, St, Sf, Sft, B, Ctl1, Ctl>
+    pub fn h2_control<St, Ctl>(self, ctl: impl IntoService<Ctl, St>) -> HttpService<Hst, F, B, Err>
     where
-        Ctl: Service<Req = h2::Control<H2Error>, Res = h2::ControlAck>,
-        Ctl::St: State<Ctl::Req>,
-        Ctl::Error: Error,
+        St: State<Ctl::Req>,
+        Ctl: Service<St, Req = h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
+        Ctl::Error: Error + 'static,
     {
         HttpService {
             sf: self.sf,
             config: self.config,
             h1_ctl: self.h1_ctl,
-            h2_ctl: Pipeline::new(ctl.into_service()),
+            h2_ctl: Pipeline::new(ctl.into_service().map_err(dyn_rc_err)),
             _t: marker::PhantomData,
         }
     }
@@ -150,30 +130,17 @@ mod openssl {
     use super::*;
     use crate::{io::Layer, server::SslError};
 
-    impl<St, F, Sf, Sft, B, Ctl1, Ctl2>
-        HttpService<St, Layer<SslFilter, F>, Sf, Sft, B, Ctl1, Ctl2>
+    impl<Hst, F, B, Err> HttpService<Hst, Layer<SslFilter, F>, B, Err>
     where
         F: Filter,
-        Sf: ServiceFactory<Request, St = Sft, InitCfg = SharedCfg> + 'static,
-        Sf::St: State<Request> + FromState<St>,
-        Sf::Res: Into<Response<B>>,
-        Sf::Error: ResponseError,
-        Sf::InitError: Error,
         B: MessageBody,
-        Ctl1: Service<
-                Req = h1::Control<Layer<SslFilter, F>, Sf::Error>,
-                Res = h1::ControlAck<Layer<SslFilter, F>>,
-            > + 'static,
-        Ctl1::Error: Error,
-        Ctl2: Service<Req = h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
-        Ctl2::Error: Error,
+        Err: ResponseError + 'static,
     {
         /// Create openssl based service
         pub fn openssl(
             self,
             acceptor: ssl::SslAcceptor,
-        ) -> impl Service<St = St, Req = Io<F>, Res = (), Error = SslError<DispatchError>>
-        {
+        ) -> impl Service<Hst, Req = Io<F>, Res = (), Error = SslError<DispatchError>> {
             SslAcceptor::new(acceptor)
                 .map_err(SslError::Ssl)
                 .and_then(self.map_err(SslError::Service))
@@ -190,30 +157,17 @@ mod rustls {
     use super::*;
     use crate::{io::Layer, server::SslError};
 
-    impl<St, F, Sf, Sft, B, Ctl1, Ctl2>
-        HttpService<St, Layer<TlsServerFilter, F>, Sf, Sft, B, Ctl1, Ctl2>
+    impl<Hst, F, B, Err> HttpService<Hst, Layer<TlsServerFilter, F>, B, Err>
     where
         F: Filter,
-        Sf: ServiceFactory<Request, St = Sft, InitCfg = SharedCfg> + 'static,
-        Sf::St: State<Request> + FromState<St>,
-        Sf::Res: Into<Response<B>>,
-        Sf::Error: ResponseError,
-        Sf::InitError: Error,
         B: MessageBody,
-        Ctl1: Service<
-                Req = h1::Control<Layer<TlsServerFilter, F>, Sf::Error>,
-                Res = h1::ControlAck<Layer<TlsServerFilter, F>>,
-            > + 'static,
-        Ctl1::Error: Error,
-        Ctl2: Service<Req = h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
-        Ctl2::Error: Error,
+        Err: ResponseError + 'static,
     {
         /// Create openssl based service
         pub fn rustls(
             self,
             mut config: ServerConfig,
-        ) -> impl Service<St = St, Req = Io<F>, Res = (), Error = SslError<DispatchError>>
-        {
+        ) -> impl Service<Hst, Req = Io<F>, Res = (), Error = SslError<DispatchError>> {
             let protos = vec!["h2".to_string().into(), "http/1.1".to_string().into()];
             config.alpn_protocols = protos;
 
@@ -224,34 +178,25 @@ mod rustls {
     }
 }
 
-impl<St, F, Sf, Sft, B, Ctl1, Ctl2> Service for HttpService<St, F, Sf, Sft, B, Ctl1, Ctl2>
+impl<Hst, F, B, Err> Service<Hst> for HttpService<Hst, F, B, Err>
 where
     F: Filter,
-    Sf: ServiceFactory<Request, St = Sft, InitCfg = SharedCfg> + 'static,
-    Sf::St: State<Request> + FromState<St>,
-    Sf::Res: Into<Response<B>>,
-    Sf::Error: ResponseError,
-    Sf::InitError: Error,
     B: MessageBody,
-    Ctl1: Service<Req = h1::Control<F, Sf::Error>, Res = h1::ControlAck<F>> + 'static,
-    Ctl1::Error: Error,
-    Ctl2: Service<Req = h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
-    Ctl2::Error: Error,
+    Err: ResponseError + 'static,
 {
-    type St = St;
     type Req = Io<F>;
     type Res = ();
     type Error = DispatchError;
 
-    async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, _: ReadyCtx<'_, Self, Hst>) -> Result<(), Self::Error> {
         let (r1, r2) = join(self.h1_ctl.ready(), self.h2_ctl.ready()).await;
         r1.map_err(|e| {
             log::error!("Http control service readiness error: {e:?}");
-            DispatchError::Control(Rc::new(e))
+            DispatchError::Control(e)
         })?;
         r2.map_err(|e| {
             log::error!("Http control service readiness error: {e:?}");
-            DispatchError::Control(Rc::new(e))
+            DispatchError::Control(e)
         })?;
         Ok(())
     }
@@ -270,24 +215,18 @@ where
         join(self.h1_ctl.shutdown(), self.h2_ctl.shutdown()).await;
     }
 
-    async fn call(&self, io: Io<F>, ctx: Ctx<'_, Self>) -> Result<Self::Res, Self::Error> {
+    async fn call(&self, io: Io<F>, ctx: Ctx<'_, Self, Hst>) -> Result<Self::Res, Self::Error> {
         let cfg = io.shared();
-        let svc = self
-            .sf
-            .create(&cfg)
-            .await
-            .map_err(|e| {
-                log::error!("Cannot construct handler service: {e:?}");
-                DispatchError::Control(Rc::new(e))
-            })
-            .map(|svc| Pipeline::with(svc, ctx.st()))?;
+        let svc = self.sf.create(&cfg, ctx.st()).await.map_err(|e| {
+            log::error!("Cannot construct handler service: {e:?}");
+            DispatchError::Control(e)
+        })?;
 
         let id = self.config.next_id();
         let ioref = io.get_ref();
         let inflight = self.config.insert_io(&ioref);
 
-        let result = if io.query::<types::HttpProtocol>().get()
-            == Some(types::HttpProtocol::Http2)
+        let result = if io.query::<types::HttpProtocol>().get() == Some(types::HttpProtocol::Http2)
         {
             log::trace!(
                 "{}: New http2 connection {id}, peer address {:?}, in-flight: {inflight}",

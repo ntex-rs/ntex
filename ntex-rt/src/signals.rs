@@ -167,9 +167,7 @@ pub(crate) fn start(sys: &System) {
                 match register(s, move || handle_signal(sig.clone())) {
                     Ok(s) => SIG_HANDLERS[idx] = Some(s),
                     Err(e) => {
-                        log::error!(
-                            "Cannot install signal handler for {sig2:?} with {e:?}"
-                        );
+                        log::error!("Cannot install signal handler for {sig2:?} with {e:?}");
                     }
                 }
             }

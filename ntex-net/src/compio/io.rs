@@ -203,11 +203,7 @@ fn build_bufs(buf: &mut BytePages) -> Vec<CompioPage> {
     bufs
 }
 
-async fn write_buf<T>(
-    io: &mut T,
-    ctx: &IoContext,
-    mut bufs: Vec<CompioPage>,
-) -> IoTaskStatus
+async fn write_buf<T>(io: &mut T, ctx: &IoContext, mut bufs: Vec<CompioPage>) -> IoTaskStatus
 where
     T: AsyncRead + AsyncWrite,
 {

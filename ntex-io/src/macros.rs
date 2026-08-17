@@ -3,18 +3,12 @@
 macro_rules! forward_ready {
     ($field:ident) => {
         #[inline]
-        fn poll_read_ready(
-            &self,
-            cx: &mut std::task::Context<'_>,
-        ) -> Poll<$crate::Readiness> {
+        fn poll_read_ready(&self, cx: &mut std::task::Context<'_>) -> Poll<$crate::Readiness> {
             self.$field.poll_read_ready(cx)
         }
 
         #[inline]
-        fn poll_write_ready(
-            &self,
-            cx: &mut std::task::Context<'_>,
-        ) -> Poll<$crate::Readiness> {
+        fn poll_write_ready(&self, cx: &mut std::task::Context<'_>) -> Poll<$crate::Readiness> {
             self.$field.poll_write_ready(cx)
         }
     };

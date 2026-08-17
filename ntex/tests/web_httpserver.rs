@@ -24,8 +24,7 @@ async fn test_run() {
         sys.run(move || {
             let srv = HttpServer::new(async || {
                 App::new().service(
-                    web::resource("/")
-                        .route(web::to(|| async { HttpResponse::Ok().body("test") })),
+                    web::resource("/").route(web::to(|| async { HttpResponse::Ok().body("test") })),
                 )
             })
             .workers(1)
@@ -167,12 +166,10 @@ async fn test_rustls() {
 
         sys.run(move || {
             let srv = HttpServer::new(async || {
-                App::new().service(web::resource("/").route(web::to(
-                    async |req: HttpRequest| {
-                        assert!(req.app_config().secure());
-                        HttpResponse::Ok().body("test")
-                    },
-                )))
+                App::new().service(web::resource("/").route(web::to(async |req: HttpRequest| {
+                    assert!(req.app_config().secure());
+                    HttpResponse::Ok().body("test")
+                })))
             })
             .workers(1)
             .shutdown_timeout(Seconds(1))
@@ -211,8 +208,7 @@ async fn test_bind_uds() {
         sys.run(move || {
             let srv = HttpServer::new(async || {
                 App::new().service(
-                    web::resource("/")
-                        .route(web::to(|| async { HttpResponse::Ok().body("test") })),
+                    web::resource("/").route(web::to(|| async { HttpResponse::Ok().body("test") })),
                 )
             })
             .workers(1)
@@ -270,8 +266,7 @@ async fn test_listen_uds() {
 
             let srv = HttpServer::new(async || {
                 App::new().service(
-                    web::resource("/")
-                        .route(web::to(|| async { HttpResponse::Ok().body("test") })),
+                    web::resource("/").route(web::to(|| async { HttpResponse::Ok().body("test") })),
                 )
             })
             .workers(1)

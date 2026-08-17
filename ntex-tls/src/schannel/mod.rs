@@ -11,10 +11,9 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Security::Authentication::Identity::{
     AcquireCredentialsHandleW, DecryptMessage, DeleteSecurityContext, EncryptMessage,
-    FreeContextBuffer, FreeCredentialsHandle, ISC_REQ_ALLOCATE_MEMORY,
-    ISC_REQ_CONFIDENTIALITY, ISC_REQ_EXTENDED_ERROR, ISC_REQ_REPLAY_DETECT,
-    ISC_REQ_SEQUENCE_DETECT, ISC_REQ_STREAM, InitializeSecurityContextW,
-    QueryContextAttributesW, SCH_CRED_AUTO_CRED_VALIDATION,
+    FreeContextBuffer, FreeCredentialsHandle, ISC_REQ_ALLOCATE_MEMORY, ISC_REQ_CONFIDENTIALITY,
+    ISC_REQ_EXTENDED_ERROR, ISC_REQ_REPLAY_DETECT, ISC_REQ_SEQUENCE_DETECT, ISC_REQ_STREAM,
+    InitializeSecurityContextW, QueryContextAttributesW, SCH_CRED_AUTO_CRED_VALIDATION,
     SCH_CRED_MANUAL_CRED_VALIDATION, SCH_CRED_NO_SERVERNAME_CHECK, SCH_USE_STRONG_CRYPTO,
     SCHANNEL_CRED, SCHANNEL_CRED_VERSION, SECBUFFER_APPLICATION_PROTOCOLS, SECBUFFER_DATA,
     SECBUFFER_EMPTY, SECBUFFER_EXTRA, SECBUFFER_STREAM_HEADER, SECBUFFER_STREAM_TRAILER,
@@ -113,8 +112,7 @@ impl Context {
         if config.verify {
             schannel_cred.dwFlags |= SCH_CRED_AUTO_CRED_VALIDATION;
         } else {
-            schannel_cred.dwFlags |=
-                SCH_CRED_MANUAL_CRED_VALIDATION | SCH_CRED_NO_SERVERNAME_CHECK;
+            schannel_cred.dwFlags |= SCH_CRED_MANUAL_CRED_VALIDATION | SCH_CRED_NO_SERVERNAME_CHECK;
         }
 
         let status = unsafe {
@@ -181,8 +179,7 @@ impl Context {
         ];
         let in_desc = SecBufferDesc {
             ulVersion: SECBUFFER_VERSION,
-            cBuffers: u32::try_from(in_bufs.len())
-                .expect("static SecBuffer count fits u32"),
+            cBuffers: u32::try_from(in_bufs.len()).expect("static SecBuffer count fits u32"),
             pBuffers: in_bufs.as_mut_ptr(),
         };
 
@@ -231,10 +228,7 @@ impl Context {
         if !out_buf.pvBuffer.is_null() {
             if out_buf.cbBuffer != 0 {
                 let token = unsafe {
-                    slice::from_raw_parts(
-                        out_buf.pvBuffer.cast::<u8>(),
-                        out_buf.cbBuffer as usize,
-                    )
+                    slice::from_raw_parts(out_buf.pvBuffer.cast::<u8>(), out_buf.cbBuffer as usize)
                 };
                 output.put_slice(token);
             }
@@ -292,11 +286,7 @@ impl Context {
         Ok(sizes)
     }
 
-    fn encrypt(
-        &mut self,
-        src: &[u8],
-        dst: &mut ntex_bytes::BytePages,
-    ) -> io::Result<usize> {
+    fn encrypt(&mut self, src: &[u8], dst: &mut ntex_bytes::BytePages) -> io::Result<usize> {
         let sizes = self.query_stream_sizes()?;
         let len = cmp::min(src.len(), sizes.cbMaximumMessage as usize);
         if len == 0 {
@@ -341,8 +331,7 @@ impl Context {
             return Err(sspi_error("EncryptMessage", status));
         }
 
-        let tls_len = usize::try_from(bufs[0].cbBuffer)
-            .expect("TLS header length fits usize")
+        let tls_len = usize::try_from(bufs[0].cbBuffer).expect("TLS header length fits usize")
             + usize::try_from(bufs[1].cbBuffer).expect("TLS data length fits usize")
             + usize::try_from(bufs[2].cbBuffer).expect("TLS trailer length fits usize");
         frame.truncate(tls_len);
@@ -385,9 +374,8 @@ impl Context {
             pBuffers: bufs.as_mut_ptr(),
         };
         let mut qop = 0u32;
-        let status = unsafe {
-            DecryptMessage(&raw const self.ctxt, &raw const desc, 0, &raw mut qop)
-        };
+        let status =
+            unsafe { DecryptMessage(&raw const self.ctxt, &raw const desc, 0, &raw mut qop) };
 
         match status {
             SEC_E_OK => {}
@@ -405,10 +393,7 @@ impl Context {
         let mut produced = false;
         if bufs[1].BufferType == SECBUFFER_DATA && bufs[1].cbBuffer != 0 {
             let data = unsafe {
-                slice::from_raw_parts(
-                    bufs[1].pvBuffer.cast::<u8>(),
-                    bufs[1].cbBuffer as usize,
-                )
+                slice::from_raw_parts(bufs[1].pvBuffer.cast::<u8>(), bufs[1].cbBuffer as usize)
             };
             dst.put_slice(data);
             produced = true;
@@ -624,9 +609,7 @@ fn alpn_buffer() -> Vec<u8> {
 
     let mut buf = Vec::with_capacity(4 + protocol_lists_size as usize);
     buf.extend_from_slice(&protocol_lists_size.to_ne_bytes());
-    buf.extend_from_slice(
-        &(SecApplicationProtocolNegotiationExt_ALPN as u32).to_ne_bytes(),
-    );
+    buf.extend_from_slice(&(SecApplicationProtocolNegotiationExt_ALPN as u32).to_ne_bytes());
     buf.extend_from_slice(&list_size.to_ne_bytes());
     buf.extend_from_slice(ALPN_WIRE);
     buf

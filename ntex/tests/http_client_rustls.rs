@@ -21,9 +21,10 @@ async fn test_connection_reuse_h2() {
             Ready::Ok(io)
         })
         .and_then(
-            HttpService::h2(App::new().service(
-                web::resource("/").route(web::to(|| async { HttpResponse::Ok() })),
-            ))
+            HttpService::h2(
+                App::new()
+                    .service(web::resource("/").route(web::to(|| async { HttpResponse::Ok() }))),
+            )
             .rustls(rustls_utils::tls_acceptor())
             .map_err(|_| ()),
         )

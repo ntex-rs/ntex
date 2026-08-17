@@ -1,7 +1,7 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use ntex_io::Io;
-use ntex_service::{Pipeline, Service, cfg::SharedCfg};
+use ntex_service::{Pipeline, Service, State, cfg::SharedCfg};
 use ntex_util::{future::BoxFuture, services::counter::CounterGuard};
 
 use super::Token;
@@ -29,14 +29,15 @@ struct Factory {
     wrapper: Box<dyn FactoryWrapper + Send>,
 }
 
-pub(crate) fn create_factory_service<F, S>(
+pub(crate) fn create_factory_service<F, S, St>(
     name: String,
     tokens: Vec<(Token, SharedCfg)>,
     f: F,
 ) -> FactoryServiceType
 where
-    F: AsyncFn() -> Result<Pipeline<S>, &'static str> + Send + Clone + 'static,
-    S: Service<Req = Io> + 'static,
+    F: AsyncFn() -> Result<S, &'static str> + Send + Clone + 'static,
+    S: Service<St, Req = Io> + 'static,
+    St: State<Io> + 'static,
 {
     let name: Arc<str> = Arc::from(name);
 
@@ -70,15 +71,16 @@ trait FactoryWrapper: Send {
     fn create(&self) -> BoxFuture<'static, Result<Box<dyn NetService>, &'static str>>;
 }
 
-struct FactoryWrapperImpl<F, S> {
+struct FactoryWrapperImpl<F, S, St> {
     f: F,
-    s: PhantomData<S>,
+    s: PhantomData<(S, St)>,
 }
 
-impl<F, S> FactoryWrapper for FactoryWrapperImpl<F, S>
+impl<F, S, St> FactoryWrapper for FactoryWrapperImpl<F, S, St>
 where
-    F: AsyncFn() -> Result<Pipeline<S>, &'static str> + Send + Clone + 'static,
-    S: Service<Req = Io> + 'static,
+    F: AsyncFn() -> Result<S, &'static str> + Send + Clone + 'static,
+    S: Service<St, Req = Io> + 'static,
+    St: State<Io> + 'static,
 {
     fn clone(&self) -> Box<dyn FactoryWrapper> {
         Box::new(Self {
@@ -91,21 +93,19 @@ where
         let f = self.f.clone();
 
         Box::pin(async move {
-            let pipeline = (f)().await?;
+            let svc = (f)().await?;
+            let pipeline = Pipeline::new(svc.map(|_| ()).map_err(|_| ()));
             let svc: Box<dyn NetService> = Box::new(ServerService { pipeline });
             Ok(svc)
         })
     }
 }
 
-pub(crate) struct ServerService<S: Service> {
-    pub(crate) pipeline: Pipeline<S>,
+pub(crate) struct ServerService {
+    pub(crate) pipeline: Pipeline<Io, (), ()>,
 }
 
-impl<S> NetService for ServerService<S>
-where
-    S: Service<Req = Io> + 'static,
-{
+impl NetService for ServerService {
     fn call(&self, io: Io, guard: CounterGuard) {
         let fut = self.pipeline.call_static(io);
         ntex_rt::spawn(async move {
@@ -126,4 +126,4 @@ where
 // SAFETY: Send cannot be provided authomatically because of E and R params
 // but R always get executed in one thread and never leave it
 unsafe impl Send for Factory {}
-unsafe impl<F, S> Send for FactoryWrapperImpl<F, S> {}
+unsafe impl<F, S, St> Send for FactoryWrapperImpl<F, S, St> {}

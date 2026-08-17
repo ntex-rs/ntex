@@ -66,7 +66,6 @@ impl<Err: ErrorRenderer> fmt::Debug for Route<Err> {
 }
 
 impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for Route<Err> {
-    type St = ();
     type Res = WebResponse;
     type Error = Err::Container;
 
@@ -106,7 +105,6 @@ impl<Err: ErrorRenderer> fmt::Debug for RouteService<Err> {
 }
 
 impl<Err: ErrorRenderer> Service for RouteService<Err> {
-    type St = ();
     type Req = WebRequest<Err>;
     type Res = WebResponse;
     type Error = Err::Container;
@@ -114,7 +112,7 @@ impl<Err: ErrorRenderer> Service for RouteService<Err> {
     async fn call(
         &self,
         req: WebRequest<Err>,
-        _: Ctx<'_, Self>,
+        _: Ctx<'_, Self, ()>,
     ) -> Result<Self::Res, Self::Error> {
         self.handler.call(req).await
     }
@@ -372,11 +370,7 @@ mod tests {
         let route: web::Route<DefaultError> = web::get();
         let repr = format!("{route:?}");
         assert!(repr.contains("Route"));
-        assert!(
-            repr.contains(
-                "handler: Handler(\"ntex::web::route::Route::new::{{closure}}\")"
-            )
-        );
+        assert!(repr.contains("handler: Handler(\"ntex::web::route::Route::new::{{closure}}\")"));
         assert!(repr.contains("methods: [GET]"));
         assert!(repr.contains("guards: AllGuard()"));
 
@@ -385,11 +379,7 @@ mod tests {
         let route_service = route.service();
         let repr = format!("{route_service:?}");
         assert!(repr.contains("RouteService"));
-        assert!(
-            repr.contains(
-                "handler: Handler(\"ntex::web::route::Route::new::{{closure}}\")"
-            )
-        );
+        assert!(repr.contains("handler: Handler(\"ntex::web::route::Route::new::{{closure}}\")"));
         assert!(repr.contains("methods: [GET]"));
         assert!(repr.contains("guards: AllGuard()"));
     }

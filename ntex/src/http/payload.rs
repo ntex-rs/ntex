@@ -71,10 +71,7 @@ impl Payload {
     /// Attempt to pull out the next value of this payload, registering
     /// the current task for wakeup if the value is not yet available,
     /// and returning None if the payload is exhausted.
-    pub fn poll_recv(
-        &mut self,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, PayloadError>>> {
+    pub fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, PayloadError>>> {
         match self {
             Payload::None => Poll::Ready(None),
             Payload::H1(pl) => pl.poll_read(cx),

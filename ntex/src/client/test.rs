@@ -98,10 +98,8 @@ impl TestResponse {
 
             let mut cookie = String::new();
             for c in self.cookies.delta() {
-                let name =
-                    percent_encode(c.name().as_bytes(), crate::http::helpers::USERINFO);
-                let value =
-                    percent_encode(c.value().as_bytes(), crate::http::helpers::USERINFO);
+                let name = percent_encode(c.name().as_bytes(), crate::http::helpers::USERINFO);
+                let value = percent_encode(c.value().as_bytes(), crate::http::helpers::USERINFO);
                 let _ = write!(cookie, "; {name}={value}");
             }
             if !cookie.is_empty() {

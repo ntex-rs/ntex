@@ -12,10 +12,7 @@ pub trait FromRequest<Err>: Sized {
     type Error;
 
     /// Convert request to a Self
-    async fn from_request(
-        req: &HttpRequest,
-        payload: &mut Payload,
-    ) -> Result<Self, Self::Error>;
+    async fn from_request(req: &HttpRequest, payload: &mut Payload) -> Result<Self, Self::Error>;
 }
 
 /// Optionally extract a field from the request
@@ -135,10 +132,7 @@ where
     type Error = T::Error;
 
     #[inline]
-    async fn from_request(
-        req: &HttpRequest,
-        payload: &mut Payload,
-    ) -> Result<Self, Self::Error> {
+    async fn from_request(req: &HttpRequest, payload: &mut Payload) -> Result<Self, Self::Error> {
         match T::from_request(req, payload).await {
             Ok(v) => Ok(Ok(v)),
             Err(e) => Ok(Err(e)),
@@ -199,25 +193,21 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_option() {
-        let (req, mut pl) = TestRequest::with_header(
-            header::CONTENT_TYPE,
-            "application/x-www-form-urlencoded",
-        )
-        .state(FormConfig::default().limit(4096))
-        .to_http_parts();
+        let (req, mut pl) =
+            TestRequest::with_header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .state(FormConfig::default().limit(4096))
+                .to_http_parts();
 
         let r = from_request::<Option<Form<Info>>>(&req, &mut pl)
             .await
             .unwrap();
         assert_eq!(r, None);
 
-        let (req, mut pl) = TestRequest::with_header(
-            header::CONTENT_TYPE,
-            "application/x-www-form-urlencoded",
-        )
-        .header(header::CONTENT_LENGTH, "9")
-        .set_payload(Bytes::from_static(b"hello=world"))
-        .to_http_parts();
+        let (req, mut pl) =
+            TestRequest::with_header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::CONTENT_LENGTH, "9")
+                .set_payload(Bytes::from_static(b"hello=world"))
+                .to_http_parts();
 
         let r = from_request::<Option<Form<Info>>>(&req, &mut pl)
             .await
@@ -229,13 +219,11 @@ mod tests {
             }))
         );
 
-        let (req, mut pl) = TestRequest::with_header(
-            header::CONTENT_TYPE,
-            "application/x-www-form-urlencoded",
-        )
-        .header(header::CONTENT_LENGTH, "9")
-        .set_payload(Bytes::from_static(b"bye=world"))
-        .to_http_parts();
+        let (req, mut pl) =
+            TestRequest::with_header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::CONTENT_LENGTH, "9")
+                .set_payload(Bytes::from_static(b"bye=world"))
+                .to_http_parts();
 
         let r = from_request::<Option<Form<Info>>>(&req, &mut pl)
             .await
@@ -245,13 +233,11 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_result() {
-        let (req, mut pl) = TestRequest::with_header(
-            header::CONTENT_TYPE,
-            "application/x-www-form-urlencoded",
-        )
-        .header(header::CONTENT_LENGTH, "11")
-        .set_payload(Bytes::from_static(b"hello=world"))
-        .to_http_parts();
+        let (req, mut pl) =
+            TestRequest::with_header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::CONTENT_LENGTH, "11")
+                .set_payload(Bytes::from_static(b"hello=world"))
+                .to_http_parts();
 
         let r = from_request::<Result<Form<Info>, UrlencodedError>>(&req, &mut pl)
             .await
@@ -263,13 +249,11 @@ mod tests {
             })
         );
 
-        let (req, mut pl) = TestRequest::with_header(
-            header::CONTENT_TYPE,
-            "application/x-www-form-urlencoded",
-        )
-        .header(header::CONTENT_LENGTH, "9")
-        .set_payload(Bytes::from_static(b"bye=world"))
-        .to_http_parts();
+        let (req, mut pl) =
+            TestRequest::with_header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::CONTENT_LENGTH, "9")
+                .set_payload(Bytes::from_static(b"bye=world"))
+                .to_http_parts();
 
         let r = from_request::<Result<Form<Info>, UrlencodedError>>(&req, &mut pl)
             .await

@@ -284,9 +284,7 @@ impl BufConfig {
     #[inline]
     /// Get buffer
     pub fn get(&self) -> BytesMut {
-        if let Some(buf) =
-            CACHE.with(|c| c.with(self.idx, self.first, |c: &mut Vec<_>| c.pop()))
-        {
+        if let Some(buf) = CACHE.with(|c| c.with(self.idx, self.first, |c: &mut Vec<_>| c.pop())) {
             buf
         } else {
             BytesMut::with_capacity(self.high)

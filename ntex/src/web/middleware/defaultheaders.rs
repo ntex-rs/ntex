@@ -105,23 +105,18 @@ pub struct DefaultHeadersMiddleware<S> {
     inner: Rc<Inner>,
 }
 
-impl<S, E> Service for DefaultHeadersMiddleware<S>
+impl<S, St, E> Service<St> for DefaultHeadersMiddleware<S>
 where
-    S: Service<Req = WebRequest<E>, Res = WebResponse>,
+    S: Service<St, Req = WebRequest<E>, Res = WebResponse>,
 {
-    type St = S::St;
     type Req = WebRequest<E>;
     type Res = WebResponse;
     type Error = S::Error;
 
-    crate::forward_ready!(service);
+    crate::forward_ready!(St, service);
     crate::forward_shutdown!(service);
 
-    async fn call(
-        &self,
-        r: WebRequest<E>,
-        ctx: Ctx<'_, Self>,
-    ) -> Result<Self::Res, S::Error> {
+    async fn call(&self, r: Self::Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, S::Error> {
         let mut res = ctx.call(&self.service, r).await?;
 
         // set response headers

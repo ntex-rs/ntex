@@ -55,10 +55,7 @@ impl<Err> WebRequest<Err> {
     /// Construct request from parts.
     ///
     /// `WebRequest` can be re-constructed only if `req` hasnt been cloned.
-    pub fn from_parts(
-        mut req: HttpRequest,
-        pl: Payload,
-    ) -> Result<Self, (HttpRequest, Payload)> {
+    pub fn from_parts(mut req: HttpRequest, pl: Payload) -> Result<Self, (HttpRequest, Payload)> {
         if Rc::strong_count(&req.0) == 1 {
             Rc::get_mut(&mut req.0).unwrap().payload = pl;
             Ok(WebRequest::new(req))

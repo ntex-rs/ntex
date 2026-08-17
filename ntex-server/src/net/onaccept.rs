@@ -42,8 +42,7 @@ where
 pub(crate) trait OnAccept {
     fn clone_fn(&self) -> Box<dyn OnAccept + Send>;
 
-    fn run(&self, name: Arc<str>, stream: Stream)
-    -> BoxFuture<'static, Result<Stream, ()>>;
+    fn run(&self, name: Arc<str>, stream: Stream) -> BoxFuture<'static, Result<Stream, ()>>;
 }
 
 pub(super) struct OnAcceptWrapper<F, E> {
@@ -75,11 +74,7 @@ where
         })
     }
 
-    fn run(
-        &self,
-        name: Arc<str>,
-        stream: Stream,
-    ) -> BoxFuture<'static, Result<Stream, ()>> {
+    fn run(&self, name: Arc<str>, stream: Stream) -> BoxFuture<'static, Result<Stream, ()>> {
         let f = self.f.clone();
         Box::pin(async move {
             (f)(name, stream).await.map_err(|e| {

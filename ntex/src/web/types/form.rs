@@ -101,10 +101,7 @@ where
 {
     type Error = UrlencodedError;
 
-    async fn from_request(
-        req: &HttpRequest,
-        payload: &mut Payload,
-    ) -> Result<Self, Self::Error> {
+    async fn from_request(req: &HttpRequest, payload: &mut Payload) -> Result<Self, Self::Error> {
         let limit = req.app_state::<FormConfig>().map_or(16384, |c| c.limit);
 
         match UrlEncoded::new(req, payload).limit(limit).await {

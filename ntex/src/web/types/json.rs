@@ -160,10 +160,7 @@ where
 {
     type Error = JsonPayloadError;
 
-    async fn from_request(
-        req: &HttpRequest,
-        payload: &mut Payload,
-    ) -> Result<Self, Self::Error> {
+    async fn from_request(req: &HttpRequest, payload: &mut Payload) -> Result<Self, Self::Error> {
         let req2 = req.clone();
         let (limit, ctype) = req
             .app_state::<JsonConfig>()
@@ -477,8 +474,7 @@ mod tests {
 
         let s = from_request::<Json<MyObject>>(&req, &mut pl).await;
         assert!(
-            format!("{}", s.err().unwrap())
-                .contains("Json payload size is bigger than allowed")
+            format!("{}", s.err().unwrap()).contains("Json payload size is bigger than allowed")
         );
 
         let (req, mut pl) = TestRequest::default()

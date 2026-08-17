@@ -7,8 +7,8 @@ use ntex_h2::{self as h2};
 use crate::error::Error;
 use crate::http::uri::{Authority, Scheme, Uri};
 use crate::io::{IoBoxed, types::HttpProtocol};
+use crate::service::cfg::SharedCfg;
 use crate::service::{Ctx, Pipeline, PipelineBinding, PipelineCall, ReadyCtx, Service};
-use crate::service::{boxed, cfg::SharedCfg};
 use crate::util::{ByteString, Either, HashMap, HashSet, select};
 use crate::{channel::inplace, channel::oneshot, channel::pool, rt::spawn, time::now};
 
@@ -19,8 +19,6 @@ use super::{Connect, error::ConnectError, h2proto::H2Client};
 pub(super) struct Key {
     authority: Authority,
 }
-
-type Connector = boxed::BoxService<(), Connect, IoBoxed, Error<ConnectError>>;
 
 impl From<Authority> for Key {
     fn from(authority: Authority) -> Key {
@@ -48,7 +46,7 @@ struct AvailableConnection {
 pub(super) struct ConnectionPool(Rc<ConnectionPoolInner>);
 
 struct ConnectionPoolInner {
-    svc: Pipeline<Connector>,
+    svc: Pipeline<Connect, IoBoxed, Error<ConnectError>>,
     inner: Rc<RefCell<Inner>>,
     waiters: Rc<RefCell<Waiters>>,
     stop: Rc<Cell<Option<oneshot::Sender<()>>>>,
@@ -70,7 +68,7 @@ pub(super) struct Inner {
 
 impl ConnectionPool {
     pub(super) fn new(
-        svc: Pipeline<Connector>,
+        svc: Pipeline<Connect, IoBoxed, Error<ConnectError>>,
         conn_lifetime: Duration,
         conn_keep_alive: Duration,
         limit: usize,
@@ -143,13 +141,12 @@ impl fmt::Debug for ConnectionPool {
 }
 
 impl Service for ConnectionPool {
-    type St = ();
     type Req = Connect;
     type Res = Connection;
     type Error = Error<ConnectError>;
 
     #[inline]
-    async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, _: ReadyCtx<'_, Self, ()>) -> Result<(), Self::Error> {
         self.0.svc.ready().await
     }
 
@@ -160,7 +157,7 @@ impl Service for ConnectionPool {
         self.0.svc.shutdown().await;
     }
 
-    async fn call(&self, req: Connect, _: Ctx<'_, Self>) -> Result<Self::Res, Self::Error> {
+    async fn call(&self, req: Connect, _: Ctx<'_, Self, ()>) -> Result<Self::Res, Self::Error> {
         log::trace!("{}: Get connection for {:?}", self.0.config.tag(), req.uri);
 
         let inner = self.0.inner.clone();
@@ -339,7 +336,7 @@ impl Inner {
 }
 
 async fn run_connection_pool(
-    svc: PipelineBinding<Connector>,
+    svc: PipelineBinding<Connect, IoBoxed, Error<ConnectError>>,
     inner: Rc<RefCell<Inner>>,
     waiters: Rc<RefCell<Waiters>>,
     config: SharedCfg,
@@ -382,10 +379,7 @@ async fn run_connection_pool(
                             )));
                         }
                         Acquire::Available => {
-                            log::trace!(
-                                "{tag}: Connecting to {:?} and wake up waiter",
-                                req.uri
-                            );
+                            log::trace!("{tag}: Connecting to {:?} and wake up waiter", req.uri);
                             cleanup = true;
                             let (connect, tx) = waiters.pop_front().unwrap();
                             let uri = connect.uri.clone();
@@ -423,7 +417,7 @@ pin_project_lite::pin_project! {
     struct OpenConnection {
         key: Key,
         #[pin]
-        fut: PipelineCall<Connector>,
+        fut: PipelineCall<IoBoxed, Error<ConnectError>>,
         uri: Uri,
         tx: Option<Waiter>,
         guard: Option<OpenGuard>,
@@ -437,7 +431,7 @@ impl OpenConnection {
         tx: Waiter,
         uri: Uri,
         inner: Rc<RefCell<Inner>>,
-        fut: PipelineCall<Connector>,
+        fut: PipelineCall<IoBoxed, Error<ConnectError>>,
     ) {
         spawn(async move {
             OpenConnection {
@@ -512,8 +506,7 @@ impl future::Future for OpenConnection {
                     }
 
                     // put h2 connection to list of available connections
-                    Connection::new(ConnectionType::H2(client), now(), Some(guard))
-                        .release(false);
+                    Connection::new(ConnectionType::H2(client), now(), Some(guard)).release(false);
 
                     Poll::Ready(())
                 } else {

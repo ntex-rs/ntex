@@ -203,11 +203,8 @@ async fn get_response(
                                             stream.tag(),
                                         );
                                         pl.set_error(
-                                            io::Error::new(
-                                                io::ErrorKind::UnexpectedEof,
-                                                err,
-                                            )
-                                            .into(),
+                                            io::Error::new(io::ErrorKind::UnexpectedEof, err)
+                                                .into(),
                                         );
                                     }
                                     h2::MessageKind::Headers { .. } => {
@@ -228,9 +225,7 @@ async fn get_response(
                     Ok((head, payload))
                 }
                 None => Err(Error::from(ClientError::H2(
-                    h2::OperationError::Connection(h2::ConnectionError::MissingPseudo(
-                        "Status",
-                    )),
+                    h2::OperationError::Connection(h2::ConnectionError::MissingPseudo("Status")),
                 ))),
             }
         }

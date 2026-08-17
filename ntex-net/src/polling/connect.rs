@@ -6,9 +6,7 @@ use ntex_service::cfg::SharedCfg;
 use slab::Slab;
 use socket2::{SockAddr, Socket};
 
-use super::{
-    Event, Handler, Reactor, ReactorApi, TcpStream, UnixStream, stream::StreamOps,
-};
+use super::{Event, Handler, Reactor, ReactorApi, TcpStream, UnixStream, stream::StreamOps};
 use crate::channel::{self, Receiver, Sender};
 
 #[derive(Clone)]
@@ -63,9 +61,8 @@ impl ConnectOps {
         cfg: SharedCfg,
         uds: bool,
     ) -> Receiver<Io> {
-        let result = syscall!(
-            break libc::connect(sock.as_raw_fd(), addr.as_ptr().cast(), addr.len())
-        );
+        let result =
+            syscall!(break libc::connect(sock.as_raw_fd(), addr.as_ptr().cast(), addr.len()));
         if let Poll::Ready(res) = result {
             match res {
                 Err(err) => {
@@ -74,15 +71,9 @@ impl ConnectOps {
                 }
                 Ok(_) => {
                     if uds {
-                        Receiver::new(Ok(Io::new(
-                            UnixStream(sock, self.0.streams.clone()),
-                            cfg,
-                        )))
+                        Receiver::new(Ok(Io::new(UnixStream(sock, self.0.streams.clone()), cfg)))
                     } else {
-                        Receiver::new(Ok(Io::new(
-                            TcpStream(sock, self.0.streams.clone()),
-                            cfg,
-                        )))
+                        Receiver::new(Ok(Io::new(TcpStream(sock, self.0.streams.clone()), cfg)))
                     }
                 }
             }

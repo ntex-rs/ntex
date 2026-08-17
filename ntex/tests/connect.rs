@@ -278,11 +278,9 @@ async fn test_rustls_peer_close_notify_closes_io() {
 
     // raw blocking rustls client
     let config = Arc::new(rustls_utils::tls_connector());
-    let mut conn = tls_rustls::ClientConnection::new(
-        config,
-        ServerName::try_from("localhost").unwrap(),
-    )
-    .unwrap();
+    let mut conn =
+        tls_rustls::ClientConnection::new(config, ServerName::try_from("localhost").unwrap())
+            .unwrap();
     let mut tcp = std::net::TcpStream::connect(srv.addr()).unwrap();
 
     // handshake + echo round-trip
@@ -316,8 +314,7 @@ async fn test_rustls_peer_close_notify_closes_io() {
             // tls records (e.g. server's close_notify alert), keep reading
             Ok(_) => continue,
             Err(ref e)
-                if e.kind() == io::ErrorKind::WouldBlock
-                    || e.kind() == io::ErrorKind::TimedOut =>
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
             {
                 panic!("server did not close connection after receiving close_notify: {e}");
             }
@@ -412,12 +409,11 @@ async fn test_rustls_keyupdate_response_flushed() {
     });
 
     // raw blocking rustls client, tls 1.3 only (KeyUpdate requires it)
-    let config = tls_rustls::ClientConfig::builder_with_protocol_versions(&[
-        &tls_rustls::version::TLS13,
-    ])
-    .dangerous()
-    .with_custom_certificate_verifier(Arc::new(rustls_utils::NoCertificateVerification))
-    .with_no_client_auth();
+    let config =
+        tls_rustls::ClientConfig::builder_with_protocol_versions(&[&tls_rustls::version::TLS13])
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(rustls_utils::NoCertificateVerification))
+            .with_no_client_auth();
     let mut conn = tls_rustls::ClientConnection::new(
         Arc::new(config),
         ServerName::try_from("localhost").unwrap(),
@@ -527,8 +523,7 @@ async fn test_uri() {
 
     let conn = Pipeline::new(ntex::connect::ConnectorService::default());
     let addr =
-        ntex::http::Uri::try_from(format!("https://localhost:{}", srv.addr().port()))
-            .unwrap();
+        ntex::http::Uri::try_from(format!("https://localhost:{}", srv.addr().port())).unwrap();
     let io = conn.call(addr.into()).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }
@@ -556,8 +551,7 @@ async fn test_rustls_uri() {
 
     let conn = Pipeline::new(ntex::connect::ConnectorService::default());
     let addr =
-        ntex::http::Uri::try_from(format!("https://localhost:{}", srv.addr().port()))
-            .unwrap();
+        ntex::http::Uri::try_from(format!("https://localhost:{}", srv.addr().port())).unwrap();
     let io = conn.call(addr.into()).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }

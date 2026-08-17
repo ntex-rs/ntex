@@ -19,19 +19,18 @@ impl Sender {
 }
 
 #[allow(unused_variables)]
-impl Service for Sender {
-    type St = ();
+impl Service<()> for Sender {
     type Req = ServiceRequest;
     type Res = ServiceResponse;
     type Error = Error<ClientError>;
 
-    crate::forward_ready!(connector);
+    crate::forward_ready!((), connector);
     crate::forward_shutdown!(connector);
 
     async fn call(
         &self,
         req: ServiceRequest,
-        ctx: Ctx<'_, Self>,
+        ctx: Ctx<'_, Self, ()>,
     ) -> Result<Self::Res, Self::Error> {
         let ServiceRequest {
             head,
@@ -59,8 +58,7 @@ impl Service for Sender {
 
         #[cfg(feature = "compress")]
         if response_decompress {
-            let payload =
-                Payload::from_stream(Decoder::from_headers(payload, &head.headers));
+            let payload = Payload::from_stream(Decoder::from_headers(payload, &head.headers));
             return Ok(ServiceResponse {
                 head,
                 payload,

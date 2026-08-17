@@ -346,8 +346,7 @@ mod tests {
         let err: PayloadError = BlockingError::Canceled.into();
         assert!(format!("{err}").contains("Operation is canceled"), "{err}");
 
-        let err: PayloadError =
-            BlockingError::Error(io::Error::other("DecodeError")).into();
+        let err: PayloadError = BlockingError::Error(io::Error::other("DecodeError")).into();
         assert!(format!("{err}").contains("DecodeError"), "{err}");
 
         let err = PayloadError::Incomplete(None);

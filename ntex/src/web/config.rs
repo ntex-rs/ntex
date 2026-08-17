@@ -121,9 +121,7 @@ impl WebAppConfig {
 
     /// Get message from the pool.
     pub(crate) fn get_request(&self) -> Option<HttpRequest> {
-        CACHE.with(|cache| {
-            cache.with(self.config.id(), |cache| cache.pop().map(HttpRequest))
-        })
+        CACHE.with(|cache| cache.with(self.config.id(), |cache| cache.pop().map(HttpRequest)))
     }
 
     /// Get message from the pool.
@@ -279,12 +277,9 @@ mod tests {
             cfg.state(10usize);
         };
 
-        let srv = init_service(
-            App::new().configure(cfg).service(
-                web::resource("/")
-                    .to(|_: web::types::State<usize>| async { HttpResponse::Ok() }),
-            ),
-        )
+        let srv = init_service(App::new().configure(cfg).service(
+            web::resource("/").to(|_: web::types::State<usize>| async { HttpResponse::Ok() }),
+        ))
         .await;
         let req = TestRequest::default().to_request();
         let resp = srv.call(req).await.unwrap();
@@ -297,10 +292,7 @@ mod tests {
         let srv = init_service(
             App::new()
                 .configure(|cfg| {
-                    cfg.external_resource(
-                        "youtube",
-                        "https://youtube.com/watch/{video_id}",
-                    );
+                    cfg.external_resource("youtube", "https://youtube.com/watch/{video_id}");
                 })
                 .route(
                     "/test",
@@ -322,8 +314,7 @@ mod tests {
     async fn test_configure_service() {
         let srv = init_service(App::new().configure(|cfg| {
             cfg.service(
-                web::resource("/test")
-                    .route(web::get().to(|| async { HttpResponse::Created() })),
+                web::resource("/test").route(web::get().to(|| async { HttpResponse::Created() })),
             )
             .route(
                 "/index.html",

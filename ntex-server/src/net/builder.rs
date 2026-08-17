@@ -2,7 +2,7 @@ use std::{fmt, io, net, sync::Arc};
 
 use ntex_io::Io;
 use ntex_rt::System;
-use ntex_service::{Pipeline, Service, cfg::SharedCfg};
+use ntex_service::{Service, State, cfg::SharedCfg};
 use ntex_util::time::Millis;
 use socket2::{Domain, SockAddr, Socket, Type};
 
@@ -242,18 +242,17 @@ impl ServerBuilder {
 
     #[allow(clippy::needless_pass_by_value)]
     /// Add new service to the server.
-    pub fn bind<F, U, N, S>(
+    pub fn bind<F, S, St>(
         mut self,
-        name: N,
-        addr: U,
+        name: impl AsRef<str>,
+        addr: impl net::ToSocketAddrs,
         cfg: SharedCfg,
         factory: F,
     ) -> io::Result<Self>
     where
-        U: net::ToSocketAddrs,
-        N: AsRef<str>,
-        F: AsyncFn() -> Result<Pipeline<S>, &'static str> + Send + Clone + 'static,
-        S: Service<Req = Io> + 'static,
+        F: AsyncFn() -> Result<S, &'static str> + Send + Clone + 'static,
+        S: Service<St, Req = Io> + 'static,
+        St: State<Io> + 'static,
     {
         let sockets = bind_addr(addr, self.backlog)?;
 
@@ -276,18 +275,17 @@ impl ServerBuilder {
 
     #[cfg(unix)]
     /// Add new unix domain service to the server.
-    pub fn bind_uds<F, U, N, S>(
+    pub fn bind_uds<F, S, St>(
         self,
-        name: N,
-        addr: U,
+        name: impl AsRef<str>,
+        addr: impl AsRef<std::path::Path>,
         cfg: SharedCfg,
         factory: F,
     ) -> io::Result<Self>
     where
-        N: AsRef<str>,
-        U: AsRef<std::path::Path>,
-        F: AsyncFn() -> Result<Pipeline<S>, &'static str> + Send + Clone + 'static,
-        S: Service<Req = Io> + 'static,
+        F: AsyncFn() -> Result<S, &'static str> + Send + Clone + 'static,
+        S: Service<St, Req = Io> + 'static,
+        St: State<Io> + 'static,
     {
         use std::os::unix::net::UnixListener;
 
@@ -308,16 +306,17 @@ impl ServerBuilder {
     /// Add new unix domain service to the server.
     /// Useful when running as a systemd service and
     /// a socket FD can be acquired using the systemd crate.
-    pub fn listen_uds<F, N: AsRef<str>, S>(
+    pub fn listen_uds<F, S, St>(
         mut self,
-        name: N,
+        name: impl AsRef<str>,
         lst: std::os::unix::net::UnixListener,
         cfg: SharedCfg,
         factory: F,
     ) -> io::Result<Self>
     where
-        F: AsyncFn() -> Result<Pipeline<S>, &'static str> + Send + Clone + 'static,
-        S: Service<Req = Io> + 'static,
+        F: AsyncFn() -> Result<S, &'static str> + Send + Clone + 'static,
+        S: Service<St, Req = Io> + 'static,
+        St: State<Io> + 'static,
     {
         let token = self.token.next();
         self.services.push(factory::create_factory_service(
@@ -331,16 +330,17 @@ impl ServerBuilder {
     }
 
     /// Add new service to the server.
-    pub fn listen<F, N: AsRef<str>, S>(
+    pub fn listen<F, S, St>(
         mut self,
-        name: N,
+        name: impl AsRef<str>,
         lst: net::TcpListener,
         cfg: SharedCfg,
         factory: F,
     ) -> io::Result<Self>
     where
-        F: AsyncFn() -> Result<Pipeline<S>, &'static str> + Send + Clone + 'static,
-        S: Service<Req = Io> + 'static,
+        F: AsyncFn() -> Result<S, &'static str> + Send + Clone + 'static,
+        S: Service<St, Req = Io> + 'static,
+        St: State<Io> + 'static,
     {
         let token = self.token.next();
         self.services.push(factory::create_factory_service(
@@ -410,10 +410,7 @@ pub fn bind_addr<S: net::ToSocketAddrs>(
     }
 }
 
-pub fn create_tcp_listener(
-    addr: net::SocketAddr,
-    backlog: i32,
-) -> io::Result<net::TcpListener> {
+pub fn create_tcp_listener(addr: net::SocketAddr, backlog: i32) -> io::Result<net::TcpListener> {
     let builder = match addr {
         net::SocketAddr::V4(_) => Socket::new(Domain::IPV4, Type::STREAM, None)?,
         net::SocketAddr::V6(_) => Socket::new(Domain::IPV6, Type::STREAM, None)?,

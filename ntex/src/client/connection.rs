@@ -49,11 +49,7 @@ impl fmt::Debug for Connection {
 }
 
 impl Connection {
-    pub(super) fn new(
-        io: ConnectionType,
-        created: time::Instant,
-        pool: Option<Acquired>,
-    ) -> Self {
+    pub(super) fn new(io: ConnectionType, created: time::Instant, pool: Option<Acquired>) -> Self {
         Self {
             pool,
             created,

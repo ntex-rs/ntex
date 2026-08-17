@@ -664,12 +664,12 @@ impl Future for TimerDriver {
                 self.0.flags.set(flags);
 
                 let now = Instant::now();
-                let deadline =
-                    if let Some(diff) = now.checked_duration_since(self.0.elapsed_time()) {
-                        Duration::from_millis(self.0.next_expiry_ms()).saturating_sub(diff)
-                    } else {
-                        Duration::from_millis(self.0.next_expiry_ms())
-                    };
+                let deadline = if let Some(diff) = now.checked_duration_since(self.0.elapsed_time())
+                {
+                    Duration::from_millis(self.0.next_expiry_ms()).saturating_sub(diff)
+                } else {
+                    Duration::from_millis(self.0.next_expiry_ms())
+                };
                 inner.driver_sleep.reset(deadline);
             }
 
@@ -762,8 +762,7 @@ mod tests {
         {
             let _elapsed = time.elapsed();
             assert!(
-                _elapsed > Duration::from_millis(200)
-                    && _elapsed < Duration::from_millis(300),
+                _elapsed > Duration::from_millis(200) && _elapsed < Duration::from_millis(300),
                 "elapsed: {_elapsed:?}"
             );
         }
@@ -785,8 +784,7 @@ mod tests {
         {
             let _elapsed = time.elapsed();
             assert!(
-                _elapsed > Duration::from_millis(20)
-                    && _elapsed < Duration::from_millis(50),
+                _elapsed > Duration::from_millis(20) && _elapsed < Duration::from_millis(50),
                 "elapsed: {_elapsed:?}",
             );
         }

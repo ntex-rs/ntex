@@ -172,10 +172,7 @@ where
     }
 }
 
-pub(crate) async fn handshake<F, S, SD>(
-    session: &RefCell<S>,
-    io: &Io<F>,
-) -> Result<(), io::Error>
+pub(crate) async fn handshake<F, S, SD>(session: &RefCell<S>, io: &Io<F>) -> Result<(), io::Error>
 where
     S: DerefMut + Deref<Target = ConnectionCommon<SD>>,
     SD: SideData,
@@ -191,9 +188,9 @@ where
         }
 
         if handshaking {
-            io.read_notify().await?.ok_or_else(|| {
-                io::Error::new(io::ErrorKind::NotConnected, "disconnected")
-            })?;
+            io.read_notify()
+                .await?
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "disconnected"))?;
         } else {
             return Ok(());
         }

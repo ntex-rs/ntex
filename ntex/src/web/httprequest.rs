@@ -1,8 +1,6 @@
 use std::{cell::Ref, cell::RefMut, fmt, net, rc::Rc};
 
-use crate::http::{
-    HeaderMap, HttpMessage, Message, Method, Payload, RequestHead, Uri, Version,
-};
+use crate::http::{HeaderMap, HttpMessage, Message, Method, Payload, RequestHead, Uri, Version};
 use crate::{io::IoRef, io::types, router::Path, util::Extensions};
 
 use super::config::WebAppConfig;

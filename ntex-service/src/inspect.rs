@@ -10,9 +10,9 @@ pub struct Inspect<S, F> {
 
 impl<S, F> Inspect<S, F> {
     /// Create new `Inspect` service combinator.
-    pub(crate) fn new(svc: S, f: F) -> Self
+    pub(crate) fn new<St>(svc: S, f: F) -> Self
     where
-        S: Service,
+        S: Service<St>,
         F: Fn(&S::Res),
     {
         Self { svc, f }
@@ -45,22 +45,21 @@ where
     }
 }
 
-impl<S, F> Service for Inspect<S, F>
+impl<S, F, St> Service<St> for Inspect<S, F>
 where
-    S: Service,
+    S: Service<St>,
     F: Fn(&S::Res),
 {
-    type St = S::St;
     type Req = S::Req;
     type Res = S::Res;
     type Error = S::Error;
 
     #[inline]
-    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self>) -> Result<S::Res, S::Error> {
+    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
         ctx.call(&self.svc, req).await.inspect(&self.f)
     }
 
-    crate::forward_ready!(svc);
+    crate::forward_ready!(St, svc);
     crate::forward_shutdown!(svc);
 }
 
@@ -72,9 +71,9 @@ pub struct InspectErr<S, F> {
 
 impl<S, F> InspectErr<S, F> {
     /// Create new `InspectErr` service combinator.
-    pub(crate) fn new(svc: S, f: F) -> Self
+    pub(crate) fn new<St>(svc: S, f: F) -> Self
     where
-        S: Service,
+        S: Service<St>,
         F: Fn(&S::Error),
     {
         Self { svc, f }
@@ -107,23 +106,22 @@ where
     }
 }
 
-impl<S, F> Service for InspectErr<S, F>
+impl<S, F, St> Service<St> for InspectErr<S, F>
 where
-    S: Service,
+    S: Service<St>,
     F: Fn(&S::Error),
 {
-    type St = S::St;
     type Req = S::Req;
     type Res = S::Res;
     type Error = S::Error;
 
     #[inline]
-    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self>) -> Result<S::Res, S::Error> {
+    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
         ctx.call(&self.svc, req).await.inspect_err(&self.f)
     }
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
         ctx.ready(&self.svc).await.inspect_err(&self.f)
     }
 
@@ -168,12 +166,11 @@ where
     }
 }
 
-impl<Sf, Req, F> ServiceFactory<Req> for InspectFactory<Sf, F>
+impl<Sf, St, Req, F> ServiceFactory<Req, St> for InspectFactory<Sf, F>
 where
-    Sf: ServiceFactory<Req>,
+    Sf: ServiceFactory<Req, St>,
     F: Fn(&Sf::Res) + Clone,
 {
-    type St = Sf::St;
     type Res = Sf::Res;
     type Error = Sf::Error;
 
@@ -228,12 +225,11 @@ where
     }
 }
 
-impl<Sf, Req, F> ServiceFactory<Req> for InspectErrFactory<Sf, F>
+impl<Sf, St, Req, F> ServiceFactory<Req, St> for InspectErrFactory<Sf, F>
 where
-    Sf: ServiceFactory<Req>,
+    Sf: ServiceFactory<Req, St>,
     F: Fn(&Sf::Error) + Clone,
 {
-    type St = Sf::St;
     type Res = Sf::Res;
     type Error = Sf::Error;
 

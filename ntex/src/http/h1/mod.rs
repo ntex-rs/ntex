@@ -72,8 +72,7 @@ impl super::ResponseError for ProtocolError {
     fn error_response(&self) -> super::Response {
         match self {
             ProtocolError::Decode(
-                super::error::DecodeError::MaxHeaders
-                | super::error::DecodeError::TooLarge(_),
+                super::error::DecodeError::MaxHeaders | super::error::DecodeError::TooLarge(_),
             ) => super::Response::RequestHeaderFieldsTooLarge().into(),
             ProtocolError::Decode(_) => super::Response::BadRequest().into(),
             ProtocolError::SlowRequestTimeout | ProtocolError::SlowPayloadTimeout => {

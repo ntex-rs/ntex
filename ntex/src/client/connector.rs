@@ -2,9 +2,7 @@ use std::{error::Error as StdError, time::Duration};
 
 use crate::connect::{self, Connect as TcpConnect, Connector as TcpConnector};
 use crate::error::{Error, ErrorMapping, with_service};
-use crate::service::{
-    Ctx, Pipeline, ReadyCtx, Service, ServiceFactory, apply_fn_factory, boxed,
-};
+use crate::service::{Ctx, Pipeline, ReadyCtx, Service, ServiceFactory, apply_fn_factory, boxed};
 use crate::{SharedCfg, http::Uri, io::IoBoxed, time::Seconds, util::join};
 
 use super::error::{ClientError, ConnectError};
@@ -159,7 +157,6 @@ impl Connector {
     where
         T: ServiceFactory<
                 TcpConnect<Uri>,
-                St = (),
                 Error = Error<connect::ConnectError>,
                 InitCfg = SharedCfg,
             > + 'static,
@@ -183,7 +180,6 @@ impl Connector {
     where
         T: ServiceFactory<
                 TcpConnect<Uri>,
-                St = (),
                 Error = Error<connect::ConnectError>,
                 InitCfg = SharedCfg,
             > + 'static,
@@ -202,8 +198,7 @@ impl Connector {
     }
 }
 
-impl ServiceFactory<Connect> for Connector {
-    type St = ();
+impl ServiceFactory<Connect, ()> for Connector {
     type Res = Connection;
     type Error = Error<ClientError>;
     type Service = ConnectorService;
@@ -246,13 +241,12 @@ pub struct ConnectorService {
 }
 
 impl Service for ConnectorService {
-    type St = ();
     type Req = Connect;
     type Res = Connection;
     type Error = Error<ClientError>;
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self, ()>) -> Result<(), Self::Error> {
         if let Some(ref ssl_pool) = self.ssl_pool {
             let (r1, r2) = join(ctx.ready(&self.tcp_pool), ctx.ready(ssl_pool)).await;
             r1.into_error()?;
@@ -269,11 +263,7 @@ impl Service for ConnectorService {
         }
     }
 
-    async fn call(
-        &self,
-        req: Connect,
-        ctx: Ctx<'_, Self>,
-    ) -> Result<Self::Res, Self::Error> {
+    async fn call(&self, req: Connect, ctx: Ctx<'_, Self, ()>) -> Result<Self::Res, Self::Error> {
         with_service(self.cfg.service(), async {
             match req.uri.scheme_str() {
                 Some("https" | "wss") => {

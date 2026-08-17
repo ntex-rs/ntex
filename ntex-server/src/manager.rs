@@ -275,8 +275,7 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
             let to = self.mgr.0.cfg.shutdown_timeout;
 
             if graceful && !to.is_zero() {
-                let futs: Vec<_> =
-                    self.workers.iter().map(|worker| worker.stop(to)).collect();
+                let futs: Vec<_> = self.workers.iter().map(|worker| worker.stop(to)).collect();
 
                 let _ = timeout(to, join_all(futs)).await;
             } else {

@@ -54,10 +54,7 @@ impl Payload {
     }
 
     #[inline]
-    pub fn poll_read(
-        &self,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, PayloadError>>> {
+    pub fn poll_read(&self, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, PayloadError>>> {
         self.inner.readany(cx)
     }
 }

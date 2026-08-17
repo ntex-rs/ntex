@@ -14,9 +14,9 @@ pub struct MapErr<S, F, E> {
 
 impl<S, F, E> MapErr<S, F, E> {
     /// Create new `MapErr` combinator
-    pub(crate) fn new(svc: S, f: F) -> Self
+    pub(crate) fn new<St>(svc: S, f: F) -> Self
     where
-        S: Service,
+        S: Service<St>,
         F: Fn(S::Error) -> E,
     {
         Self {
@@ -54,23 +54,22 @@ where
     }
 }
 
-impl<S, F, E> Service for MapErr<S, F, E>
+impl<S, St, F, E> Service<St> for MapErr<S, F, E>
 where
-    S: Service,
+    S: Service<St>,
     F: Fn(S::Error) -> E,
 {
-    type St = S::St;
     type Req = S::Req;
     type Res = S::Res;
     type Error = E;
 
     #[inline]
-    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self>) -> Result<S::Res, E> {
+    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, E> {
         ctx.call(&self.svc, req).await.map_err(|e| (self.f)(e))
     }
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), E> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), E> {
         ctx.ready(&self.svc).await.map_err(&self.f)
     }
 
@@ -89,9 +88,9 @@ pub struct MapErrFactory<Sf, F, E> {
 
 impl<Sf, F, E> MapErrFactory<Sf, F, E> {
     /// Create new `MapErr` new service instance
-    pub(crate) fn new<Req>(sf: Sf, f: F) -> Self
+    pub(crate) fn new<St, Req>(sf: Sf, f: F) -> Self
     where
-        Sf: ServiceFactory<Req>,
+        Sf: ServiceFactory<Req, St>,
         F: Fn(Sf::Error) -> E + Clone,
     {
         Self {
@@ -124,12 +123,11 @@ where
     }
 }
 
-impl<Sf, Req, F, E> ServiceFactory<Req> for MapErrFactory<Sf, F, E>
+impl<Sf, St, Req, F, E> ServiceFactory<Req, St> for MapErrFactory<Sf, F, E>
 where
-    Sf: ServiceFactory<Req>,
+    Sf: ServiceFactory<Req, St>,
     F: Fn(Sf::Error) -> E + Clone,
 {
-    type St = Sf::St;
     type Res = Sf::Res;
     type Error = E;
 
@@ -218,10 +216,9 @@ mod tests {
 
     #[ntex::test]
     async fn test_factory() {
-        let new_srv =
-            fn_factory(|| async { Ok::<_, ()>(Srv(false, Rc::new(Cell::new(0)))) })
-                .map_err(|()| "error")
-                .clone();
+        let new_srv = fn_factory(|| async { Ok::<_, ()>(Srv(false, Rc::new(Cell::new(0)))) })
+            .map_err(|()| "error")
+            .clone();
         let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
         let res = srv.call(()).await;
         assert!(res.is_err());

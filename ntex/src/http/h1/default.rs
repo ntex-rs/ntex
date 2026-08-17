@@ -1,4 +1,4 @@
-use std::{io, marker::PhantomData};
+use std::{error::Error, marker::PhantomData, rc::Rc};
 
 use crate::{Ctx, Service, http::ResponseError, io::Filter};
 
@@ -14,18 +14,17 @@ impl<F, Err> DefaultControlService<F, Err> {
     }
 }
 
-impl<F, Err> Service for DefaultControlService<F, Err>
+impl<F, Err> Service<()> for DefaultControlService<F, Err>
 where
     F: Filter,
     Err: ResponseError,
 {
-    type St = ();
     type Req = Control<F, Err>;
     type Res = ControlAck<F>;
-    type Error = io::Error;
+    type Error = Rc<dyn Error>;
 
     #[inline]
-    async fn call(&self, r: Self::Req, _: Ctx<'_, Self>) -> Result<Self::Res, io::Error> {
+    async fn call(&self, r: Self::Req, _: Ctx<'_, Self, ()>) -> Result<Self::Res, Self::Error> {
         Ok(r.ack())
     }
 }

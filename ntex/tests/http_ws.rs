@@ -2,9 +2,7 @@ use std::{cell::Cell, io, sync::Arc, sync::Mutex};
 
 use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
-use ntex::http::{
-    HttpService, HttpServiceConfig, Request, Response, StatusCode, body, h1, test,
-};
+use ntex::http::{HttpService, HttpServiceConfig, Request, Response, StatusCode, body, h1, test};
 use ntex::io::{DispatchItem, Dispatcher, Io, IoConfig};
 use ntex::service::{Ctx, Pipeline, ReadyCtx, Service, cfg::SharedCfg};
 use ntex::time::{Millis, Seconds, sleep};
@@ -88,8 +86,8 @@ async fn test_simple() {
             let ws_service = ws_service.clone();
             async move || {
                 let ws_service = ws_service.clone();
-                HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
-                    .control(async move |req: h1::Control<_, _>| {
+                HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::NotFound())).control(
+                    async move |req: h1::Control<_, _>| {
                         let ack = if let h1::Control::Upgrade(upg) = req {
                             assert!(format!("{upg:?}").contains("Upgrade"));
                             let ws_service = Pipeline::new(ws_service.clone());
@@ -100,7 +98,8 @@ async fn test_simple() {
                             req.ack()
                         };
                         Ok::<_, io::Error>(ack)
-                    })
+                    },
+                )
             }
         },
         SharedCfg::new("SRV").add(
@@ -352,48 +351,49 @@ async fn test_stale_timer_after_ws_upgrade() {
         }
     }
 
-    let srv =
-        test::server_with_config(
-            async move || {
-                HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
-                    .control(move |req: h1::Control<_, _>| {
-                        let ack = if let h1::Control::Upgrade(upg) = req {
-                            upg.handle(|req, io, codec| async move {
-                                let res = handshake(req.head()).unwrap().message_body(());
-                                io.encode((res, body::BodySize::None).into(), &codec)
-                                    .unwrap();
-                                io.set_config(SharedCfg::new("WS").add(
-                                    IoConfig::new().set_keepalive_timeout(Seconds(0)),
-                                ));
-                                // let the stale h1 timer (1s) fire before starting the WS dispatcher
-                                sleep(Millis(2500)).await;
-                                // InFlightService(1) makes poll_ready return Pending while
-                                // slow_ws_service is processing, so the dispatcher enters
-                                // poll_service → poll_read_pause where DSP_TIMEOUT is observed
-                                Dispatcher::new(
-                                    io.seal(),
-                                    ws::Codec::new(),
-                                    Pipeline::new::<()>(InFlightService::new(
-                                        1,
-                                        ntex::service::fn_service(slow_ws_service),
-                                    )),
-                                )
-                                .await
-                                .map_err(|_| panic!())
-                            })
-                        } else {
-                            req.ack()
-                        };
-                        async move { Ok::<_, io::Error>(ack) }
-                    })
-            },
-            SharedCfg::new("SRV").add(
-                HttpServiceConfig::new()
-                    .set_keepalive(1)
-                    .set_headers_read_rate(Seconds(1), Seconds::ZERO, 16),
-            ),
-        )
-        .await;
+    let srv = test::server_with_config(
+        async move || {
+            HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::NotFound())).control(
+                move |req: h1::Control<_, _>| {
+                    let ack = if let h1::Control::Upgrade(upg) = req {
+                        upg.handle(|req, io, codec| async move {
+                            let res = handshake(req.head()).unwrap().message_body(());
+                            io.encode((res, body::BodySize::None).into(), &codec)
+                                .unwrap();
+                            io.set_config(
+                                SharedCfg::new("WS")
+                                    .add(IoConfig::new().set_keepalive_timeout(Seconds(0))),
+                            );
+                            // let the stale h1 timer (1s) fire before starting the WS dispatcher
+                            sleep(Millis(2500)).await;
+                            // InFlightService(1) makes poll_ready return Pending while
+                            // slow_ws_service is processing, so the dispatcher enters
+                            // poll_service → poll_read_pause where DSP_TIMEOUT is observed
+                            Dispatcher::new(
+                                io.seal(),
+                                ws::Codec::new(),
+                                Pipeline::new::<()>(InFlightService::new(
+                                    1,
+                                    ntex::service::fn_service(slow_ws_service),
+                                )),
+                            )
+                            .await
+                            .map_err(|_| panic!())
+                        })
+                    } else {
+                        req.ack()
+                    };
+                    async move { Ok::<_, io::Error>(ack) }
+                },
+            )
+        },
+        SharedCfg::new("SRV").add(
+            HttpServiceConfig::new()
+                .set_keepalive(1)
+                .set_headers_read_rate(Seconds(1), Seconds::ZERO, 16),
+        ),
+    )
+    .await;
 
     let conn = srv.ws().await.unwrap();
     assert_eq!(conn.response().status(), StatusCode::SWITCHING_PROTOCOLS);

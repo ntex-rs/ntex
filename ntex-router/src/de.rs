@@ -25,8 +25,7 @@ macro_rules! parse_single_value {
         {
             if self.path.len() != 1 {
                 Err(de::value::Error::custom(
-                    format!("wrong number of parameters: {} expected 1", self.path.len())
-                        .as_str(),
+                    format!("wrong number of parameters: {} expected 1", self.path.len()).as_str(),
                 ))
             } else {
                 let v = self.path[0].parse().map_err(|_| {
@@ -177,8 +176,7 @@ impl<'de, T: ResourcePath + 'de> Deserializer<'de> for PathDeserializer<'de, T> 
     {
         if self.path.is_empty() {
             Err(de::value::Error::custom(
-                format!("wrong number of parameters: {} expected 1", self.path.len())
-                    .as_str(),
+                format!("wrong number of parameters: {} expected 1", self.path.len()).as_str(),
             ))
         } else {
             visitor.visit_borrowed_str(&self.path[0])
@@ -282,10 +280,7 @@ macro_rules! parse_value {
             V: Visitor<'de>,
         {
             let v = self.value.parse().map_err(|_| {
-                de::value::Error::custom(format!(
-                    "can not parse {:?} to a {}",
-                    self.value, $tp
-                ))
+                de::value::Error::custom(format!("can not parse {:?} to a {}", self.value, $tp))
             })?;
             visitor.$visit_fn(v)
         }
@@ -477,11 +472,7 @@ impl<'de> de::VariantAccess<'de> for UnitVariant {
         Err(de::value::Error::custom("not supported"))
     }
 
-    fn struct_variant<V>(
-        self,
-        _: &'static [&'static str],
-        _: V,
-    ) -> Result<V::Value, Self::Error>
+    fn struct_variant<V>(self, _: &'static [&'static str], _: V) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
@@ -536,8 +527,7 @@ mod tests {
         let s: () = de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
         assert_eq!(s, ());
 
-        let s: MyStruct =
-            de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
+        let s: MyStruct = de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
         assert_eq!(s.key, "name");
         assert_eq!(s.value, "user1");
 
@@ -574,17 +564,14 @@ mod tests {
         assert_eq!(s.key, "name");
         assert_eq!(s.value, 32);
 
-        let s: Result<(Test2,), _> =
-            de::Deserialize::deserialize(PathDeserializer::new(&path));
+        let s: Result<(Test2,), _> = de::Deserialize::deserialize(PathDeserializer::new(&path));
         assert!(s.is_err());
 
-        let s: (String, u8) =
-            de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
+        let s: (String, u8) = de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
         assert_eq!(s.0, "name");
         assert_eq!(s.1, 32);
 
-        let s: (&str, ()) =
-            de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
+        let s: (&str, ()) = de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
         assert_eq!(s.0, "name");
         assert_eq!(s.1, ());
 
@@ -593,8 +580,7 @@ mod tests {
         assert_eq!(s.0, "name");
         assert_eq!(s.1, Some(32));
 
-        let res: Vec<String> =
-            de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
+        let res: Vec<String> = de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
         assert_eq!(res[0], "name".to_owned());
         assert_eq!(res[1], "32".to_owned());
 
@@ -623,8 +609,7 @@ mod tests {
         let i: (i8,) = de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
         assert_eq!(i, (32,));
 
-        let i: Result<(i8, i8), _> =
-            de::Deserialize::deserialize(PathDeserializer::new(&path));
+        let i: Result<(i8, i8), _> = de::Deserialize::deserialize(PathDeserializer::new(&path));
         assert!(i.is_err());
 
         #[derive(Deserialize)]
@@ -641,8 +626,7 @@ mod tests {
     fn test_extract_enum() {
         let mut path = Path::new("/val1/");
         path.segments = vec![("val", PathItem::Static("val1"))];
-        let i: TestEnum =
-            de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
+        let i: TestEnum = de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
         assert_eq!(i, TestEnum::Val1);
 
         let mut path = Path::new("/val1/");

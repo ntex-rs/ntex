@@ -48,8 +48,7 @@ impl tls_rustls::client::danger::ServerCertVerifier for NoCertificateVerificatio
         _message: &[u8],
         _cert: &CertificateDer<'_>,
         _dss: &tls_rustls::DigitallySignedStruct,
-    ) -> Result<tls_rustls::client::danger::HandshakeSignatureValid, tls_rustls::Error>
-    {
+    ) -> Result<tls_rustls::client::danger::HandshakeSignatureValid, tls_rustls::Error> {
         Ok(tls_rustls::client::danger::HandshakeSignatureValid::assertion())
     }
 
@@ -58,8 +57,7 @@ impl tls_rustls::client::danger::ServerCertVerifier for NoCertificateVerificatio
         _message: &[u8],
         _cert: &CertificateDer<'_>,
         _dss: &tls_rustls::DigitallySignedStruct,
-    ) -> Result<tls_rustls::client::danger::HandshakeSignatureValid, tls_rustls::Error>
-    {
+    ) -> Result<tls_rustls::client::danger::HandshakeSignatureValid, tls_rustls::Error> {
         Ok(tls_rustls::client::danger::HandshakeSignatureValid::assertion())
     }
 

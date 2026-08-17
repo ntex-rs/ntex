@@ -2,9 +2,7 @@ use std::task::{Context, Poll, ready};
 use std::{any, cmp, future::poll_fn, io, mem, pin::Pin, ptr, rc::Rc};
 
 use ntex_bytes::{BufMut, BytePage};
-use ntex_io::{
-    Filter, Handle, Io, IoBoxed, IoContext, IoStream, IoTaskStatus, Readiness, types,
-};
+use ntex_io::{Filter, Handle, Io, IoBoxed, IoContext, IoStream, IoTaskStatus, Readiness, types};
 use tok_io::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tok_io::net::TcpStream;
 
@@ -243,8 +241,8 @@ where
 {
     let result = ctx.with_write_buf(|dst| {
         let mut pages: [Option<BytePage>; MAX_WRITE_ITEMS] = [
-            None, None, None, None, None, None, None, None, None, None, None, None, None,
-            None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+            None, None,
         ];
         let mut bufs: [mem::MaybeUninit<io::IoSlice<'_>>; MAX_WRITE_ITEMS] =
             [mem::MaybeUninit::uninit(); MAX_WRITE_ITEMS];
@@ -272,8 +270,7 @@ where
 
         if num > 0 {
             // SAFETY: initialize in previous block
-            let bufs =
-                unsafe { &*(&raw const bufs[..num] as *const [std::io::IoSlice<'_>]) };
+            let bufs = unsafe { &*(&raw const bufs[..num] as *const [std::io::IoSlice<'_>]) };
 
             let result = match write_io(ctx, io, bufs) {
                 Poll::Ready(Ok(val)) => Poll::Ready(val),
@@ -375,8 +372,7 @@ fn read<T: Stream + Unpin>(io: &T, ctx: &IoContext) -> Poll<IoTaskStatus> {
     );
 
     // read data from socket
-    let io_res =
-        io.try_read(unsafe { &mut *(ptr::from_mut(buf.chunk_mut()) as *mut [u8]) });
+    let io_res = io.try_read(unsafe { &mut *(ptr::from_mut(buf.chunk_mut()) as *mut [u8]) });
 
     let mut pending = false;
     let result = match io_res {

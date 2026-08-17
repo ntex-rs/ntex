@@ -1,7 +1,7 @@
 use std::{cell::RefCell, fmt, io, mem, net, rc::Rc, sync::Arc};
 
 use ntex_io::Io;
-use ntex_service::{Pipeline, Service, cfg::SharedCfg};
+use ntex_service::{Pipeline, Service, State, cfg::SharedCfg};
 use ntex_util::{HashMap, future::BoxFuture, future::Ready};
 
 use super::factory::{FactoryService, FactoryServiceType, NetService, ServerService};
@@ -255,13 +255,15 @@ impl ServiceRuntime {
     /// # Panics
     ///
     /// Panics if service with specified name is registered already
-    pub fn service<S>(&self, name: &str, pipeline: Pipeline<S>) -> &Self
+    pub fn service<S, St>(&self, name: &str, svc: S) -> &Self
     where
-        S: Service<Req = Io> + 'static,
+        S: Service<St, Req = Io> + 'static,
+        St: State<Io> + 'static,
     {
         let mut inner = self.0.borrow_mut();
         if let Some(entry) = inner.names.get_mut(name) {
             let idx = entry.idx;
+            let pipeline = Pipeline::new(svc.map(|_| ()).map_err(|_| ()));
             let svc: Box<dyn NetService> = Box::new(ServerService { pipeline });
             inner.services[idx] = Some(svc);
         } else {

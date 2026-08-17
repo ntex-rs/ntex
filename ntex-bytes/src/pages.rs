@@ -419,8 +419,7 @@ impl BufMut for BytePages {
                 let amount = cmp::min(src.len(), st.remaining());
                 unsafe {
                     let ptr = &mut st.as_ptr();
-                    let chunk =
-                        UninitSlice::from_raw_parts_mut(ptr.add(st.len()), st.remaining());
+                    let chunk = UninitSlice::from_raw_parts_mut(ptr.add(st.len()), st.remaining());
 
                     ptr::copy_nonoverlapping(src.as_ptr(), chunk.as_mut_ptr(), amount);
                     st.set_len(st.len() + amount);

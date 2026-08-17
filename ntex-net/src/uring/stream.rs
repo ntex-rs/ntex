@@ -190,8 +190,7 @@ impl Handler for StreamOpsHandler {
                         item.flags.remove(Flags::RD_CANCELING);
 
                         let res = item.ctx.update_read_status(buf, Ok(0));
-                        if item.flags.contains(Flags::RD_REISSUE) || res == IoTaskStatus::Io
-                        {
+                        if item.flags.contains(Flags::RD_REISSUE) || res == IoTaskStatus::Io {
                             item.flags.remove(Flags::RD_REISSUE);
                             st.recv(id, false, &self.inner.api);
                         }
@@ -206,8 +205,7 @@ impl Handler for StreamOpsHandler {
                         item.flags.remove(Flags::WR_CANCELING);
 
                         let res = item.ctx.update_write_status(Ok(false));
-                        if item.flags.contains(Flags::WR_REISSUE) || res == IoTaskStatus::Io
-                        {
+                        if item.flags.contains(Flags::WR_REISSUE) || res == IoTaskStatus::Io {
                             item.flags.remove(Flags::WR_REISSUE);
                             st.send(id, &self.inner.api);
                         }
@@ -425,21 +423,19 @@ impl StreamOpsStorage {
                     })) as u32;
                     item.wr_op = NonZeroU32::new(op_id);
 
-                    let (buf_ptr, buf_len) = if let Some(Operation::Send { buf, .. }) =
-                        &self.ops[op_id as usize]
-                    {
-                        // Safety. `buf` is stored in `self.ops` which is heap.
-                        (unsafe { buf.as_ptr() }, buf.len() as u32)
-                    } else {
-                        unreachable!()
-                    };
+                    let (buf_ptr, buf_len) =
+                        if let Some(Operation::Send { buf, .. }) = &self.ops[op_id as usize] {
+                            // Safety. `buf` is stored in `self.ops` which is heap.
+                            (unsafe { buf.as_ptr() }, buf.len() as u32)
+                        } else {
+                            unreachable!()
+                        };
 
                     api.submit_inline(op_id, move |entry| {
                         if item.flags.contains(Flags::NO_ZC) || buf_len <= ZC_SIZE {
                             opcode2::Send::with(entry, item.fd()).buffer(buf_ptr, buf_len);
                         } else {
-                            opcode2::SendZc::with(entry, item.fd())
-                                .buffer(buf_ptr, buf_len);
+                            opcode2::SendZc::with(entry, item.fd()).buffer(buf_ptr, buf_len);
                         }
                     });
                 }

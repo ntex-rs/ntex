@@ -7,7 +7,7 @@ use tls_rustls::ServerConfig as RustlsServerConfig;
 
 use crate::http::{HttpService, Request, Response, ResponseError, body::MessageBody};
 use crate::server::{Server, ServerBuilder};
-use crate::service::{FromState, IntoServiceFactory, Pipeline, ServiceFactory, State};
+use crate::service::{IntoServiceFactory, ServiceFactory};
 use crate::{SharedCfg, time::Seconds};
 
 struct Config {
@@ -36,9 +36,8 @@ struct Config {
 pub struct HttpServer<F, I, Sf, B>
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<Sf, Request>,
+    I: IntoServiceFactory<Sf, (), Request>,
     Sf: ServiceFactory<Request, InitCfg = SharedCfg>,
-    Sf::St: State<Request>,
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
     Sf::InitError: Error,
@@ -54,9 +53,8 @@ where
 impl<F, I, Sf, B> HttpServer<F, I, Sf, B>
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<Sf, Request>,
+    I: IntoServiceFactory<Sf, (), Request>,
     Sf: ServiceFactory<Request, InitCfg = SharedCfg> + 'static,
-    Sf::St: State<Request> + FromState<()>,
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
     Sf::InitError: Error,
@@ -209,11 +207,7 @@ where
             format!("ntex-web-service-{addr}"),
             lst,
             cfg,
-            async move || {
-                Ok(Pipeline::new(HttpService::<(), _, _, _, _, _>::new(
-                    factory().await,
-                )))
-            },
+            async move || Ok(HttpService::<(), _, _, _>::new(factory().await)),
         )?;
         Ok(self)
     }
@@ -246,10 +240,7 @@ where
             lst,
             cfg,
             async move || {
-                Ok(Pipeline::new(
-                    HttpService::<(), _, _, _, _, _>::new(factory().await)
-                        .openssl(acceptor.clone()),
-                ))
+                Ok(HttpService::<(), _, _, _>::new(factory().await).openssl(acceptor.clone()))
             },
         )?;
         Ok(self)
@@ -283,10 +274,7 @@ where
             lst,
             cfg,
             async move || {
-                Ok(Pipeline::new(
-                    HttpService::<(), _, _, _, _, _>::new(factory().await)
-                        .rustls(config.clone()),
-                ))
+                Ok(HttpService::<(), _, _, _>::new(factory().await).rustls(config.clone()))
             },
         )?;
         Ok(self)
@@ -295,11 +283,7 @@ where
     /// The socket address to bind.
     ///
     /// To bind multiple addresses this method can be called multiple times.
-    pub fn bind<A: net::ToSocketAddrs>(
-        mut self,
-        addr: A,
-        cfg: SharedCfg,
-    ) -> io::Result<Self> {
+    pub fn bind<A: net::ToSocketAddrs>(mut self, addr: A, cfg: SharedCfg) -> io::Result<Self> {
         for lst in self.bind2(addr)? {
             self = self.listen(lst, cfg.clone())?;
         }
@@ -386,9 +370,7 @@ where
         let addr = format!("ntex-web-service-{:?}", lst.local_addr()?);
 
         self.builder = self.builder.listen_uds(addr, lst, cfg, async move || {
-            Ok(Pipeline::new(HttpService::<(), _, _, _, _, _>::new(
-                factory().await,
-            )))
+            Ok(HttpService::<(), _, _, _>::new(factory().await))
         })?;
         Ok(self)
     }
@@ -407,11 +389,7 @@ where
             format!("ntex-web-service-{:?}", addr.as_ref().display()),
             addr,
             cfg,
-            async move || {
-                Ok(Pipeline::new(HttpService::<(), _, _, _, _, _, _>::new(
-                    factory().await,
-                )))
-            },
+            async move || Ok(HttpService::<(), _, _, _>::new(factory().await)),
         )?;
         Ok(self)
     }
@@ -420,9 +398,8 @@ where
 impl<F, I, Sf, B> HttpServer<F, I, Sf, B>
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<Sf, Request>,
+    I: IntoServiceFactory<Sf, (), Request>,
     Sf: ServiceFactory<Request, InitCfg = SharedCfg> + 'static,
-    Sf::St: State<Request>,
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
     Sf::InitError: Error,

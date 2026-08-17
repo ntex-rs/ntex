@@ -367,10 +367,7 @@ impl<F: Filter> Io<F> {
 
 impl<F> Io<F> {
     /// Reads from the incoming I/O stream and decodes a codec item.
-    pub async fn recv<U>(
-        &self,
-        codec: &U,
-    ) -> Result<Option<U::Item>, Either<U::Error, io::Error>>
+    pub async fn recv<U>(&self, codec: &U) -> Result<Option<U::Item>, Either<U::Error, io::Error>>
     where
         U: Decoder,
     {
@@ -443,11 +440,7 @@ impl<F> Io<F> {
 
     #[inline]
     /// Encodes an item and sends it to the peer, fully flushing the write buffer.
-    pub async fn send<U>(
-        &self,
-        item: U::Item,
-        codec: &U,
-    ) -> Result<(), Either<U::Error, io::Error>>
+    pub async fn send<U>(&self, item: U::Item, codec: &U) -> Result<(), Either<U::Error, io::Error>>
     where
         U: Encoder,
     {
@@ -818,9 +811,7 @@ mod tests {
     use ntex_util::{future::lazy, time::Millis, time::sleep};
 
     use super::*;
-    use crate::{
-        FilterBuf, IoContext, IoTaskStatus, Readiness, ops::Iops, testing::IoTest,
-    };
+    use crate::{FilterBuf, IoContext, IoTaskStatus, Readiness, ops::Iops, testing::IoTest};
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";

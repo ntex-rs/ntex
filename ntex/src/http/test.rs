@@ -15,7 +15,7 @@ use crate::error::Error;
 use crate::io::Filter;
 use crate::io::{Io, IoConfig};
 use crate::server::Server;
-use crate::service::{Pipeline, Service, State, cfg::SharedCfg};
+use crate::service::{Service, State, cfg::SharedCfg};
 #[cfg(feature = "ws")]
 use crate::ws::{WsClient, WsConnection, error::WsClientError};
 use crate::{rt::System, time::Millis, time::Seconds, time::sleep, util::Bytes};
@@ -232,8 +232,7 @@ fn parts(parts: &mut Option<Inner>) -> &mut Inner {
 pub async fn server<F, S>(factory: F) -> TestServer
 where
     F: AsyncFn() -> S + Send + Clone + 'static,
-    S: Service<St = (), Req = Io> + 'static,
-    S::St: State<Io>,
+    S: Service<(), Req = Io> + 'static,
 {
     server_with_config::<(), _, _, _>(
         factory,
@@ -277,8 +276,8 @@ where
 pub async fn server_with_config<St, F, S, U>(factory: F, cfg: U) -> TestServer
 where
     F: AsyncFn() -> S + Send + Clone + 'static,
-    S: Service<St = St, Req = Io> + 'static,
-    S::St: State<Io>,
+    S: Service<St, Req = Io> + 'static,
+    St: State<Io>,
     U: Into<SharedCfg>,
 {
     let sys = System::current().config();
@@ -297,9 +296,7 @@ where
 
         sys.run(move || {
             let srv = crate::server::build()
-                .listen("test", tcp, cfg, async move || {
-                    Ok(Pipeline::new(factory().await))
-                })?
+                .listen("test", tcp, cfg, async move || Ok(factory().await))?
                 .workers(1)
                 .disable_signals()
                 .run();
@@ -359,11 +356,7 @@ impl TestServer {
     }
 
     /// Set client timeout
-    pub async fn set_client_timeout(
-        mut self,
-        timeout: Seconds,
-        connect_timeout: Millis,
-    ) -> Self {
+    pub async fn set_client_timeout(mut self, timeout: Seconds, connect_timeout: Millis) -> Self {
         self.cfg = SharedCfg::new("TEST-CLIENT")
             .add(IoConfig::new().set_connect_timeout(connect_timeout))
             .add(TlsConfig::new().set_handshake_timeout(timeout))

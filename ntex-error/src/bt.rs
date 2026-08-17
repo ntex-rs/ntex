@@ -352,11 +352,10 @@ struct Bt<'a>(&'a [Option<&'a BacktraceFrame>]);
 impl fmt::Debug for Bt<'_> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         let cwd = std::env::current_dir();
-        let mut print_path =
-            move |fmt: &mut fmt::Formatter<'_>, path: BytesOrWideString<'_>| {
-                let path = crate::utils::module_path_fs(path.to_str_lossy().as_ref());
-                fmt::Display::fmt(&path, fmt)
-            };
+        let mut print_path = move |fmt: &mut fmt::Formatter<'_>, path: BytesOrWideString<'_>| {
+            let path = crate::utils::module_path_fs(path.to_str_lossy().as_ref());
+            fmt::Display::fmt(&path, fmt)
+        };
 
         let mut f = BacktraceFmt::new(fmt, backtrace::PrintFmt::Short, &mut print_path);
         f.add_context()?;

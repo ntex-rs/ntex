@@ -46,12 +46,7 @@ struct Storage {
 }
 
 impl Storage {
-    fn new(
-        tag: &'static str,
-        service: &'static str,
-        building: bool,
-        ctx: CfgContext,
-    ) -> Self {
+    fn new(tag: &'static str, service: &'static str, building: bool, ctx: CfgContext) -> Self {
         let id = IDX.fetch_add(1, Ordering::SeqCst);
         Storage {
             id,
@@ -474,8 +469,7 @@ mod tests {
         assert_eq!(t3.tag(), "TEST3");
         assert_eq!(t3.id(), cfg2.id());
 
-        let t = SharedCfg::from(SharedCfg::new("TEST4").add(TestCfg::default()))
-            .get::<TestCfg>();
+        let t = SharedCfg::from(SharedCfg::new("TEST4").add(TestCfg::default())).get::<TestCfg>();
         let cfg = t.shared();
         assert_eq!(t.id(), cfg.id());
         let t2 = t.clone();

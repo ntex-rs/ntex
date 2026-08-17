@@ -13,32 +13,27 @@ use crate::{MAX_SSL_ACCEPT_COUNTER, TlsConfig, rustls::TlsServerFilter};
 /// Support `TLS` connections via rustls package
 ///
 /// `rust-tls` feature enables `TlsAcceptor` type
-pub struct TlsAcceptorFactory<St> {
+pub struct TlsAcceptorFactory {
     config: Arc<ServerConfig>,
-    st: PhantomData<St>,
 }
 
-impl<St> TlsAcceptorFactory<St> {
+impl TlsAcceptorFactory {
     /// Create rustls based `Acceptor` service factory
     pub fn new(config: Arc<ServerConfig>) -> Self {
-        Self {
-            config,
-            st: PhantomData,
-        }
+        Self { config }
     }
 }
 
-impl<St> From<ServerConfig> for TlsAcceptorFactory<St> {
+impl From<ServerConfig> for TlsAcceptorFactory {
     fn from(cfg: ServerConfig) -> Self {
         Self::new(Arc::new(cfg))
     }
 }
 
-impl<F: Filter, St> ServiceFactory<Io<F>> for TlsAcceptorFactory<St> {
-    type St = St;
+impl<F: Filter, St> ServiceFactory<Io<F>, St> for TlsAcceptorFactory {
     type Res = Io<Layer<TlsServerFilter, F>>;
     type Error = io::Error;
-    type Service = TlsAcceptor<F, St>;
+    type Service = TlsAcceptor<F>;
     type InitCfg = SharedCfg;
     type InitError = ();
 
@@ -56,14 +51,14 @@ impl<F: Filter, St> ServiceFactory<Io<F>> for TlsAcceptorFactory<St> {
 
 #[derive(Debug)]
 /// `RusTLS` based `Acceptor` service
-pub struct TlsAcceptor<F, St> {
+pub struct TlsAcceptor<F> {
     cfg: Cfg<TlsConfig>,
     config: Arc<ServerConfig>,
     conns: Counter,
-    st: PhantomData<(F, St)>,
+    st: PhantomData<F>,
 }
 
-impl<F, St> TlsAcceptor<F, St> {
+impl<F> TlsAcceptor<F> {
     pub fn new(config: Arc<ServerConfig>) -> Self {
         MAX_SSL_ACCEPT_COUNTER.with(|conns| TlsAcceptor {
             config,
@@ -74,32 +69,26 @@ impl<F, St> TlsAcceptor<F, St> {
     }
 }
 
-impl<F, St> From<ServerConfig> for TlsAcceptor<F, St> {
+impl<F> From<ServerConfig> for TlsAcceptor<F> {
     fn from(cfg: ServerConfig) -> Self {
         Self::new(Arc::new(cfg))
     }
 }
 
-impl<F: Filter, St> Service for TlsAcceptor<F, St> {
-    type St = St;
+impl<F: Filter, St> Service<St> for TlsAcceptor<F> {
     type Req = Io<F>;
     type Res = Io<Layer<TlsServerFilter, F>>;
     type Error = io::Error;
 
-    async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, _: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
         if !self.conns.is_available() {
             self.conns.available().await;
         }
         Ok(())
     }
 
-    async fn call(&self, io: Io<F>, _: Ctx<'_, Self>) -> Result<Self::Res, Self::Error> {
+    async fn call(&self, io: Io<F>, _: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
         let _guard = self.conns.get();
-        super::TlsServerFilter::create(
-            io,
-            self.config.clone(),
-            self.cfg.handshake_timeout(),
-        )
-        .await
+        super::TlsServerFilter::create(io, self.config.clone(), self.cfg.handshake_timeout()).await
     }
 }

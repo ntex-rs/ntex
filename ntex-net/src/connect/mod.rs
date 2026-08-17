@@ -24,10 +24,7 @@ where
 }
 
 /// Resolve and connect to remote host
-pub async fn connect_with<A, U>(
-    message: U,
-    cfg: SharedCfg,
-) -> Result<Io, Error<ConnectError>>
+pub async fn connect_with<A, U>(message: U, cfg: SharedCfg) -> Result<Io, Error<ConnectError>>
 where
     A: Address,
     Connect<A>: From<U>,

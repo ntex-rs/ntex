@@ -42,10 +42,7 @@ impl WebResponse {
     #[inline]
     #[must_use]
     /// Create web response for error.
-    pub fn error_response<Err: ErrorRenderer, E: Into<Err::Container>>(
-        self,
-        err: E,
-    ) -> Self {
+    pub fn error_response<Err: ErrorRenderer, E: Into<Err::Container>>(self, err: E) -> Self {
         Self::from_err::<Err, E>(err, self.request)
     }
 
@@ -176,12 +173,11 @@ mod tests {
         assert_eq!(res.response().status(), StatusCode::PAYLOAD_TOO_LARGE);
 
         let res = TestRequest::default().to_srv_response(HttpResponse::Ok().finish());
-        let mut res = res
-            .checked_expr::<DefaultError, _, _>(|_| Ok::<_, http::error::PayloadError>(()));
+        let mut res =
+            res.checked_expr::<DefaultError, _, _>(|_| Ok::<_, http::error::PayloadError>(()));
         assert_eq!(res.response_mut().status(), StatusCode::OK);
-        let res = res.checked_expr::<DefaultError, _, _>(|_| {
-            Err(http::error::PayloadError::Overflow)
-        });
+        let res =
+            res.checked_expr::<DefaultError, _, _>(|_| Err(http::error::PayloadError::Overflow));
         assert_eq!(res.response().status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 }

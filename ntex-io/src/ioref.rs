@@ -267,9 +267,7 @@ impl IoRef {
             // which introduces latency. To prevent this behavior and
             // flatten data delivery to the peer, IoRef can initiate
             // out-of-order writes based on a configured threshold.
-            if st.flags.is_direct_wr_enabled()
-                && (force || size >= st.cfg.write_buf_threshold())
-            {
+            if st.flags.is_direct_wr_enabled() && (force || size >= st.cfg.write_buf_threshold()) {
                 // Send data in-place
                 if self.call_write() == WakeWriteTask::Yes {
                     #[cfg(feature = "trace")]

@@ -1,7 +1,5 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::{
-    cell::RefCell, collections::HashMap, io, io::Read, io::Write, net, rc::Rc, sync::Arc,
-};
+use std::{cell::RefCell, collections::HashMap, io, io::Read, io::Write, net, rc::Rc, sync::Arc};
 
 use coo_kie::Cookie;
 use flate2::{Compression, read::GzDecoder, write::GzEncoder, write::ZlibEncoder};
@@ -41,9 +39,8 @@ const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
 #[ntex::test]
 async fn test_simple() {
     let srv = test::server(async || {
-        App::new().service(
-            web::resource("/").route(web::to(|| async { HttpResponse::Ok().body(STR) })),
-        )
+        App::new()
+            .service(web::resource("/").route(web::to(|| async { HttpResponse::Ok().body(STR) })))
     })
     .await;
 
@@ -65,12 +62,13 @@ async fn test_simple() {
 
 #[ntex::test]
 async fn test_json() {
-    let srv = test::server(async || {
-        App::new().service(web::resource("/").route(web::to(
-            |_: web::types::Json<String>| async { HttpResponse::Ok() },
-        )))
-    })
-    .await;
+    let srv =
+        test::server(async || {
+            App::new().service(web::resource("/").route(web::to(
+                |_: web::types::Json<String>| async { HttpResponse::Ok() },
+            )))
+        })
+        .await;
 
     let response = srv
         .get("/")
@@ -185,8 +183,7 @@ async fn test_connection_reuse() {
 #[ntex::test]
 async fn test_connection_close() {
     let srv = test_server(async move || {
-        HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::Ok().body(STR)))
-            .map(|_| ())
+        HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::Ok().body(STR))).map(|_| ())
     })
     .await;
 
@@ -611,44 +608,35 @@ async fn test_client_cookie_handling() {
     let cookie1b = cookie1.clone();
     let cookie2b = cookie2.clone();
 
-    let srv =
-        test::server(async move || {
-            let cookie1 = cookie1b.clone();
-            let cookie2 = cookie2b.clone();
+    let srv = test::server(async move || {
+        let cookie1 = cookie1b.clone();
+        let cookie2 = cookie2b.clone();
 
-            App::new().route(
-                "/",
-                web::to(web::dev::__assert_handler1(move |req: HttpRequest| {
-                    let cookie1 = cookie1.clone();
-                    let cookie2 = cookie2.clone();
+        App::new().route(
+            "/",
+            web::to(web::dev::__assert_handler1(move |req: HttpRequest| {
+                let cookie1 = cookie1.clone();
+                let cookie2 = cookie2.clone();
 
-                    async move {
-                        // Check cookies were sent correctly
-                        let res: Result<(), Error> =
-                            req.cookie("cookie1")
-                                .ok_or(())
-                                .and_then(|c1| {
-                                    if c1.value() == "value1" { Ok(()) } else { Err(()) }
-                                })
-                                .and_then(|()| req.cookie("cookie2").ok_or(()))
-                                .and_then(|c2| {
-                                    if c2.value() == "value2" { Ok(()) } else { Err(()) }
-                                })
-                                .map_err(|_| {
-                                    Error::new(IoError::from(ErrorKind::NotFound))
-                                });
+                async move {
+                    // Check cookies were sent correctly
+                    let res: Result<(), Error> = req
+                        .cookie("cookie1")
+                        .ok_or(())
+                        .and_then(|c1| if c1.value() == "value1" { Ok(()) } else { Err(()) })
+                        .and_then(|()| req.cookie("cookie2").ok_or(()))
+                        .and_then(|c2| if c2.value() == "value2" { Ok(()) } else { Err(()) })
+                        .map_err(|_| Error::new(IoError::from(ErrorKind::NotFound)));
 
-                        res?;
+                    res?;
 
-                        // Send some cookies back
-                        Ok::<_, Error>(
-                            HttpResponse::Ok().cookie(cookie1).cookie(cookie2).finish(),
-                        )
-                    }
-                })),
-            )
-        })
-        .await;
+                    // Send some cookies back
+                    Ok::<_, Error>(HttpResponse::Ok().cookie(cookie1).cookie(cookie2).finish())
+                }
+            })),
+        )
+    })
+    .await;
 
     let request = srv.get("/").cookie(cookie1.clone()).cookie(cookie2.clone());
     let response = request.send().await.unwrap();
@@ -782,9 +770,8 @@ async fn client_bearer_auth() {
 #[ntex::test]
 async fn middleware() {
     let srv = test::server(async || {
-        App::new().service(
-            web::resource("/").route(web::to(|| async { HttpResponse::Ok().body(STR) })),
-        )
+        App::new()
+            .service(web::resource("/").route(web::to(|| async { HttpResponse::Ok().body(STR) })))
     })
     .await;
 

@@ -106,24 +106,18 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_state_extractor() {
-        let srv = init_service(
-            App::new().state(10usize).service(
-                web::resource("/")
-                    .to(|_: web::types::State<usize>| async { HttpResponse::Ok() }),
-            ),
-        )
+        let srv = init_service(App::new().state(10usize).service(
+            web::resource("/").to(|_: web::types::State<usize>| async { HttpResponse::Ok() }),
+        ))
         .await;
 
         let req = TestRequest::default().to_request();
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let srv = init_service(
-            App::new().state(10u32).service(
-                web::resource("/")
-                    .to(|_: web::types::State<usize>| async { HttpResponse::Ok() }),
-            ),
-        )
+        let srv = init_service(App::new().state(10u32).service(
+            web::resource("/").to(|_: web::types::State<usize>| async { HttpResponse::Ok() }),
+        ))
         .await;
         let req = TestRequest::default().to_request();
         let res = srv.call(req).await.unwrap();
@@ -165,9 +159,9 @@ mod tests {
             let srv = web::test::server(async move || {
                 let data = data.clone();
 
-                App::new().state(data).service(
-                    web::resource("/").to(async |_data: super::State<TestData>| "ok"),
-                )
+                App::new()
+                    .state(data)
+                    .service(web::resource("/").to(async |_data: super::State<TestData>| "ok"))
             })
             .await;
 
@@ -181,24 +175,26 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_route_state_extractor() {
-        let srv =
-            init_service(App::new().service(web::resource("/").state(10usize).route(
-                web::get().to(|data: web::types::State<usize>| async move {
-                    let _ = data.clone();
-                    HttpResponse::Ok()
-                }),
-            )))
-            .await;
+        let srv = init_service(App::new().service(web::resource("/").state(10usize).route(
+            web::get().to(|data: web::types::State<usize>| async move {
+                let _ = data.clone();
+                HttpResponse::Ok()
+            }),
+        )))
+        .await;
 
         let req = TestRequest::default().to_request();
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         // different type
-        let srv = init_service(App::new().service(web::resource("/").state(10u32).route(
-            web::get().to(|_: web::types::State<usize>| async { HttpResponse::Ok() }),
-        )))
-        .await;
+        let srv =
+            init_service(App::new().service(
+                web::resource("/").state(10u32).route(
+                    web::get().to(|_: web::types::State<usize>| async { HttpResponse::Ok() }),
+                ),
+            ))
+            .await;
         let req = TestRequest::default().to_request();
         let res = srv.call(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);

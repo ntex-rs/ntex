@@ -363,9 +363,7 @@ impl ResourceDef {
             let re = Regex::new(&re_part).unwrap();
             let names: Vec<_> = re
                 .capture_names()
-                .filter_map(|name| {
-                    name.map(|name| Box::leak(Box::new(name.to_owned())).as_str())
-                })
+                .filter_map(|name| name.map(|name| Box::leak(Box::new(name.to_owned())).as_str()))
                 .collect();
             pelems.push(Segment::Dynamic {
                 names,
@@ -658,10 +656,9 @@ mod tests {
         assert_eq!(tree.find(&mut resource), Some(1));
         assert_eq!(resource.get("id").unwrap(), "foo-/-%2f-bar");
 
-        let uri = Uri::try_from(
-            "/user/http%3A%2F%2Flocalhost%3A80%2Ffile%2F%2Fvar%2Flog%2Fsyslog/test",
-        )
-        .unwrap();
+        let uri =
+            Uri::try_from("/user/http%3A%2F%2Flocalhost%3A80%2Ffile%2F%2Fvar%2Flog%2Fsyslog/test")
+                .unwrap();
         let mut resource = Path::new(uri);
         assert_eq!(tree.find(&mut resource), Some(1));
         assert_eq!(

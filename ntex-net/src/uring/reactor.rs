@@ -163,9 +163,7 @@ impl Reactor {
             .setup_defer_taskrun()
             .build(capacity)
         {
-            log::info!(
-                "New io-uring driver with single-issuer, coop-taskrun, defer-taskrun"
-            );
+            log::info!("New io-uring driver with single-issuer, coop-taskrun, defer-taskrun");
             (true, ring)
         } else if let Ok(ring) = IoUring::builder().setup_single_issuer().build(capacity) {
             log::info!("New io-uring driver with single-issuer");
@@ -290,21 +288,17 @@ impl Reactor {
                         if !more(flags) {
                             unsafe {
                                 sq.push(
-                                    &PollAdd::new(
-                                        Fd(self.notifier.as_raw_fd()),
-                                        libc::POLLIN as _,
-                                    )
-                                    .multi(true)
-                                    .build()
-                                    .user_data(Self::NOTIFY),
+                                    &PollAdd::new(Fd(self.notifier.as_raw_fd()), libc::POLLIN as _)
+                                        .multi(true)
+                                        .build()
+                                        .user_data(Self::NOTIFY),
                                 )
                             }
                             .expect("the squeue sould not be full");
                         }
                     }
                     _ => {
-                        let batch =
-                            ((user_data & Self::BATCH_MASK) >> Self::BATCH) as usize;
+                        let batch = ((user_data & Self::BATCH_MASK) >> Self::BATCH) as usize;
                         let user_data = (user_data & Self::DATA_MASK) as usize;
 
                         let result = entry.result();
@@ -349,9 +343,7 @@ impl crate::Reactor for Reactor {
 
         match result {
             Err(err) => Receiver::new(Err(err)),
-            Ok((addr, sock)) => {
-                super::connect::ConnectOps::get(self).connect(sock, addr, cfg)
-            }
+            Ok((addr, sock)) => super::connect::ConnectOps::get(self).connect(sock, addr, cfg),
         }
     }
 
@@ -364,9 +356,7 @@ impl crate::Reactor for Reactor {
 
         match result {
             Err(err) => Receiver::new(Err(err)),
-            Ok((addr, sock)) => {
-                super::connect::ConnectOps::get(self).connect(sock, addr, cfg)
-            }
+            Ok((addr, sock)) => super::connect::ConnectOps::get(self).connect(sock, addr, cfg),
         }
     }
 

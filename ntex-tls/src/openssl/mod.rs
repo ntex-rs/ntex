@@ -258,10 +258,7 @@ pub async fn connect<F: Filter>(
     Ok(io)
 }
 
-async fn handle_result<F>(
-    io: &Io<F>,
-    result: Result<(), ssl::Error>,
-) -> io::Result<Option<()>> {
+async fn handle_result<F>(io: &Io<F>, result: Result<(), ssl::Error>) -> io::Result<Option<()>> {
     match result {
         Ok(v) => Ok(Some(v)),
         Err(e) => match e.code() {

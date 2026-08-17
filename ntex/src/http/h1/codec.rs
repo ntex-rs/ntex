@@ -134,9 +134,7 @@ impl Decoder for Codec {
             self.version.set(head.version);
 
             let ctype = head.connection_type();
-            if ctype == ConnectionType::KeepAlive
-                && !flags.contains(Flags::KEEPALIVE_ENABLED)
-            {
+            if ctype == ConnectionType::KeepAlive && !flags.contains(Flags::KEEPALIVE_ENABLED) {
                 self.ctype.set(ConnectionType::Close);
             } else {
                 self.ctype.set(ctype);

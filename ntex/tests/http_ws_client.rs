@@ -9,15 +9,13 @@ use ntex::web::{self, App, HttpRequest};
 use ntex::ws::{self, handshake_response};
 use ntex::{time::Seconds, util::ByteString, util::Bytes, util::Ready};
 
-async fn ws_service(
-    msg: DispatchItem<ws::Codec>,
-) -> Result<Option<ws::Message>, io::Error> {
+async fn ws_service(msg: DispatchItem<ws::Codec>) -> Result<Option<ws::Message>, io::Error> {
     let msg = match msg {
         DispatchItem::Item(msg) => match msg {
             ws::Frame::Ping(msg) => ws::Message::Pong(msg),
-            ws::Frame::Text(text) => ws::Message::Text(
-                String::from_utf8(Vec::from(text.as_ref())).unwrap().into(),
-            ),
+            ws::Frame::Text(text) => {
+                ws::Message::Text(String::from_utf8(Vec::from(text.as_ref())).unwrap().into())
+            }
             ws::Frame::Binary(bin) => ws::Message::Binary(bin),
             ws::Frame::Close(reason) => ws::Message::Close(reason),
             _ => ws::Message::Close(None),
@@ -37,11 +35,8 @@ async fn test_simple() {
                         let res = handshake_response(req.head()).finish();
 
                         // send handshake respone
-                        io.encode(
-                            h1::Message::Item((res.drop_body(), BodySize::None)),
-                            &codec,
-                        )
-                        .unwrap();
+                        io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
+                            .unwrap();
 
                         // start websocket service
                         Dispatcher::new(
@@ -101,11 +96,8 @@ async fn test_transport() {
                         let res = handshake_response(req.head()).finish();
 
                         // send handshake respone
-                        io.encode(
-                            h1::Message::Item((res.drop_body(), BodySize::None)),
-                            &codec,
-                        )
-                        .unwrap();
+                        io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
+                            .unwrap();
 
                         // start websocket service
                         Dispatcher::new(
@@ -144,11 +136,8 @@ async fn test_keepalive_timeout() {
                         let res = handshake_response(req.head()).finish();
 
                         // send handshake respone
-                        io.encode(
-                            h1::Message::Item((res.drop_body(), BodySize::None)),
-                            &codec,
-                        )
-                        .unwrap();
+                        io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
+                            .unwrap();
 
                         // start websocket service
                         io.set_config(

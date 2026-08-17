@@ -88,12 +88,8 @@ impl<T> Future for JoinHandle<T> {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         Poll::Ready(match self.task.as_mut() {
-            Some(Either::Task(fut)) => {
-                ready!(Pin::new(fut).poll(cx)).map_err(|_| JoinError)
-            }
-            Some(Either::Spawn(fut)) => {
-                ready!(Pin::new(fut).poll(cx)).map_err(|_| JoinError)
-            }
+            Some(Either::Task(fut)) => ready!(Pin::new(fut).poll(cx)).map_err(|_| JoinError),
+            Some(Either::Spawn(fut)) => ready!(Pin::new(fut).poll(cx)).map_err(|_| JoinError),
             None => Err(JoinError),
         })
     }

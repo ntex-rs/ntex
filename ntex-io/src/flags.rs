@@ -219,9 +219,7 @@ impl Flags {
     }
 
     pub(crate) fn set_read_ready_and_backpressure(&self) {
-        self.insert(
-            FlagsKind::RD_PAUSED | FlagsKind::BUF_R_READY | FlagsKind::RD_BACKPRESSURE,
-        );
+        self.insert(FlagsKind::RD_PAUSED | FlagsKind::BUF_R_READY | FlagsKind::RD_BACKPRESSURE);
     }
 
     pub(crate) fn set_filters_stopped(&self) {

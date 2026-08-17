@@ -12,8 +12,6 @@ fn main() {
     }
 
     if features.len() > 1 {
-        panic!(
-            "Only one runtime feature could be selected, current selection {features:?}"
-        );
+        panic!("Only one runtime feature could be selected, current selection {features:?}");
     }
 }

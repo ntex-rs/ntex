@@ -98,9 +98,7 @@ impl FilterLayer for WsTransport {
                             dst.extend_from_slice(&bin);
                         }
                         Frame::Continuation(Item::Continue(bin)) => {
-                            self.continuation_must_start(
-                                "Continuation frame is not started",
-                            )?;
+                            self.continuation_must_start("Continuation frame is not started")?;
                             dst.extend_from_slice(&bin);
                         }
                         Frame::Continuation(Item::Last(bin)) => {
@@ -169,12 +167,11 @@ impl<F> WsTransportService<F> {
 }
 
 impl<F: Filter> Service for WsTransportService<F> {
-    type St = ();
     type Req = Io<F>;
     type Res = Io<Layer<WsTransport, F>>;
     type Error = io::Error;
 
-    async fn call(&self, io: Io<F>, _: Ctx<'_, Self>) -> Result<Self::Res, Self::Error> {
+    async fn call(&self, io: Io<F>, _: Ctx<'_, Self, ()>) -> Result<Self::Res, Self::Error> {
         Ok(WsTransport::create(io, self.codec.clone()))
     }
 }

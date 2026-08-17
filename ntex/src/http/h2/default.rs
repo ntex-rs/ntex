@@ -1,3 +1,5 @@
+use std::{error::Error, rc::Rc};
+
 use ntex_h2 as h2;
 
 use crate::{Ctx, Service, http::error::H2Error};
@@ -6,16 +8,15 @@ use crate::{Ctx, Service, http::error::H2Error};
 /// Default control service
 pub struct DefaultControlService;
 
-impl Service for DefaultControlService {
-    type St = ();
+impl Service<()> for DefaultControlService {
     type Req = h2::Control<H2Error>;
     type Res = h2::ControlAck;
-    type Error = std::io::Error;
+    type Error = Rc<dyn Error>;
 
     async fn call(
         &self,
         msg: h2::Control<H2Error>,
-        _: Ctx<'_, Self>,
+        _: Ctx<'_, Self, ()>,
     ) -> Result<Self::Res, Self::Error> {
         log::trace!("HTTP/2 Control message: {msg:?}");
         Ok(msg.ack())

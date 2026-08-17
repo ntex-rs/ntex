@@ -7,9 +7,10 @@ macro_rules! buf_get_impl {
         // this Option<ret> trick is to avoid keeping a borrow on self
         // when advance() is called (mut borrow) and to call bytes() only once
         #[allow(clippy::ptr_as_ptr)]
-        let ret = $this.chunk().get(..SIZE).map(|src| unsafe {
-            $typ::$conv(*(std::ptr::from_ref(src) as *const [_; SIZE]))
-        });
+        let ret = $this
+            .chunk()
+            .get(..SIZE)
+            .map(|src| unsafe { $typ::$conv(*(std::ptr::from_ref(src) as *const [_; SIZE])) });
 
         if let Some(ret) = ret {
             // if the direct conversion was possible, advance and return

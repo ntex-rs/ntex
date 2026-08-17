@@ -180,8 +180,9 @@ async fn test_h2_headers() {
             Ok::<_, io::Error>(builder.body(data.clone()))
         })
         .rustls(tls_acceptor())
-                    .map_err(|_| ())
-    }).await;
+        .map_err(|_| ())
+    })
+    .await;
 
     let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
@@ -301,9 +302,7 @@ async fn test_h2_body_length() {
     let srv = test_server(async move || {
         HttpService::h2(|_| async {
             let body = once(Ready::Ok(Bytes::from_static(STR.as_ref())));
-            Ok::<_, io::Error>(
-                Response::Ok().body(body::SizedStream::new(STR.len() as u64, body)),
-            )
+            Ok::<_, io::Error>(Response::Ok().body(body::SizedStream::new(STR.len() as u64, body)))
         })
         .rustls(tls_acceptor())
         .map_err(|_| ())
@@ -373,10 +372,7 @@ async fn test_h2_response_http_error_handling() {
 async fn test_h2_service_error() {
     let srv = test_server(async move || {
         HttpService::h2(|_| {
-            Ready::Err::<Response, _>(InternalError::default(
-                "error",
-                StatusCode::BAD_REQUEST,
-            ))
+            Ready::Err::<Response, _>(InternalError::default("error", StatusCode::BAD_REQUEST))
         })
         .rustls(tls_acceptor())
         .map_err(|_| ())

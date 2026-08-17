@@ -62,10 +62,7 @@ impl TestBody {
 impl Stream for TestBody {
     type Item = Result<Bytes, io::Error>;
 
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         ready!(Pin::new(&mut self.delay).poll(cx));
 
         self.delay = sleep(Millis(10));
@@ -82,9 +79,8 @@ impl Stream for TestBody {
 #[ntex::test]
 async fn test_body() {
     let srv = test::server(async || {
-        App::new().service(
-            web::resource("/").route(web::to(|| async { HttpResponse::Ok().body(STR) })),
-        )
+        App::new()
+            .service(web::resource("/").route(web::to(|| async { HttpResponse::Ok().body(STR) })))
     })
     .await;
 
@@ -101,10 +97,7 @@ async fn test_body_gzip() {
     let srv = test::server_with(test::config().h1(), async || {
         App::new()
             .middleware(Compress::new(ContentEncoding::Gzip))
-            .service(
-                web::resource("/")
-                    .route(web::to(|| async { HttpResponse::Ok().body(STR) })),
-            )
+            .service(web::resource("/").route(web::to(|| async { HttpResponse::Ok().body(STR) })))
     })
     .await;
 
@@ -296,8 +289,7 @@ async fn test_body_chunked_implicit() {
         App::new()
             .middleware(Compress::new(ContentEncoding::Gzip))
             .service(web::resource("/").route(web::get().to(move || async {
-                HttpResponse::Ok()
-                    .streaming(TestBody::new(Bytes::from_static(STR.as_ref()), 24))
+                HttpResponse::Ok().streaming(TestBody::new(Bytes::from_static(STR.as_ref()), 24))
             })))
     })
     .await;
@@ -328,12 +320,9 @@ async fn test_body_chunked_implicit() {
 #[ntex::test]
 async fn test_head_binary() {
     let srv = test::server_with(test::config().h1(), async || {
-        App::new().service(
-            web::resource("/")
-                .route(web::head().to(move || async {
-                    HttpResponse::Ok().content_length(100).body(STR)
-                })),
-        )
+        App::new().service(web::resource("/").route(
+            web::head().to(move || async { HttpResponse::Ok().content_length(100).body(STR) }),
+        ))
     })
     .await;
 
@@ -377,8 +366,7 @@ async fn test_body_deflate() {
         App::new()
             .middleware(Compress::new(ContentEncoding::Deflate))
             .service(
-                web::resource("/")
-                    .route(web::to(move || async { HttpResponse::Ok().body(STR) })),
+                web::resource("/").route(web::to(move || async { HttpResponse::Ok().body(STR) })),
             )
     })
     .await;
@@ -781,8 +769,7 @@ async fn test_slow_request() {
     use std::net;
 
     let srv = test::server_with(test::config().client_timeout(Seconds(1)), async || {
-        App::new()
-            .service(web::resource("/").route(web::to(|| async { HttpResponse::Ok() })))
+        App::new().service(web::resource("/").route(web::to(|| async { HttpResponse::Ok() })))
     })
     .await;
 
@@ -883,8 +870,7 @@ async fn test_web_server() {
 
             web::server(async || {
                 App::new().service(
-                    web::resource("/")
-                        .route(web::to(|| async { HttpResponse::Ok().body(STR) })),
+                    web::resource("/").route(web::to(|| async { HttpResponse::Ok().body(STR) })),
                 )
             })
             .config(
@@ -926,8 +912,7 @@ async fn web_no_ws_with_response_payload() {
     let srv = test::server_with(test::config().h1(), async || {
         App::new()
             .service(web::resource("/").route(web::get().to(move || async {
-                HttpResponse::Ok()
-                    .streaming(TestBody::new(Bytes::from_static(STR.as_ref()), 24))
+                HttpResponse::Ok().streaming(TestBody::new(Bytes::from_static(STR.as_ref()), 24))
             })))
             .service(
                 web::resource("/f")

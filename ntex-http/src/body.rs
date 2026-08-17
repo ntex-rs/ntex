@@ -783,9 +783,9 @@ mod tests {
 
     #[ntex::test]
     async fn boxed_body_stream() {
-        let st = BoxedBodyStream::new(stream::once(Ready::<_, Rc<dyn Error>>::Ok(
-            Bytes::from("1"),
-        )));
+        let st = BoxedBodyStream::new(stream::once(Ready::<_, Rc<dyn Error>>::Ok(Bytes::from(
+            "1",
+        ))));
         assert!(format!("{st:?}").contains("BoxedBodyStream"));
         let body: Body = st.into();
         assert!(format!("{body:?}").contains("Body::Message(_)"));

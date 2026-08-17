@@ -49,12 +49,7 @@ impl ConnectOps {
         })
     }
 
-    pub(crate) fn connect(
-        &self,
-        sock: Socket,
-        addr: SockAddr,
-        cfg: SharedCfg,
-    ) -> Receiver<Io> {
+    pub(crate) fn connect(&self, sock: Socket, addr: SockAddr, cfg: SharedCfg) -> Receiver<Io> {
         let (sender, rx) = channel::create();
 
         let mut ops = self.0.ops.borrow_mut();

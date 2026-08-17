@@ -275,7 +275,7 @@ impl Drop for WorkerAvailabilityTx {
 struct ServiceRunner<F: ServerConfiguration<Item = Req>, Req> {
     name: String,
     factory: F,
-    svc: Pipeline<F::Service>,
+    svc: Pipeline<Req, (), ()>,
     reqs: Receiver<Req>,
     stop: Pin<Box<dyn Stream<Item = Shutdown>>>,
     availability: WorkerAvailabilityTx,
