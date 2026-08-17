@@ -31,7 +31,7 @@ mod then;
 mod util;
 
 pub use self::apply::{apply_fn, apply_fn_factory};
-pub use self::chain::{chain, chain_factory};
+pub use self::chain::{chain, chain_factory, unit_state};
 pub use self::ctx::{Ctx, ReadyCtx};
 pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
 pub use self::fn_shutdown::fn_shutdown;

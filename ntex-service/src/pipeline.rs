@@ -11,8 +11,8 @@ pub trait State<Req>: Default {
     }
 }
 
-pub trait FromState<St> {
-    fn from(st: &St) -> Self;
+pub trait FromState<St>: Sized {
+    fn from(st: &St) -> Option<Self>;
 }
 
 /// Container for a service.
@@ -88,7 +88,10 @@ impl<S: Service> Pipeline<S> {
         S: Service<St = St>,
         S::St: State<S::Req> + FromState<Chained>,
     {
-        Self::create(f.into_service(), S::St::from(chained))
+        Self::create(
+            f.into_service(),
+            S::St::from(chained).unwrap_or_else(|| S::St::default()),
+        )
     }
 
     fn create(s: S, st: S::St) -> Self
@@ -463,5 +466,7 @@ where
 impl<Req> State<Req> for () {}
 
 impl<St> FromState<St> for () {
-    fn from(_: &St) {}
+    fn from(_: &St) -> Option<()> {
+        None
+    }
 }

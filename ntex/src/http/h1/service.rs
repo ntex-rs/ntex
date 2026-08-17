@@ -39,9 +39,13 @@ where
     B: MessageBody,
 {
     /// Create new `HttpService` instance with config.
-    pub(crate) fn new(
+    pub(crate) fn new<Ust>(
         service: impl IntoServiceFactory<Sf, Request>,
-    ) -> H1Service<St, F, Sf, B, DefaultControlService<F, Sf::Error>> {
+    ) -> H1Service<St, F, Sf, B, DefaultControlService<F, Sf::Error>>
+    where
+        Sf: ServiceFactory<Request, St = Ust>,
+        Ust: State<Request>,
+    {
         H1Service {
             sf: service.into_factory(),
             ctl: Pipeline::new(DefaultControlService::new()),

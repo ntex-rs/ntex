@@ -13,6 +13,16 @@ use crate::then::{Then, ThenFactory};
 use crate::{IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory, State};
 
 /// Constructs new chain with one service.
+pub fn unit_state<S>(service: impl IntoService<S>) -> ServiceChain<S>
+where
+    S: Service<St = ()>,
+{
+    ServiceChain {
+        service: service.into_service(),
+    }
+}
+
+/// Constructs new chain with one service.
 pub fn chain<St, S>(service: impl IntoService<S>) -> ServiceChain<S>
 where
     S: Service<St = St>,

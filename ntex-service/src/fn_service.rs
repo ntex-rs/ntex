@@ -136,12 +136,12 @@ where
     }
 }
 
-impl<F, Req, Res, Err> IntoService<FnService<(), F, Req>> for F
+impl<St, F, Req, Res, Err> IntoService<FnService<St, F, Req>> for F
 where
     F: AsyncFn(Req) -> Result<Res, Err>,
 {
     #[inline]
-    fn into_service(self) -> FnService<(), F, Req> {
+    fn into_service(self) -> FnService<St, F, Req> {
         FnService {
             f: self,
             _t: PhantomData,
@@ -227,13 +227,13 @@ where
     }
 }
 
-impl<F, Req, Res, Err, Cfg>
-    IntoServiceFactory<FnServiceFactory<(), F, Req, Res, Err, Cfg>, Req> for F
+impl<St, F, Req, Res, Err, Cfg>
+    IntoServiceFactory<FnServiceFactory<St, F, Req, Res, Err, Cfg>, Req> for F
 where
     F: AsyncFn(Req) -> Result<Res, Err> + Clone,
 {
     #[inline]
-    fn into_factory(self) -> FnServiceFactory<(), F, Req, Res, Err, Cfg> {
+    fn into_factory(self) -> FnServiceFactory<St, F, Req, Res, Err, Cfg> {
         FnServiceFactory::new(self)
     }
 }

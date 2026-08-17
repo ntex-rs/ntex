@@ -16,6 +16,7 @@ pub struct HttpService<
     St,
     F,
     Sf: ServiceFactory<Request>,
+    Sft,
     B,
     Ctl1: Service = h1::DefaultControlService<F, HttpError>,
     Ctl2: Service = h2::DefaultControlService,
@@ -24,14 +25,15 @@ pub struct HttpService<
     h1_ctl: Pipeline<Ctl1>,
     h2_ctl: Pipeline<Ctl2>,
     config: DispatcherConfig,
-    _t: marker::PhantomData<(St, F, B)>,
+    _t: marker::PhantomData<(St, Sft, F, B)>,
 }
 
-impl<St, F, Sf, B> HttpService<St, F, Sf, B, h1::DefaultControlService<F, HttpError>>
+impl<St, F, Sf, Sft, B>
+    HttpService<St, F, Sf, Sft, B, h1::DefaultControlService<F, HttpError>>
 where
     F: Filter,
-    Sf: ServiceFactory<Request, InitCfg = SharedCfg> + 'static,
-    Sf::St: State<Request> + FromState<St>,
+    Sf: ServiceFactory<Request, St = Sft, InitCfg = SharedCfg> + 'static,
+    Sf::St: State<Request>,
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
     Sf::InitError: Error,
@@ -40,7 +42,11 @@ where
     /// Create new `HttpService` instance.
     pub fn new(
         service: impl IntoServiceFactory<Sf, Request>,
-    ) -> HttpService<St, F, Sf, B, h1::DefaultControlService<F, Sf::Error>> {
+    ) -> HttpService<St, F, Sf, Sft, B, h1::DefaultControlService<F, Sf::Error>>
+//where
+        //Sf: ServiceFactory<Request, St = Ust>,
+        //Ust: State<Request>,
+    {
         HttpService {
             sf: service.into_factory(),
             h1_ctl: Pipeline::new(h1::DefaultControlService::new()),
@@ -51,11 +57,11 @@ where
     }
 }
 
-impl<St, F, Sf, B> HttpService<St, F, Sf, B>
+impl<St, F, Sf, Sft, B> HttpService<St, F, Sf, Sft, B>
 where
     F: Filter,
-    Sf: ServiceFactory<Request, InitCfg = SharedCfg> + 'static,
-    Sf::St: State<Request> + FromState<St>,
+    Sf: ServiceFactory<Request, St = Sft, InitCfg = SharedCfg> + 'static,
+    Sf::St: State<Request>,
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
     Sf::InitError: Error,
@@ -64,20 +70,28 @@ where
     /// Create *http service* for HTTP/1 protocol.
     pub fn h1(
         sf: impl IntoServiceFactory<Sf, Request>,
-    ) -> h1::H1Service<St, F, Sf, B, h1::DefaultControlService<F, Sf::Error>> {
+    ) -> h1::H1Service<St, F, Sf, B, h1::DefaultControlService<F, Sf::Error>>
+//where
+        //Sf: ServiceFactory<Request, St = Ust>,
+        //Ust: State<Request>,
+    {
         h1::H1Service::new(sf)
     }
 
     /// Create *http service* for HTTP/2 protocol.
-    pub fn h2(sf: impl IntoServiceFactory<Sf, Request>) -> h2::H2Service<St, F, Sf, B> {
+    pub fn h2(sf: impl IntoServiceFactory<Sf, Request>) -> h2::H2Service<St, F, Sf, B>
+//where
+        //Sf: ServiceFactory<Request, St = Ust>,
+        //Ust: State<Request>,
+    {
         h2::H2Service::new(sf)
     }
 }
 
-impl<St, F, Sf, B, Ctl1, Ctl2> HttpService<St, F, Sf, B, Ctl1, Ctl2>
+impl<St, F, Sf, Sft, B, Ctl1, Ctl2> HttpService<St, F, Sf, Sft, B, Ctl1, Ctl2>
 where
     F: Filter,
-    Sf: ServiceFactory<Request, InitCfg = SharedCfg> + 'static,
+    Sf: ServiceFactory<Request, St = Sft, InitCfg = SharedCfg> + 'static,
     Sf::St: State<Request> + FromState<St>,
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
@@ -92,7 +106,7 @@ where
     pub fn h1_control<Ctl>(
         self,
         ctl: impl IntoService<Ctl>,
-    ) -> HttpService<F, St, Sf, B, Ctl, Ctl2>
+    ) -> HttpService<F, St, Sf, Sft, B, Ctl, Ctl2>
     where
         Ctl: Service<Req = h1::Control<F, Sf::Error>, Res = h1::ControlAck<F>>,
         Ctl::St: State<Ctl::Req>,
@@ -111,7 +125,7 @@ where
     pub fn h2_control<Ctl>(
         self,
         ctl: impl IntoService<Ctl>,
-    ) -> HttpService<F, St, Sf, B, Ctl1, Ctl>
+    ) -> HttpService<F, St, Sf, Sft, B, Ctl1, Ctl>
     where
         Ctl: Service<Req = h2::Control<H2Error>, Res = h2::ControlAck>,
         Ctl::St: State<Ctl::Req>,
@@ -136,10 +150,11 @@ mod openssl {
     use super::*;
     use crate::{io::Layer, server::SslError};
 
-    impl<St, F, Sf, B, Ctl1, Ctl2> HttpService<St, Layer<SslFilter, F>, Sf, B, Ctl1, Ctl2>
+    impl<St, F, Sf, Sft, B, Ctl1, Ctl2>
+        HttpService<St, Layer<SslFilter, F>, Sf, Sft, B, Ctl1, Ctl2>
     where
         F: Filter,
-        Sf: ServiceFactory<Request, InitCfg = SharedCfg> + 'static,
+        Sf: ServiceFactory<Request, St = Sft, InitCfg = SharedCfg> + 'static,
         Sf::St: State<Request> + FromState<St>,
         Sf::Res: Into<Response<B>>,
         Sf::Error: ResponseError,
@@ -175,10 +190,11 @@ mod rustls {
     use super::*;
     use crate::{io::Layer, server::SslError};
 
-    impl<St, F, Sf, B, Ctl1, Ctl2> HttpService<St, Layer<TlsServerFilter, F>, Sf, B, Ctl1, Ctl2>
+    impl<St, F, Sf, Sft, B, Ctl1, Ctl2>
+        HttpService<St, Layer<TlsServerFilter, F>, Sf, Sft, B, Ctl1, Ctl2>
     where
         F: Filter,
-        Sf: ServiceFactory<Request, InitCfg = SharedCfg> + 'static,
+        Sf: ServiceFactory<Request, St = Sft, InitCfg = SharedCfg> + 'static,
         Sf::St: State<Request> + FromState<St>,
         Sf::Res: Into<Response<B>>,
         Sf::Error: ResponseError,
@@ -208,10 +224,10 @@ mod rustls {
     }
 }
 
-impl<St, F, Sf, B, Ctl1, Ctl2> Service for HttpService<St, F, Sf, B, Ctl1, Ctl2>
+impl<St, F, Sf, Sft, B, Ctl1, Ctl2> Service for HttpService<St, F, Sf, Sft, B, Ctl1, Ctl2>
 where
     F: Filter,
-    Sf: ServiceFactory<Request, InitCfg = SharedCfg> + 'static,
+    Sf: ServiceFactory<Request, St = Sft, InitCfg = SharedCfg> + 'static,
     Sf::St: State<Request> + FromState<St>,
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,

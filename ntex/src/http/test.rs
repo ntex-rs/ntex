@@ -235,7 +235,7 @@ where
     S: Service<St = (), Req = Io> + 'static,
     S::St: State<Io>,
 {
-    server_with_config(
+    server_with_config::<(), _, _, _>(
         factory,
         SharedCfg::new("HTTP-TEST-SRV")
             .add(IoConfig::new())
@@ -274,10 +274,10 @@ where
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub async fn server_with_config<F, S, U>(factory: F, cfg: U) -> TestServer
+pub async fn server_with_config<St, F, S, U>(factory: F, cfg: U) -> TestServer
 where
     F: AsyncFn() -> S + Send + Clone + 'static,
-    S: Service<St = (), Req = Io> + 'static,
+    S: Service<St = St, Req = Io> + 'static,
     S::St: State<Io>,
     U: Into<SharedCfg>,
 {

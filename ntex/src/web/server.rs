@@ -408,7 +408,7 @@ where
             addr,
             cfg,
             async move || {
-                Ok(Pipeline::new(HttpService::<(), _, _, _, _, _>::new(
+                Ok(Pipeline::new(HttpService::<(), _, _, _, _, _, _>::new(
                     factory().await,
                 )))
             },
