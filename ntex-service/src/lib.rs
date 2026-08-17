@@ -31,7 +31,7 @@ mod then;
 mod util;
 
 pub use self::apply::{apply_fn, apply_fn_factory};
-pub use self::chain::{ServiceChain, ServiceChainFactory, chain, chain_factory};
+pub use self::chain::{ServiceChain, ServiceChainFactory, chain, factory, factory_with_state};
 pub use self::ctx::{Ctx, ReadyCtx};
 pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
 pub use self::fn_shutdown::fn_shutdown;
@@ -79,7 +79,6 @@ pub use self::pipeline::{
 /// struct MyService;
 ///
 /// impl Service for MyService {
-///     type St = ();
 ///     type Req = u8;
 ///     type Res = u64;
 ///     type Error = Infallible;
@@ -184,9 +183,6 @@ pub trait Service<St = ()> {
 /// Simple factories can often use [`fn_factory`] or [`fn_factory_with_config`]
 /// to reduce boilerplate.
 pub trait ServiceFactory<Req, St = ()> {
-    //// Shared service state that should be accessible during processing.
-    //type St;
-
     /// Responses given by the created services.
     type Res;
 
@@ -216,7 +212,7 @@ pub trait ServiceFactory<Req, St = ()> {
         Req: 'static,
         St: State<Req> + 'static,
     {
-        Ok(Pipeline::new(self.create(cfg).await?))
+        Ok(Pipeline::with(self.create(cfg).await?))
     }
 
     #[inline]
@@ -226,7 +222,7 @@ pub trait ServiceFactory<Req, St = ()> {
         Self: Sized,
         F: Fn(Self::Res) -> Res + Clone,
     {
-        chain_factory(dev::MapFactory::new(self, f))
+        factory_with_state(dev::MapFactory::new(self, f))
     }
 
     #[inline]
@@ -237,7 +233,7 @@ pub trait ServiceFactory<Req, St = ()> {
         Self: Sized,
         F: Fn(Self::Error) -> E + Clone,
     {
-        chain_factory(dev::MapErrFactory::new(self, f))
+        factory_with_state(dev::MapErrFactory::new(self, f))
     }
 
     #[inline]
@@ -248,7 +244,7 @@ pub trait ServiceFactory<Req, St = ()> {
         Self: Sized,
         F: Fn(Self::InitError) -> E + Clone,
     {
-        chain_factory(dev::MapInitErr::new(self, f))
+        factory_with_state(dev::MapInitErr::new(self, f))
     }
 
     /// Creates a boxed service factory.

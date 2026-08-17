@@ -125,7 +125,7 @@ where
         H1Service {
             sf: self.sf,
             config: self.config,
-            ctl: Pipeline::new(ctl.into_service().map_err(dyn_rc_err)),
+            ctl: Pipeline::with(ctl.into_service().map_err(dyn_rc_err)),
             _t: marker::PhantomData,
         }
     }

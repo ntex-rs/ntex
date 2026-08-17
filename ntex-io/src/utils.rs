@@ -1,6 +1,6 @@
 use std::{cell::Cell, task::Poll, task::Waker};
 
-use ntex_service::{IntoServiceFactory, ServiceFactory, chain_factory, fn_service};
+use ntex_service::{IntoServiceFactory, ServiceFactory, factory_with_state};
 use ntex_util::task::LocalWaker;
 
 use crate::{Filter, Io, IoBoxed, IoCallbacks};
@@ -29,7 +29,7 @@ where
     F: Filter,
     Sf: ServiceFactory<IoBoxed, St>,
 {
-    chain_factory(fn_service(async |io: Io<F>| Ok(io.boxed())))
+    factory_with_state(async |io: Io<F>| Ok(io.boxed()))
         .map_init_err(|_| unreachable!())
         .and_then(f.into_factory())
 }
@@ -129,7 +129,7 @@ impl Extensions {
 mod tests {
     use ntex_bytes::{BytePageSize, Bytes};
     use ntex_codec::BytesCodec;
-    use ntex_service::cfg::SharedCfg;
+    use ntex_service::{cfg::SharedCfg, factory};
 
     use super::*;
     use crate::{buf::Stack, filter::NullFilter, testing::IoTest};
@@ -140,15 +140,15 @@ mod tests {
         client.remote_buffer_cap(1024);
         client.write("REQ");
 
-        let svc = seal(|io: IoBoxed| async move {
+        let svc = factory(seal(|io: IoBoxed| async move {
             let t = io.recv(&BytesCodec).await.unwrap().unwrap();
             assert_eq!(t, b"REQ".as_ref());
             io.send(Bytes::from_static(b"RES"), &BytesCodec)
                 .await
                 .unwrap();
             Ok::<_, ()>(())
-        })
-        .pipeline::<()>(&())
+        }))
+        .pipeline(&())
         .await
         .unwrap();
         let _ = svc.call(Io::new(server, SharedCfg::default())).await;

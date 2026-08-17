@@ -226,7 +226,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_pipeline_factory() {
-        let new_srv = crate::chain_factory(fn_factory(|| async { Ok::<_, ()>(Srv::default()) }))
+        let new_srv = crate::factory(fn_factory(|| async { Ok::<_, ()>(Srv::default()) }))
             .map(|()| "ok")
             .clone();
         let srv = Pipeline::new(new_srv.create(&()).await.unwrap());

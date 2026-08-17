@@ -159,7 +159,7 @@ where
 mod tests {
     use std::{pin::Pin, task::Context, task::Poll, task::ready};
 
-    use ntex_service::{Pipeline, boxed};
+    use ntex_service::{Pipeline, boxed, factory};
 
     use super::*;
     use crate::{channel::oneshot, spawn};
@@ -168,7 +168,7 @@ mod tests {
     struct TestErr;
 
     struct Dispatcher {
-        p: Pipeline<boxed::BoxService<(), usize, usize, TestErr>>,
+        p: Pipeline<usize, usize, TestErr>,
         tx: Option<oneshot::Sender<()>>,
     }
 
@@ -191,14 +191,14 @@ mod tests {
 
     #[ntex::test]
     async fn test_ka() {
-        let factory = KeepAlive::new(Millis(100), || TestErr);
+        let factory = factory(KeepAlive::new(Millis(100), || TestErr));
         assert!(format!("{factory:?}").contains("KeepAlive"));
         let _ = factory.clone();
 
         let svc = factory.create(&()).await.unwrap();
         assert!(format!("{svc:?}").contains("KeepAliveService"));
 
-        let p = Pipeline::new::<()>(boxed::service(svc));
+        let p = Pipeline::new(boxed::service(svc));
         assert_eq!(p.call(1usize).await, Ok(1usize));
         let svc = p.bind();
 

@@ -150,7 +150,6 @@ mod tests {
     #[derive(Copy, Clone, Debug, PartialEq)]
     struct Svc1;
     impl Service for Svc1 {
-        type St = ();
         type Req = ();
         type Res = &'static str;
         type Error = ();
@@ -163,7 +162,6 @@ mod tests {
     #[derive(Clone)]
     struct Svc1Factory;
     impl ServiceFactory<()> for Svc1Factory {
-        type St = ();
         type Res = &'static str;
         type Error = ();
 
@@ -179,7 +177,6 @@ mod tests {
     #[derive(Copy, Clone, Debug, PartialEq)]
     struct Svc2;
     impl Service for Svc2 {
-        type St = ();
         type Req = ();
         type Res = &'static str;
         type Error = ();
@@ -192,7 +189,6 @@ mod tests {
     #[derive(Clone)]
     struct Svc2Factory;
     impl ServiceFactory<()> for Svc2Factory {
-        type St = ();
         type Res = &'static str;
         type Error = ();
 

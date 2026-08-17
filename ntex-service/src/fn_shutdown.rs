@@ -97,7 +97,7 @@ where
 mod tests {
     use std::{future::poll_fn, rc::Rc};
 
-    use crate::{chain_factory, fn_service};
+    use crate::{Pipeline, factory, fn_service};
 
     use super::*;
 
@@ -110,12 +110,14 @@ mod tests {
             is_called2.set(true);
         });
 
-        let pipe = chain_factory(srv)
-            .and_then(on_shutdown)
-            .clone()
-            .pipeline::<()>(&())
-            .await
-            .unwrap();
+        let pipe = Pipeline::new(
+            factory(srv)
+                .and_then(on_shutdown)
+                .clone()
+                .create(&())
+                .await
+                .unwrap(),
+        );
 
         let res = pipe.call(()).await;
         assert_eq!(pipe.ready().await, Ok(()));
@@ -124,32 +126,11 @@ mod tests {
         assert!(!pipe.is_shutdown());
         pipe.shutdown().await;
         assert!(is_called.get());
-        assert!(!pipe.is_shutdown());
+        assert!(pipe.is_shutdown());
 
         poll_fn(|cx| pipe.poll_shutdown(cx)).await;
         assert!(pipe.is_shutdown());
 
         let _ = format!("{pipe:?}");
-    }
-
-    #[ntex::test]
-    #[should_panic]
-    #[allow(clippy::should_panic_without_expect)]
-    async fn test_fn_shutdown_panic() {
-        let is_called = Rc::new(Cell::new(false));
-        let is_called2 = is_called.clone();
-        let on_shutdown = fn_shutdown::<(), _, (), ()>(async move || {
-            is_called2.set(true);
-        });
-
-        let pipe = chain_factory(on_shutdown)
-            .pipeline::<()>(&())
-            .await
-            .unwrap();
-        pipe.shutdown().await;
-        assert!(is_called.get());
-        assert!(!pipe.is_shutdown());
-
-        let _factory = pipe.get_ref().create(&()).await;
     }
 }

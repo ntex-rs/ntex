@@ -82,13 +82,12 @@ where
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use crate::{Ctx, ReadyCtx, Service, chain, chain_factory, fn_factory};
+    use crate::{Ctx, ReadyCtx, Service, chain, factory, fn_factory};
 
     #[derive(Debug, Clone)]
     struct Srv1(Rc<Cell<usize>>, Rc<Cell<usize>>);
 
     impl Service for Srv1 {
-        type St = ();
         type Req = &'static str;
         type Res = &'static str;
         type Error = ();
@@ -111,7 +110,6 @@ mod tests {
     struct Srv2(Rc<Cell<usize>>, Rc<Cell<usize>>);
 
     impl Service for Srv2 {
-        type St = ();
         type Req = &'static str;
         type Res = (&'static str, &'static str);
         type Error = ();
@@ -136,16 +134,16 @@ mod tests {
         let cnt_sht = Rc::new(Cell::new(0));
         let srv = chain(Box::new(Srv1(cnt.clone(), cnt_sht.clone())))
             .clone()
-            .and_then(crate::boxed::service(Srv2(cnt.clone(), cnt_sht.clone())))
-            .into_pipeline();
+            .and_then(crate::boxed::service(Srv2(cnt.clone(), cnt_sht.clone())));
+        assert!(format!("{srv:?}").contains("AndThen"));
+
+        let srv = srv.into_pipeline();
         let res = srv.ready().await;
         assert_eq!(res, Ok(()));
         assert_eq!(cnt.get(), 2);
 
         srv.shutdown().await;
         assert_eq!(cnt_sht.get(), 2);
-
-        assert!(format!("{srv:?}").contains("AndThen"));
     }
 
     #[ntex::test]
@@ -176,7 +174,7 @@ mod tests {
     async fn test_factory() {
         let cnt = Rc::new(Cell::new(0));
         let cnt2 = cnt.clone();
-        let new_srv = chain_factory(fn_factory(move || {
+        let new_srv = factory(fn_factory(move || {
             let cnt = cnt2.clone();
             async move { Ok::<_, ()>(Srv1(cnt, Rc::new(Cell::new(0)))) }
         }))

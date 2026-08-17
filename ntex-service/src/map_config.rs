@@ -124,20 +124,21 @@ mod tests {
     use std::{cell::Cell, rc::Rc};
 
     use super::*;
+    use crate::{Pipeline, factory};
 
     #[ntex::test]
     async fn test_map_config() {
         let item = Rc::new(Cell::new(1usize));
 
         let factory = map_config(
-            async move |item: usize| Ok::<_, ()>(item),
+            factory(async move |item: usize| Ok::<_, ()>(item)),
             |t: &usize| {
                 item.set(item.get() + *t);
             },
         )
         .clone();
 
-        let svc = factory.pipeline::<()>(&10).await.unwrap();
+        let svc = Pipeline::new(factory.create(&10).await.unwrap());
         assert_eq!(item.get(), 11);
         let _ = format!("{factory:?}");
 
@@ -146,11 +147,12 @@ mod tests {
 
     #[ntex::test]
     async fn test_unit_config() {
-        let svc = unit_config(async move |item: usize| Ok::<_, ()>(item))
-            .clone()
-            .pipeline::<()>(&10)
-            .await
-            .unwrap();
+        let svc = Pipeline::new(
+            unit_config(factory(async move |item: usize| Ok::<_, ()>(item)).clone())
+                .create(&10)
+                .await
+                .unwrap(),
+        );
         assert_eq!(svc.call(1).await.unwrap(), 1);
     }
 }

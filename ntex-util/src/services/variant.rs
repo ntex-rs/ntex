@@ -7,9 +7,11 @@ use ntex_service::{Ctx, IntoServiceFactory, ReadyCtx, Service, ServiceFactory};
 /// Construct `Variant` service factory.
 ///
 /// Variant service allow to combine multiple different services into a single service.
-pub fn variant<V1: ServiceFactory<V1R, St>, St, V1R>(factory: V1) -> Variant<V1, St, V1R> {
+pub fn variant<V1: ServiceFactory<V1R, St>, St, V1R>(
+    f: impl IntoServiceFactory<V1, St, V1R>,
+) -> Variant<V1, St, V1R> {
     Variant {
-        factory,
+        factory: f.into_factory(),
         _t: PhantomData,
     }
 }
@@ -25,7 +27,10 @@ where
     A: ServiceFactory<AR, St>,
 {
     /// Convert to a Variant with two request types
-    pub fn v2<B, BR, F>(self, factory: F) -> VariantFactory2<St, A, B, AR, BR>
+    pub fn v2<B, BR>(
+        self,
+        f: impl IntoServiceFactory<B, St, BR>,
+    ) -> VariantFactory2<St, A, B, AR, BR>
     where
         B: ServiceFactory<
                 BR,
@@ -35,11 +40,10 @@ where
                 InitCfg = A::InitCfg,
                 InitError = A::InitError,
             >,
-        F: IntoServiceFactory<B, St, BR>,
     {
         VariantFactory2 {
             V1: self.factory,
-            V2: factory.into_factory(),
+            V2: f.into_factory(),
             _t: PhantomData,
         }
     }
@@ -242,7 +246,7 @@ variant_impl_and!(VariantFactory7, VariantFactory8, V8, V8R, v8, (V2, V3, V4, V5
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unused_async_trait_impl)]
-    use ntex_service::{fn_factory, fn_service};
+    use ntex_service::{Pipeline, fn_factory, fn_service};
 
     use super::*;
     use crate::time;
@@ -251,7 +255,6 @@ mod tests {
     struct Srv1;
 
     impl Service for Srv1 {
-        type St = ();
         type Req = ();
         type Res = usize;
         type Error = ();
@@ -271,7 +274,6 @@ mod tests {
     struct Srv2;
 
     impl Service for Srv2 {
-        type St = ();
         type Req = ();
         type Res = usize;
         type Error = ();
@@ -315,7 +317,6 @@ mod tests {
         struct Srv5;
 
         impl Service for Srv5 {
-            type St = ();
             type Req = ();
             type Res = usize;
             type Error = ();
@@ -332,15 +333,15 @@ mod tests {
             }
         }
 
-        let factory = variant(fn_service(|()| async { Ok::<_, ()>(0) }))
-            .v2(fn_factory(|| async { Ok::<_, ()>(Srv5) }))
-            .v3(fn_service(|()| crate::future::Ready::Ok::<_, ()>(2)));
+        let factory = variant(fn_service(async |()| Ok::<_, ()>(0)))
+            .v2(fn_factory(async || Ok::<_, ()>(Srv5)).map_init_err(|_| unreachable!()))
+            .v3(fn_service(async |()| Ok::<_, ()>(2)));
         assert!(format!("{factory:?}").contains("Variant"));
 
         let service = factory.clone().create(&()).await.unwrap().clone();
         assert!(format!("{service:?}").contains("Variant"));
 
-        let service = factory.pipeline(&()).await.unwrap();
+        let service = Pipeline::new(factory.create(&()).await.unwrap());
         assert!(service.ready().await.is_ok());
         assert!(format!("{service:?}").contains("Variant"));
     }

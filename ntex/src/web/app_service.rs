@@ -5,7 +5,7 @@ use crate::router::{Path, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::cfg::SharedCfg;
 use crate::service::dev::ServiceChainFactory;
-use crate::service::{Ctx, Middleware, ReadyCtx, Service, ServiceFactory, fn_service};
+use crate::service::{Ctx, Middleware, ReadyCtx, Service, ServiceFactory, factory};
 use crate::util::{BoxFuture, Extensions, join};
 
 use super::error::{AppInitError, ErrorRenderer};
@@ -73,7 +73,7 @@ where
         // update resource default service
         let default = self.default.clone().unwrap_or_else(|| {
             Rc::new(boxed::factory(
-                fn_service(|req: WebRequest<Err>| async move {
+                factory(async move |req: WebRequest<Err>| {
                     Ok(req.into_response(Response::NotFound().finish()))
                 })
                 .map_init_err(|_| unreachable!()),

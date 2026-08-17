@@ -1,7 +1,7 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use ntex_io::Io;
-use ntex_service::{Pipeline, Service, State, cfg::SharedCfg};
+use ntex_service::{IntoService, Pipeline, Service, State, cfg::SharedCfg};
 use ntex_util::{future::BoxFuture, services::counter::CounterGuard};
 
 use super::Token;
@@ -29,13 +29,14 @@ struct Factory {
     wrapper: Box<dyn FactoryWrapper + Send>,
 }
 
-pub(crate) fn create_factory_service<F, S, St>(
+pub(crate) fn create_factory_service<F, S, St, I>(
     name: String,
     tokens: Vec<(Token, SharedCfg)>,
     f: F,
 ) -> FactoryServiceType
 where
-    F: AsyncFn() -> Result<S, &'static str> + Send + Clone + 'static,
+    F: AsyncFn() -> I + Send + Clone + 'static,
+    I: IntoService<S, St> + 'static,
     S: Service<St, Req = Io> + 'static,
     St: State<Io> + 'static,
 {
@@ -62,23 +63,24 @@ impl FactoryService for Factory {
         let tokens = self.tokens.clone();
         let factory_fut = self.wrapper.create();
 
-        Box::pin(async move { Ok(vec![(factory_fut.await?, name, tokens)]) })
+        Box::pin(async move { Ok(vec![(factory_fut.await, name, tokens)]) })
     }
 }
 
 trait FactoryWrapper: Send {
     fn clone(&self) -> Box<dyn FactoryWrapper>;
-    fn create(&self) -> BoxFuture<'static, Result<Box<dyn NetService>, &'static str>>;
+    fn create(&self) -> BoxFuture<'static, Box<dyn NetService>>;
 }
 
-struct FactoryWrapperImpl<F, S, St> {
+struct FactoryWrapperImpl<F, S, St, I> {
     f: F,
-    s: PhantomData<(S, St)>,
+    s: PhantomData<(S, St, I)>,
 }
 
-impl<F, S, St> FactoryWrapper for FactoryWrapperImpl<F, S, St>
+impl<F, S, St, I> FactoryWrapper for FactoryWrapperImpl<F, S, St, I>
 where
-    F: AsyncFn() -> Result<S, &'static str> + Send + Clone + 'static,
+    F: AsyncFn() -> I + Send + Clone + 'static,
+    I: IntoService<S, St> + 'static,
     S: Service<St, Req = Io> + 'static,
     St: State<Io> + 'static,
 {
@@ -89,14 +91,14 @@ where
         })
     }
 
-    fn create(&self) -> BoxFuture<'static, Result<Box<dyn NetService>, &'static str>> {
+    fn create(&self) -> BoxFuture<'static, Box<dyn NetService>> {
         let f = self.f.clone();
 
         Box::pin(async move {
-            let svc = (f)().await?;
-            let pipeline = Pipeline::new(svc.map(|_| ()).map_err(|_| ()));
+            let svc = (f)().await.into_service();
+            let pipeline = Pipeline::with(svc.map(|_| ()).map_err(|_| ()));
             let svc: Box<dyn NetService> = Box::new(ServerService { pipeline });
-            Ok(svc)
+            svc
         })
     }
 }
@@ -126,4 +128,4 @@ impl NetService for ServerService {
 // SAFETY: Send cannot be provided authomatically because of E and R params
 // but R always get executed in one thread and never leave it
 unsafe impl Send for Factory {}
-unsafe impl<F, S, St> Send for FactoryWrapperImpl<F, S, St> {}
+unsafe impl<F, S, St, I> Send for FactoryWrapperImpl<F, S, St, I> {}

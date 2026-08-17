@@ -144,7 +144,7 @@ mod tests {
     #[ntex::test]
     async fn test_rustls_connect() {
         let server = ntex::server::test_server(async || {
-            ntex::service::fn_service(|_| async { Ok::<_, ()>(()) })
+            ntex::service::fn_service(async |_| Ok::<_, ()>(()))
         });
 
         let cert_store = webpki_roots::TLS_SERVER_ROOTS

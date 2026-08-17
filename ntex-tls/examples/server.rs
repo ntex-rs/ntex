@@ -1,6 +1,6 @@
 use std::io;
 
-use ntex::service::{chain_factory, fn_service};
+use ntex::service::{factory, fn_service};
 use ntex::{codec, io::Io, server, util::Either};
 use ntex_tls::openssl::{PeerCert, PeerCertChain, SslAcceptor};
 use tls_openssl::ssl::{self, SslFiletype, SslMethod, SslVerifyMode};

@@ -40,7 +40,7 @@ pub mod ws;
 pub use self::service::{
     Ctx, FromState, IntoService, IntoServiceFactory, Middleware, Pipeline, PipelineBinding,
     PipelineFactory, ReadyCtx, Service, ServiceFactory, State, cfg::Cfg, cfg::SharedCfg, chain,
-    chain_factory, fn_service,
+    factory, fn_service,
 };
 
 pub use ntex_util::{channel, task};

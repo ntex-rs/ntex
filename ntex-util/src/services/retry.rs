@@ -137,7 +137,6 @@ mod tests {
     struct TestService(Rc<Cell<usize>>);
 
     impl Service for TestService {
-        type St = ();
         type Req = ();
         type Res = ();
         type Error = ();

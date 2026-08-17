@@ -86,13 +86,12 @@ where
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use crate::{Ctx, ReadyCtx, Service, chain, chain_factory, fn_factory};
+    use crate::{Ctx, ReadyCtx, Service, chain, factory, fn_factory};
 
     #[derive(Clone)]
     struct Srv1(Rc<Cell<usize>>, Rc<Cell<usize>>);
 
     impl Service for Srv1 {
-        type St = ();
         type Req = Result<&'static str, &'static str>;
         type Res = &'static str;
         type Error = ();
@@ -122,7 +121,6 @@ mod tests {
     struct Srv2(Rc<Cell<usize>>, Rc<Cell<usize>>);
 
     impl Service for Srv2 {
-        type St = ();
         type Req = Result<&'static str, ()>;
         type Res = (&'static str, &'static str);
         type Error = ();
@@ -188,7 +186,7 @@ mod tests {
             let cnt = cnt2.clone();
             async move { Ok::<_, ()>(Srv1(cnt, Rc::new(Cell::new(0)))) }
         });
-        let factory = chain_factory(blank)
+        let factory = factory(blank)
             .then(fn_factory(move || {
                 let cnt = cnt.clone();
                 async move { Ok(Srv2(cnt.clone(), Rc::new(Cell::new(0)))) }

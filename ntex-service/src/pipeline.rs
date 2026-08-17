@@ -47,7 +47,7 @@ where
         st: &St,
     ) -> Result<Pipeline<Req, Sf::Res, Sf::Error>, Sf::InitError> {
         let svc = self.sf.create(cfg).await?;
-        Ok(Pipeline::with::<Sf::Service, Ust, St>(svc, st))
+        Ok(Pipeline::with_chained::<Sf::Service, Ust, St>(svc, st))
     }
 }
 
@@ -233,7 +233,12 @@ where
     }
 
     fn shutdown(&self) -> Pin<Box<dyn Future<Output = ()> + '_>> {
-        Box::pin(self.s.shutdown())
+        if self.waiters.is_shutdown() {
+            Box::pin(async {})
+        } else {
+            self.waiters.shutdown();
+            Box::pin(self.s.shutdown())
+        }
     }
 }
 
@@ -245,7 +250,16 @@ where
 {
     #[inline]
     /// Construct new service pipeline instance.
-    pub fn new<S, St>(f: impl IntoService<S, St>) -> Self
+    pub fn new<S>(f: impl IntoService<S, ()>) -> Self
+    where
+        S: Service<(), Req = Req, Res = Res, Error = Err> + 'static,
+    {
+        Self::create(f.into_service(), ())
+    }
+
+    #[inline]
+    /// Construct new service pipeline instance with state.
+    pub fn with<S, St>(f: impl IntoService<S, St>) -> Self
     where
         S: Service<St, Req = Req, Res = Res, Error = Err> + 'static,
         St: State<Req> + 'static,
@@ -255,7 +269,7 @@ where
 
     #[inline]
     /// Construct new service pipeline instance with state.
-    pub fn with<S, St, Chained>(f: impl IntoService<S, St>, chained: &Chained) -> Self
+    pub fn with_chained<S, St, Chained>(f: impl IntoService<S, St>, chained: &Chained) -> Self
     where
         S: Service<St, Req = Req, Res = Res, Error = Err> + 'static,
         St: State<Req> + FromState<Chained> + 'static,

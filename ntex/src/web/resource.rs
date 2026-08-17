@@ -3,7 +3,7 @@ use std::{cell::RefCell, fmt, rc::Rc};
 use crate::router::{IntoPattern, ResourceDef};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::dev::{AndThen, ServiceChain, ServiceChainFactory};
-use crate::service::{Ctx, cfg::SharedCfg, chain, chain_factory};
+use crate::service::{Ctx, cfg::SharedCfg, chain, factory};
 use crate::service::{Identity, IntoServiceFactory, Middleware, Service, ServiceFactory};
 use crate::{http::Response, util::Extensions};
 
@@ -64,7 +64,7 @@ impl<Err: ErrorRenderer> Resource<Err> {
             name: None,
             state: None,
             middleware: Identity,
-            filter: chain_factory(Filter::new()),
+            filter: factory(Filter::new()),
             guards: Vec::new(),
             default: Rc::new(RefCell::new(None)),
         }
@@ -315,7 +315,7 @@ where
     {
         // create and configure default resource
         self.default = Rc::new(RefCell::new(Some(Rc::new(boxed::factory(
-            chain_factory(f.into_factory()).map_init_err(|e| {
+            factory(f.into_factory()).map_init_err(|e| {
                 log::error!("Cannot construct default service: {e:?}");
             }),
         )))));

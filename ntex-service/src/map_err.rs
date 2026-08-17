@@ -157,7 +157,6 @@ mod tests {
     struct Srv(bool, Rc<Cell<usize>>);
 
     impl Service for Srv {
-        type St = ();
         type Req = ();
         type Res = ();
         type Error = ();
@@ -228,7 +227,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_pipeline_factory() {
-        let new_srv = crate::chain_factory(fn_factory(|| async {
+        let new_srv = crate::factory(fn_factory(|| async {
             Ok::<Srv, ()>(Srv(false, Rc::new(Cell::new(0))))
         }))
         .map_err(|()| "error")

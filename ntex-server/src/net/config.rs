@@ -1,7 +1,7 @@
 use std::{cell::RefCell, fmt, io, mem, net, rc::Rc, sync::Arc};
 
 use ntex_io::Io;
-use ntex_service::{Pipeline, Service, State, cfg::SharedCfg};
+use ntex_service::{IntoService, Pipeline, Service, State, cfg::SharedCfg};
 use ntex_util::{HashMap, future::BoxFuture, future::Ready};
 
 use super::factory::{FactoryService, FactoryServiceType, NetService, ServerService};
@@ -49,24 +49,21 @@ impl ServiceConfig {
     }
 
     /// Add new service to the server.
-    pub fn bind<U, N: AsRef<str>>(&self, name: N, addr: U) -> io::Result<&Self>
-    where
-        U: net::ToSocketAddrs,
-    {
+    pub fn bind(
+        &self,
+        name: impl AsRef<str>,
+        addr: impl net::ToSocketAddrs,
+        cfg: impl Into<SharedCfg>,
+    ) -> io::Result<&Self> {
         let mut inner = self.0.borrow_mut();
 
+        let cfg = cfg.into();
         let sockets = bind_addr(addr, inner.backlog)?;
         let socket = Socket {
             name: name.as_ref().to_string(),
             sockets: sockets
                 .into_iter()
-                .map(|lst| {
-                    (
-                        inner.token.next(),
-                        Listener::from_tcp(lst),
-                        SharedCfg::default(),
-                    )
-                })
+                .map(|lst| (inner.token.next(), Listener::from_tcp(lst), cfg.clone()))
                 .collect(),
         };
         inner.sockets.push(socket);
@@ -75,15 +72,16 @@ impl ServiceConfig {
     }
 
     /// Add new service to the server.
-    pub fn listen<N: AsRef<str>>(&self, name: N, lst: net::TcpListener) -> &Self {
+    pub fn listen(
+        &self,
+        name: impl AsRef<str>,
+        lst: net::TcpListener,
+        cfg: impl Into<SharedCfg>,
+    ) -> &Self {
         let mut inner = self.0.borrow_mut();
         let socket = Socket {
             name: name.as_ref().to_string(),
-            sockets: vec![(
-                inner.token.next(),
-                Listener::from_tcp(lst),
-                SharedCfg::default(),
-            )],
+            sockets: vec![(inner.token.next(), Listener::from_tcp(lst), cfg.into())],
         };
         inner.sockets.push(socket);
 
@@ -255,7 +253,7 @@ impl ServiceRuntime {
     /// # Panics
     ///
     /// Panics if service with specified name is registered already
-    pub fn service<S, St>(&self, name: &str, svc: S) -> &Self
+    pub fn service<S, St>(&self, name: &str, svc: impl IntoService<S, St>) -> &Self
     where
         S: Service<St, Req = Io> + 'static,
         St: State<Io> + 'static,
@@ -263,7 +261,7 @@ impl ServiceRuntime {
         let mut inner = self.0.borrow_mut();
         if let Some(entry) = inner.names.get_mut(name) {
             let idx = entry.idx;
-            let pipeline = Pipeline::new(svc.map(|_| ()).map_err(|_| ()));
+            let pipeline = Pipeline::with(svc.into_service().map(|_| ()).map_err(|_| ()));
             let svc: Box<dyn NetService> = Box::new(ServerService { pipeline });
             inner.services[idx] = Some(svc);
         } else {

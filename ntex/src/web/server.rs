@@ -199,15 +199,15 @@ where
     ///
     /// `HttpServer` does not change any configuration for `TcpListener`,
     /// it needs to be configured before passing it to `listen()` method.
-    pub fn listen(mut self, lst: net::TcpListener, cfg: SharedCfg) -> io::Result<Self> {
+    pub fn listen(mut self, lst: net::TcpListener, cfg: impl Into<SharedCfg>) -> io::Result<Self> {
         let factory = self.factory.clone();
         let addr = lst.local_addr().unwrap();
 
         self.builder = self.builder.listen(
             format!("ntex-web-service-{addr}"),
             lst,
-            cfg,
-            async move || Ok(HttpService::<(), _, _, _>::new(factory().await)),
+            cfg.into(),
+            async move || HttpService::<(), _, _, _>::new(factory().await),
         )?;
         Ok(self)
     }
@@ -219,10 +219,10 @@ where
     pub fn listen_openssl(
         self,
         lst: net::TcpListener,
-        cfg: SharedCfg,
+        cfg: impl Into<SharedCfg>,
         builder: SslAcceptorBuilder,
     ) -> io::Result<Self> {
-        self.listen_ssl_inner(lst, cfg, openssl_acceptor(builder)?)
+        self.listen_ssl_inner(lst, cfg.into(), openssl_acceptor(builder)?)
     }
 
     #[cfg(feature = "openssl")]
@@ -240,7 +240,7 @@ where
             lst,
             cfg,
             async move || {
-                Ok(HttpService::<(), _, _, _>::new(factory().await).openssl(acceptor.clone()))
+                HttpService::<(), _, _, _>::new(factory().await).openssl(acceptor.clone())
             },
         )?;
         Ok(self)
@@ -253,10 +253,10 @@ where
     pub fn listen_rustls(
         self,
         lst: net::TcpListener,
-        cfg: SharedCfg,
+        cfg: impl Into<SharedCfg>,
         config: RustlsServerConfig,
     ) -> io::Result<Self> {
-        self.listen_rustls_inner(lst, cfg, config)
+        self.listen_rustls_inner(lst, cfg.into(), config)
     }
 
     #[cfg(feature = "rustls")]
@@ -273,9 +273,7 @@ where
             format!("ntex-web-rustls-service-{addr}"),
             lst,
             cfg,
-            async move || {
-                Ok(HttpService::<(), _, _, _>::new(factory().await).rustls(config.clone()))
-            },
+            async move || HttpService::<(), _, _, _>::new(factory().await).rustls(config.clone()),
         )?;
         Ok(self)
     }
@@ -283,7 +281,12 @@ where
     /// The socket address to bind.
     ///
     /// To bind multiple addresses this method can be called multiple times.
-    pub fn bind<A: net::ToSocketAddrs>(mut self, addr: A, cfg: SharedCfg) -> io::Result<Self> {
+    pub fn bind<A: net::ToSocketAddrs>(
+        mut self,
+        addr: A,
+        cfg: impl Into<SharedCfg>,
+    ) -> io::Result<Self> {
+        let cfg = cfg.into();
         for lst in self.bind2(addr)? {
             self = self.listen(lst, cfg.clone())?;
         }
@@ -324,12 +327,13 @@ where
     pub fn bind_openssl<A>(
         mut self,
         addr: A,
-        cfg: SharedCfg,
         builder: SslAcceptorBuilder,
+        cfg: impl Into<SharedCfg>,
     ) -> io::Result<Self>
     where
         A: net::ToSocketAddrs,
     {
+        let cfg = cfg.into();
         let sockets = self.bind2(addr)?;
         let acceptor = openssl_acceptor(builder)?;
 
@@ -347,9 +351,10 @@ where
     pub fn bind_rustls<A: net::ToSocketAddrs>(
         mut self,
         addr: A,
-        cfg: SharedCfg,
         config: &RustlsServerConfig,
+        cfg: impl Into<SharedCfg>,
     ) -> io::Result<Self> {
+        let cfg = cfg.into();
         let sockets = self.bind2(addr)?;
         for lst in sockets {
             self = self.listen_rustls_inner(lst, cfg.clone(), config.clone())?;
@@ -364,14 +369,16 @@ where
     pub fn listen_uds(
         mut self,
         lst: std::os::unix::net::UnixListener,
-        cfg: SharedCfg,
+        cfg: impl Into<SharedCfg>,
     ) -> io::Result<Self> {
         let factory = self.factory.clone();
         let addr = format!("ntex-web-service-{:?}", lst.local_addr()?);
 
-        self.builder = self.builder.listen_uds(addr, lst, cfg, async move || {
-            Ok(HttpService::<(), _, _, _>::new(factory().await))
-        })?;
+        self.builder = self
+            .builder
+            .listen_uds(addr, lst, cfg.into(), async move || {
+                HttpService::<(), _, _, _>::new(factory().await)
+            })?;
         Ok(self)
     }
 
@@ -379,7 +386,7 @@ where
     /// Start listening for incoming unix domain connections.
     ///
     /// This method is available with `uds` feature.
-    pub fn bind_uds<A>(mut self, addr: A, cfg: SharedCfg) -> io::Result<Self>
+    pub fn bind_uds<A>(mut self, addr: A, cfg: impl Into<SharedCfg>) -> io::Result<Self>
     where
         A: AsRef<std::path::Path>,
     {
@@ -388,8 +395,8 @@ where
         self.builder = self.builder.bind_uds(
             format!("ntex-web-service-{:?}", addr.as_ref().display()),
             addr,
-            cfg,
-            async move || Ok(HttpService::<(), _, _, _>::new(factory().await)),
+            cfg.into(),
+            async move || HttpService::<(), _, _, _>::new(factory().await),
         )?;
         Ok(self)
     }

@@ -7,7 +7,7 @@ use tls_openssl::ssl::{
 
 use ntex::client::{Client, Connector};
 use ntex::http::{HttpService, Version, test::server as test_server};
-use ntex::service::chain_factory;
+use ntex::service::factory;
 use ntex::web::{self, App, HttpResponse};
 use ntex::{SharedCfg, time::Seconds, util::Ready};
 

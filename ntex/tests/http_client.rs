@@ -39,8 +39,7 @@ const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
 #[ntex::test]
 async fn test_simple() {
     let srv = test::server(async || {
-        App::new()
-            .service(web::resource("/").route(web::to(|| async { HttpResponse::Ok().body(STR) })))
+        App::new().service(web::resource("/").route(web::to(async || HttpResponse::Ok().body(STR))))
     })
     .await;
 
@@ -62,13 +61,12 @@ async fn test_simple() {
 
 #[ntex::test]
 async fn test_json() {
-    let srv =
-        test::server(async || {
-            App::new().service(web::resource("/").route(web::to(
-                |_: web::types::Json<String>| async { HttpResponse::Ok() },
-            )))
-        })
-        .await;
+    let srv = test::server(async || {
+        App::new().service(web::resource("/").route(web::to(
+            async |_: web::types::Json<String>| HttpResponse::Ok(),
+        )))
+    })
+    .await;
 
     let response = srv
         .get("/")
@@ -83,7 +81,7 @@ async fn test_json() {
 async fn test_form() {
     let srv = test::server(async || {
         App::new().service(web::resource("/").route(web::to(
-            |_: web::types::Form<HashMap<String, String>>| async { HttpResponse::Ok() },
+            async |_: web::types::Form<HashMap<String, String>>| HttpResponse::Ok(),
         )))
     })
     .await;
@@ -122,7 +120,7 @@ async fn test_timeout() {
 #[ntex::test]
 async fn test_timeout_override() {
     let srv = test::server(async || {
-        App::new().service(web::resource("/").route(web::to(|| async {
+        App::new().service(web::resource("/").route(web::to(async || {
             sleep(Millis(2000)).await;
             HttpResponse::Ok().body(STR)
         })))
@@ -368,7 +366,7 @@ async fn test_connection_wait_queue_force_close() {
 #[ntex::test]
 async fn test_with_query_parameter() {
     let srv = test::server(async || {
-        App::new().service(web::resource("/").to(|req: HttpRequest| async move {
+        App::new().service(web::resource("/").to(async move |req: HttpRequest| {
             if req.query_string().contains("qp") {
                 HttpResponse::Ok()
             } else {
@@ -391,7 +389,7 @@ async fn test_no_decompress() {
     let srv = test::server(async || {
         App::new()
             .middleware(Compress::default())
-            .service(web::resource("/").route(web::to(|| async {
+            .service(web::resource("/").route(web::to(async || {
                 let mut res = HttpResponse::Ok().body(STR);
                 res.encoding(header::ContentEncoding::Gzip);
                 res
@@ -440,7 +438,7 @@ async fn test_no_decompress() {
 #[ntex::test]
 async fn test_client_gzip_encoding() {
     let srv = test::server(async || {
-        App::new().service(web::resource("/").route(web::to(|| async {
+        App::new().service(web::resource("/").route(web::to(async || {
             let mut e = GzEncoder::new(Vec::new(), Compression::default());
             e.write_all(STR.as_ref()).unwrap();
             let data = e.finish().unwrap();
@@ -464,7 +462,7 @@ async fn test_client_gzip_encoding() {
 #[ntex::test]
 async fn test_client_gzip_encoding_large() {
     let srv = test::server(async || {
-        App::new().service(web::resource("/").route(web::to(|| async {
+        App::new().service(web::resource("/").route(web::to(async || {
             let mut e = GzEncoder::new(Vec::new(), Compression::default());
             e.write_all(STR.repeat(10).as_ref()).unwrap();
             let data = e.finish().unwrap();
@@ -496,7 +494,7 @@ async fn test_client_gzip_encoding_large_random() {
     let srv = test::server(async || {
         App::new()
             .state(web::types::PayloadConfig::default().limit(1_048_576))
-            .service(web::resource("/").route(web::to(|data: Bytes| async move {
+            .service(web::resource("/").route(web::to(async move |data: Bytes| {
                 let mut e = GzEncoder::new(Vec::new(), Compression::default());
                 e.write_all(&data).unwrap();
                 let data = e.finish().unwrap();
@@ -519,7 +517,7 @@ async fn test_client_gzip_encoding_large_random() {
 #[ntex::test]
 async fn test_client_deflate_encoding() {
     let srv = test::server(async || {
-        App::new().service(web::resource("/").route(web::to(|data: Bytes| async move {
+        App::new().service(web::resource("/").route(web::to(async move |data: Bytes| {
             let mut e = ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
             e.write_all(&data).unwrap();
             let data = e.finish().unwrap();
@@ -549,7 +547,7 @@ async fn test_client_deflate_encoding_large_random() {
         .collect::<String>();
 
     let srv = test::server(async || {
-        App::new().service(web::resource("/").route(web::to(|data: Bytes| async move {
+        App::new().service(web::resource("/").route(web::to(async move |data: Bytes| {
             let mut e = ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
             e.write_all(&data).unwrap();
             let data = e.finish().unwrap();
@@ -610,11 +608,11 @@ async fn test_client_cookie_handling() {
 
         App::new().route(
             "/",
-            web::to(web::dev::__assert_handler1(move |req: HttpRequest| {
-                let cookie1 = cookie1.clone();
-                let cookie2 = cookie2.clone();
+            web::to(web::dev::__assert_handler1(
+                async move |req: HttpRequest| {
+                    let cookie1 = cookie1.clone();
+                    let cookie2 = cookie2.clone();
 
-                async move {
                     // Check cookies were sent correctly
                     let res: Result<(), Error> = req
                         .cookie("cookie1")
@@ -628,8 +626,8 @@ async fn test_client_cookie_handling() {
 
                     // Send some cookies back
                     Ok::<_, Error>(HttpResponse::Ok().cookie(cookie1).cookie(cookie2).finish())
-                }
-            })),
+                },
+            )),
         )
     })
     .await;
@@ -709,7 +707,7 @@ async fn client_basic_auth() {
     let srv = test::server(async || {
         App::new().route(
             "/",
-            web::to(|req: HttpRequest| async move {
+            web::to(async move |req: HttpRequest| {
                 if req
                     .headers()
                     .get(header::AUTHORIZATION)
@@ -738,7 +736,7 @@ async fn client_bearer_auth() {
     let srv = test::server(async || {
         App::new().route(
             "/",
-            web::to(|req: HttpRequest| async move {
+            web::to(async move |req: HttpRequest| {
                 if req
                     .headers()
                     .get(header::AUTHORIZATION)
@@ -765,8 +763,7 @@ async fn client_bearer_auth() {
 #[ntex::test]
 async fn middleware() {
     let srv = test::server(async || {
-        App::new()
-            .service(web::resource("/").route(web::to(|| async { HttpResponse::Ok().body(STR) })))
+        App::new().service(web::resource("/").route(web::to(async || HttpResponse::Ok().body(STR))))
     })
     .await;
 
@@ -836,10 +833,10 @@ async fn test_h1_v2() {
 /// Server receives the truncated Host header.
 #[ntex::test]
 async fn untruncated_host_header() {
-    let srv = test::server(|| async {
+    let srv = test::server(async || {
         App::new().route(
             "/host",
-            web::get().to(|req: HttpRequest| async move {
+            web::get().to(async move |req: HttpRequest| {
                 req.headers()
                     .get(ntex::http::header::HOST)
                     .and_then(|v| v.to_str().ok())
@@ -866,10 +863,10 @@ async fn untruncated_host_header() {
 #[ntex::test]
 async fn test_query_method() {
     use ntex::util::BytesMut;
-    let srv = test::server(|| async {
+    let srv = test::server(async || {
         App::new().route(
             "/query",
-            web::query().to(|mut payload: web::types::Payload| async move {
+            web::query().to(async move |mut payload: web::types::Payload| {
                 let mut bytes = BytesMut::new();
                 while let Some(item) = ntex::util::stream_recv(&mut payload).await {
                     bytes.extend_from_slice(&item.unwrap());

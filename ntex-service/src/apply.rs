@@ -28,7 +28,7 @@ where
     F: AsyncFn(In, &ApplyCtx<'_, Sf::Service, St>) -> Result<Out, Err> + Clone,
     Err: From<Sf::Error>,
 {
-    crate::chain_factory(ApplyFactory::new(service.into_factory(), f))
+    crate::factory_with_state(ApplyFactory::new(service.into_factory(), f))
 }
 
 #[derive(Debug)]
@@ -212,13 +212,12 @@ mod tests {
     use std::{cell::Cell, rc::Rc};
 
     use super::*;
-    use crate::{chain, chain_factory, fn_factory};
+    use crate::{chain, factory, fn_factory};
 
     #[derive(Debug, Default, Clone)]
     struct Srv(Rc<Cell<usize>>);
 
     impl Service for Srv {
-        type St = ();
         type Req = ();
         type Res = ();
         type Error = ();
@@ -292,7 +291,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_create() {
-        let new_srv = chain_factory(
+        let new_srv = factory(
             apply_fn_factory(
                 fn_factory(|| async { Ok::<_, ()>(Srv::default()) }),
                 async move |req: &'static str, srv| {
@@ -317,7 +316,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_create_chain() {
-        let new_srv = chain_factory(fn_factory(|| async { Ok::<_, ()>(Srv::default()) }))
+        let new_srv = factory(fn_factory(|| async { Ok::<_, ()>(Srv::default()) }))
             .apply_fn(async move |req: &'static str, srv| {
                 srv.call(()).await.unwrap();
                 Ok((req, ()))

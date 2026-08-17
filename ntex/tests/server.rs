@@ -10,7 +10,7 @@ use ntex::server::{TestServer, build};
 use ntex::service::fn_service;
 use ntex::util::Ready;
 #[cfg(unix)]
-use ntex::{codec::BytesCodec, io::Io, util::Bytes};
+use ntex::{SharedCfg, codec::BytesCodec, io::Io, util::Bytes};
 
 #[test]
 fn test_bind() {
@@ -23,7 +23,7 @@ fn test_bind() {
             let srv = build()
                 .workers(1)
                 .disable_signals()
-                .bind("test", addr, async move |_| {
+                .bind("test", addr, SharedCfg::default(), async move || {
                     fn_service(|_| Ready::Ok::<_, ()>(()))
                 })
                 .unwrap()
@@ -52,7 +52,7 @@ async fn test_listen() {
             let srv = build()
                 .disable_signals()
                 .workers(1)
-                .listen("test", lst, async move |_| {
+                .listen("test", lst, SharedCfg::default(), async move || {
                     fn_service(|_| Ready::Ok::<_, ()>(()))
                 })
                 .unwrap()
@@ -85,14 +85,13 @@ async fn test_run() {
                 .backlog(100)
                 .workers(1)
                 .disable_signals()
-                .bind("test", addr, async move |_| {
+                .bind("test", addr, SharedCfg::new("SRV"), async move || {
                     fn_service(|io: Io| async move {
                         let _ = io.send(Bytes::from_static(b"test"), &BytesCodec).await;
                         Ok::<_, ()>(())
                     })
                 })
                 .unwrap()
-                .config("test", ntex::SharedCfg::new("SRV"))
                 .run();
             let _ = tx.send((srv, ntex::rt::System::current()));
             Ok(())
@@ -328,7 +327,7 @@ fn test_on_accept() {
         sys.run(move || {
             let srv = build()
                 .disable_signals()
-                .bind("test", addr, async move |_| {
+                .bind("test", addr, SharedCfg::default(), async move || {
                     fn_service(|io: Io| async move {
                         let _ = io.send(Bytes::from_static(b"test"), &BytesCodec).await;
                         Ok::<_, ()>(())
@@ -371,7 +370,7 @@ fn test_stop_on_panic() {
                 .graceful_shutdown()
                 .workers(1)
                 .disable_signals()
-                .bind("test", addr, async move |_| {
+                .bind("test", addr, SharedCfg::default(), async move || {
                     #[allow(unreachable_code)]
                     fn_service(async move |_| {
                         panic!("test");

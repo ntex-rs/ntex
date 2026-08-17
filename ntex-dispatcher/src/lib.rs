@@ -623,7 +623,7 @@ mod tests {
     use ntex_bytes::{BytePages, Bytes, BytesMut};
     use ntex_codec::BytesCodec;
     use ntex_io::{Flags, Io, IoConfig, IoRef, testing::IoTest};
-    use ntex_service::{Ctx, Pipeline, ReadyCtx, cfg::SharedCfg};
+    use ntex_service::{Ctx, Pipeline, ReadyCtx, Service, cfg::SharedCfg};
     use ntex_util::{channel::oneshot, time::Millis, time::sleep};
     use rand::Rng;
 
@@ -671,13 +671,15 @@ mod tests {
         }
     }
 
-    impl<S, U> Dispatcher<S, U>
+    impl<U, Err> Dispatcher<U, Err>
     where
-        S: Service<St = (), Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
         U: Decoder + Encoder + 'static,
     {
         /// Construct new `Dispatcher` instance
-        pub(crate) fn debug(io: Io, codec: U, service: S) -> (Self, State) {
+        pub(crate) fn debug<S>(io: Io, codec: U, service: S) -> (Self, State)
+        where
+            S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>, Error = Err> + 'static,
+        {
             let flags = if io.cfg().keepalive_timeout().is_zero() {
                 super::Flags::empty()
             } else {
@@ -837,7 +839,6 @@ mod tests {
         struct Srv(Rc<Cell<usize>>);
 
         impl Service for Srv {
-            type St = ();
             type Req = DispatchItem<BytesCodec>;
             type Res = Option<Response<BytesCodec>>;
             type Error = &'static str;
@@ -1323,7 +1324,6 @@ mod tests {
         );
 
         impl Service for Srv {
-            type St = ();
             type Req = DispatchItem<BytesCodec>;
             type Res = Option<Bytes>;
             type Error = ();

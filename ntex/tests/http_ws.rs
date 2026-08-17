@@ -32,7 +32,6 @@ impl Clone for WsService {
 }
 
 impl Service for WsService {
-    type St = ();
     type Req = (Request, Io, h1::Codec);
     type Res = ();
     type Error = io::Error;
@@ -55,7 +54,7 @@ impl Service for WsService {
         io.set_config(
             SharedCfg::new("WS-SRV").add(IoConfig::new().set_keepalive_timeout(Seconds(0))),
         );
-        Dispatcher::new(io.seal(), ws::Codec::new(), Pipeline::new::<()>(service))
+        Dispatcher::new(io.seal(), ws::Codec::new(), Pipeline::new(service))
             .await
             .map_err(|_| panic!())
     }
@@ -372,7 +371,7 @@ async fn test_stale_timer_after_ws_upgrade() {
                             Dispatcher::new(
                                 io.seal(),
                                 ws::Codec::new(),
-                                Pipeline::new::<()>(InFlightService::new(
+                                Pipeline::new(InFlightService::new(
                                     1,
                                     ntex::service::fn_service(slow_ws_service),
                                 )),

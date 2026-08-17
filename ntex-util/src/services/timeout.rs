@@ -162,7 +162,6 @@ mod tests {
     }
 
     impl Service for SleepService {
-        type St = ();
         type Req = ();
         type Res = ();
         type Error = SrvError;
@@ -212,7 +211,7 @@ mod tests {
 
         let timeout = apply(
             Timeout::new(resolution).clone(),
-            fn_factory(|| async { Ok::<_, ()>(SleepService(wait_time)) }),
+            fn_factory(async move || Ok::<_, ()>(SleepService(wait_time))),
         );
         let srv = timeout.pipeline(&()).await.unwrap();
 

@@ -128,7 +128,7 @@ where
     {
         H2Service {
             sf: self.sf,
-            ctl: Pipeline::new(ctl.into_service().map_err(dyn_rc_err)),
+            ctl: Pipeline::with(ctl.into_service().map_err(dyn_rc_err)),
             config: self.config,
             _t: marker::PhantomData,
         }

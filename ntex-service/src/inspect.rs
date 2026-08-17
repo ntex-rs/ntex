@@ -252,13 +252,12 @@ mod tests {
     use std::{cell::Cell, rc::Rc};
 
     use super::*;
-    use crate::{chain, chain_factory, fn_factory};
+    use crate::{chain, factory, fn_factory};
 
     #[derive(Debug, Clone)]
     struct Srv(bool, bool, Rc<Cell<usize>>);
 
     impl Service for Srv {
-        type St = ();
         type Req = ();
         type Res = ();
         type Error = ();
@@ -344,7 +343,7 @@ mod tests {
         let cnt = Rc::new(Cell::new(0));
         let cnt2 = cnt.clone();
         let cnt3 = cnt.clone();
-        let new_srv = chain_factory(fn_factory(async move || {
+        let new_srv = factory(fn_factory(async move || {
             Ok::<_, ()>(Srv(false, false, cnt2.clone()))
         }))
         .inspect(move |&()| cnt3.set(cnt3.get() + 1))
@@ -362,7 +361,7 @@ mod tests {
         let cnt = Rc::new(Cell::new(0));
         let cnt2 = cnt.clone();
         let cnt3 = cnt.clone();
-        let new_srv = chain_factory(fn_factory(async move || {
+        let new_srv = factory(fn_factory(async move || {
             Ok::<_, ()>(Srv(false, true, cnt2.clone()))
         }))
         .inspect_err(move |&()| cnt3.set(cnt3.get() + 1))

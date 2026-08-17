@@ -78,14 +78,7 @@ where
     S::InitError: fmt::Debug,
 {
     let srv = app.into_factory().map_init_err(|e| log::error!("{e:?}"));
-    srv.pipeline(
-        &SharedCfg::new("WEB")
-            .add(IoConfig::new())
-            .add(WebAppConfig::new())
-            .into(),
-    )
-    .await
-    .unwrap()
+    srv.pipeline(&SharedCfg::default()).await.unwrap()
 }
 
 /// Calls service and waits for response future completion.
@@ -673,40 +666,37 @@ where
             let srv = match cfg.stream {
                 StreamType::Tcp => match cfg.tp {
                     HttpVer::Http1 => builder.listen("test", tcp, c, async move || {
-                        Ok(HttpService::<(), _, _, _>::h1(factory().await))
+                        HttpService::<(), _, _, _>::h1(factory().await)
                     }),
                     HttpVer::Http2 => builder.listen("test", tcp, c, async move || {
-                        Ok(HttpService::<(), _, _, _>::h2(factory().await))
+                        HttpService::<(), _, _, _>::h2(factory().await)
                     }),
                     HttpVer::Both => builder.listen("test", tcp, c, async move || {
-                        Ok(HttpService::<(), _, _, _>::new(factory().await))
+                        HttpService::<(), _, _, _>::new(factory().await)
                     }),
                 },
                 #[cfg(feature = "openssl")]
                 StreamType::Openssl(acceptor) => match cfg.tp {
                     HttpVer::Http1 => builder.listen("test", tcp, c, async move || {
-                        Ok(HttpService::<(), _, _, _>::h1(factory().await)
-                            .openssl(acceptor.clone()))
+                        HttpService::<(), _, _, _>::h1(factory().await).openssl(acceptor.clone())
                     }),
                     HttpVer::Http2 => builder.listen("test", tcp, c, async move || {
-                        Ok(HttpService::<(), _, _, _>::h2(factory().await)
-                            .openssl(acceptor.clone()))
+                        HttpService::<(), _, _, _>::h2(factory().await).openssl(acceptor.clone())
                     }),
                     HttpVer::Both => builder.listen("test", tcp, c, async move || {
-                        Ok(HttpService::<(), _, _, _>::new(factory().await)
-                            .openssl(acceptor.clone()))
+                        HttpService::<(), _, _, _>::new(factory().await).openssl(acceptor.clone())
                     }),
                 },
                 #[cfg(feature = "rustls")]
                 StreamType::Rustls(config) => match cfg.tp {
                     HttpVer::Http1 => builder.listen("test", tcp, c, async move || {
-                        Ok(HttpService::<(), _, _, _>::h1(factory().await).rustls(config.clone()))
+                        HttpService::<(), _, _, _>::h1(factory().await).rustls(config.clone())
                     }),
                     HttpVer::Http2 => builder.listen("test", tcp, c, async move || {
-                        Ok(HttpService::<(), _, _, _>::h2(factory().await).rustls(config.clone()))
+                        HttpService::<(), _, _, _>::h2(factory().await).rustls(config.clone())
                     }),
                     HttpVer::Both => builder.listen("test", tcp, c, async move || {
-                        Ok(HttpService::<(), _, _, _>::new(factory().await).rustls(config.clone()))
+                        HttpService::<(), _, _, _>::new(factory().await).rustls(config.clone())
                     }),
                 },
             }

@@ -24,7 +24,20 @@ where
 }
 
 /// Constructs new chain factory with one service factory.
-pub fn chain_factory<Sf, St, Req>(
+pub fn factory<Sf, Req>(
+    factory: impl IntoServiceFactory<Sf, (), Req>,
+) -> ServiceChainFactory<Sf, (), Req>
+where
+    Sf: ServiceFactory<Req, ()>,
+{
+    ServiceChainFactory {
+        factory: factory.into_factory(),
+        _t: PhantomData,
+    }
+}
+
+/// Constructs new chain factory with one service factory.
+pub fn factory_with_state<Sf, St, Req>(
     factory: impl IntoServiceFactory<Sf, St, Req>,
 ) -> ServiceChainFactory<Sf, St, Req>
 where
@@ -155,7 +168,7 @@ impl<S: Service<St>, St> ServiceChain<S, St> {
         S: 'static,
         St: State<S::Req> + 'static,
     {
-        Pipeline::new(self.service)
+        Pipeline::with(self.service)
     }
 }
 
@@ -226,7 +239,7 @@ impl<Sf: ServiceFactory<Req, St>, St, Req> ServiceChainFactory<Sf, St, Req> {
 
     /// Apply Middleware to current service factory.
     ///
-    /// Short version of `apply(middleware, chain_factory(...))`
+    /// Short version of `apply(middleware, factory(...))`
     pub fn apply<U>(self, tr: U) -> ServiceChainFactory<ApplyMiddleware<U, Sf>, St, Req>
     where
         U: Middleware<Sf::Service, Sf::InitCfg>,
@@ -236,7 +249,7 @@ impl<Sf: ServiceFactory<Req, St>, St, Req> ServiceChainFactory<Sf, St, Req> {
 
     /// Apply function middleware to current service factory.
     ///
-    /// Short version of `apply_fn_factory(chain_factory(...), fn)`
+    /// Short version of `apply_fn_factory(factory(...), fn)`
     pub fn apply_fn<F, In, Out, Err>(
         self,
         f: F,
@@ -347,7 +360,7 @@ impl<Sf: ServiceFactory<Req, St>, St, Req> ServiceChainFactory<Sf, St, Req> {
         St: State<Req> + 'static,
         Req: 'static,
     {
-        Ok(Pipeline::new(self.factory.create(cfg).await?))
+        Ok(Pipeline::with(self.factory.create(cfg).await?))
     }
 }
 

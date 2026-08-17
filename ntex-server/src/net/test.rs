@@ -5,22 +5,22 @@ use std::{fmt, io, marker::PhantomData, net, thread, time};
 use ntex_io::{Io, IoConfig};
 use ntex_net::tcp_connect;
 use ntex_rt::System;
-use ntex_service::{ServiceFactory, State, cfg::SharedCfg};
+use ntex_service::{IntoService, Service, State, cfg::SharedCfg};
 use socket2::{Domain, SockAddr, Socket, Type};
 use uuid::Uuid;
 
 use super::{Server, ServerBuilder};
 
 /// Test server builder
-pub struct TestServerBuilder<F, Sf, St> {
+pub struct TestServerBuilder<F, Sf, St, I> {
     id: Uuid,
     factory: F,
     config: SharedCfg,
     client_config: SharedCfg,
-    _t: PhantomData<(Sf, St)>,
+    _t: PhantomData<(Sf, St, I)>,
 }
 
-impl<F, Sf, St> fmt::Debug for TestServerBuilder<F, Sf, St> {
+impl<F, Sf, St, I> fmt::Debug for TestServerBuilder<F, Sf, St, I> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TestServerBuilder")
             .field("id", &self.id)
@@ -30,11 +30,12 @@ impl<F, Sf, St> fmt::Debug for TestServerBuilder<F, Sf, St> {
     }
 }
 
-impl<F, Sf, St> TestServerBuilder<F, Sf, St>
+impl<F, S, St, I> TestServerBuilder<F, S, St, I>
 where
-    F: AsyncFn() -> Sf + Send + Clone + 'static,
-    Sf: ServiceFactory<Io, St, InitCfg = SharedCfg> + 'static,
+    F: AsyncFn() -> I + Send + Clone + 'static,
+    S: Service<St, Req = Io> + 'static,
     St: State<Io> + 'static,
+    I: IntoService<S, St> + 'static,
 {
     #[must_use]
     /// Create test server builder
@@ -78,14 +79,8 @@ where
             let local_addr = tcp.local_addr().unwrap();
 
             sys.run(move || {
-                let cfg = config.clone();
-                let server = Server::builder()
-                    .listen("test", tcp, config, async move || {
-                        let sf = factory().await;
-                        sf.create(&cfg)
-                            .await
-                            .map_err(|_| "Cannot start test server")
-                    })?
+                let server = ServerBuilder::<St>::new()
+                    .listen("test", tcp, config, async move || factory().await)?
                     .workers(1)
                     .disable_signals()
                     .enable_affinity()
@@ -141,10 +136,11 @@ where
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub fn test_server<F, R>(factory: F) -> TestServer
+pub fn test_server<F, S, I>(factory: F) -> TestServer
 where
-    F: AsyncFn() -> R + Send + Clone + 'static,
-    R: ServiceFactory<Io, InitCfg = SharedCfg> + 'static,
+    F: AsyncFn() -> I + Send + Clone + 'static,
+    S: Service<(), Req = Io> + 'static,
+    I: IntoService<S, ()> + 'static,
 {
     TestServerBuilder::new(factory).start()
 }

@@ -84,7 +84,6 @@ mod tests {
     struct SleepService(oneshot::Receiver<()>);
 
     impl Service for SleepService {
-        type St = ();
         type Req = ();
         type Res = ();
         type Error = ();

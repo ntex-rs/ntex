@@ -91,7 +91,7 @@ where
         HttpService {
             sf: self.sf,
             config: self.config,
-            h1_ctl: Pipeline::new(ctl.into_service().map_err(dyn_rc_err)),
+            h1_ctl: Pipeline::with(ctl.into_service().map_err(dyn_rc_err)),
             h2_ctl: self.h2_ctl,
             _t: marker::PhantomData,
         }
@@ -108,7 +108,7 @@ where
             sf: self.sf,
             config: self.config,
             h1_ctl: self.h1_ctl,
-            h2_ctl: Pipeline::new(ctl.into_service().map_err(dyn_rc_err)),
+            h2_ctl: Pipeline::with(ctl.into_service().map_err(dyn_rc_err)),
             _t: marker::PhantomData,
         }
     }

@@ -870,10 +870,11 @@ async fn test_web_server() {
 
             web::server(async || {
                 App::new().service(
-                    web::resource("/").route(web::to(|| async { HttpResponse::Ok().body(STR) })),
+                    web::resource("/").route(web::to(async || HttpResponse::Ok().body(STR))),
                 )
             })
-            .config(
+            .listen(
+                tcp,
                 SharedCfg::new("TEST")
                     .add(IoConfig::new().set_disconnect_timeout(Seconds(1)))
                     .add(
@@ -882,7 +883,6 @@ async fn test_web_server() {
                             .set_payload_read_rate(Seconds(1), Seconds(5), 128),
                     ),
             )
-            .listen(tcp)
             .unwrap()
             .run()
             .await

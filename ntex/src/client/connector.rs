@@ -2,8 +2,8 @@ use std::{error::Error as StdError, time::Duration};
 
 use crate::connect::{self, Connect as TcpConnect, Connector as TcpConnector};
 use crate::error::{Error, ErrorMapping, with_service};
-use crate::service::{Ctx, Pipeline, ReadyCtx, Service, ServiceFactory, apply_fn_factory, boxed};
-use crate::{SharedCfg, http::Uri, io::IoBoxed, time::Seconds, util::join};
+use crate::service::{IntoServiceFactory, Pipeline, ReadyCtx, Service, apply_fn_factory, boxed};
+use crate::{Ctx, ServiceFactory, SharedCfg, http::Uri, io::IoBoxed, time::Seconds, util::join};
 
 use super::error::{ClientError, ConnectError};
 use super::{Connect, Connection, pool::ConnectionPool};
@@ -153,7 +153,7 @@ impl Connector {
 
     #[must_use]
     /// Use custom connector to open un-secured connections.
-    pub fn connector<T>(mut self, connector: T) -> Self
+    pub fn connector<T>(mut self, f: impl IntoServiceFactory<T, (), TcpConnect<Uri>>) -> Self
     where
         T: ServiceFactory<
                 TcpConnect<Uri>,
@@ -164,7 +164,7 @@ impl Connector {
         IoBoxed: From<T::Res>,
     {
         self.svc = boxed::factory(
-            apply_fn_factory(connector, async move |msg: Connect, svc| {
+            apply_fn_factory(f.into_factory(), async move |msg: Connect, svc| {
                 svc.call(TcpConnect::new(msg.uri).set_addr(msg.addr)).await
             })
             .map(IoBoxed::from)
@@ -176,7 +176,7 @@ impl Connector {
 
     #[must_use]
     /// Use custom connector to open secure connections.
-    pub fn secure_connector<T>(mut self, connector: T) -> Self
+    pub fn secure_connector<T>(mut self, f: impl IntoServiceFactory<T, (), TcpConnect<Uri>>) -> Self
     where
         T: ServiceFactory<
                 TcpConnect<Uri>,
@@ -187,7 +187,7 @@ impl Connector {
         IoBoxed: From<T::Res>,
     {
         self.secure_svc = Some(boxed::factory(
-            apply_fn_factory(connector, async move |msg: Connect, svc| {
+            apply_fn_factory(f.into_factory(), async move |msg: Connect, svc| {
                 svc.call(TcpConnect::new(msg.uri).set_addr(msg.addr)).await
             })
             .map(IoBoxed::from)

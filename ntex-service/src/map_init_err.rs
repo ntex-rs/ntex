@@ -70,11 +70,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::{ServiceFactory, chain_factory, fn_factory_with_config, fn_service};
+    use crate::{ServiceFactory, factory, fn_factory_with_config, fn_service};
 
     #[ntex::test]
     async fn map_init_err() {
-        let factory = chain_factory(fn_factory_with_config(async move |err: &bool| {
+        let factory = factory(fn_factory_with_config(async move |err: &bool| {
             if *err {
                 Err(())
             } else {
@@ -84,25 +84,25 @@ mod tests {
         .map_init_err(|()| std::io::Error::other("err"))
         .clone();
 
-        assert!(factory.pipeline::<()>(&true).await.is_err());
-        assert!(factory.pipeline::<()>(&false).await.is_ok());
+        assert!(factory.create(&true).await.is_err());
+        assert!(factory.create(&false).await.is_ok());
         let _ = format!("{factory:?}");
     }
 
     #[ntex::test]
     async fn map_init_err2() {
-        let factory = fn_factory_with_config(async |err: &bool| {
+        let factory = factory(fn_factory_with_config(async |err: &bool| {
             if *err {
                 Err(())
             } else {
                 Ok(fn_service(async |i: usize| Ok::<_, ()>(i * 2)))
             }
-        })
+        }))
         .map_init_err(|()| std::io::Error::other("err"))
         .clone();
 
-        assert!(factory.pipeline::<()>(&true).await.is_err());
-        assert!(factory.pipeline::<()>(&false).await.is_ok());
+        assert!(factory.create(&true).await.is_err());
+        assert!(factory.create(&false).await.is_ok());
         let _ = format!("{factory:?}");
     }
 }

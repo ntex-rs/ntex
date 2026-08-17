@@ -376,7 +376,6 @@ mod tests {
     struct Srv(Rc<Cell<usize>>, condition::Waiter);
 
     impl Service for Srv {
-        type St = ();
         type Req = &'static str;
         type Res = &'static str;
         type Error = ();

@@ -770,21 +770,17 @@ mod tests {
     use crate::http::h1::{DefaultControlService, control::Reason};
     use crate::http::{ResponseHead, StatusCode, body};
     use crate::io::{self as nio, Base};
-    use crate::service::{IntoService, State, cfg::SharedCfg, fn_service};
+    use crate::service::{IntoService, Service, cfg::SharedCfg, fn_service};
     use crate::util::{Bytes, BytesMut, lazy, stream_recv};
     use crate::{codec::Decoder, testing::IoTest, time::Millis, time::sleep};
 
     const BUFFER_SIZE: usize = 32_768;
 
     /// Create http/1 dispatcher.
-    pub(crate) fn h1<F, S, B>(
-        stream: IoTest,
-        service: F,
-    ) -> Dispatcher<Base, S, DefaultControlService<Base, S::Error>, B>
+    pub(crate) fn h1<F, S, B>(stream: IoTest, s: F) -> Dispatcher<Base, B, S::Error>
     where
         F: IntoService<S, ()>,
-        S: Service<(), Req = Request>,
-        S::St: State<S::Req>,
+        S: Service<(), Req = Request> + 'static,
         S::Res: Into<Response<B>>,
         S::Error: ResponseError + 'static,
         B: MessageBody,
@@ -800,17 +796,16 @@ mod tests {
         Dispatcher::new(
             0,
             nio::Io::new(stream, cfg.clone()),
-            Pipeline::new(service.into_service()),
+            Pipeline::new(s.into_service().map(|r| r.into())),
             Pipeline::new(DefaultControlService::new()).bind(),
             DispatcherConfig::default(),
         )
     }
 
-    pub(crate) fn spawn_h1<F, S, B>(stream: IoTest, service: F)
+    pub(crate) fn spawn_h1<F, S, B>(stream: IoTest, s: F)
     where
         F: IntoService<S, ()>,
         S: Service<(), Req = Request> + 'static,
-        S::St: State<S::Req>,
         S::Res: Into<Response<B>>,
         S::Error: ResponseError,
         B: MessageBody + 'static,
@@ -823,10 +818,10 @@ mod tests {
             )
             .into();
 
-        crate::rt::spawn(Dispatcher::<Base, S, _, B>::new(
+        crate::rt::spawn(Dispatcher::new(
             0,
             nio::Io::new(stream, cfg),
-            Pipeline::new(service.into_service()),
+            Pipeline::new(s.into_service().map(|r| r.into())),
             Pipeline::new(DefaultControlService::new()).bind(),
             DispatcherConfig::default(),
         ));
@@ -855,12 +850,12 @@ mod tests {
         let mut h1 = Dispatcher::new(
             0,
             nio::Io::new(server, config),
-            Pipeline::new::<()>(async |_| Ok::<_, io::Error>(Response::Ok().finish())),
-            Pipeline::new::<()>(fn_service(async move |req: Control<_, _>| {
+            Pipeline::new(async |_| Ok::<_, io::Error>(Response::Ok().finish())),
+            Pipeline::new(fn_service(async move |req: Control<_, _>| {
                 if let Control::Request(_) = req {
                     data2.set(true);
                 }
-                Ok::<_, std::convert::Infallible>(req.ack())
+                Ok::<_, Rc<dyn error::Error>>(req.ack())
             }))
             .bind(),
             DispatcherConfig::default(),
@@ -1260,17 +1255,17 @@ mod tests {
             )
             .into();
 
-        let disp: Dispatcher<Base, _, _, _> = Dispatcher::new(
+        let disp = Dispatcher::new(
             0,
             nio::Io::new(server, config),
-            Pipeline::new::<()>(svc.into_service()),
-            Pipeline::new::<()>(fn_service(move |msg: Control<_, _>| {
+            Pipeline::new(fn_service(svc)),
+            Pipeline::new(fn_service(async move |msg: Control<_, _>| {
                 if let Control::Disconnect(Reason::ProtocolError(ref err)) = msg
                     && matches!(err.err(), ProtocolError::SlowPayloadTimeout)
                 {
                     err_mark2.store(err_mark2.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
                 }
-                async move { Ok::<_, io::Error>(msg.ack()) }
+                Ok::<_, Rc<dyn error::Error>>(msg.ack())
             }))
             .bind(),
             DispatcherConfig::default(),
