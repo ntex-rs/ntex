@@ -43,11 +43,7 @@ where
         Sf::InitError: StdError + 'static,
     {
         H2Service {
-            sf: PipelineFactory::new(
-                sf.into_factory()
-                    .map(|res| res.into())
-                    .map_init_err(dyn_rc_err),
-            ),
+            sf: PipelineFactory::new(sf.into_factory().map(Into::into).map_init_err(dyn_rc_err)),
             ctl: Pipeline::new(DefaultControlService),
             config: DispatcherConfig::default(),
             _t: marker::PhantomData,
@@ -119,6 +115,7 @@ where
     B: MessageBody,
     Err: 'static,
 {
+    #[must_use]
     /// Provide http/2 control service
     pub fn control<Sf, St>(self, ctl: impl IntoService<Sf, St>) -> H2Service<Hst, F, B, Err>
     where
@@ -187,7 +184,7 @@ where
 
         let inflight = self.config.remove_io(&ioref);
         if inflight == 0 && self.config.is_shutdown() {
-            self.config.notify_shutdown()
+            self.config.notify_shutdown();
         }
         result
     }

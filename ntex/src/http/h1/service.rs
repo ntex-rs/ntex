@@ -32,7 +32,7 @@ where
 {
     /// Create new `HttpService` instance with config.
     pub(crate) fn new<Sf, St>(
-        service: impl IntoServiceFactory<Sf, St, Request>,
+        sf: impl IntoServiceFactory<Sf, St, Request>,
     ) -> H1Service<Hst, F, B, Err>
     where
         Hst: 'static,
@@ -42,12 +42,7 @@ where
         St: State<Request> + FromState<Hst>,
     {
         H1Service {
-            sf: PipelineFactory::new(
-                service
-                    .into_factory()
-                    .map(|res| res.into())
-                    .map_init_err(dyn_rc_err),
-            ),
+            sf: PipelineFactory::new(sf.into_factory().map(Into::into).map_init_err(dyn_rc_err)),
             ctl: Pipeline::new(DefaultControlService::new()),
             config: DispatcherConfig::default(),
             _t: marker::PhantomData,
@@ -115,6 +110,7 @@ where
     B: MessageBody,
     Err: 'static,
 {
+    #[must_use]
     /// Provide http/1 control service.
     pub fn control<Ctl>(self, ctl: impl IntoService<Ctl, St>) -> H1Service<St, F, B, Err>
     where
@@ -153,8 +149,6 @@ where
 
         // check inflight connections
         let inflight = self.config.shutdown();
-        println!("=============== SHT ======== {inflight:?}");
-
         if inflight != 0 {
             log::trace!("Shutting down service, in-flight connections: {inflight}");
 
@@ -187,7 +181,7 @@ where
 
         let inflight = self.config.remove_io(&ioref);
         if inflight == 0 && self.config.is_shutdown() {
-            self.config.notify_shutdown()
+            self.config.notify_shutdown();
         }
         result
     }

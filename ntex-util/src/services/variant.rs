@@ -334,7 +334,7 @@ mod tests {
         }
 
         let factory = variant(fn_service(async |()| Ok::<_, ()>(0)))
-            .v2(fn_factory(async || Ok::<_, ()>(Srv5)).map_init_err(|_| unreachable!()))
+            .v2(fn_factory(async || Ok::<_, ()>(Srv5)).map_init_err(|()| unreachable!()))
             .v3(fn_service(async |()| Ok::<_, ()>(2)));
         assert!(format!("{factory:?}").contains("Variant"));
 

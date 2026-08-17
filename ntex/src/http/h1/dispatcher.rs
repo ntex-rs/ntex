@@ -796,7 +796,7 @@ mod tests {
         Dispatcher::new(
             0,
             nio::Io::new(stream, cfg.clone()),
-            Pipeline::new(s.into_service().map(|r| r.into())),
+            Pipeline::new(s.into_service().map(Into::into)),
             Pipeline::new(DefaultControlService::new()).bind(),
             DispatcherConfig::default(),
         )
@@ -821,7 +821,7 @@ mod tests {
         crate::rt::spawn(Dispatcher::new(
             0,
             nio::Io::new(stream, cfg),
-            Pipeline::new(s.into_service().map(|r| r.into())),
+            Pipeline::new(s.into_service().map(Into::into)),
             Pipeline::new(DefaultControlService::new()).bind(),
             DispatcherConfig::default(),
         ));

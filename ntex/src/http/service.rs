@@ -26,20 +26,16 @@ where
     B: MessageBody,
     Err: ResponseError + 'static,
 {
+    #[must_use]
     /// Create new `HttpService` instance.
-    pub fn new<Sf>(service: impl IntoServiceFactory<Sf, (), Request>) -> HttpService<(), F, B, Err>
+    pub fn new<Sf>(sf: impl IntoServiceFactory<Sf, (), Request>) -> HttpService<(), F, B, Err>
     where
         Sf: ServiceFactory<Request, (), Error = Err, InitCfg = SharedCfg> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Error,
     {
         HttpService {
-            sf: PipelineFactory::new(
-                service
-                    .into_factory()
-                    .map(|res| res.into())
-                    .map_init_err(dyn_rc_err),
-            ),
+            sf: PipelineFactory::new(sf.into_factory().map(Into::into).map_init_err(dyn_rc_err)),
             h1_ctl: Pipeline::new(h1::DefaultControlService::new()),
             h2_ctl: Pipeline::new(h2::DefaultControlService),
             config: DispatcherConfig::default(),
@@ -54,6 +50,7 @@ where
     B: MessageBody,
     Err: ResponseError + 'static,
 {
+    #[must_use]
     /// Create *http service* for HTTP/1 protocol.
     pub fn h1<Sf>(sf: impl IntoServiceFactory<Sf, (), Request>) -> h1::H1Service<(), F, B, Err>
     where
@@ -64,6 +61,7 @@ where
         h1::H1Service::new(sf)
     }
 
+    #[must_use]
     /// Create *http service* for HTTP/2 protocol.
     pub fn h2<Sf>(sf: impl IntoServiceFactory<Sf, (), Request>) -> h2::H2Service<(), F, B, Err>
     where
@@ -81,6 +79,7 @@ where
     B: MessageBody,
     Err: ResponseError + 'static,
 {
+    #[must_use]
     /// Provide http/1 control service.
     pub fn h1_control<Ctl>(self, ctl: impl IntoService<Ctl, Hst>) -> HttpService<Hst, F, B, Err>
     where
@@ -97,6 +96,7 @@ where
         }
     }
 
+    #[must_use]
     /// Provide http/1 control service.
     pub fn h2_control<Ctl>(self, ctl: impl IntoService<Ctl, Hst>) -> HttpService<Hst, F, B, Err>
     where
@@ -240,7 +240,7 @@ where
 
         let inflight = self.config.remove_io(&ioref);
         if inflight == 0 && self.config.is_shutdown() {
-            self.config.notify_shutdown()
+            self.config.notify_shutdown();
         }
         result
     }

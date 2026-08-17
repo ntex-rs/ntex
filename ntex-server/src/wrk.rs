@@ -349,7 +349,7 @@ where
                     let _ = self.svc.call(item).await;
                     continue;
                 }
-                Either::Left(Err(_)) => {
+                Either::Left(Err(())) => {
                     // re-create service
                     ntex_rt::spawn(async move {
                         self.svc.shutdown().await;

@@ -128,6 +128,7 @@ impl Backtrace {
         REPRS.with(|r| r.borrow_mut().contains_key(&self.0.id))
     }
 
+    #[must_use]
     pub fn resolve(self) -> Self {
         self.resolver().resolve();
         self

@@ -117,7 +117,7 @@ impl NetService for ServerService {
     }
 
     fn ready(&self) -> BoxFuture<'_, Result<(), ()>> {
-        Box::pin(async { self.pipeline.ready().await.map_err(|_| ()) })
+        Box::pin(async { self.pipeline.ready().await })
     }
 
     fn shutdown(&self) -> BoxFuture<'_, ()> {

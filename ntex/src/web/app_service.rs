@@ -130,7 +130,7 @@ where
 
         // create http services
         for (path, factory, guards) in &mut services.iter() {
-            let service = factory.create(cfg).await.map_err(|_| {
+            let service = factory.create(cfg).await.map_err(|()| {
                 log::error!("Cannot construct app service");
                 AppInitError
             })?;
@@ -259,7 +259,7 @@ impl<Err: ErrorRenderer> Service for AppRouting<Err> {
     }
 }
 
-/// Web app service
+/// Web app service.
 #[derive(derive_more::Debug)]
 #[debug("AppService")]
 pub struct AppService<F, Err: ErrorRenderer> {

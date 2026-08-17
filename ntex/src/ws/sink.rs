@@ -1,3 +1,4 @@
+#![allow(clippy::unused_async)]
 use std::rc::Rc;
 
 use crate::{io::IoRef, io::OnDisconnect, ws};

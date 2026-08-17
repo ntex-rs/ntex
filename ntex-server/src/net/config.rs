@@ -1,7 +1,7 @@
 use std::{cell::RefCell, fmt, io, mem, net, rc::Rc, sync::Arc};
 
 use ntex_io::Io;
-use ntex_service::{IntoService, Pipeline, Service, State, cfg::SharedCfg};
+use ntex_service::{IntoService, Pipeline, Service, cfg::SharedCfg};
 use ntex_util::{HashMap, future::BoxFuture, future::Ready};
 
 use super::factory::{FactoryService, FactoryServiceType, NetService, ServerService};
@@ -92,7 +92,7 @@ impl ServiceConfig {
     ///
     /// This function get called during worker runtime configuration stage.
     /// It get executed in the worker thread.
-    pub fn on_worker_start<F, E>(&self, f: F) -> &Self
+    pub fn on_worker_start<F>(&self, f: F) -> &Self
     where
         F: AsyncFn(ServiceRuntime) -> Result<(), &'static str> + Send + Clone + 'static,
     {
@@ -253,10 +253,9 @@ impl ServiceRuntime {
     /// # Panics
     ///
     /// Panics if service with specified name is registered already
-    pub fn service<S, St>(&self, name: &str, svc: impl IntoService<S, St>) -> &Self
+    pub fn service<S>(&self, name: &str, svc: impl IntoService<S, ()>) -> &Self
     where
-        S: Service<St, Req = Io> + 'static,
-        St: State<Io> + 'static,
+        S: Service<Req = Io> + 'static,
     {
         let mut inner = self.0.borrow_mut();
         if let Some(entry) = inner.names.get_mut(name) {
