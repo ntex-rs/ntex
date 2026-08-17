@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 #![cfg(all(windows, feature = "openssl"))]
 
 use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};

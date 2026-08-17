@@ -1,4 +1,3 @@
-use ntex::SharedCfg;
 use ntex::web::{self, HttpRequest};
 
 #[web::get("/resource1/{name}/index.html")]
@@ -22,6 +21,7 @@ async fn no_params() -> &'static str {
 #[ntex::main]
 async fn main() -> std::io::Result<()> {
     env_logger::init();
+    use ntex::SharedCfg;
     use ntex::web::{App, HttpResponse, middleware};
 
     web::HttpServer::new(async || {

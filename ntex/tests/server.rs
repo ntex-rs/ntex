@@ -7,9 +7,9 @@ use std::{io, sync::Arc};
 use std::{net, sync::mpsc, thread, time};
 
 use ntex::server::{TestServer, build};
-use ntex::service::fn_service;
+use ntex::service::{cfg::SharedCfg, fn_service};
 #[cfg(unix)]
-use ntex::{SharedCfg, codec::BytesCodec, io::Io, util::Bytes};
+use ntex::{codec::BytesCodec, io::Io, util::Bytes};
 
 #[test]
 fn test_bind() {
