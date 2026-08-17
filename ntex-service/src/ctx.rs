@@ -3,14 +3,14 @@ use std::{cell, fmt, future::Future, marker, pin::Pin, rc::Rc};
 
 use crate::Service;
 
-pub struct Ctx<'a, Svc: Service<St> + ?Sized, St> {
+pub struct Ctx<'a, Svc: Service<St> + ?Sized, St = ()> {
     idx: u32,
     st: &'a St,
     waiters: &'a WaitersRef,
     _t: marker::PhantomData<Rc<Svc>>,
 }
 
-pub struct ReadyCtx<'a, Svc: Service<St> + ?Sized, St> {
+pub struct ReadyCtx<'a, Svc: Service<St> + ?Sized, St = ()> {
     idx: u32,
     st: &'a St,
     waiters: &'a WaitersRef,

@@ -285,7 +285,6 @@ mod tests {
     struct Srv<S>(S, Rc<Cell<usize>>);
 
     impl<S: Service> Service for Srv<S> {
-        type St = S::St;
         type Req = S::Req;
         type Res = S::Res;
         type Error = S::Error;
@@ -312,7 +311,7 @@ mod tests {
         )
         .clone();
 
-        let srv = Pipeline::new::<()>(factory.create(&()).await.unwrap().clone());
+        let srv = Pipeline::new(factory.create(&()).await.unwrap().clone());
         let res = srv.call(10).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
@@ -326,7 +325,7 @@ mod tests {
             .apply(Rc::new(Mw(Rc::new(Cell::new(0))).clone()))
             .clone();
 
-        let srv = Pipeline::new::<()>(factory.create(&()).await.unwrap().clone());
+        let srv = Pipeline::new(factory.create(&()).await.unwrap().clone());
         let res = srv.call(10).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
@@ -359,7 +358,7 @@ mod tests {
         let factory = chain_factory(fn_service(async move |i: usize| Ok::<_, ()>(i * 2)))
             .apply(Mw(cnt_sht.clone()).clone());
 
-        let srv = Pipeline::new::<()>(factory.create(&()).await.unwrap().clone());
+        let srv = Pipeline::new(factory.create(&()).await.unwrap().clone());
         let res = srv.call(10).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
@@ -376,7 +375,7 @@ mod tests {
         let mw = Stack::new(Identity, Mw(cnt_sht.clone()));
         let _ = format!("{mw:?}");
 
-        let pl = Pipeline::new::<()>(Middleware::create(
+        let pl = Pipeline::new(Middleware::create(
             &mw,
             fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }),
             &(),
@@ -401,9 +400,8 @@ mod tests {
         .clone();
         let _ = format!("{mw:?}");
 
-        let svc = Pipeline::new::<()>(
-            mw.create(fn_service(async move |i: usize| Ok::<_, ()>(i * 2)), &()),
-        );
+        let svc =
+            Pipeline::new(mw.create(fn_service(async move |i: usize| Ok::<_, ()>(i * 2)), &()));
 
         let res = svc.call("test").await;
         assert!(res.is_ok());

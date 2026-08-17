@@ -1,8 +1,7 @@
 use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering};
 use std::{io, io::Read, io::Write, net};
 
-use futures_util::future::{self, FutureExt};
-use futures_util::stream::{StreamExt, once};
+use futures_util::{future::FutureExt, stream::StreamExt, stream::once};
 use regex::Regex;
 
 use ntex::http::header::{self, HeaderName, HeaderValue};
@@ -12,7 +11,7 @@ use ntex::http::{
 use ntex::http::{body, h1, h1::Control, test, test::server as test_server};
 use ntex::time::{Millis, Seconds, sleep, timeout};
 use ntex::util::{Bytes, Ready};
-use ntex::{SharedCfg, chain_factory, channel::oneshot, fn_service, rt, web::error};
+use ntex::{SharedCfg, channel::oneshot, fn_service, rt, web::error};
 
 #[ntex::test]
 async fn test_h1() {
@@ -216,9 +215,10 @@ async fn test_slow_request2() {
 
 #[ntex::test]
 async fn test_http1_malformed_request() {
-    let srv =
-        test_server(async || HttpService::h1(|_| Ok::<_, io::Error>(Response::Ok().finish())))
-            .await;
+    let srv = test_server(async || {
+        HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().finish()))
+    })
+    .await;
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream.write_all(b"GET /test/tests/test HTTP1.1\r\n");
@@ -451,7 +451,7 @@ async fn test_http1_disable_payload_timer_after_whole_pl_has_been_read() {
 #[ntex::test]
 async fn test_http1_handle_not_consumed_payload() {
     let srv = test_server(async || {
-        HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().finish())).control(chain(
+        HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().finish())).control(
             async |msg: Control<_, _>| {
                 if matches!(
                     msg,
@@ -461,7 +461,7 @@ async fn test_http1_handle_not_consumed_payload() {
                 }
                 Ok::<_, io::Error>(msg.ack())
             },
-        ))
+        )
     })
     .await;
 
@@ -787,8 +787,8 @@ async fn test_h1_response_http_error_handling() {
 #[ntex::test]
 async fn test_h1_service_error() {
     let srv = test_server(async || {
-        HttpService::h1(|_| {
-            future::err::<Response, _>(error::InternalError::default(
+        HttpService::h1(async |_| {
+            Err::<Response, _>(error::InternalError::default(
                 "error",
                 StatusCode::BAD_REQUEST,
             ))
@@ -823,16 +823,15 @@ async fn test_h1_client_drop() -> io::Result<()> {
     let srv = test_server(async move || {
         let tx = tx.clone();
         let count = count2.clone();
-        HttpService::h1(move |req: Request| {
+        HttpService::h1(async move |req: Request| {
             let tx = tx.clone();
             let count = count.clone();
-            async move {
-                let _st = SetOnDrop(count, tx.lock().unwrap().take());
-                assert!(req.peer_addr().is_some());
-                assert_eq!(req.version(), Version::HTTP_11);
-                sleep(Millis(150000)).await;
-                Ok::<_, io::Error>(Response::Ok().finish())
-            }
+
+            let _st = SetOnDrop(count, tx.lock().unwrap().take());
+            assert!(req.peer_addr().is_some());
+            assert_eq!(req.version(), Version::HTTP_11);
+            sleep(Millis(150000)).await;
+            Ok::<_, io::Error>(Response::Ok().finish())
         })
     })
     .await;

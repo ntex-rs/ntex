@@ -1,11 +1,9 @@
 use std::{error::Error, marker, rc::Rc};
 
 use crate::io::{Filter, Io, types};
-use crate::service::{
-    IntoService, IntoServiceFactory, Pipeline, PipelineFactory, Service, ServiceFactory,
-};
+use crate::service::{IntoService, IntoServiceFactory, Pipeline, PipelineFactory};
 use crate::util::{dyn_rc_err, join};
-use crate::{Ctx, FromState, ReadyCtx, SharedCfg, State};
+use crate::{Ctx, ReadyCtx, Service, ServiceFactory, SharedCfg, State};
 
 use super::error::{DispatchError, H2Error, ResponseError};
 use super::{HttpPipeline, h1, h2, request::Request, response::Response};
@@ -22,21 +20,18 @@ pub struct HttpService<Hst, F, B, Err> {
     _t: marker::PhantomData<(Hst, F, B)>,
 }
 
-impl<Hst, F, B, Err> HttpService<Hst, F, B, Err>
+impl<F, B, Err> HttpService<(), F, B, Err>
 where
     F: Filter,
     B: MessageBody,
     Err: ResponseError + 'static,
 {
     /// Create new `HttpService` instance.
-    pub fn new<Sf, St>(
-        service: impl IntoServiceFactory<Sf, St, Request>,
-    ) -> HttpService<Hst, F, B, Err>
+    pub fn new<Sf>(service: impl IntoServiceFactory<Sf, (), Request>) -> HttpService<(), F, B, Err>
     where
-        Sf: ServiceFactory<Request, St, Error = Err, InitCfg = SharedCfg> + 'static,
+        Sf: ServiceFactory<Request, (), Error = Err, InitCfg = SharedCfg> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Error,
-        St: State<Request> + FromState<Hst>,
     {
         HttpService {
             sf: PipelineFactory::new(
@@ -53,30 +48,28 @@ where
     }
 }
 
-impl<Hst, F, B, Err> HttpService<Hst, F, B, Err>
+impl<F, B, Err> HttpService<(), F, B, Err>
 where
     F: Filter,
     B: MessageBody,
     Err: ResponseError + 'static,
 {
     /// Create *http service* for HTTP/1 protocol.
-    pub fn h1<Sf, St>(sf: impl IntoServiceFactory<Sf, St, Request>) -> h1::H1Service<Hst, F, B, Err>
+    pub fn h1<Sf>(sf: impl IntoServiceFactory<Sf, (), Request>) -> h1::H1Service<(), F, B, Err>
     where
-        Sf: ServiceFactory<Request, St, Error = Err, InitCfg = SharedCfg> + 'static,
+        Sf: ServiceFactory<Request, Error = Err, InitCfg = SharedCfg> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Error,
-        St: State<Request> + FromState<Hst>,
     {
         h1::H1Service::new(sf)
     }
 
     /// Create *http service* for HTTP/2 protocol.
-    pub fn h2<Sf, St>(sf: impl IntoServiceFactory<Sf, St, Request>) -> h2::H2Service<Hst, F, B, Err>
+    pub fn h2<Sf>(sf: impl IntoServiceFactory<Sf, (), Request>) -> h2::H2Service<(), F, B, Err>
     where
-        Sf: ServiceFactory<Request, St, Error = Err, InitCfg = SharedCfg> + 'static,
+        Sf: ServiceFactory<Request, Error = Err, InitCfg = SharedCfg> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Error,
-        St: State<Request> + FromState<Hst>,
     {
         h2::H2Service::new(sf)
     }
@@ -89,10 +82,10 @@ where
     Err: ResponseError + 'static,
 {
     /// Provide http/1 control service.
-    pub fn h1_control<St, Ctl>(self, ctl: impl IntoService<Ctl, St>) -> HttpService<Hst, F, B, Err>
+    pub fn h1_control<Ctl>(self, ctl: impl IntoService<Ctl, Hst>) -> HttpService<Hst, F, B, Err>
     where
-        St: State<h1::Control<F, Err>>,
-        Ctl: Service<St, Req = h1::Control<F, Err>, Res = h1::ControlAck<F>> + 'static,
+        Hst: State<Ctl::Req>,
+        Ctl: Service<Hst, Req = h1::Control<F, Err>, Res = h1::ControlAck<F>> + 'static,
         Ctl::Error: Error + 'static,
     {
         HttpService {
@@ -105,10 +98,10 @@ where
     }
 
     /// Provide http/1 control service.
-    pub fn h2_control<St, Ctl>(self, ctl: impl IntoService<Ctl, St>) -> HttpService<Hst, F, B, Err>
+    pub fn h2_control<Ctl>(self, ctl: impl IntoService<Ctl, Hst>) -> HttpService<Hst, F, B, Err>
     where
-        St: State<Ctl::Req>,
-        Ctl: Service<St, Req = h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
+        Hst: State<Ctl::Req>,
+        Ctl: Service<Hst, Req = h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
         Ctl::Error: Error + 'static,
     {
         HttpService {

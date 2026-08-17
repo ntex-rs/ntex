@@ -35,6 +35,7 @@ where
         service: impl IntoServiceFactory<Sf, St, Request>,
     ) -> H1Service<Hst, F, B, Err>
     where
+        Hst: 'static,
         Sf: ServiceFactory<Request, St, Error = Err, InitCfg = SharedCfg> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Error,
@@ -108,14 +109,14 @@ mod rustls {
     }
 }
 
-impl<Hst, F, B, Err> H1Service<Hst, F, B, Err>
+impl<St, F, B, Err> H1Service<St, F, B, Err>
 where
     F: Filter,
     B: MessageBody,
     Err: 'static,
 {
     /// Provide http/1 control service.
-    pub fn control<St, Ctl>(self, ctl: impl IntoService<Ctl, St>) -> H1Service<Hst, F, B, Err>
+    pub fn control<Ctl>(self, ctl: impl IntoService<Ctl, St>) -> H1Service<St, F, B, Err>
     where
         St: State<Control<F, Err>>,
         Ctl: Service<St, Req = Control<F, Err>, Res = ControlAck<F>> + 'static,

@@ -782,8 +782,8 @@ mod tests {
         service: F,
     ) -> Dispatcher<Base, S, DefaultControlService<Base, S::Error>, B>
     where
-        F: IntoService<S>,
-        S: Service<St = (), Req = Request>,
+        F: IntoService<S, ()>,
+        S: Service<(), Req = Request>,
         S::St: State<S::Req>,
         S::Res: Into<Response<B>>,
         S::Error: ResponseError + 'static,
@@ -808,8 +808,8 @@ mod tests {
 
     pub(crate) fn spawn_h1<F, S, B>(stream: IoTest, service: F)
     where
-        F: IntoService<S>,
-        S: Service<St = (), Req = Request> + 'static,
+        F: IntoService<S, ()>,
+        S: Service<(), Req = Request> + 'static,
         S::St: State<S::Req>,
         S::Res: Into<Response<B>>,
         S::Error: ResponseError,

@@ -22,26 +22,58 @@ pub struct Pipeline<Req, Res, Err> {
     state: Rc<dyn PipelineApi<Req, Res, Err>>,
 }
 
+type BoxFuture<'a, I, E> = Pin<Box<dyn Future<Output = Result<I, E>> + 'a>>;
+
 /// Factory for service pipeline.
 pub struct PipelineFactory<St, Req, Res, Err, InitCfg, InitErr> {
-    t: marker::PhantomData<(St, Req, Res, Err, InitCfg, InitErr)>,
+    inner:
+        Box<dyn for<'r> Fn(&'r InitCfg, &'r St) -> BoxFuture<'r, Pipeline<Req, Res, Err>, InitErr>>,
+}
+
+struct PipelineFactoryInner<St, Sf, Ust, Req> {
+    sf: Sf,
+    st: marker::PhantomData<(St, Ust, Req)>,
+}
+
+impl<St, Sf, Ust, Req> PipelineFactoryInner<St, Sf, Ust, Req>
+where
+    Sf: ServiceFactory<Req, Ust> + 'static,
+    Ust: State<Req> + FromState<St> + 'static,
+    Req: 'static,
+{
+    async fn create(
+        &self,
+        cfg: &Sf::InitCfg,
+        st: &St,
+    ) -> Result<Pipeline<Req, Sf::Res, Sf::Error>, Sf::InitError> {
+        let svc = self.sf.create(cfg).await?;
+        Ok(Pipeline::with::<Sf::Service, Ust, St>(svc, st))
+    }
 }
 
 impl<St, Req, Res, Err, InitCfg, InitErr> PipelineFactory<St, Req, Res, Err, InitCfg, InitErr> {
-    pub fn new<Ust, Sf>(_sf: Sf) -> Self
+    pub fn new<Ust, Sf>(sf: Sf) -> Self
     where
-        Ust: State<Req> + FromState<St>,
-        Sf: ServiceFactory<Req, Ust, Res = Res, Error = Err, InitCfg = InitCfg, InitError = InitErr>,
+        St: 'static,
+        Ust: State<Req> + FromState<St> + 'static,
+        Sf: ServiceFactory<Req, Ust, Res = Res, Error = Err, InitCfg = InitCfg, InitError = InitErr>
+            + 'static,
+        Req: 'static,
     {
-        todo!()
+        let inner = Rc::new(PipelineFactoryInner {
+            sf,
+            st: marker::PhantomData,
+        });
+        Self {
+            inner: Box::new(move |cfg_, st_| {
+                let pf = inner.clone();
+                Box::pin(async move { pf.create(cfg_, st_).await })
+            }),
+        }
     }
 
-    pub async fn create(
-        &self,
-        _cfg: &InitCfg,
-        _st: &St,
-    ) -> Result<Pipeline<Req, Res, Err>, InitErr> {
-        todo!()
+    pub async fn create(&self, cfg: &InitCfg, st: &St) -> Result<Pipeline<Req, Res, Err>, InitErr> {
+        (self.inner)(cfg, st).await
     }
 }
 
@@ -56,9 +88,14 @@ trait PipelineApi<Req, Res, Err> {
 
     fn unregister(&self, idx: u32);
 
-    fn ready(&self) -> Pin<Box<dyn Future<Output = Result<(), Err>> + '_>>;
+    fn ready(&self, idx: u32) -> Pin<Box<dyn Future<Output = Result<(), Err>> + '_>>;
 
-    fn call(&self, req: Req, ready: bool) -> Pin<Box<dyn Future<Output = Result<Res, Err>> + '_>>;
+    fn call(
+        &self,
+        idx: u32,
+        req: Req,
+        ready: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<Res, Err>> + '_>>;
 
     fn shutdown(&self) -> Pin<Box<dyn Future<Output = ()> + '_>>;
 
@@ -124,9 +161,9 @@ where
         self.waiters.remove(index);
     }
 
-    fn ready(&self) -> Pin<Box<dyn Future<Output = Result<(), S::Error>> + '_>> {
-        Box::pin(async {
-            Ctx::<'_, S, St>::new(0, self.waiters_ref(), &self.st)
+    fn ready(&self, idx: u32) -> Pin<Box<dyn Future<Output = Result<(), S::Error>> + '_>> {
+        Box::pin(async move {
+            Ctx::<'_, S, St>::new(idx, self.waiters_ref(), &self.st)
                 .ready(&self.s)
                 .await
         })
@@ -134,6 +171,7 @@ where
 
     fn call(
         &self,
+        idx: u32,
         req: S::Req,
         ready: bool,
     ) -> Pin<Box<dyn Future<Output = Result<S::Res, S::Error>> + '_>> {
@@ -141,11 +179,11 @@ where
             let st = self.st(&req);
 
             if ready {
-                Ctx::<'_, S, St>::new(0, self.waiters_ref(), st.get_ref())
+                Ctx::<'_, S, St>::new(idx, self.waiters_ref(), st.get_ref())
                     .call(&self.s, req)
                     .await
             } else {
-                Ctx::<'_, S, St>::new(0, self.waiters_ref(), st.get_ref())
+                Ctx::<'_, S, St>::new(idx, self.waiters_ref(), st.get_ref())
                     .call_nowait(&self.s, req)
                     .await
             }
@@ -247,14 +285,14 @@ where
     #[inline]
     /// Returns when the pipeline is ready to process requests.
     pub async fn ready(&self) -> Result<(), Err> {
-        self.state.ready().await
+        self.state.ready(0).await
     }
 
     #[inline]
     /// Wait for service readiness, then create a future
     /// that resolves to the service call result.
     pub async fn call(&self, req: Req) -> Result<Res, Err> {
-        self.state.call(req, true).await
+        self.state.call(0, req, true).await
     }
 
     #[inline]
@@ -264,7 +302,9 @@ where
     /// This call can be completed from different async tasks.
     pub fn call_static(&self, req: Req) -> PipelineCall<Res, Err> {
         let pl = self.bind();
-        PipelineCall(Box::pin(async move { pl.state.call(req, true).await }))
+        PipelineCall(Box::pin(
+            async move { pl.state.call(pl.index, req, true).await },
+        ))
     }
 
     #[inline]
@@ -274,7 +314,9 @@ where
     /// Note: this call does not check service readiness.
     pub fn call_nowait(&self, req: Req) -> PipelineCall<Res, Err> {
         let pl = self.bind();
-        PipelineCall(Box::pin(async move { pl.state.call(req, false).await }))
+        PipelineCall(Box::pin(async move {
+            pl.state.call(pl.index, req, false).await
+        }))
     }
 
     #[inline]
@@ -338,14 +380,14 @@ where
     #[inline]
     /// Returns when the pipeline is ready to process requests.
     pub async fn ready(&self) -> Result<(), Err> {
-        self.state.ready().await
+        self.state.ready(self.index).await
     }
 
     #[inline]
     /// Wait for service readiness, then create a future
     /// that resolves to the service call result.
     pub async fn call(&self, req: Req) -> Result<Res, Err> {
-        self.state.call(req, true).await
+        self.state.call(self.index, req, true).await
     }
 
     #[inline]
@@ -355,7 +397,9 @@ where
     /// This call can be completed from different async tasks.
     pub fn call_static(&self, req: Req) -> PipelineCall<Res, Err> {
         let pl = self.clone();
-        PipelineCall(Box::pin(async move { pl.state.call(req, true).await }))
+        PipelineCall(Box::pin(
+            async move { pl.state.call(pl.index, req, true).await },
+        ))
     }
 
     #[inline]
@@ -365,7 +409,9 @@ where
     /// Note: this call does not check service readiness.
     pub fn call_nowait(&self, req: Req) -> PipelineCall<Res, Err> {
         let pl = self.clone();
-        PipelineCall(Box::pin(async move { pl.state.call(req, false).await }))
+        PipelineCall(Box::pin(async move {
+            pl.state.call(pl.index, req, false).await
+        }))
     }
 
     #[inline]

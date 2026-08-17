@@ -8,7 +8,7 @@ use crate::service::dev::ServiceChainFactory;
 use crate::service::{Ctx, Middleware, ReadyCtx, Service, ServiceFactory, fn_service};
 use crate::util::{BoxFuture, Extensions, join};
 
-use super::error::ErrorRenderer;
+use super::error::{AppInitError, ErrorRenderer};
 use super::guard::Guard;
 use super::httprequest::HttpRequest;
 use super::request::WebRequest;
@@ -65,7 +65,7 @@ where
 
     type Service = AppFactoryService<T::Service, Err>;
     type InitCfg = SharedCfg;
-    type InitError = ();
+    type InitError = AppInitError;
 
     async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {
         let services = std::mem::take(&mut *self.services.borrow_mut());
@@ -95,7 +95,7 @@ where
         for fut in state_factories.iter() {
             extensions = fut(extensions).await.map_err(|e| {
                 log::error!("Cannot initialize state factory, {e:?}");
-                e
+                AppInitError
             })?;
         }
         let state = AppState::new(extensions, None, cfg.get());
@@ -132,6 +132,7 @@ where
         for (path, factory, guards) in &mut services.iter() {
             let service = factory.create(cfg).await.map_err(|_| {
                 log::error!("Cannot construct app service");
+                AppInitError
             })?;
             router.rdef(path.clone(), service).2 = guards.borrow_mut().take();
         }
@@ -140,7 +141,7 @@ where
             router: router.finish(),
             default: Some(default.create(cfg).await.map_err(|e| {
                 log::error!("Cannot construct default service, {e:?}");
-                e
+                AppInitError
             })?),
         };
 
@@ -149,7 +150,7 @@ where
             routing,
             filter: filter_fut.await.map_err(|e| {
                 log::error!("Cannot construct app filter: {e:?}");
-                e
+                AppInitError
             })?,
         };
 

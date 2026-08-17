@@ -36,6 +36,7 @@ where
     /// Create new `HttpService` instance with config.
     pub(crate) fn new<St, Sf>(sf: impl IntoServiceFactory<Sf, St, Request>) -> Self
     where
+        Hst: 'static,
         St: State<Request> + FromState<Hst>,
         Sf: ServiceFactory<Request, St, Error = Err, InitCfg = SharedCfg> + 'static,
         Sf::Res: Into<Response<B>>,

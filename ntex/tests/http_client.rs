@@ -9,7 +9,7 @@ use ntex::client::{Client, Connector, error::ClientError};
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpMessage, HttpService, Method, Response, header};
 use ntex::io::IoConfig;
-use ntex::service::{ServiceFactory, cfg::SharedCfg, chain_factory, fn_layer};
+use ntex::service::{cfg::SharedCfg, chain, fn_layer};
 use ntex::web::middleware::Compress;
 use ntex::web::{self, App, BodyEncoding, Error, HttpRequest, HttpResponse, test};
 use ntex::{client, time::Millis, time::Seconds, time::sleep, util::Bytes, util::Ready};
@@ -150,13 +150,13 @@ async fn test_connection_reuse() {
 
     let srv = test_server(async move || {
         let num2 = num2.clone();
-        chain_factory(move |io| {
+        chain(async move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
-            Ready::Ok(io)
+            Ok(io)
         })
-        .and_then(HttpService::new(App::new().service(
-            web::resource("/").route(web::to(|| async { HttpResponse::Ok() })),
-        )))
+        .and_then(HttpService::new(
+            App::new().service(web::resource("/").route(web::to(async || HttpResponse::Ok()))),
+        ))
     })
     .await;
 
@@ -183,7 +183,7 @@ async fn test_connection_reuse() {
 #[ntex::test]
 async fn test_connection_close() {
     let srv = test_server(async move || {
-        HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::Ok().body(STR))).map(|_| ())
+        HttpService::new(async |_| Ok::<_, io::Error>(Response::Ok().body(STR)))
     })
     .await;
 
@@ -203,13 +203,13 @@ async fn test_connection_force_close() {
 
     let srv = test_server(async move || {
         let num2 = num2.clone();
-        chain_factory(move |io| {
+        chain(async move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
-            Ready::Ok(io)
+            Ok(io)
         })
-        .and_then(HttpService::new(App::new().service(
-            web::resource("/").route(web::to(|| async { HttpResponse::Ok() })),
-        )))
+        .and_then(HttpService::new(
+            App::new().service(web::resource("/").route(web::to(async || HttpResponse::Ok()))),
+        ))
     })
     .await;
 
@@ -245,14 +245,12 @@ async fn test_connection_server_close() {
 
     let srv = test_server(async move || {
         let num2 = num2.clone();
-        chain_factory(move |io| {
+        chain(async move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
-            Ready::Ok(io)
+            Ok(io)
         })
         .and_then(HttpService::new(App::new().service(
-            web::resource("/").route(web::to(|| async {
-                HttpResponse::Ok().force_close().finish()
-            })),
+            web::resource("/").route(web::to(async || HttpResponse::Ok().force_close().finish())),
         )))
     })
     .await;
@@ -284,12 +282,12 @@ async fn test_connection_wait_queue() {
 
     let srv = test_server(async move || {
         let num2 = num2.clone();
-        chain_factory(move |io| {
+        chain(move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
             Ready::Ok(io)
         })
         .and_then(HttpService::new(App::new().service(
-            web::resource("/").route(web::to(|| async { HttpResponse::Ok().body(STR) })),
+            web::resource("/").route(web::to(async || HttpResponse::Ok().body(STR))),
         )))
     })
     .await;
@@ -329,14 +327,12 @@ async fn test_connection_wait_queue_force_close() {
 
     let srv = test_server(async move || {
         let num2 = num2.clone();
-        chain_factory(move |io| {
+        chain(async move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
-            Ready::Ok(io)
+            Ok(io)
         })
         .and_then(HttpService::new(App::new().service(
-            web::resource("/").route(web::to(|| async {
-                HttpResponse::Ok().force_close().body(STR)
-            })),
+            web::resource("/").route(web::to(async || HttpResponse::Ok().force_close().body(STR))),
         )))
     })
     .await;
@@ -650,11 +646,10 @@ async fn test_client_cookie_handling() {
 #[ntex::test]
 async fn test_client_timeout() {
     let srv = test_server(async move || {
-        HttpService::new(|_| async {
+        HttpService::new(async |_| {
             sleep(Seconds(10)).await;
             Ok::<_, io::Error>(Response::Ok().body(STR))
         })
-        .map(|_| ())
     })
     .await
     .set_client_timeout(Seconds(1), Millis(30_000))

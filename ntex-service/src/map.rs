@@ -153,7 +153,6 @@ mod tests {
     struct Srv(Rc<Cell<usize>>);
 
     impl Service for Srv {
-        type St = ();
         type Req = ();
         type Res = ();
         type Error = ();
@@ -188,7 +187,7 @@ mod tests {
 
         let cnt_sht = Rc::new(Cell::new(0));
         let svc = Srv(cnt_sht.clone()).map(|()| "ok");
-        let srv = Pipeline::new(&svc);
+        let srv = Pipeline::new(svc);
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
