@@ -1244,7 +1244,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_test_methods() {
-        let srv = server(async |_| {
+        let srv = server(async |()| {
             App::new().service(
                 web::resource("/").route((
                     web::route()

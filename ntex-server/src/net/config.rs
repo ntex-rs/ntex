@@ -271,7 +271,7 @@ impl<St: State<Io> + Clone> ServiceRuntime<St> {
         let mut inner = self.0.borrow_mut();
         if let Some(entry) = inner.names.get_mut(name) {
             let idx = entry.idx;
-            let pipeline = Pipeline::with_state(
+            let pipeline = Pipeline::with_st(
                 inner.st.clone(),
                 svc.into_service().map(|_| ()).map_err(|_| ()),
             );

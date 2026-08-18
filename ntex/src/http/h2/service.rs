@@ -10,10 +10,8 @@ use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::message::{CurrentIo, ResponseHead};
 use crate::http::{DateService, HttpPipeline, Method, Request, Response, StatusCode, Uri, Version};
 use crate::io::{Filter, Io, IoBoxed, IoRef, types};
-use crate::service::{
-    Ctx, Pipeline, PipelineBinding, PipelineFactory, ReadyCtx, Service, ServiceFactory,
-};
-use crate::service::{FromState, IntoService, IntoServiceFactory, State, cfg::SharedCfg};
+use crate::service::{Ctx, Pipeline, PipelineBinding, ReadyCtx, Service, ServiceFactory};
+use crate::service::{IntoService, IntoServiceFactory, State, cfg::SharedCfg};
 use crate::util::{Bytes, BytesMut, HashMap, dyn_rc_err};
 
 use super::{DefaultControlService, payload::Payload, payload::PayloadSender};
@@ -34,16 +32,15 @@ where
     Err: ResponseError + 'static,
 {
     /// Create new `HttpService` instance with config.
-    pub(crate) fn new<St, Sf>(sf: impl IntoServiceFactory<Sf, St, Request>) -> Self
+    pub(crate) fn new<Sf>(sf: impl IntoServiceFactory<Sf, (), Request>) -> Self
     where
         Hst: 'static,
-        St: State<Request> + FromState<Hst>,
-        Sf: ServiceFactory<Request, St, Error = Err, InitCfg = SharedCfg> + 'static,
+        Sf: ServiceFactory<Request, Error = Err, InitCfg = SharedCfg> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: StdError + 'static,
     {
         H2Service {
-            sf: PipelineFactory::new(sf.into_factory().map(Into::into).map_init_err(dyn_rc_err)),
+            sf: HttpPipeline::chained(sf.into_factory().map(Into::into).map_init_err(dyn_rc_err)),
             ctl: Pipeline::new(DefaultControlService),
             config: DispatcherConfig::default(),
             _t: marker::PhantomData,

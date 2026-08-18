@@ -290,14 +290,14 @@ where
 /// #[ntex::main]
 /// async fn main() -> std::io::Result<()> {
 ///     web::server(
-///         async || web::App::new()
+///         async |_| web::App::new()
 ///             .service(web::resource("/").to(async || { web::HttpResponse::Ok() })))
 ///         .bind("127.0.0.1:59090", SharedCfg::default())?
 ///         .run()
 ///         .await
 /// }
 /// ```
-pub fn server<F, I, Sf, B>(factory: F) -> HttpServer<F, I, Sf, B>
+pub fn server<F, I, Sf, B>(factory: F) -> HttpServer<(), F, I, Sf, (), B>
 where
     F: AsyncFn(&()) -> I + Send + Clone + 'static,
     I: IntoServiceFactory<Sf, (), Request>,
