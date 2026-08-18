@@ -26,7 +26,7 @@ struct Config {
 ///     HttpServer::new(
 ///         async || App::new()
 ///             .service(web::resource("/").to(async || { HttpResponse::Ok() })))
-///         .bind("127.0.0.1:59090")?
+///         .bind("127.0.0.1:59090", ntex::SharedCfg::default())?
 ///         .run()
 ///         .await
 /// }
@@ -433,7 +433,7 @@ where
     ///     HttpServer::new(
     ///         async || App::new().service(web::resource("/").to(async || { HttpResponse::Ok() }))
     ///     )
-    ///         .bind("127.0.0.1:0")?
+    ///         .bind("127.0.0.1:0", ntex::SharedCfg::default())?
     ///         .run()
     ///         .await
     /// }

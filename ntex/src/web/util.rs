@@ -285,14 +285,14 @@ where
 /// Create new http server with application factory.
 ///
 /// ```rust,no_run
-/// use ntex::web;
+/// use ntex::{web, SharedCfg};
 ///
 /// #[ntex::main]
 /// async fn main() -> std::io::Result<()> {
 ///     web::server(
 ///         async || web::App::new()
 ///             .service(web::resource("/").to(async || { web::HttpResponse::Ok() })))
-///         .bind("127.0.0.1:59090")?
+///         .bind("127.0.0.1:59090", SharedCfg::default())?
 ///         .run()
 ///         .await
 /// }

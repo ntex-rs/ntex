@@ -1,7 +1,7 @@
 //! Web framework for Rust.
 //!
 //! ```rust,no_run
-//! use ntex::web;
+//! use ntex::{web, SharedCfg};
 //!
 //! async fn index(info: web::types::Path<(String, u32)>) -> String {
 //!     format!("Hello {}! id:{}", info.0, info.1)
@@ -12,7 +12,7 @@
 //!     web::server(async || web::App::new().service(
 //!         web::resource("/{name}/{id}/index.html").to(index))
 //!     )
-//!         .bind("127.0.0.1:8080")?
+//!         .bind("127.0.0.1:8080", SharedCfg::default())?
 //!         .run()
 //!         .await
 //! }

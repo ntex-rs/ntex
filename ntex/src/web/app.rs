@@ -373,15 +373,14 @@ where
     /// Construct service factory, suitable for `http::HttpService`.
     ///
     /// ```rust,no_run
-    /// use ntex::{web, http, server};
+    /// use ntex::{web, http, server, SharedCfg};
     ///
     /// #[ntex::main]
     /// async fn main() -> std::io::Result<()> {
-    ///     server::build().bind("http", "127.0.0.1:0", async |_|
+    ///     server::build().bind("http", "127.0.0.1:0", SharedCfg::default(), async ||
     ///         http::HttpService::new(
     ///             web::App::new()
     ///                 .route("/index.html", web::get().to(async || { "hello_world" }))
-    ///                 .finish()
     ///         )
     ///     )?
     ///     .run()
