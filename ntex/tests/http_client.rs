@@ -9,7 +9,7 @@ use ntex::client::{Client, Connector, error::ClientError};
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpMessage, HttpService, Method, Response, header};
 use ntex::io::IoConfig;
-use ntex::service::{cfg::SharedCfg, chain, fn_layer};
+use ntex::service::{cfg::SharedCfg, fn_layer, svc};
 use ntex::web::middleware::Compress;
 use ntex::web::{self, App, BodyEncoding, Error, HttpRequest, HttpResponse, test};
 use ntex::{client, time::Millis, time::Seconds, time::sleep, util::Bytes};
@@ -148,7 +148,7 @@ async fn test_connection_reuse() {
 
     let srv = test_server(async move || {
         let num2 = num2.clone();
-        chain(async move |io| {
+        svc(async move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
             Ok(io)
         })
@@ -201,7 +201,7 @@ async fn test_connection_force_close() {
 
     let srv = test_server(async move || {
         let num2 = num2.clone();
-        chain(async move |io| {
+        svc(async move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
             Ok(io)
         })
@@ -243,7 +243,7 @@ async fn test_connection_server_close() {
 
     let srv = test_server(async move || {
         let num2 = num2.clone();
-        chain(async move |io| {
+        svc(async move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
             Ok(io)
         })
@@ -280,7 +280,7 @@ async fn test_connection_wait_queue() {
 
     let srv = test_server(async move || {
         let num2 = num2.clone();
-        chain(async move |io| {
+        svc(async move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
             Ok(io)
         })
@@ -325,7 +325,7 @@ async fn test_connection_wait_queue_force_close() {
 
     let srv = test_server(async move || {
         let num2 = num2.clone();
-        chain(async move |io| {
+        svc(async move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
             Ok(io)
         })

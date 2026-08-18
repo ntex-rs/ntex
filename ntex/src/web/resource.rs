@@ -3,7 +3,7 @@ use std::{cell::RefCell, fmt, rc::Rc};
 use crate::router::{IntoPattern, ResourceDef};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::dev::{AndThen, ServiceChain, ServiceChainFactory};
-use crate::service::{Ctx, cfg::SharedCfg, chain, factory};
+use crate::service::{Ctx, cfg::SharedCfg, factory, svc};
 use crate::service::{Identity, IntoServiceFactory, Middleware, Service, ServiceFactory};
 use crate::{http::Response, util::Extensions};
 
@@ -445,7 +445,7 @@ where
     async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {
         let filter = self.filter.create(cfg).await?;
         let routing = self.routing.create(cfg).await?;
-        Ok(self.middleware.create(chain(filter).and_then(routing), cfg))
+        Ok(self.middleware.create(svc(filter).and_then(routing), cfg))
     }
 }
 

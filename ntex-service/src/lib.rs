@@ -31,7 +31,7 @@ mod then;
 mod util;
 
 pub use self::apply::{apply_fn, apply_fn_factory};
-pub use self::chain::{ServiceChain, ServiceChainFactory, chain, factory, factory_with_state};
+pub use self::chain::{ServiceChain, ServiceChainFactory, factory, factory_with_state, svc};
 pub use self::ctx::{Ctx, ReadyCtx};
 pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
 pub use self::fn_shutdown::fn_shutdown;
@@ -151,7 +151,7 @@ pub trait Service<St = ()> {
         Self: Sized,
         F: Fn(Self::Res) -> Res,
     {
-        chain(dev::Map::new(self, f))
+        svc(dev::Map::new(self, f))
     }
 
     #[inline]
@@ -167,7 +167,7 @@ pub trait Service<St = ()> {
         Self: Sized,
         F: Fn(Self::Error) -> E,
     {
-        chain(dev::MapErr::new(self, f))
+        svc(dev::MapErr::new(self, f))
     }
 }
 

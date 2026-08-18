@@ -7,7 +7,6 @@
     clippy::missing_errors_doc,
     clippy::unused_async_trait_impl
 )]
-
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(feature = "openssl")]

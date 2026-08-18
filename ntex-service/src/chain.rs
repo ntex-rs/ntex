@@ -13,7 +13,7 @@ use crate::then::{Then, ThenFactory};
 use crate::{IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory, State};
 
 /// Constructs new chain with one service.
-pub fn chain<S, St>(service: impl IntoService<S, St>) -> ServiceChain<S, St>
+pub fn svc<S, St>(service: impl IntoService<S, St>) -> ServiceChain<S, St>
 where
     S: Service<St>,
 {
@@ -153,7 +153,7 @@ impl<S: Service<St>, St> ServiceChain<S, St> {
 
     /// Use function as middleware for current service.
     ///
-    /// Short version of `apply_fn(chain(...), fn)`
+    /// Short version of `apply_fn(svc(...), fn)`
     pub fn apply_fn<F, In, Out, Err>(self, f: F) -> ServiceChain<Apply<S, St, F, In, Out, Err>, St>
     where
         F: AsyncFn(In, &ApplyCtx<'_, S, St>) -> Result<Out, Err>,

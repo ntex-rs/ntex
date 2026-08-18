@@ -202,7 +202,7 @@ mod tests {
     #[ntex::test]
     async fn test_pipeline() {
         let srv = Pipeline::new(
-            crate::chain(Srv(false, Rc::new(Cell::new(0))))
+            crate::svc(Srv(false, Rc::new(Cell::new(0))))
                 .map_err(|()| "error")
                 .clone(),
         );

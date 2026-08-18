@@ -2,7 +2,7 @@ use std::io;
 
 use log::info;
 use ntex::http::{HttpService, HttpServiceConfig, Response, header::HeaderValue};
-use ntex::{SharedCfg, server, time::Seconds};
+use ntex::{SharedCfg, http, server, time::Seconds};
 use tls_openssl::ssl::{self, SslFiletype, SslMethod};
 
 #[ntex::main]
@@ -40,13 +40,15 @@ async fn main() -> io::Result<()> {
             "127.0.0.1:8443",
             SharedCfg::new("EXAMPLE").add(HttpServiceConfig::new().set_client_timeout(Seconds(1))),
             async move || {
-                HttpService::new(async |req| {
-                    info!("{:?}", req);
-                    let mut res = Response::Ok();
-                    res.header("x-head", HeaderValue::from_static("dummy value!"));
-                    Ok::<_, io::Error>(res.body("Hello world!"))
-                })
-                .openssl(acceptor.clone())
+                http::openssl(
+                    acceptor.clone(),
+                    HttpService::new(async |req| {
+                        info!("{:?}", req);
+                        let mut res = Response::Ok();
+                        res.header("x-head", HeaderValue::from_static("dummy value!"));
+                        Ok::<_, io::Error>(res.body("Hello world!"))
+                    }),
+                )
             },
         )?
         .workers(1)

@@ -41,6 +41,7 @@ ntex-service = { workspace = true }
 ntex-net = { workspace = true }
 
 log = { workspace = true }
+thiserror = { workspace = true }
 
 # openssl
 tls_openssl = { workspace = true, optional = true }

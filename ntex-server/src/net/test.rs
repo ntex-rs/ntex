@@ -136,11 +136,10 @@ where
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub fn test_server<F, S, I>(factory: F) -> TestServer
+pub fn test_server<F, S>(factory: F) -> TestServer
 where
-    F: AsyncFn() -> I + Send + Clone + 'static,
+    F: AsyncFn() -> S + Send + Clone + 'static,
     S: Service<(), Req = Io> + 'static,
-    I: IntoService<S, ()> + 'static,
 {
     TestServerBuilder::new(factory).start()
 }

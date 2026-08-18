@@ -51,7 +51,7 @@ pub fn build() -> ServerBuilder {
 /// Ssl error combinded with service error.
 #[derive(Debug)]
 pub enum SslError<E> {
-    Ssl(Box<dyn std::error::Error>),
+    Ssl(std::io::Error),
     Service(E),
 }
 

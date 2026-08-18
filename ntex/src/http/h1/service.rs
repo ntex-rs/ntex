@@ -50,60 +50,6 @@ where
     }
 }
 
-#[cfg(feature = "openssl")]
-#[allow(clippy::wildcard_imports)]
-mod openssl {
-    use ntex_tls::openssl::{SslAcceptor, SslFilter};
-    use tls_openssl::ssl;
-
-    use super::*;
-    use crate::{io::Layer, server::SslError};
-
-    impl<Hst, F, B, Err> H1Service<Hst, Layer<SslFilter, F>, B, Err>
-    where
-        F: Filter,
-        B: MessageBody,
-        Err: ResponseError + 'static,
-    {
-        /// Create openssl based service
-        pub fn openssl(
-            self,
-            acceptor: ssl::SslAcceptor,
-        ) -> impl Service<Hst, Req = Io<F>, Res = (), Error = SslError<DispatchError>> {
-            SslAcceptor::new(acceptor)
-                .map_err(SslError::Ssl)
-                .and_then(self.map_err(SslError::Service))
-        }
-    }
-}
-
-#[cfg(feature = "rustls")]
-#[allow(clippy::wildcard_imports)]
-mod rustls {
-    use ntex_tls::rustls::{TlsAcceptor, TlsServerFilter};
-    use tls_rustls::ServerConfig;
-
-    use super::*;
-    use crate::{io::Layer, server::SslError};
-
-    impl<Hst, F, B, Err> H1Service<Hst, Layer<TlsServerFilter, F>, B, Err>
-    where
-        F: Filter,
-        B: MessageBody,
-        Err: ResponseError + 'static,
-    {
-        /// Create rustls based service
-        pub fn rustls(
-            self,
-            config: ServerConfig,
-        ) -> impl Service<Hst, Req = Io<F>, Res = (), Error = SslError<DispatchError>> {
-            TlsAcceptor::new(std::sync::Arc::new(config))
-                .map_err(|e| SslError::Ssl(Box::new(e)))
-                .and_then(self.map_err(SslError::Service))
-        }
-    }
-}
-
 impl<St, F, B, Err> H1Service<St, F, B, Err>
 where
     F: Filter,

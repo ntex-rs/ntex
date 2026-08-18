@@ -1,7 +1,7 @@
 use std::io;
 
 use ntex::http::{StatusCode, header};
-use ntex::service::{chain, fn_factory_with_config, fn_service, fn_shutdown};
+use ntex::service::{fn_factory_with_config, fn_service, fn_shutdown, svc};
 use ntex::util::{ByteString, Bytes};
 use ntex::web::{self, App, HttpRequest, HttpResponse, test, ws};
 use ntex::ws::error::WsClientError;
@@ -372,7 +372,7 @@ async fn web_ws_shutdown_propagation() {
                     None,
                     fn_factory_with_config(async move |_t: &ws::WsSink| {
                         let shutdown_tx = shutdown_tx.clone();
-                        Ok::<_, web::Error>(chain(service).and_then(fn_shutdown(async move || {
+                        Ok::<_, web::Error>(svc(service).and_then(fn_shutdown(async move || {
                             let _ = shutdown_tx.send(());
                         })))
                     }),

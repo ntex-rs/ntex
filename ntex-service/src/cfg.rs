@@ -147,6 +147,14 @@ impl<T: Configuration> Cfg<T> {
         self.get_ref().ctx().shared()
     }
 
+    /// Get a reference to a previously inserted on configuration.
+    pub fn get_shared<U>(&self) -> Cfg<U>
+    where
+        U: Configuration,
+    {
+        self.get_ref().ctx().get::<U>()
+    }
+
     fn get_ref(&self) -> &T {
         unsafe {
             (*self.0.get())

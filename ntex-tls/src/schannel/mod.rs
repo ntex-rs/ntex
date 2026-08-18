@@ -1,6 +1,5 @@
 //! An implementation of TLS streams backed by Windows Schannel.
 #![cfg(windows)]
-
 use std::{any, cell::RefCell, cmp, io, mem, ptr, slice, task::Poll};
 
 use ntex_bytes::{BufMut, BytesMut};

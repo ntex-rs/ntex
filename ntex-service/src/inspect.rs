@@ -252,7 +252,7 @@ mod tests {
     use std::{cell::Cell, rc::Rc};
 
     use super::*;
-    use crate::{chain, factory, fn_factory};
+    use crate::{factory, fn_factory, svc};
 
     #[derive(Debug, Clone)]
     struct Srv(bool, bool, Rc<Cell<usize>>);
@@ -279,7 +279,7 @@ mod tests {
     async fn test_inspect_ready() {
         let cnt = Rc::new(Cell::new(0));
         let cnt2 = cnt.clone();
-        let srv = chain(Srv(false, false, cnt.clone()))
+        let srv = svc(Srv(false, false, cnt.clone()))
             .inspect(move |&()| cnt2.set(cnt2.get() + 1))
             .into_pipeline();
         let res = srv.ready().await;
@@ -293,7 +293,7 @@ mod tests {
     async fn test_inspect_err_ready() {
         let cnt = Rc::new(Cell::new(0));
         let cnt2 = cnt.clone();
-        let srv = chain(Srv(true, true, cnt.clone()))
+        let srv = svc(Srv(true, true, cnt.clone()))
             .inspect_err(move |&()| cnt2.set(cnt2.get() + 1))
             .into_pipeline();
         let res = srv.ready().await;
@@ -307,7 +307,7 @@ mod tests {
     async fn test_inspect_service() {
         let cnt = Rc::new(Cell::new(0));
         let cnt2 = cnt.clone();
-        let srv = chain(Srv(false, false, cnt.clone()))
+        let srv = svc(Srv(false, false, cnt.clone()))
             .inspect(move |&()| cnt2.set(cnt2.get() + 1))
             .clone()
             .into_pipeline();
@@ -324,7 +324,7 @@ mod tests {
     async fn test_inspect_err_service() {
         let cnt = Rc::new(Cell::new(0));
         let cnt2 = cnt.clone();
-        let srv = chain(Srv(false, true, cnt.clone()))
+        let srv = svc(Srv(false, true, cnt.clone()))
             .inspect_err(move |&()| cnt2.set(cnt2.get() + 1))
             .clone()
             .into_pipeline();

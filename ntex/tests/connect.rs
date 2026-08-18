@@ -1,7 +1,7 @@
 use std::{io, rc::Rc};
 
 use ntex::io::{Io, types::PeerAddr};
-use ntex::service::{Pipeline, ServiceFactory, chain};
+use ntex::service::{Pipeline, ServiceFactory, svc};
 use ntex::{Service, SharedCfg, codec::BytesCodec, connect::Connect};
 use ntex::{server::build_test_server, server::test_server, time, util::Bytes};
 
@@ -43,12 +43,12 @@ async fn test_openssl_string() {
             tcp.take().unwrap(),
             SharedCfg::new("SRV"),
             async || {
-                chain(openssl::SslAcceptor::new(ssl_acceptor())).and_then(async move |io: Io<_>| {
+                svc(openssl::SslAcceptor::new(ssl_acceptor())).and_then(async move |io: Io<_>| {
                     io.send(Bytes::from_static(b"test"), &BytesCodec)
                         .await
                         .unwrap();
                     assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "test");
-                    Ok::<_, Box<dyn std::error::Error>>(())
+                    Ok::<_, io::Error>(())
                 })
             },
         )
@@ -104,12 +104,12 @@ async fn test_openssl_read_before_error() {
     use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 
     let srv = test_server(async || {
-        chain(openssl::SslAcceptor::new(ssl_acceptor())).and_then(async move |io: Io<_>| {
+        svc(openssl::SslAcceptor::new(ssl_acceptor())).and_then(async move |io: Io<_>| {
             io.send(Bytes::from_static(b"test"), &Rc::new(BytesCodec))
                 .await
                 .unwrap();
             time::sleep(time::Millis(50)).await;
-            Ok::<_, Box<dyn std::error::Error>>(())
+            Ok::<_, io::Error>(())
         })
     });
 
@@ -142,7 +142,7 @@ async fn test_schannel_string() {
     use tls_openssl::x509::X509;
 
     let srv = test_server(async || {
-        chain(openssl::SslAcceptor::new(ssl_acceptor())).and_then(async move |io: Io<_>| {
+        svc(openssl::SslAcceptor::new(ssl_acceptor())).and_then(async move |io: Io<_>| {
             let item = io.recv(&BytesCodec).await.unwrap().unwrap();
             io.send(item, &BytesCodec).await.unwrap();
             Ok::<_, Box<dyn std::error::Error>>(())
@@ -451,13 +451,13 @@ async fn test_rustls_keyupdate_response_flushed() {
 #[ntex::test]
 async fn test_static_str() {
     let srv = test_server(async || {
-        async move |io: Io| {
+        svc(async move |io: Io| {
             io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
                 .unwrap();
             time::sleep(time::Millis(100)).await;
             Ok::<_, io::Error>(())
-        }
+        })
     });
 
     // original
@@ -475,12 +475,12 @@ async fn test_static_str() {
 #[ntex::test]
 async fn test_create() {
     let srv = test_server(async || {
-        async move |io: Io| {
+        svc(async move |io: Io| {
             io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
                 .unwrap();
             Ok::<_, io::Error>(())
-        }
+        })
     });
     time::sleep(time::Millis(100)).await;
 
@@ -493,12 +493,12 @@ async fn test_create() {
 #[ntex::test]
 async fn test_uri() {
     let srv = test_server(async || {
-        async move |io: Io| {
+        svc(async move |io: Io| {
             io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
                 .unwrap();
             Ok::<_, io::Error>(())
-        }
+        })
     });
     time::sleep(time::Millis(100)).await;
 
@@ -538,7 +538,7 @@ async fn test_rustls_uri() {
 
 #[ntex::test]
 async fn basic_connect_service() {
-    let server = ntex::server::test_server(async || async |_| Ok::<_, ()>(()));
+    let server = ntex::server::test_server(async || svc(async |_| Ok::<_, ()>(())));
 
     let srv = ntex_net::connect::Connector::default()
         .create(

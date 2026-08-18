@@ -202,7 +202,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_pipeline() {
-        let srv = Pipeline::new(crate::chain(Srv::default()).map(|()| "ok").clone());
+        let srv = Pipeline::new(crate::svc(Srv::default()).map(|()| "ok").clone());
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");

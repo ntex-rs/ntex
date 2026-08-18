@@ -5,7 +5,7 @@ use tls_openssl::ssl::{AlpnError, SslAcceptor, SslAcceptorBuilder};
 #[cfg(feature = "rustls")]
 use tls_rustls::ServerConfig as RustlsServerConfig;
 
-use crate::http::{HttpService, Request, Response, ResponseError, body::MessageBody};
+use crate::http::{self, Request, Response, ResponseError, body::MessageBody};
 use crate::server::{Server, ServerBuilder};
 use crate::service::{IntoServiceFactory, ServiceFactory};
 use crate::{SharedCfg, time::Seconds};
@@ -207,7 +207,7 @@ where
             format!("ntex-web-service-{addr}"),
             lst,
             cfg.into(),
-            async move || HttpService::<(), _, _, _>::new(factory().await),
+            async move || http::HttpService::new(factory().await),
         )?;
         Ok(self)
     }
@@ -222,11 +222,11 @@ where
         cfg: impl Into<SharedCfg>,
         builder: SslAcceptorBuilder,
     ) -> io::Result<Self> {
-        self.listen_ssl_inner(lst, cfg.into(), openssl_acceptor(builder)?)
+        self.listen_openssl_inner(lst, cfg.into(), openssl_acceptor(builder)?)
     }
 
     #[cfg(feature = "openssl")]
-    fn listen_ssl_inner(
+    fn listen_openssl_inner(
         mut self,
         lst: net::TcpListener,
         cfg: SharedCfg,
@@ -239,9 +239,7 @@ where
             format!("ntex-web-service-{addr}"),
             lst,
             cfg,
-            async move || {
-                HttpService::<(), _, _, _>::new(factory().await).openssl(acceptor.clone())
-            },
+            async move || http::openssl(acceptor.clone(), http::HttpService::new(factory().await)),
         )?;
         Ok(self)
     }
@@ -273,7 +271,13 @@ where
             format!("ntex-web-rustls-service-{addr}"),
             lst,
             cfg,
-            async move || HttpService::<(), _, _, _>::new(factory().await).rustls(config.clone()),
+            async move || {
+                http::rustls(
+                    config.clone(),
+                    http::ALPN_PROTOS,
+                    http::HttpService::new(factory().await),
+                )
+            },
         )?;
         Ok(self)
     }
@@ -338,7 +342,7 @@ where
         let acceptor = openssl_acceptor(builder)?;
 
         for lst in sockets {
-            self = self.listen_ssl_inner(lst, cfg.clone(), acceptor.clone())?;
+            self = self.listen_openssl_inner(lst, cfg.clone(), acceptor.clone())?;
         }
 
         Ok(self)
@@ -377,7 +381,7 @@ where
         self.builder = self
             .builder
             .listen_uds(addr, lst, cfg.into(), async move || {
-                HttpService::<(), _, _, _>::new(factory().await)
+                http::HttpService::new(factory().await)
             })?;
         Ok(self)
     }
@@ -396,7 +400,7 @@ where
             format!("ntex-web-service-{:?}", addr.as_ref().display()),
             addr,
             cfg.into(),
-            async move || HttpService::<(), _, _, _>::new(factory().await),
+            async move || http::HttpService::new(factory().await),
         )?;
         Ok(self)
     }

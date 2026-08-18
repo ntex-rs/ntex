@@ -15,7 +15,7 @@ use crate::http::error::{HttpError, ResponseError};
 use crate::http::header::{CONTENT_TYPE, HeaderName, HeaderValue};
 use crate::http::test::TestRequest as HttpTestRequest;
 use crate::http::{
-    HttpService, HttpServiceConfig, Method, Payload, Request, Response, StatusCode, Uri, Version,
+    self, HttpService, Method, Payload, Request, Response, StatusCode, Uri, Version,
 };
 #[cfg(feature = "ws")]
 use crate::io::Sealed;
@@ -649,7 +649,7 @@ where
             let c = cfg.srv_cfg.clone().unwrap_or_else(|| {
                 SharedCfg::new("WEB-SRV")
                     .add(IoConfig::new())
-                    .add(HttpServiceConfig::new().set_headers_read_rate(
+                    .add(http::HttpServiceConfig::new().set_headers_read_rate(
                         ctimeout,
                         Seconds::ZERO,
                         256,
@@ -666,37 +666,49 @@ where
             let srv = match cfg.stream {
                 StreamType::Tcp => match cfg.tp {
                     HttpVer::Http1 => builder.listen("test", tcp, c, async move || {
-                        HttpService::<(), _, _, _>::h1(factory().await)
+                        HttpService::h1(factory().await)
                     }),
                     HttpVer::Http2 => builder.listen("test", tcp, c, async move || {
-                        HttpService::<(), _, _, _>::h2(factory().await)
+                        HttpService::h2(factory().await)
                     }),
                     HttpVer::Both => builder.listen("test", tcp, c, async move || {
-                        HttpService::<(), _, _, _>::new(factory().await)
+                        HttpService::new(factory().await)
                     }),
                 },
                 #[cfg(feature = "openssl")]
                 StreamType::Openssl(acceptor) => match cfg.tp {
                     HttpVer::Http1 => builder.listen("test", tcp, c, async move || {
-                        HttpService::<(), _, _, _>::h1(factory().await).openssl(acceptor.clone())
+                        http::openssl(acceptor.clone(), HttpService::h1(factory().await))
                     }),
                     HttpVer::Http2 => builder.listen("test", tcp, c, async move || {
-                        HttpService::<(), _, _, _>::h2(factory().await).openssl(acceptor.clone())
+                        http::openssl(acceptor.clone(), HttpService::h2(factory().await))
                     }),
                     HttpVer::Both => builder.listen("test", tcp, c, async move || {
-                        HttpService::<(), _, _, _>::new(factory().await).openssl(acceptor.clone())
+                        http::openssl(acceptor.clone(), HttpService::new(factory().await))
                     }),
                 },
                 #[cfg(feature = "rustls")]
                 StreamType::Rustls(config) => match cfg.tp {
                     HttpVer::Http1 => builder.listen("test", tcp, c, async move || {
-                        HttpService::<(), _, _, _>::h1(factory().await).rustls(config.clone())
+                        http::rustls(
+                            config.clone(),
+                            http::ALPN_PROTO_H1,
+                            HttpService::h1(factory().await),
+                        )
                     }),
                     HttpVer::Http2 => builder.listen("test", tcp, c, async move || {
-                        HttpService::<(), _, _, _>::h2(factory().await).rustls(config.clone())
+                        http::rustls(
+                            config.clone(),
+                            http::ALPN_PROTO_H2,
+                            HttpService::h2(factory().await),
+                        )
                     }),
                     HttpVer::Both => builder.listen("test", tcp, c, async move || {
-                        HttpService::<(), _, _, _>::new(factory().await).rustls(config.clone())
+                        http::rustls(
+                            config.clone(),
+                            http::ALPN_PROTOS,
+                            HttpService::new(factory().await),
+                        )
                     }),
                 },
             }
