@@ -7,9 +7,11 @@ use ntex_service::{Ctx, IntoServiceFactory, ReadyCtx, Service, ServiceFactory};
 /// Construct `Variant` service factory.
 ///
 /// Variant service allow to combine multiple different services into a single service.
-pub fn variant<V1: ServiceFactory<V1R>, St, V1R>(factory: V1) -> Variant<V1, St, V1R> {
+pub fn variant<V1: ServiceFactory<V1R, St>, St, V1R>(
+    f: impl IntoServiceFactory<V1, St, V1R>,
+) -> Variant<V1, St, V1R> {
     Variant {
-        factory,
+        factory: f.into_factory(),
         _t: PhantomData,
     }
 }
@@ -22,24 +24,26 @@ pub struct Variant<A, St, AR> {
 
 impl<A, St, AR> Variant<A, St, AR>
 where
-    A: ServiceFactory<AR>,
+    A: ServiceFactory<AR, St>,
 {
     /// Convert to a Variant with two request types
-    pub fn v2<B, BR, F>(self, factory: F) -> VariantFactory2<St, A, B, AR, BR>
+    pub fn v2<B, BR>(
+        self,
+        f: impl IntoServiceFactory<B, St, BR>,
+    ) -> VariantFactory2<St, A, B, AR, BR>
     where
         B: ServiceFactory<
                 BR,
-                St = St,
+                St,
                 Res = A::Res,
                 Error = A::Error,
                 InitCfg = A::InitCfg,
                 InitError = A::InitError,
             >,
-        F: IntoServiceFactory<B, BR>,
     {
         VariantFactory2 {
             V1: self.factory,
-            V2: factory.into_factory(),
+            V2: f.into_factory(),
             _t: PhantomData,
         }
     }
@@ -61,17 +65,17 @@ macro_rules! variant_impl_and ({$fac1_type:ident, $fac2_type:ident, $name:ident,
     #[allow(non_snake_case)]
     impl<St, V1, $($T,)+ V1R, $($R,)+> $fac1_type<St, V1, $($T,)+ V1R, $($R,)+>
         where
-            V1: ServiceFactory<V1R, St = St>,
+            V1: ServiceFactory<V1R, St>,
         {
             /// Convert to a Variant with more request types
             pub fn $m_name<$name, $r_name, F>(self, factory: F) -> $fac2_type<St, V1, $($T,)+ $name, V1R, $($R,)+ $r_name>
             where $name: ServiceFactory<$r_name,
-                    St = St,
+                    St,
                     Res = V1::Res,
                     Error = V1::Error,
                     InitCfg = V1::InitCfg,
                     InitError = V1::InitError>,
-                  F: IntoServiceFactory<$name, $r_name>,
+                  F: IntoServiceFactory<$name, St, $r_name>,
             {
                 $fac2_type {
                     V1: self.V1,
@@ -117,17 +121,16 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
         }
     }
 
-    impl<St, V1, $($T,)+ V1R, $($R,)+> Service for $srv_type<St, V1, $($T,)+ V1R, $($R,)+>
+    impl<St, V1, $($T,)+ V1R, $($R,)+> Service<St> for $srv_type<St, V1, $($T,)+ V1R, $($R,)+>
     where
-        V1: Service<St = St, Req = V1R>,
-        $($T: Service<St = St, Req = $R, Res = V1::Res, Error = V1::Error>),+
+        V1: Service<St, Req = V1R>,
+        $($T: Service<St, Req = $R, Res = V1::Res, Error = V1::Error>),+
     {
-        type St = St;
         type Req = $enum_type<V1R, $($R,)+>;
         type Res = V1::Res;
         type Error = V1::Error;
 
-        async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
             use std::{future::Future, pin::Pin};
 
             let mut fut1 = ::std::pin::pin!(ctx.ready(&self.V1));
@@ -152,16 +155,16 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
             }).await
         }
 
-        async fn shutdown(&self) {
-            self.V1.shutdown().await;
-            $(self.$T.shutdown().await;)+
-        }
-
-        async fn call(&self, req: $enum_type<V1R, $($R,)+>, ctx: Ctx<'_, Self>) -> Result<Self::Res, Self::Error> {
+        async fn call(&self, req: $enum_type<V1R, $($R,)+>, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
             match req {
                 $enum_type::V1(req) => ctx.call(&self.V1, req).await,
                 $($enum_type::$T(req) => ctx.call(&self.$T, req).await,)+
             }
+        }
+
+        async fn shutdown(&self) {
+            self.V1.shutdown().await;
+            $(self.$T.shutdown().await;)+
         }
     }
 
@@ -191,12 +194,11 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
         }
     }
 
-    impl<St, V1, $($T,)+ V1R, $($R,)+> ServiceFactory<$enum_type<V1R, $($R),+>> for $fac_type<St, V1, $($T,)+ V1R, $($R,)+>
+    impl<St, V1, $($T,)+ V1R, $($R,)+> ServiceFactory<$enum_type<V1R, $($R),+>, St> for $fac_type<St, V1, $($T,)+ V1R, $($R,)+>
     where
-        V1: ServiceFactory<V1R, St = St>,
-        $($T: ServiceFactory<$R, St = St, Res = V1::Res, Error = V1::Error, InitCfg = V1::InitCfg, InitError = V1::InitError>),+
+        V1: ServiceFactory<V1R, St>,
+        $($T: ServiceFactory<$R, St, Res = V1::Res, Error = V1::Error, InitCfg = V1::InitCfg, InitError = V1::InitError>),+
     {
-        type St = St;
         type Res = V1::Res;
         type Error = V1::Error;
         type Service = $srv_type<St, V1::Service, $($T::Service,)+ V1R, $($R,)+>;
@@ -244,7 +246,7 @@ variant_impl_and!(VariantFactory7, VariantFactory8, V8, V8R, v8, (V2, V3, V4, V5
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unused_async_trait_impl)]
-    use ntex_service::{fn_factory, fn_service};
+    use ntex_service::{Pipeline, fn_factory, fn_service};
 
     use super::*;
     use crate::time;
@@ -253,7 +255,6 @@ mod tests {
     struct Srv1;
 
     impl Service for Srv1 {
-        type St = ();
         type Req = ();
         type Res = usize;
         type Error = ();
@@ -273,7 +274,6 @@ mod tests {
     struct Srv2;
 
     impl Service for Srv2 {
-        type St = ();
         type Req = ();
         type Res = usize;
         type Error = ();
@@ -317,7 +317,6 @@ mod tests {
         struct Srv5;
 
         impl Service for Srv5 {
-            type St = ();
             type Req = ();
             type Res = usize;
             type Error = ();
@@ -334,15 +333,15 @@ mod tests {
             }
         }
 
-        let factory = variant(fn_service(|()| async { Ok::<_, ()>(0) }))
-            .v2(fn_factory(|| async { Ok::<_, ()>(Srv5) }))
-            .v3(fn_service(|()| crate::future::Ready::Ok::<_, ()>(2)));
+        let factory = variant(fn_service(async |()| Ok::<_, ()>(0)))
+            .v2(fn_factory(async || Ok::<_, ()>(Srv5)).map_init_err(|()| unreachable!()))
+            .v3(fn_service(async |()| Ok::<_, ()>(2)));
         assert!(format!("{factory:?}").contains("Variant"));
 
         let service = factory.clone().create(&()).await.unwrap().clone();
         assert!(format!("{service:?}").contains("Variant"));
 
-        let service = factory.pipeline(&()).await.unwrap();
+        let service = Pipeline::new(factory.create(&()).await.unwrap());
         assert!(service.ready().await.is_ok());
         assert!(format!("{service:?}").contains("Variant"));
     }

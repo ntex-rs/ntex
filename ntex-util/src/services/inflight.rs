@@ -50,17 +50,16 @@ impl<S> InFlightService<S> {
     }
 }
 
-impl<S> Service for InFlightService<S>
+impl<S, St> Service<St> for InFlightService<S>
 where
-    S: Service,
+    S: Service<St>,
 {
-    type St = S::St;
     type Req = S::Req;
     type Res = S::Res;
     type Error = S::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), S::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), S::Error> {
         if self.count.is_available() {
             ctx.ready(&self.service).await
         } else {
@@ -71,7 +70,7 @@ where
     }
 
     #[inline]
-    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self>) -> Result<S::Res, S::Error> {
+    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
         ctx.ready(self).await?;
         let _guard = self.count.get();
         ctx.call(&self.service, req).await
@@ -93,7 +92,6 @@ mod tests {
     struct SleepService(mpmc::Receiver<()>);
 
     impl Service for SleepService {
-        type St = ();
         type Req = ();
         type Res = ();
         type Error = ();

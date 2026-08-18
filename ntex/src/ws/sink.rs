@@ -1,6 +1,7 @@
-use std::{future::Future, rc::Rc};
+#![allow(clippy::unused_async)]
+use std::rc::Rc;
 
-use crate::{io::IoRef, io::OnDisconnect, util::Ready, ws};
+use crate::{io::IoRef, io::OnDisconnect, ws};
 
 #[derive(Clone, Debug)]
 pub struct WsSink(Rc<WsSinkInner>);
@@ -22,22 +23,19 @@ impl WsSink {
     }
 
     /// Endcode and send message to the peer
-    pub fn send(
-        &self,
-        item: ws::Message,
-    ) -> impl Future<Output = Result<(), ws::error::ProtocolError>> {
+    pub async fn send(&self, item: ws::Message) -> Result<(), ws::error::ProtocolError> {
         let close = match item {
             ws::Message::Close(_) => self.0.codec.is_closed(),
             _ => false,
         };
 
         if let Err(e) = self.0.io.encode(item, &self.0.codec) {
-            Ready::Err(e)
+            Err(e)
         } else {
             if close {
                 self.0.io.close();
             }
-            Ready::Ok(())
+            Ok(())
         }
     }
 

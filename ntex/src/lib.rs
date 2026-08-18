@@ -38,8 +38,9 @@ pub mod web;
 pub mod ws;
 
 pub use self::service::{
-    Ctx, IntoService, IntoServiceFactory, Middleware, Pipeline, PipelineBinding, ReadyCtx,
-    Service, ServiceFactory, cfg::Cfg, cfg::SharedCfg, chain, chain_factory, fn_service,
+    Ctx, FromState, IntoService, IntoServiceFactory, Middleware, Pipeline, PipelineBinding,
+    PipelineFactory, ReadyCtx, Service, ServiceFactory, State, cfg::Cfg, cfg::SharedCfg, factory,
+    fn_service, svc,
 };
 
 pub use ntex_util::{channel, task};
@@ -117,11 +118,11 @@ pub mod error {
 }
 
 pub mod util {
-    use std::{error::Error, io, rc::Rc};
-
     pub use ntex_bytes::{Buf, BufMut, ByteString, Bytes, BytesMut};
     pub use ntex_bytes::{BytePage, BytePageSize, BytePages};
-    pub use ntex_util::{HashMap, HashSet, future::*, services::*};
+    pub use ntex_util::{
+        HashMap, HashSet, clone_io_error, dyn_err, dyn_rc_err, future::*, services::*, str_rc_err,
+    };
 
     #[doc(hidden)]
     pub fn enable_test_logging() {
@@ -134,21 +135,5 @@ pub mod util {
             }
             let _ = env_logger::builder().is_test(true).try_init();
         }
-    }
-
-    pub fn dyn_rc_error<T: Error + 'static>(err: T) -> Rc<dyn Error> {
-        Rc::new(err)
-    }
-
-    pub fn str_rc_error(s: String) -> Rc<dyn Error> {
-        #[derive(thiserror::Error, Debug)]
-        #[error("{_0}")]
-        struct StringError(String);
-
-        Rc::new(StringError(s))
-    }
-
-    pub fn clone_io_error(err: &io::Error) -> io::Error {
-        io::Error::new(err.kind(), format!("{err:?}"))
     }
 }

@@ -5,7 +5,7 @@ use crate::router::ResourceDef;
 use crate::service::boxed::{self, BoxServiceFactory};
 use crate::service::cfg::SharedCfg;
 use crate::service::{Ctx, Identity, Middleware, Service, ServiceFactory};
-use crate::service::{IntoServiceFactory, chain_factory, dev::ServiceChainFactory};
+use crate::service::{IntoServiceFactory, dev::ServiceChainFactory, factory};
 use crate::util::{BoxFuture, Extensions};
 
 use super::app_service::{AppFactory, AppService};
@@ -16,7 +16,7 @@ use super::response::WebResponse;
 use super::route::Route;
 use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
 use super::stack::WebStack;
-use super::{DefaultError, ErrorRenderer};
+use super::{DefaultError, ErrorRenderer, error::AppInitError};
 
 type HttpNewService<Err: ErrorRenderer> =
     BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, SharedCfg, ()>;
@@ -28,7 +28,7 @@ type FnStateFactory = Box<dyn Fn(Extensions) -> BoxFuture<'static, Result<Extens
 #[debug("App")]
 pub struct App<M, F, Err: ErrorRenderer = DefaultError> {
     middleware: M,
-    filter: ServiceChainFactory<F, WebRequest<Err>>,
+    filter: ServiceChainFactory<F, (), WebRequest<Err>>,
     services: Vec<Box<dyn AppServiceFactory<Err>>>,
     default: Option<Rc<HttpNewService<Err>>>,
     external: Vec<ResourceDef>,
@@ -50,7 +50,7 @@ impl App<Identity, Filter<DefaultError>, DefaultError> {
     pub fn new() -> Self {
         App {
             middleware: Identity,
-            filter: chain_factory(Filter::new()),
+            filter: factory(Filter::new()),
             state_factories: Vec::new(),
             services: Vec::new(),
             default: None,
@@ -68,7 +68,7 @@ impl<Err: ErrorRenderer> App<Identity, Filter<Err>, Err> {
     pub fn with(err: Err) -> Self {
         App {
             middleware: Identity,
-            filter: chain_factory(Filter::new()),
+            filter: factory(Filter::new()),
             state_factories: Vec::new(),
             services: Vec::new(),
             default: None,
@@ -84,7 +84,6 @@ impl<M, T, Err> App<M, T, Err>
 where
     T: ServiceFactory<
             WebRequest<Err>,
-            St = (),
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -139,7 +138,7 @@ where
     where
         F: AsyncFnOnce() -> Result<D, E> + 'static,
         D: 'static,
-        E: fmt::Debug,
+        E: fmt::Debug + 'static,
     {
         let state = Cell::new(Some(state));
 
@@ -149,8 +148,8 @@ where
             Box::pin(async move {
                 if let Some(state) = state.take() {
                     match state().await {
-                        Err(e) => {
-                            log::error!("Cannot construct state instance: {e:?}");
+                        Err(_) => {
+                            log::error!("Cannot construct state instance");
                             Err(())
                         }
                         Ok(st) => {
@@ -181,8 +180,8 @@ where
     /// // this function could be located in different module
     /// fn config(cfg: &mut web::ServiceConfig) {
     ///     cfg.service(web::resource("/test")
-    ///         .route(web::get().to(|| async { HttpResponse::Ok() }))
-    ///         .route(web::head().to(|| async { HttpResponse::MethodNotAllowed() }))
+    ///         .route(web::get().to(async || { HttpResponse::Ok() }))
+    ///         .route(web::head().to(async || { HttpResponse::MethodNotAllowed() }))
     ///     );
     /// }
     ///
@@ -190,7 +189,7 @@ where
     ///     let app = App::new()
     ///         .middleware(middleware::Logger::default())
     ///         .configure(config)  // <- register resources
-    ///         .route("/index.html", web::get().to(|| async { HttpResponse::Ok() }));
+    ///         .route("/index.html", web::get().to(async || { HttpResponse::Ok() }));
     /// }
     /// ```
     pub fn configure<F>(mut self, f: F) -> Self
@@ -222,7 +221,7 @@ where
     /// fn main() {
     ///     let app = App::new()
     ///         .route("/test1", web::get().to(index))
-    ///         .route("/test2", web::post().to(|| async { HttpResponse::MethodNotAllowed() }));
+    ///         .route("/test2", web::post().to(async || { HttpResponse::MethodNotAllowed() }));
     /// }
     /// ```
     pub fn route(self, path: &str, mut route: Route<Err>) -> Self {
@@ -269,7 +268,7 @@ where
     ///         .service(
     ///             web::resource("/index.html").route(web::get().to(index)))
     ///         .default_service(
-    ///             web::route().to(|| async { HttpResponse::NotFound() }));
+    ///             web::route().to(async || { HttpResponse::NotFound() }));
     /// }
     /// ```
     ///
@@ -281,18 +280,17 @@ where
     /// fn main() {
     ///     let app = App::new()
     ///         .service(
-    ///             web::resource("/index.html").to(|| async { HttpResponse::Ok() }))
+    ///             web::resource("/index.html").to(async || { HttpResponse::Ok() }))
     ///         .default_service(
-    ///             web::to(|| async { HttpResponse::NotFound() })
+    ///             web::to(async || { HttpResponse::NotFound() })
     ///         );
     /// }
     /// ```
     pub fn default_service<F, U>(mut self, f: F) -> Self
     where
-        F: IntoServiceFactory<U, WebRequest<Err>>,
+        F: IntoServiceFactory<U, (), WebRequest<Err>>,
         U: ServiceFactory<
                 WebRequest<Err>,
-                St = (),
                 Res = WebResponse,
                 Error = Err::Container,
                 InitCfg = SharedCfg,
@@ -300,10 +298,9 @@ where
         U::InitError: fmt::Debug,
     {
         // create and configure default resource
-        self.default = Some(Rc::new(boxed::factory(
-            chain_factory(f)
-                .map_init_err(|e| log::error!("Cannot construct default service: {e:?}")),
-        )));
+        self.default = Some(Rc::new(boxed::factory(factory(f).map_init_err(|e| {
+            log::error!("Cannot construct default service: {e:?}");
+        }))));
 
         self
     }
@@ -370,12 +367,11 @@ where
     /// ```
     pub fn filter<S>(
         self,
-        filter: impl IntoServiceFactory<S, WebRequest<Err>>,
+        filter: impl IntoServiceFactory<S, (), WebRequest<Err>>,
     ) -> App<
         M,
         impl ServiceFactory<
             WebRequest<Err>,
-            St = (),
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -386,7 +382,6 @@ where
     where
         S: ServiceFactory<
                 WebRequest<Err>,
-                St = (),
                 Res = WebRequest<Err>,
                 Error = Err::Container,
                 InitCfg = SharedCfg,
@@ -462,11 +457,9 @@ where
 impl<M, F, Err> App<M, F, Err>
 where
     M: Middleware<AppService<F::Service, Err>, SharedCfg> + 'static,
-    M::Service:
-        Service<St = (), Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    M::Service: Service<Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
             WebRequest<Err>,
-            St = (),
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -484,7 +477,7 @@ where
     ///     server::build().bind("http", "127.0.0.1:0", async |_|
     ///         http::HttpService::new(
     ///             web::App::new()
-    ///                 .route("/index.html", web::get().to(|| async { "hello_world" }))
+    ///                 .route("/index.html", web::get().to(async || { "hello_world" }))
     ///                 .finish()
     ///         )
     ///     )?
@@ -496,24 +489,21 @@ where
         self,
     ) -> impl ServiceFactory<
         Request,
-        St = (),
         Res = WebResponse,
         Error = Err::Container,
         InitCfg = SharedCfg,
-        InitError = (),
+        InitError = AppInitError,
     > {
-        IntoServiceFactory::<AppFactory<M, F, Err>, Request>::into_factory(self)
+        IntoServiceFactory::<AppFactory<M, F, Err>, (), Request>::into_factory(self)
     }
 }
 
-impl<M, F, Err> IntoServiceFactory<AppFactory<M, F, Err>, Request> for App<M, F, Err>
+impl<M, F, Err> IntoServiceFactory<AppFactory<M, F, Err>, (), Request> for App<M, F, Err>
 where
     M: Middleware<AppService<F::Service, Err>, SharedCfg> + 'static,
-    M::Service:
-        Service<St = (), Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    M::Service: Service<Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
             WebRequest<Err>,
-            St = (),
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -546,13 +536,12 @@ impl<Err: ErrorRenderer> Filter<Err> {
 }
 
 impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for Filter<Err> {
-    type St = ();
     type Res = WebRequest<Err>;
     type Error = Err::Container;
 
+    type Service = Filter<Err>;
     type InitCfg = SharedCfg;
     type InitError = ();
-    type Service = Filter<Err>;
 
     async fn create(&self, _: &SharedCfg) -> Result<Self::Service, Self::InitError> {
         Ok(Filter(PhantomData))
@@ -560,16 +549,11 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for Filter<Err> {
 }
 
 impl<Err: ErrorRenderer> Service for Filter<Err> {
-    type St = ();
     type Req = WebRequest<Err>;
     type Res = WebRequest<Err>;
     type Error = Err::Container;
 
-    async fn call(
-        &self,
-        req: WebRequest<Err>,
-        _: Ctx<'_, Self>,
-    ) -> Result<Self::Req, Self::Error> {
+    async fn call(&self, req: Self::Req, _: Ctx<'_, Self, ()>) -> Result<Self::Req, Self::Error> {
         Ok(req)
     }
 }
@@ -580,12 +564,11 @@ mod tests {
     use crate::http::{Method, StatusCode, header, header::HeaderValue};
     use crate::web::test::{TestRequest, call_service, init_service, read_body};
     use crate::web::{self, HttpRequest, HttpResponse, middleware::DefaultHeaders};
-    use crate::{service::fn_service, util::Ready};
 
     #[crate::rt_test]
     async fn test_default_resource() {
         let srv = App::new()
-            .service(web::resource("/test").to(|| async { HttpResponse::Ok() }))
+            .service(web::resource("/test").to(async || HttpResponse::Ok()))
             .finish()
             .pipeline(&SharedCfg::default())
             .await
@@ -599,15 +582,15 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
         let srv = App::new()
-            .service(web::resource("/test").to(|| async { HttpResponse::Ok() }))
+            .service(web::resource("/test").to(async || HttpResponse::Ok()))
             .service(
                 web::resource("/test2")
-                    .default_service(|r: WebRequest<DefaultError>| async move {
+                    .default_service(async move |r: WebRequest<DefaultError>| {
                         Ok(r.into_response(HttpResponse::Created()))
                     })
-                    .route(web::get().to(|| async { HttpResponse::Ok() })),
+                    .route(web::get().to(async || HttpResponse::Ok())),
             )
-            .default_service(|r: WebRequest<DefaultError>| async move {
+            .default_service(async move |r: WebRequest<DefaultError>| {
                 Ok(r.into_response(HttpResponse::MethodNotAllowed()))
             })
             .finish()
@@ -634,10 +617,9 @@ mod tests {
     async fn test_state_factory() {
         let srv = init_service(
             App::new()
-                .state_factory(|| async { Ok::<_, ()>(10usize) })
+                .state_factory(async || Ok::<_, ()>(10usize))
                 .service(
-                    web::resource("/")
-                        .to(|_: web::types::State<usize>| async { HttpResponse::Ok() }),
+                    web::resource("/").to(async |_: web::types::State<usize>| HttpResponse::Ok()),
                 ),
         )
         .await;
@@ -647,10 +629,9 @@ mod tests {
 
         let srv = init_service(
             App::new()
-                .state_factory(|| async { Ok::<_, ()>(10u32) })
+                .state_factory(async || Ok::<_, ()>(10u32))
                 .service(
-                    web::resource("/")
-                        .to(|_: web::types::State<usize>| async { HttpResponse::Ok() }),
+                    web::resource("/").to(async |_: web::types::State<usize>| HttpResponse::Ok()),
                 ),
         )
         .await;
@@ -664,11 +645,11 @@ mod tests {
         let srv = init_service(
             App::new()
                 .state(10usize)
-                .filter(fn_service(move |req: WebRequest<_>| {
+                .filter(async move |req: WebRequest<_>| {
                     assert_eq!(*req.app_state::<usize>().unwrap(), 10);
-                    Ready::Ok(req)
-                }))
-                .service(web::resource("/").to(|req: HttpRequest| async move {
+                    Ok(req)
+                })
+                .service(web::resource("/").to(async move |req: HttpRequest| {
                     assert_eq!(*req.app_state::<usize>().unwrap(), 10);
                     HttpResponse::Ok()
                 })),
@@ -685,11 +666,11 @@ mod tests {
         let filter2 = filter.clone();
         let srv = init_service(
             App::new()
-                .filter(fn_service(move |req: WebRequest<_>| {
+                .filter(async move |req: WebRequest<_>| {
                     filter2.set(true);
-                    Ready::Ok(req)
-                }))
-                .route("/test", web::get().to(|| async { HttpResponse::Ok() })),
+                    Ok(req)
+                })
+                .route("/test", web::get().to(async || HttpResponse::Ok())),
         )
         .await;
         let req = TestRequest::with_uri("/test").to_request();
@@ -706,7 +687,7 @@ mod tests {
                     DefaultHeaders::new()
                         .header(header::CONTENT_TYPE, HeaderValue::from_static("0001")),
                 )
-                .route("/test", web::get().to(|| async { HttpResponse::Ok() })),
+                .route("/test", web::get().to(async || HttpResponse::Ok())),
         )
         .await;
         let req = TestRequest::with_uri("/test").to_request();
@@ -722,7 +703,7 @@ mod tests {
     async fn test_router_wrap() {
         let srv = init_service(
             App::new()
-                .route("/test", web::get().to(|| async { HttpResponse::Ok() }))
+                .route("/test", web::get().to(async || HttpResponse::Ok()))
                 .middleware(
                     DefaultHeaders::new()
                         .header(header::CONTENT_TYPE, HeaderValue::from_static("0001")),
@@ -743,7 +724,7 @@ mod tests {
         let srv = init_service(
             App::new()
                 .case_insensitive_routing()
-                .route("/test", web::get().to(|| async { HttpResponse::Ok() })),
+                .route("/test", web::get().to(async || HttpResponse::Ok())),
         )
         .await;
         let req = TestRequest::with_uri("/test").to_request();
@@ -765,7 +746,7 @@ mod tests {
                 .external_resource("youtube", "https://youtube.com/watch/{video_id}")
                 .route(
                     "/test",
-                    web::get().to(|req: HttpRequest| async move {
+                    web::get().to(async move |req: HttpRequest| {
                         HttpResponse::Ok()
                             .body(format!("{}", req.url_for("youtube", ["12345"]).unwrap()))
                     }),

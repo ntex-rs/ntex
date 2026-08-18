@@ -169,9 +169,8 @@ impl Visitor<'_> for HeaderValueVisitor {
     where
         E: de::Error,
     {
-        HeaderValue::from_str(v).map_err(|_| {
-            de::Error::invalid_value(Unexpected::Str(v), &"a valid header value")
-        })
+        HeaderValue::from_str(v)
+            .map_err(|_| de::Error::invalid_value(Unexpected::Str(v), &"a valid header value"))
     }
 
     fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
@@ -185,9 +184,8 @@ impl Visitor<'_> for HeaderValueVisitor {
     where
         E: de::Error,
     {
-        HeaderValue::from_bytes(v).map_err(|_| {
-            de::Error::invalid_value(Unexpected::Bytes(v), &"a valid header value")
-        })
+        HeaderValue::from_bytes(v)
+            .map_err(|_| de::Error::invalid_value(Unexpected::Bytes(v), &"a valid header value"))
     }
 
     fn visit_byte_buf<E>(self, v: Vec<u8>) -> Result<Self::Value, E>

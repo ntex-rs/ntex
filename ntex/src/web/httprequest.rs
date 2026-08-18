@@ -1,8 +1,6 @@
 use std::{cell::Ref, cell::RefMut, fmt, net, rc::Rc};
 
-use crate::http::{
-    HeaderMap, HttpMessage, Message, Method, Payload, RequestHead, Uri, Version,
-};
+use crate::http::{HeaderMap, HttpMessage, Message, Method, Payload, RequestHead, Uri, Version};
 use crate::{io::IoRef, io::types, router::Path, util::Extensions};
 
 use super::config::WebAppConfig;
@@ -433,7 +431,7 @@ mod tests {
     #[crate::rt_test]
     async fn test_state() {
         let srv = init_service(App::new().state(10usize).service(web::resource("/").to(
-            |req: HttpRequest| async move {
+            async move |req: HttpRequest| {
                 if req.app_state::<usize>().is_some() {
                     HttpResponse::Ok()
                 } else {
@@ -448,7 +446,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let srv = init_service(App::new().state(10u32).service(web::resource("/").to(
-            |req: HttpRequest| async move {
+            async move |req: HttpRequest| {
                 if req.app_state::<usize>().is_some() {
                     HttpResponse::Ok()
                 } else {

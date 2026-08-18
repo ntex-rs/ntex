@@ -1,8 +1,6 @@
-use std::{io, marker::PhantomData};
+use std::{error::Error, marker::PhantomData, rc::Rc};
 
-use crate::http::ResponseError;
-use crate::io::Filter;
-use crate::service::{Ctx, Service, ServiceFactory, cfg::SharedCfg};
+use crate::{Ctx, Service, http::ResponseError, io::Filter};
 
 use super::control::{Control, ControlAck};
 
@@ -16,37 +14,17 @@ impl<F, Err> DefaultControlService<F, Err> {
     }
 }
 
-impl<F, Err> ServiceFactory<Control<F, Err>> for DefaultControlService<F, Err>
+impl<F, Err> Service<()> for DefaultControlService<F, Err>
 where
     F: Filter,
     Err: ResponseError,
 {
-    type St = ();
-    type Res = ControlAck<F>;
-    type Error = io::Error;
-
-    type Service = DefaultControlService<F, Err>;
-    type InitCfg = SharedCfg;
-    type InitError = io::Error;
-
-    #[inline]
-    async fn create(&self, _: &SharedCfg) -> Result<Self::Service, Self::InitError> {
-        Ok(DefaultControlService::new())
-    }
-}
-
-impl<F, Err> Service for DefaultControlService<F, Err>
-where
-    F: Filter,
-    Err: ResponseError,
-{
-    type St = ();
     type Req = Control<F, Err>;
     type Res = ControlAck<F>;
-    type Error = io::Error;
+    type Error = Rc<dyn Error>;
 
     #[inline]
-    async fn call(&self, r: Self::Req, _: Ctx<'_, Self>) -> Result<Self::Res, io::Error> {
+    async fn call(&self, r: Self::Req, _: Ctx<'_, Self, ()>) -> Result<Self::Res, Self::Error> {
         Ok(r.ack())
     }
 }

@@ -1,0 +1,23 @@
+* server
+
+  1. ntex::server::build() accepted service factory closure
+
+     AsyncFn() -> ServiceFactory<.., InitCfg = SharedCfg>
+
+   in v4 ServerBuilder and all other builders based on ntex-server accept
+
+     AsyncFn() -> Service<>
+
+
+* HttpService (ntex::http)
+
+1. http::HttpService::openssl(), http::h1::HttpService::openssl(),
+   http::h2::HttpService::openssl() are replcaed with
+   http::accept_openssl()
+
+   ```rust
+   http::HttpService::new(....)
+       .openssl(acceptor);
+
+   http::accept_openssl(acceptor, http::HttpService::new(..))
+   ```

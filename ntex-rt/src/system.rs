@@ -15,8 +15,7 @@ use crate::{BlockingResult, Builder, Handle, HashMap, HashSet, Runner, SystemRun
 static SYSTEM_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 thread_local!(
-    static PINGS: RefCell<HashMap<Id, VecDeque<PingRecord>>> =
-        RefCell::new(HashMap::default());
+    static PINGS: RefCell<HashMap<Id, VecDeque<PingRecord>>> = RefCell::new(HashMap::default());
 );
 
 #[derive(Default)]
@@ -73,8 +72,7 @@ impl System {
         let id = SYSTEM_COUNT.fetch_add(1, Ordering::SeqCst);
         let (sender, receiver) = unbounded();
 
-        let pool =
-            ThreadPool::new(&config.name, config.pool_limit, config.pool_recv_timeout);
+        let pool = ThreadPool::new(&config.name, config.pool_limit, config.pool_recv_timeout);
         let (arbiter, controller) = Arbiter::new_system(id, config.name.clone());
 
         let mut arbiters = Arbiters::default();
@@ -506,12 +504,7 @@ async fn ping_arbiters(sys: System) {
                 *CAPTURED.lock() = None;
                 EXPECTED_TID.store(arb.tid(), Ordering::Release);
                 let result = unsafe {
-                    libc::syscall(
-                        libc::SYS_tgkill,
-                        libc::getpid(),
-                        arb.tid(),
-                        libc::SIGUSR2,
-                    )
+                    libc::syscall(libc::SYS_tgkill, libc::getpid(), arb.tid(), libc::SIGUSR2)
                 };
 
                 if result == -1 {

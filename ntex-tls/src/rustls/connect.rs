@@ -1,4 +1,4 @@
-use std::{fmt, io, marker::PhantomData, sync::Arc};
+use std::{fmt, io, sync::Arc};
 
 use ntex_error::Error;
 use ntex_io::{Io, Layer};
@@ -16,11 +16,10 @@ pub struct TlsConnector<Sf> {
 }
 
 #[derive(Clone, Debug)]
-pub struct TlsConnectorService<S, St> {
+pub struct TlsConnectorService<S> {
     svc: S,
     cfg: Cfg<TlsConfig>,
     config: Arc<ClientConfig>,
-    st: PhantomData<St>,
 }
 
 impl<A: Address> From<Arc<ClientConfig>> for TlsConnector<Connector<A>> {
@@ -64,20 +63,14 @@ impl<Sf: fmt::Debug> fmt::Debug for TlsConnector<Sf> {
     }
 }
 
-impl<A, Sf> ServiceFactory<Connect<A>> for TlsConnector<Sf>
+impl<A, Sf, St> ServiceFactory<Connect<A>, St> for TlsConnector<Sf>
 where
     A: Address,
-    Sf: ServiceFactory<
-            Connect<A>,
-            Res = Io,
-            Error = Error<ConnectError>,
-            InitCfg = SharedCfg,
-        >,
+    Sf: ServiceFactory<Connect<A>, St, Res = Io, Error = Error<ConnectError>, InitCfg = SharedCfg>,
 {
-    type St = Sf::St;
     type Res = Io<Layer<TlsClientFilter>>;
     type Error = Error<ConnectError>;
-    type Service = TlsConnectorService<Sf::Service, Sf::St>;
+    type Service = TlsConnectorService<Sf::Service>;
     type InitCfg = SharedCfg;
     type InitError = Sf::InitError;
 
@@ -88,25 +81,19 @@ where
             svc,
             cfg: cfg.get(),
             config: self.config.clone(),
-            st: PhantomData,
         })
     }
 }
 
-impl<A: Address, S, St> Service for TlsConnectorService<S, St>
+impl<A: Address, S, St> Service<St> for TlsConnectorService<S>
 where
-    S: Service<St = St, Req = Connect<A>, Res = Io, Error = Error<ConnectError>>,
+    S: Service<St, Req = Connect<A>, Res = Io, Error = Error<ConnectError>>,
 {
-    type St = St;
     type Req = Connect<A>;
     type Res = Io<Layer<TlsClientFilter>>;
     type Error = Error<ConnectError>;
 
-    async fn call(
-        &self,
-        req: Connect<A>,
-        ctx: Ctx<'_, Self>,
-    ) -> Result<Self::Res, Self::Error> {
+    async fn call(&self, req: Self::Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
         let host = req.host().split(':').next().unwrap().to_owned();
 
         let io = ctx.call(&self.svc, req).await?;
@@ -116,8 +103,8 @@ where
         let config = self.config.clone();
 
         async {
-            let host = ServerName::try_from(host)
-                .map_err(|e| ConnectError::from(io::Error::other(e)))?;
+            let host =
+                ServerName::try_from(host).map_err(|e| ConnectError::from(io::Error::other(e)))?;
 
             let connect_fut = TlsClientFilter::create(io, config, host.clone());
             match timeout_checked(self.cfg.handshake_timeout(), connect_fut).await {
@@ -143,7 +130,7 @@ where
         .map_err(|e: Error<_>| e.set_service(self.cfg.service()))
     }
 
-    ntex_service::forward_ready!(svc);
+    ntex_service::forward_ready!(St, svc);
     ntex_service::forward_shutdown!(svc);
 }
 
@@ -157,7 +144,7 @@ mod tests {
     #[ntex::test]
     async fn test_rustls_connect() {
         let server = ntex::server::test_server(async || {
-            ntex::service::fn_service(|_| async { Ok::<_, ()>(()) })
+            ntex::service::fn_service(async |_| Ok::<_, ()>(()))
         });
 
         let cert_store = webpki_roots::TLS_SERVER_ROOTS
@@ -167,8 +154,7 @@ mod tests {
         let config = ClientConfig::builder()
             .with_root_certificates(cert_store)
             .with_no_client_auth();
-        let _: TlsConnector<Connector<&'static str>> =
-            TlsConnector::new(config.clone()).clone();
+        let _: TlsConnector<Connector<&'static str>> = TlsConnector::new(config.clone()).clone();
         let factory = TlsConnector::from(Arc::new(config)).clone();
         assert!(
             format!("{factory:?}").contains("TlsConnector"),

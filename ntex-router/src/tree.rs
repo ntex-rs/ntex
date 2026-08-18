@@ -35,9 +35,7 @@ enum PathState {
 impl Value {
     fn value(&self) -> usize {
         match self {
-            Value::Val(v) | Value::Slash(v) | Value::Prefix(v) | Value::PrefixSlash(v) => {
-                *v
-            }
+            Value::Val(v) | Value::Slash(v) | Value::Prefix(v) | Value::PrefixSlash(v) => *v,
         }
     }
 }
@@ -201,9 +199,7 @@ impl Tree {
                     match val {
                         Item::Value(val) => {
                             let v = match val {
-                                Value::Slash(v)
-                                | Value::Prefix(v)
-                                | Value::PrefixSlash(v) => *v,
+                                Value::Slash(v) | Value::Prefix(v) | Value::PrefixSlash(v) => *v,
                                 Value::Val(_) => continue,
                             };
                             if check(v, resource) {

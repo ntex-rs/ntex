@@ -69,10 +69,7 @@ impl Stream for Payload {
     type Item = Result<Bytes, error::PayloadError>;
 
     #[inline]
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.poll_recv(cx)
     }
 }
@@ -272,9 +269,7 @@ impl PayloadConfig {
             match req.mime_type() {
                 Ok(Some(ref req_mt)) => {
                     if mt != req_mt {
-                        return Err(PayloadError::from(
-                            error::ContentTypeError::Unexpected,
-                        ));
+                        return Err(PayloadError::from(error::ContentTypeError::Unexpected));
                     }
                 }
                 Ok(None) => {
@@ -325,14 +320,10 @@ impl HttpMessageBody {
                 if let Ok(l) = s.parse::<usize>() {
                     len = Some(l);
                 } else {
-                    return Self::err(PayloadError::Payload(
-                        error::PayloadError::UnknownLength,
-                    ));
+                    return Self::err(PayloadError::Payload(error::PayloadError::UnknownLength));
                 }
             } else {
-                return Self::err(PayloadError::Payload(
-                    error::PayloadError::UnknownLength,
-                ));
+                return Self::err(PayloadError::Payload(error::PayloadError::UnknownLength));
             }
         }
 
@@ -420,15 +411,13 @@ mod tests {
             .mimetype(mime::APPLICATION_JSON);
         assert!(cfg.check_mimetype(&req).is_err());
 
-        let req = TestRequest::with_header(
-            header::CONTENT_TYPE,
-            "application/x-www-form-urlencoded",
-        )
-        .to_http_request();
+        let req =
+            TestRequest::with_header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .to_http_request();
         assert!(cfg.check_mimetype(&req).is_err());
 
-        let req = TestRequest::with_header(header::CONTENT_TYPE, "application/json")
-            .to_http_request();
+        let req =
+            TestRequest::with_header(header::CONTENT_TYPE, "application/json").to_http_request();
         assert!(cfg.check_mimetype(&req).is_ok());
     }
 

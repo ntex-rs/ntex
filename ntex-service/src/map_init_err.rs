@@ -11,9 +11,9 @@ pub struct MapInitErr<Sf, F, Err> {
 
 impl<Sf, F, Err> MapInitErr<Sf, F, Err> {
     /// Create new `MapInitErr` combinator
-    pub(crate) fn new<Req>(sf: Sf, f: F) -> Self
+    pub(crate) fn new<Req, St>(sf: Sf, f: F) -> Self
     where
-        Sf: ServiceFactory<Req>,
+        Sf: ServiceFactory<Req, St>,
         F: Fn(Sf::InitError) -> Err,
     {
         Self {
@@ -50,12 +50,11 @@ where
     }
 }
 
-impl<Sf, Req, F, Err> ServiceFactory<Req> for MapInitErr<Sf, F, Err>
+impl<Sf, St, Req, F, Err> ServiceFactory<Req, St> for MapInitErr<Sf, F, Err>
 where
-    Sf: ServiceFactory<Req>,
+    Sf: ServiceFactory<Req, St>,
     F: Fn(Sf::InitError) -> Err + Clone,
 {
-    type St = Sf::St;
     type Res = Sf::Res;
     type Error = Sf::Error;
 
@@ -71,11 +70,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::{ServiceFactory, chain_factory, fn_factory_with_config, fn_service};
+    use crate::{ServiceFactory, factory, fn_factory_with_config, fn_service};
 
     #[ntex::test]
     async fn map_init_err() {
-        let factory = chain_factory(fn_factory_with_config(async move |err: &bool| {
+        let factory = factory(fn_factory_with_config(async move |err: &bool| {
             if *err {
                 Err(())
             } else {
@@ -85,25 +84,25 @@ mod tests {
         .map_init_err(|()| std::io::Error::other("err"))
         .clone();
 
-        assert!(factory.pipeline::<()>(&true).await.is_err());
-        assert!(factory.pipeline::<()>(&false).await.is_ok());
+        assert!(factory.create(&true).await.is_err());
+        assert!(factory.create(&false).await.is_ok());
         let _ = format!("{factory:?}");
     }
 
     #[ntex::test]
     async fn map_init_err2() {
-        let factory = fn_factory_with_config(async |err: &bool| {
+        let factory = factory(fn_factory_with_config(async |err: &bool| {
             if *err {
                 Err(())
             } else {
                 Ok(fn_service(async |i: usize| Ok::<_, ()>(i * 2)))
             }
-        })
+        }))
         .map_init_err(|()| std::io::Error::other("err"))
         .clone();
 
-        assert!(factory.pipeline::<()>(&true).await.is_err());
-        assert!(factory.pipeline::<()>(&false).await.is_ok());
+        assert!(factory.create(&true).await.is_err());
+        assert!(factory.create(&false).await.is_ok());
         let _ = format!("{factory:?}");
     }
 }

@@ -155,20 +155,14 @@ impl From<Either<EncodeError, io::Error>> for WsClientError {
 impl Clone for WsClientError {
     fn clone(&self) -> Self {
         match self {
-            WsClientError::InvalidRequest(err) => {
-                WsClientError::InvalidRequest(err.clone())
-            }
+            WsClientError::InvalidRequest(err) => WsClientError::InvalidRequest(err.clone()),
             WsClientError::InvalidResponse(err) => WsClientError::InvalidResponse(*err),
-            WsClientError::InvalidResponseStatus(err) => {
-                WsClientError::InvalidResponseStatus(*err)
-            }
+            WsClientError::InvalidResponseStatus(err) => WsClientError::InvalidResponseStatus(*err),
             WsClientError::InvalidUpgradeHeader => WsClientError::InvalidUpgradeHeader,
             WsClientError::InvalidConnectionHeader(err) => {
                 WsClientError::InvalidConnectionHeader(err.clone())
             }
-            WsClientError::MissingConnectionHeader => {
-                WsClientError::MissingConnectionHeader
-            }
+            WsClientError::MissingConnectionHeader => WsClientError::MissingConnectionHeader,
             WsClientError::MissingWebSocketAcceptHeader => {
                 WsClientError::MissingWebSocketAcceptHeader
             }

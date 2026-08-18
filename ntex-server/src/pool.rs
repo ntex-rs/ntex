@@ -1,6 +1,6 @@
 use ntex_util::time::Millis;
 
-use crate::{Server, ServerConfiguration};
+use crate::{Server, ServerConfiguration, manager::ServerManager};
 
 const DEFAULT_SHUTDOWN_TIMEOUT: Millis = Millis::from_secs(30);
 
@@ -125,6 +125,6 @@ impl WorkerPool {
 
     /// Starts processing incoming items and return server controller.
     pub fn run<F: ServerConfiguration>(self, factory: F) -> Server<F::Item> {
-        crate::manager::ServerManager::start(self, factory)
+        ServerManager::start(self, factory)
     }
 }

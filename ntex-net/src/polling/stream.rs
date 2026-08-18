@@ -78,11 +78,7 @@ impl StreamOps {
     }
 
     /// Register new stream
-    pub(crate) fn register(
-        &self,
-        io: Socket,
-        ctx: IoContext,
-    ) -> (StreamCtl, WeakStreamCtl) {
+    pub(crate) fn register(&self, io: Socket, ctx: IoContext) -> (StreamCtl, WeakStreamCtl) {
         let fd = io.as_raw_fd();
         let stream = self.0.with(move |streams| {
             let item = StreamItem {
@@ -430,8 +426,8 @@ impl StreamItem {
     fn write(&mut self) -> IoTaskStatus {
         let res = self.ctx.with_write_buf(|wrt| {
             let mut pages: [Option<BytePage>; MAX_WRITE_ITEMS] = [
-                None, None, None, None, None, None, None, None, None, None, None, None,
-                None, None, None, None,
+                None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+                None, None,
             ];
             let mut bufs: [mem::MaybeUninit<io::IoSlice<'_>>; MAX_WRITE_ITEMS] =
                 [mem::MaybeUninit::uninit(); MAX_WRITE_ITEMS];

@@ -189,9 +189,8 @@ impl Parser {
         let payload = match reason {
             None => Bytes::new(),
             Some(reason) => {
-                let mut payload = BytesMut::with_capacity(
-                    reason.description.as_ref().map_or(0, String::len) + 2,
-                );
+                let mut payload =
+                    BytesMut::with_capacity(reason.description.as_ref().map_or(0, String::len) + 2);
                 payload.put_u16(u16::from(reason.code));
                 if let Some(description) = reason.description {
                     payload.extend_from_slice(description.as_bytes());

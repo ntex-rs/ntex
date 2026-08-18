@@ -110,8 +110,7 @@ mod tests {
         let res = join(Ready::<_, ()>::Ok("test"), time::sleep(time::Millis(50))).await;
         assert_eq!(res, (Ok("test"), ()));
 
-        let res =
-            join_all([time::sleep(time::Millis(50)), time::sleep(time::Millis(60))]).await;
+        let res = join_all([time::sleep(time::Millis(50)), time::sleep(time::Millis(60))]).await;
         assert_eq!(res, vec![(), ()]);
     }
 }

@@ -137,11 +137,7 @@ impl Stack {
         });
     }
 
-    pub(crate) fn process_read_buf(
-        &self,
-        io: &IoRef,
-        nbytes: usize,
-    ) -> io::Result<FilterUpdates> {
+    pub(crate) fn process_read_buf(&self, io: &IoRef, nbytes: usize) -> io::Result<FilterUpdates> {
         let mut ctx = FilterCtx {
             io,
             nbytes,

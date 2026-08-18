@@ -79,10 +79,7 @@ impl<T: MessageType> Clone for MessageDecoder<T> {
 }
 
 impl<T: MessageType> MessageDecoder<T> {
-    fn decode_headers(
-        src: &mut BytesMut,
-        inner: &mut Inner<T>,
-    ) -> Poll<Result<(), DecodeError>> {
+    fn decode_headers(src: &mut BytesMut, inner: &mut Inner<T>) -> Poll<Result<(), DecodeError>> {
         loop {
             let result = match inner.hdr.parse_with_state(src, &mut inner.hdr_st)? {
                 Status::Complete(result) => result,
@@ -92,15 +89,12 @@ impl<T: MessageType> MessageDecoder<T> {
                 HeaderParsed::Header(len) => {
                     let buf = src.split_to(len);
 
-                    if inner.val.as_mut().unwrap().headers_mut().len()
-                        >= inner.cfg.max_headers
-                    {
+                    if inner.val.as_mut().unwrap().headers_mut().len() >= inner.cfg.max_headers {
                         return Poll::Ready(Err(DecodeError::MaxHeaders));
                     }
-                    let name = HeaderName::from_bytes(
-                        &buf[inner.hdr.name.start..inner.hdr.name.end],
-                    )
-                    .unwrap();
+                    let name =
+                        HeaderName::from_bytes(&buf[inner.hdr.name.start..inner.hdr.name.end])
+                            .unwrap();
 
                     // SAFETY: ntex-httparse checks header value for validity
                     let value = unsafe {
@@ -270,10 +264,7 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
 
     fn headers_mut(&mut self) -> &mut HeaderMap;
 
-    fn decode(
-        src: &mut BytesMut,
-        cache: &mut HeadersBuf,
-    ) -> Poll<Result<Self, DecodeError>>;
+    fn decode(src: &mut BytesMut, cache: &mut HeadersBuf) -> Poll<Result<Self, DecodeError>>;
 
     fn set_payload_length(
         &mut self,
@@ -382,15 +373,11 @@ impl MessageType for Request {
         &mut self.head_mut().headers
     }
 
-    fn decode(
-        src: &mut BytesMut,
-        cache: &mut HeadersBuf,
-    ) -> Poll<Result<Self, DecodeError>> {
+    fn decode(src: &mut BytesMut, cache: &mut HeadersBuf) -> Poll<Result<Self, DecodeError>> {
         match cache.req.parse(src)? {
             Status::Complete(pos) => {
-                let method =
-                    Method::from_bytes(&src[cache.req.method.start..cache.req.method.end])
-                        .map_err(|_| DecodeError::Method)?;
+                let method = Method::from_bytes(&src[cache.req.method.start..cache.req.method.end])
+                    .map_err(|_| DecodeError::Method)?;
                 let uri = Uri::try_from(&src[cache.req.path.start..cache.req.path.end])?;
                 let version = if cache.req.version == 1 {
                     Version::HTTP_11
@@ -421,10 +408,7 @@ impl MessageType for Request {
     ) -> Result<PayloadType, DecodeError> {
         // disallow HTTP/1.0 POST requests that do not contain a Content-Length headers
         // see https://datatracker.ietf.org/doc/html/rfc1945#section-7.2.2
-        if self.version() == Version::HTTP_10
-            && self.method() == Method::POST
-            && length.is_none()
-        {
+        if self.version() == Version::HTTP_10 && self.method() == Method::POST && length.is_none() {
             log::trace!("no Content-Length specified for HTTP/1.0 POST request");
             return Err(DecodeError::Header);
         }
@@ -474,10 +458,7 @@ impl MessageType for ResponseHead {
         &mut self.headers
     }
 
-    fn decode(
-        src: &mut BytesMut,
-        cache: &mut HeadersBuf,
-    ) -> Poll<Result<Self, DecodeError>> {
+    fn decode(src: &mut BytesMut, cache: &mut HeadersBuf) -> Poll<Result<Self, DecodeError>> {
         match cache.res.parse(src)? {
             Status::Complete(pos) => {
                 let version = if cache.res.version == 1 {
@@ -485,8 +466,8 @@ impl MessageType for ResponseHead {
                 } else {
                     Version::HTTP_10
                 };
-                let status = StatusCode::from_u16(cache.res.code)
-                    .map_err(|_| DecodeError::Status)?;
+                let status =
+                    StatusCode::from_u16(cache.res.code).map_err(|_| DecodeError::Status)?;
 
                 src.advance_to(pos);
                 Poll::Ready(Ok(ResponseHead::new(status, version)))
@@ -1037,9 +1018,8 @@ mod tests {
         assert_eq!(req.uri().query(), Some("test=1"));
 
         // transfer-encoding is not supported for http1.0
-        let mut buf = BytesMut::from(
-            "GET /test3?test=1 HTTP/1.0\r\nTransfer-Encoding: chunked\r\n\r\n",
-        );
+        let mut buf =
+            BytesMut::from("GET /test3?test=1 HTTP/1.0\r\nTransfer-Encoding: chunked\r\n\r\n");
         expect_parse_err!(&mut buf);
     }
 
@@ -1097,8 +1077,7 @@ mod tests {
 
     #[test]
     fn test_parse_body_crlf() {
-        let mut buf =
-            BytesMut::from("\r\nGET /test HTTP/1.1\r\nContent-Length: 4\r\n\r\nbody");
+        let mut buf = BytesMut::from("\r\nGET /test HTTP/1.1\r\nContent-Length: 4\r\n\r\nbody");
 
         let reader = MessageDecoder::<Request>::default();
         let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();

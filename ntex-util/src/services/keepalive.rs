@@ -7,16 +7,16 @@ use crate::time::{Millis, Sleep, now, sleep};
 /// `KeepAlive` service factory
 ///
 /// Controls min time between requests.
-pub struct KeepAlive<F, St, Req, E, C>
+pub struct KeepAlive<F, Req, E, C>
 where
     F: Fn() -> E + Clone,
 {
     f: F,
     ka: Millis,
-    _t: marker::PhantomData<(E, St, Req, C)>,
+    _t: marker::PhantomData<(E, Req, C)>,
 }
 
-impl<F, St, Req, E, C> KeepAlive<F, St, Req, E, C>
+impl<F, Req, E, C> KeepAlive<F, Req, E, C>
 where
     F: Fn() -> E + Clone,
 {
@@ -33,7 +33,7 @@ where
     }
 }
 
-impl<F, St, Req, E, C> Clone for KeepAlive<F, St, Req, E, C>
+impl<F, Req, E, C> Clone for KeepAlive<F, Req, E, C>
 where
     F: Fn() -> E + Clone,
 {
@@ -46,7 +46,7 @@ where
     }
 }
 
-impl<F, St, Req, E, C> fmt::Debug for KeepAlive<F, St, Req, E, C>
+impl<F, Req, E, C> fmt::Debug for KeepAlive<F, Req, E, C>
 where
     F: Fn() -> E + Clone,
 {
@@ -58,15 +58,14 @@ where
     }
 }
 
-impl<F, St, Req, E, C> ServiceFactory<Req> for KeepAlive<F, St, Req, E, C>
+impl<F, St, Req, E, C> ServiceFactory<Req, St> for KeepAlive<F, Req, E, C>
 where
     F: Fn() -> E + Clone,
 {
-    type St = St;
     type Res = Req;
     type Error = E;
 
-    type Service = KeepAliveService<St, Req, E, F>;
+    type Service = KeepAliveService<Req, E, F>;
     type InitCfg = C;
     type InitError = Infallible;
 
@@ -76,7 +75,7 @@ where
     }
 }
 
-pub struct KeepAliveService<St, Req, E, F>
+pub struct KeepAliveService<Req, E, F>
 where
     F: Fn() -> E,
 {
@@ -84,10 +83,10 @@ where
     dur: time::Duration,
     sleep: Sleep,
     expire: Cell<time::Instant>,
-    _t: marker::PhantomData<(St, Req, E)>,
+    _t: marker::PhantomData<(Req, E)>,
 }
 
-impl<St, Req, E, F> KeepAliveService<St, Req, E, F>
+impl<Req, E, F> KeepAliveService<Req, E, F>
 where
     F: Fn() -> E,
 {
@@ -104,7 +103,7 @@ where
     }
 }
 
-impl<St, Req, E, F> fmt::Debug for KeepAliveService<St, Req, E, F>
+impl<Req, E, F> fmt::Debug for KeepAliveService<Req, E, F>
 where
     F: Fn() -> E,
 {
@@ -117,16 +116,15 @@ where
     }
 }
 
-impl<St, Req, E, F> Service for KeepAliveService<St, Req, E, F>
+impl<St, Req, E, F> Service<St> for KeepAliveService<Req, E, F>
 where
     F: Fn() -> E,
 {
-    type St = St;
     type Req = Req;
     type Res = Req;
     type Error = E;
 
-    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
         let expire = self.expire.get() + self.dur;
         if expire <= now() {
             Err((self.f)())
@@ -139,9 +137,8 @@ where
                         Err((self.f)())
                     } else {
                         let expire = expire - now;
-                        self.sleep.reset(Millis(
-                            expire.as_millis().try_into().unwrap_or(u32::MAX),
-                        ));
+                        self.sleep
+                            .reset(Millis(expire.as_millis().try_into().unwrap_or(u32::MAX)));
                         let _ = self.sleep.poll_elapsed(cx);
                         Ok(())
                     }
@@ -152,7 +149,7 @@ where
     }
 
     #[inline]
-    async fn call(&self, req: Req, _: Ctx<'_, Self>) -> Result<Req, E> {
+    async fn call(&self, req: Req, _: Ctx<'_, Self, St>) -> Result<Req, E> {
         self.expire.set(now());
         Ok(req)
     }
@@ -162,7 +159,7 @@ where
 mod tests {
     use std::{pin::Pin, task::Context, task::Poll, task::ready};
 
-    use ntex_service::{Pipeline, boxed};
+    use ntex_service::{Pipeline, boxed, factory};
 
     use super::*;
     use crate::{channel::oneshot, spawn};
@@ -171,7 +168,7 @@ mod tests {
     struct TestErr;
 
     struct Dispatcher {
-        p: Pipeline<boxed::BoxService<(), usize, usize, TestErr>>,
+        p: Pipeline<usize, usize, TestErr>,
         tx: Option<oneshot::Sender<()>>,
     }
 
@@ -194,22 +191,23 @@ mod tests {
 
     #[ntex::test]
     async fn test_ka() {
-        let factory = KeepAlive::new(Millis(100), || TestErr);
+        let factory = factory(KeepAlive::new(Millis(100), || TestErr));
         assert!(format!("{factory:?}").contains("KeepAlive"));
         let _ = factory.clone();
 
         let svc = factory.create(&()).await.unwrap();
         assert!(format!("{svc:?}").contains("KeepAliveService"));
 
-        let p = Pipeline::new::<()>(boxed::service(svc));
+        let p = Pipeline::new(boxed::service(svc));
         assert_eq!(p.call(1usize).await, Ok(1usize));
         let svc = p.bind();
 
         let (tx, rx) = oneshot::channel();
         spawn(Dispatcher { p, tx: Some(tx) }).detach();
 
-        sleep(Millis(50)).await;
+        sleep(Millis(25)).await;
         assert_eq!(svc.call(1usize).await, Ok(1usize));
+        sleep(Millis(100)).await;
 
         let res = rx.await;
         assert_eq!(res, Ok(()));

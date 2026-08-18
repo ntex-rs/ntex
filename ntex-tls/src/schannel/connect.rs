@@ -1,4 +1,4 @@
-use std::{io, marker::PhantomData};
+use std::io;
 
 use ntex_error::Error;
 use ntex_io::{Io, Layer};
@@ -17,11 +17,10 @@ pub struct TlsConnector<Sf> {
 }
 
 #[derive(Clone, Debug)]
-pub struct TlsConnectorService<S, St> {
+pub struct TlsConnectorService<S> {
     svc: S,
     cfg: Cfg<TlsConfig>,
     config: ClientConfig,
-    st: PhantomData<St>,
 }
 
 impl<A: Address> Default for TlsConnector<Connector<A>> {
@@ -48,20 +47,14 @@ impl<A: Address> TlsConnector<Connector<A>> {
     }
 }
 
-impl<A: Address, Sf> ServiceFactory<Connect<A>> for TlsConnector<Sf>
+impl<A: Address, Sf, St> ServiceFactory<Connect<A>, St> for TlsConnector<Sf>
 where
-    Sf: ServiceFactory<
-            Connect<A>,
-            Res = Io,
-            Error = Error<ConnectError>,
-            InitCfg = SharedCfg,
-        >,
+    Sf: ServiceFactory<Connect<A>, St, Res = Io, Error = Error<ConnectError>, InitCfg = SharedCfg>,
 {
-    type St = Sf::St;
     type Res = Io<Layer<SchannelFilter>>;
     type Error = Error<ConnectError>;
 
-    type Service = TlsConnectorService<Sf::Service, Sf::St>;
+    type Service = TlsConnectorService<Sf::Service>;
     type InitCfg = SharedCfg;
     type InitError = Sf::InitError;
 
@@ -72,27 +65,25 @@ where
             svc,
             cfg: cfg.get(),
             config: self.config.clone(),
-            st: PhantomData,
         })
     }
 }
 
-impl<A: Address, S, St> Service for TlsConnectorService<S, St>
+impl<A: Address, S, St> Service<St> for TlsConnectorService<S>
 where
-    S: Service<St = St, Req = Connect<A>, Res = Io, Error = Error<ConnectError>>,
+    S: Service<St, Req = Connect<A>, Res = Io, Error = Error<ConnectError>>,
 {
-    type St = St;
     type Req = Connect<A>;
     type Res = Io<Layer<SchannelFilter>>;
     type Error = Error<ConnectError>;
 
-    ntex_service::forward_ready!(svc);
+    ntex_service::forward_ready!(St, svc);
     ntex_service::forward_shutdown!(svc);
 
     async fn call(
         &self,
         message: Connect<A>,
-        ctx: Ctx<'_, Self>,
+        ctx: Ctx<'_, Self, St>,
     ) -> Result<Self::Res, Self::Error> {
         let host = message.host().split(':').next().unwrap().to_string();
 
@@ -138,7 +129,7 @@ mod tests {
 
         let _: TlsConnector<Connector<&'static str>> = TlsConnector::new();
         let factory: TlsConnector<Connector<&'static str>> = TlsConnector::new();
-        let srv = factory.pipeline::<()>(&SharedCfg::default()).await.unwrap();
+        let srv = factory.pipeline(&SharedCfg::default()).await.unwrap();
         assert!(srv.ready().await.is_ok());
         let result = srv
             .call(Connect::new("").set_addr(Some(server.addr())))

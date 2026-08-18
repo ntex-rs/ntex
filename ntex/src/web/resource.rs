@@ -3,7 +3,7 @@ use std::{cell::RefCell, fmt, rc::Rc};
 use crate::router::{IntoPattern, ResourceDef};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::dev::{AndThen, ServiceChain, ServiceChainFactory};
-use crate::service::{Ctx, cfg::SharedCfg, chain, chain_factory};
+use crate::service::{Ctx, cfg::SharedCfg, factory, svc};
 use crate::service::{Identity, IntoServiceFactory, Middleware, Service, ServiceFactory};
 use crate::{http::Response, util::Extensions};
 
@@ -15,11 +15,10 @@ use super::stack::WebStack;
 use super::{app::Filter, error::ErrorRenderer, guard::Guard, service::AppState};
 use super::{request::WebRequest, response::WebResponse};
 
-type HttpService<Err: ErrorRenderer> =
-    BoxService<(), WebRequest<Err>, WebResponse, Err::Container>;
+type HttpService<Err: ErrorRenderer> = BoxService<(), WebRequest<Err>, WebResponse, Err::Container>;
 type HttpNewService<Err: ErrorRenderer> =
     BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, SharedCfg, ()>;
-type ResourcePipeline<F, Err> = ServiceChain<AndThen<F, ResourceRouter<Err>>>;
+type ResourcePipeline<F, Err> = ServiceChain<AndThen<F, ResourceRouter<Err>>, ()>;
 
 /// *Resource* is an entry in resources table which corresponds to requested URL.
 ///
@@ -37,7 +36,7 @@ type ResourcePipeline<F, Err> = ServiceChain<AndThen<F, ResourceRouter<Err>>>;
 /// fn main() {
 ///     let app = App::new().service(
 ///         web::resource("/")
-///             .route(web::get().to(|| async { HttpResponse::Ok() })));
+///             .route(web::get().to(async || { HttpResponse::Ok() })));
 /// }
 /// ```
 ///
@@ -47,7 +46,7 @@ type ResourcePipeline<F, Err> = ServiceChain<AndThen<F, ResourceRouter<Err>>>;
 #[debug("Resource({rdef:?})")]
 pub struct Resource<Err: ErrorRenderer, M = Identity, T = Filter<Err>> {
     middleware: M,
-    filter: ServiceChainFactory<T, WebRequest<Err>>,
+    filter: ServiceChainFactory<T, (), WebRequest<Err>>,
     rdef: Vec<String>,
     name: Option<String>,
     routes: Vec<Route<Err>>,
@@ -65,7 +64,7 @@ impl<Err: ErrorRenderer> Resource<Err> {
             name: None,
             state: None,
             middleware: Identity,
-            filter: chain_factory(Filter::new()),
+            filter: factory(Filter::new()),
             guards: Vec::new(),
             default: Rc::new(RefCell::new(None)),
         }
@@ -76,7 +75,6 @@ impl<Err, M, Sf> Resource<Err, M, Sf>
 where
     Sf: ServiceFactory<
             WebRequest<Err>,
-            St = (),
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -113,7 +111,7 @@ where
     ///         .service(
     ///             web::resource("/app")
     ///                 .guard(guard::Header("content-type", "text/json"))
-    ///                 .route(web::get().to(|| async { HttpResponse::MethodNotAllowed() }))
+    ///                 .route(web::get().to(async || { HttpResponse::MethodNotAllowed() }))
     ///         );
     /// }
     /// ```
@@ -174,7 +172,7 @@ where
     ///             web::route()
     ///                 .guard(guard::Any(guard::Get()).or(guard::Put()))
     ///                 .guard(guard::Header("Content-Type", "text/plain"))
-    ///                 .to(|| async { HttpResponse::Ok() }))
+    ///                 .to(async || { HttpResponse::Ok() }))
     ///     );
     /// }
     /// ```
@@ -247,13 +245,12 @@ where
     /// This is similar to `App's` filters, but filter get invoked on resource level.
     pub fn filter<U>(
         self,
-        filter: impl IntoServiceFactory<U, WebRequest<Err>>,
+        filter: impl IntoServiceFactory<U, (), WebRequest<Err>>,
     ) -> Resource<
         Err,
         M,
         impl ServiceFactory<
             WebRequest<Err>,
-            St = (),
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -263,7 +260,6 @@ where
     where
         U: ServiceFactory<
                 WebRequest<Err>,
-                St = (),
                 Res = WebRequest<Err>,
                 Error = Err::Container,
                 InitCfg = SharedCfg,
@@ -307,14 +303,10 @@ where
     ///
     /// By default *405* response get returned. Resource does not use
     /// default handler from `App` or `Scope`.
-    pub fn default_service<S>(
-        mut self,
-        f: impl IntoServiceFactory<S, WebRequest<Err>>,
-    ) -> Self
+    pub fn default_service<S>(mut self, f: impl IntoServiceFactory<S, (), WebRequest<Err>>) -> Self
     where
         S: ServiceFactory<
                 WebRequest<Err>,
-                St = (),
                 Res = WebResponse,
                 Error = Err::Container,
                 InitCfg = SharedCfg,
@@ -323,8 +315,9 @@ where
     {
         // create and configure default resource
         self.default = Rc::new(RefCell::new(Some(Rc::new(boxed::factory(
-            chain_factory(f.into_factory())
-                .map_init_err(|e| log::error!("Cannot construct default service: {e:?}")),
+            factory(f.into_factory()).map_init_err(|e| {
+                log::error!("Cannot construct default service: {e:?}");
+            }),
         )))));
 
         self
@@ -335,15 +328,13 @@ impl<Err, M, Sf> WebServiceFactory<Err> for Resource<Err, M, Sf>
 where
     Sf: ServiceFactory<
             WebRequest<Err>,
-            St = (),
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
             InitError = (),
         > + 'static,
     M: Middleware<ResourcePipeline<Sf::Service, Err>, SharedCfg> + 'static,
-    M::Service:
-        Service<St = (), Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    M::Service: Service<Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     Err: ErrorRenderer,
 {
     fn register(mut self, config: &mut WebServiceConfig<Err>) {
@@ -390,26 +381,25 @@ where
 
 impl<Err, M, Sf>
     IntoServiceFactory<
-        ResourceServiceFactory<Err, M, ServiceChainFactory<Sf, WebRequest<Err>>>,
+        ResourceServiceFactory<Err, M, ServiceChainFactory<Sf, (), WebRequest<Err>>>,
+        (),
         WebRequest<Err>,
     > for Resource<Err, M, Sf>
 where
     Sf: ServiceFactory<
             WebRequest<Err>,
-            St = (),
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
             InitError = (),
         > + 'static,
     M: Middleware<ResourcePipeline<Sf::Service, Err>, SharedCfg> + 'static,
-    M::Service:
-        Service<St = (), Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    M::Service: Service<Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     Err: ErrorRenderer,
 {
     fn into_factory(
         self,
-    ) -> ResourceServiceFactory<Err, M, ServiceChainFactory<Sf, WebRequest<Err>>> {
+    ) -> ResourceServiceFactory<Err, M, ServiceChainFactory<Sf, (), WebRequest<Err>>> {
         let router_factory = ResourceRouterFactory {
             state: None,
             routes: self.routes,
@@ -436,11 +426,9 @@ pub struct ResourceServiceFactory<Err: ErrorRenderer, M, F> {
 impl<Err, M, F> ServiceFactory<WebRequest<Err>> for ResourceServiceFactory<Err, M, F>
 where
     M: Middleware<ResourcePipeline<F::Service, Err>, SharedCfg> + 'static,
-    M::Service:
-        Service<St = (), Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    M::Service: Service<Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
             WebRequest<Err>,
-            St = (),
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -448,7 +436,6 @@ where
         > + 'static,
     Err: ErrorRenderer,
 {
-    type St = ();
     type Res = WebResponse;
     type Error = Err::Container;
     type Service = M::Service;
@@ -458,7 +445,7 @@ where
     async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {
         let filter = self.filter.create(cfg).await?;
         let routing = self.routing.create(cfg).await?;
-        Ok(self.middleware.create(chain(filter).and_then(routing), cfg))
+        Ok(self.middleware.create(svc(filter).and_then(routing), cfg))
     }
 }
 
@@ -469,13 +456,12 @@ struct ResourceRouterFactory<Err: ErrorRenderer> {
 }
 
 impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ResourceRouterFactory<Err> {
-    type St = ();
     type Res = WebResponse;
     type Error = Err::Container;
 
+    type Service = ResourceRouter<Err>;
     type InitCfg = SharedCfg;
     type InitError = ();
-    type Service = ResourceRouter<Err>;
 
     async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {
         let default = if let Some(ref default) = self.default {
@@ -500,7 +486,6 @@ pub struct ResourceRouter<Err: ErrorRenderer> {
 }
 
 impl<Err: ErrorRenderer> Service for ResourceRouter<Err> {
-    type St = ();
     type Req = WebRequest<Err>;
     type Res = WebResponse;
     type Error = Err::Container;
@@ -508,7 +493,7 @@ impl<Err: ErrorRenderer> Service for ResourceRouter<Err> {
     async fn call(
         &self,
         mut req: WebRequest<Err>,
-        ctx: Ctx<'_, Self>,
+        ctx: Ctx<'_, Self, ()>,
     ) -> Result<Self::Res, Self::Error> {
         for route in &self.routes {
             if route.check(&mut req) {
@@ -535,7 +520,6 @@ mod tests {
     use crate::time::{Millis, sleep};
     use crate::web::test::{TestRequest, call_service, init_service};
     use crate::web::{self, App, DefaultError, HttpResponse, guard, request::WebRequest};
-    use crate::{service::fn_service, util::Ready};
 
     #[crate::rt_test]
     async fn test_filter() {
@@ -544,11 +528,11 @@ mod tests {
         let srv = init_service(
             App::new().service(
                 web::resource("/test")
-                    .filter(fn_service(move |req: WebRequest<_>| {
+                    .filter(async move |req: WebRequest<_>| {
                         filter2.set(true);
-                        Ready::Ok(req)
-                    }))
-                    .route(web::get().to(|| async { HttpResponse::Ok() })),
+                        Ok(req)
+                    })
+                    .route(web::get().to(async || HttpResponse::Ok())),
             ),
         )
         .await;
@@ -560,7 +544,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_to() {
-        let srv = init_service(App::new().service(web::resource("/test").to(|| async {
+        let srv = init_service(App::new().service(web::resource("/test").to(async || {
             sleep(Millis(100)).await;
             HttpResponse::Ok()
         })))
@@ -572,9 +556,9 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_pattern() {
-        let srv = init_service(App::new().service(
-            web::resource(["/test", "/test2"]).to(|| async { HttpResponse::Ok() }),
-        ))
+        let srv = init_service(
+            App::new().service(web::resource(["/test", "/test2"]).to(async || HttpResponse::Ok())),
+        )
         .await;
         let req = TestRequest::with_uri("/test").to_request();
         let resp = call_service(&srv, req).await;
@@ -588,11 +572,8 @@ mod tests {
     async fn test_default_resource() {
         let srv = init_service(
             App::new()
-                .service(
-                    web::resource("/test")
-                        .route(web::get().to(|| async { HttpResponse::Ok() })),
-                )
-                .default_service(|r: WebRequest<DefaultError>| async move {
+                .service(web::resource("/test").route(web::get().to(async || HttpResponse::Ok())))
+                .default_service(async move |r: WebRequest<DefaultError>| {
                     Ok(r.into_response(HttpResponse::BadRequest()))
                 }),
         )
@@ -610,8 +591,8 @@ mod tests {
         let srv = init_service(
             App::new().service(
                 web::resource("/test")
-                    .route(web::get().to(|| async { HttpResponse::Ok() }))
-                    .default_service(|r: WebRequest<DefaultError>| async move {
+                    .route(web::get().to(async || HttpResponse::Ok()))
+                    .default_service(async move |r: WebRequest<DefaultError>| {
                         Ok(r.into_response(HttpResponse::BadRequest()))
                     }),
             ),
@@ -636,17 +617,17 @@ mod tests {
                 .service(
                     web::resource("/test/{p}")
                         .guard(guard::Get())
-                        .to(|| async { HttpResponse::Ok() }),
+                        .to(async || HttpResponse::Ok()),
                 )
                 .service(
                     web::resource("/test/{p}")
                         .guard(guard::Put())
-                        .to(|| async { HttpResponse::Created() }),
+                        .to(async || HttpResponse::Created()),
                 )
                 .service(
                     web::resource("/test/{p}")
                         .guard(guard::Delete())
-                        .to(|| async { HttpResponse::NoContent() }),
+                        .to(async || HttpResponse::NoContent()),
                 ),
         )
         .await;

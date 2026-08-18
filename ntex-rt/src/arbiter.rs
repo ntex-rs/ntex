@@ -9,8 +9,7 @@ use crate::{Handle, HashMap, Id, System};
 
 thread_local!(
     static ADDR: RefCell<Option<Arbiter>> = const { RefCell::new(None) };
-    static STORAGE: RefCell<HashMap<TypeId, Box<dyn Any>>> =
-        RefCell::new(HashMap::default());
+    static STORAGE: RefCell<HashMap<TypeId, Box<dyn Any>>> = RefCell::new(HashMap::default());
 );
 
 pub(super) static COUNT: AtomicUsize = AtomicUsize::new(99);
@@ -181,9 +180,7 @@ impl Arbiter {
                 }
                 log::info!("Arbiter {name3:?} has stopped");
             })
-            .unwrap_or_else(|err| {
-                panic!("Cannot spawn an arbiter's thread {name:?}: {err:?}")
-            });
+            .unwrap_or_else(|err| panic!("Cannot spawn an arbiter's thread {name:?}: {err:?}"));
 
         let arb = arb_hnd_rx.recv().expect("Could not start new arbiter");
         *arb.0.thread_handle.lock() = Some(handle);

@@ -5,8 +5,7 @@ use windows_sys::Win32::{
     Foundation::{
         ERROR_BROKEN_PIPE, ERROR_HANDLE_EOF, ERROR_IO_INCOMPLETE, ERROR_IO_PENDING,
         ERROR_MORE_DATA, ERROR_NETNAME_DELETED, ERROR_NO_DATA, ERROR_NOT_FOUND,
-        ERROR_OPERATION_ABORTED, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED,
-        GetLastError,
+        ERROR_OPERATION_ABORTED, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, GetLastError,
     },
     Networking::WinSock::{WSABUF, WSARecv, WSASend},
     System::IO::CancelIoEx,
@@ -72,9 +71,7 @@ impl ReadOperation {
                 CancelIoEx(self.io as _, self.overlapped.as_overlapped())
             ) {
                 let e = err.raw_os_error();
-                if e != Some(ERROR_NOT_FOUND as _)
-                    && e != Some(ERROR_OPERATION_ABORTED as _)
-                {
+                if e != Some(ERROR_NOT_FOUND as _) && e != Some(ERROR_OPERATION_ABORTED as _) {
                     self.ctx
                         .update_read_status(self.buf.take().unwrap(), Err(err));
                     return true;
@@ -126,8 +123,7 @@ impl ReadOperation {
                         // SAFETY: windows tells us how many bytes it read
                         unsafe { buf.advance_mut(size as usize) };
                     }
-                    if self.ctx.update_read_status(buf, Ok(size as usize))
-                        == IoTaskStatus::Io
+                    if self.ctx.update_read_status(buf, Ok(size as usize)) == IoTaskStatus::Io
                         && size != 0
                     {
                         continue;
@@ -145,10 +141,7 @@ impl ReadOperation {
         }
     }
 
-    pub(crate) fn completed(
-        res: io::Result<usize>,
-        optr: *mut Overlapped,
-    ) -> Option<usize> {
+    pub(crate) fn completed(res: io::Result<usize>, optr: *mut Overlapped) -> Option<usize> {
         let rd_optr: *mut ReadOperation = optr.cast();
         let rd = unsafe { &mut *rd_optr };
 
@@ -226,9 +219,7 @@ impl WriteOperation {
                 CancelIoEx(self.io as _, self.overlapped.as_overlapped())
             ) {
                 let e = err.raw_os_error();
-                if e != Some(ERROR_NOT_FOUND as _)
-                    && e != Some(ERROR_OPERATION_ABORTED as _)
-                {
+                if e != Some(ERROR_NOT_FOUND as _) && e != Some(ERROR_OPERATION_ABORTED as _) {
                     return true;
                 }
             }
@@ -337,10 +328,7 @@ impl WriteOperation {
         }
     }
 
-    pub(crate) fn completed(
-        res: io::Result<usize>,
-        optr: *mut Overlapped,
-    ) -> Option<usize> {
+    pub(crate) fn completed(res: io::Result<usize>, optr: *mut Overlapped) -> Option<usize> {
         let wr_optr: *mut WriteOperation = optr.cast();
         let wr = unsafe { &mut *wr_optr };
 

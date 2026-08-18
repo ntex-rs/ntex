@@ -1,13 +1,15 @@
 #![deny(clippy::pedantic)]
 #![allow(
-    clippy::unused_async,
+    async_fn_in_trait,
     clippy::clone_on_copy,
-    clippy::missing_fields_in_debug,
     clippy::must_use_candidate,
-    clippy::missing_errors_doc
+    clippy::missing_fields_in_debug,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::unused_async
 )]
 
-use ntex_service::ServiceFactory;
+use ntex_service::Service;
 
 mod manager;
 pub mod net;
@@ -31,24 +33,23 @@ impl WorkerId {
     }
 }
 
-#[allow(async_fn_in_trait)]
-/// Worker service factory.
+/// Worker service configuration.
 pub trait ServerConfiguration: Send + Clone + 'static {
     type Item: Send + 'static;
-    type Factory: ServiceFactory<Self::Item, St = (), InitCfg = ()> + 'static;
+    type Service: Service<(), Req = Self::Item, Res = (), Error = ()> + 'static;
 
-    /// Create service factory for handling `WorkerMessage<T>` messages.
-    async fn create(&self) -> Result<Self::Factory, ()>;
+    /// Create service for handling `WorkerMessage<T>` messages.
+    async fn create(&self) -> Result<Self::Service, &'static str>;
 
-    /// Server is paused.
-    fn paused(&self) {}
+    /// Pause the server.
+    fn pause(&self) {}
 
-    /// Server is resumed.
-    fn resumed(&self) {}
+    /// Resume the server.
+    fn resume(&self) {}
 
-    /// Server is stopped
+    /// Server is stopped.
     fn terminate(&self) {}
 
-    /// Server is stopped
+    /// Server is stopped.
     async fn stop(&self) {}
 }

@@ -2,10 +2,8 @@ use std::{error::Error as StdError, time::Duration};
 
 use crate::connect::{self, Connect as TcpConnect, Connector as TcpConnector};
 use crate::error::{Error, ErrorMapping, with_service};
-use crate::service::{
-    Ctx, Pipeline, ReadyCtx, Service, ServiceFactory, apply_fn_factory, boxed,
-};
-use crate::{SharedCfg, http::Uri, io::IoBoxed, time::Seconds, util::join};
+use crate::service::{IntoServiceFactory, Pipeline, ReadyCtx, Service, apply_fn_factory, boxed};
+use crate::{Ctx, ServiceFactory, SharedCfg, http::Uri, io::IoBoxed, time::Seconds, util::join};
 
 use super::error::{ClientError, ConnectError};
 use super::{Connect, Connection, pool::ConnectionPool};
@@ -155,11 +153,10 @@ impl Connector {
 
     #[must_use]
     /// Use custom connector to open un-secured connections.
-    pub fn connector<T>(mut self, connector: T) -> Self
+    pub fn connector<T>(mut self, f: impl IntoServiceFactory<T, (), TcpConnect<Uri>>) -> Self
     where
         T: ServiceFactory<
                 TcpConnect<Uri>,
-                St = (),
                 Error = Error<connect::ConnectError>,
                 InitCfg = SharedCfg,
             > + 'static,
@@ -167,7 +164,7 @@ impl Connector {
         IoBoxed: From<T::Res>,
     {
         self.svc = boxed::factory(
-            apply_fn_factory(connector, async move |msg: Connect, svc| {
+            apply_fn_factory(f.into_factory(), async move |msg: Connect, svc| {
                 svc.call(TcpConnect::new(msg.uri).set_addr(msg.addr)).await
             })
             .map(IoBoxed::from)
@@ -179,11 +176,10 @@ impl Connector {
 
     #[must_use]
     /// Use custom connector to open secure connections.
-    pub fn secure_connector<T>(mut self, connector: T) -> Self
+    pub fn secure_connector<T>(mut self, f: impl IntoServiceFactory<T, (), TcpConnect<Uri>>) -> Self
     where
         T: ServiceFactory<
                 TcpConnect<Uri>,
-                St = (),
                 Error = Error<connect::ConnectError>,
                 InitCfg = SharedCfg,
             > + 'static,
@@ -191,7 +187,7 @@ impl Connector {
         IoBoxed: From<T::Res>,
     {
         self.secure_svc = Some(boxed::factory(
-            apply_fn_factory(connector, async move |msg: Connect, svc| {
+            apply_fn_factory(f.into_factory(), async move |msg: Connect, svc| {
                 svc.call(TcpConnect::new(msg.uri).set_addr(msg.addr)).await
             })
             .map(IoBoxed::from)
@@ -202,8 +198,7 @@ impl Connector {
     }
 }
 
-impl ServiceFactory<Connect> for Connector {
-    type St = ();
+impl ServiceFactory<Connect, ()> for Connector {
     type Res = Connection;
     type Error = Error<ClientError>;
     type Service = ConnectorService;
@@ -246,13 +241,12 @@ pub struct ConnectorService {
 }
 
 impl Service for ConnectorService {
-    type St = ();
     type Req = Connect;
     type Res = Connection;
     type Error = Error<ClientError>;
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self, ()>) -> Result<(), Self::Error> {
         if let Some(ref ssl_pool) = self.ssl_pool {
             let (r1, r2) = join(ctx.ready(&self.tcp_pool), ctx.ready(ssl_pool)).await;
             r1.into_error()?;
@@ -269,11 +263,7 @@ impl Service for ConnectorService {
         }
     }
 
-    async fn call(
-        &self,
-        req: Connect,
-        ctx: Ctx<'_, Self>,
-    ) -> Result<Self::Res, Self::Error> {
+    async fn call(&self, req: Connect, ctx: Ctx<'_, Self, ()>) -> Result<Self::Res, Self::Error> {
         with_service(self.cfg.service(), async {
             match req.uri.scheme_str() {
                 Some("https" | "wss") => {

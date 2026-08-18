@@ -41,8 +41,7 @@ impl UninitSlice {
     /// ```
     #[inline]
     pub unsafe fn from_raw_parts_mut<'a>(ptr: *mut u8, len: usize) -> &'a mut UninitSlice {
-        let maybe_init: &mut [MaybeUninit<u8>] =
-            core::slice::from_raw_parts_mut(ptr.cast(), len);
+        let maybe_init: &mut [MaybeUninit<u8>] = core::slice::from_raw_parts_mut(ptr.cast(), len);
         &mut *(ptr::from_mut::<[MaybeUninit<u8>]>(maybe_init) as *mut UninitSlice)
     }
 

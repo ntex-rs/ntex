@@ -1,5 +1,5 @@
-use ntex::http;
 use ntex::web::{self, App, HttpRequest, HttpResponse, HttpServer, middleware};
+use ntex::{SharedCfg, http};
 
 #[web::get("/resource1/{name}/index.html")]
 async fn index(req: HttpRequest, name: web::types::Path<String>) -> String {
@@ -28,22 +28,18 @@ async fn main() -> std::io::Result<()> {
             .service(
                 web::resource("/resource2/index.html")
                     .middleware(ntex::util::timeout::Timeout::new(ntex::time::Millis(5000)))
-                    .middleware(
-                        middleware::DefaultHeaders::new().header("X-Version-R2", "0.3"),
-                    )
-                    .default_service(
-                        web::route().to(|| async { HttpResponse::MethodNotAllowed() }),
-                    )
+                    .middleware(middleware::DefaultHeaders::new().header("X-Version-R2", "0.3"))
+                    .default_service(web::route().to(async || HttpResponse::MethodNotAllowed()))
                     .route(web::get().to(index_async)),
             )
-            .service(web::resource("/test1.html").to(|| async { "Test\r\n" }))
+            .service(web::resource("/test1.html").to(async || "Test\r\n"))
     })
-    .bind("0.0.0.0:8081")?
-    .workers(1)
-    .config(
-        ntex::SharedCfg::new("MY-SERVER")
+    .bind(
+        "0.0.0.0:8081",
+        SharedCfg::new("MY-SERVER")
             .add(http::HttpServiceConfig::new().set_keepalive(http::KeepAlive::Disabled)),
-    )
+    )?
+    .workers(1)
     .run()
     .await
 }

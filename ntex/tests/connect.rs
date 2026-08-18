@@ -1,8 +1,8 @@
 use std::{io, rc::Rc};
 
 use ntex::io::{Io, types::PeerAddr};
-use ntex::service::{Pipeline, ServiceFactory, chain_factory, fn_service};
-use ntex::{SharedCfg, codec::BytesCodec, connect::Connect};
+use ntex::service::{Pipeline, ServiceFactory, svc};
+use ntex::{Service, SharedCfg, codec::BytesCodec, connect::Connect};
 use ntex::{server::build_test_server, server::test_server, time, util::Bytes};
 
 #[cfg(feature = "rustls")]
@@ -38,18 +38,20 @@ async fn test_openssl_string() {
 
     let mut tcp = Some(tcp);
     let srv = build_test_server(async move |srv| {
-        srv.listen("test", tcp.take().unwrap(), async |_| {
-            chain_factory(openssl::SslAcceptor::new(ssl_acceptor())).and_then(
-                fn_service(|io: Io<_>| async move {
+        srv.listen(
+            "test",
+            tcp.take().unwrap(),
+            SharedCfg::new("SRV"),
+            async || {
+                svc(openssl::SslAcceptor::new(ssl_acceptor())).and_then(async move |io: Io<_>| {
                     io.send(Bytes::from_static(b"test"), &BytesCodec)
                         .await
                         .unwrap();
                     assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "test");
-                    Ok::<_, Box<dyn std::error::Error>>(())
+                    Ok::<_, io::Error>(())
                 })
-                .map_init_err(|_| ()),
-            )
-        })
+            },
+        )
         .unwrap()
     })
     .set_addr(local_addr);
@@ -102,16 +104,13 @@ async fn test_openssl_read_before_error() {
     use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 
     let srv = test_server(async || {
-        chain_factory(openssl::SslAcceptor::new(ssl_acceptor())).and_then(
-            fn_service(|io: Io<_>| async move {
-                io.send(Bytes::from_static(b"test"), &Rc::new(BytesCodec))
-                    .await
-                    .unwrap();
-                time::sleep(time::Millis(50)).await;
-                Ok::<_, Box<dyn std::error::Error>>(())
-            })
-            .map_init_err(|_| ()),
-        )
+        svc(openssl::SslAcceptor::new(ssl_acceptor())).and_then(async move |io: Io<_>| {
+            io.send(Bytes::from_static(b"test"), &Rc::new(BytesCodec))
+                .await
+                .unwrap();
+            time::sleep(time::Millis(50)).await;
+            Ok::<_, io::Error>(())
+        })
     });
 
     let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
@@ -143,14 +142,11 @@ async fn test_schannel_string() {
     use tls_openssl::x509::X509;
 
     let srv = test_server(async || {
-        chain_factory(openssl::SslAcceptor::new(ssl_acceptor())).and_then(
-            fn_service(|io: Io<_>| async move {
-                let item = io.recv(&BytesCodec).await.unwrap().unwrap();
-                io.send(item, &BytesCodec).await.unwrap();
-                Ok::<_, Box<dyn std::error::Error>>(())
-            })
-            .map_init_err(|_| ()),
-        )
+        svc(openssl::SslAcceptor::new(ssl_acceptor())).and_then(async move |io: Io<_>| {
+            let item = io.recv(&BytesCodec).await.unwrap().unwrap();
+            io.send(item, &BytesCodec).await.unwrap();
+            Ok::<_, Box<dyn std::error::Error>>(())
+        })
     });
 
     let config = ClientConfig::new().danger_accept_invalid_certs(true);
@@ -190,14 +186,12 @@ async fn test_rustls_string() {
     use ntex_tls::rustls::{PeerCert, PeerCertChain, TlsConnector};
 
     let srv = test_server(async || {
-        chain_factory(
-            rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc()).map_err(|e| {
+        rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc())
+            .map_err(|e| {
                 log::error!("tls negotiation is failed: {e:?}");
                 e
-            }),
-        )
-        .and_then(
-            fn_service(|io: Io<_>| async move {
+            })
+            .and_then(async move |io: Io<_>| {
                 assert!(io.query::<PeerCert<'_>>().as_ref().is_none());
                 assert!(io.query::<PeerCertChain<'_>>().as_ref().is_none());
                 io.send(Bytes::from_static(b"test"), &BytesCodec)
@@ -206,8 +200,6 @@ async fn test_rustls_string() {
                 assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "test");
                 Ok::<_, io::Error>(())
             })
-            .map_init_err(|_| ()),
-        )
     });
 
     // tls connector
@@ -257,14 +249,12 @@ async fn test_rustls_peer_close_notify_closes_io() {
     use tls_rustls::pki_types::ServerName;
 
     let srv = test_server(async || {
-        chain_factory(
-            rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc()).map_err(|e| {
+        rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc())
+            .map_err(|e| {
                 log::error!("tls negotiation is failed: {e:?}");
                 e
-            }),
-        )
-        .and_then(
-            fn_service(|io: Io<_>| async move {
+            })
+            .and_then(async move |io: Io<_>| {
                 // echo round-trip proves the data path works
                 let msg = io.recv(&BytesCodec).await.unwrap().unwrap();
                 io.send(msg, &BytesCodec).await.unwrap();
@@ -273,17 +263,13 @@ async fn test_rustls_peer_close_notify_closes_io() {
                 while let Ok(Some(_)) = io.recv(&BytesCodec).await {}
                 Ok::<_, io::Error>(())
             })
-            .map_init_err(|_| ()),
-        )
     });
 
     // raw blocking rustls client
     let config = Arc::new(rustls_utils::tls_connector());
-    let mut conn = tls_rustls::ClientConnection::new(
-        config,
-        ServerName::try_from("localhost").unwrap(),
-    )
-    .unwrap();
+    let mut conn =
+        tls_rustls::ClientConnection::new(config, ServerName::try_from("localhost").unwrap())
+            .unwrap();
     let mut tcp = std::net::TcpStream::connect(srv.addr()).unwrap();
 
     // handshake + echo round-trip
@@ -317,8 +303,7 @@ async fn test_rustls_peer_close_notify_closes_io() {
             // tls records (e.g. server's close_notify alert), keep reading
             Ok(_) => continue,
             Err(ref e)
-                if e.kind() == io::ErrorKind::WouldBlock
-                    || e.kind() == io::ErrorKind::TimedOut =>
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
             {
                 panic!("server did not close connection after receiving close_notify: {e}");
             }
@@ -337,22 +322,18 @@ async fn test_rustls_shutdown_sends_close_notify() {
     use ntex::server::rustls;
 
     let srv = test_server(async || {
-        chain_factory(
-            rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc()).map_err(|e| {
+        rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc())
+            .map_err(|e| {
                 log::error!("tls negotiation is failed: {e:?}");
                 e
-            }),
-        )
-        .and_then(
-            fn_service(|io: Io<_>| async move {
+            })
+            .and_then(async move |io: Io<_>| {
                 let item = io.recv(&BytesCodec).await.unwrap().unwrap();
                 io.send(item, &BytesCodec).await.unwrap();
                 // graceful shutdown, must deliver TLS close_notify to the peer
                 io.shutdown().await.unwrap();
                 Ok::<_, io::Error>(())
             })
-            .map_init_err(|_| ()),
-        )
     });
     let addr = srv.addr();
 
@@ -394,31 +375,26 @@ async fn test_rustls_keyupdate_response_flushed() {
     use tls_rustls::pki_types::ServerName;
 
     let srv = test_server(async || {
-        chain_factory(
-            rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc()).map_err(|e| {
+        rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc())
+            .map_err(|e| {
                 log::error!("tls negotiation is failed: {e:?}");
                 e
-            }),
-        )
-        .and_then(
-            fn_service(|io: Io<_>| async move {
+            })
+            .and_then(async move |io: Io<_>| {
                 // echo frames, then sit idle waiting for more data
                 while let Some(item) = io.recv(&BytesCodec).await.unwrap() {
                     io.send(item, &BytesCodec).await.unwrap();
                 }
                 Ok::<_, io::Error>(())
             })
-            .map_init_err(|_| ()),
-        )
     });
 
     // raw blocking rustls client, tls 1.3 only (KeyUpdate requires it)
-    let config = tls_rustls::ClientConfig::builder_with_protocol_versions(&[
-        &tls_rustls::version::TLS13,
-    ])
-    .dangerous()
-    .with_custom_certificate_verifier(Arc::new(rustls_utils::NoCertificateVerification))
-    .with_no_client_auth();
+    let config =
+        tls_rustls::ClientConfig::builder_with_protocol_versions(&[&tls_rustls::version::TLS13])
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(rustls_utils::NoCertificateVerification))
+            .with_no_client_auth();
     let mut conn = tls_rustls::ClientConnection::new(
         Arc::new(config),
         ServerName::try_from("localhost").unwrap(),
@@ -475,7 +451,7 @@ async fn test_rustls_keyupdate_response_flushed() {
 #[ntex::test]
 async fn test_static_str() {
     let srv = test_server(async || {
-        fn_service(|io: Io| async move {
+        svc(async move |io: Io| {
             io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
                 .unwrap();
@@ -485,13 +461,13 @@ async fn test_static_str() {
     });
 
     // original
-    let conn = Pipeline::new::<()>(ntex::connect::ConnectorService::new());
+    let conn = Pipeline::new(ntex::connect::ConnectorService::new());
 
     let io = conn.call(Connect::with("10", srv.addr())).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 
     let connect = Connect::new("127.0.0.1".to_owned());
-    let conn = Pipeline::new::<()>(ntex::connect::ConnectorService::new());
+    let conn = Pipeline::new(ntex::connect::ConnectorService::new());
     let io = conn.call(connect).await;
     assert!(io.is_err());
 }
@@ -499,7 +475,7 @@ async fn test_static_str() {
 #[ntex::test]
 async fn test_create() {
     let srv = test_server(async || {
-        fn_service(|io: Io| async move {
+        svc(async move |io: Io| {
             io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
                 .unwrap();
@@ -509,7 +485,7 @@ async fn test_create() {
     time::sleep(time::Millis(100)).await;
 
     let factory = ntex::connect::Connector::new();
-    let conn = factory.pipeline::<()>(&SharedCfg::default()).await.unwrap();
+    let conn = factory.pipeline(&SharedCfg::default()).await.unwrap();
     let io = conn.call(Connect::with("10", srv.addr())).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }
@@ -517,7 +493,7 @@ async fn test_create() {
 #[ntex::test]
 async fn test_uri() {
     let srv = test_server(async || {
-        fn_service(|io: Io| async move {
+        svc(async move |io: Io| {
             io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
                 .unwrap();
@@ -528,8 +504,7 @@ async fn test_uri() {
 
     let conn = Pipeline::new(ntex::connect::ConnectorService::default());
     let addr =
-        ntex::http::Uri::try_from(format!("https://localhost:{}", srv.addr().port()))
-            .unwrap();
+        ntex::http::Uri::try_from(format!("https://localhost:{}", srv.addr().port())).unwrap();
     let io = conn.call(addr.into()).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }
@@ -540,34 +515,30 @@ async fn test_rustls_uri() {
     use ntex::server::rustls;
 
     let srv = test_server(async || {
-        chain_factory(
-            rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc()).map_err(|e| {
+        rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc())
+            .map_err(|e| {
                 log::error!("tls negotiation is failed: {e:?}");
                 e
-            }),
-        )
-        .and_then(fn_service(|io: Io<_>| async move {
-            io.send(Bytes::from_static(b"test"), &BytesCodec)
-                .await
-                .unwrap();
-            Ok::<_, io::Error>(())
-        }))
+            })
+            .and_then(async move |io: Io<_>| {
+                io.send(Bytes::from_static(b"test"), &BytesCodec)
+                    .await
+                    .unwrap();
+                Ok::<_, io::Error>(())
+            })
     });
     time::sleep(time::Millis(50)).await;
 
     let conn = Pipeline::new(ntex::connect::ConnectorService::default());
     let addr =
-        ntex::http::Uri::try_from(format!("https://localhost:{}", srv.addr().port()))
-            .unwrap();
+        ntex::http::Uri::try_from(format!("https://localhost:{}", srv.addr().port())).unwrap();
     let io = conn.call(addr.into()).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }
 
 #[ntex::test]
 async fn basic_connect_service() {
-    let server = ntex::server::test_server(async || {
-        ntex::service::fn_service(|_| async { Ok::<_, ()>(()) })
-    });
+    let server = ntex::server::test_server(async || svc(async |_| Ok::<_, ()>(())));
 
     let srv = ntex_net::connect::Connector::default()
         .create(

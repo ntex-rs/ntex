@@ -131,23 +131,18 @@ pub struct LoggerMiddleware<S> {
     service: S,
 }
 
-impl<S, E> Service for LoggerMiddleware<S>
+impl<S, St, E> Service<St> for LoggerMiddleware<S>
 where
-    S: Service<Req = WebRequest<E>, Res = WebResponse>,
+    S: Service<St, Req = WebRequest<E>, Res = WebResponse>,
 {
-    type St = S::St;
     type Req = WebRequest<E>;
     type Res = WebResponse;
     type Error = S::Error;
 
-    crate::forward_ready!(service);
+    crate::forward_ready!(St, service);
     crate::forward_shutdown!(service);
 
-    async fn call(
-        &self,
-        req: WebRequest<E>,
-        ctx: Ctx<'_, Self>,
-    ) -> Result<Self::Res, S::Error> {
+    async fn call(&self, req: Self::Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, S::Error> {
         if self.inner.exclude.contains(req.path()) {
             ctx.call(&self.service, req).await
         } else {
@@ -248,12 +243,8 @@ impl Format {
 
             if let Some(key) = cap.get(2) {
                 results.push(match cap.get(3).unwrap().as_str() {
-                    "i" => FormatText::RequestHeader(
-                        HeaderName::try_from(key.as_str()).unwrap(),
-                    ),
-                    "o" => FormatText::ResponseHeader(
-                        HeaderName::try_from(key.as_str()).unwrap(),
-                    ),
+                    "i" => FormatText::RequestHeader(HeaderName::try_from(key.as_str()).unwrap()),
+                    "o" => FormatText::ResponseHeader(HeaderName::try_from(key.as_str()).unwrap()),
                     "e" => FormatText::EnvironHeader(key.as_str().to_owned()),
                     _ => unreachable!(),
                 });
@@ -396,9 +387,7 @@ impl FormatText {
     }
 }
 
-pub(crate) struct FormatDisplay<'a>(
-    &'a dyn Fn(&mut fmt::Formatter<'_>) -> Result<(), fmt::Error>,
-);
+pub(crate) struct FormatDisplay<'a>(&'a dyn Fn(&mut fmt::Formatter<'_>) -> Result<(), fmt::Error>);
 
 impl fmt::Display for FormatDisplay<'_> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
@@ -410,14 +399,13 @@ impl fmt::Display for FormatDisplay<'_> {
 mod tests {
     use super::*;
     use crate::http::{StatusCode, header};
-    use crate::service::{IntoService, Pipeline};
-    use crate::util::lazy;
     use crate::web::test::{self, TestRequest};
     use crate::web::{DefaultError, Error};
+    use crate::{fn_service, service::Pipeline, util::lazy};
 
     #[crate::rt_test]
     async fn test_logger() {
-        let srv = |req: WebRequest<DefaultError>| async move {
+        let srv = fn_service(async move |req: WebRequest<DefaultError>| {
             Ok::<_, Error>(
                 req.into_response(
                     HttpResponse::build(StatusCode::OK)
@@ -425,24 +413,18 @@ mod tests {
                         .body("TEST"),
                 ),
             )
-        };
+        });
         let _logger = Logger::default();
-        let logger = Logger::new("%% %{User-Agent}i %{X-Test}o %{HOME}e %D %% test")
-            .exclude("/test");
+        let logger =
+            Logger::new("%% %{User-Agent}i %{X-Test}o %{HOME}e %D %% test").exclude("/test");
 
-        let srv = Pipeline::new::<()>(Middleware::create(
-            &logger,
-            srv.into_service(),
-            &SharedCfg::default(),
-        ));
+        let srv = Pipeline::new(Middleware::create(&logger, srv, &SharedCfg::default()));
         assert!(lazy(|cx| srv.poll_ready(cx).is_ready()).await);
         assert!(lazy(|cx| srv.poll_shutdown(cx).is_ready()).await);
 
-        let req = TestRequest::with_header(
-            header::USER_AGENT,
-            header::HeaderValue::from_static("NTEX"),
-        )
-        .to_srv_request();
+        let req =
+            TestRequest::with_header(header::USER_AGENT, header::HeaderValue::from_static("NTEX"))
+                .to_srv_request();
         let res = srv.call(req).await.unwrap();
         let body = test::read_body(res).await;
         assert_eq!(body, Bytes::from_static(b"TEST"));
@@ -458,12 +440,10 @@ mod tests {
     #[crate::rt_test]
     async fn test_request_line() {
         let mut format = Format::new("%r");
-        let req = TestRequest::with_header(
-            header::USER_AGENT,
-            header::HeaderValue::from_static("NTEX"),
-        )
-        .uri("/test/route/yeah?q=test")
-        .to_srv_request();
+        let req =
+            TestRequest::with_header(header::USER_AGENT, header::HeaderValue::from_static("NTEX"))
+                .uri("/test/route/yeah?q=test")
+                .to_srv_request();
 
         let now = time::SystemTime::now();
         for unit in &mut format.0 {
@@ -488,12 +468,10 @@ mod tests {
     #[crate::rt_test]
     async fn test_url_path() {
         let mut format = Format::new("%T %U");
-        let req = TestRequest::with_header(
-            header::USER_AGENT,
-            header::HeaderValue::from_static("NTEX"),
-        )
-        .uri("/test/route/yeah?q=test")
-        .to_srv_request();
+        let req =
+            TestRequest::with_header(header::USER_AGENT, header::HeaderValue::from_static("NTEX"))
+                .uri("/test/route/yeah?q=test")
+                .to_srv_request();
 
         let now = time::SystemTime::now();
         for unit in &mut format.0 {
@@ -519,11 +497,9 @@ mod tests {
     async fn test_default_format() {
         let mut format = Format::default();
 
-        let req = TestRequest::with_header(
-            header::USER_AGENT,
-            header::HeaderValue::from_static("NTEX"),
-        )
-        .to_srv_request();
+        let req =
+            TestRequest::with_header(header::USER_AGENT, header::HeaderValue::from_static("NTEX"))
+                .to_srv_request();
 
         let now = time::SystemTime::now();
         for unit in &mut format.0 {

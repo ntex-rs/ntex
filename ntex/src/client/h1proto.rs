@@ -178,10 +178,7 @@ impl PlStream {
 impl Stream for PlStream {
     type Item = Result<Bytes, PayloadError>;
 
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut task::Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.as_mut();
         loop {
             let item = ready!(this.io.as_ref().unwrap().poll_recv(&this.codec, cx));
@@ -208,9 +205,7 @@ impl Stream for PlStream {
                     continue;
                 }
                 Err(RecvError::Decoder(err)) => Err(err),
-                Err(RecvError::PeerGone(Some(err))) => {
-                    Err(PayloadError::Incomplete(Some(err)))
-                }
+                Err(RecvError::PeerGone(Some(err))) => Err(PayloadError::Incomplete(Some(err))),
                 Err(RecvError::PeerGone(None)) => {
                     if this.http_10 {
                         return Poll::Ready(None);

@@ -89,9 +89,9 @@ impl ReactorApi {
     pub fn modify_with_mode(&self, fd: RawFd, id: u32, mut event: Event, mode: PollMode) {
         event.key = (u64::from(id) | self.batch) as usize;
 
-        let result =
-            self.poll
-                .modify_with_mode(unsafe { BorrowedFd::borrow_raw(fd) }, event, mode);
+        let result = self
+            .poll
+            .modify_with_mode(unsafe { BorrowedFd::borrow_raw(fd) }, event, mode);
         if let Err(err) = result {
             self.change(Change::Error {
                 batch: self.id,

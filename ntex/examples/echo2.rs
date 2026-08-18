@@ -1,9 +1,8 @@
 use std::io;
 
 use futures_util::StreamExt;
-use log::info;
 use ntex::http::{HttpService, Request, Response, header::HeaderValue};
-use ntex::util::BytesMut;
+use ntex::{SharedCfg, util::BytesMut};
 
 async fn handle_request(mut req: Request) -> Result<Response, io::Error> {
     let mut body = BytesMut::new();
@@ -11,7 +10,7 @@ async fn handle_request(mut req: Request) -> Result<Response, io::Error> {
         body.extend_from_slice(&item.unwrap())
     }
 
-    info!("request body: {:?}", body);
+    log::info!("request body: {:?}", body);
     Ok(Response::Ok()
         .header("x-head", HeaderValue::from_static("dummy value!"))
         .body(body))
@@ -22,7 +21,7 @@ async fn main() -> io::Result<()> {
     env_logger::init();
 
     ntex::server::build()
-        .bind("echo", "127.0.0.1:8080", async |_| {
+        .bind("echo", "127.0.0.1:8080", SharedCfg::default(), async || {
             HttpService::h2(handle_request)
         })?
         .run()

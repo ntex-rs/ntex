@@ -10,9 +10,15 @@ use ntex::{SharedCfg, time::Seconds, util::BytesMut};
 async fn main() -> io::Result<()> {
     env_logger::init();
 
+    let cfg = SharedCfg::new("ECHO").add(HttpServiceConfig::new().set_headers_read_rate(
+        Seconds(1),
+        Seconds(5),
+        128,
+    ));
+
     ntex::server::build()
-        .bind("echo", "127.0.0.1:8080", async |_| {
-            HttpService::new(|mut req: Request| async move {
+        .bind("echo", "127.0.0.1:8080", cfg, async || {
+            HttpService::new(async move |mut req: Request| {
                 let mut body = BytesMut::new();
                 while let Some(item) = req.payload().next().await {
                     body.extend_from_slice(&item.unwrap());
@@ -26,14 +32,6 @@ async fn main() -> io::Result<()> {
                 )
             })
         })?
-        .config(
-            "echo",
-            SharedCfg::new("ECHO").add(HttpServiceConfig::new().set_headers_read_rate(
-                Seconds(1),
-                Seconds(5),
-                128,
-            )),
-        )
         .run()
         .await
 }

@@ -14,7 +14,7 @@ pub use self::codec::Codec;
 pub use self::control::{Control, ControlAck};
 pub use self::decoder::{PayloadDecoder, PayloadItem, PayloadType};
 pub use self::default::DefaultControlService;
-pub use self::service::{H1Service, H1ServiceHandler};
+pub use self::service::H1Service;
 
 pub(super) use self::service::handle_io;
 use crate::{channel::bstream::Receiver, util::Bytes};
@@ -72,8 +72,7 @@ impl super::ResponseError for ProtocolError {
     fn error_response(&self) -> super::Response {
         match self {
             ProtocolError::Decode(
-                super::error::DecodeError::MaxHeaders
-                | super::error::DecodeError::TooLarge(_),
+                super::error::DecodeError::MaxHeaders | super::error::DecodeError::TooLarge(_),
             ) => super::Response::RequestHeaderFieldsTooLarge().into(),
             ProtocolError::Decode(_) => super::Response::BadRequest().into(),
             ProtocolError::SlowRequestTimeout | ProtocolError::SlowPayloadTimeout => {

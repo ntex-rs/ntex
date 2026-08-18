@@ -7,7 +7,7 @@ use atomic_waker::AtomicWaker;
 use core_affinity::CoreId;
 
 use ntex_rt::{Arbiter, spawn};
-use ntex_service::{Pipeline, ServiceFactory};
+use ntex_service::Pipeline;
 use ntex_util::future::{Either, Stream, select, stream_recv};
 use ntex_util::time::{Millis, sleep, timeout_checked};
 
@@ -86,21 +86,14 @@ impl<T> Worker<T> {
                 }
 
                 spawn(async move {
-                    match cfg.create().await {
-                        Ok(f) => {
-                            match ServiceRunner::create(&n, f, r_rx, s_rx, a_tx).await {
-                                Ok(wrk) => {
-                                    log::debug!(
-                                        "Server instance has been created in {n:?}"
-                                    );
-                                    wrk.run().await;
-                                }
-                                Err(()) => {
-                                    log::error!("Cannot start worker {n:?}");
-                                }
-                            }
+                    match ServiceRunner::create(&n, cfg, r_rx, s_rx, a_tx).await {
+                        Ok(wrk) => {
+                            log::debug!("Server instance has been created in {n:?}");
+                            wrk.run().await;
                         }
-                        Err(e) => log::error!("Cannot start worker {n:?}: {e:?}"),
+                        Err(()) => {
+                            log::error!("Cannot start worker {n:?}");
+                        }
                     }
                     Arbiter::current().stop();
                 });
@@ -279,10 +272,10 @@ impl Drop for WorkerAvailabilityTx {
 /// Service runner.
 ///
 /// The runner receives messages through an unbounded channel and processes them.
-struct ServiceRunner<F: ServiceFactory<Req>, Req> {
+struct ServiceRunner<F: ServerConfiguration<Item = Req>, Req> {
     name: String,
     factory: F,
-    svc: Pipeline<F::Service>,
+    svc: Pipeline<Req, (), ()>,
     reqs: Receiver<Req>,
     stop: Pin<Box<dyn Stream<Item = Shutdown>>>,
     availability: WorkerAvailabilityTx,
@@ -291,7 +284,7 @@ struct ServiceRunner<F: ServiceFactory<Req>, Req> {
 impl<F, Req> ServiceRunner<F, Req>
 where
     Req: Send + 'static,
-    F: ServiceFactory<Req, St = (), InitCfg = ()> + 'static,
+    F: ServerConfiguration<Item = Req> + 'static,
 {
     async fn create(
         name: &str,
@@ -303,7 +296,7 @@ where
         availability.set(false);
         let mut stop = Box::pin(stop);
 
-        let svc = match select(factory.create(&()), stream_recv(&mut stop)).await {
+        let svc = match select(factory.create(), stream_recv(&mut stop)).await {
             Either::Left(Ok(svc)) => Pipeline::new(svc),
             Either::Right(Some(Shutdown { result, .. })) => {
                 log::trace!("Shutdown uninitialized worker");
@@ -343,20 +336,21 @@ where
                 }
 
                 if let Ok(item) = ready!(recv.as_mut().poll(cx)) {
-                    let fut = self.svc.call_static(item);
-                    spawn(async move {
-                        let _ = fut.await;
-                    });
-                    Poll::Ready(Ok::<_, F::Error>(true))
+                    Poll::Ready(Ok(Some(item)))
                 } else {
                     log::error!("Server is gone");
-                    Poll::Ready(Ok(false))
+                    Poll::Ready(Ok(None))
                 }
             });
 
             match select(fut, stream_recv(&mut self.stop)).await {
-                Either::Left(Ok(true)) => continue,
-                Either::Left(Err(_)) => {
+                Either::Left(Ok(Some(item))) => {
+                    // got item
+                    let _ = self.svc.call(item).await;
+                    continue;
+                }
+                Either::Left(Err(())) => {
+                    // re-create service
                     ntex_rt::spawn(async move {
                         self.svc.shutdown().await;
                     });
@@ -365,11 +359,10 @@ where
                     self.availability.set(false);
 
                     let timeout = if timeout.is_zero() { STOP_TIMEOUT } else { timeout };
-
                     self.stop(timeout, Some(result)).await;
                     return;
                 }
-                Either::Left(Ok(false)) | Either::Right(None) => {
+                Either::Left(Ok(None)) | Either::Right(None) => {
                     self.availability.set(false);
                     self.stop(STOP_TIMEOUT, None).await;
                     return;
@@ -378,7 +371,7 @@ where
 
             // re-create service
             loop {
-                match select(self.factory.create(&()), stream_recv(&mut self.stop)).await {
+                match select(self.factory.create(), stream_recv(&mut self.stop)).await {
                     Either::Left(Ok(service)) => {
                         self.svc = Pipeline::new(service);
                         break;

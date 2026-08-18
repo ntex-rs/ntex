@@ -116,16 +116,15 @@ impl<S> TimeoutService<S> {
     }
 }
 
-impl<S> Service for TimeoutService<S>
+impl<S, St> Service<St> for TimeoutService<S>
 where
-    S: Service,
+    S: Service<St>,
 {
-    type St = S::St;
     type Req = S::Req;
     type Res = S::Res;
     type Error = TimeoutError<S::Error>;
 
-    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self>) -> Result<S::Res, Self::Error> {
+    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, Self::Error> {
         if self.timeout.is_zero() {
             ctx.call(&self.service, req)
                 .await
@@ -138,7 +137,7 @@ where
         }
     }
 
-    ntex_service::forward_ready!(service, TimeoutError::Service);
+    ntex_service::forward_ready!(St, service, TimeoutError::Service);
     ntex_service::forward_shutdown!(service);
 }
 
@@ -163,7 +162,6 @@ mod tests {
     }
 
     impl Service for SleepService {
-        type St = ();
         type Req = ();
         type Res = ();
         type Error = SrvError;
@@ -191,8 +189,7 @@ mod tests {
         let wait_time = Duration::from_millis(50);
         let resolution = Duration::from_millis(0);
 
-        let timeout =
-            Pipeline::new(TimeoutService::new(resolution, SleepService(wait_time)));
+        let timeout = Pipeline::new(TimeoutService::new(resolution, SleepService(wait_time)));
         assert_eq!(timeout.call(()).await, Ok(()));
         assert_eq!(timeout.ready().await, Ok(()));
     }
@@ -202,8 +199,7 @@ mod tests {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(500);
 
-        let timeout =
-            Pipeline::new(TimeoutService::new(resolution, SleepService(wait_time)));
+        let timeout = Pipeline::new(TimeoutService::new(resolution, SleepService(wait_time)));
         assert_eq!(timeout.call(()).await, Err(TimeoutError::Timeout));
     }
 
@@ -215,7 +211,7 @@ mod tests {
 
         let timeout = apply(
             Timeout::new(resolution).clone(),
-            fn_factory(|| async { Ok::<_, ()>(SleepService(wait_time)) }),
+            fn_factory(async move || Ok::<_, ()>(SleepService(wait_time))),
         );
         let srv = timeout.pipeline(&()).await.unwrap();
 

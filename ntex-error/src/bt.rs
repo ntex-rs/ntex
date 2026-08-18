@@ -67,6 +67,12 @@ impl BacktraceRaw {
         Self::with_filename(location.file())
     }
 
+    #[track_caller]
+    /// Create new backtrace with current location
+    pub fn with_current() -> Self {
+        Self::new(Location::caller())
+    }
+
     /// Create new backtrace with filename location
     pub fn with_filename(location: &'static str) -> Self {
         let mut st = foldhash::fast::FixedState::default().build_hasher();
@@ -102,6 +108,12 @@ impl Backtrace {
         Self(Arc::new(BacktraceRaw::new(location)))
     }
 
+    #[track_caller]
+    /// Create new backtrace with current location
+    pub fn with_current() -> Self {
+        Self(Arc::new(BacktraceRaw::new(Location::caller())))
+    }
+
     /// Create new backtrace with filename location
     pub fn with_filename(location: &'static str) -> Self {
         Self(Arc::new(BacktraceRaw::with_filename(location)))
@@ -114,6 +126,12 @@ impl Backtrace {
 
     pub fn is_resolved(&self) -> bool {
         REPRS.with(|r| r.borrow_mut().contains_key(&self.0.id))
+    }
+
+    #[must_use]
+    pub fn resolve(self) -> Self {
+        self.resolver().resolve();
+        self
     }
 
     pub fn resolver(&self) -> BacktraceResolver {
@@ -352,11 +370,10 @@ struct Bt<'a>(&'a [Option<&'a BacktraceFrame>]);
 impl fmt::Debug for Bt<'_> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         let cwd = std::env::current_dir();
-        let mut print_path =
-            move |fmt: &mut fmt::Formatter<'_>, path: BytesOrWideString<'_>| {
-                let path = crate::utils::module_path_fs(path.to_str_lossy().as_ref());
-                fmt::Display::fmt(&path, fmt)
-            };
+        let mut print_path = move |fmt: &mut fmt::Formatter<'_>, path: BytesOrWideString<'_>| {
+            let path = crate::utils::module_path_fs(path.to_str_lossy().as_ref());
+            fmt::Display::fmt(&path, fmt)
+        };
 
         let mut f = BacktraceFmt::new(fmt, backtrace::PrintFmt::Short, &mut print_path);
         f.add_context()?;

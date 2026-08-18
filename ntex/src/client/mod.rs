@@ -43,16 +43,13 @@ pub use self::test::TestResponse;
 
 pub(crate) use self::codec::{ClientCodec, ClientPayloadCodec};
 use crate::http::{HeaderMap, Method, RequestHead, Uri, body::BodySize, error::HttpError};
-use crate::{Pipeline, SharedCfg, error::Error, service::boxed};
+use crate::{Pipeline, SharedCfg, error::Error};
 
 #[derive(Debug, Clone)]
 pub struct Connect {
     pub uri: Uri,
     pub addr: Option<std::net::SocketAddr>,
 }
-
-type BoxedSender =
-    boxed::BoxService<(), ServiceRequest, ServiceResponse, Error<error::ClientError>>;
 
 /// An HTTP Client
 ///
@@ -73,7 +70,7 @@ type BoxedSender =
 /// ```
 #[derive(Debug, Clone)]
 pub struct Client {
-    svc: Rc<Pipeline<BoxedSender>>,
+    svc: Rc<Pipeline<ServiceRequest, ServiceResponse, Error<error::ClientError>>>,
     config: ClientConfig,
 }
 
@@ -91,7 +88,10 @@ impl Client {
         ClientBuilder::new()
     }
 
-    pub(crate) fn with_service(svc: Pipeline<BoxedSender>, config: ClientConfig) -> Self {
+    pub(crate) fn with_service(
+        svc: Pipeline<ServiceRequest, ServiceResponse, Error<error::ClientError>>,
+        config: ClientConfig,
+    ) -> Self {
         Client {
             config,
             svc: Rc::new(svc),

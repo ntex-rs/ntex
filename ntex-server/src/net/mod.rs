@@ -6,13 +6,14 @@ mod accept;
 mod builder;
 mod config;
 mod factory;
+mod onaccept;
 mod service;
 mod socket;
 mod test;
 
 pub use self::accept::{AcceptLoop, AcceptNotify, AcceptorCommand};
 pub use self::builder::{ServerBuilder, bind_addr, create_tcp_listener};
-pub use self::config::{Config, ServiceConfig, ServiceRuntime};
+pub use self::config::{ServiceConfig, ServiceRuntime};
 pub use self::service::StreamServer;
 pub use self::socket::{Connection, Stream};
 pub use self::test::{TestServer, TestServerBuilder, build_test_server, test_server};
@@ -50,7 +51,7 @@ pub fn build() -> ServerBuilder {
 /// Ssl error combinded with service error.
 #[derive(Debug)]
 pub enum SslError<E> {
-    Ssl(Box<dyn std::error::Error>),
+    Ssl(std::io::Error),
     Service(E),
 }
 

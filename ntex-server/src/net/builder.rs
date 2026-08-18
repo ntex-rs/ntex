@@ -1,25 +1,24 @@
-#![allow(clippy::missing_panics_doc)]
-use std::{fmt, io, net, sync::Arc};
+use std::{fmt, io, marker::PhantomData, net, sync::Arc};
 
 use ntex_io::Io;
 use ntex_rt::System;
-use ntex_service::{ServiceFactory, cfg::SharedCfg};
+use ntex_service::{IntoService, Service, State, cfg::SharedCfg};
 use ntex_util::time::Millis;
 use socket2::{Domain, SockAddr, Socket, Type};
 
 use crate::{Server, WorkerPool};
 
 use super::accept::AcceptLoop;
-use super::config::{Config, ServiceConfig};
+use super::config::ServiceConfig;
 use super::factory::{self, FactoryServiceType};
-use super::factory::{OnAccept, OnAcceptWrapper, OnWorkerStart, OnWorkerStartWrapper};
+use super::onaccept::{OnAccept, OnAcceptWrapper, OnWorkerStart, OnWorkerStartWrapper};
 use super::{Connection, ServerStatus, Stream, StreamServer, Token, socket::Listener};
 
 /// Streaming service builder
 ///
 /// This type can be used to construct an instance of `net streaming server` through a
 /// builder-like pattern.
-pub struct ServerBuilder {
+pub struct ServerBuilder<St = ()> {
     name: String,
     token: Token,
     backlog: i32,
@@ -29,6 +28,7 @@ pub struct ServerBuilder {
     on_accept: Option<Box<dyn OnAccept + Send>>,
     accept: AcceptLoop,
     pool: WorkerPool,
+    st: PhantomData<St>,
 }
 
 impl Default for ServerBuilder {
@@ -37,7 +37,7 @@ impl Default for ServerBuilder {
     }
 }
 
-impl fmt::Debug for ServerBuilder {
+impl<St> fmt::Debug for ServerBuilder<St> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ServerBuilder")
             .field("name", &self.name)
@@ -50,10 +50,10 @@ impl fmt::Debug for ServerBuilder {
     }
 }
 
-impl ServerBuilder {
+impl<St: State<Io> + 'static> ServerBuilder<St> {
     #[must_use]
     /// Create new Server builder instance
-    pub fn new() -> ServerBuilder {
+    pub fn new() -> ServerBuilder<St> {
         let sys = System::current();
         let mut accept = AcceptLoop::default();
         accept.name(sys.name());
@@ -71,6 +71,7 @@ impl ServerBuilder {
             on_worker_start: Vec::new(),
             backlog: 2048,
             pool: WorkerPool::default().name(sys.name()),
+            st: PhantomData,
         }
     }
 
@@ -199,7 +200,7 @@ impl ServerBuilder {
     ///
     /// This function is useful for moving parts of configuration to a
     /// different module or even library.
-    pub async fn configure<F>(mut self, f: F) -> io::Result<ServerBuilder>
+    pub async fn configure<F>(mut self, f: F) -> io::Result<Self>
     where
         F: AsyncFn(ServiceConfig) -> io::Result<()>,
     {
@@ -220,10 +221,9 @@ impl ServerBuilder {
     ///
     /// This function get called during worker runtime configuration stage.
     /// It get executed in the worker thread.
-    pub fn on_worker_start<F, E>(mut self, f: F) -> Self
+    pub fn on_worker_start<F>(mut self, f: F) -> Self
     where
-        F: AsyncFn() -> Result<(), E> + Send + Clone + 'static,
-        E: fmt::Display + 'static,
+        F: AsyncFn() -> Result<(), &'static str> + Send + Clone + 'static,
     {
         self.on_worker_start.push(OnWorkerStartWrapper::create(f));
         self
@@ -242,14 +242,21 @@ impl ServerBuilder {
         self
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     /// Add new service to the server.
-    pub fn bind<F, U, N, R>(mut self, name: N, addr: U, factory: F) -> io::Result<Self>
+    pub fn bind<F, S, I>(
+        mut self,
+        name: impl AsRef<str>,
+        addr: impl net::ToSocketAddrs,
+        cfg: impl Into<SharedCfg>,
+        factory: F,
+    ) -> io::Result<Self>
     where
-        U: net::ToSocketAddrs,
-        N: AsRef<str>,
-        F: AsyncFn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io, St = (), InitCfg = SharedCfg> + 'static,
+        F: AsyncFn() -> I + Send + Clone + 'static,
+        S: Service<St, Req = Io> + 'static,
+        I: IntoService<S, St> + 'static,
     {
+        let cfg = cfg.into();
         let sockets = bind_addr(addr, self.backlog)?;
 
         let mut tokens = Vec::new();
@@ -257,7 +264,7 @@ impl ServerBuilder {
             let token = self.token.next();
             self.sockets
                 .push((token, name.as_ref().to_string(), Listener::from_tcp(lst)));
-            tokens.push((token, SharedCfg::default()));
+            tokens.push((token, cfg.clone()));
         }
 
         self.services.push(factory::create_factory_service(
@@ -271,12 +278,17 @@ impl ServerBuilder {
 
     #[cfg(unix)]
     /// Add new unix domain service to the server.
-    pub fn bind_uds<F, U, N, R>(self, name: N, addr: U, factory: F) -> io::Result<Self>
+    pub fn bind_uds<F, S, I>(
+        self,
+        name: impl AsRef<str>,
+        addr: impl AsRef<std::path::Path>,
+        cfg: impl Into<SharedCfg>,
+        factory: F,
+    ) -> io::Result<Self>
     where
-        N: AsRef<str>,
-        U: AsRef<std::path::Path>,
-        F: AsyncFn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io, St = (), InitCfg = SharedCfg> + 'static,
+        F: AsyncFn() -> I + Send + Clone + 'static,
+        S: Service<St, Req = Io> + 'static,
+        I: IntoService<S, St> + 'static,
     {
         use std::os::unix::net::UnixListener;
 
@@ -290,27 +302,29 @@ impl ServerBuilder {
         }
 
         let lst = UnixListener::bind(addr)?;
-        self.listen_uds(name, lst, factory)
+        self.listen_uds(name, lst, cfg.into(), factory)
     }
 
     #[cfg(unix)]
     /// Add new unix domain service to the server.
     /// Useful when running as a systemd service and
     /// a socket FD can be acquired using the systemd crate.
-    pub fn listen_uds<F, N: AsRef<str>, R>(
+    pub fn listen_uds<F, S, I>(
         mut self,
-        name: N,
+        name: impl AsRef<str>,
         lst: std::os::unix::net::UnixListener,
+        cfg: impl Into<SharedCfg>,
         factory: F,
     ) -> io::Result<Self>
     where
-        F: AsyncFn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io, St = (), InitCfg = SharedCfg> + 'static,
+        F: AsyncFn() -> I + Send + Clone + 'static,
+        S: Service<St, Req = Io> + 'static,
+        I: IntoService<S, St> + 'static,
     {
         let token = self.token.next();
         self.services.push(factory::create_factory_service(
             name.as_ref().to_string(),
-            vec![(token, SharedCfg::default())],
+            vec![(token, cfg.into())],
             factory,
         ));
         self.sockets
@@ -319,58 +333,27 @@ impl ServerBuilder {
     }
 
     /// Add new service to the server.
-    pub fn listen<F, N: AsRef<str>, R>(
+    pub fn listen<F, S, I>(
         mut self,
-        name: N,
+        name: impl AsRef<str>,
         lst: net::TcpListener,
+        cfg: impl Into<SharedCfg>,
         factory: F,
     ) -> io::Result<Self>
     where
-        F: AsyncFn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io, St = (), InitCfg = SharedCfg> + 'static,
+        F: AsyncFn() -> I + Send + Clone + 'static,
+        S: Service<St, Req = Io> + 'static,
+        I: IntoService<S, St> + 'static,
     {
         let token = self.token.next();
         self.services.push(factory::create_factory_service(
             name.as_ref().to_string(),
-            vec![(token, SharedCfg::default())],
+            vec![(token, cfg.into())],
             factory,
         ));
         self.sockets
             .push((token, name.as_ref().to_string(), Listener::from_tcp(lst)));
         Ok(self)
-    }
-
-    #[must_use]
-    /// Set shared config for named service
-    ///
-    /// # Panics
-    ///
-    /// Panics if named service is not registered
-    pub fn config<N, U>(mut self, name: N, cfg: U) -> Self
-    where
-        N: AsRef<str>,
-        U: Into<SharedCfg>,
-    {
-        let cfg = cfg.into();
-        let mut token = None;
-        for sock in &self.sockets {
-            if sock.1 == name.as_ref() {
-                token = Some(sock.0);
-                break;
-            }
-        }
-
-        if let Some(token) = token {
-            for svc in &mut self.services {
-                if svc.name(token) == name.as_ref() {
-                    svc.set_config(token, cfg.clone());
-                }
-            }
-        } else {
-            panic!("Cannot find service by name {:?}", name.as_ref());
-        }
-
-        self
     }
 
     /// Starts processing incoming connections and return server controller.
@@ -430,10 +413,7 @@ pub fn bind_addr<S: net::ToSocketAddrs>(
     }
 }
 
-pub fn create_tcp_listener(
-    addr: net::SocketAddr,
-    backlog: i32,
-) -> io::Result<net::TcpListener> {
+pub fn create_tcp_listener(addr: net::SocketAddr, backlog: i32) -> io::Result<net::TcpListener> {
     let builder = match addr {
         net::SocketAddr::V4(_) => Socket::new(Domain::IPV4, Type::STREAM, None)?,
         net::SocketAddr::V6(_) => Socket::new(Domain::IPV6, Type::STREAM, None)?,

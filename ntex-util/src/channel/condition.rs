@@ -1,6 +1,4 @@
-use std::{
-    cell, fmt, future::Future, future::poll_fn, pin::Pin, task::Context, task::Poll,
-};
+use std::{cell, fmt, future::Future, future::poll_fn, pin::Pin, task::Context, task::Poll};
 
 use slab::Slab;
 

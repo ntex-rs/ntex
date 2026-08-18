@@ -1,11 +1,11 @@
+#![recursion_limit = "256"]
 #![cfg(all(windows, feature = "openssl"))]
 
 use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 
 use ntex::client::{Client, Connector};
 use ntex::http::{HttpService, Uri, Version, test::server as test_server};
-use ntex::service::{cfg::SharedCfg, chain_factory};
-use ntex::util::Ready;
+use ntex::service::{cfg::SharedCfg, svc};
 use ntex::web::{self, App, HttpResponse};
 use ntex_tls::schannel::{ClientConfig, TlsConnector};
 use tls_openssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod};
@@ -37,14 +37,14 @@ async fn test_connection_reuse_h2() {
 
     let srv = test_server(async move || {
         let num2 = num2.clone();
-        chain_factory(move |io| {
+        svc(async move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
-            Ready::Ok(io)
+            Ok(io)
         })
         .and_then(
-            HttpService::h2(App::new().service(
-                web::resource("/").route(web::to(|| async { HttpResponse::Ok() })),
-            ))
+            HttpService::h2(
+                App::new().service(web::resource("/").route(web::to(async || HttpResponse::Ok()))),
+            )
             .openssl(ssl_acceptor()),
         )
     })

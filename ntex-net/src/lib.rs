@@ -40,22 +40,14 @@ pub mod compio;
 pub trait Reactor: Driver {
     fn tcp_connect(&self, addr: net::SocketAddr, cfg: SharedCfg) -> channel::Receiver<Io>;
 
-    fn unix_connect(
-        &self,
-        addr: std::path::PathBuf,
-        cfg: SharedCfg,
-    ) -> channel::Receiver<Io>;
+    fn unix_connect(&self, addr: std::path::PathBuf, cfg: SharedCfg) -> channel::Receiver<Io>;
 
     /// Convert std `TcpStream` to `Io`
     fn from_tcp_stream(&self, stream: net::TcpStream, cfg: SharedCfg) -> io::Result<Io>;
 
     #[cfg(unix)]
     /// Convert std `UnixStream` to `Io`
-    fn from_unix_stream(
-        &self,
-        _: std::os::unix::net::UnixStream,
-        _: SharedCfg,
-    ) -> io::Result<Io>;
+    fn from_unix_stream(&self, _: std::os::unix::net::UnixStream, _: SharedCfg) -> io::Result<Io>;
 }
 
 #[inline]
@@ -82,10 +74,7 @@ pub fn from_tcp_stream(stream: net::TcpStream, cfg: SharedCfg) -> io::Result<Io>
 #[cfg(unix)]
 #[inline]
 /// Convert std `UnixStream` to `UnixStream`
-pub fn from_unix_stream(
-    stream: std::os::unix::net::UnixStream,
-    cfg: SharedCfg,
-) -> io::Result<Io> {
+pub fn from_unix_stream(stream: std::os::unix::net::UnixStream, cfg: SharedCfg) -> io::Result<Io> {
     with_current(|driver| driver.from_unix_stream(stream, cfg))
 }
 
@@ -162,8 +151,7 @@ impl Runner for DefaultRuntime {
             #[cfg(feature = "neon-polling")]
             {
                 let driver: Box<dyn Reactor> = Box::new(
-                    crate::polling::Reactor::new()
-                        .expect("Cannot construct polling reactor"),
+                    crate::polling::Reactor::new().expect("Cannot construct polling reactor"),
                 );
 
                 with_reactor(&driver, || {
@@ -177,8 +165,7 @@ impl Runner for DefaultRuntime {
             #[cfg(all(target_os = "linux", feature = "neon-uring"))]
             {
                 let driver: Box<dyn Reactor> = Box::new(
-                    crate::uring::Reactor::new(2048)
-                        .expect("Cannot construct io-uring reactor"),
+                    crate::uring::Reactor::new(2048).expect("Cannot construct io-uring reactor"),
                 );
 
                 with_reactor(&driver, || {
@@ -192,20 +179,18 @@ impl Runner for DefaultRuntime {
             #[cfg(all(not(feature = "neon-uring"), not(feature = "neon-polling")))]
             {
                 #[cfg(target_os = "linux")]
-                let driver: Box<dyn Reactor> =
-                    if let Ok(reactor) = crate::uring::Reactor::new(2048) {
-                        Box::new(reactor)
-                    } else {
-                        Box::new(
-                            crate::polling::Reactor::new()
-                                .expect("Cannot construct io-uring reactor"),
-                        )
-                    };
+                let driver: Box<dyn Reactor> = if let Ok(reactor) = crate::uring::Reactor::new(2048)
+                {
+                    Box::new(reactor)
+                } else {
+                    Box::new(
+                        crate::polling::Reactor::new().expect("Cannot construct io-uring reactor"),
+                    )
+                };
 
                 #[cfg(not(target_os = "linux"))]
                 let driver: Box<dyn Reactor> = Box::new(
-                    crate::polling::Reactor::new()
-                        .expect("Cannot construct polling reactor"),
+                    crate::polling::Reactor::new().expect("Cannot construct polling reactor"),
                 );
 
                 with_reactor(&driver, || {

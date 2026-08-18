@@ -237,8 +237,7 @@ pub fn hash_key(key: &[u8]) -> Result<String, HandshakeError> {
             schedule[i] = u32::from_be_bytes(block.try_into().unwrap());
         }
         for i in 16..80 {
-            schedule[i] =
-                schedule[i - 3] ^ schedule[i - 8] ^ schedule[i - 14] ^ schedule[i - 16];
+            schedule[i] = schedule[i - 3] ^ schedule[i - 8] ^ schedule[i - 14] ^ schedule[i - 16];
             schedule[i] = schedule[i].rotate_left(1);
         }
 

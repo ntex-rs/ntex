@@ -156,9 +156,7 @@ impl Clone for ConnectError {
             #[cfg(feature = "openssl")]
             ConnectError::SslError(e) => ConnectError::SslError(e.clone()),
             #[cfg(feature = "openssl")]
-            ConnectError::SslHandshakeError(e) => {
-                ConnectError::SslHandshakeError(e.clone())
-            }
+            ConnectError::SslHandshakeError(e) => ConnectError::SslHandshakeError(e.clone()),
             ConnectError::Resolver(e) => ConnectError::Resolver(clone_io_error(e)),
             ConnectError::NoRecords => ConnectError::NoRecords,
             ConnectError::Timeout => ConnectError::Timeout,

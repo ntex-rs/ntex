@@ -6,7 +6,7 @@ use std::{cell::Cell, fmt, future::Future, io, pin::Pin, rc::Rc};
 
 use ntex_codec::{Decoder, Encoder};
 use ntex_io::{Decoded, IoBoxed, IoStatusUpdate, RecvError};
-use ntex_service::{Pipeline, PipelineCall, Service};
+use ntex_service::{Pipeline, PipelineCall};
 use ntex_util::{future::Either, spawn, time::Seconds};
 
 type Response<U> = <U as Encoder>::Item;
@@ -47,14 +47,14 @@ pub enum Reason<U: Encoder + Decoder> {
 pin_project_lite::pin_project! {
     /// Dispatcher - is a future that reads frames from bytes stream
     /// and pass them to the service.
-    pub struct Dispatcher<S, U>
+    pub struct Dispatcher<U, Err>
     where
-        S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>>,
         U: Encoder,
         U: Decoder,
         U: 'static,
+        Err: 'static,
     {
-        inner: DispatcherInner<S, U>,
+        inner: DispatcherInner<U, Err>,
     }
 }
 
@@ -70,30 +70,28 @@ bitflags::bitflags! {
     }
 }
 
-struct DispatcherInner<S, U>
+struct DispatcherInner<U, Err>
 where
-    S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>>,
     U: Encoder + Decoder + 'static,
 {
     st: DispatcherState,
-    error: Option<S::Error>,
-    shared: Rc<DispatcherShared<S, U>>,
-    response: Option<PipelineCall<S>>,
+    error: Option<Err>,
+    shared: Rc<DispatcherShared<U, Err>>,
+    response: Option<PipelineCall<Option<Response<U>>, Err>>,
     read_remains: u32,
     read_remains_prev: u32,
     read_max_timeout: Seconds,
 }
 
-pub(crate) struct DispatcherShared<S, U>
+pub(crate) struct DispatcherShared<U, Err>
 where
-    S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>>,
     U: Encoder + Decoder,
 {
     io: IoBoxed,
     codec: U,
-    service: Pipeline<S>,
+    service: Pipeline<DispatchItem<U>, Option<Response<U>>, Err>,
     flags: Cell<Flags>,
-    error: Cell<Option<DispatcherError<S::Error, <U as Encoder>::Error>>>,
+    error: Cell<Option<DispatcherError<Err, <U as Encoder>::Error>>>,
     inflight: Cell<u32>,
 }
 
@@ -127,13 +125,17 @@ impl<S, U> From<Either<S, U>> for DispatcherError<S, U> {
     }
 }
 
-impl<S, U> Dispatcher<S, U>
+impl<U, Err> Dispatcher<U, Err>
 where
-    S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
     U: Decoder + Encoder + 'static,
+    Err: 'static,
 {
     /// Construct new `Dispatcher` instance.
-    pub fn new<Io>(io: Io, codec: U, service: Pipeline<S>) -> Dispatcher<S, U>
+    pub fn new<Io>(
+        io: Io,
+        codec: U,
+        service: Pipeline<DispatchItem<U>, Option<Response<U>>, Err>,
+    ) -> Dispatcher<U, Err>
     where
         IoBoxed: From<Io>,
     {
@@ -167,12 +169,11 @@ where
     }
 }
 
-impl<S, U> DispatcherShared<S, U>
+impl<U, Err> DispatcherShared<U, Err>
 where
-    S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>>,
     U: Encoder + Decoder,
 {
-    fn handle_result(&self, item: Result<S::Res, S::Error>, io: &IoBoxed, wake: bool) {
+    fn handle_result(&self, item: Result<Option<Response<U>>, Err>, io: &IoBoxed, wake: bool) {
         match item {
             Ok(Some(val)) => {
                 if let Err(err) = io.encode(val, &self.codec) {
@@ -214,12 +215,12 @@ where
     }
 }
 
-impl<S, U> Future for Dispatcher<S, U>
+impl<U, Err> Future for Dispatcher<U, Err>
 where
-    S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
     U: Decoder + Encoder + 'static,
+    Err: 'static,
 {
-    type Output = Result<(), S::Error>;
+    type Output = Result<(), Err>;
 
     #[allow(clippy::too_many_lines)]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -240,8 +241,7 @@ where
                     let (item, nowait) = match ready!(inner.poll_service(cx)) {
                         PollService::Ready => {
                             // decode incoming bytes if buffer is ready
-                            match inner.shared.io.poll_recv_decode(&inner.shared.codec, cx)
-                            {
+                            match inner.shared.io.poll_recv_decode(&inner.shared.codec, cx) {
                                 Ok(decoded) => {
                                     inner.update_timer(&decoded);
                                     if let Some(el) = decoded.item {
@@ -261,12 +261,7 @@ where
                                 Err(RecvError::WriteBackpressure) => {
                                     // instruct write task to notify dispatcher when data is flushed
                                     inner.st = DispatcherState::Backpressure;
-                                    (
-                                        DispatchItem::Control(
-                                            Control::WBackPressureEnabled,
-                                        ),
-                                        true,
-                                    )
+                                    (DispatchItem::Control(Control::WBackPressureEnabled), true)
                                 }
                                 Err(RecvError::Decoder(err)) => {
                                     log::trace!(
@@ -307,14 +302,13 @@ where
                         PollService::Continue => continue,
                     }
 
-                    let item =
-                        if let Err(err) = ready!(inner.shared.io.poll_flush(cx, false)) {
-                            inner.st = DispatcherState::Stop;
-                            DispatchItem::Stop(Reason::Io(Some(err)))
-                        } else {
-                            inner.st = DispatcherState::Processing;
-                            DispatchItem::Control(Control::WBackPressureDisabled)
-                        };
+                    let item = if let Err(err) = ready!(inner.shared.io.poll_flush(cx, false)) {
+                        inner.st = DispatcherState::Stop;
+                        DispatchItem::Stop(Reason::Io(Some(err)))
+                    } else {
+                        inner.st = DispatcherState::Processing;
+                        DispatchItem::Control(Control::WBackPressureDisabled)
+                    };
                     inner.call_service(cx, item, false);
                 }
                 // drain service responses and shutdown io
@@ -374,10 +368,10 @@ where
     }
 }
 
-impl<S, U> DispatcherInner<S, U>
+impl<U, Err> DispatcherInner<U, Err>
 where
-    S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
     U: Decoder + Encoder + 'static,
+    Err: 'static,
 {
     fn call_service(&mut self, cx: &mut Context<'_>, item: DispatchItem<U>, nowait: bool) {
         let mut fut = if nowait {
@@ -469,9 +463,7 @@ where
                             err
                         );
                         self.st = DispatcherState::Stop;
-                        Poll::Ready(PollService::ItemWait(DispatchItem::Stop(Reason::Io(
-                            err,
-                        ))))
+                        Poll::Ready(PollService::ItemWait(DispatchItem::Stop(Reason::Io(err))))
                     }
                     IoStatusUpdate::WriteBackpressure => {
                         self.st = DispatcherState::Backpressure;
@@ -506,9 +498,7 @@ where
             self.read_remains = decoded.remains as u32;
         } else if self.read_remains == 0 && decoded.remains == 0 {
             // no new data, start keep-alive timer
-            if self.shared.contains(Flags::KA_ENABLED)
-                && !self.shared.contains(Flags::KA_TIMEOUT)
-            {
+            if self.shared.contains(Flags::KA_ENABLED) && !self.shared.contains(Flags::KA_TIMEOUT) {
                 log::trace!(
                     "{}: Start keep-alive timer {:?}",
                     self.shared.io.tag(),
@@ -543,9 +533,8 @@ where
                     self.read_remains = 0;
 
                     if !params.max_timeout.is_zero() {
-                        self.read_max_timeout = Seconds(
-                            self.read_max_timeout.0.saturating_sub(params.timeout.0),
-                        );
+                        self.read_max_timeout =
+                            Seconds(self.read_max_timeout.0.saturating_sub(params.timeout.0));
                     }
 
                     if params.max_timeout.is_zero() || !self.read_max_timeout.is_zero() {
@@ -634,7 +623,7 @@ mod tests {
     use ntex_bytes::{BytePages, Bytes, BytesMut};
     use ntex_codec::BytesCodec;
     use ntex_io::{Flags, Io, IoConfig, IoRef, testing::IoTest};
-    use ntex_service::{Ctx, Pipeline, ReadyCtx, cfg::SharedCfg};
+    use ntex_service::{Ctx, Pipeline, ReadyCtx, Service, cfg::SharedCfg};
     use ntex_util::{channel::oneshot, time::Millis, time::sleep};
     use rand::Rng;
 
@@ -682,13 +671,15 @@ mod tests {
         }
     }
 
-    impl<S, U> Dispatcher<S, U>
+    impl<U, Err> Dispatcher<U, Err>
     where
-        S: Service<St = (), Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
         U: Decoder + Encoder + 'static,
     {
         /// Construct new `Dispatcher` instance
-        pub(crate) fn debug(io: Io, codec: U, service: S) -> (Self, State) {
+        pub(crate) fn debug<S>(io: Io, codec: U, service: S) -> (Self, State)
+        where
+            S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>, Error = Err> + 'static,
+        {
             let flags = if io.cfg().keepalive_timeout().is_zero() {
                 super::Flags::empty()
             } else {
@@ -848,7 +839,6 @@ mod tests {
         struct Srv(Rc<Cell<usize>>);
 
         impl Service for Srv {
-            type St = ();
             type Req = DispatchItem<BytesCodec>;
             type Res = Option<Response<BytesCodec>>;
             type Error = &'static str;
@@ -867,8 +857,7 @@ mod tests {
             }
         }
 
-        let (disp, state) =
-            Dispatcher::debug(Io::from(server), BytesCodec, Srv(counter.clone()));
+        let (disp, state) = Dispatcher::debug(Io::from(server), BytesCodec, Srv(counter.clone()));
         spawn(async move {
             let res = disp.await;
             assert_eq!(res, Err("test"));
@@ -1335,7 +1324,6 @@ mod tests {
         );
 
         impl Service for Srv {
-            type St = ();
             type Req = DispatchItem<BytesCodec>;
             type Res = Option<Bytes>;
             type Error = ();

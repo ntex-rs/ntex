@@ -17,23 +17,22 @@ impl<A, B> Then<A, B> {
     }
 }
 
-impl<A, B> Service for Then<A, B>
+impl<A, B, St> Service<St> for Then<A, B>
 where
-    A: Service,
-    B: Service<Req = Result<A::Res, A::Error>, St = A::St, Error = A::Error>,
+    A: Service<St>,
+    B: Service<St, Req = Result<A::Res, A::Error>, Error = A::Error>,
 {
-    type St = A::St;
     type Req = A::Req;
     type Res = B::Res;
     type Error = B::Error;
 
     #[inline]
-    async fn call(&self, req: A::Req, ctx: Ctx<'_, Self>) -> Result<B::Res, B::Error> {
+    async fn call(&self, req: A::Req, ctx: Ctx<'_, Self, St>) -> Result<B::Res, B::Error> {
         ctx.call(&self.svc2, ctx.call(&self.svc1, req).await).await
     }
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
         util::ready(&self.svc1, &self.svc2, ctx).await
     }
 
@@ -57,18 +56,17 @@ impl<A, B> ThenFactory<A, B> {
     }
 }
 
-impl<A, B, Req> ServiceFactory<Req> for ThenFactory<A, B>
+impl<A, B, St, Req> ServiceFactory<Req, St> for ThenFactory<A, B>
 where
-    A: ServiceFactory<Req>,
+    A: ServiceFactory<Req, St>,
     B: ServiceFactory<
             Result<A::Res, A::Error>,
-            St = A::St,
+            St,
             Error = A::Error,
             InitCfg = A::InitCfg,
             InitError = A::InitError,
         >,
 {
-    type St = A::St;
     type Res = B::Res;
     type Error = A::Error;
 
@@ -88,13 +86,12 @@ where
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use crate::{Ctx, ReadyCtx, Service, chain, chain_factory, fn_factory};
+    use crate::{Ctx, ReadyCtx, Service, factory, fn_factory, svc};
 
     #[derive(Clone)]
     struct Srv1(Rc<Cell<usize>>, Rc<Cell<usize>>);
 
     impl Service for Srv1 {
-        type St = ();
         type Req = Result<&'static str, &'static str>;
         type Res = &'static str;
         type Error = ();
@@ -124,7 +121,6 @@ mod tests {
     struct Srv2(Rc<Cell<usize>>, Rc<Cell<usize>>);
 
     impl Service for Srv2 {
-        type St = ();
         type Req = Result<&'static str, ()>;
         type Res = (&'static str, &'static str);
         type Error = ();
@@ -154,7 +150,7 @@ mod tests {
     async fn test_ready() {
         let cnt = Rc::new(Cell::new(0));
         let cnt_sht = Rc::new(Cell::new(0));
-        let srv = chain(Srv1(cnt.clone(), cnt_sht.clone()))
+        let srv = svc(Srv1(cnt.clone(), cnt_sht.clone()))
             .then(Srv2(cnt.clone(), cnt_sht.clone()))
             .into_pipeline();
         let res = srv.ready().await;
@@ -168,7 +164,7 @@ mod tests {
     #[ntex::test]
     async fn test_call() {
         let cnt = Rc::new(Cell::new(0));
-        let srv = chain(Srv1(cnt.clone(), Rc::new(Cell::new(0))))
+        let srv = svc(Srv1(cnt.clone(), Rc::new(Cell::new(0))))
             .then(Srv2(cnt, Rc::new(Cell::new(0))))
             .clone()
             .into_pipeline();
@@ -190,7 +186,7 @@ mod tests {
             let cnt = cnt2.clone();
             async move { Ok::<_, ()>(Srv1(cnt, Rc::new(Cell::new(0)))) }
         });
-        let factory = chain_factory(blank)
+        let factory = factory(blank)
             .then(fn_factory(move || {
                 let cnt = cnt.clone();
                 async move { Ok(Srv2(cnt.clone(), Rc::new(Cell::new(0)))) }

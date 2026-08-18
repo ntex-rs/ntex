@@ -79,11 +79,7 @@ where
 ///
 /// For `ServiceError` types, this includes debug representations of all nested errors,
 /// and a backtrace when available.
-pub fn fmt_diag_typ<T>(
-    f: &mut dyn fmt::Write,
-    typ: Option<ResultType>,
-    e: &T,
-) -> fmt::Result
+pub fn fmt_diag_typ<T>(f: &mut dyn fmt::Write, typ: Option<ResultType>, e: &T) -> fmt::Result
 where
     T: ErrorDiagnostic,
 {
@@ -385,8 +381,7 @@ mod tests {
         let msg = fmt_err_string(&err);
         assert_eq!(msg, "InternalServiceError\n");
 
-        let err =
-            crate::Error::from(TestError::Disconnect(io::Error::other("Test io error")));
+        let err = crate::Error::from(TestError::Disconnect(io::Error::other("Test io error")));
         if let Some(bt) = err.backtrace() {
             bt.resolver().resolve();
         }

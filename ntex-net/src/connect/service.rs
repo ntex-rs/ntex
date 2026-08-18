@@ -14,13 +14,13 @@ pub struct Connector<A, St = ()>(marker::PhantomData<(A, St)>);
 
 #[derive(Clone, Debug)]
 /// Basic tcp stream connector
-pub struct ConnectorService<A, St = ()> {
+pub struct ConnectorService<A> {
     cfg: Cfg<IoConfig>,
     shared: SharedCfg,
-    _t: marker::PhantomData<(A, St)>,
+    _t: marker::PhantomData<A>,
 }
 
-impl<A, St> Connector<A, St> {
+impl<A> Connector<A> {
     /// Construct new connect service with default configuration
     pub fn new() -> Self {
         Connector(marker::PhantomData)
@@ -33,7 +33,7 @@ impl<A> Default for Connector<A> {
     }
 }
 
-impl<A, St> ConnectorService<A, St> {
+impl<A> ConnectorService<A> {
     #[inline]
     /// Construct new connect service with default configuration
     pub fn new() -> Self {
@@ -57,7 +57,7 @@ impl<A> Default for ConnectorService<A> {
     }
 }
 
-impl<A: Address, St> ConnectorService<A, St> {
+impl<A: Address> ConnectorService<A> {
     /// Resolve and connect to remote host
     pub async fn connect<U>(&self, message: U) -> Result<Io, Error<ConnectError>>
     where
@@ -90,12 +90,11 @@ impl<A: Address, St> ConnectorService<A, St> {
     }
 }
 
-impl<A: Address, St> ServiceFactory<Connect<A>> for Connector<A, St> {
-    type St = St;
+impl<A: Address, St> ServiceFactory<Connect<A>, St> for Connector<A, St> {
     type Res = Io;
     type Error = Error<ConnectError>;
 
-    type Service = ConnectorService<A, St>;
+    type Service = ConnectorService<A>;
     type InitCfg = SharedCfg;
     type InitError = ConnectServiceError;
 
@@ -104,13 +103,12 @@ impl<A: Address, St> ServiceFactory<Connect<A>> for Connector<A, St> {
     }
 }
 
-impl<A: Address, St> Service for ConnectorService<A, St> {
-    type St = St;
+impl<A: Address, St> Service<St> for ConnectorService<A> {
     type Req = Connect<A>;
     type Res = Io;
     type Error = Error<ConnectError>;
 
-    async fn call(&self, req: Connect<A>, _: Ctx<'_, Self>) -> Result<Io, Self::Error> {
+    async fn call(&self, req: Connect<A>, _: Ctx<'_, Self, St>) -> Result<Io, Self::Error> {
         self.connect(req).await
     }
 }

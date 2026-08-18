@@ -149,9 +149,7 @@ where
             Control::Request(msg) => f.debug_tuple("Control::Request").field(msg).finish(),
             Control::Upgrade(msg) => f.debug_tuple("Control::Upgrade").field(msg).finish(),
             Control::Expect(msg) => f.debug_tuple("Control::Expect").field(msg).finish(),
-            Control::Disconnect(msg) => {
-                f.debug_tuple("Control::Disconnect").field(msg).finish()
-            }
+            Control::Disconnect(msg) => f.debug_tuple("Control::Disconnect").field(msg).finish(),
         }
     }
 }

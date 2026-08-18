@@ -1,16 +1,14 @@
-use std::{fmt, mem, rc::Rc};
+use std::{error::Error, fmt, mem, rc::Rc};
 
 use crate::http::Method;
 use crate::service::{Ctx, Service, ServiceFactory, cfg::SharedCfg};
 
-use super::HttpResponse;
 use super::error::ErrorRenderer;
 use super::error_default::DefaultError;
 use super::extract::FromRequest;
 use super::guard::{self, AllGuard, Guard};
 use super::handler::{Handler, HandlerFn, HandlerWrapper};
-use super::request::WebRequest;
-use super::response::WebResponse;
+use super::{HttpResponse, request::WebRequest, response::WebResponse};
 
 /// Resource route definition
 ///
@@ -26,7 +24,7 @@ impl<Err: ErrorRenderer> Route<Err> {
     /// Create new route which matches any request.
     pub fn new() -> Route<Err> {
         Route {
-            handler: Rc::new(HandlerWrapper::new(|| async { HttpResponse::NotFound() })),
+            handler: Rc::new(HandlerWrapper::new(async || HttpResponse::NotFound())),
             methods: Vec::new(),
             guards: Rc::default(),
         }
@@ -68,15 +66,14 @@ impl<Err: ErrorRenderer> fmt::Debug for Route<Err> {
 }
 
 impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for Route<Err> {
-    type St = ();
     type Res = WebResponse;
     type Error = Err::Container;
 
-    type InitCfg = SharedCfg;
-    type InitError = ();
     type Service = RouteService<Err>;
+    type InitCfg = SharedCfg;
+    type InitError = Box<dyn Error>;
 
-    async fn create(&self, _: &SharedCfg) -> Result<RouteService<Err>, ()> {
+    async fn create(&self, _: &SharedCfg) -> Result<RouteService<Err>, Box<dyn Error>> {
         Ok(self.service())
     }
 }
@@ -108,7 +105,6 @@ impl<Err: ErrorRenderer> fmt::Debug for RouteService<Err> {
 }
 
 impl<Err: ErrorRenderer> Service for RouteService<Err> {
-    type St = ();
     type Req = WebRequest<Err>;
     type Res = WebResponse;
     type Error = Err::Container;
@@ -116,7 +112,7 @@ impl<Err: ErrorRenderer> Service for RouteService<Err> {
     async fn call(
         &self,
         req: WebRequest<Err>,
-        _: Ctx<'_, Self>,
+        _: Ctx<'_, Self, ()>,
     ) -> Result<Self::Res, Self::Error> {
         self.handler.call(req).await
     }
@@ -133,7 +129,7 @@ impl<Err: ErrorRenderer> Route<Err> {
     ///     web::route()
     ///         .method(ntex::http::Method::CONNECT)
     ///         .guard(guard::Header("content-type", "text/plain"))
-    ///         .to(|req: HttpRequest| async { HttpResponse::Ok() }))
+    ///         .to(async |req: HttpRequest| { HttpResponse::Ok() }))
     /// );
     /// # }
     /// ```
@@ -152,7 +148,7 @@ impl<Err: ErrorRenderer> Route<Err> {
     ///     web::route()
     ///         .guard(guard::Get())
     ///         .guard(guard::Header("content-type", "text/plain"))
-    ///         .to(|req: HttpRequest| async { HttpResponse::Ok() }))
+    ///         .to(async |req: HttpRequest| { HttpResponse::Ok() }))
     /// );
     /// # }
     /// ```
@@ -292,13 +288,13 @@ mod tests {
         let srv = init_service(
             App::new()
                 .service(web::resource("/test").route(vec![
-                        web::get().to(|| async { HttpResponse::Ok() }),
-                        web::put().to(|| async {
+                        web::get().to(async || { HttpResponse::Ok() }),
+                        web::put().to(async || {
                             Err::<HttpResponse, _>(
                                 error::ErrorBadRequest::<_, DefaultError>("err"),
                             )
                         }),
-                        web::post().to(|| async {
+                        web::post().to(async || {
                             sleep(Millis(100)).await;
                             HttpResponse::Created()
                         }),
@@ -306,13 +302,13 @@ mod tests {
                             .guard(guard::fn_guard(|req|
                                 req.headers().contains_key("content-type")
                             ))
-                            .to(|| async { HttpResponse::Conflict() }),
-                        web::delete().to(|| async {
+                            .to(async || { HttpResponse::Conflict() }),
+                        web::delete().to(async || {
                             sleep(Millis(100)).await;
                             Err::<HttpResponse, _>(error::ErrorBadRequest("err"))
                         }),
                     ]))
-                .service(web::resource("/json").route(web::get().to(|| async {
+                .service(web::resource("/json").route(web::get().to(async || {
                     sleep(Millis(25)).await;
                     web::types::Json(MyObject {
                         name: "test".to_string(),
@@ -374,11 +370,7 @@ mod tests {
         let route: web::Route<DefaultError> = web::get();
         let repr = format!("{route:?}");
         assert!(repr.contains("Route"));
-        assert!(
-            repr.contains(
-                "handler: Handler(\"ntex::web::route::Route::new::{{closure}}\")"
-            )
-        );
+        assert!(repr.contains("handler: Handler(\"ntex::web::route::Route::new::{{closure}}\")"));
         assert!(repr.contains("methods: [GET]"));
         assert!(repr.contains("guards: AllGuard()"));
 
@@ -387,11 +379,7 @@ mod tests {
         let route_service = route.service();
         let repr = format!("{route_service:?}");
         assert!(repr.contains("RouteService"));
-        assert!(
-            repr.contains(
-                "handler: Handler(\"ntex::web::route::Route::new::{{closure}}\")"
-            )
-        );
+        assert!(repr.contains("handler: Handler(\"ntex::web::route::Route::new::{{closure}}\")"));
         assert!(repr.contains("methods: [GET]"));
         assert!(repr.contains("guards: AllGuard()"));
     }

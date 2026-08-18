@@ -1,27 +1,24 @@
 use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering};
-use std::{io, io::Read, io::Write, net};
+use std::{future::ready, io, io::Read, io::Write, net};
 
-use futures_util::future::{self, FutureExt};
-use futures_util::stream::{StreamExt, once};
+use futures_util::{future::FutureExt, stream::StreamExt, stream::once};
 use regex::Regex;
 
 use ntex::http::header::{self, HeaderName, HeaderValue};
 use ntex::http::{
-    HttpService, HttpServiceConfig, KeepAlive, Method, Request, Response, StatusCode,
-    Version,
+    HttpService, HttpServiceConfig, KeepAlive, Method, Request, Response, StatusCode, Version,
 };
 use ntex::http::{body, h1, h1::Control, test, test::server as test_server};
 use ntex::time::{Millis, Seconds, sleep, timeout};
-use ntex::util::{Bytes, Ready};
-use ntex::{SharedCfg, channel::oneshot, rt, service::fn_service, web::error};
+use ntex::{SharedCfg, channel::oneshot, fn_service, rt, util::Bytes, web::error};
 
 #[ntex::test]
 async fn test_h1() {
-    let srv = test::server_with_config(
+    let srv = test::server_with_config::<(), _, _, _>(
         async || {
-            HttpService::h1(|req: Request| {
+            HttpService::h1(async |req: Request| {
                 assert!(req.peer_addr().is_some());
-                Ready::Ok::<_, io::Error>(Response::Ok().finish())
+                Ok::<_, io::Error>(Response::Ok().finish())
             })
         },
         SharedCfg::new("SRV").add(
@@ -40,10 +37,10 @@ async fn test_h1() {
 async fn test_h1_2() {
     let srv = test::server_with_config(
         async || {
-            HttpService::new(|req: Request| {
+            HttpService::new(async |req: Request| {
                 assert!(req.peer_addr().is_some());
                 assert_eq!(req.version(), Version::HTTP_11);
-                Ready::Ok::<_, io::Error>(Response::Ok().finish())
+                Ok::<_, io::Error>(Response::Ok().finish())
             })
         },
         SharedCfg::new("SRV").add(
@@ -66,11 +63,11 @@ async fn test_h1_2() {
 async fn test_expect_continue() {
     let srv = test::server_with_config(
         async || {
-            HttpService::h1(fn_service(|mut req: Request| async move {
+            HttpService::h1(async move |mut req: Request| {
                 let _ = req.payload().next().await;
                 Ok::<_, io::Error>(Response::Ok().finish())
-            }))
-            .control(fn_service(|req: Control<_, _>| async move {
+            })
+            .control(async move |req: Control<_, _>| {
                 sleep(Millis(20)).await;
                 let ack = if let Control::Expect(exc) = req {
                     if exc.get_ref().head().uri.query() == Some("yes=") {
@@ -85,10 +82,9 @@ async fn test_expect_continue() {
                     req.ack()
                 };
                 Ok::<_, std::convert::Infallible>(ack)
-            }))
+            })
         },
-        SharedCfg::new("SRV")
-            .add(HttpServiceConfig::new().set_keepalive(KeepAlive::Disabled)),
+        SharedCfg::new("SRV").add(HttpServiceConfig::new().set_keepalive(KeepAlive::Disabled)),
     )
     .await;
 
@@ -99,9 +95,8 @@ async fn test_expect_continue() {
     assert!(data.starts_with("HTTP/1.1 412 Precondition Failed\r\ncontent-length"));
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-    let _ = stream.write_all(
-        b"GET /test?yes= HTTP/1.1\r\ncontent-length:4\r\nexpect: 100-continue\r\n\r\n",
-    );
+    let _ = stream
+        .write_all(b"GET /test?yes= HTTP/1.1\r\ncontent-length:4\r\nexpect: 100-continue\r\n\r\n");
     let mut data = [0; 25];
     let _ = stream.read_exact(&mut data[..]);
     assert_eq!(&data, b"HTTP/1.1 100 Continue\r\n\r\n");
@@ -125,23 +120,21 @@ async fn test_chunked_payload() {
                     Ok(pl) => pl,
                     Err(e) => panic!("Error reading payload: {e}"),
                 })
-                .fold(0usize, |acc, chunk| async move { acc + chunk.len() })
-                .map(|req_size| {
-                    Ok::<_, io::Error>(Response::Ok().body(format!("size={req_size}")))
-                })
+                .fold(0usize, async move |acc, chunk| acc + chunk.len())
+                .map(|req_size| Ok::<_, io::Error>(Response::Ok().body(format!("size={req_size}"))))
         }))
     })
     .await;
 
     let returned_size = {
         let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-        let _ =
-            stream.write_all(b"POST /test HTTP/1.1\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n");
+        let _ = stream.write_all(
+            b"POST /test HTTP/1.1\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n",
+        );
 
         for chunk_size in chunk_sizes.iter() {
             let mut bytes = Vec::new();
-            let random_bytes: Vec<u8> =
-                (0..*chunk_size).map(|_| rand::random::<u8>()).collect();
+            let random_bytes: Vec<u8> = (0..*chunk_size).map(|_| rand::random::<u8>()).collect();
 
             bytes.extend(format!("{chunk_size:X}\r\n").as_bytes());
             bytes.extend(&random_bytes[..]);
@@ -169,7 +162,7 @@ async fn test_slow_request() {
     const DATA: &[u8] = b"GET /test/tests/test HTTP/1.1\r\n";
 
     let srv = test::server_with_config(
-        async || HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish())),
+        async || HttpService::new(async |_| Ok::<_, io::Error>(Response::Ok().finish())),
         SharedCfg::new("SRV").add(HttpServiceConfig::new().set_headers_read_rate(
             Seconds(1),
             Seconds(2),
@@ -199,7 +192,7 @@ async fn test_slow_request2() {
     const DATA: &[u8] = b"GET /test/tests/test HTTP/1.1\r\n";
 
     let srv = test::server_with_config(
-        async || HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish())),
+        async || HttpService::new(async |_| Ok::<_, io::Error>(Response::Ok().finish())),
         SharedCfg::new("SRV").add(HttpServiceConfig::new().set_headers_read_rate(
             Seconds(1),
             Seconds(2),
@@ -222,7 +215,7 @@ async fn test_slow_request2() {
 #[ntex::test]
 async fn test_http1_malformed_request() {
     let srv = test_server(async || {
-        HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish()))
+        HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().finish()))
     })
     .await;
 
@@ -236,7 +229,7 @@ async fn test_http1_malformed_request() {
 #[ntex::test]
 async fn test_http1_keepalive() {
     let srv = test_server(async || {
-        HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish()))
+        HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().finish()))
     })
     .await;
 
@@ -255,7 +248,7 @@ async fn test_http1_keepalive() {
 #[ntex::test]
 async fn test_http1_keepalive_timeout() {
     let srv = test::server_with_config(
-        async || HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish())),
+        async || HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().finish())),
         SharedCfg::new("SRV").add(HttpServiceConfig::new().set_keepalive(1)),
     )
     .await;
@@ -277,7 +270,7 @@ async fn test_http1_keepalive_timeout() {
 async fn test_http1_no_keepalive_during_response() {
     let srv = test::server_with_config(
         async || {
-            HttpService::h1(|_| async {
+            HttpService::h1(async |_| {
                 sleep(Millis(1200)).await;
                 Ok::<_, io::Error>(Response::Ok().finish())
             })
@@ -311,13 +304,13 @@ async fn test_http1_keepalive_after_response() {
     let srv = test::server_with_config(
         async move || {
             let ka = ka2.clone();
-            HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish())).control(
-                fn_service(async move |req: Control<_, _>| {
+            HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().finish())).control(
+                async move |req: Control<_, _>| {
                     if let Control::Disconnect(h1::control::Reason::KeepAlive(_)) = &req {
                         ka.store(true, Ordering::Release);
                     }
                     Ok::<_, std::convert::Infallible>(req.ack())
-                }),
+                },
             )
         },
         SharedCfg::new("SRV").add(
@@ -344,7 +337,7 @@ async fn test_http1_keepalive_after_response() {
 #[ntex::test]
 async fn test_http1_keepalive_close() {
     let srv = test_server(async || {
-        HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish()))
+        HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().finish()))
     })
     .await;
 
@@ -362,7 +355,7 @@ async fn test_http1_keepalive_close() {
 #[ntex::test]
 async fn test_http10_keepalive_default_close() {
     let srv = test_server(async || {
-        HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish()))
+        HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().finish()))
     })
     .await;
 
@@ -380,13 +373,12 @@ async fn test_http10_keepalive_default_close() {
 #[ntex::test]
 async fn test_http10_keepalive() {
     let srv = test_server(async || {
-        HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish()))
+        HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().finish()))
     })
     .await;
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-    let _ = stream
-        .write_all(b"GET /test/tests/test HTTP/1.0\r\nconnection: keep-alive\r\n\r\n");
+    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.0\r\nconnection: keep-alive\r\n\r\n");
     let mut data = vec![0; 1024];
     let _ = stream.read(&mut data);
     assert_eq!(&data[..17], b"HTTP/1.0 200 OK\r\n");
@@ -405,9 +397,8 @@ async fn test_http10_keepalive() {
 #[ntex::test]
 async fn test_http1_keepalive_disabled() {
     let srv = test::server_with_config(
-        async || HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish())),
-        SharedCfg::new("SRV")
-            .add(HttpServiceConfig::new().set_keepalive(KeepAlive::Disabled)),
+        async || HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().finish())),
+        SharedCfg::new("SRV").add(HttpServiceConfig::new().set_keepalive(KeepAlive::Disabled)),
     )
     .await;
 
@@ -427,14 +418,12 @@ async fn test_http1_keepalive_disabled() {
 async fn test_http1_disable_payload_timer_after_whole_pl_has_been_read() {
     let srv = test::server_with_config(
         async || {
-            HttpService::h1(|mut req: Request| async move {
+            HttpService::h1(async move |mut req: Request| {
                 req.payload().recv().await;
                 sleep(Millis(1500)).await;
                 Ok::<_, io::Error>(Response::Ok().finish())
             })
-            .control(fn_service(move |msg: Control<_, _>| async move {
-                Ok::<_, io::Error>(msg.ack())
-            }))
+            .control(async |msg: Control<_, _>| Ok::<_, io::Error>(msg.ack()))
         },
         SharedCfg::new("SRV").add(
             HttpServiceConfig::new()
@@ -461,16 +450,17 @@ async fn test_http1_disable_payload_timer_after_whole_pl_has_been_read() {
 #[ntex::test]
 async fn test_http1_handle_not_consumed_payload() {
     let srv = test_server(async || {
-        HttpService::h1(|_| async move { Ok::<_, io::Error>(Response::Ok().finish()) })
-            .control(fn_service(move |msg: Control<_, _>| {
+        HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().finish())).control(
+            async |msg: Control<_, _>| {
                 if matches!(
                     msg,
                     Control::Disconnect(ntex::http::h1::control::Reason::ProtocolError(_))
                 ) {
                     panic!()
                 }
-                async move { Ok::<_, io::Error>(msg.ack()) }
-            }))
+                Ok::<_, io::Error>(msg.ack())
+            },
+        )
     })
     .await;
 
@@ -506,8 +496,7 @@ async fn test_http1_handle_payload_errors() {
     .await;
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-    let _ =
-        stream.write_all(b"GET /test/tests/test HTTP/1.1\r\ncontent-length: 99999\r\n\r\n");
+    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\ncontent-length: 99999\r\n\r\n");
     sleep(Millis(250)).await;
     drop(stream);
     sleep(Millis(250)).await;
@@ -517,7 +506,7 @@ async fn test_http1_handle_payload_errors() {
 #[ntex::test]
 async fn test_content_length() {
     let srv = test_server(async || {
-        HttpService::h1(|req: Request| {
+        HttpService::h1(async |req: Request| {
             let indx: usize = req.uri().path()[1..].parse().unwrap();
             let statuses = [
                 StatusCode::NO_CONTENT,
@@ -527,7 +516,7 @@ async fn test_content_length() {
                 StatusCode::OK,
                 StatusCode::NOT_FOUND,
             ];
-            Ready::Ok::<_, io::Error>(Response::new(statuses[indx]))
+            Ok::<_, io::Error>(Response::new(statuses[indx]))
         })
     })
     .await;
@@ -561,7 +550,7 @@ async fn test_h1_headers() {
 
     let srv = test_server(async move || {
         let data = data.clone();
-        HttpService::h1(move |_| {
+        HttpService::h1(async move |_| {
             let mut builder = Response::Ok();
             for idx in 0..20 {
                 builder.header(
@@ -581,9 +570,10 @@ async fn test_h1_headers() {
                         TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST ",
                 );
             }
-            Ready::Ok::<_, io::Error>(builder.body(data.clone()))
+            Ok::<_, io::Error>(builder.body(data.clone()))
         })
-    }).await;
+    })
+    .await;
 
     let response = srv
         .request(Method::GET, "/")
@@ -623,7 +613,7 @@ const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
 #[ntex::test]
 async fn test_h1_body() {
     let srv = test_server(async || {
-        HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().body(STR)))
+        HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().body(STR)))
     })
     .await;
 
@@ -638,7 +628,7 @@ async fn test_h1_body() {
 #[ntex::test]
 async fn test_h1_head_empty() {
     let srv = test_server(async || {
-        HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().body(STR)))
+        HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().body(STR)))
     })
     .await;
 
@@ -658,10 +648,8 @@ async fn test_h1_head_empty() {
 #[ntex::test]
 async fn test_h1_head_binary() {
     let srv = test_server(async || {
-        HttpService::h1(|_| {
-            Ready::Ok::<_, io::Error>(
-                Response::Ok().content_length(STR.len() as u64).body(STR),
-            )
+        HttpService::h1(async |_| {
+            Ok::<_, io::Error>(Response::Ok().content_length(STR.len() as u64).body(STR))
         })
     })
     .await;
@@ -682,7 +670,7 @@ async fn test_h1_head_binary() {
 #[ntex::test]
 async fn test_h1_head_binary2() {
     let srv = test_server(async || {
-        HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().body(STR)))
+        HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().body(STR)))
     })
     .await;
 
@@ -698,11 +686,9 @@ async fn test_h1_head_binary2() {
 #[ntex::test]
 async fn test_h1_body_length() {
     let srv = test_server(async || {
-        HttpService::h1(|_| {
-            let body = once(Ready::Ok(Bytes::from_static(STR.as_ref())));
-            Ready::Ok::<_, io::Error>(
-                Response::Ok().body(body::SizedStream::new(STR.len() as u64, body)),
-            )
+        HttpService::h1(async |_| {
+            let body = once(ready(Ok(Bytes::from_static(STR.as_ref()))));
+            Ok::<_, io::Error>(Response::Ok().body(body::SizedStream::new(STR.len() as u64, body)))
         })
     })
     .await;
@@ -718,9 +704,9 @@ async fn test_h1_body_length() {
 #[ntex::test]
 async fn test_h1_body_chunked_explicit() {
     let srv = test_server(async || {
-        HttpService::h1(|_| {
-            let body = once(Ready::Ok::<_, io::Error>(Bytes::from_static(STR.as_ref())));
-            Ready::Ok::<_, io::Error>(
+        HttpService::h1(async |_| {
+            let body = once(ready(Ok::<_, io::Error>(Bytes::from_static(STR.as_ref()))));
+            Ok::<_, io::Error>(
                 Response::Ok()
                     .header(header::TRANSFER_ENCODING, "chunked")
                     .streaming(body),
@@ -751,9 +737,9 @@ async fn test_h1_body_chunked_explicit() {
 #[ntex::test]
 async fn test_h1_body_chunked_implicit() {
     let srv = test_server(async || {
-        HttpService::h1(|_| {
-            let body = once(Ready::Ok::<_, io::Error>(Bytes::from_static(STR.as_ref())));
-            Ready::Ok::<_, io::Error>(Response::Ok().streaming(body))
+        HttpService::h1(async |_| {
+            let body = once(ready(Ok::<_, io::Error>(Bytes::from_static(STR.as_ref()))));
+            Ok::<_, io::Error>(Response::Ok().streaming(body))
         })
     })
     .await;
@@ -778,14 +764,14 @@ async fn test_h1_body_chunked_implicit() {
 #[ntex::test]
 async fn test_h1_response_http_error_handling() {
     let srv = test_server(async || {
-        HttpService::h1(fn_service(|_| {
+        HttpService::h1(async |_| {
             let broken_header = Bytes::from_static(b"\0\0\0");
-            Ready::Ok::<_, io::Error>(
+            Ok::<_, io::Error>(
                 Response::Ok()
                     .header(header::CONTENT_TYPE, &broken_header[..])
                     .body(STR),
             )
-        }))
+        })
     })
     .await;
 
@@ -800,8 +786,8 @@ async fn test_h1_response_http_error_handling() {
 #[ntex::test]
 async fn test_h1_service_error() {
     let srv = test_server(async || {
-        HttpService::h1(|_| {
-            future::err::<Response, _>(error::InternalError::default(
+        HttpService::h1(async |_| {
+            Err::<Response, _>(error::InternalError::default(
                 "error",
                 StatusCode::BAD_REQUEST,
             ))
@@ -836,16 +822,15 @@ async fn test_h1_client_drop() -> io::Result<()> {
     let srv = test_server(async move || {
         let tx = tx.clone();
         let count = count2.clone();
-        HttpService::h1(move |req: Request| {
+        HttpService::h1(async move |req: Request| {
             let tx = tx.clone();
             let count = count.clone();
-            async move {
-                let _st = SetOnDrop(count, tx.lock().unwrap().take());
-                assert!(req.peer_addr().is_some());
-                assert_eq!(req.version(), Version::HTTP_11);
-                sleep(Millis(150000)).await;
-                Ok::<_, io::Error>(Response::Ok().finish())
-            }
+
+            let _st = SetOnDrop(count, tx.lock().unwrap().take());
+            assert!(req.peer_addr().is_some());
+            assert_eq!(req.version(), Version::HTTP_11);
+            sleep(Millis(150000)).await;
+            Ok::<_, io::Error>(Response::Ok().finish())
         })
     })
     .await;
@@ -867,17 +852,16 @@ async fn test_h1_gracefull_shutdown() {
     let srv = test_server(async move || {
         let tx = tx.clone();
         let count = count2.clone();
-        HttpService::h1(move |_: Request| {
+        HttpService::h1(async move |_: Request| {
             let count = count.clone();
             count.fetch_add(1, Ordering::Relaxed);
             if count.load(Ordering::Relaxed) == 2 {
                 let _ = tx.lock().unwrap().take().unwrap().send(());
             }
-            async move {
-                sleep(Millis(1000)).await;
-                count.fetch_sub(1, Ordering::Relaxed);
-                Ok::<_, io::Error>(Response::Ok().finish())
-            }
+
+            sleep(Millis(1000)).await;
+            count.fetch_sub(1, Ordering::Relaxed);
+            Ok::<_, io::Error>(Response::Ok().finish())
         })
     })
     .await;

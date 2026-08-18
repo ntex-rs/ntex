@@ -12,7 +12,7 @@ use crate::http::{ConnectionType, Method, Uri, Version, body::Body};
 use crate::{PipelineBinding, time::Millis, util::Bytes, util::Stream};
 
 use super::error::{ClientError, InvalidUrl};
-use super::{BoxedSender, ClientConfig, ClientResponse, ServiceRequest};
+use super::{ClientConfig, ClientResponse, ServiceRequest, ServiceResponse};
 
 /// An HTTP Client request builder
 ///
@@ -39,7 +39,7 @@ use super::{BoxedSender, ClientConfig, ClientResponse, ServiceRequest};
 /// ```
 pub struct ClientRequest {
     request: ServiceRequest,
-    svc: PipelineBinding<BoxedSender>,
+    svc: PipelineBinding<ServiceRequest, ServiceResponse, Error<ClientError>>,
     err: Option<HttpError>,
     cfg: ClientConfig,
     #[cfg(feature = "cookie")]
@@ -52,7 +52,7 @@ impl ClientRequest {
         method: Method,
         uri: U,
         cfg: ClientConfig,
-        svc: PipelineBinding<BoxedSender>,
+        svc: PipelineBinding<ServiceRequest, ServiceResponse, Error<ClientError>>,
     ) -> Self
     where
         Uri: TryFrom<U>,
@@ -367,10 +367,7 @@ impl ClientRequest {
     }
 
     /// Sets the query part of the request
-    pub fn query<T: Serialize>(
-        mut self,
-        query: &T,
-    ) -> Result<Self, serde_urlencoded::ser::Error> {
+    pub fn query<T: Serialize>(mut self, query: &T) -> Result<Self, serde_urlencoded::ser::Error> {
         let mut parts = self.request.head.uri.clone().into_parts();
 
         if let Some(path_and_query) = parts.path_and_query {
@@ -390,10 +387,7 @@ impl ClientRequest {
 
 impl ClientRequest {
     /// Complete request construction and send body.
-    pub async fn send_body<B>(
-        mut self,
-        body: B,
-    ) -> Result<ClientResponse, Error<ClientError>>
+    pub async fn send_body<B>(mut self, body: B) -> Result<ClientResponse, Error<ClientError>>
     where
         B: Into<Body>,
     {
@@ -483,12 +477,9 @@ impl ClientRequest {
             if let Some(ref mut jar) = self.cookies {
                 let mut cookie = String::new();
                 for c in jar.delta() {
-                    let name =
-                        percent_encode(c.name().as_bytes(), crate::http::helpers::USERINFO);
-                    let value = percent_encode(
-                        c.value().as_bytes(),
-                        crate::http::helpers::USERINFO,
-                    );
+                    let name = percent_encode(c.name().as_bytes(), crate::http::helpers::USERINFO);
+                    let value =
+                        percent_encode(c.value().as_bytes(), crate::http::helpers::USERINFO);
                     let _ = write!(cookie, "; {name}={value}");
                 }
                 self.request.head.headers.insert(

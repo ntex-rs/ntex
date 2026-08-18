@@ -229,8 +229,7 @@ impl IoTest {
                     if closed {
                         Poll::Ready(())
                     } else {
-                        *read.waker.0.lock().unwrap().borrow_mut() =
-                            Some(cx.waker().clone());
+                        *read.waker.0.lock().unwrap().borrow_mut() = Some(cx.waker().clone());
                         drop(read);
                         drop(guard);
                         Poll::Pending
@@ -271,11 +270,7 @@ impl IoTest {
         }
     }
 
-    pub fn poll_write_buf(
-        &self,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
+    pub fn poll_write_buf(&self, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
         let guard = self.remote.lock().unwrap();
         let mut ch = guard.borrow_mut();
 

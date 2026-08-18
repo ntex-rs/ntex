@@ -352,10 +352,7 @@ impl crate::Stream for Interval {
     type Item = ();
 
     #[inline]
-    fn poll_next(
-        self: Pin<&mut Self>,
-        cx: &mut task::Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Option<Self::Item>> {
         self.poll_tick(cx).map(|()| Some(()))
     }
 }

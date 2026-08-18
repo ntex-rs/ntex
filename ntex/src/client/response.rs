@@ -47,8 +47,7 @@ impl HttpMessage for ClientResponse {
         if self.message_extensions().get::<Cookies>().is_none() {
             let mut cookies = Vec::new();
             for hdr in self.message_headers().get_all(&SET_COOKIE) {
-                let s =
-                    std::str::from_utf8(hdr.as_bytes()).map_err(CookieParseError::from)?;
+                let s = std::str::from_utf8(hdr.as_bytes()).map_err(CookieParseError::from)?;
                 cookies.push(Cookie::parse_encoded(s)?.into_owned());
             }
             self.message_extensions_mut().insert(Cookies(cookies));
@@ -169,8 +168,7 @@ impl Stream for ClientResponse {
             let result = Pin::new(&mut pl).poll_next(cx);
             self.payload.set(Some(pl));
             Poll::Ready(
-                ready!(result)
-                    .map(|item| item.map_err(|e| Error::from(ClientPayloadError(e)))),
+                ready!(result).map(|item| item.map_err(|e| Error::from(ClientPayloadError(e)))),
             )
         } else {
             Poll::Ready(None)
@@ -293,10 +291,8 @@ impl Future for MessageBody {
         if let Some(len) = this.length.take() {
             let limit = this.fut.as_ref().unwrap().limit;
             if limit > 0 && len > limit {
-                return Poll::Ready(Err(Error::from(ClientPayloadError(
-                    PayloadError::Overflow,
-                ))
-                .set_service(this.config.cfg().service())));
+                return Poll::Ready(Err(Error::from(ClientPayloadError(PayloadError::Overflow))
+                    .set_service(this.config.cfg().service())));
             }
         }
 
@@ -338,8 +334,7 @@ where
         };
         if !json {
             let err = Some(
-                Error::from(JsonPayloadError::ContentType)
-                    .set_service(config.cfg().service()),
+                Error::from(JsonPayloadError::ContentType).set_service(config.cfg().service()),
             );
             return JsonBody {
                 err,
@@ -461,10 +456,8 @@ impl Future for ReadBody {
             return match Pin::new(&mut this.stream).poll_next(cx) {
                 Poll::Ready(Some(Ok(chunk))) => {
                     if this.limit > 0 && (this.buf.len() + chunk.len()) > this.limit {
-                        Poll::Ready(Err(Error::from(ClientPayloadError(
-                            PayloadError::Overflow,
-                        ))
-                        .set_service(this.config.cfg().service())))
+                        Poll::Ready(Err(Error::from(ClientPayloadError(PayloadError::Overflow))
+                            .set_service(this.config.cfg().service())))
                     } else {
                         this.buf.extend_from_slice(&chunk);
                         continue;

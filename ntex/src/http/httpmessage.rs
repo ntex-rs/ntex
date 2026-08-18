@@ -43,9 +43,7 @@ pub trait HttpMessage: Sized {
     fn encoding(&self) -> Result<&'static Encoding, ContentTypeError> {
         if let Some(mime_type) = self.mime_type()? {
             if let Some(charset) = mime_type.get_param("charset") {
-                if let Some(enc) =
-                    Encoding::for_label_no_replacement(charset.as_str().as_bytes())
-                {
+                if let Some(enc) = Encoding::for_label_no_replacement(charset.as_str().as_bytes()) {
                     Ok(enc)
                 } else {
                     Err(ContentTypeError::UnknownEncoding)
@@ -92,8 +90,7 @@ pub trait HttpMessage: Sized {
         if self.message_extensions().get::<Cookies>().is_none() {
             let mut cookies = Vec::new();
             for hdr in self.message_headers().get_all(header::COOKIE) {
-                let s =
-                    str::from_utf8(hdr.as_bytes()).map_err(coo_kie::ParseError::from)?;
+                let s = str::from_utf8(hdr.as_bytes()).map_err(coo_kie::ParseError::from)?;
                 for cookie_str in s.split(';').map(str::trim) {
                     if !cookie_str.is_empty() {
                         cookies.push(Cookie::parse_encoded(cookie_str)?.into_owned());
@@ -133,8 +130,7 @@ mod tests {
         let req = TestRequest::with_header("content-type", "text/plain").finish();
         assert_eq!(req.content_type(), "text/plain");
         let req =
-            TestRequest::with_header("content-type", "application/json; charset=utf=8")
-                .finish();
+            TestRequest::with_header("content-type", "application/json; charset=utf=8").finish();
         assert_eq!(req.content_type(), "application/json");
         let req = TestRequest::default().finish();
         assert_eq!(req.content_type(), "");
@@ -147,8 +143,7 @@ mod tests {
         let req = TestRequest::default().finish();
         assert_eq!(req.mime_type().unwrap(), None);
         let req =
-            TestRequest::with_header("content-type", "application/json; charset=utf-8")
-                .finish();
+            TestRequest::with_header("content-type", "application/json; charset=utf-8").finish();
         let mt = req.mime_type().unwrap().unwrap();
         assert_eq!(mt.get_param(mime::CHARSET), Some(mime::UTF_8));
         assert_eq!(mt.type_(), mime::APPLICATION);
@@ -157,11 +152,9 @@ mod tests {
 
     #[test]
     fn test_mime_type_error() {
-        let req = TestRequest::with_header(
-            "content-type",
-            "applicationadfadsfasdflknadsfklnadsfjson",
-        )
-        .finish();
+        let req =
+            TestRequest::with_header("content-type", "applicationadfadsfasdflknadsfklnadsfjson")
+                .finish();
         assert_eq!(Err(ContentTypeError::ParseError), req.mime_type());
     }
 
@@ -173,11 +166,8 @@ mod tests {
         let req = TestRequest::with_header("content-type", "application/json").finish();
         assert_eq!(UTF_8.name(), req.encoding().unwrap().name());
 
-        let req = TestRequest::with_header(
-            "content-type",
-            "application/json; charset=ISO-8859-2",
-        )
-        .finish();
+        let req = TestRequest::with_header("content-type", "application/json; charset=ISO-8859-2")
+            .finish();
         assert_eq!(ISO_8859_2, req.encoding().unwrap());
     }
 
@@ -187,8 +177,7 @@ mod tests {
         assert_eq!(Some(ContentTypeError::ParseError), req.encoding().err());
 
         let req =
-            TestRequest::with_header("content-type", "application/json; charset=kkkttktk")
-                .finish();
+            TestRequest::with_header("content-type", "application/json; charset=kkkttktk").finish();
         assert_eq!(
             Some(ContentTypeError::UnknownEncoding),
             req.encoding().err()

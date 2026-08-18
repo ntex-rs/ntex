@@ -1,7 +1,5 @@
 //! Stream encoder
-use std::{
-    fmt, future::Future, io, io::Write, pin::Pin, rc::Rc, task::Context, task::Poll,
-};
+use std::{fmt, future::Future, io, io::Write, pin::Pin, rc::Rc, task::Context, task::Poll};
 
 use flate2::write::{GzEncoder, ZlibEncoder};
 
@@ -9,7 +7,7 @@ use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::header::{CONTENT_ENCODING, ContentEncoding, HeaderValue};
 use crate::http::{ResponseHead, StatusCode};
 use crate::rt::{BlockingResult, spawn_blocking};
-use crate::util::{Bytes, dyn_rc_error};
+use crate::util::{Bytes, dyn_rc_err};
 
 use super::Writer;
 
@@ -146,7 +144,7 @@ impl<B: MessageBody> MessageBody for Encoder<B> {
                 Poll::Ready(Some(Ok(chunk))) => {
                     if let Some(mut encoder) = self.inner.take() {
                         if chunk.len() < INPLACE {
-                            encoder.write(&chunk).map_err(dyn_rc_error)?;
+                            encoder.write(&chunk).map_err(dyn_rc_err)?;
                             let chunk = encoder.take();
                             self.inner = Some(encoder);
                             if !chunk.is_empty() {
@@ -164,7 +162,7 @@ impl<B: MessageBody> MessageBody for Encoder<B> {
                 }
                 Poll::Ready(None) => {
                     if let Some(encoder) = self.inner.take() {
-                        let chunk = encoder.finish().map_err(dyn_rc_error)?;
+                        let chunk = encoder.finish().map_err(dyn_rc_err)?;
                         if chunk.is_empty() {
                             return Poll::Ready(None);
                         }

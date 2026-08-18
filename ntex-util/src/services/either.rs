@@ -44,31 +44,27 @@ impl<ChooseFn, SFLeft, SFRight> std::fmt::Debug
     }
 }
 
-impl<Req, ChooseFn, SFLeft, SFRight> ServiceFactory<Req>
+impl<St, Req, ChooseFn, SFLeft, SFRight> ServiceFactory<Req, St>
     for EitherServiceFactory<ChooseFn, SFLeft, SFRight>
 where
     ChooseFn: Fn(&SFLeft::InitCfg) -> bool,
-    SFLeft: ServiceFactory<Req>,
+    SFLeft: ServiceFactory<Req, St>,
     SFRight: ServiceFactory<
             Req,
-            St = SFLeft::St,
+            St,
             Res = SFLeft::Res,
             Error = SFLeft::Error,
             InitCfg = SFLeft::InitCfg,
             InitError = SFLeft::InitError,
         >,
 {
-    type St = SFLeft::St;
     type Res = SFLeft::Res;
     type Error = SFLeft::Error;
     type InitCfg = SFLeft::InitCfg;
     type InitError = SFLeft::InitError;
     type Service = EitherService<SFLeft::Service, SFRight::Service>;
 
-    async fn create(
-        &self,
-        cfg: &SFLeft::InitCfg,
-    ) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &SFLeft::InitCfg) -> Result<Self::Service, Self::InitError> {
         let choose_left = (self.choose_left_fn)(cfg);
 
         if choose_left {
@@ -110,18 +106,17 @@ impl<SLeft, SRight> std::fmt::Debug for EitherService<SLeft, SRight> {
     }
 }
 
-impl<SL, SR> Service for EitherService<SL, SR>
+impl<SL, SR, St> Service<St> for EitherService<SL, SR>
 where
-    SL: Service,
-    SR: Service<St = SL::St, Req = SL::Req, Res = SL::Res, Error = SL::Error>,
+    SL: Service<St>,
+    SR: Service<St, Req = SL::Req, Res = SL::Res, Error = SL::Error>,
 {
-    type St = SL::St;
     type Req = SL::Req;
     type Res = SL::Res;
     type Error = SL::Error;
 
     #[inline]
-    async fn call(&self, req: SL::Req, ctx: Ctx<'_, Self>) -> Result<SL::Res, SL::Error> {
+    async fn call(&self, req: SL::Req, ctx: Ctx<'_, Self, St>) -> Result<SL::Res, SL::Error> {
         match self.svc {
             Either::Left(ref svc) => ctx.call(svc, req).await,
             Either::Right(ref svc) => ctx.call(svc, req).await,
@@ -129,7 +124,7 @@ where
     }
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
         match self.svc {
             Either::Left(ref svc) => ctx.ready(svc).await,
             Either::Right(ref svc) => ctx.ready(svc).await,
@@ -155,7 +150,6 @@ mod tests {
     #[derive(Copy, Clone, Debug, PartialEq)]
     struct Svc1;
     impl Service for Svc1 {
-        type St = ();
         type Req = ();
         type Res = &'static str;
         type Error = ();
@@ -168,7 +162,6 @@ mod tests {
     #[derive(Clone)]
     struct Svc1Factory;
     impl ServiceFactory<()> for Svc1Factory {
-        type St = ();
         type Res = &'static str;
         type Error = ();
 
@@ -184,7 +177,6 @@ mod tests {
     #[derive(Copy, Clone, Debug, PartialEq)]
     struct Svc2;
     impl Service for Svc2 {
-        type St = ();
         type Req = ();
         type Res = &'static str;
         type Error = ();
@@ -197,7 +189,6 @@ mod tests {
     #[derive(Clone)]
     struct Svc2Factory;
     impl ServiceFactory<()> for Svc2Factory {
-        type St = ();
         type Res = &'static str;
         type Error = ();
 
@@ -231,8 +222,7 @@ mod tests {
     #[ntex::test]
     async fn test_factory() {
         let factory =
-            EitherFactory::new(|s: &&'static str| *s == "svc1", Svc1Factory, Svc2Factory)
-                .clone();
+            EitherFactory::new(|s: &&'static str| *s == "svc1", Svc1Factory, Svc2Factory).clone();
         assert!(format!("{factory:?}").contains("EitherServiceFactory"));
 
         let svc = factory.pipeline(&"svc1").await.unwrap();

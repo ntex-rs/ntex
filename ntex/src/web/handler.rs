@@ -33,10 +33,7 @@ where
 }
 
 pub(super) trait HandlerFn<Err: ErrorRenderer>: fmt::Debug {
-    fn call(
-        &self,
-        _: WebRequest<Err>,
-    ) -> BoxFuture<'_, Result<WebResponse, Err::Container>>;
+    fn call(&self, _: WebRequest<Err>) -> BoxFuture<'_, Result<WebResponse, Err::Container>>;
 }
 
 pub(super) struct HandlerWrapper<F, T, Err> {
@@ -66,10 +63,7 @@ where
     T::Error: Into<Err::Container>,
     Err: ErrorRenderer,
 {
-    fn call(
-        &self,
-        req: WebRequest<Err>,
-    ) -> BoxFuture<'_, Result<WebResponse, Err::Container>> {
+    fn call(&self, req: WebRequest<Err>) -> BoxFuture<'_, Result<WebResponse, Err::Container>> {
         Box::pin(async move {
             let (req, mut payload) = req.into_parts();
             let param = match T::from_request(&req, &mut payload).await {

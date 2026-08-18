@@ -78,8 +78,7 @@ impl syn::parse::Parse for Args {
         Ok(Args {
             path,
             guards,
-            error: error
-                .unwrap_or_else(|| syn::parse_str("ntex::web::DefaultError").unwrap()),
+            error: error.unwrap_or_else(|| syn::parse_str("ntex::web::DefaultError").unwrap()),
         })
     }
 }
@@ -98,11 +97,7 @@ impl std::fmt::Debug for Route {
 }
 
 impl Route {
-    pub fn new(
-        args: TokenStream,
-        input: TokenStream,
-        method: MethodType,
-    ) -> syn::Result<Self> {
+    pub fn new(args: TokenStream, input: TokenStream, method: MethodType) -> syn::Result<Self> {
         if args.is_empty() {
             return Err(syn::Error::new(
                 Span::call_site(),

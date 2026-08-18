@@ -55,11 +55,7 @@ impl<T, U> Router<T, U> {
         }
     }
 
-    pub fn recognize_checked<R, P, F>(
-        &self,
-        resource: &mut R,
-        check: F,
-    ) -> Option<(&T, ResourceId)>
+    pub fn recognize_checked<R, P, F>(&self, resource: &mut R, check: F) -> Option<(&T, ResourceId)>
     where
         F: Fn(&R, Option<&U>) -> bool,
         R: Resource<P>,
@@ -139,22 +135,14 @@ impl<T, U> RouterBuilder<T, U> {
     }
 
     /// Register resource for specified path prefix.
-    pub fn prefix(
-        &mut self,
-        prefix: &str,
-        resource: T,
-    ) -> &mut (ResourceDef, T, Option<U>) {
+    pub fn prefix(&mut self, prefix: &str, resource: T) -> &mut (ResourceDef, T, Option<U>) {
         self.resources
             .push((ResourceDef::prefix(prefix), resource, None));
         self.resources.last_mut().unwrap()
     }
 
     /// Register resource for `ResourceDef`
-    pub fn rdef(
-        &mut self,
-        rdef: ResourceDef,
-        resource: T,
-    ) -> &mut (ResourceDef, T, Option<U>) {
+    pub fn rdef(&mut self, rdef: ResourceDef, resource: T) -> &mut (ResourceDef, T, Option<U>) {
         self.resources.push((rdef, resource, None));
         self.resources.last_mut().unwrap()
     }

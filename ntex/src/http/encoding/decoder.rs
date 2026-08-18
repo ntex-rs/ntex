@@ -28,9 +28,9 @@ where
     #[inline]
     pub fn new(stream: S, encoding: ContentEncoding) -> Decoder<S> {
         let inner = match encoding {
-            ContentEncoding::Deflate => Some(ContentDecoder::Deflate(Box::new(
-                ZlibDecoder::new(Writer::new()),
-            ))),
+            ContentEncoding::Deflate => Some(ContentDecoder::Deflate(Box::new(ZlibDecoder::new(
+                Writer::new(),
+            )))),
             ContentEncoding::Gzip => Some(ContentDecoder::Gzip(Box::new(GzDecoder::new(
                 Writer::new(),
             )))),
@@ -68,10 +68,7 @@ where
 {
     type Item = Result<Bytes, PayloadError>;
 
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
             if let Some(ref mut fut) = self.fut {
                 let (chunk, decoder) = match Pin::new(fut).poll(cx) {

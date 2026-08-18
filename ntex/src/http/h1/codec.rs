@@ -27,6 +27,7 @@ pub struct Codec {
     decoder: decoder::MessageDecoder<Request>,
     version: Cell<Version>,
     ctype: Cell<ConnectionType>,
+    pub(super) cfg: Cfg<HttpServiceConfig>,
 
     // encoder part
     flags: Cell<Flags>,
@@ -39,6 +40,7 @@ impl Clone for Codec {
             con_id: self.con_id,
             decoder: self.decoder.clone(),
             version: self.version.clone(),
+            cfg: self.cfg.clone(),
             ctype: self.ctype.clone(),
             flags: self.flags.clone(),
             encoder: self.encoder.clone(),
@@ -69,9 +71,10 @@ impl Codec {
         } else {
             Flags::empty()
         };
-        let decoder = decoder::MessageDecoder::new(cfg);
+        let decoder = decoder::MessageDecoder::new(cfg.clone());
 
         Codec {
+            cfg,
             con_id,
             decoder,
             flags: Cell::new(flags),
@@ -131,9 +134,7 @@ impl Decoder for Codec {
             self.version.set(head.version);
 
             let ctype = head.connection_type();
-            if ctype == ConnectionType::KeepAlive
-                && !flags.contains(Flags::KEEPALIVE_ENABLED)
-            {
+            if ctype == ConnectionType::KeepAlive && !flags.contains(Flags::KEEPALIVE_ENABLED) {
                 self.ctype.set(ConnectionType::Close);
             } else {
                 self.ctype.set(ctype);

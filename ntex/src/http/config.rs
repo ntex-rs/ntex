@@ -1,9 +1,9 @@
-use std::{cell::Cell, time};
+use std::{cell::Cell, cell::RefCell, rc::Rc, time};
 
-use crate::service::Service;
-use crate::service::cfg::{Cfg, CfgContext, Configuration};
+use crate::io::{IoRef, cfg::FrameReadRate};
+use crate::service::cfg::{CfgContext, Configuration};
 use crate::time::{Millis, Seconds, sleep};
-use crate::{io::cfg::FrameReadRate, service::Pipeline, util::BytePages, util::BytesMut};
+use crate::{channel::oneshot, util::BytePages, util::BytesMut, util::HashSet};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 /// Server keep-alive setting
@@ -249,65 +249,80 @@ bitflags::bitflags! {
     }
 }
 
-pub(super) struct DispatcherConfig<S: Service, C: Service> {
+#[derive(Clone)]
+pub(super) struct DispatcherConfig(Rc<DispatcherConfigInner>);
+
+struct DispatcherConfigInner {
     flags: Cell<Flags>,
-    pub(super) idx: Cell<usize>,
-    pub(super) config: Cfg<HttpServiceConfig>,
-    pub(super) service: Pipeline<S>,
-    pub(super) control: Pipeline<C>,
+    idx: Cell<usize>,
+    pub(super) inflight: RefCell<HashSet<IoRef>>,
+    rx: Cell<Option<oneshot::Receiver<()>>>,
+    tx: Cell<Option<oneshot::Sender<()>>>,
 }
 
-impl<S: Service, C: Service> DispatcherConfig<S, C> {
-    pub(super) fn new(config: Cfg<HttpServiceConfig>, service: S, control: C) -> Self
-    where
-        S::St: Default,
-        C::St: Default,
-    {
-        DispatcherConfig {
-            idx: Cell::new(0),
-            service: Pipeline::new(service),
-            control: Pipeline::new(control),
-            flags: Cell::new(Flags::empty()),
-            config,
-        }
-    }
+impl Default for DispatcherConfig {
+    fn default() -> Self {
+        let (tx, rx) = oneshot::channel();
 
+        DispatcherConfig(Rc::new(DispatcherConfigInner {
+            idx: Cell::new(0),
+            flags: Cell::new(Flags::empty()),
+            rx: Cell::new(Some(rx)),
+            tx: Cell::new(Some(tx)),
+            inflight: RefCell::new(HashSet::default()),
+        }))
+    }
+}
+
+impl DispatcherConfig {
     /// Get connection id
     pub(super) fn next_id(&self) -> usize {
-        let id = self.idx.get();
-        self.idx.set(id + 1);
+        let id = self.0.idx.get();
+        self.0.idx.set(id + 1);
         id
     }
 
-    /// Return state of connection keep-alive functionality
-    pub(super) fn keep_alive(&self) -> Seconds {
-        self.config.keep_alive
+    pub(super) fn remove_io(&self, io: &IoRef) -> usize {
+        let mut inflight = self.0.inflight.borrow_mut();
+        inflight.remove(io);
+        inflight.len()
     }
 
-    /// Return state of connection keep-alive functionality
-    pub(super) fn keep_alive_enabled(&self) -> bool {
-        self.config.ka_enabled
-    }
-
-    pub(super) fn headers_read_rate(&self) -> Option<&FrameReadRate> {
-        self.config.headers_read_rate.as_ref()
-    }
-
-    pub(super) fn payload_read_rate(&self) -> Option<&FrameReadRate> {
-        self.config.payload_read_rate.as_ref()
+    pub(super) fn insert_io(&self, io: &IoRef) -> usize {
+        let mut inflight = self.0.inflight.borrow_mut();
+        inflight.insert(io.clone());
+        inflight.len()
     }
 
     /// Service is shutting down
     pub(super) fn is_shutdown(&self) -> bool {
-        self.flags.get().contains(Flags::SHUTDOWN)
+        self.0.flags.get().contains(Flags::SHUTDOWN)
     }
 
-    pub(super) fn shutdown(&self) {
+    pub(super) fn shutdown(&self) -> usize {
         ntex_h2::ServiceConfig::shutdown();
 
-        let mut flags = self.flags.get();
+        let mut flags = self.0.flags.get();
         flags.insert(Flags::SHUTDOWN);
-        self.flags.set(flags);
+        self.0.flags.set(flags);
+
+        let inflight = self.0.inflight.borrow();
+        for io in inflight.iter() {
+            io.notify_dispatcher();
+        }
+        inflight.len()
+    }
+
+    pub(super) async fn wait_shutdown(&self) {
+        if let Some(rx) = self.0.rx.take() {
+            let _ = rx.await;
+        }
+    }
+
+    pub(super) fn notify_shutdown(&self) {
+        if let Some(tx) = self.0.tx.take() {
+            let _ = tx.send(());
+        }
     }
 }
 

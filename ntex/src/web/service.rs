@@ -44,14 +44,8 @@ where
 }
 
 type Guards = Vec<Box<dyn Guard>>;
-type HttpServiceFactory<Err: ErrorRenderer> = boxed::BoxServiceFactory<
-    (),
-    WebRequest<Err>,
-    WebResponse,
-    Err::Container,
-    SharedCfg,
-    (),
->;
+type HttpServiceFactory<Err: ErrorRenderer> =
+    boxed::BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, SharedCfg, ()>;
 
 #[derive(Debug, Clone)]
 pub(crate) struct AppState(pub(crate) Rc<AppStateInner>);
@@ -179,10 +173,9 @@ impl<Err: ErrorRenderer> WebServiceConfig<Err> {
         factory: F,
         nested: Option<Rc<ResourceMap>>,
     ) where
-        F: IntoServiceFactory<S, WebRequest<Err>>,
+        F: IntoServiceFactory<S, (), WebRequest<Err>>,
         S: ServiceFactory<
                 WebRequest<Err>,
-                St = (),
                 Res = WebResponse,
                 Error = Err::Container,
                 InitCfg = SharedCfg,
@@ -264,10 +257,9 @@ impl WebServiceAdapter {
     /// Set a service factory implementation and generate web service.
     pub fn finish<T, F, Err>(self, service: F) -> impl WebServiceFactory<Err>
     where
-        F: IntoServiceFactory<T, WebRequest<Err>>,
+        F: IntoServiceFactory<T, (), WebRequest<Err>>,
         T: ServiceFactory<
                 WebRequest<Err>,
-                St = (),
                 Res = WebResponse,
                 Error = Err::Container,
                 InitCfg = SharedCfg,
@@ -294,7 +286,6 @@ impl<Sf, Err> WebServiceFactory<Err> for WebServiceImpl<Sf>
 where
     Sf: ServiceFactory<
             WebRequest<Err>,
-            St = (),
             Res = WebResponse,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -399,13 +390,13 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_service() {
-        let srv = init_service(App::new().service(
-            web::service("/test").name("test").finish(
-                |req: WebRequest<DefaultError>| async move {
+        let srv = init_service(
+            App::new().service(web::service("/test").name("test").finish(
+                async move |req: WebRequest<DefaultError>| {
                     Ok(req.into_response(HttpResponse::Ok().finish()))
                 },
-            ),
-        ))
+            )),
+        )
         .await;
         let req = TestRequest::with_uri("/test").to_request();
         let resp = srv.call(req).await.unwrap();
@@ -413,7 +404,7 @@ mod tests {
 
         let srv = init_service(App::new().service(
             web::service("/test").guard(guard::Get()).finish(
-                |req: WebRequest<DefaultError>| async move {
+                async move |req: WebRequest<DefaultError>| {
                     Ok(req.into_response(HttpResponse::Ok().finish()))
                 },
             ),
@@ -429,8 +420,8 @@ mod tests {
     #[crate::rt_test]
     async fn test_multi() {
         let srv = init_service(App::new().service([
-            web::resource("/test1").to(|| async { HttpResponse::Ok() }),
-            web::resource("/test2").to(|| async { HttpResponse::Ok() }),
+            web::resource("/test1").to(async || HttpResponse::Ok()),
+            web::resource("/test2").to(async || HttpResponse::Ok()),
         ]))
         .await;
         let req = TestRequest::with_uri("/test1").to_request();
@@ -441,8 +432,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let srv = init_service(App::new().service((
-            web::resource("/test1").to(|| async { HttpResponse::Ok() }),
-            web::resource("/test2").to(|| async { HttpResponse::Ok() }),
+            web::resource("/test1").to(async || HttpResponse::Ok()),
+            web::resource("/test2").to(async || HttpResponse::Ok()),
         )))
         .await;
         let req = TestRequest::with_uri("/test1").to_request();
@@ -453,8 +444,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let srv = init_service(App::new().service(vec![
-            web::resource("/test1").to(|| async { HttpResponse::Ok() }),
-            web::resource("/test2").to(|| async { HttpResponse::Ok() }),
+            web::resource("/test1").to(async || HttpResponse::Ok()),
+            web::resource("/test2").to(async || HttpResponse::Ok()),
         ]))
         .await;
         let req = TestRequest::with_uri("/test1").to_request();

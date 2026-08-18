@@ -1,6 +1,6 @@
 use std::{
-    borrow::Cow, cell::RefCell, convert::Infallible, error::Error as StdError, fmt, io,
-    path::Path, path::PathBuf,
+    borrow::Cow, cell::RefCell, convert::Infallible, error::Error as StdError, fmt, io, path::Path,
+    path::PathBuf,
 };
 
 use ntex_bytes::ByteString;
@@ -170,8 +170,7 @@ fn module_path_ext(
         cached
     } else {
         let normalized_file_path = normalize_file_path(file_path);
-        let (module_name, module_root) =
-            module_root_from_file(mod_sep, &normalized_file_path);
+        let (module_name, module_root) = module_root_from_file(mod_sep, &normalized_file_path);
         let module = module_path_from_file_with_root(
             prefix,
             sep,

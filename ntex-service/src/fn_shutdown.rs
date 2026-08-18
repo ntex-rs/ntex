@@ -1,22 +1,22 @@
-use std::{cell::Cell, fmt, marker::PhantomData};
+use std::{cell::Cell, convert::Infallible, fmt, marker::PhantomData};
 
 use crate::{Ctx, Service, ServiceFactory};
 
 #[inline]
 /// Create `FnShutdown` for function that can act as a `on_shutdown` callback.
-pub fn fn_shutdown<St, F, Req, Err>(f: F) -> FnShutdown<St, F, Req, Err>
+pub fn fn_shutdown<F, Req, Err>(f: F) -> FnShutdown<F, Req, Err>
 where
     F: AsyncFnOnce(),
 {
     FnShutdown::new(f)
 }
 
-pub struct FnShutdown<St, F, Req, Err, Cfg = ()> {
+pub struct FnShutdown<F, Req, Err, Cfg = ()> {
     f_shutdown: Cell<Option<F>>,
-    _t: PhantomData<(St, Req, Err, Cfg)>,
+    _t: PhantomData<(Req, Err, Cfg)>,
 }
 
-impl<St, F, Req, Err, Cfg> FnShutdown<St, F, Req, Err, Cfg> {
+impl<F, Req, Err, Cfg> FnShutdown<F, Req, Err, Cfg> {
     pub(crate) fn new(f: F) -> Self {
         Self {
             f_shutdown: Cell::new(Some(f)),
@@ -25,7 +25,7 @@ impl<St, F, Req, Err, Cfg> FnShutdown<St, F, Req, Err, Cfg> {
     }
 }
 
-impl<St, F, Req, Err, Cfg> Clone for FnShutdown<St, F, Req, Err, Cfg>
+impl<F, Req, Err, Cfg> Clone for FnShutdown<F, Req, Err, Cfg>
 where
     F: Clone,
 {
@@ -40,7 +40,7 @@ where
     }
 }
 
-impl<St, F, Req, Err, Cfg> fmt::Debug for FnShutdown<St, F, Req, Err, Cfg> {
+impl<F, Req, Err, Cfg> fmt::Debug for FnShutdown<F, Req, Err, Cfg> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FnShutdown")
             .field("fn", &std::any::type_name::<F>())
@@ -48,16 +48,15 @@ impl<St, F, Req, Err, Cfg> fmt::Debug for FnShutdown<St, F, Req, Err, Cfg> {
     }
 }
 
-impl<St, F, Req, Err, Cfg> ServiceFactory<Req> for FnShutdown<St, F, Req, Err, Cfg>
+impl<St, F, Req, Err, Cfg> ServiceFactory<Req, St> for FnShutdown<F, Req, Err, Cfg>
 where
     F: AsyncFnOnce() + Clone,
 {
-    type St = St;
     type Res = Req;
     type Error = Err;
-    type Service = FnShutdown<St, F, Req, Err, Cfg>;
+    type Service = FnShutdown<F, Req, Err, Cfg>;
     type InitCfg = Cfg;
-    type InitError = ();
+    type InitError = Infallible;
 
     #[inline]
     async fn create(&self, _: &Cfg) -> Result<Self::Service, Self::InitError> {
@@ -73,11 +72,10 @@ where
     }
 }
 
-impl<St, F, Req, Err, Cfg> Service for FnShutdown<St, F, Req, Err, Cfg>
+impl<F, St, Req, Err, Cfg> Service<St> for FnShutdown<F, Req, Err, Cfg>
 where
     F: AsyncFnOnce(),
 {
-    type St = St;
     type Req = Req;
     type Res = Req;
     type Error = Err;
@@ -90,7 +88,7 @@ where
     }
 
     #[inline]
-    async fn call(&self, req: Req, _: Ctx<'_, Self>) -> Result<Req, Err> {
+    async fn call(&self, req: Req, _: Ctx<'_, Self, St>) -> Result<Req, Err> {
         Ok(req)
     }
 }
@@ -99,7 +97,7 @@ where
 mod tests {
     use std::{future::poll_fn, rc::Rc};
 
-    use crate::{chain_factory, fn_service};
+    use crate::{Pipeline, factory, fn_service};
 
     use super::*;
 
@@ -112,12 +110,14 @@ mod tests {
             is_called2.set(true);
         });
 
-        let pipe = chain_factory(srv)
-            .and_then(on_shutdown)
-            .clone()
-            .pipeline::<()>(&())
-            .await
-            .unwrap();
+        let pipe = Pipeline::new(
+            factory(srv)
+                .and_then(on_shutdown)
+                .clone()
+                .create(&())
+                .await
+                .unwrap(),
+        );
 
         let res = pipe.call(()).await;
         assert_eq!(pipe.ready().await, Ok(()));
@@ -126,32 +126,11 @@ mod tests {
         assert!(!pipe.is_shutdown());
         pipe.shutdown().await;
         assert!(is_called.get());
-        assert!(!pipe.is_shutdown());
+        assert!(pipe.is_shutdown());
 
         poll_fn(|cx| pipe.poll_shutdown(cx)).await;
         assert!(pipe.is_shutdown());
 
         let _ = format!("{pipe:?}");
-    }
-
-    #[ntex::test]
-    #[should_panic]
-    #[allow(clippy::should_panic_without_expect)]
-    async fn test_fn_shutdown_panic() {
-        let is_called = Rc::new(Cell::new(false));
-        let is_called2 = is_called.clone();
-        let on_shutdown = fn_shutdown::<(), _, (), ()>(async move || {
-            is_called2.set(true);
-        });
-
-        let pipe = chain_factory(on_shutdown)
-            .pipeline::<()>(&())
-            .await
-            .unwrap();
-        pipe.shutdown().await;
-        assert!(is_called.get());
-        assert!(!pipe.is_shutdown());
-
-        let _factory = pipe.get_ref().create(&()).await;
     }
 }

@@ -499,8 +499,7 @@ mod test {
         let _ = ByteString::try_from(&Bytes::from_static(b"nice bytes")).unwrap();
         assert!(ByteString::try_from(&Bytes::from_static(b"\xc3\x28")).is_err());
 
-        let _ =
-            ByteString::try_from(BytesMut::copy_from_slice(&b"nice bytes"[..])).unwrap();
+        let _ = ByteString::try_from(BytesMut::copy_from_slice(&b"nice bytes"[..])).unwrap();
         assert!(ByteString::try_from(BytesMut::copy_from_slice(b"\xc3\x28")).is_err());
     }
 

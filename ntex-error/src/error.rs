@@ -136,8 +136,7 @@ impl<E: Clone> Error<E> {
 impl<E: Clone> Error<E> {
     /// Consumes this error and returns the inner error value.
     pub fn into_error(self) -> E {
-        Arc::try_unwrap(self.inner)
-            .map_or_else(|inner| inner.error.clone(), |inner| inner.error)
+        Arc::try_unwrap(self.inner).map_or_else(|inner| inner.error.clone(), |inner| inner.error)
     }
 }
 

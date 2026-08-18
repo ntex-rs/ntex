@@ -89,11 +89,7 @@ impl IoContext {
     ///
     /// Returns `Ok(Some(buf))` containing the read buffer.
     /// `Ok(None)` indicates that the connection has been disconnected.
-    pub fn update_read_status(
-        &self,
-        buf: BytesMut,
-        status: io::Result<usize>,
-    ) -> IoTaskStatus {
+    pub fn update_read_status(&self, buf: BytesMut, status: io::Result<usize>) -> IoTaskStatus {
         let st = self.st();
         let orig = st.buffer.read_dst_size();
 
@@ -200,9 +196,7 @@ impl IoContext {
                     if len == 0 {
                         st.wake_dispatch_task();
                     }
-                } else if st.flags.is_wr_backpressure()
-                    && st.should_disable_wr_backpressure(len)
-                {
+                } else if st.flags.is_wr_backpressure() && st.should_disable_wr_backpressure(len) {
                     // Write backpressure is active and write buffer is below threshold
                     st.wake_dispatch_task();
                 }
@@ -283,8 +277,7 @@ impl IoContext {
         // filters are shutdown and write task is paused
         if ready && st.flags.is_write_paused() && !st.flags.is_wr_send_scheduled() {
             st.filters_stopped();
-        } else if !ready
-            && (st.flags.is_read_paused() || st.flags.is_read_ready_and_backpressure())
+        } else if !ready && (st.flags.is_read_paused() || st.flags.is_read_ready_and_backpressure())
         {
             // if read buffer is not consumed it is unlikely
             // that filter will properly complete shutdown

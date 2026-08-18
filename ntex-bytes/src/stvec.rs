@@ -152,9 +152,7 @@ impl StorageVec {
                 let inner = Storage {
                     ptr: (self.0.as_ptr().cast::<u8>()).add(offset),
                     len: self.len(),
-                    offset: NonZeroUsize::new_unchecked(
-                        (offset << KIND_OFFSET_BITS) ^ KIND_VEC,
-                    ),
+                    offset: NonZeroUsize::new_unchecked((offset << KIND_OFFSET_BITS) ^ KIND_VEC),
                 };
                 mem::forget(self);
                 inner
@@ -179,9 +177,7 @@ impl StorageVec {
                 Storage {
                     ptr: (self.0.as_ptr().cast::<u8>()).add(offset),
                     len: at,
-                    offset: NonZeroUsize::new_unchecked(
-                        (offset << KIND_OFFSET_BITS) ^ KIND_VEC,
-                    ),
+                    offset: NonZeroUsize::new_unchecked((offset << KIND_OFFSET_BITS) ^ KIND_VEC),
                 }
             };
             self.set_start(at as u32);

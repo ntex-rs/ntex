@@ -257,18 +257,12 @@ impl Decoder for Codec {
                                 Ok(Some(Frame::Close(None)))
                             }
                         }
-                        OpCode::Ping => {
-                            Ok(Some(Frame::Ping(payload.unwrap_or_else(Bytes::new))))
-                        }
-                        OpCode::Pong => {
-                            Ok(Some(Frame::Pong(payload.unwrap_or_else(Bytes::new))))
-                        }
+                        OpCode::Ping => Ok(Some(Frame::Ping(payload.unwrap_or_else(Bytes::new)))),
+                        OpCode::Pong => Ok(Some(Frame::Pong(payload.unwrap_or_else(Bytes::new)))),
                         OpCode::Binary => {
                             Ok(Some(Frame::Binary(payload.unwrap_or_else(Bytes::new))))
                         }
-                        OpCode::Text => {
-                            Ok(Some(Frame::Text(payload.unwrap_or_else(Bytes::new))))
-                        }
+                        OpCode::Text => Ok(Some(Frame::Text(payload.unwrap_or_else(Bytes::new)))),
                     }
                 } else {
                     match opcode {
@@ -301,12 +295,8 @@ impl Decoder for Codec {
                                 ))))
                             }
                         }
-                        OpCode::Ping => {
-                            Ok(Some(Frame::Ping(payload.unwrap_or_else(Bytes::new))))
-                        }
-                        OpCode::Pong => {
-                            Ok(Some(Frame::Pong(payload.unwrap_or_else(Bytes::new))))
-                        }
+                        OpCode::Ping => Ok(Some(Frame::Ping(payload.unwrap_or_else(Bytes::new)))),
+                        OpCode::Pong => Ok(Some(Frame::Pong(payload.unwrap_or_else(Bytes::new)))),
                         OpCode::Bad => Err(ProtocolError::BadOpCode),
                         OpCode::Close => {
                             log::error!("Unfinished fragment {opcode:?}");

@@ -25,8 +25,7 @@ pub trait ErrorContainer: error::ResponseError + Sized {
 }
 
 /// Error that can be rendered to a `Response`
-pub trait WebResponseError<Err = DefaultError>:
-    fmt::Display + fmt::Debug + 'static
+pub trait WebResponseError<Err = DefaultError>: fmt::Display + fmt::Debug + 'static
 where
     Err: ErrorRenderer,
 {
@@ -707,6 +706,11 @@ where
     InternalError::new(err, StatusCode::NETWORK_AUTHENTICATION_REQUIRED)
 }
 
+/// Cannot initialize App instance
+#[derive(Debug, Copy, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("Cannot initialize App instance")]
+pub struct AppInitError;
+
 #[cfg(test)]
 mod tests {
     use std::io;
@@ -739,8 +743,7 @@ mod tests {
         use crate::util::timeout::TimeoutError;
 
         let req = TestRequest::default().to_http_request();
-        let resp =
-            Error::from(TimeoutError::<UrlencodedError>::Timeout).error_response(&req);
+        let resp = Error::from(TimeoutError::<UrlencodedError>::Timeout).error_response(&req);
         assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
 
         let resp = Error::from(TimeoutError::<UrlencodedError>::Service(
@@ -804,8 +807,7 @@ mod tests {
     fn test_either_error() {
         let req = TestRequest::default().to_http_request();
 
-        let err: Either<ClientError, PayloadError> =
-            Either::Left(ClientError::TunnelNotSupported);
+        let err: Either<ClientError, PayloadError> = Either::Left(ClientError::TunnelNotSupported);
         let code = WebResponseError::<DefaultError>::status_code(&err);
         assert_eq!(code, StatusCode::INTERNAL_SERVER_ERROR);
         let resp = WebResponseError::<DefaultError>::error_response(&err, &req);
@@ -848,30 +850,22 @@ mod tests {
             &req,
         );
         assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
-        let resp: HttpResponse = WebResponseError::<DefaultError>::error_response(
-            &UrlencodedError::UnknownLength,
-            &req,
-        );
+        let resp: HttpResponse =
+            WebResponseError::<DefaultError>::error_response(&UrlencodedError::UnknownLength, &req);
         assert_eq!(resp.status(), StatusCode::LENGTH_REQUIRED);
-        let resp: HttpResponse = WebResponseError::<DefaultError>::error_response(
-            &UrlencodedError::ContentType,
-            &req,
-        );
+        let resp: HttpResponse =
+            WebResponseError::<DefaultError>::error_response(&UrlencodedError::ContentType, &req);
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[test]
     fn test_json_payload_error() {
         let req = TestRequest::default().to_http_request();
-        let resp: HttpResponse = WebResponseError::<DefaultError>::error_response(
-            &JsonPayloadError::Overflow,
-            &req,
-        );
+        let resp: HttpResponse =
+            WebResponseError::<DefaultError>::error_response(&JsonPayloadError::Overflow, &req);
         assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
-        let resp: HttpResponse = WebResponseError::<DefaultError>::error_response(
-            &JsonPayloadError::ContentType,
-            &req,
-        );
+        let resp: HttpResponse =
+            WebResponseError::<DefaultError>::error_response(&JsonPayloadError::ContentType, &req);
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
@@ -883,8 +877,7 @@ mod tests {
             serde_urlencoded::from_str::<i32>("bad query").unwrap_err(),
         );
 
-        let resp: HttpResponse =
-            WebResponseError::<DefaultError>::error_response(&err, &req);
+        let resp: HttpResponse = WebResponseError::<DefaultError>::error_response(&err, &req);
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
             WebResponseError::<DefaultError>::status_code(&err),
@@ -895,11 +888,9 @@ mod tests {
     #[test]
     fn test_path_error() {
         let req = TestRequest::default().to_http_request();
-        let err = PathError::Deserialize(
-            serde_urlencoded::from_str::<i32>("bad path").unwrap_err(),
-        );
-        let resp: HttpResponse =
-            WebResponseError::<DefaultError>::error_response(&err, &req);
+        let err =
+            PathError::Deserialize(serde_urlencoded::from_str::<i32>("bad path").unwrap_err());
+        let resp: HttpResponse = WebResponseError::<DefaultError>::error_response(&err, &req);
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         assert_eq!(
             WebResponseError::<DefaultError>::status_code(&err),
@@ -958,8 +949,7 @@ mod tests {
         let r: HttpResponse = ErrorNotAcceptable::<_, DefaultError>("err").into();
         assert_eq!(r.status(), StatusCode::NOT_ACCEPTABLE);
 
-        let r: HttpResponse =
-            ErrorProxyAuthenticationRequired::<_, DefaultError>("err").into();
+        let r: HttpResponse = ErrorProxyAuthenticationRequired::<_, DefaultError>("err").into();
         assert_eq!(r.status(), StatusCode::PROXY_AUTHENTICATION_REQUIRED);
 
         let r: HttpResponse = ErrorRequestTimeout::<_, DefaultError>("err").into();
@@ -1016,12 +1006,10 @@ mod tests {
         let r: HttpResponse = ErrorTooManyRequests::<_, DefaultError>("err").into();
         assert_eq!(r.status(), StatusCode::TOO_MANY_REQUESTS);
 
-        let r: HttpResponse =
-            ErrorRequestHeaderFieldsTooLarge::<_, DefaultError>("err").into();
+        let r: HttpResponse = ErrorRequestHeaderFieldsTooLarge::<_, DefaultError>("err").into();
         assert_eq!(r.status(), StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE);
 
-        let r: HttpResponse =
-            ErrorUnavailableForLegalReasons::<_, DefaultError>("err").into();
+        let r: HttpResponse = ErrorUnavailableForLegalReasons::<_, DefaultError>("err").into();
         assert_eq!(r.status(), StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS);
 
         let r: HttpResponse = ErrorInternalServerError::<_, DefaultError>("err").into();
@@ -1054,8 +1042,7 @@ mod tests {
         let r: HttpResponse = ErrorNotExtended::<_, DefaultError>("err").into();
         assert_eq!(r.status(), StatusCode::NOT_EXTENDED);
 
-        let r: HttpResponse =
-            ErrorNetworkAuthenticationRequired::<_, DefaultError>("err").into();
+        let r: HttpResponse = ErrorNetworkAuthenticationRequired::<_, DefaultError>("err").into();
         assert_eq!(r.status(), StatusCode::NETWORK_AUTHENTICATION_REQUIRED);
     }
 }
