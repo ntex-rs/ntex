@@ -129,12 +129,12 @@ mod tests {
 
         let _: TlsConnector<Connector<&'static str>> = TlsConnector::new();
         let factory: TlsConnector<Connector<&'static str>> = TlsConnector::new();
+        assert!(format!("{factory:?}").contains("TlsConnector"));
         let srv = factory.pipeline(&SharedCfg::default()).await.unwrap();
         assert!(srv.ready().await.is_ok());
         let result = srv
             .call(Connect::new("").set_addr(Some(server.addr())))
             .await;
         assert!(result.is_err());
-        assert!(format!("{srv:?}").contains("TlsConnector"));
     }
 }
