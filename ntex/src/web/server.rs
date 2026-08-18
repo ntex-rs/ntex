@@ -35,7 +35,7 @@ struct Config {
 #[debug("HttpServer")]
 pub struct HttpServer<F, I, Sf, B>
 where
-    F: AsyncFn() -> I + Send + Clone + 'static,
+    F: AsyncFn(&()) -> I + Send + Clone + 'static,
     I: IntoServiceFactory<Sf, (), Request>,
     Sf: ServiceFactory<Request, InitCfg = SharedCfg>,
     Sf::Res: Into<Response<B>>,
@@ -52,7 +52,7 @@ where
 
 impl<F, I, Sf, B> HttpServer<F, I, Sf, B>
 where
-    F: AsyncFn() -> I + Send + Clone + 'static,
+    F: AsyncFn(&()) -> I + Send + Clone + 'static,
     I: IntoServiceFactory<Sf, (), Request>,
     Sf: ServiceFactory<Request, InitCfg = SharedCfg> + 'static,
     Sf::Res: Into<Response<B>>,
@@ -207,7 +207,7 @@ where
             format!("ntex-web-service-{addr}"),
             lst,
             cfg.into(),
-            async move || http::HttpService::new(factory().await),
+            async move |st| http::HttpService::new(factory(st).await),
         )?;
         Ok(self)
     }
@@ -239,7 +239,9 @@ where
             format!("ntex-web-service-{addr}"),
             lst,
             cfg,
-            async move || http::openssl(acceptor.clone(), http::HttpService::new(factory().await)),
+            async move |st| {
+                http::openssl(acceptor.clone(), http::HttpService::new(factory(st).await))
+            },
         )?;
         Ok(self)
     }
@@ -271,11 +273,11 @@ where
             format!("ntex-web-rustls-service-{addr}"),
             lst,
             cfg,
-            async move || {
+            async move |st| {
                 http::rustls(
                     config.clone(),
                     http::ALPN_PROTOS,
-                    http::HttpService::new(factory().await),
+                    http::HttpService::new(factory(st).await),
                 )
             },
         )?;
@@ -380,8 +382,8 @@ where
 
         self.builder = self
             .builder
-            .listen_uds(addr, lst, cfg.into(), async move || {
-                http::HttpService::new(factory().await)
+            .listen_uds(addr, lst, cfg.into(), async move |st| {
+                http::HttpService::new(factory(st).await)
             })?;
         Ok(self)
     }
@@ -400,7 +402,7 @@ where
             format!("ntex-web-service-{:?}", addr.as_ref().display()),
             addr,
             cfg.into(),
-            async move || http::HttpService::new(factory().await),
+            async move |st| http::HttpService::new(factory(st).await),
         )?;
         Ok(self)
     }
@@ -408,7 +410,7 @@ where
 
 impl<F, I, Sf, B> HttpServer<F, I, Sf, B>
 where
-    F: AsyncFn() -> I + Send + Clone + 'static,
+    F: AsyncFn(&()) -> I + Send + Clone + 'static,
     I: IntoServiceFactory<Sf, (), Request>,
     Sf: ServiceFactory<Request, InitCfg = SharedCfg> + 'static,
     Sf::Res: Into<Response<B>>,

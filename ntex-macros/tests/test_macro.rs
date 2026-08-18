@@ -87,7 +87,7 @@ fn test_main_with_args() {
 
 #[ntex::test]
 async fn test_params() {
-    let srv = test::server(async || {
+    let srv = test::server(async |_| {
         App::new()
             .service(get_param_test)
             .service(put_param_test)
@@ -110,7 +110,7 @@ async fn test_params() {
 
 #[ntex::test]
 async fn test_body() {
-    let srv = test::server(async || {
+    let srv = test::server(async |_| {
         App::new()
             .service(post_test)
             .service(put_test)
@@ -159,7 +159,7 @@ async fn test_body() {
 
 #[ntex::test]
 async fn test_auto_async() {
-    let srv = test::server(async || App::new().service(auto_async)).await;
+    let srv = test::server(async |_| App::new().service(auto_async)).await;
 
     let request = srv.request(Method::GET, srv.url("/test"));
     let response = request.send().await.unwrap();

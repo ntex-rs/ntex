@@ -22,7 +22,7 @@ async fn test_run() {
         let sys = ntex::rt::System::new("test", ntex::rt::DefaultRuntime);
 
         sys.run(move || {
-            let srv = HttpServer::new(async || {
+            let srv = HttpServer::new(async |_| {
                 App::new().service(
                     web::resource("/").route(web::to(async || HttpResponse::Ok().body("test"))),
                 )
@@ -117,7 +117,7 @@ async fn test_openssl() {
         let builder = ssl_acceptor().unwrap();
 
         sys.run(move || {
-            let srv = HttpServer::new(async || {
+            let srv = HttpServer::new(async |_| {
                 App::new().service(web::resource("/").route(web::to(
                     async move |req: HttpRequest| {
                         assert!(req.app_config().secure());
@@ -168,7 +168,7 @@ async fn test_rustls() {
         let config = rustls_utils::tls_acceptor();
 
         sys.run(move || {
-            let srv = HttpServer::new(async || {
+            let srv = HttpServer::new(async |_| {
                 App::new().service(web::resource("/").route(web::to(async |req: HttpRequest| {
                     assert!(req.app_config().secure());
                     HttpResponse::Ok().body("test")
@@ -212,7 +212,7 @@ async fn test_bind_uds() {
         let sys = ntex::rt::System::new("test", ntex::rt::DefaultRuntime);
 
         sys.run(move || {
-            let srv = HttpServer::new(async || {
+            let srv = HttpServer::new(async |_| {
                 App::new().service(
                     web::resource("/").route(web::to(async || HttpResponse::Ok().body("test"))),
                 )
@@ -265,7 +265,7 @@ async fn test_listen_uds() {
             let _ = std::fs::remove_file("/tmp/uds-test2");
             let lst = std::os::unix::net::UnixListener::bind("/tmp/uds-test2").unwrap();
 
-            let srv = HttpServer::new(async || {
+            let srv = HttpServer::new(async |_| {
                 App::new().service(
                     web::resource("/").route(web::to(async || HttpResponse::Ok().body("test"))),
                 )

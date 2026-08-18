@@ -555,7 +555,7 @@ impl TestRequest {
 /// ```
 pub async fn server<F, I, Sf, B>(factory: F) -> TestServer
 where
-    F: AsyncFn() -> I + Send + Clone + 'static,
+    F: AsyncFn(&()) -> I + Send + Clone + 'static,
     I: IntoServiceFactory<Sf, (), Request>,
     Sf: ServiceFactory<Request, InitCfg = SharedCfg> + 'static,
     Sf::Res: Into<Response<B>>,
@@ -593,7 +593,7 @@ where
 /// ```
 pub async fn server_with<F, I, Sf, B>(cfg: TestServerConfig, factory: F) -> TestServer
 where
-    F: AsyncFn() -> I + Send + Clone + 'static,
+    F: AsyncFn(&()) -> I + Send + Clone + 'static,
     I: IntoServiceFactory<Sf, (), Request>,
     Sf: ServiceFactory<Request, InitCfg = SharedCfg> + 'static,
     Sf::Res: Into<Response<B>>,
@@ -608,13 +608,6 @@ where
     let (tx, rx) = mpsc::channel();
     log::debug!("Starting {name:?} web server {id:?}");
 
-    let factory = async move || {
-        factory()
-            .await
-            .into_factory()
-            .map_init_err(|e| io::Error::other(format!("{e:?}")))
-    };
-
     let ssl = match cfg.stream {
         StreamType::Tcp => false,
         #[cfg(feature = "openssl")]
@@ -626,8 +619,13 @@ where
     // run server in separate thread
     thread::spawn(move || {
         let sys = System::with_config(&name, sys);
+        let factory = async move |s: &()| {
+            factory(s)
+                .await
+                .into_factory()
+                .map_init_err(|e| io::Error::other(format!("{e:?}")))
+        };
 
-        let factory = factory.clone();
         let ctimeout = cfg.client_timeout;
         let port = cfg.port;
         let tcp = cfg
@@ -663,49 +661,49 @@ where
 
             let srv = match cfg.stream {
                 StreamType::Tcp => match cfg.tp {
-                    HttpVer::Http1 => builder.listen("test", tcp, c, async move || {
-                        HttpService::h1(factory().await)
+                    HttpVer::Http1 => builder.listen("test", tcp, c, async move |st| {
+                        HttpService::h1(factory(st).await)
                     }),
-                    HttpVer::Http2 => builder.listen("test", tcp, c, async move || {
-                        HttpService::h2(factory().await)
+                    HttpVer::Http2 => builder.listen("test", tcp, c, async move |st| {
+                        HttpService::h2(factory(st).await)
                     }),
-                    HttpVer::Both => builder.listen("test", tcp, c, async move || {
-                        HttpService::new(factory().await)
+                    HttpVer::Both => builder.listen("test", tcp, c, async move |st| {
+                        HttpService::new(factory(st).await)
                     }),
                 },
                 #[cfg(feature = "openssl")]
                 StreamType::Openssl(acceptor) => match cfg.tp {
-                    HttpVer::Http1 => builder.listen("test", tcp, c, async move || {
-                        http::openssl(acceptor.clone(), HttpService::h1(factory().await))
+                    HttpVer::Http1 => builder.listen("test", tcp, c, async move |st| {
+                        http::openssl(acceptor.clone(), HttpService::h1(factory(st).await))
                     }),
-                    HttpVer::Http2 => builder.listen("test", tcp, c, async move || {
-                        http::openssl(acceptor.clone(), HttpService::h2(factory().await))
+                    HttpVer::Http2 => builder.listen("test", tcp, c, async move |st| {
+                        http::openssl(acceptor.clone(), HttpService::h2(factory(st).await))
                     }),
-                    HttpVer::Both => builder.listen("test", tcp, c, async move || {
-                        http::openssl(acceptor.clone(), HttpService::new(factory().await))
+                    HttpVer::Both => builder.listen("test", tcp, c, async move |st| {
+                        http::openssl(acceptor.clone(), HttpService::new(factory(st).await))
                     }),
                 },
                 #[cfg(feature = "rustls")]
                 StreamType::Rustls(config) => match cfg.tp {
-                    HttpVer::Http1 => builder.listen("test", tcp, c, async move || {
+                    HttpVer::Http1 => builder.listen("test", tcp, c, async move |st| {
                         http::rustls(
                             config.clone(),
                             http::ALPN_PROTO_H1,
-                            HttpService::h1(factory().await),
+                            HttpService::h1(factory(st).await),
                         )
                     }),
-                    HttpVer::Http2 => builder.listen("test", tcp, c, async move || {
+                    HttpVer::Http2 => builder.listen("test", tcp, c, async move |st| {
                         http::rustls(
                             config.clone(),
                             http::ALPN_PROTO_H2,
-                            HttpService::h2(factory().await),
+                            HttpService::h2(factory(st).await),
                         )
                     }),
-                    HttpVer::Both => builder.listen("test", tcp, c, async move || {
+                    HttpVer::Both => builder.listen("test", tcp, c, async move |st| {
                         http::rustls(
                             config.clone(),
                             http::ALPN_PROTOS,
-                            HttpService::new(factory().await),
+                            HttpService::new(factory(st).await),
                         )
                     }),
                 },
@@ -1246,7 +1244,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_test_methods() {
-        let srv = server(async || {
+        let srv = server(async |_| {
             App::new().service(
                 web::resource("/").route((
                     web::route()

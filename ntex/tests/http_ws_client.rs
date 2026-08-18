@@ -27,7 +27,7 @@ async fn ws_service(msg: DispatchItem<ws::Codec>) -> Result<Option<ws::Message>,
 
 #[ntex::test]
 async fn test_simple() {
-    let srv = test_server(async || {
+    let srv = test_server(async |_| {
         HttpService::new(async |_| Ok::<_, io::Error>(Response::NotFound())).h1_control(
             async move |req: h1::Control<_, _>| {
                 let ack = if let h1::Control::Upgrade(upg) = req {
@@ -84,7 +84,7 @@ async fn test_simple() {
 
 #[ntex::test]
 async fn test_transport() {
-    let srv = test_server(async || {
+    let srv = test_server(async |_| {
         HttpService::new(async |_| Ok::<_, io::Error>(Response::NotFound())).h1_control(
             async move |req: h1::Control<_, _>| {
                 let ack = if let h1::Control::Upgrade(upg) = req {
@@ -120,7 +120,7 @@ async fn test_transport() {
 
 #[ntex::test]
 async fn test_keepalive_timeout() {
-    let srv = test_server(async || {
+    let srv = test_server(async |_| {
         HttpService::h1(async |_| Ok::<_, io::Error>(Response::NotFound())).control(
             async move |req: h1::Control<_, _>| {
                 let ack = if let h1::Control::Upgrade(upg) = req {
@@ -179,7 +179,7 @@ async fn test_upgrade_handler_with_await() {
         Ok(None)
     }
 
-    let srv = test_server(async || {
+    let srv = test_server(async |_| {
         HttpService::new(App::new().service(web::resource("/").route(web::to(
             async move |req: HttpRequest| {
                 // some async context switch

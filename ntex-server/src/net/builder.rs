@@ -229,7 +229,7 @@ where
         factory: F,
     ) -> io::Result<Self>
     where
-        F: AsyncFn() -> I + Send + Clone + 'static,
+        F: AsyncFn(&St) -> I + Send + Clone + 'static,
         S: Service<St, Req = Io> + 'static,
         I: IntoService<S, St> + 'static,
     {
@@ -263,7 +263,7 @@ where
         factory: F,
     ) -> io::Result<Self>
     where
-        F: AsyncFn() -> I + Send + Clone + 'static,
+        F: AsyncFn(&St) -> I + Send + Clone + 'static,
         S: Service<St, Req = Io> + 'static,
         I: IntoService<S, St> + 'static,
     {
@@ -294,7 +294,7 @@ where
         factory: F,
     ) -> io::Result<Self>
     where
-        F: AsyncFn() -> I + Send + Clone + 'static,
+        F: AsyncFn(&St) -> I + Send + Clone + 'static,
         S: Service<St, Req = Io> + 'static,
         I: IntoService<S, St> + 'static,
     {
@@ -318,7 +318,7 @@ where
         factory: F,
     ) -> io::Result<Self>
     where
-        F: AsyncFn() -> I + Send + Clone + 'static,
+        F: AsyncFn(&St) -> I + Send + Clone + 'static,
         S: Service<St, Req = Io> + 'static,
         I: IntoService<S, St> + 'static,
     {

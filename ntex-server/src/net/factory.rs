@@ -36,7 +36,7 @@ pub(crate) fn create_factory_service<F, S, St, I>(
     f: F,
 ) -> FactoryServiceType<St>
 where
-    F: AsyncFn() -> I + Send + Clone + 'static,
+    F: AsyncFn(&St) -> I + Send + Clone + 'static,
     I: IntoService<S, St> + 'static,
     S: Service<St, Req = Io> + 'static,
     St: State<Io> + 'static,
@@ -47,7 +47,7 @@ where
         fac: Arc::new(move |st: St| {
             let f = f.clone();
             Box::pin(async move {
-                let svc = (f)().await.into_service();
+                let svc = (f)(&st).await.into_service();
                 let pipeline = Pipeline::with_state(st, svc.map(|_| ()).map_err(|_| ()));
                 let svc: Box<dyn NetService> = Box::new(ServerService { pipeline });
                 svc

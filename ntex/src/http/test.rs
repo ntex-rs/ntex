@@ -231,7 +231,7 @@ fn parts(parts: &mut Option<Inner>) -> &mut Inner {
 /// ```
 pub async fn server<F, S, I>(factory: F) -> TestServer
 where
-    F: AsyncFn() -> I + Send + Clone + 'static,
+    F: AsyncFn(&()) -> I + Send + Clone + 'static,
     S: Service<(), Req = Io> + 'static,
     I: IntoService<S, ()> + 'static,
 {
@@ -276,7 +276,7 @@ where
 /// ```
 pub async fn server_with_config<St, F, S, I>(f: F, cfg: impl Into<SharedCfg>) -> TestServer
 where
-    F: AsyncFn() -> I + Send + Clone + 'static,
+    F: AsyncFn(&St) -> I + Send + Clone + 'static,
     S: Service<St, Req = Io> + 'static,
     St: State<Io> + Clone + Default,
     I: IntoService<S, St> + 'static,
@@ -297,7 +297,7 @@ where
 
         sys.run(move || {
             let srv = crate::server::ServerBuilder::<St>::with_default()
-                .listen("test", tcp, cfg, async move || f().await)?
+                .listen("test", tcp, cfg, async move |st| f(st).await)?
                 .workers(1)
                 .disable_signals()
                 .run();

@@ -61,7 +61,7 @@ fn ssl_acceptor() -> SslAcceptor {
 
 #[ntex::test]
 async fn test_h2() -> io::Result<()> {
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         openssl(
             ssl_acceptor(),
             HttpService::h2(async |_| Ok::<_, io::Error>(Response::Ok().finish())),
@@ -76,7 +76,7 @@ async fn test_h2() -> io::Result<()> {
 
 #[ntex::test]
 async fn test_h1() -> io::Result<()> {
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
         builder
             .set_private_key_file("./tests/key.pem", SslFiletype::PEM)
@@ -99,7 +99,7 @@ async fn test_h1() -> io::Result<()> {
 
 #[ntex::test]
 async fn test_h2_1() -> io::Result<()> {
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         openssl(
             ssl_acceptor(),
             HttpService::new(async |req: Request| {
@@ -119,7 +119,7 @@ async fn test_h2_1() -> io::Result<()> {
 #[ntex::test]
 async fn test_h2_body() -> io::Result<()> {
     let data = "HELLOWORLD".to_owned().repeat(64 * 1024);
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         openssl(
             ssl_acceptor(),
             HttpService::h2(async move |mut req: Request| {
@@ -146,7 +146,7 @@ async fn test_h2_body() -> io::Result<()> {
 
 #[ntex::test]
 async fn test_h2_content_length() {
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         openssl(
             ssl_acceptor(),
             HttpService::h2(async move |req: Request| {
@@ -193,7 +193,7 @@ async fn test_h2_headers() {
     let data = STR.repeat(10);
     let data2 = data.clone();
 
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         let data = data.clone();
         openssl(
             ssl_acceptor(),
@@ -255,7 +255,7 @@ const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
 
 #[ntex::test]
 async fn test_h2_body2() {
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         openssl(
             ssl_acceptor(),
             HttpService::h2(async |_| Ok::<_, io::Error>(Response::Ok().body(STR))),
@@ -273,7 +273,7 @@ async fn test_h2_body2() {
 
 #[ntex::test]
 async fn test_h2_head_empty() {
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         openssl(
             ssl_acceptor(),
             HttpService::new(async |_| Ok::<_, io::Error>(Response::Ok().body(STR))),
@@ -297,7 +297,7 @@ async fn test_h2_head_empty() {
 
 #[ntex::test]
 async fn test_h2_head_binary() {
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         openssl(
             ssl_acceptor(),
             HttpService::h2(async |_| {
@@ -323,7 +323,7 @@ async fn test_h2_head_binary() {
 /// Server must send content-length, but no payload
 #[ntex::test]
 async fn test_h2_head_binary2() {
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         openssl(
             ssl_acceptor(),
             HttpService::h2(async |_| Ok::<_, io::Error>(Response::Ok().body(STR))),
@@ -342,7 +342,7 @@ async fn test_h2_head_binary2() {
 
 #[ntex::test]
 async fn test_h2_body_length() {
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         openssl(
             ssl_acceptor(),
             HttpService::h2(async |_| {
@@ -365,7 +365,7 @@ async fn test_h2_body_length() {
 
 #[ntex::test]
 async fn test_h2_body_chunked_explicit() {
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         openssl(
             ssl_acceptor(),
             HttpService::h2(async |_| {
@@ -393,7 +393,7 @@ async fn test_h2_body_chunked_explicit() {
 
 #[ntex::test]
 async fn test_h2_response_http_error_handling() {
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         openssl(
             ssl_acceptor(),
             HttpService::h2(async |_| {
@@ -418,7 +418,7 @@ async fn test_h2_response_http_error_handling() {
 
 #[ntex::test]
 async fn test_h2_service_error() {
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         openssl(
             ssl_acceptor(),
             HttpService::h2(async |_| {
@@ -452,7 +452,7 @@ async fn test_h2_client_drop() -> io::Result<()> {
     let (tx, rx) = ::oneshot::async_channel();
     let tx = Arc::new(Mutex::new(Some(tx)));
 
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         let tx = tx.clone();
         let count = count2.clone();
         openssl(
@@ -482,7 +482,7 @@ async fn test_ssl_handshake_timeout() {
     use std::io::Read;
 
     let srv = test::server_with_config(
-        async move || {
+        async move |_| {
             openssl(
                 ssl_acceptor(),
                 HttpService::h2(async |_| Ok::<_, io::Error>(Response::Ok().finish())),
@@ -500,7 +500,7 @@ async fn test_ssl_handshake_timeout() {
 
 #[ntex::test]
 async fn test_ws_transport() {
-    let srv = test_server(async || {
+    let srv = test_server(async |_| {
         openssl(
             ssl_acceptor(),
             HttpService::new(async |_| Ok::<_, io::Error>(Response::NotFound())).h1_control(
@@ -564,7 +564,7 @@ async fn test_h2_graceful_shutdown() -> io::Result<()> {
     let (tx, rx) = ::oneshot::channel();
     let tx = Arc::new(Mutex::new(Some(tx)));
 
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         let tx = tx.clone();
         let count = count2.clone();
         openssl(

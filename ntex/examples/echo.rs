@@ -17,7 +17,7 @@ async fn main() -> io::Result<()> {
     ));
 
     ntex::server::build()
-        .bind("echo", "127.0.0.1:8080", cfg, async || {
+        .bind("echo", "127.0.0.1:8080", cfg, async |_| {
             HttpService::new(async move |mut req: Request| {
                 let mut body = BytesMut::new();
                 while let Some(item) = req.payload().next().await {

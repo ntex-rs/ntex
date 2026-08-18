@@ -18,7 +18,7 @@ fn test_bind() {
             let srv = build()
                 .workers(1)
                 .disable_signals()
-                .bind("test", addr, SharedCfg::default(), async move || {
+                .bind("test", addr, SharedCfg::default(), async move |_| {
                     async |_| Ok::<_, ()>(())
                 })
                 .unwrap()
@@ -47,7 +47,7 @@ async fn test_listen() {
             let srv = build()
                 .disable_signals()
                 .workers(1)
-                .listen("test", lst, SharedCfg::default(), async move || {
+                .listen("test", lst, SharedCfg::default(), async move |_| {
                     async |_| Ok::<_, ()>(())
                 })
                 .unwrap()
@@ -80,7 +80,7 @@ async fn test_run() {
                 .backlog(100)
                 .workers(1)
                 .disable_signals()
-                .bind("test", addr, SharedCfg::new("SRV"), async move || {
+                .bind("test", addr, SharedCfg::new("SRV"), async move |_| {
                     async move |io: Io| {
                         let _ = io.send(Bytes::from_static(b"test"), &BytesCodec).await;
                         Ok::<_, ()>(())
@@ -264,7 +264,7 @@ fn test_panic_in_worker() {
             let srv = build()
                 .workers(1)
                 .disable_signals()
-                .bind("test", addr, SharedCfg::default(), async move || {
+                .bind("test", addr, SharedCfg::default(), async move |_| {
                     let counter = counter.clone();
                     async move |_| {
                         counter.fetch_add(1, Relaxed);
@@ -322,7 +322,7 @@ fn test_server_state() {
         sys.run(move || {
             let srv = build_with_state(async move || Ok(St(num.clone())))
                 .disable_signals()
-                .bind("test", addr, SharedCfg::default(), async move || {
+                .bind("test", addr, SharedCfg::default(), async move |_| {
                     async move |io: Io, st: &St| {
                         let _ = st.0.fetch_add(1, Relaxed);
                         let _ = io.send(Bytes::from_static(b"test"), &BytesCodec).await;
@@ -360,7 +360,7 @@ fn test_stop_on_panic() {
                 .graceful_shutdown()
                 .workers(1)
                 .disable_signals()
-                .bind("test", addr, SharedCfg::default(), async move || {
+                .bind("test", addr, SharedCfg::default(), async move |_| {
                     #[allow(unreachable_code)]
                     fn_service(async move |_| {
                         panic!("test");

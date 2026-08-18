@@ -35,7 +35,7 @@ async fn test_connection_reuse_h2() {
     let num = Arc::new(AtomicUsize::new(0));
     let num2 = num.clone();
 
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         let num2 = num2.clone();
         svc(async move |io| {
             num2.fetch_add(1, Ordering::Relaxed);

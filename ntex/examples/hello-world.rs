@@ -16,7 +16,7 @@ async fn main() -> io::Result<()> {
     ));
 
     ntex::server::build()
-        .bind("srv", "127.0.0.1:8080", cfg, async || {
+        .bind("srv", "127.0.0.1:8080", cfg, async |_| {
             HttpService::new(async |_req| {
                 info!("{:?}", _req);
                 let mut res = Response::Ok();

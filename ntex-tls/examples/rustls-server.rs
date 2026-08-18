@@ -29,8 +29,8 @@ async fn main() -> io::Result<()> {
         .bind(
             "basic",
             "127.0.0.1:8443",
-            SharedCfg::default(),
-            async move || {
+            SharedCfg::new("S"),
+            async move |_| {
                 svc(TlsAcceptor::new(tls_config.clone())).and_then(async move |io: Io<_>| {
                     println!("New client is connected");
 
