@@ -145,7 +145,7 @@ async fn test_schannel_string() {
         svc(openssl::SslAcceptor::new(ssl_acceptor())).and_then(async move |io: Io<_>| {
             let item = io.recv(&BytesCodec).await.unwrap().unwrap();
             io.send(item, &BytesCodec).await.unwrap();
-            Ok::<_, Box<dyn std::error::Error>>(())
+            Ok::<_, io::Error>(())
         })
     });
 
