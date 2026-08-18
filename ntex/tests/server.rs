@@ -1,11 +1,8 @@
-#[cfg(unix)]
-use std::io::{Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
-use std::{net, sync::Arc, sync::mpsc, thread, time};
+use std::{io::Read, io::Write, net, sync::Arc, sync::mpsc, thread, time};
 
 use ntex::server::{TestServer, build, build_with_state};
 use ntex::service::{State, cfg::SharedCfg, fn_service};
-#[cfg(unix)]
 use ntex::{codec::BytesCodec, io::Io, util::Bytes};
 
 #[test]
