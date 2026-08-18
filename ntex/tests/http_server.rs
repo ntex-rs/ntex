@@ -14,7 +14,7 @@ use ntex::{SharedCfg, channel::oneshot, fn_service, rt, util::Bytes, web::error}
 
 #[ntex::test]
 async fn test_h1() {
-    let srv = test::server_with_config::<(), _, _, _>(
+    let srv = test::server_with_config(
         async || {
             HttpService::h1(async |req: Request| {
                 assert!(req.peer_addr().is_some());

@@ -1,14 +1,13 @@
 use std::{cell::Ref, cell::RefMut, fmt, net, rc::Rc};
 
 use crate::http::{HeaderMap, HttpMessage, Message, Method, Payload, RequestHead, Uri, Version};
-use crate::{io::IoRef, io::types, router::Path, util::Extensions};
+use crate::{Cfg, io::IoRef, io::types, router::Path, util::Extensions};
 
 use super::config::WebAppConfig;
 use super::error::ErrorRenderer;
 use super::extract::FromRequest;
 use super::info::ConnectionInfo;
 use super::rmap::ResourceMap;
-use super::service::AppState;
 
 #[derive(Clone)]
 /// An HTTP Request
@@ -18,7 +17,7 @@ pub(crate) struct HttpRequestInner {
     pub(crate) head: Message<RequestHead>,
     pub(crate) path: Path<Uri>,
     pub(crate) payload: Payload,
-    pub(crate) app_state: AppState,
+    pub(crate) config: Cfg<WebAppConfig>,
     rmap: Rc<ResourceMap>,
 }
 
@@ -29,13 +28,13 @@ impl HttpRequest {
         head: Message<RequestHead>,
         payload: Payload,
         rmap: Rc<ResourceMap>,
-        app_state: AppState,
+        config: Cfg<WebAppConfig>,
     ) -> HttpRequest {
         HttpRequest(Rc::new(HttpRequestInner {
             head,
             path,
             payload,
-            app_state,
+            config,
             rmap,
         }))
     }
@@ -193,25 +192,19 @@ impl HttpRequest {
     /// borrowed.
     #[inline]
     pub fn connection_info(&self) -> Ref<'_, ConnectionInfo> {
-        ConnectionInfo::get(self.head(), self.app_config())
+        ConnectionInfo::get(self.head(), &self.0.config)
     }
 
     /// App config
     #[inline]
     pub fn app_config(&self) -> &WebAppConfig {
-        self.0.app_state.config()
+        &self.0.config
     }
 
-    /// Get an application state object stored with `App::state()` or `App::app_state()`
-    /// methods during application configuration.
-    ///
-    /// If `App::state()` was used to store object, use `State<T>`:
-    ///
-    /// ```rust,ignore
-    /// let opt_t = req.app_data::<State<T>>();
-    /// ```
+    #[inline]
+    /// Get an application state object stored with `WebAppConfig`.
     pub fn app_state<T: 'static>(&self) -> Option<&T> {
-        self.0.app_state.get::<T>()
+        self.0.config.state::<T>()
     }
 }
 
@@ -237,8 +230,8 @@ impl HttpMessage for HttpRequest {
 
 impl Drop for HttpRequest {
     fn drop(&mut self) {
-        let id = self.0.app_state.id();
-        let pool_size = self.0.app_state.config().pool_size;
+        let id = self.0.config.id();
+        let pool_size = self.0.config.pool_size;
         super::config::put_request(id, pool_size, &mut self.0);
     }
 }
@@ -296,14 +289,10 @@ impl fmt::Debug for HttpRequest {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-
     use super::*;
-    use crate::http::{StatusCode, header};
+    use crate::http::header;
     use crate::router::ResourceDef;
-
-    use crate::web::test::{TestRequest, call_service, init_service};
-    use crate::web::{self, App, HttpResponse};
+    use crate::web::test::TestRequest;
 
     #[test]
     fn test_debug() {
@@ -426,73 +415,5 @@ mod tests {
             url.ok().unwrap().as_str(),
             "https://youtube.com/watch/oHg5SJYRHA0"
         );
-    }
-
-    #[crate::rt_test]
-    async fn test_state() {
-        let srv = init_service(App::new().state(10usize).service(web::resource("/").to(
-            async move |req: HttpRequest| {
-                if req.app_state::<usize>().is_some() {
-                    HttpResponse::Ok()
-                } else {
-                    HttpResponse::BadRequest()
-                }
-            },
-        )))
-        .await;
-
-        let req = TestRequest::default().to_request();
-        let resp = call_service(&srv, req).await;
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let srv = init_service(App::new().state(10u32).service(web::resource("/").to(
-            async move |req: HttpRequest| {
-                if req.app_state::<usize>().is_some() {
-                    HttpResponse::Ok()
-                } else {
-                    HttpResponse::BadRequest()
-                }
-            },
-        )))
-        .await;
-
-        let req = TestRequest::default().to_request();
-        let resp = call_service(&srv, req).await;
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[crate::rt_test]
-    async fn test_extensions_dropped() {
-        struct Tracker {
-            dropped: bool,
-        }
-        struct Foo {
-            tracker: Rc<RefCell<Tracker>>,
-        }
-        impl Drop for Foo {
-            fn drop(&mut self) {
-                self.tracker.borrow_mut().dropped = true;
-            }
-        }
-
-        let tracker = Rc::new(RefCell::new(Tracker { dropped: false }));
-        {
-            let tracker2 = Rc::clone(&tracker);
-            let srv = init_service(App::new().state(10u32).service(web::resource("/").to(
-                move |req: HttpRequest| {
-                    req.extensions_mut().insert(Foo {
-                        tracker: Rc::clone(&tracker2),
-                    });
-                    async { HttpResponse::Ok() }
-                },
-            )))
-            .await;
-
-            let req = TestRequest::default().to_request();
-            let resp = call_service(&srv, req).await;
-            assert_eq!(resp.status(), StatusCode::OK);
-        }
-
-        assert!(tracker.borrow().dropped);
     }
 }

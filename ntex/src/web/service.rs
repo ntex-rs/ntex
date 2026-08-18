@@ -1,15 +1,13 @@
 use std::rc::Rc;
 
 use crate::router::{IntoPattern, ResourceDef};
-use crate::service::cfg::{Cfg, SharedCfg};
-use crate::service::{IntoServiceFactory, ServiceFactory, boxed};
-use crate::util::Extensions;
+use crate::service::cfg::SharedCfg;
+use crate::service::{IntoServiceFactory, PipelineFactory, ServiceFactory};
 
-use super::config::WebAppConfig;
 use super::dev::insert_slash;
 use super::error::ErrorRenderer;
 use super::guard::{AllGuard, Guard};
-use super::{request::WebRequest, response::WebResponse, rmap::ResourceMap};
+use super::{HttpService, request::WebRequest, response::WebResponse, rmap::ResourceMap};
 
 pub trait WebServiceFactory<Err: ErrorRenderer> {
     fn register(self, config: &mut WebServiceConfig<Err>);
@@ -44,72 +42,16 @@ where
 }
 
 type Guards = Vec<Box<dyn Guard>>;
-type HttpServiceFactory<Err: ErrorRenderer> =
-    boxed::BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, SharedCfg, ()>;
-
-#[derive(Debug, Clone)]
-pub(crate) struct AppState(pub(crate) Rc<AppStateInner>);
-
-#[derive(Debug)]
-pub(crate) struct AppStateInner {
-    ext: Extensions,
-    parent: Option<AppState>,
-    pub(crate) config: Cfg<WebAppConfig>,
-}
-
-impl AppState {
-    pub(crate) fn new(
-        ext: Extensions,
-        parent: Option<AppState>,
-        config: Cfg<WebAppConfig>,
-    ) -> Self {
-        AppState(Rc::new(AppStateInner {
-            ext,
-            parent,
-            config,
-        }))
-    }
-
-    pub(crate) fn id(&self) -> usize {
-        self.0.config.id()
-    }
-
-    pub(crate) fn config(&self) -> &WebAppConfig {
-        &self.0.config
-    }
-
-    pub(crate) fn get<T: 'static>(&self) -> Option<&T> {
-        let result = self.0.ext.get::<T>();
-        if result.is_some() {
-            result
-        } else if let Some(parent) = self.0.parent.as_ref() {
-            parent.get::<T>()
-        } else {
-            None
-        }
-    }
-
-    pub(crate) fn contains<T: 'static>(&self) -> bool {
-        if self.0.ext.contains::<T>() {
-            true
-        } else if let Some(parent) = self.0.parent.as_ref() {
-            parent.contains::<T>()
-        } else {
-            false
-        }
-    }
-}
 
 /// Application service configuration
 #[derive(derive_more::Debug)]
 #[debug("WebServiceConfig")]
 pub struct WebServiceConfig<Err: ErrorRenderer> {
-    state: AppState,
     root: bool,
-    default: Rc<HttpServiceFactory<Err>>,
+    default: HttpService<Err>,
     services: Vec<(
         ResourceDef,
-        HttpServiceFactory<Err>,
+        HttpService<Err>,
         Option<Guards>,
         Option<Rc<ResourceMap>>,
     )>,
@@ -117,9 +59,8 @@ pub struct WebServiceConfig<Err: ErrorRenderer> {
 
 impl<Err: ErrorRenderer> WebServiceConfig<Err> {
     /// Crate server settings instance
-    pub(crate) fn new(state: AppState, default: Rc<HttpServiceFactory<Err>>) -> Self {
+    pub(crate) fn new(default: HttpService<Err>) -> Self {
         WebServiceConfig {
-            state,
             default,
             root: true,
             services: Vec::new(),
@@ -131,49 +72,41 @@ impl<Err: ErrorRenderer> WebServiceConfig<Err> {
         self.root
     }
 
-    pub(super) fn state(&self) -> &AppState {
-        &self.state
-    }
-
     pub(crate) fn into_services(
         self,
-    ) -> Vec<(
-        ResourceDef,
-        HttpServiceFactory<Err>,
-        Option<Guards>,
-        Option<Rc<ResourceMap>>,
-    )> {
-        self.services
+    ) -> (
+        Vec<(
+            ResourceDef,
+            HttpService<Err>,
+            Option<Guards>,
+            Option<Rc<ResourceMap>>,
+        )>,
+        HttpService<Err>,
+    ) {
+        (self.services, self.default)
     }
 
-    pub(crate) fn clone_config(&self, state: Option<AppState>) -> Self {
+    pub(crate) fn get_nested(&self) -> Self {
         WebServiceConfig {
-            state: state.unwrap_or_else(|| self.state.clone()),
             default: self.default.clone(),
             services: Vec::new(),
             root: false,
         }
     }
 
-    /// Service configuration
-    pub fn config(&self) -> &WebAppConfig {
-        self.state.config()
-    }
-
     /// Default resource
-    pub fn default_service(&self) -> Rc<HttpServiceFactory<Err>> {
+    pub fn default_service(&self) -> HttpService<Err> {
         self.default.clone()
     }
 
     /// Register http service
-    pub fn register_service<F, S>(
+    pub fn register_service<S>(
         &mut self,
         rdef: ResourceDef,
         guards: Option<Vec<Box<dyn Guard>>>,
-        factory: F,
+        factory: impl IntoServiceFactory<S, (), WebRequest<Err>>,
         nested: Option<Rc<ResourceMap>>,
     ) where
-        F: IntoServiceFactory<S, (), WebRequest<Err>>,
         S: ServiceFactory<
                 WebRequest<Err>,
                 Res = WebResponse,
@@ -182,8 +115,12 @@ impl<Err: ErrorRenderer> WebServiceConfig<Err> {
                 InitError = (),
             > + 'static,
     {
-        self.services
-            .push((rdef, boxed::factory(factory.into_factory()), guards, nested));
+        self.services.push((
+            rdef,
+            PipelineFactory::new(factory.into_factory()),
+            guards,
+            nested,
+        ));
     }
 }
 

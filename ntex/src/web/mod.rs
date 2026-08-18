@@ -1,7 +1,7 @@
 //! Web framework for Rust.
 //!
 //! ```rust,no_run
-//! use ntex::web;
+//! use ntex::{web, SharedCfg};
 //!
 //! async fn index(info: web::types::Path<(String, u32)>) -> String {
 //!     format!("Hello {}! id:{}", info.0, info.1)
@@ -12,7 +12,7 @@
 //!     web::server(async || web::App::new().service(
 //!         web::resource("/{name}/{id}/index.html").to(index))
 //!     )
-//!         .bind("127.0.0.1:8080")?
+//!         .bind("127.0.0.1:8080", SharedCfg::default())?
 //!         .run()
 //!         .await
 //! }
@@ -120,6 +120,11 @@ pub use self::scope::Scope;
 pub use self::server::HttpServer;
 pub use self::service::WebServiceFactory;
 pub use self::util::*;
+
+pub(crate) type HttpHandler<Err: ErrorRenderer> =
+    crate::Pipeline<WebRequest<Err>, WebResponse, Err::Container>;
+pub(crate) type HttpService<Err: ErrorRenderer> =
+    crate::PipelineFactory<(), WebRequest<Err>, WebResponse, Err::Container, crate::SharedCfg, ()>;
 
 pub mod dev {
     //! The `ntex::web` prelude for library developers

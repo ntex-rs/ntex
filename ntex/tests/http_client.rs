@@ -194,7 +194,6 @@ async fn test_connection_close() {
     assert!(response.status().is_success());
 }
 
-#[ignore]
 #[ntex::test]
 async fn test_connection_force_close() {
     let num = Arc::new(AtomicUsize::new(0));
@@ -237,7 +236,6 @@ async fn test_connection_force_close() {
     assert_eq!(num.load(Ordering::Relaxed), 2);
 }
 
-#[ignore]
 #[ntex::test]
 async fn test_connection_server_close() {
     let num = Arc::new(AtomicUsize::new(0));
@@ -320,7 +318,6 @@ async fn test_connection_wait_queue() {
     assert_eq!(num.load(Ordering::Relaxed), 1);
 }
 
-#[ignore]
 #[ntex::test]
 async fn test_connection_wait_queue_force_close() {
     let num = Arc::new(AtomicUsize::new(0));
@@ -494,10 +491,15 @@ async fn test_client_gzip_encoding_large_random() {
         .map(char::from)
         .collect::<String>();
 
-    let srv = test::server(async || {
-        App::new()
-            .state(web::types::PayloadConfig::default().limit(1_048_576))
-            .service(web::resource("/").route(web::to(async move |data: Bytes| {
+    let srv = test::server_with(
+        test::config().server_cfg(
+            SharedCfg::new("SRV").add(
+                web::WebAppConfig::new()
+                    .set_state(web::types::PayloadConfig::default().limit(1_048_576)),
+            ),
+        ),
+        async || {
+            App::new().service(web::resource("/").route(web::to(async move |data: Bytes| {
                 let mut e = GzEncoder::new(Vec::new(), Compression::default());
                 e.write_all(&data).unwrap();
                 let data = e.finish().unwrap();
@@ -505,7 +507,8 @@ async fn test_client_gzip_encoding_large_random() {
                     .header("content-encoding", "gzip")
                     .body(data)
             })))
-    })
+        },
+    )
     .await;
 
     // client request

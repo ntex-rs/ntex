@@ -12,7 +12,7 @@ use super::extract::FromRequest;
 use super::handler::Handler;
 use super::route::{IntoRoutes, Route, RouteService};
 use super::stack::WebStack;
-use super::{app::Filter, error::ErrorRenderer, guard::Guard, service::AppState};
+use super::{app::Filter, error::ErrorRenderer, guard::Guard};
 use super::{request::WebRequest, response::WebResponse};
 
 type HttpService<Err: ErrorRenderer> = BoxService<(), WebRequest<Err>, WebResponse, Err::Container>;
@@ -352,16 +352,7 @@ where
             rdef.name_mut().clone_from(name);
         }
 
-        let state = self.state.take().map(|state| {
-            AppState::new(
-                state,
-                Some(config.state().clone()),
-                config.state().0.config.clone(),
-            )
-        });
-
         let router_factory = ResourceRouterFactory {
-            state,
             routes: self.routes,
             default: self.default.borrow_mut().take(),
         };
@@ -401,7 +392,6 @@ where
         self,
     ) -> ResourceServiceFactory<Err, M, ServiceChainFactory<Sf, (), WebRequest<Err>>> {
         let router_factory = ResourceRouterFactory {
-            state: None,
             routes: self.routes,
             default: self.default.borrow_mut().take(),
         };
@@ -452,7 +442,6 @@ where
 struct ResourceRouterFactory<Err: ErrorRenderer> {
     routes: Vec<Route<Err>>,
     default: Option<Rc<HttpNewService<Err>>>,
-    state: Option<AppState>,
 }
 
 impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ResourceRouterFactory<Err> {
@@ -471,7 +460,6 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ResourceRouterFacto
         };
         Ok(ResourceRouter {
             default,
-            state: self.state.clone(),
             routes: self.routes.iter().map(Route::service).collect(),
         })
     }
@@ -480,7 +468,6 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ResourceRouterFacto
 #[derive(derive_more::Debug)]
 #[debug("ResourceRouter")]
 pub struct ResourceRouter<Err: ErrorRenderer> {
-    state: Option<AppState>,
     routes: Vec<RouteService<Err>>,
     default: Option<HttpService<Err>>,
 }
@@ -497,9 +484,6 @@ impl<Err: ErrorRenderer> Service for ResourceRouter<Err> {
     ) -> Result<Self::Res, Self::Error> {
         for route in &self.routes {
             if route.check(&mut req) {
-                if let Some(ref state) = self.state {
-                    req.set_state_container(state.clone());
-                }
                 return ctx.call(route, req).await;
             }
         }
@@ -649,32 +633,5 @@ mod tests {
             .to_request();
         let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-    }
-
-    #[crate::rt_test]
-    async fn test_state() {
-        let srv = init_service(
-            App::new().state(1i32).state(1usize).state('-').service(
-                web::resource("/test")
-                    .state(10usize)
-                    .state('*')
-                    .guard(guard::Get())
-                    .to(
-                        |data1: web::types::State<usize>,
-                         data2: web::types::State<char>,
-                         data3: web::types::State<i32>| {
-                            assert_eq!(*data1, 10);
-                            assert_eq!(*data2, '*');
-                            assert_eq!(*data3, 1);
-                            async { HttpResponse::Ok() }
-                        },
-                    ),
-            ),
-        )
-        .await;
-
-        let req = TestRequest::get().uri("/test").to_request();
-        let resp = call_service(&srv, req).await;
-        assert_eq!(resp.status(), StatusCode::OK);
     }
 }
