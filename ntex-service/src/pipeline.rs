@@ -26,8 +26,7 @@ type BoxFuture<'a, I, E> = Pin<Box<dyn Future<Output = Result<I, E>> + 'a>>;
 
 /// Factory for a service pipeline.
 pub struct PipelineFactory<St, Req, Res, Err, InitCfg, InitErr> {
-    inner:
-        Box<dyn for<'r> Fn(&'r InitCfg, &'r St) -> BoxFuture<'r, Pipeline<Req, Res, Err>, InitErr>>,
+    f: Rc<dyn for<'r> Fn(&'r InitCfg, &'r St) -> BoxFuture<'r, Pipeline<Req, Res, Err>, InitErr>>,
 }
 
 struct PipelineFactoryInner<St, Sf, Ust, Req> {
@@ -65,7 +64,7 @@ impl<St, Req, Res, Err, InitCfg, InitErr> PipelineFactory<St, Req, Res, Err, Ini
             st: marker::PhantomData,
         });
         Self {
-            inner: Box::new(move |cfg_, st_| {
+            f: Rc::new(move |cfg_, st_| {
                 let pf = inner.clone();
                 Box::pin(async move { pf.create(cfg_, st_).await })
             }),
@@ -73,7 +72,15 @@ impl<St, Req, Res, Err, InitCfg, InitErr> PipelineFactory<St, Req, Res, Err, Ini
     }
 
     pub async fn create(&self, cfg: &InitCfg, st: &St) -> Result<Pipeline<Req, Res, Err>, InitErr> {
-        (self.inner)(cfg, st).await
+        (self.f)(cfg, st).await
+    }
+}
+
+impl<St, Req, Res, Err, InitCfg, InitErr> Clone
+    for PipelineFactory<St, Req, Res, Err, InitCfg, InitErr>
+{
+    fn clone(&self) -> Self {
+        PipelineFactory { f: self.f.clone() }
     }
 }
 

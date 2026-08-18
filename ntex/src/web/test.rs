@@ -22,16 +22,16 @@ use crate::io::Sealed;
 use crate::router::{Path, ResourceDef};
 use crate::service::{IntoServiceFactory, Pipeline, fn_service};
 use crate::time::{Millis, Seconds, sleep};
-use crate::util::{Bytes, BytesMut, Extensions, Stream, stream_recv};
+use crate::util::{Bytes, BytesMut, Stream, stream_recv};
 #[cfg(feature = "ws")]
 use crate::ws::{WsClient, WsConnection, error::WsClientError};
 use crate::{Service, ServiceFactory, SharedCfg, io::IoConfig, rt::System, server::Server};
 
+use crate::web::config::WebAppConfig;
 use crate::web::error::{DefaultError, ErrorRenderer};
 use crate::web::httprequest::HttpRequest;
 use crate::web::rmap::ResourceMap;
 use crate::web::{FromRequest, HttpResponse, Responder, WebRequest, WebResponse};
-use crate::web::{config::WebAppConfig, service::AppState};
 
 /// Create service that always responds with `HttpResponse::Ok()`
 pub fn ok_service<Err: ErrorRenderer>()
@@ -298,10 +298,9 @@ pub async fn respond_to<T: Responder<DefaultError>>(slf: T, req: &HttpRequest) -
 pub struct TestRequest {
     req: HttpTestRequest,
     rmap: ResourceMap,
-    config: SharedCfg,
     path: Path<Uri>,
     peer_addr: Option<SocketAddr>,
-    app_state: Extensions,
+    config: WebAppConfig,
 }
 
 impl Default for TestRequest {
@@ -309,10 +308,9 @@ impl Default for TestRequest {
         TestRequest {
             req: HttpTestRequest::default(),
             rmap: ResourceMap::new(ResourceDef::new("")),
-            config: SharedCfg::default(),
             path: Path::new(Uri::default()),
             peer_addr: None,
-            app_state: Extensions::new(),
+            config: WebAppConfig::new(),
         }
     }
 }
@@ -459,8 +457,8 @@ impl TestRequest {
     /// Set application data.
     ///
     /// This is equivalent of `App::data()` method for testing purpose.
-    pub fn state<T: 'static>(mut self, data: T) -> Self {
-        self.app_state.insert(data);
+    pub fn state<T: Send + Sync + 'static>(mut self, data: T) -> Self {
+        self.config = self.config.set_state(data);
         self
     }
 
@@ -483,14 +481,14 @@ impl TestRequest {
     pub fn to_srv_request(mut self) -> WebRequest<DefaultError> {
         let (head, payload) = self.req.finish().into_parts();
         *self.path.get_mut() = head.uri.clone();
-        let app_state = AppState::new(self.app_state, None, self.config.get());
+        let cfg = SharedCfg::new("TEST").add(self.config).build();
 
         WebRequest::new(HttpRequest::new(
             self.path,
             head,
             payload,
             Rc::new(self.rmap),
-            app_state,
+            cfg.get(),
         ))
     }
 
@@ -505,9 +503,9 @@ impl TestRequest {
     pub fn to_http_request(mut self) -> HttpRequest {
         let (head, payload) = self.req.finish().into_parts();
         *self.path.get_mut() = head.uri.clone();
-        let app_state = AppState::new(self.app_state, None, self.config.get());
+        let cfg = SharedCfg::new("TEST").add(self.config).build();
 
-        HttpRequest::new(self.path, head, payload, Rc::new(self.rmap), app_state)
+        HttpRequest::new(self.path, head, payload, Rc::new(self.rmap), cfg.get())
     }
 
     #[must_use]
@@ -515,14 +513,14 @@ impl TestRequest {
     pub fn to_http_parts(mut self) -> (HttpRequest, Payload) {
         let (head, payload) = self.req.finish().into_parts();
         *self.path.get_mut() = head.uri.clone();
-        let app_state = AppState::new(self.app_state, None, self.config.get());
+        let cfg = SharedCfg::new("TEST").add(self.config).build();
 
         let req = HttpRequest::new(
             self.path,
             head,
             Payload::None,
             Rc::new(self.rmap),
-            app_state,
+            cfg.get(),
         );
 
         (req, payload)
@@ -893,15 +891,15 @@ impl TestServerConfig {
 
     #[must_use]
     /// Use custom `SharedCfg` for test server.
-    pub fn server_cfg(mut self, cfg: SharedCfg) -> Self {
-        self.srv_cfg = Some(cfg);
+    pub fn server_cfg(mut self, cfg: impl Into<SharedCfg>) -> Self {
+        self.srv_cfg = Some(cfg.into());
         self
     }
 
     #[must_use]
     /// Use custom `SharedCfg` for client.
-    pub fn client_cfg(mut self, cfg: SharedCfg) -> Self {
-        self.client_cfg = Some(cfg);
+    pub fn client_cfg(mut self, cfg: impl Into<SharedCfg>) -> Self {
+        self.client_cfg = Some(cfg.into());
         self
     }
 }
@@ -1240,24 +1238,6 @@ mod tests {
         let app =
             init_service(App::new().service(web::resource("/index.html").to(async_with_block)))
                 .await;
-
-        let req = TestRequest::post().uri("/index.html").to_request();
-        let res = app.call(req).await.unwrap();
-        assert!(res.status().is_success());
-    }
-
-    #[crate::rt_test]
-    async fn test_server_state() {
-        async fn handler(data: web::types::State<usize>) -> crate::http::ResponseBuilder {
-            assert_eq!(*data, 10);
-            HttpResponse::Ok()
-        }
-
-        let app =
-            init_service(App::new().state(10usize).service(
-                web::resource("/index.html").to(crate::web::dev::__assert_handler1(handler)),
-            ))
-            .await;
 
         let req = TestRequest::post().uri("/index.html").to_request();
         let res = app.call(req).await.unwrap();

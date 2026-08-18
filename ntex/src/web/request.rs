@@ -13,7 +13,6 @@ use super::httprequest::HttpRequest;
 use super::info::ConnectionInfo;
 use super::response::WebResponse;
 use super::rmap::ResourceMap;
-use super::service::AppState;
 
 /// An service http request
 ///
@@ -195,12 +194,9 @@ impl<Err> WebRequest<Err> {
     }
 
     #[inline]
-    /// Get an application state stored with `App::app_state()` method during
-    /// application configuration.
-    ///
-    /// To get state stored with `App::state()` use `web::types::State<T>` as type.
+    /// Get an application state.
     pub fn app_state<T: 'static>(&self) -> Option<&T> {
-        (self.req).0.app_state.get::<T>()
+        (self.req).app_config().state()
     }
 
     #[inline]
@@ -213,11 +209,6 @@ impl<Err> WebRequest<Err> {
     /// Set request payload.
     pub fn set_payload(&mut self, payload: Payload) {
         Rc::get_mut(&mut (self.req).0).unwrap().payload = payload;
-    }
-
-    /// Set new app state container
-    pub(super) fn set_state_container(&mut self, state: AppState) {
-        Rc::get_mut(&mut (self.req).0).unwrap().app_state = state;
     }
 
     /// Request extensions

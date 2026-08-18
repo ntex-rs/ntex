@@ -2,11 +2,10 @@ use std::{cell::RefCell, fmt, rc::Rc};
 
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef, Router};
-use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::cfg::SharedCfg;
 use crate::service::{Ctx, Identity, Middleware, ReadyCtx, Service, ServiceFactory};
 use crate::service::{IntoServiceFactory, dev::ServiceChainFactory, factory};
-use crate::util::{Extensions, join};
+use crate::util::join;
 
 use super::app::Filter;
 use super::config::ServiceConfig;
@@ -18,13 +17,10 @@ use super::resource::Resource;
 use super::response::WebResponse;
 use super::rmap::ResourceMap;
 use super::route::Route;
-use super::service::{AppServiceFactory, AppState, ServiceFactoryWrapper};
-use super::stack::WebStack;
+use super::service::{AppServiceFactory, ServiceFactoryWrapper};
+use super::{HttpHandler, HttpService, stack::WebStack};
 
 type Guards = Vec<Box<dyn Guard>>;
-type HttpService<Err: ErrorRenderer> = BoxService<(), WebRequest<Err>, WebResponse, Err::Container>;
-type HttpNewService<Err: ErrorRenderer> =
-    BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, SharedCfg, ()>;
 
 /// Resources scope.
 ///
@@ -61,10 +57,9 @@ pub struct Scope<Err: ErrorRenderer, M = Identity, T = Filter<Err>> {
     middleware: M,
     filter: ServiceChainFactory<T, (), WebRequest<Err>>,
     rdef: Vec<String>,
-    state: Option<Extensions>,
     services: Vec<Box<dyn AppServiceFactory<Err>>>,
     guards: Vec<Box<dyn Guard>>,
-    default: Rc<RefCell<Option<Rc<HttpNewService<Err>>>>>,
+    default: Rc<RefCell<Option<HttpService<Err>>>>,
     external: Vec<ResourceDef>,
     case_insensitive: bool,
 }
@@ -77,7 +72,6 @@ impl<Err: ErrorRenderer> Scope<Err> {
             middleware: Identity,
             filter: factory(Filter::new()),
             rdef: path.patterns(),
-            state: None,
             guards: Vec::new(),
             services: Vec::new(),
             default: Rc::new(RefCell::new(None)),
@@ -121,43 +115,6 @@ where
     /// ```
     pub fn guard<G: Guard + 'static>(mut self, guard: G) -> Self {
         self.guards.push(Box::new(guard));
-        self
-    }
-
-    #[must_use]
-    /// Set or override application state.
-    ///
-    /// Application state could be accessed by using `State<T>`
-    /// extractor where `T` is state type.
-    ///
-    /// ```rust
-    /// use std::cell::Cell;
-    /// use ntex::web::{self, App, HttpResponse};
-    ///
-    /// struct MyState {
-    ///     counter: Cell<usize>,
-    /// }
-    ///
-    /// async fn index(st: web::types::State<MyState>) -> HttpResponse {
-    ///     st.counter.set(st.counter.get() + 1);
-    ///     HttpResponse::Ok().into()
-    /// }
-    ///
-    /// fn main() {
-    ///     let app = App::new().service(
-    ///         web::scope("/app")
-    ///             .state(MyState{ counter: Cell::new(0) })
-    ///             .service(
-    ///                 web::resource("/index.html").route(
-    ///                     web::get().to(index)))
-    ///     );
-    /// }
-    /// ```
-    pub fn state<D: 'static>(mut self, st: D) -> Self {
-        if self.state.is_none() {
-            self.state = Some(Extensions::new());
-        }
-        self.state.as_mut().unwrap().insert(st);
         self
     }
 
@@ -207,12 +164,6 @@ where
         f(&mut cfg);
         self.services.extend(cfg.services);
         self.external.extend(cfg.external);
-
-        if !cfg.state.is_empty() {
-            let mut state = self.state.unwrap_or_default();
-            state.extend(cfg.state);
-            self.state = Some(state);
-        }
         self
     }
 
@@ -287,9 +238,8 @@ where
     /// Default service to be used if no matching route could be found.
     ///
     /// If default resource is not registered, app's default resource is being used.
-    pub fn default_service<F, S>(mut self, f: F) -> Self
+    pub fn default_service<S>(mut self, f: impl IntoServiceFactory<S, (), WebRequest<Err>>) -> Self
     where
-        F: IntoServiceFactory<S, (), WebRequest<Err>>,
         S: ServiceFactory<
                 WebRequest<Err>,
                 Res = WebResponse,
@@ -299,11 +249,11 @@ where
         S::InitError: fmt::Debug,
     {
         // create and configure default resource
-        self.default = Rc::new(RefCell::new(Some(Rc::new(boxed::factory(
+        self.default = Rc::new(RefCell::new(Some(HttpService::new(
             factory(f.into_factory()).map_init_err(|e| {
                 log::error!("Cannot construct default service: {e:?}");
             }),
-        )))));
+        ))));
 
         self
     }
@@ -344,7 +294,6 @@ where
                 .and_then(filter.into_factory().map_init_err(|_| ())),
             middleware: self.middleware,
             rdef: self.rdef,
-            state: self.state,
             guards: self.guards,
             services: self.services,
             default: self.default,
@@ -367,7 +316,6 @@ where
             middleware: WebStack::new(self.middleware, mw),
             filter: self.filter,
             rdef: self.rdef,
-            state: self.state,
             guards: self.guards,
             services: self.services,
             default: self.default,
@@ -396,16 +344,8 @@ where
             *self.default.borrow_mut() = Some(config.default_service());
         }
 
-        let state = self.state.take().map(|state| {
-            AppState::new(
-                state,
-                Some(config.state().clone()),
-                config.state().0.config.clone(),
-            )
-        });
-
         // register nested services
-        let mut cfg = config.clone_config(state.clone());
+        let mut cfg = config.get_nested();
         self.services
             .into_iter()
             .for_each(|mut srv| srv.register(&mut cfg));
@@ -420,11 +360,11 @@ where
 
         // complete scope pipeline creation
         let router_factory = ScopeRouterFactory {
-            state,
             default: self.default.borrow_mut().take(),
             case_insensitive: self.case_insensitive,
             services: cfg
                 .into_services()
+                .0
                 .into_iter()
                 .map(|(rdef, srv, guards, nested)| {
                     // case for scope prefix ends with '/' and
@@ -529,9 +469,8 @@ where
 }
 
 struct ScopeRouterFactory<Err: ErrorRenderer> {
-    state: Option<AppState>,
-    services: Vec<(ResourceDef, HttpNewService<Err>, RefCell<Option<Guards>>)>,
-    default: Option<Rc<HttpNewService<Err>>>,
+    services: Vec<(ResourceDef, HttpService<Err>, RefCell<Option<Guards>>)>,
+    default: Option<HttpService<Err>>,
     case_insensitive: bool,
 }
 
@@ -550,12 +489,12 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ScopeRouterFactory<
             router.case_insensitive();
         }
         for (path, factory, guards) in &mut self.services.iter() {
-            let service = factory.create(cfg).await?;
+            let service = factory.create(cfg, &()).await?;
             router.rdef(path.clone(), service).2 = guards.borrow_mut().take();
         }
 
         let default = if let Some(ref default) = self.default {
-            Some(default.create(cfg).await?)
+            Some(default.create(cfg, &()).await?)
         } else {
             None
         };
@@ -563,15 +502,13 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ScopeRouterFactory<
         Ok(ScopeRouter {
             default,
             router: router.finish(),
-            state: self.state.clone(),
         })
     }
 }
 
 struct ScopeRouter<Err: ErrorRenderer> {
-    state: Option<AppState>,
-    router: Router<HttpService<Err>, Vec<Box<dyn Guard>>>,
-    default: Option<HttpService<Err>>,
+    router: Router<HttpHandler<Err>, Vec<Box<dyn Guard>>>,
+    default: Option<HttpHandler<Err>>,
 }
 
 impl<Err: ErrorRenderer> Service for ScopeRouter<Err> {
@@ -582,7 +519,7 @@ impl<Err: ErrorRenderer> Service for ScopeRouter<Err> {
     async fn call(
         &self,
         mut req: WebRequest<Err>,
-        ctx: Ctx<'_, Self, ()>,
+        _: Ctx<'_, Self, ()>,
     ) -> Result<Self::Res, Self::Error> {
         let res = self.router.recognize_checked(&mut req, |req, guards| {
             if let Some(guards) = guards {
@@ -596,12 +533,9 @@ impl<Err: ErrorRenderer> Service for ScopeRouter<Err> {
         });
 
         if let Some((srv, _info)) = res {
-            if let Some(ref state) = self.state {
-                req.set_state_container(state.clone());
-            }
-            ctx.call(srv, req).await
+            srv.call(req).await
         } else if let Some(ref default) = self.default {
-            ctx.call(default, req).await
+            default.call(req).await
         } else {
             let req = req.into_parts().0;
             Ok(WebResponse::new(Response::NotFound().finish(), req))
@@ -1146,40 +1080,6 @@ mod tests {
             resp.headers().get(CONTENT_TYPE).unwrap(),
             HeaderValue::from_static("0001")
         );
-    }
-
-    #[crate::rt_test]
-    async fn test_scope_config() {
-        let srv = init_service(App::new().service(web::scope("/app").configure(|s| {
-            s.state("teat");
-            s.route("/path1", web::get().to(async || HttpResponse::Ok()));
-        })))
-        .await;
-
-        let req = TestRequest::with_uri("/app/path1").to_request();
-        let resp = srv.call(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-    }
-
-    #[crate::rt_test]
-    async fn test_override_state() {
-        let srv = init_service(App::new().state(1usize).service(
-            web::scope("app").state(10usize).state(100u16).route(
-                "/t",
-                web::get().to(
-                    |data: web::types::State<usize>, data2: web::types::State<u16>| {
-                        assert_eq!(*data, 10);
-                        assert_eq!(*data2, 100);
-                        async { HttpResponse::Ok() }
-                    },
-                ),
-            ),
-        ))
-        .await;
-
-        let req = TestRequest::with_uri("/app/t").to_request();
-        let resp = call_service(&srv, req).await;
-        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[crate::rt_test]

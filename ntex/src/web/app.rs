@@ -1,14 +1,12 @@
-use std::{cell::Cell, cell::RefCell, fmt, marker::PhantomData, rc::Rc};
+use std::{fmt, marker::PhantomData};
 
 use crate::http::Request;
 use crate::router::ResourceDef;
-use crate::service::boxed::{self, BoxServiceFactory};
 use crate::service::cfg::SharedCfg;
-use crate::service::{Ctx, Identity, Middleware, Service, ServiceFactory};
-use crate::service::{IntoServiceFactory, dev::ServiceChainFactory, factory};
-use crate::util::{BoxFuture, Extensions};
+use crate::service::{Ctx, IntoServiceFactory, dev::ServiceChainFactory, factory};
+use crate::service::{Identity, Middleware, PipelineFactory, Service, ServiceFactory};
 
-use super::app_service::{AppFactory, AppService};
+use super::app_service::{AppFactory, AppRouter};
 use super::config::ServiceConfig;
 use super::request::WebRequest;
 use super::resource::Resource;
@@ -18,9 +16,8 @@ use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory
 use super::stack::WebStack;
 use super::{DefaultError, ErrorRenderer, error::AppInitError};
 
-type HttpNewService<Err: ErrorRenderer> =
-    BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, SharedCfg, ()>;
-type FnStateFactory = Box<dyn Fn(Extensions) -> BoxFuture<'static, Result<Extensions, ()>>>;
+type HttpServiceFactory<Err: ErrorRenderer> =
+    PipelineFactory<(), WebRequest<Err>, WebResponse, Err::Container, SharedCfg, ()>;
 
 /// Application builder - structure that follows the builder pattern
 /// for building application instances.
@@ -30,10 +27,8 @@ pub struct App<M, F, Err: ErrorRenderer = DefaultError> {
     middleware: M,
     filter: ServiceChainFactory<F, (), WebRequest<Err>>,
     services: Vec<Box<dyn AppServiceFactory<Err>>>,
-    default: Option<Rc<HttpNewService<Err>>>,
+    default: Option<HttpServiceFactory<Err>>,
     external: Vec<ResourceDef>,
-    extensions: Extensions,
-    state_factories: Vec<FnStateFactory>,
     error_renderer: Err,
     case_insensitive: bool,
 }
@@ -51,11 +46,9 @@ impl App<Identity, Filter<DefaultError>, DefaultError> {
         App {
             middleware: Identity,
             filter: factory(Filter::new()),
-            state_factories: Vec::new(),
             services: Vec::new(),
             default: None,
             external: Vec::new(),
-            extensions: Extensions::new(),
             error_renderer: DefaultError,
             case_insensitive: false,
         }
@@ -69,20 +62,18 @@ impl<Err: ErrorRenderer> App<Identity, Filter<Err>, Err> {
         App {
             middleware: Identity,
             filter: factory(Filter::new()),
-            state_factories: Vec::new(),
             services: Vec::new(),
             default: None,
             external: Vec::new(),
-            extensions: Extensions::new(),
             error_renderer: err,
             case_insensitive: false,
         }
     }
 }
 
-impl<M, T, Err> App<M, T, Err>
+impl<M, F, Err> App<M, F, Err>
 where
-    T: ServiceFactory<
+    F: ServiceFactory<
             WebRequest<Err>,
             Res = WebRequest<Err>,
             Error = Err::Container,
@@ -91,81 +82,6 @@ where
         >,
     Err: ErrorRenderer,
 {
-    #[must_use]
-    /// Set application level arbitrary state item.
-    ///
-    /// Application state stored with `App::state()` method is available
-    /// via `HttpRequest::app_state()` method at runtime.
-    ///
-    /// `State<T>` extractor could be used to access stored state `T`.
-    ///
-    /// **Note**: http server accepts an application factory rather than
-    /// an application instance. Http server constructs an application
-    /// instance for each thread, thus application state must be constructed
-    /// multiple times. If you want to share state between different
-    /// threads, a shared object should be used, e.g. `Arc`.
-    ///
-    /// ```rust
-    /// use std::cell::Cell;
-    /// use ntex::web::{self, App, HttpResponse};
-    ///
-    /// struct MyState {
-    ///     counter: Cell<usize>,
-    /// }
-    ///
-    /// async fn index(st: web::types::State<MyState>) -> HttpResponse {
-    ///     st.counter.set(st.counter.get() + 1);
-    ///     HttpResponse::Ok().into()
-    /// }
-    ///
-    /// let app = App::new()
-    ///     .state(MyState{ counter: Cell::new(0) })
-    ///     .service(
-    ///         web::resource("/index.html").route(web::get().to(index))
-    ///     );
-    /// ```
-    pub fn state<U: 'static>(mut self, state: U) -> Self {
-        self.extensions.insert(state);
-        self
-    }
-
-    #[must_use]
-    /// Set application state factory.
-    ///
-    /// This function is similar to `.state()` but it accepts state factory.
-    /// State object get constructed asynchronously during application initialization.
-    pub fn state_factory<F, D, E>(mut self, state: F) -> Self
-    where
-        F: AsyncFnOnce() -> Result<D, E> + 'static,
-        D: 'static,
-        E: fmt::Debug + 'static,
-    {
-        let state = Cell::new(Some(state));
-
-        self.state_factories.push(Box::new(move |mut ext| {
-            let mut state = state.take();
-
-            Box::pin(async move {
-                if let Some(state) = state.take() {
-                    match state().await {
-                        Err(_) => {
-                            log::error!("Cannot construct state instance");
-                            Err(())
-                        }
-                        Ok(st) => {
-                            ext.insert(st);
-                            Ok(ext)
-                        }
-                    }
-                } else {
-                    log::error!("Cannot construct state instance");
-                    Err(())
-                }
-            })
-        }));
-        self
-    }
-
     #[must_use]
     /// Run external configuration as part of the application building
     /// process.
@@ -192,15 +108,11 @@ where
     ///         .route("/index.html", web::get().to(async || { HttpResponse::Ok() }));
     /// }
     /// ```
-    pub fn configure<F>(mut self, f: F) -> Self
-    where
-        F: FnOnce(&mut ServiceConfig<Err>),
-    {
+    pub fn configure(mut self, f: impl FnOnce(&mut ServiceConfig<Err>)) -> Self {
         let mut cfg = ServiceConfig::new();
         f(&mut cfg);
         self.services.extend(cfg.services);
         self.external.extend(cfg.external);
-        self.extensions.extend(cfg.state);
         self
     }
 
@@ -242,9 +154,9 @@ where
     /// * `Resource` is an entry in resource table which corresponds to requested URL.
     /// * `Scope` is a set of resources with common root path.
     /// * `StaticFiles` is a service for static files support
-    pub fn service<F>(mut self, factory: F) -> Self
+    pub fn service<S>(mut self, factory: S) -> Self
     where
-        F: WebServiceFactory<Err> + 'static,
+        S: WebServiceFactory<Err> + 'static,
     {
         self.services
             .push(Box::new(ServiceFactoryWrapper::new(factory)));
@@ -286,9 +198,8 @@ where
     ///         );
     /// }
     /// ```
-    pub fn default_service<F, U>(mut self, f: F) -> Self
+    pub fn default_service<U>(mut self, f: impl IntoServiceFactory<U, (), WebRequest<Err>>) -> Self
     where
-        F: IntoServiceFactory<U, (), WebRequest<Err>>,
         U: ServiceFactory<
                 WebRequest<Err>,
                 Res = WebResponse,
@@ -298,9 +209,9 @@ where
         U::InitError: fmt::Debug,
     {
         // create and configure default resource
-        self.default = Some(Rc::new(boxed::factory(factory(f).map_init_err(|e| {
+        self.default = Some(PipelineFactory::new(f.into_factory().map_init_err(|e| {
             log::error!("Cannot construct default service: {e:?}");
-        }))));
+        })));
 
         self
     }
@@ -328,11 +239,7 @@ where
     ///         .external_resource("youtube", "https://youtube.com/watch/{video_id}");
     /// }
     /// ```
-    pub fn external_resource<N, U>(mut self, name: N, url: U) -> Self
-    where
-        N: AsRef<str>,
-        U: AsRef<str>,
-    {
+    pub fn external_resource(mut self, name: impl AsRef<str>, url: impl AsRef<str>) -> Self {
         let mut rdef = ResourceDef::new(url.as_ref());
         *rdef.name_mut() = name.as_ref().to_string();
         self.external.push(rdef);
@@ -392,11 +299,9 @@ where
                 .filter
                 .and_then(filter.into_factory().map_init_err(|_| ())),
             middleware: self.middleware,
-            state_factories: self.state_factories,
             services: self.services,
             default: self.default,
             external: self.external,
-            extensions: self.extensions,
             error_renderer: self.error_renderer,
             case_insensitive: self.case_insensitive,
         }
@@ -430,15 +335,13 @@ where
     ///         .route("/index.html", web::get().to(index));
     /// }
     /// ```
-    pub fn middleware<U>(self, mw: U) -> App<WebStack<M, U, Err>, T, Err> {
+    pub fn middleware<U>(self, mw: U) -> App<WebStack<M, U, Err>, F, Err> {
         App {
             middleware: WebStack::new(self.middleware, mw),
             filter: self.filter,
-            state_factories: self.state_factories,
             services: self.services,
             default: self.default,
             external: self.external,
-            extensions: self.extensions,
             error_renderer: self.error_renderer,
             case_insensitive: self.case_insensitive,
         }
@@ -456,7 +359,7 @@ where
 
 impl<M, F, Err> App<M, F, Err>
 where
-    M: Middleware<AppService<F::Service, Err>, SharedCfg> + 'static,
+    M: Middleware<AppRouter<F::Service, Err>, SharedCfg> + 'static,
     M::Service: Service<Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
             WebRequest<Err>,
@@ -500,7 +403,7 @@ where
 
 impl<M, F, Err> IntoServiceFactory<AppFactory<M, F, Err>, (), Request> for App<M, F, Err>
 where
-    M: Middleware<AppService<F::Service, Err>, SharedCfg> + 'static,
+    M: Middleware<AppRouter<F::Service, Err>, SharedCfg> + 'static,
     M::Service: Service<Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
             WebRequest<Err>,
@@ -512,16 +415,14 @@ where
     Err: ErrorRenderer,
 {
     fn into_factory(self) -> AppFactory<M, F, Err> {
-        AppFactory {
-            filter: self.filter,
-            middleware: Rc::new(self.middleware),
-            state_factories: Rc::new(self.state_factories),
-            services: Rc::new(RefCell::new(self.services)),
-            external: RefCell::new(self.external),
-            default: self.default,
-            extensions: RefCell::new(Some(self.extensions)),
-            case_insensitive: self.case_insensitive,
-        }
+        AppFactory::new(
+            self.middleware,
+            self.filter,
+            self.services,
+            self.default,
+            self.external,
+            self.case_insensitive,
+        )
     }
 }
 
@@ -560,6 +461,8 @@ impl<Err: ErrorRenderer> Service for Filter<Err> {
 
 #[cfg(test)]
 mod tests {
+    use std::{cell::Cell, rc::Rc};
+
     use super::*;
     use crate::http::{Method, StatusCode, header, header::HeaderValue};
     use crate::web::test::{TestRequest, call_service, init_service, read_body};
@@ -614,55 +517,8 @@ mod tests {
     }
 
     #[crate::rt_test]
-    async fn test_state_factory() {
-        let srv = init_service(
-            App::new()
-                .state_factory(async || Ok::<_, ()>(10usize))
-                .service(
-                    web::resource("/").to(async |_: web::types::State<usize>| HttpResponse::Ok()),
-                ),
-        )
-        .await;
-        let req = TestRequest::default().to_request();
-        let resp = srv.call(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let srv = init_service(
-            App::new()
-                .state_factory(async || Ok::<_, ()>(10u32))
-                .service(
-                    web::resource("/").to(async |_: web::types::State<usize>| HttpResponse::Ok()),
-                ),
-        )
-        .await;
-        let req = TestRequest::default().to_request();
-        let res = srv.call(req).await.unwrap();
-        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    }
-
-    #[crate::rt_test]
-    async fn test_extension() {
-        let srv = init_service(
-            App::new()
-                .state(10usize)
-                .filter(async move |req: WebRequest<_>| {
-                    assert_eq!(*req.app_state::<usize>().unwrap(), 10);
-                    Ok(req)
-                })
-                .service(web::resource("/").to(async move |req: HttpRequest| {
-                    assert_eq!(*req.app_state::<usize>().unwrap(), 10);
-                    HttpResponse::Ok()
-                })),
-        )
-        .await;
-        let req = TestRequest::default().to_request();
-        let resp = srv.call(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-    }
-
-    #[crate::rt_test]
     async fn test_filter() {
-        let filter = Rc::new(std::cell::Cell::new(false));
+        let filter = Rc::new(Cell::new(false));
         let filter2 = filter.clone();
         let srv = init_service(
             App::new()

@@ -1,7 +1,7 @@
-use std::{cell::UnsafeCell, net::SocketAddr, rc::Rc};
+use std::{any::Any, any::TypeId, cell::UnsafeCell, net::SocketAddr, rc::Rc};
 
 use crate::service::cfg::{CfgContext, Configuration};
-use crate::{router::ResourceDef, util::ByteString, util::Extensions};
+use crate::{router::ResourceDef, util::ByteString, util::HashMap};
 
 use super::httprequest::{HttpRequest, HttpRequestInner};
 use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
@@ -15,6 +15,7 @@ pub struct WebAppConfig {
     host: String,
     addr: SocketAddr,
     config: CfgContext,
+    extensions: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     pub(super) pool_size: usize,
 }
 
@@ -58,6 +59,7 @@ impl WebAppConfig {
             name: name.into(),
             pool_size: 128,
             config: CfgContext::default(),
+            extensions: HashMap::default(),
         }
     }
 
@@ -85,6 +87,16 @@ impl WebAppConfig {
     /// Returns the socket address of the local half of this TCP connection
     pub fn local_addr(&self) -> SocketAddr {
         self.addr
+    }
+
+    /// Set application level arbitrary state item.
+    ///
+    /// Application state is available
+    /// via `HttpRequest::app_state()` method at runtime.
+    pub fn state<T: 'static>(&self) -> Option<&T> {
+        self.extensions
+            .get(&TypeId::of::<T>())
+            .and_then(|boxed| boxed.downcast_ref())
     }
 
     #[must_use]
@@ -119,14 +131,18 @@ impl WebAppConfig {
         self
     }
 
-    /// Get message from the pool.
-    pub(crate) fn get_request(&self) -> Option<HttpRequest> {
-        CACHE.with(|cache| cache.with(self.config.id(), |cache| cache.pop().map(HttpRequest)))
+    #[must_use]
+    /// Set application level arbitrary state item.
+    pub fn set_state<T: Sync + Send + 'static>(mut self, val: T) -> Self {
+        self.extensions
+            .insert(TypeId::of::<T>(), Box::new(val))
+            .and_then(|item| item.downcast::<T>().map(|boxed| *boxed).ok());
+        self
     }
 
     /// Get message from the pool.
-    pub(crate) fn clear_requests(&self) {
-        CACHE.with(|cache| cache.with(self.config.id(), Vec::clear));
+    pub(crate) fn get_request(&self) -> Option<HttpRequest> {
+        CACHE.with(|cache| cache.with(self.config.id(), |cache| cache.pop().map(HttpRequest)))
     }
 }
 
@@ -154,7 +170,6 @@ pub(crate) fn put_request(id: usize, pool_size: usize, req: &mut Rc<HttpRequestI
 #[debug("ServiceConfig")]
 pub struct ServiceConfig<Err = DefaultError> {
     pub(super) services: Vec<Box<dyn AppServiceFactory<Err>>>,
-    pub(super) state: Extensions,
     pub(super) external: Vec<ResourceDef>,
 }
 
@@ -162,17 +177,8 @@ impl<Err: ErrorRenderer> ServiceConfig<Err> {
     pub fn new() -> Self {
         Self {
             services: Vec::new(),
-            state: Extensions::new(),
             external: Vec::new(),
         }
-    }
-
-    /// Set application state.
-    ///
-    /// This is same as `App::state()` method.
-    pub fn state<S: 'static>(&mut self, st: S) -> &mut Self {
-        self.state.insert(st);
-        self
     }
 
     /// Configure route for a specific path.
@@ -269,21 +275,6 @@ mod tests {
         assert_eq!(cfg.host(), "www.example.org");
         assert_eq!(cfg.local_addr(), "127.0.0.1:8080".parse().unwrap());
         assert_eq!(cfg.pool_size, 256);
-    }
-
-    #[crate::rt_test]
-    async fn test_configure_state() {
-        let cfg = |cfg: &mut ServiceConfig<_>| {
-            cfg.state(10usize);
-        };
-
-        let srv = init_service(App::new().configure(cfg).service(
-            web::resource("/").to(async |_: web::types::State<usize>| HttpResponse::Ok()),
-        ))
-        .await;
-        let req = TestRequest::default().to_request();
-        let resp = srv.call(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[cfg(feature = "url")]

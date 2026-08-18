@@ -121,6 +121,11 @@ pub use self::server::HttpServer;
 pub use self::service::WebServiceFactory;
 pub use self::util::*;
 
+pub(crate) type HttpHandler<Err: ErrorRenderer> =
+    crate::Pipeline<WebRequest<Err>, WebResponse, Err::Container>;
+pub(crate) type HttpService<Err: ErrorRenderer> =
+    crate::PipelineFactory<(), WebRequest<Err>, WebResponse, Err::Container, crate::SharedCfg, ()>;
+
 pub mod dev {
     //! The `ntex::web` prelude for library developers
     //!

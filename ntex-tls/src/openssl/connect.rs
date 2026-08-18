@@ -132,6 +132,7 @@ mod tests {
         let _: SslConnector<Connector<&'static str>> = SslConnector::new(ssl.build());
         let ssl = OpensslConnector::builder(SslMethod::tls()).unwrap();
         let factory = SslConnector::new(ssl.build()).clone();
+        assert!(format!("{factory:?}").contains("SslConnector"));
 
         let srv = factory.pipeline(&SharedCfg::default()).await.unwrap();
         // always ready
@@ -140,6 +141,5 @@ mod tests {
             .call(Connect::new("").set_addr(Some(server.addr())))
             .await;
         assert!(result.is_err());
-        assert!(format!("{srv:?}").contains("SslConnector"));
     }
 }
