@@ -83,7 +83,7 @@ where
     /// Provide http/1 control service.
     pub fn h1_control<Ctl>(self, ctl: impl IntoService<Ctl, Hst>) -> HttpService<Hst, F, B, Err>
     where
-        Hst: State<Ctl::Req>,
+        Hst: State<Ctl::Req> + Default,
         Ctl: Service<Hst, Req = h1::Control<F, Err>, Res = h1::ControlAck<F>> + 'static,
         Ctl::Error: Error + 'static,
     {
@@ -100,7 +100,7 @@ where
     /// Provide http/1 control service.
     pub fn h2_control<Ctl>(self, ctl: impl IntoService<Ctl, Hst>) -> HttpService<Hst, F, B, Err>
     where
-        Hst: State<Ctl::Req>,
+        Hst: State<Ctl::Req> + Default,
         Ctl: Service<Hst, Req = h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
         Ctl::Error: Error + 'static,
     {

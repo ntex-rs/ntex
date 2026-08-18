@@ -1,14 +1,17 @@
 //! General purpose tcp server
-use ntex_util::services::Counter;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+use ntex_io::Io;
+use ntex_service::State;
+use ntex_util::services::Counter;
 
 mod accept;
 mod builder;
 mod config;
 mod factory;
-mod onaccept;
 mod service;
 mod socket;
+mod state;
 mod test;
 
 pub use self::accept::{AcceptLoop, AcceptNotify, AcceptorCommand};
@@ -48,11 +51,13 @@ pub fn build() -> ServerBuilder {
     ServerBuilder::default()
 }
 
-/// Ssl error combinded with service error.
-#[derive(Debug)]
-pub enum SslError<E> {
-    Ssl(std::io::Error),
-    Service(E),
+/// Start server with state building process
+pub fn build_with_state<F, St>(state: F) -> ServerBuilder<St>
+where
+    F: AsyncFn() -> Result<St, &'static str> + Send + Clone + 'static,
+    St: State<Io> + Clone + 'static,
+{
+    ServerBuilder::new(state)
 }
 
 static MAX_CONNS: AtomicUsize = AtomicUsize::new(25600);

@@ -1,4 +1,4 @@
-use std::{fmt, io, marker::PhantomData, net, sync::Arc};
+use std::{fmt, io, marker::PhantomData, net};
 
 use ntex_io::Io;
 use ntex_rt::System;
@@ -11,8 +11,8 @@ use crate::{Server, WorkerPool};
 use super::accept::AcceptLoop;
 use super::config::ServiceConfig;
 use super::factory::{self, FactoryServiceType};
-use super::onaccept::{OnAccept, OnAcceptWrapper, OnWorkerStart, OnWorkerStartWrapper};
-use super::{Connection, ServerStatus, Stream, StreamServer, Token, socket::Listener};
+use super::state::{StateFactory, state_factory};
+use super::{Connection, ServerStatus, StreamServer, Token, socket::Listener};
 
 /// Streaming service builder
 ///
@@ -22,10 +22,9 @@ pub struct ServerBuilder<St = ()> {
     name: String,
     token: Token,
     backlog: i32,
-    services: Vec<FactoryServiceType>,
+    state: Box<dyn StateFactory<St> + Send>,
+    services: Vec<FactoryServiceType<St>>,
     sockets: Vec<(Token, String, Listener)>,
-    on_worker_start: Vec<Box<dyn OnWorkerStart + Send>>,
-    on_accept: Option<Box<dyn OnAccept + Send>>,
     accept: AcceptLoop,
     pool: WorkerPool,
     st: PhantomData<St>,
@@ -33,27 +32,23 @@ pub struct ServerBuilder<St = ()> {
 
 impl Default for ServerBuilder {
     fn default() -> Self {
-        Self::new()
+        Self::new(async || Ok(()))
     }
 }
 
-impl<St> fmt::Debug for ServerBuilder<St> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ServerBuilder")
-            .field("name", &self.name)
-            .field("token", &self.token)
-            .field("backlog", &self.backlog)
-            .field("sockets", &self.sockets)
-            .field("accept", &self.accept)
-            .field("worker-pool", &self.pool)
-            .finish()
-    }
-}
-
-impl<St: State<Io> + 'static> ServerBuilder<St> {
+impl<St> ServerBuilder<St>
+where
+    St: State<Io> + Clone + 'static,
+{
     #[must_use]
-    /// Create new Server builder instance
-    pub fn new() -> ServerBuilder<St> {
+    /// Create new Server builder instance.
+    ///
+    /// Provided function get called during worker runtime configuration stage
+    /// and must construct server state.
+    pub fn new<F>(state: F) -> ServerBuilder<St>
+    where
+        F: AsyncFn() -> Result<St, &'static str> + Send + Clone + 'static,
+    {
         let sys = System::current();
         let mut accept = AcceptLoop::default();
         accept.name(sys.name());
@@ -65,14 +60,22 @@ impl<St: State<Io> + 'static> ServerBuilder<St> {
             accept,
             name: sys.name().to_string(),
             token: Token(0),
+            state: state_factory(state),
             services: Vec::new(),
             sockets: Vec::new(),
-            on_accept: None,
-            on_worker_start: Vec::new(),
             backlog: 2048,
             pool: WorkerPool::default().name(sys.name()),
             st: PhantomData,
         }
+    }
+
+    #[must_use]
+    /// Create new Server builder instance with default state factory.
+    pub fn with_default() -> ServerBuilder<St>
+    where
+        St: Default,
+    {
+        Self::new(async || Ok(St::default()))
     }
 
     #[must_use]
@@ -202,7 +205,7 @@ impl<St: State<Io> + 'static> ServerBuilder<St> {
     /// different module or even library.
     pub async fn configure<F>(mut self, f: F) -> io::Result<Self>
     where
-        F: AsyncFn(ServiceConfig) -> io::Result<()>,
+        F: AsyncFn(ServiceConfig<St>) -> io::Result<()>,
     {
         let cfg = ServiceConfig::new(self.token, self.backlog);
 
@@ -214,32 +217,6 @@ impl<St: State<Io> + 'static> ServerBuilder<St> {
         self.services.push(factory);
 
         Ok(self)
-    }
-
-    #[must_use]
-    /// Register async service configuration function.
-    ///
-    /// This function get called during worker runtime configuration stage.
-    /// It get executed in the worker thread.
-    pub fn on_worker_start<F>(mut self, f: F) -> Self
-    where
-        F: AsyncFn() -> Result<(), &'static str> + Send + Clone + 'static,
-    {
-        self.on_worker_start.push(OnWorkerStartWrapper::create(f));
-        self
-    }
-
-    #[must_use]
-    /// Register on-accept callback function.
-    ///
-    /// This function get called with accepted stream.
-    pub fn on_accept<F, E>(mut self, f: F) -> Self
-    where
-        F: AsyncFn(Arc<str>, Stream) -> Result<Stream, E> + Send + Clone + 'static,
-        E: fmt::Display + 'static,
-    {
-        self.on_accept = Some(OnAcceptWrapper::create(f));
-        self
     }
 
     #[allow(clippy::needless_pass_by_value)]
@@ -362,12 +339,7 @@ impl<St: State<Io> + 'static> ServerBuilder<St> {
             !self.sockets.is_empty(),
             "Server should have at least one bound socket"
         );
-        let srv = StreamServer::new(
-            self.accept.notify(),
-            self.services,
-            self.on_worker_start,
-            self.on_accept,
-        );
+        let srv = StreamServer::new(self.accept.notify(), self.state, self.services);
         let svc = self.pool.run(srv);
 
         let sockets = self
@@ -381,6 +353,19 @@ impl<St: State<Io> + 'static> ServerBuilder<St> {
         self.accept.start(sockets, svc.clone());
 
         svc
+    }
+}
+
+impl<St> fmt::Debug for ServerBuilder<St> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ServerBuilder")
+            .field("name", &self.name)
+            .field("token", &self.token)
+            .field("backlog", &self.backlog)
+            .field("sockets", &self.sockets)
+            .field("accept", &self.accept)
+            .field("worker-pool", &self.pool)
+            .finish()
     }
 }
 

@@ -2,13 +2,24 @@ use std::{convert::Infallible, fmt, marker::PhantomData};
 
 use crate::{Ctx, IntoService, IntoServiceFactory, Service, ServiceFactory};
 
+/// `Service` implementation for an `AsyncFn(Req) -> Result<Res, Err>` fn.
 #[inline]
-/// Create `ServiceFactory` for function
 pub fn fn_service<F, Req, Res, Err>(f: F) -> FnService<F, Req, Res, Err>
 where
     F: AsyncFn(Req) -> Result<Res, Err>,
 {
     FnService { f, _t: PhantomData }
+}
+
+/// `Service` implementation for an `AsyncFn(Req, &St) -> Result<Res, Err>` function.
+///
+/// This service accesses the pipeline state via the second `&St` parameter.
+#[inline]
+pub fn fn_service_st<F, St, Req, Res, Err>(f: F) -> FnServiceSt<F, St, Req, Res, Err>
+where
+    F: AsyncFn(Req, &St) -> Result<Res, Err>,
+{
+    FnServiceSt { f, _t: PhantomData }
 }
 
 #[inline]
@@ -94,6 +105,7 @@ where
     FnServiceConfig { f, _t: PhantomData }
 }
 
+/// `Service` implementation for an `AsyncFn(Req) -> Result<Res, Err>` fn.
 pub struct FnService<F, Req, Res, Err> {
     f: F,
     _t: PhantomData<(Req, Res, Err)>,
@@ -154,6 +166,61 @@ where
     #[inline]
     fn into_service(self) -> FnService<F, Req, Res, Err> {
         FnService {
+            f: self,
+            _t: PhantomData,
+        }
+    }
+}
+
+/// `Service` implementation for an `AsyncFn(Req, &St) -> Result<Res, Err>` function.
+///
+/// This service accesses the pipeline state via the second `&St` parameter.
+pub struct FnServiceSt<F, St, Req, Res, Err> {
+    f: F,
+    _t: PhantomData<(St, Req, Res, Err)>,
+}
+
+impl<F, St, Req, Res, Err> Clone for FnServiceSt<F, St, Req, Res, Err>
+where
+    F: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            f: self.f.clone(),
+            _t: PhantomData,
+        }
+    }
+}
+
+impl<F, St, Req, Res, Err> fmt::Debug for FnServiceSt<F, St, Req, Res, Err> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FnServiceSt")
+            .field("f", &std::any::type_name::<F>())
+            .finish()
+    }
+}
+
+impl<F, St, Req, Res, Err> Service<St> for FnServiceSt<F, St, Req, Res, Err>
+where
+    F: AsyncFn(Req, &St) -> Result<Res, Err>,
+{
+    type Req = Req;
+    type Res = Res;
+    type Error = Err;
+
+    #[inline]
+    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Res, Err> {
+        (self.f)(req, ctx.st()).await
+    }
+}
+
+impl<F, St, Req, Res, Err> IntoService<FnServiceSt<F, St, Req, Res, Err>, St> for F
+where
+    F: AsyncFn(Req, &St) -> Result<Res, Err>,
+{
+    #[inline]
+    fn into_service(self) -> FnServiceSt<F, St, Req, Res, Err> {
+        FnServiceSt {
             f: self,
             _t: PhantomData,
         }

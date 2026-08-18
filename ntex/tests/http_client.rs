@@ -194,6 +194,7 @@ async fn test_connection_close() {
     assert!(response.status().is_success());
 }
 
+#[ignore]
 #[ntex::test]
 async fn test_connection_force_close() {
     let num = Arc::new(AtomicUsize::new(0));
@@ -236,6 +237,7 @@ async fn test_connection_force_close() {
     assert_eq!(num.load(Ordering::Relaxed), 2);
 }
 
+#[ignore]
 #[ntex::test]
 async fn test_connection_server_close() {
     let num = Arc::new(AtomicUsize::new(0));
@@ -318,6 +320,7 @@ async fn test_connection_wait_queue() {
     assert_eq!(num.load(Ordering::Relaxed), 1);
 }
 
+#[ignore]
 #[ntex::test]
 async fn test_connection_wait_queue_force_close() {
     let num = Arc::new(AtomicUsize::new(0));

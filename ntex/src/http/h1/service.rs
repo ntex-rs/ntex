@@ -60,7 +60,7 @@ where
     /// Provide http/1 control service.
     pub fn control<Ctl>(self, ctl: impl IntoService<Ctl, St>) -> H1Service<St, F, B, Err>
     where
-        St: State<Control<F, Err>>,
+        St: State<Control<F, Err>> + Default,
         Ctl: Service<St, Req = Control<F, Err>, Res = ControlAck<F>> + 'static,
         Ctl::Error: Error + 'static,
     {

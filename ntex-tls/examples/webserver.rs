@@ -34,7 +34,7 @@ async fn main() -> io::Result<()> {
     let acceptor = builder.build();
 
     // start server
-    server::ServerBuilder::new()
+    server::ServerBuilder::default()
         .bind(
             "basic",
             "127.0.0.1:8443",

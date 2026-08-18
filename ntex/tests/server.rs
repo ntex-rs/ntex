@@ -1,13 +1,10 @@
 #[cfg(unix)]
 use std::io::{Read, Write};
-#[cfg(any(feature = "tokio", feature = "neon"))]
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
-#[cfg(any(feature = "tokio", feature = "neon"))]
-use std::{io, sync::Arc};
-use std::{net, sync::mpsc, thread, time};
+use std::{net, sync::Arc, sync::mpsc, thread, time};
 
-use ntex::server::{TestServer, build};
-use ntex::service::{cfg::SharedCfg, fn_service};
+use ntex::server::{TestServer, build, build_with_state};
+use ntex::service::{State, cfg::SharedCfg, fn_service};
 #[cfg(unix)]
 use ntex::{codec::BytesCodec, io::Io, util::Bytes};
 
@@ -136,8 +133,9 @@ async fn test_run() {
 }
 
 #[test]
-#[cfg(feature = "tokio")]
 fn test_on_worker_start() {
+    use std::io;
+
     let addr1 = TestServer::unused_addr();
     let addr2 = TestServer::unused_addr();
     let addr3 = TestServer::unused_addr();
@@ -147,7 +145,6 @@ fn test_on_worker_start() {
 
     let h = thread::spawn(move || {
         let num = num2.clone();
-        let num2 = num2.clone();
         let sys = ntex::rt::System::new("test", ntex::rt::DefaultRuntime);
         let _ = sys.run(move || {
             let num = num.clone();
@@ -174,10 +171,6 @@ fn test_on_worker_start() {
                     })
                     .await
                     .unwrap()
-                    .on_worker_start(async move || {
-                        let _ = num2.fetch_add(1, Relaxed);
-                        Ok::<_, &'static str>(())
-                    })
                     .workers(1)
                     .run();
                 let _ = tx.send((srv, ntex::rt::System::current()));
@@ -191,14 +184,15 @@ fn test_on_worker_start() {
     assert!(net::TcpStream::connect(addr1).is_ok());
     assert!(net::TcpStream::connect(addr2).is_ok());
     assert!(net::TcpStream::connect(addr3).is_ok());
-    assert_eq!(num.load(Relaxed), 2);
+    assert_eq!(num.load(Relaxed), 1);
     sys.stop();
     let _ = h.join();
 }
 
 #[test]
-#[cfg(feature = "tokio")]
-fn test_configure_async() {
+fn test_configure() {
+    use std::io;
+
     let addr1 = TestServer::unused_addr();
     let addr2 = TestServer::unused_addr();
     let addr3 = TestServer::unused_addr();
@@ -208,7 +202,6 @@ fn test_configure_async() {
 
     let h = thread::spawn(move || {
         let num = num2.clone();
-        let num2 = num2.clone();
         let sys = ntex::rt::System::new("test", ntex::rt::DefaultRuntime);
         let _ = sys.run(move || {
             ntex_rt::spawn(async move {
@@ -234,10 +227,6 @@ fn test_configure_async() {
                     })
                     .await
                     .unwrap()
-                    .on_worker_start(async move || {
-                        let _ = num2.fetch_add(1, Relaxed);
-                        Ok::<_, &'static str>(())
-                    })
                     .workers(1)
                     .run();
                 let _ = tx.send((srv.clone(), ntex::rt::System::current()));
@@ -253,7 +242,7 @@ fn test_configure_async() {
     assert!(net::TcpStream::connect(addr1).is_ok());
     assert!(net::TcpStream::connect(addr2).is_ok());
     assert!(net::TcpStream::connect(addr3).is_ok());
-    assert_eq!(num.load(Relaxed), 2);
+    assert_eq!(num.load(Relaxed), 1);
     sys.stop();
     let _ = h.join();
 }
@@ -312,32 +301,36 @@ fn test_panic_in_worker() {
 }
 
 #[test]
-#[cfg(feature = "neon")]
-fn test_on_accept() {
+fn test_server_state() {
     let addr = TestServer::unused_addr();
     let (tx, rx) = mpsc::channel();
     let num = Arc::new(AtomicUsize::new(0));
     let num2 = num.clone();
 
+    #[derive(Clone)]
+    struct St(Arc<AtomicUsize>);
+
+    impl<Io> State<Io> for St {
+        fn on_req(&self, _: &Io) -> Option<St> {
+            let _ = self.0.fetch_add(1, Relaxed);
+            None
+        }
+    }
+
     let h = thread::spawn(move || {
         let num = num2.clone();
         let sys = ntex::rt::System::new("test", ntex::rt::DefaultRuntime);
         sys.run(move || {
-            let srv = build()
+            let srv = build_with_state(async move || Ok(St(num.clone())))
                 .disable_signals()
                 .bind("test", addr, SharedCfg::default(), async move || {
-                    async move |io: Io| {
+                    async move |io: Io, st: &St| {
+                        let _ = st.0.fetch_add(1, Relaxed);
                         let _ = io.send(Bytes::from_static(b"test"), &BytesCodec).await;
                         Ok::<_, ()>(())
                     }
                 })
                 .unwrap()
-                .on_accept(async move |name, io| {
-                    if name.as_ref() == "test" {
-                        let _ = num.fetch_add(1, Relaxed);
-                    }
-                    Ok::<_, io::Error>(io)
-                })
                 .workers(1)
                 .run();
             let _ = tx.send((srv, ntex::rt::System::current()));
@@ -350,7 +343,7 @@ fn test_on_accept() {
     assert!(net::TcpStream::connect(addr).is_ok());
     assert!(net::TcpStream::connect(addr).is_ok());
     thread::sleep(time::Duration::from_millis(250));
-    assert_eq!(num.load(Relaxed), 3);
+    assert_eq!(num.load(Relaxed), 6);
     sys.stop();
     let _ = h.join();
 }
