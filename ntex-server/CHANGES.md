@@ -2,6 +2,8 @@
 
 ## [4.0.0] - 2026-08-xx
 
+* Add app state management
+
 * Migrate to ntex-service 5
 
 ## [3.11.0] - 2026-08-09
