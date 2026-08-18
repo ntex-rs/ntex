@@ -21,7 +21,7 @@ async fn service(msg: ws::Frame) -> Result<Option<ws::Message>, io::Error> {
 async fn web_ws() {
     let _ = env_logger::try_init();
 
-    let srv = test::server(async || {
+    let srv = test::server(async |_| {
         App::new().service(
             web::resource("/").route(web::to(async move |req: HttpRequest| {
                 ws::start(
@@ -70,7 +70,7 @@ async fn web_ws() {
 
 #[ntex::test]
 async fn web_no_ws() {
-    let srv = test::server(async || {
+    let srv = test::server(async |_| {
         App::new()
             .service(web::resource("/").route(web::to(async || HttpResponse::Ok())))
             .service(web::resource("/ws_error").route(web::to(async || {
@@ -99,7 +99,7 @@ async fn web_no_ws() {
 
 #[ntex::test]
 async fn web_ws_after_pooled_post_request() {
-    let srv = test::server(async || {
+    let srv = test::server(async |_| {
         App::new()
             .service(
                 web::resource("/").route(web::to(async move |req: HttpRequest| {
@@ -133,7 +133,7 @@ async fn web_ws_after_pooled_post_request() {
 
 #[ntex::test]
 async fn web_no_ws_2() {
-    let srv = test::server(async || {
+    let srv = test::server(async |_| {
         App::new().service(
             web::resource("/").route(web::to(async || HttpResponse::Ok().body("Hello world"))),
         )
@@ -156,7 +156,7 @@ async fn web_no_ws_2() {
 
 #[ntex::test]
 async fn web_ws_client() {
-    let srv = test::server(async || {
+    let srv = test::server(async |_| {
         App::new().service(
             web::resource("/").route(web::to(async move |req: HttpRequest| {
                 ws::start(
@@ -214,7 +214,7 @@ async fn web_ws_subprotocol() {
     use ntex::time::Seconds;
     use ntex::ws::WsClient;
 
-    let srv = test::server(async || {
+    let srv = test::server(async |_| {
         App::new().service(
             web::resource("/").route(web::to(async move |req: HttpRequest| {
                 // choose first supported protocol, convert to owned String
@@ -262,7 +262,7 @@ async fn web_ws_subprotocol_none() {
     use ntex::time::Seconds;
     use ntex::ws::WsClient;
 
-    let srv = test::server(async || {
+    let srv = test::server(async |_| {
         App::new().service(
             web::resource("/").route(web::to(async move |req: HttpRequest| {
                 // choose first supported protocol (none will match), convert to owned String
@@ -309,7 +309,7 @@ async fn web_ws_protocols_parsing() {
     use ntex::time::Seconds;
     use ntex::ws::WsClient;
 
-    let srv = test::server(async || {
+    let srv = test::server(async |_| {
         App::new().service(
             web::resource("/").route(web::to(async move |req: HttpRequest| {
                 // collect all requested protocols into owned Strings
@@ -362,7 +362,7 @@ async fn web_ws_protocols_parsing() {
 async fn web_ws_shutdown_propagation() {
     let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel::<()>();
 
-    let srv = test::server(async move || {
+    let srv = test::server(async move |_| {
         let shutdown_tx = shutdown_tx.clone();
         App::new().service(
             web::resource("/").route(web::to(async move |req: HttpRequest| {

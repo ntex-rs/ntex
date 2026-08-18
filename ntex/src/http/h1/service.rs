@@ -5,8 +5,8 @@ use crate::http::error::{DispatchError, ResponseError};
 use crate::http::{HttpPipeline, body::MessageBody, request::Request, response::Response};
 use crate::io::{Filter, Io, types};
 use crate::service::{
-    Ctx, FromState, IntoService, IntoServiceFactory, Pipeline, PipelineBinding, PipelineFactory,
-    ReadyCtx, Service, ServiceFactory, State, cfg::SharedCfg,
+    Ctx, IntoService, IntoServiceFactory, Pipeline, PipelineBinding, ReadyCtx, Service,
+    ServiceFactory, State, cfg::SharedCfg,
 };
 use crate::util::dyn_rc_err;
 
@@ -26,23 +26,20 @@ pub struct H1Service<Hst, F, B, Err> {
 
 impl<Hst, F, B, Err> H1Service<Hst, F, B, Err>
 where
+    Hst: 'static,
     F: Filter,
     B: MessageBody,
     Err: ResponseError + 'static,
 {
     /// Create new `HttpService` instance with config.
-    pub(crate) fn new<Sf, St>(
-        sf: impl IntoServiceFactory<Sf, St, Request>,
-    ) -> H1Service<Hst, F, B, Err>
+    pub(crate) fn new<Sf>(sf: impl IntoServiceFactory<Sf, (), Request>) -> H1Service<Hst, F, B, Err>
     where
-        Hst: 'static,
-        Sf: ServiceFactory<Request, St, Error = Err, InitCfg = SharedCfg> + 'static,
+        Sf: ServiceFactory<Request, Error = Err, InitCfg = SharedCfg> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Error,
-        St: State<Request> + FromState<Hst>,
     {
         H1Service {
-            sf: PipelineFactory::new(sf.into_factory().map(Into::into).map_init_err(dyn_rc_err)),
+            sf: HttpPipeline::chained(sf.into_factory().map(Into::into).map_init_err(dyn_rc_err)),
             ctl: Pipeline::new(DefaultControlService::new()),
             config: DispatcherConfig::default(),
             _t: marker::PhantomData,

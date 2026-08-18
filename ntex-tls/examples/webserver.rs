@@ -39,7 +39,7 @@ async fn main() -> io::Result<()> {
             "basic",
             "127.0.0.1:8443",
             SharedCfg::new("EXAMPLE").add(HttpServiceConfig::new().set_client_timeout(Seconds(1))),
-            async move || {
+            async move |_| {
                 http::openssl(
                     acceptor.clone(),
                     HttpService::new(async |req| {

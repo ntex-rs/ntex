@@ -21,7 +21,7 @@ async fn main() -> io::Result<()> {
     env_logger::init();
 
     ntex::server::build()
-        .bind("echo", "127.0.0.1:8080", SharedCfg::default(), async || {
+        .bind("echo", "127.0.0.1:8080", SharedCfg::default(), async |_| {
             HttpService::h2(handle_request)
         })?
         .run()

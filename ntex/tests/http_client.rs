@@ -38,7 +38,7 @@ const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
 
 #[ntex::test]
 async fn test_simple() {
-    let srv = test::server(async || {
+    let srv = test::server(async |_| {
         App::new().service(web::resource("/").route(web::to(async || HttpResponse::Ok().body(STR))))
     })
     .await;
@@ -61,7 +61,7 @@ async fn test_simple() {
 
 #[ntex::test]
 async fn test_json() {
-    let srv = test::server(async || {
+    let srv = test::server(async |_| {
         App::new().service(web::resource("/").route(web::to(
             async |_: web::types::Json<String>| HttpResponse::Ok(),
         )))
@@ -79,7 +79,7 @@ async fn test_json() {
 
 #[ntex::test]
 async fn test_form() {
-    let srv = test::server(async || {
+    let srv = test::server(async |_| {
         App::new().service(web::resource("/").route(web::to(
             async |_: web::types::Form<HashMap<String, String>>| HttpResponse::Ok(),
         )))
@@ -96,7 +96,7 @@ async fn test_form() {
 
 #[ntex::test]
 async fn test_timeout() {
-    let srv = test::server(async || {
+    let srv = test::server(async |_| {
         App::new().service(web::resource("/").route(web::to(async || {
             sleep(Millis(5000)).await;
             HttpResponse::Ok().body(STR)
@@ -119,7 +119,7 @@ async fn test_timeout() {
 
 #[ntex::test]
 async fn test_timeout_override() {
-    let srv = test::server(async || {
+    let srv = test::server(async |_| {
         App::new().service(web::resource("/").route(web::to(async || {
             sleep(Millis(2000)).await;
             HttpResponse::Ok().body(STR)
@@ -146,7 +146,7 @@ async fn test_connection_reuse() {
     let num = Arc::new(AtomicUsize::new(0));
     let num2 = num.clone();
 
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         let num2 = num2.clone();
         svc(async move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
@@ -180,7 +180,7 @@ async fn test_connection_reuse() {
 
 #[ntex::test]
 async fn test_connection_close() {
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         HttpService::new(async |_| Ok::<_, io::Error>(Response::Ok().body(STR)))
     })
     .await;
@@ -199,7 +199,7 @@ async fn test_connection_force_close() {
     let num = Arc::new(AtomicUsize::new(0));
     let num2 = num.clone();
 
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         let num2 = num2.clone();
         svc(async move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
@@ -241,7 +241,7 @@ async fn test_connection_server_close() {
     let num = Arc::new(AtomicUsize::new(0));
     let num2 = num.clone();
 
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         let num2 = num2.clone();
         svc(async move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
@@ -278,7 +278,7 @@ async fn test_connection_wait_queue() {
     let num = Arc::new(AtomicUsize::new(0));
     let num2 = num.clone();
 
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         let num2 = num2.clone();
         svc(async move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
@@ -323,7 +323,7 @@ async fn test_connection_wait_queue_force_close() {
     let num = Arc::new(AtomicUsize::new(0));
     let num2 = num.clone();
 
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         let num2 = num2.clone();
         svc(async move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
@@ -365,7 +365,7 @@ async fn test_connection_wait_queue_force_close() {
 
 #[ntex::test]
 async fn test_with_query_parameter() {
-    let srv = test::server(async || {
+    let srv = test::server(async |_| {
         App::new().service(web::resource("/").to(async move |req: HttpRequest| {
             if req.query_string().contains("qp") {
                 HttpResponse::Ok()
@@ -386,7 +386,7 @@ async fn test_with_query_parameter() {
 
 #[ntex::test]
 async fn test_no_decompress() {
-    let srv = test::server(async || {
+    let srv = test::server(async |_| {
         App::new()
             .middleware(Compress::default())
             .service(web::resource("/").route(web::to(async || {
@@ -437,7 +437,7 @@ async fn test_no_decompress() {
 
 #[ntex::test]
 async fn test_client_gzip_encoding() {
-    let srv = test::server(async || {
+    let srv = test::server(async |_| {
         App::new().service(web::resource("/").route(web::to(async || {
             let mut e = GzEncoder::new(Vec::new(), Compression::default());
             e.write_all(STR.as_ref()).unwrap();
@@ -461,7 +461,7 @@ async fn test_client_gzip_encoding() {
 
 #[ntex::test]
 async fn test_client_gzip_encoding_large() {
-    let srv = test::server(async || {
+    let srv = test::server(async |_| {
         App::new().service(web::resource("/").route(web::to(async || {
             let mut e = GzEncoder::new(Vec::new(), Compression::default());
             e.write_all(STR.repeat(10).as_ref()).unwrap();
@@ -498,7 +498,7 @@ async fn test_client_gzip_encoding_large_random() {
                     .set_state(web::types::PayloadConfig::default().limit(1_048_576)),
             ),
         ),
-        async || {
+        async |_| {
             App::new().service(web::resource("/").route(web::to(async move |data: Bytes| {
                 let mut e = GzEncoder::new(Vec::new(), Compression::default());
                 e.write_all(&data).unwrap();
@@ -522,7 +522,7 @@ async fn test_client_gzip_encoding_large_random() {
 
 #[ntex::test]
 async fn test_client_deflate_encoding() {
-    let srv = test::server(async || {
+    let srv = test::server(async |_| {
         App::new().service(web::resource("/").route(web::to(async move |data: Bytes| {
             let mut e = ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
             e.write_all(&data).unwrap();
@@ -552,7 +552,7 @@ async fn test_client_deflate_encoding_large_random() {
         .map(char::from)
         .collect::<String>();
 
-    let srv = test::server(async || {
+    let srv = test::server(async |_| {
         App::new().service(web::resource("/").route(web::to(async move |data: Bytes| {
             let mut e = ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
             e.write_all(&data).unwrap();
@@ -608,7 +608,7 @@ async fn test_client_cookie_handling() {
     let cookie1b = cookie1.clone();
     let cookie2b = cookie2.clone();
 
-    let srv = test::server(async move || {
+    let srv = test::server(async move |_| {
         let cookie1 = cookie1b.clone();
         let cookie2 = cookie2b.clone();
 
@@ -649,7 +649,7 @@ async fn test_client_cookie_handling() {
 
 #[ntex::test]
 async fn test_client_timeout() {
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         HttpService::new(async |_| {
             sleep(Seconds(10)).await;
             Ok::<_, io::Error>(Response::Ok().body(STR))
@@ -710,7 +710,7 @@ async fn client_read_until_eof() {
 
 #[ntex::test]
 async fn client_basic_auth() {
-    let srv = test::server(async || {
+    let srv = test::server(async |_| {
         App::new().route(
             "/",
             web::to(async move |req: HttpRequest| {
@@ -739,7 +739,7 @@ async fn client_basic_auth() {
 
 #[ntex::test]
 async fn client_bearer_auth() {
-    let srv = test::server(async || {
+    let srv = test::server(async |_| {
         App::new().route(
             "/",
             web::to(async move |req: HttpRequest| {
@@ -768,7 +768,7 @@ async fn client_bearer_auth() {
 
 #[ntex::test]
 async fn middleware() {
-    let srv = test::server(async || {
+    let srv = test::server(async |_| {
         App::new().service(web::resource("/").route(web::to(async || HttpResponse::Ok().body(STR))))
     })
     .await;
@@ -812,7 +812,7 @@ async fn middleware() {
 
 #[ntex::test]
 async fn test_h1_v2() {
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         HttpService::new(async |_| Ok::<_, io::Error>(Response::Ok().body(STR)))
     })
     .await;
@@ -839,7 +839,7 @@ async fn test_h1_v2() {
 /// Server receives the truncated Host header.
 #[ntex::test]
 async fn untruncated_host_header() {
-    let srv = test::server(async || {
+    let srv = test::server(async |_| {
         App::new().route(
             "/host",
             web::get().to(async move |req: HttpRequest| {
@@ -869,7 +869,7 @@ async fn untruncated_host_header() {
 #[ntex::test]
 async fn test_query_method() {
     use ntex::util::BytesMut;
-    let srv = test::server(async || {
+    let srv = test::server(async |_| {
         App::new().route(
             "/query",
             web::query().to(async move |mut payload: web::types::Payload| {

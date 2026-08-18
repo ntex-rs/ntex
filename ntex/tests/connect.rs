@@ -42,7 +42,7 @@ async fn test_openssl_string() {
             "test",
             tcp.take().unwrap(),
             SharedCfg::new("SRV"),
-            async || {
+            async |_| {
                 svc(openssl::SslAcceptor::new(ssl_acceptor())).and_then(async move |io: Io<_>| {
                     io.send(Bytes::from_static(b"test"), &BytesCodec)
                         .await

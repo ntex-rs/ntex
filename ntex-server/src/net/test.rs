@@ -83,7 +83,7 @@ where
 
             sys.run(move || {
                 let server = ServerBuilder::<St>::new(async || Ok(St::default()))
-                    .listen("test", tcp, config, async move || factory().await)?
+                    .listen("test", tcp, config, async move |_| factory().await)?
                     .workers(1)
                     .disable_signals()
                     .enable_affinity()

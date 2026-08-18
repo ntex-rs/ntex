@@ -1,7 +1,7 @@
-use std::{error::Error, marker, rc::Rc};
+use std::{error::Error, rc::Rc};
 
 use crate::io::{Filter, Io, types};
-use crate::service::{IntoService, IntoServiceFactory, Pipeline, PipelineFactory};
+use crate::service::{IntoService, IntoServiceFactory, Pipeline, StateMapping};
 use crate::util::{dyn_rc_err, join};
 use crate::{Ctx, ReadyCtx, Service, ServiceFactory, SharedCfg, State};
 
@@ -17,42 +17,65 @@ pub struct HttpService<Hst, F, B, Err> {
     h1_ctl: Pipeline<h1::Control<F, Err>, h1::ControlAck<F>, Rc<dyn Error>>,
     h2_ctl: Pipeline<h2::Control<H2Error>, h2::ControlAck, Rc<dyn Error>>,
     config: DispatcherConfig,
-    _t: marker::PhantomData<(Hst, F, B)>,
 }
 
-impl<F, B, Err> HttpService<(), F, B, Err>
+impl<Hst, F, B, Err> HttpService<Hst, F, B, Err>
 where
+    Hst: 'static,
     F: Filter,
     B: MessageBody,
     Err: ResponseError + 'static,
 {
     #[must_use]
     /// Create new `HttpService` instance.
-    pub fn new<Sf>(sf: impl IntoServiceFactory<Sf, (), Request>) -> HttpService<(), F, B, Err>
+    pub fn new<Sf>(sf: impl IntoServiceFactory<Sf, (), Request>) -> HttpService<Hst, F, B, Err>
     where
-        Sf: ServiceFactory<Request, (), Error = Err, InitCfg = SharedCfg> + 'static,
+        Sf: ServiceFactory<Request, Error = Err, InitCfg = SharedCfg> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Error,
     {
         HttpService {
-            sf: PipelineFactory::new(sf.into_factory().map(Into::into).map_init_err(dyn_rc_err)),
+            sf: HttpPipeline::chained(sf.into_factory().map(Into::into).map_init_err(dyn_rc_err)),
             h1_ctl: Pipeline::new(h1::DefaultControlService::new()),
             h2_ctl: Pipeline::new(h2::DefaultControlService),
             config: DispatcherConfig::default(),
-            _t: marker::PhantomData,
+        }
+    }
+
+    #[must_use]
+    /// Create new `HttpService` instance.
+    pub fn with_st<Sf, St>(
+        sf: impl IntoServiceFactory<Sf, St, Request>,
+        sm: StateMapping<St, Hst>,
+    ) -> HttpService<Hst, F, B, Err>
+    where
+        Sf: ServiceFactory<Request, St, Error = Err, InitCfg = SharedCfg> + 'static,
+        Sf::Res: Into<Response<B>>,
+        Sf::InitError: Error,
+        St: State<Request> + 'static,
+    {
+        HttpService {
+            sf: HttpPipeline::mapping(
+                sf.into_factory().map(Into::into).map_init_err(dyn_rc_err),
+                sm,
+            ),
+            h1_ctl: Pipeline::new(h1::DefaultControlService::new()),
+            h2_ctl: Pipeline::new(h2::DefaultControlService),
+            config: DispatcherConfig::default(),
         }
     }
 }
 
-impl<F, B, Err> HttpService<(), F, B, Err>
+impl<St, F, B, Err> HttpService<St, F, B, Err>
 where
+    St: 'static,
     F: Filter,
     B: MessageBody,
     Err: ResponseError + 'static,
 {
     #[must_use]
     /// Create *http service* for HTTP/1 protocol.
-    pub fn h1<Sf>(sf: impl IntoServiceFactory<Sf, (), Request>) -> h1::H1Service<(), F, B, Err>
+    pub fn h1<Sf>(sf: impl IntoServiceFactory<Sf, (), Request>) -> h1::H1Service<St, F, B, Err>
     where
         Sf: ServiceFactory<Request, Error = Err, InitCfg = SharedCfg> + 'static,
         Sf::Res: Into<Response<B>>,
@@ -63,7 +86,7 @@ where
 
     #[must_use]
     /// Create *http service* for HTTP/2 protocol.
-    pub fn h2<Sf>(sf: impl IntoServiceFactory<Sf, (), Request>) -> h2::H2Service<(), F, B, Err>
+    pub fn h2<Sf>(sf: impl IntoServiceFactory<Sf, (), Request>) -> h2::H2Service<St, F, B, Err>
     where
         Sf: ServiceFactory<Request, Error = Err, InitCfg = SharedCfg> + 'static,
         Sf::Res: Into<Response<B>>,
@@ -92,7 +115,6 @@ where
             config: self.config,
             h1_ctl: Pipeline::with(ctl.into_service().map_err(dyn_rc_err)),
             h2_ctl: self.h2_ctl,
-            _t: marker::PhantomData,
         }
     }
 
@@ -109,7 +131,6 @@ where
             config: self.config,
             h1_ctl: self.h1_ctl,
             h2_ctl: Pipeline::with(ctl.into_service().map_err(dyn_rc_err)),
-            _t: marker::PhantomData,
         }
     }
 }

@@ -83,7 +83,7 @@ async fn test_simple() {
     let srv = test::server_with_config(
         {
             let ws_service = ws_service.clone();
-            async move || {
+            async move |_| {
                 let ws_service = ws_service.clone();
                 HttpService::h1(async |_| Ok::<_, io::Error>(Response::NotFound())).control(
                     async move |req: h1::Control<_, _>| {
@@ -267,7 +267,7 @@ async fn test_simple() {
 
 #[ntex::test]
 async fn test_transport() {
-    let srv = test_server(async || {
+    let srv = test_server(async |_| {
         HttpService::new(async |_| Ok::<_, io::Error>(Response::NotFound())).h1_control(
             async move |req: h1::Control<_, _>| {
                 let ack = if let h1::Control::Upgrade(upg) = req {
@@ -351,7 +351,7 @@ async fn test_stale_timer_after_ws_upgrade() {
     }
 
     let srv = test::server_with_config(
-        async move || {
+        async move |_| {
             HttpService::h1(async |_| Ok::<_, io::Error>(Response::NotFound())).control(
                 move |req: h1::Control<_, _>| {
                     let ack = if let h1::Control::Upgrade(upg) = req {

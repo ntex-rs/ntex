@@ -21,7 +21,7 @@ async fn no_params() -> &'static str {
 async fn main() -> std::io::Result<()> {
     env_logger::init();
 
-    HttpServer::new(async || {
+    HttpServer::new(async |_| {
         App::new()
             .middleware(middleware::Logger::default())
             .service((index, no_params))

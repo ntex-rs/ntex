@@ -36,7 +36,7 @@ where
 
 #[ntex::test]
 async fn test_h2() -> io::Result<()> {
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         http::rustls(
             tls_acceptor(),
             http::ALPN_PROTO_H2,
@@ -52,7 +52,7 @@ async fn test_h2() -> io::Result<()> {
 
 #[ntex::test]
 async fn test_h1() -> io::Result<()> {
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         http::rustls(
             tls_acceptor(),
             http::ALPN_PROTO_H1,
@@ -68,7 +68,7 @@ async fn test_h1() -> io::Result<()> {
 
 #[ntex::test]
 async fn test_h2_1() -> io::Result<()> {
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         http::rustls(
             tls_acceptor(),
             http::ALPN_PROTOS,
@@ -89,7 +89,7 @@ async fn test_h2_1() -> io::Result<()> {
 #[ntex::test]
 async fn test_h2_body() -> io::Result<()> {
     let data = "HELLOWORLD".to_owned().repeat(64 * 1024);
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         http::rustls(
             tls_acceptor(),
             http::ALPN_PROTO_H2,
@@ -117,7 +117,7 @@ async fn test_h2_body() -> io::Result<()> {
 
 #[ntex::test]
 async fn test_h2_content_length() {
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         http::rustls(
             tls_acceptor(),
             http::ALPN_PROTO_H2,
@@ -165,7 +165,7 @@ async fn test_h2_headers() {
     let data = STR.repeat(10);
     let data2 = data.clone();
 
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         let data = data.clone();
         http::rustls(
             tls_acceptor(),
@@ -228,7 +228,7 @@ const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
 
 #[ntex::test]
 async fn test_h2_body2() {
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         http::rustls(
             tls_acceptor(),
             http::ALPN_PROTO_H2,
@@ -247,7 +247,7 @@ async fn test_h2_body2() {
 
 #[ntex::test]
 async fn test_h2_head_empty() {
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         http::rustls(
             tls_acceptor(),
             http::ALPN_PROTO_H2,
@@ -272,7 +272,7 @@ async fn test_h2_head_empty() {
 
 #[ntex::test]
 async fn test_h2_head_binary() {
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         http::rustls(
             tls_acceptor(),
             http::ALPN_PROTO_H2,
@@ -299,7 +299,7 @@ async fn test_h2_head_binary() {
 /// Server must send content-length, but no payload
 #[ntex::test]
 async fn test_h2_head_binary2() {
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         http::rustls(
             tls_acceptor(),
             http::ALPN_PROTO_H2,
@@ -319,7 +319,7 @@ async fn test_h2_head_binary2() {
 
 #[ntex::test]
 async fn test_h2_body_length() {
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         http::rustls(
             tls_acceptor(),
             http::ALPN_PROTO_H2,
@@ -343,7 +343,7 @@ async fn test_h2_body_length() {
 
 #[ntex::test]
 async fn test_h2_body_chunked_explicit() {
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         http::rustls(
             tls_acceptor(),
             http::ALPN_PROTO_H2,
@@ -372,7 +372,7 @@ async fn test_h2_body_chunked_explicit() {
 
 #[ntex::test]
 async fn test_h2_response_http_error_handling() {
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         http::rustls(
             tls_acceptor(),
             http::ALPN_PROTO_H2,
@@ -398,7 +398,7 @@ async fn test_h2_response_http_error_handling() {
 
 #[ntex::test]
 async fn test_h2_service_error() {
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         http::rustls(
             tls_acceptor(),
             http::ALPN_PROTO_H2,
@@ -433,7 +433,7 @@ async fn test_h2_client_drop() -> io::Result<()> {
     let (tx, rx) = ::oneshot::async_channel();
     let tx = Arc::new(Mutex::new(Some(tx)));
 
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         let tx = tx.clone();
         let count = count2.clone();
         http::rustls(
@@ -464,7 +464,7 @@ async fn test_ssl_handshake_timeout() {
     use std::io::Read;
 
     let srv = test::server_with_config(
-        async move || {
+        async move |_| {
             http::rustls(
                 tls_acceptor(),
                 http::ALPN_PROTO_H2,
@@ -483,7 +483,7 @@ async fn test_ssl_handshake_timeout() {
 
 #[ntex::test]
 async fn test_ws_transport() {
-    let srv = test_server(async || {
+    let srv = test_server(async |_| {
         http::rustls(
             tls_acceptor(),
             http::ALPN_PROTOS,
@@ -548,7 +548,7 @@ async fn test_h2_graceful_shutdown() -> io::Result<()> {
     let (tx, rx) = ::oneshot::channel();
     let tx = Arc::new(Mutex::new(Some(tx)));
 
-    let srv = test_server(async move || {
+    let srv = test_server(async move |_| {
         let tx = tx.clone();
         let count = count2.clone();
         http::rustls(

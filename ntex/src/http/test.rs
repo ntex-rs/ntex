@@ -15,7 +15,7 @@ use crate::error::Error;
 use crate::io::Filter;
 use crate::io::{Io, IoConfig};
 use crate::server::Server;
-use crate::service::{IntoService, Service, State, cfg::SharedCfg};
+use crate::service::{IntoService, Service, cfg::SharedCfg};
 #[cfg(feature = "ws")]
 use crate::ws::{WsClient, WsConnection, error::WsClientError};
 use crate::{rt::System, time::Millis, time::Seconds, time::sleep, util::Bytes};
@@ -231,11 +231,11 @@ fn parts(parts: &mut Option<Inner>) -> &mut Inner {
 /// ```
 pub async fn server<F, S, I>(factory: F) -> TestServer
 where
-    F: AsyncFn() -> I + Send + Clone + 'static,
+    F: AsyncFn(&()) -> I + Send + Clone + 'static,
     S: Service<(), Req = Io> + 'static,
     I: IntoService<S, ()> + 'static,
 {
-    server_with_config::<(), _, _, _>(
+    server_with_config::<_, _, _>(
         factory,
         SharedCfg::new("HTTP-TEST-SRV")
             .add(IoConfig::new())
@@ -274,12 +274,12 @@ where
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub async fn server_with_config<St, F, S, I>(f: F, cfg: impl Into<SharedCfg>) -> TestServer
+pub async fn server_with_config<F, S, I>(f: F, cfg: impl Into<SharedCfg>) -> TestServer
 where
-    F: AsyncFn() -> I + Send + Clone + 'static,
-    S: Service<St, Req = Io> + 'static,
-    St: State<Io> + Clone + Default,
-    I: IntoService<S, St> + 'static,
+    F: AsyncFn(&()) -> I + Send + Clone + 'static,
+    S: Service<(), Req = Io> + 'static,
+    // St: State<Io> + Clone + Default,
+    I: IntoService<S, ()> + 'static,
 {
     let sys = System::current().config();
     let name = System::current().name().to_string();
@@ -296,8 +296,8 @@ where
         let local_addr = tcp.local_addr().unwrap();
 
         sys.run(move || {
-            let srv = crate::server::ServerBuilder::<St>::with_default()
-                .listen("test", tcp, cfg, async move || f().await)?
+            let srv = crate::server::ServerBuilder::<()>::with_default()
+                .listen("test", tcp, cfg, async move |st| f(st).await)?
                 .workers(1)
                 .disable_signals()
                 .run();

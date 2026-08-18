@@ -1,19 +1,7 @@
-use std::{cell, fmt, future::Future, marker, pin::Pin, ptr, rc::Rc, task::Context, task::Poll};
+use std::{cell, fmt, future::Future, pin::Pin, ptr, rc::Rc, task::Context, task::Poll};
 
+use crate::st::{FromState, State, StateMapping};
 use crate::{Ctx, IntoService, ReadyCtx, Service, ServiceFactory, ctx::WaitersRef};
-
-/// Trait for types that can serve as pipeline state.
-pub trait State<Req>: Sized + 'static {
-    /// Updates the state in response to a request.
-    #[inline]
-    fn on_req(&self, _: &Req) -> Option<Self> {
-        None
-    }
-}
-
-pub trait FromState<St>: Sized {
-    fn from(st: &St) -> Self;
-}
 
 /// Container for a service.
 ///
@@ -29,44 +17,63 @@ pub struct PipelineFactory<St, Req, Res, Err, InitCfg, InitErr> {
     f: Rc<dyn for<'r> Fn(&'r InitCfg, &'r St) -> BoxFuture<'r, Pipeline<Req, Res, Err>, InitErr>>,
 }
 
-struct PipelineFactoryInner<St, Sf, Ust, Req> {
-    sf: Sf,
-    st: marker::PhantomData<(St, Ust, Req)>,
-}
-
-impl<St, Sf, Ust, Req> PipelineFactoryInner<St, Sf, Ust, Req>
-where
-    Sf: ServiceFactory<Req, Ust> + 'static,
-    Ust: State<Req> + FromState<St> + 'static,
-    Req: 'static,
-{
-    async fn create(
-        &self,
-        cfg: &Sf::InitCfg,
-        st: &St,
-    ) -> Result<Pipeline<Req, Sf::Res, Sf::Error>, Sf::InitError> {
-        let svc = self.sf.create(cfg).await?;
-        Ok(Pipeline::with_chained::<Sf::Service, Ust, St>(svc, st))
-    }
-}
-
 impl<St, Req, Res, Err, InitCfg, InitErr> PipelineFactory<St, Req, Res, Err, InitCfg, InitErr> {
-    pub fn new<Ust, Sf>(sf: Sf) -> Self
+    pub fn new<Sf>(sf: Sf) -> Self
     where
-        St: 'static,
-        Ust: State<Req> + FromState<St> + 'static,
+        Sf: ServiceFactory<Req, St, Res = Res, Error = Err, InitCfg = InitCfg, InitError = InitErr>
+            + 'static,
+        St: State<Req> + Clone + 'static,
+        Req: 'static,
+        Res: 'static,
+        Err: 'static,
+    {
+        let sf = Rc::new(sf);
+        Self {
+            f: Rc::new(move |cfg: &InitCfg, st: &St| {
+                let sf = sf.clone();
+                Box::pin(async move { Ok(Pipeline::with_st(st.clone(), sf.create(cfg).await?)) })
+            }),
+        }
+    }
+
+    pub fn chained<Ust, Sf>(sf: Sf) -> Self
+    where
         Sf: ServiceFactory<Req, Ust, Res = Res, Error = Err, InitCfg = InitCfg, InitError = InitErr>
             + 'static,
+        Ust: State<Req> + FromState<St> + 'static,
+        St: 'static,
         Req: 'static,
+        Res: 'static,
+        Err: 'static,
     {
-        let inner = Rc::new(PipelineFactoryInner {
-            sf,
-            st: marker::PhantomData,
-        });
+        let sf = Rc::new(sf);
         Self {
-            f: Rc::new(move |cfg_, st_| {
-                let pf = inner.clone();
-                Box::pin(async move { pf.create(cfg_, st_).await })
+            f: Rc::new(move |cfg, st| {
+                let sf = sf.clone();
+                Box::pin(async move {
+                    let svc = sf.create(cfg).await?;
+                    Ok(Pipeline::with_chained::<Sf::Service, Ust, St>(svc, st))
+                })
+            }),
+        }
+    }
+
+    pub fn mapping<Ust, Sf>(sf: Sf, sm: StateMapping<Ust, St>) -> Self
+    where
+        Sf: ServiceFactory<Req, Ust, Res = Res, Error = Err, InitCfg = InitCfg, InitError = InitErr>
+            + 'static,
+        Ust: State<Req> + 'static,
+        St: 'static,
+        Req: 'static,
+        Res: 'static,
+        Err: 'static,
+    {
+        let sf = Rc::new(sf);
+        Self {
+            f: Rc::new(move |cfg, st| {
+                let sf = sf.clone();
+                let sm = sm.state(st);
+                Box::pin(async move { Ok(Pipeline::with_st(sm, sf.create(cfg).await?)) })
             }),
         }
     }
@@ -276,7 +283,7 @@ where
 
     #[inline]
     /// Construct new service pipeline instance with state.
-    pub fn with_state<S, St>(st: St, f: impl IntoService<S, St>) -> Self
+    pub fn with_st<S, St>(st: St, f: impl IntoService<S, St>) -> Self
     where
         S: Service<St, Req = Req, Res = Res, Error = Err> + 'static,
         St: State<Req> + 'static,
@@ -531,12 +538,6 @@ where
             result
         })
     }
-}
-
-impl<Req> State<Req> for () {}
-
-impl<St> FromState<St> for () {
-    fn from(_: &St) {}
 }
 
 impl<Req, Res, Err> fmt::Debug for Pipeline<Req, Res, Err> {

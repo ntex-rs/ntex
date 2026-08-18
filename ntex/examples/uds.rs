@@ -24,7 +24,7 @@ async fn main() -> std::io::Result<()> {
     use ntex::SharedCfg;
     use ntex::web::{App, HttpResponse, middleware};
 
-    web::HttpServer::new(async || {
+    web::HttpServer::new(async |_| {
         App::new()
             .middleware(middleware::DefaultHeaders::new().header("X-Version", "0.2"))
             .middleware(middleware::Logger::default())
