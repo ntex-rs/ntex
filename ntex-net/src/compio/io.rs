@@ -166,11 +166,9 @@ where
                     if ctx.update_write_status(Ok(false)) == IoTaskStatus::Stop {
                         break;
                     }
-                } else {
-                    if write_buf(&mut io, ctx, bufs).await == IoTaskStatus::Stop {
-                        let _ = io.shutdown().await;
-                        break;
-                    }
+                } else if write_buf(&mut io, ctx, bufs).await == IoTaskStatus::Stop {
+                    let _ = io.shutdown().await;
+                    break;
                 }
             }
             Readiness::Shutdown => {

@@ -1,10 +1,7 @@
 #[cfg(unix)]
 use std::io::{Read, Write};
-#[cfg(any(feature = "tokio", feature = "neon"))]
-use std::sync::Arc;
-#[cfg(any(feature = "tokio", feature = "neon"))]
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
-use std::{net, sync::mpsc, thread, time};
+use std::{net, sync::Arc, sync::mpsc, thread, time};
 
 use ntex::server::{TestServer, build, build_with_state};
 use ntex::service::{State, cfg::SharedCfg, fn_service};
@@ -136,7 +133,6 @@ async fn test_run() {
 }
 
 #[test]
-#[cfg(feature = "tokio")]
 fn test_on_worker_start() {
     use std::io;
 
@@ -194,8 +190,7 @@ fn test_on_worker_start() {
 }
 
 #[test]
-#[cfg(feature = "tokio")]
-fn test_configure_async() {
+fn test_configure() {
     use std::io;
 
     let addr1 = TestServer::unused_addr();
