@@ -9,14 +9,12 @@ mod either;
 mod join;
 mod lazy;
 mod on_drop;
-mod ready;
 mod select;
 
 pub use self::either::Either;
 pub use self::join::{join, join_all};
 pub use self::lazy::{Lazy, lazy};
 pub use self::on_drop::{OnDropFn, OnDropFuture, OnDropFutureExt};
-pub use self::ready::Ready;
 pub use self::select::select;
 
 /// An owned dynamically typed Future for use in cases where

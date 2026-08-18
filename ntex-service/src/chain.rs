@@ -166,7 +166,7 @@ impl<S: Service<St>, St> ServiceChain<S, St> {
     pub fn into_pipeline(self) -> Pipeline<S::Req, S::Res, S::Error>
     where
         S: 'static,
-        St: State<S::Req> + 'static,
+        St: State<S::Req> + Default + 'static,
     {
         Pipeline::with(self.service)
     }
@@ -357,7 +357,7 @@ impl<Sf: ServiceFactory<Req, St>, St, Req> ServiceChainFactory<Sf, St, Req> {
     ) -> Result<Pipeline<Req, Sf::Res, Sf::Error>, Sf::InitError>
     where
         Sf: 'static,
-        St: State<Req> + 'static,
+        St: State<Req> + Default + 'static,
         Req: 'static,
     {
         Ok(Pipeline::with(self.factory.create(cfg).await?))

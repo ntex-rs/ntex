@@ -3,28 +3,28 @@ use std::{cell, fmt, future::Future, marker, pin::Pin, ptr, rc::Rc, task::Contex
 use crate::{Ctx, IntoService, ReadyCtx, Service, ServiceFactory, ctx::WaitersRef};
 
 /// Trait for types that can serve as pipeline state.
-pub trait State<Req>: Default + 'static {
+pub trait State<Req>: Sized + 'static {
+    /// Updates the state in response to a request.
     #[inline]
-    /// Updates the state for a request.
-    fn check(&self, _: &Req) -> Option<Self> {
+    fn on_req(&self, _: &Req) -> Option<Self> {
         None
     }
 }
 
 pub trait FromState<St>: Sized {
-    fn from(st: &St) -> Option<Self>;
+    fn from(st: &St) -> Self;
 }
 
 /// Container for a service.
 ///
-/// Container allows to call enclosed service and adds support of shared readiness.
+/// Provides a way to call the enclosed service and share its readiness state.
 pub struct Pipeline<Req, Res, Err> {
     state: Rc<dyn PipelineApi<Req, Res, Err>>,
 }
 
 type BoxFuture<'a, I, E> = Pin<Box<dyn Future<Output = Result<I, E>> + 'a>>;
 
-/// Factory for service pipeline.
+/// Factory for a service pipeline.
 pub struct PipelineFactory<St, Req, Res, Err, InitCfg, InitErr> {
     inner:
         Box<dyn for<'r> Fn(&'r InitCfg, &'r St) -> BoxFuture<'r, Pipeline<Req, Res, Err>, InitErr>>,
@@ -110,7 +110,7 @@ struct PipelineState<S: Service<St>, St> {
     s: S,
     waiters: WaitersRef,
     st: St,
-    st_check: Box<dyn Fn(&St, &S::Req) -> Option<St>>,
+    st_req: Box<dyn Fn(&St, &S::Req) -> Option<St>>,
     st_runtime: cell::UnsafeCell<RuntimeState<S::Error>>,
 }
 
@@ -140,7 +140,7 @@ impl<S: Service<St>, St> PipelineState<S, St> {
     }
 
     fn st(&self, req: &S::Req) -> StateRef<'_, St> {
-        if let Some(s) = (self.st_check)(&self.st, req) {
+        if let Some(s) = (self.st_req)(&self.st, req) {
             StateRef::Owned(s)
         } else {
             StateRef::Ref(&self.st)
@@ -258,13 +258,23 @@ where
     }
 
     #[inline]
-    /// Construct new service pipeline instance with state.
+    /// Construct new service pipeline instance with default state.
     pub fn with<S, St>(f: impl IntoService<S, St>) -> Self
+    where
+        S: Service<St, Req = Req, Res = Res, Error = Err> + 'static,
+        St: State<Req> + Default + 'static,
+    {
+        Self::create(f.into_service(), St::default())
+    }
+
+    #[inline]
+    /// Construct new service pipeline instance with state.
+    pub fn with_state<S, St>(st: St, f: impl IntoService<S, St>) -> Self
     where
         S: Service<St, Req = Req, Res = Res, Error = Err> + 'static,
         St: State<Req> + 'static,
     {
-        Self::create(f.into_service(), St::default())
+        Self::create(f.into_service(), st)
     }
 
     #[inline]
@@ -274,10 +284,7 @@ where
         S: Service<St, Req = Req, Res = Res, Error = Err> + 'static,
         St: State<Req> + FromState<Chained> + 'static,
     {
-        Self::create(
-            f.into_service(),
-            St::from(chained).unwrap_or_else(|| St::default()),
-        )
+        Self::create(f.into_service(), St::from(chained))
     }
 
     fn create<S, St>(s: S, st: St) -> Self
@@ -290,7 +297,7 @@ where
                 s,
                 st,
                 waiters: WaitersRef::new(),
-                st_check: Box::new(|st: &St, req: &S::Req| st.check(req)),
+                st_req: Box::new(|st: &St, req: &S::Req| st.on_req(req)),
                 st_runtime: cell::UnsafeCell::new(RuntimeState::New),
             }),
         }
@@ -522,9 +529,7 @@ where
 impl<Req> State<Req> for () {}
 
 impl<St> FromState<St> for () {
-    fn from(_: &St) -> Option<()> {
-        None
-    }
+    fn from(_: &St) {}
 }
 
 impl<Req, Res, Err> fmt::Debug for Pipeline<Req, Res, Err> {

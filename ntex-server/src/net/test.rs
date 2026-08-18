@@ -9,7 +9,7 @@ use ntex_service::{IntoService, Service, State, cfg::SharedCfg};
 use socket2::{Domain, SockAddr, Socket, Type};
 use uuid::Uuid;
 
-use super::{Server, ServerBuilder};
+use super::{Server, ServerBuilder, state::StateFactory};
 
 /// Test server builder
 pub struct TestServerBuilder<F, Sf, St, I> {
@@ -17,6 +17,7 @@ pub struct TestServerBuilder<F, Sf, St, I> {
     factory: F,
     config: SharedCfg,
     client_config: SharedCfg,
+    state: Option<Box<dyn StateFactory<St> + Send>>,
     _t: PhantomData<(Sf, St, I)>,
 }
 
@@ -34,7 +35,7 @@ impl<F, S, St, I> TestServerBuilder<F, S, St, I>
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
     S: Service<St, Req = Io> + 'static,
-    St: State<Io> + 'static,
+    St: State<Io> + Clone + Default + 'static,
     I: IntoService<S, St> + 'static,
 {
     #[must_use]
@@ -45,6 +46,7 @@ where
             id: Uuid::now_v7(),
             config: SharedCfg::new("TEST-SERVER").into(),
             client_config: SharedCfg::new("TEST-CLIENT").into(),
+            state: None,
             _t: PhantomData,
         }
     }
@@ -67,6 +69,7 @@ where
     pub fn start(self) -> TestServer {
         log::debug!("Starting test server {:?}", self.id);
         let config = self.config;
+        let _state = self.state;
         let factory = self.factory;
         let cfg = System::current().config();
         let name = System::current().name().to_string();
@@ -79,7 +82,7 @@ where
             let local_addr = tcp.local_addr().unwrap();
 
             sys.run(move || {
-                let server = ServerBuilder::<St>::new()
+                let server = ServerBuilder::<St>::new(async || Ok(St::default()))
                     .listen("test", tcp, config, async move || factory().await)?
                     .workers(1)
                     .disable_signals()

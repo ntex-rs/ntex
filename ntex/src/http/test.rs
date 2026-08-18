@@ -278,7 +278,7 @@ pub async fn server_with_config<St, F, S, I>(f: F, cfg: impl Into<SharedCfg>) ->
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
     S: Service<St, Req = Io> + 'static,
-    St: State<Io>,
+    St: State<Io> + Clone + Default,
     I: IntoService<S, St> + 'static,
 {
     let sys = System::current().config();
@@ -296,7 +296,7 @@ where
         let local_addr = tcp.local_addr().unwrap();
 
         sys.run(move || {
-            let srv = crate::server::ServerBuilder::<St>::new()
+            let srv = crate::server::ServerBuilder::<St>::with_default()
                 .listen("test", tcp, cfg, async move || f().await)?
                 .workers(1)
                 .disable_signals()

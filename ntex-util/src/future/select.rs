@@ -45,13 +45,14 @@ where
 #[cfg(test)]
 mod tests {
     use futures_util::future::pending;
+    use std::future::ready;
 
     use super::*;
-    use crate::{future::Ready, time};
+    use crate::time;
 
     #[ntex::test]
     async fn select_tests() {
-        let res = select(Ready::<_, ()>::Ok("test"), pending::<()>()).await;
+        let res = select(ready(Ok::<_, ()>("test")), pending::<()>()).await;
         assert_eq!(res, Either::Left(Ok("test")));
 
         let res = select(pending::<()>(), time::sleep(time::Millis(50))).await;

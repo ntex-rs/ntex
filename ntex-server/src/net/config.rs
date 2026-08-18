@@ -1,14 +1,14 @@
-use std::{cell::RefCell, fmt, io, mem, net, rc::Rc, sync::Arc};
+use std::{cell::RefCell, fmt, io, marker::PhantomData, mem, net, rc::Rc, sync::Arc};
 
 use ntex_io::Io;
-use ntex_service::{IntoService, Pipeline, Service, cfg::SharedCfg};
-use ntex_util::{HashMap, future::BoxFuture, future::Ready};
+use ntex_service::{IntoService, Pipeline, Service, State, cfg::SharedCfg};
+use ntex_util::{HashMap, future::BoxFuture};
 
 use super::factory::{FactoryService, FactoryServiceType, NetService, ServerService};
 use super::{Token, builder::bind_addr, socket::Listener};
 
 #[derive(Clone, Debug)]
-pub struct ServiceConfig(pub(super) Rc<RefCell<ServiceConfigInner>>);
+pub struct ServiceConfig<St>(pub(super) Rc<RefCell<ServiceConfigInner<St>>>);
 
 #[derive(Debug)]
 struct Socket {
@@ -16,15 +16,15 @@ struct Socket {
     sockets: Vec<(Token, Listener, SharedCfg)>,
 }
 
-pub(super) struct ServiceConfigInner {
+pub(super) struct ServiceConfigInner<St> {
     token: Token,
     on_start_set: bool,
-    on_start: Vec<Box<dyn OnWorkerStart>>,
+    on_start: Vec<Box<dyn OnWorkerStart<St>>>,
     sockets: Vec<Socket>,
     backlog: i32,
 }
 
-impl fmt::Debug for ServiceConfigInner {
+impl<St> fmt::Debug for ServiceConfigInner<St> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ServiceConfigInner")
             .field("token", &self.token)
@@ -34,16 +34,16 @@ impl fmt::Debug for ServiceConfigInner {
     }
 }
 
-impl ServiceConfig {
+impl<St: State<Io> + Clone + 'static> ServiceConfig<St> {
     pub(super) fn new(token: Token, backlog: i32) -> Self {
         ServiceConfig(Rc::new(RefCell::new(ServiceConfigInner {
             token,
             backlog,
             sockets: Vec::new(),
             on_start_set: false,
-            on_start: vec![OnWorkerStartWrapper::create(|_| {
+            on_start: vec![on_worker_start(async |_| {
                 not_configured();
-                Ready::Ok::<_, &str>(())
+                Ok::<_, &str>(())
             })],
         })))
     }
@@ -94,20 +94,24 @@ impl ServiceConfig {
     /// It get executed in the worker thread.
     pub fn on_worker_start<F>(&self, f: F) -> &Self
     where
-        F: AsyncFn(ServiceRuntime) -> Result<(), &'static str> + Send + Clone + 'static,
+        F: AsyncFn(ServiceRuntime<St>) -> Result<(), &'static str> + Send + Clone + 'static,
     {
         let mut inner = self.0.borrow_mut();
         if !inner.on_start_set {
             inner.on_start.clear();
             inner.on_start_set = true;
         }
-        inner.on_start.push(OnWorkerStartWrapper::create(f));
+        inner.on_start.push(on_worker_start(f));
         self
     }
 
     pub(super) fn into_factory(
         self,
-    ) -> (Token, Vec<(Token, String, Listener)>, FactoryServiceType) {
+    ) -> (
+        Token,
+        Vec<(Token, String, Listener)>,
+        FactoryServiceType<St>,
+    ) {
         let mut inner = self.0.borrow_mut();
 
         let mut sockets = Vec::new();
@@ -144,27 +148,31 @@ impl ServiceConfig {
     }
 }
 
-struct ConfiguredService {
+struct ConfiguredService<St> {
     names: HashMap<String, Entry>,
-    on_start: Vec<Box<dyn OnWorkerStart>>,
+    on_start: Vec<Box<dyn OnWorkerStart<St>>>,
 }
 
-impl FactoryService for ConfiguredService {
-    fn clo(&self) -> FactoryServiceType {
+impl<St> FactoryService<St> for ConfiguredService<St>
+where
+    St: State<Io> + Clone + 'static,
+{
+    fn clo(&self) -> FactoryServiceType<St> {
         Box::new(Self {
             names: self.names.clone(),
-            on_start: self.on_start.iter().map(|cb| (*cb).clone()).collect(),
+            on_start: self.on_start.iter().map(|cb| (*cb).clo()).collect(),
         })
     }
 
     fn create(
         &self,
+        st: St,
     ) -> BoxFuture<
         'static,
         Result<Vec<(Box<dyn NetService>, Arc<str>, Vec<(Token, SharedCfg)>)>, &'static str>,
     > {
         // configure services
-        let rt = ServiceRuntime::new(self.names.clone());
+        let rt = ServiceRuntime::new(st, self.names.clone());
         let on_start: Vec<_> = self
             .on_start
             .iter()
@@ -205,7 +213,7 @@ fn not_configured() {
     log::error!("Service is not configured");
 }
 
-pub struct ServiceRuntime(Rc<RefCell<ServiceRuntimeInner>>);
+pub struct ServiceRuntime<St>(Rc<RefCell<ServiceRuntimeInner<St>>>);
 
 #[derive(Debug, Clone)]
 struct Entry {
@@ -214,12 +222,13 @@ struct Entry {
     tokens: Vec<(Token, SharedCfg)>,
 }
 
-struct ServiceRuntimeInner {
+struct ServiceRuntimeInner<St> {
+    st: St,
     names: HashMap<String, Entry>,
     services: Vec<Option<Box<dyn NetService>>>,
 }
 
-impl fmt::Debug for ServiceRuntime {
+impl<St> fmt::Debug for ServiceRuntime<St> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let inner = self.0.borrow();
         f.debug_struct("ServiceRuntimer")
@@ -228,11 +237,13 @@ impl fmt::Debug for ServiceRuntime {
     }
 }
 
-impl ServiceRuntime {
-    fn new(names: HashMap<String, Entry>) -> Self {
+impl<St: State<Io> + Clone> ServiceRuntime<St> {
+    fn new(st: St, names: HashMap<String, Entry>) -> Self {
+        let services = (0..names.len()).map(|_| None).collect();
         ServiceRuntime(Rc::new(RefCell::new(ServiceRuntimeInner {
-            services: (0..names.len()).map(|_| None).collect(),
+            st,
             names,
+            services,
         })))
     }
 
@@ -253,14 +264,17 @@ impl ServiceRuntime {
     /// # Panics
     ///
     /// Panics if service with specified name is registered already
-    pub fn service<S>(&self, name: &str, svc: impl IntoService<S, ()>) -> &Self
+    pub fn service<S>(&self, name: &str, svc: impl IntoService<S, St>) -> &Self
     where
-        S: Service<Req = Io> + 'static,
+        S: Service<St, Req = Io> + 'static,
     {
         let mut inner = self.0.borrow_mut();
         if let Some(entry) = inner.names.get_mut(name) {
             let idx = entry.idx;
-            let pipeline = Pipeline::with(svc.into_service().map(|_| ()).map_err(|_| ()));
+            let pipeline = Pipeline::with_state(
+                inner.st.clone(),
+                svc.into_service().map(|_| ()).map_err(|_| ()),
+            );
             let svc: Box<dyn NetService> = Box::new(ServerService { pipeline });
             inner.services[idx] = Some(svc);
         } else {
@@ -270,39 +284,43 @@ impl ServiceRuntime {
     }
 }
 
-trait OnWorkerStart: Send {
-    fn clone(&self) -> Box<dyn OnWorkerStart>;
+trait OnWorkerStart<St>: Send {
+    fn clo(&self) -> Box<dyn OnWorkerStart<St>>;
 
-    fn run(&self, rt: ServiceRuntime) -> BoxFuture<'static, Result<(), &'static str>>;
+    fn run(&self, rt: ServiceRuntime<St>) -> BoxFuture<'static, Result<(), &'static str>>;
 }
 
-struct OnWorkerStartWrapper<F> {
-    pub(super) f: F,
+struct OnWorkerStartImpl<F, St> {
+    f: F,
+    st: PhantomData<St>,
 }
 
-impl<F> OnWorkerStartWrapper<F>
+fn on_worker_start<F, St>(f: F) -> Box<dyn OnWorkerStart<St> + Send>
 where
-    F: AsyncFn(ServiceRuntime) -> Result<(), &'static str> + Send + Clone + 'static,
+    F: AsyncFn(ServiceRuntime<St>) -> Result<(), &'static str> + Send + Clone + 'static,
+    St: 'static,
 {
-    pub(super) fn create(f: F) -> Box<dyn OnWorkerStart + Send> {
-        Box::new(Self { f })
+    Box::new(OnWorkerStartImpl { f, st: PhantomData })
+}
+
+impl<F, St> OnWorkerStart<St> for OnWorkerStartImpl<F, St>
+where
+    F: AsyncFn(ServiceRuntime<St>) -> Result<(), &'static str> + Send + Clone + 'static,
+    St: 'static,
+{
+    fn clo(&self) -> Box<dyn OnWorkerStart<St>> {
+        Box::new(Self {
+            f: self.f.clone(),
+            st: PhantomData,
+        })
+    }
+
+    fn run(&self, rt: ServiceRuntime<St>) -> BoxFuture<'static, Result<(), &'static str>> {
+        let f = self.f.clone();
+        Box::pin(async move { (f)(rt).await })
     }
 }
 
 // SAFETY: Send cannot be provided authomatically because of R param
 // but R always get executed in one thread and never leave it
-unsafe impl<F> Send for OnWorkerStartWrapper<F> where F: Send {}
-
-impl<F> OnWorkerStart for OnWorkerStartWrapper<F>
-where
-    F: AsyncFn(ServiceRuntime) -> Result<(), &'static str> + Send + Clone + 'static,
-{
-    fn clone(&self) -> Box<dyn OnWorkerStart> {
-        Box::new(Self { f: self.f.clone() })
-    }
-
-    fn run(&self, rt: ServiceRuntime) -> BoxFuture<'static, Result<(), &'static str>> {
-        let f = self.f.clone();
-        Box::pin(async move { (f)(rt).await })
-    }
-}
+unsafe impl<F, St> Send for OnWorkerStartImpl<F, St> where F: Send {}

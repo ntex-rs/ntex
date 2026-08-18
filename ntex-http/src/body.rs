@@ -581,10 +581,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{future::poll_fn, io};
+    use std::{future::poll_fn, future::ready, io};
 
     use futures_util::stream;
-    use ntex::util::{BufMut, Ready};
+    use ntex::util::BufMut;
 
     use super::*;
 
@@ -771,7 +771,7 @@ mod tests {
 
     #[ntex::test]
     async fn body_stream() {
-        let st = BodyStream::new(stream::once(Ready::<_, io::Error>::Ok(Bytes::from("1"))));
+        let st = BodyStream::new(stream::once(ready(Ok::<_, io::Error>(Bytes::from("1")))));
         assert!(format!("{st:?}").contains("BodyStream"));
         let body: Body = st.into();
         assert!(format!("{body:?}").contains("Body::Message(_)"));
@@ -783,9 +783,9 @@ mod tests {
 
     #[ntex::test]
     async fn boxed_body_stream() {
-        let st = BoxedBodyStream::new(stream::once(Ready::<_, Rc<dyn Error>>::Ok(Bytes::from(
+        let st = BoxedBodyStream::new(stream::once(ready(Ok::<_, Rc<dyn Error>>(Bytes::from(
             "1",
-        ))));
+        )))));
         assert!(format!("{st:?}").contains("BoxedBodyStream"));
         let body: Body = st.into();
         assert!(format!("{body:?}").contains("Body::Message(_)"));

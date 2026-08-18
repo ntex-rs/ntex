@@ -33,7 +33,7 @@ mod util;
 pub use self::apply::{apply_fn, apply_fn_factory};
 pub use self::chain::{ServiceChain, ServiceChainFactory, factory, factory_with_state, svc};
 pub use self::ctx::{Ctx, ReadyCtx};
-pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
+pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service, fn_service_st};
 pub use self::fn_shutdown::fn_shutdown;
 pub use self::map_config::{map_config, unit_config};
 pub use self::middleware::{Identity, Middleware, Stack, apply, fn_layer};
@@ -210,7 +210,7 @@ pub trait ServiceFactory<Req, St = ()> {
     where
         Self: 'static,
         Req: 'static,
-        St: State<Req> + 'static,
+        St: State<Req> + Default + 'static,
     {
         Ok(Pipeline::with(self.create(cfg).await?))
     }

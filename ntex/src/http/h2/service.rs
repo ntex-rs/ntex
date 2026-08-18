@@ -61,7 +61,7 @@ where
     /// Provide http/2 control service
     pub fn control<Sf, St>(self, ctl: impl IntoService<Sf, St>) -> H2Service<Hst, F, B, Err>
     where
-        St: State<Sf::Req>,
+        St: State<Sf::Req> + Default,
         Sf: Service<St, Req = h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
         Sf::Error: StdError + 'static,
     {
