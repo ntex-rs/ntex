@@ -8,6 +8,7 @@ use super::Token;
 
 pub(super) type FactoryServiceType<St> = Box<dyn FactoryService<St>>;
 type CreateResult = Vec<(Box<dyn NetService>, Arc<str>, Vec<(Token, SharedCfg)>)>;
+type SvcFactory<St> = dyn Fn(St) -> BoxFuture<'static, Box<dyn NetService>>;
 
 pub(crate) trait NetService {
     fn call(&self, _: Io, _: CounterGuard);
@@ -26,7 +27,7 @@ pub(crate) trait FactoryService<St>: Send {
 struct Factory<St> {
     name: Arc<str>,
     tokens: Vec<(Token, SharedCfg)>,
-    factory: Arc<dyn Fn(St) -> BoxFuture<'static, Box<dyn NetService>>>,
+    fac: Arc<SvcFactory<St>>,
 }
 
 pub(crate) fn create_factory_service<F, S, St, I>(
@@ -43,7 +44,7 @@ where
     Box::from(Factory {
         tokens,
         name: Arc::from(name),
-        factory: Arc::new(move |st: St| {
+        fac: Arc::new(move |st: St| {
             let f = f.clone();
             Box::pin(async move {
                 let svc = (f)().await.into_service();
@@ -60,14 +61,14 @@ impl<St: 'static> FactoryService<St> for Factory<St> {
         Box::new(Factory {
             name: self.name.clone(),
             tokens: self.tokens.clone(),
-            factory: self.factory.clone(),
+            fac: self.fac.clone(),
         })
     }
 
     fn create(&self, st: St) -> BoxFuture<'static, Result<CreateResult, &'static str>> {
         let name = self.name.clone();
         let tokens = self.tokens.clone();
-        let factory_fut = (self.factory)(st);
+        let factory_fut = (self.fac)(st);
 
         Box::pin(async move { Ok(vec![(factory_fut.await, name, tokens)]) })
     }

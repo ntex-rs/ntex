@@ -138,6 +138,8 @@ async fn test_run() {
 #[test]
 #[cfg(feature = "tokio")]
 fn test_on_worker_start() {
+    use std::io;
+
     let addr1 = TestServer::unused_addr();
     let addr2 = TestServer::unused_addr();
     let addr3 = TestServer::unused_addr();
@@ -147,7 +149,6 @@ fn test_on_worker_start() {
 
     let h = thread::spawn(move || {
         let num = num2.clone();
-        let num2 = num2.clone();
         let sys = ntex::rt::System::new("test", ntex::rt::DefaultRuntime);
         let _ = sys.run(move || {
             let num = num.clone();
@@ -174,10 +175,6 @@ fn test_on_worker_start() {
                     })
                     .await
                     .unwrap()
-                    .on_worker_start(async move || {
-                        let _ = num2.fetch_add(1, Relaxed);
-                        Ok::<_, &'static str>(())
-                    })
                     .workers(1)
                     .run();
                 let _ = tx.send((srv, ntex::rt::System::current()));
@@ -191,7 +188,7 @@ fn test_on_worker_start() {
     assert!(net::TcpStream::connect(addr1).is_ok());
     assert!(net::TcpStream::connect(addr2).is_ok());
     assert!(net::TcpStream::connect(addr3).is_ok());
-    assert_eq!(num.load(Relaxed), 2);
+    assert_eq!(num.load(Relaxed), 1);
     sys.stop();
     let _ = h.join();
 }
@@ -199,6 +196,8 @@ fn test_on_worker_start() {
 #[test]
 #[cfg(feature = "tokio")]
 fn test_configure_async() {
+    use std::io;
+
     let addr1 = TestServer::unused_addr();
     let addr2 = TestServer::unused_addr();
     let addr3 = TestServer::unused_addr();
@@ -208,7 +207,6 @@ fn test_configure_async() {
 
     let h = thread::spawn(move || {
         let num = num2.clone();
-        let num2 = num2.clone();
         let sys = ntex::rt::System::new("test", ntex::rt::DefaultRuntime);
         let _ = sys.run(move || {
             ntex_rt::spawn(async move {
@@ -234,10 +232,6 @@ fn test_configure_async() {
                     })
                     .await
                     .unwrap()
-                    .on_worker_start(async move || {
-                        let _ = num2.fetch_add(1, Relaxed);
-                        Ok::<_, &'static str>(())
-                    })
                     .workers(1)
                     .run();
                 let _ = tx.send((srv.clone(), ntex::rt::System::current()));
@@ -253,7 +247,7 @@ fn test_configure_async() {
     assert!(net::TcpStream::connect(addr1).is_ok());
     assert!(net::TcpStream::connect(addr2).is_ok());
     assert!(net::TcpStream::connect(addr3).is_ok());
-    assert_eq!(num.load(Relaxed), 2);
+    assert_eq!(num.load(Relaxed), 1);
     sys.stop();
     let _ = h.join();
 }
@@ -312,7 +306,6 @@ fn test_panic_in_worker() {
 }
 
 #[test]
-#[cfg(feature = "neon")]
 fn test_server_state() {
     let addr = TestServer::unused_addr();
     let (tx, rx) = mpsc::channel();

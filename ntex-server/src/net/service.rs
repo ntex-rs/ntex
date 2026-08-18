@@ -150,6 +150,7 @@ impl Service<()> for StreamService {
         );
     }
 
+    #[allow(clippy::unused_async_trait_impl)]
     async fn call(&self, con: Connection, _: Ctx<'_, Self, ()>) -> Result<(), ()> {
         if let Some((idx, cfg)) = self.tokens.get(&con.token) {
             let stream = con.io.convert(cfg.clone()).map_err(|e| {
