@@ -300,9 +300,10 @@ mod tests {
             .v3(fn_factory(|| async { Ok::<_, ()>(Srv2) }))
             .clone();
 
-        let service = factory.pipeline(&()).await.unwrap();
+        let service = factory.create(&()).await.unwrap();
         assert!(format!("{service:?}").contains("Variant"));
 
+        let service = Pipeline::new(service);
         assert!(service.ready().await.is_ok());
         service.shutdown().await;
 
@@ -343,6 +344,5 @@ mod tests {
 
         let service = Pipeline::new(factory.create(&()).await.unwrap());
         assert!(service.ready().await.is_ok());
-        assert!(format!("{service:?}").contains("Variant"));
     }
 }

@@ -206,7 +206,10 @@ mod tests {
 
     #[ntex::test]
     async fn test_success() {
-        let svc = Pipeline::new(Either::left(Svc1).clone());
+        let svc = Either::left(Svc1).clone();
+        assert!(format!("{svc:?}").contains("EitherService"));
+
+        let svc = Pipeline::new(svc);
         assert_eq!(svc.call(()).await, Ok("svc1"));
         assert_eq!(svc.ready().await, Ok(()));
         svc.shutdown().await;
@@ -215,8 +218,6 @@ mod tests {
         assert_eq!(svc.call(()).await, Ok("svc2"));
         assert_eq!(svc.ready().await, Ok(()));
         svc.shutdown().await;
-
-        assert!(format!("{svc:?}").contains("EitherService"));
     }
 
     #[ntex::test]
