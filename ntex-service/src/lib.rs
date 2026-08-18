@@ -363,6 +363,7 @@ where
 
 /// Check `Service` type
 #[inline(always)]
+#[allow(clippy::inline_always)]
 pub fn __assert_svc<S, St, Req, Res, Err>(s: S) -> S
 where
     S: Service<St, Req = Req, Res = Res, Error = Err>,
@@ -372,6 +373,7 @@ where
 
 /// Check `ServiceFactory` type
 #[inline(always)]
+#[allow(clippy::inline_always)]
 pub fn __assert_factory<Sf, St, Req, Res, Err, InitCfg, InitErr>(f: Sf) -> Sf
 where
     Sf: ServiceFactory<Req, St, Res = Res, Error = Err, InitCfg = InitCfg, InitError = InitErr>,
