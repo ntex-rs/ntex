@@ -6,18 +6,13 @@ use crate::service::{IntoServiceFactory, dev::ServiceChainFactory, factory_with_
 use crate::service::{boxed, cfg::SharedCfg};
 use crate::util::HashMap;
 
-use super::app::Filter;
-use super::config::ServiceConfig;
+use super::app_service::AppRouter;
 use super::dev::{WebServiceConfig, WebServiceFactory};
-use super::error::ErrorRenderer;
 use super::guard::Guard;
-use super::request::WebRequest;
-use super::resource::Resource;
-use super::response::WebResponse;
 use super::rmap::ResourceMap;
-use super::route::Route;
 use super::service::{AppServiceFactory, ServiceFactoryWrapper};
-use super::{HttpService, app_service::AppRouter, stack::WebStack};
+use super::stack::{Filter, WebStack};
+use super::{ErrorRenderer, HttpService, Resource, Route, ServiceConfig, WebRequest, WebResponse};
 
 type Guards = Vec<Box<dyn Guard>>;
 

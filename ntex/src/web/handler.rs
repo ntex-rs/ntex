@@ -2,11 +2,7 @@ use std::{fmt, future::Future, marker::PhantomData};
 
 use crate::util::BoxFuture;
 
-use super::error::ErrorRenderer;
-use super::extract::FromRequest;
-use super::request::WebRequest;
-use super::responder::Responder;
-use super::response::WebResponse;
+use super::{ErrorRenderer, FromRequest, Responder, WebRequest, WebResponse};
 
 /// Async fn handler
 pub trait Handler<T, Err>

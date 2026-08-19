@@ -3,12 +3,10 @@ use std::{error::Error, fmt, mem, rc::Rc};
 use crate::http::Method;
 use crate::service::{Ctx, Service, ServiceFactory, cfg::SharedCfg};
 
-use super::error::ErrorRenderer;
 use super::error_default::DefaultError;
-use super::extract::FromRequest;
 use super::guard::{self, AllGuard, Guard};
 use super::handler::{Handler, HandlerFn, HandlerWrapper};
-use super::{HttpResponse, request::WebRequest, response::WebResponse};
+use super::{ErrorRenderer, FromRequest, HttpResponse, WebRequest, WebResponse};
 
 /// Resource route definition
 ///

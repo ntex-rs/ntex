@@ -1,22 +1,17 @@
-use std::{fmt, marker::PhantomData};
+use std::fmt;
 
 use crate::http::Request;
 use crate::router::ResourceDef;
-use crate::service::{Ctx, IntoServiceFactory, dev::ServiceChainFactory, factory_with_st};
+use crate::service::cfg::SharedCfg;
 use crate::service::{Identity, Middleware, Service, ServiceFactory};
-use crate::service::{boxed, cfg::SharedCfg};
+use crate::service::{IntoServiceFactory, dev::ServiceChainFactory, factory_with_st};
 
 use super::app_service::{AppFactory, AppRouter};
 use super::config::ServiceConfig;
-use super::request::WebRequest;
-use super::resource::Resource;
-use super::response::WebResponse;
-use super::route::Route;
+use super::error::AppInitError;
 use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
-use super::stack::WebStack;
-use super::{DefaultError, ErrorRenderer, error::AppInitError};
-
-use super::HttpService;
+use super::stack::{Filter, WebStack};
+use super::{DefaultError, ErrorRenderer, HttpService, Resource, Route, WebRequest, WebResponse};
 
 /// Application builder - structure that follows the builder pattern
 /// for building application instances.
@@ -211,7 +206,7 @@ where
         U::InitError: fmt::Debug,
     {
         // create and configure default resource
-        self.default = Some(boxed::factory(f.into_factory().map_init_err(|e| {
+        self.default = Some(HttpService::new(f.into_factory().map_init_err(|e| {
             log::error!("Cannot construct default service: {e:?}");
         })));
 
@@ -433,39 +428,6 @@ where
             self.external,
             self.case_insensitive,
         )
-    }
-}
-
-#[derive(derive_more::Debug)]
-#[debug("Filter")]
-pub struct Filter<St, Err>(PhantomData<(St, Err)>);
-
-impl<St, Err: ErrorRenderer> Filter<St, Err> {
-    pub(super) fn new() -> Self {
-        Filter(PhantomData)
-    }
-}
-
-impl<St, Err: ErrorRenderer> ServiceFactory<St, WebRequest<Err>> for Filter<St, Err> {
-    type Res = WebRequest<Err>;
-    type Error = Err::Container;
-
-    type Service = Filter<St, Err>;
-    type InitCfg = SharedCfg;
-    type InitError = ();
-
-    async fn create(&self, _: &SharedCfg) -> Result<Self::Service, Self::InitError> {
-        Ok(Filter(PhantomData))
-    }
-}
-
-impl<St, Err: ErrorRenderer> Service<St> for Filter<St, Err> {
-    type Req = WebRequest<Err>;
-    type Res = WebRequest<Err>;
-    type Error = Err::Container;
-
-    async fn call(&self, req: Self::Req, _: Ctx<'_, Self, St>) -> Result<Self::Req, Self::Error> {
-        Ok(req)
     }
 }
 
