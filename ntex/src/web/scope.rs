@@ -49,7 +49,7 @@ type Guards = Vec<Box<dyn Guard>>;
 #[debug("Scope({rdef:?})")]
 pub struct Scope<St, Err: ErrorRenderer, M = Identity, T = Filter<St, Err>> {
     middleware: M,
-    filter: ServiceChainFactory<T, St, WebRequest<Err>>,
+    filter: ServiceChainFactory<T, St, WebRequest<Err>, SharedCfg>,
     rdef: Vec<String>,
     services: Vec<Box<dyn AppServiceFactory<St, Err>>>,
     guards: Vec<Box<dyn Guard>>,
@@ -81,9 +81,9 @@ where
     T: ServiceFactory<
             St,
             WebRequest<Err>,
+            SharedCfg,
             Res = WebRequest<Err>,
             Error = Err::Container,
-            InitCfg = SharedCfg,
             InitError = (),
         >,
     Err: ErrorRenderer,
@@ -236,15 +236,15 @@ where
     /// If default resource is not registered, app's default resource is being used.
     pub fn default_service<Sf>(
         mut self,
-        f: impl IntoServiceFactory<Sf, St, WebRequest<Err>>,
+        f: impl IntoServiceFactory<Sf, St, WebRequest<Err>, SharedCfg>,
     ) -> Self
     where
         Sf: ServiceFactory<
                 St,
                 WebRequest<Err>,
+                SharedCfg,
                 Res = WebResponse,
                 Error = Err::Container,
-                InitCfg = SharedCfg,
             > + 'static,
         Sf::InitError: fmt::Debug,
     {
@@ -268,7 +268,7 @@ where
     /// This is similar to `App's` filters, but filter get invoked on scope level.
     pub fn filter<U>(
         self,
-        filter: impl IntoServiceFactory<U, St, WebRequest<Err>>,
+        filter: impl IntoServiceFactory<U, St, WebRequest<Err>, SharedCfg>,
     ) -> Scope<
         St,
         Err,
@@ -276,9 +276,9 @@ where
         impl ServiceFactory<
             St,
             WebRequest<Err>,
+            SharedCfg,
             Res = WebRequest<Err>,
             Error = Err::Container,
-            InitCfg = SharedCfg,
             InitError = (),
         >,
     >
@@ -286,9 +286,9 @@ where
         U: ServiceFactory<
                 St,
                 WebRequest<Err>,
+                SharedCfg,
                 Res = WebRequest<Err>,
                 Error = Err::Container,
-                InitCfg = SharedCfg,
             >,
     {
         Scope {
@@ -334,9 +334,9 @@ where
     F: ServiceFactory<
             St,
             WebRequest<Err>,
+            SharedCfg,
             Res = WebRequest<Err>,
             Error = Err::Container,
-            InitCfg = SharedCfg,
             InitError = (),
         > + 'static,
     M: Middleware<AppRouter<St, F::Service, Err>, SharedCfg> + 'static,
@@ -412,21 +412,22 @@ where
 /// Scope service
 struct ScopeServiceFactory<St, M, F, Err: ErrorRenderer> {
     middleware: M,
-    filter: ServiceChainFactory<F, St, WebRequest<Err>>,
+    filter: ServiceChainFactory<F, St, WebRequest<Err>, SharedCfg>,
     router: Rc<Router<HttpService<St, Err>, Guards>>,
     default: Rc<HttpService<St, Err>>,
 }
 
-impl<St, M, F, Err> ServiceFactory<St, WebRequest<Err>> for ScopeServiceFactory<St, M, F, Err>
+impl<St, M, F, Err> ServiceFactory<St, WebRequest<Err>, SharedCfg>
+    for ScopeServiceFactory<St, M, F, Err>
 where
     M: Middleware<AppRouter<St, F::Service, Err>, SharedCfg> + 'static,
     M::Service: Service<St, Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
             St,
             WebRequest<Err>,
+            SharedCfg,
             Res = WebRequest<Err>,
             Error = Err::Container,
-            InitCfg = SharedCfg,
             InitError = (),
         > + 'static,
     Err: ErrorRenderer,
@@ -434,7 +435,6 @@ where
     type Res = WebResponse;
     type Error = Err::Container;
     type Service = M::Service;
-    type InitCfg = SharedCfg;
     type InitError = ();
 
     async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {

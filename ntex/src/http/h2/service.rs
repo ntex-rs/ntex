@@ -32,10 +32,10 @@ where
     Err: ResponseError + 'static,
 {
     /// Create new `HttpService` instance with config.
-    pub(crate) fn new<Sf>(sf: impl IntoServiceFactory<Sf, (), Request>) -> Self
+    pub(crate) fn new<Sf>(sf: impl IntoServiceFactory<Sf, (), Request, SharedCfg>) -> Self
     where
         Hst: 'static,
-        Sf: ServiceFactory<(), Request, Error = Err, InitCfg = SharedCfg> + 'static,
+        Sf: ServiceFactory<(), Request, SharedCfg, Error = Err> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: StdError + 'static,
     {

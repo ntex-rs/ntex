@@ -145,7 +145,8 @@ where
     }
 }
 
-impl<F, St, Req, Res, Err, Cfg> IntoServiceFactory<FnServiceFactory<F, Req, Res, Err, Cfg>, St, Req>
+impl<F, St, Req, Res, Err, Cfg>
+    IntoServiceFactory<FnServiceFactory<F, Req, Res, Err, Cfg>, St, Req, Cfg>
     for FnService<F, Req, Res, Err>
 where
     F: AsyncFn(Req) -> Result<Res, Err> + Clone,
@@ -268,7 +269,8 @@ where
     }
 }
 
-impl<F, St, Req, Res, Err, Cfg> ServiceFactory<St, Req> for FnServiceFactory<F, Req, Res, Err, Cfg>
+impl<F, St, Req, Res, Err, Cfg> ServiceFactory<St, Req, Cfg>
+    for FnServiceFactory<F, Req, Res, Err, Cfg>
 where
     F: AsyncFn(Req) -> Result<Res, Err> + Clone,
 {
@@ -276,7 +278,6 @@ where
     type Error = Err;
 
     type Service = FnService<F, Req, Res, Err>;
-    type InitCfg = Cfg;
     type InitError = Infallible;
 
     #[inline]
@@ -288,8 +289,8 @@ where
     }
 }
 
-impl<St, F, Req, Res, Err, Cfg> IntoServiceFactory<FnServiceFactory<F, Req, Res, Err, Cfg>, St, Req>
-    for F
+impl<St, F, Req, Res, Err, Cfg>
+    IntoServiceFactory<FnServiceFactory<F, Req, Res, Err, Cfg>, St, Req, Cfg> for F
 where
     F: AsyncFn(Req) -> Result<Res, Err> + Clone,
 {
@@ -332,7 +333,8 @@ where
     }
 }
 
-impl<St, F, Cfg, S, Req, Err> ServiceFactory<St, Req> for FnServiceConfig<St, F, Cfg, S, Req, Err>
+impl<St, F, Cfg, S, Req, Err> ServiceFactory<St, Req, Cfg>
+    for FnServiceConfig<St, F, Cfg, S, Req, Err>
 where
     F: AsyncFn(&Cfg) -> Result<S, Err>,
     S: Service<St, Req = Req>,
@@ -341,7 +343,6 @@ where
     type Error = S::Error;
 
     type Service = S;
-    type InitCfg = Cfg;
     type InitError = Err;
 
     #[inline]
@@ -368,7 +369,7 @@ where
     }
 }
 
-impl<St, F, S, Req, E, C> ServiceFactory<St, Req> for FnServiceNoConfig<St, F, S, E, C>
+impl<St, F, S, Req, E, C> ServiceFactory<St, Req, C> for FnServiceNoConfig<St, F, S, E, C>
 where
     F: AsyncFn() -> Result<S, E>,
     S: Service<St, Req = Req>,
@@ -377,7 +378,6 @@ where
     type Res = S::Res;
     type Error = S::Error;
     type Service = S;
-    type InitCfg = C;
     type InitError = E;
 
     #[inline]

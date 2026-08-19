@@ -28,9 +28,11 @@ where
 {
     #[must_use]
     /// Create new `HttpService` instance.
-    pub fn new<Sf>(sf: impl IntoServiceFactory<Sf, (), Request>) -> HttpService<Hst, F, B, Err>
+    pub fn new<Sf>(
+        sf: impl IntoServiceFactory<Sf, (), Request, SharedCfg>,
+    ) -> HttpService<Hst, F, B, Err>
     where
-        Sf: ServiceFactory<(), Request, Error = Err, InitCfg = SharedCfg> + 'static,
+        Sf: ServiceFactory<(), Request, SharedCfg, Error = Err> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Error,
     {
@@ -45,11 +47,11 @@ where
     #[must_use]
     /// Create new `HttpService` instance.
     pub fn with_st<Sf, St>(
-        sf: impl IntoServiceFactory<Sf, St, Request>,
+        sf: impl IntoServiceFactory<Sf, St, Request, SharedCfg>,
         sm: StateMapping<St, Hst>,
     ) -> HttpService<Hst, F, B, Err>
     where
-        Sf: ServiceFactory<St, Request, Error = Err, InitCfg = SharedCfg> + 'static,
+        Sf: ServiceFactory<St, Request, SharedCfg, Error = Err> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Error,
         St: 'static,
@@ -75,9 +77,11 @@ where
 {
     #[must_use]
     /// Create *http service* for HTTP/1 protocol.
-    pub fn h1<Sf>(sf: impl IntoServiceFactory<Sf, (), Request>) -> h1::H1Service<St, F, B, Err>
+    pub fn h1<Sf>(
+        sf: impl IntoServiceFactory<Sf, (), Request, SharedCfg>,
+    ) -> h1::H1Service<St, F, B, Err>
     where
-        Sf: ServiceFactory<(), Request, Error = Err, InitCfg = SharedCfg> + 'static,
+        Sf: ServiceFactory<(), Request, SharedCfg, Error = Err> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Error,
     {
@@ -86,9 +90,11 @@ where
 
     #[must_use]
     /// Create *http service* for HTTP/2 protocol.
-    pub fn h2<Sf>(sf: impl IntoServiceFactory<Sf, (), Request>) -> h2::H2Service<St, F, B, Err>
+    pub fn h2<Sf>(
+        sf: impl IntoServiceFactory<Sf, (), Request, SharedCfg>,
+    ) -> h2::H2Service<St, F, B, Err>
     where
-        Sf: ServiceFactory<(), Request, Error = Err, InitCfg = SharedCfg> + 'static,
+        Sf: ServiceFactory<(), Request, SharedCfg, Error = Err> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Error,
     {

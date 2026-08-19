@@ -153,14 +153,13 @@ impl Connector {
 
     #[must_use]
     /// Use custom connector to open un-secured connections.
-    pub fn connector<T>(mut self, f: impl IntoServiceFactory<T, (), TcpConnect<Uri>>) -> Self
+    pub fn connector<T>(
+        mut self,
+        f: impl IntoServiceFactory<T, (), TcpConnect<Uri>, SharedCfg>,
+    ) -> Self
     where
-        T: ServiceFactory<
-                (),
-                TcpConnect<Uri>,
-                Error = Error<connect::ConnectError>,
-                InitCfg = SharedCfg,
-            > + 'static,
+        T: ServiceFactory<(), TcpConnect<Uri>, SharedCfg, Error = Error<connect::ConnectError>>
+            + 'static,
         T::InitError: StdError,
         IoBoxed: From<T::Res>,
     {
@@ -177,14 +176,13 @@ impl Connector {
 
     #[must_use]
     /// Use custom connector to open secure connections.
-    pub fn secure_connector<T>(mut self, f: impl IntoServiceFactory<T, (), TcpConnect<Uri>>) -> Self
+    pub fn secure_connector<T>(
+        mut self,
+        f: impl IntoServiceFactory<T, (), TcpConnect<Uri>, SharedCfg>,
+    ) -> Self
     where
-        T: ServiceFactory<
-                (),
-                TcpConnect<Uri>,
-                Error = Error<connect::ConnectError>,
-                InitCfg = SharedCfg,
-            > + 'static,
+        T: ServiceFactory<(), TcpConnect<Uri>, SharedCfg, Error = Error<connect::ConnectError>>
+            + 'static,
         T::InitError: StdError,
         IoBoxed: From<T::Res>,
     {
@@ -200,11 +198,10 @@ impl Connector {
     }
 }
 
-impl ServiceFactory<(), Connect> for Connector {
+impl ServiceFactory<(), Connect, SharedCfg> for Connector {
     type Res = Connection;
     type Error = Error<ClientError>;
     type Service = ConnectorService;
-    type InitCfg = SharedCfg;
     type InitError = Box<dyn StdError>;
 
     async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {

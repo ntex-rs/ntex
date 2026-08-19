@@ -7,9 +7,9 @@ use ntex_service::{Ctx, IntoServiceFactory, ReadyCtx, Service, ServiceFactory};
 /// Construct `Variant` service factory.
 ///
 /// Variant service allow to combine multiple different services into a single service.
-pub fn variant<V1: ServiceFactory<St, V1R>, St, V1R>(
-    f: impl IntoServiceFactory<V1, St, V1R>,
-) -> Variant<V1, St, V1R> {
+pub fn variant<V1: ServiceFactory<St, V1R, Cfg>, St, V1R, Cfg>(
+    f: impl IntoServiceFactory<V1, St, V1R, Cfg>,
+) -> Variant<St, Cfg, V1, V1R> {
     Variant {
         factory: f.into_factory(),
         _t: PhantomData,
@@ -17,29 +17,22 @@ pub fn variant<V1: ServiceFactory<St, V1R>, St, V1R>(
 }
 
 /// Combine multiple different service types into a single service.
-pub struct Variant<A, St, AR> {
+pub struct Variant<St, Cfg, A, AR> {
     factory: A,
-    _t: PhantomData<(St, AR)>,
+    _t: PhantomData<(St, Cfg, AR)>,
 }
 
-impl<A, St, AR> Variant<A, St, AR>
+impl<St, Cfg, A, AR> Variant<St, Cfg, A, AR>
 where
-    A: ServiceFactory<St, AR>,
+    A: ServiceFactory<St, AR, Cfg>,
 {
     /// Convert to a Variant with two request types
     pub fn v2<B, BR>(
         self,
-        f: impl IntoServiceFactory<B, St, BR>,
-    ) -> VariantFactory2<St, A, B, AR, BR>
+        f: impl IntoServiceFactory<B, St, BR, Cfg>,
+    ) -> VariantFactory2<St, Cfg, A, B, AR, BR>
     where
-        B: ServiceFactory<
-                St,
-                BR,
-                Res = A::Res,
-                Error = A::Error,
-                InitCfg = A::InitCfg,
-                InitError = A::InitError,
-            >,
+        B: ServiceFactory<St, BR, Cfg, Res = A::Res, Error = A::Error, InitError = A::InitError>,
     {
         VariantFactory2 {
             V1: self.factory,
@@ -49,7 +42,7 @@ where
     }
 }
 
-impl<A, St, AR> fmt::Debug for Variant<A, St, AR>
+impl<St, Cfg, A, AR> fmt::Debug for Variant<St, Cfg, A, AR>
 where
     A: fmt::Debug,
 {
@@ -63,18 +56,17 @@ where
 macro_rules! variant_impl_and ({$fac1_type:ident, $fac2_type:ident, $name:ident, $r_name:ident, $m_name:ident, ($($T:ident),+), ($($R:ident),+)} => {
 
     #[allow(non_snake_case)]
-    impl<St, V1, $($T,)+ V1R, $($R,)+> $fac1_type<St, V1, $($T,)+ V1R, $($R,)+>
+    impl<St, Cfg, V1, $($T,)+ V1R, $($R,)+> $fac1_type<St, Cfg, V1, $($T,)+ V1R, $($R,)+>
         where
             V1: ServiceFactory<St, V1R>,
         {
             /// Convert to a Variant with more request types
-            pub fn $m_name<$name, $r_name, F>(self, factory: F) -> $fac2_type<St, V1, $($T,)+ $name, V1R, $($R,)+ $r_name>
-            where $name: ServiceFactory<St, $r_name,
+            pub fn $m_name<$name, $r_name, F>(self, factory: F) -> $fac2_type<St, Cfg, V1, $($T,)+ $name, V1R, $($R,)+ $r_name>
+            where $name: ServiceFactory<St, $r_name, Cfg,
                     Res = V1::Res,
                     Error = V1::Error,
-                    InitCfg = V1::InitCfg,
                     InitError = V1::InitError>,
-                  F: IntoServiceFactory<$name, St, $r_name>,
+                  F: IntoServiceFactory<$name, St, $r_name, Cfg>,
             {
                 $fac2_type {
                     V1: self.V1,
@@ -168,13 +160,13 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
     }
 
     #[allow(non_snake_case)]
-    pub struct $fac_type<St, V1, $($T,)+ V1R, $($R,)+> {
+    pub struct $fac_type<St, Cfg, V1, $($T,)+ V1R, $($R,)+> {
         V1: V1,
         $($T: $T,)+
-        _t: PhantomData<(St, V1R, $($R,)+)>,
+        _t: PhantomData<(St, Cfg, V1R, $($R,)+)>,
     }
 
-    impl<St, V1: Clone, $($T: Clone,)+ V1R, $($R,)+> Clone for $fac_type<St, V1, $($T,)+ V1R, $($R,)+> {
+    impl<St, Cfg, V1: Clone, $($T: Clone,)+ V1R, $($R,)+> Clone for $fac_type<St, Cfg, V1, $($T,)+ V1R, $($R,)+> {
         fn clone(&self) -> Self {
             Self {
                 _t: PhantomData,
@@ -184,7 +176,7 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
         }
     }
 
-    impl<St, V1: fmt::Debug, $($T: fmt::Debug,)+ V1R, $($R,)+> fmt::Debug for $fac_type<St, V1, $($T,)+ V1R, $($R,)+> {
+    impl<St, Cfg, V1: fmt::Debug, $($T: fmt::Debug,)+ V1R, $($R,)+> fmt::Debug for $fac_type<St, Cfg, V1, $($T,)+ V1R, $($R,)+> {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.debug_struct("Variant")
                 .field("V1", &self.V1)
@@ -193,18 +185,17 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
         }
     }
 
-    impl<St, V1, $($T,)+ V1R, $($R,)+> ServiceFactory<St, $enum_type<V1R, $($R),+>> for $fac_type<St, V1, $($T,)+ V1R, $($R,)+>
+    impl<St, Cfg, V1, $($T,)+ V1R, $($R,)+> ServiceFactory<St, $enum_type<V1R, $($R),+>, Cfg> for $fac_type<St, Cfg, V1, $($T,)+ V1R, $($R,)+>
     where
-        V1: ServiceFactory<St, V1R>,
-        $($T: ServiceFactory<St, $R, Res = V1::Res, Error = V1::Error, InitCfg = V1::InitCfg, InitError = V1::InitError>),+
+        V1: ServiceFactory<St, V1R, Cfg>,
+        $($T: ServiceFactory<St, $R, Cfg, Res = V1::Res, Error = V1::Error, InitError = V1::InitError>),+
     {
         type Res = V1::Res;
         type Error = V1::Error;
         type Service = $srv_type<St, V1::Service, $($T::Service,)+ V1R, $($R,)+>;
-        type InitCfg = V1::InitCfg;
         type InitError = V1::InitError;
 
-        async fn create(&self, cfg: &V1::InitCfg) -> Result<Self::Service, Self::InitError> {
+        async fn create(&self, cfg: &Cfg) -> Result<Self::Service, Self::InitError> {
             Ok($srv_type {
                 V1: self.V1.create(cfg).await?,
                 $($T: self.$T.create(cfg).await?,)+

@@ -26,15 +26,15 @@ where
     F: ServiceFactory<
             St,
             WebRequest<Err>,
+            SharedCfg,
             Res = WebRequest<Err>,
             Error = Err::Container,
-            InitCfg = SharedCfg,
             InitError = (),
         >,
     Err: ErrorRenderer,
 {
     middleware: M,
-    filter: ServiceChainFactory<F, St, WebRequest<Err>>,
+    filter: ServiceChainFactory<F, St, WebRequest<Err>, SharedCfg>,
     rmap: Rc<ResourceMap>,
     router: Rc<Router<HttpService<St, Err>, Guards>>,
     default: Rc<HttpService<St, Err>>,
@@ -48,16 +48,16 @@ where
     F: ServiceFactory<
             St,
             WebRequest<Err>,
+            SharedCfg,
             Res = WebRequest<Err>,
             Error = Err::Container,
-            InitCfg = SharedCfg,
             InitError = (),
         >,
     Err: ErrorRenderer,
 {
     pub(super) fn new(
         middleware: M,
-        filter: ServiceChainFactory<F, St, WebRequest<Err>>,
+        filter: ServiceChainFactory<F, St, WebRequest<Err>, SharedCfg>,
         services: Vec<Box<dyn AppServiceFactory<St, Err>>>,
         default: Option<HttpService<St, Err>>,
         external: Vec<ResourceDef>,
@@ -120,7 +120,7 @@ where
     }
 }
 
-impl<St, M, F, Err> ServiceFactory<St, Request> for AppFactory<St, M, F, Err>
+impl<St, M, F, Err> ServiceFactory<St, Request, SharedCfg> for AppFactory<St, M, F, Err>
 where
     St: 'static,
     M: Middleware<AppRouter<St, F::Service, Err>, SharedCfg> + 'static,
@@ -128,9 +128,9 @@ where
     F: ServiceFactory<
             St,
             WebRequest<Err>,
+            SharedCfg,
             Res = WebRequest<Err>,
             Error = Err::Container,
-            InitCfg = SharedCfg,
             InitError = (),
         >,
     Err: ErrorRenderer,
@@ -139,7 +139,6 @@ where
     type Error = Err::Container;
 
     type Service = AppService<M::Service, St, Err>;
-    type InitCfg = SharedCfg;
     type InitError = AppInitError;
 
     async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {

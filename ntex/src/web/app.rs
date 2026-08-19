@@ -19,7 +19,7 @@ use super::{DefaultError, ErrorRenderer, HttpService, Resource, Route, WebReques
 #[debug("App")]
 pub struct App<St, M, F, Err: ErrorRenderer = DefaultError> {
     middleware: M,
-    filter: ServiceChainFactory<F, St, WebRequest<Err>>,
+    filter: ServiceChainFactory<F, St, WebRequest<Err>, SharedCfg>,
     services: Vec<Box<dyn AppServiceFactory<St, Err>>>,
     default: Option<HttpService<St, Err>>,
     external: Vec<ResourceDef>,
@@ -71,9 +71,9 @@ where
     F: ServiceFactory<
             St,
             WebRequest<Err>,
+            SharedCfg,
             Res = WebRequest<Err>,
             Error = Err::Container,
-            InitCfg = SharedCfg,
             InitError = (),
         >,
     Err: ErrorRenderer,
@@ -194,14 +194,17 @@ where
     ///         );
     /// }
     /// ```
-    pub fn default_service<U>(mut self, f: impl IntoServiceFactory<U, St, WebRequest<Err>>) -> Self
+    pub fn default_service<U>(
+        mut self,
+        f: impl IntoServiceFactory<U, St, WebRequest<Err>, SharedCfg>,
+    ) -> Self
     where
         U: ServiceFactory<
                 St,
                 WebRequest<Err>,
+                SharedCfg,
                 Res = WebResponse,
                 Error = Err::Container,
-                InitCfg = SharedCfg,
             > + 'static,
         U::InitError: fmt::Debug,
     {
@@ -271,16 +274,16 @@ where
     /// ```
     pub fn filter<S>(
         self,
-        filter: impl IntoServiceFactory<S, St, WebRequest<Err>>,
+        filter: impl IntoServiceFactory<S, St, WebRequest<Err>, SharedCfg>,
     ) -> App<
         St,
         M,
         impl ServiceFactory<
             St,
             WebRequest<Err>,
+            SharedCfg,
             Res = WebRequest<Err>,
             Error = Err::Container,
-            InitCfg = SharedCfg,
             InitError = (),
         >,
         Err,
@@ -289,9 +292,9 @@ where
         S: ServiceFactory<
                 St,
                 WebRequest<Err>,
+                SharedCfg,
                 Res = WebRequest<Err>,
                 Error = Err::Container,
-                InitCfg = SharedCfg,
             >,
     {
         App {
@@ -365,9 +368,9 @@ where
     F: ServiceFactory<
             St,
             WebRequest<Err>,
+            SharedCfg,
             Res = WebRequest<Err>,
             Error = Err::Container,
-            InitCfg = SharedCfg,
             InitError = (),
         >,
     Err: ErrorRenderer,
@@ -394,16 +397,16 @@ where
     ) -> impl ServiceFactory<
         St,
         Request,
+        SharedCfg,
         Res = WebResponse,
         Error = Err::Container,
-        InitCfg = SharedCfg,
         InitError = AppInitError,
     > {
-        IntoServiceFactory::<AppFactory<St, M, F, Err>, St, Request>::into_factory(self)
+        IntoServiceFactory::<AppFactory<St, M, F, Err>, St, Request, SharedCfg>::into_factory(self)
     }
 }
 
-impl<St, M, F, Err> IntoServiceFactory<AppFactory<St, M, F, Err>, St, Request>
+impl<St, M, F, Err> IntoServiceFactory<AppFactory<St, M, F, Err>, St, Request, SharedCfg>
     for App<St, M, F, Err>
 where
     St: 'static,
@@ -412,9 +415,9 @@ where
     F: ServiceFactory<
             St,
             WebRequest<Err>,
+            SharedCfg,
             Res = WebRequest<Err>,
             Error = Err::Container,
-            InitCfg = SharedCfg,
             InitError = (),
         >,
     Err: ErrorRenderer,

@@ -102,16 +102,16 @@ impl<St: 'static, Err: ErrorRenderer> WebServiceConfig<St, Err> {
     pub fn register_service<S>(
         &mut self,
         rdef: ResourceDef,
-        factory: impl IntoServiceFactory<S, St, WebRequest<Err>>,
+        factory: impl IntoServiceFactory<S, St, WebRequest<Err>, SharedCfg>,
         guards: Option<Vec<Box<dyn Guard>>>,
         nested: Option<Rc<ResourceMap>>,
     ) where
         S: ServiceFactory<
                 St,
                 WebRequest<Err>,
+                SharedCfg,
                 Res = WebResponse,
                 Error = Err::Container,
-                InitCfg = SharedCfg,
                 InitError = (),
             > + 'static,
     {
@@ -191,13 +191,13 @@ impl WebServiceAdapter {
     pub fn finish<St, T, F, Err>(self, service: F) -> impl WebServiceFactory<St, Err>
     where
         St: 'static,
-        F: IntoServiceFactory<T, St, WebRequest<Err>>,
+        F: IntoServiceFactory<T, St, WebRequest<Err>, SharedCfg>,
         T: ServiceFactory<
                 St,
                 WebRequest<Err>,
+                SharedCfg,
                 Res = WebResponse,
                 Error = Err::Container,
-                InitCfg = SharedCfg,
             > + 'static,
         Err: ErrorRenderer,
     {
@@ -223,9 +223,9 @@ where
     Sf: ServiceFactory<
             St,
             WebRequest<Err>,
+            SharedCfg,
             Res = WebResponse,
             Error = Err::Container,
-            InitCfg = SharedCfg,
             InitError = (),
         > + 'static,
     Err: ErrorRenderer,

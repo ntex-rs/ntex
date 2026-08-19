@@ -57,20 +57,19 @@ impl<A, B> AndThenFactory<A, B> {
     }
 }
 
-impl<A, B, Req, St> ServiceFactory<St, Req> for AndThenFactory<A, B>
+impl<A, B, St, Req, Cfg> ServiceFactory<St, Req, Cfg> for AndThenFactory<A, B>
 where
-    A: ServiceFactory<St, Req>,
-    B: ServiceFactory<St, A::Res, Error = A::Error, InitCfg = A::InitCfg, InitError = A::InitError>,
+    A: ServiceFactory<St, Req, Cfg>,
+    B: ServiceFactory<St, A::Res, Cfg, Error = A::Error, InitError = A::InitError>,
 {
     type Res = B::Res;
     type Error = A::Error;
 
     type Service = AndThen<A::Service, B::Service>;
-    type InitCfg = A::InitCfg;
     type InitError = A::InitError;
 
     #[inline]
-    async fn create(&self, cfg: &A::InitCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &Cfg) -> Result<Self::Service, Self::InitError> {
         Ok(AndThen {
             svc1: self.svc1.create(cfg).await?,
             svc2: self.svc2.create(cfg).await?,

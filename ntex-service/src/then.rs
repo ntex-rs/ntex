@@ -56,14 +56,14 @@ impl<A, B> ThenFactory<A, B> {
     }
 }
 
-impl<A, B, St, Req> ServiceFactory<St, Req> for ThenFactory<A, B>
+impl<A, B, St, Req, Cfg> ServiceFactory<St, Req, Cfg> for ThenFactory<A, B>
 where
-    A: ServiceFactory<St, Req>,
+    A: ServiceFactory<St, Req, Cfg>,
     B: ServiceFactory<
             St,
             Result<A::Res, A::Error>,
+            Cfg,
             Error = A::Error,
-            InitCfg = A::InitCfg,
             InitError = A::InitError,
         >,
 {
@@ -71,10 +71,9 @@ where
     type Error = A::Error;
 
     type Service = Then<A::Service, B::Service>;
-    type InitCfg = A::InitCfg;
     type InitError = A::InitError;
 
-    async fn create(&self, cfg: &A::InitCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &Cfg) -> Result<Self::Service, Self::InitError> {
         Ok(Then {
             svc1: self.svc1.create(cfg).await?,
             svc2: self.svc2.create(cfg).await?,

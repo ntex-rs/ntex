@@ -88,15 +88,14 @@ impl<St, Err: ErrorRenderer> Filter<St, Err> {
     }
 }
 
-impl<St, Err: ErrorRenderer> ServiceFactory<St, WebRequest<Err>> for Filter<St, Err> {
+impl<St, Err: ErrorRenderer, Cfg> ServiceFactory<St, WebRequest<Err>, Cfg> for Filter<St, Err> {
     type Res = WebRequest<Err>;
     type Error = Err::Container;
 
     type Service = Filter<St, Err>;
-    type InitCfg = SharedCfg;
     type InitError = ();
 
-    async fn create(&self, _: &SharedCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, _: &Cfg) -> Result<Self::Service, Self::InitError> {
         Ok(Filter(PhantomData))
     }
 }

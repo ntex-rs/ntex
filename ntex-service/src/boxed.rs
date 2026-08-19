@@ -129,41 +129,33 @@ where
 // ============================ ServiceFactory =============================
 
 /// Boxed service factory.
-pub struct BoxServiceFactory<St, Req, Res, Err, InitCfg, InitError> {
-    inner: Rc<
-        dyn ServiceFactoryObj<
-                St,
-                Req,
-                Res = Res,
-                Error = Err,
-                InitCfg = InitCfg,
-                InitError = InitError,
-            >,
-    >,
+pub struct BoxServiceFactory<St, Req, Res, Err, Cfg, InitError> {
+    inner: Rc<dyn ServiceFactoryObj<St, Req, Cfg, Res = Res, Error = Err, InitErr = InitError>>,
 }
 
 /// Creates a boxed service factory.
-pub fn factory<Sf, St, Req>(
+pub fn factory<Sf, St, Req, Cfg>(
     factory: Sf,
-) -> BoxServiceFactory<St, Req, Sf::Res, Sf::Error, Sf::InitCfg, Sf::InitError>
+) -> BoxServiceFactory<St, Req, Sf::Res, Sf::Error, Cfg, Sf::InitError>
 where
-    Sf: ServiceFactory<St, Req> + 'static,
+    Sf: ServiceFactory<St, Req, Cfg> + 'static,
     St: 'static,
     Req: 'static,
+    Cfg: 'static,
 {
     BoxServiceFactory::new(factory)
 }
 
-impl<St, Req, Res, Err, InitCfg, InitErr> BoxServiceFactory<St, Req, Res, Err, InitCfg, InitErr>
+impl<St, Req, Res, Err, Cfg, InitErr> BoxServiceFactory<St, Req, Res, Err, Cfg, InitErr>
 where
     St: 'static,
     Req: 'static,
+    Cfg: 'static,
 {
     /// Creates a boxed service factory.
     pub fn new<Sf>(factory: Sf) -> Self
     where
-        Sf: ServiceFactory<St, Req, Res = Res, Error = Err, InitCfg = InitCfg, InitError = InitErr>
-            + 'static,
+        Sf: ServiceFactory<St, Req, Cfg, Res = Res, Error = Err, InitError = InitErr> + 'static,
         St: 'static,
         Req: 'static,
     {
@@ -173,8 +165,8 @@ where
     }
 }
 
-impl<St, Req, Res, Err, InitCfg, InitError> ServiceFactory<St, Req>
-    for BoxServiceFactory<St, Req, Res, Err, InitCfg, InitError>
+impl<St, Req, Res, Err, Cfg, InitError> ServiceFactory<St, Req, Cfg>
+    for BoxServiceFactory<St, Req, Res, Err, Cfg, InitError>
 where
     Req: 'static,
 {
@@ -182,11 +174,10 @@ where
     type Error = Err;
 
     type Service = BoxService<St, Req, Res, Err>;
-    type InitCfg = InitCfg;
     type InitError = InitError;
 
     #[inline]
-    async fn create(&self, cfg: &InitCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &Cfg) -> Result<Self::Service, Self::InitError> {
         self.inner.create(cfg).await
     }
 }
@@ -199,36 +190,35 @@ impl<St, Req, Res, Err, Cfg, InitError> fmt::Debug
     }
 }
 
-trait ServiceFactoryObj<St, Req> {
+trait ServiceFactoryObj<St, Req, Cfg> {
     type Res;
     type Error;
-    type InitCfg;
-    type InitError;
+    type InitErr;
 
     fn create<'a>(
         &'a self,
-        cfg: &'a Self::InitCfg,
-    ) -> BoxFuture<'a, BoxService<St, Req, Self::Res, Self::Error>, Self::InitError>
+        cfg: &'a Cfg,
+    ) -> BoxFuture<'a, BoxService<St, Req, Self::Res, Self::Error>, Self::InitErr>
     where
         Req: 'a;
 }
 
-impl<Sf, St, Req> ServiceFactoryObj<St, Req> for Sf
+impl<Sf, St, Req, Cfg> ServiceFactoryObj<St, Req, Cfg> for Sf
 where
     St: 'static,
     Req: 'static,
-    Sf: ServiceFactory<St, Req> + 'static,
+    Cfg: 'static,
+    Sf: ServiceFactory<St, Req, Cfg> + 'static,
 {
     type Res = Sf::Res;
     type Error = Sf::Error;
-    type InitCfg = Sf::InitCfg;
-    type InitError = Sf::InitError;
+    type InitErr = Sf::InitError;
 
     #[inline]
     fn create<'a>(
         &'a self,
-        cfg: &'a Self::InitCfg,
-    ) -> BoxFuture<'a, BoxService<St, Req, Self::Res, Self::Error>, Self::InitError>
+        cfg: &'a Cfg,
+    ) -> BoxFuture<'a, BoxService<St, Req, Self::Res, Self::Error>, Self::InitErr>
     where
         Req: 'a,
     {

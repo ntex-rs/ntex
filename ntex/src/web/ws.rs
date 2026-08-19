@@ -71,10 +71,10 @@ pub fn subprotocols(req: &HttpRequest) -> impl Iterator<Item = &str> {
 pub async fn start<Sf>(
     req: &HttpRequest,
     subprotocol: Option<&str>,
-    f: impl IntoServiceFactory<Sf, (), Frame>,
+    f: impl IntoServiceFactory<Sf, (), Frame, WsSink>,
 ) -> Result<HttpResponse, Sf::InitError>
 where
-    Sf: ServiceFactory<(), Frame, Res = Option<Message>, InitCfg = WsSink> + 'static,
+    Sf: ServiceFactory<(), Frame, WsSink, Res = Option<Message>> + 'static,
     Sf::Error: fmt::Debug,
     Sf::InitError: From<HandshakeError> + fmt::Debug,
 {
@@ -100,11 +100,10 @@ where
 pub async fn start_with<Sf>(
     req: &HttpRequest,
     subprotocol: Option<&str>,
-    f: impl IntoServiceFactory<Sf, (), DispatchItem<ws::Codec>>,
+    f: impl IntoServiceFactory<Sf, (), DispatchItem<ws::Codec>, WsSink>,
 ) -> Result<HttpResponse, Sf::InitError>
 where
-    Sf: ServiceFactory<(), DispatchItem<ws::Codec>, Res = Option<Message>, InitCfg = WsSink>
-        + 'static,
+    Sf: ServiceFactory<(), DispatchItem<ws::Codec>, WsSink, Res = Option<Message>> + 'static,
     Sf::Error: fmt::Debug,
     Sf::InitError: From<HandshakeError>,
 {

@@ -5,43 +5,43 @@ use super::{Ctx, Service, ServiceFactory};
 /// Service for the `map` combinator, changing the type of a service's response.
 ///
 /// This is created by the `ServiceExt::map` method.
-pub struct Map<S, F, Res> {
-    svc: S,
+pub struct Map<F, S, Res> {
     f: F,
+    svc: S,
     _t: PhantomData<fn() -> Res>,
 }
 
-impl<S, F, Res> Map<S, F, Res> {
+impl<F, S, Res> Map<F, S, Res> {
     /// Create new `Map` combinator
-    pub(crate) fn new<St>(svc: S, f: F) -> Self
+    pub(crate) fn new<St>(f: F, svc: S) -> Self
     where
-        S: Service<St>,
         F: Fn(S::Res) -> Res,
+        S: Service<St>,
     {
         Self {
-            svc,
             f,
+            svc,
             _t: PhantomData,
         }
     }
 }
 
-impl<S, F, Res> Clone for Map<S, F, Res>
+impl<F, S, Res> Clone for Map<F, S, Res>
 where
-    S: Clone,
     F: Clone,
+    S: Clone,
 {
     #[inline]
     fn clone(&self) -> Self {
         Map {
-            svc: self.svc.clone(),
             f: self.f.clone(),
+            svc: self.svc.clone(),
             _t: PhantomData,
         }
     }
 }
 
-impl<S, F, Res> fmt::Debug for Map<S, F, Res>
+impl<F, S, Res> fmt::Debug for Map<F, S, Res>
 where
     S: fmt::Debug,
 {
@@ -53,7 +53,7 @@ where
     }
 }
 
-impl<S, F, Res, St> Service<St> for Map<S, F, Res>
+impl<F, S, St, Res> Service<St> for Map<F, S, Res>
 where
     S: Service<St>,
     F: Fn(S::Res) -> Res,
@@ -72,31 +72,31 @@ where
 }
 
 /// `MapNewService` new service combinator
-pub struct MapFactory<Sf, F, Res> {
-    sf: Sf,
+pub struct MapFactory<F, Sf, Res> {
     f: F,
+    sf: Sf,
     r: PhantomData<fn() -> Res>,
 }
 
-impl<Sf, F, Res> MapFactory<Sf, F, Res> {
+impl<F, Sf, Res> MapFactory<F, Sf, Res> {
     /// Create new `Map` new service instance
-    pub(crate) fn new<St, Req>(sf: Sf, f: F) -> Self
+    pub(crate) fn new<St, Req, Cfg>(f: F, sf: Sf) -> Self
     where
-        Sf: ServiceFactory<St, Req>,
         F: Fn(Sf::Res) -> Res,
+        Sf: ServiceFactory<St, Req, Cfg>,
     {
         Self {
-            sf,
             f,
+            sf,
             r: PhantomData,
         }
     }
 }
 
-impl<Sf, F, Res> Clone for MapFactory<Sf, F, Res>
+impl<F, Sf, Res> Clone for MapFactory<F, Sf, Res>
 where
-    Sf: Clone,
     F: Clone,
+    Sf: Clone,
 {
     #[inline]
     fn clone(&self) -> Self {
@@ -108,7 +108,7 @@ where
     }
 }
 
-impl<Sf, F, Res> fmt::Debug for MapFactory<Sf, F, Res>
+impl<F, Sf, Res> fmt::Debug for MapFactory<F, Sf, Res>
 where
     Sf: fmt::Debug,
 {
@@ -120,20 +120,19 @@ where
     }
 }
 
-impl<Sf, St, Req, F, Res> ServiceFactory<St, Req> for MapFactory<Sf, F, Res>
+impl<F, Sf, St, Req, Cfg, Res> ServiceFactory<St, Req, Cfg> for MapFactory<F, Sf, Res>
 where
-    Sf: ServiceFactory<St, Req>,
     F: Fn(Sf::Res) -> Res + Clone,
+    Sf: ServiceFactory<St, Req, Cfg>,
 {
     type Res = Res;
     type Error = Sf::Error;
 
-    type Service = Map<Sf::Service, F, Res>;
-    type InitCfg = Sf::InitCfg;
+    type Service = Map<F, Sf::Service, Res>;
     type InitError = Sf::InitError;
 
     #[inline]
-    async fn create(&self, cfg: &Sf::InitCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &Cfg) -> Result<Self::Service, Self::InitError> {
         Ok(Map {
             svc: self.sf.create(cfg).await?,
             f: self.f.clone(),
