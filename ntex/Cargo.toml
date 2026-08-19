@@ -15,7 +15,7 @@ categories = [
 ]
 license = "MIT OR Apache-2.0"
 edition = "2024"
-rust-version = "1.97"
+rust-version = "1.95"
 
 [package.metadata.docs.rs]
 toolchain = "nightly"

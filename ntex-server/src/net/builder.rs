@@ -2,7 +2,7 @@ use std::{fmt, io, marker::PhantomData, net};
 
 use ntex_io::Io;
 use ntex_rt::System;
-use ntex_service::{IntoService, Service, cfg::SharedCfg};
+use ntex_service::{IntoService, Service, cfg::SharedCfg, state::State};
 use ntex_util::time::Millis;
 use socket2::{Domain, SockAddr, Socket, Type};
 
@@ -38,7 +38,7 @@ impl Default for ServerBuilder {
 
 impl<St> ServerBuilder<St>
 where
-    St: Clone + 'static,
+    St: State<St, Io> + Clone + 'static,
 {
     #[must_use]
     /// Create new Server builder instance.
@@ -232,6 +232,7 @@ where
         F: AsyncFn(&St) -> I + Send + Clone + 'static,
         S: Service<St, Req = Io> + 'static,
         I: IntoService<S, St> + 'static,
+        St: State<St, Io> + 'static,
     {
         let cfg = cfg.into();
         let sockets = bind_addr(addr, self.backlog)?;
@@ -255,7 +256,7 @@ where
 
     #[cfg(unix)]
     /// Add new unix domain service to the server.
-    pub fn bind_uds<F, S, I>(
+    pub fn bind_uds<F, I, S>(
         self,
         name: impl AsRef<str>,
         addr: impl AsRef<std::path::Path>,
@@ -264,8 +265,9 @@ where
     ) -> io::Result<Self>
     where
         F: AsyncFn(&St) -> I + Send + Clone + 'static,
-        S: Service<St, Req = Io> + 'static,
         I: IntoService<S, St> + 'static,
+        S: Service<St, Req = Io> + 'static,
+        St: State<St, Io> + 'static,
     {
         use std::os::unix::net::UnixListener;
 
@@ -286,7 +288,7 @@ where
     /// Add new unix domain service to the server.
     /// Useful when running as a systemd service and
     /// a socket FD can be acquired using the systemd crate.
-    pub fn listen_uds<F, S, I>(
+    pub fn listen_uds<F, I, S>(
         mut self,
         name: impl AsRef<str>,
         lst: std::os::unix::net::UnixListener,
@@ -295,8 +297,9 @@ where
     ) -> io::Result<Self>
     where
         F: AsyncFn(&St) -> I + Send + Clone + 'static,
-        S: Service<St, Req = Io> + 'static,
         I: IntoService<S, St> + 'static,
+        S: Service<St, Req = Io> + 'static,
+        St: State<St, Io> + 'static,
     {
         let token = self.token.next();
         self.services.push(factory::create_factory_service(
@@ -321,6 +324,7 @@ where
         F: AsyncFn(&St) -> I + Send + Clone + 'static,
         S: Service<St, Req = Io> + 'static,
         I: IntoService<S, St> + 'static,
+        St: State<St, Io> + 'static,
     {
         let token = self.token.next();
         self.services.push(factory::create_factory_service(

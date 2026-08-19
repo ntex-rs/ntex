@@ -27,7 +27,7 @@ mod map_err;
 mod map_init_err;
 mod middleware;
 mod pipeline;
-mod st;
+pub mod state;
 mod then;
 mod util;
 
@@ -39,7 +39,7 @@ pub use self::fn_shutdown::fn_shutdown;
 pub use self::map_config::{map_config, unit_config};
 pub use self::middleware::{Identity, Middleware, Stack, apply, fn_layer};
 pub use self::pipeline::{Pipeline, PipelineBinding, PipelineCall, PipelineFactory};
-pub use self::st::{FromState, StateMapping};
+pub use self::state::StateMapping;
 
 #[allow(unused_variables)]
 /// An asynchronous function from a `Request` to a `Response`.

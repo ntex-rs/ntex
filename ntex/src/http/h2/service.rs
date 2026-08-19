@@ -11,7 +11,7 @@ use crate::http::message::{CurrentIo, ResponseHead};
 use crate::http::{DateService, HttpPipeline, Method, Request, Response, StatusCode, Uri, Version};
 use crate::io::{Filter, Io, IoBoxed, IoRef, types};
 use crate::service::{Ctx, Pipeline, PipelineBinding, ReadyCtx, Service, ServiceFactory};
-use crate::service::{IntoService, IntoServiceFactory, cfg::SharedCfg};
+use crate::service::{IntoService, IntoServiceFactory, cfg::SharedCfg, state::DefaultState};
 use crate::util::{Bytes, BytesMut, HashMap, dyn_rc_err};
 
 use super::{DefaultControlService, payload::Payload, payload::PayloadSender};
@@ -40,7 +40,10 @@ where
         Sf::InitError: StdError + 'static,
     {
         H2Service {
-            sf: HttpPipeline::chained(sf.into_factory().map(Into::into).map_init_err(dyn_rc_err)),
+            sf: HttpPipeline::with(
+                DefaultState,
+                sf.into_factory().map(Into::into).map_init_err(dyn_rc_err),
+            ),
             ctl: Pipeline::new(DefaultControlService),
             config: DispatcherConfig::default(),
             _t: marker::PhantomData,

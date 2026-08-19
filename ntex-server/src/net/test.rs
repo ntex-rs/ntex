@@ -5,7 +5,7 @@ use std::{fmt, io, marker::PhantomData, net, thread, time};
 use ntex_io::{Io, IoConfig};
 use ntex_net::tcp_connect;
 use ntex_rt::System;
-use ntex_service::{IntoService, Service, cfg::SharedCfg};
+use ntex_service::{IntoService, Service, cfg::SharedCfg, state::State};
 use socket2::{Domain, SockAddr, Socket, Type};
 use uuid::Uuid;
 
@@ -34,9 +34,9 @@ impl<F, Sf, St, I> fmt::Debug for TestServerBuilder<F, Sf, St, I> {
 impl<F, S, St, I> TestServerBuilder<F, S, St, I>
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
-    S: Service<St, Req = Io> + 'static,
-    St: Clone + Default + 'static,
     I: IntoService<S, St> + 'static,
+    S: Service<St, Req = Io> + 'static,
+    St: State<St, Io> + Clone + Default + 'static,
 {
     #[must_use]
     /// Create test server builder

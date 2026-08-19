@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use ntex_io::Io;
-use ntex_service::{IntoService, Pipeline, Service, cfg::SharedCfg};
+use ntex_service::{IntoService, Pipeline, Service, cfg::SharedCfg, state::State};
 use ntex_util::{future::BoxFuture, services::counter::CounterGuard};
 
 use super::Token;
@@ -39,7 +39,7 @@ where
     F: AsyncFn(&St) -> I + Send + Clone + 'static,
     I: IntoService<S, St> + 'static,
     S: Service<St, Req = Io> + 'static,
-    St: 'static,
+    St: State<St, Io> + Clone + 'static,
 {
     Box::from(Factory {
         tokens,
@@ -48,7 +48,8 @@ where
             let f = f.clone();
             Box::pin(async move {
                 let svc = (f)(&st).await.into_service();
-                let pipeline = Pipeline::with_st(st, svc.map(|_| ()).map_err(|_| ()));
+                let pipeline =
+                    Pipeline::with_stctl(st.clone(), st, svc.map(|_| ()).map_err(|_| ()));
                 let svc: Box<dyn NetService> = Box::new(ServerService { pipeline });
                 svc
             })
