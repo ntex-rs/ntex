@@ -3,8 +3,9 @@
 #![allow(
     clippy::cast_possible_truncation,
     clippy::missing_fields_in_debug,
-    clippy::must_use_candidate,
     clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate,
     clippy::type_complexity,
     clippy::unused_async,
     clippy::unused_async_trait_impl

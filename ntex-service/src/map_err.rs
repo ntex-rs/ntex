@@ -146,7 +146,6 @@ where
 }
 
 #[cfg(test)]
-#[allow(clippy::unused_async_trait_impl)]
 mod tests {
     use std::{cell::Cell, rc::Rc};
 

@@ -220,7 +220,6 @@ where
     FnMiddleware { f, r: PhantomData }
 }
 
-#[allow(clippy::type_complexity)]
 /// `FnMiddleware` service combinator
 pub struct FnMiddleware<S, St, F, In, Out, Err> {
     f: F,
