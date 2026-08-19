@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::{net, sync::Arc, sync::mpsc, thread, time};
 
 use ntex::server::{TestServer, build, build_with_state};
-use ntex::service::{cfg::SharedCfg, fn_service};
+use ntex::service::{cfg::SharedCfg, fn_service, state::State};
 use ntex::{codec::BytesCodec, io::Io, util::Bytes};
 
 #[test]
@@ -309,6 +309,13 @@ fn test_server_state() {
     #[derive(Clone)]
     struct St(Arc<AtomicUsize>);
 
+    impl State<St, Io> for St {
+        fn on_req(&self, st: &Self, _: &Io) -> Option<Self> {
+            let _ = st.0.fetch_add(1, Relaxed);
+            None
+        }
+    }
+
     let h = thread::spawn(move || {
         let num = num2.clone();
         let sys = ntex::rt::System::new("test", ntex::rt::DefaultRuntime);
@@ -335,7 +342,7 @@ fn test_server_state() {
     assert!(net::TcpStream::connect(addr).is_ok());
     assert!(net::TcpStream::connect(addr).is_ok());
     thread::sleep(time::Duration::from_millis(250));
-    assert_eq!(num.load(Relaxed), 3);
+    assert_eq!(num.load(Relaxed), 6);
     sys.stop();
     let _ = h.join();
 }

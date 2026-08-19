@@ -1,7 +1,8 @@
 use std::{error::Error, rc::Rc};
 
 use crate::io::{Filter, Io, types};
-use crate::service::{IntoService, IntoServiceFactory, Pipeline, StateMapping};
+use crate::service::state::{DefaultState, State, StateMapping};
+use crate::service::{IntoService, IntoServiceFactory, Pipeline};
 use crate::util::{dyn_rc_err, join};
 use crate::{Ctx, ReadyCtx, Service, ServiceFactory, SharedCfg};
 
@@ -37,7 +38,10 @@ where
         Sf::InitError: Error,
     {
         HttpService {
-            sf: HttpPipeline::chained(sf.into_factory().map(Into::into).map_init_err(dyn_rc_err)),
+            sf: HttpPipeline::with(
+                DefaultState,
+                sf.into_factory().map(Into::into).map_init_err(dyn_rc_err),
+            ),
             h1_ctl: Pipeline::new(h1::DefaultControlService::new()),
             h2_ctl: Pipeline::new(h2::DefaultControlService),
             config: DispatcherConfig::default(),
@@ -46,20 +50,22 @@ where
 
     #[must_use]
     /// Create new `HttpService` instance.
-    pub fn with_st<Sf, St>(
+    pub fn with<Sf, St, Sm>(
+        sm: Sm,
         sf: impl IntoServiceFactory<Sf, St, Request, SharedCfg>,
-        sm: StateMapping<St, Hst>,
     ) -> HttpService<Hst, F, B, Err>
     where
         Sf: ServiceFactory<St, Request, SharedCfg, Error = Err> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Error,
         St: 'static,
+        Sm: StateMapping<St, Hst>,
+        Sm::Control: State<St, Request>,
     {
         HttpService {
-            sf: HttpPipeline::mapping(
-                sf.into_factory().map(Into::into).map_init_err(dyn_rc_err),
+            sf: HttpPipeline::with(
                 sm,
+                sf.into_factory().map(Into::into).map_init_err(dyn_rc_err),
             ),
             h1_ctl: Pipeline::new(h1::DefaultControlService::new()),
             h2_ctl: Pipeline::new(h2::DefaultControlService),

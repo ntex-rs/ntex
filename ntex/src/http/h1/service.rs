@@ -6,7 +6,7 @@ use crate::http::{HttpPipeline, body::MessageBody, request::Request, response::R
 use crate::io::{Filter, Io, types};
 use crate::service::{
     Ctx, IntoService, IntoServiceFactory, Pipeline, PipelineBinding, ReadyCtx, Service,
-    ServiceFactory, cfg::SharedCfg,
+    ServiceFactory, cfg::SharedCfg, state::DefaultState,
 };
 use crate::util::dyn_rc_err;
 
@@ -41,7 +41,10 @@ where
         Sf::InitError: Error,
     {
         H1Service {
-            sf: HttpPipeline::chained(sf.into_factory().map(Into::into).map_init_err(dyn_rc_err)),
+            sf: HttpPipeline::with(
+                DefaultState,
+                sf.into_factory().map(Into::into).map_init_err(dyn_rc_err),
+            ),
             ctl: Pipeline::new(DefaultControlService::new()),
             config: DispatcherConfig::default(),
             _t: marker::PhantomData,
