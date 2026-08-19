@@ -10,7 +10,7 @@ documentation = "https://docs.rs/ntex-server/"
 categories = ["network-programming", "asynchronous"]
 license = "MIT OR Apache-2.0"
 edition = "2024"
-rust-version = "1.97"
+rust-version = "1.95"
 
 [lib]
 name = "ntex_server"

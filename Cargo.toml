@@ -24,7 +24,7 @@ repository = "https://github.com/ntex-rs/ntex"
 documentation = "https://docs.rs/ntex/"
 license = "MIT OR Apache-2.0"
 edition = "2024"
-rust-version = "1.97"
+rust-version = "1.95"
 
 [workspace.lints.rust]
 async_fn_in_trait = { level = "allow", priority = -1 }
