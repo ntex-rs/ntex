@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use ntex_io::Io;
-use ntex_service::{IntoService, Pipeline, Service, State, cfg::SharedCfg};
+use ntex_service::{IntoService, Pipeline, Service, cfg::SharedCfg};
 use ntex_util::{future::BoxFuture, services::counter::CounterGuard};
 
 use super::Token;
@@ -39,7 +39,7 @@ where
     F: AsyncFn(&St) -> I + Send + Clone + 'static,
     I: IntoService<S, St> + 'static,
     S: Service<St, Req = Io> + 'static,
-    St: State<Io> + 'static,
+    St: 'static,
 {
     Box::from(Factory {
         tokens,

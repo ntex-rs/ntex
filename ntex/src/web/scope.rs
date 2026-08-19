@@ -1,10 +1,10 @@
-use std::{cell::RefCell, fmt, rc::Rc};
+use std::{cell::RefCell, fmt, marker::PhantomData, rc::Rc};
 
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef, Router};
-use crate::service::cfg::SharedCfg;
 use crate::service::{Ctx, Identity, Middleware, ReadyCtx, Service, ServiceFactory};
-use crate::service::{IntoServiceFactory, dev::ServiceChainFactory, factory};
+use crate::service::{IntoServiceFactory, dev::ServiceChainFactory, factory_with_st};
+use crate::service::{boxed, cfg::SharedCfg};
 use crate::util::join;
 
 use super::app::Filter;
@@ -53,24 +53,24 @@ type Guards = Vec<Box<dyn Guard>>;
 ///
 #[derive(derive_more::Debug)]
 #[debug("Scope({rdef:?})")]
-pub struct Scope<Err: ErrorRenderer, M = Identity, T = Filter<Err>> {
+pub struct Scope<St, Err: ErrorRenderer, M = Identity, T = Filter<St, Err>> {
     middleware: M,
-    filter: ServiceChainFactory<T, (), WebRequest<Err>>,
+    filter: ServiceChainFactory<T, St, WebRequest<Err>>,
     rdef: Vec<String>,
-    services: Vec<Box<dyn AppServiceFactory<Err>>>,
+    services: Vec<Box<dyn AppServiceFactory<St, Err>>>,
     guards: Vec<Box<dyn Guard>>,
-    default: Rc<RefCell<Option<HttpService<Err>>>>,
+    default: Rc<RefCell<Option<Rc<HttpService<St, Err>>>>>,
     external: Vec<ResourceDef>,
     case_insensitive: bool,
 }
 
-impl<Err: ErrorRenderer> Scope<Err> {
+impl<St, Err: ErrorRenderer> Scope<St, Err> {
     #[allow(clippy::needless_pass_by_value)]
     /// Create a new scope
-    pub fn new<T: IntoPattern>(path: T) -> Scope<Err> {
+    pub fn new<T: IntoPattern>(path: T) -> Scope<St, Err> {
         Scope {
             middleware: Identity,
-            filter: factory(Filter::new()),
+            filter: factory_with_st(Filter::new()),
             rdef: path.patterns(),
             guards: Vec::new(),
             services: Vec::new(),
@@ -81,10 +81,12 @@ impl<Err: ErrorRenderer> Scope<Err> {
     }
 }
 
-impl<Err, M, T> Scope<Err, M, T>
+impl<St, Err, M, T> Scope<St, Err, M, T>
 where
+    St: 'static,
     T: ServiceFactory<
             WebRequest<Err>,
+            St,
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -158,7 +160,7 @@ where
     /// ```
     pub fn configure<F>(mut self, f: F) -> Self
     where
-        F: FnOnce(&mut ServiceConfig<Err>),
+        F: FnOnce(&mut ServiceConfig<St, Err>),
     {
         let mut cfg = ServiceConfig::new();
         f(&mut cfg);
@@ -197,7 +199,7 @@ where
     /// ```
     pub fn service<F>(mut self, factory: F) -> Self
     where
-        F: WebServiceFactory<Err> + 'static,
+        F: WebServiceFactory<St, Err> + 'static,
     {
         self.services
             .push(Box::new(ServiceFactoryWrapper::new(factory)));
@@ -238,22 +240,26 @@ where
     /// Default service to be used if no matching route could be found.
     ///
     /// If default resource is not registered, app's default resource is being used.
-    pub fn default_service<S>(mut self, f: impl IntoServiceFactory<S, (), WebRequest<Err>>) -> Self
+    pub fn default_service<Sf>(
+        mut self,
+        f: impl IntoServiceFactory<Sf, St, WebRequest<Err>>,
+    ) -> Self
     where
-        S: ServiceFactory<
+        Sf: ServiceFactory<
                 WebRequest<Err>,
+                St,
                 Res = WebResponse,
                 Error = Err::Container,
                 InitCfg = SharedCfg,
             > + 'static,
-        S::InitError: fmt::Debug,
+        Sf::InitError: fmt::Debug,
     {
         // create and configure default resource
-        self.default = Rc::new(RefCell::new(Some(HttpService::new(
-            factory(f.into_factory()).map_init_err(|e| {
+        self.default = Rc::new(RefCell::new(Some(Rc::new(boxed::factory(
+            f.into_factory().map_init_err(|e| {
                 log::error!("Cannot construct default service: {e:?}");
             }),
-        ))));
+        )))));
 
         self
     }
@@ -268,12 +274,14 @@ where
     /// This is similar to `App's` filters, but filter get invoked on scope level.
     pub fn filter<U>(
         self,
-        filter: impl IntoServiceFactory<U, (), WebRequest<Err>>,
+        filter: impl IntoServiceFactory<U, St, WebRequest<Err>>,
     ) -> Scope<
+        St,
         Err,
         M,
         impl ServiceFactory<
             WebRequest<Err>,
+            St,
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -283,6 +291,7 @@ where
     where
         U: ServiceFactory<
                 WebRequest<Err>,
+                St,
                 Res = WebRequest<Err>,
                 Error = Err::Container,
                 InitCfg = SharedCfg,
@@ -311,7 +320,7 @@ where
     /// middleware is more limited in what it can modify, relative to Route or
     /// Application level middleware, in that Scope-level middleware can not modify
     /// `WebResponse`.
-    pub fn middleware<U>(self, mw: U) -> Scope<Err, WebStack<M, U, Err>, T> {
+    pub fn middleware<U>(self, mw: U) -> Scope<St, Err, WebStack<St, M, U, Err>, T> {
         Scope {
             middleware: WebStack::new(self.middleware, mw),
             filter: self.filter,
@@ -325,20 +334,22 @@ where
     }
 }
 
-impl<Err, M, T> WebServiceFactory<Err> for Scope<Err, M, T>
+impl<St, Err, M, F> WebServiceFactory<St, Err> for Scope<St, Err, M, F>
 where
-    T: ServiceFactory<
+    St: 'static,
+    F: ServiceFactory<
             WebRequest<Err>,
+            St,
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
             InitError = (),
         > + 'static,
-    M: Middleware<ScopeService<T::Service, Err>, SharedCfg> + 'static,
-    M::Service: Service<Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    M: Middleware<ScopeService<St, F::Service, Err>, SharedCfg> + 'static,
+    M::Service: Service<St, Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     Err: ErrorRenderer,
 {
-    fn register(mut self, config: &mut WebServiceConfig<Err>) {
+    fn register(mut self, config: &mut WebServiceConfig<St, Err>) {
         // update default resource if needed
         if self.default.borrow().is_none() {
             *self.default.borrow_mut() = Some(config.default_service());
@@ -390,30 +401,31 @@ where
         // register final service
         config.register_service(
             ResourceDef::root_prefix(self.rdef),
-            guards,
             ScopeServiceFactory {
                 middleware: self.middleware,
                 filter: self.filter,
                 routing: router_factory,
             },
+            guards,
             Some(Rc::new(rmap)),
         );
     }
 }
 
 /// Scope service
-struct ScopeServiceFactory<M, F, Err: ErrorRenderer> {
+struct ScopeServiceFactory<St, M, F, Err: ErrorRenderer> {
     middleware: M,
     filter: F,
-    routing: ScopeRouterFactory<Err>,
+    routing: ScopeRouterFactory<St, Err>,
 }
 
-impl<M, F, Err> ServiceFactory<WebRequest<Err>> for ScopeServiceFactory<M, F, Err>
+impl<St, M, F, Err> ServiceFactory<WebRequest<Err>, St> for ScopeServiceFactory<St, M, F, Err>
 where
-    M: Middleware<ScopeService<F::Service, Err>, SharedCfg> + 'static,
-    M::Service: Service<Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    M: Middleware<ScopeService<St, F::Service, Err>, SharedCfg> + 'static,
+    M::Service: Service<St, Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
             WebRequest<Err>,
+            St,
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -440,14 +452,14 @@ where
 
 #[derive(derive_more::Debug)]
 #[debug("ScopeService")]
-pub struct ScopeService<F, Err: ErrorRenderer> {
+pub struct ScopeService<St, F, Err: ErrorRenderer> {
     filter: F,
-    routing: ScopeRouter<Err>,
+    routing: ScopeRouter<St, Err>,
 }
 
-impl<F, Err> Service for ScopeService<F, Err>
+impl<St, F, Err> Service<St> for ScopeService<St, F, Err>
 where
-    F: Service<Req = WebRequest<Err>, Res = WebRequest<Err>, Error = Err::Container>,
+    F: Service<St, Req = WebRequest<Err>, Res = WebRequest<Err>, Error = Err::Container>,
     Err: ErrorRenderer,
 {
     type Req = WebRequest<Err>;
@@ -455,30 +467,30 @@ where
     type Error = Err::Container;
 
     #[inline]
-    async fn call(&self, req: Self::Req, ctx: Ctx<'_, Self, ()>) -> Result<Self::Res, Self::Error> {
+    async fn call(&self, req: Self::Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
         let req = ctx.call(&self.filter, req).await?;
         ctx.call(&self.routing, req).await
     }
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self, ()>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
         let (ready1, ready2) = join(ctx.ready(&self.filter), ctx.ready(&self.routing)).await;
         ready1?;
         ready2
     }
 }
 
-struct ScopeRouterFactory<Err: ErrorRenderer> {
-    services: Vec<(ResourceDef, HttpService<Err>, RefCell<Option<Guards>>)>,
-    default: Option<HttpService<Err>>,
+struct ScopeRouterFactory<St, Err: ErrorRenderer> {
+    services: Vec<(ResourceDef, HttpService<St, Err>, RefCell<Option<Guards>>)>,
+    default: Option<Rc<HttpService<St, Err>>>,
     case_insensitive: bool,
 }
 
-impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ScopeRouterFactory<Err> {
+impl<St, Err: ErrorRenderer> ServiceFactory<WebRequest<Err>, St> for ScopeRouterFactory<St, Err> {
     type Res = WebResponse;
     type Error = Err::Container;
 
-    type Service = ScopeRouter<Err>;
+    type Service = ScopeRouter<St, Err>;
     type InitCfg = SharedCfg;
     type InitError = ();
 
@@ -489,12 +501,12 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ScopeRouterFactory<
             router.case_insensitive();
         }
         for (path, factory, guards) in &mut self.services.iter() {
-            let service = factory.create(cfg, &()).await?;
+            let service = factory.create(cfg).await?;
             router.rdef(path.clone(), service).2 = guards.borrow_mut().take();
         }
 
         let default = if let Some(ref default) = self.default {
-            Some(default.create(cfg, &()).await?)
+            Some(default.create(cfg).await?)
         } else {
             None
         };
@@ -502,16 +514,18 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ScopeRouterFactory<
         Ok(ScopeRouter {
             default,
             router: router.finish(),
+            st: PhantomData,
         })
     }
 }
 
-struct ScopeRouter<Err: ErrorRenderer> {
-    router: Router<HttpHandler<Err>, Vec<Box<dyn Guard>>>,
-    default: Option<HttpHandler<Err>>,
+struct ScopeRouter<St, Err: ErrorRenderer> {
+    router: Router<HttpHandler<St, Err>, Vec<Box<dyn Guard>>>,
+    default: Option<HttpHandler<St, Err>>,
+    st: PhantomData<St>,
 }
 
-impl<Err: ErrorRenderer> Service for ScopeRouter<Err> {
+impl<St, Err: ErrorRenderer> Service<St> for ScopeRouter<St, Err> {
     type Req = WebRequest<Err>;
     type Res = WebResponse;
     type Error = Err::Container;
@@ -519,7 +533,7 @@ impl<Err: ErrorRenderer> Service for ScopeRouter<Err> {
     async fn call(
         &self,
         mut req: WebRequest<Err>,
-        _: Ctx<'_, Self, ()>,
+        ctx: Ctx<'_, Self, St>,
     ) -> Result<Self::Res, Self::Error> {
         let res = self.router.recognize_checked(&mut req, |req, guards| {
             if let Some(guards) = guards {
@@ -533,9 +547,9 @@ impl<Err: ErrorRenderer> Service for ScopeRouter<Err> {
         });
 
         if let Some((srv, _info)) = res {
-            srv.call(req).await
+            ctx.call(srv, req).await
         } else if let Some(ref default) = self.default {
-            default.call(req).await
+            ctx.call(default, req).await
         } else {
             let req = req.into_parts().0;
             Ok(WebResponse::new(Response::NotFound().finish(), req))

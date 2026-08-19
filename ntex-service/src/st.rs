@@ -1,3 +1,4 @@
+#![allow(dead_code, unreachable_pub)]
 use std::{fmt, sync::Arc};
 
 /// Trait for types that can serve as pipeline state.

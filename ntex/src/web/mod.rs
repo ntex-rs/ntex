@@ -62,6 +62,7 @@
 //! * `openssl` - enables ssl support via `openssl` crate
 //! * `rustls` - enables ssl support via `rustls` crate
 #![allow(clippy::unused_async_trait_impl)]
+#![allow(unused_variables)]
 mod app;
 mod app_service;
 mod config;
@@ -121,10 +122,12 @@ pub use self::server::HttpServer;
 pub use self::service::WebServiceFactory;
 pub use self::util::*;
 
-pub(crate) type HttpHandler<Err: ErrorRenderer> =
-    crate::Pipeline<WebRequest<Err>, WebResponse, Err::Container>;
-pub(crate) type HttpService<Err: ErrorRenderer> =
-    crate::PipelineFactory<(), WebRequest<Err>, WebResponse, Err::Container, crate::SharedCfg, ()>;
+use crate::service::boxed::{BoxService, BoxServiceFactory};
+
+pub(crate) type HttpHandler<St, Err: ErrorRenderer> =
+    BoxService<St, WebRequest<Err>, WebResponse, Err::Container>;
+pub(crate) type HttpService<St, Err: ErrorRenderer> =
+    BoxServiceFactory<St, WebRequest<Err>, WebResponse, Err::Container, crate::SharedCfg, ()>;
 
 pub mod dev {
     //! The `ntex::web` prelude for library developers

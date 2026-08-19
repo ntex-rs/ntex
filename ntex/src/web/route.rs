@@ -104,7 +104,7 @@ impl<Err: ErrorRenderer> fmt::Debug for RouteService<Err> {
     }
 }
 
-impl<Err: ErrorRenderer> Service for RouteService<Err> {
+impl<St, Err: ErrorRenderer> Service<St> for RouteService<Err> {
     type Req = WebRequest<Err>;
     type Res = WebResponse;
     type Error = Err::Container;
@@ -112,7 +112,7 @@ impl<Err: ErrorRenderer> Service for RouteService<Err> {
     async fn call(
         &self,
         req: WebRequest<Err>,
-        _: Ctx<'_, Self, ()>,
+        _: Ctx<'_, Self, St>,
     ) -> Result<Self::Res, Self::Error> {
         self.handler.call(req).await
     }

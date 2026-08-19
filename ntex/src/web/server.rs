@@ -7,8 +7,8 @@ use tls_rustls::ServerConfig as RustlsServerConfig;
 
 use crate::http::{self, Request, Response, ResponseError, body::MessageBody};
 use crate::server::{Server, ServerBuilder};
-use crate::service::{FromState, IntoServiceFactory, ServiceFactory, State, StateMapping};
-use crate::{SharedCfg, io::Io, time::Seconds};
+use crate::service::{FromState, IntoServiceFactory, ServiceFactory, StateMapping};
+use crate::{SharedCfg, time::Seconds};
 
 struct Config {
     host: Option<String>,
@@ -51,15 +51,14 @@ where
     _t: PhantomData<(Sf, B)>,
 }
 
-impl<F, I, Sf, St, B> HttpServer<(), F, I, Sf, St, B>
+impl<F, I, Sf, B> HttpServer<(), F, I, Sf, (), B>
 where
     F: AsyncFn(&()) -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<Sf, St, Request>,
-    Sf: ServiceFactory<Request, St, InitCfg = SharedCfg> + 'static,
+    I: IntoServiceFactory<Sf, (), Request>,
+    Sf: ServiceFactory<Request, (), InitCfg = SharedCfg> + 'static,
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
     Sf::InitError: Error,
-    St: State<Request> + Default + 'static,
     B: MessageBody + 'static,
 {
     #[must_use]
@@ -84,8 +83,8 @@ where
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
     Sf::InitError: Error,
-    Hst: State<Io> + Clone + 'static,
-    St: State<Request> + 'static,
+    Hst: Clone + 'static,
+    St: 'static,
     B: MessageBody + 'static,
 {
     #[must_use]
@@ -473,8 +472,8 @@ where
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
     Sf::InitError: Error,
-    Hst: State<Io> + Clone + 'static,
-    St: State<Request> + 'static,
+    Hst: Clone + 'static,
+    St: 'static,
     B: MessageBody,
 {
     /// Start listening for incoming connections.

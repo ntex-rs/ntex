@@ -1,7 +1,7 @@
 use std::{cell::RefCell, fmt, io, marker::PhantomData, mem, net, rc::Rc, sync::Arc};
 
 use ntex_io::Io;
-use ntex_service::{IntoService, Pipeline, Service, State, cfg::SharedCfg};
+use ntex_service::{IntoService, Pipeline, Service, cfg::SharedCfg};
 use ntex_util::{HashMap, future::BoxFuture};
 
 use super::factory::{FactoryService, FactoryServiceType, NetService, ServerService};
@@ -34,7 +34,7 @@ impl<St> fmt::Debug for ServiceConfigInner<St> {
     }
 }
 
-impl<St: State<Io> + Clone + 'static> ServiceConfig<St> {
+impl<St: Clone + 'static> ServiceConfig<St> {
     pub(super) fn new(token: Token, backlog: i32) -> Self {
         ServiceConfig(Rc::new(RefCell::new(ServiceConfigInner {
             token,
@@ -155,7 +155,7 @@ struct ConfiguredService<St> {
 
 impl<St> FactoryService<St> for ConfiguredService<St>
 where
-    St: State<Io> + Clone + 'static,
+    St: Clone + 'static,
 {
     fn clo(&self) -> FactoryServiceType<St> {
         Box::new(Self {
@@ -237,7 +237,7 @@ impl<St> fmt::Debug for ServiceRuntime<St> {
     }
 }
 
-impl<St: State<Io> + Clone> ServiceRuntime<St> {
+impl<St: Clone + 'static> ServiceRuntime<St> {
     fn new(st: St, names: HashMap<String, Entry>) -> Self {
         let services = (0..names.len()).map(|_| None).collect();
         ServiceRuntime(Rc::new(RefCell::new(ServiceRuntimeInner {

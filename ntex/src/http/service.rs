@@ -3,7 +3,7 @@ use std::{error::Error, rc::Rc};
 use crate::io::{Filter, Io, types};
 use crate::service::{IntoService, IntoServiceFactory, Pipeline, StateMapping};
 use crate::util::{dyn_rc_err, join};
-use crate::{Ctx, ReadyCtx, Service, ServiceFactory, SharedCfg, State};
+use crate::{Ctx, ReadyCtx, Service, ServiceFactory, SharedCfg};
 
 use super::error::{DispatchError, H2Error, ResponseError};
 use super::{HttpPipeline, h1, h2, request::Request, response::Response};
@@ -52,7 +52,7 @@ where
         Sf: ServiceFactory<Request, St, Error = Err, InitCfg = SharedCfg> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Error,
-        St: State<Request> + 'static,
+        St: 'static,
     {
         HttpService {
             sf: HttpPipeline::mapping(
@@ -106,7 +106,7 @@ where
     /// Provide http/1 control service.
     pub fn h1_control<Ctl>(self, ctl: impl IntoService<Ctl, Hst>) -> HttpService<Hst, F, B, Err>
     where
-        Hst: State<Ctl::Req> + Default,
+        Hst: Default + 'static,
         Ctl: Service<Hst, Req = h1::Control<F, Err>, Res = h1::ControlAck<F>> + 'static,
         Ctl::Error: Error + 'static,
     {
@@ -122,7 +122,7 @@ where
     /// Provide http/1 control service.
     pub fn h2_control<Ctl>(self, ctl: impl IntoService<Ctl, Hst>) -> HttpService<Hst, F, B, Err>
     where
-        Hst: State<Ctl::Req> + Default,
+        Hst: Default + 'static,
         Ctl: Service<Hst, Req = h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
         Ctl::Error: Error + 'static,
     {

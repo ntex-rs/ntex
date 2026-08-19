@@ -2,7 +2,7 @@ use std::{fmt, io, marker::PhantomData, net};
 
 use ntex_io::Io;
 use ntex_rt::System;
-use ntex_service::{IntoService, Service, State, cfg::SharedCfg};
+use ntex_service::{IntoService, Service, cfg::SharedCfg};
 use ntex_util::time::Millis;
 use socket2::{Domain, SockAddr, Socket, Type};
 
@@ -38,7 +38,7 @@ impl Default for ServerBuilder {
 
 impl<St> ServerBuilder<St>
 where
-    St: State<Io> + Clone + 'static,
+    St: Clone + 'static,
 {
     #[must_use]
     /// Create new Server builder instance.

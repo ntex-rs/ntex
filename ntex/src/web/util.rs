@@ -48,7 +48,7 @@ use super::{HttpResponse, HttpResponseBuilder};
 ///         .route(web::head().to(async || { web::HttpResponse::MethodNotAllowed() }))
 /// );
 /// ```
-pub fn resource<T: IntoPattern, Err: ErrorRenderer>(path: T) -> Resource<Err> {
+pub fn resource<St, T: IntoPattern, Err: ErrorRenderer>(path: T) -> Resource<St, Err> {
     Resource::new(path)
 }
 
@@ -73,7 +73,7 @@ pub fn resource<T: IntoPattern, Err: ErrorRenderer>(path: T) -> Resource<Err> {
 ///  * `/{project_id}/path2`
 ///  * `/{project_id}/path3`
 ///
-pub fn scope<T: IntoPattern, Err: ErrorRenderer>(path: T) -> Scope<Err> {
+pub fn scope<St, T: IntoPattern, Err: ErrorRenderer>(path: T) -> Scope<St, Err> {
     Scope::new(path)
 }
 

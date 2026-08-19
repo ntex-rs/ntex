@@ -10,7 +10,7 @@ use crate::map_err::{MapErr, MapErrFactory};
 use crate::map_init_err::MapInitErr;
 use crate::middleware::{ApplyMiddleware, Middleware};
 use crate::then::{Then, ThenFactory};
-use crate::{IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory, State};
+use crate::{IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory};
 
 /// Constructs new chain with one service.
 pub fn svc<S, St>(service: impl IntoService<S, St>) -> ServiceChain<S, St>
@@ -37,7 +37,7 @@ where
 }
 
 /// Constructs new chain factory with one service factory.
-pub fn factory_with_state<Sf, St, Req>(
+pub fn factory_with_st<Sf, St, Req>(
     factory: impl IntoServiceFactory<Sf, St, Req>,
 ) -> ServiceChainFactory<Sf, St, Req>
 where
@@ -166,7 +166,8 @@ impl<S: Service<St>, St> ServiceChain<S, St> {
     pub fn into_pipeline(self) -> Pipeline<S::Req, S::Res, S::Error>
     where
         S: 'static,
-        St: State<S::Req> + Default + 'static,
+        // St: State<S::Req> + Default + 'static,
+        St: Default + 'static,
     {
         Pipeline::with(self.service)
     }
@@ -357,7 +358,8 @@ impl<Sf: ServiceFactory<Req, St>, St, Req> ServiceChainFactory<Sf, St, Req> {
     ) -> Result<Pipeline<Req, Sf::Res, Sf::Error>, Sf::InitError>
     where
         Sf: 'static,
-        St: State<Req> + Default + 'static,
+        //St: State<Req> + Default + 'static,
+        St: Default + 'static,
         Req: 'static,
     {
         Ok(Pipeline::with(self.factory.create(cfg).await?))

@@ -168,12 +168,12 @@ pub(crate) fn put_request(id: usize, pool_size: usize, req: &mut Rc<HttpRequestI
 /// modularization of big application configuration.
 #[derive(derive_more::Debug)]
 #[debug("ServiceConfig")]
-pub struct ServiceConfig<Err = DefaultError> {
-    pub(super) services: Vec<Box<dyn AppServiceFactory<Err>>>,
+pub struct ServiceConfig<St = (), Err = DefaultError> {
+    pub(super) services: Vec<Box<dyn AppServiceFactory<St, Err>>>,
     pub(super) external: Vec<ResourceDef>,
 }
 
-impl<Err: ErrorRenderer> ServiceConfig<Err> {
+impl<St: 'static, Err: ErrorRenderer> ServiceConfig<St, Err> {
     pub fn new() -> Self {
         Self {
             services: Vec::new(),
@@ -197,7 +197,7 @@ impl<Err: ErrorRenderer> ServiceConfig<Err> {
     /// This is same as `App::service()` method.
     pub fn service<F>(&mut self, factory: F) -> &mut Self
     where
-        F: WebServiceFactory<Err> + 'static,
+        F: WebServiceFactory<St, Err> + 'static,
     {
         self.services
             .push(Box::new(ServiceFactoryWrapper::new(factory)));
@@ -211,11 +211,7 @@ impl<Err: ErrorRenderer> ServiceConfig<Err> {
     /// `HttpRequest::url_for()` will work as expected.
     ///
     /// This is same as `App::external_service()` method.
-    pub fn external_resource<N, U>(&mut self, name: N, url: U) -> &mut Self
-    where
-        N: AsRef<str>,
-        U: AsRef<str>,
-    {
+    pub fn external_resource(&mut self, name: impl AsRef<str>, url: impl AsRef<str>) -> &mut Self {
         let mut rdef = ResourceDef::new(url.as_ref());
         *rdef.name_mut() = name.as_ref().to_string();
         self.external.push(rdef);
@@ -223,7 +219,7 @@ impl<Err: ErrorRenderer> ServiceConfig<Err> {
     }
 }
 
-impl<Err: ErrorRenderer> Default for ServiceConfig<Err> {
+impl<St: 'static, Err: ErrorRenderer> Default for ServiceConfig<St, Err> {
     fn default() -> Self {
         Self::new()
     }

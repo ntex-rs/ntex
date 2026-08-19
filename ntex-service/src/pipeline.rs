@@ -1,6 +1,6 @@
 use std::{cell, fmt, future::Future, pin::Pin, ptr, rc::Rc, task::Context, task::Poll};
 
-use crate::st::{FromState, State, StateMapping};
+use crate::st::{FromState, StateMapping};
 use crate::{Ctx, IntoService, ReadyCtx, Service, ServiceFactory, ctx::WaitersRef};
 
 /// Container for a service.
@@ -22,7 +22,7 @@ impl<St, Req, Res, Err, InitCfg, InitErr> PipelineFactory<St, Req, Res, Err, Ini
     where
         Sf: ServiceFactory<Req, St, Res = Res, Error = Err, InitCfg = InitCfg, InitError = InitErr>
             + 'static,
-        St: State<Req> + Clone + 'static,
+        St: Clone + 'static,
         Req: 'static,
         Res: 'static,
         Err: 'static,
@@ -40,7 +40,7 @@ impl<St, Req, Res, Err, InitCfg, InitErr> PipelineFactory<St, Req, Res, Err, Ini
     where
         Sf: ServiceFactory<Req, Ust, Res = Res, Error = Err, InitCfg = InitCfg, InitError = InitErr>
             + 'static,
-        Ust: State<Req> + FromState<St> + 'static,
+        Ust: FromState<St> + 'static,
         St: 'static,
         Req: 'static,
         Res: 'static,
@@ -62,7 +62,7 @@ impl<St, Req, Res, Err, InitCfg, InitErr> PipelineFactory<St, Req, Res, Err, Ini
     where
         Sf: ServiceFactory<Req, Ust, Res = Res, Error = Err, InitCfg = InitCfg, InitError = InitErr>
             + 'static,
-        Ust: State<Req> + 'static,
+        Ust: 'static,
         St: 'static,
         Req: 'static,
         Res: 'static,
@@ -124,7 +124,7 @@ struct PipelineState<S: Service<St>, St> {
     s: S,
     waiters: WaitersRef,
     st: St,
-    st_req: Box<dyn Fn(&St, &S::Req) -> Option<St>>,
+    // st_req: Box<dyn Fn(&St, &S::Req) -> Option<St>>,
     st_runtime: cell::UnsafeCell<RuntimeState<S::Error>>,
 }
 
@@ -134,32 +134,32 @@ enum RuntimeState<E> {
     Shutdown(Pin<Box<dyn Future<Output = ()>>>),
 }
 
-enum StateRef<'a, T> {
-    Ref(&'a T),
-    Owned(T),
-}
+//enum StateRef<'a, T> {
+//    Ref(&'a T),
+//    Owned(T),
+//}
 
-impl<'a, T> StateRef<'a, T> {
-    fn get_ref(&'a self) -> &'a T {
-        match self {
-            StateRef::Ref(t) => t,
-            StateRef::Owned(t) => t,
-        }
-    }
-}
+//impl<'a, T> StateRef<'a, T> {
+//    fn get_ref(&'a self) -> &'a T {
+//        match self {
+//            StateRef::Ref(t) => t,
+//            StateRef::Owned(t) => t,
+//        }
+//    }
+//}
 
 impl<S: Service<St>, St> PipelineState<S, St> {
     pub(crate) fn waiters_ref(&self) -> &WaitersRef {
         &self.waiters
     }
 
-    fn st(&self, req: &S::Req) -> StateRef<'_, St> {
-        if let Some(s) = (self.st_req)(&self.st, req) {
-            StateRef::Owned(s)
-        } else {
-            StateRef::Ref(&self.st)
-        }
-    }
+    //fn st(&self, req: &S::Req) -> StateRef<'_, St> {
+    //if let Some(s) = (self.st_req)(&self.st, req) {
+    //StateRef::Owned(s)
+    //} else {
+    //StateRef::Ref(&self.st)
+    //}
+    //}
 }
 
 impl<S: Service<St>, St> PipelineApi<S::Req, S::Res, S::Error> for PipelineState<S, St>
@@ -190,14 +190,14 @@ where
         ready: bool,
     ) -> Pin<Box<dyn Future<Output = Result<S::Res, S::Error>> + '_>> {
         Box::pin(async move {
-            let st = self.st(&req);
+            //let st = self.st(&req);
 
             if ready {
-                Ctx::<'_, S, St>::new(idx, self.waiters_ref(), st.get_ref())
+                Ctx::<'_, S, St>::new(idx, self.waiters_ref(), &self.st)
                     .call(&self.s, req)
                     .await
             } else {
-                Ctx::<'_, S, St>::new(idx, self.waiters_ref(), st.get_ref())
+                Ctx::<'_, S, St>::new(idx, self.waiters_ref(), &self.st)
                     .call_nowait(&self.s, req)
                     .await
             }
@@ -276,7 +276,7 @@ where
     pub fn with<S, St>(f: impl IntoService<S, St>) -> Self
     where
         S: Service<St, Req = Req, Res = Res, Error = Err> + 'static,
-        St: State<Req> + Default + 'static,
+        St: Default + 'static,
     {
         Self::create(f.into_service(), St::default())
     }
@@ -286,7 +286,7 @@ where
     pub fn with_st<S, St>(st: St, f: impl IntoService<S, St>) -> Self
     where
         S: Service<St, Req = Req, Res = Res, Error = Err> + 'static,
-        St: State<Req> + 'static,
+        St: 'static,
     {
         Self::create(f.into_service(), st)
     }
@@ -296,7 +296,7 @@ where
     pub fn with_chained<S, St, Chained>(f: impl IntoService<S, St>, chained: &Chained) -> Self
     where
         S: Service<St, Req = Req, Res = Res, Error = Err> + 'static,
-        St: State<Req> + FromState<Chained> + 'static,
+        St: FromState<Chained> + 'static,
     {
         Self::create(f.into_service(), St::from(chained))
     }
@@ -304,14 +304,14 @@ where
     fn create<S, St>(s: S, st: St) -> Self
     where
         S: Service<St, Req = Req, Res = Res, Error = Err> + 'static,
-        St: State<Req> + 'static,
+        St: 'static,
     {
         Pipeline {
             state: Rc::new(PipelineState {
                 s,
                 st,
                 waiters: WaitersRef::new(),
-                st_req: Box::new(|st: &St, req: &S::Req| st.on_req(req)),
+                // st_req: Box::new(|st: &St, req: &S::Req| st.on_req(req)),
                 st_runtime: cell::UnsafeCell::new(RuntimeState::New),
             }),
         }
