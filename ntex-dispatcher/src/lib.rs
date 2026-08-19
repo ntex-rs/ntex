@@ -678,7 +678,7 @@ mod tests {
         /// Construct new `Dispatcher` instance
         pub(crate) fn debug<S>(io: Io, codec: U, service: S) -> (Self, State)
         where
-            S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>, Error = Err> + 'static,
+            S: Service<(), Req = DispatchItem<U>, Res = Option<Response<U>>, Error = Err> + 'static,
         {
             let flags = if io.cfg().keepalive_timeout().is_zero() {
                 super::Flags::empty()
@@ -838,7 +838,7 @@ mod tests {
 
         struct Srv(Rc<Cell<usize>>);
 
-        impl Service for Srv {
+        impl Service<()> for Srv {
             type Req = DispatchItem<BytesCodec>;
             type Res = Option<Response<BytesCodec>>;
             type Error = &'static str;
@@ -1323,7 +1323,7 @@ mod tests {
             Cell<bool>,
         );
 
-        impl Service for Srv {
+        impl Service<()> for Srv {
             type Req = DispatchItem<BytesCodec>;
             type Res = Option<Bytes>;
             type Error = ();

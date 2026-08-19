@@ -140,7 +140,7 @@ impl fmt::Debug for ConnectionPool {
     }
 }
 
-impl Service for ConnectionPool {
+impl Service<()> for ConnectionPool {
     type Req = Connect;
     type Res = Connection;
     type Error = Error<ConnectError>;

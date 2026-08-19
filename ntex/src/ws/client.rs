@@ -79,6 +79,7 @@ impl WsClient<Base> {
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
         F: Filter + 'static,
         T: ServiceFactory<
+                (),
                 Connect<Uri>,
                 Res = Io<F>,
                 Error = Error<ConnectError>,
@@ -324,8 +325,13 @@ impl WsClientBuilder<Base, ()> {
 impl<F, T> WsClientBuilder<F, T>
 where
     F: 'static,
-    T: ServiceFactory<Connect<Uri>, Res = Io<F>, Error = Error<ConnectError>, InitCfg = SharedCfg>
-        + 'static,
+    T: ServiceFactory<
+            (),
+            Connect<Uri>,
+            Res = Io<F>,
+            Error = Error<ConnectError>,
+            InitCfg = SharedCfg,
+        > + 'static,
 {
     /// Set socket address of the server.
     ///
@@ -510,6 +516,7 @@ where
     where
         F1: Filter + 'static,
         T1: ServiceFactory<
+                (),
                 Connect<Uri>,
                 Res = Io<F1>,
                 Error = Error<ConnectError>,
@@ -763,7 +770,7 @@ impl WsConnection<Sealed> {
     /// Start client websockets service.
     pub async fn start<T>(self, svc: impl IntoService<T, ()>) -> Result<(), WsError<T::Error>>
     where
-        T: Service<Req = ws::Frame, Res = Option<ws::Message>> + 'static,
+        T: Service<(), Req = ws::Frame, Res = Option<ws::Message>> + 'static,
     {
         let service = apply_fn(
             svc.into_service().map_err(WsError::Service),

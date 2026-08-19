@@ -30,7 +30,7 @@ where
     /// Create new `HttpService` instance.
     pub fn new<Sf>(sf: impl IntoServiceFactory<Sf, (), Request>) -> HttpService<Hst, F, B, Err>
     where
-        Sf: ServiceFactory<Request, Error = Err, InitCfg = SharedCfg> + 'static,
+        Sf: ServiceFactory<(), Request, Error = Err, InitCfg = SharedCfg> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Error,
     {
@@ -49,7 +49,7 @@ where
         sm: StateMapping<St, Hst>,
     ) -> HttpService<Hst, F, B, Err>
     where
-        Sf: ServiceFactory<Request, St, Error = Err, InitCfg = SharedCfg> + 'static,
+        Sf: ServiceFactory<St, Request, Error = Err, InitCfg = SharedCfg> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Error,
         St: 'static,
@@ -77,7 +77,7 @@ where
     /// Create *http service* for HTTP/1 protocol.
     pub fn h1<Sf>(sf: impl IntoServiceFactory<Sf, (), Request>) -> h1::H1Service<St, F, B, Err>
     where
-        Sf: ServiceFactory<Request, Error = Err, InitCfg = SharedCfg> + 'static,
+        Sf: ServiceFactory<(), Request, Error = Err, InitCfg = SharedCfg> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Error,
     {
@@ -88,7 +88,7 @@ where
     /// Create *http service* for HTTP/2 protocol.
     pub fn h2<Sf>(sf: impl IntoServiceFactory<Sf, (), Request>) -> h2::H2Service<St, F, B, Err>
     where
-        Sf: ServiceFactory<Request, Error = Err, InitCfg = SharedCfg> + 'static,
+        Sf: ServiceFactory<(), Request, Error = Err, InitCfg = SharedCfg> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Error,
     {

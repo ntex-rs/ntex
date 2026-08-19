@@ -136,7 +136,7 @@ mod tests {
     #[derive(Clone, Debug, PartialEq)]
     struct TestService(Rc<Cell<usize>>);
 
-    impl Service for TestService {
+    impl Service<()> for TestService {
         type Req = ();
         type Res = ();
         type Error = ();

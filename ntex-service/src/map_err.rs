@@ -90,7 +90,7 @@ impl<Sf, F, E> MapErrFactory<Sf, F, E> {
     /// Create new `MapErr` new service instance
     pub(crate) fn new<St, Req>(sf: Sf, f: F) -> Self
     where
-        Sf: ServiceFactory<Req, St>,
+        Sf: ServiceFactory<St, Req>,
         F: Fn(Sf::Error) -> E + Clone,
     {
         Self {
@@ -123,9 +123,9 @@ where
     }
 }
 
-impl<Sf, St, Req, F, E> ServiceFactory<Req, St> for MapErrFactory<Sf, F, E>
+impl<Sf, St, Req, F, E> ServiceFactory<St, Req> for MapErrFactory<Sf, F, E>
 where
-    Sf: ServiceFactory<Req, St>,
+    Sf: ServiceFactory<St, Req>,
     F: Fn(Sf::Error) -> E + Clone,
 {
     type Res = Sf::Res;
@@ -156,7 +156,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct Srv(bool, Rc<Cell<usize>>);
 
-    impl Service for Srv {
+    impl Service<()> for Srv {
         type Req = ();
         type Res = ();
         type Error = ();

@@ -4,7 +4,6 @@ use std::{fmt, marker::PhantomData};
 use crate::and_then::{AndThen, AndThenFactory};
 use crate::apply::{Apply, ApplyCtx, ApplyFactory};
 use crate::ctx::Ctx;
-use crate::inspect::{Inspect, InspectErr, InspectErrFactory, InspectFactory};
 use crate::map::{Map, MapFactory};
 use crate::map_err::{MapErr, MapErrFactory};
 use crate::map_init_err::MapInitErr;
@@ -28,7 +27,7 @@ pub fn factory<Sf, Req>(
     factory: impl IntoServiceFactory<Sf, (), Req>,
 ) -> ServiceChainFactory<Sf, (), Req>
 where
-    Sf: ServiceFactory<Req, ()>,
+    Sf: ServiceFactory<(), Req>,
 {
     ServiceChainFactory {
         factory: factory.into_factory(),
@@ -41,7 +40,7 @@ pub fn factory_with_st<Sf, St, Req>(
     factory: impl IntoServiceFactory<Sf, St, Req>,
 ) -> ServiceChainFactory<Sf, St, Req>
 where
-    Sf: ServiceFactory<Req, St>,
+    Sf: ServiceFactory<St, Req>,
 {
     ServiceChainFactory {
         factory: factory.into_factory(),
@@ -123,34 +122,6 @@ impl<S: Service<St>, St> ServiceChain<S, St> {
         }
     }
 
-    /// Calls a function with a reference to the contained value if Ok.
-    ///
-    /// Returns the original result.
-    pub fn inspect<F>(self, f: F) -> ServiceChain<Inspect<S, F>, St>
-    where
-        Self: Sized,
-        F: Fn(&S::Res),
-    {
-        ServiceChain {
-            service: Inspect::new(self.service, f),
-            st: PhantomData,
-        }
-    }
-
-    /// Calls a function with a reference to the contained value if Err.
-    ///
-    /// Returns the original result.
-    pub fn inspect_err<F>(self, f: F) -> ServiceChain<InspectErr<S, F>, St>
-    where
-        Self: Sized,
-        F: Fn(&S::Error),
-    {
-        ServiceChain {
-            service: InspectErr::new(self.service, f),
-            st: PhantomData,
-        }
-    }
-
     /// Use function as middleware for current service.
     ///
     /// Short version of `apply_fn(svc(...), fn)`
@@ -216,7 +187,7 @@ pub struct ServiceChainFactory<Sf, St, Req> {
     pub(crate) _t: PhantomData<(St, Req)>,
 }
 
-impl<Sf: ServiceFactory<Req, St>, St, Req> ServiceChainFactory<Sf, St, Req> {
+impl<Sf: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Sf, St, Req> {
     /// Call another service after call to this one has resolved successfully.
     pub fn and_then<U>(
         self,
@@ -225,8 +196,8 @@ impl<Sf: ServiceFactory<Req, St>, St, Req> ServiceChainFactory<Sf, St, Req> {
     where
         Self: Sized,
         U: ServiceFactory<
-                Sf::Res,
                 St,
+                Sf::Res,
                 Error = Sf::Error,
                 InitCfg = Sf::InitCfg,
                 InitError = Sf::InitError,
@@ -273,8 +244,8 @@ impl<Sf: ServiceFactory<Req, St>, St, Req> ServiceChainFactory<Sf, St, Req> {
         Self: Sized,
         F: IntoServiceFactory<U, St, Result<Sf::Res, Sf::Error>>,
         U: ServiceFactory<
-                Result<Sf::Res, Sf::Error>,
                 St,
+                Result<Sf::Res, Sf::Error>,
                 Error = Sf::Error,
                 InitCfg = Sf::InitCfg,
                 InitError = Sf::InitError,
@@ -323,34 +294,6 @@ impl<Sf: ServiceFactory<Req, St>, St, Req> ServiceChainFactory<Sf, St, Req> {
         }
     }
 
-    /// Calls a function with a reference to the contained value if Ok.
-    ///
-    /// Returns the original result.
-    pub fn inspect<F>(self, f: F) -> ServiceChainFactory<InspectFactory<Sf, F>, St, Req>
-    where
-        Self: Sized,
-        F: Fn(&Sf::Res) + Clone,
-    {
-        ServiceChainFactory {
-            factory: InspectFactory::new(self.factory, f),
-            _t: PhantomData,
-        }
-    }
-
-    /// Calls a function with a reference to the contained value if Err.
-    ///
-    /// Returns the original result.
-    pub fn inspect_err<F>(self, f: F) -> ServiceChainFactory<InspectErrFactory<Sf, F>, St, Req>
-    where
-        Self: Sized,
-        F: Fn(&Sf::Error) + Clone,
-    {
-        ServiceChainFactory {
-            factory: InspectErrFactory::new(self.factory, f),
-            _t: PhantomData,
-        }
-    }
-
     /// Create and return a new service value asynchronously and wrap into a container
     pub async fn pipeline(
         &self,
@@ -389,7 +332,7 @@ where
     }
 }
 
-impl<Sf: ServiceFactory<Req, St>, St, Req> ServiceFactory<Req, St>
+impl<Sf: ServiceFactory<St, Req>, St, Req> ServiceFactory<St, Req>
     for ServiceChainFactory<Sf, St, Req>
 {
     type Res = Sf::Res;

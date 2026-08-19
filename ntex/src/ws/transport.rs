@@ -166,7 +166,7 @@ impl<F> WsTransportService<F> {
     }
 }
 
-impl<F: Filter> Service for WsTransportService<F> {
+impl<F: Filter> Service<()> for WsTransportService<F> {
     type Req = Io<F>;
     type Res = Io<Layer<WsTransport, F>>;
     type Error = io::Error;

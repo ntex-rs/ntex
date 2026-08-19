@@ -35,7 +35,7 @@ where
     pub(crate) fn new<Sf>(sf: impl IntoServiceFactory<Sf, (), Request>) -> Self
     where
         Hst: 'static,
-        Sf: ServiceFactory<Request, Error = Err, InitCfg = SharedCfg> + 'static,
+        Sf: ServiceFactory<(), Request, Error = Err, InitCfg = SharedCfg> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: StdError + 'static,
     {

@@ -156,6 +156,7 @@ impl Connector {
     pub fn connector<T>(mut self, f: impl IntoServiceFactory<T, (), TcpConnect<Uri>>) -> Self
     where
         T: ServiceFactory<
+                (),
                 TcpConnect<Uri>,
                 Error = Error<connect::ConnectError>,
                 InitCfg = SharedCfg,
@@ -179,6 +180,7 @@ impl Connector {
     pub fn secure_connector<T>(mut self, f: impl IntoServiceFactory<T, (), TcpConnect<Uri>>) -> Self
     where
         T: ServiceFactory<
+                (),
                 TcpConnect<Uri>,
                 Error = Error<connect::ConnectError>,
                 InitCfg = SharedCfg,
@@ -198,7 +200,7 @@ impl Connector {
     }
 }
 
-impl ServiceFactory<Connect, ()> for Connector {
+impl ServiceFactory<(), Connect> for Connector {
     type Res = Connection;
     type Error = Error<ClientError>;
     type Service = ConnectorService;
@@ -240,7 +242,7 @@ pub struct ConnectorService {
     ssl_pool: Option<ConnectionPool>,
 }
 
-impl Service for ConnectorService {
+impl Service<()> for ConnectorService {
     type Req = Connect;
     type Res = Connection;
     type Error = Error<ClientError>;

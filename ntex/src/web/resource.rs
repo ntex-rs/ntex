@@ -76,8 +76,8 @@ impl<St, Err, M, Sf> Resource<St, Err, M, Sf>
 where
     St: 'static,
     Sf: ServiceFactory<
-            WebRequest<Err>,
             St,
+            WebRequest<Err>,
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -254,8 +254,8 @@ where
         Err,
         M,
         impl ServiceFactory<
-            WebRequest<Err>,
             St,
+            WebRequest<Err>,
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -264,8 +264,8 @@ where
     >
     where
         U: ServiceFactory<
-                WebRequest<Err>,
                 St,
+                WebRequest<Err>,
                 Res = WebRequest<Err>,
                 Error = Err::Container,
                 InitCfg = SharedCfg,
@@ -312,8 +312,8 @@ where
     pub fn default_service<S>(mut self, f: impl IntoServiceFactory<S, St, WebRequest<Err>>) -> Self
     where
         S: ServiceFactory<
-                WebRequest<Err>,
                 St,
+                WebRequest<Err>,
                 Res = WebResponse,
                 Error = Err::Container,
                 InitCfg = SharedCfg,
@@ -335,8 +335,8 @@ impl<St, Err, M, Sf> WebServiceFactory<St, Err> for Resource<St, Err, M, Sf>
 where
     St: 'static,
     Sf: ServiceFactory<
-            WebRequest<Err>,
             St,
+            WebRequest<Err>,
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -388,8 +388,8 @@ impl<St, Err, M, Sf>
 where
     St: 'static,
     Sf: ServiceFactory<
-            WebRequest<Err>,
             St,
+            WebRequest<Err>,
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -424,13 +424,13 @@ pub struct ResourceServiceFactory<St, Err: ErrorRenderer, M, F> {
     routing: ResourceRouterFactory<St, Err>,
 }
 
-impl<St, Err, M, F> ServiceFactory<WebRequest<Err>, St> for ResourceServiceFactory<St, Err, M, F>
+impl<St, Err, M, F> ServiceFactory<St, WebRequest<Err>> for ResourceServiceFactory<St, Err, M, F>
 where
     M: Middleware<ResourcePipeline<St, F::Service, Err>, SharedCfg> + 'static,
     M::Service: Service<St, Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
-            WebRequest<Err>,
             St,
+            WebRequest<Err>,
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -456,7 +456,7 @@ struct ResourceRouterFactory<St, Err: ErrorRenderer> {
     default: Option<Rc<HttpService<St, Err>>>,
 }
 
-impl<St, Err: ErrorRenderer> ServiceFactory<WebRequest<Err>, St>
+impl<St, Err: ErrorRenderer> ServiceFactory<St, WebRequest<Err>>
     for ResourceRouterFactory<St, Err>
 {
     type Res = WebResponse;

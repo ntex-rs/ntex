@@ -11,7 +11,7 @@ pub fn map_config<Sf, St, Req, F, C>(
     f: F,
 ) -> MapConfig<Sf, F, C>
 where
-    Sf: ServiceFactory<Req, St>,
+    Sf: ServiceFactory<St, Req>,
     F: Fn(&C) -> Sf::InitCfg,
 {
     MapConfig::new(sf.into_factory(), f)
@@ -22,7 +22,7 @@ pub fn unit_config<Sf, St, Req, C>(
     factory: impl IntoServiceFactory<Sf, St, Req>,
 ) -> UnitConfig<Sf, C>
 where
-    Sf: ServiceFactory<Req, St>,
+    Sf: ServiceFactory<St, Req>,
 {
     UnitConfig::new(factory.into_factory())
 }
@@ -71,9 +71,9 @@ where
     }
 }
 
-impl<Sf, St, Req, F, Cfg> ServiceFactory<Req, St> for MapConfig<Sf, F, Cfg>
+impl<Sf, St, Req, F, Cfg> ServiceFactory<St, Req> for MapConfig<Sf, F, Cfg>
 where
-    Sf: ServiceFactory<Req, St>,
+    Sf: ServiceFactory<St, Req>,
     F: Fn(&Cfg) -> Sf::InitCfg,
 {
     type Res = Sf::Res;
@@ -102,9 +102,9 @@ impl<Sf, Cfg> UnitConfig<Sf, Cfg> {
     }
 }
 
-impl<Sf, St, Req, Cfg> ServiceFactory<Req, St> for UnitConfig<Sf, Cfg>
+impl<Sf, St, Req, Cfg> ServiceFactory<St, Req> for UnitConfig<Sf, Cfg>
 where
-    Sf: ServiceFactory<Req, St, InitCfg = ()>,
+    Sf: ServiceFactory<St, Req, InitCfg = ()>,
 {
     type Res = Sf::Res;
     type Error = Sf::Error;

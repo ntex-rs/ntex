@@ -24,7 +24,7 @@ pub fn apply_fn_factory<Sf, St, Req, F, In, Out, Err>(
     f: F,
 ) -> ServiceChainFactory<ApplyFactory<Sf, St, Req, F, In, Out, Err>, St, In>
 where
-    Sf: ServiceFactory<Req, St>,
+    Sf: ServiceFactory<St, Req>,
     F: AsyncFn(In, &ApplyCtx<'_, Sf::Service, St>) -> Result<Out, Err> + Clone,
     Err: From<Sf::Error>,
 {
@@ -129,7 +129,7 @@ where
 /// `apply()` service factory
 pub struct ApplyFactory<Sf, St, Req, F, In, Out, Err>
 where
-    Sf: ServiceFactory<Req, St>,
+    Sf: ServiceFactory<St, Req>,
     F: AsyncFn(In, &ApplyCtx<'_, Sf::Service, St>) -> Result<Out, Err> + Clone,
 {
     sf: Sf,
@@ -139,7 +139,7 @@ where
 
 impl<Sf, St, Req, F, In, Out, Err> ApplyFactory<Sf, St, Req, F, In, Out, Err>
 where
-    Sf: ServiceFactory<Req, St>,
+    Sf: ServiceFactory<St, Req>,
     F: AsyncFn(In, &ApplyCtx<'_, Sf::Service, St>) -> Result<Out, Err> + Clone,
     Err: From<Sf::Error>,
 {
@@ -155,7 +155,7 @@ where
 
 impl<Sf, St, Req, F, In, Out, Err> Clone for ApplyFactory<Sf, St, Req, F, In, Out, Err>
 where
-    Sf: ServiceFactory<Req, St> + Clone,
+    Sf: ServiceFactory<St, Req> + Clone,
     F: AsyncFn(In, &ApplyCtx<'_, Sf::Service, St>) -> Result<Out, Err> + Clone,
     Err: From<Sf::Error>,
 {
@@ -170,7 +170,7 @@ where
 
 impl<Sf, St, Req, F, In, Out, Err> fmt::Debug for ApplyFactory<Sf, St, Req, F, In, Out, Err>
 where
-    Sf: ServiceFactory<Req, St> + fmt::Debug,
+    Sf: ServiceFactory<St, Req> + fmt::Debug,
     F: AsyncFn(In, &ApplyCtx<'_, Sf::Service, St>) -> Result<Out, Err> + Clone,
     Err: From<Sf::Error>,
 {
@@ -182,10 +182,10 @@ where
     }
 }
 
-impl<Sf, St, Req, F, In, Out, Err> ServiceFactory<In, St>
+impl<Sf, St, Req, F, In, Out, Err> ServiceFactory<St, In>
     for ApplyFactory<Sf, St, Req, F, In, Out, Err>
 where
-    Sf: ServiceFactory<Req, St>,
+    Sf: ServiceFactory<St, Req>,
     F: AsyncFn(In, &ApplyCtx<'_, Sf::Service, St>) -> Result<Out, Err> + Clone,
     Err: From<Sf::Error>,
 {

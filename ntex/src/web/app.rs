@@ -74,8 +74,8 @@ impl<St, M, F, Err> App<St, M, F, Err>
 where
     St: 'static,
     F: ServiceFactory<
-            WebRequest<Err>,
             St,
+            WebRequest<Err>,
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -202,8 +202,8 @@ where
     pub fn default_service<U>(mut self, f: impl IntoServiceFactory<U, St, WebRequest<Err>>) -> Self
     where
         U: ServiceFactory<
-                WebRequest<Err>,
                 St,
+                WebRequest<Err>,
                 Res = WebResponse,
                 Error = Err::Container,
                 InitCfg = SharedCfg,
@@ -281,8 +281,8 @@ where
         St,
         M,
         impl ServiceFactory<
-            WebRequest<Err>,
             St,
+            WebRequest<Err>,
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -292,8 +292,8 @@ where
     >
     where
         S: ServiceFactory<
-                WebRequest<Err>,
                 St,
+                WebRequest<Err>,
                 Res = WebRequest<Err>,
                 Error = Err::Container,
                 InitCfg = SharedCfg,
@@ -368,8 +368,8 @@ where
     M: Middleware<AppRouter<St, F::Service, Err>, SharedCfg> + 'static,
     M::Service: Service<St, Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
-            WebRequest<Err>,
             St,
+            WebRequest<Err>,
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -397,8 +397,8 @@ where
     pub fn finish(
         self,
     ) -> impl ServiceFactory<
-        Request,
         St,
+        Request,
         Res = WebResponse,
         Error = Err::Container,
         InitCfg = SharedCfg,
@@ -415,8 +415,8 @@ where
     M: Middleware<AppRouter<St, F::Service, Err>, SharedCfg> + 'static,
     M::Service: Service<St, Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
-            WebRequest<Err>,
             St,
+            WebRequest<Err>,
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -446,7 +446,7 @@ impl<St, Err: ErrorRenderer> Filter<St, Err> {
     }
 }
 
-impl<St, Err: ErrorRenderer> ServiceFactory<WebRequest<Err>, St> for Filter<St, Err> {
+impl<St, Err: ErrorRenderer> ServiceFactory<St, WebRequest<Err>> for Filter<St, Err> {
     type Res = WebRequest<Err>;
     type Error = Err::Container;
 

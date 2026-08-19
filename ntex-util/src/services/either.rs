@@ -161,7 +161,7 @@ mod tests {
 
     #[derive(Clone)]
     struct Svc1Factory;
-    impl ServiceFactory<()> for Svc1Factory {
+    impl ServiceFactory<(), ()> for Svc1Factory {
         type Res = &'static str;
         type Error = ();
 
@@ -188,7 +188,7 @@ mod tests {
 
     #[derive(Clone)]
     struct Svc2Factory;
-    impl ServiceFactory<()> for Svc2Factory {
+    impl ServiceFactory<(), ()> for Svc2Factory {
         type Res = &'static str;
         type Error = ();
 

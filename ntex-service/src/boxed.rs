@@ -11,8 +11,8 @@ pub struct BoxService<St, Req, Res, Err>(
 pub struct BoxServiceFactory<St, Req, Res, Err, InitCfg, InitError>(
     Box<
         dyn ServiceFactoryObj<
-                Req,
                 St,
+                Req,
                 Res = Res,
                 Error = Err,
                 InitCfg = InitCfg,
@@ -26,7 +26,7 @@ pub fn factory<Sf, St, Req>(
     factory: Sf,
 ) -> BoxServiceFactory<St, Req, Sf::Res, Sf::Error, Sf::InitCfg, Sf::InitError>
 where
-    Sf: ServiceFactory<Req, St> + 'static,
+    Sf: ServiceFactory<St, Req> + 'static,
     St: 'static,
     Req: 'static,
 {
@@ -126,7 +126,7 @@ where
     }
 }
 
-trait ServiceFactoryObj<Req, St> {
+trait ServiceFactoryObj<St, Req> {
     type Res;
     type Error;
     type InitCfg;
@@ -140,11 +140,11 @@ trait ServiceFactoryObj<Req, St> {
         Req: 'a;
 }
 
-impl<Sf, St, Req> ServiceFactoryObj<Req, St> for Sf
+impl<Sf, St, Req> ServiceFactoryObj<St, Req> for Sf
 where
     St: 'static,
     Req: 'static,
-    Sf: ServiceFactory<Req, St> + 'static,
+    Sf: ServiceFactory<St, Req> + 'static,
 {
     type Res = Sf::Res;
     type Error = Sf::Error;
@@ -187,7 +187,7 @@ impl<St, Req, Res, Err> Service<St> for BoxService<St, Req, Res, Err> {
     }
 }
 
-impl<St, Req, Res, Err, InitCfg, InitError> ServiceFactory<Req, St>
+impl<St, Req, Res, Err, InitCfg, InitError> ServiceFactory<St, Req>
     for BoxServiceFactory<St, Req, Res, Err, InitCfg, InitError>
 where
     Req: 'static,

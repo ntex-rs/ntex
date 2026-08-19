@@ -18,8 +18,8 @@ pub struct Decoded<T> {
 pub fn seal<F, Sf, St>(
     f: impl IntoServiceFactory<Sf, St, IoBoxed>,
 ) -> impl ServiceFactory<
-    Io<F>,
     St,
+    Io<F>,
     Res = Sf::Res,
     Error = Sf::Error,
     InitCfg = Sf::InitCfg,
@@ -27,7 +27,7 @@ pub fn seal<F, Sf, St>(
 >
 where
     F: Filter,
-    Sf: ServiceFactory<IoBoxed, St>,
+    Sf: ServiceFactory<St, IoBoxed>,
 {
     factory_with_st(async |io: Io<F>| Ok(io.boxed()))
         .map_init_err(|_| unreachable!())

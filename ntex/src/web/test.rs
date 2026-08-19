@@ -35,14 +35,14 @@ use crate::web::{FromRequest, HttpResponse, Responder, WebRequest, WebResponse};
 
 /// Create service that always responds with `HttpResponse::Ok()`
 pub fn ok_service<Err: ErrorRenderer>()
--> impl Service<Req = WebRequest<Err>, Res = WebResponse, Error = std::convert::Infallible> {
+-> impl Service<(), Req = WebRequest<Err>, Res = WebResponse, Error = std::convert::Infallible> {
     default_service::<Err>(StatusCode::OK)
 }
 
 /// Create service that responds with response with specified status code
 pub fn default_service<Err: ErrorRenderer>(
     status_code: StatusCode,
-) -> impl Service<Req = WebRequest<Err>, Res = WebResponse, Error = Infallible> {
+) -> impl Service<(), Req = WebRequest<Err>, Res = WebResponse, Error = Infallible> {
     fn_service(async move |req: WebRequest<Err>| {
         Ok::<_, Infallible>(req.into_response(HttpResponse::build(status_code).finish()))
     })
@@ -74,7 +74,7 @@ pub fn default_service<Err: ErrorRenderer>(
 pub async fn init_service<R, S, E>(app: R) -> Pipeline<Request, WebResponse, E>
 where
     R: IntoServiceFactory<S, (), Request>,
-    S: ServiceFactory<Request, Res = WebResponse, Error = E, InitCfg = SharedCfg> + 'static,
+    S: ServiceFactory<(), Request, Res = WebResponse, Error = E, InitCfg = SharedCfg> + 'static,
     S::InitError: fmt::Debug,
 {
     let srv = app.into_factory().map_init_err(|e| log::error!("{e:?}"));
@@ -557,7 +557,7 @@ pub async fn server<F, I, Sf, B>(factory: F) -> TestServer
 where
     F: AsyncFn(&()) -> I + Send + Clone + 'static,
     I: IntoServiceFactory<Sf, (), Request>,
-    Sf: ServiceFactory<Request, InitCfg = SharedCfg> + 'static,
+    Sf: ServiceFactory<(), Request, InitCfg = SharedCfg> + 'static,
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
     Sf::InitError: fmt::Debug,
@@ -595,7 +595,7 @@ pub async fn server_with<F, I, Sf, B>(cfg: TestServerConfig, factory: F) -> Test
 where
     F: AsyncFn(&()) -> I + Send + Clone + 'static,
     I: IntoServiceFactory<Sf, (), Request>,
-    Sf: ServiceFactory<Request, InitCfg = SharedCfg> + 'static,
+    Sf: ServiceFactory<(), Request, InitCfg = SharedCfg> + 'static,
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
     Sf::InitError: fmt::Debug,

@@ -20,7 +20,7 @@ pub struct PipelineFactory<St, Req, Res, Err, InitCfg, InitErr> {
 impl<St, Req, Res, Err, InitCfg, InitErr> PipelineFactory<St, Req, Res, Err, InitCfg, InitErr> {
     pub fn new<Sf>(sf: Sf) -> Self
     where
-        Sf: ServiceFactory<Req, St, Res = Res, Error = Err, InitCfg = InitCfg, InitError = InitErr>
+        Sf: ServiceFactory<St, Req, Res = Res, Error = Err, InitCfg = InitCfg, InitError = InitErr>
             + 'static,
         St: Clone + 'static,
         Req: 'static,
@@ -38,7 +38,7 @@ impl<St, Req, Res, Err, InitCfg, InitErr> PipelineFactory<St, Req, Res, Err, Ini
 
     pub fn chained<Ust, Sf>(sf: Sf) -> Self
     where
-        Sf: ServiceFactory<Req, Ust, Res = Res, Error = Err, InitCfg = InitCfg, InitError = InitErr>
+        Sf: ServiceFactory<Ust, Req, Res = Res, Error = Err, InitCfg = InitCfg, InitError = InitErr>
             + 'static,
         Ust: FromState<St> + 'static,
         St: 'static,
@@ -60,7 +60,7 @@ impl<St, Req, Res, Err, InitCfg, InitErr> PipelineFactory<St, Req, Res, Err, Ini
 
     pub fn mapping<Ust, Sf>(sf: Sf, sm: StateMapping<Ust, St>) -> Self
     where
-        Sf: ServiceFactory<Req, Ust, Res = Res, Error = Err, InitCfg = InitCfg, InitError = InitErr>
+        Sf: ServiceFactory<Ust, Req, Res = Res, Error = Err, InitCfg = InitCfg, InitError = InitErr>
             + 'static,
         Ust: 'static,
         St: 'static,

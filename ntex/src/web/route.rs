@@ -65,7 +65,7 @@ impl<Err: ErrorRenderer> fmt::Debug for Route<Err> {
     }
 }
 
-impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for Route<Err> {
+impl<Err: ErrorRenderer> ServiceFactory<(), WebRequest<Err>> for Route<Err> {
     type Res = WebResponse;
     type Error = Err::Container;
 

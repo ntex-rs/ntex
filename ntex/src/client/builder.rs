@@ -203,7 +203,7 @@ impl<M> ClientBuilder<M> {
     where
         T: Into<SharedCfg>,
         M: Middleware<Sender, ClientConfig>,
-        M::Service: Service<Req = ServiceRequest, Res = ServiceResponse, Error = Error<ClientError>>
+        M::Service: Service<(), Req = ServiceRequest, Res = ServiceResponse, Error = Error<ClientError>>
             + 'static,
     {
         let cfg = cfg.into();
