@@ -34,14 +34,14 @@ impl<A: Address> SslConnector<Connector<A>> {
     }
 }
 
-impl<A: Address, Sf, St> ServiceFactory<St, Connect<A>> for SslConnector<Sf>
+impl<A: Address, Sf, St> ServiceFactory<St, Connect<A>, SharedCfg> for SslConnector<Sf>
 where
-    Sf: ServiceFactory<St, Connect<A>, Res = Io, Error = Error<ConnectError>, InitCfg = SharedCfg>,
+    Sf: ServiceFactory<St, Connect<A>, SharedCfg, Res = Io, Error = Error<ConnectError>>,
 {
     type Res = Io<Layer<SslFilter>>;
     type Error = Error<ConnectError>;
+
     type Service = SslConnectorService<Sf::Service>;
-    type InitCfg = SharedCfg;
     type InitError = Sf::InitError;
 
     async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {

@@ -18,12 +18,12 @@ where
 }
 
 /// Service factory that produces `apply_fn` service.
-pub fn apply_fn_factory<Sf, St, Req, F, In, Out, Err>(
-    service: impl IntoServiceFactory<Sf, St, Req>,
+pub fn apply_fn_factory<Sf, St, Req, Cfg, F, In, Out, Err>(
+    service: impl IntoServiceFactory<Sf, St, Req, Cfg>,
     f: F,
-) -> ServiceChainFactory<ApplyFactory<Sf, St, Req, F, In, Out, Err>, St, In>
+) -> ServiceChainFactory<ApplyFactory<F, Sf, St, Req, Cfg, In, Out, Err>, St, In, Cfg>
 where
-    Sf: ServiceFactory<St, Req>,
+    Sf: ServiceFactory<St, Req, Cfg>,
     F: AsyncFn(In, &ApplyCtx<'_, Sf::Service, St>) -> Result<Out, Err> + Clone,
     Err: From<Sf::Error>,
 {
@@ -126,24 +126,27 @@ where
 }
 
 /// `apply()` service factory
-pub struct ApplyFactory<Sf, St, Req, F, In, Out, Err>
+pub struct ApplyFactory<F, Sf, St, Req, Cfg, In, Out, Err>
 where
-    Sf: ServiceFactory<St, Req>,
     F: AsyncFn(In, &ApplyCtx<'_, Sf::Service, St>) -> Result<Out, Err> + Clone,
+    Sf: ServiceFactory<St, Req, Cfg>,
 {
-    sf: Sf,
     f: F,
-    r: marker::PhantomData<fn(St, Req) -> (In, Out)>,
+    sf: Sf,
+    r: marker::PhantomData<fn(St, Req, Cfg) -> (In, Out)>,
 }
 
-impl<Sf, St, Req, F, In, Out, Err> ApplyFactory<Sf, St, Req, F, In, Out, Err>
+impl<F, Sf, St, Req, Cfg, In, Out, Err> ApplyFactory<F, Sf, St, Req, Cfg, In, Out, Err>
 where
-    Sf: ServiceFactory<St, Req>,
     F: AsyncFn(In, &ApplyCtx<'_, Sf::Service, St>) -> Result<Out, Err> + Clone,
-    Err: From<Sf::Error>,
+    Sf: ServiceFactory<St, Req, Cfg>,
 {
-    /// Create new `ApplyNewService` new service instance
-    pub(crate) fn new(sf: Sf, f: F) -> Self {
+    /// Create new `ApplyFactory` new service instance
+    pub(crate) fn new(sf: Sf, f: F) -> Self
+    where
+        Sf: ServiceFactory<St, Req, Cfg>,
+        Err: From<Sf::Error>,
+    {
         Self {
             f,
             sf,
@@ -152,26 +155,25 @@ where
     }
 }
 
-impl<Sf, St, Req, F, In, Out, Err> Clone for ApplyFactory<Sf, St, Req, F, In, Out, Err>
+impl<F, Sf, St, Req, Cfg, In, Out, Err> Clone for ApplyFactory<F, Sf, St, Req, Cfg, In, Out, Err>
 where
-    Sf: ServiceFactory<St, Req> + Clone,
     F: AsyncFn(In, &ApplyCtx<'_, Sf::Service, St>) -> Result<Out, Err> + Clone,
-    Err: From<Sf::Error>,
+    Sf: ServiceFactory<St, Req, Cfg> + Clone,
 {
     fn clone(&self) -> Self {
         Self {
-            sf: self.sf.clone(),
             f: self.f.clone(),
+            sf: self.sf.clone(),
             r: marker::PhantomData,
         }
     }
 }
 
-impl<Sf, St, Req, F, In, Out, Err> fmt::Debug for ApplyFactory<Sf, St, Req, F, In, Out, Err>
+impl<F, Sf, St, Req, Cfg, In, Out, Err> fmt::Debug
+    for ApplyFactory<F, Sf, St, Req, Cfg, In, Out, Err>
 where
-    Sf: ServiceFactory<St, Req> + fmt::Debug,
     F: AsyncFn(In, &ApplyCtx<'_, Sf::Service, St>) -> Result<Out, Err> + Clone,
-    Err: From<Sf::Error>,
+    Sf: ServiceFactory<St, Req, Cfg> + fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ApplyFactory")
@@ -181,22 +183,21 @@ where
     }
 }
 
-impl<Sf, St, Req, F, In, Out, Err> ServiceFactory<St, In>
-    for ApplyFactory<Sf, St, Req, F, In, Out, Err>
+impl<F, Sf, St, Req, Cfg, In, Out, Err> ServiceFactory<St, In, Cfg>
+    for ApplyFactory<F, Sf, St, Req, Cfg, In, Out, Err>
 where
-    Sf: ServiceFactory<St, Req>,
     F: AsyncFn(In, &ApplyCtx<'_, Sf::Service, St>) -> Result<Out, Err> + Clone,
+    Sf: ServiceFactory<St, Req, Cfg>,
     Err: From<Sf::Error>,
 {
     type Res = Out;
     type Error = Err;
 
     type Service = Apply<Sf::Service, St, F, In, Out, Err>;
-    type InitCfg = Sf::InitCfg;
     type InitError = Sf::InitError;
 
     #[inline]
-    async fn create(&self, cfg: &Sf::InitCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &Cfg) -> Result<Self::Service, Self::InitError> {
         self.sf.create(cfg).await.map(|svc| Apply {
             svc,
             f: self.f.clone(),

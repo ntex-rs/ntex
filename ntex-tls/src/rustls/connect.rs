@@ -63,15 +63,15 @@ impl<Sf: fmt::Debug> fmt::Debug for TlsConnector<Sf> {
     }
 }
 
-impl<A, Sf, St> ServiceFactory<St, Connect<A>> for TlsConnector<Sf>
+impl<A, Sf, St> ServiceFactory<St, Connect<A>, SharedCfg> for TlsConnector<Sf>
 where
     A: Address,
-    Sf: ServiceFactory<St, Connect<A>, Res = Io, Error = Error<ConnectError>, InitCfg = SharedCfg>,
+    Sf: ServiceFactory<St, Connect<A>, SharedCfg, Res = Io, Error = Error<ConnectError>>,
 {
     type Res = Io<Layer<TlsClientFilter>>;
     type Error = Error<ConnectError>;
+
     type Service = TlsConnectorService<Sf::Service>;
-    type InitCfg = SharedCfg;
     type InitError = Sf::InitError;
 
     async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {

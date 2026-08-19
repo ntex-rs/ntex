@@ -44,27 +44,27 @@ impl<ChooseFn, SFLeft, SFRight> std::fmt::Debug
     }
 }
 
-impl<St, Req, ChooseFn, SFLeft, SFRight> ServiceFactory<Req, St>
+impl<St, Req, Cfg, ChooseFn, SFLeft, SFRight> ServiceFactory<St, Req, Cfg>
     for EitherServiceFactory<ChooseFn, SFLeft, SFRight>
 where
-    ChooseFn: Fn(&SFLeft::InitCfg) -> bool,
-    SFLeft: ServiceFactory<Req, St>,
+    ChooseFn: Fn(&Cfg) -> bool,
+    SFLeft: ServiceFactory<St, Req, Cfg>,
     SFRight: ServiceFactory<
-            Req,
             St,
+            Req,
+            Cfg,
             Res = SFLeft::Res,
             Error = SFLeft::Error,
-            InitCfg = SFLeft::InitCfg,
             InitError = SFLeft::InitError,
         >,
 {
     type Res = SFLeft::Res;
     type Error = SFLeft::Error;
-    type InitCfg = SFLeft::InitCfg;
-    type InitError = SFLeft::InitError;
-    type Service = EitherService<SFLeft::Service, SFRight::Service>;
 
-    async fn create(&self, cfg: &SFLeft::InitCfg) -> Result<Self::Service, Self::InitError> {
+    type Service = EitherService<SFLeft::Service, SFRight::Service>;
+    type InitError = SFLeft::InitError;
+
+    async fn create(&self, cfg: &Cfg) -> Result<Self::Service, Self::InitError> {
         let choose_left = (self.choose_left_fn)(cfg);
 
         if choose_left {
@@ -161,12 +161,11 @@ mod tests {
 
     #[derive(Clone)]
     struct Svc1Factory;
-    impl ServiceFactory<(), ()> for Svc1Factory {
+    impl ServiceFactory<(), (), &'static str> for Svc1Factory {
         type Res = &'static str;
         type Error = ();
 
         type Service = Svc1;
-        type InitCfg = &'static str;
         type InitError = ();
 
         async fn create(&self, _: &&'static str) -> Result<Self::Service, Self::InitError> {
@@ -188,13 +187,12 @@ mod tests {
 
     #[derive(Clone)]
     struct Svc2Factory;
-    impl ServiceFactory<(), ()> for Svc2Factory {
+    impl ServiceFactory<(), (), &'static str> for Svc2Factory {
         type Res = &'static str;
         type Error = ();
 
-        type InitCfg = &'static str;
-        type InitError = ();
         type Service = Svc2;
+        type InitError = ();
 
         async fn create(&self, _: &&'static str) -> Result<Self::Service, Self::InitError> {
             Ok(Svc2)

@@ -6,43 +6,43 @@ use super::{Ctx, ReadyCtx, Service, ServiceFactory};
 /// error.
 ///
 /// This is created by the `ServiceExt::map_err` method.
-pub struct MapErr<S, F, E> {
-    svc: S,
+pub struct MapErr<F, S, E> {
     f: F,
-    _t: PhantomData<E>,
+    svc: S,
+    e: PhantomData<E>,
 }
 
-impl<S, F, E> MapErr<S, F, E> {
+impl<F, S, E> MapErr<F, S, E> {
     /// Create new `MapErr` combinator
-    pub(crate) fn new<St>(svc: S, f: F) -> Self
+    pub(crate) fn new<St>(f: F, svc: S) -> Self
     where
         S: Service<St>,
         F: Fn(S::Error) -> E,
     {
         Self {
-            svc,
             f,
-            _t: PhantomData,
+            svc,
+            e: PhantomData,
         }
     }
 }
 
-impl<S, F, E> Clone for MapErr<S, F, E>
+impl<F, S, E> Clone for MapErr<F, S, E>
 where
-    S: Clone,
     F: Clone,
+    S: Clone,
 {
     #[inline]
     fn clone(&self) -> Self {
         MapErr {
-            svc: self.svc.clone(),
             f: self.f.clone(),
-            _t: PhantomData,
+            svc: self.svc.clone(),
+            e: PhantomData,
         }
     }
 }
 
-impl<S, F, E> fmt::Debug for MapErr<S, F, E>
+impl<F, S, E> fmt::Debug for MapErr<F, S, E>
 where
     S: fmt::Debug,
 {
@@ -54,7 +54,7 @@ where
     }
 }
 
-impl<S, St, F, E> Service<St> for MapErr<S, F, E>
+impl<F, S, St, E> Service<St> for MapErr<F, S, E>
 where
     S: Service<St>,
     F: Fn(S::Error) -> E,
@@ -80,38 +80,38 @@ where
 /// service's error.
 ///
 /// This is created by the `ServiceFactory::map_err` method.
-pub struct MapErrFactory<Sf, F, E> {
-    sf: Sf,
+pub struct MapErrFactory<F, Sf, E> {
     f: F,
+    sf: Sf,
     e: PhantomData<fn(Sf) -> E>,
 }
 
-impl<Sf, F, E> MapErrFactory<Sf, F, E> {
+impl<F, Sf, E> MapErrFactory<F, Sf, E> {
     /// Create new `MapErr` new service instance
-    pub(crate) fn new<St, Req>(sf: Sf, f: F) -> Self
+    pub(crate) fn new<St, Req, Cfg>(f: F, sf: Sf) -> Self
     where
-        Sf: ServiceFactory<St, Req>,
+        Sf: ServiceFactory<St, Req, Cfg>,
         F: Fn(Sf::Error) -> E + Clone,
     {
         Self {
-            sf,
             f,
+            sf,
             e: PhantomData,
         }
     }
 }
 
-impl<Sf: Clone, F: Clone, E> Clone for MapErrFactory<Sf, F, E> {
+impl<F: Clone, Sf: Clone, E> Clone for MapErrFactory<F, Sf, E> {
     fn clone(&self) -> Self {
         Self {
-            sf: self.sf.clone(),
             f: self.f.clone(),
+            sf: self.sf.clone(),
             e: PhantomData,
         }
     }
 }
 
-impl<Sf, F, E> fmt::Debug for MapErrFactory<Sf, F, E>
+impl<F, Sf, E> fmt::Debug for MapErrFactory<F, Sf, E>
 where
     Sf: fmt::Debug,
 {
@@ -123,24 +123,23 @@ where
     }
 }
 
-impl<Sf, St, Req, F, E> ServiceFactory<St, Req> for MapErrFactory<Sf, F, E>
+impl<F, Sf, St, Req, Cfg, E> ServiceFactory<St, Req, Cfg> for MapErrFactory<F, Sf, E>
 where
-    Sf: ServiceFactory<St, Req>,
+    Sf: ServiceFactory<St, Req, Cfg>,
     F: Fn(Sf::Error) -> E + Clone,
 {
     type Res = Sf::Res;
     type Error = E;
 
-    type Service = MapErr<Sf::Service, F, E>;
-    type InitCfg = Sf::InitCfg;
+    type Service = MapErr<F, Sf::Service, E>;
     type InitError = Sf::InitError;
 
     #[inline]
-    async fn create(&self, cfg: &Sf::InitCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &Cfg) -> Result<Self::Service, Self::InitError> {
         self.sf.create(cfg).await.map(|svc| MapErr {
             svc,
             f: self.f.clone(),
-            _t: PhantomData,
+            e: PhantomData,
         })
     }
 }

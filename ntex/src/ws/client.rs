@@ -78,13 +78,8 @@ impl WsClient<Base> {
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
         F: Filter + 'static,
-        T: ServiceFactory<
-                (),
-                Connect<Uri>,
-                Res = Io<F>,
-                Error = Error<ConnectError>,
-                InitCfg = SharedCfg,
-            > + 'static,
+        T: ServiceFactory<(), Connect<Uri>, SharedCfg, Res = Io<F>, Error = Error<ConnectError>>
+            + 'static,
     {
         WsClientBuilder::new(uri).connector(connector)
     }
@@ -325,13 +320,8 @@ impl WsClientBuilder<Base, ()> {
 impl<F, T> WsClientBuilder<F, T>
 where
     F: 'static,
-    T: ServiceFactory<
-            (),
-            Connect<Uri>,
-            Res = Io<F>,
-            Error = Error<ConnectError>,
-            InitCfg = SharedCfg,
-        > + 'static,
+    T: ServiceFactory<(), Connect<Uri>, SharedCfg, Res = Io<F>, Error = Error<ConnectError>>
+        + 'static,
 {
     /// Set socket address of the server.
     ///
@@ -515,13 +505,8 @@ where
     pub fn connector<F1, T1>(&mut self, connector: T1) -> WsClientBuilder<F1, T1>
     where
         F1: Filter + 'static,
-        T1: ServiceFactory<
-                (),
-                Connect<Uri>,
-                Res = Io<F1>,
-                Error = Error<ConnectError>,
-                InitCfg = SharedCfg,
-            > + 'static,
+        T1: ServiceFactory<(), Connect<Uri>, SharedCfg, Res = Io<F1>, Error = Error<ConnectError>>
+            + 'static,
     {
         let inner = self.inner.take().expect("cannot reuse WsClient builder");
 

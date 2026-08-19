@@ -7,16 +7,16 @@ use crate::time::{Millis, Sleep, now, sleep};
 /// `KeepAlive` service factory
 ///
 /// Controls min time between requests.
-pub struct KeepAlive<F, Req, E, C>
+pub struct KeepAlive<F, Req, E>
 where
     F: Fn() -> E + Clone,
 {
     f: F,
     ka: Millis,
-    _t: marker::PhantomData<(E, Req, C)>,
+    _t: marker::PhantomData<(E, Req)>,
 }
 
-impl<F, Req, E, C> KeepAlive<F, Req, E, C>
+impl<F, Req, E> KeepAlive<F, Req, E>
 where
     F: Fn() -> E + Clone,
 {
@@ -33,7 +33,7 @@ where
     }
 }
 
-impl<F, Req, E, C> Clone for KeepAlive<F, Req, E, C>
+impl<F, Req, E> Clone for KeepAlive<F, Req, E>
 where
     F: Fn() -> E + Clone,
 {
@@ -46,7 +46,7 @@ where
     }
 }
 
-impl<F, Req, E, C> fmt::Debug for KeepAlive<F, Req, E, C>
+impl<F, Req, E> fmt::Debug for KeepAlive<F, Req, E>
 where
     F: Fn() -> E + Clone,
 {
@@ -58,7 +58,7 @@ where
     }
 }
 
-impl<F, St, Req, E, C> ServiceFactory<St, Req> for KeepAlive<F, Req, E, C>
+impl<F, St, Req, Cfg, E> ServiceFactory<St, Req, Cfg> for KeepAlive<F, Req, E>
 where
     F: Fn() -> E + Clone,
 {
@@ -66,11 +66,10 @@ where
     type Error = E;
 
     type Service = KeepAliveService<Req, E, F>;
-    type InitCfg = C;
     type InitError = Infallible;
 
     #[inline]
-    async fn create(&self, _: &C) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, _: &Cfg) -> Result<Self::Service, Self::InitError> {
         Ok(KeepAliveService::new(self.ka, self.f.clone()))
     }
 }

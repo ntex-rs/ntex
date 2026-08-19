@@ -1,6 +1,5 @@
 //! Various helpers for ntex applications to use during testing.
-use std::convert::Infallible;
-use std::{fmt, io, net, net::SocketAddr, rc::Rc, sync::mpsc, thread, time};
+use std::{convert::Infallible, fmt, io, net, net::SocketAddr, rc::Rc, sync::mpsc, thread, time};
 
 #[cfg(feature = "cookie")]
 use coo_kie::Cookie;
@@ -73,8 +72,8 @@ pub fn default_service<Err: ErrorRenderer>(
 /// ```
 pub async fn init_service<R, S, E>(app: R) -> Pipeline<Request, WebResponse, E>
 where
-    R: IntoServiceFactory<S, (), Request>,
-    S: ServiceFactory<(), Request, Res = WebResponse, Error = E, InitCfg = SharedCfg> + 'static,
+    R: IntoServiceFactory<S, (), Request, SharedCfg>,
+    S: ServiceFactory<(), Request, SharedCfg, Res = WebResponse, Error = E> + 'static,
     S::InitError: fmt::Debug,
 {
     let srv = app.into_factory().map_init_err(|e| log::error!("{e:?}"));
@@ -556,8 +555,8 @@ impl TestRequest {
 pub async fn server<F, I, Sf, B>(factory: F) -> TestServer
 where
     F: AsyncFn(&()) -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<Sf, (), Request>,
-    Sf: ServiceFactory<(), Request, InitCfg = SharedCfg> + 'static,
+    I: IntoServiceFactory<Sf, (), Request, SharedCfg>,
+    Sf: ServiceFactory<(), Request, SharedCfg> + 'static,
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
     Sf::InitError: fmt::Debug,
@@ -594,8 +593,8 @@ where
 pub async fn server_with<F, I, Sf, B>(cfg: TestServerConfig, factory: F) -> TestServer
 where
     F: AsyncFn(&()) -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<Sf, (), Request>,
-    Sf: ServiceFactory<(), Request, InitCfg = SharedCfg> + 'static,
+    I: IntoServiceFactory<Sf, (), Request, SharedCfg>,
+    Sf: ServiceFactory<(), Request, SharedCfg> + 'static,
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
     Sf::InitError: fmt::Debug,

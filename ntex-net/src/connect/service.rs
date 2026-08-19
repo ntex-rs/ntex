@@ -90,12 +90,11 @@ impl<A: Address> ConnectorService<A> {
     }
 }
 
-impl<A: Address, St> ServiceFactory<St, Connect<A>> for Connector<A, St> {
+impl<A: Address, St> ServiceFactory<St, Connect<A>, SharedCfg> for Connector<A, St> {
     type Res = Io;
     type Error = Error<ConnectError>;
 
     type Service = ConnectorService<A>;
-    type InitCfg = SharedCfg;
     type InitError = ConnectServiceError;
 
     async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {

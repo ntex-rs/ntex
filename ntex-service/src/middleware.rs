@@ -4,13 +4,13 @@ use crate::dev::{Apply, ApplyCtx};
 use crate::{IntoServiceFactory, Service, ServiceChainFactory, ServiceFactory};
 
 /// Apply middleware to a service.
-pub fn apply<Sf, St, Req, M>(
+pub fn apply<Sf, St, Req, Cfg, M>(
     mw: M,
-    factory: impl IntoServiceFactory<Sf, St, Req>,
-) -> ServiceChainFactory<ApplyMiddleware<M, Sf>, St, Req>
+    factory: impl IntoServiceFactory<Sf, St, Req, Cfg>,
+) -> ServiceChainFactory<ApplyMiddleware<M, Sf>, St, Req, Cfg>
 where
-    Sf: ServiceFactory<St, Req>,
-    M: Middleware<Sf::Service, Sf::InitCfg>,
+    Sf: ServiceFactory<St, Req, Cfg>,
+    M: Middleware<Sf::Service, Cfg>,
 {
     ServiceChainFactory {
         factory: ApplyMiddleware::new(mw, factory.into_factory()),
@@ -102,9 +102,9 @@ pub trait Middleware<Svc, Cfg = ()> {
     fn apply<Sf, St, Req>(
         self,
         factory: Sf,
-    ) -> ServiceChainFactory<ApplyMiddleware<Self, Sf>, St, Req>
+    ) -> ServiceChainFactory<ApplyMiddleware<Self, Sf>, St, Req, Cfg>
     where
-        Sf: ServiceFactory<St, Req, Service = Svc, InitCfg = Cfg>,
+        Sf: ServiceFactory<St, Req, Cfg, Service = Svc>,
         Self: Sized,
         Self::Service: Service<St, Req = Req>,
     {
@@ -152,21 +152,20 @@ where
     }
 }
 
-impl<M, Sf, St, Req> ServiceFactory<St, Req> for ApplyMiddleware<M, Sf>
+impl<M, Sf, St, Req, Cfg> ServiceFactory<St, Req, Cfg> for ApplyMiddleware<M, Sf>
 where
-    Sf: ServiceFactory<St, Req>,
-    M: Middleware<Sf::Service, Sf::InitCfg>,
+    Sf: ServiceFactory<St, Req, Cfg>,
+    M: Middleware<Sf::Service, Cfg>,
     M::Service: Service<St, Req = Req>,
 {
     type Res = <M::Service as Service<St>>::Res;
     type Error = <M::Service as Service<St>>::Error;
 
     type Service = M::Service;
-    type InitCfg = Sf::InitCfg;
     type InitError = Sf::InitError;
 
     #[inline]
-    async fn create(&self, cfg: &Sf::InitCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &Cfg) -> Result<Self::Service, Self::InitError> {
         Ok(self.0.0.create(self.0.1.create(cfg).await?, cfg))
     }
 }

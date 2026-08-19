@@ -63,12 +63,11 @@ impl<Err: ErrorRenderer> fmt::Debug for Route<Err> {
     }
 }
 
-impl<Err: ErrorRenderer> ServiceFactory<(), WebRequest<Err>> for Route<Err> {
+impl<Err: ErrorRenderer> ServiceFactory<(), WebRequest<Err>, SharedCfg> for Route<Err> {
     type Res = WebResponse;
     type Error = Err::Container;
 
     type Service = RouteService<Err>;
-    type InitCfg = SharedCfg;
     type InitError = Box<dyn Error>;
 
     async fn create(&self, _: &SharedCfg) -> Result<RouteService<Err>, Box<dyn Error>> {

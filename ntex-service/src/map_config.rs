@@ -6,21 +6,21 @@ use super::{IntoServiceFactory, ServiceFactory};
 ///
 /// Note that this function consumes the receiving service factory and returns
 /// a wrapped version of it.
-pub fn map_config<Sf, St, Req, F, C>(
-    sf: impl IntoServiceFactory<Sf, St, Req>,
+pub fn map_config<Sf, St, Req, Cfg, F, C>(
+    sf: impl IntoServiceFactory<Sf, St, Req, Cfg>,
     f: F,
 ) -> MapConfig<Sf, F, C>
 where
-    Sf: ServiceFactory<St, Req>,
-    F: Fn(&C) -> Sf::InitCfg,
+    Sf: ServiceFactory<St, Req, Cfg>,
+    F: Fn(&C) -> Cfg,
 {
     MapConfig::new(sf.into_factory(), f)
 }
 
 /// Replace config with unit
-pub fn unit_config<Sf, St, Req, C>(
-    factory: impl IntoServiceFactory<Sf, St, Req>,
-) -> UnitConfig<Sf, C>
+pub fn unit_config<Sf, St, Req, Cfg>(
+    factory: impl IntoServiceFactory<Sf, St, Req, ()>,
+) -> UnitConfig<Sf, Cfg>
 where
     Sf: ServiceFactory<St, Req>,
 {
@@ -71,19 +71,18 @@ where
     }
 }
 
-impl<Sf, St, Req, F, Cfg> ServiceFactory<St, Req> for MapConfig<Sf, F, Cfg>
+impl<Sf, St, Req, Cfg, F, C> ServiceFactory<St, Req, C> for MapConfig<Sf, F, C>
 where
-    Sf: ServiceFactory<St, Req>,
-    F: Fn(&Cfg) -> Sf::InitCfg,
+    Sf: ServiceFactory<St, Req, Cfg>,
+    F: Fn(&C) -> Cfg,
 {
     type Res = Sf::Res;
     type Error = Sf::Error;
 
     type Service = Sf::Service;
-    type InitCfg = Cfg;
     type InitError = Sf::InitError;
 
-    async fn create(&self, cfg: &Cfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &C) -> Result<Self::Service, Self::InitError> {
         self.sf.create(&(self.f)(cfg)).await
     }
 }
@@ -102,15 +101,14 @@ impl<Sf, Cfg> UnitConfig<Sf, Cfg> {
     }
 }
 
-impl<Sf, St, Req, Cfg> ServiceFactory<St, Req> for UnitConfig<Sf, Cfg>
+impl<Sf, St, Req, Cfg> ServiceFactory<St, Req, Cfg> for UnitConfig<Sf, Cfg>
 where
-    Sf: ServiceFactory<St, Req, InitCfg = ()>,
+    Sf: ServiceFactory<St, Req, ()>,
 {
     type Res = Sf::Res;
     type Error = Sf::Error;
 
     type Service = Sf::Service;
-    type InitCfg = Cfg;
     type InitError = Sf::InitError;
 
     async fn create(&self, _: &Cfg) -> Result<Self::Service, Self::InitError> {

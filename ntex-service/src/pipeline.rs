@@ -20,12 +20,12 @@ pub struct PipelineFactory<St, Req, Res, Err, InitCfg, InitErr> {
 impl<St, Req, Res, Err, InitCfg, InitErr> PipelineFactory<St, Req, Res, Err, InitCfg, InitErr> {
     pub fn new<Sf>(sf: Sf) -> Self
     where
-        Sf: ServiceFactory<St, Req, Res = Res, Error = Err, InitCfg = InitCfg, InitError = InitErr>
-            + 'static,
+        Sf: ServiceFactory<St, Req, InitCfg, Res = Res, Error = Err, InitError = InitErr> + 'static,
         St: Clone + 'static,
         Req: 'static,
         Res: 'static,
         Err: 'static,
+        InitCfg: 'static,
     {
         let sf = Rc::new(sf);
         Self {
@@ -38,13 +38,14 @@ impl<St, Req, Res, Err, InitCfg, InitErr> PipelineFactory<St, Req, Res, Err, Ini
 
     pub fn chained<Ust, Sf>(sf: Sf) -> Self
     where
-        Sf: ServiceFactory<Ust, Req, Res = Res, Error = Err, InitCfg = InitCfg, InitError = InitErr>
+        Sf: ServiceFactory<Ust, Req, InitCfg, Res = Res, Error = Err, InitError = InitErr>
             + 'static,
         Ust: FromState<St> + 'static,
         St: 'static,
         Req: 'static,
         Res: 'static,
         Err: 'static,
+        InitCfg: 'static,
     {
         let sf = Rc::new(sf);
         Self {
@@ -60,13 +61,14 @@ impl<St, Req, Res, Err, InitCfg, InitErr> PipelineFactory<St, Req, Res, Err, Ini
 
     pub fn mapping<Ust, Sf>(sf: Sf, sm: StateMapping<Ust, St>) -> Self
     where
-        Sf: ServiceFactory<Ust, Req, Res = Res, Error = Err, InitCfg = InitCfg, InitError = InitErr>
+        Sf: ServiceFactory<Ust, Req, InitCfg, Res = Res, Error = Err, InitError = InitErr>
             + 'static,
         Ust: 'static,
         St: 'static,
         Req: 'static,
         Res: 'static,
         Err: 'static,
+        InitCfg: 'static,
     {
         let sf = Rc::new(sf);
         Self {
