@@ -58,7 +58,7 @@ where
     }
 }
 
-impl<F, St, Req, E, C> ServiceFactory<Req, St> for KeepAlive<F, Req, E, C>
+impl<F, St, Req, E, C> ServiceFactory<St, Req> for KeepAlive<F, Req, E, C>
 where
     F: Fn() -> E + Clone,
 {

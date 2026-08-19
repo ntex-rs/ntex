@@ -24,8 +24,8 @@ type Guards = Vec<Box<dyn Guard>>;
 pub struct AppFactory<St, M, F, Err: ErrorRenderer>
 where
     F: ServiceFactory<
-            WebRequest<Err>,
             St,
+            WebRequest<Err>,
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -46,8 +46,8 @@ where
     M: Middleware<AppRouter<St, F::Service, Err>, SharedCfg> + 'static,
     M::Service: Service<St, Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
-            WebRequest<Err>,
             St,
+            WebRequest<Err>,
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -120,14 +120,14 @@ where
     }
 }
 
-impl<St, M, F, Err> ServiceFactory<Request, St> for AppFactory<St, M, F, Err>
+impl<St, M, F, Err> ServiceFactory<St, Request> for AppFactory<St, M, F, Err>
 where
     St: 'static,
     M: Middleware<AppRouter<St, F::Service, Err>, SharedCfg> + 'static,
     M::Service: Service<St, Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
-            WebRequest<Err>,
             St,
+            WebRequest<Err>,
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,

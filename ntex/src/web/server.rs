@@ -37,7 +37,7 @@ pub struct HttpServer<Hst, F, I, Sf, St, B>
 where
     F: AsyncFn(&Hst) -> I + Send + Clone + 'static,
     I: IntoServiceFactory<Sf, St, Request>,
-    Sf: ServiceFactory<Request, St, InitCfg = SharedCfg>,
+    Sf: ServiceFactory<St, Request, InitCfg = SharedCfg>,
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
     Sf::InitError: Error,
@@ -55,7 +55,7 @@ impl<F, I, Sf, B> HttpServer<(), F, I, Sf, (), B>
 where
     F: AsyncFn(&()) -> I + Send + Clone + 'static,
     I: IntoServiceFactory<Sf, (), Request>,
-    Sf: ServiceFactory<Request, (), InitCfg = SharedCfg> + 'static,
+    Sf: ServiceFactory<(), Request, InitCfg = SharedCfg> + 'static,
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
     Sf::InitError: Error,
@@ -79,7 +79,7 @@ impl<Hst, F, I, Sf, St, B> HttpServer<Hst, F, I, Sf, St, B>
 where
     F: AsyncFn(&Hst) -> I + Send + Clone + 'static,
     I: IntoServiceFactory<Sf, St, Request>,
-    Sf: ServiceFactory<Request, St, InitCfg = SharedCfg> + 'static,
+    Sf: ServiceFactory<St, Request, InitCfg = SharedCfg> + 'static,
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
     Sf::InitError: Error,
@@ -468,7 +468,7 @@ impl<Hst, F, I, Sf, St, B> HttpServer<Hst, F, I, Sf, St, B>
 where
     F: AsyncFn(&Hst) -> I + Send + Clone + 'static,
     I: IntoServiceFactory<Sf, St, Request>,
-    Sf: ServiceFactory<Request, St, InitCfg = SharedCfg> + 'static,
+    Sf: ServiceFactory<St, Request, InitCfg = SharedCfg> + 'static,
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
     Sf::InitError: Error,

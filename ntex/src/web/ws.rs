@@ -74,7 +74,7 @@ pub async fn start<Sf>(
     f: impl IntoServiceFactory<Sf, (), Frame>,
 ) -> Result<HttpResponse, Sf::InitError>
 where
-    Sf: ServiceFactory<Frame, Res = Option<Message>, InitCfg = WsSink> + 'static,
+    Sf: ServiceFactory<(), Frame, Res = Option<Message>, InitCfg = WsSink> + 'static,
     Sf::Error: fmt::Debug,
     Sf::InitError: From<HandshakeError> + fmt::Debug,
 {
@@ -103,7 +103,8 @@ pub async fn start_with<Sf>(
     f: impl IntoServiceFactory<Sf, (), DispatchItem<ws::Codec>>,
 ) -> Result<HttpResponse, Sf::InitError>
 where
-    Sf: ServiceFactory<DispatchItem<ws::Codec>, Res = Option<Message>, InitCfg = WsSink> + 'static,
+    Sf: ServiceFactory<(), DispatchItem<ws::Codec>, Res = Option<Message>, InitCfg = WsSink>
+        + 'static,
     Sf::Error: fmt::Debug,
     Sf::InitError: From<HandshakeError>,
 {

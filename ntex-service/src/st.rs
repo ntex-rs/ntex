@@ -1,20 +1,9 @@
 #![allow(dead_code, unreachable_pub)]
 use std::{fmt, sync::Arc};
 
-/// Trait for types that can serve as pipeline state.
-pub trait State<Req>: Sized + 'static {
-    /// Updates the state in response to a request.
-    #[inline]
-    fn on_req(&self, _: &Req) -> Option<Self> {
-        None
-    }
-}
-
 pub trait FromState<St>: Sized {
     fn from(st: &St) -> Self;
 }
-
-impl<Req> State<Req> for () {}
 
 impl<St> FromState<St> for () {
     fn from(_: &St) {}

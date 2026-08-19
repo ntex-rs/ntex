@@ -56,12 +56,12 @@ impl<A, B> ThenFactory<A, B> {
     }
 }
 
-impl<A, B, St, Req> ServiceFactory<Req, St> for ThenFactory<A, B>
+impl<A, B, St, Req> ServiceFactory<St, Req> for ThenFactory<A, B>
 where
-    A: ServiceFactory<Req, St>,
+    A: ServiceFactory<St, Req>,
     B: ServiceFactory<
-            Result<A::Res, A::Error>,
             St,
+            Result<A::Res, A::Error>,
             Error = A::Error,
             InitCfg = A::InitCfg,
             InitError = A::InitError,
@@ -91,7 +91,7 @@ mod tests {
     #[derive(Clone)]
     struct Srv1(Rc<Cell<usize>>, Rc<Cell<usize>>);
 
-    impl Service for Srv1 {
+    impl Service<()> for Srv1 {
         type Req = Result<&'static str, &'static str>;
         type Res = &'static str;
         type Error = ();
@@ -120,7 +120,7 @@ mod tests {
     #[derive(Clone)]
     struct Srv2(Rc<Cell<usize>>, Rc<Cell<usize>>);
 
-    impl Service for Srv2 {
+    impl Service<()> for Srv2 {
         type Req = Result<&'static str, ()>;
         type Res = (&'static str, &'static str);
         type Error = ();

@@ -19,7 +19,6 @@ mod chain;
 mod ctx;
 mod fn_service;
 mod fn_shutdown;
-mod inspect;
 mod macros;
 mod map;
 mod map_config;
@@ -99,9 +98,6 @@ pub use self::st::{FromState, StateMapping};
 /// Service cannot be called directly, it must be wrapped to an instance of [`Pipeline`] or
 /// by using `ctx` argument of the call method in case of chanined services.
 pub trait Service<St = ()> {
-    ///// Shared service state that should be accessible during processing.
-    //type St;
-
     /// Requests that the service could accept.
     type Req;
 
@@ -182,7 +178,7 @@ pub trait Service<St = ()> {
 ///
 /// Simple factories can often use [`fn_factory`] or [`fn_factory_with_config`]
 /// to reduce boilerplate.
-pub trait ServiceFactory<Req, St = ()> {
+pub trait ServiceFactory<St, Req> {
     /// Responses given by the created services.
     type Res;
 
@@ -210,7 +206,6 @@ pub trait ServiceFactory<Req, St = ()> {
     where
         Self: 'static,
         Req: 'static,
-        // St: State<Req> + Default + 'static,
         St: Default + 'static,
     {
         Ok(Pipeline::with(self.create(cfg).await?))
@@ -309,9 +304,9 @@ where
     }
 }
 
-impl<Sf, St, Req> ServiceFactory<Req, St> for Rc<Sf>
+impl<Sf, St, Req> ServiceFactory<St, Req> for Rc<Sf>
 where
-    Sf: ServiceFactory<Req, St>,
+    Sf: ServiceFactory<St, Req>,
 {
     type Res = Sf::Res;
     type Error = Sf::Error;
@@ -336,7 +331,7 @@ where
 /// Trait for types that can be converted to a `ServiceFactory`
 pub trait IntoServiceFactory<Sf, St, Req>
 where
-    Sf: ServiceFactory<Req, St>,
+    Sf: ServiceFactory<St, Req>,
 {
     /// Convert `Self` to a `ServiceFactory`
     fn into_factory(self) -> Sf;
@@ -354,7 +349,7 @@ where
 
 impl<Sf, St, Req> IntoServiceFactory<Sf, St, Req> for Sf
 where
-    Sf: ServiceFactory<Req, St>,
+    Sf: ServiceFactory<St, Req>,
 {
     #[inline]
     fn into_factory(self) -> Sf {
@@ -388,7 +383,6 @@ pub mod dev {
     pub use crate::chain::{ServiceChain, ServiceChainFactory};
     pub use crate::fn_service::{FnService, FnServiceConfig, FnServiceFactory, FnServiceNoConfig};
     pub use crate::fn_shutdown::FnShutdown;
-    pub use crate::inspect::{InspectErr, InspectErrFactory};
     pub use crate::map::{Map, MapFactory};
     pub use crate::map_config::{MapConfig, UnitConfig};
     pub use crate::map_err::{MapErr, MapErrFactory};

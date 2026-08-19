@@ -29,8 +29,11 @@ pub struct OneRequestService<S> {
     ready: Cell<bool>,
 }
 
-impl<S: Service> OneRequestService<S> {
-    pub fn new(service: S) -> Self {
+impl<S> OneRequestService<S> {
+    pub fn new<St>(service: S) -> Self
+    where
+        S: Service<St>,
+    {
         Self {
             service,
             ready: Cell::new(true),
@@ -83,7 +86,7 @@ mod tests {
 
     struct SleepService(oneshot::Receiver<()>);
 
-    impl Service for SleepService {
+    impl Service<()> for SleepService {
         type Req = ();
         type Res = ();
         type Error = ();

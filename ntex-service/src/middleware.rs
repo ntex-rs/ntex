@@ -9,7 +9,7 @@ pub fn apply<Sf, St, Req, M>(
     factory: impl IntoServiceFactory<Sf, St, Req>,
 ) -> ServiceChainFactory<ApplyMiddleware<M, Sf>, St, Req>
 where
-    Sf: ServiceFactory<Req, St>,
+    Sf: ServiceFactory<St, Req>,
     M: Middleware<Sf::Service, Sf::InitCfg>,
 {
     ServiceChainFactory {
@@ -104,7 +104,7 @@ pub trait Middleware<Svc, Cfg = ()> {
         factory: Sf,
     ) -> ServiceChainFactory<ApplyMiddleware<Self, Sf>, St, Req>
     where
-        Sf: ServiceFactory<Req, St, Service = Svc, InitCfg = Cfg>,
+        Sf: ServiceFactory<St, Req, Service = Svc, InitCfg = Cfg>,
         Self: Sized,
         Self::Service: Service<St, Req = Req>,
     {
@@ -152,9 +152,9 @@ where
     }
 }
 
-impl<M, Sf, St, Req> ServiceFactory<Req, St> for ApplyMiddleware<M, Sf>
+impl<M, Sf, St, Req> ServiceFactory<St, Req> for ApplyMiddleware<M, Sf>
 where
-    Sf: ServiceFactory<Req, St>,
+    Sf: ServiceFactory<St, Req>,
     M: Middleware<Sf::Service, Sf::InitCfg>,
     M::Service: Service<St, Req = Req>,
 {
@@ -283,7 +283,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct Srv<S>(S, Rc<Cell<usize>>);
 
-    impl<S: Service> Service for Srv<S> {
+    impl<S: Service> Service<()> for Srv<S> {
         type Req = S::Req;
         type Res = S::Res;
         type Error = S::Error;

@@ -91,7 +91,7 @@ mod tests {
 
     struct SleepService(mpmc::Receiver<()>);
 
-    impl Service for SleepService {
+    impl Service<()> for SleepService {
         type Req = ();
         type Res = ();
         type Error = ();

@@ -104,10 +104,10 @@ pub struct TimeoutService<S> {
 }
 
 impl<S> TimeoutService<S> {
-    pub fn new<T>(timeout: T, service: S) -> Self
+    pub fn new<T, St>(timeout: T, service: S) -> Self
     where
         T: Into<Millis>,
-        S: Service,
+        S: Service<St>,
     {
         TimeoutService {
             service,
@@ -161,7 +161,7 @@ mod tests {
         }
     }
 
-    impl Service for SleepService {
+    impl Service<()> for SleepService {
         type Req = ();
         type Res = ();
         type Error = SrvError;

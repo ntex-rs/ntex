@@ -85,8 +85,8 @@ impl<St, Err, M, T> Scope<St, Err, M, T>
 where
     St: 'static,
     T: ServiceFactory<
-            WebRequest<Err>,
             St,
+            WebRequest<Err>,
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -246,8 +246,8 @@ where
     ) -> Self
     where
         Sf: ServiceFactory<
-                WebRequest<Err>,
                 St,
+                WebRequest<Err>,
                 Res = WebResponse,
                 Error = Err::Container,
                 InitCfg = SharedCfg,
@@ -280,8 +280,8 @@ where
         Err,
         M,
         impl ServiceFactory<
-            WebRequest<Err>,
             St,
+            WebRequest<Err>,
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -290,8 +290,8 @@ where
     >
     where
         U: ServiceFactory<
-                WebRequest<Err>,
                 St,
+                WebRequest<Err>,
                 Res = WebRequest<Err>,
                 Error = Err::Container,
                 InitCfg = SharedCfg,
@@ -338,8 +338,8 @@ impl<St, Err, M, F> WebServiceFactory<St, Err> for Scope<St, Err, M, F>
 where
     St: 'static,
     F: ServiceFactory<
-            WebRequest<Err>,
             St,
+            WebRequest<Err>,
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -419,13 +419,13 @@ struct ScopeServiceFactory<St, M, F, Err: ErrorRenderer> {
     routing: ScopeRouterFactory<St, Err>,
 }
 
-impl<St, M, F, Err> ServiceFactory<WebRequest<Err>, St> for ScopeServiceFactory<St, M, F, Err>
+impl<St, M, F, Err> ServiceFactory<St, WebRequest<Err>> for ScopeServiceFactory<St, M, F, Err>
 where
     M: Middleware<ScopeService<St, F::Service, Err>, SharedCfg> + 'static,
     M::Service: Service<St, Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
-            WebRequest<Err>,
             St,
+            WebRequest<Err>,
             Res = WebRequest<Err>,
             Error = Err::Container,
             InitCfg = SharedCfg,
@@ -486,7 +486,7 @@ struct ScopeRouterFactory<St, Err: ErrorRenderer> {
     case_insensitive: bool,
 }
 
-impl<St, Err: ErrorRenderer> ServiceFactory<WebRequest<Err>, St> for ScopeRouterFactory<St, Err> {
+impl<St, Err: ErrorRenderer> ServiceFactory<St, WebRequest<Err>> for ScopeRouterFactory<St, Err> {
     type Res = WebResponse;
     type Error = Err::Container;
 

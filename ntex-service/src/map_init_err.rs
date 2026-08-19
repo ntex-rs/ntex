@@ -11,9 +11,9 @@ pub struct MapInitErr<Sf, F, Err> {
 
 impl<Sf, F, Err> MapInitErr<Sf, F, Err> {
     /// Create new `MapInitErr` combinator
-    pub(crate) fn new<Req, St>(sf: Sf, f: F) -> Self
+    pub(crate) fn new<St, Req>(sf: Sf, f: F) -> Self
     where
-        Sf: ServiceFactory<Req, St>,
+        Sf: ServiceFactory<St, Req>,
         F: Fn(Sf::InitError) -> Err,
     {
         Self {
@@ -50,9 +50,9 @@ where
     }
 }
 
-impl<Sf, St, Req, F, Err> ServiceFactory<Req, St> for MapInitErr<Sf, F, Err>
+impl<Sf, St, Req, F, Err> ServiceFactory<St, Req> for MapInitErr<Sf, F, Err>
 where
-    Sf: ServiceFactory<Req, St>,
+    Sf: ServiceFactory<St, Req>,
     F: Fn(Sf::InitError) -> Err + Clone,
 {
     type Res = Sf::Res;

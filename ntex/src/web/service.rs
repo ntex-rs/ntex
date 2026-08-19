@@ -107,8 +107,8 @@ impl<St: 'static, Err: ErrorRenderer> WebServiceConfig<St, Err> {
         nested: Option<Rc<ResourceMap>>,
     ) where
         S: ServiceFactory<
-                WebRequest<Err>,
                 St,
+                WebRequest<Err>,
                 Res = WebResponse,
                 Error = Err::Container,
                 InitCfg = SharedCfg,
@@ -193,8 +193,8 @@ impl WebServiceAdapter {
         St: 'static,
         F: IntoServiceFactory<T, St, WebRequest<Err>>,
         T: ServiceFactory<
-                WebRequest<Err>,
                 St,
+                WebRequest<Err>,
                 Res = WebResponse,
                 Error = Err::Container,
                 InitCfg = SharedCfg,
@@ -221,8 +221,8 @@ impl<Sf, St, Err> WebServiceFactory<St, Err> for WebServiceImpl<Sf>
 where
     St: 'static,
     Sf: ServiceFactory<
-            WebRequest<Err>,
             St,
+            WebRequest<Err>,
             Res = WebResponse,
             Error = Err::Container,
             InitCfg = SharedCfg,
