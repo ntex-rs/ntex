@@ -11,7 +11,7 @@ use crate::http::message::{CurrentIo, ResponseHead};
 use crate::http::{DateService, HttpPipeline, Method, Request, Response, StatusCode, Uri, Version};
 use crate::io::{Filter, Io, IoBoxed, IoRef, types};
 use crate::service::{Ctx, Pipeline, PipelineBinding, ReadyCtx, Service, ServiceFactory};
-use crate::service::{IntoService, IntoServiceFactory, State, cfg::SharedCfg};
+use crate::service::{IntoService, IntoServiceFactory, cfg::SharedCfg};
 use crate::util::{Bytes, BytesMut, HashMap, dyn_rc_err};
 
 use super::{DefaultControlService, payload::Payload, payload::PayloadSender};
@@ -58,7 +58,7 @@ where
     /// Provide http/2 control service
     pub fn control<Sf, St>(self, ctl: impl IntoService<Sf, St>) -> H2Service<Hst, F, B, Err>
     where
-        St: State<Sf::Req> + Default,
+        St: Default + 'static,
         Sf: Service<St, Req = h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
         Sf::Error: StdError + 'static,
     {

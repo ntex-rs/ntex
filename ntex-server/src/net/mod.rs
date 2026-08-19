@@ -1,8 +1,6 @@
 //! General purpose tcp server
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use ntex_io::Io;
-use ntex_service::State;
 use ntex_util::services::Counter;
 
 mod accept;
@@ -55,7 +53,7 @@ pub fn build() -> ServerBuilder {
 pub fn build_with_state<F, St>(state: F) -> ServerBuilder<St>
 where
     F: AsyncFn() -> Result<St, &'static str> + Send + Clone + 'static,
-    St: State<Io> + Clone + 'static,
+    St: Clone + 'static,
 {
     ServerBuilder::new(state)
 }

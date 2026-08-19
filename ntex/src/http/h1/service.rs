@@ -6,7 +6,7 @@ use crate::http::{HttpPipeline, body::MessageBody, request::Request, response::R
 use crate::io::{Filter, Io, types};
 use crate::service::{
     Ctx, IntoService, IntoServiceFactory, Pipeline, PipelineBinding, ReadyCtx, Service,
-    ServiceFactory, State, cfg::SharedCfg,
+    ServiceFactory, cfg::SharedCfg,
 };
 use crate::util::dyn_rc_err;
 
@@ -57,7 +57,7 @@ where
     /// Provide http/1 control service.
     pub fn control<Ctl>(self, ctl: impl IntoService<Ctl, St>) -> H1Service<St, F, B, Err>
     where
-        St: State<Control<F, Err>> + Default,
+        St: Default + 'static,
         Ctl: Service<St, Req = Control<F, Err>, Res = ControlAck<F>> + 'static,
         Ctl::Error: Error + 'static,
     {

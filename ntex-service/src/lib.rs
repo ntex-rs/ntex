@@ -32,14 +32,14 @@ mod then;
 mod util;
 
 pub use self::apply::{apply_fn, apply_fn_factory};
-pub use self::chain::{ServiceChain, ServiceChainFactory, factory, factory_with_state, svc};
+pub use self::chain::{ServiceChain, ServiceChainFactory, factory, factory_with_st, svc};
 pub use self::ctx::{Ctx, ReadyCtx};
 pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service, fn_service_st};
 pub use self::fn_shutdown::fn_shutdown;
 pub use self::map_config::{map_config, unit_config};
 pub use self::middleware::{Identity, Middleware, Stack, apply, fn_layer};
 pub use self::pipeline::{Pipeline, PipelineBinding, PipelineCall, PipelineFactory};
-pub use self::st::{FromState, State, StateMapping};
+pub use self::st::{FromState, StateMapping};
 
 #[allow(unused_variables)]
 /// An asynchronous function from a `Request` to a `Response`.
@@ -210,7 +210,8 @@ pub trait ServiceFactory<Req, St = ()> {
     where
         Self: 'static,
         Req: 'static,
-        St: State<Req> + Default + 'static,
+        // St: State<Req> + Default + 'static,
+        St: Default + 'static,
     {
         Ok(Pipeline::with(self.create(cfg).await?))
     }
@@ -222,7 +223,7 @@ pub trait ServiceFactory<Req, St = ()> {
         Self: Sized,
         F: Fn(Self::Res) -> Res + Clone,
     {
-        factory_with_state(dev::MapFactory::new(self, f))
+        factory_with_st(dev::MapFactory::new(self, f))
     }
 
     #[inline]
@@ -233,7 +234,7 @@ pub trait ServiceFactory<Req, St = ()> {
         Self: Sized,
         F: Fn(Self::Error) -> E + Clone,
     {
-        factory_with_state(dev::MapErrFactory::new(self, f))
+        factory_with_st(dev::MapErrFactory::new(self, f))
     }
 
     #[inline]
@@ -244,7 +245,7 @@ pub trait ServiceFactory<Req, St = ()> {
         Self: Sized,
         F: Fn(Self::InitError) -> E + Clone,
     {
-        factory_with_state(dev::MapInitErr::new(self, f))
+        factory_with_st(dev::MapInitErr::new(self, f))
     }
 
     /// Creates a boxed service factory.

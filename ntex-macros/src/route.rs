@@ -132,15 +132,14 @@ impl Route {
             #[allow(non_camel_case_types)]
             pub struct #name;
 
-            impl ntex::web::dev::WebServiceFactory<#error> for #name
-            {
-                fn register(self, __config: &mut ntex::web::dev::WebServiceConfig<#error>) {
+            impl<St: 'static> ntex::web::dev::WebServiceFactory<St, #error> for #name {
+                fn register(self, __config: &mut ntex::web::dev::WebServiceConfig<St, #error>) {
                     #ast
 
                     let __resource = ntex::web::Resource::new(#path)
                         .name(#resource_name)
-                        .guard(ntex::web::guard::#method())
                         #(.guard(ntex::web::guard::fn_guard(#extra_guards)))*
+                        .guard(ntex::web::guard::#method())
                         .to(#name);
 
                     ntex::web::dev::WebServiceFactory::register(__resource, __config)

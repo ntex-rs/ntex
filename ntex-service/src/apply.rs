@@ -28,7 +28,7 @@ where
     F: AsyncFn(In, &ApplyCtx<'_, Sf::Service, St>) -> Result<Out, Err> + Clone,
     Err: From<Sf::Error>,
 {
-    crate::factory_with_state(ApplyFactory::new(service.into_factory(), f))
+    crate::factory_with_st(ApplyFactory::new(service.into_factory(), f))
 }
 
 #[derive(Debug)]
