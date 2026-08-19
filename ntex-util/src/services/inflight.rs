@@ -1,5 +1,5 @@
 //! Service that limits number of in-flight async requests.
-use ntex_service::{Ctx, Middleware, ReadyCtx, Service};
+use ntex_service::{Ctx, Middleware, Service};
 
 use super::counter::Counter;
 
@@ -59,7 +59,7 @@ where
     type Error = S::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), S::Error> {
+    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), S::Error> {
         if self.count.is_available() {
             ctx.ready(&self.service).await
         } else {

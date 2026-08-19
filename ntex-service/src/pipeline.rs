@@ -1,7 +1,7 @@
 use std::{cell, fmt, future::Future, pin::Pin, ptr, rc::Rc, task::Context, task::Poll};
 
 use crate::state::{Noop, State, StateMapping};
-use crate::{Ctx, IntoService, ReadyCtx, Service, ServiceFactory, ctx::WaitersRef};
+use crate::{Ctx, IntoService, Service, ServiceFactory, ctx::WaitersRef};
 
 /// Container for a service.
 ///
@@ -482,7 +482,7 @@ where
     S: Service<St>,
     Ctl: State<St, S::Req>,
 {
-    pl.s.ready(ReadyCtx::<'_, S, St>::new(0, pl.waiters_ref(), &pl.st))
+    pl.s.ready(Ctx::<'_, S, St>::new(0, pl.waiters_ref(), &pl.st))
 }
 
 struct CheckReadiness<S, St, Ctl, F, Fut>

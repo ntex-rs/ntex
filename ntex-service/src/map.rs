@@ -145,7 +145,7 @@ where
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use crate::{Ctx, Pipeline, ReadyCtx, Service, ServiceFactory, fn_factory};
+    use crate::{Ctx, Pipeline, Service, ServiceFactory, fn_factory};
 
     #[derive(Debug, Default, Clone)]
     struct Srv(Rc<Cell<usize>>);
@@ -155,7 +155,7 @@ mod tests {
         type Res = ();
         type Error = ();
 
-        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
             Ok(())
         }
 

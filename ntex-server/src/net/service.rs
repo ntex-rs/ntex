@@ -1,6 +1,6 @@
 use std::fmt;
 
-use ntex_service::{Ctx, ReadyCtx, Service, cfg::SharedCfg};
+use ntex_service::{Ctx, Service, cfg::SharedCfg};
 use ntex_util::{HashMap, future::join_all, services::Counter};
 
 use crate::ServerConfiguration;
@@ -123,7 +123,7 @@ impl Service<()> for StreamService {
     type Res = ();
     type Error = ();
 
-    async fn ready(&self, _: ReadyCtx<'_, Self, ()>) -> Result<(), Self::Error> {
+    async fn ready(&self, _: Ctx<'_, Self, ()>) -> Result<(), Self::Error> {
         if !self.conns.is_available() {
             self.conns.available().await;
         }

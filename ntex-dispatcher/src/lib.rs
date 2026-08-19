@@ -623,7 +623,7 @@ mod tests {
     use ntex_bytes::{BytePages, Bytes, BytesMut};
     use ntex_codec::BytesCodec;
     use ntex_io::{Flags, Io, IoConfig, IoRef, testing::IoTest};
-    use ntex_service::{Ctx, Pipeline, ReadyCtx, Service, cfg::SharedCfg};
+    use ntex_service::{Ctx, Pipeline, Service, cfg::SharedCfg};
     use ntex_util::{channel::oneshot, time::Millis, time::sleep};
     use rand::Rng;
 
@@ -843,7 +843,7 @@ mod tests {
             type Res = Option<Response<BytesCodec>>;
             type Error = &'static str;
 
-            async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+            async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
                 self.0.set(self.0.get() + 1);
                 Err("test")
             }
@@ -1328,7 +1328,7 @@ mod tests {
             type Res = Option<Bytes>;
             type Error = ();
 
-            async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+            async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
                 if self.2.get()
                     && let Some(rx) = self.0.take()
                 {

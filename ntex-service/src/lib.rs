@@ -33,7 +33,7 @@ mod util;
 
 pub use self::apply::{apply_fn, apply_fn_factory};
 pub use self::chain::{ServiceChain, ServiceChainFactory, factory, factory_with_st, svc};
-pub use self::ctx::{Ctx, ReadyCtx};
+pub use self::ctx::Ctx;
 pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service, fn_service_st};
 pub use self::fn_shutdown::fn_shutdown;
 pub use self::map_config::{map_config, unit_config};
@@ -125,7 +125,7 @@ pub trait Service<St = ()> {
     ///
     /// **Note:** Pipeline readiness is maintained across all services in the pipeline.
     /// The pipeline can process requests only if every service in the pipeline is ready.
-    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
         Ok(())
     }
 
@@ -271,7 +271,7 @@ where
     type Error = S::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), S::Error> {
+    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), S::Error> {
         ctx.ready(&**self).await
     }
 
@@ -295,7 +295,7 @@ where
     type Error = S::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), S::Error> {
+    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), S::Error> {
         ctx.ready(&**self).await
     }
 

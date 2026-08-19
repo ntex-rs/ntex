@@ -5,8 +5,8 @@ use crate::http::error::{DispatchError, ResponseError};
 use crate::http::{HttpPipeline, body::MessageBody, request::Request, response::Response};
 use crate::io::{Filter, Io, types};
 use crate::service::{
-    Ctx, IntoService, IntoServiceFactory, Pipeline, PipelineBinding, ReadyCtx, Service,
-    ServiceFactory, cfg::SharedCfg, state::DefaultState,
+    Ctx, IntoService, IntoServiceFactory, Pipeline, PipelineBinding, Service, ServiceFactory,
+    cfg::SharedCfg, state::DefaultState,
 };
 use crate::util::dyn_rc_err;
 
@@ -85,7 +85,7 @@ where
     type Res = ();
     type Error = DispatchError;
 
-    async fn ready(&self, _: ReadyCtx<'_, Self, Hst>) -> Result<(), Self::Error> {
+    async fn ready(&self, _: Ctx<'_, Self, Hst>) -> Result<(), Self::Error> {
         self.ctl.ready().await.map_err(|e| {
             log::error!("Http control service readiness error: {e:?}");
             DispatchError::Control(e)

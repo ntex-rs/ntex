@@ -1,6 +1,6 @@
 use std::{fmt, marker::PhantomData};
 
-use super::{Ctx, ReadyCtx, Service, ServiceFactory};
+use super::{Ctx, Service, ServiceFactory};
 
 /// Service for the `map_err` combinator, changing the type of a service's
 /// error.
@@ -69,7 +69,7 @@ where
     }
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), E> {
+    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), E> {
         ctx.ready(&self.svc).await.map_err(&self.f)
     }
 
@@ -159,7 +159,7 @@ mod tests {
         type Res = ();
         type Error = ();
 
-        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
             if self.0 { Err(()) } else { Ok(()) }
         }
 

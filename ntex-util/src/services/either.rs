@@ -1,5 +1,5 @@
 //! Either service allows to use different services for handling request
-use ntex_service::{Ctx, ReadyCtx, Service, ServiceFactory};
+use ntex_service::{Ctx, Service, ServiceFactory};
 
 use crate::future::Either;
 
@@ -124,7 +124,7 @@ where
     }
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
         match self.svc {
             Either::Left(ref svc) => ctx.ready(svc).await,
             Either::Right(ref svc) => ctx.ready(svc).await,

@@ -1,7 +1,7 @@
 //! Service that limits number of in-flight async requests to 1.
 use std::{cell::Cell, future::poll_fn, task::Poll};
 
-use ntex_service::{Ctx, Middleware, ReadyCtx, Service};
+use ntex_service::{Ctx, Middleware, Service};
 
 use crate::task::LocalWaker;
 
@@ -48,7 +48,7 @@ impl<S: Service<St>, St> Service<St> for OneRequestService<S> {
     type Error = S::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), S::Error> {
+    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), S::Error> {
         if !self.ready.get() {
             poll_fn(|cx| {
                 self.waker.register(cx.waker());

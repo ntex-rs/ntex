@@ -2,7 +2,7 @@ use std::{error::Error as StdError, time::Duration};
 
 use crate::connect::{self, Connect as TcpConnect, Connector as TcpConnector};
 use crate::error::{Error, ErrorMapping, with_service};
-use crate::service::{IntoServiceFactory, Pipeline, ReadyCtx, Service, apply_fn_factory, boxed};
+use crate::service::{IntoServiceFactory, Pipeline, Service, apply_fn_factory, boxed};
 use crate::{Ctx, ServiceFactory, SharedCfg, http::Uri, io::IoBoxed, time::Seconds, util::join};
 
 use super::error::{ClientError, ConnectError};
@@ -245,7 +245,7 @@ impl Service<()> for ConnectorService {
     type Error = Error<ClientError>;
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self, ()>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: Ctx<'_, Self, ()>) -> Result<(), Self::Error> {
         if let Some(ref ssl_pool) = self.ssl_pool {
             let (r1, r2) = join(ctx.ready(&self.tcp_pool), ctx.ready(ssl_pool)).await;
             r1.into_error()?;

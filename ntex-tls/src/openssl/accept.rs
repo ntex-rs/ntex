@@ -3,7 +3,7 @@ use std::{cell::RefCell, fmt, io, marker::PhantomData};
 use ntex_bytes::BytePages;
 use ntex_io::{Filter, Io, Layer};
 use ntex_service::cfg::Cfg;
-use ntex_service::{Ctx, ReadyCtx, Service, cfg::Configuration};
+use ntex_service::{Ctx, Service, cfg::Configuration};
 use ntex_util::{services::Counter, time};
 use tls_openssl::ssl;
 
@@ -35,7 +35,7 @@ impl<F: Filter, St> Service<St> for SslAcceptor<F> {
     type Res = Io<Layer<SslFilter, F>>;
     type Error = io::Error;
 
-    async fn ready(&self, _: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
+    async fn ready(&self, _: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
         if !self.conns.is_available() {
             self.conns.available().await;
         }

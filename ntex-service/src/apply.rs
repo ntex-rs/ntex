@@ -1,6 +1,6 @@
 use std::{fmt, marker};
 
-use crate::ctx::{Ctx, ReadyCtx, WaitersRef};
+use crate::ctx::{Ctx, WaitersRef};
 use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 use crate::{ServiceChain, ServiceChainFactory};
 
@@ -105,7 +105,7 @@ where
     type Error = Err;
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), Err> {
+    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Err> {
         ctx.ready(&self.svc).await.map_err(From::from)
     }
 
@@ -225,7 +225,7 @@ mod tests {
             Ok(())
         }
 
-        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), ()> {
+        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), ()> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }

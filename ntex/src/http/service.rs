@@ -4,7 +4,7 @@ use crate::io::{Filter, Io, types};
 use crate::service::state::{DefaultState, State, StateMapping};
 use crate::service::{IntoService, IntoServiceFactory, Pipeline};
 use crate::util::{dyn_rc_err, join};
-use crate::{Ctx, ReadyCtx, Service, ServiceFactory, SharedCfg};
+use crate::{Ctx, Service, ServiceFactory, SharedCfg};
 
 use super::error::{DispatchError, H2Error, ResponseError};
 use super::{HttpPipeline, h1, h2, request::Request, response::Response};
@@ -157,7 +157,7 @@ where
     type Res = ();
     type Error = DispatchError;
 
-    async fn ready(&self, _: ReadyCtx<'_, Self, Hst>) -> Result<(), Self::Error> {
+    async fn ready(&self, _: Ctx<'_, Self, Hst>) -> Result<(), Self::Error> {
         let (r1, r2) = join(self.h1_ctl.ready(), self.h2_ctl.ready()).await;
         r1.map_err(|e| {
             log::error!("Http control service readiness error: {e:?}");

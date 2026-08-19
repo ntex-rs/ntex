@@ -3,7 +3,7 @@ use std::{cell::RefCell, marker, mem, rc::Rc};
 use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, ResourceId, Router};
 use crate::service::cfg::{Cfg, SharedCfg};
-use crate::service::{Ctx, Middleware, ReadyCtx, Service, ServiceFactory, factory_with_st};
+use crate::service::{Ctx, Middleware, Service, ServiceFactory, factory_with_st};
 use crate::service::{boxed, dev::ServiceChainFactory};
 use crate::util::HashMap;
 
@@ -241,7 +241,7 @@ where
     type Error = Err::Container;
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
         ctx.ready(&self.filter).await
     }
 

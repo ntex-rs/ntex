@@ -1,6 +1,6 @@
 use std::{fmt, future::Future, pin::Pin, rc::Rc};
 
-use crate::ctx::{Ctx, ReadyCtx, WaitersRef};
+use crate::ctx::{Ctx, WaitersRef};
 use crate::{Service, ServiceFactory};
 
 type BoxFuture<'a, I, E> = Pin<Box<dyn Future<Output = Result<I, E>> + 'a>>;
@@ -52,7 +52,7 @@ impl<St, Req, Res, Err> Service<St> for BoxService<St, Req, Res, Err> {
     type Error = Err;
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
         let (idx, waiters, st) = ctx.inner();
         self.inner.ready(idx, waiters, st).await
     }
@@ -99,7 +99,7 @@ where
 
     #[inline]
     fn ready<'a>(&'a self, i: u32, w: &'a WaitersRef, s: &'a St) -> BoxFuture<'a, (), Self::Error> {
-        Box::pin(async move { ReadyCtx::<'a, S, St>::new(i, w, s).ready(self).await })
+        Box::pin(async move { Ctx::<'a, S, St>::new(i, w, s).ready(self).await })
     }
 
     #[inline]

@@ -27,7 +27,7 @@ where
 /// For example, timeout middleware:
 ///
 /// ```rust
-/// use ntex_service::{Service, Ctx, ReadyCtx};
+/// use ntex_service::{Ctx, Service};
 /// use ntex::{time::sleep, util::Either, util::select};
 ///
 /// pub struct Timeout<S> {
@@ -48,7 +48,7 @@ where
 ///     type Res = S::Res;
 ///     type Error = TimeoutError<S::Error>;
 ///
-///     async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+///     async fn ready(&self, ctx: Ctx<'_, Self>) -> Result<(), Self::Error> {
 ///         ctx.ready(&self.service).await.map_err(TimeoutError::Service)
 ///     }
 ///
@@ -264,7 +264,7 @@ mod tests {
     use std::{cell::Cell, rc::Rc};
 
     use super::*;
-    use crate::{Ctx, Pipeline, ReadyCtx, factory, fn_service};
+    use crate::{Ctx, Pipeline, factory, fn_service};
 
     #[derive(Debug, Clone)]
     struct Mw(Rc<Cell<usize>>);
@@ -286,7 +286,7 @@ mod tests {
         type Res = S::Res;
         type Error = S::Error;
 
-        async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, ctx: Ctx<'_, Self>) -> Result<(), Self::Error> {
             ctx.ready(&self.0).await
         }
 

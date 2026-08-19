@@ -10,7 +10,7 @@ use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::message::{CurrentIo, ResponseHead};
 use crate::http::{DateService, HttpPipeline, Method, Request, Response, StatusCode, Uri, Version};
 use crate::io::{Filter, Io, IoBoxed, IoRef, types};
-use crate::service::{Ctx, Pipeline, PipelineBinding, ReadyCtx, Service, ServiceFactory};
+use crate::service::{Ctx, Pipeline, PipelineBinding, Service, ServiceFactory};
 use crate::service::{IntoService, IntoServiceFactory, cfg::SharedCfg, state::DefaultState};
 use crate::util::{Bytes, BytesMut, HashMap, dyn_rc_err};
 
@@ -85,7 +85,7 @@ where
     type Error = DispatchError;
 
     #[inline]
-    async fn ready(&self, _: ReadyCtx<'_, Self, Hst>) -> Result<(), Self::Error> {
+    async fn ready(&self, _: Ctx<'_, Self, Hst>) -> Result<(), Self::Error> {
         self.ctl.ready().await.map_err(|e| {
             log::error!("Service readiness error: {e:?}");
             DispatchError::Control(e)

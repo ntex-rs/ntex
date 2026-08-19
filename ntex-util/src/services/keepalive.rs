@@ -1,6 +1,6 @@
 use std::{cell::Cell, convert::Infallible, fmt, marker, task::Poll, time};
 
-use ntex_service::{Ctx, ReadyCtx, Service, ServiceFactory};
+use ntex_service::{Ctx, Service, ServiceFactory};
 
 use crate::time::{Millis, Sleep, now, sleep};
 
@@ -123,7 +123,7 @@ where
     type Res = Req;
     type Error = E;
 
-    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
         let expire = self.expire.get() + self.dur;
         if expire <= now() {
             Err((self.f)())
