@@ -131,18 +131,21 @@ pub struct LoggerMiddleware<S> {
     service: S,
 }
 
-impl<S, St, E> Service<St> for LoggerMiddleware<S>
+impl<S, St, E> Service<St, WebRequest<E>> for LoggerMiddleware<S>
 where
-    S: Service<St, Req = WebRequest<E>, Res = WebResponse>,
+    S: Service<St, WebRequest<E>, Res = WebResponse>,
 {
-    type Req = WebRequest<E>;
     type Res = WebResponse;
     type Error = S::Error;
 
     crate::forward_ready!(St, service);
     crate::forward_shutdown!(service);
 
-    async fn call(&self, req: Self::Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, S::Error> {
+    async fn call(
+        &self,
+        req: WebRequest<E>,
+        ctx: Ctx<'_, Self, St>,
+    ) -> Result<Self::Res, S::Error> {
         if self.inner.exclude.contains(req.path()) {
             ctx.call(&self.service, req).await
         } else {

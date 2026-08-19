@@ -267,9 +267,9 @@ impl<St: State<St, Io> + Clone + 'static> ServiceRuntime<St> {
     /// # Panics
     ///
     /// Panics if service with specified name is registered already
-    pub fn service<S>(&self, name: &str, svc: impl IntoService<S, St>) -> &Self
+    pub fn service<S>(&self, name: &str, svc: impl IntoService<S, St, Io>) -> &Self
     where
-        S: Service<St, Req = Io> + 'static,
+        S: Service<St, Io> + 'static,
     {
         let mut inner = self.0.borrow_mut();
         if let Some(entry) = inner.names.get_mut(name) {

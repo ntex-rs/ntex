@@ -13,7 +13,8 @@ use super::route::{IntoRoutes, Route, RouteService};
 use super::stack::{Filter, WebStack};
 use super::{ErrorRenderer, Handler, HttpHandler, HttpService, WebRequest, WebResponse};
 
-type ResourcePipeline<St, F, Err> = ServiceChain<AndThen<F, ResourceRouter<St, Err>>, St>;
+type ResourcePipeline<St, F, Err> =
+    ServiceChain<AndThen<F, ResourceRouter<St, Err>>, St, WebRequest<Err>>;
 
 /// *Resource* is an entry in resources table which corresponds to requested URL.
 ///
@@ -340,7 +341,7 @@ where
             InitError = (),
         > + 'static,
     M: Middleware<ResourcePipeline<St, Sf::Service, Err>, SharedCfg> + 'static,
-    M::Service: Service<St, Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    M::Service: Service<St, WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     Err: ErrorRenderer,
 {
     fn register(mut self, config: &mut WebServiceConfig<St, Err>) {
@@ -394,7 +395,7 @@ where
             InitError = (),
         > + 'static,
     M: Middleware<ResourcePipeline<St, Sf::Service, Err>, SharedCfg> + 'static,
-    M::Service: Service<St, Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    M::Service: Service<St, WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     Err: ErrorRenderer,
 {
     fn into_factory(
@@ -427,7 +428,7 @@ impl<St, Err, M, F> ServiceFactory<St, WebRequest<Err>, SharedCfg>
     for ResourceServiceFactory<St, Err, M, F>
 where
     M: Middleware<ResourcePipeline<St, F::Service, Err>, SharedCfg> + 'static,
-    M::Service: Service<St, Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    M::Service: Service<St, WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
             St,
             WebRequest<Err>,
@@ -484,8 +485,7 @@ pub struct ResourceRouter<St, Err: ErrorRenderer> {
     default: Option<HttpHandler<St, Err>>,
 }
 
-impl<St, Err: ErrorRenderer> Service<St> for ResourceRouter<St, Err> {
-    type Req = WebRequest<Err>;
+impl<St, Err: ErrorRenderer> Service<St, WebRequest<Err>> for ResourceRouter<St, Err> {
     type Res = WebResponse;
     type Error = Err::Container;
 

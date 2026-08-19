@@ -112,12 +112,11 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
         }
     }
 
-    impl<St, V1, $($T,)+ V1R, $($R,)+> Service<St> for $srv_type<St, V1, $($T,)+ V1R, $($R,)+>
+    impl<St, V1, $($T,)+ V1R, $($R,)+> Service<St, $enum_type<V1R, $($R,)+>> for $srv_type<St, V1, $($T,)+ V1R, $($R,)+>
     where
-        V1: Service<St, Req = V1R>,
-        $($T: Service<St, Req = $R, Res = V1::Res, Error = V1::Error>),+
+        V1: Service<St, V1R>,
+        $($T: Service<St, $R, Res = V1::Res, Error = V1::Error>),+
     {
-        type Req = $enum_type<V1R, $($R,)+>;
         type Res = V1::Res;
         type Error = V1::Error;
 
@@ -244,8 +243,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct Srv1;
 
-    impl Service<()> for Srv1 {
-        type Req = ();
+    impl Service<(), ()> for Srv1 {
         type Res = usize;
         type Error = ();
 
@@ -263,8 +261,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct Srv2;
 
-    impl Service<()> for Srv2 {
-        type Req = ();
+    impl Service<(), ()> for Srv2 {
         type Res = usize;
         type Error = ();
 
@@ -307,8 +304,7 @@ mod tests {
         #[derive(Debug, Clone)]
         struct Srv5;
 
-        impl Service<()> for Srv5 {
-            type Req = ();
+        impl Service<(), ()> for Srv5 {
             type Res = usize;
             type Error = ();
             async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {

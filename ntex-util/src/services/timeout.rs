@@ -104,10 +104,10 @@ pub struct TimeoutService<S> {
 }
 
 impl<S> TimeoutService<S> {
-    pub fn new<T, St>(timeout: T, service: S) -> Self
+    pub fn new<T, St, Req>(timeout: T, service: S) -> Self
     where
         T: Into<Millis>,
-        S: Service<St>,
+        S: Service<St, Req>,
     {
         TimeoutService {
             service,
@@ -116,15 +116,14 @@ impl<S> TimeoutService<S> {
     }
 }
 
-impl<S, St> Service<St> for TimeoutService<S>
+impl<S, St, Req> Service<St, Req> for TimeoutService<S>
 where
-    S: Service<St>,
+    S: Service<St, Req>,
 {
-    type Req = S::Req;
     type Res = S::Res;
     type Error = TimeoutError<S::Error>;
 
-    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, Self::Error> {
+    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, Self::Error> {
         if self.timeout.is_zero() {
             ctx.call(&self.service, req)
                 .await
@@ -161,8 +160,7 @@ mod tests {
         }
     }
 
-    impl Service<()> for SleepService {
-        type Req = ();
+    impl Service<(), ()> for SleepService {
         type Res = ();
         type Error = SrvError;
 

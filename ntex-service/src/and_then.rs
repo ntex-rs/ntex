@@ -17,17 +17,16 @@ impl<A, B> AndThen<A, B> {
     }
 }
 
-impl<A, B, St> Service<St> for AndThen<A, B>
+impl<A, B, St, Req> Service<St, Req> for AndThen<A, B>
 where
-    A: Service<St>,
-    B: Service<St, Req = A::Res, Error = A::Error>,
+    A: Service<St, Req>,
+    B: Service<St, A::Res, Error = A::Error>,
 {
-    type Req = A::Req;
     type Res = B::Res;
     type Error = A::Error;
 
     #[inline]
-    async fn call(&self, req: A::Req, ctx: Ctx<'_, Self, St>) -> Result<B::Res, A::Error> {
+    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<B::Res, A::Error> {
         let result = ctx.call(&self.svc1, req).await?;
         ctx.call(&self.svc2, result).await
     }
@@ -86,8 +85,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct Srv1(Rc<Cell<usize>>, Rc<Cell<usize>>);
 
-    impl Service for Srv1 {
-        type Req = &'static str;
+    impl Service<(), &'static str> for Srv1 {
         type Res = &'static str;
         type Error = ();
 
@@ -108,8 +106,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct Srv2(Rc<Cell<usize>>, Rc<Cell<usize>>);
 
-    impl Service for Srv2 {
-        type Req = &'static str;
+    impl Service<(), &'static str> for Srv2 {
         type Res = (&'static str, &'static str);
         type Error = ();
 

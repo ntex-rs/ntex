@@ -68,11 +68,10 @@ where
     }
 }
 
-impl<A: Address, S, St> Service<St> for TlsConnectorService<S>
+impl<A: Address, S, St> Service<St, Connect<A>> for TlsConnectorService<S>
 where
-    S: Service<St, Req = Connect<A>, Res = Io, Error = Error<ConnectError>>,
+    S: Service<St, Connect<A>, Res = Io, Error = Error<ConnectError>>,
 {
-    type Req = Connect<A>;
     type Res = Io<Layer<SchannelFilter>>;
     type Error = Error<ConnectError>;
 

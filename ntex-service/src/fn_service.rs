@@ -131,11 +131,10 @@ impl<F, Req, Res, Err> fmt::Debug for FnService<F, Req, Res, Err> {
     }
 }
 
-impl<F, St, Req, Res, Err> Service<St> for FnService<F, Req, Res, Err>
+impl<F, St, Req, Res, Err> Service<St, Req> for FnService<F, Req, Res, Err>
 where
     F: AsyncFn(Req) -> Result<Res, Err>,
 {
-    type Req = Req;
     type Res = Res;
     type Error = Err;
 
@@ -160,7 +159,7 @@ where
     }
 }
 
-impl<F, St, Req, Res, Err> IntoService<FnService<F, Req, Res, Err>, St> for F
+impl<F, St, Req, Res, Err> IntoService<FnService<F, Req, Res, Err>, St, Req> for F
 where
     F: AsyncFn(Req) -> Result<Res, Err>,
 {
@@ -201,23 +200,22 @@ impl<F, St, Req, Res, Err> fmt::Debug for FnServiceSt<F, St, Req, Res, Err> {
     }
 }
 
-impl<F, St, Req, Res, Err> Service<St> for FnServiceSt<F, St, Req, Res, Err>
+impl<F, St, Req, Res, Err> Service<St, Req> for FnServiceSt<F, St, Req, Res, Err>
 where
-    F: AsyncFn(Req, &St) -> Result<Res, Err>,
+    F: AsyncFn(&St, Req) -> Result<Res, Err>,
 {
-    type Req = Req;
     type Res = Res;
     type Error = Err;
 
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Res, Err> {
-        (self.f)(req, ctx.st()).await
+        (self.f)(ctx.st(), req).await
     }
 }
 
-impl<F, St, Req, Res, Err> IntoService<FnServiceSt<F, St, Req, Res, Err>, St> for F
+impl<F, St, Req, Res, Err> IntoService<FnServiceSt<F, St, Req, Res, Err>, St, Req> for F
 where
-    F: AsyncFn(Req, &St) -> Result<Res, Err>,
+    F: AsyncFn(&St, Req) -> Result<Res, Err>,
 {
     #[inline]
     fn into_service(self) -> FnServiceSt<F, St, Req, Res, Err> {
@@ -337,7 +335,7 @@ impl<St, F, Cfg, S, Req, Err> ServiceFactory<St, Req, Cfg>
     for FnServiceConfig<St, F, Cfg, S, Req, Err>
 where
     F: AsyncFn(&Cfg) -> Result<S, Err>,
-    S: Service<St, Req = Req>,
+    S: Service<St, Req>,
 {
     type Res = S::Res;
     type Error = S::Error;
@@ -372,7 +370,7 @@ where
 impl<St, F, S, Req, E, C> ServiceFactory<St, Req, C> for FnServiceNoConfig<St, F, S, E, C>
 where
     F: AsyncFn() -> Result<S, E>,
-    S: Service<St, Req = Req>,
+    S: Service<St, Req>,
     C: 'static,
 {
     type Res = S::Res;

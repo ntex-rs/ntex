@@ -230,8 +230,8 @@ where
     ) -> io::Result<Self>
     where
         F: AsyncFn(&St) -> I + Send + Clone + 'static,
-        S: Service<St, Req = Io> + 'static,
-        I: IntoService<S, St> + 'static,
+        S: Service<St, Io> + 'static,
+        I: IntoService<S, St, Io> + 'static,
         St: State<St, Io> + 'static,
     {
         let cfg = cfg.into();
@@ -265,8 +265,8 @@ where
     ) -> io::Result<Self>
     where
         F: AsyncFn(&St) -> I + Send + Clone + 'static,
-        I: IntoService<S, St> + 'static,
-        S: Service<St, Req = Io> + 'static,
+        I: IntoService<S, St, Io> + 'static,
+        S: Service<St, Io> + 'static,
         St: State<St, Io> + 'static,
     {
         use std::os::unix::net::UnixListener;
@@ -297,8 +297,8 @@ where
     ) -> io::Result<Self>
     where
         F: AsyncFn(&St) -> I + Send + Clone + 'static,
-        I: IntoService<S, St> + 'static,
-        S: Service<St, Req = Io> + 'static,
+        I: IntoService<S, St, Io> + 'static,
+        S: Service<St, Io> + 'static,
         St: State<St, Io> + 'static,
     {
         let token = self.token.next();
@@ -322,8 +322,8 @@ where
     ) -> io::Result<Self>
     where
         F: AsyncFn(&St) -> I + Send + Clone + 'static,
-        S: Service<St, Req = Io> + 'static,
-        I: IntoService<S, St> + 'static,
+        S: Service<St, Io> + 'static,
+        I: IntoService<S, St, Io> + 'static,
         St: State<St, Io> + 'static,
     {
         let token = self.token.next();

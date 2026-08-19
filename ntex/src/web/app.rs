@@ -364,7 +364,7 @@ impl<St, M, F, Err> App<St, M, F, Err>
 where
     St: 'static,
     M: Middleware<AppRouter<St, F::Service, Err>, SharedCfg> + 'static,
-    M::Service: Service<St, Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    M::Service: Service<St, WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
             St,
             WebRequest<Err>,
@@ -411,7 +411,7 @@ impl<St, M, F, Err> IntoServiceFactory<AppFactory<St, M, F, Err>, St, Request, S
 where
     St: 'static,
     M: Middleware<AppRouter<St, F::Service, Err>, SharedCfg> + 'static,
-    M::Service: Service<St, Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    M::Service: Service<St, WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
             St,
             WebRequest<Err>,

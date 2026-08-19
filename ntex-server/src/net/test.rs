@@ -34,8 +34,8 @@ impl<F, Sf, St, I> fmt::Debug for TestServerBuilder<F, Sf, St, I> {
 impl<F, S, St, I> TestServerBuilder<F, S, St, I>
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
-    I: IntoService<S, St> + 'static,
-    S: Service<St, Req = Io> + 'static,
+    I: IntoService<S, St, Io> + 'static,
+    S: Service<St, Io> + 'static,
     St: State<St, Io> + Clone + Default + 'static,
 {
     #[must_use]
@@ -142,7 +142,7 @@ where
 pub fn test_server<F, S>(factory: F) -> TestServer
 where
     F: AsyncFn() -> S + Send + Clone + 'static,
-    S: Service<(), Req = Io> + 'static,
+    S: Service<(), Io> + 'static,
 {
     TestServerBuilder::new(factory).start()
 }

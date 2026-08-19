@@ -239,8 +239,7 @@ pub struct ConnectorService {
     ssl_pool: Option<ConnectionPool>,
 }
 
-impl Service<()> for ConnectorService {
-    type Req = Connect;
+impl Service<(), Connect> for ConnectorService {
     type Res = Connection;
     type Error = Error<ClientError>;
 

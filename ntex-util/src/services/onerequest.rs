@@ -30,9 +30,9 @@ pub struct OneRequestService<S> {
 }
 
 impl<S> OneRequestService<S> {
-    pub fn new<St>(service: S) -> Self
+    pub fn new<St, Req>(service: S) -> Self
     where
-        S: Service<St>,
+        S: Service<St, Req>,
     {
         Self {
             service,
@@ -42,8 +42,7 @@ impl<S> OneRequestService<S> {
     }
 }
 
-impl<S: Service<St>, St> Service<St> for OneRequestService<S> {
-    type Req = S::Req;
+impl<S: Service<St, Req>, St, Req> Service<St, Req> for OneRequestService<S> {
     type Res = S::Res;
     type Error = S::Error;
 
@@ -64,7 +63,7 @@ impl<S: Service<St>, St> Service<St> for OneRequestService<S> {
     }
 
     #[inline]
-    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
+    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
         self.ready.set(false);
 
         let result = ctx.call(&self.service, req).await;
@@ -86,8 +85,7 @@ mod tests {
 
     struct SleepService(oneshot::Receiver<()>);
 
-    impl Service<()> for SleepService {
-        type Req = ();
+    impl Service<(), ()> for SleepService {
         type Res = ();
         type Error = ();
 

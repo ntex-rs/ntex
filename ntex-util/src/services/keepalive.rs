@@ -1,4 +1,4 @@
-use std::{cell::Cell, convert::Infallible, fmt, marker, task::Poll, time};
+use std::{cell::Cell, convert::Infallible, fmt, task::Poll, time};
 
 use ntex_service::{Ctx, Service, ServiceFactory};
 
@@ -7,16 +7,15 @@ use crate::time::{Millis, Sleep, now, sleep};
 /// `KeepAlive` service factory
 ///
 /// Controls min time between requests.
-pub struct KeepAlive<F, Req, E>
+pub struct KeepAlive<F, E>
 where
     F: Fn() -> E + Clone,
 {
     f: F,
     ka: Millis,
-    _t: marker::PhantomData<(E, Req)>,
 }
 
-impl<F, Req, E> KeepAlive<F, Req, E>
+impl<F, E> KeepAlive<F, E>
 where
     F: Fn() -> E + Clone,
 {
@@ -25,15 +24,11 @@ where
     /// ka - keep-alive timeout
     /// err - error factory function
     pub fn new(ka: Millis, f: F) -> Self {
-        KeepAlive {
-            f,
-            ka,
-            _t: marker::PhantomData,
-        }
+        KeepAlive { f, ka }
     }
 }
 
-impl<F, Req, E> Clone for KeepAlive<F, Req, E>
+impl<F, E> Clone for KeepAlive<F, E>
 where
     F: Fn() -> E + Clone,
 {
@@ -41,12 +36,11 @@ where
         KeepAlive {
             f: self.f.clone(),
             ka: self.ka,
-            _t: marker::PhantomData,
         }
     }
 }
 
-impl<F, Req, E> fmt::Debug for KeepAlive<F, Req, E>
+impl<F, E> fmt::Debug for KeepAlive<F, E>
 where
     F: Fn() -> E + Clone,
 {
@@ -58,14 +52,14 @@ where
     }
 }
 
-impl<F, St, Req, Cfg, E> ServiceFactory<St, Req, Cfg> for KeepAlive<F, Req, E>
+impl<F, E, St, Req, Cfg> ServiceFactory<St, Req, Cfg> for KeepAlive<F, E>
 where
     F: Fn() -> E + Clone,
 {
     type Res = Req;
     type Error = E;
 
-    type Service = KeepAliveService<Req, E, F>;
+    type Service = KeepAliveService<F, E>;
     type InitError = Infallible;
 
     #[inline]
@@ -74,7 +68,7 @@ where
     }
 }
 
-pub struct KeepAliveService<Req, E, F>
+pub struct KeepAliveService<F, E>
 where
     F: Fn() -> E,
 {
@@ -82,10 +76,9 @@ where
     dur: time::Duration,
     sleep: Sleep,
     expire: Cell<time::Instant>,
-    _t: marker::PhantomData<(Req, E)>,
 }
 
-impl<Req, E, F> KeepAliveService<Req, E, F>
+impl<F, E> KeepAliveService<F, E>
 where
     F: Fn() -> E,
 {
@@ -97,12 +90,11 @@ where
             expire,
             sleep: sleep(dur),
             dur: time::Duration::from(dur),
-            _t: marker::PhantomData,
         }
     }
 }
 
-impl<Req, E, F> fmt::Debug for KeepAliveService<Req, E, F>
+impl<F, E> fmt::Debug for KeepAliveService<F, E>
 where
     F: Fn() -> E,
 {
@@ -115,11 +107,10 @@ where
     }
 }
 
-impl<St, Req, E, F> Service<St> for KeepAliveService<Req, E, F>
+impl<F, E, St, Req> Service<St, Req> for KeepAliveService<F, E>
 where
     F: Fn() -> E,
 {
-    type Req = Req;
     type Res = Req;
     type Error = E;
 
@@ -190,7 +181,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_ka() {
-        let factory = factory(KeepAlive::new(Millis(100), || TestErr));
+        let factory = factory::<_, usize, ()>(KeepAlive::new(Millis(100), || TestErr));
         assert!(format!("{factory:?}").contains("KeepAlive"));
         let _ = factory.clone();
 

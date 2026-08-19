@@ -118,8 +118,7 @@ impl fmt::Debug for StreamService {
     }
 }
 
-impl Service<()> for StreamService {
-    type Req = Connection;
+impl Service<(), Connection> for StreamService {
     type Res = ();
     type Error = ();
 

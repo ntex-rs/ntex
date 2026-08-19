@@ -1,5 +1,5 @@
 //! An implementation of `WebSockets` base bytes streams
-use std::{cell::Cell, io, marker::PhantomData, task::Poll};
+use std::{cell::Cell, io, task::Poll};
 
 use crate::codec::{Decoder, Encoder};
 use crate::io::{Filter, FilterBuf, FilterLayer, Io, Layer};
@@ -151,23 +151,18 @@ impl FilterLayer for WsTransport {
 
 #[derive(Clone, Debug)]
 /// `WebSockets` transport service
-pub struct WsTransportService<F> {
+pub struct WsTransportService {
     codec: Codec,
-    f: PhantomData<F>,
 }
 
-impl<F> WsTransportService<F> {
+impl WsTransportService {
     /// Create websockets transport service
     pub fn new(codec: Codec) -> Self {
-        Self {
-            codec,
-            f: PhantomData,
-        }
+        Self { codec }
     }
 }
 
-impl<F: Filter> Service<()> for WsTransportService<F> {
-    type Req = Io<F>;
+impl<F: Filter> Service<(), Io<F>> for WsTransportService {
     type Res = Io<Layer<WsTransport, F>>;
     type Error = io::Error;
 

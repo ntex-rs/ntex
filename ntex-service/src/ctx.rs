@@ -3,7 +3,7 @@ use std::{cell, fmt, future::Future, marker, pin::Pin, rc::Rc};
 
 use crate::Service;
 
-pub struct Ctx<'a, Svc: Service<St> + ?Sized, St = ()> {
+pub struct Ctx<'a, Svc: ?Sized, St = ()> {
     idx: u32,
     st: &'a St,
     waiters: &'a WaitersRef,
@@ -121,7 +121,7 @@ impl WaitersRef {
     }
 }
 
-impl<'a, Svc: Service<St>, St> Ctx<'a, Svc, St> {
+impl<'a, Svc, St> Ctx<'a, Svc, St> {
     pub(crate) fn new(idx: u32, waiters: &'a WaitersRef, st: &'a St) -> Self {
         Self {
             idx,
@@ -148,9 +148,9 @@ impl<'a, Svc: Service<St>, St> Ctx<'a, Svc, St> {
     }
 
     /// Returns when the service is able to process requests.
-    pub async fn ready<S>(&self, svc: &'a S) -> Result<(), S::Error>
+    pub async fn ready<S, Req>(&self, svc: &'a S) -> Result<(), S::Error>
     where
-        S: Service<St>,
+        S: Service<St, Req>,
     {
         // check readiness and notify waiters
         ReadyCall {
@@ -169,26 +169,29 @@ impl<'a, Svc: Service<St>, St> Ctx<'a, Svc, St> {
 
     #[inline]
     /// Wait for service readiness and then call service
-    pub async fn call<S>(&self, svc: &'a S, req: S::Req) -> Result<S::Res, S::Error>
+    pub async fn call<S, Req>(&self, svc: &'a S, req: Req) -> Result<S::Res, S::Error>
     where
-        S: Service<St>,
+        S: Service<St, Req>,
     {
-        let ctx = Ctx {
-            idx: self.idx,
-            st: self.st,
-            waiters: self.waiters,
-            _t: marker::PhantomData,
-        };
+        self.ready(svc).await?;
 
-        svc.ready(ctx).await?;
-        svc.call(req, ctx).await
+        svc.call(
+            req,
+            Ctx {
+                idx: self.idx,
+                st: self.st,
+                waiters: self.waiters,
+                _t: marker::PhantomData,
+            },
+        )
+        .await
     }
 
     #[inline]
     /// Call service, do not check service readiness
-    pub async fn call_nowait<S>(&self, svc: &'a S, req: S::Req) -> Result<S::Res, S::Error>
+    pub async fn call_nowait<S, Req>(&self, svc: &'a S, req: Req) -> Result<S::Res, S::Error>
     where
-        S: Service<St>,
+        S: Service<St, Req>,
     {
         svc.call(
             req,
@@ -220,16 +223,16 @@ impl<'a, Svc: Service<St>, St> Ctx<'a, Svc, St> {
     }
 }
 
-impl<Svc: Service<St>, St> Copy for Ctx<'_, Svc, St> {}
+impl<S, St> Copy for Ctx<'_, S, St> {}
 
-impl<Svc: Service<St>, St> Clone for Ctx<'_, Svc, St> {
+impl<S, St> Clone for Ctx<'_, S, St> {
     #[inline]
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<Svc: Service<St>, St> fmt::Debug for Ctx<'_, Svc, St> {
+impl<S, St> fmt::Debug for Ctx<'_, S, St> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Ctx")
             .field("idx", &self.idx)
@@ -282,8 +285,7 @@ mod tests {
 
     struct Srv(Rc<Cell<usize>>, condition::Waiter);
 
-    impl Service<()> for Srv {
-        type Req = &'static str;
+    impl Service<(), &'static str> for Srv {
         type Res = &'static str;
         type Error = ();
 

@@ -42,7 +42,7 @@ where
                 DefaultState,
                 sf.into_factory().map(Into::into).map_init_err(dyn_rc_err),
             ),
-            h1_ctl: Pipeline::new(h1::DefaultControlService::new()),
+            h1_ctl: Pipeline::new(h1::DefaultControlService),
             h2_ctl: Pipeline::new(h2::DefaultControlService),
             config: DispatcherConfig::default(),
         }
@@ -67,7 +67,7 @@ where
                 sm,
                 sf.into_factory().map(Into::into).map_init_err(dyn_rc_err),
             ),
-            h1_ctl: Pipeline::new(h1::DefaultControlService::new()),
+            h1_ctl: Pipeline::new(h1::DefaultControlService),
             h2_ctl: Pipeline::new(h2::DefaultControlService),
             config: DispatcherConfig::default(),
         }
@@ -116,10 +116,13 @@ where
 {
     #[must_use]
     /// Provide http/1 control service.
-    pub fn h1_control<Ctl>(self, ctl: impl IntoService<Ctl, Hst>) -> HttpService<Hst, F, B, Err>
+    pub fn h1_control<Ctl>(
+        self,
+        ctl: impl IntoService<Ctl, Hst, h1::Control<F, Err>>,
+    ) -> HttpService<Hst, F, B, Err>
     where
         Hst: Default + 'static,
-        Ctl: Service<Hst, Req = h1::Control<F, Err>, Res = h1::ControlAck<F>> + 'static,
+        Ctl: Service<Hst, h1::Control<F, Err>, Res = h1::ControlAck<F>> + 'static,
         Ctl::Error: Error + 'static,
     {
         HttpService {
@@ -132,10 +135,13 @@ where
 
     #[must_use]
     /// Provide http/1 control service.
-    pub fn h2_control<Ctl>(self, ctl: impl IntoService<Ctl, Hst>) -> HttpService<Hst, F, B, Err>
+    pub fn h2_control<Ctl>(
+        self,
+        ctl: impl IntoService<Ctl, Hst, h2::Control<H2Error>>,
+    ) -> HttpService<Hst, F, B, Err>
     where
         Hst: Default + 'static,
-        Ctl: Service<Hst, Req = h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
+        Ctl: Service<Hst, h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
         Ctl::Error: Error + 'static,
     {
         HttpService {
@@ -147,13 +153,12 @@ where
     }
 }
 
-impl<Hst, F, B, Err> Service<Hst> for HttpService<Hst, F, B, Err>
+impl<Hst, F, B, Err> Service<Hst, Io<F>> for HttpService<Hst, F, B, Err>
 where
     F: Filter,
     B: MessageBody,
     Err: ResponseError + 'static,
 {
-    type Req = Io<F>;
     type Res = ();
     type Error = DispatchError;
 

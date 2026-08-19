@@ -37,8 +37,8 @@ pub(crate) fn create_factory_service<F, S, St, I>(
 ) -> FactoryServiceType<St>
 where
     F: AsyncFn(&St) -> I + Send + Clone + 'static,
-    I: IntoService<S, St> + 'static,
-    S: Service<St, Req = Io> + 'static,
+    I: IntoService<S, St, Io> + 'static,
+    S: Service<St, Io> + 'static,
     St: State<St, Io> + Clone + 'static,
 {
     Box::from(Factory {

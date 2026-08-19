@@ -85,15 +85,18 @@ where
     }
 }
 
-impl<A: Address, S, St> Service<St> for TlsConnectorService<S>
+impl<A: Address, S, St> Service<St, Connect<A>> for TlsConnectorService<S>
 where
-    S: Service<St, Req = Connect<A>, Res = Io, Error = Error<ConnectError>>,
+    S: Service<St, Connect<A>, Res = Io, Error = Error<ConnectError>>,
 {
-    type Req = Connect<A>;
     type Res = Io<Layer<TlsClientFilter>>;
     type Error = Error<ConnectError>;
 
-    async fn call(&self, req: Self::Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
+    async fn call(
+        &self,
+        req: Connect<A>,
+        ctx: Ctx<'_, Self, St>,
+    ) -> Result<Self::Res, Self::Error> {
         let host = req.host().split(':').next().unwrap().to_owned();
 
         let io = ctx.call(&self.svc, req).await?;

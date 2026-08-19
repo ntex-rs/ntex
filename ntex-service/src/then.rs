@@ -17,17 +17,16 @@ impl<A, B> Then<A, B> {
     }
 }
 
-impl<A, B, St> Service<St> for Then<A, B>
+impl<A, B, St, Req> Service<St, Req> for Then<A, B>
 where
-    A: Service<St>,
-    B: Service<St, Req = Result<A::Res, A::Error>, Error = A::Error>,
+    A: Service<St, Req>,
+    B: Service<St, Result<A::Res, A::Error>, Error = A::Error>,
 {
-    type Req = A::Req;
     type Res = B::Res;
     type Error = B::Error;
 
     #[inline]
-    async fn call(&self, req: A::Req, ctx: Ctx<'_, Self, St>) -> Result<B::Res, B::Error> {
+    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<B::Res, B::Error> {
         ctx.call(&self.svc2, ctx.call(&self.svc1, req).await).await
     }
 
@@ -90,8 +89,7 @@ mod tests {
     #[derive(Clone)]
     struct Srv1(Rc<Cell<usize>>, Rc<Cell<usize>>);
 
-    impl Service<()> for Srv1 {
-        type Req = Result<&'static str, &'static str>;
+    impl Service<(), Result<&'static str, &'static str>> for Srv1 {
         type Res = &'static str;
         type Error = ();
 
@@ -119,8 +117,7 @@ mod tests {
     #[derive(Clone)]
     struct Srv2(Rc<Cell<usize>>, Rc<Cell<usize>>);
 
-    impl Service<()> for Srv2 {
-        type Req = Result<&'static str, ()>;
+    impl Service<(), Result<&'static str, ()>> for Srv2 {
         type Res = (&'static str, &'static str);
         type Error = ();
 

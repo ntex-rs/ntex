@@ -31,8 +31,7 @@ impl Clone for WsService {
     }
 }
 
-impl Service for WsService {
-    type Req = (Request, Io, h1::Codec);
+impl Service<(), (Request, Io, h1::Codec)> for WsService {
     type Res = ();
     type Error = io::Error;
 

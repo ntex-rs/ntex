@@ -59,10 +59,13 @@ where
 {
     #[must_use]
     /// Provide http/2 control service
-    pub fn control<Sf, St>(self, ctl: impl IntoService<Sf, St>) -> H2Service<Hst, F, B, Err>
+    pub fn control<Sf, St>(
+        self,
+        ctl: impl IntoService<Sf, St, h2::Control<H2Error>>,
+    ) -> H2Service<Hst, F, B, Err>
     where
         St: Default + 'static,
-        Sf: Service<St, Req = h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
+        Sf: Service<St, h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
         Sf::Error: StdError + 'static,
     {
         H2Service {
@@ -74,13 +77,12 @@ where
     }
 }
 
-impl<Hst, F, B, Err> Service<Hst> for H2Service<Hst, F, B, Err>
+impl<Hst, F, B, Err> Service<Hst, Io<F>> for H2Service<Hst, F, B, Err>
 where
     F: Filter,
     B: MessageBody,
     Err: ResponseError + 'static,
 {
-    type Req = Io<F>;
     type Res = ();
     type Error = DispatchError;
 
@@ -178,12 +180,11 @@ where
     }
 }
 
-impl<B, Err> Service<()> for PublishService<B, Err>
+impl<B, Err> Service<(), h2::Message> for PublishService<B, Err>
 where
     B: MessageBody,
     Err: ResponseError + 'static,
 {
-    type Req = h2::Message;
     type Res = ();
     type Error = H2Error;
 

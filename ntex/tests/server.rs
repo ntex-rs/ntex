@@ -323,7 +323,7 @@ fn test_server_state() {
             let srv = build_with_state(async move || Ok(St(num.clone())))
                 .disable_signals()
                 .bind("test", addr, SharedCfg::default(), async move |_| {
-                    async move |io: Io, st: &St| {
+                    async move |st: &St, io: Io| {
                         let _ = st.0.fetch_add(1, Relaxed);
                         let _ = io.send(Bytes::from_static(b"test"), &BytesCodec).await;
                         Ok::<_, ()>(())

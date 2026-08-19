@@ -4,19 +4,19 @@ use crate::{Ctx, Service, ServiceFactory};
 
 #[inline]
 /// Create `FnShutdown` for function that can act as a `on_shutdown` callback.
-pub fn fn_shutdown<F, Req, Err>(f: F) -> FnShutdown<F, Req, Err>
+pub fn fn_shutdown<F, Err>(f: F) -> FnShutdown<F, Err>
 where
     F: AsyncFnOnce(),
 {
     FnShutdown::new(f)
 }
 
-pub struct FnShutdown<F, Req, Err, Cfg = ()> {
+pub struct FnShutdown<F, Err> {
     f_shutdown: Cell<Option<F>>,
-    _t: PhantomData<(Req, Err, Cfg)>,
+    _t: PhantomData<Err>,
 }
 
-impl<F, Req, Err, Cfg> FnShutdown<F, Req, Err, Cfg> {
+impl<F, Err> FnShutdown<F, Err> {
     pub(crate) fn new(f: F) -> Self {
         Self {
             f_shutdown: Cell::new(Some(f)),
@@ -25,7 +25,7 @@ impl<F, Req, Err, Cfg> FnShutdown<F, Req, Err, Cfg> {
     }
 }
 
-impl<F, Req, Err, Cfg> Clone for FnShutdown<F, Req, Err, Cfg>
+impl<F, Err> Clone for FnShutdown<F, Err>
 where
     F: Clone,
 {
@@ -40,7 +40,7 @@ where
     }
 }
 
-impl<F, Req, Err, Cfg> fmt::Debug for FnShutdown<F, Req, Err, Cfg> {
+impl<F, Err> fmt::Debug for FnShutdown<F, Err> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FnShutdown")
             .field("fn", &std::any::type_name::<F>())
@@ -48,13 +48,14 @@ impl<F, Req, Err, Cfg> fmt::Debug for FnShutdown<F, Req, Err, Cfg> {
     }
 }
 
-impl<St, F, Req, Err, Cfg> ServiceFactory<St, Req, Cfg> for FnShutdown<F, Req, Err, Cfg>
+impl<F, St, Req, Cfg, Err> ServiceFactory<St, Req, Cfg> for FnShutdown<F, Err>
 where
     F: AsyncFnOnce() + Clone,
 {
     type Res = Req;
     type Error = Err;
-    type Service = FnShutdown<F, Req, Err, Cfg>;
+
+    type Service = FnShutdown<F, Err>;
     type InitError = Infallible;
 
     #[inline]
@@ -71,11 +72,10 @@ where
     }
 }
 
-impl<F, St, Req, Err, Cfg> Service<St> for FnShutdown<F, Req, Err, Cfg>
+impl<F, St, Req, Err> Service<St, Req> for FnShutdown<F, Err>
 where
     F: AsyncFnOnce(),
 {
-    type Req = Req;
     type Res = Req;
     type Error = Err;
 

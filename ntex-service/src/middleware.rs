@@ -40,11 +40,10 @@ where
 ///    Timeout,
 /// }
 ///
-/// impl<S> Service for Timeout<S>
+/// impl<S, R> Service<(), R> for Timeout<S>
 /// where
-///     S: Service,
+///     S: Service<(), R>,
 /// {
-///     type Req = S::Req;
 ///     type Res = S::Res;
 ///     type Error = TimeoutError<S::Error>;
 ///
@@ -52,7 +51,7 @@ where
 ///         ctx.ready(&self.service).await.map_err(TimeoutError::Service)
 ///     }
 ///
-///     async fn call(&self, req: S::Req, ctx: Ctx<'_, Self>) -> Result<Self::Res, Self::Error> {
+///     async fn call(&self, req: R, ctx: Ctx<'_, Self>) -> Result<Self::Res, Self::Error> {
 ///         match select(sleep(self.timeout), ctx.call(&self.service, req)).await {
 ///             Either::Left(_) => Err(TimeoutError::Timeout),
 ///             Either::Right(res) => res.map_err(TimeoutError::Service),
@@ -106,7 +105,7 @@ pub trait Middleware<Svc, Cfg = ()> {
     where
         Sf: ServiceFactory<St, Req, Cfg, Service = Svc>,
         Self: Sized,
-        Self::Service: Service<St, Req = Req>,
+        Self::Service: Service<St, Req>,
     {
         crate::factory_with_st(ApplyMiddleware::new(self, factory))
     }
@@ -156,10 +155,10 @@ impl<M, Sf, St, Req, Cfg> ServiceFactory<St, Req, Cfg> for ApplyMiddleware<M, Sf
 where
     Sf: ServiceFactory<St, Req, Cfg>,
     M: Middleware<Sf::Service, Cfg>,
-    M::Service: Service<St, Req = Req>,
+    M::Service: Service<St, Req>,
 {
-    type Res = <M::Service as Service<St>>::Res;
-    type Error = <M::Service as Service<St>>::Error;
+    type Res = <M::Service as Service<St, Req>>::Res;
+    type Error = <M::Service as Service<St, Req>>::Error;
 
     type Service = M::Service;
     type InitError = Sf::InitError;
@@ -212,20 +211,21 @@ where
 
 #[doc(hidden)]
 /// Service factory that produces `middleware` from `Fn`.
-pub fn fn_layer<S, St, F, In, Out, Err>(f: F) -> FnMiddleware<S, St, F, In, Out, Err>
+pub fn fn_layer<F, S, St, Req, In, Out, Err>(f: F) -> FnMiddleware<F, S, St, Req, In, Out, Err>
 where
-    F: AsyncFn(In, &ApplyCtx<'_, S, St>) -> Result<Out, Err> + Clone,
+    F: AsyncFn(In, &ApplyCtx<'_, S, St, Req>) -> Result<Out, Err> + Clone,
+    S: Service<St, Req>,
 {
     FnMiddleware { f, r: PhantomData }
 }
 
 /// `FnMiddleware` service combinator
-pub struct FnMiddleware<S, St, F, In, Out, Err> {
+pub struct FnMiddleware<F, S, St, Req, In, Out, Err> {
     f: F,
-    r: PhantomData<fn(S, St) -> (In, Out, Err)>,
+    r: PhantomData<fn(S, St, Req) -> (In, Out, Err)>,
 }
 
-impl<S, St, F, In, Out, Err> Clone for FnMiddleware<S, St, F, In, Out, Err>
+impl<F, S, St, Req, In, Out, Err> Clone for FnMiddleware<F, S, St, Req, In, Out, Err>
 where
     F: Clone,
 {
@@ -237,7 +237,7 @@ where
     }
 }
 
-impl<S, St, F, In, Out, Err> fmt::Debug for FnMiddleware<S, St, F, In, Out, Err> {
+impl<F, S, St, Req, In, Out, Err> fmt::Debug for FnMiddleware<F, S, St, Req, In, Out, Err> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FnMiddleware")
             .field("layer", &std::any::type_name::<F>())
@@ -245,13 +245,13 @@ impl<S, St, F, In, Out, Err> fmt::Debug for FnMiddleware<S, St, F, In, Out, Err>
     }
 }
 
-impl<S, St, F, In, Out, Err, C> Middleware<S, C> for FnMiddleware<S, St, F, In, Out, Err>
+impl<F, S, St, Req, In, Out, Err, C> Middleware<S, C> for FnMiddleware<F, S, St, Req, In, Out, Err>
 where
-    S: Service<St>,
-    F: AsyncFn(In, &ApplyCtx<'_, S, St>) -> Result<Out, Err> + Clone,
+    S: Service<St, Req>,
+    F: AsyncFn(In, &ApplyCtx<'_, S, St, Req>) -> Result<Out, Err> + Clone,
     Err: From<S::Error>,
 {
-    type Service = Apply<S, St, F, In, Out, Err>;
+    type Service = Apply<S, St, Req, F, In, Out, Err>;
 
     fn create(&self, service: S, _: &C) -> Self::Service {
         Apply::new(service, self.f.clone())
@@ -281,8 +281,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct Srv<S>(S, Rc<Cell<usize>>);
 
-    impl<S: Service> Service<()> for Srv<S> {
-        type Req = S::Req;
+    impl<S: Service<(), R>, R> Service<(), R> for Srv<S> {
         type Res = S::Res;
         type Error = S::Error;
 
@@ -290,7 +289,7 @@ mod tests {
             ctx.ready(&self.0).await
         }
 
-        async fn call(&self, req: S::Req, ctx: Ctx<'_, Self>) -> Result<S::Res, S::Error> {
+        async fn call(&self, req: R, ctx: Ctx<'_, Self>) -> Result<S::Res, S::Error> {
             ctx.call(&self.0, req).await
         }
 
