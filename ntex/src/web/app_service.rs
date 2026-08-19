@@ -221,14 +221,14 @@ where
 
 /// Web app service.
 #[derive(derive_more::Debug)]
-#[debug("AppRouter")]
+#[debug("HttpRouter")]
 pub struct AppRouter<St, F, Err: ErrorRenderer> {
-    cfg: SharedCfg,
-    filter: F,
-    router: Rc<Router<HttpService<St, Err>, Guards>>,
-    default: Rc<HttpService<St, Err>>,
-    cache: RefCell<HashMap<ResourceId, HttpHandler<St, Err>>>,
-    cache_default: RefCell<Option<HttpHandler<St, Err>>>,
+    pub(super) cfg: SharedCfg,
+    pub(super) filter: F,
+    pub(super) router: Rc<Router<HttpService<St, Err>, Guards>>,
+    pub(super) default: Rc<HttpService<St, Err>>,
+    pub(super) cache: RefCell<HashMap<ResourceId, HttpHandler<St, Err>>>,
+    pub(super) cache_default: RefCell<Option<HttpHandler<St, Err>>>,
 }
 
 impl<St, F, Err> Service<St> for AppRouter<St, F, Err>
@@ -246,7 +246,6 @@ where
         ctx.ready(&self.filter).await
     }
 
-    #[allow(clippy::await_holding_refcell_ref)]
     async fn call(&self, req: Self::Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
         let mut req = ctx.call(&self.filter, req).await?;
         let res = self.router.recognize_checked(&mut req, |req, guards| {
@@ -260,36 +259,33 @@ where
             true
         });
 
-        if let Some((sf, id)) = res {
-            let svc: &'static HttpHandler<_, _>;
-            if let Some(c) = self.cache.borrow().get(&id) {
-                svc = unsafe { std::mem::transmute(c) };
-            } else if let Ok(s) = sf.create(&self.cfg).await {
-                svc = unsafe { std::mem::transmute(&s) };
-                self.cache.borrow_mut().insert(id, s);
+        let svc = if let Some((sf, id)) = res {
+            if let Some(svc) = self.cache.borrow().get(&id) {
+                svc.clone()
+            } else if let Ok(svc) = sf.create(&self.cfg).await {
+                self.cache.borrow_mut().insert(id, svc.clone());
+                svc
             } else {
                 return Ok(req.into_response(Response::InternalServerError().finish()));
             }
-            ctx.call(svc, req).await
         } else {
-            let default: &'static HttpHandler<_, _>;
-            if let Some(c) = &*self.cache_default.borrow() {
-                default = unsafe { std::mem::transmute(c) };
+            if let Some(svc) = &*self.cache_default.borrow() {
+                svc.clone()
             } else if let Ok(svc) = self.default.create(&self.cfg).await {
-                default = unsafe { std::mem::transmute(&svc) };
-                *self.cache_default.borrow_mut() = Some(svc);
+                *self.cache_default.borrow_mut() = Some(svc.clone());
+                svc
             } else {
                 return Ok(req.into_response(Response::InternalServerError().finish()));
             }
-            ctx.call(default, req).await
-        }
+        };
+        ctx.call(&svc, req).await
     }
 
     async fn shutdown(&self) {
         self.filter.shutdown().await;
 
-        let default = self.cache_default.borrow_mut().take();
-        if let Some(svc) = default {
+        let svc = self.cache_default.borrow_mut().take();
+        if let Some(svc) = svc {
             svc.shutdown().await;
         }
 

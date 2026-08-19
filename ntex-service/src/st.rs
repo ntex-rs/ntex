@@ -1,4 +1,3 @@
-#![allow(dead_code, unreachable_pub)]
 use std::{fmt, sync::Arc};
 
 pub trait FromState<St>: Sized {

@@ -1,8 +1,7 @@
-#![allow(clippy::type_complexity)]
 use std::{fmt, marker};
 
-use crate::ctx::WaitersRef;
-use crate::{Ctx, IntoService, IntoServiceFactory, ReadyCtx, Service, ServiceFactory};
+use crate::ctx::{Ctx, ReadyCtx, WaitersRef};
+use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 use crate::{ServiceChain, ServiceChainFactory};
 
 /// Apply transform function to a service.
@@ -207,7 +206,6 @@ where
 }
 
 #[cfg(test)]
-#[allow(clippy::unused_async_trait_impl)]
 mod tests {
     use std::{cell::Cell, rc::Rc};
 

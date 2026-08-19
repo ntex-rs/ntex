@@ -1,7 +1,6 @@
-use std::{cell::RefCell, fmt, rc::Rc};
+use std::{fmt, rc::Rc};
 
 use crate::router::{IntoPattern, ResourceDef};
-use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::dev::{AndThen, ServiceChain, ServiceChainFactory};
 use crate::service::{Ctx, cfg::SharedCfg, factory_with_st, svc};
 use crate::service::{Identity, IntoServiceFactory, Middleware, Service, ServiceFactory};
@@ -9,16 +8,11 @@ use crate::{http::Response, util::Extensions};
 
 use super::dev::{WebServiceConfig, WebServiceFactory, insert_slash};
 use super::extract::FromRequest;
-use super::handler::Handler;
+use super::guard::Guard;
 use super::route::{IntoRoutes, Route, RouteService};
-use super::stack::WebStack;
-use super::{app::Filter, error::ErrorRenderer, guard::Guard};
-use super::{request::WebRequest, response::WebResponse};
+use super::stack::{Filter, WebStack};
+use super::{ErrorRenderer, Handler, HttpHandler, HttpService, WebRequest, WebResponse};
 
-type HttpHandler<St, Err: ErrorRenderer> =
-    BoxService<St, WebRequest<Err>, WebResponse, Err::Container>;
-type HttpService<St, Err: ErrorRenderer> =
-    BoxServiceFactory<St, WebRequest<Err>, WebResponse, Err::Container, SharedCfg, ()>;
 type ResourcePipeline<St, F, Err> = ServiceChain<AndThen<F, ResourceRouter<St, Err>>, St>;
 
 /// *Resource* is an entry in resources table which corresponds to requested URL.
@@ -53,7 +47,7 @@ pub struct Resource<St, Err: ErrorRenderer, M = Identity, F = Filter<St, Err>> {
     routes: Vec<Route<Err>>,
     state: Option<Extensions>,
     guards: Vec<Box<dyn Guard>>,
-    default: Rc<RefCell<Option<Rc<HttpService<St, Err>>>>>,
+    default: Option<Rc<HttpService<St, Err>>>,
 }
 
 impl<St, Err: ErrorRenderer> Resource<St, Err> {
@@ -67,7 +61,7 @@ impl<St, Err: ErrorRenderer> Resource<St, Err> {
             middleware: Identity,
             filter: factory_with_st(Filter::new()),
             guards: Vec::new(),
-            default: Rc::new(RefCell::new(None)),
+            default: None,
         }
     }
 }
@@ -321,11 +315,11 @@ where
         S::InitError: fmt::Debug,
     {
         // create and configure default resource
-        self.default = Rc::new(RefCell::new(Some(Rc::new(boxed::factory(
-            f.into_factory().map_init_err(|e| {
+        self.default = Some(Rc::new(HttpService::new(f.into_factory().map_init_err(
+            |e| {
                 log::error!("Cannot construct default service: {e:?}");
-            }),
-        )))));
+            },
+        ))));
 
         self
     }
@@ -363,7 +357,7 @@ where
 
         let router_factory = ResourceRouterFactory {
             routes: self.routes,
-            default: self.default.borrow_mut().take(),
+            default: self.default.take(),
         };
 
         config.register_service(
@@ -400,11 +394,11 @@ where
     Err: ErrorRenderer,
 {
     fn into_factory(
-        self,
+        mut self,
     ) -> ResourceServiceFactory<St, Err, M, ServiceChainFactory<Sf, St, WebRequest<Err>>> {
         let router_factory = ResourceRouterFactory {
             routes: self.routes,
-            default: self.default.borrow_mut().take(),
+            default: self.default.take(),
         };
 
         ResourceServiceFactory {

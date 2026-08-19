@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use crate::service::{Ctx, Middleware, Service, cfg::SharedCfg};
+use crate::service::{Ctx, Middleware, Service, ServiceFactory, cfg::SharedCfg};
 use crate::web::{ErrorRenderer, WebRequest, WebResponse};
 
 /// Stack of middlewares.
@@ -76,4 +76,37 @@ where
 
     crate::forward_ready!(St, svc);
     crate::forward_shutdown!(svc);
+}
+
+#[derive(derive_more::Debug)]
+#[debug("Filter")]
+pub struct Filter<St, Err>(PhantomData<(St, Err)>);
+
+impl<St, Err: ErrorRenderer> Filter<St, Err> {
+    pub(super) fn new() -> Self {
+        Filter(PhantomData)
+    }
+}
+
+impl<St, Err: ErrorRenderer> ServiceFactory<St, WebRequest<Err>> for Filter<St, Err> {
+    type Res = WebRequest<Err>;
+    type Error = Err::Container;
+
+    type Service = Filter<St, Err>;
+    type InitCfg = SharedCfg;
+    type InitError = ();
+
+    async fn create(&self, _: &SharedCfg) -> Result<Self::Service, Self::InitError> {
+        Ok(Filter(PhantomData))
+    }
+}
+
+impl<St, Err: ErrorRenderer> Service<St> for Filter<St, Err> {
+    type Req = WebRequest<Err>;
+    type Res = WebRequest<Err>;
+    type Error = Err::Container;
+
+    async fn call(&self, req: Self::Req, _: Ctx<'_, Self, St>) -> Result<Self::Req, Self::Error> {
+        Ok(req)
+    }
 }

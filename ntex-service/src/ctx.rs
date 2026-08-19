@@ -363,7 +363,6 @@ impl<F: Future> Future for ReadyCall<'_, F> {
 }
 
 #[cfg(test)]
-#[allow(clippy::should_panic_without_expect, clippy::unused_async_trait_impl)]
 mod tests {
     use std::{cell::Cell, cell::RefCell, future::poll_fn};
 
@@ -490,7 +489,7 @@ mod tests {
     }
 
     #[ntex::test]
-    #[should_panic]
+    #[should_panic(expected = "Pipeline is shutding down")]
     async fn test_pipeline_binding_after_shutdown() {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();

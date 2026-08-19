@@ -1,9 +1,5 @@
 //! Shared configuration for services
-#![allow(
-    clippy::should_implement_trait,
-    clippy::new_ret_no_self,
-    clippy::missing_panics_doc
-)]
+#![allow(clippy::should_implement_trait, clippy::new_ret_no_self)]
 use std::any::{Any, TypeId};
 use std::cell::{RefCell, UnsafeCell};
 use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
