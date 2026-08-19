@@ -38,7 +38,7 @@ impl Default for App<(), Identity, Filter<(), DefaultError>, DefaultError> {
     }
 }
 
-impl<St> App<St, Identity, Filter<St, DefaultError>, DefaultError> {
+impl App<(), Identity, Filter<(), DefaultError>, DefaultError> {
     #[must_use]
     /// Create application builder. Application can be configured with a builder-like pattern.
     pub fn new() -> Self {
