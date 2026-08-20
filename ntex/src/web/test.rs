@@ -34,14 +34,14 @@ use crate::web::{FromRequest, HttpResponse, Responder, WebRequest, WebResponse};
 
 /// Create service that always responds with `HttpResponse::Ok()`
 pub fn ok_service<Err: ErrorRenderer>()
--> impl Service<(), Req = WebRequest<Err>, Res = WebResponse, Error = std::convert::Infallible> {
+-> impl Service<(), WebRequest<Err>, Res = WebResponse, Error = std::convert::Infallible> {
     default_service::<Err>(StatusCode::OK)
 }
 
 /// Create service that responds with response with specified status code
 pub fn default_service<Err: ErrorRenderer>(
     status_code: StatusCode,
-) -> impl Service<(), Req = WebRequest<Err>, Res = WebResponse, Error = Infallible> {
+) -> impl Service<(), WebRequest<Err>, Res = WebResponse, Error = Infallible> {
     fn_service(async move |req: WebRequest<Err>| {
         Ok::<_, Infallible>(req.into_response(HttpResponse::build(status_code).finish()))
     })

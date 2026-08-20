@@ -340,7 +340,7 @@ where
             InitError = (),
         > + 'static,
     M: Middleware<AppRouter<St, F::Service, Err>, SharedCfg> + 'static,
-    M::Service: Service<St, Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    M::Service: Service<St, WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     Err: ErrorRenderer,
 {
     fn register(mut self, config: &mut WebServiceConfig<St, Err>) {
@@ -421,7 +421,7 @@ impl<St, M, F, Err> ServiceFactory<St, WebRequest<Err>, SharedCfg>
     for ScopeServiceFactory<St, M, F, Err>
 where
     M: Middleware<AppRouter<St, F::Service, Err>, SharedCfg> + 'static,
-    M::Service: Service<St, Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    M::Service: Service<St, WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
             St,
             WebRequest<Err>,

@@ -1,9 +1,9 @@
-use std::{cell::RefCell, fmt, io, marker::PhantomData};
+use std::{cell::RefCell, fmt, io};
 
 use ntex_bytes::BytePages;
 use ntex_io::{Filter, Io, Layer};
 use ntex_service::cfg::Cfg;
-use ntex_service::{Ctx, ReadyCtx, Service, cfg::Configuration};
+use ntex_service::{Ctx, Service, cfg::Configuration};
 use ntex_util::{services::Counter, time};
 use tls_openssl::ssl;
 
@@ -13,29 +13,26 @@ use crate::{MAX_SSL_ACCEPT_COUNTER, TlsConfig, openssl::SslFilter};
 /// Support `TLS` server connections via openssl package
 ///
 /// `openssl` feature enables `Acceptor` type
-pub struct SslAcceptor<F> {
+pub struct SslAcceptor {
     acceptor: ssl::SslAcceptor,
     conns: Counter,
-    st: PhantomData<F>,
 }
 
-impl<F> SslAcceptor<F> {
+impl SslAcceptor {
     /// Create default openssl acceptor service
     pub fn new(acceptor: ssl::SslAcceptor) -> Self {
         MAX_SSL_ACCEPT_COUNTER.with(|conns| SslAcceptor {
             acceptor,
             conns: conns.clone(),
-            st: PhantomData,
         })
     }
 }
 
-impl<F: Filter, St> Service<St> for SslAcceptor<F> {
-    type Req = Io<F>;
+impl<F: Filter, St> Service<St, Io<F>> for SslAcceptor {
     type Res = Io<Layer<SslFilter, F>>;
     type Error = io::Error;
 
-    async fn ready(&self, _: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
+    async fn ready(&self, _: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
         if !self.conns.is_available() {
             self.conns.available().await;
         }
@@ -79,13 +76,13 @@ impl<F: Filter, St> Service<St> for SslAcceptor<F> {
     }
 }
 
-impl<F> From<ssl::SslAcceptor> for SslAcceptor<F> {
+impl From<ssl::SslAcceptor> for SslAcceptor {
     fn from(acceptor: ssl::SslAcceptor) -> Self {
         Self::new(acceptor)
     }
 }
 
-impl<F> fmt::Debug for SslAcceptor<F> {
+impl fmt::Debug for SslAcceptor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SslAcceptor").finish()
     }

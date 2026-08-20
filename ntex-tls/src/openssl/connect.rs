@@ -98,15 +98,18 @@ impl<S> SslConnectorService<S> {
     }
 }
 
-impl<A: Address, S, St> Service<St> for SslConnectorService<S>
+impl<A: Address, S, St> Service<St, Connect<A>> for SslConnectorService<S>
 where
-    S: Service<St, Req = Connect<A>, Res = Io, Error = Error<ConnectError>>,
+    S: Service<St, Connect<A>, Res = Io, Error = Error<ConnectError>>,
 {
-    type Req = Connect<A>;
     type Res = Io<Layer<SslFilter>>;
     type Error = Error<ConnectError>;
 
-    async fn call(&self, req: Self::Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
+    async fn call(
+        &self,
+        req: Connect<A>,
+        ctx: Ctx<'_, Self, St>,
+    ) -> Result<Self::Res, Self::Error> {
         let host = req.host().split(':').next().unwrap().to_string();
         let io = ctx.call(&self.svc, req).await?;
         self.connect(io, &host).await

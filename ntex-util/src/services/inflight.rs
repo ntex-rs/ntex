@@ -1,5 +1,5 @@
 //! Service that limits number of in-flight async requests.
-use ntex_service::{Ctx, Middleware, ReadyCtx, Service};
+use ntex_service::{Ctx, Middleware, Service};
 
 use super::counter::Counter;
 
@@ -50,16 +50,15 @@ impl<S> InFlightService<S> {
     }
 }
 
-impl<S, St> Service<St> for InFlightService<S>
+impl<S, St, Req> Service<St, Req> for InFlightService<S>
 where
-    S: Service<St>,
+    S: Service<St, Req>,
 {
-    type Req = S::Req;
     type Res = S::Res;
     type Error = S::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), S::Error> {
+    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), S::Error> {
         if self.count.is_available() {
             ctx.ready(&self.service).await
         } else {
@@ -70,7 +69,7 @@ where
     }
 
     #[inline]
-    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
+    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
         ctx.ready(self).await?;
         let _guard = self.count.get();
         ctx.call(&self.service, req).await
@@ -91,8 +90,7 @@ mod tests {
 
     struct SleepService(mpmc::Receiver<()>);
 
-    impl Service<()> for SleepService {
-        type Req = ();
+    impl Service<(), ()> for SleepService {
         type Res = ();
         type Error = ();
 

@@ -19,8 +19,7 @@ impl Sender {
 }
 
 #[allow(unused_variables)]
-impl Service<()> for Sender {
-    type Req = ServiceRequest;
+impl Service<(), ServiceRequest> for Sender {
     type Res = ServiceResponse;
     type Error = Error<ClientError>;
 

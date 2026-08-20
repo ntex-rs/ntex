@@ -62,11 +62,11 @@ use crate::{IntoService, Service, io::Filter, io::Io, io::Layer, server::SslErro
 /// Create openssl based service
 pub fn openssl<F, S, St>(
     acceptor: tls_openssl::ssl::SslAcceptor,
-    service: impl IntoService<S, St>,
-) -> impl Service<St, Req = Io<F>, Res = S::Res, Error = SslError<S::Error>>
+    service: impl IntoService<S, St, Io<Layer<SslFilter, F>>>,
+) -> impl Service<St, Io<F>, Res = S::Res, Error = SslError<S::Error>>
 where
     F: Filter,
-    S: Service<St, Req = Io<Layer<SslFilter, F>>>,
+    S: Service<St, Io<Layer<SslFilter, F>>>,
 {
     SslAcceptor::new(acceptor)
         .map_err(SslError::Ssl)
@@ -83,11 +83,11 @@ use crate::server::rustls::{TlsAcceptor, TlsServerFilter};
 pub fn rustls<F, S, St>(
     mut config: tls_rustls::ServerConfig,
     protos: &[&str],
-    service: impl IntoService<S, St>,
-) -> impl Service<St, Req = Io<F>, Res = S::Res, Error = SslError<S::Error>>
+    service: impl IntoService<S, St, Io<Layer<TlsServerFilter, F>>>,
+) -> impl Service<St, Io<F>, Res = S::Res, Error = SslError<S::Error>>
 where
     F: Filter,
-    S: Service<St, Req = Io<Layer<TlsServerFilter, F>>>,
+    S: Service<St, Io<Layer<TlsServerFilter, F>>>,
 {
     if !protos.is_empty() && config.alpn_protocols.is_empty() {
         config.alpn_protocols = protos.iter().map(|s| s.to_string().into()).collect();

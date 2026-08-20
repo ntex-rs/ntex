@@ -8,7 +8,7 @@ use crate::error::Error;
 use crate::http::uri::{Authority, Scheme, Uri};
 use crate::io::{IoBoxed, types::HttpProtocol};
 use crate::service::cfg::SharedCfg;
-use crate::service::{Ctx, Pipeline, PipelineBinding, PipelineCall, ReadyCtx, Service};
+use crate::service::{Ctx, Pipeline, PipelineBinding, PipelineCall, Service};
 use crate::util::{ByteString, Either, HashMap, HashSet, select};
 use crate::{channel::inplace, channel::oneshot, channel::pool, rt::spawn, time::now};
 
@@ -140,13 +140,12 @@ impl fmt::Debug for ConnectionPool {
     }
 }
 
-impl Service<()> for ConnectionPool {
-    type Req = Connect;
+impl Service<(), Connect> for ConnectionPool {
     type Res = Connection;
     type Error = Error<ConnectError>;
 
     #[inline]
-    async fn ready(&self, _: ReadyCtx<'_, Self, ()>) -> Result<(), Self::Error> {
+    async fn ready(&self, _: Ctx<'_, Self, ()>) -> Result<(), Self::Error> {
         self.0.svc.ready().await
     }
 

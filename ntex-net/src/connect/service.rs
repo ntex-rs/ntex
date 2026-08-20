@@ -102,8 +102,7 @@ impl<A: Address, St> ServiceFactory<St, Connect<A>, SharedCfg> for Connector<A, 
     }
 }
 
-impl<A: Address, St> Service<St> for ConnectorService<A> {
-    type Req = Connect<A>;
+impl<A: Address, St> Service<St, Connect<A>> for ConnectorService<A> {
     type Res = Io;
     type Error = Error<ConnectError>;
 

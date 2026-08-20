@@ -1,10 +1,10 @@
 use ntex_service::{Ctx, Middleware, Service};
 
 /// Trait defines retry policy
-pub trait Policy<S: Service<St>, St>: Sized + Clone {
-    async fn retry(&mut self, req: &S::Req, res: &Result<S::Res, S::Error>) -> bool;
+pub trait Policy<S: Service<St, Req>, St, Req>: Sized + Clone {
+    async fn retry(&mut self, req: &Req, res: &Result<S::Res, S::Error>) -> bool;
 
-    fn clone_request(&self, req: &S::Req) -> Option<S::Req>;
+    fn clone_request(&self, req: &Req) -> Option<Req>;
 }
 
 #[derive(Clone, Debug)]
@@ -49,16 +49,15 @@ impl<P, S> RetryService<P, S> {
     }
 }
 
-impl<P, S, St> Service<St> for RetryService<P, S>
+impl<P, S, St, Req> Service<St, Req> for RetryService<P, S>
 where
-    P: Policy<S, St>,
-    S: Service<St>,
+    P: Policy<S, St, Req>,
+    S: Service<St, Req>,
 {
-    type Req = S::Req;
     type Res = S::Res;
     type Error = S::Error;
 
-    async fn call(&self, mut req: S::Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
+    async fn call(&self, mut req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
         let mut policy = self.policy.clone();
         let mut cloned = policy.clone_request(&req);
 
@@ -101,12 +100,12 @@ impl Default for DefaultRetryPolicy {
     }
 }
 
-impl<S, St> Policy<S, St> for DefaultRetryPolicy
+impl<S, St, Req> Policy<S, St, Req> for DefaultRetryPolicy
 where
-    S: Service<St>,
-    S::Req: Clone,
+    S: Service<St, Req>,
+    Req: Clone,
 {
-    async fn retry(&mut self, _: &S::Req, res: &Result<S::Res, S::Error>) -> bool {
+    async fn retry(&mut self, _: &Req, res: &Result<S::Res, S::Error>) -> bool {
         if res.is_err() {
             if self.0 == 0 {
                 false
@@ -119,7 +118,7 @@ where
         }
     }
 
-    fn clone_request(&self, req: &S::Req) -> Option<S::Req> {
+    fn clone_request(&self, req: &Req) -> Option<Req> {
         Some(req.clone())
     }
 }
@@ -136,8 +135,7 @@ mod tests {
     #[derive(Clone, Debug, PartialEq)]
     struct TestService(Rc<Cell<usize>>);
 
-    impl Service<()> for TestService {
-        type Req = ();
+    impl Service<(), ()> for TestService {
         type Res = ();
         type Error = ();
 

@@ -25,7 +25,7 @@ impl<S, St, Inner, Outer, Err> Middleware<S, SharedCfg> for WebStack<St, Inner, 
 where
     Inner: Middleware<S, SharedCfg>,
     Outer: Middleware<Inner::Service, SharedCfg>,
-    Outer::Service: Service<St, Req = WebRequest<Err>, Res = WebResponse>,
+    Outer::Service: Service<St, WebRequest<Err>, Res = WebResponse>,
 {
     type Service = WebMiddleware<Outer::Service, St, Err>;
 
@@ -55,13 +55,12 @@ where
     }
 }
 
-impl<S, St, Err> Service<St> for WebMiddleware<S, St, Err>
+impl<S, St, Err> Service<St, WebRequest<Err>> for WebMiddleware<S, St, Err>
 where
-    S: Service<St, Req = WebRequest<Err>, Res = WebResponse>,
+    S: Service<St, WebRequest<Err>, Res = WebResponse>,
     Err: ErrorRenderer,
     Err::Container: From<S::Error>,
 {
-    type Req = WebRequest<Err>;
     type Res = WebResponse;
     type Error = Err::Container;
 
@@ -100,12 +99,15 @@ impl<St, Err: ErrorRenderer, Cfg> ServiceFactory<St, WebRequest<Err>, Cfg> for F
     }
 }
 
-impl<St, Err: ErrorRenderer> Service<St> for Filter<St, Err> {
-    type Req = WebRequest<Err>;
+impl<St, Err: ErrorRenderer> Service<St, WebRequest<Err>> for Filter<St, Err> {
     type Res = WebRequest<Err>;
     type Error = Err::Container;
 
-    async fn call(&self, req: Self::Req, _: Ctx<'_, Self, St>) -> Result<Self::Req, Self::Error> {
+    async fn call(
+        &self,
+        req: WebRequest<Err>,
+        _: Ctx<'_, Self, St>,
+    ) -> Result<WebRequest<Err>, Self::Error> {
         Ok(req)
     }
 }

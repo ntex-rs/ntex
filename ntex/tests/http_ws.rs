@@ -4,7 +4,7 @@ use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpService, HttpServiceConfig, Request, Response, StatusCode, body, h1, test};
 use ntex::io::{DispatchItem, Dispatcher, Io, IoConfig};
-use ntex::service::{Ctx, Pipeline, ReadyCtx, Service, cfg::SharedCfg};
+use ntex::service::{Ctx, Pipeline, Service, cfg::SharedCfg};
 use ntex::time::{Millis, Seconds, sleep};
 use ntex::util::{ByteString, Bytes};
 use ntex::ws::{self, handshake, handshake_response};
@@ -31,12 +31,11 @@ impl Clone for WsService {
     }
 }
 
-impl Service for WsService {
-    type Req = (Request, Io, h1::Codec);
+impl Service<(), (Request, Io, h1::Codec)> for WsService {
     type Res = ();
     type Error = io::Error;
 
-    async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
         self.set_polled();
         Ok(())
     }

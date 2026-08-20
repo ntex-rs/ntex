@@ -753,9 +753,12 @@ impl WsConnection<Sealed> {
     }
 
     /// Start client websockets service.
-    pub async fn start<T>(self, svc: impl IntoService<T, ()>) -> Result<(), WsError<T::Error>>
+    pub async fn start<T>(
+        self,
+        svc: impl IntoService<T, (), ws::Frame>,
+    ) -> Result<(), WsError<T::Error>>
     where
-        T: Service<(), Req = ws::Frame, Res = Option<ws::Message>> + 'static,
+        T: Service<(), ws::Frame, Res = Option<ws::Message>> + 'static,
     {
         let service = apply_fn(
             svc.into_service().map_err(WsError::Service),

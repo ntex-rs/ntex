@@ -2,7 +2,7 @@
 #![allow(non_snake_case)]
 use std::{fmt, marker::PhantomData, task::Poll};
 
-use ntex_service::{Ctx, IntoServiceFactory, ReadyCtx, Service, ServiceFactory};
+use ntex_service::{Ctx, IntoServiceFactory, Service, ServiceFactory};
 
 /// Construct `Variant` service factory.
 ///
@@ -112,16 +112,15 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
         }
     }
 
-    impl<St, V1, $($T,)+ V1R, $($R,)+> Service<St> for $srv_type<St, V1, $($T,)+ V1R, $($R,)+>
+    impl<St, V1, $($T,)+ V1R, $($R,)+> Service<St, $enum_type<V1R, $($R,)+>> for $srv_type<St, V1, $($T,)+ V1R, $($R,)+>
     where
-        V1: Service<St, Req = V1R>,
-        $($T: Service<St, Req = $R, Res = V1::Res, Error = V1::Error>),+
+        V1: Service<St, V1R>,
+        $($T: Service<St, $R, Res = V1::Res, Error = V1::Error>),+
     {
-        type Req = $enum_type<V1R, $($R,)+>;
         type Res = V1::Res;
         type Error = V1::Error;
 
-        async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
+        async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
             use std::{future::Future, pin::Pin};
 
             let mut fut1 = ::std::pin::pin!(ctx.ready(&self.V1));
@@ -244,12 +243,11 @@ mod tests {
     #[derive(Debug, Clone)]
     struct Srv1;
 
-    impl Service<()> for Srv1 {
-        type Req = ();
+    impl Service<(), ()> for Srv1 {
         type Res = usize;
         type Error = ();
 
-        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
             Ok(())
         }
 
@@ -263,12 +261,11 @@ mod tests {
     #[derive(Debug, Clone)]
     struct Srv2;
 
-    impl Service<()> for Srv2 {
-        type Req = ();
+    impl Service<(), ()> for Srv2 {
         type Res = usize;
         type Error = ();
 
-        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
             Ok(())
         }
 
@@ -307,11 +304,10 @@ mod tests {
         #[derive(Debug, Clone)]
         struct Srv5;
 
-        impl Service<()> for Srv5 {
-            type Req = ();
+        impl Service<(), ()> for Srv5 {
             type Res = usize;
             type Error = ();
-            async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+            async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
                 time::sleep(time::Millis(50)).await;
                 time::sleep(time::Millis(50)).await;
                 time::sleep(time::Millis(50)).await;

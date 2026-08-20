@@ -5,8 +5,8 @@ use crate::http::error::{DispatchError, ResponseError};
 use crate::http::{HttpPipeline, body::MessageBody, request::Request, response::Response};
 use crate::io::{Filter, Io, types};
 use crate::service::{
-    Ctx, IntoService, IntoServiceFactory, Pipeline, PipelineBinding, ReadyCtx, Service,
-    ServiceFactory, cfg::SharedCfg, state::DefaultState,
+    Ctx, IntoService, IntoServiceFactory, Pipeline, PipelineBinding, Service, ServiceFactory,
+    cfg::SharedCfg, state::DefaultState,
 };
 use crate::util::dyn_rc_err;
 
@@ -45,7 +45,7 @@ where
                 DefaultState,
                 sf.into_factory().map(Into::into).map_init_err(dyn_rc_err),
             ),
-            ctl: Pipeline::new(DefaultControlService::new()),
+            ctl: Pipeline::new(DefaultControlService),
             config: DispatcherConfig::default(),
             _t: marker::PhantomData,
         }
@@ -60,10 +60,13 @@ where
 {
     #[must_use]
     /// Provide http/1 control service.
-    pub fn control<Ctl>(self, ctl: impl IntoService<Ctl, St>) -> H1Service<St, F, B, Err>
+    pub fn control<Ctl>(
+        self,
+        ctl: impl IntoService<Ctl, St, Control<F, Err>>,
+    ) -> H1Service<St, F, B, Err>
     where
         St: Default + 'static,
-        Ctl: Service<St, Req = Control<F, Err>, Res = ControlAck<F>> + 'static,
+        Ctl: Service<St, Control<F, Err>, Res = ControlAck<F>> + 'static,
         Ctl::Error: Error + 'static,
     {
         H1Service {
@@ -75,17 +78,16 @@ where
     }
 }
 
-impl<Hst, F, B, Err> Service<Hst> for H1Service<Hst, F, B, Err>
+impl<Hst, F, B, Err> Service<Hst, Io<F>> for H1Service<Hst, F, B, Err>
 where
     F: Filter,
     B: MessageBody,
     Err: ResponseError + 'static,
 {
-    type Req = Io<F>;
     type Res = ();
     type Error = DispatchError;
 
-    async fn ready(&self, _: ReadyCtx<'_, Self, Hst>) -> Result<(), Self::Error> {
+    async fn ready(&self, _: Ctx<'_, Self, Hst>) -> Result<(), Self::Error> {
         self.ctl.ready().await.map_err(|e| {
             log::error!("Http control service readiness error: {e:?}");
             DispatchError::Control(e)

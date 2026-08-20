@@ -1,5 +1,5 @@
 //! Either service allows to use different services for handling request
-use ntex_service::{Ctx, ReadyCtx, Service, ServiceFactory};
+use ntex_service::{Ctx, Service, ServiceFactory};
 
 use crate::future::Either;
 
@@ -106,17 +106,16 @@ impl<SLeft, SRight> std::fmt::Debug for EitherService<SLeft, SRight> {
     }
 }
 
-impl<SL, SR, St> Service<St> for EitherService<SL, SR>
+impl<SL, SR, St, Req> Service<St, Req> for EitherService<SL, SR>
 where
-    SL: Service<St>,
-    SR: Service<St, Req = SL::Req, Res = SL::Res, Error = SL::Error>,
+    SL: Service<St, Req>,
+    SR: Service<St, Req, Res = SL::Res, Error = SL::Error>,
 {
-    type Req = SL::Req;
     type Res = SL::Res;
     type Error = SL::Error;
 
     #[inline]
-    async fn call(&self, req: SL::Req, ctx: Ctx<'_, Self, St>) -> Result<SL::Res, SL::Error> {
+    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<SL::Res, SL::Error> {
         match self.svc {
             Either::Left(ref svc) => ctx.call(svc, req).await,
             Either::Right(ref svc) => ctx.call(svc, req).await,
@@ -124,7 +123,7 @@ where
     }
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
         match self.svc {
             Either::Left(ref svc) => ctx.ready(svc).await,
             Either::Right(ref svc) => ctx.ready(svc).await,
@@ -149,8 +148,7 @@ mod tests {
 
     #[derive(Copy, Clone, Debug, PartialEq)]
     struct Svc1;
-    impl Service for Svc1 {
-        type Req = ();
+    impl Service<(), ()> for Svc1 {
         type Res = &'static str;
         type Error = ();
 
@@ -175,8 +173,7 @@ mod tests {
 
     #[derive(Copy, Clone, Debug, PartialEq)]
     struct Svc2;
-    impl Service for Svc2 {
-        type Req = ();
+    impl Service<(), ()> for Svc2 {
         type Res = &'static str;
         type Error = ();
 

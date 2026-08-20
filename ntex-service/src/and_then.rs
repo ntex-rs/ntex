@@ -1,4 +1,4 @@
-use super::{Ctx, ReadyCtx, Service, ServiceFactory, util};
+use super::{Ctx, Service, ServiceFactory, util};
 
 #[derive(Clone, Debug)]
 /// Service for the `and_then` combinator, chaining a computation onto the end
@@ -17,23 +17,22 @@ impl<A, B> AndThen<A, B> {
     }
 }
 
-impl<A, B, St> Service<St> for AndThen<A, B>
+impl<A, B, St, Req> Service<St, Req> for AndThen<A, B>
 where
-    A: Service<St>,
-    B: Service<St, Req = A::Res, Error = A::Error>,
+    A: Service<St, Req>,
+    B: Service<St, A::Res, Error = A::Error>,
 {
-    type Req = A::Req;
     type Res = B::Res;
     type Error = A::Error;
 
     #[inline]
-    async fn call(&self, req: A::Req, ctx: Ctx<'_, Self, St>) -> Result<B::Res, A::Error> {
+    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<B::Res, A::Error> {
         let result = ctx.call(&self.svc1, req).await?;
         ctx.call(&self.svc2, result).await
     }
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
         util::ready(&self.svc1, &self.svc2, ctx).await
     }
 
@@ -81,17 +80,16 @@ where
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use crate::{Ctx, ReadyCtx, Service, factory, fn_factory, svc};
+    use crate::{Ctx, Service, factory, fn_factory, svc};
 
     #[derive(Debug, Clone)]
     struct Srv1(Rc<Cell<usize>>, Rc<Cell<usize>>);
 
-    impl Service for Srv1 {
-        type Req = &'static str;
+    impl Service<(), &'static str> for Srv1 {
         type Res = &'static str;
         type Error = ();
 
-        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }
@@ -108,12 +106,11 @@ mod tests {
     #[derive(Debug, Clone)]
     struct Srv2(Rc<Cell<usize>>, Rc<Cell<usize>>);
 
-    impl Service for Srv2 {
-        type Req = &'static str;
+    impl Service<(), &'static str> for Srv2 {
         type Res = (&'static str, &'static str);
         type Error = ();
 
-        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }

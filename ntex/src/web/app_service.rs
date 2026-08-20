@@ -3,7 +3,7 @@ use std::{cell::RefCell, marker, mem, rc::Rc};
 use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, ResourceId, Router};
 use crate::service::cfg::{Cfg, SharedCfg};
-use crate::service::{Ctx, Middleware, ReadyCtx, Service, ServiceFactory, factory_with_st};
+use crate::service::{Ctx, Middleware, Service, ServiceFactory, factory_with_st};
 use crate::service::{boxed, dev::ServiceChainFactory};
 use crate::util::HashMap;
 
@@ -44,7 +44,7 @@ impl<St, M, F, Err> AppFactory<St, M, F, Err>
 where
     St: 'static,
     M: Middleware<AppRouter<St, F::Service, Err>, SharedCfg> + 'static,
-    M::Service: Service<St, Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    M::Service: Service<St, WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
             St,
             WebRequest<Err>,
@@ -124,7 +124,7 @@ impl<St, M, F, Err> ServiceFactory<St, Request, SharedCfg> for AppFactory<St, M,
 where
     St: 'static,
     M: Middleware<AppRouter<St, F::Service, Err>, SharedCfg> + 'static,
-    M::Service: Service<St, Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    M::Service: Service<St, WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
             St,
             WebRequest<Err>,
@@ -174,7 +174,7 @@ where
 #[debug("AppService")]
 pub struct AppService<S, St, Err>
 where
-    S: Service<St, Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    S: Service<St, WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     Err: ErrorRenderer,
 {
     service: S,
@@ -183,12 +183,11 @@ where
     _t: marker::PhantomData<(St, Err)>,
 }
 
-impl<S, St, Err> Service<St> for AppService<S, St, Err>
+impl<S, St, Err> Service<St, Request> for AppService<S, St, Err>
 where
-    S: Service<St, Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    S: Service<St, WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     Err: ErrorRenderer,
 {
-    type Req = Request;
     type Res = WebResponse;
     type Error = S::Error;
 
@@ -230,22 +229,25 @@ pub struct AppRouter<St, F, Err: ErrorRenderer> {
     pub(super) cache_default: RefCell<Option<HttpHandler<St, Err>>>,
 }
 
-impl<St, F, Err> Service<St> for AppRouter<St, F, Err>
+impl<St, F, Err> Service<St, WebRequest<Err>> for AppRouter<St, F, Err>
 where
     St: 'static,
-    F: Service<St, Req = WebRequest<Err>, Res = WebRequest<Err>, Error = Err::Container>,
+    F: Service<St, WebRequest<Err>, Res = WebRequest<Err>, Error = Err::Container>,
     Err: ErrorRenderer,
 {
-    type Req = WebRequest<Err>;
     type Res = WebResponse;
     type Error = Err::Container;
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
         ctx.ready(&self.filter).await
     }
 
-    async fn call(&self, req: Self::Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
+    async fn call(
+        &self,
+        req: WebRequest<Err>,
+        ctx: Ctx<'_, Self, St>,
+    ) -> Result<Self::Res, Self::Error> {
         let mut req = ctx.call(&self.filter, req).await?;
         let res = self.router.recognize_checked(&mut req, |req, guards| {
             if let Some(guards) = guards {

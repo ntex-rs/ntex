@@ -1,7 +1,7 @@
 use std::{cell, fmt, future::Future, pin::Pin, ptr, rc::Rc, task::Context, task::Poll};
 
 use crate::state::{Noop, State, StateMapping};
-use crate::{Ctx, IntoService, ReadyCtx, Service, ServiceFactory, ctx::WaitersRef};
+use crate::{Ctx, IntoService, Service, ServiceFactory, ctx::WaitersRef};
 
 /// Container for a service.
 ///
@@ -101,7 +101,7 @@ trait PipelineApi<Req, Res, Err> {
     fn is_shutdown(&self) -> bool;
 }
 
-struct PipelineState<S: Service<St>, St, Ctl> {
+struct PipelineState<S: Service<St, Req>, St, Req, Ctl> {
     s: S,
     waiters: WaitersRef,
     st: St,
@@ -129,16 +129,16 @@ impl<'a, T> StateRef<'a, T> {
     }
 }
 
-impl<S, St, Ctl> PipelineState<S, St, Ctl>
+impl<S, St, Req, Ctl> PipelineState<S, St, Req, Ctl>
 where
-    S: Service<St>,
-    Ctl: State<St, S::Req>,
+    S: Service<St, Req>,
+    Ctl: State<St, Req>,
 {
     pub(crate) fn waiters_ref(&self) -> &WaitersRef {
         &self.waiters
     }
 
-    fn st(&self, req: &S::Req) -> StateRef<'_, St> {
+    fn st(&self, req: &Req) -> StateRef<'_, St> {
         if let Some(s) = self.st_ctl.on_req(&self.st, req) {
             StateRef::Owned(s)
         } else {
@@ -147,11 +147,12 @@ where
     }
 }
 
-impl<S, St, Ctl> PipelineApi<S::Req, S::Res, S::Error> for PipelineState<S, St, Ctl>
+impl<S, St, Req, Ctl> PipelineApi<Req, S::Res, S::Error> for PipelineState<S, St, Req, Ctl>
 where
-    S: Service<St> + 'static,
+    S: Service<St, Req> + 'static,
     St: 'static,
-    Ctl: State<St, S::Req> + 'static,
+    Req: 'static,
+    Ctl: State<St, Req> + 'static,
 {
     fn register(&self) -> u32 {
         self.waiters.insert()
@@ -172,7 +173,7 @@ where
     fn call(
         &self,
         idx: u32,
-        req: S::Req,
+        req: Req,
         ready: bool,
     ) -> Pin<Box<dyn Future<Output = Result<S::Res, S::Error>> + '_>> {
         Box::pin(async move {
@@ -250,18 +251,18 @@ where
 {
     #[inline]
     /// Construct new service pipeline instance.
-    pub fn new<S>(f: impl IntoService<S, ()>) -> Self
+    pub fn new<S>(f: impl IntoService<S, (), Req>) -> Self
     where
-        S: Service<(), Req = Req, Res = Res, Error = Err> + 'static,
+        S: Service<(), Req, Res = Res, Error = Err> + 'static,
     {
         Self::create(f.into_service(), (), Noop)
     }
 
     #[inline]
     /// Construct new service pipeline instance with default state.
-    pub fn with<S, St>(f: impl IntoService<S, St>) -> Self
+    pub fn with<S, St>(f: impl IntoService<S, St, Req>) -> Self
     where
-        S: Service<St, Req = Req, Res = Res, Error = Err> + 'static,
+        S: Service<St, Req, Res = Res, Error = Err> + 'static,
         St: Default + 'static,
     {
         Self::create(f.into_service(), St::default(), Noop)
@@ -269,9 +270,9 @@ where
 
     #[inline]
     /// Construct new service pipeline instance with state.
-    pub fn with_st<S, St>(st: St, f: impl IntoService<S, St>) -> Self
+    pub fn with_st<S, St>(st: St, f: impl IntoService<S, St, Req>) -> Self
     where
-        S: Service<St, Req = Req, Res = Res, Error = Err> + 'static,
+        S: Service<St, Req, Res = Res, Error = Err> + 'static,
         St: 'static,
     {
         Self::create(f.into_service(), st, Noop)
@@ -279,9 +280,9 @@ where
 
     #[inline]
     /// Construct new service pipeline instance with state.
-    pub fn with_stctl<S, St, Ctl>(st: St, ctl: Ctl, f: impl IntoService<S, St>) -> Self
+    pub fn with_stctl<S, St, Ctl>(st: St, ctl: Ctl, f: impl IntoService<S, St, Req>) -> Self
     where
-        S: Service<St, Req = Req, Res = Res, Error = Err> + 'static,
+        S: Service<St, Req, Res = Res, Error = Err> + 'static,
         St: 'static,
         Ctl: State<St, Req> + 'static,
     {
@@ -290,7 +291,7 @@ where
 
     fn create<S, St, Ctl>(s: S, st: St, ctl: Ctl) -> Self
     where
-        S: Service<St, Req = Req, Res = Res, Error = Err> + 'static,
+        S: Service<St, Req, Res = Res, Error = Err> + 'static,
         St: 'static,
         Ctl: State<St, Req> + 'static,
     {
@@ -475,30 +476,31 @@ impl<R, E> Future for PipelineCall<R, E> {
     }
 }
 
-fn ready<S, St, Ctl>(
-    pl: &'static PipelineState<S, St, Ctl>,
+fn ready<S, St, Req, Ctl>(
+    pl: &'static PipelineState<S, St, Req, Ctl>,
 ) -> impl Future<Output = Result<(), S::Error>>
 where
-    S: Service<St>,
-    Ctl: State<St, S::Req>,
+    S: Service<St, Req>,
+    Ctl: State<St, Req>,
 {
-    pl.s.ready(ReadyCtx::<'_, S, St>::new(0, pl.waiters_ref(), &pl.st))
+    pl.s.ready(Ctx::<'_, S, St>::new(0, pl.waiters_ref(), &pl.st))
 }
 
-struct CheckReadiness<S, St, Ctl, F, Fut>
+struct CheckReadiness<S, St, Req, Ctl, F, Fut>
 where
-    S: Service<St> + 'static,
+    S: Service<St, Req> + 'static,
     St: 'static,
+    Req: 'static,
     Ctl: 'static,
 {
     f: F,
     fut: Option<Fut>,
-    pl: &'static PipelineState<S, St, Ctl>,
+    pl: &'static PipelineState<S, St, Req, Ctl>,
 }
 
-impl<S: Service<St>, St, Ctl, F, Fut> Unpin for CheckReadiness<S, St, Ctl, F, Fut> {}
+impl<S: Service<St, Req>, St, Req, Ctl, F, Fut> Unpin for CheckReadiness<S, St, Req, Ctl, F, Fut> {}
 
-impl<S: Service<St>, St, Ctl, F, Fut> Drop for CheckReadiness<S, St, Ctl, F, Fut> {
+impl<S: Service<St, Req>, St, Req, Ctl, F, Fut> Drop for CheckReadiness<S, St, Req, Ctl, F, Fut> {
     fn drop(&mut self) {
         // future got dropped during polling, we must notify other waiters
         if self.fut.is_some() {
@@ -507,10 +509,10 @@ impl<S: Service<St>, St, Ctl, F, Fut> Drop for CheckReadiness<S, St, Ctl, F, Fut
     }
 }
 
-impl<S, St, Ctl, F, Fut> Future for CheckReadiness<S, St, Ctl, F, Fut>
+impl<S, St, Req, Ctl, F, Fut> Future for CheckReadiness<S, St, Req, Ctl, F, Fut>
 where
-    S: Service<St>,
-    F: Fn(&'static PipelineState<S, St, Ctl>) -> Fut,
+    S: Service<St, Req>,
+    F: Fn(&'static PipelineState<S, St, Req, Ctl>) -> Fut,
     Fut: Future<Output = Result<(), S::Error>>,
 {
     type Output = Result<(), S::Error>;

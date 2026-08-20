@@ -4,7 +4,7 @@ use crate::io::{Filter, Io, types};
 use crate::service::state::{DefaultState, State, StateMapping};
 use crate::service::{IntoService, IntoServiceFactory, Pipeline};
 use crate::util::{dyn_rc_err, join};
-use crate::{Ctx, ReadyCtx, Service, ServiceFactory, SharedCfg};
+use crate::{Ctx, Service, ServiceFactory, SharedCfg};
 
 use super::error::{DispatchError, H2Error, ResponseError};
 use super::{HttpPipeline, h1, h2, request::Request, response::Response};
@@ -42,7 +42,7 @@ where
                 DefaultState,
                 sf.into_factory().map(Into::into).map_init_err(dyn_rc_err),
             ),
-            h1_ctl: Pipeline::new(h1::DefaultControlService::new()),
+            h1_ctl: Pipeline::new(h1::DefaultControlService),
             h2_ctl: Pipeline::new(h2::DefaultControlService),
             config: DispatcherConfig::default(),
         }
@@ -67,7 +67,7 @@ where
                 sm,
                 sf.into_factory().map(Into::into).map_init_err(dyn_rc_err),
             ),
-            h1_ctl: Pipeline::new(h1::DefaultControlService::new()),
+            h1_ctl: Pipeline::new(h1::DefaultControlService),
             h2_ctl: Pipeline::new(h2::DefaultControlService),
             config: DispatcherConfig::default(),
         }
@@ -116,10 +116,13 @@ where
 {
     #[must_use]
     /// Provide http/1 control service.
-    pub fn h1_control<Ctl>(self, ctl: impl IntoService<Ctl, Hst>) -> HttpService<Hst, F, B, Err>
+    pub fn h1_control<Ctl>(
+        self,
+        ctl: impl IntoService<Ctl, Hst, h1::Control<F, Err>>,
+    ) -> HttpService<Hst, F, B, Err>
     where
         Hst: Default + 'static,
-        Ctl: Service<Hst, Req = h1::Control<F, Err>, Res = h1::ControlAck<F>> + 'static,
+        Ctl: Service<Hst, h1::Control<F, Err>, Res = h1::ControlAck<F>> + 'static,
         Ctl::Error: Error + 'static,
     {
         HttpService {
@@ -132,10 +135,13 @@ where
 
     #[must_use]
     /// Provide http/1 control service.
-    pub fn h2_control<Ctl>(self, ctl: impl IntoService<Ctl, Hst>) -> HttpService<Hst, F, B, Err>
+    pub fn h2_control<Ctl>(
+        self,
+        ctl: impl IntoService<Ctl, Hst, h2::Control<H2Error>>,
+    ) -> HttpService<Hst, F, B, Err>
     where
         Hst: Default + 'static,
-        Ctl: Service<Hst, Req = h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
+        Ctl: Service<Hst, h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
         Ctl::Error: Error + 'static,
     {
         HttpService {
@@ -147,17 +153,16 @@ where
     }
 }
 
-impl<Hst, F, B, Err> Service<Hst> for HttpService<Hst, F, B, Err>
+impl<Hst, F, B, Err> Service<Hst, Io<F>> for HttpService<Hst, F, B, Err>
 where
     F: Filter,
     B: MessageBody,
     Err: ResponseError + 'static,
 {
-    type Req = Io<F>;
     type Res = ();
     type Error = DispatchError;
 
-    async fn ready(&self, _: ReadyCtx<'_, Self, Hst>) -> Result<(), Self::Error> {
+    async fn ready(&self, _: Ctx<'_, Self, Hst>) -> Result<(), Self::Error> {
         let (r1, r2) = join(self.h1_ctl.ready(), self.h2_ctl.ready()).await;
         r1.map_err(|e| {
             log::error!("Http control service readiness error: {e:?}");

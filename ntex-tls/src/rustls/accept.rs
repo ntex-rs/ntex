@@ -1,43 +1,40 @@
-use std::{io, marker::PhantomData, sync::Arc};
+use std::{io, sync::Arc};
 
 use tls_rustls::ServerConfig;
 
 use ntex_io::{Filter, Io, Layer};
-use ntex_service::{Ctx, ReadyCtx, Service, cfg::Cfg, cfg::Configuration};
+use ntex_service::{Ctx, Service, cfg::Cfg, cfg::Configuration};
 use ntex_util::services::Counter;
 
 use crate::{MAX_SSL_ACCEPT_COUNTER, TlsConfig, rustls::TlsServerFilter};
 
 #[derive(Debug)]
 /// `RusTLS` based `Acceptor` service
-pub struct TlsAcceptor<F> {
+pub struct TlsAcceptor {
     cfg: Arc<ServerConfig>,
     conns: Counter,
-    st: PhantomData<F>,
 }
 
-impl<F> TlsAcceptor<F> {
+impl TlsAcceptor {
     pub fn new(cfg: Arc<ServerConfig>) -> Self {
         MAX_SSL_ACCEPT_COUNTER.with(|conns| TlsAcceptor {
             cfg,
             conns: conns.clone(),
-            st: PhantomData,
         })
     }
 }
 
-impl<F> From<ServerConfig> for TlsAcceptor<F> {
+impl From<ServerConfig> for TlsAcceptor {
     fn from(cfg: ServerConfig) -> Self {
         Self::new(Arc::new(cfg))
     }
 }
 
-impl<F: Filter, St> Service<St> for TlsAcceptor<F> {
-    type Req = Io<F>;
+impl<F: Filter, St> Service<St, Io<F>> for TlsAcceptor {
     type Res = Io<Layer<TlsServerFilter, F>>;
     type Error = io::Error;
 
-    async fn ready(&self, _: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
+    async fn ready(&self, _: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
         if !self.conns.is_available() {
             self.conns.available().await;
         }

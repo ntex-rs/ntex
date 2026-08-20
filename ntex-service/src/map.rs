@@ -13,10 +13,10 @@ pub struct Map<F, S, Res> {
 
 impl<F, S, Res> Map<F, S, Res> {
     /// Create new `Map` combinator
-    pub(crate) fn new<St>(f: F, svc: S) -> Self
+    pub(crate) fn new<St, Req>(f: F, svc: S) -> Self
     where
         F: Fn(S::Res) -> Res,
-        S: Service<St>,
+        S: Service<St, Req>,
     {
         Self {
             f,
@@ -53,22 +53,21 @@ where
     }
 }
 
-impl<F, S, St, Res> Service<St> for Map<F, S, Res>
+impl<F, S, St, Req, Res> Service<St, Req> for Map<F, S, Res>
 where
-    S: Service<St>,
+    S: Service<St, Req>,
     F: Fn(S::Res) -> Res,
 {
-    type Req = S::Req;
     type Res = Res;
     type Error = S::Error;
 
-    crate::forward_ready!(St, svc);
-    crate::forward_shutdown!(svc);
-
     #[inline]
-    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self, St>) -> Result<Res, S::Error> {
+    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Res, S::Error> {
         ctx.call(&self.svc, req).await.map(|r| (self.f)(r))
     }
+
+    crate::forward_ready!(St, svc);
+    crate::forward_shutdown!(svc);
 }
 
 /// `MapNewService` new service combinator
@@ -145,17 +144,16 @@ where
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use crate::{Ctx, Pipeline, ReadyCtx, Service, ServiceFactory, fn_factory};
+    use crate::{Ctx, Pipeline, Service, ServiceFactory, fn_factory};
 
     #[derive(Debug, Default, Clone)]
     struct Srv(Rc<Cell<usize>>);
 
-    impl Service<()> for Srv {
-        type Req = ();
+    impl Service<(), ()> for Srv {
         type Res = ();
         type Error = ();
 
-        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
             Ok(())
         }
 

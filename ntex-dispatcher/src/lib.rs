@@ -623,7 +623,7 @@ mod tests {
     use ntex_bytes::{BytePages, Bytes, BytesMut};
     use ntex_codec::BytesCodec;
     use ntex_io::{Flags, Io, IoConfig, IoRef, testing::IoTest};
-    use ntex_service::{Ctx, Pipeline, ReadyCtx, Service, cfg::SharedCfg};
+    use ntex_service::{Ctx, Pipeline, Service, cfg::SharedCfg};
     use ntex_util::{channel::oneshot, time::Millis, time::sleep};
     use rand::Rng;
 
@@ -678,7 +678,7 @@ mod tests {
         /// Construct new `Dispatcher` instance
         pub(crate) fn debug<S>(io: Io, codec: U, service: S) -> (Self, State)
         where
-            S: Service<(), Req = DispatchItem<U>, Res = Option<Response<U>>, Error = Err> + 'static,
+            S: Service<(), DispatchItem<U>, Res = Option<Response<U>>, Error = Err> + 'static,
         {
             let flags = if io.cfg().keepalive_timeout().is_zero() {
                 super::Flags::empty()
@@ -838,12 +838,11 @@ mod tests {
 
         struct Srv(Rc<Cell<usize>>);
 
-        impl Service<()> for Srv {
-            type Req = DispatchItem<BytesCodec>;
+        impl Service<(), DispatchItem<BytesCodec>> for Srv {
             type Res = Option<Response<BytesCodec>>;
             type Error = &'static str;
 
-            async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+            async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
                 self.0.set(self.0.get() + 1);
                 Err("test")
             }
@@ -1323,12 +1322,11 @@ mod tests {
             Cell<bool>,
         );
 
-        impl Service<()> for Srv {
-            type Req = DispatchItem<BytesCodec>;
+        impl Service<(), DispatchItem<BytesCodec>> for Srv {
             type Res = Option<Bytes>;
             type Error = ();
 
-            async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+            async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
                 if self.2.get()
                     && let Some(rx) = self.0.take()
                 {

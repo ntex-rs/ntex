@@ -101,8 +101,7 @@ impl<Err: ErrorRenderer> fmt::Debug for RouteService<Err> {
     }
 }
 
-impl<St, Err: ErrorRenderer> Service<St> for RouteService<Err> {
-    type Req = WebRequest<Err>;
+impl<St, Err: ErrorRenderer> Service<St, WebRequest<Err>> for RouteService<Err> {
     type Res = WebResponse;
     type Error = Err::Container;
 

@@ -8,8 +8,7 @@ use crate::{Ctx, Service, http::error::H2Error};
 /// Default control service
 pub struct DefaultControlService;
 
-impl Service<()> for DefaultControlService {
-    type Req = h2::Control<H2Error>;
+impl Service<(), h2::Control<H2Error>> for DefaultControlService {
     type Res = h2::ControlAck;
     type Error = Rc<dyn Error>;
 

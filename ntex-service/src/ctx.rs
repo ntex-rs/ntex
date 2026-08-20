@@ -3,14 +3,7 @@ use std::{cell, fmt, future::Future, marker, pin::Pin, rc::Rc};
 
 use crate::Service;
 
-pub struct Ctx<'a, Svc: Service<St> + ?Sized, St = ()> {
-    idx: u32,
-    st: &'a St,
-    waiters: &'a WaitersRef,
-    _t: marker::PhantomData<Rc<Svc>>,
-}
-
-pub struct ReadyCtx<'a, Svc: Service<St> + ?Sized, St = ()> {
+pub struct Ctx<'a, Svc: ?Sized, St = ()> {
     idx: u32,
     st: &'a St,
     waiters: &'a WaitersRef,
@@ -128,7 +121,7 @@ impl WaitersRef {
     }
 }
 
-impl<'a, Svc: Service<St>, St> Ctx<'a, Svc, St> {
+impl<'a, Svc, St> Ctx<'a, Svc, St> {
     pub(crate) fn new(idx: u32, waiters: &'a WaitersRef, st: &'a St) -> Self {
         Self {
             idx,
@@ -155,14 +148,14 @@ impl<'a, Svc: Service<St>, St> Ctx<'a, Svc, St> {
     }
 
     /// Returns when the service is able to process requests.
-    pub async fn ready<S>(&self, svc: &'a S) -> Result<(), S::Error>
+    pub async fn ready<S, Req>(&self, svc: &'a S) -> Result<(), S::Error>
     where
-        S: Service<St>,
+        S: Service<St, Req>,
     {
         // check readiness and notify waiters
         ReadyCall {
             completed: false,
-            fut: svc.ready(ReadyCtx {
+            fut: svc.ready(Ctx {
                 st: self.st,
                 idx: self.idx,
                 waiters: self.waiters,
@@ -176,9 +169,9 @@ impl<'a, Svc: Service<St>, St> Ctx<'a, Svc, St> {
 
     #[inline]
     /// Wait for service readiness and then call service
-    pub async fn call<S>(&self, svc: &'a S, req: S::Req) -> Result<S::Res, S::Error>
+    pub async fn call<S, Req>(&self, svc: &'a S, req: Req) -> Result<S::Res, S::Error>
     where
-        S: Service<St>,
+        S: Service<St, Req>,
     {
         self.ready(svc).await?;
 
@@ -196,9 +189,9 @@ impl<'a, Svc: Service<St>, St> Ctx<'a, Svc, St> {
 
     #[inline]
     /// Call service, do not check service readiness
-    pub async fn call_nowait<S>(&self, svc: &'a S, req: S::Req) -> Result<S::Res, S::Error>
+    pub async fn call_nowait<S, Req>(&self, svc: &'a S, req: Req) -> Result<S::Res, S::Error>
     where
-        S: Service<St>,
+        S: Service<St, Req>,
     {
         svc.call(
             req,
@@ -210,51 +203,6 @@ impl<'a, Svc: Service<St>, St> Ctx<'a, Svc, St> {
             },
         )
         .await
-    }
-}
-
-impl<Svc: Service<St>, St> Copy for Ctx<'_, Svc, St> {}
-
-impl<Svc: Service<St>, St> Clone for Ctx<'_, Svc, St> {
-    #[inline]
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<Svc: Service<St>, St> fmt::Debug for Ctx<'_, Svc, St> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Ctx")
-            .field("idx", &self.idx)
-            .field("waiters", &self.waiters.get().len())
-            .finish()
-    }
-}
-
-impl<'a, Svc: Service<St>, St> ReadyCtx<'a, Svc, St> {
-    pub(crate) fn new(idx: u32, waiters: &'a WaitersRef, st: &'a St) -> Self {
-        Self {
-            st,
-            idx,
-            waiters,
-            _t: marker::PhantomData,
-        }
-    }
-
-    pub(crate) fn inner(self) -> (u32, &'a WaitersRef, &'a St) {
-        (self.idx, self.waiters, self.st)
-    }
-
-    #[inline]
-    /// Unique id for this pipeline
-    pub fn id(&self) -> u32 {
-        self.idx
-    }
-
-    #[inline]
-    /// Application state
-    pub fn st(&'a self) -> &'a St {
-        self.st
     }
 
     #[inline]
@@ -264,7 +212,8 @@ impl<'a, Svc: Service<St>, St> ReadyCtx<'a, Svc, St> {
         F: FnOnce(&mut Context<'a>) -> R,
     {
         let wakers = self.waiters.get();
-        let mut ctx = if let Some(w) = wakers.get(0).and_then(|w| w.as_ref()) {
+        let idx = self.waiters.cur.get() as usize;
+        let mut ctx = if let Some(w) = wakers.get(idx).and_then(|w| w.as_ref()) {
             Context::from_waker(w)
         } else {
             Context::from_waker(Waker::noop())
@@ -272,58 +221,20 @@ impl<'a, Svc: Service<St>, St> ReadyCtx<'a, Svc, St> {
 
         f(&mut ctx)
     }
-
-    /// Returns when the service is able to process requests.
-    pub async fn ready<S>(&self, svc: &'a S) -> Result<(), S::Error>
-    where
-        S: Service<St>,
-    {
-        // check readiness and notify waiters
-        ReadyCall {
-            completed: false,
-            fut: svc.ready(ReadyCtx {
-                st: self.st,
-                idx: self.idx,
-                waiters: self.waiters,
-                _t: marker::PhantomData,
-            }),
-            idx: self.idx,
-            waiters: self.waiters,
-        }
-        .await
-    }
-
-    #[inline]
-    /// Call service without waiting for service readiness.
-    pub async fn call<S>(&self, svc: &'a S, req: S::Req) -> Result<S::Res, S::Error>
-    where
-        S: Service<St>,
-    {
-        svc.call(
-            req,
-            Ctx {
-                st: self.st,
-                idx: self.idx,
-                waiters: self.waiters,
-                _t: marker::PhantomData,
-            },
-        )
-        .await
-    }
 }
 
-impl<Svc: Service<St>, St> Copy for ReadyCtx<'_, Svc, St> {}
+impl<S, St> Copy for Ctx<'_, S, St> {}
 
-impl<Svc: Service<St>, St> Clone for ReadyCtx<'_, Svc, St> {
+impl<S, St> Clone for Ctx<'_, S, St> {
     #[inline]
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<Svc: Service<St>, St> fmt::Debug for ReadyCtx<'_, Svc, St> {
+impl<S, St> fmt::Debug for Ctx<'_, S, St> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ReadyCtx")
+        f.debug_struct("Ctx")
             .field("idx", &self.idx)
             .field("waiters", &self.waiters.get().len())
             .finish()
@@ -374,12 +285,11 @@ mod tests {
 
     struct Srv(Rc<Cell<usize>>, condition::Waiter);
 
-    impl Service<()> for Srv {
-        type Req = &'static str;
+    impl Service<(), &'static str> for Srv {
         type Res = &'static str;
         type Error = ();
 
-        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             self.1.ready().await;
             Ok(())

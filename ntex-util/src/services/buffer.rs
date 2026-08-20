@@ -3,7 +3,7 @@ use std::cell::{Cell, RefCell};
 use std::task::{Poll, Waker, ready};
 use std::{collections::VecDeque, fmt, future::poll_fn};
 
-use ntex_service::{Middleware, Pipeline, Service, Ctx, ReadyCtx};
+use ntex_service::{Middleware, Pipeline, Service, Ctx};
 
 use crate::channel::oneshot;
 
@@ -163,7 +163,7 @@ where
     type Res = S::Res;
     type Error = BufferServiceError<S::Error>;
 
-    async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
         // hold advancement until the last released task either makes a call or is dropped
         let next_call = self.next_call.borrow_mut().take();
         if let Some(next_call) = next_call {
@@ -298,7 +298,7 @@ mod tests {
         type Response = ();
         type Error = ();
 
-        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
             poll_fn(|cx| {
                 self.0.waker.register(cx.waker());
                 if self.0.ready.get() {

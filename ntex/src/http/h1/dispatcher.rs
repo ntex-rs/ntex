@@ -779,8 +779,8 @@ mod tests {
     /// Create http/1 dispatcher.
     pub(crate) fn h1<F, S, B>(stream: IoTest, s: F) -> Dispatcher<Base, B, S::Error>
     where
-        F: IntoService<S, ()>,
-        S: Service<(), Req = Request> + 'static,
+        F: IntoService<S, (), Request>,
+        S: Service<(), Request> + 'static,
         S::Res: Into<Response<B>>,
         S::Error: ResponseError + 'static,
         B: MessageBody,
@@ -797,15 +797,15 @@ mod tests {
             0,
             nio::Io::new(stream, cfg.clone()),
             Pipeline::new(s.into_service().map(Into::into)),
-            Pipeline::new(DefaultControlService::new()).bind(),
+            Pipeline::new(DefaultControlService).bind(),
             DispatcherConfig::default(),
         )
     }
 
     pub(crate) fn spawn_h1<F, S, B>(stream: IoTest, s: F)
     where
-        F: IntoService<S, ()>,
-        S: Service<(), Req = Request> + 'static,
+        F: IntoService<S, (), Request>,
+        S: Service<(), Request> + 'static,
         S::Res: Into<Response<B>>,
         S::Error: ResponseError,
         B: MessageBody + 'static,
@@ -822,7 +822,7 @@ mod tests {
             0,
             nio::Io::new(stream, cfg),
             Pipeline::new(s.into_service().map(Into::into)),
-            Pipeline::new(DefaultControlService::new()).bind(),
+            Pipeline::new(DefaultControlService).bind(),
             DispatcherConfig::default(),
         ));
     }

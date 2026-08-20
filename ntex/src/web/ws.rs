@@ -155,19 +155,22 @@ struct DispatchService<S> {
     sink: WsSink,
 }
 
-impl<S, St, E> Service<St> for DispatchService<S>
+impl<S, St, E> Service<St, DispatchItem<ws::Codec>> for DispatchService<S>
 where
-    S: Service<St, Req = Frame, Res = Option<Message>, Error = WsError<E>>,
+    S: Service<St, Frame, Res = Option<Message>, Error = WsError<E>>,
     E: fmt::Debug,
 {
-    type Req = DispatchItem<ws::Codec>;
     type Res = Option<Message>;
     type Error = WsError<E>;
 
     crate::forward_ready!(St, srv);
     crate::forward_shutdown!(srv);
 
-    async fn call(&self, req: Self::Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
+    async fn call(
+        &self,
+        req: DispatchItem<ws::Codec>,
+        ctx: Ctx<'_, Self, St>,
+    ) -> Result<Self::Res, Self::Error> {
         match req {
             DispatchItem::Item(item) => {
                 let s = if matches!(item, Frame::Close(_)) {

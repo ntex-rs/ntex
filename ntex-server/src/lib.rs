@@ -36,7 +36,7 @@ impl WorkerId {
 /// Worker service configuration.
 pub trait ServerConfiguration: Send + Clone + 'static {
     type Item: Send + 'static;
-    type Service: Service<(), Req = Self::Item, Res = (), Error = ()> + 'static;
+    type Service: Service<(), Self::Item, Res = (), Error = ()> + 'static;
 
     /// Create service for handling `WorkerMessage<T>` messages.
     async fn create(&self) -> Result<Self::Service, &'static str>;
