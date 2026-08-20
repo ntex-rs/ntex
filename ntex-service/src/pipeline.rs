@@ -1,9 +1,10 @@
 use std::{cell, fmt, future, pin::Pin, ptr, rc::Rc, task::Context, task::Poll};
 
 use crate::state::{Noop, State};
-use crate::{Ctx, IntoService, Service, ctx::WaitersRef, util::BoxFuture};
+use crate::{Ctx, CtxShutdown, IntoService, Service, ctx::WaitersRef, util::BoxFuture};
 
 pub use crate::pl_factory::PipelineFactory;
+pub use crate::pl_nost::PipelineNostate;
 
 /// Container for a service.
 ///
@@ -145,7 +146,7 @@ where
                 // Pipeline::svc is heap allocated(Rc<S>), and it is being kept alive until
                 // `self` is alive
                 let pl = unsafe { &*(ptr::from_ref(self)) };
-                let fut = Box::pin(async move { pl.s.shutdown().await });
+                let fut = Box::pin(async move { pl.s.shutdown(CtxShutdown::new(&pl.st)).await });
                 *st = RuntimeState::Shutdown(fut);
                 pl.waiters.shutdown();
                 self.poll_shutdown(cx)

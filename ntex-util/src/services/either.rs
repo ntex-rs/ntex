@@ -1,5 +1,5 @@
 //! Either service allows to use different services for handling request
-use ntex_service::{Ctx, Service, ServiceFactory};
+use ntex_service::{Ctx, CtxShutdown, Service, ServiceFactory};
 
 use crate::future::Either;
 
@@ -131,10 +131,10 @@ where
     }
 
     #[inline]
-    async fn shutdown(&self) {
+    async fn shutdown(&self, ctx: CtxShutdown<'_, St>) {
         match self.svc {
-            Either::Left(ref svc) => svc.shutdown().await,
-            Either::Right(ref svc) => svc.shutdown().await,
+            Either::Left(ref svc) => svc.shutdown(ctx).await,
+            Either::Right(ref svc) => svc.shutdown(ctx).await,
         }
     }
 }

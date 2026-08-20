@@ -134,7 +134,7 @@ where
     }
 
     ntex_service::forward_ready!(St, svc);
-    ntex_service::forward_shutdown!(svc);
+    ntex_service::forward_shutdown!(St, svc);
 }
 
 #[cfg(test)]

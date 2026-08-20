@@ -1,9 +1,7 @@
-use std::{fmt, future::Future, pin::Pin, rc::Rc};
+use std::{fmt, rc::Rc};
 
-use crate::ctx::{Ctx, WaitersRef};
-use crate::{Service, ServiceFactory};
-
-type BoxFuture<'a, I, E> = Pin<Box<dyn Future<Output = Result<I, E>> + 'a>>;
+use crate::ctx::{Ctx, CtxShutdown, WaitersRef};
+use crate::{Service, ServiceFactory, util::BoxFuture};
 
 // ============================ Service =============================
 
@@ -63,8 +61,8 @@ impl<St, Req, Res, Err> Service<St, Req> for BoxService<St, Req, Res, Err> {
     }
 
     #[inline]
-    async fn shutdown(&self) {
-        self.inner.shutdown().await;
+    async fn shutdown(&self, ctx: CtxShutdown<'_, St>) {
+        self.inner.shutdown(ctx.st()).await;
     }
 }
 
@@ -72,12 +70,12 @@ trait ServiceObj<St, Req> {
     type Res;
     type Error;
 
-    fn ready<'a>(&'a self, i: u32, w: &'a WaitersRef, s: &'a St) -> BoxFuture<'a, (), Self::Error>;
-
-    fn shutdown<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + 'a>>
-    where
-        St: 'a,
-        Req: 'a;
+    fn ready<'a>(
+        &'a self,
+        i: u32,
+        w: &'a WaitersRef,
+        s: &'a St,
+    ) -> BoxFuture<'a, Result<(), Self::Error>>;
 
     fn call<'a>(
         &'a self,
@@ -85,8 +83,13 @@ trait ServiceObj<St, Req> {
         i: u32,
         w: &'a WaitersRef,
         s: &'a St,
-    ) -> BoxFuture<'a, Self::Res, Self::Error>
+    ) -> BoxFuture<'a, Result<Self::Res, Self::Error>>
     where
+        Req: 'a;
+
+    fn shutdown<'a>(&'a self, s: &'a St) -> BoxFuture<'a, ()>
+    where
+        St: 'a,
         Req: 'a;
 }
 
@@ -98,8 +101,13 @@ where
     type Error = S::Error;
 
     #[inline]
-    fn ready<'a>(&'a self, i: u32, w: &'a WaitersRef, s: &'a St) -> BoxFuture<'a, (), Self::Error> {
-        Box::pin(async move { Ctx::<'a, S, St>::new(i, w, s).ready(self).await })
+    fn ready<'a>(
+        &'a self,
+        idx: u32,
+        waiters: &'a WaitersRef,
+        st: &'a St,
+    ) -> BoxFuture<'a, Result<(), Self::Error>> {
+        Box::pin(async move { Ctx::<'a, S, St>::new(idx, waiters, st).ready(self).await })
     }
 
     #[inline]
@@ -109,7 +117,7 @@ where
         idx: u32,
         waiters: &'a WaitersRef,
         st: &'a St,
-    ) -> BoxFuture<'a, S::Res, S::Error>
+    ) -> BoxFuture<'a, Result<S::Res, S::Error>>
     where
         Req: 'a,
     {
@@ -121,12 +129,12 @@ where
     }
 
     #[inline]
-    fn shutdown<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + 'a>>
+    fn shutdown<'a>(&'a self, st: &'a St) -> BoxFuture<'a, ()>
     where
         St: 'a,
         Req: 'a,
     {
-        Box::pin(Service::shutdown(self))
+        Box::pin(Service::shutdown(self, CtxShutdown::new(st)))
     }
 }
 
@@ -202,7 +210,7 @@ trait ServiceFactoryObj<St, Req, Cfg> {
     fn create<'a>(
         &'a self,
         cfg: &'a Cfg,
-    ) -> BoxFuture<'a, BoxService<St, Req, Self::Res, Self::Error>, Self::InitErr>
+    ) -> BoxFuture<'a, Result<BoxService<St, Req, Self::Res, Self::Error>, Self::InitErr>>
     where
         Req: 'a;
 }
@@ -222,7 +230,7 @@ where
     fn create<'a>(
         &'a self,
         cfg: &'a Cfg,
-    ) -> BoxFuture<'a, BoxService<St, Req, Self::Res, Self::Error>, Self::InitErr>
+    ) -> BoxFuture<'a, Result<BoxService<St, Req, Self::Res, Self::Error>, Self::InitErr>>
     where
         Req: 'a,
     {

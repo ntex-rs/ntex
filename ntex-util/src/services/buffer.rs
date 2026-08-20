@@ -1,9 +1,10 @@
 //! Service that buffers incoming requests.
+#![allow(clippy::type_complexity)]
 use std::cell::{Cell, RefCell};
-use std::task::{Poll, Waker, ready};
-use std::{collections::VecDeque, fmt, future::poll_fn, marker::PhantomData};
+use std::{collections::VecDeque, fmt, future, marker, task, task::Poll};
 
-use ntex_service::{Ctx, Middleware, Pipeline, Service};
+use ntex_service::pipeline::PipelineNostate;
+use ntex_service::{Ctx, CtxShutdown, Middleware, Service};
 
 use crate::channel::oneshot;
 
@@ -11,12 +12,13 @@ use crate::channel::oneshot;
 /// Buffer - service factory for service that can buffer incoming request.
 ///
 /// Default number of buffered requests is 16
-pub struct Buffer {
+pub struct Buffer<St: Clone, Req, Res, Err> {
     buf_size: usize,
     cancel_on_shutdown: bool,
+    st: marker::PhantomData<fn(St, Req) -> Result<Res, Err>>,
 }
 
-impl Buffer {
+impl<St: Clone, Req, Res, Err> Buffer<St, Req, Res, Err> {
     /// Set size of the buffer.
     ///
     /// Default is set to 16
@@ -36,23 +38,28 @@ impl Buffer {
     }
 }
 
-impl Default for Buffer {
+impl<St: Clone, Req, Res, Err> Default for Buffer<St, Req, Res, Err> {
     fn default() -> Self {
         Self {
             buf_size: 16,
             cancel_on_shutdown: false,
+            st: marker::PhantomData,
         }
     }
 }
 
-impl<C> Middleware<S, C> for Buffer
+impl<S, C, St, Req, Res, Err> Middleware<S, C> for Buffer<St, Req, Res, Err>
 where
-    S: 'static,
+    S: Service<St, Req, Res = Res, Error = Err> + 'static,
+    St: Clone + 'static,
+    Req: 'static,
+    Res: 'static,
+    Err: 'static,
 {
-    type Service = BufferService<S>;
+    type Service = BufferService<St, Req, Res, Err>;
 
     fn create(&self, service: S, _: &C) -> Self::Service {
-        BufferService::new(self.buf_size, service)
+        BufferService::new(self.buf_size, PipelineNostate::new(service))
     }
 }
 
@@ -82,26 +89,25 @@ impl<E: fmt::Display + fmt::Debug> std::error::Error for BufferServiceError<E> {
 /// Buffer service - service that can buffer incoming requests.
 ///
 /// Default number of buffered requests is 16
-pub struct BufferService<S: Service<St, Req>, St, Req> {
+pub struct BufferService<St, Req, Res, Err> {
     size: usize,
     ready: Cell<bool>,
-    service: Pipeline<Req, S::Res, S::Error>,
+    service: PipelineNostate<St, Req, Res, Err>,
     buf: RefCell<VecDeque<oneshot::Sender<oneshot::Sender<()>>>>,
     next_call: RefCell<Option<oneshot::Receiver<()>>>,
     cancel_on_shutdown: bool,
-    readiness: Cell<Option<Waker>>,
+    readiness: Cell<Option<task::Waker>>,
 }
 
-impl<S, St, Req> BufferService<S, St, Req>
+impl<St, Req, Res, Err> BufferService<St, Req, Res, Err>
 where
-    S: Service<St, Req> + 'static,
-    St: Default + 'static,
+    St: Clone + 'static,
 {
     #[must_use]
-    pub fn new(size: usize, service: S) -> Self {
+    pub fn new(size: usize, service: PipelineNostate<St, Req, Res, Err>) -> Self {
         Self {
             size,
-            service: Pipeline::new(service),
+            service,
             ready: Cell::new(false),
             buf: RefCell::new(VecDeque::with_capacity(size)),
             next_call: RefCell::default(),
@@ -119,27 +125,7 @@ where
     }
 }
 
-impl<S> Clone for BufferService<S>
-where
-    S: Service + Clone,
-{
-    fn clone(&self) -> Self {
-        Self {
-            size: self.size,
-            ready: Cell::new(false),
-            service: self.service.clone(),
-            buf: RefCell::new(VecDeque::with_capacity(self.size)),
-            next_call: RefCell::default(),
-            cancel_on_shutdown: self.cancel_on_shutdown,
-            readiness: Cell::new(None),
-        }
-    }
-}
-
-impl<S> fmt::Debug for BufferService<S>
-where
-    S: Service + fmt::Debug,
-{
+impl<St, Req, Res, Err> fmt::Debug for BufferService<St, Req, Res, Err> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BufferService")
             .field("size", &self.size)
@@ -152,28 +138,28 @@ where
     }
 }
 
-impl<S> Service for BufferService<S>
+impl<St, Req, Res, Err> Service<St, Req> for BufferService<St, Req, Res, Err>
 where
-    S: Service + 'static,
-    S::St: Clone,
+    St: Clone + 'static,
+    Req: 'static,
+    Res: 'static,
+    Err: 'static,
 {
-    type St = S::St;
-    type Req = S::Req;
-    type Res = S::Res;
-    type Error = BufferServiceError<S::Error>;
+    type Res = Res;
+    type Error = BufferServiceError<Err>;
 
-    async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
         // hold advancement until the last released task either makes a call or is dropped
         let next_call = self.next_call.borrow_mut().take();
         if let Some(next_call) = next_call {
             let _ = next_call.recv().await;
         }
 
-        poll_fn(|cx| {
+        ctx.poll_fn(|cx| {
             let mut buffer = self.buf.borrow_mut();
 
             // handle inner service readiness
-            if self.service.poll_ready(cx)?.is_pending() {
+            if self.service.poll_ready(cx, ctx.st())?.is_pending() {
                 if buffer.len() < self.size {
                     // buffer next request
                     self.ready.set(false);
@@ -181,7 +167,7 @@ where
                 } else {
                     log::trace!("Buffer limit exceeded");
                     // service is not ready
-                    let _ = self.readiness.take().map(Waker::wake);
+                    let _ = self.readiness.take().map(task::Waker::wake);
                     Poll::Pending
                 }
             } else {
@@ -203,21 +189,21 @@ where
         .await
     }
 
-    async fn shutdown(&self) {
+    async fn shutdown(&self, ctx: CtxShutdown<'_, St>) {
         // hold advancement until the last released task either makes a call or is dropped
         let next_call = self.next_call.borrow_mut().take();
         if let Some(next_call) = next_call {
             let _ = next_call.recv().await;
         }
 
-        poll_fn(|cx| {
+        future::poll_fn(|cx| {
             let mut buffer = self.buf.borrow_mut();
             if self.cancel_on_shutdown {
                 buffer.clear();
             }
 
             if !buffer.is_empty() {
-                if ready!(self.service.poll_ready(cx)).is_err() {
+                if task::ready!(self.service.poll_ready(cx, ctx.st())).is_err() {
                     log::error!("Buffered inner service failed while buffer flushing on shutdown");
                     return Poll::Ready(());
                 }
@@ -239,13 +225,13 @@ where
         })
         .await;
 
-        self.service.shutdown().await;
+        self.service.shutdown(ctx.st()).await;
     }
 
-    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self>) -> Result<Self::Res, Self::Error> {
+    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Res, Self::Error> {
         if self.ready.get() {
             self.ready.set(false);
-            Ok(self.service.call_nowait(req, ctx.st().clone()).await?)
+            Ok(self.service.call_nowait(req, ctx.st()).await?)
         } else {
             let (tx, rx) = oneshot::channel();
             self.buf.borrow_mut().push_back(tx);
@@ -260,8 +246,6 @@ where
             Ok(self.service.call(req, ctx.st()).await?)
         }
     }
-
-    ntex_service::forward_poll!(service);
 }
 
 #[cfg(test)]
@@ -283,12 +267,12 @@ mod tests {
         count: Cell<usize>,
     }
 
-    impl Service<()> for TestService {
-        type Response = ();
+    impl Service<(), ()> for TestService {
+        type Res = ();
         type Error = ();
 
-        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
-            poll_fn(|cx| {
+        async fn ready(&self, ctx: Ctx<'_, Self, ()>) -> Result<(), Self::Error> {
+            ctx.poll_fn(|cx| {
                 self.0.waker.register(cx.waker());
                 if self.0.ready.get() {
                     Poll::Ready(Ok(()))
@@ -299,7 +283,7 @@ mod tests {
             .await
         }
 
-        async fn call(&self, _r: (), _: Ctx<'_, Self>) -> Result<(), ()> {
+        async fn call(&self, _r: (), _: Ctx<'_, Self, ()>) -> Result<(), ()> {
             self.0.ready.set(false);
             self.0.count.set(self.0.count.get() + 1);
             Ok(())
@@ -314,10 +298,13 @@ mod tests {
             count: Cell::new(0),
         });
 
-        let srv = Pipeline::new(BufferService::new(2, TestService(inner.clone())).clone()).bind();
+        let svc = BufferService::new(2, PipelineNostate::new(TestService(inner.clone())));
+        assert!(format!("{svc:?}").contains("BufferService"));
+
+        let srv = Pipeline::new(svc);
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
-        let srv1 = srv.clone();
+        let srv1 = srv.bind();
         ntex::rt::spawn(async move {
             let _ = srv1.call(()).await;
         });
@@ -325,7 +312,7 @@ mod tests {
         assert_eq!(inner.count.get(), 0);
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
-        let srv1 = srv.clone();
+        let srv1 = srv.bind();
         ntex::rt::spawn(async move {
             let _ = srv1.call(()).await;
         });
@@ -353,7 +340,10 @@ mod tests {
             count: Cell::new(0),
         });
 
-        let srv = Pipeline::new(BufferService::new(2, TestService(inner.clone()))).bind();
+        let srv = Pipeline::new(BufferService::new(
+            2,
+            PipelineNostate::new(TestService(inner.clone())),
+        ));
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let _ = srv.call(()).await;
@@ -363,8 +353,7 @@ mod tests {
 
         let err = BufferServiceError::from("test");
         assert!(format!("{err}").contains("test"));
-        assert!(format!("{srv:?}").contains("BufferService"));
-        assert!(format!("{:?}", Buffer::<TestService>::default()).contains("Buffer"));
+        assert!(format!("{:?}", Buffer::<(), (), (), ()>::default()).contains("Buffer"));
     }
 
     #[ntex::test]
@@ -375,16 +364,17 @@ mod tests {
             waker: LocalWaker::default(),
             count: Cell::new(0),
         });
+        let inner2 = inner.clone();
 
         let srv = apply(
-            Buffer::default().buf_size(2).clone(),
-            fn_factory(|| async { Ok::<_, ()>(TestService(inner.clone())) }),
+            Buffer::default().buf_size(2),
+            fn_factory(async move || Ok::<_, ()>(TestService(inner2.clone()))),
         );
 
-        let srv = srv.pipeline(&()).await.unwrap().bind();
+        let srv = srv.pipeline(&()).await.unwrap();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
-        let srv1 = srv.clone();
+        let srv1 = srv.bind();
         ntex::rt::spawn(async move {
             let _ = srv1.call(()).await;
         });
@@ -392,7 +382,7 @@ mod tests {
         assert_eq!(inner.count.get(), 0);
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
-        let srv1 = srv.clone();
+        let srv1 = srv.bind();
         ntex::rt::spawn(async move {
             let _ = srv1.call(()).await;
         });
@@ -423,16 +413,17 @@ mod tests {
             waker: LocalWaker::default(),
             count: Cell::new(0),
         });
+        let inner2 = inner.clone();
 
         let srv = apply(
-            Buffer::default().buf_size(2).clone(),
-            fn_factory(|| async { Ok::<_, ()>(TestService(inner.clone())) }),
+            Buffer::default().buf_size(2),
+            fn_factory(async move || Ok::<_, ()>(TestService(inner2.clone()))),
         );
 
-        let srv = srv.pipeline(&()).await.unwrap().bind();
+        let srv = srv.pipeline(&()).await.unwrap();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
-        let srv1 = srv.clone();
+        let srv1 = srv.bind();
         ntex::rt::spawn(async move {
             let _ = srv1.call(()).await;
         });
@@ -440,7 +431,7 @@ mod tests {
         assert_eq!(inner.count.get(), 0);
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
-        let srv1 = srv.clone();
+        let srv1 = srv.bind();
         ntex::rt::spawn(async move {
             let _ = srv1.call(()).await;
         });

@@ -67,7 +67,7 @@ where
     }
 
     crate::forward_ready!(St, svc);
-    crate::forward_shutdown!(svc);
+    crate::forward_shutdown!(St, svc);
 }
 
 /// `MapNewService` new service combinator
@@ -144,7 +144,7 @@ where
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use crate::{Ctx, Pipeline, Service, ServiceFactory, fn_factory};
+    use crate::{Ctx, CtxShutdown, Pipeline, Service, ServiceFactory, fn_factory};
 
     #[derive(Debug, Default, Clone)]
     struct Srv(Rc<Cell<usize>>);
@@ -161,7 +161,7 @@ mod tests {
             Ok(())
         }
 
-        async fn shutdown(&self) {
+        async fn shutdown(&self, _: CtxShutdown<'_, ()>) {
             self.0.set(self.0.get() + 1);
         }
     }

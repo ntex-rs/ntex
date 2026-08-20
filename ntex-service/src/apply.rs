@@ -123,7 +123,7 @@ where
         (self.f)(req, &ctx).await
     }
 
-    crate::forward_shutdown!(svc);
+    crate::forward_shutdown!(St, svc);
 }
 
 /// `apply()` service factory
@@ -212,7 +212,7 @@ mod tests {
     use std::{cell::Cell, rc::Rc};
 
     use super::*;
-    use crate::{factory, fn_factory, svc};
+    use crate::{CtxShutdown, factory, fn_factory, svc};
 
     #[derive(Debug, Default, Clone)]
     struct Srv(Rc<Cell<usize>>);
@@ -230,7 +230,7 @@ mod tests {
             Ok(())
         }
 
-        async fn shutdown(&self) {
+        async fn shutdown(&self, _: CtxShutdown<'_, ()>) {
             self.0.set(self.0.get() + 1);
         }
     }

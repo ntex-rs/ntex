@@ -3,7 +3,7 @@ use std::{cell::RefCell, marker, mem, rc::Rc};
 use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, ResourceId, Router};
 use crate::service::cfg::{Cfg, SharedCfg};
-use crate::service::{Ctx, Middleware, Service, ServiceFactory, factory_with_st};
+use crate::service::{Ctx, CtxShutdown, Middleware, Service, ServiceFactory, factory_with_st};
 use crate::service::{boxed, dev::ServiceChainFactory};
 use crate::util::HashMap;
 
@@ -192,7 +192,7 @@ where
     type Error = S::Error;
 
     crate::forward_ready!(St, service);
-    crate::forward_shutdown!(service);
+    crate::forward_shutdown!(St, service);
 
     async fn call(&self, req: Request, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, S::Error> {
         let (head, payload) = req.into_parts();
@@ -282,17 +282,17 @@ where
         ctx.call(&svc, req).await
     }
 
-    async fn shutdown(&self) {
-        self.filter.shutdown().await;
+    async fn shutdown(&self, ctx: CtxShutdown<'_, St>) {
+        self.filter.shutdown(ctx).await;
 
         let svc = self.cache_default.borrow_mut().take();
         if let Some(svc) = svc {
-            svc.shutdown().await;
+            svc.shutdown(ctx).await;
         }
 
         let services = mem::take(&mut *self.cache.borrow_mut());
         for (_, svc) in services {
-            svc.shutdown().await;
+            svc.shutdown(ctx).await;
         }
     }
 }

@@ -95,7 +95,7 @@ where
         })
     }
 
-    async fn shutdown(&self) {
+    async fn shutdown(&self, _: crate::CtxShutdown<'_, Hst>) {
         self.config.shutdown();
 
         // check inflight connections

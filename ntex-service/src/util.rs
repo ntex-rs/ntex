@@ -1,16 +1,16 @@
 use std::{future::Future, future::poll_fn, pin, pin::Pin, task::Poll};
 
-use crate::{Ctx, Service};
+use crate::{Ctx, CtxShutdown, Service};
 
 pub(crate) type BoxFuture<'a, R> = Pin<Box<dyn Future<Output = R> + 'a>>;
 
-pub(crate) async fn shutdown<A, B, St, R1, R2>(svc1: &A, svc2: &B)
+pub(crate) async fn shutdown<A, B, St, R1, R2>(svc1: &A, svc2: &B, ctx: CtxShutdown<'_, St>)
 where
     A: Service<St, R1>,
     B: Service<St, R2>,
 {
-    let mut fut1 = pin::pin!(svc1.shutdown());
-    let mut fut2 = pin::pin!(svc2.shutdown());
+    let mut fut1 = pin::pin!(svc1.shutdown(ctx));
+    let mut fut2 = pin::pin!(svc2.shutdown(ctx));
 
     let mut ready1 = false;
     let mut ready2 = false;

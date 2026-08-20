@@ -186,7 +186,7 @@ impl<S: Service<St, Req>, St, Req> Service<St, Req> for ServiceChain<S, St, Req>
     }
 
     crate::forward_ready!(St, service);
-    crate::forward_shutdown!(service);
+    crate::forward_shutdown!(St, service);
 }
 
 impl<Sf: ServiceFactory<St, Req, Cfg>, St, Req, Cfg> ServiceChainFactory<Sf, St, Req, Cfg> {

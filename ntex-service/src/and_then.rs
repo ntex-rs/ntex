@@ -1,4 +1,4 @@
-use super::{Ctx, Service, ServiceFactory, util};
+use super::{Ctx, CtxShutdown, Service, ServiceFactory, util};
 
 #[derive(Clone, Debug)]
 /// Service for the `and_then` combinator, chaining a computation onto the end
@@ -37,8 +37,8 @@ where
     }
 
     #[inline]
-    async fn shutdown(&self) {
-        util::shutdown(&self.svc1, &self.svc2).await;
+    async fn shutdown(&self, ctx: CtxShutdown<'_, St>) {
+        util::shutdown(&self.svc1, &self.svc2, ctx).await;
     }
 }
 
@@ -80,7 +80,7 @@ where
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use crate::{Ctx, Service, factory, fn_factory, svc};
+    use crate::{Ctx, CtxShutdown, Service, factory, fn_factory, svc};
 
     #[derive(Debug, Clone)]
     struct Srv1(Rc<Cell<usize>>, Rc<Cell<usize>>);
@@ -98,7 +98,7 @@ mod tests {
             Ok(req)
         }
 
-        async fn shutdown(&self) {
+        async fn shutdown(&self, _: CtxShutdown<'_, ()>) {
             self.1.set(self.1.get() + 1);
         }
     }
@@ -119,7 +119,7 @@ mod tests {
             Ok((req, "srv2"))
         }
 
-        async fn shutdown(&self) {
+        async fn shutdown(&self, _: CtxShutdown<'_, ()>) {
             self.1.set(self.1.get() + 1);
         }
     }

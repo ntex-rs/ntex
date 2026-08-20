@@ -72,7 +72,7 @@ where
         ctx.ready(&self.svc).await.map_err(&self.f)
     }
 
-    crate::forward_shutdown!(svc);
+    crate::forward_shutdown!(St, svc);
 }
 
 /// Factory for the `map_err` combinator, changing the type of a new
@@ -148,7 +148,7 @@ mod tests {
     use std::{cell::Cell, rc::Rc};
 
     use super::*;
-    use crate::{Pipeline, fn_factory};
+    use crate::{CtxShutdown, Pipeline, fn_factory};
 
     #[derive(Debug, Clone)]
     struct Srv(bool, Rc<Cell<usize>>);
@@ -165,7 +165,7 @@ mod tests {
             Err(())
         }
 
-        async fn shutdown(&self) {
+        async fn shutdown(&self, _: CtxShutdown<'_, ()>) {
             self.1.set(self.1.get() + 1);
         }
     }

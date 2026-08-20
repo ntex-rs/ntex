@@ -11,7 +11,7 @@ use crate::http::message::{CurrentIo, ResponseHead};
 use crate::http::{DateService, HttpPipeline, Method, Request, Response, StatusCode, Uri, Version};
 use crate::io::{Filter, Io, IoBoxed, IoRef, types};
 use crate::service::pipeline::{Pipeline, PipelineBinding};
-use crate::service::{Ctx, Service, ServiceFactory};
+use crate::service::{Ctx, CtxShutdown, Service, ServiceFactory};
 use crate::service::{IntoService, IntoServiceFactory, cfg::SharedCfg, state::DefaultState};
 use crate::util::{Bytes, BytesMut, HashMap, dyn_rc_err};
 
@@ -96,7 +96,7 @@ where
     }
 
     #[inline]
-    async fn shutdown(&self) {
+    async fn shutdown(&self, _: CtxShutdown<'_, Hst>) {
         // check inflight connections
         let inflight = self.config.shutdown();
         if inflight != 0 {
@@ -189,7 +189,9 @@ where
     type Res = ();
     type Error = H2Error;
 
-    crate::forward_shutdown!(svc);
+    async fn shutdown(&self, _: CtxShutdown<'_, ()>) {
+        self.svc.shutdown().await;
+    }
 
     async fn call(&self, msg: h2::Message, _: Ctx<'_, Self, ()>) -> Result<Self::Res, Self::Error> {
         let h2::Message { stream, kind } = msg;

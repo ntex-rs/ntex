@@ -2,7 +2,7 @@ use std::{error::Error as StdError, time::Duration};
 
 use crate::connect::{self, Connect as TcpConnect, Connector as TcpConnector};
 use crate::error::{Error, ErrorMapping, with_service};
-use crate::service::{IntoServiceFactory, Pipeline, Service, apply_fn_factory, boxed};
+use crate::service::{CtxShutdown, IntoServiceFactory, Pipeline, Service, apply_fn_factory, boxed};
 use crate::{Ctx, ServiceFactory, SharedCfg, http::Uri, io::IoBoxed, time::Seconds, util::join};
 
 use super::error::{ClientError, ConnectError};
@@ -254,10 +254,10 @@ impl Service<(), Connect> for ConnectorService {
         }
     }
 
-    async fn shutdown(&self) {
-        self.tcp_pool.shutdown().await;
+    async fn shutdown(&self, ctx: CtxShutdown<'_, ()>) {
+        self.tcp_pool.shutdown(ctx).await;
         if let Some(ref ssl_pool) = self.ssl_pool {
-            ssl_pool.shutdown().await;
+            ssl_pool.shutdown(ctx).await;
         }
     }
 

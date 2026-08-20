@@ -1,5 +1,4 @@
-use std::task::{Context, Poll, Waker};
-use std::{cell, fmt, future::Future, marker, pin::Pin, rc::Rc};
+use std::{cell, fmt, future, marker, pin, rc::Rc, task::Context, task::Poll, task::Waker};
 
 use crate::Service;
 
@@ -8,6 +7,10 @@ pub struct Ctx<'a, Svc: ?Sized, St = ()> {
     st: &'a St,
     waiters: &'a WaitersRef,
     _t: marker::PhantomData<Rc<Svc>>,
+}
+
+pub struct CtxShutdown<'a, St = ()> {
+    st: &'a St,
 }
 
 #[derive(Debug)]
@@ -74,6 +77,7 @@ impl WaitersRef {
     where
         F: FnOnce(&mut Context<'_>) -> Poll<R>,
     {
+        // Ctx::poll_xxx() methods requires current waker always available
         self.get()[idx as usize] = Some(cx.waker().clone());
 
         // calculate owner for readiness check
@@ -206,8 +210,34 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     }
 
     #[inline]
+    /// Execute a closure until completion with the dispatcher's task `Context`.
+    pub async fn poll_fn<F, R>(&'a self, f: F) -> R
+    where
+        F: Fn(&mut Context<'a>) -> Poll<R>,
+    {
+        future::poll_fn(move |_| {
+            let wakers = self.waiters.get();
+            let idx = self.waiters.cur.get() as usize;
+            let mut ctx = if let Some(w) = wakers.get(idx).and_then(|w| w.as_ref()) {
+                Context::from_waker(w)
+            } else {
+                Context::from_waker(Waker::noop())
+            };
+
+            // is current runner is not main, we need to wake up main task
+            // to re-register all required wakers
+            if idx != 0 {
+                self.waiters.get_wakers().push(0);
+            }
+
+            f(&mut ctx)
+        })
+        .await
+    }
+
+    #[inline]
     /// Execute a closure with the dispatcher's task `Context`.
-    pub fn with_context<F, R>(&'a self, f: F) -> R
+    pub fn poll_once<F, R>(&'a self, f: F) -> R
     where
         F: FnOnce(&mut Context<'a>) -> R,
     {
@@ -218,6 +248,12 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
         } else {
             Context::from_waker(Waker::noop())
         };
+
+        // is current runner is not main, we need to wake up main task
+        // to re-register all required wakers
+        if idx != 0 {
+            self.waiters.get_wakers().push(0);
+        }
 
         f(&mut ctx)
     }
@@ -241,14 +277,41 @@ impl<S, St> fmt::Debug for Ctx<'_, S, St> {
     }
 }
 
-struct ReadyCall<'a, F: Future> {
+impl<'a, St> CtxShutdown<'a, St> {
+    pub(crate) fn new(st: &'a St) -> Self {
+        Self { st }
+    }
+
+    #[inline]
+    /// Application state
+    pub fn st(&'a self) -> &'a St {
+        self.st
+    }
+}
+
+impl<St> Copy for CtxShutdown<'_, St> {}
+
+impl<St> Clone for CtxShutdown<'_, St> {
+    #[inline]
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<St> fmt::Debug for CtxShutdown<'_, St> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CtxShutdown").finish()
+    }
+}
+
+struct ReadyCall<'a, F: future::Future> {
     completed: bool,
     fut: F,
     idx: u32,
     waiters: &'a WaitersRef,
 }
 
-impl<F: Future> Drop for ReadyCall<'_, F> {
+impl<F: future::Future> Drop for ReadyCall<'_, F> {
     fn drop(&mut self) {
         if !self.completed && self.waiters.cur.get() == self.idx {
             self.waiters.notify();
@@ -256,15 +319,15 @@ impl<F: Future> Drop for ReadyCall<'_, F> {
     }
 }
 
-impl<F: Future> Unpin for ReadyCall<'_, F> {}
+impl<F: future::Future> Unpin for ReadyCall<'_, F> {}
 
-impl<F: Future> Future for ReadyCall<'_, F> {
+impl<F: future::Future> future::Future for ReadyCall<'_, F> {
     type Output = F::Output;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(mut self: pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.waiters.run(self.idx, cx, |cx| {
             // SAFETY: `fut` never moves
-            let result = unsafe { Pin::new_unchecked(&mut self.as_mut().fut).poll(cx) };
+            let result = unsafe { pin::Pin::new_unchecked(&mut self.as_mut().fut).poll(cx) };
             if result.is_ready() {
                 self.completed = true;
             }

@@ -75,7 +75,7 @@ where
         ctx.call(&self.service, req).await
     }
 
-    ntex_service::forward_shutdown!(service);
+    ntex_service::forward_shutdown!(St, service);
 }
 
 #[cfg(test)]

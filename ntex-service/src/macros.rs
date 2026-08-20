@@ -20,10 +20,10 @@ macro_rules! forward_ready {
 /// An implementation of [`crate::Service::shutdown`] that forwards shutdown checks to a field.
 #[macro_export]
 macro_rules! forward_shutdown {
-    ($field:ident) => {
+    ($st:ty, $field:ident) => {
         #[inline]
-        async fn shutdown(&self) {
-            self.$field.shutdown().await
+        async fn shutdown(&self, ctx: $crate::CtxShutdown<'_, $st>) {
+            self.$field.shutdown(ctx).await
         }
     };
 }

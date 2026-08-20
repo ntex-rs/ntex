@@ -74,7 +74,7 @@ where
     }
 
     crate::forward_ready!(St, svc);
-    crate::forward_shutdown!(svc);
+    crate::forward_shutdown!(St, svc);
 }
 
 #[derive(derive_more::Debug)]
