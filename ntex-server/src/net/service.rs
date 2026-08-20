@@ -141,7 +141,7 @@ impl Service<(), Connection> for StreamService {
         Ok(())
     }
 
-    async fn shutdown(&self) {
+    async fn shutdown(&self, _: Ctx<'_, Self, ()>) {
         let _ = join_all(self.services.iter().map(|s| s.shutdown())).await;
         log::info!(
             "Worker service shutdown, {} connections",

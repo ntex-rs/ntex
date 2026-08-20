@@ -119,7 +119,7 @@ where
         if expire <= now() {
             Err((self.f)())
         } else {
-            ctx.with_context(|cx| match self.sleep.poll_elapsed(cx) {
+            ctx.poll_once(|cx| match self.sleep.poll_elapsed(cx) {
                 Poll::Ready(()) => {
                     let now = now();
                     let expire = self.expire.get() + self.dur;
@@ -167,7 +167,6 @@ mod tests {
 
         fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
             let mut this = self.as_mut();
-
             if ready!(this.p.poll_ready(cx)).is_err() {
                 if let Some(tx) = this.tx.take() {
                     let _ = tx.send(());

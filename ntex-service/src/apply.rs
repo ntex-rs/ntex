@@ -123,7 +123,7 @@ where
         (self.f)(req, &ctx).await
     }
 
-    crate::forward_shutdown!(svc);
+    crate::forward_shutdown!(St, svc);
 }
 
 /// `apply()` service factory
@@ -230,7 +230,7 @@ mod tests {
             Ok(())
         }
 
-        async fn shutdown(&self) {
+        async fn shutdown(&self, _: Ctx<'_, Self, ()>) {
             self.0.set(self.0.get() + 1);
         }
     }

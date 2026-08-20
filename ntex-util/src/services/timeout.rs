@@ -137,7 +137,7 @@ where
     }
 
     ntex_service::forward_ready!(St, service, TimeoutError::Service);
-    ntex_service::forward_shutdown!(service);
+    ntex_service::forward_shutdown!(St, service);
 }
 
 #[cfg(test)]

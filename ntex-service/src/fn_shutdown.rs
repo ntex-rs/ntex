@@ -80,7 +80,7 @@ where
     type Error = Err;
 
     #[inline]
-    async fn shutdown(&self) {
+    async fn shutdown(&self, _: Ctx<'_, Self, St>) {
         if let Some(f) = self.f_shutdown.take() {
             (f)().await;
         }

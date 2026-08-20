@@ -7,8 +7,9 @@ use crate::map::{Map, MapFactory};
 use crate::map_err::{MapErr, MapErrFactory};
 use crate::map_init_err::MapInitErr;
 use crate::middleware::{ApplyMiddleware, Middleware};
+use crate::pipeline::Pipeline;
 use crate::then::{Then, ThenFactory};
-use crate::{IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory};
+use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 /// Constructs new chain with one service.
 pub fn svc<S, St, Req>(service: impl IntoService<S, St, Req>) -> ServiceChain<S, St, Req>
@@ -185,7 +186,7 @@ impl<S: Service<St, Req>, St, Req> Service<St, Req> for ServiceChain<S, St, Req>
     }
 
     crate::forward_ready!(St, service);
-    crate::forward_shutdown!(service);
+    crate::forward_shutdown!(St, service);
 }
 
 impl<Sf: ServiceFactory<St, Req, Cfg>, St, Req, Cfg> ServiceChainFactory<Sf, St, Req, Cfg> {

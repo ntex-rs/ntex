@@ -1,7 +1,10 @@
-use std::{cell, fmt, future::Future, pin::Pin, ptr, rc::Rc, task::Context, task::Poll};
+use std::{cell, fmt, future, pin::Pin, ptr, rc::Rc, task::Context, task::Poll};
 
-use crate::state::{Noop, State, StateMapping};
-use crate::{Ctx, IntoService, Service, ServiceFactory, ctx::WaitersRef};
+use crate::state::{Noop, State};
+use crate::{Ctx, IntoService, Service, ctx::WaitersRef, util::BoxFuture};
+
+pub use crate::pl_factory::PipelineFactory;
+pub use crate::pl_nost::PipelineNostate;
 
 /// Container for a service.
 ///
@@ -10,89 +13,28 @@ pub struct Pipeline<Req, Res, Err> {
     state: Rc<dyn PipelineApi<Req, Res, Err>>,
 }
 
-type BoxFuture<'a, I, E> = Pin<Box<dyn Future<Output = Result<I, E>> + 'a>>;
-
-/// Factory for a service pipeline.
-pub struct PipelineFactory<St, Req, Res, Err, InitCfg, InitErr> {
-    f: Rc<dyn for<'r> Fn(&'r InitCfg, &'r St) -> BoxFuture<'r, Pipeline<Req, Res, Err>, InitErr>>,
-}
-
-impl<St, Req, Res, Err, InitCfg, InitErr> PipelineFactory<St, Req, Res, Err, InitCfg, InitErr> {
-    pub fn new<Sf>(sf: Sf) -> Self
-    where
-        Sf: ServiceFactory<St, Req, InitCfg, Res = Res, Error = Err, InitError = InitErr> + 'static,
-        St: Clone + 'static,
-        Req: 'static,
-        Res: 'static,
-        Err: 'static,
-        InitCfg: 'static,
-    {
-        let sf = Rc::new(sf);
-        Self {
-            f: Rc::new(move |cfg: &InitCfg, st: &St| {
-                let sf = sf.clone();
-                Box::pin(async move { Ok(Pipeline::with_st(st.clone(), sf.create(cfg).await?)) })
-            }),
-        }
-    }
-
-    pub fn with<Sf, Ust, Sm>(sm: Sm, sf: Sf) -> Self
-    where
-        Sf: ServiceFactory<Ust, Req, InitCfg, Res = Res, Error = Err, InitError = InitErr>
-            + 'static,
-        Ust: 'static,
-        St: 'static,
-        Req: 'static,
-        Res: 'static,
-        Err: 'static,
-        InitCfg: 'static,
-        Sm: StateMapping<Ust, St>,
-        Sm::Control: State<Ust, Req>,
-    {
-        let sf = Rc::new(sf);
-        Self {
-            f: Rc::new(move |cfg, st| {
-                let sf = sf.clone();
-                let (sm, _ctl) = sm.map::<Req>(st);
-                Box::pin(async move { Ok(Pipeline::with_st(sm, sf.create(cfg).await?)) })
-            }),
-        }
-    }
-
-    pub async fn create(&self, cfg: &InitCfg, st: &St) -> Result<Pipeline<Req, Res, Err>, InitErr> {
-        (self.f)(cfg, st).await
-    }
-}
-
-impl<St, Req, Res, Err, InitCfg, InitErr> Clone
-    for PipelineFactory<St, Req, Res, Err, InitCfg, InitErr>
-{
-    fn clone(&self) -> Self {
-        PipelineFactory { f: self.f.clone() }
-    }
-}
-
 /// Bound container for a service.
 pub struct PipelineBinding<Req, Res, Err> {
     index: u32,
     state: Rc<dyn PipelineApi<Req, Res, Err>>,
 }
 
+struct PipelineState<S: Service<St, Req>, St, Req, Ctl> {
+    s: S,
+    st: St,
+    st_ctl: Ctl,
+    st_runtime: cell::UnsafeCell<RuntimeState<S::Error>>,
+    waiters: WaitersRef,
+}
+
 trait PipelineApi<Req, Res, Err> {
-    fn register(&self) -> u32;
+    fn reg(&self) -> u32;
 
-    fn unregister(&self, idx: u32);
+    fn unreg(&self, idx: u32);
 
-    fn ready(&self, idx: u32) -> Pin<Box<dyn Future<Output = Result<(), Err>> + '_>>;
+    fn ready(&self, idx: u32) -> BoxFuture<'_, Result<(), Err>>;
 
-    fn call(
-        &self,
-        idx: u32,
-        req: Req,
-        ready: bool,
-    ) -> Pin<Box<dyn Future<Output = Result<Res, Err>> + '_>>;
-
-    fn shutdown(&self) -> Pin<Box<dyn Future<Output = ()> + '_>>;
+    fn call(&self, idx: u32, req: Req, ready: bool) -> BoxFuture<'_, Result<Res, Err>>;
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Err>>;
 
@@ -101,18 +43,11 @@ trait PipelineApi<Req, Res, Err> {
     fn is_shutdown(&self) -> bool;
 }
 
-struct PipelineState<S: Service<St, Req>, St, Req, Ctl> {
-    s: S,
-    waiters: WaitersRef,
-    st: St,
-    st_ctl: Ctl,
-    st_runtime: cell::UnsafeCell<RuntimeState<S::Error>>,
-}
-
 enum RuntimeState<E> {
     New,
-    Readiness(Pin<Box<dyn Future<Output = Result<(), E>>>>),
-    Shutdown(Pin<Box<dyn Future<Output = ()>>>),
+    Readiness(BoxFuture<'static, Result<(), E>>),
+    Shutdown(BoxFuture<'static, ()>),
+    Done,
 }
 
 enum StateRef<'a, T> {
@@ -134,10 +69,6 @@ where
     S: Service<St, Req>,
     Ctl: State<St, Req>,
 {
-    pub(crate) fn waiters_ref(&self) -> &WaitersRef {
-        &self.waiters
-    }
-
     fn st(&self, req: &Req) -> StateRef<'_, St> {
         if let Some(s) = self.st_ctl.on_req(&self.st, req) {
             StateRef::Owned(s)
@@ -154,37 +85,32 @@ where
     Req: 'static,
     Ctl: State<St, Req> + 'static,
 {
-    fn register(&self) -> u32 {
+    fn reg(&self) -> u32 {
         self.waiters.insert()
     }
 
-    fn unregister(&self, index: u32) {
+    fn unreg(&self, index: u32) {
         self.waiters.remove(index);
     }
 
-    fn ready(&self, idx: u32) -> Pin<Box<dyn Future<Output = Result<(), S::Error>> + '_>> {
+    fn ready(&self, idx: u32) -> BoxFuture<'_, Result<(), S::Error>> {
         Box::pin(async move {
-            Ctx::<'_, S, St>::new(idx, self.waiters_ref(), &self.st)
+            Ctx::<'_, S, St>::new(idx, &self.waiters, &self.st)
                 .ready(&self.s)
                 .await
         })
     }
 
-    fn call(
-        &self,
-        idx: u32,
-        req: Req,
-        ready: bool,
-    ) -> Pin<Box<dyn Future<Output = Result<S::Res, S::Error>> + '_>> {
+    fn call(&self, idx: u32, req: Req, ready: bool) -> BoxFuture<'_, Result<S::Res, S::Error>> {
         Box::pin(async move {
             let st = self.st(&req);
 
             if ready {
-                Ctx::<'_, S, St>::new(idx, self.waiters_ref(), st.get_ref())
+                Ctx::<'_, S, St>::new(idx, &self.waiters, st.get_ref())
                     .call(&self.s, req)
                     .await
             } else {
-                Ctx::<'_, S, St>::new(idx, self.waiters_ref(), st.get_ref())
+                Ctx::<'_, S, St>::new(idx, &self.waiters, st.get_ref())
                     .call_nowait(&self.s, req)
                     .await
             }
@@ -208,7 +134,7 @@ where
                 self.poll_ready(cx)
             }
             RuntimeState::Readiness(fut) => Pin::new(fut).poll(cx),
-            RuntimeState::Shutdown(_) => panic!("Pipeline is shutding down"),
+            RuntimeState::Shutdown(_) | RuntimeState::Done => panic!("Pipeline is shutding down"),
         }
     }
 
@@ -220,26 +146,28 @@ where
                 // Pipeline::svc is heap allocated(Rc<S>), and it is being kept alive until
                 // `self` is alive
                 let pl = unsafe { &*(ptr::from_ref(self)) };
-                let fut = Box::pin(async move { pl.s.shutdown().await });
+
+                let fut = Box::pin(async move {
+                    let ctx = Ctx::<'_, S, St>::new(0, &pl.waiters, &pl.st);
+                    pl.s.shutdown(ctx).await;
+                });
                 *st = RuntimeState::Shutdown(fut);
                 pl.waiters.shutdown();
                 self.poll_shutdown(cx)
             }
-            RuntimeState::Shutdown(fut) => Pin::new(fut).poll(cx),
+            RuntimeState::Shutdown(fut) => {
+                let res = Pin::new(fut).poll(cx);
+                if res.is_ready() {
+                    *st = RuntimeState::Done;
+                }
+                res
+            }
+            RuntimeState::Done => Poll::Ready(()),
         }
     }
 
     fn is_shutdown(&self) -> bool {
         self.waiters.is_shutdown()
-    }
-
-    fn shutdown(&self) -> Pin<Box<dyn Future<Output = ()> + '_>> {
-        if self.waiters.is_shutdown() {
-            Box::pin(async {})
-        } else {
-            self.waiters.shutdown();
-            Box::pin(self.s.shutdown())
-        }
     }
 }
 
@@ -324,11 +252,8 @@ where
     /// that resolves to the service result.
     ///
     /// This call can be completed from different async tasks.
-    pub fn call_static(&self, req: Req) -> PipelineCall<Res, Err> {
-        let pl = self.bind();
-        PipelineCall(Box::pin(
-            async move { pl.state.call(pl.index, req, true).await },
-        ))
+    pub fn call_static(&self, req: Req) -> PipelineCall<Req, Res, Err> {
+        PipelineCall::new(self.bind(), req, true)
     }
 
     #[inline]
@@ -336,11 +261,8 @@ where
     ///
     /// This call can be completed from different async tasks.
     /// Note: this call does not check service readiness.
-    pub fn call_nowait(&self, req: Req) -> PipelineCall<Res, Err> {
-        let pl = self.bind();
-        PipelineCall(Box::pin(async move {
-            pl.state.call(pl.index, req, false).await
-        }))
+    pub fn call_nowait(&self, req: Req) -> PipelineCall<Req, Res, Err> {
+        PipelineCall::new(self.bind(), req, false)
     }
 
     #[inline]
@@ -369,7 +291,7 @@ where
     #[inline]
     /// Shuts down the enclosed service.
     pub async fn shutdown(&self) {
-        self.state.shutdown().await;
+        future::poll_fn(|cx| self.state.poll_shutdown(cx)).await;
     }
 
     #[inline]
@@ -384,7 +306,7 @@ where
 impl<Req, Res, Err> Drop for Pipeline<Req, Res, Err> {
     #[inline]
     fn drop(&mut self) {
-        self.state.unregister(0);
+        self.state.unreg(0);
     }
 }
 
@@ -396,7 +318,7 @@ where
 {
     fn new(pl: &Pipeline<Req, Res, Err>) -> Self {
         Self {
-            index: pl.state.register(),
+            index: pl.state.reg(),
             state: pl.state.clone(),
         }
     }
@@ -419,11 +341,8 @@ where
     /// that resolves to the service result.
     ///
     /// This call can be completed from different async tasks.
-    pub fn call_static(&self, req: Req) -> PipelineCall<Res, Err> {
-        let pl = self.clone();
-        PipelineCall(Box::pin(
-            async move { pl.state.call(pl.index, req, true).await },
-        ))
+    pub fn call_static(&self, req: Req) -> PipelineCall<Req, Res, Err> {
+        PipelineCall::new(self.clone(), req, true)
     }
 
     #[inline]
@@ -431,59 +350,70 @@ where
     ///
     /// This call can be completed from different async tasks.
     /// Note: this call does not check service readiness.
-    pub fn call_nowait(&self, req: Req) -> PipelineCall<Res, Err> {
-        let pl = self.clone();
-        PipelineCall(Box::pin(async move {
-            pl.state.call(pl.index, req, false).await
-        }))
+    pub fn call_nowait(&self, req: Req) -> PipelineCall<Req, Res, Err> {
+        PipelineCall::new(self.clone(), req, false)
     }
 
     #[inline]
     /// Shuts down the enclosed service.
     pub async fn shutdown(&self) {
-        self.state.shutdown().await;
-    }
-}
-
-impl<Req, Res, Err> Clone for PipelineBinding<Req, Res, Err> {
-    fn clone(&self) -> Self {
-        Self {
-            index: self.state.register(),
-            state: self.state.clone(),
-        }
+        future::poll_fn(|cx| self.state.poll_shutdown(cx)).await;
     }
 }
 
 impl<Req, Res, Err> Drop for PipelineBinding<Req, Res, Err> {
     #[inline]
     fn drop(&mut self) {
-        self.state.unregister(self.index);
+        self.state.unreg(self.index);
+    }
+}
+
+impl<Req, Res, Err> Clone for PipelineBinding<Req, Res, Err> {
+    fn clone(&self) -> Self {
+        Self {
+            index: self.state.reg(),
+            state: self.state.clone(),
+        }
     }
 }
 
 #[must_use = "futures do nothing unless polled"]
 /// Pipeline call
-pub struct PipelineCall<R, E>(Call<R, E>);
+pub struct PipelineCall<Req, Res, Err> {
+    #[allow(dead_code)]
+    pl: PipelineBinding<Req, Res, Err>,
+    fut: BoxFuture<'static, Result<Res, Err>>,
+}
 
-type Call<R, E> = Pin<Box<dyn Future<Output = Result<R, E>> + 'static>>;
+impl<Req, Res, Err> PipelineCall<Req, Res, Err> {
+    #[allow(clippy::missing_transmute_annotations)]
+    fn new(pl: PipelineBinding<Req, Res, Err>, req: Req, ready: bool) -> Self {
+        // SAFETY: `fut` has same lifetime same as lifetime of `self.pl`.
+        // and it is being kept alive until `self` is alive
+        PipelineCall {
+            fut: unsafe { std::mem::transmute(pl.state.call(pl.index, req, ready)) },
+            pl,
+        }
+    }
+}
 
-impl<R, E> Future for PipelineCall<R, E> {
-    type Output = Result<R, E>;
+impl<Req, Res, Err> future::Future for PipelineCall<Req, Res, Err> {
+    type Output = Result<Res, Err>;
 
     #[inline]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Pin::new(&mut self.as_mut().0).poll(cx)
+        Pin::new(&mut self.as_mut().fut).poll(cx)
     }
 }
 
 fn ready<S, St, Req, Ctl>(
     pl: &'static PipelineState<S, St, Req, Ctl>,
-) -> impl Future<Output = Result<(), S::Error>>
+) -> impl future::Future<Output = Result<(), S::Error>>
 where
     S: Service<St, Req>,
     Ctl: State<St, Req>,
 {
-    pl.s.ready(Ctx::<'_, S, St>::new(0, pl.waiters_ref(), &pl.st))
+    pl.s.ready(Ctx::<'_, S, St>::new(0, &pl.waiters, &pl.st))
 }
 
 struct CheckReadiness<S, St, Req, Ctl, F, Fut>
@@ -540,14 +470,6 @@ impl<Req, Res, Err> fmt::Debug for Pipeline<Req, Res, Err> {
     }
 }
 
-impl<St, Req, Res, Err, Cfg, InitErr> fmt::Debug
-    for PipelineFactory<St, Req, Res, Err, Cfg, InitErr>
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PipelineFactory").finish()
-    }
-}
-
 impl<Req, Res, Err> fmt::Debug for PipelineBinding<Req, Res, Err> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PipelineBinding")
@@ -556,7 +478,7 @@ impl<Req, Res, Err> fmt::Debug for PipelineBinding<Req, Res, Err> {
     }
 }
 
-impl<R, E> fmt::Debug for PipelineCall<R, E> {
+impl<Req, Res, Err> fmt::Debug for PipelineCall<Req, Res, Err> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PipelineCall").finish()
     }

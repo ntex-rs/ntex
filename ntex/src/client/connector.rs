@@ -254,10 +254,10 @@ impl Service<(), Connect> for ConnectorService {
         }
     }
 
-    async fn shutdown(&self) {
-        self.tcp_pool.shutdown().await;
+    async fn shutdown(&self, ctx: Ctx<'_, Self, ()>) {
+        ctx.shutdown(&self.tcp_pool).await;
         if let Some(ref ssl_pool) = self.ssl_pool {
-            ssl_pool.shutdown().await;
+            ctx.shutdown(ssl_pool).await;
         }
     }
 

@@ -37,8 +37,8 @@ where
     }
 
     #[inline]
-    async fn shutdown(&self) {
-        util::shutdown(&self.svc1, &self.svc2).await;
+    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
+        util::shutdown(&self.svc1, &self.svc2, ctx).await;
     }
 }
 
@@ -98,7 +98,7 @@ mod tests {
             Ok(req)
         }
 
-        async fn shutdown(&self) {
+        async fn shutdown(&self, _: Ctx<'_, Self, ()>) {
             self.1.set(self.1.get() + 1);
         }
     }
@@ -119,7 +119,7 @@ mod tests {
             Ok((req, "srv2"))
         }
 
-        async fn shutdown(&self) {
+        async fn shutdown(&self, _: Ctx<'_, Self, ()>) {
             self.1.set(self.1.get() + 1);
         }
     }

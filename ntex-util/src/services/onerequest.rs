@@ -72,7 +72,7 @@ impl<S: Service<St, Req>, St, Req> Service<St, Req> for OneRequestService<S> {
         result
     }
 
-    ntex_service::forward_shutdown!(service);
+    ntex_service::forward_shutdown!(St, service);
 }
 
 #[cfg(test)]

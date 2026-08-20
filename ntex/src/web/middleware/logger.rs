@@ -139,7 +139,7 @@ where
     type Error = S::Error;
 
     crate::forward_ready!(St, service);
-    crate::forward_shutdown!(service);
+    crate::forward_shutdown!(St, service);
 
     async fn call(
         &self,

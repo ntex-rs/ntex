@@ -72,7 +72,7 @@ where
         ctx.ready(&self.svc).await.map_err(&self.f)
     }
 
-    crate::forward_shutdown!(svc);
+    crate::forward_shutdown!(St, svc);
 }
 
 /// Factory for the `map_err` combinator, changing the type of a new
@@ -165,7 +165,7 @@ mod tests {
             Err(())
         }
 
-        async fn shutdown(&self) {
+        async fn shutdown(&self, _: Ctx<'_, Self, ()>) {
             self.1.set(self.1.get() + 1);
         }
     }

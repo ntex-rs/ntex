@@ -164,7 +164,7 @@ where
     type Error = WsError<E>;
 
     crate::forward_ready!(St, srv);
-    crate::forward_shutdown!(srv);
+    crate::forward_shutdown!(St, srv);
 
     async fn call(
         &self,

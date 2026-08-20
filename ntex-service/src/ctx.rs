@@ -1,5 +1,4 @@
-use std::task::{Context, Poll, Waker};
-use std::{cell, fmt, future::Future, marker, pin::Pin, rc::Rc};
+use std::{cell, fmt, future, marker, pin, rc::Rc, task::Context, task::Poll, task::Waker};
 
 use crate::Service;
 
@@ -12,8 +11,8 @@ pub struct Ctx<'a, Svc: ?Sized, St = ()> {
 
 #[derive(Debug)]
 pub(crate) struct WaitersRef {
-    running: cell::Cell<bool>,
     cur: cell::Cell<u32>,
+    running: cell::Cell<bool>,
     shutdown: cell::Cell<bool>,
     wakers: cell::UnsafeCell<Vec<u32>>,
     indexes: cell::UnsafeCell<slab::Slab<Option<Waker>>>,
@@ -24,8 +23,8 @@ impl WaitersRef {
         let mut waiters = slab::Slab::with_capacity(16);
         waiters.insert(None);
         WaitersRef {
-            running: cell::Cell::new(false),
             cur: cell::Cell::new(u32::MAX),
+            running: cell::Cell::new(false),
             shutdown: cell::Cell::new(false),
             indexes: cell::UnsafeCell::new(waiters),
             wakers: cell::UnsafeCell::new(Vec::default()),
@@ -74,6 +73,7 @@ impl WaitersRef {
     where
         F: FnOnce(&mut Context<'_>) -> Poll<R>,
     {
+        // Ctx::poll_xxx() methods requires current waker always available
         self.get()[idx as usize] = Some(cx.waker().clone());
 
         // calculate owner for readiness check
@@ -206,8 +206,34 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     }
 
     #[inline]
+    /// Execute a closure until completion with the dispatcher's task `Context`.
+    pub async fn poll_fn<F, R>(&'a self, f: F) -> R
+    where
+        F: Fn(&mut Context<'a>) -> Poll<R>,
+    {
+        future::poll_fn(move |_| {
+            let wakers = self.waiters.get();
+            let idx = self.waiters.cur.get() as usize;
+            let mut ctx = if let Some(w) = wakers.get(idx).and_then(|w| w.as_ref()) {
+                Context::from_waker(w)
+            } else {
+                Context::from_waker(Waker::noop())
+            };
+
+            // is current runner is not main, we need to wake up main task
+            // to re-register all required wakers
+            if idx != 0 {
+                self.waiters.get_wakers().push(0);
+            }
+
+            f(&mut ctx)
+        })
+        .await
+    }
+
+    #[inline]
     /// Execute a closure with the dispatcher's task `Context`.
-    pub fn with_context<F, R>(&'a self, f: F) -> R
+    pub fn poll_once<F, R>(&'a self, f: F) -> R
     where
         F: FnOnce(&mut Context<'a>) -> R,
     {
@@ -219,7 +245,28 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
             Context::from_waker(Waker::noop())
         };
 
+        // is current runner is not main, we need to wake up main task
+        // to re-register all required wakers
+        if idx != 0 {
+            self.waiters.get_wakers().push(0);
+        }
+
         f(&mut ctx)
+    }
+
+    #[inline]
+    /// Shutdown service
+    pub async fn shutdown<S, Req>(&self, svc: &'a S)
+    where
+        S: Service<St, Req>,
+    {
+        svc.shutdown(Ctx {
+            idx: self.idx,
+            st: self.st,
+            waiters: self.waiters,
+            _t: marker::PhantomData,
+        })
+        .await;
     }
 }
 
@@ -241,14 +288,14 @@ impl<S, St> fmt::Debug for Ctx<'_, S, St> {
     }
 }
 
-struct ReadyCall<'a, F: Future> {
+struct ReadyCall<'a, F: future::Future> {
     completed: bool,
     fut: F,
     idx: u32,
     waiters: &'a WaitersRef,
 }
 
-impl<F: Future> Drop for ReadyCall<'_, F> {
+impl<F: future::Future> Drop for ReadyCall<'_, F> {
     fn drop(&mut self) {
         if !self.completed && self.waiters.cur.get() == self.idx {
             self.waiters.notify();
@@ -256,15 +303,15 @@ impl<F: Future> Drop for ReadyCall<'_, F> {
     }
 }
 
-impl<F: Future> Unpin for ReadyCall<'_, F> {}
+impl<F: future::Future> Unpin for ReadyCall<'_, F> {}
 
-impl<F: Future> Future for ReadyCall<'_, F> {
+impl<F: future::Future> future::Future for ReadyCall<'_, F> {
     type Output = F::Output;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(mut self: pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.waiters.run(self.idx, cx, |cx| {
             // SAFETY: `fut` never moves
-            let result = unsafe { Pin::new_unchecked(&mut self.as_mut().fut).poll(cx) };
+            let result = unsafe { pin::Pin::new_unchecked(&mut self.as_mut().fut).poll(cx) };
             if result.is_ready() {
                 self.completed = true;
             }
@@ -370,6 +417,7 @@ mod tests {
     }
 
     #[ntex::test]
+    #[should_panic(expected = "Pipeline is shutding down")]
     async fn test_ready_after_shutdown() {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
@@ -395,7 +443,7 @@ mod tests {
 
         con.notify();
         let res = lazy(|cx| srv.poll_ready(cx)).await;
-        assert_eq!(res, Poll::Ready(Ok(())));
+        assert_eq!(res, Poll::Pending);
     }
 
     #[ntex::test]

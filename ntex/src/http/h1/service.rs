@@ -4,9 +4,10 @@ use crate::http::config::DispatcherConfig;
 use crate::http::error::{DispatchError, ResponseError};
 use crate::http::{HttpPipeline, body::MessageBody, request::Request, response::Response};
 use crate::io::{Filter, Io, types};
+use crate::service::pipeline::{Pipeline, PipelineBinding};
 use crate::service::{
-    Ctx, IntoService, IntoServiceFactory, Pipeline, PipelineBinding, Service, ServiceFactory,
-    cfg::SharedCfg, state::DefaultState,
+    Ctx, IntoService, IntoServiceFactory, Service, ServiceFactory, cfg::SharedCfg,
+    state::DefaultState,
 };
 use crate::util::dyn_rc_err;
 
@@ -94,7 +95,7 @@ where
         })
     }
 
-    async fn shutdown(&self) {
+    async fn shutdown(&self, _: crate::Ctx<'_, Self, Hst>) {
         self.config.shutdown();
 
         // check inflight connections

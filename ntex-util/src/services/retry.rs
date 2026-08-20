@@ -78,7 +78,7 @@ where
     }
 
     ntex_service::forward_ready!(St, service);
-    ntex_service::forward_shutdown!(service);
+    ntex_service::forward_shutdown!(St, service);
 }
 
 #[derive(Copy, Clone, Debug)]

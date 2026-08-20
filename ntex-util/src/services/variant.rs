@@ -152,9 +152,9 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
             }
         }
 
-        async fn shutdown(&self) {
-            self.V1.shutdown().await;
-            $(self.$T.shutdown().await;)+
+        async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
+            ctx.shutdown(&self.V1).await;
+            $(ctx.shutdown(&&self.$T).await;)+
         }
     }
 
@@ -251,8 +251,6 @@ mod tests {
             Ok(())
         }
 
-        async fn shutdown(&self) {}
-
         async fn call(&self, (): (), _: Ctx<'_, Self>) -> Result<usize, ()> {
             Ok(1)
         }
@@ -268,8 +266,6 @@ mod tests {
         async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
             Ok(())
         }
-
-        async fn shutdown(&self) {}
 
         async fn call(&self, (): (), _: Ctx<'_, Self>) -> Result<usize, ()> {
             Ok(2)
@@ -314,7 +310,6 @@ mod tests {
                 time::sleep(time::Millis(50)).await;
                 Ok(())
             }
-            async fn shutdown(&self) {}
             async fn call(&self, _r: (), _: Ctx<'_, Self>) -> Result<usize, ()> {
                 Ok(2)
             }

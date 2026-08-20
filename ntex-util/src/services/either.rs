@@ -131,10 +131,10 @@ where
     }
 
     #[inline]
-    async fn shutdown(&self) {
+    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
         match self.svc {
-            Either::Left(ref svc) => svc.shutdown().await,
-            Either::Right(ref svc) => svc.shutdown().await,
+            Either::Left(ref svc) => ctx.shutdown(svc).await,
+            Either::Right(ref svc) => ctx.shutdown(svc).await,
         }
     }
 }

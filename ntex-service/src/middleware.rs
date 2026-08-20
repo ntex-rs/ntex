@@ -293,7 +293,7 @@ mod tests {
             ctx.call(&self.0, req).await
         }
 
-        async fn shutdown(&self) {
+        async fn shutdown(&self, _: Ctx<'_, Self, ()>) {
             self.1.set(self.1.get() + 1);
         }
     }

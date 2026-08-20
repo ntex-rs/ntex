@@ -1,4 +1,4 @@
-//pub mod buffer;
+pub mod buffer;
 pub mod either;
 mod extensions;
 pub mod inflight;

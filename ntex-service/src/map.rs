@@ -67,7 +67,7 @@ where
     }
 
     crate::forward_ready!(St, svc);
-    crate::forward_shutdown!(svc);
+    crate::forward_shutdown!(St, svc);
 }
 
 /// `MapNewService` new service combinator
@@ -161,7 +161,7 @@ mod tests {
             Ok(())
         }
 
-        async fn shutdown(&self) {
+        async fn shutdown(&self, _: Ctx<'_, Self, ()>) {
             self.0.set(self.0.get() + 1);
         }
     }
