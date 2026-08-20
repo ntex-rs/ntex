@@ -203,7 +203,7 @@ where
                 let fut = Box::pin(async move {
                     Ctx::<'_, S, St>::new(0, &pl.waiters, st)
                         .shutdown(&pl.s)
-                        .await
+                        .await;
                 });
                 *pl_state = RuntimeState::Shutdown(fut);
                 pl.waiters.shutdown();

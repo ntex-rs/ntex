@@ -266,7 +266,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
             waiters: self.waiters,
             _t: marker::PhantomData,
         })
-        .await
+        .await;
     }
 }
 

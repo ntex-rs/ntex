@@ -63,7 +63,7 @@ impl<St, Req, Res, Err> Service<St, Req> for BoxService<St, Req, Res, Err> {
     #[inline]
     async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
         let (idx, waiters, st) = ctx.inner();
-        self.inner.shutdown(idx, waiters, st).await
+        self.inner.shutdown(idx, waiters, st).await;
     }
 }
 
