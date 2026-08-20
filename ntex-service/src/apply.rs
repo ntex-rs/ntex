@@ -212,7 +212,7 @@ mod tests {
     use std::{cell::Cell, rc::Rc};
 
     use super::*;
-    use crate::{CtxShutdown, factory, fn_factory, svc};
+    use crate::{factory, fn_factory, svc};
 
     #[derive(Debug, Default, Clone)]
     struct Srv(Rc<Cell<usize>>);
@@ -230,7 +230,7 @@ mod tests {
             Ok(())
         }
 
-        async fn shutdown(&self, _: CtxShutdown<'_, ()>) {
+        async fn shutdown(&self, _: Ctx<'_, Self, ()>) {
             self.0.set(self.0.get() + 1);
         }
     }

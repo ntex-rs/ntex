@@ -1,6 +1,6 @@
 use std::{cell::Cell, convert::Infallible, fmt, marker::PhantomData};
 
-use crate::{Ctx, CtxShutdown, Service, ServiceFactory};
+use crate::{Ctx, Service, ServiceFactory};
 
 #[inline]
 /// Create `FnShutdown` for function that can act as a `on_shutdown` callback.
@@ -80,7 +80,7 @@ where
     type Error = Err;
 
     #[inline]
-    async fn shutdown(&self, _: CtxShutdown<'_, St>) {
+    async fn shutdown(&self, _: Ctx<'_, Self, St>) {
         if let Some(f) = self.f_shutdown.take() {
             (f)().await;
         }

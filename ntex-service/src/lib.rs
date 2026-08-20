@@ -36,7 +36,7 @@ mod pl_nost;
 
 pub use crate::apply::{apply_fn, apply_fn_factory};
 pub use crate::chain::{ServiceChain, ServiceChainFactory, factory, factory_with_st, svc};
-pub use crate::ctx::{Ctx, CtxShutdown};
+pub use crate::ctx::Ctx;
 pub use crate::fn_service::{fn_factory, fn_factory_with_config, fn_service, fn_service_st};
 pub use crate::fn_shutdown::fn_shutdown;
 pub use crate::map_config::{map_config, unit_config};
@@ -132,7 +132,7 @@ pub trait Service<St, Req> {
     /// Shuts down the service.
     ///
     /// Returns when the service has been properly shut down.
-    async fn shutdown(&self, cfg: CtxShutdown<'_, St>) {}
+    async fn shutdown(&self, cfg: Ctx<'_, Self, St>) {}
 
     #[inline]
     /// Maps this service's output to a different type, returning a new service.
@@ -279,8 +279,8 @@ where
     }
 
     #[inline]
-    async fn shutdown(&self, ctx: CtxShutdown<'_, St>) {
-        (**self).shutdown(ctx).await;
+    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
+        ctx.shutdown(&**self).await;
     }
 }
 
@@ -302,8 +302,8 @@ where
     }
 
     #[inline]
-    async fn shutdown(&self, ctx: CtxShutdown<'_, St>) {
-        (**self).shutdown(ctx).await;
+    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
+        ctx.shutdown(&**self).await;
     }
 }
 

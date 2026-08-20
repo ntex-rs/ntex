@@ -38,8 +38,8 @@ pub mod web;
 pub mod ws;
 
 pub use self::service::{
-    Ctx, CtxShutdown, IntoService, IntoServiceFactory, Middleware, Service, ServiceFactory,
-    cfg::Cfg, cfg::SharedCfg, factory, fn_service, pipeline::Pipeline, pipeline::PipelineBinding,
+    Ctx, IntoService, IntoServiceFactory, Middleware, Service, ServiceFactory, cfg::Cfg,
+    cfg::SharedCfg, factory, fn_service, pipeline::Pipeline, pipeline::PipelineBinding,
     pipeline::PipelineFactory, svc,
 };
 

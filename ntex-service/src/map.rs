@@ -144,7 +144,7 @@ where
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use crate::{Ctx, CtxShutdown, Pipeline, Service, ServiceFactory, fn_factory};
+    use crate::{Ctx, Pipeline, Service, ServiceFactory, fn_factory};
 
     #[derive(Debug, Default, Clone)]
     struct Srv(Rc<Cell<usize>>);
@@ -161,7 +161,7 @@ mod tests {
             Ok(())
         }
 
-        async fn shutdown(&self, _: CtxShutdown<'_, ()>) {
+        async fn shutdown(&self, _: Ctx<'_, Self, ()>) {
             self.0.set(self.0.get() + 1);
         }
     }

@@ -9,10 +9,6 @@ pub struct Ctx<'a, Svc: ?Sized, St = ()> {
     _t: marker::PhantomData<Rc<Svc>>,
 }
 
-pub struct CtxShutdown<'a, St = ()> {
-    st: &'a St,
-}
-
 #[derive(Debug)]
 pub(crate) struct WaitersRef {
     cur: cell::Cell<u32>,
@@ -257,6 +253,21 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
 
         f(&mut ctx)
     }
+
+    #[inline]
+    /// Shutdown service
+    pub async fn shutdown<S, Req>(&self, svc: &'a S)
+    where
+        S: Service<St, Req>,
+    {
+        svc.shutdown(Ctx {
+            idx: self.idx,
+            st: self.st,
+            waiters: self.waiters,
+            _t: marker::PhantomData,
+        })
+        .await
+    }
 }
 
 impl<S, St> Copy for Ctx<'_, S, St> {}
@@ -274,33 +285,6 @@ impl<S, St> fmt::Debug for Ctx<'_, S, St> {
             .field("idx", &self.idx)
             .field("waiters", &self.waiters.get().len())
             .finish()
-    }
-}
-
-impl<'a, St> CtxShutdown<'a, St> {
-    pub(crate) fn new(st: &'a St) -> Self {
-        Self { st }
-    }
-
-    #[inline]
-    /// Application state
-    pub fn st(&'a self) -> &'a St {
-        self.st
-    }
-}
-
-impl<St> Copy for CtxShutdown<'_, St> {}
-
-impl<St> Clone for CtxShutdown<'_, St> {
-    #[inline]
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<St> fmt::Debug for CtxShutdown<'_, St> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CtxShutdown").finish()
     }
 }
 

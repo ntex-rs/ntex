@@ -22,8 +22,8 @@ macro_rules! forward_ready {
 macro_rules! forward_shutdown {
     ($st:ty, $field:ident) => {
         #[inline]
-        async fn shutdown(&self, ctx: $crate::CtxShutdown<'_, $st>) {
-            self.$field.shutdown(ctx).await
+        async fn shutdown(&self, ctx: $crate::Ctx<'_, Self, $st>) {
+            ctx.shutdown(&self.$field).await
         }
     };
 }

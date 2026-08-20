@@ -1,6 +1,6 @@
 use std::{fmt, rc::Rc};
 
-use crate::ctx::{Ctx, CtxShutdown, WaitersRef};
+use crate::ctx::{Ctx, WaitersRef};
 use crate::{Service, ServiceFactory, util::BoxFuture};
 
 // ============================ Service =============================
@@ -61,8 +61,9 @@ impl<St, Req, Res, Err> Service<St, Req> for BoxService<St, Req, Res, Err> {
     }
 
     #[inline]
-    async fn shutdown(&self, ctx: CtxShutdown<'_, St>) {
-        self.inner.shutdown(ctx.st()).await;
+    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
+        let (idx, waiters, st) = ctx.inner();
+        self.inner.shutdown(idx, waiters, st).await
     }
 }
 
@@ -87,7 +88,7 @@ trait ServiceObj<St, Req> {
     where
         Req: 'a;
 
-    fn shutdown<'a>(&'a self, s: &'a St) -> BoxFuture<'a, ()>
+    fn shutdown<'a>(&'a self, idx: u32, waiters: &'a WaitersRef, st: &'a St) -> BoxFuture<'a, ()>
     where
         St: 'a,
         Req: 'a;
@@ -129,12 +130,12 @@ where
     }
 
     #[inline]
-    fn shutdown<'a>(&'a self, st: &'a St) -> BoxFuture<'a, ()>
+    fn shutdown<'a>(&'a self, idx: u32, waiters: &'a WaitersRef, st: &'a St) -> BoxFuture<'a, ()>
     where
         St: 'a,
         Req: 'a,
     {
-        Box::pin(Service::shutdown(self, CtxShutdown::new(st)))
+        Box::pin(async move { Ctx::<'a, S, St>::new(idx, waiters, st).shutdown(self).await })
     }
 }
 

@@ -2,7 +2,7 @@
 #![allow(non_snake_case)]
 use std::{fmt, marker::PhantomData, task::Poll};
 
-use ntex_service::{Ctx, CtxShutdown, IntoServiceFactory, Service, ServiceFactory};
+use ntex_service::{Ctx, IntoServiceFactory, Service, ServiceFactory};
 
 /// Construct `Variant` service factory.
 ///
@@ -152,9 +152,9 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
             }
         }
 
-        async fn shutdown(&self, ctx: CtxShutdown<'_, St>) {
-            self.V1.shutdown(ctx).await;
-            $(self.$T.shutdown(ctx).await;)+
+        async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
+            ctx.shutdown(&self.V1).await;
+            $(ctx.shutdown(&&self.$T).await;)+
         }
     }
 

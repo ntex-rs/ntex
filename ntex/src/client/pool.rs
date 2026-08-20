@@ -150,7 +150,7 @@ impl Service<(), Connect> for ConnectionPool {
     }
 
     #[inline]
-    async fn shutdown(&self, _: crate::CtxShutdown<'_, ()>) {
+    async fn shutdown(&self, _: crate::Ctx<'_, Self, ()>) {
         self.0.stop.take();
         self.0.inner.borrow_mut().stopped = true;
         self.0.svc.shutdown().await;

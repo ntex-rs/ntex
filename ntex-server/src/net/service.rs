@@ -1,6 +1,6 @@
 use std::fmt;
 
-use ntex_service::{Ctx, CtxShutdown, Service, cfg::SharedCfg};
+use ntex_service::{Ctx, Service, cfg::SharedCfg};
 use ntex_util::{HashMap, future::join_all, services::Counter};
 
 use crate::ServerConfiguration;
@@ -141,7 +141,7 @@ impl Service<(), Connection> for StreamService {
         Ok(())
     }
 
-    async fn shutdown(&self, _: CtxShutdown<'_, ()>) {
+    async fn shutdown(&self, _: Ctx<'_, Self, ()>) {
         let _ = join_all(self.services.iter().map(|s| s.shutdown())).await;
         log::info!(
             "Worker service shutdown, {} connections",

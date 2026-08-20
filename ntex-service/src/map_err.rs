@@ -148,7 +148,7 @@ mod tests {
     use std::{cell::Cell, rc::Rc};
 
     use super::*;
-    use crate::{CtxShutdown, Pipeline, fn_factory};
+    use crate::{Pipeline, fn_factory};
 
     #[derive(Debug, Clone)]
     struct Srv(bool, Rc<Cell<usize>>);
@@ -165,7 +165,7 @@ mod tests {
             Err(())
         }
 
-        async fn shutdown(&self, _: CtxShutdown<'_, ()>) {
+        async fn shutdown(&self, _: Ctx<'_, Self, ()>) {
             self.1.set(self.1.get() + 1);
         }
     }

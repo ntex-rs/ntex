@@ -3,8 +3,7 @@
 use std::cell::{Cell, RefCell};
 use std::{collections::VecDeque, fmt, future, marker, task, task::Poll};
 
-use ntex_service::pipeline::PipelineNostate;
-use ntex_service::{Ctx, CtxShutdown, Middleware, Service};
+use ntex_service::{Ctx, Middleware, Service, pipeline::PipelineNostate};
 
 use crate::channel::oneshot;
 
@@ -189,7 +188,7 @@ where
         .await
     }
 
-    async fn shutdown(&self, ctx: CtxShutdown<'_, St>) {
+    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
         // hold advancement until the last released task either makes a call or is dropped
         let next_call = self.next_call.borrow_mut().take();
         if let Some(next_call) = next_call {

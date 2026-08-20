@@ -264,7 +264,7 @@ mod tests {
     use std::{cell::Cell, rc::Rc};
 
     use super::*;
-    use crate::{Ctx, CtxShutdown, Pipeline, factory, fn_service};
+    use crate::{Ctx, Pipeline, factory, fn_service};
 
     #[derive(Debug, Clone)]
     struct Mw(Rc<Cell<usize>>);
@@ -293,7 +293,7 @@ mod tests {
             ctx.call(&self.0, req).await
         }
 
-        async fn shutdown(&self, _: CtxShutdown<'_, ()>) {
+        async fn shutdown(&self, _: Ctx<'_, Self, ()>) {
             self.1.set(self.1.get() + 1);
         }
     }
