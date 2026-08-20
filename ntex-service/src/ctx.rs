@@ -12,8 +12,8 @@ pub struct Ctx<'a, Svc: ?Sized, St = ()> {
 
 #[derive(Debug)]
 pub(crate) struct WaitersRef {
-    running: cell::Cell<bool>,
     cur: cell::Cell<u32>,
+    running: cell::Cell<bool>,
     shutdown: cell::Cell<bool>,
     wakers: cell::UnsafeCell<Vec<u32>>,
     indexes: cell::UnsafeCell<slab::Slab<Option<Waker>>>,
@@ -24,8 +24,8 @@ impl WaitersRef {
         let mut waiters = slab::Slab::with_capacity(16);
         waiters.insert(None);
         WaitersRef {
-            running: cell::Cell::new(false),
             cur: cell::Cell::new(u32::MAX),
+            running: cell::Cell::new(false),
             shutdown: cell::Cell::new(false),
             indexes: cell::UnsafeCell::new(waiters),
             wakers: cell::UnsafeCell::new(Vec::default()),
@@ -370,6 +370,7 @@ mod tests {
     }
 
     #[ntex::test]
+    #[should_panic(expected = "Pipeline is shutding down")]
     async fn test_ready_after_shutdown() {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
@@ -395,7 +396,7 @@ mod tests {
 
         con.notify();
         let res = lazy(|cx| srv.poll_ready(cx)).await;
-        assert_eq!(res, Poll::Ready(Ok(())));
+        assert_eq!(res, Poll::Pending);
     }
 
     #[ntex::test]

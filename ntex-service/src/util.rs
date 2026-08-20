@@ -2,6 +2,8 @@ use std::{future::Future, future::poll_fn, pin, pin::Pin, task::Poll};
 
 use crate::{Ctx, Service};
 
+pub(crate) type BoxFuture<'a, R> = Pin<Box<dyn Future<Output = R> + 'a>>;
+
 pub(crate) async fn shutdown<A, B, St, R1, R2>(svc1: &A, svc2: &B)
 where
     A: Service<St, R1>,

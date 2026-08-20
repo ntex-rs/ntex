@@ -1,9 +1,9 @@
 //! Service that buffers incoming requests.
 use std::cell::{Cell, RefCell};
 use std::task::{Poll, Waker, ready};
-use std::{collections::VecDeque, fmt, future::poll_fn};
+use std::{collections::VecDeque, fmt, future::poll_fn, marker::PhantomData};
 
-use ntex_service::{Middleware, Pipeline, Service, Ctx};
+use ntex_service::{Ctx, Middleware, Pipeline, Service};
 
 use crate::channel::oneshot;
 
@@ -45,9 +45,9 @@ impl Default for Buffer {
     }
 }
 
-impl<S, C> Middleware<S, C> for Buffer
+impl<C> Middleware<S, C> for Buffer
 where
-    S: Service + 'static,
+    S: 'static,
 {
     type Service = BufferService<S>;
 
@@ -72,9 +72,7 @@ impl<E: fmt::Display> fmt::Display for BufferServiceError<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             BufferServiceError::Service(e) => fmt::Display::fmt(e, f),
-            BufferServiceError::RequestCanceled => {
-                f.write_str("buffer service request canceled")
-            }
+            BufferServiceError::RequestCanceled => f.write_str("buffer service request canceled"),
         }
     }
 }
@@ -84,19 +82,20 @@ impl<E: fmt::Display + fmt::Debug> std::error::Error for BufferServiceError<E> {
 /// Buffer service - service that can buffer incoming requests.
 ///
 /// Default number of buffered requests is 16
-pub struct BufferService<S: Service> {
+pub struct BufferService<S: Service<St, Req>, St, Req> {
     size: usize,
     ready: Cell<bool>,
-    service: Pipeline<S>,
+    service: Pipeline<Req, S::Res, S::Error>,
     buf: RefCell<VecDeque<oneshot::Sender<oneshot::Sender<()>>>>,
     next_call: RefCell<Option<oneshot::Receiver<()>>>,
     cancel_on_shutdown: bool,
     readiness: Cell<Option<Waker>>,
 }
 
-impl<S> BufferService<S>
+impl<S, St, Req> BufferService<S, St, Req>
 where
-    S: Service + 'static,
+    S: Service<St, Req> + 'static,
+    St: Default + 'static,
 {
     #[must_use]
     pub fn new(size: usize, service: S) -> Self {
@@ -188,9 +187,7 @@ where
             } else {
                 while let Some(sender) = buffer.pop_front() {
                     let (next_call_tx, next_call_rx) = oneshot::channel();
-                    if sender.send(next_call_tx).is_err()
-                        || next_call_rx.poll_recv(cx).is_ready()
-                    {
+                    if sender.send(next_call_tx).is_err() || next_call_rx.poll_recv(cx).is_ready() {
                         // the task is gone
                         continue;
                     }
@@ -221,17 +218,13 @@ where
 
             if !buffer.is_empty() {
                 if ready!(self.service.poll_ready(cx)).is_err() {
-                    log::error!(
-                        "Buffered inner service failed while buffer flushing on shutdown"
-                    );
+                    log::error!("Buffered inner service failed while buffer flushing on shutdown");
                     return Poll::Ready(());
                 }
 
                 while let Some(sender) = buffer.pop_front() {
                     let (next_call_tx, next_call_rx) = oneshot::channel();
-                    if sender.send(next_call_tx).is_err()
-                        || next_call_rx.poll_recv(cx).is_ready()
-                    {
+                    if sender.send(next_call_tx).is_err() || next_call_rx.poll_recv(cx).is_ready() {
                         // the task is gone
                         continue;
                     }
@@ -249,11 +242,7 @@ where
         self.service.shutdown().await;
     }
 
-    async fn call(
-        &self,
-        req: S::Req,
-        ctx: Ctx<'_, Self>,
-    ) -> Result<Self::Res, Self::Error> {
+    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self>) -> Result<Self::Res, Self::Error> {
         if self.ready.get() {
             self.ready.set(false);
             Ok(self.service.call_nowait(req, ctx.st().clone()).await?)
@@ -325,8 +314,7 @@ mod tests {
             count: Cell::new(0),
         });
 
-        let srv =
-            Pipeline::new(BufferService::new(2, TestService(inner.clone())).clone()).bind();
+        let srv = Pipeline::new(BufferService::new(2, TestService(inner.clone())).clone()).bind();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let srv1 = srv.clone();

@@ -7,8 +7,8 @@ use ntex_h2::{self as h2};
 use crate::error::Error;
 use crate::http::uri::{Authority, Scheme, Uri};
 use crate::io::{IoBoxed, types::HttpProtocol};
-use crate::service::cfg::SharedCfg;
-use crate::service::{Ctx, Pipeline, PipelineBinding, PipelineCall, Service};
+use crate::service::pipeline::{Pipeline, PipelineBinding, PipelineCall};
+use crate::service::{Ctx, Service, cfg::SharedCfg};
 use crate::util::{ByteString, Either, HashMap, HashSet, select};
 use crate::{channel::inplace, channel::oneshot, channel::pool, rt::spawn, time::now};
 
@@ -416,7 +416,7 @@ pin_project_lite::pin_project! {
     struct OpenConnection {
         key: Key,
         #[pin]
-        fut: PipelineCall<IoBoxed, Error<ConnectError>>,
+        fut: PipelineCall<Connect, IoBoxed, Error<ConnectError>>,
         uri: Uri,
         tx: Option<Waiter>,
         guard: Option<OpenGuard>,
@@ -430,7 +430,7 @@ impl OpenConnection {
         tx: Waiter,
         uri: Uri,
         inner: Rc<RefCell<Inner>>,
-        fut: PipelineCall<IoBoxed, Error<ConnectError>>,
+        fut: PipelineCall<Connect, IoBoxed, Error<ConnectError>>,
     ) {
         spawn(async move {
             OpenConnection {

@@ -10,7 +10,8 @@ use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::message::{CurrentIo, ResponseHead};
 use crate::http::{DateService, HttpPipeline, Method, Request, Response, StatusCode, Uri, Version};
 use crate::io::{Filter, Io, IoBoxed, IoRef, types};
-use crate::service::{Ctx, Pipeline, PipelineBinding, Service, ServiceFactory};
+use crate::service::pipeline::{Pipeline, PipelineBinding};
+use crate::service::{Ctx, Service, ServiceFactory};
 use crate::service::{IntoService, IntoServiceFactory, cfg::SharedCfg, state::DefaultState};
 use crate::util::{Bytes, BytesMut, HashMap, dyn_rc_err};
 

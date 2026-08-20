@@ -26,20 +26,23 @@ mod map_config;
 mod map_err;
 mod map_init_err;
 mod middleware;
-mod pipeline;
 pub mod state;
 mod then;
 mod util;
 
-pub use self::apply::{apply_fn, apply_fn_factory};
-pub use self::chain::{ServiceChain, ServiceChainFactory, factory, factory_with_st, svc};
-pub use self::ctx::Ctx;
-pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service, fn_service_st};
-pub use self::fn_shutdown::fn_shutdown;
-pub use self::map_config::{map_config, unit_config};
-pub use self::middleware::{Identity, Middleware, Stack, apply, fn_layer};
-pub use self::pipeline::{Pipeline, PipelineBinding, PipelineCall, PipelineFactory};
-pub use self::state::StateMapping;
+pub mod pipeline;
+mod pl_factory;
+// mod pl_nost;
+
+pub use crate::apply::{apply_fn, apply_fn_factory};
+pub use crate::chain::{ServiceChain, ServiceChainFactory, factory, factory_with_st, svc};
+pub use crate::ctx::Ctx;
+pub use crate::fn_service::{fn_factory, fn_factory_with_config, fn_service, fn_service_st};
+pub use crate::fn_shutdown::fn_shutdown;
+pub use crate::map_config::{map_config, unit_config};
+pub use crate::middleware::{Identity, Middleware, Stack, apply, fn_layer};
+pub use crate::pipeline::Pipeline;
+pub use crate::state::StateMapping;
 
 #[allow(unused_variables)]
 /// An asynchronous function from a `Request` to a `Response`.

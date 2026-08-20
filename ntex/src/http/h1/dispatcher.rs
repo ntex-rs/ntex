@@ -3,7 +3,7 @@ use std::task::{Context, Poll, ready};
 use std::{error, future, io, mem, pin::Pin, rc::Rc};
 
 use crate::io::{Decoded, Filter, Io, IoStatusUpdate, RecvError};
-use crate::service::{Pipeline, PipelineBinding, PipelineCall};
+use crate::service::pipeline::{Pipeline, PipelineBinding, PipelineCall};
 use crate::{channel::bstream, time::Seconds, util::Either};
 
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
@@ -40,10 +40,10 @@ pin_project_lite::pin_project! {
 #[derive(Debug)]
 enum State<F, B, Err> {
     CallPublish {
-        fut: PipelineCall<Response<B>, Err>,
+        fut: PipelineCall<Request, Response<B>, Err>,
     },
     CallControl {
-        fut: PipelineCall<ControlAck<F>, Rc<dyn error::Error>>,
+        fut: PipelineCall<Control<F, Err>, ControlAck<F>, Rc<dyn error::Error>>,
     },
     ReadRequest,
     ReadPayload,
@@ -65,7 +65,6 @@ struct DispatcherInner<F, B, Err> {
     read_remains: u32,
     read_consumed: u32,
     read_max_timeout: Seconds,
-    // _t: marker::PhantomData<(S, B)>,
 }
 
 impl<F, B, Err> Dispatcher<F, B, Err>

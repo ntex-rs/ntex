@@ -6,7 +6,7 @@ use std::{cell::Cell, fmt, future::Future, io, pin::Pin, rc::Rc};
 
 use ntex_codec::{Decoder, Encoder};
 use ntex_io::{Decoded, IoBoxed, IoStatusUpdate, RecvError};
-use ntex_service::{Pipeline, PipelineCall};
+use ntex_service::pipeline::{Pipeline, PipelineCall};
 use ntex_util::{future::Either, spawn, time::Seconds};
 
 type Response<U> = <U as Encoder>::Item;
@@ -77,7 +77,7 @@ where
     st: DispatcherState,
     error: Option<Err>,
     shared: Rc<DispatcherShared<U, Err>>,
-    response: Option<PipelineCall<Option<Response<U>>, Err>>,
+    response: Option<PipelineCall<DispatchItem<U>, Option<Response<U>>, Err>>,
     read_remains: u32,
     read_remains_prev: u32,
     read_max_timeout: Seconds,
