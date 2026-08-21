@@ -24,10 +24,8 @@ async fn main() -> Result<(), Error<ClientError>> {
 
     // create client
     let client = Client::builder()
-        .connector::<&str>(Connector::default().openssl(builder.build()))
-        .build(SharedCfg::default())
-        .await
-        .unwrap();
+        .connector(Connector::builder(SharedCfg::default()).openssl(builder.build()))
+        .build();
 
     // Create request builder, configure request and send
     let response = client

@@ -20,7 +20,7 @@ use crate::http::{body::BodySize, error::HttpError};
 use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, Layer, Reason, Sealed};
 use crate::service::{IntoService, Pipeline, apply_fn, fn_service};
 use crate::time::{Millis, timeout};
-use crate::{Service, ServiceFactory, SharedCfg, channel::mpsc, rt, ws};
+use crate::{Service, SharedCfg, channel::mpsc, rt, ws};
 
 use super::error::{WsClientBuilderError, WsClientError, WsError};
 use super::transport::WsTransport;
@@ -45,6 +45,7 @@ pub struct WsClient<F> {
 /// `WebSocket` client builder
 pub struct WsClientBuilder<F, T> {
     inner: Option<Inner<F, T>>,
+    cfg: SharedCfg,
     err: Option<HttpError>,
     protocols: Option<String>,
     origin: Option<HeaderValue>,
@@ -64,24 +65,28 @@ struct Inner<F, T> {
 
 impl WsClient<Base> {
     /// Create new websocket client builder
-    pub fn builder<U>(uri: U) -> WsClientBuilder<Base, Connector<Uri>>
+    pub fn builder<U>(uri: U, cfg: impl Into<SharedCfg>) -> WsClientBuilder<Base, Connector<Uri>>
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
     {
-        WsClientBuilder::new(uri)
+        WsClientBuilder::new(uri, cfg.into())
     }
 
     /// Create new websocket client builder
-    pub fn with_connector<F, T, U>(uri: U, connector: T) -> WsClientBuilder<F, T>
+    pub fn with_connector<F, S, U, I>(
+        uri: U,
+        cfg: impl Into<SharedCfg>,
+        f: I,
+    ) -> WsClientBuilder<F, S>
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
         F: Filter + 'static,
-        T: ServiceFactory<(), Connect<Uri>, SharedCfg, Res = Io<F>, Error = Error<ConnectError>>
-            + 'static,
+        S: Service<(), Connect<Uri>, Res = Io<F>, Error = Error<ConnectError>> + 'static,
+        I: IntoService<S, (), Connect<Uri>>,
     {
-        WsClientBuilder::new(uri).connector(connector)
+        WsClientBuilder::new(uri, cfg.into()).connector(f.into_service())
     }
 }
 
@@ -281,11 +286,14 @@ impl<F> fmt::Debug for WsClient<F> {
 impl WsClientBuilder<Base, ()> {
     #[must_use]
     /// Create new client builder.
-    fn new<U>(uri: U) -> WsClientBuilder<Base, Connector<Uri>>
+    fn new<U>(uri: U, cfg: impl Into<SharedCfg>) -> WsClientBuilder<Base, Connector<Uri>>
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
     {
+        let cfg = cfg.into();
+        let connector = Connector::<Uri>::with(cfg.clone());
+
         let mut head = Message::<RequestHead>::new();
         // the message pool may return a recycled head whose method is not GET
         // (e.g. previously used by the HTTP/1 server dispatcher for a POST request)
@@ -300,15 +308,16 @@ impl WsClientBuilder<Base, ()> {
 
         WsClientBuilder {
             err,
+            cfg,
             origin: None,
             protocols: None,
             inner: Some(Inner {
                 head,
+                connector,
                 addr: None,
                 max_size: 65_536,
                 server_mode: false,
                 timeout: Millis(5_000),
-                connector: Connector::<Uri>::default(),
                 _t: marker::PhantomData,
             }),
             #[cfg(feature = "cookie")]
@@ -317,11 +326,10 @@ impl WsClientBuilder<Base, ()> {
     }
 }
 
-impl<F, T> WsClientBuilder<F, T>
+impl<F, S> WsClientBuilder<F, S>
 where
     F: 'static,
-    T: ServiceFactory<(), Connect<Uri>, SharedCfg, Res = Io<F>, Error = Error<ConnectError>>
-        + 'static,
+    S: Service<(), Connect<Uri>, Res = Io<F>, Error = Error<ConnectError>> + 'static,
 {
     /// Set socket address of the server.
     ///
@@ -502,17 +510,17 @@ where
     }
 
     /// Use custom connector.
-    pub fn connector<F1, T1>(&mut self, connector: T1) -> WsClientBuilder<F1, T1>
+    pub fn connector<F1, T1, U>(&mut self, f: U) -> WsClientBuilder<F1, T1>
     where
         F1: Filter + 'static,
-        T1: ServiceFactory<(), Connect<Uri>, SharedCfg, Res = Io<F1>, Error = Error<ConnectError>>
-            + 'static,
+        T1: Service<(), Connect<Uri>, Res = Io<F1>, Error = Error<ConnectError>> + 'static,
+        U: IntoService<T1, (), Connect<Uri>>,
     {
         let inner = self.inner.take().expect("cannot reuse WsClient builder");
 
         WsClientBuilder {
             inner: Some(Inner {
-                connector,
+                connector: f.into_service(),
                 head: inner.head,
                 addr: inner.addr,
                 max_size: inner.max_size,
@@ -521,6 +529,7 @@ where
                 _t: marker::PhantomData,
             }),
             err: self.err.take(),
+            cfg: self.cfg.clone(),
             protocols: self.protocols.take(),
             origin: self.origin.take(),
             #[cfg(feature = "cookie")]
@@ -532,9 +541,11 @@ where
     /// Use openssl connector.
     pub fn openssl(
         &mut self,
-        connector: tls_openssl::ssl::SslConnector,
+        config: tls_openssl::ssl::SslConnector,
     ) -> WsClientBuilder<Layer<openssl::SslFilter>, openssl::SslConnector<Connector<Uri>>> {
-        self.connector(openssl::SslConnector::new(connector))
+        self.connector(
+            openssl::SslConnector::new(config).connector(Connector::with(self.cfg.clone())),
+        )
     }
 
     #[cfg(feature = "rustls")]
@@ -543,14 +554,17 @@ where
         &mut self,
         config: std::sync::Arc<tls_rustls::ClientConfig>,
     ) -> WsClientBuilder<Layer<rustls::TlsClientFilter>, rustls::TlsConnector<Connector<Uri>>> {
-        self.connector(rustls::TlsConnector::from(config))
+        self.connector(
+            rustls::TlsConnector::from(config).connector(Connector::with(self.cfg.clone())),
+        )
     }
 
     #[must_use]
     /// This method construct new `WsClientBuilder`
-    pub fn take(&mut self) -> WsClientBuilder<F, T> {
+    pub fn take(&mut self) -> WsClientBuilder<F, S> {
         WsClientBuilder {
             inner: self.inner.take(),
+            cfg: self.cfg.clone(),
             err: self.err.take(),
             origin: self.origin.take(),
             protocols: self.protocols.take(),
@@ -564,15 +578,10 @@ where
     /// # Panics
     ///
     /// Panics if client build is reused.
-    pub async fn build<U: Into<SharedCfg>>(
-        &mut self,
-        cfg: U,
-    ) -> Result<WsClient<F>, WsClientBuilderError<T::InitError>> {
+    pub fn build(&mut self) -> Result<WsClient<F>, WsClientBuilderError> {
         if let Some(e) = self.err.take() {
             return Err(WsClientBuilderError::Http(e));
         }
-
-        let cfg = cfg.into();
         let mut inner = self.inner.take().expect("cannot reuse WsClient builder");
 
         // validate uri
@@ -638,14 +647,8 @@ where
             );
         }
 
-        let connector = inner
-            .connector
-            .create(&cfg)
-            .await
-            .map_err(WsClientBuilderError::Connector)?;
-
         Ok(WsClient {
-            connector: Pipeline::new(connector),
+            connector: Pipeline::new(inner.connector),
             head: inner.head,
             addr: inner.addr,
             max_size: inner.max_size,
@@ -808,14 +811,14 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_debug() {
-        let mut builder = WsClient::builder("http://localhost")
+        let mut builder = WsClient::builder("http://localhost", SharedCfg::default())
             .header("x-test", "111")
             .take();
         let repr = format!("{builder:?}");
         assert!(repr.contains("WsClientBuilder"));
         assert!(repr.contains("x-test"));
 
-        let client = builder.build(SharedCfg::default()).await.unwrap();
+        let client = builder.build().unwrap();
         let repr = format!("{client:?}");
         assert!(repr.contains("WsClient"));
         assert!(repr.contains("x-test"));
@@ -823,11 +826,10 @@ mod tests {
 
     #[crate::rt_test]
     async fn header_override() {
-        let req = WsClient::builder("http://localhost")
+        let req = WsClient::builder("http://localhost", SharedCfg::default())
             .header(header::CONTENT_TYPE, "111")
             .set_header(header::CONTENT_TYPE, "222")
-            .build(SharedCfg::default())
-            .await
+            .build()
             .unwrap();
 
         assert_eq!(
@@ -843,21 +845,18 @@ mod tests {
 
     #[crate::rt_test]
     async fn basic_errs() {
-        let err = WsClient::builder("localhost")
-            .build(SharedCfg::default())
-            .await
+        let err = WsClient::builder("localhost", SharedCfg::default())
+            .build()
             .err()
             .unwrap();
         assert!(matches!(err, WsClientBuilderError::MissingScheme));
-        let err = WsClient::builder("unknown://localhost")
-            .build(SharedCfg::default())
-            .await
+        let err = WsClient::builder("unknown://localhost", SharedCfg::default())
+            .build()
             .err()
             .unwrap();
         assert!(matches!(err, WsClientBuilderError::UnknownScheme));
-        let err = WsClient::builder("/")
-            .build(SharedCfg::default())
-            .await
+        let err = WsClient::builder("/", SharedCfg::default())
+            .build()
             .err()
             .unwrap();
         assert!(matches!(err, WsClientBuilderError::MissingHost));
@@ -865,11 +864,11 @@ mod tests {
 
     #[crate::rt_test]
     async fn basic_auth() {
-        let client = WsClient::builder("http://localhost")
+        let client = WsClient::builder("http://localhost", SharedCfg::default())
             .basic_auth("username", Some("password"))
-            .build(SharedCfg::default())
-            .await
+            .build()
             .unwrap();
+
         assert_eq!(
             client
                 .head
@@ -881,11 +880,11 @@ mod tests {
             "Basic dXNlcm5hbWU6cGFzc3dvcmQ="
         );
 
-        let client = WsClient::builder("http://localhost")
+        let client = WsClient::builder("http://localhost", SharedCfg::default())
             .basic_auth("username", None)
-            .build(SharedCfg::default())
-            .await
+            .build()
             .unwrap();
+
         assert_eq!(
             client
                 .head
@@ -914,11 +913,11 @@ mod tests {
 
     #[crate::rt_test]
     async fn bearer_auth() {
-        let client = WsClient::builder("http://localhost")
+        let client = WsClient::builder("http://localhost", SharedCfg::default())
             .bearer_auth("someS3cr3tAutht0k3n")
-            .build(SharedCfg::default())
-            .await
+            .build()
             .unwrap();
+
         assert_eq!(
             client
                 .head
@@ -950,7 +949,7 @@ mod tests {
     #[cfg(feature = "cookie")]
     #[crate::rt_test]
     async fn basics() {
-        let mut builder = WsClient::builder("http://localhost/")
+        let mut builder = WsClient::builder("http://localhost/", SharedCfg::default())
             .origin("test-origin")
             .max_frame_size(100)
             .server_mode()
@@ -967,7 +966,7 @@ mod tests {
         assert!(builder.inner.as_ref().unwrap().server_mode);
         assert_eq!(builder.protocols, Some("v1,v2".to_string()));
 
-        let client = builder.build(SharedCfg::default()).await.unwrap();
+        let client = builder.build().unwrap();
         assert_eq!(
             client.head.headers.get(header::CONTENT_TYPE).unwrap(),
             header::HeaderValue::from_static("json")
@@ -976,21 +975,18 @@ mod tests {
         let _ = client.connect().await;
 
         assert!(
-            WsClient::builder("/")
-                .build(SharedCfg::default())
-                .await
+            WsClient::builder("/", SharedCfg::default())
+                .build()
                 .is_err()
         );
         assert!(
-            WsClient::builder("http:///test")
-                .build(SharedCfg::default())
-                .await
+            WsClient::builder("http:///test", SharedCfg::default())
+                .build()
                 .is_err()
         );
         assert!(
-            WsClient::builder("hmm://test.com/")
-                .build(SharedCfg::default())
-                .await
+            WsClient::builder("hmm://test.com/", SharedCfg::default())
+                .build()
                 .is_err()
         );
     }
@@ -1004,9 +1000,8 @@ mod tests {
         head.method = Method::POST;
         drop(head);
 
-        let client = WsClient::builder("http://localhost")
-            .build(SharedCfg::default())
-            .await
+        let client = WsClient::builder("http://localhost", SharedCfg::default())
+            .build()
             .unwrap();
         assert_eq!(client.head.method, Method::GET);
     }

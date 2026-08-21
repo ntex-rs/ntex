@@ -26,8 +26,7 @@ async fn test_h1() {
                 .set_headers_read_rate(Seconds(1), Seconds::ZERO, 256)
                 .set_keepalive(KeepAlive::Disabled),
         ),
-    )
-    .await;
+    );
 
     let response = srv.request(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
@@ -48,8 +47,7 @@ async fn test_h1_2() {
                 .set_headers_read_rate(Seconds(1), Seconds::ZERO, 256)
                 .set_keepalive(KeepAlive::Disabled),
         ),
-    )
-    .await;
+    );
 
     let response = srv.request(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
@@ -85,8 +83,7 @@ async fn test_expect_continue() {
             })
         },
         SharedCfg::new("SRV").add(HttpServiceConfig::new().set_keepalive(KeepAlive::Disabled)),
-    )
-    .await;
+    );
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream.write_all(b"GET /test HTTP/1.1\r\nexpect: 100-continue\r\n\r\n");
@@ -123,8 +120,7 @@ async fn test_chunked_payload() {
                 .fold(0usize, async move |acc, chunk| acc + chunk.len())
                 .map(|req_size| Ok::<_, io::Error>(Response::Ok().body(format!("size={req_size}"))))
         }))
-    })
-    .await;
+    });
 
     let returned_size = {
         let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
@@ -168,8 +164,7 @@ async fn test_slow_request() {
             Seconds(2),
             4,
         )),
-    )
-    .await;
+    );
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream.write_all(DATA);
@@ -198,8 +193,7 @@ async fn test_slow_request2() {
             Seconds(2),
             4,
         )),
-    )
-    .await;
+    );
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\n\r\n");
@@ -216,8 +210,7 @@ async fn test_slow_request2() {
 async fn test_http1_malformed_request() {
     let srv = test_server(async |_| {
         HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().finish()))
-    })
-    .await;
+    });
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream.write_all(b"GET /test/tests/test HTTP1.1\r\n");
@@ -230,8 +223,7 @@ async fn test_http1_malformed_request() {
 async fn test_http1_keepalive() {
     let srv = test_server(async |_| {
         HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().finish()))
-    })
-    .await;
+    });
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\n\r\n");
@@ -250,8 +242,7 @@ async fn test_http1_keepalive_timeout() {
     let srv = test::server_with_config(
         async |_| HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().finish())),
         SharedCfg::new("SRV").add(HttpServiceConfig::new().set_keepalive(1)),
-    )
-    .await;
+    );
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\n\r\n");
@@ -276,8 +267,7 @@ async fn test_http1_no_keepalive_during_response() {
             })
         },
         SharedCfg::new("SRV").add(HttpServiceConfig::new().set_keepalive(1)),
-    )
-    .await;
+    );
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\n\r\n");
@@ -318,8 +308,7 @@ async fn test_http1_keepalive_after_response() {
                 .set_headers_read_rate(Seconds(1), Seconds(2), 4)
                 .set_keepalive(1),
         ),
-    )
-    .await;
+    );
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\n\r\n");
@@ -338,8 +327,7 @@ async fn test_http1_keepalive_after_response() {
 async fn test_http1_keepalive_close() {
     let srv = test_server(async |_| {
         HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().finish()))
-    })
-    .await;
+    });
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\nconnection: close\r\n\r\n");
@@ -356,8 +344,7 @@ async fn test_http1_keepalive_close() {
 async fn test_http10_keepalive_default_close() {
     let srv = test_server(async |_| {
         HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().finish()))
-    })
-    .await;
+    });
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream.write_all(b"GET /test/tests/test HTTP/1.0\r\n\r\n");
@@ -374,8 +361,7 @@ async fn test_http10_keepalive_default_close() {
 async fn test_http10_keepalive() {
     let srv = test_server(async |_| {
         HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().finish()))
-    })
-    .await;
+    });
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream.write_all(b"GET /test/tests/test HTTP/1.0\r\nconnection: keep-alive\r\n\r\n");
@@ -399,8 +385,7 @@ async fn test_http1_keepalive_disabled() {
     let srv = test::server_with_config(
         async |_| HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().finish())),
         SharedCfg::new("SRV").add(HttpServiceConfig::new().set_keepalive(KeepAlive::Disabled)),
-    )
-    .await;
+    );
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\n\r\n");
@@ -431,8 +416,7 @@ async fn test_http1_disable_payload_timer_after_whole_pl_has_been_read() {
                 .set_payload_read_rate(Seconds(1), Seconds(1), 512)
                 .set_keepalive(1),
         ),
-    )
-    .await;
+    );
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\ncontent-length: 4\r\n");
@@ -461,8 +445,7 @@ async fn test_http1_handle_not_consumed_payload() {
                 Ok::<_, io::Error>(msg.ack())
             },
         )
-    })
-    .await;
+    });
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\ncontent-length: 4\r\n\r\n");
@@ -492,8 +475,7 @@ async fn test_http1_handle_payload_errors() {
                 Ok::<_, io::Error>(Response::Ok().finish())
             }
         })
-    })
-    .await;
+    });
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\ncontent-length: 99999\r\n\r\n");
@@ -518,8 +500,7 @@ async fn test_content_length() {
             ];
             Ok::<_, io::Error>(Response::new(statuses[indx]))
         })
-    })
-    .await;
+    });
 
     let header = HeaderName::from_static("content-length");
     let value = HeaderValue::from_static("0");
@@ -572,8 +553,7 @@ async fn test_h1_headers() {
             }
             Ok::<_, io::Error>(builder.body(data.clone()))
         })
-    })
-    .await;
+    });
 
     let response = srv
         .request(Method::GET, "/")
@@ -614,8 +594,7 @@ const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
 async fn test_h1_body() {
     let srv = test_server(async |_| {
         HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().body(STR)))
-    })
-    .await;
+    });
 
     let response = srv.request(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
@@ -629,8 +608,7 @@ async fn test_h1_body() {
 async fn test_h1_head_empty() {
     let srv = test_server(async |_| {
         HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().body(STR)))
-    })
-    .await;
+    });
 
     let response = srv.request(Method::HEAD, "/").send().await.unwrap();
     assert!(response.status().is_success());
@@ -651,8 +629,7 @@ async fn test_h1_head_binary() {
         HttpService::h1(async |_| {
             Ok::<_, io::Error>(Response::Ok().content_length(STR.len() as u64).body(STR))
         })
-    })
-    .await;
+    });
 
     let response = srv.request(Method::HEAD, "/").send().await.unwrap();
     assert!(response.status().is_success());
@@ -671,8 +648,7 @@ async fn test_h1_head_binary() {
 async fn test_h1_head_binary2() {
     let srv = test_server(async |_| {
         HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().body(STR)))
-    })
-    .await;
+    });
 
     let response = srv.request(Method::HEAD, "/").send().await.unwrap();
     assert!(response.status().is_success());
@@ -690,8 +666,7 @@ async fn test_h1_body_length() {
             let body = once(ready(Ok(Bytes::from_static(STR.as_ref()))));
             Ok::<_, io::Error>(Response::Ok().body(body::SizedStream::new(STR.len() as u64, body)))
         })
-    })
-    .await;
+    });
 
     let response = srv.request(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
@@ -712,8 +687,7 @@ async fn test_h1_body_chunked_explicit() {
                     .streaming(body),
             )
         })
-    })
-    .await;
+    });
 
     let response = srv.request(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
@@ -741,8 +715,7 @@ async fn test_h1_body_chunked_implicit() {
             let body = once(ready(Ok::<_, io::Error>(Bytes::from_static(STR.as_ref()))));
             Ok::<_, io::Error>(Response::Ok().streaming(body))
         })
-    })
-    .await;
+    });
 
     let response = srv.request(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
@@ -772,8 +745,7 @@ async fn test_h1_response_http_error_handling() {
                     .body(STR),
             )
         })
-    })
-    .await;
+    });
 
     let response = srv.request(Method::GET, "/").send().await.unwrap();
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -792,8 +764,7 @@ async fn test_h1_service_error() {
                 StatusCode::BAD_REQUEST,
             ))
         })
-    })
-    .await;
+    });
 
     let response = srv.request(Method::GET, "/").send().await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -832,8 +803,7 @@ async fn test_h1_client_drop() -> io::Result<()> {
             sleep(Millis(150000)).await;
             Ok::<_, io::Error>(Response::Ok().finish())
         })
-    })
-    .await;
+    });
 
     let result = timeout(Millis(2500), srv.request(Method::GET, "/").send()).await;
     assert!(result.is_err());
@@ -863,8 +833,7 @@ async fn test_h1_gracefull_shutdown() {
             count.fetch_sub(1, Ordering::Relaxed);
             Ok::<_, io::Error>(Response::Ok().finish())
         })
-    })
-    .await;
+    });
 
     let mut stream1 = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream1.write_all(b"GET /index.html HTTP/1.1\r\n\r\n");
@@ -906,8 +875,7 @@ async fn test_h1_gracefull_shutdown_2() {
             count.fetch_sub(1, Ordering::Relaxed);
             Ok::<_, io::Error>(Response::Ok().finish())
         })
-    })
-    .await;
+    });
 
     let mut stream1 = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream1.write_all(b"GET /index.html HTTP/1.1\r\n\r\n");

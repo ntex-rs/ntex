@@ -7,13 +7,13 @@ use ntex_h2::{self as h2};
 use crate::error::Error;
 use crate::http::uri::{Authority, Scheme, Uri};
 use crate::io::{IoBoxed, types::HttpProtocol};
-use crate::service::pipeline::{Pipeline, PipelineBinding, PipelineCall};
+use crate::service::pipeline::{PipelineBinding, PipelineCall};
 use crate::service::{Ctx, Service, cfg::SharedCfg};
 use crate::util::{ByteString, Either, HashMap, HashSet, select};
 use crate::{channel::inplace, channel::oneshot, channel::pool, rt::spawn, time::now};
 
 use super::connection::{Connection, ConnectionType};
-use super::{Connect, error::ConnectError, h2proto::H2Client};
+use super::{Connect, ConnectorPipeline, error::ConnectError, h2proto::H2Client};
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub(super) struct Key {
@@ -46,11 +46,11 @@ struct AvailableConnection {
 pub(super) struct ConnectionPool(Rc<ConnectionPoolInner>);
 
 struct ConnectionPoolInner {
-    svc: Pipeline<Connect, IoBoxed, Error<ConnectError>>,
+    svc: ConnectorPipeline,
     inner: Rc<RefCell<Inner>>,
     waiters: Rc<RefCell<Waiters>>,
     stop: Rc<Cell<Option<oneshot::Sender<()>>>>,
-    config: SharedCfg,
+    cfg: SharedCfg,
 }
 
 #[derive(Debug)]
@@ -68,11 +68,11 @@ pub(super) struct Inner {
 
 impl ConnectionPool {
     pub(super) fn new(
-        svc: Pipeline<Connect, IoBoxed, Error<ConnectError>>,
+        svc: ConnectorPipeline,
+        cfg: SharedCfg,
         conn_lifetime: Duration,
         conn_keep_alive: Duration,
         limit: usize,
-        config: SharedCfg,
     ) -> Self {
         let waiters = Rc::new(RefCell::new(Waiters {
             waiters: HashMap::default(),
@@ -89,23 +89,22 @@ impl ConnectionPool {
             waker: inplace::channel(),
             waiters: waiters.clone(),
         }));
-        let svc_binding = svc.bind();
 
         // start connection pool
         let (stop, stop_rx) = oneshot::channel();
         crate::rt::spawn(run_connection_pool(
-            svc_binding,
+            svc.bind(),
             inner.clone(),
             waiters.clone(),
-            config.clone(),
             stop_rx,
+            cfg.tag(),
         ));
 
         ConnectionPool(Rc::new(ConnectionPoolInner {
             svc,
+            cfg,
             inner,
             waiters,
-            config,
             stop: Rc::new(Cell::new(Some(stop))),
         }))
     }
@@ -135,29 +134,28 @@ impl fmt::Debug for ConnectionPool {
             .field("svc", &self.0.svc)
             .field("inner", &self.0.inner)
             .field("waiters", &self.0.waiters)
-            .field("config", &self.0.config)
             .finish()
     }
 }
 
-impl Service<(), Connect> for ConnectionPool {
+impl<St> Service<St, Connect> for ConnectionPool {
     type Res = Connection;
     type Error = Error<ConnectError>;
 
     #[inline]
-    async fn ready(&self, _: Ctx<'_, Self, ()>) -> Result<(), Self::Error> {
+    async fn ready(&self, _: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
         self.0.svc.ready().await
     }
 
     #[inline]
-    async fn shutdown(&self, _: crate::Ctx<'_, Self, ()>) {
+    async fn shutdown(&self, _: crate::Ctx<'_, Self, St>) {
         self.0.stop.take();
         self.0.inner.borrow_mut().stopped = true;
         self.0.svc.shutdown().await;
     }
 
-    async fn call(&self, req: Connect, _: Ctx<'_, Self, ()>) -> Result<Self::Res, Self::Error> {
-        log::trace!("{}: Get connection for {:?}", self.0.config.tag(), req.uri);
+    async fn call(&self, req: Connect, _: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
+        log::trace!("{}: Get connection for {:?}", self.0.cfg.tag(), req.uri);
 
         let inner = self.0.inner.clone();
         let waiters = self.0.waiters.clone();
@@ -175,7 +173,7 @@ impl Service<(), Connect> for ConnectionPool {
             Acquire::Acquired(io, created) => {
                 log::trace!(
                     "{}: Use existing {:?} connection for {:?}",
-                    self.0.config.tag(),
+                    self.0.cfg.tag(),
                     io,
                     req.uri
                 );
@@ -187,7 +185,7 @@ impl Service<(), Connect> for ConnectionPool {
             }
             // open new tcp connection
             Acquire::Available => {
-                log::trace!("{}: Connecting to {:?}", self.0.config.tag(), req.uri);
+                log::trace!("{}: Connecting to {:?}", self.0.cfg.tag(), req.uri);
                 let uri = req.uri.clone();
                 let (tx, rx) = waiters.borrow_mut().pool.channel();
                 OpenConnection::spawn(key, tx, uri, inner, self.0.svc.call_static(req));
@@ -201,7 +199,7 @@ impl Service<(), Connect> for ConnectionPool {
             Acquire::NotAvailable => {
                 log::trace!(
                     "{}: Pool is full, waiting for available connections for {:?}",
-                    self.0.config.tag(),
+                    self.0.cfg.tag(),
                     req.uri
                 );
                 let rx = waiters.borrow_mut().wait_for(req);
@@ -338,10 +336,9 @@ async fn run_connection_pool(
     svc: PipelineBinding<Connect, IoBoxed, Error<ConnectError>>,
     inner: Rc<RefCell<Inner>>,
     waiters: Rc<RefCell<Waiters>>,
-    config: SharedCfg,
     mut stop: oneshot::Receiver<()>,
+    tag: &'static str,
 ) {
-    let tag = config.tag();
     log::trace!("{tag}: Starting connection pool support task");
 
     loop {
@@ -628,7 +625,7 @@ mod tests {
     use std::future::Future;
 
     use super::*;
-    use crate::service::{boxed, fn_service};
+    use crate::service::{Pipeline, boxed, fn_service};
     use crate::time::{Millis, sleep};
     use crate::{io as nio, testing::IoTest, util::lazy};
 
@@ -638,17 +635,17 @@ mod tests {
         let store2 = store.clone();
 
         let pool = ConnectionPool::new(
-            Pipeline::new(boxed::service(fn_service(move |req| {
+            ConnectorPipeline::new(boxed::service(fn_service(move |req| {
                 let (client, server) = IoTest::create();
                 store2.borrow_mut().push((req, server));
                 Box::pin(
                     async move { Ok(IoBoxed::from(nio::Io::new(client, SharedCfg::default()))) },
                 )
             }))),
+            SharedCfg::default(),
             Duration::from_secs(10),
             Duration::from_secs(10),
             1,
-            SharedCfg::default(),
         );
         let pipe = Pipeline::new(pool.clone());
 

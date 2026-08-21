@@ -2,13 +2,6 @@ use std::io;
 
 use ntex_error::ErrorDiagnostic;
 
-#[derive(thiserror::Error, Debug, Copy, Clone)]
-pub enum ConnectServiceError {
-    /// Cannot create connect service
-    #[error("Cannot create connect service")]
-    CannotCreateService,
-}
-
 #[derive(thiserror::Error, Debug)]
 pub enum ConnectError {
     /// Failed to resolve the hostname
@@ -43,12 +36,6 @@ impl Clone for ConnectError {
             ConnectError::Unresolved => ConnectError::Unresolved,
             ConnectError::Io(err) => ConnectError::Io(io::Error::new(err.kind(), format!("{err}"))),
         }
-    }
-}
-
-impl From<ConnectServiceError> for io::Error {
-    fn from(err: ConnectServiceError) -> io::Error {
-        io::Error::other(err)
     }
 }
 

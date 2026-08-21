@@ -34,8 +34,7 @@ async fn web_ws() {
                 .await
             })),
         )
-    })
-    .await;
+    });
 
     // client service
     let (io, codec, _) = srv.ws().await.unwrap().into_inner();
@@ -76,8 +75,7 @@ async fn web_no_ws() {
             .service(web::resource("/ws_error").route(web::to(async || {
                 Err::<HttpResponse, _>(io::Error::other("test"))
             })))
-    })
-    .await;
+    });
 
     let err = srv.ws().await.err().unwrap();
     assert!(matches!(
@@ -114,8 +112,7 @@ async fn web_ws_after_pooled_post_request() {
                 })),
             )
             .service(web::resource("/post").route(web::post().to(async || HttpResponse::Ok())))
-    })
-    .await;
+    });
 
     // a completed POST request releases its RequestHead back to the
     // thread-local message pool; a ws client built afterwards on the same
@@ -137,8 +134,7 @@ async fn web_no_ws_2() {
         App::new().service(
             web::resource("/").route(web::to(async || HttpResponse::Ok().body("Hello world"))),
         )
-    })
-    .await;
+    });
 
     let response = srv
         .get("/")
@@ -169,8 +165,7 @@ async fn web_ws_client() {
                 .await
             })),
         )
-    })
-    .await;
+    });
 
     // client service
     let conn = srv.ws().await.unwrap();
@@ -231,16 +226,14 @@ async fn web_ws_subprotocol() {
                 .await
             })),
         )
-    })
-    .await;
+    });
 
     // client requests subprotocol
-    let conn = WsClient::builder(srv.url("/"))
+    let conn = WsClient::builder(srv.url("/"), SharedCfg::default())
         .address(srv.addr())
         .timeout(Seconds(30))
         .protocols(["my-subprotocol"])
-        .build(SharedCfg::default())
-        .await
+        .build()
         .unwrap()
         .connect()
         .await
@@ -278,16 +271,14 @@ async fn web_ws_subprotocol_none() {
                 .await
             })),
         )
-    })
-    .await;
+    });
 
     // client requests subprotocol that server doesn't support
-    let conn = WsClient::builder(srv.url("/"))
+    let conn = WsClient::builder(srv.url("/"), SharedCfg::default())
         .address(srv.addr())
         .timeout(Seconds(30))
         .protocols(["my-subprotocol"])
-        .build(SharedCfg::default())
-        .await
+        .build()
         .unwrap()
         .connect()
         .await
@@ -332,16 +323,14 @@ async fn web_ws_protocols_parsing() {
                 .await
             })),
         )
-    })
-    .await;
+    });
 
     // client requests multiple protocols (comma-separated)
-    let conn = WsClient::builder(srv.url("/"))
+    let conn = WsClient::builder(srv.url("/"), SharedCfg::default())
         .address(srv.addr())
         .timeout(Seconds(30))
         .protocols(["proto1", "proto2"])
-        .build(SharedCfg::default())
-        .await
+        .build()
         .unwrap()
         .connect()
         .await
@@ -380,8 +369,7 @@ async fn web_ws_shutdown_propagation() {
                 .await
             })),
         )
-    })
-    .await;
+    });
 
     // make ure the server is working
     let (io, codec, _) = srv.ws().await.unwrap().into_inner();

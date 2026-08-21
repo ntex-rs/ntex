@@ -92,8 +92,7 @@ async fn test_params() {
             .service(get_param_test)
             .service(put_param_test)
             .service(delete_param_test)
-    })
-    .await;
+    });
 
     let request = srv.request(Method::GET, srv.url("/test/it"));
     let response = request.send().await.unwrap();
@@ -120,8 +119,8 @@ async fn test_body() {
             .service(trace_test)
             .service(patch_test)
             .service(test_handler)
-    })
-    .await;
+    });
+
     let request = srv.request(Method::GET, srv.url("/test"));
     let response = request.send().await.unwrap();
     assert!(response.status().is_success());
@@ -159,7 +158,7 @@ async fn test_body() {
 
 #[ntex::test]
 async fn test_auto_async() {
-    let srv = test::server(async |_| App::new().service(auto_async)).await;
+    let srv = test::server(async |_| App::new().service(auto_async));
 
     let request = srv.request(Method::GET, srv.url("/test"));
     let response = request.send().await.unwrap();

@@ -2,18 +2,17 @@
 use crate::http::{Payload, encoding::Decoder};
 use crate::{Ctx, Service, error::Error, http::body::MessageBody};
 
-use super::connector::ConnectorService;
 use super::error::ClientError;
-use super::{ClientConfig, ClientRawRequest, Connect, ServiceRequest, ServiceResponse};
+use super::{ClientConfig, ClientRawRequest, Connect, Connector, ServiceRequest, ServiceResponse};
 
 #[derive(Debug)]
 pub struct Sender {
     config: ClientConfig,
-    connector: ConnectorService,
+    connector: Connector,
 }
 
 impl Sender {
-    pub(crate) fn new(connector: ConnectorService, config: ClientConfig) -> Self {
+    pub(crate) fn new(connector: Connector, config: ClientConfig) -> Self {
         Self { config, connector }
     }
 }

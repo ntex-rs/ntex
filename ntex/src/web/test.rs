@@ -20,7 +20,7 @@ use crate::http::{
 use crate::io::Sealed;
 use crate::router::{Path, ResourceDef};
 use crate::service::{IntoServiceFactory, Pipeline, fn_service};
-use crate::time::{Millis, Seconds, sleep};
+use crate::time::{Millis, Seconds};
 use crate::util::{Bytes, BytesMut, Stream, stream_recv};
 #[cfg(feature = "ws")]
 use crate::ws::{WsClient, WsConnection, error::WsClientError};
@@ -552,7 +552,7 @@ impl TestRequest {
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub async fn server<F, I, Sf, B>(factory: F) -> TestServer
+pub fn server<F, I, Sf, B>(factory: F) -> TestServer
 where
     F: AsyncFn(&()) -> I + Send + Clone + 'static,
     I: IntoServiceFactory<Sf, (), Request, SharedCfg>,
@@ -562,7 +562,7 @@ where
     Sf::InitError: fmt::Debug,
     B: MessageBody + 'static,
 {
-    server_with(TestServerConfig::default(), factory).await
+    server_with(TestServerConfig::default(), factory)
 }
 
 /// Start test server with custom configuration
@@ -590,7 +590,7 @@ where
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub async fn server_with<F, I, Sf, B>(cfg: TestServerConfig, factory: F) -> TestServer
+pub fn server_with<F, I, Sf, B>(cfg: TestServerConfig, factory: F) -> TestServer
 where
     F: AsyncFn(&()) -> I + Send + Clone + 'static,
     I: IntoServiceFactory<Sf, (), Request, SharedCfg>,
@@ -715,7 +715,7 @@ where
         })
     });
     let (system, server, addr) = rx.recv().unwrap();
-    sleep(Millis(25)).await;
+    thread::sleep(Millis(25).into());
 
     let cfg = cfg.client_cfg.clone().unwrap_or_else(|| {
         SharedCfg::new("TEST-CLIENT")
@@ -740,21 +740,20 @@ where
                 let _ = builder
                     .set_alpn_protos(b"\x02h2\x08http/1.1")
                     .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
-                Connector::default()
+                Connector::builder(cfg.clone())
                     .lifetime(Seconds::ZERO)
                     .openssl(builder.build())
+                    .build()
             }
             #[cfg(not(feature = "openssl"))]
             {
-                Connector::default().lifetime(Seconds::ZERO)
+                Connector::builder(cfg.clone())
+                    .lifetime(Seconds::ZERO)
+                    .build()
             }
         };
 
-        Client::builder()
-            .connector::<&str>(connector)
-            .build(cfg.clone())
-            .await
-            .unwrap()
+        Client::builder().connector(connector).build()
     };
 
     TestServer {
@@ -997,13 +996,12 @@ impl TestServer {
                     .set_alpn_protos(b"\x08http/1.1")
                     .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
 
-                WsClient::builder(self.url(path))
+                WsClient::builder(self.url(path), self.cfg.clone())
                     .address(self.addr)
                     .timeout(Seconds(60))
                     .openssl(builder.build())
                     .take()
-                    .build(self.cfg.clone())
-                    .await
+                    .build()
                     .unwrap()
                     .connect()
                     .await
@@ -1014,11 +1012,10 @@ impl TestServer {
                 panic!("openssl feature is required")
             }
         } else {
-            WsClient::builder(self.url(path))
+            WsClient::builder(self.url(path), self.cfg.clone())
                 .address(self.addr)
                 .timeout(Seconds(60))
-                .build(self.cfg.clone())
-                .await
+                .build()
                 .unwrap()
                 .connect()
                 .await
@@ -1260,8 +1257,7 @@ mod tests {
                         .to(async || HttpResponse::Ok()),
                 )),
             )
-        })
-        .await;
+        });
 
         assert_eq!(srv.put("/").send().await.unwrap().status(), StatusCode::OK);
         assert_eq!(

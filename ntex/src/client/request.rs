@@ -530,11 +530,11 @@ impl fmt::Debug for ClientRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{SharedCfg, client::Client};
+    use crate::client::Client;
 
     #[crate::rt_test]
     async fn test_debug() {
-        let request = Client::new().await.get("/").header("x-test", "111");
+        let request = Client::new().get("/").header("x-test", "111");
         let repr = format!("{request:?}");
         assert!(repr.contains("ClientRequest"));
         assert!(repr.contains("x-test"));
@@ -543,7 +543,6 @@ mod tests {
     #[crate::rt_test]
     async fn test_basics() {
         let mut req = Client::new()
-            .await
             .put("/")
             .version(Version::HTTP_2)
             .header(header::DATE, "data")
@@ -574,9 +573,7 @@ mod tests {
     async fn test_client_header() {
         let req = Client::builder()
             .header(header::CONTENT_TYPE, "111")
-            .build(SharedCfg::default())
-            .await
-            .unwrap()
+            .build()
             .get("/");
 
         assert_eq!(
@@ -595,9 +592,7 @@ mod tests {
     async fn test_client_header_override() {
         let req = Client::builder()
             .header(header::CONTENT_TYPE, "111")
-            .build(SharedCfg::default())
-            .await
-            .unwrap()
+            .build()
             .get("/")
             .set_header(header::CONTENT_TYPE, "222");
 
@@ -616,7 +611,6 @@ mod tests {
     #[crate::rt_test]
     async fn client_basic_auth() {
         let req = Client::new()
-            .await
             .get("/")
             .basic_auth("username", Some("password"));
         assert_eq!(
@@ -630,7 +624,7 @@ mod tests {
             "Basic dXNlcm5hbWU6cGFzc3dvcmQ="
         );
 
-        let req = Client::new().await.get("/").basic_auth("username", None);
+        let req = Client::new().get("/").basic_auth("username", None);
         assert_eq!(
             req.request
                 .head
@@ -645,10 +639,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn client_bearer_auth() {
-        let req = Client::new()
-            .await
-            .get("/")
-            .bearer_auth("someS3cr3tAutht0k3n");
+        let req = Client::new().get("/").bearer_auth("someS3cr3tAutht0k3n");
         assert_eq!(
             req.request
                 .head
@@ -664,7 +655,6 @@ mod tests {
     #[crate::rt_test]
     async fn client_query() {
         let req = Client::new()
-            .await
             .get("/")
             .query(&[("key1", "val1"), ("key2", "val2")])
             .unwrap();

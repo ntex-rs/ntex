@@ -34,15 +34,19 @@ where
 
     #[inline]
     /// Returns when the pipeline is ready to process requests.
-    pub async fn ready(&self, st: &St) -> Result<(), Err> {
-        self.state.ready(0, st).await
+    pub async fn ready(&self, st: &St) -> Result<(), Err>
+    where
+        St: Clone,
+    {
+        future::poll_fn(|cx| self.poll_ready(cx, st)).await
     }
 
     #[inline]
     /// Wait for service readiness, then create a future
     /// that resolves to the service call result.
     pub async fn call(&self, req: Req, st: &St) -> Result<Res, Err> {
-        self.state.call(0, req, st, true).await
+        let pl = self.bind();
+        self.state.call(pl.index, req, st, true).await
     }
 
     #[inline]
@@ -51,7 +55,8 @@ where
     /// This call can be completed from different async tasks.
     /// Note: this call does not check service readiness.
     pub async fn call_nowait(&self, req: Req, st: &St) -> Result<Res, Err> {
-        self.state.call(0, req, st, false).await
+        let pl = self.bind();
+        pl.state.call(pl.index, req, st, false).await
     }
 
     #[inline]
@@ -76,6 +81,13 @@ where
     {
         self.state.poll_ready(cx, st)
     }
+
+    fn bind(&self) -> Binding<'_, St, Req, Res, Err> {
+        Binding {
+            index: self.state.reg(),
+            state: self.state.as_ref(),
+        }
+    }
 }
 
 impl<St, Req, Res, Err> fmt::Debug for PipelineNostate<St, Req, Res, Err> {
@@ -88,6 +100,18 @@ impl<St, Req, Res, Err> Drop for PipelineNostate<St, Req, Res, Err> {
     #[inline]
     fn drop(&mut self) {
         self.state.unreg(0);
+    }
+}
+
+struct Binding<'a, St, Req, Res, Err> {
+    index: u32,
+    state: &'a dyn PipelineApi<St, Req, Res, Err>,
+}
+
+impl<St, Req, Res, Err> Drop for Binding<'_, St, Req, Res, Err> {
+    #[inline]
+    fn drop(&mut self) {
+        self.state.unreg(self.index);
     }
 }
 
@@ -104,9 +128,8 @@ enum RuntimeState<St, E> {
 }
 
 trait PipelineApi<St, Req, Res, Err> {
+    fn reg(&self) -> u32;
     fn unreg(&self, idx: u32);
-
-    fn ready<'a>(&'a self, idx: u32, st: &'a St) -> BoxFuture<'a, Result<(), Err>>;
 
     fn call<'a>(
         &'a self,
@@ -132,16 +155,12 @@ where
     Req: 'static,
     E: 'static,
 {
-    fn unreg(&self, index: u32) {
-        self.waiters.remove(index);
+    fn reg(&self) -> u32 {
+        self.waiters.insert()
     }
 
-    fn ready<'a>(&'a self, idx: u32, st: &'a St) -> BoxFuture<'a, Result<(), S::Error>> {
-        Box::pin(async move {
-            Ctx::<'_, S, St>::new(idx, &self.waiters, st)
-                .ready(&self.s)
-                .await
-        })
+    fn unreg(&self, index: u32) {
+        self.waiters.remove(index);
     }
 
     fn call<'a>(

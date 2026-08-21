@@ -4,11 +4,10 @@ use base64::{Engine, engine::general_purpose::STANDARD as base64};
 
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderName, HeaderValue};
-use crate::service::boxed;
-use crate::service::{Identity, Middleware, Pipeline, Service, ServiceFactory, Stack};
-use crate::{SharedCfg, error::Error, time::Millis};
+use crate::service::{Identity, Middleware, Pipeline, Service, Stack};
+use crate::{error::Error, time::Millis};
 
-use super::error::{ClientBuilderError, ClientError};
+use super::error::ClientError;
 use super::sender::Sender;
 use super::service::{ServiceRequest, ServiceResponse};
 use super::{Client, ClientConfig, Connector, cfg::ClientConfigInner};
@@ -46,11 +45,22 @@ impl ClientBuilder<Identity> {
     }
 }
 
+impl<M> From<ClientBuilder<M>> for Client
+where
+    M: Middleware<Sender, ClientConfig>,
+    M::Service:
+        Service<(), ServiceRequest, Res = ServiceResponse, Error = Error<ClientError>> + 'static,
+{
+    fn from(b: ClientBuilder<M>) -> Self {
+        b.build()
+    }
+}
+
 impl<M> ClientBuilder<M> {
     #[must_use]
     /// Use custom connector service.
-    pub fn connector<T>(mut self, connector: Connector) -> Self {
-        self.connector = connector;
+    pub fn connector(mut self, connector: impl Into<Connector>) -> Self {
+        self.connector = connector.into();
         self
     }
 
@@ -199,29 +209,22 @@ impl<M> ClientBuilder<M> {
     }
 
     /// Finish build process and create `Client` instance.
-    pub async fn build<T>(mut self, cfg: T) -> Result<Client, ClientBuilderError>
+    pub fn build(mut self) -> Client
     where
-        T: Into<SharedCfg>,
         M: Middleware<Sender, ClientConfig>,
         M::Service: Service<(), ServiceRequest, Res = ServiceResponse, Error = Error<ClientError>>
             + 'static,
     {
-        let cfg = cfg.into();
+        let cfg = self.connector.cfg();
         self.config.cfg = cfg.clone();
+
         let config = ClientConfig::new(self.config);
 
         let svc = self
-            .connector
-            .create(&cfg)
-            .await
-            .map_err(|_| ClientBuilderError::ConnectorFailed)?;
+            .middleware
+            .create(Sender::new(self.connector, config.clone()), &config);
 
-        let svc = boxed::service(
-            self.middleware
-                .create(Sender::new(svc, config.clone()), &config),
-        );
-
-        Ok(Client::with_service(Pipeline::new(svc), config))
+        Client::with_service(Pipeline::new(svc), config)
     }
 }
 

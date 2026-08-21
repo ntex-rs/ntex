@@ -49,8 +49,7 @@ async fn test_connection_reuse_h2() {
                 App::new().service(web::resource("/").route(web::to(async || HttpResponse::Ok()))),
             ),
         ))
-    })
-    .await;
+    });
 
     // disable ssl verification
     let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
@@ -60,10 +59,8 @@ async fn test_connection_reuse_h2() {
         .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
 
     let client = Client::builder()
-        .connector::<&str>(Connector::default().openssl(builder.build()))
-        .build(SharedCfg::default())
-        .await
-        .unwrap();
+        .connector(Connector::builder(SharedCfg::default()).openssl(builder.build()))
+        .build();
 
     // req 1
     let request = client.get(srv.surl("/")).timeout(Seconds(30)).send();

@@ -1,8 +1,8 @@
 use std::{io, rc::Rc};
 
 use ntex::io::{Io, types::PeerAddr};
-use ntex::service::{Pipeline, ServiceFactory, svc};
-use ntex::{Service, SharedCfg, codec::BytesCodec, connect::Connect};
+use ntex::service::{Pipeline, Service, cfg::SharedCfg, svc};
+use ntex::{codec::BytesCodec, connect::Connect, connect::Connector};
 use ntex::{server::build_test_server, server::test_server, time, util::Bytes};
 
 #[cfg(feature = "rustls")]
@@ -61,10 +61,10 @@ async fn test_openssl_string() {
     let connector = builder.build();
 
     // ssl connector
-    let conn = ntex::connect::openssl::SslConnector::new(connector.clone())
-        .pipeline(&SharedCfg::new("CLIENT").into())
-        .await
-        .unwrap();
+    let conn = Pipeline::new(
+        ntex::connect::openssl::SslConnector::new(connector.clone())
+            .connector(Connector::with(SharedCfg::new("CLIENT"))),
+    );
     let addr = format!("127.0.0.1:{}", srv.addr().port());
     let io = conn.call(addr.into()).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
@@ -119,9 +119,7 @@ async fn test_openssl_read_before_error() {
 
     let conn = Pipeline::new(
         ntex::connect::openssl::SslConnector::new(connector.clone())
-            .create(&srv.config())
-            .await
-            .unwrap(),
+            .connector(Connector::with(srv.config())),
     );
     let addr = format!("127.0.0.1:{}", srv.addr().port());
     let io = conn.call(addr.into()).await.unwrap();
@@ -205,9 +203,7 @@ async fn test_rustls_string() {
     // tls connector
     let conn = Pipeline::new(
         TlsConnector::new(rustls_utils::tls_connector())
-            .create(&SharedCfg::new("CLIENT").into())
-            .await
-            .unwrap(),
+            .connector(Connector::with(SharedCfg::new("CLIENT"))),
     );
     let addr = format!("localhost:{}", srv.addr().port());
 
@@ -461,13 +457,13 @@ async fn test_static_str() {
     });
 
     // original
-    let conn = Pipeline::new(ntex::connect::ConnectorService::new());
+    let conn = Pipeline::new(ntex::connect::Connector::new());
 
     let io = conn.call(Connect::with("10", srv.addr())).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 
     let connect = Connect::new("127.0.0.1".to_owned());
-    let conn = Pipeline::new(ntex::connect::ConnectorService::new());
+    let conn = Pipeline::new(ntex::connect::Connector::new());
     let io = conn.call(connect).await;
     assert!(io.is_err());
 }
@@ -484,9 +480,8 @@ async fn test_create() {
     });
     time::sleep(time::Millis(100)).await;
 
-    let factory = ntex::connect::Connector::new();
-    let conn = factory.pipeline(&SharedCfg::default()).await.unwrap();
-    let io = conn.call(Connect::with("10", srv.addr())).await.unwrap();
+    let svc = Pipeline::new(ntex::connect::Connector::new());
+    let io = svc.call(Connect::with("10", srv.addr())).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }
 
@@ -502,7 +497,7 @@ async fn test_uri() {
     });
     time::sleep(time::Millis(100)).await;
 
-    let conn = Pipeline::new(ntex::connect::ConnectorService::default());
+    let conn = Pipeline::new(ntex::connect::Connector::default());
     let addr =
         ntex::http::Uri::try_from(format!("https://localhost:{}", srv.addr().port())).unwrap();
     let io = conn.call(addr.into()).await.unwrap();
@@ -529,7 +524,7 @@ async fn test_rustls_uri() {
     });
     time::sleep(time::Millis(50)).await;
 
-    let conn = Pipeline::new(ntex::connect::ConnectorService::default());
+    let conn = Pipeline::new(ntex::connect::Connector::default());
     let addr =
         ntex::http::Uri::try_from(format!("https://localhost:{}", srv.addr().port())).unwrap();
     let io = conn.call(addr.into()).await.unwrap();
@@ -540,21 +535,17 @@ async fn test_rustls_uri() {
 async fn basic_connect_service() {
     let server = ntex::server::test_server(async || svc(async |_| Ok::<_, ()>(())));
 
-    let srv = ntex_net::connect::Connector::default()
-        .create(
-            &ntex::SharedCfg::new("T")
-                .add(ntex::io::IoConfig::new().set_connect_timeout(time::Millis(5000)))
-                .into(),
-        )
-        .await
-        .unwrap();
+    let srv = ntex_net::connect::Connector::with(
+        ntex::SharedCfg::new("T")
+            .add(ntex::io::IoConfig::new().set_connect_timeout(time::Millis(5000))),
+    );
     let result = srv.connect("").await;
     assert!(result.is_err());
     let result = srv.connect("localhost:99999").await;
     assert!(result.is_err());
-    assert!(format!("{srv:?}").contains("ConnectorService"));
+    assert!(format!("{srv:?}").contains("Connector"));
 
-    let srv = ntex_net::connect::ConnectorService::default();
+    let srv = ntex_net::connect::Connector::default();
     let result = srv.connect(format!("{}", server.addr())).await;
     assert!(result.is_ok());
 

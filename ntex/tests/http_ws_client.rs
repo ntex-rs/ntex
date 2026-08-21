@@ -48,8 +48,7 @@ async fn test_simple() {
                 Ok::<_, io::Error>(ack)
             },
         )
-    })
-    .await;
+    });
 
     // client service
     let (io, codec, _) = srv.ws().await.unwrap().into_inner();
@@ -105,8 +104,7 @@ async fn test_transport() {
                 Ok::<_, io::Error>(ack)
             },
         )
-    })
-    .await;
+    });
 
     // client service
     let io = srv.ws().await.unwrap().into_transport();
@@ -146,15 +144,13 @@ async fn test_keepalive_timeout() {
                 Ok::<_, io::Error>(ack)
             },
         )
-    })
-    .await;
+    });
 
     // client service
-    let con = ws::WsClient::builder(srv.url("/"))
+    let con = ws::WsClient::builder(srv.url("/"), SharedCfg::default())
         .address(srv.addr())
         .timeout(Seconds(30))
-        .build(SharedCfg::default())
-        .await
+        .build()
         .unwrap()
         .connect()
         .await
@@ -195,14 +191,12 @@ async fn test_upgrade_handler_with_await() {
                 .await
             },
         ))))
-    })
-    .await;
+    });
 
-    let _ = ws::WsClient::builder(srv.url("/"))
+    let _ = ws::WsClient::builder(srv.url("/"), SharedCfg::default())
         .address(srv.addr())
         .timeout(Seconds(1))
-        .build(SharedCfg::default())
-        .await
+        .build()
         .unwrap()
         .connect()
         .await

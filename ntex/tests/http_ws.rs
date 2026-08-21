@@ -106,8 +106,7 @@ async fn test_simple() {
                 .set_headers_read_rate(Seconds(1), Seconds::ZERO, 16)
                 .set_payload_read_rate(Seconds(1), Seconds::ZERO, 16),
         ),
-    )
-    .await;
+    );
 
     // client service
     let conn = srv.ws().await.unwrap();
@@ -296,8 +295,7 @@ async fn test_transport() {
                 Ok::<_, io::Error>(ack)
             },
         )
-    })
-    .await;
+    });
 
     // client service
     let io = srv.ws().await.unwrap().into_inner().0;
@@ -390,8 +388,7 @@ async fn test_stale_timer_after_ws_upgrade() {
                 .set_keepalive(1)
                 .set_headers_read_rate(Seconds(1), Seconds::ZERO, 16),
         ),
-    )
-    .await;
+    );
 
     let conn = srv.ws().await.unwrap();
     assert_eq!(conn.response().status(), StatusCode::SWITCHING_PROTOCOLS);

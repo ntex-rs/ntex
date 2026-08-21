@@ -18,7 +18,7 @@ use crate::server::Server;
 use crate::service::{IntoService, Service, cfg::SharedCfg};
 #[cfg(feature = "ws")]
 use crate::ws::{WsClient, WsConnection, error::WsClientError};
-use crate::{rt::System, time::Millis, time::Seconds, time::sleep, util::Bytes};
+use crate::{rt::System, time::Millis, time::Seconds, util::Bytes};
 
 use super::header::{self, HeaderMap, HeaderName, HeaderValue};
 use super::{Method, Request, Uri, Version, error::HttpError, payload::Payload};
@@ -229,7 +229,7 @@ fn parts(parts: &mut Option<Inner>) -> &mut Inner {
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub async fn server<F, S, I>(factory: F) -> TestServer
+pub fn server<F, S, I>(factory: F) -> TestServer
 where
     F: AsyncFn(&()) -> I + Send + Clone + 'static,
     S: Service<(), Io> + 'static,
@@ -242,7 +242,6 @@ where
             .add(TlsConfig::new())
             .add(ntex_h2::ServiceConfig::new()),
     )
-    .await
 }
 
 /// Start test server
@@ -274,7 +273,7 @@ where
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub async fn server_with_config<F, S, I>(f: F, cfg: impl Into<SharedCfg>) -> TestServer
+pub fn server_with_config<F, S, I>(f: F, cfg: impl Into<SharedCfg>) -> TestServer
 where
     F: AsyncFn(&()) -> I + Send + Clone + 'static,
     S: Service<(), Io> + 'static,
@@ -308,9 +307,9 @@ where
         })
     });
     let (system, server, addr) = rx.recv().unwrap();
-    sleep(Millis(25)).await;
+    thread::sleep(Millis(25).into());
 
-    TestServer::create(id, system, server, addr, Seconds(90), Millis(90_000)).await
+    TestServer::create(id, system, server, addr, Seconds(90), Millis(90_000))
 }
 
 #[derive(Debug)]
@@ -325,7 +324,7 @@ pub struct TestServer {
 }
 
 impl TestServer {
-    pub async fn create(
+    pub fn create(
         id: Uuid,
         system: System,
         server: Server,
@@ -343,7 +342,7 @@ impl TestServer {
             )
             .into();
 
-        let client = Self::create_client(cfg.clone()).await;
+        let client = Self::create_client(cfg.clone());
 
         TestServer {
             id,
@@ -356,7 +355,7 @@ impl TestServer {
     }
 
     /// Set client timeout
-    pub async fn set_client_timeout(mut self, timeout: Seconds, connect_timeout: Millis) -> Self {
+    pub fn set_client_timeout(mut self, timeout: Seconds, connect_timeout: Millis) -> Self {
         self.cfg = SharedCfg::new("TEST-CLIENT")
             .add(IoConfig::new().set_connect_timeout(connect_timeout))
             .add(TlsConfig::new().set_handshake_timeout(timeout))
@@ -366,13 +365,13 @@ impl TestServer {
                     .set_max_header_continuation_frames(96),
             )
             .into();
-        self.client = Self::create_client(self.cfg.clone()).await;
+        self.client = Self::create_client(self.cfg.clone());
         self
     }
 
     /// Set client timeout
-    async fn create_client(cfg: SharedCfg) -> Client {
-        let connector = {
+    fn create_client(cfg: SharedCfg) -> Client {
+        let svc = {
             #[cfg(feature = "openssl")]
             {
                 use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
@@ -382,19 +381,15 @@ impl TestServer {
                 let _ = builder
                     .set_alpn_protos(b"\x02h2\x08http/1.1")
                     .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
-                Connector::default().openssl(builder.build())
+                Connector::builder(cfg).openssl(builder.build()).build()
             }
             #[cfg(not(feature = "openssl"))]
             {
-                Connector::default()
+                Connector::builder(cfg).build()
             }
         };
 
-        Client::builder()
-            .connector::<&str>(connector)
-            .build(cfg)
-            .await
-            .unwrap()
+        Client::builder().connector(svc).build()
     }
 
     /// Construct test server url
@@ -452,11 +447,10 @@ impl TestServer {
         &self,
         path: &str,
     ) -> Result<WsConnection<impl Filter>, Error<WsClientError>> {
-        WsClient::builder(self.url(path))
+        WsClient::builder(self.url(path), self.cfg.clone())
             .address(self.addr)
             .timeout(Seconds(30))
-            .build(self.cfg.clone())
-            .await
+            .build()
             .unwrap()
             .connect()
             .await
@@ -490,13 +484,12 @@ impl TestServer {
             .set_alpn_protos(b"\x08http/1.1")
             .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
 
-        WsClient::builder(self.url(path))
+        WsClient::builder(self.url(path), self.cfg.clone())
             .address(self.addr)
             .timeout(Seconds(30))
             .openssl(builder.build())
             .take()
-            .build(self.cfg.clone())
-            .await
+            .build()
             .unwrap()
             .connect()
             .await

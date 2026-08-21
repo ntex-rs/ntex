@@ -35,15 +35,18 @@ mod test;
 pub use self::builder::ClientBuilder;
 pub use self::cfg::ClientConfig;
 pub use self::connection::Connection;
-pub use self::connector::{Connector, ConnectorService};
+pub use self::connector::Connector;
 pub use self::request::ClientRequest;
 pub use self::response::{ClientResponse, JsonBody, MessageBody};
 pub use self::service::{ServiceRequest, ServiceResponse};
 pub use self::test::TestResponse;
 
 pub(crate) use self::codec::{ClientCodec, ClientPayloadCodec};
+use crate::client::error::ConnectError;
 use crate::http::{HeaderMap, Method, RequestHead, Uri, body::BodySize, error::HttpError};
-use crate::{Pipeline, SharedCfg, error::Error};
+use crate::{Pipeline, error::Error, io::IoBoxed};
+
+type ConnectorPipeline = Pipeline<Connect, IoBoxed, Error<ConnectError>>;
 
 #[derive(Debug, Clone)]
 pub struct Connect {
@@ -76,11 +79,8 @@ pub struct Client {
 
 impl Client {
     /// Create new client instance with default settings.
-    pub async fn new() -> Client {
-        ClientBuilder::new()
-            .build(SharedCfg::default())
-            .await
-            .unwrap()
+    pub fn new() -> Client {
+        ClientBuilder::new().build()
     }
 
     /// Build client instance.

@@ -284,6 +284,12 @@ impl Default for SharedCfg {
     }
 }
 
+impl<'a> From<&'a SharedCfg> for SharedCfg {
+    fn from(cfg: &'a SharedCfg) -> SharedCfg {
+        cfg.clone()
+    }
+}
+
 impl<T: Configuration> From<SharedCfg> for Cfg<T> {
     #[inline]
     fn from(cfg: SharedCfg) -> Self {
