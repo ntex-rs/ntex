@@ -35,7 +35,6 @@ mod test;
 pub use self::builder::ClientBuilder;
 pub use self::cfg::ClientConfig;
 pub use self::connection::Connection;
-pub use self::connector::Connector;
 pub use self::request::ClientRequest;
 pub use self::response::{ClientResponse, JsonBody, MessageBody};
 pub use self::service::{ServiceRequest, ServiceResponse};
@@ -44,9 +43,10 @@ pub use self::test::TestResponse;
 pub(crate) use self::codec::{ClientCodec, ClientPayloadCodec};
 use crate::client::error::ConnectError;
 use crate::http::{HeaderMap, Method, RequestHead, Uri, body::BodySize, error::HttpError};
-use crate::{Pipeline, error::Error, io::IoBoxed};
+use crate::service::{cfg::SharedCfg, pipeline::PipelineWithState};
+use crate::{Cfg, Pipeline, error::Error, io::IoBoxed};
 
-type ConnectorPipeline = Pipeline<Connect, IoBoxed, Error<ConnectError>>;
+type ConnectorPipeline = PipelineWithState<SharedCfg, Connect, IoBoxed, Error<ConnectError>>;
 
 #[derive(Debug, Clone)]
 pub struct Connect {
@@ -73,14 +73,14 @@ pub struct Connect {
 /// ```
 #[derive(Debug, Clone)]
 pub struct Client {
+    cfg: Cfg<ClientConfig>,
     svc: Rc<Pipeline<ServiceRequest, ServiceResponse, Error<error::ClientError>>>,
-    config: ClientConfig,
 }
 
 impl Client {
     /// Create new client instance with default settings.
     pub fn new() -> Client {
-        ClientBuilder::new().build()
+        ClientBuilder::new().build(SharedCfg::default())
     }
 
     /// Build client instance.
@@ -89,11 +89,11 @@ impl Client {
     }
 
     pub(crate) fn with_service(
+        cfg: Cfg<ClientConfig>,
         svc: Pipeline<ServiceRequest, ServiceResponse, Error<error::ClientError>>,
-        config: ClientConfig,
     ) -> Self {
         Client {
-            config,
+            cfg,
             svc: Rc::new(svc),
         }
     }
@@ -109,8 +109,8 @@ impl Client {
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
     {
-        let mut req = ClientRequest::new(method, url, self.config.clone(), self.svc.bind());
-        for (key, value) in self.config.headers() {
+        let mut req = ClientRequest::new(method, url, self.cfg.clone(), self.svc.bind());
+        for (key, value) in self.cfg.headers() {
             req = req.set_header_if_none(key.clone(), value.clone());
         }
         req

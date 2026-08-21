@@ -20,14 +20,16 @@ where
     A: Address,
     Connect<A>: From<U>,
 {
-    Connector::<A, ()>::new().connect(message).await
+    Connector::<A>::new()
+        .connect(message, &SharedCfg::default())
+        .await
 }
 
 /// Resolve and connect to remote host
-pub async fn connect_with<A, U>(message: U, cfg: SharedCfg) -> Result<Io, Error<ConnectError>>
+pub async fn connect_with<A, U>(message: U, cfg: &SharedCfg) -> Result<Io, Error<ConnectError>>
 where
     A: Address,
     Connect<A>: From<U>,
 {
-    Connector::<A, ()>::with(cfg).connect(message).await
+    Connector::<A>::new().connect(message, cfg).await
 }

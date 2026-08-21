@@ -3,7 +3,7 @@ use std::io;
 use ntex_error::Error;
 use ntex_io::{Filter, Io, Layer};
 use ntex_net::connect::{Address, Connect, ConnectError, Connector};
-use ntex_service::{Ctx, IntoService, Service, cfg::Configuration};
+use ntex_service::{Ctx, IntoService, Service, cfg::SharedCfg};
 use ntex_util::time::timeout_checked;
 use tls_openssl::ssl::SslConnector as OpensslConnector;
 
@@ -25,9 +25,9 @@ impl<A: Address> SslConnector<Connector<A>> {
     }
 
     /// Use connector to open connections.
-    pub fn connector<F, S, St>(self, f: impl IntoService<S, St, Connect<A>>) -> SslConnector<S>
+    pub fn connector<F, S>(self, f: impl IntoService<S, SharedCfg, Connect<A>>) -> SslConnector<S>
     where
-        S: Service<St, Connect<A>, Res = Io<F>, Error = Error<ConnectError>>,
+        S: Service<SharedCfg, Connect<A>, Res = Io<F>, Error = Error<ConnectError>>,
     {
         SslConnector {
             svc: f.into_service(),
@@ -42,8 +42,9 @@ impl<S> SslConnector<S> {
         &self,
         io: Io<F>,
         host: &str,
+        cfg: &SharedCfg,
     ) -> Result<Io<Layer<SslFilter, F>>, Error<ConnectError>> {
-        let cfg = io.cfg().ctx().get::<TlsConfig>();
+        let cfg = cfg.get::<TlsConfig>();
         log::trace!("{}: SSL Handshake start for: {host:?} {io:?}", cfg.tag());
 
         async {
@@ -79,9 +80,9 @@ impl<S> SslConnector<S> {
     }
 }
 
-impl<F: Filter, A: Address, S, St> Service<St, Connect<A>> for SslConnector<S>
+impl<F: Filter, A: Address, S> Service<SharedCfg, Connect<A>> for SslConnector<S>
 where
-    S: Service<St, Connect<A>, Res = Io<F>, Error = Error<ConnectError>>,
+    S: Service<SharedCfg, Connect<A>, Res = Io<F>, Error = Error<ConnectError>>,
 {
     type Res = Io<Layer<SslFilter, F>>;
     type Error = Error<ConnectError>;
@@ -89,15 +90,15 @@ where
     async fn call(
         &self,
         req: Connect<A>,
-        ctx: Ctx<'_, Self, St>,
+        ctx: Ctx<'_, Self, SharedCfg>,
     ) -> Result<Self::Res, Self::Error> {
         let host = req.host().split(':').next().unwrap().to_string();
         let io = ctx.call(&self.svc, req).await?;
-        self.connect(io, &host).await
+        self.connect(io, &host, ctx.st()).await
     }
 
-    ntex_service::forward_ready!(St, svc);
-    ntex_service::forward_shutdown!(St, svc);
+    ntex_service::forward_ready!(SharedCfg, svc);
+    ntex_service::forward_shutdown!(SharedCfg, svc);
 }
 
 #[cfg(test)]

@@ -20,7 +20,7 @@ use crate::http::{body::BodySize, error::HttpError};
 use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, Layer, Reason, Sealed};
 use crate::service::{IntoService, Pipeline, apply_fn, fn_service};
 use crate::time::{Millis, timeout};
-use crate::{Service, SharedCfg, channel::mpsc, rt, ws};
+use crate::{Cfg, Service, SharedCfg, channel::mpsc, rt, ws};
 
 use super::error::{WsClientBuilderError, WsClientError, WsError};
 use super::transport::WsTransport;
@@ -32,20 +32,19 @@ thread_local! {
 /// `WebSocket` client builder
 pub struct WsClient<F> {
     connector: Pipeline<Connect<Uri>, Io<F>, Error<ConnectError>>,
+    cfg: Cfg<ClientConfig>,
     head: Message<RequestHead>,
     addr: Option<net::SocketAddr>,
     max_size: usize,
     server_mode: bool,
     timeout: Millis,
     extra_headers: RefCell<Option<HeaderMap>>,
-    client_cfg: ClientConfig,
     _t: marker::PhantomData<F>,
 }
 
 /// `WebSocket` client builder
-pub struct WsClientBuilder<F, T> {
-    inner: Option<Inner<F, T>>,
-    cfg: SharedCfg,
+pub struct WsClientBuilder<F, S> {
+    inner: Option<Inner<F, S>>,
     err: Option<HttpError>,
     protocols: Option<String>,
     origin: Option<HeaderValue>,
@@ -53,8 +52,8 @@ pub struct WsClientBuilder<F, T> {
     cookies: Option<CookieJar>,
 }
 
-struct Inner<F, T> {
-    connector: T,
+struct Inner<F, S> {
+    connector: S,
     pub(crate) head: Message<RequestHead>,
     addr: Option<net::SocketAddr>,
     max_size: usize,
@@ -65,28 +64,24 @@ struct Inner<F, T> {
 
 impl WsClient<Base> {
     /// Create new websocket client builder
-    pub fn builder<U>(uri: U, cfg: impl Into<SharedCfg>) -> WsClientBuilder<Base, Connector<Uri>>
+    pub fn builder<U>(uri: U) -> WsClientBuilder<Base, Connector<Uri>>
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
     {
-        WsClientBuilder::new(uri, cfg.into())
+        WsClientBuilder::new(uri)
     }
 
     /// Create new websocket client builder
-    pub fn with_connector<F, S, U, I>(
-        uri: U,
-        cfg: impl Into<SharedCfg>,
-        f: I,
-    ) -> WsClientBuilder<F, S>
+    pub fn with_connector<F, S, U, I>(uri: U, f: I) -> WsClientBuilder<F, S>
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
         F: Filter + 'static,
-        S: Service<(), Connect<Uri>, Res = Io<F>, Error = Error<ConnectError>> + 'static,
-        I: IntoService<S, (), Connect<Uri>>,
+        S: Service<SharedCfg, Connect<Uri>, Res = Io<F>, Error = Error<ConnectError>> + 'static,
+        I: IntoService<S, SharedCfg, Connect<Uri>>,
     {
-        WsClientBuilder::new(uri, cfg.into()).connector(f.into_service())
+        WsClientBuilder::new(uri).connector(f.into_service())
     }
 }
 
@@ -262,7 +257,7 @@ where
         // response and ws io
         Ok(WsConnection::new(
             io,
-            ClientResponse::with_empty_payload(response, self.client_cfg.clone()),
+            ClientResponse::with_empty_payload(response, self.cfg.clone()),
             if server_mode {
                 ws::Codec::new().max_size(max_size)
             } else {
@@ -283,16 +278,15 @@ impl<F> fmt::Debug for WsClient<F> {
     }
 }
 
-impl WsClientBuilder<Base, ()> {
+impl WsClientBuilder<Base, Connector<Uri>> {
     #[must_use]
     /// Create new client builder.
-    fn new<U>(uri: U, cfg: impl Into<SharedCfg>) -> WsClientBuilder<Base, Connector<Uri>>
+    fn new<U>(uri: U) -> WsClientBuilder<Base, Connector<Uri>>
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
     {
-        let cfg = cfg.into();
-        let connector = Connector::<Uri>::with(cfg.clone());
+        let connector = Connector::<Uri>::new();
 
         let mut head = Message::<RequestHead>::new();
         // the message pool may return a recycled head whose method is not GET
@@ -308,7 +302,6 @@ impl WsClientBuilder<Base, ()> {
 
         WsClientBuilder {
             err,
-            cfg,
             origin: None,
             protocols: None,
             inner: Some(Inner {
@@ -329,7 +322,7 @@ impl WsClientBuilder<Base, ()> {
 impl<F, S> WsClientBuilder<F, S>
 where
     F: 'static,
-    S: Service<(), Connect<Uri>, Res = Io<F>, Error = Error<ConnectError>> + 'static,
+    S: Service<SharedCfg, Connect<Uri>, Res = Io<F>, Error = Error<ConnectError>> + 'static,
 {
     /// Set socket address of the server.
     ///
@@ -513,8 +506,8 @@ where
     pub fn connector<F1, T1, U>(&mut self, f: U) -> WsClientBuilder<F1, T1>
     where
         F1: Filter + 'static,
-        T1: Service<(), Connect<Uri>, Res = Io<F1>, Error = Error<ConnectError>> + 'static,
-        U: IntoService<T1, (), Connect<Uri>>,
+        T1: Service<SharedCfg, Connect<Uri>, Res = Io<F1>, Error = Error<ConnectError>> + 'static,
+        U: IntoService<T1, SharedCfg, Connect<Uri>>,
     {
         let inner = self.inner.take().expect("cannot reuse WsClient builder");
 
@@ -529,7 +522,6 @@ where
                 _t: marker::PhantomData,
             }),
             err: self.err.take(),
-            cfg: self.cfg.clone(),
             protocols: self.protocols.take(),
             origin: self.origin.take(),
             #[cfg(feature = "cookie")]
@@ -543,9 +535,7 @@ where
         &mut self,
         config: tls_openssl::ssl::SslConnector,
     ) -> WsClientBuilder<Layer<openssl::SslFilter>, openssl::SslConnector<Connector<Uri>>> {
-        self.connector(
-            openssl::SslConnector::new(config).connector(Connector::with(self.cfg.clone())),
-        )
+        self.connector(openssl::SslConnector::new(config))
     }
 
     #[cfg(feature = "rustls")]
@@ -554,9 +544,7 @@ where
         &mut self,
         config: std::sync::Arc<tls_rustls::ClientConfig>,
     ) -> WsClientBuilder<Layer<rustls::TlsClientFilter>, rustls::TlsConnector<Connector<Uri>>> {
-        self.connector(
-            rustls::TlsConnector::from(config).connector(Connector::with(self.cfg.clone())),
-        )
+        self.connector(rustls::TlsConnector::from(config))
     }
 
     #[must_use]
@@ -564,7 +552,6 @@ where
     pub fn take(&mut self) -> WsClientBuilder<F, S> {
         WsClientBuilder {
             inner: self.inner.take(),
-            cfg: self.cfg.clone(),
             err: self.err.take(),
             origin: self.origin.take(),
             protocols: self.protocols.take(),
@@ -578,7 +565,10 @@ where
     /// # Panics
     ///
     /// Panics if client build is reused.
-    pub fn build(&mut self) -> Result<WsClient<F>, WsClientBuilderError> {
+    pub fn build(
+        &mut self,
+        cfg: impl Into<SharedCfg>,
+    ) -> Result<WsClient<F>, WsClientBuilderError> {
         if let Some(e) = self.err.take() {
             return Err(WsClientBuilderError::Http(e));
         }
@@ -646,16 +636,17 @@ where
                 HeaderValue::try_from(protocols.as_str()).unwrap(),
             );
         }
+        let cfg = cfg.into();
 
         Ok(WsClient {
-            connector: Pipeline::new(inner.connector),
+            cfg: cfg.get(),
+            connector: Pipeline::with_st(cfg, inner.connector),
             head: inner.head,
             addr: inner.addr,
             max_size: inner.max_size,
             server_mode: inner.server_mode,
             timeout: inner.timeout,
             extra_headers: RefCell::new(None),
-            client_cfg: ClientConfig::default(),
             _t: marker::PhantomData,
         })
     }
@@ -663,17 +654,17 @@ where
 
 #[allow(clippy::ref_option)]
 #[inline]
-fn parts<F, T>(
-    parts: &mut Option<Inner<F, T>>,
+fn parts<F, S>(
+    parts: &mut Option<Inner<F, S>>,
     err: Option<HttpError>,
-) -> Option<&mut Inner<F, T>> {
+) -> Option<&mut Inner<F, S>> {
     if err.is_some() {
         return None;
     }
     parts.as_mut()
 }
 
-impl<F, T> fmt::Debug for WsClientBuilder<F, T> {
+impl<F, S> fmt::Debug for WsClientBuilder<F, S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(ref parts) = self.inner {
             writeln!(

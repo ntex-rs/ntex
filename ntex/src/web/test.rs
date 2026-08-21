@@ -7,7 +7,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use uuid::Uuid;
 
 use crate::client::error::ClientPayloadError;
-use crate::client::{Client, ClientRequest, ClientResponse, Connector};
+use crate::client::{Client, ClientConfig, ClientRequest, ClientResponse};
 use crate::error::Error;
 use crate::http::body::MessageBody;
 use crate::http::error::{HttpError, ResponseError};
@@ -726,34 +726,28 @@ where
                     .set_max_header_list_size(256 * 1024)
                     .set_max_header_continuation_frames(96),
             )
-            .into()
+            .add(ClientConfig::new().set_lifetime(Seconds::ZERO))
+            .build()
     });
 
     let client = {
-        let connector = {
-            #[cfg(feature = "openssl")]
-            {
-                use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+        #[cfg(feature = "openssl")]
+        {
+            use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 
-                let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
-                builder.set_verify(SslVerifyMode::NONE);
-                let _ = builder
-                    .set_alpn_protos(b"\x02h2\x08http/1.1")
-                    .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
-                Connector::builder(cfg.clone())
-                    .lifetime(Seconds::ZERO)
-                    .openssl(builder.build())
-                    .build()
-            }
-            #[cfg(not(feature = "openssl"))]
-            {
-                Connector::builder(cfg.clone())
-                    .lifetime(Seconds::ZERO)
-                    .build()
-            }
-        };
-
-        Client::builder().connector(connector).build()
+            let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+            builder.set_verify(SslVerifyMode::NONE);
+            let _ = builder
+                .set_alpn_protos(b"\x02h2\x08http/1.1")
+                .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
+            Client::builder()
+                .openssl(builder.build())
+                .build(cfg.clone())
+        }
+        #[cfg(not(feature = "openssl"))]
+        {
+            Client::builder().build(cfg.clone())
+        }
     };
 
     TestServer {
@@ -1012,10 +1006,10 @@ impl TestServer {
                 panic!("openssl feature is required")
             }
         } else {
-            WsClient::builder(self.url(path), self.cfg.clone())
+            WsClient::builder(self.url(path))
                 .address(self.addr)
                 .timeout(Seconds(60))
-                .build()
+                .build(self.cfg.clone())
                 .unwrap()
                 .connect()
                 .await

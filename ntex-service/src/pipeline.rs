@@ -4,7 +4,7 @@ use crate::state::{Noop, State};
 use crate::{Ctx, IntoService, Service, ctx::WaitersRef, util::BoxFuture};
 
 pub use crate::pl_factory::PipelineFactory;
-pub use crate::pl_nost::PipelineNostate;
+pub use crate::pl_nost::{PipelineWithState, PipelineWithStateBinding};
 
 /// Container for a service.
 ///

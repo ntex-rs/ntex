@@ -3,7 +3,7 @@ use std::{fmt, io, sync::Arc};
 use ntex_error::Error;
 use ntex_io::{Filter, Io, Layer};
 use ntex_net::connect::{Address, Connect, ConnectError, Connector};
-use ntex_service::{Ctx, IntoService, Service, cfg::Configuration};
+use ntex_service::{Ctx, IntoService, Service, cfg::SharedCfg};
 use ntex_util::time::timeout_checked;
 use tls_rustls::{ClientConfig, pki_types::ServerName};
 
@@ -21,9 +21,9 @@ impl<A: Address> TlsConnector<Connector<A>> {
     }
 
     /// Use connector to open connections.
-    pub fn connector<F, S, St>(self, f: impl IntoService<S, St, Connect<A>>) -> TlsConnector<S>
+    pub fn connector<F, S>(self, f: impl IntoService<S, SharedCfg, Connect<A>>) -> TlsConnector<S>
     where
-        S: Service<St, Connect<A>, Res = Io<F>, Error = Error<ConnectError>>,
+        S: Service<SharedCfg, Connect<A>, Res = Io<F>, Error = Error<ConnectError>>,
     {
         TlsConnector {
             svc: f.into_service(),
@@ -67,9 +67,9 @@ impl<S: fmt::Debug> fmt::Debug for TlsConnector<S> {
     }
 }
 
-impl<F: Filter, A: Address, S, St> Service<St, Connect<A>> for TlsConnector<S>
+impl<F: Filter, A: Address, S> Service<SharedCfg, Connect<A>> for TlsConnector<S>
 where
-    S: Service<St, Connect<A>, Res = Io<F>, Error = Error<ConnectError>>,
+    S: Service<SharedCfg, Connect<A>, Res = Io<F>, Error = Error<ConnectError>>,
 {
     type Res = Io<Layer<TlsClientFilter, F>>;
     type Error = Error<ConnectError>;
@@ -77,12 +77,12 @@ where
     async fn call(
         &self,
         req: Connect<A>,
-        ctx: Ctx<'_, Self, St>,
+        ctx: Ctx<'_, Self, SharedCfg>,
     ) -> Result<Self::Res, Self::Error> {
+        let cfg = ctx.st().get::<TlsConfig>();
         let host = req.host().split(':').next().unwrap().to_owned();
 
         let io = ctx.call(&self.svc, req).await?;
-        let cfg = io.cfg().ctx().get::<TlsConfig>();
         log::trace!("{}: TLS Handshake start for: {host:?}", cfg.tag());
 
         let config = self.config.clone();
@@ -115,8 +115,8 @@ where
         .map_err(|e: Error<_>| e.set_service(cfg.service()))
     }
 
-    ntex_service::forward_ready!(St, svc);
-    ntex_service::forward_shutdown!(St, svc);
+    ntex_service::forward_ready!(SharedCfg, svc);
+    ntex_service::forward_shutdown!(SharedCfg, svc);
 }
 
 #[cfg(test)]

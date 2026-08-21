@@ -9,7 +9,7 @@ use crate::error::Error;
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::{ConnectionType, Method, Uri, Version, body::Body};
-use crate::{PipelineBinding, time::Millis, util::Bytes, util::Stream};
+use crate::{Cfg, PipelineBinding, time::Millis, util::Bytes, util::Stream};
 
 use super::error::{ClientError, InvalidUrl};
 use super::{ClientConfig, ClientResponse, ServiceRequest, ServiceResponse};
@@ -41,7 +41,7 @@ pub struct ClientRequest {
     request: ServiceRequest,
     svc: PipelineBinding<ServiceRequest, ServiceResponse, Error<ClientError>>,
     err: Option<HttpError>,
-    cfg: ClientConfig,
+    cfg: Cfg<ClientConfig>,
     #[cfg(feature = "cookie")]
     cookies: Option<CookieJar>,
 }
@@ -51,7 +51,7 @@ impl ClientRequest {
     pub(super) fn new<U>(
         method: Method,
         uri: U,
-        cfg: ClientConfig,
+        cfg: Cfg<ClientConfig>,
         svc: PipelineBinding<ServiceRequest, ServiceResponse, Error<ClientError>>,
     ) -> Self
     where
@@ -441,7 +441,7 @@ impl ClientRequest {
     #[allow(unused_mut)]
     fn prep_for_sending(&mut self) -> Result<(), Error<ClientError>> {
         self.prep_for_sending_inner()
-            .map_err(|e| e.set_service(self.cfg.cfg().service()))
+            .map_err(|e| e.set_service(self.cfg.service()))
     }
 
     #[allow(unused_mut)]

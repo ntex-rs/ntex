@@ -5,9 +5,9 @@ use coo_kie::{Cookie, CookieJar};
 use crate::http::error::HttpError;
 use crate::http::header::{HeaderName, HeaderValue};
 use crate::http::{Payload, ResponseHead, StatusCode, Version};
-use crate::{channel::bstream, util::Bytes};
+use crate::{Cfg, channel::bstream, util::Bytes};
 
-use super::{ClientConfig, ClientResponse};
+use super::ClientResponse;
 
 #[derive(Debug)]
 /// Test `ClientResponse` builder
@@ -111,9 +111,9 @@ impl TestResponse {
         }
 
         if let Some(pl) = self.payload {
-            ClientResponse::new(head, pl, ClientConfig::default())
+            ClientResponse::new(head, pl, Cfg::default())
         } else {
-            ClientResponse::new(head, bstream::empty(None).into(), ClientConfig::default())
+            ClientResponse::new(head, bstream::empty(None).into(), Cfg::default())
         }
     }
 }

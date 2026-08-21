@@ -3,7 +3,7 @@
 use std::cell::{Cell, RefCell};
 use std::{collections::VecDeque, fmt, future, marker, task, task::Poll};
 
-use ntex_service::{Ctx, Middleware, Service, pipeline::PipelineNostate};
+use ntex_service::{Ctx, Middleware, Service, pipeline::PipelineWithState};
 
 use crate::channel::oneshot;
 
@@ -58,7 +58,7 @@ where
     type Service = BufferService<St, Req, Res, Err>;
 
     fn create(&self, service: S, _: &C) -> Self::Service {
-        BufferService::new(self.buf_size, PipelineNostate::new(service))
+        BufferService::new(self.buf_size, PipelineWithState::new(service))
     }
 }
 
@@ -91,7 +91,7 @@ impl<E: fmt::Display + fmt::Debug> std::error::Error for BufferServiceError<E> {
 pub struct BufferService<St, Req, Res, Err> {
     size: usize,
     ready: Cell<bool>,
-    service: PipelineNostate<St, Req, Res, Err>,
+    service: PipelineWithState<St, Req, Res, Err>,
     buf: RefCell<VecDeque<oneshot::Sender<oneshot::Sender<()>>>>,
     next_call: RefCell<Option<oneshot::Receiver<()>>>,
     cancel_on_shutdown: bool,
@@ -103,7 +103,7 @@ where
     St: Clone + 'static,
 {
     #[must_use]
-    pub fn new(size: usize, service: PipelineNostate<St, Req, Res, Err>) -> Self {
+    pub fn new(size: usize, service: PipelineWithState<St, Req, Res, Err>) -> Self {
         Self {
             size,
             service,
@@ -297,7 +297,7 @@ mod tests {
             count: Cell::new(0),
         });
 
-        let svc = BufferService::new(2, PipelineNostate::new(TestService(inner.clone())));
+        let svc = BufferService::new(2, PipelineWithState::new(TestService(inner.clone())));
         assert!(format!("{svc:?}").contains("BufferService"));
 
         let srv = Pipeline::new(svc);
@@ -341,7 +341,7 @@ mod tests {
 
         let srv = Pipeline::new(BufferService::new(
             2,
-            PipelineNostate::new(TestService(inner.clone())),
+            PipelineWithState::new(TestService(inner.clone())),
         ));
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 

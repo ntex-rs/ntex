@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::channel::bstream;
 use crate::client::error::ClientPayloadError;
-use crate::client::{Client, ClientRequest, ClientResponse, Connector};
+use crate::client::{Client, ClientRequest, ClientResponse};
 use crate::error::Error;
 #[cfg(feature = "ws")]
 use crate::io::Filter;
@@ -371,25 +371,21 @@ impl TestServer {
 
     /// Set client timeout
     fn create_client(cfg: SharedCfg) -> Client {
-        let svc = {
-            #[cfg(feature = "openssl")]
-            {
-                use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+        #[cfg(feature = "openssl")]
+        {
+            use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 
-                let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
-                builder.set_verify(SslVerifyMode::NONE);
-                let _ = builder
-                    .set_alpn_protos(b"\x02h2\x08http/1.1")
-                    .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
-                Connector::builder(cfg).openssl(builder.build()).build()
-            }
-            #[cfg(not(feature = "openssl"))]
-            {
-                Connector::builder(cfg).build()
-            }
-        };
-
-        Client::builder().connector(svc).build()
+            let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+            builder.set_verify(SslVerifyMode::NONE);
+            let _ = builder
+                .set_alpn_protos(b"\x02h2\x08http/1.1")
+                .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
+            Client::builder().openssl(builder.build()).build(cfg)
+        }
+        #[cfg(not(feature = "openssl"))]
+        {
+            Client::builder().build(cfg)
+        }
     }
 
     /// Construct test server url
@@ -447,10 +443,10 @@ impl TestServer {
         &self,
         path: &str,
     ) -> Result<WsConnection<impl Filter>, Error<WsClientError>> {
-        WsClient::builder(self.url(path), self.cfg.clone())
+        WsClient::builder(self.url(path))
             .address(self.addr)
             .timeout(Seconds(30))
-            .build()
+            .build(self.cfg.clone())
             .unwrap()
             .connect()
             .await

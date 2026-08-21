@@ -5,11 +5,11 @@ use crate::{Ctx, IntoService, Service, ctx::WaitersRef, util::BoxFuture};
 /// Container for a service.
 ///
 /// Provides a way to call the enclosed service and share its readiness state.
-pub struct PipelineNostate<St, Req, Res, Err> {
+pub struct PipelineWithState<St, Req, Res, Err> {
     state: Rc<dyn PipelineApi<St, Req, Res, Err>>,
 }
 
-impl<St, Req, Res, Err> PipelineNostate<St, Req, Res, Err>
+impl<St, Req, Res, Err> PipelineWithState<St, Req, Res, Err>
 where
     St: 'static,
     Req: 'static,
@@ -23,7 +23,7 @@ where
         S: Service<St, Req, Res = Res, Error = Err> + 'static,
         St: 'static,
     {
-        PipelineNostate {
+        PipelineWithState {
             state: Rc::new(PipelineState {
                 s: f.into_service(),
                 waiters: WaitersRef::new(),
@@ -45,7 +45,7 @@ where
     /// Wait for service readiness, then create a future
     /// that resolves to the service call result.
     pub async fn call(&self, req: Req, st: &St) -> Result<Res, Err> {
-        let pl = self.bind();
+        let pl = self.binding();
         self.state.call(pl.index, req, st, true).await
     }
 
@@ -55,7 +55,7 @@ where
     /// This call can be completed from different async tasks.
     /// Note: this call does not check service readiness.
     pub async fn call_nowait(&self, req: Req, st: &St) -> Result<Res, Err> {
-        let pl = self.bind();
+        let pl = self.binding();
         pl.state.call(pl.index, req, st, false).await
     }
 
@@ -82,21 +82,32 @@ where
         self.state.poll_ready(cx, st)
     }
 
-    fn bind(&self) -> Binding<'_, St, Req, Res, Err> {
+    fn binding(&self) -> Binding<'_, St, Req, Res, Err> {
         Binding {
             index: self.state.reg(),
             state: self.state.as_ref(),
         }
     }
-}
 
-impl<St, Req, Res, Err> fmt::Debug for PipelineNostate<St, Req, Res, Err> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PipelineNostate").finish()
+    #[inline]
+    /// Returns the current pipeline binding.
+    ///
+    /// The binding can be used to call the service.
+    pub fn bind(&self) -> PipelineWithStateBinding<St, Req, Res, Err> {
+        PipelineWithStateBinding {
+            index: self.state.reg(),
+            state: self.state.clone(),
+        }
     }
 }
 
-impl<St, Req, Res, Err> Drop for PipelineNostate<St, Req, Res, Err> {
+impl<St, Req, Res, Err> fmt::Debug for PipelineWithState<St, Req, Res, Err> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PipelineWithState").finish()
+    }
+}
+
+impl<St, Req, Res, Err> Drop for PipelineWithState<St, Req, Res, Err> {
     #[inline]
     fn drop(&mut self) {
         self.state.unreg(0);
@@ -112,6 +123,60 @@ impl<St, Req, Res, Err> Drop for Binding<'_, St, Req, Res, Err> {
     #[inline]
     fn drop(&mut self) {
         self.state.unreg(self.index);
+    }
+}
+
+pub struct PipelineWithStateBinding<St, Req, Res, Err> {
+    index: u32,
+    state: Rc<dyn PipelineApi<St, Req, Res, Err>>,
+}
+
+impl<St, Req, Res, Err> Clone for PipelineWithStateBinding<St, Req, Res, Err> {
+    #[inline]
+    fn clone(&self) -> Self {
+        PipelineWithStateBinding {
+            index: self.state.reg(),
+            state: self.state.clone(),
+        }
+    }
+}
+
+impl<St, Req, Res, Err> Drop for PipelineWithStateBinding<St, Req, Res, Err> {
+    #[inline]
+    fn drop(&mut self) {
+        self.state.unreg(self.index);
+    }
+}
+
+impl<St, Req, Res, Err> PipelineWithStateBinding<St, Req, Res, Err>
+where
+    St: 'static,
+    Req: 'static,
+    Res: 'static,
+    Err: 'static,
+{
+    #[inline]
+    /// Wait for service readiness, then create a future
+    /// that resolves to the service call result.
+    pub async fn call(&self, req: Req, st: &St) -> Result<Res, Err> {
+        let pl = self.clone();
+        self.state.call(pl.index, req, st, true).await
+    }
+
+    #[inline]
+    /// Call the service and create a future that resolves to the service result.
+    ///
+    /// This call can be completed from different async tasks.
+    /// Note: this call does not check service readiness.
+    pub async fn call_nowait(&self, req: Req, st: &St) -> Result<Res, Err> {
+        let pl = self.clone();
+        pl.state.call(pl.index, req, st, false).await
+    }
+}
+
+impl<St, Req, Res, Err> fmt::Debug for PipelineWithStateBinding<St, Req, Res, Err> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PipelineWithStateBinding").finish()
     }
 }
 
