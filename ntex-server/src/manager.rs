@@ -273,7 +273,6 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
         // stop workers
         if !self.workers.is_empty() {
             let to = self.mgr.0.cfg.shutdown_timeout;
-
             if graceful && !to.is_zero() {
                 let futs: Vec<_> = self.workers.iter().map(|worker| worker.stop(to)).collect();
 

@@ -356,6 +356,7 @@ where
                     });
                 }
                 Either::Right(Some(Shutdown { timeout, result })) => {
+                    log::info!("Shutting down {:?} worker gracefuly", self.name);
                     self.availability.set(false);
 
                     let timeout = if timeout.is_zero() { STOP_TIMEOUT } else { timeout };
@@ -363,6 +364,7 @@ where
                     return;
                 }
                 Either::Left(Ok(None)) | Either::Right(None) => {
+                    log::info!("Shutting down {:?} worker", self.name);
                     self.availability.set(false);
                     self.stop(STOP_TIMEOUT, None).await;
                     return;

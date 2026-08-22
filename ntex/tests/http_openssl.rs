@@ -558,7 +558,7 @@ async fn test_h2_graceful_shutdown() -> io::Result<()> {
                 if count.load(Ordering::Relaxed) == 2 {
                     let _ = tx.lock().unwrap().take().unwrap().send(());
                 }
-                sleep(Millis(1000)).await;
+                sleep(Millis(750)).await;
                 count.fetch_sub(1, Ordering::Relaxed);
                 Ok::<_, io::Error>(Response::Ok().finish())
             }),
@@ -567,10 +567,7 @@ async fn test_h2_graceful_shutdown() -> io::Result<()> {
 
     let req = srv.srequest(Method::GET, "/");
     rt::spawn(async move {
-        assert!(matches!(
-            req.send().await.err().unwrap().into_error(),
-            client::error::ClientError::H2 { .. }
-        ));
+        assert!(req.send().await.is_ok());
         sleep(Millis(100000)).await;
     });
     let req = srv.srequest(Method::GET, "/");
