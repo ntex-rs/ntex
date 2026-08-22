@@ -153,8 +153,7 @@ impl<M> ClientBuilder<M> {
     ///                 svc.call(req).await
     ///             }
     ///         ))
-    ///         .build(SharedCfg::default())
-    ///         .await;
+    ///         .build(SharedCfg::default());
     /// }
     /// ```
     pub fn middleware<U>(self, mw: U) -> ClientBuilder<Stack<U, M>> {

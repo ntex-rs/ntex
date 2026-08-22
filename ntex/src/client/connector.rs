@@ -6,16 +6,6 @@ use super::{Connect, Connection, pool::ConnectionPool};
 
 #[derive(Debug)]
 /// Manages http client network connectivity.
-///
-/// The `Connector` type uses a builder-like combinator pattern for service
-/// construction that finishes by calling the `.finish()` method.
-///
-/// ```rust,no_run
-/// use ntex::client::Connector;
-///
-/// let connector = Connector::default()
-///      .keep_alive(5_000);
-/// ```
 pub(super) struct Connector {
     pub(super) tcp_pool: ConnectionPool,
     pub(super) ssl_pool: Option<ConnectionPool>,
