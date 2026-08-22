@@ -4,6 +4,8 @@
 
 * Migrate to ntex-service 5
 
+* Re-design http client
+
 ## [3.13.0] - 2026-08-09
 
 * Stop server when one of worker panics (stop_on_panic)

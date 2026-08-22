@@ -1,5 +1,5 @@
-use ntex::client::{Client, Connector, error::ClientError};
-use ntex::{SharedCfg, error::Error};
+use ntex::client::{Client, ClientConfig, error::ClientError};
+use ntex::{SharedCfg, error::Error, time::Seconds};
 use tls_openssl::ssl::{self, SslMethod, SslVerifyMode};
 
 #[ntex::main]
@@ -24,8 +24,8 @@ async fn main() -> Result<(), Error<ClientError>> {
 
     // create client
     let client = Client::builder()
-        .connector(Connector::builder(SharedCfg::default()).openssl(builder.build()))
-        .build();
+        .openssl(builder.build())
+        .build(SharedCfg::new("H").add(ClientConfig::new().set_response_timeout(Seconds(5))));
 
     // Create request builder, configure request and send
     let response = client

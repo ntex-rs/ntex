@@ -66,12 +66,13 @@ pub(super) struct Inner {
 
 impl ConnectionPool {
     pub(super) fn new(svc: ConnectorPipeline, cfg: Cfg<ClientConfig>) -> Self {
+        let shared = cfg.shared();
         let waiters = Rc::new(RefCell::new(Waiters {
             waiters: HashMap::default(),
             pool: pool::new(),
         }));
         let inner = Rc::new(RefCell::new(Inner {
-            cfg: cfg.clone(),
+            cfg,
             stopped: false,
             acquired: 0,
             available: HashMap::default(),
@@ -83,7 +84,7 @@ impl ConnectionPool {
         // start connection pool
         let (stop, stop_rx) = oneshot::channel();
         crate::rt::spawn(run_connection_pool(
-            cfg.shared(),
+            shared.clone(),
             svc.bind(),
             inner.clone(),
             waiters.clone(),
@@ -94,7 +95,7 @@ impl ConnectionPool {
             svc,
             inner,
             waiters,
-            cfg: cfg.shared(),
+            cfg: shared,
             stop: Rc::new(Cell::new(Some(stop))),
         }))
     }
@@ -608,17 +609,26 @@ impl Drop for Acquired {
 
 #[cfg(test)]
 mod tests {
-    use std::future::Future;
+    use std::{future::Future, pin::Pin};
 
     use super::*;
     use crate::service::{Pipeline, boxed, fn_service};
-    use crate::time::{Millis, sleep};
+    use crate::time::{Millis, Seconds, sleep};
     use crate::{io as nio, testing::IoTest, util::lazy};
 
     #[crate::rt_test]
     async fn test_basics() {
         let store = Rc::new(RefCell::new(Vec::new()));
         let store2 = store.clone();
+
+        let cfg = SharedCfg::new("C")
+            .add(
+                ClientConfig::new()
+                    .set_keep_alive(Seconds(10))
+                    .set_lifetime(Seconds(10))
+                    .set_limit(1),
+            )
+            .build();
 
         let pool = ConnectionPool::new(
             ConnectorPipeline::new(boxed::service(fn_service(move |req| {
@@ -628,12 +638,9 @@ mod tests {
                     async move { Ok(IoBoxed::from(nio::Io::new(client, SharedCfg::default()))) },
                 )
             }))),
-            SharedCfg::default(),
-            Duration::from_secs(10),
-            Duration::from_secs(10),
-            1,
+            cfg.get(),
         );
-        let pipe = Pipeline::new(pool.clone());
+        let pipe = Pipeline::with_st(cfg, pool.clone());
 
         // uri must contain authority
         let req = Connect {
@@ -690,11 +697,7 @@ mod tests {
 
         // drop waiter, no interest in connection
         let mut fut = Box::pin(pipe.call(req.clone()));
-        assert!(
-            lazy(|cx| pin::Pin::new(&mut fut).poll(cx))
-                .await
-                .is_pending()
-        );
+        assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
         drop(fut);
         sleep(Millis(50)).await;
         pool.0.inner.borrow_mut().check_availibility();

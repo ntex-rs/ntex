@@ -5,7 +5,7 @@ use coo_kie::Cookie;
 use flate2::{Compression, read::GzDecoder, write::GzEncoder, write::ZlibEncoder};
 use rand::Rng;
 
-use ntex::client::{Client, Connector, error::ClientError};
+use ntex::client::{Client, ClientConfig, error::ClientError};
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpMessage, HttpService, Method, Response, header};
 use ntex::io::IoConfig;
@@ -100,16 +100,11 @@ async fn test_timeout() {
         })))
     });
 
-    let cfg = SharedCfg::new("SVC")
-        .add(IoConfig::new().set_connect_timeout(2500))
-        .build();
-
-    let connector = Connector::builder(&cfg).connector(ntex::connect::Connector::with(cfg));
-
-    let client = Client::builder()
-        .connector(connector)
-        .response_timeout(Seconds(3))
-        .build();
+    let client = Client::with_config(
+        SharedCfg::new("SVC")
+            .add(IoConfig::new().set_connect_timeout(2500))
+            .add(ClientConfig::new().set_response_timeout(Seconds(3))),
+    );
 
     let err = client.get(srv.url("/")).send().await.err().unwrap();
     assert!(matches!(err.into_error(), ClientError::Timeout));
@@ -124,7 +119,8 @@ async fn test_timeout_override() {
         })))
     });
 
-    let client = Client::builder().response_timeout(Seconds(50)).build();
+    let client = Client::with_config(ClientConfig::new().set_response_timeout(Seconds(50)));
+
     let err = client
         .get(srv.url("/"))
         .timeout(Seconds(1))
@@ -150,7 +146,7 @@ async fn test_connection_reuse() {
         ))
     });
 
-    let client = Client::builder().response_timeout(Seconds(30)).build();
+    let client = Client::with_config(ClientConfig::new().set_response_timeout(Seconds(30)));
 
     // req 1
     let request = client.get(srv.url("/")).send();
@@ -197,7 +193,7 @@ async fn test_connection_force_close() {
         ))
     });
 
-    let client = Client::builder().response_timeout(Seconds(30)).build();
+    let client = Client::with_config(ClientConfig::new().set_response_timeout(Seconds(30)));
 
     // req 1
     let request = client.get(srv.url("/")).force_close().send();
@@ -205,7 +201,7 @@ async fn test_connection_force_close() {
     assert!(response.status().is_success());
 
     // req 2
-    let client = Client::builder().response_timeout(Seconds(30)).build();
+    let client = Client::with_config(ClientConfig::new().set_response_timeout(Seconds(30)));
     let req = client.post(srv.url("/")).force_close();
     let response = req.send().await.unwrap();
     assert!(response.status().is_success());
@@ -230,7 +226,7 @@ async fn test_connection_server_close() {
         )))
     });
 
-    let client = Client::builder().response_timeout(Seconds(30)).build();
+    let client = Client::with_config(ClientConfig::new().set_response_timeout(Seconds(30)));
 
     // req 1
     let request = client.get(srv.url("/")).send();
@@ -262,10 +258,11 @@ async fn test_connection_wait_queue() {
         )))
     });
 
-    let client = Client::builder()
-        .response_timeout(Seconds(30))
-        .connector(Connector::builder(SharedCfg::default()).limit(1))
-        .build();
+    let client = Client::with_config(
+        ClientConfig::new()
+            .set_response_timeout(Seconds(30))
+            .set_limit(1),
+    );
 
     // req 1
     let request = client.get(srv.url("/")).send();
@@ -304,10 +301,11 @@ async fn test_connection_wait_queue_force_close() {
         )))
     });
 
-    let client = Client::builder()
-        .response_timeout(Seconds(30))
-        .connector(Connector::builder(SharedCfg::default()).limit(1))
-        .build();
+    let client = Client::with_config(
+        ClientConfig::new()
+            .set_limit(1)
+            .set_response_timeout(Seconds(30)),
+    );
 
     // req 1
     let request = client.get(srv.url("/")).send();
@@ -362,7 +360,7 @@ async fn test_no_decompress() {
             })))
     });
 
-    let client = Client::builder().response_timeout(Seconds(30)).build();
+    let client = Client::builder().build(ClientConfig::new().set_response_timeout(Seconds(30)));
 
     let res = client
         .get(srv.url("/"))
@@ -648,8 +646,7 @@ async fn client_read_until_eof() {
 
     // client request
     let req = Client::builder()
-        .response_timeout(Seconds(30))
-        .build()
+        .build(ClientConfig::new().set_response_timeout(Seconds(30)))
         .get(format!("http://{addr}/").as_str());
     let response = req.send().await.unwrap();
     assert!(response.status().is_success());
@@ -737,7 +734,7 @@ async fn middleware() {
                 result
             },
         ))
-        .build();
+        .build(SharedCfg::default());
 
     assert!(client.ready().await.is_ok());
 

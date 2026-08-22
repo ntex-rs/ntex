@@ -990,12 +990,12 @@ impl TestServer {
                     .set_alpn_protos(b"\x08http/1.1")
                     .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
 
-                WsClient::builder(self.url(path), self.cfg.clone())
+                WsClient::builder(self.url(path))
                     .address(self.addr)
                     .timeout(Seconds(60))
                     .openssl(builder.build())
                     .take()
-                    .build()
+                    .build(self.cfg.clone())
                     .unwrap()
                     .connect()
                     .await

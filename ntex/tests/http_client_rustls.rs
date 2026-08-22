@@ -2,7 +2,7 @@
 #![cfg(feature = "rustls")]
 use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 
-use ntex::client::{Client, Connector};
+use ntex::client::Client;
 use ntex::http::{self, HttpService, Version, test::server as test_server};
 use ntex::web::{self, App, HttpResponse};
 use ntex::{SharedCfg, svc};
@@ -33,9 +33,7 @@ async fn test_connection_reuse_h2() {
     let mut config = rustls_utils::tls_connector();
     config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 
-    let client = Client::builder()
-        .connector(Connector::builder(SharedCfg::default()).rustls(config))
-        .build();
+    let client = Client::builder().rustls(config).build(SharedCfg::default());
 
     // req 1
     let response = client.get(srv.surl("/")).send().await.unwrap();

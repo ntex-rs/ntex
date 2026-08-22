@@ -4,12 +4,6 @@ use crate::{Ctx, Service, SharedCfg, util::join};
 use super::error::{ClientError, ConnectError};
 use super::{Connect, Connection, pool::ConnectionPool};
 
-#[cfg(feature = "openssl")]
-use tls_openssl::ssl::SslConnector as OpensslConnector;
-
-#[cfg(feature = "rustls")]
-use tls_rustls::ClientConfig;
-
 #[derive(Debug)]
 /// Manages http client network connectivity.
 ///
@@ -69,18 +63,5 @@ impl Service<SharedCfg, Connect> for Connector {
             }
         })
         .await
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{service::Pipeline, util::lazy};
-
-    #[crate::rt_test]
-    async fn test_readiness() {
-        let conn = Pipeline::new(Connector::default());
-        assert!(lazy(|cx| conn.poll_ready(cx).is_ready()).await);
-        assert!(lazy(|cx| conn.poll_shutdown(cx).is_ready()).await);
     }
 }

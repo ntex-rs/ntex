@@ -60,7 +60,7 @@ impl Service<SharedCfg, ServiceRequest> for Sender {
             return Ok(ServiceResponse {
                 head,
                 payload,
-                config: self.config.clone(),
+                config: config.clone(),
             });
         }
 

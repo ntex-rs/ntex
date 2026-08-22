@@ -865,9 +865,8 @@ async fn test_web_server() {
     });
     let (system, addr) = rx.recv().unwrap();
 
-    let client = client::Client::builder()
-        .response_timeout(Seconds(30))
-        .build();
+    let client =
+        client::Client::with_config(client::ClientConfig::new().set_response_timeout(Seconds(30)));
 
     let response = client
         .request(Method::GET, format!("http://{addr:?}/"))
@@ -893,9 +892,8 @@ async fn web_no_ws_with_response_payload() {
             )
     });
 
-    let client = client::Client::builder()
-        .response_timeout(Seconds(30))
-        .build();
+    let client =
+        client::Client::with_config(client::ClientConfig::new().set_response_timeout(Seconds(30)));
     let response = client
         .request(Method::GET, format!("http://{:?}/f", srv.addr()))
         .header("sec-websocket-version", "13")

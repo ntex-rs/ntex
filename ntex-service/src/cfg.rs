@@ -194,6 +194,13 @@ impl<T: Configuration> Clone for Cfg<T> {
     }
 }
 
+impl<T: Configuration> From<T> for Cfg<T> {
+    #[inline]
+    fn from(cfg: T) -> Self {
+        cfg.ctx().get()
+    }
+}
+
 impl<'a, T: Configuration> From<&'a T> for Cfg<T> {
     #[inline]
     fn from(cfg: &'a T) -> Self {
@@ -294,6 +301,20 @@ impl<T: Configuration> From<SharedCfg> for Cfg<T> {
     #[inline]
     fn from(cfg: SharedCfg) -> Self {
         cfg.get()
+    }
+}
+
+impl<T: Configuration> From<T> for SharedCfg {
+    #[inline]
+    fn from(cfg: T) -> Self {
+        cfg.ctx().shared()
+    }
+}
+
+impl<T: Configuration> From<Cfg<T>> for SharedCfg {
+    #[inline]
+    fn from(cfg: Cfg<T>) -> Self {
+        cfg.shared()
     }
 }
 

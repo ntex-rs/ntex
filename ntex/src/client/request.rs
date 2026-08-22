@@ -530,7 +530,7 @@ impl fmt::Debug for ClientRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::Client;
+    use crate::{SharedCfg, client::Client};
 
     #[crate::rt_test]
     async fn test_debug() {
@@ -572,8 +572,13 @@ mod tests {
     #[crate::rt_test]
     async fn test_client_header() {
         let req = Client::builder()
-            .header(header::CONTENT_TYPE, "111")
-            .build()
+            .build(
+                SharedCfg::new("H").add(
+                    ClientConfig::new()
+                        .set_header(header::CONTENT_TYPE, "111")
+                        .unwrap(),
+                ),
+            )
             .get("/");
 
         assert_eq!(
@@ -591,8 +596,13 @@ mod tests {
     #[crate::rt_test]
     async fn test_client_header_override() {
         let req = Client::builder()
-            .header(header::CONTENT_TYPE, "111")
-            .build()
+            .build(
+                SharedCfg::new("H").add(
+                    ClientConfig::new()
+                        .set_header(header::CONTENT_TYPE, "111")
+                        .unwrap(),
+                ),
+            )
             .get("/")
             .set_header(header::CONTENT_TYPE, "222");
 

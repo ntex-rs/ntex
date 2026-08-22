@@ -77,6 +77,12 @@ pub struct Client {
     svc: Rc<Pipeline<ServiceRequest, ServiceResponse, Error<error::ClientError>>>,
 }
 
+impl Default for Client {
+    fn default() -> Self {
+        Client::new()
+    }
+}
+
 impl Client {
     /// Create new client instance with default settings.
     pub fn new() -> Client {
@@ -86,6 +92,11 @@ impl Client {
     /// Build client instance.
     pub fn builder() -> ClientBuilder {
         ClientBuilder::new()
+    }
+
+    /// Create new client instance with configuration.
+    pub fn with_config(cfg: impl Into<SharedCfg>) -> Client {
+        ClientBuilder::new().build(cfg.into())
     }
 
     pub(crate) fn with_service(

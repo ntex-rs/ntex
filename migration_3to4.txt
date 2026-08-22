@@ -21,3 +21,31 @@
 
    http::accept_openssl(acceptor, http::HttpService::new(..))
    ```
+
+* http client
+
+1. ClientBuilder and Connector merged to one
+
+2. All connector service factories are replaced with Service
+
+3. .build() methods of builders are not async anymore
+
+4. client configuration is part of ntex_service::cfg now.
+
+   ```rust
+   use ntex::SharedCfg;
+   use ntex::client::{Client, ClientConfig};
+
+   fn create_client() -> Client {
+      let cfg = SharedCfg::new("client").add(
+          ClientConfig::new()
+             .set_limit(8)
+             .set_response_payload_limit(265 * 1024)
+      );
+
+      Client::builder()
+          .connector(ntex::connect::Service::new())
+          .build(cfg)
+
+   }
+   ```

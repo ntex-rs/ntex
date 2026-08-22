@@ -55,13 +55,9 @@ async fn test_run() {
 
     use ntex::client;
 
-    let cfg = ntex::SharedCfg::new("DBG")
-        .add(IoConfig::new().set_connect_timeout(30))
-        .build();
-
-    let client = client::Client::builder()
-        .connector(client::Connector::builder(cfg))
-        .build();
+    let client = client::Client::with_config(
+        ntex::SharedCfg::new("DBG").add(IoConfig::new().set_connect_timeout(30)),
+    );
 
     let host = format!("http://{addr}");
     let response = client.get(host.clone()).send().await.unwrap();
@@ -99,15 +95,12 @@ async fn client() -> ntex::client::Client {
         .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
 
     ntex::client::Client::builder()
-        .response_timeout(Seconds(30))
-        .connector(
-            ntex::client::Connector::builder(
-                ntex::SharedCfg::new("TEST").add(IoConfig::new().set_connect_timeout(30)),
-            )
-            .openssl(builder.build())
-            .build(),
+        .openssl(builder.build())
+        .build(
+            SharedCfg::new("TEST")
+                .add(IoConfig::new().set_connect_timeout(30))
+                .add(ntex::client::ClientConfig::new().set_response_timeout(Seconds(30))),
         )
-        .build()
 }
 
 #[ntex::test]
@@ -239,14 +232,12 @@ async fn test_bind_uds() {
     use ntex::client;
 
     let client = client::Client::builder()
-        .connector(
-            client::Connector::builder(SharedCfg::default()).connector(async |_| {
-                Ok(rt::unix_connect("/tmp/uds-test", SharedCfg::default())
-                    .await
-                    .map_err(ntex::connect::ConnectError::from)?)
-            }),
-        )
-        .build();
+        .connector(async |st: &SharedCfg, _| {
+            Ok(rt::unix_connect("/tmp/uds-test", st.clone())
+                .await
+                .map_err(ntex::connect::ConnectError::from)?)
+        })
+        .build(SharedCfg::default());
     let response = client.get("http://localhost").send().await.unwrap();
     assert!(response.status().is_success());
 
@@ -290,14 +281,12 @@ async fn test_listen_uds() {
     use ntex::client;
 
     let client = client::Client::builder()
-        .connector(
-            client::Connector::builder(SharedCfg::default()).connector(async |_| {
-                Ok(rt::unix_connect("/tmp/uds-test2", SharedCfg::default())
-                    .await
-                    .map_err(ntex::connect::ConnectError::from)?)
-            }),
-        )
-        .build();
+        .connector(async |st: &SharedCfg, _| {
+            Ok(rt::unix_connect("/tmp/uds-test2", st.clone())
+                .await
+                .map_err(ntex::connect::ConnectError::from)?)
+        })
+        .build(SharedCfg::default());
     let response = client.get("http://localhost").send().await.unwrap();
     assert!(response.status().is_success());
 

@@ -122,7 +122,7 @@ impl ClientConfig {
 
     #[must_use]
     /// Disable response timeout.
-    pub fn set_disable_timeout(mut self) -> Self {
+    pub fn disable_timeout(mut self) -> Self {
         self.timeout = Millis::ZERO;
         self
     }
@@ -131,7 +131,7 @@ impl ClientConfig {
     /// Do not follow redirects.
     ///
     /// Redirects are allowed by default.
-    pub fn set_disable_redirects(mut self) -> Self {
+    pub fn disable_redirects(mut self) -> Self {
         self.allow_redirects = false;
         self
     }
@@ -173,7 +173,6 @@ impl ClientConfig {
         self
     }
 
-    #[must_use]
     /// Add default header.
     ///
     /// Headers added by this method get added to every request.
@@ -190,7 +189,6 @@ impl ClientConfig {
         Ok(self)
     }
 
-    #[must_use]
     /// Set client wide HTTP basic authorization header.
     pub fn set_basic_auth<U>(self, username: U, password: Option<&str>) -> Result<Self, HttpError>
     where
@@ -206,12 +204,117 @@ impl ClientConfig {
         )
     }
 
-    #[must_use]
     /// Set client wide HTTP bearer authentication header.
     pub fn set_bearer_auth<T>(self, token: T) -> Result<Self, HttpError>
     where
         T: fmt::Display,
     {
         self.set_header(header::AUTHORIZATION, format!("Bearer {token}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn basics() {
+        let cfg = ClientConfig::new()
+            .disable_timeout()
+            .disable_redirects()
+            .set_max_redirects(10)
+            .set_no_default_headers();
+        assert!(!cfg.allow_redirects);
+        assert!(!cfg.default_headers);
+        assert_eq!(cfg.max_redirects, 10);
+    }
+
+    #[test]
+    fn response_payload_limit() {
+        let cfg = ClientConfig::new();
+        assert_eq!(cfg.pl_limit, 262_144);
+
+        let cfg = cfg.set_response_payload_limit(10);
+        assert_eq!(cfg.pl_limit, 10);
+    }
+
+    #[test]
+    fn response_payload_timeout() {
+        let cfg = ClientConfig::default();
+        assert_eq!(cfg.pl_timeout, Millis(10_000));
+
+        let cfg = cfg.set_response_payload_timeout(Millis(10));
+        assert_eq!(cfg.pl_timeout, Millis(10));
+    }
+
+    #[test]
+    fn valid_header_name() {
+        let cfg = ClientConfig::new().set_header("Content-Length", 1).unwrap();
+        assert!(cfg.headers.contains_key("Content-Length"));
+    }
+
+    #[test]
+    fn invalid_header_name() {
+        let res = ClientConfig::new().set_header("no valid header name", 1);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn valid_header_value() {
+        let valid_header_value = HeaderValue::from(1234);
+        let cfg = ClientConfig::new()
+            .set_header("Content-Length", &valid_header_value)
+            .unwrap();
+        assert_eq!(cfg.headers.get("Content-Length"), Some(&valid_header_value));
+    }
+
+    #[test]
+    fn invalid_header_value() {
+        let res = ClientConfig::new()
+            .set_header("Content-Length", "\n")
+            .is_err();
+        assert!(res);
+    }
+
+    #[test]
+    fn client_basic_auth() {
+        let cfg = ClientConfig::new()
+            .set_basic_auth("username", Some("password"))
+            .unwrap();
+        assert_eq!(
+            cfg.headers
+                .get(header::AUTHORIZATION)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "Basic dXNlcm5hbWU6cGFzc3dvcmQ="
+        );
+
+        let cfg = ClientConfig::new()
+            .set_basic_auth("username", None)
+            .unwrap();
+        assert_eq!(
+            cfg.headers
+                .get(header::AUTHORIZATION)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "Basic dXNlcm5hbWU6"
+        );
+    }
+
+    #[test]
+    fn client_bearer_auth() {
+        let cfg = ClientConfig::new()
+            .set_bearer_auth("someS3cr3tAutht0k3n")
+            .unwrap();
+        assert_eq!(
+            cfg.headers
+                .get(header::AUTHORIZATION)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "Bearer someS3cr3tAutht0k3n"
+        );
     }
 }

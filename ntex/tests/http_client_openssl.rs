@@ -6,7 +6,7 @@ use tls_openssl::ssl::{
     AlpnError, SslAcceptor, SslConnector, SslFiletype, SslMethod, SslVerifyMode,
 };
 
-use ntex::client::{Client, Connector};
+use ntex::client::Client;
 use ntex::http::{self, HttpService, Version, test::server as test_server};
 use ntex::web::{self, App, HttpResponse};
 use ntex::{SharedCfg, svc, time::Seconds};
@@ -59,8 +59,8 @@ async fn test_connection_reuse_h2() {
         .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
 
     let client = Client::builder()
-        .connector(Connector::builder(SharedCfg::default()).openssl(builder.build()))
-        .build();
+        .openssl(builder.build())
+        .build(SharedCfg::default());
 
     // req 1
     let request = client.get(srv.surl("/")).timeout(Seconds(30)).send();

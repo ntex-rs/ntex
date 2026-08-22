@@ -147,10 +147,10 @@ async fn test_keepalive_timeout() {
     });
 
     // client service
-    let con = ws::WsClient::builder(srv.url("/"), SharedCfg::default())
+    let con = ws::WsClient::builder(srv.url("/"))
         .address(srv.addr())
         .timeout(Seconds(30))
-        .build()
+        .build(SharedCfg::default())
         .unwrap()
         .connect()
         .await
@@ -193,10 +193,10 @@ async fn test_upgrade_handler_with_await() {
         ))))
     });
 
-    let _ = ws::WsClient::builder(srv.url("/"), SharedCfg::default())
+    let _ = ws::WsClient::builder(srv.url("/"))
         .address(srv.addr())
         .timeout(Seconds(1))
-        .build()
+        .build(SharedCfg::default())
         .unwrap()
         .connect()
         .await

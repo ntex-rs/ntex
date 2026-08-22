@@ -229,11 +229,11 @@ async fn web_ws_subprotocol() {
     });
 
     // client requests subprotocol
-    let conn = WsClient::builder(srv.url("/"), SharedCfg::default())
+    let conn = WsClient::builder(srv.url("/"))
         .address(srv.addr())
         .timeout(Seconds(30))
         .protocols(["my-subprotocol"])
-        .build()
+        .build(SharedCfg::default())
         .unwrap()
         .connect()
         .await
@@ -274,11 +274,11 @@ async fn web_ws_subprotocol_none() {
     });
 
     // client requests subprotocol that server doesn't support
-    let conn = WsClient::builder(srv.url("/"), SharedCfg::default())
+    let conn = WsClient::builder(srv.url("/"))
         .address(srv.addr())
         .timeout(Seconds(30))
         .protocols(["my-subprotocol"])
-        .build()
+        .build(SharedCfg::default())
         .unwrap()
         .connect()
         .await
@@ -326,11 +326,11 @@ async fn web_ws_protocols_parsing() {
     });
 
     // client requests multiple protocols (comma-separated)
-    let conn = WsClient::builder(srv.url("/"), SharedCfg::default())
+    let conn = WsClient::builder(srv.url("/"))
         .address(srv.addr())
         .timeout(Seconds(30))
         .protocols(["proto1", "proto2"])
-        .build()
+        .build(SharedCfg::default())
         .unwrap()
         .connect()
         .await
