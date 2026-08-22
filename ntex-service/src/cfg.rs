@@ -197,7 +197,7 @@ impl<T: Configuration> Clone for Cfg<T> {
 impl<T: Configuration> From<T> for Cfg<T> {
     #[inline]
     fn from(cfg: T) -> Self {
-        cfg.ctx().get()
+        SharedCfg::new("..").add(cfg).build().get()
     }
 }
 
@@ -321,7 +321,7 @@ impl<T: Configuration> From<SharedCfgBuilder> for Cfg<T> {
 impl<T: Configuration> From<T> for SharedCfg {
     #[inline]
     fn from(cfg: T) -> Self {
-        cfg.ctx().shared()
+        SharedCfg::new("..").add(cfg).build()
     }
 }
 

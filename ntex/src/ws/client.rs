@@ -119,6 +119,7 @@ where
         // the message pool may return a recycled head whose method is not GET
         // (e.g. previously used by the HTTP/1 server dispatcher for a POST request)
         head.method = Method::GET;
+        head.uri = self.uri.clone();
         head.set_connection_type(ConnectionType::Upgrade);
 
         // copy headers
