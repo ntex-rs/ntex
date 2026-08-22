@@ -3,7 +3,7 @@
 
 use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 
-use ntex::client::{Client, Connector};
+use ntex::client::Client;
 use ntex::http::{HttpService, Uri, Version, openssl, test::server as test_server};
 use ntex::service::{cfg::SharedCfg, svc};
 use ntex::web::{self, App, HttpResponse};
@@ -47,17 +47,14 @@ async fn test_connection_reuse_h2() {
                 App::new().service(web::resource("/").route(web::to(async || HttpResponse::Ok()))),
             ),
         ))
-    })
-    .await;
+    });
 
     let tls = TlsConnector::<ntex::connect::Connector<Uri>>::with_config(
         ClientConfig::new().danger_accept_invalid_certs(true),
     );
     let client = Client::builder()
-        .connector::<&str>(Connector::default().secure_connector(tls))
-        .build(SharedCfg::default())
-        .await
-        .unwrap();
+        .secure_connector(tls)
+        .build(SharedCfg::default());
 
     let response = client.get(srv.surl("/")).send().await.unwrap();
     assert!(response.status().is_success());

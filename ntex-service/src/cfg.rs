@@ -194,6 +194,13 @@ impl<T: Configuration> Clone for Cfg<T> {
     }
 }
 
+impl<T: Configuration> From<T> for Cfg<T> {
+    #[inline]
+    fn from(cfg: T) -> Self {
+        SharedCfg::new("--").add(cfg).build().get()
+    }
+}
+
 impl<'a, T: Configuration> From<&'a T> for Cfg<T> {
     #[inline]
     fn from(cfg: &'a T) -> Self {
@@ -284,10 +291,44 @@ impl Default for SharedCfg {
     }
 }
 
+impl<'a> From<&'a SharedCfg> for SharedCfg {
+    fn from(cfg: &'a SharedCfg) -> SharedCfg {
+        cfg.clone()
+    }
+}
+
 impl<T: Configuration> From<SharedCfg> for Cfg<T> {
     #[inline]
     fn from(cfg: SharedCfg) -> Self {
         cfg.get()
+    }
+}
+
+impl<'a, T: Configuration> From<&'a SharedCfg> for Cfg<T> {
+    #[inline]
+    fn from(cfg: &'a SharedCfg) -> Self {
+        cfg.get()
+    }
+}
+
+impl<T: Configuration> From<SharedCfgBuilder> for Cfg<T> {
+    #[inline]
+    fn from(cfg: SharedCfgBuilder) -> Self {
+        cfg.build().get()
+    }
+}
+
+impl<T: Configuration> From<T> for SharedCfg {
+    #[inline]
+    fn from(cfg: T) -> Self {
+        SharedCfg::new("--").add(cfg).build()
+    }
+}
+
+impl<T: Configuration> From<Cfg<T>> for SharedCfg {
+    #[inline]
+    fn from(cfg: Cfg<T>) -> Self {
+        cfg.shared()
     }
 }
 

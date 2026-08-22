@@ -4,7 +4,7 @@ use ntex::http::{StatusCode, header};
 use ntex::service::{fn_factory_with_config, fn_service, fn_shutdown, svc};
 use ntex::util::{ByteString, Bytes};
 use ntex::web::{self, App, HttpRequest, HttpResponse, test, ws};
-use ntex::ws::error::WsClientError;
+use ntex::ws::{WsClientConfig, error::WsClientError};
 
 async fn service(msg: ws::Frame) -> Result<Option<ws::Message>, io::Error> {
     let msg = match msg {
@@ -34,8 +34,7 @@ async fn web_ws() {
                 .await
             })),
         )
-    })
-    .await;
+    });
 
     // client service
     let (io, codec, _) = srv.ws().await.unwrap().into_inner();
@@ -76,8 +75,7 @@ async fn web_no_ws() {
             .service(web::resource("/ws_error").route(web::to(async || {
                 Err::<HttpResponse, _>(io::Error::other("test"))
             })))
-    })
-    .await;
+    });
 
     let err = srv.ws().await.err().unwrap();
     assert!(matches!(
@@ -114,8 +112,7 @@ async fn web_ws_after_pooled_post_request() {
                 })),
             )
             .service(web::resource("/post").route(web::post().to(async || HttpResponse::Ok())))
-    })
-    .await;
+    });
 
     // a completed POST request releases its RequestHead back to the
     // thread-local message pool; a ws client built afterwards on the same
@@ -137,8 +134,7 @@ async fn web_no_ws_2() {
         App::new().service(
             web::resource("/").route(web::to(async || HttpResponse::Ok().body("Hello world"))),
         )
-    })
-    .await;
+    });
 
     let response = srv
         .get("/")
@@ -169,8 +165,7 @@ async fn web_ws_client() {
                 .await
             })),
         )
-    })
-    .await;
+    });
 
     // client service
     let conn = srv.ws().await.unwrap();
@@ -210,9 +205,7 @@ async fn web_ws_client() {
 
 #[ntex::test]
 async fn web_ws_subprotocol() {
-    use ntex::service::cfg::SharedCfg;
-    use ntex::time::Seconds;
-    use ntex::ws::WsClient;
+    use ntex::{time::Seconds, ws::WsClient};
 
     let srv = test::server(async |_| {
         App::new().service(
@@ -231,20 +224,20 @@ async fn web_ws_subprotocol() {
                 .await
             })),
         )
-    })
-    .await;
+    });
 
     // client requests subprotocol
-    let conn = WsClient::builder(srv.url("/"))
-        .address(srv.addr())
-        .timeout(Seconds(30))
-        .protocols(["my-subprotocol"])
-        .build(SharedCfg::default())
-        .await
-        .unwrap()
-        .connect()
-        .await
-        .unwrap();
+    let conn = WsClient::new(
+        srv.url("/"),
+        WsClientConfig::new()
+            .set_address(srv.addr())
+            .set_timeout(Seconds(30))
+            .set_protocols(["my-subprotocol"]),
+    )
+    .unwrap()
+    .connect()
+    .await
+    .unwrap();
 
     assert_eq!(conn.response().status(), StatusCode::SWITCHING_PROTOCOLS);
     assert_eq!(
@@ -258,9 +251,7 @@ async fn web_ws_subprotocol() {
 
 #[ntex::test]
 async fn web_ws_subprotocol_none() {
-    use ntex::service::cfg::SharedCfg;
-    use ntex::time::Seconds;
-    use ntex::ws::WsClient;
+    use ntex::{time::Seconds, ws::WsClient};
 
     let srv = test::server(async |_| {
         App::new().service(
@@ -278,20 +269,20 @@ async fn web_ws_subprotocol_none() {
                 .await
             })),
         )
-    })
-    .await;
+    });
 
     // client requests subprotocol that server doesn't support
-    let conn = WsClient::builder(srv.url("/"))
-        .address(srv.addr())
-        .timeout(Seconds(30))
-        .protocols(["my-subprotocol"])
-        .build(SharedCfg::default())
-        .await
-        .unwrap()
-        .connect()
-        .await
-        .unwrap();
+    let conn = WsClient::new(
+        srv.url("/"),
+        WsClientConfig::new()
+            .set_address(srv.addr())
+            .set_timeout(Seconds(30))
+            .set_protocols(["my-subprotocol"]),
+    )
+    .unwrap()
+    .connect()
+    .await
+    .unwrap();
 
     assert_eq!(conn.response().status(), StatusCode::SWITCHING_PROTOCOLS);
     // no protocol header in response
@@ -332,20 +323,22 @@ async fn web_ws_protocols_parsing() {
                 .await
             })),
         )
-    })
-    .await;
+    });
 
     // client requests multiple protocols (comma-separated)
-    let conn = WsClient::builder(srv.url("/"))
-        .address(srv.addr())
-        .timeout(Seconds(30))
-        .protocols(["proto1", "proto2"])
-        .build(SharedCfg::default())
-        .await
-        .unwrap()
-        .connect()
-        .await
-        .unwrap();
+    let conn = WsClient::new(
+        srv.url("/"),
+        SharedCfg::new("C").add(
+            WsClientConfig::new()
+                .set_address(srv.addr())
+                .set_timeout(Seconds(30))
+                .set_protocols(["proto1", "proto2"]),
+        ),
+    )
+    .unwrap()
+    .connect()
+    .await
+    .unwrap();
 
     assert_eq!(conn.response().status(), StatusCode::SWITCHING_PROTOCOLS);
     // server chooses proto2 (higher priority)
@@ -380,8 +373,7 @@ async fn web_ws_shutdown_propagation() {
                 .await
             })),
         )
-    })
-    .await;
+    });
 
     // make ure the server is working
     let (io, codec, _) = srv.ws().await.unwrap().into_inner();

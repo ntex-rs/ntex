@@ -7,6 +7,7 @@ use serde::de::DeserializeOwned;
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, ParseError as CookieParseError};
 
+use crate::Cfg;
 use crate::error::Error;
 use crate::http::error::PayloadError;
 use crate::http::header::{AsName, CONTENT_LENGTH, HeaderValue};
@@ -21,7 +22,7 @@ use super::{ClientConfig, ServiceResponse};
 pub struct ClientResponse {
     pub(crate) head: ResponseHead,
     pub(crate) payload: Cell<Option<Payload>>,
-    config: ClientConfig,
+    pub(crate) config: Cfg<ClientConfig>,
 }
 
 impl HttpMessage for ClientResponse {
@@ -61,7 +62,7 @@ impl HttpMessage for ClientResponse {
 impl ClientResponse {
     /// Create new client response instance
     #[doc(hidden)]
-    pub fn new(head: ResponseHead, payload: Payload, config: ClientConfig) -> Self {
+    pub fn new(head: ResponseHead, payload: Payload, config: Cfg<ClientConfig>) -> Self {
         ClientResponse {
             head,
             config,
@@ -70,7 +71,7 @@ impl ClientResponse {
     }
 
     #[cfg(feature = "ws")]
-    pub(crate) fn with_empty_payload(head: ResponseHead, config: ClientConfig) -> Self {
+    pub(crate) fn with_empty_payload(head: ResponseHead, config: Cfg<ClientConfig>) -> Self {
         ClientResponse::new(head, Payload::None, config)
     }
 
@@ -203,7 +204,7 @@ pub struct MessageBody {
     length: Option<usize>,
     err: Option<Error<ClientPayloadError>>,
     fut: Option<ReadBody>,
-    config: ClientConfig,
+    config: Cfg<ClientConfig>,
 }
 
 impl MessageBody {
@@ -219,14 +220,14 @@ impl MessageBody {
                 } else {
                     return Self::err(
                         Error::from(ClientPayloadError(PayloadError::UnknownLength))
-                            .set_service(config.cfg().service()),
+                            .set_service(config.service()),
                         config,
                     );
                 }
             } else {
                 return Self::err(
                     Error::from(ClientPayloadError(PayloadError::UnknownLength))
-                        .set_service(config.cfg().service()),
+                        .set_service(config.service()),
                     config,
                 );
             }
@@ -268,7 +269,7 @@ impl MessageBody {
         self
     }
 
-    fn err(e: Error<ClientPayloadError>, config: ClientConfig) -> Self {
+    fn err(e: Error<ClientPayloadError>, config: Cfg<ClientConfig>) -> Self {
         MessageBody {
             config,
             fut: None,
@@ -292,7 +293,7 @@ impl Future for MessageBody {
             let limit = this.fut.as_ref().unwrap().limit;
             if limit > 0 && len > limit {
                 return Poll::Ready(Err(Error::from(ClientPayloadError(PayloadError::Overflow))
-                    .set_service(this.config.cfg().service())));
+                    .set_service(this.config.service())));
             }
         }
 
@@ -313,7 +314,7 @@ pub struct JsonBody<U> {
     length: Option<usize>,
     err: Option<Error<JsonPayloadError>>,
     fut: Option<ReadBody>,
-    config: ClientConfig,
+    config: Cfg<ClientConfig>,
     _t: PhantomData<U>,
 }
 
@@ -333,9 +334,8 @@ where
             false
         };
         if !json {
-            let err = Some(
-                Error::from(JsonPayloadError::ContentType).set_service(config.cfg().service()),
-            );
+            let err =
+                Some(Error::from(JsonPayloadError::ContentType).set_service(config.service()));
             return JsonBody {
                 err,
                 config,
@@ -410,7 +410,7 @@ where
                 return Poll::Ready(Err(Error::from(JsonPayloadError::Payload(
                     ClientPayloadError(PayloadError::Overflow),
                 ))
-                .set_service(self.config.cfg().service())));
+                .set_service(self.config.service())));
             }
         }
 
@@ -419,9 +419,11 @@ where
             Poll::Ready(result) => result.map_err(|e| e.map(JsonPayloadError::from))?,
             Poll::Pending => return Poll::Pending,
         };
-        Poll::Ready(serde_json::from_slice::<U>(&body).map_err(|e| {
-            Error::from(JsonPayloadError::from(e)).set_service(this.config.cfg().service())
-        }))
+        Poll::Ready(
+            serde_json::from_slice::<U>(&body).map_err(|e| {
+                Error::from(JsonPayloadError::from(e)).set_service(this.config.service())
+            }),
+        )
     }
 }
 
@@ -431,11 +433,11 @@ struct ReadBody {
     buf: BytesMut,
     limit: usize,
     timeout: Deadline,
-    config: ClientConfig,
+    config: Cfg<ClientConfig>,
 }
 
 impl ReadBody {
-    fn new(stream: Payload, limit: usize, timeout: Millis, config: ClientConfig) -> Self {
+    fn new(stream: Payload, limit: usize, timeout: Millis, config: Cfg<ClientConfig>) -> Self {
         Self {
             stream,
             limit,
@@ -457,17 +459,17 @@ impl Future for ReadBody {
                 Poll::Ready(Some(Ok(chunk))) => {
                     if this.limit > 0 && (this.buf.len() + chunk.len()) > this.limit {
                         Poll::Ready(Err(Error::from(ClientPayloadError(PayloadError::Overflow))
-                            .set_service(this.config.cfg().service())))
+                            .set_service(this.config.service())))
                     } else {
                         this.buf.extend_from_slice(&chunk);
                         continue;
                     }
                 }
                 Poll::Ready(None) => Poll::Ready(Ok(this.buf.take())),
-                Poll::Ready(Some(Err(err))) => {
-                    Poll::Ready(Err(Error::from(ClientPayloadError(err))
-                        .set_service(this.config.cfg().service())))
-                }
+                Poll::Ready(Some(Err(err))) => Poll::Ready(Err(Error::from(ClientPayloadError(
+                    err,
+                ))
+                .set_service(this.config.service()))),
                 Poll::Pending => {
                     if this.timeout.poll_elapsed(cx).is_ready() {
                         Poll::Ready(Err(Error::from(ClientPayloadError(
@@ -476,7 +478,7 @@ impl Future for ReadBody {
                                 "Operation timed out",
                             ))),
                         ))
-                        .set_service(this.config.cfg().service())))
+                        .set_service(this.config.service())))
                     } else {
                         Poll::Pending
                     }

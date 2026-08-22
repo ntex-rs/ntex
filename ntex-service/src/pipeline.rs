@@ -4,7 +4,7 @@ use crate::state::{Noop, State};
 use crate::{Ctx, IntoService, Service, ctx::WaitersRef, util::BoxFuture};
 
 pub use crate::pl_factory::PipelineFactory;
-pub use crate::pl_nost::PipelineNostate;
+pub use crate::pl_nost::{PipelineWithState, PipelineWithStateBinding};
 
 /// Container for a service.
 ///
@@ -237,14 +237,15 @@ where
     #[inline]
     /// Returns when the pipeline is ready to process requests.
     pub async fn ready(&self) -> Result<(), Err> {
-        self.state.ready(0).await
+        future::poll_fn(|cx| self.state.poll_ready(cx)).await
     }
 
     #[inline]
     /// Wait for service readiness, then create a future
     /// that resolves to the service call result.
     pub async fn call(&self, req: Req) -> Result<Res, Err> {
-        self.state.call(0, req, true).await
+        let pl = self.bind();
+        pl.state.call(pl.index, req, true).await
     }
 
     #[inline]
@@ -333,7 +334,8 @@ where
     /// Wait for service readiness, then create a future
     /// that resolves to the service call result.
     pub async fn call(&self, req: Req) -> Result<Res, Err> {
-        self.state.call(self.index, req, true).await
+        let pl = self.clone();
+        pl.state.call(pl.index, req, true).await
     }
 
     #[inline]

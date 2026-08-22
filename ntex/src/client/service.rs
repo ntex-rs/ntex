@@ -5,7 +5,7 @@ use serde::Serialize;
 use crate::http::body::{Body, BodyStream};
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::{Message, Payload, RequestHead, ResponseHead, error::HttpError};
-use crate::{time::Millis, util::Bytes, util::Stream};
+use crate::{Cfg, time::Millis, util::Bytes, util::Stream};
 
 use super::{ClientConfig, error::ClientError};
 
@@ -13,7 +13,7 @@ use super::{ClientConfig, error::ClientError};
 pub struct ServiceResponse {
     pub(super) head: ResponseHead,
     pub(super) payload: Payload,
-    pub(super) config: ClientConfig,
+    pub(super) config: Cfg<ClientConfig>,
 }
 
 #[derive(Debug)]

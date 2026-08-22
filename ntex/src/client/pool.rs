@@ -1,19 +1,19 @@
-use std::task::{Context, Poll, ready};
-use std::time::{Duration, Instant};
-use std::{cell::Cell, cell::RefCell, collections::VecDeque, fmt, future, pin, rc::Rc};
+use std::time::Instant;
+use std::{cell::Cell, cell::RefCell, collections::VecDeque, fmt, future, rc::Rc};
 
 use ntex_h2::{self as h2};
 
 use crate::error::Error;
 use crate::http::uri::{Authority, Scheme, Uri};
 use crate::io::{IoBoxed, types::HttpProtocol};
-use crate::service::pipeline::{Pipeline, PipelineBinding, PipelineCall};
-use crate::service::{Ctx, Service, cfg::SharedCfg};
+use crate::service::cfg::{Cfg, SharedCfg};
+use crate::service::pipeline::{PipelineCall, PipelineWithStateBinding};
+use crate::service::{Ctx, Service};
 use crate::util::{ByteString, Either, HashMap, HashSet, select};
 use crate::{channel::inplace, channel::oneshot, channel::pool, rt::spawn, time::now};
 
 use super::connection::{Connection, ConnectionType};
-use super::{Connect, error::ConnectError, h2proto::H2Client};
+use super::{ClientConfig, Connect, ConnectorPipeline, error::ConnectError, h2proto::H2Client};
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub(super) struct Key {
@@ -46,19 +46,17 @@ struct AvailableConnection {
 pub(super) struct ConnectionPool(Rc<ConnectionPoolInner>);
 
 struct ConnectionPoolInner {
-    svc: Pipeline<Connect, IoBoxed, Error<ConnectError>>,
+    cfg: SharedCfg,
+    svc: ConnectorPipeline,
     inner: Rc<RefCell<Inner>>,
     waiters: Rc<RefCell<Waiters>>,
     stop: Rc<Cell<Option<oneshot::Sender<()>>>>,
-    config: SharedCfg,
 }
 
 #[derive(Debug)]
 pub(super) struct Inner {
+    cfg: Cfg<ClientConfig>,
     stopped: bool,
-    conn_lifetime: Duration,
-    conn_keep_alive: Duration,
-    limit: usize,
     acquired: usize,
     available: HashMap<Key, VecDeque<AvailableConnection>>,
     connecting: HashSet<Key>,
@@ -67,21 +65,14 @@ pub(super) struct Inner {
 }
 
 impl ConnectionPool {
-    pub(super) fn new(
-        svc: Pipeline<Connect, IoBoxed, Error<ConnectError>>,
-        conn_lifetime: Duration,
-        conn_keep_alive: Duration,
-        limit: usize,
-        config: SharedCfg,
-    ) -> Self {
+    pub(super) fn new(svc: ConnectorPipeline, cfg: Cfg<ClientConfig>) -> Self {
+        let shared = cfg.shared();
         let waiters = Rc::new(RefCell::new(Waiters {
             waiters: HashMap::default(),
             pool: pool::new(),
         }));
         let inner = Rc::new(RefCell::new(Inner {
-            conn_lifetime,
-            conn_keep_alive,
-            limit,
+            cfg,
             stopped: false,
             acquired: 0,
             available: HashMap::default(),
@@ -89,15 +80,14 @@ impl ConnectionPool {
             waker: inplace::channel(),
             waiters: waiters.clone(),
         }));
-        let svc_binding = svc.bind();
 
         // start connection pool
         let (stop, stop_rx) = oneshot::channel();
         crate::rt::spawn(run_connection_pool(
-            svc_binding,
+            shared.clone(),
+            svc.bind(),
             inner.clone(),
             waiters.clone(),
-            config.clone(),
             stop_rx,
         ));
 
@@ -105,7 +95,7 @@ impl ConnectionPool {
             svc,
             inner,
             waiters,
-            config,
+            cfg: shared,
             stop: Rc::new(Cell::new(Some(stop))),
         }))
     }
@@ -135,29 +125,32 @@ impl fmt::Debug for ConnectionPool {
             .field("svc", &self.0.svc)
             .field("inner", &self.0.inner)
             .field("waiters", &self.0.waiters)
-            .field("config", &self.0.config)
             .finish()
     }
 }
 
-impl Service<(), Connect> for ConnectionPool {
+impl Service<SharedCfg, Connect> for ConnectionPool {
     type Res = Connection;
     type Error = Error<ConnectError>;
 
     #[inline]
-    async fn ready(&self, _: Ctx<'_, Self, ()>) -> Result<(), Self::Error> {
-        self.0.svc.ready().await
+    async fn ready(&self, ctx: Ctx<'_, Self, SharedCfg>) -> Result<(), Self::Error> {
+        self.0.svc.ready(ctx.st()).await
     }
 
     #[inline]
-    async fn shutdown(&self, _: crate::Ctx<'_, Self, ()>) {
+    async fn shutdown(&self, ctx: Ctx<'_, Self, SharedCfg>) {
         self.0.stop.take();
         self.0.inner.borrow_mut().stopped = true;
-        self.0.svc.shutdown().await;
+        self.0.svc.shutdown(ctx.st()).await;
     }
 
-    async fn call(&self, req: Connect, _: Ctx<'_, Self, ()>) -> Result<Self::Res, Self::Error> {
-        log::trace!("{}: Get connection for {:?}", self.0.config.tag(), req.uri);
+    async fn call(
+        &self,
+        req: Connect,
+        ctx: Ctx<'_, Self, SharedCfg>,
+    ) -> Result<Self::Res, Self::Error> {
+        log::trace!("{}: Get connection for {:?}", ctx.st().tag(), req.uri);
 
         let inner = self.0.inner.clone();
         let waiters = self.0.waiters.clone();
@@ -175,7 +168,7 @@ impl Service<(), Connect> for ConnectionPool {
             Acquire::Acquired(io, created) => {
                 log::trace!(
                     "{}: Use existing {:?} connection for {:?}",
-                    self.0.config.tag(),
+                    ctx.st().tag(),
                     io,
                     req.uri
                 );
@@ -187,10 +180,18 @@ impl Service<(), Connect> for ConnectionPool {
             }
             // open new tcp connection
             Acquire::Available => {
-                log::trace!("{}: Connecting to {:?}", self.0.config.tag(), req.uri);
+                log::trace!("{}: Connecting to {:?}", ctx.st().tag(), req.uri);
                 let uri = req.uri.clone();
                 let (tx, rx) = waiters.borrow_mut().pool.channel();
-                OpenConnection::spawn(key, tx, uri, inner, self.0.svc.call_static(req));
+                open_connection(
+                    self.0.cfg.clone(),
+                    req,
+                    key,
+                    tx,
+                    uri,
+                    inner,
+                    self.0.svc.bind(),
+                );
 
                 match rx.await {
                     Err(_) => Err(ConnectError::Disconnected(None).into()),
@@ -201,7 +202,7 @@ impl Service<(), Connect> for ConnectionPool {
             Acquire::NotAvailable => {
                 log::trace!(
                     "{}: Pool is full, waiting for available connections for {:?}",
-                    self.0.config.tag(),
+                    ctx.st().tag(),
                     req.uri
                 );
                 let rx = waiters.borrow_mut().wait_for(req);
@@ -263,7 +264,7 @@ impl Waiters {
 impl Inner {
     fn acquire(&mut self, key: &Key) -> Acquire {
         // check limits
-        if self.limit > 0 && self.acquired >= self.limit {
+        if self.cfg.limit > 0 && self.acquired >= self.cfg.limit {
             return Acquire::NotAvailable;
         }
 
@@ -273,8 +274,8 @@ impl Inner {
             let now = now();
             while let Some(conn) = connections.pop_back() {
                 // check if it still usable
-                if (now - conn.used) > self.conn_keep_alive
-                    || (now - conn.created) > self.conn_lifetime
+                if (now - conn.used) > self.cfg.conn_keep_alive
+                    || (now - conn.created) > self.cfg.conn_lifetime
                 {
                     if let ConnectionType::H1(io) = conn.io {
                         spawn(async move {
@@ -328,21 +329,20 @@ impl Inner {
     fn check_availibility(&mut self) {
         let mut waiters = self.waiters.borrow_mut();
         waiters.cleanup();
-        if !waiters.waiters.is_empty() && self.acquired < self.limit {
+        if !waiters.waiters.is_empty() && self.acquired < self.cfg.limit {
             let _ = self.waker.send(());
         }
     }
 }
 
 async fn run_connection_pool(
-    svc: PipelineBinding<Connect, IoBoxed, Error<ConnectError>>,
+    cfg: SharedCfg,
+    svc: PipelineWithStateBinding<SharedCfg, Connect, IoBoxed, Error<ConnectError>>,
     inner: Rc<RefCell<Inner>>,
     waiters: Rc<RefCell<Waiters>>,
-    config: SharedCfg,
     mut stop: oneshot::Receiver<()>,
 ) {
-    let tag = config.tag();
-    log::trace!("{tag}: Starting connection pool support task");
+    log::trace!("{}: Starting connection pool support task", cfg.tag());
 
     loop {
         {
@@ -354,7 +354,7 @@ async fn run_connection_pool(
                 while let Some((req, tx)) = waiters.front() {
                     // is waiter still alive
                     if tx.is_canceled() {
-                        log::trace!("{tag}: Waiter for {:?} is gone, cleanup", req.uri);
+                        log::trace!("{}: Waiter for {:?} is gone, cleanup", cfg.tag(), req.uri);
                         cleanup = true;
                         waiters.pop_front();
                         continue;
@@ -365,7 +365,8 @@ async fn run_connection_pool(
                         Acquire::NotAvailable => break,
                         Acquire::Acquired(io, created) => {
                             log::trace!(
-                                "{tag}: Use existing {:?} connection for {:?}, wake up waiter",
+                                "{}: Use existing {:?} connection for {:?}, wake up waiter",
+                                cfg.tag(),
                                 io,
                                 req.uri
                             );
@@ -378,16 +379,22 @@ async fn run_connection_pool(
                             )));
                         }
                         Acquire::Available => {
-                            log::trace!("{tag}: Connecting to {:?} and wake up waiter", req.uri);
+                            log::trace!(
+                                "{}: Connecting to {:?} and wake up waiter",
+                                cfg.tag(),
+                                req.uri
+                            );
                             cleanup = true;
                             let (connect, tx) = waiters.pop_front().unwrap();
                             let uri = connect.uri.clone();
-                            OpenConnection::spawn(
+                            open_connection(
+                                cfg.clone(),
+                                connect,
                                 key.clone(),
                                 tx,
                                 uri,
                                 inner.clone(),
-                                svc.call_static(connect),
+                                svc.clone(),
                             );
                         }
                     }
@@ -406,7 +413,7 @@ async fn run_connection_pool(
         .await;
 
         if matches!(result, Either::Left(_)) || inner.borrow().stopped {
-            log::trace!("{tag}: Stopping connection pool support task");
+            log::trace!("{}: Stopping connection pool support task", cfg.tag());
             break;
         }
     }
@@ -424,61 +431,42 @@ pin_project_lite::pin_project! {
     }
 }
 
-impl OpenConnection {
-    fn spawn(
-        key: Key,
-        tx: Waiter,
-        uri: Uri,
-        inner: Rc<RefCell<Inner>>,
-        fut: PipelineCall<Connect, IoBoxed, Error<ConnectError>>,
-    ) {
-        spawn(async move {
-            OpenConnection {
-                tx: Some(tx),
-                key: key.clone(),
-                inner: inner.clone(),
-                guard: Some(OpenGuard::new(key, inner)),
-                fut,
-                uri,
-            }
-            .await;
-        });
-    }
-}
+fn open_connection(
+    cfg: SharedCfg,
+    connect: Connect,
+    key: Key,
+    tx: Waiter,
+    uri: Uri,
+    inner: Rc<RefCell<Inner>>,
+    pl: PipelineWithStateBinding<SharedCfg, Connect, IoBoxed, Error<ConnectError>>,
+) {
+    let guard = OpenGuard::new(key.clone(), inner.clone());
 
-impl future::Future for OpenConnection {
-    type Output = ();
-
-    fn poll(self: pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-
+    spawn(async move {
         // open tcp connection
-        match ready!(this.fut.poll(cx)) {
+        match pl.call(connect, &cfg).await {
             Err(err) => {
                 log::trace!(
                     "Failed to open client connection for {:?} with error {:?}",
-                    this.key.authority,
+                    key.authority,
                     err
                 );
-                let _ = this.guard.take();
-                if let Some(rx) = this.tx.take() {
-                    let _ = rx.send(Err(err));
-                }
-                Poll::Ready(())
+                let _ = tx.send(Err(err));
             }
             Ok(io) => {
-                if this.inner.borrow().stopped {
-                    return Poll::Ready(());
+                if inner.borrow().stopped {
+                    return;
                 }
 
                 // handle http2 proto
                 if io.query::<HttpProtocol>().get() == Some(HttpProtocol::Http2) {
                     // init http2 handshake
                     log::trace!(
-                        "Connection for {:?} is established, start http2 handshake",
-                        this.key.authority
+                        "{}: Connection for {:?} is established, start http2 handshake",
+                        io.tag(),
+                        key.authority
                     );
-                    let auth = if let Some(auth) = this.uri.authority() {
+                    let auth = if let Some(auth) = uri.authority() {
                         format!("{auth}").into()
                     } else {
                         ByteString::new()
@@ -486,48 +474,44 @@ impl future::Future for OpenConnection {
 
                     let client = h2::client::SimpleClient::new(
                         io,
-                        this.uri.scheme().cloned().unwrap_or(Scheme::HTTPS),
+                        uri.scheme().cloned().unwrap_or(Scheme::HTTPS),
                         auth,
                     );
+                    let guard = guard.consume();
                     let client = H2Client::new(client);
-                    let guard = this.guard.take().unwrap().consume();
                     let conn = Connection::new(
                         ConnectionType::H2(client.clone()),
                         now(),
                         Some(guard.clone()),
                     );
-                    if this.tx.take().unwrap().send(Ok(conn)).is_err() {
+                    if tx.send(Ok(conn)).is_err() {
                         // waiter is gone, return connection to pool
                         log::trace!(
-                            "Waiter for {:?} is gone while connecting to host",
-                            this.key.authority
+                            "{}: Waiter for {:?} is gone while connecting to host",
+                            cfg.tag(),
+                            key.authority
                         );
                     }
 
                     // put h2 connection to list of available connections
                     Connection::new(ConnectionType::H2(client), now(), Some(guard)).release(false);
-
-                    Poll::Ready(())
                 } else {
                     log::trace!(
-                        "Connection for {:?} is established, init http1 connection",
-                        this.key.authority
+                        "{}: Connection for {:?} is established, init http1 connection",
+                        io.tag(),
+                        key.authority
                     );
-                    let conn = Connection::new(
-                        ConnectionType::H1(io),
-                        now(),
-                        Some(this.guard.take().unwrap().consume()),
-                    );
-                    if let Err(Ok(conn)) = this.tx.take().unwrap().send(Ok(conn)) {
+                    let conn =
+                        Connection::new(ConnectionType::H1(io), now(), Some(guard.consume()));
+                    if let Err(Ok(conn)) = tx.send(Ok(conn)) {
                         // waiter is gone, return connection to pool
                         conn.release(false);
                     }
-                    this.inner.borrow_mut().check_availibility();
-                    Poll::Ready(())
+                    inner.borrow_mut().check_availibility();
                 }
             }
         }
-    }
+    });
 }
 
 struct OpenGuard {
@@ -625,11 +609,11 @@ impl Drop for Acquired {
 
 #[cfg(test)]
 mod tests {
-    use std::future::Future;
+    use std::{future::Future, pin::Pin};
 
     use super::*;
-    use crate::service::{boxed, fn_service};
-    use crate::time::{Millis, sleep};
+    use crate::service::{Pipeline, boxed, fn_service};
+    use crate::time::{Millis, Seconds, sleep};
     use crate::{io as nio, testing::IoTest, util::lazy};
 
     #[crate::rt_test]
@@ -637,20 +621,26 @@ mod tests {
         let store = Rc::new(RefCell::new(Vec::new()));
         let store2 = store.clone();
 
+        let cfg = SharedCfg::new("C")
+            .add(
+                ClientConfig::new()
+                    .set_keep_alive(Seconds(10))
+                    .set_lifetime(Seconds(10))
+                    .set_limit(1),
+            )
+            .build();
+
         let pool = ConnectionPool::new(
-            Pipeline::new(boxed::service(fn_service(move |req| {
+            ConnectorPipeline::new(boxed::service(fn_service(move |req| {
                 let (client, server) = IoTest::create();
                 store2.borrow_mut().push((req, server));
                 Box::pin(
                     async move { Ok(IoBoxed::from(nio::Io::new(client, SharedCfg::default()))) },
                 )
             }))),
-            Duration::from_secs(10),
-            Duration::from_secs(10),
-            1,
-            SharedCfg::default(),
+            cfg.get(),
         );
-        let pipe = Pipeline::new(pool.clone());
+        let pipe = Pipeline::with_st(cfg, pool.clone());
 
         // uri must contain authority
         let req = Connect {
@@ -707,11 +697,7 @@ mod tests {
 
         // drop waiter, no interest in connection
         let mut fut = Box::pin(pipe.call(req.clone()));
-        assert!(
-            lazy(|cx| pin::Pin::new(&mut fut).poll(cx))
-                .await
-                .is_pending()
-        );
+        assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
         drop(fut);
         sleep(Millis(50)).await;
         pool.0.inner.borrow_mut().check_availibility();

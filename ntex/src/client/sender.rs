@@ -1,35 +1,33 @@
 #[cfg(feature = "compress")]
 use crate::http::{Payload, encoding::Decoder};
-use crate::{Ctx, Service, error::Error, http::body::MessageBody};
+use crate::{Ctx, Service, SharedCfg, error::Error, http::body::MessageBody};
 
-use super::connector::ConnectorService;
-use super::error::ClientError;
 use super::{ClientConfig, ClientRawRequest, Connect, ServiceRequest, ServiceResponse};
+use super::{connector::Connector, error::ClientError};
 
 #[derive(Debug)]
 pub struct Sender {
-    config: ClientConfig,
-    connector: ConnectorService,
+    connector: Connector,
 }
 
 impl Sender {
-    pub(crate) fn new(connector: ConnectorService, config: ClientConfig) -> Self {
-        Self { config, connector }
+    pub(super) fn new(connector: Connector) -> Self {
+        Self { connector }
     }
 }
 
 #[allow(unused_variables)]
-impl Service<(), ServiceRequest> for Sender {
+impl Service<SharedCfg, ServiceRequest> for Sender {
     type Res = ServiceResponse;
     type Error = Error<ClientError>;
 
-    crate::forward_ready!((), connector);
-    crate::forward_shutdown!((), connector);
+    crate::forward_ready!(SharedCfg, connector);
+    crate::forward_shutdown!(SharedCfg, connector);
 
     async fn call(
         &self,
         req: ServiceRequest,
-        ctx: Ctx<'_, Self, ()>,
+        ctx: Ctx<'_, Self, SharedCfg>,
     ) -> Result<Self::Res, Self::Error> {
         let ServiceRequest {
             head,
@@ -42,9 +40,10 @@ impl Service<(), ServiceRequest> for Sender {
 
         let uri = head.uri.clone();
         let con = ctx.call(&self.connector, Connect { uri, addr }).await?;
+        let config = ctx.st().get::<ClientConfig>();
 
         if timeout.is_zero() {
-            timeout = self.config.timeout();
+            timeout = config.timeout();
         }
 
         let req = ClientRawRequest {
@@ -61,14 +60,14 @@ impl Service<(), ServiceRequest> for Sender {
             return Ok(ServiceResponse {
                 head,
                 payload,
-                config: self.config.clone(),
+                config: config.clone(),
             });
         }
 
         Ok(ServiceResponse {
             head,
             payload,
-            config: self.config.clone(),
+            config,
         })
     }
 }

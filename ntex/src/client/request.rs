@@ -9,7 +9,7 @@ use crate::error::Error;
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::{ConnectionType, Method, Uri, Version, body::Body};
-use crate::{PipelineBinding, time::Millis, util::Bytes, util::Stream};
+use crate::{Cfg, PipelineBinding, time::Millis, util::Bytes, util::Stream};
 
 use super::error::{ClientError, InvalidUrl};
 use super::{ClientConfig, ClientResponse, ServiceRequest, ServiceResponse};
@@ -25,7 +25,6 @@ use super::{ClientConfig, ClientResponse, ServiceRequest, ServiceResponse};
 /// #[ntex::main]
 /// async fn main() {
 ///    let response = Client::new()
-///         .await
 ///         .get("http://www.rust-lang.org") // <- Create request builder
 ///         .header("User-Agent", "ntex::web")
 ///         .send()                          // <- Send http request
@@ -41,7 +40,7 @@ pub struct ClientRequest {
     request: ServiceRequest,
     svc: PipelineBinding<ServiceRequest, ServiceResponse, Error<ClientError>>,
     err: Option<HttpError>,
-    cfg: ClientConfig,
+    cfg: Cfg<ClientConfig>,
     #[cfg(feature = "cookie")]
     cookies: Option<CookieJar>,
 }
@@ -51,7 +50,7 @@ impl ClientRequest {
     pub(super) fn new<U>(
         method: Method,
         uri: U,
-        cfg: ClientConfig,
+        cfg: Cfg<ClientConfig>,
         svc: PipelineBinding<ServiceRequest, ServiceResponse, Error<ClientError>>,
     ) -> Self
     where
@@ -155,7 +154,6 @@ impl ClientRequest {
     /// #[ntex::main]
     /// async fn main() {
     ///     let req = Client::new()
-    ///         .await
     ///         .get("http://www.rust-lang.org")
     ///         .header("X-TEST", "value")
     ///         .header(http::header::CONTENT_TYPE, "application/json");
@@ -299,7 +297,7 @@ impl ClientRequest {
     ///
     /// #[ntex::main]
     /// async fn main() {
-    ///     let resp = Client::new().await.get("https://www.rust-lang.org")
+    ///     let resp = Client::new().get("https://www.rust-lang.org")
     ///         .cookie(
     ///             cookie::Cookie::build(("name", "value"))
     ///                 .domain("www.rust-lang.org")
@@ -441,7 +439,7 @@ impl ClientRequest {
     #[allow(unused_mut)]
     fn prep_for_sending(&mut self) -> Result<(), Error<ClientError>> {
         self.prep_for_sending_inner()
-            .map_err(|e| e.set_service(self.cfg.cfg().service()))
+            .map_err(|e| e.set_service(self.cfg.service()))
     }
 
     #[allow(unused_mut)]
@@ -534,7 +532,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_debug() {
-        let request = Client::new().await.get("/").header("x-test", "111");
+        let request = Client::new().get("/").header("x-test", "111");
         let repr = format!("{request:?}");
         assert!(repr.contains("ClientRequest"));
         assert!(repr.contains("x-test"));
@@ -543,7 +541,6 @@ mod tests {
     #[crate::rt_test]
     async fn test_basics() {
         let mut req = Client::new()
-            .await
             .put("/")
             .version(Version::HTTP_2)
             .header(header::DATE, "data")
@@ -573,10 +570,13 @@ mod tests {
     #[crate::rt_test]
     async fn test_client_header() {
         let req = Client::builder()
-            .header(header::CONTENT_TYPE, "111")
-            .build(SharedCfg::default())
-            .await
-            .unwrap()
+            .build(
+                SharedCfg::new("H").add(
+                    ClientConfig::new()
+                        .set_header(header::CONTENT_TYPE, "111")
+                        .unwrap(),
+                ),
+            )
             .get("/");
 
         assert_eq!(
@@ -594,10 +594,13 @@ mod tests {
     #[crate::rt_test]
     async fn test_client_header_override() {
         let req = Client::builder()
-            .header(header::CONTENT_TYPE, "111")
-            .build(SharedCfg::default())
-            .await
-            .unwrap()
+            .build(
+                SharedCfg::new("H").add(
+                    ClientConfig::new()
+                        .set_header(header::CONTENT_TYPE, "111")
+                        .unwrap(),
+                ),
+            )
             .get("/")
             .set_header(header::CONTENT_TYPE, "222");
 
@@ -616,7 +619,6 @@ mod tests {
     #[crate::rt_test]
     async fn client_basic_auth() {
         let req = Client::new()
-            .await
             .get("/")
             .basic_auth("username", Some("password"));
         assert_eq!(
@@ -630,7 +632,7 @@ mod tests {
             "Basic dXNlcm5hbWU6cGFzc3dvcmQ="
         );
 
-        let req = Client::new().await.get("/").basic_auth("username", None);
+        let req = Client::new().get("/").basic_auth("username", None);
         assert_eq!(
             req.request
                 .head
@@ -645,10 +647,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn client_bearer_auth() {
-        let req = Client::new()
-            .await
-            .get("/")
-            .bearer_auth("someS3cr3tAutht0k3n");
+        let req = Client::new().get("/").bearer_auth("someS3cr3tAutht0k3n");
         assert_eq!(
             req.request
                 .head
@@ -664,7 +663,6 @@ mod tests {
     #[crate::rt_test]
     async fn client_query() {
         let req = Client::new()
-            .await
             .get("/")
             .query(&[("key1", "val1"), ("key2", "val2")])
             .unwrap();

@@ -42,8 +42,7 @@ async fn test_h2() -> io::Result<()> {
             http::ALPN_PROTO_H2,
             HttpService::h2(async |_| Ok::<_, io::Error>(Response::Ok().finish())),
         )
-    })
-    .await;
+    });
 
     let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
@@ -58,8 +57,7 @@ async fn test_h1() -> io::Result<()> {
             http::ALPN_PROTO_H1,
             HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().finish())),
         )
-    })
-    .await;
+    });
 
     let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
@@ -78,8 +76,7 @@ async fn test_h2_1() -> io::Result<()> {
                 Ok::<_, io::Error>(Response::Ok().finish())
             }),
         )
-    })
-    .await;
+    });
 
     let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
@@ -100,8 +97,7 @@ async fn test_h2_body() -> io::Result<()> {
                 Ok::<_, io::Error>(Response::Ok().body(body))
             }),
         )
-    })
-    .await;
+    });
 
     let response = srv
         .srequest(Method::GET, "/")
@@ -135,8 +131,7 @@ async fn test_h2_content_length() {
                 Ok::<_, io::Error>(Response::new(statuses[indx]))
             }),
         )
-    })
-    .await;
+    });
 
     let header = HeaderName::from_static("content-length");
     let value = HeaderValue::from_static("0");
@@ -193,8 +188,7 @@ async fn test_h2_headers() {
                 Ok::<_, io::Error>(builder.body(data.clone()))
             }),
         )
-    })
-    .await;
+    });
 
     let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
@@ -234,8 +228,7 @@ async fn test_h2_body2() {
             http::ALPN_PROTO_H2,
             HttpService::h2(async |_| Ok::<_, io::Error>(Response::Ok().body(STR))),
         )
-    })
-    .await;
+    });
 
     let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
@@ -253,8 +246,7 @@ async fn test_h2_head_empty() {
             http::ALPN_PROTO_H2,
             HttpService::h2(async |_| Ok::<_, io::Error>(Response::Ok().body(STR))),
         )
-    })
-    .await;
+    });
 
     let response = srv.srequest(Method::HEAD, "/").send().await.unwrap();
     assert!(response.status().is_success());
@@ -280,8 +272,7 @@ async fn test_h2_head_binary() {
                 Ok::<_, io::Error>(Response::Ok().content_length(STR.len() as u64).body(STR))
             }),
         )
-    })
-    .await;
+    });
 
     let response = srv.srequest(Method::HEAD, "/").send().await.unwrap();
     assert!(response.status().is_success());
@@ -305,8 +296,7 @@ async fn test_h2_head_binary2() {
             http::ALPN_PROTO_H2,
             HttpService::h2(async |_| Ok::<_, io::Error>(Response::Ok().body(STR))),
         )
-    })
-    .await;
+    });
 
     let response = srv.srequest(Method::HEAD, "/").send().await.unwrap();
     assert!(response.status().is_success());
@@ -330,8 +320,7 @@ async fn test_h2_body_length() {
                 )
             }),
         )
-    })
-    .await;
+    });
 
     let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
@@ -356,8 +345,7 @@ async fn test_h2_body_chunked_explicit() {
                 )
             }),
         )
-    })
-    .await;
+    });
 
     let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
@@ -385,8 +373,7 @@ async fn test_h2_response_http_error_handling() {
                 )
             }),
         )
-    })
-    .await;
+    });
 
     let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -406,8 +393,7 @@ async fn test_h2_service_error() {
                 Err::<Response, _>(InternalError::default("error", StatusCode::BAD_REQUEST))
             }),
         )
-    })
-    .await;
+    });
 
     let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -449,8 +435,7 @@ async fn test_h2_client_drop() -> io::Result<()> {
                 Ok::<_, io::Error>(Response::Ok().finish())
             }),
         )
-    })
-    .await;
+    });
 
     let result = timeout(Millis(2500), srv.srequest(Method::GET, "/").send()).await;
     assert!(result.is_err());
@@ -472,8 +457,7 @@ async fn test_ssl_handshake_timeout() {
             )
         },
         SharedCfg::new("SVC").add(TlsConfig::new().set_handshake_timeout(Seconds(1))),
-    )
-    .await;
+    );
 
     let mut stream = std::net::TcpStream::connect(srv.addr()).unwrap();
     let mut data = String::new();
@@ -517,8 +501,7 @@ async fn test_ws_transport() {
                 },
             ),
         )
-    })
-    .await;
+    });
 
     let io = srv.wss().await.unwrap().into_inner().0;
     let codec = ws::Codec::default().client_mode();
@@ -542,7 +525,7 @@ async fn test_ws_transport() {
 }
 
 #[ntex::test]
-async fn test_h2_graceful_shutdown() -> io::Result<()> {
+async fn test_h2_not_graceful_shutdown() -> io::Result<()> {
     let count = Arc::new(AtomicUsize::new(0));
     let count2 = count.clone();
     let (tx, rx) = ::oneshot::channel();
@@ -565,8 +548,7 @@ async fn test_h2_graceful_shutdown() -> io::Result<()> {
                 Ok::<_, io::Error>(Response::Ok().finish())
             }),
         )
-    })
-    .await;
+    });
 
     let req = srv.srequest(Method::GET, "/");
     rt::spawn(async move {
@@ -589,11 +571,11 @@ async fn test_h2_graceful_shutdown() -> io::Result<()> {
 
     let (tx, rx) = oneshot::channel();
     rt::spawn(async move {
-        srv.stop().await;
+        srv.stop(false).await;
         let _ = tx.send(());
     });
 
     let _ = rx.await;
-    assert_eq!(count.load(Ordering::Relaxed), 0);
+    assert_eq!(count.load(Ordering::Relaxed), 2);
     Ok(())
 }

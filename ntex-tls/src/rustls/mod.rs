@@ -9,7 +9,7 @@ mod stream;
 
 pub use self::accept::TlsAcceptor;
 pub use self::client::TlsClientFilter;
-pub use self::connect::{TlsConnector, TlsConnectorService};
+pub use self::connect::TlsConnector;
 pub use self::server::TlsServerFilter;
 
 use self::stream::Stream;

@@ -7,7 +7,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use uuid::Uuid;
 
 use crate::client::error::ClientPayloadError;
-use crate::client::{Client, ClientRequest, ClientResponse, Connector};
+use crate::client::{Client, ClientConfig, ClientRequest, ClientResponse};
 use crate::error::Error;
 use crate::http::body::MessageBody;
 use crate::http::error::{HttpError, ResponseError};
@@ -20,10 +20,10 @@ use crate::http::{
 use crate::io::Sealed;
 use crate::router::{Path, ResourceDef};
 use crate::service::{IntoServiceFactory, Pipeline, fn_service};
-use crate::time::{Millis, Seconds, sleep};
+use crate::time::{Millis, Seconds};
 use crate::util::{Bytes, BytesMut, Stream, stream_recv};
 #[cfg(feature = "ws")]
-use crate::ws::{WsClient, WsConnection, error::WsClientError};
+use crate::ws::{WsClient, WsClientConfig, WsConnection, error::WsClientError};
 use crate::{Service, ServiceFactory, SharedCfg, io::IoConfig, rt::System, server::Server};
 
 use crate::web::config::WebAppConfig;
@@ -552,7 +552,7 @@ impl TestRequest {
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub async fn server<F, I, Sf, B>(factory: F) -> TestServer
+pub fn server<F, I, Sf, B>(factory: F) -> TestServer
 where
     F: AsyncFn(&()) -> I + Send + Clone + 'static,
     I: IntoServiceFactory<Sf, (), Request, SharedCfg>,
@@ -562,7 +562,7 @@ where
     Sf::InitError: fmt::Debug,
     B: MessageBody + 'static,
 {
-    server_with(TestServerConfig::default(), factory).await
+    server_with(TestServerConfig::default(), factory)
 }
 
 /// Start test server with custom configuration
@@ -590,7 +590,7 @@ where
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub async fn server_with<F, I, Sf, B>(cfg: TestServerConfig, factory: F) -> TestServer
+pub fn server_with<F, I, Sf, B>(cfg: TestServerConfig, factory: F) -> TestServer
 where
     F: AsyncFn(&()) -> I + Send + Clone + 'static,
     I: IntoServiceFactory<Sf, (), Request, SharedCfg>,
@@ -715,7 +715,7 @@ where
         })
     });
     let (system, server, addr) = rx.recv().unwrap();
-    sleep(Millis(25)).await;
+    thread::sleep(Millis(25).into());
 
     let cfg = cfg.client_cfg.clone().unwrap_or_else(|| {
         SharedCfg::new("TEST-CLIENT")
@@ -726,35 +726,33 @@ where
                     .set_max_header_list_size(256 * 1024)
                     .set_max_header_continuation_frames(96),
             )
-            .into()
+            .add(ClientConfig::new().set_lifetime(Seconds::ZERO))
+            .add(
+                WsClientConfig::new()
+                    .set_address(addr)
+                    .set_timeout(Seconds(60)),
+            )
+            .build()
     });
 
     let client = {
-        let connector = {
-            #[cfg(feature = "openssl")]
-            {
-                use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+        #[cfg(feature = "openssl")]
+        {
+            use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 
-                let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
-                builder.set_verify(SslVerifyMode::NONE);
-                let _ = builder
-                    .set_alpn_protos(b"\x02h2\x08http/1.1")
-                    .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
-                Connector::default()
-                    .lifetime(Seconds::ZERO)
-                    .openssl(builder.build())
-            }
-            #[cfg(not(feature = "openssl"))]
-            {
-                Connector::default().lifetime(Seconds::ZERO)
-            }
-        };
-
-        Client::builder()
-            .connector::<&str>(connector)
-            .build(cfg.clone())
-            .await
-            .unwrap()
+            let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+            builder.set_verify(SslVerifyMode::NONE);
+            let _ = builder
+                .set_alpn_protos(b"\x02h2\x08http/1.1")
+                .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
+            Client::builder()
+                .openssl(builder.build())
+                .build(cfg.clone())
+        }
+        #[cfg(not(feature = "openssl"))]
+        {
+            Client::builder().build(cfg.clone())
+        }
     };
 
     TestServer {
@@ -997,14 +995,9 @@ impl TestServer {
                     .set_alpn_protos(b"\x08http/1.1")
                     .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
 
-                WsClient::builder(self.url(path))
-                    .address(self.addr)
-                    .timeout(Seconds(60))
-                    .openssl(builder.build())
-                    .take()
-                    .build(self.cfg.clone())
-                    .await
+                WsClient::new(self.url(path), &self.cfg)
                     .unwrap()
+                    .openssl(builder.build())
                     .connect()
                     .await
                     .map(WsConnection::seal)
@@ -1014,11 +1007,7 @@ impl TestServer {
                 panic!("openssl feature is required")
             }
         } else {
-            WsClient::builder(self.url(path))
-                .address(self.addr)
-                .timeout(Seconds(60))
-                .build(self.cfg.clone())
-                .await
+            WsClient::new(self.url(path), &self.cfg)
                 .unwrap()
                 .connect()
                 .await
@@ -1260,8 +1249,7 @@ mod tests {
                         .to(async || HttpResponse::Ok()),
                 )),
             )
-        })
-        .await;
+        });
 
         assert_eq!(srv.put("/").send().await.unwrap().status(), StatusCode::OK);
         assert_eq!(
