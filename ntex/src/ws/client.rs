@@ -34,8 +34,8 @@ thread_local! {
 /// `WebSocket` client builder
 pub struct WsClient<F> {
     uri: Uri,
-    cfg: Cfg<ClientConfig>,
-    wscfg: Cfg<WsClientConfig>,
+    cfg: Cfg<WsClientConfig>,
+    http_cfg: Cfg<ClientConfig>,
     connector: Pipeline<Connect<Uri>, Io<F>, Error<ConnectError>>,
     filter: marker::PhantomData<F>,
 }
@@ -63,13 +63,13 @@ impl WsClient<Base> {
             return Err(WsConfigError::UnknownScheme);
         }
 
-        let wscfg = cfg.into();
-        let shared = wscfg.shared();
+        let cfg = cfg.into();
+        let shared = cfg.shared();
 
         Ok(WsClient {
             uri,
-            wscfg,
-            cfg: shared.get(),
+            cfg,
+            http_cfg: shared.get(),
             connector: Pipeline::with_st(shared, Connector::<Uri>::new()),
             filter: marker::PhantomData,
         })
@@ -87,7 +87,7 @@ impl<F> WsClient<F> {
         WsClient {
             uri: self.uri,
             cfg: self.cfg,
-            wscfg: self.wscfg,
+            http_cfg: self.http_cfg,
             connector: Pipeline::with_st(shared, f.into_service()),
             filter: marker::PhantomData,
         }
@@ -122,7 +122,7 @@ where
         head.set_connection_type(ConnectionType::Upgrade);
 
         // copy headers
-        for (key, value) in self.cfg.headers() {
+        for (key, value) in self.cfg.headers.iter() {
             if !head.headers().contains_key(key) {
                 head.headers_mut().insert(key.clone(), value.clone());
             }
@@ -140,7 +140,7 @@ where
             use std::fmt::Write as FmtWrite;
 
             // set cookies
-            if let Some(ref jar) = self.wscfg.cookies {
+            if let Some(ref jar) = self.cfg.cookies {
                 let mut cookie = String::new();
                 for c in jar.delta() {
                     let name = percent_encode(c.name().as_bytes(), crate::http::helpers::USERINFO);
@@ -167,12 +167,12 @@ where
             HeaderValue::try_from(key.as_str()).unwrap(),
         );
 
-        let msg = Connect::new(self.uri.clone()).set_addr(self.wscfg.addr);
+        let msg = Connect::new(self.uri.clone()).set_addr(self.cfg.addr);
         log::trace!(
             "{}: Open ws connection to {:?} addr: {:?}",
             self.cfg.tag(),
             self.uri,
-            self.wscfg.addr
+            self.cfg.addr
         );
 
         let io = self.connector.call(msg).await.into_error()?;
@@ -201,8 +201,8 @@ where
         };
 
         // set request timeout
-        let response = if self.wscfg.timeout.non_zero() {
-            timeout(self.wscfg.timeout, fut)
+        let response = if self.cfg.timeout.non_zero() {
+            timeout(self.cfg.timeout, fut)
                 .await
                 .map_err(|()| WsClientError::Timeout)
                 .and_then(|res| res)?
@@ -278,11 +278,11 @@ where
         // response and ws io
         Ok(WsConnection::new(
             io,
-            ClientResponse::with_empty_payload(response, self.cfg.clone()),
-            if self.wscfg.server_mode {
-                ws::Codec::new().max_size(self.wscfg.max_size)
+            ClientResponse::with_empty_payload(response, self.http_cfg.clone()),
+            if self.cfg.server_mode {
+                ws::Codec::new().max_size(self.cfg.max_size)
             } else {
-                ws::Codec::new().max_size(self.wscfg.max_size).client_mode()
+                ws::Codec::new().max_size(self.cfg.max_size).client_mode()
             },
         ))
     }
@@ -290,9 +290,7 @@ where
 
 impl<F> fmt::Debug for WsClient<F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("WsClient")
-            .field("wscfg", &self.wscfg)
-            .finish()
+        f.debug_struct("WsClient").field("cfg", &self.cfg).finish()
     }
 }
 
