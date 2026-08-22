@@ -122,7 +122,7 @@ where
         head.set_connection_type(ConnectionType::Upgrade);
 
         // copy headers
-        for (key, value) in self.cfg.headers.iter() {
+        for (key, value) in &self.cfg.headers {
             if !head.headers().contains_key(key) {
                 head.headers_mut().insert(key.clone(), value.clone());
             }
