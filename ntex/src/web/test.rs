@@ -23,7 +23,7 @@ use crate::service::{IntoServiceFactory, Pipeline, fn_service};
 use crate::time::{Millis, Seconds};
 use crate::util::{Bytes, BytesMut, Stream, stream_recv};
 #[cfg(feature = "ws")]
-use crate::ws::{WsClient, WsConnection, error::WsClientError};
+use crate::ws::{WsClient, WsClientConfig, WsConnection, error::WsClientError};
 use crate::{Service, ServiceFactory, SharedCfg, io::IoConfig, rt::System, server::Server};
 
 use crate::web::config::WebAppConfig;
@@ -727,6 +727,11 @@ where
                     .set_max_header_continuation_frames(96),
             )
             .add(ClientConfig::new().set_lifetime(Seconds::ZERO))
+            .add(
+                WsClientConfig::new()
+                    .set_address(addr)
+                    .set_timeout(Seconds(60)),
+            )
             .build()
     });
 
@@ -990,13 +995,9 @@ impl TestServer {
                     .set_alpn_protos(b"\x08http/1.1")
                     .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
 
-                WsClient::builder(self.url(path))
-                    .address(self.addr)
-                    .timeout(Seconds(60))
-                    .openssl(builder.build())
-                    .take()
-                    .build(self.cfg.clone())
+                WsClient::new(self.url(path), &self.cfg)
                     .unwrap()
+                    .openssl(builder.build())
                     .connect()
                     .await
                     .map(WsConnection::seal)
@@ -1006,10 +1007,7 @@ impl TestServer {
                 panic!("openssl feature is required")
             }
         } else {
-            WsClient::builder(self.url(path))
-                .address(self.addr)
-                .timeout(Seconds(60))
-                .build(self.cfg.clone())
+            WsClient::new(self.url(path), &self.cfg)
                 .unwrap()
                 .connect()
                 .await

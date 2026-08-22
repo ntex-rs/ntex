@@ -147,15 +147,17 @@ async fn test_keepalive_timeout() {
     });
 
     // client service
-    let con = ws::WsClient::builder(srv.url("/"))
-        .address(srv.addr())
-        .timeout(Seconds(30))
-        .build(SharedCfg::default())
-        .unwrap()
-        .connect()
-        .await
-        .unwrap()
-        .seal();
+    let con = ws::WsClient::new(
+        srv.url("/"),
+        ws::WsClientConfig::new()
+            .set_address(srv.addr())
+            .set_timeout(Seconds(30)),
+    )
+    .unwrap()
+    .connect()
+    .await
+    .unwrap()
+    .seal();
     let tx = con.sink();
     let rx = con.receiver();
 
@@ -193,12 +195,14 @@ async fn test_upgrade_handler_with_await() {
         ))))
     });
 
-    let _ = ws::WsClient::builder(srv.url("/"))
-        .address(srv.addr())
-        .timeout(Seconds(1))
-        .build(SharedCfg::default())
-        .unwrap()
-        .connect()
-        .await
-        .unwrap();
+    let _ = ws::WsClient::new(
+        srv.url("/"),
+        ws::WsClientConfig::new()
+            .set_address(srv.addr())
+            .set_timeout(Seconds(1)),
+    )
+    .unwrap()
+    .connect()
+    .await
+    .unwrap();
 }

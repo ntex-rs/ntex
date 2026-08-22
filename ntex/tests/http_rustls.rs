@@ -525,7 +525,7 @@ async fn test_ws_transport() {
 }
 
 #[ntex::test]
-async fn test_h2_graceful_shutdown() -> io::Result<()> {
+async fn test_h2_not_graceful_shutdown() -> io::Result<()> {
     let count = Arc::new(AtomicUsize::new(0));
     let count2 = count.clone();
     let (tx, rx) = ::oneshot::channel();
@@ -571,11 +571,11 @@ async fn test_h2_graceful_shutdown() -> io::Result<()> {
 
     let (tx, rx) = oneshot::channel();
     rt::spawn(async move {
-        srv.stop().await;
+        srv.stop(false).await;
         let _ = tx.send(());
     });
 
     let _ = rx.await;
-    assert_eq!(count.load(Ordering::Relaxed), 0);
+    assert_eq!(count.load(Ordering::Relaxed), 2);
     Ok(())
 }

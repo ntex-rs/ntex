@@ -4,7 +4,7 @@ use ntex::http::{StatusCode, header};
 use ntex::service::{fn_factory_with_config, fn_service, fn_shutdown, svc};
 use ntex::util::{ByteString, Bytes};
 use ntex::web::{self, App, HttpRequest, HttpResponse, test, ws};
-use ntex::ws::error::WsClientError;
+use ntex::ws::{WsClientConfig, error::WsClientError};
 
 async fn service(msg: ws::Frame) -> Result<Option<ws::Message>, io::Error> {
     let msg = match msg {
@@ -205,9 +205,7 @@ async fn web_ws_client() {
 
 #[ntex::test]
 async fn web_ws_subprotocol() {
-    use ntex::service::cfg::SharedCfg;
-    use ntex::time::Seconds;
-    use ntex::ws::WsClient;
+    use ntex::{time::Seconds, ws::WsClient};
 
     let srv = test::server(async |_| {
         App::new().service(
@@ -229,15 +227,17 @@ async fn web_ws_subprotocol() {
     });
 
     // client requests subprotocol
-    let conn = WsClient::builder(srv.url("/"))
-        .address(srv.addr())
-        .timeout(Seconds(30))
-        .protocols(["my-subprotocol"])
-        .build(SharedCfg::default())
-        .unwrap()
-        .connect()
-        .await
-        .unwrap();
+    let conn = WsClient::new(
+        srv.url("/"),
+        WsClientConfig::new()
+            .set_address(srv.addr())
+            .set_timeout(Seconds(30))
+            .set_protocols(["my-subprotocol"]),
+    )
+    .unwrap()
+    .connect()
+    .await
+    .unwrap();
 
     assert_eq!(conn.response().status(), StatusCode::SWITCHING_PROTOCOLS);
     assert_eq!(
@@ -251,9 +251,7 @@ async fn web_ws_subprotocol() {
 
 #[ntex::test]
 async fn web_ws_subprotocol_none() {
-    use ntex::service::cfg::SharedCfg;
-    use ntex::time::Seconds;
-    use ntex::ws::WsClient;
+    use ntex::{time::Seconds, ws::WsClient};
 
     let srv = test::server(async |_| {
         App::new().service(
@@ -274,15 +272,17 @@ async fn web_ws_subprotocol_none() {
     });
 
     // client requests subprotocol that server doesn't support
-    let conn = WsClient::builder(srv.url("/"))
-        .address(srv.addr())
-        .timeout(Seconds(30))
-        .protocols(["my-subprotocol"])
-        .build(SharedCfg::default())
-        .unwrap()
-        .connect()
-        .await
-        .unwrap();
+    let conn = WsClient::new(
+        srv.url("/"),
+        WsClientConfig::new()
+            .set_address(srv.addr())
+            .set_timeout(Seconds(30))
+            .set_protocols(["my-subprotocol"]),
+    )
+    .unwrap()
+    .connect()
+    .await
+    .unwrap();
 
     assert_eq!(conn.response().status(), StatusCode::SWITCHING_PROTOCOLS);
     // no protocol header in response
@@ -326,15 +326,19 @@ async fn web_ws_protocols_parsing() {
     });
 
     // client requests multiple protocols (comma-separated)
-    let conn = WsClient::builder(srv.url("/"))
-        .address(srv.addr())
-        .timeout(Seconds(30))
-        .protocols(["proto1", "proto2"])
-        .build(SharedCfg::default())
-        .unwrap()
-        .connect()
-        .await
-        .unwrap();
+    let conn = WsClient::new(
+        srv.url("/"),
+        SharedCfg::new("C").add(
+            WsClientConfig::new()
+                .set_address(srv.addr())
+                .set_timeout(Seconds(30))
+                .set_protocols(["proto1", "proto2"]),
+        ),
+    )
+    .unwrap()
+    .connect()
+    .await
+    .unwrap();
 
     assert_eq!(conn.response().status(), StatusCode::SWITCHING_PROTOCOLS);
     // server chooses proto2 (higher priority)

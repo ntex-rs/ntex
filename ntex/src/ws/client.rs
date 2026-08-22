@@ -1,12 +1,15 @@
 //! Websockets client
-use std::{cell::RefCell, fmt, marker, net, str};
+use std::{fmt, marker};
 
 #[cfg(feature = "openssl")]
 use crate::connect::openssl;
+#[cfg(feature = "openssl")]
+use tls_openssl::ssl::SslConnector;
+
 #[cfg(feature = "rustls")]
-use crate::connect::rustls;
-#[cfg(feature = "cookie")]
-use coo_kie::{Cookie, CookieJar};
+use crate::connect::rustls::{TlsClientFilter, TlsConnector};
+#[cfg(feature = "rustls")]
+use tls_rustls::ClientConfig as RustlsClientConfig;
 
 use base64::{Engine, engine::general_purpose::STANDARD as base64};
 use nanorand::{Rng, WyRand};
@@ -14,16 +17,15 @@ use nanorand::{Rng, WyRand};
 use crate::client::{ClientCodec, ClientConfig, ClientRawRequest, ClientResponse};
 use crate::connect::{Connect, ConnectError, Connector};
 use crate::error::{Error, ErrorMapping};
-use crate::http::header::{self, AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
+use crate::http::header::{self, HeaderValue};
 use crate::http::{ConnectionType, Message, Method, RequestHead, StatusCode, Uri};
 use crate::http::{body::BodySize, error::HttpError};
 use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, Layer, Reason, Sealed};
 use crate::service::{IntoService, Pipeline, apply_fn, fn_service};
-use crate::time::{Millis, timeout};
-use crate::{Cfg, Service, SharedCfg, channel::mpsc, rt, ws};
+use crate::{Cfg, Service, SharedCfg, channel::mpsc, rt, time::timeout, ws};
 
-use super::error::{WsClientBuilderError, WsClientError, WsError};
-use super::transport::WsTransport;
+use super::error::{WsClientError, WsConfigError, WsError};
+use super::{WsClientConfig, transport::WsTransport};
 
 thread_local! {
     static CFG: SharedCfg = SharedCfg::new("WS-CLIENT").into();
@@ -31,99 +33,79 @@ thread_local! {
 
 /// `WebSocket` client builder
 pub struct WsClient<F> {
-    connector: Pipeline<Connect<Uri>, Io<F>, Error<ConnectError>>,
+    uri: Uri,
     cfg: Cfg<ClientConfig>,
-    head: Message<RequestHead>,
-    addr: Option<net::SocketAddr>,
-    max_size: usize,
-    server_mode: bool,
-    timeout: Millis,
-    extra_headers: RefCell<Option<HeaderMap>>,
-    _t: marker::PhantomData<F>,
-}
-
-/// `WebSocket` client builder
-pub struct WsClientBuilder<F, S> {
-    inner: Option<Inner<F, S>>,
-    err: Option<HttpError>,
-    protocols: Option<String>,
-    origin: Option<HeaderValue>,
-    #[cfg(feature = "cookie")]
-    cookies: Option<CookieJar>,
-}
-
-struct Inner<F, S> {
-    connector: S,
-    pub(crate) head: Message<RequestHead>,
-    addr: Option<net::SocketAddr>,
-    max_size: usize,
-    server_mode: bool,
-    timeout: Millis,
-    _t: marker::PhantomData<F>,
+    wscfg: Cfg<WsClientConfig>,
+    connector: Pipeline<Connect<Uri>, Io<F>, Error<ConnectError>>,
+    filter: marker::PhantomData<F>,
 }
 
 impl WsClient<Base> {
-    /// Create new websocket client builder
-    pub fn builder<U>(uri: U) -> WsClientBuilder<Base, Connector<Uri>>
+    /// Set server uri
+    pub fn new<U>(uri: U, cfg: impl Into<Cfg<WsClientConfig>>) -> Result<Self, WsConfigError>
     where
         Uri: TryFrom<U>,
-        <Uri as TryFrom<U>>::Error: Into<HttpError>,
+        HttpError: From<<Uri as TryFrom<U>>::Error>,
     {
-        WsClientBuilder::new(uri)
-    }
+        let uri = Uri::try_from(uri).map_err(HttpError::from)?;
 
-    /// Create new websocket client builder
-    pub fn with_connector<F, S, U, I>(uri: U, f: I) -> WsClientBuilder<F, S>
-    where
-        Uri: TryFrom<U>,
-        <Uri as TryFrom<U>>::Error: Into<HttpError>,
-        F: Filter + 'static,
-        S: Service<SharedCfg, Connect<Uri>, Res = Io<F>, Error = Error<ConnectError>> + 'static,
-        I: IntoService<S, SharedCfg, Connect<Uri>>,
-    {
-        WsClientBuilder::new(uri).connector(f.into_service())
+        // validate uri
+        if uri.host().is_none() {
+            return Err(WsConfigError::MissingHost);
+        } else if uri.scheme().is_none() {
+            return Err(WsConfigError::MissingScheme);
+        } else if let Some(scheme) = uri.scheme() {
+            match scheme.as_str() {
+                "http" | "ws" | "https" | "wss" => (),
+                _ => return Err(WsConfigError::UnknownScheme),
+            }
+        } else {
+            return Err(WsConfigError::UnknownScheme);
+        }
+
+        let wscfg = cfg.into();
+        let shared = wscfg.shared();
+
+        Ok(WsClient {
+            uri,
+            wscfg,
+            cfg: shared.get(),
+            connector: Pipeline::with_st(shared, Connector::<Uri>::new()),
+            filter: marker::PhantomData,
+        })
     }
 }
 
 impl<F> WsClient<F> {
-    /// Insert a header, replaces existing header.
-    pub fn set_header<K, V>(&self, key: K, value: V) -> Result<(), HttpError>
+    /// Create new websocket client
+    pub fn connector<U, S>(self, f: impl IntoService<S, SharedCfg, Connect<Uri>>) -> WsClient<U>
     where
-        HeaderName: TryFrom<K>,
-        HeaderValue: TryFrom<V>,
-        <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
-        <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
+        U: Filter + 'static,
+        S: Service<SharedCfg, Connect<Uri>, Res = Io<U>, Error = Error<ConnectError>> + 'static,
     {
-        let key = HeaderName::try_from(key).map_err(Into::into)?;
-        let value = HeaderValue::try_from(value).map_err(Into::into)?;
-        if let Some(headers) = &mut *self.extra_headers.borrow_mut() {
-            headers.insert(key, value);
-            return Ok(());
+        let shared = self.cfg.shared();
+        WsClient {
+            uri: self.uri,
+            cfg: self.cfg,
+            wscfg: self.wscfg,
+            connector: Pipeline::with_st(shared, f.into_service()),
+            filter: marker::PhantomData,
         }
-        let mut headers = HeaderMap::new();
-        headers.insert(key, value);
-        *self.extra_headers.borrow_mut() = Some(headers);
-        Ok(())
     }
 
-    /// Set HTTP basic authorization header
-    pub fn set_basic_auth<U>(&self, username: U, password: Option<&str>) -> Result<(), HttpError>
-    where
-        U: fmt::Display,
-    {
-        let auth = match password {
-            Some(password) => format!("{username}:{password}"),
-            None => format!("{username}:"),
-        };
-        self.set_header(AUTHORIZATION, format!("Basic {}", base64.encode(auth)))
+    #[cfg(feature = "openssl")]
+    /// Use openssl connector.
+    pub fn openssl(self, config: SslConnector) -> WsClient<Layer<openssl::SslFilter>> {
+        self.connector(openssl::SslConnector::new(config))
     }
 
-    /// Set HTTP bearer authentication header
-    pub fn set_bearer_auth<U>(&self, token: U) -> Result<(), HttpError>
-    where
-        U: fmt::Display,
-    {
-        self.set_header(AUTHORIZATION, format!("Bearer {token}"))
+    #[cfg(feature = "rustls")]
+    /// Use rustls connector.
+    pub fn rustls(
+        self,
+        config: std::sync::Arc<RustlsClientConfig>,
+    ) -> WsClient<Layer<TlsClientFilter>> {
+        self.connector(TlsConnector::from(config))
     }
 }
 
@@ -133,11 +115,45 @@ where
 {
     /// Complete request construction and connect to a websockets server.
     pub async fn connect(&self) -> Result<WsConnection<F>, Error<WsClientError>> {
-        let head = self.head.clone();
-        let max_size = self.max_size;
-        let server_mode = self.server_mode;
-        let to = self.timeout;
-        let mut headers = self.extra_headers.borrow_mut().take().unwrap_or_default();
+        let mut head = Message::<RequestHead>::new();
+        // the message pool may return a recycled head whose method is not GET
+        // (e.g. previously used by the HTTP/1 server dispatcher for a POST request)
+        head.method = Method::GET;
+        head.set_connection_type(ConnectionType::Upgrade);
+
+        // copy headers
+        for (key, value) in self.cfg.headers() {
+            if !head.headers().contains_key(key) {
+                head.headers_mut().insert(key.clone(), value.clone());
+            }
+        }
+
+        // host header
+        if !head.headers.contains_key(header::HOST) {
+            let val = HeaderValue::from_str(self.uri.host().unwrap()).unwrap();
+            head.headers.insert(header::HOST, val);
+        }
+
+        #[cfg(feature = "cookie")]
+        {
+            use percent_encoding::percent_encode;
+            use std::fmt::Write as FmtWrite;
+
+            // set cookies
+            if let Some(ref jar) = self.wscfg.cookies {
+                let mut cookie = String::new();
+                for c in jar.delta() {
+                    let name = percent_encode(c.name().as_bytes(), crate::http::helpers::USERINFO);
+                    let value =
+                        percent_encode(c.value().as_bytes(), crate::http::helpers::USERINFO);
+                    let _ = write!(cookie, "; {name}={value}");
+                }
+                head.headers.insert(
+                    header::COOKIE,
+                    HeaderValue::from_str(&cookie.as_str()[2..]).unwrap(),
+                );
+            }
+        }
 
         // Generate a random key for the `Sec-WebSocket-Key` header.
         // a base64-encoded (see Section 4 of [RFC4648]) value that,
@@ -146,13 +162,18 @@ where
         WyRand::new().fill(&mut sec_key);
         let key = base64.encode(sec_key);
 
-        headers.insert(
+        head.headers.insert(
             header::SEC_WEBSOCKET_KEY,
             HeaderValue::try_from(key.as_str()).unwrap(),
         );
 
-        let msg = Connect::new(head.uri.clone()).set_addr(self.addr);
-        log::trace!("Open ws connection to {:?} addr: {:?}", head.uri, self.addr);
+        let msg = Connect::new(self.uri.clone()).set_addr(self.wscfg.addr);
+        log::trace!(
+            "{}: Open ws connection to {:?} addr: {:?}",
+            self.cfg.tag(),
+            self.uri,
+            self.wscfg.addr
+        );
 
         let io = self.connector.call(msg).await.into_error()?;
         let tag = io.tag();
@@ -166,7 +187,7 @@ where
             io.send(
                 ClientRawRequest {
                     head,
-                    headers: Some(headers),
+                    headers: None,
                     size: BodySize::None,
                 }
                 .into(),
@@ -180,8 +201,8 @@ where
         };
 
         // set request timeout
-        let response = if to.non_zero() {
-            timeout(to, fut)
+        let response = if self.wscfg.timeout.non_zero() {
+            timeout(self.wscfg.timeout, fut)
                 .await
                 .map_err(|()| WsClientError::Timeout)
                 .and_then(|res| res)?
@@ -258,10 +279,10 @@ where
         Ok(WsConnection::new(
             io,
             ClientResponse::with_empty_payload(response, self.cfg.clone()),
-            if server_mode {
-                ws::Codec::new().max_size(max_size)
+            if self.wscfg.server_mode {
+                ws::Codec::new().max_size(self.wscfg.max_size)
             } else {
-                ws::Codec::new().max_size(max_size).client_mode()
+                ws::Codec::new().max_size(self.wscfg.max_size).client_mode()
             },
         ))
     }
@@ -269,417 +290,9 @@ where
 
 impl<F> fmt::Debug for WsClient<F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "\nWsClient {}:{}", self.head.method, self.head.uri)?;
-        writeln!(f, "  headers:")?;
-        for (key, val) in &self.head.headers {
-            writeln!(f, "    {key:?}: {val:?}")?;
-        }
-        Ok(())
-    }
-}
-
-impl WsClientBuilder<Base, Connector<Uri>> {
-    #[must_use]
-    /// Create new client builder.
-    fn new<U>(uri: U) -> WsClientBuilder<Base, Connector<Uri>>
-    where
-        Uri: TryFrom<U>,
-        <Uri as TryFrom<U>>::Error: Into<HttpError>,
-    {
-        let connector = Connector::<Uri>::new();
-
-        let mut head = Message::<RequestHead>::new();
-        // the message pool may return a recycled head whose method is not GET
-        // (e.g. previously used by the HTTP/1 server dispatcher for a POST request)
-        head.method = Method::GET;
-        let err = match Uri::try_from(uri) {
-            Ok(uri) => {
-                head.uri = uri;
-                None
-            }
-            Err(e) => Some(e.into()),
-        };
-
-        WsClientBuilder {
-            err,
-            origin: None,
-            protocols: None,
-            inner: Some(Inner {
-                head,
-                connector,
-                addr: None,
-                max_size: 65_536,
-                server_mode: false,
-                timeout: Millis(5_000),
-                _t: marker::PhantomData,
-            }),
-            #[cfg(feature = "cookie")]
-            cookies: None,
-        }
-    }
-}
-
-impl<F, S> WsClientBuilder<F, S>
-where
-    F: 'static,
-    S: Service<SharedCfg, Connect<Uri>, Res = Io<F>, Error = Error<ConnectError>> + 'static,
-{
-    /// Set socket address of the server.
-    ///
-    /// This address is used for connection. If address is not
-    /// provided url's host name get resolved.
-    pub fn address(&mut self, addr: net::SocketAddr) -> &mut Self {
-        if let Some(parts) = parts(&mut self.inner, self.err) {
-            parts.addr = Some(addr);
-        }
-        self
-    }
-
-    /// Set supported websocket protocols.
-    pub fn protocols<U, V>(&mut self, protos: U) -> &mut Self
-    where
-        U: IntoIterator<Item = V>,
-        V: AsRef<str>,
-    {
-        let mut protos = protos
-            .into_iter()
-            .fold(String::new(), |acc, s| acc + s.as_ref() + ",");
-        protos.pop();
-        self.protocols = Some(protos);
-        self
-    }
-
-    #[cfg(feature = "cookie")]
-    /// Set a cookie.
-    pub fn cookie<C>(&mut self, cookie: C) -> &mut Self
-    where
-        C: Into<Cookie<'static>>,
-    {
-        if let Some(cookies) = &mut self.cookies {
-            cookies.add(cookie.into());
-        } else {
-            let mut jar = CookieJar::new();
-            jar.add(cookie.into());
-            self.cookies = Some(jar);
-        }
-        self
-    }
-
-    /// Set request Origin.
-    pub fn origin<V, E>(&mut self, origin: V) -> &mut Self
-    where
-        HeaderValue: TryFrom<V, Error = E>,
-        HttpError: From<E>,
-    {
-        match HeaderValue::try_from(origin) {
-            Ok(value) => self.origin = Some(value),
-            Err(e) => self.err = Some(e.into()),
-        }
-        self
-    }
-
-    /// Set max frame size.
-    ///
-    /// By default max size is set to 64kb
-    pub fn max_frame_size(&mut self, size: usize) -> &mut Self {
-        if let Some(parts) = parts(&mut self.inner, self.err) {
-            parts.max_size = size;
-        }
-        self
-    }
-
-    /// Disable payload masking.
-    ///
-    /// By default ws client masks frame payload.
-    pub fn server_mode(&mut self) -> &mut Self {
-        if let Some(parts) = parts(&mut self.inner, self.err) {
-            parts.server_mode = true;
-        }
-        self
-    }
-
-    /// Append a header.
-    ///
-    /// Header gets appended to existing header.
-    /// To override header use `set_header()` method.
-    pub fn header<K, V>(&mut self, key: K, value: V) -> &mut Self
-    where
-        HeaderName: TryFrom<K>,
-        HeaderValue: TryFrom<V>,
-        <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
-        <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
-    {
-        if let Some(parts) = parts(&mut self.inner, self.err) {
-            match HeaderName::try_from(key) {
-                Ok(key) => match HeaderValue::try_from(value) {
-                    Ok(value) => {
-                        parts.head.headers.append(key, value);
-                    }
-                    Err(e) => self.err = Some(e.into()),
-                },
-                Err(e) => self.err = Some(e.into()),
-            }
-        }
-        self
-    }
-
-    /// Insert a header, replaces existing header.
-    pub fn set_header<K, V>(&mut self, key: K, value: V) -> &mut Self
-    where
-        HeaderName: TryFrom<K>,
-        HeaderValue: TryFrom<V>,
-        <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
-        <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
-    {
-        if let Some(parts) = parts(&mut self.inner, self.err) {
-            match HeaderName::try_from(key) {
-                Ok(key) => match HeaderValue::try_from(value) {
-                    Ok(value) => {
-                        parts.head.headers.insert(key, value);
-                    }
-                    Err(e) => self.err = Some(e.into()),
-                },
-                Err(e) => self.err = Some(e.into()),
-            }
-        }
-        self
-    }
-
-    /// Insert a header only if it is not yet set.
-    pub fn set_header_if_none<K, V>(&mut self, key: K, value: V) -> &mut Self
-    where
-        HeaderName: TryFrom<K>,
-        HeaderValue: TryFrom<V>,
-        <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
-        <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
-    {
-        if let Some(parts) = parts(&mut self.inner, self.err) {
-            match HeaderName::try_from(key) {
-                Ok(key) => {
-                    if !parts.head.headers.contains_key(&key) {
-                        match HeaderValue::try_from(value) {
-                            Ok(value) => {
-                                parts.head.headers.insert(key, value);
-                            }
-                            Err(e) => self.err = Some(e.into()),
-                        }
-                    }
-                }
-                Err(e) => self.err = Some(e.into()),
-            }
-        }
-        self
-    }
-
-    /// Set HTTP basic authorization header.
-    pub fn basic_auth<U>(&mut self, username: U, password: Option<&str>) -> &mut Self
-    where
-        U: fmt::Display,
-    {
-        let auth = match password {
-            Some(password) => format!("{username}:{password}"),
-            None => format!("{username}:"),
-        };
-        self.header(AUTHORIZATION, format!("Basic {}", base64.encode(auth)))
-    }
-
-    /// Set HTTP bearer authentication header.
-    pub fn bearer_auth<U>(&mut self, token: U) -> &mut Self
-    where
-        U: fmt::Display,
-    {
-        self.header(AUTHORIZATION, format!("Bearer {token}"))
-    }
-
-    /// Set request timeout.
-    ///
-    /// Request timeout is the total time before a response must be received.
-    /// Default value is 5 seconds.
-    pub fn timeout<U: Into<Millis>>(&mut self, timeout: U) -> &mut Self {
-        if let Some(parts) = parts(&mut self.inner, self.err) {
-            parts.timeout = timeout.into();
-        }
-        self
-    }
-
-    /// Use custom connector.
-    pub fn connector<F1, T1, U>(&mut self, f: U) -> WsClientBuilder<F1, T1>
-    where
-        F1: Filter + 'static,
-        T1: Service<SharedCfg, Connect<Uri>, Res = Io<F1>, Error = Error<ConnectError>> + 'static,
-        U: IntoService<T1, SharedCfg, Connect<Uri>>,
-    {
-        let inner = self.inner.take().expect("cannot reuse WsClient builder");
-
-        WsClientBuilder {
-            inner: Some(Inner {
-                connector: f.into_service(),
-                head: inner.head,
-                addr: inner.addr,
-                max_size: inner.max_size,
-                server_mode: inner.server_mode,
-                timeout: inner.timeout,
-                _t: marker::PhantomData,
-            }),
-            err: self.err.take(),
-            protocols: self.protocols.take(),
-            origin: self.origin.take(),
-            #[cfg(feature = "cookie")]
-            cookies: self.cookies.take(),
-        }
-    }
-
-    #[cfg(feature = "openssl")]
-    /// Use openssl connector.
-    pub fn openssl(
-        &mut self,
-        config: tls_openssl::ssl::SslConnector,
-    ) -> WsClientBuilder<Layer<openssl::SslFilter>, openssl::SslConnector<Connector<Uri>>> {
-        self.connector(openssl::SslConnector::new(config))
-    }
-
-    #[cfg(feature = "rustls")]
-    /// Use rustls connector.
-    pub fn rustls(
-        &mut self,
-        config: std::sync::Arc<tls_rustls::ClientConfig>,
-    ) -> WsClientBuilder<Layer<rustls::TlsClientFilter>, rustls::TlsConnector<Connector<Uri>>> {
-        self.connector(rustls::TlsConnector::from(config))
-    }
-
-    #[must_use]
-    /// This method construct new `WsClientBuilder`
-    pub fn take(&mut self) -> WsClientBuilder<F, S> {
-        WsClientBuilder {
-            inner: self.inner.take(),
-            err: self.err.take(),
-            origin: self.origin.take(),
-            protocols: self.protocols.take(),
-            #[cfg(feature = "cookie")]
-            cookies: self.cookies.take(),
-        }
-    }
-
-    /// Complete building process and construct websockets client.
-    ///
-    /// # Panics
-    ///
-    /// Panics if client build is reused.
-    pub fn build(
-        &mut self,
-        cfg: impl Into<SharedCfg>,
-    ) -> Result<WsClient<F>, WsClientBuilderError> {
-        if let Some(e) = self.err.take() {
-            return Err(WsClientBuilderError::Http(e));
-        }
-        let mut inner = self.inner.take().expect("cannot reuse WsClient builder");
-
-        // validate uri
-        let uri = &inner.head.uri;
-        if uri.host().is_none() {
-            return Err(WsClientBuilderError::MissingHost);
-        } else if uri.scheme().is_none() {
-            return Err(WsClientBuilderError::MissingScheme);
-        } else if let Some(scheme) = uri.scheme() {
-            match scheme.as_str() {
-                "http" | "ws" | "https" | "wss" => (),
-                _ => return Err(WsClientBuilderError::UnknownScheme),
-            }
-        } else {
-            return Err(WsClientBuilderError::UnknownScheme);
-        }
-
-        if !inner.head.headers.contains_key(header::HOST) {
-            let val = HeaderValue::from_str(inner.head.uri.host().unwrap()).unwrap();
-            inner.head.headers.insert(header::HOST, val);
-        }
-
-        #[cfg(feature = "cookie")]
-        {
-            use percent_encoding::percent_encode;
-            use std::fmt::Write as FmtWrite;
-
-            // set cookies
-            if let Some(ref mut jar) = self.cookies {
-                let mut cookie = String::new();
-                for c in jar.delta() {
-                    let name = percent_encode(c.name().as_bytes(), crate::http::helpers::USERINFO);
-                    let value =
-                        percent_encode(c.value().as_bytes(), crate::http::helpers::USERINFO);
-                    let _ = write!(cookie, "; {name}={value}");
-                }
-                inner.head.headers.insert(
-                    header::COOKIE,
-                    HeaderValue::from_str(&cookie.as_str()[2..]).unwrap(),
-                );
-            }
-        }
-
-        // origin
-        if let Some(origin) = self.origin.take() {
-            inner.head.headers.insert(header::ORIGIN, origin);
-        }
-
-        inner.head.set_connection_type(ConnectionType::Upgrade);
-        inner
-            .head
-            .headers
-            .insert(header::UPGRADE, HeaderValue::from_static("websocket"));
-        inner.head.headers.insert(
-            header::SEC_WEBSOCKET_VERSION,
-            HeaderValue::from_static("13"),
-        );
-
-        if let Some(protocols) = self.protocols.take() {
-            inner.head.headers.insert(
-                header::SEC_WEBSOCKET_PROTOCOL,
-                HeaderValue::try_from(protocols.as_str()).unwrap(),
-            );
-        }
-        let cfg = cfg.into();
-
-        Ok(WsClient {
-            cfg: cfg.get(),
-            connector: Pipeline::with_st(cfg, inner.connector),
-            head: inner.head,
-            addr: inner.addr,
-            max_size: inner.max_size,
-            server_mode: inner.server_mode,
-            timeout: inner.timeout,
-            extra_headers: RefCell::new(None),
-            _t: marker::PhantomData,
-        })
-    }
-}
-
-#[allow(clippy::ref_option)]
-#[inline]
-fn parts<F, S>(
-    parts: &mut Option<Inner<F, S>>,
-    err: Option<HttpError>,
-) -> Option<&mut Inner<F, S>> {
-    if err.is_some() {
-        return None;
-    }
-    parts.as_mut()
-}
-
-impl<F, S> fmt::Debug for WsClientBuilder<F, S> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(ref parts) = self.inner {
-            writeln!(
-                f,
-                "\nWsClientBuilder {}:{}",
-                parts.head.method, parts.head.uri
-            )?;
-            writeln!(f, "  headers:")?;
-            for (key, val) in &parts.head.headers {
-                writeln!(f, "    {key:?}: {val:?}")?;
-            }
-        } else {
-            writeln!(f, "WsClientBuilder(Consumed)")?;
-        }
-        Ok(())
+        f.debug_struct("WsClient")
+            .field("wscfg", &self.wscfg)
+            .finish()
     }
 }
 
@@ -802,30 +415,20 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_debug() {
-        let mut builder = WsClient::builder("http://localhost")
-            .header("x-test", "111")
-            .take();
-        let repr = format!("{builder:?}");
-        assert!(repr.contains("WsClientBuilder"));
-        assert!(repr.contains("x-test"));
-
-        let client = builder.build(SharedCfg::default()).unwrap();
-        let repr = format!("{client:?}");
-        assert!(repr.contains("WsClient"));
-        assert!(repr.contains("x-test"));
+        let client = WsClient::new("http://localhost", SharedCfg::default());
+        assert!(format!("{client:?}").contains("WsClient"));
     }
 
     #[crate::rt_test]
     async fn header_override() {
-        let req = WsClient::builder("http://localhost")
-            .header(header::CONTENT_TYPE, "111")
+        let cfg = WsClientConfig::new()
+            .set_header(header::CONTENT_TYPE, "111")
+            .unwrap()
             .set_header(header::CONTENT_TYPE, "222")
-            .build(SharedCfg::default())
             .unwrap();
 
         assert_eq!(
-            req.head
-                .headers
+            cfg.headers
                 .get(header::CONTENT_TYPE)
                 .unwrap()
                 .to_str()
@@ -836,34 +439,27 @@ mod tests {
 
     #[crate::rt_test]
     async fn basic_errs() {
-        let err = WsClient::builder("localhost")
-            .build(SharedCfg::default())
+        let err = WsClient::new("localhost", SharedCfg::default())
             .err()
             .unwrap();
-        assert!(matches!(err, WsClientBuilderError::MissingScheme));
-        let err = WsClient::builder("unknown://localhost")
-            .build(SharedCfg::default())
+        assert!(matches!(err, WsConfigError::MissingScheme));
+
+        let err = WsClient::new("unknown://localhost", SharedCfg::default())
             .err()
             .unwrap();
-        assert!(matches!(err, WsClientBuilderError::UnknownScheme));
-        let err = WsClient::builder("/")
-            .build(SharedCfg::default())
-            .err()
-            .unwrap();
-        assert!(matches!(err, WsClientBuilderError::MissingHost));
+        assert!(matches!(err, WsConfigError::UnknownScheme));
+
+        let err = WsClient::new("/", SharedCfg::default()).err().unwrap();
+        assert!(matches!(err, WsConfigError::MissingHost));
     }
 
     #[crate::rt_test]
     async fn basic_auth() {
-        let client = WsClient::builder("http://localhost")
-            .basic_auth("username", Some("password"))
-            .build(SharedCfg::default())
+        let cfg = WsClientConfig::new()
+            .set_basic_auth("username", Some("password"))
             .unwrap();
-
         assert_eq!(
-            client
-                .head
-                .headers
+            cfg.headers
                 .get(header::AUTHORIZATION)
                 .unwrap()
                 .to_str()
@@ -871,15 +467,11 @@ mod tests {
             "Basic dXNlcm5hbWU6cGFzc3dvcmQ="
         );
 
-        let client = WsClient::builder("http://localhost")
-            .basic_auth("username", None)
-            .build(SharedCfg::default())
+        let cfg = WsClientConfig::new()
+            .set_basic_auth("username", None)
             .unwrap();
-
         assert_eq!(
-            client
-                .head
-                .headers
+            cfg.headers
                 .get(header::AUTHORIZATION)
                 .unwrap()
                 .to_str()
@@ -887,13 +479,9 @@ mod tests {
             "Basic dXNlcm5hbWU6"
         );
 
-        client.set_basic_auth("username", Some("password")).unwrap();
+        let cfg = cfg.set_basic_auth("username", Some("password")).unwrap();
         assert_eq!(
-            client
-                .extra_headers
-                .borrow()
-                .as_ref()
-                .unwrap()
+            cfg.headers
                 .get(header::AUTHORIZATION)
                 .unwrap()
                 .to_str()
@@ -904,78 +492,42 @@ mod tests {
 
     #[crate::rt_test]
     async fn bearer_auth() {
-        let client = WsClient::builder("http://localhost")
-            .bearer_auth("someS3cr3tAutht0k3n")
-            .build(SharedCfg::default())
+        let cfg = WsClientConfig::new()
+            .set_bearer_auth("someS3cr3tAutht0k3n")
             .unwrap();
-
         assert_eq!(
-            client
-                .head
-                .headers
+            cfg.headers
                 .get(header::AUTHORIZATION)
                 .unwrap()
                 .to_str()
                 .unwrap(),
             "Bearer someS3cr3tAutht0k3n"
         );
-
-        let _ = client.set_bearer_auth("someS3cr3tAutht0k2n");
-        assert_eq!(
-            client
-                .extra_headers
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .get(header::AUTHORIZATION)
-                .unwrap()
-                .to_str()
-                .unwrap(),
-            "Bearer someS3cr3tAutht0k2n"
-        );
-
-        let _ = client.connect().await;
     }
 
     #[cfg(feature = "cookie")]
     #[crate::rt_test]
     async fn basics() {
-        let mut builder = WsClient::builder("http://localhost/")
-            .origin("test-origin")
-            .max_frame_size(100)
-            .server_mode()
-            .protocols(["v1", "v2"])
-            .set_header_if_none(header::CONTENT_TYPE, "json")
-            .set_header_if_none(header::CONTENT_TYPE, "text")
-            .cookie(Cookie::build(("cookie1", "value1")))
-            .take();
-        assert_eq!(
-            builder.origin.as_ref().unwrap().to_str().unwrap(),
-            "test-origin"
-        );
-        assert_eq!(builder.inner.as_ref().unwrap().max_size, 100);
-        assert!(builder.inner.as_ref().unwrap().server_mode);
-        assert_eq!(builder.protocols, Some("v1,v2".to_string()));
+        use coo_kie::Cookie;
 
-        let client = builder.build(SharedCfg::default()).unwrap();
-        assert_eq!(
-            client.head.headers.get(header::CONTENT_TYPE).unwrap(),
-            header::HeaderValue::from_static("json")
-        );
+        let cfg = WsClientConfig::new()
+            .set_origin("test-origin")
+            .unwrap()
+            .set_max_frame_size(100)
+            .set_server_mode()
+            .set_protocols(["v1", "v2"])
+            .set_header_if_unset(header::CONTENT_TYPE, "json")
+            .unwrap()
+            .set_header_if_unset(header::CONTENT_TYPE, "text")
+            .unwrap()
+            .set_cookie(Cookie::build(("cookie1", "value1")));
 
-        let _ = client.connect().await;
+        assert!(cfg.server_mode);
+        assert_eq!(cfg.max_size, 100);
 
-        assert!(WsClient::builder("/",).build(SharedCfg::default()).is_err());
-        assert!(
-            WsClient::builder("http:///test",)
-                .build(SharedCfg::default())
-                .is_err()
-        );
-        assert!(
-            WsClient::builder("hmm://test.com/",)
-                .build(SharedCfg::default())
-                .is_err()
-        );
+        assert!(WsClient::new("/", SharedCfg::default()).is_err());
+        assert!(WsClient::new("http:///test", SharedCfg::default()).is_err());
+        assert!(WsClient::new("hmm://test.com/", SharedCfg::default()).is_err());
     }
 
     #[crate::rt_test]
@@ -986,10 +538,5 @@ mod tests {
         let mut head = Message::<RequestHead>::new();
         head.method = Method::POST;
         drop(head);
-
-        let client = WsClient::builder("http://localhost")
-            .build(SharedCfg::default())
-            .unwrap();
-        assert_eq!(client.head.method, Method::GET);
     }
 }

@@ -60,7 +60,7 @@ pub enum ProtocolError {
 
 /// Websocket client error
 #[derive(Clone, Debug, thiserror::Error)]
-pub enum WsClientBuilderError {
+pub enum WsConfigError {
     #[error("Missing url scheme")]
     MissingScheme,
     #[error("Unknown url scheme")]

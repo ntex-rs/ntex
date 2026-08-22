@@ -17,7 +17,7 @@ use crate::io::{Io, IoConfig};
 use crate::server::Server;
 use crate::service::{IntoService, Service, cfg::SharedCfg};
 #[cfg(feature = "ws")]
-use crate::ws::{WsClient, WsConnection, error::WsClientError};
+use crate::ws::{WsClient, WsClientConfig, WsConnection, error::WsClientError};
 use crate::{rt::System, time::Millis, time::Seconds, util::Bytes};
 
 use super::header::{self, HeaderMap, HeaderName, HeaderValue};
@@ -332,7 +332,7 @@ impl TestServer {
         timeout: Seconds,
         connect_timeout: Millis,
     ) -> Self {
-        let cfg: SharedCfg = SharedCfg::new("TEST-CLIENT")
+        let cfg = SharedCfg::new("TEST-CLIENT")
             .add(IoConfig::new().set_connect_timeout(connect_timeout))
             .add(TlsConfig::new().set_handshake_timeout(timeout))
             .add(
@@ -340,7 +340,12 @@ impl TestServer {
                     .set_max_header_list_size(256 * 1024)
                     .set_max_header_continuation_frames(96),
             )
-            .into();
+            .add(
+                WsClientConfig::new()
+                    .set_address(addr)
+                    .set_timeout(Seconds(30)),
+            )
+            .build();
 
         let client = Self::create_client(cfg.clone());
 
@@ -365,7 +370,12 @@ impl TestServer {
                     .set_max_header_list_size(256 * 1024)
                     .set_max_header_continuation_frames(96),
             )
-            .into();
+            .add(
+                WsClientConfig::new()
+                    .set_address(self.addr)
+                    .set_timeout(Seconds(30)),
+            )
+            .build();
         self.client = Self::create_client(self.cfg.clone());
         self
     }
@@ -444,10 +454,7 @@ impl TestServer {
         &self,
         path: &str,
     ) -> Result<WsConnection<impl Filter>, Error<WsClientError>> {
-        WsClient::builder(self.url(path))
-            .address(self.addr)
-            .timeout(Seconds(30))
-            .build(self.cfg.clone())
+        WsClient::new(self.url(path), &self.cfg)
             .unwrap()
             .connect()
             .await
@@ -481,20 +488,16 @@ impl TestServer {
             .set_alpn_protos(b"\x08http/1.1")
             .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
 
-        WsClient::builder(self.url(path))
-            .address(self.addr)
-            .timeout(Seconds(30))
-            .openssl(builder.build())
-            .take()
-            .build(self.cfg.clone())
+        WsClient::new(self.url(path), &self.cfg)
             .unwrap()
+            .openssl(builder.build())
             .connect()
             .await
     }
 
     /// Stop http server
-    pub async fn stop(self) {
-        self.server.stop(true).await;
+    pub async fn stop(self, graceful: bool) {
+        self.server.stop(graceful).await;
     }
 }
 

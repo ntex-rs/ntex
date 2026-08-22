@@ -304,6 +304,20 @@ impl<T: Configuration> From<SharedCfg> for Cfg<T> {
     }
 }
 
+impl<'a, T: Configuration> From<&'a SharedCfg> for Cfg<T> {
+    #[inline]
+    fn from(cfg: &'a SharedCfg) -> Self {
+        cfg.get()
+    }
+}
+
+impl<T: Configuration> From<SharedCfgBuilder> for Cfg<T> {
+    #[inline]
+    fn from(cfg: SharedCfgBuilder) -> Self {
+        cfg.build().get()
+    }
+}
+
 impl<T: Configuration> From<T> for SharedCfg {
     #[inline]
     fn from(cfg: T) -> Self {

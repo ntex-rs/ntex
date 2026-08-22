@@ -583,7 +583,7 @@ async fn test_h2_graceful_shutdown() -> io::Result<()> {
 
     let (tx, rx) = oneshot::channel();
     rt::spawn(async move {
-        srv.stop().await;
+        srv.stop(true).await;
         let _ = tx.send(());
     });
 

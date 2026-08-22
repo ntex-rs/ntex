@@ -846,7 +846,7 @@ async fn test_h1_gracefull_shutdown() {
 
     let (tx, rx) = oneshot::channel();
     rt::spawn(async move {
-        srv.stop().await;
+        srv.stop(true).await;
         let _ = tx.send(());
     });
 
@@ -888,7 +888,7 @@ async fn test_h1_gracefull_shutdown_2() {
 
     let (tx, rx) = oneshot::channel();
     rt::spawn(async move {
-        srv.stop().await;
+        srv.stop(true).await;
         let _ = tx.send(());
     });
     let _ = rx.await;
