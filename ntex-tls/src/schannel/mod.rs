@@ -28,7 +28,7 @@ use windows_sys::Win32::Security::Cryptography::{
 };
 
 mod connect;
-pub use self::connect::{TlsConnector, TlsConnectorService};
+pub use self::connect::TlsConnector;
 
 /// Windows Schannel client configuration.
 #[derive(Clone, Debug)]
