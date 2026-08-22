@@ -150,11 +150,9 @@ async fn test_schannel_string() {
     let config = ClientConfig::new().danger_accept_invalid_certs(true);
 
     // schannel connector
-    let conn = Pipeline::new(
-        TlsConnector::with_config(config.clone())
-            .create(&SharedCfg::new("CLIENT").into())
-            .await
-            .unwrap(),
+    let conn = Pipeline::with_st(
+        SharedCfg::new("CLIENT").into(),
+        TlsConnector::with_config(config.clone()),
     );
     let addr = format!("localhost:{}", srv.addr().port());
     let io = conn.call(addr.into()).await.unwrap();
