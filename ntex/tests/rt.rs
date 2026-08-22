@@ -350,10 +350,10 @@ async fn idle_disconnect_uring() {
 
     let cfg = SharedCfg::new("NEON-URING")
         .add(IoConfig::new().set_read_buf(24, 12, 16))
-        .into();
+        .build();
 
     let msg = Connect::new(server.addr());
-    let io = ntex::connect::connect_with(msg, cfg).await.unwrap();
+    let io = ntex::connect::connect_with(msg, &cfg).await.unwrap();
     rx.await.unwrap();
 
     io.on_disconnect().await;
