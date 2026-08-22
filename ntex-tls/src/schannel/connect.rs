@@ -3,8 +3,7 @@ use std::io;
 use ntex_error::Error;
 use ntex_io::{Io, Layer};
 use ntex_net::connect::{Address, Connect, ConnectError, Connector};
-use ntex_service::cfg::{Cfg, SharedCfg};
-use ntex_service::{Ctx, Service, ServiceFactory};
+use ntex_service::{Ctx, IntoService, Service, cfg::SharedCfg};
 use ntex_util::time::timeout_checked;
 
 use super::{ClientConfig, SchannelFilter, connect as connect_io};
@@ -12,14 +11,7 @@ use crate::TlsConfig;
 
 #[derive(Clone, Debug)]
 pub struct TlsConnector<Sf> {
-    connector: Sf,
-    config: ClientConfig,
-}
-
-#[derive(Clone, Debug)]
-pub struct TlsConnectorService<S> {
-    svc: S,
-    cfg: Cfg<TlsConfig>,
+    svc: Sf,
     config: ClientConfig,
 }
 
@@ -33,7 +25,7 @@ impl<A: Address> TlsConnector<Connector<A>> {
     /// Construct new Schannel connector factory.
     pub fn new() -> Self {
         TlsConnector {
-            connector: Connector::default(),
+            svc: Connector::default(),
             config: ClientConfig::default(),
         }
     }
@@ -41,48 +33,39 @@ impl<A: Address> TlsConnector<Connector<A>> {
     /// Construct new Schannel connector factory with custom configuration.
     pub fn with_config(config: ClientConfig) -> Self {
         TlsConnector {
-            connector: Connector::default(),
+            svc: Connector::default(),
             config,
+        }
+    }
+
+    /// Use connector to open connections.
+    pub fn connector<F, S>(self, f: impl IntoService<S, SharedCfg, Connect<A>>) -> TlsConnector<S>
+    where
+        S: Service<SharedCfg, Connect<A>, Res = Io<F>, Error = Error<ConnectError>>,
+    {
+        TlsConnector {
+            svc: f.into_service(),
+            config: self.config,
         }
     }
 }
 
-impl<A: Address, Sf, St> ServiceFactory<St, Connect<A>, SharedCfg> for TlsConnector<Sf>
+impl<A: Address, S> Service<SharedCfg, Connect<A>> for TlsConnector<S>
 where
-    Sf: ServiceFactory<St, Connect<A>, SharedCfg, Res = Io, Error = Error<ConnectError>>,
+    S: Service<SharedCfg, Connect<A>, Res = Io, Error = Error<ConnectError>>,
 {
     type Res = Io<Layer<SchannelFilter>>;
     type Error = Error<ConnectError>;
 
-    type Service = TlsConnectorService<Sf::Service>;
-    type InitError = Sf::InitError;
-
-    async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {
-        let svc = self.connector.create(cfg).await?;
-
-        Ok(TlsConnectorService {
-            svc,
-            cfg: cfg.get(),
-            config: self.config.clone(),
-        })
-    }
-}
-
-impl<A: Address, S, St> Service<St, Connect<A>> for TlsConnectorService<S>
-where
-    S: Service<St, Connect<A>, Res = Io, Error = Error<ConnectError>>,
-{
-    type Res = Io<Layer<SchannelFilter>>;
-    type Error = Error<ConnectError>;
-
-    ntex_service::forward_ready!(St, svc);
-    ntex_service::forward_shutdown!(St, svc);
+    ntex_service::forward_ready!(SharedCfg, svc);
+    ntex_service::forward_shutdown!(SharedCfg, svc);
 
     async fn call(
         &self,
         message: Connect<A>,
-        ctx: Ctx<'_, Self, St>,
+        ctx: Ctx<'_, Self, SharedCfg>,
     ) -> Result<Self::Res, Self::Error> {
+        let cfg = ctx.st().get::<TlsConfig>();
         let host = message.host().split(':').next().unwrap().to_string();
 
         let io = ctx.call(&self.svc, message).await?;
@@ -90,7 +73,7 @@ where
         log::trace!("{tag}: TLS Handshake start for: {host:?}");
 
         match timeout_checked(
-            self.cfg.handshake_timeout(),
+            cfg.handshake_timeout(),
             connect_io(io, &host, self.config.clone()),
         )
         .await
@@ -117,6 +100,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use ntex_service::Pipeline;
+
     use super::*;
 
     #[ntex::test]
@@ -125,10 +110,9 @@ mod tests {
             ntex::service::fn_service(|_| async { Ok::<_, ()>(()) })
         });
 
-        let _: TlsConnector<Connector<&'static str>> = TlsConnector::new();
-        let factory: TlsConnector<Connector<&'static str>> = TlsConnector::new();
-        assert!(format!("{factory:?}").contains("TlsConnector"));
-        let srv = factory.pipeline(&SharedCfg::default()).await.unwrap();
+        let svc: TlsConnector<Connector<&'static str>> = TlsConnector::new();
+        assert!(format!("{svc:?}").contains("TlsConnector"));
+        let srv = Pipeline::with(svc);
         assert!(srv.ready().await.is_ok());
         let result = srv
             .call(Connect::new("").set_addr(Some(server.addr())))
