@@ -1,4 +1,4 @@
-* server
+* Server
 
   1. ntex::server::build() accepted service factory closure
 
@@ -11,15 +11,14 @@
 
 * HttpService (ntex::http)
 
-1. http::HttpService::openssl(), http::h1::HttpService::openssl(),
-   http::h2::HttpService::openssl() are replcaed with
-   http::accept_openssl()
+1. http::HttpService::openssl(), http::HttpService::rustls()
+   are replcaed with http::openssl / http::rustls
 
    ```rust
    http::HttpService::new(....)
        .openssl(acceptor);
 
-   http::accept_openssl(acceptor, http::HttpService::new(..))
+   http::openssl(acceptor, http::HttpService::new(..))
    ```
 
 * http client
@@ -49,3 +48,8 @@
 
    }
    ```
+
+* websocket client
+
+ Configuration is moved to `WsClientConfig` type. WsClient does not require
+ builder anymore.

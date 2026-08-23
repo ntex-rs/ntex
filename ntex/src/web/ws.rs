@@ -142,7 +142,7 @@ where
 
     // start websockets service dispatcher
     rt::spawn(async move {
-        let res = crate::io::Dispatcher::new(io, codec, Pipeline::new(srv)).await;
+        let res = crate::io::Dispatcher::new(io, codec, Pipeline::with((), srv)).await;
         log::trace!("Ws handler is terminated: {res:?}");
     });
 

@@ -136,7 +136,7 @@ mod tests {
         )
         .clone();
 
-        let svc = Pipeline::new(factory.create(&10).await.unwrap());
+        let svc = Pipeline::with((), factory.create(&10).await.unwrap());
         assert_eq!(item.get(), 11);
         let _ = format!("{factory:?}");
 
@@ -145,7 +145,8 @@ mod tests {
 
     #[ntex::test]
     async fn test_unit_config() {
-        let svc = Pipeline::new(
+        let svc = Pipeline::with(
+            (),
             unit_config(factory(async move |item: usize| Ok::<_, ()>(item)).clone())
                 .create(&10)
                 .await

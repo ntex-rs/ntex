@@ -360,7 +360,7 @@ mod tests {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
 
-        let srv = Pipeline::new(Srv(cnt.clone(), con.wait()));
+        let srv = Pipeline::with((), Srv(cnt.clone(), con.wait()));
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
         assert_eq!(cnt.get(), 1);
@@ -392,7 +392,7 @@ mod tests {
     async fn test_ready_on_drop() {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
-        let srv = Pipeline::new(Srv(cnt.clone(), con.wait()));
+        let srv = Pipeline::with((), Srv(cnt.clone(), con.wait()));
 
         let srv1 = srv.bind();
         let (tx, rx) = oneshot::channel();
@@ -421,7 +421,7 @@ mod tests {
     async fn test_ready_after_shutdown() {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
-        let srv = Pipeline::new(Srv(cnt.clone(), con.wait()));
+        let srv = Pipeline::with((), Srv(cnt.clone(), con.wait()));
 
         let (tx, rx) = oneshot::channel();
         let srv2 = srv.bind();
@@ -451,7 +451,7 @@ mod tests {
     async fn test_pipeline_binding_after_shutdown() {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
-        let srv = Pipeline::new(Srv(cnt.clone(), con.wait()));
+        let srv = Pipeline::with((), Srv(cnt.clone(), con.wait()));
         poll_fn(|cx| srv.poll_shutdown(cx)).await;
         let _ = poll_fn(|cx| srv.poll_ready(cx)).await;
     }
@@ -463,7 +463,7 @@ mod tests {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
 
-        let srv = Pipeline::new(Srv(cnt.clone(), con.wait()));
+        let srv = Pipeline::with((), Srv(cnt.clone(), con.wait()));
 
         let srv1 = srv.bind();
         let data1 = data.clone();

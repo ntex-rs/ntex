@@ -146,7 +146,8 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_default_headers() {
-        let mw = Pipeline::new(
+        let mw = Pipeline::with(
+            (),
             DefaultHeaders::new()
                 .header(CONTENT_TYPE, "0001")
                 .create(ok_service(), &SharedCfg::default()),
@@ -165,7 +166,8 @@ mod tests {
                 req.into_response(HttpResponse::Ok().header(CONTENT_TYPE, "0002").finish()),
             )
         });
-        let mw = Pipeline::new(
+        let mw = Pipeline::with(
+            (),
             DefaultHeaders::new()
                 .header(CONTENT_TYPE, "0001")
                 .create(srv, &SharedCfg::default()),
@@ -191,7 +193,8 @@ mod tests {
         let srv = fn_service(async move |req: WebRequest<DefaultError>| {
             Ok::<_, Error>(req.into_response(HttpResponse::Ok().finish()))
         });
-        let mw = Pipeline::new(
+        let mw = Pipeline::with(
+            (),
             DefaultHeaders::new()
                 .content_type()
                 .create(srv, &SharedCfg::default()),

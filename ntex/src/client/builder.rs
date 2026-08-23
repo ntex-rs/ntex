@@ -182,6 +182,6 @@ impl<M> ClientBuilder<M> {
         };
         let svc = self.middleware.create(Sender::new(connector), &cfg);
 
-        Client::with_service(config, Pipeline::with_st(cfg, svc))
+        Client::with_service(config, Pipeline::with(cfg, svc))
     }
 }

@@ -695,7 +695,7 @@ mod tests {
                 flags: Cell::new(flags),
                 error: Cell::new(None),
                 inflight: Cell::new(0),
-                service: Pipeline::new(service),
+                service: Pipeline::with((), service),
             });
 
             (

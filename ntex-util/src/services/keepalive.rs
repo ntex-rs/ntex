@@ -187,7 +187,7 @@ mod tests {
         let svc = factory.create(&()).await.unwrap();
         assert!(format!("{svc:?}").contains("KeepAliveService"));
 
-        let p = Pipeline::new(boxed::service(svc));
+        let p = Pipeline::with((), boxed::service(svc));
         assert_eq!(p.call(1usize).await, Ok(1usize));
         let svc = p.bind();
 

@@ -27,150 +27,6 @@ struct PipelineState<S: Service<St, Req>, St, Req, Ctl> {
     waiters: WaitersRef,
 }
 
-trait PipelineApi<Req, Res, Err> {
-    fn reg(&self) -> u32;
-
-    fn unreg(&self, idx: u32);
-
-    fn ready(&self, idx: u32) -> BoxFuture<'_, Result<(), Err>>;
-
-    fn call(&self, idx: u32, req: Req, ready: bool) -> BoxFuture<'_, Result<Res, Err>>;
-
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Err>>;
-
-    fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()>;
-
-    fn is_shutdown(&self) -> bool;
-}
-
-enum RuntimeState<E> {
-    New,
-    Readiness(BoxFuture<'static, Result<(), E>>),
-    Shutdown(BoxFuture<'static, ()>),
-    Done,
-}
-
-enum StateRef<'a, T> {
-    Ref(&'a T),
-    Owned(T),
-}
-
-impl<'a, T> StateRef<'a, T> {
-    fn get_ref(&'a self) -> &'a T {
-        match self {
-            StateRef::Ref(t) => t,
-            StateRef::Owned(t) => t,
-        }
-    }
-}
-
-impl<S, St, Req, Ctl> PipelineState<S, St, Req, Ctl>
-where
-    S: Service<St, Req>,
-    Ctl: State<St, Req>,
-{
-    fn st(&self, req: &Req) -> StateRef<'_, St> {
-        if let Some(s) = self.st_ctl.on_req(&self.st, req) {
-            StateRef::Owned(s)
-        } else {
-            StateRef::Ref(&self.st)
-        }
-    }
-}
-
-impl<S, St, Req, Ctl> PipelineApi<Req, S::Res, S::Error> for PipelineState<S, St, Req, Ctl>
-where
-    S: Service<St, Req> + 'static,
-    St: 'static,
-    Req: 'static,
-    Ctl: State<St, Req> + 'static,
-{
-    fn reg(&self) -> u32 {
-        self.waiters.insert()
-    }
-
-    fn unreg(&self, index: u32) {
-        self.waiters.remove(index);
-    }
-
-    fn ready(&self, idx: u32) -> BoxFuture<'_, Result<(), S::Error>> {
-        Box::pin(async move {
-            Ctx::<'_, S, St>::new(idx, &self.waiters, &self.st)
-                .ready(&self.s)
-                .await
-        })
-    }
-
-    fn call(&self, idx: u32, req: Req, ready: bool) -> BoxFuture<'_, Result<S::Res, S::Error>> {
-        Box::pin(async move {
-            let st = self.st(&req);
-
-            if ready {
-                Ctx::<'_, S, St>::new(idx, &self.waiters, st.get_ref())
-                    .call(&self.s, req)
-                    .await
-            } else {
-                Ctx::<'_, S, St>::new(idx, &self.waiters, st.get_ref())
-                    .call_nowait(&self.s, req)
-                    .await
-            }
-        })
-    }
-
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), S::Error>> {
-        let st = unsafe { &mut *self.st_runtime.get() };
-        match st {
-            RuntimeState::New => {
-                // SAFETY: `fut` has same lifetime same as lifetime of `self.pl`.
-                // Pipeline::svc is heap allocated(Rc<S>), and it is being kept alive until
-                // `self` is alive
-                let pl = unsafe { &*(ptr::from_ref(self)) };
-                let fut = Box::pin(CheckReadiness {
-                    pl,
-                    f: ready,
-                    fut: None,
-                });
-                *st = RuntimeState::Readiness(fut);
-                self.poll_ready(cx)
-            }
-            RuntimeState::Readiness(fut) => Pin::new(fut).poll(cx),
-            RuntimeState::Shutdown(_) | RuntimeState::Done => panic!("Pipeline is shutding down"),
-        }
-    }
-
-    fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
-        let st = unsafe { &mut *self.st_runtime.get() };
-        match st {
-            RuntimeState::New | RuntimeState::Readiness(_) => {
-                // SAFETY: `fut` has same lifetime same as lifetime of `self.pl`.
-                // Pipeline::svc is heap allocated(Rc<S>), and it is being kept alive until
-                // `self` is alive
-                let pl = unsafe { &*(ptr::from_ref(self)) };
-
-                let fut = Box::pin(async move {
-                    let ctx = Ctx::<'_, S, St>::new(0, &pl.waiters, &pl.st);
-                    pl.s.shutdown(ctx).await;
-                });
-                *st = RuntimeState::Shutdown(fut);
-                pl.waiters.shutdown();
-                self.poll_shutdown(cx)
-            }
-            RuntimeState::Shutdown(fut) => {
-                let res = Pin::new(fut).poll(cx);
-                if res.is_ready() {
-                    *st = RuntimeState::Done;
-                }
-                res
-            }
-            RuntimeState::Done => Poll::Ready(()),
-        }
-    }
-
-    fn is_shutdown(&self) -> bool {
-        self.waiters.is_shutdown()
-    }
-}
-
 impl<Req, Res, Err> Pipeline<Req, Res, Err>
 where
     Req: 'static,
@@ -178,17 +34,8 @@ where
     Err: 'static,
 {
     #[inline]
-    /// Construct new service pipeline instance.
-    pub fn new<S>(f: impl IntoService<S, (), Req>) -> Self
-    where
-        S: Service<(), Req, Res = Res, Error = Err> + 'static,
-    {
-        Self::create(f.into_service(), (), Noop)
-    }
-
-    #[inline]
     /// Construct new service pipeline instance with default state.
-    pub fn with<S, St>(f: impl IntoService<S, St, Req>) -> Self
+    pub fn new<S, St>(f: impl IntoService<S, St, Req>) -> Self
     where
         S: Service<St, Req, Res = Res, Error = Err> + 'static,
         St: Default + 'static,
@@ -198,7 +45,7 @@ where
 
     #[inline]
     /// Construct new service pipeline instance with state.
-    pub fn with_st<S, St>(st: St, f: impl IntoService<S, St, Req>) -> Self
+    pub fn with<S, St>(st: St, f: impl IntoService<S, St, Req>) -> Self
     where
         S: Service<St, Req, Res = Res, Error = Err> + 'static,
         St: 'static,
@@ -208,7 +55,7 @@ where
 
     #[inline]
     /// Construct new service pipeline instance with state.
-    pub fn with_stctl<S, St, Ctl>(st: St, ctl: Ctl, f: impl IntoService<S, St, Req>) -> Self
+    pub fn with_ctl<S, St, Ctl>(st: St, ctl: Ctl, f: impl IntoService<S, St, Req>) -> Self
     where
         S: Service<St, Req, Res = Res, Error = Err> + 'static,
         St: 'static,
@@ -405,6 +252,150 @@ impl<Req, Res, Err> future::Future for PipelineCall<Req, Res, Err> {
     #[inline]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         Pin::new(&mut self.as_mut().fut).poll(cx)
+    }
+}
+
+impl<S, St, Req, Ctl> PipelineState<S, St, Req, Ctl>
+where
+    S: Service<St, Req>,
+    Ctl: State<St, Req>,
+{
+    fn st(&self, req: &Req) -> StateRef<'_, St> {
+        if let Some(s) = self.st_ctl.on_req(&self.st, req) {
+            StateRef::Owned(s)
+        } else {
+            StateRef::Ref(&self.st)
+        }
+    }
+}
+
+enum RuntimeState<E> {
+    New,
+    Readiness(BoxFuture<'static, Result<(), E>>),
+    Shutdown(BoxFuture<'static, ()>),
+    Done,
+}
+
+enum StateRef<'a, T> {
+    Ref(&'a T),
+    Owned(T),
+}
+
+impl<'a, T> StateRef<'a, T> {
+    fn get_ref(&'a self) -> &'a T {
+        match self {
+            StateRef::Ref(t) => t,
+            StateRef::Owned(t) => t,
+        }
+    }
+}
+
+trait PipelineApi<Req, Res, Err> {
+    fn reg(&self) -> u32;
+
+    fn unreg(&self, idx: u32);
+
+    fn ready(&self, idx: u32) -> BoxFuture<'_, Result<(), Err>>;
+
+    fn call(&self, idx: u32, req: Req, ready: bool) -> BoxFuture<'_, Result<Res, Err>>;
+
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Err>>;
+
+    fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()>;
+
+    fn is_shutdown(&self) -> bool;
+}
+
+impl<S, St, Req, Ctl> PipelineApi<Req, S::Res, S::Error> for PipelineState<S, St, Req, Ctl>
+where
+    S: Service<St, Req> + 'static,
+    St: 'static,
+    Req: 'static,
+    Ctl: State<St, Req> + 'static,
+{
+    fn reg(&self) -> u32 {
+        self.waiters.insert()
+    }
+
+    fn unreg(&self, index: u32) {
+        self.waiters.remove(index);
+    }
+
+    fn ready(&self, idx: u32) -> BoxFuture<'_, Result<(), S::Error>> {
+        Box::pin(async move {
+            Ctx::<'_, S, St>::new(idx, &self.waiters, &self.st)
+                .ready(&self.s)
+                .await
+        })
+    }
+
+    fn call(&self, idx: u32, req: Req, ready: bool) -> BoxFuture<'_, Result<S::Res, S::Error>> {
+        Box::pin(async move {
+            let st = self.st(&req);
+
+            if ready {
+                Ctx::<'_, S, St>::new(idx, &self.waiters, st.get_ref())
+                    .call(&self.s, req)
+                    .await
+            } else {
+                Ctx::<'_, S, St>::new(idx, &self.waiters, st.get_ref())
+                    .call_nowait(&self.s, req)
+                    .await
+            }
+        })
+    }
+
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), S::Error>> {
+        let st = unsafe { &mut *self.st_runtime.get() };
+        match st {
+            RuntimeState::New => {
+                // SAFETY: `fut` has same lifetime same as lifetime of `self.pl`.
+                // Pipeline::svc is heap allocated(Rc<S>), and it is being kept alive until
+                // `self` is alive
+                let pl = unsafe { &*(ptr::from_ref(self)) };
+                let fut = Box::pin(CheckReadiness {
+                    pl,
+                    f: ready,
+                    fut: None,
+                });
+                *st = RuntimeState::Readiness(fut);
+                self.poll_ready(cx)
+            }
+            RuntimeState::Readiness(fut) => Pin::new(fut).poll(cx),
+            RuntimeState::Shutdown(_) | RuntimeState::Done => panic!("Pipeline is shutding down"),
+        }
+    }
+
+    fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
+        let st = unsafe { &mut *self.st_runtime.get() };
+        match st {
+            RuntimeState::New | RuntimeState::Readiness(_) => {
+                // SAFETY: `fut` has same lifetime same as lifetime of `self.pl`.
+                // Pipeline::svc is heap allocated(Rc<S>), and it is being kept alive until
+                // `self` is alive
+                let pl = unsafe { &*(ptr::from_ref(self)) };
+
+                let fut = Box::pin(async move {
+                    let ctx = Ctx::<'_, S, St>::new(0, &pl.waiters, &pl.st);
+                    pl.s.shutdown(ctx).await;
+                });
+                *st = RuntimeState::Shutdown(fut);
+                pl.waiters.shutdown();
+                self.poll_shutdown(cx)
+            }
+            RuntimeState::Shutdown(fut) => {
+                let res = Pin::new(fut).poll(cx);
+                if res.is_ready() {
+                    *st = RuntimeState::Done;
+                }
+                res
+            }
+            RuntimeState::Done => Poll::Ready(()),
+        }
+    }
+
+    fn is_shutdown(&self) -> bool {
+        self.waiters.is_shutdown()
     }
 }
 

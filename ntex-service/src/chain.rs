@@ -149,7 +149,7 @@ impl<S: Service<St, Req>, St, Req> ServiceChain<S, St, Req> {
         St: Default + 'static,
         Req: 'static,
     {
-        Pipeline::with(self.service)
+        Pipeline::new(self.service)
     }
 }
 
@@ -301,7 +301,7 @@ impl<Sf: ServiceFactory<St, Req, Cfg>, St, Req, Cfg> ServiceChainFactory<Sf, St,
         Req: 'static,
         Cfg: 'static,
     {
-        Ok(Pipeline::with(self.factory.create(cfg).await?))
+        Ok(Pipeline::new(self.factory.create(cfg).await?))
     }
 }
 

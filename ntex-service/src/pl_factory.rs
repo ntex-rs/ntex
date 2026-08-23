@@ -26,7 +26,7 @@ impl<St, Req, Res, Err, InitCfg, InitErr> PipelineFactory<St, Req, Res, Err, Ini
         Self {
             f: Rc::new(move |cfg: &InitCfg, st: &St| {
                 let sf = sf.clone();
-                Box::pin(async move { Ok(Pipeline::with_st(st.clone(), sf.create(cfg).await?)) })
+                Box::pin(async move { Ok(Pipeline::with(st.clone(), sf.create(cfg).await?)) })
             }),
         }
     }
@@ -49,7 +49,7 @@ impl<St, Req, Res, Err, InitCfg, InitErr> PipelineFactory<St, Req, Res, Err, Ini
             f: Rc::new(move |cfg, st| {
                 let sf = sf.clone();
                 let (sm, _ctl) = sm.map::<Req>(st);
-                Box::pin(async move { Ok(Pipeline::with_st(sm, sf.create(cfg).await?)) })
+                Box::pin(async move { Ok(Pipeline::with(sm, sf.create(cfg).await?)) })
             }),
         }
     }

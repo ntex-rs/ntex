@@ -42,8 +42,8 @@ where
                 DefaultState,
                 sf.into_factory().map(Into::into).map_init_err(dyn_rc_err),
             ),
-            h1_ctl: Pipeline::new(h1::DefaultControlService),
-            h2_ctl: Pipeline::new(h2::DefaultControlService),
+            h1_ctl: Pipeline::with((), h1::DefaultControlService),
+            h2_ctl: Pipeline::with((), h2::DefaultControlService),
             config: DispatcherConfig::default(),
         }
     }
@@ -67,8 +67,8 @@ where
                 sm,
                 sf.into_factory().map(Into::into).map_init_err(dyn_rc_err),
             ),
-            h1_ctl: Pipeline::new(h1::DefaultControlService),
-            h2_ctl: Pipeline::new(h2::DefaultControlService),
+            h1_ctl: Pipeline::with((), h1::DefaultControlService),
+            h2_ctl: Pipeline::with((), h2::DefaultControlService),
             config: DispatcherConfig::default(),
         }
     }
@@ -128,7 +128,7 @@ where
         HttpService {
             sf: self.sf,
             config: self.config,
-            h1_ctl: Pipeline::with(ctl.into_service().map_err(dyn_rc_err)),
+            h1_ctl: Pipeline::new(ctl.into_service().map_err(dyn_rc_err)),
             h2_ctl: self.h2_ctl,
         }
     }
@@ -148,7 +148,7 @@ where
             sf: self.sf,
             config: self.config,
             h1_ctl: self.h1_ctl,
-            h2_ctl: Pipeline::with(ctl.into_service().map_err(dyn_rc_err)),
+            h2_ctl: Pipeline::new(ctl.into_service().map_err(dyn_rc_err)),
         }
     }
 }

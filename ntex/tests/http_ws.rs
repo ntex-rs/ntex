@@ -53,7 +53,7 @@ impl Service<(), (Request, Io, h1::Codec)> for WsService {
         io.set_config(
             SharedCfg::new("WS-SRV").add(IoConfig::new().set_keepalive_timeout(Seconds(0))),
         );
-        Dispatcher::new(io.seal(), ws::Codec::new(), Pipeline::new(service))
+        Dispatcher::new(io.seal(), ws::Codec::new(), Pipeline::with((), service))
             .await
             .map_err(|_| panic!())
     }
@@ -88,7 +88,7 @@ async fn test_simple() {
                     async move |req: h1::Control<_, _>| {
                         let ack = if let h1::Control::Upgrade(upg) = req {
                             assert!(format!("{upg:?}").contains("Upgrade"));
-                            let ws_service = Pipeline::new(ws_service.clone());
+                            let ws_service = Pipeline::with((), ws_service.clone());
                             upg.handle(async move |req, io, codec| {
                                 ws_service.call((req, io, codec)).await
                             })
@@ -368,10 +368,13 @@ async fn test_stale_timer_after_ws_upgrade() {
                             Dispatcher::new(
                                 io.seal(),
                                 ws::Codec::new(),
-                                Pipeline::new(InFlightService::new(
-                                    1,
-                                    ntex::service::fn_service(slow_ws_service),
-                                )),
+                                Pipeline::with(
+                                    (),
+                                    InFlightService::new(
+                                        1,
+                                        ntex::service::fn_service(slow_ws_service),
+                                    ),
+                                ),
                             )
                             .await
                             .map_err(|_| panic!())

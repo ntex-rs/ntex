@@ -421,7 +421,7 @@ mod tests {
         let logger =
             Logger::new("%% %{User-Agent}i %{X-Test}o %{HOME}e %D %% test").exclude("/test");
 
-        let srv = Pipeline::new(Middleware::create(&logger, srv, &SharedCfg::default()));
+        let srv = Pipeline::with((), Middleware::create(&logger, srv, &SharedCfg::default()));
         assert!(lazy(|cx| srv.poll_ready(cx).is_ready()).await);
         assert!(lazy(|cx| srv.poll_shutdown(cx).is_ready()).await);
 

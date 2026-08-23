@@ -105,7 +105,7 @@ mod tests {
         let (tx, rx) = mpmc::unbounded();
         let counter = Rc::new(Cell::new(0));
 
-        let srv = Pipeline::new(InFlightService::new(1, SleepService(rx)));
+        let srv = Pipeline::with((), InFlightService::new(1, SleepService(rx)));
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let counter2 = counter.clone();

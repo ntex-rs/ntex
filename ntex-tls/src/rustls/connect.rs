@@ -144,7 +144,7 @@ mod tests {
         let svc = TlsConnector::from(Arc::new(config)).clone();
         assert!(format!("{svc:?}").contains("TlsConnector"), "{svc:?}");
 
-        let srv = Pipeline::with_st(SharedCfg::default(), svc);
+        let srv = Pipeline::with(SharedCfg::default(), svc);
         // always ready
         assert!(lazy(|cx| srv.poll_ready(cx)).await.is_ready());
         let result = srv

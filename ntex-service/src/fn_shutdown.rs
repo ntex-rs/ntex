@@ -109,7 +109,8 @@ mod tests {
             is_called2.set(true);
         });
 
-        let pipe = Pipeline::new(
+        let pipe = Pipeline::with(
+            (),
             factory(srv)
                 .and_then(on_shutdown)
                 .clone()
