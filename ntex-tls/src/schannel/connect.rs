@@ -112,7 +112,7 @@ mod tests {
 
         let svc: TlsConnector<Connector<&'static str>> = TlsConnector::new();
         assert!(format!("{svc:?}").contains("TlsConnector"));
-        let srv = Pipeline::with(svc);
+        let srv = Pipeline::new(svc);
         assert!(srv.ready().await.is_ok());
         let result = srv
             .call(Connect::new("").set_addr(Some(server.addr())))
