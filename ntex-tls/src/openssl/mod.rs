@@ -1,5 +1,5 @@
 //! An implementation of SSL streams for ntex backed by OpenSSL
-use std::{any, borrow::ToOwned, cell::RefCell, cmp, error::Error, io, task::Poll};
+use std::{any, borrow::ToOwned, cell::RefCell, cmp, io, task::Poll};
 
 use ntex_bytes::{BufMut, BytePages, BytesMut};
 use ntex_io::{Filter, FilterBuf, FilterLayer, Io, Layer, types};
@@ -188,7 +188,7 @@ impl FilterLayer for SslFilter {
                         }
                         Err(e) => {
                             log::trace!("{}: SSL Error: {:?}", rb.tag(), e);
-                            Err(map_to_ioerr(e))
+                            Err(io::Error::other(e))
                         }
                     };
                     return result;
@@ -217,7 +217,7 @@ impl FilterLayer for SslFilter {
                             {
                                 break;
                             }
-                            Err(e) => return Err(map_to_ioerr(e)),
+                            Err(e) => return Err(io::Error::other(e)),
                         }
                     }
                 }
@@ -270,8 +270,4 @@ async fn handle_result<F>(io: &Io<F>, result: Result<(), ssl::Error>) -> io::Res
             _ => Err(io::Error::other(e)),
         },
     }
-}
-
-fn map_to_ioerr<E: Into<Box<dyn Error + Send + Sync>>>(err: E) -> io::Error {
-    io::Error::other(err)
 }

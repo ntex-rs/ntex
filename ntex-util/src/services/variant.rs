@@ -286,7 +286,7 @@ mod tests {
         let service = factory.create(&()).await.unwrap();
         assert!(format!("{service:?}").contains("Variant"));
 
-        let service = Pipeline::new(service);
+        let service = Pipeline::with((), service);
         assert!(service.ready().await.is_ok());
         service.shutdown().await;
 
@@ -323,7 +323,7 @@ mod tests {
         let service = factory.clone().create(&()).await.unwrap().clone();
         assert!(format!("{service:?}").contains("Variant"));
 
-        let service = Pipeline::new(factory.create(&()).await.unwrap());
+        let service = Pipeline::with((), factory.create(&()).await.unwrap());
         assert!(service.ready().await.is_ok());
     }
 }

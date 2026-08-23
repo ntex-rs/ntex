@@ -99,7 +99,7 @@ mod tests {
     async fn test_oneshot() {
         let (tx, rx) = oneshot::channel();
 
-        let srv = Pipeline::new(OneRequestService::new(SleepService(rx)));
+        let srv = Pipeline::with((), OneRequestService::new(SleepService(rx)));
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let srv2 = srv.bind();

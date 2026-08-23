@@ -22,7 +22,7 @@ async fn main() -> io::Result<()> {
         .add(TlsConfig::new().set_handshake_timeout(10))
         .build();
 
-    let connector = Pipeline::with_st(cfg, connect::rustls::TlsConnector::new(config));
+    let connector = Pipeline::with(cfg, connect::rustls::TlsConnector::new(config));
 
     //let io = connector.call("www.rust-lang.org:443").await.unwrap();
     let io = connector.call("127.0.0.1:8443".into()).await.unwrap();

@@ -169,7 +169,7 @@ mod tests {
     #[ntex::test]
     async fn test_service() {
         let cnt_sht = Rc::new(Cell::new(0));
-        let srv = Pipeline::new(Srv(cnt_sht.clone()).map(|()| "ok").clone());
+        let srv = Pipeline::with((), Srv(cnt_sht.clone()).map(|()| "ok").clone());
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
@@ -183,7 +183,7 @@ mod tests {
 
         let cnt_sht = Rc::new(Cell::new(0));
         let svc = Srv(cnt_sht.clone()).map(|()| "ok");
-        let srv = Pipeline::new(svc);
+        let srv = Pipeline::with((), svc);
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
@@ -198,7 +198,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_pipeline() {
-        let srv = Pipeline::new(crate::svc(Srv::default()).map(|()| "ok").clone());
+        let srv = Pipeline::with((), crate::svc(Srv::default()).map(|()| "ok").clone());
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
@@ -212,7 +212,7 @@ mod tests {
         let new_srv = fn_factory(|| async { Ok::<_, ()>(Srv::default()) })
             .map(|()| "ok")
             .clone();
-        let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
+        let srv = Pipeline::with((), new_srv.create(&()).await.unwrap());
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("ok"));
@@ -225,7 +225,7 @@ mod tests {
         let new_srv = crate::factory(fn_factory(|| async { Ok::<_, ()>(Srv::default()) }))
             .map(|()| "ok")
             .clone();
-        let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
+        let srv = Pipeline::with((), new_srv.create(&()).await.unwrap());
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("ok"));

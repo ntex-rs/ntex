@@ -1,6 +1,6 @@
 [package]
 name = "ntex-dispatcher"
-version = "4.0.0"
+version = "4.0.0-beta.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Utilities for abstracting io streams dispatcher"
 keywords = ["network", "framework", "async", "futures"]
@@ -20,14 +20,10 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-#ntex-io = { workspace = true }
+ntex-io = { workspace = true }
 ntex-codec = { workspace = true }
-#ntex-util = { workspace = true }
-#ntex-service = { workspace = true }
-
-ntex-io = { version = "4.0" }
-ntex-util = { version = "4.0" }
-ntex-service = { version = "5.0" }
+ntex-util = { workspace = true }
+ntex-service = { workspace = true }
 
 bitflags = { workspace = true }
 log = { workspace = true }

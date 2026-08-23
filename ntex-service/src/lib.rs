@@ -206,7 +206,7 @@ pub trait ServiceFactory<St, Req, Cfg = ()> {
         Req: 'static,
         Cfg: 'static,
     {
-        Ok(Pipeline::with(self.create(cfg).await?))
+        Ok(Pipeline::new(self.create(cfg).await?))
     }
 
     #[inline]

@@ -153,7 +153,8 @@ mod tests {
     #[ntex::test]
     async fn test_retry() {
         let cnt = Rc::new(Cell::new(5));
-        let svc = Pipeline::new(
+        let svc = Pipeline::with(
+            (),
             RetryService::new(DefaultRetryPolicy::default(), TestService(cnt.clone())).clone(),
         );
         assert_eq!(svc.call(()).await, Err(()));

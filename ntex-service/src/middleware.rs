@@ -307,7 +307,7 @@ mod tests {
         )
         .clone();
 
-        let srv = Pipeline::new(fac.create(&()).await.unwrap().clone());
+        let srv = Pipeline::with((), fac.create(&()).await.unwrap().clone());
         let res = srv.call(10).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
@@ -321,7 +321,7 @@ mod tests {
             .apply(Rc::new(Mw(Rc::new(Cell::new(0))).clone()))
             .clone();
 
-        let srv = Pipeline::new(fac.create(&()).await.unwrap().clone());
+        let srv = Pipeline::with((), fac.create(&()).await.unwrap().clone());
         let res = srv.call(10).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
@@ -337,7 +337,7 @@ mod tests {
             .apply(factory(async |i: usize| Ok::<_, ()>(i * 2)))
             .boxed();
 
-        let srv = Pipeline::new(fac.create(&()).await.unwrap());
+        let srv = Pipeline::with((), fac.create(&()).await.unwrap());
         let res = srv.call(10).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
@@ -354,7 +354,7 @@ mod tests {
         let fac = factory(fn_service(async move |i: usize| Ok::<_, ()>(i * 2)))
             .apply(Mw(cnt_sht.clone()).clone());
 
-        let srv = Pipeline::new(fac.create(&()).await.unwrap().clone());
+        let srv = Pipeline::with((), fac.create(&()).await.unwrap().clone());
         let res = srv.call(10).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
@@ -371,11 +371,14 @@ mod tests {
         let mw = Stack::new(Identity, Mw(cnt_sht.clone()));
         let _ = format!("{mw:?}");
 
-        let pl = Pipeline::new(Middleware::create(
-            &mw,
-            fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }),
-            &(),
-        ));
+        let pl = Pipeline::with(
+            (),
+            Middleware::create(
+                &mw,
+                fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }),
+                &(),
+            ),
+        );
         let res = pl.call(10).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
@@ -396,8 +399,10 @@ mod tests {
         .clone();
         let _ = format!("{mw:?}");
 
-        let svc =
-            Pipeline::new(mw.create(fn_service(async move |i: usize| Ok::<_, ()>(i * 2)), &()));
+        let svc = Pipeline::with(
+            (),
+            mw.create(fn_service(async move |i: usize| Ok::<_, ()>(i * 2)), &()),
+        );
 
         let res = svc.call("test").await;
         assert!(res.is_ok());

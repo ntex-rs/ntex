@@ -45,7 +45,7 @@ where
                 DefaultState,
                 sf.into_factory().map(Into::into).map_init_err(dyn_rc_err),
             ),
-            ctl: Pipeline::new(DefaultControlService),
+            ctl: Pipeline::with((), DefaultControlService),
             config: DispatcherConfig::default(),
             _t: marker::PhantomData,
         }
@@ -71,7 +71,7 @@ where
     {
         H2Service {
             sf: self.sf,
-            ctl: Pipeline::with(ctl.into_service().map_err(dyn_rc_err)),
+            ctl: Pipeline::new(ctl.into_service().map_err(dyn_rc_err)),
             config: self.config,
             _t: marker::PhantomData,
         }
@@ -149,7 +149,7 @@ where
 
     let _ = server::handle_one(
         io,
-        Pipeline::new(PublishService::new(id, ioref, svc)),
+        Pipeline::with((), PublishService::new(id, ioref, svc)),
         control,
     )
     .await;

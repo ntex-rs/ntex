@@ -6,9 +6,8 @@ use ntex_h2::{self as h2};
 use crate::error::Error;
 use crate::http::uri::{Authority, Scheme, Uri};
 use crate::io::{IoBoxed, types::HttpProtocol};
-use crate::service::cfg::{Cfg, SharedCfg};
 use crate::service::pipeline::{PipelineCall, PipelineWithStateBinding};
-use crate::service::{Ctx, Service};
+use crate::service::{Ctx, Service, cfg::Cfg, cfg::SharedCfg};
 use crate::util::{ByteString, Either, HashMap, HashSet, select};
 use crate::{channel::inplace, channel::oneshot, channel::pool, rt::spawn, time::now};
 
@@ -640,7 +639,7 @@ mod tests {
             }))),
             cfg.get(),
         );
-        let pipe = Pipeline::with_st(cfg, pool.clone());
+        let pipe = Pipeline::with(cfg, pool.clone());
 
         // uri must contain authority
         let req = Connect {

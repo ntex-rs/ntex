@@ -46,7 +46,7 @@ where
                 DefaultState,
                 sf.into_factory().map(Into::into).map_init_err(dyn_rc_err),
             ),
-            ctl: Pipeline::new(DefaultControlService),
+            ctl: Pipeline::with((), DefaultControlService),
             config: DispatcherConfig::default(),
             _t: marker::PhantomData,
         }
@@ -73,7 +73,7 @@ where
         H1Service {
             sf: self.sf,
             config: self.config,
-            ctl: Pipeline::with(ctl.into_service().map_err(dyn_rc_err)),
+            ctl: Pipeline::new(ctl.into_service().map_err(dyn_rc_err)),
             _t: marker::PhantomData,
         }
     }

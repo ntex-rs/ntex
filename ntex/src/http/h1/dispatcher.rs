@@ -795,8 +795,8 @@ mod tests {
         Dispatcher::new(
             0,
             nio::Io::new(stream, cfg.clone()),
-            Pipeline::new(s.into_service().map(Into::into)),
-            Pipeline::new(DefaultControlService).bind(),
+            Pipeline::with((), s.into_service().map(Into::into)),
+            Pipeline::with((), DefaultControlService).bind(),
             DispatcherConfig::default(),
         )
     }
@@ -820,8 +820,8 @@ mod tests {
         crate::rt::spawn(Dispatcher::new(
             0,
             nio::Io::new(stream, cfg),
-            Pipeline::new(s.into_service().map(Into::into)),
-            Pipeline::new(DefaultControlService).bind(),
+            Pipeline::with((), s.into_service().map(Into::into)),
+            Pipeline::with((), DefaultControlService).bind(),
             DispatcherConfig::default(),
         ));
     }
@@ -849,13 +849,16 @@ mod tests {
         let mut h1 = Dispatcher::new(
             0,
             nio::Io::new(server, config),
-            Pipeline::new(async |_| Ok::<_, io::Error>(Response::Ok().finish())),
-            Pipeline::new(fn_service(async move |req: Control<_, _>| {
-                if let Control::Request(_) = req {
-                    data2.set(true);
-                }
-                Ok::<_, Rc<dyn error::Error>>(req.ack())
-            }))
+            Pipeline::with((), async |_| Ok::<_, io::Error>(Response::Ok().finish())),
+            Pipeline::with(
+                (),
+                fn_service(async move |req: Control<_, _>| {
+                    if let Control::Request(_) = req {
+                        data2.set(true);
+                    }
+                    Ok::<_, Rc<dyn error::Error>>(req.ack())
+                }),
+            )
             .bind(),
             DispatcherConfig::default(),
         );
@@ -1257,15 +1260,18 @@ mod tests {
         let disp = Dispatcher::new(
             0,
             nio::Io::new(server, config),
-            Pipeline::new(fn_service(svc)),
-            Pipeline::new(fn_service(async move |msg: Control<_, _>| {
-                if let Control::Disconnect(Reason::ProtocolError(ref err)) = msg
-                    && matches!(err.err(), ProtocolError::SlowPayloadTimeout)
-                {
-                    err_mark2.store(err_mark2.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
-                }
-                Ok::<_, Rc<dyn error::Error>>(msg.ack())
-            }))
+            Pipeline::with((), fn_service(svc)),
+            Pipeline::with(
+                (),
+                fn_service(async move |msg: Control<_, _>| {
+                    if let Control::Disconnect(Reason::ProtocolError(ref err)) = msg
+                        && matches!(err.err(), ProtocolError::SlowPayloadTimeout)
+                    {
+                        err_mark2.store(err_mark2.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
+                    }
+                    Ok::<_, Rc<dyn error::Error>>(msg.ack())
+                }),
+            )
             .bind(),
             DispatcherConfig::default(),
         );

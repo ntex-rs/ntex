@@ -61,7 +61,7 @@ async fn test_openssl_string() {
     let connector = builder.build();
 
     // ssl connector
-    let conn = Pipeline::with_st(
+    let conn = Pipeline::with(
         SharedCfg::new("CLIENT").build(),
         ntex::connect::openssl::SslConnector::new(connector.clone()),
     );
@@ -117,7 +117,7 @@ async fn test_openssl_read_before_error() {
     builder.set_verify(SslVerifyMode::NONE);
     let connector = builder.build();
 
-    let conn = Pipeline::with_st(
+    let conn = Pipeline::with(
         srv.config(),
         ntex::connect::openssl::SslConnector::new(connector.clone()),
     );
@@ -150,7 +150,7 @@ async fn test_schannel_string() {
     let config = ClientConfig::new().danger_accept_invalid_certs(true);
 
     // schannel connector
-    let conn = Pipeline::with_st(
+    let conn = Pipeline::with(
         SharedCfg::new("CLIENT").into(),
         TlsConnector::with_config(config.clone()),
     );
@@ -199,7 +199,7 @@ async fn test_rustls_string() {
     });
 
     // tls connector
-    let conn = Pipeline::with_st(
+    let conn = Pipeline::with(
         SharedCfg::new("CLIENT").build(),
         TlsConnector::new(rustls_utils::tls_connector()),
     );
@@ -455,13 +455,13 @@ async fn test_static_str() {
     });
 
     // original
-    let conn = Pipeline::with(ntex::connect::Connector::new());
+    let conn = Pipeline::new(ntex::connect::Connector::new());
 
     let io = conn.call(Connect::with("10", srv.addr())).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 
     let connect = Connect::new("127.0.0.1".to_owned());
-    let conn = Pipeline::with(ntex::connect::Connector::new());
+    let conn = Pipeline::new(ntex::connect::Connector::new());
     let io = conn.call(connect).await;
     assert!(io.is_err());
 }
@@ -478,7 +478,7 @@ async fn test_create() {
     });
     time::sleep(time::Millis(100)).await;
 
-    let svc = Pipeline::with(ntex::connect::Connector::new());
+    let svc = Pipeline::new(ntex::connect::Connector::new());
     let io = svc.call(Connect::with("10", srv.addr())).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }
@@ -495,7 +495,7 @@ async fn test_uri() {
     });
     time::sleep(time::Millis(100)).await;
 
-    let conn = Pipeline::with_st(SharedCfg::default(), ntex::connect::Connector::new());
+    let conn = Pipeline::with(SharedCfg::default(), ntex::connect::Connector::new());
     let addr =
         ntex::http::Uri::try_from(format!("https://localhost:{}", srv.addr().port())).unwrap();
     let io = conn.call(addr.into()).await.unwrap();
@@ -522,7 +522,7 @@ async fn test_rustls_uri() {
     });
     time::sleep(time::Millis(50)).await;
 
-    let conn = Pipeline::with(ntex::connect::Connector::default());
+    let conn = Pipeline::new(ntex::connect::Connector::default());
     let addr =
         ntex::http::Uri::try_from(format!("https://localhost:{}", srv.addr().port())).unwrap();
     let io = conn.call(addr.into()).await.unwrap();

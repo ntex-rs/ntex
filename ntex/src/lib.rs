@@ -91,12 +91,7 @@ pub mod server {
     #[cfg(feature = "rustls")]
     pub use ntex_tls::rustls;
 
-    /// Ssl error combinded with service error.
-    #[derive(Debug)]
-    pub enum SslError<E> {
-        Ssl(std::io::Error),
-        Service(E),
-    }
+    pub use ntex_tls::{TlsConfig, TlsError};
 }
 
 pub mod time {

@@ -175,8 +175,10 @@ mod tests {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(50);
 
-        let timeout =
-            Pipeline::new(TimeoutService::new(resolution, SleepService(wait_time)).clone());
+        let timeout = Pipeline::with(
+            (),
+            TimeoutService::new(resolution, SleepService(wait_time)).clone(),
+        );
         assert_eq!(timeout.call(()).await, Ok(()));
         assert_eq!(timeout.ready().await, Ok(()));
         timeout.shutdown().await;
@@ -187,7 +189,7 @@ mod tests {
         let wait_time = Duration::from_millis(50);
         let resolution = Duration::from_millis(0);
 
-        let timeout = Pipeline::new(TimeoutService::new(resolution, SleepService(wait_time)));
+        let timeout = Pipeline::with((), TimeoutService::new(resolution, SleepService(wait_time)));
         assert_eq!(timeout.call(()).await, Ok(()));
         assert_eq!(timeout.ready().await, Ok(()));
     }
@@ -197,7 +199,7 @@ mod tests {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(500);
 
-        let timeout = Pipeline::new(TimeoutService::new(resolution, SleepService(wait_time)));
+        let timeout = Pipeline::with((), TimeoutService::new(resolution, SleepService(wait_time)));
         assert_eq!(timeout.call(()).await, Err(TimeoutError::Timeout));
     }
 

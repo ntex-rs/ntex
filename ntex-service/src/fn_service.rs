@@ -48,7 +48,7 @@ where
 ///     });
 ///
 ///     // construct new service
-///     let srv = Pipeline::new(factory(fac).create(&()).await?);
+///     let srv = Pipeline::with((), factory(fac).create(&()).await?);
 ///
 ///     // now we can use `div` service
 ///     let result = srv.call((10, 20)).await?;
@@ -87,7 +87,7 @@ where
 ///     }));
 ///
 ///     // construct new service with config argument
-///     let srv = Pipeline::new(factory(fac).create(&10).await?);
+///     let srv = Pipeline::with((), factory(fac).create(&10).await?);
 ///
 ///     let result = srv.call(10).await?;
 ///     assert_eq!(result, 100);
@@ -418,7 +418,7 @@ mod tests {
         let new_srv = factory(fn_service(async |()| Ok::<_, ()>("srv")).clone());
         let _ = format!("{new_srv:?}");
 
-        let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
+        let srv = Pipeline::with((), new_srv.create(&()).await.unwrap());
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());
@@ -426,7 +426,7 @@ mod tests {
         let _ = format!("{srv:?}");
 
         let new_srv = fn_service(async |()| Ok::<_, ()>("srv"));
-        let srv = Pipeline::new(new_srv.clone());
+        let srv = Pipeline::with((), new_srv.clone());
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
@@ -440,7 +440,7 @@ mod tests {
         let new_srv = fn_service(async |()| Ok::<_, ()>("srv")).clone();
         let _ = format!("{new_srv:?}");
 
-        let srv = Pipeline::new(factory(new_srv).create(&()).await.unwrap());
+        let srv = Pipeline::with((), factory(new_srv).create(&()).await.unwrap());
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());
@@ -448,7 +448,7 @@ mod tests {
         let _ = format!("{srv:?}");
 
         let new_srv = fn_service(async |()| Ok::<_, ()>("srv")).clone();
-        let srv = Pipeline::new(new_srv.clone());
+        let srv = Pipeline::with((), new_srv.clone());
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
@@ -459,7 +459,8 @@ mod tests {
 
     #[ntex::test]
     async fn test_fn_service_service() {
-        let srv = Pipeline::new(
+        let srv = Pipeline::with(
+            (),
             factory(fn_service(async |()| Ok::<_, ()>("srv")).clone())
                 .create(&())
                 .await
@@ -482,7 +483,7 @@ mod tests {
         }))
         .clone();
 
-        let srv = Pipeline::new(new_srv.create(&1).await.unwrap());
+        let srv = Pipeline::with((), new_srv.create(&1).await.unwrap());
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());

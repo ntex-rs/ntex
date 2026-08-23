@@ -39,8 +39,12 @@ async fn test_simple() {
                             .unwrap();
 
                         // start websocket service
-                        Dispatcher::new(io.seal(), ws::Codec::default(), Pipeline::new(ws_service))
-                            .await
+                        Dispatcher::new(
+                            io.seal(),
+                            ws::Codec::default(),
+                            Pipeline::with((), ws_service),
+                        )
+                        .await
                     })
                 } else {
                     req.ack()
@@ -95,8 +99,12 @@ async fn test_transport() {
                             .unwrap();
 
                         // start websocket service
-                        Dispatcher::new(io.seal(), ws::Codec::default(), Pipeline::new(ws_service))
-                            .await
+                        Dispatcher::new(
+                            io.seal(),
+                            ws::Codec::default(),
+                            Pipeline::with((), ws_service),
+                        )
+                        .await
                     })
                 } else {
                     req.ack()
@@ -135,8 +143,12 @@ async fn test_keepalive_timeout() {
                                 .add(IoConfig::new().set_keepalive_timeout(Seconds::ZERO)),
                         );
 
-                        Dispatcher::new(io.seal(), ws::Codec::default(), Pipeline::new(ws_service))
-                            .await
+                        Dispatcher::new(
+                            io.seal(),
+                            ws::Codec::default(),
+                            Pipeline::with((), ws_service),
+                        )
+                        .await
                     })
                 } else {
                     req.ack()

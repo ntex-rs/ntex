@@ -300,7 +300,7 @@ mod tests {
         let svc = BufferService::new(2, PipelineWithState::new(TestService(inner.clone())));
         assert!(format!("{svc:?}").contains("BufferService"));
 
-        let srv = Pipeline::new(svc);
+        let srv = Pipeline::with((), svc);
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let srv1 = srv.bind();
@@ -339,10 +339,10 @@ mod tests {
             count: Cell::new(0),
         });
 
-        let srv = Pipeline::new(BufferService::new(
-            2,
-            PipelineWithState::new(TestService(inner.clone())),
-        ));
+        let srv = Pipeline::with(
+            (),
+            BufferService::new(2, PipelineWithState::new(TestService(inner.clone()))),
+        );
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let _ = srv.call(()).await;

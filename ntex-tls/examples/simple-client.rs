@@ -20,7 +20,7 @@ async fn main() -> io::Result<()> {
     builder.set_verify(SslVerifyMode::NONE);
 
     // openssl connector
-    let connector = Pipeline::with_st(
+    let connector = Pipeline::with(
         SharedCfg::default(),
         connect::openssl::SslConnector::new(builder.build()),
     );

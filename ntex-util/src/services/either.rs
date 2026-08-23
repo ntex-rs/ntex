@@ -204,12 +204,12 @@ mod tests {
         let svc = Either::left(Svc1).clone();
         assert!(format!("{svc:?}").contains("EitherService"));
 
-        let svc = Pipeline::new(svc);
+        let svc = Pipeline::with((), svc);
         assert_eq!(svc.call(()).await, Ok("svc1"));
         assert_eq!(svc.ready().await, Ok(()));
         svc.shutdown().await;
 
-        let svc = Pipeline::new(Either::right(Svc2).clone());
+        let svc = Pipeline::with((), Either::right(Svc2).clone());
         assert_eq!(svc.call(()).await, Ok("svc2"));
         assert_eq!(svc.ready().await, Ok(()));
         svc.shutdown().await;
