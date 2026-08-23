@@ -1,6 +1,6 @@
 [package]
 name = "ntex-net"
-version = "4.0.0"
+version = "4.0.0-beta.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntexwork utils for ntex framework"
 keywords = ["network", "framework", "async", "futures"]

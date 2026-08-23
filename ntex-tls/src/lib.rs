@@ -103,3 +103,10 @@ impl TlsConfig {
         self
     }
 }
+
+/// Ssl error combinded with service error.
+#[derive(Debug)]
+pub enum TlsError<E> {
+    Tls(std::io::Error),
+    Service(E),
+}

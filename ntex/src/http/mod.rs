@@ -56,21 +56,21 @@ pub(crate) type HttpPipeline<St, B, Err> = crate::PipelineFactory<
 #[cfg(feature = "openssl")]
 use crate::server::openssl::{SslAcceptor, SslFilter};
 #[cfg(any(feature = "openssl", feature = "rustls"))]
-use crate::{IntoService, Service, io::Filter, io::Io, io::Layer, server::SslError};
+use crate::{IntoService, Service, io::Filter, io::Io, io::Layer, server::TlsError};
 
 #[cfg(feature = "openssl")]
 /// Create openssl based service
 pub fn openssl<F, S, St>(
     acceptor: tls_openssl::ssl::SslAcceptor,
     service: impl IntoService<S, St, Io<Layer<SslFilter, F>>>,
-) -> impl Service<St, Io<F>, Res = S::Res, Error = SslError<S::Error>>
+) -> impl Service<St, Io<F>, Res = S::Res, Error = TlsError<S::Error>>
 where
     F: Filter,
     S: Service<St, Io<Layer<SslFilter, F>>>,
 {
     SslAcceptor::new(acceptor)
-        .map_err(SslError::Ssl)
-        .and_then(service.into_service().map_err(SslError::Service))
+        .map_err(TlsError::Tls)
+        .and_then(service.into_service().map_err(TlsError::Service))
 }
 
 #[cfg(feature = "rustls")]
@@ -84,7 +84,7 @@ pub fn rustls<F, S, St>(
     mut config: tls_rustls::ServerConfig,
     protos: &[&str],
     service: impl IntoService<S, St, Io<Layer<TlsServerFilter, F>>>,
-) -> impl Service<St, Io<F>, Res = S::Res, Error = SslError<S::Error>>
+) -> impl Service<St, Io<F>, Res = S::Res, Error = TlsError<S::Error>>
 where
     F: Filter,
     S: Service<St, Io<Layer<TlsServerFilter, F>>>,
@@ -94,6 +94,6 @@ where
     }
 
     TlsAcceptor::new(std::sync::Arc::new(config))
-        .map_err(SslError::Ssl)
-        .and_then(service.into_service().map_err(SslError::Service))
+        .map_err(TlsError::Tls)
+        .and_then(service.into_service().map_err(TlsError::Service))
 }
