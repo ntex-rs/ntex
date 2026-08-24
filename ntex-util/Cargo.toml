@@ -25,16 +25,17 @@ ntex-error = { workspace = true }
 ntex-service = { workspace = true }
 ntex-rt = { workspace = true }
 
-foldhash = { workspace = true }
 bitflags = { workspace = true }
-log = { workspace = true }
-slab = { workspace = true }
+foldhash = { workspace = true }
 futures-timer = { workspace = true }
 futures-core = { workspace = true }
+hashbrown = { workspace = true }
+log = { workspace = true }
 pin-project-lite = { workspace = true }
+slab = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
 ntex = { workspace = true }
-futures-util = { workspace = true }
 async-channel = { workspace = true }
+futures-util = { workspace = true }

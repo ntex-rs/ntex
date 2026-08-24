@@ -1,10 +1,10 @@
 # Changes
 
-## [5.0.0] - 2026-08-12
+## [5.0.0-beta.0] - 2026-08-24
 
 * Add shared state management
 
-* Add ReadyCtx::with_context(), service can access dispatcher's task context
+* Add Ctx::with_context(), service can access dispatcher's task context
 
 * Use config ref for service factory creation
 
