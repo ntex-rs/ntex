@@ -115,11 +115,6 @@ where
 
     #[inline]
     /// Returns `Ready` when the pipeline is ready to process requests.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the pipeline is shutting down (i.e., `.shutdown()` or
-    /// `.poll_shutdown()` has been called).
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Err>> {
         self.state.poll_ready(cx)
     }
@@ -362,7 +357,7 @@ where
                 self.poll_ready(cx)
             }
             RuntimeState::Readiness(fut) => Pin::new(fut).poll(cx),
-            RuntimeState::Shutdown(_) | RuntimeState::Done => panic!("Pipeline is shutding down"),
+            RuntimeState::Shutdown(_) | RuntimeState::Done => Poll::Ready(Ok(())),
         }
     }
 
