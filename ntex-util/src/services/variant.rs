@@ -2,27 +2,73 @@
 #![allow(non_snake_case)]
 use std::{fmt, marker::PhantomData, task::Poll};
 
-use ntex_service::{Ctx, IntoServiceFactory, Service, ServiceFactory};
+use ntex_service::{Ctx, IntoService, IntoServiceFactory, Service, ServiceFactory};
+
+/// Construct `Variant` service.
+///
+/// Variant service allow to combine multiple different services into a single service.
+pub fn variant<V1: Service<St, V1R>, St, V1R>(
+    f: impl IntoService<V1, St, V1R>,
+) -> Variant<St, V1, V1R> {
+    Variant {
+        service: f.into_service(),
+        _t: PhantomData,
+    }
+}
+
+/// Combine multiple different service types into a single service.
+pub struct Variant<St, A, AR> {
+    service: A,
+    _t: PhantomData<(St, AR)>,
+}
+
+impl<St, A, AR> Variant<St, A, AR>
+where
+    A: Service<St, AR>,
+{
+    /// Convert to a Variant with two request types
+    pub fn v2<B, BR>(self, f: impl IntoService<B, St, BR>) -> VariantService2<St, A, B, AR, BR>
+    where
+        B: Service<St, BR, Res = A::Res, Error = A::Error>,
+    {
+        VariantService2 {
+            V1: self.service,
+            V2: f.into_service(),
+            _t: PhantomData,
+        }
+    }
+}
+
+impl<St, A, AR> fmt::Debug for Variant<St, A, AR>
+where
+    A: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Variant")
+            .field("V1", &self.service)
+            .finish()
+    }
+}
 
 /// Construct `Variant` service factory.
 ///
 /// Variant service allow to combine multiple different services into a single service.
-pub fn variant<V1: ServiceFactory<St, V1R, Cfg>, St, V1R, Cfg>(
+pub fn variant_factory<V1: ServiceFactory<St, V1R, Cfg>, St, V1R, Cfg>(
     f: impl IntoServiceFactory<V1, St, V1R, Cfg>,
-) -> Variant<St, Cfg, V1, V1R> {
-    Variant {
+) -> VariantFactory<St, Cfg, V1, V1R> {
+    VariantFactory {
         factory: f.into_factory(),
         _t: PhantomData,
     }
 }
 
 /// Combine multiple different service types into a single service.
-pub struct Variant<St, Cfg, A, AR> {
+pub struct VariantFactory<St, Cfg, A, AR> {
     factory: A,
     _t: PhantomData<(St, Cfg, AR)>,
 }
 
-impl<St, Cfg, A, AR> Variant<St, Cfg, A, AR>
+impl<St, Cfg, A, AR> VariantFactory<St, Cfg, A, AR>
 where
     A: ServiceFactory<St, AR, Cfg>,
 {
@@ -42,7 +88,7 @@ where
     }
 }
 
-impl<St, Cfg, A, AR> fmt::Debug for Variant<St, Cfg, A, AR>
+impl<St, Cfg, A, AR> fmt::Debug for VariantFactory<St, Cfg, A, AR>
 where
     A: fmt::Debug,
 {
@@ -75,6 +121,29 @@ macro_rules! variant_impl_and ({$fac1_type:ident, $fac2_type:ident, $name:ident,
                     _t: PhantomData
                 }
             }
+    }
+});
+
+macro_rules! variant_impl_and_svc ({$svc1_type:ident, $svc2_type:ident, $name:ident, $r_name:ident, $m_name:ident, ($($T:ident),+), ($($R:ident),+)} => {
+
+    #[allow(non_snake_case)]
+    impl<St, V1, $($T,)+ V1R, $($R,)+> $svc1_type<St, V1, $($T,)+ V1R, $($R,)+>
+    where
+        V1: Service<St, V1R>,
+    {
+        /// Convert to a Variant with more request types
+        pub fn $m_name<$name, $r_name, F>(self, service: F) -> $svc2_type<St, V1, $($T,)+ $name, V1R, $($R,)+ $r_name>
+        where
+            $name: Service<St, $r_name, Res = V1::Res, Error = V1::Error>,
+            F: IntoService<$name, St, $r_name>,
+        {
+            $svc2_type {
+                V1: self.V1,
+                $($T: self.$T,)+
+                $name: service.into_service(),
+                _t: PhantomData
+            }
+        }
     }
 });
 
@@ -220,6 +289,19 @@ variant_impl!(v7, Variant7, VariantService7, VariantFactory7, 7, (0, V2, V2R), (
 variant_impl!(v8, Variant8, VariantService8, VariantFactory8, 8, (0, V2, V2R), (1, V3, V3R), (2, V4, V4R), (3, V5, V5R), (4, V6, V6R), (5, V7, V7R), (6, V8, V8R));
 
 #[rustfmt::skip]
+variant_impl_and_svc!(VariantService2, VariantService3, V3, V3R, v3, (V2), (V2R));
+#[rustfmt::skip]
+variant_impl_and_svc!(VariantService3, VariantService4, V4, V4R, v4, (V2, V3), (V2R, V3R));
+#[rustfmt::skip]
+variant_impl_and_svc!(VariantService4, VariantService5, V5, V5R, v5, (V2, V3, V4), (V2R, V3R, V4R));
+#[rustfmt::skip]
+variant_impl_and_svc!(VariantService5, VariantService6, V6, V6R, v6, (V2, V3, V4, V5), (V2R, V3R, V4R, V5R));
+#[rustfmt::skip]
+variant_impl_and_svc!(VariantService6, VariantService7, V7, V7R, v7, (V2, V3, V4, V5, V6), (V2R, V3R, V4R, V5R, V6R));
+#[rustfmt::skip]
+variant_impl_and_svc!(VariantService7, VariantService8, V8, V8R, v8, (V2, V3, V4, V5, V6, V7), (V2R, V3R, V4R, V5R, V6R, V7R));
+
+#[rustfmt::skip]
 variant_impl_and!(VariantFactory2, VariantFactory3, V3, V3R, v3, (V2), (V2R));
 #[rustfmt::skip]
 variant_impl_and!(VariantFactory3, VariantFactory4, V4, V4R, v4, (V2, V3), (V2R, V3R));
@@ -273,8 +355,8 @@ mod tests {
     }
 
     #[ntex::test]
-    async fn test_variant() {
-        let factory = variant(fn_factory(|| async { Ok::<_, ()>(Srv1) }));
+    async fn test_variant_factory() {
+        let factory = variant_factory(fn_factory(|| async { Ok::<_, ()>(Srv1) }));
         assert!(format!("{factory:?}").contains("Variant"));
 
         let factory = factory
@@ -293,6 +375,20 @@ mod tests {
         assert_eq!(service.call(Variant3::V1(())).await, Ok(1));
         assert_eq!(service.call(Variant3::V2(())).await, Ok(2));
         assert_eq!(service.call(Variant3::V3(())).await, Ok(2));
+    }
+
+    #[ntex::test]
+    async fn test_variant() {
+        let svc = variant(Srv1).v2(Srv2).clone().v3(Srv2).clone();
+        assert!(format!("{svc:?}").contains("Variant"));
+
+        let svc = Pipeline::with((), svc);
+        assert!(svc.ready().await.is_ok());
+        svc.shutdown().await;
+
+        assert_eq!(svc.call(Variant3::V1(())).await, Ok(1));
+        assert_eq!(svc.call(Variant3::V2(())).await, Ok(2));
+        assert_eq!(svc.call(Variant3::V3(())).await, Ok(2));
     }
 
     #[ntex::test]
@@ -315,7 +411,7 @@ mod tests {
             }
         }
 
-        let factory = variant(fn_service(async |()| Ok::<_, ()>(0)))
+        let factory = variant_factory(fn_service(async |()| Ok::<_, ()>(0)))
             .v2(fn_factory(async || Ok::<_, ()>(Srv5)).map_init_err(|()| unreachable!()))
             .v3(fn_service(async |()| Ok::<_, ()>(2)));
         assert!(format!("{factory:?}").contains("Variant"));
