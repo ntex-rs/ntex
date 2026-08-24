@@ -30,6 +30,24 @@ impl<E> Error<E> {
         }
     }
 
+    /// Creates a new error container.
+    ///
+    /// Captures the caller location and associates the error with a service.
+    #[track_caller]
+    pub fn from_err<T>(error: T) -> Self
+    where
+        E: From<T>,
+    {
+        Self {
+            inner: Arc::new(ErrorRepr::new3(
+                error.into(),
+                None,
+                None,
+                Location::caller(),
+            )),
+        }
+    }
+
     /// Transforms the inner error into another error type.
     ///
     /// Preserves `service`, backtrace, and extension data.
@@ -103,6 +121,20 @@ impl<E: Clone> Error<E> {
 
         Error {
             inner: Arc::new(ErrorRepr::new2(f(err), tag, svc, bt, ext)),
+        }
+    }
+
+    /// Maps the inner error into a new error type.
+    ///
+    /// Preserves `service`, backtrace, and extension data.
+    pub fn map_err<U>(self) -> Error<U>
+    where
+        U: From<E>,
+    {
+        let (err, tag, svc, bt, ext) = ErrorRepr::unpack(self.inner);
+
+        Error {
+            inner: Arc::new(ErrorRepr::new2(err.into(), tag, svc, bt, ext)),
         }
     }
 

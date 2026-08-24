@@ -1,5 +1,9 @@
 # Changes
 
+## [2.5.0] - 2026-08-24
+
+* Add Error::map_err() and Error::from_err() heleprs
+
 ## [2.4.0] - 2026-08-10
 
 * Add Backtrace::with_filename() ctor
