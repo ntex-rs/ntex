@@ -1,8 +1,10 @@
 # Changes
 
-## [4.0.0] - 2026-08-xx
+## [4.0.0-beta.0] - 2026-08-xx
 
 * Migrate to ntex-service 5
+
+* Add Variant service
 
 ## [3.6.1] - 2026-05-11
 
