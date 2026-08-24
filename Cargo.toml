@@ -60,7 +60,7 @@ ntex-h2 = { git = "https://github.com/ntex-rs/ntex-h2.git", branch = "service-st
 ntex = "4.0.0-beta.0"
 ntex-bytes = "1.9.0"
 ntex-codec = "1.2.1"
-ntex-error = "2.4.0"
+ntex-error = "2.5.0"
 ntex-h2 = "4.0.0-beta.0"
 ntex-http = "1.2.0"
 ntex-dispatcher = "4.0.0-beta.0"
@@ -103,6 +103,7 @@ futures = "0.3.33"
 futures-core = { version = "0.3.33", default-features = false, features = ["alloc"] }
 futures-util = { version = "0.3.33", default-features = false, features = ["alloc"] }
 futures-timer = "3.0"
+hashbrown = "0.17.1"
 http = "1.5.0"
 httparse = "1.10.1"
 httpdate = "1.0"

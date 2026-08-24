@@ -1,10 +1,12 @@
 # Changes
 
-## [4.0.0-beta.0] - 2026-08-xx
+## [4.0.0-beta.0] - 2026-08-24
 
 * Migrate to ntex-service 5
 
 * Add Variant service
+
+* Use hashbrown HashMap, HashSet
 
 ## [3.6.1] - 2026-05-11
 
