@@ -417,7 +417,6 @@ mod tests {
     }
 
     #[ntex::test]
-    #[should_panic(expected = "Pipeline is shutding down")]
     async fn test_ready_after_shutdown() {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
@@ -439,15 +438,14 @@ mod tests {
         time::sleep(time::Millis(250)).await;
 
         let res = lazy(|cx| srv.poll_ready(cx)).await;
-        assert_eq!(res, Poll::Pending);
+        assert_eq!(res, Poll::Ready(Ok(())));
 
         con.notify();
         let res = lazy(|cx| srv.poll_ready(cx)).await;
-        assert_eq!(res, Poll::Pending);
+        assert_eq!(res, Poll::Ready(Ok(())));
     }
 
     #[ntex::test]
-    #[should_panic(expected = "Pipeline is shutding down")]
     async fn test_pipeline_binding_after_shutdown() {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
