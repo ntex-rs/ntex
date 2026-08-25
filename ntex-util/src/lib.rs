@@ -18,8 +18,13 @@ pub mod time;
 pub use futures_core::Stream;
 pub use ntex_rt::spawn;
 
-pub type HashMap<K, V> = hashbrown::HashMap<K, V, foldhash::fast::RandomState>;
-pub type HashSet<V> = hashbrown::HashSet<V, foldhash::fast::RandomState>;
+#[doc(hidden)]
+pub use hashbrown::HashMap as HashMapBase;
+#[doc(hidden)]
+pub use hashbrown::HashSet as HashSetBase;
+
+pub type HashMap<K, V> = HashMapFull<K, V, foldhash::fast::RandomState>;
+pub type HashSet<V> = HashSetFull<V, foldhash::fast::RandomState>;
 pub type HashRandomState = foldhash::fast::RandomState;
 
 pub fn dyn_err<E: Error + 'static>(e: E) -> Box<dyn Error> {
