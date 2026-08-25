@@ -5,9 +5,9 @@ use crate::http::error::{DispatchError, ResponseError};
 use crate::http::{HttpPipeline, body::MessageBody, request::Request, response::Response};
 use crate::io::{Filter, Io, types};
 use crate::service::pipeline::{Pipeline, PipelineBinding};
+use crate::service::state::{State, StateMapping};
 use crate::service::{
     Ctx, IntoService, IntoServiceFactory, Service, ServiceFactory, cfg::SharedCfg,
-    state::DefaultState,
 };
 use crate::util::dyn_rc_err;
 
@@ -33,17 +33,21 @@ where
     Err: ResponseError + 'static,
 {
     /// Create new `HttpService` instance with config.
-    pub(crate) fn new<Sf>(
-        sf: impl IntoServiceFactory<Sf, (), Request, SharedCfg>,
+    pub(crate) fn new<Sf, St, Sm>(
+        sm: Sm,
+        sf: impl IntoServiceFactory<Sf, St, Request, SharedCfg>,
     ) -> H1Service<Hst, F, B, Err>
     where
-        Sf: ServiceFactory<(), Request, SharedCfg, Error = Err> + 'static,
+        Sf: ServiceFactory<St, Request, SharedCfg, Error = Err> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Error,
+        St: 'static,
+        Sm: StateMapping<St, Hst>,
+        Sm::Control: State<St, Request>,
     {
         H1Service {
             sf: HttpPipeline::with(
-                DefaultState,
+                sm,
                 sf.into_factory().map(Into::into).map_init_err(dyn_rc_err),
             ),
             ctl: Pipeline::with((), DefaultControlService),

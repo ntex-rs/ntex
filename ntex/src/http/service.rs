@@ -74,9 +74,9 @@ where
     }
 }
 
-impl<St, F, B, Err> HttpService<St, F, B, Err>
+impl<Hst, F, B, Err> HttpService<Hst, F, B, Err>
 where
-    St: 'static,
+    Hst: 'static,
     F: Filter,
     B: MessageBody,
     Err: ResponseError + 'static,
@@ -85,26 +85,60 @@ where
     /// Create *http service* for HTTP/1 protocol.
     pub fn h1<Sf>(
         sf: impl IntoServiceFactory<Sf, (), Request, SharedCfg>,
-    ) -> h1::H1Service<St, F, B, Err>
+    ) -> h1::H1Service<Hst, F, B, Err>
     where
         Sf: ServiceFactory<(), Request, SharedCfg, Error = Err> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Error,
     {
-        h1::H1Service::new(sf)
+        h1::H1Service::new(DefaultState, sf)
     }
 
     #[must_use]
     /// Create *http service* for HTTP/2 protocol.
     pub fn h2<Sf>(
         sf: impl IntoServiceFactory<Sf, (), Request, SharedCfg>,
-    ) -> h2::H2Service<St, F, B, Err>
+    ) -> h2::H2Service<Hst, F, B, Err>
     where
         Sf: ServiceFactory<(), Request, SharedCfg, Error = Err> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Error,
     {
-        h2::H2Service::new(sf)
+        h2::H2Service::new(DefaultState, sf)
+    }
+
+    #[must_use]
+    /// Create *http service* for HTTP/1 protocol.
+    pub fn h1_with<Sf, St, Sm>(
+        sm: Sm,
+        sf: impl IntoServiceFactory<Sf, St, Request, SharedCfg>,
+    ) -> h1::H1Service<Hst, F, B, Err>
+    where
+        Sf: ServiceFactory<St, Request, SharedCfg, Error = Err> + 'static,
+        Sf::Res: Into<Response<B>>,
+        Sf::InitError: Error,
+        St: 'static,
+        Sm: StateMapping<St, Hst>,
+        Sm::Control: State<St, Request>,
+    {
+        h1::H1Service::new(sm, sf)
+    }
+
+    #[must_use]
+    /// Create *http service* for HTTP/2 protocol.
+    pub fn h2_with<Sf, St, Sm>(
+        sm: Sm,
+        sf: impl IntoServiceFactory<Sf, St, Request, SharedCfg>,
+    ) -> h2::H2Service<Hst, F, B, Err>
+    where
+        Sf: ServiceFactory<St, Request, SharedCfg, Error = Err> + 'static,
+        Sf::Res: Into<Response<B>>,
+        Sf::InitError: Error,
+        St: 'static,
+        Sm: StateMapping<St, Hst>,
+        Sm::Control: State<St, Request>,
+    {
+        h2::H2Service::new(sm, sf)
     }
 }
 

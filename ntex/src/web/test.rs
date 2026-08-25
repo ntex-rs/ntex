@@ -19,6 +19,7 @@ use crate::http::{
 #[cfg(feature = "ws")]
 use crate::io::Sealed;
 use crate::router::{Path, ResourceDef};
+use crate::service::state::DefaultState;
 use crate::service::{IntoServiceFactory, Pipeline, fn_service};
 use crate::time::{Millis, Seconds};
 use crate::util::{Bytes, BytesMut, Stream, stream_recv};
@@ -57,7 +58,7 @@ pub fn default_service<St: AppState>(
 /// #[ntex::test]
 /// async fn test_init_service() {
 ///     let mut app = test::init_service(
-///         App::new()
+///         App::default()
 ///             .service(web::resource("/test").to(async || { HttpResponse::Ok() }))
 ///     ).await;
 ///
@@ -69,10 +70,11 @@ pub fn default_service<St: AppState>(
 ///     assert_eq!(resp.status(), StatusCode::OK);
 /// }
 /// ```
-pub async fn init_service<R, S, E>(app: R) -> Pipeline<Request, WebResponse, E>
+pub async fn init_service<St, R, S, E>(app: R) -> Pipeline<Request, WebResponse, E>
 where
-    R: IntoServiceFactory<S, (), Request, SharedCfg>,
-    S: ServiceFactory<(), Request, SharedCfg, Res = WebResponse, Error = E> + 'static,
+    St: Default + 'static,
+    R: IntoServiceFactory<S, St, Request, SharedCfg>,
+    S: ServiceFactory<St, Request, SharedCfg, Res = WebResponse, Error = E> + 'static,
     S::InitError: fmt::Debug,
 {
     let srv = app.into_factory().map_init_err(|e| log::error!("{e:?}"));
@@ -88,7 +90,7 @@ where
 /// #[ntex::test]
 /// async fn test_response() {
 ///     let mut app = test::init_service(
-///         App::new()
+///         App::default()
 ///             .service(web::resource("/test").to(async || {
 ///                 HttpResponse::Ok()
 ///             }))
@@ -119,7 +121,7 @@ where
 /// #[ntex::test]
 /// async fn test_index() {
 ///     let mut app = test::init_service(
-///         App::new().service(
+///         App::default().service(
 ///             web::resource("/index.html")
 ///                 .route(web::post().to(async || {
 ///                     HttpResponse::Ok().body("welcome!")
@@ -161,7 +163,7 @@ where
 /// #[ntex::test]
 /// async fn test_index() {
 ///     let mut app = test::init_service(
-///         App::new().service(
+///         App::default().service(
 ///             web::resource("/index.html")
 ///                 .route(web::post().to(async || {
 ///                     HttpResponse::Ok().body("welcome!")
@@ -215,7 +217,7 @@ where
 /// #[ntex::test]
 /// async fn test_add_person() {
 ///     let mut app = test::init_service(
-///         App::new().service(
+///         App::default().service(
 ///             web::resource("/people")
 ///                 .route(web::post().to(async |person: web::Json<Person>| {
 ///                     HttpResponse::Ok()
@@ -543,7 +545,7 @@ impl TestRequest {
 /// #[ntex::test]
 /// async fn test_example() {
 ///     let mut srv = test::server(
-///         || App::new().service(
+///         || App::default().service(
 ///                 web::resource("/").to(my_handler))
 ///     );
 ///
@@ -582,7 +584,7 @@ where
 /// #[ntex::test]
 /// async fn test_example() {
 ///     let mut srv = test::server_with(test::config().h1().port(4000), ||
-///         App::new().service(web::resource("/").to(my_handler))
+///         App::default().service(web::resource("/").to(my_handler))
 ///     );
 ///
 ///     let req = srv.get("/");
@@ -590,18 +592,20 @@ where
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub fn server_with<F, I, Sf, B>(cfg: TestServerConfig, factory: F) -> TestServer
+pub fn server_with<St, F, I, Sf, B>(cfg: TestServerConfig, factory: F) -> TestServer
 where
     F: AsyncFn(&()) -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<Sf, (), Request, SharedCfg>,
-    Sf: ServiceFactory<(), Request, SharedCfg> + 'static,
+    I: IntoServiceFactory<Sf, St, Request, SharedCfg>,
+    Sf: ServiceFactory<St, Request, SharedCfg> + 'static,
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
     Sf::InitError: fmt::Debug,
+    St: Default + 'static,
     B: MessageBody + 'static,
 {
     let sys = System::current().config();
     let name = System::current().name().to_string();
+    let state = DefaultState;
 
     let id = Uuid::now_v7();
     let (tx, rx) = mpsc::channel();
@@ -661,25 +665,34 @@ where
             let srv = match cfg.stream {
                 StreamType::Tcp => match cfg.tp {
                     HttpVer::Http1 => builder.listen("test", tcp, c, async move |st| {
-                        HttpService::h1(factory(st).await)
+                        HttpService::h1_with(state, factory(st).await)
                     }),
                     HttpVer::Http2 => builder.listen("test", tcp, c, async move |st| {
-                        HttpService::h2(factory(st).await)
+                        HttpService::h2_with(state, factory(st).await)
                     }),
                     HttpVer::Both => builder.listen("test", tcp, c, async move |st| {
-                        HttpService::new(factory(st).await)
+                        HttpService::with(state, factory(st).await)
                     }),
                 },
                 #[cfg(feature = "openssl")]
                 StreamType::Openssl(acceptor) => match cfg.tp {
                     HttpVer::Http1 => builder.listen("test", tcp, c, async move |st| {
-                        http::openssl(acceptor.clone(), HttpService::h1(factory(st).await))
+                        http::openssl(
+                            acceptor.clone(),
+                            HttpService::h1_with(state, factory(st).await),
+                        )
                     }),
                     HttpVer::Http2 => builder.listen("test", tcp, c, async move |st| {
-                        http::openssl(acceptor.clone(), HttpService::h2(factory(st).await))
+                        http::openssl(
+                            acceptor.clone(),
+                            HttpService::h2_with(state, factory(st).await),
+                        )
                     }),
                     HttpVer::Both => builder.listen("test", tcp, c, async move |st| {
-                        http::openssl(acceptor.clone(), HttpService::new(factory(st).await))
+                        http::openssl(
+                            acceptor.clone(),
+                            HttpService::with(state, factory(st).await),
+                        )
                     }),
                 },
                 #[cfg(feature = "rustls")]
@@ -688,21 +701,21 @@ where
                         http::rustls(
                             config.clone(),
                             http::ALPN_PROTO_H1,
-                            HttpService::h1(factory(st).await),
+                            HttpService::h1_with(state, factory(st).await),
                         )
                     }),
                     HttpVer::Http2 => builder.listen("test", tcp, c, async move |st| {
                         http::rustls(
                             config.clone(),
                             http::ALPN_PROTO_H2,
-                            HttpService::h2(factory(st).await),
+                            HttpService::h2_with(state, factory(st).await),
                         )
                     }),
                     HttpVer::Both => builder.listen("test", tcp, c, async move |st| {
                         http::rustls(
                             config.clone(),
                             http::ALPN_PROTOS,
-                            HttpService::new(factory(st).await),
+                            HttpService::with(state, factory(st).await),
                         )
                     }),
                 },
@@ -1073,7 +1086,7 @@ mod tests {
     #[crate::rt_test]
     async fn test_request_methods() {
         let app = init_service(
-            App::new().service(
+            App::default().service(
                 web::resource("/index.html")
                     .route(web::put().to(async || HttpResponse::Ok().body("put!")))
                     .route(web::patch().to(async || HttpResponse::Ok().body("patch!")))
@@ -1106,7 +1119,7 @@ mod tests {
     #[crate::rt_test]
     async fn test_response() {
         let app = init_service(
-            App::new().service(
+            App::default().service(
                 web::resource("/index.html")
                     .route(web::post().to(async || HttpResponse::Ok().body("welcome!"))),
             ),
@@ -1130,13 +1143,11 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_response_json() {
-        let app = init_service(
-            App::new().service(web::resource("/people").route(web::post().to(
-                async |person: web::types::Json<Person>| {
-                    HttpResponse::Ok().json(&person.into_inner())
-                },
-            ))),
-        )
+        let app = init_service(App::default().service(web::resource("/people").route(
+            web::post().to(async |person: web::types::Json<Person>| {
+                HttpResponse::Ok().json(&person.into_inner())
+            }),
+        )))
         .await;
 
         let payload = r#"{"id":"12345","name":"User name"}"#.as_bytes();
@@ -1153,13 +1164,11 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_request_response_form() {
-        let app = init_service(
-            App::new().service(web::resource("/people").route(web::post().to(
-                async |person: web::types::Form<Person>| {
-                    HttpResponse::Ok().json(&person.into_inner())
-                },
-            ))),
-        )
+        let app = init_service(App::default().service(web::resource("/people").route(
+            web::post().to(async |person: web::types::Form<Person>| {
+                HttpResponse::Ok().json(&person.into_inner())
+            }),
+        )))
         .await;
 
         let payload = Person {
@@ -1181,13 +1190,11 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_request_response_json() {
-        let app = init_service(
-            App::new().service(web::resource("/people").route(web::post().to(
-                async |person: web::types::Json<Person>| {
-                    HttpResponse::Ok().json(&person.into_inner())
-                },
-            ))),
-        )
+        let app = init_service(App::default().service(web::resource("/people").route(
+            web::post().to(async |person: web::types::Json<Person>| {
+                HttpResponse::Ok().json(&person.into_inner())
+            }),
+        )))
         .await;
 
         let payload = Person {
@@ -1222,7 +1229,7 @@ mod tests {
         }
 
         let app =
-            init_service(App::new().service(web::resource("/index.html").to(async_with_block)))
+            init_service(App::default().service(web::resource("/index.html").to(async_with_block)))
                 .await;
 
         let req = TestRequest::post().uri("/index.html").to_request();
@@ -1233,7 +1240,7 @@ mod tests {
     #[crate::rt_test]
     async fn test_test_methods() {
         let srv = server(async |()| {
-            App::new().service(
+            App::default().service(
                 web::resource("/").route((
                     web::route()
                         .method(Method::PUT)

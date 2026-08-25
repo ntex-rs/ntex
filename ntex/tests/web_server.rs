@@ -11,7 +11,6 @@ use ntex::http::header::{
     TRANSFER_ENCODING,
 };
 use ntex::http::{ConnectionType, HttpServiceConfig, Method, StatusCode, body::Body};
-use ntex::service::state::DefaultState;
 use ntex::time::{Millis, Seconds, Sleep, sleep};
 use ntex::util::{Bytes, Stream};
 use ntex::{SharedCfg, client, io::IoConfig};
@@ -772,6 +771,7 @@ async fn test_custom_error() {
     #[error("JsonContainer({0})")]
     struct JsonContainer(Box<dyn WebResponseError>);
 
+    #[derive(Copy, Clone, Default)]
     struct TestAppState;
 
     impl AppState for TestAppState {
@@ -882,7 +882,7 @@ async fn test_web_server() {
 /// Websocket connection, no ws handler and response contains payload
 #[ntex::test]
 async fn web_no_ws_with_response_payload() {
-    let srv = test::server_with(test::config().h1(), DefaultState, async |_| {
+    let srv = test::server_with(test::config().h1(), async |_| {
         App::new()
             .service(web::resource("/").route(web::get().to(async move || {
                 HttpResponse::Ok().streaming(TestBody::new(Bytes::from_static(STR.as_ref()), 24))
