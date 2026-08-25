@@ -23,6 +23,9 @@ pub use hashbrown::HashMap as HashMapBase;
 #[doc(hidden)]
 pub use hashbrown::HashSet as HashSetBase;
 
+#[doc(hidden)]
+pub use hashbrown::{hash_map, hash_set};
+
 pub type HashMap<K, V> = HashMapBase<K, V, foldhash::fast::RandomState>;
 pub type HashSet<V> = HashSetBase<V, foldhash::fast::RandomState>;
 pub type HashRandomState = foldhash::fast::RandomState;
