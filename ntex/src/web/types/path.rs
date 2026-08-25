@@ -155,7 +155,7 @@ where
 {
     type Error = PathError;
 
-    async fn from_request(req: &HttpRequest, _: &mut Payload) -> Result<Self, Self::Error> {
+    async fn from_request(_: &St, req: &HttpRequest, _: &mut Payload) -> Result<Self, Self::Error> {
         de::Deserialize::deserialize(PathDeserializer::new(req.match_info()))
             .map(|inner| Path { inner })
             .map_err(move |e| {
@@ -198,8 +198,17 @@ mod tests {
         router.recognize(req.match_info_mut());
 
         let (req, mut pl) = req.into_parts();
-        assert_eq!(*from_request::<Path<i8>>(&req, &mut pl).await.unwrap(), 32);
-        assert!(from_request::<Path<MyStruct>>(&req, &mut pl).await.is_err());
+        assert_eq!(
+            *from_request::<_, Path<i8>>(&(), &req, &mut pl)
+                .await
+                .unwrap(),
+            32
+        );
+        assert!(
+            from_request::<_, Path<MyStruct>>(&(), &req, &mut pl)
+                .await
+                .is_err()
+        );
     }
 
     #[crate::rt_test]
@@ -212,21 +221,22 @@ mod tests {
         router.recognize(req.match_info_mut());
 
         let (req, mut pl) = req.into_parts();
-        let res = from_request::<(Path<(String, String)>,)>(&req, &mut pl)
+        let res = from_request::<_, (Path<(String, String)>,)>(&(), &req, &mut pl)
             .await
             .unwrap();
         assert_eq!((res.0).0, "name");
         assert_eq!((res.0).1, "user1");
 
-        let res = from_request::<(Path<(String, String)>, Path<(String, String)>)>(&req, &mut pl)
-            .await
-            .unwrap();
+        let res =
+            from_request::<_, (Path<(String, String)>, Path<(String, String)>)>(&(), &req, &mut pl)
+                .await
+                .unwrap();
         assert_eq!((res.0).0, "name");
         assert_eq!((res.0).1, "user1");
         assert_eq!((res.1).0, "name");
         assert_eq!((res.1).1, "user1");
 
-        from_request::<()>(&req, &mut pl).await.unwrap();
+        from_request::<_, ()>(&(), &req, &mut pl).await.unwrap();
     }
 
     #[crate::rt_test]
@@ -239,7 +249,9 @@ mod tests {
         router.recognize(req.match_info_mut());
 
         let (req, mut pl) = req.into_parts();
-        let mut s = from_request::<Path<MyStruct>>(&req, &mut pl).await.unwrap();
+        let mut s = from_request::<_, Path<MyStruct>>(&(), &req, &mut pl)
+            .await
+            .unwrap();
         assert_eq!(s.key, "name");
         assert_eq!(s.value, "user1");
         s.value = "user2".to_string();
@@ -251,7 +263,7 @@ mod tests {
         let s = s.into_inner();
         assert_eq!(s.value, "user2");
 
-        let s = from_request::<Path<(String, String)>>(&req, &mut pl)
+        let s = from_request::<_, Path<(String, String)>>(&(), &req, &mut pl)
             .await
             .unwrap();
         assert_eq!(s.0, "name");
@@ -261,17 +273,19 @@ mod tests {
         router.recognize(req.match_info_mut());
 
         let (req, mut pl) = req.into_parts();
-        let s = from_request::<Path<Test2>>(&req, &mut pl).await.unwrap();
+        let s = from_request::<_, Path<Test2>>(&(), &req, &mut pl)
+            .await
+            .unwrap();
         assert_eq!(s.as_ref().key, "name");
         assert_eq!(s.value, 32);
 
-        let s = from_request::<Path<(String, u8)>>(&req, &mut pl)
+        let s = from_request::<_, Path<(String, u8)>>(&(), &req, &mut pl)
             .await
             .unwrap();
         assert_eq!(s.0, "name");
         assert_eq!(s.1, 32);
 
-        let res = from_request::<Path<Vec<String>>>(&req, &mut pl)
+        let res = from_request::<_, Path<Vec<String>>>(&(), &req, &mut pl)
             .await
             .unwrap();
         assert_eq!(res[0], "name".to_owned());

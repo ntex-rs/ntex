@@ -246,11 +246,12 @@ where
 }
 
 /// Helper method for extractors testing
-pub async fn from_request<T: FromRequest<()>>(
+pub async fn from_request<St, T: FromRequest<St>>(
+    st: &St,
     req: &HttpRequest,
     payload: &mut Payload,
 ) -> Result<T, T::Error> {
-    T::from_request(req, payload).await
+    T::from_request(st, req, payload).await
 }
 
 /// Helper method for responders testing

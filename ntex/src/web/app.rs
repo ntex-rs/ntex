@@ -50,7 +50,7 @@ impl App<(), Identity, Filter<()>> {
 impl App<(), Identity, Filter<()>> {
     #[must_use]
     /// Create application builder with custom error renderer.
-    pub fn with<St: AppState>() -> Self {
+    pub fn with<St: AppState>() -> App<St, Identity, Filter<St>> {
         App {
             middleware: Identity,
             filter: factory_with_st(Filter::new()),

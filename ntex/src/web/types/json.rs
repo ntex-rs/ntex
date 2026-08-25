@@ -162,7 +162,11 @@ where
 {
     type Error = JsonPayloadError;
 
-    async fn from_request(req: &HttpRequest, payload: &mut Payload) -> Result<Self, Self::Error> {
+    async fn from_request(
+        _: &St,
+        req: &HttpRequest,
+        payload: &mut Payload,
+    ) -> Result<Self, Self::Error> {
         let req2 = req.clone();
         let (limit, ctype) = req
             .app_state::<JsonConfig>()
@@ -452,7 +456,9 @@ mod tests {
             .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
             .to_http_parts();
 
-        let s = from_request::<Json<MyObject>>(&req, &mut pl).await.unwrap();
+        let s = from_request::<_, Json<MyObject>>(&(), &req, &mut pl)
+            .await
+            .unwrap();
         assert_eq!(s.name, "test");
         assert_eq!(
             s.into_inner(),
@@ -474,7 +480,7 @@ mod tests {
             .state(JsonConfig::default().limit(10))
             .to_http_parts();
 
-        let s = from_request::<Json<MyObject>>(&req, &mut pl).await;
+        let s = from_request::<_, Json<MyObject>>(&(), &req, &mut pl).await;
         assert!(
             format!("{}", s.err().unwrap()).contains("Json payload size is bigger than allowed")
         );
@@ -490,7 +496,7 @@ mod tests {
             )
             .set_payload(Bytes::from_static(b"--name-: -test--"))
             .to_http_parts();
-        let s = from_request::<Json<serde_json::Value>>(&req, &mut pl).await;
+        let s = from_request::<_, Json<serde_json::Value>>(&(), &req, &mut pl).await;
         assert!(format!("{:?}", s.err().unwrap()).contains("Deserialize(Error("));
     }
 
@@ -566,7 +572,7 @@ mod tests {
         .state(JsonConfig::default().limit(4096))
         .to_http_parts();
 
-        let s = from_request::<Json<MyObject>>(&req, &mut pl).await;
+        let s = from_request::<_, Json<MyObject>>(&(), &req, &mut pl).await;
         assert!(s.is_err());
     }
 
@@ -586,7 +592,7 @@ mod tests {
         }))
         .to_http_parts();
 
-        let s = from_request::<Json<MyObject>>(&req, &mut pl).await;
+        let s = from_request::<_, Json<MyObject>>(&(), &req, &mut pl).await;
         assert!(s.is_ok());
     }
 
@@ -606,7 +612,7 @@ mod tests {
         }))
         .to_http_parts();
 
-        let s = from_request::<Json<MyObject>>(&req, &mut pl).await;
+        let s = from_request::<_, Json<MyObject>>(&(), &req, &mut pl).await;
         assert!(s.is_err());
     }
 }

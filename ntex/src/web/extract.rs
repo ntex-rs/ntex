@@ -11,7 +11,11 @@ pub trait FromRequest<St>: Sized {
     type Error;
 
     /// Convert request to a Self
-    async fn from_request(req: &HttpRequest, payload: &mut Payload) -> Result<Self, Self::Error>;
+    async fn from_request(
+        st: &St,
+        req: &HttpRequest,
+        payload: &mut Payload,
+    ) -> Result<Self, Self::Error>;
 }
 
 /// Optionally extract a field from the request
@@ -33,7 +37,7 @@ pub trait FromRequest<St>: Sized {
 /// impl<St> FromRequest<St> for Thing {
 ///     type Error = error::WebError;
 ///
-///     async fn from_request(req: &HttpRequest, payload: &mut http::Payload) -> Result<Self, Self::Error> {
+///     async fn from_request(st: &St, req: &HttpRequest, payload: &mut http::Payload) -> Result<Self, Self::Error> {
 ///         if rand::random() {
 ///             Ok(Thing { name: "thingy".into() })
 ///         } else {
@@ -68,10 +72,11 @@ where
 
     #[inline]
     async fn from_request(
+        st: &St,
         req: &HttpRequest,
         payload: &mut Payload,
     ) -> Result<Option<T>, Self::Error> {
-        match T::from_request(req, payload).await {
+        match T::from_request(st, req, payload).await {
             Ok(v) => Ok(Some(v)),
             Err(e) => {
                 log::debug!("Error for Option<T> extractor: {}", e.into());
@@ -100,7 +105,7 @@ where
 /// impl<Err> FromRequest<Err> for Thing {
 ///     type Error = error::WebError;
 ///
-///     async fn from_request(req: &HttpRequest, payload: &mut http::Payload) -> Result<Thing, Self::Error> {
+///     async fn from_request(st: &St, req: &HttpRequest, payload: &mut http::Payload) -> Result<Thing, Self::Error> {
 ///         if rand::random() {
 ///             Ok(Thing { name: "thingy".into() })
 ///         } else {
@@ -131,8 +136,12 @@ where
     type Error = T::Error;
 
     #[inline]
-    async fn from_request(req: &HttpRequest, payload: &mut Payload) -> Result<Self, Self::Error> {
-        match T::from_request(req, payload).await {
+    async fn from_request(
+        st: &St,
+        req: &HttpRequest,
+        payload: &mut Payload,
+    ) -> Result<Self, Self::Error> {
+        match T::from_request(st, req, payload).await {
             Ok(v) => Ok(Ok(v)),
             Err(e) => Ok(Err(e)),
         }
@@ -144,7 +153,7 @@ impl<St: AppState> FromRequest<St> for () {
     type Error = St::Error;
 
     #[inline]
-    async fn from_request(_: &HttpRequest, _: &mut Payload) -> Result<(), Self::Error> {
+    async fn from_request(_: &St, _: &HttpRequest, _: &mut Payload) -> Result<(), Self::Error> {
         Ok(())
     }
 }
@@ -160,9 +169,9 @@ macro_rules! tuple_from_req {
         {
             type Error = St::Error;
 
-            async fn from_request(req: &HttpRequest, payload: &mut Payload) -> Result<($($T,)+), Self::Error> {
+            async fn from_request(st: &St, req: &HttpRequest, payload: &mut Payload) -> Result<($($T,)+), Self::Error> {
                 Ok((
-                    $($T::from_request(req, payload).await.map_err(|e| e.into())?,)+
+                    $($T::from_request(st, req, payload).await.map_err(|e| e.into())?,)+
                 ))
             }
         }
@@ -198,7 +207,7 @@ mod tests {
                 .state(FormConfig::default().limit(4096))
                 .to_http_parts();
 
-        let r = from_request::<Option<Form<Info>>>(&req, &mut pl)
+        let r = from_request::<_, Option<Form<Info>>>(&(), &req, &mut pl)
             .await
             .unwrap();
         assert_eq!(r, None);
@@ -209,7 +218,7 @@ mod tests {
                 .set_payload(Bytes::from_static(b"hello=world"))
                 .to_http_parts();
 
-        let r = from_request::<Option<Form<Info>>>(&req, &mut pl)
+        let r = from_request::<_, Option<Form<Info>>>(&(), &req, &mut pl)
             .await
             .unwrap();
         assert_eq!(
@@ -225,7 +234,7 @@ mod tests {
                 .set_payload(Bytes::from_static(b"bye=world"))
                 .to_http_parts();
 
-        let r = from_request::<Option<Form<Info>>>(&req, &mut pl)
+        let r = from_request::<_, Option<Form<Info>>>(&(), &req, &mut pl)
             .await
             .unwrap();
         assert_eq!(r, None);
@@ -239,7 +248,7 @@ mod tests {
                 .set_payload(Bytes::from_static(b"hello=world"))
                 .to_http_parts();
 
-        let r = from_request::<Result<Form<Info>, UrlencodedError>>(&req, &mut pl)
+        let r = from_request::<_, Result<Form<Info>, UrlencodedError>>(&(), &req, &mut pl)
             .await
             .unwrap();
         assert_eq!(
@@ -255,7 +264,7 @@ mod tests {
                 .set_payload(Bytes::from_static(b"bye=world"))
                 .to_http_parts();
 
-        let r = from_request::<Result<Form<Info>, UrlencodedError>>(&req, &mut pl)
+        let r = from_request::<_, Result<Form<Info>, UrlencodedError>>(&(), &req, &mut pl)
             .await
             .unwrap();
         assert!(r.is_err());
