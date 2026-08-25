@@ -131,9 +131,9 @@ pub struct LoggerMiddleware<S> {
     service: S,
 }
 
-impl<S, St, E> Service<St, WebRequest<E>> for LoggerMiddleware<S>
+impl<S, St> Service<St, WebRequest> for LoggerMiddleware<S>
 where
-    S: Service<St, WebRequest<E>, Res = WebResponse>,
+    S: Service<St, WebRequest, Res = WebResponse>,
 {
     type Res = WebResponse;
     type Error = S::Error;
@@ -141,11 +141,7 @@ where
     crate::forward_ready!(St, service);
     crate::forward_shutdown!(St, service);
 
-    async fn call(
-        &self,
-        req: WebRequest<E>,
-        ctx: Ctx<'_, Self, St>,
-    ) -> Result<Self::Res, S::Error> {
+    async fn call(&self, req: WebRequest, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, S::Error> {
         if self.inner.exclude.contains(req.path()) {
             ctx.call(&self.service, req).await
         } else {
@@ -344,7 +340,7 @@ impl FormatText {
         }
     }
 
-    fn render_request<E>(&mut self, now: time::SystemTime, req: &WebRequest<E>) {
+    fn render_request(&mut self, now: time::SystemTime, req: &WebRequest) {
         match *self {
             FormatText::RequestLine => {
                 let q = req.query_string();
@@ -402,14 +398,14 @@ impl fmt::Display for FormatDisplay<'_> {
 mod tests {
     use super::*;
     use crate::http::{StatusCode, header};
+    use crate::web::WebError;
     use crate::web::test::{self, TestRequest};
-    use crate::web::{DefaultError, Error};
     use crate::{fn_service, service::Pipeline, util::lazy};
 
     #[crate::rt_test]
     async fn test_logger() {
-        let srv = fn_service(async move |req: WebRequest<DefaultError>| {
-            Ok::<_, Error>(
+        let srv = fn_service(async move |req: WebRequest| {
+            Ok::<_, WebError>(
                 req.into_response(
                     HttpResponse::build(StatusCode::OK)
                         .header("X-Test", "ttt")

@@ -28,7 +28,7 @@ async fn web_ws() {
                     &req,
                     None,
                     fn_factory_with_config(async |_: &ws::WsSink| {
-                        Ok::<_, web::Error>(fn_service(service))
+                        Ok::<_, web::WebError>(fn_service(service))
                     }),
                 )
                 .await
@@ -105,7 +105,7 @@ async fn web_ws_after_pooled_post_request() {
                         &req,
                         None,
                         fn_factory_with_config(async |_: &ws::WsSink| {
-                            Ok::<_, web::Error>(fn_service(service))
+                            Ok::<_, web::WebError>(fn_service(service))
                         }),
                     )
                     .await
@@ -159,7 +159,7 @@ async fn web_ws_client() {
                     &req,
                     None,
                     fn_factory_with_config(async |_: &ws::WsSink| {
-                        Ok::<_, web::Error>(fn_service(service))
+                        Ok::<_, web::WebError>(fn_service(service))
                     }),
                 )
                 .await
@@ -218,7 +218,7 @@ async fn web_ws_subprotocol() {
                     &req,
                     protocol,
                     fn_factory_with_config(async |_: &ws::WsSink| {
-                        Ok::<_, web::Error>(fn_service(service))
+                        Ok::<_, web::WebError>(fn_service(service))
                     }),
                 )
                 .await
@@ -263,7 +263,7 @@ async fn web_ws_subprotocol_none() {
                     &req,
                     protocol,
                     fn_factory_with_config(async |_: &ws::WsSink| {
-                        Ok::<_, web::Error>(fn_service(service))
+                        Ok::<_, web::WebError>(fn_service(service))
                     }),
                 )
                 .await
@@ -317,7 +317,7 @@ async fn web_ws_protocols_parsing() {
                     &req,
                     protocol,
                     fn_factory_with_config(async |_: &ws::WsSink| {
-                        Ok::<_, web::Error>(fn_service(service))
+                        Ok::<_, web::WebError>(fn_service(service))
                     }),
                 )
                 .await
@@ -365,9 +365,11 @@ async fn web_ws_shutdown_propagation() {
                     None,
                     fn_factory_with_config(async move |_t: &ws::WsSink| {
                         let shutdown_tx = shutdown_tx.clone();
-                        Ok::<_, web::Error>(svc(service).and_then(fn_shutdown(async move || {
-                            let _ = shutdown_tx.send(());
-                        })))
+                        Ok::<_, web::WebError>(svc(service).and_then(fn_shutdown(
+                            async move || {
+                                let _ = shutdown_tx.send(());
+                            },
+                        )))
                     }),
                 )
                 .await

@@ -1,4 +1,4 @@
-use std::{cell::Ref, cell::RefMut, fmt, marker::PhantomData, net, rc::Rc};
+use std::{cell::Ref, cell::RefMut, fmt, net, rc::Rc};
 
 use crate::http::{
     HeaderMap, HttpMessage, Method, Payload, RequestHead, Response, Uri, Version, header,
@@ -8,41 +8,36 @@ use crate::router::{Path, Resource};
 use crate::util::Extensions;
 
 use super::config::WebAppConfig;
-use super::error::{ErrorRenderer, WebResponseError};
-use super::httprequest::HttpRequest;
+use super::error::WebResponseError;
 use super::info::ConnectionInfo;
-use super::response::WebResponse;
 use super::rmap::ResourceMap;
+use super::{AppState, HttpRequest, WebResponse};
 
 /// An service http request
 ///
 /// `WebRequest` allows mutable access to request's internal structures
-pub struct WebRequest<Err> {
+pub struct WebRequest {
     req: HttpRequest,
-    _t: PhantomData<Err>,
 }
 
-impl<Err: ErrorRenderer> WebRequest<Err> {
+impl WebRequest {
     /// Create web response for error
     #[inline]
-    pub fn render_error<E: WebResponseError<Err>>(self, err: &E) -> WebResponse {
+    pub fn render_error<E: WebResponseError>(self, err: &E) -> WebResponse {
         WebResponse::new(err.error_response(&self.req), self.req)
     }
 
     /// Create web response for error
     #[inline]
-    pub fn error_response<E: Into<Err::Container>>(self, err: E) -> WebResponse {
-        WebResponse::from_err::<Err, E>(err, self.req)
+    pub fn error_response<St: AppState, E: Into<St::Error>>(self, err: E) -> WebResponse {
+        WebResponse::from_err::<St, E>(err, self.req)
     }
 }
 
-impl<Err> WebRequest<Err> {
+impl WebRequest {
     /// Construct web request
     pub(crate) fn new(req: HttpRequest) -> Self {
-        WebRequest {
-            req,
-            _t: PhantomData,
-        }
+        WebRequest { req }
     }
 
     /// Deconstruct request into parts
@@ -224,7 +219,7 @@ impl<Err> WebRequest<Err> {
     }
 }
 
-impl<Err> Resource<Uri> for WebRequest<Err> {
+impl Resource<Uri> for WebRequest {
     fn path(&self) -> &str {
         self.match_info().path()
     }
@@ -234,7 +229,7 @@ impl<Err> Resource<Uri> for WebRequest<Err> {
     }
 }
 
-impl<Err> HttpMessage for WebRequest<Err> {
+impl HttpMessage for WebRequest {
     #[inline]
     /// Returns Request's headers.
     fn message_headers(&self) -> &HeaderMap {
@@ -254,7 +249,7 @@ impl<Err> HttpMessage for WebRequest<Err> {
     }
 }
 
-impl<Err: ErrorRenderer> fmt::Debug for WebRequest<Err> {
+impl fmt::Debug for WebRequest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
@@ -300,7 +295,7 @@ mod tests {
         let req = TestRequest::default().to_srv_request();
         let err = http::error::PayloadError::Overflow;
 
-        let res: HttpResponse = req.error_response(err).into();
+        let res: HttpResponse = req.error_response::<(), _>(err).into();
         assert_eq!(res.status(), http::StatusCode::PAYLOAD_TOO_LARGE);
 
         let mut req = TestRequest::default().to_srv_request();

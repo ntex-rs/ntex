@@ -27,22 +27,21 @@ use crate::ws::{WsClient, WsClientConfig, WsConnection, error::WsClientError};
 use crate::{Service, ServiceFactory, SharedCfg, io::IoConfig, rt::System, server::Server};
 
 use crate::web::config::WebAppConfig;
-use crate::web::error::{DefaultError, ErrorRenderer};
 use crate::web::httprequest::HttpRequest;
 use crate::web::rmap::ResourceMap;
-use crate::web::{FromRequest, HttpResponse, Responder, WebRequest, WebResponse};
+use crate::web::{AppState, FromRequest, HttpResponse, Responder, WebRequest, WebResponse};
 
 /// Create service that always responds with `HttpResponse::Ok()`
-pub fn ok_service<Err: ErrorRenderer>()
--> impl Service<(), WebRequest<Err>, Res = WebResponse, Error = std::convert::Infallible> {
-    default_service::<Err>(StatusCode::OK)
+pub fn ok_service<St: AppState>()
+-> impl Service<St, WebRequest, Res = WebResponse, Error = std::convert::Infallible> {
+    default_service::<St>(StatusCode::OK)
 }
 
 /// Create service that responds with response with specified status code
-pub fn default_service<Err: ErrorRenderer>(
+pub fn default_service<St: AppState>(
     status_code: StatusCode,
-) -> impl Service<(), WebRequest<Err>, Res = WebResponse, Error = Infallible> {
-    fn_service(async move |req: WebRequest<Err>| {
+) -> impl Service<St, WebRequest, Res = WebResponse, Error = Infallible> {
+    fn_service(async move |req: WebRequest| {
         Ok::<_, Infallible>(req.into_response(HttpResponse::build(status_code).finish()))
     })
 }
@@ -247,7 +246,7 @@ where
 }
 
 /// Helper method for extractors testing
-pub async fn from_request<T: FromRequest<DefaultError>>(
+pub async fn from_request<T: FromRequest<()>>(
     req: &HttpRequest,
     payload: &mut Payload,
 ) -> Result<T, T::Error> {
@@ -255,7 +254,7 @@ pub async fn from_request<T: FromRequest<DefaultError>>(
 }
 
 /// Helper method for responders testing
-pub async fn respond_to<T: Responder<DefaultError>>(slf: T, req: &HttpRequest) -> HttpResponse {
+pub async fn respond_to<T: Responder>(slf: T, req: &HttpRequest) -> HttpResponse {
     T::respond_to(slf, req).await
 }
 
@@ -477,7 +476,7 @@ impl TestRequest {
 
     #[must_use]
     /// Complete request creation and generate `WebRequest` instance.
-    pub fn to_srv_request(mut self) -> WebRequest<DefaultError> {
+    pub fn to_srv_request(mut self) -> WebRequest {
         let (head, payload) = self.req.finish().into_parts();
         *self.path.get_mut() = head.uri.clone();
         let cfg = SharedCfg::new("TEST").add(self.config).build();

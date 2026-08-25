@@ -4,7 +4,7 @@ use std::{cmp, str::FromStr};
 use crate::http::encoding::Encoder;
 use crate::http::header::{ACCEPT_ENCODING, ContentEncoding};
 use crate::service::{Ctx, Middleware, Service, cfg::SharedCfg};
-use crate::web::{BodyEncoding, ErrorRenderer, WebRequest, WebResponse};
+use crate::web::{AppState, BodyEncoding, WebRequest, WebResponse};
 
 #[derive(Debug, Clone)]
 /// `Middleware` for compressing response body.
@@ -59,10 +59,10 @@ pub struct CompressMiddleware<S> {
     encoding: ContentEncoding,
 }
 
-impl<S, St, E> Service<St, WebRequest<E>> for CompressMiddleware<S>
+impl<S, St> Service<St, WebRequest> for CompressMiddleware<S>
 where
-    S: Service<St, WebRequest<E>, Res = WebResponse>,
-    E: ErrorRenderer,
+    S: Service<St, WebRequest, Res = WebResponse>,
+    St: AppState,
 {
     type Res = WebResponse;
     type Error = S::Error;
@@ -70,11 +70,7 @@ where
     crate::forward_ready!(St, service);
     crate::forward_shutdown!(St, service);
 
-    async fn call(
-        &self,
-        req: WebRequest<E>,
-        ctx: Ctx<'_, Self, St>,
-    ) -> Result<WebResponse, S::Error> {
+    async fn call(&self, req: WebRequest, ctx: Ctx<'_, Self, St>) -> Result<WebResponse, S::Error> {
         // negotiate content-encoding
         let encoding = if let Some(val) = req.headers().get(&ACCEPT_ENCODING) {
             if let Ok(enc) = val.to_str() {

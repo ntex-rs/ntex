@@ -16,7 +16,7 @@ use ntex::util::{Bytes, Stream};
 use ntex::{SharedCfg, client, io::IoConfig};
 
 use ntex::web::{self, middleware::Compress, test};
-use ntex::web::{App, BodyEncoding, HttpRequest, HttpResponse, WebResponseError};
+use ntex::web::{App, AppState, BodyEncoding, HttpRequest, HttpResponse, WebResponseError};
 
 #[cfg(feature = "rustls")]
 mod rustls_utils;
@@ -769,7 +769,13 @@ async fn test_custom_error() {
 
     #[derive(Debug, thiserror::Error)]
     #[error("JsonContainer({0})")]
-    struct JsonContainer(Box<dyn WebResponseError<JsonRenderer>>);
+    struct JsonContainer(Box<dyn WebResponseError>);
+
+    struct TestAppState;
+
+    impl AppState for TestAppState {
+        type Error = JsonContainer;
+    }
 
     impl ntex::web::ErrorContainer for JsonContainer {
         fn error_response(&self, req: &HttpRequest) -> HttpResponse {
@@ -785,13 +791,7 @@ async fn test_custom_error() {
         }
     }
 
-    struct JsonRenderer;
-
-    impl ntex::web::error::ErrorRenderer for JsonRenderer {
-        type Container = JsonContainer;
-    }
-
-    impl WebResponseError<JsonRenderer> for TestError {
+    impl WebResponseError for TestError {
         fn error_response(&self, _: &HttpRequest) -> HttpResponse {
             HttpResponse::BadRequest()
                 .header(CONTENT_TYPE, "application/json")
@@ -808,7 +808,7 @@ async fn test_custom_error() {
     }
 
     let srv = test::server_with(test::config().h1(), async |_| {
-        App::with(JsonRenderer)
+        App::with::<TestAppState>()
             .service(web::resource("/").route(web::get().to(test)))
             .service(web::resource("/err").route(web::get().to(test_err)))
     });

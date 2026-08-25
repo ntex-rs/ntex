@@ -9,8 +9,8 @@ use crate::http::encoding::Decoder;
 use crate::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use crate::http::{HttpMessage, Payload, Response, StatusCode};
 use crate::util::{BoxFuture, BytesMut, stream_recv};
-use crate::web::error::{ErrorRenderer, UrlencodedError, WebResponseError};
-use crate::web::{FromRequest, HttpRequest, Responder};
+use crate::web::error::{UrlencodedError, WebResponseError};
+use crate::web::{AppState, FromRequest, HttpRequest, Responder};
 
 /// Form data helper (`application/x-www-form-urlencoded`)
 ///
@@ -94,10 +94,10 @@ impl<T> ops::DerefMut for Form<T> {
     }
 }
 
-impl<T, Err> FromRequest<Err> for Form<T>
+impl<T, St> FromRequest<St> for Form<T>
 where
     T: DeserializeOwned + 'static,
-    Err: ErrorRenderer,
+    St: AppState,
 {
     type Error = UrlencodedError;
 
@@ -123,9 +123,10 @@ impl<T: fmt::Display> fmt::Display for Form<T> {
     }
 }
 
-impl<T: Serialize, Err: ErrorRenderer> Responder<Err> for Form<T>
+impl<T: Serialize, St> Responder<St> for Form<T>
 where
-    Err::Container: From<serde_urlencoded::ser::Error>,
+    St: AppState,
+    St::Error: From<serde_urlencoded::ser::Error>,
 {
     async fn respond_to(self, req: &HttpRequest) -> Response {
         let body = match serde_urlencoded::to_string(&self.0) {
@@ -142,7 +143,7 @@ where
 /// Form extractor configuration
 ///
 /// ```rust
-/// use ntex::web::{self, App, Error, FromRequest};
+/// use ntex::web::{self, App, WebError, FromRequest};
 ///
 /// #[derive(serde::Deserialize)]
 /// struct FormData {
@@ -151,7 +152,7 @@ where
 ///
 /// /// Extract form data using serde.
 /// /// Custom configuration is used for this handler, max payload size is 4k
-/// async fn index(form: web::types::Form<FormData>) -> Result<String, Error> {
+/// async fn index(form: web::types::Form<FormData>) -> Result<String, WebError> {
 ///     Ok(format!("Welcome {}!", form.username))
 /// }
 ///

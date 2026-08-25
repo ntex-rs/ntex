@@ -6,6 +6,8 @@
 
 * Re-design http client
 
+* Use AppState instead of ErrorRenderer for web
+
 ## [3.13.0] - 2026-08-09
 
 * Stop server when one of worker panics (stop_on_panic)

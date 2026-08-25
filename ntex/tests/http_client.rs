@@ -11,7 +11,7 @@ use ntex::http::{HttpMessage, HttpService, Method, Response, header};
 use ntex::io::IoConfig;
 use ntex::service::{cfg::SharedCfg, fn_layer, svc};
 use ntex::web::middleware::Compress;
-use ntex::web::{self, App, BodyEncoding, Error, HttpRequest, HttpResponse, test};
+use ntex::web::{self, App, BodyEncoding, HttpRequest, HttpResponse, WebError, test};
 use ntex::{client, time::Millis, time::Seconds, time::sleep, util::Bytes};
 
 const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
@@ -574,18 +574,18 @@ async fn test_client_cookie_handling() {
                     let cookie2 = cookie2.clone();
 
                     // Check cookies were sent correctly
-                    let res: Result<(), Error> = req
+                    let res: Result<(), WebError> = req
                         .cookie("cookie1")
                         .ok_or(())
                         .and_then(|c1| if c1.value() == "value1" { Ok(()) } else { Err(()) })
                         .and_then(|()| req.cookie("cookie2").ok_or(()))
                         .and_then(|c2| if c2.value() == "value2" { Ok(()) } else { Err(()) })
-                        .map_err(|_| Error::new(IoError::from(ErrorKind::NotFound)));
+                        .map_err(|_| WebError::new(IoError::from(ErrorKind::NotFound)));
 
                     res?;
 
                     // Send some cookies back
-                    Ok::<_, Error>(HttpResponse::Ok().cookie(cookie1).cookie(cookie2).finish())
+                    Ok::<_, WebError>(HttpResponse::Ok().cookie(cookie1).cookie(cookie2).finish())
                 },
             )),
         )

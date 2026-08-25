@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{ToTokens, TokenStreamExt, quote};
-use syn::{Ident, Path};
+use syn::{Ident, TypePath};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MethodType {
@@ -45,14 +45,14 @@ impl ToTokens for MethodType {
 struct Args {
     path: syn::LitStr,
     guards: Vec<Ident>,
-    error: Path,
+    state: TypePath,
 }
 
 impl syn::parse::Parse for Args {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
         let path: syn::LitStr = input.parse()?;
         let mut guards = Vec::new();
-        let mut error: Option<Path> = None;
+        let mut state: Option<TypePath> = None;
 
         while !input.is_empty() {
             input.parse::<syn::token::Comma>()?;
@@ -64,9 +64,9 @@ impl syn::parse::Parse for Args {
             if ident == "guard" {
                 let lit: syn::LitStr = input.parse()?;
                 guards.push(Ident::new(&lit.value(), Span::call_site()));
-            } else if ident == "error" {
+            } else if ident == "state" {
                 let lit: syn::LitStr = input.parse()?;
-                error = Some(syn::parse_str(&lit.value())?);
+                state = Some(syn::parse_str(&lit.value())?);
             } else {
                 return Err(syn::Error::new_spanned(
                     ident,
@@ -78,7 +78,7 @@ impl syn::parse::Parse for Args {
         Ok(Args {
             path,
             guards,
-            error: error.unwrap_or_else(|| syn::parse_str("ntex::web::DefaultError").unwrap()),
+            state: state.unwrap_or_else(|| syn::parse_str("ntex::web::dev::DefaultState").unwrap()),
         })
     }
 }
@@ -125,15 +125,15 @@ impl Route {
         let ast = &self.ast;
         let path = &self.args.path;
         let extra_guards = &self.args.guards;
-        let error = &self.args.error;
+        let state = &self.args.state;
         let method = &self.method;
 
         let stream = quote! {
             #[allow(non_camel_case_types)]
             pub struct #name;
 
-            impl<St: 'static> ntex::web::dev::WebServiceFactory<St, #error> for #name {
-                fn register(self, __config: &mut ntex::web::dev::WebServiceConfig<St, #error>) {
+            impl ntex::web::dev::WebServiceFactory<#state> for #name {
+                fn register(self, __config: &mut ntex::web::dev::WebServiceConfig<#state>) {
                     #ast
 
                     let __resource = ntex::web::Resource::new(#path)

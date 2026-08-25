@@ -84,6 +84,7 @@ mod scope;
 mod server;
 mod service;
 pub mod stack;
+mod state;
 pub mod test;
 pub mod types;
 mod util;
@@ -108,7 +109,7 @@ pub use crate::http::ResponseBuilder as HttpResponseBuilder;
 pub use self::app::App;
 pub use self::config::ServiceConfig;
 pub use self::config::WebAppConfig;
-pub use self::error::{DefaultError, Error, ErrorContainer, ErrorRenderer, WebResponseError};
+pub use self::error::{ErrorContainer, WebError, WebResponseError};
 pub use self::extract::FromRequest;
 pub use self::handler::Handler;
 pub use self::httprequest::HttpRequest;
@@ -120,14 +121,15 @@ pub use self::route::Route;
 pub use self::scope::Scope;
 pub use self::server::HttpServer;
 pub use self::service::WebServiceFactory;
+pub use self::state::AppState;
 pub use self::util::*;
 
 use crate::service::boxed::{BoxService, BoxServiceFactory};
+use crate::service::cfg::SharedCfg;
 
-pub(crate) type HttpHandler<St, Err: ErrorRenderer> =
-    BoxService<St, WebRequest<Err>, WebResponse, Err::Container>;
-pub(crate) type HttpService<St, Err: ErrorRenderer> =
-    BoxServiceFactory<St, WebRequest<Err>, WebResponse, Err::Container, crate::SharedCfg, ()>;
+pub(crate) type HttpHandler<St: AppState> = BoxService<St, WebRequest, WebResponse, St::Error>;
+pub(crate) type HttpService<St: AppState> =
+    BoxServiceFactory<St, WebRequest, WebResponse, St::Error, SharedCfg, ()>;
 
 pub mod dev {
     //! The `ntex::web` prelude for library developers
@@ -140,6 +142,8 @@ pub mod dev {
     pub use crate::web::rmap::ResourceMap;
     pub use crate::web::route::IntoRoutes;
     pub use crate::web::service::{WebServiceAdapter, WebServiceConfig, WebServiceFactory};
+
+    pub type DefaultState = ();
 
     use crate::web::Handler;
 
@@ -154,21 +158,21 @@ pub mod dev {
 
     // #[doc(hidden)]
     // #[inline(always)]
-    // pub fn __assert_extractor<Err, T>()
+    // pub fn __assert_extractor<St, T>()
     // where
-    //     T: super::FromRequest<Err>,
-    //     Err: super::ErrorRenderer,
-    //     <T as super::FromRequest<Err>>::Error: Into<Err::Container>,
+    //     T: super::FromRequest<St>,
+    //     St: super::AppState,
+    //     <T as super::FromRequest<St>>::Error: Into<St::Error>,
     // {
     // }
 
     #[doc(hidden)]
     #[inline]
-    pub fn __assert_handler<Err, Fun, Res>(f: Fun) -> impl Handler<(), Err, Output = Res>
+    pub fn __assert_handler<St, Fun, Res>(f: Fun) -> impl Handler<St, (), Output = Res>
     where
-        Err: super::ErrorRenderer,
+        St: super::AppState,
         Fun: AsyncFn() -> Res + 'static,
-        Res: super::Responder<Err>,
+        Res: super::Responder<St>,
     {
         f
     }
@@ -176,14 +180,14 @@ pub mod dev {
     macro_rules! assert_handler ({ $name:ident, $($T:ident),+} => {
         #[doc(hidden)]
         #[inline(always)]
-        pub fn $name<Err, Fun, Res, $($T,)+>(
+        pub fn $name<St, Fun, Res, $($T,)+>(
             f: Fun,
-        ) -> impl Handler<($($T,)+), Err, Output = Res>
+        ) -> impl Handler<St, ($($T,)+), Output = Res>
         where
-            Err: $crate::web::ErrorRenderer,
+            St: $crate::web::AppState,
             Fun: AsyncFn($($T,)+) -> Res + 'static,
-            Res: super::Responder<Err> + 'static,
-        $($T: $crate::web::FromRequest<Err>),+,
+            Res: super::Responder<St> + 'static,
+           $($T: $crate::web::FromRequest<St>),+,
         {
             f
         }
