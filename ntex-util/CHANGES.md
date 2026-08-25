@@ -1,5 +1,9 @@
 # Changes
 
+## [4.0.0-beta.1] - 2026-08-25
+
+* Re-export HashMap and HashSet
+
 ## [4.0.0-beta.0] - 2026-08-24
 
 * Migrate to ntex-service 5
