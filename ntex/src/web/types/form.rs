@@ -143,7 +143,7 @@ where
 /// Form extractor configuration
 ///
 /// ```rust
-/// use ntex::web::{self, App, Error, FromRequest};
+/// use ntex::web::{self, App, WebError, FromRequest};
 ///
 /// #[derive(serde::Deserialize)]
 /// struct FormData {
@@ -152,7 +152,7 @@ where
 ///
 /// /// Extract form data using serde.
 /// /// Custom configuration is used for this handler, max payload size is 4k
-/// async fn index(form: web::types::Form<FormData>) -> Result<String, Error> {
+/// async fn index(form: web::types::Form<FormData>) -> Result<String, WebError> {
 ///     Ok(format!("Welcome {}!", form.username))
 /// }
 ///

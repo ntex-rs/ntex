@@ -31,7 +31,7 @@ pub trait FromRequest<St>: Sized {
 /// }
 ///
 /// impl<St> FromRequest<St> for Thing {
-///     type Error = error::Error;
+///     type Error = error::WebError;
 ///
 ///     async fn from_request(req: &HttpRequest, payload: &mut http::Payload) -> Result<Self, Self::Error> {
 ///         if rand::random() {
@@ -98,7 +98,7 @@ where
 /// }
 ///
 /// impl<Err> FromRequest<Err> for Thing {
-///     type Error = error::Error;
+///     type Error = error::WebError;
 ///
 ///     async fn from_request(req: &HttpRequest, payload: &mut http::Payload) -> Result<Thing, Self::Error> {
 ///         if rand::random() {
@@ -110,7 +110,7 @@ where
 /// }
 ///
 /// /// extract `Thing` from request
-/// async fn index(supplied_thing: Result<Thing, error::Error>) -> String {
+/// async fn index(supplied_thing: Result<Thing, error::WebError>) -> String {
 ///     match supplied_thing {
 ///         Ok(thing) => format!("Got thing: {:?}", thing),
 ///         Err(e) => format!("Error extracting thing: {}", e)

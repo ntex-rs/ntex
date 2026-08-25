@@ -44,7 +44,7 @@ use crate::{http::Payload, router::PathDeserializer};
 /// }
 ///
 /// /// extract `Info` from a path using serde
-/// async fn index(info: web::types::Path<Info>) -> Result<String, web::Error> {
+/// async fn index(info: web::types::Path<Info>) -> Result<String, web::WebError> {
 ///     Ok(format!("Welcome {}!", info.username))
 /// }
 ///
@@ -138,7 +138,7 @@ impl<T: fmt::Display> fmt::Display for Path<T> {
 /// }
 ///
 /// /// extract `Info` from a path using serde
-/// async fn index(info: web::types::Path<Info>) -> Result<String, web::Error> {
+/// async fn index(info: web::types::Path<Info>) -> Result<String, web::WebError> {
 ///     Ok(format!("Welcome {}!", info.username))
 /// }
 ///

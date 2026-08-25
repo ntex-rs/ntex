@@ -251,9 +251,9 @@ where
 /// Create service adapter for a specific path.
 ///
 /// ```rust
-/// use ntex::web::{self, guard, App, HttpResponse, Error};
+/// use ntex::web::{self, guard, App, HttpResponse, WebError};
 ///
-/// async fn my_service(req: web::WebRequest) -> Result<web::WebResponse, Error> {
+/// async fn my_service(req: web::WebRequest) -> Result<web::WebResponse, WebError> {
 ///     Ok(req.into_response(HttpResponse::Ok().finish()))
 /// }
 ///

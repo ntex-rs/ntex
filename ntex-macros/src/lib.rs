@@ -20,7 +20,7 @@
 //!
 //! - `"path"` - Raw literal string with path for which to register handle. Mandatory.
 //! - `guard = "function_name"` - Registers function as guard using `ntex::web::guard::fn_guard`
-//! - `error = "ErrorRenderer"` - Register handler for specified error renderer
+//! - `state = "AppState"` - Register handler for specified application state
 //!
 //! ## Notes
 //!
@@ -30,11 +30,10 @@
 //! ## Example:
 //!
 //! ```rust
-//! use ntex::web::{get, Error, HttpResponse};
-//! use futures::{future, Future};
+//! use ntex::web::{get, HttpResponse, WebError};
 //!
 //! #[get("/test")]
-//! async fn async_test() -> Result<HttpResponse, Error> {
+//! async fn async_test() -> Result<HttpResponse, WebError> {
 //!     Ok(HttpResponse::Ok().finish())
 //! }
 //! ```

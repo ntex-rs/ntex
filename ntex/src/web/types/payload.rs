@@ -80,7 +80,7 @@ impl Stream for Payload {
 /// ```rust
 /// use std::future::Future;
 /// use ntex::util::{BytesMut, Stream};
-/// use ntex::web::{self, error, App, Error, HttpResponse};
+/// use ntex::web::{self, error, App, HttpResponse};
 ///
 /// /// extract binary data from request
 /// async fn index(mut body: web::types::Payload) -> Result<HttpResponse, error::PayloadError>
