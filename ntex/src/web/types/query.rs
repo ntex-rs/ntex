@@ -130,7 +130,7 @@ where
     type Error = QueryPayloadError;
 
     #[inline]
-    async fn from_request(req: &HttpRequest, _: &mut Payload) -> Result<Self, Self::Error> {
+    async fn from_request(_: &St, req: &HttpRequest, _: &mut Payload) -> Result<Self, Self::Error> {
         serde_urlencoded::from_str::<T>(req.query_string()).map_or_else(
             move |e| {
                 let e = QueryPayloadError::Deserialize(e);
@@ -177,13 +177,15 @@ mod tests {
     async fn test_request_extract() {
         let req = TestRequest::with_uri("/name/user1/").to_srv_request();
         let (req, mut pl) = req.into_parts();
-        let res = from_request::<Query<Id>>(&req, &mut pl).await;
+        let res = from_request::<_, Query<Id>>(&(), &req, &mut pl).await;
         assert!(res.is_err());
 
         let req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
         let (req, mut pl) = req.into_parts();
 
-        let mut s = from_request::<Query<Id>>(&req, &mut pl).await.unwrap();
+        let mut s = from_request::<_, Query<Id>>(&(), &req, &mut pl)
+            .await
+            .unwrap();
         assert_eq!(s.id, "test");
         assert_eq!(format!("{s}, {s:?}"), "Id(test), Id { id: \"test\" }");
 

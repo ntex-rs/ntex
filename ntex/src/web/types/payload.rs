@@ -106,6 +106,7 @@ impl<St: AppState> FromRequest<St> for Payload {
 
     #[inline]
     async fn from_request(
+        _: &St,
         _: &HttpRequest,
         payload: &mut crate::http::Payload,
     ) -> Result<Payload, Self::Error> {
@@ -141,6 +142,7 @@ impl<St: AppState> FromRequest<St> for Bytes {
     type Error = PayloadError;
 
     async fn from_request(
+        _: &St,
         req: &HttpRequest,
         payload: &mut crate::http::Payload,
     ) -> Result<Bytes, Self::Error> {
@@ -192,6 +194,7 @@ impl<St: AppState> FromRequest<St> for String {
     type Error = PayloadError;
 
     async fn from_request(
+        _: &St,
         req: &HttpRequest,
         payload: &mut crate::http::Payload,
     ) -> Result<String, Self::Error> {
@@ -426,7 +429,9 @@ mod tests {
             .set_payload(Bytes::from_static(b"hello=world"))
             .to_http_parts();
 
-        let mut s = from_request::<Payload>(&req, &mut pl).await.unwrap();
+        let mut s = from_request::<_, Payload>(&(), &req, &mut pl)
+            .await
+            .unwrap();
         let b = stream_recv(&mut s).await.unwrap().unwrap();
         assert_eq!(b, Bytes::from_static(b"hello=world"));
     }
@@ -437,7 +442,9 @@ mod tests {
             .set_payload(Bytes::from_static(b"hello=world"))
             .to_http_parts();
 
-        let mut s = from_request::<Payload>(&req, &mut pl).await.unwrap();
+        let mut s = from_request::<_, Payload>(&(), &req, &mut pl)
+            .await
+            .unwrap();
         let b = s.recv().await.unwrap().unwrap();
         assert_eq!(b, Bytes::from_static(b"hello=world"));
     }
@@ -448,14 +455,14 @@ mod tests {
             .set_payload(Bytes::from_static(b"hello=world"))
             .to_http_parts();
 
-        let s = from_request::<Bytes>(&req, &mut pl).await.unwrap();
+        let s = from_request::<_, Bytes>(&(), &req, &mut pl).await.unwrap();
         assert_eq!(s, Bytes::from_static(b"hello=world"));
 
         let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
             .set_payload(Bytes::from_static(b"hello=world"))
             .state(PayloadConfig::default().mimetype(mime::APPLICATION_JSON))
             .to_http_parts();
-        assert!(from_request::<Bytes>(&req, &mut pl).await.is_err());
+        assert!(from_request::<_, Bytes>(&(), &req, &mut pl).await.is_err());
     }
 
     #[crate::rt_test]
@@ -464,21 +471,21 @@ mod tests {
             .set_payload(Bytes::from_static(b"hello=world"))
             .to_http_parts();
 
-        let s = from_request::<String>(&req, &mut pl).await.unwrap();
+        let s = from_request::<_, String>(&(), &req, &mut pl).await.unwrap();
         assert_eq!(s, "hello=world");
 
         let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
             .header(header::CONTENT_TYPE, "text/plain; charset=cp1251")
             .set_payload(Bytes::from_static(b"hello=world"))
             .to_http_parts();
-        let s = from_request::<String>(&req, &mut pl).await.unwrap();
+        let s = from_request::<_, String>(&(), &req, &mut pl).await.unwrap();
         assert_eq!(s, "hello=world");
 
         let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
             .set_payload(Bytes::from_static(b"hello=world"))
             .state(PayloadConfig::default().mimetype(mime::APPLICATION_JSON))
             .to_http_parts();
-        assert!(from_request::<String>(&req, &mut pl).await.is_err());
+        assert!(from_request::<_, String>(&(), &req, &mut pl).await.is_err());
     }
 
     #[crate::rt_test]

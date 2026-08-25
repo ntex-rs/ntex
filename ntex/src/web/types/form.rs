@@ -101,7 +101,11 @@ where
 {
     type Error = UrlencodedError;
 
-    async fn from_request(req: &HttpRequest, payload: &mut Payload) -> Result<Self, Self::Error> {
+    async fn from_request(
+        _: &St,
+        req: &HttpRequest,
+        payload: &mut Payload,
+    ) -> Result<Self, Self::Error> {
         let limit = req.app_state::<FormConfig>().map_or(16384, |c| c.limit);
 
         match UrlEncoded::new(req, payload).limit(limit).await {
@@ -378,7 +382,9 @@ mod tests {
                 .set_payload(Bytes::from_static(b"hello=world&counter=123"))
                 .to_http_parts();
 
-        let Form(s) = from_request::<Form<Info>>(&req, &mut pl).await.unwrap();
+        let Form(s) = from_request::<_, Form<Info>>(&(), &req, &mut pl)
+            .await
+            .unwrap();
         assert_eq!(
             s,
             Info {
@@ -392,7 +398,7 @@ mod tests {
                 .header(CONTENT_LENGTH, "xx")
                 .set_payload(Bytes::from_static(b"hello=world&counter=123"))
                 .to_http_parts();
-        let res = from_request::<Form<Info>>(&req, &mut pl).await;
+        let res = from_request::<_, Form<Info>>(&(), &req, &mut pl).await;
         assert!(eq(&res.err().unwrap(), &UrlencodedError::UnknownLength));
     }
 

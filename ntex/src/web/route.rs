@@ -104,8 +104,12 @@ impl<St: AppState> Service<St, WebRequest> for RouteService<St> {
     type Res = WebResponse;
     type Error = St::Error;
 
-    async fn call(&self, req: WebRequest, _: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
-        self.handler.call(req).await
+    async fn call(
+        &self,
+        req: WebRequest,
+        ctx: Ctx<'_, Self, St>,
+    ) -> Result<Self::Res, Self::Error> {
+        self.handler.call(ctx.st(), req).await
     }
 }
 

@@ -771,6 +771,7 @@ async fn test_custom_error() {
     #[error("JsonContainer({0})")]
     struct JsonContainer(Box<dyn WebResponseError>);
 
+    #[derive(Copy, Clone, Default)]
     struct TestAppState;
 
     impl AppState for TestAppState {

@@ -258,7 +258,7 @@ impl<St: AppState> FromRequest<St> for HttpRequest {
     type Error = St::Error;
 
     #[inline]
-    async fn from_request(req: &HttpRequest, _: &mut Payload) -> Result<Self, Self::Error> {
+    async fn from_request(_: &St, req: &HttpRequest, _: &mut Payload) -> Result<Self, Self::Error> {
         Ok(req.clone())
     }
 }
