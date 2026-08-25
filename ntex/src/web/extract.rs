@@ -1,13 +1,12 @@
 //! Request extractors
-use super::error::ErrorRenderer;
-use super::httprequest::HttpRequest;
+use super::{AppState, HttpRequest};
 use crate::http::Payload;
 
 #[allow(async_fn_in_trait)]
 /// Trait implemented by types that can be extracted from request.
 ///
 /// Types that implement this trait can be used with `Route` handlers.
-pub trait FromRequest<Err>: Sized {
+pub trait FromRequest<St>: Sized {
     /// The associated error which can be returned.
     type Error;
 
@@ -23,7 +22,7 @@ pub trait FromRequest<Err>: Sized {
 ///
 /// ```rust
 /// use ntex::http;
-/// use ntex::web::{self, error, App, HttpRequest, FromRequest, DefaultError};
+/// use ntex::web::{self, error, App, HttpRequest, FromRequest};
 /// use rand;
 ///
 /// #[derive(Debug, serde::Deserialize)]
@@ -31,7 +30,7 @@ pub trait FromRequest<Err>: Sized {
 ///     name: String
 /// }
 ///
-/// impl<Err> FromRequest<Err> for Thing {
+/// impl<St> FromRequest<St> for Thing {
 ///     type Error = error::Error;
 ///
 ///     async fn from_request(req: &HttpRequest, payload: &mut http::Payload) -> Result<Self, Self::Error> {
@@ -59,13 +58,13 @@ pub trait FromRequest<Err>: Sized {
 ///     );
 /// }
 /// ```
-impl<T, Err> FromRequest<Err> for Option<T>
+impl<T, St> FromRequest<St> for Option<T>
 where
-    T: FromRequest<Err>,
-    Err: ErrorRenderer,
-    <T as FromRequest<Err>>::Error: Into<Err::Container>,
+    T: FromRequest<St>,
+    St: AppState,
+    <T as FromRequest<St>>::Error: Into<St::Error>,
 {
-    type Error = Err::Container;
+    type Error = St::Error;
 
     #[inline]
     async fn from_request(
@@ -124,10 +123,10 @@ where
 ///     );
 /// }
 /// ```
-impl<T, E> FromRequest<E> for Result<T, T::Error>
+impl<T, St> FromRequest<St> for Result<T, T::Error>
 where
-    T: FromRequest<E>,
-    E: ErrorRenderer,
+    T: FromRequest<St>,
+    St: AppState,
 {
     type Error = T::Error;
 
@@ -141,11 +140,11 @@ where
 }
 
 #[doc(hidden)]
-impl<E: ErrorRenderer> FromRequest<E> for () {
-    type Error = E::Container;
+impl<St: AppState> FromRequest<St> for () {
+    type Error = St::Error;
 
     #[inline]
-    async fn from_request(_: &HttpRequest, _: &mut Payload) -> Result<(), E::Container> {
+    async fn from_request(_: &HttpRequest, _: &mut Payload) -> Result<(), Self::Error> {
         Ok(())
     }
 }
@@ -153,14 +152,15 @@ impl<E: ErrorRenderer> FromRequest<E> for () {
 macro_rules! tuple_from_req {
     ($(#[$meta:meta])* $(($T:ident, $t:ident)),*) => {
         $(#[$meta])*
-        impl<$($T,)+ Err: ErrorRenderer> FromRequest<Err> for ($($T,)+)
+        impl<St, $($T,)+> FromRequest<St> for ($($T,)+)
         where
-            $($T: FromRequest<Err> + 'static,)+
-            $(<$T as $crate::web::FromRequest<Err>>::Error: Into<Err::Container>),+
+            St: AppState,
+            $($T: FromRequest<St> + 'static,)+
+            $(<$T as $crate::web::FromRequest<St>>::Error: Into<St::Error>),+
         {
-            type Error = Err::Container;
+            type Error = St::Error;
 
-            async fn from_request(req: &HttpRequest, payload: &mut Payload) -> Result<($($T,)+), Err::Container> {
+            async fn from_request(req: &HttpRequest, payload: &mut Payload) -> Result<($($T,)+), Self::Error> {
                 Ok((
                     $($T::from_request(req, payload).await.map_err(|e| e.into())?,)+
                 ))

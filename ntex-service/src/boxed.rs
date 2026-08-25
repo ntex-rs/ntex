@@ -195,6 +195,16 @@ where
     }
 }
 
+impl<St, Req, Res, Err, Cfg, InitError> Clone
+    for BoxServiceFactory<St, Req, Res, Err, Cfg, InitError>
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
 impl<St, Req, Res, Err, Cfg, InitError> fmt::Debug
     for BoxServiceFactory<St, Req, Res, Err, Cfg, InitError>
 {

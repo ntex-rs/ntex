@@ -199,7 +199,7 @@ async fn test_upgrade_handler_with_await() {
                     &req,
                     None,
                     fn_factory_with_config(async |_: &ws::WsSink| {
-                        Ok::<_, web::Error>(svc(service))
+                        Ok::<_, web::WebError>(svc(service))
                     }),
                 )
                 .await

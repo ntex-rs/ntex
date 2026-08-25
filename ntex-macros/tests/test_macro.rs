@@ -1,7 +1,7 @@
 use futures::{Future, future};
 use ntex::http::{Method, StatusCode};
 use ntex::rt::System;
-use ntex::web::{App, Error, HttpResponse, HttpResponseBuilder, test, types::Path};
+use ntex::web::{App, HttpResponse, HttpResponseBuilder, WebError, test, types::Path};
 use ntex_macros::{
     web_connect, web_delete, web_get, web_head, web_options, web_patch, web_post, web_put,
     web_trace,
@@ -54,7 +54,7 @@ async fn trace_test() -> HttpResponse {
 }
 
 #[web_get("/test")]
-fn auto_async() -> impl Future<Output = Result<HttpResponse, Error>> {
+fn auto_async() -> impl Future<Output = Result<HttpResponse, WebError>> {
     future::ok(HttpResponse::Ok().finish())
 }
 

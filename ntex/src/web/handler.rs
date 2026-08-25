@@ -2,23 +2,23 @@ use std::{fmt, future::Future, marker::PhantomData};
 
 use crate::util::BoxFuture;
 
-use super::{ErrorRenderer, FromRequest, Responder, WebRequest, WebResponse};
+use super::{AppState, FromRequest, Responder, WebRequest, WebResponse};
 
 /// Async fn handler
-pub trait Handler<T, Err>
+pub trait Handler<St, T>
 where
-    Err: ErrorRenderer,
+    St: AppState,
 {
-    type Output: Responder<Err>;
+    type Output: Responder<St>;
 
     fn call(&self, param: T) -> impl Future<Output = Self::Output>;
 }
 
-impl<F, R, Err> Handler<(), Err> for F
+impl<St, F, R> Handler<St, ()> for F
 where
     F: AsyncFn() -> R,
-    R: Responder<Err>,
-    Err: ErrorRenderer,
+    R: Responder<St>,
+    St: AppState,
 {
     type Output = R;
 
@@ -28,16 +28,16 @@ where
     }
 }
 
-pub(super) trait HandlerFn<Err: ErrorRenderer>: fmt::Debug {
-    fn call(&self, _: WebRequest<Err>) -> BoxFuture<'_, Result<WebResponse, Err::Container>>;
+pub(super) trait HandlerFn<St: AppState>: fmt::Debug {
+    fn call(&self, _: WebRequest) -> BoxFuture<'_, Result<WebResponse, St::Error>>;
 }
 
-pub(super) struct HandlerWrapper<F, T, Err> {
+pub(super) struct HandlerWrapper<St, F, T> {
     hnd: F,
-    _t: PhantomData<(T, Err)>,
+    _t: PhantomData<(St, T)>,
 }
 
-impl<F, T, Err> HandlerWrapper<F, T, Err> {
+impl<St, F, T> HandlerWrapper<St, F, T> {
     pub(super) fn new(hnd: F) -> Self {
         HandlerWrapper {
             hnd,
@@ -46,25 +46,25 @@ impl<F, T, Err> HandlerWrapper<F, T, Err> {
     }
 }
 
-impl<F, T, Err> fmt::Debug for HandlerWrapper<F, T, Err> {
+impl<St, F, T> fmt::Debug for HandlerWrapper<St, F, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Handler({:?})", std::any::type_name::<F>())
     }
 }
 
-impl<F, T, Err> HandlerFn<Err> for HandlerWrapper<F, T, Err>
+impl<St, F, T> HandlerFn<St> for HandlerWrapper<St, F, T>
 where
-    F: Handler<T, Err> + 'static,
-    T: FromRequest<Err> + 'static,
-    T::Error: Into<Err::Container>,
-    Err: ErrorRenderer,
+    F: Handler<St, T> + 'static,
+    T: FromRequest<St> + 'static,
+    T::Error: Into<St::Error>,
+    St: AppState,
 {
-    fn call(&self, req: WebRequest<Err>) -> BoxFuture<'_, Result<WebResponse, Err::Container>> {
+    fn call(&self, req: WebRequest) -> BoxFuture<'_, Result<WebResponse, St::Error>> {
         Box::pin(async move {
             let (req, mut payload) = req.into_parts();
             let param = match T::from_request(&req, &mut payload).await {
                 Ok(param) => param,
-                Err(e) => return Ok(WebResponse::from_err::<Err, _>(e, req)),
+                Err(e) => return Ok(WebResponse::from_err::<St, _>(e, req)),
             };
 
             let result = self.hnd.call(param).await;
@@ -78,10 +78,11 @@ where
 macro_rules! factory_tuple (
     {$(#[$meta:meta])* $(($T:ident, $t:ident)),+} => {
         $(#[$meta])*
-        impl<Func, $($T,)+ Res, Err> Handler<($($T,)+), Err> for Func
-        where Func: AsyncFn($($T,)+) -> Res,
-            Res: Responder<Err>,
-            Err: ErrorRenderer,
+        impl<St, Func, $($T,)+ Res> Handler<St, ($($T,)+)> for Func
+        where
+            St: AppState,
+            Func: AsyncFn($($T,)+) -> Res,
+            Res: Responder<St>,
         {
             type Output = Res;
 

@@ -1,17 +1,17 @@
 use std::marker::PhantomData;
 
 use crate::service::{Ctx, Middleware, Service, ServiceFactory, cfg::SharedCfg};
-use crate::web::{ErrorRenderer, WebRequest, WebResponse};
+use crate::web::{AppState, WebRequest, WebResponse};
 
 /// Stack of middlewares.
 #[derive(Debug, Clone)]
-pub struct WebStack<St, Inner, Outer, Err> {
+pub struct WebStack<St, Inner, Outer> {
     inner: Inner,
     outer: Outer,
-    err: PhantomData<(St, Err)>,
+    err: PhantomData<St>,
 }
 
-impl<St, Inner, Outer, Err> WebStack<St, Inner, Outer, Err> {
+impl<St, Inner, Outer> WebStack<St, Inner, Outer> {
     pub fn new(inner: Inner, outer: Outer) -> Self {
         WebStack {
             inner,
@@ -21,13 +21,14 @@ impl<St, Inner, Outer, Err> WebStack<St, Inner, Outer, Err> {
     }
 }
 
-impl<S, St, Inner, Outer, Err> Middleware<S, SharedCfg> for WebStack<St, Inner, Outer, Err>
+impl<S, St, Inner, Outer> Middleware<S, SharedCfg> for WebStack<St, Inner, Outer>
 where
+    St: AppState,
     Inner: Middleware<S, SharedCfg>,
     Outer: Middleware<Inner::Service, SharedCfg>,
-    Outer::Service: Service<St, WebRequest<Err>, Res = WebResponse>,
+    Outer::Service: Service<St, WebRequest, Res = WebResponse>,
 {
-    type Service = WebMiddleware<Outer::Service, St, Err>;
+    type Service = WebMiddleware<Outer::Service, St>;
 
     fn create(&self, service: S, cfg: &SharedCfg) -> Self::Service {
         WebMiddleware {
@@ -38,12 +39,12 @@ where
 }
 
 #[derive(Debug)]
-pub struct WebMiddleware<S, St, Err> {
+pub struct WebMiddleware<S, St> {
     svc: S,
-    err: PhantomData<(St, Err)>,
+    err: PhantomData<St>,
 }
 
-impl<S, St, Err> Clone for WebMiddleware<S, St, Err>
+impl<S, St> Clone for WebMiddleware<S, St>
 where
     S: Clone,
 {
@@ -55,19 +56,19 @@ where
     }
 }
 
-impl<S, St, Err> Service<St, WebRequest<Err>> for WebMiddleware<S, St, Err>
+impl<S, St> Service<St, WebRequest> for WebMiddleware<S, St>
 where
-    S: Service<St, WebRequest<Err>, Res = WebResponse>,
-    Err: ErrorRenderer,
-    Err::Container: From<S::Error>,
+    S: Service<St, WebRequest, Res = WebResponse>,
+    St: AppState,
+    St::Error: From<S::Error>,
 {
     type Res = WebResponse;
-    type Error = Err::Container;
+    type Error = St::Error;
 
     #[inline]
     async fn call(
         &self,
-        req: WebRequest<Err>,
+        req: WebRequest,
         ctx: Ctx<'_, Self, St>,
     ) -> Result<Self::Res, Self::Error> {
         ctx.call(&self.svc, req).await.map_err(Into::into)
@@ -79,19 +80,19 @@ where
 
 #[derive(derive_more::Debug)]
 #[debug("Filter")]
-pub struct Filter<St, Err>(PhantomData<(St, Err)>);
+pub struct Filter<St>(PhantomData<St>);
 
-impl<St, Err: ErrorRenderer> Filter<St, Err> {
+impl<St> Filter<St> {
     pub(super) fn new() -> Self {
         Filter(PhantomData)
     }
 }
 
-impl<St, Err: ErrorRenderer, Cfg> ServiceFactory<St, WebRequest<Err>, Cfg> for Filter<St, Err> {
-    type Res = WebRequest<Err>;
-    type Error = Err::Container;
+impl<St: AppState, Cfg> ServiceFactory<St, WebRequest, Cfg> for Filter<St> {
+    type Res = WebRequest;
+    type Error = St::Error;
 
-    type Service = Filter<St, Err>;
+    type Service = Filter<St>;
     type InitError = ();
 
     async fn create(&self, _: &Cfg) -> Result<Self::Service, Self::InitError> {
@@ -99,15 +100,11 @@ impl<St, Err: ErrorRenderer, Cfg> ServiceFactory<St, WebRequest<Err>, Cfg> for F
     }
 }
 
-impl<St, Err: ErrorRenderer> Service<St, WebRequest<Err>> for Filter<St, Err> {
-    type Res = WebRequest<Err>;
-    type Error = Err::Container;
+impl<St: AppState> Service<St, WebRequest> for Filter<St> {
+    type Res = WebRequest;
+    type Error = St::Error;
 
-    async fn call(
-        &self,
-        req: WebRequest<Err>,
-        _: Ctx<'_, Self, St>,
-    ) -> Result<WebRequest<Err>, Self::Error> {
+    async fn call(&self, req: WebRequest, _: Ctx<'_, Self, St>) -> Result<WebRequest, St::Error> {
         Ok(req)
     }
 }

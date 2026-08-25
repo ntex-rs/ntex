@@ -8,70 +8,68 @@ use crate::service::{boxed, dev::ServiceChainFactory};
 use crate::util::HashMap;
 
 use super::config::WebAppConfig;
-use super::error::{AppInitError, ErrorRenderer};
+use super::error::AppInitError;
 use super::guard::Guard;
 use super::rmap::ResourceMap;
 use super::service::{AppServiceFactory, WebServiceConfig};
-use super::{HttpHandler, HttpService};
-use super::{httprequest::HttpRequest, request::WebRequest, response::WebResponse};
+use super::{AppState, HttpHandler, HttpRequest, HttpService, WebRequest, WebResponse};
 
 type Guards = Vec<Box<dyn Guard>>;
 
-/// Service factory to convert `Request` to a `WebRequest<S>`.
+/// Service factory to convert `Request` to a `WebRequest`.
 /// It also executes state factories.
 #[derive(derive_more::Debug)]
 #[debug("AppFactory")]
-pub struct AppFactory<St, M, F, Err: ErrorRenderer>
+pub struct AppFactory<St, M, F>
 where
+    St: AppState,
     F: ServiceFactory<
             St,
-            WebRequest<Err>,
+            WebRequest,
             SharedCfg,
-            Res = WebRequest<Err>,
-            Error = Err::Container,
+            Res = WebRequest,
+            Error = St::Error,
             InitError = (),
         >,
-    Err: ErrorRenderer,
 {
     middleware: M,
-    filter: ServiceChainFactory<F, St, WebRequest<Err>, SharedCfg>,
+    filter: ServiceChainFactory<F, St, WebRequest, SharedCfg>,
     rmap: Rc<ResourceMap>,
-    router: Rc<Router<HttpService<St, Err>, Guards>>,
-    default: Rc<HttpService<St, Err>>,
+    router: Rc<Router<HttpService<St>, Guards>>,
+    default: HttpService<St>,
 }
 
-impl<St, M, F, Err> AppFactory<St, M, F, Err>
+impl<St, M, F> AppFactory<St, M, F>
 where
-    St: 'static,
-    M: Middleware<AppRouter<St, F::Service, Err>, SharedCfg> + 'static,
-    M::Service: Service<St, WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    St: AppState,
+    M: Middleware<AppRouter<St, F::Service>, SharedCfg> + 'static,
+    M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
     F: ServiceFactory<
             St,
-            WebRequest<Err>,
+            WebRequest,
             SharedCfg,
-            Res = WebRequest<Err>,
-            Error = Err::Container,
+            Res = WebRequest,
+            Error = St::Error,
             InitError = (),
         >,
-    Err: ErrorRenderer,
 {
     pub(super) fn new(
         middleware: M,
-        filter: ServiceChainFactory<F, St, WebRequest<Err>, SharedCfg>,
-        services: Vec<Box<dyn AppServiceFactory<St, Err>>>,
-        default: Option<HttpService<St, Err>>,
+        filter: ServiceChainFactory<F, St, WebRequest, SharedCfg>,
+        services: Vec<Box<dyn AppServiceFactory<St>>>,
+        default: Option<HttpService<St>>,
         external: Vec<ResourceDef>,
         case_insensitive: bool,
     ) -> Self {
         // Default service
-        let default = Rc::new(default.unwrap_or_else(|| {
+        let default = default.unwrap_or_else(|| {
             boxed::factory(
-                factory_with_st(async move |req: WebRequest<Err>| {
+                factory_with_st(async move |req: WebRequest| {
                     Ok(req.into_response(Response::NotFound().finish()))
                 })
                 .map_init_err(|_| unreachable!()),
             )
-        }));
+        });
 
         // Web app config
         let mut config = WebServiceConfig::new(default);
@@ -120,25 +118,24 @@ where
     }
 }
 
-impl<St, M, F, Err> ServiceFactory<St, Request, SharedCfg> for AppFactory<St, M, F, Err>
+impl<St, M, F> ServiceFactory<St, Request, SharedCfg> for AppFactory<St, M, F>
 where
-    St: 'static,
-    M: Middleware<AppRouter<St, F::Service, Err>, SharedCfg> + 'static,
-    M::Service: Service<St, WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
+    St: AppState,
+    M: Middleware<AppRouter<St, F::Service>, SharedCfg> + 'static,
+    M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
     F: ServiceFactory<
             St,
-            WebRequest<Err>,
+            WebRequest,
             SharedCfg,
-            Res = WebRequest<Err>,
-            Error = Err::Container,
+            Res = WebRequest,
+            Error = St::Error,
             InitError = (),
         >,
-    Err: ErrorRenderer,
 {
     type Res = WebResponse;
-    type Error = Err::Container;
+    type Error = St::Error;
 
-    type Service = AppService<M::Service, St, Err>;
+    type Service = AppService<M::Service, St>;
     type InitError = AppInitError;
 
     async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {
@@ -169,24 +166,24 @@ where
     }
 }
 
-/// Service to convert `Request` to a `WebRequest<Err>`
+/// Service to convert `Request` to a `WebRequest`
 #[derive(derive_more::Debug)]
 #[debug("AppService")]
-pub struct AppService<S, St, Err>
+pub struct AppService<S, St>
 where
-    S: Service<St, WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
-    Err: ErrorRenderer,
+    S: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
+    St: AppState,
 {
     service: S,
     rmap: Rc<ResourceMap>,
     config: Cfg<WebAppConfig>,
-    _t: marker::PhantomData<(St, Err)>,
+    _t: marker::PhantomData<St>,
 }
 
-impl<S, St, Err> Service<St, Request> for AppService<S, St, Err>
+impl<S, St> Service<St, Request> for AppService<S, St>
 where
-    S: Service<St, WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
-    Err: ErrorRenderer,
+    S: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
+    St: AppState,
 {
     type Res = WebResponse;
     type Error = S::Error;
@@ -220,23 +217,22 @@ where
 /// Web app service.
 #[derive(derive_more::Debug)]
 #[debug("HttpRouter")]
-pub struct AppRouter<St, F, Err: ErrorRenderer> {
+pub struct AppRouter<St: AppState, F> {
     pub(super) cfg: SharedCfg,
     pub(super) filter: F,
-    pub(super) router: Rc<Router<HttpService<St, Err>, Guards>>,
-    pub(super) default: Rc<HttpService<St, Err>>,
-    pub(super) cache: RefCell<HashMap<ResourceId, HttpHandler<St, Err>>>,
-    pub(super) cache_default: RefCell<Option<HttpHandler<St, Err>>>,
+    pub(super) router: Rc<Router<HttpService<St>, Guards>>,
+    pub(super) default: HttpService<St>,
+    pub(super) cache: RefCell<HashMap<ResourceId, HttpHandler<St>>>,
+    pub(super) cache_default: RefCell<Option<HttpHandler<St>>>,
 }
 
-impl<St, F, Err> Service<St, WebRequest<Err>> for AppRouter<St, F, Err>
+impl<St, F> Service<St, WebRequest> for AppRouter<St, F>
 where
-    St: 'static,
-    F: Service<St, WebRequest<Err>, Res = WebRequest<Err>, Error = Err::Container>,
-    Err: ErrorRenderer,
+    St: AppState,
+    F: Service<St, WebRequest, Res = WebRequest, Error = St::Error>,
 {
     type Res = WebResponse;
-    type Error = Err::Container;
+    type Error = St::Error;
 
     #[inline]
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
@@ -245,7 +241,7 @@ where
 
     async fn call(
         &self,
-        req: WebRequest<Err>,
+        req: WebRequest,
         ctx: Ctx<'_, Self, St>,
     ) -> Result<Self::Res, Self::Error> {
         let mut req = ctx.call(&self.filter, req).await?;

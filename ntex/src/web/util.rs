@@ -9,7 +9,6 @@ use crate::http::header::ContentEncoding;
 use crate::http::{Method, Request, Response};
 use crate::service::{IntoServiceFactory, ServiceFactory, cfg::SharedCfg, state::DefaultState};
 
-use super::error::ErrorRenderer;
 use super::extract::FromRequest;
 use super::handler::Handler;
 use super::resource::Resource;
@@ -17,7 +16,7 @@ use super::route::Route;
 use super::scope::Scope;
 use super::server::HttpServer;
 use super::service::WebServiceAdapter;
-use super::{HttpResponse, HttpResponseBuilder};
+use super::{AppState, HttpResponse, HttpResponseBuilder};
 
 /// Create resource for a specific path.
 ///
@@ -48,7 +47,7 @@ use super::{HttpResponse, HttpResponseBuilder};
 ///         .route(web::head().to(async || { web::HttpResponse::MethodNotAllowed() }))
 /// );
 /// ```
-pub fn resource<St, T: IntoPattern, Err: ErrorRenderer>(path: T) -> Resource<St, Err> {
+pub fn resource<St: AppState, T: IntoPattern>(path: T) -> Resource<St> {
     Resource::new(path)
 }
 
@@ -73,12 +72,12 @@ pub fn resource<St, T: IntoPattern, Err: ErrorRenderer>(path: T) -> Resource<St,
 ///  * `/{project_id}/path2`
 ///  * `/{project_id}/path3`
 ///
-pub fn scope<St, T: IntoPattern, Err: ErrorRenderer>(path: T) -> Scope<St, Err> {
+pub fn scope<St: AppState, T: IntoPattern>(path: T) -> Scope<St> {
     Scope::new(path)
 }
 
 /// Create *route* without configuration.
-pub fn route<Err: ErrorRenderer>() -> Route<Err> {
+pub fn route<St: AppState>() -> Route<St> {
     Route::new()
 }
 
@@ -96,7 +95,7 @@ pub fn route<Err: ErrorRenderer>() -> Route<Err> {
 /// In the above example, one `GET` route gets added:
 ///  * `/{project_id}`
 ///
-pub fn get<Err: ErrorRenderer>() -> Route<Err> {
+pub fn get<St: AppState>() -> Route<St> {
     method(Method::GET)
 }
 
@@ -114,7 +113,7 @@ pub fn get<Err: ErrorRenderer>() -> Route<Err> {
 /// In the above example, one `POST` route gets added:
 ///  * `/{project_id}`
 ///
-pub fn post<Err: ErrorRenderer>() -> Route<Err> {
+pub fn post<St: AppState>() -> Route<St> {
     method(Method::POST)
 }
 
@@ -132,7 +131,7 @@ pub fn post<Err: ErrorRenderer>() -> Route<Err> {
 /// In the above example, one `PUT` route gets added:
 ///  * `/{project_id}`
 ///
-pub fn put<Err: ErrorRenderer>() -> Route<Err> {
+pub fn put<St: AppState>() -> Route<St> {
     method(Method::PUT)
 }
 
@@ -150,7 +149,7 @@ pub fn put<Err: ErrorRenderer>() -> Route<Err> {
 /// In the above example, one `PATCH` route gets added:
 ///  * `/{project_id}`
 ///
-pub fn patch<Err: ErrorRenderer>() -> Route<Err> {
+pub fn patch<St: AppState>() -> Route<St> {
     method(Method::PATCH)
 }
 
@@ -168,7 +167,7 @@ pub fn patch<Err: ErrorRenderer>() -> Route<Err> {
 /// In the above example, one `DELETE` route gets added:
 ///  * `/{project_id}`
 ///
-pub fn delete<Err: ErrorRenderer>() -> Route<Err> {
+pub fn delete<St: AppState>() -> Route<St> {
     method(Method::DELETE)
 }
 
@@ -186,7 +185,7 @@ pub fn delete<Err: ErrorRenderer>() -> Route<Err> {
 /// In the above example, one `HEAD` route gets added:
 ///  * `/{project_id}`
 ///
-pub fn head<Err: ErrorRenderer>() -> Route<Err> {
+pub fn head<St: AppState>() -> Route<St> {
     method(Method::HEAD)
 }
 
@@ -204,7 +203,7 @@ pub fn head<Err: ErrorRenderer>() -> Route<Err> {
 /// In the above example, one `QUERY` route gets added:
 ///  * `/{project_id}`
 ///
-pub fn query<Err: ErrorRenderer>() -> Route<Err> {
+pub fn query<St: AppState>() -> Route<St> {
     method(Method::QUERY)
 }
 
@@ -222,7 +221,7 @@ pub fn query<Err: ErrorRenderer>() -> Route<Err> {
 /// In the above example, one `GET` route gets added:
 ///  * `/{project_id}`
 ///
-pub fn method<Err: ErrorRenderer>(method: Method) -> Route<Err> {
+pub fn method<St: AppState>(method: Method) -> Route<St> {
     Route::default().method(method)
 }
 
@@ -239,12 +238,12 @@ pub fn method<Err: ErrorRenderer>(method: Method) -> Route<Err> {
 ///     web::resource("/").route(web::to(index))
 /// );
 /// ```
-pub fn to<F, Args, Err>(handler: F) -> Route<Err>
+pub fn to<St, F, Args>(handler: F) -> Route<St>
 where
-    F: Handler<Args, Err> + 'static,
-    Args: FromRequest<Err> + 'static,
-    Err: ErrorRenderer,
-    Err::Container: From<Args::Error>,
+    F: Handler<St, Args> + 'static,
+    Args: FromRequest<St> + 'static,
+    St: AppState,
+    St::Error: From<Args::Error>,
 {
     Route::new().to(handler)
 }
@@ -252,9 +251,9 @@ where
 /// Create service adapter for a specific path.
 ///
 /// ```rust
-/// use ntex::web::{self, guard, App, HttpResponse, Error, DefaultError};
+/// use ntex::web::{self, guard, App, HttpResponse, Error};
 ///
-/// async fn my_service(req: web::WebRequest<DefaultError>) -> Result<web::WebResponse, Error> {
+/// async fn my_service(req: web::WebRequest) -> Result<web::WebResponse, Error> {
 ///     Ok(req.into_response(HttpResponse::Ok().finish()))
 /// }
 ///

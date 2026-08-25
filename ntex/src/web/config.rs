@@ -5,7 +5,7 @@ use crate::{router::ResourceDef, util::ByteString, util::HashMap};
 
 use super::httprequest::{HttpRequest, HttpRequestInner};
 use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
-use super::{DefaultError, ErrorRenderer, resource::Resource, route::Route};
+use super::{AppState, Resource, Route};
 
 /// Application configuration
 #[derive(Debug)]
@@ -168,12 +168,12 @@ pub(crate) fn put_request(id: usize, pool_size: usize, req: &mut Rc<HttpRequestI
 /// modularization of big application configuration.
 #[derive(derive_more::Debug)]
 #[debug("ServiceConfig")]
-pub struct ServiceConfig<St = (), Err = DefaultError> {
-    pub(super) services: Vec<Box<dyn AppServiceFactory<St, Err>>>,
+pub struct ServiceConfig<St = ()> {
+    pub(super) services: Vec<Box<dyn AppServiceFactory<St>>>,
     pub(super) external: Vec<ResourceDef>,
 }
 
-impl<St: 'static, Err: ErrorRenderer> ServiceConfig<St, Err> {
+impl<St: AppState> ServiceConfig<St> {
     pub fn new() -> Self {
         Self {
             services: Vec::new(),
@@ -184,7 +184,7 @@ impl<St: 'static, Err: ErrorRenderer> ServiceConfig<St, Err> {
     /// Configure route for a specific path.
     ///
     /// This is same as `App::route()` method.
-    pub fn route(&mut self, path: &str, mut route: Route<Err>) -> &mut Self {
+    pub fn route(&mut self, path: &str, mut route: Route<St>) -> &mut Self {
         self.service(
             Resource::new(path)
                 .add_guards(route.take_guards())
@@ -197,7 +197,7 @@ impl<St: 'static, Err: ErrorRenderer> ServiceConfig<St, Err> {
     /// This is same as `App::service()` method.
     pub fn service<F>(&mut self, factory: F) -> &mut Self
     where
-        F: WebServiceFactory<St, Err> + 'static,
+        F: WebServiceFactory<St> + 'static,
     {
         self.services
             .push(Box::new(ServiceFactoryWrapper::new(factory)));
@@ -219,7 +219,7 @@ impl<St: 'static, Err: ErrorRenderer> ServiceConfig<St, Err> {
     }
 }
 
-impl<St: 'static, Err: ErrorRenderer> Default for ServiceConfig<St, Err> {
+impl<St: AppState> Default for ServiceConfig<St> {
     fn default() -> Self {
         Self::new()
     }
@@ -260,7 +260,7 @@ mod tests {
     use crate::http::{Method, StatusCode};
     use crate::util::Bytes;
     use crate::web::test::{TestRequest, call_service, init_service, read_body};
-    use crate::web::{self, App, DefaultError, HttpRequest, HttpResponse};
+    use crate::web::{self, App, HttpRequest, HttpResponse};
 
     #[crate::rt_test]
     async fn test_webappconfig() {
@@ -322,7 +322,7 @@ mod tests {
 
     #[test]
     fn test_new_service_config() {
-        let cfg: ServiceConfig<DefaultError> = ServiceConfig::default();
+        let cfg: ServiceConfig<()> = ServiceConfig::default();
         assert!(cfg.services.is_empty());
         assert!(cfg.external.is_empty());
     }

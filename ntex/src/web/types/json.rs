@@ -8,8 +8,8 @@ use crate::http::encoding::Decoder;
 use crate::http::header::CONTENT_LENGTH;
 use crate::http::{HttpMessage, Payload, Response, StatusCode};
 use crate::util::{BoxFuture, BytesMut, stream_recv};
-use crate::web::error::{ErrorRenderer, JsonError, JsonPayloadError, WebResponseError};
-use crate::web::{FromRequest, HttpRequest, Responder};
+use crate::web::error::{JsonError, JsonPayloadError, WebResponseError};
+use crate::web::{AppState, FromRequest, HttpRequest, Responder};
 
 /// Json helper
 ///
@@ -107,9 +107,10 @@ where
     }
 }
 
-impl<T: Serialize, Err: ErrorRenderer> Responder<Err> for Json<T>
+impl<T: Serialize, St> Responder<St> for Json<T>
 where
-    Err::Container: From<JsonError>,
+    St: AppState,
+    St::Error: From<JsonError>,
 {
     async fn respond_to(self, req: &HttpRequest) -> Response {
         let body = match serde_json::to_string(&self.0) {
@@ -154,9 +155,10 @@ where
 ///     );
 /// }
 /// ```
-impl<T, Err: ErrorRenderer> FromRequest<Err> for Json<T>
+impl<T, St> FromRequest<St> for Json<T>
 where
     T: DeserializeOwned + 'static,
+    St: AppState,
 {
     type Error = JsonPayloadError;
 

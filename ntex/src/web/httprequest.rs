@@ -4,10 +4,9 @@ use crate::http::{HeaderMap, HttpMessage, Message, Method, Payload, RequestHead,
 use crate::{Cfg, io::IoRef, io::types, router::Path, util::Extensions};
 
 use super::config::WebAppConfig;
-use super::error::ErrorRenderer;
-use super::extract::FromRequest;
 use super::info::ConnectionInfo;
 use super::rmap::ResourceMap;
+use super::{AppState, FromRequest};
 
 #[derive(Clone)]
 /// An HTTP Request
@@ -255,8 +254,8 @@ impl Drop for HttpRequest {
 ///     );
 /// }
 /// ```
-impl<Err: ErrorRenderer> FromRequest<Err> for HttpRequest {
-    type Error = Err::Container;
+impl<St: AppState> FromRequest<St> for HttpRequest {
+    type Error = St::Error;
 
     #[inline]
     async fn from_request(req: &HttpRequest, _: &mut Payload) -> Result<Self, Self::Error> {
