@@ -53,3 +53,29 @@
 
  Configuration is moved to `WsClientConfig` type. WsClient does not require
  builder anymore.
+
+* ntex::web
+
+ Redesigned state and error management. Use service state management instead of
+ App::state(). web::type::State was redesigned for new state management
+
+ ```rust
+    use ntex::web;
+
+    #[derive(Copy, Clone, Default)]
+    struct TestAppState;
+
+    impl web::AppState for TestAppState {
+        type Error = web::WebError;
+    }
+
+    async fn test() -> Result<HttpResponse, web::WebError> {
+        Ok(HttpResponse::Ok().body(STR))
+    }
+
+    let srv = test::server_with(test::config().h1(), async |_| {
+        App::with::<TestAppState>()
+            .service(web::resource("/").route(web::get().to(test)))
+    });
+
+ ```
