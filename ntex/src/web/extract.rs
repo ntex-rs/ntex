@@ -94,7 +94,7 @@ where
 ///
 /// ```rust
 /// use ntex::http;
-/// use ntex::web::{self, error, App, HttpRequest, FromRequest};
+/// use ntex::web::{self, error, App, AppState, HttpRequest, FromRequest};
 /// use rand;
 ///
 /// #[derive(Debug, serde::Deserialize)]
@@ -102,7 +102,7 @@ where
 ///     name: String
 /// }
 ///
-/// impl<Err> FromRequest<Err> for Thing {
+/// impl<St: AppState> FromRequest<St> for Thing {
 ///     type Error = error::WebError;
 ///
 ///     async fn from_request(st: &St, req: &HttpRequest, payload: &mut http::Payload) -> Result<Thing, Self::Error> {

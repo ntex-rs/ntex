@@ -24,26 +24,26 @@ use crate::web::{AppState, FromRequest, HttpRequest};
 /// cause *Internal Server Error* response.
 ///
 /// ```rust
-/// use std::sync::{Arc, Mutex};
-/// use ntex::web::{self, App, HttpResponse};
+/// use std::cell::Cell;
+/// use ntex::web::{self, App, AppState, HttpResponse, WebError};
 ///
-/// #[derive(Clone)]
+/// #[derive(Default, Clone)]
 /// struct MyState {
-///     counter: usize,
+///     counter: Cell<usize>,
+/// }
+///
+/// impl AppState for MyState {
+///     type Error = WebError;
 /// }
 ///
 /// /// Use `State<T>` extractor to access data in handler.
 /// async fn index(st: web::types::State<MyState>) -> HttpResponse {
-///     st.counter += 1;
+///     st.counter.set(st.counter.get() + 1);
 ///     HttpResponse::Ok().into()
 /// }
 ///
 /// fn main() {
-///     let st = Arc::with::<MyState>();
-///
-///     let app = App::new()
-///         // Store `MyState` in application storage.
-///         .state(st.clone())
+///     let app = App::with::<MyState>()
 ///         .service(
 ///             web::resource("/index.html").route(
 ///                 web::get().to(index)));
