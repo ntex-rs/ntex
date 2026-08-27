@@ -162,8 +162,9 @@ impl ServerBuilder {
     #[must_use]
     /// Graceful shutdown.
     ///
-    /// Gracefully shuts down on SIGTERM, SIGSEGV, or SIGQUIT.
-    /// By default, graceful shutdown is disabled.
+    /// Gracefully shuts down on SIGSEGV or SIGQUIT and app panics.
+    /// Graceful shutdown is always enabled for SIGTERM.
+    /// By default, it is disabled for SIGSEGV and SIGQUIT and panics.
     pub fn graceful_shutdown(mut self) -> Self {
         self.pool = self.pool.graceful_shutdown();
         self
