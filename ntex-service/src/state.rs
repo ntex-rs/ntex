@@ -26,7 +26,7 @@ pub struct Noop;
 
 impl<St, Req> State<St, Req> for Noop {}
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct DefaultState<St>(PhantomData<St>);
 
 impl<St> DefaultState<St> {
@@ -40,7 +40,7 @@ impl<St> Copy for DefaultState<St> {}
 
 impl<St> Clone for DefaultState<St> {
     fn clone(&self) -> Self {
-        Self(PhantomData)
+        *self
     }
 }
 
@@ -53,7 +53,7 @@ impl<St: Default + 'static, From> StateMapping<From> for DefaultState<St> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct CloneState<St>(PhantomData<St>);
 
 impl<St> CloneState<St> {
@@ -67,7 +67,7 @@ impl<St> Copy for CloneState<St> {}
 
 impl<St> Clone for CloneState<St> {
     fn clone(&self) -> Self {
-        Self(PhantomData)
+        *self
     }
 }
 
