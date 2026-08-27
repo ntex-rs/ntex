@@ -605,7 +605,7 @@ where
 {
     let sys = System::current().config();
     let name = System::current().name().to_string();
-    let state = DefaultState;
+    let state = DefaultState::new();
 
     let id = Uuid::now_v7();
     let (tx, rx) = mpsc::channel();

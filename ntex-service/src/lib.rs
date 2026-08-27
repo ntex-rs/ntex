@@ -331,7 +331,7 @@ where
 }
 
 /// Trait for types that can be converted to a `ServiceFactory`
-pub trait IntoServiceFactory<Sf, St, Req, Cfg>
+pub trait IntoServiceFactory<Sf, St, Req, Cfg = ()>
 where
     Sf: ServiceFactory<St, Req, Cfg>,
 {

@@ -33,17 +33,16 @@ where
     Err: ResponseError + 'static,
 {
     /// Create new `HttpService` instance with config.
-    pub(crate) fn new<Sf, St, Sm>(
+    pub(crate) fn new<Sf, Sm>(
         sm: Sm,
-        sf: impl IntoServiceFactory<Sf, St, Request, SharedCfg>,
+        sf: impl IntoServiceFactory<Sf, Sm::State, Request, SharedCfg>,
     ) -> H1Service<Hst, F, B, Err>
     where
-        Sf: ServiceFactory<St, Request, SharedCfg, Error = Err> + 'static,
+        Sf: ServiceFactory<Sm::State, Request, SharedCfg, Error = Err> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Error,
-        St: 'static,
-        Sm: StateMapping<St, Hst>,
-        Sm::Control: State<St, Request>,
+        Sm: StateMapping<Hst>,
+        Sm::Control: State<Sm::State, Request>,
     {
         H1Service {
             sf: HttpPipeline::with(

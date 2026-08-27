@@ -31,18 +31,17 @@ impl<St, Req, Res, Err, InitCfg, InitErr> PipelineFactory<St, Req, Res, Err, Ini
         }
     }
 
-    pub fn with<Sf, Ust, Sm>(sm: Sm, sf: Sf) -> Self
+    pub fn with<Sf, Sm>(sm: Sm, sf: Sf) -> Self
     where
         St: 'static,
-        Sf: ServiceFactory<Ust, Req, InitCfg, Res = Res, Error = Err, InitError = InitErr>
+        Sf: ServiceFactory<Sm::State, Req, InitCfg, Res = Res, Error = Err, InitError = InitErr>
             + 'static,
-        Ust: 'static,
         Req: 'static,
         Res: 'static,
         Err: 'static,
         InitCfg: 'static,
-        Sm: StateMapping<Ust, St>,
-        Sm::Control: State<Ust, Req>,
+        Sm: StateMapping<St>,
+        Sm::Control: State<Sm::State, Req>,
     {
         let sf = Rc::new(sf);
         Self {

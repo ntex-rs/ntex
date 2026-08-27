@@ -39,7 +39,7 @@ where
     {
         HttpService {
             sf: HttpPipeline::with(
-                DefaultState,
+                DefaultState::new(),
                 sf.into_factory().map(Into::into).map_init_err(dyn_rc_err),
             ),
             h1_ctl: Pipeline::with((), h1::DefaultControlService),
@@ -50,17 +50,16 @@ where
 
     #[must_use]
     /// Create new `HttpService` instance.
-    pub fn with<Sf, St, Sm>(
+    pub fn with<Sf, Sm>(
         sm: Sm,
-        sf: impl IntoServiceFactory<Sf, St, Request, SharedCfg>,
+        sf: impl IntoServiceFactory<Sf, Sm::State, Request, SharedCfg>,
     ) -> HttpService<Hst, F, B, Err>
     where
-        Sf: ServiceFactory<St, Request, SharedCfg, Error = Err> + 'static,
+        Sf: ServiceFactory<Sm::State, Request, SharedCfg, Error = Err> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Error,
-        St: 'static,
-        Sm: StateMapping<St, Hst>,
-        Sm::Control: State<St, Request>,
+        Sm: StateMapping<Hst>,
+        Sm::Control: State<Sm::State, Request>,
     {
         HttpService {
             sf: HttpPipeline::with(
@@ -91,7 +90,7 @@ where
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Error,
     {
-        h1::H1Service::new(DefaultState, sf)
+        h1::H1Service::new(DefaultState::new(), sf)
     }
 
     #[must_use]
@@ -104,39 +103,37 @@ where
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Error,
     {
-        h2::H2Service::new(DefaultState, sf)
+        h2::H2Service::new(DefaultState::new(), sf)
     }
 
     #[must_use]
     /// Create *http service* for HTTP/1 protocol.
-    pub fn h1_with<Sf, St, Sm>(
+    pub fn h1_with<Sf, Sm>(
         sm: Sm,
-        sf: impl IntoServiceFactory<Sf, St, Request, SharedCfg>,
+        sf: impl IntoServiceFactory<Sf, Sm::State, Request, SharedCfg>,
     ) -> h1::H1Service<Hst, F, B, Err>
     where
-        Sf: ServiceFactory<St, Request, SharedCfg, Error = Err> + 'static,
+        Sf: ServiceFactory<Sm::State, Request, SharedCfg, Error = Err> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Error,
-        St: 'static,
-        Sm: StateMapping<St, Hst>,
-        Sm::Control: State<St, Request>,
+        Sm: StateMapping<Hst>,
+        Sm::Control: State<Sm::State, Request>,
     {
         h1::H1Service::new(sm, sf)
     }
 
     #[must_use]
     /// Create *http service* for HTTP/2 protocol.
-    pub fn h2_with<Sf, St, Sm>(
+    pub fn h2_with<Sf, Sm>(
         sm: Sm,
-        sf: impl IntoServiceFactory<Sf, St, Request, SharedCfg>,
+        sf: impl IntoServiceFactory<Sf, Sm::State, Request, SharedCfg>,
     ) -> h2::H2Service<Hst, F, B, Err>
     where
-        Sf: ServiceFactory<St, Request, SharedCfg, Error = Err> + 'static,
+        Sf: ServiceFactory<Sm::State, Request, SharedCfg, Error = Err> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Error,
-        St: 'static,
-        Sm: StateMapping<St, Hst>,
-        Sm::Control: State<St, Request>,
+        Sm: StateMapping<Hst>,
+        Sm::Control: State<Sm::State, Request>,
     {
         h2::H2Service::new(sm, sf)
     }

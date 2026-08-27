@@ -17,7 +17,7 @@ where
 #[inline]
 pub fn fn_service_st<F, St, Req, Res, Err>(f: F) -> FnServiceSt<F, St, Req, Res, Err>
 where
-    F: AsyncFn(Req, &St) -> Result<Res, Err>,
+    F: AsyncFn(&St, Req) -> Result<Res, Err>,
 {
     FnServiceSt { f, _t: PhantomData }
 }

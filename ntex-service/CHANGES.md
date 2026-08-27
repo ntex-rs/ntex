@@ -1,5 +1,9 @@
 # Changes
 
+## [5.0.0-beta.3] - 2026-08-27
+
+* Refactor StateMapping trait
+
 ## [5.0.0-beta.1] - 2026-08-25
 
 * Do not panic in Pipeline::poll_ready() after shutdown
