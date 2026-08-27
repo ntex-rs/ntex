@@ -1,5 +1,9 @@
 # Changes
 
+## [3.11.1] - 2026-08-27
+
+* Shutdown on SIGTERM is always graceful
+
 ## [3.11.0] - 2026-08-09
 
 * Stop server when one of worker panics (stop_on_panic)
