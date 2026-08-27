@@ -1,5 +1,9 @@
 # Changes
 
+## [3.17.2] - 2026-08-27
+
+* Fix arbiter storage cleanup logic
+
 ## [3.17.1] - 2026-08-10
 
 * Add panic handling support

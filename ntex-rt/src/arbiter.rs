@@ -365,11 +365,11 @@ pub unsafe fn remove_all_items() {
     STORAGE.with(move |cell| {
         loop {
             let mut items = cell.borrow_mut();
-            let Some(item) = items.drain().next() else {
+            let Some(key) = items.keys().next().copied() else {
                 break;
             };
+            items.remove(&key);
             drop(items);
-            drop(item);
         }
     });
     System::remove_current();

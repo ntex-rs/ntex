@@ -365,7 +365,7 @@ async fn handle_cmd<F: ServerConfiguration>(
                     }
                     Signal::Term => {
                         log::info!("SIGTERM received, stopping");
-                        state.stop(state.mgr.0.cfg.graceful_shutdown, None).await;
+                        state.stop(true, None).await;
                         return;
                     }
                     Signal::Quit => {
