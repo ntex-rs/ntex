@@ -19,11 +19,6 @@ pub use futures_core::Stream;
 pub use ntex_rt::spawn;
 
 #[doc(hidden)]
-pub use hashbrown::HashMap as HashMapBase;
-#[doc(hidden)]
-pub use hashbrown::HashSet as HashSetBase;
-
-#[doc(hidden)]
 pub use hashbrown::{Equivalent, hash_map, hash_set};
 
 pub type HashMap<K, V> = HashMapBase<K, V, foldhash::fast::RandomState>;
