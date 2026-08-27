@@ -34,17 +34,17 @@ struct Config {
 /// ```
 #[derive(derive_more::Debug)]
 #[debug("HttpServer")]
-pub struct HttpServer<Hst, F, I, Sf, St, Sm, B>
+pub struct HttpServer<Hst, F, I, Sf, Sm, B>
 where
     Hst: State<Hst, Io>,
     F: AsyncFn(&Hst) -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<Sf, St, Request, SharedCfg>,
-    Sf: ServiceFactory<St, Request, SharedCfg>,
+    I: IntoServiceFactory<Sf, Sm::State, Request, SharedCfg>,
+    Sf: ServiceFactory<Sm::State, Request, SharedCfg>,
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
     Sf::InitError: Error,
-    Sm: StateMapping<St, Hst> + Send,
-    Sm::Control: State<St, Request>,
+    Sm: StateMapping<Hst> + Send,
+    Sm::Control: State<Sm::State, Request>,
     B: MessageBody,
 {
     factory: F,
@@ -52,10 +52,10 @@ where
     backlog: i32,
     builder: ServerBuilder<Hst>,
     state: Sm,
-    _t: PhantomData<(Sf, St, B)>,
+    _t: PhantomData<(Sf, B)>,
 }
 
-impl<F, I, Sf, B> HttpServer<(), F, I, Sf, (), DefaultState, B>
+impl<F, I, Sf, B> HttpServer<(), F, I, Sf, DefaultState<()>, B>
 where
     F: AsyncFn(&()) -> I + Send + Clone + 'static,
     I: IntoServiceFactory<Sf, (), Request, SharedCfg>,
@@ -70,7 +70,7 @@ where
     pub fn new(factory: F) -> Self {
         HttpServer {
             factory,
-            state: DefaultState,
+            state: DefaultState::new(),
             config: Arc::new(Mutex::new(Config { host: None })),
             backlog: 1024,
             builder: ServerBuilder::default(),
@@ -79,18 +79,17 @@ where
     }
 }
 
-impl<Hst, F, I, Sf, St, Sm, B> HttpServer<Hst, F, I, Sf, St, Sm, B>
+impl<Hst, F, I, Sf, Sm, B> HttpServer<Hst, F, I, Sf, Sm, B>
 where
     F: AsyncFn(&Hst) -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<Sf, St, Request, SharedCfg>,
-    Sf: ServiceFactory<St, Request, SharedCfg> + 'static,
+    I: IntoServiceFactory<Sf, Sm::State, Request, SharedCfg>,
+    Sf: ServiceFactory<Sm::State, Request, SharedCfg> + 'static,
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
     Sf::InitError: Error,
     Hst: State<Hst, Io> + Clone + 'static,
-    St: 'static,
-    Sm: StateMapping<St, Hst> + Send,
-    Sm::Control: State<St, Request>,
+    Sm: StateMapping<Hst> + Send,
+    Sm::Control: State<Sm::State, Request>,
     B: MessageBody + 'static,
 {
     #[must_use]
@@ -454,18 +453,17 @@ where
     }
 }
 
-impl<Hst, F, I, Sf, St, Sm, B> HttpServer<Hst, F, I, Sf, St, Sm, B>
+impl<Hst, F, I, Sf, Sm, B> HttpServer<Hst, F, I, Sf, Sm, B>
 where
     F: AsyncFn(&Hst) -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<Sf, St, Request, SharedCfg>,
-    Sf: ServiceFactory<St, Request, SharedCfg> + 'static,
+    I: IntoServiceFactory<Sf, Sm::State, Request, SharedCfg>,
+    Sf: ServiceFactory<Sm::State, Request, SharedCfg> + 'static,
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
     Sf::InitError: Error,
     Hst: State<Hst, Io> + Clone + 'static,
-    St: 'static,
-    Sm: StateMapping<St, Hst> + Send,
-    Sm::Control: State<St, Request>,
+    Sm: StateMapping<Hst> + Send,
+    Sm::Control: State<Sm::State, Request>,
     B: MessageBody,
 {
     /// Start listening for incoming connections.

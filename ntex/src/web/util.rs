@@ -296,7 +296,7 @@ where
 ///         .await
 /// }
 /// ```
-pub fn server<F, I, Sf, B>(factory: F) -> HttpServer<(), F, I, Sf, (), DefaultState, B>
+pub fn server<F, I, Sf, B>(factory: F) -> HttpServer<(), F, I, Sf, DefaultState<()>, B>
 where
     F: AsyncFn(&()) -> I + Send + Clone + 'static,
     I: IntoServiceFactory<Sf, (), Request, SharedCfg>,
