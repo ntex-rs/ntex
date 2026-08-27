@@ -21,8 +21,8 @@ pub use ntex_rt::spawn;
 #[doc(hidden)]
 pub use hashbrown::{Equivalent, hash_map, hash_set};
 
-pub type HashMap<K, V> = HashMapBase<K, V, foldhash::fast::RandomState>;
-pub type HashSet<V> = HashSetBase<V, foldhash::fast::RandomState>;
+pub type HashMap<K, V> = hash_map::HashMap<K, V, foldhash::fast::RandomState>;
+pub type HashSet<V> = hash_set::HashSet<V, foldhash::fast::RandomState>;
 pub type HashRandomState = foldhash::fast::RandomState;
 
 pub fn dyn_err<E: Error + 'static>(e: E) -> Box<dyn Error> {
