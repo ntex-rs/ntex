@@ -29,7 +29,7 @@ bitflags = { workspace = true }
 foldhash = { workspace = true }
 futures-timer = { workspace = true }
 futures-core = { workspace = true }
-hashbrown = { workspace = true }
+hashbrown = { workspace = true, features = ["serde"] }
 log = { workspace = true }
 pin-project-lite = { workspace = true }
 slab = { workspace = true }
