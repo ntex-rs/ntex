@@ -236,6 +236,29 @@ impl Response<Body> {
     }
 }
 
+impl Response<Body> {
+    #[must_use]
+    /// Extract response.
+    pub fn take(&mut self) -> Response {
+        Response {
+            head: self.head.clone(),
+            body: self.body.take_body(),
+        }
+    }
+}
+
+impl<B: MessageBody> fmt::Display for Response<B> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(
+            f,
+            "Response<{:?} {}{}>",
+            self.head.version,
+            self.head.status,
+            self.head.reason.unwrap_or(""),
+        )
+    }
+}
+
 impl<B: MessageBody> fmt::Debug for Response<B> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let res = writeln!(
@@ -795,6 +818,8 @@ impl From<BytesMut> for Response {
             .body(val)
     }
 }
+
+impl<B: MessageBody> Error for Response<B> {}
 
 #[cfg(test)]
 mod tests {

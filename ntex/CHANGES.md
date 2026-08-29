@@ -1,5 +1,9 @@
 # Changes
 
+## [4.0.0-beta.2] - 2026-08-29
+
+* Refactor web error rendering
+
 ## [4.0.0-beta.0] - 2026-08-26
 
 * Migrate to ntex-service 5

@@ -1,8 +1,7 @@
 use std::{fmt, future::Future, marker::PhantomData};
 
+use super::{AppState, FromRequest, Responder, WebRequest, WebResponse, WebResponseError};
 use crate::util::BoxFuture;
-
-use super::{AppState, FromRequest, Responder, WebRequest, WebResponse};
 
 /// Async fn handler
 pub trait Handler<St, T>
@@ -60,7 +59,7 @@ impl<St, F, T> HandlerFn<St> for HandlerWrapper<St, F, T>
 where
     F: Handler<St, T> + 'static,
     T: FromRequest<St> + 'static,
-    T::Error: Into<St::Error>,
+    T::Error: WebResponseError<St::Error>,
     St: AppState,
 {
     fn call<'a>(
@@ -72,7 +71,7 @@ where
             let (req, mut payload) = req.into_parts();
             let param = match T::from_request(st, &req, &mut payload).await {
                 Ok(param) => param,
-                Err(e) => return Ok(WebResponse::from_err::<St, _>(e, req)),
+                Err(e) => return Ok(WebResponse::from_err(e, req)),
             };
 
             let result = self.hnd.call(param).await;

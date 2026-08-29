@@ -5,7 +5,7 @@ use crate::service::{Ctx, Service, ServiceFactory, cfg::SharedCfg};
 
 use super::guard::{self, AllGuard, Guard};
 use super::handler::{Handler, HandlerFn, HandlerWrapper};
-use super::{AppState, FromRequest, HttpResponse, WebRequest, WebResponse};
+use super::{AppState, FromRequest, HttpResponse, WebRequest, WebResponse, WebResponseError};
 
 /// Resource route definition
 ///
@@ -21,7 +21,9 @@ impl<St: AppState> Route<St> {
     /// Create new route which matches any request.
     pub fn new() -> Route<St> {
         Route {
-            handler: Rc::new(HandlerWrapper::new(async || HttpResponse::NotFound())),
+            handler: Rc::new(HandlerWrapper::<St, _, ()>::new(async || {
+                HttpResponse::NotFound()
+            })),
             methods: Vec::new(),
             guards: Rc::default(),
         }
@@ -203,7 +205,7 @@ impl<St: AppState> Route<St> {
     where
         F: Handler<St, Args> + 'static,
         Args: FromRequest<St> + 'static,
-        Args::Error: Into<St::Error>,
+        Args::Error: WebResponseError<St::Error>,
     {
         self.handler = Rc::new(HandlerWrapper::new(handler));
         self

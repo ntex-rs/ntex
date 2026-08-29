@@ -80,7 +80,40 @@ impl<St: Clone + 'static> StateMapping<St> for CloneState<St> {
     }
 }
 
+#[derive(Debug)]
+pub struct FnState<F, St>(F, PhantomData<St>);
+
+impl<F, St> FnState<F, St>
+where
+    F: Fn() -> St + Clone,
+{
+    #[inline]
+    pub fn new(f: F) -> Self {
+        Self(f, PhantomData)
+    }
+}
+
+impl<F: Clone, St> Clone for FnState<F, St> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), PhantomData)
+    }
+}
+
+impl<F, St, From> StateMapping<From> for FnState<F, St>
+where
+    F: Fn() -> St + Clone + 'static,
+    St: 'static,
+{
+    type State = St;
+    type Control = Noop;
+
+    fn map<R>(&self, _: &From) -> (St, Noop) {
+        ((self.0)(), Noop)
+    }
+}
+
 // SAFETY: Send cannot be provided authomatically because of St param
 // but code get executed in one thread and never leave it
 unsafe impl<St> Send for DefaultState<St> {}
 unsafe impl<St> Send for CloneState<St> {}
+unsafe impl<F, St> Send for FnState<F, St> where F: Send {}

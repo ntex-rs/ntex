@@ -7,6 +7,7 @@ use crate::service::{Identity, IntoServiceFactory, Middleware, Service, ServiceF
 use crate::{http::Response, util::Extensions};
 
 use super::dev::{WebServiceConfig, WebServiceFactory, insert_slash};
+use super::error::WebResponseError;
 use super::extract::FromRequest;
 use super::guard::Guard;
 use super::route::{IntoRoutes, Route, RouteService};
@@ -229,7 +230,7 @@ where
     where
         F: Handler<St, Args> + 'static,
         Args: FromRequest<St> + 'static,
-        Args::Error: Into<St::Error>,
+        Args::Error: WebResponseError<St::Error>,
     {
         self.routes.push(Route::new().to(handler));
         self

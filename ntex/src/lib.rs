@@ -122,8 +122,10 @@ pub mod error {
 pub mod util {
     pub use ntex_bytes::{Buf, BufMut, ByteString, Bytes, BytesMut};
     pub use ntex_bytes::{BytePage, BytePageSize, BytePages};
+    pub use ntex_error::{ErrorMessage, ErrorMessageChained, fmt_err, fmt_err_string};
     pub use ntex_util::{
-        HashMap, HashSet, clone_io_error, dyn_err, dyn_rc_err, future::*, services::*, str_rc_err,
+        Equivalent, HashMap, HashRandomState, HashSet, clone_io_error, dyn_err, dyn_rc_err,
+        future::*, hash_map, hash_set, services::*, str_rc_err,
     };
 
     #[doc(hidden)]

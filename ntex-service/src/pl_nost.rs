@@ -156,6 +156,12 @@ where
     Err: 'static,
 {
     #[inline]
+    /// Returns when the pipeline is ready to process requests.
+    pub async fn ready(&self, st: &St) -> Result<(), Err> {
+        self.state.ready(self.index, st).await
+    }
+
+    #[inline]
     /// Wait for service readiness, then create a future
     /// that resolves to the service call result.
     pub async fn call(&self, req: Req, st: &St) -> Result<Res, Err> {
@@ -206,6 +212,10 @@ trait PipelineApi<St, Req, Res, Err> {
     where
         Req: 'a;
 
+    fn ready<'a>(&'a self, idx: u32, st: &'a St) -> BoxFuture<'a, Result<(), Err>>
+    where
+        Req: 'a;
+
     fn poll_ready(&self, cx: &mut Context<'_>, st: &St) -> Poll<Result<(), Err>>
     where
         St: Clone;
@@ -226,6 +236,17 @@ where
 
     fn unreg(&self, index: u32) {
         self.waiters.remove(index);
+    }
+
+    fn ready<'a>(&'a self, idx: u32, st: &'a St) -> BoxFuture<'a, Result<(), S::Error>>
+    where
+        Req: 'a,
+    {
+        Box::pin(async move {
+            Ctx::<'_, S, St>::new(idx, &self.waiters, st)
+                .ready(&self.s)
+                .await
+        })
     }
 
     fn call<'a>(

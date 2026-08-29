@@ -16,7 +16,7 @@ use super::route::Route;
 use super::scope::Scope;
 use super::server::HttpServer;
 use super::service::WebServiceAdapter;
-use super::{AppState, HttpResponse, HttpResponseBuilder};
+use super::{AppState, HttpResponse, HttpResponseBuilder, WebResponseError};
 
 /// Create resource for a specific path.
 ///
@@ -240,10 +240,10 @@ pub fn method<St: AppState>(method: Method) -> Route<St> {
 /// ```
 pub fn to<St, F, Args>(handler: F) -> Route<St>
 where
+    St: AppState,
     F: Handler<St, Args> + 'static,
     Args: FromRequest<St> + 'static,
-    St: AppState,
-    St::Error: From<Args::Error>,
+    Args::Error: WebResponseError<St::Error>,
 {
     Route::new().to(handler)
 }

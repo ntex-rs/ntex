@@ -3,7 +3,7 @@ use std::fmt;
 use crate::http::body::{Body, MessageBody, ResponseBody};
 use crate::http::{HeaderMap, Response, ResponseHead, StatusCode};
 
-use super::{AppState, HttpRequest, error::ErrorContainer};
+use super::{AppState, HttpRequest, WebResponseError};
 
 /// An http service response.
 pub struct WebResponse {
@@ -19,9 +19,8 @@ impl WebResponse {
 
     #[must_use]
     /// Create web response from the error.
-    pub fn from_err<St: AppState, E: Into<St::Error>>(err: E, request: HttpRequest) -> Self {
-        let err = err.into();
-        let res: Response = err.error_response(&request);
+    pub fn from_err<Err, E: WebResponseError<Err>>(mut err: E, request: HttpRequest) -> Self {
+        let res = err.error_response(&request);
 
         if res.head().status == StatusCode::INTERNAL_SERVER_ERROR {
             log::error!("Internal Server Error: {err:?}");
@@ -38,8 +37,8 @@ impl WebResponse {
     #[inline]
     #[must_use]
     /// Create web response for error.
-    pub fn error_response<St: AppState, E: Into<St::Error>>(self, err: E) -> Self {
-        Self::from_err::<St, E>(err, self.request)
+    pub fn error_response<Err, E: WebResponseError<Err>>(self, err: E) -> Self {
+        Self::from_err::<Err, E>(err, self.request)
     }
 
     #[inline]
@@ -90,13 +89,12 @@ impl WebResponse {
     /// Execute closure and in case of error convert it to response.
     pub fn checked_expr<St, F, E>(mut self, f: F) -> Self
     where
-        F: FnOnce(&mut Self) -> Result<(), E>,
-        E: Into<St::Error>,
         St: AppState,
+        F: FnOnce(&mut Self) -> Result<(), E>,
+        E: WebResponseError<St::Error>,
     {
-        if let Err(err) = f(&mut self) {
-            let res: Response = err.into().into();
-            WebResponse::new(res, self.request)
+        if let Err(mut err) = f(&mut self) {
+            WebResponse::new(err.error_response(&self.request), self.request)
         } else {
             self
         }
@@ -155,8 +153,7 @@ impl fmt::Debug for WebResponse {
 #[cfg(test)]
 mod tests {
     use crate::http::{self, StatusCode};
-    use crate::web::HttpResponse;
-    use crate::web::test::TestRequest;
+    use crate::web::{HttpResponse, WebError, test::TestRequest};
 
     #[test]
     fn test_response() {
@@ -165,7 +162,7 @@ mod tests {
         assert_eq!(res.response().status(), StatusCode::BAD_REQUEST);
 
         let err = http::error::PayloadError::Overflow;
-        let res = res.error_response::<(), _>(err);
+        let res = res.error_response::<WebError, _>(err);
         assert_eq!(res.response().status(), StatusCode::PAYLOAD_TOO_LARGE);
 
         let res = TestRequest::default().to_srv_response(HttpResponse::Ok().finish());

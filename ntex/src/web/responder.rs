@@ -5,10 +5,9 @@ use crate::http::header::{HeaderMap, HeaderName, HeaderValue};
 use crate::http::{Response, ResponseBuilder, StatusCode};
 use crate::util::{Bytes, BytesMut, Either};
 
-use super::error::{ErrorContainer, InternalError, WebResponseError};
+use super::error::{InternalError, WebResponseError};
 use super::{AppState, HttpRequest};
 
-#[allow(async_fn_in_trait)]
 /// Trait implemented by types that can be converted to a http response.
 ///
 /// Types that implement this trait can be used as the return type of a handler.
@@ -92,16 +91,16 @@ where
     }
 }
 
-impl<T, E, St> Responder<St> for Result<T, E>
+impl<St, T, E> Responder<St> for Result<T, E>
 where
-    T: Responder<St>,
-    E: Into<St::Error>,
     St: AppState,
+    T: Responder<St>,
+    E: WebResponseError<St::Error>,
 {
     async fn respond_to(self, req: &HttpRequest) -> Response {
         match self {
             Ok(val) => val.respond_to(req).await,
-            Err(e) => ErrorContainer::error_response(&e.into(), req),
+            Err(mut e) => e.error_response(req),
         }
     }
 }
@@ -299,7 +298,7 @@ where
     T: std::fmt::Debug + std::fmt::Display + 'static,
     St: AppState,
 {
-    async fn respond_to(self, req: &HttpRequest) -> Response {
+    async fn respond_to(mut self, req: &HttpRequest) -> Response {
         self.error_response(req)
     }
 }

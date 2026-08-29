@@ -1,7 +1,7 @@
-use super::error::{ErrorContainer, WebError};
+use super::error::WebError;
 
 pub trait AppState: 'static {
-    type Error: ErrorContainer;
+    type Error;
 }
 
 impl AppState for () {

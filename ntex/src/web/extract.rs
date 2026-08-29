@@ -1,5 +1,7 @@
 //! Request extractors
-use super::{AppState, HttpRequest};
+use std::convert::Infallible;
+
+use super::{AppState, HttpRequest, HttpResponse, WebResponseError};
 use crate::http::Payload;
 
 #[allow(async_fn_in_trait)]
@@ -26,7 +28,7 @@ pub trait FromRequest<St>: Sized {
 ///
 /// ```rust
 /// use ntex::http;
-/// use ntex::web::{self, error, App, HttpRequest, FromRequest};
+/// use ntex::web::{self, error, App, HttpRequest, FromRequest, WebError};
 /// use rand;
 ///
 /// #[derive(Debug, serde::Deserialize)]
@@ -35,13 +37,13 @@ pub trait FromRequest<St>: Sized {
 /// }
 ///
 /// impl<St> FromRequest<St> for Thing {
-///     type Error = error::WebError;
+///     type Error = WebError;
 ///
 ///     async fn from_request(st: &St, req: &HttpRequest, payload: &mut http::Payload) -> Result<Self, Self::Error> {
 ///         if rand::random() {
 ///             Ok(Thing { name: "thingy".into() })
 ///         } else {
-///             Err(error::ErrorBadRequest("no luck").into())
+///             Err(WebError::new(error::ErrorBadRequest("no luck")))
 ///         }
 ///     }
 /// }
@@ -66,7 +68,7 @@ impl<T, St> FromRequest<St> for Option<T>
 where
     T: FromRequest<St>,
     St: AppState,
-    <T as FromRequest<St>>::Error: Into<St::Error>,
+    <T as FromRequest<St>>::Error: WebResponseError<St::Error>,
 {
     type Error = St::Error;
 
@@ -79,7 +81,7 @@ where
         match T::from_request(st, req, payload).await {
             Ok(v) => Ok(Some(v)),
             Err(e) => {
-                log::debug!("Error for Option<T> extractor: {}", e.into());
+                log::debug!("Error for Option<T> extractor: {e}");
                 Ok(None)
             }
         }
@@ -94,7 +96,7 @@ where
 ///
 /// ```rust
 /// use ntex::http;
-/// use ntex::web::{self, error, App, AppState, HttpRequest, FromRequest};
+/// use ntex::web::{self, error, App, AppState, HttpRequest, FromRequest, WebError};
 /// use rand;
 ///
 /// #[derive(Debug, serde::Deserialize)]
@@ -103,13 +105,13 @@ where
 /// }
 ///
 /// impl<St: AppState> FromRequest<St> for Thing {
-///     type Error = error::WebError;
+///     type Error = WebError;
 ///
 ///     async fn from_request(st: &St, req: &HttpRequest, payload: &mut http::Payload) -> Result<Thing, Self::Error> {
 ///         if rand::random() {
 ///             Ok(Thing { name: "thingy".into() })
 ///         } else {
-///             Err(error::ErrorBadRequest("no luck").into())
+///             Err(WebError::new(error::ErrorBadRequest("no luck")))
 ///         }
 ///     }
 /// }
@@ -150,7 +152,7 @@ where
 
 #[doc(hidden)]
 impl<St: AppState> FromRequest<St> for () {
-    type Error = St::Error;
+    type Error = Infallible;
 
     #[inline]
     async fn from_request(_: &St, _: &HttpRequest, _: &mut Payload) -> Result<(), Self::Error> {
@@ -165,13 +167,13 @@ macro_rules! tuple_from_req {
         where
             St: AppState,
             $($T: FromRequest<St> + 'static,)+
-            $(<$T as $crate::web::FromRequest<St>>::Error: Into<St::Error>),+
+            $(<$T as $crate::web::FromRequest<St>>::Error: WebResponseError<St::Error>),+
         {
-            type Error = St::Error;
+            type Error = HttpResponse;
 
             async fn from_request(st: &St, req: &HttpRequest, payload: &mut Payload) -> Result<($($T,)+), Self::Error> {
                 Ok((
-                    $($T::from_request(st, req, payload).await.map_err(|e| e.into())?,)+
+                    $($T::from_request(st, req, payload).await.map_err(|mut e| e.error_response(req))?,)+
                 ))
             }
         }

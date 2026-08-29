@@ -218,7 +218,7 @@ where
     /// use ntex::web::{self, App, HttpRequest, HttpResponse, WebError};
     ///
     /// async fn index(req: HttpRequest) -> Result<HttpResponse, WebError> {
-    ///     let url = req.url_for("youtube", &["asdlkjqme"])?;
+    ///     let url = req.url_for("youtube", &["asdlkjqme"]).map_err(WebError::new)?;
     ///     assert_eq!(url.as_str(), "https://youtube.com/watch/asdlkjqme");
     ///     Ok(HttpResponse::Ok().into())
     /// }

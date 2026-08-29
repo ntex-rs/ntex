@@ -3,7 +3,7 @@ use std::{cell, fmt, future, pin::Pin, ptr, rc::Rc, task::Context, task::Poll};
 use crate::state::{Noop, State};
 use crate::{Ctx, IntoService, Service, ctx::WaitersRef, util::BoxFuture};
 
-pub use crate::pl_factory::PipelineFactory;
+pub use crate::pl_factory::{PipelineFactory, PipelineWithStateFactory};
 pub use crate::pl_nost::{PipelineWithState, PipelineWithStateBinding};
 
 /// Container for a service.
