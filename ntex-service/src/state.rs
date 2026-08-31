@@ -122,7 +122,7 @@ pub struct StateBuilder<St, Req, Builder = ()> {
 impl<St, Req> StateBuilder<St, Req> {
     pub fn new<F, State, Err>(f: F) -> StateBuilder<St, Req, StateBuilderInit<F>>
     where
-        F: AsyncFn(&Req) -> Result<State, Err>,
+        F: AsyncFn(&St, &Req) -> Result<State, Err>,
     {
         StateBuilder {
             step: StateBuilderInit(f),
@@ -181,7 +181,7 @@ impl<St, Req, Builder> StateBuilder<St, Req, Builder> {
         StateBuilderStack<St, Req, Builder, StateBuilderMapState<F, Builder::OutState>>,
     >
     where
-        F: AsyncFn(&Builder::Res, Builder::OutState) -> Result<NewState, Error>,
+        F: AsyncFn(&St, &Builder::Res, Builder::OutState) -> Result<NewState, Error>,
         Error: From<Builder::Error>,
         Builder: StateBuilderStep<St, Req>,
     {
@@ -269,7 +269,7 @@ pub struct StateBuilderInit<F>(F);
 
 impl<F, St, Req, State, Err> StateBuilderStep<St, Req> for StateBuilderInit<F>
 where
-    F: AsyncFn(&Req) -> Result<State, Err>,
+    F: AsyncFn(&St, &Req) -> Result<State, Err>,
 {
     type Res = Req;
     type InState = ();
@@ -282,7 +282,7 @@ where
         st: (),
         ctx: Ctx<'_, Self, St>,
     ) -> Result<(Self::Res, Self::OutState), Self::Error> {
-        (self.0)(&req).await.map(move |st| (req, st))
+        (self.0)(ctx.st(), &req).await.map(move |st| (req, st))
     }
 }
 
@@ -325,7 +325,7 @@ pub struct StateBuilderMapState<F, State> {
 
 impl<F, St, Req, State, NewState, Err> StateBuilderStep<St, Req> for StateBuilderMapState<F, State>
 where
-    F: AsyncFn(&Req, State) -> Result<NewState, Err>,
+    F: AsyncFn(&St, &Req, State) -> Result<NewState, Err>,
 {
     type Res = Req;
     type InState = State;
@@ -336,9 +336,9 @@ where
         &self,
         req: Req,
         st: State,
-        _: Ctx<'_, Self, St>,
+        ctx: Ctx<'_, Self, St>,
     ) -> Result<(Req, NewState), Err> {
-        (self.f)(&req, st).await.map(move |st| (req, st))
+        (self.f)(ctx.st(), &req, st).await.map(move |st| (req, st))
     }
 }
 
@@ -378,10 +378,10 @@ mod tests {
 
     #[ntex::test]
     async fn test_state_builder() {
-        let sb = StateBuilder::new(async |t: &&'static str| Ok::<_, ()>(St { n: t.len() }))
-            .add_service(Svc1)
-            .map(async |r: &usize, st: St| Ok(St { n: st.n + *r }))
-            .add_service(Svc2);
+        let sb = StateBuilder::new(async |_: &(), t: &&'static str| Ok::<_, ()>(St { n: t.len() }))
+            .service(Svc1)
+            .map(async |_: &(), r: &usize, st: St| Ok(St { n: st.n + *r }))
+            .service(Svc2);
 
         let pl = Pipeline::with((), sb);
         let res = pl.call("test").await.unwrap();
