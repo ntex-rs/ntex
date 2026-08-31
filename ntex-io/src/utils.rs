@@ -1,9 +1,8 @@
 use std::{cell::Cell, task::Poll, task::Waker};
 
-use ntex_service::{IntoServiceFactory, ServiceFactory, factory_with_st};
 use ntex_util::task::LocalWaker;
 
-use crate::{Filter, Io, IoBoxed, IoCallbacks};
+use crate::IoCallbacks;
 
 /// Decoded item from buffer
 #[doc(hidden)]
@@ -12,19 +11,6 @@ pub struct Decoded<T> {
     pub item: Option<T>,
     pub remains: usize,
     pub consumed: usize,
-}
-
-/// Service that converts any `Io<F>` stream to `IoBoxed` stream
-pub fn seal<F, Sf, St, Cfg>(
-    f: impl IntoServiceFactory<Sf, St, IoBoxed, Cfg>,
-) -> impl ServiceFactory<St, Io<F>, Cfg, Res = Sf::Res, Error = Sf::Error, InitError = Sf::InitError>
-where
-    F: Filter,
-    Sf: ServiceFactory<St, IoBoxed, Cfg>,
-{
-    factory_with_st(async |io: Io<F>| Ok(io.boxed()))
-        .map_init_err(|_| unreachable!())
-        .and_then(f.into_factory())
 }
 
 pub(crate) struct Extensions(Cell<Option<Box<ExtensionsInner>>>);

@@ -6,7 +6,7 @@ use tls_openssl::ssl::{AlpnError, SslAcceptor, SslAcceptorBuilder};
 use tls_rustls::ServerConfig as RustlsServerConfig;
 
 use crate::http::{self, Request, Response, ResponseError, body::MessageBody};
-use crate::server::{Server, ServerBuilder};
+use crate::server::{Server, ServerBuilder, ServerStateFactory};
 use crate::service::state::{DefaultState, State, StateMapping};
 use crate::service::{IntoServiceFactory, ServiceFactory};
 use crate::{SharedCfg, io::Io, time::Seconds};
@@ -96,7 +96,7 @@ where
     /// Create new http server with application factory and state mapping
     pub fn with_st<T>(st: T, state: Sm, factory: F) -> Self
     where
-        T: AsyncFn() -> Result<Hst, &'static str> + Send + Clone + 'static,
+        T: ServerStateFactory<Hst>,
     {
         HttpServer {
             factory,

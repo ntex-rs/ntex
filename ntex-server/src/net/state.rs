@@ -1,39 +1,31 @@
-use std::marker::PhantomData;
+use std::{io, sync::Arc};
 
 use ntex_util::future::BoxFuture;
 
-pub(crate) trait StateFactory<St> {
-    fn clo(&self) -> Box<dyn StateFactory<St> + Send>;
+pub(crate) type StateFactory<St> =
+    Arc<dyn Fn() -> BoxFuture<'static, io::Result<St>> + Send + Sync>;
 
-    fn create(&self) -> BoxFuture<'static, Result<St, &'static str>>;
-}
-
-pub(crate) fn state_factory<F, St>(f: F) -> Box<dyn StateFactory<St> + Send>
+pub(crate) fn state_factory<F, St>(f: F) -> StateFactory<St>
 where
-    F: AsyncFn() -> Result<St, &'static str> + Send + Clone + 'static,
-    St: 'static,
+    F: ServerStateFactory<St>,
 {
-    Box::new(StateFactoryImpl { f, st: PhantomData })
+    let st = Arc::new(f);
+
+    Arc::new(move || {
+        let st = st.clone();
+        Box::pin(async move { st.create().await })
+    })
 }
 
-struct StateFactoryImpl<F, St> {
-    f: F,
-    st: PhantomData<St>,
+pub trait ServerStateFactory<St>: Sync + Send + 'static {
+    async fn create(&self) -> io::Result<St>;
 }
 
-unsafe impl<F, St> Send for StateFactoryImpl<F, St> where F: Send {}
-
-impl<F, St> StateFactory<St> for StateFactoryImpl<F, St>
+impl<F, St> ServerStateFactory<St> for F
 where
-    F: AsyncFn() -> Result<St, &'static str> + Send + Clone + 'static,
-    St: 'static,
+    F: AsyncFn() -> io::Result<St> + Sync + Send + 'static,
 {
-    fn clo(&self) -> Box<dyn StateFactory<St> + Send> {
-        state_factory(self.f.clone())
-    }
-
-    fn create(&self) -> BoxFuture<'static, Result<St, &'static str>> {
-        let f = self.f.clone();
-        Box::pin(async move { (f)().await })
+    async fn create(&self) -> io::Result<St> {
+        (*self)().await
     }
 }

@@ -42,14 +42,14 @@ where
     where
         Sf: ServiceFactory<Sm::State, Request, SharedCfg, Error = Err> + 'static,
         Sf::Res: Into<Response<B>>,
-        Sf::InitError: StdError + 'static,
+        Sf::InitError: Into<Box<dyn StdError>>,
         Sm: StateMapping<Hst>,
         Sm::Control: State<Sm::State, Request>,
     {
         H2Service {
             sf: HttpPipeline::with(
                 sm,
-                sf.into_factory().map(Into::into).map_init_err(dyn_rc_err),
+                sf.into_factory().map(Into::into).map_init_err(Into::into),
             ),
             ctl: Pipeline::with((), DefaultControlService),
             config: DispatcherConfig::default(),
@@ -97,7 +97,7 @@ where
     async fn ready(&self, _: Ctx<'_, Self, Hst>) -> Result<(), Self::Error> {
         self.ctl.ready().await.map_err(|e| {
             log::error!("Service readiness error: {e:?}");
-            DispatchError::Control(e)
+            DispatchError::Control
         })
     }
 
@@ -119,7 +119,7 @@ where
         let cfg = io.shared();
         let svc = self.sf.create(&cfg, ctx.st()).await.map_err(|e| {
             log::error!("Cannot construct handler service: {e:?}");
-            DispatchError::Control(e)
+            DispatchError::Control
         })?;
 
         let id = self.config.next_id();

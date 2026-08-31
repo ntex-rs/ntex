@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, io};
 
 use ntex_service::{Ctx, Service, cfg::SharedCfg};
 use ntex_util::{HashMap, future::join_all, services::Counter};
@@ -13,14 +13,14 @@ use super::{MAX_CONNS_COUNTER, Token, socket::Connection};
 /// Net streaming server
 pub struct StreamServer<St> {
     accept: AcceptNotify,
-    state: Box<dyn StateFactory<St> + Send>,
+    state: StateFactory<St>,
     services: Vec<FactoryServiceType<St>>,
 }
 
 impl<St: Clone> StreamServer<St> {
     pub(crate) fn new(
         accept: AcceptNotify,
-        state: Box<dyn StateFactory<St> + Send>,
+        state: StateFactory<St>,
         services: Vec<FactoryServiceType<St>>,
     ) -> Self {
         Self {
@@ -45,16 +45,20 @@ impl<St: Clone + 'static> ServerConfiguration for StreamServer<St> {
     type Service = StreamService;
 
     /// Create service for handling connections
-    async fn create(&self) -> Result<Self::Service, &'static str> {
+    async fn create(&self) -> io::Result<Self::Service> {
         // construct state
-        let state = self.state.create().await?;
+        let state = (*self.state)().await?;
 
         // construct services
         let mut tokens = HashMap::default();
         let mut services = Vec::new();
 
         for info in &self.services {
-            for (svc, _, svc_tokens) in info.create(state.clone()).await? {
+            for (svc, _, svc_tokens) in info
+                .create(state.clone())
+                .await
+                .map_err(|e| io::Error::other(e))?
+            {
                 services.push(svc);
                 let idx = services.len() - 1;
                 for (token, cfg) in &svc_tokens {
@@ -96,7 +100,7 @@ impl<St: Clone + 'static> ServerConfiguration for StreamServer<St> {
 impl<St> Clone for StreamServer<St> {
     fn clone(&self) -> Self {
         Self {
-            state: self.state.clo(),
+            state: self.state.clone(),
             accept: self.accept.clone(),
             services: self.services.iter().map(|s| s.clo()).collect(),
         }

@@ -10,10 +10,10 @@ use crate::task::LocalWaker;
 #[derive(Copy, Clone, Default, Debug)]
 pub struct OneRequest;
 
-impl<S, C> Middleware<S, C> for OneRequest {
+impl<S, St, Cfg> Middleware<S, St, Cfg> for OneRequest {
     type Service = OneRequestService<S>;
 
-    fn create(&self, service: S, _: &C) -> Self::Service {
+    fn create(&self, service: S, _: &Cfg) -> Self::Service {
         OneRequestService {
             service,
             ready: Cell::new(true),

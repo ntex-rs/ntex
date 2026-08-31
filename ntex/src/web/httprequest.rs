@@ -15,7 +15,6 @@ pub struct HttpRequest(pub(crate) Rc<HttpRequestInner>);
 pub(crate) struct HttpRequestInner {
     pub(crate) head: Message<RequestHead>,
     pub(crate) path: Path<Uri>,
-    pub(crate) payload: Payload,
     pub(crate) config: Cfg<WebAppConfig>,
     rmap: Rc<ResourceMap>,
 }
@@ -25,14 +24,12 @@ impl HttpRequest {
     pub(crate) fn new(
         path: Path<Uri>,
         head: Message<RequestHead>,
-        payload: Payload,
         rmap: Rc<ResourceMap>,
         config: Cfg<WebAppConfig>,
     ) -> HttpRequest {
         HttpRequest(Rc::new(HttpRequestInner {
             head,
             path,
-            payload,
             config,
             rmap,
         }))

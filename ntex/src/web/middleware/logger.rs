@@ -113,7 +113,7 @@ impl Default for Logger {
     }
 }
 
-impl<S> Middleware<S, SharedCfg> for Logger {
+impl<S, St> Middleware<S, St, SharedCfg> for Logger {
     type Service = LoggerMiddleware<S>;
 
     fn create(&self, service: S, _: &SharedCfg) -> Self::Service {

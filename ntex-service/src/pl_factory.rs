@@ -1,6 +1,6 @@
 use std::{fmt, rc::Rc};
 
-use crate::pipeline::{Pipeline, PipelineWithState};
+use crate::pipeline::{Pipeline, PipelineState};
 use crate::{ServiceFactory, StateMapping, state::State, util::BoxFuture};
 
 /// Factory for a service pipeline.
@@ -76,17 +76,15 @@ impl<St, Req, Res, Err, Cfg, InitErr> fmt::Debug
 }
 
 /// Factory for a service pipeline with state.
-pub struct PipelineWithStateFactory<St, Req, Res, Err, InitCfg, InitErr> {
+pub struct PipelineStateFactory<St, Req, Res, Err, InitCfg, InitErr> {
     f: Rc<
         dyn for<'r> Fn(
             &'r InitCfg,
-        )
-            -> BoxFuture<'r, Result<PipelineWithState<St, Req, Res, Err>, InitErr>>,
+        ) -> BoxFuture<'r, Result<PipelineState<St, Req, Res, Err>, InitErr>>,
     >,
 }
 
-impl<St, Req, Res, Err, InitCfg, InitErr>
-    PipelineWithStateFactory<St, Req, Res, Err, InitCfg, InitErr>
+impl<St, Req, Res, Err, InitCfg, InitErr> PipelineStateFactory<St, Req, Res, Err, InitCfg, InitErr>
 where
     St: 'static,
 {
@@ -102,31 +100,28 @@ where
         Self {
             f: Rc::new(move |cfg: &InitCfg| {
                 let sf = sf.clone();
-                Box::pin(async move { Ok(PipelineWithState::new(sf.create(cfg).await?)) })
+                Box::pin(async move { Ok(PipelineState::new(sf.create(cfg).await?)) })
             }),
         }
     }
 
-    pub async fn create(
-        &self,
-        cfg: &InitCfg,
-    ) -> Result<PipelineWithState<St, Req, Res, Err>, InitErr> {
+    pub async fn create(&self, cfg: &InitCfg) -> Result<PipelineState<St, Req, Res, Err>, InitErr> {
         (self.f)(cfg).await
     }
 }
 
 impl<St, Req, Res, Err, InitCfg, InitErr> Clone
-    for PipelineWithStateFactory<St, Req, Res, Err, InitCfg, InitErr>
+    for PipelineStateFactory<St, Req, Res, Err, InitCfg, InitErr>
 {
     fn clone(&self) -> Self {
-        PipelineWithStateFactory { f: self.f.clone() }
+        PipelineStateFactory { f: self.f.clone() }
     }
 }
 
 impl<St, Req, Res, Err, Cfg, InitErr> fmt::Debug
-    for PipelineWithStateFactory<St, Req, Res, Err, Cfg, InitErr>
+    for PipelineStateFactory<St, Req, Res, Err, Cfg, InitErr>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PipelineWithStateFactory").finish()
+        f.debug_struct("PipelineStateFactory").finish()
     }
 }

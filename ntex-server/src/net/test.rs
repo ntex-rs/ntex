@@ -17,7 +17,7 @@ pub struct TestServerBuilder<F, Sf, St, I> {
     factory: F,
     config: SharedCfg,
     client_config: SharedCfg,
-    state: Option<Box<dyn StateFactory<St> + Send>>,
+    state: Option<StateFactory<St>>,
     _t: PhantomData<(Sf, St, I)>,
 }
 

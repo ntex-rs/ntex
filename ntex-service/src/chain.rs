@@ -210,7 +210,7 @@ impl<Sf: ServiceFactory<St, Req, Cfg>, St, Req, Cfg> ServiceChainFactory<Sf, St,
     /// Short version of `apply(middleware, factory(...))`
     pub fn apply<U>(self, tr: U) -> ServiceChainFactory<ApplyMiddleware<U, Sf>, St, Req, Cfg>
     where
-        U: Middleware<Sf::Service, Cfg>,
+        U: Middleware<Sf::Service, St, Cfg>,
     {
         crate::apply(tr, self.factory)
     }

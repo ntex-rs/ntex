@@ -24,10 +24,10 @@ impl Default for InFlight {
     }
 }
 
-impl<S, C> Middleware<S, C> for InFlight {
+impl<S, St, Cfg> Middleware<S, St, Cfg> for InFlight {
     type Service = InFlightService<S>;
 
-    fn create(&self, service: S, _: &C) -> Self::Service {
+    fn create(&self, service: S, _: &Cfg) -> Self::Service {
         InFlightService {
             service,
             count: Counter::new(self.max_inflight),

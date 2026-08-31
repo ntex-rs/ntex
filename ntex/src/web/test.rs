@@ -484,13 +484,10 @@ impl TestRequest {
         *self.path.get_mut() = head.uri.clone();
         let cfg = SharedCfg::new("TEST").add(self.config).build();
 
-        WebRequest::new(HttpRequest::new(
-            self.path,
-            head,
+        WebRequest::new(
+            HttpRequest::new(self.path, head, Rc::new(self.rmap), cfg.get()),
             payload,
-            Rc::new(self.rmap),
-            cfg.get(),
-        ))
+        )
     }
 
     #[must_use]
@@ -502,11 +499,11 @@ impl TestRequest {
     #[must_use]
     /// Complete request creation and generate `HttpRequest` instance.
     pub fn to_http_request(mut self) -> HttpRequest {
-        let (head, payload) = self.req.finish().into_parts();
+        let (head, _) = self.req.finish().into_parts();
         *self.path.get_mut() = head.uri.clone();
         let cfg = SharedCfg::new("TEST").add(self.config).build();
 
-        HttpRequest::new(self.path, head, payload, Rc::new(self.rmap), cfg.get())
+        HttpRequest::new(self.path, head, Rc::new(self.rmap), cfg.get())
     }
 
     #[must_use]
@@ -516,13 +513,7 @@ impl TestRequest {
         *self.path.get_mut() = head.uri.clone();
         let cfg = SharedCfg::new("TEST").add(self.config).build();
 
-        let req = HttpRequest::new(
-            self.path,
-            head,
-            Payload::None,
-            Rc::new(self.rmap),
-            cfg.get(),
-        );
+        let req = HttpRequest::new(self.path, head, Rc::new(self.rmap), cfg.get());
 
         (req, payload)
     }

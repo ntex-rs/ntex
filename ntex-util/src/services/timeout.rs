@@ -2,9 +2,9 @@
 //!
 //! If the response does not complete within the specified timeout, the response
 //! will be aborted.
-use std::{fmt, marker};
+use std::{fmt, marker::PhantomData};
 
-use ntex_service::{Ctx, Middleware, Service};
+use ntex_service::{Ctx, IntoService, Middleware, Service};
 
 use crate::future::{Either, select};
 use crate::time::{Millis, sleep};
@@ -13,9 +13,9 @@ use crate::time::{Millis, sleep};
 ///
 /// Timeout transform is disabled if timeout is set to 0
 #[derive(Debug)]
-pub struct Timeout<E = ()> {
+pub struct Timeout<St> {
     timeout: Millis,
-    _t: marker::PhantomData<E>,
+    _t: PhantomData<St>,
 }
 
 /// Timeout error
@@ -67,56 +67,59 @@ impl<E: PartialEq> PartialEq for TimeoutError<E> {
     }
 }
 
-impl Timeout {
+impl<St> Timeout<St> {
     pub fn new<T: Into<Millis>>(timeout: T) -> Self {
         Timeout {
             timeout: timeout.into(),
-            _t: marker::PhantomData,
+            _t: PhantomData,
         }
     }
 }
 
-impl Clone for Timeout {
+impl<St> Clone for Timeout<St> {
     fn clone(&self) -> Self {
         Timeout {
             timeout: self.timeout,
-            _t: marker::PhantomData,
+            _t: PhantomData,
         }
     }
 }
 
-impl<S, C> Middleware<S, C> for Timeout {
-    type Service = TimeoutService<S>;
+impl<S, St, Cfg> Middleware<S, St, Cfg> for Timeout<St> {
+    type Service = TimeoutService<S, St>;
 
-    fn create(&self, service: S, _: &C) -> Self::Service {
+    fn create(&self, service: S, _: &Cfg) -> Self::Service {
         TimeoutService {
             service,
             timeout: self.timeout,
+            st: PhantomData,
         }
     }
 }
 
 /// Applies a timeout to requests.
 #[derive(Debug, Clone)]
-pub struct TimeoutService<S> {
+pub struct TimeoutService<S, St> {
     service: S,
     timeout: Millis,
+    st: PhantomData<St>,
 }
 
-impl<S> TimeoutService<S> {
-    pub fn new<T, St, Req>(timeout: T, service: S) -> Self
+impl<S, St> TimeoutService<S, St> {
+    pub fn new<T, Req>(timeout: T, service: impl IntoService<S, St, Req>) -> Self
     where
         T: Into<Millis>,
         S: Service<St, Req>,
     {
         TimeoutService {
-            service,
+            service: service.into_service(),
             timeout: timeout.into(),
+            st: PhantomData,
         }
     }
 }
 
-impl<S, St, Req> Service<St, Req> for TimeoutService<S>
+impl<S, St, Req> Service<St, Req> for TimeoutService<S, St>
 where
     S: Service<St, Req>,
 {

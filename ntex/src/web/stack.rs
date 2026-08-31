@@ -21,11 +21,11 @@ impl<St, Inner, Outer> WebStack<St, Inner, Outer> {
     }
 }
 
-impl<S, St, Inner, Outer> Middleware<S, SharedCfg> for WebStack<St, Inner, Outer>
+impl<S, St, Inner, Outer> Middleware<S, St, SharedCfg> for WebStack<St, Inner, Outer>
 where
     St: AppState,
-    Inner: Middleware<S, SharedCfg>,
-    Outer: Middleware<Inner::Service, SharedCfg>,
+    Inner: Middleware<S, St, SharedCfg>,
+    Outer: Middleware<Inner::Service, St, SharedCfg>,
     Outer::Service: Service<St, WebRequest, Res = WebResponse>,
 {
     type Service = WebMiddleware<Outer::Service, St>;

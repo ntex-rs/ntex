@@ -19,6 +19,7 @@ pub use self::builder::{ServerBuilder, bind_addr, create_tcp_listener};
 pub use self::config::{ServiceConfig, ServiceRuntime};
 pub use self::service::StreamServer;
 pub use self::socket::{Connection, Stream};
+pub use self::state::ServerStateFactory;
 pub use self::test::{TestServer, TestServerBuilder, build_test_server, test_server};
 
 pub type Server = crate::Server<Connection>;
@@ -54,7 +55,7 @@ pub fn build() -> ServerBuilder {
 /// Start server with state building process
 pub fn build_with_state<F, St>(state: F) -> ServerBuilder<St>
 where
-    F: AsyncFn() -> Result<St, &'static str> + Send + Clone + 'static,
+    F: ServerStateFactory<St>,
     St: State<St, Io> + Clone + 'static,
 {
     ServerBuilder::new(state)

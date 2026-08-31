@@ -3,7 +3,7 @@
 use std::cell::{Cell, RefCell};
 use std::{collections::VecDeque, fmt, future, marker, task, task::Poll};
 
-use ntex_service::{Ctx, Middleware, Service, pipeline::PipelineWithState};
+use ntex_service::{Ctx, Middleware, Service, pipeline::PipelineState};
 
 use crate::channel::oneshot;
 
@@ -47,7 +47,7 @@ impl<St: Clone, Req, Res, Err> Default for Buffer<St, Req, Res, Err> {
     }
 }
 
-impl<S, C, St, Req, Res, Err> Middleware<S, C> for Buffer<St, Req, Res, Err>
+impl<S, St, Cfg, Req, Res, Err> Middleware<S, St, Cfg> for Buffer<St, Req, Res, Err>
 where
     S: Service<St, Req, Res = Res, Error = Err> + 'static,
     St: Clone + 'static,
@@ -57,8 +57,8 @@ where
 {
     type Service = BufferService<St, Req, Res, Err>;
 
-    fn create(&self, service: S, _: &C) -> Self::Service {
-        BufferService::new(self.buf_size, PipelineWithState::new(service))
+    fn create(&self, service: S, _: &Cfg) -> Self::Service {
+        BufferService::new(self.buf_size, PipelineState::new(service))
     }
 }
 
@@ -91,7 +91,7 @@ impl<E: fmt::Display + fmt::Debug> std::error::Error for BufferServiceError<E> {
 pub struct BufferService<St, Req, Res, Err> {
     size: usize,
     ready: Cell<bool>,
-    service: PipelineWithState<St, Req, Res, Err>,
+    service: PipelineState<St, Req, Res, Err>,
     buf: RefCell<VecDeque<oneshot::Sender<oneshot::Sender<()>>>>,
     next_call: RefCell<Option<oneshot::Receiver<()>>>,
     cancel_on_shutdown: bool,
@@ -103,7 +103,7 @@ where
     St: Clone + 'static,
 {
     #[must_use]
-    pub fn new(size: usize, service: PipelineWithState<St, Req, Res, Err>) -> Self {
+    pub fn new(size: usize, service: PipelineState<St, Req, Res, Err>) -> Self {
         Self {
             size,
             service,
@@ -297,7 +297,7 @@ mod tests {
             count: Cell::new(0),
         });
 
-        let svc = BufferService::new(2, PipelineWithState::new(TestService(inner.clone())));
+        let svc = BufferService::new(2, PipelineState::new(TestService(inner.clone())));
         assert!(format!("{svc:?}").contains("BufferService"));
 
         let srv = Pipeline::with((), svc);
@@ -341,7 +341,7 @@ mod tests {
 
         let srv = Pipeline::with(
             (),
-            BufferService::new(2, PipelineWithState::new(TestService(inner.clone()))),
+            BufferService::new(2, PipelineState::new(TestService(inner.clone()))),
         );
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 

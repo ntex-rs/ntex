@@ -42,7 +42,7 @@ impl Default for Compress {
     }
 }
 
-impl<S> Middleware<S, SharedCfg> for Compress {
+impl<S, St> Middleware<S, St, SharedCfg> for Compress {
     type Service = CompressMiddleware<S>;
 
     fn create(&self, service: S, _: &SharedCfg) -> Self::Service {

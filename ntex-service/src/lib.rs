@@ -32,7 +32,8 @@ mod util;
 
 pub mod pipeline;
 mod pl_factory;
-mod pl_nost;
+mod pl_inner;
+mod pl_state;
 
 pub use crate::apply::{apply_fn, apply_fn_factory};
 pub use crate::chain::{ServiceChain, ServiceChainFactory, factory, factory_with_st, svc};
@@ -165,6 +166,25 @@ pub trait Service<St, Req> {
     {
         svc(dev::MapErr::new(f, self))
     }
+
+    #[inline]
+    /// Call another service after call to this one has resolved successfully.
+    ///
+    /// This function can be used to chain two services together and ensure that
+    /// the second service isn't called until call to the fist service have
+    /// finished. Result of the call to the first service is used as an
+    /// input parameter for the second service's call.
+    ///
+    /// Note that this function consumes the receiving service and returns a
+    /// wrapped version of it.
+    fn and_then<Next, F>(self, f: F) -> ServiceChain<dev::AndThen<Self, Next>, St, Req>
+    where
+        Self: Sized,
+        Next: Service<St, Self::Res, Error = Self::Error>,
+        F: IntoService<Next, St, Self::Res>,
+    {
+        svc(dev::AndThen::new(self, f.into_service()))
+    }
 }
 
 /// A factory for creating `Service`s.
@@ -245,6 +265,16 @@ pub trait ServiceFactory<St, Req, Cfg = ()> {
         F: Fn(Self::InitError) -> E + Clone,
     {
         factory_with_st(dev::MapInitErr::new(f, self))
+    }
+
+    /// Call another service after call to this one has resolved successfully.
+    fn and_then<U, F>(self, f: F) -> ServiceChainFactory<dev::AndThenFactory<Self, U>, St, Req, Cfg>
+    where
+        Self: Sized,
+        U: ServiceFactory<St, Self::Res, Cfg, Error = Self::Error, InitError = Self::InitError>,
+        F: IntoServiceFactory<U, St, Self::Res, Cfg>,
+    {
+        factory_with_st(dev::AndThenFactory::new(self, f.into_factory()))
     }
 
     /// Creates a boxed service factory.
@@ -362,10 +392,9 @@ where
 /// Check `Service` type
 #[inline(always)]
 #[allow(clippy::inline_always)]
-pub fn __assert_svc<S, St, Req, Res, Err>(s: S) -> S
-where
-    S: Service<St, Req, Res = Res, Error = Err>,
-{
+pub fn __assert_svc<St, Req, Res, Err>(
+    s: impl Service<St, Req, Res = Res, Error = Err>,
+) -> impl Service<St, Req, Res = Res, Error = Err> {
     s
 }
 

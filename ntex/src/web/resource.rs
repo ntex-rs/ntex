@@ -325,7 +325,7 @@ where
             Error = St::Error,
             InitError = (),
         > + 'static,
-    M: Middleware<ResourcePipeline<St, Sf::Service>, SharedCfg> + 'static,
+    M: Middleware<ResourcePipeline<St, Sf::Service>, St, SharedCfg> + 'static,
     M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
 {
     fn register(mut self, config: &mut WebServiceConfig<St>) {
@@ -378,7 +378,7 @@ where
             Error = St::Error,
             InitError = (),
         > + 'static,
-    M: Middleware<ResourcePipeline<St, Sf::Service>, SharedCfg> + 'static,
+    M: Middleware<ResourcePipeline<St, Sf::Service>, St, SharedCfg> + 'static,
     M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
 {
     fn into_factory(
@@ -409,7 +409,7 @@ pub struct ResourceServiceFactory<St: AppState, M, F> {
 impl<St, M, F> ServiceFactory<St, WebRequest, SharedCfg> for ResourceServiceFactory<St, M, F>
 where
     St: AppState,
-    M: Middleware<ResourcePipeline<St, F::Service>, SharedCfg> + 'static,
+    M: Middleware<ResourcePipeline<St, F::Service>, St, SharedCfg> + 'static,
     M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
     F: ServiceFactory<
             St,

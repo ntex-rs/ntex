@@ -39,7 +39,7 @@ pub trait ServerConfiguration: Send + Clone + 'static {
     type Service: Service<(), Self::Item, Res = (), Error = ()> + 'static;
 
     /// Create service for handling `WorkerMessage<T>` messages.
-    async fn create(&self) -> Result<Self::Service, &'static str>;
+    async fn create(&self) -> std::io::Result<Self::Service>;
 
     /// Pause the server.
     fn pause(&self) {}

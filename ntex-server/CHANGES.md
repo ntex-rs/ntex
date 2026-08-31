@@ -1,5 +1,9 @@
 # Changes
 
+## [4.0.0-beta.2] - 2026-08-xx
+
+* Refactor server state creation process
+
 ## [4.0.0-beta.1] - 2026-08-26
 
 * Shutdown on SIGTERM is always graceful

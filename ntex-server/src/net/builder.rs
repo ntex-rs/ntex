@@ -11,7 +11,7 @@ use crate::{Server, WorkerPool};
 use super::accept::AcceptLoop;
 use super::config::ServiceConfig;
 use super::factory::{self, FactoryServiceType};
-use super::state::{StateFactory, state_factory};
+use super::state::{ServerStateFactory, StateFactory, state_factory};
 use super::{Connection, ServerStatus, StreamServer, Token, socket::Listener};
 
 /// Streaming service builder
@@ -22,7 +22,7 @@ pub struct ServerBuilder<St = ()> {
     name: String,
     token: Token,
     backlog: i32,
-    state: Box<dyn StateFactory<St> + Send>,
+    state: StateFactory<St>,
     services: Vec<FactoryServiceType<St>>,
     sockets: Vec<(Token, String, Listener)>,
     accept: AcceptLoop,
@@ -47,7 +47,7 @@ where
     /// and must construct server state.
     pub fn new<F>(state: F) -> ServerBuilder<St>
     where
-        F: AsyncFn() -> Result<St, &'static str> + Send + Clone + 'static,
+        F: ServerStateFactory<St>,
     {
         let sys = System::current();
         let mut accept = AcceptLoop::default();

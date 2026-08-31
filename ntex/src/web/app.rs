@@ -345,7 +345,7 @@ where
 impl<St, M, F> App<St, M, F>
 where
     St: AppState,
-    M: Middleware<AppRouter<St, F::Service>, SharedCfg> + 'static,
+    M: Middleware<AppRouter<St, F::Service>, St, SharedCfg> + 'static,
     M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
     F: ServiceFactory<
             St,
@@ -390,7 +390,7 @@ where
 impl<St, M, F> IntoServiceFactory<AppFactory<St, M, F>, St, Request, SharedCfg> for App<St, M, F>
 where
     St: AppState,
-    M: Middleware<AppRouter<St, F::Service>, SharedCfg> + 'static,
+    M: Middleware<AppRouter<St, F::Service>, St, SharedCfg> + 'static,
     M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
     F: ServiceFactory<
             St,

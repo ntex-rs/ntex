@@ -50,7 +50,7 @@ pub(crate) type HttpPipeline<St, B, Err> = crate::PipelineFactory<
     Response<B>,
     Err,
     crate::SharedCfg,
-    std::rc::Rc<dyn std::error::Error>,
+    Box<dyn std::error::Error>,
 >;
 
 #[cfg(feature = "openssl")]

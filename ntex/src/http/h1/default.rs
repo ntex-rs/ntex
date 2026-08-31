@@ -8,7 +8,7 @@ use super::control::{Control, ControlAck};
 /// Default control service
 pub struct DefaultControlService;
 
-impl<F, Err> Service<(), Control<F, Err>> for DefaultControlService
+impl<St, F, Err> Service<St, Control<F, Err>> for DefaultControlService
 where
     F: Filter,
     Err: ResponseError,
@@ -20,7 +20,7 @@ where
     async fn call(
         &self,
         r: Control<F, Err>,
-        _: Ctx<'_, Self, ()>,
+        _: Ctx<'_, Self, St>,
     ) -> Result<Self::Res, Self::Error> {
         Ok(r.ack())
     }

@@ -28,7 +28,7 @@ impl WebError {
     }
 }
 
-impl<T> WebResponseError<T> for WebError {
+impl WebResponseError<WebError> for WebError {
     fn error_response(&mut self, req: &HttpRequest) -> HttpResponse {
         self.cause.error_response(req)
     }

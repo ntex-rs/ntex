@@ -10,7 +10,7 @@ pub fn apply<Sf, St, Req, Cfg, M>(
 ) -> ServiceChainFactory<ApplyMiddleware<M, Sf>, St, Req, Cfg>
 where
     Sf: ServiceFactory<St, Req, Cfg>,
-    M: Middleware<Sf::Service, Cfg>,
+    M: Middleware<Sf::Service, St, Cfg>,
 {
     ServiceChainFactory {
         factory: ApplyMiddleware::new(mw, factory.into_factory()),
@@ -87,23 +87,23 @@ where
 ///     }
 /// }
 /// ```
-pub trait Middleware<Svc, Cfg = ()> {
+pub trait Middleware<S, St, Cfg> {
     /// The middleware `Service` value created by this factory
     type Service;
 
     /// Creates and returns a new middleware service.
-    fn create(&self, service: Svc, cfg: &Cfg) -> Self::Service;
+    fn create(&self, service: S, cfg: &Cfg) -> Self::Service;
 
     /// Creates a service factory that instantiates a service and applies
     /// the current middleware to it.
     ///
     /// This is equivalent to `apply(self, factory)`.
-    fn apply<Sf, St, Req>(
+    fn apply<Sf, Req>(
         self,
         factory: Sf,
     ) -> ServiceChainFactory<ApplyMiddleware<Self, Sf>, St, Req, Cfg>
     where
-        Sf: ServiceFactory<St, Req, Cfg, Service = Svc>,
+        Sf: ServiceFactory<St, Req, Cfg, Service = S>,
         Self: Sized,
         Self::Service: Service<St, Req>,
     {
@@ -111,9 +111,9 @@ pub trait Middleware<Svc, Cfg = ()> {
     }
 }
 
-impl<M, S, Cfg> Middleware<S, Cfg> for Rc<M>
+impl<M, S, St, Cfg> Middleware<S, St, Cfg> for Rc<M>
 where
-    M: Middleware<S, Cfg>,
+    M: Middleware<S, St, Cfg>,
 {
     type Service = M::Service;
 
@@ -154,7 +154,7 @@ where
 impl<M, Sf, St, Req, Cfg> ServiceFactory<St, Req, Cfg> for ApplyMiddleware<M, Sf>
 where
     Sf: ServiceFactory<St, Req, Cfg>,
-    M: Middleware<Sf::Service, Cfg>,
+    M: Middleware<Sf::Service, St, Cfg>,
     M::Service: Service<St, Req>,
 {
     type Res = <M::Service as Service<St, Req>>::Res;
@@ -175,7 +175,7 @@ where
 #[derive(Debug, Clone, Copy)]
 pub struct Identity;
 
-impl<S, Cfg> Middleware<S, Cfg> for Identity {
+impl<S, St, Cfg> Middleware<S, St, Cfg> for Identity {
     type Service = S;
 
     #[inline]
@@ -197,14 +197,14 @@ impl<Inner, Outer> Stack<Inner, Outer> {
     }
 }
 
-impl<S, Inner, Outer, C> Middleware<S, C> for Stack<Inner, Outer>
+impl<S, St, Inner, Outer, Cfg> Middleware<S, St, Cfg> for Stack<Inner, Outer>
 where
-    Inner: Middleware<S, C>,
-    Outer: Middleware<Inner::Service, C>,
+    Inner: Middleware<S, St, Cfg>,
+    Outer: Middleware<Inner::Service, St, Cfg>,
 {
     type Service = Outer::Service;
 
-    fn create(&self, service: S, cfg: &C) -> Self::Service {
+    fn create(&self, service: S, cfg: &Cfg) -> Self::Service {
         self.outer.create(self.inner.create(service, cfg), cfg)
     }
 }
@@ -245,7 +245,8 @@ impl<F, S, St, Req, In, Out, Err> fmt::Debug for FnMiddleware<F, S, St, Req, In,
     }
 }
 
-impl<F, S, St, Req, In, Out, Err, C> Middleware<S, C> for FnMiddleware<F, S, St, Req, In, Out, Err>
+impl<F, S, St, Req, In, Out, Err, C> Middleware<S, St, C>
+    for FnMiddleware<F, S, St, Req, In, Out, Err>
 where
     S: Service<St, Req>,
     F: AsyncFn(In, &ApplyCtx<'_, S, St, Req>) -> Result<Out, Err> + Clone,

@@ -31,10 +31,10 @@ impl<P> Retry<P> {
     }
 }
 
-impl<P: Clone, S, C> Middleware<S, C> for Retry<P> {
+impl<P: Clone, S, St, Cfg> Middleware<S, St, Cfg> for Retry<P> {
     type Service = RetryService<P, S>;
 
-    fn create(&self, service: S, _: &C) -> Self::Service {
+    fn create(&self, service: S, _: &Cfg) -> Self::Service {
         RetryService {
             service,
             policy: self.policy.clone(),

@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 
-pub trait State<St, Req> {
-    fn on_req(&self, _: &St, _: &Req) -> Option<St> {
+pub trait State<Req> {
+    fn on_req(&self, _: &Req) -> Option<Self> {
         None
     }
 }
@@ -15,8 +15,8 @@ pub trait StateMapping<From>: Clone + 'static {
         Self::Control: State<Self::State, Req>;
 }
 
-impl<Req> State<(), Req> for () {
-    fn on_req(&self, _s: &(), _r: &Req) -> Option<()> {
+impl<Req> State<Req> for () {
+    fn on_req(&self, _r: &Req) -> Option<()> {
         None
     }
 }

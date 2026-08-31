@@ -88,7 +88,7 @@ impl DefaultHeaders {
     }
 }
 
-impl<S> Middleware<S, SharedCfg> for DefaultHeaders {
+impl<S, St> Middleware<S, St, SharedCfg> for DefaultHeaders {
     type Service = DefaultHeadersMiddleware<S>;
 
     fn create(&self, service: S, _: &SharedCfg) -> Self::Service {

@@ -42,7 +42,7 @@ where
 impl<St, M, F> AppFactory<St, M, F>
 where
     St: AppState,
-    M: Middleware<AppRouter<St, F::Service>, SharedCfg> + 'static,
+    M: Middleware<AppRouter<St, F::Service>, St, SharedCfg> + 'static,
     M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
     F: ServiceFactory<
             St,
@@ -121,7 +121,7 @@ where
 impl<St, M, F> ServiceFactory<St, Request, SharedCfg> for AppFactory<St, M, F>
 where
     St: AppState,
-    M: Middleware<AppRouter<St, F::Service>, SharedCfg> + 'static,
+    M: Middleware<AppRouter<St, F::Service>, St, SharedCfg> + 'static,
     M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
     F: ServiceFactory<
             St,
@@ -198,19 +198,17 @@ where
             let inner = Rc::get_mut(&mut req.0).unwrap();
             inner.path.set(head.uri.clone());
             inner.head = head;
-            inner.payload = payload;
             inner.config = self.config.clone();
             req
         } else {
             HttpRequest::new(
                 Path::new(head.uri.clone()),
                 head,
-                payload,
                 self.rmap.clone(),
                 self.config.clone(),
             )
         };
-        ctx.call(&self.service, WebRequest::new(req)).await
+        ctx.call(&self.service, WebRequest::new(req, payload)).await
     }
 }
 

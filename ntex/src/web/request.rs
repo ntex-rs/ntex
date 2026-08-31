@@ -1,4 +1,4 @@
-use std::{cell::Ref, cell::RefMut, fmt, net, rc::Rc};
+use std::{cell::Ref, cell::RefMut, fmt, net};
 
 use crate::http::{
     HeaderMap, HttpMessage, Method, Payload, RequestHead, Response, Uri, Version, header,
@@ -18,6 +18,7 @@ use super::{HttpRequest, WebResponse};
 /// `WebRequest` allows mutable access to request's internal structures
 pub struct WebRequest {
     req: HttpRequest,
+    payload: Payload,
 }
 
 impl WebRequest {
@@ -30,38 +31,25 @@ impl WebRequest {
 
 impl WebRequest {
     /// Construct web request
-    pub(crate) fn new(req: HttpRequest) -> Self {
-        WebRequest { req }
+    pub(crate) fn new(req: HttpRequest, payload: Payload) -> Self {
+        WebRequest { req, payload }
     }
 
     /// Deconstruct request into parts
-    pub fn into_parts(mut self) -> (HttpRequest, Payload) {
-        let pl = Rc::get_mut(&mut (self.req).0).unwrap().payload.take();
-        (self.req, pl)
+    pub fn into_parts(self) -> (HttpRequest, Payload) {
+        (self.req, self.payload)
     }
 
     /// Construct request from parts.
-    ///
-    /// `WebRequest` can be re-constructed only if `req` hasnt been cloned.
-    pub fn from_parts(mut req: HttpRequest, pl: Payload) -> Result<Self, (HttpRequest, Payload)> {
-        if Rc::strong_count(&req.0) == 1 {
-            Rc::get_mut(&mut req.0).unwrap().payload = pl;
-            Ok(WebRequest::new(req))
-        } else {
-            Err((req, pl))
-        }
+    pub fn from_parts(req: HttpRequest, payload: Payload) -> Self {
+        WebRequest { req, payload }
     }
 
     /// Construct request from request.
-    ///
-    /// `HttpRequest` implements `Clone` trait via `Rc` type. `WebRequest`
-    /// can be re-constructed only if rc's strong pointers count eq 1 and
-    /// weak pointers count is 0.
-    pub fn from_request(req: HttpRequest) -> Result<Self, HttpRequest> {
-        if Rc::strong_count(&req.0) == 1 {
-            Ok(WebRequest::new(req))
-        } else {
-            Err(req)
+    pub fn from_request(req: HttpRequest) -> Self {
+        WebRequest {
+            req,
+            payload: Payload::None,
         }
     }
 
@@ -186,18 +174,6 @@ impl WebRequest {
     /// Get an application state.
     pub fn app_state<T: 'static>(&self) -> Option<&T> {
         (self.req).app_config().state()
-    }
-
-    #[inline]
-    /// Get request's payload
-    pub fn take_payload(&mut self) -> Payload {
-        Rc::get_mut(&mut (self.req).0).unwrap().payload.take()
-    }
-
-    #[inline]
-    /// Set request payload.
-    pub fn set_payload(&mut self, payload: Payload) {
-        Rc::get_mut(&mut (self.req).0).unwrap().payload = payload;
     }
 
     /// Request extensions
