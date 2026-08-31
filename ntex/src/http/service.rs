@@ -21,7 +21,7 @@ pub struct HttpService<St, Rst: RequestState, F, B, Err> {
     config: DispatcherConfig,
 }
 
-impl<St, F, B, Err> HttpService<St, DefaultState<Io<F>, ()>, F, B, Err>
+impl<St, F, B, Err> HttpService<St, DefaultState<Io<F>>, F, B, Err>
 where
     St: Clone + 'static,
     F: Filter,
@@ -49,7 +49,7 @@ where
     /// Create *http service* for HTTP/1 protocol.
     pub fn h1<Sf>(
         sf: impl IntoServiceFactory<Sf, (), Request, SharedCfg>,
-    ) -> h1::H1Service<St, DefaultState<Io<F>, ()>, F, B, Err>
+    ) -> h1::H1Service<St, DefaultState<Io<F>>, F, B, Err>
     where
         Sf: ServiceFactory<(), Request, SharedCfg, Error = Err> + 'static,
         Sf::Res: Into<Response<B>>,
@@ -62,7 +62,7 @@ where
     /// Create *http service* for HTTP/2 protocol.
     pub fn h2<Sf>(
         sf: impl IntoServiceFactory<Sf, (), Request, SharedCfg>,
-    ) -> h2::H2Service<St, DefaultState<Io<F>, ()>, F, B, Err>
+    ) -> h2::H2Service<St, DefaultState<Io<F>>, F, B, Err>
     where
         Sf: ServiceFactory<(), Request, SharedCfg, Error = Err> + 'static,
         Sf::Res: Into<Response<B>>,
@@ -219,10 +219,7 @@ where
     }
 
     async fn call(&self, io: Rst::Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
-        let (io, st) = self.rst.map(io).await.map_err(|_| {
-            log::error!("Cannot derive state");
-            DispatchError::Control
-        })?;
+        let (io, st) = self.rst.map(io);
 
         let cfg = io.shared();
         let svc = self.sf.create(&cfg, st).await.map_err(|e| {

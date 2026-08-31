@@ -110,10 +110,7 @@ where
     }
 
     async fn call(&self, io: Rst::Req, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
-        let (io, st) = self.rst.map(io).await.map_err(|_| {
-            log::error!("Cannot extract state");
-            DispatchError::Control
-        })?;
+        let (io, st) = self.rst.map(io);
 
         let cfg = io.shared();
         let svc = self.sf.create(&cfg, st).await.map_err(|e| {

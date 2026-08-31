@@ -270,7 +270,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct Mw(Rc<Cell<usize>>);
 
-    impl<S, C> Middleware<S, C> for Mw {
+    impl<S, St, C> Middleware<S, St, C> for Mw {
         type Service = Srv<S>;
 
         fn create(&self, service: S, _: &C) -> Self::Service {
@@ -374,7 +374,7 @@ mod tests {
 
         let pl = Pipeline::with(
             (),
-            Middleware::create(
+            Middleware::<_, (), _>::create(
                 &mw,
                 fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }),
                 &(),
