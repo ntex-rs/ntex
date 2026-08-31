@@ -8,7 +8,7 @@ use crate::http::error::{BlockingError, ResponseError};
 use crate::http::header::ContentEncoding;
 use crate::http::{Method, Request, Response};
 use crate::server::NoConfig;
-use crate::service::{IntoServiceFactory, ServiceFactory, cfg::SharedCfg, state::DefaultState};
+use crate::service::{IntoServiceFactory, ServiceFactory, cfg::SharedCfg};
 
 use super::extract::FromRequest;
 use super::handler::Handler;
@@ -297,7 +297,7 @@ where
 ///         .await
 /// }
 /// ```
-pub fn server<F, I, Sf, B>(factory: F) -> HttpServer<NoConfig, F, I, Sf, DefaultState<()>, B>
+pub fn server<F, I, Sf, B>(factory: F) -> HttpServer<NoConfig, F, I, Sf, B>
 where
     F: AsyncFn(&()) -> I + Send + Clone + 'static,
     I: IntoServiceFactory<Sf, (), Request, SharedCfg>,

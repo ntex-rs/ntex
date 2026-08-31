@@ -43,7 +43,7 @@ pub use crate::fn_shutdown::fn_shutdown;
 pub use crate::map_config::{map_config, unit_config};
 pub use crate::middleware::{Identity, Middleware, Stack, apply, fn_layer};
 pub use crate::pipeline::Pipeline;
-pub use crate::state::StateMapping;
+pub use crate::state::{RequestState, StateMapping};
 
 #[allow(unused_variables)]
 /// An asynchronous function from a `Request` to a `Response`.

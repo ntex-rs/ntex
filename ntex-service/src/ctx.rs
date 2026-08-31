@@ -422,20 +422,20 @@ mod tests {
         let con = condition::Condition::new();
         let srv = Pipeline::with((), Srv(cnt.clone(), con.wait()));
 
-        let (tx, rx) = oneshot::channel();
-        let srv2 = srv.bind();
-        spawn(async move {
-            select(rx, srv2.ready()).await;
-            srv2.shutdown().await;
-            time::sleep(time::Millis(25000)).await;
-        });
-        time::sleep(time::Millis(250)).await;
-
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
 
-        let _ = tx.send(());
+        let (tx, rx) = oneshot::channel();
+        let (tx2, rx2) = oneshot::channel();
+        spawn(async move {
+            select(rx, srv.ready()).await;
+            srv.shutdown().await;
+            let _ = tx2.send(srv);
+        });
         time::sleep(time::Millis(250)).await;
+
+        let _ = tx.send(());
+        let srv = rx2.await.unwrap();
 
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));

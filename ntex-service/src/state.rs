@@ -1,43 +1,9 @@
 use std::marker::PhantomData;
 
-pub trait State<Req>: Sized + 'static {
-    fn on_req(&self, _: &Req) -> Option<Self> {
-        None
-    }
-}
-
 pub trait StateMapping<From>: Clone + 'static {
     type State: 'static;
 
     fn map(&self, st: &From) -> Self::State;
-}
-
-impl<Req> State<Req> for () {}
-
-#[derive(Debug, Default)]
-pub struct DefaultState<St>(PhantomData<St>);
-
-impl<St> DefaultState<St> {
-    #[inline]
-    pub fn new() -> Self {
-        Self(PhantomData)
-    }
-}
-
-impl<St> Copy for DefaultState<St> {}
-
-impl<St> Clone for DefaultState<St> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<St: Default + 'static, From> StateMapping<From> for DefaultState<St> {
-    type State = St;
-
-    fn map(&self, _: &From) -> St {
-        St::default()
-    }
 }
 
 #[derive(Debug, Default)]
@@ -97,38 +63,45 @@ where
     }
 }
 
-pub(crate) trait StateWrapper<St, Req>: Sized + 'static {
-    fn get(&self) -> &St;
+pub trait RequestState {
+    type Req;
+    type Res;
+    type State: 'static;
+    type Error;
 
-    fn on_req(&self, _: &Req) -> Option<St>;
+    async fn map(&self, req: Self::Req) -> Result<(Self::Res, Self::State), Self::Error>;
 }
 
-pub(crate) struct StateWrapperNoReq<St>(pub(crate) St);
+#[derive(Debug)]
+pub struct DefaultState<Req, Err>(PhantomData<(Req, Err)>);
 
-impl<St: 'static, Req> StateWrapper<St, Req> for StateWrapperNoReq<St> {
-    fn get(&self) -> &St {
-        &self.0
-    }
-
-    fn on_req(&self, _: &Req) -> Option<St> {
-        None
+impl<Req, Err> DefaultState<Req, Err> {
+    pub fn new() -> Self {
+        Self(PhantomData)
     }
 }
 
-pub(crate) struct StateWrapperReq<St>(pub(crate) St);
+impl<Req, Err> Copy for DefaultState<Req, Err> {}
 
-impl<St: State<Req>, Req> StateWrapper<St, Req> for StateWrapperReq<St> {
-    fn get(&self) -> &St {
-        &self.0
+impl<Req, Err> Clone for DefaultState<Req, Err> {
+    fn clone(&self) -> Self {
+        Self(PhantomData)
     }
+}
 
-    fn on_req(&self, req: &Req) -> Option<St> {
-        self.0.on_req(req)
+impl<Req, Err> RequestState for DefaultState<Req, Err> {
+    type Req = Req;
+    type Res = Req;
+    type State = ();
+    type Error = Err;
+
+    async fn map(&self, req: Req) -> Result<(Self::Req, Self::State), Self::Error> {
+        Ok((req, ()))
     }
 }
 
 // SAFETY: Send cannot be provided authomatically because of St param
 // but code get executed in one thread and never leave it
-unsafe impl<St> Send for DefaultState<St> {}
+unsafe impl<Req, Err> Send for DefaultState<Req, Err> {}
 unsafe impl<St> Send for CloneState<St> {}
 unsafe impl<F, St> Send for FnState<F, St> where F: Send {}

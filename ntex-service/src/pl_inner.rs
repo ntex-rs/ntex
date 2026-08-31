@@ -1,6 +1,5 @@
 use std::{cell, future::Future, pin::Pin, ptr, rc::Rc, task::Context, task::Poll};
 
-use crate::state::StateWrapper;
 use crate::{Ctx, Service, ctx::WaitersRef, util::BoxFuture};
 
 // ======================== PipelaneState ============================
@@ -8,12 +7,11 @@ use crate::{Ctx, Service, ctx::WaitersRef, util::BoxFuture};
 pub(crate) struct PipelineApi<Req, Res, Err>(Rc<dyn PipelineInternalApi<Req, Res, Err>>);
 
 impl<Req, Res, Err> PipelineApi<Req, Res, Err> {
-    pub(crate) fn new<S, St, Wrp>(s: S, st: Wrp) -> Self
+    pub(crate) fn new<S, St>(s: S, st: St) -> Self
     where
-        Req: 'static,
         S: Service<St, Req, Res = Res, Error = Err> + 'static,
         St: 'static,
-        Wrp: StateWrapper<St, Req>,
+        Req: 'static,
     {
         PipelineApi(Rc::new(PipelineInner {
             s,
@@ -66,39 +64,11 @@ impl<Req, Res, Err> Clone for PipelineApi<Req, Res, Err> {
 
 // ======================== PipelaneInner ============================
 
-struct PipelineInner<S: Service<St, Req>, St, Req, Wrp> {
+struct PipelineInner<S: Service<St, Req>, St, Req> {
     s: S,
-    st: Wrp,
+    st: St,
     st_runtime: cell::UnsafeCell<RuntimeState<S::Error>>,
     waiters: WaitersRef,
-}
-
-enum StateRef<'a, T> {
-    Ref(&'a T),
-    Owned(T),
-}
-
-impl<'a, T> StateRef<'a, T> {
-    fn get_ref(&'a self) -> &'a T {
-        match self {
-            StateRef::Ref(t) => t,
-            StateRef::Owned(t) => t,
-        }
-    }
-}
-
-impl<S, St, Req, Wrp> PipelineInner<S, St, Req, Wrp>
-where
-    S: Service<St, Req> + 'static,
-    Wrp: StateWrapper<St, Req>,
-{
-    fn st(&self, req: &Req) -> StateRef<'_, St> {
-        if let Some(s) = self.st.on_req(req) {
-            StateRef::Owned(s)
-        } else {
-            StateRef::Ref(&self.st.get())
-        }
-    }
 }
 
 enum RuntimeState<E> {
@@ -126,12 +96,11 @@ pub(crate) trait PipelineInternalApi<Req, Res, Err> {
     fn is_shutdown(&self) -> bool;
 }
 
-impl<S, St, Req, Wrp> PipelineInternalApi<Req, S::Res, S::Error> for PipelineInner<S, St, Req, Wrp>
+impl<S, St, Req> PipelineInternalApi<Req, S::Res, S::Error> for PipelineInner<S, St, Req>
 where
     S: Service<St, Req> + 'static,
     St: 'static,
     Req: 'static,
-    Wrp: StateWrapper<St, Req>,
 {
     fn reg(&self) -> u32 {
         self.waiters.insert()
@@ -143,7 +112,7 @@ where
 
     fn ready(&self, idx: u32) -> BoxFuture<'_, Result<(), S::Error>> {
         Box::pin(async move {
-            Ctx::<'_, S, St>::new(idx, &self.waiters, self.st.get())
+            Ctx::<'_, S, St>::new(idx, &self.waiters, &self.st)
                 .ready(&self.s)
                 .await
         })
@@ -151,14 +120,12 @@ where
 
     fn call(&self, idx: u32, req: Req, ready: bool) -> BoxFuture<'_, Result<S::Res, S::Error>> {
         Box::pin(async move {
-            let st = self.st(&req);
-
             if ready {
-                Ctx::<'_, S, St>::new(idx, &self.waiters, st.get_ref())
+                Ctx::<'_, S, St>::new(idx, &self.waiters, &self.st)
                     .call(&self.s, req)
                     .await
             } else {
-                Ctx::<'_, S, St>::new(idx, &self.waiters, st.get_ref())
+                Ctx::<'_, S, St>::new(idx, &self.waiters, &self.st)
                     .call_nowait(&self.s, req)
                     .await
             }
@@ -196,7 +163,7 @@ where
                 let pl = unsafe { &*(ptr::from_ref(self)) };
 
                 let fut = Box::pin(async move {
-                    let ctx = Ctx::<'_, S, St>::new(0, &pl.waiters, pl.st.get());
+                    let ctx = Ctx::<'_, S, St>::new(0, &pl.waiters, &pl.st);
                     pl.s.shutdown(ctx).await;
                 });
                 *st = RuntimeState::Shutdown(fut);
@@ -219,39 +186,31 @@ where
     }
 }
 
-fn ready<S, St, Req, Wrp>(
-    pl: &'static PipelineInner<S, St, Req, Wrp>,
+fn ready<S, St, Req>(
+    pl: &'static PipelineInner<S, St, Req>,
 ) -> impl Future<Output = Result<(), S::Error>>
 where
     S: Service<St, Req>,
-    Wrp: StateWrapper<St, Req>,
 {
-    pl.s.ready(Ctx::<'_, S, St>::new(0, &pl.waiters, pl.st.get()))
+    pl.s.ready(Ctx::<'_, S, St>::new(0, &pl.waiters, &pl.st))
 }
 
-struct CheckReadiness<S, St, Req, Wrp, F, Fut>
+struct CheckReadiness<S, St, Req, F, Fut>
 where
     S: Service<St, Req> + 'static,
     St: 'static,
-    Wrp: StateWrapper<St, Req>,
     Req: 'static,
 {
     f: F,
     fut: Option<Fut>,
-    pl: &'static PipelineInner<S, St, Req, Wrp>,
+    pl: &'static PipelineInner<S, St, Req>,
 }
 
-impl<S, St, Req, Wrp, F, Fut> Unpin for CheckReadiness<S, St, Req, Wrp, F, Fut>
-where
-    S: Service<St, Req>,
-    Wrp: StateWrapper<St, Req>,
-{
-}
+impl<S, St, Req, F, Fut> Unpin for CheckReadiness<S, St, Req, F, Fut> where S: Service<St, Req> {}
 
-impl<S, St, Req, Wrp, F, Fut> Drop for CheckReadiness<S, St, Req, Wrp, F, Fut>
+impl<S, St, Req, F, Fut> Drop for CheckReadiness<S, St, Req, F, Fut>
 where
     S: Service<St, Req>,
-    Wrp: StateWrapper<St, Req>,
 {
     fn drop(&mut self) {
         // future got dropped during polling, we must notify other waiters
@@ -261,11 +220,10 @@ where
     }
 }
 
-impl<S, St, Req, Wrp, F, Fut> Future for CheckReadiness<S, St, Req, Wrp, F, Fut>
+impl<S, St, Req, F, Fut> Future for CheckReadiness<S, St, Req, F, Fut>
 where
     S: Service<St, Req>,
-    Wrp: StateWrapper<St, Req>,
-    F: Fn(&'static PipelineInner<S, St, Req, Wrp>) -> Fut,
+    F: Fn(&'static PipelineInner<S, St, Req>) -> Fut,
     Fut: Future<Output = Result<(), S::Error>>,
 {
     type Output = Result<(), S::Error>;

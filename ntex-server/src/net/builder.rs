@@ -216,9 +216,9 @@ where
         factory: F,
     ) -> io::Result<Self>
     where
-        F: AsyncFn(&Cfg::Config) -> I + Send + Clone + 'static,
-        S: Service<(), Io> + 'static,
-        I: IntoService<S, (), Io> + 'static,
+        F: AsyncFn(&Cfg::State) -> I + Send + Clone + 'static,
+        S: Service<Cfg::State, Io> + 'static,
+        I: IntoService<S, Cfg::State, Io> + 'static,
     {
         let cfg = cfg.into();
         let sockets = bind_addr(addr, self.backlog)?;
@@ -250,9 +250,9 @@ where
         factory: F,
     ) -> io::Result<Self>
     where
-        F: AsyncFn(&Cfg::Config) -> I + Send + Clone + 'static,
-        I: IntoService<S, (), Io> + 'static,
-        S: Service<(), Io> + 'static,
+        F: AsyncFn(&Cfg::State) -> I + Send + Clone + 'static,
+        I: IntoService<S, Cfg::State, Io> + 'static,
+        S: Service<Cfg::State, Io> + 'static,
     {
         use std::os::unix::net::UnixListener;
 
@@ -281,9 +281,9 @@ where
         factory: F,
     ) -> io::Result<Self>
     where
-        F: AsyncFn(&Cfg::Config) -> I + Send + Clone + 'static,
-        I: IntoService<S, (), Io> + 'static,
-        S: Service<(), Io> + 'static,
+        F: AsyncFn(&Cfg::State) -> I + Send + Clone + 'static,
+        I: IntoService<S, Cfg::State, Io> + 'static,
+        S: Service<Cfg::State, Io> + 'static,
     {
         let token = self.token.next();
         self.services.push(factory::create_factory_service(
@@ -305,9 +305,9 @@ where
         factory: F,
     ) -> io::Result<Self>
     where
-        F: AsyncFn(&Cfg::Config) -> I + Send + Clone + 'static,
-        S: Service<(), Io> + 'static,
-        I: IntoService<S, (), Io> + 'static,
+        F: AsyncFn(&Cfg::State) -> I + Send + Clone + 'static,
+        S: Service<Cfg::State, Io> + 'static,
+        I: IntoService<S, Cfg::State, Io> + 'static,
     {
         let token = self.token.next();
         self.services.push(factory::create_factory_service(

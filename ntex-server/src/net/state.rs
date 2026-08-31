@@ -1,16 +1,16 @@
 use std::io;
 
 pub trait ServerAppConfig: Sync + Send + 'static {
-    type Config: Clone;
+    type State: Clone;
 
-    async fn create(&self) -> io::Result<Self::Config>;
+    async fn create(&self) -> io::Result<Self::State>;
 }
 
 #[derive(Copy, Clone, Default, Debug)]
 pub struct NoConfig;
 
 impl ServerAppConfig for NoConfig {
-    type Config = ();
+    type State = ();
 
     async fn create(&self) -> io::Result<()> {
         Ok(())
@@ -22,7 +22,7 @@ where
     F: AsyncFn() -> io::Result<Cfg> + Sync + Send + 'static,
     Cfg: Clone,
 {
-    type Config = Cfg;
+    type State = Cfg;
 
     async fn create(&self) -> io::Result<Cfg> {
         (*self)().await

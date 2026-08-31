@@ -21,13 +21,13 @@ pub(crate) trait NetService {
 pub(crate) trait FactoryService<Cfg: ServerAppConfig>: Send {
     fn clo(&self) -> FactoryServiceType<Cfg>;
 
-    fn create(&self, st: Cfg::Config) -> BoxFuture<'static, io::Result<CreateResult>>;
+    fn create(&self, st: Cfg::State) -> BoxFuture<'static, io::Result<CreateResult>>;
 }
 
 struct Factory<Cfg: ServerAppConfig> {
     name: Arc<str>,
     tokens: Vec<(Token, SharedCfg)>,
-    fac: Arc<SvcFactory<Cfg::Config>>,
+    fac: Arc<SvcFactory<Cfg::State>>,
 }
 
 pub(crate) fn create_factory_service<Cfg, F, S, I>(
@@ -37,18 +37,18 @@ pub(crate) fn create_factory_service<Cfg, F, S, I>(
 ) -> FactoryServiceType<Cfg>
 where
     Cfg: ServerAppConfig,
-    F: AsyncFn(&Cfg::Config) -> I + Send + Clone + 'static,
-    I: IntoService<S, (), Io> + 'static,
-    S: Service<(), Io> + 'static,
+    F: AsyncFn(&Cfg::State) -> I + Send + Clone + 'static,
+    I: IntoService<S, Cfg::State, Io> + 'static,
+    S: Service<Cfg::State, Io> + 'static,
 {
     Box::from(Factory {
         tokens,
         name: Arc::from(name),
-        fac: Arc::new(move |cfg: Cfg::Config| {
+        fac: Arc::new(move |cfg: Cfg::State| {
             let f = f.clone();
             Box::pin(async move {
                 let svc = (f)(&cfg).await.into_service();
-                let pipeline = Pipeline::new(svc.map(|_| ()).map_err(|_| ()));
+                let pipeline = Pipeline::with(cfg, svc.map(|_| ()).map_err(|_| ()));
                 let svc: Box<dyn NetService> = Box::new(ServerService { pipeline });
                 svc
             })
@@ -65,7 +65,7 @@ impl<Cfg: ServerAppConfig> FactoryService<Cfg> for Factory<Cfg> {
         })
     }
 
-    fn create(&self, st: Cfg::Config) -> BoxFuture<'static, io::Result<CreateResult>> {
+    fn create(&self, st: Cfg::State) -> BoxFuture<'static, io::Result<CreateResult>> {
         let name = self.name.clone();
         let tokens = self.tokens.clone();
         let factory_fut = (self.fac)(st);

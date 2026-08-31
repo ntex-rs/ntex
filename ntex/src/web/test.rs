@@ -19,7 +19,6 @@ use crate::http::{
 #[cfg(feature = "ws")]
 use crate::io::Sealed;
 use crate::router::{Path, ResourceDef};
-use crate::service::state::{DefaultState, State};
 use crate::service::{IntoServiceFactory, Pipeline, fn_service};
 use crate::time::{Millis, Seconds};
 use crate::util::{Bytes, BytesMut, Stream, stream_recv};
@@ -583,20 +582,18 @@ where
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub fn server_with<St, F, I, Sf, B>(cfg: TestServerConfig, factory: F) -> TestServer
+pub fn server_with<F, I, Sf, B>(cfg: TestServerConfig, factory: F) -> TestServer
 where
     F: AsyncFn(&()) -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<Sf, St, Request, SharedCfg>,
-    Sf: ServiceFactory<St, Request, SharedCfg> + 'static,
+    I: IntoServiceFactory<Sf, (), Request, SharedCfg>,
+    Sf: ServiceFactory<(), Request, SharedCfg> + 'static,
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
     Sf::InitError: fmt::Debug,
-    St: State<Request> + Default + 'static,
     B: MessageBody + 'static,
 {
     let sys = System::current().config();
     let name = System::current().name().to_string();
-    let state = DefaultState::new();
 
     let id = Uuid::now_v7();
     let (tx, rx) = mpsc::channel();
@@ -656,34 +653,25 @@ where
             let srv = match cfg.stream {
                 StreamType::Tcp => match cfg.tp {
                     HttpVer::Http1 => builder.listen("test", tcp, c, async move |st| {
-                        HttpService::h1_with(state, factory(st).await)
+                        HttpService::h1(factory(st).await)
                     }),
                     HttpVer::Http2 => builder.listen("test", tcp, c, async move |st| {
-                        HttpService::h2_with(state, factory(st).await)
+                        HttpService::h2(factory(st).await)
                     }),
                     HttpVer::Both => builder.listen("test", tcp, c, async move |st| {
-                        HttpService::with(state, factory(st).await)
+                        HttpService::new(factory(st).await)
                     }),
                 },
                 #[cfg(feature = "openssl")]
                 StreamType::Openssl(acceptor) => match cfg.tp {
                     HttpVer::Http1 => builder.listen("test", tcp, c, async move |st| {
-                        http::openssl(
-                            acceptor.clone(),
-                            HttpService::h1_with(state, factory(st).await),
-                        )
+                        http::openssl(acceptor.clone(), HttpService::h1(factory(st).await))
                     }),
                     HttpVer::Http2 => builder.listen("test", tcp, c, async move |st| {
-                        http::openssl(
-                            acceptor.clone(),
-                            HttpService::h2_with(state, factory(st).await),
-                        )
+                        http::openssl(acceptor.clone(), HttpService::h2(factory(st).await))
                     }),
                     HttpVer::Both => builder.listen("test", tcp, c, async move |st| {
-                        http::openssl(
-                            acceptor.clone(),
-                            HttpService::with(state, factory(st).await),
-                        )
+                        http::openssl(acceptor.clone(), HttpService::new(factory(st).await))
                     }),
                 },
                 #[cfg(feature = "rustls")]
@@ -692,21 +680,21 @@ where
                         http::rustls(
                             config.clone(),
                             http::ALPN_PROTO_H1,
-                            HttpService::h1_with(state, factory(st).await),
+                            HttpService::h1(factory(st).await),
                         )
                     }),
                     HttpVer::Http2 => builder.listen("test", tcp, c, async move |st| {
                         http::rustls(
                             config.clone(),
                             http::ALPN_PROTO_H2,
-                            HttpService::h2_with(state, factory(st).await),
+                            HttpService::h2(factory(st).await),
                         )
                     }),
                     HttpVer::Both => builder.listen("test", tcp, c, async move |st| {
                         http::rustls(
                             config.clone(),
                             http::ALPN_PROTOS,
-                            HttpService::with(state, factory(st).await),
+                            HttpService::new(factory(st).await),
                         )
                     }),
                 },

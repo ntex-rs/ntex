@@ -1,7 +1,7 @@
 use std::{cell::RefCell, fmt, io, marker::PhantomData, mem, net, rc::Rc, sync::Arc};
 
 use ntex_io::Io;
-use ntex_service::{IntoService, Pipeline, Service, cfg::SharedCfg, state::State};
+use ntex_service::{IntoService, Pipeline, Service, cfg::SharedCfg};
 use ntex_util::{HashMap, future::BoxFuture};
 
 use super::factory::{FactoryService, FactoryServiceType, NetService, ServerService};
@@ -19,7 +19,7 @@ struct Socket {
 pub(super) struct ServiceConfigInner<Cfg: ServerAppConfig> {
     token: Token,
     on_start_set: bool,
-    on_start: Vec<Box<dyn OnWorkerStart<Cfg::Config>>>,
+    on_start: Vec<Box<dyn OnWorkerStart<Cfg::State>>>,
     sockets: Vec<Socket>,
     backlog: i32,
 }
@@ -100,7 +100,7 @@ impl<Cfg: ServerAppConfig> ServiceConfig<Cfg> {
     /// It get executed in the worker thread.
     pub fn on_worker_start<F>(&self, f: F) -> &Self
     where
-        F: AsyncFn(ServiceRuntime<Cfg::Config>) -> io::Result<()> + Send + Clone + 'static,
+        F: AsyncFn(ServiceRuntime<Cfg::State>) -> io::Result<()> + Send + Clone + 'static,
     {
         let mut inner = self.0.borrow_mut();
         if !inner.on_start_set {
@@ -208,44 +208,17 @@ impl<Cfg: Clone + 'static> ServiceRuntime<Cfg> {
     /// # Panics
     ///
     /// Panics if service with specified name is registered already
-    pub fn service<S>(&self, name: &str, svc: impl IntoService<S, (), Io>) -> &Self
+    pub fn service<S>(&self, name: &str, svc: impl IntoService<S, Cfg, Io>) -> &Self
     where
-        S: Service<(), Io> + 'static,
+        S: Service<Cfg, Io> + 'static,
     {
         let mut inner = self.1.borrow_mut();
         if let Some(entry) = inner.names.get_mut(name) {
             let idx = entry.idx;
-            let pipeline = Pipeline::new(svc.into_service().map(|_| ()).map_err(|_| ()));
-            let svc: Box<dyn NetService> = Box::new(ServerService { pipeline });
-            inner.services[idx] = Some(svc);
-        } else {
-            panic!("Unknown service: {name:?}");
-        }
-        self
-    }
-
-    /// Register service with state.
-    ///
-    /// Name of the service must be registered during configuration stage with
-    /// `ServiceConfig::bind()` or `ServiceConfig::listen()` methods.
-    ///
-    /// # Panics
-    ///
-    /// Panics if service with specified name is registered already
-    pub fn service_with_state<S, St>(
-        &self,
-        name: &str,
-        st: St,
-        svc: impl IntoService<S, St, Io>,
-    ) -> &Self
-    where
-        S: Service<St, Io> + 'static,
-        St: State<Io>,
-    {
-        let mut inner = self.1.borrow_mut();
-        if let Some(entry) = inner.names.get_mut(name) {
-            let idx = entry.idx;
-            let pipeline = Pipeline::with_st(st, svc.into_service().map(|_| ()).map_err(|_| ()));
+            let pipeline = Pipeline::with(
+                self.0.clone(),
+                svc.into_service().map(|_| ()).map_err(|_| ()),
+            );
             let svc: Box<dyn NetService> = Box::new(ServerService { pipeline });
             inner.services[idx] = Some(svc);
         } else {
@@ -265,7 +238,7 @@ impl<Cfg: Clone + 'static> ServiceRuntime<Cfg> {
 
 struct ConfiguredService<Cfg: ServerAppConfig> {
     names: HashMap<String, Entry>,
-    on_start: Vec<Box<dyn OnWorkerStart<Cfg::Config>>>,
+    on_start: Vec<Box<dyn OnWorkerStart<Cfg::State>>>,
 }
 
 impl<Cfg: ServerAppConfig> FactoryService<Cfg> for ConfiguredService<Cfg> {
@@ -278,7 +251,7 @@ impl<Cfg: ServerAppConfig> FactoryService<Cfg> for ConfiguredService<Cfg> {
 
     fn create(
         &self,
-        st: Cfg::Config,
+        st: Cfg::State,
     ) -> BoxFuture<'static, io::Result<Vec<(Box<dyn NetService>, Arc<str>, Vec<(Token, SharedCfg)>)>>>
     {
         // configure services

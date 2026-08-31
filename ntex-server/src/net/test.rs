@@ -34,8 +34,8 @@ impl<Cfg, F, Sf, I> fmt::Debug for TestServerBuilder<Cfg, F, Sf, I> {
 impl<Cfg, F, S, I> TestServerBuilder<Cfg, F, S, I>
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
-    I: IntoService<S, (), Io> + 'static,
-    S: Service<(), Io> + 'static,
+    I: IntoService<S, Cfg::State, Io> + 'static,
+    S: Service<Cfg::State, Io> + 'static,
     Cfg: ServerAppConfig + Default + 'static,
 {
     #[must_use]
