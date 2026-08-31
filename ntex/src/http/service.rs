@@ -38,7 +38,7 @@ where
         Sf::InitError: Into<Box<dyn Error>>,
     {
         HttpService {
-            sf: HttpPipeline::with(
+            sf: HttpPipeline::with_sm_state(
                 DefaultState::new(),
                 sf.into_factory().map(Into::into).map_init_err(Into::into),
             ),
@@ -56,13 +56,13 @@ where
     ) -> HttpService<Hst, F, B, Err>
     where
         Sm: StateMapping<Hst>,
-        Sm::Control: State<Sm::State, Request>,
+        Sm::State: State<Request>,
         Sf: ServiceFactory<Sm::State, Request, SharedCfg, Error = Err> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Into<Box<dyn Error>>,
     {
         HttpService {
-            sf: HttpPipeline::with(
+            sf: HttpPipeline::with_sm_state(
                 sm,
                 sf.into_factory().map(Into::into).map_init_err(Into::into),
             ),
@@ -114,7 +114,7 @@ where
     ) -> h1::H1Service<Hst, F, B, Err>
     where
         Sm: StateMapping<Hst>,
-        Sm::Control: State<Sm::State, Request>,
+        Sm::State: State<Request>,
         Sf: ServiceFactory<Sm::State, Request, SharedCfg, Error = Err> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Into<Box<dyn Error>>,
@@ -133,7 +133,7 @@ where
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Into<Box<dyn Error>>,
         Sm: StateMapping<Hst>,
-        Sm::Control: State<Sm::State, Request>,
+        Sm::State: State<Request>,
     {
         h2::H2Service::new(sm, sf)
     }

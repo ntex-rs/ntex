@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-pub trait State<Req> {
+pub trait State<Req>: Sized + 'static {
     fn on_req(&self, _: &Req) -> Option<Self> {
         None
     }
@@ -8,23 +8,11 @@ pub trait State<Req> {
 
 pub trait StateMapping<From>: Clone + 'static {
     type State: 'static;
-    type Control;
 
-    fn map<Req>(&self, st: &From) -> (Self::State, Self::Control)
-    where
-        Self::Control: State<Self::State, Req>;
+    fn map(&self, st: &From) -> Self::State;
 }
 
-impl<Req> State<Req> for () {
-    fn on_req(&self, _r: &Req) -> Option<()> {
-        None
-    }
-}
-
-#[derive(Copy, Clone, Debug)]
-pub struct Noop;
-
-impl<St, Req> State<St, Req> for Noop {}
+impl<Req> State<Req> for () {}
 
 #[derive(Debug, Default)]
 pub struct DefaultState<St>(PhantomData<St>);
@@ -46,10 +34,9 @@ impl<St> Clone for DefaultState<St> {
 
 impl<St: Default + 'static, From> StateMapping<From> for DefaultState<St> {
     type State = St;
-    type Control = Noop;
 
-    fn map<R>(&self, _: &From) -> (St, Noop) {
-        (St::default(), Noop)
+    fn map(&self, _: &From) -> St {
+        St::default()
     }
 }
 
@@ -73,10 +60,9 @@ impl<St> Clone for CloneState<St> {
 
 impl<St: Clone + 'static> StateMapping<St> for CloneState<St> {
     type State = St;
-    type Control = Noop;
 
-    fn map<R>(&self, st: &St) -> (St, Noop) {
-        (st.clone(), Noop)
+    fn map(&self, st: &St) -> St {
+        st.clone()
     }
 }
 
@@ -105,10 +91,39 @@ where
     St: 'static,
 {
     type State = St;
-    type Control = Noop;
 
-    fn map<R>(&self, _: &From) -> (St, Noop) {
-        ((self.0)(), Noop)
+    fn map(&self, _: &From) -> St {
+        (self.0)()
+    }
+}
+
+pub(crate) trait StateWrapper<St, Req>: Sized + 'static {
+    fn get(&self) -> &St;
+
+    fn on_req(&self, _: &Req) -> Option<St>;
+}
+
+pub(crate) struct StateWrapperNoReq<St>(pub(crate) St);
+
+impl<St: 'static, Req> StateWrapper<St, Req> for StateWrapperNoReq<St> {
+    fn get(&self) -> &St {
+        &self.0
+    }
+
+    fn on_req(&self, _: &Req) -> Option<St> {
+        None
+    }
+}
+
+pub(crate) struct StateWrapperReq<St>(pub(crate) St);
+
+impl<St: State<Req>, Req> StateWrapper<St, Req> for StateWrapperReq<St> {
+    fn get(&self) -> &St {
+        &self.0
+    }
+
+    fn on_req(&self, req: &Req) -> Option<St> {
+        self.0.on_req(req)
     }
 }
 

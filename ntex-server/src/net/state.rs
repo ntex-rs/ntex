@@ -1,31 +1,30 @@
-use std::{io, sync::Arc};
+use std::io;
 
-use ntex_util::future::BoxFuture;
+pub trait ServerAppConfig: Sync + Send + 'static {
+    type Config: Clone;
 
-pub(crate) type StateFactory<St> =
-    Arc<dyn Fn() -> BoxFuture<'static, io::Result<St>> + Send + Sync>;
-
-pub(crate) fn state_factory<F, St>(f: F) -> StateFactory<St>
-where
-    F: ServerStateFactory<St>,
-{
-    let st = Arc::new(f);
-
-    Arc::new(move || {
-        let st = st.clone();
-        Box::pin(async move { st.create().await })
-    })
+    async fn create(&self) -> io::Result<Self::Config>;
 }
 
-pub trait ServerStateFactory<St>: Sync + Send + 'static {
-    async fn create(&self) -> io::Result<St>;
+#[derive(Copy, Clone, Default, Debug)]
+pub struct NoConfig;
+
+impl ServerAppConfig for NoConfig {
+    type Config = ();
+
+    async fn create(&self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
-impl<F, St> ServerStateFactory<St> for F
+impl<F, Cfg> ServerAppConfig for F
 where
-    F: AsyncFn() -> io::Result<St> + Sync + Send + 'static,
+    F: AsyncFn() -> io::Result<Cfg> + Sync + Send + 'static,
+    Cfg: Clone,
 {
-    async fn create(&self) -> io::Result<St> {
+    type Config = Cfg;
+
+    async fn create(&self) -> io::Result<Cfg> {
         (*self)().await
     }
 }

@@ -11,9 +11,9 @@ pub struct BoxService<St, Req, Res, Err> {
 }
 
 /// Creates a boxed service.
-pub fn service<S, St, Req>(service: S) -> BoxService<St, Req, S::Res, S::Error>
+pub fn service<S, St, Req, Res, Err>(service: S) -> BoxService<St, Req, Res, Err>
 where
-    S: Service<St, Req> + 'static,
+    S: Service<St, Req, Res = Res, Error = Err> + 'static,
 {
     BoxService::new(service)
 }

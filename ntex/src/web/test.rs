@@ -19,7 +19,7 @@ use crate::http::{
 #[cfg(feature = "ws")]
 use crate::io::Sealed;
 use crate::router::{Path, ResourceDef};
-use crate::service::state::DefaultState;
+use crate::service::state::{DefaultState, State};
 use crate::service::{IntoServiceFactory, Pipeline, fn_service};
 use crate::time::{Millis, Seconds};
 use crate::util::{Bytes, BytesMut, Stream, stream_recv};
@@ -591,7 +591,7 @@ where
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
     Sf::InitError: fmt::Debug,
-    St: Default + 'static,
+    St: State<Request> + Default + 'static,
     B: MessageBody + 'static,
 {
     let sys = System::current().config();

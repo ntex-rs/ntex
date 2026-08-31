@@ -6,10 +6,10 @@ use tls_openssl::ssl::{AlpnError, SslAcceptor, SslAcceptorBuilder};
 use tls_rustls::ServerConfig as RustlsServerConfig;
 
 use crate::http::{self, Request, Response, ResponseError, body::MessageBody};
-use crate::server::{Server, ServerBuilder, ServerStateFactory};
+use crate::server::{NoConfig, Server, ServerAppConfig, ServerBuilder};
 use crate::service::state::{DefaultState, State, StateMapping};
 use crate::service::{IntoServiceFactory, ServiceFactory};
-use crate::{SharedCfg, io::Io, time::Seconds};
+use crate::{SharedCfg, time::Seconds};
 
 struct Config {
     host: Option<String>,
@@ -34,28 +34,28 @@ struct Config {
 /// ```
 #[derive(derive_more::Debug)]
 #[debug("HttpServer")]
-pub struct HttpServer<Hst, F, I, Sf, Sm, B>
+pub struct HttpServer<Cfg, F, I, Sf, Sm, B>
 where
-    Hst: State<Hst, Io>,
-    F: AsyncFn(&Hst) -> I + Send + Clone + 'static,
+    Cfg: ServerAppConfig,
+    F: AsyncFn(&Cfg::Config) -> I + Send + Clone + 'static,
     I: IntoServiceFactory<Sf, Sm::State, Request, SharedCfg>,
     Sf: ServiceFactory<Sm::State, Request, SharedCfg>,
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
     Sf::InitError: Error,
-    Sm: StateMapping<Hst> + Send,
-    Sm::Control: State<Sm::State, Request>,
+    Sm: StateMapping<()> + Send,
+    Sm::State: State<Request>,
     B: MessageBody,
 {
     factory: F,
     config: Arc<Mutex<Config>>,
     backlog: i32,
-    builder: ServerBuilder<Hst>,
+    builder: ServerBuilder<Cfg>,
     state: Sm,
     _t: PhantomData<(Sf, B)>,
 }
 
-impl<F, I, Sf, B> HttpServer<(), F, I, Sf, DefaultState<()>, B>
+impl<F, I, Sf, B> HttpServer<NoConfig, F, I, Sf, DefaultState<()>, B>
 where
     F: AsyncFn(&()) -> I + Send + Clone + 'static,
     I: IntoServiceFactory<Sf, (), Request, SharedCfg>,
@@ -79,31 +79,31 @@ where
     }
 }
 
-impl<Hst, F, I, Sf, Sm, B> HttpServer<Hst, F, I, Sf, Sm, B>
+impl<Cfg, F, I, Sf, Sm, B> HttpServer<Cfg, F, I, Sf, Sm, B>
 where
-    F: AsyncFn(&Hst) -> I + Send + Clone + 'static,
+    Cfg: ServerAppConfig,
+    F: AsyncFn(&Cfg::Config) -> I + Send + Clone + 'static,
     I: IntoServiceFactory<Sf, Sm::State, Request, SharedCfg>,
     Sf: ServiceFactory<Sm::State, Request, SharedCfg> + 'static,
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
     Sf::InitError: Error,
-    Hst: State<Hst, Io> + Clone + 'static,
-    Sm: StateMapping<Hst> + Send,
-    Sm::Control: State<Sm::State, Request>,
+    Sm: StateMapping<()> + Send,
+    Sm::State: State<Request>,
     B: MessageBody + 'static,
 {
     #[must_use]
     /// Create new http server with application factory and state mapping
-    pub fn with_st<T>(st: T, state: Sm, factory: F) -> Self
+    pub fn with_cfg(cfg: Cfg, state: Sm, factory: F) -> Self
     where
-        T: ServerStateFactory<Hst>,
+        Cfg: ServerAppConfig,
     {
         HttpServer {
             factory,
             state,
             config: Arc::new(Mutex::new(Config { host: None })),
             backlog: 1024,
-            builder: ServerBuilder::new(st),
+            builder: ServerBuilder::new(cfg),
             _t: PhantomData,
         }
     }
@@ -453,17 +453,17 @@ where
     }
 }
 
-impl<Hst, F, I, Sf, Sm, B> HttpServer<Hst, F, I, Sf, Sm, B>
+impl<Cfg, F, I, Sf, Sm, B> HttpServer<Cfg, F, I, Sf, Sm, B>
 where
-    F: AsyncFn(&Hst) -> I + Send + Clone + 'static,
+    Cfg: ServerAppConfig,
+    F: AsyncFn(&Cfg::Config) -> I + Send + Clone + 'static,
     I: IntoServiceFactory<Sf, Sm::State, Request, SharedCfg>,
     Sf: ServiceFactory<Sm::State, Request, SharedCfg> + 'static,
     Sf::Res: Into<Response<B>>,
     Sf::Error: ResponseError,
     Sf::InitError: Error,
-    Hst: State<Hst, Io> + Clone + 'static,
-    Sm: StateMapping<Hst> + Send,
-    Sm::Control: State<Sm::State, Request>,
+    Sm: StateMapping<()> + Send,
+    Sm::State: State<Request>,
     B: MessageBody,
 {
     /// Start listening for incoming connections.

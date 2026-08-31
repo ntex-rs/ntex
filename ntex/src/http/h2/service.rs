@@ -44,10 +44,10 @@ where
         Sf::Res: Into<Response<B>>,
         Sf::InitError: Into<Box<dyn StdError>>,
         Sm: StateMapping<Hst>,
-        Sm::Control: State<Sm::State, Request>,
+        Sm::State: State<Request>,
     {
         H2Service {
-            sf: HttpPipeline::with(
+            sf: HttpPipeline::with_sm_state(
                 sm,
                 sf.into_factory().map(Into::into).map_init_err(Into::into),
             ),

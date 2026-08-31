@@ -1,7 +1,7 @@
 use std::{fmt, future, pin::Pin, task::Context, task::Poll};
 
 use crate::pl_inner::PipelineApi;
-use crate::state::{Noop, State};
+use crate::state::{State, StateWrapper, StateWrapperNoReq, StateWrapperReq};
 use crate::{IntoService, Service, util::BoxFuture};
 
 pub use crate::pl_factory::{PipelineFactory, PipelineStateFactory};
@@ -33,7 +33,7 @@ where
         S: Service<St, Req, Res = Res, Error = Err> + 'static,
         St: Default + 'static,
     {
-        Self::create(f.into_service(), St::default(), Noop)
+        Self::create(f.into_service(), StateWrapperNoReq(St::default()))
     }
 
     #[inline]
@@ -43,28 +43,27 @@ where
         S: Service<St, Req, Res = Res, Error = Err> + 'static,
         St: 'static,
     {
-        Self::create(f.into_service(), st, Noop)
+        Self::create(f.into_service(), StateWrapperNoReq(st))
     }
 
     #[inline]
     /// Construct new service pipeline instance with state.
-    pub fn with_ctl<S, St, Ctl>(st: St, ctl: Ctl, f: impl IntoService<S, St, Req>) -> Self
+    pub fn with_st<S, St>(st: St, f: impl IntoService<S, St, Req>) -> Self
     where
         S: Service<St, Req, Res = Res, Error = Err> + 'static,
-        St: 'static,
-        Ctl: State<St, Req> + 'static,
+        St: State<Req>,
     {
-        Self::create(f.into_service(), st, ctl)
+        Self::create(f.into_service(), StateWrapperReq(st))
     }
 
-    fn create<S, St, Ctl>(s: S, st: St, ctl: Ctl) -> Self
+    fn create<S, St, Wrp>(s: S, st: Wrp) -> Self
     where
         S: Service<St, Req, Res = Res, Error = Err> + 'static,
         St: 'static,
-        Ctl: State<St, Req> + 'static,
+        Wrp: StateWrapper<St, Req>,
     {
         Pipeline {
-            api: PipelineApi::new(s, st, ctl),
+            api: PipelineApi::new(s, st),
         }
     }
 

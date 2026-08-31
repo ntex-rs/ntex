@@ -32,6 +32,24 @@ impl<St, Req, Res, Err, InitCfg, InitErr> PipelineFactory<St, Req, Res, Err, Ini
         }
     }
 
+    pub fn new_with_state<Sf>(sf: Sf) -> Self
+    where
+        Sf: ServiceFactory<St, Req, InitCfg, Res = Res, Error = Err, InitError = InitErr> + 'static,
+        St: State<Req> + Clone + 'static,
+        Req: 'static,
+        Res: 'static,
+        Err: 'static,
+        InitCfg: 'static,
+    {
+        let sf = Rc::new(sf);
+        Self {
+            f: Rc::new(move |cfg: &InitCfg, st: &St| {
+                let sf = sf.clone();
+                Box::pin(async move { Ok(Pipeline::with_st(st.clone(), sf.create(cfg).await?)) })
+            }),
+        }
+    }
+
     pub fn with<Sf, Sm>(sm: Sm, sf: Sf) -> Self
     where
         St: 'static,
@@ -42,14 +60,35 @@ impl<St, Req, Res, Err, InitCfg, InitErr> PipelineFactory<St, Req, Res, Err, Ini
         Err: 'static,
         InitCfg: 'static,
         Sm: StateMapping<St>,
-        Sm::Control: State<Sm::State, Req>,
     {
         let sf = Rc::new(sf);
         Self {
             f: Rc::new(move |cfg, st| {
                 let sf = sf.clone();
-                let (sm, _ctl) = sm.map::<Req>(st);
+                let sm = sm.map(st);
                 Box::pin(async move { Ok(Pipeline::with(sm, sf.create(cfg).await?)) })
+            }),
+        }
+    }
+
+    pub fn with_sm_state<Sf, Sm>(sm: Sm, sf: Sf) -> Self
+    where
+        St: 'static,
+        Sf: ServiceFactory<Sm::State, Req, InitCfg, Res = Res, Error = Err, InitError = InitErr>
+            + 'static,
+        Req: 'static,
+        Res: 'static,
+        Err: 'static,
+        InitCfg: 'static,
+        Sm: StateMapping<St>,
+        Sm::State: State<Req>,
+    {
+        let sf = Rc::new(sf);
+        Self {
+            f: Rc::new(move |cfg, st| {
+                let sf = sf.clone();
+                let st = sm.map(st);
+                Box::pin(async move { Ok(Pipeline::with_st(st, sf.create(cfg).await?)) })
             }),
         }
     }
