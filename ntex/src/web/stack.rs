@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use crate::service::{Ctx, Middleware, Service, ServiceFactory, cfg::SharedCfg};
+use crate::service::{Ctx, Middleware, Service, ServiceFactory};
 use crate::web::{AppState, WebRequest, WebResponse};
 
 /// Stack of middlewares.
@@ -21,16 +21,16 @@ impl<St, Inner, Outer> WebStack<St, Inner, Outer> {
     }
 }
 
-impl<S, St, Inner, Outer> Middleware<S, St, SharedCfg> for WebStack<St, Inner, Outer>
+impl<S, St, Cfg, Inner, Outer> Middleware<S, St, Cfg> for WebStack<St, Inner, Outer>
 where
     St: AppState,
-    Inner: Middleware<S, St, SharedCfg>,
-    Outer: Middleware<Inner::Service, St, SharedCfg>,
+    Inner: Middleware<S, St, Cfg>,
+    Outer: Middleware<Inner::Service, St, Cfg>,
     Outer::Service: Service<St, WebRequest, Res = WebResponse>,
 {
     type Service = WebMiddleware<Outer::Service, St>;
 
-    fn create(&self, service: S, cfg: &SharedCfg) -> Self::Service {
+    fn create(&self, service: S, cfg: &Cfg) -> Self::Service {
         WebMiddleware {
             svc: self.outer.create(self.inner.create(service, cfg), cfg),
             err: PhantomData,

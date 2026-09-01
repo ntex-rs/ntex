@@ -74,6 +74,7 @@ where
     R: IntoServiceFactory<S, St, Request, SharedCfg>,
     S: ServiceFactory<St, Request, SharedCfg, Res = WebResponse, Error = E> + 'static,
     S::InitError: fmt::Debug,
+    // Cfg: Default + Clone + 'static,
 {
     let srv = app.into_factory().map_init_err(|e| log::error!("{e:?}"));
     srv.pipeline(&SharedCfg::default()).await.unwrap()
@@ -1052,9 +1053,9 @@ mod tests {
         assert_eq!(*data, 20);
         assert_eq!(format!("{:?}", StreamType::Tcp), "StreamType::Tcp");
 
-        let mut req =
-            TestRequest::with_header(header::CONTENT_TYPE, "application/json").to_srv_request();
-        let pl = req.take_payload();
+        let (req, pl) = TestRequest::with_header(header::CONTENT_TYPE, "application/json")
+            .to_srv_request()
+            .into_parts();
         let res = load_stream(pl).await.unwrap();
         assert_eq!(res, &b""[..]);
     }
@@ -1062,7 +1063,7 @@ mod tests {
     #[crate::rt_test]
     async fn test_request_methods() {
         let app = init_service(
-            App::default().service(
+            App::new().service(
                 web::resource("/index.html")
                     .route(web::put().to(async || HttpResponse::Ok().body("put!")))
                     .route(web::patch().to(async || HttpResponse::Ok().body("patch!")))

@@ -299,17 +299,18 @@ mod tests {
         type Res = &'static str;
         type Error = ();
 
-        async fn call(&self, req: usize, _: Ctx<'_, Self>) -> Result<Self::Res, ()> {
+        async fn call(&self, _: usize, _: Ctx<'_, Self>) -> Result<Self::Res, ()> {
             Ok("test")
         }
     }
 
     #[ntex::test]
     async fn test_state_builder() {
-        let sb = StateBuilder::new(async |_: &(), t: &&'static str| Ok::<_, ()>(St { n: t.len() }))
-            .and_then(Svc1)
-            .map(async |_: &(), r: &usize, st: St| Ok(St { n: st.n + *r }))
-            .and_then(Svc2);
+        let sb =
+            StateBuilder::new(async |(): &(), t: &&'static str| Ok::<_, ()>(St { n: t.len() }))
+                .and_then(Svc1)
+                .map(async |(): &(), r: &usize, st: St| Ok(St { n: st.n + *r }))
+                .and_then(Svc2);
 
         let pl = Pipeline::with((), sb);
         let res = pl.call("test").await.unwrap();

@@ -149,7 +149,7 @@ where
 mod tests {
     use std::{pin::Pin, task::Context, task::Poll, task::ready};
 
-    use ntex_service::{Pipeline, boxed, factory};
+    use ntex_service::{Pipeline, boxed, factory_no_st};
 
     use super::*;
     use crate::{channel::oneshot, spawn};
@@ -180,7 +180,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_ka() {
-        let factory = factory::<_, usize, ()>(KeepAlive::new(Millis(100), || TestErr));
+        let factory = factory_no_st::<_, usize, ()>(KeepAlive::new(Millis(100), || TestErr));
         assert!(format!("{factory:?}").contains("KeepAlive"));
         let _ = factory.clone();
 

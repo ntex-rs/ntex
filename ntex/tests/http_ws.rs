@@ -89,9 +89,9 @@ async fn test_simple() {
                         let ack = if let h1::Control::Upgrade(upg) = req {
                             assert!(format!("{upg:?}").contains("Upgrade"));
                             let ws_service = Pipeline::with((), ws_service.clone());
-                            upg.handle(async move |req, io, codec| {
-                                ws_service.call((req, io, codec)).await
-                            })
+                            let (ack, io, req, codec) = upg.handle();
+                            let _ = ws_service.call((req, io, codec)).await;
+                            ack
                         } else {
                             req.ack()
                         };
@@ -269,26 +269,23 @@ async fn test_transport() {
         HttpService::new(async |_| Ok::<_, io::Error>(Response::NotFound())).h1_control(
             async move |req: h1::Control<_, _>| {
                 let ack = if let h1::Control::Upgrade(upg) = req {
-                    upg.handle(async move |req, io, codec| {
-                        let res = handshake_response(req.head()).finish();
+                    let (ack, io, req, codec) = upg.handle();
 
-                        // send handshake respone
-                        io.encode(
-                            h1::Message::Item((res.drop_body(), body::BodySize::None)),
-                            &codec,
-                        )
-                        .unwrap();
+                    // send handshake respone
+                    let res = handshake_response(req.head()).finish();
+                    io.encode(
+                        h1::Message::Item((res.drop_body(), body::BodySize::None)),
+                        &codec,
+                    )
+                    .unwrap();
 
-                        let io = ws::WsTransport::create(io, ws::Codec::default());
+                    // start websocket service
+                    let io = ws::WsTransport::create(io, ws::Codec::default());
+                    while let Some(item) = io.recv(&BytesCodec).await.map_err(|e| e.into_inner())? {
+                        io.send(item, &BytesCodec).await.unwrap()
+                    }
 
-                        // start websocket service
-                        while let Some(item) =
-                            io.recv(&BytesCodec).await.map_err(|e| e.into_inner())?
-                        {
-                            io.send(item, &BytesCodec).await.unwrap()
-                        }
-                        Ok::<_, io::Error>(())
-                    })
+                    ack
                 } else {
                     req.ack()
                 };
@@ -350,39 +347,37 @@ async fn test_stale_timer_after_ws_upgrade() {
     let srv = test::server_with_config(
         async move |_| {
             HttpService::h1(async |_| Ok::<_, io::Error>(Response::NotFound())).control(
-                move |req: h1::Control<_, _>| {
+                async move |req: h1::Control<_, _>| {
                     let ack = if let h1::Control::Upgrade(upg) = req {
-                        upg.handle(async move |req, io, codec| {
-                            let res = handshake(req.head()).unwrap().message_body(());
-                            io.encode((res, body::BodySize::None).into(), &codec)
-                                .unwrap();
-                            io.set_config(
-                                SharedCfg::new("WS")
-                                    .add(IoConfig::new().set_keepalive_timeout(Seconds(0))),
-                            );
-                            // let the stale h1 timer (1s) fire before starting the WS dispatcher
-                            sleep(Millis(2500)).await;
-                            // InFlightService(1) makes poll_ready return Pending while
-                            // slow_ws_service is processing, so the dispatcher enters
-                            // poll_service → poll_read_pause where DSP_TIMEOUT is observed
-                            Dispatcher::new(
-                                io.seal(),
-                                ws::Codec::new(),
-                                Pipeline::with(
-                                    (),
-                                    InFlightService::new(
-                                        1,
-                                        ntex::service::fn_service(slow_ws_service),
-                                    ),
-                                ),
-                            )
-                            .await
-                            .map_err(|_| panic!())
-                        })
+                        let (ack, io, req, codec) = upg.handle();
+
+                        let res = handshake(req.head()).unwrap().message_body(());
+                        io.encode((res, body::BodySize::None).into(), &codec)
+                            .unwrap();
+                        io.set_config(
+                            SharedCfg::new("WS")
+                                .add(IoConfig::new().set_keepalive_timeout(Seconds(0))),
+                        );
+                        // let the stale h1 timer (1s) fire before starting the WS dispatcher
+                        sleep(Millis(2500)).await;
+                        // InFlightService(1) makes poll_ready return Pending while
+                        // slow_ws_service is processing, so the dispatcher enters
+                        // poll_service → poll_read_pause where DSP_TIMEOUT is observed
+                        let _ = Dispatcher::new(
+                            io.seal(),
+                            ws::Codec::new(),
+                            Pipeline::with(
+                                (),
+                                InFlightService::new(1, ntex::service::fn_service(slow_ws_service)),
+                            ),
+                        )
+                        .await;
+
+                        ack
                     } else {
                         req.ack()
                     };
-                    async move { Ok::<_, io::Error>(ack) }
+                    Ok::<_, io::Error>(ack)
                 },
             )
         },

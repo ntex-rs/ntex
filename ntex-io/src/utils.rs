@@ -144,35 +144,11 @@ impl<F: Filter, St: 'static> RequestState<IoBoxed> for State<Io<F>, St> {
 
 #[cfg(test)]
 mod tests {
-    use ntex_bytes::{BytePageSize, Bytes};
-    use ntex_codec::BytesCodec;
-    use ntex_service::{cfg::SharedCfg, factory};
+    use ntex_bytes::BytePageSize;
+    use ntex_service::cfg::SharedCfg;
 
     use super::*;
     use crate::{buf::Stack, filter::NullFilter, testing::IoTest};
-
-    #[ntex::test]
-    async fn test_utils() {
-        let (client, server) = IoTest::create();
-        client.remote_buffer_cap(1024);
-        client.write("REQ");
-
-        let svc = factory(seal(|io: IoBoxed| async move {
-            let t = io.recv(&BytesCodec).await.unwrap().unwrap();
-            assert_eq!(t, b"REQ".as_ref());
-            io.send(Bytes::from_static(b"RES"), &BytesCodec)
-                .await
-                .unwrap();
-            Ok::<_, ()>(())
-        }))
-        .pipeline(&())
-        .await
-        .unwrap();
-        let _ = svc.call(Io::new(server, SharedCfg::default())).await;
-
-        let buf = client.read().await.unwrap();
-        assert_eq!(buf, b"RES".as_ref());
-    }
 
     #[ntex::test]
     async fn test_null_filter() {

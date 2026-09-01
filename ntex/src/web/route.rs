@@ -1,7 +1,7 @@
 use std::{error::Error, fmt, mem, rc::Rc};
 
 use crate::http::Method;
-use crate::service::{Ctx, Service, ServiceFactory, cfg::SharedCfg};
+use crate::service::{Ctx, Service, ServiceFactory};
 
 use super::guard::{self, AllGuard, Guard};
 use super::handler::{Handler, HandlerFn, HandlerWrapper};
@@ -64,14 +64,14 @@ impl<St: AppState> fmt::Debug for Route<St> {
     }
 }
 
-impl<St: AppState> ServiceFactory<St, WebRequest, SharedCfg> for Route<St> {
+impl<St: AppState, Cfg> ServiceFactory<St, WebRequest, Cfg> for Route<St> {
     type Res = WebResponse;
     type Error = St::Error;
 
     type Service = RouteService<St>;
     type InitError = Box<dyn Error>;
 
-    async fn create(&self, _: &SharedCfg) -> Result<RouteService<St>, Self::InitError> {
+    async fn create(&self, _: &Cfg) -> Result<RouteService<St>, Self::InitError> {
         Ok(self.service())
     }
 }

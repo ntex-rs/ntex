@@ -3,7 +3,7 @@ use std::{cmp, str::FromStr};
 
 use crate::http::encoding::Encoder;
 use crate::http::header::{ACCEPT_ENCODING, ContentEncoding};
-use crate::service::{Ctx, Middleware, Service, cfg::SharedCfg};
+use crate::service::{Ctx, Middleware, Service};
 use crate::web::{AppState, BodyEncoding, WebRequest, WebResponse};
 
 #[derive(Debug, Clone)]
@@ -42,10 +42,10 @@ impl Default for Compress {
     }
 }
 
-impl<S, St> Middleware<S, St, SharedCfg> for Compress {
+impl<S, St, Cfg> Middleware<S, St, Cfg> for Compress {
     type Service = CompressMiddleware<S>;
 
-    fn create(&self, service: S, _: &SharedCfg) -> Self::Service {
+    fn create(&self, service: S, _: &Cfg) -> Self::Service {
         CompressMiddleware {
             service,
             encoding: self.enc,

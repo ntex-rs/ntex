@@ -10,10 +10,10 @@ use ntex::http::header::{
     ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, ContentEncoding,
     TRANSFER_ENCODING,
 };
-use ntex::http::{ConnectionType, HttpServiceConfig, Method, StatusCode, body::Body};
+use ntex::http::{self, ConnectionType, HttpServiceConfig, Method, StatusCode, body::Body};
 use ntex::time::{Millis, Seconds, Sleep, sleep};
 use ntex::util::{Bytes, Stream};
-use ntex::{SharedCfg, client, io::IoConfig};
+use ntex::{Service, SharedCfg, client, io::IoConfig, service::State};
 
 use ntex::web::{self, middleware::Compress, test};
 use ntex::web::{App, AppState, BodyEncoding, HttpRequest, HttpResponse, WebResponseError};
@@ -796,13 +796,21 @@ async fn test_custom_error() {
         Err(TestError)
     }
 
-    let srv = test::server_with(test::config().h1(), async |_| {
-        App::with::<TestAppState>()
-            .service(web::resource("/").route(web::get().to(test)))
-            .service(web::resource("/err").route(web::get().to(test_err)))
+    let srv = http::test::server(async |_| {
+        ntex::fn_service(async |req| {
+            Ok(State {
+                req,
+                state: TestAppState,
+            })
+        })
+        .and_then(http::HttpService::new(
+            App::with::<TestAppState>()
+                .service(web::resource("/").route(web::get().to(test)))
+                .service(web::resource("/err").route(web::get().to(test_err))),
+        ))
     });
 
-    let response = srv.get("/").send().await.unwrap();
+    let response = srv.request(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     let len = response.headers().get(CONTENT_LENGTH).unwrap();
@@ -813,7 +821,7 @@ async fn test_custom_error() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 
     // err
-    let response = srv.get("/err").send().await.unwrap();
+    let response = srv.request(Method::GET, "/err").send().await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
     let tp = response.headers().get(CONTENT_TYPE).unwrap();

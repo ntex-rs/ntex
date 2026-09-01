@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use crate::http::error::HttpError;
 use crate::http::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
-use crate::service::{Ctx, Middleware, Service, cfg::SharedCfg};
+use crate::service::{Ctx, Middleware, Service};
 use crate::web::{WebRequest, WebResponse};
 
 /// `Middleware` for setting default response headers.
@@ -88,10 +88,10 @@ impl DefaultHeaders {
     }
 }
 
-impl<S, St> Middleware<S, St, SharedCfg> for DefaultHeaders {
+impl<S, St, Cfg> Middleware<S, St, Cfg> for DefaultHeaders {
     type Service = DefaultHeadersMiddleware<S>;
 
-    fn create(&self, service: S, _: &SharedCfg) -> Self::Service {
+    fn create(&self, service: S, _: &Cfg) -> Self::Service {
         DefaultHeadersMiddleware {
             service,
             inner: self.inner.clone(),
@@ -139,7 +139,7 @@ where
 #[allow(unused_must_use)]
 mod tests {
     use super::*;
-    use crate::service::{Pipeline, fn_service};
+    use crate::service::{Pipeline, cfg::SharedCfg, fn_service};
     use crate::util::lazy;
     use crate::web::test::{TestRequest, ok_service};
     use crate::web::{HttpResponse, WebError};
@@ -148,9 +148,11 @@ mod tests {
     async fn test_default_headers() {
         let mw = Pipeline::with(
             (),
-            DefaultHeaders::new()
-                .header(CONTENT_TYPE, "0001")
-                .create(ok_service(), &SharedCfg::default()),
+            Middleware::<_, (), _>::create(
+                &DefaultHeaders::new().header(CONTENT_TYPE, "0001"),
+                ok_service(),
+                &SharedCfg::default(),
+            ),
         );
 
         assert!(lazy(|cx| mw.poll_ready(cx).is_ready()).await);
@@ -168,9 +170,11 @@ mod tests {
         });
         let mw = Pipeline::with(
             (),
-            DefaultHeaders::new()
-                .header(CONTENT_TYPE, "0001")
-                .create(srv, &SharedCfg::default()),
+            Middleware::<_, (), _>::create(
+                &DefaultHeaders::new().header(CONTENT_TYPE, "0001"),
+                srv,
+                &SharedCfg::default(),
+            ),
         );
         let resp = mw.call(req).await.unwrap();
         assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "0002");
@@ -195,9 +199,11 @@ mod tests {
         });
         let mw = Pipeline::with(
             (),
-            DefaultHeaders::new()
-                .content_type()
-                .create(srv, &SharedCfg::default()),
+            Middleware::<_, (), _>::create(
+                &DefaultHeaders::new().content_type(),
+                srv,
+                &SharedCfg::default(),
+            ),
         );
 
         let req = TestRequest::default().to_srv_request();

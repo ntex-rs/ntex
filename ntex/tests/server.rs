@@ -3,8 +3,8 @@ use std::io::{Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::{net, sync::Arc, sync::mpsc, thread, time};
 
-use ntex::server::{TestServer, build, build_with_state};
-use ntex::service::{cfg::SharedCfg, fn_service, state::State};
+use ntex::server::{TestServer, build, build_with_cfg};
+use ntex::service::{cfg::SharedCfg, fn_service};
 use ntex::{codec::BytesCodec, io::Io, util::Bytes};
 
 #[test]
@@ -164,7 +164,7 @@ fn test_on_worker_start() {
                                 rt.service("addr1", async |_| Ok::<_, ()>(()));
                                 rt.service("addr3", async |_| Ok::<_, ()>(()));
                                 let _ = num.fetch_add(1, Relaxed);
-                                Ok::<_, &'static str>(())
+                                Ok::<_, io::Error>(())
                             });
                         Ok::<_, io::Error>(())
                     })
@@ -220,7 +220,7 @@ fn test_configure() {
                                 rt.service("addr1", fn_service(async |_| Ok::<_, ()>(())));
                                 rt.service("addr3", fn_service(async |_| Ok::<_, ()>(())));
                                 let _ = num.fetch_add(1, Relaxed);
-                                Ok::<_, &'static str>(())
+                                Ok::<_, io::Error>(())
                             });
                         Ok::<_, io::Error>(())
                     })
@@ -309,18 +309,11 @@ fn test_server_state() {
     #[derive(Clone)]
     struct St(Arc<AtomicUsize>);
 
-    impl State<St, Io> for St {
-        fn on_req(&self, st: &Self, _: &Io) -> Option<Self> {
-            let _ = st.0.fetch_add(1, Relaxed);
-            None
-        }
-    }
-
     let h = thread::spawn(move || {
         let num = num2.clone();
         let sys = ntex::rt::System::new("test", ntex::rt::DefaultRuntime);
         sys.run(move || {
-            let srv = build_with_state(async move || Ok(St(num.clone())))
+            let srv = build_with_cfg(async move || Ok(St(num.clone())))
                 .disable_signals()
                 .bind("test", addr, SharedCfg::default(), async move |_| {
                     async move |st: &St, io: Io| {

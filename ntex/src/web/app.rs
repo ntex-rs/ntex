@@ -1,10 +1,9 @@
-use std::fmt;
+use std::{fmt, marker::PhantomData};
 
 use crate::http::Request;
 use crate::router::ResourceDef;
-use crate::service::cfg::SharedCfg;
 use crate::service::{Identity, Middleware, Service, ServiceFactory};
-use crate::service::{IntoServiceFactory, dev::ServiceChainFactory, factory_with_st};
+use crate::service::{IntoServiceFactory, dev::ServiceChainFactory, factory};
 
 use super::app_service::{AppFactory, AppRouter};
 use super::config::ServiceConfig;
@@ -17,62 +16,73 @@ use super::{AppState, HttpService, Resource, Route, WebRequest, WebResponse};
 /// for building application instances.
 #[derive(derive_more::Debug)]
 #[debug("App")]
-pub struct App<St: AppState, M, F> {
+pub struct App<St: AppState, Cfg, M, F> {
     middleware: M,
-    filter: ServiceChainFactory<F, St, WebRequest, SharedCfg>,
-    services: Vec<Box<dyn AppServiceFactory<St>>>,
-    default: Option<HttpService<St>>,
+    filter: ServiceChainFactory<F, St, WebRequest, Cfg>,
+    services: Vec<Box<dyn AppServiceFactory<St, Cfg>>>,
+    default: Option<HttpService<St, Cfg>>,
     external: Vec<ResourceDef>,
     case_insensitive: bool,
+    ph: PhantomData<Cfg>,
 }
 
-impl Default for App<(), Identity, Filter<()>> {
+impl<Cfg> Default for App<(), Cfg, Identity, Filter<()>> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl App<(), Identity, Filter<()>> {
+impl<Cfg> App<(), Cfg, Identity, Filter<()>> {
     #[must_use]
     /// Create application builder. Application can be configured with a builder-like pattern.
     pub fn new() -> Self {
         App {
             middleware: Identity,
-            filter: factory_with_st(Filter::new()),
+            filter: factory(Filter::new()),
             services: Vec::new(),
             default: None,
             external: Vec::new(),
             case_insensitive: false,
+            ph: PhantomData,
         }
     }
 }
 
-impl App<(), Identity, Filter<()>> {
+impl<Cfg> App<(), Cfg, Identity, Filter<()>> {
     #[must_use]
-    /// Create application builder with custom error renderer.
-    pub fn with<St: AppState>() -> App<St, Identity, Filter<St>> {
+    /// Create application builder with custom app state.
+    pub fn with<St: AppState>() -> App<St, Cfg, Identity, Filter<St>> {
         App {
             middleware: Identity,
-            filter: factory_with_st(Filter::new()),
+            filter: factory(Filter::new()),
             services: Vec::new(),
             default: None,
             external: Vec::new(),
             case_insensitive: false,
+            ph: PhantomData,
         }
     }
+
+    // #[must_use]
+    // /// Create application builder with custom app state.
+    // pub fn with_config<St: AppState, Cfg>() -> App<St, Cfg, Identity, Filter<St>> {
+    //     App {
+    //         middleware: Identity,
+    //         filter: factory(Filter::new()),
+    //         services: Vec::new(),
+    //         default: None,
+    //         external: Vec::new(),
+    //         case_insensitive: false,
+    //         ph: PhantomData,
+    //     }
+    // }
 }
 
-impl<St, M, F> App<St, M, F>
+impl<St, Cfg, M, F> App<St, Cfg, M, F>
 where
     St: AppState,
-    F: ServiceFactory<
-            St,
-            WebRequest,
-            SharedCfg,
-            Res = WebRequest,
-            Error = St::Error,
-            InitError = (),
-        >,
+    Cfg: Clone + 'static,
+    F: ServiceFactory<St, WebRequest, Cfg, Res = WebRequest, Error = St::Error, InitError = ()>,
 {
     #[must_use]
     /// Run external configuration as part of the application building
@@ -100,7 +110,7 @@ where
     ///         .route("/index.html", web::get().to(async || { HttpResponse::Ok() }));
     /// }
     /// ```
-    pub fn configure(mut self, f: impl FnOnce(&mut ServiceConfig<St>)) -> Self {
+    pub fn configure(mut self, f: impl FnOnce(&mut ServiceConfig<St, Cfg>)) -> Self {
         let mut cfg = ServiceConfig::new();
         f(&mut cfg);
         self.services.extend(cfg.services);
@@ -148,7 +158,7 @@ where
     /// * `StaticFiles` is a service for static files support
     pub fn service<S>(mut self, factory: S) -> Self
     where
-        S: WebServiceFactory<St> + 'static,
+        S: WebServiceFactory<St, Cfg> + 'static,
     {
         self.services
             .push(Box::new(ServiceFactoryWrapper::new(factory)));
@@ -190,13 +200,9 @@ where
     ///         );
     /// }
     /// ```
-    pub fn default_service<U>(
-        mut self,
-        f: impl IntoServiceFactory<U, St, WebRequest, SharedCfg>,
-    ) -> Self
+    pub fn default_service<U>(mut self, f: impl IntoServiceFactory<U, St, WebRequest, Cfg>) -> Self
     where
-        U: ServiceFactory<St, WebRequest, SharedCfg, Res = WebResponse, Error = St::Error>
-            + 'static,
+        U: ServiceFactory<St, WebRequest, Cfg, Res = WebResponse, Error = St::Error> + 'static,
         U::InitError: fmt::Debug,
     {
         // create and configure default resource
@@ -265,21 +271,15 @@ where
     /// ```
     pub fn filter<S>(
         self,
-        filter: impl IntoServiceFactory<S, St, WebRequest, SharedCfg>,
+        filter: impl IntoServiceFactory<S, St, WebRequest, Cfg>,
     ) -> App<
         St,
+        Cfg,
         M,
-        impl ServiceFactory<
-            St,
-            WebRequest,
-            SharedCfg,
-            Res = WebRequest,
-            Error = St::Error,
-            InitError = (),
-        >,
+        impl ServiceFactory<St, WebRequest, Cfg, Res = WebRequest, Error = St::Error, InitError = ()>,
     >
     where
-        S: ServiceFactory<St, WebRequest, SharedCfg, Res = WebRequest, Error = St::Error>,
+        S: ServiceFactory<St, WebRequest, Cfg, Res = WebRequest, Error = St::Error>,
     {
         App {
             filter: self
@@ -290,6 +290,7 @@ where
             default: self.default,
             external: self.external,
             case_insensitive: self.case_insensitive,
+            ph: self.ph,
         }
     }
 
@@ -321,7 +322,7 @@ where
     ///         .route("/index.html", web::get().to(index));
     /// }
     /// ```
-    pub fn middleware<U>(self, mw: U) -> App<St, WebStack<St, M, U>, F> {
+    pub fn middleware<U>(self, mw: U) -> App<St, Cfg, WebStack<St, M, U>, F> {
         App {
             middleware: WebStack::new(self.middleware, mw),
             filter: self.filter,
@@ -329,6 +330,7 @@ where
             default: self.default,
             external: self.external,
             case_insensitive: self.case_insensitive,
+            ph: self.ph,
         }
     }
 
@@ -342,19 +344,13 @@ where
     }
 }
 
-impl<St, M, F> App<St, M, F>
+impl<St, Cfg, M, F> App<St, Cfg, M, F>
 where
     St: AppState,
-    M: Middleware<AppRouter<St, F::Service>, St, SharedCfg> + 'static,
+    Cfg: Clone + 'static,
+    M: Middleware<AppRouter<St, Cfg, F::Service>, St, Cfg> + 'static,
     M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
-    F: ServiceFactory<
-            St,
-            WebRequest,
-            SharedCfg,
-            Res = WebRequest,
-            Error = St::Error,
-            InitError = (),
-        >,
+    F: ServiceFactory<St, WebRequest, Cfg, Res = WebRequest, Error = St::Error, InitError = ()>,
 {
     /// Construct service factory, suitable for `http::HttpService`.
     ///
@@ -378,30 +374,25 @@ where
     ) -> impl ServiceFactory<
         St,
         Request,
-        SharedCfg,
+        Cfg,
         Res = WebResponse,
         Error = St::Error,
         InitError = AppInitError,
     > {
-        IntoServiceFactory::<AppFactory<St, M, F>, St, Request, SharedCfg>::into_factory(self)
+        IntoServiceFactory::<AppFactory<St, Cfg, M, F>, St, Request, Cfg>::into_factory(self)
     }
 }
 
-impl<St, M, F> IntoServiceFactory<AppFactory<St, M, F>, St, Request, SharedCfg> for App<St, M, F>
+impl<St, Cfg, M, F> IntoServiceFactory<AppFactory<St, Cfg, M, F>, St, Request, Cfg>
+    for App<St, Cfg, M, F>
 where
     St: AppState,
-    M: Middleware<AppRouter<St, F::Service>, St, SharedCfg> + 'static,
+    Cfg: Clone + 'static,
+    M: Middleware<AppRouter<St, Cfg, F::Service>, St, Cfg> + 'static,
     M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
-    F: ServiceFactory<
-            St,
-            WebRequest,
-            SharedCfg,
-            Res = WebRequest,
-            Error = St::Error,
-            InitError = (),
-        >,
+    F: ServiceFactory<St, WebRequest, Cfg, Res = WebRequest, Error = St::Error, InitError = ()>,
 {
-    fn into_factory(self) -> AppFactory<St, M, F> {
+    fn into_factory(self) -> AppFactory<St, Cfg, M, F> {
         AppFactory::new(
             self.middleware,
             self.filter,
@@ -427,7 +418,7 @@ mod tests {
         let srv = App::default()
             .service(web::resource("/test").to(async || HttpResponse::Ok()))
             .finish()
-            .pipeline(&SharedCfg::default())
+            .pipeline(&())
             .await
             .unwrap();
         let req = TestRequest::with_uri("/test").to_request();
@@ -451,7 +442,7 @@ mod tests {
                 Ok(r.into_response(HttpResponse::MethodNotAllowed()))
             })
             .finish()
-            .pipeline(&SharedCfg::default())
+            .pipeline(&())
             .await
             .unwrap();
 

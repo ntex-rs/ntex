@@ -36,7 +36,7 @@ mod pl_inner;
 mod pl_state;
 
 pub use crate::apply::{apply_fn, apply_fn_factory};
-pub use crate::chain::{ServiceChain, ServiceChainFactory, factory, factory_with_st, svc};
+pub use crate::chain::{ServiceChain, ServiceChainFactory, factory, factory_no_st, svc};
 pub use crate::ctx::Ctx;
 pub use crate::fn_service::{fn_factory, fn_factory_with_config, fn_service, fn_service_st};
 pub use crate::fn_shutdown::fn_shutdown;
@@ -236,7 +236,7 @@ pub trait ServiceFactory<St, Req, Cfg = ()> {
         Self: Sized,
         F: Fn(Self::Res) -> Res + Clone,
     {
-        factory_with_st(dev::MapFactory::new(f, self))
+        factory(dev::MapFactory::new(f, self))
     }
 
     #[inline]
@@ -250,7 +250,7 @@ pub trait ServiceFactory<St, Req, Cfg = ()> {
         Self: Sized,
         F: Fn(Self::Error) -> E + Clone,
     {
-        factory_with_st(dev::MapErrFactory::new(f, self))
+        factory(dev::MapErrFactory::new(f, self))
     }
 
     #[inline]
@@ -264,7 +264,7 @@ pub trait ServiceFactory<St, Req, Cfg = ()> {
         Self: Sized,
         F: Fn(Self::InitError) -> E + Clone,
     {
-        factory_with_st(dev::MapInitErr::new(f, self))
+        factory(dev::MapInitErr::new(f, self))
     }
 
     /// Call another service after call to this one has resolved successfully.
@@ -274,7 +274,7 @@ pub trait ServiceFactory<St, Req, Cfg = ()> {
         U: ServiceFactory<St, Self::Res, Cfg, Error = Self::Error, InitError = Self::InitError>,
         F: IntoServiceFactory<U, St, Self::Res, Cfg>,
     {
-        factory_with_st(dev::AndThenFactory::new(self, f.into_factory()))
+        factory(dev::AndThenFactory::new(self, f.into_factory()))
     }
 
     /// Creates a boxed service factory.
@@ -315,6 +315,29 @@ where
 }
 
 impl<S, St, Req> Service<St, Req> for Box<S>
+where
+    S: Service<St, Req>,
+{
+    type Res = S::Res;
+    type Error = S::Error;
+
+    #[inline]
+    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), S::Error> {
+        ctx.ready(&**self).await
+    }
+
+    #[inline]
+    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
+        ctx.call_nowait(&**self, req).await
+    }
+
+    #[inline]
+    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
+        ctx.shutdown(&**self).await;
+    }
+}
+
+impl<S, St, Req> Service<St, Req> for Rc<S>
 where
     S: Service<St, Req>,
 {
@@ -412,7 +435,10 @@ pub mod dev {
     pub use crate::and_then::{AndThen, AndThenFactory};
     pub use crate::apply::{Apply, ApplyCtx, ApplyFactory};
     pub use crate::chain::{ServiceChain, ServiceChainFactory};
-    pub use crate::fn_service::{FnService, FnServiceConfig, FnServiceFactory, FnServiceNoConfig};
+    pub use crate::fn_service::{
+        FnService, FnServiceConfig, FnServiceFactory, FnServiceNoConfig, FnServiceSt,
+        FnServiceStFactory,
+    };
     pub use crate::fn_shutdown::FnShutdown;
     pub use crate::map::{Map, MapFactory};
     pub use crate::map_config::{MapConfig, UnitConfig};

@@ -7,7 +7,7 @@ use regex::Regex;
 
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::header::HeaderName;
-use crate::service::{Ctx, Middleware, Service, cfg::SharedCfg};
+use crate::service::{Ctx, Middleware, Service};
 use crate::util::{Bytes, HashSet};
 use crate::web::{HttpResponse, WebRequest, WebResponse};
 
@@ -113,10 +113,10 @@ impl Default for Logger {
     }
 }
 
-impl<S, St> Middleware<S, St, SharedCfg> for Logger {
+impl<S, St, Cfg> Middleware<S, St, Cfg> for Logger {
     type Service = LoggerMiddleware<S>;
 
-    fn create(&self, service: S, _: &SharedCfg) -> Self::Service {
+    fn create(&self, service: S, _: &Cfg) -> Self::Service {
         LoggerMiddleware {
             service,
             inner: self.inner.clone(),
@@ -398,9 +398,8 @@ impl fmt::Display for FormatDisplay<'_> {
 mod tests {
     use super::*;
     use crate::http::{StatusCode, header};
-    use crate::web::WebError;
-    use crate::web::test::{self, TestRequest};
-    use crate::{fn_service, service::Pipeline, util::lazy};
+    use crate::web::{WebError, test, test::TestRequest};
+    use crate::{SharedCfg, fn_service, service::Pipeline, util::lazy};
 
     #[crate::rt_test]
     async fn test_logger() {
@@ -417,7 +416,10 @@ mod tests {
         let logger =
             Logger::new("%% %{User-Agent}i %{X-Test}o %{HOME}e %D %% test").exclude("/test");
 
-        let srv = Pipeline::with((), Middleware::create(&logger, srv, &SharedCfg::default()));
+        let srv = Pipeline::with(
+            (),
+            Middleware::<_, (), _>::create(&logger, srv, &SharedCfg::default()),
+        );
         assert!(lazy(|cx| srv.poll_ready(cx).is_ready()).await);
         assert!(lazy(|cx| srv.poll_shutdown(cx).is_ready()).await);
 

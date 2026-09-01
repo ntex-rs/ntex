@@ -770,7 +770,7 @@ mod tests {
     use crate::http::{ResponseHead, StatusCode, body};
     use crate::io::{self as nio, Base};
     use crate::service::{IntoService, Service, cfg::SharedCfg, fn_service};
-    use crate::util::{Bytes, BytesMut, lazy, stream_recv};
+    use crate::util::{Bytes, BytesMut, dyn_rc_err, lazy, stream_recv};
     use crate::{codec::Decoder, testing::IoTest, time::Millis, time::sleep};
 
     const BUFFER_SIZE: usize = 32_768;
@@ -796,7 +796,7 @@ mod tests {
             0,
             nio::Io::new(stream, cfg.clone()),
             Pipeline::with((), s.into_service().map(Into::into)),
-            Pipeline::with((), DefaultControlService).bind(),
+            Pipeline::with((), DefaultControlService.map_err(dyn_rc_err)),
             DispatcherConfig::default(),
         )
     }
@@ -821,7 +821,7 @@ mod tests {
             0,
             nio::Io::new(stream, cfg),
             Pipeline::with((), s.into_service().map(Into::into)),
-            Pipeline::with((), DefaultControlService).bind(),
+            Pipeline::with((), DefaultControlService.map_err(dyn_rc_err)),
             DispatcherConfig::default(),
         ));
     }
@@ -858,8 +858,7 @@ mod tests {
                     }
                     Ok::<_, Rc<dyn error::Error>>(req.ack())
                 }),
-            )
-            .bind(),
+            ),
             DispatcherConfig::default(),
         );
         sleep(Millis(50)).await;
@@ -1271,8 +1270,7 @@ mod tests {
                     }
                     Ok::<_, Rc<dyn error::Error>>(msg.ack())
                 }),
-            )
-            .bind(),
+            ),
             DispatcherConfig::default(),
         );
         crate::rt::spawn(disp);

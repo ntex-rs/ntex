@@ -168,12 +168,15 @@ pub(crate) fn put_request(id: usize, pool_size: usize, req: &mut Rc<HttpRequestI
 /// modularization of big application configuration.
 #[derive(derive_more::Debug)]
 #[debug("ServiceConfig")]
-pub struct ServiceConfig<St> {
-    pub(super) services: Vec<Box<dyn AppServiceFactory<St>>>,
+pub struct ServiceConfig<St, Cfg> {
+    pub(super) services: Vec<Box<dyn AppServiceFactory<St, Cfg>>>,
     pub(super) external: Vec<ResourceDef>,
 }
 
-impl<St: AppState> ServiceConfig<St> {
+impl<St: AppState, Cfg> ServiceConfig<St, Cfg>
+where
+    Cfg: Clone + 'static,
+{
     pub fn new() -> Self {
         Self {
             services: Vec::new(),
@@ -197,7 +200,7 @@ impl<St: AppState> ServiceConfig<St> {
     /// This is same as `App::service()` method.
     pub fn service<F>(&mut self, factory: F) -> &mut Self
     where
-        F: WebServiceFactory<St> + 'static,
+        F: WebServiceFactory<St, Cfg> + 'static,
     {
         self.services
             .push(Box::new(ServiceFactoryWrapper::new(factory)));
@@ -219,7 +222,7 @@ impl<St: AppState> ServiceConfig<St> {
     }
 }
 
-impl<St: AppState> Default for ServiceConfig<St> {
+impl<St: AppState, Cfg: Clone + 'static> Default for ServiceConfig<St, Cfg> {
     fn default() -> Self {
         Self::new()
     }
@@ -322,7 +325,7 @@ mod tests {
 
     #[test]
     fn test_new_service_config() {
-        let cfg: ServiceConfig<()> = ServiceConfig::default();
+        let cfg: ServiceConfig<(), ()> = ServiceConfig::default();
         assert!(cfg.services.is_empty());
         assert!(cfg.external.is_empty());
     }

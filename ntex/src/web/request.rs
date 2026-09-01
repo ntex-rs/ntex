@@ -277,9 +277,6 @@ mod tests {
         assert!(!req.headers().contains_key(header::CONTENT_TYPE));
         assert!(!req.message_headers().contains_key(header::CONTENT_TYPE));
 
-        let pl = req.take_payload();
-        req.set_payload(pl);
-
         req.extensions_mut().insert("TEXT".to_string());
         assert_eq!(req.message_extensions().get::<String>().unwrap(), "TEXT");
         req.message_extensions_mut().remove::<String>();

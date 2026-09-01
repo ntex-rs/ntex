@@ -69,11 +69,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::{ServiceFactory, factory, fn_factory_with_config, fn_service};
+    use crate::{ServiceFactory, factory_no_st, fn_factory_with_config, fn_service};
 
     #[ntex::test]
     async fn map_init_err() {
-        let factory = factory(fn_factory_with_config(async move |err: &bool| {
+        let factory = factory_no_st(fn_factory_with_config(async move |err: &bool| {
             if *err {
                 Err(())
             } else {
@@ -90,7 +90,7 @@ mod tests {
 
     #[ntex::test]
     async fn map_init_err2() {
-        let factory = factory(fn_factory_with_config(async |err: &bool| {
+        let factory = factory_no_st(fn_factory_with_config(async |err: &bool| {
             if *err {
                 Err(())
             } else {

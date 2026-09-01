@@ -107,7 +107,7 @@ pub trait Middleware<S, St, Cfg> {
         Self: Sized,
         Self::Service: Service<St, Req>,
     {
-        crate::factory_with_st(ApplyMiddleware::new(self, factory))
+        crate::factory(ApplyMiddleware::new(self, factory))
     }
 }
 
