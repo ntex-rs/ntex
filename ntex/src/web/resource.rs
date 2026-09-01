@@ -40,7 +40,7 @@ type ResourcePipeline<St, F> = ServiceChain<AndThen<F, ResourceRouter<St>>, St, 
 /// Default behavior could be overriden with `default_resource()` method.
 #[derive(derive_more::Debug)]
 #[debug("Resource({rdef:?})")]
-pub struct Resource<St: AppState, Cfg, M = Identity, F = Filter<St>> {
+pub struct Resource<St: AppState, Cfg = (), M = Identity, F = Filter<St>> {
     middleware: M,
     filter: ServiceChainFactory<F, St, WebRequest, Cfg>,
     rdef: Vec<String>,
