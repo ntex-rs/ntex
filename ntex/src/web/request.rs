@@ -1,4 +1,4 @@
-use std::{cell::Ref, cell::RefMut, fmt, net, rc::Rc};
+use std::{cell::Ref, cell::RefMut, fmt, net};
 
 use crate::http::{
     HeaderMap, HttpMessage, Method, Payload, RequestHead, Response, Uri, Version, header,
@@ -11,63 +11,45 @@ use super::config::WebAppConfig;
 use super::error::WebResponseError;
 use super::info::ConnectionInfo;
 use super::rmap::ResourceMap;
-use super::{AppState, HttpRequest, WebResponse};
+use super::{HttpRequest, WebResponse};
 
 /// An service http request
 ///
 /// `WebRequest` allows mutable access to request's internal structures
 pub struct WebRequest {
     req: HttpRequest,
+    payload: Payload,
 }
 
 impl WebRequest {
     /// Create web response for error
     #[inline]
-    pub fn render_error<E: WebResponseError>(self, err: &E) -> WebResponse {
+    pub fn error_response<Err, E: WebResponseError<Err>>(self, mut err: E) -> WebResponse {
         WebResponse::new(err.error_response(&self.req), self.req)
-    }
-
-    /// Create web response for error
-    #[inline]
-    pub fn error_response<St: AppState, E: Into<St::Error>>(self, err: E) -> WebResponse {
-        WebResponse::from_err::<St, E>(err, self.req)
     }
 }
 
 impl WebRequest {
     /// Construct web request
-    pub(crate) fn new(req: HttpRequest) -> Self {
-        WebRequest { req }
+    pub(crate) fn new(req: HttpRequest, payload: Payload) -> Self {
+        WebRequest { req, payload }
     }
 
     /// Deconstruct request into parts
-    pub fn into_parts(mut self) -> (HttpRequest, Payload) {
-        let pl = Rc::get_mut(&mut (self.req).0).unwrap().payload.take();
-        (self.req, pl)
+    pub fn into_parts(self) -> (HttpRequest, Payload) {
+        (self.req, self.payload)
     }
 
     /// Construct request from parts.
-    ///
-    /// `WebRequest` can be re-constructed only if `req` hasnt been cloned.
-    pub fn from_parts(mut req: HttpRequest, pl: Payload) -> Result<Self, (HttpRequest, Payload)> {
-        if Rc::strong_count(&req.0) == 1 {
-            Rc::get_mut(&mut req.0).unwrap().payload = pl;
-            Ok(WebRequest::new(req))
-        } else {
-            Err((req, pl))
-        }
+    pub fn from_parts(req: HttpRequest, payload: Payload) -> Self {
+        WebRequest { req, payload }
     }
 
     /// Construct request from request.
-    ///
-    /// `HttpRequest` implements `Clone` trait via `Rc` type. `WebRequest`
-    /// can be re-constructed only if rc's strong pointers count eq 1 and
-    /// weak pointers count is 0.
-    pub fn from_request(req: HttpRequest) -> Result<Self, HttpRequest> {
-        if Rc::strong_count(&req.0) == 1 {
-            Ok(WebRequest::new(req))
-        } else {
-            Err(req)
+    pub fn from_request(req: HttpRequest) -> Self {
+        WebRequest {
+            req,
+            payload: Payload::None,
         }
     }
 
@@ -194,18 +176,6 @@ impl WebRequest {
         (self.req).app_config().state()
     }
 
-    #[inline]
-    /// Get request's payload
-    pub fn take_payload(&mut self) -> Payload {
-        Rc::get_mut(&mut (self.req).0).unwrap().payload.take()
-    }
-
-    #[inline]
-    /// Set request payload.
-    pub fn set_payload(&mut self, payload: Payload) {
-        Rc::get_mut(&mut (self.req).0).unwrap().payload = payload;
-    }
-
     /// Request extensions
     #[inline]
     pub fn extensions(&self) -> Ref<'_, Extensions> {
@@ -279,8 +249,7 @@ impl fmt::Debug for WebRequest {
 #[cfg(test)]
 mod tests {
     use crate::http::{self, HttpMessage, header};
-    use crate::web::HttpResponse;
-    use crate::web::test::TestRequest;
+    use crate::web::{HttpResponse, WebError, test::TestRequest};
 
     #[test]
     fn test_request() {
@@ -289,14 +258,11 @@ mod tests {
         assert!(req.peer_addr().is_none());
         let err = http::error::PayloadError::Overflow;
 
-        let res: HttpResponse = req.render_error(&err).into();
+        let res: HttpResponse = req.error_response::<WebError, _>(err).into();
         assert_eq!(res.status(), http::StatusCode::PAYLOAD_TOO_LARGE);
 
         let req = TestRequest::default().to_srv_request();
         let err = http::error::PayloadError::Overflow;
-
-        let res: HttpResponse = req.error_response::<(), _>(err).into();
-        assert_eq!(res.status(), http::StatusCode::PAYLOAD_TOO_LARGE);
 
         let mut req = TestRequest::default().to_srv_request();
         req.headers_mut().insert(
@@ -310,9 +276,6 @@ mod tests {
         req.headers_mut().remove(header::CONTENT_TYPE);
         assert!(!req.headers().contains_key(header::CONTENT_TYPE));
         assert!(!req.message_headers().contains_key(header::CONTENT_TYPE));
-
-        let pl = req.take_payload();
-        req.set_payload(pl);
 
         req.extensions_mut().insert("TEXT".to_string());
         assert_eq!(req.message_extensions().get::<String>().unwrap(), "TEXT");

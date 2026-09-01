@@ -6,7 +6,7 @@ use ntex_h2::{self as h2};
 use crate::error::Error;
 use crate::http::uri::{Authority, Scheme, Uri};
 use crate::io::{IoBoxed, types::HttpProtocol};
-use crate::service::pipeline::{PipelineCall, PipelineWithStateBinding};
+use crate::service::pipeline::{PipelineBinding, PipelineCall};
 use crate::service::{Ctx, Service, cfg::Cfg, cfg::SharedCfg};
 use crate::util::{ByteString, Either, HashMap, HashSet, select};
 use crate::{channel::inplace, channel::oneshot, channel::pool, rt::spawn, time::now};
@@ -84,7 +84,7 @@ impl ConnectionPool {
         let (stop, stop_rx) = oneshot::channel();
         crate::rt::spawn(run_connection_pool(
             shared.clone(),
-            svc.bind(),
+            svc.bind_state(shared.clone()),
             inner.clone(),
             waiters.clone(),
             stop_rx,
@@ -189,7 +189,7 @@ impl Service<SharedCfg, Connect> for ConnectionPool {
                     tx,
                     uri,
                     inner,
-                    self.0.svc.bind(),
+                    self.0.svc.bind_state(self.0.cfg.clone()),
                 );
 
                 match rx.await {
@@ -336,7 +336,7 @@ impl Inner {
 
 async fn run_connection_pool(
     cfg: SharedCfg,
-    svc: PipelineWithStateBinding<SharedCfg, Connect, IoBoxed, Error<ConnectError>>,
+    svc: PipelineBinding<Connect, IoBoxed, Error<ConnectError>>,
     inner: Rc<RefCell<Inner>>,
     waiters: Rc<RefCell<Waiters>>,
     mut stop: oneshot::Receiver<()>,
@@ -437,13 +437,13 @@ fn open_connection(
     tx: Waiter,
     uri: Uri,
     inner: Rc<RefCell<Inner>>,
-    pl: PipelineWithStateBinding<SharedCfg, Connect, IoBoxed, Error<ConnectError>>,
+    pl: PipelineBinding<Connect, IoBoxed, Error<ConnectError>>,
 ) {
     let guard = OpenGuard::new(key.clone(), inner.clone());
 
     spawn(async move {
         // open tcp connection
-        match pl.call(connect, &cfg).await {
+        match pl.call(connect).await {
             Err(err) => {
                 log::trace!(
                     "Failed to open client connection for {:?} with error {:?}",

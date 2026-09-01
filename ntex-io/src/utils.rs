@@ -1,6 +1,6 @@
 use std::{cell::Cell, task::Poll, task::Waker};
 
-use ntex_service::{IntoServiceFactory, ServiceFactory, factory_with_st};
+use ntex_service::state::{RequestState, State};
 use ntex_util::task::LocalWaker;
 
 use crate::{Filter, Io, IoBoxed, IoCallbacks};
@@ -12,19 +12,6 @@ pub struct Decoded<T> {
     pub item: Option<T>,
     pub remains: usize,
     pub consumed: usize,
-}
-
-/// Service that converts any `Io<F>` stream to `IoBoxed` stream
-pub fn seal<F, Sf, St, Cfg>(
-    f: impl IntoServiceFactory<Sf, St, IoBoxed, Cfg>,
-) -> impl ServiceFactory<St, Io<F>, Cfg, Res = Sf::Res, Error = Sf::Error, InitError = Sf::InitError>
-where
-    F: Filter,
-    Sf: ServiceFactory<St, IoBoxed, Cfg>,
-{
-    factory_with_st(async |io: Io<F>| Ok(io.boxed()))
-        .map_init_err(|_| unreachable!())
-        .and_then(f.into_factory())
 }
 
 pub(crate) struct Extensions(Cell<Option<Box<ExtensionsInner>>>);
@@ -118,37 +105,50 @@ impl Extensions {
     }
 }
 
+impl<F> RequestState<Io<F>> for Io<F> {
+    type State = ();
+
+    #[inline]
+    fn unpack(self) -> (Io<F>, ()) {
+        (self, ())
+    }
+}
+
+impl<F: Filter> RequestState<IoBoxed> for Io<F> {
+    type State = ();
+
+    #[inline]
+    fn unpack(self) -> (IoBoxed, ()) {
+        (self.boxed(), ())
+    }
+}
+
+impl RequestState<IoBoxed> for IoBoxed {
+    type State = ();
+
+    #[inline]
+    fn unpack(self) -> (IoBoxed, ()) {
+        (self, ())
+    }
+}
+
+impl<F: Filter, St: 'static> RequestState<IoBoxed> for State<Io<F>, St> {
+    type State = St;
+
+    #[inline]
+    fn unpack(self) -> (IoBoxed, St) {
+        let State { req, state } = self;
+        (req.boxed(), state)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use ntex_bytes::{BytePageSize, Bytes};
-    use ntex_codec::BytesCodec;
-    use ntex_service::{cfg::SharedCfg, factory};
+    use ntex_bytes::BytePageSize;
+    use ntex_service::cfg::SharedCfg;
 
     use super::*;
     use crate::{buf::Stack, filter::NullFilter, testing::IoTest};
-
-    #[ntex::test]
-    async fn test_utils() {
-        let (client, server) = IoTest::create();
-        client.remote_buffer_cap(1024);
-        client.write("REQ");
-
-        let svc = factory(seal(|io: IoBoxed| async move {
-            let t = io.recv(&BytesCodec).await.unwrap().unwrap();
-            assert_eq!(t, b"REQ".as_ref());
-            io.send(Bytes::from_static(b"RES"), &BytesCodec)
-                .await
-                .unwrap();
-            Ok::<_, ()>(())
-        }))
-        .pipeline(&())
-        .await
-        .unwrap();
-        let _ = svc.call(Io::new(server, SharedCfg::default())).await;
-
-        let buf = client.read().await.unwrap();
-        assert_eq!(buf, b"RES".as_ref());
-    }
 
     #[ntex::test]
     async fn test_null_filter() {

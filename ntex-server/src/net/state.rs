@@ -1,39 +1,31 @@
-use std::marker::PhantomData;
+#![allow(clippy::unused_async_trait_impl)]
+use std::io;
 
-use ntex_util::future::BoxFuture;
+pub trait ServerAppConfig: Sync + Send + 'static {
+    type State: Clone;
 
-pub(crate) trait StateFactory<St> {
-    fn clo(&self) -> Box<dyn StateFactory<St> + Send>;
-
-    fn create(&self) -> BoxFuture<'static, Result<St, &'static str>>;
+    async fn create(&self) -> io::Result<Self::State>;
 }
 
-pub(crate) fn state_factory<F, St>(f: F) -> Box<dyn StateFactory<St> + Send>
-where
-    F: AsyncFn() -> Result<St, &'static str> + Send + Clone + 'static,
-    St: 'static,
-{
-    Box::new(StateFactoryImpl { f, st: PhantomData })
-}
+#[derive(Copy, Clone, Default, Debug)]
+pub struct NoConfig;
 
-struct StateFactoryImpl<F, St> {
-    f: F,
-    st: PhantomData<St>,
-}
+impl ServerAppConfig for NoConfig {
+    type State = ();
 
-unsafe impl<F, St> Send for StateFactoryImpl<F, St> where F: Send {}
-
-impl<F, St> StateFactory<St> for StateFactoryImpl<F, St>
-where
-    F: AsyncFn() -> Result<St, &'static str> + Send + Clone + 'static,
-    St: 'static,
-{
-    fn clo(&self) -> Box<dyn StateFactory<St> + Send> {
-        state_factory(self.f.clone())
+    async fn create(&self) -> io::Result<()> {
+        Ok(())
     }
+}
 
-    fn create(&self) -> BoxFuture<'static, Result<St, &'static str>> {
-        let f = self.f.clone();
-        Box::pin(async move { (f)().await })
+impl<F, Cfg> ServerAppConfig for F
+where
+    F: AsyncFn() -> io::Result<Cfg> + Sync + Send + 'static,
+    Cfg: Clone,
+{
+    type State = Cfg;
+
+    async fn create(&self) -> io::Result<Cfg> {
+        (*self)().await
     }
 }

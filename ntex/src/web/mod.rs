@@ -109,7 +109,7 @@ pub use crate::http::ResponseBuilder as HttpResponseBuilder;
 pub use self::app::App;
 pub use self::config::ServiceConfig;
 pub use self::config::WebAppConfig;
-pub use self::error::{ErrorContainer, WebError, WebResponseError};
+pub use self::error::{WebError, WebResponseError};
 pub use self::extract::FromRequest;
 pub use self::handler::Handler;
 pub use self::httprequest::HttpRequest;
@@ -125,11 +125,10 @@ pub use self::state::AppState;
 pub use self::util::*;
 
 use crate::service::boxed::{BoxService, BoxServiceFactory};
-use crate::service::cfg::SharedCfg;
 
 pub(crate) type HttpHandler<St: AppState> = BoxService<St, WebRequest, WebResponse, St::Error>;
-pub(crate) type HttpService<St: AppState> =
-    BoxServiceFactory<St, WebRequest, WebResponse, St::Error, SharedCfg, ()>;
+pub(crate) type HttpService<St: AppState, Cfg> =
+    BoxServiceFactory<St, WebRequest, WebResponse, St::Error, Cfg, ()>;
 
 pub mod dev {
     //! The `ntex::web` prelude for library developers

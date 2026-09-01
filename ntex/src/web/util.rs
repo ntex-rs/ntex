@@ -3,11 +3,11 @@ use std::{error::Error, fmt};
 
 use ntex_router::IntoPattern;
 
-use crate::http::body::MessageBody;
 use crate::http::error::{BlockingError, ResponseError};
 use crate::http::header::ContentEncoding;
 use crate::http::{Method, Request, Response};
-use crate::service::{IntoServiceFactory, ServiceFactory, cfg::SharedCfg, state::DefaultState};
+use crate::server::NoConfig;
+use crate::service::{IntoServiceFactory, ServiceFactory};
 
 use super::extract::FromRequest;
 use super::handler::Handler;
@@ -16,7 +16,7 @@ use super::route::Route;
 use super::scope::Scope;
 use super::server::HttpServer;
 use super::service::WebServiceAdapter;
-use super::{AppState, HttpResponse, HttpResponseBuilder};
+use super::{AppState, HttpResponse, HttpResponseBuilder, WebResponseError};
 
 /// Create resource for a specific path.
 ///
@@ -41,13 +41,13 @@ use super::{AppState, HttpResponse, HttpResponseBuilder};
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::resource("/users/{userid}/{friend}")
 ///         .route(web::get().to(async || { web::HttpResponse::Ok() }))
 ///         .route(web::head().to(async || { web::HttpResponse::MethodNotAllowed() }))
 /// );
 /// ```
-pub fn resource<St: AppState, T: IntoPattern>(path: T) -> Resource<St> {
+pub fn resource<St: AppState, Cfg, T: IntoPattern>(path: T) -> Resource<St, Cfg> {
     Resource::new(path)
 }
 
@@ -59,7 +59,7 @@ pub fn resource<St: AppState, T: IntoPattern>(path: T) -> Resource<St> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::scope("/{project_id}")
 ///         .service(web::resource("/path1").to(async || { web::HttpResponse::Ok() }))
 ///         .service(web::resource("/path2").to(async || { web::HttpResponse::Ok() }))
@@ -72,7 +72,7 @@ pub fn resource<St: AppState, T: IntoPattern>(path: T) -> Resource<St> {
 ///  * `/{project_id}/path2`
 ///  * `/{project_id}/path3`
 ///
-pub fn scope<St: AppState, T: IntoPattern>(path: T) -> Scope<St> {
+pub fn scope<St: AppState, Cfg, T: IntoPattern>(path: T) -> Scope<St, Cfg> {
     Scope::new(path)
 }
 
@@ -86,7 +86,7 @@ pub fn route<St: AppState>() -> Route<St> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::resource("/{project_id}")
 ///        .route(web::get().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -104,7 +104,7 @@ pub fn get<St: AppState>() -> Route<St> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::post().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -122,7 +122,7 @@ pub fn post<St: AppState>() -> Route<St> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::put().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -140,7 +140,7 @@ pub fn put<St: AppState>() -> Route<St> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::patch().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -158,7 +158,7 @@ pub fn patch<St: AppState>() -> Route<St> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::delete().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -176,7 +176,7 @@ pub fn delete<St: AppState>() -> Route<St> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::head().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -194,7 +194,7 @@ pub fn head<St: AppState>() -> Route<St> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::query().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -212,7 +212,7 @@ pub fn query<St: AppState>() -> Route<St> {
 /// ```rust
 /// use ntex::{http, web};
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::method(http::Method::GET).to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -234,16 +234,16 @@ pub fn method<St: AppState>(method: Method) -> Route<St> {
 ///    web::HttpResponse::Ok().finish()
 /// }
 ///
-/// web::App::new().service(
+/// web::App::default().service(
 ///     web::resource("/").route(web::to(index))
 /// );
 /// ```
 pub fn to<St, F, Args>(handler: F) -> Route<St>
 where
+    St: AppState,
     F: Handler<St, Args> + 'static,
     Args: FromRequest<St> + 'static,
-    St: AppState,
-    St::Error: From<Args::Error>,
+    Args::Error: WebResponseError<St::Error>,
 {
     Route::new().to(handler)
 }
@@ -257,7 +257,7 @@ where
 ///     Ok(req.into_response(HttpResponse::Ok().finish()))
 /// }
 ///
-/// let app = App::new().service(
+/// let app = App::default().service(
 ///     web::service("/users/*")
 ///         .guard(guard::Header("content-type", "text/plain"))
 ///         .finish(my_service)
@@ -296,15 +296,14 @@ where
 ///         .await
 /// }
 /// ```
-pub fn server<F, I, Sf, B>(factory: F) -> HttpServer<(), F, I, Sf, DefaultState<()>, B>
+pub fn server<F, I, Sf>(factory: F) -> HttpServer<NoConfig, F, I, Sf>
 where
     F: AsyncFn(&()) -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<Sf, (), Request, SharedCfg>,
-    Sf: ServiceFactory<(), Request, SharedCfg> + 'static,
-    Sf::Res: Into<Response<B>>,
+    I: IntoServiceFactory<Sf, (), Request, ()>,
+    Sf: ServiceFactory<(), Request, ()> + 'static,
+    Sf::Res: Into<Response>,
     Sf::Error: ResponseError,
     Sf::InitError: Error,
-    B: MessageBody + 'static,
 {
     HttpServer::new(factory)
 }

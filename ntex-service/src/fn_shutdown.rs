@@ -96,7 +96,7 @@ where
 mod tests {
     use std::{future::poll_fn, rc::Rc};
 
-    use crate::{Pipeline, factory, fn_service};
+    use crate::{Pipeline, factory_no_st, fn_service};
 
     use super::*;
 
@@ -111,7 +111,7 @@ mod tests {
 
         let pipe = Pipeline::with(
             (),
-            factory(srv)
+            factory_no_st(srv)
                 .and_then(on_shutdown)
                 .clone()
                 .create(&())

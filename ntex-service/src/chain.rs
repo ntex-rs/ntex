@@ -23,11 +23,11 @@ where
 }
 
 /// Constructs new chain factory with one service factory.
-pub fn factory<Sf, Req, Cfg>(
-    factory: impl IntoServiceFactory<Sf, (), Req, Cfg>,
-) -> ServiceChainFactory<Sf, (), Req, Cfg>
+pub fn factory<Sf, St, Req, Cfg>(
+    factory: impl IntoServiceFactory<Sf, St, Req, Cfg>,
+) -> ServiceChainFactory<Sf, St, Req, Cfg>
 where
-    Sf: ServiceFactory<(), Req, Cfg>,
+    Sf: ServiceFactory<St, Req, Cfg>,
 {
     ServiceChainFactory {
         factory: factory.into_factory(),
@@ -36,11 +36,11 @@ where
 }
 
 /// Constructs new chain factory with one service factory.
-pub fn factory_with_st<Sf, St, Req, Cfg>(
-    factory: impl IntoServiceFactory<Sf, St, Req, Cfg>,
-) -> ServiceChainFactory<Sf, St, Req, Cfg>
+pub fn factory_no_st<Sf, Req, Cfg>(
+    factory: impl IntoServiceFactory<Sf, (), Req, Cfg>,
+) -> ServiceChainFactory<Sf, (), Req, Cfg>
 where
-    Sf: ServiceFactory<St, Req, Cfg>,
+    Sf: ServiceFactory<(), Req, Cfg>,
 {
     ServiceChainFactory {
         factory: factory.into_factory(),
@@ -210,7 +210,7 @@ impl<Sf: ServiceFactory<St, Req, Cfg>, St, Req, Cfg> ServiceChainFactory<Sf, St,
     /// Short version of `apply(middleware, factory(...))`
     pub fn apply<U>(self, tr: U) -> ServiceChainFactory<ApplyMiddleware<U, Sf>, St, Req, Cfg>
     where
-        U: Middleware<Sf::Service, Cfg>,
+        U: Middleware<Sf::Service, St, Cfg>,
     {
         crate::apply(tr, self.factory)
     }

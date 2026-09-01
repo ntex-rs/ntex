@@ -8,13 +8,12 @@ use ntex_tls::TlsConfig;
 use uuid::Uuid;
 
 use crate::channel::bstream;
-use crate::client::error::ClientPayloadError;
-use crate::client::{Client, ClientRequest, ClientResponse};
+use crate::client::{Client, ClientRequest, ClientResponse, error::ClientPayloadError};
 use crate::error::Error;
 #[cfg(feature = "ws")]
 use crate::io::Filter;
 use crate::io::{Io, IoConfig};
-use crate::server::Server;
+use crate::server::{NoConfig, Server};
 use crate::service::{IntoService, Service, cfg::SharedCfg};
 #[cfg(feature = "ws")]
 use crate::ws::{WsClient, WsClientConfig, WsConnection, error::WsClientError};
@@ -294,7 +293,7 @@ where
         let local_addr = tcp.local_addr().unwrap();
 
         sys.run(move || {
-            let srv = crate::server::ServerBuilder::<()>::with_default()
+            let srv = crate::server::ServerBuilder::new(NoConfig)
                 .listen("test", tcp, cfg, async move |st| f(st).await)?
                 .workers(1)
                 .disable_signals()

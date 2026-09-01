@@ -44,15 +44,6 @@ pub struct HeaderItem {
     pub value: header::HeaderValue,
 }
 
-pub(crate) type HttpPipeline<St, B, Err> = crate::PipelineFactory<
-    St,
-    Request,
-    Response<B>,
-    Err,
-    crate::SharedCfg,
-    std::rc::Rc<dyn std::error::Error>,
->;
-
 #[cfg(feature = "openssl")]
 use crate::server::openssl::{SslAcceptor, SslFilter};
 #[cfg(any(feature = "openssl", feature = "rustls"))]

@@ -1,10 +1,10 @@
-use std::sync::Arc;
+use std::{io, sync::Arc};
 
 use ntex_io::Io;
-use ntex_service::{IntoService, Pipeline, Service, cfg::SharedCfg, state::State};
+use ntex_service::{IntoService, Pipeline, Service, cfg::SharedCfg};
 use ntex_util::{future::BoxFuture, services::counter::CounterGuard};
 
-use super::Token;
+use super::{ServerAppConfig, Token};
 
 pub(super) type FactoryServiceType<St> = Box<dyn FactoryService<St>>;
 type CreateResult = Vec<(Box<dyn NetService>, Arc<str>, Vec<(Token, SharedCfg)>)>;
@@ -18,37 +18,37 @@ pub(crate) trait NetService {
     fn shutdown(&self) -> BoxFuture<'_, ()>;
 }
 
-pub(crate) trait FactoryService<St>: Send {
-    fn clo(&self) -> FactoryServiceType<St>;
+pub(crate) trait FactoryService<Cfg: ServerAppConfig>: Send {
+    fn clo(&self) -> FactoryServiceType<Cfg>;
 
-    fn create(&self, st: St) -> BoxFuture<'static, Result<CreateResult, &'static str>>;
+    fn create(&self, st: Cfg::State) -> BoxFuture<'static, io::Result<CreateResult>>;
 }
 
-struct Factory<St> {
+struct Factory<Cfg: ServerAppConfig> {
     name: Arc<str>,
     tokens: Vec<(Token, SharedCfg)>,
-    fac: Arc<SvcFactory<St>>,
+    fac: Arc<SvcFactory<Cfg::State>>,
 }
 
-pub(crate) fn create_factory_service<F, S, St, I>(
+pub(crate) fn create_factory_service<Cfg, F, S, I>(
     name: String,
     tokens: Vec<(Token, SharedCfg)>,
     f: F,
-) -> FactoryServiceType<St>
+) -> FactoryServiceType<Cfg>
 where
-    F: AsyncFn(&St) -> I + Send + Clone + 'static,
-    I: IntoService<S, St, Io> + 'static,
-    S: Service<St, Io> + 'static,
-    St: State<St, Io> + Clone + 'static,
+    Cfg: ServerAppConfig,
+    F: AsyncFn(&Cfg::State) -> I + Send + Clone + 'static,
+    I: IntoService<S, Cfg::State, Io> + 'static,
+    S: Service<Cfg::State, Io> + 'static,
 {
     Box::from(Factory {
         tokens,
         name: Arc::from(name),
-        fac: Arc::new(move |st: St| {
+        fac: Arc::new(move |cfg: Cfg::State| {
             let f = f.clone();
             Box::pin(async move {
-                let svc = (f)(&st).await.into_service();
-                let pipeline = Pipeline::with_ctl(st.clone(), st, svc.map(|_| ()).map_err(|_| ()));
+                let svc = (f)(&cfg).await.into_service();
+                let pipeline = Pipeline::with(cfg, svc.map(|_| ()).map_err(|_| ()));
                 let svc: Box<dyn NetService> = Box::new(ServerService { pipeline });
                 svc
             })
@@ -56,8 +56,8 @@ where
     })
 }
 
-impl<St: 'static> FactoryService<St> for Factory<St> {
-    fn clo(&self) -> FactoryServiceType<St> {
+impl<Cfg: ServerAppConfig> FactoryService<Cfg> for Factory<Cfg> {
+    fn clo(&self) -> FactoryServiceType<Cfg> {
         Box::new(Factory {
             name: self.name.clone(),
             tokens: self.tokens.clone(),
@@ -65,7 +65,7 @@ impl<St: 'static> FactoryService<St> for Factory<St> {
         })
     }
 
-    fn create(&self, st: St) -> BoxFuture<'static, Result<CreateResult, &'static str>> {
+    fn create(&self, st: Cfg::State) -> BoxFuture<'static, io::Result<CreateResult>> {
         let name = self.name.clone();
         let tokens = self.tokens.clone();
         let factory_fut = (self.fac)(st);
@@ -98,4 +98,4 @@ impl NetService for ServerService {
 
 // SAFETY: Send cannot be provided authomatically because of E and R params
 // but R always get executed in one thread and never leave it
-unsafe impl<St> Send for Factory<St> {}
+unsafe impl<Cfg: ServerAppConfig> Send for Factory<Cfg> {}

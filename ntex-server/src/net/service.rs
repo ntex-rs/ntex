@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, io, sync::Arc};
 
 use ntex_service::{Ctx, Service, cfg::SharedCfg};
 use ntex_util::{HashMap, future::join_all, services::Counter};
@@ -7,21 +7,21 @@ use crate::ServerConfiguration;
 
 use super::accept::{AcceptNotify, AcceptorCommand};
 use super::factory::{FactoryServiceType, NetService};
-use super::state::StateFactory;
+use super::state::ServerAppConfig;
 use super::{MAX_CONNS_COUNTER, Token, socket::Connection};
 
 /// Net streaming server
-pub struct StreamServer<St> {
+pub struct StreamServer<Cfg> {
     accept: AcceptNotify,
-    state: Box<dyn StateFactory<St> + Send>,
-    services: Vec<FactoryServiceType<St>>,
+    state: Arc<Cfg>,
+    services: Vec<FactoryServiceType<Cfg>>,
 }
 
-impl<St: Clone> StreamServer<St> {
+impl<Cfg: ServerAppConfig> StreamServer<Cfg> {
     pub(crate) fn new(
         accept: AcceptNotify,
-        state: Box<dyn StateFactory<St> + Send>,
-        services: Vec<FactoryServiceType<St>>,
+        state: Arc<Cfg>,
+        services: Vec<FactoryServiceType<Cfg>>,
     ) -> Self {
         Self {
             accept,
@@ -31,7 +31,7 @@ impl<St: Clone> StreamServer<St> {
     }
 }
 
-impl<St> fmt::Debug for StreamServer<St> {
+impl<Cfg> fmt::Debug for StreamServer<Cfg> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StreamServer")
             .field("services", &self.services.len())
@@ -40,21 +40,21 @@ impl<St> fmt::Debug for StreamServer<St> {
 }
 
 /// Worker service factory.
-impl<St: Clone + 'static> ServerConfiguration for StreamServer<St> {
+impl<Cfg: ServerAppConfig> ServerConfiguration for StreamServer<Cfg> {
     type Item = Connection;
     type Service = StreamService;
 
     /// Create service for handling connections
-    async fn create(&self) -> Result<Self::Service, &'static str> {
-        // construct state
-        let state = self.state.create().await?;
+    async fn create(&self) -> io::Result<Self::Service> {
+        // construct configuration
+        let cfg = self.state.create().await?;
 
         // construct services
         let mut tokens = HashMap::default();
         let mut services = Vec::new();
 
         for info in &self.services {
-            for (svc, _, svc_tokens) in info.create(state.clone()).await? {
+            for (svc, _, svc_tokens) in info.create(cfg.clone()).await.map_err(io::Error::other)? {
                 services.push(svc);
                 let idx = services.len() - 1;
                 for (token, cfg) in &svc_tokens {
@@ -93,10 +93,10 @@ impl<St: Clone + 'static> ServerConfiguration for StreamServer<St> {
     }
 }
 
-impl<St> Clone for StreamServer<St> {
+impl<Cfg: ServerAppConfig> Clone for StreamServer<Cfg> {
     fn clone(&self) -> Self {
         Self {
-            state: self.state.clo(),
+            state: self.state.clone(),
             accept: self.accept.clone(),
             services: self.services.iter().map(|s| s.clo()).collect(),
         }

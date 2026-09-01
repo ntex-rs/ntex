@@ -3,7 +3,7 @@ use std::{cmp, str::FromStr};
 
 use crate::http::encoding::Encoder;
 use crate::http::header::{ACCEPT_ENCODING, ContentEncoding};
-use crate::service::{Ctx, Middleware, Service, cfg::SharedCfg};
+use crate::service::{Ctx, Middleware, Service};
 use crate::web::{AppState, BodyEncoding, WebRequest, WebResponse};
 
 #[derive(Debug, Clone)]
@@ -16,7 +16,7 @@ use crate::web::{AppState, BodyEncoding, WebRequest, WebResponse};
 /// use ntex::web::{self, middleware, App, HttpResponse};
 ///
 /// fn main() {
-///     let app = App::new()
+///     let app = App::default()
 ///         .middleware(middleware::Compress::default())
 ///         .service(
 ///             web::resource("/test")
@@ -42,10 +42,10 @@ impl Default for Compress {
     }
 }
 
-impl<S> Middleware<S, SharedCfg> for Compress {
+impl<S, St, Cfg> Middleware<S, St, Cfg> for Compress {
     type Service = CompressMiddleware<S>;
 
-    fn create(&self, service: S, _: &SharedCfg) -> Self::Service {
+    fn create(&self, service: S, _: &Cfg) -> Self::Service {
         CompressMiddleware {
             service,
             encoding: self.enc,

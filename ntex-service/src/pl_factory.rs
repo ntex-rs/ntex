@@ -1,14 +1,12 @@
 use std::{fmt, rc::Rc};
 
-use crate::{ServiceFactory, StateMapping, pipeline::Pipeline, state::State, util::BoxFuture};
+use crate::pipeline::{Pipeline, PipelineState};
+use crate::{ServiceFactory, util::BoxFuture};
 
 /// Factory for a service pipeline.
 pub struct PipelineFactory<St, Req, Res, Err, InitCfg, InitErr> {
     f: Rc<
-        dyn for<'r> Fn(
-            &'r InitCfg,
-            &'r St,
-        ) -> BoxFuture<'r, Result<Pipeline<Req, Res, Err>, InitErr>>,
+        dyn for<'r> Fn(&'r InitCfg, St) -> BoxFuture<'r, Result<Pipeline<Req, Res, Err>, InitErr>>,
     >,
 }
 
@@ -16,44 +14,22 @@ impl<St, Req, Res, Err, InitCfg, InitErr> PipelineFactory<St, Req, Res, Err, Ini
     pub fn new<Sf>(sf: Sf) -> Self
     where
         Sf: ServiceFactory<St, Req, InitCfg, Res = Res, Error = Err, InitError = InitErr> + 'static,
-        St: Clone + 'static,
-        Req: 'static,
-        Res: 'static,
-        Err: 'static,
-        InitCfg: 'static,
-    {
-        let sf = Rc::new(sf);
-        Self {
-            f: Rc::new(move |cfg: &InitCfg, st: &St| {
-                let sf = sf.clone();
-                Box::pin(async move { Ok(Pipeline::with(st.clone(), sf.create(cfg).await?)) })
-            }),
-        }
-    }
-
-    pub fn with<Sf, Sm>(sm: Sm, sf: Sf) -> Self
-    where
         St: 'static,
-        Sf: ServiceFactory<Sm::State, Req, InitCfg, Res = Res, Error = Err, InitError = InitErr>
-            + 'static,
         Req: 'static,
         Res: 'static,
         Err: 'static,
         InitCfg: 'static,
-        Sm: StateMapping<St>,
-        Sm::Control: State<Sm::State, Req>,
     {
         let sf = Rc::new(sf);
         Self {
-            f: Rc::new(move |cfg, st| {
+            f: Rc::new(move |cfg: &InitCfg, st: St| {
                 let sf = sf.clone();
-                let (sm, _ctl) = sm.map::<Req>(st);
-                Box::pin(async move { Ok(Pipeline::with(sm, sf.create(cfg).await?)) })
+                Box::pin(async move { Ok(Pipeline::with(st, sf.create(cfg).await?)) })
             }),
         }
     }
 
-    pub async fn create(&self, cfg: &InitCfg, st: &St) -> Result<Pipeline<Req, Res, Err>, InitErr> {
+    pub async fn create(&self, cfg: &InitCfg, st: St) -> Result<Pipeline<Req, Res, Err>, InitErr> {
         (self.f)(cfg, st).await
     }
 }
@@ -71,5 +47,56 @@ impl<St, Req, Res, Err, Cfg, InitErr> fmt::Debug
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PipelineFactory").finish()
+    }
+}
+
+/// Factory for a service pipeline with state.
+pub struct PipelineStateFactory<St, Req, Res, Err, InitCfg, InitErr> {
+    f: Rc<
+        dyn for<'r> Fn(
+            &'r InitCfg,
+        ) -> BoxFuture<'r, Result<PipelineState<St, Req, Res, Err>, InitErr>>,
+    >,
+}
+
+impl<St, Req, Res, Err, InitCfg, InitErr> PipelineStateFactory<St, Req, Res, Err, InitCfg, InitErr>
+where
+    St: 'static,
+{
+    pub fn new<Sf>(sf: Sf) -> Self
+    where
+        Sf: ServiceFactory<St, Req, InitCfg, Res = Res, Error = Err, InitError = InitErr> + 'static,
+        Req: 'static,
+        Res: 'static,
+        Err: 'static,
+        InitCfg: 'static,
+    {
+        let sf = Rc::new(sf);
+        Self {
+            f: Rc::new(move |cfg: &InitCfg| {
+                let sf = sf.clone();
+                Box::pin(async move { Ok(PipelineState::new(sf.create(cfg).await?)) })
+            }),
+        }
+    }
+
+    pub async fn create(&self, cfg: &InitCfg) -> Result<PipelineState<St, Req, Res, Err>, InitErr> {
+        (self.f)(cfg).await
+    }
+}
+
+impl<St, Req, Res, Err, InitCfg, InitErr> Clone
+    for PipelineStateFactory<St, Req, Res, Err, InitCfg, InitErr>
+{
+    fn clone(&self) -> Self {
+        PipelineStateFactory { f: self.f.clone() }
+    }
+}
+
+impl<St, Req, Res, Err, Cfg, InitErr> fmt::Debug
+    for PipelineStateFactory<St, Req, Res, Err, Cfg, InitErr>
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PipelineStateFactory").finish()
     }
 }

@@ -1,11 +1,11 @@
 use std::{error::Error, fmt, mem, rc::Rc};
 
 use crate::http::Method;
-use crate::service::{Ctx, Service, ServiceFactory, cfg::SharedCfg};
+use crate::service::{Ctx, Service, ServiceFactory};
 
 use super::guard::{self, AllGuard, Guard};
 use super::handler::{Handler, HandlerFn, HandlerWrapper};
-use super::{AppState, FromRequest, HttpResponse, WebRequest, WebResponse};
+use super::{AppState, FromRequest, HttpResponse, WebRequest, WebResponse, WebResponseError};
 
 /// Resource route definition
 ///
@@ -21,7 +21,9 @@ impl<St: AppState> Route<St> {
     /// Create new route which matches any request.
     pub fn new() -> Route<St> {
         Route {
-            handler: Rc::new(HandlerWrapper::new(async || HttpResponse::NotFound())),
+            handler: Rc::new(HandlerWrapper::<St, _, ()>::new(async || {
+                HttpResponse::NotFound()
+            })),
             methods: Vec::new(),
             guards: Rc::default(),
         }
@@ -62,14 +64,14 @@ impl<St: AppState> fmt::Debug for Route<St> {
     }
 }
 
-impl<St: AppState> ServiceFactory<St, WebRequest, SharedCfg> for Route<St> {
+impl<St: AppState, Cfg> ServiceFactory<St, WebRequest, Cfg> for Route<St> {
     type Res = WebResponse;
     type Error = St::Error;
 
     type Service = RouteService<St>;
     type InitError = Box<dyn Error>;
 
-    async fn create(&self, _: &SharedCfg) -> Result<RouteService<St>, Self::InitError> {
+    async fn create(&self, _: &Cfg) -> Result<RouteService<St>, Self::InitError> {
         Ok(self.service())
     }
 }
@@ -120,7 +122,7 @@ impl<St: AppState> Route<St> {
     /// ```rust
     /// # use ntex::web::{self, *};
     /// # fn main() {
-    /// App::new().service(web::resource("/path").route(
+    /// App::default().service(web::resource("/path").route(
     ///     web::route()
     ///         .method(ntex::http::Method::CONNECT)
     ///         .guard(guard::Header("content-type", "text/plain"))
@@ -139,7 +141,7 @@ impl<St: AppState> Route<St> {
     /// ```rust
     /// # use ntex::web::{self, *};
     /// # fn main() {
-    /// App::new().service(web::resource("/path").route(
+    /// App::default().service(web::resource("/path").route(
     ///     web::route()
     ///         .guard(guard::Get())
     ///         .guard(guard::Header("content-type", "text/plain"))
@@ -169,7 +171,7 @@ impl<St: AppState> Route<St> {
     /// }
     ///
     /// fn main() {
-    ///     let app = web::App::new().service(
+    ///     let app = web::App::default().service(
     ///         web::resource("/{username}/index.html") // <- define path parameters
     ///             .route(web::get().to(index))        // <- register handler
     ///     );
@@ -193,7 +195,7 @@ impl<St: AppState> Route<St> {
     /// }
     ///
     /// fn main() {
-    ///     let app = web::App::new().service(
+    ///     let app = web::App::default().service(
     ///         web::resource("/{username}/index.html") // <- define path parameters
     ///             .route(web::get().to(index))
     ///     );
@@ -203,7 +205,7 @@ impl<St: AppState> Route<St> {
     where
         F: Handler<St, Args> + 'static,
         Args: FromRequest<St> + 'static,
-        Args::Error: Into<St::Error>,
+        Args::Error: WebResponseError<St::Error>,
     {
         self.handler = Rc::new(HandlerWrapper::new(handler));
         self

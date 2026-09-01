@@ -27,7 +27,7 @@ where
     F: AsyncFn(In, &ApplyCtx<'_, Sf::Service, St, Req>) -> Result<Out, Err> + Clone,
     Err: From<Sf::Error>,
 {
-    crate::factory_with_st(ApplyFactory::new(service.into_factory(), f))
+    crate::factory(ApplyFactory::new(service.into_factory(), f))
 }
 
 #[derive(Debug)]
@@ -40,12 +40,24 @@ pub struct ApplyCtx<'a, S, St, Req> {
 }
 
 impl<S: Service<St, Req>, St, Req> ApplyCtx<'_, S, St, Req> {
+    /// Pipeline state
     #[inline]
+    pub fn st(&self) -> &St {
+        self.st
+    }
+
     /// Wait for service readiness and then call service.
+    #[inline]
     pub async fn call(&self, req: Req) -> Result<S::Res, S::Error> {
         Ctx::<S, St>::new(self.idx, self.waiters, self.st)
             .call(&self.service, req)
             .await
+    }
+
+    /// Get service reference
+    #[inline]
+    pub fn get_ref(&self) -> &S {
+        self.service
     }
 }
 

@@ -474,26 +474,25 @@ async fn test_ws_transport() {
             HttpService::new(async |_| Ok::<_, io::Error>(Response::NotFound())).h1_control(
                 async move |req: h1::Control<_, _>| {
                     let ack = if let h1::Control::Upgrade(upg) = req {
-                        upg.handle(async move |req, io, codec| {
-                            let res = handshake_response(req.head()).finish();
+                        let (ack, io, req, codec) = upg.handle();
 
-                            // send handshake respone
-                            io.encode(
-                                h1::Message::Item((res.drop_body(), body::BodySize::None)),
-                                &codec,
-                            )
-                            .unwrap();
+                        // send handshake respone
+                        let res = handshake_response(req.head()).finish();
+                        io.encode(
+                            h1::Message::Item((res.drop_body(), body::BodySize::None)),
+                            &codec,
+                        )
+                        .unwrap();
 
-                            // start websocket service
-                            let io = ws::WsTransport::create(io, ws::Codec::default());
-                            while let Some(item) =
-                                io.recv(&BytesCodec).await.map_err(|e| e.into_inner())?
-                            {
-                                io.send(item, &BytesCodec).await.unwrap()
-                            }
+                        // start websocket service
+                        let io = ws::WsTransport::create(io, ws::Codec::default());
+                        while let Some(item) =
+                            io.recv(&BytesCodec).await.map_err(|e| e.into_inner())?
+                        {
+                            io.send(item, &BytesCodec).await.unwrap()
+                        }
 
-                            Ok::<_, io::Error>(())
-                        })
+                        ack
                     } else {
                         req.ack()
                     };

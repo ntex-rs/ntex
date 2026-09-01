@@ -31,21 +31,21 @@ async fn test_simple() {
         HttpService::new(async |_| Ok::<_, io::Error>(Response::NotFound())).h1_control(
             async move |req: h1::Control<_, _>| {
                 let ack = if let h1::Control::Upgrade(upg) = req {
-                    upg.handle(async move |req, io, codec| {
-                        let res = handshake_response(req.head()).finish();
+                    let (ack, io, req, codec) = upg.handle();
 
-                        // send handshake respone
-                        io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
-                            .unwrap();
+                    // send handshake respone
+                    let res = handshake_response(req.head()).finish();
+                    io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
+                        .unwrap();
 
-                        // start websocket service
-                        Dispatcher::new(
-                            io.seal(),
-                            ws::Codec::default(),
-                            Pipeline::with((), ws_service),
-                        )
-                        .await
-                    })
+                    // start websocket service
+                    let _ = Dispatcher::new(
+                        io.seal(),
+                        ws::Codec::default(),
+                        Pipeline::with((), ws_service),
+                    )
+                    .await;
+                    ack
                 } else {
                     req.ack()
                 };
@@ -91,21 +91,22 @@ async fn test_transport() {
         HttpService::new(async |_| Ok::<_, io::Error>(Response::NotFound())).h1_control(
             async move |req: h1::Control<_, _>| {
                 let ack = if let h1::Control::Upgrade(upg) = req {
-                    upg.handle(async move |req, io, codec| {
-                        let res = handshake_response(req.head()).finish();
+                    let (ack, io, req, codec) = upg.handle();
 
-                        // send handshake respone
-                        io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
-                            .unwrap();
+                    // send handshake respone
+                    let res = handshake_response(req.head()).finish();
+                    io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
+                        .unwrap();
 
-                        // start websocket service
-                        Dispatcher::new(
-                            io.seal(),
-                            ws::Codec::default(),
-                            Pipeline::with((), ws_service),
-                        )
-                        .await
-                    })
+                    // start websocket service
+                    let _ = Dispatcher::new(
+                        io.seal(),
+                        ws::Codec::default(),
+                        Pipeline::with((), ws_service),
+                    )
+                    .await;
+
+                    ack
                 } else {
                     req.ack()
                 };
@@ -130,26 +131,26 @@ async fn test_keepalive_timeout() {
         HttpService::h1(async |_| Ok::<_, io::Error>(Response::NotFound())).control(
             async move |req: h1::Control<_, _>| {
                 let ack = if let h1::Control::Upgrade(upg) = req {
-                    upg.handle(async move |req, io, codec| {
-                        let res = handshake_response(req.head()).finish();
+                    let (ack, io, req, codec) = upg.handle();
 
-                        // send handshake respone
-                        io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
-                            .unwrap();
+                    // send handshake respone
+                    let res = handshake_response(req.head()).finish();
+                    io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
+                        .unwrap();
 
-                        // start websocket service
-                        io.set_config(
-                            SharedCfg::new("WS-SRV")
-                                .add(IoConfig::new().set_keepalive_timeout(Seconds::ZERO)),
-                        );
+                    // start websocket service
+                    io.set_config(
+                        SharedCfg::new("WS-SRV")
+                            .add(IoConfig::new().set_keepalive_timeout(Seconds::ZERO)),
+                    );
+                    let _ = Dispatcher::new(
+                        io.seal(),
+                        ws::Codec::default(),
+                        Pipeline::with((), ws_service),
+                    )
+                    .await;
 
-                        Dispatcher::new(
-                            io.seal(),
-                            ws::Codec::default(),
-                            Pipeline::with((), ws_service),
-                        )
-                        .await
-                    })
+                    ack
                 } else {
                     req.ack()
                 };

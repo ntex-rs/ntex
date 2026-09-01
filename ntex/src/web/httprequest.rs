@@ -15,7 +15,6 @@ pub struct HttpRequest(pub(crate) Rc<HttpRequestInner>);
 pub(crate) struct HttpRequestInner {
     pub(crate) head: Message<RequestHead>,
     pub(crate) path: Path<Uri>,
-    pub(crate) payload: Payload,
     pub(crate) config: Cfg<WebAppConfig>,
     rmap: Rc<ResourceMap>,
 }
@@ -25,14 +24,12 @@ impl HttpRequest {
     pub(crate) fn new(
         path: Path<Uri>,
         head: Message<RequestHead>,
-        payload: Payload,
         rmap: Rc<ResourceMap>,
         config: Cfg<WebAppConfig>,
     ) -> HttpRequest {
         HttpRequest(Rc::new(HttpRequestInner {
             head,
             path,
-            payload,
             config,
             rmap,
         }))
@@ -147,7 +144,7 @@ impl HttpRequest {
     /// }
     ///
     /// fn main() {
-    ///     let app = App::new()
+    ///     let app = App::default()
     ///         .service(web::resource("/test/{one}/{two}/{three}")
     ///              .name("foo")  // <- set resource name, then it could be used in `url_for`
     ///              .route(web::get().to(index))
@@ -248,7 +245,7 @@ impl Drop for HttpRequest {
 /// }
 ///
 /// fn main() {
-///     let app = App::new().service(
+///     let app = App::default().service(
 ///         web::resource("/users/{first}").route(
 ///             web::get().to(index))
 ///     );

@@ -1,5 +1,11 @@
 # Changes
 
+## [5.0.0-beta.4] - 2026-08-28
+
+* Add `St` param to Middleware trait
+
+* Add PipelineWithStateFactory
+
 ## [5.0.0-beta.3] - 2026-08-27
 
 * Refactor StateMapping trait

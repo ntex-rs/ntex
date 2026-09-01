@@ -5,23 +5,23 @@ use std::{fmt, io, marker::PhantomData, net, thread, time};
 use ntex_io::{Io, IoConfig};
 use ntex_net::tcp_connect;
 use ntex_rt::System;
-use ntex_service::{IntoService, Service, cfg::SharedCfg, state::State};
+use ntex_service::{IntoService, Service, cfg::SharedCfg};
 use socket2::{Domain, SockAddr, Socket, Type};
 use uuid::Uuid;
 
-use super::{Server, ServerBuilder, state::StateFactory};
+use super::{NoConfig, Server, ServerAppConfig, ServerBuilder};
 
 /// Test server builder
-pub struct TestServerBuilder<F, Sf, St, I> {
+pub struct TestServerBuilder<Cfg, F, Sf, I> {
     id: Uuid,
     factory: F,
     config: SharedCfg,
     client_config: SharedCfg,
-    state: Option<Box<dyn StateFactory<St> + Send>>,
-    _t: PhantomData<(Sf, St, I)>,
+    state: Cfg,
+    _t: PhantomData<(Sf, I)>,
 }
 
-impl<F, Sf, St, I> fmt::Debug for TestServerBuilder<F, Sf, St, I> {
+impl<Cfg, F, Sf, I> fmt::Debug for TestServerBuilder<Cfg, F, Sf, I> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TestServerBuilder")
             .field("id", &self.id)
@@ -31,12 +31,12 @@ impl<F, Sf, St, I> fmt::Debug for TestServerBuilder<F, Sf, St, I> {
     }
 }
 
-impl<F, S, St, I> TestServerBuilder<F, S, St, I>
+impl<Cfg, F, S, I> TestServerBuilder<Cfg, F, S, I>
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
-    I: IntoService<S, St, Io> + 'static,
-    S: Service<St, Io> + 'static,
-    St: State<St, Io> + Clone + Default + 'static,
+    I: IntoService<S, Cfg::State, Io> + 'static,
+    S: Service<Cfg::State, Io> + 'static,
+    Cfg: ServerAppConfig + Default + 'static,
 {
     #[must_use]
     /// Create test server builder
@@ -46,7 +46,7 @@ where
             id: Uuid::now_v7(),
             config: SharedCfg::new("TEST-SERVER").into(),
             client_config: SharedCfg::new("TEST-CLIENT").into(),
-            state: None,
+            state: Cfg::default(),
             _t: PhantomData,
         }
     }
@@ -69,7 +69,7 @@ where
     pub fn start(self) -> TestServer {
         log::debug!("Starting test server {:?}", self.id);
         let config = self.config;
-        let _state = self.state;
+        let state = self.state;
         let factory = self.factory;
         let cfg = System::current().config();
         let name = System::current().name().to_string();
@@ -82,7 +82,7 @@ where
             let local_addr = tcp.local_addr().unwrap();
 
             sys.run(move || {
-                let server = ServerBuilder::<St>::new(async || Ok(St::default()))
+                let server = ServerBuilder::new(state)
                     .listen("test", tcp, config, async move |_| factory().await)?
                     .workers(1)
                     .disable_signals()
@@ -144,7 +144,7 @@ where
     F: AsyncFn() -> S + Send + Clone + 'static,
     S: Service<(), Io> + 'static,
 {
-    TestServerBuilder::new(factory).start()
+    TestServerBuilder::<NoConfig, _, _, _>::new(factory).start()
 }
 
 /// Start new server with server builder

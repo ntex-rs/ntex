@@ -167,7 +167,7 @@ impl<M> ClientBuilder<M> {
     /// Finish build process and create `Client` instance.
     pub fn build(self, cfg: impl Into<SharedCfg>) -> Client
     where
-        M: Middleware<Sender, SharedCfg>,
+        M: Middleware<Sender, SharedCfg, SharedCfg>,
         M::Service: Service<SharedCfg, ServiceRequest, Res = ServiceResponse, Error = Error<ClientError>>
             + 'static,
     {

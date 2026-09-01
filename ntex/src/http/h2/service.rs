@@ -8,12 +8,10 @@ use crate::http::config::DispatcherConfig;
 use crate::http::error::{DispatchError, H2Error, ResponseError};
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::message::{CurrentIo, ResponseHead};
-use crate::http::{DateService, HttpPipeline, Method, Request, Response, StatusCode, Uri, Version};
+use crate::http::{DateService, Method, Request, Response, StatusCode, Uri, Version};
 use crate::io::{Filter, Io, IoBoxed, IoRef, types};
-use crate::service::pipeline::{Pipeline, PipelineBinding};
-use crate::service::state::{State, StateMapping};
-use crate::service::{Ctx, Service, ServiceFactory};
-use crate::service::{IntoService, IntoServiceFactory, cfg::SharedCfg};
+use crate::service::state::RequestState;
+use crate::service::{Ctx, IntoServiceFactory, Pipeline, Service, ServiceFactory};
 use crate::util::{Bytes, BytesMut, HashMap, dyn_rc_err};
 
 use super::{DefaultControlService, payload::Payload, payload::PayloadSender};
@@ -21,105 +19,88 @@ use super::{DefaultControlService, payload::Payload, payload::PayloadSender};
 /// `ServiceFactory` implementation for HTTP2 transport
 #[derive(derive_more::Debug)]
 #[debug("H2Service")]
-pub struct H2Service<Hst, F, B, Err> {
-    sf: HttpPipeline<Hst, B, Err>,
-    ctl: Pipeline<h2::Control<H2Error>, h2::ControlAck, Rc<dyn StdError>>,
+pub struct H2Service<St, F, Req: RequestState<Io<F>>, H, Ctl = DefaultControlService> {
+    sf: H,
+    ctl: Ctl,
     config: DispatcherConfig,
-    _t: marker::PhantomData<(Hst, F, B)>,
+    ph: marker::PhantomData<(St, F, Req)>,
 }
 
-impl<Hst, F, B, Err> H2Service<Hst, F, B, Err>
+impl<St, F, Req, H> H2Service<St, F, Req, H, DefaultControlService>
 where
-    Hst: 'static,
-    B: MessageBody,
-    Err: ResponseError + 'static,
+    St: 'static,
+    F: Filter,
+    Req: RequestState<Io<F>>,
+    Req::State: Clone,
 {
     /// Create new `HttpService` instance with config.
-    pub(crate) fn new<Sf, Sm>(
-        sm: Sm,
-        sf: impl IntoServiceFactory<Sf, Sm::State, Request, SharedCfg>,
-    ) -> Self
+    pub(crate) fn new(sf: impl IntoServiceFactory<H, Req::State, Request, St>) -> Self
     where
-        Sf: ServiceFactory<Sm::State, Request, SharedCfg, Error = Err> + 'static,
-        Sf::Res: Into<Response<B>>,
-        Sf::InitError: StdError + 'static,
-        Sm: StateMapping<Hst>,
-        Sm::Control: State<Sm::State, Request>,
+        H: ServiceFactory<Req::State, Request, St> + 'static,
+        H::Res: Into<Response>,
+        H::Error: ResponseError,
+        H::InitError: StdError,
     {
         H2Service {
-            sf: HttpPipeline::with(
-                sm,
-                sf.into_factory().map(Into::into).map_init_err(dyn_rc_err),
-            ),
-            ctl: Pipeline::with((), DefaultControlService),
+            sf: sf.into_factory(),
+            ctl: DefaultControlService,
             config: DispatcherConfig::default(),
-            _t: marker::PhantomData,
+            ph: marker::PhantomData,
         }
     }
 }
 
-impl<Hst, F, B, Err> H2Service<Hst, F, B, Err>
+impl<St, F, Req, H, Ctl> H2Service<St, F, Req, H, Ctl>
 where
+    St: 'static,
     F: Filter,
-    B: MessageBody,
-    Err: 'static,
+    Req: RequestState<Io<F>>,
 {
     #[must_use]
     /// Provide http/2 control service
-    pub fn control<Sf, St>(
-        self,
-        ctl: impl IntoService<Sf, St, h2::Control<H2Error>>,
-    ) -> H2Service<Hst, F, B, Err>
+    pub fn control<I, Sf>(self, ctl: I) -> H2Service<St, F, Req, H, Sf>
     where
-        St: Default + 'static,
-        Sf: Service<St, h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
-        Sf::Error: StdError + 'static,
+        I: IntoServiceFactory<Sf, Req::State, h2::Control<H2Error>, St>,
+        Sf: ServiceFactory<Req::State, h2::Control<H2Error>, St, Res = h2::ControlAck> + 'static,
+        Sf::Error: StdError,
+        Sf::InitError: StdError,
     {
         H2Service {
             sf: self.sf,
-            ctl: Pipeline::new(ctl.into_service().map_err(dyn_rc_err)),
+            ctl: ctl.into_factory(),
             config: self.config,
-            _t: marker::PhantomData,
+            ph: self.ph,
         }
     }
 }
 
-impl<Hst, F, B, Err> Service<Hst, Io<F>> for H2Service<Hst, F, B, Err>
+impl<St, F, Req, H, Ctl> Service<St, Req> for H2Service<St, F, Req, H, Ctl>
 where
+    St: 'static,
     F: Filter,
-    B: MessageBody,
-    Err: ResponseError + 'static,
+    Req: RequestState<Io<F>>,
+    Req::State: Clone,
+    H: ServiceFactory<Req::State, Request, St> + 'static,
+    H::Res: Into<Response>,
+    H::Error: ResponseError,
+    H::InitError: StdError,
+    Ctl: ServiceFactory<Req::State, h2::Control<H2Error>, St, Res = h2::ControlAck> + 'static,
+    Ctl::Error: StdError,
+    Ctl::InitError: StdError,
 {
     type Res = ();
     type Error = DispatchError;
 
-    #[inline]
-    async fn ready(&self, _: Ctx<'_, Self, Hst>) -> Result<(), Self::Error> {
-        self.ctl.ready().await.map_err(|e| {
-            log::error!("Service readiness error: {e:?}");
-            DispatchError::Control(e)
-        })
-    }
+    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
+        let (io, st) = req.unpack();
 
-    #[inline]
-    async fn shutdown(&self, _: Ctx<'_, Self, Hst>) {
-        // check inflight connections
-        let inflight = self.config.shutdown();
-        if inflight != 0 {
-            log::trace!("Shutting down service, in-flight connections: {inflight}");
-
-            self.config.wait_shutdown().await;
-            log::trace!("Shutting down is complected");
-        }
-
-        self.ctl.shutdown().await;
-    }
-
-    async fn call(&self, io: Io<F>, ctx: Ctx<'_, Self, Hst>) -> Result<Self::Res, Self::Error> {
-        let cfg = io.shared();
-        let svc = self.sf.create(&cfg, ctx.st()).await.map_err(|e| {
+        let svc = self.sf.create(ctx.st()).await.map_err(|e| {
             log::error!("Cannot construct handler service: {e:?}");
-            DispatchError::Control(e)
+            DispatchError::Control
+        })?;
+        let ctl = self.ctl.create(ctx.st()).await.map_err(|e| {
+            log::error!("Cannot construct handler service: {e:?}");
+            DispatchError::Control
         })?;
 
         let id = self.config.next_id();
@@ -131,7 +112,13 @@ where
             io.query::<types::PeerAddr>().get()
         );
 
-        let result = handle(id, io.into(), svc, self.ctl.bind()).await;
+        let result = handle(
+            id,
+            io.into(),
+            Pipeline::with(st.clone(), svc.map(Into::into)),
+            Pipeline::with(st, ctl.map_err(dyn_rc_err)),
+        )
+        .await;
 
         let inflight = self.config.remove_io(&ioref);
         if inflight == 0 && self.config.is_shutdown() {
@@ -139,16 +126,32 @@ where
         }
         result
     }
+
+    #[inline]
+    async fn ready(&self, _: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    #[inline]
+    async fn shutdown(&self, _: Ctx<'_, Self, St>) {
+        // check inflight connections
+        let inflight = self.config.shutdown();
+        if inflight != 0 {
+            log::trace!("Shutting down service, in-flight connections: {inflight}");
+
+            self.config.wait_shutdown().await;
+            log::trace!("Shutting down is complected");
+        }
+    }
 }
 
-pub(in crate::http) async fn handle<B, Err>(
+pub(in crate::http) async fn handle<Err>(
     id: usize,
     io: IoBoxed,
-    svc: Pipeline<Request, Response<B>, Err>,
-    control: PipelineBinding<h2::Control<H2Error>, h2::ControlAck, Rc<dyn StdError>>,
+    svc: Pipeline<Request, Response, Err>,
+    control: Pipeline<h2::Control<H2Error>, h2::ControlAck, Rc<dyn StdError>>,
 ) -> Result<(), DispatchError>
 where
-    B: MessageBody,
     Err: ResponseError + 'static,
 {
     let ioref = io.get_ref();
@@ -156,40 +159,36 @@ where
     let _ = server::handle_one(
         io,
         Pipeline::with((), PublishService::new(id, ioref, svc)),
-        control,
+        control.bind(),
     )
     .await;
 
     Ok(())
 }
 
-struct PublishService<B, Err> {
+struct PublishService<Err> {
     id: usize,
     io: IoRef,
-    svc: Pipeline<Request, Response<B>, Err>,
+    svc: Pipeline<Request, Response, Err>,
     streams: RefCell<HashMap<StreamId, PayloadSender>>,
-    _t: marker::PhantomData<B>,
 }
 
-impl<B, Err> PublishService<B, Err>
+impl<Err> PublishService<Err>
 where
-    B: MessageBody,
     Err: ResponseError,
 {
-    fn new(id: usize, io: IoRef, svc: Pipeline<Request, Response<B>, Err>) -> Self {
+    fn new(id: usize, io: IoRef, svc: Pipeline<Request, Response, Err>) -> Self {
         Self {
             id,
             io,
             svc,
             streams: RefCell::new(HashMap::default()),
-            _t: marker::PhantomData,
         }
     }
 }
 
-impl<B, Err> Service<(), h2::Message> for PublishService<B, Err>
+impl<Err> Service<(), h2::Message> for PublishService<Err>
 where
-    B: MessageBody,
     Err: ResponseError + 'static,
 {
     type Res = ();

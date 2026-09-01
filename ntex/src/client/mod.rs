@@ -43,10 +43,10 @@ pub use self::test::TestResponse;
 pub(crate) use self::codec::{ClientCodec, ClientPayloadCodec};
 use crate::client::error::ConnectError;
 use crate::http::{HeaderMap, Method, RequestHead, Uri, body::BodySize, error::HttpError};
-use crate::service::{cfg::SharedCfg, pipeline::PipelineWithState};
+use crate::service::{cfg::SharedCfg, pipeline::PipelineState};
 use crate::{Cfg, Pipeline, error::Error, io::IoBoxed};
 
-type ConnectorPipeline = PipelineWithState<SharedCfg, Connect, IoBoxed, Error<ConnectError>>;
+type ConnectorPipeline = PipelineState<SharedCfg, Connect, IoBoxed, Error<ConnectError>>;
 
 #[derive(Debug, Clone)]
 pub struct Connect {

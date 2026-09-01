@@ -228,8 +228,8 @@ pub enum DispatchError {
     Service(Rc<dyn ResponseError>),
 
     /// Control service error
-    #[error("Control service error: {0}")]
-    Control(#[source] Rc<dyn error::Error>),
+    #[error("Control service error")]
+    Control,
 }
 
 #[derive(thiserror::Error, Clone, Debug)]

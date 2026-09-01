@@ -1,4 +1,4 @@
-use std::{fmt, future::Future, io, rc::Rc};
+use std::{fmt, io, rc::Rc};
 
 use crate::http::message::CurrentIo;
 use crate::http::{Request, Response, ResponseError, body::Body, h1::Codec};
@@ -316,18 +316,15 @@ impl<F: Filter> Upgrade<F> {
 
     #[inline]
     /// Handle upgrade request
-    pub fn handle<H, R, O>(self, f: H) -> ControlAck<F>
-    where
-        H: FnOnce(Request, Io<F>, Codec) -> R + 'static,
-        R: Future<Output = O>,
-    {
-        let io = self.io.take();
-        crate::rt::spawn(async move {
-            let _ = f(self.req, io, self.codec).await;
-        });
-        ControlAck {
-            result: ControlResult::UpgradeHandled,
-        }
+    pub fn handle(self) -> (ControlAck<F>, Io<F>, Request, Codec) {
+        (
+            ControlAck {
+                result: ControlResult::UpgradeHandled,
+            },
+            self.io.take(),
+            self.req,
+            self.codec,
+        )
     }
 
     #[inline]

@@ -1,8 +1,8 @@
-use std::{fmt, io, marker::PhantomData, net};
+use std::{fmt, io, net, sync::Arc};
 
 use ntex_io::Io;
 use ntex_rt::System;
-use ntex_service::{IntoService, Service, cfg::SharedCfg, state::State};
+use ntex_service::{IntoService, Service, cfg::SharedCfg};
 use ntex_util::time::Millis;
 use socket2::{Domain, SockAddr, Socket, Type};
 
@@ -11,44 +11,40 @@ use crate::{Server, WorkerPool};
 use super::accept::AcceptLoop;
 use super::config::ServiceConfig;
 use super::factory::{self, FactoryServiceType};
-use super::state::{StateFactory, state_factory};
+use super::state::{NoConfig, ServerAppConfig};
 use super::{Connection, ServerStatus, StreamServer, Token, socket::Listener};
 
 /// Streaming service builder
 ///
 /// This type can be used to construct an instance of `net streaming server` through a
 /// builder-like pattern.
-pub struct ServerBuilder<St = ()> {
+pub struct ServerBuilder<Cfg = NoConfig> {
     name: String,
     token: Token,
     backlog: i32,
-    state: Box<dyn StateFactory<St> + Send>,
-    services: Vec<FactoryServiceType<St>>,
+    state: Arc<Cfg>,
+    services: Vec<FactoryServiceType<Cfg>>,
     sockets: Vec<(Token, String, Listener)>,
     accept: AcceptLoop,
     pool: WorkerPool,
-    st: PhantomData<St>,
 }
 
 impl Default for ServerBuilder {
     fn default() -> Self {
-        Self::new(async || Ok(()))
+        Self::new(NoConfig)
     }
 }
 
-impl<St> ServerBuilder<St>
+impl<Cfg> ServerBuilder<Cfg>
 where
-    St: State<St, Io> + Clone + 'static,
+    Cfg: ServerAppConfig,
 {
     #[must_use]
     /// Create new Server builder instance.
     ///
     /// Provided function get called during worker runtime configuration stage
     /// and must construct server state.
-    pub fn new<F>(state: F) -> ServerBuilder<St>
-    where
-        F: AsyncFn() -> Result<St, &'static str> + Send + Clone + 'static,
-    {
+    pub fn new(cfg: Cfg) -> ServerBuilder<Cfg> {
         let sys = System::current();
         let mut accept = AcceptLoop::default();
         accept.name(sys.name());
@@ -60,22 +56,12 @@ where
             accept,
             name: sys.name().to_string(),
             token: Token(0),
-            state: state_factory(state),
+            state: Arc::new(cfg),
             services: Vec::new(),
             sockets: Vec::new(),
             backlog: 2048,
             pool: WorkerPool::default().name(sys.name()),
-            st: PhantomData,
         }
-    }
-
-    #[must_use]
-    /// Create new Server builder instance with default state factory.
-    pub fn with_default() -> ServerBuilder<St>
-    where
-        St: Default,
-    {
-        Self::new(async || Ok(St::default()))
     }
 
     #[must_use]
@@ -206,7 +192,7 @@ where
     /// different module or even library.
     pub async fn configure<F>(mut self, f: F) -> io::Result<Self>
     where
-        F: AsyncFn(ServiceConfig<St>) -> io::Result<()>,
+        F: AsyncFn(ServiceConfig<Cfg>) -> io::Result<()>,
     {
         let cfg = ServiceConfig::new(self.token, self.backlog);
 
@@ -230,10 +216,9 @@ where
         factory: F,
     ) -> io::Result<Self>
     where
-        F: AsyncFn(&St) -> I + Send + Clone + 'static,
-        S: Service<St, Io> + 'static,
-        I: IntoService<S, St, Io> + 'static,
-        St: State<St, Io> + 'static,
+        F: AsyncFn(&Cfg::State) -> I + Send + Clone + 'static,
+        S: Service<Cfg::State, Io> + 'static,
+        I: IntoService<S, Cfg::State, Io> + 'static,
     {
         let cfg = cfg.into();
         let sockets = bind_addr(addr, self.backlog)?;
@@ -265,10 +250,9 @@ where
         factory: F,
     ) -> io::Result<Self>
     where
-        F: AsyncFn(&St) -> I + Send + Clone + 'static,
-        I: IntoService<S, St, Io> + 'static,
-        S: Service<St, Io> + 'static,
-        St: State<St, Io> + 'static,
+        F: AsyncFn(&Cfg::State) -> I + Send + Clone + 'static,
+        I: IntoService<S, Cfg::State, Io> + 'static,
+        S: Service<Cfg::State, Io> + 'static,
     {
         use std::os::unix::net::UnixListener;
 
@@ -297,10 +281,9 @@ where
         factory: F,
     ) -> io::Result<Self>
     where
-        F: AsyncFn(&St) -> I + Send + Clone + 'static,
-        I: IntoService<S, St, Io> + 'static,
-        S: Service<St, Io> + 'static,
-        St: State<St, Io> + 'static,
+        F: AsyncFn(&Cfg::State) -> I + Send + Clone + 'static,
+        I: IntoService<S, Cfg::State, Io> + 'static,
+        S: Service<Cfg::State, Io> + 'static,
     {
         let token = self.token.next();
         self.services.push(factory::create_factory_service(
@@ -322,10 +305,9 @@ where
         factory: F,
     ) -> io::Result<Self>
     where
-        F: AsyncFn(&St) -> I + Send + Clone + 'static,
-        S: Service<St, Io> + 'static,
-        I: IntoService<S, St, Io> + 'static,
-        St: State<St, Io> + 'static,
+        F: AsyncFn(&Cfg::State) -> I + Send + Clone + 'static,
+        S: Service<Cfg::State, Io> + 'static,
+        I: IntoService<S, Cfg::State, Io> + 'static,
     {
         let token = self.token.next();
         self.services.push(factory::create_factory_service(
@@ -361,7 +343,7 @@ where
     }
 }
 
-impl<St> fmt::Debug for ServerBuilder<St> {
+impl<Cfg> fmt::Debug for ServerBuilder<Cfg> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ServerBuilder")
             .field("name", &self.name)

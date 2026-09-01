@@ -122,14 +122,14 @@ mod tests {
     use std::{cell::Cell, rc::Rc};
 
     use super::*;
-    use crate::{Pipeline, factory};
+    use crate::{Pipeline, factory_no_st};
 
     #[ntex::test]
     async fn test_map_config() {
         let item = Rc::new(Cell::new(1usize));
 
         let factory = map_config(
-            factory(async move |item: usize| Ok::<_, ()>(item)),
+            factory_no_st(async move |item: usize| Ok::<_, ()>(item)),
             |t: &usize| {
                 item.set(item.get() + *t);
             },
@@ -147,7 +147,7 @@ mod tests {
     async fn test_unit_config() {
         let svc = Pipeline::with(
             (),
-            unit_config(factory(async move |item: usize| Ok::<_, ()>(item)).clone())
+            unit_config(factory_no_st(async move |item: usize| Ok::<_, ()>(item)).clone())
                 .create(&10)
                 .await
                 .unwrap(),
