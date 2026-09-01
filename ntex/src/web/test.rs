@@ -1096,7 +1096,7 @@ mod tests {
     #[crate::rt_test]
     async fn test_response() {
         let app = init_service(
-            App::default().service(
+            App::new().service(
                 web::resource("/index.html")
                     .route(web::post().to(async || HttpResponse::Ok().body("welcome!"))),
             ),
@@ -1120,11 +1120,13 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_response_json() {
-        let app = init_service(App::default().service(web::resource("/people").route(
-            web::post().to(async |person: web::types::Json<Person>| {
-                HttpResponse::Ok().json(&person.into_inner())
-            }),
-        )))
+        let app = init_service(
+            App::new().service(web::resource("/people").route(web::post().to(
+                async |person: web::types::Json<Person>| {
+                    HttpResponse::Ok().json(&person.into_inner())
+                },
+            ))),
+        )
         .await;
 
         let payload = r#"{"id":"12345","name":"User name"}"#.as_bytes();
@@ -1141,11 +1143,13 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_request_response_form() {
-        let app = init_service(App::default().service(web::resource("/people").route(
-            web::post().to(async |person: web::types::Form<Person>| {
-                HttpResponse::Ok().json(&person.into_inner())
-            }),
-        )))
+        let app = init_service(
+            App::new().service(web::resource("/people").route(web::post().to(
+                async |person: web::types::Form<Person>| {
+                    HttpResponse::Ok().json(&person.into_inner())
+                },
+            ))),
+        )
         .await;
 
         let payload = Person {
@@ -1167,11 +1171,13 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_request_response_json() {
-        let app = init_service(App::default().service(web::resource("/people").route(
-            web::post().to(async |person: web::types::Json<Person>| {
-                HttpResponse::Ok().json(&person.into_inner())
-            }),
-        )))
+        let app = init_service(
+            App::new().service(web::resource("/people").route(web::post().to(
+                async |person: web::types::Json<Person>| {
+                    HttpResponse::Ok().json(&person.into_inner())
+                },
+            ))),
+        )
         .await;
 
         let payload = Person {
@@ -1206,7 +1212,7 @@ mod tests {
         }
 
         let app =
-            init_service(App::default().service(web::resource("/index.html").to(async_with_block)))
+            init_service(App::new().service(web::resource("/index.html").to(async_with_block)))
                 .await;
 
         let req = TestRequest::post().uri("/index.html").to_request();
@@ -1217,7 +1223,7 @@ mod tests {
     #[crate::rt_test]
     async fn test_test_methods() {
         let srv = server(async |()| {
-            App::default().service(
+            App::new().service(
                 web::resource("/").route((
                     web::route()
                         .method(Method::PUT)
