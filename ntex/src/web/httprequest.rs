@@ -144,7 +144,7 @@ impl HttpRequest {
     /// }
     ///
     /// fn main() {
-    ///     let app = App::new()
+    ///     let app = App::default()
     ///         .service(web::resource("/test/{one}/{two}/{three}")
     ///              .name("foo")  // <- set resource name, then it could be used in `url_for`
     ///              .route(web::get().to(index))
@@ -245,7 +245,7 @@ impl Drop for HttpRequest {
 /// }
 ///
 /// fn main() {
-///     let app = App::new().service(
+///     let app = App::default().service(
 ///         web::resource("/users/{first}").route(
 ///             web::get().to(index))
 ///     );

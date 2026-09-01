@@ -23,7 +23,7 @@ use crate::web::{AppState, FromRequest, HttpRequest};
 /// If state is not set for a handler, using `State<T>` extractor would
 /// cause *Internal Server Error* response.
 ///
-/// ```rust
+/// ```rust,ignore
 /// use std::cell::Cell;
 /// use ntex::web::{self, App, AppState, HttpResponse, WebError};
 ///

@@ -39,7 +39,7 @@ use crate::web::{AppState, FromRequest, HttpRequest, error::QueryPayloadError};
 /// }
 ///
 /// fn main() {
-///     let app = web::App::new().service(
+///     let app = web::App::default().service(
 ///        web::resource("/index.html").route(web::get().to(index))); // <- use `Query` extractor
 /// }
 /// ```
@@ -117,7 +117,7 @@ impl<T: fmt::Display> fmt::Display for Query<T> {
 /// }
 ///
 /// fn main() {
-///     let app = web::App::new().service(
+///     let app = web::App::default().service(
 ///        web::resource("/index.html")
 ///            .route(web::get().to(index))); // <- use `Query` extractor
 /// }

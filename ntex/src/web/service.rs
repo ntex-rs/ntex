@@ -130,7 +130,7 @@ where
 ///     Ok(req.into_response(HttpResponse::Ok().finish()))
 /// }
 ///
-/// let app = App::new().service(
+/// let app = App::default().service(
 ///     web::service("/users/*")
 ///         .guard(guard::Header("content-type", "text/plain"))
 ///         .finish(my_service)
@@ -174,7 +174,7 @@ impl WebServiceAdapter {
     /// }
     ///
     /// fn main() {
-    ///     let app = App::new()
+    ///     let app = App::default()
     ///         .service(
     ///             web::service("/app")
     ///                 .guard(guard::Header("content-type", "text/plain"))

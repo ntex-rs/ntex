@@ -15,7 +15,7 @@ use crate::web::{WebRequest, WebResponse};
 /// use ntex::web::{self, middleware, App, HttpResponse};
 ///
 /// fn main() {
-///     let app = App::new()
+///     let app = App::default()
 ///         .middleware(middleware::DefaultHeaders::new().header("X-Version", "0.2"))
 ///         .service(
 ///             web::resource("/test")

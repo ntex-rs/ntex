@@ -41,7 +41,7 @@ use super::{AppState, HttpResponse, HttpResponseBuilder, WebResponseError};
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::resource("/users/{userid}/{friend}")
 ///         .route(web::get().to(async || { web::HttpResponse::Ok() }))
 ///         .route(web::head().to(async || { web::HttpResponse::MethodNotAllowed() }))
@@ -59,7 +59,7 @@ pub fn resource<St: AppState, Cfg, T: IntoPattern>(path: T) -> Resource<St, Cfg>
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::scope("/{project_id}")
 ///         .service(web::resource("/path1").to(async || { web::HttpResponse::Ok() }))
 ///         .service(web::resource("/path2").to(async || { web::HttpResponse::Ok() }))
@@ -86,7 +86,7 @@ pub fn route<St: AppState>() -> Route<St> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::resource("/{project_id}")
 ///        .route(web::get().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -104,7 +104,7 @@ pub fn get<St: AppState>() -> Route<St> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::post().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -122,7 +122,7 @@ pub fn post<St: AppState>() -> Route<St> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::put().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -140,7 +140,7 @@ pub fn put<St: AppState>() -> Route<St> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::patch().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -158,7 +158,7 @@ pub fn patch<St: AppState>() -> Route<St> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::delete().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -176,7 +176,7 @@ pub fn delete<St: AppState>() -> Route<St> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::head().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -194,7 +194,7 @@ pub fn head<St: AppState>() -> Route<St> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::query().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -212,7 +212,7 @@ pub fn query<St: AppState>() -> Route<St> {
 /// ```rust
 /// use ntex::{http, web};
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::method(http::Method::GET).to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -234,7 +234,7 @@ pub fn method<St: AppState>(method: Method) -> Route<St> {
 ///    web::HttpResponse::Ok().finish()
 /// }
 ///
-/// web::App::new().service(
+/// web::App::default().service(
 ///     web::resource("/").route(web::to(index))
 /// );
 /// ```
@@ -257,7 +257,7 @@ where
 ///     Ok(req.into_response(HttpResponse::Ok().finish()))
 /// }
 ///
-/// let app = App::new().service(
+/// let app = App::default().service(
 ///     web::service("/users/*")
 ///         .guard(guard::Header("content-type", "text/plain"))
 ///         .finish(my_service)

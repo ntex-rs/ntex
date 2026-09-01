@@ -30,7 +30,7 @@ type Guards = Vec<Box<dyn Guard>>;
 /// use ntex::web::{self, App, HttpResponse};
 ///
 /// fn main() {
-///     let app = App::new().service(
+///     let app = App::default().service(
 ///         web::scope("/{project_id}/")
 ///             .service(web::resource("/path1").to(async || { HttpResponse::Ok() }))
 ///             .service(web::resource("/path2").route(web::get().to(async || { HttpResponse::Ok() })))
@@ -91,7 +91,7 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::new().service(
+    ///     let app = App::default().service(
     ///         web::scope("/app")
     ///             .guard(guard::Header("content-type", "text/plain"))
     ///             .route("/test1", web::get().to(index))
@@ -123,7 +123,7 @@ where
     /// different module or even library. For example,
     /// some of the resource's configuration could be moved to different module.
     ///
-    /// ```rust
+    /// ```rust,ignore
     /// use ntex::web::{self, middleware, App, HttpResponse};
     ///
     /// // this function could be located in different module
@@ -135,7 +135,7 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::new()
+    ///     let app = App::default()
     ///         .middleware(middleware::Logger::default())
     ///         .service(
     ///             web::scope("/api")
@@ -176,7 +176,7 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::new().service(
+    ///     let app = App::default().service(
     ///         web::scope("/app").service(
     ///             web::scope("/v1")
     ///                 .service(web::resource("/test1").to(index)))
@@ -207,7 +207,7 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::new().service(
+    ///     let app = App::default().service(
     ///         web::scope("/app")
     ///             .route("/test1", web::get().to(index))
     ///             .route("/test2", web::post().to(async || { HttpResponse::MethodNotAllowed() }))

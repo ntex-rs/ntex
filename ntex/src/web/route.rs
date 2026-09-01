@@ -122,7 +122,7 @@ impl<St: AppState> Route<St> {
     /// ```rust
     /// # use ntex::web::{self, *};
     /// # fn main() {
-    /// App::new().service(web::resource("/path").route(
+    /// App::default().service(web::resource("/path").route(
     ///     web::route()
     ///         .method(ntex::http::Method::CONNECT)
     ///         .guard(guard::Header("content-type", "text/plain"))
@@ -141,7 +141,7 @@ impl<St: AppState> Route<St> {
     /// ```rust
     /// # use ntex::web::{self, *};
     /// # fn main() {
-    /// App::new().service(web::resource("/path").route(
+    /// App::default().service(web::resource("/path").route(
     ///     web::route()
     ///         .guard(guard::Get())
     ///         .guard(guard::Header("content-type", "text/plain"))
@@ -171,7 +171,7 @@ impl<St: AppState> Route<St> {
     /// }
     ///
     /// fn main() {
-    ///     let app = web::App::new().service(
+    ///     let app = web::App::default().service(
     ///         web::resource("/{username}/index.html") // <- define path parameters
     ///             .route(web::get().to(index))        // <- register handler
     ///     );
@@ -195,7 +195,7 @@ impl<St: AppState> Route<St> {
     /// }
     ///
     /// fn main() {
-    ///     let app = web::App::new().service(
+    ///     let app = web::App::default().service(
     ///         web::resource("/{username}/index.html") // <- define path parameters
     ///             .route(web::get().to(index))
     ///     );

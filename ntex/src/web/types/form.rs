@@ -161,7 +161,7 @@ where
 /// }
 ///
 /// fn main() {
-///     let app = App::new().service(
+///     let app = App::default().service(
 ///         web::resource("/index.html")
 ///             // change `Form` extractor configuration
 ///             .state(

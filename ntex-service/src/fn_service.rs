@@ -43,12 +43,12 @@ where
 /// #[ntex::main]
 /// async fn main() -> io::Result<()> {
 ///     // Create service factory that produces `div` services
-///     let fac = fn_factory(async || {
+///     let fac = fn_factory::<(), _, _, _>(async || {
 ///         Ok::<_, io::Error>(fn_service(div))
 ///     });
 ///
 ///     // construct new service
-///     let srv = Pipeline::with((), factory(fac).create(&()).await?);
+///     let srv = Pipeline::with((), fac.create(&()).await?);
 ///
 ///     // now we can use `div` service
 ///     let result = srv.call((10, 20)).await?;
@@ -75,19 +75,19 @@ where
 ///
 /// ```rust
 /// use std::io;
-/// use ntex_service::{factory, fn_factory_with_config, fn_service, Pipeline, Service, ServiceFactory};
+/// use ntex_service::{factory_no_st, fn_factory_with_config, fn_service, Pipeline, Service, ServiceFactory};
 ///
 /// #[ntex::main]
 /// async fn main() -> io::Result<()> {
 ///     // Create service factory. factory uses config argument for
 ///     // services it generates.
-///     let fac = factory(fn_factory_with_config(async |y: &usize| {
+///     let fac = fn_factory_with_config(async |y: &usize| {
 ///         let y = *y;
 ///         Ok::<_, io::Error>(fn_service(move |x: usize| async move { Ok::<_, io::Error>(x * y) }))
-///     }));
+///     });
 ///
 ///     // construct new service with config argument
-///     let srv = Pipeline::with((), factory(fac).create(&10).await?);
+///     let srv = Pipeline::with((), factory_no_st(fac).create(&10).await?);
 ///
 ///     let result = srv.call(10).await?;
 ///     assert_eq!(result, 100);

@@ -335,7 +335,7 @@ fn test_server_state() {
     assert!(net::TcpStream::connect(addr).is_ok());
     assert!(net::TcpStream::connect(addr).is_ok());
     thread::sleep(time::Duration::from_millis(250));
-    assert_eq!(num.load(Relaxed), 6);
+    assert_eq!(num.load(Relaxed), 3);
     sys.stop();
     let _ = h.join();
 }

@@ -695,11 +695,15 @@ mod tests {
         let s = format!("{e}");
         assert!(s.contains("Payload size is unknown"));
 
-        let e = WebError::new(UrlencodedError::UnknownLength);
+        let mut e = WebError::new(UrlencodedError::UnknownLength);
         let s = format!("{e:?}");
         assert!(s.contains("UnknownLength"));
 
         let res = crate::http::ResponseError::error_response(&e);
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let req = TestRequest::default().to_http_request();
+        let res = WebResponseError::<WebError>::error_response(&mut e, &req);
         assert_eq!(res.status(), StatusCode::LENGTH_REQUIRED);
     }
 

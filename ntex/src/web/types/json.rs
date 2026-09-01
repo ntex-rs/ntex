@@ -39,7 +39,7 @@ use crate::web::{AppState, FromRequest, HttpRequest, Responder};
 /// }
 ///
 /// fn main() {
-///     let app = web::App::new().service(
+///     let app = web::App::default().service(
 ///        web::resource("/index.html").route(
 ///            web::post().to(index))
 ///     );
@@ -149,7 +149,7 @@ where
 /// }
 ///
 /// fn main() {
-///     let app = web::App::new().service(
+///     let app = web::App::default().service(
 ///         web::resource("/index.html").route(
 ///            web::post().to(index))
 ///     );
@@ -203,7 +203,7 @@ where
 /// }
 ///
 /// fn main() {
-///     let app = App::new().service(
+///     let app = App::default().service(
 ///         web::resource("/index.html")
 ///             .state(
 ///                 // change json extractor configuration

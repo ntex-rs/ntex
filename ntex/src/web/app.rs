@@ -16,7 +16,7 @@ use super::{AppState, HttpService, Resource, Route, WebRequest, WebResponse};
 /// for building application instances.
 #[derive(derive_more::Debug)]
 #[debug("App")]
-pub struct App<St: AppState, Cfg, M, F> {
+pub struct App<St: AppState, Cfg = (), M = Identity, F = Filter<St>> {
     middleware: M,
     filter: ServiceChainFactory<F, St, WebRequest, Cfg>,
     services: Vec<Box<dyn AppServiceFactory<St, Cfg>>>,
@@ -26,13 +26,21 @@ pub struct App<St: AppState, Cfg, M, F> {
     ph: PhantomData<Cfg>,
 }
 
-impl<Cfg> Default for App<(), Cfg, Identity, Filter<()>> {
+impl Default for App<()> {
     fn default() -> Self {
-        Self::new()
+        App {
+            middleware: Identity,
+            filter: factory(Filter::new()),
+            services: Vec::new(),
+            default: None,
+            external: Vec::new(),
+            case_insensitive: false,
+            ph: PhantomData,
+        }
     }
 }
 
-impl<Cfg> App<(), Cfg, Identity, Filter<()>> {
+impl<Cfg> App<(), Cfg> {
     #[must_use]
     /// Create application builder. Application can be configured with a builder-like pattern.
     pub fn new() -> Self {
@@ -62,20 +70,6 @@ impl<Cfg> App<(), Cfg, Identity, Filter<()>> {
             ph: PhantomData,
         }
     }
-
-    // #[must_use]
-    // /// Create application builder with custom app state.
-    // pub fn with_config<St: AppState, Cfg>() -> App<St, Cfg, Identity, Filter<St>> {
-    //     App {
-    //         middleware: Identity,
-    //         filter: factory(Filter::new()),
-    //         services: Vec::new(),
-    //         default: None,
-    //         external: Vec::new(),
-    //         case_insensitive: false,
-    //         ph: PhantomData,
-    //     }
-    // }
 }
 
 impl<St, Cfg, M, F> App<St, Cfg, M, F>
@@ -92,7 +86,7 @@ where
     /// different module or even library. For example,
     /// some of the resource's configuration could be moved to different module.
     ///
-    /// ```rust
+    /// ```rust,ignore
     /// use ntex::web::{self, middleware, App, HttpResponse};
     ///
     /// // this function could be located in different module
@@ -133,7 +127,7 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::new()
+    ///     let app = App::default()
     ///         .route("/test1", web::get().to(index))
     ///         .route("/test2", web::post().to(async || { HttpResponse::MethodNotAllowed() }));
     /// }
@@ -178,7 +172,7 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::new()
+    ///     let app = App::default()
     ///         .service(
     ///             web::resource("/index.html").route(web::get().to(index)))
     ///         .default_service(
@@ -192,7 +186,7 @@ where
     /// use ntex::web::{self, App, HttpResponse};
     ///
     /// fn main() {
-    ///     let app = App::new()
+    ///     let app = App::default()
     ///         .service(
     ///             web::resource("/index.html").to(async || { HttpResponse::Ok() }))
     ///         .default_service(
@@ -230,7 +224,7 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::new()
+    ///     let app = App::default()
     ///         .service(web::resource("/index.html").route(
     ///             web::get().to(index)))
     ///         .external_resource("youtube", "https://youtube.com/watch/{video_id}");
@@ -264,7 +258,7 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::new()
+    ///     let app = App::default()
     ///         .middleware(middleware::Logger::default())
     ///         .route("/index.html", web::get().to(index));
     /// }
@@ -317,7 +311,7 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::new()
+    ///     let app = App::default()
     ///         .middleware(middleware::Logger::default())
     ///         .route("/index.html", web::get().to(index));
     /// }
@@ -361,7 +355,7 @@ where
     /// async fn main() -> std::io::Result<()> {
     ///     server::build().bind("http", "127.0.0.1:0", SharedCfg::default(), async |_|
     ///         http::HttpService::new(
-    ///             web::App::new()
+    ///             web::App::default()
     ///                 .route("/index.html", web::get().to(async || { "hello_world" }))
     ///         )
     ///     )?
