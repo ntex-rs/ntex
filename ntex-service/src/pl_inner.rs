@@ -32,7 +32,7 @@ impl<Req, Res, Err> PipelineApi<Req, Res, Err> {
     }
 
     pub(crate) fn unreg(&self, idx: u32) {
-        self.0.unreg(idx)
+        self.0.unreg(idx);
     }
 
     pub(crate) fn ready(&self, idx: u32) -> BoxFuture<'_, Result<(), Err>> {

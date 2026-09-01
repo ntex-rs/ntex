@@ -54,11 +54,7 @@ impl<Cfg: ServerAppConfig> ServerConfiguration for StreamServer<Cfg> {
         let mut services = Vec::new();
 
         for info in &self.services {
-            for (svc, _, svc_tokens) in info
-                .create(cfg.clone())
-                .await
-                .map_err(|e| io::Error::other(e))?
-            {
+            for (svc, _, svc_tokens) in info.create(cfg.clone()).await.map_err(io::Error::other)? {
                 services.push(svc);
                 let idx = services.len() - 1;
                 for (token, cfg) in &svc_tokens {

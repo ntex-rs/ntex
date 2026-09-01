@@ -3,7 +3,7 @@ use std::task::{Context, Poll, ready};
 use std::{error, future, io, mem, pin::Pin, rc::Rc};
 
 use crate::io::{Decoded, Filter, Io, IoStatusUpdate, RecvError};
-use crate::service::pipeline::{Pipeline, PipelineBinding, PipelineCall};
+use crate::service::pipeline::{Pipeline, PipelineCall};
 use crate::{channel::bstream, time::Seconds, util::Either};
 
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
@@ -57,7 +57,7 @@ struct DispatcherInner<F, B, Err> {
     io: Rc<Io<F>>,
     flags: Flags,
     service: Pipeline<Request, Response<B>, Err>,
-    control: PipelineBinding<Control<F, Err>, ControlAck<F>, Rc<dyn error::Error>>,
+    control: Pipeline<Control<F, Err>, ControlAck<F>, Rc<dyn error::Error>>,
     disconnect: Option<ServiceDisconnectReason>,
     codec: Codec,
     config: DispatcherConfig,
@@ -78,7 +78,7 @@ where
         id: usize,
         io: Io<F>,
         service: Pipeline<Request, Response<B>, Err>,
-        control: PipelineBinding<Control<F, Err>, ControlAck<F>, Rc<dyn error::Error>>,
+        control: Pipeline<Control<F, Err>, ControlAck<F>, Rc<dyn error::Error>>,
         config: DispatcherConfig,
     ) -> Self {
         let codec = Codec::new(id, io.shared().get());

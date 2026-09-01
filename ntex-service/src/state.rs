@@ -1,8 +1,12 @@
-#![allow(dead_code, unused_variables, missing_debug_implementations)]
-
 use std::marker::PhantomData;
 
-use crate::{Ctx, Service};
+use crate::{Ctx, IntoService, Service};
+
+pub trait RequestState<Res> {
+    type State: 'static;
+
+    fn unpack(self) -> (Res, Self::State);
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct State<Req, St> {
@@ -10,110 +14,17 @@ pub struct State<Req, St> {
     pub state: St,
 }
 
-pub trait StateMapping<From>: Clone + 'static {
-    type State: 'static;
-
-    fn map(&self, st: &From) -> Self::State;
-}
-
-#[derive(Debug, Default)]
-pub struct CloneState<St>(PhantomData<St>);
-
-impl<St> CloneState<St> {
-    #[inline]
-    pub fn new() -> Self {
-        Self(PhantomData)
-    }
-}
-
-impl<St> Copy for CloneState<St> {}
-
-impl<St> Clone for CloneState<St> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<St: Clone + 'static> StateMapping<St> for CloneState<St> {
+impl<Req, St: 'static> RequestState<Req> for State<Req, St> {
     type State = St;
 
-    fn map(&self, st: &St) -> St {
-        st.clone()
-    }
-}
-
-#[derive(Debug)]
-pub struct FnState<F, St>(F, PhantomData<St>);
-
-impl<F, St> FnState<F, St>
-where
-    F: Fn() -> St + Clone,
-{
     #[inline]
-    pub fn new(f: F) -> Self {
-        Self(f, PhantomData)
+    fn unpack(self) -> (Req, St) {
+        let State { req, state } = self;
+        (req, state)
     }
 }
 
-impl<F: Clone, St> Clone for FnState<F, St> {
-    fn clone(&self) -> Self {
-        Self(self.0.clone(), PhantomData)
-    }
-}
-
-impl<F, St, From> StateMapping<From> for FnState<F, St>
-where
-    F: Fn() -> St + Clone + 'static,
-    St: 'static,
-{
-    type State = St;
-
-    fn map(&self, _: &From) -> St {
-        (self.0)()
-    }
-}
-
-pub trait RequestState {
-    type Req;
-    type Res;
-    type State: 'static;
-
-    fn map(&self, req: Self::Req) -> (Self::Res, Self::State);
-}
-
-#[derive(Debug)]
-pub struct DefaultState<Req>(PhantomData<Req>);
-
-impl<Req> DefaultState<Req> {
-    pub fn new() -> Self {
-        Self(PhantomData)
-    }
-}
-
-impl<Req> Copy for DefaultState<Req> {}
-
-impl<Req> Clone for DefaultState<Req> {
-    fn clone(&self) -> Self {
-        Self(PhantomData)
-    }
-}
-
-impl<Req> RequestState for DefaultState<Req> {
-    type Req = Req;
-    type Res = Req;
-    type State = ();
-
-    fn map(&self, req: Req) -> (Self::Req, Self::State) {
-        (req, ())
-    }
-}
-
-// SAFETY: Send cannot be provided authomatically because of St param
-// but code get executed in one thread and never leave it
-unsafe impl<Req> Send for DefaultState<Req> {}
-unsafe impl<St> Send for CloneState<St> {}
-unsafe impl<F, St> Send for FnState<F, St> where F: Send {}
-
+#[derive(Clone, Debug)]
 pub struct StateBuilder<St, Req, Builder = ()> {
     step: Builder,
     t: PhantomData<(St, Req)>,
@@ -128,6 +39,19 @@ impl<St, Req> StateBuilder<St, Req> {
             step: StateBuilderInit(f),
             t: PhantomData,
         }
+    }
+}
+
+impl<St, Req, Builder> StateBuilder<St, Req, Builder>
+where
+    Builder: StateBuilderStep<St, Req, InState = ()>,
+{
+    /// Build state builder service
+    pub fn build(
+        self,
+    ) -> impl Service<St, Req, Res = State<Builder::Res, Builder::OutState>, Error = Builder::Error>
+    {
+        self
     }
 }
 
@@ -146,9 +70,9 @@ where
 }
 
 impl<St, Req, Builder> StateBuilder<St, Req, Builder> {
-    pub fn service<S>(
+    pub fn and_then<S>(
         self,
-        svc: S,
+        svc: impl IntoService<S, St, Builder::Res>,
     ) -> StateBuilder<
         St,
         Req,
@@ -163,7 +87,7 @@ impl<St, Req, Builder> StateBuilder<St, Req, Builder> {
             step: StateBuilderStack {
                 inner: self.step,
                 outer: StateBuilderService {
-                    svc,
+                    svc: svc.into_service(),
                     st: PhantomData,
                 },
                 st: PhantomData,
@@ -196,6 +120,7 @@ impl<St, Req, Builder> StateBuilder<St, Req, Builder> {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct StateBuilderStack<St, Req, Inner, Outer> {
     inner: Inner,
     outer: Outer,
@@ -258,13 +183,14 @@ pub trait StateBuilderStep<St, Req> {
         ctx: Ctx<'_, Self, St>,
     ) -> Result<(Self::Res, Self::OutState), Self::Error>;
 
-    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
+    async fn ready(&self, _: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
         Ok(())
     }
 
-    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {}
+    async fn shutdown(&self, _: Ctx<'_, Self, St>) {}
 }
 
+#[derive(Clone, Debug)]
 pub struct StateBuilderInit<F>(F);
 
 impl<F, St, Req, State, Err> StateBuilderStep<St, Req> for StateBuilderInit<F>
@@ -279,13 +205,14 @@ where
     async fn call(
         &self,
         req: Req,
-        st: (),
+        (): (),
         ctx: Ctx<'_, Self, St>,
     ) -> Result<(Self::Res, Self::OutState), Self::Error> {
         (self.0)(ctx.st(), &req).await.map(move |st| (req, st))
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct StateBuilderService<S, State> {
     svc: S,
     st: PhantomData<State>,
@@ -318,6 +245,7 @@ where
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct StateBuilderMapState<F, State> {
     f: F,
     st: PhantomData<State>,
@@ -379,9 +307,9 @@ mod tests {
     #[ntex::test]
     async fn test_state_builder() {
         let sb = StateBuilder::new(async |_: &(), t: &&'static str| Ok::<_, ()>(St { n: t.len() }))
-            .service(Svc1)
+            .and_then(Svc1)
             .map(async |_: &(), r: &usize, st: St| Ok(St { n: st.n + *r }))
-            .service(Svc2);
+            .and_then(Svc2);
 
         let pl = Pipeline::with((), sb);
         let res = pl.call("test").await.unwrap();
@@ -394,3 +322,6 @@ mod tests {
         );
     }
 }
+
+// SAFETY: Send cannot be provided authomatically because of St param
+// but code get executed in one thread and never leave it

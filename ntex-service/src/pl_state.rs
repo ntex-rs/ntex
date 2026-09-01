@@ -62,7 +62,7 @@ where
     #[inline]
     /// Shuts down the enclosed service.
     pub async fn shutdown(&self, st: &St) {
-        self.api.shutdown(0, st).await
+        self.api.shutdown(0, st).await;
     }
 
     #[inline]
@@ -133,7 +133,7 @@ impl<St, Req, Res, Err> Drop for Binding<'_, St, Req, Res, Err> {
     }
 }
 
-/// ========================== PipelineStateBinding ===========================
+// ========================== `PipelineStateBinding` ===========================
 
 pub struct PipelineStateBinding<St, Req, Res, Err> {
     idx: u32,
@@ -189,7 +189,7 @@ where
     }
 }
 
-/// ========================== PipelineApi ===========================
+// ========================== `PipelineApi` ===========================
 
 struct PipelineInternal<St, Req, Res, Err> {
     st: St,
@@ -226,7 +226,7 @@ impl<St, Req, Res, Err> PipelineInternalApi<Req, Res, Err> for PipelineInternal<
     }
 }
 
-/// ========================== PipelineStateApi ===========================
+// ========================== `PipelineStateApi` ===========================
 
 struct PipelineInner<S, St, E> {
     s: S,
@@ -300,7 +300,7 @@ where
 
             Ctx::<'_, S, St>::new(idx, &self.waiters, st)
                 .shutdown(&self.s)
-                .await
+                .await;
         })
     }
 

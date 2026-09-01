@@ -1,3 +1,4 @@
+#![allow(clippy::unused_async_trait_impl)]
 use std::io;
 
 pub trait ServerAppConfig: Sync + Send + 'static {

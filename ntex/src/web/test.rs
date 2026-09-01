@@ -9,7 +9,6 @@ use uuid::Uuid;
 use crate::client::error::ClientPayloadError;
 use crate::client::{Client, ClientConfig, ClientRequest, ClientResponse};
 use crate::error::Error;
-use crate::http::body::MessageBody;
 use crate::http::error::{HttpError, ResponseError};
 use crate::http::header::{CONTENT_TYPE, HeaderName, HeaderValue};
 use crate::http::test::TestRequest as HttpTestRequest;
@@ -544,15 +543,14 @@ impl TestRequest {
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub fn server<F, I, Sf, B>(factory: F) -> TestServer
+pub fn server<F, I, Sf>(factory: F) -> TestServer
 where
     F: AsyncFn(&()) -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<Sf, (), Request, SharedCfg>,
-    Sf: ServiceFactory<(), Request, SharedCfg> + 'static,
-    Sf::Res: Into<Response<B>>,
+    I: IntoServiceFactory<Sf, (), Request, ()>,
+    Sf: ServiceFactory<(), Request, ()> + 'static,
+    Sf::Res: Into<Response>,
     Sf::Error: ResponseError,
     Sf::InitError: fmt::Debug,
-    B: MessageBody + 'static,
 {
     server_with(TestServerConfig::default(), factory)
 }
@@ -582,15 +580,14 @@ where
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub fn server_with<F, I, Sf, B>(cfg: TestServerConfig, factory: F) -> TestServer
+pub fn server_with<F, I, Sf>(cfg: TestServerConfig, factory: F) -> TestServer
 where
     F: AsyncFn(&()) -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<Sf, (), Request, SharedCfg>,
-    Sf: ServiceFactory<(), Request, SharedCfg> + 'static,
-    Sf::Res: Into<Response<B>>,
+    I: IntoServiceFactory<Sf, (), Request, ()>,
+    Sf: ServiceFactory<(), Request, ()> + 'static,
+    Sf::Res: Into<Response>,
     Sf::Error: ResponseError,
     Sf::InitError: fmt::Debug,
-    B: MessageBody + 'static,
 {
     let sys = System::current().config();
     let name = System::current().name().to_string();

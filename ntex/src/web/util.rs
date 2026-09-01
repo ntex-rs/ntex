@@ -3,12 +3,11 @@ use std::{error::Error, fmt};
 
 use ntex_router::IntoPattern;
 
-use crate::http::body::MessageBody;
 use crate::http::error::{BlockingError, ResponseError};
 use crate::http::header::ContentEncoding;
 use crate::http::{Method, Request, Response};
 use crate::server::NoConfig;
-use crate::service::{IntoServiceFactory, ServiceFactory, cfg::SharedCfg};
+use crate::service::{IntoServiceFactory, ServiceFactory};
 
 use super::extract::FromRequest;
 use super::handler::Handler;
@@ -297,15 +296,14 @@ where
 ///         .await
 /// }
 /// ```
-pub fn server<F, I, Sf, B>(factory: F) -> HttpServer<NoConfig, F, I, Sf, B>
+pub fn server<F, I, Sf, B>(factory: F) -> HttpServer<NoConfig, F, I, Sf>
 where
     F: AsyncFn(&()) -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<Sf, (), Request, SharedCfg>,
-    Sf: ServiceFactory<(), Request, SharedCfg> + 'static,
-    Sf::Res: Into<Response<B>>,
+    I: IntoServiceFactory<Sf, (), Request, ()>,
+    Sf: ServiceFactory<(), Request, ()> + 'static,
+    Sf::Res: Into<Response>,
     Sf::Error: ResponseError,
     Sf::InitError: Error,
-    B: MessageBody + 'static,
 {
     HttpServer::new(factory)
 }

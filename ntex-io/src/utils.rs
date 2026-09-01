@@ -1,8 +1,9 @@
 use std::{cell::Cell, task::Poll, task::Waker};
 
+use ntex_service::state::{RequestState, State};
 use ntex_util::task::LocalWaker;
 
-use crate::IoCallbacks;
+use crate::{Filter, Io, IoBoxed, IoCallbacks};
 
 /// Decoded item from buffer
 #[doc(hidden)]
@@ -101,6 +102,43 @@ impl Extensions {
                 f(cb.as_ref());
             }
         });
+    }
+}
+
+impl<F> RequestState<Io<F>> for Io<F> {
+    type State = ();
+
+    #[inline]
+    fn unpack(self) -> (Io<F>, ()) {
+        (self, ())
+    }
+}
+
+impl<F: Filter> RequestState<IoBoxed> for Io<F> {
+    type State = ();
+
+    #[inline]
+    fn unpack(self) -> (IoBoxed, ()) {
+        (self.boxed(), ())
+    }
+}
+
+impl RequestState<IoBoxed> for IoBoxed {
+    type State = ();
+
+    #[inline]
+    fn unpack(self) -> (IoBoxed, ()) {
+        (self, ())
+    }
+}
+
+impl<F: Filter, St: 'static> RequestState<IoBoxed> for State<Io<F>, St> {
+    type State = St;
+
+    #[inline]
+    fn unpack(self) -> (IoBoxed, St) {
+        let State { req, state } = self;
+        (req.boxed(), state)
     }
 }
 
