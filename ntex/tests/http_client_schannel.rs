@@ -61,3 +61,22 @@ async fn test_schannel_public_https() {
     let body = response.body().await.unwrap();
     assert!(!body.is_empty());
 }
+
+#[ntex::test]
+async fn test_schannel_bing_https() {
+    let tls = TlsConnector::<ntex::connect::Connector<ntex::http::Uri>>::new();
+    let client = Client::builder().secure_connector(tls).build(
+        ntex::client::ClientConfig::new()
+            .disable_timeout()
+            .set_response_payload_limit(usize::MAX),
+    );
+
+    let response = client
+        .get("https://cn.bing.com/HPImageArchive.aspx?format=js&idx=0&n=1&mkt=zh-CN")
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    let body = response.body().await.unwrap();
+    assert!(!body.is_empty());
+}

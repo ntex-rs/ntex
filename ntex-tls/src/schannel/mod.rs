@@ -14,17 +14,16 @@ use windows_sys::Win32::Security::Authentication::Identity::{
     AcquireCredentialsHandleW, ApplyControlToken, DecryptMessage, DeleteSecurityContext,
     EncryptMessage, FreeContextBuffer, FreeCredentialsHandle, ISC_REQ_ALLOCATE_MEMORY,
     ISC_REQ_CONFIDENTIALITY, ISC_REQ_EXTENDED_ERROR, ISC_REQ_MANUAL_CRED_VALIDATION,
-    ISC_REQ_REPLAY_DETECT, ISC_REQ_SEQUENCE_DETECT, ISC_REQ_STREAM, InitializeSecurityContextW,
-    QueryContextAttributesW, SCH_CRED_AUTO_CRED_VALIDATION, SCH_CRED_MANUAL_CRED_VALIDATION,
-    SCH_CRED_NO_DEFAULT_CREDS, SCH_CRED_NO_SERVERNAME_CHECK, SCH_CREDENTIALS,
-    SCH_CREDENTIALS_VERSION, SCH_USE_STRONG_CRYPTO, SCHANNEL_SHUTDOWN,
+    ISC_REQ_REPLAY_DETECT, ISC_REQ_SEQUENCE_DETECT, ISC_REQ_STREAM, ISC_REQ_USE_SUPPLIED_CREDS,
+    InitializeSecurityContextW, QueryContextAttributesW, SCH_CRED_AUTO_CRED_VALIDATION,
+    SCH_CRED_MANUAL_CRED_VALIDATION, SCH_CRED_NO_DEFAULT_CREDS, SCH_CRED_NO_SERVERNAME_CHECK,
+    SCH_CREDENTIALS, SCH_CREDENTIALS_VERSION, SCH_USE_STRONG_CRYPTO, SCHANNEL_SHUTDOWN,
     SECBUFFER_APPLICATION_PROTOCOLS, SECBUFFER_DATA, SECBUFFER_EMPTY, SECBUFFER_EXTRA,
     SECBUFFER_STREAM_HEADER, SECBUFFER_STREAM_TRAILER, SECBUFFER_TOKEN, SECBUFFER_VERSION,
     SECPKG_ATTR_APPLICATION_PROTOCOL, SECPKG_ATTR_REMOTE_CERT_CONTEXT, SECPKG_ATTR_STREAM_SIZES,
-    SECPKG_CRED_INBOUND, SECPKG_CRED_OUTBOUND, SECURITY_NATIVE_DREP,
-    SecApplicationProtocolNegotiationExt_ALPN, SecApplicationProtocolNegotiationStatus_Success,
-    SecBuffer, SecBufferDesc, SecPkgContext_ApplicationProtocol, SecPkgContext_StreamSizes,
-    UNISP_NAME_W,
+    SECPKG_CRED_INBOUND, SECPKG_CRED_OUTBOUND, SecApplicationProtocolNegotiationExt_ALPN,
+    SecApplicationProtocolNegotiationStatus_Success, SecBuffer, SecBufferDesc,
+    SecPkgContext_ApplicationProtocol, SecPkgContext_StreamSizes, UNISP_NAME_W,
 };
 use windows_sys::Win32::Security::Credentials::SecHandle;
 use windows_sys::Win32::Security::Cryptography::{
@@ -43,7 +42,8 @@ const ISC_REQ_FLAGS: u32 = ISC_REQ_SEQUENCE_DETECT
     | ISC_REQ_CONFIDENTIALITY
     | ISC_REQ_ALLOCATE_MEMORY
     | ISC_REQ_EXTENDED_ERROR
-    | ISC_REQ_STREAM;
+    | ISC_REQ_STREAM
+    | ISC_REQ_USE_SUPPLIED_CREDS;
 
 const ASC_REQ_FLAGS: u32 = ASC_REQ_SEQUENCE_DETECT
     | ASC_REQ_REPLAY_DETECT
@@ -119,6 +119,12 @@ struct Context {
     renegotiating: bool,
     target: Vec<u16>,
     sizes: Option<SecPkgContext_StreamSizes>,
+    /// Encrypted bytes not yet consumed by Schannel.
+    ///
+    /// Incomplete TLS records stay here so the ntex read buffer can be drained
+    /// and the socket can keep reading (certificate chains often exceed one
+    /// TCP segment).
+    enc_buf: BytesMut,
 }
 
 impl Side {
@@ -197,6 +203,7 @@ impl Context {
             renegotiating: false,
             target: domain.encode_utf16().chain(Some(0)).collect(),
             sizes: None,
+            enc_buf: BytesMut::new(),
         })
     }
 
@@ -235,30 +242,34 @@ impl Context {
             renegotiating: false,
             target: Vec::new(),
             sizes: None,
+            enc_buf: BytesMut::new(),
         })
     }
 
-    fn handshake(
-        &mut self,
-        mut input: Option<&mut BytesMut>,
-        output: &mut ntex_bytes::BytePages,
-    ) -> io::Result<HandshakeState> {
+    fn pull_encrypted(&mut self, src: Option<&mut BytesMut>) {
+        if let Some(src) = src
+            && !src.is_empty()
+        {
+            self.enc_buf.extend_from_slice(src);
+            src.clear();
+        }
+    }
+
+    fn handshake(&mut self, output: &mut ntex_bytes::BytePages) -> io::Result<HandshakeState> {
         loop {
-            let in_len = input.as_ref().map_or(0, |src| src.len());
+            let in_len = self.enc_buf.len();
             if in_len == 0 && !self.renegotiating && (self.have_ctxt || self.side.is_server()) {
                 return Ok(HandshakeState::NeedRead);
             }
 
-            let state = self.handshake_step(input.as_deref_mut(), output)?;
-            let remaining = input.as_ref().map_or(0, |src| src.len());
+            let state = self.handshake_step(output)?;
+            let remaining = self.enc_buf.len();
             match state {
                 HandshakeState::Done => {
                     self.renegotiating = false;
                     return Ok(HandshakeState::Done);
                 }
-                HandshakeState::NeedRead if remaining > 0 && remaining < in_len => {
-                    // Leftover handshake records were already in this buffer.
-                }
+                HandshakeState::NeedRead if remaining > 0 && remaining < in_len => {}
                 HandshakeState::NeedRead => {
                     self.renegotiating = false;
                     return Ok(HandshakeState::NeedRead);
@@ -268,11 +279,7 @@ impl Context {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn handshake_step(
-        &mut self,
-        input: Option<&mut BytesMut>,
-        output: &mut ntex_bytes::BytePages,
-    ) -> io::Result<HandshakeState> {
+    fn handshake_step(&mut self, output: &mut ntex_bytes::BytePages) -> io::Result<HandshakeState> {
         let mut out_buf = SecBuffer {
             cbBuffer: 0,
             BufferType: SECBUFFER_TOKEN,
@@ -285,23 +292,21 @@ impl Context {
         };
 
         let mut alpn = alpn_buffer();
-        let mut input_len = 0usize;
+        let input_len = self.enc_buf.len();
+        let enc_ptr = self.enc_buf.as_mut_ptr();
         let mut in_bufs = Vec::new();
-        if let Some(src) = input.as_ref() {
-            input_len = src.len();
-            if input_len != 0 {
-                in_bufs.push(SecBuffer {
-                    cbBuffer: u32::try_from(input_len)
-                        .map_err(|_| io::Error::other("TLS input buffer is too large"))?,
-                    BufferType: SECBUFFER_TOKEN,
-                    pvBuffer: src.as_ptr().cast_mut().cast(),
-                });
-                in_bufs.push(SecBuffer {
-                    cbBuffer: 0,
-                    BufferType: SECBUFFER_EMPTY,
-                    pvBuffer: ptr::null_mut(),
-                });
-            }
+        if input_len != 0 {
+            in_bufs.push(SecBuffer {
+                cbBuffer: u32::try_from(input_len)
+                    .map_err(|_| io::Error::other("TLS input buffer is too large"))?,
+                BufferType: SECBUFFER_TOKEN,
+                pvBuffer: enc_ptr.cast(),
+            });
+            in_bufs.push(SecBuffer {
+                cbBuffer: 0,
+                BufferType: SECBUFFER_EMPTY,
+                pvBuffer: ptr::null_mut(),
+            });
         }
         if !self.have_ctxt {
             in_bufs.push(SecBuffer {
@@ -327,20 +332,20 @@ impl Context {
 
         let mut attrs = 0u32;
         let mut expiry = 0i64;
-        let ctxt = if self.have_ctxt {
-            &raw const self.ctxt
+        let (ph_context, ph_new_context) = if self.have_ctxt {
+            (&raw const self.ctxt, ptr::null_mut())
         } else {
-            ptr::null()
+            (ptr::null(), &raw mut self.ctxt)
         };
         let status = if self.side.is_server() {
             unsafe {
                 AcceptSecurityContext(
                     &raw const self.cred,
-                    ctxt,
+                    ph_context,
                     &raw const in_desc,
                     ASC_REQ_FLAGS,
-                    SECURITY_NATIVE_DREP,
-                    &raw mut self.ctxt,
+                    0,
+                    ph_new_context,
                     &raw mut out_desc,
                     &raw mut attrs,
                     &raw mut expiry,
@@ -354,14 +359,14 @@ impl Context {
             unsafe {
                 InitializeSecurityContextW(
                     &raw const self.cred,
-                    ctxt,
+                    ph_context,
                     self.target.as_ptr(),
                     flags,
                     0,
-                    SECURITY_NATIVE_DREP,
+                    0,
                     &raw mut in_desc,
                     0,
-                    &raw mut self.ctxt,
+                    ph_new_context,
                     &raw mut out_desc,
                     &raw mut attrs,
                     &raw mut expiry,
@@ -370,8 +375,10 @@ impl Context {
         };
         self.have_ctxt = true;
 
+        let mut out_len = 0u32;
         if !out_buf.pvBuffer.is_null() {
             if out_buf.cbBuffer != 0 {
+                out_len = out_buf.cbBuffer;
                 let token = unsafe {
                     slice::from_raw_parts(out_buf.pvBuffer.cast::<u8>(), out_buf.cbBuffer as usize)
                 };
@@ -381,6 +388,12 @@ impl Context {
                 FreeContextBuffer(out_buf.pvBuffer);
             }
         }
+
+        let extra = extra_len(&in_bufs);
+        log::trace!(
+            "schannel handshake status=0x{:08X} in={input_len} extra={extra} out={out_len} attrs={attrs}",
+            u32::from_ne_bytes(status.to_ne_bytes())
+        );
 
         if status == SEC_E_INCOMPLETE_MESSAGE {
             return Ok(HandshakeState::NeedRead);
@@ -394,9 +407,7 @@ impl Context {
             return Err(sspi_error(ctx, status));
         }
 
-        if let Some(src) = input {
-            consume_extra(src, input_len, extra_len(&in_bufs));
-        }
+        consume_extra(&mut self.enc_buf, input_len, extra);
 
         if status == SEC_E_OK {
             self.query_stream_sizes()?;
@@ -482,18 +493,18 @@ impl Context {
         Ok(len)
     }
 
-    fn decrypt(&mut self, src: &mut BytesMut, dst: &mut BytesMut) -> io::Result<DecryptStatus> {
-        if src.is_empty() {
+    fn decrypt(&mut self, dst: &mut BytesMut) -> io::Result<DecryptStatus> {
+        if self.enc_buf.is_empty() {
             return Ok(DecryptStatus::Incomplete);
         }
 
-        let input_len = src.len();
+        let input_len = self.enc_buf.len();
         let mut bufs = [
             SecBuffer {
                 cbBuffer: u32::try_from(input_len)
                     .map_err(|_| io::Error::other("TLS input buffer is too large"))?,
                 BufferType: SECBUFFER_DATA,
-                pvBuffer: src.as_mut_ptr().cast(),
+                pvBuffer: self.enc_buf.as_mut_ptr().cast(),
             },
             SecBuffer {
                 cbBuffer: 0,
@@ -524,12 +535,12 @@ impl Context {
             SEC_E_OK => {}
             SEC_E_INCOMPLETE_MESSAGE => return Ok(DecryptStatus::Incomplete),
             SEC_I_CONTEXT_EXPIRED => {
-                consume_extra(src, input_len, extra_len(&bufs));
+                consume_extra(&mut self.enc_buf, input_len, extra_len(&bufs));
                 return Ok(DecryptStatus::Closed);
             }
             SEC_I_RENEGOTIATE => {
                 copy_data(&bufs, dst);
-                consume_extra(src, input_len, extra_len(&bufs));
+                consume_extra(&mut self.enc_buf, input_len, extra_len(&bufs));
                 self.renegotiating = true;
                 return Ok(DecryptStatus::Renegotiate);
             }
@@ -537,7 +548,7 @@ impl Context {
         }
 
         copy_data(&bufs, dst);
-        consume_extra(src, input_len, extra_len(&bufs));
+        consume_extra(&mut self.enc_buf, input_len, extra_len(&bufs));
         Ok(DecryptStatus::Progress)
     }
 
@@ -563,7 +574,7 @@ impl Context {
             return Err(sspi_error("ApplyControlToken", status));
         }
 
-        let _ = self.handshake_step(None, output)?;
+        let _ = self.handshake_step(output)?;
         Ok(())
     }
 
@@ -664,31 +675,29 @@ impl FilterLayer for SchannelFilter {
     fn process_read_buf(&self, rb: &FilterBuf<'_>) -> io::Result<()> {
         loop {
             let mut inner = self.inner.borrow_mut();
+            rb.with_read_src(|src| inner.ctx.pull_encrypted(src.as_mut()));
+
             if inner.state == State::Handshaking {
-                let state = rb.with_write_buffers(|_, dst| {
-                    rb.with_read_src(|src| inner.ctx.handshake(src.as_mut(), dst))
-                })?;
+                let state = rb.with_write_buffers(|_, dst| inner.ctx.handshake(dst))?;
                 if state == HandshakeState::NeedRead {
                     return Ok(());
                 }
                 inner.state = State::Streaming;
             }
 
-            let renegotiate = rb.with_read_buffers(|r_src, r_dst| -> io::Result<bool> {
-                if let Some(src) = r_src {
-                    loop {
-                        match inner.ctx.decrypt(src, r_dst)? {
-                            DecryptStatus::Incomplete => break,
-                            DecryptStatus::Closed => {
-                                rb.io().close();
-                                break;
-                            }
-                            DecryptStatus::Renegotiate => {
-                                return Ok(true);
-                            }
-                            DecryptStatus::Progress if src.is_empty() => break,
-                            DecryptStatus::Progress => {}
+            let renegotiate = rb.with_read_buffers(|_, r_dst| -> io::Result<bool> {
+                loop {
+                    match inner.ctx.decrypt(r_dst)? {
+                        DecryptStatus::Incomplete => break,
+                        DecryptStatus::Closed => {
+                            rb.io().close();
+                            break;
                         }
+                        DecryptStatus::Renegotiate => {
+                            return Ok(true);
+                        }
+                        DecryptStatus::Progress if inner.ctx.enc_buf.is_empty() => break,
+                        DecryptStatus::Progress => {}
                     }
                 }
                 Ok(false)
@@ -725,7 +734,7 @@ impl SchannelFilter {
     fn start_handshake(&self, buf: &FilterBuf<'_>) -> io::Result<HandshakeState> {
         let mut inner = self.inner.borrow_mut();
         buf.with_write_buffers(|_, dst| {
-            let state = inner.ctx.handshake(None, dst)?;
+            let state = inner.ctx.handshake(dst)?;
             if state == HandshakeState::Done {
                 inner.state = State::Streaming;
             }
