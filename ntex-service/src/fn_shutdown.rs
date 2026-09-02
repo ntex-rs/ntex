@@ -101,7 +101,7 @@ mod tests {
         let is_called = Rc::new(Cell::new(false));
         let is_called2 = is_called.clone();
         let fac =
-            factory::<_, (), _, _>(|()| async { Ok::<_, ()>("pipe") }).shutdown(async move |_| {
+            factory::<_, (), _, _>(|()| async { Ok::<_, ()>("pipe") }).shutdown(async move |()| {
                 is_called2.set(true);
             });
         let _ = format!("{fac:?}");
@@ -124,7 +124,7 @@ mod tests {
         let is_called = Rc::new(Cell::new(false));
         let is_called2 = is_called.clone();
         let svc =
-            service::<_, (), _>(|()| async { Ok::<_, ()>("pipe") }).shutdown(async move |_| {
+            service::<_, (), _>(|()| async { Ok::<_, ()>("pipe") }).shutdown(async move |()| {
                 is_called2.set(true);
             });
         let _ = format!("{fac:?}");
