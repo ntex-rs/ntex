@@ -5,7 +5,7 @@ use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 
 use ntex::client::Client;
 use ntex::http::{HttpService, Uri, Version, openssl, test::server as test_server};
-use ntex::service::{cfg::SharedCfg, svc};
+use ntex::service::{cfg::SharedCfg, service};
 use ntex::web::{self, App, HttpResponse};
 use ntex_tls::schannel::{ClientConfig, TlsConnector};
 use tls_openssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod};
