@@ -55,21 +55,21 @@ impl<Cfg: ServerAppConfig> ServiceConfig<Cfg> {
     }
 
     /// Add new service to the server.
-    pub fn bind(
-        &self,
-        name: impl AsRef<str>,
-        addr: impl net::ToSocketAddrs,
-        cfg: impl Into<SharedCfg>,
-    ) -> io::Result<&Self> {
+    pub fn bind(&self, name: impl AsRef<str>, addr: impl net::ToSocketAddrs) -> io::Result<&Self> {
         let mut inner = self.0.borrow_mut();
 
-        let cfg = cfg.into();
         let sockets = bind_addr(addr, inner.backlog)?;
         let socket = Socket {
             name: name.as_ref().to_string(),
             sockets: sockets
                 .into_iter()
-                .map(|lst| (inner.token.next(), Listener::from_tcp(lst), cfg.clone()))
+                .map(|lst| {
+                    (
+                        inner.token.next(),
+                        Listener::from_tcp(lst),
+                        SharedCfg::default(),
+                    )
+                })
                 .collect(),
         };
         inner.sockets.push(socket);
@@ -78,16 +78,15 @@ impl<Cfg: ServerAppConfig> ServiceConfig<Cfg> {
     }
 
     /// Add new service to the server.
-    pub fn listen(
-        &self,
-        name: impl AsRef<str>,
-        lst: net::TcpListener,
-        cfg: impl Into<SharedCfg>,
-    ) -> &Self {
+    pub fn listen(&self, name: impl AsRef<str>, lst: net::TcpListener) -> &Self {
         let mut inner = self.0.borrow_mut();
         let socket = Socket {
             name: name.as_ref().to_string(),
-            sockets: vec![(inner.token.next(), Listener::from_tcp(lst), cfg.into())],
+            sockets: vec![(
+                inner.token.next(),
+                Listener::from_tcp(lst),
+                SharedCfg::default(),
+            )],
         };
         inner.sockets.push(socket);
 
@@ -208,13 +207,22 @@ impl<Cfg: Clone + 'static> ServiceRuntime<Cfg> {
     /// # Panics
     ///
     /// Panics if service with specified name is registered already
-    pub fn service<S>(&self, name: &str, svc: impl IntoService<S, Cfg, Io>) -> &Self
+    pub fn service<S>(
+        &self,
+        name: &str,
+        cfg: impl Into<SharedCfg>,
+        svc: impl IntoService<S, Cfg, Io>,
+    ) -> &Self
     where
         S: Service<Cfg, Io> + 'static,
     {
+        let shared = cfg.into();
         let mut inner = self.1.borrow_mut();
         if let Some(entry) = inner.names.get_mut(name) {
             let idx = entry.idx;
+            for token in &mut entry.tokens {
+                token.1 = shared.clone();
+            }
             let pipeline = Pipeline::with(
                 self.0.clone(),
                 svc.into_service().map(|_| ()).map_err(|_| ()),

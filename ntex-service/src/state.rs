@@ -96,7 +96,30 @@ impl<St, Req, Builder> StateBuilder<St, Req, Builder> {
         }
     }
 
-    pub fn map<F, NewState, Error>(
+    pub fn map<F, NewRes, NewState, Error>(
+        self,
+        f: F,
+    ) -> StateBuilder<
+        St,
+        Req,
+        StateBuilderStack<St, Req, Builder, StateBuilderMap<F, Builder::Res, Builder::OutState>>,
+    >
+    where
+        F: AsyncFn(&St, Builder::Res, Builder::OutState) -> Result<(NewRes, NewState), Error>,
+        Error: From<Builder::Error>,
+        Builder: StateBuilderStep<St, Req>,
+    {
+        StateBuilder {
+            step: StateBuilderStack {
+                inner: self.step,
+                outer: StateBuilderMap { f, st: PhantomData },
+                st: PhantomData,
+            },
+            t: PhantomData,
+        }
+    }
+
+    pub fn map_state<F, NewState, Error>(
         self,
         f: F,
     ) -> StateBuilder<
@@ -246,6 +269,32 @@ where
 }
 
 #[derive(Clone, Debug)]
+pub struct StateBuilderMap<F, Req, State> {
+    f: F,
+    st: PhantomData<(Req, State)>,
+}
+
+impl<F, St, Req, State, NewRes, NewState, Err> StateBuilderStep<St, Req>
+    for StateBuilderMap<F, Req, State>
+where
+    F: AsyncFn(&St, Req, State) -> Result<(NewRes, NewState), Err>,
+{
+    type Res = NewRes;
+    type InState = State;
+    type OutState = NewState;
+    type Error = Err;
+
+    async fn call(
+        &self,
+        req: Req,
+        st: State,
+        ctx: Ctx<'_, Self, St>,
+    ) -> Result<(NewRes, NewState), Err> {
+        (self.f)(ctx.st(), req, st).await
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct StateBuilderMapState<F, State> {
     f: F,
     st: PhantomData<State>,
@@ -309,7 +358,7 @@ mod tests {
         let sb =
             StateBuilder::new(async |(): &(), t: &&'static str| Ok::<_, ()>(St { n: t.len() }))
                 .and_then(Svc1)
-                .map(async |(): &(), r: &usize, st: St| Ok(St { n: st.n + *r }))
+                .map_state(async |(): &(), r: &usize, st: St| Ok(St { n: st.n + *r }))
                 .and_then(Svc2);
 
         let pl = Pipeline::with((), sb);

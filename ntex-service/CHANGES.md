@@ -1,5 +1,11 @@
 # Changes
 
+## [5.0.0-beta.5] - 2026-09-02
+
+* Add .readiness() callback
+
+* Add .shutdown() callback
+
 ## [5.0.0-beta.4] - 2026-08-28
 
 * Add `St` param to Middleware trait

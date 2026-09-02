@@ -54,16 +54,6 @@ impl<St: AppState> Default for Route<St> {
     }
 }
 
-impl<St: AppState> fmt::Debug for Route<St> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Route")
-            .field("handler", &self.handler)
-            .field("methods", &self.methods)
-            .field("guards", &self.guards)
-            .finish()
-    }
-}
-
 impl<St: AppState, Cfg> ServiceFactory<St, WebRequest, Cfg> for Route<St> {
     type Res = WebResponse;
     type Error = St::Error;
@@ -73,45 +63,6 @@ impl<St: AppState, Cfg> ServiceFactory<St, WebRequest, Cfg> for Route<St> {
 
     async fn create(&self, _: &Cfg) -> Result<RouteService<St>, Self::InitError> {
         Ok(self.service())
-    }
-}
-
-pub struct RouteService<St: AppState> {
-    handler: Rc<dyn HandlerFn<St>>,
-    methods: Vec<Method>,
-    guards: Rc<AllGuard>,
-}
-
-impl<St: AppState> RouteService<St> {
-    pub fn check(&self, req: &mut WebRequest) -> bool {
-        if !self.methods.is_empty() && !self.methods.contains(&req.head().method) {
-            return false;
-        }
-
-        self.guards.check(req.head())
-    }
-}
-
-impl<St: AppState> fmt::Debug for RouteService<St> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RouteService")
-            .field("handler", &self.handler)
-            .field("methods", &self.methods)
-            .field("guards", &self.guards)
-            .finish()
-    }
-}
-
-impl<St: AppState> Service<St, WebRequest> for RouteService<St> {
-    type Res = WebResponse;
-    type Error = St::Error;
-
-    async fn call(
-        &self,
-        req: WebRequest,
-        ctx: Ctx<'_, Self, St>,
-    ) -> Result<Self::Res, Self::Error> {
-        self.handler.call(ctx.st(), req).await
     }
 }
 
@@ -201,14 +152,63 @@ impl<St: AppState> Route<St> {
     ///     );
     /// }
     /// ```
-    pub fn to<F, Args>(mut self, handler: F) -> Self
+    pub fn to<H, Args>(mut self, handler: H) -> Self
     where
-        F: Handler<St, Args> + 'static,
+        H: Handler<St, Args> + 'static,
         Args: FromRequest<St> + 'static,
         Args::Error: WebResponseError<St::Error>,
     {
         self.handler = Rc::new(HandlerWrapper::new(handler));
         self
+    }
+}
+
+impl<St: AppState> fmt::Debug for Route<St> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Route")
+            .field("handler", &self.handler)
+            .field("methods", &self.methods)
+            .field("guards", &self.guards)
+            .finish()
+    }
+}
+
+pub struct RouteService<St: AppState> {
+    handler: Rc<dyn HandlerFn<St>>,
+    methods: Vec<Method>,
+    guards: Rc<AllGuard>,
+}
+
+impl<St: AppState> RouteService<St> {
+    pub fn check(&self, req: &mut WebRequest) -> bool {
+        if !self.methods.is_empty() && !self.methods.contains(&req.head().method) {
+            return false;
+        }
+
+        self.guards.check(req.head())
+    }
+}
+
+impl<St: AppState> fmt::Debug for RouteService<St> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RouteService")
+            .field("handler", &self.handler)
+            .field("methods", &self.methods)
+            .field("guards", &self.guards)
+            .finish()
+    }
+}
+
+impl<St: AppState> Service<St, WebRequest> for RouteService<St> {
+    type Res = WebResponse;
+    type Error = St::Error;
+
+    async fn call(
+        &self,
+        req: WebRequest,
+        ctx: Ctx<'_, Self, St>,
+    ) -> Result<Self::Res, Self::Error> {
+        self.handler.call(ctx.st(), req).await
     }
 }
 

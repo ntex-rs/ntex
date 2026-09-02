@@ -37,7 +37,7 @@ async fn test_connection_reuse_h2() {
 
     let srv = test_server(async move |_| {
         let num2 = num2.clone();
-        svc(async move |io| {
+        service(async move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
             Ok(io)
         })

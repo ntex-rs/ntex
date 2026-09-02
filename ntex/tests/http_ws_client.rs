@@ -4,7 +4,7 @@ use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpService, Response, body::BodySize, h1};
 use ntex::io::{DispatchItem, Dispatcher, IoConfig};
-use ntex::service::{Pipeline, cfg::SharedCfg, fn_factory_with_config, svc};
+use ntex::service::{Pipeline, cfg::SharedCfg, fn_factory_with_config, service};
 use ntex::web::{self, App, HttpRequest};
 use ntex::ws::{self, handshake_response};
 use ntex::{time::Seconds, util::ByteString, util::Bytes};
@@ -186,7 +186,7 @@ async fn test_keepalive_timeout() {
 
 #[ntex::test]
 async fn test_upgrade_handler_with_await() {
-    async fn service(_: ws::Frame) -> Result<Option<ws::Message>, io::Error> {
+    async fn ws_service(_: ws::Frame) -> Result<Option<ws::Message>, io::Error> {
         Ok(None)
     }
 
@@ -200,7 +200,7 @@ async fn test_upgrade_handler_with_await() {
                     &req,
                     None,
                     fn_factory_with_config(async |_: &ws::WsSink| {
-                        Ok::<_, web::WebError>(svc(service))
+                        Ok::<_, web::WebError>(service(ws_service))
                     }),
                 )
                 .await

@@ -80,7 +80,7 @@ where
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use crate::{Ctx, Service, factory, fn_factory, svc};
+    use crate::{Ctx, Service, factory, fn_factory, service};
 
     #[derive(Debug, Clone)]
     struct Srv1(Rc<Cell<usize>>, Rc<Cell<usize>>);
@@ -128,7 +128,7 @@ mod tests {
     async fn test_ready() {
         let cnt = Rc::new(Cell::new(0));
         let cnt_sht = Rc::new(Cell::new(0));
-        let srv = svc(Box::new(Srv1(cnt.clone(), cnt_sht.clone())))
+        let srv = service(Box::new(Srv1(cnt.clone(), cnt_sht.clone())))
             .clone()
             .and_then(crate::boxed::service(Srv2(cnt.clone(), cnt_sht.clone())));
         assert!(format!("{srv:?}").contains("AndThen"));
@@ -146,7 +146,7 @@ mod tests {
     async fn test_ready2() {
         let cnt = Rc::new(Cell::new(0));
         let srv = Box::new(
-            svc(Srv1(cnt.clone(), Rc::new(Cell::new(0))))
+            service(Srv1(cnt.clone(), Rc::new(Cell::new(0))))
                 .and_then(Srv2(cnt.clone(), Rc::new(Cell::new(0)))),
         )
         .into_pipeline();
@@ -158,7 +158,7 @@ mod tests {
     #[ntex::test]
     async fn test_call() {
         let cnt = Rc::new(Cell::new(0));
-        let srv = svc(Box::new(Srv1(cnt.clone(), Rc::new(Cell::new(0)))))
+        let srv = service(Box::new(Srv1(cnt.clone(), Rc::new(Cell::new(0)))))
             .and_then(Srv2(cnt, Rc::new(Cell::new(0))))
             .into_pipeline();
         let res = srv.call("srv1").await;
