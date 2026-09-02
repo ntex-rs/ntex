@@ -2,7 +2,7 @@ use std::fmt;
 
 use crate::router::{IntoPattern, ResourceDef};
 use crate::service::dev::{AndThen, ServiceChain, ServiceChainFactory};
-use crate::service::{Ctx, factory, svc};
+use crate::service::{Ctx, factory, service};
 use crate::service::{Identity, IntoServiceFactory, Middleware, Service, ServiceFactory};
 use crate::{http::Response, util::Extensions};
 
@@ -397,7 +397,9 @@ where
     async fn create(&self, cfg: &Cfg) -> Result<Self::Service, Self::InitError> {
         let filter = self.filter.create(cfg).await?;
         let routing = self.routing.create(cfg).await?;
-        Ok(self.middleware.create(svc(filter).and_then(routing), cfg))
+        Ok(self
+            .middleware
+            .create(service(filter).and_then(routing), cfg))
     }
 }
 

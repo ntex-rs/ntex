@@ -18,6 +18,7 @@ pub mod boxed;
 pub mod cfg;
 mod chain;
 mod ctx;
+mod fn_ready;
 mod fn_service;
 mod fn_shutdown;
 mod macros;
@@ -25,6 +26,7 @@ mod map;
 mod map_config;
 mod map_err;
 mod map_init_err;
+mod map_state;
 mod middleware;
 pub mod state;
 mod then;
@@ -36,14 +38,17 @@ mod pl_inner;
 mod pl_state;
 
 pub use crate::apply::{apply_fn, apply_fn_factory};
-pub use crate::chain::{ServiceChain, ServiceChainFactory, factory, factory_no_st, svc};
+pub use crate::chain::{ServiceChain, ServiceChainFactory, factory, factory_no_st, service};
 pub use crate::ctx::Ctx;
 pub use crate::fn_service::{fn_factory, fn_factory_with_config, fn_service, fn_service_st};
-pub use crate::fn_shutdown::fn_shutdown;
 pub use crate::map_config::{map_config, unit_config};
+pub use crate::map_state::map_state;
 pub use crate::middleware::{Identity, Middleware, Stack, apply, fn_layer};
 pub use crate::pipeline::Pipeline;
 pub use crate::state::{RequestState, State};
+
+#[deprecated]
+pub use crate::chain::svc;
 
 #[allow(unused_variables)]
 /// An asynchronous function from a `Request` to a `Response`.
@@ -148,7 +153,7 @@ pub trait Service<St, Req> {
         Self: Sized,
         F: Fn(Self::Res) -> Res,
     {
-        svc(dev::Map::new(f, self))
+        service(dev::Map::new(f, self))
     }
 
     #[inline]
@@ -164,7 +169,7 @@ pub trait Service<St, Req> {
         Self: Sized,
         F: Fn(Self::Error) -> E,
     {
-        svc(dev::MapErr::new(f, self))
+        service(dev::MapErr::new(f, self))
     }
 
     #[inline]
@@ -183,7 +188,7 @@ pub trait Service<St, Req> {
         Next: Service<St, Self::Res, Error = Self::Error>,
         F: IntoService<Next, St, Self::Res>,
     {
-        svc(dev::AndThen::new(self, f.into_service()))
+        service(dev::AndThen::new(self, f.into_service()))
     }
 }
 
@@ -435,6 +440,7 @@ pub mod dev {
     pub use crate::and_then::{AndThen, AndThenFactory};
     pub use crate::apply::{Apply, ApplyCtx, ApplyFactory};
     pub use crate::chain::{ServiceChain, ServiceChainFactory};
+    pub use crate::fn_ready::FnReadiness;
     pub use crate::fn_service::{
         FnService, FnServiceConfig, FnServiceFactory, FnServiceNoConfig, FnServiceSt,
         FnServiceStFactory,
@@ -444,6 +450,7 @@ pub mod dev {
     pub use crate::map_config::{MapConfig, UnitConfig};
     pub use crate::map_err::{MapErr, MapErrFactory};
     pub use crate::map_init_err::MapInitErr;
+    pub use crate::map_state::MapState;
     pub use crate::middleware::{ApplyMiddleware, FnMiddleware};
     pub use crate::then::{Then, ThenFactory};
 }
