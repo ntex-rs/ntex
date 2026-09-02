@@ -1,5 +1,12 @@
 # Changes
 
+## [unreleased]
+
+* Add `schannel` crate feature and wire Windows Schannel into `ClientBuilder`
+  and `http::schannel` without requiring OpenSSL or `ws`
+
+* Allow building without the `ws` feature
+
 ## [4.0.0-beta.2] - 2026-08-29
 
 * Refactor web error rendering

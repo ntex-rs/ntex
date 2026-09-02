@@ -1,9 +1,13 @@
-use std::{io, rc::Rc};
+use std::io;
+#[cfg(feature = "openssl")]
+use std::rc::Rc;
 
 use ntex::io::{Io, types::PeerAddr};
-use ntex::service::{Pipeline, Service, cfg::SharedCfg, svc};
+#[cfg(feature = "openssl")]
+use ntex::server::build_test_server;
+use ntex::service::{Pipeline, cfg::SharedCfg, svc};
 use ntex::{codec::BytesCodec, connect::Connect};
-use ntex::{server::build_test_server, server::test_server, time, util::Bytes};
+use ntex::{server::test_server, time, util::Bytes};
 
 #[cfg(feature = "rustls")]
 mod rustls_utils;
@@ -132,15 +136,16 @@ async fn test_openssl_read_before_error() {
     assert!(io.recv(&BytesCodec).await.unwrap().is_none());
 }
 
-#[cfg(all(windows, feature = "openssl"))]
+#[cfg(all(windows, feature = "schannel"))]
 #[ntex::test]
 async fn test_schannel_string() {
-    use ntex::{io::types::HttpProtocol, server::openssl};
-    use ntex_tls::schannel::{ClientConfig, PeerCert, TlsConnector};
-    use tls_openssl::x509::X509;
+    use ntex::io::types::HttpProtocol;
+    use ntex_tls::schannel::{ClientConfig, PeerCert, ServerConfig, TlsAcceptor, TlsConnector};
 
-    let srv = test_server(async || {
-        svc(openssl::SslAcceptor::new(ssl_acceptor())).and_then(async move |io: Io<_>| {
+    let server = ServerConfig::from_pem(include_str!("cert.pem"), include_str!("key.pem")).unwrap();
+    let cert = server.cert_der();
+    let srv = test_server(async move || {
+        svc(TlsAcceptor::new(server.clone())).and_then(async move |io: Io<_>| {
             let item = io.recv(&BytesCodec).await.unwrap().unwrap();
             io.send(item, &BytesCodec).await.unwrap();
             Ok::<_, io::Error>(())
@@ -157,15 +162,11 @@ async fn test_schannel_string() {
     let addr = format!("localhost:{}", srv.addr().port());
     let io = conn.call(addr.into()).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
-    assert_eq!(
+    assert!(matches!(
         io.query::<HttpProtocol>().get().unwrap(),
-        HttpProtocol::Http1
-    );
-    let cert = X509::from_pem(include_bytes!("cert.pem")).unwrap();
-    assert_eq!(
-        io.query::<PeerCert>().as_ref().unwrap().0,
-        cert.to_der().unwrap()
-    );
+        HttpProtocol::Http1 | HttpProtocol::Http2
+    ));
+    assert_eq!(io.query::<PeerCert>().as_ref().unwrap().0, cert);
     io.send(Bytes::from_static(b"test"), &BytesCodec)
         .await
         .unwrap();

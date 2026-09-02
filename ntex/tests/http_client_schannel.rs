@@ -1,33 +1,16 @@
 #![recursion_limit = "256"]
-#![cfg(all(windows, feature = "openssl"))]
+#![cfg(all(windows, feature = "schannel"))]
 
 use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 
 use ntex::client::Client;
-use ntex::http::{HttpService, Uri, Version, openssl, test::server as test_server};
+use ntex::http::{HttpService, Version, schannel, test::server as test_server};
 use ntex::service::{cfg::SharedCfg, svc};
 use ntex::web::{self, App, HttpResponse};
-use ntex_tls::schannel::{ClientConfig, TlsConnector};
-use tls_openssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod};
+use ntex_tls::schannel::{ClientConfig, ServerConfig, TlsConnector};
 
-fn ssl_acceptor() -> SslAcceptor {
-    let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
-    builder
-        .set_private_key_file("./tests/key.pem", SslFiletype::PEM)
-        .unwrap();
-    builder
-        .set_certificate_chain_file("./tests/cert.pem")
-        .unwrap();
-    builder.set_alpn_select_callback(|_, protos| {
-        const H2: &[u8] = b"\x02h2";
-        if protos.windows(3).any(|window| window == H2) {
-            Ok(b"h2")
-        } else {
-            Err(AlpnError::NOACK)
-        }
-    });
-    builder.set_alpn_protos(b"\x02h2").unwrap();
-    builder.build()
+fn server_config() -> ServerConfig {
+    ServerConfig::from_pem(include_str!("cert.pem"), include_str!("key.pem")).unwrap()
 }
 
 #[ntex::test]
@@ -41,15 +24,15 @@ async fn test_connection_reuse_h2() {
             num2.fetch_add(1, Ordering::Relaxed);
             Ok(io)
         })
-        .and_then(openssl(
-            ssl_acceptor(),
+        .and_then(schannel(
+            server_config(),
             HttpService::h2(
                 App::new().service(web::resource("/").route(web::to(async || HttpResponse::Ok()))),
             ),
         ))
     });
 
-    let tls = TlsConnector::<ntex::connect::Connector<Uri>>::with_config(
+    let tls = TlsConnector::<ntex::connect::Connector<ntex::http::Uri>>::with_config(
         ClientConfig::new().danger_accept_invalid_certs(true),
     );
     let client = Client::builder()
@@ -64,4 +47,17 @@ async fn test_connection_reuse_h2() {
     assert_eq!(response.version(), Version::HTTP_2);
 
     assert_eq!(num.load(Ordering::Relaxed), 1);
+}
+
+#[ntex::test]
+async fn test_schannel_public_https() {
+    let tls = TlsConnector::<ntex::connect::Connector<ntex::http::Uri>>::new();
+    let client = Client::builder()
+        .secure_connector(tls)
+        .build(SharedCfg::default());
+
+    let response = client.get("https://example.com/").send().await.unwrap();
+    assert!(response.status().is_success());
+    let body = response.body().await.unwrap();
+    assert!(!body.is_empty());
 }

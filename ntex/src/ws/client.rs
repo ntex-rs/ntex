@@ -107,6 +107,15 @@ impl<F> WsClient<F> {
     ) -> WsClient<Layer<TlsClientFilter>> {
         self.connector(TlsConnector::from(config))
     }
+
+    #[cfg(all(windows, feature = "schannel"))]
+    /// Use Windows Schannel connector.
+    pub fn schannel(
+        self,
+        config: crate::connect::schannel::ClientConfig,
+    ) -> WsClient<Layer<crate::connect::schannel::SchannelFilter>> {
+        self.connector(crate::connect::schannel::TlsConnector::with_config(config))
+    }
 }
 
 impl<F> WsClient<F>

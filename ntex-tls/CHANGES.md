@@ -1,5 +1,14 @@
 # Changes
 
+## [unreleased]
+
+* Fix Schannel client: drain leftover handshake records, handle TLS 1.3
+  post-handshake messages (`SEC_I_RENEGOTIATE`), send `close_notify` on
+  shutdown, and acquire credentials with `SCH_CREDENTIALS`
+
+* Add Schannel server acceptor (`TlsAcceptor`, `ServerConfig::from_pem`)
+  so Schannel no longer depends on OpenSSL for tests or TLS servers
+
 ## [4.0.0-beta.0] - 2026-08-24
 
 * Migrate to ntex-service 5

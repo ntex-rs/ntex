@@ -2,7 +2,7 @@
 name = "ntex-tls"
 version = "4.0.0-beta.0"
 authors = ["ntex contributors <team@ntex.rs>"]
-description = "An implementation of SSL streams for ntex backed by OpenSSL"
+description = "TLS streams for ntex (OpenSSL, rustls, and Windows Schannel)"
 keywords = ["network", "framework", "async", "futures"]
 homepage = "https://ntex.rs"
 repository = "https://github.com/ntex-rs/ntex.git"
@@ -58,7 +58,7 @@ windows-sys = { workspace = true, optional = true, features = [
 ] }
 
 [dev-dependencies]
-ntex = { workspace = true, features = ["openssl", "rustls"] }
+ntex = { version = "4.0.0-beta.2", default-features = false }
 env_logger = { workspace = true }
 rustls-pemfile = { workspace = true }
 webpki-roots = { workspace = true }

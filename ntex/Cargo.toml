@@ -39,6 +39,9 @@ openssl = ["tls_openssl", "ntex-tls/openssl"]
 # rustls support
 rustls = ["tls_rustls", "webpki-roots", "ntex-tls/rustls"]
 
+# Windows Schannel support
+schannel = ["ntex-tls/schannel"]
+
 # enable compressison support
 compress = ["flate2"]
 
@@ -132,7 +135,6 @@ rand = { workspace = true }
 time = { workspace = true }
 oneshot = { workspace = true }
 futures-util = { workspace = true }
-tls_openssl = { workspace = true }
 tls_rustls = { workspace = true, features = ["ring", "std"] }
 rustls-pemfile = { workspace = true }
 webpki-roots = { workspace = true }

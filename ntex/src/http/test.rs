@@ -338,13 +338,14 @@ impl TestServer {
                 ntex_h2::ServiceConfig::new()
                     .set_max_header_list_size(256 * 1024)
                     .set_max_header_continuation_frames(96),
-            )
-            .add(
-                WsClientConfig::new()
-                    .set_address(addr)
-                    .set_timeout(Seconds(30)),
-            )
-            .build();
+            );
+        #[cfg(feature = "ws")]
+        let cfg = cfg.add(
+            WsClientConfig::new()
+                .set_address(addr)
+                .set_timeout(Seconds(30)),
+        );
+        let cfg = cfg.build();
 
         let client = Self::create_client(cfg.clone());
 
@@ -361,20 +362,21 @@ impl TestServer {
     #[must_use]
     /// Set client timeout
     pub fn set_client_timeout(mut self, timeout: Seconds, connect_timeout: Millis) -> Self {
-        self.cfg = SharedCfg::new("TEST-CLIENT")
+        let cfg = SharedCfg::new("TEST-CLIENT")
             .add(IoConfig::new().set_connect_timeout(connect_timeout))
             .add(TlsConfig::new().set_handshake_timeout(timeout))
             .add(
                 ntex_h2::ServiceConfig::new()
                     .set_max_header_list_size(256 * 1024)
                     .set_max_header_continuation_frames(96),
-            )
-            .add(
-                WsClientConfig::new()
-                    .set_address(self.addr)
-                    .set_timeout(Seconds(30)),
-            )
-            .build();
+            );
+        #[cfg(feature = "ws")]
+        let cfg = cfg.add(
+            WsClientConfig::new()
+                .set_address(self.addr)
+                .set_timeout(Seconds(30)),
+        );
+        self.cfg = cfg.build();
         self.client = Self::create_client(self.cfg.clone());
         self
     }
@@ -490,6 +492,45 @@ impl TestServer {
         WsClient::new(self.url(path), &self.cfg)
             .unwrap()
             .openssl(builder.build())
+            .connect()
+            .await
+    }
+
+    #[cfg(all(
+        windows,
+        feature = "schannel",
+        feature = "ws",
+        not(feature = "openssl")
+    ))]
+    /// Connect to a websocket server
+    pub async fn wss(
+        &self,
+    ) -> Result<
+        WsConnection<crate::io::Layer<crate::connect::schannel::SchannelFilter>>,
+        Error<WsClientError>,
+    > {
+        self.wss_at("/").await
+    }
+
+    #[cfg(all(
+        windows,
+        feature = "schannel",
+        feature = "ws",
+        not(feature = "openssl")
+    ))]
+    /// Connect to secure websocket server at a given path
+    pub async fn wss_at(
+        &self,
+        path: &str,
+    ) -> Result<
+        WsConnection<crate::io::Layer<crate::connect::schannel::SchannelFilter>>,
+        Error<WsClientError>,
+    > {
+        WsClient::new(self.url(path), &self.cfg)
+            .unwrap()
+            .schannel(
+                crate::connect::schannel::ClientConfig::new().danger_accept_invalid_certs(true),
+            )
             .connect()
             .await
     }
