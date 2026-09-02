@@ -58,7 +58,7 @@ windows-sys = { workspace = true, optional = true, features = [
 ] }
 
 [dev-dependencies]
-ntex = { version = "4.0.0-beta.2", default-features = false }
+ntex = { workspace = true, features = ["openssl", "rustls"] }
 env_logger = { workspace = true }
 rustls-pemfile = { workspace = true }
 webpki-roots = { workspace = true }
