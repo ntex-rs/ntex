@@ -268,6 +268,17 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
         })
         .await;
     }
+
+    #[inline]
+    /// Map context state
+    pub fn map_state<NewSt>(&'a self, st: &'a NewSt) -> Ctx<'a, Self, NewSt> {
+        Ctx {
+            st,
+            idx: self.idx,
+            waiters: self.waiters,
+            _t: marker::PhantomData,
+        }
+    }
 }
 
 impl<S, St> Copy for Ctx<'_, S, St> {}

@@ -1,6 +1,6 @@
 use std::io;
 
-use ntex::{SharedCfg, codec, io::Io, server, svc, util::Either};
+use ntex::{SharedCfg, codec, io::Io, server, service, util::Either};
 use ntex_tls::openssl::{PeerCert, PeerCertChain, SslAcceptor};
 use tls_openssl::ssl::{self, SslFiletype, SslMethod, SslVerifyMode};
 
@@ -29,7 +29,7 @@ async fn main() -> io::Result<()> {
             "127.0.0.1:8443",
             SharedCfg::new("S"),
             async move |_| {
-                svc(SslAcceptor::new(acceptor.clone())).and_then(async move |io: Io<_>| {
+                service(SslAcceptor::new(acceptor.clone())).and_then(async move |io: Io<_>| {
                     println!("New client is connected");
                     if let Some(cert) = io.query::<PeerCert>().as_ref() {
                         println!("Peer cert: {:?}", cert.0);

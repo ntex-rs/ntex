@@ -14,7 +14,7 @@ where
     F: AsyncFn(In, &ApplyCtx<'_, S, St, Req>) -> Result<Out, Err>,
     Err: From<S::Error>,
 {
-    crate::svc(Apply::new(service.into_service(), f))
+    crate::service(Apply::new(service.into_service(), f))
 }
 
 /// Service factory that produces `apply_fn` service.
@@ -224,7 +224,7 @@ mod tests {
     use std::{cell::Cell, rc::Rc};
 
     use super::*;
-    use crate::{factory, fn_factory, svc};
+    use crate::{factory, fn_factory, service};
 
     #[derive(Debug, Default, Clone)]
     struct Srv(Rc<Cell<usize>>);
@@ -259,7 +259,7 @@ mod tests {
     #[ntex::test]
     async fn test_call() {
         let cnt_sht = Rc::new(Cell::new(0));
-        let srv = svc(
+        let srv = service(
             apply_fn(Srv(cnt_sht.clone()), async move |req: &'static str, svc| {
                 svc.call(()).await.unwrap();
                 Ok((req, ()))
@@ -281,7 +281,7 @@ mod tests {
     #[ntex::test]
     async fn test_call_svc() {
         let cnt_sht = Rc::new(Cell::new(0));
-        let srv = svc(Srv(cnt_sht.clone()))
+        let srv = service(Srv(cnt_sht.clone()))
             .apply_fn(async move |req: &'static str, svc| {
                 svc.call(()).await.unwrap();
                 Ok((req, ()))

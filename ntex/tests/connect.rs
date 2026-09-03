@@ -3,9 +3,11 @@ use std::io;
 use std::rc::Rc;
 
 use ntex::io::{Io, types::PeerAddr};
+
 #[cfg(feature = "openssl")]
 use ntex::server::build_test_server;
-use ntex::service::{Pipeline, Service, cfg::SharedCfg, svc};
+use ntex::service::{Pipeline, Service, cfg::SharedCfg, service};
+
 use ntex::{codec::BytesCodec, connect::Connect};
 use ntex::{server::test_server, time, util::Bytes};
 
@@ -47,13 +49,15 @@ async fn test_openssl_string() {
             tcp.take().unwrap(),
             SharedCfg::new("SRV"),
             async |_| {
-                svc(openssl::SslAcceptor::new(ssl_acceptor())).and_then(async move |io: Io<_>| {
-                    io.send(Bytes::from_static(b"test"), &BytesCodec)
-                        .await
-                        .unwrap();
-                    assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "test");
-                    Ok::<_, io::Error>(())
-                })
+                service(openssl::SslAcceptor::new(ssl_acceptor())).and_then(
+                    async move |io: Io<_>| {
+                        io.send(Bytes::from_static(b"test"), &BytesCodec)
+                            .await
+                            .unwrap();
+                        assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "test");
+                        Ok::<_, io::Error>(())
+                    },
+                )
             },
         )
         .unwrap()
@@ -108,7 +112,7 @@ async fn test_openssl_read_before_error() {
     use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 
     let srv = test_server(async || {
-        svc(openssl::SslAcceptor::new(ssl_acceptor())).and_then(async move |io: Io<_>| {
+        service(openssl::SslAcceptor::new(ssl_acceptor())).and_then(async move |io: Io<_>| {
             io.send(Bytes::from_static(b"test"), &Rc::new(BytesCodec))
                 .await
                 .unwrap();
@@ -142,10 +146,8 @@ async fn test_schannel_string() {
     use ntex::io::types::HttpProtocol;
     use ntex_tls::schannel::{ClientConfig, PeerCert, ServerConfig, TlsAcceptor, TlsConnector};
 
-    let server = ServerConfig::from_pem(include_str!("cert.pem"), include_str!("key.pem")).unwrap();
-    let cert = server.cert_der();
-    let srv = test_server(async move || {
-        svc(TlsAcceptor::new(server.clone())).and_then(async move |io: Io<_>| {
+    let srv = test_server(async || {
+        service(openssl::SslAcceptor::new(ssl_acceptor())).and_then(async move |io: Io<_>| {
             let item = io.recv(&BytesCodec).await.unwrap().unwrap();
             io.send(item, &BytesCodec).await.unwrap();
             Ok::<_, io::Error>(())
@@ -446,7 +448,7 @@ async fn test_rustls_keyupdate_response_flushed() {
 #[ntex::test]
 async fn test_static_str() {
     let srv = test_server(async || {
-        svc(async move |io: Io| {
+        service(async move |io: Io| {
             io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
                 .unwrap();
@@ -470,7 +472,7 @@ async fn test_static_str() {
 #[ntex::test]
 async fn test_create() {
     let srv = test_server(async || {
-        svc(async move |io: Io| {
+        service(async move |io: Io| {
             io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
                 .unwrap();
@@ -487,7 +489,7 @@ async fn test_create() {
 #[ntex::test]
 async fn test_uri() {
     let srv = test_server(async || {
-        svc(async move |io: Io| {
+        service(async move |io: Io| {
             io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
                 .unwrap();
@@ -532,7 +534,7 @@ async fn test_rustls_uri() {
 
 #[ntex::test]
 async fn basic_connect_service() {
-    let server = ntex::server::test_server(async || svc(async |_| Ok::<_, ()>(())));
+    let server = ntex::server::test_server(async || service(async |_| Ok::<_, ()>(())));
 
     let cfg = ntex::SharedCfg::new("T")
         .add(ntex::io::IoConfig::new().set_connect_timeout(time::Millis(5000)))

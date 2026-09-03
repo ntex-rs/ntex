@@ -200,7 +200,7 @@ mod tests {
     async fn test_pipeline() {
         let srv = Pipeline::with(
             (),
-            crate::svc(Srv(false, Rc::new(Cell::new(0))))
+            crate::service(Srv(false, Rc::new(Cell::new(0))))
                 .map_err(|()| "error")
                 .clone(),
         );

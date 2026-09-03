@@ -155,16 +155,6 @@ pub mod dev {
         patterns
     }
 
-    // #[doc(hidden)]
-    // #[inline(always)]
-    // pub fn __assert_extractor<St, T>()
-    // where
-    //     T: super::FromRequest<St>,
-    //     St: super::AppState,
-    //     <T as super::FromRequest<St>>::Error: Into<St::Error>,
-    // {
-    // }
-
     #[doc(hidden)]
     #[inline]
     pub fn __assert_handler<St, Fun, Res>(f: Fun) -> impl Handler<St, (), Output = Res>

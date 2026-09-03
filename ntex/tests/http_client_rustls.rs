@@ -5,7 +5,7 @@ use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 use ntex::client::Client;
 use ntex::http::{self, HttpService, Version, test::server as test_server};
 use ntex::web::{self, App, HttpResponse};
-use ntex::{SharedCfg, svc};
+use ntex::{SharedCfg, service};
 
 mod rustls_utils;
 
@@ -16,7 +16,7 @@ async fn test_connection_reuse_h2() {
 
     let srv = test_server(async move |_| {
         let num2 = num2.clone();
-        svc(async move |io| {
+        service(async move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
             Ok(io)
         })

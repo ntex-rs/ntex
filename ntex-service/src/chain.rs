@@ -3,6 +3,8 @@ use std::{fmt, marker::PhantomData};
 use crate::and_then::{AndThen, AndThenFactory};
 use crate::apply::{Apply, ApplyCtx, ApplyFactory};
 use crate::ctx::Ctx;
+use crate::fn_ready::FnReadiness;
+use crate::fn_shutdown::FnShutdown;
 use crate::map::{Map, MapFactory};
 use crate::map_err::{MapErr, MapErrFactory};
 use crate::map_init_err::MapInitErr;
@@ -13,6 +15,17 @@ use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 /// Constructs new chain with one service.
 pub fn svc<S, St, Req>(service: impl IntoService<S, St, Req>) -> ServiceChain<S, St, Req>
+where
+    S: Service<St, Req>,
+{
+    ServiceChain {
+        service: service.into_service(),
+        st: PhantomData,
+    }
+}
+
+/// Constructs new chain with one service.
+pub fn service<S, St, Req>(service: impl IntoService<S, St, Req>) -> ServiceChain<S, St, Req>
 where
     S: Service<St, Req>,
 {
@@ -128,9 +141,36 @@ impl<S: Service<St, Req>, St, Req> ServiceChain<S, St, Req> {
         }
     }
 
+    /// Add custom readiness check to the service chain.
+    pub fn readiness<F>(
+        self,
+        ready: F,
+    ) -> ServiceChain<AndThen<S, FnReadiness<F, S::Error>>, St, Req>
+    where
+        Self: Sized,
+        F: AsyncFn(&St) -> Result<(), S::Error>,
+    {
+        ServiceChain {
+            service: AndThen::new(self.service, FnReadiness::new(ready)),
+            st: PhantomData,
+        }
+    }
+
+    /// Add custom readiness check to the service chain.
+    pub fn shutdown<F>(self, sh: F) -> ServiceChain<AndThen<S, FnShutdown<F, S::Error>>, St, Req>
+    where
+        Self: Sized,
+        F: AsyncFnOnce(&St),
+    {
+        ServiceChain {
+            service: AndThen::new(self.service, FnShutdown::new(sh)),
+            st: PhantomData,
+        }
+    }
+
     /// Use function as middleware for current service.
     ///
-    /// Short version of `apply_fn(svc(...), fn)`
+    /// Short version of `apply_fn(service(...), fn)`
     pub fn apply_fn<F, In, Out, Err>(
         self,
         f: F,
@@ -286,6 +326,36 @@ impl<Sf: ServiceFactory<St, Req, Cfg>, St, Req, Cfg> ServiceChainFactory<Sf, St,
     {
         ServiceChainFactory {
             factory: MapInitErr::new(f, self.factory),
+            _t: PhantomData,
+        }
+    }
+
+    /// Add custom readiness check to the service factory.
+    pub fn readiness<F>(
+        self,
+        ready: F,
+    ) -> ServiceChainFactory<AndThenFactory<Sf, FnReadiness<F, Sf::Error>>, St, Req, Cfg>
+    where
+        Self: Sized,
+        F: AsyncFn(&St) -> Result<(), Sf::Error> + Clone,
+    {
+        ServiceChainFactory {
+            factory: AndThenFactory::new(self.factory, FnReadiness::new(ready)),
+            _t: PhantomData,
+        }
+    }
+
+    /// Add custom shutdown callback to the service factory.
+    pub fn shutdown<F>(
+        self,
+        sh: F,
+    ) -> ServiceChainFactory<AndThenFactory<Sf, FnShutdown<F, Sf::Error>>, St, Req, Cfg>
+    where
+        Self: Sized,
+        F: AsyncFnOnce(&St) + Clone,
+    {
+        ServiceChainFactory {
+            factory: AndThenFactory::new(self.factory, FnShutdown::new(sh)),
             _t: PhantomData,
         }
     }
