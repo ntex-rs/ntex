@@ -14,10 +14,10 @@ use super::{NoConfig, Server, ServerAppConfig, ServerBuilder};
 /// Test server builder
 pub struct TestServerBuilder<Cfg, F, Sf, I> {
     id: Uuid,
+    cfg: Cfg,
     factory: F,
     config: SharedCfg,
     client_config: SharedCfg,
-    state: Cfg,
     _t: PhantomData<(Sf, I)>,
 }
 
@@ -31,12 +31,11 @@ impl<Cfg, F, Sf, I> fmt::Debug for TestServerBuilder<Cfg, F, Sf, I> {
     }
 }
 
-impl<Cfg, F, S, I> TestServerBuilder<Cfg, F, S, I>
+impl<F, S, I> TestServerBuilder<NoConfig, F, S, I>
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
-    I: IntoService<S, Cfg::State, Io> + 'static,
-    S: Service<Cfg::State, Io> + 'static,
-    Cfg: ServerAppConfig + Default + 'static,
+    I: IntoService<S, (), Io> + 'static,
+    S: Service<(), Io> + 'static,
 {
     #[must_use]
     /// Create test server builder
@@ -44,9 +43,30 @@ where
         Self {
             factory,
             id: Uuid::now_v7(),
+            cfg: NoConfig,
             config: SharedCfg::new("TEST-SERVER").into(),
             client_config: SharedCfg::new("TEST-CLIENT").into(),
-            state: Cfg::default(),
+            _t: PhantomData,
+        }
+    }
+}
+
+impl<Cfg, F, S, I> TestServerBuilder<Cfg, F, S, I>
+where
+    F: AsyncFn() -> I + Send + Clone + 'static,
+    I: IntoService<S, Cfg::State, Io> + 'static,
+    S: Service<Cfg::State, Io> + 'static,
+    Cfg: ServerAppConfig + 'static,
+{
+    #[must_use]
+    /// Create test server builder with server configuration
+    pub fn with(cfg: Cfg, factory: F) -> Self {
+        Self {
+            cfg,
+            factory,
+            id: Uuid::now_v7(),
+            config: SharedCfg::new("TEST-SERVER").into(),
+            client_config: SharedCfg::new("TEST-CLIENT").into(),
             _t: PhantomData,
         }
     }
@@ -68,21 +88,21 @@ where
     /// Start test server
     pub fn start(self) -> TestServer {
         log::debug!("Starting test server {:?}", self.id);
+        let cfg = self.cfg;
         let config = self.config;
-        let state = self.state;
         let factory = self.factory;
-        let cfg = System::current().config();
+        let sys_cfg = System::current().config();
         let name = System::current().name().to_string();
 
         let (tx, rx) = oneshot::channel();
         // run server in separate thread
         thread::spawn(move || {
-            let sys = System::with_config(&name, cfg);
+            let sys = System::with_config(&name, sys_cfg);
             let tcp = net::TcpListener::bind("127.0.0.1:0").unwrap();
             let local_addr = tcp.local_addr().unwrap();
 
             sys.run(move || {
-                let server = ServerBuilder::new(state)
+                let server = ServerBuilder::new(cfg)
                     .listen("test", tcp, config, async move |_| factory().await)?
                     .workers(1)
                     .disable_signals()
@@ -144,15 +164,16 @@ where
     F: AsyncFn() -> S + Send + Clone + 'static,
     S: Service<(), Io> + 'static,
 {
-    TestServerBuilder::<NoConfig, _, _, _>::new(factory).start()
+    TestServerBuilder::new(factory).start()
 }
 
 /// Start new server with server builder
-pub fn build_test_server<F>(factory: F) -> TestServer
+pub fn build_test_server<Cfg, F>(cfg: Cfg, factory: F) -> TestServer
 where
-    F: AsyncFnOnce(ServerBuilder) -> ServerBuilder + Send + 'static,
+    Cfg: ServerAppConfig,
+    F: AsyncFnOnce(ServerBuilder<Cfg>) -> ServerBuilder<Cfg> + Send + 'static,
 {
-    let cfg = System::current().config();
+    let sys = System::current().config();
     let name = System::current().name().to_string();
 
     let id = Uuid::now_v7();
@@ -162,10 +183,10 @@ where
 
     // run server in separate thread
     thread::spawn(move || {
-        let sys = System::with_config(&name, cfg);
+        let sys = System::with_config(&name, sys);
 
         sys.block_on(async move {
-            let server = factory(super::build())
+            let server = factory(ServerBuilder::new(cfg))
                 .await
                 .workers(1)
                 .disable_signals()

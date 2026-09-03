@@ -1,4 +1,4 @@
-use std::{error, fmt, future::Future, pin::Pin, task::Context, task::Poll};
+use std::{error, fmt, future::Future, io, pin::Pin, task::Context, task::Poll};
 
 /// Combines two different futures, streams, or sinks having the same associated types into a single
 /// type.
@@ -121,6 +121,15 @@ where
         match self.project() {
             Either::Left(x) => x.poll(cx),
             Either::Right(x) => x.poll(cx),
+        }
+    }
+}
+
+impl<E: error::Error> From<Either<E, io::Error>> for io::Error {
+    fn from(err: Either<E, io::Error>) -> Self {
+        match err {
+            Either::Left(e) => io::Error::other(format!("{e:?}")),
+            Either::Right(e) => e,
         }
     }
 }
