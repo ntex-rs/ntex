@@ -92,7 +92,7 @@ where
     type Error = DispatchError;
 
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
-        let (io, st) = req.unpack();
+        let (st, io) = req.unpack();
 
         let svc = self.sf.create(ctx.st()).await.map_err(|e| {
             log::error!("Cannot construct handler service: {e:?}");

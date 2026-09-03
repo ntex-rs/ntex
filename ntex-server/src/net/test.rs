@@ -187,7 +187,7 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 /// Test server controller
 pub struct TestServer {
     id: Uuid,

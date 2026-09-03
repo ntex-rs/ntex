@@ -188,6 +188,17 @@ pub trait Service<St, Req> {
     {
         service(dev::AndThen::new(self, f.into_service()))
     }
+
+    #[inline]
+    /// Wraps it in a container.
+    fn pipeline(self) -> Pipeline<Req, Self::Res, Self::Error>
+    where
+        Self: Sized + 'static,
+        St: Default + 'static,
+        Req: 'static,
+    {
+        Pipeline::new(self)
+    }
 }
 
 /// A factory for creating `Service`s.
