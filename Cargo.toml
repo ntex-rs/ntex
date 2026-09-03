@@ -56,7 +56,7 @@ ntex-util = { path = "ntex-util" }
 ntex-h2 = { git = "https://github.com/ntex-rs/ntex-h2.git", branch = "service-updates" }
 
 [workspace.dependencies]
-ntex = "4.0.0-beta.2"
+ntex = "4.0.0-beta.4"
 ntex-bytes = "1.9.0"
 ntex-codec = "1.2.1"
 ntex-error = "2.5.0"
@@ -69,9 +69,9 @@ ntex-macros = "4.0.0-beta.2"
 ntex-router = "1.0.0"
 ntex-rt = "3.17.1"
 ntex-server = "4.0.0-beta.3"
-ntex-service = "5.0.0-beta.4"
+ntex-service = "5.0.0-beta.6"
 ntex-tls = "4.0.0-beta.0"
-ntex-util = "4.0.0-beta.3"
+ntex-util = "4.0.0-beta.5"
 
 ntex-polling = "3.10.0"
 ntex-io-uring = "0.7.120"

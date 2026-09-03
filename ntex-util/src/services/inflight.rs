@@ -83,7 +83,7 @@ mod tests {
     use std::{cell::Cell, cell::RefCell, rc::Rc, task::Poll, time::Duration};
 
     use async_channel as mpmc;
-    use ntex_service::{Pipeline, apply, fn_factory};
+    use ntex_service::{Pipeline, apply, fn_factory_nocfg};
 
     use super::*;
     use crate::{channel::oneshot, future::lazy};
@@ -163,7 +163,7 @@ mod tests {
         let rx = RefCell::new(Some(rx));
         let sf = apply(
             InFlight::new(1),
-            fn_factory(move || {
+            fn_factory_nocfg(move || {
                 let rx = rx.borrow_mut().take().unwrap();
                 async move { Ok::<_, ()>(SleepService(rx)) }
             }),
@@ -196,7 +196,7 @@ mod tests {
         let rx = RefCell::new(Some(rx));
         let sf = apply(
             InFlight::new(1),
-            fn_factory(move || {
+            fn_factory_nocfg(move || {
                 let rx = rx.borrow_mut().take().unwrap();
                 async move { Ok::<_, ()>(SleepService(rx)) }
             }),

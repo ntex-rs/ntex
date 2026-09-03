@@ -5,9 +5,7 @@ pub use crate::ws::{CloseCode, CloseReason, Frame, Message, WsSink};
 
 use crate::http::{StatusCode, body::BodySize, h1, header};
 use crate::io::{DispatchItem, IoConfig, Reason};
-use crate::service::{
-    Ctx, IntoServiceFactory, Pipeline, Service, ServiceFactory, factory, fn_factory_with_config,
-};
+use crate::service::{Ctx, IntoServiceFactory, Pipeline, Service, ServiceFactory, factory};
 use crate::web::{HttpRequest, HttpResponse};
 use crate::ws::{self, error::HandshakeError, error::WsError, handshake};
 use crate::{SharedCfg, rt, time::Seconds};
@@ -80,7 +78,7 @@ where
 {
     let inner_factory = Rc::new(factory(f.into_factory()).map_err(WsError::Service));
 
-    let factory = fn_factory_with_config(async move |sink: &WsSink| {
+    let factory = crate::service::fn_factory(async move |sink: &WsSink| {
         let srv = inner_factory.create(sink).await?;
 
         Ok::<_, Sf::InitError>(DispatchService {

@@ -23,7 +23,6 @@ mod fn_service;
 mod fn_shutdown;
 mod macros;
 mod map;
-mod map_config;
 mod map_err;
 mod map_init_err;
 mod map_state;
@@ -40,8 +39,7 @@ mod pl_state;
 pub use crate::apply::{apply_fn, apply_fn_factory};
 pub use crate::chain::{ServiceChain, ServiceChainFactory, factory, factory_no_st, service};
 pub use crate::ctx::Ctx;
-pub use crate::fn_service::{fn_factory, fn_factory_with_config, fn_service, fn_service_st};
-pub use crate::map_config::{map_config, unit_config};
+pub use crate::fn_service::{fn_factory, fn_factory_nocfg, fn_service, fn_service_st};
 pub use crate::map_state::map_state;
 pub use crate::middleware::{Identity, Middleware, Stack, apply, fn_layer};
 pub use crate::pipeline::Pipeline;
@@ -441,13 +439,9 @@ pub mod dev {
     pub use crate::apply::{Apply, ApplyCtx, ApplyFactory};
     pub use crate::chain::{ServiceChain, ServiceChainFactory};
     pub use crate::fn_ready::FnReadiness;
-    pub use crate::fn_service::{
-        FnService, FnServiceConfig, FnServiceFactory, FnServiceNoConfig, FnServiceSt,
-        FnServiceStFactory,
-    };
+    pub use crate::fn_service::{FnFactory, FnService, FnServiceSt, FnServiceStFactory};
     pub use crate::fn_shutdown::FnShutdown;
     pub use crate::map::{Map, MapFactory};
-    pub use crate::map_config::{MapConfig, UnitConfig};
     pub use crate::map_err::{MapErr, MapErrFactory};
     pub use crate::map_init_err::MapInitErr;
     pub use crate::map_state::MapState;

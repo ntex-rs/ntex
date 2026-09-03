@@ -224,7 +224,7 @@ mod tests {
     use std::{cell::Cell, rc::Rc};
 
     use super::*;
-    use crate::{factory, fn_factory, service};
+    use crate::{factory, fn_factory, fn_factory_nocfg, service};
 
     #[derive(Debug, Default, Clone)]
     struct Srv(Rc<Cell<usize>>);
@@ -302,16 +302,13 @@ mod tests {
 
     #[ntex::test]
     async fn test_create() {
-        let new_srv = factory(
-            apply_fn_factory(
-                fn_factory(|| async { Ok::<_, ()>(Srv::default()) }),
-                async move |req: &'static str, srv| {
-                    srv.call(()).await.unwrap();
-                    Ok((req, ()))
-                },
-            )
-            .clone(),
-        );
+        let new_srv = factory(apply_fn_factory(
+            fn_factory_nocfg(|| async { Ok::<_, ()>(Srv::default()) }),
+            async move |req: &'static str, srv| {
+                srv.call(()).await.unwrap();
+                Ok((req, ()))
+            },
+        ));
 
         let srv = new_srv.pipeline(&()).await.unwrap();
 
@@ -320,14 +317,12 @@ mod tests {
         let res = srv.call("srv").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv", ()));
-        let _ = format!("{new_srv:?}");
-
         assert_eq!(Err, Err::from(()));
     }
 
     #[ntex::test]
     async fn test_create_chain() {
-        let new_srv = factory(fn_factory(|| async { Ok::<_, ()>(Srv::default()) }))
+        let new_srv = factory(fn_factory(|(): &()| async { Ok::<_, ()>(Srv::default()) }))
             .apply_fn(async move |req: &'static str, srv| {
                 srv.call(()).await.unwrap();
                 Ok((req, ()))
