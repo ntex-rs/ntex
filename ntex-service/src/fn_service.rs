@@ -320,7 +320,7 @@ where
 ///
 /// ```rust
 /// use std::io;
-/// use ntex_service::{factory_no_st, fn_factory_with_config, fn_service, Pipeline, Service, ServiceFactory};
+/// use ntex_service::{factory_no_st, fn_factory, fn_service, Pipeline, Service, ServiceFactory};
 ///
 /// #[ntex::main]
 /// async fn main() -> io::Result<()> {
@@ -332,7 +332,7 @@ where
 ///     });
 ///
 ///     // construct new service with config argument
-///     let srv = Pipeline::new((), factory_no_st(fac).create(&10).await?);
+///     let srv = Pipeline::with((), factory_no_st(fac).create(&10).await?);
 ///
 ///     let result = srv.call(10).await?;
 ///     assert_eq!(result, 100);
@@ -425,7 +425,7 @@ where
 ///
 /// ```rust
 /// use std::io;
-/// use ntex_service::{factory, fn_factory, fn_service, Pipeline, Service, ServiceFactory};
+/// use ntex_service::{factory, fn_factory_nocfg, fn_service, Pipeline, Service, ServiceFactory};
 ///
 /// /// Service that divides two usize values.
 /// async fn div((x, y): (usize, usize)) -> Result<usize, io::Error> {
@@ -439,7 +439,7 @@ where
 /// #[ntex::main]
 /// async fn main() -> io::Result<()> {
 ///     // Create service factory that produces `div` services
-///     let fac = fn_factory_nocfg::<(), _, _, _>(async || {
+///     let fac = fn_factory_nocfg::<(), _, _, _, _, _>(async || {
 ///         Ok::<_, io::Error>(fn_service(div))
 ///     });
 ///
