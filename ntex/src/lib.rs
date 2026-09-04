@@ -43,6 +43,7 @@ pub use self::service::{
     cfg::SharedCfg, factory, fn_service, pipeline::Pipeline, pipeline::PipelineBinding,
     pipeline::PipelineFactory, service,
 };
+pub use ntex_error::Error;
 
 pub use ntex_util::{channel, task};
 

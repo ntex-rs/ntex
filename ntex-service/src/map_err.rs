@@ -213,9 +213,9 @@ mod tests {
 
     #[ntex::test]
     async fn test_factory() {
-        let new_srv = fn_factory(|| async { Ok::<_, ()>(Srv(false, Rc::new(Cell::new(0)))) })
-            .map_err(|()| "error")
-            .clone();
+        let new_srv =
+            crate::fn_factory_nocfg(|| async { Ok::<_, ()>(Srv(false, Rc::new(Cell::new(0)))) })
+                .map_err(|()| "error");
         let srv = Pipeline::with((), new_srv.create(&()).await.unwrap());
         let res = srv.call(()).await;
         assert!(res.is_err());
@@ -225,11 +225,10 @@ mod tests {
 
     #[ntex::test]
     async fn test_pipeline_factory() {
-        let new_srv = crate::factory(fn_factory(|| async {
-            Ok::<Srv, ()>(Srv(false, Rc::new(Cell::new(0))))
-        }))
-        .map_err(|()| "error")
-        .clone();
+        let new_srv =
+            fn_factory(|(): &()| async move { Ok::<Srv, ()>(Srv(false, Rc::new(Cell::new(0)))) })
+                .map_err(|()| "error")
+                .clone();
         let srv = Pipeline::with((), new_srv.create(&()).await.unwrap());
         let res = srv.call(()).await;
         assert!(res.is_err());

@@ -147,7 +147,7 @@ where
 mod tests {
     use std::time::Duration;
 
-    use ntex_service::{Pipeline, apply, fn_factory};
+    use ntex_service::{Pipeline, apply, fn_factory_nocfg};
 
     use super::*;
 
@@ -214,7 +214,7 @@ mod tests {
 
         let timeout = apply(
             Timeout::new(resolution).clone(),
-            fn_factory(async move || Ok::<_, ()>(SleepService(wait_time))),
+            fn_factory_nocfg(async move || Ok::<_, ()>(SleepService(wait_time))),
         );
         let srv = timeout.pipeline(&()).await.unwrap();
 

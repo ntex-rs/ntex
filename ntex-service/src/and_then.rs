@@ -170,11 +170,11 @@ mod tests {
     async fn test_factory() {
         let cnt = Rc::new(Cell::new(0));
         let cnt2 = cnt.clone();
-        let new_srv = factory(fn_factory(move || {
+        let new_srv = factory(fn_factory(move |(): &()| {
             let cnt = cnt2.clone();
             async move { Ok::<_, ()>(Srv1(cnt, Rc::new(Cell::new(0)))) }
         }))
-        .and_then(fn_factory(move || {
+        .and_then(fn_factory(move |(): &()| {
             let cnt = cnt.clone();
             async move { Ok(Srv2(cnt.clone(), Rc::new(Cell::new(0)))) }
         }))

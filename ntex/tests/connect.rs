@@ -6,10 +6,10 @@ use ntex::io::{Io, types::PeerAddr};
 
 #[cfg(feature = "openssl")]
 use ntex::server::build_test_server;
-use ntex::service::{Pipeline, Service, cfg::SharedCfg, service};
 
-use ntex::{codec::BytesCodec, connect::Connect};
-use ntex::{server::test_server, time, util::Bytes};
+use ntex::server::{NoConfig, build_test_server, test_server};
+use ntex::service::{Pipeline, Service, cfg::SharedCfg, service};
+use ntex::{codec::BytesCodec, connect::Connect, time, util::Bytes};
 
 #[cfg(feature = "rustls")]
 mod rustls_utils;
@@ -43,7 +43,7 @@ async fn test_openssl_string() {
     let local_addr = tcp.local_addr().unwrap();
 
     let mut tcp = Some(tcp);
-    let srv = build_test_server(async move |srv| {
+    let srv = build_test_server(NoConfig, async move |srv| {
         srv.listen(
             "test",
             tcp.take().unwrap(),

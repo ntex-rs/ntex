@@ -250,7 +250,7 @@ where
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unused_async_trait_impl)]
-    use ntex_service::{Pipeline, apply, fn_factory};
+    use ntex_service::{Pipeline, apply, fn_factory_nocfg};
     use std::{rc::Rc, time::Duration};
 
     use super::*;
@@ -367,7 +367,7 @@ mod tests {
 
         let srv = apply(
             Buffer::default().buf_size(2),
-            fn_factory(async move || Ok::<_, ()>(TestService(inner2.clone()))),
+            fn_factory_nocfg(async move || Ok::<_, ()>(TestService(inner2.clone()))),
         );
 
         let srv = srv.pipeline(&()).await.unwrap();
@@ -416,7 +416,7 @@ mod tests {
 
         let srv = apply(
             Buffer::default().buf_size(2),
-            fn_factory(async move || Ok::<_, ()>(TestService(inner2.clone()))),
+            fn_factory_nocfg(async move || Ok::<_, ()>(TestService(inner2.clone()))),
         );
 
         let srv = srv.pipeline(&()).await.unwrap();
