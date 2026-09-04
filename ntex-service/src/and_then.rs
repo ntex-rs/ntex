@@ -56,10 +56,10 @@ impl<A, B> AndThenFactory<A, B> {
     }
 }
 
-impl<A, B, St, Req, Cfg> ServiceFactory<St, Req, Cfg> for AndThenFactory<A, B>
+impl<A, B, St, Req> ServiceFactory<St, Req> for AndThenFactory<A, B>
 where
-    A: ServiceFactory<St, Req, Cfg>,
-    B: ServiceFactory<St, A::Res, Cfg, Error = A::Error, InitError = A::InitError>,
+    A: ServiceFactory<St, Req>,
+    B: ServiceFactory<St, A::Res, Error = A::Error, InitError = A::InitError>,
 {
     type Res = B::Res;
     type Error = A::Error;
@@ -68,10 +68,10 @@ where
     type InitError = A::InitError;
 
     #[inline]
-    async fn create(&self, cfg: &Cfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, st: &St) -> Result<Self::Service, Self::InitError> {
         Ok(AndThen {
-            svc1: self.svc1.create(cfg).await?,
-            svc2: self.svc2.create(cfg).await?,
+            svc1: self.svc1.create(st).await?,
+            svc2: self.svc2.create(st).await?,
         })
     }
 }
@@ -133,7 +133,7 @@ mod tests {
             .and_then(crate::boxed::service(Srv2(cnt.clone(), cnt_sht.clone())));
         assert!(format!("{srv:?}").contains("AndThen"));
 
-        let srv = srv.into_pipeline();
+        let srv = srv.pipeline(());
         let res = srv.ready().await;
         assert_eq!(res, Ok(()));
         assert_eq!(cnt.get(), 2);
@@ -149,7 +149,7 @@ mod tests {
             service(Srv1(cnt.clone(), Rc::new(Cell::new(0))))
                 .and_then(Srv2(cnt.clone(), Rc::new(Cell::new(0)))),
         )
-        .into_pipeline();
+        .pipeline(());
         let res = srv.ready().await;
         assert_eq!(res, Ok(()));
         assert_eq!(cnt.get(), 2);
@@ -160,7 +160,7 @@ mod tests {
         let cnt = Rc::new(Cell::new(0));
         let srv = service(Box::new(Srv1(cnt.clone(), Rc::new(Cell::new(0)))))
             .and_then(Srv2(cnt, Rc::new(Cell::new(0))))
-            .into_pipeline();
+            .pipeline(());
         let res = srv.call("srv1").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "srv2"));
@@ -180,7 +180,7 @@ mod tests {
         }))
         .clone();
 
-        let srv = new_srv.pipeline(&()).await.unwrap();
+        let srv = new_srv.pipeline(()).await.unwrap();
         let res = srv.call("srv1").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "srv2"));

@@ -54,14 +54,14 @@ impl<St: AppState> Default for Route<St> {
     }
 }
 
-impl<St: AppState, Cfg> ServiceFactory<St, WebRequest, Cfg> for Route<St> {
+impl<St: AppState> ServiceFactory<St, WebRequest> for Route<St> {
     type Res = WebResponse;
     type Error = St::Error;
 
     type Service = RouteService<St>;
     type InitError = Box<dyn Error>;
 
-    async fn create(&self, _: &Cfg) -> Result<RouteService<St>, Self::InitError> {
+    async fn create(&self, _: &St) -> Result<RouteService<St>, Self::InitError> {
         Ok(self.service())
     }
 }
@@ -272,7 +272,7 @@ mod tests {
     use crate::time::{Millis, sleep};
     use crate::web::test::{TestRequest, call_service, init_service, read_body};
     use crate::web::{self, App, HttpResponse, error, guard};
-    use crate::{ServiceFactory, SharedCfg, util::Bytes};
+    use crate::{ServiceFactory, util::Bytes};
 
     #[derive(serde::Serialize, PartialEq, Debug)]
     struct MyObject {
@@ -374,7 +374,7 @@ mod tests {
         assert!(repr.contains("methods: [GET]"), "{}", repr);
         assert!(repr.contains("guards: AllGuard()"), "{}", repr);
 
-        assert!(route.create(&SharedCfg::default()).await.is_ok());
+        assert!(route.create(&()).await.is_ok());
 
         let route_service = route.service();
         let repr = format!("{route_service:?}");

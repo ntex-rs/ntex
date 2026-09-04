@@ -20,31 +20,30 @@ type Guards = Vec<Box<dyn Guard>>;
 /// It also executes state factories.
 #[derive(derive_more::Debug)]
 #[debug("AppFactory")]
-pub struct AppFactory<St, Cfg, M, F>
+pub struct AppFactory<St, M, F>
 where
     St: AppState,
-    F: ServiceFactory<St, WebRequest, Cfg, Res = WebRequest, Error = St::Error, InitError = ()>,
+    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ()>,
 {
     middleware: M,
-    filter: ServiceChainFactory<F, St, WebRequest, Cfg>,
+    filter: ServiceChainFactory<F, St, WebRequest>,
     rmap: Rc<ResourceMap>,
-    router: Rc<Router<HttpService<St, Cfg>, Guards>>,
-    default: HttpService<St, Cfg>,
+    router: Rc<Router<HttpService<St>, Guards>>,
+    default: HttpService<St>,
 }
 
-impl<St, Cfg, M, F> AppFactory<St, Cfg, M, F>
+impl<St, M, F> AppFactory<St, M, F>
 where
     St: AppState,
-    Cfg: Clone + 'static,
-    M: Middleware<AppRouter<St, Cfg, F::Service>, St, Cfg> + 'static,
+    M: Middleware<AppRouter<St, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
-    F: ServiceFactory<St, WebRequest, Cfg, Res = WebRequest, Error = St::Error, InitError = ()>,
+    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ()>,
 {
     pub(super) fn new(
         middleware: M,
-        filter: ServiceChainFactory<F, St, WebRequest, Cfg>,
-        services: Vec<Box<dyn AppServiceFactory<St, Cfg>>>,
-        default: Option<HttpService<St, Cfg>>,
+        filter: ServiceChainFactory<F, St, WebRequest>,
+        services: Vec<Box<dyn AppServiceFactory<St>>>,
+        default: Option<HttpService<St>>,
         external: Vec<ResourceDef>,
         case_insensitive: bool,
     ) -> Self {
@@ -105,13 +104,12 @@ where
     }
 }
 
-impl<St, Cfg, M, F> ServiceFactory<St, Request, Cfg> for AppFactory<St, Cfg, M, F>
+impl<St, M, F> ServiceFactory<St, Request> for AppFactory<St, M, F>
 where
     St: AppState,
-    Cfg: Clone + 'static,
-    M: Middleware<AppRouter<St, Cfg, F::Service>, St, Cfg> + 'static,
+    M: Middleware<AppRouter<St, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
-    F: ServiceFactory<St, WebRequest, Cfg, Res = WebRequest, Error = St::Error, InitError = ()>,
+    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ()>,
 {
     type Res = WebResponse;
     type Error = St::Error;
@@ -119,23 +117,22 @@ where
     type Service = AppService<M::Service, St>;
     type InitError = AppInitError;
 
-    async fn create(&self, cfg: &Cfg) -> Result<Self::Service, Self::InitError> {
-        let filter = self.filter.create(cfg).await.map_err(|e| {
+    async fn create(&self, st: &St) -> Result<Self::Service, Self::InitError> {
+        let filter = self.filter.create(st).await.map_err(|e| {
             log::error!("Cannot construct app filter: {e:?}");
             AppInitError
         })?;
 
         // main service
         let service = self.middleware.create(
+            st,
             AppRouter {
                 filter,
-                cfg: cfg.clone(),
                 router: self.router.clone(),
                 default: self.default.clone(),
                 cache: RefCell::new(HashMap::default()),
                 cache_default: RefCell::new(None),
             },
-            cfg,
         );
 
         Ok(AppService {
@@ -195,16 +192,15 @@ where
 /// Web app service.
 #[derive(derive_more::Debug)]
 #[debug("HttpRouter")]
-pub struct AppRouter<St: AppState, Cfg, F> {
-    pub(super) cfg: Cfg,
+pub struct AppRouter<St: AppState, F> {
     pub(super) filter: F,
-    pub(super) router: Rc<Router<HttpService<St, Cfg>, Guards>>,
-    pub(super) default: HttpService<St, Cfg>,
+    pub(super) router: Rc<Router<HttpService<St>, Guards>>,
+    pub(super) default: HttpService<St>,
     pub(super) cache: RefCell<HashMap<ResourceId, HttpHandler<St>>>,
     pub(super) cache_default: RefCell<Option<HttpHandler<St>>>,
 }
 
-impl<St, Cfg, F> Service<St, WebRequest> for AppRouter<St, Cfg, F>
+impl<St, F> Service<St, WebRequest> for AppRouter<St, F>
 where
     St: AppState,
     F: Service<St, WebRequest, Res = WebRequest, Error = St::Error>,
@@ -237,7 +233,7 @@ where
         let svc = if let Some((sf, id)) = res {
             if let Some(svc) = self.cache.borrow().get(&id) {
                 svc.clone()
-            } else if let Ok(svc) = sf.create(&self.cfg).await {
+            } else if let Ok(svc) = sf.create(ctx.st()).await {
                 self.cache.borrow_mut().insert(id, svc.clone());
                 svc
             } else {
@@ -246,7 +242,7 @@ where
         } else {
             if let Some(svc) = &*self.cache_default.borrow() {
                 svc.clone()
-            } else if let Ok(svc) = self.default.create(&self.cfg).await {
+            } else if let Ok(svc) = self.default.create(ctx.st()).await {
                 *self.cache_default.borrow_mut() = Some(svc.clone());
                 svc
             } else {

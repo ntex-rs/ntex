@@ -40,20 +40,20 @@ type ResourcePipeline<St, F> = ServiceChain<AndThen<F, ResourceRouter<St>>, St, 
 /// Default behavior could be overriden with `default_resource()` method.
 #[derive(derive_more::Debug)]
 #[debug("Resource({rdef:?})")]
-pub struct Resource<St: AppState, Cfg = (), M = Identity, F = Filter<St>> {
+pub struct Resource<St: AppState, M = Identity, F = Filter<St>> {
     middleware: M,
-    filter: ServiceChainFactory<F, St, WebRequest, Cfg>,
+    filter: ServiceChainFactory<F, St, WebRequest>,
     rdef: Vec<String>,
     name: Option<String>,
     routes: Vec<Route<St>>,
     state: Option<Extensions>,
     guards: Vec<Box<dyn Guard>>,
-    default: Option<HttpService<St, Cfg>>,
+    default: Option<HttpService<St>>,
 }
 
-impl<St: AppState, Cfg> Resource<St, Cfg> {
+impl<St: AppState> Resource<St> {
     #[allow(clippy::needless_pass_by_value)]
-    pub fn new<T: IntoPattern>(path: T) -> Resource<St, Cfg> {
+    pub fn new<T: IntoPattern>(path: T) -> Resource<St> {
         Resource {
             routes: Vec::new(),
             rdef: path.patterns(),
@@ -67,11 +67,10 @@ impl<St: AppState, Cfg> Resource<St, Cfg> {
     }
 }
 
-impl<St, Cfg, M, Sf> Resource<St, Cfg, M, Sf>
+impl<St, M, Sf> Resource<St, M, Sf>
 where
     St: AppState,
-    Cfg: Clone + 'static,
-    Sf: ServiceFactory<St, WebRequest, Cfg, Res = WebRequest, Error = St::Error, InitError = ()>,
+    Sf: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ()>,
 {
     #[must_use]
     /// Set resource name.
@@ -236,15 +235,14 @@ where
     /// This is similar to `App's` filters, but filter get invoked on resource level.
     pub fn filter<U>(
         self,
-        filter: impl IntoServiceFactory<U, St, WebRequest, Cfg>,
+        filter: impl IntoServiceFactory<U, St, WebRequest>,
     ) -> Resource<
         St,
-        Cfg,
         M,
-        impl ServiceFactory<St, WebRequest, Cfg, Res = WebRequest, Error = St::Error, InitError = ()>,
+        impl ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ()>,
     >
     where
-        U: ServiceFactory<St, WebRequest, Cfg, Res = WebRequest, Error = St::Error>,
+        U: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error>,
     {
         Resource {
             filter: self
@@ -266,7 +264,7 @@ where
     /// This is similar to `App's` middlewares, but middleware get invoked on resource level.
     /// Resource level middlewares are not allowed to change response
     /// type (i.e modify response's body).
-    pub fn middleware<U>(self, mw: U) -> Resource<St, Cfg, WebStack<St, M, U>, Sf> {
+    pub fn middleware<U>(self, mw: U) -> Resource<St, WebStack<St, M, U>, Sf> {
         Resource {
             middleware: WebStack::new(self.middleware, mw),
             filter: self.filter,
@@ -284,9 +282,9 @@ where
     ///
     /// By default *405* response get returned. Resource does not use
     /// default handler from `App` or `Scope`.
-    pub fn default_service<S>(mut self, f: impl IntoServiceFactory<S, St, WebRequest, Cfg>) -> Self
+    pub fn default_service<S>(mut self, f: impl IntoServiceFactory<S, St, WebRequest>) -> Self
     where
-        S: ServiceFactory<St, WebRequest, Cfg, Res = WebResponse, Error = St::Error> + 'static,
+        S: ServiceFactory<St, WebRequest, Res = WebResponse, Error = St::Error> + 'static,
         S::InitError: fmt::Debug,
     {
         // create and configure default resource
@@ -298,16 +296,15 @@ where
     }
 }
 
-impl<St, Cfg, M, Sf> WebServiceFactory<St, Cfg> for Resource<St, Cfg, M, Sf>
+impl<St, M, Sf> WebServiceFactory<St> for Resource<St, M, Sf>
 where
     St: AppState,
-    Cfg: Clone + 'static,
-    Sf: ServiceFactory<St, WebRequest, Cfg, Res = WebRequest, Error = St::Error, InitError = ()>
+    Sf: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ()>
         + 'static,
-    M: Middleware<ResourcePipeline<St, Sf::Service>, St, Cfg> + 'static,
+    M: Middleware<ResourcePipeline<St, Sf::Service>, St> + 'static,
     M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
 {
-    fn register(mut self, config: &mut WebServiceConfig<St, Cfg>) {
+    fn register(mut self, config: &mut WebServiceConfig<St>) {
         let guards = if self.guards.is_empty() {
             None
         } else {
@@ -340,24 +337,22 @@ where
     }
 }
 
-impl<St, Cfg, M, Sf>
+impl<St, M, Sf>
     IntoServiceFactory<
-        ResourceServiceFactory<St, Cfg, M, ServiceChainFactory<Sf, St, WebRequest, Cfg>>,
+        ResourceServiceFactory<St, M, ServiceChainFactory<Sf, St, WebRequest>>,
         St,
         WebRequest,
-        Cfg,
-    > for Resource<St, Cfg, M, Sf>
+    > for Resource<St, M, Sf>
 where
     St: AppState,
-    Cfg: Clone + 'static,
-    Sf: ServiceFactory<St, WebRequest, Cfg, Res = WebRequest, Error = St::Error, InitError = ()>
+    Sf: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ()>
         + 'static,
-    M: Middleware<ResourcePipeline<St, Sf::Service>, St, Cfg> + 'static,
+    M: Middleware<ResourcePipeline<St, Sf::Service>, St> + 'static,
     M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
 {
     fn into_factory(
         mut self,
-    ) -> ResourceServiceFactory<St, Cfg, M, ServiceChainFactory<Sf, St, WebRequest, Cfg>> {
+    ) -> ResourceServiceFactory<St, M, ServiceChainFactory<Sf, St, WebRequest>> {
         let router_factory = ResourceRouterFactory {
             routes: self.routes,
             default: self.default.take(),
@@ -374,18 +369,18 @@ where
 /// Resource service
 #[derive(derive_more::Debug)]
 #[debug("ResourceServiceFactory")]
-pub struct ResourceServiceFactory<St: AppState, Cfg, M, F> {
+pub struct ResourceServiceFactory<St: AppState, M, F> {
     middleware: M,
     filter: F,
-    routing: ResourceRouterFactory<St, Cfg>,
+    routing: ResourceRouterFactory<St>,
 }
 
-impl<St, Cfg, M, F> ServiceFactory<St, WebRequest, Cfg> for ResourceServiceFactory<St, Cfg, M, F>
+impl<St, M, F> ServiceFactory<St, WebRequest> for ResourceServiceFactory<St, M, F>
 where
     St: AppState,
-    M: Middleware<ResourcePipeline<St, F::Service>, St, Cfg> + 'static,
+    M: Middleware<ResourcePipeline<St, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
-    F: ServiceFactory<St, WebRequest, Cfg, Res = WebRequest, Error = St::Error, InitError = ()>
+    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ()>
         + 'static,
 {
     type Res = WebResponse;
@@ -394,21 +389,21 @@ where
     type Service = M::Service;
     type InitError = ();
 
-    async fn create(&self, cfg: &Cfg) -> Result<Self::Service, Self::InitError> {
-        let filter = self.filter.create(cfg).await?;
-        let routing = self.routing.create(cfg).await?;
+    async fn create(&self, st: &St) -> Result<Self::Service, Self::InitError> {
+        let filter = self.filter.create(st).await?;
+        let routing = self.routing.create(st).await?;
         Ok(self
             .middleware
-            .create(service(filter).and_then(routing), cfg))
+            .create(st, service(filter).and_then(routing)))
     }
 }
 
-struct ResourceRouterFactory<St: AppState, Cfg> {
+struct ResourceRouterFactory<St: AppState> {
     routes: Vec<Route<St>>,
-    default: Option<HttpService<St, Cfg>>,
+    default: Option<HttpService<St>>,
 }
 
-impl<St, Cfg> ServiceFactory<St, WebRequest, Cfg> for ResourceRouterFactory<St, Cfg>
+impl<St> ServiceFactory<St, WebRequest> for ResourceRouterFactory<St>
 where
     St: AppState,
 {
@@ -418,9 +413,9 @@ where
     type Service = ResourceRouter<St>;
     type InitError = ();
 
-    async fn create(&self, cfg: &Cfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, st: &St) -> Result<Self::Service, Self::InitError> {
         let default = if let Some(ref default) = self.default {
-            Some(default.create(cfg).await?)
+            Some(default.create(st).await?)
         } else {
             None
         };

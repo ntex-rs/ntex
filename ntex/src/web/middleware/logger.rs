@@ -113,10 +113,10 @@ impl Default for Logger {
     }
 }
 
-impl<S, St, Cfg> Middleware<S, St, Cfg> for Logger {
+impl<S, St> Middleware<S, St> for Logger {
     type Service = LoggerMiddleware<S>;
 
-    fn create(&self, service: S, _: &Cfg) -> Self::Service {
+    fn create(&self, _: &St, service: S) -> Self::Service {
         LoggerMiddleware {
             service,
             inner: self.inner.clone(),
@@ -399,7 +399,7 @@ mod tests {
     use super::*;
     use crate::http::{StatusCode, header};
     use crate::web::{WebError, test, test::TestRequest};
-    use crate::{SharedCfg, fn_service, service::Pipeline, util::lazy};
+    use crate::{fn_service, service::Pipeline, util::lazy};
 
     #[crate::rt_test]
     async fn test_logger() {
@@ -416,10 +416,7 @@ mod tests {
         let logger =
             Logger::new("%% %{User-Agent}i %{X-Test}o %{HOME}e %D %% test").exclude("/test");
 
-        let srv = Pipeline::with(
-            (),
-            Middleware::<_, (), _>::create(&logger, srv, &SharedCfg::default()),
-        );
+        let srv = Pipeline::new((), Middleware::create(&logger, &(), srv));
         assert!(lazy(|cx| srv.poll_ready(cx).is_ready()).await);
         assert!(lazy(|cx| srv.poll_shutdown(cx).is_ready()).await);
 

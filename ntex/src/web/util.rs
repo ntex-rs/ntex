@@ -47,7 +47,7 @@ use super::{AppState, HttpResponse, HttpResponseBuilder, WebResponseError};
 ///         .route(web::head().to(async || { web::HttpResponse::MethodNotAllowed() }))
 /// );
 /// ```
-pub fn resource<St: AppState, Cfg, T: IntoPattern>(path: T) -> Resource<St, Cfg> {
+pub fn resource<St: AppState, T: IntoPattern>(path: T) -> Resource<St> {
     Resource::new(path)
 }
 
@@ -72,7 +72,7 @@ pub fn resource<St: AppState, Cfg, T: IntoPattern>(path: T) -> Resource<St, Cfg>
 ///  * `/{project_id}/path2`
 ///  * `/{project_id}/path3`
 ///
-pub fn scope<St: AppState, Cfg, T: IntoPattern>(path: T) -> Scope<St, Cfg> {
+pub fn scope<St: AppState, T: IntoPattern>(path: T) -> Scope<St> {
     Scope::new(path)
 }
 
@@ -299,8 +299,8 @@ where
 pub fn server<F, I, Sf>(factory: F) -> HttpServer<NoConfig, F, I, Sf>
 where
     F: AsyncFn(&()) -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<Sf, (), Request, ()>,
-    Sf: ServiceFactory<(), Request, ()> + 'static,
+    I: IntoServiceFactory<Sf, (), Request>,
+    Sf: ServiceFactory<(), Request> + 'static,
     Sf::Res: Into<Response>,
     Sf::Error: ResponseError,
     Sf::InitError: Error,

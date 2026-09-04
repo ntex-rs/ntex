@@ -127,8 +127,8 @@ pub use self::util::*;
 use crate::service::boxed::{BoxService, BoxServiceFactory};
 
 pub(crate) type HttpHandler<St: AppState> = BoxService<St, WebRequest, WebResponse, St::Error>;
-pub(crate) type HttpService<St: AppState, Cfg> =
-    BoxServiceFactory<St, WebRequest, WebResponse, St::Error, Cfg, ()>;
+pub(crate) type HttpService<St: AppState> =
+    BoxServiceFactory<St, WebRequest, WebResponse, St::Error, ()>;
 
 pub mod dev {
     //! The `ntex::web` prelude for library developers

@@ -55,16 +55,10 @@ impl<A, B> ThenFactory<A, B> {
     }
 }
 
-impl<A, B, St, Req, Cfg> ServiceFactory<St, Req, Cfg> for ThenFactory<A, B>
+impl<A, B, St, Req> ServiceFactory<St, Req> for ThenFactory<A, B>
 where
-    A: ServiceFactory<St, Req, Cfg>,
-    B: ServiceFactory<
-            St,
-            Result<A::Res, A::Error>,
-            Cfg,
-            Error = A::Error,
-            InitError = A::InitError,
-        >,
+    A: ServiceFactory<St, Req>,
+    B: ServiceFactory<St, Result<A::Res, A::Error>, Error = A::Error, InitError = A::InitError>,
 {
     type Res = B::Res;
     type Error = A::Error;
@@ -72,10 +66,10 @@ where
     type Service = Then<A::Service, B::Service>;
     type InitError = A::InitError;
 
-    async fn create(&self, cfg: &Cfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, st: &St) -> Result<Self::Service, Self::InitError> {
         Ok(Then {
-            svc1: self.svc1.create(cfg).await?,
-            svc2: self.svc2.create(cfg).await?,
+            svc1: self.svc1.create(st).await?,
+            svc2: self.svc2.create(st).await?,
         })
     }
 }
@@ -148,7 +142,7 @@ mod tests {
         let cnt_sht = Rc::new(Cell::new(0));
         let srv = service(Srv1(cnt.clone(), cnt_sht.clone()))
             .then(Srv2(cnt.clone(), cnt_sht.clone()))
-            .into_pipeline();
+            .pipeline(());
         let res = srv.ready().await;
         assert_eq!(res, Ok(()));
         assert_eq!(cnt.get(), 2);
@@ -163,7 +157,7 @@ mod tests {
         let srv = service(Srv1(cnt.clone(), Rc::new(Cell::new(0))))
             .then(Srv2(cnt, Rc::new(Cell::new(0))))
             .clone()
-            .into_pipeline();
+            .pipeline(());
 
         let res = srv.call(Ok("srv1")).await;
         assert!(res.is_ok());
@@ -188,7 +182,7 @@ mod tests {
                 async move { Ok(Srv2(cnt.clone(), Rc::new(Cell::new(0)))) }
             }))
             .clone();
-        let srv = factory.pipeline(&()).await.unwrap();
+        let srv = factory.pipeline(()).await.unwrap();
         let res = srv.call(Ok("srv1")).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "ok"));

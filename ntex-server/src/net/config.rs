@@ -223,7 +223,7 @@ impl<Cfg: Clone + 'static> ServiceRuntime<Cfg> {
             for token in &mut entry.tokens {
                 token.1 = shared.clone();
             }
-            let pipeline = Pipeline::with(
+            let pipeline = Pipeline::new(
                 self.0.clone(),
                 svc.into_service().map(|_| ()).map_err(|_| ()),
             );

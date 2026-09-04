@@ -70,7 +70,7 @@ impl WsClient<Base> {
             uri,
             cfg,
             http_cfg: shared.get(),
-            connector: Pipeline::with(shared, Connector::<Uri>::new()),
+            connector: Pipeline::new(shared, Connector::<Uri>::new()),
             filter: marker::PhantomData,
         })
     }
@@ -88,7 +88,7 @@ impl<F> WsClient<F> {
             uri: self.uri,
             cfg: self.cfg,
             http_cfg: self.http_cfg,
-            connector: Pipeline::with(shared, f.into_service()),
+            connector: Pipeline::new(shared, f.into_service()),
             filter: marker::PhantomData,
         }
     }
@@ -380,7 +380,7 @@ impl WsConnection<Sealed> {
             },
         );
 
-        Dispatcher::new(self.io, self.codec, Pipeline::with((), service)).await
+        Dispatcher::new(self.io, self.codec, Pipeline::new((), service)).await
     }
 }
 

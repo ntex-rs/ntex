@@ -88,10 +88,10 @@ impl DefaultHeaders {
     }
 }
 
-impl<S, St, Cfg> Middleware<S, St, Cfg> for DefaultHeaders {
+impl<S, St> Middleware<S, St> for DefaultHeaders {
     type Service = DefaultHeadersMiddleware<S>;
 
-    fn create(&self, service: S, _: &Cfg) -> Self::Service {
+    fn create(&self, _: &St, service: S) -> Self::Service {
         DefaultHeadersMiddleware {
             service,
             inner: self.inner.clone(),
@@ -139,19 +139,18 @@ where
 #[allow(unused_must_use)]
 mod tests {
     use super::*;
-    use crate::service::{Pipeline, cfg::SharedCfg, fn_service};
-    use crate::util::lazy;
     use crate::web::test::{TestRequest, ok_service};
     use crate::web::{HttpResponse, WebError};
+    use crate::{Pipeline, fn_service, util::lazy};
 
     #[crate::rt_test]
     async fn test_default_headers() {
-        let mw = Pipeline::with(
+        let mw = Pipeline::new(
             (),
-            Middleware::<_, (), _>::create(
+            Middleware::create(
                 &DefaultHeaders::new().header(CONTENT_TYPE, "0001"),
+                &(),
                 ok_service(),
-                &SharedCfg::default(),
             ),
         );
 
@@ -168,12 +167,12 @@ mod tests {
                 req.into_response(HttpResponse::Ok().header(CONTENT_TYPE, "0002").finish()),
             )
         });
-        let mw = Pipeline::with(
+        let mw = Pipeline::new(
             (),
-            Middleware::<_, (), _>::create(
+            Middleware::create(
                 &DefaultHeaders::new().header(CONTENT_TYPE, "0001"),
+                &(),
                 srv,
-                &SharedCfg::default(),
             ),
         );
         let resp = mw.call(req).await.unwrap();
@@ -197,13 +196,9 @@ mod tests {
         let srv = fn_service(async move |req: WebRequest| {
             Ok::<_, WebError>(req.into_response(HttpResponse::Ok().finish()))
         });
-        let mw = Pipeline::with(
+        let mw = Pipeline::new(
             (),
-            Middleware::<_, (), _>::create(
-                &DefaultHeaders::new().content_type(),
-                srv,
-                &SharedCfg::default(),
-            ),
+            Middleware::create(&DefaultHeaders::new().content_type(), &(), srv),
         );
 
         let req = TestRequest::default().to_srv_request();

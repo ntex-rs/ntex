@@ -1,4 +1,4 @@
-use std::{error::Error, marker::PhantomData, rc::Rc};
+use std::{error::Error, rc::Rc};
 
 use crate::io::{Filter, Io, types};
 use crate::service::{IntoServiceFactory, RequestState, pipeline::PipelineFactory};
@@ -7,26 +7,24 @@ use crate::{Ctx, Service, ServiceFactory, util::dyn_rc_err};
 use super::error::{DispatchError, H2Error, ResponseError};
 use super::{Request, Response, config::DispatcherConfig, h1, h2};
 
-type HttpPipeline<St, Cfg, Err> = PipelineFactory<St, Request, Response, Err, Cfg, String>;
-type Ctl1Pipeline<St, F, Cfg, Err> =
-    PipelineFactory<St, h1::Control<F, Err>, h1::ControlAck<F>, Rc<dyn Error>, Cfg, String>;
-type Ctl2Pipeline<St, Cfg> =
-    PipelineFactory<St, h2::Control<H2Error>, h2::ControlAck, Rc<dyn Error>, Cfg, String>;
+type HttpPipeline<St, Err> = PipelineFactory<St, Request, Response, Err, String>;
+type Ctl1Pipeline<St, F, Err> =
+    PipelineFactory<St, h1::Control<F, Err>, h1::ControlAck<F>, Rc<dyn Error>, String>;
+type Ctl2Pipeline<St> =
+    PipelineFactory<St, h2::Control<H2Error>, h2::ControlAck, Rc<dyn Error>, String>;
 
 /// HTTP1.1/HTTP2 transport implementation
 #[derive(derive_more::Debug)]
 #[debug("HttpService")]
-pub struct HttpService<St, F, Req: RequestState<Io<F>>, Err> {
-    sf: HttpPipeline<Req::State, St, Err>,
-    h1_ctl: Ctl1Pipeline<Req::State, F, St, Err>,
-    h2_ctl: Ctl2Pipeline<Req::State, St>,
+pub struct HttpService<F, Req: RequestState<Io<F>>, Err> {
+    sf: HttpPipeline<Req::State, Err>,
+    h1_ctl: Ctl1Pipeline<Req::State, F, Err>,
+    h2_ctl: Ctl2Pipeline<Req::State>,
     config: DispatcherConfig,
-    ph: PhantomData<(St, F, Req)>,
 }
 
-impl<St, F, Req, Err> HttpService<St, F, Req, Err>
+impl<F, Req, Err> HttpService<F, Req, Err>
 where
-    St: 'static,
     F: Filter + 'static,
     Req: RequestState<Io<F>>,
     Req::State: Clone,
@@ -34,9 +32,9 @@ where
 {
     #[must_use]
     /// Create new `HttpService` instance.
-    pub fn new<H>(sf: impl IntoServiceFactory<H, Req::State, Request, St>) -> Self
+    pub fn new<H>(sf: impl IntoServiceFactory<H, Req::State, Request>) -> Self
     where
-        H: ServiceFactory<Req::State, Request, St, Error = Err> + 'static,
+        H: ServiceFactory<Req::State, Request, Error = Err> + 'static,
         H::Res: Into<Response>,
         H::InitError: Error,
     {
@@ -57,17 +55,14 @@ where
                     .map_err(dyn_rc_err),
             ),
             config: DispatcherConfig::default(),
-            ph: PhantomData,
         }
     }
 
     #[must_use]
     /// Create *http service* for HTTP/1 protocol.
-    pub fn h1<H>(
-        sf: impl IntoServiceFactory<H, Req::State, Request, St>,
-    ) -> h1::H1Service<St, F, Req, H>
+    pub fn h1<H>(sf: impl IntoServiceFactory<H, Req::State, Request>) -> h1::H1Service<F, Req, H>
     where
-        H: ServiceFactory<Req::State, Request, St, Error = Err> + 'static,
+        H: ServiceFactory<Req::State, Request, Error = Err> + 'static,
         H::Res: Into<Response>,
         H::InitError: Error,
     {
@@ -76,12 +71,9 @@ where
 
     #[must_use]
     /// Create *http service* for HTTP/2 protocol.
-    pub fn h2<H>(
-        sf: impl IntoServiceFactory<H, Req::State, Request, St>,
-    ) -> h2::H2Service<St, F, Req, H>
+    pub fn h2<H>(sf: impl IntoServiceFactory<H, Req::State, Request>) -> h2::H2Service<F, Req, H>
     where
-        St: 'static,
-        H: ServiceFactory<Req::State, Request, St, Error = Err> + 'static,
+        H: ServiceFactory<Req::State, Request, Error = Err> + 'static,
         H::Res: Into<Response>,
         H::InitError: Error,
     {
@@ -89,9 +81,8 @@ where
     }
 }
 
-impl<St, F, Req, Err> HttpService<St, F, Req, Err>
+impl<F, Req, Err> HttpService<F, Req, Err>
 where
-    St: 'static,
     F: Filter,
     Req: RequestState<Io<F>>,
     Err: ResponseError + 'static,
@@ -100,10 +91,10 @@ where
     /// Provide http/1 control service.
     pub fn h1_control<Ctl>(
         self,
-        ctl: impl IntoServiceFactory<Ctl, Req::State, h1::Control<F, Err>, St>,
+        ctl: impl IntoServiceFactory<Ctl, Req::State, h1::Control<F, Err>>,
     ) -> Self
     where
-        Ctl: ServiceFactory<Req::State, h1::Control<F, Err>, St, Res = h1::ControlAck<F>> + 'static,
+        Ctl: ServiceFactory<Req::State, h1::Control<F, Err>, Res = h1::ControlAck<F>> + 'static,
         Ctl::Error: Error,
         Ctl::InitError: Error,
     {
@@ -116,18 +107,17 @@ where
             ),
             h2_ctl: self.h2_ctl,
             config: self.config,
-            ph: self.ph,
         }
     }
 
     #[must_use]
     /// Provide http/1 control service.
-    pub fn h2_control<Ctl, I>(self, ctl: I) -> HttpService<St, F, Req, Err>
+    pub fn h2_control<Ctl, I>(self, ctl: I) -> HttpService<F, Req, Err>
     where
-        Ctl: ServiceFactory<Req::State, h2::Control<H2Error>, St, Res = h2::ControlAck> + 'static,
+        Ctl: ServiceFactory<Req::State, h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
         Ctl::Error: Error,
         Ctl::InitError: Error,
-        I: IntoServiceFactory<Ctl, Req::State, h2::Control<H2Error>, St>,
+        I: IntoServiceFactory<Ctl, Req::State, h2::Control<H2Error>>,
     {
         HttpService {
             sf: self.sf,
@@ -138,27 +128,12 @@ where
                     .map_init_err(|e| format!("{e:?}")),
             ),
             config: self.config,
-            ph: self.ph,
         }
     }
 }
 
-impl<St, F, Req, Err> HttpService<St, F, Req, Err>
+impl<St, F, Req, Err> Service<St, Req> for HttpService<F, Req, Err>
 where
-    St: 'static,
-    F: Filter + 'static,
-    Req: RequestState<Io<F>>,
-    Req::State: Clone,
-    Err: ResponseError + 'static,
-{
-    pub fn build(self) -> impl Service<St, Req, Res = (), Error = DispatchError> {
-        self
-    }
-}
-
-impl<St, F, Req, Err> Service<St, Req> for HttpService<St, F, Req, Err>
-where
-    St: 'static,
     F: Filter + 'static,
     Req: RequestState<Io<F>>,
     Req::State: Clone,
@@ -167,10 +142,10 @@ where
     type Res = ();
     type Error = DispatchError;
 
-    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
+    async fn call(&self, req: Req, _: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
         let (st, io) = req.unpack();
 
-        let svc = self.sf.create(ctx.st(), st.clone()).await.map_err(|e| {
+        let svc = self.sf.create(st.clone()).await.map_err(|e| {
             log::error!("Cannot construct handler service: {e}");
             DispatchError::Control
         })?;
@@ -187,7 +162,7 @@ where
                 io.query::<types::PeerAddr>().get(),
             );
 
-            let ctl = self.h2_ctl.create(ctx.st(), st).await.map_err(|e| {
+            let ctl = self.h2_ctl.create(st).await.map_err(|e| {
                 log::error!("Cannot construct h2 control service: {e:?}");
                 DispatchError::Control
             })?;
@@ -200,7 +175,7 @@ where
                 io.query::<types::PeerAddr>().get(),
             );
 
-            let ctl = self.h1_ctl.create(ctx.st(), st).await.map_err(|e| {
+            let ctl = self.h1_ctl.create(st).await.map_err(|e| {
                 log::error!("Cannot construct h1 control service: {e}");
                 DispatchError::Control
             })?;

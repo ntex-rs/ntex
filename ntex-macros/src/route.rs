@@ -132,8 +132,8 @@ impl Route {
             #[allow(non_camel_case_types)]
             pub struct #name;
 
-            impl<Cfg: Clone + 'static> ntex::web::dev::WebServiceFactory<#state, Cfg> for #name {
-                fn register(self, __config: &mut ntex::web::dev::WebServiceConfig<#state, Cfg>) {
+            impl ntex::web::dev::WebServiceFactory<#state> for #name {
+                fn register(self, __config: &mut ntex::web::dev::WebServiceConfig<#state>) {
                     #ast
 
                     let __resource = ntex::web::Resource::new(#path)

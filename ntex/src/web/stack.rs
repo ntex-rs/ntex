@@ -21,18 +21,18 @@ impl<St, Inner, Outer> WebStack<St, Inner, Outer> {
     }
 }
 
-impl<S, St, Cfg, Inner, Outer> Middleware<S, St, Cfg> for WebStack<St, Inner, Outer>
+impl<S, St, Inner, Outer> Middleware<S, St> for WebStack<St, Inner, Outer>
 where
     St: AppState,
-    Inner: Middleware<S, St, Cfg>,
-    Outer: Middleware<Inner::Service, St, Cfg>,
+    Inner: Middleware<S, St>,
+    Outer: Middleware<Inner::Service, St>,
     Outer::Service: Service<St, WebRequest, Res = WebResponse>,
 {
     type Service = WebMiddleware<Outer::Service, St>;
 
-    fn create(&self, service: S, cfg: &Cfg) -> Self::Service {
+    fn create(&self, st: &St, service: S) -> Self::Service {
         WebMiddleware {
-            svc: self.outer.create(self.inner.create(service, cfg), cfg),
+            svc: self.outer.create(st, self.inner.create(st, service)),
             err: PhantomData,
         }
     }
@@ -88,14 +88,14 @@ impl<St> Filter<St> {
     }
 }
 
-impl<St: AppState, Cfg> ServiceFactory<St, WebRequest, Cfg> for Filter<St> {
+impl<St: AppState> ServiceFactory<St, WebRequest> for Filter<St> {
     type Res = WebRequest;
     type Error = St::Error;
 
     type Service = Filter<St>;
     type InitError = ();
 
-    async fn create(&self, _: &Cfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, _: &St) -> Result<Self::Service, Self::InitError> {
         Ok(Filter(PhantomData))
     }
 }

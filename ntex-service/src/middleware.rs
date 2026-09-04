@@ -4,13 +4,13 @@ use crate::dev::{Apply, ApplyCtx};
 use crate::{IntoServiceFactory, Service, ServiceChainFactory, ServiceFactory};
 
 /// Apply middleware to a service.
-pub fn apply<Sf, St, Req, Cfg, M>(
+pub fn apply<Sf, St, Req, M>(
     mw: M,
-    factory: impl IntoServiceFactory<Sf, St, Req, Cfg>,
-) -> ServiceChainFactory<ApplyMiddleware<M, Sf>, St, Req, Cfg>
+    factory: impl IntoServiceFactory<Sf, St, Req>,
+) -> ServiceChainFactory<ApplyMiddleware<M, Sf>, St, Req>
 where
-    Sf: ServiceFactory<St, Req, Cfg>,
-    M: Middleware<Sf::Service, St, Cfg>,
+    Sf: ServiceFactory<St, Req>,
+    M: Middleware<Sf::Service, St>,
 {
     ServiceChainFactory {
         factory: ApplyMiddleware::new(mw, factory.into_factory()),
@@ -87,12 +87,12 @@ where
 ///     }
 /// }
 /// ```
-pub trait Middleware<S, St, Cfg> {
+pub trait Middleware<S, St> {
     /// The middleware `Service` value created by this factory
     type Service;
 
     /// Creates and returns a new middleware service.
-    fn create(&self, service: S, cfg: &Cfg) -> Self::Service;
+    fn create(&self, st: &St, service: S) -> Self::Service;
 
     /// Creates a service factory that instantiates a service and applies
     /// the current middleware to it.
@@ -101,9 +101,9 @@ pub trait Middleware<S, St, Cfg> {
     fn apply_to<Sf, Req>(
         self,
         factory: Sf,
-    ) -> ServiceChainFactory<ApplyMiddleware<Self, Sf>, St, Req, Cfg>
+    ) -> ServiceChainFactory<ApplyMiddleware<Self, Sf>, St, Req>
     where
-        Sf: ServiceFactory<St, Req, Cfg, Service = S>,
+        Sf: ServiceFactory<St, Req, Service = S>,
         Self: Sized,
         Self::Service: Service<St, Req>,
     {
@@ -111,14 +111,14 @@ pub trait Middleware<S, St, Cfg> {
     }
 }
 
-impl<M, S, St, Cfg> Middleware<S, St, Cfg> for Rc<M>
+impl<M, S, St> Middleware<S, St> for Rc<M>
 where
-    M: Middleware<S, St, Cfg>,
+    M: Middleware<S, St>,
 {
     type Service = M::Service;
 
-    fn create(&self, service: S, cfg: &Cfg) -> M::Service {
-        self.as_ref().create(service, cfg)
+    fn create(&self, st: &St, service: S) -> M::Service {
+        self.as_ref().create(st, service)
     }
 }
 
@@ -151,10 +151,10 @@ where
     }
 }
 
-impl<M, Sf, St, Req, Cfg> ServiceFactory<St, Req, Cfg> for ApplyMiddleware<M, Sf>
+impl<M, Sf, St, Req> ServiceFactory<St, Req> for ApplyMiddleware<M, Sf>
 where
-    Sf: ServiceFactory<St, Req, Cfg>,
-    M: Middleware<Sf::Service, St, Cfg>,
+    Sf: ServiceFactory<St, Req>,
+    M: Middleware<Sf::Service, St>,
     M::Service: Service<St, Req>,
 {
     type Res = <M::Service as Service<St, Req>>::Res;
@@ -164,8 +164,8 @@ where
     type InitError = Sf::InitError;
 
     #[inline]
-    async fn create(&self, cfg: &Cfg) -> Result<Self::Service, Self::InitError> {
-        Ok(self.0.0.create(self.0.1.create(cfg).await?, cfg))
+    async fn create(&self, st: &St) -> Result<Self::Service, Self::InitError> {
+        Ok(self.0.0.create(st, self.0.1.create(st).await?))
     }
 }
 
@@ -175,11 +175,11 @@ where
 #[derive(Debug, Clone, Copy)]
 pub struct Identity;
 
-impl<S, St, Cfg> Middleware<S, St, Cfg> for Identity {
+impl<S, St> Middleware<S, St> for Identity {
     type Service = S;
 
     #[inline]
-    fn create(&self, service: S, _: &Cfg) -> Self::Service {
+    fn create(&self, _: &St, service: S) -> Self::Service {
         service
     }
 }
@@ -197,15 +197,15 @@ impl<Inner, Outer> Stack<Inner, Outer> {
     }
 }
 
-impl<S, St, Inner, Outer, Cfg> Middleware<S, St, Cfg> for Stack<Inner, Outer>
+impl<S, St, Inner, Outer> Middleware<S, St> for Stack<Inner, Outer>
 where
-    Inner: Middleware<S, St, Cfg>,
-    Outer: Middleware<Inner::Service, St, Cfg>,
+    Inner: Middleware<S, St>,
+    Outer: Middleware<Inner::Service, St>,
 {
     type Service = Outer::Service;
 
-    fn create(&self, service: S, cfg: &Cfg) -> Self::Service {
-        self.outer.create(self.inner.create(service, cfg), cfg)
+    fn create(&self, st: &St, service: S) -> Self::Service {
+        self.outer.create(st, self.inner.create(st, service))
     }
 }
 
@@ -245,8 +245,7 @@ impl<F, S, St, Req, In, Out, Err> fmt::Debug for FnMiddleware<F, S, St, Req, In,
     }
 }
 
-impl<F, S, St, Req, In, Out, Err, C> Middleware<S, St, C>
-    for FnMiddleware<F, S, St, Req, In, Out, Err>
+impl<F, S, St, Req, In, Out, Err> Middleware<S, St> for FnMiddleware<F, S, St, Req, In, Out, Err>
 where
     S: Service<St, Req>,
     F: AsyncFn(In, &ApplyCtx<'_, S, St, Req>) -> Result<Out, Err> + Clone,
@@ -254,7 +253,7 @@ where
 {
     type Service = Apply<S, St, Req, F, In, Out, Err>;
 
-    fn create(&self, service: S, _: &C) -> Self::Service {
+    fn create(&self, _: &St, service: S) -> Self::Service {
         Apply::new(service, self.f.clone())
     }
 }
@@ -270,10 +269,10 @@ mod tests {
     #[derive(Debug, Clone)]
     struct Mw(Rc<Cell<usize>>);
 
-    impl<S, St, C> Middleware<S, St, C> for Mw {
+    impl<S, St> Middleware<S, St> for Mw {
         type Service = Srv<S>;
 
-        fn create(&self, service: S, _: &C) -> Self::Service {
+        fn create(&self, _: &St, service: S) -> Self::Service {
             self.0.set(self.0.get() + 1);
             Srv(service, self.0.clone())
         }
@@ -308,7 +307,7 @@ mod tests {
         )
         .clone();
 
-        let srv = Pipeline::with((), fac.create(&()).await.unwrap().clone());
+        let srv = Pipeline::new((), fac.create(&()).await.unwrap().clone());
         let res = srv.call(10).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
@@ -322,7 +321,7 @@ mod tests {
             .apply(Rc::new(Mw(Rc::new(Cell::new(0))).clone()))
             .clone();
 
-        let srv = Pipeline::with((), fac.create(&()).await.unwrap().clone());
+        let srv = Pipeline::new((), fac.create(&()).await.unwrap().clone());
         let res = srv.call(10).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
@@ -338,7 +337,7 @@ mod tests {
             .apply_to(factory(async |i: usize| Ok::<_, ()>(i * 2)))
             .boxed();
 
-        let srv = Pipeline::with((), fac.create(&()).await.unwrap());
+        let srv = Pipeline::new((), fac.create(&()).await.unwrap());
         let res = srv.call(10).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
@@ -355,7 +354,7 @@ mod tests {
         let fac = factory(fn_service(async move |i: usize| Ok::<_, ()>(i * 2)))
             .apply(Mw(cnt_sht.clone()).clone());
 
-        let srv = Pipeline::with((), fac.create(&()).await.unwrap().clone());
+        let srv = Pipeline::new((), fac.create(&()).await.unwrap().clone());
         let res = srv.call(10).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
@@ -372,12 +371,12 @@ mod tests {
         let mw = Stack::new(Identity, Mw(cnt_sht.clone()));
         let _ = format!("{mw:?}");
 
-        let pl = Pipeline::with(
+        let pl = Pipeline::new(
             (),
-            Middleware::<_, (), _>::create(
+            Middleware::create(
                 &mw,
-                fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }),
                 &(),
+                fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }),
             ),
         );
         let res = pl.call(10).await;
@@ -400,9 +399,9 @@ mod tests {
         .clone();
         let _ = format!("{mw:?}");
 
-        let svc = Pipeline::with(
+        let svc = Pipeline::new(
             (),
-            mw.create(fn_service(async move |i: usize| Ok::<_, ()>(i * 2)), &()),
+            mw.create(&(), fn_service(async move |i: usize| Ok::<_, ()>(i * 2))),
         );
 
         let res = svc.call("test").await;

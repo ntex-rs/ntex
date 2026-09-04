@@ -795,8 +795,8 @@ mod tests {
         Dispatcher::new(
             0,
             nio::Io::new(stream, cfg.clone()),
-            Pipeline::with((), s.into_service().map(Into::into)),
-            Pipeline::with((), DefaultControlService.map_err(dyn_rc_err)),
+            Pipeline::new((), s.into_service().map(Into::into)),
+            Pipeline::new((), DefaultControlService.map_err(dyn_rc_err)),
             DispatcherConfig::default(),
         )
     }
@@ -820,8 +820,8 @@ mod tests {
         crate::rt::spawn(Dispatcher::new(
             0,
             nio::Io::new(stream, cfg),
-            Pipeline::with((), s.into_service().map(Into::into)),
-            Pipeline::with((), DefaultControlService.map_err(dyn_rc_err)),
+            Pipeline::new((), s.into_service().map(Into::into)),
+            Pipeline::new((), DefaultControlService.map_err(dyn_rc_err)),
             DispatcherConfig::default(),
         ));
     }
@@ -849,8 +849,8 @@ mod tests {
         let mut h1 = Dispatcher::new(
             0,
             nio::Io::new(server, config),
-            Pipeline::with((), async |_| Ok::<_, io::Error>(Response::Ok().finish())),
-            Pipeline::with(
+            Pipeline::new((), async |_| Ok::<_, io::Error>(Response::Ok().finish())),
+            Pipeline::new(
                 (),
                 fn_service(async move |req: Control<_, _>| {
                     if let Control::Request(_) = req {
@@ -1259,8 +1259,8 @@ mod tests {
         let disp = Dispatcher::new(
             0,
             nio::Io::new(server, config),
-            Pipeline::with((), fn_service(svc)),
-            Pipeline::with(
+            Pipeline::new((), fn_service(svc)),
+            Pipeline::new(
                 (),
                 fn_service(async move |msg: Control<_, _>| {
                     if let Control::Disconnect(Reason::ProtocolError(ref err)) = msg

@@ -90,7 +90,7 @@ mod tests {
         }
 
         let srv = init_service(
-            App::with::<MyState>()
+            App::<MyState>::with()
                 .service(web::resource("/").to(|_: State<MyState>| async { HttpResponse::Ok() })),
         )
         .await;
@@ -100,7 +100,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let srv = init_service(
-            App::with::<MyState>()
+            App::<MyState>::with()
                 .service(web::resource("/").to(|_: State<MyState>| async { HttpResponse::Ok() })),
         )
         .await;

@@ -43,30 +43,6 @@ impl<F, Err> fmt::Debug for FnShutdown<F, Err> {
     }
 }
 
-impl<F, St, Req, Cfg, Err> ServiceFactory<St, Req, Cfg> for FnShutdown<F, Err>
-where
-    F: AsyncFnOnce(&St) + Clone,
-{
-    type Res = Req;
-    type Error = Err;
-
-    type Service = FnShutdown<F, Err>;
-    type InitError = Infallible;
-
-    #[inline]
-    async fn create(&self, _: &Cfg) -> Result<Self::Service, Self::InitError> {
-        if let Some(f) = self.f_shutdown.take() {
-            self.f_shutdown.set(Some(f.clone()));
-            Ok(FnShutdown {
-                f_shutdown: Cell::new(Some(f)),
-                err: PhantomData,
-            })
-        } else {
-            panic!("FnShutdown was used already");
-        }
-    }
-}
-
 impl<F, St, Req, Err> Service<St, Req> for FnShutdown<F, Err>
 where
     F: AsyncFnOnce(&St),
@@ -87,6 +63,30 @@ where
     }
 }
 
+impl<F, St, Req, Err> ServiceFactory<St, Req> for FnShutdown<F, Err>
+where
+    F: AsyncFnOnce(&St) + Clone,
+{
+    type Res = Req;
+    type Error = Err;
+
+    type Service = FnShutdown<F, Err>;
+    type InitError = Infallible;
+
+    #[inline]
+    async fn create(&self, _: &St) -> Result<Self::Service, Self::InitError> {
+        if let Some(f) = self.f_shutdown.take() {
+            self.f_shutdown.set(Some(f.clone()));
+            Ok(FnShutdown {
+                f_shutdown: Cell::new(Some(f)),
+                err: PhantomData,
+            })
+        } else {
+            panic!("FnShutdown was used already");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{future::poll_fn, rc::Rc};
@@ -100,13 +100,12 @@ mod tests {
         // Service factory
         let is_called = Rc::new(Cell::new(false));
         let is_called2 = is_called.clone();
-        let fac =
-            factory::<_, (), _, _>(|()| async { Ok::<_, ()>("pipe") }).shutdown(async move |()| {
-                is_called2.set(true);
-            });
+        let fac = factory(|()| async { Ok::<_, ()>("pipe") }).shutdown(async move |()| {
+            is_called2.set(true);
+        });
         let _ = format!("{fac:?}");
 
-        let pipe = Pipeline::new(fac.clone().create(&()).await.unwrap());
+        let pipe = Pipeline::new((), fac.clone().create(&()).await.unwrap());
 
         let res = pipe.call(()).await;
         assert_eq!(pipe.ready().await, Ok(()));
@@ -123,13 +122,12 @@ mod tests {
         // Service
         let is_called = Rc::new(Cell::new(false));
         let is_called2 = is_called.clone();
-        let svc =
-            service::<_, (), _>(|()| async { Ok::<_, ()>("pipe") }).shutdown(async move |()| {
-                is_called2.set(true);
-            });
+        let svc = service(|()| async { Ok::<_, ()>("pipe") }).shutdown(async move |()| {
+            is_called2.set(true);
+        });
         let _ = format!("{fac:?}");
 
-        let pipe = Pipeline::new(svc);
+        let pipe = Pipeline::new((), svc);
 
         let res = pipe.call(()).await;
         assert_eq!(pipe.ready().await, Ok(()));

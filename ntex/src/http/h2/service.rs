@@ -19,24 +19,23 @@ use super::{DefaultControlService, payload::Payload, payload::PayloadSender};
 /// `ServiceFactory` implementation for HTTP2 transport
 #[derive(derive_more::Debug)]
 #[debug("H2Service")]
-pub struct H2Service<St, F, Req: RequestState<Io<F>>, H, Ctl = DefaultControlService> {
+pub struct H2Service<F, Req: RequestState<Io<F>>, H, Ctl = DefaultControlService> {
     sf: H,
     ctl: Ctl,
     config: DispatcherConfig,
-    ph: marker::PhantomData<(St, F, Req)>,
+    ph: marker::PhantomData<(F, Req)>,
 }
 
-impl<St, F, Req, H> H2Service<St, F, Req, H, DefaultControlService>
+impl<F, Req, H> H2Service<F, Req, H, DefaultControlService>
 where
-    St: 'static,
     F: Filter,
     Req: RequestState<Io<F>>,
     Req::State: Clone,
 {
     /// Create new `HttpService` instance with config.
-    pub(crate) fn new(sf: impl IntoServiceFactory<H, Req::State, Request, St>) -> Self
+    pub(crate) fn new(sf: impl IntoServiceFactory<H, Req::State, Request>) -> Self
     where
-        H: ServiceFactory<Req::State, Request, St> + 'static,
+        H: ServiceFactory<Req::State, Request> + 'static,
         H::Res: Into<Response>,
         H::Error: ResponseError,
         H::InitError: StdError,
@@ -50,18 +49,17 @@ where
     }
 }
 
-impl<St, F, Req, H, Ctl> H2Service<St, F, Req, H, Ctl>
+impl<F, Req, H, Ctl> H2Service<F, Req, H, Ctl>
 where
-    St: 'static,
     F: Filter,
     Req: RequestState<Io<F>>,
 {
     #[must_use]
     /// Provide http/2 control service
-    pub fn control<I, Sf>(self, ctl: I) -> H2Service<St, F, Req, H, Sf>
+    pub fn control<I, Sf>(self, ctl: I) -> H2Service<F, Req, H, Sf>
     where
-        I: IntoServiceFactory<Sf, Req::State, h2::Control<H2Error>, St>,
-        Sf: ServiceFactory<Req::State, h2::Control<H2Error>, St, Res = h2::ControlAck> + 'static,
+        I: IntoServiceFactory<Sf, Req::State, h2::Control<H2Error>>,
+        Sf: ServiceFactory<Req::State, h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
         Sf::Error: StdError,
         Sf::InitError: StdError,
     {
@@ -74,31 +72,30 @@ where
     }
 }
 
-impl<St, F, Req, H, Ctl> Service<St, Req> for H2Service<St, F, Req, H, Ctl>
+impl<St, F, Req, H, Ctl> Service<St, Req> for H2Service<F, Req, H, Ctl>
 where
-    St: 'static,
     F: Filter,
     Req: RequestState<Io<F>>,
     Req::State: Clone,
-    H: ServiceFactory<Req::State, Request, St> + 'static,
+    H: ServiceFactory<Req::State, Request> + 'static,
     H::Res: Into<Response>,
     H::Error: ResponseError,
     H::InitError: StdError,
-    Ctl: ServiceFactory<Req::State, h2::Control<H2Error>, St, Res = h2::ControlAck> + 'static,
+    Ctl: ServiceFactory<Req::State, h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
     Ctl::Error: StdError,
     Ctl::InitError: StdError,
 {
     type Res = ();
     type Error = DispatchError;
 
-    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
+    async fn call(&self, req: Req, _: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
         let (st, io) = req.unpack();
 
-        let svc = self.sf.create(ctx.st()).await.map_err(|e| {
+        let svc = self.sf.create(&st).await.map_err(|e| {
             log::error!("Cannot construct handler service: {e:?}");
             DispatchError::Control
         })?;
-        let ctl = self.ctl.create(ctx.st()).await.map_err(|e| {
+        let ctl = self.ctl.create(&st).await.map_err(|e| {
             log::error!("Cannot construct handler service: {e:?}");
             DispatchError::Control
         })?;
@@ -115,8 +112,8 @@ where
         let result = handle(
             id,
             io.into(),
-            Pipeline::with(st.clone(), svc.map(Into::into)),
-            Pipeline::with(st, ctl.map_err(dyn_rc_err)),
+            Pipeline::new(st.clone(), svc.map(Into::into)),
+            Pipeline::new(st, ctl.map_err(dyn_rc_err)),
         )
         .await;
 
@@ -158,7 +155,7 @@ where
 
     let _ = server::handle_one(
         io,
-        Pipeline::with((), PublishService::new(id, ioref, svc)),
+        Pipeline::new((), PublishService::new(id, ioref, svc)),
         control.bind(),
     )
     .await;

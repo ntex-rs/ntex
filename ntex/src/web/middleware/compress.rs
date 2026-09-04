@@ -42,10 +42,10 @@ impl Default for Compress {
     }
 }
 
-impl<S, St, Cfg> Middleware<S, St, Cfg> for Compress {
+impl<S, St> Middleware<S, St> for Compress {
     type Service = CompressMiddleware<S>;
 
-    fn create(&self, service: S, _: &Cfg) -> Self::Service {
+    fn create(&self, _: &St, service: S) -> Self::Service {
         CompressMiddleware {
             service,
             encoding: self.enc,
