@@ -128,7 +128,7 @@ mod tests {
     #![allow(clippy::unused_async_trait_impl)]
     use std::{cell::Cell, rc::Rc};
 
-    use ntex_service::{Pipeline, apply, fn_factory};
+    use ntex_service::{Pipeline, apply, fn_factory_nocfg};
 
     use super::*;
 
@@ -164,14 +164,14 @@ mod tests {
 
         let factory = apply(
             Retry::new(DefaultRetryPolicy::new(3)).clone(),
-            fn_factory(|| async { Ok::<_, ()>(TestService(Rc::new(Cell::new(2)))) }),
+            fn_factory_nocfg(|| async { Ok::<_, ()>(TestService(Rc::new(Cell::new(2)))) }),
         );
         let srv = factory.pipeline(&()).await.unwrap();
         assert_eq!(srv.call(()).await, Ok(()));
 
         let factory = apply(
             Retry::new(DefaultRetryPolicy::new(3)).clone(),
-            fn_factory(|| async { Ok::<_, ()>(TestService(Rc::new(Cell::new(2)))) }),
+            fn_factory_nocfg(|| async { Ok::<_, ()>(TestService(Rc::new(Cell::new(2)))) }),
         );
         let srv = factory.pipeline(&()).await.unwrap();
         assert_eq!(srv.call(()).await, Ok(()));

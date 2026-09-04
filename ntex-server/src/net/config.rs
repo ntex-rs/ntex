@@ -99,7 +99,7 @@ impl<Cfg: ServerAppConfig> ServiceConfig<Cfg> {
     /// It get executed in the worker thread.
     pub fn on_worker_start<F>(&self, f: F) -> &Self
     where
-        F: AsyncFn(ServiceRuntime<Cfg::State>) -> io::Result<()> + Send + Clone + 'static,
+        F: AsyncFnOnce(ServiceRuntime<Cfg::State>) -> io::Result<()> + Send + Clone + 'static,
     {
         let mut inner = self.0.borrow_mut();
         if !inner.on_start_set {
@@ -317,7 +317,7 @@ struct OnWorkerStartImpl<F, Cfg> {
 
 fn on_worker_start<F, Cfg>(f: F) -> Box<dyn OnWorkerStart<Cfg> + Send>
 where
-    F: AsyncFn(ServiceRuntime<Cfg>) -> io::Result<()> + Send + Clone + 'static,
+    F: AsyncFnOnce(ServiceRuntime<Cfg>) -> io::Result<()> + Send + Clone + 'static,
     Cfg: 'static,
 {
     Box::new(OnWorkerStartImpl { f, st: PhantomData })
@@ -325,7 +325,7 @@ where
 
 impl<F, Cfg> OnWorkerStart<Cfg> for OnWorkerStartImpl<F, Cfg>
 where
-    F: AsyncFn(ServiceRuntime<Cfg>) -> io::Result<()> + Send + Clone + 'static,
+    F: AsyncFnOnce(ServiceRuntime<Cfg>) -> io::Result<()> + Send + Clone + 'static,
     Cfg: 'static,
 {
     fn clo(&self) -> Box<dyn OnWorkerStart<Cfg>> {

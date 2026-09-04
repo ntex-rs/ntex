@@ -98,7 +98,7 @@ pub trait Middleware<S, St, Cfg> {
     /// the current middleware to it.
     ///
     /// This is equivalent to `apply(self, factory)`.
-    fn apply<Sf, Req>(
+    fn apply_to<Sf, Req>(
         self,
         factory: Sf,
     ) -> ServiceChainFactory<ApplyMiddleware<Self, Sf>, St, Req, Cfg>
@@ -335,7 +335,7 @@ mod tests {
     async fn middleware_apply() {
         let cnt_sht = Rc::new(Cell::new(0));
         let fac = Mw(cnt_sht.clone())
-            .apply(factory(async |i: usize| Ok::<_, ()>(i * 2)))
+            .apply_to(factory(async |i: usize| Ok::<_, ()>(i * 2)))
             .boxed();
 
         let srv = Pipeline::with((), fac.create(&()).await.unwrap());
