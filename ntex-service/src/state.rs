@@ -1,7 +1,7 @@
-pub trait RequestState<Res> {
+pub trait RequestState<Req> {
     type State: 'static;
 
-    fn unpack(self) -> (Self::State, Res);
+    fn unpack(self) -> (Self::State, Req);
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
