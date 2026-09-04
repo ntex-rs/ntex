@@ -315,7 +315,7 @@ where
 ///
 /// ```rust
 /// use std::io;
-/// use ntex_service::{factory_no_st, fn_factory, fn_service, Pipeline, Service, ServiceFactory};
+/// use ntex_service::{factory, fn_factory, fn_service, Pipeline, Service, ServiceFactory};
 ///
 /// #[ntex::main]
 /// async fn main() -> io::Result<()> {
@@ -327,7 +327,7 @@ where
 ///     });
 ///
 ///     // construct new service with config argument
-///     let srv = Pipeline::with((), factory_no_st(fac).create(&10).await?);
+///     let srv = Pipeline::new(12, factory(fac).create(&10).await?);
 ///
 ///     let result = srv.call(10).await?;
 ///     assert_eq!(result, 100);
