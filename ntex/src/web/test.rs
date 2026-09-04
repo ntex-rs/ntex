@@ -708,7 +708,7 @@ where
     thread::sleep(Millis(25).into());
 
     let cfg = cfg.client_cfg.clone().unwrap_or_else(|| {
-        SharedCfg::new("TEST-CLIENT")
+        let builder = SharedCfg::new("TEST-CLIENT")
             .add(IoConfig::new().set_connect_timeout(Millis(90_000)))
             .add(ntex_tls::TlsConfig::new().set_handshake_timeout(Seconds(5)))
             .add(
@@ -716,13 +716,14 @@ where
                     .set_max_header_list_size(256 * 1024)
                     .set_max_header_continuation_frames(96),
             )
-            .add(ClientConfig::new().set_lifetime(Seconds::ZERO))
-            .add(
-                WsClientConfig::new()
-                    .set_address(addr)
-                    .set_timeout(Seconds(60)),
-            )
-            .build()
+            .add(ClientConfig::new().set_lifetime(Seconds::ZERO));
+        #[cfg(feature = "ws")]
+        let builder = builder.add(
+            WsClientConfig::new()
+                .set_address(addr)
+                .set_timeout(Seconds(60)),
+        );
+        builder.build()
     });
 
     let client = {
@@ -893,6 +894,7 @@ impl TestServerConfig {
 /// Test server controller
 pub struct TestServer {
     id: Uuid,
+    #[cfg_attr(not(feature = "ws"), allow(dead_code))]
     cfg: SharedCfg,
     addr: net::SocketAddr,
     client: Client,
@@ -992,9 +994,21 @@ impl TestServer {
                     .await
                     .map(WsConnection::seal)
             }
-            #[cfg(not(feature = "openssl"))]
+            #[cfg(all(not(feature = "openssl"), windows, feature = "schannel"))]
             {
-                panic!("openssl feature is required")
+                WsClient::new(self.url(path), &self.cfg)
+                    .unwrap()
+                    .schannel(
+                        crate::connect::schannel::ClientConfig::new()
+                            .danger_accept_invalid_certs(true),
+                    )
+                    .connect()
+                    .await
+                    .map(WsConnection::seal)
+            }
+            #[cfg(not(any(feature = "openssl", all(windows, feature = "schannel"))))]
+            {
+                panic!("TLS feature is required")
             }
         } else {
             WsClient::new(self.url(path), &self.cfg)

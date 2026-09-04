@@ -46,7 +46,13 @@ pub struct HeaderItem {
 
 #[cfg(feature = "openssl")]
 use crate::server::openssl::{SslAcceptor, SslFilter};
-#[cfg(any(feature = "openssl", feature = "rustls"))]
+#[cfg(all(windows, feature = "schannel"))]
+use crate::server::schannel::{SchannelFilter, TlsAcceptor as SchannelAcceptor};
+#[cfg(any(
+    feature = "openssl",
+    feature = "rustls",
+    all(windows, feature = "schannel")
+))]
 use crate::{IntoService, Service, io::Filter, io::Io, io::Layer, server::TlsError};
 
 #[cfg(feature = "openssl")]
@@ -65,7 +71,7 @@ where
 }
 
 #[cfg(feature = "rustls")]
-use crate::server::rustls::{TlsAcceptor, TlsServerFilter};
+use crate::server::rustls::{TlsAcceptor as RustlsAcceptor, TlsServerFilter};
 
 #[cfg(feature = "rustls")]
 /// Create rustls based service.
@@ -84,7 +90,22 @@ where
         config.alpn_protocols = protos.iter().map(|s| s.to_string().into()).collect();
     }
 
-    TlsAcceptor::new(std::sync::Arc::new(config))
+    RustlsAcceptor::new(std::sync::Arc::new(config))
+        .map_err(TlsError::Tls)
+        .and_then(service.into_service().map_err(TlsError::Service))
+}
+
+#[cfg(all(windows, feature = "schannel"))]
+/// Create Schannel based service
+pub fn schannel<F, S, St>(
+    config: crate::connect::schannel::ServerConfig,
+    service: impl IntoService<S, St, Io<Layer<SchannelFilter, F>>>,
+) -> impl Service<St, Io<F>, Res = S::Res, Error = TlsError<S::Error>>
+where
+    F: Filter,
+    S: Service<St, Io<Layer<SchannelFilter, F>>>,
+{
+    SchannelAcceptor::new(config)
         .map_err(TlsError::Tls)
         .and_then(service.into_service().map_err(TlsError::Service))
 }

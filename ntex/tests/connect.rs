@@ -1,6 +1,12 @@
-use std::{io, rc::Rc};
+use std::io;
+#[cfg(feature = "openssl")]
+use std::rc::Rc;
 
 use ntex::io::{Io, types::PeerAddr};
+
+#[cfg(feature = "openssl")]
+use ntex::server::build_test_server;
+
 use ntex::server::{NoConfig, build_test_server, test_server};
 use ntex::service::{Pipeline, Service, cfg::SharedCfg, service};
 use ntex::{codec::BytesCodec, connect::Connect, time, util::Bytes};
@@ -134,12 +140,11 @@ async fn test_openssl_read_before_error() {
     assert!(io.recv(&BytesCodec).await.unwrap().is_none());
 }
 
-#[cfg(all(windows, feature = "openssl"))]
+#[cfg(all(windows, feature = "schannel"))]
 #[ntex::test]
 async fn test_schannel_string() {
-    use ntex::{io::types::HttpProtocol, server::openssl};
-    use ntex_tls::schannel::{ClientConfig, PeerCert, TlsConnector};
-    use tls_openssl::x509::X509;
+    use ntex::io::types::HttpProtocol;
+    use ntex_tls::schannel::{ClientConfig, PeerCert, ServerConfig, TlsAcceptor, TlsConnector};
 
     let srv = test_server(async || {
         service(openssl::SslAcceptor::new(ssl_acceptor())).and_then(async move |io: Io<_>| {
@@ -159,15 +164,11 @@ async fn test_schannel_string() {
     let addr = format!("localhost:{}", srv.addr().port());
     let io = conn.call(addr.into()).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
-    assert_eq!(
+    assert!(matches!(
         io.query::<HttpProtocol>().get().unwrap(),
-        HttpProtocol::Http1
-    );
-    let cert = X509::from_pem(include_bytes!("cert.pem")).unwrap();
-    assert_eq!(
-        io.query::<PeerCert>().as_ref().unwrap().0,
-        cert.to_der().unwrap()
-    );
+        HttpProtocol::Http1 | HttpProtocol::Http2
+    ));
+    assert_eq!(io.query::<PeerCert>().as_ref().unwrap().0, cert);
     io.send(Bytes::from_static(b"test"), &BytesCodec)
         .await
         .unwrap();

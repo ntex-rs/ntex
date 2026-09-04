@@ -74,7 +74,20 @@ impl ClientBuilder<Identity> {
             config.alpn_protocols = protos;
             builder.rustls(config)
         }
-        #[cfg(not(any(feature = "openssl", feature = "rustls")))]
+        #[cfg(all(
+            windows,
+            not(feature = "openssl"),
+            not(feature = "rustls"),
+            feature = "schannel"
+        ))]
+        {
+            builder.schannel(crate::connect::schannel::ClientConfig::new())
+        }
+        #[cfg(not(any(
+            feature = "openssl",
+            feature = "rustls",
+            all(windows, feature = "schannel")
+        )))]
         {
             builder
         }
@@ -98,6 +111,15 @@ impl<M> ClientBuilder<M> {
         use crate::connect::rustls::TlsConnector;
 
         self.secure_connector(TlsConnector::new(config))
+    }
+
+    #[must_use]
+    #[cfg(all(windows, feature = "schannel"))]
+    /// Use Windows Schannel connector for secured connections.
+    pub fn schannel(self, config: crate::connect::schannel::ClientConfig) -> Self {
+        use crate::connect::schannel::TlsConnector;
+
+        self.secure_connector(TlsConnector::with_config(config))
     }
 
     #[must_use]
