@@ -19,3 +19,12 @@ impl<Req, St: 'static> RequestState<Req> for State<St, Req> {
         (state, req)
     }
 }
+
+impl<Req, St: 'static> RequestState<Req> for (St, Req) {
+    type State = St;
+
+    #[inline]
+    fn unpack(self) -> (St, Req) {
+        (self.0, self.1)
+    }
+}
