@@ -13,24 +13,23 @@ use super::dispatcher::Dispatcher;
 /// `ServiceFactory` implementation for HTTP1 transport
 #[derive(derive_more::Debug)]
 #[debug("H1Service")]
-pub struct H1Service<St, F, Req: RequestState<Io<F>>, H, Ctl = DefaultControlService> {
+pub struct H1Service<F, Req: RequestState<Io<F>>, H, Ctl = DefaultControlService> {
     sf: H,
     ctl: Ctl,
     config: DispatcherConfig,
-    ph: PhantomData<(St, F, Req)>,
+    ph: PhantomData<(F, Req)>,
 }
 
-impl<St, F, Req, H> H1Service<St, F, Req, H>
+impl<F, Req, H> H1Service<F, Req, H>
 where
-    St: 'static,
     F: Filter,
     Req: RequestState<Io<F>>,
     Req::State: Clone,
 {
     /// Create new `HttpService` instance with config.
-    pub(crate) fn new(sf: impl IntoServiceFactory<H, Req::State, Request, St>) -> Self
+    pub(crate) fn new(sf: impl IntoServiceFactory<H, Req::State, Request>) -> Self
     where
-        H: ServiceFactory<Req::State, Request, St> + 'static,
+        H: ServiceFactory<Req::State, Request> + 'static,
         H::Res: Into<Response>,
         H::Error: ResponseError,
         H::InitError: Error,
@@ -44,19 +43,18 @@ where
     }
 }
 
-impl<St, F, Req, H, Ctl> H1Service<St, F, Req, H, Ctl>
+impl<F, Req, H, Ctl> H1Service<F, Req, H, Ctl>
 where
-    St: 'static,
     F: Filter,
     Req: RequestState<Io<F>>,
 {
     #[must_use]
     /// Provide http/1 control service.
-    pub fn control<I, Sf>(self, ctl: I) -> H1Service<St, F, Req, H, Sf>
+    pub fn control<I, Sf>(self, ctl: I) -> H1Service<F, Req, H, Sf>
     where
-        H: ServiceFactory<Req::State, Request, St>,
-        I: IntoServiceFactory<Sf, Req::State, Control<F, H::Error>, St>,
-        Sf: ServiceFactory<Req::State, Control<F, H::Error>, St, Res = ControlAck<F>> + 'static,
+        H: ServiceFactory<Req::State, Request>,
+        I: IntoServiceFactory<Sf, Req::State, Control<F, H::Error>>,
+        Sf: ServiceFactory<Req::State, Control<F, H::Error>, Res = ControlAck<F>> + 'static,
         Sf::Error: Error,
         Sf::InitError: Error,
     {
@@ -69,31 +67,30 @@ where
     }
 }
 
-impl<St, F, Req, H, Ctl> Service<St, Req> for H1Service<St, F, Req, H, Ctl>
+impl<St, F, Req, H, Ctl> Service<St, Req> for H1Service<F, Req, H, Ctl>
 where
-    St: 'static,
     F: Filter,
     Req: RequestState<Io<F>>,
     Req::State: Clone,
-    H: ServiceFactory<Req::State, Request, St> + 'static,
+    H: ServiceFactory<Req::State, Request> + 'static,
     H::Res: Into<Response>,
     H::Error: ResponseError,
     H::InitError: Error,
-    Ctl: ServiceFactory<Req::State, Control<F, H::Error>, St, Res = ControlAck<F>> + 'static,
+    Ctl: ServiceFactory<Req::State, Control<F, H::Error>, Res = ControlAck<F>> + 'static,
     Ctl::Error: Error,
     Ctl::InitError: Error,
 {
     type Res = ();
     type Error = DispatchError;
 
-    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
+    async fn call(&self, req: Req, _: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
         let (st, io) = req.unpack();
 
-        let svc = self.sf.create(ctx.st()).await.map_err(|e| {
+        let svc = self.sf.create(&st).await.map_err(|e| {
             log::error!("Cannot construct handler service: {e:?}");
             DispatchError::Control
         })?;
-        let ctl = self.ctl.create(ctx.st()).await.map_err(|e| {
+        let ctl = self.ctl.create(&st).await.map_err(|e| {
             log::error!("Cannot construct handler service: {e:?}");
             DispatchError::Control
         })?;
@@ -112,8 +109,8 @@ where
         let result = handle_io(
             id,
             io,
-            Pipeline::with(st.clone(), svc.map(Into::into)),
-            Pipeline::with(st, ctl.map_err(dyn_rc_err)),
+            Pipeline::new(st.clone(), svc.map(Into::into)),
+            Pipeline::new(st, ctl.map_err(dyn_rc_err)),
             self.config.clone(),
         )
         .await;

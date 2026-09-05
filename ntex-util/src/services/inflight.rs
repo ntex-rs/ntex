@@ -24,10 +24,10 @@ impl Default for InFlight {
     }
 }
 
-impl<S, St, Cfg> Middleware<S, St, Cfg> for InFlight {
+impl<S, St> Middleware<S, St> for InFlight {
     type Service = InFlightService<S>;
 
-    fn create(&self, service: S, _: &Cfg) -> Self::Service {
+    fn create(&self, _: &St, service: S) -> Self::Service {
         InFlightService {
             service,
             count: Counter::new(self.max_inflight),
@@ -83,7 +83,7 @@ mod tests {
     use std::{cell::Cell, cell::RefCell, rc::Rc, task::Poll, time::Duration};
 
     use async_channel as mpmc;
-    use ntex_service::{Pipeline, apply, fn_factory_nocfg};
+    use ntex_service::{Pipeline, apply, fn_factory};
 
     use super::*;
     use crate::{channel::oneshot, future::lazy};
@@ -105,7 +105,7 @@ mod tests {
         let (tx, rx) = mpmc::unbounded();
         let counter = Rc::new(Cell::new(0));
 
-        let srv = Pipeline::with((), InFlightService::new(1, SleepService(rx)));
+        let srv = Pipeline::new((), InFlightService::new(1, SleepService(rx)));
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let counter2 = counter.clone();
@@ -163,13 +163,13 @@ mod tests {
         let rx = RefCell::new(Some(rx));
         let sf = apply(
             InFlight::new(1),
-            fn_factory_nocfg(move || {
+            fn_factory(move |(): &()| {
                 let rx = rx.borrow_mut().take().unwrap();
                 async move { Ok::<_, ()>(SleepService(rx)) }
             }),
         );
 
-        let srv = sf.pipeline(&()).await.unwrap();
+        let srv = sf.pipeline(()).await.unwrap();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let srv2 = srv.bind();
@@ -196,13 +196,13 @@ mod tests {
         let rx = RefCell::new(Some(rx));
         let sf = apply(
             InFlight::new(1),
-            fn_factory_nocfg(move || {
+            fn_factory(move |(): &()| {
                 let rx = rx.borrow_mut().take().unwrap();
                 async move { Ok::<_, ()>(SleepService(rx)) }
             }),
         );
 
-        let srv = sf.pipeline(&()).await.unwrap();
+        let srv = sf.pipeline(()).await.unwrap();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let srv2 = srv.bind();

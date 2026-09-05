@@ -804,7 +804,7 @@ async fn test_custom_error() {
             })
         })
         .and_then(http::HttpService::new(
-            App::with::<TestAppState>()
+            App::with()
                 .service(web::resource("/").route(web::get().to(test)))
                 .service(web::resource("/err").route(web::get().to(test_err))),
         ))

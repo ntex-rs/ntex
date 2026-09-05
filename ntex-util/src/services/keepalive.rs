@@ -52,7 +52,7 @@ where
     }
 }
 
-impl<F, E, St, Req, Cfg> ServiceFactory<St, Req, Cfg> for KeepAlive<F, E>
+impl<F, E, St, Req> ServiceFactory<St, Req> for KeepAlive<F, E>
 where
     F: Fn() -> E + Clone,
 {
@@ -63,7 +63,7 @@ where
     type InitError = Infallible;
 
     #[inline]
-    async fn create(&self, _: &Cfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, _: &St) -> Result<Self::Service, Self::InitError> {
         Ok(KeepAliveService::new(self.ka, self.f.clone()))
     }
 }
@@ -149,7 +149,7 @@ where
 mod tests {
     use std::{pin::Pin, task::Context, task::Poll, task::ready};
 
-    use ntex_service::{Pipeline, boxed, factory_no_st};
+    use ntex_service::{Pipeline, boxed, factory};
 
     use super::*;
     use crate::{channel::oneshot, spawn};
@@ -180,14 +180,14 @@ mod tests {
 
     #[ntex::test]
     async fn test_ka() {
-        let factory = factory_no_st::<_, usize, ()>(KeepAlive::new(Millis(100), || TestErr));
+        let factory = factory::<_, (), usize>(KeepAlive::new(Millis(100), || TestErr));
         assert!(format!("{factory:?}").contains("KeepAlive"));
         let _ = factory.clone();
 
         let svc = factory.create(&()).await.unwrap();
         assert!(format!("{svc:?}").contains("KeepAliveService"));
 
-        let p = Pipeline::with((), boxed::service(svc));
+        let p = Pipeline::new((), boxed::service(svc));
         assert_eq!(p.call(1usize).await, Ok(1usize));
         let svc = p.bind();
 

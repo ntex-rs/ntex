@@ -48,7 +48,7 @@ where
             let f = f.clone();
             Box::pin(async move {
                 let svc = (f)(&cfg).await.into_service();
-                let pipeline = Pipeline::with(cfg, svc.map(|_| ()).map_err(|_| ()));
+                let pipeline = Pipeline::new(cfg, svc.map(|_| ()).map_err(|_| ()));
                 let svc: Box<dyn NetService> = Box::new(ServerService { pipeline });
                 svc
             })

@@ -120,7 +120,7 @@ mod tests {
         let svc = SslConnector::new(ssl.build()).clone();
         assert!(format!("{svc:?}").contains("SslConnector"));
 
-        let srv = Pipeline::with(SharedCfg::default(), svc);
+        let srv = Pipeline::new(SharedCfg::default(), svc);
         // always ready
         assert!(srv.ready().await.is_ok());
         let result = srv

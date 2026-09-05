@@ -69,10 +69,10 @@ pub fn subprotocols(req: &HttpRequest) -> impl Iterator<Item = &str> {
 pub async fn start<Sf>(
     req: &HttpRequest,
     subprotocol: Option<&str>,
-    f: impl IntoServiceFactory<Sf, (), Frame, WsSink>,
+    f: impl IntoServiceFactory<Sf, WsSink, Frame>,
 ) -> Result<HttpResponse, Sf::InitError>
 where
-    Sf: ServiceFactory<(), Frame, WsSink, Res = Option<Message>> + 'static,
+    Sf: ServiceFactory<WsSink, Frame, Res = Option<Message>> + 'static,
     Sf::Error: fmt::Debug,
     Sf::InitError: From<HandshakeError> + fmt::Debug,
 {
@@ -98,10 +98,10 @@ where
 pub async fn start_with<Sf>(
     req: &HttpRequest,
     subprotocol: Option<&str>,
-    f: impl IntoServiceFactory<Sf, (), DispatchItem<ws::Codec>, WsSink>,
+    f: impl IntoServiceFactory<Sf, WsSink, DispatchItem<ws::Codec>>,
 ) -> Result<HttpResponse, Sf::InitError>
 where
-    Sf: ServiceFactory<(), DispatchItem<ws::Codec>, WsSink, Res = Option<Message>> + 'static,
+    Sf: ServiceFactory<WsSink, DispatchItem<ws::Codec>, Res = Option<Message>> + 'static,
     Sf::Error: fmt::Debug,
     Sf::InitError: From<HandshakeError>,
 {
@@ -140,7 +140,7 @@ where
 
     // start websockets service dispatcher
     rt::spawn(async move {
-        let res = crate::io::Dispatcher::new(io, codec, Pipeline::with((), srv)).await;
+        let res = crate::io::Dispatcher::new(io, codec, Pipeline::new(sink, srv)).await;
         log::trace!("Ws handler is terminated: {res:?}");
     });
 

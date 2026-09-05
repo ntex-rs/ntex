@@ -37,9 +37,9 @@ mod pl_inner;
 mod pl_state;
 
 pub use crate::apply::{apply_fn, apply_fn_factory};
-pub use crate::chain::{ServiceChain, ServiceChainFactory, factory, factory_no_st, service};
+pub use crate::chain::{ServiceChain, ServiceChainFactory, factory, service};
 pub use crate::ctx::Ctx;
-pub use crate::fn_service::{fn_factory, fn_factory_nocfg, fn_service, fn_service_st};
+pub use crate::fn_service::{fn_factory, fn_service, fn_service_st};
 pub use crate::map_state::map_state;
 pub use crate::middleware::{Identity, Middleware, Stack, apply, fn_layer};
 pub use crate::pipeline::Pipeline;
@@ -191,13 +191,13 @@ pub trait Service<St, Req> {
 
     #[inline]
     /// Wraps it in a container.
-    fn pipeline(self) -> Pipeline<Req, Self::Res, Self::Error>
+    fn pipeline(self, st: St) -> Pipeline<Req, Self::Res, Self::Error>
     where
         Self: Sized + 'static,
-        St: Default + 'static,
+        St: 'static,
         Req: 'static,
     {
-        Pipeline::new(self)
+        Pipeline::new(st, self)
     }
 }
 
@@ -212,7 +212,7 @@ pub trait Service<St, Req> {
 ///
 /// Simple factories can often use [`fn_factory`] or [`fn_factory_with_config`]
 /// to reduce boilerplate.
-pub trait ServiceFactory<St, Req, Cfg = ()> {
+pub trait ServiceFactory<St, Req> {
     /// Responses given by the created services.
     type Res;
 
@@ -226,26 +226,26 @@ pub trait ServiceFactory<St, Req, Cfg = ()> {
     type InitError;
 
     /// Creates a new service asynchronously and returns it.
-    async fn create(&self, cfg: &Cfg) -> Result<Self::Service, Self::InitError>;
+    async fn create(&self, cfg: &St) -> Result<Self::Service, Self::InitError>;
 
     #[inline]
     /// Asynchronously creates a new service and wraps it in a container.
     async fn pipeline(
         &self,
-        cfg: &Cfg,
+        st: St,
     ) -> Result<Pipeline<Req, Self::Res, Self::Error>, Self::InitError>
     where
         Self: 'static,
-        St: Default + 'static,
+        St: 'static,
         Req: 'static,
-        Cfg: 'static,
     {
-        Ok(Pipeline::new(self.create(cfg).await?))
+        let svc = self.create(&st).await?;
+        Ok(Pipeline::new(st, svc))
     }
 
     #[inline]
     /// Returns a new service that maps this service's output to a different type.
-    fn map<F, Res>(self, f: F) -> ServiceChainFactory<dev::MapFactory<F, Self, Res>, St, Req, Cfg>
+    fn map<F, Res>(self, f: F) -> ServiceChainFactory<dev::MapFactory<F, Self, Res>, St, Req>
     where
         Self: Sized,
         F: Fn(Self::Res) -> Res + Clone,
@@ -256,10 +256,7 @@ pub trait ServiceFactory<St, Req, Cfg = ()> {
     #[inline]
     /// Transforms this service's error into another error,
     /// producing a new service.
-    fn map_err<F, E>(
-        self,
-        f: F,
-    ) -> ServiceChainFactory<dev::MapErrFactory<F, Self, E>, St, Req, Cfg>
+    fn map_err<F, E>(self, f: F) -> ServiceChainFactory<dev::MapErrFactory<F, Self, E>, St, Req>
     where
         Self: Sized,
         F: Fn(Self::Error) -> E + Clone,
@@ -270,10 +267,7 @@ pub trait ServiceFactory<St, Req, Cfg = ()> {
     #[inline]
     /// Maps this factory's initialization error to a different error,
     /// returning a new service factory.
-    fn map_init_err<F, E>(
-        self,
-        f: F,
-    ) -> ServiceChainFactory<dev::MapInitErr<F, Self, E>, St, Req, Cfg>
+    fn map_init_err<F, E>(self, f: F) -> ServiceChainFactory<dev::MapInitErr<F, Self, E>, St, Req>
     where
         Self: Sized,
         F: Fn(Self::InitError) -> E + Clone,
@@ -282,23 +276,20 @@ pub trait ServiceFactory<St, Req, Cfg = ()> {
     }
 
     /// Call another service after call to this one has resolved successfully.
-    fn and_then<U, F>(self, f: F) -> ServiceChainFactory<dev::AndThenFactory<Self, U>, St, Req, Cfg>
+    fn and_then<U, F>(self, f: F) -> ServiceChainFactory<dev::AndThenFactory<Self, U>, St, Req>
     where
         Self: Sized,
-        U: ServiceFactory<St, Self::Res, Cfg, Error = Self::Error, InitError = Self::InitError>,
-        F: IntoServiceFactory<U, St, Self::Res, Cfg>,
+        U: ServiceFactory<St, Self::Res, Error = Self::Error, InitError = Self::InitError>,
+        F: IntoServiceFactory<U, St, Self::Res>,
     {
         factory(dev::AndThenFactory::new(self, f.into_factory()))
     }
 
     /// Creates a boxed service factory.
-    fn boxed(
-        self,
-    ) -> boxed::BoxServiceFactory<St, Req, Self::Res, Self::Error, Cfg, Self::InitError>
+    fn boxed(self) -> boxed::BoxServiceFactory<St, Req, Self::Res, Self::Error, Self::InitError>
     where
         St: 'static,
         Req: 'static,
-        Cfg: 'static,
         Self: Sized + 'static,
     {
         boxed::factory(self)
@@ -374,16 +365,16 @@ where
     }
 }
 
-impl<Sf, St, Req, Cfg> ServiceFactory<St, Req, Cfg> for Rc<Sf>
+impl<Sf, St, Req> ServiceFactory<St, Req> for Rc<Sf>
 where
-    Sf: ServiceFactory<St, Req, Cfg>,
+    Sf: ServiceFactory<St, Req>,
 {
     type Res = Sf::Res;
     type Error = Sf::Error;
     type Service = Sf::Service;
     type InitError = Sf::InitError;
 
-    async fn create(&self, cfg: &Cfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &St) -> Result<Self::Service, Self::InitError> {
         self.as_ref().create(cfg).await
     }
 }
@@ -398,9 +389,9 @@ where
 }
 
 /// Trait for types that can be converted to a `ServiceFactory`
-pub trait IntoServiceFactory<Sf, St, Req, Cfg = ()>
+pub trait IntoServiceFactory<Sf, St, Req>
 where
-    Sf: ServiceFactory<St, Req, Cfg>,
+    Sf: ServiceFactory<St, Req>,
 {
     /// Convert `Self` to a `ServiceFactory`
     fn into_factory(self) -> Sf;
@@ -416,9 +407,9 @@ where
     }
 }
 
-impl<Sf, St, Req, Cfg> IntoServiceFactory<Sf, St, Req, Cfg> for Sf
+impl<Sf, St, Req> IntoServiceFactory<Sf, St, Req> for Sf
 where
-    Sf: ServiceFactory<St, Req, Cfg>,
+    Sf: ServiceFactory<St, Req>,
 {
     #[inline]
     fn into_factory(self) -> Sf {
@@ -438,9 +429,9 @@ pub fn __assert_svc<St, Req, Res, Err>(
 /// Check `ServiceFactory` type
 #[inline(always)]
 #[allow(clippy::inline_always)]
-pub fn __assert_factory<Sf, St, Req, Res, Err, InitCfg, InitErr>(f: Sf) -> Sf
+pub fn __assert_factory<Sf, St, Req, Res, Err, InitErr>(f: Sf) -> Sf
 where
-    Sf: ServiceFactory<St, Req, InitCfg, Res = Res, Error = Err, InitError = InitErr>,
+    Sf: ServiceFactory<St, Req, Res = Res, Error = Err, InitError = InitErr>,
 {
     f
 }

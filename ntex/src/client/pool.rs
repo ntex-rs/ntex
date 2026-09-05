@@ -639,7 +639,7 @@ mod tests {
             }))),
             cfg.get(),
         );
-        let pipe = Pipeline::with(cfg, pool.clone());
+        let pipe = Pipeline::new(cfg, pool.clone());
 
         // uri must contain authority
         let req = Connect {

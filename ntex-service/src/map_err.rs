@@ -87,9 +87,9 @@ pub struct MapErrFactory<F, Sf, E> {
 
 impl<F, Sf, E> MapErrFactory<F, Sf, E> {
     /// Create new `MapErr` new service instance
-    pub(crate) fn new<St, Req, Cfg>(f: F, sf: Sf) -> Self
+    pub(crate) fn new<St, Req>(f: F, sf: Sf) -> Self
     where
-        Sf: ServiceFactory<St, Req, Cfg>,
+        Sf: ServiceFactory<St, Req>,
         F: Fn(Sf::Error) -> E + Clone,
     {
         Self {
@@ -122,9 +122,9 @@ where
     }
 }
 
-impl<F, Sf, St, Req, Cfg, E> ServiceFactory<St, Req, Cfg> for MapErrFactory<F, Sf, E>
+impl<F, Sf, St, Req, E> ServiceFactory<St, Req> for MapErrFactory<F, Sf, E>
 where
-    Sf: ServiceFactory<St, Req, Cfg>,
+    Sf: ServiceFactory<St, Req>,
     F: Fn(Sf::Error) -> E + Clone,
 {
     type Res = Sf::Res;
@@ -134,8 +134,8 @@ where
     type InitError = Sf::InitError;
 
     #[inline]
-    async fn create(&self, cfg: &Cfg) -> Result<Self::Service, Self::InitError> {
-        self.sf.create(cfg).await.map(|svc| MapErr {
+    async fn create(&self, st: &St) -> Result<Self::Service, Self::InitError> {
+        self.sf.create(st).await.map(|svc| MapErr {
             svc,
             f: self.f.clone(),
             e: PhantomData,
@@ -173,7 +173,7 @@ mod tests {
     #[ntex::test]
     async fn test_ready() {
         let cnt_sht = Rc::new(Cell::new(0));
-        let srv = Pipeline::with((), Srv(true, cnt_sht.clone()).map_err(|()| "error"));
+        let srv = Pipeline::new((), Srv(true, cnt_sht.clone()).map_err(|()| "error"));
         let res = srv.ready().await;
         assert_eq!(res, Err("error"));
 
@@ -183,7 +183,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_service() {
-        let srv = Pipeline::with(
+        let srv = Pipeline::new(
             (),
             Srv(false, Rc::new(Cell::new(0)))
                 .map_err(|()| "error")
@@ -198,7 +198,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_pipeline() {
-        let srv = Pipeline::with(
+        let srv = Pipeline::new(
             (),
             crate::service(Srv(false, Rc::new(Cell::new(0))))
                 .map_err(|()| "error")
@@ -214,9 +214,9 @@ mod tests {
     #[ntex::test]
     async fn test_factory() {
         let new_srv =
-            crate::fn_factory_nocfg(|| async { Ok::<_, ()>(Srv(false, Rc::new(Cell::new(0)))) })
+            crate::fn_factory(|(): &()| async { Ok::<_, ()>(Srv(false, Rc::new(Cell::new(0)))) })
                 .map_err(|()| "error");
-        let srv = Pipeline::with((), new_srv.create(&()).await.unwrap());
+        let srv = Pipeline::new((), new_srv.create(&()).await.unwrap());
         let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");
@@ -229,7 +229,7 @@ mod tests {
             fn_factory(|(): &()| async move { Ok::<Srv, ()>(Srv(false, Rc::new(Cell::new(0)))) })
                 .map_err(|()| "error")
                 .clone();
-        let srv = Pipeline::with((), new_srv.create(&()).await.unwrap());
+        let srv = Pipeline::new((), new_srv.create(&()).await.unwrap());
         let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");

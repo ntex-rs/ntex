@@ -3,7 +3,7 @@ use std::{fmt, future, pin::Pin, task::Context, task::Poll};
 use crate::pl_inner::PipelineApi;
 use crate::{IntoService, Service, util::BoxFuture};
 
-pub use crate::pl_factory::{PipelineFactory, PipelineStateFactory};
+pub use crate::pl_factory::PipelineFactory;
 pub use crate::pl_state::{PipelineState, PipelineStateBinding};
 
 /// Container for a service.
@@ -27,19 +27,7 @@ where
 {
     #[inline]
     /// Construct new service pipeline instance with default state.
-    pub fn new<S, St>(f: impl IntoService<S, St, Req>) -> Self
-    where
-        S: Service<St, Req, Res = Res, Error = Err> + 'static,
-        St: Default + 'static,
-    {
-        Pipeline {
-            api: PipelineApi::new(f.into_service(), St::default()),
-        }
-    }
-
-    #[inline]
-    /// Construct new service pipeline instance with state.
-    pub fn with<S, St>(st: St, f: impl IntoService<S, St, Req>) -> Self
+    pub fn new<S, St>(st: St, f: impl IntoService<S, St, Req>) -> Self
     where
         S: Service<St, Req, Res = Res, Error = Err> + 'static,
         St: 'static,

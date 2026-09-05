@@ -71,13 +71,13 @@ pub fn default_service<St: AppState>(
 pub async fn init_service<St, R, S, E>(app: R) -> Pipeline<Request, WebResponse, E>
 where
     St: Default + 'static,
-    R: IntoServiceFactory<S, St, Request, SharedCfg>,
-    S: ServiceFactory<St, Request, SharedCfg, Res = WebResponse, Error = E> + 'static,
+    R: IntoServiceFactory<S, St, Request>,
+    S: ServiceFactory<St, Request, Res = WebResponse, Error = E> + 'static,
     S::InitError: fmt::Debug,
-    // Cfg: Default + Clone + 'static,
+    St: Default + Clone + 'static,
 {
     let srv = app.into_factory().map_init_err(|e| log::error!("{e:?}"));
-    srv.pipeline(&SharedCfg::default()).await.unwrap()
+    srv.pipeline(Default::default()).await.unwrap()
 }
 
 /// Calls service and waits for response future completion.
@@ -547,8 +547,8 @@ impl TestRequest {
 pub fn server<F, I, Sf>(factory: F) -> TestServer
 where
     F: AsyncFn(&()) -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<Sf, (), Request, ()>,
-    Sf: ServiceFactory<(), Request, ()> + 'static,
+    I: IntoServiceFactory<Sf, (), Request>,
+    Sf: ServiceFactory<(), Request> + 'static,
     Sf::Res: Into<Response>,
     Sf::Error: ResponseError,
     Sf::InitError: fmt::Debug,
@@ -584,8 +584,8 @@ where
 pub fn server_with<F, I, Sf>(cfg: TestServerConfig, factory: F) -> TestServer
 where
     F: AsyncFn(&()) -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<Sf, (), Request, ()>,
-    Sf: ServiceFactory<(), Request, ()> + 'static,
+    I: IntoServiceFactory<Sf, (), Request>,
+    Sf: ServiceFactory<(), Request> + 'static,
     Sf::Res: Into<Response>,
     Sf::Error: ResponseError,
     Sf::InitError: fmt::Debug,

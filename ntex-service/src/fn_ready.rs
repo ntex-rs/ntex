@@ -41,7 +41,7 @@ impl<F, Err> fmt::Debug for FnReadiness<F, Err> {
     }
 }
 
-impl<F, Err, St, Req, Cfg> ServiceFactory<St, Req, Cfg> for FnReadiness<F, Err>
+impl<F, Err, St, Req> ServiceFactory<St, Req> for FnReadiness<F, Err>
 where
     F: AsyncFn(&St) -> Result<(), Err> + Clone,
 {
@@ -52,7 +52,7 @@ where
     type InitError = Infallible;
 
     #[inline]
-    async fn create(&self, _: &Cfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, _: &St) -> Result<Self::Service, Self::InitError> {
         Ok(self.clone())
     }
 }
@@ -89,12 +89,12 @@ mod tests {
         let is_called = Rc::new(Cell::new(false));
         let is_called2 = is_called.clone();
 
-        let svc = service::<_, (), _>(async |()| Ok::<_, ()>("pipe")).readiness(async move |()| {
+        let svc = service(async |()| Ok::<_, ()>("pipe")).readiness(async move |()| {
             is_called2.set(true);
             Ok(())
         });
         let _ = format!("{svc:?}");
-        let pipe = Pipeline::new(svc);
+        let pipe = Pipeline::new((), svc);
 
         let res = pipe.call(()).await;
         assert_eq!(pipe.ready().await, Ok(()));
@@ -106,12 +106,11 @@ mod tests {
         let is_called = Rc::new(Cell::new(false));
         let is_called2 = is_called.clone();
 
-        let factory =
-            factory::<_, (), _, _>(|()| async { Ok::<_, ()>("pipe") }).readiness(async move |()| {
-                is_called2.set(true);
-                Ok(())
-            });
-        let pipe = Pipeline::new(factory.create(&()).await.unwrap());
+        let factory = factory(|()| async { Ok::<_, ()>("pipe") }).readiness(async move |()| {
+            is_called2.set(true);
+            Ok(())
+        });
+        let pipe = Pipeline::new((), factory.create(&()).await.unwrap());
 
         let res = pipe.call(()).await;
         assert_eq!(pipe.ready().await, Ok(()));

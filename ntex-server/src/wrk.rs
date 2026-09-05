@@ -297,7 +297,7 @@ where
         let mut stop = Box::pin(stop);
 
         let svc = match select(factory.create(), stream_recv(&mut stop)).await {
-            Either::Left(Ok(svc)) => Pipeline::with((), svc),
+            Either::Left(Ok(svc)) => Pipeline::new((), svc),
             Either::Right(Some(Shutdown { result, .. })) => {
                 log::trace!("Shutdown uninitialized worker");
                 let _ = result.send(false);
@@ -375,7 +375,7 @@ where
             loop {
                 match select(self.factory.create(), stream_recv(&mut self.stop)).await {
                     Either::Left(Ok(service)) => {
-                        self.svc = Pipeline::with((), service);
+                        self.svc = Pipeline::new((), service);
                         break;
                     }
                     Either::Left(Err(_)) => sleep(Millis::ONE_SEC).await,

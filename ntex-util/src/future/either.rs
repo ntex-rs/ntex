@@ -1,5 +1,7 @@
 use std::{error, fmt, future::Future, io, pin::Pin, task::Context, task::Poll};
 
+use ntex_service::{Ctx, Service};
+
 /// Combines two different futures, streams, or sinks having the same associated types into a single
 /// type.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -130,6 +132,36 @@ impl<E: error::Error> From<Either<E, io::Error>> for io::Error {
         match err {
             Either::Left(e) => io::Error::other(format!("{e:?}")),
             Either::Right(e) => e,
+        }
+    }
+}
+
+impl<A, B, St, Req> Service<St, Req> for Either<A, B>
+where
+    A: Service<St, Req>,
+    B: Service<St, Req, Res = A::Res, Error = A::Error>,
+{
+    type Res = A::Res;
+    type Error = A::Error;
+
+    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
+        match self {
+            Either::Left(svc) => ctx.call(svc, req).await,
+            Either::Right(svc) => ctx.call(svc, req).await,
+        }
+    }
+
+    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
+        match self {
+            Either::Left(svc) => ctx.ready(svc).await,
+            Either::Right(svc) => ctx.ready(svc).await,
+        }
+    }
+
+    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
+        match self {
+            Either::Left(svc) => ctx.shutdown(svc).await,
+            Either::Right(svc) => ctx.shutdown(svc).await,
         }
     }
 }

@@ -37,8 +37,8 @@ pub struct HttpServer<Cfg, F, I, Sf>
 where
     Cfg: ServerAppConfig,
     F: AsyncFn(&Cfg::State) -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<Sf, (), Request, Cfg::State>,
-    Sf: ServiceFactory<(), Request, Cfg::State>,
+    I: IntoServiceFactory<Sf, (), Request>,
+    Sf: ServiceFactory<(), Request>,
     Sf::Res: Into<Response>,
     Sf::Error: ResponseError,
     Sf::InitError: Error,
@@ -53,8 +53,8 @@ where
 impl<F, I, Sf> HttpServer<NoConfig, F, I, Sf>
 where
     F: AsyncFn(&()) -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<Sf, (), Request, ()>,
-    Sf: ServiceFactory<(), Request, ()> + 'static,
+    I: IntoServiceFactory<Sf, (), Request>,
+    Sf: ServiceFactory<(), Request> + 'static,
     Sf::Res: Into<Response>,
     Sf::Error: ResponseError,
     Sf::InitError: Error,
@@ -76,8 +76,8 @@ impl<Cfg, F, I, Sf> HttpServer<Cfg, F, I, Sf>
 where
     Cfg: ServerAppConfig,
     F: AsyncFn(&Cfg::State) -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<Sf, (), Request, Cfg::State>,
-    Sf: ServiceFactory<(), Request, Cfg::State> + 'static,
+    I: IntoServiceFactory<Sf, (), Request>,
+    Sf: ServiceFactory<(), Request> + 'static,
     Sf::Res: Into<Response>,
     Sf::Error: ResponseError,
     Sf::InitError: Error,
@@ -233,7 +233,7 @@ where
             format!("ntex-web-service-{addr}"),
             lst,
             cfg.into(),
-            async move |st| http::HttpService::new(factory(st).await).build(),
+            async move |st| http::HttpService::new(factory(st).await),
         )?;
         Ok(self)
     }
@@ -438,8 +438,8 @@ impl<Cfg, F, I, Sf> HttpServer<Cfg, F, I, Sf>
 where
     Cfg: ServerAppConfig,
     F: AsyncFn(&Cfg::State) -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<Sf, (), Request, Cfg::State>,
-    Sf: ServiceFactory<(), Request, Cfg::State> + 'static,
+    I: IntoServiceFactory<Sf, (), Request>,
+    Sf: ServiceFactory<(), Request> + 'static,
     Sf::Res: Into<Response>,
     Sf::Error: ResponseError,
     Sf::InitError: Error,

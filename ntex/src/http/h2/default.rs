@@ -22,14 +22,14 @@ impl<St> Service<St, h2::Control<H2Error>> for DefaultControlService {
     }
 }
 
-impl<St, Cfg> ServiceFactory<St, h2::Control<H2Error>, Cfg> for DefaultControlService {
+impl<St> ServiceFactory<St, h2::Control<H2Error>> for DefaultControlService {
     type Res = h2::ControlAck;
     type Error = io::Error;
 
     type Service = DefaultControlService;
     type InitError = Infallible;
 
-    async fn create(&self, _: &Cfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, _: &St) -> Result<Self::Service, Self::InitError> {
         Ok(DefaultControlService)
     }
 }

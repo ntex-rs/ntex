@@ -11,9 +11,9 @@ pub struct MapInitErr<F, Sf, Err> {
 
 impl<F, Sf, Err> MapInitErr<F, Sf, Err> {
     /// Create new `MapInitErr` combinator
-    pub(crate) fn new<St, Req, Cfg>(f: F, sf: Sf) -> Self
+    pub(crate) fn new<St, Req>(f: F, sf: Sf) -> Self
     where
-        Sf: ServiceFactory<St, Req, Cfg>,
+        Sf: ServiceFactory<St, Req>,
         F: Fn(Sf::InitError) -> Err,
     {
         Self {
@@ -50,10 +50,10 @@ where
     }
 }
 
-impl<F, Sf, St, Req, Cfg, Err> ServiceFactory<St, Req, Cfg> for MapInitErr<F, Sf, Err>
+impl<F, Sf, St, Req, Err> ServiceFactory<St, Req> for MapInitErr<F, Sf, Err>
 where
     F: Fn(Sf::InitError) -> Err + Clone,
-    Sf: ServiceFactory<St, Req, Cfg>,
+    Sf: ServiceFactory<St, Req>,
 {
     type Res = Sf::Res;
     type Error = Sf::Error;
@@ -62,18 +62,18 @@ where
     type InitError = Err;
 
     #[inline]
-    async fn create(&self, cfg: &Cfg) -> Result<Self::Service, Self::InitError> {
-        self.sf.create(cfg).await.map_err(|e| (self.f)(e))
+    async fn create(&self, st: &St) -> Result<Self::Service, Self::InitError> {
+        self.sf.create(st).await.map_err(|e| (self.f)(e))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{ServiceFactory, factory_no_st, fn_factory, fn_service};
+    use crate::{ServiceFactory, factory, fn_factory, fn_service};
 
     #[ntex::test]
     async fn map_init_err() {
-        let factory = factory_no_st(fn_factory(async move |err: &bool| {
+        let factory = factory(fn_factory(async move |err: &bool| {
             if *err {
                 Err(())
             } else {
@@ -90,7 +90,7 @@ mod tests {
 
     #[ntex::test]
     async fn map_init_err2() {
-        let factory = factory_no_st(fn_factory(async |err: &bool| {
+        let factory = factory(fn_factory(async |err: &bool| {
             if *err {
                 Err(())
             } else {

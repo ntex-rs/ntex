@@ -47,7 +47,7 @@ impl<St: Clone, Req, Res, Err> Default for Buffer<St, Req, Res, Err> {
     }
 }
 
-impl<S, St, Cfg, Req, Res, Err> Middleware<S, St, Cfg> for Buffer<St, Req, Res, Err>
+impl<S, St, Req, Res, Err> Middleware<S, St> for Buffer<St, Req, Res, Err>
 where
     S: Service<St, Req, Res = Res, Error = Err> + 'static,
     St: Clone + 'static,
@@ -57,7 +57,7 @@ where
 {
     type Service = BufferService<St, Req, Res, Err>;
 
-    fn create(&self, service: S, _: &Cfg) -> Self::Service {
+    fn create(&self, _: &St, service: S) -> Self::Service {
         BufferService::new(self.buf_size, PipelineState::new(service))
     }
 }
@@ -250,7 +250,7 @@ where
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unused_async_trait_impl)]
-    use ntex_service::{Pipeline, apply, fn_factory_nocfg};
+    use ntex_service::{Pipeline, apply, fn_factory};
     use std::{rc::Rc, time::Duration};
 
     use super::*;
@@ -300,7 +300,7 @@ mod tests {
         let svc = BufferService::new(2, PipelineState::new(TestService(inner.clone())));
         assert!(format!("{svc:?}").contains("BufferService"));
 
-        let srv = Pipeline::with((), svc);
+        let srv = Pipeline::new((), svc);
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let srv1 = srv.bind();
@@ -339,7 +339,7 @@ mod tests {
             count: Cell::new(0),
         });
 
-        let srv = Pipeline::with(
+        let srv = Pipeline::new(
             (),
             BufferService::new(2, PipelineState::new(TestService(inner.clone()))),
         );
@@ -367,10 +367,10 @@ mod tests {
 
         let srv = apply(
             Buffer::default().buf_size(2),
-            fn_factory_nocfg(async move || Ok::<_, ()>(TestService(inner2.clone()))),
+            fn_factory(async move |(): &()| Ok::<_, ()>(TestService(inner2.clone()))),
         );
 
-        let srv = srv.pipeline(&()).await.unwrap();
+        let srv = srv.pipeline(()).await.unwrap();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let srv1 = srv.bind();
@@ -416,10 +416,10 @@ mod tests {
 
         let srv = apply(
             Buffer::default().buf_size(2),
-            fn_factory_nocfg(async move || Ok::<_, ()>(TestService(inner2.clone()))),
+            fn_factory(async move |(): &()| Ok::<_, ()>(TestService(inner2.clone()))),
         );
 
-        let srv = srv.pipeline(&()).await.unwrap();
+        let srv = srv.pipeline(()).await.unwrap();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let srv1 = srv.bind();

@@ -85,10 +85,10 @@ impl<St> Clone for Timeout<St> {
     }
 }
 
-impl<S, St, Cfg> Middleware<S, St, Cfg> for Timeout<St> {
+impl<S, St> Middleware<S, St> for Timeout<St> {
     type Service = TimeoutService<S, St>;
 
-    fn create(&self, service: S, _: &Cfg) -> Self::Service {
+    fn create(&self, _: &St, service: S) -> Self::Service {
         TimeoutService {
             service,
             timeout: self.timeout,
@@ -147,7 +147,7 @@ where
 mod tests {
     use std::time::Duration;
 
-    use ntex_service::{Pipeline, apply, fn_factory_nocfg};
+    use ntex_service::{Pipeline, apply, fn_factory};
 
     use super::*;
 
@@ -178,7 +178,7 @@ mod tests {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(50);
 
-        let timeout = Pipeline::with(
+        let timeout = Pipeline::new(
             (),
             TimeoutService::new(resolution, SleepService(wait_time)).clone(),
         );
@@ -192,7 +192,7 @@ mod tests {
         let wait_time = Duration::from_millis(50);
         let resolution = Duration::from_millis(0);
 
-        let timeout = Pipeline::with((), TimeoutService::new(resolution, SleepService(wait_time)));
+        let timeout = Pipeline::new((), TimeoutService::new(resolution, SleepService(wait_time)));
         assert_eq!(timeout.call(()).await, Ok(()));
         assert_eq!(timeout.ready().await, Ok(()));
     }
@@ -202,7 +202,7 @@ mod tests {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(500);
 
-        let timeout = Pipeline::with((), TimeoutService::new(resolution, SleepService(wait_time)));
+        let timeout = Pipeline::new((), TimeoutService::new(resolution, SleepService(wait_time)));
         assert_eq!(timeout.call(()).await, Err(TimeoutError::Timeout));
     }
 
@@ -214,9 +214,9 @@ mod tests {
 
         let timeout = apply(
             Timeout::new(resolution).clone(),
-            fn_factory_nocfg(async move || Ok::<_, ()>(SleepService(wait_time))),
+            fn_factory(async move |()| Ok::<_, ()>(SleepService(wait_time))),
         );
-        let srv = timeout.pipeline(&()).await.unwrap();
+        let srv = timeout.pipeline(()).await.unwrap();
 
         let res = srv.call(()).await.unwrap_err();
         assert_eq!(res, TimeoutError::Timeout);

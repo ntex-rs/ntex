@@ -42,7 +42,7 @@ async fn test_simple() {
                     let _ = Dispatcher::new(
                         io.seal(),
                         ws::Codec::default(),
-                        Pipeline::with((), ws_service),
+                        Pipeline::new((), ws_service),
                     )
                     .await;
                     ack
@@ -102,7 +102,7 @@ async fn test_transport() {
                     let _ = Dispatcher::new(
                         io.seal(),
                         ws::Codec::default(),
-                        Pipeline::with((), ws_service),
+                        Pipeline::new((), ws_service),
                     )
                     .await;
 
@@ -146,7 +146,7 @@ async fn test_keepalive_timeout() {
                     let _ = Dispatcher::new(
                         io.seal(),
                         ws::Codec::default(),
-                        Pipeline::with((), ws_service),
+                        Pipeline::new((), ws_service),
                     )
                     .await;
 

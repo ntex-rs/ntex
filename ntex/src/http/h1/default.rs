@@ -26,7 +26,7 @@ where
     }
 }
 
-impl<St, F, Err, Cfg> ServiceFactory<St, Control<F, Err>, Cfg> for DefaultControlService
+impl<St, F, Err> ServiceFactory<St, Control<F, Err>> for DefaultControlService
 where
     F: Filter,
     Err: ResponseError,
@@ -37,7 +37,7 @@ where
     type Service = DefaultControlService;
     type InitError = Infallible;
 
-    async fn create(&self, _: &Cfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, _: &St) -> Result<Self::Service, Self::InitError> {
         Ok(DefaultControlService)
     }
 }

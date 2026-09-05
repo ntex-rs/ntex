@@ -79,10 +79,10 @@ pub struct MapFactory<F, Sf, Res> {
 
 impl<F, Sf, Res> MapFactory<F, Sf, Res> {
     /// Create new `Map` new service instance
-    pub(crate) fn new<St, Req, Cfg>(f: F, sf: Sf) -> Self
+    pub(crate) fn new<St, Req>(f: F, sf: Sf) -> Self
     where
         F: Fn(Sf::Res) -> Res,
-        Sf: ServiceFactory<St, Req, Cfg>,
+        Sf: ServiceFactory<St, Req>,
     {
         Self {
             f,
@@ -119,10 +119,10 @@ where
     }
 }
 
-impl<F, Sf, St, Req, Cfg, Res> ServiceFactory<St, Req, Cfg> for MapFactory<F, Sf, Res>
+impl<F, Sf, St, Req, Res> ServiceFactory<St, Req> for MapFactory<F, Sf, Res>
 where
     F: Fn(Sf::Res) -> Res + Clone,
-    Sf: ServiceFactory<St, Req, Cfg>,
+    Sf: ServiceFactory<St, Req>,
 {
     type Res = Res;
     type Error = Sf::Error;
@@ -131,9 +131,9 @@ where
     type InitError = Sf::InitError;
 
     #[inline]
-    async fn create(&self, cfg: &Cfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, st: &St) -> Result<Self::Service, Self::InitError> {
         Ok(Map {
-            svc: self.sf.create(cfg).await?,
+            svc: self.sf.create(st).await?,
             f: self.f.clone(),
             _t: PhantomData,
         })
@@ -169,7 +169,7 @@ mod tests {
     #[ntex::test]
     async fn test_service() {
         let cnt_sht = Rc::new(Cell::new(0));
-        let srv = Pipeline::with((), Srv(cnt_sht.clone()).map(|()| "ok").clone());
+        let srv = Pipeline::new((), Srv(cnt_sht.clone()).map(|()| "ok").clone());
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
@@ -183,7 +183,7 @@ mod tests {
 
         let cnt_sht = Rc::new(Cell::new(0));
         let svc = Srv(cnt_sht.clone()).map(|()| "ok");
-        let srv = Pipeline::with((), svc);
+        let srv = Pipeline::new((), svc);
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
@@ -198,7 +198,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_pipeline() {
-        let srv = Pipeline::with((), crate::service(Srv::default()).map(|()| "ok").clone());
+        let srv = Pipeline::new((), crate::service(Srv::default()).map(|()| "ok").clone());
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
@@ -212,7 +212,7 @@ mod tests {
         let new_srv = fn_factory(|(): &()| async { Ok::<_, ()>(Srv::default()) })
             .map(|()| "ok")
             .clone();
-        let srv = Pipeline::with((), new_srv.create(&()).await.unwrap());
+        let srv = Pipeline::new((), new_srv.create(&()).await.unwrap());
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("ok"));
@@ -225,7 +225,7 @@ mod tests {
         let new_srv = crate::fn_factory(|(): &()| async { Ok::<_, ()>(Srv::default()) })
             .map(|()| "ok")
             .clone();
-        let srv = Pipeline::with((), new_srv.create(&()).await.unwrap());
+        let srv = Pipeline::new((), new_srv.create(&()).await.unwrap());
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("ok"));
