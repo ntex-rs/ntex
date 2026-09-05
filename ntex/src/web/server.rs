@@ -1,10 +1,11 @@
-use std::{error::Error, io, marker::PhantomData, net, sync::Arc, sync::Mutex};
+use std::{io, marker::PhantomData, net, sync::Arc, sync::Mutex};
 
 #[cfg(feature = "openssl")]
 use tls_openssl::ssl::{AlpnError, SslAcceptor, SslAcceptorBuilder};
 #[cfg(feature = "rustls")]
 use tls_rustls::ServerConfig as RustlsServerConfig;
 
+use crate::error::ErrorDiagnostic;
 use crate::http::{self, Request, Response, ResponseError};
 use crate::server::{NoConfig, Server, ServerAppConfig, ServerBuilder};
 use crate::service::{IntoServiceFactory, ServiceFactory};
@@ -41,7 +42,7 @@ where
     Sf: ServiceFactory<(), Request>,
     Sf::Res: Into<Response>,
     Sf::Error: ResponseError,
-    Sf::InitError: Error,
+    Sf::InitError: ErrorDiagnostic,
 {
     factory: F,
     config: Arc<Mutex<Config>>,
@@ -57,7 +58,7 @@ where
     Sf: ServiceFactory<(), Request> + 'static,
     Sf::Res: Into<Response>,
     Sf::Error: ResponseError,
-    Sf::InitError: Error,
+    Sf::InitError: ErrorDiagnostic,
 {
     #[must_use]
     /// Create new http server with application factory
@@ -80,7 +81,7 @@ where
     Sf: ServiceFactory<(), Request> + 'static,
     Sf::Res: Into<Response>,
     Sf::Error: ResponseError,
-    Sf::InitError: Error,
+    Sf::InitError: ErrorDiagnostic,
 {
     #[must_use]
     /// Create new http server with application factory and state mapping
@@ -442,7 +443,7 @@ where
     Sf: ServiceFactory<(), Request> + 'static,
     Sf::Res: Into<Response>,
     Sf::Error: ResponseError,
-    Sf::InitError: Error,
+    Sf::InitError: ErrorDiagnostic,
 {
     /// Start listening for incoming connections.
     ///

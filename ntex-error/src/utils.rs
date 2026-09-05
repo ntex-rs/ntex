@@ -62,21 +62,6 @@ impl ErrorDiagnostic for Infallible {
 }
 
 impl ErrorDiagnostic for io::Error {
-    fn typ(&self) -> ResultType {
-        match self.kind() {
-            io::ErrorKind::InvalidData
-            | io::ErrorKind::InvalidInput
-            | io::ErrorKind::Unsupported
-            | io::ErrorKind::UnexpectedEof
-            | io::ErrorKind::BrokenPipe
-            | io::ErrorKind::ConnectionReset
-            | io::ErrorKind::ConnectionAborted
-            | io::ErrorKind::NotConnected
-            | io::ErrorKind::TimedOut => ResultType::ClientError,
-            _ => ResultType::ServiceError,
-        }
-    }
-
     fn signature(&self) -> &'static str {
         match self.kind() {
             io::ErrorKind::InvalidData => "io-InvalidData",
@@ -99,10 +84,6 @@ pub struct Success;
 impl StdError for Success {}
 
 impl ErrorDiagnostic for Success {
-    fn typ(&self) -> ResultType {
-        ResultType::Success
-    }
-
     fn signature(&self) -> &'static str {
         ResultType::Success.as_str()
     }

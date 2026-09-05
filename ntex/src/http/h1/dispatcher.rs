@@ -1,13 +1,13 @@
 //! HTTP/1 protocol dispatcher
 use std::task::{Context, Poll, ready};
-use std::{error, future, io, mem, pin::Pin, rc::Rc};
+use std::{future, io, mem, pin::Pin, rc::Rc};
 
 use crate::io::{Decoded, Filter, Io, IoStatusUpdate, RecvError};
 use crate::service::pipeline::{Pipeline, PipelineCall};
 use crate::{channel::bstream, time::Seconds, util::Either};
 
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
-use crate::http::error::{PayloadError, ResponseError};
+use crate::http::error::{DispatchError, PayloadError, ResponseError};
 use crate::http::message::CurrentIo;
 use crate::http::{self, config::DispatcherConfig, request::Request, response::Response};
 
@@ -43,7 +43,7 @@ enum State<F, B, Err> {
         fut: PipelineCall<Request, Response<B>, Err>,
     },
     CallControl {
-        fut: PipelineCall<Control<F, Err>, ControlAck<F>, Rc<dyn error::Error>>,
+        fut: PipelineCall<Control<F, Err>, ControlAck<F>, DispatchError>,
     },
     ReadRequest,
     ReadPayload,
@@ -57,7 +57,7 @@ struct DispatcherInner<F, B, Err> {
     io: Rc<Io<F>>,
     flags: Flags,
     service: Pipeline<Request, Response<B>, Err>,
-    control: Pipeline<Control<F, Err>, ControlAck<F>, Rc<dyn error::Error>>,
+    control: Pipeline<Control<F, Err>, ControlAck<F>, DispatchError>,
     disconnect: Option<ServiceDisconnectReason>,
     codec: Codec,
     config: DispatcherConfig,
@@ -78,7 +78,7 @@ where
         id: usize,
         io: Io<F>,
         service: Pipeline<Request, Response<B>, Err>,
-        control: Pipeline<Control<F, Err>, ControlAck<F>, Rc<dyn error::Error>>,
+        control: Pipeline<Control<F, Err>, ControlAck<F>, DispatchError>,
         config: DispatcherConfig,
     ) -> Self {
         let codec = Codec::new(id, io.shared().get());
@@ -116,7 +116,7 @@ where
     B: MessageBody,
     Err: ResponseError + 'static,
 {
-    type Output = Result<(), Rc<dyn error::Error>>;
+    type Output = Result<(), DispatchError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -219,9 +219,8 @@ where
                 }
                 // shutdown io
                 State::Stop => {
-                    return Poll::Ready(
-                        ready!(inner.io.poll_shutdown(cx)).map_err(crate::util::dyn_rc_err),
-                    );
+                    let _ = ready!(inner.io.poll_shutdown(cx));
+                    return Poll::Ready(Ok(()));
                 }
             }
         }
@@ -759,7 +758,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::{cell::Cell, future::Future, future::poll_fn, sync::Arc};
+    use std::{cell::Cell, error, future::Future, future::poll_fn, sync::Arc};
 
     use rand::Rng;
 
@@ -770,7 +769,7 @@ mod tests {
     use crate::http::{ResponseHead, StatusCode, body};
     use crate::io::{self as nio, Base};
     use crate::service::{IntoService, Service, cfg::SharedCfg, fn_service};
-    use crate::util::{Bytes, BytesMut, dyn_rc_err, lazy, stream_recv};
+    use crate::util::{Bytes, BytesMut, lazy, stream_recv};
     use crate::{codec::Decoder, testing::IoTest, time::Millis, time::sleep};
 
     const BUFFER_SIZE: usize = 32_768;
@@ -796,7 +795,7 @@ mod tests {
             0,
             nio::Io::new(stream, cfg.clone()),
             Pipeline::new((), s.into_service().map(Into::into)),
-            Pipeline::new((), DefaultControlService.map_err(dyn_rc_err)),
+            Pipeline::new((), DefaultControlService),
             DispatcherConfig::default(),
         )
     }
@@ -821,7 +820,7 @@ mod tests {
             0,
             nio::Io::new(stream, cfg),
             Pipeline::new((), s.into_service().map(Into::into)),
-            Pipeline::new((), DefaultControlService.map_err(dyn_rc_err)),
+            Pipeline::new((), DefaultControlService),
             DispatcherConfig::default(),
         ));
     }
@@ -856,7 +855,7 @@ mod tests {
                     if let Control::Request(_) = req {
                         data2.set(true);
                     }
-                    Ok::<_, Rc<dyn error::Error>>(req.ack())
+                    Ok::<_, DispatchError>(req.ack())
                 }),
             ),
             DispatcherConfig::default(),
@@ -1268,7 +1267,7 @@ mod tests {
                     {
                         err_mark2.store(err_mark2.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
                     }
-                    Ok::<_, Rc<dyn error::Error>>(msg.ack())
+                    Ok::<_, DispatchError>(msg.ack())
                 }),
             ),
             DispatcherConfig::default(),

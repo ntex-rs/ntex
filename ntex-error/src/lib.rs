@@ -102,10 +102,6 @@ impl fmt::Display for ResultType {
 }
 
 impl ErrorDiagnostic for ResultType {
-    fn typ(&self) -> ResultType {
-        *self
-    }
-
     fn signature(&self) -> &'static str {
         self.as_str()
     }
