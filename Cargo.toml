@@ -53,9 +53,6 @@ ntex-tls = { path = "ntex-tls" }
 ntex-macros = { path = "ntex-macros" }
 ntex-util = { path = "ntex-util" }
 
-#ntex-h2 = { path = "../dev/ntex-h2" }
-ntex-h2 = { git = "https://github.com/ntex-rs/ntex-h2.git", branch = "service-updates" }
-
 [workspace.dependencies]
 ntex = "4.0.0-beta.5"
 ntex-bytes = "1.9.0"

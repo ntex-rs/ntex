@@ -680,6 +680,12 @@ where
 #[error("Cannot initialize App instance")]
 pub struct AppInitError;
 
+impl crate::error::ErrorDiagnostic for AppInitError {
+    fn signature(&self) -> &'static str {
+        "web-AppInit"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io;

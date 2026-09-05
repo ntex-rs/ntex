@@ -1,6 +1,5 @@
-use std::{convert::Infallible, io};
-
-use crate::{Ctx, Service, ServiceFactory, http::ResponseError, io::Filter};
+use crate::http::{ResponseError, error::DispatchError};
+use crate::{Ctx, Service, ServiceFactory, io::Filter};
 
 use super::control::{Control, ControlAck};
 
@@ -14,7 +13,7 @@ where
     Err: ResponseError,
 {
     type Res = ControlAck<F>;
-    type Error = io::Error;
+    type Error = DispatchError;
 
     #[inline]
     async fn call(
@@ -32,10 +31,10 @@ where
     Err: ResponseError,
 {
     type Res = ControlAck<F>;
-    type Error = io::Error;
+    type Error = DispatchError;
 
     type Service = DefaultControlService;
-    type InitError = Infallible;
+    type InitError = DispatchError;
 
     async fn create(&self, _: &St) -> Result<Self::Service, Self::InitError> {
         Ok(DefaultControlService)

@@ -1,8 +1,9 @@
 //! Essentials helper functions and types for application registration.
-use std::{error::Error, fmt};
+use std::fmt;
 
 use ntex_router::IntoPattern;
 
+use crate::error::ErrorDiagnostic;
 use crate::http::error::{BlockingError, ResponseError};
 use crate::http::header::ContentEncoding;
 use crate::http::{Method, Request, Response};
@@ -303,7 +304,7 @@ where
     Sf: ServiceFactory<(), Request> + 'static,
     Sf::Res: Into<Response>,
     Sf::Error: ResponseError,
-    Sf::InitError: Error,
+    Sf::InitError: ErrorDiagnostic,
 {
     HttpServer::new(factory)
 }
