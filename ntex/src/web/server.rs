@@ -5,7 +5,7 @@ use tls_openssl::ssl::{AlpnError, SslAcceptor, SslAcceptorBuilder};
 #[cfg(feature = "rustls")]
 use tls_rustls::ServerConfig as RustlsServerConfig;
 
-use crate::error::ErrorDiagnostic;
+use crate::error::IntoErrorInfo;
 use crate::http::{self, Request, Response, ResponseError};
 use crate::server::{NoConfig, Server, ServerAppConfig, ServerBuilder};
 use crate::service::{IntoServiceFactory, ServiceFactory};
@@ -42,7 +42,7 @@ where
     Sf: ServiceFactory<(), Request>,
     Sf::Res: Into<Response>,
     Sf::Error: ResponseError,
-    Sf::InitError: ErrorDiagnostic,
+    Sf::InitError: IntoErrorInfo,
 {
     factory: F,
     config: Arc<Mutex<Config>>,
@@ -58,7 +58,7 @@ where
     Sf: ServiceFactory<(), Request> + 'static,
     Sf::Res: Into<Response>,
     Sf::Error: ResponseError,
-    Sf::InitError: ErrorDiagnostic,
+    Sf::InitError: IntoErrorInfo,
 {
     #[must_use]
     /// Create new http server with application factory
@@ -81,7 +81,7 @@ where
     Sf: ServiceFactory<(), Request> + 'static,
     Sf::Res: Into<Response>,
     Sf::Error: ResponseError,
-    Sf::InitError: ErrorDiagnostic,
+    Sf::InitError: IntoErrorInfo,
 {
     #[must_use]
     /// Create new http server with application factory and state mapping
@@ -443,7 +443,7 @@ where
     Sf: ServiceFactory<(), Request> + 'static,
     Sf::Res: Into<Response>,
     Sf::Error: ResponseError,
-    Sf::InitError: ErrorDiagnostic,
+    Sf::InitError: IntoErrorInfo,
 {
     /// Start listening for incoming connections.
     ///

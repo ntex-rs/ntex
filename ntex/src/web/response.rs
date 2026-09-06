@@ -19,7 +19,7 @@ impl WebResponse {
 
     #[must_use]
     /// Create web response from the error.
-    pub fn from_err<Err, E: WebResponseError<Err>>(mut err: E, request: HttpRequest) -> Self {
+    pub fn from_err<St, E: WebResponseError<St>>(mut err: E, request: HttpRequest) -> Self {
         let res = err.error_response(&request);
 
         if res.head().status == StatusCode::INTERNAL_SERVER_ERROR {
@@ -37,8 +37,8 @@ impl WebResponse {
     #[inline]
     #[must_use]
     /// Create web response for error.
-    pub fn error_response<Err, E: WebResponseError<Err>>(self, err: E) -> Self {
-        Self::from_err::<Err, E>(err, self.request)
+    pub fn error_response<St, E: WebResponseError<St>>(self, err: E) -> Self {
+        Self::from_err::<St, E>(err, self.request)
     }
 
     #[inline]

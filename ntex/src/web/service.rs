@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use crate::error::{ErrorInfo, IntoErrorInfo};
 use crate::router::{IntoPattern, ResourceDef};
 use crate::service::{IntoServiceFactory, ServiceFactory, boxed};
 
@@ -104,8 +105,13 @@ impl<St: AppState> WebServiceConfig<St> {
         guards: Option<Vec<Box<dyn Guard>>>,
         nested: Option<Rc<ResourceMap>>,
     ) where
-        S: ServiceFactory<St, WebRequest, Res = WebResponse, Error = St::Error, InitError = ()>
-            + 'static,
+        S: ServiceFactory<
+                St,
+                WebRequest,
+                Res = WebResponse,
+                Error = St::Error,
+                InitError = ErrorInfo,
+            > + 'static,
     {
         self.services
             .push((rdef, boxed::factory(factory.into_factory()), guards, nested));
@@ -180,14 +186,15 @@ impl WebServiceAdapter {
     }
 
     /// Set a service factory implementation and generate web service.
-    pub fn finish<St, T, F>(self, service: F) -> impl WebServiceFactory<St>
+    pub fn finish<Sf, St, F>(self, service: F) -> impl WebServiceFactory<St>
     where
         St: AppState,
-        F: IntoServiceFactory<T, St, WebRequest>,
-        T: ServiceFactory<St, WebRequest, Res = WebResponse, Error = St::Error> + 'static,
+        F: IntoServiceFactory<Sf, St, WebRequest>,
+        Sf: ServiceFactory<St, WebRequest, Res = WebResponse, Error = St::Error> + 'static,
+        Sf::InitError: IntoErrorInfo,
     {
         WebServiceImpl {
-            srv: service.into_factory().map_init_err(|_| ()),
+            srv: service.into_factory().map_init_err(IntoErrorInfo::into_err),
             rdef: self.rdef,
             name: self.name,
             guards: self.guards,
@@ -205,7 +212,7 @@ struct WebServiceImpl<Sf> {
 impl<Sf, St> WebServiceFactory<St> for WebServiceImpl<Sf>
 where
     St: AppState,
-    Sf: ServiceFactory<St, WebRequest, Res = WebResponse, Error = St::Error, InitError = ()>
+    Sf: ServiceFactory<St, WebRequest, Res = WebResponse, Error = St::Error, InitError = ErrorInfo>
         + 'static,
 {
     fn register(mut self, config: &mut WebServiceConfig<St>) {

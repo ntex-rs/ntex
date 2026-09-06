@@ -2,7 +2,7 @@ use std::{cell::RefCell, future::poll_fn, io, mem};
 
 use ntex_h2::{self as h2, frame::StreamId, server};
 
-use crate::error::{Error, ErrorDiagnostic, ErrorInfo};
+use crate::error::{Error, IntoErrorInfo};
 use crate::http::body::{BodySize, MessageBody};
 use crate::http::config::DispatcherConfig;
 use crate::http::error::{DispatchError, H2Error, ResponseError};
@@ -37,13 +37,13 @@ where
     where
         Sf: ServiceFactory<Req::State, Request, Error = Err> + 'static,
         Sf::Res: Into<Response>,
-        Sf::InitError: ErrorDiagnostic,
+        Sf::InitError: IntoErrorInfo,
     {
         H2Service {
             sf: PipelineFactory::new(
                 sf.into_factory()
                     .map(Into::into)
-                    .map_init_err(|e| DispatchError::Control(ErrorInfo::from(Error::from(e)))),
+                    .map_init_err(|e| DispatchError::Control(e.into_err())),
             ),
             ctl: PipelineFactory::new(DefaultControlService),
             config: DispatcherConfig::default(),
@@ -62,17 +62,17 @@ where
     /// Provide http/2 control service
     pub fn control<I, Sf>(self, ctl: I) -> Self
     where
-        I: IntoServiceFactory<Sf, Req::State, h2::Control<H2Error>>,
-        Sf: ServiceFactory<Req::State, h2::Control<H2Error>, Res = h2::ControlAck> + 'static,
-        Sf::Error: ErrorDiagnostic,
-        Sf::InitError: ErrorDiagnostic,
+        I: IntoServiceFactory<Sf, Req::State, h2::Control<Error<H2Error>>>,
+        Sf: ServiceFactory<Req::State, h2::Control<Error<H2Error>>, Res = h2::ControlAck> + 'static,
+        Sf::Error: IntoErrorInfo,
+        Sf::InitError: IntoErrorInfo,
     {
         H2Service {
             sf: self.sf,
             ctl: PipelineFactory::new(
                 ctl.into_factory()
-                    .map_err(|e| DispatchError::Service(ErrorInfo::from(Error::from(e))))
-                    .map_init_err(|e| DispatchError::Service(ErrorInfo::from(Error::from(e)))),
+                    .map_err(|e| DispatchError::Service(e.into_err()))
+                    .map_init_err(|e| DispatchError::Service(e.into_err())),
             ),
             config: self.config,
         }
@@ -135,7 +135,7 @@ pub(in crate::http) async fn handle<Err>(
     id: usize,
     io: IoBoxed,
     svc: Pipeline<Request, Response, Err>,
-    control: Pipeline<h2::Control<H2Error>, h2::ControlAck, DispatchError>,
+    control: Pipeline<h2::Control<Error<H2Error>>, h2::ControlAck, DispatchError>,
 ) -> Result<(), DispatchError>
 where
     Err: ResponseError + 'static,
@@ -178,7 +178,7 @@ where
     Err: ResponseError + 'static,
 {
     type Res = ();
-    type Error = H2Error;
+    type Error = Error<H2Error>;
 
     async fn shutdown(&self, _: Ctx<'_, Self, ()>) {
         self.svc.shutdown().await;
@@ -273,9 +273,9 @@ where
         let head = req.head_mut();
         head.uri = if let Some(ref authority) = pseudo.authority {
             let scheme = pseudo.scheme.ok_or(H2Error::MissingPseudo("Scheme"))?;
-            Uri::try_from(format!("{scheme}://{authority}{path}"))?
+            Uri::try_from(format!("{scheme}://{authority}{path}")).map_err(Error::from_err)?
         } else {
-            Uri::try_from(path.as_str())?
+            Uri::try_from(path.as_str()).map_err(Error::from_err)?
         };
         let is_head_req = method == Method::HEAD;
         head.version = Version::HTTP_2;
@@ -301,11 +301,11 @@ where
         if size.is_eof() || is_head_req {
             stream
                 .send_response(head.status, hdrs, true)
-                .map_err(Error::into_error)?;
+                .map_err(Error::map_err)?;
         } else {
             stream
                 .send_response(head.status, hdrs, false)
-                .map_err(Error::into_error)?;
+                .map_err(Error::map_err)?;
 
             loop {
                 match poll_fn(|cx| body.poll_next_chunk(cx)).await {
@@ -319,7 +319,7 @@ where
                         stream
                             .send_payload(Bytes::new(), true)
                             .await
-                            .map_err(Error::into_error)?;
+                            .map_err(Error::map_err)?;
                         break;
                     }
                     Some(Ok(chunk)) => {
@@ -334,13 +334,13 @@ where
                             stream
                                 .send_payload(chunk, false)
                                 .await
-                                .map_err(Error::into_error)?;
+                                .map_err(Error::map_err)?;
                         }
                     }
                     Some(Err(e)) => {
                         #[cfg(feature = "trace")]
                         log::error!("{}: Response payload stream error: {e:?}", self.io.tag());
-                        return Err(H2Error::Stream(e));
+                        return Err(H2Error::Stream(e).into());
                     }
                 }
             }

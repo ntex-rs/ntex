@@ -89,6 +89,7 @@ where
         .and_then(service.into_service().map_err(TlsError::Service))
 }
 
+use crate::error::Error;
 use crate::service::pipeline::PipelineFactory;
 
 type HttpPipeline<St, Err> = PipelineFactory<St, Request, Response, Err, error::DispatchError>;
@@ -101,7 +102,7 @@ type Ctl1Pipeline<St, F, Err> = PipelineFactory<
 >;
 type Ctl2Pipeline<St> = PipelineFactory<
     St,
-    h2::Control<error::H2Error>,
+    h2::Control<Error<error::H2Error>>,
     h2::ControlAck,
     error::DispatchError,
     error::DispatchError,

@@ -1,5 +1,4 @@
-use std::fmt;
-
+use crate::error::{ErrorInfo, IntoErrorInfo};
 use crate::router::{IntoPattern, ResourceDef};
 use crate::service::dev::{AndThen, ServiceChain, ServiceChainFactory};
 use crate::service::{Ctx, factory, service};
@@ -70,7 +69,7 @@ impl<St: AppState> Resource<St> {
 impl<St, M, Sf> Resource<St, M, Sf>
 where
     St: AppState,
-    Sf: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ()>,
+    Sf: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ErrorInfo>,
 {
     #[must_use]
     /// Set resource name.
@@ -239,15 +238,16 @@ where
     ) -> Resource<
         St,
         M,
-        impl ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ()>,
+        impl ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ErrorInfo>,
     >
     where
         U: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error>,
+        U::InitError: IntoErrorInfo,
     {
         Resource {
             filter: self
                 .filter
-                .and_then(filter.into_factory().map_init_err(|_| ())),
+                .and_then(filter.into_factory().map_init_err(IntoErrorInfo::into_err)),
             middleware: self.middleware,
             rdef: self.rdef,
             name: self.name,
@@ -285,12 +285,12 @@ where
     pub fn default_service<S>(mut self, f: impl IntoServiceFactory<S, St, WebRequest>) -> Self
     where
         S: ServiceFactory<St, WebRequest, Res = WebResponse, Error = St::Error> + 'static,
-        S::InitError: fmt::Debug,
+        S::InitError: IntoErrorInfo,
     {
         // create and configure default resource
-        self.default = Some(HttpService::new(f.into_factory().map_init_err(|e| {
-            log::error!("Cannot construct default service: {e:?}");
-        })));
+        self.default = Some(HttpService::new(
+            f.into_factory().map_init_err(IntoErrorInfo::into_err),
+        ));
 
         self
     }
@@ -299,7 +299,7 @@ where
 impl<St, M, Sf> WebServiceFactory<St> for Resource<St, M, Sf>
 where
     St: AppState,
-    Sf: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ()>
+    Sf: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ErrorInfo>
         + 'static,
     M: Middleware<ResourcePipeline<St, Sf::Service>, St> + 'static,
     M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
@@ -345,7 +345,7 @@ impl<St, M, Sf>
     > for Resource<St, M, Sf>
 where
     St: AppState,
-    Sf: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ()>
+    Sf: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ErrorInfo>
         + 'static,
     M: Middleware<ResourcePipeline<St, Sf::Service>, St> + 'static,
     M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
@@ -380,14 +380,14 @@ where
     St: AppState,
     M: Middleware<ResourcePipeline<St, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
-    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ()>
+    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ErrorInfo>
         + 'static,
 {
     type Res = WebResponse;
     type Error = St::Error;
 
     type Service = M::Service;
-    type InitError = ();
+    type InitError = ErrorInfo;
 
     async fn create(&self, st: &St) -> Result<Self::Service, Self::InitError> {
         let filter = self.filter.create(st).await?;
@@ -411,7 +411,7 @@ where
     type Error = St::Error;
 
     type Service = ResourceRouter<St>;
-    type InitError = ();
+    type InitError = ErrorInfo;
 
     async fn create(&self, st: &St) -> Result<Self::Service, Self::InitError> {
         let default = if let Some(ref default) = self.default {

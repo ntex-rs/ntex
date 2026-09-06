@@ -180,7 +180,7 @@ impl<E> Clone for Error<E> {
     }
 }
 
-impl<E: error::Error> From<E> for Error<E> {
+impl<E> From<E> for Error<E> {
     #[track_caller]
     fn from(error: E) -> Self {
         Self {
