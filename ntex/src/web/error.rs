@@ -675,17 +675,6 @@ where
     InternalError::new(err, StatusCode::NETWORK_AUTHENTICATION_REQUIRED)
 }
 
-/// Cannot initialize App instance
-#[derive(Debug, Copy, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("Cannot initialize App instance")]
-pub struct AppInitError;
-
-impl crate::error::ErrorDiagnostic for AppInitError {
-    fn signature(&self) -> &'static str {
-        "web-AppInit"
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::io;

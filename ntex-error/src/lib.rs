@@ -107,6 +107,11 @@ impl ErrorDiagnostic for ResultType {
     }
 }
 
+/// Helper trait for converting a value into a unified error-aware result type.
+pub trait IntoErrorInfo: Sized {
+    fn into_err(self) -> ErrorInfo;
+}
+
 #[cfg(test)]
 mod tests {
     use std::{error::Error as StdError, mem};
@@ -292,5 +297,13 @@ mod tests {
         let res = Err::<(), _>(TestError::Service("409 Error"));
         let info = ResultSignature::from(&res);
         assert_eq!(info.signature(), "Service-Internal");
+    }
+
+    #[ntex::test]
+    async fn test_error_info() {
+        let err: Error<TestError> = TestError::Service("409 Error").into();
+        println!("1 === {:?}", std::mem::size_of::<Error<TestError>>());
+        let _info = ErrorInfo::from(err);
+        println!("2 === {:?}", std::mem::size_of::<ErrorInfo>());
     }
 }

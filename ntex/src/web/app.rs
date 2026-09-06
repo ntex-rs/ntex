@@ -1,5 +1,4 @@
-use std::fmt;
-
+use crate::error::{ErrorInfo, IntoErrorInfo};
 use crate::http::Request;
 use crate::router::ResourceDef;
 use crate::service::{Identity, Middleware, Service, ServiceFactory};
@@ -7,7 +6,6 @@ use crate::service::{IntoServiceFactory, dev::ServiceChainFactory, factory};
 
 use super::app_service::{AppFactory, AppRouter};
 use super::config::ServiceConfig;
-use super::error::AppInitError;
 use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
 use super::stack::{Filter, WebStack};
 use super::{AppState, HttpService, Resource, Route, WebRequest, WebResponse};
@@ -71,7 +69,7 @@ impl<St: AppState> App<St> {
 impl<St, M, F> App<St, M, F>
 where
     St: AppState,
-    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ()>,
+    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ErrorInfo>,
 {
     #[must_use]
     /// Run external configuration as part of the application building
@@ -192,12 +190,12 @@ where
     pub fn default_service<U>(mut self, f: impl IntoServiceFactory<U, St, WebRequest>) -> Self
     where
         U: ServiceFactory<St, WebRequest, Res = WebResponse, Error = St::Error> + 'static,
-        U::InitError: fmt::Debug,
+        U::InitError: IntoErrorInfo,
     {
         // create and configure default resource
-        self.default = Some(HttpService::new(f.into_factory().map_init_err(|e| {
-            log::error!("Cannot construct default service: {e:?}");
-        })));
+        self.default = Some(HttpService::new(
+            f.into_factory().map_init_err(IntoErrorInfo::into_err),
+        ));
 
         self
     }
@@ -258,21 +256,22 @@ where
     ///         .route("/index.html", web::get().to(index));
     /// }
     /// ```
-    pub fn filter<S>(
+    pub fn filter<Sf>(
         self,
-        filter: impl IntoServiceFactory<S, St, WebRequest>,
+        filter: impl IntoServiceFactory<Sf, St, WebRequest>,
     ) -> App<
         St,
         M,
-        impl ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ()>,
+        impl ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ErrorInfo>,
     >
     where
-        S: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error>,
+        Sf: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error>,
+        Sf::InitError: IntoErrorInfo,
     {
         App {
             filter: self
                 .filter
-                .and_then(filter.into_factory().map_init_err(|_| ())),
+                .and_then(filter.into_factory().map_init_err(IntoErrorInfo::into_err)),
             middleware: self.middleware,
             services: self.services,
             default: self.default,
@@ -335,7 +334,7 @@ where
     St: AppState,
     M: Middleware<AppRouter<St, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
-    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ()>,
+    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ErrorInfo>,
 {
     /// Construct service factory, suitable for `http::HttpService`.
     ///
@@ -356,7 +355,7 @@ where
     /// ```
     pub fn finish(
         self,
-    ) -> impl ServiceFactory<St, Request, Res = WebResponse, Error = St::Error, InitError = AppInitError>
+    ) -> impl ServiceFactory<St, Request, Res = WebResponse, Error = St::Error, InitError = ErrorInfo>
     {
         IntoServiceFactory::<AppFactory<St, M, F>, St, Request>::into_factory(self)
     }
@@ -367,7 +366,7 @@ where
     St: AppState,
     M: Middleware<AppRouter<St, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
-    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ()>,
+    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ErrorInfo>,
 {
     fn into_factory(self) -> AppFactory<St, M, F> {
         AppFactory::new(

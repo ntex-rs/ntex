@@ -1,5 +1,6 @@
 use std::{cell::RefCell, marker, mem, rc::Rc};
 
+use crate::error::ErrorInfo;
 use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, ResourceId, Router};
 use crate::service::cfg::{Cfg, Configuration};
@@ -8,7 +9,6 @@ use crate::service::{boxed, dev::ServiceChainFactory};
 use crate::util::HashMap;
 
 use super::config::WebAppConfig;
-use super::error::AppInitError;
 use super::guard::Guard;
 use super::rmap::ResourceMap;
 use super::service::{AppServiceFactory, WebServiceConfig};
@@ -23,7 +23,7 @@ type Guards = Vec<Box<dyn Guard>>;
 pub struct AppFactory<St, M, F>
 where
     St: AppState,
-    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ()>,
+    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ErrorInfo>,
 {
     middleware: M,
     filter: ServiceChainFactory<F, St, WebRequest>,
@@ -37,7 +37,7 @@ where
     St: AppState,
     M: Middleware<AppRouter<St, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
-    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ()>,
+    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ErrorInfo>,
 {
     pub(super) fn new(
         middleware: M,
@@ -109,19 +109,16 @@ where
     St: AppState,
     M: Middleware<AppRouter<St, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
-    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ()>,
+    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ErrorInfo>,
 {
     type Res = WebResponse;
     type Error = St::Error;
 
     type Service = AppService<M::Service, St>;
-    type InitError = AppInitError;
+    type InitError = ErrorInfo;
 
     async fn create(&self, st: &St) -> Result<Self::Service, Self::InitError> {
-        let filter = self.filter.create(st).await.map_err(|e| {
-            log::error!("Cannot construct app filter: {e:?}");
-            AppInitError
-        })?;
+        let filter = self.filter.create(st).await?;
 
         // main service
         let service = self.middleware.create(

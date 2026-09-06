@@ -263,6 +263,12 @@ impl From<ntex_http::compat::InvalidUri> for H2Error {
     }
 }
 
+impl crate::error::ErrorDiagnostic for H2Error {
+    fn signature(&self) -> &'static str {
+        "ntex-http-h2error"
+    }
+}
+
 /// A set of error that can occure during parsing content type
 #[derive(thiserror::Error, Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub enum ContentTypeError {

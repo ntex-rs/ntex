@@ -1,5 +1,9 @@
 # Changes
 
+## [2.6.0] - 2026-09-06
+
+* Introduce IntoErrorInfo trait
+
 ## [2.5.0] - 2026-08-24
 
 * Add Error::map_err() and Error::from_err() heleprs

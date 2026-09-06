@@ -1,6 +1,6 @@
 use std::{any::Any, any::TypeId, error, fmt, sync::Arc};
 
-use crate::{Backtrace, Error, ErrorDiagnostic, repr::ErrorRepr};
+use crate::{Backtrace, Error, ErrorDiagnostic, IntoErrorInfo, repr::ErrorRepr};
 
 trait ErrorInformation: fmt::Display + fmt::Debug + 'static {
     fn tag(&self) -> Option<&crate::Bytes>;
@@ -84,7 +84,7 @@ impl ErrorInfo {
 
 impl<E> From<Error<E>> for ErrorInfo
 where
-    E: ErrorDiagnostic + error::Error,
+    E: ErrorDiagnostic,
 {
     fn from(err: Error<E>) -> Self {
         Self { inner: err.inner }
@@ -93,11 +93,28 @@ where
 
 impl<E> From<&Error<E>> for ErrorInfo
 where
-    E: ErrorDiagnostic + error::Error,
+    E: ErrorDiagnostic,
 {
     fn from(err: &Error<E>) -> Self {
         Self {
             inner: err.inner.clone(),
+        }
+    }
+}
+
+impl IntoErrorInfo for ErrorInfo {
+    fn into_err(self) -> ErrorInfo {
+        self
+    }
+}
+
+impl<E> IntoErrorInfo for E
+where
+    E: ErrorDiagnostic + Into<Error<E>>,
+{
+    fn into_err(self) -> ErrorInfo {
+        ErrorInfo {
+            inner: self.into().inner,
         }
     }
 }
@@ -117,19 +134,5 @@ impl fmt::Debug for ErrorInfo {
 impl fmt::Display for ErrorInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.inner, f)
-    }
-}
-
-impl ErrorDiagnostic for ErrorInfo {
-    fn signature(&self) -> &'static str {
-        self.inner.signature()
-    }
-
-    fn service(&self) -> Option<&'static str> {
-        self.inner.service()
-    }
-
-    fn backtrace(&self) -> Option<&Backtrace> {
-        self.inner.backtrace()
     }
 }
