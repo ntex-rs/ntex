@@ -22,13 +22,13 @@ pub struct Response<B = Body> {
 impl Response<Body> {
     /// Create http response builder with specific status.
     #[inline]
-    pub fn build(status: StatusCode) -> ResponseBuilder {
+    pub fn builder(status: StatusCode) -> ResponseBuilder {
         ResponseBuilder::new(status)
     }
 
     /// Create http response builder.
     #[inline]
-    pub fn build_from<T: Into<ResponseBuilder>>(source: T) -> ResponseBuilder {
+    pub fn builder_from<T: Into<ResponseBuilder>>(source: T) -> ResponseBuilder {
         source.into()
     }
 
@@ -340,7 +340,7 @@ impl ResponseBuilder {
     ///     Response::Ok()
     ///         .header("X-TEST", "value")
     ///         .header(header::CONTENT_TYPE, "application/json")
-    ///         .finish()
+    ///         .build()
     /// }
     /// ```
     pub fn header<K, V>(&mut self, key: K, value: V) -> &mut Self
@@ -373,7 +373,7 @@ impl ResponseBuilder {
     ///     Response::Ok()
     ///         .set_header("X-TEST", "value")
     ///         .set_header(header::CONTENT_TYPE, "application/json")
-    ///         .finish()
+    ///         .build()
     /// }
     /// ```
     pub fn set_header<K, V>(&mut self, key: K, value: V) -> &mut Self
@@ -486,7 +486,7 @@ impl ResponseBuilder {
     ///                 .secure(true)
     ///                 .http_only(true)
     ///         )
-    ///         .finish()
+    ///         .build()
     /// }
     /// ```
     pub fn cookie<C>(&mut self, cookie: C) -> &mut Self
@@ -516,7 +516,7 @@ impl ResponseBuilder {
     ///         builder.del_cookie(cookie);
     ///     }
     ///
-    ///     builder.finish()
+    ///     builder.build()
     /// }
     /// ```
     pub fn del_cookie(&mut self, cookie: &Cookie<'_>) -> &mut Self {
@@ -621,7 +621,7 @@ impl ResponseBuilder {
     /// Set an empty body and generate `Response`.
     ///
     /// `ResponseBuilder` can not be used after this call.
-    pub fn finish(&mut self) -> Response {
+    pub fn build(&mut self) -> Response {
         self.body(Body::Empty)
     }
 
@@ -767,7 +767,7 @@ where
 
 impl From<ResponseBuilder> for Response {
     fn from(mut builder: ResponseBuilder) -> Self {
-        builder.finish()
+        builder.build()
     }
 }
 
@@ -831,7 +831,7 @@ mod tests {
         let resp = Response::Ok()
             .header(COOKIE, HeaderValue::from_static("cookie1=value1; "))
             .header(COOKIE, HeaderValue::from_static("cookie2=value2; "))
-            .finish();
+            .build();
         let dbg = format!("{resp:?}");
         assert!(dbg.contains("Response"));
         let dbg = format!("{:?}", resp.head());
@@ -853,7 +853,7 @@ mod tests {
         let req = crate::http::test::TestRequest::default()
             .header(COOKIE, "cookie1=value1")
             .header(COOKIE, "cookie2=value2")
-            .finish();
+            .build();
         let cookies = req.cookies().unwrap();
 
         let resp = Response::Ok()
@@ -865,7 +865,7 @@ mod tests {
                     .max_age(time::Duration::days(1)),
             )
             .del_cookie(&cookies[0])
-            .finish();
+            .build();
 
         let mut val: Vec<_> = resp
             .headers()
@@ -885,7 +885,7 @@ mod tests {
     fn test_update_response_cookies() {
         let mut r = Response::Ok()
             .cookie(coo_kie::Cookie::new("original", "val100"))
-            .finish();
+            .build();
 
         r.add_cookie(coo_kie::Cookie::new("cookie2", "val200"))
             .unwrap();
@@ -906,15 +906,15 @@ mod tests {
 
     #[test]
     fn test_basic_builder() {
-        let resp = Response::Ok().header("X-TEST", "value").finish();
+        let resp = Response::Ok().header("X-TEST", "value").build();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[test]
     fn test_upgrade() {
-        let resp = Response::build(StatusCode::OK)
+        let resp = Response::builder(StatusCode::OK)
             .upgrade("websocket")
-            .finish();
+            .build();
         assert!(resp.upgrade());
         assert_eq!(
             resp.headers().get(header::UPGRADE).unwrap(),
@@ -924,13 +924,13 @@ mod tests {
 
     #[test]
     fn test_force_close() {
-        let resp = Response::build(StatusCode::OK).force_close().finish();
+        let resp = Response::builder(StatusCode::OK).force_close().build();
         assert!(!resp.keep_alive());
     }
 
     #[test]
     fn test_content_type() {
-        let resp = Response::build(StatusCode::OK)
+        let resp = Response::builder(StatusCode::OK)
             .content_type("text/plain")
             .body(Body::Empty);
         assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "text/plain");
@@ -938,7 +938,7 @@ mod tests {
 
     #[test]
     fn test_json() {
-        let resp = Response::build(StatusCode::OK).json(&vec!["v1", "v2", "v3"]);
+        let resp = Response::builder(StatusCode::OK).json(&vec!["v1", "v2", "v3"]);
         let ct = resp.headers().get(CONTENT_TYPE).unwrap();
         assert_eq!(ct, HeaderValue::from_static("application/json"));
         assert_eq!(resp.get_body_ref(), b"[\"v1\",\"v2\",\"v3\"]");
@@ -946,7 +946,7 @@ mod tests {
 
     #[test]
     fn test_json_ct() {
-        let resp = Response::build(StatusCode::OK)
+        let resp = Response::builder(StatusCode::OK)
             .header(CONTENT_TYPE, "text/json")
             .json(&vec!["v1", "v2", "v3"]);
         let ct = resp.headers().get(CONTENT_TYPE).unwrap();
@@ -1023,7 +1023,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.get_body_ref(), b"test");
 
-        let builder = Response::build_from(ResponseBuilder::new(StatusCode::OK))
+        let builder = Response::builder_from(ResponseBuilder::new(StatusCode::OK))
             .keep_alive()
             .take();
         let _ = builder.extensions();
@@ -1043,7 +1043,7 @@ mod tests {
         let (resp, _) = resp.into_parts();
 
         let mut builder: ResponseBuilder = resp.head().into();
-        let resp = builder.status(StatusCode::BAD_REQUEST).finish();
+        let resp = builder.status(StatusCode::BAD_REQUEST).build();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
         #[cfg(feature = "cookie")]
@@ -1053,7 +1053,7 @@ mod tests {
         }
 
         let mut builder: ResponseBuilder = resp.into();
-        let resp = builder.status(StatusCode::BAD_REQUEST).finish();
+        let resp = builder.status(StatusCode::BAD_REQUEST).build();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
         #[cfg(feature = "cookie")]

@@ -40,7 +40,7 @@ async fn test_h2() -> io::Result<()> {
         http::rustls(
             tls_acceptor(),
             http::ALPN_PROTO_H2,
-            HttpService::h2(async |_| Ok::<_, io::Error>(Response::Ok().finish())),
+            HttpService::h2(async |_| Ok::<_, io::Error>(Response::Ok().build())),
         )
     });
 
@@ -55,7 +55,7 @@ async fn test_h1() -> io::Result<()> {
         http::rustls(
             tls_acceptor(),
             http::ALPN_PROTO_H1,
-            HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().finish())),
+            HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().build())),
         )
     });
 
@@ -73,7 +73,7 @@ async fn test_h2_1() -> io::Result<()> {
             HttpService::new(async |req: Request| {
                 assert!(req.peer_addr().is_some());
                 assert_eq!(req.version(), Version::HTTP_2);
-                Ok::<_, io::Error>(Response::Ok().finish())
+                Ok::<_, io::Error>(Response::Ok().build())
             }),
         )
     });
@@ -432,7 +432,7 @@ async fn test_h2_client_drop() -> io::Result<()> {
                 assert_eq!(req.version(), Version::HTTP_2);
                 sleep(Seconds(30)).await;
                 drop(st);
-                Ok::<_, io::Error>(Response::Ok().finish())
+                Ok::<_, io::Error>(Response::Ok().build())
             }),
         )
     });
@@ -453,7 +453,7 @@ async fn test_ssl_handshake_timeout() {
             http::rustls(
                 tls_acceptor(),
                 http::ALPN_PROTO_H2,
-                HttpService::h2(async |_| Ok::<_, io::Error>(Response::Ok().finish())),
+                HttpService::h2(async |_| Ok::<_, io::Error>(Response::Ok().build())),
             )
         },
         SharedCfg::new("SVC").add(TlsConfig::new().set_handshake_timeout(Seconds(1))),
@@ -477,7 +477,7 @@ async fn test_ws_transport() {
                         let (ack, io, req, codec) = upg.handle();
 
                         // send handshake respone
-                        let res = handshake_response(req.head()).finish();
+                        let res = handshake_response(req.head()).build();
                         io.encode(
                             h1::Message::Item((res.drop_body(), body::BodySize::None)),
                             &codec,
@@ -544,7 +544,7 @@ async fn test_h2_not_graceful_shutdown() -> io::Result<()> {
                 }
                 sleep(Millis(1000)).await;
                 count.fetch_sub(1, Ordering::Relaxed);
-                Ok::<_, io::Error>(Response::Ok().finish())
+                Ok::<_, io::Error>(Response::Ok().build())
             }),
         )
     });

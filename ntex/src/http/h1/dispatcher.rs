@@ -848,7 +848,7 @@ mod tests {
         let mut h1 = Dispatcher::new(
             0,
             nio::Io::new(server, config),
-            Pipeline::new((), async |_| Ok::<_, io::Error>(Response::Ok().finish())),
+            Pipeline::new((), async |_| Ok::<_, io::Error>(Response::Ok().build())),
             Pipeline::new(
                 (),
                 fn_service(async move |req: Control<_, _>| {
@@ -877,9 +877,7 @@ mod tests {
         client.remote_buffer_cap(1024);
         client.write("GET /test HTTP/1\r\n\r\n");
 
-        let mut h1 = h1(server, async |_| {
-            Ok::<_, io::Error>(Response::Ok().finish())
-        });
+        let mut h1 = h1(server, async |_| Ok::<_, io::Error>(Response::Ok().build()));
         sleep(Millis(50)).await;
         // required because io shutdown is async oper
         let _ = lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready();
@@ -901,9 +899,7 @@ mod tests {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
         let mut decoder = ClientCodec::new(true, SharedCfg::default().get());
-        spawn_h1(server, async |_| {
-            Ok::<_, io::Error>(Response::Ok().finish())
-        });
+        spawn_h1(server, async |_| Ok::<_, io::Error>(Response::Ok().build()));
 
         client.write("GET /test1 HTTP/1.1\r\n\r\n");
 
@@ -933,7 +929,7 @@ mod tests {
         spawn_h1(server, async move |mut req: Request| {
             let mut p = req.take_payload();
             while (stream_recv(&mut p).await).is_some() {}
-            Ok::<_, io::Error>(Response::Ok().finish())
+            Ok::<_, io::Error>(Response::Ok().build())
         });
 
         client.write("GET /test1 HTTP/1.1\r\ncontent-length: 5\r\n\r\n");
@@ -962,7 +958,7 @@ mod tests {
         let mut decoder = ClientCodec::new(true, SharedCfg::default().get());
         spawn_h1(server, async |_| {
             sleep(Millis(100)).await;
-            Ok::<_, io::Error>(Response::Ok().finish())
+            Ok::<_, io::Error>(Response::Ok().build())
         });
 
         client.write("GET /test HTTP/1.1\r\n\r\n");
@@ -1003,7 +999,7 @@ mod tests {
         let (client, server) = IoTest::create();
         spawn_h1(server, async move |_| {
             num2.fetch_add(1, Ordering::Relaxed);
-            Ok::<_, io::Error>(Response::Ok().finish())
+            Ok::<_, io::Error>(Response::Ok().build())
         });
 
         client.remote_buffer_cap(1024);
@@ -1024,9 +1020,7 @@ mod tests {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
 
-        let mut h1 = h1(server, async |_| {
-            Ok::<_, io::Error>(Response::Ok().finish())
-        });
+        let mut h1 = h1(server, async |_| Ok::<_, io::Error>(Response::Ok().build()));
         h1.inner.io.set_config(
             SharedCfg::new("TEST")
                 .add(
@@ -1077,7 +1071,7 @@ mod tests {
             m.store(true, Ordering::Relaxed);
             // sleep
             sleep(Millis(999_999_000)).await;
-            Ok::<_, io::Error>(Response::Ok().finish())
+            Ok::<_, io::Error>(Response::Ok().build())
         });
 
         client.write("GET /test HTTP/1.1\r\nContent-Length: 1048576\r\n\r\n");
@@ -1239,10 +1233,10 @@ mod tests {
                     if let Ok(buf) = item {
                         m.store(size + buf.len(), Ordering::Relaxed);
                     } else {
-                        return Ok::<_, io::Error>(Response::Ok().finish());
+                        return Ok::<_, io::Error>(Response::Ok().build());
                     }
                 }
-                Ok::<_, io::Error>(Response::Ok().finish())
+                Ok::<_, io::Error>(Response::Ok().build())
             }
         };
 

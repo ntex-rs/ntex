@@ -705,7 +705,7 @@ async fn test_server_cookies() {
                 .cookie(coo_kie::Cookie::build(("first", "first_value")).http_only(true))
                 .cookie(coo_kie::Cookie::new("second", "first_value"))
                 .cookie(coo_kie::Cookie::new("second", "second_value"))
-                .finish()
+                .build()
         }))
     });
 

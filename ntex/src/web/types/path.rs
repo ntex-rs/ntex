@@ -190,9 +190,9 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_extract_path_single() {
-        let mut router = Router::<usize>::build();
+        let mut router = Router::<usize>::builder();
         router.path("/{value}/", 10).0.set_id(0);
-        let router = router.finish();
+        let router = router.build();
 
         let mut req = TestRequest::with_uri("/32/").to_srv_request();
         router.recognize(req.match_info_mut());
@@ -213,9 +213,9 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_tuple_extract() {
-        let mut router = Router::<usize>::build();
+        let mut router = Router::<usize>::builder();
         router.path("/{key}/{value}/", 10).0.set_id(0);
-        let router = router.finish();
+        let router = router.build();
 
         let mut req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
         router.recognize(req.match_info_mut());
@@ -241,9 +241,9 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_request_extract() {
-        let mut router = Router::<usize>::build();
+        let mut router = Router::<usize>::builder();
         router.path("/{key}/{value}/", 10).0.set_id(0);
-        let router = router.finish();
+        let router = router.build();
 
         let mut req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
         router.recognize(req.match_info_mut());

@@ -60,6 +60,12 @@ struct Inner {
 
 impl Default for TestRequest {
     fn default() -> TestRequest {
+        Self::builder()
+    }
+}
+
+impl TestRequest {
+    pub fn builder() -> TestRequest {
         TestRequest(Some(Inner {
             method: Method::GET,
             uri: Uri::from_str("/").unwrap(),
@@ -70,9 +76,7 @@ impl Default for TestRequest {
             payload: None,
         }))
     }
-}
 
-impl TestRequest {
     #[must_use]
     /// Create `TestRequest` and set request uri.
     pub fn with_uri(path: &str) -> TestRequest {
@@ -149,7 +153,7 @@ impl TestRequest {
 
     #[must_use]
     /// Complete request creation and generate `Request` instance.
-    pub fn finish(&mut self) -> Request {
+    pub fn build(&mut self) -> Request {
         let inner = self.0.take().expect("cannot reuse test request builder");
 
         let mut req = if let Some(pl) = inner.payload {

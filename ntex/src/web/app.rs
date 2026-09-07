@@ -353,7 +353,7 @@ where
     ///     .await
     /// }
     /// ```
-    pub fn finish(
+    pub fn build(
         self,
     ) -> impl ServiceFactory<St, Request, Res = WebResponse, Error = St::Error, InitError = Failure>
     {
@@ -393,7 +393,7 @@ mod tests {
     async fn test_default_resource() {
         let srv = App::default()
             .service(web::resource("/test").to(async || HttpResponse::Ok()))
-            .finish()
+            .build()
             .pipeline(())
             .await
             .unwrap();
@@ -417,7 +417,7 @@ mod tests {
             .default_service(async move |r: WebRequest| {
                 Ok(r.into_response(HttpResponse::MethodNotAllowed()))
             })
-            .finish()
+            .build()
             .pipeline(())
             .await
             .unwrap();

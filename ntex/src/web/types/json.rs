@@ -118,7 +118,7 @@ where
             Err(mut e) => return e.error_response(req),
         };
 
-        Response::build(StatusCode::OK)
+        Response::builder(StatusCode::OK)
             .content_type("application/json")
             .body(body)
     }

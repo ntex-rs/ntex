@@ -157,15 +157,15 @@ mod tests {
 
     #[test]
     fn test_response() {
-        let res = TestRequest::default().to_srv_response(HttpResponse::Ok().finish());
-        let res = res.into_response(HttpResponse::BadRequest().finish());
+        let res = TestRequest::default().to_srv_response(HttpResponse::Ok().build());
+        let res = res.into_response(HttpResponse::BadRequest().build());
         assert_eq!(res.response().status(), StatusCode::BAD_REQUEST);
 
         let err = http::error::PayloadError::Overflow;
         let res = res.error_response::<WebError, _>(err);
         assert_eq!(res.response().status(), StatusCode::PAYLOAD_TOO_LARGE);
 
-        let res = TestRequest::default().to_srv_response(HttpResponse::Ok().finish());
+        let res = TestRequest::default().to_srv_response(HttpResponse::Ok().build());
         let mut res = res.checked_expr::<(), _, _>(|_| Ok::<_, http::error::PayloadError>(()));
         assert_eq!(res.response_mut().status(), StatusCode::OK);
         let res = res.checked_expr::<(), _, _>(|_| Err(http::error::PayloadError::Overflow));

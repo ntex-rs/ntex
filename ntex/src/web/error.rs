@@ -880,7 +880,7 @@ mod tests {
         assert!(format!("{err:?}").contains("web::InternalError"));
 
         let err: InternalError<_> =
-            InternalError::from_response("err", HttpResponse::BadRequest().finish());
+            InternalError::from_response("err", HttpResponse::BadRequest().build());
         let r: HttpResponse = err.into();
         assert_eq!(r.status(), StatusCode::BAD_REQUEST);
 

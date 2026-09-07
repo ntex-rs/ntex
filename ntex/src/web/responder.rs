@@ -74,7 +74,7 @@ impl<St: AppState> Responder<St> for Response {
 impl<St: AppState> Responder<St> for ResponseBuilder {
     #[inline]
     async fn respond_to(mut self, _: &HttpRequest) -> Response {
-        self.finish()
+        self.build()
     }
 }
 
@@ -86,7 +86,7 @@ where
     async fn respond_to(self, req: &HttpRequest) -> Response {
         match self {
             Some(t) => t.respond_to(req).await,
-            None => Response::build(StatusCode::NOT_FOUND).finish(),
+            None => Response::builder(StatusCode::NOT_FOUND).build(),
         }
     }
 }
@@ -119,7 +119,7 @@ where
 
 impl<St: AppState> Responder<St> for &'static str {
     async fn respond_to(self, _: &HttpRequest) -> Response {
-        Response::build(StatusCode::OK)
+        Response::builder(StatusCode::OK)
             .content_type("text/plain; charset=utf-8")
             .body(self)
     }
@@ -127,7 +127,7 @@ impl<St: AppState> Responder<St> for &'static str {
 
 impl<St: AppState> Responder<St> for &'static [u8] {
     async fn respond_to(self, _: &HttpRequest) -> Response {
-        Response::build(StatusCode::OK)
+        Response::builder(StatusCode::OK)
             .content_type("application/octet-stream")
             .body(self)
     }
@@ -135,7 +135,7 @@ impl<St: AppState> Responder<St> for &'static [u8] {
 
 impl<St: AppState> Responder<St> for String {
     async fn respond_to(self, _: &HttpRequest) -> Response {
-        Response::build(StatusCode::OK)
+        Response::builder(StatusCode::OK)
             .content_type("text/plain; charset=utf-8")
             .body(self)
     }
@@ -143,7 +143,7 @@ impl<St: AppState> Responder<St> for String {
 
 impl<St: AppState> Responder<St> for &String {
     async fn respond_to(self, _: &HttpRequest) -> Response {
-        Response::build(StatusCode::OK)
+        Response::builder(StatusCode::OK)
             .content_type("text/plain; charset=utf-8")
             .body(self)
     }
@@ -151,7 +151,7 @@ impl<St: AppState> Responder<St> for &String {
 
 impl<St: AppState> Responder<St> for Bytes {
     async fn respond_to(self, _: &HttpRequest) -> Response {
-        Response::build(StatusCode::OK)
+        Response::builder(StatusCode::OK)
             .content_type("application/octet-stream")
             .body(self)
     }
@@ -159,7 +159,7 @@ impl<St: AppState> Responder<St> for Bytes {
 
 impl<St: AppState> Responder<St> for BytesMut {
     async fn respond_to(self, _: &HttpRequest) -> Response {
-        Response::build(StatusCode::OK)
+        Response::builder(StatusCode::OK)
             .content_type("application/octet-stream")
             .body(self)
     }

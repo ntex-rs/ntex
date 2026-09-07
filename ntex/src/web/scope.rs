@@ -343,7 +343,7 @@ where
             .collect();
 
         // Create router
-        let mut router = Router::build();
+        let mut router = Router::builder();
         if self.case_insensitive {
             router.case_insensitive();
         }
@@ -358,7 +358,7 @@ where
                 default,
                 filter: self.filter,
                 middleware: self.middleware,
-                router: Rc::new(router.finish()),
+                router: Rc::new(router.build()),
             },
             if self.guards.is_empty() {
                 None

@@ -406,7 +406,7 @@ mod tests {
         let srv = fn_service(async move |req: WebRequest| {
             Ok::<_, WebError>(
                 req.into_response(
-                    HttpResponse::build(StatusCode::OK)
+                    HttpResponse::builder(StatusCode::OK)
                         .header("X-Test", "ttt")
                         .body("TEST"),
                 ),
@@ -448,7 +448,7 @@ mod tests {
             unit.render_request(now, &req);
         }
 
-        let resp = HttpResponse::build(StatusCode::OK).force_close().finish();
+        let resp = HttpResponse::builder(StatusCode::OK).force_close().build();
         for unit in &mut format.0 {
             unit.render_response(&resp);
         }
@@ -476,7 +476,7 @@ mod tests {
             unit.render_request(now, &req);
         }
 
-        let resp = HttpResponse::build(StatusCode::OK).force_close().finish();
+        let resp = HttpResponse::builder(StatusCode::OK).force_close().build();
         for unit in &mut format.0 {
             unit.render_response(&resp);
         }
@@ -504,7 +504,7 @@ mod tests {
             unit.render_request(now, &req);
         }
 
-        let resp = HttpResponse::build(StatusCode::OK).force_close().finish();
+        let resp = HttpResponse::builder(StatusCode::OK).force_close().build();
         for unit in &mut format.0 {
             unit.render_response(&resp);
         }
@@ -532,7 +532,7 @@ mod tests {
             unit.render_request(now, &req);
         }
 
-        let resp = HttpResponse::build(StatusCode::OK).force_close().finish();
+        let resp = HttpResponse::builder(StatusCode::OK).force_close().build();
         for unit in &mut format.0 {
             unit.render_response(&resp);
         }

@@ -451,7 +451,7 @@ impl<St: AppState> Service<St, WebRequest> for ResourceRouter<St> {
             ctx.call(default, req).await
         } else {
             Ok(WebResponse::new(
-                Response::MethodNotAllowed().finish(),
+                Response::MethodNotAllowed().build(),
                 req.into_parts().0,
             ))
         }

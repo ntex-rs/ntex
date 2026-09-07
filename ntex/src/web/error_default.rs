@@ -248,22 +248,22 @@ impl WebResponseError<WebError> for HandshakeError {
         match *self {
             HandshakeError::GetMethodRequired => HttpResponse::MethodNotAllowed()
                 .header(header::ALLOW, "GET")
-                .finish(),
+                .build(),
             HandshakeError::NoWebsocketUpgrade => HttpResponse::BadRequest()
                 .reason("No WebSocket UPGRADE header found")
-                .finish(),
+                .build(),
             HandshakeError::NoConnectionUpgrade => HttpResponse::BadRequest()
                 .reason("No CONNECTION upgrade")
-                .finish(),
+                .build(),
             HandshakeError::NoVersionHeader => HttpResponse::BadRequest()
                 .reason("Websocket version header is required")
-                .finish(),
+                .build(),
             HandshakeError::UnsupportedVersion => HttpResponse::BadRequest()
                 .reason("Unsupported version")
-                .finish(),
-            HandshakeError::BadWebsocketKey => HttpResponse::BadRequest()
-                .reason("Handshake error")
-                .finish(),
+                .build(),
+            HandshakeError::BadWebsocketKey => {
+                HttpResponse::BadRequest().reason("Handshake error").build()
+            }
         }
     }
 }

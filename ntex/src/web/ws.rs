@@ -112,7 +112,7 @@ where
     if let Some(protocol) = subprotocol {
         res.set_header(header::SEC_WEBSOCKET_PROTOCOL, protocol);
     }
-    let res = res.finish().into_parts().0;
+    let res = res.build().into_parts().0;
 
     // extract io
     let item = req

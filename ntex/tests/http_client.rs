@@ -222,7 +222,7 @@ async fn test_connection_server_close() {
             Ok(io)
         })
         .and_then(HttpService::new(App::new().service(
-            web::resource("/").route(web::to(async || HttpResponse::Ok().force_close().finish())),
+            web::resource("/").route(web::to(async || HttpResponse::Ok().force_close().build())),
         )))
     });
 
@@ -539,7 +539,7 @@ async fn test_client_deflate_encoding_large_random() {
 //         })
 //     });
 
-//     let request = srv.get("/").finish().unwrap();
+//     let request = srv.get("/").build().unwrap();
 //     let response = srv.execute(request.send()).unwrap();
 //     assert!(response.status().is_success());
 
@@ -585,7 +585,7 @@ async fn test_client_cookie_handling() {
                     res?;
 
                     // Send some cookies back
-                    Ok::<_, WebError>(HttpResponse::Ok().cookie(cookie1).cookie(cookie2).finish())
+                    Ok::<_, WebError>(HttpResponse::Ok().cookie(cookie1).cookie(cookie2).build())
                 },
             )),
         )
