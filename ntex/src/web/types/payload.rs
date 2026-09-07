@@ -26,7 +26,7 @@ use crate::web::{AppState, FromRequest, HttpRequest, error::PayloadError};
 ///     }
 ///
 ///     format!("Body {:?}!", bytes);
-///     Ok(HttpResponse::Ok().finish())
+///     Ok(HttpResponse::Ok().build())
 /// }
 ///
 /// fn main() {
@@ -91,7 +91,7 @@ impl Stream for Payload {
 ///     }
 ///
 ///     format!("Body {:?}!", bytes);
-///     Ok(HttpResponse::Ok().finish())
+///     Ok(HttpResponse::Ok().build())
 /// }
 ///
 /// fn main() {

@@ -38,11 +38,13 @@ use super::{Method, Request, Uri, Version, error::HttpError, payload::Payload};
 /// }
 ///
 /// let resp = index(
-///     TestRequest::with_header("content-type", "text/plain").finish());
+///     TestRequest::with_header("content-type", "text/plain").build()
+/// );
 /// assert_eq!(resp.status(), StatusCode::OK);
 ///
 /// let resp = index(
-///     TestRequest::default().finish());
+///     TestRequest::default().build()
+/// );
 /// assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 /// ```
 pub struct TestRequest(Option<Inner>);

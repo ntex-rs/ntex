@@ -34,7 +34,7 @@
 //!
 //! #[get("/test")]
 //! async fn async_test() -> Result<HttpResponse, WebError> {
-//!     Ok(HttpResponse::Ok().finish())
+//!     Ok(HttpResponse::Ok().build())
 //! }
 //! ```
 
