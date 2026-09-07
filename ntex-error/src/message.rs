@@ -14,8 +14,8 @@ impl<'a> Wrt<'a> {
         Wrt { fmt, written: 0 }
     }
 
-    fn wrote(&mut self) -> bool {
-        let res = self.written != 0;
+    fn wrote(&mut self) -> usize {
+        let res = self.written;
         self.written = 0;
         res
     }
@@ -44,7 +44,7 @@ pub fn fmt_err(f: &mut dyn fmt::Write, e: &dyn StdError) -> fmt::Result {
     let mut current = Some(e);
     while let Some(std_err) = current {
         write!(&mut wrt, "{std_err}")?;
-        if wrt.wrote() {
+        if wrt.wrote() > 0 {
             writeln!(wrt.fmt)?;
         }
         current = std_err.source();
@@ -102,15 +102,18 @@ where
     writeln!(f)?;
 
     let mut wrt = Wrt::new(f);
-    write!(&mut wrt, "{e:?}")?;
-    if wrt.wrote() {
+    write!(&mut wrt, "{e}")?;
+    if wrt.wrote() > 0 {
         writeln!(wrt.fmt)?;
     }
 
+    let mut nesting = 0;
     let mut current = e.source();
     while let Some(err) = current {
-        write!(&mut wrt, "{err:?}")?;
-        if wrt.wrote() {
+        nesting += 2;
+        write!(&mut wrt, "{}", " ".repeat(nesting))?;
+        write!(&mut wrt, "{err}")?;
+        if wrt.wrote() > nesting {
             writeln!(wrt.fmt)?;
         }
         current = err.source();
