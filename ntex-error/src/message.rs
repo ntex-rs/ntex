@@ -55,7 +55,7 @@ pub fn fmt_err(f: &mut dyn fmt::Write, e: &dyn StdError) -> fmt::Result {
 /// Formats a full diagnostic view of an error for logging and tracing.
 pub fn fmt_diag_string<'a, T>(e: &'a T) -> String
 where
-    T: AsError,
+    T: ErrorDiagnostic + AsError,
     ResultType: From<&'a T::Target>,
 {
     let mut buf = String::new();
@@ -69,7 +69,7 @@ where
 /// and a backtrace when available.
 pub fn fmt_diag<'a, T>(f: &mut dyn fmt::Write, container: &'a T) -> fmt::Result
 where
-    T: AsError,
+    T: ErrorDiagnostic + AsError,
     ResultType: From<&'a T::Target>,
 {
     fmt_diag_typ(f, Some(ResultType::from(container.as_diag())), container)
@@ -79,12 +79,10 @@ where
 ///
 /// For `ServiceError` types, this includes debug representations of all nested errors,
 /// and a backtrace when available.
-pub fn fmt_diag_typ<T>(f: &mut dyn fmt::Write, typ: Option<ResultType>, err: &T) -> fmt::Result
+pub fn fmt_diag_typ<T>(f: &mut dyn fmt::Write, typ: Option<ResultType>, e: &T) -> fmt::Result
 where
-    T: AsError,
+    T: ErrorDiagnostic,
 {
-    let e = err.as_diag();
-
     writeln!(f, "err: {e}")?;
     if let Some(ref tp) = typ {
         writeln!(f, "type: {}", tp.as_str())?;

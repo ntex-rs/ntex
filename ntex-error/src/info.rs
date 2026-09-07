@@ -1,3 +1,4 @@
+use ntex_bytes::Bytes;
 use std::{any::Any, any::TypeId, error, fmt, sync::Arc};
 
 use crate::{AsError, Backtrace, Error, ErrorDiagnostic, IntoFailure, repr::ErrorRepr};
@@ -160,6 +161,10 @@ impl AsError for Failure {
 impl ErrorDiagnostic for FailureDiagnostic {
     fn signature(&self) -> &'static str {
         self.0.signature()
+    }
+
+    fn tag(&self) -> Option<&Bytes> {
+        self.0.tag()
     }
 
     fn service(&self) -> Option<&'static str> {
