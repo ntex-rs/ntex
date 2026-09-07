@@ -1,6 +1,6 @@
 //! Test server
 #![allow(clippy::missing_panics_doc)]
-use std::{fmt, io, marker::PhantomData, net, thread, time};
+use std::{fmt, io, marker::PhantomData, net, sync::Arc, thread, time};
 
 use ntex_io::{Io, IoConfig};
 use ntex_net::tcp_connect;
@@ -122,10 +122,12 @@ where
 
         TestServer {
             addr,
-            server,
-            system,
-            id: self.id,
-            cfg: self.client_config,
+            inner: Arc::new(TestServerInner {
+                server,
+                system,
+                id: self.id,
+                cfg: self.client_config,
+            }),
         }
     }
 }
@@ -200,19 +202,26 @@ where
     thread::sleep(time::Duration::from_millis(25));
 
     TestServer {
-        id,
-        system,
-        server,
         addr: "127.0.0.1:0".parse().unwrap(),
-        cfg: SharedCfg::new("TEST-CLIENT").add(IoConfig::new()).into(),
+        inner: Arc::new(TestServerInner {
+            id,
+            system,
+            server,
+            cfg: SharedCfg::new("TEST-CLIENT").add(IoConfig::new()).into(),
+        }),
     }
 }
 
 #[derive(Clone, Debug)]
 /// Test server controller
 pub struct TestServer {
-    id: Uuid,
     addr: net::SocketAddr,
+    inner: Arc<TestServerInner>,
+}
+
+#[derive(Debug)]
+struct TestServerInner {
+    id: Uuid,
     system: System,
     server: Server,
     cfg: SharedCfg,
@@ -232,17 +241,17 @@ impl TestServer {
 
     /// Test client shared config
     pub fn config(&self) -> SharedCfg {
-        self.cfg.clone()
+        self.inner.cfg.clone()
     }
 
     /// Connect to server, return Io
     pub async fn connect(&self) -> io::Result<Io> {
-        tcp_connect(self.addr, self.cfg.clone()).await
+        tcp_connect(self.addr, self.inner.cfg.clone()).await
     }
 
     /// Stop http server by stopping the runtime.
     pub fn stop(&self) {
-        drop(self.server.stop(true));
+        drop(self.inner.server.stop(true));
     }
 
     /// Get first available unused address
@@ -257,13 +266,13 @@ impl TestServer {
 
     /// Get access to the running Server
     pub fn server(&self) -> Server {
-        self.server.clone()
+        self.inner.server.clone()
     }
 }
 
-impl Drop for TestServer {
+impl Drop for TestServerInner {
     fn drop(&mut self) {
-        log::debug!("Stopping test server {:?}", self.id);
+        log::debug!("Stopping test server (dropped) {:?}", self.id,);
         drop(self.server.stop(false));
         thread::sleep(time::Duration::from_millis(75));
         self.system.stop();

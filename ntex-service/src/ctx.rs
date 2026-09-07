@@ -1,4 +1,4 @@
-use std::{cell, fmt, future, marker, pin, rc::Rc, task::Context, task::Poll, task::Waker};
+use std::{cell, fmt, future, marker, ops, pin, rc::Rc, task::Context, task::Poll, task::Waker};
 
 use crate::Service;
 
@@ -287,6 +287,15 @@ impl<S, St> Clone for Ctx<'_, S, St> {
     #[inline]
     fn clone(&self) -> Self {
         *self
+    }
+}
+
+impl<S, St> ops::Deref for Ctx<'_, S, St> {
+    type Target = St;
+
+    #[inline]
+    fn deref(&self) -> &St {
+        self.st
     }
 }
 

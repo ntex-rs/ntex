@@ -21,7 +21,7 @@ pub enum ConnectError {
     Unresolved,
 
     /// Connection io error
-    #[error("{0}")]
+    #[error("Tcp connect")]
     Io(#[from] io::Error),
 }
 
