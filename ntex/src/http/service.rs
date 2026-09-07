@@ -1,4 +1,4 @@
-use crate::error::{Error, IntoErrorInfo};
+use crate::error::{Error, IntoFailure};
 use crate::io::{Filter, Io, types};
 use crate::service::{IntoServiceFactory, RequestState, pipeline::PipelineFactory};
 use crate::{Ctx, Service, ServiceFactory};
@@ -29,13 +29,13 @@ where
     where
         H: ServiceFactory<Req::State, Request, Error = Err> + 'static,
         H::Res: Into<Response>,
-        H::InitError: IntoErrorInfo,
+        H::InitError: IntoFailure,
     {
         HttpService {
             sf: PipelineFactory::new(
                 sf.into_factory()
                     .map(Into::into)
-                    .map_init_err(|e| DispatchError::Control(e.into_err())),
+                    .map_init_err(|e| DispatchError::Control(e.fail())),
             ),
             h1_ctl: PipelineFactory::new(h1::DefaultControlService),
             h2_ctl: PipelineFactory::new(h2::DefaultControlService),
@@ -49,7 +49,7 @@ where
     where
         H: ServiceFactory<Req::State, Request, Error = Err> + 'static,
         H::Res: Into<Response>,
-        H::InitError: IntoErrorInfo,
+        H::InitError: IntoFailure,
     {
         h1::H1Service::new(sf)
     }
@@ -60,7 +60,7 @@ where
     where
         H: ServiceFactory<Req::State, Request, Error = Err> + 'static,
         H::Res: Into<Response>,
-        H::InitError: IntoErrorInfo,
+        H::InitError: IntoFailure,
     {
         h2::H2Service::new(sf)
     }
@@ -80,15 +80,15 @@ where
     ) -> Self
     where
         Ctl: ServiceFactory<Req::State, h1::Control<F, Err>, Res = h1::ControlAck<F>> + 'static,
-        Ctl::Error: IntoErrorInfo,
-        Ctl::InitError: IntoErrorInfo,
+        Ctl::Error: IntoFailure,
+        Ctl::InitError: IntoFailure,
     {
         HttpService {
             sf: self.sf,
             h1_ctl: PipelineFactory::new(
                 ctl.into_factory()
-                    .map_err(|e| DispatchError::Service(e.into_err()))
-                    .map_init_err(|e| DispatchError::Control(e.into_err())),
+                    .map_err(|e| DispatchError::Service(e.fail()))
+                    .map_init_err(|e| DispatchError::Control(e.fail())),
             ),
             h2_ctl: self.h2_ctl,
             config: self.config,
@@ -104,16 +104,16 @@ where
     where
         Ctl:
             ServiceFactory<Req::State, h2::Control<Error<H2Error>>, Res = h2::ControlAck> + 'static,
-        Ctl::Error: IntoErrorInfo,
-        Ctl::InitError: IntoErrorInfo,
+        Ctl::Error: IntoFailure,
+        Ctl::InitError: IntoFailure,
     {
         HttpService {
             sf: self.sf,
             h1_ctl: self.h1_ctl,
             h2_ctl: PipelineFactory::new(
                 ctl.into_factory()
-                    .map_err(|e| DispatchError::Service(e.into_err()))
-                    .map_init_err(|e| DispatchError::Control(e.into_err())),
+                    .map_err(|e| DispatchError::Service(e.fail()))
+                    .map_init_err(|e| DispatchError::Control(e.fail())),
             ),
             config: self.config,
         }

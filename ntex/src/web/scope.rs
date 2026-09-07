@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
-use crate::error::{ErrorInfo, IntoErrorInfo};
+use crate::error::{Failure, IntoFailure};
 use crate::router::{IntoPattern, ResourceDef, Router};
 use crate::service::{Identity, Middleware, Service, ServiceFactory};
 use crate::service::{IntoServiceFactory, boxed, dev::ServiceChainFactory, factory};
@@ -78,7 +78,7 @@ impl<St: AppState> Scope<St> {
 impl<St, M, T> Scope<St, M, T>
 where
     St: AppState,
-    T: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ErrorInfo>,
+    T: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = Failure>,
 {
     #[must_use]
     /// Add match guard to a scope.
@@ -229,11 +229,11 @@ where
     pub fn default_service<Sf>(mut self, f: impl IntoServiceFactory<Sf, St, WebRequest>) -> Self
     where
         Sf: ServiceFactory<St, WebRequest, Res = WebResponse, Error = St::Error> + 'static,
-        Sf::InitError: IntoErrorInfo,
+        Sf::InitError: IntoFailure,
     {
         // create and configure default resource
         self.default = Some(boxed::factory(
-            f.into_factory().map_init_err(IntoErrorInfo::into_err),
+            f.into_factory().map_init_err(IntoFailure::fail),
         ));
 
         self
@@ -253,16 +253,16 @@ where
     ) -> Scope<
         St,
         M,
-        impl ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ErrorInfo>,
+        impl ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = Failure>,
     >
     where
         U: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error>,
-        U::InitError: IntoErrorInfo,
+        U::InitError: IntoFailure,
     {
         Scope {
             filter: self
                 .filter
-                .and_then(filter.into_factory().map_init_err(IntoErrorInfo::into_err)),
+                .and_then(filter.into_factory().map_init_err(IntoFailure::fail)),
             middleware: self.middleware,
             rdef: self.rdef,
             guards: self.guards,
@@ -299,7 +299,7 @@ where
 impl<St, M, F> WebServiceFactory<St> for Scope<St, M, F>
 where
     St: AppState,
-    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ErrorInfo>
+    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = Failure>
         + 'static,
     M: Middleware<AppRouter<St, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
@@ -383,14 +383,14 @@ where
     St: AppState,
     M: Middleware<AppRouter<St, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
-    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ErrorInfo>
+    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = Failure>
         + 'static,
 {
     type Res = WebResponse;
     type Error = St::Error;
 
     type Service = M::Service;
-    type InitError = ErrorInfo;
+    type InitError = Failure;
 
     async fn create(&self, cfg: &St) -> Result<Self::Service, Self::InitError> {
         let filter = self.filter.create(cfg).await?;

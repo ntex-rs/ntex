@@ -19,13 +19,17 @@ pub mod utils;
 
 pub use crate::bt::{Backtrace, BacktraceRaw, BacktraceResolver};
 pub use crate::error::Error;
-pub use crate::info::ErrorInfo;
+pub use crate::info::Failure;
 pub use crate::message::{ErrorMessage, ErrorMessageChained};
 pub use crate::message::{fmt_diag, fmt_diag_string, fmt_diag_typ, fmt_err, fmt_err_string};
 pub use crate::utils::{ResultSignature, Retryable, Success, with_service};
 
 #[doc(hidden)]
 pub use crate::bt::{set_backtrace_start, set_backtrace_start_alt};
+
+#[doc(hidden)]
+#[deprecated(since = "2.6.0")]
+pub type ErrorInfo = Failure;
 
 /// The type of the result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, thiserror::Error)]
@@ -108,8 +112,8 @@ impl ErrorDiagnostic for ResultType {
 }
 
 /// Helper trait for converting a value into a unified error-aware result type.
-pub trait IntoErrorInfo: Sized {
-    fn into_err(self) -> ErrorInfo;
+pub trait IntoFailure: Sized {
+    fn fail(self) -> Failure;
 }
 
 #[cfg(test)]
@@ -250,10 +254,13 @@ mod tests {
         let msg = fmt_diag_string(&err);
         assert!(msg.contains("err: InternalServiceError"));
 
-        let err: ErrorInfo = err.set_service("SVC").into();
+        let err: Failure = err.set_service("SVC").into();
         assert_eq!(err.service(), Some("SVC"));
         assert_eq!(err.signature(), "Service-Internal");
+        assert_eq!(err.as_diag().service(), Some("SVC"));
+        assert_eq!(err.as_diag().signature(), "Service-Internal");
         assert!(err.backtrace().is_some());
+        assert!(err.as_diag().backtrace().is_some());
 
         let res = Err(TestError::Service("409 Error"));
         let res: Result<(), Error<TestError>> = res.into_error();
@@ -275,7 +282,7 @@ mod tests {
         let err2 = err.clone().map(|_| TestError::Disconnect);
         assert_eq!(err2.get_item::<&str>(), Some(&"Test"));
 
-        let info = ErrorInfo::from(&err2);
+        let info = Failure::from(&err2);
         assert_eq!(info.get_item::<&str>(), Some(&"Test"));
 
         let err3 = err
@@ -297,13 +304,5 @@ mod tests {
         let res = Err::<(), _>(TestError::Service("409 Error"));
         let info = ResultSignature::from(&res);
         assert_eq!(info.signature(), "Service-Internal");
-    }
-
-    #[ntex::test]
-    async fn test_error_info() {
-        let err: Error<TestError> = TestError::Service("409 Error").into();
-        println!("1 === {:?}", std::mem::size_of::<Error<TestError>>());
-        let _info = ErrorInfo::from(err);
-        println!("2 === {:?}", std::mem::size_of::<ErrorInfo>());
     }
 }

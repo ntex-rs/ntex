@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::error::{ErrorInfo, IntoErrorInfo};
+use crate::error::{Failure, IntoFailure};
 use crate::router::{IntoPattern, ResourceDef};
 use crate::service::{IntoServiceFactory, ServiceFactory, boxed};
 
@@ -110,7 +110,7 @@ impl<St: AppState> WebServiceConfig<St> {
                 WebRequest,
                 Res = WebResponse,
                 Error = St::Error,
-                InitError = ErrorInfo,
+                InitError = Failure,
             > + 'static,
     {
         self.services
@@ -191,10 +191,10 @@ impl WebServiceAdapter {
         St: AppState,
         F: IntoServiceFactory<Sf, St, WebRequest>,
         Sf: ServiceFactory<St, WebRequest, Res = WebResponse, Error = St::Error> + 'static,
-        Sf::InitError: IntoErrorInfo,
+        Sf::InitError: IntoFailure,
     {
         WebServiceImpl {
-            srv: service.into_factory().map_init_err(IntoErrorInfo::into_err),
+            srv: service.into_factory().map_init_err(IntoFailure::fail),
             rdef: self.rdef,
             name: self.name,
             guards: self.guards,
@@ -212,7 +212,7 @@ struct WebServiceImpl<Sf> {
 impl<Sf, St> WebServiceFactory<St> for WebServiceImpl<Sf>
 where
     St: AppState,
-    Sf: ServiceFactory<St, WebRequest, Res = WebResponse, Error = St::Error, InitError = ErrorInfo>
+    Sf: ServiceFactory<St, WebRequest, Res = WebResponse, Error = St::Error, InitError = Failure>
         + 'static,
 {
     fn register(mut self, config: &mut WebServiceConfig<St>) {

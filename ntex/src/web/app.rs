@@ -1,4 +1,4 @@
-use crate::error::{ErrorInfo, IntoErrorInfo};
+use crate::error::{Failure, IntoFailure};
 use crate::http::Request;
 use crate::router::ResourceDef;
 use crate::service::{Identity, Middleware, Service, ServiceFactory};
@@ -69,7 +69,7 @@ impl<St: AppState> App<St> {
 impl<St, M, F> App<St, M, F>
 where
     St: AppState,
-    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ErrorInfo>,
+    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = Failure>,
 {
     #[must_use]
     /// Run external configuration as part of the application building
@@ -190,11 +190,11 @@ where
     pub fn default_service<U>(mut self, f: impl IntoServiceFactory<U, St, WebRequest>) -> Self
     where
         U: ServiceFactory<St, WebRequest, Res = WebResponse, Error = St::Error> + 'static,
-        U::InitError: IntoErrorInfo,
+        U::InitError: IntoFailure,
     {
         // create and configure default resource
         self.default = Some(HttpService::new(
-            f.into_factory().map_init_err(IntoErrorInfo::into_err),
+            f.into_factory().map_init_err(IntoFailure::fail),
         ));
 
         self
@@ -262,16 +262,16 @@ where
     ) -> App<
         St,
         M,
-        impl ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ErrorInfo>,
+        impl ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = Failure>,
     >
     where
         Sf: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error>,
-        Sf::InitError: IntoErrorInfo,
+        Sf::InitError: IntoFailure,
     {
         App {
             filter: self
                 .filter
-                .and_then(filter.into_factory().map_init_err(IntoErrorInfo::into_err)),
+                .and_then(filter.into_factory().map_init_err(IntoFailure::fail)),
             middleware: self.middleware,
             services: self.services,
             default: self.default,
@@ -334,7 +334,7 @@ where
     St: AppState,
     M: Middleware<AppRouter<St, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
-    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ErrorInfo>,
+    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = Failure>,
 {
     /// Construct service factory, suitable for `http::HttpService`.
     ///
@@ -355,7 +355,7 @@ where
     /// ```
     pub fn finish(
         self,
-    ) -> impl ServiceFactory<St, Request, Res = WebResponse, Error = St::Error, InitError = ErrorInfo>
+    ) -> impl ServiceFactory<St, Request, Res = WebResponse, Error = St::Error, InitError = Failure>
     {
         IntoServiceFactory::<AppFactory<St, M, F>, St, Request>::into_factory(self)
     }
@@ -366,7 +366,7 @@ where
     St: AppState,
     M: Middleware<AppRouter<St, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
-    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = ErrorInfo>,
+    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = Failure>,
 {
     fn into_factory(self) -> AppFactory<St, M, F> {
         AppFactory::new(
