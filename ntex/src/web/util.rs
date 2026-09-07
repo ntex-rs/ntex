@@ -232,7 +232,7 @@ pub fn method<St: AppState>(method: Method) -> Route<St> {
 /// use ntex::web;
 ///
 /// async fn index() -> web::HttpResponse {
-///    web::HttpResponse::Ok().finish()
+///    web::HttpResponse::Ok().build()
 /// }
 ///
 /// web::App::default().service(
@@ -255,13 +255,13 @@ where
 /// use ntex::web::{self, guard, App, HttpResponse, WebError};
 ///
 /// async fn my_service(req: web::WebRequest) -> Result<web::WebResponse, WebError> {
-///     Ok(req.into_response(HttpResponse::Ok().finish()))
+///     Ok(req.into_response(HttpResponse::Ok().build()))
 /// }
 ///
 /// let app = App::default().service(
 ///     web::service("/users/*")
 ///         .guard(guard::Header("content-type", "text/plain"))
-///         .finish(my_service)
+///         .build(my_service)
 /// );
 /// ```
 pub fn service<T: IntoPattern>(path: T) -> WebServiceAdapter {

@@ -164,7 +164,7 @@ mod tests {
         let req = TestRequest::default().to_srv_request();
         let srv = fn_service(async move |req: WebRequest| {
             Ok::<_, WebError>(
-                req.into_response(HttpResponse::Ok().header(CONTENT_TYPE, "0002").finish()),
+                req.into_response(HttpResponse::Ok().header(CONTENT_TYPE, "0002").build()),
             )
         });
         let mw = Pipeline::new(
@@ -194,7 +194,7 @@ mod tests {
     #[crate::rt_test]
     async fn test_content_type() {
         let srv = fn_service(async move |req: WebRequest| {
-            Ok::<_, WebError>(req.into_response(HttpResponse::Ok().finish()))
+            Ok::<_, WebError>(req.into_response(HttpResponse::Ok().build()))
         });
         let mw = Pipeline::new(
             (),

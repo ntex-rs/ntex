@@ -18,8 +18,8 @@ pub struct TestResponse {
     cookies: CookieJar,
 }
 
-impl Default for TestResponse {
-    fn default() -> TestResponse {
+impl TestResponse {
+    pub fn builder() -> TestResponse {
         TestResponse {
             head: ResponseHead::new(StatusCode::OK, Version::default()),
             payload: None,
@@ -27,9 +27,7 @@ impl Default for TestResponse {
             cookies: CookieJar::new(),
         }
     }
-}
 
-impl TestResponse {
     #[must_use]
     /// Create `TestResponse` and set header.
     pub fn with_header<K, V>(key: K, value: V) -> Self
@@ -38,7 +36,7 @@ impl TestResponse {
         HeaderValue: TryFrom<V>,
         <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
     {
-        Self::default().header(key, value)
+        Self::builder().header(key, value)
     }
 
     #[must_use]
@@ -85,7 +83,7 @@ impl TestResponse {
 
     #[must_use]
     /// Complete response creation and generate `ClientResponse` instance.
-    pub fn finish(self) -> ClientResponse {
+    pub fn build(self) -> ClientResponse {
         #[allow(unused_mut)]
         let mut head = self.head;
 
@@ -128,18 +126,18 @@ mod tests {
         let res = {
             #[cfg(feature = "cookie")]
             {
-                TestResponse::default()
+                TestResponse::builder()
                     .version(Version::HTTP_2)
                     .header(header::DATE, "data")
                     .cookie(coo_kie::Cookie::build(("name", "value")))
-                    .finish()
+                    .build()
             }
             #[cfg(not(feature = "cookie"))]
             {
-                TestResponse::default()
+                TestResponse::builder()
                     .version(Version::HTTP_2)
                     .header(header::DATE, "data")
-                    .finish()
+                    .build()
             }
         };
         #[cfg(feature = "cookie")]

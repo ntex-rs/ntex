@@ -498,26 +498,26 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_body() {
-        let req = TestResponse::with_header(header::CONTENT_LENGTH, "xxxx").finish();
+        let req = TestResponse::with_header(header::CONTENT_LENGTH, "xxxx").build();
         match &*req.body().await.err().unwrap().into_error() {
             PayloadError::UnknownLength => (),
             _ => unreachable!("error"),
         }
 
-        let req = TestResponse::with_header(header::CONTENT_LENGTH, "1000000").finish();
+        let req = TestResponse::with_header(header::CONTENT_LENGTH, "1000000").build();
         match &*req.body().await.err().unwrap().into_error() {
             PayloadError::Overflow => (),
             _ => unreachable!("error"),
         }
 
-        let req = TestResponse::default()
+        let req = TestResponse::builder()
             .set_payload(Bytes::from_static(b"test"))
-            .finish();
+            .build();
         assert_eq!(req.body().await.ok().unwrap(), Bytes::from_static(b"test"));
 
-        let req = TestResponse::default()
+        let req = TestResponse::builder()
             .set_payload(Bytes::from_static(b"11111111111111"))
-            .finish();
+            .build();
         match &*req.body().limit(5).await.err().unwrap().into_error() {
             PayloadError::Overflow => (),
             _ => unreachable!("error"),
@@ -544,26 +544,26 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_json_body() {
-        let req = TestResponse::default().finish();
+        let req = TestResponse::builder().build();
         let json = JsonBody::<MyObject>::new(&req).await;
         assert!(json_eq(
             &json.err().unwrap(),
             &JsonPayloadError::ContentType
         ));
 
-        let req = TestResponse::default()
+        let req = TestResponse::builder()
             .header(
                 header::CONTENT_TYPE,
                 header::HeaderValue::from_static("application/text"),
             )
-            .finish();
+            .build();
         let json = JsonBody::<MyObject>::new(&req).await;
         assert!(json_eq(
             &json.err().unwrap(),
             &JsonPayloadError::ContentType
         ));
 
-        let req = TestResponse::default()
+        let req = TestResponse::builder()
             .header(
                 header::CONTENT_TYPE,
                 header::HeaderValue::from_static("application/json"),
@@ -572,7 +572,7 @@ mod tests {
                 header::CONTENT_LENGTH,
                 header::HeaderValue::from_static("10000"),
             )
-            .finish();
+            .build();
 
         let json = JsonBody::<MyObject>::new(&req).limit(100).await;
         assert!(json_eq(
@@ -580,7 +580,7 @@ mod tests {
             &JsonPayloadError::Payload(ClientPayloadError(PayloadError::Overflow))
         ));
 
-        let req = TestResponse::default()
+        let req = TestResponse::builder()
             .header(
                 header::CONTENT_TYPE,
                 header::HeaderValue::from_static("application/json"),
@@ -590,7 +590,7 @@ mod tests {
                 header::HeaderValue::from_static("16"),
             )
             .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
-            .finish();
+            .build();
 
         let json = JsonBody::<MyObject>::new(&req).await;
         assert_eq!(

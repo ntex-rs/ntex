@@ -41,7 +41,7 @@ pub fn default_service<St: AppState>(
     status_code: StatusCode,
 ) -> impl Service<St, WebRequest, Res = WebResponse, Error = Infallible> {
     fn_service(async move |req: WebRequest| {
-        Ok::<_, Infallible>(req.into_response(HttpResponse::build(status_code).finish()))
+        Ok::<_, Infallible>(req.into_response(HttpResponse::builder(status_code).build()))
     })
 }
 
@@ -473,13 +473,13 @@ impl TestRequest {
     #[must_use]
     /// Complete request creation and generate `Request` instance.
     pub fn to_request(mut self) -> Request {
-        self.req.finish()
+        self.req.build()
     }
 
     #[must_use]
     /// Complete request creation and generate `WebRequest` instance.
     pub fn to_srv_request(mut self) -> WebRequest {
-        let (head, payload) = self.req.finish().into_parts();
+        let (head, payload) = self.req.build().into_parts();
         *self.path.get_mut() = head.uri.clone();
         let cfg = SharedCfg::new("TEST").add(self.config).build();
 
@@ -498,7 +498,7 @@ impl TestRequest {
     #[must_use]
     /// Complete request creation and generate `HttpRequest` instance.
     pub fn to_http_request(mut self) -> HttpRequest {
-        let (head, _) = self.req.finish().into_parts();
+        let (head, _) = self.req.build().into_parts();
         *self.path.get_mut() = head.uri.clone();
         let cfg = SharedCfg::new("TEST").add(self.config).build();
 
@@ -508,7 +508,7 @@ impl TestRequest {
     #[must_use]
     /// Complete request creation and generate `HttpRequest` and `Payload` instances.
     pub fn to_http_parts(mut self) -> (HttpRequest, Payload) {
-        let (head, payload) = self.req.finish().into_parts();
+        let (head, payload) = self.req.build().into_parts();
         *self.path.get_mut() = head.uri.clone();
         let cfg = SharedCfg::new("TEST").add(self.config).build();
 

@@ -10,52 +10,52 @@ use ntex_macros::{
 // Make sure that we can name function as 'config'
 #[web_get("/config")]
 async fn config() -> HttpResponse {
-    HttpResponse::Ok().finish()
+    HttpResponse::Ok().build()
 }
 
 #[web_get("/test")]
 async fn test_handler() -> HttpResponse {
-    HttpResponse::Ok().finish()
+    HttpResponse::Ok().build()
 }
 
 #[web_put("/test")]
 async fn put_test() -> HttpResponse {
-    HttpResponse::Created().finish()
+    HttpResponse::Created().build()
 }
 
 #[web_patch("/test")]
 async fn patch_test() -> HttpResponse {
-    HttpResponse::Ok().finish()
+    HttpResponse::Ok().build()
 }
 
 #[web_post("/test")]
 async fn post_test() -> HttpResponse {
-    HttpResponse::NoContent().finish()
+    HttpResponse::NoContent().build()
 }
 
 #[web_head("/test")]
 async fn head_test() -> HttpResponse {
-    HttpResponse::Ok().finish()
+    HttpResponse::Ok().build()
 }
 
 #[web_connect("/test")]
 async fn connect_test() -> HttpResponse {
-    HttpResponse::Ok().finish()
+    HttpResponse::Ok().build()
 }
 
 #[web_options("/test")]
 async fn options_test() -> HttpResponse {
-    HttpResponse::Ok().finish()
+    HttpResponse::Ok().build()
 }
 
 #[web_trace("/test")]
 async fn trace_test() -> HttpResponse {
-    HttpResponse::Ok().finish()
+    HttpResponse::Ok().build()
 }
 
 #[web_get("/test")]
 fn auto_async() -> impl Future<Output = Result<HttpResponse, WebError>> {
-    future::ok(HttpResponse::Ok().finish())
+    future::ok(HttpResponse::Ok().build())
 }
 
 #[web_put("/test/{param}")]
@@ -70,7 +70,7 @@ async fn delete_param_test(_: Path<String>) -> HttpResponseBuilder {
 
 #[web_get("/test/{param}")]
 async fn get_param_test(_: Path<String>) -> HttpResponse {
-    HttpResponse::Ok().finish()
+    HttpResponse::Ok().build()
 }
 
 #[ntex::main(name = "test", signals = false, ping_interval = 25)]

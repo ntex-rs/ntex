@@ -38,11 +38,13 @@ use super::{Method, Request, Uri, Version, error::HttpError, payload::Payload};
 /// }
 ///
 /// let resp = index(
-///     TestRequest::with_header("content-type", "text/plain").finish());
+///     TestRequest::with_header("content-type", "text/plain").build()
+/// );
 /// assert_eq!(resp.status(), StatusCode::OK);
 ///
 /// let resp = index(
-///     TestRequest::default().finish());
+///     TestRequest::default().build()
+/// );
 /// assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 /// ```
 pub struct TestRequest(Option<Inner>);
@@ -60,6 +62,12 @@ struct Inner {
 
 impl Default for TestRequest {
     fn default() -> TestRequest {
+        Self::builder()
+    }
+}
+
+impl TestRequest {
+    pub fn builder() -> TestRequest {
         TestRequest(Some(Inner {
             method: Method::GET,
             uri: Uri::from_str("/").unwrap(),
@@ -70,9 +78,7 @@ impl Default for TestRequest {
             payload: None,
         }))
     }
-}
 
-impl TestRequest {
     #[must_use]
     /// Create `TestRequest` and set request uri.
     pub fn with_uri(path: &str) -> TestRequest {
@@ -149,7 +155,7 @@ impl TestRequest {
 
     #[must_use]
     /// Complete request creation and generate `Request` instance.
-    pub fn finish(&mut self) -> Request {
+    pub fn build(&mut self) -> Request {
         let inner = self.0.take().expect("cannot reuse test request builder");
 
         let mut req = if let Some(pl) = inner.payload {

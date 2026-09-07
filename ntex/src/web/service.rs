@@ -124,13 +124,13 @@ impl<St: AppState> WebServiceConfig<St> {
 /// use ntex::web::{self, guard, App, HttpResponse, WebError};
 ///
 /// async fn my_service(req: web::WebRequest) -> Result<web::WebResponse, WebError> {
-///     Ok(req.into_response(HttpResponse::Ok().finish()))
+///     Ok(req.into_response(HttpResponse::Ok().build()))
 /// }
 ///
 /// let app = App::default().service(
 ///     web::service("/users/*")
 ///         .guard(guard::Header("content-type", "text/plain"))
-///         .finish(my_service)
+///         .build(my_service)
 /// );
 /// ```
 #[derive(Debug)]
@@ -167,7 +167,7 @@ impl WebServiceAdapter {
     /// use ntex::web::{self, guard, App, WebError, HttpResponse};
     ///
     /// async fn index(req: web::WebRequest) -> Result<web::WebResponse, WebError> {
-    ///     Ok(req.into_response(HttpResponse::Ok().finish()))
+    ///     Ok(req.into_response(HttpResponse::Ok().build()))
     /// }
     ///
     /// fn main() {
@@ -175,7 +175,7 @@ impl WebServiceAdapter {
     ///         .service(
     ///             web::service("/app")
     ///                 .guard(guard::Header("content-type", "text/plain"))
-    ///                 .finish(index)
+    ///                 .build(index)
     ///         );
     /// }
     /// ```
@@ -186,7 +186,7 @@ impl WebServiceAdapter {
     }
 
     /// Set a service factory implementation and generate web service.
-    pub fn finish<Sf, St, F>(self, service: F) -> impl WebServiceFactory<St>
+    pub fn build<Sf, St, F>(self, service: F) -> impl WebServiceFactory<St>
     where
         St: AppState,
         F: IntoServiceFactory<Sf, St, WebRequest>,
@@ -291,19 +291,17 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_service() {
-        let srv = init_service(
-            App::new().service(web::service("/test").name("test").finish(
-                async move |req: WebRequest| Ok(req.into_response(HttpResponse::Ok().finish())),
-            )),
-        )
+        let srv = init_service(App::new().service(web::service("/test").name("test").build(
+            async move |req: WebRequest| Ok(req.into_response(HttpResponse::Ok().build())),
+        )))
         .await;
         let req = TestRequest::with_uri("/test").to_request();
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let srv = init_service(
-            App::new().service(web::service("/test").guard(guard::Get()).finish(
-                async move |req: WebRequest| Ok(req.into_response(HttpResponse::Ok().finish())),
+            App::new().service(web::service("/test").guard(guard::Get()).build(
+                async move |req: WebRequest| Ok(req.into_response(HttpResponse::Ok().build())),
             )),
         )
         .await;
@@ -364,7 +362,7 @@ mod tests {
         assert!(s.contains("test=1"));
         assert!(s.contains("x-test"));
 
-        let res = HttpResponse::Ok().header("x-test", "111").finish();
+        let res = HttpResponse::Ok().header("x-test", "111").build();
         let res = TestRequest::post()
             .uri("/index.html?test=1")
             .to_srv_response(res);

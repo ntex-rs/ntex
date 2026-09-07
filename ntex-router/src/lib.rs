@@ -1,6 +1,7 @@
 #![deny(clippy::pedantic)]
 #![allow(
     clippy::must_use_candidate,
+    clippy::missing_panics_doc,
     clippy::missing_errors_doc,
     clippy::iter_without_into_iter,
     clippy::cast_possible_wrap,

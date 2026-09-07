@@ -51,7 +51,7 @@ where
         let default = default.unwrap_or_else(|| {
             boxed::factory(
                 factory(async move |req: WebRequest| {
-                    Ok(req.into_response(Response::NotFound().finish()))
+                    Ok(req.into_response(Response::NotFound().build()))
                 })
                 .map_init_err(|_| unreachable!()),
             )
@@ -83,10 +83,10 @@ where
 
         // complete ResourceMap tree
         let rmap = Rc::new(rmap);
-        rmap.finish(&rmap);
+        rmap.build(&rmap);
 
         // Create router
-        let mut router = Router::build();
+        let mut router = Router::builder();
         if case_insensitive {
             router.case_insensitive();
         }
@@ -99,7 +99,7 @@ where
             filter,
             middleware,
             default,
-            router: Rc::new(router.finish()),
+            router: Rc::new(router.build()),
         }
     }
 }
@@ -234,7 +234,7 @@ where
                 self.cache.borrow_mut().insert(id, svc.clone());
                 svc
             } else {
-                return Ok(req.into_response(Response::InternalServerError().finish()));
+                return Ok(req.into_response(Response::InternalServerError().build()));
             }
         } else {
             if let Some(svc) = &*self.cache_default.borrow() {
@@ -243,7 +243,7 @@ where
                 *self.cache_default.borrow_mut() = Some(svc.clone());
                 svc
             } else {
-                return Ok(req.into_response(Response::InternalServerError().finish()));
+                return Ok(req.into_response(Response::InternalServerError().build()));
             }
         };
         ctx.call(&svc, req).await

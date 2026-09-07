@@ -211,22 +211,22 @@ impl ResponseError for HandshakeError {
     fn error_response(&self) -> Response {
         match *self {
             HandshakeError::GetMethodRequired => {
-                Response::MethodNotAllowed().header(ALLOW, "GET").finish()
+                Response::MethodNotAllowed().header(ALLOW, "GET").build()
             }
             HandshakeError::NoWebsocketUpgrade => Response::BadRequest()
                 .reason("No WebSocket UPGRADE header found")
-                .finish(),
+                .build(),
             HandshakeError::NoConnectionUpgrade => Response::BadRequest()
                 .reason("No CONNECTION upgrade")
-                .finish(),
+                .build(),
             HandshakeError::NoVersionHeader => Response::BadRequest()
                 .reason("Websocket version header is required")
-                .finish(),
-            HandshakeError::UnsupportedVersion => Response::BadRequest()
-                .reason("Unsupported version")
-                .finish(),
+                .build(),
+            HandshakeError::UnsupportedVersion => {
+                Response::BadRequest().reason("Unsupported version").build()
+            }
             HandshakeError::BadWebsocketKey => {
-                Response::BadRequest().reason("Handshake error").finish()
+                Response::BadRequest().reason("Handshake error").build()
             }
         }
     }

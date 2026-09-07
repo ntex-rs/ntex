@@ -34,7 +34,7 @@ async fn test_simple() {
                     let (ack, io, req, codec) = upg.handle();
 
                     // send handshake respone
-                    let res = handshake_response(req.head()).finish();
+                    let res = handshake_response(req.head()).build();
                     io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
                         .unwrap();
 
@@ -94,7 +94,7 @@ async fn test_transport() {
                     let (ack, io, req, codec) = upg.handle();
 
                     // send handshake respone
-                    let res = handshake_response(req.head()).finish();
+                    let res = handshake_response(req.head()).build();
                     io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
                         .unwrap();
 
@@ -134,7 +134,7 @@ async fn test_keepalive_timeout() {
                     let (ack, io, req, codec) = upg.handle();
 
                     // send handshake respone
-                    let res = handshake_response(req.head()).finish();
+                    let res = handshake_response(req.head()).build();
                     io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
                         .unwrap();
 
