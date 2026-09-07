@@ -80,9 +80,9 @@ mod tests {
         assert_eq!(err.signature(), "ntex-connect-Unresolved");
 
         let err = ConnectError::Io(io::Error::new(io::ErrorKind::InvalidInput, "test"));
-        assert_eq!(err.signature(), "io-InvalidInput");
+        assert_eq!(err.signature(), "std-io-InvalidInput");
 
         let err = ConnectError::Io(io::Error::other("test"));
-        assert_eq!(err.signature(), "io-Error");
+        assert_eq!(err.signature(), "std-io-Error");
     }
 }
