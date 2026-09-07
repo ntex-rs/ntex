@@ -1,6 +1,7 @@
 //! WebSocket protocol related errors.
 use std::io;
 
+use crate::error::ErrorDiagnostic;
 use crate::http::error::{DecodeError, EncodeError, HttpError, ResponseError};
 use crate::http::{Response, StatusCode, header::ALLOW, header::HeaderValue};
 use crate::{connect::ConnectError, util::Either, util::clone_io_error};
@@ -174,6 +175,12 @@ impl Clone for WsClientError {
                 WsClientError::Disconnected(err.as_ref().map(clone_io_error))
             }
         }
+    }
+}
+
+impl ErrorDiagnostic for WsClientError {
+    fn signature(&self) -> &'static str {
+        "ntex-ws-client"
     }
 }
 

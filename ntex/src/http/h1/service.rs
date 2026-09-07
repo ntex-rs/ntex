@@ -1,4 +1,4 @@
-use crate::error::IntoErrorInfo;
+use crate::error::IntoFailure;
 use crate::http::error::{DispatchError, ResponseError};
 use crate::http::{Request, Response, config::DispatcherConfig};
 use crate::io::{Filter, Io, types};
@@ -30,13 +30,13 @@ where
     where
         Sf: ServiceFactory<Req::State, Request, Error = Err> + 'static,
         Sf::Res: Into<Response>,
-        Sf::InitError: IntoErrorInfo,
+        Sf::InitError: IntoFailure,
     {
         H1Service {
             sf: PipelineFactory::new(
                 sf.into_factory()
                     .map(Into::into)
-                    .map_init_err(|e| DispatchError::Control(e.into_err())),
+                    .map_init_err(|e| DispatchError::Control(e.fail())),
             ),
             ctl: PipelineFactory::new(DefaultControlService),
             config: DispatcherConfig::default(),
@@ -57,15 +57,15 @@ where
     where
         I: IntoServiceFactory<Sf, Req::State, Control<F, Err>>,
         Sf: ServiceFactory<Req::State, Control<F, Err>, Res = ControlAck<F>> + 'static,
-        Sf::Error: IntoErrorInfo,
-        Sf::InitError: IntoErrorInfo,
+        Sf::Error: IntoFailure,
+        Sf::InitError: IntoFailure,
     {
         H1Service {
             sf: self.sf,
             ctl: PipelineFactory::new(
                 ctl.into_factory()
-                    .map_err(|e| DispatchError::Service(e.into_err()))
-                    .map_init_err(|e| DispatchError::Control(e.into_err())),
+                    .map_err(|e| DispatchError::Service(e.fail()))
+                    .map_init_err(|e| DispatchError::Control(e.fail())),
             ),
             config: self.config,
         }

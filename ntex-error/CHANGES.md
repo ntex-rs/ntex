@@ -1,8 +1,10 @@
 # Changes
 
-## [2.6.0] - 2026-09-06
+## [2.6.0] - 2026-09-07
 
-* Introduce IntoErrorInfo trait
+* Introduce IntoFailure trait
+
+* Rename ErrorInfo to Failure
 
 ## [2.5.0] - 2026-08-24
 

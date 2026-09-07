@@ -1,6 +1,6 @@
 use std::{fmt, mem, rc::Rc};
 
-use crate::error::ErrorInfo;
+use crate::error::Failure;
 use crate::http::Method;
 use crate::service::{Ctx, Service, ServiceFactory};
 
@@ -60,7 +60,7 @@ impl<St: AppState> ServiceFactory<St, WebRequest> for Route<St> {
     type Error = St::Error;
 
     type Service = RouteService<St>;
-    type InitError = ErrorInfo;
+    type InitError = Failure;
 
     async fn create(&self, _: &St) -> Result<RouteService<St>, Self::InitError> {
         Ok(self.service())

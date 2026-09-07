@@ -2,7 +2,7 @@ use std::{cell::RefCell, future::poll_fn, io, mem};
 
 use ntex_h2::{self as h2, frame::StreamId, server};
 
-use crate::error::{Error, IntoErrorInfo};
+use crate::error::{Error, IntoFailure};
 use crate::http::body::{BodySize, MessageBody};
 use crate::http::config::DispatcherConfig;
 use crate::http::error::{DispatchError, H2Error, ResponseError};
@@ -37,13 +37,13 @@ where
     where
         Sf: ServiceFactory<Req::State, Request, Error = Err> + 'static,
         Sf::Res: Into<Response>,
-        Sf::InitError: IntoErrorInfo,
+        Sf::InitError: IntoFailure,
     {
         H2Service {
             sf: PipelineFactory::new(
                 sf.into_factory()
                     .map(Into::into)
-                    .map_init_err(|e| DispatchError::Control(e.into_err())),
+                    .map_init_err(|e| DispatchError::Control(e.fail())),
             ),
             ctl: PipelineFactory::new(DefaultControlService),
             config: DispatcherConfig::default(),
@@ -64,15 +64,15 @@ where
     where
         I: IntoServiceFactory<Sf, Req::State, h2::Control<Error<H2Error>>>,
         Sf: ServiceFactory<Req::State, h2::Control<Error<H2Error>>, Res = h2::ControlAck> + 'static,
-        Sf::Error: IntoErrorInfo,
-        Sf::InitError: IntoErrorInfo,
+        Sf::Error: IntoFailure,
+        Sf::InitError: IntoFailure,
     {
         H2Service {
             sf: self.sf,
             ctl: PipelineFactory::new(
                 ctl.into_factory()
-                    .map_err(|e| DispatchError::Service(e.into_err()))
-                    .map_init_err(|e| DispatchError::Service(e.into_err())),
+                    .map_err(|e| DispatchError::Service(e.fail()))
+                    .map_init_err(|e| DispatchError::Service(e.fail())),
             ),
             config: self.config,
         }

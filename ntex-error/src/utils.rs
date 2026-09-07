@@ -1,7 +1,4 @@
-use std::{
-    borrow::Cow, cell::RefCell, convert::Infallible, error::Error as StdError, fmt, io, path::Path,
-    path::PathBuf,
-};
+use std::{borrow::Cow, cell::RefCell, convert, error::Error as StdError, fmt, io, path};
 
 use ntex_bytes::ByteString;
 
@@ -55,7 +52,7 @@ impl<'a, T, E: ErrorDiagnostic> From<&'a Result<T, E>> for ResultSignature {
     }
 }
 
-impl ErrorDiagnostic for Infallible {
+impl ErrorDiagnostic for convert::Infallible {
     fn signature(&self) -> &'static str {
         unreachable!()
     }
@@ -64,16 +61,16 @@ impl ErrorDiagnostic for Infallible {
 impl ErrorDiagnostic for io::Error {
     fn signature(&self) -> &'static str {
         match self.kind() {
-            io::ErrorKind::InvalidData => "io-InvalidData",
-            io::ErrorKind::InvalidInput => "io-InvalidInput",
-            io::ErrorKind::Unsupported => "io-Unsupported",
-            io::ErrorKind::UnexpectedEof => "io-UnexpectedEof",
-            io::ErrorKind::BrokenPipe => "io-BrokenPipe",
-            io::ErrorKind::ConnectionReset => "io-ConnectionReset",
-            io::ErrorKind::ConnectionAborted => "io-ConnectionAborted",
-            io::ErrorKind::NotConnected => "io-NotConnected",
-            io::ErrorKind::TimedOut => "io-TimedOut",
-            _ => "io-Error",
+            io::ErrorKind::InvalidData => "std-io-InvalidData",
+            io::ErrorKind::InvalidInput => "std-io-InvalidInput",
+            io::ErrorKind::Unsupported => "std-io-Unsupported",
+            io::ErrorKind::UnexpectedEof => "std-io-UnexpectedEof",
+            io::ErrorKind::BrokenPipe => "std-io-BrokenPipe",
+            io::ErrorKind::ConnectionReset => "std-io-ConnectionReset",
+            io::ErrorKind::ConnectionAborted => "std-io-ConnectionAborted",
+            io::ErrorKind::NotConnected => "std-io-NotConnected",
+            io::ErrorKind::TimedOut => "std-io-TimedOut",
+            _ => "std-io-Error",
         }
     }
 }
@@ -173,7 +170,7 @@ fn module_path_ext(
 }
 
 fn normalize_file_path(file_path: &str) -> String {
-    let path = Path::new(file_path);
+    let path = path::Path::new(file_path);
     if path.is_absolute() {
         return path.to_string_lossy().into_owned();
     }
@@ -184,10 +181,10 @@ fn normalize_file_path(file_path: &str) -> String {
     }
 }
 
-fn module_root_from_file(mod_sep: &str, file_path: &str) -> (String, PathBuf) {
+fn module_root_from_file(mod_sep: &str, file_path: &str) -> (String, path::PathBuf) {
     let normalized = file_path.replace('\\', "/");
     if let Some((root, _)) = normalized.rsplit_once("/src/") {
-        let mut root = PathBuf::from(root);
+        let mut root = path::PathBuf::from(root);
         let mod_name = root
             .file_name()
             .map_or(Cow::Borrowed("crate"), |s| s.to_string_lossy());
@@ -200,9 +197,9 @@ fn module_root_from_file(mod_sep: &str, file_path: &str) -> (String, PathBuf) {
         return (format!("{mod_name}{mod_sep}"), root);
     }
 
-    let path = Path::new(file_path)
+    let path = path::Path::new(file_path)
         .parent()
-        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        .map_or_else(|| path::PathBuf::from("."), path::Path::to_path_buf);
 
     let m = path
         .parent()
@@ -242,7 +239,7 @@ fn module_path_from_file_with_root(
     sep: &str,
     file_path: &str,
     module_name: &str,
-    module_root: &Path,
+    module_root: &path::Path,
     suffix: &str,
 ) -> ByteString {
     let normalized = file_path.replace('\\', "/");

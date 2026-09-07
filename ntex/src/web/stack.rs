@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use crate::error::ErrorInfo;
+use crate::error::Failure;
 use crate::service::{Ctx, Middleware, Service, ServiceFactory};
 use crate::web::{AppState, WebRequest, WebResponse};
 
@@ -94,7 +94,7 @@ impl<St: AppState> ServiceFactory<St, WebRequest> for Filter<St> {
     type Error = St::Error;
 
     type Service = Filter<St>;
-    type InitError = ErrorInfo;
+    type InitError = Failure;
 
     async fn create(&self, _: &St) -> Result<Self::Service, Self::InitError> {
         Ok(Filter(PhantomData))
