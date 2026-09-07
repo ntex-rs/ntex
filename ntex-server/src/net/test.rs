@@ -272,7 +272,7 @@ impl TestServer {
 
 impl Drop for TestServerInner {
     fn drop(&mut self) {
-        log::debug!("Stopping test server (dropped) {:?}", self.id,);
+        log::debug!("Stopping test server (dropped) {:?}", self.id);
         drop(self.server.stop(false));
         thread::sleep(time::Duration::from_millis(75));
         self.system.stop();
