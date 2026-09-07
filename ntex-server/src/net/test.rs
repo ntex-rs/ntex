@@ -1,6 +1,6 @@
 //! Test server
 #![allow(clippy::missing_panics_doc)]
-use std::{fmt, io, marker::PhantomData, net, sync::Arc, thread, time};
+use std::{fmt, io, marker::PhantomData, net, rc::Rc, thread, time};
 
 use ntex_io::{Io, IoConfig};
 use ntex_net::tcp_connect;
@@ -122,7 +122,7 @@ where
 
         TestServer {
             addr,
-            inner: Arc::new(TestServerInner {
+            inner: Rc::new(TestServerInner {
                 server,
                 system,
                 id: self.id,
@@ -203,7 +203,7 @@ where
 
     TestServer {
         addr: "127.0.0.1:0".parse().unwrap(),
-        inner: Arc::new(TestServerInner {
+        inner: Rc::new(TestServerInner {
             id,
             system,
             server,
@@ -216,7 +216,7 @@ where
 /// Test server controller
 pub struct TestServer {
     addr: net::SocketAddr,
-    inner: Arc<TestServerInner>,
+    inner: Rc<TestServerInner>,
 }
 
 #[derive(Debug)]
