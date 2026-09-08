@@ -27,10 +27,12 @@ impl WebResponse {
     where
         St: AppState,
     {
-        let res = err.error_response(st, &request);
+        let res = err.error_response(st);
 
         if res.head().status == StatusCode::INTERNAL_SERVER_ERROR {
-            log::error!("Internal Server Error");
+            log::error!("Internal Server Error: {err:?}");
+        } else {
+            log::debug!("Error in response: {err:?}");
         }
 
         WebResponse {
@@ -91,21 +93,6 @@ impl WebResponse {
     /// Returns mutable response's headers.
     pub fn headers_mut(&mut self) -> &mut HeaderMap {
         self.response.headers_mut()
-    }
-
-    #[must_use]
-    /// Execute closure and in case of error convert it to response.
-    pub fn checked_expr<St, F, E>(mut self, st: &St, f: F) -> Self
-    where
-        St: AppState,
-        F: FnOnce(&mut Self) -> Result<(), E>,
-        E: WebResponseError<St, St::Error>,
-    {
-        if let Err(mut err) = f(&mut self) {
-            WebResponse::new(err.error_response(st, &self.request), self.request)
-        } else {
-            self
-        }
     }
 
     #[must_use]
@@ -171,12 +158,6 @@ mod tests {
 
         let err = http::error::PayloadError::Overflow;
         let res = res.error_response::<()>(&(), err);
-        assert_eq!(res.response().status(), StatusCode::PAYLOAD_TOO_LARGE);
-
-        let res = TestRequest::default().to_srv_response(HttpResponse::Ok().build());
-        let mut res = res.checked_expr::<(), _, _>(&(), |_| Ok::<_, http::error::PayloadError>(()));
-        assert_eq!(res.response_mut().status(), StatusCode::OK);
-        let res = res.checked_expr::<(), _, _>(&(), |_| Err(http::error::PayloadError::Overflow));
         assert_eq!(res.response().status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 }

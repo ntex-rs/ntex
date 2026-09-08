@@ -29,7 +29,7 @@ impl WebRequest {
         St: AppState,
         E: WebResponseError<St, St::Error>,
     {
-        WebResponse::new(err.error_response(st, &self.req), self.req)
+        WebResponse::new(err.error_response(st), self.req)
     }
 }
 

@@ -135,7 +135,7 @@ where
     async fn respond_to(self, st: &St, req: &HttpRequest) -> Response {
         let body = match serde_urlencoded::to_string(&self.0) {
             Ok(body) => body,
-            Err(mut e) => return e.error_response(st, req),
+            Err(mut e) => return e.error_response(st),
         };
 
         Response::builder(StatusCode::OK)

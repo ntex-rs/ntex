@@ -100,7 +100,7 @@ where
     async fn respond_to(self, st: &St, req: &HttpRequest) -> Response {
         match self {
             Ok(val) => val.respond_to(st, req).await,
-            Err(mut e) => e.error_response(st, req),
+            Err(mut e) => e.error_response(st),
         }
     }
 }
@@ -305,7 +305,7 @@ where
     St: AppState,
 {
     async fn respond_to(mut self, st: &St, req: &HttpRequest) -> Response {
-        self.error_response(st, req)
+        self.error_response(st)
     }
 }
 
@@ -360,7 +360,7 @@ pub(crate) mod tests {
         let req = TestRequest::with_uri("/some").to_request();
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        if let ResponseBody::Body(Body::Bytes(b)) = resp.response().body() {
+        if let ResponseBody::Body(Body::Bytes(b)) = resp.body() {
             let bytes: Bytes = b.clone();
             assert_eq!(bytes, Bytes::from_static(b"some"));
         } else {

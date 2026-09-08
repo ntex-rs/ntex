@@ -68,11 +68,11 @@ pub fn default_service<St: AppState>(
 ///     assert_eq!(resp.status(), StatusCode::OK);
 /// }
 /// ```
-pub async fn init_service<St, R, S, E>(app: R) -> Pipeline<Request, WebResponse, E>
+pub async fn init_service<St, R, S, E>(app: R) -> Pipeline<Request, Response, E>
 where
     St: Default + 'static,
     R: IntoServiceFactory<S, St, Request>,
-    S: ServiceFactory<St, Request, Res = WebResponse, Error = E> + 'static,
+    S: ServiceFactory<St, Request, Res = Response, Error = E> + 'static,
     S::InitError: fmt::Debug,
     St: Default + Clone + 'static,
 {
@@ -103,7 +103,7 @@ where
 ///     assert_eq!(resp.status(), StatusCode::OK);
 /// }
 /// ```
-pub async fn call_service<R, E>(app: &Pipeline<R, WebResponse, E>, req: R) -> WebResponse
+pub async fn call_service<R, E>(app: &Pipeline<R, Response, E>, req: R) -> Response
 where
     R: 'static,
     E: fmt::Debug + 'static,
@@ -136,7 +136,7 @@ where
 ///     assert_eq!(result, Bytes::from_static(b"welcome!"));
 /// }
 /// ```
-pub async fn read_response<E>(app: &Pipeline<Request, WebResponse, E>, req: Request) -> Bytes
+pub async fn read_response<E>(app: &Pipeline<Request, Response, E>, req: Request) -> Bytes
 where
     E: 'static,
 {
@@ -179,8 +179,8 @@ where
 ///     assert_eq!(result, Bytes::from_static(b"welcome!"));
 /// }
 /// ```
-pub async fn read_body(mut res: WebResponse) -> Bytes {
-    let mut body = res.take_body();
+pub async fn read_body(res: impl Into<Response>) -> Bytes {
+    let mut body = res.into().take_body();
     let mut bytes = BytesMut::new();
     while let Some(item) = stream_recv(&mut body).await {
         bytes.extend_from_slice(&item.unwrap());
@@ -235,7 +235,7 @@ where
 ///     let result: Person = test::read_response_json(&mut app, req).await;
 /// }
 /// ```
-pub async fn read_response_json<T, E>(app: &Pipeline<Request, WebResponse, E>, req: Request) -> T
+pub async fn read_response_json<T, E>(app: &Pipeline<Request, Response, E>, req: Request) -> T
 where
     T: DeserializeOwned,
     E: 'static,
