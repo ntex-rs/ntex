@@ -4,9 +4,10 @@ use crate::error::Failure;
 use crate::http::Method;
 use crate::service::{Ctx, Service, ServiceFactory};
 
+use super::error::{WebError, WebResponseError};
 use super::guard::{self, AllGuard, Guard};
 use super::handler::{Handler, HandlerFn, HandlerWrapper};
-use super::{AppState, FromRequest, HttpResponse, WebRequest, WebResponse, WebResponseError};
+use super::{AppState, FromRequest, HttpResponse, WebRequest, WebResponse};
 
 /// Resource route definition
 ///
@@ -57,7 +58,7 @@ impl<St: AppState> Default for Route<St> {
 
 impl<St: AppState> ServiceFactory<St, WebRequest> for Route<St> {
     type Res = WebResponse;
-    type Error = St::Error;
+    type Error = WebError<St, St::Error>;
 
     type Service = RouteService<St>;
     type InitError = Failure;
@@ -157,7 +158,7 @@ impl<St: AppState> Route<St> {
     where
         H: Handler<St, Args> + 'static,
         Args: FromRequest<St> + 'static,
-        Args::Error: WebResponseError<St::Error>,
+        Args::Error: WebResponseError<St, St::Error>,
     {
         self.handler = Rc::new(HandlerWrapper::new(handler));
         self
@@ -202,14 +203,14 @@ impl<St: AppState> fmt::Debug for RouteService<St> {
 
 impl<St: AppState> Service<St, WebRequest> for RouteService<St> {
     type Res = WebResponse;
-    type Error = St::Error;
+    type Error = WebError<St, St::Error>;
 
     async fn call(
         &self,
         req: WebRequest,
         ctx: Ctx<'_, Self, St>,
     ) -> Result<Self::Res, Self::Error> {
-        self.handler.call(ctx.st(), req).await
+        Ok(self.handler.call(ctx.st(), req).await)
     }
 }
 

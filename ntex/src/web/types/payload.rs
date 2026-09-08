@@ -1,5 +1,7 @@
 //! Payload/Bytes/String extractors
-use std::{borrow::Cow, future::Future, pin::Pin, str, task::Context, task::Poll};
+use std::{
+    borrow::Cow, convert::Infallible, future::Future, pin::Pin, str, task::Context, task::Poll,
+};
 
 use encoding_rs::UTF_8;
 use mime::Mime;
@@ -102,7 +104,7 @@ impl Stream for Payload {
 /// }
 /// ```
 impl<St: AppState> FromRequest<St> for Payload {
-    type Error = St::Error;
+    type Error = Infallible;
 
     #[inline]
     async fn from_request(

@@ -11,21 +11,25 @@ use super::config::WebAppConfig;
 use super::error::WebResponseError;
 use super::info::ConnectionInfo;
 use super::rmap::ResourceMap;
-use super::{HttpRequest, WebResponse};
+use super::{AppState, HttpRequest, WebResponse};
 
 /// An service http request
 ///
 /// `WebRequest` allows mutable access to request's internal structures
 pub struct WebRequest {
-    req: HttpRequest,
+    pub(crate) req: HttpRequest,
     payload: Payload,
 }
 
 impl WebRequest {
     /// Create web response for error
     #[inline]
-    pub fn error_response<Err, E: WebResponseError<Err>>(self, mut err: E) -> WebResponse {
-        WebResponse::new(err.error_response(&self.req), self.req)
+    pub fn error_response<St, E>(self, st: &St, mut err: E) -> WebResponse
+    where
+        St: AppState,
+        E: WebResponseError<St, St::Error>,
+    {
+        WebResponse::new(err.error_response(st, &self.req), self.req)
     }
 }
 
@@ -249,7 +253,7 @@ impl fmt::Debug for WebRequest {
 #[cfg(test)]
 mod tests {
     use crate::http::{self, HttpMessage, header};
-    use crate::web::{HttpResponse, WebError, test::TestRequest};
+    use crate::web::{HttpResponse, test::TestRequest};
 
     #[test]
     fn test_request() {
@@ -258,7 +262,7 @@ mod tests {
         assert!(req.peer_addr().is_none());
         let err = http::error::PayloadError::Overflow;
 
-        let res: HttpResponse = req.error_response::<WebError, _>(err).into();
+        let res: HttpResponse = req.error_response::<(), _>(&(), err).into();
         assert_eq!(res.status(), http::StatusCode::PAYLOAD_TOO_LARGE);
 
         let req = TestRequest::default().to_srv_request();

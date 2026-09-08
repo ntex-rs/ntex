@@ -14,184 +14,174 @@ use crate::ws::error::HandshakeError;
 use super::error::{InternalError, WebResponseError};
 use super::{HttpRequest, HttpResponse, error};
 
-/// Generic error container for errors that supports `DefaultError` renderer.
-#[derive(thiserror::Error)]
-pub struct WebError {
-    cause: Box<dyn WebResponseError<Self>>,
+#[derive(Debug, thiserror::Error)]
+#[error("Default error marker")]
+pub struct DefaultError {
+    _ph: io::Error,
 }
 
-impl WebError {
-    pub fn new(err: impl WebResponseError<Self>) -> WebError {
-        WebError {
-            cause: Box::new(err),
-        }
+// =========== DefaultError impls
+
+impl<St> WebResponseError<St, DefaultError> for DefaultError {
+    fn error_response(&mut self, _: &St, _: &HttpRequest) -> HttpResponse {
+        unreachable!()
     }
 }
 
-impl WebResponseError<WebError> for WebError {
-    fn error_response(&mut self, req: &HttpRequest) -> HttpResponse {
-        self.cause.error_response(req)
+impl<St, T> WebResponseError<St, DefaultError> for InternalError<T>
+where
+    T: fmt::Debug + fmt::Display + 'static,
+{
+    fn error_response(&mut self, _: &St, _: &HttpRequest) -> HttpResponse {
+        crate::http::error::ResponseError::error_response(self)
     }
 }
 
-impl crate::http::error::ResponseError for WebError {
-    fn error_response(&self) -> HttpResponse {
-        WebResponseError::<Self>::error_response_with_status(
+/// `InternalServerError` for `StateExtractorError`
+impl<St> WebResponseError<St, DefaultError> for error::StateExtractorError {
+    fn error_response(&mut self, _: &St, _: &HttpRequest) -> HttpResponse {
+        WebResponseError::<St, _>::error_response_with_status(self, StatusCode::BAD_REQUEST)
+    }
+}
+
+/// `InternalServerError` for `JsonError`
+impl<St> WebResponseError<St, DefaultError> for JsonError {
+    fn error_response(&mut self, _: &St, _: &HttpRequest) -> HttpResponse {
+        WebResponseError::<St, _>::error_response_with_status(self, StatusCode::BAD_REQUEST)
+    }
+}
+
+/// `InternalServerError` for `FormError`
+impl<St> WebResponseError<St, DefaultError> for FormError {
+    fn error_response(&mut self, _: &St, _: &HttpRequest) -> HttpResponse {
+        WebResponseError::<St, _>::error_response_with_status(self, StatusCode::BAD_REQUEST)
+    }
+}
+
+#[cfg(feature = "openssl")]
+/// `InternalServerError` for `openssl::ssl::Error`
+impl<St> WebResponseError<St, DefaultError> for tls_openssl::ssl::Error {
+    fn error_response(&mut self, _: &St, _: &HttpRequest) -> HttpResponse {
+        WebResponseError::<St, _>::error_response_with_status(self, StatusCode::BAD_REQUEST)
+    }
+}
+
+#[cfg(feature = "openssl")]
+/// `InternalServerError` for `openssl::ssl::HandshakeError`
+impl<St, T: fmt::Debug + 'static> WebResponseError<St, DefaultError>
+    for tls_openssl::ssl::HandshakeError<T>
+{
+}
+
+/// Return `BAD_REQUEST` for `de::value::Error`
+impl<St> WebResponseError<St, DefaultError> for DeError {
+    fn error_response(&mut self, _: &St, _: &HttpRequest) -> HttpResponse {
+        WebResponseError::<St, _>::error_response_with_status(self, StatusCode::BAD_REQUEST)
+    }
+}
+
+/// `InternalServerError` for `Canceled`
+impl<St> WebResponseError<St, DefaultError> for crate::http::error::Canceled {
+    fn error_response(&mut self, _: &St, _: &HttpRequest) -> HttpResponse {
+        WebResponseError::<St, _>::error_response_with_status(
             self,
             StatusCode::INTERNAL_SERVER_ERROR,
         )
     }
 }
 
-impl fmt::Display for WebError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.cause, f)
-    }
-}
-
-impl fmt::Debug for WebError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "web::Error({:?})", self.cause)
-    }
-}
-
-impl<T> WebResponseError<WebError> for InternalError<T>
-where
-    T: fmt::Debug + fmt::Display + 'static,
-{
-    fn error_response(&mut self, _: &HttpRequest) -> HttpResponse {
-        crate::http::error::ResponseError::error_response(self)
-    }
-}
-
-/// `InternalServerError` for `StateExtractorError`
-impl WebResponseError<WebError> for error::StateExtractorError {
-    fn error_response(&mut self, _: &HttpRequest) -> HttpResponse {
-        self.error_response_with_status(StatusCode::BAD_REQUEST)
-    }
-}
-
-/// `InternalServerError` for `JsonError`
-impl WebResponseError<WebError> for JsonError {
-    fn error_response(&mut self, _: &HttpRequest) -> HttpResponse {
-        self.error_response_with_status(StatusCode::BAD_REQUEST)
-    }
-}
-
-/// `InternalServerError` for `FormError`
-impl WebResponseError<WebError> for FormError {
-    fn error_response(&mut self, _: &HttpRequest) -> HttpResponse {
-        self.error_response_with_status(StatusCode::BAD_REQUEST)
-    }
-}
-
-#[cfg(feature = "openssl")]
-/// `InternalServerError` for `openssl::ssl::Error`
-impl WebResponseError<WebError> for tls_openssl::ssl::Error {
-    fn error_response(&mut self, _: &HttpRequest) -> HttpResponse {
-        self.error_response_with_status(StatusCode::BAD_REQUEST)
-    }
-}
-
-#[cfg(feature = "openssl")]
-/// `InternalServerError` for `openssl::ssl::HandshakeError`
-impl<T: fmt::Debug + 'static> WebResponseError<WebError> for tls_openssl::ssl::HandshakeError<T> {}
-
-/// Return `BAD_REQUEST` for `de::value::Error`
-impl WebResponseError<WebError> for DeError {
-    fn error_response(&mut self, _: &HttpRequest) -> HttpResponse {
-        self.error_response_with_status(StatusCode::BAD_REQUEST)
-    }
-}
-
-/// `InternalServerError` for `Canceled`
-impl WebResponseError<WebError> for crate::http::error::Canceled {
-    fn error_response(&mut self, _: &HttpRequest) -> HttpResponse {
-        self.error_response_with_status(StatusCode::INTERNAL_SERVER_ERROR)
-    }
-}
-
 /// `InternalServerError` for `BlockingError`
-impl<E: Error + 'static> WebResponseError<WebError> for crate::http::error::BlockingError<E> {
-    fn error_response(&mut self, _: &HttpRequest) -> HttpResponse {
-        self.error_response_with_status(StatusCode::INTERNAL_SERVER_ERROR)
+impl<St, E: Error + 'static> WebResponseError<St, DefaultError>
+    for crate::http::error::BlockingError<E>
+{
+    fn error_response(&mut self, _: &St, _: &HttpRequest) -> HttpResponse {
+        WebResponseError::<St, _>::error_response_with_status(
+            self,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        )
     }
 }
 
 /// Return `BAD_REQUEST` for `Utf8Error`
-impl WebResponseError<WebError> for Utf8Error {
-    fn error_response(&mut self, _: &HttpRequest) -> HttpResponse {
-        self.error_response_with_status(StatusCode::BAD_REQUEST)
+impl<St> WebResponseError<St, DefaultError> for Utf8Error {
+    fn error_response(&mut self, _: &St, _: &HttpRequest) -> HttpResponse {
+        WebResponseError::<St, _>::error_response_with_status(self, StatusCode::BAD_REQUEST)
     }
 }
 
 /// Return `InternalServerError` for `HttpError`,
 /// Response generation can return `HttpError`, so it is internal error
-impl WebResponseError<WebError> for crate::http::error::HttpError {
-    fn error_response(&mut self, _: &HttpRequest) -> HttpResponse {
-        self.error_response_with_status(StatusCode::INTERNAL_SERVER_ERROR)
+impl<St> WebResponseError<St, DefaultError> for crate::http::error::HttpError {
+    fn error_response(&mut self, _: &St, _: &HttpRequest) -> HttpResponse {
+        WebResponseError::<St, _>::error_response_with_status(
+            self,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        )
     }
 }
 
 /// Return `InternalServerError` for `io::Error`
-impl WebResponseError<WebError> for io::Error {
-    fn error_response(&mut self, _: &HttpRequest) -> HttpResponse {
+impl<St> WebResponseError<St, DefaultError> for io::Error {
+    fn error_response(&mut self, _: &St, _: &HttpRequest) -> HttpResponse {
         let status = match self.kind() {
             io::ErrorKind::NotFound => StatusCode::NOT_FOUND,
             io::ErrorKind::PermissionDenied => StatusCode::FORBIDDEN,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
-        self.error_response_with_status(status)
+        WebResponseError::<St, _>::error_response_with_status(self, status)
     }
 }
 
 /// `InternalServerError` for `UrlGeneratorError`
-impl WebResponseError<WebError> for error::UrlGenerationError {
-    fn error_response(&mut self, _: &HttpRequest) -> HttpResponse {
-        self.error_response_with_status(StatusCode::INTERNAL_SERVER_ERROR)
+impl<St> WebResponseError<St, DefaultError> for error::UrlGenerationError {
+    fn error_response(&mut self, _: &St, _: &HttpRequest) -> HttpResponse {
+        WebResponseError::<St, _>::error_response_with_status(
+            self,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        )
     }
 }
 
 /// Response renderer for `UrlencodedError`
-impl WebResponseError<WebError> for error::UrlencodedError {
-    fn error_response(&mut self, _: &HttpRequest) -> HttpResponse {
-        let status = match *self {
+impl<St> WebResponseError<St, DefaultError> for error::UrlencodedError {
+    fn error_response(&mut self, _: &St, _: &HttpRequest) -> HttpResponse {
+        let status = match self {
             error::UrlencodedError::Overflow { .. } => StatusCode::PAYLOAD_TOO_LARGE,
             error::UrlencodedError::UnknownLength => StatusCode::LENGTH_REQUIRED,
             _ => StatusCode::BAD_REQUEST,
         };
-        self.error_response_with_status(status)
+        WebResponseError::<St, _>::error_response_with_status(self, status)
     }
 }
 
 /// Return `BadRequest` for `JsonPayloadError`
-impl WebResponseError<WebError> for error::JsonPayloadError {
-    fn error_response(&mut self, _: &HttpRequest) -> HttpResponse {
-        let status = match *self {
+impl<St> WebResponseError<St, DefaultError> for error::JsonPayloadError {
+    fn error_response(&mut self, _: &St, _: &HttpRequest) -> HttpResponse {
+        let status = match self {
             error::JsonPayloadError::Overflow => StatusCode::PAYLOAD_TOO_LARGE,
             _ => StatusCode::BAD_REQUEST,
         };
-        self.error_response_with_status(status)
+        WebResponseError::<St, _>::error_response_with_status(self, status)
     }
 }
 
 /// Error renderer for `PathError`
-impl WebResponseError<WebError> for error::PathError {
-    fn error_response(&mut self, _: &HttpRequest) -> HttpResponse {
-        self.error_response_with_status(StatusCode::NOT_FOUND)
+impl<St> WebResponseError<St, DefaultError> for error::PathError {
+    fn error_response(&mut self, _: &St, _: &HttpRequest) -> HttpResponse {
+        WebResponseError::<St, _>::error_response_with_status(self, StatusCode::NOT_FOUND)
     }
 }
 
 /// Error renderer `QueryPayloadError`
-impl WebResponseError<WebError> for error::QueryPayloadError {
-    fn error_response(&mut self, _: &HttpRequest) -> HttpResponse {
-        self.error_response_with_status(StatusCode::BAD_REQUEST)
+impl<St> WebResponseError<St, DefaultError> for error::QueryPayloadError {
+    fn error_response(&mut self, _: &St, _: &HttpRequest) -> HttpResponse {
+        WebResponseError::<St, _>::error_response_with_status(self, StatusCode::BAD_REQUEST)
     }
 }
 
-impl WebResponseError<WebError> for error::PayloadError {
-    fn error_response(&mut self, _: &HttpRequest) -> HttpResponse {
-        self.error_response_with_status(StatusCode::BAD_REQUEST)
+impl<St> WebResponseError<St, DefaultError> for error::PayloadError {
+    fn error_response(&mut self, _: &St, _: &HttpRequest) -> HttpResponse {
+        WebResponseError::<St, _>::error_response_with_status(self, StatusCode::BAD_REQUEST)
     }
 }
 
@@ -199,35 +189,35 @@ impl WebResponseError<WebError> for error::PayloadError {
 ///
 /// - `Overflow` returns `PayloadTooLarge`
 /// - Other errors returns `BadRequest`
-impl WebResponseError<WebError> for http::error::PayloadError {
-    fn error_response(&mut self, _: &HttpRequest) -> HttpResponse {
-        let status = match *self {
+impl<St> WebResponseError<St, DefaultError> for http::error::PayloadError {
+    fn error_response(&mut self, _: &St, _: &HttpRequest) -> HttpResponse {
+        let status = match self {
             http::error::PayloadError::Overflow => StatusCode::PAYLOAD_TOO_LARGE,
             _ => StatusCode::BAD_REQUEST,
         };
-        self.error_response_with_status(status)
+        WebResponseError::<St, _>::error_response_with_status(self, status)
     }
 }
 
 #[cfg(feature = "cookie")]
 /// Return `BadRequest` for `cookie::ParseError`
-impl WebResponseError<WebError> for coo_kie::ParseError {
-    fn error_response(&mut self, _: &HttpRequest) -> HttpResponse {
-        self.error_response_with_status(StatusCode::BAD_REQUEST)
+impl<St> WebResponseError<St, DefaultError> for coo_kie::ParseError {
+    fn error_response(&mut self, _: &St, _: &HttpRequest) -> HttpResponse {
+        WebResponseError::<St, _>::error_response_with_status(self, StatusCode::BAD_REQUEST)
     }
 }
 
 /// Return `BadRequest` for `ContentTypeError`
-impl WebResponseError<WebError> for http::error::ContentTypeError {
-    fn error_response(&mut self, _: &HttpRequest) -> HttpResponse {
-        self.error_response_with_status(StatusCode::BAD_REQUEST)
+impl<St> WebResponseError<St, DefaultError> for http::error::ContentTypeError {
+    fn error_response(&mut self, _: &St, _: &HttpRequest) -> HttpResponse {
+        WebResponseError::<St, _>::error_response_with_status(self, StatusCode::BAD_REQUEST)
     }
 }
 
 /// Convert `ClientError` to a server `Response`
-impl WebResponseError<WebError> for client::error::ClientError {
-    fn error_response(&mut self, _: &HttpRequest) -> HttpResponse {
-        let status = match self {
+impl<St> WebResponseError<St, DefaultError> for client::error::ClientError {
+    fn error_response(&mut self, _: &St, _: &HttpRequest) -> HttpResponse {
+        let status = match &self {
             client::error::ClientError::Connect(err) => {
                 if matches!(err, client::error::ConnectError::Timeout) {
                     StatusCode::GATEWAY_TIMEOUT
@@ -237,15 +227,16 @@ impl WebResponseError<WebError> for client::error::ClientError {
             }
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
-        self.error_response_with_status(status)
+
+        WebResponseError::<St, _>::error_response_with_status(self, status)
     }
 }
 
 #[cfg(feature = "ws")]
 /// Error renderer for `ws::HandshakeError`
-impl WebResponseError<WebError> for HandshakeError {
-    fn error_response(&mut self, _: &HttpRequest) -> HttpResponse {
-        match *self {
+impl<St> WebResponseError<St, DefaultError> for HandshakeError {
+    fn error_response(&mut self, _: &St, _: &HttpRequest) -> HttpResponse {
+        match self {
             HandshakeError::GetMethodRequired => HttpResponse::MethodNotAllowed()
                 .header(header::ALLOW, "GET")
                 .build(),
@@ -268,21 +259,15 @@ impl WebResponseError<WebError> for HandshakeError {
     }
 }
 
-impl From<HandshakeError> for WebError {
-    fn from(err: HandshakeError) -> Self {
-        Self::new(err)
-    }
-}
-
 /// Return `GATEWAY_TIMEOUT` for `TimeoutError`
-impl<E> From<TimeoutError<E>> for WebError
+impl<St, E> WebResponseError<St, DefaultError> for TimeoutError<E>
 where
-    E: WebResponseError<WebError>,
+    E: fmt::Display + fmt::Debug + WebResponseError<St, DefaultError> + 'static,
 {
-    fn from(err: TimeoutError<E>) -> WebError {
-        match err {
-            TimeoutError::Service(e) => Self::new(e),
-            TimeoutError::Timeout => Self::new(super::error::ErrorGatewayTimeout("")),
+    fn error_response(&mut self, st: &St, req: &HttpRequest) -> HttpResponse {
+        match self {
+            TimeoutError::Service(e) => e.error_response(st, req),
+            TimeoutError::Timeout => super::error::ErrorGatewayTimeout("").error_response(st, req),
         }
     }
 }

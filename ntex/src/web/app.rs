@@ -6,6 +6,7 @@ use crate::service::{IntoServiceFactory, dev::ServiceChainFactory, factory};
 
 use super::app_service::{AppFactory, AppRouter};
 use super::config::ServiceConfig;
+use super::error::{WebError, WebResponseError};
 use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
 use super::stack::{Filter, WebStack};
 use super::{AppState, HttpService, Resource, Route, WebRequest, WebResponse};
@@ -69,7 +70,13 @@ impl<St: AppState> App<St> {
 impl<St, M, F> App<St, M, F>
 where
     St: AppState,
-    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = Failure>,
+    F: ServiceFactory<
+            St,
+            WebRequest,
+            Res = WebRequest,
+            Error = WebError<St, St::Error>,
+            InitError = Failure,
+        >,
 {
     #[must_use]
     /// Run external configuration as part of the application building
@@ -189,12 +196,15 @@ where
     /// ```
     pub fn default_service<U>(mut self, f: impl IntoServiceFactory<U, St, WebRequest>) -> Self
     where
-        U: ServiceFactory<St, WebRequest, Res = WebResponse, Error = St::Error> + 'static,
+        U: ServiceFactory<St, WebRequest, Res = WebResponse> + 'static,
+        U::Error: WebResponseError<St, St::Error>,
         U::InitError: IntoFailure,
     {
         // create and configure default resource
         self.default = Some(HttpService::new(
-            f.into_factory().map_init_err(IntoFailure::fail),
+            f.into_factory()
+                .map_err(WebError::from_err)
+                .map_init_err(IntoFailure::fail),
         ));
 
         self
@@ -208,10 +218,10 @@ where
     /// `HttpRequest::url_for()` will work as expected.
     ///
     /// ```rust
-    /// use ntex::web::{self, App, HttpRequest, HttpResponse, WebError};
+    /// use ntex::web::{self, App, HttpRequest, HttpResponse, error::UrlGenerationError};
     ///
-    /// async fn index(req: HttpRequest) -> Result<HttpResponse, WebError> {
-    ///     let url = req.url_for("youtube", &["asdlkjqme"]).map_err(WebError::new)?;
+    /// async fn index(req: HttpRequest) -> Result<HttpResponse, UrlGenerationError> {
+    ///     let url = req.url_for("youtube", &["asdlkjqme"])?;
     ///     assert_eq!(url.as_str(), "https://youtube.com/watch/asdlkjqme");
     ///     Ok(HttpResponse::Ok().into())
     /// }
@@ -262,16 +272,26 @@ where
     ) -> App<
         St,
         M,
-        impl ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = Failure>,
+        impl ServiceFactory<
+            St,
+            WebRequest,
+            Res = WebRequest,
+            Error = WebError<St, St::Error>,
+            InitError = Failure,
+        >,
     >
     where
-        Sf: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error>,
+        Sf: ServiceFactory<St, WebRequest, Res = WebRequest>,
+        Sf::Error: WebResponseError<St, St::Error>,
         Sf::InitError: IntoFailure,
     {
         App {
-            filter: self
-                .filter
-                .and_then(filter.into_factory().map_init_err(IntoFailure::fail)),
+            filter: self.filter.and_then(
+                filter
+                    .into_factory()
+                    .map_err(WebError::from_err)
+                    .map_init_err(IntoFailure::fail),
+            ),
             middleware: self.middleware,
             services: self.services,
             default: self.default,
@@ -333,8 +353,14 @@ impl<St, M, F> App<St, M, F>
 where
     St: AppState,
     M: Middleware<AppRouter<St, F::Service>, St> + 'static,
-    M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
-    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = Failure>,
+    M::Service: Service<St, WebRequest, Res = WebResponse, Error = WebError<St, St::Error>>,
+    F: ServiceFactory<
+            St,
+            WebRequest,
+            Res = WebRequest,
+            Error = WebError<St, St::Error>,
+            InitError = Failure,
+        >,
 {
     /// Construct service factory, suitable for `http::HttpService`.
     ///
@@ -355,8 +381,13 @@ where
     /// ```
     pub fn build(
         self,
-    ) -> impl ServiceFactory<St, Request, Res = WebResponse, Error = St::Error, InitError = Failure>
-    {
+    ) -> impl ServiceFactory<
+        St,
+        Request,
+        Res = WebResponse,
+        Error = WebError<St, St::Error>,
+        InitError = Failure,
+    > {
         IntoServiceFactory::<AppFactory<St, M, F>, St, Request>::into_factory(self)
     }
 }
@@ -365,8 +396,14 @@ impl<St, M, F> IntoServiceFactory<AppFactory<St, M, F>, St, Request> for App<St,
 where
     St: AppState,
     M: Middleware<AppRouter<St, F::Service>, St> + 'static,
-    M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
-    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = Failure>,
+    M::Service: Service<St, WebRequest, Res = WebResponse, Error = WebError<St, St::Error>>,
+    F: ServiceFactory<
+            St,
+            WebRequest,
+            Res = WebRequest,
+            Error = WebError<St, St::Error>,
+            InitError = Failure,
+        >,
 {
     fn into_factory(self) -> AppFactory<St, M, F> {
         AppFactory::new(
@@ -382,7 +419,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, rc::Rc};
+    use std::{cell::Cell, convert::Infallible, rc::Rc};
 
     use super::*;
     use crate::http::{Method, StatusCode, header, header::HeaderValue};
@@ -410,12 +447,12 @@ mod tests {
             .service(
                 web::resource("/test2")
                     .default_service(async move |r: WebRequest| {
-                        Ok(r.into_response(HttpResponse::Created()))
+                        Ok::<_, Infallible>(r.into_response(HttpResponse::Created()))
                     })
                     .route(web::get().to(async || HttpResponse::Ok())),
             )
             .default_service(async move |r: WebRequest| {
-                Ok(r.into_response(HttpResponse::MethodNotAllowed()))
+                Ok::<_, Infallible>(r.into_response(HttpResponse::MethodNotAllowed()))
             })
             .build()
             .pipeline(())
@@ -445,7 +482,7 @@ mod tests {
             App::new()
                 .filter(async move |req: WebRequest| {
                     filter2.set(true);
-                    Ok(req)
+                    Ok::<_, Infallible>(req)
                 })
                 .route("/test", web::get().to(async || HttpResponse::Ok())),
         )

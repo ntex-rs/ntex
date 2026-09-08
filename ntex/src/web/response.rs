@@ -19,13 +19,18 @@ impl WebResponse {
 
     #[must_use]
     /// Create web response from the error.
-    pub fn from_err<St, E: WebResponseError<St>>(mut err: E, request: HttpRequest) -> Self {
-        let res = err.error_response(&request);
+    pub fn from_err<St>(
+        st: &St,
+        mut err: impl WebResponseError<St, St::Error>,
+        request: HttpRequest,
+    ) -> Self
+    where
+        St: AppState,
+    {
+        let res = err.error_response(st, &request);
 
         if res.head().status == StatusCode::INTERNAL_SERVER_ERROR {
-            log::error!("Internal Server Error: {err:?}");
-        } else {
-            log::debug!("Error in response: {err:?}");
+            log::error!("Internal Server Error");
         }
 
         WebResponse {
@@ -37,8 +42,11 @@ impl WebResponse {
     #[inline]
     #[must_use]
     /// Create web response for error.
-    pub fn error_response<St, E: WebResponseError<St>>(self, err: E) -> Self {
-        Self::from_err::<St, E>(err, self.request)
+    pub fn error_response<St>(self, st: &St, err: impl WebResponseError<St, St::Error>) -> Self
+    where
+        St: AppState,
+    {
+        Self::from_err(st, err, self.request)
     }
 
     #[inline]
@@ -87,14 +95,14 @@ impl WebResponse {
 
     #[must_use]
     /// Execute closure and in case of error convert it to response.
-    pub fn checked_expr<St, F, E>(mut self, f: F) -> Self
+    pub fn checked_expr<St, F, E>(mut self, st: &St, f: F) -> Self
     where
         St: AppState,
         F: FnOnce(&mut Self) -> Result<(), E>,
-        E: WebResponseError<St::Error>,
+        E: WebResponseError<St, St::Error>,
     {
         if let Err(mut err) = f(&mut self) {
-            WebResponse::new(err.error_response(&self.request), self.request)
+            WebResponse::new(err.error_response(st, &self.request), self.request)
         } else {
             self
         }
@@ -153,7 +161,7 @@ impl fmt::Debug for WebResponse {
 #[cfg(test)]
 mod tests {
     use crate::http::{self, StatusCode};
-    use crate::web::{HttpResponse, WebError, test::TestRequest};
+    use crate::web::{HttpResponse, test::TestRequest};
 
     #[test]
     fn test_response() {
@@ -162,13 +170,13 @@ mod tests {
         assert_eq!(res.response().status(), StatusCode::BAD_REQUEST);
 
         let err = http::error::PayloadError::Overflow;
-        let res = res.error_response::<WebError, _>(err);
+        let res = res.error_response::<()>(&(), err);
         assert_eq!(res.response().status(), StatusCode::PAYLOAD_TOO_LARGE);
 
         let res = TestRequest::default().to_srv_response(HttpResponse::Ok().build());
-        let mut res = res.checked_expr::<(), _, _>(|_| Ok::<_, http::error::PayloadError>(()));
+        let mut res = res.checked_expr::<(), _, _>(&(), |_| Ok::<_, http::error::PayloadError>(()));
         assert_eq!(res.response_mut().status(), StatusCode::OK);
-        let res = res.checked_expr::<(), _, _>(|_| Err(http::error::PayloadError::Overflow));
+        let res = res.checked_expr::<(), _, _>(&(), |_| Err(http::error::PayloadError::Overflow));
         assert_eq!(res.response().status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 }

@@ -4,7 +4,7 @@ use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpService, Response, body::BodySize, h1};
 use ntex::io::{DispatchItem, Dispatcher, IoConfig};
-use ntex::service::{Pipeline, cfg::SharedCfg, service};
+use ntex::service::{Pipeline, cfg::SharedCfg};
 use ntex::web::{self, App, HttpRequest};
 use ntex::ws::{self, handshake_response};
 use ntex::{time::Seconds, util::ByteString, util::Bytes};
@@ -195,10 +195,7 @@ async fn test_upgrade_handler_with_await() {
             async move |req: HttpRequest| {
                 // some async context switch
                 ntex::time::sleep(ntex::time::Seconds::ZERO).await;
-                web::ws::start(&req, None, async |_: &ws::WsSink| {
-                    Ok::<_, web::WebError>(service(ws_service))
-                })
-                .await
+                let _ = web::ws::start(&req, None, ws_service).await;
             },
         ))))
     });

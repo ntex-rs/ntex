@@ -54,7 +54,7 @@ ntex-macros = { path = "ntex-macros" }
 ntex-util = { path = "ntex-util" }
 
 [workspace.dependencies]
-ntex = "4.0.0-beta.7"
+ntex = "4.0.0-beta.8"
 ntex-bytes = "1.9.0"
 ntex-codec = "1.2.1"
 ntex-error = "2.6.0"
@@ -95,6 +95,7 @@ ctrlc = "3.4"
 derive_more = "2.0.1"
 encoding_rs = "0.8"
 env_logger = { version = "0.11", default-features = false }
+flate2 = "1.0"
 foldhash = "0.2.0"
 futures = "0.3.33"
 futures-core = { version = "0.3.33", default-features = false, features = ["alloc"] }

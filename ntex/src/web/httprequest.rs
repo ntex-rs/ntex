@@ -1,4 +1,4 @@
-use std::{cell::Ref, cell::RefMut, fmt, net, rc::Rc};
+use std::{cell::Ref, cell::RefMut, convert::Infallible, fmt, net, rc::Rc};
 
 use crate::http::{HeaderMap, HttpMessage, Message, Method, Payload, RequestHead, Uri, Version};
 use crate::{Cfg, io::IoRef, io::types, router::Path, util::Extensions};
@@ -252,7 +252,7 @@ impl Drop for HttpRequest {
 /// }
 /// ```
 impl<St: AppState> FromRequest<St> for HttpRequest {
-    type Error = St::Error;
+    type Error = Infallible;
 
     #[inline]
     async fn from_request(_: &St, req: &HttpRequest, _: &mut Payload) -> Result<Self, Self::Error> {

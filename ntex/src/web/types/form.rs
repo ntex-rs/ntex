@@ -130,12 +130,12 @@ impl<T: fmt::Display> fmt::Display for Form<T> {
 impl<T: Serialize, St> Responder<St> for Form<T>
 where
     St: AppState,
-    serde_urlencoded::ser::Error: WebResponseError<St::Error>,
+    serde_urlencoded::ser::Error: WebResponseError<St, St::Error>,
 {
-    async fn respond_to(self, req: &HttpRequest) -> Response {
+    async fn respond_to(self, st: &St, req: &HttpRequest) -> Response {
         let body = match serde_urlencoded::to_string(&self.0) {
             Ok(body) => body,
-            Err(mut e) => return e.error_response(req),
+            Err(mut e) => return e.error_response(st, req),
         };
 
         Response::builder(StatusCode::OK)
@@ -147,6 +147,7 @@ where
 /// Form extractor configuration
 ///
 /// ```rust
+/// use std::convert::Infallible;
 /// use ntex::web::{self, App, WebError, FromRequest};
 ///
 /// #[derive(serde::Deserialize)]
@@ -156,7 +157,7 @@ where
 ///
 /// /// Extract form data using serde.
 /// /// Custom configuration is used for this handler, max payload size is 4k
-/// async fn index(form: web::types::Form<FormData>) -> Result<String, WebError> {
+/// async fn index(form: web::types::Form<FormData>) -> Result<String, Infallible> {
 ///     Ok(format!("Welcome {}!", form.username))
 /// }
 ///

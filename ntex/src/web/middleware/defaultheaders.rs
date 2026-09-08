@@ -138,9 +138,10 @@ where
 #[cfg(test)]
 #[allow(unused_must_use)]
 mod tests {
+    use std::convert::Infallible;
+
     use super::*;
-    use crate::web::test::{TestRequest, ok_service};
-    use crate::web::{HttpResponse, WebError};
+    use crate::web::{HttpResponse, test::TestRequest, test::ok_service};
     use crate::{Pipeline, fn_service, util::lazy};
 
     #[crate::rt_test]
@@ -163,7 +164,7 @@ mod tests {
 
         let req = TestRequest::default().to_srv_request();
         let srv = fn_service(async move |req: WebRequest| {
-            Ok::<_, WebError>(
+            Ok::<_, Infallible>(
                 req.into_response(HttpResponse::Ok().header(CONTENT_TYPE, "0002").build()),
             )
         });
@@ -194,7 +195,7 @@ mod tests {
     #[crate::rt_test]
     async fn test_content_type() {
         let srv = fn_service(async move |req: WebRequest| {
-            Ok::<_, WebError>(req.into_response(HttpResponse::Ok().build()))
+            Ok::<_, Infallible>(req.into_response(HttpResponse::Ok().build()))
         });
         let mw = Pipeline::new(
             (),

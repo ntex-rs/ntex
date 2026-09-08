@@ -1,7 +1,7 @@
 use std::{cell::RefCell, marker, mem, rc::Rc};
 
 use crate::error::Failure;
-use crate::http::{Request, Response};
+use crate::http::{Message, Request, RequestHead, Response};
 use crate::router::{Path, ResourceDef, ResourceId, Router};
 use crate::service::cfg::{Cfg, Configuration};
 use crate::service::{Ctx, Middleware, Service, ServiceFactory, factory};
@@ -12,7 +12,7 @@ use super::config::WebAppConfig;
 use super::guard::Guard;
 use super::rmap::ResourceMap;
 use super::service::{AppServiceFactory, WebServiceConfig};
-use super::{AppState, HttpHandler, HttpRequest, HttpService, WebRequest, WebResponse};
+use super::{AppState, HttpHandler, HttpRequest, HttpService, WebError, WebRequest, WebResponse};
 
 type Guards = Vec<Box<dyn Guard>>;
 
@@ -23,7 +23,13 @@ type Guards = Vec<Box<dyn Guard>>;
 pub struct AppFactory<St, M, F>
 where
     St: AppState,
-    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = Failure>,
+    F: ServiceFactory<
+            St,
+            WebRequest,
+            Res = WebRequest,
+            Error = WebError<St, St::Error>,
+            InitError = Failure,
+        >,
 {
     middleware: M,
     filter: ServiceChainFactory<F, St, WebRequest>,
@@ -36,8 +42,14 @@ impl<St, M, F> AppFactory<St, M, F>
 where
     St: AppState,
     M: Middleware<AppRouter<St, F::Service>, St> + 'static,
-    M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
-    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = Failure>,
+    M::Service: Service<St, WebRequest, Res = WebResponse, Error = WebError<St, St::Error>>,
+    F: ServiceFactory<
+            St,
+            WebRequest,
+            Res = WebRequest,
+            Error = WebError<St, St::Error>,
+            InitError = Failure,
+        >,
 {
     pub(super) fn new(
         middleware: M,
@@ -108,11 +120,17 @@ impl<St, M, F> ServiceFactory<St, Request> for AppFactory<St, M, F>
 where
     St: AppState,
     M: Middleware<AppRouter<St, F::Service>, St> + 'static,
-    M::Service: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
-    F: ServiceFactory<St, WebRequest, Res = WebRequest, Error = St::Error, InitError = Failure>,
+    M::Service: Service<St, WebRequest, Res = WebResponse, Error = WebError<St, St::Error>>,
+    F: ServiceFactory<
+            St,
+            WebRequest,
+            Res = WebRequest,
+            Error = WebError<St, St::Error>,
+            InitError = Failure,
+        >,
 {
     type Res = WebResponse;
-    type Error = St::Error;
+    type Error = WebError<St, St::Error>;
 
     type Service = AppService<M::Service, St>;
     type InitError = Failure;
@@ -145,7 +163,7 @@ where
 #[debug("AppService")]
 pub struct AppService<S, St>
 where
-    S: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
+    S: Service<St, WebRequest, Res = WebResponse, Error = WebError<St, St::Error>>,
     St: AppState,
 {
     service: S,
@@ -155,7 +173,7 @@ where
 
 impl<S, St> Service<St, Request> for AppService<S, St>
 where
-    S: Service<St, WebRequest, Res = WebResponse, Error = St::Error>,
+    S: Service<St, WebRequest, Res = WebResponse, Error = WebError<St, St::Error>>,
     St: AppState,
 {
     type Res = WebResponse;
@@ -173,16 +191,35 @@ where
 
         let (head, payload) = req.into_parts();
 
-        let req = if let Some(mut req) = config.get_request() {
-            let inner = Rc::get_mut(&mut req.0).unwrap();
-            inner.path.set(head.uri.clone());
-            inner.head = head;
-            inner.config = config;
-            req
-        } else {
-            HttpRequest::new(Path::new(head.uri.clone()), head, self.rmap.clone(), config)
-        };
-        ctx.call(&self.service, WebRequest::new(req, payload)).await
+        let req = get_request(&config, &head, &self.rmap);
+        match ctx.call(&self.service, WebRequest::new(req, payload)).await {
+            Ok(r) => Ok(r),
+            Err(mut e) => {
+                let req = get_request(&config, &head, &self.rmap);
+                let res = e.0.error_response(ctx.st(), &req);
+                Ok(WebResponse::new(res, req))
+            }
+        }
+    }
+}
+
+fn get_request(
+    cfg: &Cfg<WebAppConfig>,
+    head: &Message<RequestHead>,
+    rmap: &Rc<ResourceMap>,
+) -> HttpRequest {
+    if let Some(mut req) = cfg.get_request() {
+        let inner = Rc::get_mut(&mut req.0).unwrap();
+        inner.path.set(head.uri.clone());
+        inner.head = head.clone();
+        req
+    } else {
+        HttpRequest::new(
+            Path::new(head.uri.clone()),
+            head.clone(),
+            rmap.clone(),
+            cfg.clone(),
+        )
     }
 }
 
@@ -200,10 +237,10 @@ pub struct AppRouter<St: AppState, F> {
 impl<St, F> Service<St, WebRequest> for AppRouter<St, F>
 where
     St: AppState,
-    F: Service<St, WebRequest, Res = WebRequest, Error = St::Error>,
+    F: Service<St, WebRequest, Res = WebRequest, Error = WebError<St, St::Error>>,
 {
     type Res = WebResponse;
-    type Error = St::Error;
+    type Error = WebError<St, St::Error>;
 
     #[inline]
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
