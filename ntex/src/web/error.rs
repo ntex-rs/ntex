@@ -52,7 +52,11 @@ impl<St: 'static, Err: 'static> WebResponseError<St, Err> for WebError<St, Err> 
     }
 }
 
-impl<St, Err> Error for WebError<St, Err> {}
+impl<St, Err> Error for WebError<St, Err> {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.0.source()
+    }
+}
 
 impl<St, Err> crate::http::error::ResponseError for WebError<St, Err> {
     fn error_response(&self) -> HttpResponse {
@@ -62,7 +66,7 @@ impl<St, Err> crate::http::error::ResponseError for WebError<St, Err> {
 
 impl<St, Err> fmt::Display for WebError<St, Err> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self.0)
+        write!(f, "{}", self.0)
     }
 }
 
