@@ -173,7 +173,7 @@ macro_rules! tuple_from_req {
 
             async fn from_request(st: &St, req: &HttpRequest, payload: &mut Payload) -> Result<($($T,)+), Self::Error> {
                 Ok((
-                    $($T::from_request(st, req, payload).await.map_err(|mut e| e.error_response(st, req))?,)+
+                    $($T::from_request(st, req, payload).await.map_err(|mut e| e.error_response(st))?,)+
                 ))
             }
         }

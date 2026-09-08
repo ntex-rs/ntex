@@ -16,7 +16,7 @@ use ntex::util::{Bytes, Stream};
 use ntex::{Service, SharedCfg, client, io::IoConfig, service::State};
 
 use ntex::web::{self, middleware::Compress, test};
-use ntex::web::{App, AppState, BodyEncoding, HttpRequest, HttpResponse, WebResponseError};
+use ntex::web::{App, AppState, BodyEncoding, HttpResponse, WebResponseError};
 
 #[cfg(feature = "rustls")]
 mod rustls_utils;
@@ -781,7 +781,7 @@ async fn test_custom_error() {
     impl ntex::http::ResponseError for JsonContainer {}
 
     impl<St> WebResponseError<St, JsonContainer> for TestError {
-        fn error_response(&mut self, _: &St, _: &HttpRequest) -> HttpResponse {
+        fn error_response(&mut self, _: &St) -> HttpResponse {
             HttpResponse::BadRequest()
                 .header(CONTENT_TYPE, "application/json")
                 .body("Error")

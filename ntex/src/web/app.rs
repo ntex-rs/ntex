@@ -1,5 +1,5 @@
 use crate::error::{Failure, IntoFailure};
-use crate::http::Request;
+use crate::http::{Request, Response};
 use crate::router::ResourceDef;
 use crate::service::{Identity, Middleware, Service, ServiceFactory};
 use crate::service::{IntoServiceFactory, dev::ServiceChainFactory, factory};
@@ -384,7 +384,7 @@ where
     ) -> impl ServiceFactory<
         St,
         Request,
-        Res = WebResponse,
+        Res = Response,
         Error = WebError<St, St::Error>,
         InitError = Failure,
     > {

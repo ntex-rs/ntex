@@ -717,7 +717,7 @@ mod tests {
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        if let ResponseBody::Body(Body::Bytes(b)) = resp.response().body() {
+        if let ResponseBody::Body(Body::Bytes(b)) = resp.body() {
             let bytes: Bytes = b.clone();
             assert_eq!(bytes, Bytes::from_static(b"project: project1"));
         }
@@ -740,7 +740,7 @@ mod tests {
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        if let ResponseBody::Body(Body::Bytes(b)) = resp.response().body() {
+        if let ResponseBody::Body(Body::Bytes(b)) = resp.body() {
             let bytes: Bytes = b.clone();
             assert_eq!(bytes, Bytes::from_static(b"project: project1"));
         }
@@ -749,7 +749,7 @@ mod tests {
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        if let ResponseBody::Body(Body::Bytes(b)) = resp.response().body() {
+        if let ResponseBody::Body(Body::Bytes(b)) = resp.body() {
             let bytes: Bytes = b.clone();
             assert_eq!(bytes, Bytes::from_static(b"project: project1"));
         }
@@ -847,7 +847,7 @@ mod tests {
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
 
-        if let ResponseBody::Body(Body::Bytes(b)) = resp.response().body() {
+        if let ResponseBody::Body(Body::Bytes(b)) = resp.body() {
             let bytes: Bytes = b.clone();
             assert_eq!(bytes, Bytes::from_static(b"project: project_1"));
         }
@@ -872,7 +872,7 @@ mod tests {
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
 
-        if let ResponseBody::Body(Body::Bytes(b)) = resp.response().body() {
+        if let ResponseBody::Body(Body::Bytes(b)) = resp.body() {
             let bytes: Bytes = b.clone();
             assert_eq!(bytes, Bytes::from_static(b"project: test - 1"));
         }

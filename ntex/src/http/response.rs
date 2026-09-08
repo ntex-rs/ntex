@@ -1,5 +1,5 @@
 //! Http response
-use std::{cell::Ref, cell::RefMut, error::Error, fmt, str};
+use std::{cell::Ref, cell::RefMut, error::Error, fmt, fmt::Write, str};
 
 use serde::Serialize;
 
@@ -39,6 +39,19 @@ impl Response<Body> {
             head: Message::with_status(status),
             body: ResponseBody::Body(Body::Empty),
         }
+    }
+
+    /// Constructs a response with body.
+    #[inline]
+    pub fn render_with<B: fmt::Display>(status: StatusCode, body: &B) -> Response {
+        let mut resp = Response::new(status);
+        let mut buf = BytesMut::new();
+        let _ = write!(&mut buf, "{body}");
+        resp.headers_mut().insert(
+            header::CONTENT_TYPE,
+            header::HeaderValue::from_static("text/plain; charset=utf-8"),
+        );
+        resp.set_body(Body::from(buf))
     }
 
     /// Convert response to response with body.

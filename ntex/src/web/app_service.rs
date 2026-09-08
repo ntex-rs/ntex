@@ -1,7 +1,7 @@
 use std::{cell::RefCell, marker, mem, rc::Rc};
 
 use crate::error::Failure;
-use crate::http::{Message, Request, RequestHead, Response};
+use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, ResourceId, Router};
 use crate::service::cfg::{Cfg, Configuration};
 use crate::service::{Ctx, Middleware, Service, ServiceFactory, factory};
@@ -129,7 +129,7 @@ where
             InitError = Failure,
         >,
 {
-    type Res = WebResponse;
+    type Res = Response;
     type Error = WebError<St, St::Error>;
 
     type Service = AppService<M::Service, St>;
@@ -176,7 +176,7 @@ where
     S: Service<St, WebRequest, Res = WebResponse, Error = WebError<St, St::Error>>,
     St: AppState,
 {
-    type Res = WebResponse;
+    type Res = Response;
     type Error = S::Error;
 
     crate::forward_ready!(St, service);
@@ -191,35 +191,18 @@ where
 
         let (head, payload) = req.into_parts();
 
-        let req = get_request(&config, &head, &self.rmap);
+        let req = if let Some(mut req) = config.get_request() {
+            let inner = Rc::get_mut(&mut req.0).unwrap();
+            inner.path.set(head.uri.clone());
+            inner.head = head;
+            req
+        } else {
+            HttpRequest::new(Path::new(head.uri.clone()), head, self.rmap.clone(), config)
+        };
         match ctx.call(&self.service, WebRequest::new(req, payload)).await {
-            Ok(r) => Ok(r),
-            Err(mut e) => {
-                let req = get_request(&config, &head, &self.rmap);
-                let res = e.0.error_response(ctx.st(), &req);
-                Ok(WebResponse::new(res, req))
-            }
+            Ok(r) => Ok(r.into()),
+            Err(mut e) => Ok(e.0.error_response(ctx.st())),
         }
-    }
-}
-
-fn get_request(
-    cfg: &Cfg<WebAppConfig>,
-    head: &Message<RequestHead>,
-    rmap: &Rc<ResourceMap>,
-) -> HttpRequest {
-    if let Some(mut req) = cfg.get_request() {
-        let inner = Rc::get_mut(&mut req.0).unwrap();
-        inner.path.set(head.uri.clone());
-        inner.head = head.clone();
-        req
-    } else {
-        HttpRequest::new(
-            Path::new(head.uri.clone()),
-            head.clone(),
-            rmap.clone(),
-            cfg.clone(),
-        )
     }
 }
 
