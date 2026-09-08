@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use crate::error::Failure;
 use crate::service::{Ctx, Middleware, Service, ServiceFactory};
-use crate::web::{AppState, WebRequest, WebResponse};
+use crate::web::{AppState, WebError, WebRequest, WebResponse, WebResponseError};
 
 /// Stack of middlewares.
 #[derive(Debug, Clone)]
@@ -26,10 +26,8 @@ impl<S, St, Inner, Outer> Middleware<S, St> for WebStack<St, Inner, Outer>
 where
     St: AppState,
     Inner: Middleware<S, St>,
-    // St::Error: From<<Inner::Service as Service<St, WebRequest>>::Error>,
     Outer: Middleware<Inner::Service, St>,
     Outer::Service: Service<St, WebRequest, Res = WebResponse>,
-    St::Error: From<<Outer::Service as Service<St, WebRequest>>::Error>,
 {
     type Service = WebMiddleware<Outer::Service, St>;
 
@@ -62,11 +60,11 @@ where
 impl<S, St> Service<St, WebRequest> for WebMiddleware<S, St>
 where
     S: Service<St, WebRequest, Res = WebResponse>,
+    S::Error: WebResponseError<St, St::Error>,
     St: AppState,
-    St::Error: From<S::Error>,
 {
     type Res = WebResponse;
-    type Error = St::Error;
+    type Error = WebError<St, St::Error>;
 
     #[inline]
     async fn call(
@@ -74,10 +72,10 @@ where
         req: WebRequest,
         ctx: Ctx<'_, Self, St>,
     ) -> Result<Self::Res, Self::Error> {
-        ctx.call(&self.svc, req).await.map_err(Into::into)
+        ctx.call(&self.svc, req).await.map_err(WebError::from_err)
     }
 
-    crate::forward_ready!(St, svc);
+    crate::forward_ready!(St, svc, WebError::from_err);
     crate::forward_shutdown!(St, svc);
 }
 
@@ -93,7 +91,7 @@ impl<St> Filter<St> {
 
 impl<St: AppState> ServiceFactory<St, WebRequest> for Filter<St> {
     type Res = WebRequest;
-    type Error = St::Error;
+    type Error = WebError<St, St::Error>;
 
     type Service = Filter<St>;
     type InitError = Failure;
@@ -105,9 +103,9 @@ impl<St: AppState> ServiceFactory<St, WebRequest> for Filter<St> {
 
 impl<St: AppState> Service<St, WebRequest> for Filter<St> {
     type Res = WebRequest;
-    type Error = St::Error;
+    type Error = WebError<St, St::Error>;
 
-    async fn call(&self, req: WebRequest, _: Ctx<'_, Self, St>) -> Result<WebRequest, St::Error> {
+    async fn call(&self, req: WebRequest, _: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
         Ok(req)
     }
 }

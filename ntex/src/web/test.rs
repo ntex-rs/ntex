@@ -257,7 +257,7 @@ pub async fn from_request<St, T: FromRequest<St>>(
 
 /// Helper method for responders testing
 pub async fn respond_to<T: Responder>(slf: T, req: &HttpRequest) -> HttpResponse {
-    T::respond_to(slf, req).await
+    T::respond_to(slf, &(), req).await
 }
 
 /// Test `Request` builder.

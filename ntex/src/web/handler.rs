@@ -55,7 +55,7 @@ impl<St, F, T> HandlerFn<St> for HandlerWrapper<St, F, T>
 where
     F: Handler<St, T> + 'static,
     T: FromRequest<St> + 'static,
-    T::Error: WebResponseError<St::Error>,
+    T::Error: WebResponseError<St, St::Error>,
     St: AppState,
 {
     fn call<'a>(&'a self, st: &'a St, req: WebRequest) -> BoxFuture<'a, WebResponse> {
@@ -63,11 +63,11 @@ where
             let (req, mut payload) = req.into_parts();
             let param = match T::from_request(st, &req, &mut payload).await {
                 Ok(param) => param,
-                Err(e) => return WebResponse::from_err::<St, _>(e, req),
+                Err(e) => return WebResponse::from_err(st, e, req),
             };
 
             let result = self.hnd.call(param).await;
-            let response = result.respond_to(&req).await;
+            let response = result.respond_to(st, &req).await;
             WebResponse::new(response, req)
         })
     }

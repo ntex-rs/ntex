@@ -68,7 +68,7 @@ impl<T, St> FromRequest<St> for Option<T>
 where
     T: FromRequest<St>,
     St: AppState,
-    <T as FromRequest<St>>::Error: WebResponseError<St::Error>,
+    <T as FromRequest<St>>::Error: WebResponseError<St, St::Error>,
 {
     type Error = Infallible;
 
@@ -167,13 +167,13 @@ macro_rules! tuple_from_req {
         where
             St: AppState,
             $($T: FromRequest<St> + 'static,)+
-            $(<$T as $crate::web::FromRequest<St>>::Error: WebResponseError<St::Error>),+
+            $(<$T as $crate::web::FromRequest<St>>::Error: WebResponseError<St, St::Error>),+
         {
             type Error = HttpResponse;
 
             async fn from_request(st: &St, req: &HttpRequest, payload: &mut Payload) -> Result<($($T,)+), Self::Error> {
                 Ok((
-                    $($T::from_request(st, req, payload).await.map_err(|e| e.error_response(req))?,)+
+                    $($T::from_request(st, req, payload).await.map_err(|mut e| e.error_response(st, req))?,)+
                 ))
             }
         }

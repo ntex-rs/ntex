@@ -24,11 +24,12 @@ pub struct WebRequest {
 impl WebRequest {
     /// Create web response for error
     #[inline]
-    pub fn error_response<St: AppState, E: WebResponseError<St::Error>>(
-        self,
-        err: E,
-    ) -> WebResponse {
-        WebResponse::new(err.error_response(&self.req), self.req)
+    pub fn error_response<St, E>(self, st: &St, mut err: E) -> WebResponse
+    where
+        St: AppState,
+        E: WebResponseError<St, St::Error>,
+    {
+        WebResponse::new(err.error_response(st, &self.req), self.req)
     }
 }
 
@@ -261,7 +262,7 @@ mod tests {
         assert!(req.peer_addr().is_none());
         let err = http::error::PayloadError::Overflow;
 
-        let res: HttpResponse = req.error_response::<(), _>(err).into();
+        let res: HttpResponse = req.error_response::<(), _>(&(), err).into();
         assert_eq!(res.status(), http::StatusCode::PAYLOAD_TOO_LARGE);
 
         let req = TestRequest::default().to_srv_request();

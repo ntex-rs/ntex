@@ -4,6 +4,7 @@ use crate::error::{Failure, IntoFailure};
 use crate::router::{IntoPattern, ResourceDef};
 use crate::service::{IntoServiceFactory, ServiceFactory, boxed};
 
+use super::error::{WebError, WebResponseError};
 use super::guard::{AllGuard, Guard};
 use super::{AppState, HttpService, WebRequest, WebResponse, dev::insert_slash, rmap::ResourceMap};
 
@@ -109,7 +110,7 @@ impl<St: AppState> WebServiceConfig<St> {
                 St,
                 WebRequest,
                 Res = WebResponse,
-                Error = St::Error,
+                Error = WebError<St, St::Error>,
                 InitError = Failure,
             > + 'static,
     {
@@ -190,13 +191,14 @@ impl WebServiceAdapter {
     where
         St: AppState,
         F: IntoServiceFactory<Sf, St, WebRequest>,
-        Sf: ServiceFactory<St, WebRequest, Res = WebResponse, Error = St::Error> + 'static,
+        Sf: ServiceFactory<St, WebRequest, Res = WebResponse> + 'static,
+        Sf::Error: WebResponseError<St, St::Error>,
         Sf::InitError: IntoFailure,
     {
         WebServiceImpl {
             srv: service
                 .into_factory()
-                .map_err(Into::into)
+                .map_err(WebError::from_err)
                 .map_init_err(IntoFailure::fail),
             rdef: self.rdef,
             name: self.name,
@@ -215,8 +217,13 @@ struct WebServiceImpl<Sf> {
 impl<Sf, St> WebServiceFactory<St> for WebServiceImpl<Sf>
 where
     St: AppState,
-    Sf: ServiceFactory<St, WebRequest, Res = WebResponse, Error = St::Error, InitError = Failure>
-        + 'static,
+    Sf: ServiceFactory<
+            St,
+            WebRequest,
+            Res = WebResponse,
+            Error = WebError<St, St::Error>,
+            InitError = Failure,
+        > + 'static,
 {
     fn register(mut self, config: &mut WebServiceConfig<St>) {
         let guards = if self.guards.0.is_empty() {
@@ -287,15 +294,19 @@ mod m {
 
 #[cfg(test)]
 mod tests {
+    use std::convert::Infallible;
+
     use super::*;
     use crate::http::{Method, StatusCode};
     use crate::web::test::{TestRequest, init_service};
-    use crate::web::{self, App, HttpResponse, guard};
+    use crate::web::{self, App, DefaultError, HttpResponse, guard};
 
     #[crate::rt_test]
     async fn test_service() {
         let srv = init_service(App::new().service(web::service("/test").name("test").build(
-            async move |req: WebRequest| Ok(req.into_response(HttpResponse::Ok().build())),
+            async move |req: WebRequest| {
+                Ok::<_, Infallible>(req.into_response(HttpResponse::Ok().build()))
+            },
         )))
         .await;
         let req = TestRequest::with_uri("/test").to_request();
@@ -304,7 +315,9 @@ mod tests {
 
         let srv = init_service(
             App::new().service(web::service("/test").guard(guard::Get()).build(
-                async move |req: WebRequest| Ok(req.into_response(HttpResponse::Ok().build())),
+                async move |req: WebRequest| {
+                    Ok::<_, DefaultError>(req.into_response(HttpResponse::Ok().build()))
+                },
             )),
         )
         .await;

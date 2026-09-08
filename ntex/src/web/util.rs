@@ -244,7 +244,7 @@ where
     St: AppState,
     F: Handler<St, Args> + 'static,
     Args: FromRequest<St> + 'static,
-    Args::Error: WebResponseError<St::Error>,
+    Args::Error: WebResponseError<St, St::Error>,
 {
     Route::new().to(handler)
 }

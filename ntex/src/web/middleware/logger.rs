@@ -396,15 +396,17 @@ impl fmt::Display for FormatDisplay<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::convert::Infallible;
+
     use super::*;
     use crate::http::{StatusCode, header};
-    use crate::web::{WebError, test, test::TestRequest};
+    use crate::web::{test, test::TestRequest};
     use crate::{fn_service, service::Pipeline, util::lazy};
 
     #[crate::rt_test]
     async fn test_logger() {
         let srv = fn_service(async move |req: WebRequest| {
-            Ok::<_, WebError>(
+            Ok::<_, Infallible>(
                 req.into_response(
                     HttpResponse::builder(StatusCode::OK)
                         .header("X-Test", "ttt")

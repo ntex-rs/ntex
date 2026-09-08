@@ -110,12 +110,12 @@ where
 impl<T: Serialize, St> Responder<St> for Json<T>
 where
     St: AppState,
-    JsonError: WebResponseError<St::Error>,
+    JsonError: WebResponseError<St, St::Error>,
 {
-    async fn respond_to(self, req: &HttpRequest) -> Response {
+    async fn respond_to(self, st: &St, req: &HttpRequest) -> Response {
         let body = match serde_json::to_string(&self.0) {
             Ok(body) => body,
-            Err(e) => return e.error_response(req),
+            Err(mut e) => return e.error_response(st, req),
         };
 
         Response::builder(StatusCode::OK)

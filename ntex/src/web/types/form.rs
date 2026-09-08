@@ -130,12 +130,12 @@ impl<T: fmt::Display> fmt::Display for Form<T> {
 impl<T: Serialize, St> Responder<St> for Form<T>
 where
     St: AppState,
-    serde_urlencoded::ser::Error: WebResponseError<St::Error>,
+    serde_urlencoded::ser::Error: WebResponseError<St, St::Error>,
 {
-    async fn respond_to(self, req: &HttpRequest) -> Response {
+    async fn respond_to(self, st: &St, req: &HttpRequest) -> Response {
         let body = match serde_urlencoded::to_string(&self.0) {
             Ok(body) => body,
-            Err(e) => return e.error_response(req),
+            Err(mut e) => return e.error_response(st, req),
         };
 
         Response::builder(StatusCode::OK)
