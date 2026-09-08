@@ -19,7 +19,10 @@ impl WebResponse {
 
     #[must_use]
     /// Create web response from the error.
-    pub fn from_err<St, E: WebResponseError<St>>(mut err: E, request: HttpRequest) -> Self {
+    pub fn from_err<St: AppState, E: WebResponseError<St::Error>>(
+        mut err: E,
+        request: HttpRequest,
+    ) -> Self {
         let res = err.error_response(&request);
 
         if res.head().status == StatusCode::INTERNAL_SERVER_ERROR {
@@ -37,7 +40,7 @@ impl WebResponse {
     #[inline]
     #[must_use]
     /// Create web response for error.
-    pub fn error_response<St, E: WebResponseError<St>>(self, err: E) -> Self {
+    pub fn error_response<St: AppState, E: WebResponseError<St::Error>>(self, err: E) -> Self {
         Self::from_err::<St, E>(err, self.request)
     }
 
@@ -153,7 +156,7 @@ impl fmt::Debug for WebResponse {
 #[cfg(test)]
 mod tests {
     use crate::http::{self, StatusCode};
-    use crate::web::{HttpResponse, WebError, test::TestRequest};
+    use crate::web::{HttpResponse, test::TestRequest};
 
     #[test]
     fn test_response() {
@@ -162,7 +165,7 @@ mod tests {
         assert_eq!(res.response().status(), StatusCode::BAD_REQUEST);
 
         let err = http::error::PayloadError::Overflow;
-        let res = res.error_response::<WebError, _>(err);
+        let res = res.error_response::<(), _>(err);
         assert_eq!(res.response().status(), StatusCode::PAYLOAD_TOO_LARGE);
 
         let res = TestRequest::default().to_srv_response(HttpResponse::Ok().build());

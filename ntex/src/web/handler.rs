@@ -28,11 +28,7 @@ where
 }
 
 pub(super) trait HandlerFn<St: AppState>: fmt::Debug {
-    fn call<'a>(
-        &'a self,
-        _: &'a St,
-        _: WebRequest,
-    ) -> BoxFuture<'a, Result<WebResponse, St::Error>>;
+    fn call<'a>(&'a self, _: &'a St, _: WebRequest) -> BoxFuture<'a, WebResponse>;
 }
 
 pub(super) struct HandlerWrapper<St, F, T> {
@@ -62,21 +58,17 @@ where
     T::Error: WebResponseError<St::Error>,
     St: AppState,
 {
-    fn call<'a>(
-        &'a self,
-        st: &'a St,
-        req: WebRequest,
-    ) -> BoxFuture<'a, Result<WebResponse, St::Error>> {
+    fn call<'a>(&'a self, st: &'a St, req: WebRequest) -> BoxFuture<'a, WebResponse> {
         Box::pin(async move {
             let (req, mut payload) = req.into_parts();
             let param = match T::from_request(st, &req, &mut payload).await {
                 Ok(param) => param,
-                Err(e) => return Ok(WebResponse::from_err(e, req)),
+                Err(e) => return WebResponse::from_err::<St, _>(e, req),
             };
 
             let result = self.hnd.call(param).await;
             let response = result.respond_to(&req).await;
-            Ok(WebResponse::new(response, req))
+            WebResponse::new(response, req)
         })
     }
 }

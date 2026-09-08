@@ -209,7 +209,7 @@ impl<St: AppState> Service<St, WebRequest> for RouteService<St> {
         req: WebRequest,
         ctx: Ctx<'_, Self, St>,
     ) -> Result<Self::Res, Self::Error> {
-        self.handler.call(ctx.st(), req).await
+        Ok(self.handler.call(ctx.st(), req).await)
     }
 }
 

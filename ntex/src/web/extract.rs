@@ -70,7 +70,7 @@ where
     St: AppState,
     <T as FromRequest<St>>::Error: WebResponseError<St::Error>,
 {
-    type Error = St::Error;
+    type Error = Infallible;
 
     #[inline]
     async fn from_request(

@@ -11,7 +11,7 @@ use crate::http::{StatusCode, error, header};
 use crate::util::{BytesMut, Either};
 
 pub use crate::http::error::BlockingError;
-pub use crate::web::error_default::WebError;
+pub use crate::web::error_default::{DefaultError, WebError};
 
 use super::{HttpRequest, HttpResponse};
 
@@ -686,11 +686,11 @@ mod tests {
     #[test]
     fn test_into_error() {
         let err = UrlencodedError::UnknownLength;
-        let e = WebError::new(err);
+        let e = DefaultError::new(err);
         let s = format!("{e}");
         assert!(s.contains("Payload size is unknown"));
 
-        let mut e = WebError::new(UrlencodedError::UnknownLength);
+        let e = DefaultError::new(UrlencodedError::UnknownLength);
         let s = format!("{e:?}");
         assert!(s.contains("UnknownLength"));
 
@@ -698,7 +698,10 @@ mod tests {
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
         let req = TestRequest::default().to_http_request();
-        let res = WebResponseError::<WebError>::error_response(&mut e, &req);
+        let res = WebResponseError::<DefaultError>::error_response(
+            &mut UrlencodedError::UnknownLength,
+            &req,
+        );
         assert_eq!(res.status(), StatusCode::LENGTH_REQUIRED);
     }
 
@@ -707,17 +710,15 @@ mod tests {
         use crate::util::timeout::TimeoutError;
 
         let req = TestRequest::default().to_http_request();
-        let mut err = WebError::from(TimeoutError::<UrlencodedError>::Timeout);
+        let mut err = TimeoutError::<UrlencodedError>::Timeout;
         assert_eq!(
-            WebResponseError::<WebError>::error_response(&mut err, &req).status(),
+            WebResponseError::<DefaultError>::error_response(&mut err, &req).status(),
             StatusCode::GATEWAY_TIMEOUT
         );
 
-        let mut err = WebError::from(TimeoutError::<UrlencodedError>::Service(
-            UrlencodedError::Chunked,
-        ));
+        let mut err = TimeoutError::<UrlencodedError>::Service(UrlencodedError::Chunked);
         assert_eq!(
-            WebResponseError::<WebError>::error_response(&mut err, &req).status(),
+            WebResponseError::<DefaultError>::error_response(&mut err, &req).status(),
             StatusCode::BAD_REQUEST
         );
 

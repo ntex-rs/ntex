@@ -194,7 +194,10 @@ impl WebServiceAdapter {
         Sf::InitError: IntoFailure,
     {
         WebServiceImpl {
-            srv: service.into_factory().map_init_err(IntoFailure::fail),
+            srv: service
+                .into_factory()
+                .map_err(Into::into)
+                .map_init_err(IntoFailure::fail),
             rdef: self.rdef,
             name: self.name,
             guards: self.guards,

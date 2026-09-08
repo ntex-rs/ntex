@@ -22,6 +22,9 @@ pub enum WsError<E> {
     /// Ws protocol level error
     #[error("Ws protocol level error")]
     Protocol(#[source] ProtocolError),
+    /// Websocket handshake errors
+    #[error("Ws handshake error")]
+    Handshake(#[from] HandshakeError),
     /// Peer has been disconnected
     #[error("Peer has been disconnected: {0:?}")]
     Disconnected(#[source] Option<io::Error>),

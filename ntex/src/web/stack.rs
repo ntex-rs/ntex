@@ -26,8 +26,10 @@ impl<S, St, Inner, Outer> Middleware<S, St> for WebStack<St, Inner, Outer>
 where
     St: AppState,
     Inner: Middleware<S, St>,
+    // St::Error: From<<Inner::Service as Service<St, WebRequest>>::Error>,
     Outer: Middleware<Inner::Service, St>,
     Outer::Service: Service<St, WebRequest, Res = WebResponse>,
+    St::Error: From<<Outer::Service as Service<St, WebRequest>>::Error>,
 {
     type Service = WebMiddleware<Outer::Service, St>;
 

@@ -233,7 +233,9 @@ where
     {
         // create and configure default resource
         self.default = Some(boxed::factory(
-            f.into_factory().map_init_err(IntoFailure::fail),
+            f.into_factory()
+                .map_err(Into::into)
+                .map_init_err(IntoFailure::fail),
         ));
 
         self

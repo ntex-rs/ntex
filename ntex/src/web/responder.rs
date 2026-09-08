@@ -165,6 +165,12 @@ impl<St: AppState> Responder<St> for BytesMut {
     }
 }
 
+impl Responder<()> for () {
+    async fn respond_to(self, _: &HttpRequest) -> Response {
+        Response::builder(StatusCode::OK).build()
+    }
+}
+
 /// Allows to override status code and headers for a responder.
 #[derive(derive_more::Debug)]
 #[debug("CustomResponder")]
