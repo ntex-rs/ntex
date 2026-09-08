@@ -728,9 +728,9 @@ mod tests {
     fn test_into_error() {
         let e = WebError::<(), _>::from_err(UrlencodedError::UnknownLength);
         let s = format!("{e}");
-        assert!(s.contains("UnknownLength"));
+        assert!(s.contains("Payload size is unknown"), "{}", s);
         let s = format!("{e:?}");
-        assert!(s.contains("web::WebError"));
+        assert!(s.contains("web::WebError"), "{}", s);
 
         let res = crate::http::ResponseError::error_response(&e);
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
