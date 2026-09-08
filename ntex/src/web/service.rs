@@ -122,9 +122,10 @@ impl<St: AppState> WebServiceConfig<St> {
 /// Create service adapter for a specific path.
 ///
 /// ```rust
-/// use ntex::web::{self, guard, App, HttpResponse, WebError};
+/// use std::convert::Infallible;
+/// use ntex::web::{self, guard, App, HttpResponse};
 ///
-/// async fn my_service(req: web::WebRequest) -> Result<web::WebResponse, WebError> {
+/// async fn my_service(req: web::WebRequest) -> Result<web::WebResponse, Infallible> {
 ///     Ok(req.into_response(HttpResponse::Ok().build()))
 /// }
 ///
@@ -165,9 +166,10 @@ impl WebServiceAdapter {
     /// Add match guard to a web service.
     ///
     /// ```rust
+    /// use std::convert::Infallible;
     /// use ntex::web::{self, guard, App, WebError, HttpResponse};
     ///
-    /// async fn index(req: web::WebRequest) -> Result<web::WebResponse, WebError> {
+    /// async fn index(req: web::WebRequest) -> Result<web::WebResponse, Infallible> {
     ///     Ok(req.into_response(HttpResponse::Ok().build()))
     /// }
     ///

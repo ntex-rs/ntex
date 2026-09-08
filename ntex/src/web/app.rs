@@ -218,10 +218,10 @@ where
     /// `HttpRequest::url_for()` will work as expected.
     ///
     /// ```rust
-    /// use ntex::web::{self, App, HttpRequest, HttpResponse, WebError};
+    /// use ntex::web::{self, App, HttpRequest, HttpResponse, error::UrlGenerationError};
     ///
-    /// async fn index(req: HttpRequest) -> Result<HttpResponse, WebError> {
-    ///     let url = req.url_for("youtube", &["asdlkjqme"]).map_err(WebError::new)?;
+    /// async fn index(req: HttpRequest) -> Result<HttpResponse, UrlGenerationError> {
+    ///     let url = req.url_for("youtube", &["asdlkjqme"])?;
     ///     assert_eq!(url.as_str(), "https://youtube.com/watch/asdlkjqme");
     ///     Ok(HttpResponse::Ok().into())
     /// }

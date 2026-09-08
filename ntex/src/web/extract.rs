@@ -28,7 +28,7 @@ pub trait FromRequest<St>: Sized {
 ///
 /// ```rust
 /// use ntex::http;
-/// use ntex::web::{self, error, App, HttpRequest, FromRequest, WebError};
+/// use ntex::web::{self, error, App, HttpRequest, FromRequest, InternalError};
 /// use rand;
 ///
 /// #[derive(Debug, serde::Deserialize)]
@@ -37,13 +37,13 @@ pub trait FromRequest<St>: Sized {
 /// }
 ///
 /// impl<St> FromRequest<St> for Thing {
-///     type Error = WebError;
+///     type Error = InternalError<&'static str>;
 ///
 ///     async fn from_request(st: &St, req: &HttpRequest, payload: &mut http::Payload) -> Result<Self, Self::Error> {
 ///         if rand::random() {
 ///             Ok(Thing { name: "thingy".into() })
 ///         } else {
-///             Err(WebError::new(error::ErrorBadRequest("no luck")))
+///             Err(error::ErrorBadRequest("no luck"))
 ///         }
 ///     }
 /// }
@@ -96,7 +96,7 @@ where
 ///
 /// ```rust
 /// use ntex::http;
-/// use ntex::web::{self, error, App, AppState, HttpRequest, FromRequest, WebError};
+/// use ntex::web::{self, error, App, AppState, HttpRequest, FromRequest, InternalError};
 /// use rand;
 ///
 /// #[derive(Debug, serde::Deserialize)]
@@ -105,19 +105,19 @@ where
 /// }
 ///
 /// impl<St: AppState> FromRequest<St> for Thing {
-///     type Error = WebError;
+///     type Error = InternalError<&'static str>;
 ///
 ///     async fn from_request(st: &St, req: &HttpRequest, payload: &mut http::Payload) -> Result<Thing, Self::Error> {
 ///         if rand::random() {
 ///             Ok(Thing { name: "thingy".into() })
 ///         } else {
-///             Err(WebError::new(error::ErrorBadRequest("no luck")))
+///             Err(error::ErrorBadRequest("no luck"))
 ///         }
 ///     }
 /// }
 ///
 /// /// extract `Thing` from request
-/// async fn index(supplied_thing: Result<Thing, error::WebError>) -> String {
+/// async fn index(supplied_thing: Result<Thing, InternalError<&'static str>>) -> String {
 ///     match supplied_thing {
 ///         Ok(thing) => format!("Got thing: {:?}", thing),
 ///         Err(e) => format!("Error extracting thing: {}", e)

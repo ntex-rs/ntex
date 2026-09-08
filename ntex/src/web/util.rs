@@ -252,9 +252,10 @@ where
 /// Create service adapter for a specific path.
 ///
 /// ```rust
+/// use std::convert::Infallible;
 /// use ntex::web::{self, guard, App, HttpResponse, WebError};
 ///
-/// async fn my_service(req: web::WebRequest) -> Result<web::WebResponse, WebError> {
+/// async fn my_service(req: web::WebRequest) -> Result<web::WebResponse, Infallible> {
 ///     Ok(req.into_response(HttpResponse::Ok().build()))
 /// }
 ///

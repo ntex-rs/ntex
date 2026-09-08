@@ -30,10 +30,11 @@
 //! ## Example:
 //!
 //! ```rust
+//! use std::convert::Infallible;
 //! use ntex::web::{get, HttpResponse, WebError};
 //!
 //! #[get("/test")]
-//! async fn async_test() -> Result<HttpResponse, WebError> {
+//! async fn async_test() -> Result<HttpResponse, Infallible> {
 //!     Ok(HttpResponse::Ok().build())
 //! }
 //! ```

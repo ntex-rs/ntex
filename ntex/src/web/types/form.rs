@@ -147,6 +147,7 @@ where
 /// Form extractor configuration
 ///
 /// ```rust
+/// use std::convert::Infallible;
 /// use ntex::web::{self, App, WebError, FromRequest};
 ///
 /// #[derive(serde::Deserialize)]
@@ -156,7 +157,7 @@ where
 ///
 /// /// Extract form data using serde.
 /// /// Custom configuration is used for this handler, max payload size is 4k
-/// async fn index(form: web::types::Form<FormData>) -> Result<String, WebError> {
+/// async fn index(form: web::types::Form<FormData>) -> Result<String, Infallible> {
 ///     Ok(format!("Welcome {}!", form.username))
 /// }
 ///

@@ -36,6 +36,7 @@ use crate::{http::Payload, router::PathDeserializer};
 /// implements `Deserialize` trait from *serde*.
 ///
 /// ```rust
+/// use std::convert::Infallible;
 /// use ntex::web;
 ///
 /// #[derive(serde::Deserialize)]
@@ -44,7 +45,7 @@ use crate::{http::Payload, router::PathDeserializer};
 /// }
 ///
 /// /// extract `Info` from a path using serde
-/// async fn index(info: web::types::Path<Info>) -> Result<String, web::WebError> {
+/// async fn index(info: web::types::Path<Info>) -> Result<String, Infallible> {
 ///     Ok(format!("Welcome {}!", info.username))
 /// }
 ///
@@ -130,6 +131,7 @@ impl<T: fmt::Display> fmt::Display for Path<T> {
 /// implements `Deserialize` trait from *serde*.
 ///
 /// ```rust
+/// use std::convert::Infallible;
 /// use ntex::web;
 ///
 /// #[derive(serde::Deserialize)]
@@ -138,7 +140,7 @@ impl<T: fmt::Display> fmt::Display for Path<T> {
 /// }
 ///
 /// /// extract `Info` from a path using serde
-/// async fn index(info: web::types::Path<Info>) -> Result<String, web::WebError> {
+/// async fn index(info: web::types::Path<Info>) -> Result<String, Infallible> {
 ///     Ok(format!("Welcome {}!", info.username))
 /// }
 ///

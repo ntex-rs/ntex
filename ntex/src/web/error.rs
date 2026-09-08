@@ -25,7 +25,7 @@ pub trait WebResponseError<St, Err>: Error + 'static {
     }
 
     /// Helper method
-    fn error_response_with_status(&self, status: StatusCode) -> HttpResponse {
+    fn error_response_with_status(&mut self, status: StatusCode) -> HttpResponse {
         let mut resp = HttpResponse::new(status);
         let mut buf = BytesMut::new();
         let _ = write!(&mut buf, "{self}");
@@ -49,7 +49,7 @@ pub trait WebResponseError<St, Err>: Error + 'static {
 pub struct WebError<St, Err>(pub(crate) Box<dyn WebResponseError<St, Err>>);
 
 impl<St: 'static, Err: 'static> WebError<St, Err> {
-    pub(crate) fn from_err<E: WebResponseError<St, Err>>(err: E) -> Self {
+    pub fn from_err<E: WebResponseError<St, Err>>(err: E) -> Self {
         Self(err.into())
     }
 }
