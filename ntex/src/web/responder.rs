@@ -100,7 +100,7 @@ where
     async fn respond_to(self, req: &HttpRequest) -> Response {
         match self {
             Ok(val) => val.respond_to(req).await,
-            Err(mut e) => e.error_response(req),
+            Err(e) => e.error_response(req),
         }
     }
 }
@@ -304,7 +304,7 @@ where
     T: std::fmt::Debug + std::fmt::Display + 'static,
     St: AppState,
 {
-    async fn respond_to(mut self, req: &HttpRequest) -> Response {
+    async fn respond_to(self, req: &HttpRequest) -> Response {
         self.error_response(req)
     }
 }

@@ -769,7 +769,7 @@ async fn test_custom_error() {
 
     #[derive(Debug, thiserror::Error)]
     #[error("JsonContainer({0})")]
-    struct JsonContainer(Box<dyn WebResponseError<JsonContainer>>);
+    struct JsonContainer(web::DefaultError);
 
     #[derive(Copy, Clone, Default)]
     struct TestAppState;
@@ -781,7 +781,7 @@ async fn test_custom_error() {
     impl ntex::http::ResponseError for JsonContainer {}
 
     impl WebResponseError<JsonContainer> for TestError {
-        fn error_response(&mut self, _: &HttpRequest) -> HttpResponse {
+        fn error_response(self, _: &HttpRequest) -> HttpResponse {
             HttpResponse::BadRequest()
                 .header(CONTENT_TYPE, "application/json")
                 .body("Error")

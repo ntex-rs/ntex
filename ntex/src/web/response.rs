@@ -20,15 +20,13 @@ impl WebResponse {
     #[must_use]
     /// Create web response from the error.
     pub fn from_err<St: AppState, E: WebResponseError<St::Error>>(
-        mut err: E,
+        err: E,
         request: HttpRequest,
     ) -> Self {
         let res = err.error_response(&request);
 
         if res.head().status == StatusCode::INTERNAL_SERVER_ERROR {
-            log::error!("Internal Server Error: {err:?}");
-        } else {
-            log::debug!("Error in response: {err:?}");
+            log::error!("Internal Server Error");
         }
 
         WebResponse {
@@ -96,7 +94,7 @@ impl WebResponse {
         F: FnOnce(&mut Self) -> Result<(), E>,
         E: WebResponseError<St::Error>,
     {
-        if let Err(mut err) = f(&mut self) {
+        if let Err(err) = f(&mut self) {
             WebResponse::new(err.error_response(&self.request), self.request)
         } else {
             self

@@ -26,7 +26,7 @@ impl WebRequest {
     #[inline]
     pub fn error_response<St: AppState, E: WebResponseError<St::Error>>(
         self,
-        mut err: E,
+        err: E,
     ) -> WebResponse {
         WebResponse::new(err.error_response(&self.req), self.req)
     }
