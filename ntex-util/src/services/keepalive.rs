@@ -119,21 +119,26 @@ where
         if expire <= now() {
             Err((self.f)())
         } else {
-            ctx.poll_once(|cx| match self.sleep.poll_elapsed(cx) {
-                Poll::Ready(()) => {
-                    let now = now();
-                    let expire = self.expire.get() + self.dur;
-                    if expire <= now {
-                        Err((self.f)())
-                    } else {
-                        let expire = expire - now;
-                        self.sleep
-                            .reset(Millis(expire.as_millis().try_into().unwrap_or(u32::MAX)));
-                        let _ = self.sleep.poll_elapsed(cx);
-                        Ok(())
+            ctx.poll_once(|cx| {
+                loop {
+                    match self.sleep.poll_elapsed(cx) {
+                        Poll::Ready(()) => {
+                            let now = now();
+                            let expire = self.expire.get() + self.dur;
+                            if expire <= now {
+                                return Err((self.f)());
+                            }
+                            let expire = expire - now;
+
+                            // sleep must be reset to non zero duration,
+                            // otherwise it stays in elapsed state and waker
+                            // never gets registered
+                            let expire: u32 = expire.as_millis().try_into().unwrap_or(u32::MAX);
+                            self.sleep.reset(Millis(expire.max(1)));
+                        }
+                        Poll::Pending => return Ok(()),
                     }
                 }
-                Poll::Pending => Ok(()),
             })
         }
     }
@@ -201,5 +206,22 @@ mod tests {
         let res = rx.await;
         assert_eq!(res, Ok(()));
         assert_eq!(svc.ready().await, Err(TestErr));
+    }
+
+    #[ntex::test]
+    async fn test_ka_sub_millis() {
+        let svc = std::rc::Rc::new(KeepAliveService::new(Millis(100), || TestErr));
+
+        // less than millisecond is left before expiration
+        svc.expire
+            .set(now().checked_sub(svc.dur).unwrap() + time::Duration::from_micros(500));
+        svc.sleep.elapse();
+
+        let p = Pipeline::<usize, usize, TestErr>::with((), svc.clone()).bind();
+        assert_eq!(p.ready().await, Ok(()));
+
+        // timer has to be re-armed, otherwise waker never gets registered
+        // and service readiness never resolves
+        assert!(!svc.sleep.is_elapsed());
     }
 }
