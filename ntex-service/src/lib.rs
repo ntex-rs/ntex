@@ -420,25 +420,6 @@ where
     }
 }
 
-/// Check `Service` type
-#[inline(always)]
-#[allow(clippy::inline_always)]
-pub fn __assert_svc<St, Req, Res, Err>(
-    s: impl Service<St, Req, Res = Res, Error = Err>,
-) -> impl Service<St, Req, Res = Res, Error = Err> {
-    s
-}
-
-/// Check `ServiceFactory` type
-#[inline(always)]
-#[allow(clippy::inline_always)]
-pub fn __assert_factory<Sf, St, Req, Res, Err, InitErr>(f: Sf) -> Sf
-where
-    Sf: ServiceFactory<St, Req, Res = Res, Error = Err, InitError = InitErr>,
-{
-    f
-}
-
 pub mod dev {
     pub use crate::and_then::{AndThen, AndThenFactory};
     pub use crate::apply::{Apply, ApplyCtx, ApplyFactory};
