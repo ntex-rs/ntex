@@ -276,7 +276,7 @@ mod tests {
         let cnt_sht = Rc::new(Cell::new(0));
         let srv = service(Srv(cnt_sht.clone()))
             .apply_fn(async move |req: &'static str, svc| {
-                let _ = svc.st();
+                svc.st();
                 svc.call(()).await.unwrap();
                 Ok((req, ()))
             })
