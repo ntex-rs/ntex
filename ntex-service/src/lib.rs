@@ -376,6 +376,12 @@ where
     }
 }
 
+/// Trait for types that can be called
+pub trait ServiceCaller<Req, Res, Err> {
+    /// Wait for service readiness and then call service.
+    async fn call_service(&self, req: Req) -> Result<Res, Err>;
+}
+
 /// Trait for types that can be converted to a `Service`
 pub trait IntoService<S, St, Req>
 where
@@ -412,25 +418,6 @@ where
     fn into_factory(self) -> Sf {
         self
     }
-}
-
-/// Check `Service` type
-#[inline(always)]
-#[allow(clippy::inline_always)]
-pub fn __assert_svc<St, Req, Res, Err>(
-    s: impl Service<St, Req, Res = Res, Error = Err>,
-) -> impl Service<St, Req, Res = Res, Error = Err> {
-    s
-}
-
-/// Check `ServiceFactory` type
-#[inline(always)]
-#[allow(clippy::inline_always)]
-pub fn __assert_factory<Sf, St, Req, Res, Err, InitErr>(f: Sf) -> Sf
-where
-    Sf: ServiceFactory<St, Req, Res = Res, Error = Err, InitError = InitErr>,
-{
-    f
 }
 
 pub mod dev {
