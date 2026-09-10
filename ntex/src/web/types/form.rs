@@ -148,7 +148,7 @@ where
 ///
 /// ```rust
 /// use std::convert::Infallible;
-/// use ntex::web::{self, App, WebError, FromRequest};
+/// use ntex::web::{self, App, WebError, FromRequest, WebAppConfig};
 ///
 /// #[derive(serde::Deserialize)]
 /// struct FormData {
@@ -162,14 +162,14 @@ where
 /// }
 ///
 /// fn main() {
-///     let app = App::default().service(
-///         web::resource("/index.html")
-///             // change `Form` extractor configuration
-///             .state(
-///                 web::types::FormConfig::default().limit(4097)
-///             )
-///             .route(web::get().to(index))
-///     );
+///     let cfg = WebAppConfig::new()
+///         // change `Form` extractor configuration
+///         .set_state(web::types::FormConfig::default().limit(4097))
+///         .into();
+///
+///     let app = App::default()
+///         .config(cfg)
+///         .service(web::resource("/index.html").route(web::get().to(index)));
 /// }
 /// ```
 #[derive(Clone, Debug)]

@@ -14,17 +14,6 @@ use crate::then::{Then, ThenFactory};
 use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 /// Constructs new chain with one service.
-pub fn svc<S, St, Req>(service: impl IntoService<S, St, Req>) -> ServiceChain<S, St, Req>
-where
-    S: Service<St, Req>,
-{
-    ServiceChain {
-        service: service.into_service(),
-        st: PhantomData,
-    }
-}
-
-/// Constructs new chain with one service.
 pub fn service<S, St, Req>(service: impl IntoService<S, St, Req>) -> ServiceChain<S, St, Req>
 where
     S: Service<St, Req>,

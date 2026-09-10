@@ -190,7 +190,7 @@ where
 ///
 /// ```rust
 /// use ntex::http::error;
-/// use ntex::web::{self, App, FromRequest, HttpResponse};
+/// use ntex::web::{self, App, FromRequest, HttpResponse, WebAppConfig};
 ///
 /// #[derive(serde::Deserialize)]
 /// struct Info {
@@ -203,16 +203,19 @@ where
 /// }
 ///
 /// fn main() {
-///     let app = App::default().service(
-///         web::resource("/index.html")
-///             .state(
-///                 // change json extractor configuration
-///                 web::types::JsonConfig::default()
-///                    .limit(4096)
-///                    .content_type(|mime| {  // <- accept text/plain content type
-///                        mime.type_() == mime::TEXT && mime.subtype() == mime::PLAIN
-///                    })
-///             )
+///     let cfg = WebAppConfig::new()
+///         .set_state(
+///             // change json extractor configuration
+///             web::types::JsonConfig::default()
+///                 .limit(4096)
+///                 .content_type(|mime| {  // <- accept text/plain content type
+///                     mime.type_() == mime::TEXT && mime.subtype() == mime::PLAIN
+///                 })
+///     ).into();
+///
+///     let app = App::default()
+///         .config(cfg)
+///         .service(web::resource("/index.html")
 ///             .route(web::post().to(index))
 ///     );
 /// }

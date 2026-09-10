@@ -1,9 +1,9 @@
 use crate::error::{Failure, IntoFailure};
+use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef};
 use crate::service::dev::{AndThen, ServiceChain, ServiceChainFactory};
 use crate::service::{Ctx, factory, service};
 use crate::service::{Identity, IntoServiceFactory, Middleware, Service, ServiceFactory};
-use crate::{http::Response, util::Extensions};
 
 use super::dev::{WebServiceConfig, WebServiceFactory, insert_slash};
 use super::error::{WebError, WebResponseError};
@@ -44,7 +44,6 @@ pub struct Resource<St: AppState, M = Identity, F = Filter<St>> {
     rdef: Vec<String>,
     name: Option<String>,
     routes: Vec<Route<St>>,
-    state: Option<Extensions>,
     guards: Vec<Box<dyn Guard>>,
     default: Option<HttpService<St>>,
 }
@@ -56,7 +55,6 @@ impl<St: AppState> Resource<St> {
             routes: Vec::new(),
             rdef: path.patterns(),
             name: None,
-            state: None,
             middleware: Identity,
             filter: factory(Filter::new()),
             guards: Vec::new(),
@@ -116,41 +114,6 @@ where
 
     pub(crate) fn add_guards(mut self, guards: Vec<Box<dyn Guard>>) -> Self {
         self.guards.extend(guards);
-        self
-    }
-
-    #[must_use]
-    /// Provide resource specific state.
-    ///
-    /// This method allows to add extractor configuration or specific
-    /// state available via `State<T>` extractor. Provided state is available
-    /// for all routes registered for the current resource.
-    /// Resource state overrides state registered by `App::state()` method.
-    ///
-    /// ```rust
-    /// use ntex::web::{self, App, FromRequest};
-    ///
-    /// /// extract text data from request
-    /// async fn index(body: String) -> String {
-    ///     format!("Body {}!", body)
-    /// }
-    ///
-    /// fn main() {
-    ///     let app = App::default().service(
-    ///         web::resource("/index.html")
-    ///           // limit size of the payload
-    ///           .state(web::types::PayloadConfig::new(4096))
-    ///           .route(
-    ///               // register handler
-    ///               web::get().to(index)
-    ///           ));
-    /// }
-    /// ```
-    pub fn state<D: 'static>(mut self, st: D) -> Self {
-        if self.state.is_none() {
-            self.state = Some(Extensions::new());
-        }
-        self.state.as_mut().unwrap().insert(st);
         self
     }
 
@@ -266,7 +229,6 @@ where
             middleware: self.middleware,
             rdef: self.rdef,
             name: self.name,
-            state: self.state,
             guards: self.guards,
             routes: self.routes,
             default: self.default,
@@ -285,7 +247,6 @@ where
             filter: self.filter,
             rdef: self.rdef,
             name: self.name,
-            state: self.state,
             guards: self.guards,
             routes: self.routes,
             default: self.default,

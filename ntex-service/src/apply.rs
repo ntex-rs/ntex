@@ -53,12 +53,6 @@ impl<S: Service<St, Req>, St, Req> ApplyCtx<'_, S, St, Req> {
             .call(&self.service, req)
             .await
     }
-
-    /// Get service reference
-    #[inline]
-    pub fn get_ref(&self) -> &S {
-        self.service
-    }
 }
 
 /// `Apply` service combinator
@@ -282,12 +276,15 @@ mod tests {
         let cnt_sht = Rc::new(Cell::new(0));
         let srv = service(Srv(cnt_sht.clone()))
             .apply_fn(async move |req: &'static str, svc| {
+                svc.st();
                 svc.call(()).await.unwrap();
                 Ok((req, ()))
             })
-            .clone()
-            .pipeline(());
+            .clone();
+        let s = format!("{srv:?}");
+        assert!(s.contains("Apply"), "{}", s);
 
+        let srv = srv.pipeline(());
         assert_eq!(srv.ready().await, Ok::<_, Err>(()));
 
         srv.shutdown().await;

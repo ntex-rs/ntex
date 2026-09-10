@@ -36,6 +36,7 @@ where
     rmap: Rc<ResourceMap>,
     router: Rc<Router<HttpService<St>, Guards>>,
     default: HttpService<St>,
+    config: Option<Cfg<WebAppConfig>>,
 }
 
 impl<St, M, F> AppFactory<St, M, F>
@@ -56,6 +57,7 @@ where
         filter: ServiceChainFactory<F, St, WebRequest>,
         services: Vec<Box<dyn AppServiceFactory<St>>>,
         default: Option<HttpService<St>>,
+        config: Option<Cfg<WebAppConfig>>,
         external: Vec<ResourceDef>,
         case_insensitive: bool,
     ) -> Self {
@@ -70,11 +72,11 @@ where
         });
 
         // Web app config
-        let mut config = WebServiceConfig::new(default);
+        let mut cfg = WebServiceConfig::new(default);
 
         // register services
         for mut srv in services {
-            srv.register(&mut config);
+            srv.register(&mut cfg);
         }
 
         // ResourceMap tree
@@ -84,7 +86,7 @@ where
         }
 
         // Complete pipeline creation
-        let (services, default) = config.into_services();
+        let (services, default) = cfg.into_services();
         let services: Vec<_> = services
             .into_iter()
             .map(|(mut rdef, srv, guards, nested)| {
@@ -111,6 +113,7 @@ where
             filter,
             middleware,
             default,
+            config,
             router: Rc::new(router.build()),
         }
     }
@@ -153,6 +156,7 @@ where
         Ok(AppService {
             service,
             rmap: self.rmap.clone(),
+            config: self.config.clone(),
             _t: marker::PhantomData,
         })
     }
@@ -168,6 +172,7 @@ where
 {
     service: S,
     rmap: Rc<ResourceMap>,
+    config: Option<Cfg<WebAppConfig>>,
     _t: marker::PhantomData<St>,
 }
 
@@ -183,7 +188,9 @@ where
     crate::forward_shutdown!(St, service);
 
     async fn call(&self, req: Request, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, S::Error> {
-        let config: Cfg<WebAppConfig> = if let Some(io) = req.io() {
+        let config: Cfg<WebAppConfig> = if let Some(cfg) = &self.config {
+            cfg.clone()
+        } else if let Some(io) = req.io() {
             io.cfg().ctx().get()
         } else {
             Cfg::<WebAppConfig>::default()

@@ -175,7 +175,7 @@ impl<St: AppState> FromRequest<St> for Bytes {
 /// ## Example
 ///
 /// ```rust
-/// use ntex::web::{self, App, FromRequest};
+/// use ntex::web::{self, App, FromRequest, WebAppConfig};
 ///
 /// /// extract text data from request
 /// async fn index(text: String) -> String {
@@ -183,12 +183,16 @@ impl<St: AppState> FromRequest<St> for Bytes {
 /// }
 ///
 /// fn main() {
-///     let app = App::default().service(
-///         web::resource("/index.html")
-///             .state(
-///                 web::types::PayloadConfig::new(4096)  // <- limit size of the payload
-///             )
-///             .route(web::get().to(index))  // <- register handler with extractor params
+///     let cfg = WebAppConfig::new()
+///         .set_state(
+///              web::types::PayloadConfig::new(4096))  // <- limit size of the payload
+///         .into();
+///
+///     let app = App::default()
+///         .config(cfg)
+///         .service(
+///             web::resource("/index.html")
+///                 .route(web::get().to(index))  // <- register handler with extractor params
 ///     );
 /// }
 /// ```
