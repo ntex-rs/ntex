@@ -15,7 +15,7 @@ pub struct WebAppConfig {
     host: String,
     addr: SocketAddr,
     config: CfgContext,
-    extensions: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+    state: HashMap<TypeId, Box<dyn Any + Sync + Send>>,
     pub(super) pool_size: usize,
 }
 
@@ -58,8 +58,8 @@ impl WebAppConfig {
             addr,
             name: name.into(),
             pool_size: 128,
+            state: HashMap::default(),
             config: CfgContext::default(),
-            extensions: HashMap::default(),
         }
     }
 
@@ -89,12 +89,9 @@ impl WebAppConfig {
         self.addr
     }
 
-    /// Set application level arbitrary state item.
-    ///
-    /// Application state is available
-    /// via `HttpRequest::app_state()` method at runtime.
+    /// Get an application state object stored with `.set_state()` method.
     pub fn state<T: 'static>(&self) -> Option<&T> {
-        self.extensions
+        self.state
             .get(&TypeId::of::<T>())
             .and_then(|boxed| boxed.downcast_ref())
     }
@@ -133,8 +130,11 @@ impl WebAppConfig {
 
     #[must_use]
     /// Set application level arbitrary state item.
-    pub fn set_state<T: Sync + Send + 'static>(mut self, val: T) -> Self {
-        self.extensions
+    ///
+    /// Application state stored with `.state()` method is available
+    /// via `HttpRequest::app_state()` method at runtime.
+    pub fn set_state<T: Send + Sync + 'static>(mut self, val: T) -> Self {
+        self.state
             .insert(TypeId::of::<T>(), Box::new(val))
             .and_then(|item| item.downcast::<T>().map(|boxed| *boxed).ok());
         self

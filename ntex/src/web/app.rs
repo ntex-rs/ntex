@@ -1,11 +1,11 @@
 use crate::error::{Failure, IntoFailure};
 use crate::http::{Request, Response};
 use crate::router::ResourceDef;
-use crate::service::{Identity, Middleware, Service, ServiceFactory};
+use crate::service::{Identity, Middleware, Service, ServiceFactory, cfg::Cfg};
 use crate::service::{IntoServiceFactory, dev::ServiceChainFactory, factory};
 
 use super::app_service::{AppFactory, AppRouter};
-use super::config::ServiceConfig;
+use super::config::{ServiceConfig, WebAppConfig};
 use super::error::{WebError, WebResponseError};
 use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
 use super::stack::{Filter, WebStack};
@@ -21,6 +21,7 @@ pub struct App<St: AppState, M = Identity, F = Filter<St>> {
     services: Vec<Box<dyn AppServiceFactory<St>>>,
     default: Option<HttpService<St>>,
     external: Vec<ResourceDef>,
+    config: Option<Cfg<WebAppConfig>>,
     case_insensitive: bool,
 }
 
@@ -32,6 +33,7 @@ impl Default for App<()> {
             services: Vec::new(),
             default: None,
             external: Vec::new(),
+            config: None,
             case_insensitive: false,
         }
     }
@@ -46,6 +48,7 @@ impl App<()> {
             filter: factory(Filter::new()),
             services: Vec::new(),
             default: None,
+            config: None,
             external: Vec::new(),
             case_insensitive: false,
         }
@@ -61,6 +64,7 @@ impl<St: AppState> App<St> {
             filter: factory(Filter::new()),
             services: Vec::new(),
             default: None,
+            config: None,
             external: Vec::new(),
             case_insensitive: false,
         }
@@ -241,6 +245,13 @@ where
     }
 
     #[must_use]
+    /// Set custom app configuration.
+    pub fn config(mut self, cfg: Cfg<WebAppConfig>) -> Self {
+        self.config = Some(cfg);
+        self
+    }
+
+    #[must_use]
     /// Register request filter.
     ///
     /// Filter runs during inbound processing in the request
@@ -295,6 +306,7 @@ where
             middleware: self.middleware,
             services: self.services,
             default: self.default,
+            config: self.config,
             external: self.external,
             case_insensitive: self.case_insensitive,
         }
@@ -334,6 +346,7 @@ where
             filter: self.filter,
             services: self.services,
             default: self.default,
+            config: self.config,
             external: self.external,
             case_insensitive: self.case_insensitive,
         }
@@ -411,6 +424,7 @@ where
             self.filter,
             self.services,
             self.default,
+            self.config,
             self.external,
             self.case_insensitive,
         )
@@ -547,6 +561,29 @@ mod tests {
 
         let req = TestRequest::with_uri("/Test").to_request();
         let resp = call_service(&srv, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[crate::rt_test]
+    async fn test_extension() {
+        let cfg = WebAppConfig::new().set_state(10usize).into();
+
+        let srv = init_service(
+            App::new()
+                .config(cfg)
+                .filter(async move |req: WebRequest| {
+                    assert_eq!(*req.app_state::<usize>().unwrap(), 10);
+                    Ok::<_, Infallible>(req)
+                })
+                .service(web::resource("/").to(async move |req: HttpRequest| {
+                    assert_eq!(*req.app_state::<usize>().unwrap(), 10);
+                    HttpResponse::Ok()
+                })),
+        )
+        .await;
+
+        let req = TestRequest::default().to_request();
+        let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
