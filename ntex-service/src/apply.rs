@@ -2,7 +2,7 @@ use std::{fmt, marker};
 
 use crate::ctx::{Ctx, WaitersRef};
 use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
-use crate::{ServiceChain, ServiceChainFactory};
+use crate::{ServiceCaller, ServiceChain, ServiceChainFactory};
 
 /// Apply transform function to a service.
 pub fn apply_fn<S, St, Req, F, In, Out, Err>(
@@ -40,7 +40,7 @@ pub struct ApplyCtx<'a, S, St, Req> {
 }
 
 impl<S: Service<St, Req>, St, Req> ApplyCtx<'_, S, St, Req> {
-    /// Pipeline state
+    /// Service state
     #[inline]
     pub fn st(&self) -> &St {
         self.st
@@ -49,6 +49,17 @@ impl<S: Service<St, Req>, St, Req> ApplyCtx<'_, S, St, Req> {
     /// Wait for service readiness and then call service.
     #[inline]
     pub async fn call(&self, req: Req) -> Result<S::Res, S::Error> {
+        Ctx::<S, St>::new(self.idx, self.waiters, self.st)
+            .call(&self.service, req)
+            .await
+    }
+}
+
+impl<S: Service<St, Req>, St, Req> ServiceCaller<Req, S::Res, S::Error>
+    for ApplyCtx<'_, S, St, Req>
+{
+    #[inline]
+    async fn call_service(&self, req: Req) -> Result<S::Res, S::Error> {
         Ctx::<S, St>::new(self.idx, self.waiters, self.st)
             .call(&self.service, req)
             .await

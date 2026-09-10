@@ -376,6 +376,12 @@ where
     }
 }
 
+/// Trait for types that can be called
+pub trait ServiceCaller<Req, Res, Err> {
+    /// Wait for service readiness and then call service.
+    async fn call_service(&self, req: Req) -> Result<Res, Err>;
+}
+
 /// Trait for types that can be converted to a `Service`
 pub trait IntoService<S, St, Req>
 where

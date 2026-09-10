@@ -1,7 +1,7 @@
 use std::{fmt, future, pin::Pin, task::Context, task::Poll};
 
 use crate::pl_inner::PipelineApi;
-use crate::{IntoService, Service, util::BoxFuture};
+use crate::{IntoService, Service, ServiceCaller, util::BoxFuture};
 
 pub use crate::pl_factory::PipelineFactory;
 pub use crate::pl_state::{PipelineState, PipelineStateBinding};
@@ -99,6 +99,19 @@ where
     /// The binding can be used to check readiness and call the service.
     pub fn bind(&self) -> PipelineBinding<Req, Res, Err> {
         PipelineBinding::new(self)
+    }
+}
+
+impl<Req, Res, Err> ServiceCaller<Req, Res, Err> for Pipeline<Req, Res, Err>
+where
+    Req: 'static,
+    Res: 'static,
+    Err: 'static,
+{
+    #[inline]
+    async fn call_service(&self, req: Req) -> Result<Res, Err> {
+        let pl = self.bind();
+        pl.api.call(pl.idx, req, true).await
     }
 }
 

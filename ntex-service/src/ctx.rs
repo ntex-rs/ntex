@@ -142,7 +142,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     }
 
     #[inline]
-    /// Application state
+    /// Service state
     pub fn st(&'a self) -> &'a St {
         self.st
     }
