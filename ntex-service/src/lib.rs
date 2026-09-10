@@ -45,9 +45,6 @@ pub use crate::middleware::{Identity, Middleware, Stack, apply, fn_layer};
 pub use crate::pipeline::Pipeline;
 pub use crate::state::{RequestState, State};
 
-#[deprecated]
-pub use crate::chain::svc;
-
 #[allow(unused_variables)]
 /// An asynchronous function from a `Request` to a `Response`.
 ///
