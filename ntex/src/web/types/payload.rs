@@ -32,7 +32,7 @@ use crate::web::{AppState, FromRequest, HttpRequest, error::PayloadError};
 /// }
 ///
 /// fn main() {
-///     let app = App::default().service(
+///     let app = App::new().service(
 ///         web::resource("/index.html").route(
 ///             web::get().to(index))
 ///     );
@@ -97,7 +97,7 @@ impl Stream for Payload {
 /// }
 ///
 /// fn main() {
-///     let app = App::default().service(
+///     let app = App::new().service(
 ///         web::resource("/index.html").route(
 ///             web::get().to(index))
 ///     );
@@ -134,7 +134,7 @@ impl<St: AppState> FromRequest<St> for Payload {
 /// }
 ///
 /// fn main() {
-///     let app = web::App::default().service(
+///     let app = web::App::new().service(
 ///         web::resource("/index.html").route(
 ///             web::get().to(index))
 ///     );
@@ -188,7 +188,7 @@ impl<St: AppState> FromRequest<St> for Bytes {
 ///              web::types::PayloadConfig::new(4096))  // <- limit size of the payload
 ///         .into();
 ///
-///     let app = App::default()
+///     let app = App::new()
 ///         .config(cfg)
 ///         .service(
 ///             web::resource("/index.html")
@@ -431,8 +431,8 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_payload() {
-        let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
-            .set_payload(Bytes::from_static(b"hello=world"))
+        let (req, mut pl, ()) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
+            .payload(Bytes::from_static(b"hello=world"))
             .to_http_parts();
 
         let mut s = from_request::<_, Payload>(&(), &req, &mut pl)
@@ -444,8 +444,8 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_payload_recv() {
-        let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
-            .set_payload(Bytes::from_static(b"hello=world"))
+        let (req, mut pl, ()) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
+            .payload(Bytes::from_static(b"hello=world"))
             .to_http_parts();
 
         let mut s = from_request::<_, Payload>(&(), &req, &mut pl)
@@ -457,46 +457,46 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_bytes() {
-        let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
-            .set_payload(Bytes::from_static(b"hello=world"))
+        let (req, mut pl, ()) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
+            .payload(Bytes::from_static(b"hello=world"))
             .to_http_parts();
 
         let s = from_request::<_, Bytes>(&(), &req, &mut pl).await.unwrap();
         assert_eq!(s, Bytes::from_static(b"hello=world"));
 
-        let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
-            .set_payload(Bytes::from_static(b"hello=world"))
-            .state(PayloadConfig::default().mimetype(mime::APPLICATION_JSON))
+        let (req, mut pl, ()) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
+            .payload(Bytes::from_static(b"hello=world"))
+            .app_state(PayloadConfig::default().mimetype(mime::APPLICATION_JSON))
             .to_http_parts();
         assert!(from_request::<_, Bytes>(&(), &req, &mut pl).await.is_err());
     }
 
     #[crate::rt_test]
     async fn test_string() {
-        let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
-            .set_payload(Bytes::from_static(b"hello=world"))
+        let (req, mut pl, ()) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
+            .payload(Bytes::from_static(b"hello=world"))
             .to_http_parts();
 
         let s = from_request::<_, String>(&(), &req, &mut pl).await.unwrap();
         assert_eq!(s, "hello=world");
 
-        let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
+        let (req, mut pl, ()) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
             .header(header::CONTENT_TYPE, "text/plain; charset=cp1251")
-            .set_payload(Bytes::from_static(b"hello=world"))
+            .payload(Bytes::from_static(b"hello=world"))
             .to_http_parts();
         let s = from_request::<_, String>(&(), &req, &mut pl).await.unwrap();
         assert_eq!(s, "hello=world");
 
-        let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
-            .set_payload(Bytes::from_static(b"hello=world"))
-            .state(PayloadConfig::default().mimetype(mime::APPLICATION_JSON))
+        let (req, mut pl, ()) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
+            .payload(Bytes::from_static(b"hello=world"))
+            .app_state(PayloadConfig::default().mimetype(mime::APPLICATION_JSON))
             .to_http_parts();
         assert!(from_request::<_, String>(&(), &req, &mut pl).await.is_err());
     }
 
     #[crate::rt_test]
     async fn test_message_body() {
-        let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "xxxx")
+        let (req, mut pl, ()) = TestRequest::with_header(header::CONTENT_LENGTH, "xxxx")
             .to_srv_request()
             .into_parts();
         let res = HttpMessageBody::new(&req, &mut pl).await;
@@ -505,7 +505,7 @@ mod tests {
             _ => unreachable!("error"),
         }
 
-        let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "1000000")
+        let (req, mut pl, ()) = TestRequest::with_header(header::CONTENT_LENGTH, "1000000")
             .to_srv_request()
             .into_parts();
         let res = HttpMessageBody::new(&req, &mut pl).await;
@@ -514,14 +514,14 @@ mod tests {
             _ => unreachable!("error"),
         }
 
-        let (req, mut pl) = TestRequest::default()
-            .set_payload(Bytes::from_static(b"test"))
+        let (req, mut pl, ()) = TestRequest::default()
+            .payload(Bytes::from_static(b"test"))
             .to_http_parts();
         let res = HttpMessageBody::new(&req, &mut pl).await;
         assert_eq!(res.ok().unwrap(), Bytes::from_static(b"test"));
 
-        let (req, mut pl) = TestRequest::default()
-            .set_payload(Bytes::from_static(b"11111111111111"))
+        let (req, mut pl, ()) = TestRequest::default()
+            .payload(Bytes::from_static(b"11111111111111"))
             .to_http_parts();
         let res = HttpMessageBody::new(&req, &mut pl).limit(5).await;
         match res.err().unwrap() {

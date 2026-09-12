@@ -1,8 +1,11 @@
+#![allow(clippy::new_without_default)]
+use std::marker::PhantomData;
+
 use crate::error::{Failure, IntoFailure};
 use crate::http::{Request, Response};
 use crate::router::ResourceDef;
-use crate::service::{Identity, Middleware, Service, ServiceFactory, cfg::Cfg};
-use crate::service::{IntoServiceFactory, dev::ServiceChainFactory, factory};
+use crate::service::{Identity, ServiceChainFactory};
+use crate::{Cfg, IntoServiceFactory, Middleware, Service, ServiceFactory, factory};
 
 use super::app_service::{AppFactory, AppRouter};
 use super::config::{ServiceConfig, WebAppConfig};
@@ -15,69 +18,69 @@ use super::{AppState, HttpService, Resource, Route, WebRequest, WebResponse};
 /// for building application instances.
 #[derive(derive_more::Debug)]
 #[debug("App")]
-pub struct App<St: AppState, M = Identity, F = Filter<St>> {
+pub struct App<St: AppState, In, Out = In, M = Identity, F = Filter<St, In>> {
     middleware: M,
-    filter: ServiceChainFactory<F, St, WebRequest>,
-    services: Vec<Box<dyn AppServiceFactory<St>>>,
-    default: Option<HttpService<St>>,
+    filter: ServiceChainFactory<F, St, WebRequest<In>>,
     external: Vec<ResourceDef>,
     config: Option<Cfg<WebAppConfig>>,
     case_insensitive: bool,
+    ph: PhantomData<Out>,
 }
 
-impl Default for App<()> {
-    fn default() -> Self {
-        App {
-            middleware: Identity,
-            filter: factory(Filter::new()),
-            services: Vec::new(),
-            default: None,
-            external: Vec::new(),
-            config: None,
-            case_insensitive: false,
-        }
-    }
+/// Application builder - structure that follows the builder pattern
+/// for building application instances.
+#[derive(derive_more::Debug)]
+#[debug("AppServices")]
+pub struct AppServices<St: AppState, In, Out, M, F> {
+    middleware: M,
+    filter: ServiceChainFactory<F, St, WebRequest<In>>,
+    services: Vec<Box<dyn AppServiceFactory<St, Out>>>,
+    default: Option<HttpService<St, Out>>,
+    external: Vec<ResourceDef>,
+    config: Option<Cfg<WebAppConfig>>,
+    case_insensitive: bool,
+    ph: PhantomData<In>,
 }
 
-impl App<()> {
+impl App<(), ()> {
     #[must_use]
     /// Create application builder. Application can be configured with a builder-like pattern.
     pub fn new() -> Self {
         App {
             middleware: Identity,
             filter: factory(Filter::new()),
-            services: Vec::new(),
-            default: None,
             config: None,
             external: Vec::new(),
             case_insensitive: false,
+            ph: PhantomData,
         }
     }
 }
 
-impl<St: AppState> App<St> {
+impl<St: AppState, In> App<St, In, In> {
     #[must_use]
     /// Create application builder. Application can be configured with a builder-like pattern.
     pub fn with() -> Self {
         App {
             middleware: Identity,
             filter: factory(Filter::new()),
-            services: Vec::new(),
-            default: None,
             config: None,
             external: Vec::new(),
             case_insensitive: false,
+            ph: PhantomData,
         }
     }
 }
 
-impl<St, M, F> App<St, M, F>
+impl<St, In, Out, M, F> App<St, In, Out, M, F>
 where
     St: AppState,
+    In: 'static,
+    Out: 'static,
     F: ServiceFactory<
             St,
-            WebRequest,
-            Res = WebRequest,
+            WebRequest<In>,
+            Res = WebRequest<Out>,
             Error = WebError<St, St::Error>,
             InitError = Failure,
         >,
@@ -108,12 +111,23 @@ where
     ///         .route("/index.html", web::get().to(async || { HttpResponse::Ok() }));
     /// }
     /// ```
-    pub fn configure(mut self, f: impl FnOnce(&mut ServiceConfig<St>)) -> Self {
-        let mut cfg = ServiceConfig::new();
+    pub fn configure(
+        self,
+        f: impl FnOnce(&mut ServiceConfig<St, Out>),
+    ) -> AppServices<St, In, Out, M, F> {
+        let mut cfg = ServiceConfig::new(self.external);
         f(&mut cfg);
-        self.services.extend(cfg.services);
-        self.external.extend(cfg.external);
-        self
+
+        AppServices {
+            services: cfg.services,
+            default: None,
+            filter: self.filter,
+            middleware: self.middleware,
+            config: self.config,
+            external: cfg.external,
+            case_insensitive: self.case_insensitive,
+            ph: PhantomData,
+        }
     }
 
     #[must_use]
@@ -131,12 +145,12 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::default()
+    ///     let app = App::new()
     ///         .route("/test1", web::get().to(index))
     ///         .route("/test2", web::post().to(async || { HttpResponse::MethodNotAllowed() }));
     /// }
     /// ```
-    pub fn route(self, path: &str, mut route: Route<St>) -> Self {
+    pub fn route(self, path: &str, mut route: Route<St, Out>) -> AppServices<St, In, Out, M, F> {
         self.service(
             Resource::new(path)
                 .add_guards(route.take_guards())
@@ -154,13 +168,20 @@ where
     /// * `Resource` is an entry in resource table which corresponds to requested URL.
     /// * `Scope` is a set of resources with common root path.
     /// * `StaticFiles` is a service for static files support
-    pub fn service<S>(mut self, factory: S) -> Self
+    pub fn service<S>(self, factory: S) -> AppServices<St, In, Out, M, F>
     where
-        S: WebServiceFactory<St> + 'static,
+        S: WebServiceFactory<St, Out> + 'static,
     {
-        self.services
-            .push(Box::new(ServiceFactoryWrapper::new(factory)));
-        self
+        AppServices {
+            services: vec![Box::new(ServiceFactoryWrapper::new(factory))],
+            default: None,
+            filter: self.filter,
+            middleware: self.middleware,
+            config: self.config,
+            external: self.external,
+            case_insensitive: self.case_insensitive,
+            ph: PhantomData,
+        }
     }
 
     #[must_use]
@@ -176,7 +197,7 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::default()
+    ///     let app = App::new()
     ///         .service(
     ///             web::resource("/index.html").route(web::get().to(index)))
     ///         .default_service(
@@ -190,7 +211,7 @@ where
     /// use ntex::web::{self, App, HttpResponse};
     ///
     /// fn main() {
-    ///     let app = App::default()
+    ///     let app = App::new()
     ///         .service(
     ///             web::resource("/index.html").to(async || { HttpResponse::Ok() }))
     ///         .default_service(
@@ -198,20 +219,32 @@ where
     ///         );
     /// }
     /// ```
-    pub fn default_service<U>(mut self, f: impl IntoServiceFactory<U, St, WebRequest>) -> Self
+    pub fn default_service<U>(
+        self,
+        f: impl IntoServiceFactory<U, St, WebRequest<Out>>,
+    ) -> AppServices<St, In, Out, M, F>
     where
-        U: ServiceFactory<St, WebRequest, Res = WebResponse> + 'static,
+        U: ServiceFactory<St, WebRequest<Out>, Res = WebResponse> + 'static,
         U::Error: WebResponseError<St, St::Error>,
         U::InitError: IntoFailure,
     {
         // create and configure default resource
-        self.default = Some(HttpService::new(
+        let default = Some(HttpService::new(
             f.into_factory()
                 .map_err(WebError::from_err)
                 .map_init_err(IntoFailure::fail),
         ));
 
-        self
+        AppServices {
+            default,
+            services: Vec::new(),
+            filter: self.filter,
+            middleware: self.middleware,
+            config: self.config,
+            external: self.external,
+            case_insensitive: self.case_insensitive,
+            ph: PhantomData,
+        }
     }
 
     #[must_use]
@@ -231,10 +264,10 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::default()
+    ///     let app = App::new()
+    ///         .external_resource("youtube", "https://youtube.com/watch/{video_id}")
     ///         .service(web::resource("/index.html").route(
-    ///             web::get().to(index)))
-    ///         .external_resource("youtube", "https://youtube.com/watch/{video_id}");
+    ///             web::get().to(index)));
     /// }
     /// ```
     pub fn external_resource(mut self, name: impl AsRef<str>, url: impl AsRef<str>) -> Self {
@@ -272,27 +305,29 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::default()
+    ///     let app = App::new()
     ///         .middleware(middleware::Logger::default())
     ///         .route("/index.html", web::get().to(index));
     /// }
     /// ```
-    pub fn filter<Sf>(
+    pub fn filter<Sf, R>(
         self,
-        filter: impl IntoServiceFactory<Sf, St, WebRequest>,
+        filter: impl IntoServiceFactory<Sf, St, WebRequest<Out>>,
     ) -> App<
         St,
+        In,
+        R,
         M,
         impl ServiceFactory<
             St,
-            WebRequest,
-            Res = WebRequest,
+            WebRequest<In>,
+            Res = WebRequest<R>,
             Error = WebError<St, St::Error>,
             InitError = Failure,
         >,
     >
     where
-        Sf: ServiceFactory<St, WebRequest, Res = WebRequest>,
+        Sf: ServiceFactory<St, WebRequest<Out>, Res = WebRequest<R>>,
         Sf::Error: WebResponseError<St, St::Error>,
         Sf::InitError: IntoFailure,
     {
@@ -304,11 +339,10 @@ where
                     .map_init_err(IntoFailure::fail),
             ),
             middleware: self.middleware,
-            services: self.services,
-            default: self.default,
             config: self.config,
             external: self.external,
             case_insensitive: self.case_insensitive,
+            ph: PhantomData,
         }
     }
 
@@ -335,20 +369,19 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::default()
+    ///     let app = App::new()
     ///         .middleware(middleware::Logger::default())
     ///         .route("/index.html", web::get().to(index));
     /// }
     /// ```
-    pub fn middleware<U>(self, mw: U) -> App<St, WebStack<St, M, U>, F> {
+    pub fn middleware<U>(self, mw: U) -> App<St, In, Out, WebStack<St, M, U>, F> {
         App {
             middleware: WebStack::new(self.middleware, mw),
             filter: self.filter,
-            services: self.services,
-            default: self.default,
             config: self.config,
             external: self.external,
             case_insensitive: self.case_insensitive,
+            ph: PhantomData,
         }
     }
 
@@ -362,18 +395,131 @@ where
     }
 }
 
-impl<St, M, F> App<St, M, F>
+impl<St, In, Out, M, F> AppServices<St, In, Out, M, F>
 where
     St: AppState,
-    M: Middleware<AppRouter<St, F::Service>, St> + 'static,
-    M::Service: Service<St, WebRequest, Res = WebResponse, Error = WebError<St, St::Error>>,
+    Out: 'static,
     F: ServiceFactory<
             St,
-            WebRequest,
-            Res = WebRequest,
+            WebRequest<In>,
+            Res = WebRequest<Out>,
             Error = WebError<St, St::Error>,
             InitError = Failure,
         >,
+{
+    #[must_use]
+    /// Configure route for a specific path.
+    ///
+    /// This is a simplified version of the `App::service()` method.
+    /// This method can be used multiple times with same path, in that case
+    /// multiple resources with one route would be registered for same resource path.
+    ///
+    /// ```rust
+    /// use ntex::web::{self, App, HttpResponse};
+    ///
+    /// async fn index(data: web::types::Path<(String, String)>) -> &'static str {
+    ///     "Welcome!"
+    /// }
+    ///
+    /// fn main() {
+    ///     let app = App::new()
+    ///         .route("/test1", web::get().to(index))
+    ///         .route("/test2", web::post().to(async || { HttpResponse::MethodNotAllowed() }));
+    /// }
+    /// ```
+    pub fn route(self, path: &str, mut route: Route<St, Out>) -> Self {
+        self.service(
+            Resource::new(path)
+                .add_guards(route.take_guards())
+                .route(route),
+        )
+    }
+
+    #[must_use]
+    /// Register http service.
+    ///
+    /// Http service is any type that implements `WebServiceFactory` trait.
+    ///
+    /// ntex provides several services implementations:
+    ///
+    /// * `Resource` is an entry in resource table which corresponds to requested URL.
+    /// * `Scope` is a set of resources with common root path.
+    /// * `StaticFiles` is a service for static files support
+    pub fn service<S>(mut self, factory: S) -> Self
+    where
+        S: WebServiceFactory<St, Out> + 'static,
+    {
+        self.services
+            .push(Box::new(ServiceFactoryWrapper::new(factory)));
+        self
+    }
+
+    #[must_use]
+    /// Default service to be used if no matching resource could be found.
+    ///
+    /// It is possible to use services like `Resource`, `Route`.
+    ///
+    /// ```rust
+    /// use ntex::web::{self, App, HttpResponse};
+    ///
+    /// async fn index() -> &'static str {
+    ///     "Welcome!"
+    /// }
+    ///
+    /// fn main() {
+    ///     let app = App::new()
+    ///         .service(
+    ///             web::resource("/index.html").route(web::get().to(index)))
+    ///         .default_service(
+    ///             web::route().to(async || { HttpResponse::NotFound() }));
+    /// }
+    /// ```
+    ///
+    /// It is also possible to use static files as default service.
+    ///
+    /// ```rust
+    /// use ntex::web::{self, App, HttpResponse};
+    ///
+    /// fn main() {
+    ///     let app = App::new()
+    ///         .service(
+    ///             web::resource("/index.html").to(async || { HttpResponse::Ok() }))
+    ///         .default_service(
+    ///             web::to(async || { HttpResponse::NotFound() })
+    ///         );
+    /// }
+    /// ```
+    pub fn default_service<U>(mut self, f: impl IntoServiceFactory<U, St, WebRequest<Out>>) -> Self
+    where
+        U: ServiceFactory<St, WebRequest<Out>, Res = WebResponse> + 'static,
+        U::Error: WebResponseError<St, St::Error>,
+        U::InitError: IntoFailure,
+    {
+        // create and configure default resource
+        self.default = Some(HttpService::new(
+            f.into_factory()
+                .map_err(WebError::from_err)
+                .map_init_err(IntoFailure::fail),
+        ));
+
+        self
+    }
+}
+
+impl<St, In, Out, M, F> AppServices<St, In, Out, M, F>
+where
+    St: AppState,
+    In: 'static,
+    Out: 'static,
+    F: ServiceFactory<
+            St,
+            WebRequest<In>,
+            Res = WebRequest<Out>,
+            Error = WebError<St, St::Error>,
+            InitError = Failure,
+        >,
+    M: Middleware<AppRouter<St, In, Out, F::Service>, St> + 'static,
+    M::Service: Service<St, WebRequest<()>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
     /// Construct service factory, suitable for `http::HttpService`.
     ///
@@ -384,7 +530,7 @@ where
     /// async fn main() -> std::io::Result<()> {
     ///     server::build().bind("http", "127.0.0.1:0", SharedCfg::default(), async |_|
     ///         http::HttpService::new(
-    ///             web::App::default()
+    ///             web::App::new()
     ///                 .route("/index.html", web::get().to(async || { "hello_world" }))
     ///         )
     ///     )?
@@ -401,24 +547,27 @@ where
         Error = WebError<St, St::Error>,
         InitError = Failure,
     > {
-        IntoServiceFactory::<AppFactory<St, M, F>, St, Request>::into_factory(self)
+        IntoServiceFactory::<AppFactory<St, In, Out, M, F>, St, Request>::into_factory(self)
     }
 }
 
-impl<St, M, F> IntoServiceFactory<AppFactory<St, M, F>, St, Request> for App<St, M, F>
+impl<St, In, Out, M, F> IntoServiceFactory<AppFactory<St, In, Out, M, F>, St, Request>
+    for AppServices<St, In, Out, M, F>
 where
     St: AppState,
-    M: Middleware<AppRouter<St, F::Service>, St> + 'static,
-    M::Service: Service<St, WebRequest, Res = WebResponse, Error = WebError<St, St::Error>>,
+    In: 'static,
+    Out: 'static,
     F: ServiceFactory<
             St,
-            WebRequest,
-            Res = WebRequest,
+            WebRequest<In>,
+            Res = WebRequest<Out>,
             Error = WebError<St, St::Error>,
             InitError = Failure,
         >,
+    M: Middleware<AppRouter<St, In, Out, F::Service>, St> + 'static,
+    M::Service: Service<St, WebRequest<()>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
-    fn into_factory(self) -> AppFactory<St, M, F> {
+    fn into_factory(self) -> AppFactory<St, In, Out, M, F> {
         AppFactory::new(
             self.middleware,
             self.filter,
@@ -442,7 +591,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_default_resource() {
-        let srv = App::default()
+        let srv = App::new()
             .service(web::resource("/test").to(async || HttpResponse::Ok()))
             .build()
             .pipeline(())
@@ -456,16 +605,16 @@ mod tests {
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
-        let srv = App::default()
+        let srv = App::new()
             .service(web::resource("/test").to(async || HttpResponse::Ok()))
             .service(
                 web::resource("/test2")
-                    .default_service(async move |r: WebRequest| {
+                    .default_service(async move |r: WebRequest<()>| {
                         Ok::<_, Infallible>(r.into_response(HttpResponse::Created()))
                     })
                     .route(web::get().to(async || HttpResponse::Ok())),
             )
-            .default_service(async move |r: WebRequest| {
+            .default_service(async move |r: WebRequest<()>| {
                 Ok::<_, Infallible>(r.into_response(HttpResponse::MethodNotAllowed()))
             })
             .build()
@@ -494,7 +643,7 @@ mod tests {
         let filter2 = filter.clone();
         let srv = init_service(
             App::new()
-                .filter(async move |req: WebRequest| {
+                .filter(async move |req: WebRequest<()>| {
                     filter2.set(true);
                     Ok::<_, Infallible>(req)
                 })
@@ -531,11 +680,11 @@ mod tests {
     async fn test_router_wrap() {
         let srv = init_service(
             App::new()
-                .route("/test", web::get().to(async || HttpResponse::Ok()))
                 .middleware(
                     DefaultHeaders::new()
                         .header(header::CONTENT_TYPE, HeaderValue::from_static("0001")),
-                ),
+                )
+                .route("/test", web::get().to(async || HttpResponse::Ok())),
         )
         .await;
         let req = TestRequest::with_uri("/test").to_request();
@@ -571,7 +720,7 @@ mod tests {
         let srv = init_service(
             App::new()
                 .config(cfg)
-                .filter(async move |req: WebRequest| {
+                .filter(async move |req: WebRequest<()>| {
                     assert_eq!(*req.app_state::<usize>().unwrap(), 10);
                     Ok::<_, Infallible>(req)
                 })

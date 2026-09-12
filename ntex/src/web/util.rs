@@ -42,13 +42,13 @@ use super::{AppState, HttpResponse, HttpResponseBuilder, WebResponseError};
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::default().service(
+/// let app = web::App::new().service(
 ///     web::resource("/users/{userid}/{friend}")
 ///         .route(web::get().to(async || { web::HttpResponse::Ok() }))
 ///         .route(web::head().to(async || { web::HttpResponse::MethodNotAllowed() }))
 /// );
 /// ```
-pub fn resource<St: AppState, T: IntoPattern>(path: T) -> Resource<St> {
+pub fn resource<St: AppState, In: 'static, T: IntoPattern>(path: T) -> Resource<St, In> {
     Resource::new(path)
 }
 
@@ -60,7 +60,7 @@ pub fn resource<St: AppState, T: IntoPattern>(path: T) -> Resource<St> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::default().service(
+/// let app = web::App::new().service(
 ///     web::scope("/{project_id}")
 ///         .service(web::resource("/path1").to(async || { web::HttpResponse::Ok() }))
 ///         .service(web::resource("/path2").to(async || { web::HttpResponse::Ok() }))
@@ -73,12 +73,12 @@ pub fn resource<St: AppState, T: IntoPattern>(path: T) -> Resource<St> {
 ///  * `/{project_id}/path2`
 ///  * `/{project_id}/path3`
 ///
-pub fn scope<St: AppState, T: IntoPattern>(path: T) -> Scope<St> {
+pub fn scope<St: AppState, In: 'static, T: IntoPattern>(path: T) -> Scope<St, In> {
     Scope::new(path)
 }
 
 /// Create *route* without configuration.
-pub fn route<St: AppState>() -> Route<St> {
+pub fn route<St: AppState, U: 'static>() -> Route<St, U> {
     Route::new()
 }
 
@@ -87,7 +87,7 @@ pub fn route<St: AppState>() -> Route<St> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::default().service(
+/// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
 ///        .route(web::get().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -96,7 +96,7 @@ pub fn route<St: AppState>() -> Route<St> {
 /// In the above example, one `GET` route gets added:
 ///  * `/{project_id}`
 ///
-pub fn get<St: AppState>() -> Route<St> {
+pub fn get<St: AppState, U: 'static>() -> Route<St, U> {
     method(Method::GET)
 }
 
@@ -105,7 +105,7 @@ pub fn get<St: AppState>() -> Route<St> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::default().service(
+/// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::post().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -114,7 +114,7 @@ pub fn get<St: AppState>() -> Route<St> {
 /// In the above example, one `POST` route gets added:
 ///  * `/{project_id}`
 ///
-pub fn post<St: AppState>() -> Route<St> {
+pub fn post<St: AppState, U: 'static>() -> Route<St, U> {
     method(Method::POST)
 }
 
@@ -123,7 +123,7 @@ pub fn post<St: AppState>() -> Route<St> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::default().service(
+/// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::put().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -132,7 +132,7 @@ pub fn post<St: AppState>() -> Route<St> {
 /// In the above example, one `PUT` route gets added:
 ///  * `/{project_id}`
 ///
-pub fn put<St: AppState>() -> Route<St> {
+pub fn put<St: AppState, U: 'static>() -> Route<St, U> {
     method(Method::PUT)
 }
 
@@ -141,7 +141,7 @@ pub fn put<St: AppState>() -> Route<St> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::default().service(
+/// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::patch().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -150,7 +150,7 @@ pub fn put<St: AppState>() -> Route<St> {
 /// In the above example, one `PATCH` route gets added:
 ///  * `/{project_id}`
 ///
-pub fn patch<St: AppState>() -> Route<St> {
+pub fn patch<St: AppState, U: 'static>() -> Route<St, U> {
     method(Method::PATCH)
 }
 
@@ -159,7 +159,7 @@ pub fn patch<St: AppState>() -> Route<St> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::default().service(
+/// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::delete().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -168,7 +168,7 @@ pub fn patch<St: AppState>() -> Route<St> {
 /// In the above example, one `DELETE` route gets added:
 ///  * `/{project_id}`
 ///
-pub fn delete<St: AppState>() -> Route<St> {
+pub fn delete<St: AppState, U: 'static>() -> Route<St, U> {
     method(Method::DELETE)
 }
 
@@ -177,7 +177,7 @@ pub fn delete<St: AppState>() -> Route<St> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::default().service(
+/// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::head().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -186,7 +186,7 @@ pub fn delete<St: AppState>() -> Route<St> {
 /// In the above example, one `HEAD` route gets added:
 ///  * `/{project_id}`
 ///
-pub fn head<St: AppState>() -> Route<St> {
+pub fn head<St: AppState, U: 'static>() -> Route<St, U> {
     method(Method::HEAD)
 }
 
@@ -195,7 +195,7 @@ pub fn head<St: AppState>() -> Route<St> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::default().service(
+/// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::query().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -204,7 +204,7 @@ pub fn head<St: AppState>() -> Route<St> {
 /// In the above example, one `QUERY` route gets added:
 ///  * `/{project_id}`
 ///
-pub fn query<St: AppState>() -> Route<St> {
+pub fn query<St: AppState, U: 'static>() -> Route<St, U> {
     method(Method::QUERY)
 }
 
@@ -213,7 +213,7 @@ pub fn query<St: AppState>() -> Route<St> {
 /// ```rust
 /// use ntex::{http, web};
 ///
-/// let app = web::App::default().service(
+/// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::method(http::Method::GET).to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -222,7 +222,7 @@ pub fn query<St: AppState>() -> Route<St> {
 /// In the above example, one `GET` route gets added:
 ///  * `/{project_id}`
 ///
-pub fn method<St: AppState>(method: Method) -> Route<St> {
+pub fn method<St: AppState, U: 'static>(method: Method) -> Route<St, U> {
     Route::default().method(method)
 }
 
@@ -235,13 +235,14 @@ pub fn method<St: AppState>(method: Method) -> Route<St> {
 ///    web::HttpResponse::Ok().build()
 /// }
 ///
-/// web::App::default().service(
+/// web::App::new().service(
 ///     web::resource("/").route(web::to(index))
 /// );
 /// ```
-pub fn to<St, F, Args>(handler: F) -> Route<St>
+pub fn to<St, U, F, Args>(handler: F) -> Route<St, U>
 where
     St: AppState,
+    U: 'static,
     F: Handler<St, Args> + 'static,
     Args: FromRequest<St> + 'static,
     Args::Error: WebResponseError<St, St::Error>,
@@ -259,7 +260,7 @@ where
 ///     Ok(req.into_response(HttpResponse::Ok().build()))
 /// }
 ///
-/// let app = App::default().service(
+/// let app = App::new().service(
 ///     web::service("/users/*")
 ///         .guard(guard::Header("content-type", "text/plain"))
 ///         .build(my_service)

@@ -4,7 +4,7 @@ use super::{AppState, FromRequest, Responder, WebRequest, WebResponse, WebRespon
 use crate::util::BoxFuture;
 
 /// Async fn handler
-pub trait Handler<St, T>
+pub trait Handler<St, T>: 'static
 where
     St: AppState,
 {
@@ -15,7 +15,7 @@ where
 
 impl<St, F, R> Handler<St, ()> for F
 where
-    F: AsyncFn() -> R,
+    F: AsyncFn() -> R + 'static,
     R: Responder<St>,
     St: AppState,
 {
@@ -27,16 +27,16 @@ where
     }
 }
 
-pub(super) trait HandlerFn<St: AppState>: fmt::Debug {
-    fn call<'a>(&'a self, _: &'a St, _: WebRequest) -> BoxFuture<'a, WebResponse>;
+pub(super) trait HandlerFn<St: AppState, U>: fmt::Debug {
+    fn call<'a>(&'a self, _: &'a St, _: WebRequest<U>) -> BoxFuture<'a, WebResponse>;
 }
 
-pub(super) struct HandlerWrapper<St, F, T> {
+pub(super) struct HandlerWrapper<St, U, F, T> {
     hnd: F,
-    _t: PhantomData<(St, T)>,
+    _t: PhantomData<(St, U, T)>,
 }
 
-impl<St, F, T> HandlerWrapper<St, F, T> {
+impl<St, U, F, T> HandlerWrapper<St, U, F, T> {
     pub(super) fn new(hnd: F) -> Self {
         HandlerWrapper {
             hnd,
@@ -45,22 +45,22 @@ impl<St, F, T> HandlerWrapper<St, F, T> {
     }
 }
 
-impl<St, F, T> fmt::Debug for HandlerWrapper<St, F, T> {
+impl<St, U, F, T> fmt::Debug for HandlerWrapper<St, U, F, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Handler({:?})", std::any::type_name::<F>())
     }
 }
 
-impl<St, F, T> HandlerFn<St> for HandlerWrapper<St, F, T>
+impl<St, U, F, T> HandlerFn<St, U> for HandlerWrapper<St, U, F, T>
 where
     F: Handler<St, T> + 'static,
     T: FromRequest<St> + 'static,
     T::Error: WebResponseError<St, St::Error>,
     St: AppState,
 {
-    fn call<'a>(&'a self, st: &'a St, req: WebRequest) -> BoxFuture<'a, WebResponse> {
+    fn call<'a>(&'a self, st: &'a St, req: WebRequest<U>) -> BoxFuture<'a, WebResponse> {
         Box::pin(async move {
-            let (req, mut payload) = req.into_parts();
+            let (req, mut payload, _reqst) = req.into_parts();
             let param = match T::from_request(st, &req, &mut payload).await {
                 Ok(param) => param,
                 Err(e) => return WebResponse::from_err(st, e, req),
@@ -80,6 +80,7 @@ macro_rules! factory_tuple (
         impl<St, Func, $($T,)+ Res> Handler<St, ($($T,)+)> for Func
         where
             St: AppState,
+            Func: 'static,
             Func: AsyncFn($($T,)+) -> Res,
             Res: Responder<St>,
         {

@@ -27,7 +27,7 @@ where
     St: AppState,
     Inner: Middleware<S, St>,
     Outer: Middleware<Inner::Service, St>,
-    Outer::Service: Service<St, WebRequest, Res = WebResponse>,
+    // Outer::Service: Service<St, WebRequest<In>, Res = WebResponse>,
 {
     type Service = WebMiddleware<Outer::Service, St>;
 
@@ -57,9 +57,9 @@ where
     }
 }
 
-impl<S, St> Service<St, WebRequest> for WebMiddleware<S, St>
+impl<S, St, In> Service<St, WebRequest<In>> for WebMiddleware<S, St>
 where
-    S: Service<St, WebRequest, Res = WebResponse>,
+    S: Service<St, WebRequest<In>, Res = WebResponse>,
     S::Error: WebResponseError<St, St::Error>,
     St: AppState,
 {
@@ -69,7 +69,7 @@ where
     #[inline]
     async fn call(
         &self,
-        req: WebRequest,
+        req: WebRequest<In>,
         ctx: Ctx<'_, Self, St>,
     ) -> Result<Self::Res, Self::Error> {
         ctx.call(&self.svc, req).await.map_err(WebError::from_err)
@@ -81,19 +81,19 @@ where
 
 #[derive(derive_more::Debug)]
 #[debug("Filter")]
-pub struct Filter<St>(PhantomData<St>);
+pub struct Filter<St, In>(PhantomData<(St, In)>);
 
-impl<St> Filter<St> {
+impl<St, In> Filter<St, In> {
     pub(super) fn new() -> Self {
         Filter(PhantomData)
     }
 }
 
-impl<St: AppState> ServiceFactory<St, WebRequest> for Filter<St> {
-    type Res = WebRequest;
+impl<St: AppState, In> ServiceFactory<St, WebRequest<In>> for Filter<St, In> {
+    type Res = WebRequest<In>;
     type Error = WebError<St, St::Error>;
 
-    type Service = Filter<St>;
+    type Service = Filter<St, In>;
     type InitError = Failure;
 
     async fn create(&self, _: &St) -> Result<Self::Service, Self::InitError> {
@@ -101,11 +101,15 @@ impl<St: AppState> ServiceFactory<St, WebRequest> for Filter<St> {
     }
 }
 
-impl<St: AppState> Service<St, WebRequest> for Filter<St> {
-    type Res = WebRequest;
+impl<St: AppState, In> Service<St, WebRequest<In>> for Filter<St, In> {
+    type Res = WebRequest<In>;
     type Error = WebError<St, St::Error>;
 
-    async fn call(&self, req: WebRequest, _: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
+    async fn call(
+        &self,
+        req: WebRequest<In>,
+        _: Ctx<'_, Self, St>,
+    ) -> Result<Self::Res, Self::Error> {
         Ok(req)
     }
 }

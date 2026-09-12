@@ -16,7 +16,7 @@ use crate::web::{AppState, BodyEncoding, WebRequest, WebResponse};
 /// use ntex::web::{self, middleware, App, HttpResponse};
 ///
 /// fn main() {
-///     let app = App::default()
+///     let app = App::new()
 ///         .middleware(middleware::Compress::default())
 ///         .service(
 ///             web::resource("/test")
@@ -59,9 +59,9 @@ pub struct CompressMiddleware<S> {
     encoding: ContentEncoding,
 }
 
-impl<S, St> Service<St, WebRequest> for CompressMiddleware<S>
+impl<S, St, In> Service<St, WebRequest<In>> for CompressMiddleware<S>
 where
-    S: Service<St, WebRequest, Res = WebResponse>,
+    S: Service<St, WebRequest<In>, Res = WebResponse>,
     St: AppState,
 {
     type Res = WebResponse;
@@ -70,7 +70,11 @@ where
     crate::forward_ready!(St, service);
     crate::forward_shutdown!(St, service);
 
-    async fn call(&self, req: WebRequest, ctx: Ctx<'_, Self, St>) -> Result<WebResponse, S::Error> {
+    async fn call(
+        &self,
+        req: WebRequest<In>,
+        ctx: Ctx<'_, Self, St>,
+    ) -> Result<WebResponse, S::Error> {
         // negotiate content-encoding
         let encoding = if let Some(val) = req.headers().get(&ACCEPT_ENCODING) {
             if let Ok(enc) = val.to_str() {

@@ -304,7 +304,7 @@ where
     T: std::fmt::Debug + std::fmt::Display + 'static,
     St: AppState,
 {
-    async fn respond_to(mut self, st: &St, req: &HttpRequest) -> Response {
+    async fn respond_to(mut self, st: &St, _: &HttpRequest) -> Response {
         self.error_response(st)
     }
 }

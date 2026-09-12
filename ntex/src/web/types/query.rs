@@ -39,7 +39,7 @@ use crate::web::{AppState, FromRequest, HttpRequest, error::QueryPayloadError};
 /// }
 ///
 /// fn main() {
-///     let app = web::App::default().service(
+///     let app = web::App::new().service(
 ///        web::resource("/index.html").route(web::get().to(index))); // <- use `Query` extractor
 /// }
 /// ```
@@ -117,7 +117,7 @@ impl<T: fmt::Display> fmt::Display for Query<T> {
 /// }
 ///
 /// fn main() {
-///     let app = web::App::default().service(
+///     let app = web::App::new().service(
 ///        web::resource("/index.html")
 ///            .route(web::get().to(index))); // <- use `Query` extractor
 /// }
@@ -176,12 +176,12 @@ mod tests {
     #[crate::rt_test]
     async fn test_request_extract() {
         let req = TestRequest::with_uri("/name/user1/").to_srv_request();
-        let (req, mut pl) = req.into_parts();
+        let (req, mut pl, ()) = req.into_parts();
         let res = from_request::<_, Query<Id>>(&(), &req, &mut pl).await;
         assert!(res.is_err());
 
         let req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
-        let (req, mut pl) = req.into_parts();
+        let (req, mut pl, ()) = req.into_parts();
 
         let mut s = from_request::<_, Query<Id>>(&(), &req, &mut pl)
             .await

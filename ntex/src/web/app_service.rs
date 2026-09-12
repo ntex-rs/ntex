@@ -1,12 +1,11 @@
-use std::{cell::RefCell, marker, mem, rc::Rc};
+use std::{cell::RefCell, marker::PhantomData, mem, rc::Rc};
 
 use crate::error::Failure;
 use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, ResourceId, Router};
-use crate::service::cfg::{Cfg, Configuration};
-use crate::service::{Ctx, Middleware, Service, ServiceFactory, factory};
-use crate::service::{boxed, dev::ServiceChainFactory};
+use crate::service::{ServiceChainFactory, boxed, cfg::Cfg, cfg::Configuration};
 use crate::util::HashMap;
+use crate::{Ctx, Middleware, Service, ServiceFactory, factory};
 
 use super::config::WebAppConfig;
 use super::guard::Guard;
@@ -20,43 +19,47 @@ type Guards = Vec<Box<dyn Guard>>;
 /// It also executes state factories.
 #[derive(derive_more::Debug)]
 #[debug("AppFactory")]
-pub struct AppFactory<St, M, F>
+pub struct AppFactory<St, In, Out, M, F>
 where
     St: AppState,
     F: ServiceFactory<
             St,
-            WebRequest,
-            Res = WebRequest,
+            WebRequest<In>,
+            Res = WebRequest<Out>,
             Error = WebError<St, St::Error>,
             InitError = Failure,
         >,
+    M: Middleware<AppRouter<St, In, Out, F::Service>, St> + 'static,
+    M::Service: Service<St, WebRequest<()>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
     middleware: M,
-    filter: ServiceChainFactory<F, St, WebRequest>,
+    filter: ServiceChainFactory<F, St, WebRequest<In>>,
     rmap: Rc<ResourceMap>,
-    router: Rc<Router<HttpService<St>, Guards>>,
-    default: HttpService<St>,
+    router: Rc<Router<HttpService<St, Out>, Guards>>,
+    default: HttpService<St, Out>,
     config: Option<Cfg<WebAppConfig>>,
 }
 
-impl<St, M, F> AppFactory<St, M, F>
+impl<St, In, Out, M, F> AppFactory<St, In, Out, M, F>
 where
     St: AppState,
-    M: Middleware<AppRouter<St, F::Service>, St> + 'static,
-    M::Service: Service<St, WebRequest, Res = WebResponse, Error = WebError<St, St::Error>>,
+    In: 'static,
+    Out: 'static,
     F: ServiceFactory<
             St,
-            WebRequest,
-            Res = WebRequest,
+            WebRequest<In>,
+            Res = WebRequest<Out>,
             Error = WebError<St, St::Error>,
             InitError = Failure,
         >,
+    M: Middleware<AppRouter<St, In, Out, F::Service>, St> + 'static,
+    M::Service: Service<St, WebRequest<()>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
     pub(super) fn new(
         middleware: M,
-        filter: ServiceChainFactory<F, St, WebRequest>,
-        services: Vec<Box<dyn AppServiceFactory<St>>>,
-        default: Option<HttpService<St>>,
+        filter: ServiceChainFactory<F, St, WebRequest<In>>,
+        services: Vec<Box<dyn AppServiceFactory<St, Out>>>,
+        default: Option<HttpService<St, Out>>,
         config: Option<Cfg<WebAppConfig>>,
         external: Vec<ResourceDef>,
         case_insensitive: bool,
@@ -64,7 +67,7 @@ where
         // Default service
         let default = default.unwrap_or_else(|| {
             boxed::factory(
-                factory(async move |req: WebRequest| {
+                factory(async move |req: WebRequest<Out>| {
                     Ok(req.into_response(Response::NotFound().build()))
                 })
                 .map_init_err(|_| unreachable!()),
@@ -72,7 +75,7 @@ where
         });
 
         // Web app config
-        let mut cfg = WebServiceConfig::new(default);
+        let mut cfg = WebServiceConfig::new();
 
         // register services
         for mut srv in services {
@@ -86,7 +89,7 @@ where
         }
 
         // Complete pipeline creation
-        let (services, default) = cfg.into_services();
+        let services = cfg.into_services();
         let services: Vec<_> = services
             .into_iter()
             .map(|(mut rdef, srv, guards, nested)| {
@@ -111,53 +114,51 @@ where
         Self {
             rmap,
             filter,
-            middleware,
             default,
             config,
+            middleware,
             router: Rc::new(router.build()),
         }
     }
 }
 
-impl<St, M, F> ServiceFactory<St, Request> for AppFactory<St, M, F>
+impl<St, In, Out, M, F> ServiceFactory<St, Request> for AppFactory<St, In, Out, M, F>
 where
     St: AppState,
-    M: Middleware<AppRouter<St, F::Service>, St> + 'static,
-    M::Service: Service<St, WebRequest, Res = WebResponse, Error = WebError<St, St::Error>>,
+    In: 'static,
+    Out: 'static,
     F: ServiceFactory<
             St,
-            WebRequest,
-            Res = WebRequest,
+            WebRequest<In>,
+            Res = WebRequest<Out>,
             Error = WebError<St, St::Error>,
             InitError = Failure,
         >,
+    M: Middleware<AppRouter<St, In, Out, F::Service>, St> + 'static,
+    M::Service: Service<St, WebRequest<()>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
     type Res = Response;
     type Error = WebError<St, St::Error>;
 
-    type Service = AppService<M::Service, St>;
+    type Service = AppService<St, M::Service>;
     type InitError = Failure;
 
     async fn create(&self, st: &St) -> Result<Self::Service, Self::InitError> {
-        let filter = self.filter.create(st).await?;
-
         // main service
-        let service = self.middleware.create(
-            st,
-            AppRouter {
-                filter,
-                router: self.router.clone(),
-                default: self.default.clone(),
-                cache: RefCell::new(HashMap::default()),
-                cache_default: RefCell::new(None),
-            },
-        );
+        let service = AppRouter {
+            filter: self.filter.create(st).await?,
+            router: self.router.clone(),
+            default: self.default.clone(),
+            cache: RefCell::new(HashMap::default()),
+            cache_default: RefCell::new(None),
+            ph: PhantomData,
+        };
 
         Ok(AppService {
-            service,
+            service: self.middleware.create(st, service),
             rmap: self.rmap.clone(),
             config: self.config.clone(),
-            _t: marker::PhantomData,
+            _t: PhantomData,
         })
     }
 }
@@ -165,29 +166,29 @@ where
 /// Service to convert `Request` to a `WebRequest`
 #[derive(derive_more::Debug)]
 #[debug("AppService")]
-pub struct AppService<S, St>
+pub struct AppService<St, F>
 where
-    S: Service<St, WebRequest, Res = WebResponse, Error = WebError<St, St::Error>>,
     St: AppState,
+    F: Service<St, WebRequest<()>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
-    service: S,
+    service: F,
     rmap: Rc<ResourceMap>,
     config: Option<Cfg<WebAppConfig>>,
-    _t: marker::PhantomData<St>,
+    _t: PhantomData<St>,
 }
 
-impl<S, St> Service<St, Request> for AppService<S, St>
+impl<St, F> Service<St, Request> for AppService<St, F>
 where
-    S: Service<St, WebRequest, Res = WebResponse, Error = WebError<St, St::Error>>,
     St: AppState,
+    F: Service<St, WebRequest<()>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
     type Res = Response;
-    type Error = S::Error;
+    type Error = F::Error;
 
     crate::forward_ready!(St, service);
     crate::forward_shutdown!(St, service);
 
-    async fn call(&self, req: Request, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, S::Error> {
+    async fn call(&self, req: Request, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, F::Error> {
         let config: Cfg<WebAppConfig> = if let Some(cfg) = &self.config {
             cfg.clone()
         } else if let Some(io) = req.io() {
@@ -206,7 +207,10 @@ where
         } else {
             HttpRequest::new(Path::new(head.uri.clone()), head, self.rmap.clone(), config)
         };
-        match ctx.call(&self.service, WebRequest::new(req, payload)).await {
+        match ctx
+            .call(&self.service, WebRequest::new(req, payload, ()))
+            .await
+        {
             Ok(r) => Ok(r.into()),
             Err(mut e) => Ok(e.0.error_response(ctx.st())),
         }
@@ -215,19 +219,21 @@ where
 
 /// Web app service.
 #[derive(derive_more::Debug)]
-#[debug("HttpRouter")]
-pub struct AppRouter<St: AppState, F> {
+#[debug("AppRouter")]
+pub struct AppRouter<St: AppState, In, Out, F> {
     pub(super) filter: F,
-    pub(super) router: Rc<Router<HttpService<St>, Guards>>,
-    pub(super) default: HttpService<St>,
-    pub(super) cache: RefCell<HashMap<ResourceId, HttpHandler<St>>>,
-    pub(super) cache_default: RefCell<Option<HttpHandler<St>>>,
+    pub(super) router: Rc<Router<HttpService<St, Out>, Guards>>,
+    pub(super) default: HttpService<St, Out>,
+    pub(super) cache: RefCell<HashMap<ResourceId, HttpHandler<St, Out>>>,
+    pub(super) cache_default: RefCell<Option<HttpHandler<St, Out>>>,
+    pub(super) ph: PhantomData<In>,
 }
 
-impl<St, F> Service<St, WebRequest> for AppRouter<St, F>
+impl<St, In, Out, F> Service<St, WebRequest<In>> for AppRouter<St, In, Out, F>
 where
     St: AppState,
-    F: Service<St, WebRequest, Res = WebRequest, Error = WebError<St, St::Error>>,
+    Out: 'static,
+    F: Service<St, WebRequest<In>, Res = WebRequest<Out>, Error = WebError<St, St::Error>>,
 {
     type Res = WebResponse;
     type Error = WebError<St, St::Error>;
@@ -239,7 +245,7 @@ where
 
     async fn call(
         &self,
-        req: WebRequest,
+        req: WebRequest<In>,
         ctx: Ctx<'_, Self, St>,
     ) -> Result<Self::Res, Self::Error> {
         let mut req = ctx.call(&self.filter, req).await?;

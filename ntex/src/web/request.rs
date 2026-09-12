@@ -16,44 +16,56 @@ use super::{AppState, HttpRequest, WebResponse};
 /// An service http request
 ///
 /// `WebRequest` allows mutable access to request's internal structures
-pub struct WebRequest {
+pub struct WebRequest<St = ()> {
     pub(crate) req: HttpRequest,
     payload: Payload,
+    state: St,
 }
 
-impl WebRequest {
+impl<St> WebRequest<St> {
+    /// Construct web request
+    pub(crate) fn new(req: HttpRequest, payload: Payload, state: St) -> Self {
+        WebRequest {
+            req,
+            payload,
+            state,
+        }
+    }
+
     /// Create web response for error
     #[inline]
-    pub fn error_response<St, E>(self, st: &St, mut err: E) -> WebResponse
+    pub fn error_response<AppSt, E>(self, st: &AppSt, mut err: E) -> WebResponse
     where
-        St: AppState,
-        E: WebResponseError<St, St::Error>,
+        AppSt: AppState,
+        E: WebResponseError<AppSt, AppSt::Error>,
     {
         WebResponse::new(err.error_response(st), self.req)
     }
 }
 
-impl WebRequest {
-    /// Construct web request
-    pub(crate) fn new(req: HttpRequest, payload: Payload) -> Self {
-        WebRequest { req, payload }
-    }
-
-    /// Deconstruct request into parts
-    pub fn into_parts(self) -> (HttpRequest, Payload) {
-        (self.req, self.payload)
-    }
-
-    /// Construct request from parts.
-    pub fn from_parts(req: HttpRequest, payload: Payload) -> Self {
-        WebRequest { req, payload }
-    }
-
+impl WebRequest<()> {
     /// Construct request from request.
     pub fn from_request(req: HttpRequest) -> Self {
         WebRequest {
             req,
             payload: Payload::None,
+            state: (),
+        }
+    }
+}
+
+impl<St> WebRequest<St> {
+    /// Deconstruct request into parts
+    pub fn into_parts(self) -> (HttpRequest, Payload, St) {
+        (self.req, self.payload, self.state)
+    }
+
+    /// Construct request from parts.
+    pub fn from_parts(req: HttpRequest, payload: Payload, state: St) -> Self {
+        WebRequest {
+            req,
+            payload,
+            state,
         }
     }
 
@@ -191,9 +203,38 @@ impl WebRequest {
     pub fn extensions_mut(&self) -> RefMut<'_, Extensions> {
         self.req.extensions_mut()
     }
+
+    /// Get request state ref.
+    pub fn st(&self) -> &St {
+        &self.state
+    }
+
+    /// Get request state mut ref
+    pub fn st_mut(&mut self) -> &mut St {
+        &mut self.state
+    }
+
+    #[inline]
+    /// Map request state to a new state.
+    pub fn map_state<F, NewSt>(self, f: F) -> WebRequest<NewSt>
+    where
+        F: FnOnce(St) -> NewSt,
+    {
+        let WebRequest {
+            req,
+            payload,
+            state,
+        } = self;
+
+        WebRequest {
+            req,
+            payload,
+            state: f(state),
+        }
+    }
 }
 
-impl Resource<Uri> for WebRequest {
+impl<St> Resource<Uri> for WebRequest<St> {
     fn path(&self) -> &str {
         self.match_info().path()
     }
@@ -203,7 +244,7 @@ impl Resource<Uri> for WebRequest {
     }
 }
 
-impl HttpMessage for WebRequest {
+impl<St> HttpMessage for WebRequest<St> {
     #[inline]
     /// Returns Request's headers.
     fn message_headers(&self) -> &HeaderMap {
@@ -223,7 +264,7 @@ impl HttpMessage for WebRequest {
     }
 }
 
-impl fmt::Debug for WebRequest {
+impl<St> fmt::Debug for WebRequest<St> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
@@ -264,9 +305,6 @@ mod tests {
 
         let res: HttpResponse = req.error_response::<(), _>(&(), err).into();
         assert_eq!(res.status(), http::StatusCode::PAYLOAD_TOO_LARGE);
-
-        let req = TestRequest::default().to_srv_request();
-        let err = http::error::PayloadError::Overflow;
 
         let mut req = TestRequest::default().to_srv_request();
         req.headers_mut().insert(
