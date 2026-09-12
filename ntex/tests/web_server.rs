@@ -915,3 +915,64 @@ async fn web_no_ws_with_response_payload() {
     let body = response.body().await.unwrap();
     assert_eq!(body, STR);
 }
+
+#[ntex::test]
+async fn test_request_state() {
+    use ntex::{Ctx, Middleware, Service, web::WebRequest, web::WebResponse};
+    use std::convert::Infallible;
+
+    struct UsizeMw;
+    struct UsizeMwS<S>(S);
+
+    impl<S, St> Middleware<S, St> for UsizeMw {
+        type Service = UsizeMwS<S>;
+
+        fn create(&self, _: &St, s: S) -> Self::Service {
+            UsizeMwS(s)
+        }
+    }
+
+    impl<S, St> Service<St, WebRequest> for UsizeMwS<S>
+    where
+        S: Service<St, WebRequest<usize>, Res = WebResponse>,
+    {
+        type Res = WebResponse;
+        type Error = S::Error;
+
+        async fn call(
+            &self,
+            req: WebRequest,
+            ctx: Ctx<'_, Self, St>,
+        ) -> Result<Self::Res, Self::Error> {
+            let req = req.map_state(|()| 100);
+            ctx.call(&self.0, req).await
+        }
+    }
+
+    async fn test() -> Result<HttpResponse, Infallible> {
+        Ok(HttpResponse::Ok().body(STR))
+    }
+
+    let srv = http::test::server(async |_| {
+        http::HttpService::new(
+            App::with()
+                .middleware(UsizeMw)
+                .filter(async |mut req: WebRequest<usize>| {
+                    assert_eq!(*req.st(), 100);
+                    *req.st_mut() = 10;
+                    Ok::<_, Infallible>(req)
+                })
+                .service(
+                    web::resource("/")
+                        .filter(async |req: WebRequest<usize>| {
+                            assert_eq!(*req.st(), 10);
+                            Ok::<_, Infallible>(req)
+                        })
+                        .route(web::get().to(test)),
+                ),
+        )
+    });
+
+    let response = srv.request(Method::GET, "/").send().await.unwrap();
+    assert!(response.status().is_success());
+}
