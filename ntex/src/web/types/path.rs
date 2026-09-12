@@ -25,7 +25,7 @@ use crate::{http::Payload, router::PathDeserializer};
 /// }
 ///
 /// fn main() {
-///     let app = web::App::default().service(
+///     let app = web::App::new().service(
 ///         web::resource("/{username}/{count}/index.html") // <- define path parameters
 ///              .route(web::get().to(index))               // <- register handler with `Path` extractor
 ///     );
@@ -50,7 +50,7 @@ use crate::{http::Payload, router::PathDeserializer};
 /// }
 ///
 /// fn main() {
-///     let app = web::App::default().service(
+///     let app = web::App::new().service(
 ///         web::resource("/{username}/index.html") // <- define path parameters
 ///              .route(web::get().to(index)) // <- use handler with Path` extractor
 ///     );
@@ -120,7 +120,7 @@ impl<T: fmt::Display> fmt::Display for Path<T> {
 /// }
 ///
 /// fn main() {
-///     let app = web::App::default().service(
+///     let app = web::App::new().service(
 ///         web::resource("/{username}/{count}/index.html") // <- define path parameters
 ///              .route(web::get().to(index)) // <- register handler with `Path` extractor
 ///     );
@@ -145,7 +145,7 @@ impl<T: fmt::Display> fmt::Display for Path<T> {
 /// }
 ///
 /// fn main() {
-///     let app = web::App::default().service(
+///     let app = web::App::new().service(
 ///         web::resource("/{username}/index.html") // <- define path parameters
 ///              .route(web::get().to(index)) // <- use handler with Path` extractor
 ///     );

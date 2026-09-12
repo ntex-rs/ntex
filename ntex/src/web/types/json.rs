@@ -39,7 +39,7 @@ use crate::web::{AppState, FromRequest, HttpRequest, Responder};
 /// }
 ///
 /// fn main() {
-///     let app = web::App::default().service(
+///     let app = web::App::new().service(
 ///        web::resource("/index.html").route(
 ///            web::post().to(index))
 ///     );
@@ -149,7 +149,7 @@ where
 /// }
 ///
 /// fn main() {
-///     let app = web::App::default().service(
+///     let app = web::App::new().service(
 ///         web::resource("/index.html").route(
 ///            web::post().to(index))
 ///     );
@@ -213,7 +213,7 @@ where
 ///                 })
 ///     ).into();
 ///
-///     let app = App::default()
+///     let app = App::new()
 ///         .config(cfg)
 ///         .service(web::resource("/index.html")
 ///             .route(web::post().to(index))

@@ -16,7 +16,7 @@ use crate::web::{AppState, BodyEncoding, WebRequest, WebResponse};
 /// use ntex::web::{self, middleware, App, HttpResponse};
 ///
 /// fn main() {
-///     let app = App::default()
+///     let app = App::new()
 ///         .middleware(middleware::Compress::default())
 ///         .service(
 ///             web::resource("/test")

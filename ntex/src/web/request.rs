@@ -16,7 +16,7 @@ use super::{AppState, HttpRequest, WebResponse};
 /// An service http request
 ///
 /// `WebRequest` allows mutable access to request's internal structures
-pub struct WebRequest<St> {
+pub struct WebRequest<St = ()> {
     pub(crate) req: HttpRequest,
     payload: Payload,
     state: St,

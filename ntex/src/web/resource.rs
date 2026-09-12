@@ -27,7 +27,7 @@ use super::{AppState, FromRequest, Handler, HttpHandler, HttpService, WebRequest
 /// use ntex::web::{self, App, HttpResponse};
 ///
 /// fn main() {
-///     let app = App::default().service(
+///     let app = App::new().service(
 ///         web::resource("/")
 ///             .route(web::get().to(async || { HttpResponse::Ok() })));
 /// }
@@ -105,7 +105,7 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::default()
+    ///     let app = App::new()
     ///         .service(
     ///             web::resource("/app")
     ///                 .guard(guard::Header("content-type", "text/plain"))
@@ -192,7 +192,7 @@ where
     /// use ntex::web::{self, guard, App, HttpResponse};
     ///
     /// fn main() {
-    ///     let app = App::default().service(
+    ///     let app = App::new().service(
     ///         web::resource("/").route(
     ///             web::route()
     ///                 .guard(guard::Any(guard::Get()).or(guard::Put()))
@@ -209,7 +209,7 @@ where
     /// use ntex::web::{self, guard, App};
     ///
     /// fn main() {
-    ///     let app = App::default().service(
+    ///     let app = App::new().service(
     ///         web::resource("/container/")
     ///             .route([
     ///                 web::get().to(get_handler),
@@ -254,7 +254,7 @@ where
     ///     unimplemented!()
     /// }
     ///
-    /// App::default().service(web::resource("/").to(index));
+    /// App::new().service(web::resource("/").to(index));
     /// ```
     ///
     /// This is shortcut for:
@@ -262,7 +262,7 @@ where
     /// ```rust
     /// # use ntex::web::{self, *};
     /// # async fn index(req: HttpRequest) -> HttpResponse { unimplemented!() }
-    /// App::default().service(web::resource("/").route(web::route().to(index)));
+    /// App::new().service(web::resource("/").route(web::route().to(index)));
     /// ```
     pub fn to<Args>(self, h: impl Handler<St, Args>) -> ResourceServices<St, In, Out, M, F>
     where
@@ -332,7 +332,7 @@ where
     /// use ntex::web::{self, guard, App, HttpResponse};
     ///
     /// fn main() {
-    ///     let app = App::default().service(
+    ///     let app = App::new().service(
     ///         web::resource("/").route(
     ///             web::route()
     ///                 .guard(guard::Any(guard::Get()).or(guard::Put()))
@@ -349,7 +349,7 @@ where
     /// use ntex::web::{self, guard, App};
     ///
     /// fn main() {
-    ///     let app = App::default().service(
+    ///     let app = App::new().service(
     ///         web::resource("/container/")
     ///             .route([
     ///                 web::get().to(get_handler),
@@ -384,7 +384,7 @@ where
     ///     unimplemented!()
     /// }
     ///
-    /// App::default().service(web::resource("/").to(index));
+    /// App::new().service(web::resource("/").to(index));
     /// ```
     ///
     /// This is shortcut for:
@@ -392,7 +392,7 @@ where
     /// ```rust
     /// # use ntex::web::{self, *};
     /// # async fn index(req: HttpRequest) -> HttpResponse { unimplemented!() }
-    /// App::default().service(web::resource("/").route(web::route().to(index)));
+    /// App::new().service(web::resource("/").route(web::route().to(index)));
     /// ```
     pub fn to<Args>(mut self, handler: impl Handler<St, Args>) -> Self
     where

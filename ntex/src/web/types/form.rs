@@ -167,7 +167,7 @@ where
 ///         .set_state(web::types::FormConfig::default().limit(4097))
 ///         .into();
 ///
-///     let app = App::default()
+///     let app = App::new()
 ///         .config(cfg)
 ///         .service(web::resource("/index.html").route(web::get().to(index)));
 /// }

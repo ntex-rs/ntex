@@ -42,7 +42,7 @@ pub struct AppServices<St: AppState, In, Out, M, F> {
     ph: PhantomData<In>,
 }
 
-impl<In> App<(), In, In> {
+impl App<(), ()> {
     #[must_use]
     /// Create application builder. Application can be configured with a builder-like pattern.
     pub fn new() -> Self {
@@ -145,7 +145,7 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::default()
+    ///     let app = App::new()
     ///         .route("/test1", web::get().to(index))
     ///         .route("/test2", web::post().to(async || { HttpResponse::MethodNotAllowed() }));
     /// }
@@ -197,7 +197,7 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::default()
+    ///     let app = App::new()
     ///         .service(
     ///             web::resource("/index.html").route(web::get().to(index)))
     ///         .default_service(
@@ -211,7 +211,7 @@ where
     /// use ntex::web::{self, App, HttpResponse};
     ///
     /// fn main() {
-    ///     let app = App::default()
+    ///     let app = App::new()
     ///         .service(
     ///             web::resource("/index.html").to(async || { HttpResponse::Ok() }))
     ///         .default_service(
@@ -264,10 +264,10 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::default()
+    ///     let app = App::new()
+    ///         .external_resource("youtube", "https://youtube.com/watch/{video_id}")
     ///         .service(web::resource("/index.html").route(
-    ///             web::get().to(index)))
-    ///         .external_resource("youtube", "https://youtube.com/watch/{video_id}");
+    ///             web::get().to(index)));
     /// }
     /// ```
     pub fn external_resource(mut self, name: impl AsRef<str>, url: impl AsRef<str>) -> Self {
@@ -305,7 +305,7 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::default()
+    ///     let app = App::new()
     ///         .middleware(middleware::Logger::default())
     ///         .route("/index.html", web::get().to(index));
     /// }
@@ -369,7 +369,7 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::default()
+    ///     let app = App::new()
     ///         .middleware(middleware::Logger::default())
     ///         .route("/index.html", web::get().to(index));
     /// }
@@ -422,7 +422,7 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::default()
+    ///     let app = App::new()
     ///         .route("/test1", web::get().to(index))
     ///         .route("/test2", web::post().to(async || { HttpResponse::MethodNotAllowed() }));
     /// }
@@ -467,7 +467,7 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::default()
+    ///     let app = App::new()
     ///         .service(
     ///             web::resource("/index.html").route(web::get().to(index)))
     ///         .default_service(
@@ -481,7 +481,7 @@ where
     /// use ntex::web::{self, App, HttpResponse};
     ///
     /// fn main() {
-    ///     let app = App::default()
+    ///     let app = App::new()
     ///         .service(
     ///             web::resource("/index.html").to(async || { HttpResponse::Ok() }))
     ///         .default_service(
@@ -530,7 +530,7 @@ where
     /// async fn main() -> std::io::Result<()> {
     ///     server::build().bind("http", "127.0.0.1:0", SharedCfg::default(), async |_|
     ///         http::HttpService::new(
-    ///             web::App::default()
+    ///             web::App::new()
     ///                 .route("/index.html", web::get().to(async || { "hello_world" }))
     ///         )
     ///     )?

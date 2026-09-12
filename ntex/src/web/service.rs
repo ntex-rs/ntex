@@ -111,7 +111,7 @@ impl<St: AppState, In: 'static> WebServiceConfig<St, In> {
 ///     Ok(req.into_response(HttpResponse::Ok().build()))
 /// }
 ///
-/// let app = App::default().service(
+/// let app = App::new().service(
 ///     web::service("/users/*")
 ///         .guard(guard::Header("content-type", "text/plain"))
 ///         .build(my_service)
@@ -156,7 +156,7 @@ impl WebServiceAdapter {
     /// }
     ///
     /// fn main() {
-    ///     let app = App::default()
+    ///     let app = App::new()
     ///         .service(
     ///             web::service("/app")
     ///                 .guard(guard::Header("content-type", "text/plain"))

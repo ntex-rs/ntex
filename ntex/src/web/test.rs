@@ -56,7 +56,7 @@ pub fn default_service<St: AppState, In>(
 /// #[ntex::test]
 /// async fn test_init_service() {
 ///     let mut app = test::init_service(
-///         App::default()
+///         App::new()
 ///             .service(web::resource("/test").to(async || { HttpResponse::Ok() }))
 ///     ).await;
 ///
@@ -89,7 +89,7 @@ where
 /// #[ntex::test]
 /// async fn test_response() {
 ///     let mut app = test::init_service(
-///         App::default()
+///         App::new()
 ///             .service(web::resource("/test").to(async || {
 ///                 HttpResponse::Ok()
 ///             }))
@@ -120,7 +120,7 @@ where
 /// #[ntex::test]
 /// async fn test_index() {
 ///     let mut app = test::init_service(
-///         App::default().service(
+///         App::new().service(
 ///             web::resource("/index.html")
 ///                 .route(web::post().to(async || {
 ///                     HttpResponse::Ok().body("welcome!")
@@ -162,7 +162,7 @@ where
 /// #[ntex::test]
 /// async fn test_index() {
 ///     let mut app = test::init_service(
-///         App::default().service(
+///         App::new().service(
 ///             web::resource("/index.html")
 ///                 .route(web::post().to(async || {
 ///                     HttpResponse::Ok().body("welcome!")
@@ -216,7 +216,7 @@ where
 /// #[ntex::test]
 /// async fn test_add_person() {
 ///     let mut app = test::init_service(
-///         App::default().service(
+///         App::new().service(
 ///             web::resource("/people")
 ///                 .route(web::post().to(async |person: web::Json<Person>| {
 ///                     HttpResponse::Ok()
@@ -552,7 +552,7 @@ impl<St> TestRequest<St> {
 /// #[ntex::test]
 /// async fn test_example() {
 ///     let mut srv = test::server(
-///         || App::default().service(
+///         || App::new().service(
 ///                 web::resource("/").to(my_handler))
 ///     );
 ///
@@ -590,7 +590,7 @@ where
 /// #[ntex::test]
 /// async fn test_example() {
 ///     let mut srv = test::server_with(test::config().h1().port(4000), ||
-///         App::default().service(web::resource("/").to(my_handler))
+///         App::new().service(web::resource("/").to(my_handler))
 ///     );
 ///
 ///     let req = srv.get("/");
