@@ -31,16 +31,16 @@ use crate::web::rmap::ResourceMap;
 use crate::web::{AppState, FromRequest, HttpResponse, Responder, WebRequest, WebResponse};
 
 /// Create service that always responds with `HttpResponse::Ok()`
-pub fn ok_service<St: AppState>()
--> impl Service<St, WebRequest, Res = WebResponse, Error = std::convert::Infallible> {
-    default_service::<St>(StatusCode::OK)
+pub fn ok_service<St: AppState, In>()
+-> impl Service<St, WebRequest<In>, Res = WebResponse, Error = std::convert::Infallible> {
+    default_service::<St, In>(StatusCode::OK)
 }
 
 /// Create service that responds with response with specified status code
-pub fn default_service<St: AppState>(
+pub fn default_service<St: AppState, In>(
     status_code: StatusCode,
-) -> impl Service<St, WebRequest, Res = WebResponse, Error = Infallible> {
-    fn_service(async move |req: WebRequest| {
+) -> impl Service<St, WebRequest<In>, Res = WebResponse, Error = Infallible> {
+    fn_service(async move |req: WebRequest<In>| {
         Ok::<_, Infallible>(req.into_response(HttpResponse::builder(status_code).build()))
     })
 }
@@ -295,11 +295,12 @@ pub async fn respond_to<T: Responder>(slf: T, req: &HttpRequest) -> HttpResponse
 /// }
 /// ```
 #[derive(Debug)]
-pub struct TestRequest {
+pub struct TestRequest<St = ()> {
     req: HttpTestRequest,
     rmap: ResourceMap,
     path: Path<Uri>,
     peer_addr: Option<SocketAddr>,
+    state: St,
     config: WebAppConfig,
 }
 
@@ -310,12 +311,12 @@ impl Default for TestRequest {
             rmap: ResourceMap::new(ResourceDef::new("")),
             path: Path::new(Uri::default()),
             peer_addr: None,
+            state: (),
             config: WebAppConfig::new(),
         }
     }
 }
 
-#[allow(clippy::wrong_self_convention)]
 impl TestRequest {
     #[must_use]
     /// Create `TestRequest` and set request uri.
@@ -363,7 +364,9 @@ impl TestRequest {
     pub fn delete() -> TestRequest {
         TestRequest::default().method(Method::DELETE)
     }
+}
 
+impl<St> TestRequest<St> {
     #[must_use]
     /// Set HTTP version of this request.
     pub fn version(mut self, ver: Version) -> Self {
@@ -424,7 +427,7 @@ impl TestRequest {
 
     #[must_use]
     /// Set request payload.
-    pub fn set_payload<B: Into<Bytes>>(mut self, data: B) -> Self {
+    pub fn payload<B: Into<Bytes>>(mut self, data: B) -> Self {
         self.req.set_payload(data);
         self
     }
@@ -433,7 +436,7 @@ impl TestRequest {
     /// Serialize `data` to a URL encoded form and set it as the request payload.
     ///
     /// The `Content-Type` header is set to `application/x-www-form-urlencoded`.
-    pub fn set_form<T: Serialize>(mut self, data: &T) -> Self {
+    pub fn form<T: Serialize>(mut self, data: &T) -> Self {
         let bytes = serde_urlencoded::to_string(data)
             .expect("Failed to serialize test data as a urlencoded form");
         self.req.set_payload(bytes);
@@ -446,7 +449,7 @@ impl TestRequest {
     /// Serialize `data` to JSON and set it as the request payload.
     ///
     /// The `Content-Type` header is set to `application/json`.
-    pub fn set_json<T: Serialize>(mut self, data: &T) -> Self {
+    pub fn json<T: Serialize>(mut self, data: &T) -> Self {
         let bytes = serde_json::to_string(data).expect("Failed to serialize test data to json");
         self.req.set_payload(bytes);
         self.req.header(CONTENT_TYPE, "application/json");
@@ -454,10 +457,23 @@ impl TestRequest {
     }
 
     #[must_use]
+    /// Set request state.
+    pub fn state<NewSt: 'static>(self, state: NewSt) -> TestRequest<NewSt> {
+        TestRequest {
+            state,
+            req: self.req,
+            rmap: self.rmap,
+            path: self.path,
+            peer_addr: self.peer_addr,
+            config: self.config,
+        }
+    }
+
+    #[must_use]
     /// Set application data.
     ///
     /// This is equivalent of `App::data()` method for testing purpose.
-    pub fn state<T: Send + Sync + 'static>(mut self, data: T) -> Self {
+    pub fn app_state<T: Send + Sync + 'static>(mut self, data: T) -> Self {
         self.config = self.config.set_state(data);
         self
     }
@@ -478,7 +494,7 @@ impl TestRequest {
 
     #[must_use]
     /// Complete request creation and generate `WebRequest` instance.
-    pub fn to_srv_request(mut self) -> WebRequest {
+    pub fn to_srv_request(mut self) -> WebRequest<St> {
         let (head, payload) = self.req.build().into_parts();
         *self.path.get_mut() = head.uri.clone();
         let cfg = SharedCfg::new("TEST").add(self.config).build();
@@ -486,6 +502,7 @@ impl TestRequest {
         WebRequest::new(
             HttpRequest::new(self.path, head, Rc::new(self.rmap), cfg.get()),
             payload,
+            self.state,
         )
     }
 
@@ -507,14 +524,14 @@ impl TestRequest {
 
     #[must_use]
     /// Complete request creation and generate `HttpRequest` and `Payload` instances.
-    pub fn to_http_parts(mut self) -> (HttpRequest, Payload) {
+    pub fn to_http_parts(mut self) -> (HttpRequest, Payload, St) {
         let (head, payload) = self.req.build().into_parts();
         *self.path.get_mut() = head.uri.clone();
         let cfg = SharedCfg::new("TEST").add(self.config).build();
 
         let req = HttpRequest::new(self.path, head, Rc::new(self.rmap), cfg.get());
 
-        (req, payload)
+        (req, payload, self.state)
     }
 }
 
@@ -1041,7 +1058,7 @@ mod tests {
             .version(Version::HTTP_2)
             .header(header::DATE, "some date")
             .param("test", "123")
-            .state(20u64)
+            .app_state(20u64)
             .peer_addr("127.0.0.1:8081".parse().unwrap())
             .to_http_request();
         assert!(req.headers().contains_key(header::CONTENT_TYPE));
@@ -1053,7 +1070,7 @@ mod tests {
         assert_eq!(*data, 20);
         assert_eq!(format!("{:?}", StreamType::Tcp), "StreamType::Tcp");
 
-        let (req, pl) = TestRequest::with_header(header::CONTENT_TYPE, "application/json")
+        let (_, pl, ()) = TestRequest::with_header(header::CONTENT_TYPE, "application/json")
             .to_srv_request()
             .into_parts();
         let res = load_stream(pl).await.unwrap();
@@ -1134,7 +1151,7 @@ mod tests {
         let req = TestRequest::post()
             .uri("/people")
             .header(header::CONTENT_TYPE, "application/json")
-            .set_payload(payload)
+            .payload(payload)
             .to_request();
 
         let result: Person = read_response_json(&app, req).await;
@@ -1159,7 +1176,7 @@ mod tests {
 
         let req = TestRequest::post()
             .uri("/people")
-            .set_form(&payload)
+            .form(&payload)
             .to_request();
 
         assert_eq!(req.content_type(), "application/x-www-form-urlencoded");
@@ -1187,7 +1204,7 @@ mod tests {
 
         let req = TestRequest::post()
             .uri("/people")
-            .set_json(&payload)
+            .json(&payload)
             .to_request();
 
         assert_eq!(req.content_type(), "application/json");

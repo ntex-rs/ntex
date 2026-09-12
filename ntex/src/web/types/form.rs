@@ -132,7 +132,7 @@ where
     St: AppState,
     serde_urlencoded::ser::Error: WebResponseError<St, St::Error>,
 {
-    async fn respond_to(self, st: &St, req: &HttpRequest) -> Response {
+    async fn respond_to(self, st: &St, _: &HttpRequest) -> Response {
         let body = match serde_urlencoded::to_string(&self.0) {
             Ok(body) => body,
             Err(mut e) => return e.error_response(st),
@@ -377,10 +377,10 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_form() {
-        let (req, mut pl) =
+        let (req, mut pl, ()) =
             TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(CONTENT_LENGTH, "11")
-                .set_payload(Bytes::from_static(b"hello=world&counter=123"))
+                .payload(Bytes::from_static(b"hello=world&counter=123"))
                 .to_http_parts();
 
         let Form(s) = from_request::<_, Form<Info>>(&(), &req, &mut pl)
@@ -394,10 +394,10 @@ mod tests {
             }
         );
 
-        let (req, mut pl) =
+        let (req, mut pl, ()) =
             TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(CONTENT_LENGTH, "xx")
-                .set_payload(Bytes::from_static(b"hello=world&counter=123"))
+                .payload(Bytes::from_static(b"hello=world&counter=123"))
                 .to_http_parts();
         let res = from_request::<_, Form<Info>>(&(), &req, &mut pl).await;
         assert!(eq(&res.err().unwrap(), &UrlencodedError::UnknownLength));
@@ -405,14 +405,14 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_urlencoded_error() {
-        let (req, mut pl) =
+        let (req, mut pl, ()) =
             TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(CONTENT_LENGTH, "xxxx")
                 .to_http_parts();
         let info = UrlEncoded::<Info>::new(&req, &mut pl).await;
         assert!(eq(&info.err().unwrap(), &UrlencodedError::UnknownLength));
 
-        let (req, mut pl) =
+        let (req, mut pl, ()) =
             TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(CONTENT_LENGTH, "1000000")
                 .to_http_parts();
@@ -422,7 +422,7 @@ mod tests {
             &UrlencodedError::Overflow { size: 0, limit: 0 }
         ));
 
-        let (req, mut pl) = TestRequest::with_header(CONTENT_TYPE, "text/plain")
+        let (req, mut pl, ()) = TestRequest::with_header(CONTENT_TYPE, "text/plain")
             .header(CONTENT_LENGTH, "10")
             .to_http_parts();
         let info = UrlEncoded::<Info>::new(&req, &mut pl).await;
@@ -431,10 +431,10 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_urlencoded() {
-        let (req, mut pl) =
+        let (req, mut pl, ()) =
             TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(CONTENT_LENGTH, "11")
-                .set_payload(Bytes::from_static(b"hello=world&counter=123"))
+                .payload(Bytes::from_static(b"hello=world&counter=123"))
                 .to_http_parts();
 
         let info = UrlEncoded::<Info>::new(&req, &mut pl).await.unwrap();
@@ -446,12 +446,12 @@ mod tests {
             }
         );
 
-        let (req, mut pl) = TestRequest::with_header(
+        let (req, mut pl, ()) = TestRequest::with_header(
             CONTENT_TYPE,
             "application/x-www-form-urlencoded; charset=utf-8",
         )
         .header(CONTENT_LENGTH, "11")
-        .set_payload(Bytes::from_static(b"hello=world&counter=123"))
+        .payload(Bytes::from_static(b"hello=world&counter=123"))
         .to_http_parts();
 
         let info = UrlEncoded::<Info>::new(&req, &mut pl).await.unwrap();
@@ -463,12 +463,12 @@ mod tests {
             }
         );
 
-        let (req, mut pl) = TestRequest::with_header(
+        let (req, mut pl, ()) = TestRequest::with_header(
             CONTENT_TYPE,
             "application/x-www-form-urlencoded; charset=cp1251",
         )
         .header(CONTENT_LENGTH, "11")
-        .set_payload(Bytes::from_static(b"hello=world&counter=123"))
+        .payload(Bytes::from_static(b"hello=world&counter=123"))
         .to_http_parts();
 
         let info = UrlEncoded::<Info>::new(&req, &mut pl).await.unwrap();

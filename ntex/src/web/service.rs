@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{marker::PhantomData, rc::Rc};
 
 use crate::error::{Failure, IntoFailure};
 use crate::router::{IntoPattern, ResourceDef};
@@ -8,12 +8,12 @@ use super::error::{WebError, WebResponseError};
 use super::guard::{AllGuard, Guard};
 use super::{AppState, HttpService, WebRequest, WebResponse, dev::insert_slash, rmap::ResourceMap};
 
-pub trait WebServiceFactory<St: AppState> {
-    fn register(self, config: &mut WebServiceConfig<St>);
+pub trait WebServiceFactory<St: AppState, In>: 'static {
+    fn register(self, config: &mut WebServiceConfig<St, In>);
 }
 
-pub(super) trait AppServiceFactory<St: AppState> {
-    fn register(&mut self, config: &mut WebServiceConfig<St>);
+pub(super) trait AppServiceFactory<St: AppState, In> {
+    fn register(&mut self, config: &mut WebServiceConfig<St, In>);
 }
 
 pub(super) struct ServiceFactoryWrapper<T> {
@@ -28,12 +28,12 @@ impl<T> ServiceFactoryWrapper<T> {
     }
 }
 
-impl<T, St> AppServiceFactory<St> for ServiceFactoryWrapper<T>
+impl<T, St, In> AppServiceFactory<St, In> for ServiceFactoryWrapper<T>
 where
-    T: WebServiceFactory<St>,
+    T: WebServiceFactory<St, In>,
     St: AppState,
 {
-    fn register(&mut self, config: &mut WebServiceConfig<St>) {
+    fn register(&mut self, config: &mut WebServiceConfig<St, In>) {
         if let Some(item) = self.factory.take() {
             item.register(config);
         }
@@ -45,22 +45,20 @@ type Guards = Vec<Box<dyn Guard>>;
 /// Application service configuration
 #[derive(derive_more::Debug)]
 #[debug("WebServiceConfig")]
-pub struct WebServiceConfig<St: AppState> {
+pub struct WebServiceConfig<St: AppState, In> {
     root: bool,
-    default: HttpService<St>,
     services: Vec<(
         ResourceDef,
-        HttpService<St>,
+        HttpService<St, In>,
         Option<Guards>,
         Option<Rc<ResourceMap>>,
     )>,
 }
 
-impl<St: AppState> WebServiceConfig<St> {
+impl<St: AppState, In: 'static> WebServiceConfig<St, In> {
     /// Crate server settings instance
-    pub(crate) fn new(default: HttpService<St>) -> Self {
+    pub(crate) fn new() -> Self {
         WebServiceConfig {
-            default,
             root: true,
             services: Vec::new(),
         }
@@ -73,42 +71,26 @@ impl<St: AppState> WebServiceConfig<St> {
 
     pub(crate) fn into_services(
         self,
-    ) -> (
-        Vec<(
-            ResourceDef,
-            HttpService<St>,
-            Option<Guards>,
-            Option<Rc<ResourceMap>>,
-        )>,
-        HttpService<St>,
-    ) {
-        (self.services, self.default)
-    }
-
-    pub(crate) fn get_nested(&self) -> Self {
-        WebServiceConfig {
-            default: self.default.clone(),
-            services: Vec::new(),
-            root: false,
-        }
-    }
-
-    /// Default resource
-    pub fn default_service(&self) -> HttpService<St> {
-        self.default.clone()
+    ) -> Vec<(
+        ResourceDef,
+        HttpService<St, In>,
+        Option<Guards>,
+        Option<Rc<ResourceMap>>,
+    )> {
+        self.services
     }
 
     /// Register http service
     pub fn register_service<S>(
         &mut self,
         rdef: ResourceDef,
-        factory: impl IntoServiceFactory<S, St, WebRequest>,
         guards: Option<Vec<Box<dyn Guard>>>,
         nested: Option<Rc<ResourceMap>>,
+        factory: impl IntoServiceFactory<S, St, WebRequest<In>>,
     ) where
         S: ServiceFactory<
                 St,
-                WebRequest,
+                WebRequest<In>,
                 Res = WebResponse,
                 Error = WebError<St, St::Error>,
                 InitError = Failure,
@@ -189,11 +171,12 @@ impl WebServiceAdapter {
     }
 
     /// Set a service factory implementation and generate web service.
-    pub fn build<Sf, St, F>(self, service: F) -> impl WebServiceFactory<St>
+    pub fn build<Sf, St, In, F>(self, service: F) -> impl WebServiceFactory<St, In>
     where
         St: AppState,
-        F: IntoServiceFactory<Sf, St, WebRequest>,
-        Sf: ServiceFactory<St, WebRequest, Res = WebResponse> + 'static,
+        In: 'static,
+        F: IntoServiceFactory<Sf, St, WebRequest<In>>,
+        Sf: ServiceFactory<St, WebRequest<In>, Res = WebResponse> + 'static,
         Sf::Error: WebResponseError<St, St::Error>,
         Sf::InitError: IntoFailure,
     {
@@ -205,29 +188,32 @@ impl WebServiceAdapter {
             rdef: self.rdef,
             name: self.name,
             guards: self.guards,
+            ph: PhantomData,
         }
     }
 }
 
-struct WebServiceImpl<Sf> {
+struct WebServiceImpl<Sf, In> {
     srv: Sf,
     rdef: Vec<String>,
     name: Option<String>,
     guards: AllGuard,
+    ph: PhantomData<In>,
 }
 
-impl<Sf, St> WebServiceFactory<St> for WebServiceImpl<Sf>
+impl<Sf, In, St> WebServiceFactory<St, In> for WebServiceImpl<Sf, In>
 where
     St: AppState,
+    In: 'static,
     Sf: ServiceFactory<
             St,
-            WebRequest,
+            WebRequest<In>,
             Res = WebResponse,
             Error = WebError<St, St::Error>,
             InitError = Failure,
         > + 'static,
 {
-    fn register(mut self, config: &mut WebServiceConfig<St>) {
+    fn register(mut self, config: &mut WebServiceConfig<St, In>) {
         let guards = if self.guards.0.is_empty() {
             None
         } else {
@@ -242,17 +228,17 @@ where
         if let Some(ref name) = self.name {
             rdef.name_mut().clone_from(name);
         }
-        config.register_service(rdef, self.srv, guards, None);
+        config.register_service(rdef, guards, None, self.srv);
     }
 }
 
 #[allow(unused_parens)]
-impl<T, St> WebServiceFactory<St> for Vec<T>
+impl<T, St, In> WebServiceFactory<St, In> for Vec<T>
 where
-    T: WebServiceFactory<St> + 'static,
+    T: WebServiceFactory<St, In> + 'static,
     St: AppState,
 {
-    fn register(mut self, config: &mut WebServiceConfig<St>) {
+    fn register(mut self, config: &mut WebServiceConfig<St, In>) {
         for service in self.drain(..) {
             service.register(config);
         }
@@ -263,8 +249,8 @@ macro_rules! tuple_web_service(
     {$(#[$meta:meta])* $(($n:tt, $T:ident)),+} => {
 
         $(#[$meta])*
-        impl<St: AppState, $($T: WebServiceFactory<St> + 'static),+> WebServiceFactory<St> for ($($T,)+) {
-            fn register(self, config: &mut WebServiceConfig<St>) {
+        impl<St: AppState, In, $($T: WebServiceFactory<St, In> + 'static),+> WebServiceFactory<St, In> for ($($T,)+) {
+            fn register(self, config: &mut WebServiceConfig<St, In>) {
                 $(
                     self.$n.register(config);
                 )+
@@ -273,12 +259,12 @@ macro_rules! tuple_web_service(
     }
 );
 
-impl<St, T, const N: usize> WebServiceFactory<St> for [T; N]
+impl<St, In, T, const N: usize> WebServiceFactory<St, In> for [T; N]
 where
     St: AppState,
-    T: WebServiceFactory<St> + 'static,
+    T: WebServiceFactory<St, In> + 'static,
 {
-    fn register(self, config: &mut WebServiceConfig<St>) {
+    fn register(self, config: &mut WebServiceConfig<St, In>) {
         for t in self {
             t.register(config);
         }
@@ -306,7 +292,7 @@ mod tests {
     #[crate::rt_test]
     async fn test_service() {
         let srv = init_service(App::new().service(web::service("/test").name("test").build(
-            async move |req: WebRequest| {
+            async move |req: WebRequest<()>| {
                 Ok::<_, Infallible>(req.into_response(HttpResponse::Ok().build()))
             },
         )))
@@ -317,7 +303,7 @@ mod tests {
 
         let srv = init_service(
             App::new().service(web::service("/test").guard(guard::Get()).build(
-                async move |req: WebRequest| {
+                async move |req: WebRequest<()>| {
                     Ok::<_, DefaultError>(req.into_response(HttpResponse::Ok().build()))
                 },
             )),

@@ -1,9 +1,10 @@
+use std::marker::PhantomData;
+
 use crate::error::{Failure, IntoFailure};
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef};
-use crate::service::dev::{AndThen, ServiceChain, ServiceChainFactory};
-use crate::service::{Ctx, factory, service};
-use crate::service::{Identity, IntoServiceFactory, Middleware, Service, ServiceFactory};
+use crate::service::{Identity, ServiceChainFactory};
+use crate::{Ctx, IntoServiceFactory, Middleware, Service, ServiceFactory, factory};
 
 use super::dev::{WebServiceConfig, WebServiceFactory, insert_slash};
 use super::error::{WebError, WebResponseError};
@@ -11,8 +12,6 @@ use super::guard::Guard;
 use super::route::{IntoRoutes, Route, RouteService};
 use super::stack::{Filter, WebStack};
 use super::{AppState, FromRequest, Handler, HttpHandler, HttpService, WebRequest, WebResponse};
-
-type ResourcePipeline<St, F> = ServiceChain<AndThen<F, ResourceRouter<St>>, St, WebRequest>;
 
 /// *Resource* is an entry in resources table which corresponds to requested URL.
 ///
@@ -38,38 +37,50 @@ type ResourcePipeline<St, F> = ServiceChain<AndThen<F, ResourceRouter<St>>, St, 
 /// Default behavior could be overriden with `default_resource()` method.
 #[derive(derive_more::Debug)]
 #[debug("Resource({rdef:?})")]
-pub struct Resource<St: AppState, M = Identity, F = Filter<St>> {
+pub struct Resource<St: AppState, In, Out = In, M = Identity, F = Filter<St, In>> {
     middleware: M,
-    filter: ServiceChainFactory<F, St, WebRequest>,
+    filter: ServiceChainFactory<F, St, WebRequest<In>>,
     rdef: Vec<String>,
     name: Option<String>,
-    routes: Vec<Route<St>>,
     guards: Vec<Box<dyn Guard>>,
-    default: Option<HttpService<St>>,
+    ph: PhantomData<Out>,
 }
 
-impl<St: AppState> Resource<St> {
+#[derive(derive_more::Debug)]
+#[debug("Resource({rdef:?})")]
+pub struct ResourceServices<St: AppState, In, Out, M, F> {
+    middleware: M,
+    filter: ServiceChainFactory<F, St, WebRequest<In>>,
+    rdef: Vec<String>,
+    name: Option<String>,
+    guards: Vec<Box<dyn Guard>>,
+    routes: Vec<Route<St, Out>>,
+    default: Option<HttpService<St, Out>>,
+}
+
+impl<St: AppState, In: 'static> Resource<St, In, In> {
     #[allow(clippy::needless_pass_by_value)]
-    pub fn new<T: IntoPattern>(path: T) -> Resource<St> {
+    pub fn new<T: IntoPattern>(path: T) -> Resource<St, In, In> {
         Resource {
-            routes: Vec::new(),
             rdef: path.patterns(),
             name: None,
             middleware: Identity,
             filter: factory(Filter::new()),
             guards: Vec::new(),
-            default: None,
+            ph: PhantomData,
         }
     }
 }
 
-impl<St, M, Sf> Resource<St, M, Sf>
+impl<St, In, Out, M, F> Resource<St, In, Out, M, F>
 where
     St: AppState,
-    Sf: ServiceFactory<
+    In: 'static,
+    Out: 'static,
+    F: ServiceFactory<
             St,
-            WebRequest,
-            Res = WebRequest,
+            WebRequest<In>,
+            Res = WebRequest<Out>,
             Error = WebError<St, St::Error>,
             InitError = Failure,
         >,
@@ -118,6 +129,203 @@ where
     }
 
     #[must_use]
+    /// Register request filter.
+    ///
+    /// This is similar to `App's` filters, but filter get invoked on resource level.
+    pub fn filter<U, R>(
+        self,
+        filter: impl IntoServiceFactory<U, St, WebRequest<Out>>,
+    ) -> Resource<
+        St,
+        In,
+        R,
+        M,
+        impl ServiceFactory<
+            St,
+            WebRequest<In>,
+            Res = WebRequest<R>,
+            Error = WebError<St, St::Error>,
+            InitError = Failure,
+        >,
+    >
+    where
+        U: ServiceFactory<St, WebRequest<Out>, Res = WebRequest<R>>,
+        U::Error: WebResponseError<St, St::Error>,
+        U::InitError: IntoFailure,
+    {
+        Resource {
+            filter: self.filter.and_then(
+                filter
+                    .into_factory()
+                    .map_err(WebError::from_err)
+                    .map_init_err(IntoFailure::fail),
+            ),
+            middleware: self.middleware,
+            rdef: self.rdef,
+            name: self.name,
+            guards: self.guards,
+            ph: PhantomData,
+        }
+    }
+
+    #[must_use]
+    /// Register a resource middleware.
+    ///
+    /// This is similar to `App's` middlewares, but middleware get invoked on resource level.
+    /// Resource level middlewares are not allowed to change response
+    /// type (i.e modify response's body).
+    pub fn middleware<U>(self, mw: U) -> Resource<St, In, Out, WebStack<St, M, U>, F> {
+        Resource {
+            middleware: WebStack::new(self.middleware, mw),
+            filter: self.filter,
+            rdef: self.rdef,
+            name: self.name,
+            guards: self.guards,
+            ph: PhantomData,
+        }
+    }
+
+    #[must_use]
+    /// Register a new route.
+    ///
+    /// ```rust
+    /// use ntex::web::{self, guard, App, HttpResponse};
+    ///
+    /// fn main() {
+    ///     let app = App::default().service(
+    ///         web::resource("/").route(
+    ///             web::route()
+    ///                 .guard(guard::Any(guard::Get()).or(guard::Put()))
+    ///                 .guard(guard::Header("Content-Type", "text/plain"))
+    ///                 .to(async || { HttpResponse::Ok() }))
+    ///     );
+    /// }
+    /// ```
+    ///
+    /// Multiple routes could be added to a resource. Resource object uses
+    /// match guards for route selection.
+    ///
+    /// ```rust
+    /// use ntex::web::{self, guard, App};
+    ///
+    /// fn main() {
+    ///     let app = App::default().service(
+    ///         web::resource("/container/")
+    ///             .route([
+    ///                 web::get().to(get_handler),
+    ///                 web::post().to(post_handler),
+    ///                 web::delete().to(delete_handler)
+    ///             ])
+    ///     );
+    /// }
+    /// # async fn get_handler() -> web::HttpResponseBuilder { web::HttpResponse::Ok() }
+    /// # async fn post_handler() -> web::HttpResponseBuilder { web::HttpResponse::Ok() }
+    /// # async fn delete_handler() -> web::HttpResponseBuilder { web::HttpResponse::Ok() }
+    /// ```
+    pub fn route<R>(self, route: R) -> ResourceServices<St, In, Out, M, F>
+    where
+        R: IntoRoutes<St, Out>,
+    {
+        let mut routes = Vec::new();
+        for route in route.routes() {
+            routes.push(route);
+        }
+
+        ResourceServices {
+            routes,
+            name: self.name,
+            rdef: self.rdef,
+            guards: self.guards,
+            filter: self.filter,
+            middleware: self.middleware,
+            default: None,
+        }
+    }
+
+    #[must_use]
+    /// Register a new route and add handler.
+    ///
+    /// This route matches all requests.
+    ///
+    /// ```rust
+    /// use ntex::web::{self, App, HttpRequest, HttpResponse};
+    ///
+    /// async fn index(req: HttpRequest) -> HttpResponse {
+    ///     unimplemented!()
+    /// }
+    ///
+    /// App::default().service(web::resource("/").to(index));
+    /// ```
+    ///
+    /// This is shortcut for:
+    ///
+    /// ```rust
+    /// # use ntex::web::{self, *};
+    /// # async fn index(req: HttpRequest) -> HttpResponse { unimplemented!() }
+    /// App::default().service(web::resource("/").route(web::route().to(index)));
+    /// ```
+    pub fn to<Args>(self, h: impl Handler<St, Args>) -> ResourceServices<St, In, Out, M, F>
+    where
+        Args: FromRequest<St> + 'static,
+        Args::Error: WebResponseError<St, St::Error>,
+    {
+        ResourceServices {
+            name: self.name,
+            rdef: self.rdef,
+            guards: self.guards,
+            filter: self.filter,
+            middleware: self.middleware,
+            default: None,
+            routes: vec![Route::new().to(h)],
+        }
+    }
+
+    #[must_use]
+    /// Default service to be used if no matching route could be found.
+    ///
+    /// By default *405* response get returned. Resource does not use
+    /// default handler from `App` or `Scope`.
+    pub fn default_service<S>(
+        self,
+        f: impl IntoServiceFactory<S, St, WebRequest<Out>>,
+    ) -> ResourceServices<St, In, Out, M, F>
+    where
+        S: ServiceFactory<St, WebRequest<Out>, Res = WebResponse> + 'static,
+        S::Error: WebResponseError<St, St::Error>,
+        S::InitError: IntoFailure,
+    {
+        // create and configure default resource
+        ResourceServices {
+            name: self.name,
+            rdef: self.rdef,
+            guards: self.guards,
+            filter: self.filter,
+            routes: Vec::new(),
+            middleware: self.middleware,
+            default: Some(HttpService::new(
+                f.into_factory()
+                    .map_err(WebError::from_err)
+                    .map_init_err(IntoFailure::fail),
+            )),
+        }
+    }
+}
+
+impl<St, In, Out, M, F> ResourceServices<St, In, Out, M, F>
+where
+    St: AppState,
+    In: 'static,
+    Out: 'static,
+    M: 'static,
+    F: ServiceFactory<
+            St,
+            WebRequest<In>,
+            Res = WebRequest<Out>,
+            Error = WebError<St, St::Error>,
+            InitError = Failure,
+        >,
+{
+    #[must_use]
     /// Register a new route.
     ///
     /// ```rust
@@ -156,7 +364,7 @@ where
     /// ```
     pub fn route<R>(mut self, route: R) -> Self
     where
-        R: IntoRoutes<St>,
+        R: IntoRoutes<St, Out>,
     {
         for route in route.routes() {
             self.routes.push(route);
@@ -186,9 +394,8 @@ where
     /// # async fn index(req: HttpRequest) -> HttpResponse { unimplemented!() }
     /// App::default().service(web::resource("/").route(web::route().to(index)));
     /// ```
-    pub fn to<F, Args>(mut self, handler: F) -> Self
+    pub fn to<Args>(mut self, handler: impl Handler<St, Args>) -> Self
     where
-        F: Handler<St, Args> + 'static,
         Args: FromRequest<St> + 'static,
         Args::Error: WebResponseError<St, St::Error>,
     {
@@ -197,70 +404,13 @@ where
     }
 
     #[must_use]
-    /// Register request filter.
-    ///
-    /// This is similar to `App's` filters, but filter get invoked on resource level.
-    pub fn filter<U>(
-        self,
-        filter: impl IntoServiceFactory<U, St, WebRequest>,
-    ) -> Resource<
-        St,
-        M,
-        impl ServiceFactory<
-            St,
-            WebRequest,
-            Res = WebRequest,
-            Error = WebError<St, St::Error>,
-            InitError = Failure,
-        >,
-    >
-    where
-        U: ServiceFactory<St, WebRequest, Res = WebRequest>,
-        U::Error: WebResponseError<St, St::Error>,
-        U::InitError: IntoFailure,
-    {
-        Resource {
-            filter: self.filter.and_then(
-                filter
-                    .into_factory()
-                    .map_err(WebError::from_err)
-                    .map_init_err(IntoFailure::fail),
-            ),
-            middleware: self.middleware,
-            rdef: self.rdef,
-            name: self.name,
-            guards: self.guards,
-            routes: self.routes,
-            default: self.default,
-        }
-    }
-
-    #[must_use]
-    /// Register a resource middleware.
-    ///
-    /// This is similar to `App's` middlewares, but middleware get invoked on resource level.
-    /// Resource level middlewares are not allowed to change response
-    /// type (i.e modify response's body).
-    pub fn middleware<U>(self, mw: U) -> Resource<St, WebStack<St, M, U>, Sf> {
-        Resource {
-            middleware: WebStack::new(self.middleware, mw),
-            filter: self.filter,
-            rdef: self.rdef,
-            name: self.name,
-            guards: self.guards,
-            routes: self.routes,
-            default: self.default,
-        }
-    }
-
-    #[must_use]
     /// Default service to be used if no matching route could be found.
     ///
     /// By default *405* response get returned. Resource does not use
     /// default handler from `App` or `Scope`.
-    pub fn default_service<S>(mut self, f: impl IntoServiceFactory<S, St, WebRequest>) -> Self
+    pub fn default_service<S>(mut self, f: impl IntoServiceFactory<S, St, WebRequest<Out>>) -> Self
     where
-        S: ServiceFactory<St, WebRequest, Res = WebResponse> + 'static,
+        S: ServiceFactory<St, WebRequest<Out>, Res = WebResponse> + 'static,
         S::Error: WebResponseError<St, St::Error>,
         S::InitError: IntoFailure,
     {
@@ -275,20 +425,23 @@ where
     }
 }
 
-impl<St, M, Sf> WebServiceFactory<St> for Resource<St, M, Sf>
+impl<St, Outer, In, Out, M, F> WebServiceFactory<St, Outer> for ResourceServices<St, In, Out, M, F>
 where
     St: AppState,
-    Sf: ServiceFactory<
+    Outer: 'static,
+    In: 'static,
+    Out: 'static,
+    F: ServiceFactory<
             St,
-            WebRequest,
-            Res = WebRequest,
+            WebRequest<In>,
+            Res = WebRequest<Out>,
             Error = WebError<St, St::Error>,
             InitError = Failure,
         > + 'static,
-    M: Middleware<ResourcePipeline<St, Sf::Service>, St> + 'static,
-    M::Service: Service<St, WebRequest, Res = WebResponse, Error = WebError<St, St::Error>>,
+    M: Middleware<ResourceService<St, In, Out, F::Service>, St> + 'static,
+    M::Service: Service<St, WebRequest<Outer>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
-    fn register(mut self, config: &mut WebServiceConfig<St>) {
+    fn register(mut self, config: &mut WebServiceConfig<St, Outer>) {
         let guards = if self.guards.is_empty() {
             None
         } else {
@@ -303,79 +456,80 @@ where
             rdef.name_mut().clone_from(name);
         }
 
-        let router_factory = ResourceRouterFactory {
-            routes: self.routes,
-            default: self.default.take(),
-        };
-
         config.register_service(
             rdef,
+            guards,
+            None,
             ResourceServiceFactory {
                 middleware: self.middleware,
                 filter: self.filter,
-                routing: router_factory,
+                routes: self.routes,
+                default: self.default.take(),
+                ph: PhantomData,
             },
-            guards,
-            None,
         );
     }
 }
 
-impl<St, M, Sf>
+impl<St, Outer, In, Out, M, F>
     IntoServiceFactory<
-        ResourceServiceFactory<St, M, ServiceChainFactory<Sf, St, WebRequest>>,
+        ResourceServiceFactory<St, In, Out, M, ServiceChainFactory<F, St, WebRequest<In>>>,
         St,
-        WebRequest,
-    > for Resource<St, M, Sf>
+        WebRequest<Outer>,
+    > for ResourceServices<St, In, Out, M, F>
 where
     St: AppState,
-    Sf: ServiceFactory<
+    Outer: 'static,
+    In: 'static,
+    Out: 'static,
+    F: ServiceFactory<
             St,
-            WebRequest,
-            Res = WebRequest,
+            WebRequest<In>,
+            Res = WebRequest<Out>,
             Error = WebError<St, St::Error>,
             InitError = Failure,
         > + 'static,
-    M: Middleware<ResourcePipeline<St, Sf::Service>, St> + 'static,
-    M::Service: Service<St, WebRequest, Res = WebResponse, Error = WebError<St, St::Error>>,
+    M: Middleware<ResourceService<St, In, Out, F::Service>, St> + 'static,
+    M::Service: Service<St, WebRequest<Outer>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
     fn into_factory(
         mut self,
-    ) -> ResourceServiceFactory<St, M, ServiceChainFactory<Sf, St, WebRequest>> {
-        let router_factory = ResourceRouterFactory {
-            routes: self.routes,
-            default: self.default.take(),
-        };
-
+    ) -> ResourceServiceFactory<St, In, Out, M, ServiceChainFactory<F, St, WebRequest<In>>> {
         ResourceServiceFactory {
             middleware: self.middleware,
             filter: self.filter,
-            routing: router_factory,
+            routes: self.routes,
+            default: self.default.take(),
+            ph: PhantomData,
         }
     }
 }
 
-/// Resource service
+/// Resource service factory
 #[derive(derive_more::Debug)]
 #[debug("ResourceServiceFactory")]
-pub struct ResourceServiceFactory<St: AppState, M, F> {
+pub struct ResourceServiceFactory<St: AppState, In, Out, M, F> {
     middleware: M,
     filter: F,
-    routing: ResourceRouterFactory<St>,
+    routes: Vec<Route<St, Out>>,
+    default: Option<HttpService<St, Out>>,
+    ph: PhantomData<In>,
 }
 
-impl<St, M, F> ServiceFactory<St, WebRequest> for ResourceServiceFactory<St, M, F>
+impl<St, Outer, In, Out, M, F> ServiceFactory<St, WebRequest<Outer>>
+    for ResourceServiceFactory<St, In, Out, M, F>
 where
     St: AppState,
-    M: Middleware<ResourcePipeline<St, F::Service>, St> + 'static,
-    M::Service: Service<St, WebRequest, Res = WebResponse, Error = WebError<St, St::Error>>,
+    Out: 'static,
     F: ServiceFactory<
             St,
-            WebRequest,
-            Res = WebRequest,
+            WebRequest<In>,
+            Res = WebRequest<Out>,
             Error = WebError<St, St::Error>,
             InitError = Failure,
         > + 'static,
+    M: Middleware<ResourceService<St, In, Out, F::Service>, St> + 'static,
+    M::Service: Service<St, WebRequest<Outer>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
     type Res = WebResponse;
     type Error = WebError<St, St::Error>;
@@ -385,57 +539,49 @@ where
 
     async fn create(&self, st: &St) -> Result<Self::Service, Self::InitError> {
         let filter = self.filter.create(st).await?;
-        let routing = self.routing.create(st).await?;
-        Ok(self
-            .middleware
-            .create(st, service(filter).and_then(routing)))
-    }
-}
-
-struct ResourceRouterFactory<St: AppState> {
-    routes: Vec<Route<St>>,
-    default: Option<HttpService<St>>,
-}
-
-impl<St> ServiceFactory<St, WebRequest> for ResourceRouterFactory<St>
-where
-    St: AppState,
-{
-    type Res = WebResponse;
-    type Error = WebError<St, St::Error>;
-
-    type Service = ResourceRouter<St>;
-    type InitError = Failure;
-
-    async fn create(&self, st: &St) -> Result<Self::Service, Self::InitError> {
         let default = if let Some(ref default) = self.default {
             Some(default.create(st).await?)
         } else {
             None
         };
-        Ok(ResourceRouter {
-            default,
-            routes: self.routes.iter().map(Route::service).collect(),
-        })
+
+        Ok(self.middleware.create(
+            st,
+            ResourceService {
+                filter,
+                default,
+                routes: self.routes.iter().map(Route::service).collect(),
+                ph: PhantomData,
+            },
+        ))
     }
 }
 
+/// Resource service
 #[derive(derive_more::Debug)]
-#[debug("ResourceRouter")]
-pub struct ResourceRouter<St: AppState> {
-    routes: Vec<RouteService<St>>,
-    default: Option<HttpHandler<St>>,
+#[debug("ResourceService")]
+pub struct ResourceService<St: AppState, In, Out, F> {
+    filter: F,
+    routes: Vec<RouteService<St, Out>>,
+    default: Option<HttpHandler<St, Out>>,
+    ph: PhantomData<In>,
 }
 
-impl<St: AppState> Service<St, WebRequest> for ResourceRouter<St> {
+impl<St, In, Out, F> Service<St, WebRequest<In>> for ResourceService<St, In, Out, F>
+where
+    St: AppState,
+    F: Service<St, WebRequest<In>, Res = WebRequest<Out>, Error = WebError<St, St::Error>>,
+{
     type Res = WebResponse;
     type Error = WebError<St, St::Error>;
 
     async fn call(
         &self,
-        mut req: WebRequest,
+        req: WebRequest<In>,
         ctx: Ctx<'_, Self, St>,
     ) -> Result<Self::Res, Self::Error> {
+        let mut req = ctx.call(&self.filter, req).await?;
+
         for route in &self.routes {
             if route.check(&mut req) {
                 return ctx.call(route, req).await;
@@ -468,7 +614,7 @@ mod tests {
         let srv = init_service(
             App::new().service(
                 web::resource("/test")
-                    .filter(async move |req: WebRequest| {
+                    .filter(async move |req: WebRequest<()>| {
                         filter2.set(true);
                         Ok::<_, Infallible>(req)
                     })
@@ -513,7 +659,7 @@ mod tests {
         let srv = init_service(
             App::new()
                 .service(web::resource("/test").route(web::get().to(async || HttpResponse::Ok())))
-                .default_service(async move |r: WebRequest| {
+                .default_service(async move |r: WebRequest<()>| {
                     Ok::<_, Infallible>(r.into_response(HttpResponse::BadRequest()))
                 }),
         )
@@ -532,7 +678,7 @@ mod tests {
             App::new().service(
                 web::resource("/test")
                     .route(web::get().to(async || HttpResponse::Ok()))
-                    .default_service(async move |r: WebRequest| {
+                    .default_service(async move |r: WebRequest<()>| {
                         Ok::<_, Infallible>(r.into_response(HttpResponse::BadRequest()))
                     }),
             ),

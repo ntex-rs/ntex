@@ -199,7 +199,7 @@ mod tests {
         let mut req = TestRequest::with_uri("/32/").to_srv_request();
         router.recognize(req.match_info_mut());
 
-        let (req, mut pl) = req.into_parts();
+        let (req, mut pl, ()) = req.into_parts();
         assert_eq!(
             *from_request::<_, Path<i8>>(&(), &req, &mut pl)
                 .await
@@ -222,7 +222,7 @@ mod tests {
         let mut req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
         router.recognize(req.match_info_mut());
 
-        let (req, mut pl) = req.into_parts();
+        let (req, mut pl, ()) = req.into_parts();
         let res = from_request::<_, (Path<(String, String)>,)>(&(), &req, &mut pl)
             .await
             .unwrap();
@@ -250,7 +250,7 @@ mod tests {
         let mut req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
         router.recognize(req.match_info_mut());
 
-        let (req, mut pl) = req.into_parts();
+        let (req, mut pl, ()) = req.into_parts();
         let mut s = from_request::<_, Path<MyStruct>>(&(), &req, &mut pl)
             .await
             .unwrap();
@@ -274,7 +274,7 @@ mod tests {
         let mut req = TestRequest::with_uri("/name/32/").to_srv_request();
         router.recognize(req.match_info_mut());
 
-        let (req, mut pl) = req.into_parts();
+        let (req, mut pl, ()) = req.into_parts();
         let s = from_request::<_, Path<Test2>>(&(), &req, &mut pl)
             .await
             .unwrap();

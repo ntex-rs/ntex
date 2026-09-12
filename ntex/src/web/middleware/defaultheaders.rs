@@ -105,9 +105,9 @@ pub struct DefaultHeadersMiddleware<S> {
     inner: Rc<Inner>,
 }
 
-impl<S, St> Service<St, WebRequest> for DefaultHeadersMiddleware<S>
+impl<S, St, In> Service<St, WebRequest<In>> for DefaultHeadersMiddleware<S>
 where
-    S: Service<St, WebRequest, Res = WebResponse>,
+    S: Service<St, WebRequest<In>, Res = WebResponse>,
 {
     type Res = WebResponse;
     type Error = S::Error;
@@ -115,7 +115,7 @@ where
     crate::forward_ready!(St, service);
     crate::forward_shutdown!(St, service);
 
-    async fn call(&self, r: WebRequest, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, S::Error> {
+    async fn call(&self, r: WebRequest<In>, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, S::Error> {
         let mut res = ctx.call(&self.service, r).await?;
 
         // set response headers
@@ -163,7 +163,7 @@ mod tests {
         assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "0001");
 
         let req = TestRequest::default().to_srv_request();
-        let srv = fn_service(async move |req: WebRequest| {
+        let srv = fn_service(async move |req: WebRequest<()>| {
             Ok::<_, Infallible>(
                 req.into_response(HttpResponse::Ok().header(CONTENT_TYPE, "0002").build()),
             )
@@ -194,7 +194,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_content_type() {
-        let srv = fn_service(async move |req: WebRequest| {
+        let srv = fn_service(async move |req: WebRequest<()>| {
             Ok::<_, Infallible>(req.into_response(HttpResponse::Ok().build()))
         });
         let mw = Pipeline::new(

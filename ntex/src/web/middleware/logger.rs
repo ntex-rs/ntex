@@ -131,9 +131,9 @@ pub struct LoggerMiddleware<S> {
     service: S,
 }
 
-impl<S, St> Service<St, WebRequest> for LoggerMiddleware<S>
+impl<S, St, In> Service<St, WebRequest<In>> for LoggerMiddleware<S>
 where
-    S: Service<St, WebRequest, Res = WebResponse>,
+    S: Service<St, WebRequest<In>, Res = WebResponse>,
 {
     type Res = WebResponse;
     type Error = S::Error;
@@ -141,7 +141,11 @@ where
     crate::forward_ready!(St, service);
     crate::forward_shutdown!(St, service);
 
-    async fn call(&self, req: WebRequest, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, S::Error> {
+    async fn call(
+        &self,
+        req: WebRequest<In>,
+        ctx: Ctx<'_, Self, St>,
+    ) -> Result<Self::Res, S::Error> {
         if self.inner.exclude.contains(req.path()) {
             ctx.call(&self.service, req).await
         } else {
@@ -340,7 +344,7 @@ impl FormatText {
         }
     }
 
-    fn render_request(&mut self, now: time::SystemTime, req: &WebRequest) {
+    fn render_request<R>(&mut self, now: time::SystemTime, req: &WebRequest<R>) {
         match *self {
             FormatText::RequestLine => {
                 let q = req.query_string();
@@ -405,7 +409,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_logger() {
-        let srv = fn_service(async move |req: WebRequest| {
+        let srv = fn_service(async move |req: WebRequest<()>| {
             Ok::<_, Infallible>(
                 req.into_response(
                     HttpResponse::builder(StatusCode::OK)

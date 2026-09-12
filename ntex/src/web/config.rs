@@ -168,23 +168,23 @@ pub(crate) fn put_request(id: usize, pool_size: usize, req: &mut Rc<HttpRequestI
 /// modularization of big application configuration.
 #[derive(derive_more::Debug)]
 #[debug("ServiceConfig")]
-pub struct ServiceConfig<St> {
-    pub(super) services: Vec<Box<dyn AppServiceFactory<St>>>,
+pub struct ServiceConfig<St, In> {
+    pub(super) services: Vec<Box<dyn AppServiceFactory<St, In>>>,
     pub(super) external: Vec<ResourceDef>,
 }
 
-impl<St: AppState> ServiceConfig<St> {
-    pub fn new() -> Self {
+impl<St: AppState, In: 'static> ServiceConfig<St, In> {
+    pub fn new(external: Vec<ResourceDef>) -> Self {
         Self {
+            external,
             services: Vec::new(),
-            external: Vec::new(),
         }
     }
 
     /// Configure route for a specific path.
     ///
     /// This is same as `App::route()` method.
-    pub fn route(&mut self, path: &str, mut route: Route<St>) -> &mut Self {
+    pub fn route(&mut self, path: &str, mut route: Route<St, In>) -> &mut Self {
         self.service(
             Resource::new(path)
                 .add_guards(route.take_guards())
@@ -197,7 +197,7 @@ impl<St: AppState> ServiceConfig<St> {
     /// This is same as `App::service()` method.
     pub fn service<F>(&mut self, factory: F) -> &mut Self
     where
-        F: WebServiceFactory<St> + 'static,
+        F: WebServiceFactory<St, In> + 'static,
     {
         self.services
             .push(Box::new(ServiceFactoryWrapper::new(factory)));
@@ -216,12 +216,6 @@ impl<St: AppState> ServiceConfig<St> {
         *rdef.name_mut() = name.as_ref().to_string();
         self.external.push(rdef);
         self
-    }
-}
-
-impl<St: AppState> Default for ServiceConfig<St> {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -322,7 +316,7 @@ mod tests {
 
     #[test]
     fn test_new_service_config() {
-        let cfg: ServiceConfig<()> = ServiceConfig::default();
+        let cfg: ServiceConfig<(), ()> = ServiceConfig::new(Vec::new());
         assert!(cfg.services.is_empty());
         assert!(cfg.external.is_empty());
     }

@@ -176,12 +176,12 @@ mod tests {
     #[crate::rt_test]
     async fn test_request_extract() {
         let req = TestRequest::with_uri("/name/user1/").to_srv_request();
-        let (req, mut pl) = req.into_parts();
+        let (req, mut pl, ()) = req.into_parts();
         let res = from_request::<_, Query<Id>>(&(), &req, &mut pl).await;
         assert!(res.is_err());
 
         let req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
-        let (req, mut pl) = req.into_parts();
+        let (req, mut pl, ()) = req.into_parts();
 
         let mut s = from_request::<_, Query<Id>>(&(), &req, &mut pl)
             .await

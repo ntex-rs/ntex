@@ -722,7 +722,7 @@ mod tests {
 
     use super::*;
     use crate::client::error::{ClientError, ConnectError};
-    use crate::{http, web::WebError, web::test::TestRequest};
+    use crate::{http, web::WebError};
 
     #[test]
     fn test_into_error() {
@@ -735,7 +735,6 @@ mod tests {
         let res = crate::http::ResponseError::error_response(&e);
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
-        let req = TestRequest::default().to_http_request();
         let res = WebResponseError::<(), DefaultError>::error_response(
             &mut UrlencodedError::UnknownLength,
             &(),
@@ -747,7 +746,6 @@ mod tests {
     fn test_other_errors() {
         use crate::util::timeout::TimeoutError;
 
-        let req = TestRequest::default().to_http_request();
         let mut err = TimeoutError::<UrlencodedError>::Timeout;
         assert_eq!(
             WebResponseError::<(), DefaultError>::error_response(&mut err, &(),).status(),
@@ -806,8 +804,6 @@ mod tests {
 
     #[test]
     fn test_either_error() {
-        let req = TestRequest::default().to_http_request();
-
         let mut err: Either<ClientError, PayloadError> =
             Either::Left(ClientError::TunnelNotSupported);
         let resp = WebResponseError::error_response(&mut err, &());
@@ -820,7 +816,6 @@ mod tests {
 
     #[test]
     fn test_io_error() {
-        let req = TestRequest::default().to_http_request();
         assert_eq!(
             StatusCode::NOT_FOUND,
             WebResponseError::error_response(
@@ -860,7 +855,6 @@ mod tests {
 
     #[test]
     fn test_json_payload_error() {
-        let req = TestRequest::default().to_http_request();
         let resp: HttpResponse =
             WebResponseError::error_response(&mut JsonPayloadError::Overflow, &());
         assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
@@ -871,8 +865,6 @@ mod tests {
 
     #[test]
     fn test_query_payload_error() {
-        let req = TestRequest::default().to_http_request();
-
         let mut err = QueryPayloadError::Deserialize(
             serde_urlencoded::from_str::<i32>("bad query").unwrap_err(),
         );

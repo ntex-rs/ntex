@@ -1,10 +1,10 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, marker::PhantomData, rc::Rc};
 
 use crate::error::{Failure, IntoFailure};
+use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef, Router};
-use crate::service::{Identity, Middleware, Service, ServiceFactory};
-use crate::service::{IntoServiceFactory, boxed, dev::ServiceChainFactory, factory};
-use crate::util::HashMap;
+use crate::service::{Identity, ServiceChainFactory, boxed};
+use crate::{IntoServiceFactory, Middleware, Service, ServiceFactory, factory, util::HashMap};
 
 use super::app_service::AppRouter;
 use super::dev::{WebServiceConfig, WebServiceFactory};
@@ -48,18 +48,33 @@ type Guards = Vec<Box<dyn Guard>>;
 ///
 #[derive(derive_more::Debug)]
 #[debug("Scope({rdef:?})")]
-pub struct Scope<St: AppState, M = Identity, T = Filter<St>> {
+pub struct Scope<St: AppState, In, Out = In, M = Identity, F = Filter<St, In>> {
     middleware: M,
-    filter: ServiceChainFactory<T, St, WebRequest>,
+    filter: ServiceChainFactory<F, St, WebRequest<In>>,
     rdef: Vec<String>,
-    services: Vec<Box<dyn AppServiceFactory<St>>>,
     guards: Vec<Box<dyn Guard>>,
-    default: Option<HttpService<St>>,
+    external: Vec<ResourceDef>,
+    case_insensitive: bool,
+    ph: PhantomData<Out>,
+}
+
+/// Resources scope.
+///
+/// Scope is a set of resources with common root path.
+#[derive(derive_more::Debug)]
+#[debug("ScopeServices({rdef:?})")]
+pub struct ScopeServices<St: AppState, In, Out, M, F> {
+    middleware: M,
+    rdef: Vec<String>,
+    guards: Vec<Box<dyn Guard>>,
+    filter: ServiceChainFactory<F, St, WebRequest<In>>,
+    services: Vec<Box<dyn AppServiceFactory<St, Out>>>,
+    default: Option<HttpService<St, Out>>,
     external: Vec<ResourceDef>,
     case_insensitive: bool,
 }
 
-impl<St: AppState> Scope<St> {
+impl<St: AppState, In> Scope<St, In, In> {
     #[allow(clippy::needless_pass_by_value)]
     /// Create a new scope
     pub fn new<T: IntoPattern>(path: T) -> Self {
@@ -68,21 +83,22 @@ impl<St: AppState> Scope<St> {
             filter: factory(Filter::new()),
             rdef: path.patterns(),
             guards: Vec::new(),
-            services: Vec::new(),
-            default: None,
             external: Vec::new(),
             case_insensitive: false,
+            ph: PhantomData,
         }
     }
 }
 
-impl<St, M, T> Scope<St, M, T>
+impl<St, In, Out, M, F> Scope<St, In, Out, M, F>
 where
     St: AppState,
-    T: ServiceFactory<
+    In: 'static,
+    Out: 'static,
+    F: ServiceFactory<
             St,
-            WebRequest,
-            Res = WebRequest,
+            WebRequest<In>,
+            Res = WebRequest<Out>,
             Error = WebError<St, St::Error>,
             InitError = Failure,
         >,
@@ -151,15 +167,23 @@ where
     ///         .route("/index.html", web::get().to(async || { HttpResponse::Ok() }));
     /// }
     /// ```
-    pub fn configure<F>(mut self, f: F) -> Self
-    where
-        F: FnOnce(&mut ServiceConfig<St>),
-    {
-        let mut cfg = ServiceConfig::new();
+    pub fn configure(
+        self,
+        f: impl FnOnce(&mut ServiceConfig<St, Out>),
+    ) -> ScopeServices<St, In, Out, M, F> {
+        let mut cfg = ServiceConfig::new(self.external);
         f(&mut cfg);
-        self.services.extend(cfg.services);
-        self.external.extend(cfg.external);
-        self
+
+        ScopeServices {
+            rdef: self.rdef,
+            guards: self.guards,
+            filter: self.filter,
+            middleware: self.middleware,
+            default: None,
+            services: cfg.services,
+            external: cfg.external,
+            case_insensitive: self.case_insensitive,
+        }
     }
 
     #[must_use]
@@ -190,10 +214,193 @@ where
     ///     );
     /// }
     /// ```
-    pub fn service<F>(mut self, factory: F) -> Self
+    pub fn service(
+        self,
+        factory: impl WebServiceFactory<St, Out>,
+    ) -> ScopeServices<St, In, Out, M, F> {
+        ScopeServices {
+            rdef: self.rdef,
+            guards: self.guards,
+            filter: self.filter,
+            middleware: self.middleware,
+            default: None,
+            external: self.external,
+            case_insensitive: self.case_insensitive,
+            services: vec![Box::new(ServiceFactoryWrapper::new(factory))],
+        }
+    }
+
+    #[must_use]
+    /// Configure route for a specific path.
+    ///
+    /// This is a simplified version of the `Scope::service()` method.
+    /// This method can be called multiple times, in that case
+    /// multiple resources with one route would be registered for same resource path.
+    ///
+    /// ```rust
+    /// use ntex::web::{self, App, HttpResponse};
+    ///
+    /// async fn index(data: web::types::Path<(String, String)>) -> &'static str {
+    ///     "Welcome!"
+    /// }
+    ///
+    /// fn main() {
+    ///     let app = App::default().service(
+    ///         web::scope("/app")
+    ///             .route("/test1", web::get().to(index))
+    ///             .route("/test2", web::post().to(async || { HttpResponse::MethodNotAllowed() }))
+    ///     );
+    /// }
+    /// ```
+    pub fn route(self, path: &str, mut route: Route<St, Out>) -> ScopeServices<St, In, Out, M, F> {
+        self.service(
+            Resource::new(path)
+                .add_guards(route.take_guards())
+                .route(route),
+        )
+    }
+
+    #[must_use]
+    /// Default service to be used if no matching route could be found.
+    ///
+    /// If default resource is not registered, app's default resource is being used.
+    pub fn default_service<Sf>(
+        self,
+        f: impl IntoServiceFactory<Sf, St, WebRequest<Out>>,
+    ) -> ScopeServices<St, In, Out, M, F>
     where
-        F: WebServiceFactory<St> + 'static,
+        Sf: ServiceFactory<St, WebRequest<Out>, Res = WebResponse> + 'static,
+        Sf::Error: WebResponseError<St, St::Error>,
+        Sf::InitError: IntoFailure,
     {
+        // create and configure default resource
+        let default = boxed::factory(
+            f.into_factory()
+                .map_err(WebError::from_err)
+                .map_init_err(IntoFailure::fail),
+        );
+
+        ScopeServices {
+            rdef: self.rdef,
+            guards: self.guards,
+            filter: self.filter,
+            middleware: self.middleware,
+            default: Some(default),
+            external: self.external,
+            case_insensitive: self.case_insensitive,
+            services: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    /// Register request filter.
+    ///
+    /// Filter runs during inbound processing in the request
+    /// lifecycle (request -> response), modifying request as
+    /// necessary, across all requests managed by the *Scope*.
+    ///
+    /// This is similar to `App's` filters, but filter get invoked on scope level.
+    pub fn filter<U, R>(
+        self,
+        filter: impl IntoServiceFactory<U, St, WebRequest<Out>>,
+    ) -> Scope<
+        St,
+        In,
+        R,
+        M,
+        impl ServiceFactory<
+            St,
+            WebRequest<In>,
+            Res = WebRequest<R>,
+            Error = WebError<St, St::Error>,
+            InitError = Failure,
+        >,
+    >
+    where
+        U: ServiceFactory<St, WebRequest<Out>, Res = WebRequest<R>>,
+        U::Error: WebResponseError<St, St::Error>,
+        U::InitError: IntoFailure,
+    {
+        Scope {
+            filter: self.filter.and_then(
+                filter
+                    .into_factory()
+                    .map_err(WebError::from_err)
+                    .map_init_err(IntoFailure::fail),
+            ),
+            middleware: self.middleware,
+            rdef: self.rdef,
+            guards: self.guards,
+            external: self.external,
+            case_insensitive: self.case_insensitive,
+            ph: PhantomData,
+        }
+    }
+
+    #[must_use]
+    /// Registers middleware, in the form of a middleware component (type).
+    ///
+    /// That runs during inbound processing in the request
+    /// lifecycle (request -> response), modifying request as
+    /// necessary, across all requests managed by the *Scope*. Scope-level
+    /// middleware is more limited in what it can modify, relative to Route or
+    /// Application level middleware, in that Scope-level middleware can not modify
+    /// `WebResponse`.
+    pub fn middleware<U>(self, mw: U) -> Scope<St, In, Out, WebStack<St, M, U>, F> {
+        Scope {
+            middleware: WebStack::new(self.middleware, mw),
+            filter: self.filter,
+            rdef: self.rdef,
+            guards: self.guards,
+            external: self.external,
+            case_insensitive: self.case_insensitive,
+            ph: PhantomData,
+        }
+    }
+}
+
+impl<St, In, Out, M, F> ScopeServices<St, In, Out, M, F>
+where
+    St: AppState,
+    In: 'static,
+    Out: 'static,
+    F: ServiceFactory<
+            St,
+            WebRequest<In>,
+            Res = WebRequest<Out>,
+            Error = WebError<St, St::Error>,
+            InitError = Failure,
+        >,
+{
+    #[must_use]
+    /// Register http service.
+    ///
+    /// This is similar to `App's` service registration.
+    ///
+    /// ntex web provides several services implementations:
+    ///
+    /// * *`Resource`* is an entry in resource table which corresponds to requested URL.
+    /// * *`Scope`* is a set of resources with common root path.
+    /// * *`StaticFiles`* is a service for static files support
+    ///
+    /// ```rust
+    /// use ntex::web::{self, App, HttpRequest};
+    ///
+    /// struct AppState;
+    ///
+    /// async fn index(req: HttpRequest) -> &'static str {
+    ///     "Welcome!"
+    /// }
+    ///
+    /// fn main() {
+    ///     let app = App::default().service(
+    ///         web::scope("/app").service(
+    ///             web::scope("/v1")
+    ///                 .service(web::resource("/test1").to(index)))
+    ///     );
+    /// }
+    /// ```
+    pub fn service(mut self, factory: impl WebServiceFactory<St, Out>) -> Self {
         self.services
             .push(Box::new(ServiceFactoryWrapper::new(factory)));
         self
@@ -221,7 +428,7 @@ where
     ///     );
     /// }
     /// ```
-    pub fn route(self, path: &str, mut route: Route<St>) -> Self {
+    pub fn route(self, path: &str, mut route: Route<St, Out>) -> Self {
         self.service(
             Resource::new(path)
                 .add_guards(route.take_guards())
@@ -233,9 +440,12 @@ where
     /// Default service to be used if no matching route could be found.
     ///
     /// If default resource is not registered, app's default resource is being used.
-    pub fn default_service<Sf>(mut self, f: impl IntoServiceFactory<Sf, St, WebRequest>) -> Self
+    pub fn default_service<Sf>(
+        mut self,
+        f: impl IntoServiceFactory<Sf, St, WebRequest<Out>>,
+    ) -> Self
     where
-        Sf: ServiceFactory<St, WebRequest, Res = WebResponse> + 'static,
+        Sf: ServiceFactory<St, WebRequest<Out>, Res = WebResponse> + 'static,
         Sf::Error: WebResponseError<St, St::Error>,
         Sf::InitError: IntoFailure,
     {
@@ -248,93 +458,37 @@ where
 
         self
     }
-
-    #[must_use]
-    /// Register request filter.
-    ///
-    /// Filter runs during inbound processing in the request
-    /// lifecycle (request -> response), modifying request as
-    /// necessary, across all requests managed by the *Scope*.
-    ///
-    /// This is similar to `App's` filters, but filter get invoked on scope level.
-    pub fn filter<U>(
-        self,
-        filter: impl IntoServiceFactory<U, St, WebRequest>,
-    ) -> Scope<
-        St,
-        M,
-        impl ServiceFactory<
-            St,
-            WebRequest,
-            Res = WebRequest,
-            Error = WebError<St, St::Error>,
-            InitError = Failure,
-        >,
-    >
-    where
-        U: ServiceFactory<St, WebRequest, Res = WebRequest>,
-        U::Error: WebResponseError<St, St::Error>,
-        U::InitError: IntoFailure,
-    {
-        Scope {
-            filter: self.filter.and_then(
-                filter
-                    .into_factory()
-                    .map_err(WebError::from_err)
-                    .map_init_err(IntoFailure::fail),
-            ),
-            middleware: self.middleware,
-            rdef: self.rdef,
-            guards: self.guards,
-            services: self.services,
-            default: self.default,
-            external: self.external,
-            case_insensitive: self.case_insensitive,
-        }
-    }
-
-    #[must_use]
-    /// Registers middleware, in the form of a middleware component (type).
-    ///
-    /// That runs during inbound processing in the request
-    /// lifecycle (request -> response), modifying request as
-    /// necessary, across all requests managed by the *Scope*. Scope-level
-    /// middleware is more limited in what it can modify, relative to Route or
-    /// Application level middleware, in that Scope-level middleware can not modify
-    /// `WebResponse`.
-    pub fn middleware<U>(self, mw: U) -> Scope<St, WebStack<St, M, U>, T> {
-        Scope {
-            middleware: WebStack::new(self.middleware, mw),
-            filter: self.filter,
-            rdef: self.rdef,
-            guards: self.guards,
-            services: self.services,
-            default: self.default,
-            external: self.external,
-            case_insensitive: self.case_insensitive,
-        }
-    }
 }
 
-impl<St, M, F> WebServiceFactory<St> for Scope<St, M, F>
+impl<St, Outer, In, Out, M, F> WebServiceFactory<St, Outer> for ScopeServices<St, In, Out, M, F>
 where
     St: AppState,
+    Outer: 'static,
+    In: 'static,
+    Out: 'static,
     F: ServiceFactory<
             St,
-            WebRequest,
-            Res = WebRequest,
+            WebRequest<In>,
+            Res = WebRequest<Out>,
             Error = WebError<St, St::Error>,
             InitError = Failure,
         > + 'static,
-    M: Middleware<AppRouter<St, F::Service>, St> + 'static,
-    M::Service: Service<St, WebRequest, Res = WebResponse, Error = WebError<St, St::Error>>,
+    M: Middleware<AppRouter<St, In, Out, F::Service>, St> + 'static,
+    M::Service: Service<St, WebRequest<Outer>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
-    fn register(mut self, config: &mut WebServiceConfig<St>) {
-        // update default resource if needed
-        let default = self.default.unwrap_or_else(|| config.default_service());
+    fn register(mut self, config: &mut WebServiceConfig<St, Outer>) {
+        // Default service
+        let default = self.default.unwrap_or_else(|| {
+            boxed::factory(
+                factory(async move |req: WebRequest<Out>| {
+                    Ok(req.into_response(Response::NotFound().build()))
+                })
+                .map_init_err(|_| unreachable!()),
+            )
+        });
 
         // Web app config
-        let mut cfg = config.get_nested();
+        let mut cfg = WebServiceConfig::new();
 
         // register nested services
         for mut svc in self.services {
@@ -352,7 +506,6 @@ where
         // Complete scope pipeline creation
         let services: Vec<_> = cfg
             .into_services()
-            .0
             .into_iter()
             .map(|(rdef, srv, guards, nested)| {
                 // case for scope prefix ends with '/' and
@@ -379,42 +532,46 @@ where
         // register final service
         config.register_service(
             ResourceDef::root_prefix(self.rdef),
-            ScopeServiceFactory {
-                default,
-                filter: self.filter,
-                middleware: self.middleware,
-                router: Rc::new(router.build()),
-            },
             if self.guards.is_empty() {
                 None
             } else {
                 Some(self.guards)
             },
             Some(Rc::new(rmap)),
+            ScopeServiceFactory {
+                default,
+                middleware: self.middleware,
+                filter: self.filter,
+                router: Rc::new(router.build()),
+            },
         );
     }
 }
 
 /// Scope service
-struct ScopeServiceFactory<St: AppState, M, F> {
+struct ScopeServiceFactory<St: AppState, In, Out, M, F> {
     middleware: M,
-    filter: ServiceChainFactory<F, St, WebRequest>,
-    router: Rc<Router<HttpService<St>, Guards>>,
-    default: HttpService<St>,
+    filter: ServiceChainFactory<F, St, WebRequest<In>>,
+    router: Rc<Router<HttpService<St, Out>, Guards>>,
+    default: HttpService<St, Out>,
 }
 
-impl<St, M, F> ServiceFactory<St, WebRequest> for ScopeServiceFactory<St, M, F>
+impl<St, Outer, In, Out, M, F> ServiceFactory<St, WebRequest<Outer>>
+    for ScopeServiceFactory<St, In, Out, M, F>
 where
     St: AppState,
-    M: Middleware<AppRouter<St, F::Service>, St> + 'static,
-    M::Service: Service<St, WebRequest, Res = WebResponse, Error = WebError<St, St::Error>>,
+    Outer: 'static,
+    In: 'static,
+    Out: 'static,
     F: ServiceFactory<
             St,
-            WebRequest,
-            Res = WebRequest,
+            WebRequest<In>,
+            Res = WebRequest<Out>,
             Error = WebError<St, St::Error>,
             InitError = Failure,
         > + 'static,
+    M: Middleware<AppRouter<St, In, Out, F::Service>, St> + 'static,
+    M::Service: Service<St, WebRequest<Outer>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
     type Res = WebResponse;
     type Error = WebError<St, St::Error>;
@@ -422,18 +579,19 @@ where
     type Service = M::Service;
     type InitError = Failure;
 
-    async fn create(&self, cfg: &St) -> Result<Self::Service, Self::InitError> {
-        let filter = self.filter.create(cfg).await?;
+    async fn create(&self, st: &St) -> Result<Self::Service, Self::InitError> {
+        let filter = self.filter.create(st).await?;
 
         // router service
         Ok(self.middleware.create(
-            cfg,
+            st,
             AppRouter {
                 filter,
                 router: self.router.clone(),
                 default: self.default.clone(),
                 cache: RefCell::new(HashMap::default()),
                 cache_default: RefCell::new(None),
+                ph: PhantomData,
             },
         ))
     }
@@ -888,7 +1046,7 @@ mod tests {
             App::new().service(
                 web::scope("/app")
                     .service(web::resource("/path1").to(async || HttpResponse::Ok()))
-                    .default_service(async move |r: WebRequest| {
+                    .default_service(async move |r: WebRequest<()>| {
                         Ok::<_, Infallible>(r.into_response(HttpResponse::BadRequest()))
                     }),
             ),
@@ -905,41 +1063,13 @@ mod tests {
     }
 
     #[crate::rt_test]
-    async fn test_default_resource_propagation() {
-        let srv = init_service(
-            App::new()
-                .service(
-                    web::scope("/app1")
-                        .default_service(web::resource("").to(async || HttpResponse::BadRequest())),
-                )
-                .service(web::scope("/app2"))
-                .default_service(async move |r: WebRequest| {
-                    Ok::<_, Infallible>(r.into_response(HttpResponse::MethodNotAllowed()))
-                }),
-        )
-        .await;
-
-        let req = TestRequest::with_uri("/non-exist").to_request();
-        let resp = srv.call(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
-
-        let req = TestRequest::with_uri("/app1/non-exist").to_request();
-        let resp = srv.call(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-
-        let req = TestRequest::with_uri("/app2/non-exist").to_request();
-        let resp = srv.call(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
-    }
-
-    #[crate::rt_test]
     async fn test_filter() {
         let filter = std::rc::Rc::new(std::cell::Cell::new(false));
         let filter2 = filter.clone();
         let srv = init_service(
             App::new().service(
                 web::scope("app")
-                    .filter(async move |req: WebRequest| {
+                    .filter(async move |req: WebRequest<()>| {
                         filter2.set(true);
                         Ok::<_, Infallible>(req)
                     })
