@@ -45,7 +45,7 @@ type Guards = Vec<Box<dyn Guard>>;
 /// Application service configuration
 #[derive(derive_more::Debug)]
 #[debug("WebServiceConfig")]
-pub struct WebServiceConfig<St: AppState, In> {
+pub struct WebServiceConfig<St: AppState, In = ()> {
     root: bool,
     services: Vec<(
         ResourceDef,
