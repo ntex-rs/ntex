@@ -83,7 +83,7 @@ where
     E: WebResponseError<St, Err> + Clone,
 {
     fn error_response(&self, st: &St) -> HttpResponse {
-        self.clone().into_error().error_response(st)
+        (**self).error_response(st)
     }
 }
 
