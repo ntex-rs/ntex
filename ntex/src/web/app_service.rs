@@ -212,7 +212,7 @@ where
             .await
         {
             Ok(r) => Ok(r.into()),
-            Err(mut e) => Ok(e.0.error_response(ctx.st())),
+            Err(e) => Ok(e.0.error_response(ctx.st())),
         }
     }
 }

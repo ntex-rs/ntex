@@ -13,7 +13,7 @@ use super::{AppState, FromRequest, HttpResponse, WebRequest, WebResponse};
 ///
 /// Route uses builder-like pattern for configuration.
 /// If handler is not explicitly set, default *404 Not Found* handler is used.
-pub struct Route<St: AppState, In> {
+pub struct Route<St: AppState, In = ()> {
     handler: Rc<dyn HandlerFn<St, In>>,
     methods: Vec<Method>,
     guards: Rc<AllGuard>,
@@ -75,7 +75,7 @@ impl<St: AppState, In: 'static> Route<St, In> {
     /// ```rust
     /// # use ntex::web::{self, *};
     /// # fn main() {
-    /// App::new().service(web::resource("/path").route(
+    /// App::default().service(web::resource("/path").route(
     ///     web::route()
     ///         .method(ntex::http::Method::CONNECT)
     ///         .guard(guard::Header("content-type", "text/plain"))
@@ -94,7 +94,7 @@ impl<St: AppState, In: 'static> Route<St, In> {
     /// ```rust
     /// # use ntex::web::{self, *};
     /// # fn main() {
-    /// App::new().service(web::resource("/path").route(
+    /// App::default().service(web::resource("/path").route(
     ///     web::route()
     ///         .guard(guard::Get())
     ///         .guard(guard::Header("content-type", "text/plain"))
@@ -124,7 +124,7 @@ impl<St: AppState, In: 'static> Route<St, In> {
     /// }
     ///
     /// fn main() {
-    ///     let app = web::App::new().service(
+    ///     let app = web::App::default().service(
     ///         web::resource("/{username}/index.html") // <- define path parameters
     ///             .route(web::get().to(index))        // <- register handler
     ///     );
@@ -148,7 +148,7 @@ impl<St: AppState, In: 'static> Route<St, In> {
     /// }
     ///
     /// fn main() {
-    ///     let app = web::App::new().service(
+    ///     let app = web::App::default().service(
     ///         web::resource("/{username}/index.html") // <- define path parameters
     ///             .route(web::get().to(index))
     ///     );
@@ -369,9 +369,7 @@ mod tests {
         let repr = format!("{route:?}");
         assert!(repr.contains("Route"), "{}", repr);
         assert!(
-            repr.contains(
-                "handler: Handler(\"ntex::web::route::Route<(), ()>::new::{{closure}}\")"
-            ),
+            repr.contains("handler: Handler(\"ntex::web::route::Route<()>::new::{{closure}}\")"),
             "{}",
             repr
         );
@@ -384,9 +382,7 @@ mod tests {
         let repr = format!("{route_service:?}");
         assert!(repr.contains("RouteService"));
         assert!(
-            repr.contains(
-                "handler: Handler(\"ntex::web::route::Route<(), ()>::new::{{closure}}\")"
-            )
+            repr.contains("handler: Handler(\"ntex::web::route::Route<()>::new::{{closure}}\")")
         );
         assert!(repr.contains("methods: [GET]"));
         assert!(repr.contains("guards: AllGuard()"));

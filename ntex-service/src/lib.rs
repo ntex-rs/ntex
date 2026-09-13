@@ -40,7 +40,7 @@ pub use crate::apply::{apply_fn, apply_fn_factory};
 pub use crate::chain::{ServiceChain, ServiceChainFactory, factory, service};
 pub use crate::ctx::Ctx;
 pub use crate::fn_service::{fn_factory, fn_service, fn_service_st};
-pub use crate::map_state::map_state;
+pub use crate::map_state::{map_state, map_state_factory};
 pub use crate::middleware::{Identity, Middleware, Stack, apply, fn_layer};
 pub use crate::pipeline::Pipeline;
 pub use crate::state::{RequestState, State};
@@ -430,7 +430,7 @@ pub mod dev {
     pub use crate::map::{Map, MapFactory};
     pub use crate::map_err::{MapErr, MapErrFactory};
     pub use crate::map_init_err::MapInitErr;
-    pub use crate::map_state::MapState;
+    pub use crate::map_state::{MapState, MapStateFactory};
     pub use crate::middleware::{ApplyMiddleware, FnMiddleware};
     pub use crate::then::{Then, ThenFactory};
 }

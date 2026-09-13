@@ -781,7 +781,7 @@ async fn test_custom_error() {
     impl ntex::http::ResponseError for JsonContainer {}
 
     impl<St> WebResponseError<St, JsonContainer> for TestError {
-        fn error_response(&mut self, _: &St) -> HttpResponse {
+        fn error_response(&self, _: &St) -> HttpResponse {
             HttpResponse::BadRequest()
                 .header(CONTENT_TYPE, "application/json")
                 .body("Error")
@@ -804,7 +804,7 @@ async fn test_custom_error() {
             })
         })
         .and_then(http::HttpService::new(
-            App::with()
+            App::new()
                 .service(web::resource("/").route(web::get().to(test)))
                 .service(web::resource("/err").route(web::get().to(test_err))),
         ))
@@ -932,7 +932,7 @@ async fn test_request_state() {
         }
     }
 
-    impl<S, St> Service<St, WebRequest> for UsizeMwS<S>
+    impl<S, St> Service<St, WebRequest<()>> for UsizeMwS<S>
     where
         S: Service<St, WebRequest<usize>, Res = WebResponse>,
     {
@@ -941,7 +941,7 @@ async fn test_request_state() {
 
         async fn call(
             &self,
-            req: WebRequest,
+            req: WebRequest<()>,
             ctx: Ctx<'_, Self, St>,
         ) -> Result<Self::Res, Self::Error> {
             let req = req.map_state(|()| 100);
@@ -955,7 +955,7 @@ async fn test_request_state() {
 
     let srv = http::test::server(async |_| {
         http::HttpService::new(
-            App::with()
+            App::new()
                 .middleware(UsizeMw)
                 .filter(async |mut req: WebRequest<usize>| {
                     assert_eq!(*req.st(), 100);

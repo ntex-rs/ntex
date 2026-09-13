@@ -135,7 +135,7 @@ where
     async fn respond_to(self, st: &St, _: &HttpRequest) -> Response {
         let body = match serde_urlencoded::to_string(&self.0) {
             Ok(body) => body,
-            Err(mut e) => return e.error_response(st),
+            Err(e) => return e.error_response(st),
         };
 
         Response::builder(StatusCode::OK)
@@ -167,7 +167,7 @@ where
 ///         .set_state(web::types::FormConfig::default().limit(4097))
 ///         .into();
 ///
-///     let app = App::new()
+///     let app = App::default()
 ///         .config(cfg)
 ///         .service(web::resource("/index.html").route(web::get().to(index)));
 /// }

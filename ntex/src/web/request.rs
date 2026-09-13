@@ -1,17 +1,14 @@
 use std::{cell::Ref, cell::RefMut, fmt, net};
 
-use crate::http::{
-    HeaderMap, HttpMessage, Method, Payload, RequestHead, Response, Uri, Version, header,
-};
+use crate::http::header;
+use crate::http::{HeaderMap, HttpMessage, Method, Payload, RequestHead, Response, Uri, Version};
 use crate::io::{IoRef, types};
 use crate::router::{Path, Resource};
 use crate::util::Extensions;
 
 use super::config::WebAppConfig;
-use super::error::WebResponseError;
 use super::info::ConnectionInfo;
-use super::rmap::ResourceMap;
-use super::{AppState, HttpRequest, WebResponse};
+use super::{AppState, HttpRequest, WebResponse, WebResponseError, rmap::ResourceMap};
 
 /// An service http request
 ///
@@ -34,7 +31,7 @@ impl<St> WebRequest<St> {
 
     /// Create web response for error
     #[inline]
-    pub fn error_response<AppSt, E>(self, st: &AppSt, mut err: E) -> WebResponse
+    pub fn error_response<AppSt, E>(self, st: &AppSt, err: &E) -> WebResponse
     where
         AppSt: AppState,
         E: WebResponseError<AppSt, AppSt::Error>,
@@ -303,7 +300,7 @@ mod tests {
         assert!(req.peer_addr().is_none());
         let err = http::error::PayloadError::Overflow;
 
-        let res: HttpResponse = req.error_response::<(), _>(&(), err).into();
+        let res: HttpResponse = req.error_response::<(), _>(&(), &err).into();
         assert_eq!(res.status(), http::StatusCode::PAYLOAD_TOO_LARGE);
 
         let mut req = TestRequest::default().to_srv_request();
