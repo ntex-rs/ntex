@@ -63,7 +63,7 @@ where
             let (req, mut payload, _reqst) = req.into_parts();
             let param = match T::from_request(st, &req, &mut payload).await {
                 Ok(param) => param,
-                Err(e) => return WebResponse::from_err(st, e, req),
+                Err(e) => return WebResponse::from_err(st, &e, req),
             };
 
             let result = self.hnd.call(param).await;

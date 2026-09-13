@@ -781,7 +781,7 @@ async fn test_custom_error() {
     impl ntex::http::ResponseError for JsonContainer {}
 
     impl<St> WebResponseError<St, JsonContainer> for TestError {
-        fn error_response(&mut self, _: &St) -> HttpResponse {
+        fn error_response(&self, _: &St) -> HttpResponse {
             HttpResponse::BadRequest()
                 .header(CONTENT_TYPE, "application/json")
                 .body("Error")

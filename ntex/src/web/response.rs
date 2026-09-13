@@ -21,7 +21,7 @@ impl WebResponse {
     /// Create web response from the error.
     pub fn from_err<St>(
         st: &St,
-        mut err: impl WebResponseError<St, St::Error>,
+        err: &impl WebResponseError<St, St::Error>,
         request: HttpRequest,
     ) -> Self
     where
@@ -44,7 +44,7 @@ impl WebResponse {
     #[inline]
     #[must_use]
     /// Create web response for error.
-    pub fn error_response<St>(self, st: &St, err: impl WebResponseError<St, St::Error>) -> Self
+    pub fn error_response<St>(self, st: &St, err: &impl WebResponseError<St, St::Error>) -> Self
     where
         St: AppState,
     {
@@ -157,7 +157,7 @@ mod tests {
         assert_eq!(res.response().status(), StatusCode::BAD_REQUEST);
 
         let err = http::error::PayloadError::Overflow;
-        let res = res.error_response::<()>(&(), err);
+        let res = res.error_response::<()>(&(), &err);
         assert_eq!(res.response().status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 }

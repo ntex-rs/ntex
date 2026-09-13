@@ -1,7 +1,7 @@
 //! Request extractors
 use std::convert::Infallible;
 
-use super::{AppState, HttpRequest, HttpResponse, WebResponseError};
+use super::{AppState, HttpRequest, WebResponseError};
 use crate::http::Payload;
 
 #[allow(async_fn_in_trait)]
@@ -169,11 +169,13 @@ macro_rules! tuple_from_req {
             $($T: FromRequest<St> + 'static,)+
             $(<$T as $crate::web::FromRequest<St>>::Error: WebResponseError<St, St::Error>),+
         {
-            type Error = HttpResponse;
+            type Error = $crate::web::InternalError<&'static str>;
 
             async fn from_request(st: &St, req: &HttpRequest, payload: &mut Payload) -> Result<($($T,)+), Self::Error> {
                 Ok((
-                    $($T::from_request(st, req, payload).await.map_err(|mut e| e.error_response(st))?,)+
+                    $($T::from_request(st, req, payload).await.map_err(
+                        |e|
+                        $crate::web::InternalError::from_response("Error", e.error_response(st)))?,)+
                 ))
             }
         }

@@ -91,8 +91,7 @@ mod tests {
 
         let srv = init_service_st(
             MyState { val: 0 },
-            App::new()
-                .service(web::resource("/").to(|_: State<MyState>| async { HttpResponse::Ok() })),
+            App::new().service(web::resource("/").to(async |_: State<MyState>| HttpResponse::Ok())),
         )
         .await;
 
@@ -102,8 +101,7 @@ mod tests {
 
         let srv = init_service_st(
             MyState { val: 0 },
-            App::new()
-                .service(web::resource("/").to(|_: State<MyState>| async { HttpResponse::Ok() })),
+            App::new().service(web::resource("/").to(async |_: State<MyState>| HttpResponse::Ok())),
         )
         .await;
         let req = TestRequest::default().to_request();
