@@ -1,5 +1,7 @@
 # Changes
 
+* Refactor Condition result
+
 ## [4.0.0-beta.1] - 2026-08-25
 
 * Re-export HashMap and HashSet
