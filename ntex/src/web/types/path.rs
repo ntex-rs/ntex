@@ -25,7 +25,7 @@ use crate::{http::Payload, router::PathDeserializer};
 /// }
 ///
 /// fn main() {
-///     let app = web::App::default().service(
+///     let app = web::App::new().service(
 ///         web::resource("/{username}/{count}/index.html") // <- define path parameters
 ///              .route(web::get().to(index))               // <- register handler with `Path` extractor
 ///     );
@@ -36,6 +36,7 @@ use crate::{http::Payload, router::PathDeserializer};
 /// implements `Deserialize` trait from *serde*.
 ///
 /// ```rust
+/// use std::convert::Infallible;
 /// use ntex::web;
 ///
 /// #[derive(serde::Deserialize)]
@@ -44,12 +45,12 @@ use crate::{http::Payload, router::PathDeserializer};
 /// }
 ///
 /// /// extract `Info` from a path using serde
-/// async fn index(info: web::types::Path<Info>) -> Result<String, web::WebError> {
+/// async fn index(info: web::types::Path<Info>) -> Result<String, Infallible> {
 ///     Ok(format!("Welcome {}!", info.username))
 /// }
 ///
 /// fn main() {
-///     let app = web::App::default().service(
+///     let app = web::App::new().service(
 ///         web::resource("/{username}/index.html") // <- define path parameters
 ///              .route(web::get().to(index)) // <- use handler with Path` extractor
 ///     );
@@ -119,7 +120,7 @@ impl<T: fmt::Display> fmt::Display for Path<T> {
 /// }
 ///
 /// fn main() {
-///     let app = web::App::default().service(
+///     let app = web::App::new().service(
 ///         web::resource("/{username}/{count}/index.html") // <- define path parameters
 ///              .route(web::get().to(index)) // <- register handler with `Path` extractor
 ///     );
@@ -130,6 +131,7 @@ impl<T: fmt::Display> fmt::Display for Path<T> {
 /// implements `Deserialize` trait from *serde*.
 ///
 /// ```rust
+/// use std::convert::Infallible;
 /// use ntex::web;
 ///
 /// #[derive(serde::Deserialize)]
@@ -138,12 +140,12 @@ impl<T: fmt::Display> fmt::Display for Path<T> {
 /// }
 ///
 /// /// extract `Info` from a path using serde
-/// async fn index(info: web::types::Path<Info>) -> Result<String, web::WebError> {
+/// async fn index(info: web::types::Path<Info>) -> Result<String, Infallible> {
 ///     Ok(format!("Welcome {}!", info.username))
 /// }
 ///
 /// fn main() {
-///     let app = web::App::default().service(
+///     let app = web::App::new().service(
 ///         web::resource("/{username}/index.html") // <- define path parameters
 ///              .route(web::get().to(index)) // <- use handler with Path` extractor
 ///     );
@@ -190,14 +192,14 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_extract_path_single() {
-        let mut router = Router::<usize>::build();
+        let mut router = Router::<usize>::builder();
         router.path("/{value}/", 10).0.set_id(0);
-        let router = router.finish();
+        let router = router.build();
 
         let mut req = TestRequest::with_uri("/32/").to_srv_request();
         router.recognize(req.match_info_mut());
 
-        let (req, mut pl) = req.into_parts();
+        let (req, mut pl, ()) = req.into_parts();
         assert_eq!(
             *from_request::<_, Path<i8>>(&(), &req, &mut pl)
                 .await
@@ -213,14 +215,14 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_tuple_extract() {
-        let mut router = Router::<usize>::build();
+        let mut router = Router::<usize>::builder();
         router.path("/{key}/{value}/", 10).0.set_id(0);
-        let router = router.finish();
+        let router = router.build();
 
         let mut req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
         router.recognize(req.match_info_mut());
 
-        let (req, mut pl) = req.into_parts();
+        let (req, mut pl, ()) = req.into_parts();
         let res = from_request::<_, (Path<(String, String)>,)>(&(), &req, &mut pl)
             .await
             .unwrap();
@@ -241,14 +243,14 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_request_extract() {
-        let mut router = Router::<usize>::build();
+        let mut router = Router::<usize>::builder();
         router.path("/{key}/{value}/", 10).0.set_id(0);
-        let router = router.finish();
+        let router = router.build();
 
         let mut req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
         router.recognize(req.match_info_mut());
 
-        let (req, mut pl) = req.into_parts();
+        let (req, mut pl, ()) = req.into_parts();
         let mut s = from_request::<_, Path<MyStruct>>(&(), &req, &mut pl)
             .await
             .unwrap();
@@ -272,7 +274,7 @@ mod tests {
         let mut req = TestRequest::with_uri("/name/32/").to_srv_request();
         router.recognize(req.match_info_mut());
 
-        let (req, mut pl) = req.into_parts();
+        let (req, mut pl, ()) = req.into_parts();
         let s = from_request::<_, Path<Test2>>(&(), &req, &mut pl)
             .await
             .unwrap();

@@ -109,8 +109,8 @@ impl<F> RequestState<Io<F>> for Io<F> {
     type State = ();
 
     #[inline]
-    fn unpack(self) -> (Io<F>, ()) {
-        (self, ())
+    fn unpack(self) -> ((), Io<F>) {
+        ((), self)
     }
 }
 
@@ -118,8 +118,8 @@ impl<F: Filter> RequestState<IoBoxed> for Io<F> {
     type State = ();
 
     #[inline]
-    fn unpack(self) -> (IoBoxed, ()) {
-        (self.boxed(), ())
+    fn unpack(self) -> ((), IoBoxed) {
+        ((), self.boxed())
     }
 }
 
@@ -127,18 +127,18 @@ impl RequestState<IoBoxed> for IoBoxed {
     type State = ();
 
     #[inline]
-    fn unpack(self) -> (IoBoxed, ()) {
-        (self, ())
+    fn unpack(self) -> ((), IoBoxed) {
+        ((), self)
     }
 }
 
-impl<F: Filter, St: 'static> RequestState<IoBoxed> for State<Io<F>, St> {
+impl<F: Filter, St: 'static> RequestState<IoBoxed> for State<St, Io<F>> {
     type State = St;
 
     #[inline]
-    fn unpack(self) -> (IoBoxed, St) {
+    fn unpack(self) -> (St, IoBoxed) {
         let State { req, state } = self;
-        (req.boxed(), state)
+        (state, req.boxed())
     }
 }
 

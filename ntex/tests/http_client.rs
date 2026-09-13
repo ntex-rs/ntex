@@ -9,9 +9,9 @@ use ntex::client::{Client, ClientConfig, error::ClientError};
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpMessage, HttpService, Method, Response, header};
 use ntex::io::IoConfig;
-use ntex::service::{cfg::SharedCfg, fn_layer, svc};
+use ntex::service::{cfg::SharedCfg, fn_layer, service};
 use ntex::web::middleware::Compress;
-use ntex::web::{self, App, BodyEncoding, HttpRequest, HttpResponse, WebError, test};
+use ntex::web::{self, App, BodyEncoding, HttpRequest, HttpResponse, test};
 use ntex::{client, time::Millis, time::Seconds, time::sleep, util::Bytes};
 
 const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
@@ -137,7 +137,7 @@ async fn test_connection_reuse() {
 
     let srv = test_server(async move |_| {
         let num2 = num2.clone();
-        svc(async move |io| {
+        service(async move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
             Ok(io)
         })
@@ -184,7 +184,7 @@ async fn test_connection_force_close() {
 
     let srv = test_server(async move |_| {
         let num2 = num2.clone();
-        svc(async move |io| {
+        service(async move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
             Ok(io)
         })
@@ -217,12 +217,12 @@ async fn test_connection_server_close() {
 
     let srv = test_server(async move |_| {
         let num2 = num2.clone();
-        svc(async move |io| {
+        service(async move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
             Ok(io)
         })
         .and_then(HttpService::new(App::new().service(
-            web::resource("/").route(web::to(async || HttpResponse::Ok().force_close().finish())),
+            web::resource("/").route(web::to(async || HttpResponse::Ok().force_close().build())),
         )))
     });
 
@@ -249,7 +249,7 @@ async fn test_connection_wait_queue() {
 
     let srv = test_server(async move |_| {
         let num2 = num2.clone();
-        svc(async move |io| {
+        service(async move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
             Ok(io)
         })
@@ -292,7 +292,7 @@ async fn test_connection_wait_queue_force_close() {
 
     let srv = test_server(async move |_| {
         let num2 = num2.clone();
-        svc(async move |io| {
+        service(async move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
             Ok(io)
         })
@@ -539,7 +539,7 @@ async fn test_client_deflate_encoding_large_random() {
 //         })
 //     });
 
-//     let request = srv.get("/").finish().unwrap();
+//     let request = srv.get("/").build().unwrap();
 //     let response = srv.execute(request.send()).unwrap();
 //     assert!(response.status().is_success());
 
@@ -574,18 +574,18 @@ async fn test_client_cookie_handling() {
                     let cookie2 = cookie2.clone();
 
                     // Check cookies were sent correctly
-                    let res: Result<(), WebError> = req
+                    let res: Result<(), io::Error> = req
                         .cookie("cookie1")
                         .ok_or(())
                         .and_then(|c1| if c1.value() == "value1" { Ok(()) } else { Err(()) })
                         .and_then(|()| req.cookie("cookie2").ok_or(()))
                         .and_then(|c2| if c2.value() == "value2" { Ok(()) } else { Err(()) })
-                        .map_err(|_| WebError::new(IoError::from(ErrorKind::NotFound)));
+                        .map_err(|_| IoError::from(ErrorKind::NotFound));
 
                     res?;
 
                     // Send some cookies back
-                    Ok::<_, WebError>(HttpResponse::Ok().cookie(cookie1).cookie(cookie2).finish())
+                    Ok::<_, io::Error>(HttpResponse::Ok().cookie(cookie1).cookie(cookie2).build())
                 },
             )),
         )

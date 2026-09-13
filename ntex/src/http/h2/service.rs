@@ -1,8 +1,8 @@
-use std::{cell::RefCell, error::Error as StdError, future::poll_fn, io, marker, mem, rc::Rc};
+use std::{cell::RefCell, future::poll_fn, io, mem};
 
 use ntex_h2::{self as h2, frame::StreamId, server};
 
-use crate::error::Error;
+use crate::error::{Error, IntoFailure};
 use crate::http::body::{BodySize, MessageBody};
 use crate::http::config::DispatcherConfig;
 use crate::http::error::{DispatchError, H2Error, ResponseError};
@@ -10,98 +10,90 @@ use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::message::{CurrentIo, ResponseHead};
 use crate::http::{DateService, Method, Request, Response, StatusCode, Uri, Version};
 use crate::io::{Filter, Io, IoBoxed, IoRef, types};
-use crate::service::state::RequestState;
-use crate::service::{Ctx, IntoServiceFactory, Pipeline, Service, ServiceFactory};
-use crate::util::{Bytes, BytesMut, HashMap, dyn_rc_err};
+use crate::service::pipeline::{Pipeline, PipelineFactory};
+use crate::service::{Ctx, IntoServiceFactory, RequestState, Service, ServiceFactory};
+use crate::util::{Bytes, BytesMut, HashMap};
 
 use super::{DefaultControlService, payload::Payload, payload::PayloadSender};
 
 /// `ServiceFactory` implementation for HTTP2 transport
 #[derive(derive_more::Debug)]
 #[debug("H2Service")]
-pub struct H2Service<St, F, Req: RequestState<Io<F>>, H, Ctl = DefaultControlService> {
-    sf: H,
-    ctl: Ctl,
+pub struct H2Service<F, Req: RequestState<Io<F>>, Err> {
+    sf: crate::http::HttpPipeline<Req::State, Err>,
+    ctl: crate::http::Ctl2Pipeline<Req::State>,
     config: DispatcherConfig,
-    ph: marker::PhantomData<(St, F, Req)>,
 }
 
-impl<St, F, Req, H> H2Service<St, F, Req, H, DefaultControlService>
+impl<F, Req, Err> H2Service<F, Req, Err>
 where
-    St: 'static,
     F: Filter,
     Req: RequestState<Io<F>>,
     Req::State: Clone,
+    Err: ResponseError + 'static,
 {
     /// Create new `HttpService` instance with config.
-    pub(crate) fn new(sf: impl IntoServiceFactory<H, Req::State, Request, St>) -> Self
+    pub(crate) fn new<Sf>(sf: impl IntoServiceFactory<Sf, Req::State, Request>) -> Self
     where
-        H: ServiceFactory<Req::State, Request, St> + 'static,
-        H::Res: Into<Response>,
-        H::Error: ResponseError,
-        H::InitError: StdError,
+        Sf: ServiceFactory<Req::State, Request, Error = Err> + 'static,
+        Sf::Res: Into<Response>,
+        Sf::InitError: IntoFailure,
     {
         H2Service {
-            sf: sf.into_factory(),
-            ctl: DefaultControlService,
+            sf: PipelineFactory::new(
+                sf.into_factory()
+                    .map(Into::into)
+                    .map_init_err(|e| DispatchError::Control(e.fail())),
+            ),
+            ctl: PipelineFactory::new(DefaultControlService),
             config: DispatcherConfig::default(),
-            ph: marker::PhantomData,
         }
     }
 }
 
-impl<St, F, Req, H, Ctl> H2Service<St, F, Req, H, Ctl>
+impl<F, Req, Err> H2Service<F, Req, Err>
 where
-    St: 'static,
     F: Filter,
     Req: RequestState<Io<F>>,
+    Req::State: Clone,
+    Err: ResponseError + 'static,
 {
     #[must_use]
     /// Provide http/2 control service
-    pub fn control<I, Sf>(self, ctl: I) -> H2Service<St, F, Req, H, Sf>
+    pub fn control<I, Sf>(self, ctl: I) -> Self
     where
-        I: IntoServiceFactory<Sf, Req::State, h2::Control<H2Error>, St>,
-        Sf: ServiceFactory<Req::State, h2::Control<H2Error>, St, Res = h2::ControlAck> + 'static,
-        Sf::Error: StdError,
-        Sf::InitError: StdError,
+        I: IntoServiceFactory<Sf, Req::State, h2::Control<Error<H2Error>>>,
+        Sf: ServiceFactory<Req::State, h2::Control<Error<H2Error>>, Res = h2::ControlAck> + 'static,
+        Sf::Error: IntoFailure,
+        Sf::InitError: IntoFailure,
     {
         H2Service {
             sf: self.sf,
-            ctl: ctl.into_factory(),
+            ctl: PipelineFactory::new(
+                ctl.into_factory()
+                    .map_err(|e| DispatchError::Service(e.fail()))
+                    .map_init_err(|e| DispatchError::Service(e.fail())),
+            ),
             config: self.config,
-            ph: self.ph,
         }
     }
 }
 
-impl<St, F, Req, H, Ctl> Service<St, Req> for H2Service<St, F, Req, H, Ctl>
+impl<St, F, Req, Err> Service<St, Req> for H2Service<F, Req, Err>
 where
-    St: 'static,
     F: Filter,
     Req: RequestState<Io<F>>,
     Req::State: Clone,
-    H: ServiceFactory<Req::State, Request, St> + 'static,
-    H::Res: Into<Response>,
-    H::Error: ResponseError,
-    H::InitError: StdError,
-    Ctl: ServiceFactory<Req::State, h2::Control<H2Error>, St, Res = h2::ControlAck> + 'static,
-    Ctl::Error: StdError,
-    Ctl::InitError: StdError,
+    Err: ResponseError + 'static,
 {
     type Res = ();
     type Error = DispatchError;
 
-    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
-        let (io, st) = req.unpack();
+    async fn call(&self, req: Req, _: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
+        let (st, io) = req.unpack();
 
-        let svc = self.sf.create(ctx.st()).await.map_err(|e| {
-            log::error!("Cannot construct handler service: {e:?}");
-            DispatchError::Control
-        })?;
-        let ctl = self.ctl.create(ctx.st()).await.map_err(|e| {
-            log::error!("Cannot construct handler service: {e:?}");
-            DispatchError::Control
-        })?;
+        let svc = self.sf.create(st.clone()).await?;
+        let ctl = self.ctl.create(st).await?;
 
         let id = self.config.next_id();
         let ioref = io.get_ref();
@@ -112,13 +104,7 @@ where
             io.query::<types::PeerAddr>().get()
         );
 
-        let result = handle(
-            id,
-            io.into(),
-            Pipeline::with(st.clone(), svc.map(Into::into)),
-            Pipeline::with(st, ctl.map_err(dyn_rc_err)),
-        )
-        .await;
+        let result = handle(id, io.into(), svc, ctl).await;
 
         let inflight = self.config.remove_io(&ioref);
         if inflight == 0 && self.config.is_shutdown() {
@@ -149,7 +135,7 @@ pub(in crate::http) async fn handle<Err>(
     id: usize,
     io: IoBoxed,
     svc: Pipeline<Request, Response, Err>,
-    control: Pipeline<h2::Control<H2Error>, h2::ControlAck, Rc<dyn StdError>>,
+    control: Pipeline<h2::Control<Error<H2Error>>, h2::ControlAck, DispatchError>,
 ) -> Result<(), DispatchError>
 where
     Err: ResponseError + 'static,
@@ -158,7 +144,7 @@ where
 
     let _ = server::handle_one(
         io,
-        Pipeline::with((), PublishService::new(id, ioref, svc)),
+        Pipeline::new((), PublishService::new(id, ioref, svc)),
         control.bind(),
     )
     .await;
@@ -192,7 +178,7 @@ where
     Err: ResponseError + 'static,
 {
     type Res = ();
-    type Error = H2Error;
+    type Error = Error<H2Error>;
 
     async fn shutdown(&self, _: Ctx<'_, Self, ()>) {
         self.svc.shutdown().await;
@@ -287,9 +273,9 @@ where
         let head = req.head_mut();
         head.uri = if let Some(ref authority) = pseudo.authority {
             let scheme = pseudo.scheme.ok_or(H2Error::MissingPseudo("Scheme"))?;
-            Uri::try_from(format!("{scheme}://{authority}{path}"))?
+            Uri::try_from(format!("{scheme}://{authority}{path}")).map_err(Error::from_err)?
         } else {
-            Uri::try_from(path.as_str())?
+            Uri::try_from(path.as_str()).map_err(Error::from_err)?
         };
         let is_head_req = method == Method::HEAD;
         head.version = Version::HTTP_2;
@@ -298,13 +284,8 @@ where
         head.io = CurrentIo::Ref(io);
         head.id = self.id;
 
-        let (mut res, mut body) = match self.svc.call(req).await {
-            Ok(res) => res.into_parts(),
-            Err(err) => {
-                let (res, body) = Response::from(&err).into_parts();
-                (res, body.into_body())
-            }
-        };
+        let result = self.svc.call(req).await;
+        let (mut res, mut body) = Response::from(result).into_parts();
 
         let head = res.head_mut();
         let mut size = body.size();
@@ -320,11 +301,11 @@ where
         if size.is_eof() || is_head_req {
             stream
                 .send_response(head.status, hdrs, true)
-                .map_err(Error::into_error)?;
+                .map_err(Error::map_err)?;
         } else {
             stream
                 .send_response(head.status, hdrs, false)
-                .map_err(Error::into_error)?;
+                .map_err(Error::map_err)?;
 
             loop {
                 match poll_fn(|cx| body.poll_next_chunk(cx)).await {
@@ -338,7 +319,7 @@ where
                         stream
                             .send_payload(Bytes::new(), true)
                             .await
-                            .map_err(Error::into_error)?;
+                            .map_err(Error::map_err)?;
                         break;
                     }
                     Some(Ok(chunk)) => {
@@ -353,13 +334,13 @@ where
                             stream
                                 .send_payload(chunk, false)
                                 .await
-                                .map_err(Error::into_error)?;
+                                .map_err(Error::map_err)?;
                         }
                     }
                     Some(Err(e)) => {
                         #[cfg(feature = "trace")]
                         log::error!("{}: Response payload stream error: {e:?}", self.io.tag());
-                        return Err(H2Error::Stream(e));
+                        return Err(H2Error::Stream(e).into());
                     }
                 }
             }

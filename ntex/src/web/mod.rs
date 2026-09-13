@@ -61,8 +61,7 @@
 //! * `compress` - enables content encoding compression support
 //! * `openssl` - enables ssl support via `openssl` crate
 //! * `rustls` - enables ssl support via `rustls` crate
-#![allow(clippy::unused_async_trait_impl)]
-#![allow(unused_variables)]
+#![allow(clippy::unused_async_trait_impl, clippy::mismatching_type_param_order)]
 mod app;
 mod app_service;
 mod config;
@@ -106,29 +105,30 @@ pub use ntex_macros::web_trace as trace;
 pub use crate::http::Response as HttpResponse;
 pub use crate::http::ResponseBuilder as HttpResponseBuilder;
 
-pub use self::app::App;
-pub use self::config::ServiceConfig;
-pub use self::config::WebAppConfig;
-pub use self::error::{WebError, WebResponseError};
+pub use self::app::{App, AppServices};
+pub use self::config::{ServiceConfig, WebAppConfig};
+pub use self::error::{DefaultError, InternalError, WebError, WebResponseError};
 pub use self::extract::FromRequest;
 pub use self::handler::Handler;
 pub use self::httprequest::HttpRequest;
 pub use self::request::WebRequest;
-pub use self::resource::Resource;
+pub use self::resource::{Resource, ResourceServices};
 pub use self::responder::Responder;
 pub use self::response::WebResponse;
 pub use self::route::Route;
-pub use self::scope::Scope;
+pub use self::scope::{Scope, ScopeServices};
 pub use self::server::HttpServer;
 pub use self::service::WebServiceFactory;
 pub use self::state::AppState;
 pub use self::util::*;
 
+use crate::error::Failure;
 use crate::service::boxed::{BoxService, BoxServiceFactory};
 
-pub(crate) type HttpHandler<St: AppState> = BoxService<St, WebRequest, WebResponse, St::Error>;
-pub(crate) type HttpService<St: AppState, Cfg> =
-    BoxServiceFactory<St, WebRequest, WebResponse, St::Error, Cfg, ()>;
+pub(crate) type HttpHandler<St: AppState, In> =
+    BoxService<St, WebRequest<In>, WebResponse, WebError<St, St::Error>>;
+pub(crate) type HttpService<St: AppState, In> =
+    BoxServiceFactory<St, WebRequest<In>, WebResponse, WebError<St, St::Error>, Failure>;
 
 pub mod dev {
     //! The `ntex::web` prelude for library developers
@@ -154,16 +154,6 @@ pub mod dev {
         }
         patterns
     }
-
-    // #[doc(hidden)]
-    // #[inline(always)]
-    // pub fn __assert_extractor<St, T>()
-    // where
-    //     T: super::FromRequest<St>,
-    //     St: super::AppState,
-    //     <T as super::FromRequest<St>>::Error: Into<St::Error>,
-    // {
-    // }
 
     #[doc(hidden)]
     #[inline]

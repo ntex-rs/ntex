@@ -1,13 +1,13 @@
 //! HTTP/1 protocol dispatcher
 use std::task::{Context, Poll, ready};
-use std::{error, future, io, mem, pin::Pin, rc::Rc};
+use std::{future, io, mem, pin::Pin, rc::Rc};
 
 use crate::io::{Decoded, Filter, Io, IoStatusUpdate, RecvError};
 use crate::service::pipeline::{Pipeline, PipelineCall};
 use crate::{channel::bstream, time::Seconds, util::Either};
 
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
-use crate::http::error::{PayloadError, ResponseError};
+use crate::http::error::{DispatchError, PayloadError, ResponseError};
 use crate::http::message::CurrentIo;
 use crate::http::{self, config::DispatcherConfig, request::Request, response::Response};
 
@@ -43,7 +43,7 @@ enum State<F, B, Err> {
         fut: PipelineCall<Request, Response<B>, Err>,
     },
     CallControl {
-        fut: PipelineCall<Control<F, Err>, ControlAck<F>, Rc<dyn error::Error>>,
+        fut: PipelineCall<Control<F, Err>, ControlAck<F>, DispatchError>,
     },
     ReadRequest,
     ReadPayload,
@@ -57,7 +57,7 @@ struct DispatcherInner<F, B, Err> {
     io: Rc<Io<F>>,
     flags: Flags,
     service: Pipeline<Request, Response<B>, Err>,
-    control: Pipeline<Control<F, Err>, ControlAck<F>, Rc<dyn error::Error>>,
+    control: Pipeline<Control<F, Err>, ControlAck<F>, DispatchError>,
     disconnect: Option<ServiceDisconnectReason>,
     codec: Codec,
     config: DispatcherConfig,
@@ -78,7 +78,7 @@ where
         id: usize,
         io: Io<F>,
         service: Pipeline<Request, Response<B>, Err>,
-        control: Pipeline<Control<F, Err>, ControlAck<F>, Rc<dyn error::Error>>,
+        control: Pipeline<Control<F, Err>, ControlAck<F>, DispatchError>,
         config: DispatcherConfig,
     ) -> Self {
         let codec = Codec::new(id, io.shared().get());
@@ -116,7 +116,7 @@ where
     B: MessageBody,
     Err: ResponseError + 'static,
 {
-    type Output = Result<(), Rc<dyn error::Error>>;
+    type Output = Result<(), DispatchError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -219,9 +219,8 @@ where
                 }
                 // shutdown io
                 State::Stop => {
-                    return Poll::Ready(
-                        ready!(inner.io.poll_shutdown(cx)).map_err(crate::util::dyn_rc_err),
-                    );
+                    let _ = ready!(inner.io.poll_shutdown(cx));
+                    return Poll::Ready(Ok(()));
                 }
             }
         }
@@ -759,7 +758,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::{cell::Cell, future::Future, future::poll_fn, sync::Arc};
+    use std::{cell::Cell, error, future::Future, future::poll_fn, sync::Arc};
 
     use rand::Rng;
 
@@ -770,7 +769,7 @@ mod tests {
     use crate::http::{ResponseHead, StatusCode, body};
     use crate::io::{self as nio, Base};
     use crate::service::{IntoService, Service, cfg::SharedCfg, fn_service};
-    use crate::util::{Bytes, BytesMut, dyn_rc_err, lazy, stream_recv};
+    use crate::util::{Bytes, BytesMut, lazy, stream_recv};
     use crate::{codec::Decoder, testing::IoTest, time::Millis, time::sleep};
 
     const BUFFER_SIZE: usize = 32_768;
@@ -795,8 +794,8 @@ mod tests {
         Dispatcher::new(
             0,
             nio::Io::new(stream, cfg.clone()),
-            Pipeline::with((), s.into_service().map(Into::into)),
-            Pipeline::with((), DefaultControlService.map_err(dyn_rc_err)),
+            Pipeline::new((), s.into_service().map(Into::into)),
+            Pipeline::new((), DefaultControlService),
             DispatcherConfig::default(),
         )
     }
@@ -820,8 +819,8 @@ mod tests {
         crate::rt::spawn(Dispatcher::new(
             0,
             nio::Io::new(stream, cfg),
-            Pipeline::with((), s.into_service().map(Into::into)),
-            Pipeline::with((), DefaultControlService.map_err(dyn_rc_err)),
+            Pipeline::new((), s.into_service().map(Into::into)),
+            Pipeline::new((), DefaultControlService),
             DispatcherConfig::default(),
         ));
     }
@@ -849,14 +848,14 @@ mod tests {
         let mut h1 = Dispatcher::new(
             0,
             nio::Io::new(server, config),
-            Pipeline::with((), async |_| Ok::<_, io::Error>(Response::Ok().finish())),
-            Pipeline::with(
+            Pipeline::new((), async |_| Ok::<_, io::Error>(Response::Ok().build())),
+            Pipeline::new(
                 (),
                 fn_service(async move |req: Control<_, _>| {
                     if let Control::Request(_) = req {
                         data2.set(true);
                     }
-                    Ok::<_, Rc<dyn error::Error>>(req.ack())
+                    Ok::<_, DispatchError>(req.ack())
                 }),
             ),
             DispatcherConfig::default(),
@@ -878,9 +877,7 @@ mod tests {
         client.remote_buffer_cap(1024);
         client.write("GET /test HTTP/1\r\n\r\n");
 
-        let mut h1 = h1(server, async |_| {
-            Ok::<_, io::Error>(Response::Ok().finish())
-        });
+        let mut h1 = h1(server, async |_| Ok::<_, io::Error>(Response::Ok().build()));
         sleep(Millis(50)).await;
         // required because io shutdown is async oper
         let _ = lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready();
@@ -902,9 +899,7 @@ mod tests {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
         let mut decoder = ClientCodec::new(true, SharedCfg::default().get());
-        spawn_h1(server, async |_| {
-            Ok::<_, io::Error>(Response::Ok().finish())
-        });
+        spawn_h1(server, async |_| Ok::<_, io::Error>(Response::Ok().build()));
 
         client.write("GET /test1 HTTP/1.1\r\n\r\n");
 
@@ -934,7 +929,7 @@ mod tests {
         spawn_h1(server, async move |mut req: Request| {
             let mut p = req.take_payload();
             while (stream_recv(&mut p).await).is_some() {}
-            Ok::<_, io::Error>(Response::Ok().finish())
+            Ok::<_, io::Error>(Response::Ok().build())
         });
 
         client.write("GET /test1 HTTP/1.1\r\ncontent-length: 5\r\n\r\n");
@@ -963,7 +958,7 @@ mod tests {
         let mut decoder = ClientCodec::new(true, SharedCfg::default().get());
         spawn_h1(server, async |_| {
             sleep(Millis(100)).await;
-            Ok::<_, io::Error>(Response::Ok().finish())
+            Ok::<_, io::Error>(Response::Ok().build())
         });
 
         client.write("GET /test HTTP/1.1\r\n\r\n");
@@ -1004,7 +999,7 @@ mod tests {
         let (client, server) = IoTest::create();
         spawn_h1(server, async move |_| {
             num2.fetch_add(1, Ordering::Relaxed);
-            Ok::<_, io::Error>(Response::Ok().finish())
+            Ok::<_, io::Error>(Response::Ok().build())
         });
 
         client.remote_buffer_cap(1024);
@@ -1025,9 +1020,7 @@ mod tests {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
 
-        let mut h1 = h1(server, async |_| {
-            Ok::<_, io::Error>(Response::Ok().finish())
-        });
+        let mut h1 = h1(server, async |_| Ok::<_, io::Error>(Response::Ok().build()));
         h1.inner.io.set_config(
             SharedCfg::new("TEST")
                 .add(
@@ -1078,7 +1071,7 @@ mod tests {
             m.store(true, Ordering::Relaxed);
             // sleep
             sleep(Millis(999_999_000)).await;
-            Ok::<_, io::Error>(Response::Ok().finish())
+            Ok::<_, io::Error>(Response::Ok().build())
         });
 
         client.write("GET /test HTTP/1.1\r\nContent-Length: 1048576\r\n\r\n");
@@ -1240,10 +1233,10 @@ mod tests {
                     if let Ok(buf) = item {
                         m.store(size + buf.len(), Ordering::Relaxed);
                     } else {
-                        return Ok::<_, io::Error>(Response::Ok().finish());
+                        return Ok::<_, io::Error>(Response::Ok().build());
                     }
                 }
-                Ok::<_, io::Error>(Response::Ok().finish())
+                Ok::<_, io::Error>(Response::Ok().build())
             }
         };
 
@@ -1259,8 +1252,8 @@ mod tests {
         let disp = Dispatcher::new(
             0,
             nio::Io::new(server, config),
-            Pipeline::with((), fn_service(svc)),
-            Pipeline::with(
+            Pipeline::new((), fn_service(svc)),
+            Pipeline::new(
                 (),
                 fn_service(async move |msg: Control<_, _>| {
                     if let Control::Disconnect(Reason::ProtocolError(ref err)) = msg
@@ -1268,7 +1261,7 @@ mod tests {
                     {
                         err_mark2.store(err_mark2.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
                     }
-                    Ok::<_, Rc<dyn error::Error>>(msg.ack())
+                    Ok::<_, DispatchError>(msg.ack())
                 }),
             ),
             DispatcherConfig::default(),

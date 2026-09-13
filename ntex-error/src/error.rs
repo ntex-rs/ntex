@@ -152,6 +152,11 @@ impl<E: Clone> Error<E> {
         })
     }
 
+    /// Consumes this error and returns the inner error value.
+    pub fn into_error(self) -> E {
+        Arc::try_unwrap(self.inner).map_or_else(|inner| inner.error.clone(), |inner| inner.error)
+    }
+
     /// Attaches a typed value to this `Error`.
     ///
     /// This value can be retrieved later using `get_item::<T>()`.
@@ -165,13 +170,6 @@ impl<E: Clone> Error<E> {
     }
 }
 
-impl<E: Clone> Error<E> {
-    /// Consumes this error and returns the inner error value.
-    pub fn into_error(self) -> E {
-        Arc::try_unwrap(self.inner).map_or_else(|inner| inner.error.clone(), |inner| inner.error)
-    }
-}
-
 impl<E> Clone for Error<E> {
     fn clone(&self) -> Error<E> {
         Error {
@@ -180,7 +178,7 @@ impl<E> Clone for Error<E> {
     }
 }
 
-impl<E: error::Error> From<E> for Error<E> {
+impl<E> From<E> for Error<E> {
     #[track_caller]
     fn from(error: E) -> Self {
         Self {

@@ -123,7 +123,7 @@ where
 
 impl<E> error::Error for ErrorRepr<E>
 where
-    E: ErrorDiagnostic + error::Error,
+    E: ErrorDiagnostic,
 {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         Some(&self.error)
@@ -132,7 +132,7 @@ where
 
 impl<E> fmt::Debug for ErrorRepr<E>
 where
-    E: ErrorDiagnostic + error::Error,
+    E: ErrorDiagnostic,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&self.error, f)
@@ -141,7 +141,7 @@ where
 
 impl<E> fmt::Display for ErrorRepr<E>
 where
-    E: ErrorDiagnostic + error::Error,
+    E: ErrorDiagnostic,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.error, f)

@@ -8,8 +8,8 @@ use ntex_http::{StatusCode, header};
 pub use crate::channel::Canceled;
 pub use ntex_http::error::Error as HttpError;
 
-use crate::http::body::Body;
-use crate::http::response::Response;
+use crate::error::Failure;
+use crate::http::{body::Body, response::Response};
 use crate::util::{BytesMut, Either, clone_io_error};
 
 /// Error that can be converted to `Response`
@@ -225,11 +225,11 @@ impl From<Either<PayloadError, io::Error>> for PayloadError {
 pub enum DispatchError {
     /// Service error
     #[error("Service error {0}")]
-    Service(Rc<dyn ResponseError>),
+    Service(Failure),
 
     /// Control service error
     #[error("Control service error")]
-    Control,
+    Control(Failure),
 }
 
 #[derive(thiserror::Error, Clone, Debug)]
@@ -260,6 +260,12 @@ pub enum H2Error {
 impl From<ntex_http::compat::InvalidUri> for H2Error {
     fn from(_: ntex_http::compat::InvalidUri) -> H2Error {
         H2Error::Uri
+    }
+}
+
+impl crate::error::ErrorDiagnostic for H2Error {
+    fn signature(&self) -> &'static str {
+        "ntex-http-h2error"
     }
 }
 

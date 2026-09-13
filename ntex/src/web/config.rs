@@ -15,7 +15,7 @@ pub struct WebAppConfig {
     host: String,
     addr: SocketAddr,
     config: CfgContext,
-    extensions: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+    state: HashMap<TypeId, Box<dyn Any + Sync + Send>>,
     pub(super) pool_size: usize,
 }
 
@@ -58,8 +58,8 @@ impl WebAppConfig {
             addr,
             name: name.into(),
             pool_size: 128,
+            state: HashMap::default(),
             config: CfgContext::default(),
-            extensions: HashMap::default(),
         }
     }
 
@@ -89,12 +89,9 @@ impl WebAppConfig {
         self.addr
     }
 
-    /// Set application level arbitrary state item.
-    ///
-    /// Application state is available
-    /// via `HttpRequest::app_state()` method at runtime.
+    /// Get an application state object stored with `.set_state()` method.
     pub fn state<T: 'static>(&self) -> Option<&T> {
-        self.extensions
+        self.state
             .get(&TypeId::of::<T>())
             .and_then(|boxed| boxed.downcast_ref())
     }
@@ -133,8 +130,11 @@ impl WebAppConfig {
 
     #[must_use]
     /// Set application level arbitrary state item.
-    pub fn set_state<T: Sync + Send + 'static>(mut self, val: T) -> Self {
-        self.extensions
+    ///
+    /// Application state stored with `.state()` method is available
+    /// via `HttpRequest::app_state()` method at runtime.
+    pub fn set_state<T: Send + Sync + 'static>(mut self, val: T) -> Self {
+        self.state
             .insert(TypeId::of::<T>(), Box::new(val))
             .and_then(|item| item.downcast::<T>().map(|boxed| *boxed).ok());
         self
@@ -168,26 +168,23 @@ pub(crate) fn put_request(id: usize, pool_size: usize, req: &mut Rc<HttpRequestI
 /// modularization of big application configuration.
 #[derive(derive_more::Debug)]
 #[debug("ServiceConfig")]
-pub struct ServiceConfig<St, Cfg> {
-    pub(super) services: Vec<Box<dyn AppServiceFactory<St, Cfg>>>,
+pub struct ServiceConfig<St, In> {
+    pub(super) services: Vec<Box<dyn AppServiceFactory<St, In>>>,
     pub(super) external: Vec<ResourceDef>,
 }
 
-impl<St: AppState, Cfg> ServiceConfig<St, Cfg>
-where
-    Cfg: Clone + 'static,
-{
-    pub fn new() -> Self {
+impl<St: AppState, In: 'static> ServiceConfig<St, In> {
+    pub fn new(external: Vec<ResourceDef>) -> Self {
         Self {
+            external,
             services: Vec::new(),
-            external: Vec::new(),
         }
     }
 
     /// Configure route for a specific path.
     ///
     /// This is same as `App::route()` method.
-    pub fn route(&mut self, path: &str, mut route: Route<St>) -> &mut Self {
+    pub fn route(&mut self, path: &str, mut route: Route<St, In>) -> &mut Self {
         self.service(
             Resource::new(path)
                 .add_guards(route.take_guards())
@@ -200,7 +197,7 @@ where
     /// This is same as `App::service()` method.
     pub fn service<F>(&mut self, factory: F) -> &mut Self
     where
-        F: WebServiceFactory<St, Cfg> + 'static,
+        F: WebServiceFactory<St, In> + 'static,
     {
         self.services
             .push(Box::new(ServiceFactoryWrapper::new(factory)));
@@ -219,12 +216,6 @@ where
         *rdef.name_mut() = name.as_ref().to_string();
         self.external.push(rdef);
         self
-    }
-}
-
-impl<St: AppState, Cfg: Clone + 'static> Default for ServiceConfig<St, Cfg> {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -325,7 +316,7 @@ mod tests {
 
     #[test]
     fn test_new_service_config() {
-        let cfg: ServiceConfig<(), ()> = ServiceConfig::default();
+        let cfg: ServiceConfig<(), ()> = ServiceConfig::new(Vec::new());
         assert!(cfg.services.is_empty());
         assert!(cfg.external.is_empty());
     }

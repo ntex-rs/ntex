@@ -28,7 +28,7 @@ pub trait FromRequest<St>: Sized {
 ///
 /// ```rust
 /// use ntex::http;
-/// use ntex::web::{self, error, App, HttpRequest, FromRequest, WebError};
+/// use ntex::web::{self, error, App, HttpRequest, FromRequest, InternalError};
 /// use rand;
 ///
 /// #[derive(Debug, serde::Deserialize)]
@@ -37,13 +37,13 @@ pub trait FromRequest<St>: Sized {
 /// }
 ///
 /// impl<St> FromRequest<St> for Thing {
-///     type Error = WebError;
+///     type Error = InternalError<&'static str>;
 ///
 ///     async fn from_request(st: &St, req: &HttpRequest, payload: &mut http::Payload) -> Result<Self, Self::Error> {
 ///         if rand::random() {
 ///             Ok(Thing { name: "thingy".into() })
 ///         } else {
-///             Err(WebError::new(error::ErrorBadRequest("no luck")))
+///             Err(error::ErrorBadRequest("no luck"))
 ///         }
 ///     }
 /// }
@@ -58,7 +58,7 @@ pub trait FromRequest<St>: Sized {
 /// }
 ///
 /// fn main() {
-///     let app = App::default().service(
+///     let app = App::new().service(
 ///         web::resource("/users/:first").route(
 ///             web::post().to(index))
 ///     );
@@ -68,9 +68,9 @@ impl<T, St> FromRequest<St> for Option<T>
 where
     T: FromRequest<St>,
     St: AppState,
-    <T as FromRequest<St>>::Error: WebResponseError<St::Error>,
+    <T as FromRequest<St>>::Error: WebResponseError<St, St::Error>,
 {
-    type Error = St::Error;
+    type Error = Infallible;
 
     #[inline]
     async fn from_request(
@@ -96,7 +96,7 @@ where
 ///
 /// ```rust
 /// use ntex::http;
-/// use ntex::web::{self, error, App, AppState, HttpRequest, FromRequest, WebError};
+/// use ntex::web::{self, error, App, AppState, HttpRequest, FromRequest, InternalError};
 /// use rand;
 ///
 /// #[derive(Debug, serde::Deserialize)]
@@ -105,19 +105,19 @@ where
 /// }
 ///
 /// impl<St: AppState> FromRequest<St> for Thing {
-///     type Error = WebError;
+///     type Error = InternalError<&'static str>;
 ///
 ///     async fn from_request(st: &St, req: &HttpRequest, payload: &mut http::Payload) -> Result<Thing, Self::Error> {
 ///         if rand::random() {
 ///             Ok(Thing { name: "thingy".into() })
 ///         } else {
-///             Err(WebError::new(error::ErrorBadRequest("no luck")))
+///             Err(error::ErrorBadRequest("no luck"))
 ///         }
 ///     }
 /// }
 ///
 /// /// extract `Thing` from request
-/// async fn index(supplied_thing: Result<Thing, error::WebError>) -> String {
+/// async fn index(supplied_thing: Result<Thing, InternalError<&'static str>>) -> String {
 ///     match supplied_thing {
 ///         Ok(thing) => format!("Got thing: {:?}", thing),
 ///         Err(e) => format!("Error extracting thing: {}", e)
@@ -125,7 +125,7 @@ where
 /// }
 ///
 /// fn main() {
-///     let app = App::default().service(
+///     let app = App::new().service(
 ///         web::resource("/users/:first").route(web::post().to(index))
 ///     );
 /// }
@@ -167,13 +167,13 @@ macro_rules! tuple_from_req {
         where
             St: AppState,
             $($T: FromRequest<St> + 'static,)+
-            $(<$T as $crate::web::FromRequest<St>>::Error: WebResponseError<St::Error>),+
+            $(<$T as $crate::web::FromRequest<St>>::Error: WebResponseError<St, St::Error>),+
         {
             type Error = HttpResponse;
 
             async fn from_request(st: &St, req: &HttpRequest, payload: &mut Payload) -> Result<($($T,)+), Self::Error> {
                 Ok((
-                    $($T::from_request(st, req, payload).await.map_err(|mut e| e.error_response(req))?,)+
+                    $($T::from_request(st, req, payload).await.map_err(|mut e| e.error_response(st))?,)+
                 ))
             }
         }
@@ -204,9 +204,9 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_option() {
-        let (req, mut pl) =
+        let (req, mut pl, ()) =
             TestRequest::with_header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                .state(FormConfig::default().limit(4096))
+                .app_state(FormConfig::default().limit(4096))
                 .to_http_parts();
 
         let r = from_request::<_, Option<Form<Info>>>(&(), &req, &mut pl)
@@ -214,10 +214,10 @@ mod tests {
             .unwrap();
         assert_eq!(r, None);
 
-        let (req, mut pl) =
+        let (req, mut pl, ()) =
             TestRequest::with_header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(header::CONTENT_LENGTH, "9")
-                .set_payload(Bytes::from_static(b"hello=world"))
+                .payload(Bytes::from_static(b"hello=world"))
                 .to_http_parts();
 
         let r = from_request::<_, Option<Form<Info>>>(&(), &req, &mut pl)
@@ -230,10 +230,10 @@ mod tests {
             }))
         );
 
-        let (req, mut pl) =
+        let (req, mut pl, ()) =
             TestRequest::with_header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(header::CONTENT_LENGTH, "9")
-                .set_payload(Bytes::from_static(b"bye=world"))
+                .payload(Bytes::from_static(b"bye=world"))
                 .to_http_parts();
 
         let r = from_request::<_, Option<Form<Info>>>(&(), &req, &mut pl)
@@ -244,10 +244,10 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_result() {
-        let (req, mut pl) =
+        let (req, mut pl, ()) =
             TestRequest::with_header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(header::CONTENT_LENGTH, "11")
-                .set_payload(Bytes::from_static(b"hello=world"))
+                .payload(Bytes::from_static(b"hello=world"))
                 .to_http_parts();
 
         let r = from_request::<_, Result<Form<Info>, UrlencodedError>>(&(), &req, &mut pl)
@@ -260,10 +260,10 @@ mod tests {
             })
         );
 
-        let (req, mut pl) =
+        let (req, mut pl, ()) =
             TestRequest::with_header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(header::CONTENT_LENGTH, "9")
-                .set_payload(Bytes::from_static(b"bye=world"))
+                .payload(Bytes::from_static(b"bye=world"))
                 .to_http_parts();
 
         let r = from_request::<_, Result<Form<Info>, UrlencodedError>>(&(), &req, &mut pl)

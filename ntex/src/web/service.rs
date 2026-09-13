@@ -1,17 +1,19 @@
-use std::rc::Rc;
+use std::{marker::PhantomData, rc::Rc};
 
+use crate::error::{Failure, IntoFailure};
 use crate::router::{IntoPattern, ResourceDef};
 use crate::service::{IntoServiceFactory, ServiceFactory, boxed};
 
+use super::error::{WebError, WebResponseError};
 use super::guard::{AllGuard, Guard};
 use super::{AppState, HttpService, WebRequest, WebResponse, dev::insert_slash, rmap::ResourceMap};
 
-pub trait WebServiceFactory<St: AppState, Cfg> {
-    fn register(self, config: &mut WebServiceConfig<St, Cfg>);
+pub trait WebServiceFactory<St: AppState, In>: 'static {
+    fn register(self, config: &mut WebServiceConfig<St, In>);
 }
 
-pub(super) trait AppServiceFactory<St: AppState, Cfg> {
-    fn register(&mut self, config: &mut WebServiceConfig<St, Cfg>);
+pub(super) trait AppServiceFactory<St: AppState, In> {
+    fn register(&mut self, config: &mut WebServiceConfig<St, In>);
 }
 
 pub(super) struct ServiceFactoryWrapper<T> {
@@ -26,12 +28,12 @@ impl<T> ServiceFactoryWrapper<T> {
     }
 }
 
-impl<T, St, Cfg> AppServiceFactory<St, Cfg> for ServiceFactoryWrapper<T>
+impl<T, St, In> AppServiceFactory<St, In> for ServiceFactoryWrapper<T>
 where
-    T: WebServiceFactory<St, Cfg>,
+    T: WebServiceFactory<St, In>,
     St: AppState,
 {
-    fn register(&mut self, config: &mut WebServiceConfig<St, Cfg>) {
+    fn register(&mut self, config: &mut WebServiceConfig<St, In>) {
         if let Some(item) = self.factory.take() {
             item.register(config);
         }
@@ -43,25 +45,20 @@ type Guards = Vec<Box<dyn Guard>>;
 /// Application service configuration
 #[derive(derive_more::Debug)]
 #[debug("WebServiceConfig")]
-pub struct WebServiceConfig<St: AppState, Cfg> {
+pub struct WebServiceConfig<St: AppState, In> {
     root: bool,
-    default: HttpService<St, Cfg>,
     services: Vec<(
         ResourceDef,
-        HttpService<St, Cfg>,
+        HttpService<St, In>,
         Option<Guards>,
         Option<Rc<ResourceMap>>,
     )>,
 }
 
-impl<St: AppState, Cfg> WebServiceConfig<St, Cfg>
-where
-    Cfg: Clone + 'static,
-{
+impl<St: AppState, In: 'static> WebServiceConfig<St, In> {
     /// Crate server settings instance
-    pub(crate) fn new(default: HttpService<St, Cfg>) -> Self {
+    pub(crate) fn new() -> Self {
         WebServiceConfig {
-            default,
             root: true,
             services: Vec::new(),
         }
@@ -74,46 +71,29 @@ where
 
     pub(crate) fn into_services(
         self,
-    ) -> (
-        Vec<(
-            ResourceDef,
-            HttpService<St, Cfg>,
-            Option<Guards>,
-            Option<Rc<ResourceMap>>,
-        )>,
-        HttpService<St, Cfg>,
-    ) {
-        (self.services, self.default)
-    }
-
-    pub(crate) fn get_nested(&self) -> Self {
-        WebServiceConfig {
-            default: self.default.clone(),
-            services: Vec::new(),
-            root: false,
-        }
-    }
-
-    /// Default resource
-    pub fn default_service(&self) -> HttpService<St, Cfg> {
-        self.default.clone()
+    ) -> Vec<(
+        ResourceDef,
+        HttpService<St, In>,
+        Option<Guards>,
+        Option<Rc<ResourceMap>>,
+    )> {
+        self.services
     }
 
     /// Register http service
     pub fn register_service<S>(
         &mut self,
         rdef: ResourceDef,
-        factory: impl IntoServiceFactory<S, St, WebRequest, Cfg>,
         guards: Option<Vec<Box<dyn Guard>>>,
         nested: Option<Rc<ResourceMap>>,
+        factory: impl IntoServiceFactory<S, St, WebRequest<In>>,
     ) where
         S: ServiceFactory<
                 St,
-                WebRequest,
-                Cfg,
+                WebRequest<In>,
                 Res = WebResponse,
-                Error = St::Error,
-                InitError = (),
+                Error = WebError<St, St::Error>,
+                InitError = Failure,
             > + 'static,
     {
         self.services
@@ -124,16 +104,17 @@ where
 /// Create service adapter for a specific path.
 ///
 /// ```rust
-/// use ntex::web::{self, guard, App, HttpResponse, WebError};
+/// use std::convert::Infallible;
+/// use ntex::web::{self, guard, App, HttpResponse};
 ///
-/// async fn my_service(req: web::WebRequest) -> Result<web::WebResponse, WebError> {
-///     Ok(req.into_response(HttpResponse::Ok().finish()))
+/// async fn my_service(req: web::WebRequest) -> Result<web::WebResponse, Infallible> {
+///     Ok(req.into_response(HttpResponse::Ok().build()))
 /// }
 ///
-/// let app = App::default().service(
+/// let app = App::new().service(
 ///     web::service("/users/*")
 ///         .guard(guard::Header("content-type", "text/plain"))
-///         .finish(my_service)
+///         .build(my_service)
 /// );
 /// ```
 #[derive(Debug)]
@@ -167,18 +148,19 @@ impl WebServiceAdapter {
     /// Add match guard to a web service.
     ///
     /// ```rust
+    /// use std::convert::Infallible;
     /// use ntex::web::{self, guard, App, WebError, HttpResponse};
     ///
-    /// async fn index(req: web::WebRequest) -> Result<web::WebResponse, WebError> {
-    ///     Ok(req.into_response(HttpResponse::Ok().finish()))
+    /// async fn index(req: web::WebRequest) -> Result<web::WebResponse, Infallible> {
+    ///     Ok(req.into_response(HttpResponse::Ok().build()))
     /// }
     ///
     /// fn main() {
-    ///     let app = App::default()
+    ///     let app = App::new()
     ///         .service(
     ///             web::service("/app")
     ///                 .guard(guard::Header("content-type", "text/plain"))
-    ///                 .finish(index)
+    ///                 .build(index)
     ///         );
     /// }
     /// ```
@@ -189,37 +171,49 @@ impl WebServiceAdapter {
     }
 
     /// Set a service factory implementation and generate web service.
-    pub fn finish<St, Cfg, T, F>(self, service: F) -> impl WebServiceFactory<St, Cfg>
+    pub fn build<Sf, St, In, F>(self, service: F) -> impl WebServiceFactory<St, In>
     where
         St: AppState,
-        Cfg: Clone + 'static,
-        F: IntoServiceFactory<T, St, WebRequest, Cfg>,
-        T: ServiceFactory<St, WebRequest, Cfg, Res = WebResponse, Error = St::Error> + 'static,
+        In: 'static,
+        F: IntoServiceFactory<Sf, St, WebRequest<In>>,
+        Sf: ServiceFactory<St, WebRequest<In>, Res = WebResponse> + 'static,
+        Sf::Error: WebResponseError<St, St::Error>,
+        Sf::InitError: IntoFailure,
     {
         WebServiceImpl {
-            srv: service.into_factory().map_init_err(|_| ()),
+            srv: service
+                .into_factory()
+                .map_err(WebError::from_err)
+                .map_init_err(IntoFailure::fail),
             rdef: self.rdef,
             name: self.name,
             guards: self.guards,
+            ph: PhantomData,
         }
     }
 }
 
-struct WebServiceImpl<Sf> {
+struct WebServiceImpl<Sf, In> {
     srv: Sf,
     rdef: Vec<String>,
     name: Option<String>,
     guards: AllGuard,
+    ph: PhantomData<In>,
 }
 
-impl<Sf, St, Cfg> WebServiceFactory<St, Cfg> for WebServiceImpl<Sf>
+impl<Sf, In, St> WebServiceFactory<St, In> for WebServiceImpl<Sf, In>
 where
     St: AppState,
-    Cfg: Clone + 'static,
-    Sf: ServiceFactory<St, WebRequest, Cfg, Res = WebResponse, Error = St::Error, InitError = ()>
-        + 'static,
+    In: 'static,
+    Sf: ServiceFactory<
+            St,
+            WebRequest<In>,
+            Res = WebResponse,
+            Error = WebError<St, St::Error>,
+            InitError = Failure,
+        > + 'static,
 {
-    fn register(mut self, config: &mut WebServiceConfig<St, Cfg>) {
+    fn register(mut self, config: &mut WebServiceConfig<St, In>) {
         let guards = if self.guards.0.is_empty() {
             None
         } else {
@@ -234,17 +228,17 @@ where
         if let Some(ref name) = self.name {
             rdef.name_mut().clone_from(name);
         }
-        config.register_service(rdef, self.srv, guards, None);
+        config.register_service(rdef, guards, None, self.srv);
     }
 }
 
 #[allow(unused_parens)]
-impl<T, St, Cfg> WebServiceFactory<St, Cfg> for Vec<T>
+impl<T, St, In> WebServiceFactory<St, In> for Vec<T>
 where
-    T: WebServiceFactory<St, Cfg> + 'static,
+    T: WebServiceFactory<St, In> + 'static,
     St: AppState,
 {
-    fn register(mut self, config: &mut WebServiceConfig<St, Cfg>) {
+    fn register(mut self, config: &mut WebServiceConfig<St, In>) {
         for service in self.drain(..) {
             service.register(config);
         }
@@ -255,8 +249,8 @@ macro_rules! tuple_web_service(
     {$(#[$meta:meta])* $(($n:tt, $T:ident)),+} => {
 
         $(#[$meta])*
-        impl<St: AppState, Cfg, $($T: WebServiceFactory<St, Cfg> + 'static),+> WebServiceFactory<St, Cfg> for ($($T,)+) {
-            fn register(self, config: &mut WebServiceConfig<St, Cfg>) {
+        impl<St: AppState, In, $($T: WebServiceFactory<St, In> + 'static),+> WebServiceFactory<St, In> for ($($T,)+) {
+            fn register(self, config: &mut WebServiceConfig<St, In>) {
                 $(
                     self.$n.register(config);
                 )+
@@ -265,12 +259,12 @@ macro_rules! tuple_web_service(
     }
 );
 
-impl<St, Cfg, T, const N: usize> WebServiceFactory<St, Cfg> for [T; N]
+impl<St, In, T, const N: usize> WebServiceFactory<St, In> for [T; N]
 where
     St: AppState,
-    T: WebServiceFactory<St, Cfg> + 'static,
+    T: WebServiceFactory<St, In> + 'static,
 {
-    fn register(self, config: &mut WebServiceConfig<St, Cfg>) {
+    fn register(self, config: &mut WebServiceConfig<St, In>) {
         for t in self {
             t.register(config);
         }
@@ -288,26 +282,30 @@ mod m {
 
 #[cfg(test)]
 mod tests {
+    use std::convert::Infallible;
+
     use super::*;
     use crate::http::{Method, StatusCode};
     use crate::web::test::{TestRequest, init_service};
-    use crate::web::{self, App, HttpResponse, guard};
+    use crate::web::{self, App, DefaultError, HttpResponse, guard};
 
     #[crate::rt_test]
     async fn test_service() {
-        let srv = init_service(
-            App::new().service(web::service("/test").name("test").finish(
-                async move |req: WebRequest| Ok(req.into_response(HttpResponse::Ok().finish())),
-            )),
-        )
+        let srv = init_service(App::new().service(web::service("/test").name("test").build(
+            async move |req: WebRequest<()>| {
+                Ok::<_, Infallible>(req.into_response(HttpResponse::Ok().build()))
+            },
+        )))
         .await;
         let req = TestRequest::with_uri("/test").to_request();
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let srv = init_service(
-            App::new().service(web::service("/test").guard(guard::Get()).finish(
-                async move |req: WebRequest| Ok(req.into_response(HttpResponse::Ok().finish())),
+            App::new().service(web::service("/test").guard(guard::Get()).build(
+                async move |req: WebRequest<()>| {
+                    Ok::<_, DefaultError>(req.into_response(HttpResponse::Ok().build()))
+                },
             )),
         )
         .await;
@@ -368,7 +366,7 @@ mod tests {
         assert!(s.contains("test=1"));
         assert!(s.contains("x-test"));
 
-        let res = HttpResponse::Ok().header("x-test", "111").finish();
+        let res = HttpResponse::Ok().header("x-test", "111").build();
         let res = TestRequest::post()
             .uri("/index.html?test=1")
             .to_srv_response(res);

@@ -1,4 +1,4 @@
-use std::{cell::Ref, cell::RefMut, fmt, net, rc::Rc};
+use std::{cell::Ref, cell::RefMut, convert::Infallible, fmt, net, rc::Rc};
 
 use crate::http::{HeaderMap, HttpMessage, Message, Method, Payload, RequestHead, Uri, Version};
 use crate::{Cfg, io::IoRef, io::types, router::Path, util::Extensions};
@@ -144,7 +144,7 @@ impl HttpRequest {
     /// }
     ///
     /// fn main() {
-    ///     let app = App::default()
+    ///     let app = App::new()
     ///         .service(web::resource("/test/{one}/{two}/{three}")
     ///              .name("foo")  // <- set resource name, then it could be used in `url_for`
     ///              .route(web::get().to(index))
@@ -245,14 +245,14 @@ impl Drop for HttpRequest {
 /// }
 ///
 /// fn main() {
-///     let app = App::default().service(
+///     let app = App::new().service(
 ///         web::resource("/users/{first}").route(
 ///             web::get().to(index))
 ///     );
 /// }
 /// ```
 impl<St: AppState> FromRequest<St> for HttpRequest {
-    type Error = St::Error;
+    type Error = Infallible;
 
     #[inline]
     async fn from_request(_: &St, req: &HttpRequest, _: &mut Payload) -> Result<Self, Self::Error> {

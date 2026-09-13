@@ -4,7 +4,7 @@ use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpService, Response, body::BodySize, h1};
 use ntex::io::{DispatchItem, Dispatcher, IoConfig};
-use ntex::service::{Pipeline, cfg::SharedCfg, fn_factory_with_config, svc};
+use ntex::service::{Pipeline, cfg::SharedCfg};
 use ntex::web::{self, App, HttpRequest};
 use ntex::ws::{self, handshake_response};
 use ntex::{time::Seconds, util::ByteString, util::Bytes};
@@ -34,7 +34,7 @@ async fn test_simple() {
                     let (ack, io, req, codec) = upg.handle();
 
                     // send handshake respone
-                    let res = handshake_response(req.head()).finish();
+                    let res = handshake_response(req.head()).build();
                     io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
                         .unwrap();
 
@@ -42,7 +42,7 @@ async fn test_simple() {
                     let _ = Dispatcher::new(
                         io.seal(),
                         ws::Codec::default(),
-                        Pipeline::with((), ws_service),
+                        Pipeline::new((), ws_service),
                     )
                     .await;
                     ack
@@ -94,7 +94,7 @@ async fn test_transport() {
                     let (ack, io, req, codec) = upg.handle();
 
                     // send handshake respone
-                    let res = handshake_response(req.head()).finish();
+                    let res = handshake_response(req.head()).build();
                     io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
                         .unwrap();
 
@@ -102,7 +102,7 @@ async fn test_transport() {
                     let _ = Dispatcher::new(
                         io.seal(),
                         ws::Codec::default(),
-                        Pipeline::with((), ws_service),
+                        Pipeline::new((), ws_service),
                     )
                     .await;
 
@@ -134,7 +134,7 @@ async fn test_keepalive_timeout() {
                     let (ack, io, req, codec) = upg.handle();
 
                     // send handshake respone
-                    let res = handshake_response(req.head()).finish();
+                    let res = handshake_response(req.head()).build();
                     io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
                         .unwrap();
 
@@ -146,7 +146,7 @@ async fn test_keepalive_timeout() {
                     let _ = Dispatcher::new(
                         io.seal(),
                         ws::Codec::default(),
-                        Pipeline::with((), ws_service),
+                        Pipeline::new((), ws_service),
                     )
                     .await;
 
@@ -186,7 +186,7 @@ async fn test_keepalive_timeout() {
 
 #[ntex::test]
 async fn test_upgrade_handler_with_await() {
-    async fn service(_: ws::Frame) -> Result<Option<ws::Message>, io::Error> {
+    async fn ws_service(_: ws::Frame) -> Result<Option<ws::Message>, io::Error> {
         Ok(None)
     }
 
@@ -195,15 +195,7 @@ async fn test_upgrade_handler_with_await() {
             async move |req: HttpRequest| {
                 // some async context switch
                 ntex::time::sleep(ntex::time::Seconds::ZERO).await;
-
-                web::ws::start(
-                    &req,
-                    None,
-                    fn_factory_with_config(async |_: &ws::WsSink| {
-                        Ok::<_, web::WebError>(svc(service))
-                    }),
-                )
-                .await
+                let _ = web::ws::start(&req, None, ws_service).await;
             },
         ))))
     });

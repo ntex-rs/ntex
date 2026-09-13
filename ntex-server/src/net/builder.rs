@@ -192,7 +192,7 @@ where
     /// different module or even library.
     pub async fn configure<F>(mut self, f: F) -> io::Result<Self>
     where
-        F: AsyncFn(ServiceConfig<Cfg>) -> io::Result<()>,
+        F: AsyncFnOnce(ServiceConfig<Cfg>) -> io::Result<()>,
     {
         let cfg = ServiceConfig::new(self.token, self.backlog);
 

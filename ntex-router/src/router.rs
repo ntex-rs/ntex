@@ -1,4 +1,3 @@
-#![allow(clippy::missing_panics_doc)]
 use super::tree::Tree;
 use super::{IntoPattern, Resource, ResourceDef, ResourcePath};
 
@@ -14,11 +13,17 @@ pub struct Router<T, U = ()> {
 }
 
 impl<T, U> Router<T, U> {
-    pub fn build() -> RouterBuilder<T, U> {
+    pub fn builder() -> RouterBuilder<T, U> {
         RouterBuilder {
             resources: Vec::new(),
             insensitive: false,
         }
+    }
+
+    #[doc(hidden)]
+    #[deprecated]
+    pub fn build() -> RouterBuilder<T, U> {
+        Self::builder()
     }
 
     pub fn recognize<R, P>(&self, resource: &mut R) -> Option<(&T, ResourceId)>
@@ -148,7 +153,7 @@ impl<T, U> RouterBuilder<T, U> {
     }
 
     /// Finish configuration and create router instance.
-    pub fn finish(self) -> Router<T, U> {
+    pub fn build(self) -> Router<T, U> {
         let tree = if self.resources.is_empty() {
             Tree::default()
         } else {
@@ -165,6 +170,12 @@ impl<T, U> RouterBuilder<T, U> {
             insensitive: self.insensitive,
         }
     }
+
+    #[doc(hidden)]
+    #[deprecated]
+    pub fn finish(self) -> Router<T, U> {
+        self.build()
+    }
 }
 
 #[cfg(test)]
@@ -174,7 +185,7 @@ mod tests {
 
     #[test]
     fn test_recognizer_1() {
-        let mut router = Router::<usize>::build();
+        let mut router = Router::<usize>::builder();
         router.path("/name", 10).0.set_id(0);
         router.path("/name/{val}", 11).0.set_id(1);
         router.path("/name/{val}/index.html", 12).0.set_id(2);
@@ -184,7 +195,7 @@ mod tests {
         router.path("/test2/{test}.html", 16).0.set_id(6);
         router.path("/{test}/index.html", 17).0.set_id(7);
         router.path("/v2/{custom:.*}/test.html", 18).0.set_id(8);
-        let mut router = router.finish();
+        let mut router = router.build();
 
         let mut path = Path::new("/unknown");
         assert!(router.recognize_mut(&mut path).is_none());
@@ -258,10 +269,10 @@ mod tests {
 
     #[test]
     fn test_recognizer_2() {
-        let mut router = Router::<usize>::build();
+        let mut router = Router::<usize>::builder();
         router.path("/index.json", 10);
         router.path("/{source}.json", 11);
-        let mut router = router.finish();
+        let mut router = router.build();
 
         let mut path = Path::new("/index.json");
         let (h, _) = router.recognize_mut(&mut path).unwrap();
@@ -274,11 +285,11 @@ mod tests {
 
     #[test]
     fn test_recognizer_3() {
-        let mut router = Router::<usize>::build();
+        let mut router = Router::<usize>::builder();
         router.path("/index.json", 10);
         router.path("/{source}.json", 11);
         router.case_insensitive();
-        let mut router = router.finish();
+        let mut router = router.build();
 
         let mut path = Path::new("/index.json");
         let (h, _) = router.recognize_mut(&mut path).unwrap();
@@ -294,10 +305,10 @@ mod tests {
 
     #[test]
     fn test_recognizer_with_path_skip() {
-        let mut router = Router::<usize>::build();
+        let mut router = Router::<usize>::builder();
         router.path("/name", 10).0.set_id(0);
         router.path("/name/{val}", 11).0.set_id(1);
-        let mut router = router.finish();
+        let mut router = router.build();
 
         let mut path = Path::new("/name");
         path.skip(5);
@@ -317,10 +328,10 @@ mod tests {
         assert_eq!(&path["val"], "value");
 
         // same patterns
-        let mut router = Router::<usize>::build();
+        let mut router = Router::<usize>::builder();
         router.path("/name", 10);
         router.path("/name/{val}", 11);
-        let mut router = router.finish();
+        let mut router = router.build();
 
         let mut path = Path::new("/name");
         path.skip(5);
@@ -344,11 +355,11 @@ mod tests {
 
     #[test]
     fn test_recognizer_checked() {
-        let mut router = Router::<usize, usize>::build();
+        let mut router = Router::<usize, usize>::builder();
         router.path("/name", 10).2 = Some(0);
         router.path("/name", 11).2 = Some(1);
         router.path("/name", 12).2 = Some(2);
-        let mut router = router.finish();
+        let mut router = router.build();
 
         let mut p = Path::new("/name");
         assert_eq!(
@@ -402,12 +413,12 @@ mod tests {
 
     #[test]
     fn test_recognizer_checked_insensitive() {
-        let mut router = Router::<usize, usize>::build();
+        let mut router = Router::<usize, usize>::builder();
         router.case_insensitive();
         router.path("/name", 10).2 = Some(0);
         router.path("/name", 11).2 = Some(1);
         router.path("/name", 12).2 = Some(2);
-        let mut router = router.finish();
+        let mut router = router.build();
 
         let mut p = Path::new("/Name");
         assert_eq!(

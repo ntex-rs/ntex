@@ -1,12 +1,10 @@
 pub mod buffer;
-pub mod either;
 mod extensions;
 pub mod inflight;
 pub mod keepalive;
 pub mod onerequest;
 pub mod retry;
 pub mod timeout;
-pub mod variant;
 
 #[doc(hidden)]
 pub mod counter;

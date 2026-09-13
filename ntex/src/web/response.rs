@@ -19,8 +19,15 @@ impl WebResponse {
 
     #[must_use]
     /// Create web response from the error.
-    pub fn from_err<Err, E: WebResponseError<Err>>(mut err: E, request: HttpRequest) -> Self {
-        let res = err.error_response(&request);
+    pub fn from_err<St>(
+        st: &St,
+        mut err: impl WebResponseError<St, St::Error>,
+        request: HttpRequest,
+    ) -> Self
+    where
+        St: AppState,
+    {
+        let res = err.error_response(st);
 
         if res.head().status == StatusCode::INTERNAL_SERVER_ERROR {
             log::error!("Internal Server Error: {err:?}");
@@ -37,8 +44,11 @@ impl WebResponse {
     #[inline]
     #[must_use]
     /// Create web response for error.
-    pub fn error_response<Err, E: WebResponseError<Err>>(self, err: E) -> Self {
-        Self::from_err::<Err, E>(err, self.request)
+    pub fn error_response<St>(self, st: &St, err: impl WebResponseError<St, St::Error>) -> Self
+    where
+        St: AppState,
+    {
+        Self::from_err(st, err, self.request)
     }
 
     #[inline]
@@ -83,21 +93,6 @@ impl WebResponse {
     /// Returns mutable response's headers.
     pub fn headers_mut(&mut self) -> &mut HeaderMap {
         self.response.headers_mut()
-    }
-
-    #[must_use]
-    /// Execute closure and in case of error convert it to response.
-    pub fn checked_expr<St, F, E>(mut self, f: F) -> Self
-    where
-        St: AppState,
-        F: FnOnce(&mut Self) -> Result<(), E>,
-        E: WebResponseError<St::Error>,
-    {
-        if let Err(mut err) = f(&mut self) {
-            WebResponse::new(err.error_response(&self.request), self.request)
-        } else {
-            self
-        }
     }
 
     #[must_use]
@@ -153,22 +148,16 @@ impl fmt::Debug for WebResponse {
 #[cfg(test)]
 mod tests {
     use crate::http::{self, StatusCode};
-    use crate::web::{HttpResponse, WebError, test::TestRequest};
+    use crate::web::{HttpResponse, test::TestRequest};
 
     #[test]
     fn test_response() {
-        let res = TestRequest::default().to_srv_response(HttpResponse::Ok().finish());
-        let res = res.into_response(HttpResponse::BadRequest().finish());
+        let res = TestRequest::default().to_srv_response(HttpResponse::Ok().build());
+        let res = res.into_response(HttpResponse::BadRequest().build());
         assert_eq!(res.response().status(), StatusCode::BAD_REQUEST);
 
         let err = http::error::PayloadError::Overflow;
-        let res = res.error_response::<WebError, _>(err);
-        assert_eq!(res.response().status(), StatusCode::PAYLOAD_TOO_LARGE);
-
-        let res = TestRequest::default().to_srv_response(HttpResponse::Ok().finish());
-        let mut res = res.checked_expr::<(), _, _>(|_| Ok::<_, http::error::PayloadError>(()));
-        assert_eq!(res.response_mut().status(), StatusCode::OK);
-        let res = res.checked_expr::<(), _, _>(|_| Err(http::error::PayloadError::Overflow));
+        let res = res.error_response::<()>(&(), err);
         assert_eq!(res.response().status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 }

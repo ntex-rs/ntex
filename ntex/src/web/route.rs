@@ -1,27 +1,29 @@
-use std::{error::Error, fmt, mem, rc::Rc};
+use std::{fmt, mem, rc::Rc};
 
+use crate::error::Failure;
 use crate::http::Method;
 use crate::service::{Ctx, Service, ServiceFactory};
 
+use super::error::{WebError, WebResponseError};
 use super::guard::{self, AllGuard, Guard};
 use super::handler::{Handler, HandlerFn, HandlerWrapper};
-use super::{AppState, FromRequest, HttpResponse, WebRequest, WebResponse, WebResponseError};
+use super::{AppState, FromRequest, HttpResponse, WebRequest, WebResponse};
 
 /// Resource route definition
 ///
 /// Route uses builder-like pattern for configuration.
 /// If handler is not explicitly set, default *404 Not Found* handler is used.
-pub struct Route<St: AppState> {
-    handler: Rc<dyn HandlerFn<St>>,
+pub struct Route<St: AppState, In> {
+    handler: Rc<dyn HandlerFn<St, In>>,
     methods: Vec<Method>,
     guards: Rc<AllGuard>,
 }
 
-impl<St: AppState> Route<St> {
+impl<St: AppState, In: 'static> Route<St, In> {
     /// Create new route which matches any request.
-    pub fn new() -> Route<St> {
+    pub fn new() -> Route<St, In> {
         Route {
-            handler: Rc::new(HandlerWrapper::<St, _, ()>::new(async || {
+            handler: Rc::new(HandlerWrapper::<St, In, _, ()>::new(async || {
                 HttpResponse::NotFound()
             })),
             methods: Vec::new(),
@@ -39,7 +41,7 @@ impl<St: AppState> Route<St> {
         mem::take(&mut Rc::get_mut(&mut self.guards).unwrap().0)
     }
 
-    pub(super) fn service(&self) -> RouteService<St> {
+    pub(super) fn service(&self) -> RouteService<St, In> {
         RouteService {
             handler: self.handler.clone(),
             guards: self.guards.clone(),
@@ -48,81 +50,32 @@ impl<St: AppState> Route<St> {
     }
 }
 
-impl<St: AppState> Default for Route<St> {
+impl<St: AppState, In: 'static> Default for Route<St, In> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<St: AppState> fmt::Debug for Route<St> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Route")
-            .field("handler", &self.handler)
-            .field("methods", &self.methods)
-            .field("guards", &self.guards)
-            .finish()
-    }
-}
-
-impl<St: AppState, Cfg> ServiceFactory<St, WebRequest, Cfg> for Route<St> {
+impl<St: AppState, In: 'static> ServiceFactory<St, WebRequest<In>> for Route<St, In> {
     type Res = WebResponse;
-    type Error = St::Error;
+    type Error = WebError<St, St::Error>;
 
-    type Service = RouteService<St>;
-    type InitError = Box<dyn Error>;
+    type Service = RouteService<St, In>;
+    type InitError = Failure;
 
-    async fn create(&self, _: &Cfg) -> Result<RouteService<St>, Self::InitError> {
+    async fn create(&self, _: &St) -> Result<Self::Service, Self::InitError> {
         Ok(self.service())
     }
 }
 
-pub struct RouteService<St: AppState> {
-    handler: Rc<dyn HandlerFn<St>>,
-    methods: Vec<Method>,
-    guards: Rc<AllGuard>,
-}
-
-impl<St: AppState> RouteService<St> {
-    pub fn check(&self, req: &mut WebRequest) -> bool {
-        if !self.methods.is_empty() && !self.methods.contains(&req.head().method) {
-            return false;
-        }
-
-        self.guards.check(req.head())
-    }
-}
-
-impl<St: AppState> fmt::Debug for RouteService<St> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RouteService")
-            .field("handler", &self.handler)
-            .field("methods", &self.methods)
-            .field("guards", &self.guards)
-            .finish()
-    }
-}
-
-impl<St: AppState> Service<St, WebRequest> for RouteService<St> {
-    type Res = WebResponse;
-    type Error = St::Error;
-
-    async fn call(
-        &self,
-        req: WebRequest,
-        ctx: Ctx<'_, Self, St>,
-    ) -> Result<Self::Res, Self::Error> {
-        self.handler.call(ctx.st(), req).await
-    }
-}
-
-impl<St: AppState> Route<St> {
+impl<St: AppState, In: 'static> Route<St, In> {
     #[must_use]
     /// Add method guard to the route.
     ///
     /// ```rust
     /// # use ntex::web::{self, *};
     /// # fn main() {
-    /// App::default().service(web::resource("/path").route(
+    /// App::new().service(web::resource("/path").route(
     ///     web::route()
     ///         .method(ntex::http::Method::CONNECT)
     ///         .guard(guard::Header("content-type", "text/plain"))
@@ -141,7 +94,7 @@ impl<St: AppState> Route<St> {
     /// ```rust
     /// # use ntex::web::{self, *};
     /// # fn main() {
-    /// App::default().service(web::resource("/path").route(
+    /// App::new().service(web::resource("/path").route(
     ///     web::route()
     ///         .guard(guard::Get())
     ///         .guard(guard::Header("content-type", "text/plain"))
@@ -171,7 +124,7 @@ impl<St: AppState> Route<St> {
     /// }
     ///
     /// fn main() {
-    ///     let app = web::App::default().service(
+    ///     let app = web::App::new().service(
     ///         web::resource("/{username}/index.html") // <- define path parameters
     ///             .route(web::get().to(index))        // <- register handler
     ///     );
@@ -195,36 +148,85 @@ impl<St: AppState> Route<St> {
     /// }
     ///
     /// fn main() {
-    ///     let app = web::App::default().service(
+    ///     let app = web::App::new().service(
     ///         web::resource("/{username}/index.html") // <- define path parameters
     ///             .route(web::get().to(index))
     ///     );
     /// }
     /// ```
-    pub fn to<F, Args>(mut self, handler: F) -> Self
+    pub fn to<H, Args>(mut self, handler: H) -> Self
     where
-        F: Handler<St, Args> + 'static,
+        H: Handler<St, Args> + 'static,
         Args: FromRequest<St> + 'static,
-        Args::Error: WebResponseError<St::Error>,
+        Args::Error: WebResponseError<St, St::Error>,
     {
         self.handler = Rc::new(HandlerWrapper::new(handler));
         self
     }
 }
 
-/// Convert object to a vec of routes
-pub trait IntoRoutes<St: AppState> {
-    fn routes(self) -> Vec<Route<St>>;
+impl<St: AppState, In> fmt::Debug for Route<St, In> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Route")
+            .field("handler", &self.handler)
+            .field("methods", &self.methods)
+            .field("guards", &self.guards)
+            .finish()
+    }
 }
 
-impl<St: AppState> IntoRoutes<St> for Route<St> {
-    fn routes(self) -> Vec<Route<St>> {
+pub struct RouteService<St: AppState, In> {
+    handler: Rc<dyn HandlerFn<St, In>>,
+    methods: Vec<Method>,
+    guards: Rc<AllGuard>,
+}
+
+impl<St: AppState, In> RouteService<St, In> {
+    pub fn check(&self, req: &mut WebRequest<In>) -> bool {
+        if !self.methods.is_empty() && !self.methods.contains(&req.head().method) {
+            return false;
+        }
+
+        self.guards.check(req.head())
+    }
+}
+
+impl<St: AppState, In> fmt::Debug for RouteService<St, In> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RouteService")
+            .field("handler", &self.handler)
+            .field("methods", &self.methods)
+            .field("guards", &self.guards)
+            .finish()
+    }
+}
+
+impl<St: AppState, In> Service<St, WebRequest<In>> for RouteService<St, In> {
+    type Res = WebResponse;
+    type Error = WebError<St, St::Error>;
+
+    async fn call(
+        &self,
+        req: WebRequest<In>,
+        ctx: Ctx<'_, Self, St>,
+    ) -> Result<Self::Res, Self::Error> {
+        Ok(self.handler.call(ctx.st(), req).await)
+    }
+}
+
+/// Convert object to a vec of routes
+pub trait IntoRoutes<St: AppState, In> {
+    fn routes(self) -> Vec<Route<St, In>>;
+}
+
+impl<St: AppState, In> IntoRoutes<St, In> for Route<St, In> {
+    fn routes(self) -> Vec<Route<St, In>> {
         vec![self]
     }
 }
 
-impl<St: AppState> IntoRoutes<St> for Vec<Route<St>> {
-    fn routes(self) -> Vec<Route<St>> {
+impl<St: AppState, In> IntoRoutes<St, In> for Vec<Route<St, In>> {
+    fn routes(self) -> Vec<Route<St, In>> {
         self
     }
 }
@@ -233,21 +235,21 @@ macro_rules! tuple_routes(
     {$(#[$meta:meta])* $(($n:tt, $T:ident)),+} => {
         $(#[$meta])*
         #[allow(unused_parens)]
-        impl<St: AppState, $($T,)+> IntoRoutes<St> for ($($T,)+)
+        impl<St: AppState, U, $($T,)+> IntoRoutes<St, U> for ($($T,)+)
         where
-            $($T: Into<Route<St>> + 'static,)+ {
-            fn routes(self) -> Vec<Route<St>> {
+            $($T: Into<Route<St, U>> + 'static,)+ {
+            fn routes(self) -> Vec<Route<St, U>> {
                 vec![$(self.$n.into(),)+]
             }
         }
     }
 );
 
-impl<St: AppState, T, const N: usize> IntoRoutes<St> for [T; N]
+impl<St: AppState, In, T, const N: usize> IntoRoutes<St, In> for [T; N]
 where
-    T: Into<Route<St>>,
+    T: Into<Route<St, In>>,
 {
-    fn routes(self) -> Vec<Route<St>> {
+    fn routes(self) -> Vec<Route<St, In>> {
         let mut routes = Vec::with_capacity(N);
         for route in self {
             routes.push(route.into());
@@ -272,7 +274,7 @@ mod tests {
     use crate::time::{Millis, sleep};
     use crate::web::test::{TestRequest, call_service, init_service, read_body};
     use crate::web::{self, App, HttpResponse, error, guard};
-    use crate::{ServiceFactory, SharedCfg, util::Bytes};
+    use crate::{ServiceFactory, util::Bytes};
 
     #[derive(serde::Serialize, PartialEq, Debug)]
     struct MyObject {
@@ -363,24 +365,28 @@ mod tests {
         let body = read_body(resp).await;
         assert_eq!(body, Bytes::from_static(b"{\"name\":\"test\"}"));
 
-        let route: web::Route<()> = web::get();
+        let route: web::Route<(), ()> = web::get();
         let repr = format!("{route:?}");
         assert!(repr.contains("Route"), "{}", repr);
         assert!(
-            repr.contains("handler: Handler(\"ntex::web::route::Route<()>::new::{{closure}}\")"),
+            repr.contains(
+                "handler: Handler(\"ntex::web::route::Route<(), ()>::new::{{closure}}\")"
+            ),
             "{}",
             repr
         );
         assert!(repr.contains("methods: [GET]"), "{}", repr);
         assert!(repr.contains("guards: AllGuard()"), "{}", repr);
 
-        assert!(route.create(&SharedCfg::default()).await.is_ok());
+        assert!(route.create(&()).await.is_ok());
 
         let route_service = route.service();
         let repr = format!("{route_service:?}");
         assert!(repr.contains("RouteService"));
         assert!(
-            repr.contains("handler: Handler(\"ntex::web::route::Route<()>::new::{{closure}}\")")
+            repr.contains(
+                "handler: Handler(\"ntex::web::route::Route<(), ()>::new::{{closure}}\")"
+            )
         );
         assert!(repr.contains("methods: [GET]"));
         assert!(repr.contains("guards: AllGuard()"));

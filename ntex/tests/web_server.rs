@@ -16,7 +16,7 @@ use ntex::util::{Bytes, Stream};
 use ntex::{Service, SharedCfg, client, io::IoConfig, service::State};
 
 use ntex::web::{self, middleware::Compress, test};
-use ntex::web::{App, AppState, BodyEncoding, HttpRequest, HttpResponse, WebResponseError};
+use ntex::web::{App, AppState, BodyEncoding, HttpResponse, WebResponseError};
 
 #[cfg(feature = "rustls")]
 mod rustls_utils;
@@ -705,7 +705,7 @@ async fn test_server_cookies() {
                 .cookie(coo_kie::Cookie::build(("first", "first_value")).http_only(true))
                 .cookie(coo_kie::Cookie::new("second", "first_value"))
                 .cookie(coo_kie::Cookie::new("second", "second_value"))
-                .finish()
+                .build()
         }))
     });
 
@@ -768,8 +768,8 @@ async fn test_custom_error() {
     struct TestError;
 
     #[derive(Debug, thiserror::Error)]
-    #[error("JsonContainer({0})")]
-    struct JsonContainer(Box<dyn WebResponseError<JsonContainer>>);
+    #[error("JsonContainer")]
+    struct JsonContainer;
 
     #[derive(Copy, Clone, Default)]
     struct TestAppState;
@@ -780,8 +780,8 @@ async fn test_custom_error() {
 
     impl ntex::http::ResponseError for JsonContainer {}
 
-    impl WebResponseError<JsonContainer> for TestError {
-        fn error_response(&mut self, _: &HttpRequest) -> HttpResponse {
+    impl<St> WebResponseError<St, JsonContainer> for TestError {
+        fn error_response(&mut self, _: &St) -> HttpResponse {
             HttpResponse::BadRequest()
                 .header(CONTENT_TYPE, "application/json")
                 .body("Error")
@@ -804,7 +804,7 @@ async fn test_custom_error() {
             })
         })
         .and_then(http::HttpService::new(
-            App::with::<TestAppState>()
+            App::with()
                 .service(web::resource("/").route(web::get().to(test)))
                 .service(web::resource("/err").route(web::get().to(test_err))),
         ))
@@ -914,4 +914,65 @@ async fn web_no_ws_with_response_payload() {
         .unwrap();
     let body = response.body().await.unwrap();
     assert_eq!(body, STR);
+}
+
+#[ntex::test]
+async fn test_request_state() {
+    use ntex::{Ctx, Middleware, Service, web::WebRequest, web::WebResponse};
+    use std::convert::Infallible;
+
+    struct UsizeMw;
+    struct UsizeMwS<S>(S);
+
+    impl<S, St> Middleware<S, St> for UsizeMw {
+        type Service = UsizeMwS<S>;
+
+        fn create(&self, _: &St, s: S) -> Self::Service {
+            UsizeMwS(s)
+        }
+    }
+
+    impl<S, St> Service<St, WebRequest> for UsizeMwS<S>
+    where
+        S: Service<St, WebRequest<usize>, Res = WebResponse>,
+    {
+        type Res = WebResponse;
+        type Error = S::Error;
+
+        async fn call(
+            &self,
+            req: WebRequest,
+            ctx: Ctx<'_, Self, St>,
+        ) -> Result<Self::Res, Self::Error> {
+            let req = req.map_state(|()| 100);
+            ctx.call(&self.0, req).await
+        }
+    }
+
+    async fn test() -> Result<HttpResponse, Infallible> {
+        Ok(HttpResponse::Ok().body(STR))
+    }
+
+    let srv = http::test::server(async |_| {
+        http::HttpService::new(
+            App::with()
+                .middleware(UsizeMw)
+                .filter(async |mut req: WebRequest<usize>| {
+                    assert_eq!(*req.st(), 100);
+                    *req.st_mut() = 10;
+                    Ok::<_, Infallible>(req)
+                })
+                .service(
+                    web::resource("/")
+                        .filter(async |req: WebRequest<usize>| {
+                            assert_eq!(*req.st(), 10);
+                            Ok::<_, Infallible>(req)
+                        })
+                        .route(web::get().to(test)),
+                ),
+        )
+    });
+
+    let response = srv.request(Method::GET, "/").send().await.unwrap();
+    assert!(response.status().is_success());
 }

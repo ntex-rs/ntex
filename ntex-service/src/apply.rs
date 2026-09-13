@@ -2,7 +2,7 @@ use std::{fmt, marker};
 
 use crate::ctx::{Ctx, WaitersRef};
 use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
-use crate::{ServiceChain, ServiceChainFactory};
+use crate::{ServiceCaller, ServiceChain, ServiceChainFactory};
 
 /// Apply transform function to a service.
 pub fn apply_fn<S, St, Req, F, In, Out, Err>(
@@ -14,16 +14,16 @@ where
     F: AsyncFn(In, &ApplyCtx<'_, S, St, Req>) -> Result<Out, Err>,
     Err: From<S::Error>,
 {
-    crate::svc(Apply::new(service.into_service(), f))
+    crate::service(Apply::new(service.into_service(), f))
 }
 
 /// Service factory that produces `apply_fn` service.
-pub fn apply_fn_factory<Sf, St, Req, Cfg, F, In, Out, Err>(
-    service: impl IntoServiceFactory<Sf, St, Req, Cfg>,
+pub fn apply_fn_factory<Sf, St, Req, F, In, Out, Err>(
+    service: impl IntoServiceFactory<Sf, St, Req>,
     f: F,
-) -> ServiceChainFactory<ApplyFactory<F, Sf, St, Req, Cfg, In, Out, Err>, St, In, Cfg>
+) -> ServiceChainFactory<ApplyFactory<F, Sf, St, Req, In, Out, Err>, St, In>
 where
-    Sf: ServiceFactory<St, Req, Cfg>,
+    Sf: ServiceFactory<St, Req>,
     F: AsyncFn(In, &ApplyCtx<'_, Sf::Service, St, Req>) -> Result<Out, Err> + Clone,
     Err: From<Sf::Error>,
 {
@@ -40,7 +40,7 @@ pub struct ApplyCtx<'a, S, St, Req> {
 }
 
 impl<S: Service<St, Req>, St, Req> ApplyCtx<'_, S, St, Req> {
-    /// Pipeline state
+    /// Service state
     #[inline]
     pub fn st(&self) -> &St {
         self.st
@@ -53,11 +53,16 @@ impl<S: Service<St, Req>, St, Req> ApplyCtx<'_, S, St, Req> {
             .call(&self.service, req)
             .await
     }
+}
 
-    /// Get service reference
+impl<S: Service<St, Req>, St, Req> ServiceCaller<Req, S::Res, S::Error>
+    for ApplyCtx<'_, S, St, Req>
+{
     #[inline]
-    pub fn get_ref(&self) -> &S {
-        self.service
+    async fn call_service(&self, req: Req) -> Result<S::Res, S::Error> {
+        Ctx::<S, St>::new(self.idx, self.waiters, self.st)
+            .call(&self.service, req)
+            .await
     }
 }
 
@@ -139,25 +144,25 @@ where
 }
 
 /// `apply()` service factory
-pub struct ApplyFactory<F, Sf, St, Req, Cfg, In, Out, Err>
+pub struct ApplyFactory<F, Sf, St, Req, In, Out, Err>
 where
     F: AsyncFn(In, &ApplyCtx<'_, Sf::Service, St, Req>) -> Result<Out, Err> + Clone,
-    Sf: ServiceFactory<St, Req, Cfg>,
+    Sf: ServiceFactory<St, Req>,
 {
     f: F,
     sf: Sf,
-    r: marker::PhantomData<fn(St, Req, Cfg) -> (In, Out)>,
+    r: marker::PhantomData<fn(St, Req) -> (In, Out)>,
 }
 
-impl<F, Sf, St, Req, Cfg, In, Out, Err> ApplyFactory<F, Sf, St, Req, Cfg, In, Out, Err>
+impl<F, Sf, St, Req, In, Out, Err> ApplyFactory<F, Sf, St, Req, In, Out, Err>
 where
     F: AsyncFn(In, &ApplyCtx<'_, Sf::Service, St, Req>) -> Result<Out, Err> + Clone,
-    Sf: ServiceFactory<St, Req, Cfg>,
+    Sf: ServiceFactory<St, Req>,
 {
     /// Create new `ApplyFactory` new service instance
     pub(crate) fn new(sf: Sf, f: F) -> Self
     where
-        Sf: ServiceFactory<St, Req, Cfg>,
+        Sf: ServiceFactory<St, Req>,
         Err: From<Sf::Error>,
     {
         Self {
@@ -168,10 +173,10 @@ where
     }
 }
 
-impl<F, Sf, St, Req, Cfg, In, Out, Err> Clone for ApplyFactory<F, Sf, St, Req, Cfg, In, Out, Err>
+impl<F, Sf, St, Req, In, Out, Err> Clone for ApplyFactory<F, Sf, St, Req, In, Out, Err>
 where
     F: AsyncFn(In, &ApplyCtx<'_, Sf::Service, St, Req>) -> Result<Out, Err> + Clone,
-    Sf: ServiceFactory<St, Req, Cfg> + Clone,
+    Sf: ServiceFactory<St, Req> + Clone,
 {
     fn clone(&self) -> Self {
         Self {
@@ -182,11 +187,10 @@ where
     }
 }
 
-impl<F, Sf, St, Req, Cfg, In, Out, Err> fmt::Debug
-    for ApplyFactory<F, Sf, St, Req, Cfg, In, Out, Err>
+impl<F, Sf, St, Req, In, Out, Err> fmt::Debug for ApplyFactory<F, Sf, St, Req, In, Out, Err>
 where
     F: AsyncFn(In, &ApplyCtx<'_, Sf::Service, St, Req>) -> Result<Out, Err> + Clone,
-    Sf: ServiceFactory<St, Req, Cfg> + fmt::Debug,
+    Sf: ServiceFactory<St, Req> + fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ApplyFactory")
@@ -196,11 +200,11 @@ where
     }
 }
 
-impl<F, Sf, St, Req, Cfg, In, Out, Err> ServiceFactory<St, In, Cfg>
-    for ApplyFactory<F, Sf, St, Req, Cfg, In, Out, Err>
+impl<F, Sf, St, Req, In, Out, Err> ServiceFactory<St, In>
+    for ApplyFactory<F, Sf, St, Req, In, Out, Err>
 where
     F: AsyncFn(In, &ApplyCtx<'_, Sf::Service, St, Req>) -> Result<Out, Err> + Clone,
-    Sf: ServiceFactory<St, Req, Cfg>,
+    Sf: ServiceFactory<St, Req>,
     Err: From<Sf::Error>,
 {
     type Res = Out;
@@ -210,8 +214,8 @@ where
     type InitError = Sf::InitError;
 
     #[inline]
-    async fn create(&self, cfg: &Cfg) -> Result<Self::Service, Self::InitError> {
-        self.sf.create(cfg).await.map(|svc| Apply {
+    async fn create(&self, st: &St) -> Result<Self::Service, Self::InitError> {
+        self.sf.create(st).await.map(|svc| Apply {
             svc,
             f: self.f.clone(),
             r: marker::PhantomData,
@@ -224,7 +228,7 @@ mod tests {
     use std::{cell::Cell, rc::Rc};
 
     use super::*;
-    use crate::{factory, fn_factory, svc};
+    use crate::{factory, fn_factory, service};
 
     #[derive(Debug, Default, Clone)]
     struct Srv(Rc<Cell<usize>>);
@@ -259,14 +263,14 @@ mod tests {
     #[ntex::test]
     async fn test_call() {
         let cnt_sht = Rc::new(Cell::new(0));
-        let srv = svc(
+        let srv = service(
             apply_fn(Srv(cnt_sht.clone()), async move |req: &'static str, svc| {
                 svc.call(()).await.unwrap();
                 Ok((req, ()))
             })
             .clone(),
         )
-        .into_pipeline();
+        .pipeline(());
 
         assert_eq!(srv.ready().await, Ok::<_, Err>(()));
 
@@ -281,14 +285,17 @@ mod tests {
     #[ntex::test]
     async fn test_call_svc() {
         let cnt_sht = Rc::new(Cell::new(0));
-        let srv = svc(Srv(cnt_sht.clone()))
+        let srv = service(Srv(cnt_sht.clone()))
             .apply_fn(async move |req: &'static str, svc| {
+                svc.st();
                 svc.call(()).await.unwrap();
                 Ok((req, ()))
             })
-            .clone()
-            .into_pipeline();
+            .clone();
+        let s = format!("{srv:?}");
+        assert!(s.contains("Apply"), "{}", s);
 
+        let srv = srv.pipeline(());
         assert_eq!(srv.ready().await, Ok::<_, Err>(()));
 
         srv.shutdown().await;
@@ -302,39 +309,34 @@ mod tests {
 
     #[ntex::test]
     async fn test_create() {
-        let new_srv = factory(
-            apply_fn_factory(
-                fn_factory(|| async { Ok::<_, ()>(Srv::default()) }),
-                async move |req: &'static str, srv| {
-                    srv.call(()).await.unwrap();
-                    Ok((req, ()))
-                },
-            )
-            .clone(),
-        );
+        let new_srv = factory(apply_fn_factory(
+            fn_factory(|(): &()| async { Ok::<_, ()>(Srv::default()) }),
+            async move |req: &'static str, srv| {
+                srv.call(()).await.unwrap();
+                Ok((req, ()))
+            },
+        ));
 
-        let srv = new_srv.pipeline(&()).await.unwrap();
+        let srv = new_srv.pipeline(()).await.unwrap();
 
         assert_eq!(srv.ready().await, Ok::<_, Err>(()));
 
         let res = srv.call("srv").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv", ()));
-        let _ = format!("{new_srv:?}");
-
         assert_eq!(Err, Err::from(()));
     }
 
     #[ntex::test]
     async fn test_create_chain() {
-        let new_srv = factory(fn_factory(|| async { Ok::<_, ()>(Srv::default()) }))
+        let new_srv = factory(fn_factory(|(): &()| async { Ok::<_, ()>(Srv::default()) }))
             .apply_fn(async move |req: &'static str, srv| {
                 srv.call(()).await.unwrap();
                 Ok((req, ()))
             })
             .clone();
 
-        let srv = new_srv.pipeline(&()).await.unwrap();
+        let srv = new_srv.pipeline(()).await.unwrap();
 
         assert_eq!(srv.ready().await, Ok::<_, Err>(()));
 

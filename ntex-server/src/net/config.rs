@@ -55,21 +55,21 @@ impl<Cfg: ServerAppConfig> ServiceConfig<Cfg> {
     }
 
     /// Add new service to the server.
-    pub fn bind(
-        &self,
-        name: impl AsRef<str>,
-        addr: impl net::ToSocketAddrs,
-        cfg: impl Into<SharedCfg>,
-    ) -> io::Result<&Self> {
+    pub fn bind(&self, name: impl AsRef<str>, addr: impl net::ToSocketAddrs) -> io::Result<&Self> {
         let mut inner = self.0.borrow_mut();
 
-        let cfg = cfg.into();
         let sockets = bind_addr(addr, inner.backlog)?;
         let socket = Socket {
             name: name.as_ref().to_string(),
             sockets: sockets
                 .into_iter()
-                .map(|lst| (inner.token.next(), Listener::from_tcp(lst), cfg.clone()))
+                .map(|lst| {
+                    (
+                        inner.token.next(),
+                        Listener::from_tcp(lst),
+                        SharedCfg::default(),
+                    )
+                })
                 .collect(),
         };
         inner.sockets.push(socket);
@@ -78,16 +78,15 @@ impl<Cfg: ServerAppConfig> ServiceConfig<Cfg> {
     }
 
     /// Add new service to the server.
-    pub fn listen(
-        &self,
-        name: impl AsRef<str>,
-        lst: net::TcpListener,
-        cfg: impl Into<SharedCfg>,
-    ) -> &Self {
+    pub fn listen(&self, name: impl AsRef<str>, lst: net::TcpListener) -> &Self {
         let mut inner = self.0.borrow_mut();
         let socket = Socket {
             name: name.as_ref().to_string(),
-            sockets: vec![(inner.token.next(), Listener::from_tcp(lst), cfg.into())],
+            sockets: vec![(
+                inner.token.next(),
+                Listener::from_tcp(lst),
+                SharedCfg::default(),
+            )],
         };
         inner.sockets.push(socket);
 
@@ -100,7 +99,7 @@ impl<Cfg: ServerAppConfig> ServiceConfig<Cfg> {
     /// It get executed in the worker thread.
     pub fn on_worker_start<F>(&self, f: F) -> &Self
     where
-        F: AsyncFn(ServiceRuntime<Cfg::State>) -> io::Result<()> + Send + Clone + 'static,
+        F: AsyncFnOnce(ServiceRuntime<Cfg::State>) -> io::Result<()> + Send + Clone + 'static,
     {
         let mut inner = self.0.borrow_mut();
         if !inner.on_start_set {
@@ -208,14 +207,23 @@ impl<Cfg: Clone + 'static> ServiceRuntime<Cfg> {
     /// # Panics
     ///
     /// Panics if service with specified name is registered already
-    pub fn service<S>(&self, name: &str, svc: impl IntoService<S, Cfg, Io>) -> &Self
+    pub fn service<S>(
+        &self,
+        name: &str,
+        cfg: impl Into<SharedCfg>,
+        svc: impl IntoService<S, Cfg, Io>,
+    ) -> &Self
     where
         S: Service<Cfg, Io> + 'static,
     {
+        let shared = cfg.into();
         let mut inner = self.1.borrow_mut();
         if let Some(entry) = inner.names.get_mut(name) {
             let idx = entry.idx;
-            let pipeline = Pipeline::with(
+            for token in &mut entry.tokens {
+                token.1 = shared.clone();
+            }
+            let pipeline = Pipeline::new(
                 self.0.clone(),
                 svc.into_service().map(|_| ()).map_err(|_| ()),
             );
@@ -309,7 +317,7 @@ struct OnWorkerStartImpl<F, Cfg> {
 
 fn on_worker_start<F, Cfg>(f: F) -> Box<dyn OnWorkerStart<Cfg> + Send>
 where
-    F: AsyncFn(ServiceRuntime<Cfg>) -> io::Result<()> + Send + Clone + 'static,
+    F: AsyncFnOnce(ServiceRuntime<Cfg>) -> io::Result<()> + Send + Clone + 'static,
     Cfg: 'static,
 {
     Box::new(OnWorkerStartImpl { f, st: PhantomData })
@@ -317,7 +325,7 @@ where
 
 impl<F, Cfg> OnWorkerStart<Cfg> for OnWorkerStartImpl<F, Cfg>
 where
-    F: AsyncFn(ServiceRuntime<Cfg>) -> io::Result<()> + Send + Clone + 'static,
+    F: AsyncFnOnce(ServiceRuntime<Cfg>) -> io::Result<()> + Send + Clone + 'static,
     Cfg: 'static,
 {
     fn clo(&self) -> Box<dyn OnWorkerStart<Cfg>> {

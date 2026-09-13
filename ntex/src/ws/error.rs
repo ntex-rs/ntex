@@ -1,6 +1,7 @@
 //! WebSocket protocol related errors.
 use std::io;
 
+use crate::error::ErrorDiagnostic;
 use crate::http::error::{DecodeError, EncodeError, HttpError, ResponseError};
 use crate::http::{Response, StatusCode, header::ALLOW, header::HeaderValue};
 use crate::{connect::ConnectError, util::Either, util::clone_io_error};
@@ -21,6 +22,9 @@ pub enum WsError<E> {
     /// Ws protocol level error
     #[error("Ws protocol level error")]
     Protocol(#[source] ProtocolError),
+    /// Websocket handshake errors
+    #[error("Ws handshake error")]
+    Handshake(#[from] HandshakeError),
     /// Peer has been disconnected
     #[error("Peer has been disconnected: {0:?}")]
     Disconnected(#[source] Option<io::Error>),
@@ -177,6 +181,12 @@ impl Clone for WsClientError {
     }
 }
 
+impl ErrorDiagnostic for WsClientError {
+    fn signature(&self) -> &'static str {
+        "ntex-ws-client"
+    }
+}
+
 /// Websocket handshake errors
 #[derive(Copy, Clone, PartialEq, Eq, Debug, thiserror::Error)]
 pub enum HandshakeError {
@@ -204,22 +214,22 @@ impl ResponseError for HandshakeError {
     fn error_response(&self) -> Response {
         match *self {
             HandshakeError::GetMethodRequired => {
-                Response::MethodNotAllowed().header(ALLOW, "GET").finish()
+                Response::MethodNotAllowed().header(ALLOW, "GET").build()
             }
             HandshakeError::NoWebsocketUpgrade => Response::BadRequest()
                 .reason("No WebSocket UPGRADE header found")
-                .finish(),
+                .build(),
             HandshakeError::NoConnectionUpgrade => Response::BadRequest()
                 .reason("No CONNECTION upgrade")
-                .finish(),
+                .build(),
             HandshakeError::NoVersionHeader => Response::BadRequest()
                 .reason("Websocket version header is required")
-                .finish(),
-            HandshakeError::UnsupportedVersion => Response::BadRequest()
-                .reason("Unsupported version")
-                .finish(),
+                .build(),
+            HandshakeError::UnsupportedVersion => {
+                Response::BadRequest().reason("Unsupported version").build()
+            }
             HandshakeError::BadWebsocketKey => {
-                Response::BadRequest().reason("Handshake error").finish()
+                Response::BadRequest().reason("Handshake error").build()
             }
         }
     }

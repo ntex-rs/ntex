@@ -130,15 +130,15 @@ impl<T: fmt::Display> fmt::Display for Form<T> {
 impl<T: Serialize, St> Responder<St> for Form<T>
 where
     St: AppState,
-    serde_urlencoded::ser::Error: WebResponseError<St::Error>,
+    serde_urlencoded::ser::Error: WebResponseError<St, St::Error>,
 {
-    async fn respond_to(self, req: &HttpRequest) -> Response {
+    async fn respond_to(self, st: &St, _: &HttpRequest) -> Response {
         let body = match serde_urlencoded::to_string(&self.0) {
             Ok(body) => body,
-            Err(mut e) => return e.error_response(req),
+            Err(mut e) => return e.error_response(st),
         };
 
-        Response::build(StatusCode::OK)
+        Response::builder(StatusCode::OK)
             .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
             .body(body)
     }
@@ -147,7 +147,8 @@ where
 /// Form extractor configuration
 ///
 /// ```rust
-/// use ntex::web::{self, App, WebError, FromRequest};
+/// use std::convert::Infallible;
+/// use ntex::web::{self, App, WebError, FromRequest, WebAppConfig};
 ///
 /// #[derive(serde::Deserialize)]
 /// struct FormData {
@@ -156,19 +157,19 @@ where
 ///
 /// /// Extract form data using serde.
 /// /// Custom configuration is used for this handler, max payload size is 4k
-/// async fn index(form: web::types::Form<FormData>) -> Result<String, WebError> {
+/// async fn index(form: web::types::Form<FormData>) -> Result<String, Infallible> {
 ///     Ok(format!("Welcome {}!", form.username))
 /// }
 ///
 /// fn main() {
-///     let app = App::default().service(
-///         web::resource("/index.html")
-///             // change `Form` extractor configuration
-///             .state(
-///                 web::types::FormConfig::default().limit(4097)
-///             )
-///             .route(web::get().to(index))
-///     );
+///     let cfg = WebAppConfig::new()
+///         // change `Form` extractor configuration
+///         .set_state(web::types::FormConfig::default().limit(4097))
+///         .into();
+///
+///     let app = App::new()
+///         .config(cfg)
+///         .service(web::resource("/index.html").route(web::get().to(index)));
 /// }
 /// ```
 #[derive(Clone, Debug)]
@@ -376,10 +377,10 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_form() {
-        let (req, mut pl) =
+        let (req, mut pl, ()) =
             TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(CONTENT_LENGTH, "11")
-                .set_payload(Bytes::from_static(b"hello=world&counter=123"))
+                .payload(Bytes::from_static(b"hello=world&counter=123"))
                 .to_http_parts();
 
         let Form(s) = from_request::<_, Form<Info>>(&(), &req, &mut pl)
@@ -393,10 +394,10 @@ mod tests {
             }
         );
 
-        let (req, mut pl) =
+        let (req, mut pl, ()) =
             TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(CONTENT_LENGTH, "xx")
-                .set_payload(Bytes::from_static(b"hello=world&counter=123"))
+                .payload(Bytes::from_static(b"hello=world&counter=123"))
                 .to_http_parts();
         let res = from_request::<_, Form<Info>>(&(), &req, &mut pl).await;
         assert!(eq(&res.err().unwrap(), &UrlencodedError::UnknownLength));
@@ -404,14 +405,14 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_urlencoded_error() {
-        let (req, mut pl) =
+        let (req, mut pl, ()) =
             TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(CONTENT_LENGTH, "xxxx")
                 .to_http_parts();
         let info = UrlEncoded::<Info>::new(&req, &mut pl).await;
         assert!(eq(&info.err().unwrap(), &UrlencodedError::UnknownLength));
 
-        let (req, mut pl) =
+        let (req, mut pl, ()) =
             TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(CONTENT_LENGTH, "1000000")
                 .to_http_parts();
@@ -421,7 +422,7 @@ mod tests {
             &UrlencodedError::Overflow { size: 0, limit: 0 }
         ));
 
-        let (req, mut pl) = TestRequest::with_header(CONTENT_TYPE, "text/plain")
+        let (req, mut pl, ()) = TestRequest::with_header(CONTENT_TYPE, "text/plain")
             .header(CONTENT_LENGTH, "10")
             .to_http_parts();
         let info = UrlEncoded::<Info>::new(&req, &mut pl).await;
@@ -430,10 +431,10 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_urlencoded() {
-        let (req, mut pl) =
+        let (req, mut pl, ()) =
             TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .header(CONTENT_LENGTH, "11")
-                .set_payload(Bytes::from_static(b"hello=world&counter=123"))
+                .payload(Bytes::from_static(b"hello=world&counter=123"))
                 .to_http_parts();
 
         let info = UrlEncoded::<Info>::new(&req, &mut pl).await.unwrap();
@@ -445,12 +446,12 @@ mod tests {
             }
         );
 
-        let (req, mut pl) = TestRequest::with_header(
+        let (req, mut pl, ()) = TestRequest::with_header(
             CONTENT_TYPE,
             "application/x-www-form-urlencoded; charset=utf-8",
         )
         .header(CONTENT_LENGTH, "11")
-        .set_payload(Bytes::from_static(b"hello=world&counter=123"))
+        .payload(Bytes::from_static(b"hello=world&counter=123"))
         .to_http_parts();
 
         let info = UrlEncoded::<Info>::new(&req, &mut pl).await.unwrap();
@@ -462,12 +463,12 @@ mod tests {
             }
         );
 
-        let (req, mut pl) = TestRequest::with_header(
+        let (req, mut pl, ()) = TestRequest::with_header(
             CONTENT_TYPE,
             "application/x-www-form-urlencoded; charset=cp1251",
         )
         .header(CONTENT_LENGTH, "11")
-        .set_payload(Bytes::from_static(b"hello=world&counter=123"))
+        .payload(Bytes::from_static(b"hello=world&counter=123"))
         .to_http_parts();
 
         let info = UrlEncoded::<Info>::new(&req, &mut pl).await.unwrap();

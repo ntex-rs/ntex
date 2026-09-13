@@ -31,10 +31,10 @@ impl<P> Retry<P> {
     }
 }
 
-impl<P: Clone, S, St, Cfg> Middleware<S, St, Cfg> for Retry<P> {
+impl<P: Clone, S, St> Middleware<S, St> for Retry<P> {
     type Service = RetryService<P, S>;
 
-    fn create(&self, service: S, _: &Cfg) -> Self::Service {
+    fn create(&self, _: &St, service: S) -> Self::Service {
         RetryService {
             service,
             policy: self.policy.clone(),
@@ -153,7 +153,7 @@ mod tests {
     #[ntex::test]
     async fn test_retry() {
         let cnt = Rc::new(Cell::new(5));
-        let svc = Pipeline::with(
+        let svc = Pipeline::new(
             (),
             RetryService::new(DefaultRetryPolicy::default(), TestService(cnt.clone())).clone(),
         );
@@ -164,16 +164,16 @@ mod tests {
 
         let factory = apply(
             Retry::new(DefaultRetryPolicy::new(3)).clone(),
-            fn_factory(|| async { Ok::<_, ()>(TestService(Rc::new(Cell::new(2)))) }),
+            fn_factory(|(): &()| async { Ok::<_, ()>(TestService(Rc::new(Cell::new(2)))) }),
         );
-        let srv = factory.pipeline(&()).await.unwrap();
+        let srv = factory.pipeline(()).await.unwrap();
         assert_eq!(srv.call(()).await, Ok(()));
 
         let factory = apply(
             Retry::new(DefaultRetryPolicy::new(3)).clone(),
-            fn_factory(|| async { Ok::<_, ()>(TestService(Rc::new(Cell::new(2)))) }),
+            fn_factory(|(): &()| async { Ok::<_, ()>(TestService(Rc::new(Cell::new(2)))) }),
         );
-        let srv = factory.pipeline(&()).await.unwrap();
+        let srv = factory.pipeline(()).await.unwrap();
         assert_eq!(srv.call(()).await, Ok(()));
     }
 }

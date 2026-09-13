@@ -167,7 +167,7 @@ impl<M> ClientBuilder<M> {
     /// Finish build process and create `Client` instance.
     pub fn build(self, cfg: impl Into<SharedCfg>) -> Client
     where
-        M: Middleware<Sender, SharedCfg, SharedCfg>,
+        M: Middleware<Sender, SharedCfg>,
         M::Service: Service<SharedCfg, ServiceRequest, Res = ServiceResponse, Error = Error<ClientError>>
             + 'static,
     {
@@ -180,8 +180,8 @@ impl<M> ClientBuilder<M> {
                 .secure_svc
                 .map(|svc| ConnectionPool::new(svc, config.clone())),
         };
-        let svc = self.middleware.create(Sender::new(connector), &cfg);
+        let svc = self.middleware.create(&cfg, Sender::new(connector));
 
-        Client::with_service(config, Pipeline::with(cfg, svc))
+        Client::with_service(config, Pipeline::new(cfg, svc))
     }
 }

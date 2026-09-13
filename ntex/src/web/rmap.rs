@@ -36,11 +36,11 @@ impl ResourceMap {
         }
     }
 
-    pub(crate) fn finish(&self, current: &Rc<ResourceMap>) {
+    pub(crate) fn build(&self, current: &Rc<ResourceMap>) {
         for (_, nested) in &self.patterns {
             if let Some(nested) = nested {
                 *nested.parent.borrow_mut() = Some(current.clone());
-                nested.finish(nested);
+                nested.build(nested);
             }
         }
     }

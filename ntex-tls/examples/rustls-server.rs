@@ -1,6 +1,6 @@
 use std::{fs::File, io, io::BufReader, sync::Arc};
 
-use ntex::{SharedCfg, codec, io::Io, server, svc, util::Either};
+use ntex::{SharedCfg, codec, io::Io, server, service, util::Either};
 use ntex_tls::rustls::TlsAcceptor;
 use tls_rustls::ServerConfig;
 
@@ -31,7 +31,7 @@ async fn main() -> io::Result<()> {
             "127.0.0.1:8443",
             SharedCfg::new("S"),
             async move |_| {
-                svc(TlsAcceptor::new(tls_config.clone())).and_then(async move |io: Io<_>| {
+                service(TlsAcceptor::new(tls_config.clone())).and_then(async move |io: Io<_>| {
                     println!("New client is connected");
 
                     io.send(

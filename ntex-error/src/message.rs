@@ -1,4 +1,4 @@
-use std::{error, fmt, fmt::Write, rc::Rc};
+use std::{error::Error as StdError, fmt, fmt::Write, rc::Rc};
 
 use ntex_bytes::ByteString;
 
@@ -14,8 +14,8 @@ impl<'a> Wrt<'a> {
         Wrt { fmt, written: 0 }
     }
 
-    fn wrote(&mut self) -> bool {
-        let res = self.written != 0;
+    fn wrote(&mut self) -> usize {
+        let res = self.written;
         self.written = 0;
         res
     }
@@ -33,18 +33,18 @@ impl fmt::Write for Wrt<'_> {
     }
 }
 
-pub fn fmt_err_string(e: &dyn error::Error) -> String {
+pub fn fmt_err_string(e: &dyn StdError) -> String {
     let mut buf = String::new();
     _ = fmt_err(&mut buf, e);
     buf
 }
 
-pub fn fmt_err(f: &mut dyn fmt::Write, e: &dyn error::Error) -> fmt::Result {
+pub fn fmt_err(f: &mut dyn fmt::Write, e: &dyn StdError) -> fmt::Result {
     let mut wrt = Wrt::new(f);
     let mut current = Some(e);
     while let Some(std_err) = current {
         write!(&mut wrt, "{std_err}")?;
-        if wrt.wrote() {
+        if wrt.wrote() > 0 {
             writeln!(wrt.fmt)?;
         }
         current = std_err.source();
@@ -102,15 +102,18 @@ where
     writeln!(f)?;
 
     let mut wrt = Wrt::new(f);
-    write!(&mut wrt, "{e:?}")?;
-    if wrt.wrote() {
+    write!(&mut wrt, "{e}")?;
+    if wrt.wrote() > 0 {
         writeln!(wrt.fmt)?;
     }
 
+    let mut nesting = 0;
     let mut current = e.source();
     while let Some(err) = current {
-        write!(&mut wrt, "{err:?}")?;
-        if wrt.wrote() {
+        nesting += 2;
+        write!(&mut wrt, "{}", " ".repeat(nesting))?;
+        write!(&mut wrt, "{err}")?;
+        if wrt.wrote() > nesting {
             writeln!(wrt.fmt)?;
         }
         current = err.source();
@@ -132,14 +135,14 @@ pub struct ErrorMessage(ByteString);
 #[derive(Clone)]
 pub struct ErrorMessageChained {
     msg: ByteString,
-    source: Option<Rc<dyn error::Error>>,
+    source: Option<Rc<dyn StdError>>,
 }
 
 impl ErrorMessageChained {
     pub fn new<M, E>(ctx: M, source: E) -> Self
     where
         M: Into<ErrorMessage>,
-        E: error::Error + 'static,
+        E: StdError + 'static,
     {
         ErrorMessageChained {
             msg: ctx.into().into_string(),
@@ -189,7 +192,7 @@ impl ErrorMessage {
         self.0
     }
 
-    pub fn with_source<E: error::Error + 'static>(self, source: E) -> ErrorMessageChained {
+    pub fn with_source<E: StdError + 'static>(self, source: E) -> ErrorMessageChained {
         ErrorMessageChained::new(self, source)
     }
 }
@@ -245,8 +248,8 @@ impl<M: Into<ErrorMessage>> From<M> for ErrorMessageChained {
     }
 }
 
-impl error::Error for ErrorMessageChained {
-    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+impl StdError for ErrorMessageChained {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
         self.source.as_ref().map(AsRef::as_ref)
     }
 }

@@ -31,7 +31,7 @@ use crate::web::{HttpResponse, WebRequest, WebResponse};
 /// use ntex::web::middleware::Logger;
 ///
 /// fn main() {
-///     let app = App::default()
+///     let app = App::new()
 ///         .middleware(Logger::default())
 ///         .middleware(Logger::new("%a %{User-Agent}i"));
 /// }
@@ -113,10 +113,10 @@ impl Default for Logger {
     }
 }
 
-impl<S, St, Cfg> Middleware<S, St, Cfg> for Logger {
+impl<S, St> Middleware<S, St> for Logger {
     type Service = LoggerMiddleware<S>;
 
-    fn create(&self, service: S, _: &Cfg) -> Self::Service {
+    fn create(&self, _: &St, service: S) -> Self::Service {
         LoggerMiddleware {
             service,
             inner: self.inner.clone(),
@@ -131,9 +131,9 @@ pub struct LoggerMiddleware<S> {
     service: S,
 }
 
-impl<S, St> Service<St, WebRequest> for LoggerMiddleware<S>
+impl<S, St, In> Service<St, WebRequest<In>> for LoggerMiddleware<S>
 where
-    S: Service<St, WebRequest, Res = WebResponse>,
+    S: Service<St, WebRequest<In>, Res = WebResponse>,
 {
     type Res = WebResponse;
     type Error = S::Error;
@@ -141,7 +141,11 @@ where
     crate::forward_ready!(St, service);
     crate::forward_shutdown!(St, service);
 
-    async fn call(&self, req: WebRequest, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, S::Error> {
+    async fn call(
+        &self,
+        req: WebRequest<In>,
+        ctx: Ctx<'_, Self, St>,
+    ) -> Result<Self::Res, S::Error> {
         if self.inner.exclude.contains(req.path()) {
             ctx.call(&self.service, req).await
         } else {
@@ -340,7 +344,7 @@ impl FormatText {
         }
     }
 
-    fn render_request(&mut self, now: time::SystemTime, req: &WebRequest) {
+    fn render_request<R>(&mut self, now: time::SystemTime, req: &WebRequest<R>) {
         match *self {
             FormatText::RequestLine => {
                 let q = req.query_string();
@@ -396,17 +400,19 @@ impl fmt::Display for FormatDisplay<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::convert::Infallible;
+
     use super::*;
     use crate::http::{StatusCode, header};
-    use crate::web::{WebError, test, test::TestRequest};
-    use crate::{SharedCfg, fn_service, service::Pipeline, util::lazy};
+    use crate::web::{test, test::TestRequest};
+    use crate::{fn_service, service::Pipeline, util::lazy};
 
     #[crate::rt_test]
     async fn test_logger() {
-        let srv = fn_service(async move |req: WebRequest| {
-            Ok::<_, WebError>(
+        let srv = fn_service(async move |req: WebRequest<()>| {
+            Ok::<_, Infallible>(
                 req.into_response(
-                    HttpResponse::build(StatusCode::OK)
+                    HttpResponse::builder(StatusCode::OK)
                         .header("X-Test", "ttt")
                         .body("TEST"),
                 ),
@@ -416,10 +422,7 @@ mod tests {
         let logger =
             Logger::new("%% %{User-Agent}i %{X-Test}o %{HOME}e %D %% test").exclude("/test");
 
-        let srv = Pipeline::with(
-            (),
-            Middleware::<_, (), _>::create(&logger, srv, &SharedCfg::default()),
-        );
+        let srv = Pipeline::new((), Middleware::create(&logger, &(), srv));
         assert!(lazy(|cx| srv.poll_ready(cx).is_ready()).await);
         assert!(lazy(|cx| srv.poll_shutdown(cx).is_ready()).await);
 
@@ -451,7 +454,7 @@ mod tests {
             unit.render_request(now, &req);
         }
 
-        let resp = HttpResponse::build(StatusCode::OK).force_close().finish();
+        let resp = HttpResponse::builder(StatusCode::OK).force_close().build();
         for unit in &mut format.0 {
             unit.render_response(&resp);
         }
@@ -479,7 +482,7 @@ mod tests {
             unit.render_request(now, &req);
         }
 
-        let resp = HttpResponse::build(StatusCode::OK).force_close().finish();
+        let resp = HttpResponse::builder(StatusCode::OK).force_close().build();
         for unit in &mut format.0 {
             unit.render_response(&resp);
         }
@@ -507,7 +510,7 @@ mod tests {
             unit.render_request(now, &req);
         }
 
-        let resp = HttpResponse::build(StatusCode::OK).force_close().finish();
+        let resp = HttpResponse::builder(StatusCode::OK).force_close().build();
         for unit in &mut format.0 {
             unit.render_response(&resp);
         }
@@ -535,7 +538,7 @@ mod tests {
             unit.render_request(now, &req);
         }
 
-        let resp = HttpResponse::build(StatusCode::OK).force_close().finish();
+        let resp = HttpResponse::builder(StatusCode::OK).force_close().build();
         for unit in &mut format.0 {
             unit.render_response(&resp);
         }

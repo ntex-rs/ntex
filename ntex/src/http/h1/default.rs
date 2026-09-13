@@ -1,6 +1,5 @@
-use std::{convert::Infallible, io};
-
-use crate::{Ctx, Service, ServiceFactory, http::ResponseError, io::Filter};
+use crate::http::{ResponseError, error::DispatchError};
+use crate::{Ctx, Service, ServiceFactory, io::Filter};
 
 use super::control::{Control, ControlAck};
 
@@ -14,7 +13,7 @@ where
     Err: ResponseError,
 {
     type Res = ControlAck<F>;
-    type Error = io::Error;
+    type Error = DispatchError;
 
     #[inline]
     async fn call(
@@ -26,18 +25,18 @@ where
     }
 }
 
-impl<St, F, Err, Cfg> ServiceFactory<St, Control<F, Err>, Cfg> for DefaultControlService
+impl<St, F, Err> ServiceFactory<St, Control<F, Err>> for DefaultControlService
 where
     F: Filter,
     Err: ResponseError,
 {
     type Res = ControlAck<F>;
-    type Error = io::Error;
+    type Error = DispatchError;
 
     type Service = DefaultControlService;
-    type InitError = Infallible;
+    type InitError = DispatchError;
 
-    async fn create(&self, _: &Cfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, _: &St) -> Result<Self::Service, Self::InitError> {
         Ok(DefaultControlService)
     }
 }

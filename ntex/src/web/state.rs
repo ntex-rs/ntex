@@ -1,9 +1,9 @@
-use super::error::WebError;
+use super::error::DefaultError;
 
 pub trait AppState: 'static {
     type Error;
 }
 
 impl AppState for () {
-    type Error = WebError;
+    type Error = DefaultError;
 }

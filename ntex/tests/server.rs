@@ -149,29 +149,34 @@ fn test_on_worker_start() {
             let num = num.clone();
             ntex::rt::spawn(async move {
                 let num = num.clone();
-                let srv = build()
-                    .disable_signals()
-                    .configure(async move |cfg| {
-                        let num = num.clone();
-                        let lst = net::TcpListener::bind(addr3).unwrap();
-                        cfg.bind("addr1", addr1, SharedCfg::default())
-                            .unwrap()
-                            .bind("addr2", addr2, SharedCfg::default())
-                            .unwrap()
-                            .listen("addr3", lst, SharedCfg::default())
-                            .on_worker_start(async move |rt| {
-                                let num = num.clone();
-                                rt.service("addr1", async |_| Ok::<_, ()>(()));
-                                rt.service("addr3", async |_| Ok::<_, ()>(()));
-                                let _ = num.fetch_add(1, Relaxed);
-                                Ok::<_, io::Error>(())
-                            });
-                        Ok::<_, io::Error>(())
-                    })
-                    .await
-                    .unwrap()
-                    .workers(1)
-                    .run();
+                let srv =
+                    build()
+                        .disable_signals()
+                        .configure(async move |cfg| {
+                            let num = num.clone();
+                            let lst = net::TcpListener::bind(addr3).unwrap();
+                            cfg.bind("addr1", addr1)
+                                .unwrap()
+                                .bind("addr2", addr2)
+                                .unwrap()
+                                .listen("addr3", lst)
+                                .on_worker_start(async move |rt| {
+                                    let num = num.clone();
+                                    rt.service("addr1", SharedCfg::default(), async |_| {
+                                        Ok::<_, ()>(())
+                                    });
+                                    rt.service("addr3", SharedCfg::default(), async |_| {
+                                        Ok::<_, ()>(())
+                                    });
+                                    let _ = num.fetch_add(1, Relaxed);
+                                    Ok::<_, io::Error>(())
+                                });
+                            Ok::<_, io::Error>(())
+                        })
+                        .await
+                        .unwrap()
+                        .workers(1)
+                        .run();
                 let _ = tx.send((srv, ntex::rt::System::current()));
             });
             Ok::<_, io::Error>(())
@@ -209,16 +214,24 @@ fn test_configure() {
                     .configure(async move |cfg| {
                         let num = num.clone();
                         let lst = net::TcpListener::bind(addr3).unwrap();
-                        cfg.bind("addr1", addr1, SharedCfg::new("srv-addr1"))
+                        cfg.bind("addr1", addr1)
                             .unwrap()
-                            .bind("addr2", addr2, SharedCfg::default())
+                            .bind("addr2", addr2)
                             .unwrap()
-                            .listen("addr3", lst, SharedCfg::default())
+                            .listen("addr3", lst)
                             .on_worker_start(async move |rt| {
                                 assert!(format!("{:?}", rt).contains("ServiceRuntime"));
                                 let num = num.clone();
-                                rt.service("addr1", fn_service(async |_| Ok::<_, ()>(())));
-                                rt.service("addr3", fn_service(async |_| Ok::<_, ()>(())));
+                                rt.service(
+                                    "addr1",
+                                    SharedCfg::new("srv-addr1"),
+                                    fn_service(async |_| Ok::<_, ()>(())),
+                                );
+                                rt.service(
+                                    "addr3",
+                                    SharedCfg::default(),
+                                    fn_service(async |_| Ok::<_, ()>(())),
+                                );
                                 let _ = num.fetch_add(1, Relaxed);
                                 Ok::<_, io::Error>(())
                             });

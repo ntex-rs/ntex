@@ -55,16 +55,10 @@ impl<A, B> ThenFactory<A, B> {
     }
 }
 
-impl<A, B, St, Req, Cfg> ServiceFactory<St, Req, Cfg> for ThenFactory<A, B>
+impl<A, B, St, Req> ServiceFactory<St, Req> for ThenFactory<A, B>
 where
-    A: ServiceFactory<St, Req, Cfg>,
-    B: ServiceFactory<
-            St,
-            Result<A::Res, A::Error>,
-            Cfg,
-            Error = A::Error,
-            InitError = A::InitError,
-        >,
+    A: ServiceFactory<St, Req>,
+    B: ServiceFactory<St, Result<A::Res, A::Error>, Error = A::Error, InitError = A::InitError>,
 {
     type Res = B::Res;
     type Error = A::Error;
@@ -72,10 +66,10 @@ where
     type Service = Then<A::Service, B::Service>;
     type InitError = A::InitError;
 
-    async fn create(&self, cfg: &Cfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, st: &St) -> Result<Self::Service, Self::InitError> {
         Ok(Then {
-            svc1: self.svc1.create(cfg).await?,
-            svc2: self.svc2.create(cfg).await?,
+            svc1: self.svc1.create(st).await?,
+            svc2: self.svc2.create(st).await?,
         })
     }
 }
@@ -84,7 +78,7 @@ where
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use crate::{Ctx, Service, factory, fn_factory, svc};
+    use crate::{Ctx, Service, factory, fn_factory, service};
 
     #[derive(Clone)]
     struct Srv1(Rc<Cell<usize>>, Rc<Cell<usize>>);
@@ -146,9 +140,9 @@ mod tests {
     async fn test_ready() {
         let cnt = Rc::new(Cell::new(0));
         let cnt_sht = Rc::new(Cell::new(0));
-        let srv = svc(Srv1(cnt.clone(), cnt_sht.clone()))
+        let srv = service(Srv1(cnt.clone(), cnt_sht.clone()))
             .then(Srv2(cnt.clone(), cnt_sht.clone()))
-            .into_pipeline();
+            .pipeline(());
         let res = srv.ready().await;
         assert_eq!(res, Ok(()));
         assert_eq!(cnt.get(), 2);
@@ -160,10 +154,10 @@ mod tests {
     #[ntex::test]
     async fn test_call() {
         let cnt = Rc::new(Cell::new(0));
-        let srv = svc(Srv1(cnt.clone(), Rc::new(Cell::new(0))))
+        let srv = service(Srv1(cnt.clone(), Rc::new(Cell::new(0))))
             .then(Srv2(cnt, Rc::new(Cell::new(0))))
             .clone()
-            .into_pipeline();
+            .pipeline(());
 
         let res = srv.call(Ok("srv1")).await;
         assert!(res.is_ok());
@@ -178,17 +172,17 @@ mod tests {
     async fn test_factory() {
         let cnt = Rc::new(Cell::new(0));
         let cnt2 = cnt.clone();
-        let blank = fn_factory(move || {
+        let blank = fn_factory(move |(): &_| {
             let cnt = cnt2.clone();
             async move { Ok::<_, ()>(Srv1(cnt, Rc::new(Cell::new(0)))) }
         });
         let factory = factory(blank)
-            .then(fn_factory(move || {
+            .then(fn_factory(move |(): &()| {
                 let cnt = cnt.clone();
                 async move { Ok(Srv2(cnt.clone(), Rc::new(Cell::new(0)))) }
             }))
             .clone();
-        let srv = factory.pipeline(&()).await.unwrap();
+        let srv = factory.pipeline(()).await.unwrap();
         let res = srv.call(Ok("srv1")).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "ok"));

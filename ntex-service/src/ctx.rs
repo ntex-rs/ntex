@@ -1,4 +1,4 @@
-use std::{cell, fmt, future, marker, pin, rc::Rc, task::Context, task::Poll, task::Waker};
+use std::{cell, fmt, future, marker, ops, pin, rc::Rc, task::Context, task::Poll, task::Waker};
 
 use crate::Service;
 
@@ -142,7 +142,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     }
 
     #[inline]
-    /// Application state
+    /// Service state
     pub fn st(&'a self) -> &'a St {
         self.st
     }
@@ -268,6 +268,17 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
         })
         .await;
     }
+
+    #[inline]
+    /// Map context state
+    pub fn map_state<NewSt>(&'a self, st: &'a NewSt) -> Ctx<'a, Self, NewSt> {
+        Ctx {
+            st,
+            idx: self.idx,
+            waiters: self.waiters,
+            _t: marker::PhantomData,
+        }
+    }
 }
 
 impl<S, St> Copy for Ctx<'_, S, St> {}
@@ -276,6 +287,15 @@ impl<S, St> Clone for Ctx<'_, S, St> {
     #[inline]
     fn clone(&self) -> Self {
         *self
+    }
+}
+
+impl<S, St> ops::Deref for Ctx<'_, S, St> {
+    type Target = St;
+
+    #[inline]
+    fn deref(&self) -> &St {
+        self.st
     }
 }
 
@@ -360,7 +380,7 @@ mod tests {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
 
-        let srv = Pipeline::with((), Srv(cnt.clone(), con.wait()));
+        let srv = Pipeline::new((), Srv(cnt.clone(), con.wait()));
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
         assert_eq!(cnt.get(), 1);
@@ -392,7 +412,7 @@ mod tests {
     async fn test_ready_on_drop() {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
-        let srv = Pipeline::with((), Srv(cnt.clone(), con.wait()));
+        let srv = Pipeline::new((), Srv(cnt.clone(), con.wait()));
 
         let srv1 = srv.bind();
         let (tx, rx) = oneshot::channel();
@@ -420,7 +440,7 @@ mod tests {
     async fn test_ready_after_shutdown() {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
-        let srv = Pipeline::with((), Srv(cnt.clone(), con.wait()));
+        let srv = Pipeline::new((), Srv(cnt.clone(), con.wait()));
 
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
@@ -449,7 +469,7 @@ mod tests {
     async fn test_pipeline_binding_after_shutdown() {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
-        let srv = Pipeline::with((), Srv(cnt.clone(), con.wait()));
+        let srv = Pipeline::new((), Srv(cnt.clone(), con.wait()));
         poll_fn(|cx| srv.poll_shutdown(cx)).await;
         let _ = poll_fn(|cx| srv.poll_ready(cx)).await;
     }
@@ -461,7 +481,7 @@ mod tests {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
 
-        let srv = Pipeline::with((), Srv(cnt.clone(), con.wait()));
+        let srv = Pipeline::new((), Srv(cnt.clone(), con.wait()));
 
         let srv1 = srv.bind();
         let data1 = data.clone();
