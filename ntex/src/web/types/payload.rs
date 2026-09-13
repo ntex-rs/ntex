@@ -32,7 +32,7 @@ use crate::web::{AppState, FromRequest, HttpRequest, error::PayloadError};
 /// }
 ///
 /// fn main() {
-///     let app = App::new().service(
+///     let app = App::default().service(
 ///         web::resource("/index.html").route(
 ///             web::get().to(index))
 ///     );
@@ -97,7 +97,7 @@ impl Stream for Payload {
 /// }
 ///
 /// fn main() {
-///     let app = App::new().service(
+///     let app = App::default().service(
 ///         web::resource("/index.html").route(
 ///             web::get().to(index))
 ///     );
@@ -134,7 +134,7 @@ impl<St: AppState> FromRequest<St> for Payload {
 /// }
 ///
 /// fn main() {
-///     let app = web::App::new().service(
+///     let app = web::App::default().service(
 ///         web::resource("/index.html").route(
 ///             web::get().to(index))
 ///     );
@@ -188,7 +188,7 @@ impl<St: AppState> FromRequest<St> for Bytes {
 ///              web::types::PayloadConfig::new(4096))  // <- limit size of the payload
 ///         .into();
 ///
-///     let app = App::new()
+///     let app = App::default()
 ///         .config(cfg)
 ///         .service(
 ///             web::resource("/index.html")

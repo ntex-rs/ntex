@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 use crate::error::{Failure, IntoFailure};
 use crate::http::{Request, Response};
 use crate::router::ResourceDef;
-use crate::service::{Identity, ServiceChainFactory};
+use crate::service::{Identity, ServiceChainFactory, map_state_factory};
 use crate::{Cfg, IntoServiceFactory, Middleware, Service, ServiceFactory, factory};
 
 use super::app_service::{AppFactory, AppRouter};
@@ -42,10 +42,8 @@ pub struct AppServices<St: AppState, In, Out, M, F> {
     ph: PhantomData<In>,
 }
 
-impl App<(), ()> {
-    #[must_use]
-    /// Create application builder. Application can be configured with a builder-like pattern.
-    pub fn new() -> Self {
+impl Default for App<(), ()> {
+    fn default() -> Self {
         App {
             middleware: Identity,
             filter: factory(Filter::new()),
@@ -60,7 +58,7 @@ impl App<(), ()> {
 impl<St: AppState, In> App<St, In, In> {
     #[must_use]
     /// Create application builder. Application can be configured with a builder-like pattern.
-    pub fn with() -> Self {
+    pub fn new() -> Self {
         App {
             middleware: Identity,
             filter: factory(Filter::new()),
@@ -105,7 +103,7 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::new()
+    ///     let app = App::default()
     ///         .middleware(middleware::Logger::default())
     ///         .configure(config)  // <- register resources
     ///         .route("/index.html", web::get().to(async || { HttpResponse::Ok() }));
@@ -145,7 +143,7 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::new()
+    ///     let app = App::default()
     ///         .route("/test1", web::get().to(index))
     ///         .route("/test2", web::post().to(async || { HttpResponse::MethodNotAllowed() }));
     /// }
@@ -197,7 +195,7 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::new()
+    ///     let app = App::default()
     ///         .service(
     ///             web::resource("/index.html").route(web::get().to(index)))
     ///         .default_service(
@@ -211,7 +209,7 @@ where
     /// use ntex::web::{self, App, HttpResponse};
     ///
     /// fn main() {
-    ///     let app = App::new()
+    ///     let app = App::default()
     ///         .service(
     ///             web::resource("/index.html").to(async || { HttpResponse::Ok() }))
     ///         .default_service(
@@ -264,7 +262,7 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::new()
+    ///     let app = App::default()
     ///         .external_resource("youtube", "https://youtube.com/watch/{video_id}")
     ///         .service(web::resource("/index.html").route(
     ///             web::get().to(index)));
@@ -305,7 +303,7 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::new()
+    ///     let app = App::default()
     ///         .middleware(middleware::Logger::default())
     ///         .route("/index.html", web::get().to(index));
     /// }
@@ -369,7 +367,7 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::new()
+    ///     let app = App::default()
     ///         .middleware(middleware::Logger::default())
     ///         .route("/index.html", web::get().to(index));
     /// }
@@ -422,7 +420,7 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::new()
+    ///     let app = App::default()
     ///         .route("/test1", web::get().to(index))
     ///         .route("/test2", web::post().to(async || { HttpResponse::MethodNotAllowed() }));
     /// }
@@ -467,7 +465,7 @@ where
     /// }
     ///
     /// fn main() {
-    ///     let app = App::new()
+    ///     let app = App::default()
     ///         .service(
     ///             web::resource("/index.html").route(web::get().to(index)))
     ///         .default_service(
@@ -481,7 +479,7 @@ where
     /// use ntex::web::{self, App, HttpResponse};
     ///
     /// fn main() {
-    ///     let app = App::new()
+    ///     let app = App::default()
     ///         .service(
     ///             web::resource("/index.html").to(async || { HttpResponse::Ok() }))
     ///         .default_service(
@@ -530,8 +528,9 @@ where
     /// async fn main() -> std::io::Result<()> {
     ///     server::build().bind("http", "127.0.0.1:0", SharedCfg::default(), async |_|
     ///         http::HttpService::new(
-    ///             web::App::new()
+    ///             web::App::default()
     ///                 .route("/index.html", web::get().to(async || { "hello_world" }))
+    ///                 .build()
     ///         )
     ///     )?
     ///     .run()
@@ -548,6 +547,55 @@ where
         InitError = Failure,
     > {
         IntoServiceFactory::<AppFactory<St, In, Out, M, F>, St, Request>::into_factory(self)
+    }
+}
+
+impl<St, In, Out, M, F> AppServices<St, In, Out, M, F>
+where
+    St: AppState + Clone,
+    In: 'static,
+    Out: 'static,
+    F: ServiceFactory<
+            St,
+            WebRequest<In>,
+            Res = WebRequest<Out>,
+            Error = WebError<St, St::Error>,
+            InitError = Failure,
+        >,
+    M: Middleware<AppRouter<St, In, Out, F::Service>, St> + 'static,
+    M::Service: Service<St, WebRequest<()>, Res = WebResponse, Error = WebError<St, St::Error>>,
+{
+    /// Construct service factory, suitable for `http::HttpService` and set state.
+    ///
+    /// ```rust,no_run
+    /// use ntex::{web, http, server, SharedCfg};
+    ///
+    /// #[ntex::main]
+    /// async fn main() -> std::io::Result<()> {
+    ///     server::build().bind("http", "127.0.0.1:0", SharedCfg::default(), async |_|
+    ///         http::HttpService::new(
+    ///             web::App::default()
+    ///                 .route("/index.html", web::get().to(async || { "hello_world" }))
+    ///         )
+    ///     )?
+    ///     .run()
+    ///     .await
+    /// }
+    /// ```
+    pub fn build_with<Outer>(
+        self,
+        state: St,
+    ) -> impl ServiceFactory<
+        Outer,
+        Request,
+        Res = Response,
+        Error = WebError<St, St::Error>,
+        InitError = Failure,
+    > {
+        map_state_factory(
+            state,
+            IntoServiceFactory::<AppFactory<St, In, Out, M, F>, St, Request>::into_factory(self),
+        )
     }
 }
 

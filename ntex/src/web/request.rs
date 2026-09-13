@@ -1,17 +1,14 @@
 use std::{cell::Ref, cell::RefMut, fmt, net};
 
-use crate::http::{
-    HeaderMap, HttpMessage, Method, Payload, RequestHead, Response, Uri, Version, header,
-};
+use crate::http::header;
+use crate::http::{HeaderMap, HttpMessage, Method, Payload, RequestHead, Response, Uri, Version};
 use crate::io::{IoRef, types};
 use crate::router::{Path, Resource};
 use crate::util::Extensions;
 
 use super::config::WebAppConfig;
-use super::error::WebResponseError;
 use super::info::ConnectionInfo;
-use super::rmap::ResourceMap;
-use super::{AppState, HttpRequest, WebResponse};
+use super::{AppState, HttpRequest, WebResponse, WebResponseError, rmap::ResourceMap};
 
 /// An service http request
 ///

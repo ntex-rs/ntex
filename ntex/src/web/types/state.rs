@@ -72,7 +72,7 @@ impl<St: AppState + Clone> FromRequest<St> for State<St> {
 #[cfg(test)]
 mod tests {
     use crate::http::StatusCode;
-    use crate::web::test::{TestRequest, init_service};
+    use crate::web::test::{TestRequest, init_service_st};
     use crate::web::{self, App, DefaultError, HttpResponse};
 
     use super::*;
@@ -89,8 +89,9 @@ mod tests {
             type Error = DefaultError;
         }
 
-        let srv = init_service(
-            App::<MyState, ()>::with()
+        let srv = init_service_st(
+            MyState { val: 0 },
+            App::new()
                 .service(web::resource("/").to(|_: State<MyState>| async { HttpResponse::Ok() })),
         )
         .await;
@@ -99,8 +100,9 @@ mod tests {
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let srv = init_service(
-            App::<MyState, ()>::with()
+        let srv = init_service_st(
+            MyState { val: 0 },
+            App::new()
                 .service(web::resource("/").to(|_: State<MyState>| async { HttpResponse::Ok() })),
         )
         .await;

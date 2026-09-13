@@ -42,7 +42,7 @@ use super::{AppState, HttpResponse, HttpResponseBuilder, WebResponseError};
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::resource("/users/{userid}/{friend}")
 ///         .route(web::get().to(async || { web::HttpResponse::Ok() }))
 ///         .route(web::head().to(async || { web::HttpResponse::MethodNotAllowed() }))
@@ -60,7 +60,7 @@ pub fn resource<St: AppState, In: 'static, T: IntoPattern>(path: T) -> Resource<
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::scope("/{project_id}")
 ///         .service(web::resource("/path1").to(async || { web::HttpResponse::Ok() }))
 ///         .service(web::resource("/path2").to(async || { web::HttpResponse::Ok() }))
@@ -87,7 +87,7 @@ pub fn route<St: AppState, U: 'static>() -> Route<St, U> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::resource("/{project_id}")
 ///        .route(web::get().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -105,7 +105,7 @@ pub fn get<St: AppState, U: 'static>() -> Route<St, U> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::post().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -123,7 +123,7 @@ pub fn post<St: AppState, U: 'static>() -> Route<St, U> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::put().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -141,7 +141,7 @@ pub fn put<St: AppState, U: 'static>() -> Route<St, U> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::patch().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -159,7 +159,7 @@ pub fn patch<St: AppState, U: 'static>() -> Route<St, U> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::delete().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -177,7 +177,7 @@ pub fn delete<St: AppState, U: 'static>() -> Route<St, U> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::head().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -195,7 +195,7 @@ pub fn head<St: AppState, U: 'static>() -> Route<St, U> {
 /// ```rust
 /// use ntex::web;
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::query().to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -213,7 +213,7 @@ pub fn query<St: AppState, U: 'static>() -> Route<St, U> {
 /// ```rust
 /// use ntex::{http, web};
 ///
-/// let app = web::App::new().service(
+/// let app = web::App::default().service(
 ///     web::resource("/{project_id}")
 ///         .route(web::method(http::Method::GET).to(async || { web::HttpResponse::Ok() }))
 /// );
@@ -235,7 +235,7 @@ pub fn method<St: AppState, U: 'static>(method: Method) -> Route<St, U> {
 ///    web::HttpResponse::Ok().build()
 /// }
 ///
-/// web::App::new().service(
+/// web::App::default().service(
 ///     web::resource("/").route(web::to(index))
 /// );
 /// ```
@@ -256,11 +256,11 @@ where
 /// use std::convert::Infallible;
 /// use ntex::web::{self, guard, App, HttpResponse, WebError};
 ///
-/// async fn my_service(req: web::WebRequest) -> Result<web::WebResponse, Infallible> {
+/// async fn my_service(req: web::WebRequest<()>) -> Result<web::WebResponse, Infallible> {
 ///     Ok(req.into_response(HttpResponse::Ok().build()))
 /// }
 ///
-/// let app = App::new().service(
+/// let app = App::default().service(
 ///     web::service("/users/*")
 ///         .guard(guard::Header("content-type", "text/plain"))
 ///         .build(my_service)
@@ -291,9 +291,10 @@ where
 ///
 /// #[ntex::main]
 /// async fn main() -> std::io::Result<()> {
-///     web::server(
-///         async |_| web::App::new()
-///             .service(web::resource("/").to(async || { web::HttpResponse::Ok() })))
+///     web::server(async |_| {
+///         web::App::new()
+///             .service(web::resource("/").to(async || { web::HttpResponse::Ok() }))
+///         })
 ///         .bind("127.0.0.1:59090", SharedCfg::default())?
 ///         .run()
 ///         .await

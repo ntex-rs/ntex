@@ -1,11 +1,29 @@
-use crate::{Ctx, IntoService, Service};
+use crate::{Ctx, IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 /// Create `map state` service
 pub fn map_state<S, St, Req>(st: St, s: impl IntoService<S, St, Req>) -> MapState<S, St>
 where
     S: Service<St, Req>,
 {
-    MapState::new(s.into_service(), st)
+    MapState {
+        st,
+        s: s.into_service(),
+    }
+}
+
+/// Create `map state` service factory
+pub fn map_state_factory<Sf, St, Req>(
+    st: St,
+    sf: impl IntoServiceFactory<Sf, St, Req>,
+) -> MapStateFactory<Sf, St>
+where
+    Sf: ServiceFactory<St, Req>,
+    St: Clone,
+{
+    MapStateFactory {
+        st,
+        sf: sf.into_factory(),
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -13,16 +31,6 @@ where
 pub struct MapState<S, St> {
     s: S,
     st: St,
-}
-
-impl<S, St> MapState<S, St> {
-    /// Create new `MapState` instance
-    pub fn new<Req>(s: S, st: St) -> Self
-    where
-        S: Service<St, Req>,
-    {
-        Self { s, st }
-    }
 }
 
 impl<OtSt, S, St, Req> Service<OtSt, Req> for MapState<S, St>
@@ -45,5 +53,32 @@ where
     #[inline]
     async fn shutdown(&self, ctx: Ctx<'_, Self, OtSt>) {
         ctx.map_state(&self.st).shutdown(&self.s).await;
+    }
+}
+
+#[derive(Clone, Debug)]
+/// Factory for map state for inner service
+pub struct MapStateFactory<Sf, St> {
+    sf: Sf,
+    st: St,
+}
+
+impl<OtSt, Sf, St, Req> ServiceFactory<OtSt, Req> for MapStateFactory<Sf, St>
+where
+    Sf: ServiceFactory<St, Req>,
+    St: Clone,
+{
+    type Res = Sf::Res;
+    type Error = Sf::Error;
+
+    type Service = MapState<Sf::Service, St>;
+    type InitError = Sf::InitError;
+
+    #[inline]
+    async fn create(&self, _: &OtSt) -> Result<Self::Service, Self::InitError> {
+        Ok(MapState {
+            s: self.sf.create(&self.st).await?,
+            st: self.st.clone(),
+        })
     }
 }

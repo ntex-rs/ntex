@@ -65,8 +65,8 @@ impl syn::parse::Parse for Args {
                 let lit: syn::LitStr = input.parse()?;
                 guards.push(Ident::new(&lit.value(), Span::call_site()));
             } else if ident == "state" {
-                let lit: syn::LitStr = input.parse()?;
-                state = Some(syn::parse_str(&lit.value())?);
+                let lit: syn::TypePath = input.parse()?;
+                state = Some(lit); //syn::parse_str(&lit.value())?);
             } else {
                 return Err(syn::Error::new_spanned(
                     ident,

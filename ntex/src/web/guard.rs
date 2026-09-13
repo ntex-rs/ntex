@@ -17,7 +17,7 @@
 //! use ntex::web::{self, guard, App, HttpResponse};
 //!
 //! fn main() {
-//!     App::new().service(web::resource("/index.html").route(
+//!     App::default().service(web::resource("/index.html").route(
 //!         web::route()
 //!              .guard(guard::Post())
 //!              .guard(guard::fn_guard(|head| head.method == Method::GET))
@@ -52,7 +52,7 @@ pub trait Guard {
 /// use ntex::web::{self, guard, App, HttpResponse};
 ///
 /// fn main() {
-///     App::new().service(web::resource("/index.html").route(
+///     App::default().service(web::resource("/index.html").route(
 ///         web::route()
 ///             .guard(
 ///                 guard::fn_guard(
@@ -111,7 +111,7 @@ where
 /// use ntex::web::{self, guard, App, HttpResponse};
 ///
 /// fn main() {
-///     App::new().service(web::resource("/index.html").route(
+///     App::default().service(web::resource("/index.html").route(
 ///         web::route()
 ///              .guard(guard::Any(guard::Get()).or(guard::Post()))
 ///              .to(async || { HttpResponse::MethodNotAllowed() }))
@@ -167,7 +167,7 @@ impl fmt::Debug for AnyGuard {
 /// use ntex::web::{self, guard, App, HttpResponse};
 ///
 /// fn main() {
-///     App::new().service(web::resource("/index.html").route(
+///     App::default().service(web::resource("/index.html").route(
 ///         web::route()
 ///             .guard(
 ///                 guard::All(guard::Get()).and(guard::Header("content-type", "text/plain")))
@@ -354,7 +354,7 @@ impl Guard for HeaderGuard {
 /// use ntex::web::{self, guard::Host, App, HttpResponse};
 ///
 /// fn main() {
-///     App::new().service(
+///     App::default().service(
 ///         web::resource("/index.html")
 ///             .guard(Host("www.rust-lang.org"))
 ///             .to(async || { HttpResponse::MethodNotAllowed() })

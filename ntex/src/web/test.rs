@@ -68,16 +68,49 @@ pub fn default_service<St: AppState, In>(
 ///     assert_eq!(resp.status(), StatusCode::OK);
 /// }
 /// ```
-pub async fn init_service<St, R, S, E>(app: R) -> Pipeline<Request, Response, E>
+pub async fn init_service<R, S, E>(app: R) -> Pipeline<Request, Response, E>
 where
-    St: Default + 'static,
+    R: IntoServiceFactory<S, (), Request>,
+    S: ServiceFactory<(), Request, Res = Response, Error = E> + 'static,
+    S::InitError: fmt::Debug,
+{
+    let srv = app.into_factory().map_init_err(|e| log::error!("{e:?}"));
+    srv.pipeline(()).await.unwrap()
+}
+
+/// This method accepts application builder instance, and constructs
+/// service with specified state.
+///
+/// ```rust
+/// use ntex::service::Service;
+/// use ntex::http::StatusCode;
+/// use ntex::web::{self, test, App, HttpResponse};
+///
+/// #[ntex::test]
+/// async fn test_init_service() {
+///     let mut app = test::init_service_st(
+///         (),
+///         App::new()
+///             .service(web::resource("/test").to(async || { HttpResponse::Ok() }))
+///     ).await;
+///
+///     // Create request object
+///     let req = test::TestRequest::with_uri("/test").to_request();
+///
+///     // Execute application
+///     let resp = app.call(req).await.unwrap();
+///     assert_eq!(resp.status(), StatusCode::OK);
+/// }
+/// ```
+pub async fn init_service_st<St, R, S, E>(st: St, app: R) -> Pipeline<Request, Response, E>
+where
+    St: 'static,
     R: IntoServiceFactory<S, St, Request>,
     S: ServiceFactory<St, Request, Res = Response, Error = E> + 'static,
     S::InitError: fmt::Debug,
-    St: Default + Clone + 'static,
 {
     let srv = app.into_factory().map_init_err(|e| log::error!("{e:?}"));
-    srv.pipeline(Default::default()).await.unwrap()
+    srv.pipeline(st).await.unwrap()
 }
 
 /// Calls service and waits for response future completion.

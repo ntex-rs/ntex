@@ -31,7 +31,7 @@ use crate::web::{HttpResponse, WebRequest, WebResponse};
 /// use ntex::web::middleware::Logger;
 ///
 /// fn main() {
-///     let app = App::new()
+///     let app = App::default()
 ///         .middleware(Logger::default())
 ///         .middleware(Logger::new("%a %{User-Agent}i"));
 /// }

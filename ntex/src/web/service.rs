@@ -107,11 +107,11 @@ impl<St: AppState, In: 'static> WebServiceConfig<St, In> {
 /// use std::convert::Infallible;
 /// use ntex::web::{self, guard, App, HttpResponse};
 ///
-/// async fn my_service(req: web::WebRequest) -> Result<web::WebResponse, Infallible> {
+/// async fn my_service(req: web::WebRequest<()>) -> Result<web::WebResponse, Infallible> {
 ///     Ok(req.into_response(HttpResponse::Ok().build()))
 /// }
 ///
-/// let app = App::new().service(
+/// let app = App::default().service(
 ///     web::service("/users/*")
 ///         .guard(guard::Header("content-type", "text/plain"))
 ///         .build(my_service)
@@ -151,12 +151,12 @@ impl WebServiceAdapter {
     /// use std::convert::Infallible;
     /// use ntex::web::{self, guard, App, WebError, HttpResponse};
     ///
-    /// async fn index(req: web::WebRequest) -> Result<web::WebResponse, Infallible> {
+    /// async fn index(req: web::WebRequest<()>) -> Result<web::WebResponse, Infallible> {
     ///     Ok(req.into_response(HttpResponse::Ok().build()))
     /// }
     ///
     /// fn main() {
-    ///     let app = App::new()
+    ///     let app = App::default()
     ///         .service(
     ///             web::service("/app")
     ///                 .guard(guard::Header("content-type", "text/plain"))
