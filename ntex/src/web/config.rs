@@ -168,7 +168,7 @@ pub(crate) fn put_request(id: usize, pool_size: usize, req: &mut Rc<HttpRequestI
 /// modularization of big application configuration.
 #[derive(derive_more::Debug)]
 #[debug("ServiceConfig")]
-pub struct ServiceConfig<St, In> {
+pub struct ServiceConfig<St, In = ()> {
     pub(super) services: Vec<Box<dyn AppServiceFactory<St, In>>>,
     pub(super) external: Vec<ResourceDef>,
 }

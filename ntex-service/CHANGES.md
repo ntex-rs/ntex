@@ -1,5 +1,9 @@
 # Changes
 
+## [5.0.0] - 2026-09-13
+
+* Release 5.0
+
 ## [5.0.0-beta.5] - 2026-09-02
 
 * Add .readiness() callback
