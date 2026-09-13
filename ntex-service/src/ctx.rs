@@ -389,7 +389,7 @@ mod tests {
         assert_eq!(res, Poll::Pending);
         assert_eq!(cnt.get(), 1);
 
-        con.notify();
+        con.notify(());
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
         assert_eq!(cnt.get(), 1);
@@ -398,7 +398,7 @@ mod tests {
         assert_eq!(res, Poll::Pending);
         assert_eq!(cnt.get(), 2);
 
-        con.notify();
+        con.notify(());
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
         assert_eq!(cnt.get(), 2);
@@ -431,7 +431,7 @@ mod tests {
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
 
-        con.notify();
+        con.notify(());
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
     }
@@ -460,7 +460,7 @@ mod tests {
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
 
-        con.notify();
+        con.notify(());
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
     }
@@ -501,13 +501,13 @@ mod tests {
         });
         time::sleep(time::Millis(50)).await;
 
-        con.notify();
+        con.notify(());
         time::sleep(time::Millis(150)).await;
 
         assert_eq!(cnt.get(), 2);
         assert_eq!(&*data.borrow(), &["srv1"]);
 
-        con.notify();
+        con.notify(());
         time::sleep(time::Millis(150)).await;
 
         assert_eq!(cnt.get(), 2);
