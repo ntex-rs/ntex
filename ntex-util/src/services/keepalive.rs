@@ -217,7 +217,7 @@ mod tests {
             .set(now().checked_sub(svc.dur).unwrap() + time::Duration::from_micros(500));
         svc.sleep.elapse();
 
-        let p = Pipeline::<usize, usize, TestErr>::with((), svc.clone()).bind();
+        let p = Pipeline::<usize, usize, TestErr>::new((), svc.clone()).bind();
         assert_eq!(p.ready().await, Ok(()));
 
         // timer has to be re-armed, otherwise waker never gets registered
