@@ -76,6 +76,17 @@ impl<St, Err> fmt::Debug for WebError<St, Err> {
     }
 }
 
+// ========================== Error<E> ========================
+
+impl<E, St, Err> WebResponseError<St, Err> for crate::error::Error<E>
+where
+    E: WebResponseError<St, Err> + Clone,
+{
+    fn error_response(&mut self, st: &St) -> HttpResponse {
+        self.clone().into_error().error_response(st)
+    }
+}
+
 // ==========================
 
 impl<St, Err> WebResponseError<St, Err> for std::convert::Infallible {}

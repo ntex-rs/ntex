@@ -219,6 +219,13 @@ impl<St> WebResponseError<St, DefaultError> for client::error::ClientError {
     }
 }
 
+/// Convert `ClientPayloadError` to a server `Response`
+impl<St> WebResponseError<St, DefaultError> for client::error::ClientPayloadError {
+    fn error_response(&mut self, _: &St) -> HttpResponse {
+        HttpResponse::render_with(StatusCode::BAD_REQUEST, self)
+    }
+}
+
 #[cfg(feature = "ws")]
 /// Error renderer for `ws::HandshakeError`
 impl<St> WebResponseError<St, DefaultError> for HandshakeError {
