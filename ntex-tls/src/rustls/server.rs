@@ -19,11 +19,9 @@ impl FilterLayer for TlsServerFilter {
             if let Some(item) = s.query(id) {
                 Some(item)
             } else if id == any::TypeId::of::<Servername>() {
-                if let Some(name) = s.session.server_name() {
-                    Some(Box::new(Servername(name.to_string())) as Box<dyn any::Any>)
-                } else {
-                    None
-                }
+                s.session
+                    .server_name()
+                    .map(|name| Box::new(Servername(name.to_string())) as Box<dyn any::Any>)
             } else {
                 None
             }
