@@ -1,5 +1,11 @@
 # Changes
 
+## [4.1.0] - 2026-09-14
+
+* Move ServerAppConfig to root
+
+* Rename `build_with_config()` helper
+
 ## [4.0.0] - 2026-09-14
 
 * Refactor server state creation process

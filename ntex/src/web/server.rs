@@ -8,7 +8,7 @@ use tls_rustls::ServerConfig as RustlsServerConfig;
 use crate::error::IntoFailure;
 use crate::http::{self, Request, Response, ResponseError};
 use crate::server::{NoConfig, Server, ServerAppConfig, ServerBuilder};
-use crate::service::{IntoServiceFactory, ServiceFactory};
+use crate::service::{IntoServiceFactory, Service, ServiceFactory, State, fn_service};
 use crate::{SharedCfg, time::Seconds};
 
 struct Config {
@@ -37,9 +37,10 @@ struct Config {
 pub struct HttpServer<Cfg, F, I, Sf>
 where
     Cfg: ServerAppConfig,
+    Cfg::State: Clone,
     F: AsyncFn(&Cfg::State) -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<Sf, (), Request>,
-    Sf: ServiceFactory<(), Request>,
+    I: IntoServiceFactory<Sf, Cfg::State, Request>,
+    Sf: ServiceFactory<Cfg::State, Request>,
     Sf::Res: Into<Response>,
     Sf::Error: ResponseError,
     Sf::InitError: IntoFailure,
@@ -76,16 +77,17 @@ where
 impl<Cfg, F, I, Sf> HttpServer<Cfg, F, I, Sf>
 where
     Cfg: ServerAppConfig,
+    Cfg::State: Clone,
     F: AsyncFn(&Cfg::State) -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<Sf, (), Request>,
-    Sf: ServiceFactory<(), Request> + 'static,
+    I: IntoServiceFactory<Sf, Cfg::State, Request>,
+    Sf: ServiceFactory<Cfg::State, Request> + 'static,
     Sf::Res: Into<Response>,
     Sf::Error: ResponseError,
     Sf::InitError: IntoFailure,
 {
     #[must_use]
     /// Create new http server with application factory and state mapping
-    pub fn with_cfg(cfg: Cfg, factory: F) -> Self
+    pub fn with_config(cfg: Cfg, factory: F) -> Self
     where
         Cfg: ServerAppConfig,
     {
@@ -234,7 +236,16 @@ where
             format!("ntex-web-service-{addr}"),
             lst,
             cfg.into(),
-            async move |st| http::HttpService::new(factory(st).await),
+            async move |st| {
+                let state = st.clone();
+                fn_service(async move |req| {
+                    Ok(State {
+                        req,
+                        state: state.clone(),
+                    })
+                })
+                .and_then(http::HttpService::new(factory(st).await))
+            },
         )?;
         Ok(self)
     }
@@ -267,7 +278,18 @@ where
             lst,
             cfg,
             async move |st| {
-                http::openssl(acceptor.clone(), http::HttpService::new(factory(st).await))
+                let state = st.clone();
+
+                http::openssl(
+                    acceptor.clone(),
+                    fn_service(async move |req| {
+                        Ok(State {
+                            req,
+                            state: state.clone(),
+                        })
+                    })
+                    .and_then(http::HttpService::new(factory(st).await)),
+                )
             },
         )?;
         Ok(self)
@@ -301,10 +323,17 @@ where
             lst,
             cfg,
             async move |st| {
+                let state = st.clone();
                 http::rustls(
                     config.clone(),
                     http::ALPN_PROTOS,
-                    http::HttpService::new(factory(st).await),
+                    fn_service(async move |req| {
+                        Ok(State {
+                            req,
+                            state: state.clone(),
+                        })
+                    })
+                    .and_then(http::HttpService::new(factory(st).await)),
                 )
             },
         )?;
@@ -410,7 +439,14 @@ where
         self.builder = self
             .builder
             .listen_uds(addr, lst, cfg.into(), async move |st| {
-                http::HttpService::new(factory(st).await)
+                let state = st.clone();
+                fn_service(async move |req| {
+                    Ok(State {
+                        req,
+                        state: state.clone(),
+                    })
+                })
+                .and_then(http::HttpService::new(factory(st).await))
             })?;
         Ok(self)
     }
@@ -429,7 +465,16 @@ where
             format!("ntex-web-service-{:?}", addr.as_ref().display()),
             addr,
             cfg.into(),
-            async move |st| http::HttpService::new(factory(st).await),
+            async move |st| {
+                let state = st.clone();
+                fn_service(async move |req| {
+                    Ok(State {
+                        req,
+                        state: state.clone(),
+                    })
+                })
+                .and_then(http::HttpService::new(factory(st).await))
+            },
         )?;
         Ok(self)
     }
@@ -438,9 +483,10 @@ where
 impl<Cfg, F, I, Sf> HttpServer<Cfg, F, I, Sf>
 where
     Cfg: ServerAppConfig,
+    Cfg::State: Clone,
     F: AsyncFn(&Cfg::State) -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<Sf, (), Request>,
-    Sf: ServiceFactory<(), Request> + 'static,
+    I: IntoServiceFactory<Sf, Cfg::State, Request>,
+    Sf: ServiceFactory<Cfg::State, Request> + 'static,
     Sf::Res: Into<Response>,
     Sf::Error: ResponseError,
     Sf::InitError: IntoFailure,

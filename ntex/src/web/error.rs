@@ -304,6 +304,15 @@ where
 
 impl<T: fmt::Display + fmt::Debug + 'static> std::error::Error for InternalError<T> {}
 
+impl<St, Err, T> WebResponseError<St, Err> for InternalError<T>
+where
+    T: fmt::Debug + fmt::Display + 'static,
+{
+    fn error_response(&self, _: &St) -> HttpResponse {
+        crate::http::error::ResponseError::error_response(self)
+    }
+}
+
 impl<T> crate::http::error::ResponseError for InternalError<T>
 where
     T: fmt::Debug + fmt::Display + 'static,
@@ -921,124 +930,219 @@ mod tests {
 
         let err: InternalError<_> =
             InternalError::from_response("err", HttpResponse::BadRequest().build());
-        let r = err.error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(&err, &());
         assert_eq!(r.status(), StatusCode::BAD_REQUEST);
 
-        let r = ErrorBadRequest::<_>("err").error_response(&());
+        let r =
+            WebResponseError::<_, DefaultError>::error_response(&ErrorBadRequest::<_>("err"), &());
         assert_eq!(r.status(), StatusCode::BAD_REQUEST);
 
-        let r = ErrorUnauthorized::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorUnauthorized::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
 
-        let r = ErrorPaymentRequired::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorPaymentRequired::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::PAYMENT_REQUIRED);
 
-        let r = ErrorForbidden::<_>("err").error_response(&());
+        let r =
+            WebResponseError::<_, DefaultError>::error_response(&ErrorForbidden::<_>("err"), &());
         assert_eq!(r.status(), StatusCode::FORBIDDEN);
 
-        let r = ErrorNotFound::<_>("err").error_response(&());
+        let r =
+            WebResponseError::<_, DefaultError>::error_response(&ErrorNotFound::<_>("err"), &());
         assert_eq!(r.status(), StatusCode::NOT_FOUND);
 
-        let r = ErrorMethodNotAllowed::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorMethodNotAllowed::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::METHOD_NOT_ALLOWED);
 
-        let r = ErrorNotAcceptable::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorNotAcceptable::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::NOT_ACCEPTABLE);
 
-        let r = ErrorProxyAuthenticationRequired::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorProxyAuthenticationRequired::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::PROXY_AUTHENTICATION_REQUIRED);
 
-        let r = ErrorRequestTimeout::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorRequestTimeout::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::REQUEST_TIMEOUT);
 
-        let r = ErrorConflict::<_>("err").error_response(&());
+        let r =
+            WebResponseError::<_, DefaultError>::error_response(&ErrorConflict::<_>("err"), &());
         assert_eq!(r.status(), StatusCode::CONFLICT);
 
-        let r = ErrorGone::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(&ErrorGone::<_>("err"), &());
         assert_eq!(r.status(), StatusCode::GONE);
 
-        let r = ErrorLengthRequired::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorLengthRequired::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::LENGTH_REQUIRED);
 
-        let r = ErrorPreconditionFailed::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorPreconditionFailed::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::PRECONDITION_FAILED);
 
-        let r = ErrorPayloadTooLarge::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorPayloadTooLarge::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::PAYLOAD_TOO_LARGE);
 
-        let r = ErrorUriTooLong::<_>("err").error_response(&());
+        let r =
+            WebResponseError::<_, DefaultError>::error_response(&ErrorUriTooLong::<_>("err"), &());
         assert_eq!(r.status(), StatusCode::URI_TOO_LONG);
 
-        let r = ErrorUnsupportedMediaType::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorUnsupportedMediaType::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
 
-        let r = ErrorRangeNotSatisfiable::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorRangeNotSatisfiable::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::RANGE_NOT_SATISFIABLE);
 
-        let r = ErrorExpectationFailed::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorExpectationFailed::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::EXPECTATION_FAILED);
 
-        let r = ErrorImATeapot::<_>("err").error_response(&());
+        let r =
+            WebResponseError::<_, DefaultError>::error_response(&ErrorImATeapot::<_>("err"), &());
         assert_eq!(r.status(), StatusCode::IM_A_TEAPOT);
 
-        let r = ErrorMisdirectedRequest::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorMisdirectedRequest::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::MISDIRECTED_REQUEST);
 
-        let r = ErrorUnprocessableEntity::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorUnprocessableEntity::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
-        let r = ErrorLocked::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(&ErrorLocked::<_>("err"), &());
         assert_eq!(r.status(), StatusCode::LOCKED);
 
-        let r = ErrorFailedDependency::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorFailedDependency::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::FAILED_DEPENDENCY);
 
-        let r = ErrorUpgradeRequired::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorUpgradeRequired::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::UPGRADE_REQUIRED);
 
-        let r = ErrorPreconditionRequired::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorPreconditionRequired::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::PRECONDITION_REQUIRED);
 
-        let r = ErrorTooManyRequests::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorTooManyRequests::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::TOO_MANY_REQUESTS);
 
-        let r = ErrorRequestHeaderFieldsTooLarge::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorRequestHeaderFieldsTooLarge::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE);
 
-        let r = ErrorUnavailableForLegalReasons::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorUnavailableForLegalReasons::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS);
 
-        let r = ErrorInternalServerError::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorInternalServerError::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
-        let r = ErrorNotImplemented::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorNotImplemented::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::NOT_IMPLEMENTED);
 
-        let r = ErrorBadGateway::<_>("err").error_response(&());
+        let r =
+            WebResponseError::<_, DefaultError>::error_response(&ErrorBadGateway::<_>("err"), &());
         assert_eq!(r.status(), StatusCode::BAD_GATEWAY);
 
-        let r = ErrorServiceUnavailable::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorServiceUnavailable::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::SERVICE_UNAVAILABLE);
 
-        let r = ErrorGatewayTimeout::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorGatewayTimeout::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::GATEWAY_TIMEOUT);
 
-        let r = ErrorHttpVersionNotSupported::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorHttpVersionNotSupported::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::HTTP_VERSION_NOT_SUPPORTED);
 
-        let r = ErrorVariantAlsoNegotiates::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorVariantAlsoNegotiates::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::VARIANT_ALSO_NEGOTIATES);
 
-        let r = ErrorInsufficientStorage::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorInsufficientStorage::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::INSUFFICIENT_STORAGE);
 
-        let r = ErrorLoopDetected::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorLoopDetected::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::LOOP_DETECTED);
 
-        let r = ErrorNotExtended::<_>("err").error_response(&());
+        let r =
+            WebResponseError::<_, DefaultError>::error_response(&ErrorNotExtended::<_>("err"), &());
         assert_eq!(r.status(), StatusCode::NOT_EXTENDED);
 
-        let r = ErrorNetworkAuthenticationRequired::<_>("err").error_response(&());
+        let r = WebResponseError::<_, DefaultError>::error_response(
+            &ErrorNetworkAuthenticationRequired::<_>("err"),
+            &(),
+        );
         assert_eq!(r.status(), StatusCode::NETWORK_AUTHENTICATION_REQUIRED);
     }
 }

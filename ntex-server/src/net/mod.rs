@@ -9,15 +9,15 @@ mod config;
 mod factory;
 mod service;
 mod socket;
-mod state;
 mod test;
+
+pub use crate::{NoConfig, ServerAppConfig};
 
 pub use self::accept::{AcceptLoop, AcceptNotify, AcceptorCommand};
 pub use self::builder::{ServerBuilder, bind_addr, create_tcp_listener};
 pub use self::config::{ServiceConfig, ServiceRuntime};
 pub use self::service::StreamServer;
 pub use self::socket::{Connection, Stream};
-pub use self::state::{NoConfig, ServerAppConfig};
 pub use self::test::{TestServer, TestServerBuilder, build_test_server, test_server};
 
 pub type Server = crate::Server<Connection>;
@@ -50,8 +50,8 @@ pub fn build() -> ServerBuilder {
     ServerBuilder::default()
 }
 
-/// Start server with state building process
-pub fn build_with_cfg<Cfg>(state: Cfg) -> ServerBuilder<Cfg>
+/// Start server with configuration
+pub fn build_with_config<Cfg>(state: Cfg) -> ServerBuilder<Cfg>
 where
     Cfg: ServerAppConfig,
 {

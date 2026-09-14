@@ -6,12 +6,11 @@ use ntex_service::{IntoService, Service, cfg::SharedCfg};
 use ntex_util::time::Millis;
 use socket2::{Domain, SockAddr, Socket, Type};
 
-use crate::{Server, WorkerPool};
+use crate::{NoConfig, Server, ServerAppConfig, WorkerPool};
 
 use super::accept::AcceptLoop;
 use super::config::ServiceConfig;
 use super::factory::{self, FactoryServiceType};
-use super::state::{NoConfig, ServerAppConfig};
 use super::{Connection, ServerStatus, StreamServer, Token, socket::Listener};
 
 /// Streaming service builder

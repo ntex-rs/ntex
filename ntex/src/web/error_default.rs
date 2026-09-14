@@ -11,7 +11,9 @@ use crate::util::timeout::TimeoutError;
 #[cfg(feature = "ws")]
 use crate::ws::error::HandshakeError;
 
-use super::{HttpResponse, InternalError, WebResponseError, error};
+use super::{HttpResponse, WebResponseError, error};
+
+// =========== DefaultError marker ============
 
 #[derive(Debug, thiserror::Error)]
 #[error("Default error marker")]
@@ -19,22 +21,13 @@ pub struct DefaultError {
     _ph: io::Error,
 }
 
-// =========== DefaultError impls
-
 impl<St> WebResponseError<St, DefaultError> for DefaultError {
     fn error_response(&self, _: &St) -> HttpResponse {
         unreachable!()
     }
 }
 
-impl<St, T> WebResponseError<St, DefaultError> for InternalError<T>
-where
-    T: fmt::Debug + fmt::Display + 'static,
-{
-    fn error_response(&self, _: &St) -> HttpResponse {
-        crate::http::error::ResponseError::error_response(self)
-    }
-}
+// =========== DefaultError impls =========
 
 /// `InternalServerError` for `StateExtractorError`
 impl<St> WebResponseError<St, DefaultError> for error::StateExtractorError {
@@ -261,7 +254,10 @@ where
     fn error_response(&self, st: &St) -> HttpResponse {
         match self {
             TimeoutError::Service(e) => e.error_response(st),
-            TimeoutError::Timeout => super::error::ErrorGatewayTimeout("").error_response(st),
+            TimeoutError::Timeout => WebResponseError::<St, DefaultError>::error_response(
+                &super::error::ErrorGatewayTimeout(""),
+                st,
+            ),
         }
     }
 }

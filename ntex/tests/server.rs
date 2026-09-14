@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::{net, sync::Arc, sync::mpsc, thread, time};
 
-use ntex::server::{TestServer, build, build_with_cfg};
+use ntex::server::{TestServer, build, build_with_config};
 use ntex::service::{cfg::SharedCfg, fn_service};
 use ntex::{codec::BytesCodec, io::Io, util::Bytes};
 
@@ -326,7 +326,7 @@ fn test_server_state() {
         let num = num2.clone();
         let sys = ntex::rt::System::new("test", ntex::rt::DefaultRuntime);
         sys.run(move || {
-            let srv = build_with_cfg(async move || Ok(St(num.clone())))
+            let srv = build_with_config(async move || Ok(St(num.clone())))
                 .disable_signals()
                 .bind("test", addr, SharedCfg::default(), async move |_| {
                     async move |st: &St, io: Io| {

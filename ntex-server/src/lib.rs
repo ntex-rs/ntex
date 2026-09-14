@@ -15,10 +15,12 @@ mod manager;
 pub mod net;
 mod pool;
 mod server;
+mod state;
 mod wrk;
 
 pub use self::pool::WorkerPool;
 pub use self::server::Server;
+pub use self::state::{NoConfig, ServerAppConfig};
 pub use self::wrk::{Worker, WorkerStatus, WorkerStop};
 
 /// Worker id
