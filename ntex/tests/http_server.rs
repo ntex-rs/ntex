@@ -557,7 +557,6 @@ async fn test_h1_headers() {
 
     let response = srv
         .request(Method::GET, "/")
-        .force_close()
         .send()
         .await
         .unwrap();
