@@ -556,7 +556,9 @@ async fn test_h1_headers() {
     });
 
     // Keep this test focused on large header/body handling.
-    // Connection-close behavior is covered by dedicated client tests.
+    // `.force_close()` made this test intermittently fail with
+    // `ClientPayloadError(Incomplete(None))` in CI; connection-close
+    // behavior is covered by dedicated client tests.
     let response = srv.request(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
