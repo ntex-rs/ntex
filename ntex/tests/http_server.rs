@@ -555,6 +555,8 @@ async fn test_h1_headers() {
         })
     });
 
+    // Keep this test focused on large header/body handling.
+    // Connection-close behavior is covered by dedicated client tests.
     let response = srv
         .request(Method::GET, "/")
         .send()
