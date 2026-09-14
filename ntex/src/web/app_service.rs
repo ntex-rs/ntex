@@ -11,7 +11,7 @@ use super::config::WebAppConfig;
 use super::guard::Guard;
 use super::rmap::ResourceMap;
 use super::service::{AppServiceFactory, WebServiceConfig};
-use super::{AppState, HttpHandler, HttpRequest, HttpService, WebError, WebRequest, WebResponse};
+use super::{HttpHandler, HttpRequest, HttpService, State, WebError, WebRequest, WebResponse};
 
 type Guards = Vec<Box<dyn Guard>>;
 
@@ -21,7 +21,7 @@ type Guards = Vec<Box<dyn Guard>>;
 #[debug("AppFactory")]
 pub struct AppFactory<St, In, Out, M, F>
 where
-    St: AppState,
+    St: State,
     F: ServiceFactory<
             St,
             WebRequest<In>,
@@ -42,7 +42,7 @@ where
 
 impl<St, In, Out, M, F> AppFactory<St, In, Out, M, F>
 where
-    St: AppState,
+    St: State,
     In: 'static,
     Out: 'static,
     F: ServiceFactory<
@@ -124,7 +124,7 @@ where
 
 impl<St, In, Out, M, F> ServiceFactory<St, Request> for AppFactory<St, In, Out, M, F>
 where
-    St: AppState,
+    St: State,
     In: 'static,
     Out: 'static,
     F: ServiceFactory<
@@ -168,7 +168,7 @@ where
 #[debug("AppService")]
 pub struct AppService<St, F>
 where
-    St: AppState,
+    St: State,
     F: Service<St, WebRequest<()>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
     service: F,
@@ -179,7 +179,7 @@ where
 
 impl<St, F> Service<St, Request> for AppService<St, F>
 where
-    St: AppState,
+    St: State,
     F: Service<St, WebRequest<()>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
     type Res = Response;
@@ -220,7 +220,7 @@ where
 /// Web app service.
 #[derive(derive_more::Debug)]
 #[debug("AppRouter")]
-pub struct AppRouter<St: AppState, In, Out, F> {
+pub struct AppRouter<St: State, In, Out, F> {
     pub(super) filter: F,
     pub(super) router: Rc<Router<HttpService<St, Out>, Guards>>,
     pub(super) default: HttpService<St, Out>,
@@ -231,7 +231,7 @@ pub struct AppRouter<St: AppState, In, Out, F> {
 
 impl<St, In, Out, F> Service<St, WebRequest<In>> for AppRouter<St, In, Out, F>
 where
-    St: AppState,
+    St: State,
     Out: 'static,
     F: Service<St, WebRequest<In>, Res = WebRequest<Out>, Error = WebError<St, St::Error>>,
 {

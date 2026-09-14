@@ -119,15 +119,15 @@ pub use self::route::Route;
 pub use self::scope::{Scope, ScopeServices};
 pub use self::server::HttpServer;
 pub use self::service::WebServiceFactory;
-pub use self::state::AppState;
+pub use self::state::{AppState, State};
 pub use self::util::*;
 
 use crate::error::Failure;
 use crate::service::boxed::{BoxService, BoxServiceFactory};
 
-pub(crate) type HttpHandler<St: AppState, In> =
+pub(crate) type HttpHandler<St: State, In> =
     BoxService<St, WebRequest<In>, WebResponse, WebError<St, St::Error>>;
-pub(crate) type HttpService<St: AppState, In> =
+pub(crate) type HttpService<St: State, In> =
     BoxServiceFactory<St, WebRequest<In>, WebResponse, WebError<St, St::Error>, Failure>;
 
 pub mod dev {
@@ -159,7 +159,7 @@ pub mod dev {
     #[inline]
     pub fn __assert_handler<St, Fun, Res>(f: Fun) -> impl Handler<St, (), Output = Res>
     where
-        St: super::AppState,
+        St: super::State,
         Fun: AsyncFn() -> Res + 'static,
         Res: super::Responder<St>,
     {
@@ -173,7 +173,7 @@ pub mod dev {
             f: Fun,
         ) -> impl Handler<St, ($($T,)+), Output = Res>
         where
-            St: $crate::web::AppState,
+            St: $crate::web::State,
             Fun: AsyncFn($($T,)+) -> Res + 'static,
             Res: super::Responder<St> + 'static,
            $($T: $crate::web::FromRequest<St>),+,

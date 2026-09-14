@@ -1,12 +1,12 @@
 use std::{fmt, future::Future, marker::PhantomData};
 
-use super::{AppState, FromRequest, Responder, WebRequest, WebResponse, WebResponseError};
+use super::{FromRequest, Responder, State, WebRequest, WebResponse, WebResponseError};
 use crate::util::BoxFuture;
 
 /// Async fn handler
 pub trait Handler<St, T>: 'static
 where
-    St: AppState,
+    St: State,
 {
     type Output: Responder<St>;
 
@@ -17,7 +17,7 @@ impl<St, F, R> Handler<St, ()> for F
 where
     F: AsyncFn() -> R + 'static,
     R: Responder<St>,
-    St: AppState,
+    St: State,
 {
     type Output = R;
 
@@ -27,7 +27,7 @@ where
     }
 }
 
-pub(super) trait HandlerFn<St: AppState, U>: fmt::Debug {
+pub(super) trait HandlerFn<St: State, U>: fmt::Debug {
     fn call<'a>(&'a self, _: &'a St, _: WebRequest<U>) -> BoxFuture<'a, WebResponse>;
 }
 
@@ -56,7 +56,7 @@ where
     F: Handler<St, T> + 'static,
     T: FromRequest<St> + 'static,
     T::Error: WebResponseError<St, St::Error>,
-    St: AppState,
+    St: State,
 {
     fn call<'a>(&'a self, st: &'a St, req: WebRequest<U>) -> BoxFuture<'a, WebResponse> {
         Box::pin(async move {
@@ -79,7 +79,7 @@ macro_rules! factory_tuple (
         $(#[$meta])*
         impl<St, Func, $($T,)+ Res> Handler<St, ($($T,)+)> for Func
         where
-            St: AppState,
+            St: State,
             Func: 'static,
             Func: AsyncFn($($T,)+) -> Res,
             Res: Responder<St>,

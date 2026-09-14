@@ -10,7 +10,7 @@ use crate::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use crate::http::{HttpMessage, Payload, Response, StatusCode};
 use crate::util::{BoxFuture, BytesMut, stream_recv};
 use crate::web::error::{UrlencodedError, WebResponseError};
-use crate::web::{AppState, FromRequest, HttpRequest, Responder};
+use crate::web::{FromRequest, HttpRequest, Responder, State};
 
 /// Form data helper (`application/x-www-form-urlencoded`)
 ///
@@ -94,10 +94,10 @@ impl<T> ops::DerefMut for Form<T> {
     }
 }
 
-impl<T, St> FromRequest<St> for Form<T>
+impl<St, T> FromRequest<St> for Form<T>
 where
+    St: State,
     T: DeserializeOwned + 'static,
-    St: AppState,
 {
     type Error = UrlencodedError;
 
@@ -127,9 +127,9 @@ impl<T: fmt::Display> fmt::Display for Form<T> {
     }
 }
 
-impl<T: Serialize, St> Responder<St> for Form<T>
+impl<St, T: Serialize> Responder<St> for Form<T>
 where
-    St: AppState,
+    St: State,
     serde_urlencoded::ser::Error: WebResponseError<St, St::Error>,
 {
     async fn respond_to(self, st: &St, _: &HttpRequest) -> Response {

@@ -1,7 +1,7 @@
 //! Request extractors
 use std::convert::Infallible;
 
-use super::{AppState, HttpRequest, WebResponseError};
+use super::{HttpRequest, State, WebResponseError};
 use crate::http::Payload;
 
 #[allow(async_fn_in_trait)]
@@ -64,10 +64,10 @@ pub trait FromRequest<St>: Sized {
 ///     );
 /// }
 /// ```
-impl<T, St> FromRequest<St> for Option<T>
+impl<St, T> FromRequest<St> for Option<T>
 where
+    St: State,
     T: FromRequest<St>,
-    St: AppState,
     <T as FromRequest<St>>::Error: WebResponseError<St, St::Error>,
 {
     type Error = Infallible;
@@ -96,7 +96,7 @@ where
 ///
 /// ```rust
 /// use ntex::http;
-/// use ntex::web::{self, error, App, AppState, HttpRequest, FromRequest, InternalError};
+/// use ntex::web::{self, error, App, State, HttpRequest, FromRequest, InternalError};
 /// use rand;
 ///
 /// #[derive(Debug, serde::Deserialize)]
@@ -104,7 +104,7 @@ where
 ///     name: String
 /// }
 ///
-/// impl<St: AppState> FromRequest<St> for Thing {
+/// impl<St: State> FromRequest<St> for Thing {
 ///     type Error = InternalError<&'static str>;
 ///
 ///     async fn from_request(st: &St, req: &HttpRequest, payload: &mut http::Payload) -> Result<Thing, Self::Error> {
@@ -130,10 +130,10 @@ where
 ///     );
 /// }
 /// ```
-impl<T, St> FromRequest<St> for Result<T, T::Error>
+impl<St, T> FromRequest<St> for Result<T, T::Error>
 where
+    St: State,
     T: FromRequest<St>,
-    St: AppState,
 {
     type Error = T::Error;
 
@@ -151,7 +151,7 @@ where
 }
 
 #[doc(hidden)]
-impl<St: AppState> FromRequest<St> for () {
+impl<St: State> FromRequest<St> for () {
     type Error = Infallible;
 
     #[inline]
@@ -165,7 +165,7 @@ macro_rules! tuple_from_req {
         $(#[$meta])*
         impl<St, $($T,)+> FromRequest<St> for ($($T,)+)
         where
-            St: AppState,
+            St: State,
             $($T: FromRequest<St> + 'static,)+
             $(<$T as $crate::web::FromRequest<St>>::Error: WebResponseError<St, St::Error>),+
         {

@@ -8,7 +8,7 @@ use crate::util::Extensions;
 
 use super::config::WebAppConfig;
 use super::info::ConnectionInfo;
-use super::{AppState, HttpRequest, WebResponse, WebResponseError, rmap::ResourceMap};
+use super::{HttpRequest, State, WebResponse, WebResponseError, rmap::ResourceMap};
 
 /// An service http request
 ///
@@ -33,7 +33,7 @@ impl<St> WebRequest<St> {
     #[inline]
     pub fn error_response<AppSt, E>(self, st: &AppSt, err: &E) -> WebResponse
     where
-        AppSt: AppState,
+        AppSt: State,
         E: WebResponseError<AppSt, AppSt::Error>,
     {
         WebResponse::new(err.error_response(st), self.req)

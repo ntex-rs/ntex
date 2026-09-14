@@ -28,16 +28,16 @@ use crate::{Service, ServiceFactory, SharedCfg, io::IoConfig, rt::System, server
 use crate::web::config::WebAppConfig;
 use crate::web::httprequest::HttpRequest;
 use crate::web::rmap::ResourceMap;
-use crate::web::{AppState, FromRequest, HttpResponse, Responder, WebRequest, WebResponse};
+use crate::web::{FromRequest, HttpResponse, Responder, State, WebRequest, WebResponse};
 
 /// Create service that always responds with `HttpResponse::Ok()`
-pub fn ok_service<St: AppState, In>()
+pub fn ok_service<St: State, In>()
 -> impl Service<St, WebRequest<In>, Res = WebResponse, Error = std::convert::Infallible> {
     default_service::<St, In>(StatusCode::OK)
 }
 
 /// Create service that responds with response with specified status code
-pub fn default_service<St: AppState, In>(
+pub fn default_service<St: State, In>(
     status_code: StatusCode,
 ) -> impl Service<St, WebRequest<In>, Res = WebResponse, Error = Infallible> {
     fn_service(async move |req: WebRequest<In>| {

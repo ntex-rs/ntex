@@ -3,7 +3,7 @@ use std::fmt;
 use crate::http::body::{Body, MessageBody, ResponseBody};
 use crate::http::{HeaderMap, Response, ResponseHead, StatusCode};
 
-use super::{AppState, HttpRequest, WebResponseError};
+use super::{HttpRequest, State, WebResponseError};
 
 /// An http service response.
 pub struct WebResponse {
@@ -25,7 +25,7 @@ impl WebResponse {
         request: HttpRequest,
     ) -> Self
     where
-        St: AppState,
+        St: State,
     {
         let res = err.error_response(st);
 
@@ -46,7 +46,7 @@ impl WebResponse {
     /// Create web response for error.
     pub fn error_response<St>(self, st: &St, err: &impl WebResponseError<St, St::Error>) -> Self
     where
-        St: AppState,
+        St: State,
     {
         Self::from_err(st, err, self.request)
     }

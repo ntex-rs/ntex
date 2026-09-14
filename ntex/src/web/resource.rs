@@ -11,7 +11,7 @@ use super::error::{WebError, WebResponseError};
 use super::guard::Guard;
 use super::route::{IntoRoutes, Route, RouteService};
 use super::stack::{Filter, WebStack};
-use super::{AppState, FromRequest, Handler, HttpHandler, HttpService, WebRequest, WebResponse};
+use super::{FromRequest, Handler, HttpHandler, HttpService, State, WebRequest, WebResponse};
 
 /// *Resource* is an entry in resources table which corresponds to requested URL.
 ///
@@ -37,7 +37,7 @@ use super::{AppState, FromRequest, Handler, HttpHandler, HttpService, WebRequest
 /// Default behavior could be overriden with `default_resource()` method.
 #[derive(derive_more::Debug)]
 #[debug("Resource({rdef:?})")]
-pub struct Resource<St: AppState, In, Out = In, M = Identity, F = Filter<St, In>> {
+pub struct Resource<St: State, In, Out = In, M = Identity, F = Filter<St, In>> {
     middleware: M,
     filter: ServiceChainFactory<F, St, WebRequest<In>>,
     rdef: Vec<String>,
@@ -48,7 +48,7 @@ pub struct Resource<St: AppState, In, Out = In, M = Identity, F = Filter<St, In>
 
 #[derive(derive_more::Debug)]
 #[debug("Resource({rdef:?})")]
-pub struct ResourceServices<St: AppState, In, Out, M, F> {
+pub struct ResourceServices<St: State, In, Out, M, F> {
     middleware: M,
     filter: ServiceChainFactory<F, St, WebRequest<In>>,
     rdef: Vec<String>,
@@ -58,7 +58,7 @@ pub struct ResourceServices<St: AppState, In, Out, M, F> {
     default: Option<HttpService<St, Out>>,
 }
 
-impl<St: AppState, In: 'static> Resource<St, In, In> {
+impl<St: State, In: 'static> Resource<St, In, In> {
     #[allow(clippy::needless_pass_by_value)]
     pub fn new<T: IntoPattern>(path: T) -> Resource<St, In, In> {
         Resource {
@@ -74,7 +74,7 @@ impl<St: AppState, In: 'static> Resource<St, In, In> {
 
 impl<St, In, Out, M, F> Resource<St, In, Out, M, F>
 where
-    St: AppState,
+    St: State,
     In: 'static,
     Out: 'static,
     F: ServiceFactory<
@@ -313,7 +313,7 @@ where
 
 impl<St, In, Out, M, F> ResourceServices<St, In, Out, M, F>
 where
-    St: AppState,
+    St: State,
     In: 'static,
     Out: 'static,
     M: 'static,
@@ -427,7 +427,7 @@ where
 
 impl<St, Outer, In, Out, M, F> WebServiceFactory<St, Outer> for ResourceServices<St, In, Out, M, F>
 where
-    St: AppState,
+    St: State,
     Outer: 'static,
     In: 'static,
     Out: 'static,
@@ -478,7 +478,7 @@ impl<St, Outer, In, Out, M, F>
         WebRequest<Outer>,
     > for ResourceServices<St, In, Out, M, F>
 where
-    St: AppState,
+    St: State,
     Outer: 'static,
     In: 'static,
     Out: 'static,
@@ -508,7 +508,7 @@ where
 /// Resource service factory
 #[derive(derive_more::Debug)]
 #[debug("ResourceServiceFactory")]
-pub struct ResourceServiceFactory<St: AppState, In, Out, M, F> {
+pub struct ResourceServiceFactory<St: State, In, Out, M, F> {
     middleware: M,
     filter: F,
     routes: Vec<Route<St, Out>>,
@@ -519,7 +519,7 @@ pub struct ResourceServiceFactory<St: AppState, In, Out, M, F> {
 impl<St, Outer, In, Out, M, F> ServiceFactory<St, WebRequest<Outer>>
     for ResourceServiceFactory<St, In, Out, M, F>
 where
-    St: AppState,
+    St: State,
     Out: 'static,
     F: ServiceFactory<
             St,
@@ -560,7 +560,7 @@ where
 /// Resource service
 #[derive(derive_more::Debug)]
 #[debug("ResourceService")]
-pub struct ResourceService<St: AppState, In, Out, F> {
+pub struct ResourceService<St: State, In, Out, F> {
     filter: F,
     routes: Vec<RouteService<St, Out>>,
     default: Option<HttpHandler<St, Out>>,
@@ -569,7 +569,7 @@ pub struct ResourceService<St: AppState, In, Out, F> {
 
 impl<St, In, Out, F> Service<St, WebRequest<In>> for ResourceService<St, In, Out, F>
 where
-    St: AppState,
+    St: State,
     F: Service<St, WebRequest<In>, Res = WebRequest<Out>, Error = WebError<St, St::Error>>,
 {
     type Res = WebResponse;

@@ -12,13 +12,13 @@ use super::config::{ServiceConfig, WebAppConfig};
 use super::error::{WebError, WebResponseError};
 use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
 use super::stack::{Filter, WebStack};
-use super::{AppState, HttpService, Resource, Route, WebRequest, WebResponse};
+use super::{HttpService, Resource, Route, State, WebRequest, WebResponse};
 
 /// Application builder - structure that follows the builder pattern
 /// for building application instances.
 #[derive(derive_more::Debug)]
 #[debug("App")]
-pub struct App<St: AppState, In, Out = In, M = Identity, F = Filter<St, In>> {
+pub struct App<St: State, In, Out = In, M = Identity, F = Filter<St, In>> {
     middleware: M,
     filter: ServiceChainFactory<F, St, WebRequest<In>>,
     external: Vec<ResourceDef>,
@@ -31,7 +31,7 @@ pub struct App<St: AppState, In, Out = In, M = Identity, F = Filter<St, In>> {
 /// for building application instances.
 #[derive(derive_more::Debug)]
 #[debug("AppServices")]
-pub struct AppServices<St: AppState, In, Out, M, F> {
+pub struct AppServices<St: State, In, Out, M, F> {
     middleware: M,
     filter: ServiceChainFactory<F, St, WebRequest<In>>,
     services: Vec<Box<dyn AppServiceFactory<St, Out>>>,
@@ -55,7 +55,7 @@ impl Default for App<(), ()> {
     }
 }
 
-impl<St: AppState, In> App<St, In, In> {
+impl<St: State, In> App<St, In, In> {
     #[must_use]
     /// Create application builder. Application can be configured with a builder-like pattern.
     pub fn new() -> Self {
@@ -72,7 +72,7 @@ impl<St: AppState, In> App<St, In, In> {
 
 impl<St, In, Out, M, F> App<St, In, Out, M, F>
 where
-    St: AppState,
+    St: State,
     In: 'static,
     Out: 'static,
     F: ServiceFactory<
@@ -395,7 +395,7 @@ where
 
 impl<St, In, Out, M, F> AppServices<St, In, Out, M, F>
 where
-    St: AppState,
+    St: State,
     Out: 'static,
     F: ServiceFactory<
             St,
@@ -506,7 +506,7 @@ where
 
 impl<St, In, Out, M, F> AppServices<St, In, Out, M, F>
 where
-    St: AppState,
+    St: State,
     In: 'static,
     Out: 'static,
     F: ServiceFactory<
@@ -552,7 +552,7 @@ where
 
 impl<St, In, Out, M, F> AppServices<St, In, Out, M, F>
 where
-    St: AppState + Clone,
+    St: State + Clone,
     In: 'static,
     Out: 'static,
     F: ServiceFactory<
@@ -602,7 +602,7 @@ where
 impl<St, In, Out, M, F> IntoServiceFactory<AppFactory<St, In, Out, M, F>, St, Request>
     for AppServices<St, In, Out, M, F>
 where
-    St: AppState,
+    St: State,
     In: 'static,
     Out: 'static,
     F: ServiceFactory<

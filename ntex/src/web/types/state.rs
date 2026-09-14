@@ -1,7 +1,7 @@
 use std::{convert::Infallible, ops::Deref};
 
 use crate::http::Payload;
-use crate::web::{AppState, FromRequest, HttpRequest};
+use crate::web::{self, FromRequest, HttpRequest};
 
 /// Application state.
 ///
@@ -25,14 +25,14 @@ use crate::web::{AppState, FromRequest, HttpRequest};
 ///
 /// ```rust,ignore
 /// use std::cell::Cell;
-/// use ntex::web::{self, App, AppState, HttpResponse, WebError};
+/// use ntex::web::{self, App, State, HttpResponse, WebError};
 ///
 /// #[derive(Default, Clone)]
 /// struct MyState {
 ///     counter: Cell<usize>,
 /// }
 ///
-/// impl AppState for MyState {
+/// impl State for MyState {
 ///     type Error = WebError;
 /// }
 ///
@@ -60,7 +60,7 @@ impl<St> Deref for State<St> {
     }
 }
 
-impl<St: AppState + Clone> FromRequest<St> for State<St> {
+impl<St: web::State + Clone> FromRequest<St> for State<St> {
     type Error = Infallible;
 
     #[inline]
@@ -85,7 +85,7 @@ mod tests {
             val: usize,
         }
 
-        impl AppState for MyState {
+        impl web::State for MyState {
             type Error = DefaultError;
         }
 

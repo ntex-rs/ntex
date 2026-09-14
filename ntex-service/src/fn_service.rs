@@ -240,15 +240,6 @@ where
     ph: PhantomData<(St, Req, Res, Err)>,
 }
 
-impl<F, St, Req, Res, Err> FnServiceStFactory<F, St, Req, Res, Err>
-where
-    F: AsyncFn(&St, Req) -> Result<Res, Err> + Clone,
-{
-    fn new(f: F) -> Self {
-        FnServiceStFactory { f, ph: PhantomData }
-    }
-}
-
 impl<F, St, Req, Res, Err> Clone for FnServiceStFactory<F, St, Req, Res, Err>
 where
     F: AsyncFn(&St, Req) -> Result<Res, Err> + Clone,
@@ -299,7 +290,10 @@ where
 {
     #[inline]
     fn into_factory(self) -> FnServiceStFactory<F, St, Req, Res, Err> {
-        FnServiceStFactory::new(self)
+        FnServiceStFactory {
+            f: self,
+            ph: PhantomData,
+        }
     }
 }
 
@@ -482,7 +476,7 @@ mod tests {
     }
 
     #[ntex::test]
-    async fn test_fn_service_with_config() {
+    async fn test_fn_factory() {
         let new_srv = factory(fn_factory(async move |cfg: &usize| {
             let cfg = *cfg;
             Ok::<_, ()>(fn_service(async move |()| Ok::<_, ()>(("srv", cfg))))
@@ -494,5 +488,27 @@ mod tests {
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv", 1));
+    }
+
+    #[ntex::test]
+    async fn test_fn_service_st() {
+        let new_srv = factory(async |(): &(), ()| Ok::<_, ()>("srv")).clone();
+        let _ = format!("{new_srv:?}");
+
+        let srv = Pipeline::new((), new_srv.create(&()).await.unwrap());
+        let res = srv.call(()).await;
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), "srv");
+        let _ = format!("{srv:?}");
+
+        let new_srv = fn_service(async |()| Ok::<_, ()>("srv"));
+        let srv = Pipeline::new((), new_srv.clone());
+        let res = srv.call(()).await;
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), "srv");
+        let _ = format!("{srv:?}");
+
+        assert_eq!(lazy(|cx| srv.poll_shutdown(cx)).await, Poll::Ready(()));
     }
 }

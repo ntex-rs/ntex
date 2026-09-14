@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use crate::error::Failure;
 use crate::service::{Ctx, Middleware, Service, ServiceFactory};
-use crate::web::{AppState, WebError, WebRequest, WebResponse, WebResponseError};
+use crate::web::{State, WebError, WebRequest, WebResponse, WebResponseError};
 
 /// Stack of middlewares.
 #[derive(Debug, Clone)]
@@ -24,7 +24,7 @@ impl<St, Inner, Outer> WebStack<St, Inner, Outer> {
 
 impl<S, St, Inner, Outer> Middleware<S, St> for WebStack<St, Inner, Outer>
 where
-    St: AppState,
+    St: State,
     Inner: Middleware<S, St>,
     Outer: Middleware<Inner::Service, St>,
     // Outer::Service: Service<St, WebRequest<In>, Res = WebResponse>,
@@ -61,7 +61,7 @@ impl<S, St, In> Service<St, WebRequest<In>> for WebMiddleware<S, St>
 where
     S: Service<St, WebRequest<In>, Res = WebResponse>,
     S::Error: WebResponseError<St, St::Error>,
-    St: AppState,
+    St: State,
 {
     type Res = WebResponse;
     type Error = WebError<St, St::Error>;
@@ -89,7 +89,7 @@ impl<St, In> Filter<St, In> {
     }
 }
 
-impl<St: AppState, In> ServiceFactory<St, WebRequest<In>> for Filter<St, In> {
+impl<St: State, In> ServiceFactory<St, WebRequest<In>> for Filter<St, In> {
     type Res = WebRequest<In>;
     type Error = WebError<St, St::Error>;
 
@@ -101,7 +101,7 @@ impl<St: AppState, In> ServiceFactory<St, WebRequest<In>> for Filter<St, In> {
     }
 }
 
-impl<St: AppState, In> Service<St, WebRequest<In>> for Filter<St, In> {
+impl<St: State, In> Service<St, WebRequest<In>> for Filter<St, In> {
     type Res = WebRequest<In>;
     type Error = WebError<St, St::Error>;
 

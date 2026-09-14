@@ -5,7 +5,7 @@ use crate::{router::ResourceDef, util::ByteString, util::HashMap};
 
 use super::httprequest::{HttpRequest, HttpRequestInner};
 use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
-use super::{AppState, Resource, Route};
+use super::{Resource, Route, State};
 
 /// Application configuration
 #[derive(Debug)]
@@ -173,7 +173,7 @@ pub struct ServiceConfig<St, In = ()> {
     pub(super) external: Vec<ResourceDef>,
 }
 
-impl<St: AppState, In: 'static> ServiceConfig<St, In> {
+impl<St: State, In: 'static> ServiceConfig<St, In> {
     pub fn new(external: Vec<ResourceDef>) -> Self {
         Self {
             external,
