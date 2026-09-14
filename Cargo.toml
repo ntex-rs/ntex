@@ -56,19 +56,19 @@ ntex-util = { path = "ntex-util" }
 [workspace.dependencies]
 ntex = "4.0.0-beta.12"
 ntex-h2 = "4.0.0-beta.2"
-ntex-dispatcher = "4.0.0-beta.0"
-ntex-io = "4.0.0-beta.2"
-ntex-net = "4.0.0-beta.0"
 ntex-macros = "4.0.0-beta.5"
-ntex-server = "4.0.0-beta.6"
 ntex-tls = "4.0.0-beta.0"
 
 ntex-bytes = "1.9.0"
 ntex-codec = "1.2.1"
+ntex-dispatcher = "4.0.0"
+ntex-io = "4.0.0"
+ntex-net = "4.0.0"
 ntex-error = "2.6.0"
 ntex-http = "1.2.0"
 ntex-router = "1.1.0"
 ntex-rt = "3.17.1"
+ntex-server = "4.0.0"
 ntex-service = "5.0.0"
 ntex-util = "4.0.0"
 

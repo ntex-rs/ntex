@@ -1,6 +1,6 @@
 # Changes
 
-## [4.0.0-beta.2] - 2026-08-xx
+## [4.0.0] - 2026-09-14
 
 * Refactor server state creation process
 
