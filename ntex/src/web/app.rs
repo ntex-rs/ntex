@@ -7,7 +7,7 @@ use crate::router::ResourceDef;
 use crate::service::{Identity, ServiceChainFactory, map_state_factory};
 use crate::{Cfg, IntoServiceFactory, Middleware, Service, ServiceFactory, factory};
 
-use super::app_service::{AppFactory, AppRouter};
+use super::app_service::{AppFactory, WebServiceRouter};
 use super::config::{ServiceConfig, WebAppConfig};
 use super::error::{WebError, WebResponseError};
 use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
@@ -516,7 +516,7 @@ where
             Error = WebError<St, St::Error>,
             InitError = Failure,
         >,
-    M: Middleware<AppRouter<St, In, Out, F::Service>, St> + 'static,
+    M: Middleware<WebServiceRouter<St, In, Out, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest<()>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
     /// Construct service factory, suitable for `http::HttpService`.
@@ -562,7 +562,7 @@ where
             Error = WebError<St, St::Error>,
             InitError = Failure,
         >,
-    M: Middleware<AppRouter<St, In, Out, F::Service>, St> + 'static,
+    M: Middleware<WebServiceRouter<St, In, Out, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest<()>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
     /// Construct service factory, suitable for `http::HttpService` and set state.
@@ -612,7 +612,7 @@ where
             Error = WebError<St, St::Error>,
             InitError = Failure,
         >,
-    M: Middleware<AppRouter<St, In, Out, F::Service>, St> + 'static,
+    M: Middleware<WebServiceRouter<St, In, Out, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest<()>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
     fn into_factory(self) -> AppFactory<St, In, Out, M, F> {

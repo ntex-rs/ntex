@@ -4,9 +4,9 @@ use crate::error::{Failure, IntoFailure};
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef, Router};
 use crate::service::{Identity, ServiceChainFactory, boxed};
-use crate::{IntoServiceFactory, Middleware, Service, ServiceFactory, factory, util::HashMap};
+use crate::{IntoServiceFactory, Middleware, Service, ServiceFactory, factory};
 
-use super::app_service::AppRouter;
+use super::app_service::WebServiceRouter;
 use super::dev::{WebServiceConfig, WebServiceFactory};
 use super::error::{WebError, WebResponseError};
 use super::guard::Guard;
@@ -469,7 +469,7 @@ where
             Error = WebError<St, St::Error>,
             InitError = Failure,
         > + 'static,
-    M: Middleware<AppRouter<St, In, Out, F::Service>, St> + 'static,
+    M: Middleware<WebServiceRouter<St, In, Out, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest<Outer>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
     fn register(mut self, config: &mut WebServiceConfig<St, Outer>) {
@@ -566,7 +566,7 @@ where
             Error = WebError<St, St::Error>,
             InitError = Failure,
         > + 'static,
-    M: Middleware<AppRouter<St, In, Out, F::Service>, St> + 'static,
+    M: Middleware<WebServiceRouter<St, In, Out, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest<Outer>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
     type Res = WebResponse;
@@ -581,14 +581,7 @@ where
         // router service
         Ok(self.middleware.create(
             st,
-            AppRouter {
-                filter,
-                router: self.router.clone(),
-                default: self.default.clone(),
-                cache: RefCell::new(HashMap::default()),
-                cache_default: RefCell::new(None),
-                ph: PhantomData,
-            },
+            WebServiceRouter::new(filter, self.router.clone(), self.default.clone()),
         ))
     }
 }

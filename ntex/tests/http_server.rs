@@ -555,12 +555,7 @@ async fn test_h1_headers() {
         })
     });
 
-    let response = srv
-        .request(Method::GET, "/")
-        .force_close()
-        .send()
-        .await
-        .unwrap();
+    let response = srv.request(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     // read response

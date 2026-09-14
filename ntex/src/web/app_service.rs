@@ -29,7 +29,7 @@ where
             Error = WebError<St, St::Error>,
             InitError = Failure,
         >,
-    M: Middleware<AppRouter<St, In, Out, F::Service>, St> + 'static,
+    M: Middleware<WebServiceRouter<St, In, Out, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest<()>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
     middleware: M,
@@ -52,7 +52,7 @@ where
             Error = WebError<St, St::Error>,
             InitError = Failure,
         >,
-    M: Middleware<AppRouter<St, In, Out, F::Service>, St> + 'static,
+    M: Middleware<WebServiceRouter<St, In, Out, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest<()>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
     pub(super) fn new(
@@ -134,7 +134,7 @@ where
             Error = WebError<St, St::Error>,
             InitError = Failure,
         >,
-    M: Middleware<AppRouter<St, In, Out, F::Service>, St> + 'static,
+    M: Middleware<WebServiceRouter<St, In, Out, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest<()>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
     type Res = Response;
@@ -145,14 +145,11 @@ where
 
     async fn create(&self, st: &St) -> Result<Self::Service, Self::InitError> {
         // main service
-        let service = AppRouter {
-            filter: self.filter.create(st).await?,
-            router: self.router.clone(),
-            default: self.default.clone(),
-            cache: RefCell::new(HashMap::default()),
-            cache_default: RefCell::new(None),
-            ph: PhantomData,
-        };
+        let service = WebServiceRouter::new(
+            self.filter.create(st).await?,
+            self.router.clone(),
+            self.default.clone(),
+        );
 
         Ok(AppService {
             service: self.middleware.create(st, service),
@@ -219,17 +216,34 @@ where
 
 /// Web app service.
 #[derive(derive_more::Debug)]
-#[debug("AppRouter")]
-pub struct AppRouter<St: State, In, Out, F> {
-    pub(super) filter: F,
-    pub(super) router: Rc<Router<HttpService<St, Out>, Guards>>,
-    pub(super) default: HttpService<St, Out>,
-    pub(super) cache: RefCell<HashMap<ResourceId, HttpHandler<St, Out>>>,
-    pub(super) cache_default: RefCell<Option<HttpHandler<St, Out>>>,
-    pub(super) ph: PhantomData<In>,
+#[debug("Router")]
+pub struct WebServiceRouter<St: State, In, Out, F> {
+    filter: F,
+    router: Rc<Router<HttpService<St, Out>, Guards>>,
+    default: HttpService<St, Out>,
+    cache: RefCell<HashMap<ResourceId, HttpHandler<St, Out>>>,
+    cache_default: RefCell<Option<HttpHandler<St, Out>>>,
+    ph: PhantomData<In>,
 }
 
-impl<St, In, Out, F> Service<St, WebRequest<In>> for AppRouter<St, In, Out, F>
+impl<St: State, In, Out, F> WebServiceRouter<St, In, Out, F> {
+    pub fn new(
+        filter: F,
+        router: Rc<Router<HttpService<St, Out>, Guards>>,
+        default: HttpService<St, Out>,
+    ) -> Self {
+        Self {
+            filter,
+            router,
+            default,
+            cache: RefCell::new(HashMap::default()),
+            cache_default: RefCell::new(None),
+            ph: PhantomData,
+        }
+    }
+}
+
+impl<St, In, Out, F> Service<St, WebRequest<In>> for WebServiceRouter<St, In, Out, F>
 where
     St: State,
     Out: 'static,
