@@ -34,7 +34,7 @@ pub trait WebResponseError<St, Err>: Error + 'static {
 
 // ========================== WebErrorImpl ====================
 
-pub struct WebError<St, Err>(pub(crate) Box<dyn WebResponseError<St, Err>>);
+pub struct WebError<St = (), Err = DefaultError>(pub(crate) Box<dyn WebResponseError<St, Err>>);
 
 impl<St: 'static, Err: 'static> WebError<St, Err> {
     pub fn from_err<E: WebResponseError<St, Err>>(err: E) -> Self {

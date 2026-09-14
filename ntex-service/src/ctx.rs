@@ -369,6 +369,7 @@ mod tests {
         ) -> Result<Self::Res, Self::Error> {
             let _ = format!("{ctx:?}");
             let _ = format!("{:?}", ctx.id());
+            let () = *ctx;
             #[allow(clippy::clone_on_copy)]
             let _ = ctx.clone();
             Ok(req)

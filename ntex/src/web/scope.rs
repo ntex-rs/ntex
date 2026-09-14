@@ -13,7 +13,7 @@ use super::guard::Guard;
 use super::rmap::ResourceMap;
 use super::service::{AppServiceFactory, ServiceFactoryWrapper};
 use super::stack::{Filter, WebStack};
-use super::{AppState, HttpService, Resource, Route, ServiceConfig, WebRequest, WebResponse};
+use super::{HttpService, Resource, Route, ServiceConfig, State, WebRequest, WebResponse};
 
 type Guards = Vec<Box<dyn Guard>>;
 
@@ -48,7 +48,7 @@ type Guards = Vec<Box<dyn Guard>>;
 ///
 #[derive(derive_more::Debug)]
 #[debug("Scope({rdef:?})")]
-pub struct Scope<St: AppState, In, Out = In, M = Identity, F = Filter<St, In>> {
+pub struct Scope<St: State, In, Out = In, M = Identity, F = Filter<St, In>> {
     middleware: M,
     filter: ServiceChainFactory<F, St, WebRequest<In>>,
     rdef: Vec<String>,
@@ -63,7 +63,7 @@ pub struct Scope<St: AppState, In, Out = In, M = Identity, F = Filter<St, In>> {
 /// Scope is a set of resources with common root path.
 #[derive(derive_more::Debug)]
 #[debug("ScopeServices({rdef:?})")]
-pub struct ScopeServices<St: AppState, In, Out, M, F> {
+pub struct ScopeServices<St: State, In, Out, M, F> {
     middleware: M,
     rdef: Vec<String>,
     guards: Vec<Box<dyn Guard>>,
@@ -74,7 +74,7 @@ pub struct ScopeServices<St: AppState, In, Out, M, F> {
     case_insensitive: bool,
 }
 
-impl<St: AppState, In> Scope<St, In, In> {
+impl<St: State, In> Scope<St, In, In> {
     #[allow(clippy::needless_pass_by_value)]
     /// Create a new scope
     pub fn new<T: IntoPattern>(path: T) -> Self {
@@ -92,7 +92,7 @@ impl<St: AppState, In> Scope<St, In, In> {
 
 impl<St, In, Out, M, F> Scope<St, In, Out, M, F>
 where
-    St: AppState,
+    St: State,
     In: 'static,
     Out: 'static,
     F: ServiceFactory<
@@ -199,8 +199,6 @@ where
     ///
     /// ```rust
     /// use ntex::web::{self, App, HttpRequest};
-    ///
-    /// struct AppState;
     ///
     /// async fn index(req: HttpRequest) -> &'static str {
     ///     "Welcome!"
@@ -361,7 +359,7 @@ where
 
 impl<St, In, Out, M, F> ScopeServices<St, In, Out, M, F>
 where
-    St: AppState,
+    St: State,
     In: 'static,
     Out: 'static,
     F: ServiceFactory<
@@ -385,8 +383,6 @@ where
     ///
     /// ```rust
     /// use ntex::web::{self, App, HttpRequest};
-    ///
-    /// struct AppState;
     ///
     /// async fn index(req: HttpRequest) -> &'static str {
     ///     "Welcome!"
@@ -462,7 +458,7 @@ where
 
 impl<St, Outer, In, Out, M, F> WebServiceFactory<St, Outer> for ScopeServices<St, In, Out, M, F>
 where
-    St: AppState,
+    St: State,
     Outer: 'static,
     In: 'static,
     Out: 'static,
@@ -549,7 +545,7 @@ where
 }
 
 /// Scope service
-struct ScopeServiceFactory<St: AppState, In, Out, M, F> {
+struct ScopeServiceFactory<St: State, In, Out, M, F> {
     middleware: M,
     filter: ServiceChainFactory<F, St, WebRequest<In>>,
     router: Rc<Router<HttpService<St, Out>, Guards>>,
@@ -559,7 +555,7 @@ struct ScopeServiceFactory<St: AppState, In, Out, M, F> {
 impl<St, Outer, In, Out, M, F> ServiceFactory<St, WebRequest<Outer>>
     for ScopeServiceFactory<St, In, Out, M, F>
 where
-    St: AppState,
+    St: State,
     Outer: 'static,
     In: 'static,
     Out: 'static,

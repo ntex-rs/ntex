@@ -498,6 +498,7 @@ mod tests {
         assert_eq!(t.ctx().id(), t.id());
 
         let cfg = SharedCfg::new("TEST2").build();
+        let cfg = SharedCfg::from(&cfg);
         let t = cfg.get::<TestCfg>();
         assert_eq!(t.tag(), "TEST2");
         assert_eq!(t.id(), cfg.id());
@@ -522,7 +523,12 @@ mod tests {
         assert_eq!(t2.tag(), "TEST4");
 
         let t3 = t.ctx().get::<TestCfg>();
+        let t3 = Cfg::from(t3.get_ref());
+        let t3 = t3.get_shared::<TestCfg>();
         assert_eq!(t3.id(), cfg.id());
         assert_eq!(t3.tag(), "TEST4");
+
+        let t1 = SharedCfg::from(t3);
+        assert_eq!(t.id(), t1.id());
     }
 }

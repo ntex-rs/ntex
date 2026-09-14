@@ -128,7 +128,7 @@ mod tests {
     async fn test_ready() {
         let cnt = Rc::new(Cell::new(0));
         let cnt_sht = Rc::new(Cell::new(0));
-        let srv = service(Box::new(Srv1(cnt.clone(), cnt_sht.clone())))
+        let srv = service(Rc::new(Srv1(cnt.clone(), cnt_sht.clone())))
             .clone()
             .and_then(crate::boxed::service(Srv2(cnt.clone(), cnt_sht.clone())));
         assert!(format!("{srv:?}").contains("AndThen"));
@@ -158,12 +158,16 @@ mod tests {
     #[ntex::test]
     async fn test_call() {
         let cnt = Rc::new(Cell::new(0));
-        let srv = service(Box::new(Srv1(cnt.clone(), Rc::new(Cell::new(0)))))
-            .and_then(Srv2(cnt, Rc::new(Cell::new(0))))
+        let cnt_sht = Rc::new(Cell::new(0));
+        let srv = Srv1(cnt.clone(), cnt_sht.clone())
+            .and_then(Srv2(cnt, cnt_sht.clone()))
             .pipeline(());
         let res = srv.call("srv1").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "srv2"));
+
+        srv.shutdown().await;
+        assert_eq!(cnt_sht.get(), 2);
     }
 
     #[ntex::test]

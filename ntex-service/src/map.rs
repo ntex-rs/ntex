@@ -144,7 +144,7 @@ where
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use crate::{Ctx, Pipeline, Service, ServiceFactory, fn_factory};
+    use crate::{Ctx, Pipeline, Service, ServiceFactory, fn_factory, service};
 
     #[derive(Debug, Default, Clone)]
     struct Srv(Rc<Cell<usize>>);
@@ -169,7 +169,7 @@ mod tests {
     #[ntex::test]
     async fn test_service() {
         let cnt_sht = Rc::new(Cell::new(0));
-        let srv = Pipeline::new((), Srv(cnt_sht.clone()).map(|()| "ok").clone());
+        let srv = Pipeline::new((), service(Srv(cnt_sht.clone())).map(|()| "ok").clone());
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");

@@ -8,7 +8,7 @@ use mime::Mime;
 
 use crate::http::{HttpMessage, error, header};
 use crate::util::{BoxFuture, Bytes, BytesMut, Stream, stream_recv};
-use crate::web::{AppState, FromRequest, HttpRequest, error::PayloadError};
+use crate::web::{FromRequest, HttpRequest, State, error::PayloadError};
 
 /// Payload extractor returns request 's payload stream.
 ///
@@ -103,7 +103,7 @@ impl Stream for Payload {
 ///     );
 /// }
 /// ```
-impl<St: AppState> FromRequest<St> for Payload {
+impl<St: State> FromRequest<St> for Payload {
     type Error = Infallible;
 
     #[inline]
@@ -140,7 +140,7 @@ impl<St: AppState> FromRequest<St> for Payload {
 ///     );
 /// }
 /// ```
-impl<St: AppState> FromRequest<St> for Bytes {
+impl<St: State> FromRequest<St> for Bytes {
     type Error = PayloadError;
 
     async fn from_request(
@@ -196,7 +196,7 @@ impl<St: AppState> FromRequest<St> for Bytes {
 ///     );
 /// }
 /// ```
-impl<St: AppState> FromRequest<St> for String {
+impl<St: State> FromRequest<St> for String {
     type Error = PayloadError;
 
     async fn from_request(

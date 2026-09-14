@@ -7,19 +7,19 @@ use crate::service::{Ctx, Service, ServiceFactory};
 use super::error::{WebError, WebResponseError};
 use super::guard::{self, AllGuard, Guard};
 use super::handler::{Handler, HandlerFn, HandlerWrapper};
-use super::{AppState, FromRequest, HttpResponse, WebRequest, WebResponse};
+use super::{FromRequest, HttpResponse, State, WebRequest, WebResponse};
 
 /// Resource route definition
 ///
 /// Route uses builder-like pattern for configuration.
 /// If handler is not explicitly set, default *404 Not Found* handler is used.
-pub struct Route<St: AppState, In = ()> {
+pub struct Route<St: State, In = ()> {
     handler: Rc<dyn HandlerFn<St, In>>,
     methods: Vec<Method>,
     guards: Rc<AllGuard>,
 }
 
-impl<St: AppState, In: 'static> Route<St, In> {
+impl<St: State, In: 'static> Route<St, In> {
     /// Create new route which matches any request.
     pub fn new() -> Route<St, In> {
         Route {
@@ -50,13 +50,13 @@ impl<St: AppState, In: 'static> Route<St, In> {
     }
 }
 
-impl<St: AppState, In: 'static> Default for Route<St, In> {
+impl<St: State, In: 'static> Default for Route<St, In> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<St: AppState, In: 'static> ServiceFactory<St, WebRequest<In>> for Route<St, In> {
+impl<St: State, In: 'static> ServiceFactory<St, WebRequest<In>> for Route<St, In> {
     type Res = WebResponse;
     type Error = WebError<St, St::Error>;
 
@@ -68,7 +68,7 @@ impl<St: AppState, In: 'static> ServiceFactory<St, WebRequest<In>> for Route<St,
     }
 }
 
-impl<St: AppState, In: 'static> Route<St, In> {
+impl<St: State, In: 'static> Route<St, In> {
     #[must_use]
     /// Add method guard to the route.
     ///
@@ -165,7 +165,7 @@ impl<St: AppState, In: 'static> Route<St, In> {
     }
 }
 
-impl<St: AppState, In> fmt::Debug for Route<St, In> {
+impl<St: State, In> fmt::Debug for Route<St, In> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Route")
             .field("handler", &self.handler)
@@ -175,13 +175,13 @@ impl<St: AppState, In> fmt::Debug for Route<St, In> {
     }
 }
 
-pub struct RouteService<St: AppState, In> {
+pub struct RouteService<St: State, In> {
     handler: Rc<dyn HandlerFn<St, In>>,
     methods: Vec<Method>,
     guards: Rc<AllGuard>,
 }
 
-impl<St: AppState, In> RouteService<St, In> {
+impl<St: State, In> RouteService<St, In> {
     pub fn check(&self, req: &mut WebRequest<In>) -> bool {
         if !self.methods.is_empty() && !self.methods.contains(&req.head().method) {
             return false;
@@ -191,7 +191,7 @@ impl<St: AppState, In> RouteService<St, In> {
     }
 }
 
-impl<St: AppState, In> fmt::Debug for RouteService<St, In> {
+impl<St: State, In> fmt::Debug for RouteService<St, In> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RouteService")
             .field("handler", &self.handler)
@@ -201,7 +201,7 @@ impl<St: AppState, In> fmt::Debug for RouteService<St, In> {
     }
 }
 
-impl<St: AppState, In> Service<St, WebRequest<In>> for RouteService<St, In> {
+impl<St: State, In> Service<St, WebRequest<In>> for RouteService<St, In> {
     type Res = WebResponse;
     type Error = WebError<St, St::Error>;
 
@@ -215,17 +215,17 @@ impl<St: AppState, In> Service<St, WebRequest<In>> for RouteService<St, In> {
 }
 
 /// Convert object to a vec of routes
-pub trait IntoRoutes<St: AppState, In> {
+pub trait IntoRoutes<St: State, In> {
     fn routes(self) -> Vec<Route<St, In>>;
 }
 
-impl<St: AppState, In> IntoRoutes<St, In> for Route<St, In> {
+impl<St: State, In> IntoRoutes<St, In> for Route<St, In> {
     fn routes(self) -> Vec<Route<St, In>> {
         vec![self]
     }
 }
 
-impl<St: AppState, In> IntoRoutes<St, In> for Vec<Route<St, In>> {
+impl<St: State, In> IntoRoutes<St, In> for Vec<Route<St, In>> {
     fn routes(self) -> Vec<Route<St, In>> {
         self
     }
@@ -235,7 +235,7 @@ macro_rules! tuple_routes(
     {$(#[$meta:meta])* $(($n:tt, $T:ident)),+} => {
         $(#[$meta])*
         #[allow(unused_parens)]
-        impl<St: AppState, U, $($T,)+> IntoRoutes<St, U> for ($($T,)+)
+        impl<St: State, U, $($T,)+> IntoRoutes<St, U> for ($($T,)+)
         where
             $($T: Into<Route<St, U>> + 'static,)+ {
             fn routes(self) -> Vec<Route<St, U>> {
@@ -245,7 +245,7 @@ macro_rules! tuple_routes(
     }
 );
 
-impl<St: AppState, In, T, const N: usize> IntoRoutes<St, In> for [T; N]
+impl<St: State, In, T, const N: usize> IntoRoutes<St, In> for [T; N]
 where
     T: Into<Route<St, In>>,
 {

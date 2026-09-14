@@ -4,7 +4,7 @@ use std::{fmt, ops};
 use serde::de;
 
 use crate::web::error::PathError;
-use crate::web::{AppState, FromRequest, HttpRequest};
+use crate::web::{FromRequest, HttpRequest, State};
 use crate::{http::Payload, router::PathDeserializer};
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
@@ -151,7 +151,7 @@ impl<T: fmt::Display> fmt::Display for Path<T> {
 ///     );
 /// }
 /// ```
-impl<T, St: AppState> FromRequest<St> for Path<T>
+impl<T, St: State> FromRequest<St> for Path<T>
 where
     T: de::DeserializeOwned,
 {

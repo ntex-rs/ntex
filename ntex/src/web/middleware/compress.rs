@@ -4,7 +4,7 @@ use std::{cmp, str::FromStr};
 use crate::http::encoding::Encoder;
 use crate::http::header::{ACCEPT_ENCODING, ContentEncoding};
 use crate::service::{Ctx, Middleware, Service};
-use crate::web::{AppState, BodyEncoding, WebRequest, WebResponse};
+use crate::web::{BodyEncoding, State, WebRequest, WebResponse};
 
 #[derive(Debug, Clone)]
 /// `Middleware` for compressing response body.
@@ -62,7 +62,7 @@ pub struct CompressMiddleware<S> {
 impl<S, St, In> Service<St, WebRequest<In>> for CompressMiddleware<S>
 where
     S: Service<St, WebRequest<In>, Res = WebResponse>,
-    St: AppState,
+    St: State,
 {
     type Res = WebResponse;
     type Error = S::Error;

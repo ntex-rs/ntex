@@ -17,7 +17,7 @@ use super::route::Route;
 use super::scope::Scope;
 use super::server::HttpServer;
 use super::service::WebServiceAdapter;
-use super::{AppState, HttpResponse, HttpResponseBuilder, WebResponseError};
+use super::{HttpResponse, HttpResponseBuilder, State, WebResponseError};
 
 /// Create resource for a specific path.
 ///
@@ -39,16 +39,24 @@ use super::{AppState, HttpResponse, HttpResponseBuilder, WebResponseError};
 /// `/users/{userid}/{friend}` and store `userid` and `friend` in
 /// the exposed `Params` object:
 ///
-/// ```rust
+/// ```rust,no_run
 /// use ntex::web;
 ///
-/// let app = web::App::default().service(
-///     web::resource("/users/{userid}/{friend}")
-///         .route(web::get().to(async || { web::HttpResponse::Ok() }))
-///         .route(web::head().to(async || { web::HttpResponse::MethodNotAllowed() }))
-/// );
+/// #[ntex::main]
+/// async fn main() -> std::io::Result<()> {
+///     web::server(async |_| {
+///         web::App::new().service(
+///             web::resource("/users/{userid}/{friend}")
+///                 .route(web::get().to(async || { web::HttpResponse::Ok() }))
+///                 .route(web::head().to(async || { web::HttpResponse::MethodNotAllowed() }))
+///         )
+///    })
+///    .bind("127.0.0.1:59090", ntex::SharedCfg::default())?
+///    .run()
+///    .await
+/// }
 /// ```
-pub fn resource<St: AppState, In: 'static, T: IntoPattern>(path: T) -> Resource<St, In> {
+pub fn resource<St: State, In: 'static, T: IntoPattern>(path: T) -> Resource<St, In> {
     Resource::new(path)
 }
 
@@ -57,15 +65,23 @@ pub fn resource<St: AppState, In: 'static, T: IntoPattern>(path: T) -> Resource<
 /// Scopes collect multiple paths under a common path prefix.
 /// Scope path can contain variable path segments as resources.
 ///
-/// ```rust
+/// ```rust,no_run
 /// use ntex::web;
 ///
-/// let app = web::App::default().service(
-///     web::scope("/{project_id}")
-///         .service(web::resource("/path1").to(async || { web::HttpResponse::Ok() }))
-///         .service(web::resource("/path2").to(async || { web::HttpResponse::Ok() }))
-///         .service(web::resource("/path3").to(async || { web::HttpResponse::MethodNotAllowed() }))
-/// );
+/// #[ntex::main]
+/// async fn main() -> std::io::Result<()> {
+///     web::server(async |_| {
+///         web::App::new().service(
+///             web::scope("/{project_id}")
+///                 .service(web::resource("/path1").to(async || { web::HttpResponse::Ok() }))
+///                 .service(web::resource("/path2").to(async || { web::HttpResponse::Ok() }))
+///                 .service(web::resource("/path3").to(async || { web::HttpResponse::MethodNotAllowed() }))
+///             )
+///    })
+///    .bind("127.0.0.1:59090", ntex::SharedCfg::default())?
+///    .run()
+///    .await
+/// }
 /// ```
 ///
 /// In the above example, three routes get added:
@@ -73,12 +89,12 @@ pub fn resource<St: AppState, In: 'static, T: IntoPattern>(path: T) -> Resource<
 ///  * `/{project_id}/path2`
 ///  * `/{project_id}/path3`
 ///
-pub fn scope<St: AppState, In: 'static, T: IntoPattern>(path: T) -> Scope<St, In> {
+pub fn scope<St: State, In: 'static, T: IntoPattern>(path: T) -> Scope<St, In> {
     Scope::new(path)
 }
 
 /// Create *route* without configuration.
-pub fn route<St: AppState, U: 'static>() -> Route<St, U> {
+pub fn route<St: State, U: 'static>() -> Route<St, U> {
     Route::new()
 }
 
@@ -96,7 +112,7 @@ pub fn route<St: AppState, U: 'static>() -> Route<St, U> {
 /// In the above example, one `GET` route gets added:
 ///  * `/{project_id}`
 ///
-pub fn get<St: AppState, U: 'static>() -> Route<St, U> {
+pub fn get<St: State, U: 'static>() -> Route<St, U> {
     method(Method::GET)
 }
 
@@ -114,7 +130,7 @@ pub fn get<St: AppState, U: 'static>() -> Route<St, U> {
 /// In the above example, one `POST` route gets added:
 ///  * `/{project_id}`
 ///
-pub fn post<St: AppState, U: 'static>() -> Route<St, U> {
+pub fn post<St: State, U: 'static>() -> Route<St, U> {
     method(Method::POST)
 }
 
@@ -132,7 +148,7 @@ pub fn post<St: AppState, U: 'static>() -> Route<St, U> {
 /// In the above example, one `PUT` route gets added:
 ///  * `/{project_id}`
 ///
-pub fn put<St: AppState, U: 'static>() -> Route<St, U> {
+pub fn put<St: State, U: 'static>() -> Route<St, U> {
     method(Method::PUT)
 }
 
@@ -150,7 +166,7 @@ pub fn put<St: AppState, U: 'static>() -> Route<St, U> {
 /// In the above example, one `PATCH` route gets added:
 ///  * `/{project_id}`
 ///
-pub fn patch<St: AppState, U: 'static>() -> Route<St, U> {
+pub fn patch<St: State, U: 'static>() -> Route<St, U> {
     method(Method::PATCH)
 }
 
@@ -168,7 +184,7 @@ pub fn patch<St: AppState, U: 'static>() -> Route<St, U> {
 /// In the above example, one `DELETE` route gets added:
 ///  * `/{project_id}`
 ///
-pub fn delete<St: AppState, U: 'static>() -> Route<St, U> {
+pub fn delete<St: State, U: 'static>() -> Route<St, U> {
     method(Method::DELETE)
 }
 
@@ -186,7 +202,7 @@ pub fn delete<St: AppState, U: 'static>() -> Route<St, U> {
 /// In the above example, one `HEAD` route gets added:
 ///  * `/{project_id}`
 ///
-pub fn head<St: AppState, U: 'static>() -> Route<St, U> {
+pub fn head<St: State, U: 'static>() -> Route<St, U> {
     method(Method::HEAD)
 }
 
@@ -204,7 +220,7 @@ pub fn head<St: AppState, U: 'static>() -> Route<St, U> {
 /// In the above example, one `QUERY` route gets added:
 ///  * `/{project_id}`
 ///
-pub fn query<St: AppState, U: 'static>() -> Route<St, U> {
+pub fn query<St: State, U: 'static>() -> Route<St, U> {
     method(Method::QUERY)
 }
 
@@ -222,7 +238,7 @@ pub fn query<St: AppState, U: 'static>() -> Route<St, U> {
 /// In the above example, one `GET` route gets added:
 ///  * `/{project_id}`
 ///
-pub fn method<St: AppState, U: 'static>(method: Method) -> Route<St, U> {
+pub fn method<St: State, U: 'static>(method: Method) -> Route<St, U> {
     Route::default().method(method)
 }
 
@@ -241,7 +257,7 @@ pub fn method<St: AppState, U: 'static>(method: Method) -> Route<St, U> {
 /// ```
 pub fn to<St, U, F, Args>(handler: F) -> Route<St, U>
 where
-    St: AppState,
+    St: State,
     U: 'static,
     F: Handler<St, Args> + 'static,
     Args: FromRequest<St> + 'static,

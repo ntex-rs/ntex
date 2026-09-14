@@ -6,13 +6,13 @@ use crate::service::{IntoServiceFactory, ServiceFactory, boxed};
 
 use super::error::{WebError, WebResponseError};
 use super::guard::{AllGuard, Guard};
-use super::{AppState, HttpService, WebRequest, WebResponse, dev::insert_slash, rmap::ResourceMap};
+use super::{HttpService, State, WebRequest, WebResponse, dev::insert_slash, rmap::ResourceMap};
 
-pub trait WebServiceFactory<St: AppState, In>: 'static {
+pub trait WebServiceFactory<St: State, In>: 'static {
     fn register(self, config: &mut WebServiceConfig<St, In>);
 }
 
-pub(super) trait AppServiceFactory<St: AppState, In> {
+pub(super) trait AppServiceFactory<St: State, In> {
     fn register(&mut self, config: &mut WebServiceConfig<St, In>);
 }
 
@@ -31,7 +31,7 @@ impl<T> ServiceFactoryWrapper<T> {
 impl<T, St, In> AppServiceFactory<St, In> for ServiceFactoryWrapper<T>
 where
     T: WebServiceFactory<St, In>,
-    St: AppState,
+    St: State,
 {
     fn register(&mut self, config: &mut WebServiceConfig<St, In>) {
         if let Some(item) = self.factory.take() {
@@ -45,7 +45,7 @@ type Guards = Vec<Box<dyn Guard>>;
 /// Application service configuration
 #[derive(derive_more::Debug)]
 #[debug("WebServiceConfig")]
-pub struct WebServiceConfig<St: AppState, In = ()> {
+pub struct WebServiceConfig<St: State, In = ()> {
     root: bool,
     services: Vec<(
         ResourceDef,
@@ -55,7 +55,7 @@ pub struct WebServiceConfig<St: AppState, In = ()> {
     )>,
 }
 
-impl<St: AppState, In: 'static> WebServiceConfig<St, In> {
+impl<St: State, In: 'static> WebServiceConfig<St, In> {
     /// Crate server settings instance
     pub(crate) fn new() -> Self {
         WebServiceConfig {
@@ -173,7 +173,7 @@ impl WebServiceAdapter {
     /// Set a service factory implementation and generate web service.
     pub fn build<Sf, St, In, F>(self, service: F) -> impl WebServiceFactory<St, In>
     where
-        St: AppState,
+        St: State,
         In: 'static,
         F: IntoServiceFactory<Sf, St, WebRequest<In>>,
         Sf: ServiceFactory<St, WebRequest<In>, Res = WebResponse> + 'static,
@@ -203,7 +203,7 @@ struct WebServiceImpl<Sf, In> {
 
 impl<Sf, In, St> WebServiceFactory<St, In> for WebServiceImpl<Sf, In>
 where
-    St: AppState,
+    St: State,
     In: 'static,
     Sf: ServiceFactory<
             St,
@@ -236,7 +236,7 @@ where
 impl<T, St, In> WebServiceFactory<St, In> for Vec<T>
 where
     T: WebServiceFactory<St, In> + 'static,
-    St: AppState,
+    St: State,
 {
     fn register(mut self, config: &mut WebServiceConfig<St, In>) {
         for service in self.drain(..) {
@@ -249,7 +249,7 @@ macro_rules! tuple_web_service(
     {$(#[$meta:meta])* $(($n:tt, $T:ident)),+} => {
 
         $(#[$meta])*
-        impl<St: AppState, In, $($T: WebServiceFactory<St, In> + 'static),+> WebServiceFactory<St, In> for ($($T,)+) {
+        impl<St: State, In, $($T: WebServiceFactory<St, In> + 'static),+> WebServiceFactory<St, In> for ($($T,)+) {
             fn register(self, config: &mut WebServiceConfig<St, In>) {
                 $(
                     self.$n.register(config);
@@ -261,7 +261,7 @@ macro_rules! tuple_web_service(
 
 impl<St, In, T, const N: usize> WebServiceFactory<St, In> for [T; N]
 where
-    St: AppState,
+    St: State,
     T: WebServiceFactory<St, In> + 'static,
 {
     fn register(self, config: &mut WebServiceConfig<St, In>) {

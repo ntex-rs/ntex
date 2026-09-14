@@ -6,7 +6,7 @@ use crate::{Cfg, io::IoRef, io::types, router::Path, util::Extensions};
 use super::config::WebAppConfig;
 use super::info::ConnectionInfo;
 use super::rmap::ResourceMap;
-use super::{AppState, FromRequest};
+use super::{FromRequest, State};
 
 #[derive(Clone)]
 /// An HTTP Request
@@ -251,7 +251,7 @@ impl Drop for HttpRequest {
 ///     );
 /// }
 /// ```
-impl<St: AppState> FromRequest<St> for HttpRequest {
+impl<St: State> FromRequest<St> for HttpRequest {
     type Error = Infallible;
 
     #[inline]

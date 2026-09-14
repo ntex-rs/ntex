@@ -9,7 +9,7 @@ use crate::http::header::CONTENT_LENGTH;
 use crate::http::{HttpMessage, Payload, Response, StatusCode};
 use crate::util::{BoxFuture, BytesMut, stream_recv};
 use crate::web::error::{JsonError, JsonPayloadError, WebResponseError};
-use crate::web::{AppState, FromRequest, HttpRequest, Responder};
+use crate::web::{FromRequest, HttpRequest, Responder, State};
 
 /// Json helper
 ///
@@ -107,9 +107,9 @@ where
     }
 }
 
-impl<T: Serialize, St> Responder<St> for Json<T>
+impl<St, T: Serialize> Responder<St> for Json<T>
 where
-    St: AppState,
+    St: State,
     JsonError: WebResponseError<St, St::Error>,
 {
     async fn respond_to(self, st: &St, _: &HttpRequest) -> Response {
@@ -155,10 +155,10 @@ where
 ///     );
 /// }
 /// ```
-impl<T, St> FromRequest<St> for Json<T>
+impl<St, T> FromRequest<St> for Json<T>
 where
+    St: State,
     T: DeserializeOwned + 'static,
-    St: AppState,
 {
     type Error = JsonPayloadError;
 

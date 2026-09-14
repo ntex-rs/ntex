@@ -4,7 +4,7 @@ use std::{fmt, ops};
 use serde::de;
 
 use crate::http::Payload;
-use crate::web::{AppState, FromRequest, HttpRequest, error::QueryPayloadError};
+use crate::web::{FromRequest, HttpRequest, State, error::QueryPayloadError};
 
 /// Extract typed information from the request's query.
 ///
@@ -122,10 +122,10 @@ impl<T: fmt::Display> fmt::Display for Query<T> {
 ///            .route(web::get().to(index))); // <- use `Query` extractor
 /// }
 /// ```
-impl<T, St> FromRequest<St> for Query<T>
+impl<St, T> FromRequest<St> for Query<T>
 where
+    St: State,
     T: de::DeserializeOwned,
-    St: AppState,
 {
     type Error = QueryPayloadError;
 

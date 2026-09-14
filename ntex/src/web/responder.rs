@@ -6,12 +6,12 @@ use crate::http::{Response, ResponseBuilder, StatusCode};
 use crate::util::{Bytes, BytesMut, Either};
 
 use super::error::{InternalError, WebResponseError};
-use super::{AppState, HttpRequest};
+use super::{HttpRequest, State};
 
 /// Trait implemented by types that can be converted to a http response.
 ///
 /// Types that implement this trait can be used as the return type of a handler.
-pub trait Responder<St: AppState = ()> {
+pub trait Responder<St: State = ()> {
     /// Convert itself to http response.
     async fn respond_to(self, st: &St, req: &HttpRequest) -> Response;
 
@@ -64,14 +64,14 @@ pub trait Responder<St: AppState = ()> {
     }
 }
 
-impl<St: AppState> Responder<St> for Response {
+impl<St: State> Responder<St> for Response {
     #[inline]
     async fn respond_to(self, _: &St, _: &HttpRequest) -> Response {
         self
     }
 }
 
-impl<St: AppState> Responder<St> for ResponseBuilder {
+impl<St: State> Responder<St> for ResponseBuilder {
     #[inline]
     async fn respond_to(mut self, _: &St, _: &HttpRequest) -> Response {
         self.build()
@@ -81,7 +81,7 @@ impl<St: AppState> Responder<St> for ResponseBuilder {
 impl<T, St> Responder<St> for Option<T>
 where
     T: Responder<St>,
-    St: AppState,
+    St: State,
 {
     async fn respond_to(self, st: &St, req: &HttpRequest) -> Response {
         match self {
@@ -93,7 +93,7 @@ where
 
 impl<St, T, E> Responder<St> for Result<T, E>
 where
-    St: AppState,
+    St: State,
     T: Responder<St>,
     E: WebResponseError<St, St::Error>,
 {
@@ -105,10 +105,10 @@ where
     }
 }
 
-impl<T, St> Responder<St> for (T, StatusCode)
+impl<St, T> Responder<St> for (T, StatusCode)
 where
+    St: State,
     T: Responder<St>,
-    St: AppState,
 {
     async fn respond_to(self, st: &St, req: &HttpRequest) -> Response {
         let mut res = self.0.respond_to(st, req).await;
@@ -117,7 +117,7 @@ where
     }
 }
 
-impl<St: AppState> Responder<St> for &'static str {
+impl<St: State> Responder<St> for &'static str {
     async fn respond_to(self, _: &St, _: &HttpRequest) -> Response {
         Response::builder(StatusCode::OK)
             .content_type("text/plain; charset=utf-8")
@@ -125,7 +125,7 @@ impl<St: AppState> Responder<St> for &'static str {
     }
 }
 
-impl<St: AppState> Responder<St> for &'static [u8] {
+impl<St: State> Responder<St> for &'static [u8] {
     async fn respond_to(self, _: &St, _: &HttpRequest) -> Response {
         Response::builder(StatusCode::OK)
             .content_type("application/octet-stream")
@@ -133,7 +133,7 @@ impl<St: AppState> Responder<St> for &'static [u8] {
     }
 }
 
-impl<St: AppState> Responder<St> for String {
+impl<St: State> Responder<St> for String {
     async fn respond_to(self, _: &St, _: &HttpRequest) -> Response {
         Response::builder(StatusCode::OK)
             .content_type("text/plain; charset=utf-8")
@@ -141,7 +141,7 @@ impl<St: AppState> Responder<St> for String {
     }
 }
 
-impl<St: AppState> Responder<St> for &String {
+impl<St: State> Responder<St> for &String {
     async fn respond_to(self, _: &St, _: &HttpRequest) -> Response {
         Response::builder(StatusCode::OK)
             .content_type("text/plain; charset=utf-8")
@@ -149,7 +149,7 @@ impl<St: AppState> Responder<St> for &String {
     }
 }
 
-impl<St: AppState> Responder<St> for Bytes {
+impl<St: State> Responder<St> for Bytes {
     async fn respond_to(self, _: &St, _: &HttpRequest) -> Response {
         Response::builder(StatusCode::OK)
             .content_type("application/octet-stream")
@@ -157,7 +157,7 @@ impl<St: AppState> Responder<St> for Bytes {
     }
 }
 
-impl<St: AppState> Responder<St> for BytesMut {
+impl<St: State> Responder<St> for BytesMut {
     async fn respond_to(self, _: &St, _: &HttpRequest) -> Response {
         Response::builder(StatusCode::OK)
             .content_type("application/octet-stream")
@@ -174,7 +174,7 @@ impl Responder<()> for () {
 /// Allows to override status code and headers for a responder.
 #[derive(derive_more::Debug)]
 #[debug("CustomResponder")]
-pub struct CustomResponder<T: Responder<St>, St: AppState> {
+pub struct CustomResponder<T: Responder<St>, St: State> {
     responder: T,
     status: Option<StatusCode>,
     headers: Option<HeaderMap>,
@@ -182,7 +182,7 @@ pub struct CustomResponder<T: Responder<St>, St: AppState> {
     _t: PhantomData<St>,
 }
 
-impl<T: Responder<St>, St: AppState> CustomResponder<T, St> {
+impl<T: Responder<St>, St: State> CustomResponder<T, St> {
     fn new(responder: T) -> Self {
         CustomResponder {
             responder,
@@ -252,7 +252,7 @@ impl<T: Responder<St>, St: AppState> CustomResponder<T, St> {
     }
 }
 
-impl<T: Responder<St>, St: AppState> Responder<St> for CustomResponder<T, St> {
+impl<T: Responder<St>, St: State> Responder<St> for CustomResponder<T, St> {
     async fn respond_to(self, st: &St, req: &HttpRequest) -> Response {
         let mut res = self.responder.respond_to(st, req).await;
 
@@ -285,11 +285,11 @@ impl<T: Responder<St>, St: AppState> Responder<St> for CustomResponder<T, St> {
 /// # fn is_a_variant() -> bool { true }
 /// # fn main() {}
 /// ```
-impl<A, B, St> Responder<St> for Either<A, B>
+impl<St, A, B> Responder<St> for Either<A, B>
 where
+    St: State,
     A: Responder<St>,
     B: Responder<St>,
-    St: AppState,
 {
     async fn respond_to(self, st: &St, req: &HttpRequest) -> Response {
         match self {
@@ -299,10 +299,10 @@ where
     }
 }
 
-impl<T, St> Responder<St> for InternalError<T>
+impl<St, T> Responder<St> for InternalError<T>
 where
+    St: State,
     T: std::fmt::Debug + std::fmt::Display + 'static,
-    St: AppState,
 {
     async fn respond_to(self, st: &St, _: &HttpRequest) -> Response {
         self.error_response(st)
