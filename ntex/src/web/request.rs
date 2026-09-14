@@ -148,6 +148,18 @@ impl<St> WebRequest<St> {
             .and_then(|io| io.query::<types::PeerAddr>().get().map(|addr| addr.0))
     }
 
+    #[inline]
+    /// Get request's payload
+    pub fn take_payload(&mut self) -> Payload {
+        self.payload.take()
+    }
+
+    #[inline]
+    /// Set request payload.
+    pub fn set_payload(&mut self, payload: Payload) {
+        self.payload = payload;
+    }
+
     /// Get `ConnectionInfo` for the current request.
     #[inline]
     pub fn connection_info(&self) -> Ref<'_, ConnectionInfo> {

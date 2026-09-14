@@ -1,14 +1,13 @@
-use std::task::Poll;
-use std::{any, cell::RefCell, io, io::Write, ops::Deref, ops::DerefMut};
+use std::{any, io, io::Write, ops::Deref, ops::DerefMut, task::Poll};
 
 use ntex_bytes::{BufMut, BytePages};
-use ntex_io::{FilterBuf, Io, types};
+use ntex_io::{FilterBuf, types};
 use tls_rustls::{ConnectionCommon, SideData};
 
 use super::{PeerCert, PeerCertChain};
 
 pub(crate) struct Stream<'a, S> {
-    session: &'a mut S,
+    pub(crate) session: &'a mut S,
 }
 
 impl<'a, S> Stream<'a, S> {
@@ -168,31 +167,6 @@ where
             Ok(Poll::Pending)
         } else {
             Ok(Poll::Ready(()))
-        }
-    }
-}
-
-pub(crate) async fn handshake<F, S, SD>(session: &RefCell<S>, io: &Io<F>) -> Result<(), io::Error>
-where
-    S: DerefMut + Deref<Target = ConnectionCommon<SD>>,
-    SD: SideData,
-{
-    loop {
-        let (wants_write, handshaking) = {
-            let s = session.borrow_mut();
-            (s.wants_write(), s.is_handshaking())
-        };
-
-        if wants_write {
-            io.flush(false).await?;
-        }
-
-        if handshaking {
-            io.read_notify()
-                .await?
-                .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "disconnected"))?;
-        } else {
-            return Ok(());
         }
     }
 }

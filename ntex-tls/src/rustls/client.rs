@@ -1,32 +1,32 @@
 //! An implementation of SSL streams for ntex backed by OpenSSL
-use std::{any, cell::RefCell, io, sync::Arc, task::Poll};
+use std::{any, cell::UnsafeCell, io, sync::Arc, task::Poll};
 
 use ntex_io::{Filter, FilterBuf, FilterLayer, Io, Layer};
 use tls_rustls::{ClientConfig, ClientConnection, pki_types::ServerName};
 
-use super::stream::{self, Stream};
+use super::stream::Stream;
 
 #[derive(Debug)]
 /// An implementation of TLS streams
 pub struct TlsClientFilter {
-    session: RefCell<ClientConnection>,
+    session: UnsafeCell<ClientConnection>,
 }
 
 impl FilterLayer for TlsClientFilter {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
-        Stream::new(&mut *self.session.borrow_mut()).query(id)
+        self.stream(|s| s.query(id))
     }
 
     fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
-        Stream::new(&mut *self.session.borrow_mut()).process_read_buf(buf)
+        self.stream(|s| s.process_read_buf(buf))
     }
 
     fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
-        Stream::new(&mut *self.session.borrow_mut()).process_write_buf(buf)
+        self.stream(|s| s.process_write_buf(buf))
     }
 
     fn shutdown(&self, buf: &FilterBuf<'_>) -> io::Result<Poll<()>> {
-        Stream::new(&mut *self.session.borrow_mut()).shutdown(buf)
+        self.stream(|s| s.shutdown(buf))
     }
 }
 
@@ -39,10 +39,33 @@ impl TlsClientFilter {
         let mut session = ClientConnection::new(cfg, domain).map_err(io::Error::other)?;
         session.set_buffer_limit(Some(io.cfg().write_page_size().capacity()));
         let io = io.add_filter(TlsClientFilter {
-            session: RefCell::new(session),
+            session: UnsafeCell::new(session),
         });
 
-        stream::handshake(&io.filter().session, &io).await?;
-        Ok(io)
+        loop {
+            let (wants_write, handshaking) = {
+                let s = unsafe { &*io.filter().session.get() };
+                (s.wants_write(), s.is_handshaking())
+            };
+            if wants_write {
+                io.flush(false).await?;
+            }
+
+            if handshaking {
+                io.read_notify()
+                    .await?
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "disconnected"))?;
+            } else {
+                return Ok(io);
+            }
+        }
+    }
+
+    fn stream<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut Stream<'_, ClientConnection>) -> R,
+    {
+        let mut s = Stream::new(unsafe { &mut *self.session.get() });
+        f(&mut s)
     }
 }

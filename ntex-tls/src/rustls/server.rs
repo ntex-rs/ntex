@@ -1,5 +1,5 @@
 //! An implementation of SSL streams for ntex backed by OpenSSL
-use std::{any, cell::RefCell, io, sync::Arc, task::Poll};
+use std::{any, cell::UnsafeCell, io, sync::Arc, task::Poll};
 
 use ntex_io::{Filter, FilterBuf, FilterLayer, Io, Layer};
 use ntex_util::{time, time::Millis};
@@ -10,35 +10,36 @@ use crate::{Servername, rustls::Stream};
 #[derive(Debug)]
 /// An implementation of SSL streams
 pub struct TlsServerFilter {
-    session: RefCell<ServerConnection>,
+    session: UnsafeCell<ServerConnection>,
 }
 
 impl FilterLayer for TlsServerFilter {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
-        let session = &mut *self.session.borrow_mut();
-        if let Some(item) = Stream::new(session).query(id) {
-            Some(item)
-        } else if id == any::TypeId::of::<Servername>() {
-            if let Some(name) = session.server_name() {
-                Some(Box::new(Servername(name.to_string())))
+        self.stream(|s| {
+            if let Some(item) = s.query(id) {
+                Some(item)
+            } else if id == any::TypeId::of::<Servername>() {
+                if let Some(name) = s.session.server_name() {
+                    Some(Box::new(Servername(name.to_string())) as Box<dyn any::Any>)
+                } else {
+                    None
+                }
             } else {
                 None
             }
-        } else {
-            None
-        }
+        })
     }
 
     fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
-        Stream::new(&mut *self.session.borrow_mut()).process_read_buf(buf)
+        self.stream(|s| s.process_read_buf(buf))
     }
 
     fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
-        Stream::new(&mut *self.session.borrow_mut()).process_write_buf(buf)
+        self.stream(|s| s.process_write_buf(buf))
     }
 
     fn shutdown(&self, buf: &FilterBuf<'_>) -> io::Result<Poll<()>> {
-        Stream::new(&mut *self.session.borrow_mut()).shutdown(buf)
+        self.stream(|s| s.shutdown(buf))
     }
 }
 
@@ -54,16 +55,38 @@ impl TlsServerFilter {
             let mut session = ServerConnection::new(cfg).map_err(io::Error::other)?;
             session.set_buffer_limit(Some(io.cfg().write_page_size().capacity()));
             let io = io.add_filter(TlsServerFilter {
-                session: RefCell::new(session),
+                session: UnsafeCell::new(session),
             });
 
-            super::stream::handshake(&io.filter().session, &io).await?;
-            log::trace!("{}: TLS Handshake successed", io.tag());
+            loop {
+                let (wants_write, handshaking) = {
+                    let s = unsafe { &*io.filter().session.get() };
+                    (s.wants_write(), s.is_handshaking())
+                };
+                if wants_write {
+                    io.flush(false).await?;
+                }
 
-            Ok(io)
+                if handshaking {
+                    io.read_notify().await?.ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::NotConnected, "disconnected")
+                    })?;
+                } else {
+                    log::trace!("{}: TLS Handshake successed", io.tag());
+                    return Ok(io);
+                }
+            }
         })
         .await
         .map_err(|()| io::Error::new(io::ErrorKind::TimedOut, "rustls handshake timeout"))
         .and_then(|item| item)
+    }
+
+    fn stream<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut Stream<'_, ServerConnection>) -> R,
+    {
+        let mut s = Stream::new(unsafe { &mut *self.session.get() });
+        f(&mut s)
     }
 }

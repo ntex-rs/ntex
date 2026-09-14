@@ -1,10 +1,9 @@
 use std::{io, sync::Arc};
 
-use tls_rustls::ServerConfig;
-
 use ntex_io::{Filter, Io, Layer};
 use ntex_service::{Ctx, Service, cfg::Cfg, cfg::Configuration};
 use ntex_util::services::Counter;
+use tls_rustls::ServerConfig;
 
 use crate::{MAX_SSL_ACCEPT_COUNTER, TlsConfig, rustls::TlsServerFilter};
 
