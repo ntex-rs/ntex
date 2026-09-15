@@ -7,7 +7,7 @@ use crate::error::IntoFailure;
 use crate::http::error::{BlockingError, ResponseError};
 use crate::http::header::ContentEncoding;
 use crate::http::{Method, Request, Response};
-use crate::server::NoConfig;
+use crate::server::{NoConfig, ServerAppConfig};
 use crate::service::{IntoServiceFactory, ServiceFactory};
 
 use super::extract::FromRequest;
@@ -326,6 +326,53 @@ where
     Sf::InitError: IntoFailure,
 {
     HttpServer::new(factory)
+}
+
+/// Create new http server with application factory and configuration.
+///
+/// ```rust,no_run
+/// use std::io;
+/// use ntex::{web, SharedCfg};
+///
+/// #[derive(Clone)]
+/// struct AppState;
+///
+/// impl web::State for AppState {
+///     type Error = web::DefaultError;
+/// }
+///
+/// struct AppStateBuilder;
+///
+/// impl ntex::server::ServerAppConfig for AppStateBuilder {
+///     type State = AppState;
+///
+///     async fn create(&self) -> io::Result<Self::State> {
+///         Ok(AppState)
+///     }
+/// }
+///
+/// #[ntex::main]
+/// async fn main() -> io::Result<()> {
+///     web::server_with_config(AppStateBuilder, async |_| {
+///         web::App::new()
+///             .service(web::resource("/").to(async || { web::HttpResponse::Ok() }))
+///         })
+///         .bind("127.0.0.1:59090", SharedCfg::default())?
+///         .run()
+///         .await
+/// }
+/// ```
+pub fn server_with_config<Cfg, F, I, Sf>(cfg: Cfg, factory: F) -> HttpServer<Cfg, F, I, Sf>
+where
+    Cfg: ServerAppConfig,
+    F: AsyncFn(&Cfg::State) -> I + Send + Clone + 'static,
+    I: IntoServiceFactory<Sf, Cfg::State, Request>,
+    Sf: ServiceFactory<Cfg::State, Request> + 'static,
+    Sf::Res: Into<Response>,
+    Sf::Error: ResponseError,
+    Sf::InitError: IntoFailure,
+{
+    HttpServer::with_config(cfg, factory)
 }
 
 struct Enc(ContentEncoding);

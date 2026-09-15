@@ -3,11 +3,10 @@ use std::{fmt, io, sync::Arc};
 use ntex_service::{Ctx, Service, cfg::SharedCfg};
 use ntex_util::{HashMap, future::join_all, services::Counter};
 
-use crate::ServerConfiguration;
+use crate::{ServerAppConfig, ServerConfiguration};
 
 use super::accept::{AcceptNotify, AcceptorCommand};
 use super::factory::{FactoryServiceType, NetService};
-use super::state::ServerAppConfig;
 use super::{MAX_CONNS_COUNTER, Token, socket::Connection};
 
 /// Net streaming server

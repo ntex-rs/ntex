@@ -305,7 +305,7 @@ where
     T: std::fmt::Debug + std::fmt::Display + 'static,
 {
     async fn respond_to(self, st: &St, _: &HttpRequest) -> Response {
-        self.error_response(st)
+        WebResponseError::<St, St::Error>::error_response(&self, st)
     }
 }
 
