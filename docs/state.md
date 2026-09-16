@@ -419,3 +419,110 @@ worker-level resources that can be reused across many connections. At the same
 time, each connection carries its own state.
 
 [Complete state accumulation example](https://github.com/ntex-rs/examples/tree/main/state5)
+
+## Implementation Details
+
+ntex supports several network protocols, and each one handles state a little
+differently. The important distinction is between state that belongs to a
+connection and state that belongs to a single request.
+
+### `ntex::http`
+
+`HttpService` expects a handler with roughly the following shape:
+
+```rust
+async fn handler(state: &St, req: http::Request) -> Result<http::Response, Err> {
+    // ...
+}
+```
+
+Here, `state` is the state of the HTTP connection. It is extracted from the
+value passed to `HttpService` through the `RequestState` trait.
+
+For example, an earlier service can return a `State<ConnectionWithTls, Io>`.
+When `HttpService` receives that value, it separates the connection state
+from the I/O stream. The I/O stream is used to run the HTTP protocol,
+while `ConnectionWithTls` becomes the state provided to the HTTP request handler.
+
+This is the mechanism used in the previous section to make connection-specific
+information, such as the peer address and TLS server name, available while
+handling HTTP requests.
+
+### `ntex::web`
+
+A `web::App` can act as the handler for `HttpService`. When it does, the state
+extracted by `HttpService` becomes the application's state.
+
+A web service looks roughly like this:
+
+```rust
+async fn handler(state: &St, req: web::WebRequest) -> Result<web::WebResponse, Err> {
+    // ...
+}
+```
+
+The `state` argument contains the long-lived application or connection state.
+The request can also carry its own state through the generic
+parameter of `WebRequest`:
+
+```rust
+web::WebRequest<RequestState>
+```
+
+This gives a web application two separate kinds of state:
+
+- `St` is provided by the service pipeline and remains available across
+  requests.
+- `RequestState` belongs to one request and moves through the request-processing
+  chain.
+
+A filter or middleware can inspect a `WebRequest`, perform some work, and
+return a new `WebRequest` with a different state type. This makes it possible
+to build up request-specific information as the request moves through
+the application.
+
+For example, a request-processing chain might look like this:
+
+```text
+validate request
+    → load and authenticate the user
+    → apply throttling
+    → call the handler
+```
+
+The request starts without any additional state:
+
+```rust
+web::WebRequest<()>
+```
+
+After the authentication service loads and verifies the user, it can return:
+
+```rust
+web::WebRequest<AuthenticatedUser>
+```
+
+The next service can then require `WebRequest<AuthenticatedUser>`. This means it
+cannot be called until authentication has completed and the request contains an
+authenticated user.
+
+Another service could validate the request and return a different state type:
+
+```rust
+web::WebRequest<ValidatedRequest>
+```
+
+In this way, the request type shows how far the request has moved through the
+processing chain. Each service declares the state it expects and the state it
+produces, and Rust checks that the services are connected in the right order.
+
+There are therefore two kinds of state in a web application:
+
+- Pipeline state contains application or connection information and
+  is reused across requests.
+- `WebRequest<ReqState>` contains information collected for one request and
+  disappears when that request is complete.
+
+Keeping them separate lets the application reuse connection-level resources
+while building up request-specific information as each request moves through
+the service chain.
