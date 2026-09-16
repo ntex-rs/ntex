@@ -262,3 +262,43 @@ same `AppState` instance alongside the connection.
 Each worker has its own state. Connections handled by the same worker share one
 state instance, but connections handled by different workers do not
 automatically share state.
+
+## State Accumulation
+
+The state discussed so far is long-lived. It stays alive for as long as the
+worker, pipeline, or another object that owns it.
+
+Sometimes, however, we need state that grows as a request or connection moves
+through a service chain. Each service may add information to that state, and
+the final service can extract both the accumulated state and the resulting
+message before passing them to the next pipeline.
+
+Consider a pipeline that accepts a new connection. The first service might read
+the TLS `ClientHello` message and extract the Server Name Indication (SNI). The
+next service could load configuration associated with that server name, validate
+the connection, calculate resource usage, or apply throttling. Another service
+could then perform the TLS handshake before passing the established connection
+to an HTTP server.
+
+The complete flow might look like this:
+
+```text
+accept connection
+    → read SNI
+    → load client information
+    → validate and throttle
+    → negotiate TLS
+    → handle HTTP
+```
+
+For this kind of request-scoped state, ntex-service provides the `RequestState`
+trait and the `State` type. Together, they allow services to pass a message and
+its accumulated state through a service chain.
+
+Unlike pipeline state, which remains available for the lifetime of the
+pipeline, accumulated state belongs to the request or connection being
+processed. Each item moving through the pipeline has its own state, and services
+can add information to it as processing continues.
+
+The current ntex protocol servers support `RequestState`, including
+`ntex::http`, ntex-h2, ntex-mqtt, and ntex-amqp.
