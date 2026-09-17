@@ -16,9 +16,9 @@ async fn endpoint(req: HttpRequest) -> Result<HttpResponse, Error> {
 }
 ```
 
-This function is really a sequence of fallible, asynchronous transformations.
-Each step takes the output of the previous step and either produces the next
-value or returns an error.
+This function is a sequence of fallible, asynchronous transformations. Each
+step takes the output of the previous step and either produces the next value or
+returns an error.
 
 That structure maps naturally to a service pipeline. We can compose the same
 steps with an `and_then` combinator, similar to `Result::and_then()`:
@@ -32,8 +32,7 @@ let pipeline = service(authenticate)
 ```
 
 Each service runs only if the previous one succeeds. If any stage returns an
-error, the remaining stages are skipped and the error is returned by the
-pipeline.
+error, the remaining stages are skipped and the pipeline returns that error.
 
 The completed pipeline is itself a service:
 
@@ -42,62 +41,65 @@ Service<HttpRequest, Res = HttpResponse>
 ```
 
 From the outside, it behaves just like the original `endpoint` function. It
-accepts an `HttpRequest` and produces an `HttpResponse`, while the intermediate
-steps remain an implementation detail.
+accepts an `HttpRequest` and produces an `HttpResponse`. Everything that happens
+between those two types remains an implementation detail.
 
-The advantage of this approach is that each stage remains independent. A
-service can be replaced, removed, or inserted without rewriting the rest of the
+The benefit of this approach is that each stage remains independent. We can
+replace, remove, or insert a service without rewriting the rest of the
 pipeline.
 
 For example, adding request throttling is a local change:
 
 ```rust
 let pipeline = service(authenticate)
-    .and_then(throttle)  // <- new stage in pipeline, throttling
+    .and_then(throttle) // <- throttling service
     .and_then(load_operation)
     .and_then(authorize)
     .and_then(execute)
     .and_then(into_response);
 ```
 
-The only requirement is that the types line up: the output of one service must
-match the input expected by the next. But external inteface hast changed,
-it is still transformation from `HttpRequest -> HttpResponse`.
+The external interface has not changed. The pipeline still represents the same
+overall transformation:
 
-A throttling service can be designed for a specific request type:
+```text
+HttpRequest -> HttpResponse
+```
+
+The only requirement is that the types line up: the output of one service must
+match the input expected by the next.
+
+A throttling service can be designed specifically for HTTP requests:
 
 ```rust
 Service<HttpRequest, Res = HttpRequest>
 ```
 
-Such a service inspects an HTTP request and returns it unchanged when the
-request is allowed to continue.
+Such a service inspects a request and returns it unchanged when the request is
+allowed to continue.
 
-It can also be generic over its input:
+The service can also be generic over its input:
 
 ```rust
 Service<R, Res = R>
 ```
 
-A generic throttling service acts as a reusable concurrency or rate-limiting
-boundary. It can wrap any stage of a pipeline without depending on HTTP or other
-domain-specific types.
+A generic throttling service can act as a reusable concurrency or rate-limiting
+boundary anywhere in a pipeline. It does not need to know anything about HTTP
+or the application's domain types.
 
 This is what makes service pipelines useful: they let us build larger behavior
 from small, focused transformations while preserving a simple interface for the
 result.
 
-==============
+## Implementing `and_then`
 
-Given the `Service` trait, we can describe `and_then` as a generic operation.
-It accepts two services and connects them so that the output of the first
-becomes the input of the second:
+Given the `Service` trait, we can describe `and_then` as a generic operation. It
+accepts two services and connects them so that the output of the first becomes
+the input of the second:
 
 ```rust
-fn and_then<Req, A, B>(
-    first: A,
-    second: B,
-) -> impl Service<Req, Res = B::Res, Error = A::Error>
+fn and_then<Req, A, B>(first: A, second: B) -> impl Service<Req, Res = B::Res, Error = A::Error>
 where
     A: Service<Req>,
     B: Service<A::Res, Error = A::Error>,
@@ -106,7 +108,7 @@ where
 }
 ```
 
-The type constraints express the rules of composition:
+The type constraints describe the rules of composition:
 
 - `first` accepts the original request.
 - `second` accepts the response produced by `first`.
@@ -129,10 +131,7 @@ where
     type Res = B::Res;
     type Error = A::Error;
 
-    async fn call(
-        &self,
-        req: Req,
-    ) -> Result<Self::Res, Self::Error> {
+    async fn call(&self, req: Req) -> Result<Self::Res, Self::Error> {
         let intermediate = self.first.call(req).await?;
         self.second.call(intermediate).await
     }
@@ -165,34 +164,23 @@ Each call wraps the existing chain in another service combinator. The resulting
 `ServiceChain` is itself a service, so it can be extended further, wrapped in
 middleware, or placed in a `Pipeline`.
 
-A `Pipeline` adds an important runtime guarantee: readiness. Before dispatching
-a request, it makes sure that every service involved in processing that request
-is ready to accept work. If one of them is at capacity, processing waits until
-the service becomes ready again.
+The entire chain remains strongly typed. If one service produces a value that
+the next service cannot accept, the code fails to compile. Invalid pipelines
+are therefore caught while the application is being built rather than after it
+starts running.
 
-This distinction is useful:
-
-- `ServiceChain` describes how services are composed.
-- `Pipeline` owns the runnable service graph and coordinates its readiness,
-  calls, state, and shutdown.
-
-The composition remains fully typed. If one service produces a value that the
-next service cannot accept, the chain fails to compile. This catches invalid
-pipelines while they are being assembled rather than after the application is
-running.
-
-==========================
-
-## Readiness
+## Readiness and Backpressure
 
 So far, `Service::call()` describes what a service does, but it says nothing
 about when the service is able to accept more work.
 
 Real services are not always ready. A service may have reached its limit for
 in-flight requests, filled an internal queue, or be waiting for an external
-resource such as a connection from a pool. If callers can invoke `call()` at any
-time, the service must either buffer an unlimited amount of work or implement
-backpressure through some separate, ad hoc mechanism.
+resource such as a database connection.
+
+If callers can invoke `call()` at any time, the service must either buffer an
+unlimited amount of work or implement backpressure through a separate,
+non-composable mechanism.
 
 We can make backpressure part of the service contract by adding a readiness
 check:
@@ -204,10 +192,7 @@ trait Service<Req> {
 
     async fn ready(&self) -> Result<(), Self::Error>;
 
-    async fn call(
-        &self,
-        req: Req,
-    ) -> Result<Self::Res, Self::Error>;
+    async fn call(&self, req: Req) -> Result<Self::Res, Self::Error>;
 }
 ```
 
@@ -216,16 +201,16 @@ more work without exceeding its internal limits. If the service cannot become
 ready—for example, because an underlying resource has failed—it returns an
 error.
 
-A caller therefore follows this pattern:
+A caller would follow this pattern:
 
 ```rust
 service.ready().await?;
 let response = service.call(request).await?;
 ```
 
-For a composed service such as `AndThen<A, B>`, readiness is no longer a local
-property. A request may pass through both services, so the combined service is
-ready only when both components are ready.
+For a composed service such as `AndThen<A, B>`, readiness is no longer local to
+one component. A request may pass through both services, so the combined service
+is ready only when both components are ready.
 
 A simplified implementation looks like this:
 
@@ -244,10 +229,7 @@ where
         Ok(())
     }
 
-    async fn call(
-        &self,
-        req: Req,
-    ) -> Result<Self::Res, Self::Error> {
+    async fn call(&self, req: Req) -> Result<Self::Res, Self::Error> {
         let intermediate = self.first.call(req).await?;
         self.second.call(intermediate).await
     }
@@ -257,47 +239,39 @@ where
 This captures the basic rule: the composed service should not accept a request
 unless every stage needed to process it is ready.
 
-A production implementation can check both services concurrently rather than
-waiting for them one at a time. This matters when both components are under
-load, because progress in either service may be needed before the full chain
-becomes ready.
+A production implementation can check the services concurrently rather than
+waiting for them one at a time. More importantly, it must coordinate readiness
+across all concurrent calls to the same service graph.
 
-Readiness also needs to be coordinated across concurrent callers. A readiness
-check is not merely a convenience method attached to an individual service; it
-is part of the behavior of the whole service graph. This is one of the main
-reasons ntex services are called through a `Pipeline`.
-
-The pipeline tracks readiness for the composed service and waits until the
-required services can accept work before dispatching a request. Backpressure
-therefore flows through the same abstractions as request processing instead of
-being handled separately by each caller.
-
-=============================================
+That coordination is the responsibility of the `Pipeline`.
 
 ## Pipeline Readiness
 
-Unlike `call()`, readiness is not entirely local to one service. In a composed
-service, the pipeline must consider every service that may participate in
-processing the request.
+A `Pipeline` turns a service chain into a runnable service graph. It owns the
+graph's state and coordinates readiness, calls, and shutdown.
 
-This matters because execution is asynchronous and several requests may be in
-flight at the same time. Whether the pipeline can accept more work may depend on
-the combined load of its inner services: active calls, queue capacity,
-connection limits, or external resources.
+This matters because several requests may be in flight at the same time.
+Whether the pipeline can accept more work may depend on active calls, queue
+capacity, connection limits, or external resources used by any of its inner
+services.
 
 Readiness is therefore a cross-cutting concern. It cannot be managed reliably
-by looking at each call in isolation.
+by looking at each call or service in isolation.
 
-The `Pipeline` coordinates readiness across the complete service graph. Before
-dispatching a request, it waits until the services required to process that
-request are ready. If an inner service reaches capacity, execution pauses until
-that service can accept more work.
+Before dispatching a request, the pipeline waits until the required services
+are ready. If one of them reaches capacity, processing pauses until that service
+can accept more work.
+
+This gives us a useful distinction:
+
+- `ServiceChain` describes how services are connected.
+- `Pipeline` owns the runnable service graph and coordinates its lifecycle.
 
 ### Shared Readiness
 
-Concurrent calls share the readiness state of the same underlying pipeline.
-Each active call receives its own pipeline binding, which identifies it while
-readiness is being coordinated.
+Concurrent calls use the same underlying pipeline and therefore share its
+readiness state. Each active call receives its own pipeline binding, which
+identifies the call while readiness is being coordinated.
 
 A normal call creates this binding internally:
 
@@ -305,27 +279,27 @@ A normal call creates this binding internally:
 let response = pipeline.call(request).await?;
 ```
 
-When a call needs to be stored, moved into another task, or allowed to outlive
-the borrow of `pipeline`, `Pipeline::call_static()` returns an owned future that
-keeps its binding alive:
+Sometimes a call must be stored, moved into another task, or allowed to outlive
+the borrow of `pipeline`. In that case, `Pipeline::call_static()` returns an
+owned future that keeps its binding alive:
 
 ```rust
 let call = pipeline.call_static(request);
 let response = call.await?;
 ```
 
-Both forms use the same underlying service graph and shared readiness state.
-The difference is in how the lifetime of the call is managed.
+Both methods use the same service graph and shared readiness state. The
+difference is how the lifetime of the call is managed.
 
-This coordination prevents concurrent callers from independently driving the
-same readiness check. It also avoids hiding excess work in unbounded internal
-queues: when the pipeline is not ready, callers wait.
+This coordination prevents multiple callers from independently driving the same
+readiness check. It also avoids hiding excess work in unbounded internal queues:
+when the pipeline is not ready, callers wait.
 
 ### Readiness Between Services
 
-Readiness must also be respected as a request moves through a service chain. A
-service should not call the next service directly because doing so would bypass
-the next service's readiness check.
+Readiness must also be respected while a request moves through the service
+chain. A service should not invoke the next service directly, because doing so
+would bypass that service's readiness check.
 
 Instead, services call one another through an execution context:
 
@@ -334,26 +308,26 @@ let result = ctx.call(&next_service, request).await?;
 ```
 
 The context waits for `next_service` to become ready before invoking it. This
-allows backpressure to propagate through the chain, even when readiness changes
+allows backpressure to propagate through the chain, even if readiness changes
 while a request is being processed.
 
-In ntex-service, this context is represented by `Ctx`. It carries the
-pipeline-level information needed to coordinate readiness across otherwise
-independent service instances.
+In ntex-service, this execution context is represented by `Ctx`. It carries the
+pipeline-level information needed to coordinate otherwise independent service
+instances.
 
 A useful mental model is:
 
 - [`Service`](https://docs.rs/ntex-service/latest/ntex_service/trait.Service.html)
   defines what happens at each step.
-- `ServiceChain` describes how those steps are connected.
+- `ServiceChain` describes how the steps are connected.
 - [`Pipeline`](https://docs.rs/ntex-service/latest/ntex_service/struct.Pipeline.html)
-  owns the runnable service graph and coordinates its shared readiness.
+  owns the runnable graph and coordinates shared readiness.
 - [`Ctx`](https://docs.rs/ntex-service/latest/ntex_service/struct.Ctx.html)
   controls how execution moves safely between services.
 
-### The Complete `Service` Trait
+## The Complete `Service` Trait
 
-With state, readiness, and shutdown included, a simplified version of the ntex
+Once we include state, readiness, and shutdown, a simplified version of the ntex
 `Service` trait looks like this:
 
 ```rust
@@ -361,43 +335,36 @@ trait Service<St, Req> {
     type Res;
     type Error;
 
-    async fn ready(
-        &self,
-        ctx: Ctx<'_, Self, St>,
-    ) -> Result<(), Self::Error>;
+    async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error>;
 
-    async fn call(
-        &self,
-        req: Req,
-        ctx: Ctx<'_, Self, St>,
-    ) -> Result<Self::Res, Self::Error>;
+    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error>;
 
-    async fn shutdown(
-        &self,
-        ctx: Ctx<'_, Self, St>,
-    );
+    async fn shutdown(&self, ctx: Ctx<'_, Self, St>);
 }
 ```
 
 The context serves several related purposes:
 
 - It provides access to the pipeline state.
-- It links services to the pipeline that owns them.
+- It connects services to the pipeline that owns them.
 - It coordinates readiness between services.
 - It allows one service to call another without bypassing backpressure.
-- It participates in orderly service shutdown.
+- It participates in orderly shutdown.
 
 The important point is that readiness is not merely a method that callers are
 expected to use correctly. It is built into the way requests move through a
 pipeline. This makes backpressure explicit, composable, and enforceable without
 relying on hidden queues or coordination outside the service model.
 
-### `shutdown()`
+The `St` parameter represents the service state made available through the
+context. We will explore service and pipeline state in the next section.
+
+## Shutdown
 
 The `shutdown()` method represents the final stage of the service lifecycle:
 
 ```rust
-async fn shutdown(&self);
+async fn shutdown(&self, ctx: Ctx<'_, Self, St>);
 ```
 
 It is called by the service's owner—typically a `Pipeline`—when the service is
@@ -413,3 +380,6 @@ A service can use `shutdown()` to:
 Simple services may not need to do anything during shutdown. Services that own
 resources or run background tasks, however, should use this method to clean up
 properly rather than stopping abruptly.
+
+Composite services should also propagate shutdown to their inner services so
+that the entire pipeline stops cleanly.
