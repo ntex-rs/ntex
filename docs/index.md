@@ -4,3 +4,5 @@
 - [Service pipelines](./2-pipeline.md)
 - [Service and Pipeline State](./3-state.md)
 - [Runtime](./4-runtime.md)
+- [Server](./5-server.md)
+- [Application state management](./6-server-app.md)

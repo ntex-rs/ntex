@@ -1,9 +1,4 @@
-# State Management in ntex applications
-
-Every ntex application has several types of state. Let’s discuss
-each one individually.
-
-## Process and Worker State
+## Application state management
 
 Each ntex worker runs its own single-threaded runtime. To make use of multiple
 CPU cores, the server starts several workers and distributes incoming
