@@ -207,3 +207,70 @@ for readiness, queries, and shutdown to make this pattern less error-prone.
 
 [`Filter`]: https://docs.rs/ntex/latest/ntex/io/trait.Filter.html
 [`Io::map_filter`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.map_filter
+
+## Read/write streams
+
+Incoming and outgoing bytes use separate buffer paths.
+
+### Reading
+
+The transport adapter places bytes read from the socket into a [`BytesMut`].
+The bytes pass through the filter chain and arrive in the application-facing
+read buffer, where a codec or protocol service can inspect and consume them.
+
+`BytesMut` is a contiguous, growable buffer. A decoder can split immutable
+[`Bytes`] values from it in constant time without copying the payload. This is
+useful when a decoded message must retain part of the input after the decoder
+continues processing later data.
+
+ntex reuses eligible read buffers through a per-thread cache and retains spare
+capacity where possible. Before another socket read, the adapter obtains a
+buffer from `IoContext`. ntex ensures that a reused buffer has at least the
+configured low-water mark available. If the retained capacity is
+insufficient, the buffer grows and may allocate additional storage.
+
+Read backpressure is based on the size of the application-facing read buffer.
+When it reaches the configured high-water mark, ntex pauses the transport read
+task. Consuming input through [`Io::recv`], [`Io::read`], [`IoRef::decode`], or
+[`IoRef::with_read_buf`] updates the buffer state and wakes the read task once
+the buffered input falls below that mark.
+
+### Writing
+
+Application output is queued in [`BytePages`], a growable collection of
+byte pages. Internally allocated pages use the size configured by [`IoConfig`].
+Owned buffers passed to [`IoRef::encode_bytes`] can also become pages directly,
+avoiding a copy when their storage can be retained. Write filters consume the
+pages in order, transform their contents, and place the result into the next
+buffer toward the transport.
+
+[`IoRef::encode`], [`IoRef::encode_slice`], and [`IoRef::encode_bytes`] queue
+output but do not wait for every byte to reach the socket. Queueing makes the
+data available to the transport write task and schedules that task when it
+needs to be resumed. On transports that support direct writes, the configured
+write threshold can trigger an earlier write while the application is still
+producing output, reducing latency for large responses.
+
+Use [`Io::flush`] to wait for write progress. `flush(false)` returns
+immediately while the buffered output is below the high-water mark. If the
+high-water mark has been reached, it waits until the buffered output falls to
+half that mark. `flush(true)` waits until all queued data has been written.
+[`Io::send`] combines codec encoding with a full flush.
+
+This separation allows codecs and application services to work with bytes
+without depending on socket readiness, while the I/O subsystem consistently
+enforces buffer limits and backpressure.
+
+[`BytePages`]: https://docs.rs/ntex/latest/ntex/util/struct.BytePages.html
+[`Bytes`]: https://docs.rs/ntex/latest/ntex/util/struct.Bytes.html
+[`BytesMut`]: https://docs.rs/ntex/latest/ntex/util/struct.BytesMut.html
+[`Io::flush`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.flush
+[`Io::read`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.read
+[`Io::recv`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.recv
+[`Io::send`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.send
+[`IoConfig`]: https://docs.rs/ntex/latest/ntex/io/struct.IoConfig.html
+[`IoRef::decode`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.decode
+[`IoRef::encode`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.encode
+[`IoRef::encode_bytes`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.encode_bytes
+[`IoRef::encode_slice`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.encode_slice
+[`IoRef::with_read_buf`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.with_read_buf
