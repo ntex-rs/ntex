@@ -1,4 +1,4 @@
-<div align="center">
+<div>
   <h1>ntex</h1>
   <p><strong>Framework for composable network services.</strong></p>
 
@@ -11,7 +11,7 @@
 [![Discord](https://img.shields.io/discord/919288597826387979?label=chat&logo=discord)](https://discord.gg/4GtaeP5Uqu)
 </div>
 
-ntex provides a strongly typed service and middleware model for building
+ntex provides a strongly typed component for building
 asynchronous network applications. It includes HTTP/1, HTTP/2, WebSocket,
 Mqtt3/5, Amqp1.0, TLS, and runtime-independent I/O support.
 
