@@ -65,7 +65,7 @@ impl Runtime {
         }
     }
 
-    /// Spawns a new asynchronous task, returning a [`Task`] for it.
+    /// Spawns a new asynchronous task, returning a [`JoinHandle`] for it.
     ///
     /// Spawning a task enables the task to execute concurrently to other tasks.
     /// There is no guarantee that a spawned task will execute to completion.
@@ -73,7 +73,7 @@ impl Runtime {
         unsafe { self.spawn_unchecked(future) }
     }
 
-    /// Spawns a new asynchronous task, returning a [`Task`] for it.
+    /// Spawns a new asynchronous task, returning a [`JoinHandle`] for it.
     ///
     /// # Safety
     ///
@@ -154,7 +154,7 @@ impl Handle {
         self.queue.handle.notify()
     }
 
-    /// Spawns a new asynchronous task, returning a [`Task`] for it.
+    /// Spawns a new asynchronous task, returning a [`JoinHandle`] for it.
     ///
     /// Spawning a task enables the task to execute concurrently to other tasks.
     /// There is no guarantee that a spawned task will execute to completion.

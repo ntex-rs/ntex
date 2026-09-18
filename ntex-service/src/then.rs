@@ -4,7 +4,7 @@ use super::{Ctx, Service, ServiceFactory, util};
 /// Service for the `then` combinator, chaining a computation onto the end of
 /// another service.
 ///
-/// This is created by the `Pipeline::then` method.
+/// This is created by the `ServiceChain::then()` method.
 pub struct Then<A, B> {
     svc1: A,
     svc2: B,

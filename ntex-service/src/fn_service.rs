@@ -11,9 +11,9 @@ where
     FnService { f, _t: PhantomData }
 }
 
-/// `Service` implementation for an `AsyncFn(Req, &St) -> Result<Res, Err>` function.
+/// `Service` implementation for an `AsyncFn(&St, Req) -> Result<Res, Err>` function.
 ///
-/// This service accesses the pipeline state via the second `&St` parameter.
+/// This service accesses the pipeline state via the first `&St` parameter.
 #[inline]
 pub fn fn_service_st<F, St, Req, Res, Err>(f: F) -> FnServiceSt<F, St, Req, Res, Err>
 where
@@ -90,9 +90,9 @@ where
     }
 }
 
-/// `Service` implementation for an `AsyncFn(Req, &St) -> Result<Res, Err>` function.
+/// `Service` implementation for an `AsyncFn(&St, Req) -> Result<Res, Err>` function.
 ///
-/// This service accesses the pipeline state via the second `&St` parameter.
+/// This service accesses the pipeline state via the first `&St` parameter.
 pub struct FnServiceSt<F, St, Req, Res, Err> {
     f: F,
     _t: PhantomData<(St, Req, Res, Err)>,

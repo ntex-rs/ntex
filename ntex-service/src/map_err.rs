@@ -5,7 +5,7 @@ use super::{Ctx, Service, ServiceFactory};
 /// Service for the `map_err` combinator, changing the type of a service's
 /// error.
 ///
-/// This is created by the `ServiceExt::map_err` method.
+/// This is created by the `Service::map_err()` and `ServiceChain::map_err()` methods.
 pub struct MapErr<F, S, E> {
     f: F,
     svc: S,

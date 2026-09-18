@@ -4,7 +4,7 @@ use super::{Ctx, Service, ServiceFactory};
 
 /// Service for the `map` combinator, changing the type of a service's response.
 ///
-/// This is created by the `ServiceExt::map` method.
+/// This is created by the `Service::map()` and `ServiceChain::map()` methods.
 pub struct Map<F, S, Res> {
     f: F,
     svc: S,

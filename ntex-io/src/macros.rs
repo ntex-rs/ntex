@@ -1,4 +1,8 @@
-/// An implementation of [`poll_read/write_ready`] that forwards readiness checks to a field.
+/// Implements [`Filter::poll_read_ready`] and [`Filter::poll_write_ready`] by
+/// forwarding readiness checks to a field.
+///
+/// [`Filter::poll_read_ready`]: crate::Filter::poll_read_ready
+/// [`Filter::poll_write_ready`]: crate::Filter::poll_write_ready
 #[macro_export]
 macro_rules! forward_ready {
     ($field:ident) => {

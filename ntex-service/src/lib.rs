@@ -205,10 +205,9 @@ pub trait Service<St, Req> {
 /// each connection using the `ServiceFactory` trait, and uses that service to
 /// handle inbound requests.
 ///
-/// `Config` represents the configuration type for the service factory.
+/// `St` represents the state type for the service factory and service.
 ///
-/// Simple factories can often use [`fn_factory`] or [`fn_factory_with_config`]
-/// to reduce boilerplate.
+/// Simple factories can often use [`fn_factory`] to reduce boilerplate.
 pub trait ServiceFactory<St, Req> {
     /// Responses given by the created services.
     type Res;

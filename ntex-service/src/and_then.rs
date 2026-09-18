@@ -4,7 +4,7 @@ use super::{Ctx, Service, ServiceFactory, util};
 /// Service for the `and_then` combinator, chaining a computation onto the end
 /// of another service which completes successfully.
 ///
-/// This is created by the `ServiceExt::and_then` method.
+/// This is created by the `Service::and_then()` and `ServiceChain::and_then()` methods.
 pub struct AndThen<A, B> {
     svc1: A,
     svc2: B,
