@@ -25,9 +25,9 @@ An active connection has three cooperating execution responsibilities:
 3. A transport write task takes queued bytes from the I/O subsystem and writes
    them to the socket.
 
-An adapter may run these responsibilities as separate tasks or combine them.
-For example, the Tokio adapter uses separate read and write tasks, while the
-Compio adapter drives both directions from one transport task.
+The runtime adapter decides how to schedule these responsibilities. The
+built-in adapters typically use cooperating read and write tasks, but this is
+an implementation detail rather than part of the `IoStream` contract.
 
 The read task cooperates with ntex backpressure. It reads only while
 [`IoContext::poll_read_ready`] permits more input. After reading, it returns the
@@ -148,4 +148,62 @@ so filters may also expose their own typed metadata.
 [`PeerAddr`]: https://docs.rs/ntex/latest/ntex/io/types/struct.PeerAddr.html
 [`QueryItem`]: https://docs.rs/ntex/latest/ntex/io/types/struct.QueryItem.html
 
-## Filter
+## Filter subsystem
+
+Applications often need to transform a byte stream before a protocol service
+processes it. TLS must decrypt incoming records and encrypt outgoing data. A
+protocol may also be tunneled through another framing layer, such as MQTT over
+WebSocket.
+
+ntex implements these transformations with [`FilterLayer`]. A filter operates
+on in-memory byte buffers: [`FilterLayer::process_read_buf`] transforms data
+received from the next inner layer, while [`FilterLayer::process_write_buf`]
+transforms data queued by the application before passing it toward the
+transport. Filters do not perform socket I/O themselves, so the same filter
+can be used with any supported runtime backend.
+
+Filters are composable. [`Io::add_filter`] adds a layer and allocates the
+intermediate read and write buffers that separate it from adjacent layers. For
+example, an MQTT service can receive its byte stream through either of these
+stacks:
+
+```text
+socket <-> TLS <-> MQTT
+
+socket <-> TLS <-> WebSocket <-> MQTT
+```
+
+On reads, bytes move from the socket through the inner filters toward the
+application. On writes, they move in the opposite direction. In the second
+stack, the WebSocket filter removes and creates WebSocket framing, while the
+TLS filter decrypts and encrypts the resulting byte stream. The MQTT service
+still reads and writes MQTT bytes and does not need to know which transport
+filters are installed below it.
+
+Filters may maintain protocol state, expose typed metadata through `query()`,
+request an immediate write after processing input, and participate in graceful
+shutdown. For example, a TLS filter can expose the negotiated protocol or peer
+certificate, and a WebSocket filter can generate a close frame during
+shutdown.
+
+[`FilterLayer`]: https://docs.rs/ntex/latest/ntex/io/trait.FilterLayer.html
+[`FilterLayer::process_read_buf`]: https://docs.rs/ntex/latest/ntex/io/trait.FilterLayer.html#tymethod.process_read_buf
+[`FilterLayer::process_write_buf`]: https://docs.rs/ntex/latest/ntex/io/trait.FilterLayer.html#tymethod.process_write_buf
+[`Io::add_filter`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.add_filter
+
+Most byte transformations only need [`FilterLayer`]. Lower-level concerns that
+must observe or control the entire filter chain can instead wrap the current
+chain with [`Filter`] by using [`Io::map_filter`].
+
+In addition to processing buffers, queries, and shutdown, `Filter` participates
+in read and write readiness decisions. A wrapper can therefore delay readiness
+to implement custom throttling and wake the I/O tasks when work may resume. It
+can also observe buffer processing for metrics or accounting without changing
+the byte stream.
+
+A custom `Filter` normally stores the filter it wraps and delegates every
+operation it does not intentionally override. ntex provides forwarding macros
+for readiness, queries, and shutdown to make this pattern less error-prone.
+
+[`Filter`]: https://docs.rs/ntex/latest/ntex/io/trait.Filter.html
+[`Io::map_filter`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.map_filter
