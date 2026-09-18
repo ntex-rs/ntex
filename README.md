@@ -29,14 +29,14 @@ ntex supports multiple async runtimes, runtime must be selected as a feature. Av
 
 ```toml
 [dependencies]
-ntex = { version = "3", features = ["neon"] }
+ntex = { version = "4" }
 ```
 
 ## Documentation & community resources
 
+* [Documentation](docs/index.md)
 * [Web framework documentation](https://ntex.rs)
 * [Api Documentation](https://docs.rs/ntex)
-* [Documentation](docs/index.md)
 * Minimum supported Rust version: 1.97 or later
 
 ## License
