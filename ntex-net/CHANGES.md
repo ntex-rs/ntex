@@ -1,5 +1,9 @@
 # Changes
 
+## [4.0.1] - 2026-09-18
+
+* Api docs improvements
+
 ## [4.0.0] - 2026-09-14
 
 * Migrate to ntex-service 5

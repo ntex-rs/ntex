@@ -1,5 +1,9 @@
 # Changes
 
+## [5.0.1] - 2026-09-18
+
+* Api docs improvements
+
 ## [5.0.0] - 2026-09-13
 
 * Introduce service state management.
