@@ -13,7 +13,7 @@ use crate::pipeline::Pipeline;
 use crate::then::{Then, ThenFactory};
 use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
-/// Constructs new chain with one service.
+/// Starts a [`ServiceChain`] with one service.
 pub fn service<S, St, Req>(service: impl IntoService<S, St, Req>) -> ServiceChain<S, St, Req>
 where
     S: Service<St, Req>,
@@ -24,7 +24,7 @@ where
     }
 }
 
-/// Constructs new chain factory with one service factory.
+/// Starts a [`ServiceChainFactory`] with one service factory.
 pub fn factory<Sf, St, Req>(
     factory: impl IntoServiceFactory<Sf, St, Req>,
 ) -> ServiceChainFactory<Sf, St, Req>
@@ -37,28 +37,23 @@ where
     }
 }
 
-/// Chain builder - chain allows to compose multiple service into one service.
+/// A builder for composing services and combinators into one service.
 pub struct ServiceChain<S, St, Req> {
     service: S,
     st: PhantomData<(St, Req)>,
 }
 
-/// Service factory builder
+/// A builder for composing service factories and combinators.
 pub struct ServiceChainFactory<Sf, St, Req> {
     pub(crate) factory: Sf,
     pub(crate) _t: PhantomData<(St, Req)>,
 }
 
 impl<S: Service<St, Req>, St, Req> ServiceChain<S, St, Req> {
-    /// Call another service after call to this one has resolved successfully.
+    /// Calls another service after this service completes successfully.
     ///
-    /// This function can be used to chain two services together and ensure that
-    /// the second service isn't called until call to the fist service have
-    /// finished. Result of the call to the first service is used as an
-    /// input parameter for the second service's call.
-    ///
-    /// Note that this function consumes the receiving service and returns a
-    /// wrapped version of it.
+    /// The current service's response becomes the next service's request. If
+    /// the current service returns an error, the next service is not called.
     pub fn and_then<Next, F>(self, service: F) -> ServiceChain<AndThen<S, Next>, St, Req>
     where
         Self: Sized,
@@ -71,8 +66,10 @@ impl<S: Service<St, Req>, St, Req> ServiceChain<S, St, Req> {
         }
     }
 
-    /// Chain on a computation for when a call to the service finished,
-    /// passing the result of the call to the next service `U`.
+    /// Calls another service after this service completes.
+    ///
+    /// The next service receives the current service's complete `Result`, so it
+    /// can handle either a response or an error.
     pub fn then<Next, F>(self, service: F) -> ServiceChain<Then<S, Next>, St, Req>
     where
         Self: Sized,
@@ -85,11 +82,9 @@ impl<S: Service<St, Req>, St, Req> ServiceChain<S, St, Req> {
         }
     }
 
-    /// Map this service's output to a different type, returning a new service
-    /// of the resulting type.
+    /// Maps this service's response to a different type.
     ///
-    /// This function is similar to the `Option::map` or `Iterator::map` where
-    /// it will change the type of the underlying service.
+    /// This is analogous to [`Option::map`] or [`Result::map`].
     pub fn map<F, Res>(self, f: F) -> ServiceChain<Map<F, S, Res>, St, Req>
     where
         Self: Sized,
@@ -101,11 +96,10 @@ impl<S: Service<St, Req>, St, Req> ServiceChain<S, St, Req> {
         }
     }
 
-    /// Map this service's error to a different error, returning a new service.
+    /// Maps this service's error to a different type.
     ///
-    /// This function is similar to the `Result::map_err` where it will change
-    /// the error type of the underlying service. This is useful for example to
-    /// ensure that services have the same error type.
+    /// This is analogous to [`Result::map_err`] and is useful for normalizing
+    /// error types across composed services.
     pub fn map_err<F, Err>(self, f: F) -> ServiceChain<MapErr<F, S, Err>, St, Req>
     where
         Self: Sized,
@@ -117,7 +111,7 @@ impl<S: Service<St, Req>, St, Req> ServiceChain<S, St, Req> {
         }
     }
 
-    /// Add custom readiness check to the service chain.
+    /// Adds a custom readiness check to the service chain.
     pub fn readiness<F>(
         self,
         ready: F,
@@ -132,7 +126,7 @@ impl<S: Service<St, Req>, St, Req> ServiceChain<S, St, Req> {
         }
     }
 
-    /// Add custom readiness check to the service chain.
+    /// Adds a callback that runs once when the service shuts down.
     pub fn shutdown<F>(self, sh: F) -> ServiceChain<AndThen<S, FnShutdown<F, S::Error>>, St, Req>
     where
         Self: Sized,
@@ -144,9 +138,9 @@ impl<S: Service<St, Req>, St, Req> ServiceChain<S, St, Req> {
         }
     }
 
-    /// Use function as middleware for current service.
+    /// Applies an asynchronous function as middleware to this service.
     ///
-    /// Short version of `apply_fn(service(...), fn)`
+    /// This is shorthand for calling [`crate::apply_fn`] on the chained service.
     pub fn apply_fn<F, In, Out, Err>(
         self,
         f: F,
@@ -196,7 +190,7 @@ impl<S: Service<St, Req>, St, Req> Service<St, Req> for ServiceChain<S, St, Req>
 }
 
 impl<Sf: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Sf, St, Req> {
-    /// Call another service after call to this one has resolved successfully.
+    /// Chains another factory after this factory's services.
     pub fn and_then<U>(
         self,
         factory: impl IntoServiceFactory<U, St, Sf::Res>,
@@ -211,9 +205,9 @@ impl<Sf: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Sf, St, Req> {
         }
     }
 
-    /// Apply Middleware to current service factory.
+    /// Applies middleware to this service factory.
     ///
-    /// Short version of `apply(middleware, factory(...))`
+    /// This is shorthand for calling [`crate::apply`] on the chained factory.
     pub fn apply<U>(self, tr: U) -> ServiceChainFactory<ApplyMiddleware<U, Sf>, St, Req>
     where
         U: Middleware<Sf::Service, St>,
@@ -221,9 +215,10 @@ impl<Sf: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Sf, St, Req> {
         crate::apply(tr, self.factory)
     }
 
-    /// Apply function middleware to current service factory.
+    /// Applies an asynchronous function as middleware to this service factory.
     ///
-    /// Short version of `apply_fn_factory(factory(...), fn)`
+    /// This is shorthand for calling [`crate::apply_fn_factory`] on the chained
+    /// factory.
     pub fn apply_fn<F, In, Out, Err>(
         self,
         f: F,
@@ -235,12 +230,8 @@ impl<Sf: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Sf, St, Req> {
         crate::apply_fn_factory(self.factory, f)
     }
 
-    /// Create chain factory to chain on a computation for when a call to the
-    /// service finished, passing the result of the call to the next
-    /// service `U`.
-    ///
-    /// Note that this function consumes the receiving factory and returns a
-    /// wrapped version of it.
+    /// Chains a factory whose services receive the preceding service's complete
+    /// `Result`.
     pub fn then<F, U>(self, factory: F) -> ServiceChainFactory<ThenFactory<Sf, U>, St, Req>
     where
         Self: Sized,
@@ -258,8 +249,7 @@ impl<Sf: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Sf, St, Req> {
         }
     }
 
-    /// Map this service's output to a different type, returning a new service
-    /// of the resulting type.
+    /// Maps responses produced by this factory's services.
     pub fn map<F, Res>(self, f: F) -> ServiceChainFactory<MapFactory<F, Sf, Res>, St, Req>
     where
         Self: Sized,
@@ -271,7 +261,7 @@ impl<Sf: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Sf, St, Req> {
         }
     }
 
-    /// Map this service's error to a different error.
+    /// Maps errors produced by this factory's services.
     pub fn map_err<F, E>(self, f: F) -> ServiceChainFactory<MapErrFactory<F, Sf, E>, St, Req>
     where
         Self: Sized,
@@ -283,7 +273,7 @@ impl<Sf: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Sf, St, Req> {
         }
     }
 
-    /// Map this factory's init error to a different error, returning a new factory.
+    /// Maps this factory's initialization error.
     pub fn map_init_err<F, E>(self, f: F) -> ServiceChainFactory<MapInitErr<F, Sf, E>, St, Req>
     where
         Self: Sized,
@@ -295,7 +285,7 @@ impl<Sf: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Sf, St, Req> {
         }
     }
 
-    /// Add custom readiness check to the service factory.
+    /// Adds a custom readiness check to each created service.
     pub fn readiness<F>(
         self,
         ready: F,
@@ -310,7 +300,7 @@ impl<Sf: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Sf, St, Req> {
         }
     }
 
-    /// Add custom shutdown callback to the service factory.
+    /// Adds a shutdown callback to each created service.
     pub fn shutdown<F>(
         self,
         sh: F,
@@ -325,7 +315,7 @@ impl<Sf: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Sf, St, Req> {
         }
     }
 
-    /// Create and return a new service value asynchronously and wrap into a container
+    /// Creates a service and wraps it with its state in a [`Pipeline`].
     pub async fn pipeline(&self, st: St) -> Result<Pipeline<Req, Sf::Res, Sf::Error>, Sf::InitError>
     where
         Sf: 'static,

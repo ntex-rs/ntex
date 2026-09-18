@@ -2,6 +2,10 @@ use std::{cell, fmt, future, marker, ops, pin, rc::Rc, task::Context, task::Poll
 
 use crate::Service;
 
+/// Context provided to [`Service`] lifecycle methods.
+///
+/// A context gives a service access to pipeline state and coordinates calls to
+/// inner services with the pipeline's readiness and shutdown machinery.
 pub struct Ctx<'a, Svc: ?Sized, St = ()> {
     idx: u32,
     st: &'a St,
@@ -106,7 +110,7 @@ impl WaitersRef {
             }
             result
         } else {
-            // other pipeline ownes readiness check process
+            // Another pipeline binding owns the readiness check.
             self.get_wakers().push(idx);
             Poll::Pending
         }
@@ -136,18 +140,18 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     }
 
     #[inline]
-    /// Unique id for this pipeline
+    /// Returns the identifier of the current pipeline binding.
     pub fn id(&self) -> u32 {
         self.idx
     }
 
     #[inline]
-    /// Service state
+    /// Returns the pipeline state.
     pub fn st(&'a self) -> &'a St {
         self.st
     }
 
-    /// Returns when the service is able to process requests.
+    /// Waits until `svc` is ready to process a request.
     pub async fn ready<S, Req>(&self, svc: &'a S) -> Result<(), S::Error>
     where
         S: Service<St, Req>,
@@ -168,7 +172,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     }
 
     #[inline]
-    /// Wait for service readiness and then call service
+    /// Waits for `svc` to become ready, then calls it.
     pub async fn call<S, Req>(&self, svc: &'a S, req: Req) -> Result<S::Res, S::Error>
     where
         S: Service<St, Req>,
@@ -188,7 +192,9 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     }
 
     #[inline]
-    /// Call service, do not check service readiness
+    /// Calls `svc` without checking readiness.
+    ///
+    /// The caller must ensure that `svc` is ready.
     pub async fn call_nowait<S, Req>(&self, svc: &'a S, req: Req) -> Result<S::Res, S::Error>
     where
         S: Service<St, Req>,
@@ -206,7 +212,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     }
 
     #[inline]
-    /// Execute a closure until completion with the dispatcher's task `Context`.
+    /// Polls a closure until completion using the dispatcher's task [`Context`].
     pub async fn poll_fn<F, R>(&'a self, f: F) -> R
     where
         F: Fn(&mut Context<'a>) -> Poll<R>,
@@ -232,7 +238,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     }
 
     #[inline]
-    /// Execute a closure with the dispatcher's task `Context`.
+    /// Calls a closure once with the dispatcher's task [`Context`].
     pub fn poll_once<F, R>(&'a self, f: F) -> R
     where
         F: FnOnce(&mut Context<'a>) -> R,
@@ -255,7 +261,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     }
 
     #[inline]
-    /// Shutdown service
+    /// Shuts down `svc`.
     pub async fn shutdown<S, Req>(&self, svc: &'a S)
     where
         S: Service<St, Req>,
@@ -270,7 +276,7 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     }
 
     #[inline]
-    /// Map context state
+    /// Returns a context that uses `st` as its state.
     pub fn map_state<NewSt>(&'a self, st: &'a NewSt) -> Ctx<'a, Self, NewSt> {
         Ctx {
             st,

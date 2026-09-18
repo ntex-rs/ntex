@@ -2,7 +2,7 @@ use std::{convert::Infallible, fmt, marker::PhantomData};
 
 use crate::{Ctx, IntoService, IntoServiceFactory, Service, ServiceFactory};
 
-/// `Service` implementation for an `AsyncFn(Req) -> Result<Res, Err>` fn.
+/// Converts an asynchronous function into a [`Service`].
 #[inline]
 pub fn fn_service<F, Req, Res, Err>(f: F) -> FnService<F, Req, Res, Err>
 where
@@ -11,7 +11,7 @@ where
     FnService { f, _t: PhantomData }
 }
 
-/// `Service` implementation for an `AsyncFn(&St, Req) -> Result<Res, Err>` function.
+/// Converts a state-aware asynchronous function into a [`Service`].
 ///
 /// This service accesses the pipeline state via the first `&St` parameter.
 #[inline]
@@ -24,7 +24,7 @@ where
 
 // ====================== FnService =======================
 
-/// `Service` implementation for an `AsyncFn(Req) -> Result<Res, Err>` fn.
+/// A [`Service`] backed by an asynchronous function.
 pub struct FnService<F, Req, Res, Err> {
     f: F,
     _t: PhantomData<(Req, Res, Err)>,
@@ -90,7 +90,7 @@ where
     }
 }
 
-/// `Service` implementation for an `AsyncFn(&St, Req) -> Result<Res, Err>` function.
+/// A state-aware [`Service`] backed by an asynchronous function.
 ///
 /// This service accesses the pipeline state via the first `&St` parameter.
 pub struct FnServiceSt<F, St, Req, Res, Err> {
@@ -160,6 +160,7 @@ where
 
 // ---------------------------- FnServiceFactory ------------------------
 
+/// A service factory backed by a clonable asynchronous service function.
 pub struct FnServiceFactory<F, Req, Res, Err>
 where
     F: AsyncFn(Req) -> Result<Res, Err> + Clone,
@@ -232,6 +233,7 @@ where
 
 // ========================= FnServiceStFactory =======================
 
+/// A service factory backed by a clonable, state-aware asynchronous function.
 pub struct FnServiceStFactory<F, St, Req, Res, Err>
 where
     F: AsyncFn(&St, Req) -> Result<Res, Err> + Clone,
@@ -300,10 +302,10 @@ where
 // ========================= FnFactory ==================================
 
 #[inline]
-/// Create `ServiceFactory` for function that accepts config argument and can produce services
+/// Converts an asynchronous constructor function into a [`ServiceFactory`].
 ///
-/// Any function that has following form `AsyncFn(&Config) -> Result<Service, Error>` could
-/// act as a `ServiceFactory`.
+/// Any function with the form
+/// `AsyncFn(&State) -> Result<Service, InitError>` can act as a factory.
 ///
 /// # Example
 ///
@@ -313,14 +315,13 @@ where
 ///
 /// #[ntex::main]
 /// async fn main() -> io::Result<()> {
-///     // Create service factory. factory uses config argument for
-///     // services it generates.
+///     // Create a factory that uses the state to configure each service.
 ///     let fac = fn_factory(async |y: &usize| {
 ///         let y = *y;
 ///         Ok::<_, io::Error>(fn_service(move |x: usize| async move { Ok::<_, io::Error>(x * y) }))
 ///     });
 ///
-///     // construct new service with config argument
+///     // Construct a service with the supplied state.
 ///     let srv = Pipeline::new(12, factory(fac).create(&10).await?);
 ///
 ///     let result = srv.call(10).await?;
@@ -338,7 +339,7 @@ where
     FnFactory { f, _t: PhantomData }
 }
 
-/// `ServiceFactory` for a `AsyncFn(&St) -> Result<Srv, Err>` function
+/// A [`ServiceFactory`] backed by an asynchronous constructor function.
 pub struct FnFactory<F, S, St, Req, Err>
 where
     F: AsyncFn(&St) -> Result<S, Err>,

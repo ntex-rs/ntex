@@ -6,14 +6,18 @@ use crate::{IntoService, Service, ServiceCaller, util::BoxFuture};
 pub use crate::pl_factory::PipelineFactory;
 pub use crate::pl_state::{PipelineState, PipelineStateBinding};
 
-/// Container for a service.
+/// Execution container for a service and its state.
 ///
-/// Provides a way to call the enclosed service and share its readiness state.
+/// A pipeline coordinates readiness, calls, and shutdown for the enclosed
+/// service chain.
 pub struct Pipeline<Req, Res, Err> {
     api: PipelineApi<Req, Res, Err>,
 }
 
-/// Bound container for a service.
+/// An independently registered handle to a [`Pipeline`].
+///
+/// Bindings share the pipeline and its readiness state. Cloning a binding
+/// registers another handle.
 pub struct PipelineBinding<Req, Res, Err> {
     idx: u32,
     api: PipelineApi<Req, Res, Err>,
@@ -26,14 +30,14 @@ where
     Err: 'static,
 {
     #[inline]
-    /// Construct new service pipeline instance with default state.
-    pub fn new<S, St>(st: St, f: impl IntoService<S, St, Req>) -> Self
+    /// Creates a pipeline containing `service` and `state`.
+    pub fn new<S, St>(st: St, service: impl IntoService<S, St, Req>) -> Self
     where
         S: Service<St, Req, Res = Res, Error = Err> + 'static,
         St: 'static,
     {
         Pipeline {
-            api: PipelineApi::new(f.into_service(), st),
+            api: PipelineApi::new(service.into_service(), st),
         }
     }
 
@@ -44,27 +48,27 @@ where
     }
 
     #[inline]
-    /// Wait for service readiness, then create a future
-    /// that resolves to the service call result.
+    /// Waits for readiness, then calls the service.
     pub async fn call(&self, req: Req) -> Result<Res, Err> {
         let pl = self.bind();
         pl.api.call(pl.idx, req, true).await
     }
 
     #[inline]
-    /// Wait for service readiness, then create a future
-    /// that resolves to the service result.
+    /// Returns an owned future that waits for readiness and calls the service.
     ///
-    /// This call can be completed from different async tasks.
+    /// Unlike [`Pipeline::call`], the returned future does not borrow the
+    /// pipeline and can be moved between local tasks.
     pub fn call_static(&self, req: Req) -> PipelineCall<Req, Res, Err> {
         PipelineCall::new(self.bind(), req, true)
     }
 
     #[inline]
-    /// Call the service and create a future that resolves to the service result.
+    /// Returns an owned future that calls the service without checking readiness.
     ///
-    /// This call can be completed from different async tasks.
-    /// Note: this call does not check service readiness.
+    /// The caller must ensure the pipeline is ready before polling the returned
+    /// future. The future does not borrow the pipeline and can be moved between
+    /// local tasks.
     pub fn call_nowait(&self, req: Req) -> PipelineCall<Req, Res, Err> {
         PipelineCall::new(self.bind(), req, false)
     }
@@ -94,7 +98,7 @@ where
     }
 
     #[inline]
-    /// Returns the current pipeline binding.
+    /// Creates a new binding to this pipeline.
     ///
     /// The binding can be used to check readiness and call the service.
     pub fn bind(&self) -> PipelineBinding<Req, Res, Err> {
@@ -140,33 +144,32 @@ where
     }
 
     #[inline]
-    /// Returns when the pipeline is ready to process requests.
+    /// Waits until the pipeline is ready to process a request.
     pub async fn ready(&self) -> Result<(), Err> {
         self.api.ready(self.idx).await
     }
 
     #[inline]
-    /// Wait for service readiness, then create a future
-    /// that resolves to the service call result.
+    /// Waits for readiness, then calls the service.
     pub async fn call(&self, req: Req) -> Result<Res, Err> {
         let pl = self.clone();
         pl.api.call(pl.idx, req, true).await
     }
 
     #[inline]
-    /// Wait for service readiness, then create a future
-    /// that resolves to the service result.
+    /// Returns an owned future that waits for readiness and calls the service.
     ///
-    /// This call can be completed from different async tasks.
+    /// The returned future does not borrow this binding and can be moved between
+    /// local tasks.
     pub fn call_static(&self, req: Req) -> PipelineCall<Req, Res, Err> {
         PipelineCall::new(self.clone(), req, true)
     }
 
     #[inline]
-    /// Call the service and create a future that resolves to the service result.
+    /// Returns an owned future that calls the service without checking readiness.
     ///
-    /// This call can be completed from different async tasks.
-    /// Note: this call does not check service readiness.
+    /// The caller must ensure the pipeline is ready before polling the returned
+    /// future.
     pub fn call_nowait(&self, req: Req) -> PipelineCall<Req, Res, Err> {
         PipelineCall::new(self.clone(), req, false)
     }
@@ -189,7 +192,7 @@ impl<Req, Res, Err> Clone for PipelineBinding<Req, Res, Err> {
 }
 
 #[must_use = "futures do nothing unless polled"]
-/// Pipeline call
+/// An owned future for a pipeline service call.
 pub struct PipelineCall<Req, Res, Err> {
     #[allow(dead_code)]
     pl: PipelineBinding<Req, Res, Err>,

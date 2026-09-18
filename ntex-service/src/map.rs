@@ -2,7 +2,7 @@ use std::{fmt, marker::PhantomData};
 
 use super::{Ctx, Service, ServiceFactory};
 
-/// Service for the `map` combinator, changing the type of a service's response.
+/// Service produced by the `map` combinator.
 ///
 /// This is created by the `Service::map()` and `ServiceChain::map()` methods.
 pub struct Map<F, S, Res> {
@@ -70,7 +70,7 @@ where
     crate::forward_shutdown!(St, svc);
 }
 
-/// `MapNewService` new service combinator
+/// Service factory produced by the `map` combinator.
 pub struct MapFactory<F, Sf, Res> {
     f: F,
     sf: Sf,

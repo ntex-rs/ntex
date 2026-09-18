@@ -1,8 +1,7 @@
 use super::{Ctx, Service, ServiceFactory, util};
 
 #[derive(Clone, Debug)]
-/// Service for the `and_then` combinator, chaining a computation onto the end
-/// of another service which completes successfully.
+/// Service produced by the `and_then` combinator.
 ///
 /// This is created by the `Service::and_then()` and `ServiceChain::and_then()` methods.
 pub struct AndThen<A, B> {
@@ -43,7 +42,7 @@ where
 }
 
 #[derive(Debug, Clone)]
-/// `.and_then()` service factory combinator
+/// Service factory produced by the `and_then` combinator.
 pub struct AndThenFactory<A, B> {
     svc1: A,
     svc2: B,

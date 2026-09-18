@@ -3,7 +3,7 @@ use std::{fmt, marker::PhantomData, rc::Rc};
 use crate::dev::{Apply, ApplyCtx};
 use crate::{IntoServiceFactory, Service, ServiceChainFactory, ServiceFactory};
 
-/// Apply middleware to a service.
+/// Applies middleware to every service produced by a factory.
 pub fn apply<Sf, St, Req, M>(
     mw: M,
     factory: impl IntoServiceFactory<Sf, St, Req>,
@@ -18,11 +18,10 @@ where
     }
 }
 
-/// The `Middleware` trait defines the interface for a service factory
-/// that wraps an inner service during construction.
+/// Wraps an inner service during service construction.
 ///
-/// Middleware runs during inbound and/or outbound processing in the
-/// request/response lifecycle, and may modify the request and/or response.
+/// Middleware can run before and after the inner service, and can modify
+/// requests, responses, or errors.
 ///
 /// For example, timeout middleware:
 ///
@@ -60,26 +59,21 @@ where
 /// }
 /// ```
 ///
-/// The timeout service in the example above is decoupled from the underlying
-/// service implementation and can be applied to any service.
+/// The timeout service is independent of the wrapped service implementation and
+/// can be applied to any compatible service.
 ///
-/// The `Middleware` trait defines the interface for a middleware factory,
-/// specifying how to construct a middleware `Service`. A service constructed
-/// by the factory takes the following service in the execution chain as a
-/// parameter, assuming ownership of that service.
-///
-/// Factory for `Timeout` middleware from the above example could look like this:
+/// A middleware factory for `Timeout` could look like this:
 ///
 /// ```rust,ignore
 /// pub struct TimeoutMiddleware {
 ///     timeout: std::time::Duration,
 /// }
 ///
-/// impl<S> Middleware<S> for TimeoutMiddleware
+/// impl<S> Middleware<S, ()> for TimeoutMiddleware
 /// {
 ///     type Service = Timeout<S>;
 ///
-///     fn create(&self, service: S) -> Self::Service {
+///     fn create(&self, _: &(), service: S) -> Self::Service {
 ///         Timeout {
 ///             service,
 ///             timeout: self.timeout,
@@ -88,7 +82,7 @@ where
 /// }
 /// ```
 pub trait Middleware<S, St> {
-    /// The middleware `Service` value created by this factory
+    /// Service created by this middleware.
     type Service;
 
     /// Creates and returns a new middleware service.
@@ -122,7 +116,7 @@ where
     }
 }
 
-/// `Apply` middleware to a service factory.
+/// A service factory with middleware applied.
 pub struct ApplyMiddleware<M, Sf>(Rc<(M, Sf)>);
 
 impl<M, Sf> ApplyMiddleware<M, Sf> {
@@ -169,9 +163,7 @@ where
     }
 }
 
-/// Identity is a middleware.
-///
-/// It returns service without modifications.
+/// Middleware that returns the wrapped service unchanged.
 #[derive(Debug, Clone, Copy)]
 pub struct Identity;
 
@@ -184,7 +176,10 @@ impl<S, St> Middleware<S, St> for Identity {
     }
 }
 
-/// Stack of middlewares.
+/// Two middleware values applied in sequence.
+///
+/// The inner middleware is applied first, then the outer middleware wraps its
+/// service.
 #[derive(Debug, Clone)]
 pub struct Stack<Inner, Outer> {
     inner: Inner,
@@ -192,6 +187,7 @@ pub struct Stack<Inner, Outer> {
 }
 
 impl<Inner, Outer> Stack<Inner, Outer> {
+    /// Creates a middleware stack.
     pub fn new(inner: Inner, outer: Outer) -> Self {
         Stack { inner, outer }
     }
@@ -219,7 +215,7 @@ where
     FnMiddleware { f, r: PhantomData }
 }
 
-/// `FnMiddleware` service combinator
+/// Middleware backed by an asynchronous function.
 pub struct FnMiddleware<F, S, St, Req, In, Out, Err> {
     f: F,
     r: PhantomData<fn(S, St, Req) -> (In, Out, Err)>,

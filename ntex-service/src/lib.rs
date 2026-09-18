@@ -1,4 +1,9 @@
-//! See [`Service`] docs for information on this crate's foundational trait.
+//! Asynchronous services, factories, middleware, and execution pipelines.
+//!
+//! The [`Service`] trait is the crate's central abstraction. A service
+//! asynchronously transforms a request into a response, while
+//! [`ServiceFactory`] constructs services and [`Pipeline`] manages readiness,
+//! calls, and shutdown.
 #![deny(clippy::pedantic)]
 #![allow(
     clippy::cast_possible_truncation,
@@ -46,34 +51,30 @@ pub use crate::pipeline::Pipeline;
 pub use crate::state::{RequestState, State};
 
 #[allow(unused_variables)]
-/// An asynchronous function from a `Request` to a `Response`.
+/// An asynchronous operation from a request to a response.
 ///
-/// The `Service` trait represents a request/response interaction, receiving
-/// requests and returning replies. Conceptually, a service is like a function
-/// with one argument that returns a result asynchronously:
+/// A service receives requests and asynchronously produces responses.
+/// Conceptually, it is similar to:
 ///
 /// ```rust,ignore
 /// async fn(Request) -> Result<Response, Error>
 /// ```
 ///
-/// The `Service` trait generalizes this form. Requests are defined as a generic
-/// type parameter, while responses and other details are defined as associated
-/// types on the trait implementation. This design allows services to accept
-/// many request types and produce a single response type.
+/// The request and pipeline-state types are generic parameters. The response
+/// and error types are associated types, allowing one service type to implement
+/// `Service` for multiple request types.
 ///
-/// Services can also have internal mutable state that influences computation
-/// using `Cell`, `RefCell`, or `Mutex`. Services intentionally do not take
-/// `&mut self` to reduce overhead in common use cases.
+/// Methods take `&self`, so implementations that mutate internal state must use
+/// interior mutability such as `Cell`, `RefCell`, or a synchronization
+/// primitive when appropriate.
 ///
-/// `Service` provides a uniform API; the same abstractions can represent both
-/// clients and servers. Services describe only _transformation_ operations,
-/// which encourages simple API surfaces, easier testing, and straightforward
-/// composition.
+/// The same abstraction can represent client- and server-side operations.
+/// Services focus on transformation, making them straightforward to test and
+/// compose.
 ///
-/// Services can only be called within a pipeline. The `Pipeline` enforces
-/// shared readiness for all services in the pipeline. To process requests from
-/// one service to another, all services must be ready; otherwise, processing
-/// is paused until that state is achieved.
+/// A service call requires a [`Ctx`] and therefore runs through a [`Pipeline`]
+/// or from another service. The pipeline coordinates readiness across a
+/// composed service chain before dispatching a request.
 ///
 /// ```rust
 /// # use std::convert::Infallible;
@@ -92,39 +93,45 @@ pub use crate::state::{RequestState, State};
 /// }
 /// ```
 ///
-/// Sometimes it is not necessary to implement the Service trait. For example, the above service
-/// could be rewritten as a simple function and passed to [`fn_service`](fn_service()).
+/// Simple services do not need a manual trait implementation. The example
+/// above can be expressed with [`fn_service`]:
 ///
-/// ```rust,ignore
-/// async fn my_service(req: u8) -> Result<u64, Infallible>;
+/// ```rust
+/// # use std::convert::Infallible;
+/// # use ntex_service::{Pipeline, fn_service};
+/// #
+/// # async fn run() -> Result<(), Infallible> {
+/// let service = fn_service(|req: u8| async move {
+///     Ok::<_, Infallible>(u64::from(req))
+/// });
+/// let pipeline = Pipeline::new((), service);
+///
+/// assert_eq!(pipeline.call(10).await?, 10);
+/// # Ok(())
+/// # }
 /// ```
-///
-/// Service cannot be called directly, it must be wrapped to an instance of [`Pipeline`] or
-/// by using `ctx` argument of the call method in case of chanined services.
 pub trait Service<St, Req> {
-    /// Responses that the service could provide.
+    /// Response produced by the service.
     type Res;
 
-    /// Errors produced by the service while checking readiness or executing a call.
+    /// Error produced while checking readiness or processing a request.
     type Error;
 
     /// Processes a request and asynchronously returns the response.
     ///
-    /// The `call` method can only be invoked within a pipeline, which ensures
-    /// that all services in the pipeline are ready. Implementations of `call`
-    /// must not call `ready`; the `ctx` argument ensures that the service is
-    /// ready before it is invoked.
+    /// The enclosing pipeline checks readiness before invoking this method.
+    /// Implementations should not call their own `ready` method. A composed
+    /// service can use `ctx` to call an inner service.
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error>;
 
     #[inline]
-    /// Returns when the service is ready to process requests.
+    /// Waits until the service is ready to process a request.
     ///
-    /// If the service is at capacity, `ready` will not return immediately. The current
-    /// task is notified when the service becomes ready again. This function should
-    /// be called while executing on a task.
+    /// If the service is at capacity, the returned future remains pending until
+    /// capacity becomes available.
     ///
-    /// **Note:** Pipeline readiness is maintained across all services in the pipeline.
-    /// The pipeline can process requests only if every service in the pipeline is ready.
+    /// Pipeline readiness is coordinated across all services in a composed
+    /// chain. A request is dispatched only when the chain is ready.
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
         Ok(())
     }
@@ -133,7 +140,7 @@ pub trait Service<St, Req> {
     /// Shuts down the service.
     ///
     /// Returns when the service has been properly shut down.
-    async fn shutdown(&self, cfg: Ctx<'_, Self, St>) {}
+    async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {}
 
     #[inline]
     /// Maps this service's output to a different type, returning a new service.
@@ -168,15 +175,10 @@ pub trait Service<St, Req> {
     }
 
     #[inline]
-    /// Call another service after call to this one has resolved successfully.
+    /// Calls another service after this service completes successfully.
     ///
-    /// This function can be used to chain two services together and ensure that
-    /// the second service isn't called until call to the fist service have
-    /// finished. Result of the call to the first service is used as an
-    /// input parameter for the second service's call.
-    ///
-    /// Note that this function consumes the receiving service and returns a
-    /// wrapped version of it.
+    /// The first service's response becomes the second service's request. If
+    /// the first service returns an error, the second service is not called.
     fn and_then<Next, F>(self, f: F) -> ServiceChain<dev::AndThen<Self, Next>, St, Req>
     where
         Self: Sized,
@@ -187,7 +189,7 @@ pub trait Service<St, Req> {
     }
 
     #[inline]
-    /// Wraps it in a container.
+    /// Wraps this service and its state in a [`Pipeline`].
     fn pipeline(self, st: St) -> Pipeline<Req, Self::Res, Self::Error>
     where
         Self: Sized + 'static,
@@ -198,34 +200,34 @@ pub trait Service<St, Req> {
     }
 }
 
-/// A factory for creating `Service`s.
+/// A factory for asynchronously creating [`Service`] values.
 ///
 /// This is useful when new `Service`s must be produced dynamically. For example,
 /// a TCP server listener accepts new connections, constructs a new `Service` for
 /// each connection using the `ServiceFactory` trait, and uses that service to
 /// handle inbound requests.
 ///
-/// `St` represents the state type for the service factory and service.
+/// `St` is the state type shared by the factory and its services.
 ///
 /// Simple factories can often use [`fn_factory`] to reduce boilerplate.
 pub trait ServiceFactory<St, Req> {
-    /// Responses given by the created services.
+    /// Response produced by the created services.
     type Res;
 
-    /// Errors produced by the created services.
+    /// Error produced by the created services.
     type Error;
 
     /// The type of `Service` produced by this factory.
     type Service: Service<St, Req, Res = Self::Res, Error = Self::Error>;
 
-    /// Possible errors encountered during service construction.
+    /// Error that can occur while constructing a service.
     type InitError;
 
-    /// Creates a new service asynchronously and returns it.
+    /// Asynchronously creates a service using the supplied state.
     async fn create(&self, cfg: &St) -> Result<Self::Service, Self::InitError>;
 
     #[inline]
-    /// Asynchronously creates a new service and wraps it in a container.
+    /// Creates a service and wraps it with its state in a [`Pipeline`].
     async fn pipeline(
         &self,
         st: St,
@@ -240,7 +242,7 @@ pub trait ServiceFactory<St, Req> {
     }
 
     #[inline]
-    /// Returns a new service that maps this service's output to a different type.
+    /// Returns a factory whose services map responses to a different type.
     fn map<F, Res>(self, f: F) -> ServiceChainFactory<dev::MapFactory<F, Self, Res>, St, Req>
     where
         Self: Sized,
@@ -250,8 +252,7 @@ pub trait ServiceFactory<St, Req> {
     }
 
     #[inline]
-    /// Transforms this service's error into another error,
-    /// producing a new service.
+    /// Returns a factory whose services map errors to a different type.
     fn map_err<F, E>(self, f: F) -> ServiceChainFactory<dev::MapErrFactory<F, Self, E>, St, Req>
     where
         Self: Sized,
@@ -271,7 +272,11 @@ pub trait ServiceFactory<St, Req> {
         factory(dev::MapInitErr::new(f, self))
     }
 
-    /// Call another service after call to this one has resolved successfully.
+    /// Chains another factory after this factory's services.
+    ///
+    /// Each response from the first service becomes a request to the second
+    /// service. The second service is not called when the first returns an
+    /// error.
     fn and_then<U, F>(self, f: F) -> ServiceChainFactory<dev::AndThenFactory<Self, U>, St, Req>
     where
         Self: Sized,
@@ -375,27 +380,27 @@ where
     }
 }
 
-/// Trait for types that can be called
+/// A common interface for values that can call a service.
 pub trait ServiceCaller<Req, Res, Err> {
-    /// Wait for service readiness and then call service.
+    /// Waits for readiness, then calls the service.
     async fn call_service(&self, req: Req) -> Result<Res, Err>;
 }
 
-/// Trait for types that can be converted to a `Service`
+/// Conversion into a [`Service`].
 pub trait IntoService<S, St, Req>
 where
     S: Service<St, Req>,
 {
-    /// Convert to a `Service`
+    /// Converts this value into a service.
     fn into_service(self) -> S;
 }
 
-/// Trait for types that can be converted to a `ServiceFactory`
+/// Conversion into a [`ServiceFactory`].
 pub trait IntoServiceFactory<Sf, St, Req>
 where
     Sf: ServiceFactory<St, Req>,
 {
-    /// Convert `Self` to a `ServiceFactory`
+    /// Converts this value into a service factory.
     fn into_factory(self) -> Sf;
 }
 
