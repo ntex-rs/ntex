@@ -33,12 +33,14 @@ impl fmt::Write for Wrt<'_> {
     }
 }
 
+/// Formats an error and its source chain into a string.
 pub fn fmt_err_string(e: &dyn StdError) -> String {
     let mut buf = String::new();
     _ = fmt_err(&mut buf, e);
     buf
 }
 
+/// Writes an error and its source chain.
 pub fn fmt_err(f: &mut dyn fmt::Write, e: &dyn StdError) -> fmt::Result {
     let mut wrt = Wrt::new(f);
     let mut current = Some(e);
@@ -129,9 +131,11 @@ where
     Ok(())
 }
 
+/// A lightweight owned error message.
 #[derive(Clone, PartialEq, Eq, thiserror::Error)]
 pub struct ErrorMessage(ByteString);
 
+/// An owned error message with an optional source error.
 #[derive(Clone)]
 pub struct ErrorMessageChained {
     msg: ByteString,
@@ -139,6 +143,7 @@ pub struct ErrorMessageChained {
 }
 
 impl ErrorMessageChained {
+    /// Creates a message error with a source.
     pub fn new<M, E>(ctx: M, source: E) -> Self
     where
         M: Into<ErrorMessage>,
@@ -150,48 +155,54 @@ impl ErrorMessageChained {
         }
     }
 
-    /// Construct `ErrorMessageChained` from `ByteString`
+    /// Creates a message error without a source.
     pub const fn from_bstr(msg: ByteString) -> Self {
         Self { msg, source: None }
     }
 
+    /// Returns the message.
     pub fn msg(&self) -> &ByteString {
         &self.msg
     }
 }
 
 impl ErrorMessage {
-    /// Construct a new empty `ErrorMessage`
+    /// Creates an empty error message.
     pub const fn empty() -> Self {
         Self(ByteString::from_static(""))
     }
 
-    /// Construct `ErrorMessage` from `ByteString`
+    /// Creates an error message from a [`ByteString`].
     pub const fn from_bstr(msg: ByteString) -> ErrorMessage {
         ErrorMessage(msg)
     }
 
-    /// Construct `ErrorMessage` from static string
+    /// Creates an error message from a static string.
     pub const fn from_static(msg: &'static str) -> Self {
         ErrorMessage(ByteString::from_static(msg))
     }
 
+    /// Returns `true` if the message is empty.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
+    /// Returns the message as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
+    /// Returns the underlying [`ByteString`].
     pub fn as_bstr(&self) -> &ByteString {
         &self.0
     }
 
+    /// Converts this message into its underlying [`ByteString`].
     pub fn into_string(self) -> ByteString {
         self.0
     }
 
+    /// Attaches a source error to this message.
     pub fn with_source<E: StdError + 'static>(self, source: E) -> ErrorMessageChained {
         ErrorMessageChained::new(self, source)
     }

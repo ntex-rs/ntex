@@ -5,15 +5,20 @@ use futures_core::Stream;
 use ntex_bytes::{BytePages, Bytes, BytesMut};
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
-/// Body size hint
+/// Size information used when encoding an HTTP message body.
 pub enum BodySize {
+    /// No body is present and no `Content-Length` header should be emitted.
     None,
+    /// An empty body with a `Content-Length: 0` header.
     Empty,
+    /// A body with a known byte length.
     Sized(u64),
+    /// A streaming body with an unknown final length.
     Stream,
 }
 
 impl BodySize {
+    /// Returns `true` if this size represents no payload bytes.
     pub fn is_eof(&self) -> bool {
         matches!(self, BodySize::None | BodySize::Empty | BodySize::Sized(0))
     }
@@ -21,9 +26,10 @@ impl BodySize {
 
 /// Interface for types that can be streamed to a peer.
 pub trait MessageBody: 'static {
-    /// Message body size hind
+    /// Returns the body size hint.
     fn size(&self) -> BodySize;
 
+    /// Polls the next body chunk.
     fn poll_next_chunk(
         &mut self,
         cx: &mut Context<'_>,
@@ -61,13 +67,16 @@ impl<T: MessageBody> MessageBody for Box<T> {
 }
 
 #[derive(Debug)]
-/// Represents http response body
+/// Response body preserving either a concrete body type or a type-erased body.
 pub enum ResponseBody<B> {
+    /// The original concrete body.
     Body(B),
+    /// A type-erased body.
     Other(Body),
 }
 
 impl ResponseBody<Body> {
+    /// Converts a type-erased response body to another concrete response type.
     pub fn into_body<B>(self) -> ResponseBody<B> {
         match self {
             ResponseBody::Body(b) | ResponseBody::Other(b) => ResponseBody::Other(b),
@@ -91,18 +100,21 @@ impl<B> From<Body> for ResponseBody<B> {
 
 impl<B> ResponseBody<B> {
     #[inline]
+    /// Creates a response body from a concrete body value.
     pub fn new(body: B) -> Self {
         ResponseBody::Body(body)
     }
 
     #[inline]
     #[must_use]
+    /// Replaces this response body with [`Body::None`] and returns the original.
     pub fn take_body(&mut self) -> ResponseBody<B> {
         std::mem::replace(self, ResponseBody::Other(Body::None))
     }
 }
 
 impl<B: MessageBody> ResponseBody<B> {
+    /// Returns the concrete body, if this is [`ResponseBody::Body`].
     pub fn as_ref(&self) -> Option<&B> {
         if let ResponseBody::Body(b) = self {
             Some(b)
@@ -144,7 +156,7 @@ impl<B: MessageBody + Unpin> Stream for ResponseBody<B> {
     }
 }
 
-/// Represents various types of http message body.
+/// Type-erased HTTP message body.
 pub enum Body {
     /// Empty response. `Content-Length` header is not set.
     None,
@@ -157,12 +169,12 @@ pub enum Body {
 }
 
 impl Body {
-    /// Create body from slice (copy)
+    /// Creates a body by copying a byte slice.
     pub fn from_slice(s: &[u8]) -> Body {
         Body::Bytes(Bytes::copy_from_slice(s))
     }
 
-    /// Create body from generic message body.
+    /// Creates a body from a streaming message body.
     pub fn from_message<B: MessageBody>(body: B) -> Body {
         Body::Message(Box::new(body))
     }

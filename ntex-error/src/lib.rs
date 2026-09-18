@@ -1,4 +1,12 @@
-//! Error management.
+//! Structured error context and diagnostics for ntex.
+//!
+//! [`Error`] is a cheap-to-clone error container that preserves service
+//! attribution, tags, typed context, and backtraces. Implement
+//! [`ErrorDiagnostic`] on application errors to provide stable signatures and
+//! diagnostic metadata.
+//!
+//! [`Failure`] provides a type-erased failure representation, while
+//! [`ErrorMessage`] and [`ErrorMessageChained`] are lightweight message errors.
 #![deny(clippy::pedantic)]
 #![allow(
     clippy::must_use_candidate,
@@ -34,8 +42,11 @@ pub type ErrorInfo = Failure;
 /// The type of the result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, thiserror::Error)]
 pub enum ResultType {
+    /// The operation completed successfully.
     Success,
+    /// The operation failed because of the client or request.
     ClientError,
+    /// The operation failed in a service.
     ServiceError,
 }
 
@@ -50,9 +61,12 @@ impl ResultType {
     }
 }
 
+/// Provides access to an error's diagnostic representation.
 pub trait AsError {
+    /// Diagnostic error type.
     type Target: ErrorDiagnostic;
 
+    /// Returns the diagnostic error.
     fn as_diag(&self) -> &Self::Target;
 }
 
@@ -113,6 +127,7 @@ impl ErrorDiagnostic for ResultType {
 
 /// Helper trait for converting a value into a unified error-aware result type.
 pub trait IntoFailure: Sized {
+    /// Converts this value into a type-erased [`Failure`].
     fn fail(self) -> Failure;
 }
 

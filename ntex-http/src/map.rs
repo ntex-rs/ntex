@@ -7,21 +7,20 @@ use crate::{HeaderName, HeaderValue};
 
 type HashMap<K, V> = collections::HashMap<K, V, RandomState>;
 
-/// Combines two different futures, streams, or sinks having the same associated types into a single
-/// type.
+/// A value containing one of two possible types.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Either<A, B> {
-    /// First branch of the type
+    /// First variant.
     Left(A),
-    /// Second branch of the type
+    /// Second variant.
     Right(B),
 }
 
-/// A set of HTTP headers
+/// A multimap of HTTP header names to values.
 ///
-/// `HeaderMap` is an multimap of [`HeaderName`] to values.
-///
-/// [`HeaderName`]: struct.HeaderName.html
+/// Each header name may have one or more values. Methods such as [`get`](Self::get)
+/// return the first value; use [`get_all`](Self::get_all) to iterate over every
+/// value associated with a name.
 #[derive(Clone, PartialEq, Eq)]
 pub struct HeaderMap {
     pub(crate) inner: HashMap<HeaderName, Value>,
@@ -138,7 +137,7 @@ impl Default for HeaderMap {
 }
 
 impl HeaderMap {
-    /// Create an empty `HeaderMap`.
+    /// Creates an empty `HeaderMap`.
     ///
     /// The map will be created without any capacity. This function will not
     /// allocate.
@@ -148,7 +147,7 @@ impl HeaderMap {
         }
     }
 
-    /// Create an empty `HeaderMap` with the specified capacity.
+    /// Creates an empty `HeaderMap` with the specified capacity.
     ///
     /// The returned map will allocate internal storage in order to hold about
     /// `capacity` elements without reallocating. However, this is a "best
@@ -164,13 +163,12 @@ impl HeaderMap {
 
     /// Returns the number of keys stored in the map.
     ///
-    /// This number could be be less than or equal to actual headers stored in
-    /// the map.
+    /// This counts distinct header names, not the total number of values.
     pub fn len(&self) -> usize {
         self.inner.len()
     }
 
-    /// Returns true if the map contains no elements.
+    /// Returns `true` if the map contains no headers.
     pub fn is_empty(&self) -> bool {
         self.inner.len() == 0
     }
@@ -229,7 +227,6 @@ impl HeaderMap {
     /// the values associated with the key.  See [`GetAll`] for more details.
     /// Returns `None` if there are no values associated with the key.
     ///
-    /// [`GetAll`]: struct.GetAll.html
     pub fn get_all<N: AsName>(&self, name: N) -> GetAll<'_> {
         GetAll {
             idx: 0,
@@ -255,7 +252,7 @@ impl HeaderMap {
         }
     }
 
-    /// Returns true if the map contains a value for the specified key.
+    /// Returns `true` if the map contains a value for the specified key.
     pub fn contains_key<N: AsName>(&self, key: N) -> bool {
         match key.as_name() {
             Either::Left(name) => self.inner.contains_key(name),
@@ -271,9 +268,8 @@ impl HeaderMap {
 
     /// An iterator visiting all key-value pairs.
     ///
-    /// The iteration order is arbitrary, but consistent across platforms for
-    /// the same crate version. Each key will be yielded once per associated
-    /// value. So, if a key has 3 associated values, it will be yielded 3 times.
+    /// The iteration order is arbitrary and may vary between maps. Each key is
+    /// yielded once per associated value.
     pub fn iter(&self) -> Iter<'_> {
         Iter::new(self.inner.iter())
     }
@@ -285,24 +281,15 @@ impl HeaderMap {
 
     /// An iterator visiting all keys.
     ///
-    /// The iteration order is arbitrary, but consistent across platforms for
-    /// the same crate version. Each key will be yielded only once even if it
-    /// has multiple associated values.
+    /// The iteration order is arbitrary and may vary between maps. Each key is
+    /// yielded only once, even if it has multiple associated values.
     pub fn keys(&self) -> Keys<'_> {
         Keys(self.inner.keys())
     }
 
     /// Inserts a key-value pair into the map.
     ///
-    /// If the map did not previously have this key present, then `None` is
-    /// returned.
-    ///
-    /// If the map did have this key present, the new value is associated with
-    /// the key and all previous values are removed. **Note** that only a single
-    /// one of the previous values is returned. If there are multiple values
-    /// that have been previously associated with the key, then the first one is
-    /// returned. See `insert_mult` on `OccupiedEntry` for an API that returns
-    /// all values.
+    /// The new value replaces all values previously associated with the key.
     ///
     /// The key is not updated, though; this matters for types that can be `==`
     /// without being identical.
@@ -312,13 +299,8 @@ impl HeaderMap {
 
     /// Inserts a key-value pair into the map.
     ///
-    /// If the map did not previously have this key present, then `false` is
-    /// returned.
-    ///
-    /// If the map did have this key present, the new value is pushed to the end
-    /// of the list of values currently associated with the key. The key is not
-    /// updated, though; this matters for types that can be `==` without being
-    /// identical.
+    /// The value is appended after any values already associated with the key.
+    /// The stored key itself is not replaced when an equivalent key exists.
     pub fn append(&mut self, key: HeaderName, value: HeaderValue) {
         match self.inner.entry(key) {
             Entry::Occupied(mut entry) => entry.get_mut().append(value),

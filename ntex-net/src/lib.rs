@@ -1,4 +1,22 @@
-//! Utility for async runtime abstraction
+//! Network transports and runtime reactor integration for ntex.
+//!
+//! This crate provides TCP and Unix domain socket connection helpers, DNS-aware
+//! connectors, and reactor implementations for native ntex, Tokio, and Compio
+//! runtimes. All transports are exposed as [`Io`] values.
+//!
+//! [`DefaultRuntime`] selects a reactor from the enabled Cargo features and the
+//! current platform.
+//!
+//! # Runtime features
+//!
+//! - `tokio` enables the Tokio reactor.
+//! - `compio` enables the Compio reactor.
+//! - `neon-polling` requires the native polling reactor.
+//! - `neon-uring` requires the native io_uring reactor on Linux.
+//! - `neon-iocp` requires the native IOCP reactor on Windows.
+//!
+//! Without an explicit runtime feature, Linux tries io_uring and falls back to
+//! polling; other Unix platforms use polling and Windows uses IOCP.
 #![deny(clippy::pedantic)]
 #![allow(
     clippy::clone_on_copy,
@@ -36,17 +54,20 @@ pub mod tokio;
 #[cfg(feature = "compio")]
 pub mod compio;
 
+/// Runtime reactor used for network connection and transport operations.
 #[allow(clippy::wrong_self_convention)]
 pub trait Reactor: Driver {
+    /// Starts an asynchronous TCP connection.
     fn tcp_connect(&self, addr: net::SocketAddr, cfg: SharedCfg) -> channel::Receiver<Io>;
 
+    /// Starts an asynchronous Unix domain socket connection.
     fn unix_connect(&self, addr: std::path::PathBuf, cfg: SharedCfg) -> channel::Receiver<Io>;
 
-    /// Convert std `TcpStream` to `Io`
+    /// Converts a standard-library TCP stream into an [`Io`] value.
     fn from_tcp_stream(&self, stream: net::TcpStream, cfg: SharedCfg) -> io::Result<Io>;
 
     #[cfg(unix)]
-    /// Convert std `UnixStream` to `Io`
+    /// Converts a standard-library Unix stream into an [`Io`] value.
     fn from_unix_stream(&self, _: std::os::unix::net::UnixStream, _: SharedCfg) -> io::Result<Io>;
 }
 
@@ -57,7 +78,7 @@ pub async fn tcp_connect(addr: SocketAddr, cfg: SharedCfg) -> io::Result<Io> {
 }
 
 #[inline]
-/// Opens a unix stream connection.
+/// Opens a Unix domain socket connection.
 pub async fn unix_connect<'a, P>(addr: P, cfg: SharedCfg) -> io::Result<Io>
 where
     P: AsRef<std::path::Path> + 'a,
@@ -66,14 +87,14 @@ where
 }
 
 #[inline]
-/// Convert std `TcpStream` to `TcpStream`
+/// Converts a standard-library TCP stream into an [`Io`] value.
 pub fn from_tcp_stream(stream: net::TcpStream, cfg: SharedCfg) -> io::Result<Io> {
     with_current(|driver| driver.from_tcp_stream(stream, cfg))
 }
 
 #[cfg(unix)]
 #[inline]
-/// Convert std `UnixStream` to `UnixStream`
+/// Converts a standard-library Unix stream into an [`Io`] value.
 pub fn from_unix_stream(stream: std::os::unix::net::UnixStream, cfg: SharedCfg) -> io::Result<Io> {
     with_current(|driver| driver.from_unix_stream(stream, cfg))
 }
@@ -93,6 +114,10 @@ fn with_current<T, F: FnOnce(&dyn Reactor) -> T>(f: F) -> T {
 
 #[allow(clippy::borrowed_box)]
 /// Sets the current reactor and runs the provided closure.
+///
+/// # Panics
+///
+/// Panics if a reactor is already active on the current thread.
 pub fn with_reactor<R, F: FnOnce() -> R>(r: &Box<dyn Reactor>, f: F) -> R {
     #[cold]
     fn reactor_is_set() -> ! {

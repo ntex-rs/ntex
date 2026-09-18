@@ -19,9 +19,13 @@ use crate::seal::{IoBoxed, Sealed};
 use crate::utils::Extensions;
 use crate::{Decoded, FilterLayer, Handle, IoStatusUpdate, IoStream, RecvError};
 
-/// Interface object to the underlying I/O stream
+/// Buffered, filterable interface to an underlying I/O stream.
+///
+/// An `Io` value owns a shared connection state. It coordinates transport
+/// tasks, read and write buffers, backpressure, filters, and graceful shutdown.
 pub struct Io<F = Base>(UnsafeCell<IoRef>, marker::PhantomData<F>);
 
+/// Cloneable reference to an [`Io`] connection's shared state.
 #[derive(Clone)]
 pub struct IoRef(pub(super) Rc<IoState>);
 
@@ -243,7 +247,7 @@ impl IoRef {
 
 impl<F> Io<F> {
     #[inline]
-    /// Get an instance of `IoRef`.
+    /// Returns a cloneable reference to this connection's shared state.
     pub fn get_ref(&self) -> IoRef {
         self.io_ref().clone()
     }
@@ -290,7 +294,7 @@ impl<F: FilterLayer, T: Filter> Io<Layer<F, T>> {
 
 impl<F: Filter> Io<F> {
     #[inline]
-    /// Convert the current I/O stream into a sealed version.
+    /// Converts the current I/O stream into a sealed version.
     pub fn seal(self) -> Io<Sealed> {
         let state = self.take_io_ref();
         state.0.filter.seal::<F>();
@@ -299,7 +303,7 @@ impl<F: Filter> Io<F> {
     }
 
     #[inline]
-    /// Convert the current I/O stream into a boxed version.
+    /// Converts the current I/O stream into a boxed version.
     pub fn boxed(self) -> IoBoxed {
         self.seal().into()
     }
@@ -456,7 +460,7 @@ impl<F> Io<F> {
     #[inline]
     /// Wakes the write task and requests a flush of buffered data.
     ///
-    /// This is the async version of `.poll_flush()` method.
+    /// This is the asynchronous counterpart to `poll_flush`.
     pub async fn flush(&self, full: bool) -> io::Result<()> {
         poll_fn(|cx| self.poll_flush(cx, full)).await
     }
