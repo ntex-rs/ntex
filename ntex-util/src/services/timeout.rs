@@ -1,7 +1,7 @@
 //! Service that applies a timeout to requests.
 //!
-//! If the response does not complete within the specified timeout, the response
-//! will be aborted.
+//! If a service call does not complete within the configured timeout, its
+//! future is dropped and [`TimeoutError::Timeout`] is returned.
 use std::{fmt, marker::PhantomData};
 
 use ntex_service::{Ctx, IntoService, Middleware, Service};
@@ -11,18 +11,18 @@ use crate::time::{Millis, sleep};
 
 /// Applies a timeout to requests.
 ///
-/// Timeout transform is disabled if timeout is set to 0
+/// A zero timeout disables the middleware.
 #[derive(Debug)]
 pub struct Timeout<St> {
     timeout: Millis,
     _t: PhantomData<St>,
 }
 
-/// Timeout error
+/// Error returned by a timed service call.
 pub enum TimeoutError<E> {
-    /// Service error
+    /// Error returned by the wrapped service.
     Service(E),
-    /// Service call timeout
+    /// The service call exceeded its timeout.
     Timeout,
 }
 
@@ -68,6 +68,7 @@ impl<E: PartialEq> PartialEq for TimeoutError<E> {
 }
 
 impl<St> Timeout<St> {
+    /// Creates timeout middleware with the specified duration.
     pub fn new<T: Into<Millis>>(timeout: T) -> Self {
         Timeout {
             timeout: timeout.into(),
@@ -97,7 +98,7 @@ impl<S, St> Middleware<S, St> for Timeout<St> {
     }
 }
 
-/// Applies a timeout to requests.
+/// A service that applies a timeout to each request.
 #[derive(Debug, Clone)]
 pub struct TimeoutService<S, St> {
     service: S,
@@ -106,6 +107,7 @@ pub struct TimeoutService<S, St> {
 }
 
 impl<S, St> TimeoutService<S, St> {
+    /// Wraps a service with the specified per-request timeout.
     pub fn new<T, Req>(timeout: T, service: impl IntoService<S, St, Req>) -> Self
     where
         T: Into<Millis>,

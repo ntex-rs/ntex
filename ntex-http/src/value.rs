@@ -15,8 +15,8 @@ use ntex_bytes::{ByteString, Bytes};
 /// case, the header field value is not able to be represented as a string.
 ///
 /// To handle this, the `HeaderValue` is useable as a type and can be compared
-/// with strings and implements `Debug`. A `to_str` fn is provided that returns
-/// an `Err` if the header value contains non visible ascii characters.
+/// with strings and implements `Debug`. [`to_str`](Self::to_str) returns an
+/// error if the value contains bytes outside visible ASCII.
 #[derive(Clone, Hash, Eq)]
 pub struct HeaderValue {
     inner: Bytes,
@@ -45,33 +45,12 @@ impl HeaderValue {
     ///
     /// This function will not perform any copying, however the string is
     /// checked to ensure that no invalid characters are present. Only visible
-    /// ASCII characters (32-127) are permitted.
+    /// ASCII characters (32-126) are permitted.
     ///
     /// # Panics
     ///
     /// This function panics if the argument contains invalid header value
     /// characters.
-    ///
-    /// Until [Allow panicking in constants](https://github.com/rust-lang/rfcs/pull/2345)
-    /// makes its way into stable, the panic message at compile-time is
-    /// going to look cryptic, but should at least point at your header value:
-    ///
-    /// ```text
-    /// error: any use of this value will cause an error
-    ///   --> http/src/header/value.rs:67:17
-    ///    |
-    /// 67 |                 ([] as [u8; 0])[0]; // Invalid header value
-    ///    |                 ^^^^^^^^^^^^^^^^^^
-    ///    |                 |
-    ///    |                 index out of bounds: the length is 0 but the index is 0
-    ///    |                 inside `HeaderValue::from_static` at http/src/header/value.rs:67:17
-    ///    |                 inside `INVALID_HEADER` at src/main.rs:73:33
-    ///    |
-    ///   ::: src/main.rs:73:1
-    ///    |
-    /// 73 | const INVALID_HEADER: HeaderValue = HeaderValue::from_static("жsome value");
-    ///    | ----------------------------------------------------------------------------
-    /// ```
     ///
     /// # Examples
     ///
@@ -102,12 +81,9 @@ impl HeaderValue {
     /// Attempt to convert a string to a `HeaderValue`.
     ///
     /// If the argument contains invalid header value characters, an error is
-    /// returned. Only visible ASCII characters (32-127) are permitted. Use
+    /// returned. Only visible ASCII characters (32-126) are permitted. Use
     /// `from_bytes` to create a `HeaderValue` that includes opaque octets
     /// (128-255).
-    ///
-    /// This function is intended to be replaced in the future by a `TryFrom`
-    /// implementation once the trait is stabilized in std.
     ///
     /// # Examples
     ///
@@ -135,9 +111,6 @@ impl HeaderValue {
     /// returned. Only byte values between 32 and 255 (inclusive) are permitted,
     /// excluding byte 127 (DEL).
     ///
-    /// This function is intended to be replaced in the future by a `TryFrom`
-    /// implementation once the trait is stabilized in std.
-    ///
     /// # Examples
     ///
     /// ```
@@ -160,8 +133,8 @@ impl HeaderValue {
 
     /// Attempt to convert a `Bytes` buffer to a `HeaderValue`.
     ///
-    /// This will try to prevent a copy if the type passed is the type used
-    /// internally, and will copy the data if it is not.
+    /// The conversion avoids copying when `src` can be converted into the
+    /// internal [`Bytes`] representation without allocation.
     pub fn from_shared<T>(src: T) -> Result<HeaderValue, InvalidHeaderValue>
     where
         Bytes: From<T>,
@@ -179,10 +152,12 @@ impl HeaderValue {
         })
     }
 
-    /// Attempt to convert a `Bytes` buffer to a `HeaderValue`.
+    /// Creates a header value from bytes without validation.
     ///
-    /// This will try to prevent a copy if the type passed is the type used
-    /// internally, and will copy the data if it is not.
+    /// # Safety
+    ///
+    /// `src` must contain only bytes allowed in an HTTP header field value:
+    /// bytes 32 through 255, excluding 127.
     pub unsafe fn from_shared_unchecked(src: Bytes) -> HeaderValue {
         HeaderValue {
             inner: src,
@@ -246,7 +221,7 @@ impl HeaderValue {
         self.as_ref().len()
     }
 
-    /// Returns true if the `HeaderValue` has a length of zero bytes.
+    /// Returns `true` if the header value is empty.
     ///
     /// # Examples
     ///
@@ -263,7 +238,7 @@ impl HeaderValue {
         self.len() == 0
     }
 
-    /// Converts a `HeaderValue` to a byte slice.
+    /// Returns the header value as a byte slice.
     ///
     /// # Examples
     ///
@@ -277,7 +252,7 @@ impl HeaderValue {
         self.as_ref()
     }
 
-    /// Converts a `HeaderValue` to a bytes object.
+    /// Returns the underlying shared byte buffer.
     ///
     /// # Examples
     ///
@@ -292,7 +267,7 @@ impl HeaderValue {
         &self.inner
     }
 
-    /// Mark that the header value represents sensitive information.
+    /// Marks whether the header value contains sensitive information.
     ///
     /// # Examples
     ///

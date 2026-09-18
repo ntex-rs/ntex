@@ -1,5 +1,9 @@
 # Changes
 
+## [4.1.1] - 2026-09-18
+
+* Api docs improvements
+
 ## [4.1.0] - 2026-09-14
 
 * Move ServerAppConfig to root

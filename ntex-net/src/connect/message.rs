@@ -4,15 +4,15 @@ use std::{fmt, iter::FusedIterator, net::SocketAddr};
 use ntex_bytes::ByteString;
 use ntex_util::future::Either;
 
-/// Connect request
+/// Address information required by [`Connect`].
 pub trait Address: Unpin + 'static {
-    /// Host name of the request
+    /// Returns the host name.
     fn host(&self) -> &str;
 
-    /// Port of the request
+    /// Returns an explicitly configured port, if available.
     fn port(&self) -> Option<u16>;
 
-    /// `SocketAddr` of the address
+    /// Returns a pre-resolved socket address, if available.
     fn addr(&self) -> Option<SocketAddr> {
         None
     }
@@ -62,7 +62,7 @@ impl Address for SocketAddr {
     }
 }
 
-/// Connect request
+/// Request to resolve and connect to a remote address.
 #[derive(Eq, PartialEq, Debug, Hash)]
 pub struct Connect<T> {
     pub(super) req: T,
@@ -71,7 +71,7 @@ pub struct Connect<T> {
 }
 
 impl<T: Address> Connect<T> {
-    /// Create `Connect` instance by spliting the string by ':' and convert the second part to u16
+    /// Creates a connection request and derives a port from the host when present.
     #[must_use]
     pub fn new(req: T) -> Connect<T> {
         let (_, port) = parse(req.host());
@@ -82,7 +82,9 @@ impl<T: Address> Connect<T> {
         }
     }
 
-    /// Create new `Connect` instance from host and address. Connector skips name resolution stage for such connect messages.
+    /// Creates a request with a pre-resolved socket address.
+    ///
+    /// The connector skips DNS resolution for this request.
     #[must_use]
     pub fn with(req: T, addr: SocketAddr) -> Connect<T> {
         Connect {
@@ -92,16 +94,16 @@ impl<T: Address> Connect<T> {
         }
     }
 
-    /// Use port if address does not provide one.
+    /// Sets the fallback port used when the address does not provide one.
     ///
-    /// By default it set to 0
+    /// The default fallback port is zero.
     #[must_use]
     pub fn set_port(mut self, port: u16) -> Self {
         self.port = port;
         self
     }
 
-    /// Use address.
+    /// Sets one pre-resolved socket address.
     #[must_use]
     pub fn set_addr(mut self, addr: Option<SocketAddr>) -> Self {
         if let Some(addr) = addr {
@@ -110,7 +112,7 @@ impl<T: Address> Connect<T> {
         self
     }
 
-    /// Use addresses.
+    /// Sets multiple pre-resolved socket addresses.
     #[must_use]
     pub fn set_addrs<I>(mut self, addrs: I) -> Self
     where
@@ -125,17 +127,17 @@ impl<T: Address> Connect<T> {
         self
     }
 
-    /// Host name
+    /// Returns the request host name.
     pub fn host(&self) -> &str {
         self.req.host()
     }
 
-    /// Port of the request
+    /// Returns the explicit or fallback port.
     pub fn port(&self) -> u16 {
         self.req.port().unwrap_or(self.port)
     }
 
-    /// Preresolved addresses of the request.
+    /// Iterates over the request's pre-resolved addresses.
     pub fn addrs(&self) -> ConnectAddrsIter<'_> {
         if let Some(addr) = self.req.addr() {
             ConnectAddrsIter {
@@ -152,7 +154,7 @@ impl<T: Address> Connect<T> {
         }
     }
 
-    /// Takes preresolved addresses of the request.
+    /// Removes and returns the request's pre-resolved addresses.
     pub fn take_addrs(&mut self) -> ConnectTakeAddrsIter {
         if let Some(addr) = self.req.addr() {
             ConnectTakeAddrsIter {
@@ -169,12 +171,12 @@ impl<T: Address> Connect<T> {
         }
     }
 
-    /// Return reference to inner type
+    /// Returns the original address value.
     pub fn get_ref(&self) -> &T {
         &self.req
     }
 
-    /// Call callback with current address and construct new Connect instance.
+    /// Maps the original address value while preserving port and resolved addresses.
     pub fn map_addr<F, R>(self, f: F) -> Connect<R>
     where
         F: FnOnce(T) -> R,
@@ -211,7 +213,7 @@ impl<T: Address> fmt::Display for Connect<T> {
     }
 }
 
-/// Iterator over addresses in a [`Connect`](struct.Connect.html) request.
+/// Iterator over addresses in a [`Connect`] request.
 #[derive(Clone)]
 pub struct ConnectAddrsIter<'a> {
     inner: Either<Option<SocketAddr>, vec_deque::Iter<'a, SocketAddr>>,
@@ -246,7 +248,7 @@ impl ExactSizeIterator for ConnectAddrsIter<'_> {}
 
 impl FusedIterator for ConnectAddrsIter<'_> {}
 
-/// Owned iterator over addresses in a [`Connect`](struct.Connect.html) request.
+/// Owning iterator over addresses removed from a [`Connect`] request.
 #[derive(Debug)]
 pub struct ConnectTakeAddrsIter {
     inner: Either<Option<SocketAddr>, vec_deque::IntoIter<SocketAddr>>,

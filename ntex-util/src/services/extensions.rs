@@ -7,7 +7,7 @@ pub struct Extensions {
 }
 
 impl Extensions {
-    /// Create an empty `Extensions`.
+    /// Creates an empty `Extensions` map.
     #[inline]
     pub fn new() -> Extensions {
         Extensions {
@@ -17,27 +17,26 @@ impl Extensions {
 
     /// Insert a type into this `Extensions`.
     ///
-    /// If a extension of this type already existed, it will
-    /// be returned.
+    /// Returns the previous value of the same type, if present.
     pub fn insert<T: 'static>(&mut self, val: T) -> Option<T> {
         self.map
             .insert(TypeId::of::<T>(), Box::new(val))
             .and_then(|item| item.downcast::<T>().map(|boxed| *boxed).ok())
     }
 
-    /// Check if container contains entry
+    /// Returns `true` if the map contains a value of type `T`.
     pub fn contains<T: 'static>(&self) -> bool {
         self.map.contains_key(&TypeId::of::<T>())
     }
 
-    /// Get a reference to a type previously inserted on this `Extensions`.
+    /// Returns a reference to a previously inserted value of type `T`.
     pub fn get<T: 'static>(&self) -> Option<&T> {
         self.map
             .get(&TypeId::of::<T>())
             .and_then(|boxed| boxed.downcast_ref())
     }
 
-    /// Get a mutable reference to a type previously inserted on this `Extensions`.
+    /// Returns a mutable reference to a previously inserted value of type `T`.
     pub fn get_mut<T: 'static>(&mut self) -> Option<&mut T> {
         self.map
             .get_mut(&TypeId::of::<T>())
@@ -46,24 +45,25 @@ impl Extensions {
 
     /// Remove a type from this `Extensions`.
     ///
-    /// If a extension of this type existed, it will be returned.
+    /// Returns the removed value, if present.
     pub fn remove<T: 'static>(&mut self) -> Option<T> {
         self.map
             .remove(&TypeId::of::<T>())
             .and_then(|boxed| boxed.downcast().ok().map(|boxed| *boxed))
     }
 
-    /// Add all items from other `Extensions`
+    /// Moves all values from `other` into this map.
     pub fn extend(&mut self, other: Extensions) {
         self.map.extend(other.map);
     }
 
     #[inline]
+    /// Returns `true` if the map contains no values.
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
 
-    /// Clear the `Extensions` of all inserted extensions.
+    /// Removes all values from the map.
     #[inline]
     pub fn clear(&mut self) {
         self.map.clear();

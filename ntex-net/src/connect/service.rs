@@ -8,14 +8,14 @@ use ntex_util::{future::Either, time::timeout_checked};
 use super::{Address, Connect, ConnectError, resolve};
 
 #[derive(Debug)]
-/// Basic tcp stream connector
+/// DNS-aware TCP stream connector.
 pub struct Connector<A> {
     _t: marker::PhantomData<A>,
 }
 
 impl<A> Connector<A> {
     #[inline]
-    /// Construct new connect service with default configuration
+    /// Creates a connector.
     pub fn new() -> Self {
         Connector {
             _t: marker::PhantomData,
@@ -38,7 +38,7 @@ impl<A> Clone for Connector<A> {
 }
 
 impl<A: Address> Connector<A> {
-    /// Resolve and connect to remote host
+    /// Resolves and connects to a remote host.
     pub async fn connect<U>(&self, message: U, cfg: &SharedCfg) -> Result<Io, Error<ConnectError>>
     where
         Connect<A>: From<U>,

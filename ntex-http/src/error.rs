@@ -3,7 +3,7 @@ use std::{error, fmt};
 pub use crate::value::{InvalidHeaderValue, ToStrError};
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
-/// A generic "error" for HTTP connections
+/// A generic error for HTTP value conversions.
 ///
 /// This error type is less specific than the error returned from other
 /// functions in this crate, but all other errors can be converted to this
@@ -71,12 +71,12 @@ impl fmt::Display for Error {
 }
 
 impl Error {
-    /// Return true if the underlying error has the same type as T.
+    /// Returns `true` if the underlying error has type `T`.
     pub fn is<T: error::Error + 'static>(&self) -> bool {
         self.get_ref().is::<T>()
     }
 
-    /// Return a reference to the lower level, inner error.
+    /// Returns the underlying conversion error.
     pub fn get_ref(&self) -> &(dyn error::Error + 'static) {
         match self.inner {
             ErrorKind::StatusCode(ref e) => e,

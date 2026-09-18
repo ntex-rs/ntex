@@ -1,4 +1,4 @@
-//! Tcp connector service
+//! DNS-aware TCP connector service.
 use ntex_error::Error;
 
 mod error;
@@ -14,7 +14,7 @@ pub use self::service::Connector;
 use ntex_io::Io;
 use ntex_service::cfg::SharedCfg;
 
-/// Resolve and connect to remote host
+/// Resolves a request and connects using default shared configuration.
 pub async fn connect<A, U>(message: U) -> Result<Io, Error<ConnectError>>
 where
     A: Address,
@@ -25,7 +25,7 @@ where
         .await
 }
 
-/// Resolve and connect to remote host
+/// Resolves a request and connects using the supplied shared configuration.
 pub async fn connect_with<A, U>(message: U, cfg: &SharedCfg) -> Result<Io, Error<ConnectError>>
 where
     A: Address,

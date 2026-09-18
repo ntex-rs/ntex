@@ -12,27 +12,26 @@ mod wheel;
 pub use self::types::{Millis, Seconds};
 pub use self::wheel::{TimerHandle, now, query_system_time, system_time};
 
-/// Waits until `duration` has elapsed.
+/// Waits until `dur` has elapsed.
 ///
-/// No work is performed while awaiting on the sleep future to complete. `Sleep`
-/// operates at 16 millisecond granularity and should not be used for tasks that
-/// require high-resolution timers. `Sleep` sleeps at least one tick (16 millis)
-/// even if 0 millis duration is used.
+/// No work is performed while awaiting the returned [`Sleep`]. Timers have a
+/// granularity of approximately 16 milliseconds and are not suitable for
+/// high-resolution timing. A zero duration still waits for at least one timer
+/// tick.
 #[inline]
 pub fn sleep<T: Into<Millis>>(dur: T) -> Sleep {
     Sleep::new(dur.into())
 }
 
-/// Waits until `duration` has elapsed.
+/// Waits until `dur` has elapsed.
 ///
-/// This is similar to `sleep` future, but in case of `0` duration deadline future
-/// never completes.
+/// Unlike [`sleep`], a zero-duration deadline never completes.
 #[inline]
 pub fn deadline<T: Into<Millis>>(dur: T) -> Deadline {
     Deadline::new(dur.into())
 }
 
-/// Creates new [`Interval`] that yields with interval of `period`.
+/// Creates an [`Interval`] that ticks every `period`.
 ///
 /// An interval will tick indefinitely. At any time, the [`Interval`] value can
 /// be dropped. This cancels the interval.
@@ -41,11 +40,12 @@ pub fn interval<T: Into<Millis>>(period: T) -> Interval {
     Interval::new(period.into())
 }
 
-/// Require a `Future` to complete before the specified duration has elapsed.
+/// Requires a future to complete before `dur` has elapsed.
 ///
 /// If the future completes before the duration has elapsed, then the completed
 /// value is returned. Otherwise, an error is returned and the future is
-/// canceled.
+/// canceled. A zero duration still represents an active timeout of at least
+/// one timer tick; use [`timeout_checked`] to disable the timeout with zero.
 #[inline]
 pub fn timeout<T, U>(dur: U, future: T) -> Timeout<T>
 where
@@ -55,11 +55,11 @@ where
     Timeout::new_with_delay(future, Sleep::new(dur.into()))
 }
 
-/// Require a `Future` to complete before the specified duration has elapsed.
+/// Requires a future to complete before `dur` has elapsed.
 ///
 /// If the future completes before the duration has elapsed, then the completed
 /// value is returned. Otherwise, an error is returned and the future is
-/// canceled. If duration value is zero then timeout is disabled.
+/// canceled. A zero duration disables the timeout.
 #[inline]
 pub fn timeout_checked<T, U>(dur: U, future: T) -> TimeoutChecked<T>
 where
@@ -92,7 +92,7 @@ pub struct Sleep {
 }
 
 impl Sleep {
-    /// Create new sleep future
+    /// Creates a new sleep future.
     #[inline]
     pub fn new(duration: Millis) -> Sleep {
         Sleep {
@@ -106,7 +106,7 @@ impl Sleep {
         self.hnd.is_elapsed()
     }
 
-    /// Complete sleep timer.
+    /// Completes the timer immediately.
     #[inline]
     pub fn elapse(&self) {
         self.hnd.elapse();
@@ -124,7 +124,7 @@ impl Sleep {
     }
 
     #[inline]
-    /// Wait when `Sleep` instance get elapsed.
+    /// Waits until this timer has elapsed.
     pub async fn wait(&self) {
         poll_fn(|cx| self.hnd.poll_elapsed(cx)).await;
     }
@@ -165,7 +165,9 @@ pub struct Deadline {
 }
 
 impl Deadline {
-    /// Create new deadline future
+    /// Creates a new deadline future.
+    ///
+    /// A zero duration creates a deadline that never completes.
     #[inline]
     pub fn new(duration: Millis) -> Deadline {
         if duration.0 != 0 {
@@ -178,7 +180,7 @@ impl Deadline {
     }
 
     #[inline]
-    /// Wait when `Sleep` instance get elapsed.
+    /// Waits until this deadline has elapsed.
     pub async fn wait(&self) {
         poll_fn(|cx| self.poll_elapsed(cx)).await;
     }
@@ -311,7 +313,7 @@ where
     }
 }
 
-/// Interval returned by [`interval`]
+/// An interval returned by [`interval`].
 ///
 /// This type allows you to wait on a sequence of instants with a certain
 /// duration between each instant.
@@ -323,7 +325,7 @@ pub struct Interval {
 }
 
 impl Interval {
-    /// Create new sleep future
+    /// Creates an interval with the specified period.
     #[inline]
     pub fn new(period: Millis) -> Interval {
         Interval {
@@ -333,11 +335,13 @@ impl Interval {
     }
 
     #[inline]
+    /// Waits for the next interval tick.
     pub async fn tick(&self) {
         poll_fn(|cx| self.poll_tick(cx)).await;
     }
 
     #[inline]
+    /// Polls for the next interval tick.
     pub fn poll_tick(&self, cx: &mut task::Context<'_>) -> Poll<()> {
         if self.hnd.poll_elapsed(cx).is_ready() {
             self.hnd.reset(u64::from(self.period));

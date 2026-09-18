@@ -24,11 +24,14 @@ struct Arbiters {
     list: Vec<Arbiter>,
 }
 
-/// System id
+/// Identifier assigned to a running [`System`].
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Id(pub(crate) usize);
 
-/// System is a runtime manager
+/// Runtime manager for a group of arbiter threads.
+///
+/// A system stores runtime configuration, manages arbiters, dispatches process
+/// signals, and owns the blocking thread pool.
 pub struct System(Arc<SystemInner>);
 
 struct SystemInner {
@@ -43,6 +46,7 @@ struct SystemInner {
     pool: ThreadPool,
 }
 
+/// Configuration shared by a running [`System`].
 #[derive(Clone)]
 pub struct SystemConfig {
     pub(super) name: String,
@@ -101,35 +105,38 @@ impl System {
         (sys, stop)
     }
 
-    /// Build a new system with a customized runtime
+    /// Creates a builder for a system with a customized runtime.
     ///
-    /// This allows to customize the runtime. See struct level docs on
-    /// `Builder` for more information.
+    /// See [`Builder`] for the available configuration options.
     pub fn build() -> Builder {
         Builder::new()
     }
 
     #[allow(clippy::new_ret_no_self)]
-    /// Create new system
+    /// Creates a system runner with the specified name and runtime runner.
     ///
-    /// This method panics if it can not create runtime
+    /// # Panics
+    ///
+    /// Panics if the runtime cannot be created.
     pub fn new<R: Runner>(name: &str, runner: R) -> SystemRunner {
         Self::build().name(name).build(runner)
     }
 
     #[allow(clippy::new_ret_no_self)]
-    /// Create new system
+    /// Creates a system runner from an existing configuration.
     ///
-    /// This method panics if it can not create runtime
+    /// # Panics
+    ///
+    /// Panics if the runtime cannot be created.
     pub fn with_config(name: &str, config: SystemConfig) -> SystemRunner {
         Self::build().name(name).build_with(config)
     }
 
-    /// Get current running system
+    /// Returns the system running on the current thread.
     ///
     /// # Panics
     ///
-    /// Panics if System is not running
+    /// Panics if no system is running on the current thread.
     pub fn current() -> System {
         CURRENT.with(|cell| match *cell.borrow() {
             Some(ref sys) => sys.clone(),
@@ -137,7 +144,7 @@ impl System {
         })
     }
 
-    /// Runs a function using the system context.
+    /// Returns the system running on the current thread, if one exists.
     pub fn try_current() -> Option<System> {
         CURRENT.with(|cell| cell.borrow().as_ref().map(Clone::clone))
     }
@@ -180,22 +187,22 @@ impl System {
         });
     }
 
-    /// System id
+    /// Returns the system identifier.
     pub fn id(&self) -> Id {
         Id(self.0.id)
     }
 
-    /// System name
+    /// Returns the system name.
     pub fn name(&self) -> &str {
         &self.0.config.name
     }
 
-    /// Stop the system
+    /// Stops the system with exit code `0`.
     pub fn stop(&self) {
         self.stop_with_code(0);
     }
 
-    /// Stop the system with a particular exit code
+    /// Stops the system with the specified exit code.
     pub fn stop_with_code(&self, code: i32) {
         let _ = self.0.sender.try_send(SystemCommand::Exit(code));
     }
@@ -210,12 +217,12 @@ impl System {
         false
     }
 
-    /// Return status of `signals` option
+    /// Returns whether process signal handling is enabled.
     pub fn signals(&self) -> bool {
         self.0.signals.load(Ordering::Relaxed)
     }
 
-    /// Enable `signals` handling
+    /// Enables process signal handling.
     pub fn enable_signals(&self) {
         if !self.signals() {
             crate::signals::start(self);
@@ -223,7 +230,7 @@ impl System {
         }
     }
 
-    /// Disable `signals` handling
+    /// Disables process signal handling.
     pub fn disable_signals(&self) {
         if self.signals() {
             crate::signals::stop(self);
@@ -231,16 +238,16 @@ impl System {
         }
     }
 
-    /// System arbiter
+    /// Returns the system's primary arbiter.
     ///
     /// # Panics
     ///
-    /// Panics if system is not started
+    /// Panics if the system has not been started.
     pub fn arbiter(&self) -> Arbiter {
         self.0.arbiter.clone()
     }
 
-    /// Retrieves a list of all arbiters in the system
+    /// Provides access to all arbiters registered with this system.
     ///
     /// This method should be called from the thread where the system has been initialized,
     /// typically the "main" thread.
@@ -251,7 +258,7 @@ impl System {
         f(&self.0.arbiters.lock().list)
     }
 
-    /// Retrieves a list of last pings records for each worker.
+    /// Visits the latest ping records for each registered arbiter.
     ///
     /// This method should be called from the thread where the system has been initialized,
     /// typically the "main" thread.
@@ -286,26 +293,28 @@ impl System {
         }
     }
 
-    /// System config
+    /// Returns a clone of the system configuration.
     pub fn config(&self) -> SystemConfig {
         self.0.config.clone()
     }
 
     #[inline]
-    /// Runtime handle for main thread
+    /// Returns a runtime handle for the primary arbiter.
     pub fn handle(&self) -> Handle {
         self.arbiter().handle().clone()
     }
 
-    /// Testing flag
+    /// Returns whether the system is configured for testing.
     pub fn testing(&self) -> bool {
         self.0.config.testing()
     }
 
     /// Spawns a blocking task on a new thread and waits for it to complete.
     ///
-    /// If the returned future is dropped, the blocking task is cancelled.
-    /// Call `detach` to allow the task to continue running in the background.
+    /// Dropping the returned future prevents queued work from starting, but
+    /// cannot interrupt work that is already running. Call
+    /// [`BlockingResult::detach`] to let queued work continue even if its
+    /// result is no longer needed.
     pub fn spawn_blocking<F, R>(&self, f: F) -> BlockingResult<R>
     where
         F: FnOnce() -> R + Send + 'static,
@@ -339,7 +348,7 @@ impl System {
 
 impl SystemConfig {
     #[inline]
-    /// Is current system is testing
+    /// Returns whether the system is configured for testing.
     pub fn testing(&self) -> bool {
         self.testing
     }

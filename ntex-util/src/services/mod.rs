@@ -1,3 +1,8 @@
+//! Reusable services and middleware.
+//!
+//! This module includes request buffering, in-flight request limits,
+//! keep-alive handling, retries, per-request extensions, and timeouts.
+
 pub mod buffer;
 mod extensions;
 pub mod inflight;

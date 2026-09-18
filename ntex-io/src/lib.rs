@@ -1,4 +1,11 @@
-//! Utilities for abstructing io streams
+//! Asynchronous I/O abstractions for the ntex ecosystem.
+//!
+//! [`Io`] wraps an underlying [`IoStream`] and coordinates buffered reads,
+//! writes, backpressure, timeouts, and shutdown. Protocol transforms can be
+//! composed through [`Filter`] layers, while [`Framed`] combines an I/O stream
+//! with an `ntex-codec` encoder and decoder.
+//!
+//! Use [`IoConfig`] to configure buffer thresholds and connection timeouts.
 #![deny(clippy::pedantic)]
 #![allow(
     clippy::missing_fields_in_debug,
@@ -70,6 +77,7 @@ impl Readiness {
     }
 }
 
+/// A processing layer that transforms an I/O stream's read and write buffers.
 #[allow(unused_variables)]
 pub trait FilterLayer: fmt::Debug + 'static {
     /// Accesses internal filter information.
@@ -89,31 +97,35 @@ pub trait FilterLayer: fmt::Debug + 'static {
     }
 }
 
+/// An underlying transport that can be managed by [`Io`].
 pub trait IoStream {
+    /// Starts transport-specific I/O tasks and returns their control handle.
     fn start(self, _: IoContext) -> Box<dyn Handle>;
 }
 
 #[doc(hidden)]
-/// Callbacks for filter processing
+/// Callbacks invoked around filter-chain processing.
 pub trait IoCallbacks {
-    /// Get called before processing read or write buffers chain
+    /// Called before processing the read or write filter chain.
     fn before_processing(&self, io: &IoRef);
 
-    /// Get called after processing read or write buffers chain
+    /// Called after processing the read or write filter chain.
     fn after_processing(&self, io: &IoRef);
 }
 
+/// Control handle for transport-specific I/O tasks.
 pub trait Handle {
+    /// Queries transport-specific information by type.
     fn query(&self, _: TypeId) -> Option<Box<dyn Any>> {
         None
     }
 
     #[inline]
-    /// Initiate io write operation
+    /// Requests that the transport start a write operation.
     fn write(&self, _: &IoContext) {}
 
     #[inline]
-    /// Called when readiness changes
+    /// Notifies the I/O context that readiness has changed.
     fn notify(&self, ctx: &IoContext) {
         ctx.notify();
     }

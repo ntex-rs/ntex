@@ -13,21 +13,21 @@ impl<T> JoinHandle<T> {
         JoinHandle { task: Some(task) }
     }
 
-    /// Cancels the task
+    /// Cancels the task.
     pub fn cancel(mut self) {
         if let Some(t) = self.task.take() {
             drop(t.cancel());
         }
     }
 
-    /// Detaches the task to let it keep running in the background
+    /// Detaches the task so it continues running independently.
     pub fn detach(mut self) {
         if let Some(t) = self.task.take() {
             t.detach();
         }
     }
 
-    /// Returns true if the current task is finished
+    /// Returns `true` if the task has finished.
     pub fn is_finished(&self) -> bool {
         match &self.task {
             Some(fut) => fut.is_finished(),
@@ -55,6 +55,7 @@ impl<T> Future for JoinHandle<T> {
     }
 }
 
+/// Error returned when a task handle no longer contains a task.
 #[derive(Debug, Copy, Clone)]
 pub struct JoinError;
 

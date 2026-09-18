@@ -13,7 +13,10 @@ pub(crate) struct ServerShared {
     pub(crate) paused: AtomicBool,
 }
 
-/// Server controller
+/// Controller and completion future for a running server.
+///
+/// Clones can pause, resume, stop, or submit items to the server. Awaiting a
+/// `Server` resolves when the server has stopped.
 #[derive(Debug)]
 pub struct Server<T> {
     shared: Arc<ServerShared>,
@@ -30,7 +33,7 @@ impl<T> Server<T> {
         }
     }
 
-    /// Start streaming server building process
+    /// Creates a network server builder with no application configuration.
     pub fn builder() -> crate::net::ServerBuilder {
         crate::net::ServerBuilder::default()
     }
@@ -39,7 +42,9 @@ impl<T> Server<T> {
         let _ = self.cmd.try_send(ServerCommand::Signal(sig));
     }
 
-    /// Send item to worker pool
+    /// Submits an item to the worker pool.
+    ///
+    /// Returns the item unchanged if the server is paused or cannot accept it.
     pub fn process(&self, item: T) -> Result<(), T> {
         if self.shared.paused.load(Ordering::Acquire) {
             Err(item)
@@ -54,10 +59,10 @@ impl<T> Server<T> {
         }
     }
 
-    /// Pause accepting incoming connections
+    /// Pauses processing new items.
     ///
-    /// If socket contains some pending connection, they might be dropped.
-    /// All opened connection remains active.
+    /// For network servers, pending connections may be dropped. Existing
+    /// connections remain active.
     pub fn pause(&self) -> impl Future<Output = ()> + use<T> {
         let (tx, rx) = oneshot::channel();
         let _ = self.cmd.try_send(ServerCommand::Pause(tx));
@@ -66,7 +71,7 @@ impl<T> Server<T> {
         }
     }
 
-    /// Resume accepting incoming connections
+    /// Resumes processing new items.
     pub fn resume(&self) -> impl Future<Output = ()> + use<T> {
         let (tx, rx) = oneshot::channel();
         let _ = self.cmd.try_send(ServerCommand::Resume(tx));
@@ -75,9 +80,10 @@ impl<T> Server<T> {
         }
     }
 
-    /// Stop incoming connection processing, stop all workers and exit.
+    /// Stops processing new items and shuts down all workers.
     ///
-    /// If server starts with `spawn()` method, then spawned thread get terminated.
+    /// If `graceful` is `true`, workers are given time to finish active work
+    /// before they are stopped.
     pub fn stop(&self, graceful: bool) -> impl Future<Output = ()> + use<T> {
         let (tx, rx) = oneshot::channel();
         let _ = self.cmd.try_send(ServerCommand::Stop {

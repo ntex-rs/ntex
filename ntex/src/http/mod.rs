@@ -1,4 +1,8 @@
-//! Http protocol support.
+//! HTTP protocol support.
+//!
+//! This module contains HTTP request and response types, HTTP/1 and HTTP/2
+//! services, payload streaming, protocol configuration, and common header
+//! types.
 mod config;
 #[cfg(feature = "compress")]
 pub mod encoding;
@@ -32,15 +36,21 @@ pub use crate::io::types::HttpProtocol;
 pub use ntex_http::uri::{self, Uri};
 pub use ntex_http::{HeaderMap, Method, StatusCode, Version, body, header};
 
+/// ALPN protocol identifiers for HTTP/1.1.
 pub const ALPN_PROTO_H1: &[&str] = &["http/1.1"];
+/// ALPN protocol identifiers for HTTP/2.
 pub const ALPN_PROTO_H2: &[&str] = &["h2"];
+/// ALPN protocol identifiers for negotiating HTTP/2 or HTTP/1.1.
 pub const ALPN_PROTOS: &[&str] = &["h2", "http/1.1"];
 
-/// Header item
+/// A parsed header that preserves its original name and value.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct HeaderItem {
+    /// Parsed header name.
     pub name: header::HeaderName,
+    /// Header name as it appeared in the original message.
     pub origin: crate::util::ByteString,
+    /// Parsed header value.
     pub value: header::HeaderValue,
 }
 
@@ -50,7 +60,7 @@ use crate::server::openssl::{SslAcceptor, SslFilter};
 use crate::{IntoService, Service, io::Filter, io::Io, io::Layer, server::TlsError};
 
 #[cfg(feature = "openssl")]
-/// Create openssl based service
+/// Creates an OpenSSL-based HTTP service.
 pub fn openssl<F, S, St>(
     acceptor: tls_openssl::ssl::SslAcceptor,
     service: impl IntoService<S, St, Io<Layer<SslFilter, F>>>,
@@ -68,9 +78,11 @@ where
 use crate::server::rustls::{TlsAcceptor, TlsServerFilter};
 
 #[cfg(feature = "rustls")]
-/// Create rustls based service.
+/// Creates a rustls-based HTTP service.
 ///
-/// You must specify alpns protocols to negotiate for h2 server
+/// Pass the supported ALPN protocol identifiers in `protos` to enable HTTP/2
+/// negotiation. If the configuration already contains ALPN protocols, they
+/// are preserved.
 pub fn rustls<F, S, St>(
     mut config: tls_rustls::ServerConfig,
     protos: &[&str],

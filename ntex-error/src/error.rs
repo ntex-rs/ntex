@@ -12,7 +12,7 @@ pub struct Error<E> {
 }
 
 impl<E> Error<E> {
-    /// Creates a new error container.
+    /// Creates an error container associated with a service.
     ///
     /// Captures the caller location and associates the error with a service.
     #[track_caller]
@@ -30,7 +30,7 @@ impl<E> Error<E> {
         }
     }
 
-    /// Creates a new error container.
+    /// Creates an error container without service attribution.
     ///
     /// Captures the caller location and associates the error with a service.
     #[track_caller]
@@ -138,7 +138,7 @@ impl<E: Clone> Error<E> {
         }
     }
 
-    /// Try to map inner error to new error.
+    /// Tries to map the inner error into a value or another error type.
     ///
     /// Preserves `service`, backtrace, and extension data.
     pub fn try_map<T, U, F>(self, f: F) -> Result<T, Error<U>>
@@ -159,7 +159,7 @@ impl<E: Clone> Error<E> {
 
     /// Attaches a typed value to this `Error`.
     ///
-    /// This value can be retrieved later using `get_item::<T>()`.
+    /// This value can be retrieved later using [`get_item`](Self::get_item).
     #[must_use]
     pub fn insert_item<T: Sync + Send + 'static>(self, val: T) -> Self {
         Error {

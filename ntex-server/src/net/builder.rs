@@ -13,10 +13,10 @@ use super::config::ServiceConfig;
 use super::factory::{self, FactoryServiceType};
 use super::{Connection, ServerStatus, StreamServer, Token, socket::Listener};
 
-/// Streaming service builder
+/// Builder for a network server.
 ///
-/// This type can be used to construct an instance of `net streaming server` through a
-/// builder-like pattern.
+/// Register listeners and their service factories, configure the worker pool,
+/// and call [`run`](Self::run) to start the server.
 pub struct ServerBuilder<Cfg = NoConfig> {
     name: String,
     token: Token,
@@ -39,10 +39,7 @@ where
     Cfg: ServerAppConfig,
 {
     #[must_use]
-    /// Create new Server builder instance.
-    ///
-    /// Provided function get called during worker runtime configuration stage
-    /// and must construct server state.
+    /// Creates a server builder with the specified application configuration.
     pub fn new(cfg: Cfg) -> ServerBuilder<Cfg> {
         let sys = System::current();
         let mut accept = AcceptLoop::default();
@@ -64,9 +61,9 @@ where
     }
 
     #[must_use]
-    /// Set server name.
+    /// Sets the server name.
     ///
-    /// Name is used for worker thread name
+    /// The name is also used for worker threads.
     pub fn name<T: AsRef<str>>(mut self, name: T) -> Self {
         self.name = name.as_ref().to_string();
         self.accept.name(self.name.as_str());
@@ -75,10 +72,9 @@ where
     }
 
     #[must_use]
-    /// Set number of workers to start.
+    /// Sets the number of worker threads to start.
     ///
-    /// By default server uses number of available logical cpu as workers
-    /// count.
+    /// By default, the server uses the number of available logical CPUs.
     pub fn workers(mut self, num: usize) -> Self {
         self.pool = self.pool.workers(num);
         self
@@ -106,14 +102,14 @@ where
     /// All socket listeners will stop accepting connections when this limit is
     /// reached for each worker.
     ///
-    /// By default max connections is set to a 25k per worker.
+    /// The default is 25,600 connections per worker.
     pub fn maxconn(self, num: usize) -> Self {
         super::max_concurrent_connections(num);
         self
     }
 
     #[must_use]
-    /// Stop ntex runtime when server get dropped.
+    /// Stops the current ntex runtime when the server is dropped.
     ///
     /// By default "stop runtime" is disabled.
     pub fn stop_runtime(mut self) -> Self {
@@ -140,7 +136,7 @@ where
     }
 
     #[must_use]
-    /// Enable cpu affinity.
+    /// Enables CPU affinity for worker threads.
     ///
     /// By default, affinity is disabled.
     pub fn enable_affinity(mut self) -> Self {
@@ -184,7 +180,7 @@ where
         self
     }
 
-    /// Execute external async configuration as part of the server building
+    /// Executes asynchronous configuration as part of the server building
     /// process.
     ///
     /// This function is useful for moving parts of configuration to a
@@ -206,7 +202,7 @@ where
     }
 
     #[allow(clippy::needless_pass_by_value)]
-    /// Add new service to the server.
+    /// Binds TCP listeners and registers a service factory.
     pub fn bind<F, S, I>(
         mut self,
         name: impl AsRef<str>,
@@ -240,7 +236,7 @@ where
     }
 
     #[cfg(unix)]
-    /// Add new unix domain service to the server.
+    /// Binds a Unix domain socket and registers a service factory.
     pub fn bind_uds<F, I, S>(
         self,
         name: impl AsRef<str>,
@@ -269,9 +265,10 @@ where
     }
 
     #[cfg(unix)]
-    /// Add new unix domain service to the server.
-    /// Useful when running as a systemd service and
-    /// a socket FD can be acquired using the systemd crate.
+    /// Registers a service factory for an existing Unix domain listener.
+    ///
+    /// This is useful for socket activation, including listeners acquired
+    /// through systemd.
     pub fn listen_uds<F, I, S>(
         mut self,
         name: impl AsRef<str>,
@@ -295,7 +292,7 @@ where
         Ok(self)
     }
 
-    /// Add new service to the server.
+    /// Registers a service factory for an existing TCP listener.
     pub fn listen<F, S, I>(
         mut self,
         name: impl AsRef<str>,
@@ -319,7 +316,7 @@ where
         Ok(self)
     }
 
-    /// Starts processing incoming connections and return server controller.
+    /// Starts processing incoming connections and returns a server controller.
     pub fn run(self) -> Server<Connection> {
         assert!(
             !self.sockets.is_empty(),
@@ -355,6 +352,7 @@ impl<Cfg> fmt::Debug for ServerBuilder<Cfg> {
     }
 }
 
+/// Binds TCP listeners for every address resolved from `addr`.
 pub fn bind_addr<S: net::ToSocketAddrs>(
     addr: S,
     backlog: i32,
@@ -384,6 +382,7 @@ pub fn bind_addr<S: net::ToSocketAddrs>(
     }
 }
 
+/// Creates and binds a TCP listener with the specified listen backlog.
 pub fn create_tcp_listener(addr: net::SocketAddr, backlog: i32) -> io::Result<net::TcpListener> {
     let builder = match addr {
         net::SocketAddr::V4(_) => Socket::new(Domain::IPV4, Type::STREAM, None)?,

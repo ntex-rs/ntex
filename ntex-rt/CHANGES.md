@@ -1,5 +1,9 @@
 # Changes
 
+## [3.17.3] - 2026-09-18
+
+* Api docs improvements
+
 ## [3.17.2] - 2026-08-27
 
 * Fix arbiter storage cleanup logic

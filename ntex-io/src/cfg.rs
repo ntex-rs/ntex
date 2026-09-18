@@ -14,7 +14,7 @@ thread_local! {
 }
 
 #[derive(Debug)]
-/// Base io configuration
+/// Shared configuration for an [`crate::Io`] stream.
 pub struct IoConfig {
     connect_timeout: Millis,
     keepalive_timeout: Seconds,
@@ -51,17 +51,25 @@ impl Configuration for IoConfig {
     }
 }
 
+/// Minimum read rate required while decoding one frame.
 #[derive(Copy, Clone, Debug)]
 pub struct FrameReadRate {
+    /// Initial read timeout.
     pub timeout: Seconds,
+    /// Maximum cumulative timeout for the frame.
     pub max_timeout: Seconds,
+    /// Number of bytes that extends the deadline by one `timeout` period.
     pub rate: u32,
 }
 
+/// Buffer allocation and backpressure thresholds.
 #[derive(Copy, Clone, Debug)]
 pub struct BufConfig {
+    /// High watermark that enables backpressure.
     pub high: usize,
+    /// Low watermark used when resizing or caching buffers.
     pub low: usize,
+    /// Threshold that disables active backpressure.
     pub half: usize,
     idx: usize,
     first: bool,
@@ -71,7 +79,7 @@ pub struct BufConfig {
 impl IoConfig {
     #[inline]
     #[must_use]
-    /// Create new config object
+    /// Creates an I/O configuration with default settings.
     pub fn new() -> IoConfig {
         let config = CfgContext::default();
         let idx = config.id();
@@ -105,49 +113,49 @@ impl IoConfig {
     }
 
     #[inline]
-    /// Get tag
+    /// Returns the shared configuration tag.
     pub fn tag(&self) -> &str {
         self.config.tag()
     }
 
     #[inline]
-    /// Get connect timeout
+    /// Returns the connection timeout.
     pub fn connect_timeout(&self) -> Millis {
         self.connect_timeout
     }
 
     #[inline]
-    /// Get keep-alive timeout
+    /// Returns the keep-alive timeout.
     pub fn keepalive_timeout(&self) -> Seconds {
         self.keepalive_timeout
     }
 
     #[inline]
-    /// Get disconnect timeout
+    /// Returns the graceful disconnect timeout.
     pub fn disconnect_timeout(&self) -> Seconds {
         self.disconnect_timeout
     }
 
     #[inline]
-    /// Get frame read params
+    /// Returns the frame read-rate configuration.
     pub fn frame_read_rate(&self) -> Option<&FrameReadRate> {
         self.frame_read_rate.as_ref()
     }
 
     #[inline]
-    /// Get read buffer parameters
+    /// Returns the read-buffer configuration.
     pub fn read_buf(&self) -> &BufConfig {
         &self.read_buf
     }
 
     #[inline]
-    /// Get write buffer parameters
+    /// Returns the write-buffer configuration.
     pub fn write_buf(&self) -> &BufConfig {
         &self.write_buf
     }
 
     #[inline]
-    /// Get write page size
+    /// Returns the write-buffer page size.
     pub fn write_page_size(&self) -> BytePageSize {
         self.write_page_size
     }
@@ -158,47 +166,40 @@ impl IoConfig {
         self.write_buf_threshold
     }
 
-    /// Set connect timeout in seconds.
+    /// Sets the connection timeout.
     ///
-    /// To disable timeout set value to 0.
-    ///
-    /// By default connect timeout is disabled.
+    /// A zero duration disables the timeout. It is disabled by default.
     #[must_use]
     pub fn set_connect_timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
         self.connect_timeout = timeout.into();
         self
     }
 
-    /// Set keep-alive timeout in seconds.
+    /// Sets the keep-alive timeout.
     ///
-    /// To disable timeout set value to 0.
-    ///
-    /// By default keep-alive timeout is disabled.
+    /// A zero duration disables the timeout. It is disabled by default.
     #[must_use]
     pub fn set_keepalive_timeout<T: Into<Seconds>>(mut self, timeout: T) -> Self {
         self.keepalive_timeout = timeout.into();
         self
     }
 
-    /// Set connection disconnect timeout.
+    /// Sets the graceful disconnect timeout.
     ///
-    /// Defines a timeout for disconnect connection. If a disconnect procedure does not complete
-    /// within this time, the connection get dropped.
+    /// If shutdown does not complete within this duration, the connection is
+    /// dropped.
     ///
-    /// To disable timeout set value to 0.
-    ///
-    /// By default disconnect timeout is set to 1 seconds.
+    /// A zero duration disables the timeout. The default is one second.
     #[must_use]
     pub fn set_disconnect_timeout<T: Into<Seconds>>(mut self, timeout: T) -> Self {
         self.disconnect_timeout = timeout.into();
         self
     }
 
-    /// Set read rate parameters for single frame.
+    /// Sets read-rate parameters for a single decoded frame.
     ///
-    /// Set read timeout, max timeout and rate for reading payload. If the client
-    /// sends `rate` amount of data within `timeout` period of time, extend timeout by `timeout` seconds.
-    /// But no more than `max_timeout` timeout.
+    /// If `rate` bytes arrive within one `timeout` period, the deadline is
+    /// extended by another `timeout` period, up to `max_timeout`.
     ///
     /// By default frame read rate is disabled.
     #[must_use]
@@ -216,9 +217,10 @@ impl IoConfig {
         self
     }
 
-    /// Set read buffer parameters.
+    /// Sets read-buffer watermarks and cache capacity.
     ///
-    /// By default high watermark is set to 16Kb, low watermark 1kb.
+    /// By default, the high watermark is approximately 16 KiB and the low
+    /// watermark is approximately 512 bytes.
     #[must_use]
     pub fn set_read_buf(
         mut self,
@@ -233,9 +235,9 @@ impl IoConfig {
         self
     }
 
-    /// Set write buffer page size.
+    /// Sets the write-buffer page size.
     ///
-    /// By default page size is set to 16kb.
+    /// The default page size is 16 KiB.
     #[must_use]
     pub fn set_write_page_size(mut self, size: BytePageSize) -> Self {
         self.write_page_size = size;
@@ -255,16 +257,17 @@ impl IoConfig {
     /// flatten data delivery to the peer, ntex's io can initiate
     /// out-of-order writes based on a configured threshold.
     ///
-    /// Set `0` to disable send-buf.
+    /// Set this to zero to disable early writes.
     #[must_use]
     pub fn set_write_buf_threshold(mut self, size: usize) -> Self {
         self.write_buf_threshold = size;
         self
     }
 
-    /// Set write buffer parameters.
+    /// Sets write-buffer watermarks and cache capacity.
     ///
-    /// By default high watermark is set to 16Kb, low watermark 1kb.
+    /// By default, the high watermark is approximately 16 KiB and the low
+    /// watermark is approximately 512 bytes.
     #[must_use]
     pub fn set_write_buf(
         mut self,
@@ -282,7 +285,7 @@ impl IoConfig {
 
 impl BufConfig {
     #[inline]
-    /// Get buffer
+    /// Acquires an empty buffer from this configuration's thread-local cache.
     pub fn get(&self) -> BytesMut {
         if let Some(buf) = CACHE.with(|c| c.with(self.idx, self.first, |c: &mut Vec<_>| c.pop())) {
             buf
@@ -291,13 +294,13 @@ impl BufConfig {
         }
     }
 
-    /// Get buffer with capacity
+    /// Creates a new buffer with the specified capacity.
     pub fn buf_with_capacity(&self, cap: usize) -> BytesMut {
         BytesMut::with_capacity(cap)
     }
 
     #[inline]
-    /// Resize buffer
+    /// Ensures that the buffer has at least the configured low watermark free.
     pub fn resize(&self, buf: &mut BytesMut) {
         if buf.remaining_mut() < self.low {
             self.resize_min(buf, self.high);
@@ -305,7 +308,7 @@ impl BufConfig {
     }
 
     #[inline]
-    /// Resize buffer
+    /// Ensures that the buffer has at least `size` bytes of remaining capacity.
     pub fn resize_min(&self, buf: &mut BytesMut, size: usize) {
         let mut avail = buf.remaining_mut();
         if avail < size {
@@ -319,7 +322,7 @@ impl BufConfig {
     }
 
     #[inline]
-    /// Release buffer, buf must be allocated from this pool
+    /// Returns an eligible buffer to this configuration's thread-local cache.
     pub fn release(&self, mut buf: BytesMut) {
         let cap = buf.capacity();
         if cap > self.low && cap <= self.high {

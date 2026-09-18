@@ -1,11 +1,32 @@
-//! ntex - framework for composable network services
+//! A framework for composable network services.
 //!
-//! ## Package feature
+//! ntex provides a single-threaded service framework, HTTP client and server
+//! implementations, a web application framework, and WebSocket support.
 //!
-//! * `openssl` - enables ssl support via `openssl` crate
-//! * `rustls` - enables ssl support via `rustls` crate
-//! * `compress` - enables compression support in http and web modules
-//! * `cookie` - enables cookie support in http and web modules
+//! The most commonly used entry points are:
+//!
+//! - [`web`] for HTTP applications and servers
+//! - [`client`] for outgoing HTTP requests
+//! - [`http`] for lower-level HTTP services and message types
+//! - [`service`] for composing services and middleware
+//! - [`ws`] for WebSocket protocol support (enabled by the `ws` feature)
+//!
+//! ## Runtime selection
+//!
+//! ntex uses its native Neon runtime by default. Enable `tokio` or `compio` to
+//! use the corresponding runtime backend. The `neon-polling`, `neon-uring`,
+//! and `neon-iocp` features select a specific native I/O reactor.
+//!
+//! ## Crate features
+//!
+//! - `ws` (default) enables WebSocket support.
+//! - `openssl` enables TLS support through OpenSSL.
+//! - `rustls` enables TLS support through rustls.
+//! - `compress` enables HTTP content compression and decompression.
+//! - `cookie` enables HTTP cookie support.
+//! - `url` enables URL generation and URL-aware request helpers.
+//! - `no-test-logging` disables automatic logging configuration in
+//!   [`test`](macro@test).
 #![deny(clippy::pedantic)]
 #![allow(
     type_alias_bounds,
@@ -52,7 +73,7 @@ pub mod codec {
 }
 
 pub mod connect {
-    //! Tcp connector service
+    //! TCP connector services.
     pub use ntex_net::connect::*;
 
     #[cfg(feature = "openssl")]
@@ -72,18 +93,19 @@ pub mod router {
 }
 
 pub mod rt {
-    //! A runtime implementation that runs everything on the current thread.
+    //! Runtime APIs for running tasks on the current thread.
     pub use ntex_rt::*;
 
     pub use ntex_net::*;
 }
 
 pub mod service {
+    //! Service, service factory, and middleware abstractions.
     pub use ntex_service::*;
 }
 
 pub mod server {
-    //! General purpose tcp server
+    //! General-purpose TCP server APIs.
     pub use ntex_server::net::*;
 
     #[cfg(feature = "openssl")]
@@ -117,10 +139,12 @@ pub mod tls {
 }
 
 pub mod error {
+    //! Error types and helpers.
     pub use ntex_error::*;
 }
 
 pub mod util {
+    //! Common byte, collection, future, and service utilities.
     pub use ntex_bytes::{Buf, BufMut, ByteString, Bytes, BytesMut};
     pub use ntex_bytes::{BytePage, BytePageSize, BytePages};
     pub use ntex_error::{ErrorMessage, ErrorMessageChained, fmt_err, fmt_err_string};

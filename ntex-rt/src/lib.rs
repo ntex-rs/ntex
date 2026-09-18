@@ -1,4 +1,17 @@
-//! A runtime implementation that runs everything on the current thread.
+//! Single-threaded asynchronous runtime infrastructure for ntex.
+//!
+//! A [`System`] owns the runtime configuration and coordinates one or more
+//! [`Arbiter`] execution threads. Each arbiter runs local futures on its own
+//! thread, allowing tasks to use types that are not `Send`.
+//!
+//! Use [`System::build()`] to configure a system, [`spawn()`] to start a local
+//! task, and [`spawn_blocking()`] for blocking work.
+//!
+//! Runtime backends are selected with Cargo features:
+//!
+//! - no runtime feature uses the native ntex runtime
+//! - `tokio` uses the Tokio-based runtime adapter
+//! - `compio` uses the Compio-based runtime adapter
 #![deny(clippy::pedantic)]
 #![allow(
     clippy::missing_errors_doc,

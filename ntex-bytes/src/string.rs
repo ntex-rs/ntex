@@ -1,9 +1,9 @@
-//! A UTF-8 encoded read-only string using Bytes as storage.
+//! Immutable UTF-8 strings backed by [`crate::Bytes`].
 use std::{borrow, fmt, hash, ops, slice, str, sync::Arc};
 
 use crate::{Bytes, BytesMut};
 
-/// An immutable UTF-8 encoded string with [`Bytes`] as a storage.
+/// An immutable UTF-8 string backed by [`Bytes`].
 #[derive(Clone, Default, Eq, PartialOrd, Ord)]
 pub struct ByteString(Bytes);
 
@@ -15,25 +15,25 @@ impl ByteString {
         ByteString(Bytes::new())
     }
 
-    /// Get a str slice.
+    /// Returns this value as a string slice.
     #[inline]
     pub fn as_str(&self) -> &str {
         self
     }
 
-    /// Get a reference to the underlying bytes.
+    /// Returns the underlying byte slice.
     #[inline]
     pub fn as_slice(&self) -> &[u8] {
         self.0.as_ref()
     }
 
-    /// Get a reference to the underlying `Bytes` object.
+    /// Returns the underlying [`Bytes`] value.
     #[inline]
     pub fn as_bytes(&self) -> &Bytes {
         &self.0
     }
 
-    /// Unwraps this `ByteString` into the underlying `Bytes` object.
+    /// Converts this value into its underlying [`Bytes`].
     #[inline]
     #[must_use]
     pub fn into_bytes(self) -> Bytes {
@@ -78,7 +78,7 @@ impl ByteString {
         ByteString(self.0.slice(range))
     }
 
-    /// Splits the bytestring into two at the given index.
+    /// Splits the string into two at the given byte index.
     ///
     /// Afterwards `self` contains elements `[0, at)`, and the returned `ByteString`
     /// contains elements `[at, len)`.
@@ -109,7 +109,7 @@ impl ByteString {
         ByteString(self.0.split_off(at))
     }
 
-    /// Splits the bytestring into two at the given index.
+    /// Splits the string into two at the given byte index.
     ///
     /// Afterwards `self` contains elements `[at, len)`, and the returned
     /// `Bytes` contains elements `[0, at)`.
@@ -140,7 +140,9 @@ impl ByteString {
         ByteString(self.0.split_to(at))
     }
 
-    /// Shortens the buffer to `len` bytes and dropping the rest.
+    /// Compacts the underlying storage to this string's current byte range.
+    ///
+    /// The string contents are unchanged.
     #[inline]
     pub fn trimdown(&mut self) {
         self.0.trimdown();
@@ -163,13 +165,13 @@ impl ByteString {
         self.0.clear();
     }
 
-    /// Creates a new `ByteString` from a Bytes.
+    /// Creates a `ByteString` from bytes without validating UTF-8.
     ///
     /// # Safety
-    /// This function is unsafe because it does not check the bytes passed to it are valid UTF-8.
-    /// If this constraint is violated, it may cause memory unsafety issues with future users of
-    /// the `ByteString`, as we assume that `ByteString`s are valid UTF-8. However, the most likely
-    /// issue is that the data gets corrupted.
+    ///
+    /// `src` must contain valid UTF-8. Violating this invariant can cause
+    /// undefined behavior because safe methods assume that every `ByteString`
+    /// contains valid UTF-8.
     #[inline]
     pub const unsafe fn from_bytes_unchecked(src: Bytes) -> ByteString {
         Self(src)

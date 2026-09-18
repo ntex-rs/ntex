@@ -1,10 +1,10 @@
-//! A synchronization primitive for task wakeup.
+//! Task wake-up and scheduling utilities.
 use std::{cell::Cell, fmt, marker::PhantomData, rc, task::Waker};
 
-/// A synchronization primitive for task wakeup.
+/// A single-threaded synchronization primitive for task wake-up.
 ///
 /// Sometimes the task interested in a given event will change over time.
-/// An `LocalWaker` can coordinate concurrent notifications with the consumer
+/// A `LocalWaker` can coordinate notifications with the consumer
 /// potentially "updating" the underlying task to wake up. This is useful in
 /// scenarios where a computation completes in another task and wants to
 /// notify the consumer, but the consumer is in the process of being migrated to
@@ -24,12 +24,12 @@ pub struct LocalWaker {
 }
 
 impl LocalWaker {
-    /// Create an `LocalWaker`.
+    /// Creates an empty `LocalWaker`.
     pub fn new() -> Self {
         LocalWaker::with(None)
     }
 
-    /// Create an `LocalWaker`.
+    /// Creates a `LocalWaker` with an optional initial waker.
     pub fn with(waker: Option<Waker>) -> Self {
         LocalWaker {
             waker: Cell::new(waker),
@@ -40,7 +40,7 @@ impl LocalWaker {
     #[inline]
     /// Registers the waker to be notified on calls to `wake`.
     ///
-    /// Returns `true` if waker was registered before.
+    /// Returns `true` if a waker was already registered.
     pub fn register(&self, waker: &Waker) -> bool {
         self.waker.replace(Some(waker.clone())).is_some()
     }

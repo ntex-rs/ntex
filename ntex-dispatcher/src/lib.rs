@@ -1,4 +1,13 @@
-//! Framed transport dispatcher
+//! Service dispatcher for framed I/O transports.
+//!
+//! [`Dispatcher`] reads frames from an `ntex-io` transport using an
+//! `ntex-codec` decoder and forwards them to an `ntex-service` pipeline as
+//! [`DispatchItem`] values. The service may return an encoded response, report
+//! a service error, or return `None` when no response is required.
+//!
+//! The dispatcher also reports write backpressure through [`Control`] messages
+//! and delivers disconnect, codec, keep-alive, and frame-read failures through
+//! [`Reason`] before shutting down the service.
 #![deny(clippy::pedantic)]
 #![allow(clippy::cast_possible_truncation)]
 use std::task::{Context, Poll, ready};
@@ -11,42 +20,57 @@ use ntex_util::{future::Either, spawn, time::Seconds};
 
 type Response<U> = <U as Encoder>::Item;
 
-/// Dispatch item
+/// Event delivered to the dispatcher service.
 pub enum DispatchItem<U: Encoder + Decoder> {
-    /// Parsed item
+    /// A frame decoded from the transport.
     Item(<U as Decoder>::Item),
-    /// Dispatcher control message
+    /// A transport flow-control notification.
     Control(Control),
-    /// Dispatcher is stopping
+    /// The dispatcher is stopping for the specified reason.
     Stop(Reason<U>),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-/// Dispatcher control message
+/// Write-side flow-control notification.
 pub enum Control {
-    /// Write back-pressure enabled
+    /// Write backpressure has been enabled.
     WBackPressureEnabled,
-    /// Write back-pressure disabled
+    /// Write backpressure has been disabled.
     WBackPressureDisabled,
 }
 
-/// Dispatcher disconnect message
+/// Reason a dispatcher is stopping.
 pub enum Reason<U: Encoder + Decoder> {
-    /// Socket has been disconnected
+    /// The transport disconnected.
+    ///
+    /// The value contains the underlying I/O error when one was available.
     Io(Option<io::Error>),
-    /// Encoder error
+    /// A service response could not be encoded.
     Encoder(<U as Encoder>::Error),
-    /// Decoder error
+    /// Incoming bytes could not be decoded.
     Decoder(<U as Decoder>::Error),
-    /// Keep alive timeout
+    /// The connection exceeded its keep-alive timeout.
     KeepAliveTimeout,
-    /// Frame read timeout
+    /// A complete frame was not received within the configured read deadline.
     ReadTimeout,
 }
 
 pin_project_lite::pin_project! {
-    /// Dispatcher - is a future that reads frames from bytes stream
-    /// and pass them to the service.
+    /// Future that dispatches decoded transport frames to a service.
+    ///
+    /// The service receives [`DispatchItem`] values and returns
+    /// `Option<U::Item>`, where `Some(item)` is encoded and written to the
+    /// transport and `None` produces no response.
+    ///
+    /// Multiple service calls may be in flight concurrently. When the
+    /// transport applies write backpressure, the dispatcher pauses normal
+    /// reads and emits [`Control::WBackPressureEnabled`]. It emits
+    /// [`Control::WBackPressureDisabled`] before resuming normal processing.
+    ///
+    /// Before shutdown, transport and codec failures are delivered to the
+    /// service as [`DispatchItem::Stop`]. The future resolves to `Err` only
+    /// when the service itself fails; other stop reasons complete as `Ok(())`
+    /// after the service and transport have shut down.
     pub struct Dispatcher<U, Err>
     where
         U: Encoder,
@@ -130,7 +154,10 @@ where
     U: Decoder + Encoder + 'static,
     Err: 'static,
 {
-    /// Construct new `Dispatcher` instance.
+    /// Creates a dispatcher for an I/O transport, codec, and service pipeline.
+    ///
+    /// Keep-alive and frame-read timeout behavior is taken from the transport's
+    /// `ntex_io::IoConfig`.
     pub fn new<Io>(
         io: Io,
         codec: U,

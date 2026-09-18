@@ -15,7 +15,7 @@ static mut CUR_SYS: Option<System> = None;
 static mut SIGS: [Option<Signal>; 10] = [const { None }; 10];
 static HND_WAKER: AtomicWaker = AtomicWaker::new();
 
-/// Different types of process signals
+/// Process and application signals delivered to the runtime.
 #[derive(Clone, Debug)]
 pub enum Signal {
     /// SIGHUP
@@ -30,19 +30,19 @@ pub enum Signal {
     Panic(PanicSource),
 }
 
-/// Different types of panics
+/// Source of a panic signal.
 #[derive(Clone, Debug)]
 pub enum PanicSource {
-    /// SIGSEGV or SIGABRT is received
+    /// A `SIGSEGV` or `SIGABRT` signal was received.
     Sig(&'static str),
-    /// Application panic
+    /// An application panic and its captured backtrace.
     App(Arc<str>, Backtrace),
 }
 
-/// Register signal handler.
+/// Registers interest in the next batch of signals.
 ///
-/// Signals are handled by oneshots, you have to re-register
-/// interest after each signal.
+/// The returned one-shot receiver handles one notification. Call this function
+/// again after each notification to continue receiving signals.
 pub fn signal() -> oneshot::AsyncReceiver<Arc<[Signal]>> {
     let (tx, rx) = oneshot::async_channel();
     System::current().handle().spawn(async move {
@@ -54,7 +54,7 @@ pub fn signal() -> oneshot::AsyncReceiver<Arc<[Signal]>> {
     rx
 }
 
-/// Check if signal handling is enabled.
+/// Returns whether signal handling is enabled.
 pub fn is_enabled() -> bool {
     unsafe { CUR_SYS.is_some() }
 }

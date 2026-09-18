@@ -1,4 +1,4 @@
-//! Bytes stream
+//! A buffered stream of byte chunks.
 use std::cell::{Cell, RefCell};
 use std::task::{Context, Poll};
 use std::{collections::VecDeque, fmt, future::poll_fn, pin::Pin, rc::Rc, rc::Weak};
@@ -36,10 +36,10 @@ pub fn channel<E>() -> (Sender<E>, Receiver<E>) {
     )
 }
 
-/// Create closed bytes stream.
+/// Creates a byte stream that starts at EOF.
 ///
-/// This method construct two objects responsible for bytes stream
-/// generation.
+/// The returned receiver completes after any subsequently buffered data has
+/// been consumed.
 pub fn eof<E>() -> (Sender<E>, Receiver<E>) {
     let inner = Rc::new(Inner::new(true));
 
