@@ -1,10 +1,10 @@
 # Runtime
 
-ntex is built around single-threaded execution model. Tasks stay on the
+ntex is built around a single-threaded execution model. Tasks stay on the
 thread where they were started, so many ntex types do not need to implement
 `Send` or `Sync`.
 
-This does not limit an ntex to one CPU core. ntex can start several
+This does not limit an ntex application to one CPU core. ntex can start several
 worker threads, with each worker running its own single-threaded runtime.
 Within a worker, tasks and services can safely use types such as `Rc`, `Cell`,
 and `RefCell` without cross-thread synchronization.
@@ -12,15 +12,17 @@ and `RefCell` without cross-thread synchronization.
 State shared between workers must still use thread-safe types such as `Arc`,
 atomics, or locks.
 
-ntex keeps its networking and service APIs separate from the runtime that
-drives them. This separation allows ntex to support different runtimes. It
-currently supports three runtime backends:
+ntex keeps its networking and service APIs separate from the task runtime and
+network reactor that drive them. [`DefaultRuntime`] selects compatible
+implementations for both. The available backend families are:
 
 - Tokio
 - Compio
-- Neon
+- the native ntex runtime and platform reactor
 
-The backend is selected through Cargo features.
+The backend is selected through Cargo features. `tokio` takes precedence if
+both `tokio` and `compio` are enabled; applications should normally enable at
+most one runtime feature.
 
 ## Tokio
 
@@ -32,7 +34,7 @@ ntex = { version = "4", features = ["tokio"] }
 ```
 
 ntex keeps its single-threaded runtime when using Tokio. Tokio provides
-the underlying task scheduler and I/O driver, while ntex tasks remain local to
+the underlying local task scheduler and I/O driver, while ntex tasks remain on
 the runtime thread where they were started.
 
 ## Compio
@@ -44,10 +46,10 @@ Enable the `compio` feature to use Compio:
 ntex = { version = "4", features = ["compio"] }
 ```
 
-As with the Tokio backend, ntex services run within a single-threaded execution
-context.
+Compio provides completion-based I/O and local task execution. As with the
+Tokio backend, ntex services run within a single-threaded execution context.
 
-## Neon
+## Native runtime
 
 When neither `tokio` nor `compio` is enabled, ntex uses its native runtime. It
 selects an I/O reactor based on the current platform:
@@ -63,6 +65,8 @@ You can select a specific native reactor through a Cargo feature:
 - `neon-uring` selects the `io_uring` reactor on Linux.
 - `neon-iocp` selects the IOCP reactor on Windows.
 
+The reactor-selection features are intended to be mutually exclusive.
+
 For example, to use the polling reactor:
 
 ```toml
@@ -77,9 +81,39 @@ To require `io_uring` on Linux:
 ntex = { version = "4", features = ["neon-uring"] }
 ```
 
-The native runtime gives ntex direct control over its I/O reactor. The Tokio
-and Compio backends are useful when integrating ntex into applications that
-already use those ecosystems.
+The native runtime gives ntex direct control over task scheduling and its I/O
+reactor. The Tokio and Compio backends are useful when integrating ntex into
+applications that already use those ecosystems.
+
+[`DefaultRuntime`]: https://docs.rs/ntex/latest/ntex/rt/struct.DefaultRuntime.html
+
+## Spawning tasks
+
+Use [`ntex::rt::spawn`] to start a future on the current runtime thread:
+
+```rust
+let task = ntex::rt::spawn(async {
+    // `Rc`, `RefCell`, and other `!Send` values may be used here.
+    10usize
+});
+
+assert_eq!(task.await.unwrap(), 10);
+```
+
+The future and its result do not need to implement `Send`, but they must be
+`'static`. `spawn()` panics when called outside an active ntex runtime.
+
+The returned [`JoinHandle`] can be awaited, canceled with `cancel()`, or
+detached explicitly with `detach()`. Dropping the handle also detaches the task;
+it does not cancel it.
+
+To submit work from another thread, obtain an arbiter's runtime handle with
+[`Arbiter::handle`] and call `spawn()` on that handle. Cross-thread futures and
+their results must implement `Send`.
+
+[`Arbiter::handle`]: https://docs.rs/ntex-rt/latest/ntex_rt/struct.Arbiter.html#method.handle
+[`JoinHandle`]: https://docs.rs/ntex/latest/ntex/rt/struct.JoinHandle.html
+[`ntex::rt::spawn`]: https://docs.rs/ntex/latest/ntex/rt/fn.spawn.html
 
 ## System and Arbiter
 
@@ -101,25 +135,41 @@ You can access the current arbiter from code running on its thread:
 let arbiter = ntex::rt::Arbiter::current();
 ```
 
-An `Arbiter` handle can also be used to interact with its execution thread or
-stop it when it is no longer needed.
+`Arbiter::new()` starts another execution thread in the current system.
+`Arbiter::stop()` requests that its event loop stop, and `join()` waits for an
+arbiter-owned thread to exit. The system's primary arbiter does not own a
+joinable thread handle.
 
 A simple way to think about the two types is:
 
 - `System` manages the complete runtime environment.
 - `Arbiter` manages one execution thread within that system.
 
+Building a system returns a [`SystemRunner`]. `block_on()` runs a root future
+and stops when that future completes. `run_until_stop()` runs the event loop
+until code calls `System::stop()` or `System::stop_with_code()`.
+
+```rust
+let result = ntex::rt::System::build()
+    .name("worker")
+    .build(ntex::rt::DefaultRuntime)
+    .block_on(async {
+        10usize
+    });
+
+assert_eq!(result, 10);
+```
+
+[`SystemRunner`]: https://docs.rs/ntex-rt/latest/ntex_rt/struct.SystemRunner.html
+
 ## Custom Runners
 
-You can customize how backend runtime is created by implementing the
+You can customize how the system's root future is driven by implementing the
 [`Runner`](https://docs.rs/ntex-rt/latest/ntex_rt/trait.Runner.html) trait:
 
 ```rust
 trait Runner: Send + Sync + 'static {
-    fn block_on(
-        &self,
-        fut: BlockFuture,
-    ) -> Result<(), Box<dyn Any + Send>>;
+    fn block_on(&self, fut: BlockFuture) -> Result<(), Box<dyn Any + Send>>;
 }
 ```
 
@@ -131,17 +181,18 @@ let system = ntex::rt::System::build()
     .build(MyRunner::new());
 ```
 
-The system stores the runner in its configuration. The same runner is used for
-the main system runtime and for runtimes created by new arbiters.
+The system stores the runner in its configuration. The same runner drives the
+main system thread and each runtime created for a new arbiter.
 
-A custom runner controls how these runtimes are created, but it does not change
-the task-spawning implementation selected at compile time. Functions such as
-`ntex::rt::spawn()` use the backend chosen through Cargo features.
+A custom runner does not change the task-spawning or network-reactor
+implementation selected at compile time. Functions such as `ntex::rt::spawn()`
+use the backend chosen through Cargo features.
 
 For example, when the `tokio` feature is enabled, `spawn()` uses the Tokio
-backend. A custom runner cannot switch task spawning to the native runtime at
-run time. The selected Cargo feature, custom runner, and runtime environment
-must therefore be compatible.
+backend. A custom runner must establish the runtime environment expected by
+that backend. Applications performing network I/O must also install a
+compatible ntex network reactor. `DefaultRuntime` handles both requirements
+and is appropriate unless the application needs specialized integration.
 
 ## Blocking Work
 
@@ -152,7 +203,7 @@ not run directly inside asynchronous tasks.
 Use [`spawn_blocking()`](https://docs.rs/ntex-rt/latest/ntex_rt/fn.spawn_blocking.html)
 to move this work to the system's blocking thread pool:
 
-```rust
+```rust,ignore
 let result = ntex::rt::spawn_blocking(|| {
     // Perform CPU-intensive or blocking work.
     expensive_computation()
@@ -161,7 +212,16 @@ let result = ntex::rt::spawn_blocking(|| {
 ```
 
 The asynchronous task can await the result without blocking other work on its
-arbiter.
+arbiter. The closure and its result must implement `Send`.
+
+When no ntex `System` is active, `spawn_blocking()` runs the closure immediately
+on the calling thread and returns an already completed future. It should
+therefore normally be called from inside a running system.
+
+Dropping the returned future prevents work that is still queued from starting,
+but it cannot interrupt a closure that is already running. Use `detach()` when
+the queued operation should continue even if its result is no longer needed.
+Cancellation or a panic in the closure is reported as `BlockingError`.
 
 You can configure the blocking thread pool through the system builder:
 
@@ -187,8 +247,14 @@ ntex provides basic support for detecting stalled arbiters through
 and
 [`Builder::ping_threshold()`](https://docs.rs/ntex-rt/latest/ntex_rt/struct.Builder.html#method.ping_threshold).
 
-This mechanism is available only on Unix systems and does not guarantee that
-every stalled arbiter will be detected.
+Ping round-trip records are collected on all supported platforms and are
+available through [`System::list_arbiter_pings`]. On Linux, when process
+signal handling is enabled, exceeding the configured threshold also triggers
+an attempt to capture a backtrace from the unresponsive arbiter. Backtrace
+capture is diagnostic and does not guarantee that every stall can be
+identified.
+
+[`System::list_arbiter_pings`]: https://docs.rs/ntex-rt/latest/ntex_rt/struct.System.html#method.list_arbiter_pings
 
 ## The `#[ntex::main]` Attribute
 
@@ -263,3 +329,20 @@ async fn main() {
 For most applications, `#[ntex::main]` is the simplest way to create and run an
 ntex system. Applications that need more control can build a `System` directly
 with `System::build()`.
+
+## The `#[ntex::test]` attribute
+
+`#[ntex::test]` runs an asynchronous test inside a test-configured ntex
+`System`:
+
+```rust
+#[ntex::test]
+async fn runtime_test() {
+    let value = ntex::rt::spawn(async { 10usize }).await.unwrap();
+    assert_eq!(value, 10);
+}
+```
+
+The generated test disables signal and panic handling. Unless the
+`no-test-logging` feature is enabled, it also initializes ntex's test logging
+support.

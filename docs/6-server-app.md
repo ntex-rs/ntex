@@ -1,4 +1,4 @@
-## Application state management
+# Application state management
 
 Each ntex worker runs its own single-threaded runtime. To make use of multiple
 CPU cores, the server starts several workers and distributes incoming
@@ -49,7 +49,7 @@ impl ServerAppConfig for AppBuilder {
 }
 ```
 
-### Creating the Worker Application
+## Creating the Worker Application
 
 Once the worker state is ready, the server calls an application factory to
 build the worker's application instance. The factory runs once per worker and
@@ -85,7 +85,7 @@ The factory can use the state while setting up the application and its
 services. The same state is also available to the worker's connection-handler
 pipelines throughout their lifecycle.
 
-### Worker-Local and Process-Wide State
+## Worker-Local and Process-Wide State
 
 A worker creates its state once and reuses it for every connection it handles.
 It does not create a fresh state for every connection.

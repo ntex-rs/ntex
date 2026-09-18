@@ -1,16 +1,36 @@
 # Changes
 
-## [4.0.0-beta.2] - 2026-08-29
+## [4.0.0] - 2026-09-18
 
-* Refactor web error rendering
+* Migrate to `ntex-service` 5 and its typed service state model. Service
+  factories and middleware now receive state instead of a configuration
+  parameter, `Service::poll()` is removed, and services use asynchronous
+  `ready()` and `shutdown()` lifecycle methods
 
-## [4.0.0-beta.0] - 2026-08-26
+* Refactor `Pipeline` and middleware APIs around state binding and lifecycle
+  management
 
-* Migrate to ntex-service 5
+* Redesign web application state. Add the `State` trait, `AppState<T>`,
+  `WebAppConfig`, request-local state, and support for constructing web
+  applications with server-created state
 
-* Re-design http client
+* Refactor web error handling around state-aware `WebResponseError` and
+  `WebError` types. Error rendering no longer receives an `HttpRequest`, and
+  service initialization errors use `Failure` and `IntoFailure`
 
-* Use AppState instead of ErrorRenderer for web
+* Redesign the HTTP client, including its builder, configuration, connectors,
+  connection pool, request sender, and HTTP/2 integration
+
+* Refactor HTTP server service construction, control handling, shutdown, and
+  application-state creation
+
+* Stop test servers when all server handles are dropped
+
+* Fix a keep-alive readiness deadlock when less than one millisecond remains
+
+* Update the minimum supported Rust version to 1.97
+
+* Improve crate and public API documentation
 
 ## [3.13.0] - 2026-08-09
 
