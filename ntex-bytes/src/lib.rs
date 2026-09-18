@@ -1,11 +1,8 @@
 //! Provides abstractions for working with bytes.
 //!
-//! The `ntex-bytes` crate provides an efficient byte buffer structure
-//! ([`Bytes`](struct.Bytes.html)) and traits for working with buffer
-//! implementations ([`Buf`], [`BufMut`]).
-//!
-//! [`Buf`]: trait.Buf.html
-//! [`BufMut`]: trait.BufMut.html
+//! The crate provides immutable [`Bytes`] and mutable [`BytesMut`] buffers,
+//! UTF-8 [`ByteString`] values, paged buffers through [`BytePages`], and the
+//! [`Buf`] and [`BufMut`] traits.
 //!
 //! # `Bytes`
 //!
@@ -18,8 +15,8 @@
 //! using a reference count to track when the memory is no longer needed and can
 //! be freed.
 //!
-//! A `Bytes` handle can be created directly from an existing `BytesMut` store
-//! is used first and written to. For example:
+//! A common pattern is to write into a [`BytesMut`] and extract immutable
+//! [`Bytes`] views:
 //!
 //! ```rust
 //! use ntex_bytes::{BytesMut, BufMut};
@@ -39,14 +36,17 @@
 //! assert_eq!(buf.capacity(), 998);
 //! ```
 //!
-//! In the above example, only a single buffer of 1024 is allocated. The handles
-//! `a` and `b` will share the underlying buffer and maintain indices tracking
-//! the view into the buffer represented by the handle.
+//! In this example, a single 1,024-byte allocation is reused. The `a` and `b`
+//! handles retain immutable views into that allocation, while `buf` continues
+//! using its remaining capacity.
 //!
-//! See the [struct docs] for more details.
+//! See [`Bytes`] and [`BytesMut`] for details about sharing, splitting, and
+//! allocation behavior.
 //!
-//! [struct docs]: struct.Bytes.html
+//! # Crate features
 //!
+//! - `simd` enables SIMD-accelerated UTF-8 validation.
+//! - `overuse` enables diagnostic logging for unusually large page stacks.
 #![doc(html_root_url = "https://docs.rs/ntex-bytes/")]
 #![deny(clippy::pedantic)]
 #![allow(
@@ -108,20 +108,30 @@ pub mod info {
     }
 }
 
+/// Capacity category used when allocating [`BytePage`] storage.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum BytePageSize {
+    /// A 4 KiB page.
     Size4 = 0,
+    /// An 8 KiB page.
     Size8 = 1,
+    /// A 16 KiB page.
     #[default]
     Size16 = 2,
+    /// A 24 KiB page.
     Size24 = 3,
+    /// A 32 KiB page.
     Size32 = 4,
+    /// A 48 KiB page.
     Size48 = 5,
+    /// A 64 KiB page.
     Size64 = 6,
+    /// No fixed page category.
     Unset = 7,
 }
 
 impl BytePageSize {
+    /// Returns the page capacity in bytes.
     pub const fn capacity(self) -> usize {
         match self {
             BytePageSize::Size4 => 4 * 1024,
@@ -134,6 +144,7 @@ impl BytePageSize {
         }
     }
 
+    /// Returns the recommended write-buffer threshold for this page size.
     pub const fn half_capacity(self) -> usize {
         match self {
             BytePageSize::Size4 => 2 * 1024,
@@ -148,9 +159,9 @@ impl BytePageSize {
     }
 }
 
-/// Set pages cache size
+/// Sets the maximum number of cached page allocations for the current thread.
 ///
-/// Size is set for current thread
+/// This setting affects only the thread on which it is called.
 pub fn set_pages_cache(size: usize) {
     self::stvec::set_pages_cache(size);
 }

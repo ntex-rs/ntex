@@ -20,11 +20,10 @@ pub(super) enum ArbiterCommand {
     Execute(Pin<Box<dyn Future<Output = ()> + Send>>),
 }
 
-/// Arbiters provide an asynchronous execution environment for actors, functions
-/// and futures.
+/// An asynchronous execution environment running on one OS thread.
 ///
-/// When an Arbiter is created, it spawns a new OS thread, and
-/// hosts an event loop. Some Arbiter functions execute on the current thread.
+/// Creating an arbiter starts a thread with its own local event loop. Futures
+/// spawned on that event loop are not required to implement `Send`.
 pub struct Arbiter(pub(crate) Arc<ArbiterInner>);
 
 type OnCloseStorage = Arc<Mutex<Vec<Box<dyn Fn() + Send + Sync>>>>;
@@ -80,11 +79,11 @@ impl Arbiter {
         )
     }
 
-    /// Returns the current thread's arbiter's address
+    /// Returns the arbiter running on the current thread.
     ///
     /// # Panics
     ///
-    /// Panics if Arbiter is not running
+    /// Panics if no arbiter is running on the current thread.
     pub fn current() -> Arbiter {
         ADDR.with(|cell| match *cell.borrow() {
             Some(ref addr) => addr.clone(),
@@ -92,21 +91,18 @@ impl Arbiter {
         })
     }
 
-    /// Stop arbiter from continuing it's event loop.
+    /// Requests that the arbiter stop its event loop.
     pub fn stop(&self) {
         let _ = self.0.sender.try_send(ArbiterCommand::Stop);
     }
 
-    /// Spawn new thread and run runtime in spawned thread.
-    /// Returns address of newly created arbiter.
+    /// Starts an arbiter on a new thread with an automatically generated name.
     pub fn new() -> Arbiter {
         let id = COUNT.load(Ordering::Relaxed) + 1;
         Arbiter::with_name(format!("{}:arb:{}", System::current().name(), id))
     }
 
-    /// Spawn new thread and run runtime in spawned thread
-    ///
-    /// Returns address of newly created arbiter.
+    /// Starts an arbiter on a new thread with the specified name.
     pub fn with_name(name: String) -> Arbiter {
         let id = COUNT.fetch_add(1, Ordering::Relaxed);
         let sys = System::current();
@@ -218,7 +214,7 @@ impl Arbiter {
         }))
     }
 
-    /// Id of the arbiter
+    /// Returns the arbiter identifier.
     pub fn id(&self) -> Id {
         Id(self.0.id)
     }
@@ -229,24 +225,24 @@ impl Arbiter {
         self.0.tid
     }
 
-    /// Name of the arbiter
+    /// Returns the arbiter name.
     pub fn name(&self) -> &str {
         self.0.name.as_ref()
     }
 
     #[inline]
-    /// Handle to a runtime
+    /// Returns a handle to the arbiter's runtime.
     pub fn handle(&self) -> &Handle {
         self.0.hnd.as_ref().unwrap()
     }
 
     #[inline]
-    /// Check if arbiter is running
+    /// Returns whether the arbiter is running.
     pub fn is_running(&self) -> bool {
         self.0.running.load(Ordering::Relaxed)
     }
 
-    /// Get a type previously inserted to this runtime or create new one.
+    /// Returns a value from thread-local arbiter storage, inserting it if absent.
     pub fn get_value<T, F>(f: F) -> T
     where
         T: Clone + 'static,
@@ -266,7 +262,7 @@ impl Arbiter {
     }
 
     #[must_use]
-    /// Add "on-stop" callback.
+    /// Adds a callback to run after the arbiter stops.
     pub fn on_stop<F>(self, f: F) -> Self
     where
         F: Fn() + Send + Sync + 'static,
@@ -275,7 +271,10 @@ impl Arbiter {
         self
     }
 
-    /// Wait for the event loop to stop by joining the underlying thread (if have Some).
+    /// Waits for the arbiter's thread to stop.
+    ///
+    /// This returns immediately for an arbiter that does not own a thread
+    /// handle, including the system's primary arbiter.
     pub fn join(&mut self) -> thread::Result<()> {
         if let Some(thread_handle) = self.0.thread_handle.lock().take() {
             thread_handle.join()
@@ -318,12 +317,12 @@ impl ArbiterController {
     }
 }
 
-/// Set item to current runtime's storage
+/// Inserts a value into the current arbiter's thread-local storage.
 pub fn set_item<T: 'static>(item: T) {
     STORAGE.with(move |cell| cell.borrow_mut().insert(TypeId::of::<T>(), Box::new(item)));
 }
 
-/// Get a reference to a type previously inserted on this runtime's storage
+/// Returns a cloned value from the current arbiter's thread-local storage.
 pub fn get_item<T: Clone + 'static>() -> Option<T> {
     STORAGE.with(move |cell| {
         cell.borrow()
@@ -333,7 +332,9 @@ pub fn get_item<T: Clone + 'static>() -> Option<T> {
     })
 }
 
-/// Get a reference to a type or create new if it doesnt exists
+/// Provides access to a value in the current arbiter's thread-local storage.
+///
+/// A default value is inserted if the requested type is not already present.
 pub fn with_item<T: Default + 'static, F, R>(f: F) -> R
 where
     F: FnOnce(&T) -> R,
@@ -360,7 +361,7 @@ where
 ///
 /// # Safety
 ///
-/// Must ensure that all outstading calls to `with_item` are completed.
+/// All outstanding calls to [`with_item`] must have completed.
 pub unsafe fn remove_all_items() {
     STORAGE.with(move |cell| {
         loop {

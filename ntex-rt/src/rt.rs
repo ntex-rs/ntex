@@ -21,12 +21,12 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    /// Create [`Runtime`] with default config.
+    /// Creates a runtime with default configuration.
     pub fn new(handle: Box<dyn Notify>) -> Self {
         Self::builder().build(handle)
     }
 
-    /// Create a builder for [`Runtime`].
+    /// Creates a runtime builder.
     pub fn builder() -> RuntimeBuilder {
         RuntimeBuilder::new()
     }
@@ -39,11 +39,11 @@ impl Runtime {
         }
     }
 
-    /// Perform a function on the current runtime.
+    /// Runs a closure with the runtime active on the current thread.
     ///
     /// ## Panics
     ///
-    /// This method will panic if there are no running [`Runtime`].
+    /// Panics if no runtime is active on the current thread.
     pub fn with_current<T, F: FnOnce(&Self) -> T>(f: F) -> T {
         #[cold]
         fn not_in_neon_runtime() -> ! {
@@ -58,7 +58,7 @@ impl Runtime {
     }
 
     #[inline]
-    /// Get handle for current runtime
+    /// Returns a handle to this runtime.
     pub fn handle(&self) -> Handle {
         Handle {
             queue: self.queue.clone(),
@@ -89,7 +89,7 @@ impl Runtime {
         JoinHandle::new(task)
     }
 
-    /// Poll runtime and run active tasks.
+    /// Polls the runtime and runs scheduled tasks.
     pub fn poll(&self) -> PollResult {
         if self.stop.get() {
             PollResult::Ready
@@ -136,20 +136,22 @@ impl Drop for Runtime {
 }
 
 #[derive(Debug)]
-/// Handle for current runtime
+/// A thread-safe handle used to schedule work on a runtime.
 pub struct Handle {
     queue: Arc<RunnableQueue>,
 }
 
 impl Handle {
-    /// Get handle for current runtime
+    /// Returns a handle to the runtime active on the current thread.
     ///
-    /// Panics if runtime is not set
+    /// # Panics
+    ///
+    /// Panics if no runtime is active on the current thread.
     pub fn current() -> Handle {
         Runtime::with_current(Runtime::handle)
     }
 
-    /// Wake up runtime
+    /// Wakes the runtime's driver.
     pub fn notify(&self) -> io::Result<()> {
         self.queue.handle.notify()
     }

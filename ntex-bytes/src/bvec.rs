@@ -6,21 +6,17 @@ use crate::{Buf, BufMut, Bytes, buf::IntoIter, buf::UninitSlice, stvec::StorageV
 ///
 /// `BytesMut` represents a unique view into a potentially shared memory region.
 /// Given the uniqueness guarantee, owners of `BytesMut` handles are able to
-/// mutate the memory. It is similar to a `Vec<u8>` but with less copies and
+/// mutate the memory. It is similar to a `Vec<u8>` but with fewer copies and
 /// allocations. It also always allocates.
 ///
-/// For more detail, see [Bytes](struct.Bytes.html).
+/// For more detail, see [`Bytes`].
 ///
 /// # Growth
 ///
-/// One key difference from `Vec<u8>` is that most operations **do not
-/// implicitly grow the buffer**. This means that calling `my_bytes.put("hello
-/// world");` could panic if `my_bytes` does not have enough capacity. Before
-/// writing to the buffer, ensure that there is enough remaining capacity by
-/// calling `my_bytes.remaining_mut()`. In general, avoiding calls to `reserve`
-/// is preferable.
-///
-/// The only exception is `extend` which implicitly reserves required capacity.
+/// Safe write operations such as [`BufMut::put_slice`], [`BufMut::put_u8`], and
+/// [`extend_from_slice`](Self::extend_from_slice) reserve additional capacity
+/// when needed. Use [`reserve`](Self::reserve) when the required capacity is
+/// known in advance to avoid repeated allocation.
 ///
 /// # Examples
 ///
@@ -59,8 +55,8 @@ impl BytesMut {
     ///
     /// # Panics
     ///
-    /// Panics if `capacity` greater than 60bit for 64bit systems
-    /// and 28bit for 32bit systems
+    /// Panics if `capacity` exceeds 60 bits on 64-bit systems or 28 bits on
+    /// 32-bit systems.
     ///
     /// # Examples
     ///
@@ -84,7 +80,7 @@ impl BytesMut {
         }
     }
 
-    /// Creates a new `BytesMut` from slice, by copying it.
+    /// Creates a `BytesMut` by copying a byte slice.
     #[inline]
     #[must_use]
     pub fn copy_from_slice<T: AsRef<[u8]>>(src: T) -> Self {
@@ -135,7 +131,7 @@ impl BytesMut {
         self.storage.len()
     }
 
-    /// Returns true if the `BytesMut` has a length of 0.
+    /// Returns `true` if the buffer is empty.
     ///
     /// # Examples
     ///
@@ -354,8 +350,8 @@ impl BytesMut {
     ///
     /// # Panics
     ///
-    /// Panics if `new_len` greater than 60bit for 64bit systems
-    /// and 28bit for 32bit systems
+    /// Panics if `new_len` exceeds 60 bits on 64-bit systems or 28 bits on
+    /// 32-bit systems.
     ///
     /// # Examples
     ///
@@ -429,8 +425,8 @@ impl BytesMut {
     ///
     /// # Panics
     ///
-    /// Panics if new capacity is greater than 60bit for 64bit systems
-    /// and 28bit for 32bit systems
+    /// Panics if the new capacity exceeds 60 bits on 64-bit systems or 28 bits
+    /// on 32-bit systems.
     ///
     /// # Examples
     ///
@@ -480,8 +476,8 @@ impl BytesMut {
     ///
     /// # Panics
     ///
-    /// Panics if new capacity is greater than 60bit for 64bit systems
-    /// and 28bit for 32bit systems
+    /// Panics if the new capacity exceeds 60 bits on 64-bit systems or 28 bits
+    /// on 32-bit systems.
     ///
     /// # Examples
     ///
@@ -500,10 +496,9 @@ impl BytesMut {
         self.storage.reserve_capacity(cap);
     }
 
-    /// Appends given bytes to this object.
+    /// Appends a byte slice to the buffer.
     ///
-    /// If this `BytesMut` object has not enough capacity, it is resized first.
-    /// So unlike `put_slice` operation, `extend_from_slice` does not panic.
+    /// Additional capacity is reserved automatically when needed.
     ///
     /// # Examples
     ///

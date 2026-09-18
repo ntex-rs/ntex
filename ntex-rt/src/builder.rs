@@ -3,11 +3,10 @@ use std::{fmt, future::Future, io, marker::PhantomData, panic, rc::Rc, sync::Arc
 use crate::{driver::Runner, signals, system::System, system::SystemConfig};
 
 #[derive(Debug, Clone)]
-/// Builder struct for a ntex runtime.
+/// Builder for an ntex runtime system.
 ///
-/// Either use `Builder::build` to create a system and start actors.
-/// Alternatively, use `Builder::run` to start the runtime and
-/// run a function in its context.
+/// Use [`build`](Self::build) to create a [`SystemRunner`], then run the event
+/// loop or block on a future.
 pub struct Builder {
     /// Name of the System. Defaults to "ntex" if unset.
     name: String,
@@ -64,7 +63,7 @@ impl Builder {
     }
 
     #[must_use]
-    /// Set signals handling.
+    /// Enables or disables process signal handling.
     ///
     /// By default, signal handling is disabled.
     pub fn signals(mut self, eanbled: bool) -> Self {
@@ -111,10 +110,10 @@ impl Builder {
     }
 
     #[must_use]
-    /// Sets ping interval for spawned arbiters.
+    /// Sets the ping interval for spawned arbiters.
     ///
-    /// Interval is in milliseconds. By default 2000 milliseconds is set.
-    /// To disable pings set value to zero.
+    /// The interval is specified in milliseconds and defaults to 2,000.
+    /// Set it to zero to disable pings.
     pub fn ping_interval(mut self, interval: usize) -> Self {
         self.ping_interval = interval;
         self
@@ -126,22 +125,25 @@ impl Builder {
     /// If a response takes too long, an attempt is made to create a backtrace
     /// for the busy arbiter.
     ///
-    /// The interval is specified in milliseconds. The default is 1000 milliseconds.
+    /// The threshold is specified in milliseconds and defaults to 1,000.
     pub fn ping_threshold(mut self, interval: usize) -> Self {
         self.ping_threshold = interval;
         self
     }
 
     #[must_use]
-    /// Set the thread number limit of the inner thread pool, if exists. The
-    /// default value is 256.
+    /// Sets the maximum number of blocking thread-pool workers.
+    ///
+    /// The default is 256.
     pub fn thread_pool_limit(mut self, value: usize) -> Self {
         self.pool_limit = value;
         self
     }
 
     #[must_use]
-    /// Mark system as testing
+    /// Configures the system for testing.
+    ///
+    /// This disables signal and panic handling.
     pub fn testing(mut self) -> Self {
         self.testing = true;
         self.signals = false;
@@ -150,8 +152,9 @@ impl Builder {
     }
 
     #[must_use]
-    /// Set the waiting timeout of the inner thread, if exists. The default is
-    /// 60 seconds.
+    /// Sets how long an idle blocking worker waits before exiting.
+    ///
+    /// The default is 60 seconds.
     pub fn thread_pool_recv_timeout<T>(mut self, timeout: T) -> Self
     where
         time::Duration: From<T>,
@@ -160,9 +163,11 @@ impl Builder {
         self
     }
 
-    /// Create new System.
+    /// Creates a system runner using the specified runtime runner.
     ///
-    /// This method panics if it can not create runtime
+    /// # Panics
+    ///
+    /// Panics if the runtime cannot be created.
     pub fn build<R: Runner>(self, runner: R) -> SystemRunner {
         let config = SystemConfig {
             name: self.name.clone(),
@@ -177,9 +182,11 @@ impl Builder {
         self.build_with(config)
     }
 
-    /// Create new System.
+    /// Creates a system runner from an existing system configuration.
     ///
-    /// This method panics if it can not create runtime
+    /// # Panics
+    ///
+    /// Panics if the runtime cannot be created.
     pub fn build_with(self, config: SystemConfig) -> SystemRunner {
         let runner = config.runner.clone();
 
@@ -194,7 +201,7 @@ impl Builder {
     }
 }
 
-/// Helper object that runs System's event loop
+/// A configured system that has not yet started its event loop.
 #[must_use = "SystemRunner must be run"]
 pub struct SystemRunner {
     config: SystemConfig,
@@ -205,14 +212,12 @@ pub struct SystemRunner {
 }
 
 impl SystemRunner {
-    /// This function will start event loop and will finish once the
-    /// `System::stop()` function is called.
+    /// Runs the event loop until [`System::stop()`] is called.
     pub fn run_until_stop(self) -> io::Result<()> {
         self.run(|| Ok(()))
     }
 
-    /// This function will start event loop and will finish once the
-    /// `System::stop()` function is called.
+    /// Runs `f`, then drives the event loop until [`System::stop()`] is called.
     pub fn run<F>(self, f: F) -> io::Result<()>
     where
         F: FnOnce() -> io::Result<()> + 'static,

@@ -4,6 +4,10 @@ use std::{borrow::Borrow, cell::Cell, cmp, collections::VecDeque, fmt, io, mem, 
 use crate::{BufMut, BytePageSize, ByteString, Bytes, BytesMut};
 use crate::{buf::UninitSlice, stvec::StorageVec};
 
+/// A growable sequence of byte pages.
+///
+/// Data is stored in fixed-capacity pages selected by [`BytePageSize`]. This
+/// avoids reallocating and copying one large contiguous buffer as data grows.
 pub struct BytePages {
     st: Option<Box<Inner>>,
     current: Option<StorageVec>,
@@ -23,8 +27,7 @@ const CACHE_SIZE: usize = 128;
 impl BytePages {
     /// Creates a new `BytePages` with the specified page size.
     ///
-    /// The returned `BytePages` will be hold one page with
-    /// specified capacity.
+    /// Pages are allocated lazily using the specified capacity category.
     pub fn new(size: BytePageSize) -> Self {
         debug_assert!(size != BytePageSize::Unset, "Page cannot be Unset");
 
@@ -72,7 +75,7 @@ impl BytePages {
         }
     }
 
-    /// Get size of the page.
+    /// Returns the capacity category used for new pages.
     pub fn page_size(&self) -> BytePageSize {
         self.st.as_ref().unwrap().size
     }
@@ -82,7 +85,9 @@ impl BytePages {
         self.st.as_mut().unwrap().size = size;
     }
 
-    /// Insert a page to the front of the collection.
+    /// Inserts a non-empty page at the front of the collection.
+    ///
+    /// Returns whether a page was inserted.
     pub fn prepend<T>(&mut self, buf: T) -> bool
     where
         BytePage: From<T>,
@@ -149,7 +154,7 @@ impl BytePages {
     }
 
     #[inline]
-    /// Gets the total number of pages.
+    /// Returns the total number of buffered bytes.
     pub fn len(&self) -> usize {
         self.pages()
             .iter()
@@ -164,7 +169,7 @@ impl BytePages {
     }
 
     #[inline]
-    /// Checks if the `BytePages` instance is empty.
+    /// Returns `true` if no bytes are buffered.
     pub fn is_empty(&self) -> bool {
         for p in self.pages() {
             if !p.is_empty() {
@@ -175,7 +180,7 @@ impl BytePages {
     }
 
     #[inline]
-    /// Returns the total number of pages contained in this object.
+    /// Returns the number of allocated pages containing buffered data.
     pub fn num_pages(&self) -> usize {
         if self.current.is_none() {
             self.pages().len()
@@ -194,7 +199,7 @@ impl BytePages {
     }
 
     #[inline]
-    /// Copies all pages into another `BytePages` instance.
+    /// Copies all buffered data into another [`BytePages`] value.
     ///
     /// Depending on the underlying storage, this operation might be `O(1)` or could
     /// involve a memory copy.
@@ -209,7 +214,7 @@ impl BytePages {
     }
 
     #[inline]
-    /// Moves all pages to another `BytePages` instance.
+    /// Moves all buffered data into another [`BytePages`] value.
     pub fn move_to(&mut self, pages: &mut BytePages) {
         while let Some(page) = self.take() {
             pages.append(page);
@@ -218,7 +223,7 @@ impl BytePages {
 
     /// Splits the buffer into two at the given index.
     ///
-    /// Afterwards, `self` contains elements `[at, len)`, and the returned `BytePage`
+    /// Afterwards, `self` contains elements `[at, len)`, and the returned [`BytePages`]
     /// contains elements `[0, at)`.
     ///
     /// Depending on the underlying storage, this operation might be `O(1)` or could
@@ -232,7 +237,7 @@ impl BytePages {
 
     /// Splits the buffer, adding the resulting items to the supplied pages object.
     ///
-    /// Afterwards, `self` contains elements `[at, len)`, and the supplied `BytePage`
+    /// Afterwards, `self` contains elements `[at, len)`, and `to`
     /// contains elements `[0, at)`.
     ///
     /// Depending on the underlying storage, this operation might be `O(1)` or could
@@ -267,7 +272,7 @@ impl BytePages {
         while self.take().is_some() {}
     }
 
-    /// Converts `self` into an immutable `Bytes`.
+    /// Drains all pages into one immutable [`Bytes`] value.
     #[inline]
     #[must_use]
     pub fn freeze(&mut self) -> Bytes {
@@ -286,6 +291,7 @@ impl BytePages {
     }
 
     #[inline]
+    /// Moves the current writable page from `pages` if this value is empty.
     pub fn try_get_current_from(&mut self, pages: &mut BytePages) {
         if self.pages().is_empty()
             && self.current.is_none()
@@ -295,7 +301,7 @@ impl BytePages {
         }
     }
 
-    /// Access current page as `BytesMut` object
+    /// Provides mutable access to the current writable page.
     pub fn with_bytes_mut<F, R>(&mut self, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
@@ -478,6 +484,7 @@ impl From<BytePages> for BytesMut {
     }
 }
 
+/// A contiguous chunk stored by [`BytePages`].
 pub struct BytePage {
     inner: StorageType,
 }
@@ -500,7 +507,7 @@ impl BytePage {
     }
 
     #[inline]
-    /// Returns true if the `BytePage` has a length of 0.
+    /// Returns `true` if the page is empty.
     pub fn is_empty(&self) -> bool {
         match &self.inner {
             StorageType::Bytes(b) => b.is_empty(),

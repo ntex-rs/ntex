@@ -5,10 +5,14 @@ use std::{any::Any, fmt, future::Future, panic, pin::Pin, thread, time::Duration
 
 use crossbeam_channel::{Receiver, Select, Sender, TrySendError, bounded, unbounded};
 
-/// Spawns a blocking task on a new thread and waits for it to complete.
+/// Submits blocking work and returns a future for its result.
 ///
-/// If the returned future is dropped, the blocking task is cancelled.
-/// Call `detach` to allow the task to continue running in the background.
+/// If a system is running, work is submitted to its blocking thread pool.
+/// Otherwise, the closure runs immediately on the current thread.
+///
+/// Dropping the returned future prevents queued work from starting, but cannot
+/// interrupt work that is already running. Call [`BlockingResult::detach`] to
+/// let queued work continue even if its result is no longer needed.
 pub fn spawn_blocking<F, R>(f: F) -> BlockingResult<R>
 where
     F: FnOnce() -> R + Send + 'static,
@@ -21,7 +25,9 @@ where
     }
 }
 
-/// An error that may be emitted when all worker threads are busy.
+/// Error returned when blocking work cannot produce a result.
+///
+/// This can occur if the task is canceled or panics.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct BlockingError;
 
@@ -33,13 +39,14 @@ impl fmt::Display for BlockingError {
     }
 }
 
+/// Future resolving to the result of blocking work.
 #[derive(Debug)]
 pub struct BlockingResult<T> {
     rx: oneshot::AsyncReceiver<Result<T, Box<dyn Any + Send>>>,
 }
 
 impl<T: 'static> BlockingResult<T> {
-    /// Detaches the task to let it keep running in the background
+    /// Detaches the task so it can continue without awaiting its result.
     pub fn detach(self) {
         crate::spawn(async move {
             let _ = self.await;
@@ -155,7 +162,7 @@ impl ThreadPool {
     }
 
     #[allow(clippy::missing_panics_doc)]
-    /// Submits a task (closure) to the thread pool.
+    /// Submits a closure to the thread pool.
     ///
     /// The task will be executed by an available worker thread.
     /// If no threads are available and the pool has reached its maximum size,

@@ -175,7 +175,7 @@ impl Bytes {
         self.storage.is_empty()
     }
 
-    /// Return true if the `Bytes` uses inline allocation
+    /// Returns `true` if the bytes are stored inline.
     ///
     /// # Examples
     /// ```
@@ -189,7 +189,7 @@ impl Bytes {
         self.storage.is_inline()
     }
 
-    /// Creates `Bytes` instance from slice, by copying it.
+    /// Creates a `Bytes` value by copying a byte slice.
     ///
     /// Data from the slice could be inlined.
     #[must_use]
@@ -465,9 +465,10 @@ impl Bytes {
         self.storage.truncate(len);
     }
 
-    /// Shortens the buffer to `len` bytes and dropping the rest.
+    /// Compacts the underlying storage to this value's current byte range.
     ///
-    /// This is useful if underlying buffer is larger than cuurrent bytes object.
+    /// This can reduce retained capacity when this value is a small view into a
+    /// larger allocation. The visible bytes are unchanged.
     ///
     /// # Examples
     ///
