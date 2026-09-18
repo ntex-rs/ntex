@@ -1,3 +1,10 @@
+//! Worker-based server infrastructure for ntex.
+//!
+//! [`WorkerPool`] runs services across one or more worker threads. The [`net`]
+//! module builds TCP and Unix domain socket servers on top of that pool.
+//! [`Server`] is the controller used to pause, resume, stop, or await a running
+//! server.
+
 #![deny(clippy::pedantic)]
 #![allow(
     async_fn_in_trait,
@@ -23,7 +30,7 @@ pub use self::server::Server;
 pub use self::state::{NoConfig, ServerAppConfig};
 pub use self::wrk::{Worker, WorkerStatus, WorkerStop};
 
-/// Worker id
+/// Identifier assigned to a server worker.
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct WorkerId(pub(crate) usize);
 
@@ -37,10 +44,12 @@ impl WorkerId {
 
 /// Worker service configuration.
 pub trait ServerConfiguration: Send + Clone + 'static {
+    /// Item dispatched to a worker service.
     type Item: Send + 'static;
+    /// Service created independently for each worker.
     type Service: Service<(), Self::Item, Res = (), Error = ()> + 'static;
 
-    /// Create service for handling `WorkerMessage<T>` messages.
+    /// Creates the service used by one worker.
     async fn create(&self) -> std::io::Result<Self::Service>;
 
     /// Pause the server.
@@ -49,9 +58,9 @@ pub trait ServerConfiguration: Send + Clone + 'static {
     /// Resume the server.
     fn resume(&self) {}
 
-    /// Server is stopped.
+    /// Called when the server is terminated immediately.
     fn terminate(&self) {}
 
-    /// Server is stopped.
+    /// Performs asynchronous cleanup when the server stops.
     async fn stop(&self) {}
 }

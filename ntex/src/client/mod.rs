@@ -1,18 +1,19 @@
-//! HTTP Client
+//! HTTP client.
 //!
-//! ```rust
+//! ```rust,no_run
 //! use ntex::client::Client;
 //!
 //! #[ntex::main]
 //! async fn main() {
-//!    let mut client = Client::new();
+//!     let client = Client::new();
 //!
-//!    let response = client.get("http://www.rust-lang.org") // <- Create request builder
-//!        .header("User-Agent", "ntex::web")
-//!        .send()                                           // <- Send http request
-//!        .await;
+//!     let response = client
+//!         .get("https://www.rust-lang.org")
+//!         .header("User-Agent", "ntex")
+//!         .send()
+//!         .await;
 //!
-//!     println!("Response: {:?}", response);
+//!     println!("Response: {response:?}");
 //! }
 //! ```
 use std::rc::Rc;
@@ -48,27 +49,31 @@ use crate::{Cfg, Pipeline, error::Error, io::IoBoxed};
 
 type ConnectorPipeline = PipelineState<SharedCfg, Connect, IoBoxed, Error<ConnectError>>;
 
+/// Connection parameters passed to an HTTP connector service.
 #[derive(Debug, Clone)]
 pub struct Connect {
+    /// Target request URI.
     pub uri: Uri,
+    /// Pre-resolved peer address, if available.
     pub addr: Option<std::net::SocketAddr>,
 }
 
-/// An HTTP Client
+/// An HTTP client.
 ///
-/// ```rust
+/// ```rust,no_run
 /// use ntex::client::Client;
 ///
 /// #[ntex::main]
 /// async fn main() {
-///     let mut client = Client::new();
+///     let client = Client::new();
 ///
-///     let res = client.get("http://www.rust-lang.org") // <- Create request builder
-///         .header("User-Agent", "ntex::web")
-///         .send()                             // <- Send http request
-///         .await;                             // <- send request and wait for response
+///     let response = client
+///         .get("https://www.rust-lang.org")
+///         .header("User-Agent", "ntex")
+///         .send()
+///         .await;
 ///
-///      println!("Response: {:?}", res);
+///     println!("Response: {response:?}");
 /// }
 /// ```
 #[derive(Debug, Clone)]
@@ -84,17 +89,17 @@ impl Default for Client {
 }
 
 impl Client {
-    /// Create new client instance with default settings.
+    /// Creates a client with default settings.
     pub fn new() -> Client {
         ClientBuilder::new().build(SharedCfg::default())
     }
 
-    /// Build client instance.
+    /// Creates a client builder.
     pub fn builder() -> ClientBuilder {
         ClientBuilder::new()
     }
 
-    /// Create new client instance with configuration.
+    /// Creates a client with shared service configuration.
     pub fn with_config(cfg: impl Into<SharedCfg>) -> Client {
         ClientBuilder::new().build(cfg.into())
     }
@@ -109,12 +114,12 @@ impl Client {
         }
     }
 
-    /// Returns when the client is ready to process requests.
+    /// Waits until the client is ready to process requests.
     pub async fn ready(&self) -> Result<(), Error<error::ClientError>> {
         self.svc.ready().await
     }
 
-    /// Construct HTTP request.
+    /// Creates an HTTP request with the specified method and URL.
     pub fn request<U>(&self, method: Method, url: U) -> ClientRequest
     where
         Uri: TryFrom<U>,
@@ -127,10 +132,10 @@ impl Client {
         req
     }
 
-    /// Create `ClientRequest` from `RequestHead`
+    /// Creates a [`ClientRequest`] from a [`RequestHead`].
     ///
-    /// It is useful for proxy requests. This implementation
-    /// copies all headers and the method.
+    /// This is useful for proxy requests. The method and headers are copied
+    /// from `head`; existing client default headers are not overwritten.
     pub fn request_from<U>(&self, url: U, head: &RequestHead) -> ClientRequest
     where
         Uri: TryFrom<U>,

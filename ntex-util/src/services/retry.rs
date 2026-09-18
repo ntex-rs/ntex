@@ -1,31 +1,33 @@
 use ntex_service::{Ctx, Middleware, Service};
 
-/// Trait defines retry policy
+/// Determines whether and how a failed service call is retried.
 pub trait Policy<S: Service<St, Req>, St, Req>: Sized + Clone {
+    /// Returns whether the call should be retried.
     async fn retry(&mut self, req: &Req, res: &Result<S::Res, S::Error>) -> bool;
 
+    /// Clones or reconstructs a request for a possible retry.
+    ///
+    /// Returning `None` prevents retries for this request.
     fn clone_request(&self, req: &Req) -> Option<Req>;
 }
 
 #[derive(Clone, Debug)]
-/// Retry middleware
+/// Middleware that retries service calls according to a [`Policy`].
 ///
-/// Retry middleware allows to retry service call
+/// The policy is cloned for each request.
 pub struct Retry<P> {
     policy: P,
 }
 
 #[derive(Clone, Debug)]
-/// Retry service
-///
-/// Retry service allows to retry service call
+/// A service that retries calls according to a [`Policy`].
 pub struct RetryService<P, S> {
     policy: P,
     service: S,
 }
 
 impl<P> Retry<P> {
-    /// Create retry middleware
+    /// Creates retry middleware with the specified policy.
     pub fn new(policy: P) -> Self {
         Retry { policy }
     }
@@ -43,7 +45,7 @@ impl<P: Clone, S, St> Middleware<S, St> for Retry<P> {
 }
 
 impl<P, S> RetryService<P, S> {
-    /// Create retry service
+    /// Wraps a service with the specified retry policy.
     pub fn new(policy: P, service: S) -> Self {
         RetryService { policy, service }
     }
@@ -82,13 +84,13 @@ where
 }
 
 #[derive(Copy, Clone, Debug)]
-/// Default retry policy
+/// A retry policy that retries every service error.
 ///
-/// This policy retries on any error. By default retry count is 3
+/// The default policy permits up to three retries after the initial call.
 pub struct DefaultRetryPolicy(u16);
 
 impl DefaultRetryPolicy {
-    /// Create default retry policy
+    /// Creates a policy that permits up to `retry` retries.
     pub fn new(retry: u16) -> Self {
         DefaultRetryPolicy(retry)
     }

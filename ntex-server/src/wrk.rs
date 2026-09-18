@@ -25,9 +25,12 @@ struct Shutdown {
 #[derive(Copy, Clone, Default, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 /// Worker status.
 pub enum WorkerStatus {
+    /// The worker is ready to accept an item.
     Available,
+    /// The worker is temporarily unable to accept an item.
     #[default]
     Unavailable,
+    /// The worker stopped unexpectedly.
     Failed,
 }
 
@@ -43,14 +46,14 @@ pub struct Worker<T> {
 }
 
 #[derive(Debug)]
-/// Stop worker process.
+/// Future returned when stopping a worker.
 ///
-/// Stop future resolves when worker completes processing
-/// incoming items and stop arbiter
+/// This future resolves when the worker finishes processing incoming items and
+/// stops its arbiter.
 pub struct WorkerStop(oneshot::AsyncReceiver<bool>);
 
 impl<T> Worker<T> {
-    /// Start worker.
+    /// Starts a worker on a new arbiter thread.
     pub fn start<F>(name: String, cfg: F, cid: Option<CoreId>) -> Worker<T>
     where
         T: Send + 'static,
@@ -102,7 +105,7 @@ impl<T> Worker<T> {
         worker
     }
 
-    /// Worker name
+    /// Returns the worker name.
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -116,7 +119,7 @@ impl<T> Worker<T> {
         self.reqs.try_send(msg).map_err(TrySendError::into_inner)
     }
 
-    /// Check worker status.
+    /// Returns the current worker status.
     pub fn status(&self) -> WorkerStatus {
         if self.avail.failed() {
             WorkerStatus::Failed

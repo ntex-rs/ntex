@@ -1,4 +1,4 @@
-//! Web framework for Rust.
+//! Web application framework.
 //!
 //! ```rust,no_run
 //! use ntex::{web, SharedCfg};
@@ -18,49 +18,41 @@
 //! }
 //! ```
 //!
-//! ## Documentation & community resources
+//! ## Documentation and community resources
 //!
-//! Besides the API documentation (which you are currently looking
-//! at!), several other resources are available:
+//! Additional resources:
 //!
-//! * [User Guide](https://docs.rs/ntex/)
-//! * [GitHub repository](https://github.com/ntex-rs/ntex)
-//! * [Cargo package](https://crates.io/crates/ntex)
+//! - [User guide](https://ntex.rs)
+//! - [GitHub repository](https://github.com/ntex-rs/ntex)
+//! - [Cargo package](https://crates.io/crates/ntex)
 //!
-//! To get started navigating the API documentation you may want to
-//! consider looking at the following pages:
+//! Useful API entry points include:
 //!
-//! * [App](struct.App.html): This struct represents an ntex web
-//!   application and is used to configure routes and other common
-//!   settings.
-//!
-//! * [`HttpServer`](struct.HttpServer.html): This struct
-//!   represents an HTTP server instance and is used to instantiate and
-//!   configure servers.
-//!
-//! * [`HttpRequest`](struct.HttpRequest.html) and
-//!   [`HttpResponse`](struct.HttpResponse.html): These structs
-//!   represent HTTP requests and responses and expose various methods
-//!   for inspecting, creating and otherwise utilizing them.
+//! - [`App`] configures routes, application state, and middleware.
+//! - [`HttpServer`] creates and configures HTTP server instances.
+//! - [`HttpRequest`] provides request metadata and application state.
+//! - [`HttpResponse`] and [`WebResponse`] represent HTTP responses.
+//! - [`resource()`] and [`route()`] configure resource and route matching.
 //!
 //! ## Features
 //!
-//! * Supported *HTTP/1.x* and *HTTP/2.0* protocols
-//! * Streaming and pipelining
-//! * Keep-alive and slow requests handling
-//! * `WebSockets` server/client
-//! * Transparent content compression/decompression (br, gzip, deflate)
-//! * Configurable request routing
-//! * SSL support with OpenSSL or `rustls`
-//! * Middlewares
-//! * Supported Rust version: 1.41 or later
+//! - HTTP/1.x and HTTP/2
+//! - Streaming and pipelining
+//! - Keep-alive connections and slow-request handling
+//! - WebSocket clients and servers
+//! - Transparent Brotli, gzip, and deflate content encoding
+//! - Configurable request routing
+//! - TLS through OpenSSL or rustls
+//! - Composable middleware
 //!
-//! ## Package feature
+//! ## Crate features
 //!
-//! * `cookie` - enables http cookie support
-//! * `compress` - enables content encoding compression support
-//! * `openssl` - enables ssl support via `openssl` crate
-//! * `rustls` - enables ssl support via `rustls` crate
+//! - `cookie` enables HTTP cookie support.
+//! - `compress` enables content compression and decompression.
+//! - `openssl` enables TLS support through OpenSSL.
+//! - `rustls` enables TLS support through rustls.
+//! - `url` enables URL generation and URL-aware request helpers.
+//! - `ws` enables the [`ws`] module.
 #![allow(clippy::unused_async_trait_impl, clippy::mismatching_type_param_order)]
 mod app;
 mod app_service;
@@ -131,10 +123,10 @@ pub(crate) type HttpService<St: State, In> =
     BoxServiceFactory<St, WebRequest<In>, WebResponse, WebError<St, St::Error>, Failure>;
 
 pub mod dev {
-    //! The `ntex::web` prelude for library developers
+    //! Internal web framework types commonly needed by library authors.
     //!
-    //! The purpose of this module is to alleviate imports of many common
-    //! traits by adding a glob import to the top of `ntex::web` heavy modules:
+    //! Importing this module's contents can reduce repetitive imports in
+    //! libraries that build abstractions on top of [`crate::web`].
 
     pub use crate::web::app_service::AppService;
     pub use crate::web::info::ConnectionInfo;

@@ -1,4 +1,8 @@
-//! Communication primitives
+//! Asynchronous communication primitives.
+//!
+//! These channels are primarily intended for local, single-threaded ntex
+//! tasks. Individual modules document their ownership and backpressure
+//! behavior.
 
 mod cell;
 
@@ -9,8 +13,7 @@ pub mod mpsc;
 pub mod oneshot;
 pub mod pool;
 
-/// Error returned from a `Receiver` when the corresponding
-/// `Sender` is dropped.
+/// Error returned when a channel is canceled before producing a value.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Canceled;
 

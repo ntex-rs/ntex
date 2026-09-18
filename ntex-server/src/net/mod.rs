@@ -1,4 +1,8 @@
-//! General purpose tcp server
+//! General-purpose network server.
+//!
+//! Use [`build()`] or [`ServerBuilder`] to register TCP or Unix domain socket
+//! services. Each worker receives its own service instance and processes
+//! connections on a single-threaded runtime.
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ntex_util::services::Counter;
@@ -24,20 +28,24 @@ pub type Server = crate::Server<Connection>;
 
 #[non_exhaustive]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-/// Server readiness status
+/// Server readiness status.
 pub enum ServerStatus {
+    /// All workers are ready to accept work.
     Ready,
+    /// At least one worker is temporarily unavailable.
     NotReady,
+    /// A worker failed.
     WorkerFailed,
 }
 
-/// Socket id token
+/// Identifier assigned to a registered listener.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Token(usize);
 
 impl Token {
     #[must_use]
     #[allow(clippy::should_implement_trait)]
+    /// Returns the current token and advances this value to the next token.
     pub fn next(&mut self) -> Token {
         let token = Token(self.0);
         self.0 += 1;
@@ -45,12 +53,12 @@ impl Token {
     }
 }
 
-/// Start server building process
+/// Creates a server builder with no application configuration.
 pub fn build() -> ServerBuilder {
     ServerBuilder::default()
 }
 
-/// Start server with configuration
+/// Creates a server builder with application configuration.
 pub fn build_with_config<Cfg>(state: Cfg) -> ServerBuilder<Cfg>
 where
     Cfg: ServerAppConfig,

@@ -1,8 +1,8 @@
 //! WebSocket protocol support.
 //!
-//! To setup a `WebSocket`, first do web socket handshake then on success
-//! convert `Payload` into a `WsStream` stream and then use `WsWriter` to
-//! communicate with the peer.
+//! Use [`handshake()`] or [`handshake_response()`] to perform a server-side
+//! opening handshake. For framed WebSocket communication, use [`WsTransport`]
+//! with [`WsSink`], or use [`WsClient`] to establish a client connection.
 mod cfg;
 mod client;
 mod codec;

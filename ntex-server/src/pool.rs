@@ -6,7 +6,7 @@ const DEFAULT_SHUTDOWN_TIMEOUT: Millis = Millis::from_secs(30);
 
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
-/// Server builder
+/// Builder for a pool of server workers.
 pub struct WorkerPool {
     pub(crate) num: usize,
     pub(crate) name: String,
@@ -26,7 +26,7 @@ impl Default for WorkerPool {
 
 impl WorkerPool {
     #[must_use]
-    /// Create new Server builder instance
+    /// Creates a worker pool with default settings.
     pub fn new() -> Self {
         let num = core_affinity::get_core_ids().map_or_else(
             || std::thread::available_parallelism().map_or(2, std::num::NonZeroUsize::get),
@@ -46,26 +46,25 @@ impl WorkerPool {
     }
 
     #[must_use]
-    /// Set workers name.
+    /// Sets the worker thread name prefix.
     ///
-    /// Name is used for worker thread name
+    /// The configured name is used for worker thread names.
     pub fn name<T: AsRef<str>>(mut self, name: T) -> Self {
         self.name = name.as_ref().to_string();
         self
     }
 
     #[must_use]
-    /// Set number of workers to start.
+    /// Sets the number of worker threads to start.
     ///
-    /// By default server uses number of available logical cpu as workers
-    /// count.
+    /// By default, the server uses the number of available logical CPUs.
     pub fn workers(mut self, num: usize) -> Self {
         self.num = num;
         self
     }
 
     #[must_use]
-    /// Stop current ntex runtime when manager get dropped.
+    /// Stops the current ntex runtime when the server manager is dropped.
     ///
     /// By default "stop runtime" is disabled.
     pub fn stop_runtime(mut self) -> Self {
@@ -116,7 +115,7 @@ impl WorkerPool {
     }
 
     #[must_use]
-    /// Enable cpu affinity.
+    /// Enables CPU affinity for worker threads.
     ///
     /// By default, affinity is disabled.
     pub fn enable_affinity(mut self) -> Self {
@@ -124,7 +123,7 @@ impl WorkerPool {
         self
     }
 
-    /// Starts processing incoming items and return server controller.
+    /// Starts processing incoming items and returns a server controller.
     pub fn run<F: ServerConfiguration>(self, factory: F) -> Server<F::Item> {
         ServerManager::start(self, factory)
     }

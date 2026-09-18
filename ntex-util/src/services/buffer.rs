@@ -8,9 +8,9 @@ use ntex_service::{Ctx, Middleware, Service, pipeline::PipelineState};
 use crate::channel::oneshot;
 
 #[derive(Copy, Clone, Debug)]
-/// Buffer - service factory for service that can buffer incoming request.
+/// Middleware that buffers requests while the wrapped service is not ready.
 ///
-/// Default number of buffered requests is 16
+/// The default buffer capacity is 16 requests.
 pub struct Buffer<St: Clone, Req, Res, Err> {
     buf_size: usize,
     cancel_on_shutdown: bool,
@@ -18,9 +18,9 @@ pub struct Buffer<St: Clone, Req, Res, Err> {
 }
 
 impl<St: Clone, Req, Res, Err> Buffer<St, Req, Res, Err> {
-    /// Set size of the buffer.
+    /// Sets the maximum number of buffered requests.
     ///
-    /// Default is set to 16
+    /// The default capacity is 16.
     #[must_use]
     pub fn buf_size(mut self, size: usize) -> Self {
         self.buf_size = size;
@@ -29,7 +29,7 @@ impl<St: Clone, Req, Res, Err> Buffer<St, Req, Res, Err> {
 
     /// Cancel all buffered requests on shutdown.
     ///
-    /// By default buffered requests are flushed during `poll_shutdown()`
+    /// By default, buffered requests are released during service shutdown.
     #[must_use]
     pub fn cancel_on_shutdown(mut self) -> Self {
         self.cancel_on_shutdown = true;
@@ -62,9 +62,12 @@ where
     }
 }
 
+/// Errors returned by [`BufferService`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BufferServiceError<E> {
+    /// Error returned by the wrapped service.
     Service(E),
+    /// The buffered request was canceled before it could be processed.
     RequestCanceled,
 }
 
@@ -85,9 +88,9 @@ impl<E: fmt::Display> fmt::Display for BufferServiceError<E> {
 
 impl<E: fmt::Display + fmt::Debug> std::error::Error for BufferServiceError<E> {}
 
-/// Buffer service - service that can buffer incoming requests.
+/// A service that buffers requests while its wrapped service is not ready.
 ///
-/// Default number of buffered requests is 16
+/// The default buffer capacity is 16 requests.
 pub struct BufferService<St, Req, Res, Err> {
     size: usize,
     ready: Cell<bool>,
@@ -103,6 +106,7 @@ where
     St: Clone + 'static,
 {
     #[must_use]
+    /// Creates a buffering service with the specified capacity.
     pub fn new(size: usize, service: PipelineState<St, Req, Res, Err>) -> Self {
         Self {
             size,
@@ -116,6 +120,7 @@ where
     }
 
     #[must_use]
+    /// Cancels pending buffered requests instead of releasing them on shutdown.
     pub fn cancel_on_shutdown(self) -> Self {
         Self {
             cancel_on_shutdown: true,
