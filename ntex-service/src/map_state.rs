@@ -1,6 +1,8 @@
 use crate::{Ctx, IntoService, IntoServiceFactory, Service, ServiceFactory};
 
-/// Create `map state` service
+/// Wraps a service with a fixed state value.
+///
+/// The wrapped service uses `st` instead of the state from its outer pipeline.
 pub fn map_state<S, St, Req>(st: St, s: impl IntoService<S, St, Req>) -> MapState<S, St>
 where
     S: Service<St, Req>,
@@ -11,7 +13,9 @@ where
     }
 }
 
-/// Create `map state` service factory
+/// Wraps a service factory with a fixed state value.
+///
+/// The fixed state is used both to create services and to process their calls.
 pub fn map_state_factory<Sf, St, Req>(
     st: St,
     sf: impl IntoServiceFactory<Sf, St, Req>,
@@ -27,7 +31,7 @@ where
 }
 
 #[derive(Clone, Debug)]
-/// Map state for inner service
+/// A service that substitutes fixed state for the outer pipeline state.
 pub struct MapState<S, St> {
     s: S,
     st: St,
@@ -57,7 +61,7 @@ where
 }
 
 #[derive(Clone, Debug)]
-/// Factory for map state for inner service
+/// A factory that creates [`MapState`] services using fixed state.
 pub struct MapStateFactory<Sf, St> {
     sf: Sf,
     st: St,

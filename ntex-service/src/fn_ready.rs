@@ -2,13 +2,14 @@ use std::{convert::Infallible, fmt, marker::PhantomData};
 
 use crate::{Ctx, Service, ServiceFactory};
 
-/// Function that can act as a `ready` call.
+/// A pass-through service with readiness controlled by an asynchronous function.
 pub struct FnReadiness<F, Err> {
     f: F,
     err: PhantomData<Err>,
 }
 
 impl<F, Err> FnReadiness<F, Err> {
+    /// Creates a readiness service from an asynchronous function.
     pub fn new<St>(f: F) -> Self
     where
         F: AsyncFn(&St) -> Result<(), Err>,

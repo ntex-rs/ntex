@@ -2,7 +2,7 @@ use std::{fmt, marker::PhantomData};
 
 use super::ServiceFactory;
 
-/// `MapInitError` service combinator
+/// Service factory produced by the `map_init_err` combinator.
 pub struct MapInitErr<F, Sf, Err> {
     f: F,
     sf: Sf,

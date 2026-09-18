@@ -2,10 +2,9 @@ use std::{fmt, marker::PhantomData};
 
 use super::{Ctx, Service, ServiceFactory};
 
-/// Service for the `map_err` combinator, changing the type of a service's
-/// error.
+/// Service produced by the `map_err` combinator.
 ///
-/// This is created by the `ServiceExt::map_err` method.
+/// This is created by the `Service::map_err()` and `ServiceChain::map_err()` methods.
 pub struct MapErr<F, S, E> {
     f: F,
     svc: S,
@@ -75,8 +74,7 @@ where
     crate::forward_shutdown!(St, svc);
 }
 
-/// Factory for the `map_err` combinator, changing the type of a new
-/// service's error.
+/// Service factory produced by the `map_err` combinator.
 ///
 /// This is created by the `ServiceFactory::map_err` method.
 pub struct MapErrFactory<F, Sf, E> {

@@ -8,6 +8,7 @@ pub struct PipelineFactory<St, Req, Res, Err, InitErr> {
 }
 
 impl<St, Req, Res, Err, InitErr> PipelineFactory<St, Req, Res, Err, InitErr> {
+    /// Creates a pipeline factory from a service factory.
     pub fn new<Sf>(sf: Sf) -> Self
     where
         Sf: ServiceFactory<St, Req, Res = Res, Error = Err, InitError = InitErr> + 'static,
@@ -28,6 +29,7 @@ impl<St, Req, Res, Err, InitErr> PipelineFactory<St, Req, Res, Err, InitErr> {
         }
     }
 
+    /// Creates a service with `st` and wraps both in a [`Pipeline`].
     pub async fn create(&self, st: St) -> Result<Pipeline<Req, Res, Err>, InitErr> {
         (self.f)(st).await
     }

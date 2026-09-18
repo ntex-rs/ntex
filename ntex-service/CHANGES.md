@@ -2,35 +2,17 @@
 
 ## [5.0.0] - 2026-09-13
 
-* Release 5.0
+* Introduce service state management.
 
-## [5.0.0-beta.5] - 2026-09-02
+* Replace `Cfg` paramater in ServiceFactory with `St`
 
-* Add .readiness() callback
+* Replace `Cfg` paramater in Middleware with `St`
 
-* Add .shutdown() callback
+* Added .readiness() callback
 
-## [5.0.0-beta.4] - 2026-08-28
+* Added .shutdown() callback
 
-* Add `St` param to Middleware trait
-
-* Add PipelineWithStateFactory
-
-## [5.0.0-beta.3] - 2026-08-27
-
-* Refactor StateMapping trait
-
-## [5.0.0-beta.1] - 2026-08-25
-
-* Do not panic in Pipeline::poll_ready() after shutdown
-
-## [5.0.0-beta.0] - 2026-08-24
-
-* Add shared state management
-
-* Add Ctx::with_context(), service can access dispatcher's task context
-
-* Use config ref for service factory creation
+* Added PipelineFactory, PipelineState, PipelineStateBinding
 
 * Remove Service::poll() method
 

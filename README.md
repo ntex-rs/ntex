@@ -34,9 +34,10 @@ ntex = { version = "3", features = ["neon"] }
 
 ## Documentation & community resources
 
-* [Documentation](https://ntex.rs)
-* [Docs.rs](https://docs.rs/ntex)
-* Minimum supported Rust version: 1.88 or later
+* [Web framework documentation](https://ntex.rs)
+* [Api Documentation](https://docs.rs/ntex)
+* [Documentation](docs/index.md)
+* Minimum supported Rust version: 1.97 or later
 
 ## License
 

@@ -79,3 +79,10 @@
     });
 
  ```
+
+* HTTP server and client configuration
+
+  Since ntex 3, all configuration is provided through the `SharedCfg` value
+  created when the server starts. See
+  [Connection and Protocol Configuration](docs/5-server.md#connection-and-protocol-configuration)
+  for more information.

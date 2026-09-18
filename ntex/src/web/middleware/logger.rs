@@ -58,11 +58,11 @@ use crate::web::{HttpResponse, WebRequest, WebResponse};
 ///
 /// `%U`  Request URL
 ///
-/// `%{FOO}i`  request.headers[`FOO`]
+/// `%{FOO}i`  `request.headers["FOO"]`
 ///
-/// `%{FOO}o`  response.headers[`FOO`]
+/// `%{FOO}o`  `response.headers["FOO"]`
 ///
-/// `%{FOO}e`  os.environ[`FOO`]
+/// `%{FOO}e`  `os.environ["FOO"]`
 ///
 #[derive(Debug)]
 pub struct Logger {

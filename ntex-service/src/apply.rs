@@ -4,7 +4,10 @@ use crate::ctx::{Ctx, WaitersRef};
 use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 use crate::{ServiceCaller, ServiceChain, ServiceChainFactory};
 
-/// Apply transform function to a service.
+/// Applies an asynchronous middleware function to a service.
+///
+/// The function receives an input request and an [`ApplyCtx`] that can call the
+/// wrapped service.
 pub fn apply_fn<S, St, Req, F, In, Out, Err>(
     service: impl IntoService<S, St, Req>,
     f: F,
@@ -17,7 +20,7 @@ where
     crate::service(Apply::new(service.into_service(), f))
 }
 
-/// Service factory that produces `apply_fn` service.
+/// Applies an asynchronous middleware function to every service from a factory.
 pub fn apply_fn_factory<Sf, St, Req, F, In, Out, Err>(
     service: impl IntoServiceFactory<Sf, St, Req>,
     f: F,
@@ -31,6 +34,7 @@ where
 }
 
 #[derive(Debug)]
+/// Context passed to middleware functions created by [`apply_fn`].
 pub struct ApplyCtx<'a, S, St, Req> {
     idx: u32,
     waiters: &'a WaitersRef,
@@ -40,13 +44,13 @@ pub struct ApplyCtx<'a, S, St, Req> {
 }
 
 impl<S: Service<St, Req>, St, Req> ApplyCtx<'_, S, St, Req> {
-    /// Service state
+    /// Returns the pipeline state.
     #[inline]
     pub fn st(&self) -> &St {
         self.st
     }
 
-    /// Wait for service readiness and then call service.
+    /// Waits for the wrapped service to become ready, then calls it.
     #[inline]
     pub async fn call(&self, req: Req) -> Result<S::Res, S::Error> {
         Ctx::<S, St>::new(self.idx, self.waiters, self.st)
@@ -66,7 +70,7 @@ impl<S: Service<St, Req>, St, Req> ServiceCaller<Req, S::Res, S::Error>
     }
 }
 
-/// `Apply` service combinator
+/// Service produced by [`apply_fn`].
 pub struct Apply<S, St, Req, F, In, Out, Err> {
     svc: S,
     f: F,
@@ -143,7 +147,7 @@ where
     crate::forward_shutdown!(St, svc);
 }
 
-/// `apply()` service factory
+/// Service factory produced by [`apply_fn_factory`].
 pub struct ApplyFactory<F, Sf, St, Req, In, Out, Err>
 where
     F: AsyncFn(In, &ApplyCtx<'_, Sf::Service, St, Req>) -> Result<Out, Err> + Clone,

@@ -1,10 +1,9 @@
 use super::{Ctx, Service, ServiceFactory, util};
 
 #[derive(Debug, Clone)]
-/// Service for the `then` combinator, chaining a computation onto the end of
-/// another service.
+/// Service produced by the `then` combinator.
 ///
-/// This is created by the `Pipeline::then` method.
+/// This is created by the `ServiceChain::then()` method.
 pub struct Then<A, B> {
     svc1: A,
     svc2: B,
@@ -42,7 +41,7 @@ where
 }
 
 #[derive(Debug, Clone)]
-/// `.then()` service factory combinator
+/// Service factory produced by the `then` combinator.
 pub struct ThenFactory<A, B> {
     svc1: A,
     svc2: B,

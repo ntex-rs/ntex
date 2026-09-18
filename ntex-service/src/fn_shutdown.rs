@@ -2,13 +2,14 @@ use std::{cell::Cell, convert::Infallible, fmt, marker::PhantomData};
 
 use crate::{Ctx, Service, ServiceFactory};
 
-/// Function that can act as a `on_shutdown` callback.
+/// A pass-through service that invokes an asynchronous shutdown callback once.
 pub struct FnShutdown<F, Err> {
     f_shutdown: Cell<Option<F>>,
     err: PhantomData<Err>,
 }
 
 impl<F, Err> FnShutdown<F, Err> {
+    /// Creates a service with the supplied shutdown callback.
     pub fn new<St>(f: F) -> Self
     where
         F: AsyncFnOnce(&St),

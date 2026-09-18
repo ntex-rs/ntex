@@ -5,9 +5,11 @@ use crate::{Ctx, IntoService, Service, ctx::WaitersRef, util::BoxFuture};
 use crate::pipeline::PipelineBinding;
 use crate::pl_inner::{PipelineApi, PipelineInternalApi};
 
-/// Container for a service.
+/// Execution container for a service whose state is supplied per operation.
 ///
-/// Provides a way to call the enclosed service and share its readiness state.
+/// Unlike [`crate::Pipeline`], this type does not own a state value. Callers
+/// provide a state reference when checking readiness, calling, or shutting
+/// down the service.
 pub struct PipelineState<St, Req, Res, Err> {
     api: Rc<dyn PipelineStateApi<St, Req, Res, Err>>,
 }
@@ -20,15 +22,15 @@ where
     Err: 'static,
 {
     #[inline]
-    /// Construct new service pipeline instance with default state.
-    pub fn new<S>(f: impl IntoService<S, St, Req>) -> Self
+    /// Creates a state-independent pipeline containing `service`.
+    pub fn new<S>(service: impl IntoService<S, St, Req>) -> Self
     where
         S: Service<St, Req, Res = Res, Error = Err> + 'static,
         St: 'static,
     {
         PipelineState {
             api: Rc::new(PipelineInner {
-                s: f.into_service(),
+                s: service.into_service(),
                 waiters: WaitersRef::new(),
                 st_runtime: cell::UnsafeCell::new(RuntimeState::New),
             }),
@@ -42,18 +44,16 @@ where
     }
 
     #[inline]
-    /// Wait for service readiness, then create a future
-    /// that resolves to the service call result.
+    /// Waits for readiness, then calls the service with `st`.
     pub async fn call(&self, req: Req, st: &St) -> Result<Res, Err> {
         let pl = self.binding();
         self.api.call(pl.idx, req, st, true).await
     }
 
     #[inline]
-    /// Call the service and create a future that resolves to the service result.
+    /// Calls the service with `st` without checking readiness.
     ///
-    /// This call can be completed from different async tasks.
-    /// Note: this call does not check service readiness.
+    /// The caller must ensure the pipeline is ready before calling this method.
     pub async fn call_nowait(&self, req: Req, st: &St) -> Result<Res, Err> {
         let pl = self.binding();
         pl.api.call(pl.idx, req, st, false).await
@@ -87,7 +87,7 @@ where
     }
 
     #[inline]
-    /// Returns the current pipeline binding.
+    /// Creates a binding that accepts state per call.
     ///
     /// The binding can be used to call the service.
     pub fn bind(&self) -> PipelineStateBinding<St, Req, Res, Err> {
@@ -98,7 +98,7 @@ where
     }
 
     #[inline]
-    /// Returns the current pipeline binding.
+    /// Creates a standard pipeline binding by attaching an owned state value.
     ///
     /// The binding can be used to call the service.
     pub fn bind_state(&self, st: St) -> PipelineBinding<Req, Res, Err>
@@ -135,6 +135,7 @@ impl<St, Req, Res, Err> Drop for Binding<'_, St, Req, Res, Err> {
 
 // ========================== `PipelineStateBinding` ===========================
 
+/// An independently registered handle to a [`PipelineState`].
 pub struct PipelineStateBinding<St, Req, Res, Err> {
     idx: u32,
     api: Rc<dyn PipelineStateApi<St, Req, Res, Err>>,
@@ -165,8 +166,7 @@ where
     Err: 'static,
 {
     #[inline]
-    /// Wait for service readiness, then create a future
-    /// that resolves to the service call result.
+    /// Waits for readiness, then calls the service with `st`.
     pub async fn call(&self, req: Req, st: &St) -> Result<Res, Err> {
         let pl = Binding {
             idx: self.api.reg(),
@@ -176,10 +176,9 @@ where
     }
 
     #[inline]
-    /// Call the service and create a future that resolves to the service result.
+    /// Calls the service with `st` without checking readiness.
     ///
-    /// This call can be completed from different async tasks.
-    /// Note: this call does not check service readiness.
+    /// The caller must ensure the pipeline is ready before calling this method.
     pub async fn call_nowait(&self, req: Req, st: &St) -> Result<Res, Err> {
         let pl = Binding {
             idx: self.api.reg(),

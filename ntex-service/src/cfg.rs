@@ -1,4 +1,4 @@
-//! Shared configuration for services
+//! Typed, shared configuration for services.
 #![allow(clippy::should_implement_trait, clippy::new_ret_no_self)]
 use std::any::{Any, TypeId};
 use std::cell::{RefCell, UnsafeCell};
@@ -23,11 +23,15 @@ static IDX: AtomicUsize = AtomicUsize::new(0);
 const KIND_ARC: usize = 1;
 const KIND_UNMASK: usize = !KIND_ARC;
 
+/// A value that can be stored in [`SharedCfg`].
 pub trait Configuration: Default + Send + Sync + fmt::Debug + 'static {
+    /// Human-readable configuration name used in diagnostics.
     const NAME: &'static str;
 
+    /// Returns the shared context associated with this value.
     fn ctx(&self) -> &CfgContext;
 
+    /// Associates this value with a shared configuration context.
     fn set_ctx(&mut self, ctx: CfgContext);
 }
 
@@ -56,6 +60,7 @@ impl Storage {
 }
 
 #[derive(Debug)]
+/// Metadata and lookup access for a shared configuration.
 pub struct CfgContext(*const Storage);
 
 unsafe impl Send for CfgContext {}
@@ -66,23 +71,23 @@ impl CfgContext {
         self.0 = new_p;
     }
 
-    /// Unique id of the context.
+    /// Returns the unique identifier of the shared configuration.
     pub fn id(&self) -> usize {
         self.get_ref().id
     }
 
     #[inline]
-    /// Context tag.
+    /// Returns the configuration tag.
     pub fn tag(&self) -> &'static str {
         self.get_ref().tag
     }
 
-    /// Service name.
+    /// Returns the configured service name.
     pub fn service(&self) -> &'static str {
         self.get_ref().service
     }
 
-    /// Get a reference to a configuration.
+    /// Returns a typed configuration value from the same shared configuration.
     pub fn get<T>(&self) -> Cfg<T>
     where
         T: Configuration,
@@ -93,7 +98,7 @@ impl CfgContext {
         cfg
     }
 
-    /// Get a shared configuration.
+    /// Returns a handle to the complete shared configuration.
     pub fn shared(&self) -> SharedCfg {
         let inner: Arc<Storage> = unsafe { Arc::from_raw(self.0) };
         let shared = SharedCfg(inner.clone());
@@ -114,6 +119,7 @@ impl Default for CfgContext {
 }
 
 #[derive(Debug)]
+/// A typed handle to a value in a [`SharedCfg`].
 pub struct Cfg<T: Configuration>(UnsafeCell<*const T>, PhantomData<rc::Rc<T>>);
 
 impl<T: Configuration> Cfg<T> {
@@ -122,28 +128,28 @@ impl<T: Configuration> Cfg<T> {
     }
 
     #[inline]
-    /// Unique id of the configuration.
+    /// Returns the unique identifier of the shared configuration.
     pub fn id(&self) -> usize {
         self.get_ref().ctx().id()
     }
 
     #[inline]
-    /// Context tag.
+    /// Returns the configuration tag.
     pub fn tag(&self) -> &'static str {
         self.get_ref().ctx().tag()
     }
 
-    /// Service name.
+    /// Returns the configured service name.
     pub fn service(&self) -> &'static str {
         self.get_ref().ctx().service()
     }
 
-    /// Get a shared configuration.
+    /// Returns a handle to the complete shared configuration.
     pub fn shared(&self) -> SharedCfg {
         self.get_ref().ctx().shared()
     }
 
-    /// Get a reference to a previously inserted on configuration.
+    /// Returns another typed value from the same shared configuration.
     pub fn get_shared<U>(&self) -> Cfg<U>
     where
         U: Configuration,
@@ -225,10 +231,11 @@ impl<T: Configuration> Default for Cfg<T> {
 }
 
 #[derive(Clone, Debug)]
-/// Shared configuration
+/// An immutable collection of typed configuration values.
 pub struct SharedCfg(Arc<Storage>);
 
 #[derive(Debug)]
+/// Builder for [`SharedCfg`].
 pub struct SharedCfgBuilder {
     ctx: CfgContext,
     storage: Arc<Storage>,
@@ -249,33 +256,33 @@ impl Hash for SharedCfg {
 }
 
 impl SharedCfg {
-    /// Construct new configuration
+    /// Starts building a shared configuration with the given tag.
     pub fn new(tag: &'static str) -> SharedCfgBuilder {
         SharedCfgBuilder::new(tag)
     }
 
     #[inline]
-    /// Get unique shared cfg id
+    /// Returns the unique identifier of this configuration.
     pub fn id(&self) -> usize {
         self.0.id
     }
 
     #[inline]
-    /// Get tag.
+    /// Returns the configuration tag.
     pub fn tag(&self) -> &'static str {
         self.0.tag
     }
 
-    /// Service name.
+    /// Returns the configured service name.
     pub fn service(&self) -> &'static str {
         self.0.service
     }
 
-    /// Get a reference to a previously inserted on configuration.
+    /// Returns the configuration value of type `T`.
     ///
     /// # Panics
     ///
-    /// if shared config is in building stage
+    /// Panics if the shared configuration is still being built.
     pub fn get<T>(&self) -> Cfg<T>
     where
         T: Configuration,
@@ -342,17 +349,16 @@ impl SharedCfgBuilder {
     }
 
     #[must_use]
-    /// Set service name.
+    /// Sets the service name.
     pub fn service(mut self, name: &'static str) -> Self {
         Arc::get_mut(&mut self.storage).unwrap().service = name;
         self
     }
 
     #[must_use]
-    /// Insert a type into this configuration.
+    /// Inserts a typed value into this configuration.
     ///
-    /// If a config of this type already existed, it will
-    /// be replaced.
+    /// Replaces the existing value when the same type was already inserted.
     pub fn add<T: Configuration>(mut self, mut val: T) -> Self {
         val.set_ctx(CfgContext(self.ctx.0));
         Arc::get_mut(&mut self.storage)
@@ -363,7 +369,7 @@ impl SharedCfgBuilder {
     }
 
     #[must_use]
-    /// Build `SharedCfg` instance.
+    /// Finishes building and returns the shared configuration.
     pub fn build(self) -> SharedCfg {
         self.into()
     }
@@ -388,7 +394,7 @@ where
     );
 
     // increase arc refs for storage instead of actual item
-    // CfgContext and Cfg::shared() relayes on Arc<Storage>
+    // CfgContext and Cfg::shared() rely on Arc<Storage>.
     mem::forget(st.clone());
 
     let tp = TypeId::of::<T>();
