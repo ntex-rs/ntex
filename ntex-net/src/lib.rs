@@ -11,12 +11,12 @@
 //!
 //! - `tokio` enables the Tokio reactor.
 //! - `compio` enables the Compio reactor.
-//! - `neon-polling` requires the native polling reactor.
-//! - `neon-uring` requires the native io_uring reactor on Linux.
-//! - `neon-iocp` requires the native IOCP reactor on Windows.
+//! - `neon-polling` requires the native `polling` reactor.
+//! - `neon-uring` requires the native `io-uring` reactor on Linux.
+//! - `neon-iocp` requires the native `IOCP` reactor on Windows.
 //!
-//! Without an explicit runtime feature, Linux tries io_uring and falls back to
-//! polling; other Unix platforms use polling and Windows uses IOCP.
+//! Without an explicit runtime feature, Linux tries `io-uring` and falls back to
+//! `polling`; other Unix platforms use polling and Windows uses `IOCP`.
 #![deny(clippy::pedantic)]
 #![allow(
     clippy::clone_on_copy,
