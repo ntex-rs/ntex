@@ -15,7 +15,7 @@ dependency inversion. The I/O subsystem does not call Tokio, Compio, or Neon
 socket APIs directly. Instead, a runtime adapter moves bytes between its socket
 and the buffers owned by [`Io`].
 
-An active connection generally involves three cooperating tasks:
+An active connection has three cooperating execution responsibilities:
 
 1. A protocol or dispatcher task consumes decoded input and queues encoded
    output through `Io` or [`IoRef`]. This task typically runs the protocol
@@ -24,6 +24,10 @@ An active connection generally involves three cooperating tasks:
    and submits them to the I/O subsystem.
 3. A transport write task takes queued bytes from the I/O subsystem and writes
    them to the socket.
+
+An adapter may run these responsibilities as separate tasks or combine them.
+For example, the Tokio adapter uses separate read and write tasks, while the
+Compio adapter drives both directions from one transport task.
 
 The read task cooperates with ntex backpressure. It reads only while
 [`IoContext::poll_read_ready`] permits more input. After reading, it returns the
@@ -113,5 +117,35 @@ The runtime-specific implementations are provided by the [`ntex-net`] crate,
 which supports Tokio, Compio, and Neon backends.
 
 [`ntex-net`]: https://docs.rs/ntex-net/
+
+### Transport handles and metadata
+
+Because the underlying socket is hidden behind the I/O abstraction, code using
+`Io` cannot access transport-specific methods directly. The [`Handle`] returned
+by `IoStream::start()` provides the bridge to the underlying transport. It can
+respond to control notifications and expose transport-specific metadata through
+typed queries.
+
+Each backend decides which query types it supports. For example, the built-in
+network backends expose the remote socket address as [`PeerAddr`].
+[`IoRef::query`] is also available on `Io` through dereferencing and returns a
+[`QueryItem`], from which the value can be retrieved with `get()`:
+
+```rust
+use ntex::io::{Io, types::PeerAddr};
+
+fn log_peer_addr(io: &Io) {
+    if let Some(addr) = io.query::<PeerAddr>().get() {
+        println!("Peer address {:?}", addr.into_inner());
+    }
+}
+```
+
+Queries travel through the filter stack before reaching the transport handle,
+so filters may also expose their own typed metadata.
+
+[`IoRef::query`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.query
+[`PeerAddr`]: https://docs.rs/ntex/latest/ntex/io/types/struct.PeerAddr.html
+[`QueryItem`]: https://docs.rs/ntex/latest/ntex/io/types/struct.QueryItem.html
 
 ## Filter
