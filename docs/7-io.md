@@ -148,6 +148,62 @@ so filters may also expose their own typed metadata.
 [`PeerAddr`]: https://docs.rs/ntex/latest/ntex/io/types/struct.PeerAddr.html
 [`QueryItem`]: https://docs.rs/ntex/latest/ntex/io/types/struct.QueryItem.html
 
+## Configuration and timeouts
+
+I/O settings are stored in [`IoConfig`] and are normally added to a
+[`SharedCfg`]. `Io::new()` retrieves the `IoConfig` from that shared
+configuration, using the default settings when it is not present.
+
+```rust
+use ntex::{
+    SharedCfg,
+    io::IoConfig,
+    time::{Millis, Seconds},
+};
+
+let cfg = SharedCfg::new("my-protocol")
+    .add(
+        IoConfig::new()
+            .set_connect_timeout(Millis(5_000))
+            .set_keepalive_timeout(Seconds(30))
+            .set_disconnect_timeout(Seconds(2))
+            .set_frame_read_rate(Seconds(2), Seconds(10), 1_024)
+            .set_read_buf(32 * 1024, 1024, 16)
+            .set_write_buf(32 * 1024, 1024, 16)
+            .set_write_buf_threshold(8 * 1024),
+    )
+    .build();
+```
+
+These settings are used by different parts of the stack:
+
+- The connection timeout is applied by `ntex-net` while resolving and opening
+  an outgoing connection.
+- The keep-alive timeout and frame read-rate limits are interpreted by
+  protocol dispatchers. A frame read-rate limit protects a decoder from peers
+  that send one incomplete frame too slowly.
+- The graceful-disconnect timeout limits how long the I/O subsystem waits for
+  filters and pending output during shutdown.
+- The read and write high-water marks enable backpressure. Write backpressure
+  is released after buffered output falls to half its high-water mark.
+- The read low-water mark controls how much free capacity is reserved before
+  another socket read. The cache-size argument limits the number of eligible
+  read buffers retained in the per-thread cache.
+- The write page size controls newly allocated [`BytePages`], while the write
+  threshold controls when supported transports attempt an early direct write.
+
+Connection and keep-alive timeouts are disabled by default. Frame read-rate
+limits are also disabled. The default graceful-disconnect timeout is one
+second, and the default read and write high-water marks are approximately
+16 KiB.
+
+An established connection can switch to another shared configuration with
+[`Io::set_config`]. This is useful when a protocol upgrade changes timeout or
+buffer requirements.
+
+[`Io::set_config`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.set_config
+[`SharedCfg`]: https://docs.rs/ntex/latest/ntex/struct.SharedCfg.html
+
 ## Filter subsystem
 
 Applications often need to transform a byte stream before a protocol service
@@ -207,6 +263,43 @@ for readiness, queries, and shutdown to make this pattern less error-prone.
 
 [`Filter`]: https://docs.rs/ntex/latest/ntex/io/trait.Filter.html
 [`Io::map_filter`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.map_filter
+
+### Typed versus erased filter stacks
+
+The filter stack is represented in the type of [`Io<Base>`]. A new connection starts
+with the [`Base`] filter. Calling `add_filter(layer)` consumes the current
+value and returns `Io<Layer<U, F>>`, where `U` is the new outer layer and `F`
+is the previous stack. Keeping this concrete type provides static dispatch and
+allows [`Io::filter`] to return the concrete outer filter.
+
+```rust,ignore
+let io: Io<Base> = create_io();
+let io: Io<Layer<MyFilter, Base>> = io.add_filter(MyFilter::new());
+```
+
+At service boundaries, different connections may have different concrete
+filter stacks. [`Io::seal`] erases the stack type and returns `Io<Sealed>`,
+while [`Io::boxed`] returns the `IoBoxed` convenience wrapper. Both operations
+consume the original `Io` value and retain the same connection state and
+filter behavior behind a dynamically dispatched `Filter`.
+
+```rust,ignore
+let io: IoBoxed = io.boxed();
+start_protocol(io);
+```
+
+Additional typed layers can still be added to a sealed stream and the result
+can be erased again when necessary. Type erasure is therefore normally
+performed at the boundary where a protocol or service needs one uniform I/O
+type, rather than while constructing the filter stack.
+
+[`Base`]: https://docs.rs/ntex/latest/ntex/io/struct.Base.html
+[`Io::boxed`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.boxed
+[`Io::filter`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.filter
+[`Io::seal`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.seal
+[`IoBoxed`]: https://docs.rs/ntex/latest/ntex/io/struct.IoBoxed.html
+[`Layer`]: https://docs.rs/ntex/latest/ntex/io/struct.Layer.html
+[`Sealed`]: https://docs.rs/ntex/latest/ntex/io/struct.Sealed.html
 
 ## Read/write streams
 
@@ -274,3 +367,42 @@ enforces buffer limits and backpressure.
 [`IoRef::encode_bytes`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.encode_bytes
 [`IoRef::encode_slice`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.encode_slice
 [`IoRef::with_read_buf`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.with_read_buf
+
+## Testing
+
+[`IoTest`] provides a pair of interconnected in-memory transports for testing
+codecs, filters, and protocol services without opening sockets. Each endpoint
+implements `IoStream` and can be wrapped in `Io`. Writing to one `IoTest`
+endpoint supplies input to the other endpoint, while `read()` collects bytes
+written back by the peer.
+
+```rust
+use ntex::codec::BytesCodec;
+use ntex::io::{Io, testing::IoTest};
+use ntex::util::Bytes;
+
+#[ntex::test]
+async fn protocol_io() {
+    let (client, server) = IoTest::create();
+
+    // Allow the server transport to write to the client.
+    client.remote_buffer_cap(1024);
+
+    let io = Io::from(server);
+
+    client.write(b"request");
+    let request = io.recv(&BytesCodec).await.unwrap().unwrap();
+    assert_eq!(request, Bytes::from_static(b"request"));
+
+    io.send(Bytes::from_static(b"response"), &BytesCodec)
+        .await
+        .unwrap();
+    assert_eq!(client.read().await.unwrap(), b"response"[..]);
+}
+```
+
+Tests can also force pending reads, inject read or write errors, close either
+side, constrain write capacity to exercise backpressure, and attach a
+`PeerAddr` value for transport-query tests.
+
+[`IoTest`]: https://docs.rs/ntex/latest/ntex/io/testing/struct.IoTest.html
