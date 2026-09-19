@@ -18,7 +18,7 @@ use super::{HttpService, Resource, Route, State, WebRequest, WebResponse};
 /// for building application instances.
 #[derive(derive_more::Debug)]
 #[debug("App")]
-pub struct App<St: State, In, Out = In, M = Identity, F = Filter<St, In>> {
+pub struct App<St: State, In = (), Out = In, M = Identity, F = Filter<St, In>> {
     middleware: M,
     filter: ServiceChainFactory<F, St, WebRequest<In>>,
     external: Vec<ResourceDef>,
@@ -42,7 +42,7 @@ pub struct AppServices<St: State, In, Out, M, F> {
     ph: PhantomData<In>,
 }
 
-impl Default for App<(), ()> {
+impl Default for App<()> {
     fn default() -> Self {
         App {
             middleware: Identity,
