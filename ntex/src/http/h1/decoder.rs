@@ -30,9 +30,15 @@ struct Inner<T> {
 pub enum PayloadType {
     /// The message has no payload.
     None,
-    /// The message has a framed HTTP payload.
+    /// The message has an HTTP body.
+    ///
+    /// Depending on the message headers and version, the decoder may use a
+    /// fixed length, chunked transfer coding, or connection close as the body
+    /// delimiter.
     Payload(PayloadDecoder),
-    /// The connection switches to an unframed stream.
+    /// The message switches the connection away from HTTP framing.
+    ///
+    /// Subsequent bytes belong to the upgraded protocol or tunnel.
     Stream(PayloadDecoder),
 }
 

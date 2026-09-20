@@ -1,4 +1,4 @@
-use std::{fmt, io, rc::Rc};
+use std::{cell::Cell, fmt, io, rc::Rc};
 
 use crate::http::message::CurrentIo;
 use crate::http::{Request, Response, ResponseError, body::Body, h1::Codec};
@@ -272,6 +272,7 @@ pub struct Upgrade<F> {
 struct RequestIoAccess<F> {
     io: Rc<Io<F>>,
     codec: Codec,
+    taken: Cell<bool>,
 }
 
 impl<F> fmt::Debug for RequestIoAccess<F> {
@@ -285,11 +286,19 @@ impl<F> fmt::Debug for RequestIoAccess<F> {
 
 impl<F: Filter> crate::http::message::IoAccess for RequestIoAccess<F> {
     fn get(&self) -> Option<&IoRef> {
-        Some(self.io.as_ref())
+        if self.taken.get() {
+            None
+        } else {
+            Some(self.io.as_ref())
+        }
     }
 
     fn take(&self) -> Option<(IoBoxed, Codec)> {
-        Some((self.io.take().into(), self.codec.clone()))
+        if self.taken.replace(true) {
+            None
+        } else {
+            Some((self.io.take().into(), self.codec.clone()))
+        }
     }
 }
 
@@ -322,6 +331,7 @@ impl<F: Filter> Upgrade<F> {
         let io = Rc::new(RequestIoAccess {
             io: self.io,
             codec: self.codec,
+            taken: Cell::new(false),
         });
         self.req.head_mut().io = CurrentIo::new(io);
 
@@ -605,5 +615,30 @@ impl Expect {
         ControlAck {
             result: ControlResult::ExpectFailed(res, body.into()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::http::HttpServiceConfig;
+    use crate::http::message::IoAccess;
+    use crate::service::cfg::SharedCfg;
+    use crate::testing::IoTest;
+
+    #[crate::rt_test]
+    async fn request_io_access_is_one_shot() {
+        let (_, server) = IoTest::create();
+        let cfg: SharedCfg = SharedCfg::new("TEST").add(HttpServiceConfig::new()).into();
+        let access = RequestIoAccess {
+            io: Rc::new(Io::new(server, cfg.clone())),
+            codec: Codec::new(1, cfg.get()),
+            taken: Cell::new(false),
+        };
+
+        assert!(access.get().is_some());
+        assert!(access.take().is_some());
+        assert!(access.get().is_none());
+        assert!(access.take().is_none());
     }
 }
