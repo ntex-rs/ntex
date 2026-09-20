@@ -23,7 +23,7 @@ impl<T> AppState<T> {
     }
 }
 
-impl<T: Clone + 'static> State for AppState<T> {
+impl<T: 'static> State for AppState<T> {
     type Error = DefaultError;
 }
 

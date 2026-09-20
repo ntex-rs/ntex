@@ -366,9 +366,9 @@ where
     /// Application level middleware, in that Scope-level middleware can not modify
     /// `WebResponse`.
     #[must_use]
-    pub fn middleware<U>(self, mw: U) -> Scope<St, In, Out, WebStack<St, M, U>, F> {
+    pub fn middleware<U>(self, mw: U) -> Scope<St, In, Out, WebStack<St, U, M>, F> {
         Scope {
-            middleware: WebStack::new(self.middleware, mw),
+            middleware: WebStack::new(mw, self.middleware),
             filter: self.filter,
             rdef: self.rdef,
             guards: self.guards,

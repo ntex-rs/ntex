@@ -68,7 +68,7 @@ where
     St: State,
     U: 'static,
 {
-    pub(super) fn new(hnd: F) -> Rc<dyn HandlerFn<St, U>> {
+    pub(super) fn create(hnd: F) -> Rc<dyn HandlerFn<St, U>> {
         Rc::new(HandlerStWrapper {
             hnd,
             _t: PhantomData,
@@ -117,7 +117,7 @@ where
     St: State,
     U: 'static,
 {
-    pub(super) fn new(hnd: F) -> Rc<dyn HandlerFn<St, U>> {
+    pub(super) fn create(hnd: F) -> Rc<dyn HandlerFn<St, U>> {
         Rc::new(HandlerWrapper {
             hnd,
             _t: PhantomData,

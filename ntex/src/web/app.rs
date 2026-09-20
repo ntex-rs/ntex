@@ -389,9 +389,9 @@ where
     ///         .route("/index.html", web::get().to(index));
     /// }
     /// ```
-    pub fn middleware<U>(self, mw: U) -> App<St, In, Out, WebStack<St, M, U>, F> {
+    pub fn middleware<U>(self, mw: U) -> App<St, In, Out, WebStack<St, U, M>, F> {
         App {
-            middleware: WebStack::new(self.middleware, mw),
+            middleware: WebStack::new(mw, self.middleware),
             filter: self.filter,
             config: self.config,
             external: self.external,
@@ -563,7 +563,7 @@ where
 
 impl<St, In, Out, M, F> AppServices<St, In, Out, M, F>
 where
-    St: State + Clone,
+    St: State,
     In: 'static,
     Out: 'static,
     F: ServiceFactory<
@@ -602,7 +602,10 @@ where
         Res = Response,
         Error = WebError<St, St::Error>,
         InitError = Failure,
-    > {
+    >
+    where
+        St: Clone,
+    {
         map_state_factory(
             state,
             IntoServiceFactory::<AppFactory<St, In, Out, M, F>, St, Request>::into_factory(self),

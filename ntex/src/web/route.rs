@@ -23,7 +23,7 @@ impl<St: State, In: 'static> Route<St, In> {
     /// Create new route which matches any request.
     pub fn new() -> Route<St, In> {
         Route {
-            handler: HandlerWrapper::<St, In, _, ()>::new(async || HttpResponse::NotFound()),
+            handler: HandlerWrapper::<St, In, _, ()>::create(async || HttpResponse::NotFound()),
             methods: Vec::new(),
             guards: Rc::default(),
         }
@@ -155,7 +155,7 @@ impl<St: State, In: 'static> Route<St, In> {
         Args: FromRequest<St> + 'static,
         Args::Error: WebResponseError<St, St::Error>,
     {
-        self.handler = HandlerWrapper::new(handler);
+        self.handler = HandlerWrapper::create(handler);
         self
     }
 
@@ -195,7 +195,7 @@ impl<St: State, In: 'static> Route<St, In> {
         Args: FromRequest<St> + 'static,
         Args::Error: WebResponseError<St, St::Error>,
     {
-        self.handler = HandlerStWrapper::new(handler);
+        self.handler = HandlerStWrapper::create(handler);
         self
     }
 }

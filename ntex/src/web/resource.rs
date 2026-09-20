@@ -178,9 +178,9 @@ where
     /// Resource level middlewares are not allowed to change response
     /// type (i.e modify response's body).
     #[must_use]
-    pub fn middleware<U>(self, mw: U) -> Resource<St, In, Out, WebStack<St, M, U>, F> {
+    pub fn middleware<U>(self, mw: U) -> Resource<St, In, Out, WebStack<St, U, M>, F> {
         Resource {
-            middleware: WebStack::new(self.middleware, mw),
+            middleware: WebStack::new(mw, self.middleware),
             filter: self.filter,
             rdef: self.rdef,
             name: self.name,
