@@ -73,6 +73,7 @@ struct DispatcherInner<F, B, Err> {
     codec: Codec,
     config: DispatcherConfig,
     payload: Option<(PayloadDecoder, bstream::Sender<PayloadError>)>,
+    pending_payload_error: Option<Either<ProtocolError, Option<io::Error>>>,
     read_remains: u32,
     read_consumed: u32,
     read_max_timeout: Seconds,
@@ -113,6 +114,7 @@ where
                 config,
                 io: Rc::new(io),
                 payload: None,
+                pending_payload_error: None,
                 read_remains: 0,
                 read_consumed: 0,
                 read_max_timeout: max_timeout,
@@ -158,56 +160,83 @@ where
                     }
                 },
                 // handle control service responses
-                State::CallControl { fut } => match Pin::new(fut).poll(cx) {
-                    Poll::Ready(Ok(ControlAck { result })) => match result {
-                        ControlResult::Publish(req) => inner.publish(req),
-                        ControlResult::Response(res, body)
-                        | ControlResult::Error(res, body)
-                        | ControlResult::ProtocolError(res, body) => {
-                            inner.send_response(res, body.into())
-                        }
-                        ControlResult::Continue(req) => {
-                            let result = inner.io.encode_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
-                            if let Err(err) = result {
-                                *this.st = inner.ctl_peer_gone(Some(err));
-                                continue;
+                State::CallControl { fut } => {
+                    let result = match Pin::new(fut).poll(cx) {
+                        Poll::Ready(result) => result,
+                        Poll::Pending => {
+                            // Check for payload errors while waiting for the control
+                            // service, but preserve the in-flight control call.
+                            if inner.pending_payload_error.is_none()
+                                && let Poll::Ready(Err(err)) =
+                                    inner.poll_request_payload_inner::<F>(None, cx)
+                            {
+                                inner.pending_payload_error = Some(err);
                             }
-                            if req.upgrade() {
-                                inner.ctl_upgrade(req)
+                            return Poll::Pending;
+                        }
+                    };
+
+                    match result {
+                        Ok(ControlAck { result }) => {
+                            if let Some(err) = inner.pending_payload_error.take() {
+                                match err {
+                                    Either::Left(err) => inner.ctl_proto_err(err),
+                                    Either::Right(err) => inner.ctl_peer_gone(err),
+                                }
                             } else {
-                                inner.publish(req)
+                                match result {
+                                    ControlResult::Publish(req) => inner.publish(req),
+                                    ControlResult::Response(res, body)
+                                    | ControlResult::Error(res, body)
+                                    | ControlResult::ProtocolError(res, body) => {
+                                        inner.send_response(res, body.into())
+                                    }
+                                    ControlResult::Continue(req) => {
+                                        let result =
+                                            inner.io.encode_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
+                                        if let Err(err) = result {
+                                            *this.st = inner.ctl_peer_gone(Some(err));
+                                            continue;
+                                        }
+                                        if req.upgrade() {
+                                            inner.ctl_upgrade(req)
+                                        } else {
+                                            inner.publish(req)
+                                        }
+                                    }
+                                    ControlResult::Expect(req) => {
+                                        inner.control(Control::expect(req))
+                                    }
+                                    ControlResult::ExpectFailed(res, body) => {
+                                        inner.disconnect =
+                                            Some(ServiceDisconnectReason::ExpectFailed);
+                                        inner.send_response(res, body.into())
+                                    }
+                                    ControlResult::Upgrade(req) => inner.ctl_upgrade(req),
+                                    ControlResult::UpgradeAck(req) => {
+                                        inner.disconnect =
+                                            Some(ServiceDisconnectReason::UpgradeHandled);
+                                        inner.publish(req)
+                                    }
+                                    ControlResult::UpgradeHandled => inner.ctl_svc_disconnect(
+                                        ServiceDisconnectReason::UpgradeHandled,
+                                    ),
+                                    ControlResult::UpgradeFailed(res, body) => {
+                                        inner.disconnect =
+                                            Some(ServiceDisconnectReason::UpgradeFailed);
+                                        inner.send_response(res, body.into())
+                                    }
+                                    ControlResult::Stop => inner.stop(),
+                                    ControlResult::Connect(_) => unreachable!(),
+                                }
                             }
                         }
-                        ControlResult::Expect(req) => inner.control(Control::expect(req)),
-                        ControlResult::ExpectFailed(res, body) => {
-                            inner.disconnect = Some(ServiceDisconnectReason::ExpectFailed);
-                            inner.send_response(res, body.into())
+                        Err(err) => {
+                            log::error!("{}: Control plain error: {}", inner.io.tag(), err);
+                            return Poll::Ready(Err(err));
                         }
-                        ControlResult::Upgrade(req) => inner.ctl_upgrade(req),
-                        ControlResult::UpgradeAck(req) => {
-                            inner.disconnect = Some(ServiceDisconnectReason::UpgradeHandled);
-                            inner.publish(req)
-                        }
-                        ControlResult::UpgradeHandled => {
-                            inner.ctl_svc_disconnect(ServiceDisconnectReason::UpgradeHandled)
-                        }
-                        ControlResult::UpgradeFailed(res, body) => {
-                            inner.disconnect = Some(ServiceDisconnectReason::UpgradeFailed);
-                            inner.send_response(res, body.into())
-                        }
-                        ControlResult::Stop => inner.stop(),
-                        ControlResult::Connect(_) => unreachable!(),
-                    },
-                    Poll::Ready(Err(err)) => {
-                        log::error!("{}: Control plain error: {}", inner.io.tag(), err);
-                        return Poll::Ready(Err(err));
                     }
-                    Poll::Pending => {
-                        // check for io changes, it could be close while waiting for service call
-                        let _ = inner.poll_request_payload_inner::<F>(None, cx);
-                        return Poll::Pending;
-                    }
-                },
+                }
                 // read request and call service
                 State::ReadRequest => {
                     if let Some(st) = inner.check_disconnect() {
@@ -1459,6 +1488,94 @@ mod tests {
 
         client.close().await;
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+    }
+
+    #[crate::rt_test]
+    async fn test_payload_peer_gone_while_control_pending() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let requests2 = requests.clone();
+        let disconnects = Arc::new(AtomicUsize::new(0));
+        let disconnects2 = disconnects.clone();
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, SharedCfg::default()),
+            Pipeline::new(
+                (),
+                fn_service(async move |_| {
+                    requests2.fetch_add(1, Ordering::Relaxed);
+                    Ok::<_, io::Error>(Response::Ok().build())
+                }),
+            ),
+            Pipeline::new(
+                (),
+                fn_service(async move |msg: Control<_, _>| {
+                    match &msg {
+                        Control::Request(_) => sleep(Millis(100)).await,
+                        Control::Disconnect(Reason::PeerGone(_)) => {
+                            disconnects2.fetch_add(1, Ordering::Relaxed);
+                        }
+                        _ => {}
+                    }
+                    Ok::<_, DispatchError>(msg.ack())
+                }),
+            ),
+            DispatcherConfig::default(),
+        );
+
+        client.write("POST / HTTP/1.1\r\ncontent-length: 10\r\n\r\nbody");
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        client.close().await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+        assert_eq!(requests.load(Ordering::Relaxed), 0);
+        assert_eq!(disconnects.load(Ordering::Relaxed), 1);
+    }
+
+    #[crate::rt_test]
+    async fn test_payload_decode_error_while_control_pending() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let requests2 = requests.clone();
+        let errors = Arc::new(AtomicUsize::new(0));
+        let errors2 = errors.clone();
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, SharedCfg::default()),
+            Pipeline::new(
+                (),
+                fn_service(async move |_| {
+                    requests2.fetch_add(1, Ordering::Relaxed);
+                    Ok::<_, io::Error>(Response::Ok().build())
+                }),
+            ),
+            Pipeline::new(
+                (),
+                fn_service(async move |msg: Control<_, _>| {
+                    match &msg {
+                        Control::Request(_) => sleep(Millis(100)).await,
+                        Control::Disconnect(Reason::ProtocolError(err))
+                            if matches!(err.get_ref(), ProtocolError::Decode(_)) =>
+                        {
+                            errors2.fetch_add(1, Ordering::Relaxed);
+                        }
+                        _ => {}
+                    }
+                    Ok::<_, DispatchError>(msg.ack())
+                }),
+            ),
+            DispatcherConfig::default(),
+        );
+
+        client.write("POST / HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\ninvalid\r\n");
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+        assert_eq!(requests.load(Ordering::Relaxed), 0);
+        assert_eq!(errors.load(Ordering::Relaxed), 1);
     }
 
     #[crate::rt_test]
