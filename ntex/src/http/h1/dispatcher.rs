@@ -29,6 +29,8 @@ bitflags::bitflags! {
     pub struct Flags: u8 {
         /// Disconnect
         const DISCONNECT_SENT      = 0b0000_0001;
+        /// No request has been decoded yet
+        const FIRST_REQUEST        = 0b0000_0010;
         /// Keep-alive is enabled
         const READ_KA_TIMEOUT      = 0b0001_0000;
         /// Read headers timer is enabled
@@ -96,9 +98,9 @@ where
         let (flags, max_timeout) = if let Some(cfg) = &codec.cfg.headers_read_rate {
             let (timeout, max_timeout) = read_timeout(cfg.timeout, cfg.max_timeout);
             io.start_timer(timeout);
-            (Flags::READ_HDRS_TIMEOUT, max_timeout)
+            (Flags::FIRST_REQUEST | Flags::READ_HDRS_TIMEOUT, max_timeout)
         } else {
-            (Flags::empty(), Seconds::ZERO)
+            (Flags::FIRST_REQUEST, Seconds::ZERO)
         };
 
         Dispatcher {
@@ -635,13 +637,21 @@ where
         if decoded.item.is_some() {
             self.read_remains = 0;
             self.read_consumed = 0;
-            self.flags
-                .remove(Flags::READ_KA_TIMEOUT | Flags::READ_HDRS_TIMEOUT | Flags::READ_PL_TIMEOUT);
+            self.flags.remove(
+                Flags::FIRST_REQUEST
+                    | Flags::READ_KA_TIMEOUT
+                    | Flags::READ_HDRS_TIMEOUT
+                    | Flags::READ_PL_TIMEOUT,
+            );
             self.io.stop_timer();
         } else if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
             // received new data but not enough for parsing complete frame
             self.read_remains = decoded.remains as u32;
-        } else if self.read_remains == 0 && decoded.remains == 0 && !self.codec.is_reading_hdrs() {
+        } else if !self.flags.contains(Flags::FIRST_REQUEST)
+            && self.read_remains == 0
+            && decoded.remains == 0
+            && !self.codec.is_reading_hdrs()
+        {
             // no new data, start keep-alive timer
             if self.codec.keepalive() {
                 if !self.flags.contains(Flags::READ_KA_TIMEOUT) && self.codec.cfg.ka_enabled {
@@ -786,7 +796,7 @@ mod tests {
     use crate::client::ClientCodec;
     use crate::http::config::HttpServiceConfig;
     use crate::http::h1::{DefaultControlService, control::Reason};
-    use crate::http::{ResponseHead, StatusCode, body};
+    use crate::http::{KeepAlive, ResponseHead, StatusCode, body};
     use crate::io::{self as nio, Base};
     use crate::service::{IntoService, Service, cfg::SharedCfg, fn_service};
     use crate::util::{Bytes, BytesMut, lazy, stream_recv};
@@ -807,6 +817,40 @@ mod tests {
         let (timeout, remaining) = read_timeout(Seconds(10), Seconds(3));
         assert_eq!(timeout, Seconds(3));
         assert_eq!(remaining, Seconds::ZERO);
+    }
+
+    #[crate::rt_test]
+    async fn test_new_connection_without_header_timeout() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(
+                HttpServiceConfig::new()
+                    .set_client_timeout(Seconds::ZERO)
+                    .set_keepalive(KeepAlive::Disabled),
+            )
+            .into();
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
+            ),
+            Pipeline::new((), DefaultControlService),
+            DispatcherConfig::default(),
+        );
+
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(!h1.inner.io.is_closed());
+
+        client.write("GET / HTTP/1.1\r\n\r\n");
+        sleep(Millis(50)).await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+
+        let buf = client.read_any();
+        assert!(buf.starts_with(b"HTTP/1.1 200 OK\r\n"));
     }
 
     /// Create http/1 dispatcher.

@@ -161,7 +161,9 @@ impl HttpServiceConfig {
     ///
     /// If the client does not begin transmitting a complete header block
     /// within this period, the request is rejected with `408 Request Timeout`.
-    /// A zero duration disables header-read timing. The default is one second.
+    /// A zero duration disables header-read timing, allowing a new connection
+    /// to wait indefinitely for its first request independently of the
+    /// keep-alive policy. The default is one second.
     pub fn set_client_timeout(mut self, timeout: Seconds) -> Self {
         if timeout.is_zero() {
             self.headers_read_rate = None;
