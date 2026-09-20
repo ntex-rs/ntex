@@ -450,6 +450,12 @@ impl<Err: ResponseError> Error<Err> {
     }
 
     #[inline]
+    /// Returns mutable access to the application service error.
+    pub fn get_mut(&mut self) -> &mut Err {
+        &mut self.err
+    }
+
+    #[inline]
     /// Sends the response generated from the service error.
     pub fn ack<F>(self) -> ControlAck<F> {
         let (res, body) = self.pkt.into_parts();
@@ -487,7 +493,7 @@ pub struct ProtocolError(super::ProtocolError);
 impl ProtocolError {
     #[inline]
     /// Returns the protocol error.
-    pub fn err(&self) -> &super::ProtocolError {
+    pub fn get_ref(&self) -> &super::ProtocolError {
         &self.0
     }
 
@@ -530,8 +536,14 @@ pub struct PeerGone(Option<io::Error>);
 impl PeerGone {
     #[inline]
     /// Returns the underlying I/O error, if one was reported.
-    pub fn err(&self) -> Option<&io::Error> {
+    pub fn get_ref(&self) -> Option<&io::Error> {
         self.0.as_ref()
+    }
+
+    #[inline]
+    /// Returns mutable access to the underlying I/O error, if one was reported.
+    pub fn get_mut(&mut self) -> Option<&mut io::Error> {
+        self.0.as_mut()
     }
 
     #[inline]
@@ -558,6 +570,12 @@ impl Expect {
     /// Returns the HTTP request.
     pub fn get_ref(&self) -> &Request {
         &self.0
+    }
+
+    #[inline]
+    /// Returns mutable access to the HTTP request.
+    pub fn get_mut(&mut self) -> &mut Request {
+        &mut self.0
     }
 
     #[inline]

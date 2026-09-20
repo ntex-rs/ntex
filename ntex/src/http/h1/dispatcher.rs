@@ -1258,7 +1258,7 @@ mod tests {
                 (),
                 fn_service(async move |msg: Control<_, _>| {
                     if let Control::Disconnect(Reason::ProtocolError(ref err)) = msg
-                        && matches!(err.err(), ProtocolError::SlowPayloadTimeout)
+                        && matches!(err.get_ref(), ProtocolError::SlowPayloadTimeout)
                     {
                         err_mark2.store(err_mark2.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
                     }
