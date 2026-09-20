@@ -191,7 +191,7 @@ where
         }
     }
 
-    /// Adds middleware around this resource.
+    /// Registers a middleware for this resource.
     ///
     /// The middleware runs only after the resource's path and guards match. It
     /// wraps the resource filter, routes, and fallback service, so it can

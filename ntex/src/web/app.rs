@@ -369,7 +369,7 @@ where
         }
     }
 
-    /// Adds middleware around the application.
+    /// Registers a middleware for this application.
     ///
     /// Use application middleware for work that should apply to every request,
     /// such as logging, response headers, or authentication. It runs before

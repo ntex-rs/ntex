@@ -372,7 +372,7 @@ where
         }
     }
 
-    /// Adds middleware around this scope.
+    /// Registers a middleware for this scope.
     ///
     /// The middleware runs only after the scope's path and guards match. It
     /// wraps everything inside the scope, including its filter, nested routes,
