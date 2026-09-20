@@ -8,14 +8,54 @@ use crate::util::{Bytes, BytesMut, Either};
 use super::error::{InternalError, WebResponseError};
 use super::{HttpRequest, State};
 
-/// Trait implemented by types that can be converted to a http response.
+/// Turns a handler's return value into an HTTP response.
 ///
-/// Types that implement this trait can be used as the return type of a handler.
+/// A handler can return any type that implements `Responder`. ntex provides
+/// implementations for common values such as responses, strings, byte
+/// buffers, [`Json`](super::types::Json), [`Form`](super::types::Form),
+/// `Option<T>`, and `Result<T, E>`.
+///
+/// After the handler finishes, ntex calls [`respond_to()`](Self::respond_to)
+/// with the application state and the original request. Custom responders can
+/// use them to choose the status, headers, or response body. The conversion is
+/// asynchronous, so it can also perform async work when needed.
+///
+/// For small changes, use [`with_status()`](Self::with_status) or
+/// [`with_header()`](Self::with_header) instead of implementing a new
+/// responder.
+///
+/// # Example
+///
+/// An application type can be returned directly from a handler after it
+/// implements `Responder`:
+///
+/// ```rust
+/// use ntex::http::Response;
+/// use ntex::web::{self, HttpRequest, Responder};
+///
+/// struct Greeting(&'static str);
+///
+/// impl<St: web::State> Responder<St> for Greeting {
+///     async fn respond_to(self, _: &St, _: &HttpRequest) -> Response {
+///         Response::Ok()
+///             .content_type("text/plain; charset=utf-8")
+///             .body(self.0)
+///     }
+/// }
+///
+/// async fn hello() -> Greeting {
+///     Greeting("Hello!")
+/// }
+///
+/// let app = web::App::default().route("/", web::get().to(hello));
+/// ```
 pub trait Responder<St: State = ()> {
-    /// Convert itself to http response.
+    /// Builds an HTTP response from this value.
     async fn respond_to(self, st: &St, req: &HttpRequest) -> Response;
 
-    /// Override a status code for a Responder.
+    /// Replaces the status code produced by this responder.
+    ///
+    /// The response body and headers are left unchanged.
     ///
     /// ```rust
     /// use ntex::http::StatusCode;
@@ -33,7 +73,9 @@ pub trait Responder<St: State = ()> {
         CustomResponder::new(self).with_status(status)
     }
 
-    /// Add header to the Responder's response.
+    /// Sets a header on the response produced by this responder.
+    ///
+    /// An existing value with the same header name is replaced.
     ///
     /// ```rust
     /// use ntex::web::{self, HttpRequest, Responder};
