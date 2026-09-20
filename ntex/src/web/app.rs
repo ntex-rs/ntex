@@ -796,7 +796,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_extension() {
-        let cfg = WebAppConfig::new().set_state(10usize).into();
+        let cfg = WebAppConfig::new().set_state(10usize);
 
         let srv = init_service(
             App::new()
