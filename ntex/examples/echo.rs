@@ -1,10 +1,31 @@
+//! HTTP echo server that buffers and returns each request body.
+//!
+//! Run it and try: `curl --data 'hello' http://127.0.0.1:8080/echo`
+
 use std::io;
 
 use futures_util::StreamExt;
 use log::info;
-use ntex::http::header::HeaderValue;
-use ntex::http::{HttpService, HttpServiceConfig, Request, Response};
+use ntex::http::{HttpService, HttpServiceConfig, Request, Response, header};
 use ntex::{SharedCfg, time::Seconds, util::BytesMut};
+
+async fn echo(mut req: Request) -> Result<Response, io::Error> {
+    let mut body = BytesMut::new();
+    while let Some(chunk) = req.payload().next().await {
+        let chunk = chunk.map_err(|err| io::Error::other(err.to_string()))?;
+        body.extend_from_slice(&chunk);
+    }
+
+    info!(
+        "{} {}: echoing {} bytes",
+        req.method(),
+        req.path(),
+        body.len()
+    );
+    Ok(Response::Ok()
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .body(body))
+}
 
 #[ntex::main]
 async fn main() -> io::Result<()> {
@@ -16,21 +37,10 @@ async fn main() -> io::Result<()> {
         128,
     ));
 
+    info!("starting HTTP echo server at http://127.0.0.1:8080");
     ntex::server::build()
         .bind("echo", "127.0.0.1:8080", cfg, async |_| {
-            HttpService::new(async move |mut req: Request| {
-                let mut body = BytesMut::new();
-                while let Some(item) = req.payload().next().await {
-                    body.extend_from_slice(&item.unwrap());
-                }
-
-                info!("request body: {:?}", body);
-                Ok::<_, io::Error>(
-                    Response::Ok()
-                        .header("x-head", HeaderValue::from_static("dummy value!"))
-                        .body(body),
-                )
-            })
+            HttpService::new(echo)
         })?
         .run()
         .await
