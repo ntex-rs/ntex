@@ -4,7 +4,7 @@ use std::{future, io, mem, pin::Pin, rc::Rc};
 
 use crate::io::{Decoded, Filter, Io, IoStatusUpdate, RecvError};
 use crate::service::pipeline::{Pipeline, PipelineCall};
-use crate::{channel::bstream, time::Seconds, util::Either};
+use crate::{channel::bstream, time::Seconds, util::Either, util::clone_io_error};
 
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
 use crate::http::error::{DispatchError, PayloadError, ResponseError};
@@ -483,6 +483,14 @@ where
                 // read request payload
                 let mut updated = false;
                 loop {
+                    let buffered = if self.flags.contains(Flags::READ_PL_TIMEOUT) {
+                        Some(
+                            io.map(|io| io.with_read_buf(|buf| buf.len()))
+                                .unwrap_or_else(|| self.io.with_read_buf(|buf| buf.len())),
+                        )
+                    } else {
+                        None
+                    };
                     let recv_result = io
                         .map(|io| io.poll_recv_decode(&self.payload.as_ref().unwrap().0, cx))
                         .unwrap_or_else(|| {
@@ -530,6 +538,17 @@ where
                                     continue;
                                 }
                                 RecvError::KeepAlive => {
+                                    if let Some(buffered) = buffered {
+                                        let remains = io
+                                            .map(|io| io.with_read_buf(|buf| buf.len()))
+                                            .unwrap_or_else(|| {
+                                                self.io.with_read_buf(|buf| buf.len())
+                                            });
+                                        self.read_consumed =
+                                            self.read_consumed.saturating_add(
+                                                buffered.saturating_sub(remains) as u32,
+                                            );
+                                    }
                                     if let Err(err) = self.handle_timeout() {
                                         Either::Left(err)
                                     } else {
@@ -537,11 +556,13 @@ where
                                     }
                                 }
                                 RecvError::PeerGone(err) => {
-                                    self.set_payload_error(PayloadError::EncodingCorrupted);
+                                    self.set_payload_error(PayloadError::Incomplete(
+                                        err.as_ref().map(clone_io_error),
+                                    ));
                                     Either::Right(err)
                                 }
                                 RecvError::Decoder(e) => {
-                                    self.set_payload_error(PayloadError::EncodingCorrupted);
+                                    self.set_payload_error(PayloadError::Decode(e));
                                     Either::Left(ProtocolError::Decode(e))
                                 }
                             };
@@ -618,7 +639,7 @@ where
             if self.flags.contains(Flags::READ_PL_TIMEOUT) {
                 self.set_payload_error(PayloadError::Io(io::Error::new(
                     io::ErrorKind::TimedOut,
-                    "Keep-alive",
+                    "Payload read timeout",
                 )));
                 Err(ProtocolError::SlowPayloadTimeout)
             } else {
@@ -1400,6 +1421,132 @@ mod tests {
 
         client.close().await;
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+    }
+
+    #[crate::rt_test]
+    async fn test_payload_progress_available_when_timer_fires() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(HttpServiceConfig::new().set_payload_read_rate(Seconds(1), Seconds(2), 2))
+            .into();
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |mut req: Request| {
+                    while req.payload().recv().await.is_some() {}
+                    Ok::<_, io::Error>(Response::Ok().build())
+                }),
+            ),
+            Pipeline::new((), DefaultControlService),
+            DispatcherConfig::default(),
+        );
+
+        client.write("POST / HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        // Chunk framing is consumed without producing a payload item.
+        client.write("4\r\n");
+        sleep(Millis(1100)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        sleep(Millis(50)).await;
+        assert!(client.read_any().is_empty());
+
+        client.close().await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+    }
+
+    #[crate::rt_test]
+    async fn test_payload_peer_gone_reports_incomplete() {
+        let mark = Arc::new(AtomicUsize::new(0));
+        let mark2 = mark.clone();
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+
+        let mut h1 = h1(server, move |mut req: Request| {
+            let mark = mark2.clone();
+            async move {
+                while let Some(item) = req.payload().recv().await {
+                    if matches!(item, Err(PayloadError::Incomplete(None))) {
+                        mark.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                Ok::<_, io::Error>(Response::Ok().build())
+            }
+        });
+
+        client.write("POST / HTTP/1.1\r\ncontent-length: 10\r\n\r\nbody");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        client.close().await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+        sleep(Millis(50)).await;
+        assert_eq!(mark.load(Ordering::Relaxed), 1);
+    }
+
+    #[crate::rt_test]
+    async fn test_payload_read_error_reports_incomplete() {
+        let mark = Arc::new(AtomicUsize::new(0));
+        let mark2 = mark.clone();
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+
+        let mut h1 = h1(server, move |mut req: Request| {
+            let mark = mark2.clone();
+            async move {
+                while let Some(item) = req.payload().recv().await {
+                    if let Err(PayloadError::Incomplete(Some(err))) = item
+                        && err.kind() == io::ErrorKind::ConnectionReset
+                    {
+                        mark.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                Ok::<_, io::Error>(Response::Ok().build())
+            }
+        });
+
+        client.write("POST / HTTP/1.1\r\ncontent-length: 10\r\n\r\nbody");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        client.read_error(io::Error::new(
+            io::ErrorKind::ConnectionReset,
+            "connection reset",
+        ));
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+        sleep(Millis(50)).await;
+        assert_eq!(mark.load(Ordering::Relaxed), 1);
+    }
+
+    #[crate::rt_test]
+    async fn test_payload_decode_error_is_preserved() {
+        let mark = Arc::new(AtomicUsize::new(0));
+        let mark2 = mark.clone();
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+
+        let mut h1 = h1(server, move |mut req: Request| {
+            let mark = mark2.clone();
+            async move {
+                while let Some(item) = req.payload().recv().await {
+                    if matches!(item, Err(PayloadError::Decode(_))) {
+                        mark.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                Ok::<_, io::Error>(Response::Ok().build())
+            }
+        });
+
+        client.write("POST / HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\ninvalid\r\n");
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+        sleep(Millis(50)).await;
+        assert_eq!(mark.load(Ordering::Relaxed), 1);
     }
 
     #[crate::rt_test]
