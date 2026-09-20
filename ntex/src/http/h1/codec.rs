@@ -18,6 +18,7 @@ bitflags! {
         const HEAD              = 0b0000_0001;
         const STREAM            = 0b0000_0010;
         const KEEPALIVE_ENABLED = 0b0000_0100;
+        const UPGRADE           = 0b0000_1000;
     }
 }
 
@@ -75,6 +76,11 @@ impl Codec {
         } else {
             Flags::empty()
         };
+        let ctype = if cfg.ka_enabled {
+            ConnectionType::KeepAlive
+        } else {
+            ConnectionType::Close
+        };
         let decoder = decoder::MessageDecoder::new(cfg.clone());
 
         Codec {
@@ -83,7 +89,7 @@ impl Codec {
             decoder,
             flags: Cell::new(flags),
             version: Cell::new(Version::HTTP_11),
-            ctype: Cell::new(ConnectionType::KeepAlive),
+            ctype: Cell::new(ctype),
             encoder: encoder::MessageEncoder::default(),
         }
     }
@@ -93,13 +99,21 @@ impl Codec {
     }
 
     #[inline]
-    /// Returns whether the current request upgrades the connection.
+    /// Returns whether the most recently decoded request upgrades the
+    /// connection.
+    ///
+    /// This state remains available to an upgrade handler after the HTTP
+    /// dispatcher relinquishes the connection.
     pub fn upgrade(&self) -> bool {
-        self.ctype.get() == ConnectionType::Upgrade
+        self.flags.get().contains(Flags::UPGRADE)
     }
 
     #[inline]
-    /// Returns whether the current connection remains persistent.
+    /// Returns whether the current HTTP connection state is persistent.
+    ///
+    /// Before the first request is decoded, this reflects whether keep-alive
+    /// is enabled in the service configuration. Decoding a request or encoding
+    /// a response can update the value.
     pub fn keepalive(&self) -> bool {
         self.ctype.get() == ConnectionType::KeepAlive
     }
@@ -138,6 +152,8 @@ impl Decoder for Codec {
             self.version.set(head.version);
 
             let ctype = head.connection_type();
+            flags.set(Flags::UPGRADE, ctype == ConnectionType::Upgrade);
+            self.flags.set(flags);
             if ctype == ConnectionType::KeepAlive && !flags.contains(Flags::KEEPALIVE_ENABLED) {
                 self.ctype.set(ConnectionType::Close);
             } else {
@@ -197,7 +213,11 @@ impl Encoder for Codec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{SharedCfg, http::HttpMessage, http::h1::PayloadItem, util::Bytes};
+    use crate::{
+        SharedCfg,
+        http::{HttpMessage, KeepAlive, h1::PayloadItem},
+        util::Bytes,
+    };
 
     #[test]
     fn test_http_request_chunked_payload_and_next_message() {
@@ -244,6 +264,16 @@ mod tests {
         );
         let _item = codec.decode(&mut buf).unwrap().unwrap();
         assert!(codec.upgrade());
+        assert!(!codec.keepalive());
+        codec.reset_upgrade();
+        assert!(codec.upgrade());
+        assert!(!codec.keepalive());
+
+        let cfg: SharedCfg = SharedCfg::new("DBG")
+            .add(HttpServiceConfig::new().set_keepalive(KeepAlive::Disabled))
+            .into();
+        let codec = Codec::new(0, cfg.get());
+        assert!(!codec.upgrade());
         assert!(!codec.keepalive());
     }
 }
