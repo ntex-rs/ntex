@@ -19,4 +19,4 @@ build web applications.
 
 ## Migration
 
-- [Migrating from ntex 3 to ntex 4](../migration_3to4.md)
+- [Migrating from ntex 3 to ntex 4](../ntex/migration_3to4.md)
