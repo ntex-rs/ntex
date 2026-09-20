@@ -15,6 +15,7 @@ build web applications.
   - [Application State](./8.2-web-app.md)
   - [Filters and Middleware](./8.3-web-app.md)
   - [Extractors and Responders](./8.4-web-app.md)
+  - [Error Handling](./8.5-web-app.md)
 
 ## Migration
 
