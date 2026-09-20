@@ -836,40 +836,32 @@ where
     }
 
     fn ctl_keepalive(&mut self, enabled: bool) -> State<F, B, Err> {
-        self.flags.insert(Flags::DISCONNECT_SENT);
-        State::CallControl {
-            fut: self.control.call_nowait(Control::keepalive(enabled)),
-        }
+        self.ctl_disconnect(Control::keepalive(enabled))
     }
 
     fn ctl_error(&mut self, err: Err) -> State<F, B, Err> {
-        self.flags.insert(Flags::DISCONNECT_SENT);
-        State::CallControl {
-            fut: self.control.call_nowait(Control::err(err)),
-        }
+        self.ctl_disconnect(Control::err(err))
     }
 
     fn ctl_proto_err(&mut self, err: ProtocolError) -> State<F, B, Err> {
-        self.flags.insert(Flags::DISCONNECT_SENT);
-        State::CallControl {
-            fut: self.control.call_nowait(Control::proto_err(err)),
-        }
+        self.ctl_disconnect(Control::proto_err(err))
     }
 
     fn ctl_peer_gone(&mut self, err: Option<io::Error>) -> State<F, B, Err> {
-        self.flags.insert(Flags::DISCONNECT_SENT);
-        State::CallControl {
-            fut: self.control.call_nowait(Control::peer_gone(err)),
-        }
+        self.ctl_disconnect(Control::peer_gone(err))
     }
 
     fn ctl_svc_disconnect(&mut self, reason: ServiceDisconnectReason) -> State<F, B, Err> {
+        self.ctl_disconnect(Control::svc_disconnect(reason))
+    }
+
+    fn ctl_disconnect(&mut self, req: Control<F, Err>) -> State<F, B, Err> {
         if self.flags.contains(Flags::DISCONNECT_SENT) {
             self.stop()
         } else {
             self.flags.insert(Flags::DISCONNECT_SENT);
             State::CallControl {
-                fut: self.control.call_nowait(Control::svc_disconnect(reason)),
+                fut: self.control.call_nowait(req),
             }
         }
     }
@@ -1865,6 +1857,61 @@ mod tests {
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
         assert_eq!(requests.load(Ordering::Relaxed), 0);
         assert_eq!(errors.load(Ordering::Relaxed), 1);
+    }
+
+    #[crate::rt_test]
+    async fn test_disconnect_notification_is_not_repeated() {
+        let payload = Rc::new(RefCell::new(None));
+        let payload2 = payload.clone();
+        let disconnects = Arc::new(AtomicUsize::new(0));
+        let disconnects2 = disconnects.clone();
+        let peer_gone = Arc::new(AtomicUsize::new(0));
+        let peer_gone2 = peer_gone.clone();
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, SharedCfg::default()),
+            Pipeline::new(
+                (),
+                fn_service(move |mut req: Request| {
+                    payload2.borrow_mut().replace(req.take_payload());
+                    async { Err::<Response<()>, _>(io::Error::other("service error")) }
+                }),
+            ),
+            Pipeline::new(
+                (),
+                fn_service(async move |msg: Control<_, io::Error>| {
+                    let wait = match &msg {
+                        Control::Disconnect(Reason::Error(_)) => {
+                            disconnects2.fetch_add(1, Ordering::Relaxed);
+                            true
+                        }
+                        Control::Disconnect(Reason::PeerGone(_)) => {
+                            disconnects2.fetch_add(1, Ordering::Relaxed);
+                            peer_gone2.fetch_add(1, Ordering::Relaxed);
+                            false
+                        }
+                        _ => false,
+                    };
+                    if wait {
+                        sleep(Millis(100)).await;
+                    }
+                    Ok::<_, DispatchError>(msg.ack())
+                }),
+            ),
+            DispatcherConfig::default(),
+        );
+
+        client.write("POST / HTTP/1.1\r\ncontent-length: 10\r\n\r\nbody");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        client.close().await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+        assert_eq!(disconnects.load(Ordering::Relaxed), 1);
+        assert_eq!(peer_gone.load(Ordering::Relaxed), 0);
     }
 
     #[crate::rt_test]
