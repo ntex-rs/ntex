@@ -268,9 +268,9 @@ impl MessageBody {
     /// Sets the timeout for reading the complete payload.
     ///
     /// The default is 10 seconds. A zero duration disables the timeout.
-    pub fn timeout(mut self, to: Millis) -> Self {
+    pub fn timeout<T: Into<Millis>>(mut self, to: T) -> Self {
         if let Some(ref mut fut) = self.fut {
-            fut.timeout.reset(to);
+            fut.timeout.reset(to.into());
         }
         self
     }
@@ -392,9 +392,9 @@ where
     /// Sets the timeout for reading the complete payload.
     ///
     /// The default is 10 seconds. A zero duration disables the timeout.
-    pub fn timeout(mut self, to: Millis) -> Self {
+    pub fn timeout<T: Into<Millis>>(mut self, to: T) -> Self {
         if let Some(ref mut fut) = self.fut {
-            fut.timeout.reset(to);
+            fut.timeout.reset(to.into());
         }
         self
     }

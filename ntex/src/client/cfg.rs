@@ -18,9 +18,6 @@ pub struct ClientConfig {
     pub(super) timeout: Millis,
     pub(super) pl_limit: usize,
     pub(super) pl_timeout: Millis,
-    pub(super) default_headers: bool,
-    pub(super) allow_redirects: bool,
-    pub(super) max_redirects: usize,
     pub(super) conn_lifetime: Duration,
     pub(super) conn_keep_alive: Duration,
     pub(super) limit: usize,
@@ -55,9 +52,6 @@ impl ClientConfig {
             timeout: Millis(5_000),
             pl_limit: 262_144,
             pl_timeout: Millis(10_000),
-            default_headers: true,
-            allow_redirects: true,
-            max_redirects: 2,
             conn_lifetime: Duration::from_secs(75),
             conn_keep_alive: Duration::from_secs(15),
             limit: 8,
@@ -135,36 +129,6 @@ impl ClientConfig {
     }
 
     #[must_use]
-    /// Retains the compatibility setting for disabling redirects.
-    ///
-    /// The built-in client sender does not currently follow redirects, so this
-    /// setting has no effect.
-    pub fn disable_redirects(mut self) -> Self {
-        self.allow_redirects = false;
-        self
-    }
-
-    #[must_use]
-    /// Retains the compatibility setting for the redirect limit.
-    ///
-    /// The stored default is 2. The built-in client sender does not currently
-    /// follow redirects, so this setting has no effect.
-    pub fn set_max_redirects(mut self, num: usize) -> Self {
-        self.max_redirects = num;
-        self
-    }
-
-    #[must_use]
-    /// Retains the compatibility setting for automatic request headers.
-    ///
-    /// The built-in client does not automatically add `Date` or `User-Agent`
-    /// headers, so this setting currently has no effect.
-    pub fn set_no_default_headers(mut self) -> Self {
-        self.default_headers = false;
-        self
-    }
-
-    #[must_use]
     /// Sets the maximum size of a buffered response payload.
     ///
     /// The default is 256 KiB. A value of zero disables the limit.
@@ -177,8 +141,8 @@ impl ClientConfig {
     /// Sets the timeout for reading a complete response payload.
     ///
     /// The default is 10 seconds. A zero duration disables the timeout.
-    pub fn set_response_payload_timeout(mut self, timeout: Millis) -> Self {
-        self.pl_timeout = timeout;
+    pub fn set_response_payload_timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
+        self.pl_timeout = timeout.into();
         self
     }
 
@@ -228,14 +192,8 @@ mod tests {
 
     #[test]
     fn basics() {
-        let cfg = ClientConfig::new()
-            .disable_timeout()
-            .disable_redirects()
-            .set_max_redirects(10)
-            .set_no_default_headers();
-        assert!(!cfg.allow_redirects);
-        assert!(!cfg.default_headers);
-        assert_eq!(cfg.max_redirects, 10);
+        let cfg = ClientConfig::new().disable_timeout();
+        assert_eq!(cfg.timeout, Millis::ZERO);
     }
 
     #[test]
