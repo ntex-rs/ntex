@@ -14,10 +14,10 @@ use crate::{Cfg, PipelineBinding, time::Millis, util::Bytes, util::Stream};
 use super::error::{ClientError, InvalidUrl};
 use super::{ClientConfig, ClientResponse, ServiceRequest, ServiceResponse};
 
-/// An HTTP Client request builder
+/// An HTTP client request builder.
 ///
-/// This type can be used to construct an instance of `ClientRequest` through a
-/// builder-like pattern.
+/// Builder methods configure the request and the `send*` methods consume it,
+/// send the request, and return a [`ClientResponse`].
 ///
 /// ```rust
 /// use ntex::client::Client;
@@ -69,7 +69,9 @@ impl ClientRequest {
         .uri(uri)
     }
 
-    /// Set HTTP URI of request.
+    /// Sets the request URI.
+    ///
+    /// URI conversion errors are stored and returned by the next `send*` call.
     #[inline]
     #[must_use]
     pub fn uri<U>(mut self, uri: U) -> Self
@@ -84,22 +86,21 @@ impl ClientRequest {
         self
     }
 
-    /// Get HTTP URI of request.
+    /// Returns the request URI.
     pub fn get_uri(&self) -> &Uri {
         &self.request.head.uri
     }
 
     #[must_use]
-    /// Set socket address of the server.
+    /// Sets the server socket address.
     ///
-    /// This address is used for connection. If address is not
-    /// provided url's host name get resolved.
+    /// This address is used instead of resolving the URI host name.
     pub fn address(mut self, addr: net::SocketAddr) -> Self {
         self.request.addr = Some(addr);
         self
     }
 
-    /// Set HTTP method of this request.
+    /// Sets the request method.
     #[inline]
     #[must_use]
     pub fn method(mut self, method: Method) -> Self {
@@ -109,14 +110,15 @@ impl ClientRequest {
 
     #[inline]
     #[must_use]
-    /// Get HTTP method of this request.
+    /// Returns the request method.
     pub fn get_method(&self) -> &Method {
         &self.request.head.method
     }
 
-    /// Set HTTP version of this request.
+    /// Sets the request HTTP version.
     ///
-    /// By default requests's HTTP version depends on network stream
+    /// By default, the version is selected from the negotiated transport
+    /// protocol.
     #[inline]
     #[must_use]
     pub fn version(mut self, version: Version) -> Self {
@@ -125,19 +127,19 @@ impl ClientRequest {
     }
 
     #[inline]
-    /// Get HTTP version of this request.
+    /// Returns the request HTTP version.
     pub fn get_version(&self) -> &Version {
         &self.request.head.version
     }
 
     #[inline]
-    /// Returns request's headers.
+    /// Returns the request headers.
     pub fn headers(&self) -> &HeaderMap {
         &self.request.head.headers
     }
 
     #[inline]
-    /// Returns request's mutable headers.
+    /// Returns mutable access to the request headers.
     pub fn headers_mut(&mut self) -> &mut HeaderMap {
         &mut self.request.head.headers
     }
@@ -145,8 +147,11 @@ impl ClientRequest {
     #[must_use]
     /// Append a header.
     ///
-    /// Header gets appended to existing header.
-    /// To override header use `set_header()` method.
+    /// The header is appended to any existing values with the same name. Use
+    /// [`set_header`](Self::set_header) to replace existing values.
+    ///
+    /// Header conversion errors are stored and returned by the next `send*`
+    /// call.
     ///
     /// ```rust
     /// use ntex::{http, client::Client};
@@ -177,7 +182,10 @@ impl ClientRequest {
     }
 
     #[must_use]
-    /// Insert a header, replaces existing header.
+    /// Inserts a header, replacing existing values with the same name.
+    ///
+    /// Header conversion errors are stored and returned by the next `send*`
+    /// call.
     pub fn set_header<K, V>(mut self, key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
@@ -196,7 +204,11 @@ impl ClientRequest {
     }
 
     #[must_use]
-    /// Insert a header only if it is not yet set.
+    /// Inserts a header if the request does not already contain one with the
+    /// same name.
+    ///
+    /// Header conversion errors are stored and returned by the next `send*`
+    /// call.
     pub fn set_header_if_none<K, V>(mut self, key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
@@ -220,15 +232,15 @@ impl ClientRequest {
 
     #[inline]
     #[must_use]
-    /// Set connection type of the message.
+    /// Sets the request connection type.
     pub fn set_connection_type(mut self, ctype: ConnectionType) -> Self {
         self.request.head.set_connection_type(ctype);
         self
     }
 
-    /// Force close connection instead of returning it back to connections pool.
+    /// Prevents an HTTP/1 connection from returning to the connection pool.
     ///
-    /// This setting affect only http/1 connections.
+    /// This setting affects only HTTP/1 connections.
     #[inline]
     #[must_use]
     pub fn force_close(mut self) -> Self {
@@ -236,7 +248,10 @@ impl ClientRequest {
         self
     }
 
-    /// Set request's content type.
+    /// Sets the request content type.
+    ///
+    /// Header conversion errors are stored and returned by the next `send*`
+    /// call.
     #[inline]
     #[must_use]
     pub fn content_type<V>(mut self, value: V) -> Self
@@ -255,7 +270,7 @@ impl ClientRequest {
         self
     }
 
-    /// Set content length.
+    /// Sets the request content length.
     #[inline]
     #[must_use]
     pub fn content_length(self, len: u64) -> Self {
@@ -263,7 +278,7 @@ impl ClientRequest {
     }
 
     #[must_use]
-    /// Set HTTP basic authorization header.
+    /// Sets the HTTP basic authentication header.
     pub fn basic_auth<U>(self, username: U, password: Option<&str>) -> Self
     where
         U: fmt::Display,
@@ -279,7 +294,7 @@ impl ClientRequest {
     }
 
     #[must_use]
-    /// Set HTTP bearer authentication header.
+    /// Sets the HTTP bearer authentication header.
     pub fn bearer_auth<T>(self, token: T) -> Self
     where
         T: fmt::Display,
@@ -326,27 +341,27 @@ impl ClientRequest {
     }
 
     #[must_use]
-    /// Disable automatic decompress of response's body.
+    /// Disables automatic decompression of the response body.
     pub fn no_decompress(mut self) -> Self {
         self.request.response_decompress = false;
         self
     }
 
     #[must_use]
-    /// Set request timeout in millis.
+    /// Sets the response-header timeout for this request.
     ///
-    /// Overrides client wide timeout setting.
+    /// This overrides the client-wide timeout. The timeout covers sending the
+    /// request and receiving the response head after a connection has been
+    /// acquired.
     ///
-    /// Request timeout is the total time before a response must be received.
-    /// Default value is 5 seconds.
+    /// The client-wide default is 5 seconds.
     pub fn timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
         self.request.timeout = timeout.into();
         self
     }
 
     #[must_use]
-    /// This method calls provided closure with builder reference if
-    /// value is `true`.
+    /// Applies `f` to this builder when `value` is `true`.
     pub fn if_true<F>(self, value: bool, f: F) -> Self
     where
         F: FnOnce(ClientRequest) -> ClientRequest,
@@ -355,8 +370,8 @@ impl ClientRequest {
     }
 
     #[must_use]
-    /// This method calls provided closure with builder reference if
-    /// value is `Some`.
+    /// Applies `f` and the contained value to this builder when `value` is
+    /// [`Some`].
     pub fn if_some<T, F>(self, value: Option<T>, f: F) -> Self
     where
         F: FnOnce(T, ClientRequest) -> ClientRequest,
@@ -364,7 +379,7 @@ impl ClientRequest {
         if let Some(val) = value { f(val, self) } else { self }
     }
 
-    /// Sets the query part of the request
+    /// Serializes `query` and replaces the query component of the request URI.
     pub fn query<T: Serialize>(mut self, query: &T) -> Result<Self, serde_urlencoded::ser::Error> {
         let mut parts = self.request.head.uri.clone().into_parts();
 
@@ -384,7 +399,7 @@ impl ClientRequest {
 }
 
 impl ClientRequest {
-    /// Complete request construction and send body.
+    /// Sends the request with `body`.
     pub async fn send_body<B>(mut self, body: B) -> Result<ClientResponse, Error<ClientError>>
     where
         B: Into<Body>,
@@ -394,7 +409,7 @@ impl ClientRequest {
         self.svc.call(self.request).await.map(Into::into)
     }
 
-    /// Set a JSON body and generate `ClientRequest`.
+    /// Serializes `value` as JSON and sends the request.
     pub async fn send_json<T: Serialize>(
         mut self,
         value: &T,
@@ -404,9 +419,7 @@ impl ClientRequest {
         self.svc.call(self.request).await.map(Into::into)
     }
 
-    /// Set a urlencoded body and generate `ClientRequest`.
-    ///
-    /// `ClientRequestBuilder` can not be used after this call.
+    /// Serializes `value` as a URL-encoded form and sends the request.
     pub async fn send_form<T: Serialize>(
         mut self,
         value: &T,
@@ -416,7 +429,7 @@ impl ClientRequest {
         self.svc.call(self.request).await.map(Into::into)
     }
 
-    /// Set an streaming body and generate `ClientRequest`.
+    /// Sends the request with a streaming body.
     pub async fn send_stream<T, E>(
         mut self,
         stream: T,
@@ -430,7 +443,7 @@ impl ClientRequest {
         self.svc.call(self.request).await.map(Into::into)
     }
 
-    /// Set an empty body and generate `ClientRequest`.
+    /// Sends the request with an empty body.
     pub async fn send(mut self) -> Result<ClientResponse, Error<ClientError>> {
         self.prep_for_sending()?;
         self.svc.call(self.request).await.map(Into::into)

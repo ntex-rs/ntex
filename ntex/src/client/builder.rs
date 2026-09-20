@@ -14,10 +14,10 @@ use tls_openssl::ssl::SslConnector as OpensslConnector;
 #[cfg(feature = "rustls")]
 use tls_rustls::ClientConfig as RustlsClientConfig;
 
-/// An HTTP Client builder.
+/// An HTTP client builder.
 ///
-/// This type can be used to construct an instance of `Client` through a
-/// builder-like pattern.
+/// This type configures connectors and middleware before constructing a
+/// [`Client`].
 #[derive(Debug)]
 pub struct ClientBuilder<M = Identity> {
     middleware: M,
@@ -33,7 +33,7 @@ impl Default for ClientBuilder<Identity> {
 
 impl ClientBuilder<Identity> {
     #[must_use]
-    /// Create new client builder instance.
+    /// Creates a client builder with default connectors.
     pub fn new() -> Self {
         let svc = ConnectorPipeline::new(
             apply_fn(TcpConnector::new(), async move |msg: Connect, svc| {
@@ -84,7 +84,7 @@ impl ClientBuilder<Identity> {
 impl<M> ClientBuilder<M> {
     #[must_use]
     #[cfg(feature = "openssl")]
-    /// Use openssl connector for secured connections.
+    /// Uses an OpenSSL connector for secure connections.
     pub fn openssl(self, config: OpensslConnector) -> Self {
         use crate::connect::openssl::SslConnector;
 
@@ -93,7 +93,7 @@ impl<M> ClientBuilder<M> {
 
     #[must_use]
     #[cfg(feature = "rustls")]
-    /// Use rustls connector for secured connections.
+    /// Uses a rustls connector for secure connections.
     pub fn rustls(self, config: RustlsClientConfig) -> Self {
         use crate::connect::rustls::TlsConnector;
 
@@ -101,7 +101,7 @@ impl<M> ClientBuilder<M> {
     }
 
     #[must_use]
-    /// Use custom connector to open un-secured connections.
+    /// Uses a custom connector for unsecured connections.
     pub fn connector<T>(mut self, f: impl IntoService<T, SharedCfg, TcpConnect<Uri>>) -> Self
     where
         T: Service<SharedCfg, TcpConnect<Uri>, Error = Error<connect::ConnectError>> + 'static,
@@ -118,7 +118,7 @@ impl<M> ClientBuilder<M> {
     }
 
     #[must_use]
-    /// Use custom connector to open secure connections.
+    /// Uses a custom connector for secure connections.
     pub fn secure_connector<T>(mut self, f: impl IntoService<T, SharedCfg, TcpConnect<Uri>>) -> Self
     where
         T: Service<SharedCfg, TcpConnect<Uri>, Error = Error<connect::ConnectError>> + 'static,
@@ -135,10 +135,9 @@ impl<M> ClientBuilder<M> {
     }
 
     #[must_use]
-    /// Apply middleware.
+    /// Applies middleware to the client request service.
     ///
-    /// Use middleware when you need to read or modify *every* request or
-    /// response in some way.
+    /// Middleware can inspect or modify every request and response.
     ///
     /// ```rust
     /// use ntex::client::{Client, ServiceRequest};
@@ -164,7 +163,28 @@ impl<M> ClientBuilder<M> {
         }
     }
 
-    /// Finish build process and create `Client` instance.
+    /// Builds the [`Client`] using the supplied shared configuration.
+    ///
+    /// Add a [`ClientConfig`] to [`SharedCfg`] to customize client behavior:
+    ///
+    /// ```rust
+    /// use ntex::SharedCfg;
+    /// use ntex::client::{Client, ClientConfig};
+    /// use ntex::time::Millis;
+    ///
+    /// #[ntex::main]
+    /// async fn main() {
+    ///     let cfg = SharedCfg::new("HTTP-CLIENT")
+    ///         .add(
+    ///             ClientConfig::new()
+    ///                 .set_response_timeout(Millis(10_000))
+    ///                 .set_response_payload_limit(1024 * 1024),
+    ///         )
+    ///         .build();
+    ///
+    ///     let _client = Client::builder().build(cfg);
+    /// }
+    /// ```
     pub fn build(self, cfg: impl Into<SharedCfg>) -> Client
     where
         M: Middleware<Sender, SharedCfg>,

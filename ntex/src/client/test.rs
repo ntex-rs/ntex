@@ -1,4 +1,4 @@
-//! Test helpers for ntex http client to use during testing.
+//! Test helpers for the ntex HTTP client.
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 
@@ -10,7 +10,7 @@ use crate::{Cfg, channel::bstream, util::Bytes};
 use super::ClientResponse;
 
 #[derive(Debug)]
-/// Test `ClientResponse` builder
+/// Builder for creating a [`ClientResponse`] in tests.
 pub struct TestResponse {
     head: ResponseHead,
     payload: Option<Payload>,
@@ -19,6 +19,7 @@ pub struct TestResponse {
 }
 
 impl TestResponse {
+    /// Creates a test response builder.
     pub fn builder() -> TestResponse {
         TestResponse {
             head: ResponseHead::new(StatusCode::OK, Version::default()),
@@ -29,7 +30,7 @@ impl TestResponse {
     }
 
     #[must_use]
-    /// Create `TestResponse` and set header.
+    /// Creates a test response with one header.
     pub fn with_header<K, V>(key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
@@ -40,14 +41,14 @@ impl TestResponse {
     }
 
     #[must_use]
-    /// Set HTTP version of this response.
+    /// Sets the response HTTP version.
     pub fn version(mut self, ver: Version) -> Self {
         self.head.version = ver;
         self
     }
 
     #[must_use]
-    /// Append a header.
+    /// Appends a response header.
     pub fn header<K, V>(mut self, key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
@@ -65,7 +66,7 @@ impl TestResponse {
 
     #[must_use]
     #[cfg(feature = "cookie")]
-    /// Set cookie for this response.
+    /// Adds a response cookie.
     pub fn cookie<C>(mut self, cookie: C) -> Self
     where
         C: Into<Cookie<'static>>,
@@ -75,14 +76,14 @@ impl TestResponse {
     }
 
     #[must_use]
-    /// Set response's payload.
+    /// Sets the response payload.
     pub fn set_payload<B: Into<Bytes>>(mut self, data: B) -> Self {
         self.payload = Some(bstream::empty(Some(data.into())).into());
         self
     }
 
     #[must_use]
-    /// Complete response creation and generate `ClientResponse` instance.
+    /// Builds the [`ClientResponse`].
     pub fn build(self) -> ClientResponse {
         #[allow(unused_mut)]
         let mut head = self.head;

@@ -8,6 +8,11 @@ use crate::service::cfg::{CfgContext, Configuration};
 use crate::time::{Millis, Seconds};
 
 #[derive(Debug)]
+/// Runtime configuration for an HTTP [`Client`](super::Client).
+///
+/// The configuration is stored in [`SharedCfg`](crate::SharedCfg) and can be
+/// supplied before constructing a client with [`Client::with_config`](super::Client::with_config)
+/// or [`ClientBuilder::build`](super::ClientBuilder::build).
 pub struct ClientConfig {
     pub(super) headers: HeaderMap,
     pub(super) timeout: Millis,
@@ -43,7 +48,7 @@ impl Configuration for ClientConfig {
 
 impl ClientConfig {
     #[must_use]
-    /// Create instance of `HttpClientConfig`.
+    /// Creates an HTTP client configuration with default values.
     pub fn new() -> ClientConfig {
         ClientConfig {
             headers: HeaderMap::new(),
@@ -61,121 +66,125 @@ impl ClientConfig {
         }
     }
 
+    /// Returns the headers added to every request.
     pub fn headers(&self) -> &HeaderMap {
         &self.headers
     }
 
+    /// Returns the response-header timeout.
     pub fn timeout(&self) -> Millis {
         self.timeout
     }
 
+    /// Returns the maximum response payload size.
+    ///
+    /// A value of zero disables the limit.
     pub fn payload_limit(&self) -> usize {
         self.pl_limit
     }
 
+    /// Returns the timeout for reading a complete response payload.
     pub fn payload_timeout(&self) -> Millis {
         self.pl_timeout
     }
 
     #[must_use]
-    /// Set total number of simultaneous connections per type of scheme.
+    /// Sets the maximum number of simultaneous connections per scheme.
     ///
-    /// If limit is 0, the connector has no limit.
-    /// The default limit size is 8.
+    /// A value of zero disables the limit. The default is 8.
     pub fn set_limit(mut self, limit: usize) -> Self {
         self.limit = limit;
         self
     }
 
     #[must_use]
-    /// Set keep-alive period for opened connection.
+    /// Sets the keep-alive period for idle pooled connections.
     ///
-    /// Keep-alive period is the period between connection usage. If
-    /// the delay between repeated usages of the same connection
-    /// exceeds this period, the connection is closed.
-    /// Default keep-alive period is 15 seconds.
+    /// A pooled connection is closed when it has been idle longer than this
+    /// period. The default is 15 seconds.
     pub fn set_keep_alive<T: Into<Seconds>>(mut self, dur: T) -> Self {
         self.conn_keep_alive = dur.into().into();
         self
     }
 
     #[must_use]
-    /// Set max lifetime period for connection.
+    /// Sets the maximum lifetime of a pooled connection.
     ///
-    /// Connection lifetime is max lifetime of any opened connection
-    /// until it is closed regardless of keep-alive period.
-    /// Default lifetime period is 75 seconds.
+    /// A connection is closed after this period regardless of how recently it
+    /// was used. The default is 75 seconds.
     pub fn set_lifetime<T: Into<Seconds>>(mut self, dur: T) -> Self {
         self.conn_lifetime = dur.into().into();
         self
     }
 
     #[must_use]
-    /// Set response timeout.
+    /// Sets the response-header timeout.
     ///
-    /// Response timeout is the total time before a response must be received.
-    /// Default value is 5 seconds.
+    /// The timeout covers sending the request and receiving the response head
+    /// after a connection has been acquired. The default is 5 seconds.
     pub fn set_response_timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
         self.timeout = timeout.into();
         self
     }
 
     #[must_use]
-    /// Disable response timeout.
+    /// Disables the response-header timeout.
     pub fn disable_timeout(mut self) -> Self {
         self.timeout = Millis::ZERO;
         self
     }
 
     #[must_use]
-    /// Do not follow redirects.
+    /// Retains the compatibility setting for disabling redirects.
     ///
-    /// Redirects are allowed by default.
+    /// The built-in client sender does not currently follow redirects, so this
+    /// setting has no effect.
     pub fn disable_redirects(mut self) -> Self {
         self.allow_redirects = false;
         self
     }
 
     #[must_use]
-    /// Set max number of redirects.
+    /// Retains the compatibility setting for the redirect limit.
     ///
-    /// Max redirects is set to 10 by default.
+    /// The stored default is 2. The built-in client sender does not currently
+    /// follow redirects, so this setting has no effect.
     pub fn set_max_redirects(mut self, num: usize) -> Self {
         self.max_redirects = num;
         self
     }
 
     #[must_use]
-    /// Do not add default request headers.
+    /// Retains the compatibility setting for automatic request headers.
     ///
-    /// By default `Date` and `User-Agent` headers are set.
+    /// The built-in client does not automatically add `Date` or `User-Agent`
+    /// headers, so this setting currently has no effect.
     pub fn set_no_default_headers(mut self) -> Self {
         self.default_headers = false;
         self
     }
 
     #[must_use]
-    /// Max size of response payload.
+    /// Sets the maximum size of a buffered response payload.
     ///
-    /// By default max size is 256Kb
+    /// The default is 256 KiB. A value of zero disables the limit.
     pub fn set_response_payload_limit(mut self, limit: usize) -> Self {
         self.pl_limit = limit;
         self
     }
 
     #[must_use]
-    /// Set response timeout.
+    /// Sets the timeout for reading a complete response payload.
     ///
-    /// Response payload timeout is the total time before a payload must be received.
-    /// Default value is 10 seconds.
+    /// The default is 10 seconds. A zero duration disables the timeout.
     pub fn set_response_payload_timeout(mut self, timeout: Millis) -> Self {
         self.pl_timeout = timeout;
         self
     }
 
-    /// Add default header.
+    /// Adds a header to every request.
     ///
-    /// Headers added by this method get added to every request.
+    /// A request-specific header with the same name takes precedence.
     pub fn set_header<K, V>(mut self, key: K, value: V) -> Result<Self, HttpError>
     where
         HeaderName: TryFrom<K>,
@@ -189,7 +198,7 @@ impl ClientConfig {
         Ok(self)
     }
 
-    /// Set client wide HTTP basic authorization header.
+    /// Sets a client-wide HTTP Basic authentication header.
     pub fn set_basic_auth<U>(self, username: U, password: Option<&str>) -> Result<Self, HttpError>
     where
         U: fmt::Display,
@@ -204,7 +213,7 @@ impl ClientConfig {
         )
     }
 
-    /// Set client wide HTTP bearer authentication header.
+    /// Sets a client-wide HTTP Bearer authentication header.
     pub fn set_bearer_auth<T>(self, token: T) -> Result<Self, HttpError>
     where
         T: fmt::Display,
