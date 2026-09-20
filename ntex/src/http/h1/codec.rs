@@ -18,10 +18,42 @@ bitflags! {
         const HEAD              = 0b0000_0001;
         const STREAM            = 0b0000_0010;
         const KEEPALIVE_ENABLED = 0b0000_0100;
+        const UPGRADE           = 0b0000_1000;
     }
 }
 
-/// HTTP/1 Codec
+/// Stateful HTTP/1 request decoder and response encoder.
+///
+/// The codec tracks the version, connection behavior, request method, and
+/// streaming state of the most recently decoded request.
+///
+/// # Decoding
+///
+/// [`Decoder::decode`] incrementally consumes one request head and returns its
+/// [`Request`] together with a [`PayloadType`]. For
+/// [`PayloadType::Payload`], pass subsequent bytes to the returned payload
+/// decoder until framing completes before decoding another request head. Bytes
+/// for a pipelined request can already remain in the input buffer.
+/// [`PayloadType::Stream`] ends HTTP message framing; transfer the connection
+/// and any buffered bytes to the upgraded protocol instead of decoding another
+/// HTTP request.
+///
+/// `Ok(None)` means that more bytes are required. A [`DecodeError`] indicates
+/// invalid framing or a configured request-head limit and should be treated as
+/// a connection-level protocol failure.
+///
+/// # Encoding
+///
+/// [`Encoder::encodev`] accepts a
+/// [`Message<(Response<()>, BodySize)>`](Message). Encode the response head
+/// first, followed by body chunks and a final `Message::Chunk(None)` when the
+/// response has a body. The codec selects fixed-length, chunked, or
+/// connection-close framing from the response, request method, version, and
+/// supplied [`BodySize`]. An [`EncodeError`] indicates invalid response
+/// encoding or an incomplete fixed-length body.
+///
+/// The codec only transforms buffers; it does not perform I/O, flush output,
+/// or apply transport backpressure.
 pub struct Codec {
     con_id: usize,
     decoder: decoder::MessageDecoder<Request>,
@@ -62,7 +94,7 @@ impl fmt::Debug for Codec {
 }
 
 impl Codec {
-    /// Create HTTP/1 codec.
+    /// Creates an HTTP/1 codec.
     ///
     /// `con_id` identifies the connection in decoded request heads. Protocol
     /// limits and keep-alive behavior are read from `cfg`.
@@ -72,6 +104,11 @@ impl Codec {
         } else {
             Flags::empty()
         };
+        let ctype = if cfg.ka_enabled {
+            ConnectionType::KeepAlive
+        } else {
+            ConnectionType::Close
+        };
         let decoder = decoder::MessageDecoder::new(cfg.clone());
 
         Codec {
@@ -80,7 +117,7 @@ impl Codec {
             decoder,
             flags: Cell::new(flags),
             version: Cell::new(Version::HTTP_11),
-            ctype: Cell::new(ConnectionType::KeepAlive),
+            ctype: Cell::new(ctype),
             encoder: encoder::MessageEncoder::default(),
         }
     }
@@ -90,13 +127,21 @@ impl Codec {
     }
 
     #[inline]
-    /// Check if request is upgrade
+    /// Returns whether the most recently decoded request upgrades the
+    /// connection.
+    ///
+    /// This state remains available to an upgrade handler after the HTTP
+    /// dispatcher relinquishes the connection.
     pub fn upgrade(&self) -> bool {
-        self.ctype.get() == ConnectionType::Upgrade
+        self.flags.get().contains(Flags::UPGRADE)
     }
 
     #[inline]
-    /// Check if last response is keep-alive
+    /// Returns whether the current HTTP connection state is persistent.
+    ///
+    /// Before the first request is decoded, this reflects whether keep-alive
+    /// is enabled in the service configuration. Decoding a request or encoding
+    /// a response can update the value.
     pub fn keepalive(&self) -> bool {
         self.ctype.get() == ConnectionType::KeepAlive
     }
@@ -135,6 +180,8 @@ impl Decoder for Codec {
             self.version.set(head.version);
 
             let ctype = head.connection_type();
+            flags.set(Flags::UPGRADE, ctype == ConnectionType::Upgrade);
+            self.flags.set(flags);
             if ctype == ConnectionType::KeepAlive && !flags.contains(Flags::KEEPALIVE_ENABLED) {
                 self.ctype.set(ConnectionType::Close);
             } else {
@@ -194,7 +241,11 @@ impl Encoder for Codec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{SharedCfg, http::HttpMessage, http::h1::PayloadItem, util::Bytes};
+    use crate::{
+        SharedCfg,
+        http::{HttpMessage, KeepAlive, h1::PayloadItem},
+        util::Bytes,
+    };
 
     #[test]
     fn test_http_request_chunked_payload_and_next_message() {
@@ -241,6 +292,16 @@ mod tests {
         );
         let _item = codec.decode(&mut buf).unwrap().unwrap();
         assert!(codec.upgrade());
+        assert!(!codec.keepalive());
+        codec.reset_upgrade();
+        assert!(codec.upgrade());
+        assert!(!codec.keepalive());
+
+        let cfg: SharedCfg = SharedCfg::new("DBG")
+            .add(HttpServiceConfig::new().set_keepalive(KeepAlive::Disabled))
+            .into();
+        let codec = Codec::new(0, cfg.get());
+        assert!(!codec.upgrade());
         assert!(!codec.keepalive());
     }
 }

@@ -141,7 +141,7 @@ async fn test_keepalive_timeout() {
                     // start websocket service
                     io.set_config(
                         SharedCfg::new("WS-SRV")
-                            .add(IoConfig::new().set_keepalive_timeout(Seconds::ZERO)),
+                            .add(IoConfig::new().set_keepalive_timeout(Seconds::ONE)),
                     );
                     let _ = Dispatcher::new(
                         io.seal(),

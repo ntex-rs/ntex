@@ -51,13 +51,16 @@ impl fmt::Debug for Payload {
 
 impl Payload {
     #[must_use]
-    /// Takes current payload and replaces it with `None` value
+    /// Takes the payload and replaces it with [`Payload::None`].
     pub fn take(&mut self) -> Self {
         mem::take(self)
     }
 
     #[must_use]
-    /// Create payload from stream
+    /// Creates a payload from a local asynchronous byte stream.
+    ///
+    /// The stream is pinned and does not need to implement [`Unpin`]. It must
+    /// yield HTTP [`PayloadError`] values directly.
     pub fn from_stream<S>(stream: S) -> Self
     where
         S: Stream<Item = Result<Bytes, PayloadError>> + 'static,
@@ -66,15 +69,16 @@ impl Payload {
     }
 
     #[inline]
-    /// Attempt to pull out the next value of this payload.
+    /// Waits for and returns the next payload chunk.
     pub async fn recv(&mut self) -> Option<Result<Bytes, PayloadError>> {
         poll_fn(|cx| self.poll_recv(cx)).await
     }
 
     #[inline]
-    /// Attempt to pull out the next value of this payload, registering
-    /// the current task for wakeup if the value is not yet available,
-    /// and returning None if the payload is exhausted.
+    /// Polls for the next payload chunk.
+    ///
+    /// Registers the current task for wakeup when data is not yet available
+    /// and returns `Poll::Ready(None)` after the payload is exhausted.
     pub fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, PayloadError>>> {
         match self {
             Payload::None => Poll::Ready(None),

@@ -4,7 +4,7 @@ use std::{future, io, mem, pin::Pin, rc::Rc};
 
 use crate::io::{Decoded, Filter, Io, IoStatusUpdate, RecvError};
 use crate::service::pipeline::{Pipeline, PipelineCall};
-use crate::{channel::bstream, time::Seconds, util::Either};
+use crate::{channel::bstream, time::Seconds, util::Either, util::clone_io_error};
 
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
 use crate::http::error::{DispatchError, PayloadError, ResponseError};
@@ -15,17 +15,30 @@ use super::control::{Control, ControlAck, ControlResult, ServiceDisconnectReason
 use super::decoder::{PayloadDecoder, PayloadItem, PayloadType};
 use super::{Message, ProtocolError, codec::Codec};
 
+fn read_timeout(timeout: Seconds, max_timeout: Seconds) -> (Seconds, Seconds) {
+    if max_timeout.is_zero() {
+        (timeout, Seconds::ZERO)
+    } else {
+        let timeout = Seconds(timeout.0.min(max_timeout.0));
+        (timeout, Seconds(max_timeout.0.saturating_sub(timeout.0)))
+    }
+}
+
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     pub struct Flags: u8 {
+        /// No request has been decoded yet
+        const FIRST_REQUEST        = 0b0000_0001;
         /// Disconnect
-        const DISCONNECT_SENT      = 0b0000_0001;
+        const DISCONNECT_SENT      = 0b0000_0010;
         /// Keep-alive is enabled
         const READ_KA_TIMEOUT      = 0b0001_0000;
         /// Read headers timer is enabled
         const READ_HDRS_TIMEOUT    = 0b0010_0000;
         /// Read headers payload is enabled
         const READ_PL_TIMEOUT      = 0b0100_0000;
+        /// Payload timer is paused by application backpressure
+        const READ_PL_PAUSED       = 0b1000_0000;
     }
 }
 
@@ -62,6 +75,7 @@ struct DispatcherInner<F, B, Err> {
     codec: Codec,
     config: DispatcherConfig,
     payload: Option<(PayloadDecoder, bstream::Sender<PayloadError>)>,
+    pending_payload_error: Option<Either<ProtocolError, Option<io::Error>>>,
     read_remains: u32,
     read_consumed: u32,
     read_max_timeout: Seconds,
@@ -85,10 +99,11 @@ where
 
         // slow-request timer
         let (flags, max_timeout) = if let Some(cfg) = &codec.cfg.headers_read_rate {
-            io.start_timer(cfg.timeout);
-            (Flags::READ_HDRS_TIMEOUT, cfg.max_timeout)
+            let (timeout, max_timeout) = read_timeout(cfg.timeout, cfg.max_timeout);
+            io.start_timer(timeout);
+            (Flags::FIRST_REQUEST | Flags::READ_HDRS_TIMEOUT, max_timeout)
         } else {
-            (Flags::empty(), Seconds::ZERO)
+            (Flags::FIRST_REQUEST, Seconds::ZERO)
         };
 
         Dispatcher {
@@ -101,6 +116,7 @@ where
                 config,
                 io: Rc::new(io),
                 payload: None,
+                pending_payload_error: None,
                 read_remains: 0,
                 read_consumed: 0,
                 read_max_timeout: max_timeout,
@@ -146,56 +162,83 @@ where
                     }
                 },
                 // handle control service responses
-                State::CallControl { fut } => match Pin::new(fut).poll(cx) {
-                    Poll::Ready(Ok(ControlAck { result })) => match result {
-                        ControlResult::Publish(req) => inner.publish(req),
-                        ControlResult::Response(res, body)
-                        | ControlResult::Error(res, body)
-                        | ControlResult::ProtocolError(res, body) => {
-                            inner.send_response(res, body.into())
-                        }
-                        ControlResult::Continue(req) => {
-                            let result = inner.io.encode_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
-                            if let Err(err) = result {
-                                *this.st = inner.ctl_peer_gone(Some(err));
-                                continue;
+                State::CallControl { fut } => {
+                    let result = match Pin::new(fut).poll(cx) {
+                        Poll::Ready(result) => result,
+                        Poll::Pending => {
+                            // Check for payload errors while waiting for the control
+                            // service, but preserve the in-flight control call.
+                            if inner.pending_payload_error.is_none()
+                                && let Poll::Ready(Err(err)) =
+                                    inner.poll_request_payload_inner::<F>(None, cx)
+                            {
+                                inner.pending_payload_error = Some(err);
                             }
-                            if req.upgrade() {
-                                inner.ctl_upgrade(req)
+                            return Poll::Pending;
+                        }
+                    };
+
+                    match result {
+                        Ok(ControlAck { result }) => {
+                            if let Some(err) = inner.pending_payload_error.take() {
+                                match err {
+                                    Either::Left(err) => inner.ctl_proto_err(err),
+                                    Either::Right(err) => inner.ctl_peer_gone(err),
+                                }
                             } else {
-                                inner.publish(req)
+                                match result {
+                                    ControlResult::Publish(req) => inner.publish(req),
+                                    ControlResult::Response(res, body)
+                                    | ControlResult::Error(res, body)
+                                    | ControlResult::ProtocolError(res, body) => {
+                                        inner.send_response(res, body.into())
+                                    }
+                                    ControlResult::Continue(req) => {
+                                        let result =
+                                            inner.io.encode_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
+                                        if let Err(err) = result {
+                                            *this.st = inner.ctl_peer_gone(Some(err));
+                                            continue;
+                                        }
+                                        if req.upgrade() {
+                                            inner.ctl_upgrade(req)
+                                        } else {
+                                            inner.publish(req)
+                                        }
+                                    }
+                                    ControlResult::Expect(req) => {
+                                        inner.control(Control::expect(req))
+                                    }
+                                    ControlResult::ExpectFailed(res, body) => {
+                                        inner.disconnect =
+                                            Some(ServiceDisconnectReason::ExpectFailed);
+                                        inner.send_response(res, body.into())
+                                    }
+                                    ControlResult::Upgrade(req) => inner.ctl_upgrade(req),
+                                    ControlResult::UpgradeAck(req) => {
+                                        inner.disconnect =
+                                            Some(ServiceDisconnectReason::UpgradeHandled);
+                                        inner.publish(req)
+                                    }
+                                    ControlResult::UpgradeHandled => inner.ctl_svc_disconnect(
+                                        ServiceDisconnectReason::UpgradeHandled,
+                                    ),
+                                    ControlResult::UpgradeFailed(res, body) => {
+                                        inner.disconnect =
+                                            Some(ServiceDisconnectReason::UpgradeFailed);
+                                        inner.send_response(res, body.into())
+                                    }
+                                    ControlResult::Stop => inner.stop(),
+                                    ControlResult::Connect(_) => unreachable!(),
+                                }
                             }
                         }
-                        ControlResult::Expect(req) => inner.control(Control::expect(req)),
-                        ControlResult::ExpectFailed(res, body) => {
-                            inner.disconnect = Some(ServiceDisconnectReason::ExpectFailed);
-                            inner.send_response(res, body.into())
+                        Err(err) => {
+                            log::error!("{}: Control plain error: {}", inner.io.tag(), err);
+                            return Poll::Ready(Err(err));
                         }
-                        ControlResult::Upgrade(req) => inner.ctl_upgrade(req),
-                        ControlResult::UpgradeAck(req) => {
-                            inner.disconnect = Some(ServiceDisconnectReason::UpgradeHandled);
-                            inner.publish(req)
-                        }
-                        ControlResult::UpgradeHandled => {
-                            inner.ctl_svc_disconnect(ServiceDisconnectReason::UpgradeHandled)
-                        }
-                        ControlResult::UpgradeFailed(res, body) => {
-                            inner.disconnect = Some(ServiceDisconnectReason::UpgradeFailed);
-                            inner.send_response(res, body.into())
-                        }
-                        ControlResult::Stop => inner.stop(),
-                        ControlResult::Connect(_) => unreachable!(),
-                    },
-                    Poll::Ready(Err(err)) => {
-                        log::error!("{}: Control plain error: {}", inner.io.tag(), err);
-                        return Poll::Ready(Err(err));
                     }
-                    Poll::Pending => {
-                        // check for io changes, it could be close while waiting for service call
-                        let _ = inner.poll_request_payload_inner::<F>(None, cx);
-                        return Poll::Pending;
-                    }
-                },
+                }
                 // read request and call service
                 State::ReadRequest => {
                     if let Some(st) = inner.check_disconnect() {
@@ -241,6 +284,14 @@ where
         }
 
         log::trace!("{}: Trying to read http message", self.io.tag());
+
+        let buffered = self.io.with_read_buf(|buf| buf.len()) as u32;
+        if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
+            self.read_consumed = self
+                .read_consumed
+                .saturating_add(buffered.saturating_sub(self.read_remains));
+            self.read_remains = buffered;
+        }
 
         let result = match self.io.poll_recv_decode(&self.codec, cx) {
             Ok(decoded) => {
@@ -303,6 +354,10 @@ where
                     } else {
                         ready!(self.poll_read_request(cx))
                     }
+                } else if self.codec.is_reading_hdrs() {
+                    let remains = self.io.with_read_buf(|buf| buf.len()) as u32;
+                    self.start_headers_timer(buffered, remains);
+                    ready!(self.poll_read_request(cx))
                 } else {
                     log::trace!("{}: Keep-alive timeout, close connection", self.io.tag());
                     self.ctl_keepalive(true)
@@ -460,9 +515,33 @@ where
 
         match self.payload.as_ref().unwrap().1.poll_ready(cx) {
             Poll::Ready(bstream::Status::Ready) => {
+                if self.flags.contains(Flags::READ_PL_PAUSED)
+                    && self
+                        .codec
+                        .cfg
+                        .payload_read_rate
+                        .as_ref()
+                        .is_some_and(|cfg| cfg.max_timeout.non_zero())
+                    && self.read_max_timeout.is_zero()
+                {
+                    self.set_payload_error(PayloadError::Io(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "Payload read timeout",
+                    )));
+                    return Poll::Ready(Err(Either::Left(ProtocolError::SlowPayloadTimeout)));
+                }
+
                 // read request payload
                 let mut updated = false;
                 loop {
+                    let buffered = if self.flags.contains(Flags::READ_PL_TIMEOUT) {
+                        Some(
+                            io.map(|io| io.with_read_buf(|buf| buf.len()))
+                                .unwrap_or_else(|| self.io.with_read_buf(|buf| buf.len())),
+                        )
+                    } else {
+                        None
+                    };
                     let recv_result = io
                         .map(|io| io.poll_recv_decode(&self.payload.as_ref().unwrap().0, cx))
                         .unwrap_or_else(|| {
@@ -488,7 +567,9 @@ where
                             self.payload.as_mut().unwrap().1.feed_data(chunk);
                         }
                         Ok(PayloadItem::Eof) => {
-                            self.flags.remove(Flags::READ_PL_TIMEOUT);
+                            self.io.stop_timer();
+                            self.flags
+                                .remove(Flags::READ_PL_TIMEOUT | Flags::READ_PL_PAUSED);
                             self.payload.as_mut().unwrap().1.feed_eof();
                             self.payload = None;
                             break;
@@ -504,11 +585,23 @@ where
                                         .map_err(|e| Either::Right(Some(e)))?
                                         .is_pending()
                                     {
+                                        self.pause_payload_timer();
                                         break;
                                     }
                                     continue;
                                 }
                                 RecvError::KeepAlive => {
+                                    if let Some(buffered) = buffered {
+                                        let remains = io
+                                            .map(|io| io.with_read_buf(|buf| buf.len()))
+                                            .unwrap_or_else(|| {
+                                                self.io.with_read_buf(|buf| buf.len())
+                                            });
+                                        self.read_consumed =
+                                            self.read_consumed.saturating_add(
+                                                buffered.saturating_sub(remains) as u32,
+                                            );
+                                    }
                                     if let Err(err) = self.handle_timeout() {
                                         Either::Left(err)
                                     } else {
@@ -516,11 +609,13 @@ where
                                     }
                                 }
                                 RecvError::PeerGone(err) => {
-                                    self.set_payload_error(PayloadError::EncodingCorrupted);
+                                    self.set_payload_error(PayloadError::Incomplete(
+                                        err.as_ref().map(clone_io_error),
+                                    ));
                                     Either::Right(err)
                                 }
                                 RecvError::Decoder(e) => {
-                                    self.set_payload_error(PayloadError::EncodingCorrupted);
+                                    self.set_payload_error(PayloadError::Decode(e));
                                     Either::Left(ProtocolError::Decode(e))
                                 }
                             };
@@ -535,11 +630,7 @@ where
                 }
             }
             Poll::Pending => {
-                // stop payload timer
-                if self.flags.contains(Flags::READ_PL_TIMEOUT) {
-                    self.flags.remove(Flags::READ_PL_TIMEOUT);
-                    self.io.stop_timer();
-                }
+                self.pause_payload_timer();
                 Poll::Pending
             }
             Poll::Ready(bstream::Status::Dropped | bstream::Status::Eof) => {
@@ -550,6 +641,20 @@ where
                 self.disconnect = Some(ServiceDisconnectReason::PayloadDropped);
                 Poll::Pending
             }
+        }
+    }
+
+    fn pause_payload_timer(&mut self) {
+        if self.flags.contains(Flags::READ_PL_TIMEOUT) {
+            self.flags.remove(Flags::READ_PL_TIMEOUT);
+            self.flags.insert(Flags::READ_PL_PAUSED);
+            if let Some(cfg) = &self.codec.cfg.payload_read_rate
+                && cfg.max_timeout.non_zero()
+            {
+                let remains = self.io.timer_handle().remains();
+                self.read_max_timeout = Seconds(self.read_max_timeout.0.saturating_add(remains.0));
+            }
+            self.io.stop_timer();
         }
     }
 
@@ -564,28 +669,27 @@ where
         };
 
         if let Some(cfg) = cfg {
-            if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
-                self.read_remains = 0;
-            } else {
-                self.read_consumed = 0;
-            }
-            let total = self.read_remains - self.read_consumed;
+            let total = self.read_consumed;
+            self.read_consumed = 0;
 
             if total > cfg.rate {
-                // update max timeout
-                if !cfg.max_timeout.is_zero() {
-                    self.read_max_timeout =
-                        Seconds(self.read_max_timeout.0.saturating_sub(cfg.timeout.0));
-                }
+                let timeout = if cfg.max_timeout.is_zero() {
+                    Some(cfg.timeout)
+                } else if self.read_max_timeout.is_zero() {
+                    None
+                } else {
+                    let (timeout, remaining) = read_timeout(cfg.timeout, self.read_max_timeout);
+                    self.read_max_timeout = remaining;
+                    Some(timeout)
+                };
 
-                // start timer for next period
-                if cfg.max_timeout.is_zero() || !self.read_max_timeout.is_zero() {
+                if let Some(timeout) = timeout {
                     log::trace!(
                         "{}: Bytes read rate {:?}, extend timer",
                         self.io.tag(),
                         total
                     );
-                    self.io.start_timer(cfg.timeout);
+                    self.io.start_timer(timeout);
                     return Ok(());
                 }
             }
@@ -598,7 +702,7 @@ where
             if self.flags.contains(Flags::READ_PL_TIMEOUT) {
                 self.set_payload_error(PayloadError::Io(io::Error::new(
                     io::ErrorKind::TimedOut,
-                    "Keep-alive",
+                    "Payload read timeout",
                 )));
                 Err(ProtocolError::SlowPayloadTimeout)
             } else {
@@ -616,12 +720,23 @@ where
         // got parsed frame
         if decoded.item.is_some() {
             self.read_remains = 0;
-            self.flags
-                .remove(Flags::READ_KA_TIMEOUT | Flags::READ_HDRS_TIMEOUT | Flags::READ_PL_TIMEOUT);
+            self.read_consumed = 0;
+            self.flags.remove(
+                Flags::FIRST_REQUEST
+                    | Flags::READ_KA_TIMEOUT
+                    | Flags::READ_HDRS_TIMEOUT
+                    | Flags::READ_PL_TIMEOUT
+                    | Flags::READ_PL_PAUSED,
+            );
+            self.io.stop_timer();
         } else if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
             // received new data but not enough for parsing complete frame
             self.read_remains = decoded.remains as u32;
-        } else if self.read_remains == 0 && decoded.remains == 0 && !self.codec.is_reading_hdrs() {
+        } else if !self.flags.contains(Flags::FIRST_REQUEST)
+            && self.read_remains == 0
+            && decoded.remains == 0
+            && !self.codec.is_reading_hdrs()
+        {
             // no new data, start keep-alive timer
             if self.codec.keepalive() {
                 if !self.flags.contains(Flags::READ_KA_TIMEOUT) && self.codec.cfg.ka_enabled {
@@ -639,42 +754,67 @@ where
             }
         } else if self.codec.is_reading_hdrs()
             && !self.flags.contains(Flags::READ_HDRS_TIMEOUT)
-            && let Some(cfg) = &self.codec.cfg.headers_read_rate
+            && (self.flags.contains(Flags::READ_KA_TIMEOUT)
+                || self.codec.cfg.headers_read_rate.is_some())
         {
+            self.start_headers_timer(
+                (decoded.consumed as u32).saturating_add(decoded.remains as u32),
+                decoded.remains as u32,
+            );
+        }
+        None
+    }
+
+    fn start_headers_timer(&mut self, consumed: u32, remains: u32) {
+        self.flags
+            .remove(Flags::READ_KA_TIMEOUT | Flags::READ_PL_TIMEOUT);
+        self.read_remains = remains;
+        self.read_consumed = consumed;
+
+        if let Some(cfg) = &self.codec.cfg.headers_read_rate {
             log::debug!(
                 "{}: Start headers read timer {:?}",
                 self.io.tag(),
                 cfg.timeout
             );
-
-            // we got new data but not enough to parse single frame
-            // start read timer
-            self.flags
-                .remove(Flags::READ_KA_TIMEOUT | Flags::READ_PL_TIMEOUT);
             self.flags.insert(Flags::READ_HDRS_TIMEOUT);
 
-            self.read_consumed = 0;
-            self.read_remains = decoded.remains as u32;
-            self.read_max_timeout = cfg.max_timeout;
-            self.io.start_timer(cfg.timeout);
+            let (timeout, max_timeout) = read_timeout(cfg.timeout, cfg.max_timeout);
+            self.read_max_timeout = max_timeout;
+            self.io.start_timer(timeout);
+        } else {
+            self.io.stop_timer();
         }
-        None
     }
 
     fn update_payload_timer(&mut self, decoded: &Decoded<PayloadItem>) {
         if self.flags.contains(Flags::READ_PL_TIMEOUT) {
-            self.read_remains = decoded.remains as u32;
-            self.read_consumed += decoded.consumed as u32;
+            self.read_consumed = self.read_consumed.saturating_add(decoded.consumed as u32);
         } else if let Some(cfg) = &self.codec.cfg.payload_read_rate {
             log::debug!("{}: Start payload timer {:?}", self.io.tag(), cfg.timeout);
 
             // start payload timer
+            let paused = self.flags.contains(Flags::READ_PL_PAUSED);
+            let max_timeout = if paused {
+                self.flags.remove(Flags::READ_PL_PAUSED);
+                if cfg.max_timeout.is_zero() {
+                    Seconds::ZERO
+                } else {
+                    self.read_max_timeout
+                }
+            } else {
+                cfg.max_timeout
+            };
             self.flags.insert(Flags::READ_PL_TIMEOUT);
 
-            self.read_remains = decoded.remains as u32;
-            self.read_consumed = decoded.consumed as u32;
-            self.read_max_timeout = cfg.max_timeout;
-            self.io.start_timer(cfg.timeout);
+            let (timeout, max_timeout) = read_timeout(cfg.timeout, max_timeout);
+            if paused {
+                self.read_consumed = self.read_consumed.saturating_add(decoded.consumed as u32);
+            } else {
+                self.read_consumed = decoded.consumed as u32;
+            }
+            self.read_max_timeout = max_timeout;
+            self.io.start_timer(timeout);
         }
     }
 
@@ -696,40 +836,32 @@ where
     }
 
     fn ctl_keepalive(&mut self, enabled: bool) -> State<F, B, Err> {
-        self.flags.insert(Flags::DISCONNECT_SENT);
-        State::CallControl {
-            fut: self.control.call_nowait(Control::keepalive(enabled)),
-        }
+        self.ctl_disconnect(Control::keepalive(enabled))
     }
 
     fn ctl_error(&mut self, err: Err) -> State<F, B, Err> {
-        self.flags.insert(Flags::DISCONNECT_SENT);
-        State::CallControl {
-            fut: self.control.call_nowait(Control::err(err)),
-        }
+        self.ctl_disconnect(Control::err(err))
     }
 
     fn ctl_proto_err(&mut self, err: ProtocolError) -> State<F, B, Err> {
-        self.flags.insert(Flags::DISCONNECT_SENT);
-        State::CallControl {
-            fut: self.control.call_nowait(Control::proto_err(err)),
-        }
+        self.ctl_disconnect(Control::proto_err(err))
     }
 
     fn ctl_peer_gone(&mut self, err: Option<io::Error>) -> State<F, B, Err> {
-        self.flags.insert(Flags::DISCONNECT_SENT);
-        State::CallControl {
-            fut: self.control.call_nowait(Control::peer_gone(err)),
-        }
+        self.ctl_disconnect(Control::peer_gone(err))
     }
 
     fn ctl_svc_disconnect(&mut self, reason: ServiceDisconnectReason) -> State<F, B, Err> {
+        self.ctl_disconnect(Control::svc_disconnect(reason))
+    }
+
+    fn ctl_disconnect(&mut self, req: Control<F, Err>) -> State<F, B, Err> {
         if self.flags.contains(Flags::DISCONNECT_SENT) {
             self.stop()
         } else {
             self.flags.insert(Flags::DISCONNECT_SENT);
             State::CallControl {
-                fut: self.control.call_nowait(Control::svc_disconnect(reason)),
+                fut: self.control.call_nowait(req),
             }
         }
     }
@@ -757,8 +889,9 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::cell::{Cell, RefCell};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::{cell::Cell, error, future::Future, future::poll_fn, sync::Arc};
+    use std::{error, future::Future, future::poll_fn, sync::Arc};
 
     use rand::Rng;
 
@@ -766,13 +899,239 @@ mod tests {
     use crate::client::ClientCodec;
     use crate::http::config::HttpServiceConfig;
     use crate::http::h1::{DefaultControlService, control::Reason};
-    use crate::http::{ResponseHead, StatusCode, body};
+    use crate::http::{KeepAlive, ResponseHead, StatusCode, body};
     use crate::io::{self as nio, Base};
     use crate::service::{IntoService, Service, cfg::SharedCfg, fn_service};
     use crate::util::{Bytes, BytesMut, lazy, stream_recv};
     use crate::{codec::Decoder, testing::IoTest, time::Millis, time::sleep};
 
     const BUFFER_SIZE: usize = 32_768;
+
+    #[test]
+    fn test_read_timeout_is_bounded_by_maximum() {
+        let (timeout, remaining) = read_timeout(Seconds(10), Seconds(15));
+        assert_eq!(timeout, Seconds(10));
+        assert_eq!(remaining, Seconds(5));
+
+        let (timeout, remaining) = read_timeout(Seconds(10), remaining);
+        assert_eq!(timeout, Seconds(5));
+        assert_eq!(remaining, Seconds::ZERO);
+
+        let (timeout, remaining) = read_timeout(Seconds(10), Seconds(3));
+        assert_eq!(timeout, Seconds(3));
+        assert_eq!(remaining, Seconds::ZERO);
+    }
+
+    #[crate::rt_test]
+    async fn test_payload_timer_resume_preserves_maximum() {
+        let (_client, server) = IoTest::create();
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(HttpServiceConfig::new().set_payload_read_rate(Seconds(10), Seconds(15), 1))
+            .into();
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
+            ),
+            Pipeline::new((), DefaultControlService),
+            DispatcherConfig::default(),
+        );
+        let decoded = Decoded {
+            item: None,
+            remains: 0,
+            consumed: 2,
+        };
+
+        h1.inner
+            .flags
+            .remove(Flags::FIRST_REQUEST | Flags::READ_HDRS_TIMEOUT);
+        h1.inner.io.stop_timer();
+        h1.inner.update_payload_timer(&decoded);
+        assert_eq!(h1.inner.read_max_timeout, Seconds(5));
+        assert!(h1.inner.handle_timeout().is_ok());
+        assert_eq!(h1.inner.read_max_timeout, Seconds::ZERO);
+        assert_eq!(h1.inner.io.timer_handle().remains(), Seconds(5));
+
+        h1.inner.pause_payload_timer();
+        assert!(h1.inner.flags.contains(Flags::READ_PL_PAUSED));
+        assert_eq!(h1.inner.read_max_timeout, Seconds(5));
+
+        h1.inner.update_payload_timer(&decoded);
+        assert!(!h1.inner.flags.contains(Flags::READ_PL_PAUSED));
+        assert_eq!(h1.inner.read_max_timeout, Seconds::ZERO);
+        assert_eq!(h1.inner.io.timer_handle().remains(), Seconds(5));
+    }
+
+    #[crate::rt_test]
+    async fn test_header_timeout_does_not_leak_into_payload() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(
+                HttpServiceConfig::new()
+                    .set_headers_read_rate(Seconds(10), Seconds(10), 1)
+                    .set_payload_read_rate(Seconds(10), Seconds(10), 1)
+                    .set_keepalive(KeepAlive::Disabled),
+            )
+            .into();
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |mut req: Request| {
+                    while req.payload().recv().await.is_some() {}
+                    Ok::<_, io::Error>(Response::Ok().build())
+                }),
+            ),
+            Pipeline::new((), DefaultControlService),
+            DispatcherConfig::default(),
+        );
+
+        client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\n\r\n");
+        sleep(Millis(50)).await;
+        h1.inner.io.notify_timeout();
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        client.write("body");
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+        assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
+    }
+
+    #[crate::rt_test]
+    async fn test_payload_timeout_does_not_leak_into_keepalive() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(
+                HttpServiceConfig::new()
+                    .set_headers_read_rate(Seconds(10), Seconds(10), 1)
+                    .set_payload_read_rate(Seconds(10), Seconds(10), 1)
+                    .set_keepalive(Seconds(10)),
+            )
+            .into();
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |mut req: Request| {
+                    while req.payload().recv().await.is_some() {}
+                    Ok::<_, io::Error>(Response::Ok().build())
+                }),
+            ),
+            Pipeline::new((), DefaultControlService),
+            DispatcherConfig::default(),
+        );
+
+        client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\n\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        client.write("body");
+        sleep(Millis(50)).await;
+        h1.inner.io.notify_timeout();
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        assert!(h1.inner.flags.contains(Flags::READ_KA_TIMEOUT));
+        assert!(!h1.inner.io.is_closed());
+        sleep(Millis(50)).await;
+        assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
+
+        client.close().await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+    }
+
+    #[crate::rt_test]
+    async fn test_partial_next_request_wins_keepalive_timeout() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(
+                HttpServiceConfig::new()
+                    .set_headers_read_rate(Seconds(10), Seconds(20), 1)
+                    .set_keepalive(Seconds(10)),
+            )
+            .into();
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
+            ),
+            Pipeline::new((), DefaultControlService),
+            DispatcherConfig::default(),
+        );
+
+        client.write("GET /first HTTP/1.1\r\n\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(h1.inner.flags.contains(Flags::READ_KA_TIMEOUT));
+        sleep(Millis(50)).await;
+        assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
+
+        let partial = "GET /next HTTP/1.1\r\nhost: example.com";
+        client.write(partial);
+        sleep(Millis(50)).await;
+        h1.inner.io.notify_timeout();
+
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(h1.inner.flags.contains(Flags::READ_HDRS_TIMEOUT));
+        assert!(!h1.inner.flags.contains(Flags::READ_KA_TIMEOUT));
+        assert_eq!(h1.inner.read_consumed, partial.len() as u32);
+        assert!(!h1.inner.io.is_closed());
+
+        client.write("\r\n\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        sleep(Millis(50)).await;
+        assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
+
+        client.close().await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+    }
+
+    #[crate::rt_test]
+    async fn test_new_connection_without_header_timeout() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(
+                HttpServiceConfig::new()
+                    .set_client_timeout(Seconds::ZERO)
+                    .set_keepalive(KeepAlive::Disabled),
+            )
+            .into();
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
+            ),
+            Pipeline::new((), DefaultControlService),
+            DispatcherConfig::default(),
+        );
+
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(!h1.inner.io.is_closed());
+
+        client.write("GET / HTTP/1.1\r\n\r\n");
+        sleep(Millis(50)).await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+
+        let buf = client.read_any();
+        assert!(buf.starts_with(b"HTTP/1.1 200 OK\r\n"));
+    }
 
     /// Create http/1 dispatcher.
     pub(crate) fn h1<F, S, B>(stream: IoTest, s: F) -> Dispatcher<Base, B, S::Error>
@@ -1090,6 +1449,57 @@ mod tests {
     }
 
     #[crate::rt_test]
+    async fn test_payload_timer_pauses_for_write_backpressure() {
+        let payload = Rc::new(RefCell::new(None));
+        let payload2 = payload.clone();
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(HttpServiceConfig::new().set_payload_read_rate(Seconds(10), Seconds(20), 1))
+            .into();
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(move |mut req: Request| {
+                    payload2.borrow_mut().replace(req.take_payload());
+                    async { Ok::<_, io::Error>(Response::Ok().body("x".repeat(128 * 1024))) }
+                }),
+            ),
+            Pipeline::new((), DefaultControlService),
+            DispatcherConfig::default(),
+        );
+
+        client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\n\r\nb");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(h1.inner.flags.contains(Flags::READ_PL_TIMEOUT));
+        assert!(h1.inner.io.is_wr_backpressure());
+
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(h1.inner.flags.contains(Flags::READ_PL_PAUSED));
+        assert!(!h1.inner.flags.contains(Flags::READ_PL_TIMEOUT));
+        assert!(!h1.inner.io.timer_handle().is_set());
+
+        client.remote_buffer_cap(256 * 1024);
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(h1.inner.flags.contains(Flags::READ_PL_TIMEOUT));
+        assert!(!h1.inner.flags.contains(Flags::READ_PL_PAUSED));
+
+        client.write("ody");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        payload.borrow_mut().take();
+        client.close().await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+    }
+
+    #[crate::rt_test]
     #[allow(clippy::items_after_statements)]
     async fn test_write_backpressure() {
         let num = Arc::new(AtomicUsize::new(0));
@@ -1196,6 +1606,403 @@ mod tests {
     }
 
     #[crate::rt_test]
+    async fn test_partial_request_headers_clean_disconnect() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let requests2 = requests.clone();
+        let disconnects = Arc::new(AtomicUsize::new(0));
+        let disconnects2 = disconnects.clone();
+
+        let (client, server) = IoTest::create();
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(HttpServiceConfig::new().set_client_timeout(Seconds(10)))
+            .into();
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async move |_| {
+                    requests2.fetch_add(1, Ordering::Relaxed);
+                    Ok::<_, io::Error>(Response::Ok().build())
+                }),
+            ),
+            Pipeline::new(
+                (),
+                fn_service(async move |msg: Control<_, _>| {
+                    if let Control::Disconnect(Reason::PeerGone(err)) = &msg {
+                        assert!(err.get_ref().is_none());
+                        disconnects2.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Ok::<_, DispatchError>(msg.ack())
+                }),
+            ),
+            DispatcherConfig::default(),
+        );
+
+        client.write("GET /test HTTP/1.1\r\nHost: example.com");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        client.close().await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+        assert_eq!(requests.load(Ordering::Relaxed), 0);
+        assert_eq!(disconnects.load(Ordering::Relaxed), 1);
+        assert!(client.read_any().is_empty());
+    }
+
+    #[crate::rt_test]
+    async fn test_partial_request_headers_read_error() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let requests2 = requests.clone();
+        let disconnects = Arc::new(AtomicUsize::new(0));
+        let disconnects2 = disconnects.clone();
+
+        let (client, server) = IoTest::create();
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(HttpServiceConfig::new().set_client_timeout(Seconds(10)))
+            .into();
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async move |_| {
+                    requests2.fetch_add(1, Ordering::Relaxed);
+                    Ok::<_, io::Error>(Response::Ok().build())
+                }),
+            ),
+            Pipeline::new(
+                (),
+                fn_service(async move |msg: Control<_, _>| {
+                    if let Control::Disconnect(Reason::PeerGone(err)) = &msg {
+                        assert_eq!(
+                            err.get_ref().map(io::Error::kind),
+                            Some(io::ErrorKind::ConnectionReset)
+                        );
+                        disconnects2.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Ok::<_, DispatchError>(msg.ack())
+                }),
+            ),
+            DispatcherConfig::default(),
+        );
+
+        client.write("GET /test HTTP/1.1\r\nHost: example.com");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        client.read_error(io::Error::new(
+            io::ErrorKind::ConnectionReset,
+            "connection reset",
+        ));
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+        assert_eq!(requests.load(Ordering::Relaxed), 0);
+        assert_eq!(disconnects.load(Ordering::Relaxed), 1);
+        assert!(client.read_any().is_empty());
+    }
+
+    #[crate::rt_test]
+    async fn test_header_progress_available_when_timer_fires() {
+        let (client, server) = IoTest::create();
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(HttpServiceConfig::new().set_headers_read_rate(Seconds(1), Seconds(2), 4))
+            .into();
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
+            ),
+            Pipeline::new((), DefaultControlService),
+            DispatcherConfig::default(),
+        );
+
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        client.write("GET /");
+        sleep(Millis(1100)).await;
+
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        sleep(Millis(50)).await;
+        assert!(client.read_any().is_empty());
+
+        client.close().await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+    }
+
+    #[crate::rt_test]
+    async fn test_payload_progress_available_when_timer_fires() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(HttpServiceConfig::new().set_payload_read_rate(Seconds(1), Seconds(2), 2))
+            .into();
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |mut req: Request| {
+                    while req.payload().recv().await.is_some() {}
+                    Ok::<_, io::Error>(Response::Ok().build())
+                }),
+            ),
+            Pipeline::new((), DefaultControlService),
+            DispatcherConfig::default(),
+        );
+
+        client.write("POST / HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        // Chunk framing is consumed without producing a payload item.
+        client.write("4\r\n");
+        sleep(Millis(1100)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        sleep(Millis(50)).await;
+        assert!(client.read_any().is_empty());
+
+        client.close().await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+    }
+
+    #[crate::rt_test]
+    async fn test_payload_peer_gone_while_control_pending() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let requests2 = requests.clone();
+        let disconnects = Arc::new(AtomicUsize::new(0));
+        let disconnects2 = disconnects.clone();
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, SharedCfg::default()),
+            Pipeline::new(
+                (),
+                fn_service(async move |_| {
+                    requests2.fetch_add(1, Ordering::Relaxed);
+                    Ok::<_, io::Error>(Response::Ok().build())
+                }),
+            ),
+            Pipeline::new(
+                (),
+                fn_service(async move |msg: Control<_, _>| {
+                    match &msg {
+                        Control::Request(_) => sleep(Millis(100)).await,
+                        Control::Disconnect(Reason::PeerGone(_)) => {
+                            disconnects2.fetch_add(1, Ordering::Relaxed);
+                        }
+                        _ => {}
+                    }
+                    Ok::<_, DispatchError>(msg.ack())
+                }),
+            ),
+            DispatcherConfig::default(),
+        );
+
+        client.write("POST / HTTP/1.1\r\ncontent-length: 10\r\n\r\nbody");
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        client.close().await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+        assert_eq!(requests.load(Ordering::Relaxed), 0);
+        assert_eq!(disconnects.load(Ordering::Relaxed), 1);
+    }
+
+    #[crate::rt_test]
+    async fn test_payload_decode_error_while_control_pending() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let requests2 = requests.clone();
+        let errors = Arc::new(AtomicUsize::new(0));
+        let errors2 = errors.clone();
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, SharedCfg::default()),
+            Pipeline::new(
+                (),
+                fn_service(async move |_| {
+                    requests2.fetch_add(1, Ordering::Relaxed);
+                    Ok::<_, io::Error>(Response::Ok().build())
+                }),
+            ),
+            Pipeline::new(
+                (),
+                fn_service(async move |msg: Control<_, _>| {
+                    match &msg {
+                        Control::Request(_) => sleep(Millis(100)).await,
+                        Control::Disconnect(Reason::ProtocolError(err))
+                            if matches!(err.get_ref(), ProtocolError::Decode(_)) =>
+                        {
+                            errors2.fetch_add(1, Ordering::Relaxed);
+                        }
+                        _ => {}
+                    }
+                    Ok::<_, DispatchError>(msg.ack())
+                }),
+            ),
+            DispatcherConfig::default(),
+        );
+
+        client.write("POST / HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\ninvalid\r\n");
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+        assert_eq!(requests.load(Ordering::Relaxed), 0);
+        assert_eq!(errors.load(Ordering::Relaxed), 1);
+    }
+
+    #[crate::rt_test]
+    async fn test_disconnect_notification_is_not_repeated() {
+        let payload = Rc::new(RefCell::new(None));
+        let payload2 = payload.clone();
+        let disconnects = Arc::new(AtomicUsize::new(0));
+        let disconnects2 = disconnects.clone();
+        let peer_gone = Arc::new(AtomicUsize::new(0));
+        let peer_gone2 = peer_gone.clone();
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, SharedCfg::default()),
+            Pipeline::new(
+                (),
+                fn_service(move |mut req: Request| {
+                    payload2.borrow_mut().replace(req.take_payload());
+                    async { Err::<Response<()>, _>(io::Error::other("service error")) }
+                }),
+            ),
+            Pipeline::new(
+                (),
+                fn_service(async move |msg: Control<_, io::Error>| {
+                    let wait = match &msg {
+                        Control::Disconnect(Reason::Error(_)) => {
+                            disconnects2.fetch_add(1, Ordering::Relaxed);
+                            true
+                        }
+                        Control::Disconnect(Reason::PeerGone(_)) => {
+                            disconnects2.fetch_add(1, Ordering::Relaxed);
+                            peer_gone2.fetch_add(1, Ordering::Relaxed);
+                            false
+                        }
+                        _ => false,
+                    };
+                    if wait {
+                        sleep(Millis(100)).await;
+                    }
+                    Ok::<_, DispatchError>(msg.ack())
+                }),
+            ),
+            DispatcherConfig::default(),
+        );
+
+        client.write("POST / HTTP/1.1\r\ncontent-length: 10\r\n\r\nbody");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        client.close().await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+        assert_eq!(disconnects.load(Ordering::Relaxed), 1);
+        assert_eq!(peer_gone.load(Ordering::Relaxed), 0);
+    }
+
+    #[crate::rt_test]
+    async fn test_payload_peer_gone_reports_incomplete() {
+        let mark = Arc::new(AtomicUsize::new(0));
+        let mark2 = mark.clone();
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+
+        let mut h1 = h1(server, move |mut req: Request| {
+            let mark = mark2.clone();
+            async move {
+                while let Some(item) = req.payload().recv().await {
+                    if matches!(item, Err(PayloadError::Incomplete(None))) {
+                        mark.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                Ok::<_, io::Error>(Response::Ok().build())
+            }
+        });
+
+        client.write("POST / HTTP/1.1\r\ncontent-length: 10\r\n\r\nbody");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        client.close().await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+        sleep(Millis(50)).await;
+        assert_eq!(mark.load(Ordering::Relaxed), 1);
+    }
+
+    #[crate::rt_test]
+    async fn test_payload_read_error_reports_incomplete() {
+        let mark = Arc::new(AtomicUsize::new(0));
+        let mark2 = mark.clone();
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+
+        let mut h1 = h1(server, move |mut req: Request| {
+            let mark = mark2.clone();
+            async move {
+                while let Some(item) = req.payload().recv().await {
+                    if let Err(PayloadError::Incomplete(Some(err))) = item
+                        && err.kind() == io::ErrorKind::ConnectionReset
+                    {
+                        mark.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                Ok::<_, io::Error>(Response::Ok().build())
+            }
+        });
+
+        client.write("POST / HTTP/1.1\r\ncontent-length: 10\r\n\r\nbody");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        client.read_error(io::Error::new(
+            io::ErrorKind::ConnectionReset,
+            "connection reset",
+        ));
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+        sleep(Millis(50)).await;
+        assert_eq!(mark.load(Ordering::Relaxed), 1);
+    }
+
+    #[crate::rt_test]
+    async fn test_payload_decode_error_is_preserved() {
+        let mark = Arc::new(AtomicUsize::new(0));
+        let mark2 = mark.clone();
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+
+        let mut h1 = h1(server, move |mut req: Request| {
+            let mark = mark2.clone();
+            async move {
+                while let Some(item) = req.payload().recv().await {
+                    if matches!(item, Err(PayloadError::Decode(_))) {
+                        mark.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                Ok::<_, io::Error>(Response::Ok().build())
+            }
+        });
+
+        client.write("POST / HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\ninvalid\r\n");
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+        sleep(Millis(50)).await;
+        assert_eq!(mark.load(Ordering::Relaxed), 1);
+    }
+
+    #[crate::rt_test]
     async fn test_service_error() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
@@ -1257,7 +2064,7 @@ mod tests {
                 (),
                 fn_service(async move |msg: Control<_, _>| {
                     if let Control::Disconnect(Reason::ProtocolError(ref err)) = msg
-                        && matches!(err.err(), ProtocolError::SlowPayloadTimeout)
+                        && matches!(err.get_ref(), ProtocolError::SlowPayloadTimeout)
                     {
                         err_mark2.store(err_mark2.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
                     }
@@ -1277,7 +2084,9 @@ mod tests {
             client.write(random_bytes);
             sleep(Millis(750)).await;
         }
-        assert_eq!(mark.load(Ordering::Relaxed), 768);
+        // The first interval exceeds the configured rate and earns one
+        // extension; the two-second maximum then terminates the payload.
+        assert_eq!(mark.load(Ordering::Relaxed), 1536);
         assert_eq!(err_mark.load(Ordering::Relaxed), 1);
     }
 

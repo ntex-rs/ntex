@@ -42,6 +42,11 @@ pub trait HttpMessage: Sized {
     /// Returns the character encoding declared by `Content-Type`.
     ///
     /// UTF-8 is returned when the header or its `charset` parameter is absent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ContentTypeError::ParseError`] for an invalid media type or
+    /// [`ContentTypeError::UnknownEncoding`] for an unknown charset.
     fn encoding(&self) -> Result<&'static Encoding, ContentTypeError> {
         if let Some(mime_type) = self.mime_type()? {
             if let Some(charset) = mime_type.get_param("charset") {
@@ -59,6 +64,11 @@ pub trait HttpMessage: Sized {
     }
 
     /// Parses the `Content-Type` header as a MIME type.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ContentTypeError::ParseError`] when the header is not valid
+    /// UTF-8 or does not contain a valid MIME value.
     fn mime_type(&self) -> Result<Option<Mime>, ContentTypeError> {
         if let Some(content_type) = self.message_headers().get(header::CONTENT_TYPE) {
             if let Ok(content_type) = content_type.to_str() {
@@ -74,6 +84,11 @@ pub trait HttpMessage: Sized {
     }
 
     /// Returns whether `Transfer-Encoding` contains `chunked`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecodeError::Header`] when the header value is not valid
+    /// UTF-8.
     fn chunked(&self) -> Result<bool, DecodeError> {
         if let Some(encodings) = self.message_headers().get(header::TRANSFER_ENCODING) {
             if let Ok(s) = encodings.to_str() {
@@ -88,6 +103,11 @@ pub trait HttpMessage: Sized {
 
     #[cfg(feature = "cookie")]
     /// Parses and caches cookies from the `Cookie` headers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a header is not valid UTF-8 or a cookie cannot be
+    /// parsed.
     fn cookies(&self) -> Result<Ref<'_, Vec<Cookie<'static>>>, coo_kie::ParseError> {
         if self.message_extensions().get::<Cookies>().is_none() {
             let mut cookies = Vec::new();

@@ -26,13 +26,19 @@ struct Inner<T> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-/// The payload framing detected for an incoming HTTP/1 message.
+/// The payload framing and decoder selected for an incoming HTTP/1 message.
 pub enum PayloadType {
     /// The message has no payload.
     None,
-    /// The message has a framed HTTP payload.
+    /// The message has an HTTP body.
+    ///
+    /// Depending on the message headers and version, the decoder may use a
+    /// fixed length, chunked transfer coding, or connection close as the body
+    /// delimiter.
     Payload(PayloadDecoder),
-    /// The connection switches to an unframed stream.
+    /// The message switches the connection away from HTTP framing.
+    ///
+    /// Subsequent bytes belong to the upgraded protocol or tunnel.
     Stream(PayloadDecoder),
 }
 
@@ -187,7 +193,7 @@ impl<T: MessageType> Decoder for MessageDecoder<T> {
             (Ok(None), len)
         };
 
-        if buf_size >= inner.cfg.max_buf_size {
+        if buf_size > inner.cfg.max_buf_size {
             log::trace!("MAX_BUFFER_SIZE of data reached, closing");
             return Err(DecodeError::TooLarge(buf_size));
         }
@@ -591,10 +597,21 @@ pub enum PayloadItem {
     Eof,
 }
 
-/// Decoders to handle different Transfer-Encodings.
+/// Incremental decoder for an HTTP/1 message body.
 ///
-/// If a message body does not include a Transfer-Encoding, it *should*
-/// include a Content-Length header.
+/// The decoder handles fixed `Content-Length`, chunked transfer coding, and
+/// bodies delimited by connection EOF. It implements [`Decoder`] and retains
+/// framing state between calls.
+///
+/// Fixed-length and chunked decoders emit [`PayloadItem::Eof`] when their wire
+/// framing completes. An EOF-delimited decoder emits every available byte as a
+/// chunk but cannot infer completion from an empty input buffer; the transport
+/// owner must treat connection closure as the end of that payload.
+///
+/// `Ok(None)` means that more bytes or transport EOF are required. A
+/// [`DecodeError`] reports malformed payload framing, such as an invalid
+/// chunk-size or chunk terminator. Cloning preserves the current payload
+/// framing state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PayloadDecoder {
     kind: Cell<Kind>,
@@ -1759,6 +1776,14 @@ mod tests {
         // message head size is within the limit
         let cfg: SharedCfg = SharedCfg::new("test")
             .add(HttpServiceConfig::new().set_max_buf_size(100))
+            .into();
+        let reader = MessageDecoder::<Request>::new(cfg.get());
+        let mut buf = BytesMut::from(TEXT);
+        assert!(reader.decode(&mut buf).unwrap().is_some());
+
+        // the configured maximum is inclusive
+        let cfg: SharedCfg = SharedCfg::new("test")
+            .add(HttpServiceConfig::new().set_max_buf_size(TEXT.len()))
             .into();
         let reader = MessageDecoder::<Request>::new(cfg.get());
         let mut buf = BytesMut::from(TEXT);

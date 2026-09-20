@@ -1,24 +1,28 @@
-use ntex::{client::Client, client::error::ClientError, error::Error};
+//! Minimal HTTPS client that prints response metadata and a body preview.
+
+use ntex::client::Client;
 
 #[ntex::main]
-async fn main() -> Result<(), Error<ClientError>> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
+    let url = "https://www.rust-lang.org/";
     let client = Client::new();
-
-    // Create request builder, configure request and send
     let response = client
-        .get("https://www.rust-lang.org/")
-        .header("User-Agent", "ntex")
+        .get(url)
+        .header("user-agent", "ntex-example")
         .send()
         .await?;
 
-    // server http response
-    println!("Response: {:?}", response);
+    println!("GET {url} -> {}", response.status());
+    println!("response headers: {}", response.headers().len());
 
-    // read response body
-    let body = response.body().await.unwrap();
-    println!("Downloaded: {:?} bytes", body.len());
-
+    let body = response.body().await?;
+    let preview_len = body.len().min(120);
+    println!("downloaded {} bytes", body.len());
+    println!(
+        "body preview: {}",
+        String::from_utf8_lossy(&body[..preview_len])
+    );
     Ok(())
 }

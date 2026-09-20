@@ -372,8 +372,10 @@ impl IoRef {
         }
     }
 
-    /// Stop timer
+    /// Stops the timer and clears any pending timeout notification.
     pub fn stop_timer(&self) {
+        self.0.flags.check_dispatcher_timeout();
+
         let hnd = self.0.timeout.get();
         if hnd.is_set() {
             log::trace!("{}: Stop timer", self.tag());

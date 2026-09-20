@@ -131,35 +131,35 @@ impl Head for RequestHead {
 }
 
 impl RequestHead {
-    /// Message extensions
+    /// Returns the request extensions.
     #[inline]
     pub fn extensions(&self) -> Ref<'_, Extensions> {
         self.extensions.borrow()
     }
 
-    /// Mutable reference to a the message's extensions
+    /// Returns mutable access to the request extensions.
     #[inline]
     pub fn extensions_mut(&self) -> RefMut<'_, Extensions> {
         self.extensions.borrow_mut()
     }
 
-    /// Read the message headers.
+    /// Returns the request headers.
     pub fn headers(&self) -> &HeaderMap {
         &self.headers
     }
 
-    /// Mutable reference to the message headers.
+    /// Returns mutable access to the request headers.
     pub fn headers_mut(&mut self) -> &mut HeaderMap {
         &mut self.headers
     }
 
-    /// Returns the header items.
+    /// Returns headers preserved in their original order and casing.
     pub fn headers_vec(&self) -> &[HeaderItem] {
         &self.headers_vec
     }
 
     #[inline]
-    /// Set connection type of the message
+    /// Sets the request connection behavior.
     pub fn set_connection_type(&mut self, ctype: ConnectionType) {
         match ctype {
             ConnectionType::Close => self.flags.insert(Flags::CLOSE),
@@ -169,7 +169,7 @@ impl RequestHead {
     }
 
     #[inline]
-    /// Connection type
+    /// Returns the request connection behavior.
     pub fn connection_type(&self) -> ConnectionType {
         if self.flags.contains(Flags::CLOSE) {
             ConnectionType::Close
@@ -185,13 +185,13 @@ impl RequestHead {
     }
 
     #[inline]
-    /// Connection upgrade status
+    /// Returns whether the request upgrades the connection.
     pub fn upgrade(&self) -> bool {
         self.flags.contains(Flags::UPGRADE)
     }
 
     #[inline]
-    /// Request contains `EXPECT` header
+    /// Returns whether the request contains `Expect: 100-continue`.
     pub fn expect(&self) -> bool {
         self.flags.contains(Flags::EXPECT)
     }
@@ -222,7 +222,7 @@ impl RequestHead {
         self.flags.insert(Flags::UPGRADE);
     }
 
-    /// Peer socket address
+    /// Returns the peer socket address.
     ///
     /// Peer address is actual socket address, if proxy is used in front of
     /// ntex http server, then peer address would be address of this proxy.
@@ -235,9 +235,11 @@ impl RequestHead {
         })
     }
 
-    /// Take io and codec for current request
+    /// Takes ownership of the I/O stream and HTTP/1 codec for an upgrade.
     ///
-    /// This objects are set only for upgrade requests
+    /// The handle is installed only after an upgrade is acknowledged through
+    /// the HTTP/1 control service. This is a one-shot operation: subsequent
+    /// calls return [`None`].
     pub fn take_io(&self) -> Option<(IoBoxed, Codec)> {
         self.io.take()
     }
@@ -271,7 +273,7 @@ pub struct ResponseHead {
 }
 
 impl ResponseHead {
-    /// Create new instance of `ResponseHead` type
+    /// Creates response metadata with the supplied status and HTTP version.
     #[inline]
     pub fn new(status: StatusCode, version: Version) -> ResponseHead {
         ResponseHead {
@@ -286,37 +288,37 @@ impl ResponseHead {
         }
     }
 
-    /// Message extensions
+    /// Returns the response extensions.
     #[inline]
     pub fn extensions(&self) -> Ref<'_, Extensions> {
         self.extensions.borrow()
     }
 
-    /// Mutable reference to a the message's extensions
+    /// Returns mutable access to the response extensions.
     #[inline]
     pub fn extensions_mut(&self) -> RefMut<'_, Extensions> {
         self.extensions.borrow_mut()
     }
 
     #[inline]
-    /// Read the message headers.
+    /// Returns the response headers.
     pub fn headers(&self) -> &HeaderMap {
         &self.headers
     }
 
     #[inline]
-    /// Mutable reference to the message headers.
+    /// Returns mutable access to the response headers.
     pub fn headers_mut(&mut self) -> &mut HeaderMap {
         &mut self.headers
     }
 
-    /// Returns the header items.
+    /// Returns headers preserved in their original order and casing.
     pub fn headers_vec(&self) -> &[HeaderItem] {
         &self.headers_vec
     }
 
     #[inline]
-    /// Set connection type of the message
+    /// Sets the response connection behavior.
     pub fn set_connection_type(&mut self, ctype: ConnectionType) {
         match ctype {
             ConnectionType::Close => self.flags.insert(Flags::CLOSE),
@@ -342,18 +344,18 @@ impl ResponseHead {
     }
 
     #[inline]
-    /// Check if keep-alive is enabled
+    /// Returns whether the response keeps the connection open.
     pub fn keep_alive(&self) -> bool {
         self.connection_type() == ConnectionType::KeepAlive
     }
 
     #[inline]
-    /// Check upgrade status of this message
+    /// Returns whether the response upgrades the connection.
     pub fn upgrade(&self) -> bool {
         self.connection_type() == ConnectionType::Upgrade
     }
 
-    /// Get custom reason for the response
+    /// Returns the custom or canonical reason phrase.
     #[inline]
     pub fn reason(&self) -> &str {
         if let Some(reason) = self.reason {
@@ -379,13 +381,13 @@ impl ResponseHead {
     }
 
     #[inline]
-    /// Get response body chunking state
+    /// Returns whether HTTP/1 chunked transfer encoding is allowed.
     pub fn chunked(&self) -> bool {
         !self.flags.contains(Flags::NO_CHUNKING)
     }
 
     #[inline]
-    /// Set no chunking for payload
+    /// Enables or disables HTTP/1 chunked transfer encoding.
     pub fn no_chunking(&mut self, val: bool) {
         if val {
             self.flags.insert(Flags::NO_CHUNKING);

@@ -1,4 +1,4 @@
-use std::{fmt, io, rc::Rc};
+use std::{cell::Cell, fmt, io, rc::Rc};
 
 use crate::http::message::CurrentIo;
 use crate::http::{Request, Response, ResponseError, body::Body, h1::Codec};
@@ -9,45 +9,47 @@ use crate::io::{Filter, Io, IoBoxed, IoRef};
 /// Return [`Control::ack`] to accept the default action, or use the methods on
 /// the individual message type to reject or take ownership of the operation.
 pub enum Control<F, Err> {
-    /// New connection
+    /// A transport connection has been accepted.
     Connect(Connection<F>),
-    /// New request is loaded
+    /// A complete request head has been decoded.
     Request(NewRequest),
-    /// Handle `Connection: UPGRADE`
+    /// A request asks to upgrade the HTTP/1 connection.
     Upgrade(Upgrade<F>),
-    /// Handle `EXPECT` header
+    /// A request contains `Expect: 100-continue`.
     Expect(Expect),
-    /// Connection is prepared to disconnect
+    /// The connection is preparing to stop.
     Disconnect(Reason<Err>),
 }
 
 #[derive(Debug)]
-/// Disconnect reason
+/// Reason supplied with an HTTP/1 disconnect notification.
 pub enum Reason<Err> {
-    /// Disconnect initiated by service
+    /// The HTTP service initiated the disconnect.
     Service(ServiceDisconnect),
-    /// Application level error
+    /// The application service returned an error.
     Error(Error<Err>),
-    /// Protocol level error
+    /// HTTP/1 decoding, encoding, or timeout processing failed.
     ProtocolError(ProtocolError),
-    /// Peer is gone
+    /// The peer closed the connection or an I/O error occurred.
     PeerGone(PeerGone),
-    /// Keep-alive timeout
+    /// The keep-alive timer expired.
     KeepAlive(KeepAlive),
 }
 
 /// The reason the HTTP service is disconnecting.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ServiceDisconnectReason {
-    /// Server is shutting down
+    /// The server is shutting down.
     Shutdown,
-    /// Upgrade request is handled by Upgrade service
+    /// The HTTP/1 dispatcher relinquished the connection after an upgrade was
+    /// handed to the application or control service.
     UpgradeHandled,
-    /// Upgrade handling failed
+    /// Upgrade handling failed.
     UpgradeFailed,
-    /// Expect control message handling failed
+    /// Expectation handling failed.
     ExpectFailed,
-    /// Service is not interested in payload, it is not possible to continue
+    /// The application dropped an unread request payload, preventing reuse of
+    /// the connection.
     PayloadDropped,
 }
 
@@ -270,6 +272,7 @@ pub struct Upgrade<F> {
 struct RequestIoAccess<F> {
     io: Rc<Io<F>>,
     codec: Codec,
+    taken: Cell<bool>,
 }
 
 impl<F> fmt::Debug for RequestIoAccess<F> {
@@ -283,11 +286,19 @@ impl<F> fmt::Debug for RequestIoAccess<F> {
 
 impl<F: Filter> crate::http::message::IoAccess for RequestIoAccess<F> {
     fn get(&self) -> Option<&IoRef> {
-        Some(self.io.as_ref())
+        if self.taken.get() {
+            None
+        } else {
+            Some(self.io.as_ref())
+        }
     }
 
     fn take(&self) -> Option<(IoBoxed, Codec)> {
-        Some((self.io.take().into(), self.codec.clone()))
+        if self.taken.replace(true) {
+            None
+        } else {
+            Some((self.io.take().into(), self.codec.clone()))
+        }
     }
 }
 
@@ -320,6 +331,7 @@ impl<F: Filter> Upgrade<F> {
         let io = Rc::new(RequestIoAccess {
             io: self.io,
             codec: self.codec,
+            taken: Cell::new(false),
         });
         self.req.head_mut().io = CurrentIo::new(io);
 
@@ -448,6 +460,12 @@ impl<Err: ResponseError> Error<Err> {
     }
 
     #[inline]
+    /// Returns mutable access to the application service error.
+    pub fn get_mut(&mut self) -> &mut Err {
+        &mut self.err
+    }
+
+    #[inline]
     /// Sends the response generated from the service error.
     pub fn ack<F>(self) -> ControlAck<F> {
         let (res, body) = self.pkt.into_parts();
@@ -485,7 +503,7 @@ pub struct ProtocolError(super::ProtocolError);
 impl ProtocolError {
     #[inline]
     /// Returns the protocol error.
-    pub fn err(&self) -> &super::ProtocolError {
+    pub fn get_ref(&self) -> &super::ProtocolError {
         &self.0
     }
 
@@ -528,8 +546,14 @@ pub struct PeerGone(Option<io::Error>);
 impl PeerGone {
     #[inline]
     /// Returns the underlying I/O error, if one was reported.
-    pub fn err(&self) -> Option<&io::Error> {
+    pub fn get_ref(&self) -> Option<&io::Error> {
         self.0.as_ref()
+    }
+
+    #[inline]
+    /// Returns mutable access to the underlying I/O error, if one was reported.
+    pub fn get_mut(&mut self) -> Option<&mut io::Error> {
+        self.0.as_mut()
     }
 
     #[inline]
@@ -559,6 +583,12 @@ impl Expect {
     }
 
     #[inline]
+    /// Returns mutable access to the HTTP request.
+    pub fn get_mut(&mut self) -> &mut Request {
+        &mut self.0
+    }
+
+    #[inline]
     /// Sends `100 Continue` and passes the request to the application service.
     pub fn ack<F>(self) -> ControlAck<F> {
         ControlAck {
@@ -585,5 +615,30 @@ impl Expect {
         ControlAck {
             result: ControlResult::ExpectFailed(res, body.into()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::http::HttpServiceConfig;
+    use crate::http::message::IoAccess;
+    use crate::service::cfg::SharedCfg;
+    use crate::testing::IoTest;
+
+    #[crate::rt_test]
+    async fn request_io_access_is_one_shot() {
+        let (_, server) = IoTest::create();
+        let cfg: SharedCfg = SharedCfg::new("TEST").add(HttpServiceConfig::new()).into();
+        let access = RequestIoAccess {
+            io: Rc::new(Io::new(server, cfg.clone())),
+            codec: Codec::new(1, cfg.get()),
+            taken: Cell::new(false),
+        };
+
+        assert!(access.get().is_some());
+        assert!(access.take().is_some());
+        assert!(access.get().is_none());
+        assert!(access.take().is_none());
     }
 }

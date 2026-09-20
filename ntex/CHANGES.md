@@ -28,6 +28,8 @@
 
 * Fix a keep-alive readiness deadlock when less than one millisecond remains
 
+* Fix a rate limiting handling for http1 codec
+
 * Update the minimum supported Rust version to 1.97
 
 * Improve crate and public API documentation

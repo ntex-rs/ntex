@@ -810,6 +810,8 @@ impl Future for OnDisconnect {
 
 #[cfg(test)]
 mod tests {
+    use std::{cell::Cell, rc::Rc};
+
     use ntex_bytes::{BufMut, BytePages, Bytes, BytesMut};
     use ntex_codec::BytesCodec;
     use ntex_util::{future::lazy, time::Millis, time::sleep};
@@ -846,6 +848,18 @@ mod tests {
         server.st().flags.set_wr_backpressure();
         let item = server.recv(&BytesCodec).await.ok().unwrap().unwrap();
         assert_eq!(item, TEXT);
+    }
+
+    #[ntex::test]
+    async fn test_stop_timer_clears_timeout_notification() {
+        let (_client, server) = IoTest::create();
+        let server = Io::new(server, SharedCfg::new("SRV"));
+
+        server.start_timer(ntex_util::time::Seconds(10));
+        server.notify_timeout();
+        server.stop_timer();
+
+        assert!(lazy(|cx| server.poll_status_update(cx)).await.is_pending());
     }
 
     #[ntex::test]
@@ -1385,6 +1399,43 @@ mod tests {
         ntex_util::time::timeout(Millis(4000), io.on_disconnect())
             .await
             .expect("io stream did not disconnect after flush");
+    }
+
+    #[ntex::test]
+    async fn zero_disconnect_timeout_does_not_force_filter_shutdown() {
+        #[derive(Debug)]
+        struct PendingShutdown(Rc<Cell<bool>>);
+
+        impl FilterLayer for PendingShutdown {
+            fn process_read_buf(&self, _: &FilterBuf<'_>) -> io::Result<()> {
+                Ok(())
+            }
+
+            fn process_write_buf(&self, _: &FilterBuf<'_>) -> io::Result<()> {
+                Ok(())
+            }
+
+            fn shutdown(&self, _: &FilterBuf<'_>) -> io::Result<Poll<()>> {
+                if self.0.get() {
+                    Ok(Poll::Ready(()))
+                } else {
+                    Ok(Poll::Pending)
+                }
+            }
+        }
+
+        let (_client, server) = IoTest::create();
+        let ready = Rc::new(Cell::new(false));
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV")
+                .add(IoConfig::default().set_disconnect_timeout(ntex_util::time::Seconds::ZERO)),
+        )
+        .add_filter(PendingShutdown(ready.clone()));
+
+        io.close();
+        sleep(Millis(50)).await;
+        assert!(!io.is_closed());
     }
 
     #[ntex::test]

@@ -39,7 +39,11 @@ impl From<Option<usize>> for KeepAlive {
 }
 
 #[derive(Debug)]
-/// HTTP service configuration.
+/// Configuration shared by HTTP/1 and HTTP/2 server services.
+///
+/// The default configuration enables persistent HTTP/1 connections with a
+/// five-second idle timeout, allows 96 headers, limits the message-head buffer
+/// to 64 KiB, and applies a one-second initial request-header timeout.
 pub struct HttpServiceConfig {
     pub(super) keep_alive: Seconds,
     pub(super) ka_enabled: bool,
@@ -104,22 +108,19 @@ impl HttpServiceConfig {
     #[must_use]
     /// Sets the maximum number of headers in a message.
     ///
-    /// When a request is received, the parser will reserve a buffer
-    /// to store headers for optimal performance.
-    ///
-    /// If server receives more headers than the buffer size, it responds
-    /// to the client with “431 Request Header Fields Too Large”.
-    ///
-    /// Default is set to 96
+    /// Requests exceeding this limit are rejected with
+    /// `431 Request Header Fields Too Large`. The default is 96.
     pub fn set_max_headers(mut self, val: usize) -> Self {
         self.max_headers = val;
         self
     }
 
     #[must_use]
-    /// Sets the maximum buffer size used while parsing an HTTP message.
+    /// Sets the maximum cumulative size of an HTTP message head.
     ///
-    /// Default is 64kb
+    /// The request or response line, headers, and terminating empty line may
+    /// occupy up to and including this number of bytes. Larger message heads
+    /// are rejected. The default is 64 KiB.
     pub fn set_max_buf_size(mut self, val: usize) -> Self {
         self.max_buf_size = val;
         self
@@ -128,7 +129,7 @@ impl HttpServiceConfig {
     #[must_use]
     /// Sets the server keep-alive behavior.
     ///
-    /// By default keep alive is set to a 5 seconds.
+    /// By default, idle persistent connections are closed after five seconds.
     pub fn set_keepalive<W: Into<KeepAlive>>(mut self, val: W) -> Self {
         let (keep_alive, ka_enabled) = match val.into() {
             KeepAlive::Timeout(val) => (val, true),
@@ -145,9 +146,10 @@ impl HttpServiceConfig {
     #[must_use]
     /// Sets the keep-alive timeout.
     ///
-    /// To disable timeout set value to 0.
-    ///
-    /// By default keep-alive timeout is set to 5 seconds.
+    /// A zero duration disables persistent connections rather than selecting
+    /// an unlimited timeout. Use [`KeepAlive::Os`] with
+    /// [`set_keepalive`](Self::set_keepalive) to leave connection lifetime to
+    /// the peer or operating system. The default is five seconds.
     pub fn set_keepalive_timeout(mut self, timeout: Seconds) -> Self {
         self.keep_alive = timeout;
         self.ka_enabled = !timeout.is_zero();
@@ -157,13 +159,11 @@ impl HttpServiceConfig {
     #[must_use]
     /// Sets the initial timeout for reading request headers.
     ///
-    /// Defines a timeout for reading client request header. If a client does not transmit
-    /// the entire set headers within this time, the request is terminated with
-    /// the 408 (Request Time-out) error.
-    ///
-    /// To disable timeout set value to 0.
-    ///
-    /// By default, the timeout is 1 second.
+    /// If the client does not begin transmitting a complete header block
+    /// within this period, the request is rejected with `408 Request Timeout`.
+    /// A zero duration disables header-read timing, allowing a new connection
+    /// to wait indefinitely for its first request independently of the
+    /// keep-alive policy. The default is one second.
     pub fn set_client_timeout(mut self, timeout: Seconds) -> Self {
         if timeout.is_zero() {
             self.headers_read_rate = None;
@@ -182,7 +182,10 @@ impl HttpServiceConfig {
     #[must_use]
     /// Preserves headers in their original order and casing.
     ///
-    /// By default, headers are not stored in vector.
+    /// When enabled, decoded headers are additionally copied into
+    /// [`RequestHead::headers_vec`](crate::http::RequestHead::headers_vec) or
+    /// [`ResponseHead::headers_vec`](crate::http::ResponseHead::headers_vec).
+    /// The normal header map remains populated. This is disabled by default.
     pub fn set_enable_headers_vec(mut self) -> Self {
         self.headers_vec = true;
         self
@@ -191,12 +194,46 @@ impl HttpServiceConfig {
     #[must_use]
     /// Sets read-rate limits for request headers.
     ///
-    /// Set read timeout, max timeout and rate for reading request headers. If the client
-    /// sends `rate` amount of data within `timeout` period of time, extend timeout by `timeout` seconds.
-    /// But no more than `max_timeout` timeout.
+    /// This setting protects HTTP/1 connections from clients that send a
+    /// request line or headers too slowly. The timer starts when the connection
+    /// begins waiting for the initial request. On a persistent connection, it
+    /// starts again after bytes for the next request head arrive.
+    ///
+    /// `timeout` is the duration of one measurement interval. When an interval
+    /// expires, the dispatcher grants another interval only if more than
+    /// `rate` new bytes were received. The request head must complete before
+    /// the cumulative `max_timeout` is exhausted. All newly received
+    /// request-head bytes count toward progress, including request-line and
+    /// header bytes that the incremental parser has already consumed.
+    ///
+    /// A zero `timeout` disables request-head timing. A zero `max_timeout`
+    /// removes the cumulative limit, allowing the deadline to be extended
+    /// indefinitely while the required read rate is maintained. When
+    /// `max_timeout` is not an exact multiple of `timeout`, the final
+    /// measurement interval is shortened so the cumulative limit is not
+    /// exceeded.
+    ///
+    /// If the request head misses its deadline, the HTTP/1 control service
+    /// receives
+    /// [`ProtocolError::SlowRequestTimeout`](crate::http::h1::ProtocolError::SlowRequestTimeout).
+    /// The default control service responds with `408 Request Timeout` and
+    /// closes the connection.
     ///
     /// By default, the timeout is 1 second and the maximum timeout is 16
-    /// seconds.
+    /// seconds, with more than 256 bytes required for each extension.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use ntex::http::HttpServiceConfig;
+    /// use ntex::time::Seconds;
+    ///
+    /// let config = HttpServiceConfig::new().set_headers_read_rate(
+    ///     Seconds(2),  // measurement interval
+    ///     Seconds(10), // maximum time for one request head
+    ///     512,         // bytes required to extend the deadline for next 2 seconds
+    /// );
+    /// ```
     pub fn set_headers_read_rate(
         mut self,
         timeout: Seconds,
@@ -218,11 +255,46 @@ impl HttpServiceConfig {
     #[must_use]
     /// Sets read-rate limits for request payloads.
     ///
-    /// Set read timeout, max timeout and rate for reading payload. If the client
-    /// sends `rate` amount of data within `timeout` period of time, extend timeout by `timeout` seconds.
-    /// But no more than `max_timeout` timeout.
+    /// This setting protects HTTP/1 connections from clients that send a
+    /// request body too slowly. The timer starts when the dispatcher begins
+    /// decoding a request payload. At the end of each `timeout`
+    /// interval, another interval is granted only if more than `rate` bytes
+    /// were decoded.
     ///
-    /// By default payload read rate is disabled.
+    /// The timer runs only while the dispatcher can read and forward payload
+    /// data. It is paused while application payload backpressure or response
+    /// write backpressure prevents further reads, so those conditions are not
+    /// treated as a slow network peer. Pausing preserves the unused portion of
+    /// the cumulative `max_timeout`; resuming does not grant a new maximum
+    /// period. The timer stops when the complete payload has been decoded.
+    ///
+    /// A zero `timeout` disables payload timing. A zero `max_timeout` removes
+    /// the cumulative limit, allowing the deadline to be extended indefinitely
+    /// while the required read rate is maintained. When `max_timeout` is not
+    /// an exact multiple of `timeout`, the final measurement interval is
+    /// shortened so the cumulative limit is not exceeded.
+    ///
+    /// If the payload misses its deadline, its stream receives a timed-out
+    /// [`PayloadError`](crate::http::error::PayloadError), and the HTTP/1
+    /// control service receives
+    /// [`ProtocolError::SlowPayloadTimeout`](crate::http::h1::ProtocolError::SlowPayloadTimeout).
+    /// The default control service responds with `408 Request Timeout` and
+    /// closes the connection.
+    ///
+    /// Payload read-rate limiting is disabled by default.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use ntex::http::HttpServiceConfig;
+    /// use ntex::time::Seconds;
+    ///
+    /// let config = HttpServiceConfig::new().set_payload_read_rate(
+    ///     Seconds(2),  // measurement interval
+    ///     Seconds(30), // maximum time for one request payload
+    ///     1024,        // bytes required to extend the deadline
+    /// );
+    /// ```
     pub fn set_payload_read_rate(
         mut self,
         timeout: Seconds,
@@ -332,7 +404,11 @@ const DATE_VALUE_DEFAULT: [u8; DATE_VALUE_LENGTH_HDR] =
     *b"date: 00000000000000000000000000000\r\n\r\n";
 
 #[derive(Debug, Copy, Clone)]
-/// Generates a cached HTTP `Date` header value.
+/// Generates the cached HTTP `Date` header used by the protocol encoders.
+///
+/// The cached value is refreshed periodically and avoids formatting the
+/// current system time for every response. Applications normally do not need
+/// to use this type directly.
 pub struct DateService;
 
 thread_local! {

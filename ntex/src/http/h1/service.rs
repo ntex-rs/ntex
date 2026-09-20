@@ -9,7 +9,12 @@ use super::control::{Control, ControlAck, ControlResult};
 use super::default::DefaultControlService;
 use super::dispatcher::Dispatcher;
 
-/// An HTTP/1 transport service.
+/// Server transport service that dispatches HTTP/1 requests.
+///
+/// Construct this service with [`HttpService::h1`](crate::http::HttpService::h1).
+/// Request handling is delegated to the configured application service, while
+/// connection lifecycle events use [`DefaultControlService`] unless replaced
+/// with [`control`](Self::control).
 #[derive(derive_more::Debug)]
 #[debug("H1Service")]
 pub struct H1Service<F, Req: RequestState<Io<F>>, Err> {
@@ -53,6 +58,10 @@ where
 {
     #[must_use]
     /// Provides the HTTP/1 control service.
+    ///
+    /// The control service receives connection, request, expectation, upgrade,
+    /// error, and disconnect events. Returning [`Control::ack`] applies the
+    /// default action for each event.
     pub fn control<I, Sf>(self, ctl: I) -> Self
     where
         I: IntoServiceFactory<Sf, Req::State, Control<F, Err>>,
@@ -113,8 +122,6 @@ where
     }
 
     async fn shutdown(&self, _: crate::Ctx<'_, Self, St>) {
-        self.config.shutdown();
-
         // check inflight connections
         let inflight = self.config.shutdown();
         if inflight != 0 {
