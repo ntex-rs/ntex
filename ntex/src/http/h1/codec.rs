@@ -26,6 +26,34 @@ bitflags! {
 ///
 /// The codec tracks the version, connection behavior, request method, and
 /// streaming state of the most recently decoded request.
+///
+/// # Decoding
+///
+/// [`Decoder::decode`] incrementally consumes one request head and returns its
+/// [`Request`] together with a [`PayloadType`]. For
+/// [`PayloadType::Payload`], pass subsequent bytes to the returned payload
+/// decoder until framing completes before decoding another request head. Bytes
+/// for a pipelined request can already remain in the input buffer.
+/// [`PayloadType::Stream`] ends HTTP message framing; transfer the connection
+/// and any buffered bytes to the upgraded protocol instead of decoding another
+/// HTTP request.
+///
+/// `Ok(None)` means that more bytes are required. A [`DecodeError`] indicates
+/// invalid framing or a configured request-head limit and should be treated as
+/// a connection-level protocol failure.
+///
+/// # Encoding
+///
+/// [`Encoder::encodev`] accepts a
+/// [`Message<(Response<()>, BodySize)>`](Message). Encode the response head
+/// first, followed by body chunks and a final `Message::Chunk(None)` when the
+/// response has a body. The codec selects fixed-length, chunked, or
+/// connection-close framing from the response, request method, version, and
+/// supplied [`BodySize`]. An [`EncodeError`] indicates invalid response
+/// encoding or an incomplete fixed-length body.
+///
+/// The codec only transforms buffers; it does not perform I/O, flush output,
+/// or apply transport backpressure.
 pub struct Codec {
     con_id: usize,
     decoder: decoder::MessageDecoder<Request>,

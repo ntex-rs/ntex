@@ -602,6 +602,16 @@ pub enum PayloadItem {
 /// The decoder handles fixed `Content-Length`, chunked transfer coding, and
 /// bodies delimited by connection EOF. It implements [`Decoder`] and retains
 /// framing state between calls.
+///
+/// Fixed-length and chunked decoders emit [`PayloadItem::Eof`] when their wire
+/// framing completes. An EOF-delimited decoder emits every available byte as a
+/// chunk but cannot infer completion from an empty input buffer; the transport
+/// owner must treat connection closure as the end of that payload.
+///
+/// `Ok(None)` means that more bytes or transport EOF are required. A
+/// [`DecodeError`] reports malformed payload framing, such as an invalid
+/// chunk-size or chunk terminator. Cloning preserves the current payload
+/// framing state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PayloadDecoder {
     kind: Cell<Kind>,

@@ -24,15 +24,35 @@ pub use self::service::H1Service;
 pub(super) use self::service::handle_io;
 use crate::{channel::bstream::Receiver, util::Bytes};
 
-/// An HTTP/1 request payload stream.
+/// A buffered stream of an HTTP/1 request body's decoded bytes.
+///
+/// Each item is either a body chunk or a [`PayloadError`](super::error::PayloadError).
+/// Normal body completion closes the stream, after which receiving returns
+/// `None`. A payload error is yielded once before the stream terminates.
+///
+/// The HTTP/1 dispatcher stops reading body data while this stream's buffer is
+/// full. Consuming items therefore releases transport-level backpressure.
+/// Dropping the stream before the complete body has been decoded prevents the
+/// connection from being reused and causes the dispatcher to disconnect it.
 pub type Payload = Receiver<super::error::PayloadError>;
 
-/// A message produced or consumed by the HTTP/1 codec.
+/// A message passed to an HTTP/1 request or response encoder.
+///
+/// Encoding a message starts with [`Message::Item`]. If the head declares a
+/// body, zero or more [`Message::Chunk(Some(_))`](Message::Chunk) values follow,
+/// and [`Message::Chunk(None)`](Message::Chunk) completes the body. The final
+/// `None` writes the chunked terminator when required and verifies that a
+/// fixed-length body supplied all declared bytes.
+///
+/// A new [`Message::Item`] must not be encoded until the preceding body has
+/// completed. Body chunks should be non-empty; use `Message::Chunk(None)` to
+/// complete the body explicitly.
 #[derive(Debug)]
 pub enum Message<T> {
-    /// A complete request or response head.
+    /// A complete request or response head, including the body-size metadata
+    /// required by the concrete codec.
     Item(T),
-    /// A payload chunk, or `None` at the end of the payload.
+    /// Body bytes, or `None` to complete the current body.
     Chunk(Option<Bytes>),
 }
 
