@@ -17,6 +17,28 @@ pub struct ServiceResponse {
     pub(super) config: Cfg<ClientConfig>,
 }
 
+impl ServiceResponse {
+    /// Returns the response head.
+    pub fn head(&self) -> &ResponseHead {
+        &self.head
+    }
+
+    /// Returns mutable access to the response head.
+    pub fn head_mut(&mut self) -> &mut ResponseHead {
+        &mut self.head
+    }
+
+    /// Returns mutable access to the response payload.
+    pub fn payload(&mut self) -> &mut Payload {
+        &mut self.payload
+    }
+
+    /// Takes the response payload, leaving an empty payload behind.
+    pub fn take_payload(&mut self) -> Payload {
+        std::mem::replace(&mut self.payload, Payload::None)
+    }
+}
+
 #[derive(Debug)]
 /// HTTP request passed through client middleware before it is sent.
 pub struct ServiceRequest {

@@ -35,7 +35,6 @@ mod test;
 
 pub use self::builder::ClientBuilder;
 pub use self::cfg::ClientConfig;
-pub use self::connection::Connection;
 pub use self::request::ClientRequest;
 pub use self::response::{ClientResponse, JsonBody, MessageBody};
 pub use self::service::{ServiceRequest, ServiceResponse};
@@ -49,13 +48,10 @@ use crate::{Cfg, Pipeline, error::Error, io::IoBoxed};
 
 type ConnectorPipeline = PipelineState<SharedCfg, Connect, IoBoxed, Error<ConnectError>>;
 
-/// Connection parameters passed to an HTTP connector service.
 #[derive(Debug, Clone)]
-pub struct Connect {
-    /// Target request URI.
-    pub uri: Uri,
-    /// Pre-resolved peer address, if available.
-    pub addr: Option<std::net::SocketAddr>,
+pub(crate) struct Connect {
+    pub(crate) uri: Uri,
+    pub(crate) addr: Option<std::net::SocketAddr>,
 }
 
 /// An HTTP client.

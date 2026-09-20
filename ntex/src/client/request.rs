@@ -1,4 +1,4 @@
-use std::{error::Error as StdError, fmt, net};
+use std::{error::Error as StdError, fmt, net, rc::Rc};
 
 use base64::{Engine, engine::general_purpose::STANDARD as base64};
 #[cfg(feature = "cookie")]
@@ -39,7 +39,7 @@ use super::{ClientConfig, ClientResponse, ServiceRequest, ServiceResponse};
 pub struct ClientRequest {
     request: ServiceRequest,
     svc: PipelineBinding<ServiceRequest, ServiceResponse, Error<ClientError>>,
-    err: Option<HttpError>,
+    err: Option<ClientError>,
     cfg: Cfg<ClientConfig>,
     #[cfg(feature = "cookie")]
     cookies: Option<CookieJar>,
@@ -81,7 +81,7 @@ impl ClientRequest {
     {
         match Uri::try_from(uri) {
             Ok(uri) => self.request.head.uri = uri,
-            Err(e) => self.err = Some(e.into()),
+            Err(e) => self.err = Some(ClientError::Http(e.into())),
         }
         self
     }
@@ -174,9 +174,9 @@ impl ClientRequest {
         match HeaderName::try_from(key) {
             Ok(key) => match HeaderValue::try_from(value) {
                 Ok(value) => self.request.head.headers.append(key, value),
-                Err(e) => self.err = Some(e.into()),
+                Err(e) => self.err = Some(ClientError::Http(e.into())),
             },
-            Err(e) => self.err = Some(e.into()),
+            Err(e) => self.err = Some(ClientError::Http(e.into())),
         }
         self
     }
@@ -196,9 +196,9 @@ impl ClientRequest {
         match HeaderName::try_from(key) {
             Ok(key) => match HeaderValue::try_from(value) {
                 Ok(value) => self.request.head.headers.insert(key, value),
-                Err(e) => self.err = Some(e.into()),
+                Err(e) => self.err = Some(ClientError::Http(e.into())),
             },
-            Err(e) => self.err = Some(e.into()),
+            Err(e) => self.err = Some(ClientError::Http(e.into())),
         }
         self
     }
@@ -221,11 +221,11 @@ impl ClientRequest {
                 if !self.request.head.headers.contains_key(&key) {
                     match HeaderValue::try_from(value) {
                         Ok(value) => self.request.head.headers.insert(key, value),
-                        Err(e) => self.err = Some(e.into()),
+                        Err(e) => self.err = Some(ClientError::Http(e.into())),
                     }
                 }
             }
-            Err(e) => self.err = Some(e.into()),
+            Err(e) => self.err = Some(ClientError::Http(e.into())),
         }
         self
     }
@@ -265,7 +265,7 @@ impl ClientRequest {
                 .head
                 .headers
                 .insert(header::CONTENT_TYPE, value),
-            Err(e) => self.err = Some(e.into()),
+            Err(e) => self.err = Some(ClientError::Http(e.into())),
         }
         self
     }
@@ -380,21 +380,30 @@ impl ClientRequest {
     }
 
     /// Serializes `query` and replaces the query component of the request URI.
-    pub fn query<T: Serialize>(mut self, query: &T) -> Result<Self, serde_urlencoded::ser::Error> {
+    ///
+    /// Serialization errors are stored and returned by the next `send*` call.
+    #[must_use]
+    pub fn query<T: Serialize>(mut self, query: &T) -> Self {
         let mut parts = self.request.head.uri.clone().into_parts();
 
         if let Some(path_and_query) = parts.path_and_query {
-            let query = serde_urlencoded::to_string(query)?;
+            let query = match serde_urlencoded::to_string(query) {
+                Ok(query) => query,
+                Err(err) => {
+                    self.err = Some(ClientError::Error(Rc::new(err)));
+                    return self;
+                }
+            };
             let path = path_and_query.path();
             parts.path_and_query = format!("{path}?{query}").parse().ok();
 
             match Uri::from_parts(parts) {
                 Ok(uri) => self.request.head.uri = uri,
-                Err(e) => self.err = Some(e.into()),
+                Err(e) => self.err = Some(ClientError::Http(e.into())),
             }
         }
 
-        Ok(self)
+        self
     }
 }
 
@@ -458,7 +467,7 @@ impl ClientRequest {
     #[allow(unused_mut)]
     fn prep_for_sending_inner(&mut self) -> Result<(), Error<ClientError>> {
         if let Some(e) = self.err.take() {
-            return Err(ClientError::from(e).into());
+            return Err(e.into());
         }
 
         // validate uri
@@ -542,6 +551,17 @@ impl fmt::Debug for ClientRequest {
 mod tests {
     use super::*;
     use crate::{SharedCfg, client::Client};
+
+    struct InvalidQuery;
+
+    impl Serialize for InvalidQuery {
+        fn serialize<S>(&self, _: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            Err(serde::ser::Error::custom("invalid query"))
+        }
+    }
 
     #[crate::rt_test]
     async fn test_debug() {
@@ -677,8 +697,10 @@ mod tests {
     async fn client_query() {
         let req = Client::new()
             .get("/")
-            .query(&[("key1", "val1"), ("key2", "val2")])
-            .unwrap();
+            .query(&[("key1", "val1"), ("key2", "val2")]);
         assert_eq!(req.get_uri().query().unwrap(), "key1=val1&key2=val2");
+
+        let req = Client::new().get("/").query(&InvalidQuery);
+        assert!(matches!(req.err, Some(ClientError::Error(_))));
     }
 }

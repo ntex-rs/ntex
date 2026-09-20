@@ -83,14 +83,6 @@ impl ErrorDiagnostic for ClientPayloadError {
     }
 }
 
-/// Errors that can occur while constructing an HTTP client.
-#[derive(thiserror::Error, Copy, Clone, Debug)]
-pub enum ClientBuilderError {
-    /// The connector could not be constructed.
-    #[error("Cannot construct connector")]
-    ConnectorFailed,
-}
-
 /// Errors that can occur while connecting to an HTTP host.
 #[derive(thiserror::Error, Debug)]
 pub enum ConnectError {
@@ -336,11 +328,5 @@ impl ErrorDiagnostic for ClientError {
             ClientError::Error(_) => "ntex-client-SendBody",
             ClientError::H2(err) => err.signature(),
         }
-    }
-}
-
-impl From<ClientBuilderError> for io::Error {
-    fn from(err: ClientBuilderError) -> io::Error {
-        io::Error::other(err)
     }
 }
