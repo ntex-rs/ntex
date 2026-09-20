@@ -17,35 +17,45 @@ use super::{HttpService, Resource, Route, ServiceConfig, State, WebRequest, WebR
 
 type Guards = Vec<Box<dyn Guard>>;
 
-/// Resources scope.
+/// Groups services under a shared path prefix.
 ///
-/// Scope is a set of resources with common root path.
-/// Scopes collect multiple paths under a common path prefix.
-/// Scope path can contain variable path segments as resources.
-/// Scope prefix is always complete path segment, i.e `/app` would
-/// be converted to a `/app/` and it would not match `/app` path.
+/// A scope is useful for keeping a related part of an application together,
+/// such as an API or administration area. It can contain resources, routes,
+/// nested scopes, middleware, filters, guards, and its own fallback service.
 ///
-/// You can get variable path segments from `HttpRequest::match_info()`.
-/// `Path` extractor also is able to extract scope level variable segments.
+/// The prefix matches complete path segments. For example, `scope("/api")`
+/// can contain a service for `/api/users`, but the scope itself does not match
+/// the bare `/api` path. Register an empty nested resource if that path also
+/// needs a handler.
+///
+/// Scope prefixes can contain dynamic segments. Their values remain available
+/// to nested handlers through [`HttpRequest::match_info()`] and the [`Path`]
+/// extractor. For example, `scope("/users/{user_id}")` makes `user_id`
+/// available to every handler nested inside that scope.
+///
+/// Once the scope's prefix and guards match, its middleware and filters run,
+/// followed by its nested router. If no nested service matches, the scope uses
+/// its own fallback, which returns `404 Not Found` by default. It does not fall
+/// back to the surrounding application.
 ///
 /// ```rust
-/// use ntex::web::{self, App, HttpResponse};
+/// use ntex::web::{self, App};
 ///
-/// fn main() {
-///     let app = App::default().service(
-///         web::scope("/{project_id}/")
-///             .service(web::resource("/path1").to(async || { HttpResponse::Ok() }))
-///             .service(web::resource("/path2").route(web::get().to(async || { HttpResponse::Ok() })))
-///             .service(web::resource("/path3").route(web::head().to(async || { HttpResponse::MethodNotAllowed() })))
-///     );
+/// async fn issues(
+///     path: web::types::Path<(String,)>,
+/// ) -> String {
+///     format!("Issues for {}", path.0)
 /// }
+///
+/// App::default().service(
+///     web::scope("/projects/{project_id}")
+///         .route("/issues", web::get().to(issues))
+///         .route("/settings", web::get().to(async || "settings")),
+/// );
 /// ```
 ///
-/// In the above example three routes get registered:
-///  * `/{project_id}/path1` - reponds to all http method
-///  * `/{project_id}/path2` - `GET` requests
-///  * `/{project_id}/path3` - `HEAD` requests
-///
+/// [`HttpRequest::match_info()`]: super::HttpRequest::match_info
+/// [`Path`]: super::types::Path
 #[derive(derive_more::Debug)]
 #[debug("Scope({rdef:?})")]
 pub struct Scope<St: State, In, Out = In, M = Identity, F = Filter<St, In>> {
@@ -58,9 +68,12 @@ pub struct Scope<St: State, In, Out = In, M = Identity, F = Filter<St, In>> {
     ph: PhantomData<Out>,
 }
 
-/// Resources scope.
+/// A scope with nested services or a configured fallback.
 ///
-/// Scope is a set of resources with common root path.
+/// Methods such as [`Scope::service()`], [`Scope::route()`],
+/// [`Scope::configure()`], and [`Scope::default_service()`] turn a [`Scope`]
+/// into `ScopeServices`. You can then add more services or routes and adjust
+/// the scope fallback.
 #[derive(derive_more::Debug)]
 #[debug("ScopeServices({rdef:?})")]
 pub struct ScopeServices<St: State, In, Out, M, F> {

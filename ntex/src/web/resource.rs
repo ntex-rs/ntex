@@ -61,8 +61,20 @@ pub struct Resource<St: State, In, Out = In, M = Identity, F = Filter<St, In>> {
     ph: PhantomData<Out>,
 }
 
+/// A resource with routes or a configured fallback.
+///
+/// From here, you can add more routes or handlers and change the resource
+/// fallback. Configure resource-wide settings such as its name, guards,
+/// filters, and middleware before adding the first route or fallback.
+///
+/// The finished builder can be registered with [`App::service()`] or
+/// [`Scope::service()`]. It keeps the path and all configuration from the
+/// original [`Resource`].
+///
+/// [`App::service()`]: super::App::service
+/// [`Scope::service()`]: super::Scope::service
 #[derive(derive_more::Debug)]
-#[debug("Resource({rdef:?})")]
+#[debug("ResourceServices({rdef:?})")]
 pub struct ResourceServices<St: State, In, Out, M, F> {
     middleware: M,
     filter: ServiceChainFactory<F, St, WebRequest<In>>,

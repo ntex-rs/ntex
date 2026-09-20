@@ -14,8 +14,34 @@ use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory
 use super::stack::{Filter, WebStack};
 use super::{HttpService, Resource, Route, State, WebRequest, WebResponse};
 
-/// Application builder - structure that follows the builder pattern
-/// for building application instances.
+/// The main builder for a web application.
+///
+/// Start with `App::new()` then add routes, resources,
+/// scopes, middleware, filters, application state, and a fallback response.
+///
+/// Middleware and filters run before routing. ntex then chooses the resource
+/// or scope that matches the request. If nothing matches, the application
+/// returns `404 Not Found` unless you provide a custom fallback.
+///
+/// Add application-wide settings, such as middleware, filters,
+/// [`App::with_config()`], and case-insensitive routing, before adding the
+/// first route or service. After that, the builder becomes [`AppServices`],
+/// where you can continue adding routes and services.
+///
+/// ```rust
+/// use ntex::web::{self, middleware, App, HttpResponse};
+///
+/// App::default()
+///     .middleware(middleware::Logger::default())
+///     .service(
+///         web::resource("/users")
+///             .route(web::get().to(async || "users"))
+///             .route(web::post().to(async || HttpResponse::Created())),
+///     )
+///     .default_service(
+///         web::to(async || HttpResponse::NotFound().body("Not found")),
+///     );
+/// ```
 #[derive(derive_more::Debug)]
 #[debug("App")]
 pub struct App<St: State, In = (), Out = In, M = Identity, F = Filter<St, In>> {
@@ -27,8 +53,19 @@ pub struct App<St: State, In = (), Out = In, M = Identity, F = Filter<St, In>> {
     ph: PhantomData<Out>,
 }
 
-/// Application builder - structure that follows the builder pattern
-/// for building application instances.
+/// An application builder that already has routing configuration.
+///
+/// You usually do not need to name this type. It is returned naturally after
+/// calling [`App::route()`], [`App::service()`], [`App::configure()`], or
+/// [`App::default_service()`].
+///
+/// From here, you can add more routes and services or set the application
+/// fallback. Return the finished builder from the factory passed to
+/// [`web::server()`]. The [`AppServices::build()`] and
+/// [`AppServices::build_with()`] methods are available when you need to
+/// connect the application to a lower-level HTTP service yourself.
+///
+/// [`web::server()`]: super::server
 #[derive(derive_more::Debug)]
 #[debug("AppServices")]
 pub struct AppServices<St: State, In, Out, M, F> {
