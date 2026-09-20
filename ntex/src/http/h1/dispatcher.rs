@@ -585,6 +585,7 @@ where
                                         .map_err(|e| Either::Right(Some(e)))?
                                         .is_pending()
                                     {
+                                        self.pause_payload_timer();
                                         break;
                                     }
                                     continue;
@@ -896,8 +897,9 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::cell::{Cell, RefCell};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::{cell::Cell, error, future::Future, future::poll_fn, sync::Arc};
+    use std::{error, future::Future, future::poll_fn, sync::Arc};
 
     use rand::Rng;
 
@@ -1452,6 +1454,57 @@ mod tests {
         sleep(Millis(50)).await;
         assert!(client.remote_buffer(|buf| buf.len()) > 1_048_576 - BUFFER_SIZE * 3);
         assert!(mark.load(Ordering::Relaxed));
+    }
+
+    #[crate::rt_test]
+    async fn test_payload_timer_pauses_for_write_backpressure() {
+        let payload = Rc::new(RefCell::new(None));
+        let payload2 = payload.clone();
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(HttpServiceConfig::new().set_payload_read_rate(Seconds(10), Seconds(20), 1))
+            .into();
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(move |mut req: Request| {
+                    payload2.borrow_mut().replace(req.take_payload());
+                    async { Ok::<_, io::Error>(Response::Ok().body("x".repeat(128 * 1024))) }
+                }),
+            ),
+            Pipeline::new((), DefaultControlService),
+            DispatcherConfig::default(),
+        );
+
+        client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\n\r\nb");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(h1.inner.flags.contains(Flags::READ_PL_TIMEOUT));
+        assert!(h1.inner.io.is_wr_backpressure());
+
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(h1.inner.flags.contains(Flags::READ_PL_PAUSED));
+        assert!(!h1.inner.flags.contains(Flags::READ_PL_TIMEOUT));
+        assert!(!h1.inner.io.timer_handle().is_set());
+
+        client.remote_buffer_cap(256 * 1024);
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(h1.inner.flags.contains(Flags::READ_PL_TIMEOUT));
+        assert!(!h1.inner.flags.contains(Flags::READ_PL_PAUSED));
+
+        client.write("ody");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        payload.borrow_mut().take();
+        client.close().await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
     }
 
     #[crate::rt_test]

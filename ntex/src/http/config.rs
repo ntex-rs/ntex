@@ -261,13 +261,12 @@ impl HttpServiceConfig {
     /// interval, another interval is granted only if more than `rate` bytes
     /// were decoded.
     ///
-    /// The timer runs only while the application-side payload stream can
-    /// accept data. It is paused while application backpressure prevents the
-    /// dispatcher from forwarding payload chunks, so a slow payload consumer
-    /// is not treated as a slow network peer. Pausing preserves the unused
-    /// portion of the cumulative `max_timeout`; resuming does not grant a new
-    /// maximum period. The timer stops when the complete payload has been
-    /// decoded.
+    /// The timer runs only while the dispatcher can read and forward payload
+    /// data. It is paused while application payload backpressure or response
+    /// write backpressure prevents further reads, so those conditions are not
+    /// treated as a slow network peer. Pausing preserves the unused portion of
+    /// the cumulative `max_timeout`; resuming does not grant a new maximum
+    /// period. The timer stops when the complete payload has been decoded.
     ///
     /// A zero `timeout` disables payload timing. A zero `max_timeout` removes
     /// the cumulative limit, allowing the deadline to be extended indefinitely
