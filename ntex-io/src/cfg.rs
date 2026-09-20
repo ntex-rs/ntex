@@ -275,6 +275,31 @@ impl IoConfig {
 
     /// Sets the write-buffer page size.
     ///
+    /// Write buffers are represented as a sequence of reusable byte pages.
+    /// `size` selects the capacity category used when those buffers allocate
+    /// new internal pages, including the intermediate write buffers created
+    /// between filter layers. [`BytePages`](ntex_bytes::BytePages) may also
+    /// contain externally supplied [`BytePage`](ntex_bytes::BytePage),
+    /// [`Bytes`](ntex_bytes::Bytes), or `Vec<u8>` segments; this setting does
+    /// not resize or copy those segments.
+    ///
+    /// Smaller pages reduce unused capacity for connections that usually
+    /// produce small writes. Larger pages can reduce allocation and page-list
+    /// overhead for connections that regularly buffer larger writes. This
+    /// setting does not limit the total amount of buffered data or determine
+    /// the size of individual transport write operations.
+    ///
+    /// Changing the page size on an active connection through
+    /// [`Io::set_config`](crate::Io::set_config) updates the allocation
+    /// category for future pages in every existing write buffer. Pages that
+    /// have already been allocated retain their current capacity. Filter
+    /// layers added later use the new page size.
+    ///
+    /// The page size is independent of the eager-write threshold and write
+    /// backpressure watermarks. Changing it does not update values configured
+    /// by [`set_write_buf_threshold`](Self::set_write_buf_threshold) or
+    /// [`set_write_buf`](Self::set_write_buf).
+    ///
     /// The default page size is 16 KiB.
     #[must_use]
     pub fn set_write_page_size(mut self, size: BytePageSize) -> Self {
@@ -304,8 +329,9 @@ impl IoConfig {
     /// caller must wait for buffered data to be written.
     ///
     /// Set `size` to zero to disable eager writes when this configuration is
-    /// used to construct an [`Io`](crate::Io). The default is half of the
-    /// configured write page size, which is 8 KiB with the default 16 KiB page.
+    /// used to construct an [`Io`](crate::Io). The default is 8 KiB, derived
+    /// from the default 16 KiB page size when [`IoConfig::new`] is called.
+    /// Changing the page size later does not recalculate this threshold.
     ///
     /// Whether eager-write support is enabled is captured when the `Io` object
     /// is created. Replacing an active connection's configuration with
