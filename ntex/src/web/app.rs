@@ -128,24 +128,21 @@ where
         }
     }
 
-    /// Configure route for a specific path.
+    /// Register a route for an application path.
     ///
-    /// This is a simplified version of the `App::service()` method.
-    /// This method can be used multiple times with same path, in that case
-    /// multiple resources with one route would be registered for same resource path.
+    /// This is shorthand for creating a [`Resource`] with one route and
+    /// registering it with [`App::service()`]. The route's method and custom
+    /// guards are promoted to resource guards.
+    ///
+    /// Each call creates a separate resource, so the same path can be
+    /// registered more than once with different guards.
     ///
     /// ```rust
     /// use ntex::web::{self, App, HttpResponse};
     ///
-    /// async fn index(data: web::types::Path<(String, String)>) -> &'static str {
-    ///     "Welcome!"
-    /// }
-    ///
-    /// fn main() {
-    ///     let app = App::default()
-    ///         .route("/test1", web::get().to(index))
-    ///         .route("/test2", web::post().to(async || { HttpResponse::MethodNotAllowed() }));
-    /// }
+    /// App::default()
+    ///     .route("/items", web::get().to(async || "list"))
+    ///     .route("/items", web::post().to(async || HttpResponse::Created()));
     /// ```
     #[must_use]
     pub fn route(self, path: &str, mut route: Route<St, Out>) -> AppServices<St, In, Out, M, F> {
@@ -182,39 +179,26 @@ where
         }
     }
 
-    /// Default service to be used if no matching resource could be found.
+    /// Set the fallback service for unmatched application requests.
     ///
-    /// It is possible to use services like `Resource`, `Route`.
+    /// The fallback is called when no top-level resource or scope matches the
+    /// request path and guards. Without a custom fallback, the application
+    /// returns `404 Not Found`.
     ///
-    /// ```rust
-    /// use ntex::web::{self, App, HttpResponse};
-    ///
-    /// async fn index() -> &'static str {
-    ///     "Welcome!"
-    /// }
-    ///
-    /// fn main() {
-    ///     let app = App::default()
-    ///         .service(
-    ///             web::resource("/index.html").route(web::get().to(index)))
-    ///         .default_service(
-    ///             web::route().to(async || { HttpResponse::NotFound() }));
-    /// }
-    /// ```
-    ///
-    /// It is also possible to use static files as default service.
+    /// A matched resource or scope handles its own routing failures, so its
+    /// requests do not fall through to this service.
     ///
     /// ```rust
-    /// use ntex::web::{self, App, HttpResponse};
+    /// use ntex::web::{self, App, HttpRequest, HttpResponse};
     ///
-    /// fn main() {
-    ///     let app = App::default()
-    ///         .service(
-    ///             web::resource("/index.html").to(async || { HttpResponse::Ok() }))
-    ///         .default_service(
-    ///             web::to(async || { HttpResponse::NotFound() })
-    ///         );
+    /// async fn not_found(req: HttpRequest) -> HttpResponse {
+    ///     HttpResponse::NotFound()
+    ///         .body(format!("No resource for {}", req.path()))
     /// }
+    ///
+    /// App::default()
+    ///     .route("/health", web::get().to(async || "ready"))
+    ///     .default_service(web::to(not_found));
     /// ```
     #[must_use]
     pub fn default_service<U>(
@@ -438,26 +422,33 @@ where
             InitError = Failure,
         >,
 {
-    #[must_use]
-    /// Configure route for a specific path.
+    /// Register a route for an application path.
     ///
-    /// This is a simplified version of the `App::service()` method.
-    /// This method can be used multiple times with same path, in that case
-    /// multiple resources with one route would be registered for same resource path.
+    /// This is shorthand for creating a [`Resource`] with one route and
+    /// registering it with [`AppServices::service()`]. The route's method and
+    /// custom guards are promoted to resource guards.
+    ///
+    /// Consequently, if those guards reject a request, the generated resource
+    /// does not match and the application router continues searching. If
+    /// nothing else matches, the application default service is used. To use a
+    /// resource-level fallback such as the built-in `405 Method Not Allowed`,
+    /// register an explicit [`Resource`] and add routes with
+    /// [`Resource::route()`].
+    ///
+    /// Each call creates a separate resource, so the same path can be
+    /// registered more than once with different guards.
     ///
     /// ```rust
     /// use ntex::web::{self, App, HttpResponse};
     ///
-    /// async fn index(data: web::types::Path<(String, String)>) -> &'static str {
-    ///     "Welcome!"
-    /// }
-    ///
-    /// fn main() {
-    ///     let app = App::default()
-    ///         .route("/test1", web::get().to(index))
-    ///         .route("/test2", web::post().to(async || { HttpResponse::MethodNotAllowed() }));
-    /// }
+    /// App::default()
+    ///     .route("/items", web::get().to(async || "list"))
+    ///     .route(
+    ///         "/items",
+    ///         web::post().to(async || HttpResponse::Created()),
+    ///     );
     /// ```
+    #[must_use]
     pub fn route(self, path: &str, mut route: Route<St, Out>) -> Self {
         self.service(
             Resource::new(path)
@@ -466,7 +457,6 @@ where
         )
     }
 
-    #[must_use]
     /// Register http service.
     ///
     /// Http service is any type that implements `WebServiceFactory` trait.
@@ -476,6 +466,7 @@ where
     /// * `Resource` is an entry in resource table which corresponds to requested URL.
     /// * `Scope` is a set of resources with common root path.
     /// * `StaticFiles` is a service for static files support
+    #[must_use]
     pub fn service<S>(mut self, factory: S) -> Self
     where
         S: WebServiceFactory<St, Out> + 'static,
@@ -485,41 +476,28 @@ where
         self
     }
 
+    /// Set the fallback service for unmatched application requests.
+    ///
+    /// The fallback is called when no top-level resource or scope matches the
+    /// request path and guards. Without a custom fallback, the application
+    /// returns `404 Not Found`.
+    ///
+    /// A matched resource or scope handles its own routing failures, so its
+    /// requests do not fall through to this service.
+    ///
+    /// ```rust
+    /// use ntex::web::{self, App, HttpRequest, HttpResponse};
+    ///
+    /// async fn not_found(req: HttpRequest) -> HttpResponse {
+    ///     HttpResponse::NotFound()
+    ///         .body(format!("No resource for {}", req.path()))
+    /// }
+    ///
+    /// App::default()
+    ///     .route("/health", web::get().to(async || "ready"))
+    ///     .default_service(web::to(not_found));
+    /// ```
     #[must_use]
-    /// Default service to be used if no matching resource could be found.
-    ///
-    /// It is possible to use services like `Resource`, `Route`.
-    ///
-    /// ```rust
-    /// use ntex::web::{self, App, HttpResponse};
-    ///
-    /// async fn index() -> &'static str {
-    ///     "Welcome!"
-    /// }
-    ///
-    /// fn main() {
-    ///     let app = App::default()
-    ///         .service(
-    ///             web::resource("/index.html").route(web::get().to(index)))
-    ///         .default_service(
-    ///             web::route().to(async || { HttpResponse::NotFound() }));
-    /// }
-    /// ```
-    ///
-    /// It is also possible to use static files as default service.
-    ///
-    /// ```rust
-    /// use ntex::web::{self, App, HttpResponse};
-    ///
-    /// fn main() {
-    ///     let app = App::default()
-    ///         .service(
-    ///             web::resource("/index.html").to(async || { HttpResponse::Ok() }))
-    ///         .default_service(
-    ///             web::to(async || { HttpResponse::NotFound() })
-    ///         );
-    /// }
-    /// ```
     pub fn default_service<U>(mut self, f: impl IntoServiceFactory<U, St, WebRequest<Out>>) -> Self
     where
         U: ServiceFactory<St, WebRequest<Out>, Res = WebResponse> + 'static,

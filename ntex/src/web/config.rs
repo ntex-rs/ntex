@@ -181,9 +181,13 @@ impl<St: State, In: 'static> ServiceConfig<St, In> {
         }
     }
 
-    /// Configure route for a specific path.
+    /// Register a route for an application path.
     ///
-    /// This is same as `App::route()` method.
+    /// This has the same behavior as [`App::route()`]: it creates a separate
+    /// resource containing the route and promotes the route's method and custom
+    /// guards to resource guards.
+    ///
+    /// [`App::route()`]: super::App::route
     pub fn route(&mut self, path: &str, mut route: Route<St, In>) -> &mut Self {
         self.service(
             Resource::new(path)

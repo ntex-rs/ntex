@@ -145,24 +145,29 @@ impl WebServiceAdapter {
         self
     }
 
-    /// Add match guard to a web service.
+    /// Add a match guard to this web service.
+    ///
+    /// The service is selected only when its path and all registered guards
+    /// match. If a guard rejects the request, the router can try another
+    /// matching service; otherwise the containing scope or application fallback
+    /// is used.
     ///
     /// ```rust
     /// use std::convert::Infallible;
-    /// use ntex::web::{self, guard, App, WebError, HttpResponse};
+    /// use ntex::web::{self, guard, App, HttpResponse};
     ///
-    /// async fn index(req: web::WebRequest<()>) -> Result<web::WebResponse, Infallible> {
+    /// async fn index(
+    ///     req: web::WebRequest<()>,
+    /// ) -> Result<web::WebResponse, Infallible> {
     ///     Ok(req.into_response(HttpResponse::Ok().build()))
     /// }
     ///
-    /// fn main() {
-    ///     let app = App::default()
-    ///         .service(
-    ///             web::service("/app")
-    ///                 .guard(guard::Header("content-type", "text/plain"))
-    ///                 .build(index)
-    ///         );
-    /// }
+    /// App::default().service(
+    ///     web::service("/health")
+    ///         .guard(guard::Get())
+    ///         .guard(guard::Header("x-health-check", "true"))
+    ///         .build(index)
+    /// );
     /// ```
     #[must_use]
     pub fn guard<G: Guard + 'static>(mut self, guard: G) -> Self {

@@ -67,7 +67,6 @@ impl<St: State, In: 'static> ServiceFactory<St, WebRequest<In>> for Route<St, In
 }
 
 impl<St: State, In: 'static> Route<St, In> {
-    #[must_use]
     /// Add method guard to the route.
     ///
     /// ```rust
@@ -81,31 +80,85 @@ impl<St: State, In: 'static> Route<St, In> {
     /// );
     /// # }
     /// ```
+    #[must_use]
     pub fn method(mut self, method: Method) -> Self {
         self.methods.push(method);
         self
     }
 
-    #[must_use]
-    /// Add guard to the route.
+    /// Add a match guard to this route.
+    ///
+    /// All guards registered on the route must accept the request. Guards are
+    /// evaluated after the containing resource has matched. If a guard rejects
+    /// the request, the resource tries its next route; if no route matches, the
+    /// resource's default service is used.
+    ///
+    /// Method restrictions added by [`Route::method()`] are evaluated together
+    /// with these guards.
     ///
     /// ```rust
-    /// # use ntex::web::{self, *};
-    /// # fn main() {
-    /// App::default().service(web::resource("/path").route(
-    ///     web::route()
-    ///         .guard(guard::Get())
-    ///         .guard(guard::Header("content-type", "text/plain"))
-    ///         .to(async |req: HttpRequest| { HttpResponse::Ok() }))
+    /// use ntex::web::{self, guard, App};
+    ///
+    /// App::default().service(
+    ///     web::resource("/items")
+    ///         .route(
+    ///             web::get()
+    ///                 .guard(guard::Header("accept", "application/json"))
+    ///                 .to(async || "JSON items")
+    ///         )
+    ///         .route(web::get().to(async || "Default items"))
     /// );
-    /// # }
     /// ```
+    #[must_use]
     pub fn guard<F: Guard + 'static>(mut self, f: F) -> Self {
         Rc::get_mut(&mut self.guards).unwrap().add(f);
         self
     }
 
+    /// Set the handler for this route.
+    ///
+    /// Handler arguments are populated through [`FromRequest`]. Each argument
+    /// must implement [`FromRequest`] trait and are evaluated
+    /// before the handler is called. If extraction fails, the error is
+    /// converted into a response.
+    ///
+    /// The handler's return value must implement [`Responder`](super::Responder).
+    /// Use [`Route::to_with_state()`] when the handler also needs a borrowed
+    /// application state and the current request state.
+    ///
+    /// ```rust
+    /// use std::collections::HashMap;
+    /// use ntex::web;
+    ///
+    /// #[derive(serde::Deserialize)]
+    /// struct UserPath {
+    ///     user_id: u32,
+    /// }
+    ///
+    /// async fn show_user(
+    ///     path: web::types::Path<UserPath>,
+    ///     query: web::types::Query<HashMap<String, String>>,
+    /// ) -> String {
+    ///     let format = query.get("format").map(String::as_str).unwrap_or("text");
+    ///     format!("User {} as {format}", path.user_id)
+    /// }
+    ///
+    /// web::App::default().service(
+    ///     web::resource("/users/{user_id}")
+    ///         .route(web::get().to(show_user))
+    /// );
+    /// ```
     #[must_use]
+    pub fn to<H, Args>(mut self, handler: H) -> Self
+    where
+        H: Handler<St, Args> + 'static,
+        Args: FromRequest<St> + 'static,
+        Args::Error: WebResponseError<St, St::Error>,
+    {
+        self.handler = HandlerWrapper::new(handler);
+        self
+    }
+
     /// Set a state-aware handler for this route.
     ///
     /// The handler receives a shared reference to the application state,
@@ -135,6 +188,7 @@ impl<St: State, In: 'static> Route<St, In> {
     ///     web::resource("/{name}").route(web::get().to_with_state(index))
     /// );
     /// ```
+    #[must_use]
     pub fn to_with_state<H, Args>(mut self, handler: H) -> Self
     where
         H: HandlerSt<St, In, Args> + 'static,
@@ -142,63 +196,6 @@ impl<St: State, In: 'static> Route<St, In> {
         Args::Error: WebResponseError<St, St::Error>,
     {
         self.handler = HandlerStWrapper::new(handler);
-        self
-    }
-
-    #[must_use]
-    /// Set handler function, use request extractors for parameters.
-    ///
-    /// ```rust
-    /// use ntex::web;
-    ///
-    /// #[derive(serde::Deserialize)]
-    /// struct Info {
-    ///     username: String,
-    /// }
-    ///
-    /// /// extract path info using serde
-    /// async fn index(info: web::types::Path<Info>) -> String {
-    ///     format!("Welcome {}!", info.username)
-    /// }
-    ///
-    /// fn main() {
-    ///     let app = web::App::default().service(
-    ///         web::resource("/{username}/index.html") // <- define path parameters
-    ///             .route(web::get().to(index))        // <- register handler
-    ///     );
-    /// }
-    /// ```
-    ///
-    /// It is possible to use multiple extractors for one handler function.
-    ///
-    /// ```rust
-    /// # use std::collections::HashMap;
-    /// use ntex::web;
-    ///
-    /// #[derive(serde::Deserialize)]
-    /// struct Info {
-    ///     username: String,
-    /// }
-    ///
-    /// /// extract path info using serde
-    /// async fn index(path: web::types::Path<Info>, query: web::types::Query<HashMap<String, String>>, body: web::types::Json<Info>) -> String {
-    ///     format!("Welcome {}!", path.username)
-    /// }
-    ///
-    /// fn main() {
-    ///     let app = web::App::default().service(
-    ///         web::resource("/{username}/index.html") // <- define path parameters
-    ///             .route(web::get().to(index))
-    ///     );
-    /// }
-    /// ```
-    pub fn to<H, Args>(mut self, handler: H) -> Self
-    where
-        H: Handler<St, Args> + 'static,
-        Args: FromRequest<St> + 'static,
-        Args::Error: WebResponseError<St, St::Error>,
-    {
-        self.handler = HandlerWrapper::new(handler);
         self
     }
 }

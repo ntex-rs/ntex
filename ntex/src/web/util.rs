@@ -242,17 +242,25 @@ pub fn method<St: State, U: 'static>(method: Method) -> Route<St, U> {
     Route::default().method(method)
 }
 
-/// Create a new route and add handler.
+/// Create an unguarded route with a handler.
+///
+/// The handler receives values produced by request extractors and returns a
+/// type implementing [`Responder`](super::Responder). If extraction fails, the
+/// error is converted into a response and the handler is not called.
+///
+/// The returned route has no method or custom guards, so it matches every
+/// request considered by its resource. Add guards before the handler with
+/// helpers such as [`get()`] or with [`Route::guard()`].
 ///
 /// ```rust
 /// use ntex::web;
 ///
-/// async fn index() -> web::HttpResponse {
-///    web::HttpResponse::Ok().build()
+/// async fn show_user(id: web::types::Path<u32>) -> String {
+///     format!("User {}", id.into_inner())
 /// }
 ///
 /// web::App::default().service(
-///     web::resource("/").route(web::to(index))
+///     web::resource("/users/{id}").route(web::to(show_user))
 /// );
 /// ```
 pub fn to<St, In, F, Args>(handler: F) -> Route<St, In>

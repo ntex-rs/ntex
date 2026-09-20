@@ -103,25 +103,23 @@ where
             InitError = Failure,
         >,
 {
-    /// Add match guard to a scope.
+    /// Add a match guard to this scope.
+    ///
+    /// The scope is selected only when its path prefix and all registered
+    /// guards match. If a guard rejects the request, the application router can
+    /// try another matching scope or resource; otherwise the application's
+    /// default service is used.
+    ///
+    /// The guard applies to every resource nested in the scope.
     ///
     /// ```rust
-    /// use ntex::web::{self, guard, App, HttpRequest, HttpResponse};
+    /// use ntex::web::{self, guard, App};
     ///
-    /// async fn index(data: web::types::Path<(String, String)>) -> &'static str {
-    ///     "Welcome!"
-    /// }
-    ///
-    /// fn main() {
-    ///     let app = App::default().service(
-    ///         web::scope("/app")
-    ///             .guard(guard::Header("content-type", "text/plain"))
-    ///             .route("/test1", web::get().to(index))
-    ///             .route("/test2", web::post().to(async |r: HttpRequest| {
-    ///                 HttpResponse::MethodNotAllowed()
-    ///             }))
-    ///     );
-    /// }
+    /// App::default().service(
+    ///     web::scope("/api")
+    ///         .guard(guard::Header("x-api-version", "2"))
+    ///         .route("/users", web::get().to(async || "Version 2 users"))
+    /// );
     /// ```
     #[must_use]
     pub fn guard<G: Guard + 'static>(mut self, guard: G) -> Self {
@@ -228,26 +226,31 @@ where
         }
     }
 
-    /// Configure route for a specific path.
+    /// Register a route for a path relative to this scope.
     ///
-    /// This is a simplified version of the `Scope::service()` method.
-    /// This method can be called multiple times, in that case
-    /// multiple resources with one route would be registered for same resource path.
+    /// This is shorthand for creating a [`Resource`] with one route and
+    /// registering it with [`Scope::service()`]. The route's method and custom
+    /// guards are promoted to resource guards.
+    ///
+    /// If those guards reject a request, the generated resource does not match
+    /// and the scope router continues searching. If nothing else in the scope
+    /// matches, the scope default service is used. Register an explicit
+    /// [`Resource`] when route mismatches should use a resource-level fallback.
+    ///
+    /// Each call creates a separate resource, so the same relative path can be
+    /// registered more than once with different guards.
     ///
     /// ```rust
     /// use ntex::web::{self, App, HttpResponse};
     ///
-    /// async fn index(data: web::types::Path<(String, String)>) -> &'static str {
-    ///     "Welcome!"
-    /// }
-    ///
-    /// fn main() {
-    ///     let app = App::default().service(
-    ///         web::scope("/app")
-    ///             .route("/test1", web::get().to(index))
-    ///             .route("/test2", web::post().to(async || { HttpResponse::MethodNotAllowed() }))
-    ///     );
-    /// }
+    /// App::default().service(
+    ///     web::scope("/api")
+    ///         .route("/items", web::get().to(async || "list"))
+    ///         .route(
+    ///             "/items",
+    ///             web::post().to(async || HttpResponse::Created()),
+    ///         )
+    /// );
     /// ```
     #[must_use]
     pub fn route(self, path: &str, mut route: Route<St, Out>) -> ScopeServices<St, In, Out, M, F> {
@@ -258,9 +261,28 @@ where
         )
     }
 
-    /// Default service to be used if no matching route could be found.
+    /// Set the fallback service for unmatched requests within this scope.
     ///
-    /// If default resource is not registered, app's default resource is being used.
+    /// The fallback is called after the scope prefix and guards match but no
+    /// nested resource matches. Without a custom fallback, the scope returns
+    /// `404 Not Found`; it does not delegate to the application's fallback.
+    /// Routing failures inside a matched resource are handled by that
+    /// resource's fallback instead.
+    ///
+    /// ```rust
+    /// use ntex::web::{self, App, HttpRequest, HttpResponse};
+    ///
+    /// async fn not_found(req: HttpRequest) -> HttpResponse {
+    ///     HttpResponse::NotFound()
+    ///         .body(format!("No API resource for {}", req.path()))
+    /// }
+    ///
+    /// App::default().service(
+    ///     web::scope("/api")
+    ///         .route("/health", web::get().to(async || "ready"))
+    ///         .default_service(web::to(not_found))
+    /// );
+    /// ```
     #[must_use]
     pub fn default_service<Sf>(
         self,
@@ -402,26 +424,26 @@ where
         self
     }
 
-    /// Configure route for a specific path.
+    /// Register a route for a path relative to this scope.
     ///
-    /// This is a simplified version of the `Scope::service()` method.
-    /// This method can be called multiple times, in that case
-    /// multiple resources with one route would be registered for same resource path.
+    /// This is shorthand for creating a [`Resource`] with one route and
+    /// registering it with [`ScopeServices::service()`]. The route's method and
+    /// custom guards are promoted to resource guards.
+    ///
+    /// Each call creates a separate resource, so the same relative path can be
+    /// registered more than once with different guards.
     ///
     /// ```rust
     /// use ntex::web::{self, App, HttpResponse};
     ///
-    /// async fn index(data: web::types::Path<(String, String)>) -> &'static str {
-    ///     "Welcome!"
-    /// }
-    ///
-    /// fn main() {
-    ///     let app = App::default().service(
-    ///         web::scope("/app")
-    ///             .route("/test1", web::get().to(index))
-    ///             .route("/test2", web::post().to(async || { HttpResponse::MethodNotAllowed() }))
-    ///     );
-    /// }
+    /// App::default().service(
+    ///     web::scope("/api")
+    ///         .route("/items", web::get().to(async || "list"))
+    ///         .route(
+    ///             "/items",
+    ///             web::post().to(async || HttpResponse::Created()),
+    ///         )
+    /// );
     /// ```
     #[must_use]
     pub fn route(self, path: &str, mut route: Route<St, Out>) -> Self {
@@ -432,9 +454,28 @@ where
         )
     }
 
-    /// Default service to be used if no matching route could be found.
+    /// Set the fallback service for unmatched requests within this scope.
     ///
-    /// If default resource is not registered, app's default resource is being used.
+    /// The fallback is called after the scope prefix and guards match but no
+    /// nested resource matches. Without a custom fallback, the scope returns
+    /// `404 Not Found`; it does not delegate to the application's fallback.
+    /// Routing failures inside a matched resource are handled by that
+    /// resource's fallback instead.
+    ///
+    /// ```rust
+    /// use ntex::web::{self, App, HttpRequest, HttpResponse};
+    ///
+    /// async fn not_found(req: HttpRequest) -> HttpResponse {
+    ///     HttpResponse::NotFound()
+    ///         .body(format!("No API resource for {}", req.path()))
+    /// }
+    ///
+    /// App::default().service(
+    ///     web::scope("/api")
+    ///         .route("/health", web::get().to(async || "ready"))
+    ///         .default_service(web::to(not_found))
+    /// );
+    /// ```
     #[must_use]
     pub fn default_service<Sf>(
         mut self,
