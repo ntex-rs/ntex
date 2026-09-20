@@ -9,45 +9,46 @@ use crate::io::{Filter, Io, IoBoxed, IoRef};
 /// Return [`Control::ack`] to accept the default action, or use the methods on
 /// the individual message type to reject or take ownership of the operation.
 pub enum Control<F, Err> {
-    /// New connection
+    /// A transport connection has been accepted.
     Connect(Connection<F>),
-    /// New request is loaded
+    /// A complete request head has been decoded.
     Request(NewRequest),
-    /// Handle `Connection: UPGRADE`
+    /// A request asks to upgrade the HTTP/1 connection.
     Upgrade(Upgrade<F>),
-    /// Handle `EXPECT` header
+    /// A request contains `Expect: 100-continue`.
     Expect(Expect),
-    /// Connection is prepared to disconnect
+    /// The connection is preparing to stop.
     Disconnect(Reason<Err>),
 }
 
 #[derive(Debug)]
-/// Disconnect reason
+/// Reason supplied with an HTTP/1 disconnect notification.
 pub enum Reason<Err> {
-    /// Disconnect initiated by service
+    /// The HTTP service initiated the disconnect.
     Service(ServiceDisconnect),
-    /// Application level error
+    /// The application service returned an error.
     Error(Error<Err>),
-    /// Protocol level error
+    /// HTTP/1 decoding, encoding, or timeout processing failed.
     ProtocolError(ProtocolError),
-    /// Peer is gone
+    /// The peer closed the connection or an I/O error occurred.
     PeerGone(PeerGone),
-    /// Keep-alive timeout
+    /// The keep-alive timer expired.
     KeepAlive(KeepAlive),
 }
 
 /// The reason the HTTP service is disconnecting.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ServiceDisconnectReason {
-    /// Server is shutting down
+    /// The server is shutting down.
     Shutdown,
-    /// Upgrade request is handled by Upgrade service
+    /// The upgrade request was taken over by the control service.
     UpgradeHandled,
-    /// Upgrade handling failed
+    /// Upgrade handling failed.
     UpgradeFailed,
-    /// Expect control message handling failed
+    /// Expectation handling failed.
     ExpectFailed,
-    /// Service is not interested in payload, it is not possible to continue
+    /// The application dropped an unread request payload, preventing reuse of
+    /// the connection.
     PayloadDropped,
 }
 

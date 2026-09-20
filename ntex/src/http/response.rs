@@ -295,6 +295,9 @@ impl<B: MessageBody> fmt::Debug for Response<B> {
 
 #[cfg(feature = "cookie")]
 #[derive(Debug)]
+/// Iterator over valid `Set-Cookie` header values in a response.
+///
+/// Malformed header values are skipped.
 pub struct CookieIter<'a> {
     iter: header::GetAll<'a>,
 }
@@ -335,7 +338,7 @@ pub struct ResponseBuilder {
 impl ResponseBuilder {
     #[inline]
     #[must_use]
-    /// Create response builder
+    /// Creates a response builder with the supplied status.
     pub fn new(status: StatusCode) -> Self {
         ResponseBuilder {
             head: Some(Message::with_status(status)),
@@ -345,7 +348,7 @@ impl ResponseBuilder {
         }
     }
 
-    /// Set HTTP status code of this response.
+    /// Sets the response status code.
     #[inline]
     pub fn status(&mut self, status: StatusCode) -> &mut Self {
         if let Some(parts) = parts(&mut self.head, self.err) {
@@ -387,7 +390,7 @@ impl ResponseBuilder {
         self
     }
 
-    /// Set a header.
+    /// Sets a header, replacing any existing values with the same name.
     ///
     /// ```rust
     /// use ntex::http::{header, Request, Response};
@@ -420,7 +423,7 @@ impl ResponseBuilder {
         self
     }
 
-    /// Set the custom reason for the response.
+    /// Sets a custom HTTP/1 reason phrase.
     #[inline]
     pub fn reason(&mut self, reason: &'static str) -> &mut Self {
         if let Some(parts) = parts(&mut self.head, self.err) {
@@ -429,7 +432,7 @@ impl ResponseBuilder {
         self
     }
 
-    /// Set connection type to `KeepAlive`
+    /// Marks the response connection as persistent.
     #[inline]
     pub fn keep_alive(&mut self) -> &mut Self {
         if let Some(parts) = parts(&mut self.head, self.err) {
@@ -438,7 +441,7 @@ impl ResponseBuilder {
         self
     }
 
-    /// Set connection type to `Upgrade`
+    /// Marks the connection as upgraded and sets the `Upgrade` header.
     #[inline]
     pub fn upgrade<V>(&mut self, value: V) -> &mut Self
     where
@@ -451,7 +454,7 @@ impl ResponseBuilder {
         self.set_header(header::UPGRADE, value)
     }
 
-    /// Force close connection, even if it is marked as keep-alive
+    /// Forces the connection to close after this response.
     #[inline]
     pub fn force_close(&mut self) -> &mut Self {
         if let Some(parts) = parts(&mut self.head, self.err) {
@@ -469,7 +472,7 @@ impl ResponseBuilder {
         self
     }
 
-    /// Set response content type.
+    /// Sets the `Content-Type` header.
     #[inline]
     pub fn content_type<V>(&mut self, value: V) -> &mut Self
     where
@@ -487,7 +490,7 @@ impl ResponseBuilder {
         self
     }
 
-    /// Set content length.
+    /// Appends a `Content-Length` header.
     #[inline]
     pub fn content_length(&mut self, len: u64) -> &mut Self {
         self.header(header::CONTENT_LENGTH, len)
@@ -553,14 +556,22 @@ impl ResponseBuilder {
         self
     }
 
-    /// Responses extensions.
+    /// Returns the response extensions.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the builder has already produced or transferred a response.
     #[inline]
     pub fn extensions(&self) -> Ref<'_, Extensions> {
         let head = self.head.as_ref().expect("cannot reuse response builder");
         head.extensions.borrow()
     }
 
-    /// Mutable reference to a the response's extensions.
+    /// Returns mutable access to the response extensions.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the builder has already produced or transferred a response.
     #[inline]
     pub fn extensions_mut(&self) -> RefMut<'_, Extensions> {
         let head = self.head.as_ref().expect("cannot reuse response builder");
@@ -568,16 +579,20 @@ impl ResponseBuilder {
     }
 
     #[inline]
-    /// Set a body and generate `Response`.
+    /// Sets a body and creates the response.
     ///
-    /// `ResponseBuilder` can not be used after this call.
+    /// # Panics
+    ///
+    /// Panics if the builder has already produced or transferred a response.
     pub fn body<B: Into<Body>>(&mut self, body: B) -> Response {
         self.message_body(body.into())
     }
 
-    /// Set a body and generate `Response`.
+    /// Sets a typed body and creates the response.
     ///
-    /// `ResponseBuilder` can not be used after this call.
+    /// # Panics
+    ///
+    /// Panics if the builder has already produced or transferred a response.
     pub fn message_body<B>(&mut self, body: B) -> Response<B> {
         if let Some(e) = self.err.take() {
             return Response::from(e).into_body();
@@ -606,9 +621,11 @@ impl ResponseBuilder {
 
     #[inline]
     #[must_use]
-    /// Set a streaming body and generate `Response`.
+    /// Sets a streaming body and creates the response.
     ///
-    /// `ResponseBuilder` can not be used after this call.
+    /// # Panics
+    ///
+    /// Panics if the builder has already produced or transferred a response.
     pub fn streaming<S, E>(&mut self, stream: S) -> Response
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin + 'static,
@@ -618,9 +635,16 @@ impl ResponseBuilder {
     }
 
     #[must_use]
-    /// Set a json body and generate `Response`.
+    /// Serializes `value` as JSON and creates the response.
     ///
-    /// `ResponseBuilder` can not be used after this call.
+    /// Sets `Content-Type: application/json` unless a content type is already
+    /// present. If serialization fails, the serialization error is converted
+    /// into an HTTP error response.
+    ///
+    /// # Panics
+    ///
+    /// Panics if serialization succeeds after the builder has already
+    /// produced or transferred a response.
     pub fn json<T: Serialize>(&mut self, value: &T) -> Response {
         match serde_json::to_string(value) {
             Ok(body) => {
@@ -641,15 +665,19 @@ impl ResponseBuilder {
 
     #[inline]
     #[must_use]
-    /// Set an empty body and generate `Response`.
+    /// Creates the response with an empty body.
     ///
-    /// `ResponseBuilder` can not be used after this call.
+    /// # Panics
+    ///
+    /// Panics if the builder has already produced or transferred a response.
     pub fn build(&mut self) -> Response {
         self.body(Body::Empty)
     }
 
     #[must_use]
-    /// This method construct new `ResponseBuilder`
+    /// Transfers the builder state into a new builder.
+    ///
+    /// The current builder is left consumed and cannot produce a response.
     pub fn take(&mut self) -> ResponseBuilder {
         ResponseBuilder {
             head: self.head.take(),

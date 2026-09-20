@@ -1,4 +1,8 @@
-//! HTTP/1 implementation
+//! HTTP/1 protocol services, codecs, payload decoding, and lifecycle control.
+//!
+//! [`H1Service`] runs an HTTP/1-only server service. [`Codec`] provides
+//! low-level request decoding and response encoding, while [`control`] exposes
+//! connection, request, expectation, upgrade, and disconnect events.
 use std::rc::Rc;
 
 mod codec;
@@ -38,7 +42,11 @@ impl<T> From<T> for Message<T> {
     }
 }
 
-/// The payload framing detected for an incoming message.
+/// Payload state reported by the HTTP client codec.
+///
+/// Unlike [`PayloadType`], which contains the decoder for an incoming HTTP/1
+/// payload, this enum only reports whether the client codec has no payload, a
+/// framed payload, or an unframed stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageType {
     /// The message has no payload.
@@ -50,25 +58,25 @@ pub enum MessageType {
 }
 
 #[derive(thiserror::Error, Clone, Debug)]
-/// A set of errors that can occur during dispatching http requests
+/// Errors that can occur while dispatching HTTP/1 requests.
 pub enum ProtocolError {
-    /// Http request parse error.
+    /// HTTP request parsing failed.
     #[error("Parse error: {0}")]
     Decode(#[from] super::error::DecodeError),
 
-    /// Http response encoding error.
+    /// HTTP response encoding failed.
     #[error("Encode error: {0}")]
     Encode(#[from] super::error::EncodeError),
 
-    /// Request did not complete within the specified timeout
+    /// The request head did not complete within the configured timeout.
     #[error("Request did not complete within the specified timeout")]
     SlowRequestTimeout,
 
-    /// Payload did not complete within the specified timeout
+    /// The request payload did not complete within the configured timeout.
     #[error("Payload did not complete within the specified timeout")]
     SlowPayloadTimeout,
 
-    /// Response body processing error
+    /// The response body stream returned an error.
     #[error("Response body processing error: {0}")]
     ResponsePayload(Rc<dyn std::error::Error>),
 }

@@ -4,7 +4,8 @@ use crate::{Ctx, Service, ServiceFactory, io::Filter};
 use super::control::{Control, ControlAck};
 
 #[derive(Debug, Default)]
-/// Default control service
+/// Control service that acknowledges every HTTP/1 lifecycle event using its
+/// default action.
 pub struct DefaultControlService;
 
 impl<St, F, Err> Service<St, Control<F, Err>> for DefaultControlService

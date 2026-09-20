@@ -7,6 +7,11 @@ use super::error::{DispatchError, H2Error, ResponseError};
 use super::{Request, Response, config::DispatcherConfig, h1, h2};
 
 /// An HTTP/1.1 and HTTP/2 transport service.
+///
+/// The protocol is selected from
+/// [`HttpProtocol`](crate::http::HttpProtocol) metadata attached to the I/O
+/// stream, normally by a TLS ALPN acceptor. Connections without HTTP/2
+/// metadata are handled as HTTP/1.
 #[derive(derive_more::Debug)]
 #[debug("HttpService")]
 pub struct HttpService<F, Req: RequestState<Io<F>>, Err> {
@@ -74,6 +79,10 @@ where
 {
     #[must_use]
     /// Provides the HTTP/1 control service.
+    ///
+    /// The service receives the lifecycle events described by
+    /// [`h1::Control`]. A default service that acknowledges each event is used
+    /// unless this method is called.
     pub fn h1_control<Ctl>(
         self,
         ctl: impl IntoServiceFactory<Ctl, Req::State, h1::Control<F, Err>>,
@@ -97,6 +106,9 @@ where
 
     #[must_use]
     /// Provides the HTTP/2 control service.
+    ///
+    /// A default service that acknowledges each HTTP/2 control event is used
+    /// unless this method is called.
     pub fn h2_control<Ctl>(
         self,
         ctl: impl IntoServiceFactory<Ctl, Req::State, h2::Control<Error<H2Error>>>,

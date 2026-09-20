@@ -26,7 +26,7 @@ struct Inner<T> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-/// The payload framing detected for an incoming HTTP/1 message.
+/// The payload framing and decoder selected for an incoming HTTP/1 message.
 pub enum PayloadType {
     /// The message has no payload.
     None,
@@ -591,10 +591,11 @@ pub enum PayloadItem {
     Eof,
 }
 
-/// Decoders to handle different Transfer-Encodings.
+/// Incremental decoder for an HTTP/1 message body.
 ///
-/// If a message body does not include a Transfer-Encoding, it *should*
-/// include a Content-Length header.
+/// The decoder handles fixed `Content-Length`, chunked transfer coding, and
+/// bodies delimited by connection EOF. It implements [`Decoder`] and retains
+/// framing state between calls.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PayloadDecoder {
     kind: Cell<Kind>,

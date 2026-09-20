@@ -21,7 +21,10 @@ bitflags! {
     }
 }
 
-/// HTTP/1 Codec
+/// Stateful HTTP/1 request decoder and response encoder.
+///
+/// The codec tracks the version, connection behavior, request method, and
+/// streaming state of the most recently decoded request.
 pub struct Codec {
     con_id: usize,
     decoder: decoder::MessageDecoder<Request>,
@@ -62,7 +65,7 @@ impl fmt::Debug for Codec {
 }
 
 impl Codec {
-    /// Create HTTP/1 codec.
+    /// Creates an HTTP/1 codec.
     ///
     /// `con_id` identifies the connection in decoded request heads. Protocol
     /// limits and keep-alive behavior are read from `cfg`.
@@ -90,13 +93,13 @@ impl Codec {
     }
 
     #[inline]
-    /// Check if request is upgrade
+    /// Returns whether the current request upgrades the connection.
     pub fn upgrade(&self) -> bool {
         self.ctype.get() == ConnectionType::Upgrade
     }
 
     #[inline]
-    /// Check if last response is keep-alive
+    /// Returns whether the current connection remains persistent.
     pub fn keepalive(&self) -> bool {
         self.ctype.get() == ConnectionType::KeepAlive
     }
