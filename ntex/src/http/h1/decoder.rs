@@ -26,10 +26,13 @@ struct Inner<T> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-/// Incoming request type
+/// The payload framing detected for an incoming HTTP/1 message.
 pub enum PayloadType {
+    /// The message has no payload.
     None,
+    /// The message has a framed HTTP payload.
     Payload(PayloadDecoder),
+    /// The connection switches to an unframed stream.
     Stream(PayloadDecoder),
 }
 
@@ -580,9 +583,11 @@ pub(crate) struct HeadersBuf {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-/// Http payload item
+/// A decoded HTTP/1 payload item.
 pub enum PayloadItem {
+    /// A payload data chunk.
     Chunk(Bytes),
+    /// The end of the payload.
     Eof,
 }
 

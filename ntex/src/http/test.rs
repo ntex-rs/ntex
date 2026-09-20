@@ -67,6 +67,7 @@ impl Default for TestRequest {
 }
 
 impl TestRequest {
+    /// Creates a test request builder with a `GET /` request.
     pub fn builder() -> TestRequest {
         TestRequest(Some(Inner {
             method: Method::GET,
@@ -329,6 +330,8 @@ pub struct TestServer {
 }
 
 impl TestServer {
+    /// Creates a test-server controller from a running server and its client
+    /// connection settings.
     pub fn create(
         id: Uuid,
         system: System,
@@ -365,7 +368,10 @@ impl TestServer {
     }
 
     #[must_use]
-    /// Set client timeout
+    /// Sets the TLS handshake and TCP connection timeouts used by the client.
+    ///
+    /// `timeout` controls the TLS handshake timeout, while `connect_timeout`
+    /// controls how long the client waits to establish a connection.
     pub fn set_client_timeout(mut self, timeout: Seconds, connect_timeout: Millis) -> Self {
         self.cfg = SharedCfg::new("TEST-CLIENT")
             .add(IoConfig::new().set_connect_timeout(connect_timeout))

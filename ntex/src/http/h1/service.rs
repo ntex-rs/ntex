@@ -9,7 +9,7 @@ use super::control::{Control, ControlAck, ControlResult};
 use super::default::DefaultControlService;
 use super::dispatcher::Dispatcher;
 
-/// `ServiceFactory` implementation for HTTP1 transport
+/// An HTTP/1 transport service.
 #[derive(derive_more::Debug)]
 #[debug("H1Service")]
 pub struct H1Service<F, Req: RequestState<Io<F>>, Err> {
@@ -52,7 +52,7 @@ where
     Err: ResponseError + 'static,
 {
     #[must_use]
-    /// Provide http/1 control service.
+    /// Provides the HTTP/1 control service.
     pub fn control<I, Sf>(self, ctl: I) -> Self
     where
         I: IntoServiceFactory<Sf, Req::State, Control<F, Err>>,

@@ -39,7 +39,7 @@ impl From<Option<usize>> for KeepAlive {
 }
 
 #[derive(Debug)]
-/// Http service configuration
+/// HTTP service configuration.
 pub struct HttpServiceConfig {
     pub(super) keep_alive: Seconds,
     pub(super) ka_enabled: bool,
@@ -72,7 +72,7 @@ impl Configuration for HttpServiceConfig {
 
 impl HttpServiceConfig {
     #[must_use]
-    /// Create instance of `HttpServiceConfig`.
+    /// Creates an HTTP service configuration with default settings.
     pub fn new() -> HttpServiceConfig {
         Self::_new(KeepAlive::Timeout(Seconds(5)), Seconds::ONE)
     }
@@ -102,7 +102,7 @@ impl HttpServiceConfig {
     }
 
     #[must_use]
-    /// Set the maximum number of headers.
+    /// Sets the maximum number of headers in a message.
     ///
     /// When a request is received, the parser will reserve a buffer
     /// to store headers for optimal performance.
@@ -117,7 +117,7 @@ impl HttpServiceConfig {
     }
 
     #[must_use]
-    /// Set the maximum buffer size for parsing http message.
+    /// Sets the maximum buffer size used while parsing an HTTP message.
     ///
     /// Default is 64kb
     pub fn set_max_buf_size(mut self, val: usize) -> Self {
@@ -126,7 +126,7 @@ impl HttpServiceConfig {
     }
 
     #[must_use]
-    /// Set server keep-alive setting.
+    /// Sets the server keep-alive behavior.
     ///
     /// By default keep alive is set to a 5 seconds.
     pub fn set_keepalive<W: Into<KeepAlive>>(mut self, val: W) -> Self {
@@ -143,7 +143,7 @@ impl HttpServiceConfig {
     }
 
     #[must_use]
-    /// Set keep-alive timeout in seconds.
+    /// Sets the keep-alive timeout.
     ///
     /// To disable timeout set value to 0.
     ///
@@ -155,7 +155,7 @@ impl HttpServiceConfig {
     }
 
     #[must_use]
-    /// Set request headers read timeout.
+    /// Sets the initial timeout for reading request headers.
     ///
     /// Defines a timeout for reading client request header. If a client does not transmit
     /// the entire set headers within this time, the request is terminated with
@@ -180,7 +180,7 @@ impl HttpServiceConfig {
     }
 
     #[must_use]
-    /// Enable storing the headers in vector.
+    /// Preserves headers in their original order and casing.
     ///
     /// By default, headers are not stored in vector.
     pub fn set_enable_headers_vec(mut self) -> Self {
@@ -189,7 +189,7 @@ impl HttpServiceConfig {
     }
 
     #[must_use]
-    /// Set read rate parameters for request headers.
+    /// Sets read-rate limits for request headers.
     ///
     /// Set read timeout, max timeout and rate for reading request headers. If the client
     /// sends `rate` amount of data within `timeout` period of time, extend timeout by `timeout` seconds.
@@ -216,7 +216,7 @@ impl HttpServiceConfig {
     }
 
     #[must_use]
-    /// Set read rate parameters for request's payload.
+    /// Sets read-rate limits for request payloads.
     ///
     /// Set read timeout, max timeout and rate for reading payload. If the client
     /// sends `rate` amount of data within `timeout` period of time, extend timeout by `timeout` seconds.
@@ -332,6 +332,7 @@ const DATE_VALUE_DEFAULT: [u8; DATE_VALUE_LENGTH_HDR] =
     *b"date: 00000000000000000000000000000\r\n\r\n";
 
 #[derive(Debug, Copy, Clone)]
+/// Generates a cached HTTP `Date` header value.
 pub struct DateService;
 
 thread_local! {

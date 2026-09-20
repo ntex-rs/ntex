@@ -326,6 +326,7 @@ impl ResponseHead {
     }
 
     #[inline]
+    /// Returns the response's connection behavior.
     pub fn connection_type(&self) -> ConnectionType {
         if self.flags.contains(Flags::CLOSE) {
             ConnectionType::Close

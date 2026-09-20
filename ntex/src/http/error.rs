@@ -64,6 +64,7 @@ pub enum EncodeError {
     #[error("Unsupported HTTP version specified, {0:?}")]
     UnsupportedVersion(super::Version),
 
+    /// The encoded stream ended before the message was complete.
     #[error("Unexpected end of bytes stream")]
     UnexpectedEof,
 

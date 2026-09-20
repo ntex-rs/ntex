@@ -8,6 +8,7 @@ mod dispatcher;
 pub(crate) mod encoder;
 mod service;
 
+/// Connection lifecycle messages and acknowledgements.
 pub mod control;
 
 pub use self::codec::Codec;
