@@ -921,6 +921,11 @@ mod tests {
             &(),
         );
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let resp = WebResponseError::<_, DefaultError>::error_response(
+            &HandshakeError::BadWebsocketProtocol,
+            &(),
+        );
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[test]

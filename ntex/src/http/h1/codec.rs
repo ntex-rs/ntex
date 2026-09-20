@@ -64,7 +64,8 @@ impl fmt::Debug for Codec {
 impl Codec {
     /// Create HTTP/1 codec.
     ///
-    /// `keepalive_enabled` how response `connection` header get generated.
+    /// `con_id` identifies the connection in decoded request heads. Protocol
+    /// limits and keep-alive behavior are read from `cfg`.
     pub fn new(con_id: usize, cfg: Cfg<HttpServiceConfig>) -> Self {
         let flags = if cfg.ka_enabled {
             Flags::KEEPALIVE_ENABLED

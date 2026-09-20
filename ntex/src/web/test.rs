@@ -770,7 +770,7 @@ where
             .add(
                 WsClientConfig::new()
                     .set_address(addr)
-                    .set_timeout(Seconds(60)),
+                    .set_handshake_timeout(Seconds(60)),
             )
             .build()
     });
@@ -1036,7 +1036,6 @@ impl TestServer {
                     .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
 
                 WsClient::new(self.url(path), &self.cfg)
-                    .unwrap()
                     .openssl(builder.build())
                     .connect()
                     .await
@@ -1048,7 +1047,6 @@ impl TestServer {
             }
         } else {
             WsClient::new(self.url(path), &self.cfg)
-                .unwrap()
                 .connect()
                 .await
                 .map(WsConnection::seal)

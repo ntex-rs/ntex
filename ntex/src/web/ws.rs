@@ -5,7 +5,7 @@ pub use crate::ws::{CloseCode, CloseReason, Frame, Message, WsSink};
 
 use crate::http::{body::BodySize, h1, header};
 use crate::io::{DispatchItem, IoConfig, Reason};
-use crate::service::{Ctx, IntoService, Pipeline, Service};
+use crate::service::{Ctx, IntoService, Pipeline, Service, apply_fn};
 use crate::web::HttpRequest;
 use crate::ws::{self, error::HandshakeError, error::WsError, handshake};
 use crate::{SharedCfg, rt, time::Seconds};
@@ -49,7 +49,8 @@ pub fn subprotocols(req: &HttpRequest) -> impl Iterator<Item = &str> {
 /// including the chosen subprotocol in the response.
 ///
 /// If `subprotocol` is `Some`, the `Sec-Websocket-Protocol` header will be included
-/// in the response with the chosen protocol. If `None`, the header is omitted.
+/// in the response with the chosen protocol. The protocol must be a valid HTTP
+/// token offered by the client. If `None`, the header is omitted.
 ///
 /// # Example
 ///
@@ -89,7 +90,8 @@ where
 /// including the chosen subprotocol in the response.
 ///
 /// If `subprotocol` is `Some`, the `Sec-Websocket-Protocol` header will be included
-/// in the response with the chosen protocol. If `None`, the header is omitted.
+/// in the response with the chosen protocol. The protocol must be a valid HTTP
+/// token offered by the client. If `None`, the header is omitted.
 pub async fn start_with<S, Err>(
     req: &HttpRequest,
     subprotocol: Option<&str>,
@@ -106,6 +108,9 @@ where
     // ws handshake
     let mut res = handshake(req.head())?;
     if let Some(protocol) = subprotocol {
+        if !ws::is_token(protocol) || !subprotocols(req).any(|offered| offered == protocol) {
+            return Err(HandshakeError::BadWebsocketProtocol.into());
+        }
         res.set_header(header::SEC_WEBSOCKET_PROTOCOL, protocol);
     }
     let res = res.build().into_parts().0;
@@ -124,7 +129,7 @@ where
 
     // create sink
     let codec = ws::Codec::new();
-    let sink = WsSink::new(io.get_ref(), codec.clone());
+    let sink = WsSink::new(io.get_ref(), codec.clone(), io.shared().get());
 
     // create ws service
     io.set_config(CFG.with(Clone::clone));
@@ -134,7 +139,15 @@ where
     io.stop_timer();
 
     // start websockets service dispatcher
-    let result = crate::io::Dispatcher::new(io, codec, Pipeline::new(sink, f.into_service())).await;
+    let timeout_sink = sink.clone();
+    let service = apply_fn(f.into_service(), async move |req, svc| {
+        let result = svc.call(req).await;
+        if matches!(&result, Ok(Some(Message::Close(_)))) {
+            timeout_sink.start_close_timeout();
+        }
+        result
+    });
+    let result = crate::io::Dispatcher::new(io, codec, Pipeline::new(sink, service)).await;
     log::trace!("Ws handler is terminated: {result:?}");
 
     result

@@ -67,6 +67,7 @@ impl Default for TestRequest {
 }
 
 impl TestRequest {
+    /// Creates a test request builder with a `GET /` request.
     pub fn builder() -> TestRequest {
         TestRequest(Some(Inner {
             method: Method::GET,
@@ -329,6 +330,8 @@ pub struct TestServer {
 }
 
 impl TestServer {
+    /// Creates a test-server controller from a running server and its client
+    /// connection settings.
     pub fn create(
         id: Uuid,
         system: System,
@@ -348,7 +351,7 @@ impl TestServer {
             .add(
                 WsClientConfig::new()
                     .set_address(addr)
-                    .set_timeout(Seconds(30)),
+                    .set_handshake_timeout(Seconds(30)),
             )
             .build();
 
@@ -365,7 +368,10 @@ impl TestServer {
     }
 
     #[must_use]
-    /// Set client timeout
+    /// Sets the TLS handshake and TCP connection timeouts used by the client.
+    ///
+    /// `timeout` controls the TLS handshake timeout, while `connect_timeout`
+    /// controls how long the client waits to establish a connection.
     pub fn set_client_timeout(mut self, timeout: Seconds, connect_timeout: Millis) -> Self {
         self.cfg = SharedCfg::new("TEST-CLIENT")
             .add(IoConfig::new().set_connect_timeout(connect_timeout))
@@ -378,7 +384,7 @@ impl TestServer {
             .add(
                 WsClientConfig::new()
                     .set_address(self.addr)
-                    .set_timeout(Seconds(30)),
+                    .set_handshake_timeout(Seconds(30)),
             )
             .build();
         self.client = Self::create_client(self.cfg.clone());
@@ -404,7 +410,7 @@ impl TestServer {
         }
     }
 
-    /// Construct test server url
+    /// Returns the test server's socket address.
     pub fn addr(&self) -> net::SocketAddr {
         self.addr
     }
@@ -459,10 +465,7 @@ impl TestServer {
         &self,
         path: &str,
     ) -> Result<WsConnection<impl Filter>, Error<WsClientError>> {
-        WsClient::new(self.url(path), &self.cfg)
-            .unwrap()
-            .connect()
-            .await
+        WsClient::new(self.url(path), &self.cfg).connect().await
     }
 
     #[cfg(all(feature = "openssl", feature = "ws"))]
@@ -494,7 +497,6 @@ impl TestServer {
             .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
 
         WsClient::new(self.url(path), &self.cfg)
-            .unwrap()
             .openssl(builder.build())
             .connect()
             .await

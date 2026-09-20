@@ -6,7 +6,7 @@ use crate::{Ctx, Service, ServiceFactory};
 use super::error::{DispatchError, H2Error, ResponseError};
 use super::{Request, Response, config::DispatcherConfig, h1, h2};
 
-/// HTTP1.1/HTTP2 transport implementation
+/// An HTTP/1.1 and HTTP/2 transport service.
 #[derive(derive_more::Debug)]
 #[debug("HttpService")]
 pub struct HttpService<F, Req: RequestState<Io<F>>, Err> {
@@ -24,7 +24,7 @@ where
     Err: ResponseError + 'static,
 {
     #[must_use]
-    /// Create new `HttpService` instance.
+    /// Creates a service that supports HTTP/1.1 and HTTP/2.
     pub fn new<H>(sf: impl IntoServiceFactory<H, Req::State, Request>) -> Self
     where
         H: ServiceFactory<Req::State, Request, Error = Err> + 'static,
@@ -44,7 +44,7 @@ where
     }
 
     #[must_use]
-    /// Create *http service* for HTTP/1 protocol.
+    /// Creates an HTTP/1-only service.
     pub fn h1<H>(sf: impl IntoServiceFactory<H, Req::State, Request>) -> h1::H1Service<F, Req, Err>
     where
         H: ServiceFactory<Req::State, Request, Error = Err> + 'static,
@@ -55,7 +55,7 @@ where
     }
 
     #[must_use]
-    /// Create *http service* for HTTP/2 protocol.
+    /// Creates an HTTP/2-only service.
     pub fn h2<H>(sf: impl IntoServiceFactory<H, Req::State, Request>) -> h2::H2Service<F, Req, Err>
     where
         H: ServiceFactory<Req::State, Request, Error = Err> + 'static,
@@ -73,7 +73,7 @@ where
     Err: ResponseError + 'static,
 {
     #[must_use]
-    /// Provide http/1 control service.
+    /// Provides the HTTP/1 control service.
     pub fn h1_control<Ctl>(
         self,
         ctl: impl IntoServiceFactory<Ctl, Req::State, h1::Control<F, Err>>,
@@ -96,7 +96,7 @@ where
     }
 
     #[must_use]
-    /// Provide http/1 control service.
+    /// Provides the HTTP/2 control service.
     pub fn h2_control<Ctl>(
         self,
         ctl: impl IntoServiceFactory<Ctl, Req::State, h2::Control<Error<H2Error>>>,

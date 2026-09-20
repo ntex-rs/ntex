@@ -5,53 +5,59 @@ use crate::util::{BytePage, BytePages, ByteString, Bytes, BytesMut};
 
 use super::error::ProtocolError;
 use super::frame::Parser;
-use super::proto::{CloseReason, OpCode};
+use super::proto::{CloseCode, CloseReason, OpCode};
 
-/// WebSocket message
+/// An outgoing WebSocket message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
-    /// Text message
+    /// UTF-8 text message.
     Text(ByteString),
-    /// Binary message
+    /// Binary message.
     Binary(Bytes),
-    /// Continuation
+    /// Fragment of a text or binary message.
     Continuation(Item),
-    /// Ping message
+    /// Ping control message.
     Ping(Bytes),
-    /// Pong message
+    /// Pong control message.
     Pong(Bytes),
-    /// Close message with optional reason
+    /// Close control message with an optional reason.
     Close(Option<CloseReason>),
 }
 
-/// WebSocket frame
+/// A decoded WebSocket frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Frame {
-    /// Text frame, codec does not verify utf8 encoding
+    /// Text frame.
+    ///
+    /// The codec does not validate that the payload is UTF-8.
     Text(Bytes),
-    /// Binary frame
+    /// Binary frame.
     Binary(Bytes),
-    /// Continuation
+    /// Fragmented text or binary frame.
     Continuation(Item),
-    /// Ping message
+    /// Ping control frame.
     Ping(Bytes),
-    /// Pong message
+    /// Pong control frame.
     Pong(Bytes),
-    /// Close message with optional reason
+    /// Close control frame with an optional reason.
     Close(Option<CloseReason>),
 }
 
-/// WebSocket continuation item
+/// A fragment in a WebSocket continuation sequence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
+    /// First fragment of a text message.
     FirstText(Bytes),
+    /// First fragment of a binary message.
     FirstBinary(Bytes),
+    /// Intermediate fragment.
     Continue(Bytes),
+    /// Final fragment.
     Last(Bytes),
 }
 
 #[derive(Debug, Clone)]
-/// `WebSockets` protocol codec
+/// Encoder and decoder for WebSocket frames.
 pub struct Codec {
     flags: Cell<Flags>,
     max_size: usize,
@@ -68,7 +74,7 @@ bitflags::bitflags! {
 }
 
 impl Codec {
-    /// Create new websocket frames decoder
+    /// Creates a codec in server mode with a 64 KiB frame-size limit.
     #[must_use]
     pub fn new() -> Codec {
         Codec {
@@ -77,25 +83,26 @@ impl Codec {
         }
     }
 
-    /// Set max frame size
+    /// Sets the maximum accepted frame payload size.
     ///
-    /// By default max size is set to 64kb
+    /// The default is 64 KiB.
     #[must_use]
     pub fn max_size(mut self, size: usize) -> Self {
         self.max_size = size;
         self
     }
 
-    /// Set decoder to client mode.
+    /// Configures the codec for client-side masking rules.
     ///
-    /// By default decoder works in server mode.
+    /// Client mode masks encoded frames and rejects masked incoming frames.
+    /// By default, the codec uses server-side masking rules.
     #[must_use]
-    pub fn client_mode(self) -> Self {
+    pub fn set_client_mode(self) -> Self {
         self.remove_flags(Flags::SERVER);
         self
     }
 
-    /// Check if codec encoded `Close` message
+    /// Returns `true` after this codec has encoded a close message.
     pub fn is_closed(&self) -> bool {
         self.flags.get().contains(Flags::CLOSED)
     }
@@ -112,15 +119,25 @@ impl Codec {
         self.flags.set(flags);
     }
 
-    /// Encode binary message
-    pub fn encode_page(&self, page: BytePage, dst: &mut BytePages) {
+    /// Encodes `page` as a final binary frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::Closed`] if a close message has already been
+    /// encoded.
+    pub fn encode_page(&self, page: BytePage, dst: &mut BytePages) -> Result<(), ProtocolError> {
+        if self.is_closed() {
+            return Err(ProtocolError::Closed);
+        }
         Parser::write_message(
             dst,
             page,
             OpCode::Binary,
             true,
             !self.flags.get().contains(Flags::SERVER),
-        );
+        )
+        .expect("binary frames are always valid");
+        Ok(())
     }
 }
 
@@ -135,38 +152,52 @@ impl Encoder for Codec {
     type Error = ProtocolError;
 
     fn encodev(&self, item: Message, dst: &mut BytePages) -> Result<(), Self::Error> {
+        if self.is_closed() {
+            return Err(ProtocolError::Closed);
+        }
+
         match item {
-            Message::Text(txt) => Parser::write_message(
-                dst,
-                txt,
-                OpCode::Text,
-                true,
-                !self.flags.get().contains(Flags::SERVER),
-            ),
-            Message::Binary(bin) => Parser::write_message(
-                dst,
-                bin,
-                OpCode::Binary,
-                true,
-                !self.flags.get().contains(Flags::SERVER),
-            ),
+            Message::Text(txt) => {
+                if self.flags.get().contains(Flags::W_CONTINUATION) {
+                    return Err(ProtocolError::ContinuationStarted);
+                }
+                Parser::write_message(
+                    dst,
+                    txt,
+                    OpCode::Text,
+                    true,
+                    !self.flags.get().contains(Flags::SERVER),
+                )?;
+            }
+            Message::Binary(bin) => {
+                if self.flags.get().contains(Flags::W_CONTINUATION) {
+                    return Err(ProtocolError::ContinuationStarted);
+                }
+                Parser::write_message(
+                    dst,
+                    bin,
+                    OpCode::Binary,
+                    true,
+                    !self.flags.get().contains(Flags::SERVER),
+                )?;
+            }
             Message::Ping(txt) => Parser::write_message(
                 dst,
                 txt,
                 OpCode::Ping,
                 true,
                 !self.flags.get().contains(Flags::SERVER),
-            ),
+            )?,
             Message::Pong(txt) => Parser::write_message(
                 dst,
                 txt,
                 OpCode::Pong,
                 true,
                 !self.flags.get().contains(Flags::SERVER),
-            ),
+            )?,
             Message::Close(reason) => {
+                Parser::write_close(dst, reason, !self.flags.get().contains(Flags::SERVER))?;
                 self.insert_flags(Flags::CLOSED);
-                Parser::write_close(dst, reason, !self.flags.get().contains(Flags::SERVER));
             }
             Message::Continuation(cont) => match cont {
                 Item::FirstText(data) => {
@@ -180,7 +211,7 @@ impl Encoder for Codec {
                         OpCode::Text,
                         false,
                         !self.flags.get().contains(Flags::SERVER),
-                    );
+                    )?;
                 }
                 Item::FirstBinary(data) => {
                     if self.flags.get().contains(Flags::W_CONTINUATION) {
@@ -193,7 +224,7 @@ impl Encoder for Codec {
                         OpCode::Binary,
                         false,
                         !self.flags.get().contains(Flags::SERVER),
-                    );
+                    )?;
                 }
                 Item::Continue(data) => {
                     if self.flags.get().contains(Flags::W_CONTINUATION) {
@@ -203,7 +234,7 @@ impl Encoder for Codec {
                             OpCode::Continue,
                             false,
                             !self.flags.get().contains(Flags::SERVER),
-                        );
+                        )?;
                     } else {
                         return Err(ProtocolError::ContinuationNotStarted);
                     }
@@ -217,7 +248,7 @@ impl Encoder for Codec {
                             OpCode::Continue,
                             true,
                             !self.flags.get().contains(Flags::SERVER),
-                        );
+                        )?;
                     } else {
                         return Err(ProtocolError::ContinuationNotStarted);
                     }
@@ -241,28 +272,48 @@ impl Decoder for Codec {
                         OpCode::Continue => {
                             if self.flags.get().contains(Flags::R_CONTINUATION) {
                                 self.remove_flags(Flags::R_CONTINUATION);
-                                Ok(Some(Frame::Continuation(Item::Last(
-                                    payload.unwrap_or_else(Bytes::new),
-                                ))))
+                                let payload = payload.unwrap_or_default();
+                                Ok(Some(Frame::Continuation(Item::Last(payload))))
                             } else {
                                 Err(ProtocolError::ContinuationNotStarted)
                             }
                         }
-                        OpCode::Bad => Err(ProtocolError::BadOpCode),
                         OpCode::Close => {
-                            if let Some(ref pl) = payload {
-                                let close_reason = Parser::parse_close_payload(pl);
-                                Ok(Some(Frame::Close(close_reason)))
+                            if let Some(pl) = payload {
+                                let reason = Parser::parse_close_payload(&pl)?;
+                                if !self.flags.get().contains(Flags::SERVER)
+                                    && matches!(
+                                        reason,
+                                        Some(CloseReason {
+                                            code: CloseCode::Extension,
+                                            ..
+                                        })
+                                    )
+                                {
+                                    Err(ProtocolError::InvalidCloseCode(1010))
+                                } else {
+                                    Ok(Some(Frame::Close(reason)))
+                                }
                             } else {
                                 Ok(Some(Frame::Close(None)))
                             }
                         }
-                        OpCode::Ping => Ok(Some(Frame::Ping(payload.unwrap_or_else(Bytes::new)))),
-                        OpCode::Pong => Ok(Some(Frame::Pong(payload.unwrap_or_else(Bytes::new)))),
+                        OpCode::Ping => Ok(Some(Frame::Ping(payload.unwrap_or_default()))),
+                        OpCode::Pong => Ok(Some(Frame::Pong(payload.unwrap_or_default()))),
                         OpCode::Binary => {
-                            Ok(Some(Frame::Binary(payload.unwrap_or_else(Bytes::new))))
+                            if self.flags.get().contains(Flags::R_CONTINUATION) {
+                                Err(ProtocolError::ContinuationStarted)
+                            } else {
+                                Ok(Some(Frame::Binary(payload.unwrap_or_else(Bytes::new))))
+                            }
                         }
-                        OpCode::Text => Ok(Some(Frame::Text(payload.unwrap_or_else(Bytes::new)))),
+                        OpCode::Text => {
+                            if self.flags.get().contains(Flags::R_CONTINUATION) {
+                                Err(ProtocolError::ContinuationStarted)
+                            } else {
+                                Ok(Some(Frame::Text(payload.unwrap_or_else(Bytes::new))))
+                            }
+                        }
                     }
                 } else {
                     match opcode {
@@ -297,16 +348,69 @@ impl Decoder for Codec {
                         }
                         OpCode::Ping => Ok(Some(Frame::Ping(payload.unwrap_or_else(Bytes::new)))),
                         OpCode::Pong => Ok(Some(Frame::Pong(payload.unwrap_or_else(Bytes::new)))),
-                        OpCode::Bad => Err(ProtocolError::BadOpCode),
-                        OpCode::Close => {
-                            log::error!("Unfinished fragment {opcode:?}");
-                            Err(ProtocolError::ContinuationFragment(opcode))
-                        }
+                        OpCode::Close => Err(ProtocolError::FragmentedControlFrame(opcode)),
                     }
                 }
             }
             Ok(None) => Ok(None),
             Err(e) => Err(e),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_payload_is_not_validated() {
+        let codec = Codec::new().set_client_mode();
+        let mut frame = BytesMut::from(&[0x81, 0x01, 0xff][..]);
+        assert!(matches!(
+            codec.decode(&mut frame),
+            Ok(Some(Frame::Text(data))) if data == Bytes::from_static(&[0xff])
+        ));
+    }
+
+    #[test]
+    fn rejects_server_extension_close_code() {
+        let codec = Codec::new().set_client_mode();
+        let mut close = BytesMut::from(&[0x88, 0x02, 0x03, 0xf2][..]);
+        assert!(matches!(
+            codec.decode(&mut close),
+            Err(ProtocolError::InvalidCloseCode(1010))
+        ));
+    }
+
+    #[test]
+    fn validates_outgoing_continuations() {
+        let codec = Codec::new();
+        let mut dst = BytePages::default();
+        codec
+            .encodev(
+                Message::Continuation(Item::FirstBinary(Bytes::new())),
+                &mut dst,
+            )
+            .unwrap();
+        assert!(matches!(
+            codec.encodev(Message::Text("text".into()), &mut dst),
+            Err(ProtocolError::ContinuationStarted)
+        ));
+    }
+
+    #[test]
+    fn rejects_messages_after_close() {
+        let codec = Codec::new();
+        let mut dst = BytePages::default();
+        codec.encodev(Message::Close(None), &mut dst).unwrap();
+
+        assert!(matches!(
+            codec.encodev(Message::Text("text".into()), &mut dst),
+            Err(ProtocolError::Closed)
+        ));
+        assert!(matches!(
+            codec.encode_page(BytePage::from(Bytes::new()), &mut dst),
+            Err(ProtocolError::Closed)
+        ));
     }
 }

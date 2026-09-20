@@ -2,7 +2,9 @@ use std::{fmt, time};
 
 use crate::http::body::Body;
 use crate::http::{Payload, ResponseHead, Version};
-use crate::io::{IoBoxed, types::HttpProtocol};
+use crate::io::IoBoxed;
+#[cfg(test)]
+use crate::io::types::HttpProtocol;
 use crate::{error::Error, time::Millis};
 
 use super::{ClientRawRequest, error::ClientError, h1proto, h2proto, pool::Acquired};
@@ -30,9 +32,7 @@ impl fmt::Debug for ConnectionType {
     }
 }
 
-#[doc(hidden)]
-/// HTTP client connection
-pub struct Connection {
+pub(crate) struct Connection {
     io: Option<ConnectionType>,
     created: time::Instant,
     pool: Option<Acquired>,
@@ -76,7 +76,8 @@ impl Connection {
         (self.io.unwrap(), self.created, self.pool)
     }
 
-    pub fn protocol(&self) -> HttpProtocol {
+    #[cfg(test)]
+    pub(super) fn protocol(&self) -> HttpProtocol {
         match self.io {
             Some(ConnectionType::H1(_)) => HttpProtocol::Http1,
             Some(ConnectionType::H2(_)) => HttpProtocol::Http2,

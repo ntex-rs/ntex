@@ -1,4 +1,4 @@
-//! Websockets client
+//! WebSocket client.
 use std::{fmt, marker};
 
 #[cfg(feature = "openssl")]
@@ -17,23 +17,29 @@ use nanorand::{Rng, WyRand};
 use crate::client::{ClientCodec, ClientConfig, ClientRawRequest, ClientResponse};
 use crate::connect::{Connect, ConnectError, Connector};
 use crate::error::{Error, ErrorMapping};
-use crate::http::header::{self, HeaderValue};
+use crate::http::header::{self, HeaderMap, HeaderValue};
 use crate::http::{ConnectionType, Message, Method, RequestHead, StatusCode, Uri};
 use crate::http::{body::BodySize, error::HttpError};
 use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, Layer, Reason, Sealed};
 use crate::service::{IntoService, Pipeline, apply_fn, fn_service};
 use crate::{Cfg, Service, SharedCfg, channel::mpsc, rt, time::timeout, ws};
 
+use super::cfg::is_token;
 use super::error::{WsClientError, WsConfigError, WsError};
+use super::handshake::header_contains_token;
 use super::{WsClientConfig, transport::WsTransport};
 
 thread_local! {
     static CFG: SharedCfg = SharedCfg::new("WS-CLIENT").into();
 }
 
-/// `WebSocket` client builder
+/// Builder for establishing a WebSocket client connection.
+///
+/// The builder contains the target URI and a typed [`WsClientConfig`]. Use
+/// [`connect`](Self::connect) to perform the opening handshake.
 pub struct WsClient<F> {
     uri: Uri,
+    err: Option<WsConfigError>,
     cfg: Cfg<WsClientConfig>,
     http_cfg: Cfg<ClientConfig>,
     connector: Pipeline<Connect<Uri>, Io<F>, Error<ConnectError>>,
@@ -41,43 +47,70 @@ pub struct WsClient<F> {
 }
 
 impl WsClient<Base> {
-    /// Set server uri
-    pub fn new<U>(uri: U, cfg: impl Into<Cfg<WsClientConfig>>) -> Result<Self, WsConfigError>
+    /// Creates a client for `uri` using the supplied configuration.
+    ///
+    /// ```rust
+    /// use ntex::{SharedCfg, time::Seconds};
+    /// use ntex::ws::{WsClient, WsClientConfig};
+    ///
+    /// #[ntex::main]
+    /// async fn main() {
+    ///     let cfg = SharedCfg::new("WS-CLIENT").add(
+    ///         WsClientConfig::new()
+    ///             .set_max_frame_size(128 * 1024)
+    ///             .set_handshake_timeout(Seconds(10))
+    ///     );
+    ///
+    ///     let _client = WsClient::new("ws://localhost/socket", cfg);
+    /// }
+    /// ```
+    ///
+    /// URI conversion and validation errors are stored and returned by
+    /// [`connect`](Self::connect).
+    pub fn new<U>(uri: U, cfg: impl Into<Cfg<WsClientConfig>>) -> Self
     where
         Uri: TryFrom<U>,
         HttpError: From<<Uri as TryFrom<U>>::Error>,
     {
-        let uri = Uri::try_from(uri).map_err(HttpError::from)?;
-
-        // validate uri
-        if uri.host().is_none() {
-            return Err(WsConfigError::MissingHost);
-        } else if uri.scheme().is_none() {
-            return Err(WsConfigError::MissingScheme);
-        } else if let Some(scheme) = uri.scheme() {
-            match scheme.as_str() {
-                "http" | "ws" | "https" | "wss" => (),
-                _ => return Err(WsConfigError::UnknownScheme),
+        let (uri, err) = match Uri::try_from(uri) {
+            Ok(uri) => {
+                let err = if uri.host().is_none() {
+                    Some(WsConfigError::MissingHost)
+                } else if uri.scheme().is_none() {
+                    Some(WsConfigError::MissingScheme)
+                } else if let Some(scheme) = uri.scheme() {
+                    if matches!(scheme.as_str(), "http" | "ws" | "https" | "wss") {
+                        None
+                    } else {
+                        Some(WsConfigError::UnknownScheme)
+                    }
+                } else {
+                    Some(WsConfigError::UnknownScheme)
+                };
+                (uri, err)
             }
-        } else {
-            return Err(WsConfigError::UnknownScheme);
-        }
+            Err(err) => (
+                Uri::default(),
+                Some(WsConfigError::Http(HttpError::from(err))),
+            ),
+        };
 
         let cfg = cfg.into();
         let shared = cfg.shared();
 
-        Ok(WsClient {
+        WsClient {
             uri,
+            err,
             cfg,
             http_cfg: shared.get(),
             connector: Pipeline::new(shared, Connector::<Uri>::new()),
             filter: marker::PhantomData,
-        })
+        }
     }
 }
 
 impl<F> WsClient<F> {
-    /// Create new websocket client
+    /// Replaces the network connector used to establish the connection.
     pub fn connector<U, S>(self, f: impl IntoService<S, SharedCfg, Connect<Uri>>) -> WsClient<U>
     where
         U: Filter + 'static,
@@ -86,6 +119,7 @@ impl<F> WsClient<F> {
         let shared = self.cfg.shared();
         WsClient {
             uri: self.uri,
+            err: self.err,
             cfg: self.cfg,
             http_cfg: self.http_cfg,
             connector: Pipeline::new(shared, f.into_service()),
@@ -94,13 +128,13 @@ impl<F> WsClient<F> {
     }
 
     #[cfg(feature = "openssl")]
-    /// Use openssl connector.
+    /// Uses the supplied OpenSSL connector for secure connections.
     pub fn openssl(self, config: SslConnector) -> WsClient<Layer<openssl::SslFilter>> {
         self.connector(openssl::SslConnector::new(config))
     }
 
     #[cfg(feature = "rustls")]
-    /// Use rustls connector.
+    /// Uses the supplied rustls connector for secure connections.
     pub fn rustls(
         self,
         config: std::sync::Arc<RustlsClientConfig>,
@@ -113,8 +147,17 @@ impl<F> WsClient<F>
 where
     F: Filter,
 {
-    /// Complete request construction and connect to a websockets server.
+    /// Establishes the connection and performs the WebSocket opening handshake.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if connection establishment, HTTP encoding or decoding,
+    /// URI validation, timeout handling, or handshake validation fails.
     pub async fn connect(&self) -> Result<WsConnection<F>, Error<WsClientError>> {
+        if let Some(err) = self.err.clone() {
+            return Err(Error::from(WsClientError::Config(err)).set_service(self.cfg.service()));
+        }
+
         let mut head = Message::<RequestHead>::new();
         // the message pool may return a recycled head whose method is not GET
         // (e.g. previously used by the HTTP/1 server dispatcher for a POST request)
@@ -131,7 +174,7 @@ where
 
         // host header
         if !head.headers.contains_key(header::HOST) {
-            let val = HeaderValue::from_str(self.uri.host().unwrap()).unwrap();
+            let val = HeaderValue::from_str(self.uri.authority().unwrap().as_str()).unwrap();
             head.headers.insert(header::HOST, val);
         }
 
@@ -220,30 +263,14 @@ where
         }
 
         // Check for "UPGRADE" to websocket header
-        let has_hdr = if let Some(hdr) = response.headers.get(&header::UPGRADE) {
-            if let Ok(s) = hdr.to_str() {
-                s.to_ascii_lowercase().contains("websocket")
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-        if !has_hdr {
+        if !header_contains_token(&response.headers, &header::UPGRADE, "websocket") {
             log::trace!("{tag}: Invalid upgrade header");
             return Err(Error::from(WsClientError::InvalidUpgradeHeader));
         }
 
         // Check for "CONNECTION" header
         if let Some(conn) = response.headers.get(&header::CONNECTION) {
-            if let Ok(s) = conn.to_str() {
-                if !s.to_ascii_lowercase().contains("upgrade") {
-                    log::trace!("{tag}: Invalid connection header: {s}");
-                    return Err(Error::from(WsClientError::InvalidConnectionHeader(
-                        conn.clone(),
-                    )));
-                }
-            } else {
+            if !header_contains_token(&response.headers, &header::CONNECTION, "upgrade") {
                 log::trace!("{tag}: Invalid connection header: {conn:?}");
                 return Err(Error::from(WsClientError::InvalidConnectionHeader(
                     conn.clone(),
@@ -274,6 +301,8 @@ where
             log::trace!("{tag}: Missing SEC-WEBSOCKET-ACCEPT header");
             return Err(Error::from(WsClientError::MissingWebSocketAcceptHeader));
         }
+
+        validate_negotiation(&response.headers, &self.cfg.headers).map_err(Error::from)?;
         log::trace!("{tag}: Ws handshake response verification is completed");
 
         // response and ws io
@@ -283,10 +312,39 @@ where
             if self.cfg.server_mode {
                 ws::Codec::new().max_size(self.cfg.max_size)
             } else {
-                ws::Codec::new().max_size(self.cfg.max_size).client_mode()
+                ws::Codec::new()
+                    .max_size(self.cfg.max_size)
+                    .set_client_mode()
             },
         ))
     }
+}
+
+fn validate_negotiation(response: &HeaderMap, offered: &HeaderMap) -> Result<(), WsClientError> {
+    if let Some(extensions) = response.get(header::SEC_WEBSOCKET_EXTENSIONS) {
+        return Err(WsClientError::UnexpectedWebSocketExtensions(
+            extensions.clone(),
+        ));
+    }
+
+    let mut protocols = response.get_all(header::SEC_WEBSOCKET_PROTOCOL);
+    if let Some(protocol) = protocols.next() {
+        let selected = protocol.to_str().ok();
+        let valid = protocols.next().is_none()
+            && selected.is_some_and(|selected| {
+                is_token(selected)
+                    && offered
+                        .get(header::SEC_WEBSOCKET_PROTOCOL)
+                        .and_then(|offered| offered.to_str().ok())
+                        .is_some_and(|offered| {
+                            offered.split(',').any(|item| item.trim() == selected)
+                        })
+            });
+        if !valid {
+            return Err(WsClientError::InvalidWebSocketProtocol(protocol.clone()));
+        }
+    }
+    Ok(())
 }
 
 impl<F> fmt::Debug for WsClient<F> {
@@ -295,6 +353,10 @@ impl<F> fmt::Debug for WsClient<F> {
     }
 }
 
+/// An established WebSocket client connection.
+///
+/// This value retains the opening-handshake response, the WebSocket codec, and
+/// the underlying I/O stream.
 pub struct WsConnection<F> {
     io: Io<F>,
     codec: ws::Codec,
@@ -306,33 +368,39 @@ impl<F> WsConnection<F> {
         Self { io, codec, res }
     }
 
-    /// Get codec reference
+    /// Returns the connection's WebSocket codec.
     pub fn codec(&self) -> &ws::Codec {
         &self.codec
     }
 
-    /// Get reference to response
+    /// Returns the opening-handshake response.
     pub fn response(&self) -> &ClientResponse {
         &self.res
     }
 }
 
 impl<F> WsConnection<F> {
-    /// Get ws sink
+    /// Creates a sink for sending messages over this connection.
     pub fn sink(&self) -> ws::WsSink {
-        ws::WsSink::new(self.io.get_ref(), self.codec.clone())
+        ws::WsSink::new(
+            self.io.get_ref(),
+            self.codec.clone(),
+            self.io.shared().get(),
+        )
     }
 
-    /// Consumes the `WsConnection`, returning it'as underlying I/O stream object
-    /// and response.
+    /// Consumes the connection and returns its I/O stream, codec, and
+    /// opening-handshake response.
     pub fn into_inner(self) -> (Io<F>, ws::Codec, ClientResponse) {
         (self.io, self.codec, self.res)
     }
 }
 
 impl WsConnection<Sealed> {
-    // TODO: fix close frame handling
-    /// Start client websockets with `SinkService` and `mpsc::Receiver<Frame>`
+    /// Starts the WebSocket dispatcher and returns a channel of received frames.
+    ///
+    /// The dispatcher runs in a spawned task. Protocol and connection errors
+    /// are delivered through the returned channel.
     pub fn receiver(self) -> mpsc::Receiver<Result<ws::Frame, WsError<()>>> {
         let (tx, rx): (_, mpsc::Receiver<Result<ws::Frame, WsError<()>>>) = mpsc::channel();
 
@@ -358,7 +426,10 @@ impl WsConnection<Sealed> {
         rx
     }
 
-    /// Start client websockets service.
+    /// Runs the WebSocket dispatcher with `svc` handling received frames.
+    ///
+    /// The service may return a message to send to the peer or [`None`] when no
+    /// response is required.
     pub async fn start<T>(
         self,
         svc: impl IntoService<T, (), ws::Frame>,
@@ -366,10 +437,23 @@ impl WsConnection<Sealed> {
     where
         T: Service<(), ws::Frame, Res = Option<ws::Message>> + 'static,
     {
+        let io = self.io.get_ref();
+        let sink = self.sink();
         let service = apply_fn(
             svc.into_service().map_err(WsError::Service),
             async move |req, svc| match req {
-                DispatchItem::<ws::Codec>::Item(item) => svc.call(item).await,
+                DispatchItem::<ws::Codec>::Item(item) => {
+                    let close = matches!(item, ws::Frame::Close(_));
+                    let result = svc.call(item).await;
+                    if matches!(&result, Ok(Some(ws::Message::Close(_)))) {
+                        sink.start_close_timeout();
+                    }
+                    if close {
+                        let io = io.clone();
+                        rt::spawn(async move { io.close() });
+                    }
+                    result
+                }
                 DispatchItem::Control(_) => Ok(None),
                 DispatchItem::Stop(Reason::KeepAliveTimeout) => Err(WsError::KeepAlive),
                 DispatchItem::Stop(Reason::ReadTimeout) => Err(WsError::ReadTimeout),
@@ -385,7 +469,7 @@ impl WsConnection<Sealed> {
 }
 
 impl<F: Filter> WsConnection<F> {
-    /// Convert I/O stream to boxed stream
+    /// Erases the concrete I/O filter type.
     pub fn seal(self) -> WsConnection<Sealed> {
         WsConnection {
             io: self.io.seal(),
@@ -394,7 +478,7 @@ impl<F: Filter> WsConnection<F> {
         }
     }
 
-    /// Convert to ws stream to plain io stream
+    /// Converts the connection into a binary WebSocket transport.
     pub fn into_transport(self) -> Io<Layer<WsTransport, F>> {
         WsTransport::create(self.io, self.codec)
     }
@@ -436,20 +520,133 @@ mod tests {
         );
     }
 
+    #[test]
+    fn protocols() {
+        let cfg = WsClientConfig::new()
+            .set_protocols(["chat", "superchat"])
+            .unwrap();
+        assert_eq!(
+            cfg.headers
+                .get(header::SEC_WEBSOCKET_PROTOCOL)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "chat,superchat"
+        );
+
+        let cfg = cfg.set_protocols([] as [&str; 0]).unwrap();
+        assert!(!cfg.headers.contains_key(header::SEC_WEBSOCKET_PROTOCOL));
+        assert!(WsClientConfig::new().set_protocols(["bad\n"]).is_err());
+        assert!(
+            WsClientConfig::new()
+                .set_protocols(["bad protocol"])
+                .is_err()
+        );
+        assert!(
+            WsClientConfig::new()
+                .set_protocols(["first,second"])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn negotiation() {
+        let configured = WsClientConfig::new()
+            .set_protocols(["chat", "superchat"])
+            .unwrap();
+        let mut response = HeaderMap::new();
+
+        response.insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static("chat"),
+        );
+        validate_negotiation(&response, &configured.headers).unwrap();
+
+        let mut offered_headers = HeaderMap::new();
+        offered_headers.insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static("chat, superchat"),
+        );
+        response.insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static("superchat"),
+        );
+        validate_negotiation(&response, &offered_headers).unwrap();
+
+        response.insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static("other"),
+        );
+        assert!(matches!(
+            validate_negotiation(&response, &configured.headers),
+            Err(WsClientError::InvalidWebSocketProtocol(_))
+        ));
+
+        response.insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static("chat,superchat"),
+        );
+        assert!(matches!(
+            validate_negotiation(&response, &configured.headers),
+            Err(WsClientError::InvalidWebSocketProtocol(_))
+        ));
+
+        response.remove(header::SEC_WEBSOCKET_PROTOCOL);
+        response.append(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static("chat"),
+        );
+        response.append(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static("superchat"),
+        );
+        assert!(matches!(
+            validate_negotiation(&response, &configured.headers),
+            Err(WsClientError::InvalidWebSocketProtocol(_))
+        ));
+
+        response.remove(header::SEC_WEBSOCKET_PROTOCOL);
+        response.insert(
+            header::SEC_WEBSOCKET_EXTENSIONS,
+            HeaderValue::from_static("permessage-deflate"),
+        );
+        assert!(matches!(
+            validate_negotiation(&response, &configured.headers),
+            Err(WsClientError::UnexpectedWebSocketExtensions(_))
+        ));
+    }
+
     #[crate::rt_test]
     async fn basic_errs() {
         let err = WsClient::new("localhost", SharedCfg::default())
+            .connect()
+            .await
             .err()
             .unwrap();
-        assert!(matches!(err, WsConfigError::MissingScheme));
+        assert!(matches!(
+            err.into_error(),
+            WsClientError::Config(WsConfigError::MissingScheme)
+        ));
 
         let err = WsClient::new("unknown://localhost", SharedCfg::default())
+            .connect()
+            .await
             .err()
             .unwrap();
-        assert!(matches!(err, WsConfigError::UnknownScheme));
+        assert!(matches!(
+            err.into_error(),
+            WsClientError::Config(WsConfigError::UnknownScheme)
+        ));
 
-        let err = WsClient::new("/", SharedCfg::default()).err().unwrap();
-        assert!(matches!(err, WsConfigError::MissingHost));
+        let err = WsClient::new("/", SharedCfg::default())
+            .connect()
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(
+            err.into_error(),
+            WsClientError::Config(WsConfigError::MissingHost)
+        ));
     }
 
     #[crate::rt_test]
@@ -515,6 +712,7 @@ mod tests {
             .set_max_frame_size(100)
             .set_server_mode()
             .set_protocols(["v1", "v2"])
+            .unwrap()
             .set_header_if_unset(header::CONTENT_TYPE, "json")
             .unwrap()
             .set_header_if_unset(header::CONTENT_TYPE, "text")
@@ -524,9 +722,17 @@ mod tests {
         assert!(cfg.server_mode);
         assert_eq!(cfg.max_size, 100);
 
-        assert!(WsClient::new("/", SharedCfg::default()).is_err());
-        assert!(WsClient::new("http:///test", SharedCfg::default()).is_err());
-        assert!(WsClient::new("hmm://test.com/", SharedCfg::default()).is_err());
+        assert!(WsClient::new("/", SharedCfg::default()).err.is_some());
+        assert!(
+            WsClient::new("http:///test", SharedCfg::default())
+                .err
+                .is_some()
+        );
+        assert!(
+            WsClient::new("hmm://test.com/", SharedCfg::default())
+                .err
+                .is_some()
+        );
     }
 
     #[crate::rt_test]

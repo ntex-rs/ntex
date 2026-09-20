@@ -242,6 +242,9 @@ impl<St> WebResponseError<St, DefaultError> for HandshakeError {
             HandshakeError::BadWebsocketKey => {
                 HttpResponse::BadRequest().reason("Handshake error").build()
             }
+            HandshakeError::BadWebsocketProtocol => HttpResponse::BadRequest()
+                .reason("Invalid websocket subprotocol")
+                .build(),
         }
     }
 }

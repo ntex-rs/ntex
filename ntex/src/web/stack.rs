@@ -27,7 +27,6 @@ where
     St: State,
     Inner: Middleware<S, St>,
     Outer: Middleware<Inner::Service, St>,
-    // Outer::Service: Service<St, WebRequest<In>, Res = WebResponse>,
 {
     type Service = WebMiddleware<Outer::Service, St>;
 

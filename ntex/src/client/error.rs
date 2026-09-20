@@ -1,4 +1,4 @@
-//! Http client errors
+//! HTTP client errors.
 use std::{error::Error as StdError, io, ops::Deref, rc::Rc};
 
 use serde_json::error::Error as JsonError;
@@ -10,17 +10,17 @@ use crate::error::ErrorDiagnostic;
 use crate::http::error::{DecodeError, EncodeError, HttpError, PayloadError};
 use crate::util::{Either, clone_io_error};
 
-/// A set of errors that can occur during parsing json payloads
+/// Errors that can occur while deserializing a JSON response payload.
 #[derive(thiserror::Error, Debug)]
 pub enum JsonPayloadError {
-    /// Content type error
+    /// The response content type is not JSON.
     #[error("Content type error")]
     ContentType,
-    /// Deserialize error
+    /// The response body could not be deserialized.
     #[error("Json deserialize error")]
     Deserialize(#[source] Option<JsonError>),
-    /// Payload error
-    #[error("Error that occur during reading payload")]
+    /// The response payload could not be read.
+    #[error("Error occurred while reading payload")]
     Payload(
         #[from]
         #[source]
@@ -62,6 +62,7 @@ impl ErrorDiagnostic for JsonPayloadError {
 
 #[derive(thiserror::Error, Clone, Debug)]
 #[error("{0}")]
+/// Error returned while reading a client response payload.
 pub struct ClientPayloadError(
     #[from]
     #[source]
@@ -82,32 +83,24 @@ impl ErrorDiagnostic for ClientPayloadError {
     }
 }
 
-/// A set of errors that can occur while building HTTP client
-#[derive(thiserror::Error, Copy, Clone, Debug)]
-pub enum ClientBuilderError {
-    /// Connector failed
-    #[error("Cannot construct connector")]
-    ConnectorFailed,
-}
-
-/// A set of errors that can occur while connecting to an HTTP host
+/// Errors that can occur while connecting to an HTTP host.
 #[derive(thiserror::Error, Debug)]
 pub enum ConnectError {
-    /// SSL feature is not enabled
+    /// TLS support is not enabled.
     #[error("SSL is not supported")]
     SslIsNotSupported,
 
-    /// SSL error
+    /// OpenSSL configuration or protocol error.
     #[cfg(feature = "openssl")]
     #[error("{0}")]
     SslError(#[source] Rc<SslError>),
 
-    /// SSL Handshake error
+    /// OpenSSL handshake error.
     #[cfg(feature = "openssl")]
     #[error("{0}")]
     SslHandshakeError(#[source] Rc<dyn StdError>),
 
-    /// Failed to resolve the hostname
+    /// The host name could not be resolved.
     #[error("Failed resolving hostname: {0}")]
     Resolver(
         #[from]
@@ -115,19 +108,19 @@ pub enum ConnectError {
         io::Error,
     ),
 
-    /// No dns records
+    /// No DNS records were found.
     #[error("No dns records found for the input")]
     NoRecords,
 
-    /// Connecting took too long
+    /// Establishing the connection timed out.
     #[error("Timeout while establishing connection")]
     Timeout,
 
-    /// Connector has been disconnected
+    /// The connector disconnected.
     #[error("Connector has been disconnected")]
     Disconnected(#[source] Option<io::Error>),
 
-    /// Unresolved host name
+    /// The connector received an unresolved host name.
     #[error("Connector received `Connect` method with unresolved host")]
     Unresolved,
 }
@@ -199,13 +192,18 @@ impl<T: StdError + 'static> From<HandshakeError<T>> for ConnectError {
 }
 
 #[derive(Copy, Clone, Debug, thiserror::Error)]
+/// Error returned when a request URI is not valid for an HTTP client request.
 pub enum InvalidUrl {
+    /// The URI does not contain a scheme.
     #[error("Missing url scheme")]
     MissingScheme,
+    /// The URI uses a scheme other than HTTP, HTTPS, WS, or WSS.
     #[error("Unknown url scheme")]
     UnknownScheme,
+    /// The URI does not contain a host.
     #[error("Missing host name")]
     MissingHost,
+    /// The URI could not be parsed or constructed.
     #[error("Url parse error: {0}")]
     Http(
         #[from]
@@ -214,7 +212,7 @@ pub enum InvalidUrl {
     ),
 }
 
-/// A set of errors that can occur during request sending and response reading
+/// Errors that can occur while sending a request or reading its response.
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
     /// Invalid URL
@@ -330,11 +328,5 @@ impl ErrorDiagnostic for ClientError {
             ClientError::Error(_) => "ntex-client-SendBody",
             ClientError::H2(err) => err.signature(),
         }
-    }
-}
-
-impl From<ClientBuilderError> for io::Error {
-    fn from(err: ClientBuilderError) -> io::Error {
-        io::Error::other(err)
     }
 }

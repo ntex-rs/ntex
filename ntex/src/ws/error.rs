@@ -8,29 +8,30 @@ use crate::{connect::ConnectError, util::Either, util::clone_io_error};
 
 use super::OpCode;
 
-/// Websocket service errors
+/// Errors produced by a WebSocket dispatcher.
 #[derive(Debug, thiserror::Error)]
 pub enum WsError<E> {
+    /// Error returned by the frame service.
     #[error("Service error")]
     Service(#[source] E),
-    /// Keep-alive error
+    /// The keep-alive timer expired.
     #[error("Keep-alive error")]
     KeepAlive,
-    /// Frame read timeout
+    /// Reading a frame timed out.
     #[error("Frame read timeout")]
     ReadTimeout,
-    /// Ws protocol level error
+    /// WebSocket protocol error.
     #[error("Ws protocol level error")]
     Protocol(#[source] ProtocolError),
-    /// Websocket handshake errors
+    /// WebSocket opening-handshake error.
     #[error("Ws handshake error")]
     Handshake(#[from] HandshakeError),
-    /// Peer has been disconnected
+    /// The peer disconnected.
     #[error("Peer has been disconnected: {0:?}")]
     Disconnected(#[source] Option<io::Error>),
 }
 
-/// Websocket protocol errors
+/// WebSocket protocol errors.
 #[derive(Copy, Clone, Debug, thiserror::Error)]
 pub enum ProtocolError {
     /// Received an unmasked frame from client
@@ -42,12 +43,30 @@ pub enum ProtocolError {
     /// Encountered invalid opcode
     #[error("Invalid opcode: {0}")]
     InvalidOpcode(u8),
+    /// Reserved frame bits are set without a negotiated extension.
+    #[error("Reserved frame bits are set: {0:#05b}")]
+    ReservedBits(u8),
+    /// A control frame is fragmented.
+    #[error("Fragmented control frame: {0}")]
+    FragmentedControlFrame(OpCode),
     /// Invalid control frame length
     #[error("Invalid control frame length: {0}")]
     InvalidLength(usize),
-    /// Bad web socket op code
-    #[error("Bad web socket op code")]
-    BadOpCode,
+    /// A payload length does not use its shortest valid encoding.
+    #[error("Invalid payload length encoding")]
+    InvalidLengthEncoding,
+    /// Invalid close status code.
+    #[error("Invalid close status code: {0}")]
+    InvalidCloseCode(u16),
+    /// Invalid close-frame payload.
+    #[error("Invalid close-frame payload")]
+    InvalidClosePayload,
+    /// A close-frame description is not valid UTF-8.
+    #[error("Invalid UTF-8 in close-frame description")]
+    InvalidUtf8,
+    /// A message was encoded after a close message.
+    #[error("WebSocket codec is closed")]
+    Closed,
     /// A payload reached size limit.
     #[error("A payload reached size limit.")]
     Overflow,
@@ -57,20 +76,21 @@ pub enum ProtocolError {
     /// Received new continuation but it is already started
     #[error("Received new continuation but it is already started")]
     ContinuationStarted,
-    /// Unknown continuation fragment
-    #[error("Unknown continuation fragment {0}")]
-    ContinuationFragment(OpCode),
 }
 
-/// Websocket client error
+/// Errors produced while configuring a WebSocket client.
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum WsConfigError {
+    /// The URI does not contain a scheme.
     #[error("Missing url scheme")]
     MissingScheme,
+    /// The URI uses an unsupported scheme.
     #[error("Unknown url scheme")]
     UnknownScheme,
+    /// The URI does not contain a host.
     #[error("Missing host name")]
     MissingHost,
+    /// The URI could not be parsed.
     #[error("Url parse error: {0}")]
     Http(
         #[from]
@@ -79,9 +99,16 @@ pub enum WsConfigError {
     ),
 }
 
-/// Websocket client error
+/// Errors produced while establishing or using a WebSocket client connection.
 #[derive(Debug, thiserror::Error)]
 pub enum WsClientError {
+    /// Invalid client configuration.
+    #[error("Invalid client configuration: {0}")]
+    Config(
+        #[from]
+        #[source]
+        WsConfigError,
+    ),
     /// Invalid request
     #[error("Invalid request")]
     InvalidRequest(
@@ -114,6 +141,12 @@ pub enum WsClientError {
     /// Invalid challenge response
     #[error("Invalid challenge response")]
     InvalidChallengeResponse(String, HeaderValue),
+    /// The server selected an invalid or unrequested WebSocket subprotocol.
+    #[error("Invalid WebSocket subprotocol: {0:?}")]
+    InvalidWebSocketProtocol(HeaderValue),
+    /// The server returned an extension that the client did not offer.
+    #[error("Unexpected WebSocket extensions: {0:?}")]
+    UnexpectedWebSocketExtensions(HeaderValue),
     /// Protocol error
     #[error("{0}")]
     Protocol(
@@ -121,8 +154,8 @@ pub enum WsClientError {
         #[source]
         ProtocolError,
     ),
-    /// Response took too long
-    #[error("Timeout out while waiting for response")]
+    /// The opening handshake timed out.
+    #[error("Timeout while waiting for response")]
     Timeout,
     /// Failed to connect to host
     #[error("Failed to connect to host: {0}")]
@@ -157,6 +190,7 @@ impl From<Either<EncodeError, io::Error>> for WsClientError {
 impl Clone for WsClientError {
     fn clone(&self) -> Self {
         match self {
+            WsClientError::Config(err) => WsClientError::Config(err.clone()),
             WsClientError::InvalidRequest(err) => WsClientError::InvalidRequest(err.clone()),
             WsClientError::InvalidResponse(err) => WsClientError::InvalidResponse(*err),
             WsClientError::InvalidResponseStatus(err) => WsClientError::InvalidResponseStatus(*err),
@@ -170,6 +204,12 @@ impl Clone for WsClientError {
             }
             WsClientError::InvalidChallengeResponse(n, val) => {
                 WsClientError::InvalidChallengeResponse(n.clone(), val.clone())
+            }
+            WsClientError::InvalidWebSocketProtocol(val) => {
+                WsClientError::InvalidWebSocketProtocol(val.clone())
+            }
+            WsClientError::UnexpectedWebSocketExtensions(val) => {
+                WsClientError::UnexpectedWebSocketExtensions(val.clone())
             }
             WsClientError::Protocol(err) => WsClientError::Protocol(*err),
             WsClientError::Timeout => WsClientError::Timeout,
@@ -187,7 +227,7 @@ impl ErrorDiagnostic for WsClientError {
     }
 }
 
-/// Websocket handshake errors
+/// Errors produced while validating a WebSocket opening handshake.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, thiserror::Error)]
 pub enum HandshakeError {
     /// Only get method is allowed
@@ -208,6 +248,9 @@ pub enum HandshakeError {
     /// Websocket key is not set or wrong
     #[error("Unknown websocket key")]
     BadWebsocketKey,
+    /// The selected WebSocket subprotocol was not requested by the client.
+    #[error("Invalid websocket subprotocol")]
+    BadWebsocketProtocol,
 }
 
 impl ResponseError for HandshakeError {
@@ -231,6 +274,9 @@ impl ResponseError for HandshakeError {
             HandshakeError::BadWebsocketKey => {
                 Response::BadRequest().reason("Handshake error").build()
             }
+            HandshakeError::BadWebsocketProtocol => Response::BadRequest()
+                .reason("Invalid websocket subprotocol")
+                .build(),
         }
     }
 }

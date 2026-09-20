@@ -164,9 +164,8 @@ async fn test_keepalive_timeout() {
         srv.url("/"),
         ws::WsClientConfig::new()
             .set_address(srv.addr())
-            .set_timeout(Seconds(30)),
+            .set_handshake_timeout(Seconds(30)),
     )
-    .unwrap()
     .connect()
     .await
     .unwrap()
@@ -204,9 +203,8 @@ async fn test_upgrade_handler_with_await() {
         srv.url("/"),
         ws::WsClientConfig::new()
             .set_address(srv.addr())
-            .set_timeout(Seconds(1)),
+            .set_handshake_timeout(Seconds(1)),
     )
-    .unwrap()
     .connect()
     .await
     .unwrap();

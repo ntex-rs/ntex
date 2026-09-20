@@ -15,19 +15,21 @@ use crate::util::Extensions;
 #[cfg(feature = "cookie")]
 struct Cookies(Vec<Cookie<'static>>);
 
-/// Trait that implements general purpose operations on http messages
+/// Common operations for HTTP requests and responses.
 pub trait HttpMessage: Sized {
-    /// Read the message headers.
+    /// Returns the message headers.
     fn message_headers(&self) -> &HeaderMap;
 
-    /// Request's extensions container
+    /// Returns the message extensions.
     fn message_extensions(&self) -> Ref<'_, Extensions>;
 
-    /// Mutable reference to a the request's extensions container
+    /// Returns mutable access to the message extensions.
     fn message_extensions_mut(&self) -> RefMut<'_, Extensions>;
 
-    /// Read the request content type. If request does not contain
-    /// *Content-Type* header, empty str get returned.
+    /// Returns the media type from the `Content-Type` header.
+    ///
+    /// Parameters such as `charset` are omitted. Returns an empty string when
+    /// the header is missing or is not valid UTF-8.
     fn content_type(&self) -> &str {
         if let Some(content_type) = self.message_headers().get(header::CONTENT_TYPE)
             && let Ok(content_type) = content_type.to_str()
@@ -37,9 +39,9 @@ pub trait HttpMessage: Sized {
         ""
     }
 
-    /// Get content type encoding
+    /// Returns the character encoding declared by `Content-Type`.
     ///
-    /// UTF-8 is used by default, If request charset is not set.
+    /// UTF-8 is returned when the header or its `charset` parameter is absent.
     fn encoding(&self) -> Result<&'static Encoding, ContentTypeError> {
         if let Some(mime_type) = self.mime_type()? {
             if let Some(charset) = mime_type.get_param("charset") {
@@ -56,7 +58,7 @@ pub trait HttpMessage: Sized {
         }
     }
 
-    /// Convert the request content type to a known mime type.
+    /// Parses the `Content-Type` header as a MIME type.
     fn mime_type(&self) -> Result<Option<Mime>, ContentTypeError> {
         if let Some(content_type) = self.message_headers().get(header::CONTENT_TYPE) {
             if let Ok(content_type) = content_type.to_str() {
@@ -71,7 +73,7 @@ pub trait HttpMessage: Sized {
         }
     }
 
-    /// Check if request has chunked transfer encoding
+    /// Returns whether `Transfer-Encoding` contains `chunked`.
     fn chunked(&self) -> Result<bool, DecodeError> {
         if let Some(encodings) = self.message_headers().get(header::TRANSFER_ENCODING) {
             if let Ok(s) = encodings.to_str() {
@@ -85,7 +87,7 @@ pub trait HttpMessage: Sized {
     }
 
     #[cfg(feature = "cookie")]
-    /// Load request cookies.
+    /// Parses and caches cookies from the `Cookie` headers.
     fn cookies(&self) -> Result<Ref<'_, Vec<Cookie<'static>>>, coo_kie::ParseError> {
         if self.message_extensions().get::<Cookies>().is_none() {
             let mut cookies = Vec::new();
@@ -105,7 +107,7 @@ pub trait HttpMessage: Sized {
     }
 
     #[cfg(feature = "cookie")]
-    /// Return request cookie.
+    /// Returns the first request cookie with the given name.
     fn cookie(&self, name: &str) -> Option<Cookie<'static>> {
         if let Ok(cookies) = self.cookies() {
             for cookie in cookies.iter() {

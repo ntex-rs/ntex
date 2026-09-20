@@ -16,7 +16,7 @@ use crate::util::{Bytes, BytesMut, HashMap};
 
 use super::{DefaultControlService, payload::Payload, payload::PayloadSender};
 
-/// `ServiceFactory` implementation for HTTP2 transport
+/// An HTTP/2 transport service.
 #[derive(derive_more::Debug)]
 #[debug("H2Service")]
 pub struct H2Service<F, Req: RequestState<Io<F>>, Err> {
@@ -59,7 +59,7 @@ where
     Err: ResponseError + 'static,
 {
     #[must_use]
-    /// Provide http/2 control service
+    /// Provides the HTTP/2 control service.
     pub fn control<I, Sf>(self, ctl: I) -> Self
     where
         I: IntoServiceFactory<Sf, Req::State, h2::Control<Error<H2Error>>>,

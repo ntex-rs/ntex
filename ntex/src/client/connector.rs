@@ -1,8 +1,9 @@
 use crate::error::{Error, ErrorMapping, with_service};
 use crate::{Ctx, Service, SharedCfg, util::join};
 
+use super::connection::Connection;
 use super::error::{ClientError, ConnectError};
-use super::{Connect, Connection, pool::ConnectionPool};
+use super::{Connect, pool::ConnectionPool};
 
 #[derive(Debug)]
 /// Manages http client network connectivity.

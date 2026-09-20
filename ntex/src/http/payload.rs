@@ -3,16 +3,20 @@ use std::{fmt, future::poll_fn, mem, pin::Pin, task::Context, task::Poll};
 use crate::http::{error::PayloadError, h1, h2};
 use crate::util::{Bytes, Stream};
 
-/// Type represent boxed payload
+/// A boxed stream of HTTP payload chunks.
 pub type PayloadStream = Pin<Box<dyn Stream<Item = Result<Bytes, PayloadError>>>>;
 
-/// Type represent streaming payload
+/// An HTTP request payload.
 #[derive(Default)]
 pub enum Payload {
+    /// No payload is available.
     #[default]
     None,
+    /// An HTTP/1 payload stream.
     H1(h1::Payload),
+    /// An HTTP/2 payload stream.
     H2(h2::Payload),
+    /// A custom payload stream.
     Stream(PayloadStream),
 }
 

@@ -23,3 +23,5 @@ pub use self::handshake::{handshake, handshake_response, verify_handshake};
 pub use self::proto::{CloseCode, CloseReason, OpCode, hash_key};
 pub use self::sink::WsSink;
 pub use self::transport::{WsTransport, WsTransportService};
+
+pub(crate) use self::cfg::is_token;

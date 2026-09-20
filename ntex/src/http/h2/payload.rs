@@ -16,13 +16,14 @@ bitflags::bitflags! {
     }
 }
 
-/// Buffered stream of byte chunks
+/// Buffered HTTP/2 payload stream.
 ///
-/// Payload stores chunks in a vector. First chunk can be received with
-/// `.readany()` method. Payload stream is not thread safe. Payload does not
-/// notify current task when new data is available.
+/// Use [`Payload::read`] to receive the next chunk asynchronously, or consume
+/// the payload through its [`Stream`] implementation. Waiting tasks are woken
+/// when data, end-of-stream, or an error becomes available.
 ///
-/// Payload stream can be used as `Response` body stream.
+/// This type is not thread-safe and can also be used as a
+/// [`Response`](crate::http::Response) body stream.
 #[derive(Debug)]
 pub struct Payload {
     inner: Rc<Inner>,
@@ -49,11 +50,15 @@ impl Payload {
     }
 
     #[inline]
+    /// Receives the next payload chunk.
+    ///
+    /// Returns `None` after the complete payload has been received.
     pub async fn read(&self) -> Option<Result<Bytes, PayloadError>> {
         poll_fn(|cx| self.poll_read(cx)).await
     }
 
     #[inline]
+    /// Polls for the next payload chunk.
     pub fn poll_read(&self, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, PayloadError>>> {
         self.inner.readany(cx)
     }
@@ -94,24 +99,28 @@ impl Drop for PayloadSender {
 }
 
 impl PayloadSender {
+    /// Closes the payload stream with an error.
     pub fn set_error(&self, err: PayloadError) {
         if let Some(shared) = self.inner.upgrade() {
             shared.set_error(err);
         }
     }
 
+    /// Sends the final payload chunk and closes the stream.
     pub fn feed_eof(&self, data: Bytes) {
         if let Some(shared) = self.inner.upgrade() {
             shared.feed_eof(data);
         }
     }
 
+    /// Sends a payload chunk and updates the HTTP/2 flow-control capacity.
     pub fn feed_data(&self, data: Bytes, cap: h2::Capacity) {
         if let Some(shared) = self.inner.upgrade() {
             shared.feed_data(data, cap);
         }
     }
 
+    /// Associates the payload with its HTTP/2 stream.
     pub fn set_stream(&self, stream: Option<h2::Stream>) {
         if let Some(shared) = self.inner.upgrade() {
             shared.stream.set(stream);

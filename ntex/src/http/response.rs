@@ -13,20 +13,20 @@ use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::message::{ConnectionType, Message, ResponseHead};
 use crate::util::{Bytes, BytesMut, Extensions, Stream};
 
-/// An HTTP Response
+/// An HTTP response.
 pub struct Response<B = Body> {
     body: ResponseBody<B>,
     head: Message<ResponseHead>,
 }
 
 impl Response<Body> {
-    /// Create http response builder with specific status.
+    /// Creates a response builder with the given status.
     #[inline]
     pub fn builder(status: StatusCode) -> ResponseBuilder {
         ResponseBuilder::new(status)
     }
 
-    /// Create http response builder.
+    /// Creates a response builder from another compatible value.
     #[inline]
     pub fn builder_from<T: Into<ResponseBuilder>>(source: T) -> ResponseBuilder {
         source.into()
@@ -41,7 +41,7 @@ impl Response<Body> {
         }
     }
 
-    /// Constructs a response with body.
+    /// Renders a displayable value as a plain-text response body.
     #[inline]
     pub fn render_with<B: fmt::Display>(status: StatusCode, body: &B) -> Response {
         let mut resp = Response::new(status);
@@ -54,7 +54,7 @@ impl Response<Body> {
         resp.set_body(Body::from(buf))
     }
 
-    /// Convert response to response with body.
+    /// Converts the default body into a custom response body type.
     pub fn into_body<B>(self) -> Response<B> {
         let b = match self.body {
             ResponseBody::Body(b) | ResponseBody::Other(b) => b,
@@ -67,7 +67,7 @@ impl Response<Body> {
 }
 
 impl<B> Response<B> {
-    /// Constructs a response with body.
+    /// Creates a response with the given status and body.
     #[inline]
     pub fn with_body(status: StatusCode, body: B) -> Response<B> {
         Response {
@@ -77,36 +77,36 @@ impl<B> Response<B> {
     }
 
     #[inline]
-    /// Http message part of the response.
+    /// Returns the response head.
     pub fn head(&self) -> &ResponseHead {
         &self.head
     }
 
     #[inline]
-    /// Mutable reference to a http message part of the response.
+    /// Returns mutable access to the response head.
     pub fn head_mut(&mut self) -> &mut ResponseHead {
         &mut self.head
     }
 
-    /// Get the response status code.
+    /// Returns the response status code.
     #[inline]
     pub fn status(&self) -> StatusCode {
         self.head.status
     }
 
-    /// Set the `StatusCode` for this response.
+    /// Returns mutable access to the response status code.
     #[inline]
     pub fn status_mut(&mut self) -> &mut StatusCode {
         &mut self.head.status
     }
 
-    /// Get the headers from the response.
+    /// Returns the response headers.
     #[inline]
     pub fn headers(&self) -> &HeaderMap {
         &self.head.headers
     }
 
-    /// Get a mutable reference to the headers.
+    /// Returns mutable access to the response headers.
     #[inline]
     pub fn headers_mut(&mut self) -> &mut HeaderMap {
         &mut self.head.headers
@@ -175,25 +175,25 @@ impl<B> Response<B> {
         self.head.keep_alive()
     }
 
-    /// Responses extensions.
+    /// Returns the response extensions.
     #[inline]
     pub fn extensions(&self) -> Ref<'_, Extensions> {
         self.head.extensions.borrow()
     }
 
-    /// Mutable reference to a the response's extensions.
+    /// Returns mutable access to the response extensions.
     #[inline]
     pub fn extensions_mut(&self) -> RefMut<'_, Extensions> {
         self.head.extensions.borrow_mut()
     }
 
-    /// Get body of this response.
+    /// Returns the response body.
     #[inline]
     pub fn body(&self) -> &ResponseBody<B> {
         &self.body
     }
 
-    /// Set a body.
+    /// Replaces the response body with a different body type.
     pub fn set_body<B2>(self, body: B2) -> Response<B2> {
         Response {
             head: self.head,
@@ -201,7 +201,7 @@ impl<B> Response<B> {
         }
     }
 
-    /// Split response and body.
+    /// Splits the response into its metadata and body.
     pub fn into_parts(self) -> (Response<()>, ResponseBody<B>) {
         (
             Response {
@@ -212,7 +212,7 @@ impl<B> Response<B> {
         )
     }
 
-    /// Drop request's body.
+    /// Drops the response body while preserving the response head.
     pub fn drop_body(self) -> Response<()> {
         Response {
             head: self.head,
@@ -220,7 +220,7 @@ impl<B> Response<B> {
         }
     }
 
-    /// Set a body and return previous body value.
+    /// Transforms the response body and allows its metadata to be updated.
     pub fn map_body<F, B2>(mut self, f: F) -> Response<B2>
     where
         F: FnOnce(&mut ResponseHead, ResponseBody<B>) -> ResponseBody<B2>,
@@ -233,7 +233,7 @@ impl<B> Response<B> {
         }
     }
 
-    /// Extract response body.
+    /// Takes the response body, leaving an empty body behind.
     pub fn take_body(&mut self) -> ResponseBody<B> {
         self.body.take_body()
     }
@@ -251,7 +251,10 @@ impl Response<Body> {
 
 impl Response<Body> {
     #[must_use]
-    /// Extract response.
+    /// Takes the response body while preserving its metadata.
+    ///
+    /// The returned response contains the original body and a clone of the
+    /// response head. This response is left with an empty body.
     pub fn take(&mut self) -> Response {
         Response {
             head: self.head.clone(),
@@ -315,6 +318,13 @@ impl<'a> Iterator for CookieIter<'a> {
 ///
 /// This type can be used to construct an instance of `Response` through a
 /// builder-like pattern.
+///
+/// Header conversion errors are stored by the builder. A later call to
+/// [`ResponseBuilder::body`], [`ResponseBuilder::message_body`],
+/// [`ResponseBuilder::streaming`], [`ResponseBuilder::json`], or
+/// [`ResponseBuilder::build`] converts the stored error into an error response.
+/// After an error is stored, subsequent configuration does not affect the
+/// returned response.
 pub struct ResponseBuilder {
     head: Option<Message<ResponseHead>>,
     err: Option<HttpError>,

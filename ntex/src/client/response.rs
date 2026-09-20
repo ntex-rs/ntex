@@ -18,7 +18,7 @@ use crate::util::{Bytes, BytesMut, Extensions, Stream};
 use super::error::{ClientPayloadError, JsonPayloadError};
 use super::{ClientConfig, ServiceResponse};
 
-/// Client Response
+/// An HTTP client response.
 pub struct ClientResponse {
     pub(crate) head: ResponseHead,
     pub(crate) payload: Cell<Option<Payload>>,
@@ -39,7 +39,7 @@ impl HttpMessage for ClientResponse {
     }
 
     #[cfg(feature = "cookie")]
-    /// Load request cookies.
+    /// Parses cookies from the response `Set-Cookie` headers.
     fn cookies(&self) -> Result<Ref<'_, Vec<Cookie<'static>>>, CookieParseError> {
         use crate::http::header::SET_COOKIE;
 
@@ -60,7 +60,7 @@ impl HttpMessage for ClientResponse {
 }
 
 impl ClientResponse {
-    /// Create new client response instance
+    /// Creates a client response.
     #[doc(hidden)]
     pub fn new(head: ResponseHead, payload: Payload, config: Cfg<ClientConfig>) -> Self {
         ClientResponse {
@@ -85,43 +85,47 @@ impl ClientResponse {
         &mut self.head
     }
 
-    /// Read the Request Version.
+    /// Returns the response HTTP version.
     #[inline]
     pub fn version(&self) -> Version {
         self.head().version
     }
 
-    /// Get the status from the server.
+    /// Returns the response status.
     #[inline]
     pub fn status(&self) -> StatusCode {
         self.head().status
     }
 
     #[inline]
-    /// Returns a reference to the header value.
+    /// Returns the first header value associated with `name`.
     pub fn header<N: AsName>(&self, name: N) -> Option<&HeaderValue> {
         self.head().headers.get(name)
     }
 
     #[inline]
-    /// Returns response's headers.
+    /// Returns the response headers.
     pub fn headers(&self) -> &HeaderMap {
         &self.head().headers
     }
 
     #[inline]
-    /// Returns mutable response's headers.
+    /// Returns mutable access to the response headers.
     pub fn headers_mut(&mut self) -> &mut HeaderMap {
         &mut self.head_mut().headers
     }
 
-    /// Set a body and return previous body value.
+    /// Replaces the response payload.
+    ///
+    /// Any unread previous payload is dropped.
     pub fn set_payload(&self, payload: Payload) {
         self.payload.set(Some(payload));
     }
 
     #[must_use]
-    /// Get response's payload.
+    /// Takes the response payload.
+    ///
+    /// Subsequent calls return an empty payload.
     pub fn take_payload(&self) -> Payload {
         if let Some(pl) = self.payload.take() {
             pl
@@ -130,13 +134,13 @@ impl ClientResponse {
         }
     }
 
-    /// Request extensions.
+    /// Returns the response extensions.
     #[inline]
     pub fn extensions(&self) -> Ref<'_, Extensions> {
         self.head().extensions()
     }
 
-    /// Mutable reference to a the request's extensions.
+    /// Returns mutable access to the response extensions.
     #[inline]
     pub fn extensions_mut(&self) -> RefMut<'_, Extensions> {
         self.head().extensions_mut()
@@ -144,18 +148,18 @@ impl ClientResponse {
 }
 
 impl ClientResponse {
-    /// Loads http response's body.
+    /// Returns a future that buffers the response body.
     pub fn body(&self) -> MessageBody {
         MessageBody::new(self)
     }
 
-    /// Loads and parse `application/json` encoded body.
-    /// Return `JsonBody<T>` future. It resolves to a `T` value.
+    /// Returns a future that buffers and deserializes a JSON response body.
     ///
-    /// Returns error:
+    /// The future returns an error when:
     ///
-    /// * content type is not `application/json`
-    /// * content length is greater than 256k
+    /// * the content type is not JSON;
+    /// * the body exceeds the configured response payload limit; or
+    /// * reading or deserializing the body fails.
     pub fn json<T: DeserializeOwned>(&self) -> JsonBody<T> {
         JsonBody::new(self)
     }
@@ -199,7 +203,7 @@ impl fmt::Debug for ClientResponse {
 }
 
 #[derive(Debug)]
-/// Future that resolves to a complete http message body.
+/// Future that buffers a complete HTTP response body.
 pub struct MessageBody {
     length: Option<usize>,
     err: Option<Error<ClientPayloadError>>,
@@ -208,7 +212,10 @@ pub struct MessageBody {
 }
 
 impl MessageBody {
-    /// Create `MessageBody` for request.
+    /// Creates a body future for `res`.
+    ///
+    /// This takes the response payload. Creating another body future from the
+    /// same response produces an empty body.
     pub fn new(res: &ClientResponse) -> MessageBody {
         let config = res.config.clone();
 
@@ -247,9 +254,9 @@ impl MessageBody {
     }
 
     #[must_use]
-    /// Change max size of payload.
+    /// Sets the maximum buffered payload size.
     ///
-    /// By default max size is 256Kb
+    /// The default is 256 KiB. A value of zero disables the limit.
     pub fn limit(mut self, limit: usize) -> Self {
         if let Some(ref mut fut) = self.fut {
             fut.limit = limit;
@@ -258,13 +265,12 @@ impl MessageBody {
     }
 
     #[must_use]
-    /// Set operation timeout.
+    /// Sets the timeout for reading the complete payload.
     ///
-    /// By default timeout is set to 10 seconds. Set 0 millis to disable
-    /// timeout.
-    pub fn timeout(mut self, to: Millis) -> Self {
+    /// The default is 10 seconds. A zero duration disables the timeout.
+    pub fn timeout<T: Into<Millis>>(mut self, to: T) -> Self {
         if let Some(ref mut fut) = self.fut {
-            fut.timeout.reset(to);
+            fut.timeout.reset(to.into());
         }
         self
     }
@@ -304,12 +310,13 @@ impl Future for MessageBody {
 }
 
 #[derive(Debug)]
-/// Response's payload json parser, it resolves to a deserialized `T` value.
+/// Future that buffers and deserializes a JSON response body.
 ///
-/// Returns error:
+/// The future returns an error when:
 ///
-/// * content type is not `application/json`
-/// * content length is greater than 64k
+/// * the content type is not JSON;
+/// * the body exceeds the configured response payload limit; or
+/// * reading or deserializing the body fails.
 pub struct JsonBody<U> {
     length: Option<usize>,
     err: Option<Error<JsonPayloadError>>,
@@ -323,7 +330,10 @@ where
     U: DeserializeOwned,
 {
     #[must_use]
-    /// Create `JsonBody` for request.
+    /// Creates a JSON body future for `res`.
+    ///
+    /// This takes the response payload. Creating another body future from the
+    /// same response produces an empty body.
     pub fn new(res: &ClientResponse) -> Self {
         let config = res.config.clone();
 
@@ -368,9 +378,9 @@ where
     }
 
     #[must_use]
-    /// Change max size of payload.
+    /// Sets the maximum buffered payload size.
     ///
-    /// By default max size is 64Kb.
+    /// The default is 256 KiB. A value of zero disables the limit.
     pub fn limit(mut self, limit: usize) -> Self {
         if let Some(ref mut fut) = self.fut {
             fut.limit = limit;
@@ -379,13 +389,12 @@ where
     }
 
     #[must_use]
-    /// Set operation timeout.
+    /// Sets the timeout for reading the complete payload.
     ///
-    /// By default timeout is set to 10 seconds. Set 0 millis to disable
-    /// timeout.
-    pub fn timeout(mut self, to: Millis) -> Self {
+    /// The default is 10 seconds. A zero duration disables the timeout.
+    pub fn timeout<T: Into<Millis>>(mut self, to: T) -> Self {
         if let Some(ref mut fut) = self.fut {
-            fut.timeout.reset(to);
+            fut.timeout.reset(to.into());
         }
         self
     }
