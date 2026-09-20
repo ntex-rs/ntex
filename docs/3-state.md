@@ -1,4 +1,4 @@
-# Service and Pipeline State
+# Service State
 
 Services often need access to information that is not part of an individual
 request. Examples include connection metadata, a database pool, application

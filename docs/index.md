@@ -1,11 +1,11 @@
-# ntex documentation
+# ntex framework documentation
 
 Learn how ntex services fit together, run servers, manage state and I/O, and
 build web applications.
 
 - [Component and Service Model](./1-service.md)
 - [Service Pipelines](./2-pipeline.md)
-- [Service and Pipeline State](./3-state.md)
+- [Service State](./3-state.md)
 - [Runtime](./4-runtime.md)
 - [Server](./5-server.md)
 - [Application State Management](./6-server-app.md)
