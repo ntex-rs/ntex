@@ -92,6 +92,7 @@ pub use ntex_macros::web_options as options;
 pub use ntex_macros::web_patch as patch;
 pub use ntex_macros::web_post as post;
 pub use ntex_macros::web_put as put;
+pub use ntex_macros::web_query as query;
 pub use ntex_macros::web_trace as trace;
 
 pub use crate::http::Response as HttpResponse;
@@ -101,7 +102,7 @@ pub use self::app::{App, AppServices};
 pub use self::config::{ServiceConfig, WebAppConfig};
 pub use self::error::{DefaultError, InternalError, WebError, WebResponseError};
 pub use self::extract::FromRequest;
-pub use self::handler::Handler;
+pub use self::handler::{Handler, HandlerSt};
 pub use self::httprequest::HttpRequest;
 pub use self::request::WebRequest;
 pub use self::resource::{Resource, ResourceServices};
@@ -149,7 +150,7 @@ pub mod dev {
 
     #[doc(hidden)]
     #[inline]
-    pub fn __assert_handler<St, Fun, Res>(f: Fun) -> impl Handler<St, (), Output = Res>
+    pub fn __assert_handler<St, In, Fun, Res>(f: Fun) -> impl Handler<St, (), Output = Res>
     where
         St: super::State,
         Fun: AsyncFn() -> Res + 'static,

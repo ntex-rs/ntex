@@ -76,7 +76,7 @@ let app = web::App::<()>::new().service(
 no method guard, it accepts every HTTP method:
 
 ```rust
-# use ntex::web::{self, HttpResponse};
+use ntex::web::{self, HttpResponse};
 
 let app = web::App::<()>::new().service(
     web::resource("/health").to(async || HttpResponse::Ok()),
@@ -250,11 +250,13 @@ remainder is usually clearer and works naturally with typed path extraction.
 A resource or scope can accept several patterns by using an array or vector:
 
 ```rust
-# use ntex::web::{self, HttpResponse};
-let app = web::App::<()>::new().service(
-    web::resource(["/health", "/status"])
-        .to(async || HttpResponse::Ok()),
-);
+use ntex::web::{self, HttpResponse};
+
+let app = web::App::<()>::new()
+    .service(
+        web::resource(["/health", "/status"])
+            .to(async || HttpResponse::Ok()),
+    );
 ```
 
 All patterns register the same service. A resource definition supports at
@@ -305,9 +307,8 @@ let app = web::App::<()>::new().route(
 );
 ```
 
-The field names must match the variable names in the route pattern. The
-application must include `serde` with its `derive` feature to use
-`#[derive(serde::Deserialize)]`.
+The field names must match the variable names in the route pattern.
+This example requires `serde` with its `derive` feature enabled.
 
 Handlers can also inspect [`HttpRequest::match_info()`] directly:
 
@@ -382,7 +383,8 @@ returns `404 Not Found`; a custom application default is not used.
 
 ## Named and External Resources
 
-URL generation requires ntex's `url` Cargo feature.
+With ntex's `url` Cargo feature enabled, handlers can generate absolute URLs
+for named resources.
 
 Name a resource when handlers need to generate URLs for it:
 
@@ -403,7 +405,8 @@ let app = web::App::<()>::new()
     .route("/", web::get().to(index));
 ```
 
-The `index` handler generates an absolute URL such as `http://some-host-name/users/42`.
+The `index` handler generates an absolute URL such as
+`http://some-host-name/users/42`.
 
 [`HttpRequest::url_for()`] substitutes supplied values in pattern order and
 uses the request's connection information to produce an absolute URL.
@@ -411,7 +414,8 @@ uses the request's connection information to produce an absolute URL.
 `App::external_resource()` registers a named URL pattern for generation only:
 
 ```rust
-# use ntex::web;
+use ntex::web;
+
 let app = web::App::<()>::new().external_resource(
     "documentation",
     "https://docs.example.com/{page}",
@@ -421,7 +425,8 @@ let app = web::App::<()>::new().external_resource(
 The registered name can then be used for URL generation:
 
 ```rust
-# use ntex::web::{HttpRequest, HttpResponse};
+use ntex::web::{HttpRequest, HttpResponse};
+
 async fn doc(req: HttpRequest) -> HttpResponse {
     let url = req.url_for("documentation", ["page1.html"]).unwrap();
     HttpResponse::Ok().body(url.to_string())
@@ -495,9 +500,56 @@ Tests should cover method mismatches, trailing slashes, dynamic-variable
 constraints, scope boundaries, and fallback services because each affects a
 different stage of route selection.
 
+## Lower-Level HTTP Service
+
+`web::server(factory)` is a convenience constructor equivalent to
+`web::HttpServer::new(factory)`.
+
+After routes and services have been registered, the resulting application
+builder can be converted into a service factory from `http::Request` to
+`http::Response`. [`HttpService`] uses that factory to handle HTTP/1.1 and
+HTTP/2 connections.
+
+Using the lower-level server builder also allows connection-level services to
+be composed before `HttpService`. Such services can inspect or transform the
+`Io` object and map the state passed into the HTTP and application services.
+
+The equivalent lower-level server setup looks like this:
+
+```rust,no_run
+use ntex::{http, server, web, SharedCfg};
+use ntex::web::HttpResponse;
+
+#[ntex::main]
+async fn main() -> std::io::Result<()> {
+    server::build()
+        .bind(
+            "http",
+            "127.0.0.1:8080",
+            SharedCfg::new("S"),
+            async |_| {
+                http::HttpService::new(
+                web::App::new()
+                    .route("/", web::get().to(async || {
+                        HttpResponse::Ok().body("Hello")
+                    }))
+                    .build(),
+                )
+            },
+        )?
+        .run()
+        .await
+}
+```
+
+To give the web application a fixed state that differs from the surrounding
+service pipeline's state, see
+[Web Application State](./9-web-app-state.md).
+
 [`HttpRequest::match_info()`]: https://docs.rs/ntex/latest/ntex/web/struct.HttpRequest.html#method.match_info
 [`HttpRequest::url_for()`]: https://docs.rs/ntex/latest/ntex/web/struct.HttpRequest.html#method.url_for
 [`FromRequest`]: https://docs.rs/ntex/latest/ntex/web/trait.FromRequest.html
+[`HttpService`]: https://docs.rs/ntex/latest/ntex/http/struct.HttpService.html
 [`Path`]: https://docs.rs/ntex/latest/ntex/web/types/struct.Path.html
 [`Resource`]: https://docs.rs/ntex/latest/ntex/web/struct.Resource.html
 [`Responder`]: https://docs.rs/ntex/latest/ntex/web/trait.Responder.html

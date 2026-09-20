@@ -103,7 +103,6 @@ where
             InitError = Failure,
         >,
 {
-    #[must_use]
     /// Add match guard to a scope.
     ///
     /// ```rust
@@ -124,21 +123,21 @@ where
     ///     );
     /// }
     /// ```
+    #[must_use]
     pub fn guard<G: Guard + 'static>(mut self, guard: G) -> Self {
         self.guards.push(Box::new(guard));
         self
     }
 
-    #[must_use]
     /// Use ascii case-insensitive routing.
     ///
     /// Only static segments could be case-insensitive.
+    #[must_use]
     pub fn case_insensitive_routing(mut self) -> Self {
         self.case_insensitive = true;
         self
     }
 
-    #[must_use]
     /// Run external configuration as part of the scope building
     /// process
     ///
@@ -167,6 +166,7 @@ where
     ///         .route("/index.html", web::get().to(async || { HttpResponse::Ok() }));
     /// }
     /// ```
+    #[must_use]
     pub fn configure(
         self,
         f: impl FnOnce(&mut ServiceConfig<St, Out>),
@@ -186,7 +186,6 @@ where
         }
     }
 
-    #[must_use]
     /// Register http service.
     ///
     /// This is similar to `App's` service registration.
@@ -212,6 +211,7 @@ where
     ///     );
     /// }
     /// ```
+    #[must_use]
     pub fn service(
         self,
         factory: impl WebServiceFactory<St, Out>,
@@ -228,7 +228,6 @@ where
         }
     }
 
-    #[must_use]
     /// Configure route for a specific path.
     ///
     /// This is a simplified version of the `Scope::service()` method.
@@ -250,6 +249,7 @@ where
     ///     );
     /// }
     /// ```
+    #[must_use]
     pub fn route(self, path: &str, mut route: Route<St, Out>) -> ScopeServices<St, In, Out, M, F> {
         self.service(
             Resource::new(path)
@@ -258,10 +258,10 @@ where
         )
     }
 
-    #[must_use]
     /// Default service to be used if no matching route could be found.
     ///
     /// If default resource is not registered, app's default resource is being used.
+    #[must_use]
     pub fn default_service<Sf>(
         self,
         f: impl IntoServiceFactory<Sf, St, WebRequest<Out>>,
@@ -290,7 +290,6 @@ where
         }
     }
 
-    #[must_use]
     /// Register request filter.
     ///
     /// Filter runs during inbound processing in the request
@@ -298,6 +297,7 @@ where
     /// necessary, across all requests managed by the *Scope*.
     ///
     /// This is similar to `App's` filters, but filter get invoked on scope level.
+    #[must_use]
     pub fn filter<U, R>(
         self,
         filter: impl IntoServiceFactory<U, St, WebRequest<Out>>,
@@ -335,7 +335,6 @@ where
         }
     }
 
-    #[must_use]
     /// Registers middleware, in the form of a middleware component (type).
     ///
     /// That runs during inbound processing in the request
@@ -344,6 +343,7 @@ where
     /// middleware is more limited in what it can modify, relative to Route or
     /// Application level middleware, in that Scope-level middleware can not modify
     /// `WebResponse`.
+    #[must_use]
     pub fn middleware<U>(self, mw: U) -> Scope<St, In, Out, WebStack<St, M, U>, F> {
         Scope {
             middleware: WebStack::new(self.middleware, mw),
@@ -370,7 +370,6 @@ where
             InitError = Failure,
         >,
 {
-    #[must_use]
     /// Register http service.
     ///
     /// This is similar to `App's` service registration.
@@ -396,13 +395,13 @@ where
     ///     );
     /// }
     /// ```
+    #[must_use]
     pub fn service(mut self, factory: impl WebServiceFactory<St, Out>) -> Self {
         self.services
             .push(Box::new(ServiceFactoryWrapper::new(factory)));
         self
     }
 
-    #[must_use]
     /// Configure route for a specific path.
     ///
     /// This is a simplified version of the `Scope::service()` method.
@@ -424,6 +423,7 @@ where
     ///     );
     /// }
     /// ```
+    #[must_use]
     pub fn route(self, path: &str, mut route: Route<St, Out>) -> Self {
         self.service(
             Resource::new(path)
@@ -432,10 +432,10 @@ where
         )
     }
 
-    #[must_use]
     /// Default service to be used if no matching route could be found.
     ///
     /// If default resource is not registered, app's default resource is being used.
+    #[must_use]
     pub fn default_service<Sf>(
         mut self,
         f: impl IntoServiceFactory<Sf, St, WebRequest<Out>>,

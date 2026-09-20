@@ -11,7 +11,9 @@ use super::error::{WebError, WebResponseError};
 use super::guard::Guard;
 use super::route::{IntoRoutes, Route, RouteService};
 use super::stack::{Filter, WebStack};
-use super::{FromRequest, Handler, HttpHandler, HttpService, State, WebRequest, WebResponse};
+use super::{
+    FromRequest, Handler, HandlerSt, HttpHandler, HttpService, State, WebRequest, WebResponse,
+};
 
 /// *Resource* is an entry in resources table which corresponds to requested URL.
 ///
@@ -85,16 +87,15 @@ where
             InitError = Failure,
         >,
 {
-    #[must_use]
     /// Set resource name.
     ///
     /// Name is used for url generation.
+    #[must_use]
     pub fn name(mut self, name: &str) -> Self {
         self.name = Some(name.to_string());
         self
     }
 
-    #[must_use]
     /// Add match guard to a resource.
     ///
     /// ```rust
@@ -118,6 +119,7 @@ where
     ///         );
     /// }
     /// ```
+    #[must_use]
     pub fn guard<G: Guard + 'static>(mut self, guard: G) -> Self {
         self.guards.push(Box::new(guard));
         self
@@ -128,10 +130,10 @@ where
         self
     }
 
-    #[must_use]
     /// Register request filter.
     ///
     /// This is similar to `App's` filters, but filter get invoked on resource level.
+    #[must_use]
     pub fn filter<U, R>(
         self,
         filter: impl IntoServiceFactory<U, St, WebRequest<Out>>,
@@ -281,6 +283,53 @@ where
     }
 
     #[must_use]
+    /// Register a state-aware handler as a new route.
+    ///
+    /// The handler receives a shared reference to the application state,
+    /// followed by the current request state and any request extractors.
+    ///
+    /// ```rust
+    /// use ntex::web;
+    ///
+    /// struct AppState {
+    ///     greeting: &'static str,
+    /// }
+    ///
+    /// impl web::State for AppState {
+    ///     type Error = web::DefaultError;
+    /// }
+    ///
+    /// async fn index(
+    ///     state: &AppState,
+    ///     request_state: (),
+    ///     name: web::types::Path<String>,
+    /// ) -> String {
+    ///     let _ = request_state;
+    ///     format!("{}, {}!", state.greeting, name.into_inner())
+    /// }
+    ///
+    /// web::App::<AppState>::new()
+    ///     .service(web::resource("/{name}").to2(index));
+    /// ```
+    ///
+    /// This is equivalent to `resource.route(web::route().to2(handler))`.
+    pub fn to2<Args>(self, h: impl HandlerSt<St, Out, Args>) -> ResourceServices<St, In, Out, M, F>
+    where
+        Args: FromRequest<St> + 'static,
+        Args::Error: WebResponseError<St, St::Error>,
+    {
+        ResourceServices {
+            name: self.name,
+            rdef: self.rdef,
+            guards: self.guards,
+            filter: self.filter,
+            middleware: self.middleware,
+            default: None,
+            routes: vec![Route::new().to2(h)],
+        }
+    }
+
+    #[must_use]
     /// Default service to be used if no matching route could be found.
     ///
     /// By default *405* response get returned. Resource does not use
@@ -400,6 +449,46 @@ where
         Args::Error: WebResponseError<St, St::Error>,
     {
         self.routes.push(Route::new().to(handler));
+        self
+    }
+
+    #[must_use]
+    /// Add a state-aware handler as a new route.
+    ///
+    /// The route has no guards and matches any request not accepted by an
+    /// earlier route. The handler receives a shared reference to the
+    /// application state, followed by the current request state and any request
+    /// extractors.
+    ///
+    /// ```rust
+    /// use ntex::web;
+    ///
+    /// struct AppState;
+    ///
+    /// impl web::State for AppState {
+    ///     type Error = web::DefaultError;
+    /// }
+    ///
+    /// async fn fallback(
+    ///     _state: &AppState,
+    ///     _request_state: (),
+    ///     req: web::HttpRequest,
+    /// ) -> String {
+    ///     format!("No route for {}", req.path())
+    /// }
+    ///
+    /// web::App::<AppState>::new().service(
+    ///     web::resource("/")
+    ///         .route(web::get().to(async || "GET"))
+    ///         .to2(fallback)
+    /// );
+    /// ```
+    pub fn to2<Args>(mut self, handler: impl HandlerSt<St, Out, Args>) -> Self
+    where
+        Args: FromRequest<St> + 'static,
+        Args::Error: WebResponseError<St, St::Error>,
+    {
+        self.routes.push(Route::new().to2(handler));
         self
     }
 

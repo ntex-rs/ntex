@@ -6,7 +6,7 @@ use crate::service::{Ctx, Service, ServiceFactory};
 
 use super::error::{WebError, WebResponseError};
 use super::guard::{self, AllGuard, Guard};
-use super::handler::{Handler, HandlerFn, HandlerWrapper};
+use super::handler::{Handler, HandlerFn, HandlerSt, HandlerStWrapper, HandlerWrapper};
 use super::{FromRequest, HttpResponse, State, WebRequest, WebResponse};
 
 /// Resource route definition
@@ -23,9 +23,7 @@ impl<St: State, In: 'static> Route<St, In> {
     /// Create new route which matches any request.
     pub fn new() -> Route<St, In> {
         Route {
-            handler: Rc::new(HandlerWrapper::<St, In, _, ()>::new(async || {
-                HttpResponse::NotFound()
-            })),
+            handler: HandlerWrapper::<St, In, _, ()>::new(async || HttpResponse::NotFound()),
             methods: Vec::new(),
             guards: Rc::default(),
         }
@@ -108,6 +106,46 @@ impl<St: State, In: 'static> Route<St, In> {
     }
 
     #[must_use]
+    /// Set a state-aware handler for this route.
+    ///
+    /// The handler receives a shared reference to the application state,
+    /// followed by the current request state and any request extractors.
+    ///
+    /// ```rust
+    /// use ntex::web;
+    ///
+    /// struct AppState {
+    ///     greeting: &'static str,
+    /// }
+    ///
+    /// impl web::State for AppState {
+    ///     type Error = web::DefaultError;
+    /// }
+    ///
+    /// async fn index(
+    ///     state: &AppState,
+    ///     request_state: (),
+    ///     name: web::types::Path<String>,
+    /// ) -> String {
+    ///     let _ = request_state;
+    ///     format!("{}, {}!", state.greeting, name.into_inner())
+    /// }
+    ///
+    /// web::App::<AppState>::new().service(
+    ///     web::resource("/{name}").route(web::get().to2(index))
+    /// );
+    /// ```
+    pub fn to2<H, Args>(mut self, handler: H) -> Self
+    where
+        H: HandlerSt<St, In, Args> + 'static,
+        Args: FromRequest<St> + 'static,
+        Args::Error: WebResponseError<St, St::Error>,
+    {
+        self.handler = HandlerStWrapper::new(handler);
+        self
+    }
+
+    #[must_use]
     /// Set handler function, use request extractors for parameters.
     ///
     /// ```rust
@@ -160,7 +198,7 @@ impl<St: State, In: 'static> Route<St, In> {
         Args: FromRequest<St> + 'static,
         Args::Error: WebResponseError<St, St::Error>,
     {
-        self.handler = Rc::new(HandlerWrapper::new(handler));
+        self.handler = HandlerWrapper::new(handler);
         self
     }
 }

@@ -168,7 +168,7 @@ where
 ///         .into();
 ///
 ///     let app = App::default()
-///         .config(cfg)
+///         .web_app_config(cfg)
 ///         .service(web::resource("/index.html").route(web::get().to(index)));
 /// }
 /// ```

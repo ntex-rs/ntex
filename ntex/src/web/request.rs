@@ -8,7 +8,8 @@ use crate::util::Extensions;
 
 use super::config::WebAppConfig;
 use super::info::ConnectionInfo;
-use super::{HttpRequest, State, WebResponse, WebResponseError, rmap::ResourceMap};
+use super::rmap::ResourceMap;
+use super::{HttpRequest, State, WebResponse, WebResponseError};
 
 /// An service http request
 ///
@@ -108,13 +109,12 @@ impl<St> WebRequest<St> {
         self.head().version
     }
 
-    #[inline]
     /// Returns request's headers.
+    #[inline]
     pub fn headers(&self) -> &HeaderMap {
         &self.head().headers
     }
 
-    #[inline]
     /// Returns mutable request's headers.
     pub fn headers_mut(&mut self) -> &mut HeaderMap {
         &mut self.head_mut().headers
@@ -148,20 +148,18 @@ impl<St> WebRequest<St> {
             .and_then(|io| io.query::<types::PeerAddr>().get().map(|addr| addr.0))
     }
 
-    #[inline]
     /// Get request's payload
+    #[inline]
     pub fn take_payload(&mut self) -> Payload {
         self.payload.take()
     }
 
-    #[inline]
     /// Set request payload.
     pub fn set_payload(&mut self, payload: Payload) {
         self.payload = payload;
     }
 
     /// Get `ConnectionInfo` for the current request.
-    #[inline]
     pub fn connection_info(&self) -> Ref<'_, ConnectionInfo> {
         ConnectionInfo::get(self.head(), self.app_config())
     }
@@ -177,14 +175,14 @@ impl<St> WebRequest<St> {
         self.req.match_info()
     }
 
-    #[inline]
     /// Get a mutable reference to the Path parameters.
+    #[inline]
     pub fn match_info_mut(&mut self) -> &mut Path<Uri> {
         self.req.match_info_mut()
     }
 
-    #[inline]
     /// Get a reference to a `ResourceMap` of current application.
+    #[inline]
     pub fn resource_map(&self) -> &ResourceMap {
         self.req.resource_map()
     }
@@ -195,8 +193,8 @@ impl<St> WebRequest<St> {
         self.req.app_config()
     }
 
-    #[inline]
     /// Get an application state.
+    #[inline]
     pub fn app_state<T: 'static>(&self) -> Option<&T> {
         (self.req).app_config().state()
     }
@@ -214,17 +212,42 @@ impl<St> WebRequest<St> {
     }
 
     /// Get request state ref.
+    #[inline]
     pub fn st(&self) -> &St {
         &self.state
     }
 
     /// Get request state mut ref
+    #[inline]
     pub fn st_mut(&mut self) -> &mut St {
         &mut self.state
     }
 
+    /// Transform the request state into a new type.
+    ///
+    /// This method consumes the request and returns request with different
+    /// state a `WebRequest<NewSt>`. The HTTP request and payload are preserved.
+    /// It is useful in application and resource filters that add
+    /// request-specific data before passing the request to the next service.
+    ///
+    /// Application state is not affected; only the state stored in this
+    /// `WebRequest` is replaced.
+    ///
+    /// ```rust
+    /// use std::convert::Infallible;
+    /// use ntex::web::{self, WebRequest};
+    ///
+    /// async fn index(_: &(), user_id: usize) -> String {
+    ///     format!("User {user_id}")
+    /// }
+    ///
+    /// web::App::default()
+    ///     .filter(async |req: WebRequest<()>| {
+    ///         Ok::<_, Infallible>(req.map_state(|()| 42usize))
+    ///     })
+    ///     .service(web::resource("/").to2(index));
+    /// ```
     #[inline]
-    /// Map request state to a new state.
     pub fn map_state<F, NewSt>(self, f: F) -> WebRequest<NewSt>
     where
         F: FnOnce(St) -> NewSt,

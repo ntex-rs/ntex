@@ -949,7 +949,8 @@ async fn test_request_state() {
         }
     }
 
-    async fn test() -> Result<HttpResponse, Infallible> {
+    async fn test(_: &(), st: usize) -> Result<HttpResponse, Infallible> {
+        assert_eq!(st, 10);
         Ok(HttpResponse::Ok().body(STR))
     }
 
@@ -968,7 +969,7 @@ async fn test_request_state() {
                             assert_eq!(*req.st(), 10);
                             Ok::<_, Infallible>(req)
                         })
-                        .route(web::get().to(test)),
+                        .route(web::get().to2(test)),
                 ),
         )
     });

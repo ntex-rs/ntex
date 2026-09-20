@@ -54,7 +54,7 @@ tokio = ["ntex-net/tokio"]
 # compio runtime
 compio = ["ntex-net/compio"]
 
-# neon runtime
+# neon runtime (feature is deprecated)
 neon = []
 
 # neon polling runtime

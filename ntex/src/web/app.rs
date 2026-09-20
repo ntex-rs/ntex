@@ -56,8 +56,8 @@ impl Default for App<()> {
 }
 
 impl<St: State, In> App<St, In, In> {
-    #[must_use]
     /// Create application builder. Application can be configured with a builder-like pattern.
+    #[must_use]
     pub fn new() -> Self {
         App {
             middleware: Identity,
@@ -83,7 +83,6 @@ where
             InitError = Failure,
         >,
 {
-    #[must_use]
     /// Run external configuration as part of the application building
     /// process.
     ///
@@ -109,6 +108,7 @@ where
     ///         .route("/index.html", web::get().to(async || { HttpResponse::Ok() }));
     /// }
     /// ```
+    #[must_use]
     pub fn configure(
         self,
         f: impl FnOnce(&mut ServiceConfig<St, Out>),
@@ -128,7 +128,6 @@ where
         }
     }
 
-    #[must_use]
     /// Configure route for a specific path.
     ///
     /// This is a simplified version of the `App::service()` method.
@@ -148,6 +147,7 @@ where
     ///         .route("/test2", web::post().to(async || { HttpResponse::MethodNotAllowed() }));
     /// }
     /// ```
+    #[must_use]
     pub fn route(self, path: &str, mut route: Route<St, Out>) -> AppServices<St, In, Out, M, F> {
         self.service(
             Resource::new(path)
@@ -156,7 +156,6 @@ where
         )
     }
 
-    #[must_use]
     /// Register http service.
     ///
     /// Http service is any type that implements `WebServiceFactory` trait.
@@ -166,6 +165,7 @@ where
     /// * `Resource` is an entry in resource table which corresponds to requested URL.
     /// * `Scope` is a set of resources with common root path.
     /// * `StaticFiles` is a service for static files support
+    #[must_use]
     pub fn service<S>(self, factory: S) -> AppServices<St, In, Out, M, F>
     where
         S: WebServiceFactory<St, Out> + 'static,
@@ -182,7 +182,6 @@ where
         }
     }
 
-    #[must_use]
     /// Default service to be used if no matching resource could be found.
     ///
     /// It is possible to use services like `Resource`, `Route`.
@@ -217,6 +216,7 @@ where
     ///         );
     /// }
     /// ```
+    #[must_use]
     pub fn default_service<U>(
         self,
         f: impl IntoServiceFactory<U, St, WebRequest<Out>>,
@@ -245,7 +245,6 @@ where
         }
     }
 
-    #[must_use]
     /// Register an external resource.
     ///
     /// External resources are useful for URL generation purposes only
@@ -268,6 +267,7 @@ where
     ///             web::get().to(index)));
     /// }
     /// ```
+    #[must_use]
     pub fn external_resource(mut self, name: impl AsRef<str>, url: impl AsRef<str>) -> Self {
         let mut rdef = ResourceDef::new(url.as_ref());
         *rdef.name_mut() = name.as_ref().to_string();
@@ -275,14 +275,46 @@ where
         self
     }
 
+    /// Set the application's runtime configuration.
+    ///
+    /// [`WebAppConfig`] contains connection metadata used by the application,
+    /// such as the host, secure-connection flag, local address, and request pool
+    /// size. It can also store typed configuration values with
+    /// [`WebAppConfig::set_state()`]; those values are available through
+    /// [`HttpRequest::app_state()`] and [`WebRequest::app_state()`].
+    ///
+    /// Without an explicit configuration, each request uses the
+    /// [`WebAppConfig`] from its I/O context, or the default configuration if
+    /// the request has no associated I/O object. This method overrides that
+    /// selection for every request handled by this application.
+    ///
+    /// This configuration is separate from the service-level application state
+    /// represented by `St`. To register routes and services from an external
+    /// function, use [`App::configure()`] instead.
+    ///
+    /// ```rust
+    /// use ntex::web::{self, App, HttpRequest, WebAppConfig};
+    ///
+    /// async fn index(req: HttpRequest) -> String {
+    ///     let value = req.app_state::<usize>().copied().unwrap_or_default();
+    ///     format!("Configured value: {value}")
+    /// }
+    ///
+    /// let config = WebAppConfig::new()
+    ///     .set_host("www.example.com".to_owned())
+    ///     .set_secure()
+    ///     .set_state(42usize);
+    ///
+    /// App::default()
+    ///     .web_app_config(config)
+    ///     .route("/", web::get().to(index));
+    /// ```
     #[must_use]
-    /// Set custom app configuration.
-    pub fn config(mut self, cfg: Cfg<WebAppConfig>) -> Self {
-        self.config = Some(cfg);
+    pub fn web_app_config(mut self, cfg: impl Into<Cfg<WebAppConfig>>) -> Self {
+        self.config = Some(cfg.into());
         self
     }
 
-    #[must_use]
     /// Register request filter.
     ///
     /// Filter runs during inbound processing in the request
@@ -308,6 +340,7 @@ where
     ///         .route("/index.html", web::get().to(index));
     /// }
     /// ```
+    #[must_use]
     pub fn filter<Sf, R>(
         self,
         filter: impl IntoServiceFactory<Sf, St, WebRequest<Out>>,
@@ -767,7 +800,7 @@ mod tests {
 
         let srv = init_service(
             App::new()
-                .config(cfg)
+                .web_app_config(cfg)
                 .filter(async move |req: WebRequest<()>| {
                     assert_eq!(*req.app_state::<usize>().unwrap(), 10);
                     Ok::<_, Infallible>(req)
