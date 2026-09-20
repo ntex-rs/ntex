@@ -43,6 +43,9 @@ pub enum ProtocolError {
     /// Encountered invalid opcode
     #[error("Invalid opcode: {0}")]
     InvalidOpcode(u8),
+    /// Reserved frame bits are set without a negotiated extension.
+    #[error("Reserved frame bits are set: {0:#05b}")]
+    ReservedBits(u8),
     /// Invalid control frame length
     #[error("Invalid control frame length: {0}")]
     InvalidLength(usize),

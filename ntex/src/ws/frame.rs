@@ -24,6 +24,10 @@ impl Parser {
         let first = src[0];
         let second = src[1];
         let finished = first & 0x80 != 0;
+        let reserved = first & 0x70;
+        if reserved != 0 {
+            return Err(ProtocolError::ReservedBits(reserved >> 4));
+        }
 
         // check masking
         let masked = second & 0x80 != 0;
@@ -263,6 +267,17 @@ mod tests {
         assert!(!frame.finished);
         assert_eq!(frame.opcode, OpCode::Text);
         assert!(frame.payload.is_empty());
+    }
+
+    #[test]
+    fn test_reserved_bits() {
+        for reserved in [0x10, 0x20, 0x40, 0x70] {
+            let mut buf = BytesMut::from(&[0x81 | reserved, 0][..]);
+            assert!(matches!(
+                Parser::parse(&mut buf, false, 1024),
+                Err(ProtocolError::ReservedBits(_))
+            ));
+        }
     }
 
     #[test]

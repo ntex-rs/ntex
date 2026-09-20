@@ -25,6 +25,7 @@ use crate::service::{IntoService, Pipeline, apply_fn, fn_service};
 use crate::{Cfg, Service, SharedCfg, channel::mpsc, rt, time::timeout, ws};
 
 use super::error::{WsClientError, WsConfigError, WsError};
+use super::handshake::header_contains_token;
 use super::{WsClientConfig, transport::WsTransport};
 
 thread_local! {
@@ -172,7 +173,7 @@ where
 
         // host header
         if !head.headers.contains_key(header::HOST) {
-            let val = HeaderValue::from_str(self.uri.host().unwrap()).unwrap();
+            let val = HeaderValue::from_str(self.uri.authority().unwrap().as_str()).unwrap();
             head.headers.insert(header::HOST, val);
         }
 
@@ -261,30 +262,14 @@ where
         }
 
         // Check for "UPGRADE" to websocket header
-        let has_hdr = if let Some(hdr) = response.headers.get(&header::UPGRADE) {
-            if let Ok(s) = hdr.to_str() {
-                s.to_ascii_lowercase().contains("websocket")
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-        if !has_hdr {
+        if !header_contains_token(&response.headers, &header::UPGRADE, "websocket") {
             log::trace!("{tag}: Invalid upgrade header");
             return Err(Error::from(WsClientError::InvalidUpgradeHeader));
         }
 
         // Check for "CONNECTION" header
         if let Some(conn) = response.headers.get(&header::CONNECTION) {
-            if let Ok(s) = conn.to_str() {
-                if !s.to_ascii_lowercase().contains("upgrade") {
-                    log::trace!("{tag}: Invalid connection header: {s}");
-                    return Err(Error::from(WsClientError::InvalidConnectionHeader(
-                        conn.clone(),
-                    )));
-                }
-            } else {
+            if !header_contains_token(&response.headers, &header::CONNECTION, "upgrade") {
                 log::trace!("{tag}: Invalid connection header: {conn:?}");
                 return Err(Error::from(WsClientError::InvalidConnectionHeader(
                     conn.clone(),
@@ -489,6 +474,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn protocols() {
+        let cfg = WsClientConfig::new()
+            .set_protocols(["chat", "superchat"])
+            .unwrap();
+        assert_eq!(
+            cfg.headers
+                .get(header::SEC_WEBSOCKET_PROTOCOL)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "chat,superchat"
+        );
+
+        let cfg = cfg.set_protocols([] as [&str; 0]).unwrap();
+        assert!(!cfg.headers.contains_key(header::SEC_WEBSOCKET_PROTOCOL));
+        assert!(WsClientConfig::new().set_protocols(["bad\n"]).is_err());
+    }
+
     #[crate::rt_test]
     async fn basic_errs() {
         let err = WsClient::new("localhost", SharedCfg::default())
@@ -585,6 +589,7 @@ mod tests {
             .set_max_frame_size(100)
             .set_server_mode()
             .set_protocols(["v1", "v2"])
+            .unwrap()
             .set_header_if_unset(header::CONTENT_TYPE, "json")
             .unwrap()
             .set_header_if_unset(header::CONTENT_TYPE, "text")

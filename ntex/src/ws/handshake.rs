@@ -1,6 +1,9 @@
 //! WebSocket opening-handshake helpers.
+use base64::{Engine, engine::general_purpose::STANDARD as base64};
+
+use crate::http::header::HeaderName;
+use crate::http::{HeaderMap, RequestHead, Response, ResponseBuilder};
 use crate::http::{Method, StatusCode, header};
-use crate::http::{RequestHead, Response, ResponseBuilder};
 
 use super::error::HandshakeError;
 
@@ -26,21 +29,12 @@ pub fn verify_handshake(req: &RequestHead) -> Result<(), HandshakeError> {
     }
 
     // Check for "UPGRADE" to websocket header
-    let has_hdr = if let Some(hdr) = req.headers().get(header::UPGRADE) {
-        if let Ok(s) = hdr.to_str() {
-            s.to_ascii_lowercase().contains("websocket")
-        } else {
-            false
-        }
-    } else {
-        false
-    };
-    if !has_hdr {
+    if !header_contains_token(req.headers(), &header::UPGRADE, "websocket") {
         return Err(HandshakeError::NoWebsocketUpgrade);
     }
 
     // Upgrade connection
-    if !req.upgrade() {
+    if !header_contains_token(req.headers(), &header::CONNECTION, "upgrade") {
         return Err(HandshakeError::NoConnectionUpgrade);
     }
 
@@ -60,10 +54,30 @@ pub fn verify_handshake(req: &RequestHead) -> Result<(), HandshakeError> {
     }
 
     // check client handshake for validity
-    if !req.headers().contains_key(header::SEC_WEBSOCKET_KEY) {
+    let mut keys = req.headers().get_all(header::SEC_WEBSOCKET_KEY);
+    let valid_key = keys
+        .next()
+        .and_then(|key| base64.decode(key.as_bytes()).ok())
+        .is_some_and(|key| key.len() == 16)
+        && keys.next().is_none();
+    if !valid_key {
         return Err(HandshakeError::BadWebsocketKey);
     }
     Ok(())
+}
+
+pub(super) fn header_contains_token(
+    headers: &HeaderMap,
+    name: &HeaderName,
+    expected: &str,
+) -> bool {
+    headers.get_all(name).any(|value| {
+        value.to_str().is_ok_and(|value| {
+            value
+                .split(',')
+                .any(|token| token.trim().eq_ignore_ascii_case(expected))
+        })
+    })
 }
 
 /// Creates a WebSocket opening-handshake response.
@@ -73,11 +87,13 @@ pub fn verify_handshake(req: &RequestHead) -> Result<(), HandshakeError> {
 ///
 /// # Panics
 ///
-/// Panics if `req` does not contain a `Sec-WebSocket-Key` header.
+/// Panics if `req` does not contain a `Sec-WebSocket-Key` header or the key
+/// exceeds the length accepted by [`hash_key`](crate::ws::hash_key). Use
+/// [`handshake`] when the request has not already been validated.
 pub fn handshake_response(req: &RequestHead) -> ResponseBuilder {
     let key = {
         let key = req.headers().get(header::SEC_WEBSOCKET_KEY).unwrap();
-        crate::ws::hash_key(key.as_ref()).unwrap_or_else(|_| String::new())
+        crate::ws::hash_key(key.as_ref()).expect("validated Sec-WebSocket-Key")
     };
 
     Response::builder(StatusCode::SWITCHING_PROTOCOLS)
@@ -117,7 +133,18 @@ mod tests {
         let req = TestRequest::default()
             .header(
                 header::UPGRADE,
-                header::HeaderValue::from_static("websocket"),
+                header::HeaderValue::from_static("notwebsocket"),
+            )
+            .build();
+        assert_eq!(
+            HandshakeError::NoWebsocketUpgrade,
+            verify_handshake(req.head()).err().unwrap()
+        );
+
+        let req = TestRequest::default()
+            .header(
+                header::UPGRADE,
+                header::HeaderValue::from_static("WebSocket"),
             )
             .build();
         assert_eq!(
@@ -132,11 +159,26 @@ mod tests {
             )
             .header(
                 header::CONNECTION,
-                header::HeaderValue::from_static("upgrade"),
+                header::HeaderValue::from_static("keep-alive, Upgrade"),
             )
             .build();
         assert_eq!(
             HandshakeError::NoVersionHeader,
+            verify_handshake(req.head()).err().unwrap()
+        );
+
+        let req = TestRequest::default()
+            .header(
+                header::UPGRADE,
+                header::HeaderValue::from_static("websocket"),
+            )
+            .header(
+                header::CONNECTION,
+                header::HeaderValue::from_static("keep-alive, upgraded"),
+            )
+            .build();
+        assert_eq!(
+            HandshakeError::NoConnectionUpgrade,
             verify_handshake(req.head()).err().unwrap()
         );
 
@@ -196,6 +238,30 @@ mod tests {
                 header::HeaderValue::from_static("13"),
             )
             .build();
+        assert_eq!(
+            HandshakeError::BadWebsocketKey,
+            verify_handshake(req.head()).err().unwrap()
+        );
+
+        let req = TestRequest::default()
+            .header(
+                header::UPGRADE,
+                header::HeaderValue::from_static("websocket"),
+            )
+            .header(
+                header::CONNECTION,
+                header::HeaderValue::from_static("upgrade"),
+            )
+            .header(
+                header::SEC_WEBSOCKET_VERSION,
+                header::HeaderValue::from_static("13"),
+            )
+            .header(
+                header::SEC_WEBSOCKET_KEY,
+                header::HeaderValue::from_static("dGhlIHNhbXBsZSBub25jZQ=="),
+            )
+            .build();
+        verify_handshake(req.head()).unwrap();
         assert_eq!(
             StatusCode::SWITCHING_PROTOCOLS,
             handshake_response(req.head()).build().status()

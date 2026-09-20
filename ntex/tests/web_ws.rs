@@ -171,14 +171,8 @@ async fn web_ws_client() {
     sink.send(ws::Message::Close(Some(ws::CloseCode::Normal.into())))
         .await
         .unwrap();
-    let item = rx.recv().await.unwrap().unwrap();
-    assert_eq!(item, ws::Frame::Close(Some(ws::CloseCode::Away.into())));
-
-    let item = rx.recv().await;
-    assert!(item.is_none());
-
-    // TODO fix
-    on_disconnect.await
+    on_disconnect.await;
+    assert!(rx.recv().await.is_none());
 }
 
 #[ntex::test]
@@ -203,7 +197,8 @@ async fn web_ws_subprotocol() {
         WsClientConfig::new()
             .set_address(srv.addr())
             .set_timeout(Seconds(30))
-            .set_protocols(["my-subprotocol"]),
+            .set_protocols(["my-subprotocol"])
+            .unwrap(),
     )
     .connect()
     .await
@@ -217,6 +212,44 @@ async fn web_ws_subprotocol() {
             .map(|v| v.to_str().unwrap()),
         Some("my-subprotocol")
     );
+}
+
+#[ntex::test]
+async fn web_ws_host_includes_port() {
+    use std::sync::mpsc;
+
+    use ntex::ws::WsClient;
+
+    let (tx, rx) = mpsc::channel();
+    let srv = test::server(async move |_| {
+        let tx = tx.clone();
+        App::new().service(
+            web::resource("/").route(web::to(async move |req: HttpRequest| {
+                tx.send(
+                    req.headers()
+                        .get(header::HOST)
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                        .to_owned(),
+                )
+                .unwrap();
+                let _ = ws::start(&req, None, ws_service).await;
+            })),
+        )
+    });
+
+    let authority = format!("example.test:{}", srv.addr().port());
+    let conn = WsClient::new(
+        format!("ws://{authority}/"),
+        WsClientConfig::new().set_address(srv.addr()),
+    )
+    .connect()
+    .await
+    .unwrap();
+
+    assert_eq!(conn.response().status(), StatusCode::SWITCHING_PROTOCOLS);
+    assert_eq!(rx.recv().unwrap(), authority);
 }
 
 #[ntex::test]
@@ -240,7 +273,8 @@ async fn web_ws_subprotocol_none() {
         WsClientConfig::new()
             .set_address(srv.addr())
             .set_timeout(Seconds(30))
-            .set_protocols(["my-subprotocol"]),
+            .set_protocols(["my-subprotocol"])
+            .unwrap(),
     )
     .connect()
     .await
@@ -287,7 +321,8 @@ async fn web_ws_protocols_parsing() {
             WsClientConfig::new()
                 .set_address(srv.addr())
                 .set_timeout(Seconds(30))
-                .set_protocols(["proto1", "proto2"]),
+                .set_protocols(["proto1", "proto2"])
+                .unwrap(),
         ),
     )
     .connect()

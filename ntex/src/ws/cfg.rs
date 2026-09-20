@@ -79,27 +79,33 @@ impl WsClientConfig {
     #[must_use]
     /// Sets the WebSocket subprotocols offered to the server.
     ///
-    /// This replaces the current `Sec-WebSocket-Protocol` header.
+    /// This replaces the current `Sec-WebSocket-Protocol` header. An empty
+    /// iterator removes the header.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the comma-separated protocol list is not a valid HTTP header
-    /// value.
-    pub fn set_protocols<U, V>(mut self, protos: U) -> Self
+    /// Returns [`HttpError`] if the comma-separated protocol list is not a
+    /// valid HTTP header value.
+    pub fn set_protocols<U, V>(mut self, protos: U) -> Result<Self, HttpError>
     where
         U: IntoIterator<Item = V>,
         V: AsRef<str>,
     {
-        let mut protos = protos
+        let protos = protos
             .into_iter()
-            .fold(String::new(), |acc, s| acc + s.as_ref() + ",");
-        protos.pop();
+            .map(|proto| proto.as_ref().to_owned())
+            .collect::<Vec<_>>()
+            .join(",");
 
-        self.headers.insert(
-            header::SEC_WEBSOCKET_PROTOCOL,
-            HeaderValue::try_from(protos.as_str()).unwrap(),
-        );
-        self
+        if protos.is_empty() {
+            self.headers.remove(header::SEC_WEBSOCKET_PROTOCOL);
+        } else {
+            self.headers.insert(
+                header::SEC_WEBSOCKET_PROTOCOL,
+                HeaderValue::try_from(protos.as_str())?,
+            );
+        }
+        Ok(self)
     }
 
     #[must_use]
