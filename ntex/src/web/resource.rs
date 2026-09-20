@@ -15,28 +15,41 @@ use super::{
     FromRequest, Handler, HandlerSt, HttpHandler, HttpService, State, WebRequest, WebResponse,
 };
 
-/// *Resource* is an entry in resources table which corresponds to requested URL.
+/// Groups routes and configuration for one or more URL patterns.
 ///
-/// Resource in turn has at least one route.
-/// Route consists of an handlers objects and list of guards
-/// (objects that implement `Guard` trait).
-/// Resources and routes uses builder-like pattern for configuration.
-/// During request handling, resource object iterate through all routes
-/// and check guards for specific route, if request matches all
-/// guards, route considered matched and route handler get called.
+/// A resource is useful when several routes belong to the same path. Along
+/// with those routes, it can have its own guards, filters, middleware, name,
+/// and fallback service. Create one with [`web::resource()`], then register it
+/// with [`App::service()`] or [`Scope::service()`].
+///
+/// For each request, the router first checks the resource's path and guards.
+/// If they do not match, it keeps looking for another resource or scope. Once
+/// this resource is selected, its middleware and filters run, followed by its
+/// routes in registration order. The first route whose guards all pass handles
+/// the request.
+///
+/// When none of the routes match, the resource uses its own fallback. By
+/// default, that fallback returns `405 Method Not Allowed`.
+///
+/// Use [`Resource::route()`] to add guarded routes, or [`Resource::to()`] to
+/// add an unguarded handler that accepts any request reaching the resource.
 ///
 /// ```rust
 /// use ntex::web::{self, App, HttpResponse};
 ///
-/// fn main() {
-///     let app = App::default().service(
-///         web::resource("/")
-///             .route(web::get().to(async || { HttpResponse::Ok() })));
-/// }
+/// App::default().service(
+///     web::resource("/users")
+///         .route(web::get().to(async || "users"))
+///         .route(web::post().to(async || HttpResponse::Created()))
+///         .default_service(web::to(async || {
+///             HttpResponse::MethodNotAllowed().body("Use GET or POST")
+///         })),
+/// );
 /// ```
 ///
-/// If no matching route could be found, *405* response code get returned.
-/// Default behavior could be overriden with `default_resource()` method.
+/// [`App::service()`]: super::App::service
+/// [`Scope::service()`]: super::Scope::service
+/// [`web::resource()`]: super::resource
 #[derive(derive_more::Debug)]
 #[debug("Resource({rdef:?})")]
 pub struct Resource<St: State, In, Out = In, M = Identity, F = Filter<St, In>> {
