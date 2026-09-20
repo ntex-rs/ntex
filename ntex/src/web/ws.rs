@@ -5,7 +5,7 @@ pub use crate::ws::{CloseCode, CloseReason, Frame, Message, WsSink};
 
 use crate::http::{body::BodySize, h1, header};
 use crate::io::{DispatchItem, IoConfig, Reason};
-use crate::service::{Ctx, IntoService, Pipeline, Service};
+use crate::service::{Ctx, IntoService, Pipeline, Service, apply_fn};
 use crate::web::HttpRequest;
 use crate::ws::{self, error::HandshakeError, error::WsError, handshake};
 use crate::{SharedCfg, rt, time::Seconds};
@@ -139,7 +139,15 @@ where
     io.stop_timer();
 
     // start websockets service dispatcher
-    let result = crate::io::Dispatcher::new(io, codec, Pipeline::new(sink, f.into_service())).await;
+    let timeout_sink = sink.clone();
+    let service = apply_fn(f.into_service(), async move |req, svc| {
+        let result = svc.call(req).await;
+        if matches!(&result, Ok(Some(Message::Close(_)))) {
+            timeout_sink.start_close_timeout();
+        }
+        result
+    });
+    let result = crate::io::Dispatcher::new(io, codec, Pipeline::new(sink, service)).await;
     log::trace!("Ws handler is terminated: {result:?}");
 
     result

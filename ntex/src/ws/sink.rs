@@ -24,6 +24,19 @@ impl WsSink {
         &self.0.io
     }
 
+    pub(crate) fn start_close_timeout(&self) {
+        if self.0.cfg.close_timeout.non_zero() {
+            let io = self.0.io.clone();
+            let close_timeout = self.0.cfg.close_timeout;
+            rt::spawn(async move {
+                select(sleep(close_timeout), io.on_disconnect()).await;
+                if !io.is_closed() {
+                    io.close();
+                }
+            });
+        }
+    }
+
     /// Encodes and queues a message for the peer.
     ///
     /// Sending a close message starts the closing handshake. The connection
@@ -35,15 +48,8 @@ impl WsSink {
         if let Err(e) = self.0.io.encode(item, &self.0.codec) {
             Err(e)
         } else {
-            if close && self.0.cfg.close_timeout.non_zero() {
-                let io = self.0.io.clone();
-                let close_timeout = self.0.cfg.close_timeout;
-                rt::spawn(async move {
-                    select(sleep(close_timeout), io.on_disconnect()).await;
-                    if !io.is_closed() {
-                        io.close();
-                    }
-                });
+            if close {
+                self.start_close_timeout();
             }
             Ok(())
         }

@@ -182,6 +182,61 @@ async fn web_ws_client() {
 }
 
 #[ntex::test]
+async fn web_ws_service_close_timeout() {
+    use ntex::io::DispatchItem;
+    use ntex::time::{Millis, timeout};
+    use ntex::ws::WsClient;
+
+    let srv = test::server(async |_| {
+        App::new().service(
+            web::resource("/").route(web::to(async move |req: HttpRequest| {
+                let _ = ws::start_with(
+                    &req,
+                    None,
+                    service::fn_service(async |item: DispatchItem<ntex::ws::Codec>| {
+                        let msg = match item {
+                            DispatchItem::Item(ws::Frame::Text(text)) => Some(ws::Message::Text(
+                                String::from_utf8_lossy(&text).as_ref().into(),
+                            )),
+                            _ => None,
+                        };
+                        Ok::<_, WsError<io::Error>>(msg)
+                    }),
+                )
+                .await;
+            })),
+        )
+    });
+
+    let conn = WsClient::new(
+        srv.url("/"),
+        WsClientConfig::new()
+            .set_address(srv.addr())
+            .set_close_timeout(Millis(50)),
+    )
+    .connect()
+    .await
+    .unwrap();
+    conn.sink()
+        .send(ws::Message::Text(ByteString::from_static("text")))
+        .await
+        .unwrap();
+
+    let result = timeout(
+        Millis(500),
+        conn.seal()
+            .start(service::fn_service(async |frame: ws::Frame| {
+                Ok::<_, ()>(match frame {
+                    ws::Frame::Text(_) => Some(ws::Message::Close(None)),
+                    _ => None,
+                })
+            })),
+    )
+    .await;
+    assert!(result.is_ok());
+}
+
+#[ntex::test]
 async fn web_ws_subprotocol() {
     use ntex::{time::Seconds, ws::WsClient};
 

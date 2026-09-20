@@ -438,12 +438,16 @@ impl WsConnection<Sealed> {
         T: Service<(), ws::Frame, Res = Option<ws::Message>> + 'static,
     {
         let io = self.io.get_ref();
+        let sink = self.sink();
         let service = apply_fn(
             svc.into_service().map_err(WsError::Service),
             async move |req, svc| match req {
                 DispatchItem::<ws::Codec>::Item(item) => {
                     let close = matches!(item, ws::Frame::Close(_));
                     let result = svc.call(item).await;
+                    if matches!(&result, Ok(Some(ws::Message::Close(_)))) {
+                        sink.start_close_timeout();
+                    }
                     if close {
                         let io = io.clone();
                         rt::spawn(async move { io.close() });
