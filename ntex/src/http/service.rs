@@ -96,7 +96,7 @@ where
     }
 
     #[must_use]
-    /// Provide http/1 control service.
+    /// Provides the HTTP/2 control service.
     pub fn h2_control<Ctl>(
         self,
         ctl: impl IntoServiceFactory<Ctl, Req::State, h2::Control<Error<H2Error>>>,

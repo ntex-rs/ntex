@@ -404,7 +404,7 @@ impl TestServer {
         }
     }
 
-    /// Construct test server url
+    /// Returns the test server's socket address.
     pub fn addr(&self) -> net::SocketAddr {
         self.addr
     }

@@ -7,7 +7,7 @@ use crate::http::{HeaderItem, Method, StatusCode, Uri, Version, h1::Codec};
 use crate::io::{IoBoxed, IoRef, types};
 use crate::util::Extensions;
 
-/// Represents various types of connection
+/// The connection behavior selected for an HTTP message.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum ConnectionType {
     /// Close connection after response
@@ -71,14 +71,26 @@ impl CurrentIo {
     }
 }
 
+/// The parsed metadata for an HTTP request.
 #[derive(Debug)]
 pub struct RequestHead {
+    /// Identifier of the connection that received the request.
     pub id: usize,
+    /// Request URI.
     pub uri: Uri,
+    /// Request method.
     pub method: Method,
+    /// HTTP protocol version.
     pub version: Version,
+    /// Parsed request headers.
     pub headers: HeaderMap,
+    /// Headers in their original order and with their original names.
+    ///
+    /// This collection is populated only when
+    /// [`HttpServiceConfig::set_enable_headers_vec`](crate::http::HttpServiceConfig::set_enable_headers_vec)
+    /// is enabled.
     pub headers_vec: Vec<HeaderItem>,
+    /// Request-local type map.
     pub extensions: RefCell<Extensions>,
     pub(crate) io: CurrentIo,
     pub(crate) flags: Flags,
@@ -185,12 +197,13 @@ impl RequestHead {
     }
 
     #[inline]
-    /// Get response body chunking state
+    /// Returns whether chunked transfer encoding is allowed.
     pub fn chunked(&self) -> bool {
         !self.flags.contains(Flags::NO_CHUNKING)
     }
 
     #[inline]
+    /// Enables or disables chunked transfer encoding.
     pub fn no_chunking(&mut self, val: bool) {
         if val {
             self.flags.insert(Flags::NO_CHUNKING);
@@ -235,12 +248,22 @@ impl RequestHead {
     }
 }
 
+/// The metadata for an HTTP response.
 #[derive(Debug)]
 pub struct ResponseHead {
+    /// HTTP protocol version.
     pub version: Version,
+    /// Response status code.
     pub status: StatusCode,
+    /// Response headers.
     pub headers: HeaderMap,
+    /// Headers in their original order and with their original names.
+    ///
+    /// This collection is populated when decoding a response with
+    /// [`HttpServiceConfig::set_enable_headers_vec`](crate::http::HttpServiceConfig::set_enable_headers_vec)
+    /// enabled.
     pub headers_vec: Vec<HeaderItem>,
+    /// Custom reason phrase, or `None` to use the status code's standard phrase.
     pub reason: Option<&'static str>,
     pub(crate) io: CurrentIo,
     pub(crate) extensions: RefCell<Extensions>,

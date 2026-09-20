@@ -212,7 +212,7 @@ impl<B> Response<B> {
         )
     }
 
-    /// Drop request's body.
+    /// Drops the response body while preserving the response head.
     pub fn drop_body(self) -> Response<()> {
         Response {
             head: self.head,
@@ -315,6 +315,13 @@ impl<'a> Iterator for CookieIter<'a> {
 ///
 /// This type can be used to construct an instance of `Response` through a
 /// builder-like pattern.
+///
+/// Header conversion errors are stored by the builder. A later call to
+/// [`ResponseBuilder::body`], [`ResponseBuilder::message_body`],
+/// [`ResponseBuilder::streaming`], [`ResponseBuilder::json`], or
+/// [`ResponseBuilder::build`] converts the stored error into an error response.
+/// After an error is stored, subsequent configuration does not affect the
+/// returned response.
 pub struct ResponseBuilder {
     head: Option<Message<ResponseHead>>,
     err: Option<HttpError>,

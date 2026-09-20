@@ -19,14 +19,15 @@ pub use self::service::H1Service;
 pub(super) use self::service::handle_io;
 use crate::{channel::bstream::Receiver, util::Bytes};
 
+/// An HTTP/1 request payload stream.
 pub type Payload = Receiver<super::error::PayloadError>;
 
+/// A message produced or consumed by the HTTP/1 codec.
 #[derive(Debug)]
-/// Codec message
 pub enum Message<T> {
-    /// Http message
+    /// A complete request or response head.
     Item(T),
-    /// Payload chunk
+    /// A payload chunk, or `None` at the end of the payload.
     Chunk(Option<Bytes>),
 }
 
@@ -36,11 +37,14 @@ impl<T> From<T> for Message<T> {
     }
 }
 
-/// Incoming request type
+/// The payload framing detected for an incoming message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageType {
+    /// The message has no payload.
     None,
+    /// The payload has a known length.
     Payload,
+    /// The payload uses streaming transfer encoding.
     Stream,
 }
 

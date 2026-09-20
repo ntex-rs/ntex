@@ -6,13 +6,13 @@ use crate::time::{Millis, Seconds, sleep};
 use crate::{channel::oneshot, util::BytePages, util::BytesMut, util::HashSet};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-/// Server keep-alive setting
+/// Server keep-alive behavior.
 pub enum KeepAlive {
-    /// Keep alive in seconds
+    /// Close an idle connection after this timeout.
     Timeout(Seconds),
-    /// Relay on OS to shutdown tcp connection
+    /// Keep the connection open until the peer or operating system closes it.
     Os,
-    /// Disabled
+    /// Disable persistent connections.
     Disabled,
 }
 
@@ -163,7 +163,7 @@ impl HttpServiceConfig {
     ///
     /// To disable timeout set value to 0.
     ///
-    /// By default client timeout is set to 3 seconds.
+    /// By default, the timeout is 1 second.
     pub fn set_client_timeout(mut self, timeout: Seconds) -> Self {
         if timeout.is_zero() {
             self.headers_read_rate = None;
@@ -195,7 +195,8 @@ impl HttpServiceConfig {
     /// sends `rate` amount of data within `timeout` period of time, extend timeout by `timeout` seconds.
     /// But no more than `max_timeout` timeout.
     ///
-    /// By default headers read rate is set to 1sec with max timeout 5sec.
+    /// By default, the timeout is 1 second and the maximum timeout is 16
+    /// seconds.
     pub fn set_headers_read_rate(
         mut self,
         timeout: Seconds,
