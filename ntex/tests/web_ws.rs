@@ -2,7 +2,10 @@ use std::io;
 
 use ntex::http::{StatusCode, header};
 use ntex::web::{self, App, HttpRequest, HttpResponse, test, ws};
-use ntex::ws::{WsClientConfig, error::WsClientError};
+use ntex::ws::{
+    WsClientConfig,
+    error::{HandshakeError, WsClientError, WsError},
+};
 use ntex::{service, util::ByteString, util::Bytes};
 
 async fn ws_service(msg: ws::Frame) -> Result<Option<ws::Message>, io::Error> {
@@ -212,6 +215,41 @@ async fn web_ws_subprotocol() {
             .map(|v| v.to_str().unwrap()),
         Some("my-subprotocol")
     );
+}
+
+#[ntex::test]
+async fn web_ws_rejects_unrequested_subprotocol() {
+    use std::sync::mpsc;
+
+    use ntex::ws::WsClient;
+
+    let (tx, rx) = mpsc::channel();
+    let srv = test::server(async move |_| {
+        let tx = tx.clone();
+        App::new().service(
+            web::resource("/").route(web::to(async move |req: HttpRequest| {
+                let result = ws::start(&req, Some("other"), ws_service).await;
+                tx.send(matches!(
+                    result,
+                    Err(WsError::Handshake(HandshakeError::BadWebsocketProtocol))
+                ))
+                .unwrap();
+            })),
+        )
+    });
+
+    let result = WsClient::new(
+        srv.url("/"),
+        WsClientConfig::new()
+            .set_address(srv.addr())
+            .set_protocols(["chat"])
+            .unwrap(),
+    )
+    .connect()
+    .await;
+
+    assert!(result.is_err());
+    assert!(rx.recv().unwrap());
 }
 
 #[ntex::test]

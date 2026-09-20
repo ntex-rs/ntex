@@ -46,12 +46,24 @@ pub enum ProtocolError {
     /// Reserved frame bits are set without a negotiated extension.
     #[error("Reserved frame bits are set: {0:#05b}")]
     ReservedBits(u8),
+    /// A control frame is fragmented.
+    #[error("Fragmented control frame: {0}")]
+    FragmentedControlFrame(OpCode),
     /// Invalid control frame length
     #[error("Invalid control frame length: {0}")]
     InvalidLength(usize),
-    /// Bad web socket op code
-    #[error("Bad web socket op code")]
-    BadOpCode,
+    /// A payload length does not use its shortest valid encoding.
+    #[error("Invalid payload length encoding")]
+    InvalidLengthEncoding,
+    /// Invalid close status code.
+    #[error("Invalid close status code: {0}")]
+    InvalidCloseCode(u16),
+    /// Invalid close-frame payload.
+    #[error("Invalid close-frame payload")]
+    InvalidClosePayload,
+    /// Text data is not valid UTF-8.
+    #[error("Invalid UTF-8 in text data")]
+    InvalidUtf8,
     /// A payload reached size limit.
     #[error("A payload reached size limit.")]
     Overflow,
@@ -61,9 +73,6 @@ pub enum ProtocolError {
     /// Received new continuation but it is already started
     #[error("Received new continuation but it is already started")]
     ContinuationStarted,
-    /// Unknown continuation fragment
-    #[error("Unknown continuation fragment {0}")]
-    ContinuationFragment(OpCode),
 }
 
 /// Errors produced while configuring a WebSocket client.
@@ -129,6 +138,12 @@ pub enum WsClientError {
     /// Invalid challenge response
     #[error("Invalid challenge response")]
     InvalidChallengeResponse(String, HeaderValue),
+    /// The server selected an invalid or unrequested WebSocket subprotocol.
+    #[error("Invalid WebSocket subprotocol: {0:?}")]
+    InvalidWebSocketProtocol(HeaderValue),
+    /// The server returned an extension that the client did not offer.
+    #[error("Unexpected WebSocket extensions: {0:?}")]
+    UnexpectedWebSocketExtensions(HeaderValue),
     /// Protocol error
     #[error("{0}")]
     Protocol(
@@ -187,6 +202,12 @@ impl Clone for WsClientError {
             WsClientError::InvalidChallengeResponse(n, val) => {
                 WsClientError::InvalidChallengeResponse(n.clone(), val.clone())
             }
+            WsClientError::InvalidWebSocketProtocol(val) => {
+                WsClientError::InvalidWebSocketProtocol(val.clone())
+            }
+            WsClientError::UnexpectedWebSocketExtensions(val) => {
+                WsClientError::UnexpectedWebSocketExtensions(val.clone())
+            }
             WsClientError::Protocol(err) => WsClientError::Protocol(*err),
             WsClientError::Timeout => WsClientError::Timeout,
             WsClientError::Connect(err) => WsClientError::Connect(err.clone()),
@@ -224,6 +245,9 @@ pub enum HandshakeError {
     /// Websocket key is not set or wrong
     #[error("Unknown websocket key")]
     BadWebsocketKey,
+    /// The selected WebSocket subprotocol was not requested by the client.
+    #[error("Invalid websocket subprotocol")]
+    BadWebsocketProtocol,
 }
 
 impl ResponseError for HandshakeError {
@@ -247,6 +271,9 @@ impl ResponseError for HandshakeError {
             HandshakeError::BadWebsocketKey => {
                 Response::BadRequest().reason("Handshake error").build()
             }
+            HandshakeError::BadWebsocketProtocol => Response::BadRequest()
+                .reason("Invalid websocket subprotocol")
+                .build(),
         }
     }
 }

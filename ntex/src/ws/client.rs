@@ -17,13 +17,14 @@ use nanorand::{Rng, WyRand};
 use crate::client::{ClientCodec, ClientConfig, ClientRawRequest, ClientResponse};
 use crate::connect::{Connect, ConnectError, Connector};
 use crate::error::{Error, ErrorMapping};
-use crate::http::header::{self, HeaderValue};
+use crate::http::header::{self, HeaderMap, HeaderValue};
 use crate::http::{ConnectionType, Message, Method, RequestHead, StatusCode, Uri};
 use crate::http::{body::BodySize, error::HttpError};
 use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, Layer, Reason, Sealed};
 use crate::service::{IntoService, Pipeline, apply_fn, fn_service};
 use crate::{Cfg, Service, SharedCfg, channel::mpsc, rt, time::timeout, ws};
 
+use super::cfg::is_token;
 use super::error::{WsClientError, WsConfigError, WsError};
 use super::handshake::header_contains_token;
 use super::{WsClientConfig, transport::WsTransport};
@@ -300,6 +301,8 @@ where
             log::trace!("{tag}: Missing SEC-WEBSOCKET-ACCEPT header");
             return Err(Error::from(WsClientError::MissingWebSocketAcceptHeader));
         }
+
+        validate_negotiation(&response.headers, &self.cfg.headers).map_err(Error::from)?;
         log::trace!("{tag}: Ws handshake response verification is completed");
 
         // response and ws io
@@ -315,6 +318,31 @@ where
             },
         ))
     }
+}
+
+fn validate_negotiation(response: &HeaderMap, offered: &HeaderMap) -> Result<(), WsClientError> {
+    if let Some(extensions) = response.get(header::SEC_WEBSOCKET_EXTENSIONS) {
+        return Err(WsClientError::UnexpectedWebSocketExtensions(
+            extensions.clone(),
+        ));
+    }
+
+    let mut protocols = response.get_all(header::SEC_WEBSOCKET_PROTOCOL);
+    if let Some(protocol) = protocols.next() {
+        let selected = protocol.to_str().ok();
+        let valid = protocols.next().is_none()
+            && selected.is_some_and(|selected| {
+                is_token(selected)
+                    && offered
+                        .get(header::SEC_WEBSOCKET_PROTOCOL)
+                        .and_then(|offered| offered.to_str().ok())
+                        .is_some_and(|offered| offered.split(',').any(|item| item == selected))
+            });
+        if !valid {
+            return Err(WsClientError::InvalidWebSocketProtocol(protocol.clone()));
+        }
+    }
+    Ok(())
 }
 
 impl<F> fmt::Debug for WsClient<F> {
@@ -491,6 +519,72 @@ mod tests {
         let cfg = cfg.set_protocols([] as [&str; 0]).unwrap();
         assert!(!cfg.headers.contains_key(header::SEC_WEBSOCKET_PROTOCOL));
         assert!(WsClientConfig::new().set_protocols(["bad\n"]).is_err());
+        assert!(
+            WsClientConfig::new()
+                .set_protocols(["bad protocol"])
+                .is_err()
+        );
+        assert!(
+            WsClientConfig::new()
+                .set_protocols(["first,second"])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn negotiation() {
+        let offered = WsClientConfig::new()
+            .set_protocols(["chat", "superchat"])
+            .unwrap();
+        let mut response = HeaderMap::new();
+
+        response.insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static("chat"),
+        );
+        validate_negotiation(&response, &offered.headers).unwrap();
+
+        response.insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static("other"),
+        );
+        assert!(matches!(
+            validate_negotiation(&response, &offered.headers),
+            Err(WsClientError::InvalidWebSocketProtocol(_))
+        ));
+
+        response.insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static("chat,superchat"),
+        );
+        assert!(matches!(
+            validate_negotiation(&response, &offered.headers),
+            Err(WsClientError::InvalidWebSocketProtocol(_))
+        ));
+
+        response.remove(header::SEC_WEBSOCKET_PROTOCOL);
+        response.append(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static("chat"),
+        );
+        response.append(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static("superchat"),
+        );
+        assert!(matches!(
+            validate_negotiation(&response, &offered.headers),
+            Err(WsClientError::InvalidWebSocketProtocol(_))
+        ));
+
+        response.remove(header::SEC_WEBSOCKET_PROTOCOL);
+        response.insert(
+            header::SEC_WEBSOCKET_EXTENSIONS,
+            HeaderValue::from_static("permessage-deflate"),
+        );
+        assert!(matches!(
+            validate_negotiation(&response, &offered.headers),
+            Err(WsClientError::UnexpectedWebSocketExtensions(_))
+        ));
     }
 
     #[crate::rt_test]

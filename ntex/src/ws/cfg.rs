@@ -5,7 +5,9 @@ use base64::{Engine, engine::general_purpose::STANDARD as base64};
 use coo_kie::{Cookie, CookieJar};
 
 use crate::http::error::HttpError;
-use crate::http::header::{self, AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
+use crate::http::header::{
+    self, AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, InvalidHeaderValue,
+};
 use crate::service::cfg::{CfgContext, Configuration};
 use crate::time::Millis;
 
@@ -76,7 +78,6 @@ impl WsClientConfig {
         self
     }
 
-    #[must_use]
     /// Sets the WebSocket subprotocols offered to the server.
     ///
     /// This replaces the current `Sec-WebSocket-Protocol` header. An empty
@@ -84,18 +85,22 @@ impl WsClientConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`HttpError`] if the comma-separated protocol list is not a
-    /// valid HTTP header value.
+    /// Returns [`HttpError`] if a protocol is not a valid HTTP token or the
+    /// resulting list is not a valid HTTP header value.
     pub fn set_protocols<U, V>(mut self, protos: U) -> Result<Self, HttpError>
     where
         U: IntoIterator<Item = V>,
         V: AsRef<str>,
     {
-        let protos = protos
-            .into_iter()
-            .map(|proto| proto.as_ref().to_owned())
-            .collect::<Vec<_>>()
-            .join(",");
+        let mut values = Vec::new();
+        for proto in protos {
+            let proto = proto.as_ref();
+            if !is_token(proto) {
+                return Err(InvalidHeaderValue::default().into());
+            }
+            values.push(proto.to_owned());
+        }
+        let protos = values.join(",");
 
         if protos.is_empty() {
             self.headers.remove(header::SEC_WEBSOCKET_PROTOCOL);
@@ -215,4 +220,28 @@ impl WsClientConfig {
         self.timeout = timeout.into();
         self
     }
+}
+
+pub(crate) fn is_token(value: &str) -> bool {
+    !value.is_empty()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
 }

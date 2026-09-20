@@ -19,8 +19,6 @@ pub enum OpCode {
     Ping,
     /// Indicates a pong control frame.
     Pong,
-    /// Indicates an invalid opcode was received.
-    Bad,
 }
 
 impl fmt::Display for OpCode {
@@ -32,7 +30,6 @@ impl fmt::Display for OpCode {
             OpCode::Close => write!(f, "CLOSE"),
             OpCode::Ping => write!(f, "PING"),
             OpCode::Pong => write!(f, "PONG"),
-            OpCode::Bad => write!(f, "BAD"),
         }
     }
 }
@@ -46,25 +43,29 @@ impl From<OpCode> for u8 {
             OpCode::Close => 8,
             OpCode::Ping => 9,
             OpCode::Pong => 10,
-            OpCode::Bad => {
-                log::error!("Attempted to convert invalid opcode to u8. This is a bug.");
-                8 // if this somehow happens, a close frame will help us tear down quickly
-            }
         }
     }
 }
 
-impl From<u8> for OpCode {
-    fn from(byte: u8) -> OpCode {
+impl TryFrom<u8> for OpCode {
+    type Error = ();
+
+    fn try_from(byte: u8) -> Result<OpCode, Self::Error> {
         match byte {
-            0 => OpCode::Continue,
-            1 => OpCode::Text,
-            2 => OpCode::Binary,
-            8 => OpCode::Close,
-            9 => OpCode::Ping,
-            10 => OpCode::Pong,
-            _ => OpCode::Bad,
+            0 => Ok(OpCode::Continue),
+            1 => Ok(OpCode::Text),
+            2 => Ok(OpCode::Binary),
+            8 => Ok(OpCode::Close),
+            9 => Ok(OpCode::Ping),
+            10 => Ok(OpCode::Pong),
+            _ => Err(()),
         }
+    }
+}
+
+impl OpCode {
+    pub(crate) fn is_control(self) -> bool {
+        matches!(self, OpCode::Close | OpCode::Ping | OpCode::Pong)
     }
 }
 
@@ -88,7 +89,7 @@ pub enum CloseCode {
     Unsupported,
     /// Indicates that the connection closed without a close control frame.
     ///
-    /// This code is reserved for local reporting and must not be sent in a
+    /// This code is reserved for local reporting and cannot be sent in a
     /// close frame.
     Abnormal,
     /// Indicates that an endpoint is terminating the connection
@@ -126,9 +127,16 @@ pub enum CloseCode {
     /// connect to a different IP (when multiple targets exist), or
     /// reconnect to the same IP when a user has performed an action.
     Again,
-    #[doc(hidden)]
+    /// Indicates that an upstream server returned an invalid response.
+    BadGateway,
+    /// Indicates that the TLS handshake failed.
+    ///
+    /// This code is reserved for local reporting and cannot be sent in a
+    /// close frame.
     Tls,
-    #[doc(hidden)]
+    /// An unrecognized or application-defined close code.
+    ///
+    /// Only values in the range 3000 through 4999 can be sent.
     Other(u16),
 }
 
@@ -147,6 +155,7 @@ impl From<CloseCode> for u16 {
             CloseCode::Error => 1011,
             CloseCode::Restart => 1012,
             CloseCode::Again => 1013,
+            CloseCode::BadGateway => 1014,
             CloseCode::Tls => 1015,
             CloseCode::Other(code) => code,
         }
@@ -168,9 +177,17 @@ impl From<u16> for CloseCode {
             1011 => CloseCode::Error,
             1012 => CloseCode::Restart,
             1013 => CloseCode::Again,
+            1014 => CloseCode::BadGateway,
             1015 => CloseCode::Tls,
             _ => CloseCode::Other(code),
         }
+    }
+}
+
+impl CloseCode {
+    pub(crate) fn is_valid(self) -> bool {
+        !matches!(self, CloseCode::Abnormal | CloseCode::Tls)
+            && !matches!(self, CloseCode::Other(code) if !(3000..=4999).contains(&code))
     }
 }
 
@@ -313,7 +330,7 @@ mod tests {
 
     macro_rules! opcode_into {
         ($from:expr => $opcode:pat) => {
-            match OpCode::from($from) {
+            match OpCode::try_from($from).unwrap() {
                 e @ $opcode => (),
                 e => unreachable!("{:?}", e),
             }
@@ -338,7 +355,7 @@ mod tests {
         opcode_into!(8 => OpCode::Close);
         opcode_into!(9 => OpCode::Ping);
         opcode_into!(10 => OpCode::Pong);
-        opcode_into!(99 => OpCode::Bad);
+        assert!(OpCode::try_from(99).is_err());
     }
 
     #[test]
@@ -352,13 +369,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
-    #[allow(clippy::should_panic_without_expect)]
-    fn test_from_opcode_debug() {
-        opcode_from!(OpCode::Bad => 99);
-    }
-
-    #[test]
     fn test_from_opcode_display() {
         assert_eq!(format!("{}", OpCode::Continue), "CONTINUE");
         assert_eq!(format!("{}", OpCode::Text), "TEXT");
@@ -366,7 +376,6 @@ mod tests {
         assert_eq!(format!("{}", OpCode::Close), "CLOSE");
         assert_eq!(format!("{}", OpCode::Ping), "PING");
         assert_eq!(format!("{}", OpCode::Pong), "PONG");
-        assert_eq!(format!("{}", OpCode::Bad), "BAD");
     }
 
     #[test]
@@ -389,8 +398,13 @@ mod tests {
         assert_eq!(CloseCode::from(1011u16), CloseCode::Error);
         assert_eq!(CloseCode::from(1012u16), CloseCode::Restart);
         assert_eq!(CloseCode::from(1013u16), CloseCode::Again);
+        assert_eq!(CloseCode::from(1014u16), CloseCode::BadGateway);
         assert_eq!(CloseCode::from(1015u16), CloseCode::Tls);
-        assert_eq!(CloseCode::from(2000u16), CloseCode::Other(2000));
+        assert_eq!(CloseCode::from(3000u16), CloseCode::Other(3000));
+        assert!(!CloseCode::from(1005u16).is_valid());
+        assert!(!CloseCode::from(1006u16).is_valid());
+        assert!(!CloseCode::from(1015u16).is_valid());
+        assert!(!CloseCode::from(2000u16).is_valid());
     }
 
     #[test]
@@ -407,7 +421,9 @@ mod tests {
         assert_eq!(1011u16, Into::<u16>::into(CloseCode::Error));
         assert_eq!(1012u16, Into::<u16>::into(CloseCode::Restart));
         assert_eq!(1013u16, Into::<u16>::into(CloseCode::Again));
+        assert_eq!(1014u16, Into::<u16>::into(CloseCode::BadGateway));
         assert_eq!(1015u16, Into::<u16>::into(CloseCode::Tls));
-        assert_eq!(2000u16, Into::<u16>::into(CloseCode::Other(2000)));
+        assert_eq!(3000u16, Into::<u16>::into(CloseCode::Other(3000)));
+        assert!(!CloseCode::Other(2000).is_valid());
     }
 }

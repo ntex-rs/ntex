@@ -49,7 +49,8 @@ pub fn subprotocols(req: &HttpRequest) -> impl Iterator<Item = &str> {
 /// including the chosen subprotocol in the response.
 ///
 /// If `subprotocol` is `Some`, the `Sec-Websocket-Protocol` header will be included
-/// in the response with the chosen protocol. If `None`, the header is omitted.
+/// in the response with the chosen protocol. The protocol must be a valid HTTP
+/// token offered by the client. If `None`, the header is omitted.
 ///
 /// # Example
 ///
@@ -89,7 +90,8 @@ where
 /// including the chosen subprotocol in the response.
 ///
 /// If `subprotocol` is `Some`, the `Sec-Websocket-Protocol` header will be included
-/// in the response with the chosen protocol. If `None`, the header is omitted.
+/// in the response with the chosen protocol. The protocol must be a valid HTTP
+/// token offered by the client. If `None`, the header is omitted.
 pub async fn start_with<S, Err>(
     req: &HttpRequest,
     subprotocol: Option<&str>,
@@ -106,6 +108,9 @@ where
     // ws handshake
     let mut res = handshake(req.head())?;
     if let Some(protocol) = subprotocol {
+        if !ws::is_token(protocol) || !subprotocols(req).any(|offered| offered == protocol) {
+            return Err(HandshakeError::BadWebsocketProtocol.into());
+        }
         res.set_header(header::SEC_WEBSOCKET_PROTOCOL, protocol);
     }
     let res = res.build().into_parts().0;

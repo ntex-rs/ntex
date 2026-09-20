@@ -98,7 +98,6 @@ pub fn handshake_response(req: &RequestHead) -> ResponseBuilder {
 
     Response::builder(StatusCode::SWITCHING_PROTOCOLS)
         .upgrade("websocket")
-        .header(header::TRANSFER_ENCODING, "chunked")
         .header(header::SEC_WEBSOCKET_ACCEPT, key)
         .take()
 }
@@ -262,10 +261,9 @@ mod tests {
             )
             .build();
         verify_handshake(req.head()).unwrap();
-        assert_eq!(
-            StatusCode::SWITCHING_PROTOCOLS,
-            handshake_response(req.head()).build().status()
-        );
+        let response = handshake_response(req.head()).build();
+        assert_eq!(StatusCode::SWITCHING_PROTOCOLS, response.status());
+        assert!(!response.headers().contains_key(header::TRANSFER_ENCODING));
     }
 
     #[test]
@@ -281,6 +279,8 @@ mod tests {
         let resp: Response = HandshakeError::UnsupportedVersion.error_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let resp: Response = HandshakeError::BadWebsocketKey.error_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let resp: Response = HandshakeError::BadWebsocketProtocol.error_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }
