@@ -312,13 +312,28 @@ where
         }
     }
 
-    /// Register request filter.
+    /// Registers a request filter for this scope.
     ///
-    /// Filter runs during inbound processing in the request
-    /// lifecycle (request -> response), modifying request as
-    /// necessary, across all requests managed by the *Scope*.
+    /// The filter runs after the scope's path and guards match, but before its
+    /// nested router selects a resource. It is not called for requests that do
+    /// not match this scope.
     ///
-    /// This is similar to `App's` filters, but filter get invoked on scope level.
+    /// ```rust
+    /// use std::convert::Infallible;
+    /// use ntex::web::{self, App, WebRequest};
+    ///
+    /// async fn user(_state: &(), user_id: usize) -> String {
+    ///     format!("User {user_id}")
+    /// }
+    ///
+    /// App::new().service(
+    ///     web::scope("/api")
+    ///         .filter(async |req: WebRequest<()>| {
+    ///             Ok::<_, Infallible>(req.map_state(|()| 42usize))
+    ///         })
+    ///         .route("/user", web::get().to_with_state(user)),
+    /// );
+    /// ```
     #[must_use]
     pub fn filter<U, R>(
         self,
@@ -357,14 +372,25 @@ where
         }
     }
 
-    /// Registers middleware, in the form of a middleware component (type).
+    /// Adds middleware around this scope.
     ///
-    /// That runs during inbound processing in the request
-    /// lifecycle (request -> response), modifying request as
-    /// necessary, across all requests managed by the *Scope*. Scope-level
-    /// middleware is more limited in what it can modify, relative to Route or
-    /// Application level middleware, in that Scope-level middleware can not modify
-    /// `WebResponse`.
+    /// The middleware runs only after the scope's path and guards match. It
+    /// wraps everything inside the scope, including its filter, nested routes,
+    /// and fallback service. This means it can inspect or modify both the
+    /// request and response, even when no nested route matches.
+    ///
+    /// ```rust
+    /// use ntex::web::{self, middleware, App};
+    ///
+    /// App::default().service(
+    ///     web::scope("/api")
+    ///         .middleware(
+    ///             middleware::DefaultHeaders::new()
+    ///                 .header("x-api", "v1"),
+    ///         )
+    ///         .route("/health", web::get().to(async || "OK")),
+    /// );
+    /// ```
     #[must_use]
     pub fn middleware<U>(self, mw: U) -> Scope<St, In, Out, WebStack<St, U, M>, F> {
         Scope {

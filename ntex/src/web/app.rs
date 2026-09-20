@@ -299,30 +299,38 @@ where
         self
     }
 
-    /// Register request filter.
+    /// Registers a request filter.
     ///
-    /// Filter runs during inbound processing in the request
-    /// lifecycle (request -> response), modifying request as
-    /// necessary, across all requests managed by the *Application*.
+    /// Application filters run before the application router selects a
+    /// resource or scope. Filters are called in registration order, and each
+    /// filter receives the [`WebRequest`] returned by the previous one.
     ///
-    /// Use filter when you need to read or modify *every* request in some way.
-    /// If filter returns request object then pipeline execution continues
-    /// to the next service in pipeline. In case of response, it get returned
-    /// immediately.
+    /// A filter can inspect or modify the request, or use
+    /// [`WebRequest::map_state()`] to change its request-local state type. It
+    /// must return another `WebRequest` to continue processing. Returning an
+    /// error stops the filter chain and prevents routing; the error is handled
+    /// through [`WebResponseError`].
+    ///
+    /// Application middleware wraps the filter and router, so middleware runs
+    /// before filters on the inbound path.
     ///
     /// ```rust
-    /// use ntex::http::header::{CONTENT_TYPE, HeaderValue};
-    /// use ntex::web::{self, middleware, App};
+    /// use std::convert::Infallible;
+    /// use ntex::web::{self, App, WebRequest};
     ///
-    /// async fn index() -> &'static str {
-    ///     "Welcome!"
+    /// async fn authenticate(
+    ///     req: WebRequest<()>,
+    /// ) -> Result<WebRequest<&'static str>, Infallible> {
+    ///     Ok(req.map_state(|()| "alice"))
     /// }
     ///
-    /// fn main() {
-    ///     let app = App::default()
-    ///         .middleware(middleware::Logger::default())
-    ///         .route("/index.html", web::get().to(index));
+    /// async fn index(_state: &(), user: &'static str) -> String {
+    ///     format!("Hello, {user}!")
     /// }
+    ///
+    /// App::new()
+    ///     .filter(authenticate)
+    ///     .route("/", web::get().to_with_state(index));
     /// ```
     #[must_use]
     pub fn filter<Sf, R>(
@@ -361,34 +369,37 @@ where
         }
     }
 
-    #[must_use]
-    /// Registers middleware.
+    /// Adds middleware around the application.
     ///
-    /// Registers middleware in the form of a middleware component (type),
-    /// that runs during inbound and/or outbound processing in the request
-    /// lifecycle (request -> response), modifying request/response as
-    /// necessary, across all requests managed by the *Application*.
+    /// Use application middleware for work that should apply to every request,
+    /// such as logging, response headers, or authentication. It runs before
+    /// the application filter and router on the way in, and can inspect or
+    /// modify the response on the way back.
     ///
-    /// Use middleware when you need to read or modify *every* request or
-    /// response in some way.
+    /// Middleware may also return a response without calling the service it
+    /// wraps. In that case, the rest of the application pipeline is skipped.
     ///
-    /// As you register middleware in the App builder, imagine wrapping
-    /// layers around an inner App.
+    /// Requests pass through middleware in the order it was added. Responses
+    /// travel back in the opposite order. In this example, `DefaultHeaders`
+    /// sees the request before `Logger`, while `Logger` sees the response
+    /// before `DefaultHeaders`.
+    ///
+    /// Custom middleware should call the wrapped service through
+    /// [`Ctx::call()`] so readiness and lifecycle events are handled
+    /// correctly.
     ///
     /// ```rust
-    /// use ntex::http::header::{CONTENT_TYPE, HeaderValue};
     /// use ntex::web::{self, middleware, App};
     ///
-    /// async fn index() -> &'static str {
-    ///     "Welcome!"
-    /// }
-    ///
-    /// fn main() {
-    ///     let app = App::default()
-    ///         .middleware(middleware::Logger::default())
-    ///         .route("/index.html", web::get().to(index));
-    /// }
+    /// App::default()
+    ///     .middleware(
+    ///         middleware::DefaultHeaders::new()
+    ///             .header("x-application", "example"),
+    ///     )
+    ///     .middleware(middleware::Logger::default())
+    ///     .route("/", web::get().to(async || "Hello"));
     /// ```
+    #[must_use]
     pub fn middleware<U>(self, mw: U) -> App<St, In, Out, WebStack<St, U, M>, F> {
         App {
             middleware: WebStack::new(mw, self.middleware),

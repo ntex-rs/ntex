@@ -132,9 +132,28 @@ where
         self
     }
 
-    /// Register request filter.
+    /// Registers a request filter for this resource.
     ///
-    /// This is similar to `App's` filters, but filter get invoked on resource level.
+    /// The filter runs after the resource's path and guards match, but before
+    /// its routes are checked. It therefore also runs when no route matches
+    /// and the resource's default service is used.
+    ///
+    /// ```rust
+    /// use std::convert::Infallible;
+    /// use ntex::web::{self, App, WebRequest};
+    ///
+    /// async fn item(_state: &(), item_id: usize) -> String {
+    ///     format!("Item {item_id}")
+    /// }
+    ///
+    /// App::new().service(
+    ///     web::resource("/item")
+    ///         .filter(async |req: WebRequest<()>| {
+    ///             Ok::<_, Infallible>(req.map_state(|()| 10usize))
+    ///         })
+    ///         .route(web::get().to_with_state(item)),
+    /// );
+    /// ```
     #[must_use]
     pub fn filter<U, R>(
         self,
@@ -172,11 +191,22 @@ where
         }
     }
 
-    /// Register a resource middleware.
+    /// Adds middleware around this resource.
     ///
-    /// This is similar to `App's` middlewares, but middleware get invoked on resource level.
-    /// Resource level middlewares are not allowed to change response
-    /// type (i.e modify response's body).
+    /// The middleware runs only after the resource's path and guards match. It
+    /// wraps the resource filter, routes, and fallback service, so it can
+    /// inspect or modify both the request and response. It also runs when no
+    /// route matches and the resource fallback handles the request.
+    ///
+    /// ```rust
+    /// use ntex::web::{self, middleware, App};
+    ///
+    /// App::default().service(
+    ///     web::resource("/items")
+    ///         .middleware(middleware::Logger::default())
+    ///         .route(web::get().to(async || "Items")),
+    /// );
+    /// ```
     #[must_use]
     pub fn middleware<U>(self, mw: U) -> Resource<St, In, Out, WebStack<St, U, M>, F> {
         Resource {

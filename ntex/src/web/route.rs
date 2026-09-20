@@ -404,7 +404,9 @@ mod tests {
         let repr = format!("{route:?}");
         assert!(repr.contains("Route"), "{}", repr);
         assert!(
-            repr.contains("handler: Handler(\"ntex::web::route::Route<()>::new::{{closure}}\")"),
+            repr.contains(
+                "handler: HandlerNoState(\"ntex::web::route::Route<()>::new::{{closure}}\")"
+            ),
             "{}",
             repr
         );
@@ -416,9 +418,9 @@ mod tests {
         let route_service = route.service();
         let repr = format!("{route_service:?}");
         assert!(repr.contains("RouteService"));
-        assert!(
-            repr.contains("handler: Handler(\"ntex::web::route::Route<()>::new::{{closure}}\")")
-        );
+        assert!(repr.contains(
+            "handler: HandlerNoState(\"ntex::web::route::Route<()>::new::{{closure}}\")"
+        ));
         assert!(repr.contains("methods: [GET]"));
         assert!(repr.contains("guards: AllGuard()"));
     }
