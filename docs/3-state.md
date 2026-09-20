@@ -59,10 +59,29 @@ async fn main() {
 }
 ```
 
-The function receives `&AppState` for each call. ntex performs this conversion
-through [`IntoService`] trait implementation; for this case it uses [`fn_service_st`] type,
-calling it explicitly is useful when the service value must be named or
-passed through an API before creating the pipeline.
+The function receives `&AppState` for each call. The [`IntoService`]
+implementation performs this conversion automatically. You can call
+[`fn_service_st`] explicitly when the service value must be named or passed
+through an API before creating the pipeline.
+
+## Testing state-aware function services
+
+A state-aware function service can be tested without starting a server. Create
+the service with [`fn_service_st`], place it and the test state in a
+[`Pipeline::new`], then call it with the request value. This exercises the same
+state access and readiness handling used in production.
+
+When the state contains external dependencies, a mocking library can verify how
+the service uses them:
+
+- [`test-mockall`] defines the state behavior as a trait. Mockall creates a mock
+  state and checks calls to its accessor and operation methods.
+- [`test-shimforge`] keeps the concrete state type. Shimforge replaces its
+  methods during the test, including a method on an object nested in the state,
+  and checks the receiver's attributes and call arguments.
+
+Both examples configure call counts and ordering, invoke the service through a
+pipeline, and assert its response.
 
 ## Pipeline-owned state
 
@@ -96,8 +115,9 @@ async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self
 already been established. `Ctx` also provides corresponding `ready()` and
 `shutdown()` operations for implementing service combinators and middleware.
 
-Calling an inner service's trait methods directly bypasses this pipeline
-coordination is not possible.
+A wrapping service should not call an inner service's trait methods directly.
+Use `Ctx` so the pipeline can supply the required context and coordinate the
+service chain.
 
 ## Substituting state
 
@@ -171,12 +191,16 @@ pipeline should use. The [`RequestState`] trait represents such an input.
 state and a request:
 
 ```rust
-use ntex::service::State;
+use ntex::service::{RequestState, State};
 
 let input = State {
-    state: connection_state,
-    req: io,
+    state: "connection-1",
+    req: "request",
 };
+
+let (connection, request) = input.unpack();
+assert_eq!(connection, "connection-1");
+assert_eq!(request, "request");
 ```
 
 For example, ntex HTTP services use `RequestState` to extract state associated
@@ -187,12 +211,13 @@ HTTP request value while preserving its concrete type.
 [`Ctx`]: https://docs.rs/ntex/latest/ntex/struct.Ctx.html
 [`Ctx::call`]: https://docs.rs/ntex/latest/ntex/struct.Ctx.html#method.call
 [`Ctx::call_nowait`]: https://docs.rs/ntex/latest/ntex/struct.Ctx.html#method.call_nowait
-[`Ctx::map_state`]: https://docs.rs/ntex/latest/ntex/struct.Ctx.html#method.map_state
 [`fn_service_st`]: https://docs.rs/ntex/latest/ntex/fn.fn_service_st.html
+[`IntoService`]: https://docs.rs/ntex/latest/ntex/trait.IntoService.html
 [`map_state`]: https://docs.rs/ntex/latest/ntex/service/fn.map_state.html
-[`map_state_factory`]: https://docs.rs/ntex/latest/ntex/service/fn.map_state_factory.html
 [`Pipeline::new`]: https://docs.rs/ntex/latest/ntex/struct.Pipeline.html#method.new
 [`PipelineBinding`]: https://docs.rs/ntex/latest/ntex/struct.PipelineBinding.html
 [`PipelineState`]: https://docs.rs/ntex/latest/ntex/service/pipeline/struct.PipelineState.html
 [`RequestState`]: https://docs.rs/ntex/latest/ntex/service/trait.RequestState.html
 [`State<St, Req>`]: https://docs.rs/ntex/latest/ntex/service/struct.State.html
+[`test-mockall`]: https://github.com/ntex-rs/examples/tree/main/test-mockall
+[`test-shimforge`]: https://github.com/ntex-rs/examples/tree/main/test-shimforge
