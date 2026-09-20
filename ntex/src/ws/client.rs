@@ -37,6 +37,7 @@ thread_local! {
 /// [`connect`](Self::connect) to perform the opening handshake.
 pub struct WsClient<F> {
     uri: Uri,
+    err: Option<WsConfigError>,
     cfg: Cfg<WsClientConfig>,
     http_cfg: Cfg<ClientConfig>,
     connector: Pipeline<Connect<Uri>, Io<F>, Error<ConnectError>>,
@@ -58,45 +59,51 @@ impl WsClient<Base> {
     ///             .set_timeout(Seconds(10))
     ///     );
     ///
-    ///     let _client = WsClient::new("ws://localhost/socket", cfg).unwrap();
+    ///     let _client = WsClient::new("ws://localhost/socket", cfg);
     /// }
     /// ```
     ///
-    /// # Errors
-    ///
-    /// Returns [`WsConfigError`] if the URI is invalid, has no host or scheme,
-    /// or uses an unsupported scheme.
-    pub fn new<U>(uri: U, cfg: impl Into<Cfg<WsClientConfig>>) -> Result<Self, WsConfigError>
+    /// URI conversion and validation errors are stored and returned by
+    /// [`connect`](Self::connect).
+    pub fn new<U>(uri: U, cfg: impl Into<Cfg<WsClientConfig>>) -> Self
     where
         Uri: TryFrom<U>,
         HttpError: From<<Uri as TryFrom<U>>::Error>,
     {
-        let uri = Uri::try_from(uri).map_err(HttpError::from)?;
-
-        // validate uri
-        if uri.host().is_none() {
-            return Err(WsConfigError::MissingHost);
-        } else if uri.scheme().is_none() {
-            return Err(WsConfigError::MissingScheme);
-        } else if let Some(scheme) = uri.scheme() {
-            match scheme.as_str() {
-                "http" | "ws" | "https" | "wss" => (),
-                _ => return Err(WsConfigError::UnknownScheme),
+        let (uri, err) = match Uri::try_from(uri) {
+            Ok(uri) => {
+                let err = if uri.host().is_none() {
+                    Some(WsConfigError::MissingHost)
+                } else if uri.scheme().is_none() {
+                    Some(WsConfigError::MissingScheme)
+                } else if let Some(scheme) = uri.scheme() {
+                    if matches!(scheme.as_str(), "http" | "ws" | "https" | "wss") {
+                        None
+                    } else {
+                        Some(WsConfigError::UnknownScheme)
+                    }
+                } else {
+                    Some(WsConfigError::UnknownScheme)
+                };
+                (uri, err)
             }
-        } else {
-            return Err(WsConfigError::UnknownScheme);
-        }
+            Err(err) => (
+                Uri::default(),
+                Some(WsConfigError::Http(HttpError::from(err))),
+            ),
+        };
 
         let cfg = cfg.into();
         let shared = cfg.shared();
 
-        Ok(WsClient {
+        WsClient {
             uri,
+            err,
             cfg,
             http_cfg: shared.get(),
             connector: Pipeline::new(shared, Connector::<Uri>::new()),
             filter: marker::PhantomData,
-        })
+        }
     }
 }
 
@@ -110,6 +117,7 @@ impl<F> WsClient<F> {
         let shared = self.cfg.shared();
         WsClient {
             uri: self.uri,
+            err: self.err,
             cfg: self.cfg,
             http_cfg: self.http_cfg,
             connector: Pipeline::new(shared, f.into_service()),
@@ -142,8 +150,12 @@ where
     /// # Errors
     ///
     /// Returns an error if connection establishment, HTTP encoding or decoding,
-    /// timeout handling, or handshake validation fails.
+    /// URI validation, timeout handling, or handshake validation fails.
     pub async fn connect(&self) -> Result<WsConnection<F>, Error<WsClientError>> {
+        if let Some(err) = self.err.clone() {
+            return Err(Error::from(WsClientError::Config(err)).set_service(self.cfg.service()));
+        }
+
         let mut head = Message::<RequestHead>::new();
         // the message pool may return a recycled head whose method is not GET
         // (e.g. previously used by the HTTP/1 server dispatcher for a POST request)
@@ -312,7 +324,9 @@ where
             if self.cfg.server_mode {
                 ws::Codec::new().max_size(self.cfg.max_size)
             } else {
-                ws::Codec::new().max_size(self.cfg.max_size).client_mode()
+                ws::Codec::new()
+                    .max_size(self.cfg.max_size)
+                    .set_client_mode()
             },
         ))
     }
@@ -478,17 +492,34 @@ mod tests {
     #[crate::rt_test]
     async fn basic_errs() {
         let err = WsClient::new("localhost", SharedCfg::default())
+            .connect()
+            .await
             .err()
             .unwrap();
-        assert!(matches!(err, WsConfigError::MissingScheme));
+        assert!(matches!(
+            err.into_error(),
+            WsClientError::Config(WsConfigError::MissingScheme)
+        ));
 
         let err = WsClient::new("unknown://localhost", SharedCfg::default())
+            .connect()
+            .await
             .err()
             .unwrap();
-        assert!(matches!(err, WsConfigError::UnknownScheme));
+        assert!(matches!(
+            err.into_error(),
+            WsClientError::Config(WsConfigError::UnknownScheme)
+        ));
 
-        let err = WsClient::new("/", SharedCfg::default()).err().unwrap();
-        assert!(matches!(err, WsConfigError::MissingHost));
+        let err = WsClient::new("/", SharedCfg::default())
+            .connect()
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(
+            err.into_error(),
+            WsClientError::Config(WsConfigError::MissingHost)
+        ));
     }
 
     #[crate::rt_test]
@@ -563,9 +594,17 @@ mod tests {
         assert!(cfg.server_mode);
         assert_eq!(cfg.max_size, 100);
 
-        assert!(WsClient::new("/", SharedCfg::default()).is_err());
-        assert!(WsClient::new("http:///test", SharedCfg::default()).is_err());
-        assert!(WsClient::new("hmm://test.com/", SharedCfg::default()).is_err());
+        assert!(WsClient::new("/", SharedCfg::default()).err.is_some());
+        assert!(
+            WsClient::new("http:///test", SharedCfg::default())
+                .err
+                .is_some()
+        );
+        assert!(
+            WsClient::new("hmm://test.com/", SharedCfg::default())
+                .err
+                .is_some()
+        );
     }
 
     #[crate::rt_test]

@@ -87,6 +87,13 @@ pub enum WsConfigError {
 /// Errors produced while establishing or using a WebSocket client connection.
 #[derive(Debug, thiserror::Error)]
 pub enum WsClientError {
+    /// Invalid client configuration.
+    #[error("Invalid client configuration: {0}")]
+    Config(
+        #[from]
+        #[source]
+        WsConfigError,
+    ),
     /// Invalid request
     #[error("Invalid request")]
     InvalidRequest(
@@ -162,6 +169,7 @@ impl From<Either<EncodeError, io::Error>> for WsClientError {
 impl Clone for WsClientError {
     fn clone(&self) -> Self {
         match self {
+            WsClientError::Config(err) => WsClientError::Config(err.clone()),
             WsClientError::InvalidRequest(err) => WsClientError::InvalidRequest(err.clone()),
             WsClientError::InvalidResponse(err) => WsClientError::InvalidResponse(*err),
             WsClientError::InvalidResponseStatus(err) => WsClientError::InvalidResponseStatus(*err),

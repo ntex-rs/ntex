@@ -519,7 +519,7 @@ async fn test_ws_transport() {
     });
 
     let io = srv.wss().await.unwrap().into_inner().0;
-    let codec = ws::Codec::default().client_mode();
+    let codec = ws::Codec::default().set_client_mode();
 
     io.send(ws::Message::Binary(Bytes::from_static(b"text")), &codec)
         .await

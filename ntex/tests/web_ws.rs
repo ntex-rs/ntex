@@ -205,7 +205,6 @@ async fn web_ws_subprotocol() {
             .set_timeout(Seconds(30))
             .set_protocols(["my-subprotocol"]),
     )
-    .unwrap()
     .connect()
     .await
     .unwrap();
@@ -243,7 +242,6 @@ async fn web_ws_subprotocol_none() {
             .set_timeout(Seconds(30))
             .set_protocols(["my-subprotocol"]),
     )
-    .unwrap()
     .connect()
     .await
     .unwrap();
@@ -292,7 +290,6 @@ async fn web_ws_protocols_parsing() {
                 .set_protocols(["proto1", "proto2"]),
         ),
     )
-    .unwrap()
     .connect()
     .await
     .unwrap();

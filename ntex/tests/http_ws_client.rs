@@ -166,7 +166,6 @@ async fn test_keepalive_timeout() {
             .set_address(srv.addr())
             .set_timeout(Seconds(30)),
     )
-    .unwrap()
     .connect()
     .await
     .unwrap()
@@ -206,7 +205,6 @@ async fn test_upgrade_handler_with_await() {
             .set_address(srv.addr())
             .set_timeout(Seconds(1)),
     )
-    .unwrap()
     .connect()
     .await
     .unwrap();

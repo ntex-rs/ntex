@@ -25,10 +25,7 @@ impl WsSink {
 
     /// Encodes and queues a message for the peer.
     pub async fn send(&self, item: ws::Message) -> Result<(), ws::error::ProtocolError> {
-        let close = match item {
-            ws::Message::Close(_) => self.0.codec.is_closed(),
-            _ => false,
-        };
+        let close = matches!(item, ws::Message::Close(_));
 
         if let Err(e) = self.0.io.encode(item, &self.0.codec) {
             Err(e)

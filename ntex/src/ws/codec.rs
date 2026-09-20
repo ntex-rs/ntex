@@ -97,7 +97,7 @@ impl Codec {
     /// Client mode masks encoded frames and rejects masked incoming frames.
     /// By default, the codec uses server-side masking rules.
     #[must_use]
-    pub fn client_mode(self) -> Self {
+    pub fn set_client_mode(self) -> Self {
         self.remove_flags(Flags::SERVER);
         self
     }

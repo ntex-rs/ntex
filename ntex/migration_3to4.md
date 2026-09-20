@@ -146,10 +146,13 @@ use ntex::ws::{WsClient, WsClientConfig};
 let client = WsClient::new(
     "ws://127.0.0.1:8080/ws",
     WsClientConfig::new().set_max_frame_size(128 * 1024),
-)?;
+);
 
 let connection = client.connect().await?;
 ```
+
+URI validation errors are now reported by `connect()` rather than by
+`WsClient::new()`.
 
 Custom connectors and TLS are still selected with `connector()`, `openssl()`,
 or `rustls()` on `WsClient`.
