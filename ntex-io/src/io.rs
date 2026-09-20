@@ -849,6 +849,18 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn test_stop_timer_clears_timeout_notification() {
+        let (_client, server) = IoTest::create();
+        let server = Io::new(server, SharedCfg::new("SRV"));
+
+        server.start_timer(ntex_util::time::Seconds(10));
+        server.notify_timeout();
+        server.stop_timer();
+
+        assert!(lazy(|cx| server.poll_status_update(cx)).await.is_pending());
+    }
+
+    #[ntex::test]
     async fn test_read() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);

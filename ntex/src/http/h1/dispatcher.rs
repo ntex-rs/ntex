@@ -958,6 +958,89 @@ mod tests {
     }
 
     #[crate::rt_test]
+    async fn test_header_timeout_does_not_leak_into_payload() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(
+                HttpServiceConfig::new()
+                    .set_headers_read_rate(Seconds(10), Seconds(10), 1)
+                    .set_payload_read_rate(Seconds(10), Seconds(10), 1)
+                    .set_keepalive(KeepAlive::Disabled),
+            )
+            .into();
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |mut req: Request| {
+                    while req.payload().recv().await.is_some() {}
+                    Ok::<_, io::Error>(Response::Ok().build())
+                }),
+            ),
+            Pipeline::new((), DefaultControlService),
+            DispatcherConfig::default(),
+        );
+
+        client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\n\r\n");
+        sleep(Millis(50)).await;
+        h1.inner.io.notify_timeout();
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        client.write("body");
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+        assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
+    }
+
+    #[crate::rt_test]
+    async fn test_payload_timeout_does_not_leak_into_keepalive() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(
+                HttpServiceConfig::new()
+                    .set_headers_read_rate(Seconds(10), Seconds(10), 1)
+                    .set_payload_read_rate(Seconds(10), Seconds(10), 1)
+                    .set_keepalive(Seconds(10)),
+            )
+            .into();
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |mut req: Request| {
+                    while req.payload().recv().await.is_some() {}
+                    Ok::<_, io::Error>(Response::Ok().build())
+                }),
+            ),
+            Pipeline::new((), DefaultControlService),
+            DispatcherConfig::default(),
+        );
+
+        client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\n\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        client.write("body");
+        sleep(Millis(50)).await;
+        h1.inner.io.notify_timeout();
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        assert!(h1.inner.flags.contains(Flags::READ_KA_TIMEOUT));
+        assert!(!h1.inner.io.is_closed());
+        sleep(Millis(50)).await;
+        assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
+
+        client.close().await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+    }
+
+    #[crate::rt_test]
     async fn test_new_connection_without_header_timeout() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
