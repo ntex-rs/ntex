@@ -196,9 +196,26 @@ impl<St: State, In: 'static> ServiceConfig<St, In> {
         )
     }
 
-    /// Register http service.
+    /// Registers a web service with the current application or scope.
     ///
-    /// This is same as `App::service()` method.
+    /// This has the same routing behavior as [`App::service()`]. The service
+    /// can be a resource, scope, attribute-macro handler, or custom
+    /// [`WebServiceFactory`]. When this configuration is used by a scope, the
+    /// service is registered below that scope's path prefix.
+    ///
+    /// ```rust
+    /// use ntex::web::{self, App, ServiceConfig};
+    ///
+    /// fn configure(cfg: &mut ServiceConfig<()>) {
+    ///     cfg.service(
+    ///         web::resource("/health").to(async || "OK"),
+    ///     );
+    /// }
+    ///
+    /// App::default().configure(configure);
+    /// ```
+    ///
+    /// [`App::service()`]: super::App::service
     pub fn service<F>(&mut self, factory: F) -> &mut Self
     where
         F: WebServiceFactory<St, In> + 'static,

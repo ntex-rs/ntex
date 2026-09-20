@@ -153,15 +153,33 @@ where
         )
     }
 
-    /// Register http service.
+    /// Registers a web service with the application.
     ///
-    /// Http service is any type that implements `WebServiceFactory` trait.
+    /// A service defines its own path and guards through [`WebServiceFactory`].
+    /// Common services include [`Resource`], [`Scope`], handlers created with
+    /// route attribute macros, and custom services built with `web::service()`.
     ///
-    /// ntex provides several services implementations:
+    /// Use a resource to group several routes, filters, middleware, or a
+    /// fallback under one path. Use a scope to group services under a shared
+    /// path prefix.
     ///
-    /// * `Resource` is an entry in resource table which corresponds to requested URL.
-    /// * `Scope` is a set of resources with common root path.
-    /// * `StaticFiles` is a service for static files support
+    /// If no registered service matches the request path and guards, the
+    /// application's default service is used.
+    ///
+    /// ```rust
+    /// use ntex::web::{self, App, HttpResponse};
+    ///
+    /// App::default()
+    ///     .service(
+    ///         web::resource("/users")
+    ///             .route(web::get().to(async || "users"))
+    ///             .route(web::post().to(async || HttpResponse::Created())),
+    ///     )
+    ///     .service(
+    ///         web::scope("/api")
+    ///             .route("/health", web::get().to(async || "OK")),
+    ///     );
+    /// ```
     #[must_use]
     pub fn service<S>(self, factory: S) -> AppServices<St, In, Out, M, F>
     where
@@ -468,15 +486,14 @@ where
         )
     }
 
-    /// Register http service.
+    /// Registers another web service with the application.
     ///
-    /// Http service is any type that implements `WebServiceFactory` trait.
+    /// This has the same behavior as [`App::service()`]. The service supplies
+    /// its own path and guards and becomes part of the application's top-level
+    /// router.
     ///
-    /// ntex provides several services implementations:
-    ///
-    /// * `Resource` is an entry in resource table which corresponds to requested URL.
-    /// * `Scope` is a set of resources with common root path.
-    /// * `StaticFiles` is a service for static files support
+    /// If none of the registered services match, the application's default
+    /// service is used.
     #[must_use]
     pub fn service<S>(mut self, factory: S) -> Self
     where
@@ -541,24 +558,25 @@ where
     M: Middleware<WebServiceRouter<St, In, Out, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest<()>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
-    /// Construct service factory, suitable for `http::HttpService`.
+    /// Builds the application into a service factory.
     ///
-    /// ```rust,no_run
-    /// use ntex::{web, http, server, SharedCfg};
+    /// The returned factory accepts [`Request`] values and uses application
+    /// state supplied by the surrounding service pipeline. It can be passed to
+    /// [`HttpService`] when building an HTTP server manually.
     ///
-    /// #[ntex::main]
-    /// async fn main() -> std::io::Result<()> {
-    ///     server::build().bind("http", "127.0.0.1:0", SharedCfg::default(), async |_|
-    ///         http::HttpService::new(
-    ///             web::App::default()
-    ///                 .route("/index.html", web::get().to(async || { "hello_world" }))
-    ///                 .build()
-    ///         )
-    ///     )?
-    ///     .run()
-    ///     .await
-    /// }
+    /// Applications passed to [`web::server()`] do not normally need an
+    /// explicit call to `build()`.
+    ///
+    /// ```rust
+    /// use ntex::web;
+    ///
+    /// let factory = web::App::default()
+    ///     .route("/", web::get().to(async || "Hello"))
+    ///     .build();
     /// ```
+    ///
+    /// [`HttpService`]: crate::http::HttpService
+    /// [`web::server()`]: super::server
     pub fn build(
         self,
     ) -> impl ServiceFactory<
@@ -587,22 +605,33 @@ where
     M: Middleware<WebServiceRouter<St, In, Out, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest<()>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
-    /// Construct service factory, suitable for `http::HttpService` and set state.
+    /// Builds the application with a fixed application state.
     ///
-    /// ```rust,no_run
-    /// use ntex::{web, http, server, SharedCfg};
+    /// Unlike [`AppServices::build()`], which takes its application state from
+    /// the surrounding service pipeline, this method stores `state` in the
+    /// returned factory. Web handlers, filters, middleware, and services use
+    /// this fixed state even when the outer pipeline uses a different state
+    /// type.
     ///
-    /// #[ntex::main]
-    /// async fn main() -> std::io::Result<()> {
-    ///     server::build().bind("http", "127.0.0.1:0", SharedCfg::default(), async |_|
-    ///         http::HttpService::new(
-    ///             web::App::default()
-    ///                 .route("/index.html", web::get().to(async || { "hello_world" }))
-    ///         )
-    ///     )?
-    ///     .run()
-    ///     .await
+    /// ```rust
+    /// use ntex::web;
+    ///
+    /// #[derive(Clone)]
+    /// struct AppState {
+    ///     greeting: &'static str,
     /// }
+    ///
+    /// impl web::State for AppState {
+    ///     type Error = web::DefaultError;
+    /// }
+    ///
+    /// async fn index(state: &AppState, _request_state: ()) -> String {
+    ///     state.greeting.to_owned()
+    /// }
+    ///
+    /// let app = web::App::<AppState>::new()
+    ///     .route("/", web::get().to_with_state(index))
+    ///     .build_with::<()>(AppState { greeting: "Hello" });
     /// ```
     pub fn build_with<Outer>(
         self,

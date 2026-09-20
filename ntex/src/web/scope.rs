@@ -184,30 +184,26 @@ where
         }
     }
 
-    /// Register http service.
+    /// Registers a web service for this scope.
     ///
-    /// This is similar to `App's` service registration.
+    /// The service's path is joined with the scope prefix. A service can be a
+    /// [`Resource`], another [`Scope`], an attribute-macro handler, or a custom
+    /// service built with `web::service()`.
     ///
-    /// ntex web provides several services implementations:
-    ///
-    /// * *`Resource`* is an entry in resource table which corresponds to requested URL.
-    /// * *`Scope`* is a set of resources with common root path.
-    /// * *`StaticFiles`* is a service for static files support
+    /// If this scope matches but none of its services do, the scope's default
+    /// service is used.
     ///
     /// ```rust
-    /// use ntex::web::{self, App, HttpRequest};
+    /// use ntex::web::{self, App};
     ///
-    /// async fn index(req: HttpRequest) -> &'static str {
-    ///     "Welcome!"
-    /// }
-    ///
-    /// fn main() {
-    ///     let app = App::default().service(
-    ///         web::scope("/app").service(
-    ///             web::scope("/v1")
-    ///                 .service(web::resource("/test1").to(index)))
-    ///     );
-    /// }
+    /// App::default().service(
+    ///     web::scope("/api")
+    ///         .service(web::resource("/users").to(async || "users"))
+    ///         .service(
+    ///             web::scope("/admin")
+    ///                 .route("/health", web::get().to(async || "OK")),
+    ///         ),
+    /// );
     /// ```
     #[must_use]
     pub fn service(
@@ -418,31 +414,12 @@ where
             InitError = Failure,
         >,
 {
-    /// Register http service.
+    /// Registers another web service inside this scope.
     ///
-    /// This is similar to `App's` service registration.
+    /// This has the same behavior as [`Scope::service()`]. The service's path
+    /// is joined with the scope prefix and added to the scope's nested router.
     ///
-    /// ntex web provides several services implementations:
-    ///
-    /// * *`Resource`* is an entry in resource table which corresponds to requested URL.
-    /// * *`Scope`* is a set of resources with common root path.
-    /// * *`StaticFiles`* is a service for static files support
-    ///
-    /// ```rust
-    /// use ntex::web::{self, App, HttpRequest};
-    ///
-    /// async fn index(req: HttpRequest) -> &'static str {
-    ///     "Welcome!"
-    /// }
-    ///
-    /// fn main() {
-    ///     let app = App::default().service(
-    ///         web::scope("/app").service(
-    ///             web::scope("/v1")
-    ///                 .service(web::resource("/test1").to(index)))
-    ///     );
-    /// }
-    /// ```
+    /// If no nested service matches, the scope's default service is used.
     #[must_use]
     pub fn service(mut self, factory: impl WebServiceFactory<St, Out>) -> Self {
         self.services
