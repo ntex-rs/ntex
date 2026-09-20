@@ -19,6 +19,7 @@ macro_rules! forward_ready {
 }
 
 #[macro_export]
+/// Implements [`Filter::query`](crate::Filter::query) by forwarding to a field.
 macro_rules! forward_query {
     ($field:ident) => {
         #[inline]
@@ -29,6 +30,8 @@ macro_rules! forward_query {
 }
 
 #[macro_export]
+/// Implements [`Filter::shutdown`](crate::Filter::shutdown) by forwarding to a
+/// field.
 macro_rules! forward_shutdown {
     ($field:ident) => {
         #[inline]

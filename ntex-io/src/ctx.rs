@@ -5,7 +5,13 @@ use ntex_util::time::sleep;
 
 use crate::{Flags, Id, IoRef, IoTaskStatus, Readiness, io::IoState};
 
-/// Context for io read task
+/// Connection context shared with transport read and write tasks.
+///
+/// Transport implementations obtain buffers from this context, perform
+/// nonblocking I/O, and return completion through
+/// [`update_read_status`](Self::update_read_status) and
+/// [`update_write_status`](Self::update_write_status). Their return value tells
+/// the task whether to continue, pause until notified, or stop.
 pub struct IoContext(IoRef);
 
 impl fmt::Debug for IoContext {
@@ -64,7 +70,11 @@ impl IoContext {
         self.st().flags.is_closed()
     }
 
-    /// Gets the read buffer.
+    /// Takes a buffer for the next transport read.
+    ///
+    /// The returned buffer must be passed back exactly once through
+    /// [`update_read_status`](Self::update_read_status), even when the read
+    /// fails or would otherwise stop the task.
     pub fn get_read_buf(&self) -> BytesMut {
         let st = self.st();
 
@@ -85,10 +95,12 @@ impl IoContext {
         self.0.resize_read_buf(buf);
     }
 
-    /// Updates the read status.
+    /// Returns a transport read buffer and reports the read result.
     ///
-    /// Returns `Ok(Some(buf))` containing the read buffer.
-    /// `Ok(None)` indicates that the connection has been disconnected.
+    /// `Ok(n)` reports that `n` bytes were appended to `buf`; `Ok(0)` reports
+    /// EOF. An error terminates the connection. The returned [`IoTaskStatus`]
+    /// instructs the read task to continue immediately, pause until notified,
+    /// or stop.
     pub fn update_read_status(&self, buf: BytesMut, status: io::Result<usize>) -> IoTaskStatus {
         let st = self.st();
         let orig = st.buffer.read_dst_size();
@@ -159,7 +171,11 @@ impl IoContext {
         }
     }
 
-    /// Gets the write buffer.
+    /// Provides access to bytes ready for the transport to write.
+    ///
+    /// Pending filter output is processed before `f` is invoked. The transport
+    /// should remove only bytes it successfully writes and then report the
+    /// result with [`update_write_status`](Self::update_write_status).
     pub fn with_write_buf<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytePages) -> R,
@@ -175,7 +191,9 @@ impl IoContext {
     /// Updates the write status.
     ///
     /// `Ok(true)` indicates that one or more bytes were successfully written
-    /// to the I/O stream.
+    /// to the transport; `Ok(false)` indicates no write progress. An error
+    /// terminates the connection. The returned [`IoTaskStatus`] instructs the
+    /// write task to continue immediately, pause until notified, or stop.
     pub fn update_write_status(&self, status: io::Result<bool>) -> IoTaskStatus {
         let st = &self.st();
 
@@ -229,7 +247,12 @@ impl IoContext {
         }
     }
 
-    /// Waits for the I/O stream to close or begin closing.
+    /// Polls transport-task shutdown state.
+    ///
+    /// If `flush` is `true`, this first waits until the write task is paused,
+    /// indicating that currently buffered output has been handled. It then
+    /// waits for the connection to close. The context's waker is registered
+    /// while pending.
     pub fn shutdown(&self, flush: bool, cx: &mut Context<'_>) -> Poll<()> {
         let st = self.st();
         if flush && !st.flags.is_stopping() {

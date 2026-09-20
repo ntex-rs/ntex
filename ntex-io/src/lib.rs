@@ -78,26 +78,47 @@ impl Readiness {
 }
 
 /// A processing layer that transforms an I/O stream's read and write buffers.
+///
+/// Read processing runs from the transport toward the application. Write and
+/// shutdown processing run from the application toward the transport. Each
+/// callback receives the buffers immediately before and after this layer.
+///
+/// Implementations must move or transform all bytes they consume. Bytes left
+/// in a source buffer remain available to the layer on a later callback.
 #[allow(unused_variables)]
 pub trait FilterLayer: fmt::Debug + 'static {
-    /// Accesses internal filter information.
+    /// Returns type-indexed information exposed by this layer.
+    ///
+    /// Returning `None` allows the query to continue through the remaining
+    /// filter chain.
     fn query(&self, id: TypeId) -> Option<Box<dyn Any>> {
         None
     }
 
-    /// Processes incoming read-buffer data.
+    /// Processes incoming data from the transport-facing source buffer into
+    /// the application-facing destination buffer.
     fn process_read_buf(&self, buf: &FilterBuf<'_>) -> IoResult<()>;
 
-    /// Processes outgoing write-buffer data.
+    /// Processes outgoing data from the application-facing source buffer into
+    /// the transport-facing destination buffer.
     fn process_write_buf(&self, buf: &FilterBuf<'_>) -> IoResult<()>;
 
-    /// Performs a graceful shutdown of the filter.
+    /// Performs one step of graceful filter shutdown.
+    ///
+    /// Returning `Poll::Pending` keeps the filter active and causes shutdown to
+    /// be polled again after the I/O task is notified. A ready result allows
+    /// shutdown to continue toward the transport.
     fn shutdown(&self, buf: &FilterBuf<'_>) -> IoResult<Poll<()>> {
         Ok(Poll::Ready(()))
     }
 }
 
 /// An underlying transport that can be managed by [`Io`].
+///
+/// [`start`](IoStream::start) is called exactly once when the transport is
+/// wrapped in [`Io`]. The implementation must start its read and write tasks,
+/// use the supplied [`IoContext`] to exchange buffers and readiness state, and
+/// return a handle that remains valid for the connection's lifetime.
 pub trait IoStream {
     /// Starts transport-specific I/O tasks and returns their control handle.
     fn start(self, _: IoContext) -> Box<dyn Handle>;
@@ -114,14 +135,18 @@ pub trait IoCallbacks {
 }
 
 /// Control handle for transport-specific I/O tasks.
+///
+/// The handle is called synchronously by the connection state and must not
+/// block. It can use [`IoContext::notify`] to wake a transport task after
+/// readiness changes.
 pub trait Handle {
-    /// Queries transport-specific information by type.
+    /// Returns type-indexed transport information.
     fn query(&self, _: TypeId) -> Option<Box<dyn Any>> {
         None
     }
 
     #[inline]
-    /// Requests that the transport start a write operation.
+    /// Requests that the transport start or resume a write operation.
     fn write(&self, _: &IoContext) {}
 
     #[inline]
@@ -134,11 +159,11 @@ pub trait Handle {
 /// Current status of the I/O state.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum IoTaskStatus {
-    /// Continue performing I/O operations.
+    /// Continue performing I/O operations immediately.
     Io,
-    /// Pause I/O processing temporarily.
+    /// Pause the task until the context or handle wakes it.
     Pause,
-    /// Stop the I/O task.
+    /// Stop the task and release its transport resources.
     Stop,
 }
 

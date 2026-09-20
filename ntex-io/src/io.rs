@@ -254,9 +254,10 @@ impl<F> Io<F> {
 
     #[inline]
     #[must_use]
-    /// Takes the current I/O object.
+    /// Transfers the live connection state into a new `Io` object.
     ///
-    /// After this call, the I/O object is no longer valid for use.
+    /// This does not clone the connection. `self` is replaced with a stopped
+    /// placeholder and should no longer be used for I/O.
     pub fn take(&self) -> Self {
         Self(UnsafeCell::new(self.take_io_ref()), marker::PhantomData)
     }
@@ -274,7 +275,10 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Updates the shared I/O configuration.
+    /// Replaces this connection's shared I/O configuration.
+    ///
+    /// The write-buffer page size is updated immediately. Existing allocated
+    /// buffers and an already registered timer are not recreated.
     pub fn set_config<T: Into<SharedCfg>>(&self, cfg: T) {
         unsafe {
             let cfg = cfg.into().get::<IoConfig>();
@@ -370,7 +374,14 @@ impl<F: Filter> Io<F> {
 }
 
 impl<F> Io<F> {
-    /// Reads from the incoming I/O stream and decodes a codec item.
+    /// Reads and decodes the next item from the incoming stream.
+    ///
+    /// Returns `Ok(None)` when the peer disconnects cleanly before another item
+    /// is decoded. Codec errors are returned in [`Either::Left`]; transport
+    /// errors and dispatcher timeouts are returned in [`Either::Right`].
+    ///
+    /// If write backpressure prevents further reads, this method first waits
+    /// for the write buffer to fall below its configured threshold.
     pub async fn recv<U>(&self, codec: &U) -> Result<Option<U::Item>, Either<U::Error, io::Error>>
     where
         U: Decoder,
@@ -421,13 +432,19 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Waits until the I/O stream is ready for reading.
+    /// Waits until application-facing read data is available.
+    ///
+    /// Returns `Ok(None)` after the stream has disconnected.
     pub async fn read_ready(&self) -> io::Result<Option<()>> {
         poll_fn(|cx| self.poll_read_ready(cx)).await
     }
 
     #[inline]
-    /// Waits until the I/O stream receives new data.
+    /// Waits for a new transport read notification.
+    ///
+    /// Unlike [`read_ready`](Self::read_ready), this waits for the read task to
+    /// observe new source data even if previously buffered application data is
+    /// already available. Returns `Ok(None)` when the stream begins stopping.
     pub async fn read_notify(&self) -> io::Result<Option<()>> {
         poll_fn(|cx| self.poll_read_notify(cx)).await
     }
@@ -560,10 +577,17 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Decode codec item from incoming bytes stream.
+    /// Attempts to decode an item and reports buffer progress.
     ///
-    /// Wake read task and request to read more data if data is not enough for decoding.
-    /// If error get returned this method does not register waker for later wake up action.
+    /// `Decoded::consumed` is the number of bytes consumed by this decode
+    /// attempt and `Decoded::remains` is the number left in the
+    /// application-facing read buffer. If the codec needs more input, this
+    /// returns `Ok` with `item` set to `None` after arranging for `cx` to be
+    /// woken when progress is possible.
+    ///
+    /// An error return does not register the waker. A successfully decoded item
+    /// takes precedence over timeout, backpressure, and peer-disconnect status
+    /// observed during the same poll.
     pub fn poll_recv_decode<U>(
         &self,
         codec: &U,
@@ -671,6 +695,11 @@ impl<F> Io<F> {
 
     #[inline]
     /// Polls for available status updates.
+    ///
+    /// `KeepAlive` consumes the pending dispatcher-timeout notification.
+    /// `WriteBackpressure` is reported while backpressure is active, including
+    /// the poll that observes the write buffer falling below its release
+    /// threshold. `PeerGone` is returned after the connection closes.
     pub fn poll_status_update(&self, cx: &mut Context<'_>) -> Poll<IoStatusUpdate> {
         let st = self.st();
         st.dispatch_task.register(cx.waker());
@@ -755,7 +784,10 @@ impl<F> Drop for Io<F> {
 }
 
 #[derive(Debug)]
-/// The `OnDisconnect` future resolves when the I/O stream is disconnected.
+/// A future that resolves when an I/O stream begins disconnecting.
+///
+/// Resolution indicates that shutdown or termination has started; it does not
+/// guarantee that filter or transport shutdown has completed.
 #[must_use = "OnDisconnect do nothing unless polled"]
 pub struct OnDisconnect {
     token: usize,

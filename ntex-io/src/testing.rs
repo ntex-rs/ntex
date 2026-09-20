@@ -1,4 +1,4 @@
-//! utilities and helpers for testing
+//! In-memory I/O transport and helpers for tests.
 #![allow(clippy::missing_panics_doc)]
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
@@ -29,7 +29,10 @@ impl fmt::Debug for AtomicWaker {
     }
 }
 
-/// Async io stream
+/// One endpoint of an in-memory asynchronous byte stream.
+///
+/// Use [`IoTest::create`] to construct connected client and server endpoints.
+/// Bytes written by one endpoint become readable from the other.
 #[derive(Debug)]
 pub struct IoTest {
     tp: Type,
@@ -96,7 +99,7 @@ enum IoTestState {
 }
 
 impl IoTest {
-    /// Create a two interconnected streams
+    /// Creates connected client and server endpoints.
     pub fn create() -> (IoTest, IoTest) {
         let local = Arc::new(Mutex::new(RefCell::new(Channel::default())));
         let remote = Arc::new(Mutex::new(RefCell::new(Channel::default())));
@@ -120,47 +123,47 @@ impl IoTest {
         )
     }
 
-    /// Check if client is dropped
+    /// Returns `true` after the client endpoint has been dropped.
     pub fn is_client_dropped(&self) -> bool {
         self.state.lock().unwrap().borrow().client_dropped
     }
 
-    /// Check if server is dropped
+    /// Returns `true` after the server endpoint has been dropped.
     pub fn is_server_dropped(&self) -> bool {
         self.state.lock().unwrap().borrow().server_dropped
     }
 
-    /// Check if channel is closed from remoote side
+    /// Returns `true` after the peer has closed its write side.
     pub fn is_closed(&self) -> bool {
         self.remote.lock().unwrap().borrow().is_closed()
     }
 
-    /// Set peer addr
+    /// Sets the socket address returned by transport queries.
     #[must_use]
     pub fn set_peer_addr(mut self, addr: net::SocketAddr) -> Self {
         self.peer_addr = Some(addr);
         self
     }
 
-    /// Set read to Pending state
+    /// Forces subsequent reads from the peer endpoint to remain pending.
     pub fn read_pending(&self) {
         self.remote.lock().unwrap().borrow_mut().read = IoTestState::Pending;
     }
 
-    /// Set read to error
+    /// Makes the peer endpoint's next read fail with `err`.
     pub fn read_error(&self, err: io::Error) {
         let channel = self.remote.lock().unwrap();
         channel.borrow_mut().read = IoTestState::Err(err);
         channel.borrow().waker.wake();
     }
 
-    /// Set write error on remote side
+    /// Makes this endpoint's next transport write fail with `err`.
     pub fn write_error(&self, err: io::Error) {
         self.local.lock().unwrap().borrow_mut().write = IoTestState::Err(err);
         self.remote.lock().unwrap().borrow().waker.wake();
     }
 
-    /// Access read buffer.
+    /// Provides mutable access to bytes readable by this endpoint.
     pub fn local_buffer<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
@@ -170,7 +173,7 @@ impl IoTest {
         f(&mut ch.buf)
     }
 
-    /// Access remote buffer.
+    /// Provides mutable access to bytes readable by the peer endpoint.
     pub fn remote_buffer<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
@@ -180,7 +183,10 @@ impl IoTest {
         f(&mut ch.buf)
     }
 
-    /// Closed remote side.
+    /// Simulates the peer closing its write side.
+    ///
+    /// This wakes a pending reader and yields once so the close can be
+    /// observed by asynchronous test code.
     pub async fn close(&self) {
         {
             let guard = self.remote.lock().unwrap();
@@ -192,7 +198,7 @@ impl IoTest {
         sleep(Millis(35)).await;
     }
 
-    /// Add extra data to the remote buffer and notify reader
+    /// Writes bytes for the peer endpoint to read and wakes its reader.
     pub fn write<T: AsRef<[u8]>>(&self, data: T) {
         let guard = self.remote.lock().unwrap();
         let mut write = guard.borrow_mut();
@@ -200,7 +206,9 @@ impl IoTest {
         write.waker.wake();
     }
 
-    /// Set remote buffer capacity
+    /// Sets how many bytes the peer may write before becoming blocked.
+    ///
+    /// Increasing the capacity wakes the peer's pending writer.
     pub fn remote_buffer_cap(&self, cap: usize) {
         // change cap
         self.local.lock().unwrap().borrow_mut().buf_cap = cap;
@@ -208,12 +216,12 @@ impl IoTest {
         self.remote.lock().unwrap().borrow().waker.wake();
     }
 
-    /// Read any available data
+    /// Takes all bytes currently readable by this endpoint without waiting.
     pub fn read_any(&self) -> Bytes {
         self.local.lock().unwrap().borrow_mut().buf.take()
     }
 
-    /// Read data, if data is not available wait for it
+    /// Waits for readable data or peer closure, then takes all available bytes.
     pub async fn read(&self) -> Result<Bytes, io::Error> {
         if self.local.lock().unwrap().borrow().buf.is_empty() {
             poll_fn(|cx| {
@@ -243,6 +251,10 @@ impl IoTest {
         Ok(self.local.lock().unwrap().borrow_mut().buf.take())
     }
 
+    /// Polls a transport read into `buf`.
+    ///
+    /// Returns the number of bytes copied, zero on simulated peer closure, or
+    /// `Pending` when no input is available.
     pub fn poll_read_buf(
         &self,
         cx: &mut Context<'_>,
@@ -270,6 +282,10 @@ impl IoTest {
         }
     }
 
+    /// Polls a transport write from `buf`.
+    ///
+    /// The write is limited by the capacity configured with
+    /// [`remote_buffer_cap`](Self::remote_buffer_cap).
     pub fn poll_write_buf(&self, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
         let guard = self.remote.lock().unwrap();
         let mut ch = guard.borrow_mut();

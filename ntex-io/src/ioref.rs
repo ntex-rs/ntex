@@ -79,7 +79,13 @@ impl IoRef {
     }
 
     #[inline]
-    /// Encodes the item into the write buffer.
+    /// Encodes an item into the write buffer.
+    ///
+    /// This method reports codec errors only. If the connection is already
+    /// closing or closed, the item is not encoded and the call returns
+    /// `Ok(())`. Use [`encode_slice`](Self::encode_slice) or
+    /// [`encode_bytes`](Self::encode_bytes) when transport-state errors must be
+    /// observable.
     pub fn encode<U>(&self, item: U::Item, codec: &U) -> Result<(), <U as Encoder>::Error>
     where
         U: Encoder,
@@ -184,7 +190,10 @@ impl IoRef {
         }
     }
 
-    /// Get access to filter buffer
+    /// Provides temporary access to the outermost filter buffers.
+    ///
+    /// Filter callbacks run before and after `f`, and any produced write data
+    /// is scheduled for delivery after the closure returns.
     pub fn with_buf<F, R>(&self, f: F) -> io::Result<R>
     where
         F: FnOnce(&mut FilterBuf<'_>) -> R,
@@ -197,7 +206,10 @@ impl IoRef {
         Ok(result)
     }
 
-    /// Get mut access to read buffer
+    /// Provides mutable access to the application-facing read buffer.
+    ///
+    /// Consuming bytes may release read backpressure and wake the transport
+    /// read task.
     pub fn with_read_buf<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
@@ -209,7 +221,10 @@ impl IoRef {
         })
     }
 
-    /// Get mut access to source write buffer
+    /// Provides mutable access to the application-facing write buffer.
+    ///
+    /// Returns an error without invoking `f` if the connection is closing or
+    /// closed. Data appended by `f` is scheduled for delivery.
     pub fn with_write_buf<F, R>(&self, f: F) -> io::Result<R>
     where
         F: FnOnce(&mut BytePages) -> R,
@@ -230,7 +245,9 @@ impl IoRef {
     }
 
     #[inline]
-    /// Get mut access to src read buffer
+    /// Provides mutable access to the transport-facing read buffer.
+    ///
+    /// This is primarily intended for transport and filter implementations.
     pub fn with_read_src_buf<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
@@ -239,7 +256,9 @@ impl IoRef {
     }
 
     #[inline]
-    /// Get mut access to dest write buffer
+    /// Provides mutable access to the transport-facing write buffer.
+    ///
+    /// This is primarily intended for transport and filter implementations.
     pub fn with_write_dst_buf<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytePages) -> R,
@@ -342,12 +361,23 @@ impl IoRef {
         self.0.notify_timeout();
     }
 
-    /// Current timer handle
+    /// Returns the currently registered dispatcher timer handle.
+    ///
+    /// [`TimerHandle::ZERO`] is returned when no timer is registered.
     pub fn timer_handle(&self) -> TimerHandle {
         self.0.timeout.get()
     }
 
-    /// Start timer
+    /// Starts or updates the dispatcher timer.
+    ///
+    /// The timer uses second-granularity deadlines. When it expires,
+    /// [`poll_status_update`](crate::Io::poll_status_update) reports
+    /// [`IoStatusUpdate::KeepAlive`](crate::IoStatusUpdate::KeepAlive).
+    ///
+    /// A zero timeout cancels the current timer but does not consume a timeout
+    /// notification that has already been delivered. Use
+    /// [`stop_timer`](Self::stop_timer) when leaving a protocol phase to also
+    /// clear such a notification.
     pub fn start_timer(&self, timeout: Seconds) -> TimerHandle {
         let cur_hnd = self.0.timeout.get();
 
@@ -384,7 +414,7 @@ impl IoRef {
         }
     }
 
-    /// Notify when io stream get disconnected
+    /// Returns a future that resolves when the I/O stream begins disconnecting.
     pub fn on_disconnect(&self) -> crate::OnDisconnect {
         crate::OnDisconnect::new(self.0.clone())
     }

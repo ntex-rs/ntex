@@ -2,7 +2,7 @@ use std::{any::Any, any::TypeId, fmt, io, ops, task::Context, task::Poll};
 
 use crate::{Filter, FilterCtx, Io, Readiness};
 
-/// Sealed filter type
+/// Type-erased filter chain used by [`IoBoxed`].
 pub struct Sealed(pub(crate) Box<dyn Filter>);
 
 impl fmt::Debug for Sealed {
@@ -44,15 +44,16 @@ impl Filter for Sealed {
 }
 
 #[derive(Debug)]
-/// Boxed `Io` object with erased filter type
+/// An [`Io`] object whose filter-chain type has been erased.
 pub struct IoBoxed(Io<Sealed>);
 
 impl IoBoxed {
     #[inline]
     #[must_use]
-    /// Clone current io object.
+    /// Transfers the live I/O state into a new object.
     ///
-    /// Current io object becomes closed.
+    /// This does not clone the connection. The current object is replaced with
+    /// a stopped placeholder and should no longer be used for I/O.
     pub fn take(&mut self) -> Self {
         IoBoxed(self.0.take())
     }

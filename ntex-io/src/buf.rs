@@ -302,6 +302,12 @@ pub(crate) struct FilterUpdates {
 }
 
 #[derive(Debug)]
+/// Context used while traversing a complete filter chain.
+///
+/// A context tracks the current layer and accumulated notifications.
+/// [`with_next`](Self::with_next) advances to the inner layer, while
+/// [`with_buffer`](Self::with_buffer) exposes the buffers adjacent to the
+/// current layer.
 pub struct FilterCtx<'a> {
     io: &'a IoRef,
     idx: usize,
@@ -324,19 +330,21 @@ impl FilterCtx<'_> {
     }
 
     #[inline]
-    /// Gets new bytes count for read buffer.
+    /// Returns the number of bytes added by the latest transport read.
     pub fn new_read_bytes(&self) -> usize {
         self.nbytes
     }
 
     #[inline]
-    /// Notifies about readiness changes.
+    /// Requests a transport readiness notification after processing.
     pub fn notify(&mut self) {
         self.st.notify = true;
     }
 
     #[inline]
-    /// Returns the filter context for the next filter in the chain.
+    /// Invokes `f` with the context advanced to the next inner filter.
+    ///
+    /// The previous layer is restored after `f` returns.
     pub fn with_next<F, R>(&mut self, f: F) -> R
     where
         F: FnOnce(&mut Self) -> R,
@@ -348,7 +356,7 @@ impl FilterCtx<'_> {
     }
 
     #[inline]
-    /// Returns the filter buffer.
+    /// Invokes `f` with the buffers adjacent to the current filter.
     pub fn with_buffer<F, R>(&mut self, f: F) -> R
     where
         F: FnOnce(&mut FilterBuf<'_>) -> R,
@@ -367,13 +375,13 @@ impl FilterCtx<'_> {
     }
 
     #[inline]
-    /// Returns the size of the last read buffer in the chain.
+    /// Returns the size of the application-facing read buffer.
     pub fn read_dst_size(&self) -> usize {
         self.stack.buffers[0].read_len()
     }
 
     #[inline]
-    /// Returns the size of the last write buffer in the chain.
+    /// Returns the size of the transport-facing write buffer.
     pub fn write_dst_size(&mut self) -> usize {
         self.stack.buffers[self.stack.buffers.len() - 2].write_len()
     }
@@ -384,6 +392,13 @@ impl FilterCtx<'_> {
 }
 
 #[derive(Debug)]
+/// Buffers and connection state adjacent to one [`FilterLayer`](crate::FilterLayer).
+///
+/// For reads, the source is transport-facing and the destination is
+/// application-facing. For writes, the source is application-facing and the
+/// destination is transport-facing. Buffers are returned to the chain after
+/// each closure completes; empty read buffers may be returned to the
+/// configured cache.
 pub struct FilterBuf<'a> {
     io: &'a IoRef,
     curr: &'a Buffer,
@@ -404,7 +419,11 @@ impl FilterBuf<'_> {
         self.io.tag()
     }
 
-    /// Returns references to the source read buffer.
+    /// Provides mutable access to the transport-facing read source.
+    ///
+    /// The source is optional because no bytes may currently be allocated for
+    /// this edge of the filter chain. Leaving an empty buffer in the option
+    /// returns it to the configured cache.
     pub fn with_read_src<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut Option<BytesMut>) -> R,
@@ -422,7 +441,12 @@ impl FilterBuf<'_> {
         result
     }
 
-    /// Returns references to the source and destination read buffers.
+    /// Provides the transport-facing read source and application-facing
+    /// destination.
+    ///
+    /// Implementations normally consume bytes from `src` and append decoded or
+    /// transformed bytes to `dst`. Unconsumed source bytes are retained for the
+    /// next invocation.
     pub fn with_read_buffers<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut Option<BytesMut>, &mut BytesMut) -> R,
@@ -453,7 +477,12 @@ impl FilterBuf<'_> {
     }
 
     #[inline]
-    /// Returns references to the source and destination write buffers.
+    /// Provides the application-facing write source and transport-facing
+    /// destination.
+    ///
+    /// Implementations normally consume bytes from `src` and append encoded or
+    /// transformed bytes to `dst`. Appending destination bytes marks the write
+    /// chain as needing transport progress.
     pub fn with_write_buffers<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytePages, &mut BytePages) -> R,
