@@ -522,3 +522,129 @@ impl fmt::Debug for Buffer {
         result
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use ntex_bytes::BufMut;
+
+    use super::*;
+    use crate::{Io, testing::IoTest};
+
+    #[ntex::test]
+    async fn stack_buffers() {
+        let (_, server) = IoTest::create();
+        let io = Io::from(server);
+        let ioref = io.get_ref();
+
+        let mut stack = Stack::new(BytePageSize::Size8);
+        assert!(format!("{stack:?}").contains("len: 2"));
+        assert_eq!(stack.read_dst_size(), 0);
+        assert_eq!(stack.write_buf_size(), 0);
+
+        stack.add_layer(BytePageSize::Size16);
+        assert_eq!(stack.buffers.len(), 3);
+
+        stack.set_page_size(BytePageSize::Size32);
+        for buffer in &stack.buffers {
+            buffer.with_write(|buf| assert_eq!(buf.page_size(), BytePageSize::Size32));
+        }
+
+        stack.set_read_buf(BytesMut::from(&b"one"[..]), ioref.cfg());
+        stack.set_read_buf(BytesMut::from(&b"-two"[..]), ioref.cfg());
+        assert_eq!(stack.get_read_buf().as_deref(), Some(b"one-two".as_ref()));
+        assert!(stack.get_read_buf().is_none());
+
+        stack.set_read_buf(BytesMut::new(), ioref.cfg());
+        assert!(stack.get_read_buf().is_none());
+    }
+
+    #[ntex::test]
+    async fn filter_read_buffers() {
+        let (_, server) = IoTest::create();
+        let io = Io::from(server);
+        let ioref = io.get_ref();
+        let mut stack = Stack::new(BytePageSize::Size8);
+        stack.add_layer(BytePageSize::Size8);
+        stack.set_read_buf(BytesMut::from(&b"input"[..]), ioref.cfg());
+
+        stack.with_filter(&ioref, |ctx| {
+            assert_eq!(ctx.io(), &ioref);
+            assert_eq!(ctx.tag(), ioref.tag());
+            assert_eq!(ctx.new_read_bytes(), 0);
+            assert_eq!(ctx.read_dst_size(), 0);
+
+            ctx.with_buffer(|buf| {
+                assert_eq!(buf.io(), &ioref);
+                assert_eq!(buf.tag(), ioref.tag());
+                buf.with_read_buffers(|src, dst| {
+                    let src = src.as_mut().unwrap();
+                    dst.extend_from_slice(&src.split_to(2));
+                });
+            });
+        });
+
+        assert_eq!(stack.read_dst_size(), 2);
+        stack.with_read_dst(&ioref, |buf| assert_eq!(&buf[..], b"in"));
+        assert_eq!(stack.get_read_buf().as_deref(), Some(b"put".as_ref()));
+
+        stack.with_filter(&ioref, |ctx| {
+            ctx.with_buffer(|buf| {
+                buf.with_read_src(|src| {
+                    *src = Some(BytesMut::from(&b"next"[..]));
+                });
+            });
+        });
+        assert_eq!(stack.get_read_buf().as_deref(), Some(b"next".as_ref()));
+    }
+
+    #[ntex::test]
+    async fn filter_write_buffers_and_updates() {
+        let (_, server) = IoTest::create();
+        let io = Io::from(server);
+        let ioref = io.get_ref();
+        let mut stack = Stack::new(BytePageSize::Size8);
+        stack.add_layer(BytePageSize::Size8);
+        stack.with_write_src(|buf| buf.put_slice(b"output"));
+
+        let updates = stack.with_filter(&ioref, |ctx| {
+            ctx.notify();
+            assert_eq!(ctx.write_dst_size(), 0);
+            ctx.with_buffer(|buf| {
+                buf.with_write_buffers(|src, dst| {
+                    assert_eq!(src.len(), 6);
+                    assert_eq!(dst.len(), 0);
+                    src.move_to(dst);
+                });
+            });
+            ctx.st
+        });
+
+        assert!(updates.notify);
+        assert!(updates.wants_write);
+        assert_eq!(stack.write_buf_size(), 6);
+        assert_eq!(
+            stack.with_write_dst(|buf| buf.split_to(6).freeze()),
+            b"output".as_ref()
+        );
+        assert_eq!(stack.write_buf_size(), 0);
+    }
+
+    #[ntex::test]
+    async fn buffer_debug_preserves_contents() {
+        let (_, server) = IoTest::create();
+        let io = Io::from(server);
+        let ioref = io.get_ref();
+        let buffer = Buffer {
+            read: Cell::new(None),
+            write: Cell::new(Some(BytePages::new(BytePageSize::Size8))),
+        };
+
+        buffer.with_read(&ioref, |buf| buf.extend_from_slice(b"read"));
+        buffer.with_write(|buf| buf.put_slice(b"write"));
+
+        let debug = format!("{buffer:?}");
+        assert!(debug.contains("Buffer"));
+        assert_eq!(buffer.read_len(), 4);
+        assert_eq!(buffer.write_len(), 5);
+    }
+}
