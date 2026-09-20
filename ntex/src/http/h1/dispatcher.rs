@@ -285,12 +285,12 @@ where
 
         log::trace!("{}: Trying to read http message", self.io.tag());
 
+        let buffered = self.io.with_read_buf(|buf| buf.len()) as u32;
         if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
-            let remains = self.io.with_read_buf(|buf| buf.len()) as u32;
             self.read_consumed = self
                 .read_consumed
-                .saturating_add(remains.saturating_sub(self.read_remains));
-            self.read_remains = remains;
+                .saturating_add(buffered.saturating_sub(self.read_remains));
+            self.read_remains = buffered;
         }
 
         let result = match self.io.poll_recv_decode(&self.codec, cx) {
@@ -354,6 +354,10 @@ where
                     } else {
                         ready!(self.poll_read_request(cx))
                     }
+                } else if self.codec.is_reading_hdrs() {
+                    let remains = self.io.with_read_buf(|buf| buf.len()) as u32;
+                    self.start_headers_timer(buffered, remains);
+                    ready!(self.poll_read_request(cx))
                 } else {
                     log::trace!("{}: Keep-alive timeout, close connection", self.io.tag());
                     self.ctl_keepalive(true)
@@ -749,27 +753,37 @@ where
             }
         } else if self.codec.is_reading_hdrs()
             && !self.flags.contains(Flags::READ_HDRS_TIMEOUT)
-            && let Some(cfg) = &self.codec.cfg.headers_read_rate
+            && (self.flags.contains(Flags::READ_KA_TIMEOUT)
+                || self.codec.cfg.headers_read_rate.is_some())
         {
+            self.start_headers_timer(
+                (decoded.consumed as u32).saturating_add(decoded.remains as u32),
+                decoded.remains as u32,
+            );
+        }
+        None
+    }
+
+    fn start_headers_timer(&mut self, consumed: u32, remains: u32) {
+        self.flags
+            .remove(Flags::READ_KA_TIMEOUT | Flags::READ_PL_TIMEOUT);
+        self.read_remains = remains;
+        self.read_consumed = consumed;
+
+        if let Some(cfg) = &self.codec.cfg.headers_read_rate {
             log::debug!(
                 "{}: Start headers read timer {:?}",
                 self.io.tag(),
                 cfg.timeout
             );
-
-            // we got new data but not enough to parse single frame
-            // start read timer
-            self.flags
-                .remove(Flags::READ_KA_TIMEOUT | Flags::READ_PL_TIMEOUT);
             self.flags.insert(Flags::READ_HDRS_TIMEOUT);
 
             let (timeout, max_timeout) = read_timeout(cfg.timeout, cfg.max_timeout);
-            self.read_remains = decoded.remains as u32;
-            self.read_consumed = (decoded.consumed as u32).saturating_add(self.read_remains);
             self.read_max_timeout = max_timeout;
             self.io.start_timer(timeout);
+        } else {
+            self.io.stop_timer();
         }
-        None
     }
 
     fn update_payload_timer(&mut self, decoded: &Decoded<PayloadItem>) {
@@ -1033,6 +1047,57 @@ mod tests {
 
         assert!(h1.inner.flags.contains(Flags::READ_KA_TIMEOUT));
         assert!(!h1.inner.io.is_closed());
+        sleep(Millis(50)).await;
+        assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
+
+        client.close().await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+    }
+
+    #[crate::rt_test]
+    async fn test_partial_next_request_wins_keepalive_timeout() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(
+                HttpServiceConfig::new()
+                    .set_headers_read_rate(Seconds(10), Seconds(20), 1)
+                    .set_keepalive(Seconds(10)),
+            )
+            .into();
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
+            ),
+            Pipeline::new((), DefaultControlService),
+            DispatcherConfig::default(),
+        );
+
+        client.write("GET /first HTTP/1.1\r\n\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(h1.inner.flags.contains(Flags::READ_KA_TIMEOUT));
+        sleep(Millis(50)).await;
+        assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
+
+        let partial = "GET /next HTTP/1.1\r\nhost: example.com";
+        client.write(partial);
+        sleep(Millis(50)).await;
+        h1.inner.io.notify_timeout();
+
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(h1.inner.flags.contains(Flags::READ_HDRS_TIMEOUT));
+        assert!(!h1.inner.flags.contains(Flags::READ_KA_TIMEOUT));
+        assert_eq!(h1.inner.read_consumed, partial.len() as u32);
+        assert!(!h1.inner.io.is_closed());
+
+        client.write("\r\n\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         sleep(Millis(50)).await;
         assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
 
