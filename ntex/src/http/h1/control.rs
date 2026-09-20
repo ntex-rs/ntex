@@ -41,7 +41,8 @@ pub enum Reason<Err> {
 pub enum ServiceDisconnectReason {
     /// The server is shutting down.
     Shutdown,
-    /// The upgrade request was taken over by the control service.
+    /// The HTTP/1 dispatcher relinquished the connection after an upgrade was
+    /// handed to the application or control service.
     UpgradeHandled,
     /// Upgrade handling failed.
     UpgradeFailed,

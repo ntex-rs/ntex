@@ -46,19 +46,30 @@ impl<T> From<T> for Message<T> {
 ///
 /// Unlike [`PayloadType`], which contains the decoder for an incoming HTTP/1
 /// payload, this enum only reports whether the client codec has no payload, a
-/// framed payload, or an unframed stream.
+/// message body, or an upgraded connection stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageType {
     /// The message has no payload.
     None,
-    /// The payload has a known length.
+    /// The message has a body decoded according to its HTTP framing.
+    ///
+    /// This includes fixed-length, chunked, and connection-close-delimited
+    /// bodies.
     Payload,
-    /// The payload uses streaming transfer encoding.
+    /// The response switched protocols, so subsequent bytes belong to the
+    /// upgraded connection rather than an HTTP message body.
     Stream,
 }
 
 #[derive(thiserror::Error, Clone, Debug)]
 /// Errors that can occur while dispatching HTTP/1 requests.
+///
+/// The default [`ResponseError`](super::ResponseError) implementation maps
+/// header-count and message-head size failures to
+/// `431 Request Header Fields Too Large`, other decoding failures to
+/// `400 Bad Request`, request and payload timeouts to `408 Request Timeout`,
+/// and response encoding or body-stream failures to
+/// `500 Internal Server Error`.
 pub enum ProtocolError {
     /// HTTP request parsing failed.
     #[error("Parse error: {0}")]
