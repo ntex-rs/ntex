@@ -122,8 +122,6 @@ where
     }
 
     async fn shutdown(&self, _: crate::Ctx<'_, Self, St>) {
-        self.config.shutdown();
-
         // check inflight connections
         let inflight = self.config.shutdown();
         if inflight != 0 {

@@ -4,6 +4,8 @@
 
 * Stopped timer clears any pending timeout notification
 
+* Zero disconnect timeout disables the forced filter-shutdown deadline
+
 ## [4.0.1] - 2026-09-18
 
 * Api docs improvements

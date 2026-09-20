@@ -282,7 +282,7 @@ impl IoContext {
             // if read buffer is not consumed it is unlikely
             // that filter will properly complete shutdown
             st.filters_stopped();
-        } else {
+        } else if st.cfg.disconnect_timeout().non_zero() {
             // filter shutdown timeout
             let timeout = st
                 .shutdown_timeout
