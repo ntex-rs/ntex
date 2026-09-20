@@ -84,7 +84,15 @@ impl Parser {
         Ok(Some((idx, finished, opcode, length, mask)))
     }
 
-    /// Parse the input stream into a frame.
+    /// Parses one WebSocket frame from `src`.
+    ///
+    /// `server` selects the expected masking direction: server-side parsing
+    /// requires masked frames, while client-side parsing rejects them.
+    /// `max_size` limits the frame payload size.
+    ///
+    /// Returns the final-fragment flag, opcode, and optional payload when a
+    /// complete frame is available. Returns [`None`] without consuming a
+    /// partial frame.
     pub fn parse(
         src: &mut BytesMut,
         server: bool,
@@ -132,7 +140,10 @@ impl Parser {
         Ok(Some((finished, opcode, Some(src.split_to(length)))))
     }
 
-    /// Parse the payload of a close frame.
+    /// Parses a close-frame payload.
+    ///
+    /// Returns [`None`] when the payload does not contain a two-byte close
+    /// code. Invalid UTF-8 in the description is replaced lossily.
     pub fn parse_close_payload(payload: &[u8]) -> Option<CloseReason> {
         if payload.len() >= 2 {
             let raw_code = u16::from_be_bytes(TryFrom::try_from(&payload[..2]).unwrap());
@@ -148,7 +159,10 @@ impl Parser {
         }
     }
 
-    /// Generate binary representation
+    /// Encodes a WebSocket frame into `dst`.
+    ///
+    /// `fin` controls the final-fragment bit and `mask` controls whether a new
+    /// random masking key is applied.
     pub fn write_message<B>(dst: &mut BytePages, pl: B, op: OpCode, fin: bool, mask: bool)
     where
         BytePage: From<B>,
@@ -183,7 +197,7 @@ impl Parser {
         }
     }
 
-    /// Create a new Close control frame.
+    /// Encodes a final close control frame into `dst`.
     #[inline]
     pub fn write_close(dst: &mut BytePages, reason: Option<CloseReason>, mask: bool) {
         let payload = match reason {

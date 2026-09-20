@@ -1,22 +1,24 @@
-//! Websockets protocol helpers
+//! WebSocket opening-handshake helpers.
 use crate::http::{Method, StatusCode, header};
 use crate::http::{RequestHead, Response, ResponseBuilder};
 
 use super::error::HandshakeError;
 
-/// Verify `WebSocket` handshake request and create handshake reponse.
-// /// `protocols` is a sequence of known protocols. On successful handshake,
-// /// the returned response headers contain the first protocol in this list
-// /// which the server also knows.
+/// Verifies a WebSocket opening-handshake request and creates its response.
+///
+/// # Errors
+///
+/// Returns [`HandshakeError`] when the request method or required upgrade
+/// headers are invalid.
 pub fn handshake(req: &RequestHead) -> Result<ResponseBuilder, HandshakeError> {
     verify_handshake(req)?;
     Ok(handshake_response(req))
 }
 
-/// Verify `WebSocket` handshake request.
-// /// `protocols` is a sequence of known protocols. On successful handshake,
-// /// the returned response headers contain the first protocol in this list
-// /// which the server also knows.
+/// Verifies a WebSocket opening-handshake request.
+///
+/// The request must use `GET`, request a connection upgrade to WebSocket,
+/// include a `Sec-WebSocket-Key`, and use WebSocket version 7, 8, or 13.
 pub fn verify_handshake(req: &RequestHead) -> Result<(), HandshakeError> {
     // WebSocket accepts only GET
     if req.method != Method::GET {
@@ -64,13 +66,14 @@ pub fn verify_handshake(req: &RequestHead) -> Result<(), HandshakeError> {
     Ok(())
 }
 
-/// Create websocket's handshake response
+/// Creates a WebSocket opening-handshake response.
 ///
-/// This function returns handshake `Response`, ready to send to peer.
+/// The returned response builder has status `101 Switching Protocols` and the
+/// required upgrade and challenge-response headers.
 ///
 /// # Panics
 ///
-/// `RequestHead` must contain `SEC_WEBSOCKET_KEY` header
+/// Panics if `req` does not contain a `Sec-WebSocket-Key` header.
 pub fn handshake_response(req: &RequestHead) -> ResponseBuilder {
     let key = {
         let key = req.headers().get(header::SEC_WEBSOCKET_KEY).unwrap();

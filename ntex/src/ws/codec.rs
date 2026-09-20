@@ -7,51 +7,57 @@ use super::error::ProtocolError;
 use super::frame::Parser;
 use super::proto::{CloseReason, OpCode};
 
-/// WebSocket message
+/// An outgoing WebSocket message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
-    /// Text message
+    /// UTF-8 text message.
     Text(ByteString),
-    /// Binary message
+    /// Binary message.
     Binary(Bytes),
-    /// Continuation
+    /// Fragment of a text or binary message.
     Continuation(Item),
-    /// Ping message
+    /// Ping control message.
     Ping(Bytes),
-    /// Pong message
+    /// Pong control message.
     Pong(Bytes),
-    /// Close message with optional reason
+    /// Close control message with an optional reason.
     Close(Option<CloseReason>),
 }
 
-/// WebSocket frame
+/// A decoded WebSocket frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Frame {
-    /// Text frame, codec does not verify utf8 encoding
+    /// Text frame.
+    ///
+    /// The codec does not validate that the payload is UTF-8.
     Text(Bytes),
-    /// Binary frame
+    /// Binary frame.
     Binary(Bytes),
-    /// Continuation
+    /// Fragmented text or binary frame.
     Continuation(Item),
-    /// Ping message
+    /// Ping control frame.
     Ping(Bytes),
-    /// Pong message
+    /// Pong control frame.
     Pong(Bytes),
-    /// Close message with optional reason
+    /// Close control frame with an optional reason.
     Close(Option<CloseReason>),
 }
 
-/// WebSocket continuation item
+/// A fragment in a WebSocket continuation sequence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
+    /// First fragment of a text message.
     FirstText(Bytes),
+    /// First fragment of a binary message.
     FirstBinary(Bytes),
+    /// Intermediate fragment.
     Continue(Bytes),
+    /// Final fragment.
     Last(Bytes),
 }
 
 #[derive(Debug, Clone)]
-/// `WebSockets` protocol codec
+/// Encoder and decoder for WebSocket frames.
 pub struct Codec {
     flags: Cell<Flags>,
     max_size: usize,
@@ -68,7 +74,7 @@ bitflags::bitflags! {
 }
 
 impl Codec {
-    /// Create new websocket frames decoder
+    /// Creates a codec in server mode with a 64 KiB frame-size limit.
     #[must_use]
     pub fn new() -> Codec {
         Codec {
@@ -77,25 +83,26 @@ impl Codec {
         }
     }
 
-    /// Set max frame size
+    /// Sets the maximum accepted frame payload size.
     ///
-    /// By default max size is set to 64kb
+    /// The default is 64 KiB.
     #[must_use]
     pub fn max_size(mut self, size: usize) -> Self {
         self.max_size = size;
         self
     }
 
-    /// Set decoder to client mode.
+    /// Configures the codec for client-side masking rules.
     ///
-    /// By default decoder works in server mode.
+    /// Client mode masks encoded frames and rejects masked incoming frames.
+    /// By default, the codec uses server-side masking rules.
     #[must_use]
     pub fn client_mode(self) -> Self {
         self.remove_flags(Flags::SERVER);
         self
     }
 
-    /// Check if codec encoded `Close` message
+    /// Returns `true` after this codec has encoded a close message.
     pub fn is_closed(&self) -> bool {
         self.flags.get().contains(Flags::CLOSED)
     }
@@ -112,7 +119,7 @@ impl Codec {
         self.flags.set(flags);
     }
 
-    /// Encode binary message
+    /// Encodes `page` as a final binary frame.
     pub fn encode_page(&self, page: BytePage, dst: &mut BytePages) {
         Parser::write_message(
             dst,

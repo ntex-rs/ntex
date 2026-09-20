@@ -4,6 +4,7 @@ use std::rc::Rc;
 use crate::{io::IoRef, io::OnDisconnect, ws};
 
 #[derive(Clone, Debug)]
+/// A clonable handle for sending messages over a WebSocket connection.
 pub struct WsSink(Rc<WsSinkInner>);
 
 #[derive(Debug)]
@@ -17,12 +18,12 @@ impl WsSink {
         Self(Rc::new(WsSinkInner { io, codec }))
     }
 
-    /// Io reference
+    /// Returns the underlying I/O handle.
     pub fn io(&self) -> &IoRef {
         &self.0.io
     }
 
-    /// Endcode and send message to the peer
+    /// Encodes and queues a message for the peer.
     pub async fn send(&self, item: ws::Message) -> Result<(), ws::error::ProtocolError> {
         let close = match item {
             ws::Message::Close(_) => self.0.codec.is_closed(),
@@ -39,7 +40,7 @@ impl WsSink {
         }
     }
 
-    /// Notify when connection get disconnected
+    /// Returns a future that resolves when the connection is disconnected.
     pub fn on_disconnect(&self) -> OnDisconnect {
         self.0.io.on_disconnect()
     }

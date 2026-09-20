@@ -1,4 +1,4 @@
-//! An implementation of `WebSockets` base bytes streams
+//! Binary-stream adaptation for WebSocket connections.
 use std::{cell::Cell, io, task::Poll};
 
 use crate::codec::{Decoder, Encoder};
@@ -17,14 +17,18 @@ bitflags::bitflags! {
 }
 
 #[derive(Clone, Debug)]
-/// An implementation of `WebSockets` streams
+/// I/O filter that exposes binary WebSocket messages as a byte stream.
+///
+/// Incoming binary messages and fragments are forwarded as bytes. Text
+/// messages are rejected, ping frames receive automatic pong replies, and
+/// close frames close the underlying I/O stream.
 pub struct WsTransport {
     codec: Codec,
     flags: Cell<Flags>,
 }
 
 impl WsTransport {
-    /// Create websockets transport
+    /// Adds a binary WebSocket transport filter to `io`.
     pub fn create<F: Filter>(io: Io<F>, codec: Codec) -> Io<Layer<WsTransport, F>> {
         io.add_filter(WsTransport {
             codec,
@@ -150,13 +154,13 @@ impl FilterLayer for WsTransport {
 }
 
 #[derive(Clone, Debug)]
-/// `WebSockets` transport service
+/// Service that adds a [`WsTransport`] filter to an I/O stream.
 pub struct WsTransportService {
     codec: Codec,
 }
 
 impl WsTransportService {
-    /// Create websockets transport service
+    /// Creates a transport service using `codec`.
     pub fn new(codec: Codec) -> Self {
         Self { codec }
     }

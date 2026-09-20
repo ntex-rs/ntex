@@ -9,7 +9,10 @@ use crate::http::header::{self, AUTHORIZATION, HeaderMap, HeaderName, HeaderValu
 use crate::service::cfg::{CfgContext, Configuration};
 use crate::time::Millis;
 
-/// `WebSocket` client builder
+/// Configuration for a WebSocket client connection.
+///
+/// Store this value in [`SharedCfg`](crate::SharedCfg) and pass the resulting
+/// configuration to [`WsClient::new`](super::WsClient::new).
 #[derive(Debug)]
 pub struct WsClientConfig {
     pub(super) addr: Option<net::SocketAddr>,
@@ -43,7 +46,7 @@ impl Configuration for WsClientConfig {
 
 impl WsClientConfig {
     #[must_use]
-    /// Create instance of `WsClientConfig`.
+    /// Creates a WebSocket client configuration with default values.
     pub fn new() -> WsClientConfig {
         let mut headers = HeaderMap::new();
         headers.insert(header::UPGRADE, HeaderValue::from_static("websocket"));
@@ -65,17 +68,23 @@ impl WsClientConfig {
     }
 
     #[must_use]
-    /// Set socket address of the server.
+    /// Sets the server socket address.
     ///
-    /// This address is used for connection. If address is not
-    /// provided url's host name get resolved.
+    /// This address is used instead of resolving the URI host name.
     pub fn set_address(mut self, addr: net::SocketAddr) -> Self {
         self.addr = Some(addr);
         self
     }
 
     #[must_use]
-    /// Set supported websocket protocols.
+    /// Sets the WebSocket subprotocols offered to the server.
+    ///
+    /// This replaces the current `Sec-WebSocket-Protocol` header.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the comma-separated protocol list is not a valid HTTP header
+    /// value.
     pub fn set_protocols<U, V>(mut self, protos: U) -> Self
     where
         U: IntoIterator<Item = V>,
@@ -95,7 +104,7 @@ impl WsClientConfig {
 
     #[must_use]
     #[cfg(feature = "cookie")]
-    /// Set a cookie.
+    /// Adds a cookie to the opening handshake.
     pub fn set_cookie<C>(mut self, cookie: C) -> Self
     where
         C: Into<Cookie<'static>>,
@@ -110,7 +119,7 @@ impl WsClientConfig {
         self
     }
 
-    /// Set request Origin.
+    /// Sets the `Origin` header for the opening handshake.
     pub fn set_origin<V, E>(mut self, origin: V) -> Result<Self, HttpError>
     where
         HeaderValue: TryFrom<V, Error = E>,
@@ -122,27 +131,27 @@ impl WsClientConfig {
     }
 
     #[must_use]
-    /// Set max frame size.
+    /// Sets the maximum accepted frame payload size.
     ///
-    /// By default max size is set to 64kb
+    /// The default is 64 KiB.
     pub fn set_max_frame_size(mut self, size: usize) -> Self {
         self.max_size = size;
         self
     }
 
     #[must_use]
-    /// Disable payload masking.
+    /// Configures the connection to use server-side masking rules.
     ///
-    /// By default ws client masks frame payload.
+    /// By default, the client masks outgoing frames and expects unmasked
+    /// incoming frames. Server mode reverses those rules.
     pub fn set_server_mode(mut self) -> Self {
         self.server_mode = true;
         self
     }
 
-    /// Append a header.
+    /// Sets a header for the opening handshake.
     ///
-    /// Header gets appended to existing header.
-    /// To override header use `set_header()` method.
+    /// This replaces any existing value with the same name.
     pub fn set_header<K, V>(mut self, key: K, value: V) -> Result<Self, HttpError>
     where
         HeaderName: TryFrom<K>,
@@ -156,7 +165,7 @@ impl WsClientConfig {
         Ok(self)
     }
 
-    /// Insert a header only if it is not yet set.
+    /// Sets a handshake header if it is not already present.
     pub fn set_header_if_unset<K, V>(mut self, key: K, value: V) -> Result<Self, HttpError>
     where
         HeaderName: TryFrom<K>,
@@ -172,7 +181,7 @@ impl WsClientConfig {
         Ok(self)
     }
 
-    /// Set HTTP basic authorization header.
+    /// Sets the HTTP Basic authentication header.
     pub fn set_basic_auth(
         self,
         username: impl fmt::Display,
@@ -185,16 +194,17 @@ impl WsClientConfig {
         self.set_header(AUTHORIZATION, format!("Basic {}", base64.encode(auth)))
     }
 
-    /// Set HTTP bearer authentication header.
+    /// Sets the HTTP bearer authentication header.
     pub fn set_bearer_auth(self, token: impl fmt::Display) -> Result<Self, HttpError> {
         self.set_header(AUTHORIZATION, format!("Bearer {token}"))
     }
 
     #[must_use]
-    /// Set request timeout.
+    /// Sets the opening-handshake timeout.
     ///
-    /// Request timeout is the total time before a response must be received.
-    /// Default value is 5 seconds.
+    /// The timeout covers sending the upgrade request and receiving the
+    /// response after a connection has been established. The default is
+    /// 5 seconds. A zero duration disables the timeout.
     pub fn set_timeout(mut self, timeout: impl Into<Millis>) -> Self {
         self.timeout = timeout.into();
         self

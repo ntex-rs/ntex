@@ -1,4 +1,4 @@
-//! Websockets client
+//! WebSocket client.
 use std::{fmt, marker};
 
 #[cfg(feature = "openssl")]
@@ -31,7 +31,10 @@ thread_local! {
     static CFG: SharedCfg = SharedCfg::new("WS-CLIENT").into();
 }
 
-/// `WebSocket` client builder
+/// Builder for establishing a WebSocket client connection.
+///
+/// The builder contains the target URI and a typed [`WsClientConfig`]. Use
+/// [`connect`](Self::connect) to perform the opening handshake.
 pub struct WsClient<F> {
     uri: Uri,
     cfg: Cfg<WsClientConfig>,
@@ -41,7 +44,28 @@ pub struct WsClient<F> {
 }
 
 impl WsClient<Base> {
-    /// Set server uri
+    /// Creates a client for `uri` using the supplied configuration.
+    ///
+    /// ```rust
+    /// use ntex::{SharedCfg, time::Seconds};
+    /// use ntex::ws::{WsClient, WsClientConfig};
+    ///
+    /// #[ntex::main]
+    /// async fn main() {
+    ///     let cfg = SharedCfg::new("WS-CLIENT").add(
+    ///         WsClientConfig::new()
+    ///             .set_max_frame_size(128 * 1024)
+    ///             .set_timeout(Seconds(10))
+    ///     );
+    ///
+    ///     let _client = WsClient::new("ws://localhost/socket", cfg).unwrap();
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WsConfigError`] if the URI is invalid, has no host or scheme,
+    /// or uses an unsupported scheme.
     pub fn new<U>(uri: U, cfg: impl Into<Cfg<WsClientConfig>>) -> Result<Self, WsConfigError>
     where
         Uri: TryFrom<U>,
@@ -77,7 +101,7 @@ impl WsClient<Base> {
 }
 
 impl<F> WsClient<F> {
-    /// Create new websocket client
+    /// Replaces the network connector used to establish the connection.
     pub fn connector<U, S>(self, f: impl IntoService<S, SharedCfg, Connect<Uri>>) -> WsClient<U>
     where
         U: Filter + 'static,
@@ -94,13 +118,13 @@ impl<F> WsClient<F> {
     }
 
     #[cfg(feature = "openssl")]
-    /// Use openssl connector.
+    /// Uses the supplied OpenSSL connector for secure connections.
     pub fn openssl(self, config: SslConnector) -> WsClient<Layer<openssl::SslFilter>> {
         self.connector(openssl::SslConnector::new(config))
     }
 
     #[cfg(feature = "rustls")]
-    /// Use rustls connector.
+    /// Uses the supplied rustls connector for secure connections.
     pub fn rustls(
         self,
         config: std::sync::Arc<RustlsClientConfig>,
@@ -113,7 +137,12 @@ impl<F> WsClient<F>
 where
     F: Filter,
 {
-    /// Complete request construction and connect to a websockets server.
+    /// Establishes the connection and performs the WebSocket opening handshake.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if connection establishment, HTTP encoding or decoding,
+    /// timeout handling, or handshake validation fails.
     pub async fn connect(&self) -> Result<WsConnection<F>, Error<WsClientError>> {
         let mut head = Message::<RequestHead>::new();
         // the message pool may return a recycled head whose method is not GET
@@ -295,6 +324,10 @@ impl<F> fmt::Debug for WsClient<F> {
     }
 }
 
+/// An established WebSocket client connection.
+///
+/// This value retains the opening-handshake response, the WebSocket codec, and
+/// the underlying I/O stream.
 pub struct WsConnection<F> {
     io: Io<F>,
     codec: ws::Codec,
@@ -306,25 +339,25 @@ impl<F> WsConnection<F> {
         Self { io, codec, res }
     }
 
-    /// Get codec reference
+    /// Returns the connection's WebSocket codec.
     pub fn codec(&self) -> &ws::Codec {
         &self.codec
     }
 
-    /// Get reference to response
+    /// Returns the opening-handshake response.
     pub fn response(&self) -> &ClientResponse {
         &self.res
     }
 }
 
 impl<F> WsConnection<F> {
-    /// Get ws sink
+    /// Creates a sink for sending messages over this connection.
     pub fn sink(&self) -> ws::WsSink {
         ws::WsSink::new(self.io.get_ref(), self.codec.clone())
     }
 
-    /// Consumes the `WsConnection`, returning it'as underlying I/O stream object
-    /// and response.
+    /// Consumes the connection and returns its I/O stream, codec, and
+    /// opening-handshake response.
     pub fn into_inner(self) -> (Io<F>, ws::Codec, ClientResponse) {
         (self.io, self.codec, self.res)
     }
@@ -332,7 +365,10 @@ impl<F> WsConnection<F> {
 
 impl WsConnection<Sealed> {
     // TODO: fix close frame handling
-    /// Start client websockets with `SinkService` and `mpsc::Receiver<Frame>`
+    /// Starts the WebSocket dispatcher and returns a channel of received frames.
+    ///
+    /// The dispatcher runs in a spawned task. Protocol and connection errors
+    /// are delivered through the returned channel.
     pub fn receiver(self) -> mpsc::Receiver<Result<ws::Frame, WsError<()>>> {
         let (tx, rx): (_, mpsc::Receiver<Result<ws::Frame, WsError<()>>>) = mpsc::channel();
 
@@ -358,7 +394,10 @@ impl WsConnection<Sealed> {
         rx
     }
 
-    /// Start client websockets service.
+    /// Runs the WebSocket dispatcher with `svc` handling received frames.
+    ///
+    /// The service may return a message to send to the peer or [`None`] when no
+    /// response is required.
     pub async fn start<T>(
         self,
         svc: impl IntoService<T, (), ws::Frame>,
@@ -385,7 +424,7 @@ impl WsConnection<Sealed> {
 }
 
 impl<F: Filter> WsConnection<F> {
-    /// Convert I/O stream to boxed stream
+    /// Erases the concrete I/O filter type.
     pub fn seal(self) -> WsConnection<Sealed> {
         WsConnection {
             io: self.io.seal(),
@@ -394,7 +433,7 @@ impl<F: Filter> WsConnection<F> {
         }
     }
 
-    /// Convert to ws stream to plain io stream
+    /// Converts the connection into a binary WebSocket transport.
     pub fn into_transport(self) -> Io<Layer<WsTransport, F>> {
         WsTransport::create(self.io, self.codec)
     }

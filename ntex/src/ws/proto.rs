@@ -4,7 +4,7 @@ use base64::{Engine, engine::general_purpose::STANDARD as base64};
 
 use super::error::HandshakeError;
 
-/// Operation codes as part of rfc6455.
+/// WebSocket frame operation codes defined by RFC 6455.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum OpCode {
     /// Indicates a continuation frame of a fragmented message.
@@ -86,11 +86,10 @@ pub enum CloseCode {
     /// endpoint that understands only text data MAY send this if it
     /// receives a binary message).
     Unsupported,
-    /// Indicates an abnormal closure. If the abnormal closure was due to an
-    /// error, this close code will not be used. Instead, the `on_error` method
-    /// of the handler will be called with the error. However, if the connection
-    /// is simply dropped, without an error, this close code will be sent to the
-    /// handler.
+    /// Indicates that the connection closed without a close control frame.
+    ///
+    /// This code is reserved for local reporting and must not be sent in a
+    /// close frame.
     Abnormal,
     /// Indicates that an endpoint is terminating the connection
     /// because it has received data within a message that was not
@@ -176,11 +175,11 @@ impl From<u16> for CloseCode {
 }
 
 #[derive(Debug, Eq, PartialEq, Clone)]
-/// Reason for closing the connection
+/// Reason supplied in a WebSocket close control frame.
 pub struct CloseReason {
-    /// Exit code
+    /// Close status code.
     pub code: CloseCode,
-    /// Optional description of the exit code
+    /// Optional human-readable description.
     pub description: Option<String>,
 }
 
@@ -211,7 +210,12 @@ const H4: u32 = 0xC3D2_E1F0;
 const WS_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 #[allow(clippy::many_single_char_names)]
-/// Computes the SHA-1 hash of the input key
+/// Computes the `Sec-WebSocket-Accept` value for a client handshake key.
+///
+/// # Errors
+///
+/// Returns [`HandshakeError::BadWebsocketKey`] when `key` is longer than
+/// 32 bytes.
 pub fn hash_key(key: &[u8]) -> Result<String, HandshakeError> {
     if key.len() > 32 {
         return Err(HandshakeError::BadWebsocketKey);
