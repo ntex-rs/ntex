@@ -4,7 +4,6 @@ use std::convert::Infallible;
 use super::{HttpRequest, State, WebResponseError};
 use crate::http::Payload;
 
-#[allow(async_fn_in_trait)]
 /// Trait implemented by types that can be extracted from request.
 ///
 /// Types that implement this trait can be used with `Route` handlers.
