@@ -969,7 +969,7 @@ async fn test_request_state() {
                             assert_eq!(*req.st(), 10);
                             Ok::<_, Infallible>(req)
                         })
-                        .route(web::get().to2(test)),
+                        .route(web::get().to_with_state(test)),
                 ),
         )
     });

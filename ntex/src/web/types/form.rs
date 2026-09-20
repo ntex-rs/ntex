@@ -164,11 +164,10 @@ where
 /// fn main() {
 ///     let cfg = WebAppConfig::new()
 ///         // change `Form` extractor configuration
-///         .set_state(web::types::FormConfig::default().limit(4097))
-///         .into();
+///         .set_state(web::types::FormConfig::default().limit(4097));
 ///
 ///     let app = App::default()
-///         .web_app_config(cfg)
+///         .with_config(cfg)
 ///         .service(web::resource("/index.html").route(web::get().to(index)));
 /// }
 /// ```

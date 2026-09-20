@@ -210,11 +210,10 @@ where
 ///                 .limit(4096)
 ///                 .content_type(|mime| {  // <- accept text/plain content type
 ///                     mime.type_() == mime::TEXT && mime.subtype() == mime::PLAIN
-///                 })
-///     ).into();
+///                 }));
 ///
 ///     let app = App::default()
-///         .web_app_config(cfg)
+///         .with_config(cfg)
 ///         .service(web::resource("/index.html")
 ///             .route(web::post().to(index))
 ///     );

@@ -309,11 +309,15 @@ where
     /// }
     ///
     /// web::App::<AppState>::new()
-    ///     .service(web::resource("/{name}").to2(index));
+    ///     .service(web::resource("/{name}").to_with_state(index));
     /// ```
     ///
-    /// This is equivalent to `resource.route(web::route().to2(handler))`.
-    pub fn to2<Args>(self, h: impl HandlerSt<St, Out, Args>) -> ResourceServices<St, In, Out, M, F>
+    /// This is equivalent to
+    /// `resource.route(web::route().to_with_state(handler))`.
+    pub fn to_with_state<Args>(
+        self,
+        h: impl HandlerSt<St, Out, Args>,
+    ) -> ResourceServices<St, In, Out, M, F>
     where
         Args: FromRequest<St> + 'static,
         Args::Error: WebResponseError<St, St::Error>,
@@ -325,7 +329,7 @@ where
             filter: self.filter,
             middleware: self.middleware,
             default: None,
-            routes: vec![Route::new().to2(h)],
+            routes: vec![Route::new().to_with_state(h)],
         }
     }
 
@@ -480,15 +484,15 @@ where
     /// web::App::<AppState>::new().service(
     ///     web::resource("/")
     ///         .route(web::get().to(async || "GET"))
-    ///         .to2(fallback)
+    ///         .to_with_state(fallback)
     /// );
     /// ```
-    pub fn to2<Args>(mut self, handler: impl HandlerSt<St, Out, Args>) -> Self
+    pub fn to_with_state<Args>(mut self, handler: impl HandlerSt<St, Out, Args>) -> Self
     where
         Args: FromRequest<St> + 'static,
         Args::Error: WebResponseError<St, St::Error>,
     {
-        self.routes.push(Route::new().to2(handler));
+        self.routes.push(Route::new().to_with_state(handler));
         self
     }
 

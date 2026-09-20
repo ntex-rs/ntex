@@ -132,10 +132,10 @@ impl<St: State, In: 'static> Route<St, In> {
     /// }
     ///
     /// web::App::<AppState>::new().service(
-    ///     web::resource("/{name}").route(web::get().to2(index))
+    ///     web::resource("/{name}").route(web::get().to_with_state(index))
     /// );
     /// ```
-    pub fn to2<H, Args>(mut self, handler: H) -> Self
+    pub fn to_with_state<H, Args>(mut self, handler: H) -> Self
     where
         H: HandlerSt<St, In, Args> + 'static,
         Args: FromRequest<St> + 'static,

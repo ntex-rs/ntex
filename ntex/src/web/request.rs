@@ -245,7 +245,7 @@ impl<St> WebRequest<St> {
     ///     .filter(async |req: WebRequest<()>| {
     ///         Ok::<_, Infallible>(req.map_state(|()| 42usize))
     ///     })
-    ///     .service(web::resource("/").to2(index));
+    ///     .service(web::resource("/").to_with_state(index));
     /// ```
     #[inline]
     pub fn map_state<F, NewSt>(self, f: F) -> WebRequest<NewSt>

@@ -306,11 +306,11 @@ where
     ///     .set_state(42usize);
     ///
     /// App::default()
-    ///     .web_app_config(config)
+    ///     .with_config(config)
     ///     .route("/", web::get().to(index));
     /// ```
     #[must_use]
-    pub fn web_app_config(mut self, cfg: impl Into<Cfg<WebAppConfig>>) -> Self {
+    pub fn with_config(mut self, cfg: impl Into<Cfg<WebAppConfig>>) -> Self {
         self.config = Some(cfg.into());
         self
     }
@@ -800,7 +800,7 @@ mod tests {
 
         let srv = init_service(
             App::new()
-                .web_app_config(cfg)
+                .with_config(cfg)
                 .filter(async move |req: WebRequest<()>| {
                     assert_eq!(*req.app_state::<usize>().unwrap(), 10);
                     Ok::<_, Infallible>(req)

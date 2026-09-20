@@ -298,10 +298,10 @@ where
 ///         .filter(async |req: WebRequest<()>| {
 ///             Ok::<_, Infallible>(req.map_state(|_| 10usize))
 ///         })
-///         .route(web::to2(index))
+///         .route(web::to_with_state(index))
 /// );
 /// ```
-pub fn to2<St, In, F, Args>(handler: F) -> Route<St, In>
+pub fn to_with_state<St, In, F, Args>(handler: F) -> Route<St, In>
 where
     St: State,
     In: 'static,
@@ -309,7 +309,7 @@ where
     Args: FromRequest<St> + 'static,
     Args::Error: WebResponseError<St, St::Error>,
 {
-    Route::new().to2(handler)
+    Route::new().to_with_state(handler)
 }
 
 /// Create service adapter for a specific path.
