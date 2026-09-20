@@ -120,7 +120,15 @@ impl Codec {
     }
 
     /// Encodes `page` as a final binary frame.
-    pub fn encode_page(&self, page: BytePage, dst: &mut BytePages) {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::Closed`] if a close message has already been
+    /// encoded.
+    pub fn encode_page(&self, page: BytePage, dst: &mut BytePages) -> Result<(), ProtocolError> {
+        if self.is_closed() {
+            return Err(ProtocolError::Closed);
+        }
         Parser::write_message(
             dst,
             page,
@@ -129,6 +137,7 @@ impl Codec {
             !self.flags.get().contains(Flags::SERVER),
         )
         .expect("binary frames are always valid");
+        Ok(())
     }
 }
 
@@ -143,6 +152,10 @@ impl Encoder for Codec {
     type Error = ProtocolError;
 
     fn encodev(&self, item: Message, dst: &mut BytePages) -> Result<(), Self::Error> {
+        if self.is_closed() {
+            return Err(ProtocolError::Closed);
+        }
+
         match item {
             Message::Text(txt) => {
                 if self.flags.get().contains(Flags::W_CONTINUATION) {
@@ -382,6 +395,22 @@ mod tests {
         assert!(matches!(
             codec.encodev(Message::Text("text".into()), &mut dst),
             Err(ProtocolError::ContinuationStarted)
+        ));
+    }
+
+    #[test]
+    fn rejects_messages_after_close() {
+        let codec = Codec::new();
+        let mut dst = BytePages::default();
+        codec.encodev(Message::Close(None), &mut dst).unwrap();
+
+        assert!(matches!(
+            codec.encodev(Message::Text("text".into()), &mut dst),
+            Err(ProtocolError::Closed)
+        ));
+        assert!(matches!(
+            codec.encode_page(BytePage::from(Bytes::new()), &mut dst),
+            Err(ProtocolError::Closed)
         ));
     }
 }

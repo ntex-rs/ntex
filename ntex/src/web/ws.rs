@@ -129,7 +129,7 @@ where
 
     // create sink
     let codec = ws::Codec::new();
-    let sink = WsSink::new(io.get_ref(), codec.clone());
+    let sink = WsSink::new(io.get_ref(), codec.clone(), io.shared().get());
 
     // create ws service
     io.set_config(CFG.with(Clone::clone));

@@ -58,7 +58,7 @@ impl WsClient<Base> {
     ///     let cfg = SharedCfg::new("WS-CLIENT").add(
     ///         WsClientConfig::new()
     ///             .set_max_frame_size(128 * 1024)
-    ///             .set_timeout(Seconds(10))
+    ///             .set_handshake_timeout(Seconds(10))
     ///     );
     ///
     ///     let _client = WsClient::new("ws://localhost/socket", cfg);
@@ -336,7 +336,9 @@ fn validate_negotiation(response: &HeaderMap, offered: &HeaderMap) -> Result<(),
                     && offered
                         .get(header::SEC_WEBSOCKET_PROTOCOL)
                         .and_then(|offered| offered.to_str().ok())
-                        .is_some_and(|offered| offered.split(',').any(|item| item == selected))
+                        .is_some_and(|offered| {
+                            offered.split(',').any(|item| item.trim() == selected)
+                        })
             });
         if !valid {
             return Err(WsClientError::InvalidWebSocketProtocol(protocol.clone()));
@@ -380,7 +382,11 @@ impl<F> WsConnection<F> {
 impl<F> WsConnection<F> {
     /// Creates a sink for sending messages over this connection.
     pub fn sink(&self) -> ws::WsSink {
-        ws::WsSink::new(self.io.get_ref(), self.codec.clone())
+        ws::WsSink::new(
+            self.io.get_ref(),
+            self.codec.clone(),
+            self.io.shared().get(),
+        )
     }
 
     /// Consumes the connection and returns its I/O stream, codec, and
@@ -391,7 +397,6 @@ impl<F> WsConnection<F> {
 }
 
 impl WsConnection<Sealed> {
-    // TODO: fix close frame handling
     /// Starts the WebSocket dispatcher and returns a channel of received frames.
     ///
     /// The dispatcher runs in a spawned task. Protocol and connection errors
@@ -432,10 +437,19 @@ impl WsConnection<Sealed> {
     where
         T: Service<(), ws::Frame, Res = Option<ws::Message>> + 'static,
     {
+        let io = self.io.get_ref();
         let service = apply_fn(
             svc.into_service().map_err(WsError::Service),
             async move |req, svc| match req {
-                DispatchItem::<ws::Codec>::Item(item) => svc.call(item).await,
+                DispatchItem::<ws::Codec>::Item(item) => {
+                    let close = matches!(item, ws::Frame::Close(_));
+                    let result = svc.call(item).await;
+                    if close {
+                        let io = io.clone();
+                        rt::spawn(async move { io.close() });
+                    }
+                    result
+                }
                 DispatchItem::Control(_) => Ok(None),
                 DispatchItem::Stop(Reason::KeepAliveTimeout) => Err(WsError::KeepAlive),
                 DispatchItem::Stop(Reason::ReadTimeout) => Err(WsError::ReadTimeout),
@@ -533,7 +547,7 @@ mod tests {
 
     #[test]
     fn negotiation() {
-        let offered = WsClientConfig::new()
+        let configured = WsClientConfig::new()
             .set_protocols(["chat", "superchat"])
             .unwrap();
         let mut response = HeaderMap::new();
@@ -542,14 +556,25 @@ mod tests {
             header::SEC_WEBSOCKET_PROTOCOL,
             HeaderValue::from_static("chat"),
         );
-        validate_negotiation(&response, &offered.headers).unwrap();
+        validate_negotiation(&response, &configured.headers).unwrap();
+
+        let mut offered_headers = HeaderMap::new();
+        offered_headers.insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static("chat, superchat"),
+        );
+        response.insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static("superchat"),
+        );
+        validate_negotiation(&response, &offered_headers).unwrap();
 
         response.insert(
             header::SEC_WEBSOCKET_PROTOCOL,
             HeaderValue::from_static("other"),
         );
         assert!(matches!(
-            validate_negotiation(&response, &offered.headers),
+            validate_negotiation(&response, &configured.headers),
             Err(WsClientError::InvalidWebSocketProtocol(_))
         ));
 
@@ -558,7 +583,7 @@ mod tests {
             HeaderValue::from_static("chat,superchat"),
         );
         assert!(matches!(
-            validate_negotiation(&response, &offered.headers),
+            validate_negotiation(&response, &configured.headers),
             Err(WsClientError::InvalidWebSocketProtocol(_))
         ));
 
@@ -572,7 +597,7 @@ mod tests {
             HeaderValue::from_static("superchat"),
         );
         assert!(matches!(
-            validate_negotiation(&response, &offered.headers),
+            validate_negotiation(&response, &configured.headers),
             Err(WsClientError::InvalidWebSocketProtocol(_))
         ));
 
@@ -582,7 +607,7 @@ mod tests {
             HeaderValue::from_static("permessage-deflate"),
         );
         assert!(matches!(
-            validate_negotiation(&response, &offered.headers),
+            validate_negotiation(&response, &configured.headers),
             Err(WsClientError::UnexpectedWebSocketExtensions(_))
         ));
     }

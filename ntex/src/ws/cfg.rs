@@ -20,6 +20,7 @@ pub struct WsClientConfig {
     pub(super) addr: Option<net::SocketAddr>,
     pub(super) max_size: usize,
     pub(super) timeout: Millis,
+    pub(super) close_timeout: Millis,
     pub(super) headers: HeaderMap,
     pub(super) server_mode: bool,
     #[cfg(feature = "cookie")]
@@ -63,6 +64,7 @@ impl WsClientConfig {
             max_size: 65_536,
             server_mode: false,
             timeout: Millis(5_000),
+            close_timeout: Millis(5_000),
             #[cfg(feature = "cookie")]
             cookies: None,
             config: CfgContext::default(),
@@ -216,8 +218,19 @@ impl WsClientConfig {
     /// The timeout covers sending the upgrade request and receiving the
     /// response after a connection has been established. The default is
     /// 5 seconds. A zero duration disables the timeout.
-    pub fn set_timeout(mut self, timeout: impl Into<Millis>) -> Self {
+    pub fn set_handshake_timeout(mut self, timeout: impl Into<Millis>) -> Self {
         self.timeout = timeout.into();
+        self
+    }
+
+    #[must_use]
+    /// Sets the closing-handshake timeout.
+    ///
+    /// After sending a close frame, the client waits this long for the peer's
+    /// close response before shutting down the connection. The default is
+    /// 5 seconds. A zero duration disables the timeout.
+    pub fn set_close_timeout(mut self, timeout: impl Into<Millis>) -> Self {
+        self.close_timeout = timeout.into();
         self
     }
 }

@@ -174,6 +174,9 @@ async fn web_ws_client() {
     sink.send(ws::Message::Close(Some(ws::CloseCode::Normal.into())))
         .await
         .unwrap();
+    let item = rx.recv().await.unwrap().unwrap();
+    assert_eq!(item, ws::Frame::Close(Some(ws::CloseCode::Away.into())));
+
     on_disconnect.await;
     assert!(rx.recv().await.is_none());
 }
@@ -199,7 +202,7 @@ async fn web_ws_subprotocol() {
         srv.url("/"),
         WsClientConfig::new()
             .set_address(srv.addr())
-            .set_timeout(Seconds(30))
+            .set_handshake_timeout(Seconds(30))
             .set_protocols(["my-subprotocol"])
             .unwrap(),
     )
@@ -310,7 +313,7 @@ async fn web_ws_subprotocol_none() {
         srv.url("/"),
         WsClientConfig::new()
             .set_address(srv.addr())
-            .set_timeout(Seconds(30))
+            .set_handshake_timeout(Seconds(30))
             .set_protocols(["my-subprotocol"])
             .unwrap(),
     )
@@ -358,7 +361,7 @@ async fn web_ws_protocols_parsing() {
         SharedCfg::new("C").add(
             WsClientConfig::new()
                 .set_address(srv.addr())
-                .set_timeout(Seconds(30))
+                .set_handshake_timeout(Seconds(30))
                 .set_protocols(["proto1", "proto2"])
                 .unwrap(),
         ),

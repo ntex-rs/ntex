@@ -144,12 +144,13 @@ impl FilterLayer for WsTransport {
     }
 
     fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
-        buf.with_write_buffers(|w_src, w_dst| {
+        buf.with_write_buffers(|w_src, w_dst| -> Result<(), super::error::ProtocolError> {
             while let Some(page) = w_src.take() {
-                self.codec.encode_page(page, w_dst);
+                self.codec.encode_page(page, w_dst)?;
             }
-        });
-        Ok(())
+            Ok(())
+        })
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
     }
 }
 

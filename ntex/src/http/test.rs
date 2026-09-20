@@ -351,7 +351,7 @@ impl TestServer {
             .add(
                 WsClientConfig::new()
                     .set_address(addr)
-                    .set_timeout(Seconds(30)),
+                    .set_handshake_timeout(Seconds(30)),
             )
             .build();
 
@@ -384,7 +384,7 @@ impl TestServer {
             .add(
                 WsClientConfig::new()
                     .set_address(self.addr)
-                    .set_timeout(Seconds(30)),
+                    .set_handshake_timeout(Seconds(30)),
             )
             .build();
         self.client = Self::create_client(self.cfg.clone());
