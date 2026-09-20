@@ -43,13 +43,14 @@ use crate::web::{HttpResponse, WebRequest, WebResponse};
 ///
 /// `%a`  Remote IP-address (IP-address of proxy if using reverse proxy)
 ///
-/// `%t`  Time when the request was started to process (in rfc3339 format)
+/// `%t`  Time when the request was started to process (in HTTP-date format,
+/// e.g. `Thu, 04 Sep 2025 15:33:20 GMT`)
 ///
 /// `%r`  First line of request
 ///
 /// `%s`  Response status code
 ///
-/// `%b`  Size of response in bytes, including HTTP headers
+/// `%b`  Size of response in bytes, excluding HTTP headers
 ///
 /// `%T` Time taken to serve the request, in seconds with floating fraction in
 /// .06f format
