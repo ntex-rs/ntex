@@ -92,6 +92,7 @@ pub use ntex_macros::web_options as options;
 pub use ntex_macros::web_patch as patch;
 pub use ntex_macros::web_post as post;
 pub use ntex_macros::web_put as put;
+pub use ntex_macros::web_query as query;
 pub use ntex_macros::web_trace as trace;
 
 pub use crate::http::Response as HttpResponse;
@@ -101,7 +102,7 @@ pub use self::app::{App, AppServices};
 pub use self::config::{ServiceConfig, WebAppConfig};
 pub use self::error::{DefaultError, InternalError, WebError, WebResponseError};
 pub use self::extract::FromRequest;
-pub use self::handler::Handler;
+pub use self::handler::{Handler, HandlerSt};
 pub use self::httprequest::HttpRequest;
 pub use self::request::WebRequest;
 pub use self::resource::{Resource, ResourceServices};
@@ -136,7 +137,7 @@ pub mod dev {
 
     pub type DefaultState = ();
 
-    use crate::web::Handler;
+    use crate::web::{Handler, HandlerSt};
 
     pub(crate) fn insert_slash(mut patterns: Vec<String>) -> Vec<String> {
         for path in &mut patterns {
@@ -149,10 +150,21 @@ pub mod dev {
 
     #[doc(hidden)]
     #[inline]
-    pub fn __assert_handler<St, Fun, Res>(f: Fun) -> impl Handler<St, (), Output = Res>
+    pub fn __assert_handler<St, In, Fun, Res>(f: Fun) -> impl Handler<St, (), Output = Res>
     where
         St: super::State,
         Fun: AsyncFn() -> Res + 'static,
+        Res: super::Responder<St>,
+    {
+        f
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn __assert_handler_st<St, In, Fun, Res>(f: Fun) -> impl HandlerSt<St, In, (), Output = Res>
+    where
+        St: super::State,
+        Fun: AsyncFn(&St, In) -> Res + 'static,
         Res: super::Responder<St>,
     {
         f
@@ -184,4 +196,31 @@ pub mod dev {
     assert_handler!(__assert_handler8, A, B, C, D, E, F, G, H);
     assert_handler!(__assert_handler9, A, B, C, D, E, F, G, H, I);
     assert_handler!(__assert_handler10, A, B, C, D, E, F, G, H, I, J);
+
+    macro_rules! assert_handler_st ({ $name:ident, $($T:ident),+} => {
+        #[doc(hidden)]
+        #[inline(always)]
+        pub fn $name<St, In, Fun, Res, $($T,)+>(
+            f: Fun,
+        ) -> impl HandlerSt<St, In, ($($T,)+), Output = Res>
+        where
+            St: $crate::web::State,
+            Fun: AsyncFn(&St, In, $($T,)+) -> Res + 'static,
+            Res: super::Responder<St> + 'static,
+           $($T: $crate::web::FromRequest<St>),+,
+        {
+            f
+        }
+    });
+
+    assert_handler_st!(__assert_handler_st1, A);
+    assert_handler_st!(__assert_handler_st2, A, B);
+    assert_handler_st!(__assert_handler_st3, A, B, C);
+    assert_handler_st!(__assert_handler_st4, A, B, C, D);
+    assert_handler_st!(__assert_handler_st5, A, B, C, D, E);
+    assert_handler_st!(__assert_handler_st6, A, B, C, D, E, F);
+    assert_handler_st!(__assert_handler_st7, A, B, C, D, E, F, G);
+    assert_handler_st!(__assert_handler_st8, A, B, C, D, E, F, G, H);
+    assert_handler_st!(__assert_handler_st9, A, B, C, D, E, F, G, H, I);
+    assert_handler_st!(__assert_handler_st10, A, B, C, D, E, F, G, H, I, J);
 }

@@ -184,12 +184,10 @@ impl<St: State> FromRequest<St> for Bytes {
 ///
 /// fn main() {
 ///     let cfg = WebAppConfig::new()
-///         .set_state(
-///              web::types::PayloadConfig::new(4096))  // <- limit size of the payload
-///         .into();
+///         .set_state(web::types::PayloadConfig::new(4096)); // <- limit size of the payload
 ///
 ///     let app = App::default()
-///         .config(cfg)
+///         .with_config(cfg)
 ///         .service(
 ///             web::resource("/index.html")
 ///                 .route(web::get().to(index))  // <- register handler with extractor params

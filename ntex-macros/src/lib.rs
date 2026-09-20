@@ -15,6 +15,7 @@
 //! - [options](attr.web_options.html)
 //! - [trace](attr.web_trace.html)
 //! - [patch](attr.web_patch.html)
+//! - [query](attr.web_query.html)
 //!
 //! ### Attributes:
 //!

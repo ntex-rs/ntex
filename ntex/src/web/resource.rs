@@ -11,30 +11,45 @@ use super::error::{WebError, WebResponseError};
 use super::guard::Guard;
 use super::route::{IntoRoutes, Route, RouteService};
 use super::stack::{Filter, WebStack};
-use super::{FromRequest, Handler, HttpHandler, HttpService, State, WebRequest, WebResponse};
+use super::{
+    FromRequest, Handler, HandlerSt, HttpHandler, HttpService, State, WebRequest, WebResponse,
+};
 
-/// *Resource* is an entry in resources table which corresponds to requested URL.
+/// Groups routes and configuration for one or more URL patterns.
 ///
-/// Resource in turn has at least one route.
-/// Route consists of an handlers objects and list of guards
-/// (objects that implement `Guard` trait).
-/// Resources and routes uses builder-like pattern for configuration.
-/// During request handling, resource object iterate through all routes
-/// and check guards for specific route, if request matches all
-/// guards, route considered matched and route handler get called.
+/// A resource is useful when several routes belong to the same path. Along
+/// with those routes, it can have its own guards, filters, middleware, name,
+/// and fallback service. Create one with [`web::resource()`], then register it
+/// with [`App::service()`] or [`Scope::service()`].
+///
+/// For each request, the router first checks the resource's path and guards.
+/// If they do not match, it keeps looking for another resource or scope. Once
+/// this resource is selected, its middleware and filters run, followed by its
+/// routes in registration order. The first route whose guards all pass handles
+/// the request.
+///
+/// When none of the routes match, the resource uses its own fallback. By
+/// default, that fallback returns `405 Method Not Allowed`.
+///
+/// Use [`Resource::route()`] to add guarded routes, or [`Resource::to()`] to
+/// add an unguarded handler that accepts any request reaching the resource.
 ///
 /// ```rust
 /// use ntex::web::{self, App, HttpResponse};
 ///
-/// fn main() {
-///     let app = App::default().service(
-///         web::resource("/")
-///             .route(web::get().to(async || { HttpResponse::Ok() })));
-/// }
+/// App::default().service(
+///     web::resource("/users")
+///         .route(web::get().to(async || "users"))
+///         .route(web::post().to(async || HttpResponse::Created()))
+///         .default_service(web::to(async || {
+///             HttpResponse::MethodNotAllowed().body("Use GET or POST")
+///         })),
+/// );
 /// ```
 ///
-/// If no matching route could be found, *405* response code get returned.
-/// Default behavior could be overriden with `default_resource()` method.
+/// [`App::service()`]: super::App::service
+/// [`Scope::service()`]: super::Scope::service
+/// [`web::resource()`]: super::resource
 #[derive(derive_more::Debug)]
 #[debug("Resource({rdef:?})")]
 pub struct Resource<St: State, In, Out = In, M = Identity, F = Filter<St, In>> {
@@ -46,8 +61,20 @@ pub struct Resource<St: State, In, Out = In, M = Identity, F = Filter<St, In>> {
     ph: PhantomData<Out>,
 }
 
+/// A resource with routes or a configured fallback.
+///
+/// From here, you can add more routes or handlers and change the resource
+/// fallback. Configure resource-wide settings such as its name, guards,
+/// filters, and middleware before adding the first route or fallback.
+///
+/// The finished builder can be registered with [`App::service()`] or
+/// [`Scope::service()`]. It keeps the path and all configuration from the
+/// original [`Resource`].
+///
+/// [`App::service()`]: super::App::service
+/// [`Scope::service()`]: super::Scope::service
 #[derive(derive_more::Debug)]
-#[debug("Resource({rdef:?})")]
+#[debug("ResourceServices({rdef:?})")]
 pub struct ResourceServices<St: State, In, Out, M, F> {
     middleware: M,
     filter: ServiceChainFactory<F, St, WebRequest<In>>,
@@ -85,39 +112,41 @@ where
             InitError = Failure,
         >,
 {
-    #[must_use]
     /// Set resource name.
     ///
     /// Name is used for url generation.
+    #[must_use]
     pub fn name(mut self, name: &str) -> Self {
         self.name = Some(name.to_string());
         self
     }
 
-    #[must_use]
-    /// Add match guard to a resource.
+    /// Add a match guard to this resource.
+    ///
+    /// The resource is selected only when its path and all registered guards
+    /// match. If a guard rejects the request, the router can try another
+    /// resource with the same path; otherwise the containing scope or
+    /// application fallback is used.
+    ///
+    /// Resource guards run before route selection. Use [`Route::guard()`] when
+    /// the condition should choose between routes inside one resource.
     ///
     /// ```rust
-    /// use ntex::web::{self, guard, App, HttpResponse};
+    /// use ntex::web::{self, guard, App};
     ///
-    /// async fn index(data: web::types::Path<(String, String)>) -> &'static str {
-    ///     "Welcome!"
-    /// }
-    ///
-    /// fn main() {
-    ///     let app = App::default()
-    ///         .service(
-    ///             web::resource("/app")
-    ///                 .guard(guard::Header("content-type", "text/plain"))
-    ///                 .route(web::get().to(index))
-    ///         )
-    ///         .service(
-    ///             web::resource("/app")
-    ///                 .guard(guard::Header("content-type", "text/json"))
-    ///                 .route(web::get().to(async || { HttpResponse::MethodNotAllowed() }))
-    ///         );
-    /// }
+    /// App::default()
+    ///     .service(
+    ///         web::resource("/items")
+    ///             .guard(guard::Header("accept", "application/json"))
+    ///             .to(async || "JSON items")
+    ///     )
+    ///     .service(
+    ///         web::resource("/items")
+    ///             .guard(guard::Header("accept", "text/plain"))
+    ///             .to(async || "Text items")
+    ///     );
     /// ```
+    #[must_use]
     pub fn guard<G: Guard + 'static>(mut self, guard: G) -> Self {
         self.guards.push(Box::new(guard));
         self
@@ -128,10 +157,29 @@ where
         self
     }
 
-    #[must_use]
-    /// Register request filter.
+    /// Registers a request filter for this resource.
     ///
-    /// This is similar to `App's` filters, but filter get invoked on resource level.
+    /// The filter runs after the resource's path and guards match, but before
+    /// its routes are checked. It therefore also runs when no route matches
+    /// and the resource's default service is used.
+    ///
+    /// ```rust
+    /// use std::convert::Infallible;
+    /// use ntex::web::{self, App, WebRequest};
+    ///
+    /// async fn item(_state: &(), item_id: usize) -> String {
+    ///     format!("Item {item_id}")
+    /// }
+    ///
+    /// App::new().service(
+    ///     web::resource("/item")
+    ///         .filter(async |req: WebRequest<()>| {
+    ///             Ok::<_, Infallible>(req.map_state(|()| 10usize))
+    ///         })
+    ///         .route(web::get().to_with_state(item)),
+    /// );
+    /// ```
+    #[must_use]
     pub fn filter<U, R>(
         self,
         filter: impl IntoServiceFactory<U, St, WebRequest<Out>>,
@@ -168,15 +216,26 @@ where
         }
     }
 
-    #[must_use]
-    /// Register a resource middleware.
+    /// Registers a middleware for this resource.
     ///
-    /// This is similar to `App's` middlewares, but middleware get invoked on resource level.
-    /// Resource level middlewares are not allowed to change response
-    /// type (i.e modify response's body).
-    pub fn middleware<U>(self, mw: U) -> Resource<St, In, Out, WebStack<St, M, U>, F> {
+    /// The middleware runs only after the resource's path and guards match. It
+    /// wraps the resource filter, routes, and fallback service, so it can
+    /// inspect or modify both the request and response. It also runs when no
+    /// route matches and the resource fallback handles the request.
+    ///
+    /// ```rust
+    /// use ntex::web::{self, middleware, App};
+    ///
+    /// App::default().service(
+    ///     web::resource("/items")
+    ///         .middleware(middleware::Logger::default())
+    ///         .route(web::get().to(async || "Items")),
+    /// );
+    /// ```
+    #[must_use]
+    pub fn middleware<U>(self, mw: U) -> Resource<St, In, Out, WebStack<St, U, M>, F> {
         Resource {
-            middleware: WebStack::new(self.middleware, mw),
+            middleware: WebStack::new(mw, self.middleware),
             filter: self.filter,
             rdef: self.rdef,
             name: self.name,
@@ -185,43 +244,28 @@ where
         }
     }
 
+    /// Add one or more routes to this resource.
+    ///
+    /// Routes are checked in registration order after the resource path and
+    /// resource guards match. The first route whose method and custom guards
+    /// accept the request is called. If no route matches, the resource's
+    /// default service is used; without a custom default, it returns
+    /// `405 Method Not Allowed`.
+    ///
+    /// A single [`Route`] or a collection of routes can be supplied.
+    ///
+    /// ```rust
+    /// use ntex::web::{self, App, HttpResponse};
+    ///
+    /// App::default().service(
+    ///     web::resource("/items").route([
+    ///         web::get().to(async || "list"),
+    ///         web::post().to(async || HttpResponse::Created()),
+    ///         web::delete().to(async || HttpResponse::NoContent()),
+    ///     ])
+    /// );
+    /// ```
     #[must_use]
-    /// Register a new route.
-    ///
-    /// ```rust
-    /// use ntex::web::{self, guard, App, HttpResponse};
-    ///
-    /// fn main() {
-    ///     let app = App::default().service(
-    ///         web::resource("/").route(
-    ///             web::route()
-    ///                 .guard(guard::Any(guard::Get()).or(guard::Put()))
-    ///                 .guard(guard::Header("Content-Type", "text/plain"))
-    ///                 .to(async || { HttpResponse::Ok() }))
-    ///     );
-    /// }
-    /// ```
-    ///
-    /// Multiple routes could be added to a resource. Resource object uses
-    /// match guards for route selection.
-    ///
-    /// ```rust
-    /// use ntex::web::{self, guard, App};
-    ///
-    /// fn main() {
-    ///     let app = App::default().service(
-    ///         web::resource("/container/")
-    ///             .route([
-    ///                 web::get().to(get_handler),
-    ///                 web::post().to(post_handler),
-    ///                 web::delete().to(delete_handler)
-    ///             ])
-    ///     );
-    /// }
-    /// # async fn get_handler() -> web::HttpResponseBuilder { web::HttpResponse::Ok() }
-    /// # async fn post_handler() -> web::HttpResponseBuilder { web::HttpResponse::Ok() }
-    /// # async fn delete_handler() -> web::HttpResponseBuilder { web::HttpResponse::Ok() }
-    /// ```
     pub fn route<R>(self, route: R) -> ResourceServices<St, In, Out, M, F>
     where
         R: IntoRoutes<St, Out>,
@@ -242,28 +286,25 @@ where
         }
     }
 
-    #[must_use]
-    /// Register a new route and add handler.
+    /// Register route with a handler.
     ///
-    /// This route matches all requests.
+    /// The route matches every request after this resource's path and guards
+    /// match. The handler receives request extractor values and returns a type
+    /// implementing [`Responder`](super::Responder).
     ///
     /// ```rust
-    /// use ntex::web::{self, App, HttpRequest, HttpResponse};
+    /// use ntex::web::{self, App};
     ///
-    /// async fn index(req: HttpRequest) -> HttpResponse {
-    ///     unimplemented!()
+    /// async fn show_user(id: web::types::Path<u32>) -> String {
+    ///     format!("User {}", id.into_inner())
     /// }
     ///
-    /// App::default().service(web::resource("/").to(index));
+    /// App::default()
+    ///     .service(web::resource("/users/{id}").to(show_user));
     /// ```
     ///
-    /// This is shortcut for:
-    ///
-    /// ```rust
-    /// # use ntex::web::{self, *};
-    /// # async fn index(req: HttpRequest) -> HttpResponse { unimplemented!() }
-    /// App::default().service(web::resource("/").route(web::route().to(index)));
-    /// ```
+    /// This is equivalent to `resource.route(web::route().to(handler))`.
+    #[must_use]
     pub fn to<Args>(self, h: impl Handler<St, Args>) -> ResourceServices<St, In, Out, M, F>
     where
         Args: FromRequest<St> + 'static,
@@ -280,11 +321,76 @@ where
         }
     }
 
-    #[must_use]
-    /// Default service to be used if no matching route could be found.
+    /// Register a state-aware handler as a new route.
     ///
-    /// By default *405* response get returned. Resource does not use
-    /// default handler from `App` or `Scope`.
+    /// The handler receives a shared reference to the application state,
+    /// followed by the current request state and any request extractors.
+    ///
+    /// ```rust
+    /// use ntex::web;
+    ///
+    /// struct AppState {
+    ///     greeting: &'static str,
+    /// }
+    ///
+    /// impl web::State for AppState {
+    ///     type Error = web::DefaultError;
+    /// }
+    ///
+    /// async fn index(
+    ///     state: &AppState,
+    ///     request_state: (),
+    ///     name: web::types::Path<String>,
+    /// ) -> String {
+    ///     let _ = request_state;
+    ///     format!("{}, {}!", state.greeting, name.into_inner())
+    /// }
+    ///
+    /// web::App::<AppState>::new()
+    ///     .service(web::resource("/{name}").to_with_state(index));
+    /// ```
+    ///
+    /// This is equivalent to `resource.route(web::route().to_with_state(handler))`.
+    #[must_use]
+    pub fn to_with_state<Args>(
+        self,
+        h: impl HandlerSt<St, Out, Args>,
+    ) -> ResourceServices<St, In, Out, M, F>
+    where
+        Args: FromRequest<St> + 'static,
+        Args::Error: WebResponseError<St, St::Error>,
+    {
+        ResourceServices {
+            name: self.name,
+            rdef: self.rdef,
+            guards: self.guards,
+            filter: self.filter,
+            middleware: self.middleware,
+            default: None,
+            routes: vec![Route::new().to_with_state(h)],
+        }
+    }
+
+    /// Set the fallback service for this resource.
+    ///
+    /// The fallback is called after the resource path and guards match but none
+    /// of its routes match, commonly because the request method is unsupported.
+    /// Without a custom fallback, the resource returns
+    /// `405 Method Not Allowed`. It does not delegate to a scope or application
+    /// fallback.
+    ///
+    /// ```rust
+    /// use ntex::web::{self, App, HttpResponse};
+    ///
+    /// App::default().service(
+    ///     web::resource("/items")
+    ///         .route(web::get().to(async || "items"))
+    ///         .default_service(web::to(async || {
+    ///             HttpResponse::MethodNotAllowed().body("Use GET")
+    ///         }))
+    /// );
+    /// ```
+    #[must_use]
     pub fn default_service<S>(
         self,
         f: impl IntoServiceFactory<S, St, WebRequest<Out>>,
@@ -325,43 +431,29 @@ where
             InitError = Failure,
         >,
 {
+    /// Add one or more routes to this resource.
+    ///
+    /// Routes are checked in registration order after the resource path and
+    /// resource guards match. The first route whose method and custom guards
+    /// accept the request is called. If no route matches, the resource's
+    /// default service is used; without a custom default, it returns
+    /// `405 Method Not Allowed`.
+    ///
+    /// A single [`Route`] or a collection of routes can be supplied.
+    ///
+    /// ```rust
+    /// use ntex::web::{self, App, HttpResponse};
+    ///
+    /// App::default().service(
+    ///     web::resource("/items")
+    ///         .route(web::get().to(async || "list"))
+    ///         .route([
+    ///             web::post().to(async || HttpResponse::Created()),
+    ///             web::delete().to(async || HttpResponse::NoContent()),
+    ///         ])
+    /// );
+    /// ```
     #[must_use]
-    /// Register a new route.
-    ///
-    /// ```rust
-    /// use ntex::web::{self, guard, App, HttpResponse};
-    ///
-    /// fn main() {
-    ///     let app = App::default().service(
-    ///         web::resource("/").route(
-    ///             web::route()
-    ///                 .guard(guard::Any(guard::Get()).or(guard::Put()))
-    ///                 .guard(guard::Header("Content-Type", "text/plain"))
-    ///                 .to(async || { HttpResponse::Ok() }))
-    ///     );
-    /// }
-    /// ```
-    ///
-    /// Multiple routes could be added to a resource. Resource object uses
-    /// match guards for route selection.
-    ///
-    /// ```rust
-    /// use ntex::web::{self, guard, App};
-    ///
-    /// fn main() {
-    ///     let app = App::default().service(
-    ///         web::resource("/container/")
-    ///             .route([
-    ///                 web::get().to(get_handler),
-    ///                 web::post().to(post_handler),
-    ///                 web::delete().to(delete_handler)
-    ///             ])
-    ///     );
-    /// }
-    /// # async fn get_handler() -> web::HttpResponseBuilder { web::HttpResponse::Ok() }
-    /// # async fn post_handler() -> web::HttpResponseBuilder { web::HttpResponse::Ok() }
-    /// # async fn delete_handler() -> web::HttpResponseBuilder { web::HttpResponse::Ok() }
-    /// ```
     pub fn route<R>(mut self, route: R) -> Self
     where
         R: IntoRoutes<St, Out>,
@@ -372,28 +464,25 @@ where
         self
     }
 
+    /// Add an unguarded route with a handler.
+    ///
+    /// The route matches every request not accepted by an earlier route.
+    /// Routes are checked in registration order, so this catch-all route should
+    /// normally be added last; routes added after it cannot be selected.
+    ///
+    /// The handler receives request extractor values and returns a type
+    /// implementing [`Responder`](super::Responder).
+    ///
+    /// ```rust
+    /// use ntex::web::{self, App};
+    ///
+    /// App::default().service(
+    ///     web::resource("/items")
+    ///         .route(web::get().to(async || "list"))
+    ///         .to(async || "Unsupported request")
+    /// );
+    /// ```
     #[must_use]
-    /// Register a new route and add handler.
-    ///
-    /// This route matches all requests.
-    ///
-    /// ```rust
-    /// use ntex::web::{self, App, HttpRequest, HttpResponse};
-    ///
-    /// async fn index(req: HttpRequest) -> HttpResponse {
-    ///     unimplemented!()
-    /// }
-    ///
-    /// App::default().service(web::resource("/").to(index));
-    /// ```
-    ///
-    /// This is shortcut for:
-    ///
-    /// ```rust
-    /// # use ntex::web::{self, *};
-    /// # async fn index(req: HttpRequest) -> HttpResponse { unimplemented!() }
-    /// App::default().service(web::resource("/").route(web::route().to(index)));
-    /// ```
     pub fn to<Args>(mut self, handler: impl Handler<St, Args>) -> Self
     where
         Args: FromRequest<St> + 'static,
@@ -403,11 +492,66 @@ where
         self
     }
 
-    #[must_use]
-    /// Default service to be used if no matching route could be found.
+    /// Add a state-aware handler as a new route.
     ///
-    /// By default *405* response get returned. Resource does not use
-    /// default handler from `App` or `Scope`.
+    /// The route has no guards and matches any request not accepted by an
+    /// earlier route. The handler receives a shared reference to the
+    /// application state, followed by the current request state and any request
+    /// extractors.
+    ///
+    /// ```rust
+    /// use ntex::web;
+    ///
+    /// struct AppState;
+    ///
+    /// impl web::State for AppState {
+    ///     type Error = web::DefaultError;
+    /// }
+    ///
+    /// async fn fallback(
+    ///     _state: &AppState,
+    ///     _request_state: (),
+    ///     req: web::HttpRequest,
+    /// ) -> String {
+    ///     format!("No route for {}", req.path())
+    /// }
+    ///
+    /// web::App::<AppState>::new().service(
+    ///     web::resource("/")
+    ///         .route(web::get().to(async || "GET"))
+    ///         .to_with_state(fallback)
+    /// );
+    /// ```
+    #[must_use]
+    pub fn to_with_state<Args>(mut self, handler: impl HandlerSt<St, Out, Args>) -> Self
+    where
+        Args: FromRequest<St> + 'static,
+        Args::Error: WebResponseError<St, St::Error>,
+    {
+        self.routes.push(Route::new().to_with_state(handler));
+        self
+    }
+
+    /// Set the fallback service for this resource.
+    ///
+    /// The fallback is called after the resource path and guards match but none
+    /// of its routes match, commonly because the request method is unsupported.
+    /// Without a custom fallback, the resource returns
+    /// `405 Method Not Allowed`. It does not delegate to a scope or application
+    /// fallback.
+    ///
+    /// ```rust
+    /// use ntex::web::{self, App, HttpResponse};
+    ///
+    /// App::default().service(
+    ///     web::resource("/items")
+    ///         .route(web::get().to(async || "items"))
+    ///         .default_service(web::to(async || {
+    ///             HttpResponse::MethodNotAllowed().body("Use GET")
+    ///         }))
+    /// );
+    /// ```
+    #[must_use]
     pub fn default_service<S>(mut self, f: impl IntoServiceFactory<S, St, WebRequest<Out>>) -> Self
     where
         S: ServiceFactory<St, WebRequest<Out>, Res = WebResponse> + 'static,

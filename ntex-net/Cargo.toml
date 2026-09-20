@@ -28,9 +28,6 @@ tokio = ["ntex-rt/tokio", "tok-io"]
 # compio runtime
 compio = ["ntex-rt/compio", "compio-net", "compio-driver", "compio-runtime", "compio-buf", "compio-io"]
 
-# neon runtime (deprecated)
-neon = []
-
 # io-uring only
 neon-uring = []
 

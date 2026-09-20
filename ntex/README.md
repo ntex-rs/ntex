@@ -35,8 +35,7 @@ ntex = "4"
 A minimal web server looks like this:
 
 ```rust
-use ntex::{SharedCfg, web},
-};
+use ntex::{SharedCfg, web};
 
 #[web::get("/")]
 async fn index() -> &'static str {

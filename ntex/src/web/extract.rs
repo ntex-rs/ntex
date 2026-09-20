@@ -4,15 +4,61 @@ use std::convert::Infallible;
 use super::{HttpRequest, State, WebResponseError};
 use crate::http::Payload;
 
-#[allow(async_fn_in_trait)]
-/// Trait implemented by types that can be extracted from request.
+/// Turns request data into a value that a handler can use.
 ///
-/// Types that implement this trait can be used with `Route` handlers.
+/// Each argument accepted by a handler registered with
+/// [`Route::to()`](super::Route::to) is an extractor. Before calling the
+/// handler, ntex asks each argument type to create its value from the incoming
+/// request.
+///
+/// An extractor can look at the application state, request headers, path, and
+/// other request information. It can also read the request body through the
+/// payload. Extractors run in the same order as the handler arguments and
+/// share that payload, so an extractor that reads the body may leave nothing
+/// for the next one. For that reason, a handler should normally have only one
+/// body-reading extractor.
+///
+/// When an extractor returns an error, ntex turns it into an HTTP response and
+/// skips the handler. The error must implement [`WebResponseError`] for the
+/// application. If the handler should still run, use `Option<T>` to receive
+/// `None`, or `Result<T, T::Error>` to receive the original error.
+///
+/// # Example
+///
+/// A custom extractor can turn a request header into a handler argument:
+///
+/// ```rust
+/// use ntex::http::Payload;
+/// use ntex::web::{self, FromRequest, HttpRequest, InternalError};
+///
+/// struct ClientName(String);
+///
+/// impl<St: web::State> FromRequest<St> for ClientName {
+///     type Error = InternalError<&'static str>;
+///
+///     async fn from_request(_: &St, req: &HttpRequest, _: &mut Payload) -> Result<Self, Self::Error> {
+///         req.headers()
+///             .get("x-client-name")
+///             .and_then(|value| value.to_str().ok())
+///             .map(|value| ClientName(value.to_owned()))
+///             .ok_or_else(|| web::error::ErrorBadRequest("Missing client name"))
+///     }
+/// }
+///
+/// async fn hello(client: ClientName) -> String {
+///     format!("Hello, {}!", client.0)
+/// }
+///
+/// let app = web::App::default().route("/", web::get().to(hello));
+/// ```
 pub trait FromRequest<St>: Sized {
-    /// The associated error which can be returned.
+    /// The error returned when extraction fails.
+    ///
+    /// For a route handler, ntex must be able to turn this error into an HTTP
+    /// response through [`WebResponseError`].
     type Error;
 
-    /// Convert request to a Self
+    /// Creates the extractor value for this request.
     async fn from_request(
         st: &St,
         req: &HttpRequest,

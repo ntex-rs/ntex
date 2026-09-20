@@ -13,57 +13,72 @@ worker's application state.
 For a server without custom application state, continue to use
 `ntex::server::build()`. The factory receives `&()`:
 
-```rust
+```rust,no_run
+use std::io;
 use ntex::http::{HttpService, Response};
 use ntex::SharedCfg;
 
-let server = ntex::server::build()
-    .bind(
-        "http",
-        "127.0.0.1:8080",
-        SharedCfg::default(),
-        async |_| {
-            HttpService::new(async |_| {
-                Ok::<_, std::io::Error>(Response::Ok().body("Hello"))
-            })
-        },
-    )?
-    .run();
+#[ntex::main]
+async fn main() -> io::Result<()> {
+    ntex::server::build()
+        .bind(
+            "http",
+            "127.0.0.1:8080",
+            SharedCfg::default(),
+            async |_| {
+                HttpService::new(async |_| {
+                    Ok::<_, io::Error>(Response::Ok().body("Hello"))
+                })
+            },
+        )?
+        .run()
+        .await
+}
 ```
 
 Use `ntex::server::build_with_config()` when each worker needs application
 state. Its argument implements `ServerAppConfig` and creates the state for each
 worker. An asynchronous closure can be used directly:
 
-```rust
+```rust,no_run
 use std::io;
 use ntex::SharedCfg;
 
 #[derive(Clone)]
 struct WorkerState;
 
-let server = ntex::server::build_with_config(
-    async || Ok::<_, io::Error>(WorkerState),
-)
-.bind(
-    "service",
-    "127.0.0.1:8080",
-    SharedCfg::default(),
-    async |state: &WorkerState| {
-        let state = state.clone();
-        ntex::service::fn_service(move |_| {
-            let _state = state.clone();
-            async { Ok::<_, io::Error>(()) }
-        })
-    },
-)?
-.run();
+#[ntex::main]
+async fn main() -> io::Result<()> {
+    ntex::server::build_with_config(
+        async || Ok::<_, io::Error>(WorkerState),
+    )
+    .bind(
+        "service",
+        "127.0.0.1:8080",
+        SharedCfg::default(),
+        async |state: &WorkerState| {
+            let state = state.clone();
+            ntex::service::fn_service(move |_| {
+                let _state = state.clone();
+                async { Ok::<_, io::Error>(()) }
+            })
+        },
+    )?
+    .run()
+    .await
+}
 ```
 
 `ntex-service` 5 also removes `Service::poll()`. The `Service` trait now uses
 the asynchronous `ready()` and `shutdown()` lifecycle methods, while service
 chains provide `readiness()` and `shutdown()` callbacks. `Pipeline` and
 middleware APIs have been updated to bind and propagate service state.
+
+### Runtime features
+
+The deprecated `neon` feature has been removed from `ntex-net`. Remove it from
+direct `ntex-net` dependencies. Select the `tokio`, `compio`, or `neon-uring`
+feature when a specific runtime backend is required.
 
 ## HTTP services
 
@@ -72,7 +87,7 @@ middleware APIs have been updated to bind and propagate service state.
 
 OpenSSL:
 
-```rust
+```rust,ignore
 let service = ntex::http::openssl(
     acceptor,
     ntex::http::HttpService::new(handler),
@@ -81,7 +96,7 @@ let service = ntex::http::openssl(
 
 rustls now accepts the ALPN protocol names separately:
 
-```rust
+```rust,ignore
 let service = ntex::http::rustls(
     config,
     &["h2", "http/1.1"],
@@ -125,7 +140,7 @@ WebSocket client settings have moved to `WsClientConfig`. Construct
 `WsClient` directly with the URI and configuration; a separate builder is no
 longer required:
 
-```rust
+```rust,ignore
 use ntex::ws::{WsClient, WsClientConfig};
 
 let client = WsClient::new(
@@ -143,13 +158,21 @@ or `rustls()` on `WsClient`.
 
 Web application state and error handling have been redesigned.
 
+### Application state in handlers
+
 The application state type implements `web::State`. For common state that uses
 the default web error type, `web::AppState<T>` provides a ready-made wrapper.
 State is created once per worker with `web::server_with_config()` and is
-available through the `web::types::State<St>` extractor or
-`WebRequest::st()`.
+passed to state-aware handlers by reference.
 
-```rust
+The `web::types::State<St>` extractor has been removed. Replace handlers that
+use it with `Route::to_with_state()`. A state-aware handler receives:
+
+1. A shared reference to the application state.
+2. The request-local state.
+3. Any request extractors.
+
+```rust,no_run
 use std::io;
 use ntex::{web, SharedCfg};
 
@@ -162,30 +185,49 @@ impl web::State for TestAppState {
     type Error = web::DefaultError;
 }
 
-async fn index(state: web::types::State<TestAppState>) -> web::HttpResponse {
+async fn index(
+    state: &TestAppState,
+    _request_state: (),
+) -> web::HttpResponse {
     web::HttpResponse::Ok().body(state.value)
 }
 
-let server = web::server_with_config(
-    async || {
-        Ok::<_, io::Error>(TestAppState {
-            value: "Hello",
-        })
-    },
-    async |_| {
-        web::App::new()
-            .service(web::resource("/").route(web::get().to(index)))
-    },
-)
-.bind("127.0.0.1:8080", SharedCfg::default())?
-.run();
+#[ntex::main]
+async fn main() -> io::Result<()> {
+    web::server_with_config(
+        async || {
+            Ok::<_, io::Error>(TestAppState {
+                value: "Hello",
+            })
+        },
+        async |_| {
+            web::App::<TestAppState>::new()
+                .route("/", web::get().to_with_state(index))
+        },
+    )
+    .bind("127.0.0.1:8080", SharedCfg::default())?
+    .run()
+    .await
+}
 ```
+
+The state-aware variants are available as `web::to_with_state()`,
+`Route::to_with_state()`, `Resource::to_with_state()`, and
+`ResourceServices::to_with_state()`. Continue to use `to()` when a handler only
+needs request extractors.
 
 The old `App::state()` model is replaced by service state for the primary
 application state. Additional configuration values can be stored with
 `WebAppConfig::set_state()` and retrieved with `HttpRequest::app_state()`.
 Request-local state is available through `WebRequest::st()` and
-`WebRequest::st_mut()`.
+`WebRequest::st_mut()`. Filters and middleware can change its type with
+`WebRequest::map_state()`.
+
+Custom implementations of the `Handler` trait must change `call()` from a
+method returning `impl Future` to an `async fn`. Ordinary `async fn` handlers
+do not need this change.
+
+### Error handling
 
 The `ErrorRenderer` API has been removed. The state's associated `Error` type
 defines the application's error type, and errors are rendered through

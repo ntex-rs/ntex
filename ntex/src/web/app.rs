@@ -14,11 +14,37 @@ use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory
 use super::stack::{Filter, WebStack};
 use super::{HttpService, Resource, Route, State, WebRequest, WebResponse};
 
-/// Application builder - structure that follows the builder pattern
-/// for building application instances.
+/// The main builder for a web application.
+///
+/// Start with `App::new()` then add routes, resources,
+/// scopes, middleware, filters, application state, and a fallback response.
+///
+/// Middleware and filters run before routing. ntex then chooses the resource
+/// or scope that matches the request. If nothing matches, the application
+/// returns `404 Not Found` unless you provide a custom fallback.
+///
+/// Add application-wide settings, such as middleware, filters,
+/// [`App::with_config()`], and case-insensitive routing, before adding the
+/// first route or service. After that, the builder becomes [`AppServices`],
+/// where you can continue adding routes and services.
+///
+/// ```rust
+/// use ntex::web::{self, middleware, App, HttpResponse};
+///
+/// App::default()
+///     .middleware(middleware::Logger::default())
+///     .service(
+///         web::resource("/users")
+///             .route(web::get().to(async || "users"))
+///             .route(web::post().to(async || HttpResponse::Created())),
+///     )
+///     .default_service(
+///         web::to(async || HttpResponse::NotFound().body("Not found")),
+///     );
+/// ```
 #[derive(derive_more::Debug)]
 #[debug("App")]
-pub struct App<St: State, In, Out = In, M = Identity, F = Filter<St, In>> {
+pub struct App<St: State, In = (), Out = In, M = Identity, F = Filter<St, In>> {
     middleware: M,
     filter: ServiceChainFactory<F, St, WebRequest<In>>,
     external: Vec<ResourceDef>,
@@ -27,8 +53,19 @@ pub struct App<St: State, In, Out = In, M = Identity, F = Filter<St, In>> {
     ph: PhantomData<Out>,
 }
 
-/// Application builder - structure that follows the builder pattern
-/// for building application instances.
+/// An application builder that already has routing configuration.
+///
+/// You usually do not need to name this type. It is returned naturally after
+/// calling [`App::route()`], [`App::service()`], [`App::configure()`], or
+/// [`App::default_service()`].
+///
+/// From here, you can add more routes and services or set the application
+/// fallback. Return the finished builder from the factory passed to
+/// [`web::server()`]. The [`AppServices::build()`] and
+/// [`AppServices::build_with()`] methods are available when you need to
+/// connect the application to a lower-level HTTP service yourself.
+///
+/// [`web::server()`]: super::server
 #[derive(derive_more::Debug)]
 #[debug("AppServices")]
 pub struct AppServices<St: State, In, Out, M, F> {
@@ -42,7 +79,7 @@ pub struct AppServices<St: State, In, Out, M, F> {
     ph: PhantomData<In>,
 }
 
-impl Default for App<(), ()> {
+impl Default for App<()> {
     fn default() -> Self {
         App {
             middleware: Identity,
@@ -56,8 +93,8 @@ impl Default for App<(), ()> {
 }
 
 impl<St: State, In> App<St, In, In> {
-    #[must_use]
     /// Create application builder. Application can be configured with a builder-like pattern.
+    #[must_use]
     pub fn new() -> Self {
         App {
             middleware: Identity,
@@ -83,7 +120,6 @@ where
             InitError = Failure,
         >,
 {
-    #[must_use]
     /// Run external configuration as part of the application building
     /// process.
     ///
@@ -109,6 +145,7 @@ where
     ///         .route("/index.html", web::get().to(async || { HttpResponse::Ok() }));
     /// }
     /// ```
+    #[must_use]
     pub fn configure(
         self,
         f: impl FnOnce(&mut ServiceConfig<St, Out>),
@@ -128,26 +165,23 @@ where
         }
     }
 
-    #[must_use]
-    /// Configure route for a specific path.
+    /// Register a route for an application path.
     ///
-    /// This is a simplified version of the `App::service()` method.
-    /// This method can be used multiple times with same path, in that case
-    /// multiple resources with one route would be registered for same resource path.
+    /// This is shorthand for creating a [`Resource`] with one route and
+    /// registering it with [`App::service()`]. The route's method and custom
+    /// guards are promoted to resource guards.
+    ///
+    /// Each call creates a separate resource, so the same path can be
+    /// registered more than once with different guards.
     ///
     /// ```rust
     /// use ntex::web::{self, App, HttpResponse};
     ///
-    /// async fn index(data: web::types::Path<(String, String)>) -> &'static str {
-    ///     "Welcome!"
-    /// }
-    ///
-    /// fn main() {
-    ///     let app = App::default()
-    ///         .route("/test1", web::get().to(index))
-    ///         .route("/test2", web::post().to(async || { HttpResponse::MethodNotAllowed() }));
-    /// }
+    /// App::default()
+    ///     .route("/items", web::get().to(async || "list"))
+    ///     .route("/items", web::post().to(async || HttpResponse::Created()));
     /// ```
+    #[must_use]
     pub fn route(self, path: &str, mut route: Route<St, Out>) -> AppServices<St, In, Out, M, F> {
         self.service(
             Resource::new(path)
@@ -156,16 +190,34 @@ where
         )
     }
 
+    /// Registers a web service with the application.
+    ///
+    /// A service defines its own path and guards through [`WebServiceFactory`].
+    /// Common services include [`Resource`], [`Scope`], handlers created with
+    /// route attribute macros, and custom services built with `web::service()`.
+    ///
+    /// Use a resource to group several routes, filters, middleware, or a
+    /// fallback under one path. Use a scope to group services under a shared
+    /// path prefix.
+    ///
+    /// If no registered service matches the request path and guards, the
+    /// application's default service is used.
+    ///
+    /// ```rust
+    /// use ntex::web::{self, App, HttpResponse};
+    ///
+    /// App::default()
+    ///     .service(
+    ///         web::resource("/users")
+    ///             .route(web::get().to(async || "users"))
+    ///             .route(web::post().to(async || HttpResponse::Created())),
+    ///     )
+    ///     .service(
+    ///         web::scope("/api")
+    ///             .route("/health", web::get().to(async || "OK")),
+    ///     );
+    /// ```
     #[must_use]
-    /// Register http service.
-    ///
-    /// Http service is any type that implements `WebServiceFactory` trait.
-    ///
-    /// ntex provides several services implementations:
-    ///
-    /// * `Resource` is an entry in resource table which corresponds to requested URL.
-    /// * `Scope` is a set of resources with common root path.
-    /// * `StaticFiles` is a service for static files support
     pub fn service<S>(self, factory: S) -> AppServices<St, In, Out, M, F>
     where
         S: WebServiceFactory<St, Out> + 'static,
@@ -182,41 +234,28 @@ where
         }
     }
 
+    /// Set the fallback service for unmatched application requests.
+    ///
+    /// The fallback is called when no top-level resource or scope matches the
+    /// request path and guards. Without a custom fallback, the application
+    /// returns `404 Not Found`.
+    ///
+    /// A matched resource or scope handles its own routing failures, so its
+    /// requests do not fall through to this service.
+    ///
+    /// ```rust
+    /// use ntex::web::{self, App, HttpRequest, HttpResponse};
+    ///
+    /// async fn not_found(req: HttpRequest) -> HttpResponse {
+    ///     HttpResponse::NotFound()
+    ///         .body(format!("No resource for {}", req.path()))
+    /// }
+    ///
+    /// App::default()
+    ///     .route("/health", web::get().to(async || "ready"))
+    ///     .default_service(web::to(not_found));
+    /// ```
     #[must_use]
-    /// Default service to be used if no matching resource could be found.
-    ///
-    /// It is possible to use services like `Resource`, `Route`.
-    ///
-    /// ```rust
-    /// use ntex::web::{self, App, HttpResponse};
-    ///
-    /// async fn index() -> &'static str {
-    ///     "Welcome!"
-    /// }
-    ///
-    /// fn main() {
-    ///     let app = App::default()
-    ///         .service(
-    ///             web::resource("/index.html").route(web::get().to(index)))
-    ///         .default_service(
-    ///             web::route().to(async || { HttpResponse::NotFound() }));
-    /// }
-    /// ```
-    ///
-    /// It is also possible to use static files as default service.
-    ///
-    /// ```rust
-    /// use ntex::web::{self, App, HttpResponse};
-    ///
-    /// fn main() {
-    ///     let app = App::default()
-    ///         .service(
-    ///             web::resource("/index.html").to(async || { HttpResponse::Ok() }))
-    ///         .default_service(
-    ///             web::to(async || { HttpResponse::NotFound() })
-    ///         );
-    /// }
-    /// ```
     pub fn default_service<U>(
         self,
         f: impl IntoServiceFactory<U, St, WebRequest<Out>>,
@@ -245,7 +284,6 @@ where
         }
     }
 
-    #[must_use]
     /// Register an external resource.
     ///
     /// External resources are useful for URL generation purposes only
@@ -268,6 +306,7 @@ where
     ///             web::get().to(index)));
     /// }
     /// ```
+    #[must_use]
     pub fn external_resource(mut self, name: impl AsRef<str>, url: impl AsRef<str>) -> Self {
         let mut rdef = ResourceDef::new(url.as_ref());
         *rdef.name_mut() = name.as_ref().to_string();
@@ -275,39 +314,80 @@ where
         self
     }
 
+    /// Set the application's runtime configuration.
+    ///
+    /// [`WebAppConfig`] contains connection metadata used by the application,
+    /// such as the host, secure-connection flag, local address, and request pool
+    /// size. It can also store typed configuration values with
+    /// [`WebAppConfig::set_state()`]; those values are available through
+    /// [`HttpRequest::app_state()`] and [`WebRequest::app_state()`].
+    ///
+    /// Without an explicit configuration, each request uses the
+    /// [`WebAppConfig`] from its I/O context, or the default configuration if
+    /// the request has no associated I/O object. This method overrides that
+    /// selection for every request handled by this application.
+    ///
+    /// This configuration is separate from the service-level application state
+    /// represented by `St`. To register routes and services from an external
+    /// function, use [`App::configure()`] instead.
+    ///
+    /// ```rust
+    /// use ntex::web::{self, App, HttpRequest, WebAppConfig};
+    ///
+    /// async fn index(req: HttpRequest) -> String {
+    ///     let value = req.app_state::<usize>().copied().unwrap_or_default();
+    ///     format!("Configured value: {value}")
+    /// }
+    ///
+    /// let config = WebAppConfig::new()
+    ///     .set_host("www.example.com".to_owned())
+    ///     .set_secure()
+    ///     .set_state(42usize);
+    ///
+    /// App::default()
+    ///     .with_config(config)
+    ///     .route("/", web::get().to(index));
+    /// ```
     #[must_use]
-    /// Set custom app configuration.
-    pub fn config(mut self, cfg: Cfg<WebAppConfig>) -> Self {
-        self.config = Some(cfg);
+    pub fn with_config(mut self, cfg: impl Into<Cfg<WebAppConfig>>) -> Self {
+        self.config = Some(cfg.into());
         self
     }
 
-    #[must_use]
-    /// Register request filter.
+    /// Registers a request filter.
     ///
-    /// Filter runs during inbound processing in the request
-    /// lifecycle (request -> response), modifying request as
-    /// necessary, across all requests managed by the *Application*.
+    /// Application filters run before the application router selects a
+    /// resource or scope. Filters are called in registration order, and each
+    /// filter receives the [`WebRequest`] returned by the previous one.
     ///
-    /// Use filter when you need to read or modify *every* request in some way.
-    /// If filter returns request object then pipeline execution continues
-    /// to the next service in pipeline. In case of response, it get returned
-    /// immediately.
+    /// A filter can inspect or modify the request, or use
+    /// [`WebRequest::map_state()`] to change its request-local state type. It
+    /// must return another `WebRequest` to continue processing. Returning an
+    /// error stops the filter chain and prevents routing; the error is handled
+    /// through [`WebResponseError`].
+    ///
+    /// Application middleware wraps the filter and router, so middleware runs
+    /// before filters on the inbound path.
     ///
     /// ```rust
-    /// use ntex::http::header::{CONTENT_TYPE, HeaderValue};
-    /// use ntex::web::{self, middleware, App};
+    /// use std::convert::Infallible;
+    /// use ntex::web::{self, App, WebRequest};
     ///
-    /// async fn index() -> &'static str {
-    ///     "Welcome!"
+    /// async fn authenticate(
+    ///     req: WebRequest<()>,
+    /// ) -> Result<WebRequest<&'static str>, Infallible> {
+    ///     Ok(req.map_state(|()| "alice"))
     /// }
     ///
-    /// fn main() {
-    ///     let app = App::default()
-    ///         .middleware(middleware::Logger::default())
-    ///         .route("/index.html", web::get().to(index));
+    /// async fn index(_state: &(), user: &'static str) -> String {
+    ///     format!("Hello, {user}!")
     /// }
+    ///
+    /// App::new()
+    ///     .filter(authenticate)
+    ///     .route("/", web::get().to_with_state(index));
     /// ```
+    #[must_use]
     pub fn filter<Sf, R>(
         self,
         filter: impl IntoServiceFactory<Sf, St, WebRequest<Out>>,
@@ -344,37 +424,40 @@ where
         }
     }
 
-    #[must_use]
-    /// Registers middleware.
+    /// Registers a middleware for this application.
     ///
-    /// Registers middleware in the form of a middleware component (type),
-    /// that runs during inbound and/or outbound processing in the request
-    /// lifecycle (request -> response), modifying request/response as
-    /// necessary, across all requests managed by the *Application*.
+    /// Use application middleware for work that should apply to every request,
+    /// such as logging, response headers, or authentication. It runs before
+    /// the application filter and router on the way in, and can inspect or
+    /// modify the response on the way back.
     ///
-    /// Use middleware when you need to read or modify *every* request or
-    /// response in some way.
+    /// Middleware may also return a response without calling the service it
+    /// wraps. In that case, the rest of the application pipeline is skipped.
     ///
-    /// As you register middleware in the App builder, imagine wrapping
-    /// layers around an inner App.
+    /// Requests pass through middleware in the order it was added. Responses
+    /// travel back in the opposite order. In this example, `DefaultHeaders`
+    /// sees the request before `Logger`, while `Logger` sees the response
+    /// before `DefaultHeaders`.
+    ///
+    /// Custom middleware should call the wrapped service through
+    /// [`Ctx::call()`] so readiness and lifecycle events are handled
+    /// correctly.
     ///
     /// ```rust
-    /// use ntex::http::header::{CONTENT_TYPE, HeaderValue};
     /// use ntex::web::{self, middleware, App};
     ///
-    /// async fn index() -> &'static str {
-    ///     "Welcome!"
-    /// }
-    ///
-    /// fn main() {
-    ///     let app = App::default()
-    ///         .middleware(middleware::Logger::default())
-    ///         .route("/index.html", web::get().to(index));
-    /// }
+    /// App::default()
+    ///     .middleware(
+    ///         middleware::DefaultHeaders::new()
+    ///             .header("x-application", "example"),
+    ///     )
+    ///     .middleware(middleware::Logger::default())
+    ///     .route("/", web::get().to(async || "Hello"));
     /// ```
-    pub fn middleware<U>(self, mw: U) -> App<St, In, Out, WebStack<St, M, U>, F> {
+    #[must_use]
+    pub fn middleware<U>(self, mw: U) -> App<St, In, Out, WebStack<St, U, M>, F> {
         App {
-            middleware: WebStack::new(self.middleware, mw),
+            middleware: WebStack::new(mw, self.middleware),
             filter: self.filter,
             config: self.config,
             external: self.external,
@@ -405,26 +488,33 @@ where
             InitError = Failure,
         >,
 {
-    #[must_use]
-    /// Configure route for a specific path.
+    /// Register a route for an application path.
     ///
-    /// This is a simplified version of the `App::service()` method.
-    /// This method can be used multiple times with same path, in that case
-    /// multiple resources with one route would be registered for same resource path.
+    /// This is shorthand for creating a [`Resource`] with one route and
+    /// registering it with [`AppServices::service()`]. The route's method and
+    /// custom guards are promoted to resource guards.
+    ///
+    /// Consequently, if those guards reject a request, the generated resource
+    /// does not match and the application router continues searching. If
+    /// nothing else matches, the application default service is used. To use a
+    /// resource-level fallback such as the built-in `405 Method Not Allowed`,
+    /// register an explicit [`Resource`] and add routes with
+    /// [`Resource::route()`].
+    ///
+    /// Each call creates a separate resource, so the same path can be
+    /// registered more than once with different guards.
     ///
     /// ```rust
     /// use ntex::web::{self, App, HttpResponse};
     ///
-    /// async fn index(data: web::types::Path<(String, String)>) -> &'static str {
-    ///     "Welcome!"
-    /// }
-    ///
-    /// fn main() {
-    ///     let app = App::default()
-    ///         .route("/test1", web::get().to(index))
-    ///         .route("/test2", web::post().to(async || { HttpResponse::MethodNotAllowed() }));
-    /// }
+    /// App::default()
+    ///     .route("/items", web::get().to(async || "list"))
+    ///     .route(
+    ///         "/items",
+    ///         web::post().to(async || HttpResponse::Created()),
+    ///     );
     /// ```
+    #[must_use]
     pub fn route(self, path: &str, mut route: Route<St, Out>) -> Self {
         self.service(
             Resource::new(path)
@@ -433,16 +523,15 @@ where
         )
     }
 
+    /// Registers another web service with the application.
+    ///
+    /// This has the same behavior as [`App::service()`]. The service supplies
+    /// its own path and guards and becomes part of the application's top-level
+    /// router.
+    ///
+    /// If none of the registered services match, the application's default
+    /// service is used.
     #[must_use]
-    /// Register http service.
-    ///
-    /// Http service is any type that implements `WebServiceFactory` trait.
-    ///
-    /// ntex provides several services implementations:
-    ///
-    /// * `Resource` is an entry in resource table which corresponds to requested URL.
-    /// * `Scope` is a set of resources with common root path.
-    /// * `StaticFiles` is a service for static files support
     pub fn service<S>(mut self, factory: S) -> Self
     where
         S: WebServiceFactory<St, Out> + 'static,
@@ -452,41 +541,28 @@ where
         self
     }
 
+    /// Set the fallback service for unmatched application requests.
+    ///
+    /// The fallback is called when no top-level resource or scope matches the
+    /// request path and guards. Without a custom fallback, the application
+    /// returns `404 Not Found`.
+    ///
+    /// A matched resource or scope handles its own routing failures, so its
+    /// requests do not fall through to this service.
+    ///
+    /// ```rust
+    /// use ntex::web::{self, App, HttpRequest, HttpResponse};
+    ///
+    /// async fn not_found(req: HttpRequest) -> HttpResponse {
+    ///     HttpResponse::NotFound()
+    ///         .body(format!("No resource for {}", req.path()))
+    /// }
+    ///
+    /// App::default()
+    ///     .route("/health", web::get().to(async || "ready"))
+    ///     .default_service(web::to(not_found));
+    /// ```
     #[must_use]
-    /// Default service to be used if no matching resource could be found.
-    ///
-    /// It is possible to use services like `Resource`, `Route`.
-    ///
-    /// ```rust
-    /// use ntex::web::{self, App, HttpResponse};
-    ///
-    /// async fn index() -> &'static str {
-    ///     "Welcome!"
-    /// }
-    ///
-    /// fn main() {
-    ///     let app = App::default()
-    ///         .service(
-    ///             web::resource("/index.html").route(web::get().to(index)))
-    ///         .default_service(
-    ///             web::route().to(async || { HttpResponse::NotFound() }));
-    /// }
-    /// ```
-    ///
-    /// It is also possible to use static files as default service.
-    ///
-    /// ```rust
-    /// use ntex::web::{self, App, HttpResponse};
-    ///
-    /// fn main() {
-    ///     let app = App::default()
-    ///         .service(
-    ///             web::resource("/index.html").to(async || { HttpResponse::Ok() }))
-    ///         .default_service(
-    ///             web::to(async || { HttpResponse::NotFound() })
-    ///         );
-    /// }
-    /// ```
     pub fn default_service<U>(mut self, f: impl IntoServiceFactory<U, St, WebRequest<Out>>) -> Self
     where
         U: ServiceFactory<St, WebRequest<Out>, Res = WebResponse> + 'static,
@@ -519,24 +595,25 @@ where
     M: Middleware<WebServiceRouter<St, In, Out, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest<()>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
-    /// Construct service factory, suitable for `http::HttpService`.
+    /// Builds the application into a service factory.
     ///
-    /// ```rust,no_run
-    /// use ntex::{web, http, server, SharedCfg};
+    /// The returned factory accepts [`Request`] values and uses application
+    /// state supplied by the surrounding service pipeline. It can be passed to
+    /// [`HttpService`] when building an HTTP server manually.
     ///
-    /// #[ntex::main]
-    /// async fn main() -> std::io::Result<()> {
-    ///     server::build().bind("http", "127.0.0.1:0", SharedCfg::default(), async |_|
-    ///         http::HttpService::new(
-    ///             web::App::default()
-    ///                 .route("/index.html", web::get().to(async || { "hello_world" }))
-    ///                 .build()
-    ///         )
-    ///     )?
-    ///     .run()
-    ///     .await
-    /// }
+    /// Applications passed to [`web::server()`] do not normally need an
+    /// explicit call to `build()`.
+    ///
+    /// ```rust
+    /// use ntex::web;
+    ///
+    /// let factory = web::App::default()
+    ///     .route("/", web::get().to(async || "Hello"))
+    ///     .build();
     /// ```
+    ///
+    /// [`HttpService`]: crate::http::HttpService
+    /// [`web::server()`]: super::server
     pub fn build(
         self,
     ) -> impl ServiceFactory<
@@ -552,7 +629,7 @@ where
 
 impl<St, In, Out, M, F> AppServices<St, In, Out, M, F>
 where
-    St: State + Clone,
+    St: State,
     In: 'static,
     Out: 'static,
     F: ServiceFactory<
@@ -565,22 +642,33 @@ where
     M: Middleware<WebServiceRouter<St, In, Out, F::Service>, St> + 'static,
     M::Service: Service<St, WebRequest<()>, Res = WebResponse, Error = WebError<St, St::Error>>,
 {
-    /// Construct service factory, suitable for `http::HttpService` and set state.
+    /// Builds the application with a fixed application state.
     ///
-    /// ```rust,no_run
-    /// use ntex::{web, http, server, SharedCfg};
+    /// Unlike [`AppServices::build()`], which takes its application state from
+    /// the surrounding service pipeline, this method stores `state` in the
+    /// returned factory. Web handlers, filters, middleware, and services use
+    /// this fixed state even when the outer pipeline uses a different state
+    /// type.
     ///
-    /// #[ntex::main]
-    /// async fn main() -> std::io::Result<()> {
-    ///     server::build().bind("http", "127.0.0.1:0", SharedCfg::default(), async |_|
-    ///         http::HttpService::new(
-    ///             web::App::default()
-    ///                 .route("/index.html", web::get().to(async || { "hello_world" }))
-    ///         )
-    ///     )?
-    ///     .run()
-    ///     .await
+    /// ```rust
+    /// use ntex::web;
+    ///
+    /// #[derive(Clone)]
+    /// struct AppState {
+    ///     greeting: &'static str,
     /// }
+    ///
+    /// impl web::State for AppState {
+    ///     type Error = web::DefaultError;
+    /// }
+    ///
+    /// async fn index(state: &AppState, _request_state: ()) -> String {
+    ///     state.greeting.to_owned()
+    /// }
+    ///
+    /// let app = web::App::<AppState>::new()
+    ///     .route("/", web::get().to_with_state(index))
+    ///     .build_with::<()>(AppState { greeting: "Hello" });
     /// ```
     pub fn build_with<Outer>(
         self,
@@ -591,7 +679,10 @@ where
         Res = Response,
         Error = WebError<St, St::Error>,
         InitError = Failure,
-    > {
+    >
+    where
+        St: Clone,
+    {
         map_state_factory(
             state,
             IntoServiceFactory::<AppFactory<St, In, Out, M, F>, St, Request>::into_factory(self),
@@ -763,11 +854,11 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_extension() {
-        let cfg = WebAppConfig::new().set_state(10usize).into();
+        let cfg = WebAppConfig::new().set_state(10usize);
 
         let srv = init_service(
             App::new()
-                .config(cfg)
+                .with_config(cfg)
                 .filter(async move |req: WebRequest<()>| {
                     assert_eq!(*req.app_state::<usize>().unwrap(), 10);
                     Ok::<_, Infallible>(req)

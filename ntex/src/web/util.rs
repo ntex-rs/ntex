@@ -11,7 +11,7 @@ use crate::server::{NoConfig, ServerAppConfig};
 use crate::service::{IntoServiceFactory, ServiceFactory};
 
 use super::extract::FromRequest;
-use super::handler::Handler;
+use super::handler::{Handler, HandlerSt};
 use super::resource::Resource;
 use super::route::Route;
 use super::scope::Scope;
@@ -242,28 +242,82 @@ pub fn method<St: State, U: 'static>(method: Method) -> Route<St, U> {
     Route::default().method(method)
 }
 
-/// Create a new route and add handler.
+/// Create an unguarded route with a handler.
+///
+/// The handler receives values produced by request extractors and returns a
+/// type implementing [`Responder`](super::Responder). If extraction fails, the
+/// error is converted into a response and the handler is not called.
+///
+/// The returned route has no method or custom guards, so it matches every
+/// request considered by its resource. Add guards before the handler with
+/// helpers such as [`get()`] or with [`Route::guard()`].
 ///
 /// ```rust
 /// use ntex::web;
 ///
-/// async fn index() -> web::HttpResponse {
-///    web::HttpResponse::Ok().build()
+/// async fn show_user(id: web::types::Path<u32>) -> String {
+///     format!("User {}", id.into_inner())
 /// }
 ///
 /// web::App::default().service(
-///     web::resource("/").route(web::to(index))
+///     web::resource("/users/{id}").route(web::to(show_user))
 /// );
 /// ```
-pub fn to<St, U, F, Args>(handler: F) -> Route<St, U>
+pub fn to<St, In, F, Args>(handler: F) -> Route<St, In>
 where
     St: State,
-    U: 'static,
+    In: 'static,
     F: Handler<St, Args> + 'static,
     Args: FromRequest<St> + 'static,
     Args::Error: WebResponseError<St, St::Error>,
 {
     Route::new().to(handler)
+}
+
+/// Create a new route with a state-aware handler.
+///
+/// The handler receives a shared reference to the application state, followed
+/// by the request state and any request extractors. Use [`to()`] when the
+/// handler only needs request extractors.
+///
+/// ```rust
+/// use std::convert::Infallible;
+/// use ntex::web::{self, WebRequest};
+///
+/// struct AppState {
+///     greeting: &'static str,
+/// }
+///
+/// impl web::State for AppState {
+///     type Error = web::DefaultError;
+/// }
+///
+/// async fn index(
+///     state: &AppState,
+///     request_state: usize,
+///     name: web::types::Path<String>,
+/// ) -> String {
+///     let _ = request_state;
+///     format!("{}, {}!", state.greeting, name.into_inner())
+/// }
+///
+/// web::App::<AppState>::new().service(
+///     web::resource("/{name}")
+///         .filter(async |req: WebRequest<()>| {
+///             Ok::<_, Infallible>(req.map_state(|_| 10usize))
+///         })
+///         .route(web::to_with_state(index))
+/// );
+/// ```
+pub fn to_with_state<St, In, F, Args>(handler: F) -> Route<St, In>
+where
+    St: State,
+    In: 'static,
+    F: HandlerSt<St, In, Args> + 'static,
+    Args: FromRequest<St> + 'static,
+    Args::Error: WebResponseError<St, St::Error>,
+{
+    Route::new().to_with_state(handler)
 }
 
 /// Create service adapter for a specific path.
