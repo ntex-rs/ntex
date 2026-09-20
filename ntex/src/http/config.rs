@@ -198,7 +198,9 @@ impl HttpServiceConfig {
     /// `timeout` is the duration of one measurement interval. When an interval
     /// expires, the dispatcher grants another interval only if more than
     /// `rate` new bytes were received. The request head must complete before
-    /// the cumulative `max_timeout` is exhausted.
+    /// the cumulative `max_timeout` is exhausted. All newly received
+    /// request-head bytes count toward progress, including request-line and
+    /// header bytes that the incremental parser has already consumed.
     ///
     /// A zero `timeout` disables request-head timing. A zero `max_timeout`
     /// removes the cumulative limit, allowing the deadline to be extended

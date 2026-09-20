@@ -620,9 +620,10 @@ where
         } else if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
             // received new data but not enough for parsing complete frame
             let remains = decoded.remains as u32;
-            self.read_consumed = self
-                .read_consumed
-                .saturating_add(remains.saturating_sub(self.read_remains));
+            let received = (decoded.consumed as u32)
+                .saturating_add(remains)
+                .saturating_sub(self.read_remains);
+            self.read_consumed = self.read_consumed.saturating_add(received);
             self.read_remains = remains;
         } else if self.read_remains == 0 && decoded.remains == 0 && !self.codec.is_reading_hdrs() {
             // no new data, start keep-alive timer
@@ -657,7 +658,7 @@ where
             self.flags.insert(Flags::READ_HDRS_TIMEOUT);
 
             self.read_remains = decoded.remains as u32;
-            self.read_consumed = self.read_remains;
+            self.read_consumed = (decoded.consumed as u32).saturating_add(self.read_remains);
             self.read_max_timeout = cfg.max_timeout;
             self.io.start_timer(cfg.timeout);
         }
@@ -1194,6 +1195,104 @@ mod tests {
         client.close().await;
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
+    }
+
+    #[crate::rt_test]
+    async fn test_partial_request_headers_clean_disconnect() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let requests2 = requests.clone();
+        let disconnects = Arc::new(AtomicUsize::new(0));
+        let disconnects2 = disconnects.clone();
+
+        let (client, server) = IoTest::create();
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(HttpServiceConfig::new().set_client_timeout(Seconds(10)))
+            .into();
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async move |_| {
+                    requests2.fetch_add(1, Ordering::Relaxed);
+                    Ok::<_, io::Error>(Response::Ok().build())
+                }),
+            ),
+            Pipeline::new(
+                (),
+                fn_service(async move |msg: Control<_, _>| {
+                    if let Control::Disconnect(Reason::PeerGone(err)) = &msg {
+                        assert!(err.get_ref().is_none());
+                        disconnects2.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Ok::<_, DispatchError>(msg.ack())
+                }),
+            ),
+            DispatcherConfig::default(),
+        );
+
+        client.write("GET /test HTTP/1.1\r\nHost: example.com");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        client.close().await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+        assert_eq!(requests.load(Ordering::Relaxed), 0);
+        assert_eq!(disconnects.load(Ordering::Relaxed), 1);
+        assert!(client.read_any().is_empty());
+    }
+
+    #[crate::rt_test]
+    async fn test_partial_request_headers_read_error() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let requests2 = requests.clone();
+        let disconnects = Arc::new(AtomicUsize::new(0));
+        let disconnects2 = disconnects.clone();
+
+        let (client, server) = IoTest::create();
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(HttpServiceConfig::new().set_client_timeout(Seconds(10)))
+            .into();
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async move |_| {
+                    requests2.fetch_add(1, Ordering::Relaxed);
+                    Ok::<_, io::Error>(Response::Ok().build())
+                }),
+            ),
+            Pipeline::new(
+                (),
+                fn_service(async move |msg: Control<_, _>| {
+                    if let Control::Disconnect(Reason::PeerGone(err)) = &msg {
+                        assert_eq!(
+                            err.get_ref().map(io::Error::kind),
+                            Some(io::ErrorKind::ConnectionReset)
+                        );
+                        disconnects2.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Ok::<_, DispatchError>(msg.ack())
+                }),
+            ),
+            DispatcherConfig::default(),
+        );
+
+        client.write("GET /test HTTP/1.1\r\nHost: example.com");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        client.read_error(io::Error::new(
+            io::ErrorKind::ConnectionReset,
+            "connection reset",
+        ));
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+        assert_eq!(requests.load(Ordering::Relaxed), 0);
+        assert_eq!(disconnects.load(Ordering::Relaxed), 1);
+        assert!(client.read_any().is_empty());
     }
 
     #[crate::rt_test]

@@ -228,6 +228,41 @@ async fn test_headers_read_rate_extends_timeout() {
 }
 
 #[ntex::test]
+async fn test_headers_read_rate_counts_parsed_bytes() {
+    let srv = test::server_with_config(
+        async |_| HttpService::new(async |_| Ok::<_, io::Error>(Response::Ok().build())),
+        SharedCfg::new("SRV").add(HttpServiceConfig::new().set_headers_read_rate(
+            Seconds(2),
+            Seconds(5),
+            4,
+        )),
+    );
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    // The complete request line is consumed by the decoder, leaving no bytes
+    // buffered while the remainder of the header block is still pending.
+    let _ = stream.write_all(b"GET / HTTP/1.1\r\n");
+    sleep(Millis(3200)).await;
+
+    stream.set_nonblocking(true).unwrap();
+    let mut data = vec![0; 1024];
+    match stream.read(&mut data) {
+        Err(err) if err.kind() == io::ErrorKind::WouldBlock => (),
+        Ok(len) => panic!(
+            "server responded before the request head completed: {:?}",
+            String::from_utf8_lossy(&data[..len])
+        ),
+        Err(err) => panic!("failed to inspect the connection: {err}"),
+    }
+    stream.set_nonblocking(false).unwrap();
+
+    let _ = stream.write_all(b"\r\n");
+
+    let len = stream.read(&mut data).unwrap();
+    assert!(data[..len].starts_with(b"HTTP/1.1 200 OK\r\n"));
+}
+
+#[ntex::test]
 async fn test_payload_read_rate_extends_timeout() {
     let srv = test::server_with_config(
         async |_| {
