@@ -207,6 +207,53 @@ async fn test_slow_request2() {
 }
 
 #[ntex::test]
+async fn test_headers_read_rate_extends_timeout() {
+    let srv = test::server_with_config(
+        async |_| HttpService::new(async |_| Ok::<_, io::Error>(Response::Ok().build())),
+        SharedCfg::new("SRV").add(HttpServiceConfig::new().set_headers_read_rate(
+            Seconds(1),
+            Seconds(3),
+            4,
+        )),
+    );
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let _ = stream.write_all(b"GET /");
+    sleep(Millis(1100)).await;
+    let _ = stream.write_all(b" HTTP/1.1\r\n\r\n");
+
+    let mut data = vec![0; 1024];
+    let len = stream.read(&mut data).unwrap();
+    assert!(data[..len].starts_with(b"HTTP/1.1 200 OK\r\n"));
+}
+
+#[ntex::test]
+async fn test_payload_read_rate_extends_timeout() {
+    let srv = test::server_with_config(
+        async |_| {
+            HttpService::new(async |mut req: Request| {
+                while req.payload().recv().await.is_some() {}
+                Ok::<_, io::Error>(Response::Ok().build())
+            })
+        },
+        SharedCfg::new("SRV").add(HttpServiceConfig::new().set_payload_read_rate(
+            Seconds(1),
+            Seconds(3),
+            4,
+        )),
+    );
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let _ = stream.write_all(b"POST / HTTP/1.1\r\ncontent-length: 10\r\n\r\n12345");
+    sleep(Millis(1100)).await;
+    let _ = stream.write_all(b"67890");
+
+    let mut data = vec![0; 1024];
+    let len = stream.read(&mut data).unwrap();
+    assert!(data[..len].starts_with(b"HTTP/1.1 200 OK\r\n"));
+}
+
+#[ntex::test]
 async fn test_http1_malformed_request() {
     let srv = test_server(async |_| {
         HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().build()))

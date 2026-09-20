@@ -190,12 +190,41 @@ impl HttpServiceConfig {
     #[must_use]
     /// Sets read-rate limits for request headers.
     ///
-    /// If the client supplies at least `rate` bytes during each `timeout`
-    /// interval, the deadline is extended, up to `max_timeout`. A zero
-    /// `timeout` disables header-read timing.
+    /// This setting protects HTTP/1 connections from clients that send a
+    /// request line or headers too slowly. The timer starts when the connection
+    /// begins waiting for the initial request. On a persistent connection, it
+    /// starts again after bytes for the next request head arrive.
+    ///
+    /// `timeout` is the duration of one measurement interval. When an interval
+    /// expires, the dispatcher grants another interval only if more than
+    /// `rate` new bytes were received. The request head must complete before
+    /// the cumulative `max_timeout` is exhausted.
+    ///
+    /// A zero `timeout` disables request-head timing. A zero `max_timeout`
+    /// removes the cumulative limit, allowing the deadline to be extended
+    /// indefinitely while the required read rate is maintained.
+    ///
+    /// If the request head misses its deadline, the HTTP/1 control service
+    /// receives
+    /// [`ProtocolError::SlowRequestTimeout`](crate::http::h1::ProtocolError::SlowRequestTimeout).
+    /// The default control service responds with `408 Request Timeout` and
+    /// closes the connection.
     ///
     /// By default, the timeout is 1 second and the maximum timeout is 16
-    /// seconds.
+    /// seconds, with more than 256 bytes required for each extension.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use ntex::http::HttpServiceConfig;
+    /// use ntex::time::Seconds;
+    ///
+    /// let config = HttpServiceConfig::new().set_headers_read_rate(
+    ///     Seconds(2),  // measurement interval
+    ///     Seconds(10), // maximum time for one request head
+    ///     512,         // bytes required to extend the deadline for next 2 seconds
+    /// );
+    /// ```
     pub fn set_headers_read_rate(
         mut self,
         timeout: Seconds,
@@ -217,10 +246,43 @@ impl HttpServiceConfig {
     #[must_use]
     /// Sets read-rate limits for request payloads.
     ///
-    /// If the client supplies at least `rate` bytes during each `timeout`
-    /// interval, the deadline is extended, up to `max_timeout`. A zero
-    /// `timeout` disables payload-read timing. Payload read-rate limiting is
-    /// disabled by default.
+    /// This setting protects HTTP/1 connections from clients that send a
+    /// request body too slowly. The timer starts when the dispatcher begins
+    /// decoding a request payload. At the end of each `timeout`
+    /// interval, another interval is granted only if more than `rate` bytes
+    /// were decoded.
+    ///
+    /// The timer runs only while the application-side payload stream can
+    /// accept data. It is paused while application backpressure prevents the
+    /// dispatcher from forwarding payload chunks, so a slow payload consumer
+    /// is not treated as a slow network peer. The timer stops when the complete
+    /// payload has been decoded.
+    ///
+    /// A zero `timeout` disables payload timing. A zero `max_timeout` removes
+    /// the cumulative limit, allowing the deadline to be extended indefinitely
+    /// while the required read rate is maintained.
+    ///
+    /// If the payload misses its deadline, its stream receives a timed-out
+    /// [`PayloadError`](crate::http::error::PayloadError), and the HTTP/1
+    /// control service receives
+    /// [`ProtocolError::SlowPayloadTimeout`](crate::http::h1::ProtocolError::SlowPayloadTimeout).
+    /// The default control service responds with `408 Request Timeout` and
+    /// closes the connection.
+    ///
+    /// Payload read-rate limiting is disabled by default.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use ntex::http::HttpServiceConfig;
+    /// use ntex::time::Seconds;
+    ///
+    /// let config = HttpServiceConfig::new().set_payload_read_rate(
+    ///     Seconds(2),  // measurement interval
+    ///     Seconds(30), // maximum time for one request payload
+    ///     1024,        // bytes required to extend the deadline
+    /// );
+    /// ```
     pub fn set_payload_read_rate(
         mut self,
         timeout: Seconds,

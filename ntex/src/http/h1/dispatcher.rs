@@ -488,6 +488,7 @@ where
                             self.payload.as_mut().unwrap().1.feed_data(chunk);
                         }
                         Ok(PayloadItem::Eof) => {
+                            self.io.stop_timer();
                             self.flags.remove(Flags::READ_PL_TIMEOUT);
                             self.payload.as_mut().unwrap().1.feed_eof();
                             self.payload = None;
@@ -564,12 +565,8 @@ where
         };
 
         if let Some(cfg) = cfg {
-            if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
-                self.read_remains = 0;
-            } else {
-                self.read_consumed = 0;
-            }
-            let total = self.read_remains - self.read_consumed;
+            let total = self.read_consumed;
+            self.read_consumed = 0;
 
             if total > cfg.rate {
                 // update max timeout
@@ -616,11 +613,17 @@ where
         // got parsed frame
         if decoded.item.is_some() {
             self.read_remains = 0;
+            self.read_consumed = 0;
             self.flags
                 .remove(Flags::READ_KA_TIMEOUT | Flags::READ_HDRS_TIMEOUT | Flags::READ_PL_TIMEOUT);
+            self.io.stop_timer();
         } else if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
             // received new data but not enough for parsing complete frame
-            self.read_remains = decoded.remains as u32;
+            let remains = decoded.remains as u32;
+            self.read_consumed = self
+                .read_consumed
+                .saturating_add(remains.saturating_sub(self.read_remains));
+            self.read_remains = remains;
         } else if self.read_remains == 0 && decoded.remains == 0 && !self.codec.is_reading_hdrs() {
             // no new data, start keep-alive timer
             if self.codec.keepalive() {
@@ -653,8 +656,8 @@ where
                 .remove(Flags::READ_KA_TIMEOUT | Flags::READ_PL_TIMEOUT);
             self.flags.insert(Flags::READ_HDRS_TIMEOUT);
 
-            self.read_consumed = 0;
             self.read_remains = decoded.remains as u32;
+            self.read_consumed = self.read_remains;
             self.read_max_timeout = cfg.max_timeout;
             self.io.start_timer(cfg.timeout);
         }
@@ -663,15 +666,13 @@ where
 
     fn update_payload_timer(&mut self, decoded: &Decoded<PayloadItem>) {
         if self.flags.contains(Flags::READ_PL_TIMEOUT) {
-            self.read_remains = decoded.remains as u32;
-            self.read_consumed += decoded.consumed as u32;
+            self.read_consumed = self.read_consumed.saturating_add(decoded.consumed as u32);
         } else if let Some(cfg) = &self.codec.cfg.payload_read_rate {
             log::debug!("{}: Start payload timer {:?}", self.io.tag(), cfg.timeout);
 
             // start payload timer
             self.flags.insert(Flags::READ_PL_TIMEOUT);
 
-            self.read_remains = decoded.remains as u32;
             self.read_consumed = decoded.consumed as u32;
             self.read_max_timeout = cfg.max_timeout;
             self.io.start_timer(cfg.timeout);
@@ -1277,7 +1278,9 @@ mod tests {
             client.write(random_bytes);
             sleep(Millis(750)).await;
         }
-        assert_eq!(mark.load(Ordering::Relaxed), 768);
+        // The first interval exceeds the configured rate and earns one
+        // extension; the two-second maximum then terminates the payload.
+        assert_eq!(mark.load(Ordering::Relaxed), 1536);
         assert_eq!(err_mark.load(Ordering::Relaxed), 1);
     }
 
