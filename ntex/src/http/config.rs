@@ -116,9 +116,11 @@ impl HttpServiceConfig {
     }
 
     #[must_use]
-    /// Sets the maximum buffer size used while parsing an HTTP message.
+    /// Sets the maximum cumulative size of an HTTP message head.
     ///
-    /// The default is 64 KiB.
+    /// The request or response line, headers, and terminating empty line may
+    /// occupy up to and including this number of bytes. Larger message heads
+    /// are rejected. The default is 64 KiB.
     pub fn set_max_buf_size(mut self, val: usize) -> Self {
         self.max_buf_size = val;
         self
@@ -204,7 +206,10 @@ impl HttpServiceConfig {
     ///
     /// A zero `timeout` disables request-head timing. A zero `max_timeout`
     /// removes the cumulative limit, allowing the deadline to be extended
-    /// indefinitely while the required read rate is maintained.
+    /// indefinitely while the required read rate is maintained. When
+    /// `max_timeout` is not an exact multiple of `timeout`, the final
+    /// measurement interval is shortened so the cumulative limit is not
+    /// exceeded.
     ///
     /// If the request head misses its deadline, the HTTP/1 control service
     /// receives
@@ -262,7 +267,9 @@ impl HttpServiceConfig {
     ///
     /// A zero `timeout` disables payload timing. A zero `max_timeout` removes
     /// the cumulative limit, allowing the deadline to be extended indefinitely
-    /// while the required read rate is maintained.
+    /// while the required read rate is maintained. When `max_timeout` is not
+    /// an exact multiple of `timeout`, the final measurement interval is
+    /// shortened so the cumulative limit is not exceeded.
     ///
     /// If the payload misses its deadline, its stream receives a timed-out
     /// [`PayloadError`](crate::http::error::PayloadError), and the HTTP/1

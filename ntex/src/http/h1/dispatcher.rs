@@ -15,6 +15,15 @@ use super::control::{Control, ControlAck, ControlResult, ServiceDisconnectReason
 use super::decoder::{PayloadDecoder, PayloadItem, PayloadType};
 use super::{Message, ProtocolError, codec::Codec};
 
+fn read_timeout(timeout: Seconds, max_timeout: Seconds) -> (Seconds, Seconds) {
+    if max_timeout.is_zero() {
+        (timeout, Seconds::ZERO)
+    } else {
+        let timeout = Seconds(timeout.0.min(max_timeout.0));
+        (timeout, Seconds(max_timeout.0.saturating_sub(timeout.0)))
+    }
+}
+
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     pub struct Flags: u8 {
@@ -85,8 +94,9 @@ where
 
         // slow-request timer
         let (flags, max_timeout) = if let Some(cfg) = &codec.cfg.headers_read_rate {
-            io.start_timer(cfg.timeout);
-            (Flags::READ_HDRS_TIMEOUT, cfg.max_timeout)
+            let (timeout, max_timeout) = read_timeout(cfg.timeout, cfg.max_timeout);
+            io.start_timer(timeout);
+            (Flags::READ_HDRS_TIMEOUT, max_timeout)
         } else {
             (Flags::empty(), Seconds::ZERO)
         };
@@ -241,6 +251,14 @@ where
         }
 
         log::trace!("{}: Trying to read http message", self.io.tag());
+
+        if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
+            let remains = self.io.with_read_buf(|buf| buf.len()) as u32;
+            self.read_consumed = self
+                .read_consumed
+                .saturating_add(remains.saturating_sub(self.read_remains));
+            self.read_remains = remains;
+        }
 
         let result = match self.io.poll_recv_decode(&self.codec, cx) {
             Ok(decoded) => {
@@ -569,20 +587,23 @@ where
             self.read_consumed = 0;
 
             if total > cfg.rate {
-                // update max timeout
-                if !cfg.max_timeout.is_zero() {
-                    self.read_max_timeout =
-                        Seconds(self.read_max_timeout.0.saturating_sub(cfg.timeout.0));
-                }
+                let timeout = if cfg.max_timeout.is_zero() {
+                    Some(cfg.timeout)
+                } else if self.read_max_timeout.is_zero() {
+                    None
+                } else {
+                    let (timeout, remaining) = read_timeout(cfg.timeout, self.read_max_timeout);
+                    self.read_max_timeout = remaining;
+                    Some(timeout)
+                };
 
-                // start timer for next period
-                if cfg.max_timeout.is_zero() || !self.read_max_timeout.is_zero() {
+                if let Some(timeout) = timeout {
                     log::trace!(
                         "{}: Bytes read rate {:?}, extend timer",
                         self.io.tag(),
                         total
                     );
-                    self.io.start_timer(cfg.timeout);
+                    self.io.start_timer(timeout);
                     return Ok(());
                 }
             }
@@ -619,12 +640,7 @@ where
             self.io.stop_timer();
         } else if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
             // received new data but not enough for parsing complete frame
-            let remains = decoded.remains as u32;
-            let received = (decoded.consumed as u32)
-                .saturating_add(remains)
-                .saturating_sub(self.read_remains);
-            self.read_consumed = self.read_consumed.saturating_add(received);
-            self.read_remains = remains;
+            self.read_remains = decoded.remains as u32;
         } else if self.read_remains == 0 && decoded.remains == 0 && !self.codec.is_reading_hdrs() {
             // no new data, start keep-alive timer
             if self.codec.keepalive() {
@@ -657,10 +673,11 @@ where
                 .remove(Flags::READ_KA_TIMEOUT | Flags::READ_PL_TIMEOUT);
             self.flags.insert(Flags::READ_HDRS_TIMEOUT);
 
+            let (timeout, max_timeout) = read_timeout(cfg.timeout, cfg.max_timeout);
             self.read_remains = decoded.remains as u32;
             self.read_consumed = (decoded.consumed as u32).saturating_add(self.read_remains);
-            self.read_max_timeout = cfg.max_timeout;
-            self.io.start_timer(cfg.timeout);
+            self.read_max_timeout = max_timeout;
+            self.io.start_timer(timeout);
         }
         None
     }
@@ -674,9 +691,10 @@ where
             // start payload timer
             self.flags.insert(Flags::READ_PL_TIMEOUT);
 
+            let (timeout, max_timeout) = read_timeout(cfg.timeout, cfg.max_timeout);
             self.read_consumed = decoded.consumed as u32;
-            self.read_max_timeout = cfg.max_timeout;
-            self.io.start_timer(cfg.timeout);
+            self.read_max_timeout = max_timeout;
+            self.io.start_timer(timeout);
         }
     }
 
@@ -775,6 +793,21 @@ mod tests {
     use crate::{codec::Decoder, testing::IoTest, time::Millis, time::sleep};
 
     const BUFFER_SIZE: usize = 32_768;
+
+    #[test]
+    fn test_read_timeout_is_bounded_by_maximum() {
+        let (timeout, remaining) = read_timeout(Seconds(10), Seconds(15));
+        assert_eq!(timeout, Seconds(10));
+        assert_eq!(remaining, Seconds(5));
+
+        let (timeout, remaining) = read_timeout(Seconds(10), remaining);
+        assert_eq!(timeout, Seconds(5));
+        assert_eq!(remaining, Seconds::ZERO);
+
+        let (timeout, remaining) = read_timeout(Seconds(10), Seconds(3));
+        assert_eq!(timeout, Seconds(3));
+        assert_eq!(remaining, Seconds::ZERO);
+    }
 
     /// Create http/1 dispatcher.
     pub(crate) fn h1<F, S, B>(stream: IoTest, s: F) -> Dispatcher<Base, B, S::Error>
@@ -1293,6 +1326,36 @@ mod tests {
         assert_eq!(requests.load(Ordering::Relaxed), 0);
         assert_eq!(disconnects.load(Ordering::Relaxed), 1);
         assert!(client.read_any().is_empty());
+    }
+
+    #[crate::rt_test]
+    async fn test_header_progress_available_when_timer_fires() {
+        let (client, server) = IoTest::create();
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(HttpServiceConfig::new().set_headers_read_rate(Seconds(1), Seconds(2), 4))
+            .into();
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
+            ),
+            Pipeline::new((), DefaultControlService),
+            DispatcherConfig::default(),
+        );
+
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        client.write("GET /");
+        sleep(Millis(1100)).await;
+
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        sleep(Millis(50)).await;
+        assert!(client.read_any().is_empty());
+
+        client.close().await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
     }
 
     #[crate::rt_test]

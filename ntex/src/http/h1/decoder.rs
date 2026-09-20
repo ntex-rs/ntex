@@ -193,7 +193,7 @@ impl<T: MessageType> Decoder for MessageDecoder<T> {
             (Ok(None), len)
         };
 
-        if buf_size >= inner.cfg.max_buf_size {
+        if buf_size > inner.cfg.max_buf_size {
             log::trace!("MAX_BUFFER_SIZE of data reached, closing");
             return Err(DecodeError::TooLarge(buf_size));
         }
@@ -1766,6 +1766,14 @@ mod tests {
         // message head size is within the limit
         let cfg: SharedCfg = SharedCfg::new("test")
             .add(HttpServiceConfig::new().set_max_buf_size(100))
+            .into();
+        let reader = MessageDecoder::<Request>::new(cfg.get());
+        let mut buf = BytesMut::from(TEXT);
+        assert!(reader.decode(&mut buf).unwrap().is_some());
+
+        // the configured maximum is inclusive
+        let cfg: SharedCfg = SharedCfg::new("test")
+            .add(HttpServiceConfig::new().set_max_buf_size(TEXT.len()))
             .into();
         let reader = MessageDecoder::<Request>::new(cfg.get());
         let mut buf = BytesMut::from(TEXT);
