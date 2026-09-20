@@ -27,16 +27,18 @@ fn read_timeout(timeout: Seconds, max_timeout: Seconds) -> (Seconds, Seconds) {
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     pub struct Flags: u8 {
-        /// Disconnect
-        const DISCONNECT_SENT      = 0b0000_0001;
         /// No request has been decoded yet
-        const FIRST_REQUEST        = 0b0000_0010;
+        const FIRST_REQUEST        = 0b0000_0001;
+        /// Disconnect
+        const DISCONNECT_SENT      = 0b0000_0010;
         /// Keep-alive is enabled
         const READ_KA_TIMEOUT      = 0b0001_0000;
         /// Read headers timer is enabled
         const READ_HDRS_TIMEOUT    = 0b0010_0000;
         /// Read headers payload is enabled
         const READ_PL_TIMEOUT      = 0b0100_0000;
+        /// Payload timer is paused by application backpressure
+        const READ_PL_PAUSED       = 0b1000_0000;
     }
 }
 
@@ -509,6 +511,22 @@ where
 
         match self.payload.as_ref().unwrap().1.poll_ready(cx) {
             Poll::Ready(bstream::Status::Ready) => {
+                if self.flags.contains(Flags::READ_PL_PAUSED)
+                    && self
+                        .codec
+                        .cfg
+                        .payload_read_rate
+                        .as_ref()
+                        .is_some_and(|cfg| cfg.max_timeout.non_zero())
+                    && self.read_max_timeout.is_zero()
+                {
+                    self.set_payload_error(PayloadError::Io(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "Payload read timeout",
+                    )));
+                    return Poll::Ready(Err(Either::Left(ProtocolError::SlowPayloadTimeout)));
+                }
+
                 // read request payload
                 let mut updated = false;
                 loop {
@@ -546,7 +564,8 @@ where
                         }
                         Ok(PayloadItem::Eof) => {
                             self.io.stop_timer();
-                            self.flags.remove(Flags::READ_PL_TIMEOUT);
+                            self.flags
+                                .remove(Flags::READ_PL_TIMEOUT | Flags::READ_PL_PAUSED);
                             self.payload.as_mut().unwrap().1.feed_eof();
                             self.payload = None;
                             break;
@@ -606,11 +625,7 @@ where
                 }
             }
             Poll::Pending => {
-                // stop payload timer
-                if self.flags.contains(Flags::READ_PL_TIMEOUT) {
-                    self.flags.remove(Flags::READ_PL_TIMEOUT);
-                    self.io.stop_timer();
-                }
+                self.pause_payload_timer();
                 Poll::Pending
             }
             Poll::Ready(bstream::Status::Dropped | bstream::Status::Eof) => {
@@ -621,6 +636,20 @@ where
                 self.disconnect = Some(ServiceDisconnectReason::PayloadDropped);
                 Poll::Pending
             }
+        }
+    }
+
+    fn pause_payload_timer(&mut self) {
+        if self.flags.contains(Flags::READ_PL_TIMEOUT) {
+            self.flags.remove(Flags::READ_PL_TIMEOUT);
+            self.flags.insert(Flags::READ_PL_PAUSED);
+            if let Some(cfg) = &self.codec.cfg.payload_read_rate
+                && cfg.max_timeout.non_zero()
+            {
+                let remains = self.io.timer_handle().remains();
+                self.read_max_timeout = Seconds(self.read_max_timeout.0.saturating_add(remains.0));
+            }
+            self.io.stop_timer();
         }
     }
 
@@ -691,7 +720,8 @@ where
                 Flags::FIRST_REQUEST
                     | Flags::READ_KA_TIMEOUT
                     | Flags::READ_HDRS_TIMEOUT
-                    | Flags::READ_PL_TIMEOUT,
+                    | Flags::READ_PL_TIMEOUT
+                    | Flags::READ_PL_PAUSED,
             );
             self.io.stop_timer();
         } else if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
@@ -749,10 +779,25 @@ where
             log::debug!("{}: Start payload timer {:?}", self.io.tag(), cfg.timeout);
 
             // start payload timer
+            let paused = self.flags.contains(Flags::READ_PL_PAUSED);
+            let max_timeout = if paused {
+                self.flags.remove(Flags::READ_PL_PAUSED);
+                if cfg.max_timeout.is_zero() {
+                    Seconds::ZERO
+                } else {
+                    self.read_max_timeout
+                }
+            } else {
+                cfg.max_timeout
+            };
             self.flags.insert(Flags::READ_PL_TIMEOUT);
 
-            let (timeout, max_timeout) = read_timeout(cfg.timeout, cfg.max_timeout);
-            self.read_consumed = decoded.consumed as u32;
+            let (timeout, max_timeout) = read_timeout(cfg.timeout, max_timeout);
+            if paused {
+                self.read_consumed = self.read_consumed.saturating_add(decoded.consumed as u32);
+            } else {
+                self.read_consumed = decoded.consumed as u32;
+            }
             self.read_max_timeout = max_timeout;
             self.io.start_timer(timeout);
         }
@@ -867,6 +912,49 @@ mod tests {
         let (timeout, remaining) = read_timeout(Seconds(10), Seconds(3));
         assert_eq!(timeout, Seconds(3));
         assert_eq!(remaining, Seconds::ZERO);
+    }
+
+    #[crate::rt_test]
+    async fn test_payload_timer_resume_preserves_maximum() {
+        let (_client, server) = IoTest::create();
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(HttpServiceConfig::new().set_payload_read_rate(Seconds(10), Seconds(15), 1))
+            .into();
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
+            ),
+            Pipeline::new((), DefaultControlService),
+            DispatcherConfig::default(),
+        );
+        let decoded = Decoded {
+            item: None,
+            remains: 0,
+            consumed: 2,
+        };
+
+        h1.inner
+            .flags
+            .remove(Flags::FIRST_REQUEST | Flags::READ_HDRS_TIMEOUT);
+        h1.inner.io.stop_timer();
+        h1.inner.update_payload_timer(&decoded);
+        assert_eq!(h1.inner.read_max_timeout, Seconds(5));
+        assert!(h1.inner.handle_timeout().is_ok());
+        assert_eq!(h1.inner.read_max_timeout, Seconds::ZERO);
+        assert_eq!(h1.inner.io.timer_handle().remains(), Seconds(5));
+
+        h1.inner.pause_payload_timer();
+        assert!(h1.inner.flags.contains(Flags::READ_PL_PAUSED));
+        assert_eq!(h1.inner.read_max_timeout, Seconds(5));
+
+        h1.inner.update_payload_timer(&decoded);
+        assert!(!h1.inner.flags.contains(Flags::READ_PL_PAUSED));
+        assert_eq!(h1.inner.read_max_timeout, Seconds::ZERO);
+        assert_eq!(h1.inner.io.timer_handle().remains(), Seconds(5));
     }
 
     #[crate::rt_test]

@@ -264,8 +264,10 @@ impl HttpServiceConfig {
     /// The timer runs only while the application-side payload stream can
     /// accept data. It is paused while application backpressure prevents the
     /// dispatcher from forwarding payload chunks, so a slow payload consumer
-    /// is not treated as a slow network peer. The timer stops when the complete
-    /// payload has been decoded.
+    /// is not treated as a slow network peer. Pausing preserves the unused
+    /// portion of the cumulative `max_timeout`; resuming does not grant a new
+    /// maximum period. The timer stops when the complete payload has been
+    /// decoded.
     ///
     /// A zero `timeout` disables payload timing. A zero `max_timeout` removes
     /// the cumulative limit, allowing the deadline to be extended indefinitely
