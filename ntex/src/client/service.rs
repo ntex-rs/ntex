@@ -18,13 +18,8 @@ pub struct ServiceResponse {
 }
 
 impl ServiceResponse {
-    /// Returns the response head.
-    pub fn head(&self) -> &ResponseHead {
-        &self.head
-    }
-
     /// Returns mutable access to the response head.
-    pub fn head_mut(&mut self) -> &mut ResponseHead {
+    pub fn head(&mut self) -> &mut ResponseHead {
         &mut self.head
     }
 
