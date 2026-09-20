@@ -9,10 +9,42 @@ use super::guard::{self, AllGuard, Guard};
 use super::handler::{Handler, HandlerFn, HandlerSt, HandlerStWrapper, HandlerWrapper};
 use super::{FromRequest, HttpResponse, State, WebRequest, WebResponse};
 
-/// Resource route definition
+/// Connects a handler to the requests it should handle.
 ///
-/// Route uses builder-like pattern for configuration.
-/// If handler is not explicitly set, default *404 Not Found* handler is used.
+/// A route belongs to a [`Resource`](super::Resource). It does not define a
+/// path itself; instead, its method and custom guards decide which requests
+/// within that resource should reach its handler.
+///
+/// Routes are checked in registration order. A route matches when the request
+/// method matches one of its configured methods and every custom guard accepts
+/// the request. Without a method or custom guard, it matches any request that
+/// reaches the resource.
+///
+/// If a route does not match, the resource tries the next one. When no route
+/// matches, the resource fallback runs and returns `405 Method Not Allowed` by
+/// default.
+///
+/// Use helpers such as [`web::get()`] and [`web::post()`] to create
+/// method-specific routes, then attach a handler with [`Route::to()`] or
+/// [`Route::to_with_state()`]. Handler arguments are populated through
+/// [`FromRequest`], and the returned value is converted into a response through
+/// [`Responder`](super::Responder).
+///
+/// A route without an explicitly configured handler returns `404 Not Found`
+/// when called.
+///
+/// ```rust
+/// use ntex::web::{self, App, HttpResponse};
+///
+/// App::default().service(
+///     web::resource("/users/{id}")
+///         .route(web::get().to(async || "user"))
+///         .route(web::delete().to(async || HttpResponse::NoContent())),
+/// );
+/// ```
+///
+/// [`web::get()`]: super::get
+/// [`web::post()`]: super::post
 pub struct Route<St: State, In = ()> {
     handler: Rc<dyn HandlerFn<St, In>>,
     methods: Vec<Method>,
