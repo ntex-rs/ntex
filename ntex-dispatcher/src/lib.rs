@@ -756,7 +756,7 @@ mod tests {
                 if let DispatchItem::Item(msg) = msg {
                     Ok::<_, ()>(Some(msg))
                 } else {
-                    panic!()
+                    Ok(None)
                 }
             }),
         );
@@ -773,6 +773,7 @@ mod tests {
         assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
 
         client.close().await;
+        sleep(Millis(75)).await;
         assert!(client.is_server_dropped());
 
         assert!(format!("{:?}", super::Flags::KA_TIMEOUT.clone()).contains("KA_TIMEOUT"));

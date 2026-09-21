@@ -4,6 +4,8 @@
 
 * Fix api consistency for IoContext::update_read_status()
 
+* Fix peer EOF force-terminates instead of gracefully closing
+
 * Zero disconnect timeout disables the forced filter-shutdown deadline
 
 * Stopped timer clears any pending timeout notification

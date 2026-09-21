@@ -97,8 +97,10 @@ impl IoContext {
 
     /// Returns a transport read buffer and reports the read result.
     ///
-    /// `Poll::Ready(Ok(n))` reports that `n` bytes were appended to `buf`, with
-    /// zero reporting EOF. `Poll::Ready(Err(_))` terminates the connection.
+    /// `Poll::Ready(Ok(n))` reports that `n` bytes were appended to `buf`.
+    /// Zero marks the transport read side as closed: further reads are parked,
+    /// but buffered input remains decodable and the write side remains usable
+    /// until graceful shutdown. `Poll::Ready(Err(_))` terminates the connection.
     /// `Poll::Pending` returns the buffer after a nonblocking operation made no
     /// progress or a submitted operation was canceled for reissue.
     ///
@@ -126,7 +128,8 @@ impl IoContext {
         let result = match status {
             Poll::Pending => Ok(()),
             Poll::Ready(Ok(0)) => {
-                st.terminate_connection(None);
+                st.flags.set_read_eof();
+                st.wake_dispatch_task();
                 Ok(())
             }
             Poll::Ready(status) => status.and_then(|nbytes| {
@@ -175,7 +178,7 @@ impl IoContext {
             IoTaskStatus::Stop
         } else if st.flags.is_closed() {
             IoTaskStatus::Stop
-        } else if st.flags.is_read_paused_or_backpressure() {
+        } else if st.flags.is_read_eof() || st.flags.is_read_paused_or_backpressure() {
             IoTaskStatus::Pause
         } else {
             IoTaskStatus::Io
@@ -375,9 +378,9 @@ mod tests {
 
         assert_eq!(
             ctx.update_read_status(ctx.get_read_buf(), Poll::Ready(Ok(0))),
-            IoTaskStatus::Stop
+            IoTaskStatus::Pause
         );
-        assert!(ctx.is_stopped());
+        assert!(!ctx.is_stopped());
         assert!(matches!(
             lazy(|cx| state.poll_read_ready(cx)).await,
             Poll::Ready(Ok(None))

@@ -16,6 +16,8 @@ bitflags::bitflags! {
         const RD_PAUSED           = 0b0000_0000_0001_0000;
         /// read backpressure
         const RD_BACKPRESSURE     = 0b0000_0000_1000_0000;
+        /// transport read side reached clean EOF
+        const RD_EOF              = 0b0100_0000_0000_0000;
 
         /// read any data and notify dispatcher
         const RD_NOTIFY           = 0b0000_0000_0010_0000;
@@ -161,6 +163,10 @@ impl Flags {
         self.contains(FlagsKind::RD_BACKPRESSURE)
     }
 
+    pub(crate) fn is_read_eof(&self) -> bool {
+        self.contains(FlagsKind::RD_EOF)
+    }
+
     pub(crate) fn is_wr_backpressure(&self) -> bool {
         self.contains(FlagsKind::DSP_W_BACKPRESSURE)
     }
@@ -228,6 +234,10 @@ impl Flags {
 
     pub(crate) fn set_read_ready_and_backpressure(&self) {
         self.insert(FlagsKind::RD_PAUSED | FlagsKind::BUF_R_READY | FlagsKind::RD_BACKPRESSURE);
+    }
+
+    pub(crate) fn set_read_eof(&self) {
+        self.insert(FlagsKind::RD_EOF);
     }
 
     pub(crate) fn set_filters_stopped(&self) {

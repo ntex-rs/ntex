@@ -521,6 +521,10 @@ impl<F> Io<F> {
         } else {
             let ready = st.flags.is_read_ready();
 
+            if st.flags.is_read_eof() && !ready {
+                return Poll::Ready(Ok(None));
+            }
+
             // If the dispatcher requests more data but no read occurs,
             // restart the read task.
             if st.flags.is_read_paused_or_backpressure() {
@@ -550,7 +554,7 @@ impl<F> Io<F> {
     /// Polls the I/O stream for availability of incoming data.
     pub fn poll_read_notify(&self, cx: &mut Context<'_>) -> Poll<io::Result<Option<()>>> {
         let st = self.st();
-        if st.flags.is_stopping() {
+        if st.flags.is_stopping() || st.flags.is_read_eof() && !st.flags.is_read_ready() {
             Poll::Ready(Ok(None))
         } else if st.flags.check_read_notifed() {
             Poll::Ready(Ok(Some(())))
@@ -856,7 +860,7 @@ mod tests {
 
     use ntex_bytes::{BufMut, BytePages, Bytes, BytesMut};
     use ntex_codec::BytesCodec;
-    use ntex_util::{future::lazy, time::Millis, time::sleep};
+    use ntex_util::{future::lazy, time::Millis, time::sleep, time::timeout};
 
     use super::*;
     use crate::{FilterBuf, IoContext, IoTaskStatus, Readiness, ops::Iops, testing::IoTest};
@@ -1468,6 +1472,47 @@ mod tests {
         ntex_util::time::timeout(Millis(4000), io.on_disconnect())
             .await
             .expect("io stream did not disconnect after flush");
+    }
+
+    #[ntex::test]
+    async fn peer_eof_allows_response_before_shutdown() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = Io::from(server);
+
+        client.write("request");
+        client.close().await;
+
+        assert_eq!(
+            timeout(Millis(1000), io.recv(&BytesCodec))
+                .await
+                .expect("request was not decoded")
+                .unwrap(),
+            Some(Bytes::from_static(b"request"))
+        );
+        assert!(
+            timeout(Millis(1000), io.recv(&BytesCodec))
+                .await
+                .expect("EOF was not reported")
+                .unwrap()
+                .is_none()
+        );
+        assert!(!io.is_closed());
+
+        io.encode(Bytes::from_static(b"response"), &BytesCodec)
+            .unwrap();
+        timeout(Millis(1000), io.shutdown())
+            .await
+            .expect("shutdown did not complete")
+            .unwrap();
+
+        assert_eq!(
+            timeout(Millis(1000), client.read())
+                .await
+                .expect("response was not flushed")
+                .unwrap(),
+            b"response"[..]
+        );
     }
 
     #[ntex::test]
