@@ -52,6 +52,14 @@ impl IoRef {
     }
 
     #[inline]
+    /// Checks whether the connection entered graceful transport shutdown.
+    ///
+    /// This state remains set after backend teardown completes.
+    pub fn is_stopping(&self) -> bool {
+        self.0.flags.is_stopping()
+    }
+
+    #[inline]
     /// Checks whether the stream entered the force-termination path.
     ///
     /// This becomes `true` after [`terminate`](Self::terminate) is called or
@@ -426,7 +434,11 @@ impl IoRef {
         }
     }
 
-    /// Returns a future that resolves when the I/O stream begins disconnecting.
+    /// Returns a future that resolves when the complete I/O stream disconnects.
+    ///
+    /// A clean peer read EOF does not resolve this future because the write
+    /// half remains usable. It resolves when local shutdown or force
+    /// termination closes the complete transport.
     pub fn on_disconnect(&self) -> crate::OnDisconnect {
         crate::OnDisconnect::new(self.0.clone())
     }
@@ -514,7 +526,7 @@ mod tests {
     use ntex_bytes::Bytes;
     use ntex_codec::BytesCodec;
     use ntex_util::future::{Either, lazy};
-    use ntex_util::time::{Millis, sleep};
+    use ntex_util::time::{Millis, sleep, timeout};
 
     use super::*;
     use crate::{FilterCtx, Io, testing::IoTest};
@@ -632,8 +644,25 @@ mod tests {
             Poll::Pending
         );
         client.close().await;
-        assert_eq!(waiter.await, ());
-        assert_eq!(waiter2.await, ());
+        assert_eq!(
+            lazy(|cx| Pin::new(&mut waiter).poll(cx)).await,
+            Poll::Pending
+        );
+        assert_eq!(
+            lazy(|cx| Pin::new(&mut waiter2).poll(cx)).await,
+            Poll::Pending
+        );
+
+        timeout(Millis(1000), state.shutdown())
+            .await
+            .expect("stream shutdown did not complete")
+            .unwrap();
+        timeout(Millis(1000), waiter)
+            .await
+            .expect("disconnect waiter was not notified");
+        timeout(Millis(1000), waiter2)
+            .await
+            .expect("cloned disconnect waiter was not notified");
 
         let mut waiter = state.on_disconnect();
         assert_eq!(
@@ -650,13 +679,19 @@ mod tests {
         );
         client.read_error(io::Error::other("err"));
         assert_eq!(waiter.await, ());
+
+        let mut waiter = state.on_disconnect();
+        assert_eq!(
+            lazy(|cx| Pin::new(&mut waiter).poll(cx)).await,
+            Poll::Ready(())
+        );
     }
 
     #[ntex::test]
     async fn write_to_closed_io() {
-        let (client, server) = IoTest::create();
+        let (_client, server) = IoTest::create();
         let state = Io::from(server);
-        client.close().await;
+        state.terminate();
 
         assert!(state.is_closed());
         assert!(state.encode_slice(TEXT.as_bytes()).is_err());

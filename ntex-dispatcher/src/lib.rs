@@ -694,13 +694,10 @@ mod tests {
 
     use ntex_bytes::{BytePages, Bytes, BytesMut};
     use ntex_codec::BytesCodec;
-    use ntex_io::{Flags, Io, IoConfig, IoRef, testing::IoTest};
+    use ntex_io::{Io, IoConfig, IoRef, testing::IoTest};
     use ntex_service::{Ctx, Pipeline, Service, cfg::SharedCfg};
-    use ntex_util::{
-        channel::oneshot,
-        future::lazy,
-        time::{Millis, sleep, timeout},
-    };
+    use ntex_util::time::{Millis, sleep, timeout};
+    use ntex_util::{channel::oneshot, future::lazy};
     use rand::Rng;
 
     use super::*;
@@ -708,10 +705,6 @@ mod tests {
     pub(crate) struct State(IoRef);
 
     impl State {
-        fn flags(&self) -> Flags {
-            self.0.flags()
-        }
-
         fn io(&self) -> &IoRef {
             &self.0
         }
@@ -1216,8 +1209,7 @@ mod tests {
         sleep(Millis(2000)).await;
 
         // write side must be closed, dispatcher should fail with keep-alive
-        let flags = state.flags();
-        assert!(flags.is_stopping());
+        assert!(state.0.is_stopping());
         assert!(client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
     }
@@ -1266,8 +1258,7 @@ mod tests {
         sleep(Millis(2000)).await;
 
         // write side must be closed, dispatcher should fail with keep-alive
-        let flags = state.flags();
-        assert!(flags.is_stopping());
+        assert!(state.0.is_stopping());
         assert!(client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
     }
@@ -1377,15 +1368,15 @@ mod tests {
 
         client.write("1");
         sleep(Millis(1000)).await;
-        assert!(!state.flags().is_stopping());
+        assert!(!state.0.is_stopping());
         client.write("23");
         sleep(Millis(1000)).await;
-        assert!(!state.flags().is_stopping());
+        assert!(!state.0.is_stopping());
         client.write("4");
         sleep(Millis(2000)).await;
 
         // write side must be closed, dispatcher should fail with keep-alive
-        assert!(state.flags().is_stopping());
+        assert!(state.0.is_stopping());
         assert!(client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
     }
@@ -1438,7 +1429,7 @@ mod tests {
         assert_eq!(buf, Bytes::from_static(b"1"));
 
         sleep(Millis(1000)).await;
-        assert!(state.flags().is_stopping());
+        assert!(state.0.is_stopping());
         assert!(client.is_closed());
     }
 

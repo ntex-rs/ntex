@@ -4,7 +4,7 @@ pub struct Flags(Cell<FlagsKind>);
 
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-    pub struct FlagsKind: u16 {
+    pub struct FlagsKind: u32 {
         /// io is closed
         const IO_STOPPED          = 0b0000_0000_0000_0001;
         /// shutdown io tasks
@@ -12,7 +12,7 @@ bitflags::bitflags! {
         /// shutting down filters
         const IO_STOPPING_FILTERS = 0b0000_0000_0000_0100;
         /// force termination or transport failure is in progress
-        const IO_TERMINATING      = 0b0100_0000_0000_0000;
+        const IO_TERMINATING      = 0b0001_0000_0000_0000_0000;
 
         /// pause io read
         const RD_PAUSED           = 0b0000_0000_0001_0000;
@@ -99,15 +99,22 @@ impl Flags {
         self.contains(FlagsKind::IO_STOPPED)
     }
 
-    pub fn is_stopping(&self) -> bool {
+    /// Checks whether the connection entered graceful transport shutdown.
+    ///
+    /// This state remains set after backend teardown completes.
+    pub(crate) fn is_stopping(&self) -> bool {
         self.contains(FlagsKind::IO_STOPPING)
     }
 
     /// Checks whether the connection entered the force-termination path.
     ///
     /// This state remains set after backend teardown completes.
-    pub fn is_terminating(&self) -> bool {
+    pub(crate) fn is_terminating(&self) -> bool {
         self.contains(FlagsKind::IO_TERMINATING)
+    }
+
+    pub(crate) fn is_stopping_or_terminating_or_rdeof(&self) -> bool {
+        self.intersects(FlagsKind::IO_STOPPING | FlagsKind::IO_TERMINATING | FlagsKind::RD_EOF)
     }
 
     pub(crate) fn is_stopping_any(&self) -> bool {
@@ -337,5 +344,6 @@ mod tests {
         assert!(format!("{:?}", FlagsKind::IO_STOPPED).contains("IO_STOPPED"));
         assert_eq!(FlagsKind::IO_STOPPED, FlagsKind::IO_STOPPED);
         assert_ne!(FlagsKind::IO_STOPPED, FlagsKind::IO_STOPPING);
+        assert_ne!(FlagsKind::IO_TERMINATING, FlagsKind::RD_EOF);
     }
 }

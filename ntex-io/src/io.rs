@@ -578,7 +578,7 @@ impl<F> Io<F> {
     /// Polls the I/O stream for availability of incoming data.
     pub fn poll_read_notify(&self, cx: &mut Context<'_>) -> Poll<io::Result<Option<()>>> {
         let st = self.st();
-        if st.flags.is_stopping() || st.flags.is_read_eof() && !st.flags.is_read_ready() {
+        if st.flags.is_stopping_or_terminating_or_rdeof() && !st.flags.is_read_ready() {
             Poll::Ready(Ok(None))
         } else if st.flags.check_read_notifed() {
             Poll::Ready(Ok(Some(())))
@@ -826,10 +826,10 @@ impl<F> Drop for Io<F> {
 }
 
 #[derive(Debug)]
-/// A future that resolves when an I/O stream begins disconnecting.
+/// A future that resolves when the complete I/O stream disconnects.
 ///
-/// Resolution indicates that shutdown or termination has started; it does not
-/// guarantee that filter or transport shutdown has completed.
+/// A clean peer read EOF does not resolve this future while the write half
+/// remains usable.
 #[must_use = "OnDisconnect do nothing unless polled"]
 pub struct OnDisconnect {
     token: usize,
@@ -838,7 +838,7 @@ pub struct OnDisconnect {
 
 impl OnDisconnect {
     pub(super) fn new(inner: Rc<IoState>) -> Self {
-        Self::new_inner(inner.flags.is_stopping(), inner)
+        Self::new_inner(inner.flags.is_closed(), inner)
     }
 
     fn new_inner(disconnected: bool, inner: Rc<IoState>) -> Self {
@@ -853,7 +853,7 @@ impl OnDisconnect {
     #[inline]
     /// Checks if the I/O stream is disconnected.
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<()> {
-        if self.token == usize::MAX || self.inner.flags.is_stopping() {
+        if self.token == usize::MAX || self.inner.flags.is_closed() {
             Poll::Ready(())
         } else {
             self.inner
