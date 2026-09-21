@@ -1967,6 +1967,72 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn blocked_filter_shutdown_flushes_buffered_output() {
+        #[derive(Debug)]
+        struct ClosingShutdown(Cell<bool>);
+
+        impl FilterLayer for ClosingShutdown {
+            fn process_read_buf(&self, _: &FilterBuf<'_>) -> io::Result<()> {
+                Ok(())
+            }
+
+            fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                buf.with_write_buffers(|src, dst| src.move_to(dst));
+                Ok(())
+            }
+
+            fn shutdown(&self, buf: &FilterBuf<'_>) -> io::Result<Poll<()>> {
+                // emit a closing record, like a tls close_notify
+                if !self.0.replace(true) {
+                    buf.with_write_buffers(|_, dst| dst.extend_from_slice(b"bye"));
+                }
+                Ok(Poll::Pending)
+            }
+        }
+
+        let (client, server) = IoTest::create();
+        // the peer cannot accept the closing record yet
+        client.remote_buffer_cap(0);
+
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV").add(
+                IoConfig::default()
+                    .set_read_buf(8, 4, 16)
+                    .set_disconnect_timeout(ntex_util::time::Seconds(10)),
+            ),
+        )
+        .add_filter(ClosingShutdown(Cell::new(false)));
+
+        io.st().flags.set_read_ready_and_backpressure();
+        io.close();
+        sleep(Millis(50)).await;
+
+        // filter shutdown is blocked, but the closing record must not be dropped
+        assert!(!io.st().flags.is_stopping());
+
+        // let the peer accept the buffered bytes
+        client.remote_buffer_cap(1024);
+        assert_eq!(
+            timeout(Millis(1000), client.read())
+                .await
+                .expect("closing record was not written")
+                .unwrap(),
+            Bytes::from_static(b"bye")
+        );
+
+        // once the record is delivered the filter shutdown phase ends
+        sleep(Millis(50)).await;
+        assert!(io.st().flags.is_stopping());
+
+        let err = timeout(Millis(1000), io.shutdown())
+            .await
+            .expect("transport shutdown did not complete")
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+    }
+
+    #[ntex::test]
     async fn blocked_filter_shutdown_is_reported() {
         #[derive(Debug)]
         struct PendingShutdown;

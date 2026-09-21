@@ -2,6 +2,9 @@
 
 ## [4.1.0] - 2026-09-21
 
+* Do not discard buffered output when filter shutdown cannot complete, wait for the write
+  buffer to drain (bounded by the disconnect timeout) before closing the transport
+
 * Rename buffer accessors to name their side of the chain: IoRef::with_read_buf() to
   with_read_dst(), with_write_buf() to with_write_src(), with_read_src_buf() to with_read_src(),
   with_write_dst_buf() to with_write_dst(), and IoContext::with_write_buf() to with_write_dst()
@@ -28,7 +31,7 @@
 
 * Fix read_notify() can wait forever after EOF with buffered data
 
-* Fix, recalculate buf size after shortcur write
+* Fix, recalculate buf size after shortcut write
 
 ## [4.0.1] - 2026-09-18
 

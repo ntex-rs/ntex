@@ -295,47 +295,88 @@ impl IoContext {
             return;
         }
 
+        // all pending output has reached the transport
+        let flushed = st.flags.is_write_paused() && !st.flags.is_wr_send_scheduled();
+
         #[cfg(feature = "trace")]
         log::trace!(
-            "{}: shutdown filters, done:{ready:?} wr-buf:{:?}, flags:{:?}",
+            "{}: shutdown filters, done:{ready:?} flushed:{flushed:?} wr-buf:{:?}, flags:{:?}",
             st.tag(),
             st.buffer.write_buf_size(),
             st.flags,
         );
 
         // filters are shutdown and write task is paused
-        if ready && st.flags.is_write_paused() && !st.flags.is_wr_send_scheduled() {
+        if ready && flushed {
             st.filters_stopped();
-        } else if !ready && (st.flags.is_read_paused() || st.flags.is_read_ready_and_backpressure())
-        {
-            // if read buffer is not consumed it is unlikely
-            // that filter will properly complete shutdown
-            st.set_shutdown_error(io::Error::other(
-                "filter shutdown blocked by unread buffered data",
-            ));
-            st.filters_stopped();
-        } else if st.cfg.disconnect_timeout().non_zero() {
+            return;
+        }
+
+        // If the read buffer is not consumed it is unlikely that the filter
+        // will ever complete its shutdown.
+        let blocked =
+            !ready && (st.flags.is_read_paused() || st.flags.is_read_ready_and_backpressure());
+
+        // The shutdown cannot complete, but stay in the filter shutdown phase
+        // until buffered output has reached the transport; setting
+        // `IO_STOPPING` makes the write task close instead of writing. The
+        // disconnect timeout below bounds the wait, and `update_write_status()`
+        // wakes the read task once the write buffer drains. Without a
+        // disconnect timeout the wait would be unbounded.
+        if blocked && (flushed || !st.cfg.disconnect_timeout().non_zero()) {
+            Self::stop_filters(st, blocked_err());
+            return;
+        }
+
+        if st.cfg.disconnect_timeout().non_zero() {
             // filter shutdown timeout
             let timeout = st
                 .shutdown_timeout
                 .take()
                 .unwrap_or_else(|| sleep(st.cfg.disconnect_timeout()));
             if timeout.poll_elapsed(cx).is_ready() {
-                st.set_shutdown_error(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "filter shutdown timed out",
-                ));
-                st.filters_stopped();
+                Self::stop_filters(
+                    st,
+                    if blocked {
+                        blocked_err()
+                    } else {
+                        io::Error::new(io::ErrorKind::TimedOut, "filter shutdown timed out")
+                    },
+                );
             } else {
                 st.shutdown_timeout.set(Some(timeout));
             }
         }
     }
 
+    /// Leaves the filter shutdown phase after an incomplete shutdown.
+    ///
+    /// Output that has not reached the transport by this point is lost, because
+    /// `IO_STOPPING` makes the write task close instead of writing.
+    ///
+    /// The error is recorded here rather than when the failure is first
+    /// detected: while an error is set, `IoRef::consolidate_write_state()`
+    /// short-circuits, which would stop the write buffer from draining.
+    fn stop_filters(st: &IoState, err: io::Error) {
+        let len = st.buffer.write_buf_size();
+        if len != 0 {
+            log::warn!(
+                "{}: Filter shutdown did not complete, discarding {len} bytes of buffered output",
+                st.tag()
+            );
+        }
+        st.set_shutdown_error(err);
+        st.filters_stopped();
+    }
+
     /// Notifies read tasks.
     pub fn notify(&self) {
         self.0.0.wake_read_task();
     }
+}
+
+fn blocked_err() -> io::Error {
+    io::Error::other("filter shutdown blocked by unread buffered data")
 }
 
 impl Clone for IoContext {
