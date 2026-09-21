@@ -128,6 +128,14 @@ impl Flags {
         self.contains(FlagsKind::DIRECT_WR_SUP)
     }
 
+    pub(crate) fn set_direct_wr_enabled(&self, enabled: bool) {
+        if enabled {
+            self.insert(FlagsKind::DIRECT_WR_SUP);
+        } else {
+            self.remove(FlagsKind::DIRECT_WR_SUP);
+        }
+    }
+
     pub(crate) fn is_read_paused(&self) -> bool {
         self.contains(FlagsKind::RD_PAUSED)
     }

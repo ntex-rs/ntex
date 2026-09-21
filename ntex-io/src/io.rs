@@ -277,12 +277,16 @@ impl<F> Io<F> {
     #[inline]
     /// Replaces this connection's shared I/O configuration.
     ///
-    /// The write-buffer page size is updated immediately. Existing allocated
-    /// buffers and an already registered timer are not recreated.
+    /// The write-buffer page size and eager-write enablement are updated
+    /// immediately. Existing allocated buffers and an already registered timer
+    /// are not recreated.
     pub fn set_config<T: Into<SharedCfg>>(&self, cfg: T) {
         unsafe {
             let cfg = cfg.into().get::<IoConfig>();
             self.st().buffer.set_page_size(cfg.write_page_size());
+            self.st()
+                .flags
+                .set_direct_wr_enabled(cfg.write_buf_threshold() > 0);
             self.st().cfg.replace(cfg);
         }
     }
@@ -1346,6 +1350,23 @@ mod tests {
             lazy(|cx| io.poll_status_update(cx)).await,
             Poll::Ready(IoStatusUpdate::PeerGone(None))
         ));
+    }
+
+    #[ntex::test]
+    async fn set_config_updates_eager_write_support() {
+        let io = Io::new(
+            IoTest::create().0,
+            SharedCfg::new("SRV").add(IoConfig::new().set_write_buf_threshold(0)),
+        );
+        assert!(!io.st().flags.is_direct_wr_enabled());
+
+        io.set_config(SharedCfg::new("SRV").add(IoConfig::new().set_write_buf_threshold(1024)));
+        assert!(io.st().flags.is_direct_wr_enabled());
+        assert_eq!(io.cfg().write_buf_threshold(), 1024);
+
+        io.set_config(SharedCfg::new("SRV").add(IoConfig::new().set_write_buf_threshold(0)));
+        assert!(!io.st().flags.is_direct_wr_enabled());
+        assert_eq!(io.cfg().write_buf_threshold(), 0);
     }
 
     #[ntex::test]

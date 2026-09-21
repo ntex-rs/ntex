@@ -344,9 +344,9 @@ impl IoConfig {
     /// from the default 16 KiB page size when [`IoConfig::new`] is called.
     /// Changing the page size later does not recalculate this threshold.
     ///
-    /// Whether eager-write support is enabled is captured when the `Io` object
-    /// is created. Replacing an active connection's configuration with
-    /// [`Io::set_config`](crate::Io::set_config) does not toggle that support.
+    /// Replacing an active connection's configuration with
+    /// [`Io::set_config`](crate::Io::set_config) enables or disables eager
+    /// writes according to the replacement threshold.
     #[must_use]
     pub fn set_write_buf_threshold(mut self, size: usize) -> Self {
         self.write_buf_threshold = size;
