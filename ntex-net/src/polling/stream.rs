@@ -171,9 +171,7 @@ impl Handler for StreamOpsHandler {
         self.inner.with(|streams| {
             if let Some(io) = streams.get_mut(id) {
                 log::trace!("{}: {:?}-Failed err({err:?})", io.tag(), io.fd());
-                if !io.ctx.is_stopped() {
-                    io.ctx.stop(Some(err));
-                }
+                io.ctx.stop(Some(err));
             }
         });
     }
@@ -234,9 +232,7 @@ impl StreamOpsInner {
         let fd = item.fd();
         log::trace!("{}: {fd:?}-Close flags: {:?}", item.tag(), item.flags);
 
-        if !item.ctx.is_stopped() {
-            item.ctx.stop(None);
-        }
+        item.ctx.stop(None);
         self.api.detach(fd, id);
 
         if item.flags.contains(Flags::DROPPED_SEC) {
@@ -282,9 +278,7 @@ impl StreamOpsInner {
                     IdType::Stream(id) => self.drop_stream(id, &mut streams),
                     IdType::Weak(id) => StreamOpsInner::drop_weak_stream(id, &mut streams),
                     IdType::Write(id) => {
-                        if let Some(item) = streams.get_mut(id as usize)
-                            && !item.ctx.is_stopped()
-                        {
+                        if let Some(item) = streams.get_mut(id as usize) {
                             item.write();
                         }
                     }

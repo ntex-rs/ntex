@@ -2,6 +2,8 @@
 
 ## [4.1.0] - 2026-09-21
 
+* Drop unreachable IoContext::shutdown() step from io task shutdown
+
 * Support eager writes with the IOCP backend
 
 * Update IoContext::update_read_status() api usage

@@ -60,7 +60,10 @@ pub struct FrameReadRate {
     pub timeout: Seconds,
     /// Maximum cumulative timeout for the frame.
     pub max_timeout: Seconds,
-    /// Number of bytes that extends the deadline by one `timeout` period.
+    /// Byte-progress threshold that must be exceeded to extend the deadline.
+    ///
+    /// Progress must be strictly greater than this value for another `timeout`
+    /// period to be granted.
     pub rate: u32,
 }
 
@@ -68,12 +71,23 @@ pub struct FrameReadRate {
 #[derive(Copy, Clone, Debug)]
 pub struct BufConfig {
     /// Buffered byte count at which backpressure is enabled.
+    ///
+    /// This is also the capacity of a freshly allocated buffer, the growth
+    /// increment used by [`resize_min`](Self::resize_min), and the free
+    /// capacity guaranteed by [`resize`](Self::resize).
     pub high: usize,
-    /// Minimum free capacity requested when resizing a read buffer.
+    /// Free-capacity threshold below which [`resize`](Self::resize) grows a
+    /// buffer.
+    ///
+    /// This is the trigger for a resize, not the amount of free capacity the
+    /// resize produces; see [`resize`](Self::resize).
     ///
     /// Buffers whose capacity is not greater than this value are not cached.
     pub low: usize,
-    /// Buffered byte count at which active write backpressure is released.
+    /// Buffered byte count at which active backpressure is released.
+    ///
+    /// For [`IoConfig::write_buf`] this releases write backpressure; for
+    /// [`IoConfig::read_buf`] it releases read backpressure.
     ///
     /// This is set to half of `high` by the configuration builders.
     pub half: usize,
@@ -167,7 +181,7 @@ impl IoConfig {
     }
 
     #[inline]
-    /// The write buffer threshold that triggers earlier sending.
+    /// Returns the buffered write size that triggers an earlier send.
     pub fn write_buf_threshold(&self) -> usize {
         self.write_buf_threshold
     }
@@ -256,10 +270,15 @@ impl IoConfig {
     /// Sets read-buffer watermarks and cache capacity.
     ///
     /// `high_watermark` enables read backpressure when the application-facing
-    /// buffer reaches this size and is also used as the allocation growth
-    /// increment. It must be greater than zero. `low_watermark` is the minimum
-    /// free capacity requested when resizing a read buffer. `cache_size` limits
-    /// the number of eligible buffers retained per thread and configuration.
+    /// buffer reaches this size. It is also the capacity of a freshly
+    /// allocated read buffer, the increment by which buffers grow, and the
+    /// free capacity a resize guarantees. It must be greater than zero.
+    /// `low_watermark` is the free-capacity threshold below which a read
+    /// buffer is grown. `cache_size` limits the number of eligible buffers
+    /// retained per thread and configuration.
+    ///
+    /// Read backpressure is released once the application-facing buffer falls
+    /// to half of `high_watermark`.
     ///
     /// By default, the high watermark is approximately 16 KiB and the low
     /// watermark is approximately 512 bytes.
@@ -406,7 +425,11 @@ impl BufConfig {
     }
 
     #[inline]
-    /// Ensures that the buffer has at least the configured low watermark free.
+    /// Ensures that the buffer has at least `high` bytes of free capacity.
+    ///
+    /// The buffer is grown only when its free capacity has fallen below `low`;
+    /// `low` is the trigger for the resize, while `high` is the amount of free
+    /// capacity the resize guarantees.
     pub fn resize(&self, buf: &mut BytesMut) {
         if buf.remaining_mut() < self.low {
             self.resize_min(buf, self.high);

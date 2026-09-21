@@ -43,15 +43,9 @@ impl Handle for HandleWrapper {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum Status {
-    Shutdown,
-    Terminate,
-}
-
 async fn run(ctl: StreamCtl, context: ntex_io::IoContext) {
     // Handle io read readiness
-    let st = poll_fn(|cx| {
+    poll_fn(|cx| {
         let mut modify = false;
         let mut readable = false;
         let mut writable = false;
@@ -75,8 +69,7 @@ async fn run(ctl: StreamCtl, context: ntex_io::IoContext) {
                 writable = true;
                 Poll::Pending
             }
-            Poll::Ready(Readiness::Shutdown) => Poll::Ready(Status::Shutdown),
-            Poll::Ready(Readiness::Terminate) => Poll::Ready(Status::Terminate),
+            Poll::Ready(Readiness::Shutdown | Readiness::Terminate) => Poll::Ready(()),
             Poll::Pending => {
                 modify = true;
                 Poll::Pending
@@ -89,24 +82,13 @@ async fn run(ctl: StreamCtl, context: ntex_io::IoContext) {
 
         if read.is_pending() && write.is_pending() {
             Poll::Pending
-        } else if write.is_ready() {
-            write
         } else {
-            Poll::Ready(Status::Terminate)
+            Poll::Ready(())
         }
     })
     .await;
 
     log::trace!("{}: Shuting down io", context.tag());
-    if !context.is_stopped() {
-        let flush = st == Status::Shutdown;
-        poll_fn(|cx| {
-            ctl.interest(true, true);
-            context.shutdown(flush, cx)
-        })
-        .await;
-    }
-
     let result = ctl.shutdown().await;
     log::trace!("{}: Shutdown complete {result:?}", context.tag());
     context.stopped(result.err());

@@ -2,6 +2,8 @@
 
 ## [4.1.0] - 2026-09-21
 
+* Remove IoContext::shutdown(), it is unreachable in every transport impl
+
 * Fix api consistency for IoContext::update_read_status()
 
 * Fix peer EOF force-terminates instead of gracefully closing

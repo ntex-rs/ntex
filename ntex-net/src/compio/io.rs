@@ -118,11 +118,7 @@ where
         }
     }
 
-    log::trace!("{}: Shuting down io {:?}", ctx.tag(), ctx.is_stopped());
-    if !ctx.is_stopped() {
-        let result = poll_fn(|cx| ctx.shutdown(true, cx)).await;
-        log::trace!("{}: Shuting down complete {result:?}", ctx.tag());
-    }
+    log::trace!("{}: Read task shutdown", ctx.tag());
 }
 
 async fn read_buf<T>(io: &T, buf: BytesMut) -> BufResult<usize, CompioBuf>

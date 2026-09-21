@@ -32,8 +32,6 @@ bitflags::bitflags! {
         const WR_FLUSH            = 0b0000_0001_0000_0000;
         /// write task paused
         const WR_PAUSED           = 0b0000_0010_0000_0000;
-        /// write any data and notify dispatcher
-        const WR_NOTIFY           = 0b0000_0100_0000_0000;
         /// write op is scheduled
         const WR_SEND_OP          = 0b0000_1000_0000_0000;
 
@@ -130,10 +128,6 @@ impl Flags {
         self.contains(FlagsKind::IO_STOPPING_FILTERS)
     }
 
-    pub(crate) fn is_write_notify(&self) -> bool {
-        self.contains(FlagsKind::WR_NOTIFY)
-    }
-
     pub(crate) fn is_write_flush(&self) -> bool {
         self.intersects(FlagsKind::WR_FLUSH)
     }
@@ -211,10 +205,6 @@ impl Flags {
         self.insert(FlagsKind::WR_PAUSED);
     }
 
-    pub(crate) fn set_write_notify(&self) {
-        self.insert(FlagsKind::WR_NOTIFY);
-    }
-
     pub(crate) fn set_wr_send_scheduled(&self) {
         self.insert(FlagsKind::WR_SEND_OP);
     }
@@ -267,10 +257,6 @@ impl Flags {
 
     pub(crate) fn unset_write_paused(&self) {
         self.remove(FlagsKind::WR_PAUSED);
-    }
-
-    pub(crate) fn unset_write_notify(&self) {
-        self.remove(FlagsKind::WR_NOTIFY);
     }
 
     pub(crate) fn unset_wr_send_scheduled(&self) {

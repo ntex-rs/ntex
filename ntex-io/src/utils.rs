@@ -5,12 +5,14 @@ use ntex_util::task::LocalWaker;
 
 use crate::{Filter, Io, IoBoxed, IoCallbacks};
 
-/// Decoded item from buffer
-#[doc(hidden)]
+/// Result of a single decode attempt.
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Decoded<T> {
+    /// The decoded item, or `None` when the codec needs more input.
     pub item: Option<T>,
+    /// Bytes left in the application-facing read buffer after the attempt.
     pub remains: usize,
+    /// Bytes consumed from the read buffer by the attempt.
     pub consumed: usize,
 }
 

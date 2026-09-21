@@ -307,7 +307,7 @@ impl Handler for StreamOpsHandler {
                 }
                 Operation::Poll { id } => {
                     if let Some(item) = st.streams.get_mut(id)
-                        && !item.flags.contains(Flags::RD_MORE) && !item.ctx.is_stopped() {
+                        && !item.flags.contains(Flags::RD_MORE) {
                             item.ctx.stop(res.err());
                         }
                 }

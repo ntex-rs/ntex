@@ -46,7 +46,12 @@ impl IoRef {
     }
 
     #[inline]
-    /// Checks whether the I/O stream is closed.
+    /// Checks whether the I/O stream is closed or closing.
+    ///
+    /// This becomes `true` as soon as graceful shutdown or force termination
+    /// starts, so buffered output may still be flushing. Use
+    /// [`is_stopping`](Self::is_stopping) and
+    /// [`is_terminating`](Self::is_terminating) to tell the two paths apart.
     pub fn is_closed(&self) -> bool {
         self.0.flags.is_closed()
     }
@@ -109,11 +114,14 @@ impl IoRef {
     #[inline]
     /// Encodes an item into the write buffer.
     ///
-    /// This method reports codec errors only. If the connection is already
-    /// closing or closed, the item is not encoded and the call returns
-    /// `Ok(())`. Use [`encode_slice`](Self::encode_slice) or
-    /// [`encode_bytes`](Self::encode_bytes) when transport-state errors must be
-    /// observable.
+    /// This method reports codec errors only. Any `io::Error` produced while
+    /// buffering is discarded: if the connection is already closing or closed
+    /// the item is not encoded, and a transport or filter error raised by an
+    /// eager backend write is dropped. Such errors remain observable later
+    /// through [`crate::Io::poll_flush`] or [`crate::Io::poll_recv`]. Use
+    /// [`encode_slice`](Self::encode_slice) or
+    /// [`encode_bytes`](Self::encode_bytes) when they must be observed at the
+    /// call site.
     pub fn encode<U>(&self, item: U::Item, codec: &U) -> Result<(), <U as Encoder>::Error>
     where
         U: Encoder,
@@ -144,6 +152,11 @@ impl IoRef {
     }
 
     /// Attempts to decode a frame from the read buffer.
+    ///
+    /// This mutates the read state: it clears read readiness, and consuming
+    /// enough bytes may release read backpressure. It also cancels a pause
+    /// installed by [`Io::pause`](crate::Io::pause) and wakes the transport
+    /// read task.
     pub fn decode<U>(
         &self,
         codec: &U,
@@ -160,6 +173,14 @@ impl IoRef {
     }
 
     /// Attempts to decode a frame from the read buffer.
+    ///
+    /// `Decoded::consumed` reports the bytes taken by this attempt and
+    /// `Decoded::remains` the bytes left in the application-facing read
+    /// buffer.
+    ///
+    /// Like [`decode`](Self::decode), this mutates the read state: it clears
+    /// read readiness, may release read backpressure, and cancels a pause
+    /// installed by [`Io::pause`](crate::Io::pause).
     pub fn decode_item<U>(
         &self,
         codec: &U,
@@ -234,8 +255,12 @@ impl IoRef {
 
     /// Provides mutable access to the application-facing read buffer.
     ///
-    /// Consuming bytes may release read backpressure and wake the transport
-    /// read task.
+    /// This mutates the read state whether or not `f` consumes anything. Read
+    /// readiness is always cleared, and a pause installed by
+    /// [`Io::pause`](crate::Io::pause) is always cancelled, waking the
+    /// transport read task. Consuming enough bytes additionally releases read
+    /// backpressure. Use [`crate::Io::poll_read_more`] rather than this method
+    /// to check whether data is available.
     pub fn with_read_buf<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
@@ -455,8 +480,10 @@ impl IoRef {
     /// Returns a future that resolves when the complete I/O stream disconnects.
     ///
     /// A clean peer read EOF does not resolve this future because the write
-    /// half remains usable. It resolves when local shutdown or force
-    /// termination closes the complete transport.
+    /// half remains usable. It resolves once the transport backend reports
+    /// that teardown has finished, which happens after local shutdown or
+    /// force termination. [`terminate`](Self::terminate) requests that
+    /// teardown but does not itself resolve the future.
     pub fn on_disconnect(&self) -> crate::OnDisconnect {
         crate::OnDisconnect::new(self.0.clone())
     }

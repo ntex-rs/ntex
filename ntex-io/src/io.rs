@@ -536,6 +536,12 @@ impl<F> Io<F> {
 
     #[inline]
     /// Pauses the read task.
+    ///
+    /// There is no explicit resume. The pause is cancelled implicitly by any
+    /// operation that touches the read buffer or asks for more input, namely
+    /// [`read_more`](Self::read_more), [`poll_read_more`](Self::poll_read_more),
+    /// [`IoRef::decode`], [`IoRef::decode_item`], and [`IoRef::with_read_buf`].
+    /// Releasing read backpressure cancels it as well.
     pub fn pause(&self) {
         let st = self.st();
         if !st.flags.is_read_paused() {
@@ -810,9 +816,13 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Pauses the read task.
+    /// Pauses the read task and polls for a status update.
     ///
-    /// Returns status updates.
+    /// This is [`pause`](Self::pause) followed by
+    /// [`poll_status_update`](Self::poll_status_update), and the pause is
+    /// cancelled under the same conditions described on `pause`. Callers that
+    /// must stay paused should avoid touching the read buffer until they are
+    /// ready to resume.
     pub fn poll_read_pause(&self, cx: &mut Context<'_>) -> Poll<IoStatusUpdate> {
         self.pause();
         self.poll_status_update(cx)
@@ -912,7 +922,9 @@ impl<F> Drop for Io<F> {
 /// A future that resolves when the complete I/O stream disconnects.
 ///
 /// A clean peer read EOF does not resolve this future while the write half
-/// remains usable.
+/// remains usable. It resolves only once the transport backend reports that
+/// teardown has finished; requesting shutdown or termination is not by itself
+/// enough.
 #[must_use = "OnDisconnect do nothing unless polled"]
 pub struct OnDisconnect {
     token: usize,

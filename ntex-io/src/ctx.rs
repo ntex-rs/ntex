@@ -12,6 +12,18 @@ use crate::{Flags, Id, IoRef, IoTaskStatus, Readiness, io::IoState};
 /// [`update_read_status`](Self::update_read_status) and
 /// [`update_write_status`](Self::update_write_status). Their return value tells
 /// the task whether to continue, pause until notified, or stop.
+///
+/// # Shutdown
+///
+/// A transport task runs until [`poll_read_ready`](Self::poll_read_ready) or
+/// [`poll_write_ready`](Self::poll_write_ready) reports
+/// [`Readiness::Shutdown`]/[`Readiness::Terminate`], or until a status update
+/// returns [`IoTaskStatus::Stop`]. All of those imply
+/// [`is_stopped`](Self::is_stopped), so once the loop exits there is nothing
+/// left for the task to drain: buffered output has already been written, because
+/// an empty write buffer is a precondition of entering graceful shutdown. The
+/// task should therefore close the transport immediately and report the outcome
+/// through [`stopped`](Self::stopped).
 pub struct IoContext(IoRef);
 
 impl fmt::Debug for IoContext {
@@ -60,7 +72,12 @@ impl IoContext {
         self.0.filter().poll_write_ready(cx)
     }
 
-    /// Stops the I/O stream.
+    /// Force-terminates the I/O stream.
+    ///
+    /// This is the immediate path, not a graceful shutdown: pending
+    /// application work is not drained. Call
+    /// [`stopped`](Self::stopped) afterwards, once transport teardown has
+    /// actually finished.
     pub fn stop(&self, e: Option<io::Error>) {
         self.st().terminate_connection(e);
     }
@@ -68,11 +85,6 @@ impl IoContext {
     /// Marks backend transport teardown as complete.
     pub fn stopped(&self, e: Option<io::Error>) {
         self.st().stop_connection(e);
-    }
-
-    /// Checks if the I/O stream is stopped.
-    pub fn is_stopped(&self) -> bool {
-        self.st().flags.is_closed()
     }
 
     /// Takes a buffer for the next transport read.
@@ -211,10 +223,11 @@ impl IoContext {
 
     /// Updates the write status.
     ///
-    /// `Ok(true)` indicates that one or more bytes were successfully written
-    /// to the transport; `Ok(false)` indicates no write progress. An error
-    /// terminates the connection. The returned [`IoTaskStatus`] instructs the
-    /// write task to continue immediately, pause until notified, or stop.
+    /// `Ok(_)` reports that the write attempt completed without error, where
+    /// `true` means one or more bytes reached the transport and `false` means
+    /// no write progress. An error terminates the connection. The returned
+    /// [`IoTaskStatus`] instructs the write task to continue immediately, pause
+    /// until notified, or stop.
     pub fn update_write_status(&self, status: io::Result<bool>) -> IoTaskStatus {
         let st = &self.st();
 
@@ -227,7 +240,7 @@ impl IoContext {
         );
 
         match status {
-            Ok(written) => {
+            Ok(_) => {
                 let len = st.buffer.write_buf_size();
                 // Full flush is active
                 if st.flags.is_write_flush() {
@@ -238,13 +251,6 @@ impl IoContext {
                 } else if st.flags.is_wr_backpressure() && st.should_disable_wr_backpressure(len) {
                     // Write backpressure is active and write buffer is below threshold
                     st.wake_dispatch_task();
-                }
-
-                // Write notify is enabled
-                if written && st.flags.is_write_notify() {
-                    st.flags.unset_write_notify();
-                    st.wake_read_task();
-                    st.wake_write_task();
                 }
 
                 if st.flags.is_closed() {
@@ -265,31 +271,6 @@ impl IoContext {
                 st.terminate_connection(Some(err));
                 IoTaskStatus::Stop
             }
-        }
-    }
-
-    /// Polls transport-task shutdown state.
-    ///
-    /// If `flush` is `true`, this first waits until the write task is paused,
-    /// indicating that currently buffered output has been handled. It then
-    /// waits for the connection to close. The context's waker is registered
-    /// while pending.
-    pub fn shutdown(&self, flush: bool, cx: &mut Context<'_>) -> Poll<()> {
-        let st = self.st();
-        if flush && !st.flags.is_stopping() {
-            if st.flags.is_write_paused() {
-                return Poll::Ready(());
-            }
-            st.flags.set_write_notify();
-            st.read_task.register(cx.waker());
-            st.write_task.register(cx.waker());
-            Poll::Pending
-        } else if !st.flags.is_closed() {
-            st.read_task.register(cx.waker());
-            st.write_task.register(cx.waker());
-            Poll::Pending
-        } else {
-            Poll::Ready(())
         }
     }
 
@@ -389,14 +370,12 @@ mod tests {
             ctx.update_read_status(ctx.get_read_buf(), Poll::Pending),
             IoTaskStatus::Stop
         );
-        assert!(!ctx.is_stopped());
         assert!(lazy(|cx| state.poll_read_more(cx)).await.is_pending());
 
         assert_eq!(
             ctx.update_read_status(ctx.get_read_buf(), Poll::Ready(Ok(0))),
             IoTaskStatus::Pause
         );
-        assert!(!ctx.is_stopped());
         assert!(matches!(
             lazy(|cx| state.poll_read_more(cx)).await,
             Poll::Ready(Ok(None))

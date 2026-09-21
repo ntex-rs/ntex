@@ -39,31 +39,16 @@ impl Handle for HandleWrapper {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum Status {
-    Shutdown,
-    Terminate,
-}
-
 async fn run(ctl: StreamCtl, ctx: IoContext) {
     // Handle io readiness
-    let st = poll_fn(|cx| poll_readiness(&ctl, &ctx, cx)).await;
-
-    if !ctx.is_stopped() {
-        let flush = st == Status::Shutdown;
-        poll_fn(|cx| {
-            let _ = poll_readiness(&ctl, &ctx, cx);
-            ctx.shutdown(flush, cx)
-        })
-        .await;
-    }
+    poll_fn(|cx| poll_readiness(&ctl, &ctx, cx)).await;
 
     let result = ctl.shutdown().await;
     ctx.stopped(result.err());
 }
 
 /// Handle ctx readiness
-fn poll_readiness(ctl: &StreamCtl, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<Status> {
+fn poll_readiness(ctl: &StreamCtl, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<()> {
     let read = match ctx.poll_read_ready(cx) {
         Poll::Ready(Readiness::Ready) => {
             ctl.resume_read();
@@ -81,16 +66,13 @@ fn poll_readiness(ctl: &StreamCtl, ctx: &IoContext, cx: &mut Context<'_>) -> Pol
             ctl.resume_write();
             Poll::Pending
         }
-        Poll::Ready(Readiness::Shutdown) => Poll::Ready(Status::Shutdown),
-        Poll::Ready(Readiness::Terminate) => Poll::Ready(Status::Terminate),
+        Poll::Ready(Readiness::Shutdown | Readiness::Terminate) => Poll::Ready(()),
         Poll::Pending => Poll::Pending,
     };
 
     if read.is_pending() && write.is_pending() {
         Poll::Pending
-    } else if write.is_ready() {
-        write
     } else {
-        Poll::Ready(Status::Terminate)
+        Poll::Ready(())
     }
 }

@@ -227,24 +227,7 @@ where
     })
     .await;
 
-    log::trace!("{}: Shuting down io {:?}", ctx.tag(), ctx.is_stopped());
-    if !ctx.is_stopped() {
-        let flush = st == Status::Shutdown;
-        poll_fn(|cx| match ready!(io.poll_write_ready(cx)) {
-            Ok(()) => {
-                if write(io.as_ref(), &ctx, false) == WrtStatus::Terminate {
-                    Poll::Ready(())
-                } else {
-                    ctx.shutdown(flush, cx)
-                }
-            }
-            Err(err) => {
-                ctx.update_write_status(Err(err));
-                Poll::Ready(())
-            }
-        })
-        .await;
-    }
+    log::trace!("{}: Shuting down io", ctx.tag());
 
     let result = match st {
         Status::Shutdown => io.shutdown(),
