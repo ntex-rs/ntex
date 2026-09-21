@@ -58,7 +58,12 @@ where
     type Service = BufferService<St, Req, Res, Err>;
 
     fn create(&self, _: &St, service: S) -> Self::Service {
-        BufferService::new(self.buf_size, PipelineState::new(service))
+        let service = BufferService::new(self.buf_size, PipelineState::new(service));
+        if self.cancel_on_shutdown {
+            service.cancel_on_shutdown()
+        } else {
+            service
+        }
     }
 }
 
@@ -256,7 +261,7 @@ where
 mod tests {
     #![allow(clippy::unused_async_trait_impl)]
     use ntex_service::{Pipeline, apply, fn_factory};
-    use std::{rc::Rc, time::Duration};
+    use std::{cell::RefCell, rc::Rc, time::Duration};
 
     use super::*;
     use crate::{future::lazy, task::LocalWaker};
@@ -291,6 +296,34 @@ mod tests {
             self.0.ready.set(false);
             self.0.count.set(self.0.count.get() + 1);
             Ok(())
+        }
+    }
+
+    struct PendingService {
+        inner: Rc<PendingInner>,
+        release: RefCell<Option<oneshot::Receiver<()>>>,
+    }
+
+    struct PendingInner {
+        started: Cell<bool>,
+        completed: Cell<bool>,
+        shutdown: Cell<bool>,
+    }
+
+    impl Service<(), ()> for PendingService {
+        type Res = ();
+        type Error = ();
+
+        async fn call(&self, (): (), _: Ctx<'_, Self, ()>) -> Result<(), ()> {
+            self.inner.started.set(true);
+            let release = self.release.borrow_mut().take().unwrap();
+            release.recv().await.unwrap();
+            self.inner.completed.set(true);
+            Ok(())
+        }
+
+        async fn shutdown(&self, _: Ctx<'_, Self, ()>) {
+            self.inner.shutdown.set(true);
         }
     }
 
@@ -456,5 +489,76 @@ mod tests {
 
         crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(inner.count.get(), 2);
+    }
+
+    #[ntex::test]
+    async fn middleware_cancels_buffered_requests_on_shutdown() {
+        let inner = Rc::new(Inner {
+            ready: Cell::new(false),
+            waker: LocalWaker::default(),
+            count: Cell::new(0),
+        });
+        let inner2 = inner.clone();
+
+        let srv = apply(
+            Buffer::default().buf_size(1).cancel_on_shutdown(),
+            fn_factory(async move |(): &()| Ok::<_, ()>(TestService(inner2.clone()))),
+        )
+        .pipeline(())
+        .await
+        .unwrap();
+
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+
+        let canceled = Rc::new(Cell::new(false));
+        let canceled2 = canceled.clone();
+        let srv2 = srv.bind();
+        ntex::rt::spawn(async move {
+            canceled2.set(matches!(
+                srv2.call(()).await,
+                Err(BufferServiceError::RequestCanceled)
+            ));
+        });
+
+        crate::time::sleep(Duration::from_millis(25)).await;
+        srv.shutdown().await;
+        crate::time::sleep(Duration::from_millis(25)).await;
+
+        assert!(canceled.get());
+        assert_eq!(inner.count.get(), 0);
+    }
+
+    #[ntex::test]
+    async fn shutdown_with_in_flight_request() {
+        let inner = Rc::new(PendingInner {
+            started: Cell::new(false),
+            completed: Cell::new(false),
+            shutdown: Cell::new(false),
+        });
+        let (release_tx, release_rx) = oneshot::channel();
+        let service = PendingService {
+            inner: inner.clone(),
+            release: RefCell::new(Some(release_rx)),
+        };
+        let srv = Pipeline::new((), BufferService::new(1, PipelineState::new(service)));
+
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+
+        let srv2 = srv.bind();
+        ntex::rt::spawn(async move {
+            srv2.call(()).await.unwrap();
+        });
+        crate::time::sleep(Duration::from_millis(25)).await;
+
+        assert!(inner.started.get());
+        assert!(!inner.completed.get());
+        assert!(lazy(|cx| srv.poll_shutdown(cx)).await.is_ready());
+        assert!(inner.shutdown.get());
+        assert!(!inner.completed.get());
+
+        release_tx.send(()).unwrap();
+        crate::time::sleep(Duration::from_millis(25)).await;
+
+        assert!(inner.completed.get());
     }
 }

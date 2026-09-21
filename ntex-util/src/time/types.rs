@@ -15,8 +15,9 @@ impl Millis {
     pub const ONE_SEC: Millis = Millis(1_000);
 
     #[inline]
+    /// Converts seconds to milliseconds, saturating at [`u32::MAX`].
     pub const fn from_secs(secs: u32) -> Millis {
-        Millis(secs * 1000)
+        Millis(secs.saturating_mul(1000))
     }
 
     #[inline]
@@ -121,8 +122,8 @@ impl From<std::time::Duration> for Millis {
     #[inline]
     fn from(d: std::time::Duration) -> Millis {
         Self(d.as_millis().try_into().unwrap_or_else(|_| {
-            log::error!("time Duration is too large {d:?}");
-            1 << 31
+            log::error!("Duration is too large for Millis: {d:?}");
+            u32::MAX
         }))
     }
 }
@@ -222,7 +223,11 @@ impl From<u16> for Seconds {
 impl From<i32> for Seconds {
     #[inline]
     fn from(i: i32) -> Seconds {
-        Seconds(if i < 0 { 0 } else { i as u16 })
+        Seconds(if i < 0 {
+            0
+        } else {
+            (i as u32).min(u32::from(u16::MAX)) as u16
+        })
     }
 }
 
@@ -277,10 +282,11 @@ mod tests {
         assert_eq!(m.0, 1000);
 
         let m = Millis::from(Duration::from_secs(u64::MAX));
-        assert_eq!(m.0, 2_147_483_648);
+        assert_eq!(m.0, u32::MAX);
 
         let m = Millis::from_secs(1);
         assert_eq!(m.0, 1000);
+        assert_eq!(Millis::from_secs(u32::MAX).0, u32::MAX);
 
         let m = Millis(0);
         assert_eq!(m.map(|m| m + Millis(1)), None);
@@ -302,6 +308,7 @@ mod tests {
 
         let s = Seconds::from(-10i32);
         assert_eq!(s.0, 0);
+        assert_eq!(Seconds::from(i32::MAX).0, u16::MAX);
 
         let s = Seconds::checked_new(10);
         assert_eq!(s.0, 10);

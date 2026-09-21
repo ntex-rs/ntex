@@ -1,8 +1,22 @@
 # Changes
 
-## [4.0.1] - 2026-09-18
+## [4.1.0] - 2026-09-21
 
-* Api docs improvements
+* Propagate `Buffer::cancel_on_shutdown()` to the created service
+
+* Improve API documentation for channels, timers, futures, and services
+
+* Align service timeout ordering with `time::timeout()`
+
+* Remove unnecessary `Default` bound from `condition::Waiter` future
+
+* Wake pending `mpsc` receive operations when the receiver is closed
+
+* Recompute `bstream` sender readiness when its buffer threshold changes
+
+* Saturate overflowing `Millis` and `Seconds` conversions
+
+* Remove `Clone` from `OneRequestService` to preserve its single-call guarantee
 
 ## [4.0.0] - 2026-09-14
 

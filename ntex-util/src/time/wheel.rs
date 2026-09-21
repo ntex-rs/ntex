@@ -67,54 +67,60 @@ const fn as_millis(dur: Duration) -> u64 {
     dur.as_secs() * 1_000 + (dur.subsec_millis() as u64)
 }
 
-/// Returns an instant corresponding to “now”.
+/// Returns a cached approximation of the current instant.
 ///
-/// Resolution is 5ms
+/// The cached value is refreshed at roughly 5 millisecond intervals.
 #[inline]
 pub fn now() -> Instant {
     TIMER.with(|t| t.with_mod(|inner| t.now(inner)))
 }
 
-/// Returns the system time corresponding to “now”.
+/// Returns a cached approximation of the current system time.
 ///
-/// Resolution is 5ms
+/// The cached value is refreshed at roughly 5 millisecond intervals.
 #[inline]
 pub fn system_time() -> SystemTime {
     TIMER.with(|t| t.with_mod(|inner| t.system_time(inner)))
 }
 
-/// Returns the system time corresponding to “now”.
+/// Returns the cached system time without starting the timer driver.
 ///
-/// If low resolution system time is not set, use system time.
-/// This method does not start timer driver.
+/// Before the cache has been initialized, this falls back to
+/// [`SystemTime::now`].
 #[inline]
 pub fn query_system_time() -> SystemTime {
     TIMER.with(|t| t.with_mod(|inner| t.system_time(inner)))
 }
 
 #[derive(Debug)]
+/// Handle to a timer registered with ntex's local timer wheel.
+///
+/// Dropping the handle cancels the timer. A handle may be reset and reused
+/// after it has elapsed.
 pub struct TimerHandle(NonZeroUsize);
 
 impl TimerHandle {
-    /// Createt new timer and return handle
+    /// Registers a timer that elapses after `millis`.
     pub fn new(millis: u64) -> Self {
         TIMER.with(|t| t.add_timer(millis))
     }
 
-    /// Resets the `TimerHandle` instance to a new deadline.
+    /// Restarts the timer with a new delay in milliseconds.
     pub fn reset(&self, millis: u64) {
         TIMER.with(|t| t.update_timer(self.0.get(), millis));
     }
 
-    /// Resets the `TimerHandle` instance to elapsed state.
+    /// Completes the timer immediately and wakes its registered task.
     pub fn elapse(&self) {
         TIMER.with(|t| t.remove_timer(self.0.get()));
     }
 
+    /// Returns `true` if this timer has elapsed.
     pub fn is_elapsed(&self) -> bool {
         TIMER.with(|t| t.with_mod(|m| m.timers[self.0.get()].bucket.is_none()))
     }
 
+    /// Polls until this timer has elapsed.
     pub fn poll_elapsed(&self, cx: &mut task::Context<'_>) -> Poll<()> {
         TIMER.with(|t| {
             t.with_mod(|inner| {

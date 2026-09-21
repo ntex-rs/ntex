@@ -1,12 +1,11 @@
-//! Service that limits number of in-flight async requests to 1.
+//! Middleware that permits one service call at a time.
 use std::{cell::Cell, future::poll_fn, task::Poll};
 
 use ntex_service::{Ctx, Middleware, Service};
 
 use crate::task::LocalWaker;
 
-/// `OneRequest` - service factory for service that can limit number of in-flight
-/// async requests to 1.
+/// Middleware that serializes calls to its wrapped service.
 #[derive(Copy, Clone, Default, Debug)]
 pub struct OneRequest;
 
@@ -22,7 +21,11 @@ impl<S, St> Middleware<S, St> for OneRequest {
     }
 }
 
-#[derive(Clone, Debug)]
+/// Service wrapper that allows only one call to run at a time.
+///
+/// This type is intentionally not cloneable. Cloning its readiness state would
+/// create another independent gate and allow calls to overlap.
+#[derive(Debug)]
 pub struct OneRequestService<S> {
     waker: LocalWaker,
     service: S,
@@ -30,6 +33,7 @@ pub struct OneRequestService<S> {
 }
 
 impl<S> OneRequestService<S> {
+    /// Wraps a service so that concurrent callers wait for the active call.
     pub fn new<St, Req>(service: S) -> Self
     where
         S: Service<St, Req>,

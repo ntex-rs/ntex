@@ -45,7 +45,8 @@ pub fn interval<T: Into<Millis>>(period: T) -> Interval {
 /// If the future completes before the duration has elapsed, then the completed
 /// value is returned. Otherwise, an error is returned and the future is
 /// canceled. A zero duration still represents an active timeout of at least
-/// one timer tick; use [`timeout_checked`] to disable the timeout with zero.
+/// one timer tick; use [`timeout_checked`] to disable the timeout with zero. If
+/// the future and timer are both ready during the same poll, the future wins.
 #[inline]
 pub fn timeout<T, U>(dur: U, future: T) -> Timeout<T>
 where
@@ -206,12 +207,19 @@ impl Deadline {
     }
 
     /// Returns `true` if `Deadline` has elapsed.
+    ///
+    /// A disabled zero-duration deadline is reported as elapsed here even
+    /// though polling it remains pending. Use this method to determine whether
+    /// there is an active future deadline to wait for.
     #[inline]
     pub fn is_elapsed(&self) -> bool {
         self.hnd.as_ref().is_none_or(TimerHandle::is_elapsed)
     }
 
     #[inline]
+    /// Polls until this deadline has elapsed.
+    ///
+    /// A zero-duration deadline remains pending until it is reset.
     pub fn poll_elapsed(&self, cx: &mut task::Context<'_>) -> Poll<()> {
         self.hnd
             .as_ref()

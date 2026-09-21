@@ -69,7 +69,7 @@ ntex-rt = "3.17.3"
 ntex-server = "4.1.1"
 ntex-service = "5.0.1"
 ntex-tls = "4.0.0"
-ntex-util = "4.0.1"
+ntex-util = "4.1.0"
 
 ntex-polling = "3.10.0"
 ntex-io-uring = "0.7.120"
