@@ -458,15 +458,10 @@ fn read(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<()> {
     loop {
         let mut buf = ctx.get_read_buf();
 
-        let (pending, result) = match io.poll_read_buf(cx, &mut buf) {
-            Poll::Ready(Ok(0)) => {
-                ctx.stop(None);
-                (false, Ok(0))
-            }
-            Poll::Ready(val) => (false, val),
-            Poll::Pending => (true, Ok(0)),
-        };
-        return match ctx.update_read_status(buf, result) {
+        let result = io.poll_read_buf(cx, &mut buf);
+        let pending = result.is_pending();
+        let result = ctx.update_read_status(buf, result);
+        return match result {
             IoTaskStatus::Io => {
                 if pending {
                     Poll::Pending

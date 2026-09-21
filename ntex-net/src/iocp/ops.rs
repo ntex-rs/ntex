@@ -73,7 +73,7 @@ impl ReadOperation {
                 let e = err.raw_os_error();
                 if e != Some(ERROR_NOT_FOUND as _) && e != Some(ERROR_OPERATION_ABORTED as _) {
                     self.ctx
-                        .update_read_status(self.buf.take().unwrap(), Err(err));
+                        .update_read_status(self.buf.take().unwrap(), Poll::Ready(Err(err)));
                     return true;
                 }
             }
@@ -117,20 +117,21 @@ impl ReadOperation {
 
             match winsock_result(result) {
                 Poll::Ready(Ok(())) => {
-                    if size == 0 {
-                        self.ctx.stop(None);
-                    } else {
+                    if size != 0 {
                         // SAFETY: windows tells us how many bytes it read
                         unsafe { buf.advance_mut(size as usize) };
                     }
-                    if self.ctx.update_read_status(buf, Ok(size as usize)) == IoTaskStatus::Io
+                    if self
+                        .ctx
+                        .update_read_status(buf, Poll::Ready(Ok(size as usize)))
+                        == IoTaskStatus::Io
                         && size != 0
                     {
                         continue;
                     }
                 }
                 Poll::Ready(Err(err)) => {
-                    self.ctx.update_read_status(buf, Err(err));
+                    self.ctx.update_read_status(buf, Poll::Ready(Err(err)));
                 }
                 Poll::Pending => {
                     self.buf = Some(buf);
@@ -158,18 +159,16 @@ impl ReadOperation {
         if let Some(mut buf) = rd.buf.take() {
             let st = match res {
                 Ok(size) => {
-                    if size == 0 {
-                        rd.ctx.stop(None);
-                    } else {
+                    if size != 0 {
                         // SAFETY: windows tells us how many bytes it read
                         unsafe { buf.advance_mut(size) };
                     }
-                    rd.ctx.update_read_status(buf, Ok(size))
+                    rd.ctx.update_read_status(buf, Poll::Ready(Ok(size)))
                 }
                 Err(err) if err.raw_os_error() == Some(ERROR_OPERATION_ABORTED as _) => {
-                    rd.ctx.update_read_status(buf, Ok(0))
+                    rd.ctx.update_read_status(buf, Poll::Pending)
                 }
-                Err(err) => rd.ctx.update_read_status(buf, Err(err)),
+                Err(err) => rd.ctx.update_read_status(buf, Poll::Ready(Err(err))),
             };
             if rd.flags.contains(Flags::CLOSING) {
                 Some(rd.id)

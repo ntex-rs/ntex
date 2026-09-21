@@ -1,5 +1,9 @@
 # Changes
 
+## [4.1.0] - 2026-09-21
+
+* Update IoContext::update_read_status() api usage
+
 ## [4.0.1] - 2026-09-18
 
 * Api docs improvements

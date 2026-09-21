@@ -506,18 +506,14 @@ impl StreamItem {
         #[cfg(feature = "trace")]
         log::trace!("{}: {fd:?}-Rdt sz() = {result:?}", self.tag());
 
-        let st = match result {
-            Poll::Ready(Ok(0)) => {
-                self.ctx.stop(None);
-                Ok(0)
-            }
+        match result {
+            Poll::Ready(Ok(0)) => self.ctx.update_read_status(buf, Poll::Ready(Ok(0))),
             Poll::Ready(Ok(n)) => {
                 unsafe { buf.advance_mut(n) };
-                Ok(n)
+                self.ctx.update_read_status(buf, Poll::Ready(Ok(n)))
             }
-            Poll::Ready(Err(err)) => Err(err),
-            Poll::Pending => Ok(0),
-        };
-        self.ctx.update_read_status(buf, st)
+            Poll::Ready(Err(err)) => self.ctx.update_read_status(buf, Poll::Ready(Err(err))),
+            Poll::Pending => self.ctx.update_read_status(buf, Poll::Pending),
+        }
     }
 }

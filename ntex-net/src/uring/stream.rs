@@ -189,7 +189,7 @@ impl Handler for StreamOpsHandler {
                         item.rd_op.take();
                         item.flags.remove(Flags::RD_CANCELING);
 
-                        let res = item.ctx.update_read_status(buf, Ok(0));
+                        let res = item.ctx.update_read_status(buf, Poll::Pending);
                         if item.flags.contains(Flags::RD_REISSUE) || res == IoTaskStatus::Io {
                             item.flags.remove(Flags::RD_REISSUE);
                             st.recv(id, false, &self.inner.api);
@@ -242,8 +242,6 @@ impl Handler for StreamOpsHandler {
                                 if size > 0 {
                                     // SAFETY: kernel tells us how many bytes it read
                                     unsafe { buf.advance_mut(size) };
-                                } else {
-                                    item.ctx.stop(None);
                                 }
                             }
 
@@ -258,7 +256,9 @@ impl Handler for StreamOpsHandler {
                                 st.recv_more(id, buf, &self.inner.api);
                             } else {
                                 item.flags.remove(Flags::RD_MORE);
-                                if item.ctx.update_read_status(buf, res) == IoTaskStatus::Io {
+                                if item.ctx.update_read_status(buf, Poll::Ready(res))
+                                    == IoTaskStatus::Io
+                                {
                                     st.recv(id, self.inner.api.is_new(), &self.inner.api);
                                 }
                             }

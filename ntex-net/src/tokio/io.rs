@@ -375,25 +375,21 @@ fn read<T: Stream + Unpin>(io: &T, ctx: &IoContext) -> Poll<IoTaskStatus> {
     let io_res = io.try_read(unsafe { &mut *(ptr::from_mut(buf.chunk_mut()) as *mut [u8]) });
 
     let mut pending = false;
-    let result = match io_res {
-        Ok(0) => {
-            ctx.stop(None);
-            Ok(0)
-        }
+    let status = match io_res {
+        Ok(0) => Poll::Ready(Ok(0)),
         Ok(n) => {
             // Safety: This is guaranteed to be the number of initialized
             // bytes due to the invariants provided by `try_read()`.
-            unsafe { buf.advance_mut(n) }
-            Ok(n)
+            unsafe { buf.advance_mut(n) };
+            Poll::Ready(Ok(n))
         }
         Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
             pending = true;
-            Ok(0)
+            Poll::Pending
         }
-        Err(e) => Err(e),
+        Err(e) => Poll::Ready(Err(e)),
     };
-
-    let result = ctx.update_read_status(buf, result);
+    let result = ctx.update_read_status(buf, status);
 
     #[cfg(feature = "trace")]
     log::trace!(
