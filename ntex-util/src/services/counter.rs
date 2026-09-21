@@ -2,9 +2,10 @@ use std::{cell::Cell, cell::RefCell, future::poll_fn, rc::Rc, task::Context, tas
 
 use crate::task::LocalWaker;
 
-/// Simple counter with ability to notify task on reaching specific number
+/// A shared count with an asynchronous capacity notification.
 ///
-/// Counter could be cloned, total count is shared across all clones.
+/// Clones use the same count and capacity, but each clone registers its own
+/// waiting task.
 #[derive(Debug)]
 pub struct Counter(usize, Rc<CounterInner>);
 
@@ -16,7 +17,7 @@ struct CounterInner {
 }
 
 impl Counter {
-    /// Create `Counter` instance and set max value.
+    /// Creates a counter with the specified capacity.
     pub fn new(capacity: usize) -> Self {
         let mut tasks = slab::Slab::new();
         let idx = tasks.insert(LocalWaker::new());
@@ -31,18 +32,21 @@ impl Counter {
         )
     }
 
-    /// Get counter guard.
+    /// Acquires one count and returns a guard that releases it on drop.
+    ///
+    /// This does not wait for capacity; call [`available`](Self::available)
+    /// first when exceeding the configured capacity is not acceptable.
     pub fn get(&self) -> CounterGuard {
         CounterGuard::new(self.1.clone())
     }
 
-    /// Set counter capacity
+    /// Changes the capacity and wakes tasks waiting for availability.
     pub fn set_capacity(&self, cap: usize) {
         self.1.capacity.set(cap);
         self.1.notify();
     }
 
-    /// Check is counter has free capacity.
+    /// Returns `true` if another count can be acquired without exceeding the capacity.
     pub fn is_available(&self) -> bool {
         self.1.count.get() < self.1.capacity.get()
     }
@@ -86,7 +90,7 @@ impl Counter {
         }
     }
 
-    /// Get total number of acquired counts
+    /// Returns the number of currently held guards.
     pub fn total(&self) -> usize {
         self.1.count.get()
     }
@@ -106,6 +110,9 @@ impl Drop for Counter {
 }
 
 #[derive(Debug)]
+/// An acquired counter slot.
+///
+/// Dropping the guard releases the slot and wakes availability waiters.
 pub struct CounterGuard(Rc<CounterInner>);
 
 impl CounterGuard {

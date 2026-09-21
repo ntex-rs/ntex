@@ -4,7 +4,7 @@
 
 * Propagate `Buffer::cancel_on_shutdown()` to the created service
 
-* Api docs improvements
+* Improve API documentation for channels, timers, futures, and services
 
 ## [4.0.0] - 2026-09-14
 

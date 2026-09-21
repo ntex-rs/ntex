@@ -206,12 +206,19 @@ impl Deadline {
     }
 
     /// Returns `true` if `Deadline` has elapsed.
+    ///
+    /// A disabled zero-duration deadline is reported as elapsed here even
+    /// though polling it remains pending. Use this method to determine whether
+    /// there is an active future deadline to wait for.
     #[inline]
     pub fn is_elapsed(&self) -> bool {
         self.hnd.as_ref().is_none_or(TimerHandle::is_elapsed)
     }
 
     #[inline]
+    /// Polls until this deadline has elapsed.
+    ///
+    /// A zero-duration deadline remains pending until it is reset.
     pub fn poll_elapsed(&self, cx: &mut task::Context<'_>) -> Poll<()> {
         self.hnd
             .as_ref()

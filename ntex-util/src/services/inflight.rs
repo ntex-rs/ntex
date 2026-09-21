@@ -1,18 +1,21 @@
-//! Service that limits number of in-flight async requests.
+//! Middleware for limiting concurrent service calls.
 use ntex_service::{Ctx, Middleware, Service};
 
 use super::counter::Counter;
 
-/// `InFlight` - service factory for service that can limit number of in-flight
-/// async requests.
+/// Middleware that limits the number of concurrent calls to a service.
 ///
-/// Default number of in-flight requests is 15
+/// Readiness remains pending while every slot is in use. The default limit is
+/// 15 concurrent calls.
 #[derive(Copy, Clone, Debug)]
 pub struct InFlight {
     max_inflight: usize,
 }
 
 impl InFlight {
+    /// Creates middleware with the specified concurrency limit.
+    ///
+    /// A limit of zero keeps the service permanently unavailable.
     pub fn new(max: usize) -> Self {
         Self { max_inflight: max }
     }
@@ -36,12 +39,16 @@ impl<S, St> Middleware<S, St> for InFlight {
 }
 
 #[derive(Debug)]
+/// Service wrapper that enforces a concurrent-call limit.
 pub struct InFlightService<S> {
     count: Counter,
     service: S,
 }
 
 impl<S> InFlightService<S> {
+    /// Wraps `service` with the specified concurrency limit.
+    ///
+    /// A limit of zero keeps the service permanently unavailable.
     pub fn new(max: usize, service: S) -> Self {
         Self {
             service,

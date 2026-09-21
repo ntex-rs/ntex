@@ -6,11 +6,13 @@ use super::cell::Cell;
 use crate::task::LocalWaker;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Result produced by a [`Condition`] waiter.
 pub enum ConditionResult<T> {
+    /// The condition delivered a value.
     Value(T),
-    /// Condition is completed and locked (no new notifications)
+    /// The condition has been locked and will not deliver more values.
     Locked,
-    /// Condition object is dropped (no new notifications)
+    /// The last handle to the condition was dropped.
     Dropped,
 }
 
@@ -21,12 +23,17 @@ enum State {
     Dropped,
 }
 
-/// Condition allows to notify multiple waiters at the same time
+/// A condition that can wake several waiting tasks at once.
+///
+/// Notifications are not queued. A waiter must have been polled and registered
+/// its waker before [`notify`](Self::notify) is called, otherwise it misses that
+/// value. Use [`notify_and_lock`](Self::notify_and_lock) when no later
+/// notifications should be accepted.
 pub struct Condition<T = ()> {
     inner: Cell<Inner<T>>,
 }
 
-/// Waits for result from condition
+/// A task waiting for a [`Condition`] notification.
 pub struct Waiter<T = ()> {
     token: usize,
     inner: Cell<Inner<T>>,
@@ -66,7 +73,7 @@ impl<T> fmt::Debug for Condition<T> {
 }
 
 impl<T> Condition<T> {
-    /// Construct new condition instance
+    /// Creates an unlocked condition with no waiters.
     pub fn new() -> Condition<T> {
         Condition {
             inner: Cell::new(Inner {
@@ -79,7 +86,10 @@ impl<T> Condition<T> {
 }
 
 impl<T: Clone> Condition<T> {
-    /// Get condition waiter
+    /// Creates a new waiter.
+    ///
+    /// The waiter starts listening when it is first polled, not when this
+    /// method returns.
     pub fn wait(&self) -> Waiter<T> {
         let token = self.inner.get_mut().data.insert(None);
         Waiter {
@@ -88,9 +98,15 @@ impl<T: Clone> Condition<T> {
         }
     }
 
-    /// Notify all waiters
+    /// Sends `val` to every waiter that is currently being polled.
+    ///
+    /// The value is cloned for each registered waiter. Unpolled waiters do not
+    /// receive it, and the value is not retained for future waiters.
     pub fn notify(&self, val: T) {
         let inner = self.inner.get_ref();
+        if inner.state != State::Normal {
+            return;
+        }
         for (_, item) in &inner.data {
             if let Some(item) = item
                 && item.waker.wake_checked()
@@ -100,19 +116,24 @@ impl<T: Clone> Condition<T> {
         }
     }
 
-    /// Notify all waiters.
+    /// Notifies the current waiters and permanently locks the condition.
     ///
-    /// All subsequent waiter readiness checks always returns `Locked`
+    /// Registered waiters receive `val`. Later readiness checks return
+    /// [`ConditionResult::Locked`], and later calls to [`notify`](Self::notify)
+    /// do not deliver another value.
     pub fn notify_and_lock(&self, val: T) {
-        self.inner.get_mut().state = State::Locked;
         self.notify(val);
+        self.inner.get_mut().state = State::Locked;
     }
 }
 
 impl<T: Default> Condition<T> {
-    /// Notify all waiters
+    /// Sends `T::default()` to every waiter that is currently being polled.
     pub fn notify_default(&self) {
         let inner = self.inner.get_ref();
+        if inner.state != State::Normal {
+            return;
+        }
         for (_, item) in &inner.data {
             if let Some(item) = item
                 && item.waker.wake_checked()
@@ -141,12 +162,15 @@ impl<T> Drop for Condition<T> {
 }
 
 impl<T> Waiter<T> {
-    /// Returns readiness state of the condition.
+    /// Waits for the next condition result.
     pub async fn ready(&self) -> ConditionResult<T> {
         poll_fn(|cx| self.poll_ready(cx)).await
     }
 
-    /// Returns readiness state of the condition.
+    /// Polls for the next condition result.
+    ///
+    /// The first poll registers this waiter. While the condition remains
+    /// unlocked, later notifications wake the registered task.
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<ConditionResult<T>> {
         let parent = self.inner.get_mut();
         let inner = unsafe { parent.data.get_unchecked_mut(self.token) };
@@ -325,6 +349,11 @@ mod tests {
             lazy(|cx| waiter.poll_ready(cx)).await,
             Poll::Ready(ConditionResult::Locked)
         );
+        assert_eq!(
+            lazy(|cx| waiter.poll_ready(cx)).await,
+            Poll::Ready(ConditionResult::Locked)
+        );
+        cond.notify(());
         assert_eq!(
             lazy(|cx| waiter.poll_ready(cx)).await,
             Poll::Ready(ConditionResult::Locked)
