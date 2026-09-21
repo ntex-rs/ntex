@@ -72,8 +72,12 @@ impl IoState {
     /// Get the current I/O error.
     pub(super) fn error(&self) -> Option<io::Error> {
         if let Some(err) = self.error.take() {
-            self.error
-                .set(Some(io::Error::new(err.kind(), format!("{err}"))));
+            let cloned = if let Some(code) = err.raw_os_error() {
+                io::Error::from_raw_os_error(code)
+            } else {
+                io::Error::new(err.kind(), format!("{err}"))
+            };
+            self.error.set(Some(cloned));
             Some(err)
         } else {
             None
