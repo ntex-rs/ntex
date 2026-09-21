@@ -181,14 +181,14 @@ where
     {
         let io = IoBoxed::from(io);
         let mut flags = if io.cfg().keepalive_timeout().is_zero() {
-            Flags::FIRST_FRAME
+            Flags::empty()
         } else {
-            Flags::KA_ENABLED | Flags::FIRST_FRAME
+            Flags::KA_ENABLED
         };
 
         let read_max_timeout = if let Some(cfg) = io.cfg().frame_read_rate() {
             let (timeout, max_timeout) = next_read_timeout(cfg.timeout, cfg.max_timeout);
-            flags.insert(Flags::READ_TIMEOUT);
+            flags.insert(Flags::READ_TIMEOUT | Flags::FIRST_FRAME);
             io.start_timer(timeout);
             max_timeout
         } else {
@@ -1458,6 +1458,37 @@ mod tests {
         state.io().notify_timeout();
         let _ = lazy(|cx| Pin::new(&mut disp).poll(cx)).await;
 
+        assert!(timeout.get());
+        client.close().await;
+    }
+
+    #[ntex::test]
+    async fn keepalive_starts_for_new_connection_without_read_rate() {
+        let timeout = Rc::new(Cell::new(false));
+        let timeout2 = timeout.clone();
+        let (client, server) = IoTest::create();
+        let io = Io::new(
+            server,
+            SharedCfg::new("TEST").add(IoConfig::new().set_keepalive_timeout(Seconds::ONE)),
+        );
+
+        let (mut disp, state) = Dispatcher::debug(
+            io,
+            BCodec(8),
+            ntex_service::fn_service(move |msg: DispatchItem<BCodec>| {
+                if matches!(msg, DispatchItem::Stop(Reason::KeepAliveTimeout)) {
+                    timeout2.set(true);
+                }
+                async { Ok::<_, ()>(None) }
+            }),
+        );
+
+        assert!(!disp.inner.shared.contains(Flags::FIRST_FRAME));
+        assert!(lazy(|cx| Pin::new(&mut disp).poll(cx)).await.is_pending());
+        assert!(disp.inner.shared.contains(Flags::KA_TIMEOUT));
+
+        state.io().notify_timeout();
+        let _ = lazy(|cx| Pin::new(&mut disp).poll(cx)).await;
         assert!(timeout.get());
         client.close().await;
     }
