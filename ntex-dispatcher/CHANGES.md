@@ -3,11 +3,9 @@
 ## [4.1.0] - 2026-09-21
 
 * Start frame rate timing for new connections immediately
-
 * Preserve partial-frame timing across service readiness pauses
-
+* Preserve the cumulative frame read-timeout budget across readiness pauses
 * Preserve frame read-timeout classification when service readiness pauses reads
-
 * Transport failures and force-closes cancel the dispatcher-held pending response future
 
 ## [4.0.1] - 2026-09-18

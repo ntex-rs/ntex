@@ -234,6 +234,10 @@ impl IoConfig {
     /// After the first frame, idle time between frames is governed separately
     /// by [`set_keepalive_timeout`](Self::set_keepalive_timeout).
     ///
+    /// The dispatcher pauses frame timing while service readiness prevents it
+    /// from reading. Resuming preserves the unused part of the active interval
+    /// and does not grant a new cumulative `max_timeout` budget.
+    ///
     /// Frame read-rate enforcement is disabled by default.
     #[must_use]
     pub fn set_frame_read_rate(

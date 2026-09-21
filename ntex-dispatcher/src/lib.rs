@@ -151,7 +151,6 @@ struct ReadProgress {
 }
 
 impl ReadState {
-    #[cfg(test)]
     fn progress(&self) -> Option<&ReadProgress> {
         match self {
             Self::FirstFrame(progress) | Self::ReadingFrame(progress) => Some(progress),
@@ -513,7 +512,14 @@ where
             self.shared.remove_flags(Flags::KA_TIMEOUT | Flags::IDLE);
             self.shared.insert_flags(Flags::READ_TIMEOUT);
 
-            let (timeout, max_timeout) = next_read_timeout(params.timeout, params.max_timeout);
+            let max_timeout = if params.max_timeout.is_zero() {
+                Seconds::ZERO
+            } else {
+                self.read_state
+                    .progress()
+                    .map_or(params.max_timeout, |progress| progress.max_timeout)
+            };
+            let (timeout, max_timeout) = next_read_timeout(params.timeout, max_timeout);
             let progress = ReadProgress {
                 remains,
                 consumed,
@@ -528,6 +534,22 @@ where
                 ReadState::FirstFrame(progress)
             };
             self.shared.io.start_timer(timeout);
+        }
+    }
+
+    fn preserve_read_timer_budget(&mut self, remains: Seconds) {
+        if self
+            .shared
+            .io
+            .cfg()
+            .frame_read_rate()
+            .is_some_and(|params| !params.max_timeout.is_zero())
+        {
+            let progress = self
+                .read_state
+                .progress_mut()
+                .expect("read timeout requires active frame progress");
+            progress.max_timeout = Seconds(progress.max_timeout.0.saturating_add(remains.0));
         }
     }
 
@@ -599,12 +621,20 @@ where
                 }
 
                 // remove all timers
+                let timer_remains = self.shared.io.timer_handle().remains();
                 let timeout_pending = self.shared.io.stop_timer_status();
+                if read_timeout && !timeout_pending {
+                    self.preserve_read_timer_budget(timer_remains);
+                }
                 let timeout_reason = if read_timeout && timeout_pending {
                     self.handle_timeout().err()
                 } else {
                     None
                 };
+                if read_timeout && timeout_pending && timeout_reason.is_none() {
+                    let timer_remains = self.shared.io.timer_handle().remains();
+                    self.preserve_read_timer_budget(timer_remains);
+                }
                 self.shared
                     .remove_flags(Flags::KA_TIMEOUT | Flags::READ_TIMEOUT | Flags::IDLE);
                 self.shared.io.stop_timer();
@@ -1679,6 +1709,44 @@ mod tests {
         assert!(matches!(disp.inner.read_state, ReadState::ReadingFrame(_)));
         assert!(disp.inner.shared.contains(Flags::READ_TIMEOUT));
         assert!(!disp.inner.shared.contains(Flags::KA_TIMEOUT));
+        client.close().await;
+    }
+
+    #[ntex::test]
+    async fn read_timer_resume_preserves_timeout_budget() {
+        let (client, server) = IoTest::create();
+        let io = Io::new(
+            server,
+            SharedCfg::new("TEST").add(
+                IoConfig::new()
+                    .set_keepalive_timeout(Seconds::ZERO)
+                    .set_frame_read_rate(Seconds(2), Seconds(5), 2),
+            ),
+        );
+        let (mut disp, _) = Dispatcher::debug(
+            io,
+            BCodec(8),
+            ntex_service::fn_service(|_: DispatchItem<BCodec>| async { Ok::<_, ()>(None) }),
+        );
+
+        assert_eq!(
+            disp.inner.read_state.progress().unwrap().max_timeout,
+            Seconds(3)
+        );
+        disp.inner.preserve_read_timer_budget(Seconds::ONE);
+        assert_eq!(
+            disp.inner.read_state.progress().unwrap().max_timeout,
+            Seconds(4)
+        );
+
+        disp.inner.shared.remove_flags(Flags::READ_TIMEOUT);
+        disp.inner.shared.io.stop_timer();
+        disp.inner.start_read_timer(0, 0);
+        assert_eq!(
+            disp.inner.read_state.progress().unwrap().max_timeout,
+            Seconds(2)
+        );
+
         client.close().await;
     }
 
