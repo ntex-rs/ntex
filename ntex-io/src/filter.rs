@@ -81,8 +81,14 @@ impl Filter for Base {
             st.read_task.register(cx.waker());
 
             if st.flags.is_read_eof() {
+                // The transport read side is closed, no further input can
+                // arrive. This outranks filter shutdown below: a filter that
+                // waits for input would otherwise keep the transport polling a
+                // closed read side.
                 Poll::Pending
             } else if st.flags.is_stopping_filters() {
+                // A filter may still need input to complete its shutdown, so
+                // keep reading even though the application paused reads.
                 Poll::Ready(Readiness::Ready)
             } else if st.flags.is_read_paused_or_backpressure() {
                 // read buffer is full or is not processed by dispatcher yet

@@ -148,6 +148,11 @@ impl IoContext {
             Poll::Pending => Ok(()),
             Poll::Ready(status) => status.and_then(|nbytes| {
                 if nbytes == 0 {
+                    if st.flags.is_read_eof() {
+                        // A clean eof is reported to the filter chain exactly
+                        // once, no matter how often the transport reports it.
+                        return Ok(());
+                    }
                     st.flags.set_read_eof();
                     st.wake_dispatch_task();
                 }
@@ -450,6 +455,22 @@ mod tests {
         fn process_write_buf(&self, _: &FilterBuf<'_>) -> io::Result<()> {
             Ok(())
         }
+    }
+
+    #[ntex::test]
+    async fn clean_eof_is_processed_by_filters_once() {
+        let (_, server) = IoTest::create();
+        let state = Io::from(server).add_filter(FinishOnEof);
+        let ctx = IoContext::new(state.get_ref());
+
+        for _ in 0..3 {
+            assert_eq!(
+                ctx.update_read_status(ctx.get_read_buf(), Poll::Ready(Ok(0))),
+                IoTaskStatus::Pause
+            );
+            assert!(state.is_read_eof());
+        }
+        assert_eq!(state.with_read_dst(BytesMut::take), b"final");
     }
 
     #[ntex::test]

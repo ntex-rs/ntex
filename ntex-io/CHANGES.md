@@ -1,41 +1,27 @@
 # Changes
 
-## [4.1.0] - 2026-09-21
+## [4.1.0] - 2026-09-22
 
+* Report a clean read EOF to the filter chain exactly once
 * Complete filter shutdown after a clean peer EOF instead of waiting for the disconnect
   timeout, no further input can arrive
-
 * Rename Io::read() to Io::read_exact(), it fills the whole buffer
-
 * Do not discard buffered output when filter shutdown cannot complete, wait for the write
   buffer to drain (bounded by the disconnect timeout) before closing the transport
-
 * Rename buffer accessors to name their side of the chain: IoRef::with_read_buf() to
   with_read_dst(), with_write_buf() to with_write_src(), with_read_src_buf() to with_read_src(),
   with_write_dst_buf() to with_write_dst(), and IoContext::with_write_buf() to with_write_dst()
-
 * Remove IoContext::shutdown(), it is unreachable in every transport impl
-
 * Fix api consistency for IoContext::update_read_status()
-
 * Fix peer EOF force-terminates instead of gracefully closing
-
 * Io::shutdown().await waits until physical transport shutdown
-
 * Added distinct IO_TERMINATING state for force-close and transport failures
-
 * Zero disconnect timeout disables the forced filter-shutdown deadline
-
 * Stopped timer clears any pending timeout notification
-
 * Filter shutdown timeout returns io::ErrorKind::TimedOut
-
 * Disconnect waiters resolve only after the backend closes connection
-
 * Backpressure remains active until the buffer reaches half of the high watermark
-
 * Fix read_notify() can wait forever after EOF with buffered data
-
 * Fix, recalculate buf size after shortcut write
 
 ## [4.0.1] - 2026-09-18
