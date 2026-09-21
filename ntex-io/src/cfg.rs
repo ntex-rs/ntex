@@ -224,10 +224,9 @@ impl IoConfig {
     /// so the effective limit is rounded up to a multiple of `timeout` and is
     /// never shorter than the initial period.
     ///
-    /// `timeout` should be non-zero. A zero value cannot schedule the
-    /// dispatcher timer and therefore does not enforce a read rate. With
-    /// `rate` set to zero, any positive buffered-byte progress permits another
-    /// period.
+    /// A zero `timeout` disables frame read-rate enforcement and ignores
+    /// `max_timeout` and `rate`. With a non-zero timeout and `rate` set to zero,
+    /// any positive buffered-byte progress permits another period.
     ///
     /// This setting applies only after a frame has started. Idle connections
     /// with no partial frame are governed separately by
@@ -241,11 +240,15 @@ impl IoConfig {
         max_timeout: Seconds,
         rate: u32,
     ) -> Self {
-        self.frame_read_rate = Some(FrameReadRate {
-            timeout,
-            max_timeout,
-            rate,
-        });
+        self.frame_read_rate = if timeout.is_zero() {
+            None
+        } else {
+            Some(FrameReadRate {
+                timeout,
+                max_timeout,
+                rate,
+            })
+        };
         self
     }
 
@@ -495,6 +498,18 @@ mod tests {
         assert_eq!(cfg.write_buf().high, 2048);
         assert_eq!(cfg.write_buf().low, 256);
         assert_eq!(cfg.write_buf().half, 1024);
+    }
+
+    #[test]
+    fn frame_read_rate_configuration() {
+        let cfg = IoConfig::new().set_frame_read_rate(Seconds(1), Seconds(3), 128);
+        let rate = cfg.frame_read_rate().unwrap();
+        assert_eq!(rate.timeout, Seconds(1));
+        assert_eq!(rate.max_timeout, Seconds(3));
+        assert_eq!(rate.rate, 128);
+
+        let cfg = cfg.set_frame_read_rate(Seconds::ZERO, Seconds(10), 1024);
+        assert!(cfg.frame_read_rate().is_none());
     }
 
     #[test]
