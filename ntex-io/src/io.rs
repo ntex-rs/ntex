@@ -975,10 +975,35 @@ mod tests {
         // disconnect during read
         let fut = ntex_rt::spawn(async move {
             let mut buf: [u8; 4] = [0, 0, 0, 0];
-            server.read(&mut buf).await
+            let err = server.read(&mut buf).await.unwrap_err();
+            (server, err)
         });
         client.close().await;
-        let err = fut.await.unwrap().err().unwrap();
+        let (server, err) = fut.await.unwrap();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+
+        let err = server.read(&mut [0]).await.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[ntex::test]
+    async fn test_read_partial_eof() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let server = Io::new(server, SharedCfg::new("SRV"));
+
+        client.write(b"12");
+        client.close().await;
+
+        let err = server.read(&mut [0; 4]).await.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+
+        let mut buf = [0; 2];
+        server.read(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"12");
+
+        let err = server.read(&mut [0]).await.unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
     }
 
