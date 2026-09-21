@@ -582,7 +582,9 @@ impl<F> Io<F> {
     /// Polls the I/O stream for availability of incoming data.
     pub fn poll_read_notify(&self, cx: &mut Context<'_>) -> Poll<io::Result<Option<()>>> {
         let st = self.st();
-        if st.flags.is_stopping_or_terminating_or_rdeof() && !st.flags.is_read_ready() {
+        if st.flags.is_stopping_or_terminating()
+            || (st.flags.is_read_eof() && !st.flags.is_read_ready())
+        {
             Poll::Ready(Ok(None))
         } else if st.flags.check_read_notifed() {
             Poll::Ready(Ok(Some(())))

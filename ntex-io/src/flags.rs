@@ -113,8 +113,8 @@ impl Flags {
         self.contains(FlagsKind::IO_TERMINATING)
     }
 
-    pub(crate) fn is_stopping_or_terminating_or_rdeof(&self) -> bool {
-        self.intersects(FlagsKind::IO_STOPPING | FlagsKind::IO_TERMINATING | FlagsKind::RD_EOF)
+    pub(crate) fn is_stopping_or_terminating(&self) -> bool {
+        self.intersects(FlagsKind::IO_STOPPING | FlagsKind::IO_TERMINATING)
     }
 
     pub(crate) fn is_stopping_any(&self) -> bool {
