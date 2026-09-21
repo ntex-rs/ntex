@@ -192,8 +192,9 @@ impl IoConfig {
 
     /// Sets the graceful disconnect timeout.
     ///
-    /// If shutdown does not complete within this duration, the connection is
-    /// dropped.
+    /// If filter shutdown does not complete within this duration, transport
+    /// teardown continues and [`crate::Io::shutdown`] returns a timed-out
+    /// error after the transport has stopped.
     ///
     /// A zero duration disables the timeout. The default is one second.
     #[must_use]

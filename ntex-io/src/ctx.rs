@@ -323,6 +323,9 @@ impl IoContext {
         {
             // if read buffer is not consumed it is unlikely
             // that filter will properly complete shutdown
+            st.set_shutdown_error(io::Error::other(
+                "filter shutdown blocked by unread buffered data",
+            ));
             st.filters_stopped();
         } else if st.cfg.disconnect_timeout().non_zero() {
             // filter shutdown timeout
@@ -331,6 +334,10 @@ impl IoContext {
                 .take()
                 .unwrap_or_else(|| sleep(st.cfg.disconnect_timeout()));
             if timeout.poll_elapsed(cx).is_ready() {
+                st.set_shutdown_error(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "filter shutdown timed out",
+                ));
                 st.filters_stopped();
             } else {
                 st.shutdown_timeout.set(Some(timeout));

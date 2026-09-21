@@ -14,6 +14,8 @@
 
 * Stopped timer clears any pending timeout notification
 
+* Filter shutdown timeout returns io::ErrorKind::TimedOut
+
 ## [4.0.1] - 2026-09-18
 
 * Api docs improvements

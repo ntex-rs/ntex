@@ -103,6 +103,10 @@ impl IoState {
         }
     }
 
+    pub(super) fn set_shutdown_error(&self, err: io::Error) {
+        self.set_error(Some(err));
+    }
+
     pub(super) fn terminate_connection(&self, err: Option<io::Error>) {
         self.set_error(err);
         if !self.flags.is_terminated() && !self.flags.is_terminating() {
@@ -1635,6 +1639,85 @@ mod tests {
         io.close();
         sleep(Millis(50)).await;
         assert!(!io.is_closed());
+    }
+
+    #[ntex::test]
+    async fn filter_shutdown_timeout_is_reported() {
+        #[derive(Debug)]
+        struct PendingShutdown;
+
+        impl FilterLayer for PendingShutdown {
+            fn process_read_buf(&self, _: &FilterBuf<'_>) -> io::Result<()> {
+                Ok(())
+            }
+
+            fn process_write_buf(&self, _: &FilterBuf<'_>) -> io::Result<()> {
+                Ok(())
+            }
+
+            fn shutdown(&self, _: &FilterBuf<'_>) -> io::Result<Poll<()>> {
+                Ok(Poll::Pending)
+            }
+        }
+
+        let (_client, server) = IoTest::create();
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV")
+                .add(IoConfig::default().set_disconnect_timeout(ntex_util::time::Seconds(1))),
+        )
+        .add_filter(PendingShutdown);
+
+        let err = timeout(Millis(3000), io.shutdown())
+            .await
+            .expect("transport shutdown did not complete")
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert!(io.st().flags.is_terminated());
+        assert!(!io.st().flags.is_terminating());
+    }
+
+    #[ntex::test]
+    async fn blocked_filter_shutdown_is_reported() {
+        #[derive(Debug)]
+        struct PendingShutdown;
+
+        impl FilterLayer for PendingShutdown {
+            fn process_read_buf(&self, _: &FilterBuf<'_>) -> io::Result<()> {
+                Ok(())
+            }
+
+            fn process_write_buf(&self, _: &FilterBuf<'_>) -> io::Result<()> {
+                Ok(())
+            }
+
+            fn shutdown(&self, _: &FilterBuf<'_>) -> io::Result<Poll<()>> {
+                Ok(Poll::Pending)
+            }
+        }
+
+        let (_client, server) = IoTest::create();
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV").add(
+                IoConfig::default()
+                    .set_read_buf(8, 4, 16)
+                    .set_disconnect_timeout(ntex_util::time::Seconds(10)),
+            ),
+        )
+        .add_filter(PendingShutdown);
+
+        io.st().flags.set_read_ready_and_backpressure();
+        io.close();
+        sleep(Millis(50)).await;
+
+        let err = timeout(Millis(1000), io.shutdown())
+            .await
+            .expect("transport shutdown did not complete")
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+        assert!(io.st().flags.is_terminated());
+        assert!(!io.st().flags.is_terminating());
     }
 
     #[ntex::test]
