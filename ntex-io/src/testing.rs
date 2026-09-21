@@ -423,7 +423,7 @@ async fn run(io: Rc<IoTest>, ctx: IoContext) {
         .insert(IoTestFlags::CLOSED);
 
     log::debug!("{}: Shutdown complete", ctx.tag());
-    ctx.stop(None);
+    ctx.stopped(None);
 }
 
 fn turn(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<Status> {

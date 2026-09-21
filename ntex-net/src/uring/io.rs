@@ -59,7 +59,7 @@ async fn run(ctl: StreamCtl, ctx: IoContext) {
     }
 
     let result = ctl.shutdown().await;
-    ctx.stop(result.err());
+    ctx.stopped(result.err());
 }
 
 /// Handle ctx readiness

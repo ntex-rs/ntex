@@ -93,13 +93,34 @@ impl IoState {
         self.flags.set_filters_stopped();
     }
 
-    pub(super) fn terminate_connection(&self, err: Option<io::Error>) {
-        if !self.flags.is_terminated() {
-            log::trace!("{}: Terminate io with error {:?}", self.cfg.tag(), err);
-            if err.is_some() {
-                self.error.set(err);
+    fn set_error(&self, err: Option<io::Error>) {
+        if let Some(err) = err {
+            if let Some(current) = self.error.take() {
+                self.error.set(Some(current));
+            } else {
+                self.error.set(Some(err));
             }
+        }
+    }
+
+    pub(super) fn terminate_connection(&self, err: Option<io::Error>) {
+        self.set_error(err);
+        if !self.flags.is_terminated() && !self.flags.is_terminating() {
+            log::trace!("{}: Terminate io", self.cfg.tag());
             self.flags.set_terminate();
+            self.wake_read_task();
+            self.wake_write_task();
+            self.wake_dispatch_task();
+            self.notify_disconnect();
+            self.handle.take();
+        }
+    }
+
+    pub(super) fn stop_connection(&self, err: Option<io::Error>) {
+        if !self.flags.is_terminated() {
+            log::trace!("{}: Stop io with error {:?}", self.cfg.tag(), err);
+            self.set_error(err);
+            self.flags.set_stopped();
             self.wake_read_task();
             self.wake_write_task();
             self.wake_dispatch_task();
@@ -622,7 +643,7 @@ impl<F> Io<F> {
 
         if decoded.item.is_some() {
             Ok(decoded)
-        } else if st.flags.is_stopping() {
+        } else if st.flags.is_stopping() || st.flags.is_terminating() {
             Err(RecvError::PeerGone(st.error()))
         } else if st.flags.check_dispatcher_timeout() {
             Err(RecvError::KeepAlive)
@@ -692,7 +713,7 @@ impl<F> Io<F> {
                 Poll::Ready(Ok(()))
             }
         } else {
-            if !st.flags.is_stopping_filters() {
+            if !st.flags.is_terminating() && !st.flags.is_stopping_filters() {
                 st.start_shutdown();
             }
             st.flags.unset_all_read_flags();
@@ -1541,11 +1562,42 @@ mod tests {
 
         assert!(lazy(|cx| io.poll_shutdown(cx)).await.is_pending());
 
-        ctx.stop(None);
+        ctx.stopped(None);
         assert!(matches!(
             lazy(|cx| io.poll_shutdown(cx)).await,
             Poll::Ready(Ok(()))
         ));
+    }
+
+    #[ntex::test]
+    async fn termination_waits_for_transport_stop() {
+        #[derive(Debug)]
+        struct DormantTransport;
+
+        impl IoStream for DormantTransport {
+            fn start(self, _: IoContext) -> Box<dyn Handle> {
+                Box::new(self)
+            }
+        }
+
+        impl Handle for DormantTransport {}
+
+        let io = Io::from(DormantTransport);
+        let ctx = IoContext::new(io.get_ref());
+        ctx.stop(Some(io::Error::new(
+            io::ErrorKind::ConnectionReset,
+            "connection reset",
+        )));
+
+        assert!(io.st().flags.is_terminating());
+        assert!(!io.st().flags.is_terminated());
+        assert!(lazy(|cx| io.poll_shutdown(cx)).await.is_pending());
+
+        ctx.stopped(None);
+        let Poll::Ready(Err(err)) = lazy(|cx| io.poll_shutdown(cx)).await else {
+            panic!("shutdown did not report termination error");
+        };
+        assert_eq!(err.kind(), io::ErrorKind::ConnectionReset);
     }
 
     #[ntex::test]
@@ -1633,10 +1685,14 @@ mod tests {
         // == terminate
         ctx.stop(None);
         assert!(st.flags.is_closed());
-        assert!(st.flags.is_terminated());
+        assert!(st.flags.is_terminating());
+        assert!(!st.flags.is_terminated());
         assert!(st.flags.is_stopping_filters());
 
         let err = io.with_write_buf(|_| 1).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotConnected);
+
+        ctx.stopped(None);
+        assert!(st.flags.is_terminated());
     }
 }

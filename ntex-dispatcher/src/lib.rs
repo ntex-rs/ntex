@@ -306,7 +306,7 @@ where
                                         inner.shared.io.tag(),
                                         err
                                     );
-                                    if err.is_some() || inner.shared.io.is_closed() {
+                                    if err.is_some() || inner.shared.io.is_terminating() {
                                         inner.shared.insert_flags(Flags::IO_ERR);
                                     }
                                     inner.st = DispatcherState::Stop;
@@ -380,11 +380,19 @@ where
                             }
                             Poll::Pending => (),
                         }
+                    } else if inner.shared.io.is_terminating() {
+                        inner.shared.insert_flags(Flags::IO_ERR);
+                        continue;
+                    } else if inner.shared.io.is_closed() {
+                        inner.shared.io.poll_dispatch(cx);
                     } else if !inner.shared.contains(Flags::IO_ERR) {
                         match ready!(inner.shared.io.poll_status_update(cx)) {
                             IoStatusUpdate::PeerGone(_) => {
-                                inner.shared.insert_flags(Flags::IO_ERR);
-                                continue;
+                                if inner.shared.io.is_terminating() {
+                                    inner.shared.insert_flags(Flags::IO_ERR);
+                                    continue;
+                                }
+                                inner.shared.io.poll_dispatch(cx);
                             }
                             IoStatusUpdate::KeepAlive => continue,
                             IoStatusUpdate::WriteBackpressure => {
@@ -523,7 +531,7 @@ where
                             self.shared.io.tag(),
                             err
                         );
-                        if err.is_some() || self.shared.io.is_closed() {
+                        if err.is_some() || self.shared.io.is_terminating() {
                             self.shared.insert_flags(Flags::IO_ERR);
                         }
                         self.st = DispatcherState::Stop;
@@ -1123,6 +1131,45 @@ mod tests {
         })
         .await
         .expect("service did not receive I/O stop notification");
+    }
+
+    #[ntex::test]
+    async fn application_close_waits_for_pending_service_call() {
+        let started = Arc::new(AtomicBool::new(false));
+        let started2 = started.clone();
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let (mut disp, state) = Dispatcher::debug(
+            Io::from(server),
+            BytesCodec,
+            ntex_service::fn_service(move |msg: DispatchItem<BytesCodec>| {
+                let started = started2.clone();
+                async move {
+                    if matches!(msg, DispatchItem::Item(_)) {
+                        started.store(true, Relaxed);
+                        sleep(Millis(200)).await;
+                    }
+                    Ok::<_, ()>(None)
+                }
+            }),
+        );
+
+        client.write("request");
+        sleep(Millis(25)).await;
+        assert!(lazy(|cx| Pin::new(&mut disp).poll(cx)).await.is_pending());
+        assert!(started.load(Relaxed));
+
+        state.close();
+        assert!(
+            timeout(Millis(50), poll_fn(|cx| Pin::new(&mut disp).poll(cx)))
+                .await
+                .is_err()
+        );
+        timeout(Millis(1000), poll_fn(|cx| Pin::new(&mut disp).poll(cx)))
+            .await
+            .expect("dispatcher did not drain pending service call")
+            .unwrap();
     }
 
     #[ntex::test]

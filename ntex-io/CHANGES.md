@@ -8,6 +8,8 @@
 
 * Io::shutdown().await waits until physical transport shutdown
 
+* Added distinct IO_TERMINATING state for force-close and transport failures
+
 * Zero disconnect timeout disables the forced filter-shutdown deadline
 
 * Stopped timer clears any pending timeout notification

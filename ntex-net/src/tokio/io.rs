@@ -32,6 +32,8 @@ trait Stream: AsyncRead + AsyncWrite + Unpin {
 
     fn shutdown(&self) -> io::Result<()>;
 
+    fn terminate(&self) -> io::Result<()>;
+
     fn try_read(&self, buf: &mut [u8]) -> io::Result<usize>;
 
     fn try_write(&self, buf: &[u8]) -> io::Result<usize>;
@@ -50,6 +52,10 @@ impl Stream for TcpStream {
 
     fn shutdown(&self) -> io::Result<()> {
         socket2::SockRef::from(self).shutdown(std::net::Shutdown::Write)
+    }
+
+    fn terminate(&self) -> io::Result<()> {
+        socket2::SockRef::from(self).shutdown(std::net::Shutdown::Both)
     }
 
     fn try_read(&self, buf: &mut [u8]) -> io::Result<usize> {
@@ -77,6 +83,10 @@ impl Stream for tok_io::net::UnixStream {
 
     fn shutdown(&self) -> io::Result<()> {
         socket2::SockRef::from(self).shutdown(std::net::Shutdown::Write)
+    }
+
+    fn terminate(&self) -> io::Result<()> {
+        socket2::SockRef::from(self).shutdown(std::net::Shutdown::Both)
     }
 
     fn try_read(&self, buf: &mut [u8]) -> io::Result<usize> {
@@ -236,18 +246,13 @@ where
         .await;
     }
 
-    let result = if st == Status::Shutdown {
-        io.shutdown()
-    } else {
-        Ok(())
+    let result = match st {
+        Status::Shutdown => io.shutdown(),
+        Status::Terminate => io.terminate(),
     };
 
     log::trace!("{}: Shutdown complete {result:?}", ctx.tag());
-    if st == Status::Shutdown {
-        ctx.stop(result.err());
-    } else if !ctx.is_stopped() {
-        ctx.stop(None);
-    }
+    ctx.stopped(result.err());
 }
 
 const MAX_WRITE_SIZE: usize = 64 * 1024;

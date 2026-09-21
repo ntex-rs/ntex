@@ -11,6 +11,8 @@ bitflags::bitflags! {
         const IO_STOPPING         = 0b0000_0000_0000_0010;
         /// shutting down filters
         const IO_STOPPING_FILTERS = 0b0000_0000_0000_0100;
+        /// force termination or transport failure is in progress
+        const IO_TERMINATING      = 0b0100_0000_0000_0000;
 
         /// pause io read
         const RD_PAUSED           = 0b0000_0000_0001_0000;
@@ -39,7 +41,6 @@ bitflags::bitflags! {
         const DSP_TIMEOUT         = 0b0001_0000_0000_0000;
         /// write buffer is full
         const DSP_W_BACKPRESSURE  = 0b0010_0000_0000_0000;
-
         /// is direct-write enabled
         const DIRECT_WR_SUP       = 0b1000_0000_0000_0000;
     }
@@ -91,7 +92,7 @@ impl Flags {
     }
 
     pub(crate) fn is_closed(&self) -> bool {
-        self.intersects(FlagsKind::IO_STOPPING | FlagsKind::IO_STOPPED)
+        self.intersects(FlagsKind::IO_STOPPING | FlagsKind::IO_STOPPED | FlagsKind::IO_TERMINATING)
     }
 
     pub(crate) fn is_terminated(&self) -> bool {
@@ -102,9 +103,19 @@ impl Flags {
         self.contains(FlagsKind::IO_STOPPING)
     }
 
+    /// Checks whether the connection entered the force-termination path.
+    ///
+    /// This state remains set after backend teardown completes.
+    pub fn is_terminating(&self) -> bool {
+        self.contains(FlagsKind::IO_TERMINATING)
+    }
+
     pub(crate) fn is_stopping_any(&self) -> bool {
         self.intersects(
-            FlagsKind::IO_STOPPED | FlagsKind::IO_STOPPING | FlagsKind::IO_STOPPING_FILTERS,
+            FlagsKind::IO_STOPPED
+                | FlagsKind::IO_STOPPING
+                | FlagsKind::IO_STOPPING_FILTERS
+                | FlagsKind::IO_TERMINATING,
         )
     }
 
@@ -123,7 +134,9 @@ impl Flags {
     pub(crate) fn is_shutting_down_filters(&self) -> bool {
         let f = self.get();
         f.contains(FlagsKind::IO_STOPPING_FILTERS)
-            && !f.intersects(FlagsKind::IO_STOPPED | FlagsKind::IO_STOPPING)
+            && !f.intersects(
+                FlagsKind::IO_STOPPED | FlagsKind::IO_STOPPING | FlagsKind::IO_TERMINATING,
+            )
     }
 
     pub(crate) fn is_direct_wr_enabled(&self) -> bool {
@@ -209,11 +222,12 @@ impl Flags {
 
     pub(crate) fn set_terminate(&self) {
         self.insert(
-            FlagsKind::IO_STOPPED
-                | FlagsKind::IO_STOPPING
-                | FlagsKind::IO_STOPPING_FILTERS
-                | FlagsKind::BUF_R_READY,
+            FlagsKind::IO_TERMINATING | FlagsKind::IO_STOPPING_FILTERS | FlagsKind::BUF_R_READY,
         );
+    }
+
+    pub(crate) fn set_stopped(&self) {
+        self.insert(FlagsKind::IO_STOPPED);
     }
 
     pub(crate) fn set_wants_write_flush(&self) {

@@ -52,6 +52,18 @@ impl IoRef {
     }
 
     #[inline]
+    /// Checks whether the stream entered the force-termination path.
+    ///
+    /// This becomes `true` after [`terminate`](Self::terminate) is called or
+    /// an I/O or filter error requests immediate termination. Unlike graceful
+    /// shutdown, pending application work is not drained. The value remains
+    /// `true` after backend teardown completes so callers can distinguish a
+    /// terminated stream from one that closed gracefully.
+    pub fn is_terminating(&self) -> bool {
+        self.0.flags.is_terminating()
+    }
+
+    #[inline]
     /// Checks whether write back-pressure is enabled.
     pub fn is_wr_backpressure(&self) -> bool {
         self.0.flags.is_wr_backpressure()
@@ -578,7 +590,10 @@ mod tests {
         client.remote_buffer_cap(1024);
         let state = Io::from(server);
         state.terminate();
-        assert!(state.flags().is_stopping());
+        assert!(state.flags().is_terminating());
+        assert!(!state.flags().is_stopping());
+        assert!(!state.flags().is_terminated());
+        state.shutdown().await.unwrap();
         assert!(state.flags().is_terminated());
     }
 

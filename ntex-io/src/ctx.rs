@@ -65,6 +65,11 @@ impl IoContext {
         self.st().terminate_connection(e);
     }
 
+    /// Marks backend transport teardown as complete.
+    pub fn stopped(&self, e: Option<io::Error>) {
+        self.st().stop_connection(e);
+    }
+
     /// Checks if the I/O stream is stopped.
     pub fn is_stopped(&self) -> bool {
         self.st().flags.is_closed()
