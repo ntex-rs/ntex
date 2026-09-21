@@ -101,6 +101,9 @@ pub trait FilterLayer: fmt::Debug + 'static {
 
     /// Processes incoming data from the transport-facing source buffer into
     /// the application-facing destination buffer.
+    ///
+    /// This is also called once after clean transport read EOF, with
+    /// [`IoRef::is_read_eof`] returning `true`.
     fn process_read_buf(&self, buf: &FilterBuf<'_>) -> IoResult<()>;
 
     /// Processes outgoing data from the application-facing source buffer into

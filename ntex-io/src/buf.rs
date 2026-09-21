@@ -331,6 +331,10 @@ impl FilterCtx<'_> {
 
     #[inline]
     /// Returns the number of bytes added by the latest transport read.
+    ///
+    /// This is zero when filters are invoked for clean read EOF. Use
+    /// [`IoRef::is_read_eof`](crate::IoRef::is_read_eof) to distinguish EOF
+    /// from other zero-byte processing passes.
     pub fn new_read_bytes(&self) -> usize {
         self.nbytes
     }

@@ -103,9 +103,11 @@ impl IoContext {
     /// Returns a transport read buffer and reports the read result.
     ///
     /// `Poll::Ready(Ok(n))` reports that `n` bytes were appended to `buf`.
-    /// Zero marks the transport read side as closed: further reads are parked,
-    /// but buffered input remains decodable and the write side remains usable
-    /// until graceful shutdown. `Poll::Ready(Err(_))` terminates the connection.
+    /// Zero marks the transport read side as closed and invokes the read filter
+    /// chain once with no new bytes. This lets filters emit final buffered data
+    /// or report truncated input. Further transport reads are parked, but
+    /// buffered input remains decodable and the write side remains usable until
+    /// graceful shutdown. `Poll::Ready(Err(_))` terminates the connection.
     /// `Poll::Pending` returns the buffer after a nonblocking operation made no
     /// progress or a submitted operation was canceled for reissue.
     ///
@@ -132,12 +134,12 @@ impl IoContext {
         // process read buf
         let result = match status {
             Poll::Pending => Ok(()),
-            Poll::Ready(Ok(0)) => {
-                st.flags.set_read_eof();
-                st.wake_dispatch_task();
-                Ok(())
-            }
             Poll::Ready(status) => status.and_then(|nbytes| {
+                if nbytes == 0 {
+                    st.flags.set_read_eof();
+                    st.wake_dispatch_task();
+                }
+
                 st.buffer.process_read_buf(&self.0, nbytes).map(|status| {
                     let size = st.buffer.read_dst_size();
 
@@ -360,7 +362,7 @@ impl Clone for IoContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Io, testing::IoTest};
+    use crate::{FilterBuf, FilterLayer, Io, testing::IoTest};
     use ntex_util::future::lazy;
 
     #[ntex::test]
@@ -397,5 +399,73 @@ mod tests {
             lazy(|cx| state.poll_read_ready(cx)).await,
             Poll::Ready(Ok(None))
         ));
+    }
+
+    #[derive(Debug)]
+    struct FinishOnEof;
+
+    impl FilterLayer for FinishOnEof {
+        fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+            if buf.io().is_read_eof() {
+                buf.with_read_buffers(|_, dst| dst.extend_from_slice(b"final"));
+            }
+            Ok(())
+        }
+
+        fn process_write_buf(&self, _: &FilterBuf<'_>) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[ntex::test]
+    async fn clean_eof_is_processed_by_filters() {
+        let (_, server) = IoTest::create();
+        let state = Io::from(server).add_filter(FinishOnEof);
+        let ctx = IoContext::new(state.get_ref());
+
+        assert_eq!(
+            ctx.update_read_status(ctx.get_read_buf(), Poll::Ready(Ok(0))),
+            IoTaskStatus::Pause
+        );
+        assert!(state.is_read_eof());
+        assert_eq!(state.with_read_buf(BytesMut::take), b"final");
+        assert!(matches!(
+            lazy(|cx| state.poll_read_ready(cx)).await,
+            Poll::Ready(Ok(None))
+        ));
+    }
+
+    #[derive(Debug)]
+    struct RejectEof;
+
+    impl FilterLayer for RejectEof {
+        fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+            if buf.io().is_read_eof() {
+                Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "truncated filtered stream",
+                ))
+            } else {
+                Ok(())
+            }
+        }
+
+        fn process_write_buf(&self, _: &FilterBuf<'_>) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[ntex::test]
+    async fn clean_eof_filter_error_terminates_connection() {
+        let (_, server) = IoTest::create();
+        let state = Io::from(server).add_filter(RejectEof);
+        let ctx = IoContext::new(state.get_ref());
+
+        assert_eq!(
+            ctx.update_read_status(ctx.get_read_buf(), Poll::Ready(Ok(0))),
+            IoTaskStatus::Stop
+        );
+        assert!(state.is_read_eof());
+        assert!(state.is_terminating());
     }
 }
