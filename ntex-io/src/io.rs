@@ -21,11 +21,43 @@ use crate::{Decoded, FilterLayer, Handle, IoStatusUpdate, IoStream, RecvError};
 
 /// Buffered, filterable interface to an underlying I/O stream.
 ///
-/// An `Io` value owns a shared connection state. It coordinates transport
-/// tasks, read and write buffers, backpressure, filters, and graceful shutdown.
+/// `Io` is the main handle for a connection. The runtime fills its read buffer
+/// and drains its write buffer, while protocol code uses this handle to decode
+/// requests and encode responses.
+///
+/// Reads and writes go through buffers rather than directly to the socket.
+/// When the read buffer grows too large, ntex pauses the transport.
+/// [`read_more`](Self::read_more) can resume it, so calling that method asks
+/// for more input; it does more than check whether data is already available.
+///
+/// If the peer cleanly closes its read side, any buffered input remains
+/// available and responses can still be written. [`shutdown`](Self::shutdown)
+/// closes the connection gracefully and waits for the runtime to finish.
+/// [`terminate`](IoRef::terminate) closes it immediately.
+///
+/// The `F` parameter keeps track of the installed filters. Adding or mapping a
+/// filter changes the type. Use [`seal`](Self::seal) or [`boxed`](Self::boxed)
+/// when the concrete filter type does not need to be exposed.
+///
+/// Use [`get_ref`](Self::get_ref) to share access to the connection. The
+/// returned [`IoRef`] points to the same buffers and state; it does not create
+/// another connection. Dropping `Io` terminates the connection even if an
+/// `IoRef` is still alive.
 pub struct Io<F = Base>(UnsafeCell<IoRef>, marker::PhantomData<F>);
 
-/// Cloneable reference to an [`Io`] connection's shared state.
+/// A cheap, cloneable handle to an [`Io`] connection.
+///
+/// All clones point to the same connection. Changes to its buffers,
+/// configuration, timers, errors, or shutdown state are visible through every
+/// clone. Cloning `IoRef` never clones the socket.
+///
+/// Use it to inspect the connection, access its buffers, queue output, or start
+/// graceful or immediate shutdown. These methods are also available directly
+/// on `Io`, which dereferences to `IoRef`.
+///
+/// Keeping an `IoRef` alive does not keep the connection open after its `Io`
+/// owner is dropped. Like `Io`, it stays on the local runtime thread and is
+/// neither `Send` nor `Sync`.
 #[derive(Clone)]
 pub struct IoRef(pub(super) Rc<IoState>);
 
@@ -551,7 +583,7 @@ impl<F> Io<F> {
     /// # Returns
     ///
     /// - `Poll::Pending` while waiting for more data.
-    /// - `Poll::Ready(Ok(Some(())))` when data is available.
+    /// - `Poll::Ready(Ok(Some(())))` when new data is available.
     /// - `Poll::Ready(Ok(None))` once buffered input has been drained after
     ///   clean EOF, or when the stream closes without an error. Clean EOF
     ///   leaves the write half open.
