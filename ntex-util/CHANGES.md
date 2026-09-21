@@ -14,6 +14,8 @@
 
 * Recompute `bstream` sender readiness when its buffer threshold changes
 
+* Saturate overflowing `Millis` and `Seconds` conversions
+
 ## [4.0.0] - 2026-09-14
 
 * Refactor Condition result
