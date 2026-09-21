@@ -813,8 +813,11 @@ impl<F> Io<F> {
             if !st.flags.is_terminating() && !st.flags.is_stopping_filters() {
                 st.start_shutdown();
             }
-            st.flags.unset_all_read_flags();
-            st.flags.unset_read_paused();
+            // Reads must keep running during shutdown so that the transport can
+            // observe a peer EOF and filters can complete their shutdown
+            // handshake. `BUF_R_READY` is deliberately left alone: it marks
+            // input the dispatcher has not consumed yet.
+            st.flags.resume_reads();
 
             st.wake_read_task();
             st.wake_write_task();

@@ -486,6 +486,26 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn shutdown_keeps_unconsumed_input_visible() {
+        let (_, server) = IoTest::create();
+        let state = Io::from(server);
+        let ctx = IoContext::new(state.get_ref());
+
+        // input arrives but the dispatcher has not consumed it yet
+        ctx.update_read_status(BytesMut::copy_from_slice(b"12345"), Poll::Ready(Ok(5)));
+        assert!(ctx.flags().is_read_ready());
+
+        // starting a shutdown must not discard the "input available" signal
+        assert!(lazy(|cx| state.poll_shutdown(cx)).await.is_pending());
+        assert!(ctx.flags().is_read_ready());
+
+        // so the read task is handed a fresh buffer instead of the one the
+        // dispatcher still has to decode
+        assert!(ctx.get_read_buf().is_empty());
+        assert_eq!(state.with_read_dst(BytesMut::take), b"12345");
+    }
+
+    #[ntex::test]
     async fn clean_eof_is_processed_by_filters_once() {
         let (_, server) = IoTest::create();
         let state = Io::from(server).add_filter(FinishOnEof);
