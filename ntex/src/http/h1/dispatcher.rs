@@ -1380,15 +1380,18 @@ mod tests {
         client.remote_buffer_cap(4096);
 
         let mut h1 = h1(server, async |_| Ok::<_, io::Error>(Response::Ok().build()));
-        h1.inner.io.set_config(
-            SharedCfg::new("TEST")
-                .add(
-                    nio::IoConfig::new()
-                        .set_read_buf(15 * 1024, 1024, 16)
-                        .set_write_buf(15 * 1024, 1024, 16),
-                )
-                .add(HttpServiceConfig::new().set_max_buf_size(32 * 1024)),
-        );
+        // SAFETY: this test does not retain a reference returned by `io.cfg()`.
+        unsafe {
+            h1.inner.io.set_config(
+                SharedCfg::new("TEST")
+                    .add(
+                        nio::IoConfig::new()
+                            .set_read_buf(15 * 1024, 1024, 16)
+                            .set_write_buf(15 * 1024, 1024, 16),
+                    )
+                    .add(HttpServiceConfig::new().set_max_buf_size(32 * 1024)),
+            );
+        }
 
         let mut decoder = ClientCodec::new(true, SharedCfg::default().get());
 

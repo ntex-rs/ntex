@@ -280,7 +280,13 @@ impl<F> Io<F> {
     /// The write-buffer page size and eager-write enablement are updated
     /// immediately. Existing allocated buffers and an already registered timer
     /// are not recreated.
-    pub fn set_config<T: Into<SharedCfg>>(&self, cfg: T) {
+    ///
+    /// # Safety
+    ///
+    /// No reference obtained from [`IoRef::cfg`] for this connection may be
+    /// live when this method is called or used afterward. Replacing the
+    /// configuration may release the allocation backing those references.
+    pub unsafe fn set_config<T: Into<SharedCfg>>(&self, cfg: T) {
         unsafe {
             let cfg = cfg.into().get::<IoConfig>();
             self.st().buffer.set_page_size(cfg.write_page_size());
@@ -1360,11 +1366,18 @@ mod tests {
         );
         assert!(!io.st().flags.is_direct_wr_enabled());
 
-        io.set_config(SharedCfg::new("SRV").add(IoConfig::new().set_write_buf_threshold(1024)));
+        // SAFETY: no reference returned by `io.cfg()` is retained.
+        unsafe {
+            io.set_config(SharedCfg::new("SRV").add(IoConfig::new().set_write_buf_threshold(1024)));
+        }
         assert!(io.st().flags.is_direct_wr_enabled());
         assert_eq!(io.cfg().write_buf_threshold(), 1024);
 
-        io.set_config(SharedCfg::new("SRV").add(IoConfig::new().set_write_buf_threshold(0)));
+        // SAFETY: the previous `io.cfg()` reference was limited to the
+        // assertion statement and is no longer live.
+        unsafe {
+            io.set_config(SharedCfg::new("SRV").add(IoConfig::new().set_write_buf_threshold(0)));
+        }
         assert!(!io.st().flags.is_direct_wr_enabled());
         assert_eq!(io.cfg().write_buf_threshold(), 0);
     }

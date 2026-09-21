@@ -238,11 +238,9 @@ impl Handler for StreamOpsHandler {
                             log::error!("{}: Received WouldBlock {:?}, id: {:?}", item.tag(), res, item.ctx.id());
                             st.recv_more(id, buf, &self.inner.api);
                         } else {
-                            if let Ok(size) = res {
-                                if size > 0 {
-                                    // SAFETY: kernel tells us how many bytes it read
-                                    unsafe { buf.advance_mut(size) };
-                                }
+                            if let Ok(size) = res && size > 0 {
+                                // SAFETY: kernel tells us how many bytes it read
+                                unsafe { buf.advance_mut(size) };
                             }
 
                             // handle IORING_CQE_F_SOCK_NONEMPTY flag
