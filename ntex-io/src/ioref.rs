@@ -501,7 +501,8 @@ mod tests {
 
     use ntex_bytes::Bytes;
     use ntex_codec::BytesCodec;
-    use ntex_util::{future::lazy, time::Millis, time::sleep};
+    use ntex_util::future::{Either, lazy};
+    use ntex_util::time::{Millis, sleep};
 
     use super::*;
     use crate::{FilterCtx, Io, testing::IoTest};
@@ -578,6 +579,25 @@ mod tests {
         let state = Io::from(server);
         state.terminate();
         assert!(state.flags().is_stopping());
+        assert!(state.flags().is_terminated());
+    }
+
+    #[ntex::test]
+    async fn zero_byte_write_reports_write_zero() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let state = Io::from(server);
+
+        client.write_zero();
+        let err = state
+            .send(Bytes::from_static(b"test"), &BytesCodec)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            Either::Right(ref err) if err.kind() == io::ErrorKind::WriteZero
+        ));
         assert!(state.flags().is_terminated());
     }
 

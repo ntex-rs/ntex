@@ -272,8 +272,9 @@ impl WriteOperation {
 
                     match winsock_result(result) {
                         Poll::Ready(Ok(())) => {
-                            let mut sent = sent as usize;
-                            if sent == 0 {
+                            let written = sent as usize;
+                            let mut sent = written;
+                            if written == 0 {
                                 self.ctx.stop(None);
                             }
                             // remove written bytes
@@ -299,7 +300,14 @@ impl WriteOperation {
                                     break;
                                 }
                             }
-                            Ok(true)
+                            if sent == 0 {
+                                Err(io::Error::new(
+                                    io::ErrorKind::WriteZero,
+                                    "failed to write frame to transport",
+                                ))
+                            } else {
+                                Ok(true)
+                            }
                         }
                         Poll::Ready(Err(err)) => {
                             // return unwritten data back to buffer
@@ -338,10 +346,11 @@ impl WriteOperation {
         wr.flags.remove(Flags::WAITING);
 
         let st = match res {
+            Ok(0) => Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "failed to write frame to transport",
+            )),
             Ok(mut sent) => {
-                if sent == 0 {
-                    wr.ctx.stop(None);
-                }
                 // remove written bytes
                 for page in wr.pages[..num].iter_mut() {
                     if let Some(p) = page {

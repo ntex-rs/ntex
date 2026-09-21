@@ -274,12 +274,7 @@ impl Handler for StreamOpsHandler {
                         );
 
                         if cqueue::notif(flags) {
-                            let res = result.unwrap_or(res).map(|n| {
-                                if n == 0 {
-                                    item.ctx.stop(None);
-                                }
-                                n > 0
-                            });
+                            let res = result.unwrap_or(res).and_then(write_status);
                             if item.ctx.update_write_status(res) == IoTaskStatus::Io {
                                 st.send(id, &self.inner.api);
                             }
@@ -288,7 +283,7 @@ impl Handler for StreamOpsHandler {
                             item.wr_op.take();
 
                             // try to send next chunk
-                            if res.is_ok() {
+                            if matches!(&res, Ok(n) if *n > 0) {
                                 st.send(id, &self.inner.api);
                             }
                             // insert op back for "notify" handling
@@ -303,12 +298,7 @@ impl Handler for StreamOpsHandler {
                             item.wr_op.take();
 
                             // release buffer and try to send next chunk
-                            let res = res.map(|n| {
-                                if n == 0 {
-                                    item.ctx.stop(None);
-                                }
-                                n > 0
-                            });
+                            let res = res.and_then(write_status);
                             if item.ctx.update_write_status(res) == IoTaskStatus::Io {
                                 st.send(id, &self.inner.api);
                             }
@@ -361,6 +351,17 @@ impl Handler for StreamOpsHandler {
             self.inner.storage.set(Some(v));
         }
         self.inner.delayed_feed.clear();
+    }
+}
+
+fn write_status(n: usize) -> io::Result<bool> {
+    if n == 0 {
+        Err(io::Error::new(
+            io::ErrorKind::WriteZero,
+            "failed to write frame to transport",
+        ))
+    } else {
+        Ok(true)
     }
 }
 

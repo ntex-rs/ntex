@@ -163,6 +163,12 @@ impl IoTest {
         self.remote.lock().unwrap().borrow().waker.wake();
     }
 
+    /// Makes this endpoint's next transport write return zero bytes.
+    pub fn write_zero(&self) {
+        self.local.lock().unwrap().borrow_mut().write = IoTestState::Close;
+        self.remote.lock().unwrap().borrow().waker.wake();
+    }
+
     /// Provides mutable access to bytes readable by this endpoint.
     pub fn local_buffer<F, R>(&self, f: F) -> R
     where
@@ -490,8 +496,11 @@ pub(super) fn write_io(
         match result {
             Poll::Ready(0) => {
                 log::trace!("{tag}: disconnected during flush, written {written}");
-                ctx.stop(None);
-                return Ok(false);
+                buf.prepend(page);
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "failed to write frame to transport",
+                ));
             }
             Poll::Ready(n) => {
                 written += n;

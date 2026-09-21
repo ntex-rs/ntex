@@ -479,12 +479,11 @@ impl StreamItem {
                 }
 
                 match res {
-                    Poll::Ready(n) => {
-                        if n == 0 {
-                            self.ctx.stop(None);
-                        }
-                        Ok(n > 0)
-                    }
+                    Poll::Ready(0) => Err(io::Error::new(
+                        io::ErrorKind::WriteZero,
+                        "failed to write frame to transport",
+                    )),
+                    Poll::Ready(_) => Ok(true),
                     Poll::Pending => Ok(false),
                 }
             } else {

@@ -4,6 +4,8 @@
 
 * Update IoContext::update_read_status() api usage
 
+* Produce io::ErrorKind::WriteZero for backend impl
+
 ## [4.0.1] - 2026-09-18
 
 * Api docs improvements
