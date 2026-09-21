@@ -60,18 +60,22 @@ pub enum Readiness {
 }
 
 impl Readiness {
-    /// Merges two readiness states.
+    /// Merges two readiness states without regard to argument order.
+    ///
+    /// Terminal states take precedence: `Terminate` overrides every other
+    /// state, followed by `Shutdown`. If neither terminal state is present,
+    /// `Pending` overrides `Ready`.
     pub fn merge(val1: Poll<Readiness>, val2: Poll<Readiness>) -> Poll<Readiness> {
-        match val1 {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(Readiness::Ready) => val2,
-            Poll::Ready(Readiness::Terminate) => Poll::Ready(Readiness::Terminate),
-            Poll::Ready(Readiness::Shutdown) => {
-                if val2 == Poll::Ready(Readiness::Terminate) {
-                    Poll::Ready(Readiness::Terminate)
-                } else {
-                    Poll::Ready(Readiness::Shutdown)
-                }
+        match (val1, val2) {
+            (Poll::Ready(Readiness::Terminate), _) | (_, Poll::Ready(Readiness::Terminate)) => {
+                Poll::Ready(Readiness::Terminate)
+            }
+            (Poll::Ready(Readiness::Shutdown), _) | (_, Poll::Ready(Readiness::Shutdown)) => {
+                Poll::Ready(Readiness::Shutdown)
+            }
+            (Poll::Pending, _) | (_, Poll::Pending) => Poll::Pending,
+            (Poll::Ready(Readiness::Ready), Poll::Ready(Readiness::Ready)) => {
+                Poll::Ready(Readiness::Ready)
             }
         }
     }
@@ -240,6 +244,38 @@ mod tests {
                 RecvError::<BytesCodec>::PeerGone(Some(io::Error::other("err")))
             )
             .contains("RecvError::PeerGone")
+        );
+    }
+
+    #[test]
+    fn readiness_merge() {
+        let states = [
+            Poll::Pending,
+            Poll::Ready(Readiness::Ready),
+            Poll::Ready(Readiness::Shutdown),
+            Poll::Ready(Readiness::Terminate),
+        ];
+
+        for val1 in states {
+            for val2 in states {
+                assert_eq!(Readiness::merge(val1, val2), Readiness::merge(val2, val1));
+            }
+        }
+
+        assert_eq!(
+            Readiness::merge(Poll::Pending, Poll::Ready(Readiness::Ready)),
+            Poll::Pending
+        );
+        assert_eq!(
+            Readiness::merge(Poll::Pending, Poll::Ready(Readiness::Shutdown)),
+            Poll::Ready(Readiness::Shutdown)
+        );
+        assert_eq!(
+            Readiness::merge(
+                Poll::Ready(Readiness::Shutdown),
+                Poll::Ready(Readiness::Terminate)
+            ),
+            Poll::Ready(Readiness::Terminate)
         );
     }
 }
