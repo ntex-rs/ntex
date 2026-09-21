@@ -20,8 +20,6 @@
 
 * Backpressure remains active until the buffer reaches half of the high watermark
 
-* Add `IoRef::is_read_eof()` for detecting a cleanly closed read half
-
 ## [4.0.1] - 2026-09-18
 
 * Api docs improvements

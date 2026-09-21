@@ -592,7 +592,7 @@ mod tests {
         assert_eq!(buf, Bytes::from_static(b"test"));
 
         client.write(b"test");
-        state.read_ready().await.unwrap();
+        state.read_more().await.unwrap();
         let buf = state.decode(&BytesCodec).unwrap().unwrap();
         assert_eq!(buf, Bytes::from_static(b"test"));
 

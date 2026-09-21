@@ -382,13 +382,13 @@ mod tests {
         let state = Io::from(server);
         let ctx = IoContext::new(state.get_ref());
 
-        assert!(lazy(|cx| state.poll_read_ready(cx)).await.is_pending());
+        assert!(lazy(|cx| state.poll_read_more(cx)).await.is_pending());
         assert_ne!(
             ctx.update_read_status(ctx.get_read_buf(), Poll::Pending),
             IoTaskStatus::Stop
         );
         assert!(!ctx.is_stopped());
-        assert!(lazy(|cx| state.poll_read_ready(cx)).await.is_pending());
+        assert!(lazy(|cx| state.poll_read_more(cx)).await.is_pending());
 
         assert_eq!(
             ctx.update_read_status(ctx.get_read_buf(), Poll::Ready(Ok(0))),
@@ -396,7 +396,7 @@ mod tests {
         );
         assert!(!ctx.is_stopped());
         assert!(matches!(
-            lazy(|cx| state.poll_read_ready(cx)).await,
+            lazy(|cx| state.poll_read_more(cx)).await,
             Poll::Ready(Ok(None))
         ));
     }
@@ -430,7 +430,7 @@ mod tests {
         assert!(state.is_read_eof());
         assert_eq!(state.with_read_buf(BytesMut::take), b"final");
         assert!(matches!(
-            lazy(|cx| state.poll_read_ready(cx)).await,
+            lazy(|cx| state.poll_read_more(cx)).await,
             Poll::Ready(Ok(None))
         ));
     }
