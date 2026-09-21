@@ -75,10 +75,11 @@ impl<E> Receiver<E> {
     /// Once buffered data reaches this size, [`Sender::poll_ready`] stops
     /// reporting [`Status::Ready`] until the receiver consumes enough data.
     /// Sending does not enforce the threshold, so producers must cooperate by
-    /// waiting for readiness. The default is 32 KiB.
+    /// waiting for readiness. Changing the threshold immediately updates and,
+    /// when needed, wakes sender readiness. The default is 32 KiB.
     #[inline]
     pub fn max_buffer_size(&self, size: usize) {
-        self.inner.max_buffer_size.set(size);
+        self.inner.set_max_buffer_size(size);
     }
 
     /// Puts previously read data back at the front of the stream.
@@ -262,6 +263,24 @@ impl<E> Inner<E> {
         self.flags.set(flags);
     }
 
+    fn set_max_buffer_size(&self, size: usize) {
+        self.max_buffer_size.set(size);
+
+        let flags = self.flags.get();
+        if flags.intersects(Flags::EOF | Flags::ERROR | Flags::SENDER_GONE) {
+            return;
+        }
+
+        if self.len.get() < size {
+            if !flags.contains(Flags::NEED_READ) {
+                self.insert_flag(Flags::NEED_READ);
+                self.send_task.wake();
+            }
+        } else {
+            self.remove_flag(Flags::NEED_READ);
+        }
+    }
+
     fn set_error(&self, err: E) {
         self.err.set(Some(err));
         self.insert_flag(Flags::ERROR);
@@ -324,6 +343,7 @@ impl<E> fmt::Debug for Inner<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::future::lazy;
 
     #[ntex::test]
     async fn test_eof() {
@@ -357,6 +377,26 @@ mod tests {
             Bytes::from("data"),
             poll_fn(|cx| payload.poll_read(cx)).await.unwrap().unwrap()
         );
+    }
+
+    #[ntex::test]
+    async fn buffer_size_updates_sender_readiness() {
+        let (tx, rx) = channel::<()>();
+        rx.max_buffer_size(4);
+        tx.feed_data(Bytes::from_static(b"data"));
+
+        assert!(lazy(|cx| tx.poll_ready(cx)).await.is_pending());
+        assert!(rx.inner.send_task.is_set());
+
+        rx.max_buffer_size(5);
+        assert!(!rx.inner.send_task.is_set());
+        assert_eq!(
+            lazy(|cx| tx.poll_ready(cx)).await,
+            Poll::Ready(Status::Ready)
+        );
+
+        rx.max_buffer_size(4);
+        assert!(lazy(|cx| tx.poll_ready(cx)).await.is_pending());
     }
 
     #[ntex::test]

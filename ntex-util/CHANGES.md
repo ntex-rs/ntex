@@ -12,6 +12,8 @@
 
 * Wake pending `mpsc` receive operations when the receiver is closed
 
+* Recompute `bstream` sender readiness when its buffer threshold changes
+
 ## [4.0.0] - 2026-09-14
 
 * Refactor Condition result
