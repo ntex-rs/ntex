@@ -447,9 +447,9 @@ impl<F> Io<F> {
     /// Reads bytes from this I/O stream into the specified buffer.
     ///
     /// If there is not enough data available, waits for incoming data.
-    /// Returns an error of kind [`io::ErrorKind::UnexpectedEof`] if the
-    /// transport read half reaches EOF or the stream closes before `dst` is
-    /// completely filled.
+    /// If clean EOF or an error-free shutdown occurs before `dst` is filled,
+    /// this returns [`io::ErrorKind::UnexpectedEof`]. Transport errors are
+    /// passed through unchanged.
     pub async fn read(&self, dst: &mut [u8]) -> io::Result<()> {
         loop {
             let completed = self.with_read_buf(|buf| {
@@ -463,7 +463,7 @@ impl<F> Io<F> {
             if completed {
                 return Ok(());
             }
-            // `read_ready` resolves with `None` at read EOF or shutdown.
+            // No more bytes will arrive after clean EOF or shutdown.
             if self.read_ready().await?.is_none() {
                 return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Disconnected"));
             }
@@ -473,9 +473,9 @@ impl<F> Io<F> {
     #[inline]
     /// Waits until application-facing read data is available.
     ///
-    /// Returns `Ok(None)` after buffered input is exhausted and the transport
-    /// read half has reached clean EOF, or after the stream begins shutting
-    /// down. Clean read EOF does not close the write half.
+    /// Returns `Ok(None)` once buffered input has been drained after clean EOF,
+    /// or when an error-free shutdown begins. Clean EOF leaves the write half
+    /// open. If the transport failed, this returns that error.
     pub async fn read_ready(&self) -> io::Result<Option<()>> {
         poll_fn(|cx| self.poll_read_ready(cx)).await
     }
@@ -485,8 +485,9 @@ impl<F> Io<F> {
     ///
     /// Unlike [`read_ready`](Self::read_ready), this waits for the read task to
     /// observe new source data even if previously buffered application data is
-    /// already available. Returns `Ok(None)` after clean read EOF with no
-    /// buffered input, or when the stream begins stopping.
+    /// already available. Returns `Ok(None)` after clean EOF with no buffered
+    /// input, or when an error-free shutdown begins. If the transport failed,
+    /// this returns that error.
     pub async fn read_notify(&self) -> io::Result<Option<()>> {
         poll_fn(|cx| self.poll_read_notify(cx)).await
     }
@@ -546,15 +547,19 @@ impl<F> Io<F> {
     ///
     /// - `Poll::Pending` if the I/O stream is not ready for reading.
     /// - `Poll::Ready(Ok(Some(())))` if the I/O stream is ready for reading.
-    /// - `Poll::Ready(Ok(None))` after buffered input is exhausted and the
-    ///   transport read half reaches clean EOF, or when the stream is closing
-    ///   or closed. Clean read EOF does not close the write half.
-    /// - `Poll::Ready(Err(e))` if an error is encountered.
+    /// - `Poll::Ready(Ok(None))` once buffered input has been drained after
+    ///   clean EOF, or when the stream closes without an error. Clean EOF
+    ///   leaves the write half open.
+    /// - `Poll::Ready(Err(e))` if the transport failed.
     pub fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<Option<()>>> {
         let st = self.st();
 
         if st.flags.is_closed() {
-            Poll::Ready(Ok(None))
+            if let Some(err) = st.error() {
+                Poll::Ready(Err(err))
+            } else {
+                Poll::Ready(Ok(None))
+            }
         } else {
             let ready = st.flags.is_read_ready();
 
@@ -591,9 +596,13 @@ impl<F> Io<F> {
     /// Polls the I/O stream for availability of incoming data.
     pub fn poll_read_notify(&self, cx: &mut Context<'_>) -> Poll<io::Result<Option<()>>> {
         let st = self.st();
-        if st.flags.is_stopping_or_terminating()
-            || (st.flags.is_read_eof() && !st.flags.is_read_ready())
-        {
+        if st.flags.is_stopping_or_terminating() {
+            if let Some(err) = st.error() {
+                Poll::Ready(Err(err))
+            } else {
+                Poll::Ready(Ok(None))
+            }
+        } else if st.flags.is_read_eof() && !st.flags.is_read_ready() {
             Poll::Ready(Ok(None))
         } else if st.flags.check_read_notifed() {
             Poll::Ready(Ok(Some(())))
@@ -1619,6 +1628,73 @@ mod tests {
         };
         assert_eq!(err.kind(), io::ErrorKind::ConnectionReset);
         assert!(lazy(|cx| waiter.poll_ready(cx)).await.is_ready());
+    }
+
+    #[ntex::test]
+    async fn send_buf_retains_termination_error() {
+        #[derive(Debug)]
+        struct DormantTransport;
+
+        impl IoStream for DormantTransport {
+            fn start(self, _: IoContext) -> Box<dyn Handle> {
+                Box::new(self)
+            }
+        }
+
+        impl Handle for DormantTransport {}
+
+        let io = Io::from(DormantTransport);
+        let ctx = IoContext::new(io.get_ref());
+        ctx.stop(Some(io::Error::new(
+            io::ErrorKind::ConnectionReset,
+            "connection reset",
+        )));
+
+        let err = io.get_ref().send_buf().unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::ConnectionReset);
+        assert_eq!(err.to_string(), "connection reset");
+
+        ctx.stopped(None);
+        let err = io.shutdown().await.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::ConnectionReset);
+        assert_eq!(err.to_string(), "connection reset");
+    }
+
+    #[ntex::test]
+    async fn read_readiness_reports_termination_error() {
+        #[derive(Debug)]
+        struct DormantTransport;
+
+        impl IoStream for DormantTransport {
+            fn start(self, _: IoContext) -> Box<dyn Handle> {
+                Box::new(self)
+            }
+        }
+
+        impl Handle for DormantTransport {}
+
+        let io = Io::from(DormantTransport);
+        let ctx = IoContext::new(io.get_ref());
+        ctx.stop(Some(io::Error::new(
+            io::ErrorKind::ConnectionReset,
+            "connection reset",
+        )));
+
+        let Poll::Ready(Err(err)) = lazy(|cx| io.poll_read_ready(cx)).await else {
+            panic!("read readiness did not report termination error");
+        };
+        assert_eq!(err.kind(), io::ErrorKind::ConnectionReset);
+        assert_eq!(err.to_string(), "connection reset");
+
+        let Poll::Ready(Err(err)) = lazy(|cx| io.poll_read_notify(cx)).await else {
+            panic!("read notification did not report termination error");
+        };
+        assert_eq!(err.kind(), io::ErrorKind::ConnectionReset);
+        assert_eq!(err.to_string(), "connection reset");
+
+        let err = io.read(&mut [0]).await.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::ConnectionReset);
+        assert_eq!(err.to_string(), "connection reset");
     }
 
     #[ntex::test]

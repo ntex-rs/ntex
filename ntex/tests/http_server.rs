@@ -9,7 +9,7 @@ use ntex::http::{
     HttpService, HttpServiceConfig, KeepAlive, Method, Request, Response, StatusCode, Version,
 };
 use ntex::http::{body, h1, h1::Control, test, test::server as test_server};
-use ntex::time::{Millis, Seconds, sleep, timeout};
+use ntex::time::{Millis, Seconds, sleep};
 use ntex::{SharedCfg, channel::oneshot, fn_service, rt, util::Bytes, web::error};
 
 #[ntex::test]
@@ -851,18 +851,16 @@ async fn test_h1_service_error() {
     assert_eq!(bytes, Bytes::from_static(b"error"));
 }
 
-struct SetOnDrop(Arc<AtomicUsize>, Option<::oneshot::Sender<()>>);
-
-impl Drop for SetOnDrop {
-    fn drop(&mut self) {
-        self.0.fetch_add(1, Ordering::Relaxed);
-        let _ = self.1.take().unwrap().send(());
-    }
-}
-
 // /// If client drops connection, server must drop pending handling futures
 // #[ntex::test]
 // async fn test_h1_client_drop() -> io::Result<()> {
+// struct SetOnDrop(Arc<AtomicUsize>, Option<::oneshot::Sender<()>>);
+// impl Drop for SetOnDrop {
+//     fn drop(&mut self) {
+//         self.0.fetch_add(1, Ordering::Relaxed);
+//         let _ = self.1.take().unwrap().send(());
+//     }
+// }
 //     let count = Arc::new(AtomicUsize::new(0));
 //     let count2 = count.clone();
 //     let (tx, rx) = ::oneshot::channel();

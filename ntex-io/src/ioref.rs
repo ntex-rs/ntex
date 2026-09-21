@@ -183,7 +183,7 @@ impl IoRef {
         self.consolidate_write_state(true);
 
         if self.0.flags.is_stopping_any()
-            && let Some(err) = self.0.error.take()
+            && let Some(err) = self.0.error()
         {
             Err(err)
         } else {
