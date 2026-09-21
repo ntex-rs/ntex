@@ -119,7 +119,6 @@ impl IoState {
             self.wake_read_task();
             self.wake_write_task();
             self.wake_dispatch_task();
-            self.notify_disconnect();
             self.handle.take();
         }
     }
@@ -848,7 +847,7 @@ pub struct OnDisconnect {
 
 impl OnDisconnect {
     pub(super) fn new(inner: Rc<IoState>) -> Self {
-        Self::new_inner(inner.flags.is_closed(), inner)
+        Self::new_inner(inner.flags.is_terminated(), inner)
     }
 
     fn new_inner(disconnected: bool, inner: Rc<IoState>) -> Self {
@@ -863,7 +862,7 @@ impl OnDisconnect {
     #[inline]
     /// Checks if the I/O stream is disconnected.
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<()> {
-        if self.token == usize::MAX || self.inner.flags.is_closed() {
+        if self.token == usize::MAX || self.inner.flags.is_terminated() {
             Poll::Ready(())
         } else {
             self.inner
@@ -1568,15 +1567,18 @@ mod tests {
 
         let io = Io::from(DormantTransport);
         let ctx = IoContext::new(io.get_ref());
+        let waiter = io.on_disconnect();
         io.st().flags.set_filters_stopped();
 
         assert!(lazy(|cx| io.poll_shutdown(cx)).await.is_pending());
+        assert!(lazy(|cx| waiter.poll_ready(cx)).await.is_pending());
 
         ctx.stopped(None);
         assert!(matches!(
             lazy(|cx| io.poll_shutdown(cx)).await,
             Poll::Ready(Ok(()))
         ));
+        assert!(lazy(|cx| waiter.poll_ready(cx)).await.is_ready());
     }
 
     #[ntex::test]
@@ -1594,6 +1596,7 @@ mod tests {
 
         let io = Io::from(DormantTransport);
         let ctx = IoContext::new(io.get_ref());
+        let waiter = io.on_disconnect();
         ctx.stop(Some(io::Error::new(
             io::ErrorKind::ConnectionReset,
             "connection reset",
@@ -1602,12 +1605,14 @@ mod tests {
         assert!(io.st().flags.is_terminating());
         assert!(!io.st().flags.is_terminated());
         assert!(lazy(|cx| io.poll_shutdown(cx)).await.is_pending());
+        assert!(lazy(|cx| waiter.poll_ready(cx)).await.is_pending());
 
         ctx.stopped(None);
         let Poll::Ready(Err(err)) = lazy(|cx| io.poll_shutdown(cx)).await else {
             panic!("shutdown did not report termination error");
         };
         assert_eq!(err.kind(), io::ErrorKind::ConnectionReset);
+        assert!(lazy(|cx| waiter.poll_ready(cx)).await.is_ready());
     }
 
     #[ntex::test]

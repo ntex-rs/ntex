@@ -16,6 +16,8 @@
 
 * Filter shutdown timeout returns io::ErrorKind::TimedOut
 
+* Disconnect waiters resolve only after the backend closes connection
+
 ## [4.0.1] - 2026-09-18
 
 * Api docs improvements
