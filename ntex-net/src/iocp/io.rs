@@ -37,6 +37,10 @@ impl Handle for HandleWrapper {
         }
         None
     }
+
+    fn write(&self, _: &IoContext) {
+        self.0.write();
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
