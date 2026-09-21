@@ -1522,6 +1522,45 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn eager_write_uses_updated_buffer_size() {
+        #[derive(Debug)]
+        struct DirectWrite;
+
+        impl IoStream for DirectWrite {
+            fn start(self, _: IoContext) -> Box<dyn Handle> {
+                Box::new(self)
+            }
+        }
+
+        impl Handle for DirectWrite {
+            fn write(&self, ctx: &IoContext) {
+                let written = ctx.with_write_buf(|buf| {
+                    let written = !buf.is_empty();
+                    buf.clear();
+                    written
+                });
+                let _ = ctx.update_write_status(Ok(written));
+            }
+        }
+
+        let io = Io::new(
+            DirectWrite,
+            SharedCfg::new("SRV").add(
+                IoConfig::new()
+                    .set_write_buf_threshold(1)
+                    .set_write_buf(8, 4, 16),
+            ),
+        );
+
+        io.encode_slice(BIN2).unwrap();
+
+        assert_eq!(io.st().buffer.write_buf_size(), 0);
+        assert!(io.flags().is_write_paused());
+        assert!(!io.flags().is_wr_backpressure());
+        assert!(!io.st().flags.is_wr_send_scheduled());
+    }
+
+    #[ntex::test]
     async fn write_backpressure() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(0);

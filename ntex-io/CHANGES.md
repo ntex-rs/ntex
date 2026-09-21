@@ -22,6 +22,8 @@
 
 * Fix read_notify() can wait forever after EOF with buffered data
 
+* Fix, recalculate buf size after shortcur write
+
 ## [4.0.1] - 2026-09-18
 
 * Api docs improvements

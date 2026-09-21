@@ -339,6 +339,9 @@ impl IoRef {
                 Iops::schedule_write(st.id());
             }
         }
+        // A direct write may have changed the amount of buffered data.
+        let size = st.buffer.write_buf_size();
+
         // Enable backpressure
         if !st.flags.is_wr_backpressure() && st.is_wr_backpressure_needed(size) {
             st.flags.set_wr_backpressure();
