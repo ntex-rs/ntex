@@ -85,7 +85,21 @@ impl IoRef {
     }
 
     #[inline]
+    /// Checks whether read back-pressure is enabled.
+    ///
+    /// This becomes `true` once unread data in the application-facing read
+    /// buffer reaches the configured high watermark, which parks the transport
+    /// read task. Consuming enough of the buffer releases it.
+    pub fn is_rd_backpressure(&self) -> bool {
+        self.0.flags.is_rd_backpressure()
+    }
+
+    #[inline]
     /// Checks whether write back-pressure is enabled.
+    ///
+    /// This becomes `true` once unwritten data in the transport-facing write
+    /// buffer reaches the configured high watermark. Draining enough of the
+    /// buffer releases it.
     pub fn is_wr_backpressure(&self) -> bool {
         self.0.flags.is_wr_backpressure()
     }

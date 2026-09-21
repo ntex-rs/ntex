@@ -123,6 +123,8 @@ impl IoState {
     }
 
     pub(super) fn filters_stopped(&self) {
+        // the filter shutdown deadline is no longer needed
+        self.shutdown_timeout.set(None);
         self.wake_read_task();
         self.wake_write_task();
         self.wake_dispatch_task();
@@ -628,10 +630,6 @@ impl<F> Io<F> {
             } else if ready {
                 Poll::Ready(Ok(Some(())))
             } else {
-                if st.flags.is_read_paused() {
-                    st.wake_read_task();
-                    st.flags.unset_read_paused();
-                }
                 st.dispatch_task.register(cx.waker());
                 Poll::Pending
             }
@@ -1114,6 +1112,8 @@ mod tests {
         assert!(io.st().read_task.is_set());
         assert!(!io.st().flags.is_read_ready());
         assert!(!io.st().flags.is_rd_backpressure());
+        assert!(!io.is_rd_backpressure());
+        assert!(!io.is_wr_backpressure());
 
         // == Enable backpressure
         ctx.update_read_status(
@@ -1129,6 +1129,8 @@ mod tests {
         assert!(io.st().flags.is_read_ready());
         // read backpressure is enabled
         assert!(io.st().flags.is_rd_backpressure());
+        assert!(io.is_rd_backpressure());
+        assert!(!io.is_wr_backpressure());
         // read task paused
         assert_eq!(lazy(|cx| ctx.poll_read_ready(cx)).await, Poll::Pending);
 

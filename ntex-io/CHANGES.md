@@ -2,6 +2,7 @@
 
 ## [4.1.0] - 2026-09-22
 
+* Add IoRef::is_rd_backpressure(), the read counterpart of is_wr_backpressure()
 * Report a clean read EOF to the filter chain exactly once
 * Complete filter shutdown after a clean peer EOF instead of waiting for the disconnect
   timeout, no further input can arrive
