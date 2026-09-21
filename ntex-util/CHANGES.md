@@ -10,6 +10,8 @@
 
 * Remove unnecessary `Default` bound from `condition::Waiter` future
 
+* Wake pending `mpsc` receive operations when the receiver is closed
+
 ## [4.0.0] - 2026-09-14
 
 * Refactor Condition result

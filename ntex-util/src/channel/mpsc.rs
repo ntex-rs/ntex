@@ -109,7 +109,9 @@ impl<T> Receiver<T> {
     /// This prevents any further messages from being sent on the channel
     /// while still enabling the receiver to drain messages that are buffered.
     pub fn close(&self) {
-        self.shared.get_mut().has_receiver = false;
+        let shared = self.shared.get_mut();
+        shared.has_receiver = false;
+        shared.blocked_recv.wake();
     }
 
     /// Returns whether this channel is closed.
@@ -261,8 +263,12 @@ mod tests {
         assert!(rx.is_terminated());
 
         let (tx, rx) = channel::<()>();
+        assert_eq!(lazy(|cx| rx.poll_recv(cx)).await, Poll::Pending);
+        assert!(rx.shared.get_ref().blocked_recv.is_set());
         rx.close();
         assert!(tx.is_closed());
+        assert!(!rx.shared.get_ref().blocked_recv.is_set());
+        assert_eq!(lazy(|cx| rx.poll_recv(cx)).await, Poll::Ready(None));
 
         let (tx, rx) = channel::<()>();
         drop(tx);
