@@ -205,12 +205,14 @@ impl IoConfig {
 
     /// Sets read-rate parameters for a single decoded frame.
     ///
-    /// Rate tracking starts when a decoder returns no complete item while
-    /// leaving partial frame data in the read buffer. The dispatcher then
-    /// allows one `timeout` period for additional data to arrive.
+    /// Rate tracking starts when a dispatcher begins waiting for the first
+    /// frame on a new connection. After a frame completes, tracking starts
+    /// again when bytes for the next frame arrive.
     ///
-    /// When that period expires, the dispatcher compares the buffered-byte
-    /// progress since the previous check with `rate`:
+    /// When that period expires, the dispatcher compares the received-byte
+    /// progress since the previous check with `rate`. Progress counts bytes
+    /// received from the transport even when the decoder consumes them while
+    /// waiting for the rest of the frame:
     ///
     /// - If the progress is greater than `rate`, the deadline is extended by
     ///   another `timeout` period.
@@ -221,17 +223,16 @@ impl IoConfig {
     ///
     /// `max_timeout` limits the cumulative time allowed for one frame. A zero
     /// value permits an unlimited number of extensions while the required rate
-    /// is maintained. A non-zero value is enforced in whole `timeout` periods,
-    /// so the effective limit is rounded up to a multiple of `timeout` and is
-    /// never shorter than the initial period.
+    /// is maintained. When `max_timeout` is not an exact multiple of `timeout`,
+    /// the final measurement interval is shortened so the cumulative limit is
+    /// not exceeded.
     ///
     /// A zero `timeout` disables frame read-rate enforcement and ignores
     /// `max_timeout` and `rate`. With a non-zero timeout and `rate` set to zero,
     /// any positive buffered-byte progress permits another period.
     ///
-    /// This setting applies only after a frame has started. Idle connections
-    /// with no partial frame are governed separately by
-    /// [`set_keepalive_timeout`](Self::set_keepalive_timeout).
+    /// After the first frame, idle time between frames is governed separately
+    /// by [`set_keepalive_timeout`](Self::set_keepalive_timeout).
     ///
     /// Frame read-rate enforcement is disabled by default.
     #[must_use]

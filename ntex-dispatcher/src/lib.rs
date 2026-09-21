@@ -20,6 +20,15 @@ use ntex_util::{future::Either, spawn, time::Seconds};
 
 type Response<U> = <U as Encoder>::Item;
 
+fn next_read_timeout(timeout: Seconds, max_timeout: Seconds) -> (Seconds, Seconds) {
+    if max_timeout.is_zero() {
+        (timeout, Seconds::ZERO)
+    } else {
+        let timeout = Seconds(timeout.0.min(max_timeout.0));
+        (timeout, Seconds(max_timeout.0.saturating_sub(timeout.0)))
+    }
+}
+
 /// Event delivered to the dispatcher service.
 pub enum DispatchItem<U: Encoder + Decoder> {
     /// A frame decoded from the transport.
@@ -51,7 +60,8 @@ pub enum Reason<U: Encoder + Decoder> {
     Decoder(<U as Decoder>::Error),
     /// The connection exceeded its keep-alive timeout.
     KeepAliveTimeout,
-    /// A complete frame was not received within the configured read deadline.
+    /// The frame did not maintain the configured read rate or exceeded its
+    /// cumulative read timeout.
     ReadTimeout,
 }
 
@@ -92,6 +102,7 @@ bitflags::bitflags! {
         const KA_TIMEOUT    = 0b000_1000;
         const READ_TIMEOUT  = 0b001_0000;
         const IDLE          = 0b010_0000;
+        const FIRST_FRAME   = 0b100_0000;
     }
 }
 
@@ -104,7 +115,7 @@ where
     shared: Rc<DispatcherShared<U, Err>>,
     response: Option<PipelineCall<DispatchItem<U>, Option<Response<U>>, Err>>,
     read_remains: u32,
-    read_remains_prev: u32,
+    read_consumed: u32,
     read_max_timeout: Seconds,
 }
 
@@ -158,7 +169,8 @@ where
     /// Creates a dispatcher for an I/O transport, codec, and service pipeline.
     ///
     /// Keep-alive and frame-read timeout behavior is taken from the transport's
-    /// `ntex_io::IoConfig`.
+    /// `ntex_io::IoConfig`. When frame read-rate enforcement is configured, its
+    /// first measurement interval starts immediately for the new connection.
     pub fn new<Io>(
         io: Io,
         codec: U,
@@ -168,10 +180,19 @@ where
         IoBoxed: From<Io>,
     {
         let io = IoBoxed::from(io);
-        let flags = if io.cfg().keepalive_timeout().is_zero() {
-            Flags::empty()
+        let mut flags = if io.cfg().keepalive_timeout().is_zero() {
+            Flags::FIRST_FRAME
         } else {
-            Flags::KA_ENABLED
+            Flags::KA_ENABLED | Flags::FIRST_FRAME
+        };
+
+        let read_max_timeout = if let Some(cfg) = io.cfg().frame_read_rate() {
+            let (timeout, max_timeout) = next_read_timeout(cfg.timeout, cfg.max_timeout);
+            flags.insert(Flags::READ_TIMEOUT);
+            io.start_timer(timeout);
+            max_timeout
+        } else {
+            Seconds::ZERO
         };
 
         let shared = Rc::new(DispatcherShared {
@@ -189,8 +210,8 @@ where
                 response: None,
                 error: None,
                 read_remains: 0,
-                read_remains_prev: 0,
-                read_max_timeout: Seconds::ZERO,
+                read_consumed: 0,
+                read_max_timeout,
                 st: DispatcherState::Processing,
             },
         }
@@ -269,6 +290,7 @@ where
                     let (item, nowait) = match ready!(inner.poll_service(cx)) {
                         PollService::Ready => {
                             // decode incoming bytes if buffer is ready
+                            inner.update_read_progress();
                             match inner.shared.io.poll_recv_decode(&inner.shared.codec, cx) {
                                 Ok(decoded) => {
                                     inner.update_timer(&decoded);
@@ -442,6 +464,29 @@ where
     U: Decoder + Encoder + 'static,
     Err: 'static,
 {
+    fn update_read_progress(&mut self) {
+        if self.shared.contains(Flags::READ_TIMEOUT) {
+            let buffered = self.shared.io.with_read_buf(|buf| buf.len()) as u32;
+            self.read_consumed = self
+                .read_consumed
+                .saturating_add(buffered.saturating_sub(self.read_remains));
+            self.read_remains = buffered;
+        }
+    }
+
+    fn start_read_timer(&mut self, consumed: u32, remains: u32) {
+        if let Some(params) = self.shared.io.cfg().frame_read_rate() {
+            self.shared.remove_flags(Flags::KA_TIMEOUT | Flags::IDLE);
+            self.shared.insert_flags(Flags::READ_TIMEOUT);
+            self.read_consumed = consumed;
+            self.read_remains = remains;
+
+            let (timeout, max_timeout) = next_read_timeout(params.timeout, params.max_timeout);
+            self.read_max_timeout = max_timeout;
+            self.shared.io.start_timer(timeout);
+        }
+    }
+
     fn call_service(&mut self, cx: &mut Context<'_>, item: DispatchItem<U>, nowait: bool) {
         let mut fut = if nowait {
             self.shared.service.call_nowait(item)
@@ -563,12 +608,20 @@ where
         // got parsed frame
         if decoded.item.is_some() {
             self.read_remains = 0;
-            self.shared
-                .remove_flags(Flags::KA_TIMEOUT | Flags::READ_TIMEOUT | Flags::IDLE);
+            self.read_consumed = 0;
+            self.shared.remove_flags(
+                Flags::KA_TIMEOUT | Flags::READ_TIMEOUT | Flags::IDLE | Flags::FIRST_FRAME,
+            );
+            self.shared.io.stop_timer();
         } else if self.shared.contains(Flags::READ_TIMEOUT) {
             // received new data but not enough for parsing complete frame
             self.read_remains = decoded.remains as u32;
-        } else if self.read_remains == 0 && decoded.remains == 0 {
+        } else if self.shared.contains(Flags::FIRST_FRAME) {
+            self.start_read_timer(
+                (decoded.consumed as u32).saturating_add(decoded.remains as u32),
+                decoded.remains as u32,
+            );
+        } else if self.read_remains == 0 && decoded.remains == 0 && decoded.consumed == 0 {
             // no new data, start keep-alive timer
             if self.shared.contains(Flags::KA_ENABLED) && !self.shared.contains(Flags::KA_TIMEOUT) {
                 log::trace!(
@@ -581,15 +634,12 @@ where
                     .io
                     .start_timer(self.shared.io.cfg().keepalive_timeout());
             }
-        } else if let Some(params) = self.shared.io.cfg().frame_read_rate() {
+        } else {
             // we got new data but not enough to parse single frame
-            // start read timer
-            self.shared.insert_flags(Flags::READ_TIMEOUT);
-
-            self.read_remains = decoded.remains as u32;
-            self.read_remains_prev = 0;
-            self.read_max_timeout = params.max_timeout;
-            self.shared.io.start_timer(params.timeout);
+            self.start_read_timer(
+                (decoded.consumed as u32).saturating_add(decoded.remains as u32),
+                decoded.remains as u32,
+            );
         }
     }
 
@@ -597,25 +647,29 @@ where
         // check read timer
         if self.shared.contains(Flags::READ_TIMEOUT) {
             if let Some(params) = self.shared.io.cfg().frame_read_rate() {
-                let total = self.read_remains - self.read_remains_prev;
+                let total = self.read_consumed;
+                self.read_consumed = 0;
 
                 // read rate, start timer for next period
                 if total > params.rate {
-                    self.read_remains_prev = self.read_remains;
-                    self.read_remains = 0;
+                    let timeout = if params.max_timeout.is_zero() {
+                        Some(params.timeout)
+                    } else if self.read_max_timeout.is_zero() {
+                        None
+                    } else {
+                        let (timeout, remaining) =
+                            next_read_timeout(params.timeout, self.read_max_timeout);
+                        self.read_max_timeout = remaining;
+                        Some(timeout)
+                    };
 
-                    if !params.max_timeout.is_zero() {
-                        self.read_max_timeout =
-                            Seconds(self.read_max_timeout.0.saturating_sub(params.timeout.0));
-                    }
-
-                    if params.max_timeout.is_zero() || !self.read_max_timeout.is_zero() {
+                    if let Some(timeout) = timeout {
                         log::trace!(
                             "{}: Frame read rate {:?}, extend timer",
                             self.shared.io.tag(),
                             total
                         );
-                        self.shared.io.start_timer(params.timeout);
+                        self.shared.io.start_timer(timeout);
                         return Ok(());
                     }
                     log::trace!(
@@ -740,6 +794,29 @@ mod tests {
         }
     }
 
+    #[derive(Copy, Clone)]
+    struct ConsumingCodec;
+
+    impl Encoder for ConsumingCodec {
+        type Item = Bytes;
+        type Error = io::Error;
+
+        fn encodev(&self, item: Bytes, dst: &mut BytePages) -> Result<(), Self::Error> {
+            dst.append(item);
+            Ok(())
+        }
+    }
+
+    impl Decoder for ConsumingCodec {
+        type Item = Bytes;
+        type Error = io::Error;
+
+        fn decode(&self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+            src.clear();
+            Ok(None)
+        }
+    }
+
     impl<U, Err> Dispatcher<U, Err>
     where
         U: Decoder + Encoder + 'static,
@@ -749,38 +826,8 @@ mod tests {
         where
             S: Service<(), DispatchItem<U>, Res = Option<Response<U>>, Error = Err> + 'static,
         {
-            let flags = if io.cfg().keepalive_timeout().is_zero() {
-                super::Flags::empty()
-            } else {
-                super::Flags::KA_ENABLED
-            };
-
             let inner = State(io.get_ref());
-            io.start_timer(Seconds::ONE);
-
-            let shared = Rc::new(DispatcherShared {
-                codec,
-                io: io.into(),
-                flags: Cell::new(flags),
-                error: Cell::new(None),
-                inflight: Cell::new(0),
-                service: Pipeline::new((), service),
-            });
-
-            (
-                Dispatcher {
-                    inner: DispatcherInner {
-                        shared,
-                        error: None,
-                        st: DispatcherState::Processing,
-                        response: None,
-                        read_remains: 0,
-                        read_remains_prev: 0,
-                        read_max_timeout: Seconds::ZERO,
-                    },
-                },
-                inner,
-            )
+            (Self::new(io, codec, Pipeline::new((), service)), inner)
         }
     }
 
@@ -1379,6 +1426,82 @@ mod tests {
         assert!(state.0.is_stopping());
         assert!(client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
+    }
+
+    #[ntex::test]
+    async fn read_timeout_starts_for_new_connection() {
+        let timeout = Rc::new(Cell::new(false));
+        let timeout2 = timeout.clone();
+        let (client, server) = IoTest::create();
+        let io = Io::new(
+            server,
+            SharedCfg::new("TEST").add(
+                IoConfig::new()
+                    .set_keepalive_timeout(Seconds::ZERO)
+                    .set_frame_read_rate(Seconds(1), Seconds(2), 2),
+            ),
+        );
+
+        let (mut disp, state) = Dispatcher::debug(
+            io,
+            BCodec(8),
+            ntex_service::fn_service(move |msg: DispatchItem<BCodec>| {
+                if matches!(msg, DispatchItem::Stop(Reason::ReadTimeout)) {
+                    timeout2.set(true);
+                }
+                async { Ok::<_, ()>(None) }
+            }),
+        );
+
+        assert!(disp.inner.shared.contains(Flags::FIRST_FRAME));
+        assert!(disp.inner.shared.contains(Flags::READ_TIMEOUT));
+        state.io().notify_timeout();
+        let _ = lazy(|cx| Pin::new(&mut disp).poll(cx)).await;
+
+        assert!(timeout.get());
+        client.close().await;
+    }
+
+    #[ntex::test]
+    async fn read_timeout_tracks_consumed_bytes_and_stalls() {
+        let timeout = Rc::new(Cell::new(false));
+        let timeout2 = timeout.clone();
+        let (client, server) = IoTest::create();
+        let io = Io::new(
+            server,
+            SharedCfg::new("TEST").add(
+                IoConfig::new()
+                    .set_keepalive_timeout(Seconds::ZERO)
+                    .set_frame_read_rate(Seconds(1), Seconds::ZERO, 2),
+            ),
+        );
+
+        let (mut disp, state) = Dispatcher::debug(
+            io,
+            ConsumingCodec,
+            ntex_service::fn_service(move |msg: DispatchItem<ConsumingCodec>| {
+                if matches!(msg, DispatchItem::Stop(Reason::ReadTimeout)) {
+                    timeout2.set(true);
+                }
+                async { Ok::<_, ()>(None) }
+            }),
+        );
+
+        client.write("123");
+        sleep(Millis(25)).await;
+        assert!(lazy(|cx| Pin::new(&mut disp).poll(cx)).await.is_pending());
+        assert_eq!(disp.inner.read_consumed, 3);
+        assert_eq!(disp.inner.read_remains, 0);
+
+        state.io().notify_timeout();
+        assert!(lazy(|cx| Pin::new(&mut disp).poll(cx)).await.is_pending());
+        assert!(!timeout.get());
+        assert_eq!(disp.inner.read_consumed, 0);
+
+        state.io().notify_timeout();
+        let _ = lazy(|cx| Pin::new(&mut disp).poll(cx)).await;
+        assert!(timeout.get());
+        client.close().await;
     }
 
     #[ntex::test]

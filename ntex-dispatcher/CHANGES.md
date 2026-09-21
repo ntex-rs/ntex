@@ -2,6 +2,8 @@
 
 ## [4.1.0] - 2026-09-21
 
+* Start frame rate timing for new connections immediately
+
 * Transport failures and force-closes cancel the dispatcher-held pending response future
 
 ## [4.0.1] - 2026-09-18
