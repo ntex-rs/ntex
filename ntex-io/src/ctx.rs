@@ -140,43 +140,43 @@ impl IoContext {
                     st.wake_dispatch_task();
                 }
 
-                st.buffer.process_read_buf(&self.0, nbytes).map(|status| {
-                    let size = st.buffer.read_dst_size();
+                st.buffer
+                    .process_read_buf(&self.0, nbytes)
+                    .and_then(|status| {
+                        let size = st.buffer.read_dst_size();
 
-                    // The destination read buffer has new data, wake up the dispatcher
-                    if size > orig {
-                        if st.is_rd_backpressure_needed(size) {
-                            log::trace!("{}: Read buf({size}), enable back-pressure", st.tag());
-                            st.flags.set_read_ready_and_backpressure();
-                        } else {
-                            st.flags.set_read_ready();
+                        // The destination read buffer has new data, wake up the dispatcher
+                        if size > orig {
+                            if st.is_rd_backpressure_needed(size) {
+                                log::trace!("{}: Read buf({size}), enable back-pressure", st.tag());
+                                st.flags.set_read_ready_and_backpressure();
+                            } else {
+                                st.flags.set_read_ready();
+                            }
+                            #[cfg(feature = "trace")]
+                            log::trace!("{}: New {size} bytes available", st.tag());
+                            st.wake_dispatch_task();
                         }
-                        #[cfg(feature = "trace")]
-                        log::trace!("{}: New {size} bytes available", st.tag());
-                        st.wake_dispatch_task();
-                    }
 
-                    if st.flags.is_read_notify() {
-                        // If the "notify" flag is set, we must wake the
-                        // dispatcher task whenever data is read from the source.
-                        st.wake_dispatch_task();
-                        st.flags.set_read_notifed();
-                    }
-
-                    // Check if the filter wrote data during buffer processing
-                    if status.wants_write {
-                        if let Err(err) = st.buffer.process_write_buf_force(&self.0) {
-                            st.terminate_connection(Some(err));
-                        } else {
-                            self.0.consolidate_write_state(false);
+                        if st.flags.is_read_notify() {
+                            // If the "notify" flag is set, we must wake the
+                            // dispatcher task whenever data is read from the source.
+                            st.wake_dispatch_task();
+                            st.flags.set_read_notifed();
                         }
-                    }
 
-                    // Check whether the filter notifies about readiness changes
-                    if status.notify {
-                        self.0.call_notify();
-                    }
-                })
+                        // Check if the filter wrote data during buffer processing
+                        if status.wants_write {
+                            st.buffer.process_write_buf_force(&self.0)?;
+                            self.0.consolidate_write_state(false)?;
+                        }
+
+                        // Check whether the filter notifies about readiness changes
+                        if status.notify {
+                            self.0.call_notify();
+                        }
+                        Ok(())
+                    })
             }),
         };
 
@@ -308,7 +308,9 @@ impl IoContext {
                 return;
             }
         };
-        self.0.consolidate_write_state(true);
+        if self.0.consolidate_write_state(true).is_err() {
+            return;
+        }
 
         #[cfg(feature = "trace")]
         log::trace!(

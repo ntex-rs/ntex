@@ -124,12 +124,18 @@ impl IoRef {
 
     #[inline]
     /// Encodes the slice into the write buffer.
+    ///
+    /// If this triggers an eager backend write, any transport or filter error
+    /// from that write is returned immediately.
     pub fn encode_slice(&self, src: &[u8]) -> io::Result<()> {
         self.with_write_buf(|buf| buf.extend_from_slice(src))
     }
 
     #[inline]
     /// Writes bytes to the write buffer.
+    ///
+    /// If this triggers an eager backend write, any transport or filter error
+    /// from that write is returned immediately.
     pub fn encode_bytes<B>(&self, src: B) -> io::Result<()>
     where
         BytePage: From<B>,
@@ -179,16 +185,7 @@ impl IoRef {
     /// Requires the underlying runtime to implement `.write()`;
     /// otherwise, no action is taken.
     pub fn send_buf(&self) -> io::Result<()> {
-        // try send bytes
-        self.consolidate_write_state(true);
-
-        if self.0.flags.is_stopping_any()
-            && let Some(err) = self.0.error()
-        {
-            Err(err)
-        } else {
-            Ok(())
-        }
+        self.consolidate_write_state(true)
     }
 
     pub(crate) fn ops_send_buf(&self) {
@@ -221,7 +218,8 @@ impl IoRef {
     /// Provides temporary access to the outermost filter buffers.
     ///
     /// Filter callbacks run before and after `f`, and any produced write data
-    /// is scheduled for delivery after the closure returns.
+    /// is scheduled for delivery after the closure returns. Errors from an
+    /// eager backend write are returned to the caller.
     pub fn with_buf<F, R>(&self, f: F) -> io::Result<R>
     where
         F: FnOnce(&mut FilterBuf<'_>) -> R,
@@ -230,7 +228,7 @@ impl IoRef {
         let result = self.0.buffer.with_filter(self, |ctx| ctx.with_buffer(f));
         self.with_callbacks(|cb| cb.after_processing(self));
 
-        self.consolidate_write_state(false);
+        self.consolidate_write_state(false)?;
         Ok(result)
     }
 
@@ -252,7 +250,8 @@ impl IoRef {
     /// Provides mutable access to the application-facing write buffer.
     ///
     /// Returns an error without invoking `f` if the connection is closing or
-    /// closed. Data appended by `f` is scheduled for delivery.
+    /// closed. Data appended by `f` is scheduled for delivery. If that starts
+    /// an eager backend write, its transport or filter error is returned.
     pub fn with_write_buf<F, R>(&self, f: F) -> io::Result<R>
     where
         F: FnOnce(&mut BytePages) -> R,
@@ -267,7 +266,7 @@ impl IoRef {
             }
         } else {
             let result = st.buffer.with_write_src(f);
-            self.consolidate_write_state(false);
+            self.consolidate_write_state(false)?;
             Ok(result)
         }
     }
@@ -294,7 +293,7 @@ impl IoRef {
         self.0.buffer.with_write_dst(f)
     }
 
-    pub(crate) fn consolidate_write_state(&self, force: bool) {
+    pub(crate) fn consolidate_write_state(&self, force: bool) -> io::Result<()> {
         let st = &self.0;
 
         // wake write task if needsed
@@ -339,6 +338,13 @@ impl IoRef {
                 Iops::schedule_write(st.id());
             }
         }
+
+        if st.flags.is_stopping_any()
+            && let Some(err) = st.error()
+        {
+            return Err(err);
+        }
+
         // A direct write may have changed the amount of buffered data.
         let size = st.buffer.write_buf_size();
 
@@ -347,6 +353,7 @@ impl IoRef {
             st.flags.set_wr_backpressure();
             st.wake_dispatch_task();
         }
+        Ok(())
     }
 
     fn update_read_destination(&self, buf: &mut BytesMut) {
@@ -600,10 +607,15 @@ mod tests {
         assert_eq!(buf, Bytes::from_static(b"test"));
 
         client.write_error(io::Error::other("err"));
-        state
+        let err = state
             .send(Bytes::from_static(b"test"), &BytesCodec)
             .await
-            .unwrap();
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            Either::Right(ref err)
+                if err.kind() == io::ErrorKind::Other && err.to_string() == "err"
+        ));
         assert!(state.flags().is_terminated());
 
         let res = state.send(Bytes::from_static(b"test"), &BytesCodec).await;

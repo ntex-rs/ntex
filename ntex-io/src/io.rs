@@ -751,7 +751,7 @@ impl<F> Io<F> {
 
         // flush filter state
         st.buffer.process_write_buf_force(self)?;
-        self.consolidate_write_state(false);
+        self.consolidate_write_state(false)?;
 
         let len = st.buffer.write_buf_size();
         if len > 0 {
@@ -1558,6 +1558,37 @@ mod tests {
         assert!(io.flags().is_write_paused());
         assert!(!io.flags().is_wr_backpressure());
         assert!(!io.st().flags.is_wr_send_scheduled());
+    }
+
+    #[ntex::test]
+    async fn eager_write_reports_transport_error() {
+        #[derive(Debug)]
+        struct FailedWrite;
+
+        impl IoStream for FailedWrite {
+            fn start(self, _: IoContext) -> Box<dyn Handle> {
+                Box::new(self)
+            }
+        }
+
+        impl Handle for FailedWrite {
+            fn write(&self, ctx: &IoContext) {
+                ctx.update_write_status(Err(io::Error::new(
+                    io::ErrorKind::ConnectionReset,
+                    "connection reset",
+                )));
+            }
+        }
+
+        let io = Io::new(
+            FailedWrite,
+            SharedCfg::new("SRV").add(IoConfig::new().set_write_buf_threshold(1)),
+        );
+
+        let err = io.encode_slice(BIN2).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::ConnectionReset);
+        assert_eq!(err.to_string(), "connection reset");
+        assert!(io.is_terminating());
     }
 
     #[ntex::test]
