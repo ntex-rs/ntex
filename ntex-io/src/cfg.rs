@@ -259,6 +259,10 @@ impl IoConfig {
     ///
     /// By default, the high watermark is approximately 16 KiB and the low
     /// watermark is approximately 512 bytes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `high_watermark` is zero.
     #[must_use]
     pub fn set_read_buf(
         mut self,
@@ -266,6 +270,10 @@ impl IoConfig {
         low_watermark: usize,
         cache_size: usize,
     ) -> Self {
+        assert!(
+            high_watermark > 0,
+            "read buffer high watermark must be greater than zero"
+        );
         self.read_buf.cache_size = cache_size;
         self.read_buf.high = high_watermark;
         self.read_buf.low = low_watermark;
@@ -352,6 +360,10 @@ impl IoConfig {
     ///
     /// By default, the high watermark is approximately 16 KiB and the low
     /// watermark is approximately 512 bytes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `high_watermark` is zero.
     #[must_use]
     pub fn set_write_buf(
         mut self,
@@ -359,6 +371,10 @@ impl IoConfig {
         low_watermark: usize,
         cache_size: usize,
     ) -> Self {
+        assert!(
+            high_watermark > 0,
+            "write buffer high watermark must be greater than zero"
+        );
         self.write_buf.cache_size = cache_size;
         self.write_buf.high = high_watermark;
         self.write_buf.low = low_watermark;
@@ -395,9 +411,17 @@ impl BufConfig {
 
     #[inline]
     /// Ensures that the buffer has at least `size` bytes of remaining capacity.
+    ///
+    /// # Panics
+    ///
+    /// Panics if growth is required and `high` is zero.
     pub fn resize_min(&self, buf: &mut BytesMut, size: usize) {
         let mut avail = buf.remaining_mut();
         if avail < size {
+            assert!(
+                self.high > 0,
+                "buffer high watermark must be greater than zero"
+            );
             let mut new_cap = buf.capacity();
             while avail < size {
                 avail += self.high;
@@ -452,5 +476,44 @@ impl LocalCache {
         } else {
             f(&mut cache[idx].1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn buffer_configuration() {
+        let cfg = IoConfig::new()
+            .set_read_buf(1024, 128, 4)
+            .set_write_buf(2048, 256, 8);
+
+        assert_eq!(cfg.read_buf().high, 1024);
+        assert_eq!(cfg.read_buf().low, 128);
+        assert_eq!(cfg.read_buf().half, 512);
+        assert_eq!(cfg.write_buf().high, 2048);
+        assert_eq!(cfg.write_buf().low, 256);
+        assert_eq!(cfg.write_buf().half, 1024);
+    }
+
+    #[test]
+    #[should_panic(expected = "read buffer high watermark must be greater than zero")]
+    fn zero_read_high_watermark() {
+        let _ = IoConfig::new().set_read_buf(0, 128, 4);
+    }
+
+    #[test]
+    #[should_panic(expected = "write buffer high watermark must be greater than zero")]
+    fn zero_write_high_watermark() {
+        let _ = IoConfig::new().set_write_buf(0, 128, 4);
+    }
+
+    #[test]
+    #[should_panic(expected = "buffer high watermark must be greater than zero")]
+    fn zero_resize_increment() {
+        let mut cfg = *IoConfig::new().read_buf();
+        cfg.high = 0;
+        cfg.resize_min(&mut BytesMut::new(), 1024);
     }
 }
