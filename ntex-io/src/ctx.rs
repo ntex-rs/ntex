@@ -312,10 +312,16 @@ impl IoContext {
             return;
         }
 
+        // After a clean read EOF no further input can arrive, so a filter that
+        // is waiting for the peer can never finish. The peer closing first is
+        // a normal close, so this is not reported as an error.
+        let eof = !ready && st.flags.is_read_eof();
+
         // If the read buffer is not consumed it is unlikely that the filter
         // will ever complete its shutdown.
-        let blocked =
-            !ready && (st.flags.is_read_paused() || st.flags.is_read_ready_and_backpressure());
+        let blocked = !ready
+            && !eof
+            && (st.flags.is_read_paused() || st.flags.is_read_ready_and_backpressure());
 
         // The shutdown cannot complete, but stay in the filter shutdown phase
         // until buffered output has reached the transport; setting
@@ -323,8 +329,11 @@ impl IoContext {
         // disconnect timeout below bounds the wait, and `update_write_status()`
         // wakes the read task once the write buffer drains. Without a
         // disconnect timeout the wait would be unbounded.
-        if blocked && (flushed || !st.cfg.disconnect_timeout().non_zero()) {
-            Self::stop_filters(st, blocked_err());
+        if (eof || blocked) && (flushed || !st.cfg.disconnect_timeout().non_zero()) {
+            if eof {
+                log::debug!("{}: Peer closed before filter shutdown completed", st.tag());
+            }
+            Self::stop_filters(st, blocked.then(blocked_err));
             return;
         }
 
@@ -337,11 +346,11 @@ impl IoContext {
             if timeout.poll_elapsed(cx).is_ready() {
                 Self::stop_filters(
                     st,
-                    if blocked {
+                    Some(if blocked {
                         blocked_err()
                     } else {
                         io::Error::new(io::ErrorKind::TimedOut, "filter shutdown timed out")
-                    },
+                    }),
                 );
             } else {
                 st.shutdown_timeout.set(Some(timeout));
@@ -357,7 +366,7 @@ impl IoContext {
     /// The error is recorded here rather than when the failure is first
     /// detected: while an error is set, `IoRef::consolidate_write_state()`
     /// short-circuits, which would stop the write buffer from draining.
-    fn stop_filters(st: &IoState, err: io::Error) {
+    fn stop_filters(st: &IoState, err: Option<io::Error>) {
         let len = st.buffer.write_buf_size();
         if len != 0 {
             log::warn!(
@@ -365,7 +374,9 @@ impl IoContext {
                 st.tag()
             );
         }
-        st.set_shutdown_error(err);
+        if let Some(err) = err {
+            st.set_shutdown_error(err);
+        }
         st.filters_stopped();
     }
 

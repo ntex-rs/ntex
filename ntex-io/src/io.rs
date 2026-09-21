@@ -1931,6 +1931,56 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn peer_eof_completes_filter_shutdown() {
+        #[derive(Debug)]
+        struct PendingShutdown;
+
+        impl FilterLayer for PendingShutdown {
+            fn process_read_buf(&self, _: &FilterBuf<'_>) -> io::Result<()> {
+                Ok(())
+            }
+
+            fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                buf.with_write_buffers(|src, dst| src.move_to(dst));
+                Ok(())
+            }
+
+            fn shutdown(&self, buf: &FilterBuf<'_>) -> io::Result<Poll<()>> {
+                // waits for input that can never arrive after a clean eof
+                buf.with_write_buffers(|src, dst| src.move_to(dst));
+                Ok(Poll::Pending)
+            }
+        }
+
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV")
+                .add(IoConfig::default().set_disconnect_timeout(ntex_util::time::Seconds(30))),
+        )
+        .add_filter(PendingShutdown);
+
+        io.encode_slice(b"bye").unwrap();
+
+        // peer closes cleanly, no further input can arrive
+        let peer = client.clone();
+        drop(client);
+        assert!(io.read_more().await.unwrap().is_none());
+        assert!(io.st().flags.is_read_eof());
+
+        // the shutdown completes without waiting for the disconnect timeout
+        timeout(Millis(1000), io.shutdown())
+            .await
+            .expect("transport shutdown did not complete")
+            .unwrap();
+        assert!(io.st().flags.is_terminated());
+
+        // buffered output still reached the peer
+        assert_eq!(peer.read_any(), Bytes::from_static(b"bye"));
+    }
+
+    #[ntex::test]
     async fn filter_shutdown_timeout_is_reported() {
         #[derive(Debug)]
         struct PendingShutdown;

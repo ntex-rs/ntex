@@ -110,11 +110,18 @@ pub trait FilterLayer: fmt::Debug + 'static {
     /// the transport-facing destination buffer.
     fn process_write_buf(&self, buf: &FilterBuf<'_>) -> IoResult<()>;
 
-    /// Performs one step of graceful filter shutdown.
+    /// Performs graceful filter shutdown.
     ///
     /// Returning `Poll::Pending` keeps the filter active and causes shutdown to
     /// be polled again after the I/O task is notified. A ready result allows
     /// shutdown to continue toward the transport.
+    ///
+    /// A filter that waits for input from the peer must check
+    /// [`IoRef::is_read_eof`] and return a ready result once it is set: after a
+    /// clean read EOF no further input can arrive, so pending forever would
+    /// only stall the close until the disconnect timeout expires. The runtime
+    /// also ends the shutdown phase itself in that case, but it cannot know
+    /// whether the filter considers the shutdown complete.
     fn shutdown(&self, buf: &FilterBuf<'_>) -> IoResult<Poll<()>> {
         Ok(Poll::Ready(()))
     }

@@ -2,6 +2,9 @@
 
 ## [4.1.0] - 2026-09-21
 
+* Complete filter shutdown after a clean peer EOF instead of waiting for the disconnect
+  timeout, no further input can arrive
+
 * Rename Io::read() to Io::read_exact(), it fills the whole buffer
 
 * Do not discard buffered output when filter shutdown cannot complete, wait for the write
