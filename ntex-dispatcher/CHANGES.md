@@ -4,6 +4,8 @@
 
 * Start frame rate timing for new connections immediately
 
+* Preserve frame read-timeout classification when service readiness pauses reads
+
 * Transport failures and force-closes cancel the dispatcher-held pending response future
 
 ## [4.0.1] - 2026-09-18

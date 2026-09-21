@@ -442,7 +442,13 @@ impl IoRef {
 
     /// Stops the timer and clears any pending timeout notification.
     pub fn stop_timer(&self) {
-        self.0.flags.check_dispatcher_timeout();
+        self.stop_timer_status();
+    }
+
+    #[doc(hidden)]
+    /// Stops the timer and reports whether a pending notification was cleared.
+    pub fn stop_timer_status(&self) -> bool {
+        let notified = self.0.flags.check_dispatcher_timeout();
 
         let hnd = self.0.timeout.get();
         if hnd.is_set() {
@@ -450,6 +456,7 @@ impl IoRef {
             self.0.timeout.set(TimerHandle::ZERO);
             hnd.unregister(self);
         }
+        notified
     }
 
     /// Returns a future that resolves when the complete I/O stream disconnects.

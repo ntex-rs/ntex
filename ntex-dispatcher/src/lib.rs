@@ -549,10 +549,30 @@ where
                     self.shared.io.tag()
                 );
 
+                let read_timeout = self.shared.contains(Flags::READ_TIMEOUT);
+                if read_timeout {
+                    self.update_read_progress();
+                }
+
                 // remove all timers
+                let timeout_pending = self.shared.io.stop_timer_status();
+                let timeout_reason = if read_timeout && timeout_pending {
+                    self.handle_timeout().err()
+                } else {
+                    None
+                };
                 self.shared
                     .remove_flags(Flags::KA_TIMEOUT | Flags::READ_TIMEOUT | Flags::IDLE);
                 self.shared.io.stop_timer();
+
+                if let Some(reason) = timeout_reason {
+                    log::trace!(
+                        "{}: Frame read timeout during service pause",
+                        self.shared.io.tag()
+                    );
+                    self.st = DispatcherState::Stop;
+                    return Poll::Ready(PollService::ItemWait(DispatchItem::Stop(reason)));
+                }
 
                 match ready!(self.shared.io.poll_read_pause(cx)) {
                     IoStatusUpdate::KeepAlive => {
@@ -1491,6 +1511,72 @@ mod tests {
         let _ = lazy(|cx| Pin::new(&mut disp).poll(cx)).await;
         assert!(timeout.get());
         client.close().await;
+    }
+
+    #[ntex::test]
+    async fn read_timeout_during_service_readiness_pause() {
+        struct PendingReadyService {
+            pending: Cell<bool>,
+            reason: Rc<Cell<Option<bool>>>,
+        }
+
+        impl Service<(), DispatchItem<BCodec>> for PendingReadyService {
+            type Res = Option<Bytes>;
+            type Error = ();
+
+            async fn ready(&self, ctx: Ctx<'_, Self>) -> Result<(), Self::Error> {
+                ctx.poll_fn(|cx| {
+                    if self.pending.replace(false) {
+                        cx.waker().wake_by_ref();
+                        Poll::Pending
+                    } else {
+                        Poll::Ready(Ok(()))
+                    }
+                })
+                .await
+            }
+
+            async fn call(
+                &self,
+                msg: DispatchItem<BCodec>,
+                _: Ctx<'_, Self>,
+            ) -> Result<Self::Res, Self::Error> {
+                if let DispatchItem::Stop(reason) = msg {
+                    self.reason.set(Some(matches!(reason, Reason::ReadTimeout)));
+                }
+                Ok(None)
+            }
+        }
+
+        async fn check(keepalive: Seconds) {
+            let reason = Rc::new(Cell::new(None));
+            let (client, server) = IoTest::create();
+            let io = Io::new(
+                server,
+                SharedCfg::new("TEST").add(
+                    IoConfig::new()
+                        .set_keepalive_timeout(keepalive)
+                        .set_frame_read_rate(Seconds::ONE, Seconds(2), 2),
+                ),
+            );
+            let (mut disp, state) = Dispatcher::debug(
+                io,
+                BCodec(8),
+                PendingReadyService {
+                    pending: Cell::new(true),
+                    reason: reason.clone(),
+                },
+            );
+
+            state.io().notify_timeout();
+            assert!(lazy(|cx| Pin::new(&mut disp).poll(cx)).await.is_pending());
+            let _ = lazy(|cx| Pin::new(&mut disp).poll(cx)).await;
+            assert_eq!(reason.get(), Some(true));
+            client.close().await;
+        }
+
+        check(Seconds::ZERO).await;
+        check(Seconds::ONE).await;
     }
 
     #[ntex::test]
