@@ -21,8 +21,11 @@ impl<S, St> Middleware<S, St> for OneRequest {
     }
 }
 
-#[derive(Clone, Debug)]
 /// Service wrapper that allows only one call to run at a time.
+///
+/// This type is intentionally not cloneable. Cloning its readiness state would
+/// create another independent gate and allow calls to overlap.
+#[derive(Debug)]
 pub struct OneRequestService<S> {
     waker: LocalWaker,
     service: S,

@@ -16,6 +16,8 @@
 
 * Saturate overflowing `Millis` and `Seconds` conversions
 
+* Remove `Clone` from `OneRequestService` to preserve its single-call guarantee
+
 ## [4.0.0] - 2026-09-14
 
 * Refactor Condition result
