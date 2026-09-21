@@ -520,13 +520,16 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Waits for a new transport read notification.
+    /// Waits for the next read from the transport.
     ///
-    /// Unlike [`read_more`](Self::read_more), this waits for the read task to
-    /// observe new source data even if previously buffered application data is
-    /// already available. Returns `Ok(None)` after clean EOF with no buffered
-    /// input, or when an error-free shutdown begins. If the transport failed,
-    /// this returns that error.
+    /// Use this when a filter needs more source bytes. Unlike
+    /// [`read_more`](Self::read_more), data already waiting in the application
+    /// buffer does not complete this wait. If the read task is paused, this
+    /// method wakes it.
+    ///
+    /// Returns `Some(())` when the transport provides more input. If clean EOF
+    /// leaves final data in the application buffer, it returns `Some(())` once
+    /// and `None` afterward. A transport error is returned unchanged.
     pub async fn read_notify(&self) -> io::Result<Option<()>> {
         poll_fn(|cx| self.poll_read_notify(cx)).await
     }
@@ -630,7 +633,15 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Polls the I/O stream for availability of incoming data.
+    /// Polls for the next read from the transport.
+    ///
+    /// This is the polling version of [`read_notify`](Self::read_notify).
+    /// Existing application data does not make it ready. When another transport
+    /// read is needed, this wakes the read task and registers the current waker.
+    ///
+    /// `Some(())` means that more input arrived. Clean EOF may produce one last
+    /// `Some(())` when filters leave final application data; later polls return
+    /// `None`. Transport errors are returned unchanged.
     pub fn poll_read_notify(&self, cx: &mut Context<'_>) -> Poll<io::Result<Option<()>>> {
         let st = self.st();
         if st.flags.is_stopping_or_terminating() {
@@ -639,8 +650,13 @@ impl<F> Io<F> {
             } else {
                 Poll::Ready(Ok(None))
             }
-        } else if st.flags.is_read_eof() && !st.flags.is_read_ready() {
-            Poll::Ready(Ok(None))
+        } else if st.flags.is_read_eof() {
+            let notified = st.flags.check_read_notifed();
+            if notified && st.flags.is_read_ready() {
+                Poll::Ready(Ok(Some(())))
+            } else {
+                Poll::Ready(Ok(None))
+            }
         } else if st.flags.check_read_notifed() {
             Poll::Ready(Ok(Some(())))
         } else {

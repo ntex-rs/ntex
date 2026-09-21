@@ -423,11 +423,20 @@ mod tests {
         let state = Io::from(server).add_filter(FinishOnEof);
         let ctx = IoContext::new(state.get_ref());
 
+        assert!(lazy(|cx| state.poll_read_notify(cx)).await.is_pending());
         assert_eq!(
             ctx.update_read_status(ctx.get_read_buf(), Poll::Ready(Ok(0))),
             IoTaskStatus::Pause
         );
         assert!(state.is_read_eof());
+        assert!(matches!(
+            lazy(|cx| state.poll_read_notify(cx)).await,
+            Poll::Ready(Ok(Some(())))
+        ));
+        assert!(matches!(
+            lazy(|cx| state.poll_read_notify(cx)).await,
+            Poll::Ready(Ok(None))
+        ));
         assert_eq!(state.with_read_buf(BytesMut::take), b"final");
         assert!(matches!(
             lazy(|cx| state.poll_read_more(cx)).await,

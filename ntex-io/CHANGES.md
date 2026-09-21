@@ -20,6 +20,8 @@
 
 * Backpressure remains active until the buffer reaches half of the high watermark
 
+* Fix read_notify() can wait forever after EOF with buffered data
+
 ## [4.0.1] - 2026-09-18
 
 * Api docs improvements
