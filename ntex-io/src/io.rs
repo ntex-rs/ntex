@@ -745,7 +745,8 @@ impl<F> Io<F> {
     /// Wakes the write task and instructs it to flush data.
     ///
     /// If `full` is true, wakes the dispatcher when all data has been flushed;
-    /// otherwise, it wakes when the write buffer size falls below the low-watermark size.
+    /// otherwise, active write backpressure is released when the buffered size
+    /// reaches half of the configured high watermark.
     pub fn poll_flush(&self, cx: &mut Context<'_>, full: bool) -> Poll<io::Result<()>> {
         let st = self.st();
 
@@ -761,6 +762,11 @@ impl<F> Io<F> {
                 st.flags.set_wants_write_flush();
                 st.dispatch_task.register(cx.waker());
                 return Poll::Pending;
+            } else if st.flags.is_wr_backpressure() {
+                if !st.should_disable_wr_backpressure(len) {
+                    st.dispatch_task.register(cx.waker());
+                    return Poll::Pending;
+                }
             } else if st.is_wr_backpressure_needed(len) {
                 st.flags.set_wr_backpressure();
                 st.dispatch_task.register(cx.waker());
@@ -1618,6 +1624,31 @@ mod tests {
             Poll::Ready(IoStatusUpdate::WriteBackpressure)
         ));
         assert!(!io.flags().is_wr_backpressure());
+        assert!(matches!(
+            lazy(|cx| io.poll_flush(cx, false)).await,
+            Poll::Ready(Ok(()))
+        ));
+        assert!(!io.flags().is_wr_backpressure());
+    }
+
+    #[ntex::test]
+    async fn partial_flush_keeps_write_backpressure_until_half_watermark() {
+        let io = Io::new(
+            IoTest::create().0,
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8, 4, 16)),
+        );
+        let ctx = IoContext::new(io.get_ref());
+
+        io.encode_slice(b"12345678").unwrap();
+        assert!(io.flags().is_wr_backpressure());
+
+        assert_eq!(ctx.with_write_buf(|buf| buf.split_to(1).len()), 1);
+        assert_eq!(ctx.update_write_status(Ok(true)), IoTaskStatus::Io);
+        assert!(lazy(|cx| io.poll_flush(cx, false)).await.is_pending());
+        assert!(io.flags().is_wr_backpressure());
+
+        assert_eq!(ctx.with_write_buf(|buf| buf.split_to(3).len()), 3);
+        assert_eq!(ctx.update_write_status(Ok(true)), IoTaskStatus::Io);
         assert!(matches!(
             lazy(|cx| io.poll_flush(cx, false)).await,
             Poll::Ready(Ok(()))
