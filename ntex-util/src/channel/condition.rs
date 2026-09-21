@@ -210,7 +210,7 @@ impl<T> Clone for Waiter<T> {
     }
 }
 
-impl<T: Default> Future for Waiter<T> {
+impl<T> Future for Waiter<T> {
     type Output = ConditionResult<T>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -218,7 +218,7 @@ impl<T: Default> Future for Waiter<T> {
     }
 }
 
-impl<T: Default> fmt::Debug for Waiter<T> {
+impl<T> fmt::Debug for Waiter<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Waiter").finish()
     }
@@ -332,6 +332,19 @@ mod tests {
             lazy(|cx| waiter2.poll_ready(cx)).await,
             Poll::Ready(ConditionResult::Dropped)
         );
+    }
+
+    #[ntex::test]
+    async fn waiter_future_does_not_require_default() {
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        struct Value(&'static str);
+
+        let cond = Condition::<Value>::new();
+        let waiter = cond.wait();
+        assert_eq!(lazy(|cx| waiter.poll_ready(cx)).await, Poll::Pending);
+
+        cond.notify(Value("ready"));
+        assert_eq!(waiter.await, ConditionResult::Value(Value("ready")));
     }
 
     #[ntex::test]

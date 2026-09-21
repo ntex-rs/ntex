@@ -6,6 +6,10 @@
 
 * Improve API documentation for channels, timers, futures, and services
 
+* Align service timeout ordering with `time::timeout()`
+
+* Remove unnecessary `Default` bound from `condition::Waiter` future
+
 ## [4.0.0] - 2026-09-14
 
 * Refactor Condition result

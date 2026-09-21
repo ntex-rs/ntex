@@ -45,7 +45,8 @@ pub fn interval<T: Into<Millis>>(period: T) -> Interval {
 /// If the future completes before the duration has elapsed, then the completed
 /// value is returned. Otherwise, an error is returned and the future is
 /// canceled. A zero duration still represents an active timeout of at least
-/// one timer tick; use [`timeout_checked`] to disable the timeout with zero.
+/// one timer tick; use [`timeout_checked`] to disable the timeout with zero. If
+/// the future and timer are both ready during the same poll, the future wins.
 #[inline]
 pub fn timeout<T, U>(dur: U, future: T) -> Timeout<T>
 where

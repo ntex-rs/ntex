@@ -2,12 +2,12 @@
 //!
 //! If a service call does not complete within the configured timeout, its
 //! future is dropped and [`TimeoutError::Timeout`] is returned.
+//! If both complete during the same poll, the service result wins.
 use std::{fmt, marker::PhantomData};
 
 use ntex_service::{Ctx, IntoService, Middleware, Service};
 
-use crate::future::{Either, select};
-use crate::time::{Millis, sleep};
+use crate::time::{Millis, timeout};
 
 /// Applies a timeout to requests.
 ///
@@ -134,9 +134,9 @@ where
                 .await
                 .map_err(TimeoutError::Service)
         } else {
-            match select(sleep(self.timeout), ctx.call(&self.service, req)).await {
-                Either::Left(()) => Err(TimeoutError::Timeout),
-                Either::Right(res) => res.map_err(TimeoutError::Service),
+            match timeout(self.timeout, ctx.call(&self.service, req)).await {
+                Ok(res) => res.map_err(TimeoutError::Service),
+                Err(()) => Err(TimeoutError::Timeout),
             }
         }
     }
