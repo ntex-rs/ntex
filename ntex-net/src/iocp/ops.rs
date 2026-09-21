@@ -4,8 +4,8 @@ use std::{cmp, io, mem, os::windows::io::RawSocket, ptr, task::Poll};
 use windows_sys::Win32::{
     Foundation::{
         ERROR_BROKEN_PIPE, ERROR_HANDLE_EOF, ERROR_IO_INCOMPLETE, ERROR_IO_PENDING,
-        ERROR_MORE_DATA, ERROR_NETNAME_DELETED, ERROR_NO_DATA, ERROR_NOT_FOUND,
-        ERROR_OPERATION_ABORTED, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, GetLastError,
+        ERROR_MORE_DATA, ERROR_NO_DATA, ERROR_NOT_FOUND, ERROR_OPERATION_ABORTED,
+        ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, GetLastError,
     },
     Networking::WinSock::{WSABUF, WSARecv, WSASend},
     System::IO::CancelIoEx,
@@ -395,7 +395,6 @@ pub(crate) fn winapi_result() -> Poll<io::Result<()>> {
     match error {
         ERROR_IO_PENDING => Poll::Pending,
         ERROR_IO_INCOMPLETE
-        | ERROR_NETNAME_DELETED
         | ERROR_HANDLE_EOF
         | ERROR_BROKEN_PIPE
         | ERROR_PIPE_CONNECTED

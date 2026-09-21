@@ -3,9 +3,9 @@ use std::{cell::Cell, fmt, io, net, ptr, sync::Arc};
 
 use windows_sys::Win32::{
     Foundation::{
-        ERROR_BROKEN_PIPE, ERROR_HANDLE_EOF, ERROR_IO_INCOMPLETE, ERROR_MORE_DATA,
-        ERROR_NETNAME_DELETED, ERROR_NO_DATA, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED,
-        INVALID_HANDLE_VALUE, NTSTATUS, RtlNtStatusToDosError, WAIT_TIMEOUT,
+        ERROR_BROKEN_PIPE, ERROR_HANDLE_EOF, ERROR_IO_INCOMPLETE, ERROR_MORE_DATA, ERROR_NO_DATA,
+        ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, INVALID_HANDLE_VALUE, NTSTATUS,
+        RtlNtStatusToDosError, WAIT_TIMEOUT,
     },
     Storage::FileSystem::SetFileCompletionNotificationModes,
     System::{
@@ -206,7 +206,6 @@ impl Reactor {
                 let error = unsafe { RtlNtStatusToDosError(status) };
                 match error {
                     ERROR_IO_INCOMPLETE
-                    | ERROR_NETNAME_DELETED
                     | ERROR_HANDLE_EOF
                     | ERROR_BROKEN_PIPE
                     | ERROR_PIPE_CONNECTED

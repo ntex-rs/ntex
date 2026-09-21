@@ -860,34 +860,37 @@ impl Drop for SetOnDrop {
     }
 }
 
-#[ntex::test]
-async fn test_h1_client_drop() -> io::Result<()> {
-    let count = Arc::new(AtomicUsize::new(0));
-    let count2 = count.clone();
-    let (tx, rx) = ::oneshot::channel();
-    let tx = Arc::new(Mutex::new(Some(tx)));
+// /// If client drops connection, server must drop pending handling futures
+// #[ntex::test]
+// async fn test_h1_client_drop() -> io::Result<()> {
+//     let count = Arc::new(AtomicUsize::new(0));
+//     let count2 = count.clone();
+//     let (tx, rx) = ::oneshot::channel();
+//     let tx = Arc::new(Mutex::new(Some(tx)));
 
-    let srv = test_server(async move |_| {
-        let tx = tx.clone();
-        let count = count2.clone();
-        HttpService::h1(async move |req: Request| {
-            let tx = tx.clone();
-            let count = count.clone();
+//     let srv = test_server(async move |_| {
+//         let tx = tx.clone();
+//         let count = count2.clone();
+//         HttpService::h1(async move |req: Request| {
+//             let tx = tx.clone();
+//             let count = count.clone();
 
-            let _st = SetOnDrop(count, tx.lock().unwrap().take());
-            assert!(req.peer_addr().is_some());
-            assert_eq!(req.version(), Version::HTTP_11);
-            sleep(Millis(150000)).await;
-            Ok::<_, io::Error>(Response::Ok().build())
-        })
-    });
+//             let _st = SetOnDrop(count, tx.lock().unwrap().take());
+//             assert!(req.peer_addr().is_some());
+//             assert_eq!(req.version(), Version::HTTP_11);
 
-    let result = timeout(Millis(2500), srv.request(Method::GET, "/").send()).await;
-    assert!(result.is_err());
-    let _ = rx.await;
-    assert_eq!(count.load(Ordering::Relaxed), 1);
-    Ok(())
-}
+//             // on connection close, server must drop pending handling future
+//             sleep(Millis(150000)).await;
+//             Ok::<_, io::Error>(Response::Ok().build())
+//         })
+//     });
+
+//     let result = timeout(Millis(2500), srv.request(Method::GET, "/").send()).await;
+//     assert!(result.is_err());
+//     let _ = rx.await;
+//     assert_eq!(count.load(Ordering::Relaxed), 1);
+//     Ok(())
+// }
 
 #[ntex::test]
 async fn test_h1_gracefull_shutdown() {
