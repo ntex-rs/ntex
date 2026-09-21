@@ -452,9 +452,11 @@ impl<F: Filter> Io<F> {
 impl<F> Io<F> {
     /// Reads and decodes the next item from the incoming stream.
     ///
-    /// Returns `Ok(None)` when the peer disconnects cleanly before another item
-    /// is decoded. Codec errors are returned in [`Either::Left`]; transport
-    /// errors and dispatcher timeouts are returned in [`Either::Right`].
+    /// Returns `Ok(None)` when the connection closes cleanly before another
+    /// item is decoded, whether the peer disconnected or the shutdown was
+    /// started locally. Codec errors are returned in [`Either::Left`];
+    /// transport errors and dispatcher timeouts are returned in
+    /// [`Either::Right`].
     ///
     /// If write backpressure prevents further reads, this method first waits
     /// for the write buffer to fall below its configured threshold.
@@ -840,8 +842,9 @@ impl<F> Io<F> {
     /// `WriteBackpressure` is reported while backpressure is active. The poll
     /// that observes the write buffer falling below its release threshold
     /// releases backpressure and reports no status update, matching
-    /// [`poll_flush`](Self::poll_flush). `PeerGone` is returned after the
-    /// connection closes.
+    /// [`poll_flush`](Self::poll_flush). `PeerGone` is returned once the
+    /// connection has closed, whether the peer disconnected, the transport
+    /// failed, or the shutdown was started locally.
     pub fn poll_status_update(&self, cx: &mut Context<'_>) -> Poll<IoStatusUpdate> {
         let st = self.st();
         st.dispatch_task.register(cx.waker());
@@ -1520,6 +1523,22 @@ mod tests {
         };
         assert_eq!(err.kind(), io::ErrorKind::NotConnected);
         // statis returns error
+        assert!(matches!(
+            lazy(|cx| io.poll_status_update(cx)).await,
+            Poll::Ready(IoStatusUpdate::PeerGone(None))
+        ));
+    }
+
+    #[ntex::test]
+    async fn local_shutdown_reports_peer_gone_without_error() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = Io::from(server);
+
+        // purely local graceful shutdown, the peer does nothing
+        io.shutdown().await.unwrap();
+
+        assert!(io.is_closed());
         assert!(matches!(
             lazy(|cx| io.poll_status_update(cx)).await,
             Poll::Ready(IoStatusUpdate::PeerGone(None))

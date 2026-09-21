@@ -387,8 +387,9 @@ requires attention. [`Io::poll_status_update`] reports the next status as an
 - `KeepAlive` when the configured keep-alive timeout has expired.
 - `WriteBackpressure` when queued output has reached the write high-water
   mark, so the producer should stop and flush.
-- `PeerGone` when the connection is closing, carrying the transport error if
-  one occurred.
+- `PeerGone` once the connection has closed, whether the peer disconnected,
+  the transport failed, or the shutdown was started locally. It carries the
+  transport error if one occurred, and `None` after a clean close.
 
 The same conditions reach a codec-driven service as [`RecvError`] from
 [`Io::poll_recv`], which additionally reports decoder failures. Code that only

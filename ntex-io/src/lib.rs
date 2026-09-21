@@ -188,7 +188,14 @@ pub enum IoStatusUpdate {
     KeepAlive,
     /// Write backpressure is currently active.
     WriteBackpressure,
-    /// Peer has disconnected.
+    /// The connection is no longer usable.
+    ///
+    /// Reported once the connection has closed, whether because the peer
+    /// disconnected, the transport failed, or the shutdown was started
+    /// locally with [`IoRef::close`](crate::IoRef::close) or
+    /// [`IoRef::terminate`](crate::IoRef::terminate). Carries the transport
+    /// error when the connection ended because of one, and `None` when it
+    /// closed cleanly.
     PeerGone(Option<IoError>),
 }
 
@@ -200,7 +207,14 @@ pub enum RecvError<U: Decoder> {
     WriteBackpressure,
     /// Failed to decode an incoming frame.
     Decoder(U::Error),
-    /// The peer has disconnected.
+    /// The connection is no longer usable.
+    ///
+    /// Reported once the connection has closed, whether because the peer
+    /// disconnected, the transport failed, or the shutdown was started
+    /// locally with [`IoRef::close`](crate::IoRef::close) or
+    /// [`IoRef::terminate`](crate::IoRef::terminate). Carries the transport
+    /// error when the connection ended because of one, and `None` when it
+    /// closed cleanly.
     PeerGone(Option<IoError>),
 }
 
