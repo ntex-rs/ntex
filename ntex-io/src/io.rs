@@ -154,6 +154,10 @@ impl IoState {
         size >= self.cfg.read_buf().high
     }
 
+    pub(super) fn should_disable_rd_backpressure(&self, size: usize) -> bool {
+        size <= self.cfg.read_buf().half
+    }
+
     pub(super) fn is_wr_backpressure_needed(&self, size: usize) -> bool {
         size >= self.cfg.write_buf().high
     }
@@ -1076,8 +1080,13 @@ mod tests {
         // read backpressure is enabled
         assert!(io.st().flags.is_rd_backpressure());
 
-        // read 4 bytes. buf size is 4, less that half of high watermark
-        assert_eq!(io.with_read_buf(|buf| buf.split_to(4)), b"3456");
+        // dropping below the high watermark does not release backpressure
+        assert_eq!(io.with_read_buf(|buf| buf.split_to(1)), b"3");
+        assert!(io.st().flags.is_rd_backpressure());
+        assert!(io.st().flags.is_read_paused());
+
+        // reaching half of the high watermark releases backpressure
+        assert_eq!(io.with_read_buf(|buf| buf.split_to(3)), b"456");
         // read task is not paused anymore
         assert!(!io.st().flags.is_read_paused());
         // read buffer is not ready

@@ -358,8 +358,8 @@ impl IoRef {
         );
 
         if st.flags.is_rd_backpressure() {
-            // back-pressure is still eanbled
-            if st.is_rd_backpressure_needed(buf.len()) {
+            // Keep reads paused until enough buffered data has been consumed.
+            if !st.should_disable_rd_backpressure(buf.len()) {
                 return;
             }
             st.flags.unset_all_read_flags();
