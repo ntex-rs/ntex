@@ -896,14 +896,14 @@ mod tests {
     use rand::Rng;
 
     use super::*;
-    use crate::client::ClientCodec;
     use crate::http::config::HttpServiceConfig;
     use crate::http::h1::{DefaultControlService, control::Reason};
     use crate::http::{KeepAlive, ResponseHead, StatusCode, body};
-    use crate::io::{self as nio, Base};
+    use crate::io::{self as nio, Base, testing::IoTest};
     use crate::service::{IntoService, Service, cfg::SharedCfg, fn_service};
+    use crate::time::{Millis, sleep, timeout};
     use crate::util::{Bytes, BytesMut, lazy, stream_recv};
-    use crate::{codec::Decoder, testing::IoTest, time::Millis, time::sleep};
+    use crate::{client::ClientCodec, codec::Decoder};
 
     const BUFFER_SIZE: usize = 32_768;
 
@@ -1349,8 +1349,8 @@ mod tests {
     }
 
     #[crate::rt_test]
-    /// h1 dispatcher still processes all incoming requests
-    /// but it does not write any data to socket
+    /// A peer write-half close still allows all buffered requests to complete
+    /// and their responses to be written.
     async fn test_write_disconnected() {
         let num = Arc::new(AtomicUsize::new(0));
         let num2 = num.clone();
@@ -1367,10 +1367,14 @@ mod tests {
         client.write("GET /test HTTP/1.1\r\n\r\n");
         client.close().await;
         assert!(client.is_server_dropped());
-        assert!(client.read_any().is_empty());
 
-        // only first request get handled
-        assert_eq!(num.load(Ordering::Relaxed), 1);
+        let mut decoder = ClientCodec::new(true, SharedCfg::default().get());
+        let mut buf = BytesMut::from(&client.read_any()[..]);
+        for _ in 0..3 {
+            assert!(load(&mut decoder, &mut buf).status.is_success());
+        }
+        assert!(decoder.decode(&mut buf).unwrap().is_none());
+        assert_eq!(num.load(Ordering::Relaxed), 3);
     }
 
     /// max http message size is 32k (no payload)
@@ -1380,15 +1384,18 @@ mod tests {
         client.remote_buffer_cap(4096);
 
         let mut h1 = h1(server, async |_| Ok::<_, io::Error>(Response::Ok().build()));
-        h1.inner.io.set_config(
-            SharedCfg::new("TEST")
-                .add(
-                    nio::IoConfig::new()
-                        .set_read_buf(15 * 1024, 1024, 16)
-                        .set_write_buf(15 * 1024, 1024, 16),
-                )
-                .add(HttpServiceConfig::new().set_max_buf_size(32 * 1024)),
-        );
+        // SAFETY: this test does not retain a reference returned by `io.cfg()`.
+        unsafe {
+            h1.inner.io.set_config(
+                SharedCfg::new("TEST")
+                    .add(
+                        nio::IoConfig::new()
+                            .set_read_buf(15 * 1024, 1024, 16)
+                            .set_write_buf(15 * 1024, 1024, 16),
+                    )
+                    .add(HttpServiceConfig::new().set_max_buf_size(32 * 1024)),
+            );
+        }
 
         let mut decoder = ClientCodec::new(true, SharedCfg::default().get());
 
@@ -1602,7 +1609,7 @@ mod tests {
 
         client.close().await;
         sleep(Millis(50)).await;
-        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
     }
 
     #[crate::rt_test]
@@ -1939,7 +1946,13 @@ mod tests {
 
         client.close().await;
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
-        sleep(Millis(50)).await;
+        timeout(Millis(1000), async {
+            while mark.load(Ordering::Relaxed) == 0 {
+                sleep(Millis(10)).await;
+            }
+        })
+        .await
+        .expect("payload consumer did not receive incomplete error");
         assert_eq!(mark.load(Ordering::Relaxed), 1);
     }
 

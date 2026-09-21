@@ -1,4 +1,4 @@
-use std::{cell::Cell, io, mem, num::NonZeroU32, os::fd::AsRawFd, rc::Rc};
+use std::{cell::Cell, io, mem, num::NonZeroU32, os::fd::AsRawFd, rc::Rc, task::Poll};
 
 use ntex_bytes::{BufMut, BytePage, BytePages, BytesMut};
 use ntex_io::{IoContext, IoTaskStatus};
@@ -189,7 +189,7 @@ impl Handler for StreamOpsHandler {
                         item.rd_op.take();
                         item.flags.remove(Flags::RD_CANCELING);
 
-                        let res = item.ctx.update_read_status(buf, Ok(0));
+                        let res = item.ctx.update_read_status(buf, Poll::Pending);
                         if item.flags.contains(Flags::RD_REISSUE) || res == IoTaskStatus::Io {
                             item.flags.remove(Flags::RD_REISSUE);
                             st.recv(id, false, &self.inner.api);
@@ -238,13 +238,9 @@ impl Handler for StreamOpsHandler {
                             log::error!("{}: Received WouldBlock {:?}, id: {:?}", item.tag(), res, item.ctx.id());
                             st.recv_more(id, buf, &self.inner.api);
                         } else {
-                            if let Ok(size) = res {
-                                if size > 0 {
-                                    // SAFETY: kernel tells us how many bytes it read
-                                    unsafe { buf.advance_mut(size) };
-                                } else {
-                                    item.ctx.stop(None);
-                                }
+                            if let Ok(size) = res && size > 0 {
+                                // SAFETY: kernel tells us how many bytes it read
+                                unsafe { buf.advance_mut(size) };
                             }
 
                             // handle IORING_CQE_F_SOCK_NONEMPTY flag
@@ -258,7 +254,9 @@ impl Handler for StreamOpsHandler {
                                 st.recv_more(id, buf, &self.inner.api);
                             } else {
                                 item.flags.remove(Flags::RD_MORE);
-                                if item.ctx.update_read_status(buf, res) == IoTaskStatus::Io {
+                                if item.ctx.update_read_status(buf, Poll::Ready(res))
+                                    == IoTaskStatus::Io
+                                {
                                     st.recv(id, self.inner.api.is_new(), &self.inner.api);
                                 }
                             }
@@ -276,12 +274,7 @@ impl Handler for StreamOpsHandler {
                         );
 
                         if cqueue::notif(flags) {
-                            let res = result.unwrap_or(res).map(|n| {
-                                if n == 0 {
-                                    item.ctx.stop(None);
-                                }
-                                n > 0
-                            });
+                            let res = result.unwrap_or(res).and_then(write_status);
                             if item.ctx.update_write_status(res) == IoTaskStatus::Io {
                                 st.send(id, &self.inner.api);
                             }
@@ -290,7 +283,7 @@ impl Handler for StreamOpsHandler {
                             item.wr_op.take();
 
                             // try to send next chunk
-                            if res.is_ok() {
+                            if matches!(&res, Ok(n) if *n > 0) {
                                 st.send(id, &self.inner.api);
                             }
                             // insert op back for "notify" handling
@@ -305,12 +298,7 @@ impl Handler for StreamOpsHandler {
                             item.wr_op.take();
 
                             // release buffer and try to send next chunk
-                            let res = res.map(|n| {
-                                if n == 0 {
-                                    item.ctx.stop(None);
-                                }
-                                n > 0
-                            });
+                            let res = res.and_then(write_status);
                             if item.ctx.update_write_status(res) == IoTaskStatus::Io {
                                 st.send(id, &self.inner.api);
                             }
@@ -363,6 +351,17 @@ impl Handler for StreamOpsHandler {
             self.inner.storage.set(Some(v));
         }
         self.inner.delayed_feed.clear();
+    }
+}
+
+fn write_status(n: usize) -> io::Result<bool> {
+    if n == 0 {
+        Err(io::Error::new(
+            io::ErrorKind::WriteZero,
+            "failed to write frame to transport",
+        ))
+    } else {
+        Ok(true)
     }
 }
 

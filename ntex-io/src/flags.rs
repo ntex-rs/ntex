@@ -4,18 +4,22 @@ pub struct Flags(Cell<FlagsKind>);
 
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-    pub struct FlagsKind: u16 {
+    pub struct FlagsKind: u32 {
         /// io is closed
         const IO_STOPPED          = 0b0000_0000_0000_0001;
         /// shutdown io tasks
         const IO_STOPPING         = 0b0000_0000_0000_0010;
         /// shutting down filters
         const IO_STOPPING_FILTERS = 0b0000_0000_0000_0100;
+        /// force termination or transport failure is in progress
+        const IO_TERMINATING      = 0b0001_0000_0000_0000_0000;
 
         /// pause io read
         const RD_PAUSED           = 0b0000_0000_0001_0000;
         /// read backpressure
         const RD_BACKPRESSURE     = 0b0000_0000_1000_0000;
+        /// transport read side reached clean EOF
+        const RD_EOF              = 0b0100_0000_0000_0000;
 
         /// read any data and notify dispatcher
         const RD_NOTIFY           = 0b0000_0000_0010_0000;
@@ -37,7 +41,6 @@ bitflags::bitflags! {
         const DSP_TIMEOUT         = 0b0001_0000_0000_0000;
         /// write buffer is full
         const DSP_W_BACKPRESSURE  = 0b0010_0000_0000_0000;
-
         /// is direct-write enabled
         const DIRECT_WR_SUP       = 0b1000_0000_0000_0000;
     }
@@ -89,20 +92,37 @@ impl Flags {
     }
 
     pub(crate) fn is_closed(&self) -> bool {
-        self.intersects(FlagsKind::IO_STOPPING | FlagsKind::IO_STOPPED)
+        self.intersects(FlagsKind::IO_STOPPING | FlagsKind::IO_STOPPED | FlagsKind::IO_TERMINATING)
     }
 
     pub(crate) fn is_terminated(&self) -> bool {
         self.contains(FlagsKind::IO_STOPPED)
     }
 
-    pub fn is_stopping(&self) -> bool {
+    /// Checks whether the connection entered graceful transport shutdown.
+    ///
+    /// This state remains set after backend teardown completes.
+    pub(crate) fn is_stopping(&self) -> bool {
         self.contains(FlagsKind::IO_STOPPING)
+    }
+
+    /// Checks whether the connection entered the force-termination path.
+    ///
+    /// This state remains set after backend teardown completes.
+    pub(crate) fn is_terminating(&self) -> bool {
+        self.contains(FlagsKind::IO_TERMINATING)
+    }
+
+    pub(crate) fn is_stopping_or_terminating(&self) -> bool {
+        self.intersects(FlagsKind::IO_STOPPING | FlagsKind::IO_TERMINATING)
     }
 
     pub(crate) fn is_stopping_any(&self) -> bool {
         self.intersects(
-            FlagsKind::IO_STOPPED | FlagsKind::IO_STOPPING | FlagsKind::IO_STOPPING_FILTERS,
+            FlagsKind::IO_STOPPED
+                | FlagsKind::IO_STOPPING
+                | FlagsKind::IO_STOPPING_FILTERS
+                | FlagsKind::IO_TERMINATING,
         )
     }
 
@@ -121,11 +141,21 @@ impl Flags {
     pub(crate) fn is_shutting_down_filters(&self) -> bool {
         let f = self.get();
         f.contains(FlagsKind::IO_STOPPING_FILTERS)
-            && !f.intersects(FlagsKind::IO_STOPPED | FlagsKind::IO_STOPPING)
+            && !f.intersects(
+                FlagsKind::IO_STOPPED | FlagsKind::IO_STOPPING | FlagsKind::IO_TERMINATING,
+            )
     }
 
     pub(crate) fn is_direct_wr_enabled(&self) -> bool {
         self.contains(FlagsKind::DIRECT_WR_SUP)
+    }
+
+    pub(crate) fn set_direct_wr_enabled(&self, enabled: bool) {
+        if enabled {
+            self.insert(FlagsKind::DIRECT_WR_SUP);
+        } else {
+            self.remove(FlagsKind::DIRECT_WR_SUP);
+        }
     }
 
     pub(crate) fn is_read_paused(&self) -> bool {
@@ -151,6 +181,10 @@ impl Flags {
 
     pub(crate) fn is_rd_backpressure(&self) -> bool {
         self.contains(FlagsKind::RD_BACKPRESSURE)
+    }
+
+    pub(crate) fn is_read_eof(&self) -> bool {
+        self.contains(FlagsKind::RD_EOF)
     }
 
     pub(crate) fn is_wr_backpressure(&self) -> bool {
@@ -195,11 +229,12 @@ impl Flags {
 
     pub(crate) fn set_terminate(&self) {
         self.insert(
-            FlagsKind::IO_STOPPED
-                | FlagsKind::IO_STOPPING
-                | FlagsKind::IO_STOPPING_FILTERS
-                | FlagsKind::BUF_R_READY,
+            FlagsKind::IO_TERMINATING | FlagsKind::IO_STOPPING_FILTERS | FlagsKind::BUF_R_READY,
         );
+    }
+
+    pub(crate) fn set_stopped(&self) {
+        self.insert(FlagsKind::IO_STOPPED);
     }
 
     pub(crate) fn set_wants_write_flush(&self) {
@@ -220,6 +255,10 @@ impl Flags {
 
     pub(crate) fn set_read_ready_and_backpressure(&self) {
         self.insert(FlagsKind::RD_PAUSED | FlagsKind::BUF_R_READY | FlagsKind::RD_BACKPRESSURE);
+    }
+
+    pub(crate) fn set_read_eof(&self) {
+        self.insert(FlagsKind::RD_EOF);
     }
 
     pub(crate) fn set_filters_stopped(&self) {
@@ -305,5 +344,6 @@ mod tests {
         assert!(format!("{:?}", FlagsKind::IO_STOPPED).contains("IO_STOPPED"));
         assert_eq!(FlagsKind::IO_STOPPED, FlagsKind::IO_STOPPED);
         assert_ne!(FlagsKind::IO_STOPPED, FlagsKind::IO_STOPPING);
+        assert_ne!(FlagsKind::IO_TERMINATING, FlagsKind::RD_EOF);
     }
 }

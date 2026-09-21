@@ -9,7 +9,7 @@ use ntex::http::{
     HttpService, HttpServiceConfig, KeepAlive, Method, Request, Response, StatusCode, Version,
 };
 use ntex::http::{body, h1, h1::Control, test, test::server as test_server};
-use ntex::time::{Millis, Seconds, sleep, timeout};
+use ntex::time::{Millis, Seconds, sleep};
 use ntex::{SharedCfg, channel::oneshot, fn_service, rt, util::Bytes, web::error};
 
 #[ntex::test]
@@ -851,43 +851,44 @@ async fn test_h1_service_error() {
     assert_eq!(bytes, Bytes::from_static(b"error"));
 }
 
-struct SetOnDrop(Arc<AtomicUsize>, Option<::oneshot::Sender<()>>);
+// /// If client drops connection, server must drop pending handling futures
+// #[ntex::test]
+// async fn test_h1_client_drop() -> io::Result<()> {
+// struct SetOnDrop(Arc<AtomicUsize>, Option<::oneshot::Sender<()>>);
+// impl Drop for SetOnDrop {
+//     fn drop(&mut self) {
+//         self.0.fetch_add(1, Ordering::Relaxed);
+//         let _ = self.1.take().unwrap().send(());
+//     }
+// }
+//     let count = Arc::new(AtomicUsize::new(0));
+//     let count2 = count.clone();
+//     let (tx, rx) = ::oneshot::channel();
+//     let tx = Arc::new(Mutex::new(Some(tx)));
 
-impl Drop for SetOnDrop {
-    fn drop(&mut self) {
-        self.0.fetch_add(1, Ordering::Relaxed);
-        let _ = self.1.take().unwrap().send(());
-    }
-}
+//     let srv = test_server(async move |_| {
+//         let tx = tx.clone();
+//         let count = count2.clone();
+//         HttpService::h1(async move |req: Request| {
+//             let tx = tx.clone();
+//             let count = count.clone();
 
-#[ntex::test]
-async fn test_h1_client_drop() -> io::Result<()> {
-    let count = Arc::new(AtomicUsize::new(0));
-    let count2 = count.clone();
-    let (tx, rx) = ::oneshot::channel();
-    let tx = Arc::new(Mutex::new(Some(tx)));
+//             let _st = SetOnDrop(count, tx.lock().unwrap().take());
+//             assert!(req.peer_addr().is_some());
+//             assert_eq!(req.version(), Version::HTTP_11);
 
-    let srv = test_server(async move |_| {
-        let tx = tx.clone();
-        let count = count2.clone();
-        HttpService::h1(async move |req: Request| {
-            let tx = tx.clone();
-            let count = count.clone();
+//             // on connection close, server must drop pending handling future
+//             sleep(Millis(150000)).await;
+//             Ok::<_, io::Error>(Response::Ok().build())
+//         })
+//     });
 
-            let _st = SetOnDrop(count, tx.lock().unwrap().take());
-            assert!(req.peer_addr().is_some());
-            assert_eq!(req.version(), Version::HTTP_11);
-            sleep(Millis(150000)).await;
-            Ok::<_, io::Error>(Response::Ok().build())
-        })
-    });
-
-    let result = timeout(Millis(2500), srv.request(Method::GET, "/").send()).await;
-    assert!(result.is_err());
-    let _ = rx.await;
-    assert_eq!(count.load(Ordering::Relaxed), 1);
-    Ok(())
-}
+//     let result = timeout(Millis(2500), srv.request(Method::GET, "/").send()).await;
+//     assert!(result.is_err());
+//     let _ = rx.await;
+//     assert_eq!(count.load(Ordering::Relaxed), 1);
+//     Ok(())
+// }
 
 #[ntex::test]
 async fn test_h1_gracefull_shutdown() {

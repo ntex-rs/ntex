@@ -108,10 +108,7 @@ where
 
         match select(read_fut.as_mut().unwrap(), not_read_ready(ctx)).await {
             Either::Left(BufResult(result, cbuf)) => {
-                if matches!(result, Ok(0)) {
-                    ctx.stop(None);
-                }
-                if ctx.update_read_status(cbuf.0, result) == IoTaskStatus::Stop {
+                if ctx.update_read_status(cbuf.0, Poll::Ready(result)) == IoTaskStatus::Stop {
                     break;
                 }
                 read_fut = Some(Box::pin(read_buf(&io, ctx.get_read_buf())));
@@ -125,7 +122,6 @@ where
     if !ctx.is_stopped() {
         let result = poll_fn(|cx| ctx.shutdown(true, cx)).await;
         log::trace!("{}: Shuting down complete {result:?}", ctx.tag());
-        ctx.stop(None);
     }
 }
 
@@ -167,7 +163,8 @@ where
                         break;
                     }
                 } else if write_buf(&mut io, ctx, bufs).await == IoTaskStatus::Stop {
-                    let _ = io.shutdown().await;
+                    let res = io.shutdown().await;
+                    ctx.stopped(res.err());
                     break;
                 }
             }
@@ -175,10 +172,14 @@ where
                 let bufs = ctx.with_write_buf(build_bufs);
                 write_buf(&mut io, ctx, bufs).await;
                 let res = io.shutdown().await;
-                ctx.stop(res.err());
+                ctx.stopped(res.err());
                 break;
             }
-            Readiness::Terminate => return,
+            Readiness::Terminate => {
+                let res = io.shutdown().await;
+                ctx.stopped(res.err());
+                return;
+            }
         }
     }
 }

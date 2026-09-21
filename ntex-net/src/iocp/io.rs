@@ -37,6 +37,10 @@ impl Handle for HandleWrapper {
         }
         None
     }
+
+    fn write(&self, _: &IoContext) {
+        self.0.write();
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -59,9 +63,7 @@ async fn run(ctl: StreamCtl, ctx: IoContext) {
     }
 
     let result = ctl.shutdown().await;
-    if !ctx.is_stopped() {
-        ctx.stop(result.err());
-    }
+    ctx.stopped(result.err());
 }
 
 /// Handle ctx readiness

@@ -69,8 +69,9 @@ pin_project_lite::pin_project! {
     ///
     /// Before shutdown, transport and codec failures are delivered to the
     /// service as [`DispatchItem::Stop`]. The future resolves to `Err` only
-    /// when the service itself fails; other stop reasons complete as `Ok(())`
-    /// after the service and transport have shut down.
+    /// when the service itself fails. Graceful and protocol stops drain service
+    /// calls before shutdown; transport failures abandon pending calls after
+    /// delivering the stop notification so they cannot block teardown.
     pub struct Dispatcher<U, Err>
     where
         U: Encoder,
@@ -305,6 +306,9 @@ where
                                         inner.shared.io.tag(),
                                         err
                                     );
+                                    if err.is_some() || inner.shared.io.is_terminating() {
+                                        inner.shared.insert_flags(Flags::IO_ERR);
+                                    }
                                     inner.st = DispatcherState::Stop;
                                     (DispatchItem::Stop(Reason::Io(err)), true)
                                 }
@@ -330,6 +334,7 @@ where
                     }
 
                     let item = if let Err(err) = ready!(inner.shared.io.poll_flush(cx, false)) {
+                        inner.shared.insert_flags(Flags::IO_ERR);
                         inner.st = DispatcherState::Stop;
                         DispatchItem::Stop(Reason::Io(Some(err)))
                     } else {
@@ -342,6 +347,19 @@ where
                 DispatcherState::Stop => {
                     inner.shared.io.stop_timer();
 
+                    if inner.shared.contains(Flags::IO_ERR) {
+                        inner.response = None;
+                        return if inner.shared.io.poll_shutdown(cx).is_ready() {
+                            Poll::Ready(if let Some(err) = inner.error.take() {
+                                Err(err)
+                            } else {
+                                Ok(())
+                            })
+                        } else {
+                            Poll::Pending
+                        };
+                    }
+
                     // service may relay on poll_ready for response results
                     if !inner.shared.contains(Flags::READY_ERR)
                         && let Poll::Ready(res) = inner.shared.service.poll_ready(cx)
@@ -351,16 +369,32 @@ where
                     }
 
                     if inner.shared.inflight.get() == 0 {
-                        if inner.shared.io.poll_shutdown(cx).is_ready() {
-                            inner.st = DispatcherState::Shutdown;
-                            continue;
-                        }
-                    } else if !inner.shared.contains(Flags::IO_ERR) {
-                        match ready!(inner.shared.io.poll_status_update(cx)) {
-                            IoStatusUpdate::PeerGone(_) | IoStatusUpdate::KeepAlive => {
+                        match inner.shared.io.poll_shutdown(cx) {
+                            Poll::Ready(Ok(())) => {
+                                inner.st = DispatcherState::Shutdown;
+                                continue;
+                            }
+                            Poll::Ready(Err(_)) => {
                                 inner.shared.insert_flags(Flags::IO_ERR);
                                 continue;
                             }
+                            Poll::Pending => (),
+                        }
+                    } else if inner.shared.io.is_terminating() {
+                        inner.shared.insert_flags(Flags::IO_ERR);
+                        continue;
+                    } else if inner.shared.io.is_closed() {
+                        inner.shared.io.poll_dispatch(cx);
+                    } else if !inner.shared.contains(Flags::IO_ERR) {
+                        match ready!(inner.shared.io.poll_status_update(cx)) {
+                            IoStatusUpdate::PeerGone(_) => {
+                                if inner.shared.io.is_terminating() {
+                                    inner.shared.insert_flags(Flags::IO_ERR);
+                                    continue;
+                                }
+                                inner.shared.io.poll_dispatch(cx);
+                            }
+                            IoStatusUpdate::KeepAlive => continue,
                             IoStatusUpdate::WriteBackpressure => {
                                 if ready!(inner.shared.io.poll_flush(cx, true)).is_err() {
                                     inner.shared.insert_flags(Flags::IO_ERR);
@@ -375,6 +409,14 @@ where
                 }
                 // shutdown service
                 DispatcherState::Shutdown => {
+                    if inner.shared.contains(Flags::IO_ERR) {
+                        return Poll::Ready(if let Some(err) = inner.error.take() {
+                            Err(err)
+                        } else {
+                            Ok(())
+                        });
+                    }
+
                     return if inner.shared.service.poll_shutdown(cx).is_ready() {
                         log::trace!(
                             "{}: Service shutdown is completed, stop",
@@ -489,6 +531,9 @@ where
                             self.shared.io.tag(),
                             err
                         );
+                        if err.is_some() || self.shared.io.is_terminating() {
+                            self.shared.insert_flags(Flags::IO_ERR);
+                        }
                         self.st = DispatcherState::Stop;
                         Poll::Ready(PollService::ItemWait(DispatchItem::Stop(Reason::Io(err))))
                     }
@@ -645,13 +690,14 @@ where
 #[allow(clippy::unused_async_trait_impl)]
 mod tests {
     use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::Ordering::Relaxed};
-    use std::{cell::RefCell, io};
+    use std::{cell::RefCell, future::poll_fn, io};
 
     use ntex_bytes::{BytePages, Bytes, BytesMut};
     use ntex_codec::BytesCodec;
-    use ntex_io::{Flags, Io, IoConfig, IoRef, testing::IoTest};
+    use ntex_io::{Io, IoConfig, IoRef, testing::IoTest};
     use ntex_service::{Ctx, Pipeline, Service, cfg::SharedCfg};
-    use ntex_util::{channel::oneshot, time::Millis, time::sleep};
+    use ntex_util::time::{Millis, sleep, timeout};
+    use ntex_util::{channel::oneshot, future::lazy};
     use rand::Rng;
 
     use super::*;
@@ -659,10 +705,6 @@ mod tests {
     pub(crate) struct State(IoRef);
 
     impl State {
-        fn flags(&self) -> Flags {
-            self.0.flags()
-        }
-
         fn io(&self) -> &IoRef {
             &self.0
         }
@@ -756,7 +798,7 @@ mod tests {
                 if let DispatchItem::Item(msg) = msg {
                     Ok::<_, ()>(Some(msg))
                 } else {
-                    panic!()
+                    Ok(None)
                 }
             }),
         );
@@ -773,6 +815,7 @@ mod tests {
         assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
 
         client.close().await;
+        sleep(Millis(75)).await;
         assert!(client.is_server_dropped());
 
         assert!(format!("{:?}", super::Flags::KA_TIMEOUT.clone()).contains("KA_TIMEOUT"));
@@ -1036,6 +1079,93 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn io_error_does_not_wait_for_pending_service_call() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop2 = stop.clone();
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let (mut disp, _) = Dispatcher::debug(
+            Io::from(server),
+            BytesCodec,
+            ntex_service::fn_service(move |msg: DispatchItem<BytesCodec>| {
+                let stop = stop2.clone();
+                async move {
+                    match msg {
+                        DispatchItem::Item(_) => {
+                            std::future::pending::<Result<Option<Bytes>, ()>>().await
+                        }
+                        DispatchItem::Stop(Reason::Io(Some(_))) => {
+                            stop.store(true, Relaxed);
+                            Ok(None)
+                        }
+                        _ => Ok(None),
+                    }
+                }
+            }),
+        );
+
+        client.write("request");
+        assert!(lazy(|cx| Pin::new(&mut disp).poll(cx)).await.is_pending());
+
+        client.read_error(io::Error::new(
+            io::ErrorKind::ConnectionReset,
+            "connection reset",
+        ));
+        timeout(Millis(1000), poll_fn(|cx| Pin::new(&mut disp).poll(cx)))
+            .await
+            .expect("dispatcher waited for pending service call")
+            .unwrap();
+
+        timeout(Millis(1000), async {
+            while !stop.load(Relaxed) {
+                sleep(Millis(10)).await;
+            }
+        })
+        .await
+        .expect("service did not receive I/O stop notification");
+    }
+
+    #[ntex::test]
+    async fn application_close_waits_for_pending_service_call() {
+        let started = Arc::new(AtomicBool::new(false));
+        let started2 = started.clone();
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let (mut disp, state) = Dispatcher::debug(
+            Io::from(server),
+            BytesCodec,
+            ntex_service::fn_service(move |msg: DispatchItem<BytesCodec>| {
+                let started = started2.clone();
+                async move {
+                    if matches!(msg, DispatchItem::Item(_)) {
+                        started.store(true, Relaxed);
+                        sleep(Millis(200)).await;
+                    }
+                    Ok::<_, ()>(None)
+                }
+            }),
+        );
+
+        client.write("request");
+        sleep(Millis(25)).await;
+        assert!(lazy(|cx| Pin::new(&mut disp).poll(cx)).await.is_pending());
+        assert!(started.load(Relaxed));
+
+        state.close();
+        assert!(
+            timeout(Millis(50), poll_fn(|cx| Pin::new(&mut disp).poll(cx)))
+                .await
+                .is_err()
+        );
+        timeout(Millis(1000), poll_fn(|cx| Pin::new(&mut disp).poll(cx)))
+            .await
+            .expect("dispatcher did not drain pending service call")
+            .unwrap();
+    }
+
+    #[ntex::test]
     async fn keepalive() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
@@ -1079,8 +1209,7 @@ mod tests {
         sleep(Millis(2000)).await;
 
         // write side must be closed, dispatcher should fail with keep-alive
-        let flags = state.flags();
-        assert!(flags.is_stopping());
+        assert!(state.0.is_stopping());
         assert!(client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
     }
@@ -1129,8 +1258,7 @@ mod tests {
         sleep(Millis(2000)).await;
 
         // write side must be closed, dispatcher should fail with keep-alive
-        let flags = state.flags();
-        assert!(flags.is_stopping());
+        assert!(state.0.is_stopping());
         assert!(client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
     }
@@ -1240,15 +1368,15 @@ mod tests {
 
         client.write("1");
         sleep(Millis(1000)).await;
-        assert!(!state.flags().is_stopping());
+        assert!(!state.0.is_stopping());
         client.write("23");
         sleep(Millis(1000)).await;
-        assert!(!state.flags().is_stopping());
+        assert!(!state.0.is_stopping());
         client.write("4");
         sleep(Millis(2000)).await;
 
         // write side must be closed, dispatcher should fail with keep-alive
-        assert!(state.flags().is_stopping());
+        assert!(state.0.is_stopping());
         assert!(client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
     }
@@ -1301,7 +1429,7 @@ mod tests {
         assert_eq!(buf, Bytes::from_static(b"1"));
 
         sleep(Millis(1000)).await;
-        assert!(state.flags().is_stopping());
+        assert!(state.0.is_stopping());
         assert!(client.is_closed());
     }
 

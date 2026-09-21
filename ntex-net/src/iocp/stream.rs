@@ -344,6 +344,14 @@ impl WeakStreamCtl {
     pub(crate) fn peer_addr(&self) -> SockAddr {
         self.inner.with(|st| st.streams[self.id].addr.clone())
     }
+
+    pub(crate) fn write(&self) {
+        self.inner.with(|st| {
+            if let Some(item) = st.streams.get_mut(self.id) {
+                item.wr_op.write();
+            }
+        });
+    }
 }
 
 impl Drop for WeakStreamCtl {

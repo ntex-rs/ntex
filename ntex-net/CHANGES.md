@@ -1,5 +1,13 @@
 # Changes
 
+## [4.1.0] - 2026-09-21
+
+* Support eager writes with the IOCP backend
+
+* Update IoContext::update_read_status() api usage
+
+* Produce io::ErrorKind::WriteZero for backend impl
+
 ## [4.0.1] - 2026-09-18
 
 * Api docs improvements

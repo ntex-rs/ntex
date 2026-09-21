@@ -1,3 +1,5 @@
+//! I/O buffer, timeout, and frame-rate configuration.
+
 use std::cell::UnsafeCell;
 
 use ntex_bytes::{BytePageSize, BytesMut, buf::BufMut};
@@ -65,11 +67,15 @@ pub struct FrameReadRate {
 /// Buffer allocation and backpressure thresholds.
 #[derive(Copy, Clone, Debug)]
 pub struct BufConfig {
-    /// High watermark that enables backpressure.
+    /// Buffered byte count at which backpressure is enabled.
     pub high: usize,
-    /// Low watermark used when resizing or caching buffers.
+    /// Minimum free capacity requested when resizing a read buffer.
+    ///
+    /// Buffers whose capacity is not greater than this value are not cached.
     pub low: usize,
-    /// Threshold that disables active backpressure.
+    /// Buffered byte count at which active write backpressure is released.
+    ///
+    /// This is set to half of `high` by the configuration builders.
     pub half: usize,
     idx: usize,
     first: bool,
@@ -186,8 +192,9 @@ impl IoConfig {
 
     /// Sets the graceful disconnect timeout.
     ///
-    /// If shutdown does not complete within this duration, the connection is
-    /// dropped.
+    /// If filter shutdown does not complete within this duration, transport
+    /// teardown continues and [`crate::Io::shutdown`] returns a timed-out
+    /// error after the transport has stopped.
     ///
     /// A zero duration disables the timeout. The default is one second.
     #[must_use]
@@ -198,10 +205,35 @@ impl IoConfig {
 
     /// Sets read-rate parameters for a single decoded frame.
     ///
-    /// If `rate` bytes arrive within one `timeout` period, the deadline is
-    /// extended by another `timeout` period, up to `max_timeout`.
+    /// Rate tracking starts when a decoder returns no complete item while
+    /// leaving partial frame data in the read buffer. The dispatcher then
+    /// allows one `timeout` period for additional data to arrive.
     ///
-    /// By default frame read rate is disabled.
+    /// When that period expires, the dispatcher compares the buffered-byte
+    /// progress since the previous check with `rate`:
+    ///
+    /// - If the progress is greater than `rate`, the deadline is extended by
+    ///   another `timeout` period.
+    /// - If the progress is at most `rate`, frame decoding fails with a read
+    ///   timeout.
+    /// - Completing the frame clears the timer and resets rate tracking for the
+    ///   next frame.
+    ///
+    /// `max_timeout` limits the cumulative time allowed for one frame. A zero
+    /// value permits an unlimited number of extensions while the required rate
+    /// is maintained. A non-zero value is enforced in whole `timeout` periods,
+    /// so the effective limit is rounded up to a multiple of `timeout` and is
+    /// never shorter than the initial period.
+    ///
+    /// A zero `timeout` disables frame read-rate enforcement and ignores
+    /// `max_timeout` and `rate`. With a non-zero timeout and `rate` set to zero,
+    /// any positive buffered-byte progress permits another period.
+    ///
+    /// This setting applies only after a frame has started. Idle connections
+    /// with no partial frame are governed separately by
+    /// [`set_keepalive_timeout`](Self::set_keepalive_timeout).
+    ///
+    /// Frame read-rate enforcement is disabled by default.
     #[must_use]
     pub fn set_frame_read_rate(
         mut self,
@@ -209,18 +241,32 @@ impl IoConfig {
         max_timeout: Seconds,
         rate: u32,
     ) -> Self {
-        self.frame_read_rate = Some(FrameReadRate {
-            timeout,
-            max_timeout,
-            rate,
-        });
+        self.frame_read_rate = if timeout.is_zero() {
+            None
+        } else {
+            Some(FrameReadRate {
+                timeout,
+                max_timeout,
+                rate,
+            })
+        };
         self
     }
 
     /// Sets read-buffer watermarks and cache capacity.
     ///
+    /// `high_watermark` enables read backpressure when the application-facing
+    /// buffer reaches this size and is also used as the allocation growth
+    /// increment. It must be greater than zero. `low_watermark` is the minimum
+    /// free capacity requested when resizing a read buffer. `cache_size` limits
+    /// the number of eligible buffers retained per thread and configuration.
+    ///
     /// By default, the high watermark is approximately 16 KiB and the low
     /// watermark is approximately 512 bytes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `high_watermark` is zero.
     #[must_use]
     pub fn set_read_buf(
         mut self,
@@ -228,6 +274,10 @@ impl IoConfig {
         low_watermark: usize,
         cache_size: usize,
     ) -> Self {
+        assert!(
+            high_watermark > 0,
+            "read buffer high watermark must be greater than zero"
+        );
         self.read_buf.cache_size = cache_size;
         self.read_buf.high = high_watermark;
         self.read_buf.low = low_watermark;
@@ -236,6 +286,31 @@ impl IoConfig {
     }
 
     /// Sets the write-buffer page size.
+    ///
+    /// Write buffers are represented as a sequence of reusable byte pages.
+    /// `size` selects the capacity category used when those buffers allocate
+    /// new internal pages, including the intermediate write buffers created
+    /// between filter layers. [`BytePages`](ntex_bytes::BytePages) may also
+    /// contain externally supplied [`BytePage`](ntex_bytes::BytePage),
+    /// [`Bytes`](ntex_bytes::Bytes), or `Vec<u8>` segments; this setting does
+    /// not resize or copy those segments.
+    ///
+    /// Smaller pages reduce unused capacity for connections that usually
+    /// produce small writes. Larger pages can reduce allocation and page-list
+    /// overhead for connections that regularly buffer larger writes. This
+    /// setting does not limit the total amount of buffered data or determine
+    /// the size of individual transport write operations.
+    ///
+    /// Changing the page size on an active connection through
+    /// [`Io::set_config`](crate::Io::set_config) updates the allocation
+    /// category for future pages in every existing write buffer. Pages that
+    /// have already been allocated retain their current capacity. Filter
+    /// layers added later use the new page size.
+    ///
+    /// The page size is independent of the eager-write threshold and write
+    /// backpressure watermarks. Changing it does not update values configured
+    /// by [`set_write_buf_threshold`](Self::set_write_buf_threshold) or
+    /// [`set_write_buf`](Self::set_write_buf).
     ///
     /// The default page size is 16 KiB.
     #[must_use]
@@ -246,18 +321,33 @@ impl IoConfig {
 
     /// Sets the write buffer threshold.
     ///
-    /// The app encodes data in response to incoming data,
-    /// continuing to fill the write buffer until all data
-    /// has been processed. Only then can the runtime wake
-    /// the write task to send the buffered data.
+    /// Application code can encode multiple items during one dispatcher turn.
+    /// Normally, the transport write task is scheduled to run after that work
+    /// yields, so all items produced during the turn may accumulate in the
+    /// write buffer and be sent as one large burst.
     ///
-    /// By that time, the buffer may have accumulated a large
-    /// amount of data, causing it to be sent in large bursts,
-    /// which introduces latency. To prevent this behavior and
-    /// flatten data delivery to the peer, ntex's io can initiate
-    /// out-of-order writes based on a configured threshold.
+    /// When the buffered size reaches `size` while the transport write task is
+    /// paused, `Io` asks the transport handle to start writing immediately.
+    /// This eager write attempt occurs synchronously with buffer consolidation,
+    /// before the current application or dispatcher turn necessarily
+    /// completes. If bytes remain afterward, the normal write task is
+    /// scheduled to continue delivery. Data below the threshold is delivered
+    /// through that normal scheduled path.
     ///
-    /// Set this to zero to disable early writes.
+    /// The threshold is a latency and write-burst tuning parameter. It does not
+    /// limit write-buffer growth, provide a flush guarantee, or control write
+    /// backpressure; use [`set_write_buf`](Self::set_write_buf) for
+    /// backpressure watermarks and [`Io::flush`](crate::Io::flush) when a
+    /// caller must wait for buffered data to be written.
+    ///
+    /// Set `size` to zero to disable eager writes when this configuration is
+    /// used to construct an [`Io`](crate::Io). The default is 8 KiB, derived
+    /// from the default 16 KiB page size when [`IoConfig::new`] is called.
+    /// Changing the page size later does not recalculate this threshold.
+    ///
+    /// Replacing an active connection's configuration with
+    /// [`Io::set_config`](crate::Io::set_config) enables or disables eager
+    /// writes according to the replacement threshold.
     #[must_use]
     pub fn set_write_buf_threshold(mut self, size: usize) -> Self {
         self.write_buf_threshold = size;
@@ -266,8 +356,18 @@ impl IoConfig {
 
     /// Sets write-buffer watermarks and cache capacity.
     ///
+    /// `high_watermark` enables write backpressure at this buffered size and
+    /// must be greater than zero. Backpressure is released after the buffered
+    /// size falls to half of this value. `low_watermark` controls which empty
+    /// buffers are eligible for caching, and `cache_size` limits the number
+    /// retained per thread and configuration.
+    ///
     /// By default, the high watermark is approximately 16 KiB and the low
     /// watermark is approximately 512 bytes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `high_watermark` is zero.
     #[must_use]
     pub fn set_write_buf(
         mut self,
@@ -275,6 +375,10 @@ impl IoConfig {
         low_watermark: usize,
         cache_size: usize,
     ) -> Self {
+        assert!(
+            high_watermark > 0,
+            "write buffer high watermark must be greater than zero"
+        );
         self.write_buf.cache_size = cache_size;
         self.write_buf.high = high_watermark;
         self.write_buf.low = low_watermark;
@@ -286,6 +390,8 @@ impl IoConfig {
 impl BufConfig {
     #[inline]
     /// Acquires an empty buffer from this configuration's thread-local cache.
+    ///
+    /// If the cache is empty, allocates a buffer with capacity `high`.
     pub fn get(&self) -> BytesMut {
         if let Some(buf) = CACHE.with(|c| c.with(self.idx, self.first, |c: &mut Vec<_>| c.pop())) {
             buf
@@ -294,7 +400,7 @@ impl BufConfig {
         }
     }
 
-    /// Creates a new buffer with the specified capacity.
+    /// Creates a new uncached buffer with the specified capacity.
     pub fn buf_with_capacity(&self, cap: usize) -> BytesMut {
         BytesMut::with_capacity(cap)
     }
@@ -309,9 +415,17 @@ impl BufConfig {
 
     #[inline]
     /// Ensures that the buffer has at least `size` bytes of remaining capacity.
+    ///
+    /// # Panics
+    ///
+    /// Panics if growth is required and `high` is zero.
     pub fn resize_min(&self, buf: &mut BytesMut, size: usize) {
         let mut avail = buf.remaining_mut();
         if avail < size {
+            assert!(
+                self.high > 0,
+                "buffer high watermark must be greater than zero"
+            );
             let mut new_cap = buf.capacity();
             while avail < size {
                 avail += self.high;
@@ -323,6 +437,9 @@ impl BufConfig {
 
     #[inline]
     /// Returns an eligible buffer to this configuration's thread-local cache.
+    ///
+    /// The buffer is retained only when its capacity is greater than `low`, no
+    /// greater than `high`, and this configuration's cache is not full.
     pub fn release(&self, mut buf: BytesMut) {
         let cap = buf.capacity();
         if cap > self.low && cap <= self.high {
@@ -363,5 +480,56 @@ impl LocalCache {
         } else {
             f(&mut cache[idx].1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn buffer_configuration() {
+        let cfg = IoConfig::new()
+            .set_read_buf(1024, 128, 4)
+            .set_write_buf(2048, 256, 8);
+
+        assert_eq!(cfg.read_buf().high, 1024);
+        assert_eq!(cfg.read_buf().low, 128);
+        assert_eq!(cfg.read_buf().half, 512);
+        assert_eq!(cfg.write_buf().high, 2048);
+        assert_eq!(cfg.write_buf().low, 256);
+        assert_eq!(cfg.write_buf().half, 1024);
+    }
+
+    #[test]
+    fn frame_read_rate_configuration() {
+        let cfg = IoConfig::new().set_frame_read_rate(Seconds(1), Seconds(3), 128);
+        let rate = cfg.frame_read_rate().unwrap();
+        assert_eq!(rate.timeout, Seconds(1));
+        assert_eq!(rate.max_timeout, Seconds(3));
+        assert_eq!(rate.rate, 128);
+
+        let cfg = cfg.set_frame_read_rate(Seconds::ZERO, Seconds(10), 1024);
+        assert!(cfg.frame_read_rate().is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "read buffer high watermark must be greater than zero")]
+    fn zero_read_high_watermark() {
+        let _ = IoConfig::new().set_read_buf(0, 128, 4);
+    }
+
+    #[test]
+    #[should_panic(expected = "write buffer high watermark must be greater than zero")]
+    fn zero_write_high_watermark() {
+        let _ = IoConfig::new().set_write_buf(0, 128, 4);
+    }
+
+    #[test]
+    #[should_panic(expected = "buffer high watermark must be greater than zero")]
+    fn zero_resize_increment() {
+        let mut cfg = *IoConfig::new().read_buf();
+        cfg.high = 0;
+        cfg.resize_min(&mut BytesMut::new(), 1024);
     }
 }

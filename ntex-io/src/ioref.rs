@@ -52,6 +52,34 @@ impl IoRef {
     }
 
     #[inline]
+    /// Checks whether the transport read half reached clean EOF.
+    ///
+    /// Buffered input remains available and the write half may still be used.
+    pub fn is_read_eof(&self) -> bool {
+        self.0.flags.is_read_eof()
+    }
+
+    #[inline]
+    /// Checks whether the connection entered graceful transport shutdown.
+    ///
+    /// This state remains set after backend teardown completes.
+    pub fn is_stopping(&self) -> bool {
+        self.0.flags.is_stopping()
+    }
+
+    #[inline]
+    /// Checks whether the stream entered the force-termination path.
+    ///
+    /// This becomes `true` after [`terminate`](Self::terminate) is called or
+    /// an I/O or filter error requests immediate termination. Unlike graceful
+    /// shutdown, pending application work is not drained. The value remains
+    /// `true` after backend teardown completes so callers can distinguish a
+    /// terminated stream from one that closed gracefully.
+    pub fn is_terminating(&self) -> bool {
+        self.0.flags.is_terminating()
+    }
+
+    #[inline]
     /// Checks whether write back-pressure is enabled.
     pub fn is_wr_backpressure(&self) -> bool {
         self.0.flags.is_wr_backpressure()
@@ -79,7 +107,13 @@ impl IoRef {
     }
 
     #[inline]
-    /// Encodes the item into the write buffer.
+    /// Encodes an item into the write buffer.
+    ///
+    /// This method reports codec errors only. If the connection is already
+    /// closing or closed, the item is not encoded and the call returns
+    /// `Ok(())`. Use [`encode_slice`](Self::encode_slice) or
+    /// [`encode_bytes`](Self::encode_bytes) when transport-state errors must be
+    /// observable.
     pub fn encode<U>(&self, item: U::Item, codec: &U) -> Result<(), <U as Encoder>::Error>
     where
         U: Encoder,
@@ -90,12 +124,18 @@ impl IoRef {
 
     #[inline]
     /// Encodes the slice into the write buffer.
+    ///
+    /// If this triggers an eager backend write, any transport or filter error
+    /// from that write is returned immediately.
     pub fn encode_slice(&self, src: &[u8]) -> io::Result<()> {
         self.with_write_buf(|buf| buf.extend_from_slice(src))
     }
 
     #[inline]
     /// Writes bytes to the write buffer.
+    ///
+    /// If this triggers an eager backend write, any transport or filter error
+    /// from that write is returned immediately.
     pub fn encode_bytes<B>(&self, src: B) -> io::Result<()>
     where
         BytePage: From<B>,
@@ -145,16 +185,7 @@ impl IoRef {
     /// Requires the underlying runtime to implement `.write()`;
     /// otherwise, no action is taken.
     pub fn send_buf(&self) -> io::Result<()> {
-        // try send bytes
-        self.consolidate_write_state(true);
-
-        if self.0.flags.is_stopping_any()
-            && let Some(err) = self.0.error.take()
-        {
-            Err(err)
-        } else {
-            Ok(())
-        }
+        self.consolidate_write_state(true)
     }
 
     pub(crate) fn ops_send_buf(&self) {
@@ -184,7 +215,11 @@ impl IoRef {
         }
     }
 
-    /// Get access to filter buffer
+    /// Provides temporary access to the outermost filter buffers.
+    ///
+    /// Filter callbacks run before and after `f`, and any produced write data
+    /// is scheduled for delivery after the closure returns. Errors from an
+    /// eager backend write are returned to the caller.
     pub fn with_buf<F, R>(&self, f: F) -> io::Result<R>
     where
         F: FnOnce(&mut FilterBuf<'_>) -> R,
@@ -193,11 +228,14 @@ impl IoRef {
         let result = self.0.buffer.with_filter(self, |ctx| ctx.with_buffer(f));
         self.with_callbacks(|cb| cb.after_processing(self));
 
-        self.consolidate_write_state(false);
+        self.consolidate_write_state(false)?;
         Ok(result)
     }
 
-    /// Get mut access to read buffer
+    /// Provides mutable access to the application-facing read buffer.
+    ///
+    /// Consuming bytes may release read backpressure and wake the transport
+    /// read task.
     pub fn with_read_buf<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
@@ -209,7 +247,11 @@ impl IoRef {
         })
     }
 
-    /// Get mut access to source write buffer
+    /// Provides mutable access to the application-facing write buffer.
+    ///
+    /// Returns an error without invoking `f` if the connection is closing or
+    /// closed. Data appended by `f` is scheduled for delivery. If that starts
+    /// an eager backend write, its transport or filter error is returned.
     pub fn with_write_buf<F, R>(&self, f: F) -> io::Result<R>
     where
         F: FnOnce(&mut BytePages) -> R,
@@ -224,13 +266,15 @@ impl IoRef {
             }
         } else {
             let result = st.buffer.with_write_src(f);
-            self.consolidate_write_state(false);
+            self.consolidate_write_state(false)?;
             Ok(result)
         }
     }
 
     #[inline]
-    /// Get mut access to src read buffer
+    /// Provides mutable access to the transport-facing read buffer.
+    ///
+    /// This is primarily intended for transport and filter implementations.
     pub fn with_read_src_buf<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
@@ -239,7 +283,9 @@ impl IoRef {
     }
 
     #[inline]
-    /// Get mut access to dest write buffer
+    /// Provides mutable access to the transport-facing write buffer.
+    ///
+    /// This is primarily intended for transport and filter implementations.
     pub fn with_write_dst_buf<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytePages) -> R,
@@ -247,7 +293,7 @@ impl IoRef {
         self.0.buffer.with_write_dst(f)
     }
 
-    pub(crate) fn consolidate_write_state(&self, force: bool) {
+    pub(crate) fn consolidate_write_state(&self, force: bool) -> io::Result<()> {
         let st = &self.0;
 
         // wake write task if needsed
@@ -292,11 +338,22 @@ impl IoRef {
                 Iops::schedule_write(st.id());
             }
         }
+
+        if st.flags.is_stopping_any()
+            && let Some(err) = st.error()
+        {
+            return Err(err);
+        }
+
+        // A direct write may have changed the amount of buffered data.
+        let size = st.buffer.write_buf_size();
+
         // Enable backpressure
         if !st.flags.is_wr_backpressure() && st.is_wr_backpressure_needed(size) {
             st.flags.set_wr_backpressure();
             st.wake_dispatch_task();
         }
+        Ok(())
     }
 
     fn update_read_destination(&self, buf: &mut BytesMut) {
@@ -311,8 +368,8 @@ impl IoRef {
         );
 
         if st.flags.is_rd_backpressure() {
-            // back-pressure is still eanbled
-            if st.is_rd_backpressure_needed(buf.len()) {
+            // Keep reads paused until enough buffered data has been consumed.
+            if !st.should_disable_rd_backpressure(buf.len()) {
                 return;
             }
             st.flags.unset_all_read_flags();
@@ -342,12 +399,23 @@ impl IoRef {
         self.0.notify_timeout();
     }
 
-    /// Current timer handle
+    /// Returns the currently registered dispatcher timer handle.
+    ///
+    /// [`TimerHandle::ZERO`] is returned when no timer is registered.
     pub fn timer_handle(&self) -> TimerHandle {
         self.0.timeout.get()
     }
 
-    /// Start timer
+    /// Starts or updates the dispatcher timer.
+    ///
+    /// The timer uses second-granularity deadlines. When it expires,
+    /// [`poll_status_update`](crate::Io::poll_status_update) reports
+    /// [`IoStatusUpdate::KeepAlive`](crate::IoStatusUpdate::KeepAlive).
+    ///
+    /// A zero timeout cancels the current timer but does not consume a timeout
+    /// notification that has already been delivered. Use
+    /// [`stop_timer`](Self::stop_timer) when leaving a protocol phase to also
+    /// clear such a notification.
     pub fn start_timer(&self, timeout: Seconds) -> TimerHandle {
         let cur_hnd = self.0.timeout.get();
 
@@ -384,7 +452,11 @@ impl IoRef {
         }
     }
 
-    /// Notify when io stream get disconnected
+    /// Returns a future that resolves when the complete I/O stream disconnects.
+    ///
+    /// A clean peer read EOF does not resolve this future because the write
+    /// half remains usable. It resolves when local shutdown or force
+    /// termination closes the complete transport.
     pub fn on_disconnect(&self) -> crate::OnDisconnect {
         crate::OnDisconnect::new(self.0.clone())
     }
@@ -471,7 +543,8 @@ mod tests {
 
     use ntex_bytes::Bytes;
     use ntex_codec::BytesCodec;
-    use ntex_util::{future::lazy, time::Millis, time::sleep};
+    use ntex_util::future::{Either, lazy};
+    use ntex_util::time::{Millis, sleep, timeout};
 
     use super::*;
     use crate::{FilterCtx, Io, testing::IoTest};
@@ -529,15 +602,20 @@ mod tests {
         assert_eq!(buf, Bytes::from_static(b"test"));
 
         client.write(b"test");
-        state.read_ready().await.unwrap();
+        state.read_more().await.unwrap();
         let buf = state.decode(&BytesCodec).unwrap().unwrap();
         assert_eq!(buf, Bytes::from_static(b"test"));
 
         client.write_error(io::Error::other("err"));
-        state
+        let err = state
             .send(Bytes::from_static(b"test"), &BytesCodec)
             .await
-            .unwrap();
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            Either::Right(ref err)
+                if err.kind() == io::ErrorKind::Other && err.to_string() == "err"
+        ));
         assert!(state.flags().is_terminated());
 
         let res = state.send(Bytes::from_static(b"test"), &BytesCodec).await;
@@ -547,7 +625,29 @@ mod tests {
         client.remote_buffer_cap(1024);
         let state = Io::from(server);
         state.terminate();
-        assert!(state.flags().is_stopping());
+        assert!(state.flags().is_terminating());
+        assert!(!state.flags().is_stopping());
+        assert!(!state.flags().is_terminated());
+        state.shutdown().await.unwrap();
+        assert!(state.flags().is_terminated());
+    }
+
+    #[ntex::test]
+    async fn zero_byte_write_reports_write_zero() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let state = Io::from(server);
+
+        client.write_zero();
+        let err = state
+            .send(Bytes::from_static(b"test"), &BytesCodec)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            Either::Right(ref err) if err.kind() == io::ErrorKind::WriteZero
+        ));
         assert!(state.flags().is_terminated());
     }
 
@@ -567,8 +667,27 @@ mod tests {
             Poll::Pending
         );
         client.close().await;
-        assert_eq!(waiter.await, ());
-        assert_eq!(waiter2.await, ());
+        assert!(state.is_read_eof());
+        assert!(!state.is_closed());
+        assert_eq!(
+            lazy(|cx| Pin::new(&mut waiter).poll(cx)).await,
+            Poll::Pending
+        );
+        assert_eq!(
+            lazy(|cx| Pin::new(&mut waiter2).poll(cx)).await,
+            Poll::Pending
+        );
+
+        timeout(Millis(1000), state.shutdown())
+            .await
+            .expect("stream shutdown did not complete")
+            .unwrap();
+        timeout(Millis(1000), waiter)
+            .await
+            .expect("disconnect waiter was not notified");
+        timeout(Millis(1000), waiter2)
+            .await
+            .expect("cloned disconnect waiter was not notified");
 
         let mut waiter = state.on_disconnect();
         assert_eq!(
@@ -585,13 +704,19 @@ mod tests {
         );
         client.read_error(io::Error::other("err"));
         assert_eq!(waiter.await, ());
+
+        let mut waiter = state.on_disconnect();
+        assert_eq!(
+            lazy(|cx| Pin::new(&mut waiter).poll(cx)).await,
+            Poll::Ready(())
+        );
     }
 
     #[ntex::test]
     async fn write_to_closed_io() {
-        let (client, server) = IoTest::create();
+        let (_client, server) = IoTest::create();
         let state = Io::from(server);
-        client.close().await;
+        state.terminate();
 
         assert!(state.is_closed());
         assert!(state.encode_slice(TEXT.as_bytes()).is_err());

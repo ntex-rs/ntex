@@ -4,8 +4,8 @@ use std::{cmp, io, mem, os::windows::io::RawSocket, ptr, task::Poll};
 use windows_sys::Win32::{
     Foundation::{
         ERROR_BROKEN_PIPE, ERROR_HANDLE_EOF, ERROR_IO_INCOMPLETE, ERROR_IO_PENDING,
-        ERROR_MORE_DATA, ERROR_NETNAME_DELETED, ERROR_NO_DATA, ERROR_NOT_FOUND,
-        ERROR_OPERATION_ABORTED, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, GetLastError,
+        ERROR_MORE_DATA, ERROR_NO_DATA, ERROR_NOT_FOUND, ERROR_OPERATION_ABORTED,
+        ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, GetLastError,
     },
     Networking::WinSock::{WSABUF, WSARecv, WSASend},
     System::IO::CancelIoEx,
@@ -73,7 +73,7 @@ impl ReadOperation {
                 let e = err.raw_os_error();
                 if e != Some(ERROR_NOT_FOUND as _) && e != Some(ERROR_OPERATION_ABORTED as _) {
                     self.ctx
-                        .update_read_status(self.buf.take().unwrap(), Err(err));
+                        .update_read_status(self.buf.take().unwrap(), Poll::Ready(Err(err)));
                     return true;
                 }
             }
@@ -117,20 +117,21 @@ impl ReadOperation {
 
             match winsock_result(result) {
                 Poll::Ready(Ok(())) => {
-                    if size == 0 {
-                        self.ctx.stop(None);
-                    } else {
+                    if size != 0 {
                         // SAFETY: windows tells us how many bytes it read
                         unsafe { buf.advance_mut(size as usize) };
                     }
-                    if self.ctx.update_read_status(buf, Ok(size as usize)) == IoTaskStatus::Io
+                    if self
+                        .ctx
+                        .update_read_status(buf, Poll::Ready(Ok(size as usize)))
+                        == IoTaskStatus::Io
                         && size != 0
                     {
                         continue;
                     }
                 }
                 Poll::Ready(Err(err)) => {
-                    self.ctx.update_read_status(buf, Err(err));
+                    self.ctx.update_read_status(buf, Poll::Ready(Err(err)));
                 }
                 Poll::Pending => {
                     self.buf = Some(buf);
@@ -158,18 +159,16 @@ impl ReadOperation {
         if let Some(mut buf) = rd.buf.take() {
             let st = match res {
                 Ok(size) => {
-                    if size == 0 {
-                        rd.ctx.stop(None);
-                    } else {
+                    if size != 0 {
                         // SAFETY: windows tells us how many bytes it read
                         unsafe { buf.advance_mut(size) };
                     }
-                    rd.ctx.update_read_status(buf, Ok(size))
+                    rd.ctx.update_read_status(buf, Poll::Ready(Ok(size)))
                 }
                 Err(err) if err.raw_os_error() == Some(ERROR_OPERATION_ABORTED as _) => {
-                    rd.ctx.update_read_status(buf, Ok(0))
+                    rd.ctx.update_read_status(buf, Poll::Pending)
                 }
-                Err(err) => rd.ctx.update_read_status(buf, Err(err)),
+                Err(err) => rd.ctx.update_read_status(buf, Poll::Ready(Err(err))),
             };
             if rd.flags.contains(Flags::CLOSING) {
                 Some(rd.id)
@@ -273,10 +272,8 @@ impl WriteOperation {
 
                     match winsock_result(result) {
                         Poll::Ready(Ok(())) => {
-                            let mut sent = sent as usize;
-                            if sent == 0 {
-                                self.ctx.stop(None);
-                            }
+                            let written = sent as usize;
+                            let mut sent = written;
                             // remove written bytes
                             for page in self.pages[..num].iter_mut() {
                                 if let Some(p) = page {
@@ -300,7 +297,14 @@ impl WriteOperation {
                                     break;
                                 }
                             }
-                            Ok(true)
+                            if written == 0 {
+                                Err(io::Error::new(
+                                    io::ErrorKind::WriteZero,
+                                    "failed to write frame to transport",
+                                ))
+                            } else {
+                                Ok(true)
+                            }
                         }
                         Poll::Ready(Err(err)) => {
                             // return unwritten data back to buffer
@@ -339,10 +343,11 @@ impl WriteOperation {
         wr.flags.remove(Flags::WAITING);
 
         let st = match res {
+            Ok(0) => Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "failed to write frame to transport",
+            )),
             Ok(mut sent) => {
-                if sent == 0 {
-                    wr.ctx.stop(None);
-                }
                 // remove written bytes
                 for page in wr.pages[..num].iter_mut() {
                     if let Some(p) = page {
@@ -390,7 +395,6 @@ pub(crate) fn winapi_result() -> Poll<io::Result<()>> {
     match error {
         ERROR_IO_PENDING => Poll::Pending,
         ERROR_IO_INCOMPLETE
-        | ERROR_NETNAME_DELETED
         | ERROR_HANDLE_EOF
         | ERROR_BROKEN_PIPE
         | ERROR_PIPE_CONNECTED

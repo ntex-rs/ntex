@@ -50,9 +50,13 @@ impl Service<(), (Request, Io, h1::Codec)> for WsService {
         io.encode((res, body::BodySize::None).into(), &codec)
             .unwrap();
 
-        io.set_config(
-            SharedCfg::new("WS-SRV").add(IoConfig::new().set_keepalive_timeout(Seconds(0))),
-        );
+        // SAFETY: no reference returned by `io.cfg()` is retained across the
+        // protocol transition.
+        unsafe {
+            io.set_config(
+                SharedCfg::new("WS-SRV").add(IoConfig::new().set_keepalive_timeout(Seconds(0))),
+            );
+        }
         Dispatcher::new(io.seal(), ws::Codec::new(), Pipeline::new((), service))
             .await
             .map_err(|_| panic!())
@@ -354,10 +358,14 @@ async fn test_stale_timer_after_ws_upgrade() {
                         let res = handshake(req.head()).unwrap().message_body(());
                         io.encode((res, body::BodySize::None).into(), &codec)
                             .unwrap();
-                        io.set_config(
-                            SharedCfg::new("WS")
-                                .add(IoConfig::new().set_keepalive_timeout(Seconds(0))),
-                        );
+                        // SAFETY: no reference returned by `io.cfg()` is
+                        // retained across the protocol transition.
+                        unsafe {
+                            io.set_config(
+                                SharedCfg::new("WS")
+                                    .add(IoConfig::new().set_keepalive_timeout(Seconds(0))),
+                            );
+                        }
                         // let the stale h1 timer (1s) fire before starting the WS dispatcher
                         sleep(Millis(2500)).await;
                         // InFlightService(1) makes poll_ready return Pending while

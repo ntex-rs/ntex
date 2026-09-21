@@ -132,7 +132,11 @@ where
     let sink = WsSink::new(io.get_ref(), codec.clone(), io.shared().get());
 
     // create ws service
-    io.set_config(CFG.with(Clone::clone));
+    // SAFETY: the HTTP dispatcher has transferred ownership of `io` to this
+    // upgrade path, and no borrowed reference from `io.cfg()` is retained.
+    unsafe {
+        io.set_config(CFG.with(Clone::clone));
+    }
 
     // the h1 dispatcher may have started a headers-read timer on this IO;
     // cancel it so DSP_TIMEOUT doesn't fire on the new WS dispatcher

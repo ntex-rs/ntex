@@ -287,7 +287,7 @@ impl Inner {
                 let io = conn.io;
                 match io {
                     ConnectionType::H1(ref s) => {
-                        if s.is_closed() {
+                        if s.is_closed() || s.is_read_eof() {
                             continue;
                         }
                         let is_valid = s.with_read_buf(|buf| {
@@ -561,6 +561,8 @@ impl Acquired {
             let (io, created, _) = conn.into_inner();
             let mut inner = inner.borrow_mut();
             inner.acquired -= 1;
+            let close = close
+                || matches!(&io, ConnectionType::H1(io) if io.is_closed() || io.is_read_eof());
             if close {
                 log::trace!(
                     "{:?}: Releasing and closing connection for {:?}",
@@ -724,6 +726,57 @@ mod tests {
         assert_eq!(pool.0.inner.borrow().available.len(), 2);
 
         assert!(lazy(|cx| pipe.poll_ready(cx)).await.is_ready());
+        assert!(lazy(|cx| pipe.poll_shutdown(cx)).await.is_ready());
+    }
+
+    #[crate::rt_test]
+    async fn clean_eof_connections_are_not_reused() {
+        let store = Rc::new(RefCell::new(Vec::new()));
+        let store2 = store.clone();
+
+        let cfg = SharedCfg::new("C")
+            .add(
+                ClientConfig::new()
+                    .set_keep_alive(Seconds(10))
+                    .set_lifetime(Seconds(10))
+                    .set_limit(1),
+            )
+            .build();
+
+        let pool = ConnectionPool::new(
+            ConnectorPipeline::new(boxed::service(fn_service(move |req| {
+                let (client, server) = IoTest::create();
+                store2.borrow_mut().push((req, server));
+                Box::pin(
+                    async move { Ok(IoBoxed::from(nio::Io::new(client, SharedCfg::default()))) },
+                )
+            }))),
+            cfg.get(),
+        );
+        let pipe = Pipeline::new(cfg, pool.clone());
+        let req = Connect {
+            uri: Uri::try_from("http://localhost/test").unwrap(),
+            addr: None,
+        };
+
+        // EOF observed before release: do not add the connection to the pool.
+        let conn = pipe.call(req.clone()).await.unwrap();
+        let peer = store.borrow()[0].1.clone();
+        peer.close().await;
+        conn.release(false);
+        assert!(pool.0.inner.borrow().available.is_empty());
+
+        // EOF observed after release: reject the stale pooled connection.
+        let conn = pipe.call(req.clone()).await.unwrap();
+        assert_eq!(store.borrow().len(), 2);
+        let peer = store.borrow()[1].1.clone();
+        conn.release(false);
+        assert_eq!(pool.0.inner.borrow().available.len(), 1);
+        peer.close().await;
+
+        let conn = pipe.call(req).await.unwrap();
+        assert_eq!(store.borrow().len(), 3);
+        conn.release(true);
         assert!(lazy(|cx| pipe.poll_shutdown(cx)).await.is_ready());
     }
 }

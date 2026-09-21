@@ -5,7 +5,13 @@ use ntex_util::time::sleep;
 
 use crate::{Flags, Id, IoRef, IoTaskStatus, Readiness, io::IoState};
 
-/// Context for io read task
+/// Connection context shared with transport read and write tasks.
+///
+/// Transport implementations obtain buffers from this context, perform
+/// nonblocking I/O, and return completion through
+/// [`update_read_status`](Self::update_read_status) and
+/// [`update_write_status`](Self::update_write_status). Their return value tells
+/// the task whether to continue, pause until notified, or stop.
 pub struct IoContext(IoRef);
 
 impl fmt::Debug for IoContext {
@@ -59,12 +65,21 @@ impl IoContext {
         self.st().terminate_connection(e);
     }
 
+    /// Marks backend transport teardown as complete.
+    pub fn stopped(&self, e: Option<io::Error>) {
+        self.st().stop_connection(e);
+    }
+
     /// Checks if the I/O stream is stopped.
     pub fn is_stopped(&self) -> bool {
         self.st().flags.is_closed()
     }
 
-    /// Gets the read buffer.
+    /// Takes a buffer for the next transport read.
+    ///
+    /// The returned buffer must be passed back exactly once through
+    /// [`update_read_status`](Self::update_read_status), even when the read
+    /// fails or would otherwise stop the task.
     pub fn get_read_buf(&self) -> BytesMut {
         let st = self.st();
 
@@ -85,11 +100,24 @@ impl IoContext {
         self.0.resize_read_buf(buf);
     }
 
-    /// Updates the read status.
+    /// Returns a transport read buffer and reports the read result.
     ///
-    /// Returns `Ok(Some(buf))` containing the read buffer.
-    /// `Ok(None)` indicates that the connection has been disconnected.
-    pub fn update_read_status(&self, buf: BytesMut, status: io::Result<usize>) -> IoTaskStatus {
+    /// `Poll::Ready(Ok(n))` reports that `n` bytes were appended to `buf`.
+    /// Zero marks the transport read side as closed and invokes the read filter
+    /// chain once with no new bytes. This lets filters emit final buffered data
+    /// or report truncated input. Further transport reads are parked, but
+    /// buffered input remains decodable and the write side remains usable until
+    /// graceful shutdown. `Poll::Ready(Err(_))` terminates the connection.
+    /// `Poll::Pending` returns the buffer after a nonblocking operation made no
+    /// progress or a submitted operation was canceled for reissue.
+    ///
+    /// The returned [`IoTaskStatus`] instructs the read task to continue
+    /// immediately, pause until notified, or stop.
+    pub fn update_read_status(
+        &self,
+        buf: BytesMut,
+        status: Poll<io::Result<usize>>,
+    ) -> IoTaskStatus {
         let st = self.st();
         let orig = st.buffer.read_dst_size();
 
@@ -104,62 +132,71 @@ impl IoContext {
         st.buffer.set_read_buf(buf, self.0.cfg());
 
         // process read buf
-        let result = status.and_then(|nbytes| {
-            if nbytes == 0 {
-                return Ok(());
-            }
-            st.buffer.process_read_buf(&self.0, nbytes).map(|status| {
-                let size = st.buffer.read_dst_size();
-
-                // The destination read buffer has new data, wake up the dispatcher
-                if size > orig {
-                    if st.is_rd_backpressure_needed(size) {
-                        log::trace!("{}: Read buf({size}), enable back-pressure", st.tag());
-                        st.flags.set_read_ready_and_backpressure();
-                    } else {
-                        st.flags.set_read_ready();
-                    }
-                    #[cfg(feature = "trace")]
-                    log::trace!("{}: New {size} bytes available", st.tag());
+        let result = match status {
+            Poll::Pending => Ok(()),
+            Poll::Ready(status) => status.and_then(|nbytes| {
+                if nbytes == 0 {
+                    st.flags.set_read_eof();
                     st.wake_dispatch_task();
                 }
 
-                if st.flags.is_read_notify() {
-                    // If the "notify" flag is set, we must wake the
-                    // dispatcher task whenever data is read from the source.
-                    st.wake_dispatch_task();
-                    st.flags.set_read_notifed();
-                }
+                st.buffer
+                    .process_read_buf(&self.0, nbytes)
+                    .and_then(|status| {
+                        let size = st.buffer.read_dst_size();
 
-                // Check if the filter wrote data during buffer processing
-                if status.wants_write {
-                    if let Err(err) = st.buffer.process_write_buf_force(&self.0) {
-                        st.terminate_connection(Some(err));
-                    } else {
-                        self.0.consolidate_write_state(false);
-                    }
-                }
+                        // The destination read buffer has new data, wake up the dispatcher
+                        if size > orig {
+                            if st.is_rd_backpressure_needed(size) {
+                                log::trace!("{}: Read buf({size}), enable back-pressure", st.tag());
+                                st.flags.set_read_ready_and_backpressure();
+                            } else {
+                                st.flags.set_read_ready();
+                            }
+                            #[cfg(feature = "trace")]
+                            log::trace!("{}: New {size} bytes available", st.tag());
+                            st.wake_dispatch_task();
+                        }
 
-                // Check whether the filter notifies about readiness changes
-                if status.notify {
-                    self.0.call_notify();
-                }
-            })
-        });
+                        if st.flags.is_read_notify() {
+                            // If the "notify" flag is set, we must wake the
+                            // dispatcher task whenever data is read from the source.
+                            st.wake_dispatch_task();
+                            st.flags.set_read_notifed();
+                        }
+
+                        // Check if the filter wrote data during buffer processing
+                        if status.wants_write {
+                            st.buffer.process_write_buf_force(&self.0)?;
+                            self.0.consolidate_write_state(false)?;
+                        }
+
+                        // Check whether the filter notifies about readiness changes
+                        if status.notify {
+                            self.0.call_notify();
+                        }
+                        Ok(())
+                    })
+            }),
+        };
 
         if let Err(err) = result {
             st.terminate_connection(Some(err));
             IoTaskStatus::Stop
         } else if st.flags.is_closed() {
             IoTaskStatus::Stop
-        } else if st.flags.is_read_paused_or_backpressure() {
+        } else if st.flags.is_read_eof() || st.flags.is_read_paused_or_backpressure() {
             IoTaskStatus::Pause
         } else {
             IoTaskStatus::Io
         }
     }
 
-    /// Gets the write buffer.
+    /// Provides access to bytes ready for the transport to write.
+    ///
+    /// Pending filter output is processed before `f` is invoked. The transport
+    /// should remove only bytes it successfully writes and then report the
+    /// result with [`update_write_status`](Self::update_write_status).
     pub fn with_write_buf<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytePages) -> R,
@@ -175,7 +212,9 @@ impl IoContext {
     /// Updates the write status.
     ///
     /// `Ok(true)` indicates that one or more bytes were successfully written
-    /// to the I/O stream.
+    /// to the transport; `Ok(false)` indicates no write progress. An error
+    /// terminates the connection. The returned [`IoTaskStatus`] instructs the
+    /// write task to continue immediately, pause until notified, or stop.
     pub fn update_write_status(&self, status: io::Result<bool>) -> IoTaskStatus {
         let st = &self.st();
 
@@ -229,7 +268,12 @@ impl IoContext {
         }
     }
 
-    /// Waits for the I/O stream to close or begin closing.
+    /// Polls transport-task shutdown state.
+    ///
+    /// If `flush` is `true`, this first waits until the write task is paused,
+    /// indicating that currently buffered output has been handled. It then
+    /// waits for the connection to close. The context's waker is registered
+    /// while pending.
     pub fn shutdown(&self, flush: bool, cx: &mut Context<'_>) -> Poll<()> {
         let st = self.st();
         if flush && !st.flags.is_stopping() {
@@ -264,7 +308,9 @@ impl IoContext {
                 return;
             }
         };
-        self.0.consolidate_write_state(true);
+        if self.0.consolidate_write_state(true).is_err() {
+            return;
+        }
 
         #[cfg(feature = "trace")]
         log::trace!(
@@ -281,6 +327,9 @@ impl IoContext {
         {
             // if read buffer is not consumed it is unlikely
             // that filter will properly complete shutdown
+            st.set_shutdown_error(io::Error::other(
+                "filter shutdown blocked by unread buffered data",
+            ));
             st.filters_stopped();
         } else if st.cfg.disconnect_timeout().non_zero() {
             // filter shutdown timeout
@@ -289,6 +338,10 @@ impl IoContext {
                 .take()
                 .unwrap_or_else(|| sleep(st.cfg.disconnect_timeout()));
             if timeout.poll_elapsed(cx).is_ready() {
+                st.set_shutdown_error(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "filter shutdown timed out",
+                ));
                 st.filters_stopped();
             } else {
                 st.shutdown_timeout.set(Some(timeout));
@@ -311,7 +364,8 @@ impl Clone for IoContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Io, testing::IoTest};
+    use crate::{FilterBuf, FilterLayer, Io, testing::IoTest};
+    use ntex_util::future::lazy;
 
     #[ntex::test]
     async fn ctx_basics() {
@@ -322,5 +376,107 @@ mod tests {
         let _ = ctx.flags();
         assert_ne!(ctx.id(), Id::default());
         assert!(format!("{ctx:?}").contains("IoContext"));
+    }
+
+    #[ntex::test]
+    async fn pending_read_completion_is_not_eof() {
+        let (_, server) = IoTest::create();
+        let state = Io::from(server);
+        let ctx = IoContext::new(state.get_ref());
+
+        assert!(lazy(|cx| state.poll_read_more(cx)).await.is_pending());
+        assert_ne!(
+            ctx.update_read_status(ctx.get_read_buf(), Poll::Pending),
+            IoTaskStatus::Stop
+        );
+        assert!(!ctx.is_stopped());
+        assert!(lazy(|cx| state.poll_read_more(cx)).await.is_pending());
+
+        assert_eq!(
+            ctx.update_read_status(ctx.get_read_buf(), Poll::Ready(Ok(0))),
+            IoTaskStatus::Pause
+        );
+        assert!(!ctx.is_stopped());
+        assert!(matches!(
+            lazy(|cx| state.poll_read_more(cx)).await,
+            Poll::Ready(Ok(None))
+        ));
+    }
+
+    #[derive(Debug)]
+    struct FinishOnEof;
+
+    impl FilterLayer for FinishOnEof {
+        fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+            if buf.io().is_read_eof() {
+                buf.with_read_buffers(|_, dst| dst.extend_from_slice(b"final"));
+            }
+            Ok(())
+        }
+
+        fn process_write_buf(&self, _: &FilterBuf<'_>) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[ntex::test]
+    async fn clean_eof_is_processed_by_filters() {
+        let (_, server) = IoTest::create();
+        let state = Io::from(server).add_filter(FinishOnEof);
+        let ctx = IoContext::new(state.get_ref());
+
+        assert!(lazy(|cx| state.poll_read_notify(cx)).await.is_pending());
+        assert_eq!(
+            ctx.update_read_status(ctx.get_read_buf(), Poll::Ready(Ok(0))),
+            IoTaskStatus::Pause
+        );
+        assert!(state.is_read_eof());
+        assert!(matches!(
+            lazy(|cx| state.poll_read_notify(cx)).await,
+            Poll::Ready(Ok(Some(())))
+        ));
+        assert!(matches!(
+            lazy(|cx| state.poll_read_notify(cx)).await,
+            Poll::Ready(Ok(None))
+        ));
+        assert_eq!(state.with_read_buf(BytesMut::take), b"final");
+        assert!(matches!(
+            lazy(|cx| state.poll_read_more(cx)).await,
+            Poll::Ready(Ok(None))
+        ));
+    }
+
+    #[derive(Debug)]
+    struct RejectEof;
+
+    impl FilterLayer for RejectEof {
+        fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+            if buf.io().is_read_eof() {
+                Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "truncated filtered stream",
+                ))
+            } else {
+                Ok(())
+            }
+        }
+
+        fn process_write_buf(&self, _: &FilterBuf<'_>) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[ntex::test]
+    async fn clean_eof_filter_error_terminates_connection() {
+        let (_, server) = IoTest::create();
+        let state = Io::from(server).add_filter(RejectEof);
+        let ctx = IoContext::new(state.get_ref());
+
+        assert_eq!(
+            ctx.update_read_status(ctx.get_read_buf(), Poll::Ready(Ok(0))),
+            IoTaskStatus::Stop
+        );
+        assert!(state.is_read_eof());
+        assert!(state.is_terminating());
     }
 }

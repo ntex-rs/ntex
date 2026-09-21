@@ -139,10 +139,14 @@ async fn test_keepalive_timeout() {
                         .unwrap();
 
                     // start websocket service
-                    io.set_config(
-                        SharedCfg::new("WS-SRV")
-                            .add(IoConfig::new().set_keepalive_timeout(Seconds::ONE)),
-                    );
+                    // SAFETY: no reference returned by `io.cfg()` is retained
+                    // across the protocol transition.
+                    unsafe {
+                        io.set_config(
+                            SharedCfg::new("WS-SRV")
+                                .add(IoConfig::new().set_keepalive_timeout(Seconds::ONE)),
+                        );
+                    }
                     let _ = Dispatcher::new(
                         io.seal(),
                         ws::Codec::default(),

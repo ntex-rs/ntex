@@ -3,7 +3,7 @@ use std::{any, cell::Cell, io, task::Context, task::Poll};
 use crate::{FilterCtx, FilterLayer, IoRef, Readiness};
 
 #[derive(Debug)]
-/// Default `Io` filter
+/// Base filter that connects a filter chain to the underlying transport.
 pub struct Base(IoRef);
 
 impl Base {
@@ -13,6 +13,11 @@ impl Base {
 }
 
 #[derive(Debug)]
+/// One processing layer wrapped around an existing filter chain.
+///
+/// Values of this type are created by [`Io::add_filter`](crate::Io::add_filter).
+/// `F` is the outer, newly added layer and `L` is the previously installed
+/// inner chain.
 pub struct Layer<F, L = Base>(pub(crate) F, L, Cell<bool>);
 
 impl<F: FilterLayer, L: Filter> Layer<F, L> {
@@ -31,23 +36,29 @@ impl NullFilter {
     }
 }
 
+/// Complete filter-chain interface used by [`Io`](crate::Io).
+///
+/// Most filters should implement [`FilterLayer`] and be installed with
+/// [`Io::add_filter`](crate::Io::add_filter). Implement this trait directly
+/// only when wrapping or replacing a complete chain.
 pub trait Filter: 'static {
-    /// Accesses internal filter information.
+    /// Returns type-indexed information exposed by this chain.
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>>;
 
-    /// Processes incoming read-buffer data.
+    /// Processes incoming data from the transport toward the application.
     fn process_read_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()>;
 
-    /// Processes outgoing write-buffer data.
+    /// Processes outgoing data from the application toward the transport.
     fn process_write_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()>;
 
-    /// Performs a graceful shutdown of the filter.
+    /// Performs graceful shutdown from the outermost layer toward the
+    /// transport.
     fn shutdown(&self, ctx: &mut FilterCtx<'_>) -> io::Result<Poll<()>>;
 
-    /// Checks whether read operations may proceed.
+    /// Checks whether transport read operations may proceed.
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness>;
 
-    /// Checks whether write operations may proceed.
+    /// Checks whether transport write operations may proceed.
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness>;
 }
 
@@ -69,7 +80,9 @@ impl Filter for Base {
         } else {
             st.read_task.register(cx.waker());
 
-            if st.flags.is_stopping_filters() {
+            if st.flags.is_read_eof() {
+                Poll::Pending
+            } else if st.flags.is_stopping_filters() {
                 Poll::Ready(Readiness::Ready)
             } else if st.flags.is_read_paused_or_backpressure() {
                 // read buffer is fulled of is not processed by dispatcher yet
@@ -81,7 +94,7 @@ impl Filter for Base {
     }
 
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
-        if self.0.0.flags.is_closed() {
+        if self.0.0.flags.is_terminated() || self.0.0.flags.is_terminating() {
             Poll::Ready(Readiness::Terminate)
         } else {
             self.0.0.write_task.register(cx.waker());

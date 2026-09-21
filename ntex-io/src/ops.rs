@@ -13,18 +13,35 @@ const CAP: usize = 64;
 const SEC: Duration = Duration::from_secs(1);
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
+/// Opaque identifier assigned to a registered I/O stream.
+///
+/// The identifier is meaningful only within the current thread's I/O manager.
 pub struct Id(Option<NonZeroUsize>);
 
 #[derive(Copy, Clone, Default, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+/// Handle to an I/O dispatcher timer.
+///
+/// Handles represent second-granularity deadlines managed by the current
+/// thread's I/O manager. A handle becomes stale after its timer is stopped or
+/// replaced and must not be used as an independent cancellation token.
 pub struct TimerHandle(u32);
 
 impl TimerHandle {
+    /// A handle that does not refer to an active timer.
     pub const ZERO: TimerHandle = TimerHandle(0);
 
+    /// Returns `true` if this handle refers to a timer deadline.
+    ///
+    /// This does not guarantee that the timer is still registered or has not
+    /// already elapsed.
     pub fn is_set(&self) -> bool {
         self.0 != 0
     }
 
+    /// Returns the whole seconds remaining until this handle's deadline.
+    ///
+    /// Returns zero if the deadline has elapsed. The result is based on the
+    /// current thread's I/O timer clock.
     pub fn remains(&self) -> Seconds {
         IoManager::with(|mgr| {
             let cur = mgr.timers.current;
@@ -37,6 +54,10 @@ impl TimerHandle {
         })
     }
 
+    /// Returns the instant represented by this handle.
+    ///
+    /// The instant is based on the current thread's I/O timer clock. For
+    /// [`ZERO`](Self::ZERO), this is the clock's base instant.
     pub fn instant(&self) -> Instant {
         IoManager::with(|mgr| mgr.timers.base + Duration::from_secs(u64::from(self.0)))
     }
