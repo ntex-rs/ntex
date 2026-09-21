@@ -169,7 +169,7 @@ impl IoRef {
     ///
     /// This mutates the read state: it clears read readiness, and consuming
     /// enough bytes may release read backpressure. It also cancels a pause
-    /// installed by [`Io::pause`](crate::Io::pause) and wakes the transport
+    /// installed by [`Io::poll_read_pause`](crate::Io::poll_read_pause) and wakes the transport
     /// read task.
     pub fn decode<U>(
         &self,
@@ -194,7 +194,7 @@ impl IoRef {
     ///
     /// Like [`decode`](Self::decode), this mutates the read state: it clears
     /// read readiness, may release read backpressure, and cancels a pause
-    /// installed by [`Io::pause`](crate::Io::pause).
+    /// installed by [`Io::poll_read_pause`](crate::Io::poll_read_pause).
     pub fn decode_item<U>(
         &self,
         codec: &U,
@@ -274,7 +274,7 @@ impl IoRef {
     ///
     /// This mutates the read state whether or not `f` consumes anything. Read
     /// readiness is always cleared, and a pause installed by
-    /// [`Io::pause`](crate::Io::pause) is always cancelled, waking the
+    /// [`Io::poll_read_pause`](crate::Io::poll_read_pause) is always cancelled, waking the
     /// transport read task. Consuming enough bytes additionally releases read
     /// backpressure. Use [`crate::Io::poll_read_more`] rather than this method
     /// to check whether data is available.

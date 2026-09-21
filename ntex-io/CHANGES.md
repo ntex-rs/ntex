@@ -2,6 +2,7 @@
 
 ## [4.1.0] - 2026-09-22
 
+* Remove Io::pause(), the pause it installed could be silently cancelled
 * Io::poll_shutdown() no longer discards the read-ready flag
 * Io::poll_status_update() releases write back-pressure without reporting another
   WriteBackpressure update, matching Io::poll_flush()

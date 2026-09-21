@@ -539,22 +539,6 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Pauses the read task.
-    ///
-    /// There is no explicit resume. The pause is cancelled implicitly by any
-    /// operation that touches the read buffer or asks for more input, namely
-    /// [`read_more`](Self::read_more), [`poll_read_more`](Self::poll_read_more),
-    /// [`IoRef::decode`], [`IoRef::decode_item`], and [`IoRef::with_read_dst`].
-    /// Releasing read backpressure cancels it as well.
-    pub fn pause(&self) {
-        let st = self.st();
-        if !st.flags.is_read_paused() {
-            st.wake_read_task();
-            st.flags.set_read_paused();
-        }
-    }
-
-    #[inline]
     /// Encodes an item and sends it to the peer, fully flushing the write buffer.
     pub async fn send<U>(&self, item: U::Item, codec: &U) -> Result<(), Either<U::Error, io::Error>>
     where
@@ -829,13 +813,23 @@ impl<F> Io<F> {
     #[inline]
     /// Pauses the read task and polls for a status update.
     ///
-    /// This is [`pause`](Self::pause) followed by
-    /// [`poll_status_update`](Self::poll_status_update), and the pause is
-    /// cancelled under the same conditions described on `pause`. Callers that
-    /// must stay paused should avoid touching the read buffer until they are
-    /// ready to resume.
+    /// The transport stops reading until the pause is cancelled. There is no
+    /// explicit resume: the pause is cancelled implicitly by any operation that
+    /// touches the read buffer or asks for more input, namely
+    /// [`read_more`](Self::read_more), [`poll_read_more`](Self::poll_read_more),
+    /// [`IoRef::decode`], [`IoRef::decode_item`], and [`IoRef::with_read_dst`].
+    /// Releasing read backpressure cancels it as well. Because those methods
+    /// are available through every [`IoRef`] clone, the pause holds only while
+    /// no other holder touches the read buffer.
+    ///
+    /// See [`poll_status_update`](Self::poll_status_update) for the reported
+    /// updates.
     pub fn poll_read_pause(&self, cx: &mut Context<'_>) -> Poll<IoStatusUpdate> {
-        self.pause();
+        let st = self.st();
+        if !st.flags.is_read_paused() {
+            st.wake_read_task();
+            st.flags.set_read_paused();
+        }
         self.poll_status_update(cx)
     }
 
