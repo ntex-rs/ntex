@@ -515,8 +515,10 @@ impl<F> Io<F> {
     /// If reads are paused or under backpressure, calling this method resumes
     /// the read task. This is not a passive check of the current buffer.
     ///
-    /// Returns `Ok(Some(()))` when data is available, `Ok(None)` after clean
-    /// EOF or an error-free shutdown, and `Err` if the transport failed.
+    /// Returns `Ok(Some(()))` when input that has not been reported yet is
+    /// available, `Ok(None)` when no further input will be reported, and `Err`
+    /// if the transport failed. See [`poll_read_more`](Self::poll_read_more)
+    /// for what `None` means after a clean EOF.
     pub async fn read_more(&self) -> io::Result<Option<()>> {
         poll_fn(|cx| self.poll_read_more(cx)).await
     }
@@ -594,10 +596,16 @@ impl<F> Io<F> {
     /// # Returns
     ///
     /// - `Poll::Pending` while waiting for more data.
-    /// - `Poll::Ready(Ok(Some(())))` when new data is available.
-    /// - `Poll::Ready(Ok(None))` once buffered input has been drained after
-    ///   clean EOF, or when the stream closes without an error. Clean EOF
-    ///   leaves the write half open.
+    /// - `Poll::Ready(Ok(Some(())))` when input that has not been reported yet
+    ///   is available.
+    /// - `Poll::Ready(Ok(None))` when no further input will be reported: after
+    ///   a clean EOF once the available input has been reported, or when the
+    ///   stream closes without an error. Clean EOF leaves the write half open.
+    ///
+    ///   This reports arrivals, not buffer contents. Input that has already
+    ///   been reported stays in the read buffer and remains decodable through
+    ///   [`IoRef::decode`] and [`IoRef::with_read_dst`], so `None` does not
+    ///   imply that the read buffer is empty.
     /// - `Poll::Ready(Err(e))` if the transport failed.
     pub fn poll_read_more(&self, cx: &mut Context<'_>) -> Poll<io::Result<Option<()>>> {
         let st = self.st();
@@ -665,9 +673,11 @@ impl<F> Io<F> {
             Poll::Ready(Ok(Some(())))
         } else {
             st.flags.set_read_notify();
-            if self.poll_read_more(cx).is_ready() {
-                st.dispatch_task.register(cx.waker());
-            }
+            // Resumes the read task if reads are paused. The result is
+            // discarded on purpose: buffered application data does not
+            // complete this wait, and the eof and closed cases are handled
+            // by the branches above.
+            let _ = self.poll_read_more(cx);
             st.dispatch_task.register(cx.waker());
             Poll::Pending
         }
@@ -830,9 +840,11 @@ impl<F> Io<F> {
     /// Polls for available status updates.
     ///
     /// `KeepAlive` consumes the pending dispatcher-timeout notification.
-    /// `WriteBackpressure` is reported while backpressure is active, including
-    /// the poll that observes the write buffer falling below its release
-    /// threshold. `PeerGone` is returned after the connection closes.
+    /// `WriteBackpressure` is reported while backpressure is active. The poll
+    /// that observes the write buffer falling below its release threshold
+    /// releases backpressure and reports no status update, matching
+    /// [`poll_flush`](Self::poll_flush). `PeerGone` is returned after the
+    /// connection closes.
     pub fn poll_status_update(&self, cx: &mut Context<'_>) -> Poll<IoStatusUpdate> {
         let st = self.st();
         st.dispatch_task.register(cx.waker());
@@ -844,8 +856,10 @@ impl<F> Io<F> {
             // write backpressure is enabled and write buf smaller than half
             if st.should_disable_wr_backpressure(st.buffer.write_buf_size()) {
                 st.flags.unset_wr_backpressure();
+                Poll::Pending
+            } else {
+                Poll::Ready(IoStatusUpdate::WriteBackpressure)
             }
-            Poll::Ready(IoStatusUpdate::WriteBackpressure)
         } else {
             Poll::Pending
         }
@@ -1448,11 +1462,9 @@ mod tests {
         assert!(!io.st().flags.is_write_paused());
         // back-pressure is enabled
         assert!(io.st().flags.is_wr_backpressure());
-        // dispatcher gets WriteBackpressure, buf wr-backpressure flags is removed
-        assert!(matches!(
-            lazy(|cx| io.poll_status_update(cx)).await,
-            Poll::Ready(IoStatusUpdate::WriteBackpressure)
-        ));
+        // the write buf dropped below the release threshold, back-pressure is
+        // released and no further WriteBackpressure is reported
+        assert!(lazy(|cx| io.poll_status_update(cx)).await.is_pending());
         // back-pressure is disabled
         assert!(!io.st().flags.is_wr_backpressure());
         assert!(lazy(|cx| io.poll_status_update(cx)).await.is_pending());
@@ -1633,10 +1645,9 @@ mod tests {
         let item = client.read().await.unwrap();
         assert_eq!(item, BIN2);
         assert!(io.flags().is_wr_backpressure());
-        assert!(matches!(
-            lazy(|cx| io.poll_status_update(cx)).await,
-            Poll::Ready(IoStatusUpdate::WriteBackpressure)
-        ));
+        // the write buf drained, back-pressure is released and no status
+        // update is reported, same as poll_flush() below
+        assert!(lazy(|cx| io.poll_status_update(cx)).await.is_pending());
         assert!(!io.flags().is_wr_backpressure());
         assert!(matches!(
             lazy(|cx| io.poll_flush(cx, false)).await,

@@ -458,6 +458,34 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn eof_reports_available_input_once() {
+        let (_, server) = IoTest::create();
+        let state = Io::from(server);
+        let ctx = IoContext::new(state.get_ref());
+
+        // data arrives, then a clean eof
+        ctx.update_read_status(BytesMut::copy_from_slice(b"12345"), Poll::Ready(Ok(5)));
+        ctx.update_read_status(ctx.get_read_buf(), Poll::Ready(Ok(0)));
+
+        // the buffered input is reported once
+        assert!(matches!(
+            lazy(|cx| state.poll_read_more(cx)).await,
+            Poll::Ready(Ok(Some(())))
+        ));
+
+        // accessing the buffer marks the input as reported
+        assert_eq!(state.with_read_dst(|b| b.len()), 5);
+        assert!(matches!(
+            lazy(|cx| state.poll_read_more(cx)).await,
+            Poll::Ready(Ok(None))
+        ));
+
+        // "no further input" does not mean the read buffer is empty, the
+        // remaining bytes are still decodable
+        assert_eq!(state.with_read_dst(BytesMut::take), b"12345");
+    }
+
+    #[ntex::test]
     async fn clean_eof_is_processed_by_filters_once() {
         let (_, server) = IoTest::create();
         let state = Io::from(server).add_filter(FinishOnEof);
