@@ -494,6 +494,9 @@ impl<F> Io<F> {
 
     #[inline]
     /// Gracefully shuts down the I/O stream.
+    ///
+    /// This completes after filters and buffered output have been flushed and
+    /// the transport backend has finished its shutdown operation.
     pub async fn shutdown(&self) -> io::Result<()> {
         poll_fn(|cx| self.poll_shutdown(cx)).await
     }
@@ -675,11 +678,14 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Gracefully shuts down the I/O stream.
+    /// Polls graceful shutdown through transport completion.
+    ///
+    /// `Poll::Ready` is returned only after the transport backend marks the
+    /// connection stopped, not merely when filter shutdown and flushing finish.
     pub fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let st = self.st();
 
-        if st.flags.is_stopping() {
+        if st.flags.is_terminated() {
             if let Some(err) = st.error() {
                 Poll::Ready(Err(err))
             } else {
@@ -693,6 +699,7 @@ impl<F> Io<F> {
             st.flags.unset_read_paused();
 
             st.wake_read_task();
+            st.wake_write_task();
             st.dispatch_task.register(cx.waker());
             Poll::Pending
         }
@@ -1513,6 +1520,32 @@ mod tests {
                 .unwrap(),
             b"response"[..]
         );
+    }
+
+    #[ntex::test]
+    async fn shutdown_waits_for_transport_stop() {
+        #[derive(Debug)]
+        struct DormantTransport;
+
+        impl IoStream for DormantTransport {
+            fn start(self, _: IoContext) -> Box<dyn Handle> {
+                Box::new(self)
+            }
+        }
+
+        impl Handle for DormantTransport {}
+
+        let io = Io::from(DormantTransport);
+        let ctx = IoContext::new(io.get_ref());
+        io.st().flags.set_filters_stopped();
+
+        assert!(lazy(|cx| io.poll_shutdown(cx)).await.is_pending());
+
+        ctx.stop(None);
+        assert!(matches!(
+            lazy(|cx| io.poll_shutdown(cx)).await,
+            Poll::Ready(Ok(()))
+        ));
     }
 
     #[ntex::test]
