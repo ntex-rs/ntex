@@ -37,7 +37,7 @@ the configured high-water mark is reached.
 
 The write task follows the same pattern. It waits for
 [`IoContext::poll_write_ready`], obtains queued data with
-[`IoContext::with_write_buf`], and reports progress through
+[`IoContext::with_write_dst`], and reports progress through
 [`IoContext::update_write_status`]. ntex can then apply write backpressure,
 resume waiting services, and coordinate graceful shutdown.
 
@@ -77,7 +77,7 @@ async fn write_task(socket: Rc<TcpStream>, ctx: IoContext) {
     loop {
         wait_for_write_readiness(&ctx).await;
 
-        let result = ctx.with_write_buf(|buf| {
+        let result = ctx.with_write_dst(|buf| {
             write_to_socket(&socket, buf)
         });
 
@@ -108,7 +108,7 @@ into the I/O write buffer without depending on the concrete socket type.
 [`IoContext::poll_write_ready`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.poll_write_ready
 [`IoContext::update_read_status`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.update_read_status
 [`IoContext::update_write_status`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.update_write_status
-[`IoContext::with_write_buf`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.with_write_buf
+[`IoContext::with_write_dst`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.with_write_dst
 [`IoRef`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html
 [`IoStream`]: https://docs.rs/ntex/latest/ntex/io/trait.IoStream.html
 [`ntex::http::HttpService`]: https://docs.rs/ntex/latest/ntex/http/struct.HttpService.html
@@ -199,9 +199,12 @@ second, and the default read and write high-water marks are approximately
 
 An established connection can switch to another shared configuration with
 [`Io::set_config`]. This is useful when a protocol upgrade changes timeout or
-buffer requirements.
+buffer requirements. The method is `unsafe`: replacing the configuration may
+release the allocation that [`IoRef::cfg`] hands out, so no reference obtained
+from it may be live across the call or used afterwards.
 
 [`Io::set_config`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.set_config
+[`IoRef::cfg`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.cfg
 [`SharedCfg`]: https://docs.rs/ntex/latest/ntex/struct.SharedCfg.html
 
 ## Filter subsystem
@@ -266,11 +269,12 @@ for readiness, queries, and shutdown to make this pattern less error-prone.
 
 ### Typed versus erased filter stacks
 
-The filter stack is represented in the type of [`Io<Base>`]. A new connection starts
-with the [`Base`] filter. Calling `add_filter(layer)` consumes the current
-value and returns `Io<Layer<U, F>>`, where `U` is the new outer layer and `F`
-is the previous stack. Keeping this concrete type provides static dispatch and
-allows [`Io::filter`] to return the concrete outer filter.
+The filter stack is encoded in the type parameter of [`Io`]. A new connection
+starts as `Io<Base>`, using the [`Base`] filter. Calling `add_filter(layer)`
+consumes the current value and returns `Io<Layer<U, F>>`, where the [`Layer`]
+marker pairs the new outer layer `U` with the previous stack `F`. Keeping this
+concrete type provides static dispatch and allows [`Io::filter`] to return the
+concrete outer filter.
 
 ```rust,ignore
 let io: Io<Base> = create_io();
@@ -279,9 +283,10 @@ let io: Io<Layer<MyFilter, Base>> = io.add_filter(MyFilter::new());
 
 At service boundaries, different connections may have different concrete
 filter stacks. [`Io::seal`] erases the stack type and returns `Io<Sealed>`,
-while [`Io::boxed`] returns the `IoBoxed` convenience wrapper. Both operations
-consume the original `Io` value and retain the same connection state and
-filter behavior behind a dynamically dispatched `Filter`.
+using the [`Sealed`] marker, while [`Io::boxed`] returns the [`IoBoxed`]
+convenience wrapper. Both operations consume the original `Io` value and retain
+the same connection state and filter behavior behind a dynamically dispatched
+`Filter`.
 
 ```rust,ignore
 let io: IoBoxed = io.boxed();
@@ -324,9 +329,10 @@ insufficient, the buffer grows and may allocate additional storage.
 
 Read backpressure is based on the size of the application-facing read buffer.
 When it reaches the configured high-water mark, ntex pauses the transport read
-task. Consuming input through [`Io::recv`], [`Io::read`], [`IoRef::decode`], or
-[`IoRef::with_read_buf`] updates the buffer state and wakes the read task once
-the buffered input falls below that mark.
+task. Consuming input through [`IoRef::decode`] or [`IoRef::with_read_dst`]
+wakes the read task once the buffered input falls to half that mark.
+[`Io::recv`] and [`Io::read_exact`] wait for more input, so they release
+backpressure regardless of how much is still buffered.
 
 ### Writing
 
@@ -358,7 +364,7 @@ enforces buffer limits and backpressure.
 [`Bytes`]: https://docs.rs/ntex/latest/ntex/util/struct.Bytes.html
 [`BytesMut`]: https://docs.rs/ntex/latest/ntex/util/struct.BytesMut.html
 [`Io::flush`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.flush
-[`Io::read`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.read
+[`Io::read_exact`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.read_exact
 [`Io::recv`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.recv
 [`Io::send`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.send
 [`IoConfig`]: https://docs.rs/ntex/latest/ntex/io/struct.IoConfig.html
@@ -366,7 +372,55 @@ enforces buffer limits and backpressure.
 [`IoRef::encode`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.encode
 [`IoRef::encode_bytes`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.encode_bytes
 [`IoRef::encode_slice`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.encode_slice
-[`IoRef::with_read_buf`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.with_read_buf
+[`IoRef::with_read_dst`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.with_read_dst
+
+## Connection lifecycle and shutdown
+
+A connection stays usable until the application closes it, the peer
+disconnects, or the transport reports an error.
+
+A service that is waiting on something other than input, such as an unready
+dependency or a slow response, still needs to notice that the connection
+requires attention. [`Io::poll_status_update`] reports the next status as an
+[`IoStatusUpdate`] value:
+
+- `KeepAlive` when the configured keep-alive timeout has expired.
+- `WriteBackpressure` when queued output has reached the write high-water
+  mark, so the producer should stop and flush.
+- `PeerGone` when the connection is closing, carrying the transport error if
+  one occurred.
+
+The same conditions reach a codec-driven service as [`RecvError`] from
+[`Io::poll_recv`], which additionally reports decoder failures. Code that only
+needs to be woken when the connection goes away can await the [`OnDisconnect`]
+future returned by [`IoRef::on_disconnect`], and [`IoRef::is_closed`] reports
+whether shutdown has already started.
+
+A clean EOF from the peer ends the read direction but leaves the write half
+open, so a service can still finish encoding and flushing its response before
+closing.
+
+[`IoRef::close`] requests a graceful shutdown and returns immediately.
+[`Io::shutdown`] drives that shutdown to completion: it flushes queued output,
+gives every filter a chance to emit its own closing data through
+[`FilterLayer::shutdown`], such as a TLS `close_notify` or a WebSocket close
+frame, and then shuts the transport down. Reads keep running throughout, so
+closing data sent by the peer is still processed.
+
+The graceful-disconnect timeout bounds this process. [`IoRef::terminate`] skips
+it entirely and drops the connection without flushing pending output.
+
+[`FilterLayer::shutdown`]: https://docs.rs/ntex/latest/ntex/io/trait.FilterLayer.html#method.shutdown
+[`Io::poll_recv`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.poll_recv
+[`Io::poll_status_update`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.poll_status_update
+[`Io::shutdown`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.shutdown
+[`IoRef::close`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.close
+[`IoRef::is_closed`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.is_closed
+[`IoRef::on_disconnect`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.on_disconnect
+[`IoRef::terminate`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.terminate
+[`IoStatusUpdate`]: https://docs.rs/ntex/latest/ntex/io/enum.IoStatusUpdate.html
+[`OnDisconnect`]: https://docs.rs/ntex/latest/ntex/io/struct.OnDisconnect.html
+[`RecvError`]: https://docs.rs/ntex/latest/ntex/io/enum.RecvError.html
 
 ## Testing
 
