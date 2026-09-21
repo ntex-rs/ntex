@@ -2,6 +2,8 @@
 
 ## [4.0.1] - 2026-09-18
 
+* Propagate `Buffer::cancel_on_shutdown()` to the created service
+
 * Api docs improvements
 
 ## [4.0.0] - 2026-09-14

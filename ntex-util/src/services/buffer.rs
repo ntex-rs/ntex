@@ -58,7 +58,12 @@ where
     type Service = BufferService<St, Req, Res, Err>;
 
     fn create(&self, _: &St, service: S) -> Self::Service {
-        BufferService::new(self.buf_size, PipelineState::new(service))
+        let service = BufferService::new(self.buf_size, PipelineState::new(service));
+        if self.cancel_on_shutdown {
+            service.cancel_on_shutdown()
+        } else {
+            service
+        }
     }
 }
 
@@ -456,5 +461,42 @@ mod tests {
 
         crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(inner.count.get(), 2);
+    }
+
+    #[ntex::test]
+    async fn middleware_cancels_buffered_requests_on_shutdown() {
+        let inner = Rc::new(Inner {
+            ready: Cell::new(false),
+            waker: LocalWaker::default(),
+            count: Cell::new(0),
+        });
+        let inner2 = inner.clone();
+
+        let srv = apply(
+            Buffer::default().buf_size(1).cancel_on_shutdown(),
+            fn_factory(async move |(): &()| Ok::<_, ()>(TestService(inner2.clone()))),
+        )
+        .pipeline(())
+        .await
+        .unwrap();
+
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+
+        let canceled = Rc::new(Cell::new(false));
+        let canceled2 = canceled.clone();
+        let srv2 = srv.bind();
+        ntex::rt::spawn(async move {
+            canceled2.set(matches!(
+                srv2.call(()).await,
+                Err(BufferServiceError::RequestCanceled)
+            ));
+        });
+
+        crate::time::sleep(Duration::from_millis(25)).await;
+        srv.shutdown().await;
+        crate::time::sleep(Duration::from_millis(25)).await;
+
+        assert!(canceled.get());
+        assert_eq!(inner.count.get(), 0);
     }
 }
