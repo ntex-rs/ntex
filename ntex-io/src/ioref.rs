@@ -52,6 +52,14 @@ impl IoRef {
     }
 
     #[inline]
+    /// Checks whether the transport read half reached clean EOF.
+    ///
+    /// Buffered input remains available and the write half may still be used.
+    pub fn is_read_eof(&self) -> bool {
+        self.0.flags.is_read_eof()
+    }
+
+    #[inline]
     /// Checks whether the connection entered graceful transport shutdown.
     ///
     /// This state remains set after backend teardown completes.
@@ -644,6 +652,8 @@ mod tests {
             Poll::Pending
         );
         client.close().await;
+        assert!(state.is_read_eof());
+        assert!(!state.is_closed());
         assert_eq!(
             lazy(|cx| Pin::new(&mut waiter).poll(cx)).await,
             Poll::Pending

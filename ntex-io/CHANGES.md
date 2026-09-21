@@ -18,6 +18,8 @@
 
 * Disconnect waiters resolve only after the backend closes connection
 
+* Add `IoRef::is_read_eof()` for detecting a cleanly closed read half
+
 ## [4.0.1] - 2026-09-18
 
 * Api docs improvements
