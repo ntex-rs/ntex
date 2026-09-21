@@ -2,6 +2,8 @@
 
 ## [4.1.0] - 2026-09-21
 
+* Rename Io::read() to Io::read_exact(), it fills the whole buffer
+
 * Do not discard buffered output when filter shutdown cannot complete, wait for the write
   buffer to drain (bounded by the disconnect timeout) before closing the transport
 

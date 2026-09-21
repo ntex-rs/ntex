@@ -480,13 +480,13 @@ impl<F> Io<F> {
         }
     }
 
-    /// Reads bytes from this I/O stream into the specified buffer.
+    /// Reads exactly enough bytes from this I/O stream to fill `dst`.
     ///
     /// If there is not enough data available, waits for incoming data.
     /// If clean EOF or an error-free shutdown occurs before `dst` is filled,
     /// this returns [`io::ErrorKind::UnexpectedEof`]. Transport errors are
     /// passed through unchanged.
-    pub async fn read(&self, dst: &mut [u8]) -> io::Result<()> {
+    pub async fn read_exact(&self, dst: &mut [u8]) -> io::Result<()> {
         loop {
             let completed = self.with_read_dst(|buf| {
                 if buf.len() >= dst.len() {
@@ -1040,20 +1040,20 @@ mod tests {
 
         client.write(b"1234");
         let mut buf: [u8; 4] = [0, 0, 0, 0];
-        server.read(&mut buf).await.unwrap();
+        server.read_exact(&mut buf).await.unwrap();
         assert_eq!(&buf, b"1234");
 
         // disconnect during read
         let fut = ntex_rt::spawn(async move {
             let mut buf: [u8; 4] = [0, 0, 0, 0];
-            let err = server.read(&mut buf).await.unwrap_err();
+            let err = server.read_exact(&mut buf).await.unwrap_err();
             (server, err)
         });
         client.close().await;
         let (server, err) = fut.await.unwrap();
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
 
-        let err = server.read(&mut [0]).await.unwrap_err();
+        let err = server.read_exact(&mut [0]).await.unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
     }
 
@@ -1067,14 +1067,14 @@ mod tests {
         client.write(b"12");
         client.close().await;
 
-        let err = server.read(&mut [0; 4]).await.unwrap_err();
+        let err = server.read_exact(&mut [0; 4]).await.unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
 
         let mut buf = [0; 2];
-        server.read(&mut buf).await.unwrap();
+        server.read_exact(&mut buf).await.unwrap();
         assert_eq!(&buf, b"12");
 
-        let err = server.read(&mut [0]).await.unwrap_err();
+        let err = server.read_exact(&mut [0]).await.unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
     }
 
@@ -1888,7 +1888,7 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::ConnectionReset);
         assert_eq!(err.to_string(), "connection reset");
 
-        let err = io.read(&mut [0]).await.unwrap_err();
+        let err = io.read_exact(&mut [0]).await.unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::ConnectionReset);
         assert_eq!(err.to_string(), "connection reset");
     }
