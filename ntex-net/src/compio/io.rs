@@ -153,7 +153,7 @@ where
     loop {
         match poll_fn(|cx| ctx.poll_write_ready(cx)).await {
             Readiness::Ready => {
-                let bufs = ctx.with_write_buf(build_bufs);
+                let bufs = ctx.with_write_dst(build_bufs);
                 if bufs.is_empty() {
                     if ctx.update_write_status(Ok(false)) == IoTaskStatus::Stop {
                         break;
@@ -165,7 +165,7 @@ where
                 }
             }
             Readiness::Shutdown => {
-                let bufs = ctx.with_write_buf(build_bufs);
+                let bufs = ctx.with_write_dst(build_bufs);
                 write_buf(&mut io, ctx, bufs).await;
                 let res = io.shutdown().await;
                 ctx.stopped(res.err());

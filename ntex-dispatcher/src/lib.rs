@@ -1015,15 +1015,15 @@ mod tests {
         assert_eq!(client.remote_buffer(|buf| buf.len()), 0);
 
         // response message
-        assert_eq!(state.io().with_write_buf(|buf| buf.len()).unwrap(), 65536);
+        assert_eq!(state.io().with_write_src(|buf| buf.len()).unwrap(), 65536);
 
         client.remote_buffer_cap(10240);
         sleep(Millis(50)).await;
-        assert_eq!(state.io().with_write_buf(|buf| buf.len()).unwrap(), 55296);
+        assert_eq!(state.io().with_write_src(|buf| buf.len()).unwrap(), 55296);
 
         client.remote_buffer_cap(48056);
         sleep(Millis(50)).await;
-        assert_eq!(state.io().with_write_buf(|buf| buf.len()).unwrap(), 7240);
+        assert_eq!(state.io().with_write_src(|buf| buf.len()).unwrap(), 7240);
 
         // backpressure disabled
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1, 2]);

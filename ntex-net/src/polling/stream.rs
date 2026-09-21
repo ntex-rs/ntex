@@ -418,7 +418,7 @@ impl StreamItem {
     }
 
     fn write(&mut self) -> IoTaskStatus {
-        let res = self.ctx.with_write_buf(|wrt| {
+        let res = self.ctx.with_write_dst(|wrt| {
             let mut pages: [Option<BytePage>; MAX_WRITE_ITEMS] = [
                 None, None, None, None, None, None, None, None, None, None, None, None, None, None,
                 None, None,

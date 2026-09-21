@@ -290,7 +290,7 @@ impl Inner {
                         if s.is_closed() || s.is_read_eof() {
                             continue;
                         }
-                        let is_valid = s.with_read_buf(|buf| {
+                        let is_valid = s.with_read_dst(|buf| {
                             if buf.is_empty() || (buf.len() == 2 && &buf[..] == b"\r\n") {
                                 buf.clear();
                                 true

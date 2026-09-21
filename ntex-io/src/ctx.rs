@@ -18,10 +18,10 @@ use crate::{Flags, Id, IoRef, IoTaskStatus, Readiness, io::IoState};
 /// A transport task runs until [`poll_read_ready`](Self::poll_read_ready) or
 /// [`poll_write_ready`](Self::poll_write_ready) reports
 /// [`Readiness::Shutdown`]/[`Readiness::Terminate`], or until a status update
-/// returns [`IoTaskStatus::Stop`]. All of those imply
-/// [`is_stopped`](Self::is_stopped), so once the loop exits there is nothing
-/// left for the task to drain: buffered output has already been written, because
-/// an empty write buffer is a precondition of entering graceful shutdown. The
+/// returns [`IoTaskStatus::Stop`]. All of those imply that the connection is
+/// already closing or closed, so once the loop exits there is nothing left for
+/// the task to drain: buffered output has already been written, because an
+/// empty write buffer is a precondition of entering graceful shutdown. The
 /// task should therefore close the transport immediately and report the outcome
 /// through [`stopped`](Self::stopped).
 pub struct IoContext(IoRef);
@@ -204,12 +204,14 @@ impl IoContext {
         }
     }
 
-    /// Provides access to bytes ready for the transport to write.
+    /// Provides access to the transport-facing write destination.
+    ///
+    /// This holds the encoded bytes that are ready to be written out.
     ///
     /// Pending filter output is processed before `f` is invoked. The transport
     /// should remove only bytes it successfully writes and then report the
     /// result with [`update_write_status`](Self::update_write_status).
-    pub fn with_write_buf<F, R>(&self, f: F) -> R
+    pub fn with_write_dst<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytePages) -> R,
     {
@@ -418,7 +420,7 @@ mod tests {
             lazy(|cx| state.poll_read_notify(cx)).await,
             Poll::Ready(Ok(None))
         ));
-        assert_eq!(state.with_read_buf(BytesMut::take), b"final");
+        assert_eq!(state.with_read_dst(BytesMut::take), b"final");
         assert!(matches!(
             lazy(|cx| state.poll_read_more(cx)).await,
             Poll::Ready(Ok(None))

@@ -431,7 +431,7 @@ fn turn(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<()> {
 }
 
 fn write(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<()> {
-    let result = ctx.with_write_buf(|buf| write_io(io, buf, cx, ctx));
+    let result = ctx.with_write_dst(|buf| write_io(io, buf, cx, ctx));
     if ctx.update_write_status(result) == IoTaskStatus::Stop {
         Poll::Ready(())
     } else {

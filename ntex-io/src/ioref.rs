@@ -126,7 +126,7 @@ impl IoRef {
     where
         U: Encoder,
     {
-        self.with_write_buf(|buf| codec.encodev(item, buf))
+        self.with_write_src(|buf| codec.encodev(item, buf))
             .unwrap_or_else(|_| Ok(()))
     }
 
@@ -136,7 +136,7 @@ impl IoRef {
     /// If this triggers an eager backend write, any transport or filter error
     /// from that write is returned immediately.
     pub fn encode_slice(&self, src: &[u8]) -> io::Result<()> {
-        self.with_write_buf(|buf| buf.extend_from_slice(src))
+        self.with_write_src(|buf| buf.extend_from_slice(src))
     }
 
     #[inline]
@@ -148,7 +148,7 @@ impl IoRef {
     where
         BytePage: From<B>,
     {
-        self.with_write_buf(|buf| buf.append(src))
+        self.with_write_src(|buf| buf.append(src))
     }
 
     /// Attempts to decode a frame from the read buffer.
@@ -253,7 +253,10 @@ impl IoRef {
         Ok(result)
     }
 
-    /// Provides mutable access to the application-facing read buffer.
+    /// Provides mutable access to the application-facing read destination.
+    ///
+    /// This holds the decoded bytes the application consumes; see
+    /// [`with_read_src`](Self::with_read_src) for the transport-facing source.
     ///
     /// This mutates the read state whether or not `f` consumes anything. Read
     /// readiness is always cleared, and a pause installed by
@@ -261,7 +264,7 @@ impl IoRef {
     /// transport read task. Consuming enough bytes additionally releases read
     /// backpressure. Use [`crate::Io::poll_read_more`] rather than this method
     /// to check whether data is available.
-    pub fn with_read_buf<F, R>(&self, f: F) -> R
+    pub fn with_read_dst<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
@@ -272,12 +275,16 @@ impl IoRef {
         })
     }
 
-    /// Provides mutable access to the application-facing write buffer.
+    /// Provides mutable access to the application-facing write source.
+    ///
+    /// This holds the bytes the application produces; see
+    /// [`with_write_dst`](Self::with_write_dst) for the transport-facing
+    /// destination.
     ///
     /// Returns an error without invoking `f` if the connection is closing or
     /// closed. Data appended by `f` is scheduled for delivery. If that starts
     /// an eager backend write, its transport or filter error is returned.
-    pub fn with_write_buf<F, R>(&self, f: F) -> io::Result<R>
+    pub fn with_write_src<F, R>(&self, f: F) -> io::Result<R>
     where
         F: FnOnce(&mut BytePages) -> R,
     {
@@ -297,10 +304,13 @@ impl IoRef {
     }
 
     #[inline]
-    /// Provides mutable access to the transport-facing read buffer.
+    /// Provides mutable access to the transport-facing read source.
     ///
-    /// This is primarily intended for transport and filter implementations.
-    pub fn with_read_src_buf<F, R>(&self, f: F) -> R
+    /// This is the buffer the transport fills; it is the counterpart of the
+    /// application-facing destination exposed by
+    /// [`with_read_dst`](Self::with_read_dst). Primarily intended for transport
+    /// and filter implementations.
+    pub fn with_read_src<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
@@ -308,10 +318,13 @@ impl IoRef {
     }
 
     #[inline]
-    /// Provides mutable access to the transport-facing write buffer.
+    /// Provides mutable access to the transport-facing write destination.
     ///
-    /// This is primarily intended for transport and filter implementations.
-    pub fn with_write_dst_buf<F, R>(&self, f: F) -> R
+    /// This is the buffer the transport drains; it is the counterpart of the
+    /// application-facing source exposed by
+    /// [`with_write_src`](Self::with_write_src). Primarily intended for
+    /// transport and filter implementations.
+    pub fn with_write_dst<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytePages) -> R,
     {
@@ -622,9 +635,9 @@ mod tests {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
         let state = Io::from(server);
-        assert_eq!(0, state.with_write_dst_buf(|b| b.len()));
+        assert_eq!(0, state.with_write_dst(|b| b.len()));
         state.encode_slice(b"test").unwrap();
-        assert_eq!(4, state.with_write_dst_buf(|b| b.len()));
+        assert_eq!(4, state.with_write_dst(|b| b.len()));
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"test"));
 
@@ -750,7 +763,7 @@ mod tests {
         assert!(state.encode_bytes(Bytes::from_static(BIN)).is_err());
         assert!(
             state
-                .with_write_buf(|buf| buf.extend_from_slice(BIN))
+                .with_write_src(|buf| buf.extend_from_slice(BIN))
                 .is_err()
         );
     }

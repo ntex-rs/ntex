@@ -234,7 +234,7 @@ impl WriteOperation {
             if self.flags.contains(Flags::WAITING) {
                 return;
             }
-            let st = self.ctx.with_write_buf(|wrt| {
+            let st = self.ctx.with_write_dst(|wrt| {
                 #[cfg(feature = "trace")]
                 log::trace!("{}: Wrt({}) size:{:?}", self.ctx.tag(), self.io, wrt.len());
 
@@ -369,7 +369,7 @@ impl WriteOperation {
         };
 
         // return unwritten data back to buffer
-        wr.ctx.with_write_buf(|wrt| {
+        wr.ctx.with_write_dst(|wrt| {
             for p in wr.pages[..num].iter_mut().rev() {
                 if let Some(page) = p.take() {
                     wrt.prepend(page);

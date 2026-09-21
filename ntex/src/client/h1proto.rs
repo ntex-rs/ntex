@@ -223,7 +223,7 @@ fn release_connection(
     created: Instant,
     mut pool: Option<Acquired>,
 ) {
-    if force_close || io.is_closed() || io.is_read_eof() || io.with_read_buf(|buf| !buf.is_empty())
+    if force_close || io.is_closed() || io.is_read_eof() || io.with_read_dst(|buf| !buf.is_empty())
     {
         if let Some(mut pool) = pool.take() {
             pool.release(Connection::new(ConnectionType::H1(io), created, None), true);

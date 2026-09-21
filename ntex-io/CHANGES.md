@@ -2,6 +2,10 @@
 
 ## [4.1.0] - 2026-09-21
 
+* Rename buffer accessors to name their side of the chain: IoRef::with_read_buf() to
+  with_read_dst(), with_write_buf() to with_write_src(), with_read_src_buf() to with_read_src(),
+  with_write_dst_buf() to with_write_dst(), and IoContext::with_write_buf() to with_write_dst()
+
 * Remove IoContext::shutdown(), it is unreachable in every transport impl
 
 * Fix api consistency for IoContext::update_read_status()

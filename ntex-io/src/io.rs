@@ -488,7 +488,7 @@ impl<F> Io<F> {
     /// passed through unchanged.
     pub async fn read(&self, dst: &mut [u8]) -> io::Result<()> {
         loop {
-            let completed = self.with_read_buf(|buf| {
+            let completed = self.with_read_dst(|buf| {
                 if buf.len() >= dst.len() {
                     let _ = io::Read::read(buf, dst).expect("Cannot fail");
                     true
@@ -540,7 +540,7 @@ impl<F> Io<F> {
     /// There is no explicit resume. The pause is cancelled implicitly by any
     /// operation that touches the read buffer or asks for more input, namely
     /// [`read_more`](Self::read_more), [`poll_read_more`](Self::poll_read_more),
-    /// [`IoRef::decode`], [`IoRef::decode_item`], and [`IoRef::with_read_buf`].
+    /// [`IoRef::decode`], [`IoRef::decode_item`], and [`IoRef::with_read_dst`].
     /// Releasing read backpressure cancels it as well.
     pub fn pause(&self) {
         let st = self.st();
@@ -1133,7 +1133,7 @@ mod tests {
         assert_eq!(lazy(|cx| ctx.poll_read_ready(cx)).await, Poll::Pending);
 
         // read one byte
-        assert_eq!(io.with_read_buf(|buf| buf.split_to(1)), b"1");
+        assert_eq!(io.with_read_dst(|buf| buf.split_to(1)), b"1");
         // read buffer is ready
         assert!(io.st().flags.is_read_ready());
         // read backpressure is enabled
@@ -1143,17 +1143,17 @@ mod tests {
         assert!(io.st().read_task.is_set());
 
         // read one more byte
-        assert_eq!(io.with_read_buf(|buf| buf.split_to(1)), b"2");
+        assert_eq!(io.with_read_dst(|buf| buf.split_to(1)), b"2");
         // read backpressure is enabled
         assert!(io.st().flags.is_rd_backpressure());
 
         // dropping below the high watermark does not release backpressure
-        assert_eq!(io.with_read_buf(|buf| buf.split_to(1)), b"3");
+        assert_eq!(io.with_read_dst(|buf| buf.split_to(1)), b"3");
         assert!(io.st().flags.is_rd_backpressure());
         assert!(io.st().flags.is_read_paused());
 
         // reaching half of the high watermark releases backpressure
-        assert_eq!(io.with_read_buf(|buf| buf.split_to(3)), b"456");
+        assert_eq!(io.with_read_dst(|buf| buf.split_to(3)), b"456");
         // read task is not paused anymore
         assert!(!io.st().flags.is_read_paused());
         // read buffer is not ready
@@ -1185,7 +1185,7 @@ mod tests {
         assert_eq!(lazy(|cx| ctx.poll_read_ready(cx)).await, Poll::Pending);
 
         // read 4 bytes. buf size is 4, less that half of high watermark
-        assert_eq!(io.with_read_buf(|buf| buf.split_to(4)), b"7890");
+        assert_eq!(io.with_read_dst(|buf| buf.split_to(4)), b"7890");
         // read backpressure is disabled
         assert!(!io.st().flags.is_rd_backpressure());
 
@@ -1208,7 +1208,7 @@ mod tests {
         );
 
         // read 4 bytes. buf size is 4, less that half of high watermark
-        assert_eq!(io.with_read_buf(BytesMut::take), b"1234567");
+        assert_eq!(io.with_read_dst(BytesMut::take), b"1234567");
         // read task is paused
         assert!(!io.st().flags.is_read_paused());
         // read buffer is ready
@@ -1335,7 +1335,7 @@ mod tests {
             Poll::Ready(Ok(Some(())))
         ));
 
-        let item = io.with_read_buf(BytesMut::take);
+        let item = io.with_read_dst(BytesMut::take);
         assert_eq!(item, Bytes::from_static(BIN));
 
         client.write(TEXT);
@@ -1390,7 +1390,7 @@ mod tests {
         assert!(!io.st().flags.is_wr_backpressure());
 
         // write
-        io.with_write_buf(|buf| buf.put_slice(b"1234")).unwrap();
+        io.with_write_src(|buf| buf.put_slice(b"1234")).unwrap();
         assert_eq!(lazy(|cx| ctx.poll_write_ready(cx)).await, Poll::Pending);
         // write task is paused
         assert!(io.st().flags.is_write_paused());
@@ -1402,7 +1402,7 @@ mod tests {
         assert!(io.st().dispatch_task.is_set());
 
         // == enable wr backpressure
-        io.with_write_buf(|buf| buf.put_slice(b"5678")).unwrap();
+        io.with_write_src(|buf| buf.put_slice(b"5678")).unwrap();
         // back-pressure is enabled
         assert!(io.st().flags.is_wr_backpressure());
         // dispatch is woken up
@@ -1434,7 +1434,7 @@ mod tests {
         );
 
         // wrote 4 bytes to io
-        assert_eq!(ctx.with_write_buf(|buf| buf.split_to(4).freeze()), b"1234");
+        assert_eq!(ctx.with_write_dst(|buf| buf.split_to(4).freeze()), b"1234");
         // continue to write
         assert_eq!(ctx.update_write_status(Ok(true)), IoTaskStatus::Io);
         // write task can proceed
@@ -1461,7 +1461,7 @@ mod tests {
         ));
 
         // full flush write buffer
-        io.with_write_buf(|buf| buf.put_slice(b"1234")).unwrap();
+        io.with_write_src(|buf| buf.put_slice(b"1234")).unwrap();
         assert!(lazy(|cx| io.poll_flush(cx, true)).await.is_pending());
         // full flush is enabled
         assert!(io.st().flags.is_write_flush());
@@ -1470,7 +1470,7 @@ mod tests {
 
         // wrote all data
         Iops::run();
-        assert_eq!(ctx.with_write_buf(BytePages::freeze), b"56781234");
+        assert_eq!(ctx.with_write_dst(BytePages::freeze), b"56781234");
         // write task is not paused, so send-buf op is not scheduled
         assert!(!io.st().flags.is_wr_send_scheduled());
         // update status, no more work
@@ -1552,7 +1552,7 @@ mod tests {
 
         impl Handle for DirectWrite {
             fn write(&self, ctx: &IoContext) {
-                let written = ctx.with_write_buf(|buf| {
+                let written = ctx.with_write_dst(|buf| {
                     let written = !buf.is_empty();
                     buf.clear();
                     written
@@ -1654,12 +1654,12 @@ mod tests {
         io.encode_slice(b"12345678").unwrap();
         assert!(io.flags().is_wr_backpressure());
 
-        assert_eq!(ctx.with_write_buf(|buf| buf.split_to(1).len()), 1);
+        assert_eq!(ctx.with_write_dst(|buf| buf.split_to(1).len()), 1);
         assert_eq!(ctx.update_write_status(Ok(true)), IoTaskStatus::Io);
         assert!(lazy(|cx| io.poll_flush(cx, false)).await.is_pending());
         assert!(io.flags().is_wr_backpressure());
 
-        assert_eq!(ctx.with_write_buf(|buf| buf.split_to(3).len()), 3);
+        assert_eq!(ctx.with_write_dst(|buf| buf.split_to(3).len()), 3);
         assert_eq!(ctx.update_write_status(Ok(true)), IoTaskStatus::Io);
         assert!(matches!(
             lazy(|cx| io.poll_flush(cx, false)).await,
@@ -2041,7 +2041,7 @@ mod tests {
         assert!(!st.flags.is_closed());
         assert!(st.flags.is_stopping_filters());
         // encoding is not allowed in shutting down stage
-        let err = io.with_write_buf(|_| 1).unwrap_err();
+        let err = io.with_write_src(|_| 1).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::Other);
 
         let io = io.add_filter(F);
@@ -2061,7 +2061,7 @@ mod tests {
         assert!(!st.flags.is_terminated());
         assert!(st.flags.is_stopping_filters());
 
-        let err = io.with_write_buf(|_| 1).unwrap_err();
+        let err = io.with_write_src(|_| 1).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotConnected);
 
         ctx.stopped(None);

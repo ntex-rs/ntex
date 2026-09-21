@@ -245,7 +245,7 @@ fn write<T>(io: &T, ctx: &IoContext, direct: bool) -> WrtStatus
 where
     T: Stream,
 {
-    let result = ctx.with_write_buf(|dst| {
+    let result = ctx.with_write_dst(|dst| {
         let mut pages: [Option<BytePage>; MAX_WRITE_ITEMS] = [
             None, None, None, None, None, None, None, None, None, None, None, None, None, None,
             None, None,
@@ -440,7 +440,7 @@ impl AsyncRead for TokioIoBoxed {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        let len = self.0.with_read_buf(|src| {
+        let len = self.0.with_read_dst(|src| {
             let len = cmp::min(src.len(), buf.remaining());
             buf.put_slice(&src.split_to(len));
             len

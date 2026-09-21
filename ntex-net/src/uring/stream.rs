@@ -200,7 +200,7 @@ impl Handler for StreamOpsHandler {
                     if let Some(item) = st.streams.get_mut(id) {
                         #[cfg(feature = "trace")]
                         log::trace!("{}: Send canceled: {:?}", item.tag(), item.fd());
-                        item.ctx.with_write_buf(|pages| pages.prepend(buf));
+                        item.ctx.with_write_dst(|pages| pages.prepend(buf));
                         item.wr_op.take();
                         item.flags.remove(Flags::WR_CANCELING);
 
@@ -410,7 +410,7 @@ impl StreamOpsStorage {
     fn send(&mut self, id: usize, api: &ReactorApi) {
         if let Some(item) = self.streams.get_mut(id) {
             if item.wr_op.is_none() {
-                let page = item.ctx.with_write_buf(BytePages::take);
+                let page = item.ctx.with_write_dst(BytePages::take);
                 if let Some(buf) = page {
                     #[cfg(feature = "trace")]
                     log::trace!("{}: Snd({id}) size:{:?}", item.ctx.tag(), buf.len());
