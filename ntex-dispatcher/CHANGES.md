@@ -4,6 +4,8 @@
 
 * Start frame rate timing for new connections immediately
 
+* Preserve partial-frame timing across service readiness pauses
+
 * Preserve frame read-timeout classification when service readiness pauses reads
 
 * Transport failures and force-closes cancel the dispatcher-held pending response future

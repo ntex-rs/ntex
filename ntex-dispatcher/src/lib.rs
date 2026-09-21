@@ -102,7 +102,6 @@ bitflags::bitflags! {
         const KA_TIMEOUT    = 0b000_1000;
         const READ_TIMEOUT  = 0b001_0000;
         const IDLE          = 0b010_0000;
-        const FIRST_FRAME   = 0b100_0000;
     }
 }
 
@@ -114,9 +113,7 @@ where
     error: Option<Err>,
     shared: Rc<DispatcherShared<U, Err>>,
     response: Option<PipelineCall<DispatchItem<U>, Option<Response<U>>, Err>>,
-    read_remains: u32,
-    read_consumed: u32,
-    read_max_timeout: Seconds,
+    read_state: ReadState,
 }
 
 pub(crate) struct DispatcherShared<U, Err>
@@ -137,6 +134,37 @@ enum DispatcherState {
     Backpressure,
     Stop,
     Shutdown,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum ReadState {
+    Idle,
+    FirstFrame(ReadProgress),
+    ReadingFrame(ReadProgress),
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct ReadProgress {
+    remains: u32,
+    consumed: u32,
+    max_timeout: Seconds,
+}
+
+impl ReadState {
+    #[cfg(test)]
+    fn progress(&self) -> Option<&ReadProgress> {
+        match self {
+            Self::FirstFrame(progress) | Self::ReadingFrame(progress) => Some(progress),
+            Self::Idle => None,
+        }
+    }
+
+    fn progress_mut(&mut self) -> Option<&mut ReadProgress> {
+        match self {
+            Self::FirstFrame(progress) | Self::ReadingFrame(progress) => Some(progress),
+            Self::Idle => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -186,13 +214,17 @@ where
             Flags::KA_ENABLED
         };
 
-        let read_max_timeout = if let Some(cfg) = io.cfg().frame_read_rate() {
+        let read_state = if let Some(cfg) = io.cfg().frame_read_rate() {
             let (timeout, max_timeout) = next_read_timeout(cfg.timeout, cfg.max_timeout);
-            flags.insert(Flags::READ_TIMEOUT | Flags::FIRST_FRAME);
+            flags.insert(Flags::READ_TIMEOUT);
             io.start_timer(timeout);
-            max_timeout
+            ReadState::FirstFrame(ReadProgress {
+                remains: 0,
+                consumed: 0,
+                max_timeout,
+            })
         } else {
-            Seconds::ZERO
+            ReadState::Idle
         };
 
         let shared = Rc::new(DispatcherShared {
@@ -209,9 +241,7 @@ where
                 shared,
                 response: None,
                 error: None,
-                read_remains: 0,
-                read_consumed: 0,
-                read_max_timeout,
+                read_state,
                 st: DispatcherState::Processing,
             },
         }
@@ -467,10 +497,14 @@ where
     fn update_read_progress(&mut self) {
         if self.shared.contains(Flags::READ_TIMEOUT) {
             let buffered = self.shared.io.with_read_buf(|buf| buf.len()) as u32;
-            self.read_consumed = self
-                .read_consumed
-                .saturating_add(buffered.saturating_sub(self.read_remains));
-            self.read_remains = buffered;
+            let progress = self
+                .read_state
+                .progress_mut()
+                .expect("read timeout requires active frame progress");
+            progress.consumed = progress
+                .consumed
+                .saturating_add(buffered.saturating_sub(progress.remains));
+            progress.remains = buffered;
         }
     }
 
@@ -478,11 +512,21 @@ where
         if let Some(params) = self.shared.io.cfg().frame_read_rate() {
             self.shared.remove_flags(Flags::KA_TIMEOUT | Flags::IDLE);
             self.shared.insert_flags(Flags::READ_TIMEOUT);
-            self.read_consumed = consumed;
-            self.read_remains = remains;
 
             let (timeout, max_timeout) = next_read_timeout(params.timeout, params.max_timeout);
-            self.read_max_timeout = max_timeout;
+            let progress = ReadProgress {
+                remains,
+                consumed,
+                max_timeout,
+            };
+            self.read_state = if consumed != 0
+                || remains != 0
+                || matches!(self.read_state, ReadState::ReadingFrame(_))
+            {
+                ReadState::ReadingFrame(progress)
+            } else {
+                ReadState::FirstFrame(progress)
+            };
             self.shared.io.start_timer(timeout);
         }
     }
@@ -627,21 +671,30 @@ where
     fn update_timer(&mut self, decoded: &Decoded<<U as Decoder>::Item>) {
         // got parsed frame
         if decoded.item.is_some() {
-            self.read_remains = 0;
-            self.read_consumed = 0;
-            self.shared.remove_flags(
-                Flags::KA_TIMEOUT | Flags::READ_TIMEOUT | Flags::IDLE | Flags::FIRST_FRAME,
-            );
+            self.read_state = ReadState::Idle;
+            self.shared
+                .remove_flags(Flags::KA_TIMEOUT | Flags::READ_TIMEOUT | Flags::IDLE);
             self.shared.io.stop_timer();
         } else if self.shared.contains(Flags::READ_TIMEOUT) {
             // received new data but not enough for parsing complete frame
-            self.read_remains = decoded.remains as u32;
-        } else if self.shared.contains(Flags::FIRST_FRAME) {
+            self.read_state
+                .progress_mut()
+                .expect("read timeout requires active frame progress")
+                .remains = decoded.remains as u32;
+            if (decoded.consumed != 0 || decoded.remains != 0)
+                && let ReadState::FirstFrame(progress) = self.read_state
+            {
+                self.read_state = ReadState::ReadingFrame(progress);
+            }
+        } else if matches!(
+            self.read_state,
+            ReadState::FirstFrame(_) | ReadState::ReadingFrame(_)
+        ) {
             self.start_read_timer(
                 (decoded.consumed as u32).saturating_add(decoded.remains as u32),
                 decoded.remains as u32,
             );
-        } else if self.read_remains == 0 && decoded.remains == 0 && decoded.consumed == 0 {
+        } else if decoded.remains == 0 && decoded.consumed == 0 {
             // no new data, start keep-alive timer
             if self.shared.contains(Flags::KA_ENABLED) && !self.shared.contains(Flags::KA_TIMEOUT) {
                 log::trace!(
@@ -667,19 +720,23 @@ where
         // check read timer
         if self.shared.contains(Flags::READ_TIMEOUT) {
             if let Some(params) = self.shared.io.cfg().frame_read_rate() {
-                let total = self.read_consumed;
-                self.read_consumed = 0;
+                let progress = self
+                    .read_state
+                    .progress_mut()
+                    .expect("read timeout requires active frame progress");
+                let total = progress.consumed;
+                progress.consumed = 0;
 
                 // read rate, start timer for next period
                 if total > params.rate {
                     let timeout = if params.max_timeout.is_zero() {
                         Some(params.timeout)
-                    } else if self.read_max_timeout.is_zero() {
+                    } else if progress.max_timeout.is_zero() {
                         None
                     } else {
                         let (timeout, remaining) =
-                            next_read_timeout(params.timeout, self.read_max_timeout);
-                        self.read_max_timeout = remaining;
+                            next_read_timeout(params.timeout, progress.max_timeout);
+                        progress.max_timeout = remaining;
                         Some(timeout)
                     };
 
@@ -1473,7 +1530,7 @@ mod tests {
             }),
         );
 
-        assert!(disp.inner.shared.contains(Flags::FIRST_FRAME));
+        assert!(matches!(disp.inner.read_state, ReadState::FirstFrame(_)));
         assert!(disp.inner.shared.contains(Flags::READ_TIMEOUT));
         state.io().notify_timeout();
         let _ = lazy(|cx| Pin::new(&mut disp).poll(cx)).await;
@@ -1503,7 +1560,7 @@ mod tests {
             }),
         );
 
-        assert!(!disp.inner.shared.contains(Flags::FIRST_FRAME));
+        assert_eq!(disp.inner.read_state, ReadState::Idle);
         assert!(lazy(|cx| Pin::new(&mut disp).poll(cx)).await.is_pending());
         assert!(disp.inner.shared.contains(Flags::KA_TIMEOUT));
 
@@ -1580,6 +1637,52 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn consumed_subsequent_frame_resumes_read_timer() {
+        let (client, server) = IoTest::create();
+        let io = Io::new(
+            server,
+            SharedCfg::new("TEST").add(
+                IoConfig::new()
+                    .set_keepalive_timeout(Seconds::ONE)
+                    .set_frame_read_rate(Seconds::ONE, Seconds(2), 2),
+            ),
+        );
+        let (mut disp, _) = Dispatcher::debug(
+            io,
+            ConsumingCodec,
+            ntex_service::fn_service(|_: DispatchItem<ConsumingCodec>| async { Ok::<_, ()>(None) }),
+        );
+
+        disp.inner.update_timer(&Decoded {
+            item: Some(Bytes::new()),
+            remains: 0,
+            consumed: 1,
+        });
+        assert_eq!(disp.inner.read_state, ReadState::Idle);
+
+        disp.inner.update_timer(&Decoded {
+            item: None,
+            remains: 0,
+            consumed: 3,
+        });
+        assert!(matches!(disp.inner.read_state, ReadState::ReadingFrame(_)));
+        assert!(disp.inner.shared.contains(Flags::READ_TIMEOUT));
+
+        disp.inner.shared.remove_flags(Flags::READ_TIMEOUT);
+        disp.inner.shared.io.stop_timer();
+        disp.inner.update_timer(&Decoded::<Bytes> {
+            item: None,
+            remains: 0,
+            consumed: 0,
+        });
+
+        assert!(matches!(disp.inner.read_state, ReadState::ReadingFrame(_)));
+        assert!(disp.inner.shared.contains(Flags::READ_TIMEOUT));
+        assert!(!disp.inner.shared.contains(Flags::KA_TIMEOUT));
+        client.close().await;
+    }
+
+    #[ntex::test]
     async fn read_timeout_tracks_consumed_bytes_and_stalls() {
         let timeout = Rc::new(Cell::new(false));
         let timeout2 = timeout.clone();
@@ -1607,13 +1710,14 @@ mod tests {
         client.write("123");
         sleep(Millis(25)).await;
         assert!(lazy(|cx| Pin::new(&mut disp).poll(cx)).await.is_pending());
-        assert_eq!(disp.inner.read_consumed, 3);
-        assert_eq!(disp.inner.read_remains, 0);
+        let progress = disp.inner.read_state.progress().unwrap();
+        assert_eq!(progress.consumed, 3);
+        assert_eq!(progress.remains, 0);
 
         state.io().notify_timeout();
         assert!(lazy(|cx| Pin::new(&mut disp).poll(cx)).await.is_pending());
         assert!(!timeout.get());
-        assert_eq!(disp.inner.read_consumed, 0);
+        assert_eq!(disp.inner.read_state.progress().unwrap().consumed, 0);
 
         state.io().notify_timeout();
         let _ = lazy(|cx| Pin::new(&mut disp).poll(cx)).await;
