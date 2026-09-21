@@ -274,9 +274,6 @@ impl WriteOperation {
                         Poll::Ready(Ok(())) => {
                             let written = sent as usize;
                             let mut sent = written;
-                            if written == 0 {
-                                self.ctx.stop(None);
-                            }
                             // remove written bytes
                             for page in self.pages[..num].iter_mut() {
                                 if let Some(p) = page {
@@ -300,7 +297,7 @@ impl WriteOperation {
                                     break;
                                 }
                             }
-                            if sent == 0 {
+                            if written == 0 {
                                 Err(io::Error::new(
                                     io::ErrorKind::WriteZero,
                                     "failed to write frame to transport",
