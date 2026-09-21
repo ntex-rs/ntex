@@ -447,8 +447,9 @@ impl<F> Io<F> {
     /// Reads bytes from this I/O stream into the specified buffer.
     ///
     /// If there is not enough data available, waits for incoming data.
-    /// Returns an error of kind [`io::ErrorKind::UnexpectedEof`] if the stream
-    /// is disconnected before `dst` is completely filled.
+    /// Returns an error of kind [`io::ErrorKind::UnexpectedEof`] if the
+    /// transport read half reaches EOF or the stream closes before `dst` is
+    /// completely filled.
     pub async fn read(&self, dst: &mut [u8]) -> io::Result<()> {
         loop {
             let completed = self.with_read_buf(|buf| {
@@ -462,7 +463,7 @@ impl<F> Io<F> {
             if completed {
                 return Ok(());
             }
-            // `read_ready` resolves with `None` once the io is closed/stopped.
+            // `read_ready` resolves with `None` at read EOF or shutdown.
             if self.read_ready().await?.is_none() {
                 return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Disconnected"));
             }
@@ -472,7 +473,9 @@ impl<F> Io<F> {
     #[inline]
     /// Waits until application-facing read data is available.
     ///
-    /// Returns `Ok(None)` after the stream has disconnected.
+    /// Returns `Ok(None)` after buffered input is exhausted and the transport
+    /// read half has reached clean EOF, or after the stream begins shutting
+    /// down. Clean read EOF does not close the write half.
     pub async fn read_ready(&self) -> io::Result<Option<()>> {
         poll_fn(|cx| self.poll_read_ready(cx)).await
     }
@@ -482,7 +485,8 @@ impl<F> Io<F> {
     ///
     /// Unlike [`read_ready`](Self::read_ready), this waits for the read task to
     /// observe new source data even if previously buffered application data is
-    /// already available. Returns `Ok(None)` when the stream begins stopping.
+    /// already available. Returns `Ok(None)` after clean read EOF with no
+    /// buffered input, or when the stream begins stopping.
     pub async fn read_notify(&self) -> io::Result<Option<()>> {
         poll_fn(|cx| self.poll_read_notify(cx)).await
     }
@@ -542,7 +546,9 @@ impl<F> Io<F> {
     ///
     /// - `Poll::Pending` if the I/O stream is not ready for reading.
     /// - `Poll::Ready(Ok(Some(())))` if the I/O stream is ready for reading.
-    /// - `Poll::Ready(Ok(None))` if the I/O stream is disconnected.
+    /// - `Poll::Ready(Ok(None))` after buffered input is exhausted and the
+    ///   transport read half reaches clean EOF, or when the stream is closing
+    ///   or closed. Clean read EOF does not close the write half.
     /// - `Poll::Ready(Err(e))` if an error is encountered.
     pub fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<Option<()>>> {
         let st = self.st();
