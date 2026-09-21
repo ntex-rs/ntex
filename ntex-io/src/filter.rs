@@ -92,7 +92,7 @@ impl Filter for Base {
     }
 
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
-        if self.0.0.flags.is_closed() {
+        if self.0.0.flags.is_terminated() {
             Poll::Ready(Readiness::Terminate)
         } else {
             self.0.0.write_task.register(cx.waker());

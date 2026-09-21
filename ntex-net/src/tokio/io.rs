@@ -30,6 +30,8 @@ trait Stream: AsyncRead + AsyncWrite + Unpin {
 
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>>;
 
+    fn shutdown(&self) -> io::Result<()>;
+
     fn try_read(&self, buf: &mut [u8]) -> io::Result<usize>;
 
     fn try_write(&self, buf: &[u8]) -> io::Result<usize>;
@@ -44,6 +46,10 @@ impl Stream for TcpStream {
 
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         TcpStream::poll_write_ready(self, cx)
+    }
+
+    fn shutdown(&self) -> io::Result<()> {
+        socket2::SockRef::from(self).shutdown(std::net::Shutdown::Write)
     }
 
     fn try_read(&self, buf: &mut [u8]) -> io::Result<usize> {
@@ -67,6 +73,10 @@ impl Stream for tok_io::net::UnixStream {
 
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         tok_io::net::UnixStream::poll_write_ready(self, cx)
+    }
+
+    fn shutdown(&self) -> io::Result<()> {
+        socket2::SockRef::from(self).shutdown(std::net::Shutdown::Write)
     }
 
     fn try_read(&self, buf: &mut [u8]) -> io::Result<usize> {
@@ -226,8 +236,16 @@ where
         .await;
     }
 
-    log::trace!("{}: Shutdown complete", ctx.tag());
-    if !ctx.is_stopped() {
+    let result = if st == Status::Shutdown {
+        io.shutdown()
+    } else {
+        Ok(())
+    };
+
+    log::trace!("{}: Shutdown complete {result:?}", ctx.tag());
+    if st == Status::Shutdown {
+        ctx.stop(result.err());
+    } else if !ctx.is_stopped() {
         ctx.stop(None);
     }
 }
@@ -468,5 +486,51 @@ impl AsyncWrite for TokioIoBoxed {
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.as_ref().0.poll_shutdown(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net;
+
+    use ntex_service::cfg::SharedCfg;
+    use ntex_util::time::{Millis, timeout};
+
+    use super::*;
+
+    #[ntex::test]
+    async fn graceful_shutdown_closes_transport_write_half() {
+        let listener = net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        client.set_nonblocking(true).unwrap();
+        server.set_nonblocking(true).unwrap();
+
+        let client = tok_io::net::TcpStream::from_std(client).unwrap();
+        let io = Io::new(
+            super::super::TcpStream(tok_io::net::TcpStream::from_std(server).unwrap()),
+            SharedCfg::default(),
+        );
+
+        io.close();
+
+        let mut buf = [0; 1];
+        let read = timeout(Millis(1000), async {
+            loop {
+                client.readable().await.unwrap();
+                match client.try_read(&mut buf) {
+                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => (),
+                    result => break result,
+                }
+            }
+        })
+        .await
+        .expect("transport write half was not shut down")
+        .unwrap();
+        assert_eq!(read, 0);
+
+        // Keep the Io alive until after EOF is observed. Dropping it must not be
+        // what closes the peer-facing write half.
+        drop(io);
     }
 }
