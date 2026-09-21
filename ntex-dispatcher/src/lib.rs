@@ -69,8 +69,9 @@ pin_project_lite::pin_project! {
     ///
     /// Before shutdown, transport and codec failures are delivered to the
     /// service as [`DispatchItem::Stop`]. The future resolves to `Err` only
-    /// when the service itself fails; other stop reasons complete as `Ok(())`
-    /// after the service and transport have shut down.
+    /// when the service itself fails. Graceful and protocol stops drain service
+    /// calls before shutdown; transport failures abandon pending calls after
+    /// delivering the stop notification so they cannot block teardown.
     pub struct Dispatcher<U, Err>
     where
         U: Encoder,
@@ -305,6 +306,9 @@ where
                                         inner.shared.io.tag(),
                                         err
                                     );
+                                    if err.is_some() || inner.shared.io.is_closed() {
+                                        inner.shared.insert_flags(Flags::IO_ERR);
+                                    }
                                     inner.st = DispatcherState::Stop;
                                     (DispatchItem::Stop(Reason::Io(err)), true)
                                 }
@@ -330,6 +334,7 @@ where
                     }
 
                     let item = if let Err(err) = ready!(inner.shared.io.poll_flush(cx, false)) {
+                        inner.shared.insert_flags(Flags::IO_ERR);
                         inner.st = DispatcherState::Stop;
                         DispatchItem::Stop(Reason::Io(Some(err)))
                     } else {
@@ -342,6 +347,19 @@ where
                 DispatcherState::Stop => {
                     inner.shared.io.stop_timer();
 
+                    if inner.shared.contains(Flags::IO_ERR) {
+                        inner.response = None;
+                        return if inner.shared.io.poll_shutdown(cx).is_ready() {
+                            Poll::Ready(if let Some(err) = inner.error.take() {
+                                Err(err)
+                            } else {
+                                Ok(())
+                            })
+                        } else {
+                            Poll::Pending
+                        };
+                    }
+
                     // service may relay on poll_ready for response results
                     if !inner.shared.contains(Flags::READY_ERR)
                         && let Poll::Ready(res) = inner.shared.service.poll_ready(cx)
@@ -351,16 +369,24 @@ where
                     }
 
                     if inner.shared.inflight.get() == 0 {
-                        if inner.shared.io.poll_shutdown(cx).is_ready() {
-                            inner.st = DispatcherState::Shutdown;
-                            continue;
-                        }
-                    } else if !inner.shared.contains(Flags::IO_ERR) {
-                        match ready!(inner.shared.io.poll_status_update(cx)) {
-                            IoStatusUpdate::PeerGone(_) | IoStatusUpdate::KeepAlive => {
+                        match inner.shared.io.poll_shutdown(cx) {
+                            Poll::Ready(Ok(())) => {
+                                inner.st = DispatcherState::Shutdown;
+                                continue;
+                            }
+                            Poll::Ready(Err(_)) => {
                                 inner.shared.insert_flags(Flags::IO_ERR);
                                 continue;
                             }
+                            Poll::Pending => (),
+                        }
+                    } else if !inner.shared.contains(Flags::IO_ERR) {
+                        match ready!(inner.shared.io.poll_status_update(cx)) {
+                            IoStatusUpdate::PeerGone(_) => {
+                                inner.shared.insert_flags(Flags::IO_ERR);
+                                continue;
+                            }
+                            IoStatusUpdate::KeepAlive => continue,
                             IoStatusUpdate::WriteBackpressure => {
                                 if ready!(inner.shared.io.poll_flush(cx, true)).is_err() {
                                     inner.shared.insert_flags(Flags::IO_ERR);
@@ -375,6 +401,14 @@ where
                 }
                 // shutdown service
                 DispatcherState::Shutdown => {
+                    if inner.shared.contains(Flags::IO_ERR) {
+                        return Poll::Ready(if let Some(err) = inner.error.take() {
+                            Err(err)
+                        } else {
+                            Ok(())
+                        });
+                    }
+
                     return if inner.shared.service.poll_shutdown(cx).is_ready() {
                         log::trace!(
                             "{}: Service shutdown is completed, stop",
@@ -489,6 +523,9 @@ where
                             self.shared.io.tag(),
                             err
                         );
+                        if err.is_some() || self.shared.io.is_closed() {
+                            self.shared.insert_flags(Flags::IO_ERR);
+                        }
                         self.st = DispatcherState::Stop;
                         Poll::Ready(PollService::ItemWait(DispatchItem::Stop(Reason::Io(err))))
                     }
@@ -645,13 +682,17 @@ where
 #[allow(clippy::unused_async_trait_impl)]
 mod tests {
     use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::Ordering::Relaxed};
-    use std::{cell::RefCell, io};
+    use std::{cell::RefCell, future::poll_fn, io};
 
     use ntex_bytes::{BytePages, Bytes, BytesMut};
     use ntex_codec::BytesCodec;
     use ntex_io::{Flags, Io, IoConfig, IoRef, testing::IoTest};
     use ntex_service::{Ctx, Pipeline, Service, cfg::SharedCfg};
-    use ntex_util::{channel::oneshot, time::Millis, time::sleep};
+    use ntex_util::{
+        channel::oneshot,
+        future::lazy,
+        time::{Millis, sleep, timeout},
+    };
     use rand::Rng;
 
     use super::*;
@@ -1034,6 +1075,54 @@ mod tests {
         // close read side
         state.close();
         let _ = rx.recv().await;
+    }
+
+    #[ntex::test]
+    async fn io_error_does_not_wait_for_pending_service_call() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop2 = stop.clone();
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let (mut disp, _) = Dispatcher::debug(
+            Io::from(server),
+            BytesCodec,
+            ntex_service::fn_service(move |msg: DispatchItem<BytesCodec>| {
+                let stop = stop2.clone();
+                async move {
+                    match msg {
+                        DispatchItem::Item(_) => {
+                            std::future::pending::<Result<Option<Bytes>, ()>>().await
+                        }
+                        DispatchItem::Stop(Reason::Io(Some(_))) => {
+                            stop.store(true, Relaxed);
+                            Ok(None)
+                        }
+                        _ => Ok(None),
+                    }
+                }
+            }),
+        );
+
+        client.write("request");
+        assert!(lazy(|cx| Pin::new(&mut disp).poll(cx)).await.is_pending());
+
+        client.read_error(io::Error::new(
+            io::ErrorKind::ConnectionReset,
+            "connection reset",
+        ));
+        timeout(Millis(1000), poll_fn(|cx| Pin::new(&mut disp).poll(cx)))
+            .await
+            .expect("dispatcher waited for pending service call")
+            .unwrap();
+
+        timeout(Millis(1000), async {
+            while !stop.load(Relaxed) {
+                sleep(Millis(10)).await;
+            }
+        })
+        .await
+        .expect("service did not receive I/O stop notification");
     }
 
     #[ntex::test]

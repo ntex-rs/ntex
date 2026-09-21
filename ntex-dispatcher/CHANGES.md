@@ -1,5 +1,9 @@
 # Changes
 
+## [4.1.0] - 2026-09-21
+
+* Transport failures and force-closes cancel the dispatcher-held pending response future
+
 ## [4.0.1] - 2026-09-18
 
 * Api docs improvements
