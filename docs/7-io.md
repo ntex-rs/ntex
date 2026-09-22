@@ -37,9 +37,14 @@ the configured high-water mark is reached.
 
 The write task follows the same pattern. It waits for
 [`IoContext::poll_write_ready`], obtains queued data with
-[`IoContext::with_write_dst`], and reports progress through
+[`IoContext::with_write_dst`], and reports the outcome through
 [`IoContext::update_write_status`]. ntex can then apply write backpressure,
 resume waiting services, and coordinate graceful shutdown.
+
+Both methods return an [`IoTaskStatus`]. `Io` means work remains, not that the
+transport is ready, so a task re-arms transport readiness before its next
+operation. On the write side it is returned whenever output is still buffered,
+including after an attempt that made no progress.
 
 Socket types integrate with the I/O subsystem by implementing [`IoStream`].
 Its `start()` method receives an [`IoContext`], starts the transport-specific
@@ -111,6 +116,7 @@ into the I/O write buffer without depending on the concrete socket type.
 [`IoContext::with_write_dst`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.with_write_dst
 [`IoRef`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html
 [`IoStream`]: https://docs.rs/ntex/latest/ntex/io/trait.IoStream.html
+[`IoTaskStatus`]: https://docs.rs/ntex/latest/ntex/io/enum.IoTaskStatus.html
 [`ntex::http::HttpService`]: https://docs.rs/ntex/latest/ntex/http/struct.HttpService.html
 
 The runtime-specific implementations are provided by the [`ntex-net`] crate,

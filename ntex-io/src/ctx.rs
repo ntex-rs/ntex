@@ -230,12 +230,12 @@ impl IoContext {
 
     /// Updates the write status.
     ///
-    /// `Ok(_)` reports that the write attempt completed without error, where
-    /// `true` means one or more bytes reached the transport and `false` means
-    /// no write progress. An error terminates the connection. The returned
-    /// [`IoTaskStatus`] instructs the write task to continue immediately, pause
+    /// `Ok(())` reports that the write attempt completed without error, whether
+    /// or not it moved any bytes; the resulting status is derived from how much
+    /// output is still buffered. An error terminates the connection. The
+    /// returned [`IoTaskStatus`] instructs the write task to continue, pause
     /// until notified, or stop.
-    pub fn update_write_status(&self, status: io::Result<bool>) -> IoTaskStatus {
+    pub fn update_write_status(&self, status: io::Result<()>) -> IoTaskStatus {
         let st = &self.st();
 
         #[cfg(feature = "trace")]
@@ -247,7 +247,7 @@ impl IoContext {
         );
 
         match status {
-            Ok(_) => {
+            Ok(()) => {
                 let len = st.buffer.write_buf_size();
                 // Full flush is active
                 if st.flags.is_write_flush() {

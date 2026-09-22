@@ -155,7 +155,7 @@ where
             Readiness::Ready => {
                 let bufs = ctx.with_write_dst(build_bufs);
                 if bufs.is_empty() {
-                    if ctx.update_write_status(Ok(false)) == IoTaskStatus::Stop {
+                    if ctx.update_write_status(Ok(())) == IoTaskStatus::Stop {
                         break;
                     }
                 } else if write_buf(&mut io, ctx, bufs).await == IoTaskStatus::Stop {
@@ -234,7 +234,7 @@ where
                         break;
                     }
                 }
-                Ok(true)
+                Ok(())
             }
             Err(e) => Err(e),
         };

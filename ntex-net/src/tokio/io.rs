@@ -315,12 +315,12 @@ where
                     if val == 0 {
                         ctx.stop(None);
                     }
-                    Ok(val > 0)
+                    Ok(())
                 }
-                Poll::Pending => Ok(false),
+                Poll::Pending => Ok(()),
             }
         } else {
-            Ok(false)
+            Ok(())
         }
     });
 

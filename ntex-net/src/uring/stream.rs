@@ -204,7 +204,7 @@ impl Handler for StreamOpsHandler {
                         item.wr_op.take();
                         item.flags.remove(Flags::WR_CANCELING);
 
-                        let res = item.ctx.update_write_status(Ok(false));
+                        let res = item.ctx.update_write_status(Ok(()));
                         if item.flags.contains(Flags::WR_REISSUE) || res == IoTaskStatus::Io {
                             item.flags.remove(Flags::WR_REISSUE);
                             st.send(id, &self.inner.api);
@@ -354,14 +354,14 @@ impl Handler for StreamOpsHandler {
     }
 }
 
-fn write_status(n: usize) -> io::Result<bool> {
+fn write_status(n: usize) -> io::Result<()> {
     if n == 0 {
         Err(io::Error::new(
             io::ErrorKind::WriteZero,
             "failed to write frame to transport",
         ))
     } else {
-        Ok(true)
+        Ok(())
     }
 }
 

@@ -3,6 +3,7 @@
 ## [4.1.0] - 2026-09-22
 
 * Remove Io::pause(), the pause it installed could be silently cancelled
+* IoContext::update_write_status() takes io::Result<()> instead of io::Result<bool>
 * Release the transport handle when a direct write or notify callback terminates the connection
 * Io::poll_shutdown() no longer discards the read-ready flag
 * Io::poll_status_update() releases write back-pressure without reporting another

@@ -1452,7 +1452,7 @@ mod tests {
         // wrote 4 bytes to io
         assert_eq!(ctx.with_write_dst(|buf| buf.split_to(4).freeze()), b"1234");
         // continue to write
-        assert_eq!(ctx.update_write_status(Ok(true)), IoTaskStatus::Io);
+        assert_eq!(ctx.update_write_status(Ok(())), IoTaskStatus::Io);
         // write task can proceed
         assert_eq!(
             lazy(|cx| ctx.poll_write_ready(cx)).await,
@@ -1488,7 +1488,7 @@ mod tests {
         // write task is not paused, so send-buf op is not scheduled
         assert!(!io.st().flags.is_wr_send_scheduled());
         // update status, no more work
-        assert_eq!(ctx.update_write_status(Ok(true)), IoTaskStatus::Pause);
+        assert_eq!(ctx.update_write_status(Ok(())), IoTaskStatus::Pause);
         // write task is paused
         assert!(io.st().flags.is_write_paused());
         // flush is still enabled
@@ -1582,12 +1582,8 @@ mod tests {
 
         impl Handle for DirectWrite {
             fn write(&self, ctx: &IoContext) {
-                let written = ctx.with_write_dst(|buf| {
-                    let written = !buf.is_empty();
-                    buf.clear();
-                    written
-                });
-                let _ = ctx.update_write_status(Ok(written));
+                ctx.with_write_dst(|buf| buf.clear());
+                let _ = ctx.update_write_status(Ok(()));
             }
         }
 
@@ -1725,12 +1721,12 @@ mod tests {
         assert!(io.flags().is_wr_backpressure());
 
         assert_eq!(ctx.with_write_dst(|buf| buf.split_to(1).len()), 1);
-        assert_eq!(ctx.update_write_status(Ok(true)), IoTaskStatus::Io);
+        assert_eq!(ctx.update_write_status(Ok(())), IoTaskStatus::Io);
         assert!(lazy(|cx| io.poll_flush(cx, false)).await.is_pending());
         assert!(io.flags().is_wr_backpressure());
 
         assert_eq!(ctx.with_write_dst(|buf| buf.split_to(3).len()), 3);
-        assert_eq!(ctx.update_write_status(Ok(true)), IoTaskStatus::Io);
+        assert_eq!(ctx.update_write_status(Ok(())), IoTaskStatus::Io);
         assert!(matches!(
             lazy(|cx| io.poll_flush(cx, false)).await,
             Poll::Ready(Ok(()))

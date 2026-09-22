@@ -173,7 +173,13 @@ pub trait Handle {
 /// Current status of the I/O state.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum IoTaskStatus {
-    /// Continue performing I/O operations immediately.
+    /// Work remains, the task should perform another I/O operation.
+    ///
+    /// This reports that the connection still has work to do, not that the
+    /// transport can accept or supply bytes right now. A task must re-arm
+    /// transport readiness before the next operation. On the write side it is
+    /// returned whenever output is still buffered, including after an attempt
+    /// that made no progress.
     Io,
     /// Pause the task until the context or handle wakes it.
     Pause,

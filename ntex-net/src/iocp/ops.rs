@@ -303,7 +303,7 @@ impl WriteOperation {
                                     "failed to write frame to transport",
                                 ))
                             } else {
-                                Ok(true)
+                                Ok(())
                             }
                         }
                         Poll::Ready(Err(err)) => {
@@ -318,11 +318,11 @@ impl WriteOperation {
                         Poll::Pending => {
                             self.pages_num = num as u8;
                             self.flags.insert(Flags::WAITING);
-                            Ok(false)
+                            Ok(())
                         }
                     }
                 } else {
-                    Ok(false)
+                    Ok(())
                 }
             });
 
@@ -363,7 +363,7 @@ impl WriteOperation {
                     }
                     break;
                 }
-                Ok(true)
+                Ok(())
             }
             Err(err) => Err(err),
         };
