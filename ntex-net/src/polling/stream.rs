@@ -188,15 +188,15 @@ impl Handler for StreamOpsHandler {
     fn cleanup(&mut self) {
         if let Some(v) = self.inner.streams.take() {
             for (_, val) in v.into_iter() {
-                if val.flags.contains(Flags::DROPPED_PRI) {
-                    mem::forget(val.io);
-                } else {
+                if !val.flags.contains(Flags::DROPPED_PRI) {
                     log::trace!(
                         "{}: Unclosed sockets {:?}",
                         val.ctx.tag(),
                         val.io.peer_addr()
                     );
                 }
+                // A close job removes its entry; sockets still in the slab are ours.
+                drop(val);
             }
         }
         self.inner.delayed_feed.clear();
@@ -528,5 +528,78 @@ impl StreamItem {
             }
             result
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::net::UnixStream;
+
+    use ntex_io::{Handle, Io, IoStream};
+    use ntex_service::cfg::SharedCfg;
+
+    use super::*;
+
+    struct TestStream {
+        socket: Socket,
+        ops: StreamOps,
+        ctl: Rc<Cell<Option<StreamCtl>>>,
+    }
+
+    struct TestHandle {
+        _ctl: WeakStreamCtl,
+    }
+
+    impl Handle for TestHandle {}
+
+    impl IoStream for TestStream {
+        fn start(self, ctx: IoContext) -> Box<dyn Handle> {
+            let (ctl, weak) = self.ops.register(self.socket, ctx);
+            self.ctl.set(Some(ctl));
+            Box::new(TestHandle { _ctl: weak })
+        }
+    }
+
+    #[ntex::test]
+    async fn cleanup_closes_socket_with_deferred_secondary_drop() {
+        let reactor = Reactor::new().unwrap();
+        let ops = StreamOps::get(&reactor);
+        let (socket, _peer) = UnixStream::pair().unwrap();
+        let fd = socket.as_raw_fd();
+        let ctl = Rc::new(Cell::new(None));
+        let io = Io::new(
+            TestStream {
+                socket: Socket::from(socket),
+                ops: ops.clone(),
+                ctl: ctl.clone(),
+            },
+            SharedCfg::default(),
+        );
+        let primary = ctl.take().unwrap();
+        let id = primary.id as usize;
+        drop(primary);
+        assert!(
+            ops.0
+                .with(|streams| streams[id].flags.contains(Flags::DROPPED_PRI))
+        );
+        assert!(!ops.0.delayed_feed.is_empty());
+        assert_ne!(unsafe { libc::fcntl(fd, libc::F_GETFD) }, -1);
+
+        let mut handler = StreamOpsHandler {
+            inner: ops.0.clone(),
+        };
+        handler.cleanup();
+
+        let result = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        let err = io::Error::last_os_error();
+        if result != -1 {
+            // Release the leaked descriptor if this regression returns.
+            assert_eq!(unsafe { libc::close(fd) }, 0);
+        }
+        assert_eq!(result, -1, "cleanup leaked the socket");
+        assert_eq!(err.raw_os_error(), Some(libc::EBADF));
+        assert!(ops.0.delayed_feed.is_empty());
+        handler.cleanup();
+        drop(io);
     }
 }

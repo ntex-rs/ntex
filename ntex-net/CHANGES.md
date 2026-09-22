@@ -2,6 +2,9 @@
 
 ## [4.1.0] - 2026-09-23
 
+* Fix polling reactor cleanup leaking sockets whose primary handle was dropped
+  but whose secondary drop had not yet been processed
+
 * Reset the connection on a force close instead of closing it gracefully, the
   receive queue drain and SHUT_RDWR turned a truncated response into a clean
   FIN that a peer could not tell apart from a complete one
