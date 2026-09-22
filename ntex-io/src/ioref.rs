@@ -65,7 +65,7 @@ impl IoRef {
     }
 
     #[inline]
-    /// Checks whether the connection entered graceful transport shutdown.
+    /// Checks whether the transport entered graceful shutdown.
     ///
     /// This state remains set after backend teardown completes.
     pub fn is_stopping(&self) -> bool {
@@ -89,7 +89,14 @@ impl IoRef {
     ///
     /// This becomes `true` once unread data in the application-facing read
     /// buffer reaches the configured high watermark, which parks the transport
-    /// read task. Consuming enough of the buffer releases it.
+    /// read task.
+    ///
+    /// Two different paths release it. Consuming through
+    /// [`decode`](Self::decode) or [`with_read_dst`](Self::with_read_dst)
+    /// releases it once the buffer has fallen to at most half the high
+    /// watermark. Asking for more input through
+    /// [`Io::poll_read_more`](crate::Io::poll_read_more), and the methods built
+    /// on it, releases it immediately however much data is still buffered.
     pub fn is_rd_backpressure(&self) -> bool {
         self.0.flags.is_rd_backpressure()
     }
@@ -278,12 +285,16 @@ impl IoRef {
     /// This holds the decoded bytes the application consumes; see
     /// [`with_read_src`](Self::with_read_src) for the transport-facing source.
     ///
-    /// This mutates the read state whether or not `f` consumes anything. Read
-    /// readiness is always cleared, and a pause installed by
-    /// [`Io::poll_read_pause`](crate::Io::poll_read_pause) is always cancelled, waking the
-    /// transport read task. Consuming enough bytes additionally releases read
-    /// backpressure. Use [`crate::Io::poll_read_more`] rather than this method
-    /// to check whether data is available.
+    /// This mutates the read state whether or not `f` consumes anything. While
+    /// read back-pressure is active nothing is released until the buffer has
+    /// fallen to at most half the high watermark, so until then read readiness
+    /// and any installed read pause are left in place. Once it has, or when
+    /// back-pressure was not active, read readiness is cleared and a pause
+    /// installed by [`Io::poll_read_pause`](crate::Io::poll_read_pause) is
+    /// cancelled, waking the transport read task.
+    ///
+    /// Use [`crate::Io::poll_read_more`] rather than this method to check
+    /// whether data is available.
     pub fn with_read_dst<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,

@@ -490,6 +490,10 @@ impl<F> Io<F> {
     /// If clean EOF or an error-free shutdown occurs before `dst` is filled,
     /// this returns [`io::ErrorKind::UnexpectedEof`]. Transport errors are
     /// passed through unchanged.
+    ///
+    /// Each wait goes through [`read_more`](Self::read_more), so this releases
+    /// read backpressure unconditionally rather than waiting for the read
+    /// buffer to drain to half the high watermark.
     pub async fn read_exact(&self, dst: &mut [u8]) -> io::Result<()> {
         loop {
             let completed = self.with_read_dst(|buf| {
@@ -515,7 +519,8 @@ impl<F> Io<F> {
     /// transport to read more data.
     ///
     /// If reads are paused or under backpressure, calling this method resumes
-    /// the read task. This is not a passive check of the current buffer.
+    /// the read task. This is not a passive check of the current buffer, and
+    /// read backpressure is released however much data is still buffered.
     ///
     /// Returns `Ok(Some(()))` when input that has not been reported yet is
     /// available, `Ok(None)` when no further input will be reported, and `Err`
@@ -579,6 +584,12 @@ impl<F> Io<F> {
     /// It therefore changes the read state and should not be used as a passive
     /// buffer check.
     ///
+    /// The release is unconditional: unlike consumption through
+    /// [`IoRef::decode`] or [`IoRef::with_read_dst`], which waits for the read
+    /// buffer to fall to at most half the high watermark, this releases read
+    /// backpressure however much data is still buffered. Asking for more input
+    /// is taken as the dispatcher declaring itself able to accept it.
+    ///
     /// # Returns
     ///
     /// - `Poll::Pending` while waiting for more data.
@@ -640,6 +651,10 @@ impl<F> Io<F> {
     /// `Some(())` means that more input arrived. Clean EOF may produce one last
     /// `Some(())` when filters leave final application data; later polls return
     /// `None`. Transport errors are returned unchanged.
+    ///
+    /// Paused or back-pressured reads are resumed through
+    /// [`poll_read_more`](Self::poll_read_more), which releases read
+    /// backpressure unconditionally.
     pub fn poll_read_notify(&self, cx: &mut Context<'_>) -> Poll<io::Result<Option<()>>> {
         let st = self.st();
         if st.flags.is_stopping_or_terminating() {
@@ -703,6 +718,10 @@ impl<F> Io<F> {
     /// An error return does not register the waker. A successfully decoded item
     /// takes precedence over timeout, backpressure, and peer-disconnect status
     /// observed during the same poll.
+    ///
+    /// When the codec needs more input this goes through
+    /// [`poll_read_more`](Self::poll_read_more), which releases read
+    /// backpressure unconditionally.
     pub fn poll_recv_decode<U>(
         &self,
         codec: &U,
