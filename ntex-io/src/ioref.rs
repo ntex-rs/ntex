@@ -6,7 +6,7 @@ use ntex_service::cfg::SharedCfg;
 use ntex_util::time::Seconds;
 
 use crate::ops::{Id, Iops, TimerHandle};
-use crate::{Decoded, Filter, FilterBuf, Flags, IoConfig, IoContext, IoRef, types};
+use crate::{Decoded, Filter, FilterBuf, Flags, Handle, IoConfig, IoContext, IoRef, types};
 
 impl IoRef {
     #[inline]
@@ -535,7 +535,7 @@ impl IoRef {
             );
             let ctx = unsafe { &*(ptr::from_ref(self).cast::<IoContext>()) };
             hnd.write(ctx);
-            self.0.handle.set(Some(hnd));
+            self.restore_handle(hnd);
         }
         if self.0.flags.is_write_paused() {
             WakeWriteTask::No
@@ -548,6 +548,23 @@ impl IoRef {
         if let Some(hnd) = self.0.handle.take() {
             let ctx = unsafe { &*(ptr::from_ref(self).cast::<IoContext>()) };
             hnd.notify(ctx);
+            self.restore_handle(hnd);
+        }
+    }
+
+    /// Reinstalls the transport handle after a reentrant transport callback.
+    ///
+    /// The handle is taken for the duration of the call so that a nested
+    /// `call_write()`/`call_notify()` cannot reenter the transport. If the
+    /// callback terminated the connection, `terminate_connection()` and
+    /// `stop_connection()` found the slot empty and could not release the
+    /// transport, so the handle is dropped here instead of being reinstalled.
+    /// A graceful shutdown keeps it: the write task still needs the transport
+    /// to shut it down.
+    fn restore_handle(&self, hnd: Box<dyn Handle>) {
+        if self.0.flags.is_terminating() || self.0.flags.is_terminated() {
+            drop(hnd);
+        } else {
             self.0.handle.set(Some(hnd));
         }
     }

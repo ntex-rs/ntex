@@ -1640,6 +1640,47 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn terminate_during_eager_write_releases_transport() {
+        #[derive(Debug)]
+        struct FailedWrite(Rc<Cell<bool>>);
+
+        impl Drop for FailedWrite {
+            fn drop(&mut self) {
+                self.0.set(true);
+            }
+        }
+
+        impl IoStream for FailedWrite {
+            fn start(self, _: IoContext) -> Box<dyn Handle> {
+                Box::new(self)
+            }
+        }
+
+        impl Handle for FailedWrite {
+            fn write(&self, ctx: &IoContext) {
+                ctx.update_write_status(Err(io::Error::new(
+                    io::ErrorKind::ConnectionReset,
+                    "connection reset",
+                )));
+            }
+        }
+
+        let dropped = Rc::new(Cell::new(false));
+        let io = Io::new(
+            FailedWrite(dropped.clone()),
+            SharedCfg::new("SRV").add(IoConfig::new().set_write_buf_threshold(1)),
+        );
+
+        io.encode_slice(BIN2).unwrap_err();
+        assert!(io.is_terminating());
+
+        // the handle is taken for the duration of the direct write, so the
+        // terminate it triggered could not release the transport itself
+        assert!(dropped.get());
+        assert!(io.st().handle.take().is_none());
+    }
+
+    #[ntex::test]
     async fn write_backpressure() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(0);
