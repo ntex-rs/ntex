@@ -51,12 +51,12 @@ where
     /// Flushes encoded data to the transport.
     ///
     /// If `full` is `true`, waits until all buffered data has been written.
-    pub async fn flush(&self, full: bool) -> Result<(), io::Error> {
+    pub async fn flush(&self, full: bool) -> io::Result<()> {
         self.io.flush(full).await
     }
 
     /// Gracefully shuts down the I/O stream.
-    pub async fn shutdown(&self) -> Result<(), io::Error> {
+    pub async fn shutdown(&self) -> io::Result<()> {
         self.io.shutdown().await
     }
 }
