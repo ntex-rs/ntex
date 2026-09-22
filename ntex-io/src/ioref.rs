@@ -133,7 +133,7 @@ impl IoRef {
     /// [`close`](Self::close) for that.
     pub fn terminate(&self) {
         log::trace!("{}: Terminate io stream object", self.tag());
-        self.0.terminate_connection(None);
+        self.0.force_close_connection();
     }
 
     /// Queries filter-specific data.

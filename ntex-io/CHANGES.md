@@ -2,6 +2,11 @@
 
 ## [4.1.0] - 2026-09-22
 
+* Readiness::Terminate is reported only for an explicit IoRef::terminate().
+  A transport failure, a filter failure or an expired shutdown deadline used
+  to abort the connection as well, a graceful close that was already draining
+  was turned into a reset. They now report Readiness::Close
+
 * Dropping an Io now terminates the connection instead of closing it
   gracefully, a service that returned without shutting down discarded whatever
   it had encoded yet the peer saw a clean end of stream

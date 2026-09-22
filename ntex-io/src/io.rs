@@ -156,6 +156,20 @@ impl IoState {
         self.set_error(Some(err));
     }
 
+    /// Force-closes the connection, aborting it instead of closing gracefully.
+    ///
+    /// This is the only path that makes the transport report
+    /// [`Readiness::Terminate`](crate::Readiness::Terminate). Terminations that
+    /// come from a failure rather than from an explicit request go through
+    /// [`terminate_connection`](Self::terminate_connection) and let the
+    /// transport close the connection gracefully.
+    pub(super) fn force_close_connection(&self) {
+        if !self.flags.is_terminated() {
+            self.flags.set_force_close();
+        }
+        self.terminate_connection(None);
+    }
+
     pub(super) fn terminate_connection(&self, err: Option<io::Error>) {
         self.set_error(err);
         if !self.flags.is_terminated() && !self.flags.is_terminating() {
@@ -1032,7 +1046,7 @@ impl<F> Drop for Io<F> {
                 log::trace!("{}: Io is dropped, terminate connection", st.tag());
             }
 
-            st.terminate_connection(None);
+            st.force_close_connection();
             st.filter.drop_filter::<F>();
         }
 
@@ -1349,6 +1363,50 @@ mod tests {
         // read task ready
         assert_eq!(
             lazy(|cx| ctx.poll_read_ready(cx)).await,
+            Poll::Ready(Readiness::Terminate)
+        );
+    }
+
+    #[ntex::test]
+    async fn only_force_close_reports_terminate() {
+        // a transport failure ends the connection, but it is closed gracefully
+        let io = Io::new(IoTest::create().0, SharedCfg::new("SRV"));
+        let ctx = IoContext::new(io.get_ref());
+        ctx.stop(Some(io::Error::other("transport failed")));
+        assert!(io.st().flags.is_terminating());
+        assert!(!io.st().flags.is_force_closing());
+        assert_eq!(
+            lazy(|cx| ctx.poll_read_ready(cx)).await,
+            Poll::Ready(Readiness::Close)
+        );
+        assert_eq!(
+            lazy(|cx| ctx.poll_write_ready(cx)).await,
+            Poll::Ready(Readiness::Close)
+        );
+
+        // a failure during the transport shutdown phase does not abort either
+        let io = Io::new(IoTest::create().0, SharedCfg::new("SRV"));
+        let ctx = IoContext::new(io.get_ref());
+        io.close();
+        io.st().filters_stopped();
+        assert!(io.st().flags.is_stopping());
+        ctx.stop(Some(io::Error::other("transport failed")));
+        assert_eq!(
+            lazy(|cx| ctx.poll_write_ready(cx)).await,
+            Poll::Ready(Readiness::Close)
+        );
+
+        // only an explicit force close aborts
+        let io = Io::new(IoTest::create().0, SharedCfg::new("SRV"));
+        let ctx = IoContext::new(io.get_ref());
+        io.terminate();
+        assert!(io.st().flags.is_force_closing());
+        assert_eq!(
+            lazy(|cx| ctx.poll_read_ready(cx)).await,
+            Poll::Ready(Readiness::Terminate)
+        );
+        assert_eq!(
+            lazy(|cx| ctx.poll_write_ready(cx)).await,
             Poll::Ready(Readiness::Terminate)
         );
     }

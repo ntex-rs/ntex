@@ -35,7 +35,10 @@ use crate::{Flags, Id, IoRef, IoTaskStatus, Readiness, io::IoState};
 /// differ only in how the transport is released: [`Readiness::Close`] closes
 /// both directions gracefully, while [`Readiness::Terminate`] skips the
 /// graceful close so that an aborted connection stays distinguishable from one
-/// that ended normally.
+/// that ended normally. Only an explicit
+/// [`IoRef::terminate`](crate::IoRef::terminate) reports `Terminate`; every
+/// other way a connection can end, an expired shutdown timeout included,
+/// reports `Close`.
 pub struct IoContext(IoRef);
 
 impl fmt::Debug for IoContext {

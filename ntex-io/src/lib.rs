@@ -64,13 +64,18 @@ pub enum Readiness {
     Close,
     /// The transport must be released immediately.
     ///
-    /// The connection was force-closed through
-    /// [`IoRef::terminate`](crate::IoRef::terminate) or aborted by an I/O
-    /// error, so whatever is still buffered is discarded on purpose. The I/O
-    /// task must not perform a graceful close: no receive queue drain and no
-    /// `shutdown(SHUT_RDWR)`, just release the connection. That keeps an
-    /// aborted stream distinguishable from one that ended normally, instead of
-    /// terminating a truncated response with a clean `FIN`.
+    /// This is reported only for an explicit force close through
+    /// [`IoRef::terminate`](crate::IoRef::terminate), so whatever is still
+    /// buffered is discarded on purpose. The I/O task must not perform a
+    /// graceful close: no receive queue drain and no `shutdown(SHUT_RDWR)`,
+    /// just release the connection. That keeps an aborted stream
+    /// distinguishable from one that ended normally, instead of terminating a
+    /// truncated response with a clean `FIN`.
+    ///
+    /// A connection that ends because of an I/O failure, a filter failure or an
+    /// expired shutdown deadline reports [`Close`](Self::Close) instead: the
+    /// transport is gone or unusable, so there is nothing to gain from
+    /// aborting it.
     Terminate,
 }
 

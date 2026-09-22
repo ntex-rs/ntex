@@ -3,9 +3,8 @@ use std::{cell::Cell, fmt};
 pub struct Flags(Cell<FlagsKind>);
 
 bitflags::bitflags! {
-    /// All 16 bits are in use; widen the representation before adding a flag.
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-    pub struct FlagsKind: u16 {
+    pub struct FlagsKind: u32 {
         /// io is closed
         const IO_STOPPED          = 0b0000_0000_0000_0001;
         /// shutdown io tasks
@@ -14,6 +13,8 @@ bitflags::bitflags! {
         const IO_STOPPING_FILTERS = 0b0000_0000_0000_0100;
         /// force termination or transport failure is in progress
         const IO_TERMINATING      = 0b0000_0100_0000_0000;
+        /// the application asked for a force close through `IoRef::terminate()`
+        const IO_FORCE_CLOSE      = 0b0001_0000_0000_0000_0000;
 
         /// pause io read
         const RD_PAUSED           = 0b0000_0000_0001_0000;
@@ -120,6 +121,18 @@ impl Flags {
         self.contains(FlagsKind::IO_TERMINATING)
     }
 
+    /// Checks whether the application asked for a force close.
+    ///
+    /// Only [`IoRef::terminate`](crate::IoRef::terminate) sets this. A
+    /// transport failure, a filter failure or an expired shutdown deadline
+    /// terminate the connection as well, but they close it gracefully rather
+    /// than aborting it.
+    ///
+    /// This state remains set after backend teardown completes.
+    pub(crate) fn is_force_closing(&self) -> bool {
+        self.contains(FlagsKind::IO_FORCE_CLOSE)
+    }
+
     pub(crate) fn is_stopping_or_terminating(&self) -> bool {
         self.intersects(FlagsKind::IO_STOPPING | FlagsKind::IO_TERMINATING)
     }
@@ -224,6 +237,10 @@ impl Flags {
 
     pub(crate) fn set_filter_stopping(&self) {
         self.insert(FlagsKind::IO_STOPPING_FILTERS);
+    }
+
+    pub(crate) fn set_force_close(&self) {
+        self.insert(FlagsKind::IO_FORCE_CLOSE);
     }
 
     pub(crate) fn set_terminate(&self) {
