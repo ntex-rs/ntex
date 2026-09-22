@@ -498,11 +498,19 @@ impl<F: Filter> Io<F> {
 impl<F> Io<F> {
     /// Reads and decodes the next item from the incoming stream.
     ///
-    /// Returns `Ok(None)` when the connection closes cleanly before another
-    /// item is decoded, whether the peer disconnected or the shutdown was
-    /// started locally. Codec errors are returned in [`Either::Left`];
-    /// transport errors and dispatcher timeouts are returned in
-    /// [`Either::Right`].
+    /// Returns `Ok(None)` when the connection closed before another item could
+    /// be decoded and nothing was left undecoded, whether the peer
+    /// disconnected or the shutdown was started locally.
+    ///
+    /// If the peer closed its write half while the codec still held a partial
+    /// item, the stream was truncated and this returns
+    /// [`io::ErrorKind::UnexpectedEof`] in [`Either::Right`] rather than
+    /// `Ok(None)`, so that a cut-off frame is not mistaken for a clean end of
+    /// stream. Undecodable bytes left after a locally started shutdown are not
+    /// treated as truncation.
+    ///
+    /// Codec errors are returned in [`Either::Left`]; transport errors and
+    /// dispatcher timeouts are returned in [`Either::Right`].
     ///
     /// If write backpressure prevents further reads, this method first waits
     /// for the write buffer to fall below its configured threshold.
@@ -525,7 +533,17 @@ impl<F> Io<F> {
                 }
                 Err(RecvError::Decoder(err)) => Err(Either::Left(err)),
                 Err(RecvError::PeerGone(Some(err))) => Err(Either::Right(err)),
-                Err(RecvError::PeerGone(None)) => Ok(None),
+                Err(RecvError::PeerGone(None)) => {
+                    let st = self.st();
+                    if st.flags.is_read_eof() && st.buffer.read_dst_size() != 0 {
+                        Err(Either::Right(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "bytes remaining on stream",
+                        )))
+                    } else {
+                        Ok(None)
+                    }
+                }
             };
         }
     }
@@ -2745,5 +2763,73 @@ mod tests {
 
         ctx.stopped(None);
         assert!(st.flags.is_terminated());
+    }
+
+    struct FixedSize(usize);
+
+    impl Decoder for FixedSize {
+        type Item = Bytes;
+        type Error = io::Error;
+
+        fn decode(&self, src: &mut BytesMut) -> Result<Option<Bytes>, io::Error> {
+            if src.len() < self.0 {
+                Ok(None)
+            } else {
+                Ok(Some(src.split_to(self.0)))
+            }
+        }
+    }
+
+    #[ntex::test]
+    async fn recv_reports_truncated_stream() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = Io::new(server, SharedCfg::new("SRV"));
+
+        // a partial item, then the peer goes away
+        client.write("123");
+        sleep(Millis(25)).await;
+        client.close().await;
+
+        let err = io.recv(&FixedSize(8)).await.err().unwrap();
+        let Either::Right(err) = err else {
+            panic!("expected a transport error")
+        };
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+
+        // the partial item is still buffered, it is not discarded
+        assert_eq!(io.with_read_dst(|b| b.len()), 3);
+    }
+
+    #[ntex::test]
+    async fn recv_reports_clean_eof() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = Io::new(server, SharedCfg::new("SRV"));
+
+        // a whole item, then the peer goes away
+        client.write("12345678");
+        sleep(Millis(25)).await;
+        client.close().await;
+
+        assert_eq!(io.recv(&FixedSize(8)).await.unwrap().unwrap(), "12345678");
+        assert!(io.recv(&FixedSize(8)).await.unwrap().is_none());
+    }
+
+    #[ntex::test]
+    async fn recv_local_shutdown_is_not_truncation() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = Io::new(server, SharedCfg::new("SRV"));
+
+        // undecodable input is left buffered, but the peer never closed and
+        // the shutdown is started locally, so this is not a truncated stream
+        client.write("123");
+        sleep(Millis(25)).await;
+        io.close();
+        sleep(Millis(25)).await;
+
+        assert!(io.recv(&FixedSize(8)).await.unwrap().is_none());
+        assert_eq!(io.with_read_dst(|b| b.len()), 3);
     }
 }

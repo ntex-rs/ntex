@@ -2,6 +2,11 @@
 
 ## [4.1.0] - 2026-09-22
 
+* Io::recv() reports a truncated stream as UnexpectedEof instead of Ok(None),
+  a peer that closed its write half while the codec still held a partial item
+  is no longer indistinguishable from a clean end of stream. Input left over
+  after a locally started shutdown is not treated as truncation
+
 * Add IoContext::with_read_buf(), it hands the read buffer to the transport in
   place instead of handing out a detached buffer that has to be appended back,
   so a readiness based backend no longer pays a buffer swap and a copy for
