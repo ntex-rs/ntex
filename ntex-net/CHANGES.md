@@ -2,6 +2,10 @@
 
 ## [4.1.0] - 2026-09-23
 
+* Drop poll interest before tearing a connection down in the polling backend,
+  and drain its receive queue on the reactor thread instead of the blocking
+  pool, the socket is still registered so the drain raced the reactor
+
 * Read into the io context buffer in place in the tokio and polling backends,
   they read synchronously so they no longer need a detached buffer
 

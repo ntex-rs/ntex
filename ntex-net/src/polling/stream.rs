@@ -361,8 +361,13 @@ impl StreamCtl {
             .with(|streams| {
                 let item = &mut streams[self.id as usize];
                 let fd = item.fd();
+                // The socket is still registered with the poller at this
+                // point, so it is drained here rather than on the blocking
+                // pool: reading it from another thread would race the reactor.
+                // The drain is non-blocking and bounded, so it is cheap enough
+                // to run inline.
+                crate::helpers::drain_raw_socket(fd);
                 ntex_rt::spawn(ntex_rt::spawn_blocking(move || {
-                    crate::helpers::drain_raw_socket(fd);
                     syscall!(libc::shutdown(fd, libc::SHUT_RDWR)).map(|_| ())
                 }))
             })

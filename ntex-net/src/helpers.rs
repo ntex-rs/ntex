@@ -55,11 +55,12 @@ const MAX_DRAIN_CHUNKS: usize = 16;
 /// keeps sending cannot hold the shutdown up. Input that arrives after the last
 /// read can still abort the connection, that race cannot be closed.
 ///
-/// This runs on the write task, which on a completion based backend can leave a
-/// read operation in flight, so the two may end up sharing the queue between
-/// them. That is harmless, input is discarded in this phase either way, and a
-/// backend that can cheaply tell an operation is in flight is free to leave the
-/// draining to it instead.
+/// This runs on the thread that drives the connection, which on a completion
+/// based backend can leave a read operation in flight, so the two may end up
+/// sharing the queue between them. That is harmless, input is discarded in this
+/// phase either way, and a backend that can cheaply tell an operation is in
+/// flight is free to leave the draining to it instead. It must not be moved off
+/// that thread while the socket is still registered with a reactor.
 pub(crate) fn drain_socket(sock: &socket2::SockRef<'_>) {
     if sock.set_nonblocking(true).is_err() {
         return;

@@ -89,6 +89,10 @@ async fn run(ctl: StreamCtl, context: ntex_io::IoContext) {
     .await;
 
     log::trace!("{}: Shuting down io", context.tag());
+    // Both directions can report `Close` in the same poll, which leaves the
+    // last armed interest in place. Drop it before teardown, so the reactor
+    // cannot deliver an event for a socket that is being closed.
+    ctl.interest(false, false);
     let result = ctl.shutdown().await;
     log::trace!("{}: Shutdown complete {result:?}", context.tag());
     context.stopped(result.err());
