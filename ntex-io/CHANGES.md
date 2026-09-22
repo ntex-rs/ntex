@@ -5,6 +5,7 @@
 * Release read back-pressure and any read pause when IoRef::with_read_src() or
   IoRef::with_buf() drain the application read destination, previously the
   connection could stall permanently
+* Remove FilterCtx::new_read_bytes(), it had no consumers
 * Remove Io::pause(), the pause it installed could be silently cancelled
 * IoContext::update_write_status() takes io::Result<()> instead of io::Result<bool>
 * Release the transport handle when a direct write or notify callback terminates the connection

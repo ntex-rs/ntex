@@ -418,7 +418,7 @@ impl<F: Filter> Io<F> {
         let io = Io(UnsafeCell::new(state), marker::PhantomData);
 
         // push read data into new filter
-        if let Err(e) = io.st().buffer.process_read_buf_no_cb(&io, 0) {
+        if let Err(e) = io.st().buffer.process_read_buf_no_cb(&io) {
             io.st().terminate_connection(Some(e));
         }
         io.with_callbacks(|cb| cb.after_processing(&io));

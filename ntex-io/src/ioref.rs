@@ -840,7 +840,6 @@ mod tests {
     struct Counter<F> {
         layer: F,
         idx: usize,
-        in_bytes: Rc<Cell<usize>>,
         out_bytes: Rc<Cell<usize>>,
         read_order: Rc<RefCell<Vec<usize>>>,
         write_order: Rc<RefCell<Vec<usize>>>,
@@ -849,10 +848,7 @@ mod tests {
     impl<F: Filter> Filter for Counter<F> {
         fn process_read_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()> {
             self.read_order.borrow_mut().push(self.idx);
-            let result = self.layer.process_read_buf(ctx);
-            self.in_bytes
-                .set(self.in_bytes.get() + ctx.new_read_bytes());
-            result
+            self.layer.process_read_buf(ctx)
         }
 
         fn process_write_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()> {
@@ -872,7 +868,6 @@ mod tests {
 
     #[ntex::test]
     async fn filter() {
-        let in_bytes = Rc::new(Cell::new(0));
         let out_bytes = Rc::new(Cell::new(0));
         let read_order = Rc::new(RefCell::new(Vec::new()));
         let write_order = Rc::new(RefCell::new(Vec::new()));
@@ -882,7 +877,6 @@ mod tests {
             .map_filter(|layer| Counter {
                 layer,
                 idx: 1,
-                in_bytes: in_bytes.clone(),
                 out_bytes: out_bytes.clone(),
                 read_order: read_order.clone(),
                 write_order: write_order.clone(),
@@ -904,13 +898,11 @@ mod tests {
         let msg = io.recv(&BytesCodec).await.unwrap().unwrap();
         assert_eq!(msg, Bytes::from_static(BIN));
 
-        assert_eq!(in_bytes.get(), BIN.len() * 2);
         assert_eq!(out_bytes.get(), 8);
     }
 
     #[ntex::test]
     async fn boxed_filter() {
-        let in_bytes = Rc::new(Cell::new(0));
         let out_bytes = Rc::new(Cell::new(0));
         let read_order = Rc::new(RefCell::new(Vec::new()));
         let write_order = Rc::new(RefCell::new(Vec::new()));
@@ -920,7 +912,6 @@ mod tests {
             .map_filter(|layer| Counter {
                 layer,
                 idx: 2,
-                in_bytes: in_bytes.clone(),
                 out_bytes: out_bytes.clone(),
                 read_order: read_order.clone(),
                 write_order: write_order.clone(),
@@ -928,7 +919,6 @@ mod tests {
             .map_filter(|layer| Counter {
                 layer,
                 idx: 1,
-                in_bytes: in_bytes.clone(),
                 out_bytes: out_bytes.clone(),
                 read_order: read_order.clone(),
                 write_order: write_order.clone(),
@@ -947,14 +937,13 @@ mod tests {
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"test"));
 
-        assert_eq!(in_bytes.get(), BIN.len() * 2);
         assert_eq!(out_bytes.get(), 16);
         assert_eq!(state.0.buffer.with_write_dst(|b| b.len()), 0);
 
         // refs
-        assert_eq!(Rc::strong_count(&in_bytes), 3);
+        assert_eq!(Rc::strong_count(&out_bytes), 3);
         drop(state);
-        assert_eq!(Rc::strong_count(&in_bytes), 1);
+        assert_eq!(Rc::strong_count(&out_bytes), 1);
         assert_eq!(*read_order.borrow(), &[1, 2][..]);
         assert_eq!(*write_order.borrow(), &[1, 2, 1, 2, 1, 2][..]);
     }
