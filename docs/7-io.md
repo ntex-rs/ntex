@@ -13,7 +13,11 @@ writes, backpressure, timeouts, and graceful shutdown.
 ntex achieves independence from the underlying socket implementation through
 dependency inversion. The I/O subsystem does not call Tokio, Compio, or Neon
 socket APIs directly. Instead, a runtime adapter moves bytes between its socket
-and the buffers owned by [`Io`].
+and the buffers owned by [`Io`]. One way to picture it: the read half carries
+bytes from the transport to the application and the write half carries them
+back, with `Io` sitting between the two. Each half is an in-memory buffer that
+`Io` owns, which is what lets it apply backpressure and run filter
+transformations on bytes as they pass through.
 
 An active connection has three cooperating execution responsibilities:
 
@@ -56,6 +60,25 @@ including after an attempt that made no progress. Output the transport already
 owns does not keep the task running, because its completion wakes the task
 again.
 
+Both readiness methods resolve to a [`Readiness`] value rather than a plain
+ready signal. `Readiness::Ready` allows the task to perform its next operation.
+`Readiness::Close` means the connection must be taken down: the task closes
+both directions and releases the socket, cancelling anything still in flight.
+For a socket this is `shutdown(SHUT_RDWR)` followed by `close()`.
+
+`Readiness::Close` covers a graceful shutdown and an immediate termination
+alike, and a task does not need to tell them apart. On the graceful path the
+I/O subsystem reports it only once buffered output has been drained, so in
+either case nothing is left to flush.
+
+Teardown is reported back through two methods. A transport that fails or
+decides to abort calls [`IoContext::stop`] with the error, which terminates the
+connection without draining pending work. Once transport teardown has actually
+finished, and regardless of which side initiated it, the task calls
+[`IoContext::stopped`]. That is what completes [`Io::shutdown`], which resolves
+only after the backend reports the connection stopped, not merely when filter
+shutdown and flushing are done.
+
 Socket types integrate with the I/O subsystem by implementing [`IoStream`].
 Its `start()` method receives an [`IoContext`], starts the transport-specific
 tasks, and returns a [`Handle`] used to control or query the transport.
@@ -75,7 +98,11 @@ impl IoStream for TcpStream {
 
 async fn read_task(socket: Rc<TcpStream>, ctx: IoContext) {
     loop {
-        wait_for_read_readiness(&ctx).await;
+        // resolves `IoContext::poll_read_ready`
+        match wait_for_read_readiness(&ctx).await {
+            Readiness::Ready => {}
+            Readiness::Close => break,
+        }
 
         let mut buf = ctx.get_read_buf();
         let result = read_from_socket(&socket, &mut buf);
@@ -90,7 +117,11 @@ async fn read_task(socket: Rc<TcpStream>, ctx: IoContext) {
 
 async fn write_task(socket: Rc<TcpStream>, ctx: IoContext) {
     loop {
-        wait_for_write_readiness(&ctx).await;
+        // resolves `IoContext::poll_write_ready`
+        match wait_for_write_readiness(&ctx).await {
+            Readiness::Ready => {}
+            Readiness::Close => break,
+        }
 
         let result = ctx.with_write_dst(|buf| {
             write_to_socket(&socket, buf)
@@ -103,6 +134,10 @@ async fn write_task(socket: Rc<TcpStream>, ctx: IoContext) {
             IoTaskStatus::Stop => break,
         }
     }
+
+    // close both directions, then report teardown as complete
+    shutdown_socket(&socket).await;
+    ctx.stopped(None);
 }
 ```
 
@@ -122,12 +157,15 @@ into the I/O write buffer without depending on the concrete socket type.
 [`IoContext`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html
 [`IoContext::poll_read_ready`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.poll_read_ready
 [`IoContext::poll_write_ready`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.poll_write_ready
+[`IoContext::stop`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.stop
+[`IoContext::stopped`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.stopped
 [`IoContext::update_read_status`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.update_read_status
 [`IoContext::update_write_status`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.update_write_status
 [`IoContext::with_write_dst`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.with_write_dst
 [`IoRef`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html
 [`IoStream`]: https://docs.rs/ntex/latest/ntex/io/trait.IoStream.html
 [`IoTaskStatus`]: https://docs.rs/ntex/latest/ntex/io/enum.IoTaskStatus.html
+[`Readiness`]: https://docs.rs/ntex/latest/ntex/io/enum.Readiness.html
 [`ntex::http::HttpService`]: https://docs.rs/ntex/latest/ntex/http/struct.HttpService.html
 
 The runtime-specific implementations are provided by the [`ntex-net`] crate,
@@ -140,8 +178,8 @@ which supports Tokio, Compio, and Neon backends.
 Because the underlying socket is hidden behind the I/O abstraction, code using
 `Io` cannot access transport-specific methods directly. The [`Handle`] returned
 by `IoStream::start()` provides the bridge to the underlying transport. It can
-respond to control notifications and expose transport-specific metadata through
-typed queries.
+resume the transport write operation on request and expose transport-specific
+metadata through typed queries.
 
 Each backend decides which query types it supports. For example, the built-in
 network backends expose the remote socket address as [`PeerAddr`].
@@ -186,7 +224,7 @@ let cfg = SharedCfg::new("my-protocol")
             .set_disconnect_timeout(Seconds(2))
             .set_frame_read_rate(Seconds(2), Seconds(10), 1_024)
             .set_read_buf(32 * 1024, 1024, 16)
-            .set_write_buf(32 * 1024, 1024, 16)
+            .set_write_buf(32 * 1024)
             .set_write_buf_threshold(8 * 1024),
     )
     .build();
@@ -207,7 +245,9 @@ These settings are used by different parts of the stack:
   but not yet written to the peer.
 - The read low-water mark controls how much free capacity is reserved before
   another socket read. The cache-size argument limits the number of eligible
-  read buffers retained in the per-thread cache.
+  read buffers retained in the per-thread cache. Neither applies to output,
+  which is held in [`BytePages`] rather than cached read buffers, so the write
+  setting takes only a high-water mark.
 - The write page size controls newly allocated [`BytePages`], while the write
   threshold controls when supported transports attempt an early direct write.
 
@@ -259,10 +299,11 @@ still reads and writes MQTT bytes and does not need to know which transport
 filters are installed below it.
 
 Filters may maintain protocol state, expose typed metadata through `query()`,
-request an immediate write after processing input, and participate in graceful
-shutdown. For example, a TLS filter can expose the negotiated protocol or peer
-certificate, and a WebSocket filter can generate a close frame during
-shutdown.
+emit output while processing input, and participate in graceful shutdown. For
+example, a TLS filter can expose the negotiated protocol or peer certificate,
+and a WebSocket filter can generate a close frame during shutdown. Output a
+filter writes while processing a read is pushed toward the transport as soon as
+that processing finishes, without waiting for the application to write.
 
 [`FilterLayer`]: https://docs.rs/ntex/latest/ntex/io/trait.FilterLayer.html
 [`FilterLayer::process_read_buf`]: https://docs.rs/ntex/latest/ntex/io/trait.FilterLayer.html#tymethod.process_read_buf
@@ -444,6 +485,10 @@ connection is terminated and any undrained output is discarded.
 [`IoRef::terminate`] skips the process entirely and drops the connection
 without flushing pending output.
 
+Either way the transport observes the end of the connection as
+[`Readiness::Close`] and reports its own teardown through
+[`IoContext::stopped`], which is what allows `Io::shutdown` to resolve.
+
 [`FilterLayer::shutdown`]: https://docs.rs/ntex/latest/ntex/io/trait.FilterLayer.html#method.shutdown
 [`Io::poll_recv`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.poll_recv
 [`Io::poll_status_update`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.poll_status_update
@@ -454,6 +499,7 @@ without flushing pending output.
 [`IoRef::terminate`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.terminate
 [`IoStatusUpdate`]: https://docs.rs/ntex/latest/ntex/io/enum.IoStatusUpdate.html
 [`OnDisconnect`]: https://docs.rs/ntex/latest/ntex/io/struct.OnDisconnect.html
+[`Readiness::Close`]: https://docs.rs/ntex/latest/ntex/io/enum.Readiness.html#variant.Close
 [`RecvError`]: https://docs.rs/ntex/latest/ntex/io/enum.RecvError.html
 
 ## Testing

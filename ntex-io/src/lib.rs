@@ -59,11 +59,10 @@ pub enum Readiness {
     /// release it. For a socket this is `shutdown(SHUT_RDWR)` followed by
     /// `close()`. Any operation still in flight should be canceled.
     ///
-    /// This covers both a graceful shutdown and an immediate termination. The
-    /// task does not need to tell them apart: buffered output is drained before
-    /// this is reported on the graceful path, so in either case there is
-    /// nothing left to flush. A task that does care can still distinguish them
-    /// through [`IoContext::flags`].
+    /// This covers both a graceful shutdown and an immediate termination, and
+    /// the task does not need to tell them apart: buffered output is drained
+    /// before this is reported on the graceful path, so in either case there
+    /// is nothing left to flush.
     Close,
 }
 

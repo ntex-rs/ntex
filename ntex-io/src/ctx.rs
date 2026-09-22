@@ -62,7 +62,7 @@ impl IoContext {
     }
 
     #[doc(hidden)]
-    /// Gets the flags.
+    /// Gets the state flags. (for debug purpose only)
     pub fn flags(&self) -> Flags {
         self.0.flags()
     }
@@ -76,7 +76,7 @@ impl IoContext {
     /// still sends, so `Close` is resolved here only once the connection is
     /// terminated.
     pub fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
-        self.shutdown_filters(cx);
+        self.poll_filters_shutdown(cx);
         self.0.filter().poll_read_ready(cx)
     }
 
@@ -257,7 +257,7 @@ impl IoContext {
         }
     }
 
-    /// Provides access to the transport-facing write destination.
+    /// Provides mutable access to the transport-facing write destination.
     ///
     /// This holds the encoded bytes that are ready to be written out.
     ///
@@ -349,7 +349,26 @@ impl IoContext {
         }
     }
 
-    fn shutdown_filters(&self, cx: &mut Context<'_>) {
+    /// Drives the filter shutdown phase.
+    ///
+    /// This is polled from [`poll_read_ready`](Self::poll_read_ready), so the
+    /// read task advances the phase, and does nothing unless it is active.
+    /// Both directions stay open here: a filter may emit its closing data and
+    /// still read the peer's.
+    ///
+    /// The phase ends once every filter reports ready and its output has
+    /// reached the transport, and the transport shutdown phase begins. It is
+    /// also ended early when the filters cannot finish: after a clean read EOF,
+    /// because no further input can arrive, which is a normal close rather than
+    /// an error; when buffered input is left unconsumed, which is reported as a
+    /// blocked shutdown; and when the disconnect timeout elapses. An I/O error
+    /// terminates the connection instead.
+    ///
+    /// The deadline is kept once it has expired so that
+    /// [`poll_shutdown_deadline`](Self::poll_shutdown_deadline) sees it
+    /// expired, which is what makes one `disconnect_timeout` bound both
+    /// phases.
+    fn poll_filters_shutdown(&self, cx: &mut Context<'_>) {
         let st = &self.st();
         if !st.flags.is_shutting_down_filters() {
             return;

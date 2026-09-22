@@ -72,9 +72,12 @@ pub struct FrameReadRate {
 pub struct BufConfig {
     /// Buffered byte count at which backpressure is enabled.
     ///
-    /// This is also the capacity of a freshly allocated buffer, the growth
-    /// increment used by [`resize_min`](Self::resize_min), and the free
-    /// capacity guaranteed by [`resize`](Self::resize).
+    /// For [`IoConfig::read_buf`] this is also the capacity of a freshly
+    /// allocated buffer, the growth increment used by
+    /// [`resize_min`](Self::resize_min), and the free capacity guaranteed by
+    /// [`resize`](Self::resize). For [`IoConfig::write_buf`] it is only a
+    /// watermark; page sizing is controlled by
+    /// [`IoConfig::set_write_page_size`].
     pub high: usize,
     /// Free-capacity threshold below which [`resize`](Self::resize) grows a
     /// buffer.
@@ -83,6 +86,10 @@ pub struct BufConfig {
     /// resize produces; see [`resize`](Self::resize).
     ///
     /// Buffers whose capacity is not greater than this value are not cached.
+    ///
+    /// This applies to [`IoConfig::read_buf`] only. Output is held in
+    /// [`BytePages`](ntex_bytes::BytePages), which are neither resized nor
+    /// cached this way, so the value is unused for [`IoConfig::write_buf`].
     pub low: usize,
     /// Outstanding byte count at which active backpressure is released.
     ///
@@ -172,6 +179,9 @@ impl IoConfig {
 
     #[inline]
     /// Returns the write-buffer configuration.
+    ///
+    /// Only the backpressure watermarks apply to output; see
+    /// [`set_write_buf`](Self::set_write_buf).
     pub fn write_buf(&self) -> &BufConfig {
         &self.write_buf
     }
@@ -375,36 +385,31 @@ impl IoConfig {
         self
     }
 
-    /// Sets write-buffer watermarks and cache capacity.
+    /// Sets the write-buffer backpressure watermark.
     ///
     /// `high_watermark` enables write backpressure at this outstanding size and
     /// must be greater than zero. Backpressure is released after the
     /// outstanding size falls to half of this value. Outstanding output is the
     /// buffered output plus any output a transport has taken ownership of but
-    /// not yet written to the peer. `low_watermark` controls which empty
-    /// buffers are eligible for caching, and `cache_size` limits the number
-    /// retained per thread and configuration.
+    /// not yet written to the peer.
     ///
-    /// By default, the high watermark is approximately 16 KiB and the low
-    /// watermark is approximately 512 bytes.
+    /// Unlike [`set_read_buf`](Self::set_read_buf) this takes no low watermark
+    /// or cache size. Output is held in [`BytePages`](ntex_bytes::BytePages),
+    /// which are sized by [`set_write_page_size`](Self::set_write_page_size)
+    /// and are not served from the read-buffer cache.
+    ///
+    /// By default, the high watermark is approximately 16 KiB.
     ///
     /// # Panics
     ///
     /// Panics if `high_watermark` is zero.
     #[must_use]
-    pub fn set_write_buf(
-        mut self,
-        high_watermark: usize,
-        low_watermark: usize,
-        cache_size: usize,
-    ) -> Self {
+    pub fn set_write_buf(mut self, high_watermark: usize) -> Self {
         assert!(
             high_watermark > 0,
             "write buffer high watermark must be greater than zero"
         );
-        self.write_buf.cache_size = cache_size;
         self.write_buf.high = high_watermark;
-        self.write_buf.low = low_watermark;
         self.write_buf.half = high_watermark >> 1;
         self
     }
@@ -518,13 +523,12 @@ mod tests {
     fn buffer_configuration() {
         let cfg = IoConfig::new()
             .set_read_buf(1024, 128, 4)
-            .set_write_buf(2048, 256, 8);
+            .set_write_buf(2048);
 
         assert_eq!(cfg.read_buf().high, 1024);
         assert_eq!(cfg.read_buf().low, 128);
         assert_eq!(cfg.read_buf().half, 512);
         assert_eq!(cfg.write_buf().high, 2048);
-        assert_eq!(cfg.write_buf().low, 256);
         assert_eq!(cfg.write_buf().half, 1024);
     }
 
@@ -549,7 +553,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "write buffer high watermark must be greater than zero")]
     fn zero_write_high_watermark() {
-        let _ = IoConfig::new().set_write_buf(0, 128, 4);
+        let _ = IoConfig::new().set_write_buf(0);
     }
 
     #[test]

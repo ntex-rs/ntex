@@ -2,6 +2,9 @@
 
 ## [4.1.0] - 2026-09-22
 
+* IoConfig::set_write_buf() takes only the high watermark, the low watermark and
+  cache size were never read for output, which is held in BytePages rather than
+  cached read buffers
 * Remove Handle::notify(), FilterCtx::notify() and IoContext::notify(), nothing
   triggered that path, read readiness is derived from connection flags and every
   transition that changes it already wakes the read task

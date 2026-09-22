@@ -740,10 +740,13 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Decode codec item from incoming bytes stream.
+    /// Decodes the next item from the incoming byte stream.
     ///
-    /// Wake read task and request to read more data if data is not enough for decoding.
-    /// If error get returned this method does not register waker for later wake up action.
+    /// Returns `Poll::Pending` when the codec needs more input, after going
+    /// through [`poll_read_more`](Self::poll_read_more), which wakes the read
+    /// task and releases read backpressure unconditionally.
+    ///
+    /// An error return does not register the waker.
     pub fn poll_recv<U>(
         &self,
         codec: &U,
@@ -818,9 +821,12 @@ impl<F> Io<F> {
     #[inline]
     /// Wakes the write task and instructs it to flush data.
     ///
-    /// If `full` is true, wakes the dispatcher when all data has been flushed;
-    /// otherwise, active write backpressure is released when the outstanding
-    /// size reaches half of the configured high watermark.
+    /// A full flush waits until all output has reached the peer.
+    ///
+    /// Otherwise this returns immediately while the outstanding size is below
+    /// the configured high watermark. Reaching that watermark enables write
+    /// backpressure, and the call then waits until the outstanding size falls
+    /// to half of it.
     ///
     /// Output that a completion based transport has taken ownership of counts
     /// as outstanding until it reaches the peer, so a full flush does not
@@ -1536,7 +1542,7 @@ mod tests {
     async fn write() {
         let io = Io::new(
             IoTest::create().0,
-            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8, 4, 16)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8)),
         );
         assert!(lazy(|cx| io.poll_status_update(cx)).await.is_pending());
         assert!(io.st().dispatch_task.is_set());
@@ -1738,11 +1744,7 @@ mod tests {
 
         let io = Io::new(
             DirectWrite,
-            SharedCfg::new("SRV").add(
-                IoConfig::new()
-                    .set_write_buf_threshold(1)
-                    .set_write_buf(8, 4, 16),
-            ),
+            SharedCfg::new("SRV").add(IoConfig::new().set_write_buf_threshold(1).set_write_buf(8)),
         );
 
         io.encode_slice(BIN2).unwrap();
@@ -1832,7 +1834,7 @@ mod tests {
 
         let io = Io::new(
             server,
-            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(16, 8, 12)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(16)),
         );
         assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
         assert!(io.flags().is_write_paused());
@@ -1862,7 +1864,7 @@ mod tests {
     async fn partial_flush_keeps_write_backpressure_until_half_watermark() {
         let io = Io::new(
             IoTest::create().0,
-            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8, 4, 16)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8)),
         );
         let ctx = IoContext::new(io.get_ref());
 
@@ -1919,7 +1921,7 @@ mod tests {
         // back-pressure in place.
         let io = Io::new(
             IoTest::create().0,
-            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8, 4, 16)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8)),
         );
         let ctx = IoContext::new(io.get_ref());
 
@@ -2564,7 +2566,7 @@ mod tests {
 
         let io = Io::new(
             IoTest::create().0,
-            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8, 4, 16)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8)),
         );
         let st = io.st();
         assert!(lazy(|cx| io.poll_status_update(cx)).await.is_pending());

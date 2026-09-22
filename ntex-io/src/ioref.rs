@@ -22,7 +22,7 @@ impl IoRef {
     }
 
     #[doc(hidden)]
-    /// Gets the current state flags.
+    /// Gets the state flags. (for debug purpose only)
     pub fn flags(&self) -> Flags {
         self.0.flags.clone()
     }

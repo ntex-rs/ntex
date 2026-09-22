@@ -1391,7 +1391,7 @@ mod tests {
                     .add(
                         nio::IoConfig::new()
                             .set_read_buf(15 * 1024, 1024, 16)
-                            .set_write_buf(15 * 1024, 1024, 16),
+                            .set_write_buf(15 * 1024),
                     )
                     .add(HttpServiceConfig::new().set_max_buf_size(32 * 1024)),
             );
