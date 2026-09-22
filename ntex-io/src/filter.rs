@@ -57,9 +57,9 @@ pub trait Filter: 'static {
 
     /// Checks whether transport read operations may proceed.
     ///
-    /// Reads continue throughout a graceful shutdown, first so that filters can
-    /// complete theirs, then to drain and discard whatever the peer still
-    /// sends, so [`Readiness::Close`] is resolved only once the connection is
+    /// Reads continue through the filter shutdown phase so that filters can
+    /// complete theirs, and are paused for the transport shutdown phase, so
+    /// [`Readiness::Close`] is resolved only once the connection is
     /// terminated.
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness>;
 
