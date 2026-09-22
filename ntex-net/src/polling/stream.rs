@@ -130,6 +130,11 @@ impl Handler for StreamOpsHandler {
             );
 
             if ev.readable {
+                // A single read per notification, unlike the other backends
+                // which loop until the io layer stops them. `BufConfig::resize`
+                // hands the read a chunk of at least `high` bytes, and read
+                // back-pressure engages at `high`, so one read can already
+                // reach the watermark; a second one would return `Pause`.
                 if io.read() == IoTaskStatus::Io {
                     renew.readable = true;
                     io.flags.insert(Flags::RD);
