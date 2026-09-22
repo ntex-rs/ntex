@@ -166,6 +166,15 @@ impl ReadOperation {
                     rd.ctx.release_read_buf(buf, Poll::Ready(Ok(size)))
                 }
                 Err(err) if err.raw_os_error() == Some(ERROR_OPERATION_ABORTED as _) => {
+                    // A cancelled recv is not expected to have transferred anything,
+                    // but the kernel reports the transfer count regardless of status,
+                    // so keep whatever it did deliver instead of silently dropping it.
+                    let size = rd.overlapped.base.InternalHigh;
+                    debug_assert_eq!(size, 0, "cancelled recv reported {size} transferred bytes");
+                    if size != 0 {
+                        // SAFETY: windows tells us how many bytes it read
+                        unsafe { buf.advance_mut(size) };
+                    }
                     rd.ctx.release_read_buf(buf, Poll::Pending)
                 }
                 Err(err) => rd.ctx.release_read_buf(buf, Poll::Ready(Err(err))),
