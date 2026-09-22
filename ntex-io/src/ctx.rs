@@ -9,9 +9,29 @@ use crate::{Flags, Id, IoRef, IoTaskStatus, Readiness, io::IoState};
 ///
 /// Transport implementations obtain buffers from this context, perform
 /// nonblocking I/O, and return completion through
-/// [`update_read_status`](Self::update_read_status) and
+/// [`release_read_buf`](Self::release_read_buf) and
 /// [`update_write_status`](Self::update_write_status). Their return value tells
 /// the task whether to continue, pause until notified, or stop.
+///
+/// # Shutdown
+///
+/// A transport task runs until [`poll_read_ready`](Self::poll_read_ready) or
+/// [`poll_write_ready`](Self::poll_write_ready) reports [`Readiness::Close`],
+/// or until a status update returns [`IoTaskStatus::Stop`]. All of those imply
+/// that the connection is already closing or closed.
+///
+/// Graceful shutdown runs in two phases. In the first the filters shut down
+/// while both directions stay open. In the second, buffered output is drained
+/// into the transport while the read side is paused;
+/// [`Readiness::Close`] is reported only once nothing is left to write. A
+/// single shutdown timeout bounds both phases, and terminates the connection
+/// if it elapses.
+///
+/// So by the time the loop exits there is nothing left to drain, whether the
+/// connection was shut down gracefully or terminated. A task must never attempt
+/// a final flush on the way out; it should close both directions of the
+/// transport immediately and report the outcome through
+/// [`stopped`](Self::stopped).
 pub struct IoContext(IoRef);
 
 impl fmt::Debug for IoContext {
@@ -29,8 +49,8 @@ impl IoContext {
         &self.0.0
     }
 
-    #[doc(hidden)]
     #[inline]
+    /// Gets the ID.
     pub fn id(&self) -> Id {
         self.0.id()
     }
@@ -42,25 +62,42 @@ impl IoContext {
     }
 
     #[doc(hidden)]
-    /// Gets the flags.
+    /// Gets the state flags. (for debug purpose only)
     pub fn flags(&self) -> Flags {
         self.0.flags()
     }
 
     #[inline]
     /// Checks readiness for read operations.
+    ///
+    /// Resolves to [`Readiness::Ready`] or [`Readiness::Close`], or stays
+    /// `Pending`. Reads continue through the filter shutdown phase so that
+    /// filters can complete theirs, and are paused for the transport shutdown
+    /// phase, so `Close` is resolved here only once the connection is
+    /// terminated.
     pub fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
-        self.shutdown_filters(cx);
+        self.poll_filters_shutdown(cx);
         self.0.filter().poll_read_ready(cx)
     }
 
     #[inline]
     /// Checks readiness for write operations.
+    ///
+    /// Resolves to [`Readiness::Ready`] or [`Readiness::Close`], or stays
+    /// `Pending`. Unlike the read path this reports `Close` at the end of a
+    /// graceful shutdown as well, once buffered output has been drained, so the
+    /// task must not flush again.
     pub fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
+        self.poll_shutdown_deadline(cx);
         self.0.filter().poll_write_ready(cx)
     }
 
-    /// Stops the I/O stream.
+    /// Force-terminates the I/O stream.
+    ///
+    /// This is the immediate path, not a graceful shutdown: pending
+    /// application work is not drained. Call
+    /// [`stopped`](Self::stopped) afterwards, once transport teardown has
+    /// actually finished.
     pub fn stop(&self, e: Option<io::Error>) {
         self.st().terminate_connection(e);
     }
@@ -70,22 +107,23 @@ impl IoContext {
         self.st().stop_connection(e);
     }
 
-    /// Checks if the I/O stream is stopped.
-    pub fn is_stopped(&self) -> bool {
-        self.st().flags.is_closed()
-    }
-
     /// Takes a buffer for the next transport read.
     ///
-    /// The returned buffer must be passed back exactly once through
-    /// [`update_read_status`](Self::update_read_status), even when the read
+    /// The returned buffer must be released exactly once through
+    /// [`release_read_buf`](Self::release_read_buf), even when the read
     /// fails or would otherwise stop the task.
-    pub fn get_read_buf(&self) -> BytesMut {
+    ///
+    /// This hands out a buffer of its own while the dispatcher still has input
+    /// to consume, because the read buffer is moved out of the io state until
+    /// it is released and the dispatcher would not find it. A transport whose
+    /// read completes without suspending can avoid that with
+    /// [`with_read_buf`](Self::with_read_buf).
+    pub fn take_read_buf(&self) -> BytesMut {
         let st = self.st();
 
         if st.flags.is_read_ready() {
-            // The dispatcher has not consumed the read buffer yet,
-            // so we must not modify it.
+            // The dispatcher has not consumed the read buffer yet, so it must
+            // stay in place and the read goes to a buffer of its own.
             st.get_read_buf()
         } else if let Some(mut buf) = st.buffer.get_read_buf() {
             self.0.resize_read_buf(&mut buf);
@@ -100,7 +138,10 @@ impl IoContext {
         self.0.resize_read_buf(buf);
     }
 
-    /// Returns a transport read buffer and reports the read result.
+    /// Releases a transport read buffer and reports the read result.
+    ///
+    /// This is the counterpart of [`take_read_buf`](Self::take_read_buf); every
+    /// buffer it hands out must come back here exactly once.
     ///
     /// `Poll::Ready(Ok(n))` reports that `n` bytes were appended to `buf`.
     /// Zero marks the transport read side as closed and invokes the read filter
@@ -113,11 +154,7 @@ impl IoContext {
     ///
     /// The returned [`IoTaskStatus`] instructs the read task to continue
     /// immediately, pause until notified, or stop.
-    pub fn update_read_status(
-        &self,
-        buf: BytesMut,
-        status: Poll<io::Result<usize>>,
-    ) -> IoTaskStatus {
+    pub fn release_read_buf(&self, buf: BytesMut, status: Poll<io::Result<usize>>) -> IoTaskStatus {
         let st = self.st();
         let orig = st.buffer.read_dst_size();
 
@@ -128,62 +165,142 @@ impl IoContext {
             st.flags
         );
 
-        // release read buffer
-        st.buffer.set_read_buf(buf, self.0.cfg());
+        // Transport shutdown phase, the filters are shut down and the
+        // connection is about to be closed. The read task is paused, but a read
+        // issued before the transition can still complete here; its input is
+        // discarded because nothing can consume it anymore.
+        if st.flags.is_stopping() {
+            let mut buf = buf;
+            buf.clear();
+            st.buffer.set_read_buf(buf, self.0.cfg());
+            stopping_read_status(st, &status)
+        } else {
+            // release read buffer
+            st.buffer.set_read_buf(buf, self.0.cfg());
+
+            self.process_read_status(orig, status)
+        }
+    }
+
+    /// Reads into the read buffer in place and reports the read result.
+    ///
+    /// This is the counterpart of [`take_read_buf`](Self::take_read_buf) and
+    /// [`release_read_buf`](Self::release_read_buf) for a transport whose
+    /// read completes without suspending. `f` reads into the buffer it is
+    /// given and reports the same status `release_read_buf` takes, with the
+    /// same meaning.
+    ///
+    /// The buffer is not moved out of the io state for the duration of the
+    /// call, so no temporary buffer is taken from the pool and no append is
+    /// needed to put the result back. A transport that keeps the buffer across
+    /// a suspension point cannot use this: the buffer would be missing while
+    /// the dispatcher looks for input, so it must take one of its own through
+    /// `take_read_buf` instead.
+    ///
+    /// `f` must not read from this io again, a nested read terminates the
+    /// connection.
+    pub fn with_read_buf<F>(&self, f: F) -> IoTaskStatus
+    where
+        F: FnOnce(&mut BytesMut) -> Poll<io::Result<usize>>,
+    {
+        let st = self.st();
+        let orig = st.buffer.read_dst_size();
+        let stopping = st.flags.is_stopping();
+
+        let status = st.buffer.with_read_src(&self.0, |buf| {
+            self.0.resize_read_buf(buf);
+            let status = f(buf);
+            if stopping {
+                // the filters are done, nothing can consume this input anymore
+                buf.clear();
+            }
+            status
+        });
+
+        #[cfg(feature = "trace")]
+        log::trace!(
+            "{}: rd-status = {status:?} orig:{orig:?} flags:{:?}",
+            st.tag(),
+            st.flags
+        );
+
+        if stopping {
+            stopping_read_status(st, &status)
+        } else {
+            self.process_read_status(orig, status)
+        }
+    }
+
+    /// Processes input that reached the transport-facing read buffer.
+    ///
+    /// `orig` is the size of the destination read buffer before the read.
+    fn process_read_status(&self, orig: usize, status: Poll<io::Result<usize>>) -> IoTaskStatus {
+        let st = self.st();
 
         // process read buf
         let result = match status {
             Poll::Pending => Ok(()),
             Poll::Ready(status) => status.and_then(|nbytes| {
                 if nbytes == 0 {
+                    if st.flags.is_read_eof() {
+                        // A clean eof is reported to the filter chain exactly
+                        // once, no matter how often the transport reports it.
+                        return Ok(());
+                    }
                     st.flags.set_read_eof();
                     st.wake_dispatch_task();
                 }
 
-                st.buffer
-                    .process_read_buf(&self.0, nbytes)
-                    .and_then(|status| {
-                        let size = st.buffer.read_dst_size();
+                st.buffer.process_read_buf(&self.0).and_then(|status| {
+                    let size = st.buffer.read_dst_size();
 
-                        // The destination read buffer has new data, wake up the dispatcher
-                        if size > orig {
-                            if st.is_rd_backpressure_needed(size) {
-                                log::trace!("{}: Read buf({size}), enable back-pressure", st.tag());
-                                st.flags.set_read_ready_and_backpressure();
-                            } else {
-                                st.flags.set_read_ready();
-                            }
-                            #[cfg(feature = "trace")]
-                            log::trace!("{}: New {size} bytes available", st.tag());
-                            st.wake_dispatch_task();
+                    // The destination read buffer has new data, wake up the dispatcher
+                    if size > orig {
+                        if st.is_rd_backpressure_needed(size) {
+                            log::trace!("{}: Read buf({size}), enable back-pressure", st.tag());
+                            st.flags.set_read_ready_and_backpressure();
+                        } else {
+                            st.flags.set_read_ready();
                         }
+                        #[cfg(feature = "trace")]
+                        log::trace!("{}: New {size} bytes available", st.tag());
+                        st.wake_dispatch_task();
+                    }
 
-                        if st.flags.is_read_notify() {
-                            // If the "notify" flag is set, we must wake the
-                            // dispatcher task whenever data is read from the source.
-                            st.wake_dispatch_task();
-                            st.flags.set_read_notifed();
-                        }
+                    if st.flags.is_read_notify() {
+                        // If the "notify" flag is set, we must wake the
+                        // dispatcher task whenever data is read from the source.
+                        st.wake_dispatch_task();
+                        st.flags.set_read_notifed();
+                    }
 
-                        // Check if the filter wrote data during buffer processing
-                        if status.wants_write {
-                            st.buffer.process_write_buf_force(&self.0)?;
-                            self.0.consolidate_write_state(false)?;
-                        }
-
-                        // Check whether the filter notifies about readiness changes
-                        if status.notify {
-                            self.0.call_notify();
-                        }
-                        Ok(())
-                    })
+                    // A filter may write data while processing reads, for
+                    // example a TLS handshake record. Such output can land in
+                    // an intermediate buffer that `write_buf_size()` does not
+                    // account for, so the write chain is forced from the
+                    // outermost layer to move it to the transport.
+                    if status.wants_write {
+                        st.buffer.process_write_buf_force(&self.0)?;
+                        self.0.consolidate_write_state(false)?;
+                    }
+                    Ok(())
+                })
             }),
         };
 
         if let Err(err) = result {
-            st.terminate_connection(Some(err));
-            IoTaskStatus::Stop
-        } else if st.flags.is_closed() {
+            // A read failure while the filters are shutting down does not
+            // terminate the connection: the filter handshake cannot complete,
+            // but buffered output is still drained by the transport shutdown
+            // phase.
+            if st.flags.is_stopping_filters() {
+                stop_filters(st, Some(err));
+                IoTaskStatus::Pause
+            } else {
+                st.terminate_connection(Some(err));
+                IoTaskStatus::Stop
+            }
+        } else if st.flags.is_aborted() {
             IoTaskStatus::Stop
         } else if st.flags.is_read_eof() || st.flags.is_read_paused_or_backpressure() {
             IoTaskStatus::Pause
@@ -192,65 +309,81 @@ impl IoContext {
         }
     }
 
-    /// Provides access to bytes ready for the transport to write.
+    /// Provides mutable access to the transport-facing write destination.
+    ///
+    /// This holds the encoded bytes that are ready to be written out.
     ///
     /// Pending filter output is processed before `f` is invoked. The transport
-    /// should remove only bytes it successfully writes and then report the
-    /// result with [`update_write_status`](Self::update_write_status).
-    pub fn with_write_buf<F, R>(&self, f: F) -> R
+    /// may write bytes out directly, or take ownership of pages and write them
+    /// later; any page it removes is counted as in-flight output until it is
+    /// either returned to this buffer or reported as written through
+    /// [`update_write_status`](Self::update_write_status).
+    pub fn with_write_dst<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytePages) -> R,
     {
+        let st = self.st();
+
         // Write buffer processing may be delayed
-        if let Err(e) = self.st().buffer.process_write_buf(&self.0) {
-            self.st().terminate_connection(Some(e));
+        if let Err(e) = st.buffer.process_write_buf(&self.0) {
+            st.terminate_connection(Some(e));
         }
 
-        self.st().buffer.with_write_dst(|buffer| f(buffer))
+        let before = st.buffer.write_buf_size();
+        let result = st.buffer.with_write_dst(|buffer| f(buffer));
+        st.track_wr_inflight(before, st.buffer.write_buf_size());
+
+        result
     }
 
     /// Updates the write status.
     ///
-    /// `Ok(true)` indicates that one or more bytes were successfully written
-    /// to the transport; `Ok(false)` indicates no write progress. An error
-    /// terminates the connection. The returned [`IoTaskStatus`] instructs the
-    /// write task to continue immediately, pause until notified, or stop.
-    pub fn update_write_status(&self, status: io::Result<bool>) -> IoTaskStatus {
+    /// `Ok(n)` reports that the write attempt completed without error and that
+    /// `n` bytes reached the peer; `n` is zero when the attempt moved nothing.
+    /// Any page the transport is still holding stays counted as outstanding
+    /// output, so it must either be returned to the write buffer or reported
+    /// here. An error terminates the connection. The returned
+    /// [`IoTaskStatus`] instructs the write task to continue, pause until
+    /// notified, or stop.
+    pub fn update_write_status(&self, status: io::Result<usize>) -> IoTaskStatus {
         let st = &self.st();
 
         #[cfg(feature = "trace")]
         log::trace!(
-            "{}: write-status == {status:?} buf:{} flags:{:?}",
+            "{}: write-status == {status:?} buf:{} inflight:{} flags:{:?}",
             st.tag(),
             st.buffer.write_buf_size(),
+            st.wr_inflight.get(),
             st.flags
         );
 
         match status {
             Ok(written) => {
+                st.wr_inflight_written(written);
+
                 let len = st.buffer.write_buf_size();
+                let outstanding = st.write_outstanding();
+
                 // Full flush is active
                 if st.flags.is_write_flush() {
-                    // The write buffer must be fully written
-                    if len == 0 {
+                    // All output must reach the peer, including in-flight pages
+                    if outstanding == 0 {
                         st.wake_dispatch_task();
                     }
-                } else if st.flags.is_wr_backpressure() && st.should_disable_wr_backpressure(len) {
-                    // Write backpressure is active and write buffer is below threshold
+                } else if st.flags.is_wr_backpressure()
+                    && st.should_disable_wr_backpressure(outstanding)
+                {
+                    // Write backpressure is active and outstanding output is
+                    // below the threshold
                     st.wake_dispatch_task();
                 }
 
-                // Write notify is enabled
-                if written && st.flags.is_write_notify() {
-                    st.flags.unset_write_notify();
-                    st.wake_read_task();
-                    st.wake_write_task();
-                }
-
-                if st.flags.is_closed() {
+                if st.flags.is_aborted() {
                     IoTaskStatus::Stop
                 } else if len == 0 {
-                    // All data has been written, pause the write task.
+                    // Nothing left to submit, pause the write task. In-flight
+                    // pages are not actionable here, their completion wakes
+                    // the task again.
                     st.flags.set_write_paused();
                     if st.flags.is_stopping_filters() {
                         st.wake_read_task();
@@ -268,32 +401,26 @@ impl IoContext {
         }
     }
 
-    /// Polls transport-task shutdown state.
+    /// Drives the filter shutdown phase.
     ///
-    /// If `flush` is `true`, this first waits until the write task is paused,
-    /// indicating that currently buffered output has been handled. It then
-    /// waits for the connection to close. The context's waker is registered
-    /// while pending.
-    pub fn shutdown(&self, flush: bool, cx: &mut Context<'_>) -> Poll<()> {
-        let st = self.st();
-        if flush && !st.flags.is_stopping() {
-            if st.flags.is_write_paused() {
-                return Poll::Ready(());
-            }
-            st.flags.set_write_notify();
-            st.read_task.register(cx.waker());
-            st.write_task.register(cx.waker());
-            Poll::Pending
-        } else if !st.flags.is_closed() {
-            st.read_task.register(cx.waker());
-            st.write_task.register(cx.waker());
-            Poll::Pending
-        } else {
-            Poll::Ready(())
-        }
-    }
-
-    fn shutdown_filters(&self, cx: &mut Context<'_>) {
+    /// This is polled from [`poll_read_ready`](Self::poll_read_ready), so the
+    /// read task advances the phase, and does nothing unless it is active.
+    /// Both directions stay open here: a filter may emit its closing data and
+    /// still read the peer's.
+    ///
+    /// The phase ends once every filter reports ready and its output has
+    /// reached the transport, and the transport shutdown phase begins. It is
+    /// also ended early when the filters cannot finish: after a clean read EOF,
+    /// because no further input can arrive, which is a normal close rather than
+    /// an error; when buffered input is left unconsumed, which is reported as a
+    /// blocked shutdown; and when the shutdown timeout elapses. An I/O error
+    /// terminates the connection instead.
+    ///
+    /// The deadline is kept once it has expired so that
+    /// [`poll_shutdown_deadline`](Self::poll_shutdown_deadline) sees it
+    /// expired, which is what makes one `shutdown_timeout` bound both
+    /// phases.
+    fn poll_filters_shutdown(&self, cx: &mut Context<'_>) {
         let st = &self.st();
         if !st.flags.is_shutting_down_filters() {
             return;
@@ -312,46 +439,140 @@ impl IoContext {
             return;
         }
 
+        // all pending output has reached the transport
+        let flushed = st.flags.is_write_paused() && !st.flags.is_wr_send_scheduled();
+
         #[cfg(feature = "trace")]
         log::trace!(
-            "{}: shutdown filters, done:{ready:?} wr-buf:{:?}, flags:{:?}",
+            "{}: shutdown filters, done:{ready:?} flushed:{flushed:?} wr-buf:{:?}, flags:{:?}",
             st.tag(),
             st.buffer.write_buf_size(),
             st.flags,
         );
 
         // filters are shutdown and write task is paused
-        if ready && st.flags.is_write_paused() && !st.flags.is_wr_send_scheduled() {
+        if ready && flushed {
             st.filters_stopped();
-        } else if !ready && (st.flags.is_read_paused() || st.flags.is_read_ready_and_backpressure())
-        {
-            // if read buffer is not consumed it is unlikely
-            // that filter will properly complete shutdown
-            st.set_shutdown_error(io::Error::other(
-                "filter shutdown blocked by unread buffered data",
-            ));
-            st.filters_stopped();
-        } else if st.cfg.disconnect_timeout().non_zero() {
+            return;
+        }
+
+        // After a clean read EOF no further input can arrive, so a filter that
+        // is waiting for the peer can never finish. The peer closing first is
+        // a normal close, so this is not reported as an error.
+        let eof = !ready && st.flags.is_read_eof();
+
+        // If the read buffer is not consumed it is unlikely that the filter
+        // will ever complete its shutdown.
+        let blocked = !ready
+            && !eof
+            && (st.flags.is_read_paused() || st.flags.is_read_ready_and_backpressure());
+
+        // The filter shutdown cannot complete. Move on to the transport
+        // shutdown phase, which drains whatever output has been produced so far
+        // and then closes the connection.
+        if eof || blocked {
+            if eof {
+                log::debug!("{}: Peer closed before filter shutdown completed", st.tag());
+            }
+            stop_filters(st, blocked.then(blocked_err));
+            return;
+        }
+
+        if st.cfg.shutdown_timeout().non_zero() {
             // filter shutdown timeout
             let timeout = st
                 .shutdown_timeout
                 .take()
-                .unwrap_or_else(|| sleep(st.cfg.disconnect_timeout()));
+                .unwrap_or_else(|| sleep(st.cfg.shutdown_timeout()));
             if timeout.poll_elapsed(cx).is_ready() {
-                st.set_shutdown_error(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "filter shutdown timed out",
-                ));
-                st.filters_stopped();
-            } else {
-                st.shutdown_timeout.set(Some(timeout));
+                stop_filters(
+                    st,
+                    Some(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "filter shutdown timed out",
+                    )),
+                );
             }
+            // the deadline is put back even once it has elapsed, so that the
+            // transport shutdown phase sees it expired instead of starting a
+            // second one
+            st.shutdown_timeout.set(Some(timeout));
         }
     }
 
-    /// Notifies read tasks.
-    pub fn notify(&self) {
-        self.0.0.wake_read_task();
+    /// Polls the shutdown deadline during the transport shutdown phase.
+    ///
+    /// The deadline is created when filter shutdown starts and is not reset
+    /// here, so a single `shutdown_timeout` bounds both shutdown phases. When
+    /// it elapses the connection is terminated and any output that has not
+    /// reached the transport is lost.
+    fn poll_shutdown_deadline(&self, cx: &mut Context<'_>) {
+        let st = &self.st();
+        if !st.flags.is_stopping() || !st.cfg.shutdown_timeout().non_zero() {
+            return;
+        }
+
+        // Nothing is left to drain, so the connection closes cleanly on the
+        // next readiness check and the deadline does not apply. Without this
+        // the shutdown would be reported as timed out whenever the filter
+        // phase happened to consume the whole deadline.
+        if st.write_outstanding() == 0 {
+            return;
+        }
+
+        let timeout = st
+            .shutdown_timeout
+            .take()
+            .unwrap_or_else(|| sleep(st.cfg.shutdown_timeout()));
+        if timeout.poll_elapsed(cx).is_ready() {
+            let len = st.write_outstanding();
+            if len != 0 {
+                log::warn!(
+                    "{}: Shutdown timed out, discarding {len} bytes of buffered output",
+                    st.tag()
+                );
+            }
+            st.terminate_connection(Some(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "io shutdown timed out",
+            )));
+        } else {
+            st.shutdown_timeout.set(Some(timeout));
+        }
+    }
+}
+
+fn blocked_err() -> io::Error {
+    io::Error::other("filter shutdown blocked by unread buffered data")
+}
+
+/// Leaves the filter shutdown phase after an incomplete shutdown.
+///
+/// Output that has not reached the transport is not lost: the transport
+/// shutdown phase drains it before closing the connection.
+///
+/// The error is recorded here rather than when the failure is first
+/// detected: while an error is set, `IoRef::consolidate_write_state()`
+/// short-circuits, which would stop the write buffer from draining.
+fn stop_filters(st: &IoState, err: Option<io::Error>) {
+    if let Some(err) = err {
+        st.set_shutdown_error(err);
+    }
+    st.filters_stopped();
+}
+
+/// Reports a read that completed during the transport shutdown phase.
+///
+/// Neither a clean eof nor an error terminates the connection: the write
+/// side keeps draining until it completes or the shutdown deadline elapses.
+fn stopping_read_status(st: &IoState, status: &Poll<io::Result<usize>>) -> IoTaskStatus {
+    match status {
+        Poll::Ready(Ok(n)) if *n != 0 => IoTaskStatus::Io,
+        Poll::Ready(_) => {
+            st.flags.set_read_eof();
+            IoTaskStatus::Pause
+        }
+        Poll::Pending => IoTaskStatus::Pause,
     }
 }
 
@@ -386,17 +607,15 @@ mod tests {
 
         assert!(lazy(|cx| state.poll_read_more(cx)).await.is_pending());
         assert_ne!(
-            ctx.update_read_status(ctx.get_read_buf(), Poll::Pending),
+            ctx.release_read_buf(ctx.take_read_buf(), Poll::Pending),
             IoTaskStatus::Stop
         );
-        assert!(!ctx.is_stopped());
         assert!(lazy(|cx| state.poll_read_more(cx)).await.is_pending());
 
         assert_eq!(
-            ctx.update_read_status(ctx.get_read_buf(), Poll::Ready(Ok(0))),
+            ctx.release_read_buf(ctx.take_read_buf(), Poll::Ready(Ok(0))),
             IoTaskStatus::Pause
         );
-        assert!(!ctx.is_stopped());
         assert!(matches!(
             lazy(|cx| state.poll_read_more(cx)).await,
             Poll::Ready(Ok(None))
@@ -420,6 +639,70 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn eof_reports_available_input_once() {
+        let (_, server) = IoTest::create();
+        let state = Io::from(server);
+        let ctx = IoContext::new(state.get_ref());
+
+        // data arrives, then a clean eof
+        ctx.release_read_buf(BytesMut::copy_from_slice(b"12345"), Poll::Ready(Ok(5)));
+        ctx.release_read_buf(ctx.take_read_buf(), Poll::Ready(Ok(0)));
+
+        // the buffered input is reported once
+        assert!(matches!(
+            lazy(|cx| state.poll_read_more(cx)).await,
+            Poll::Ready(Ok(Some(())))
+        ));
+
+        // accessing the buffer marks the input as reported
+        assert_eq!(state.with_read_dst(|b| b.len()), 5);
+        assert!(matches!(
+            lazy(|cx| state.poll_read_more(cx)).await,
+            Poll::Ready(Ok(None))
+        ));
+
+        // "no further input" does not mean the read buffer is empty, the
+        // remaining bytes are still decodable
+        assert_eq!(state.with_read_dst(BytesMut::take), b"12345");
+    }
+
+    #[ntex::test]
+    async fn shutdown_keeps_unconsumed_input_visible() {
+        let (_, server) = IoTest::create();
+        let state = Io::from(server);
+        let ctx = IoContext::new(state.get_ref());
+
+        // input arrives but the dispatcher has not consumed it yet
+        ctx.release_read_buf(BytesMut::copy_from_slice(b"12345"), Poll::Ready(Ok(5)));
+        assert!(ctx.flags().is_read_ready());
+
+        // starting a shutdown must not discard the "input available" signal
+        assert!(lazy(|cx| state.poll_shutdown(cx)).await.is_pending());
+        assert!(ctx.flags().is_read_ready());
+
+        // so the read task is handed a fresh buffer instead of the one the
+        // dispatcher still has to decode
+        assert!(ctx.take_read_buf().is_empty());
+        assert_eq!(state.with_read_dst(BytesMut::take), b"12345");
+    }
+
+    #[ntex::test]
+    async fn clean_eof_is_processed_by_filters_once() {
+        let (_, server) = IoTest::create();
+        let state = Io::from(server).add_filter(FinishOnEof);
+        let ctx = IoContext::new(state.get_ref());
+
+        for _ in 0..3 {
+            assert_eq!(
+                ctx.release_read_buf(ctx.take_read_buf(), Poll::Ready(Ok(0))),
+                IoTaskStatus::Pause
+            );
+            assert!(state.is_read_eof());
+        }
+        assert_eq!(state.with_read_dst(BytesMut::take), b"final");
+    }
+
+    #[ntex::test]
     async fn clean_eof_is_processed_by_filters() {
         let (_, server) = IoTest::create();
         let state = Io::from(server).add_filter(FinishOnEof);
@@ -427,7 +710,7 @@ mod tests {
 
         assert!(lazy(|cx| state.poll_read_notify(cx)).await.is_pending());
         assert_eq!(
-            ctx.update_read_status(ctx.get_read_buf(), Poll::Ready(Ok(0))),
+            ctx.release_read_buf(ctx.take_read_buf(), Poll::Ready(Ok(0))),
             IoTaskStatus::Pause
         );
         assert!(state.is_read_eof());
@@ -439,7 +722,7 @@ mod tests {
             lazy(|cx| state.poll_read_notify(cx)).await,
             Poll::Ready(Ok(None))
         ));
-        assert_eq!(state.with_read_buf(BytesMut::take), b"final");
+        assert_eq!(state.with_read_dst(BytesMut::take), b"final");
         assert!(matches!(
             lazy(|cx| state.poll_read_more(cx)).await,
             Poll::Ready(Ok(None))
@@ -473,7 +756,7 @@ mod tests {
         let ctx = IoContext::new(state.get_ref());
 
         assert_eq!(
-            ctx.update_read_status(ctx.get_read_buf(), Poll::Ready(Ok(0))),
+            ctx.release_read_buf(ctx.take_read_buf(), Poll::Ready(Ok(0))),
             IoTaskStatus::Stop
         );
         assert!(state.is_read_eof());

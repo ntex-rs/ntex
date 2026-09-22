@@ -1,10 +1,35 @@
 # Changes
 
-## [4.1.0] - 2026-09-21
+## [4.1.0] - 2026-09-23
+
+* Read into the io context buffer in place in the tokio and polling backends,
+  they read synchronously so they no longer need a detached buffer
+
+* Discard the socket receive queue before closing a connection, closing a
+  socket with unread input aborts it with an RST and loses the output that the
+  graceful shutdown just drained. The io-uring backend leaves this to a recv
+  that is already in flight rather than racing it
+
+* Report the number of bytes written to the peer from every backend, so that
+  output a completion based backend still owns is accounted for as outstanding
+
+* Return output that did not reach the peer back to the write buffer in the
+  io-uring backend, a partial send silently dropped the rest of the page
+
+* Close both directions of the connection at the end of a graceful shutdown in
+  the tokio and compio backends, previously they only shut down the write
+  direction
+
+* Fix compio backend hang, the io task could stop without reporting completion
+  to the io context if the write buffer was empty
+
+* Drop unreachable IoContext::shutdown() step from io task shutdown
 
 * Support eager writes with the IOCP backend
 
-* Update IoContext::update_read_status() api usage
+* Update IoContext::take_read_buf()/release_read_buf() api usage
+
+* Update IoContext::update_write_status() api usage
 
 * Produce io::ErrorKind::WriteZero for backend impl
 

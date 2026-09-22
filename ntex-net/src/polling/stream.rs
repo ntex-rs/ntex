@@ -171,9 +171,7 @@ impl Handler for StreamOpsHandler {
         self.inner.with(|streams| {
             if let Some(io) = streams.get_mut(id) {
                 log::trace!("{}: {:?}-Failed err({err:?})", io.tag(), io.fd());
-                if !io.ctx.is_stopped() {
-                    io.ctx.stop(Some(err));
-                }
+                io.ctx.stop(Some(err));
             }
         });
     }
@@ -234,9 +232,7 @@ impl StreamOpsInner {
         let fd = item.fd();
         log::trace!("{}: {fd:?}-Close flags: {:?}", item.tag(), item.flags);
 
-        if !item.ctx.is_stopped() {
-            item.ctx.stop(None);
-        }
+        item.ctx.stop(None);
         self.api.detach(fd, id);
 
         if item.flags.contains(Flags::DROPPED_SEC) {
@@ -282,9 +278,7 @@ impl StreamOpsInner {
                     IdType::Stream(id) => self.drop_stream(id, &mut streams),
                     IdType::Weak(id) => StreamOpsInner::drop_weak_stream(id, &mut streams),
                     IdType::Write(id) => {
-                        if let Some(item) = streams.get_mut(id as usize)
-                            && !item.ctx.is_stopped()
-                        {
+                        if let Some(item) = streams.get_mut(id as usize) {
                             item.write();
                         }
                     }
@@ -363,6 +357,7 @@ impl StreamCtl {
                 let item = &mut streams[self.id as usize];
                 let fd = item.fd();
                 ntex_rt::spawn(ntex_rt::spawn_blocking(move || {
+                    crate::helpers::drain_raw_socket(fd);
                     syscall!(libc::shutdown(fd, libc::SHUT_RDWR)).map(|_| ())
                 }))
             })
@@ -424,7 +419,7 @@ impl StreamItem {
     }
 
     fn write(&mut self) -> IoTaskStatus {
-        let res = self.ctx.with_write_buf(|wrt| {
+        let res = self.ctx.with_write_dst(|wrt| {
             let mut pages: [Option<BytePage>; MAX_WRITE_ITEMS] = [
                 None, None, None, None, None, None, None, None, None, None, None, None, None, None,
                 None, None,
@@ -483,11 +478,11 @@ impl StreamItem {
                         io::ErrorKind::WriteZero,
                         "failed to write frame to transport",
                     )),
-                    Poll::Ready(_) => Ok(true),
-                    Poll::Pending => Ok(false),
+                    Poll::Ready(n) => Ok(n),
+                    Poll::Pending => Ok(0),
                 }
             } else {
-                Ok(false)
+                Ok(0)
             }
         });
         self.ctx.update_write_status(res)
@@ -495,24 +490,24 @@ impl StreamItem {
 
     fn read(&mut self) -> IoTaskStatus {
         let fd = self.fd();
-        let mut buf = self.ctx.get_read_buf();
-
-        let chunk = buf.chunk_mut();
-        let chunk_len = chunk.len();
-        let chunk_ptr = chunk.as_mut_ptr();
-
-        let result = syscall!(break libc::read(fd, chunk_ptr.cast(), chunk_len));
         #[cfg(feature = "trace")]
-        log::trace!("{}: {fd:?}-Rdt sz() = {result:?}", self.tag());
+        let tag = self.tag();
 
-        match result {
-            Poll::Ready(Ok(0)) => self.ctx.update_read_status(buf, Poll::Ready(Ok(0))),
-            Poll::Ready(Ok(n)) => {
+        self.ctx.with_read_buf(|buf| {
+            let chunk = buf.chunk_mut();
+            let chunk_len = chunk.len();
+            let chunk_ptr = chunk.as_mut_ptr();
+
+            let result = syscall!(break libc::read(fd, chunk_ptr.cast(), chunk_len));
+            #[cfg(feature = "trace")]
+            log::trace!("{tag}: {fd:?}-Rdt sz() = {result:?}");
+
+            if let Poll::Ready(Ok(n)) = result
+                && n != 0
+            {
                 unsafe { buf.advance_mut(n) };
-                self.ctx.update_read_status(buf, Poll::Ready(Ok(n)))
             }
-            Poll::Ready(Err(err)) => self.ctx.update_read_status(buf, Poll::Ready(Err(err))),
-            Poll::Pending => self.ctx.update_read_status(buf, Poll::Pending),
-        }
+            result
+        })
     }
 }

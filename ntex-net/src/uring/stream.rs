@@ -189,7 +189,7 @@ impl Handler for StreamOpsHandler {
                         item.rd_op.take();
                         item.flags.remove(Flags::RD_CANCELING);
 
-                        let res = item.ctx.update_read_status(buf, Poll::Pending);
+                        let res = item.ctx.release_read_buf(buf, Poll::Pending);
                         if item.flags.contains(Flags::RD_REISSUE) || res == IoTaskStatus::Io {
                             item.flags.remove(Flags::RD_REISSUE);
                             st.recv(id, false, &self.inner.api);
@@ -200,11 +200,11 @@ impl Handler for StreamOpsHandler {
                     if let Some(item) = st.streams.get_mut(id) {
                         #[cfg(feature = "trace")]
                         log::trace!("{}: Send canceled: {:?}", item.tag(), item.fd());
-                        item.ctx.with_write_buf(|pages| pages.prepend(buf));
+                        item.ctx.with_write_dst(|pages| pages.prepend(buf));
                         item.wr_op.take();
                         item.flags.remove(Flags::WR_CANCELING);
 
-                        let res = item.ctx.update_write_status(Ok(false));
+                        let res = item.ctx.update_write_status(Ok(0));
                         if item.flags.contains(Flags::WR_REISSUE) || res == IoTaskStatus::Io {
                             item.flags.remove(Flags::WR_REISSUE);
                             st.send(id, &self.inner.api);
@@ -254,7 +254,7 @@ impl Handler for StreamOpsHandler {
                                 st.recv_more(id, buf, &self.inner.api);
                             } else {
                                 item.flags.remove(Flags::RD_MORE);
-                                if item.ctx.update_read_status(buf, Poll::Ready(res))
+                                if item.ctx.release_read_buf(buf, Poll::Ready(res))
                                     == IoTaskStatus::Io
                                 {
                                     st.recv(id, self.inner.api.is_new(), &self.inner.api);
@@ -274,7 +274,8 @@ impl Handler for StreamOpsHandler {
                         );
 
                         if cqueue::notif(flags) {
-                            let res = result.unwrap_or(res).and_then(write_status);
+                            let res = result.unwrap_or(res);
+                            let res = complete_send(&item.ctx, buf, res);
                             if item.ctx.update_write_status(res) == IoTaskStatus::Io {
                                 st.send(id, &self.inner.api);
                             }
@@ -298,7 +299,7 @@ impl Handler for StreamOpsHandler {
                             item.wr_op.take();
 
                             // release buffer and try to send next chunk
-                            let res = res.and_then(write_status);
+                            let res = complete_send(&item.ctx, buf, res);
                             if item.ctx.update_write_status(res) == IoTaskStatus::Io {
                                 st.send(id, &self.inner.api);
                             }
@@ -307,7 +308,7 @@ impl Handler for StreamOpsHandler {
                 }
                 Operation::Poll { id } => {
                     if let Some(item) = st.streams.get_mut(id)
-                        && !item.flags.contains(Flags::RD_MORE) && !item.ctx.is_stopped() {
+                        && !item.flags.contains(Flags::RD_MORE) {
                             item.ctx.stop(res.err());
                         }
                 }
@@ -354,15 +355,30 @@ impl Handler for StreamOpsHandler {
     }
 }
 
-fn write_status(n: usize) -> io::Result<bool> {
+fn write_status(n: usize) -> io::Result<usize> {
     if n == 0 {
         Err(io::Error::new(
             io::ErrorKind::WriteZero,
             "failed to write frame to transport",
         ))
     } else {
-        Ok(true)
+        Ok(n)
     }
+}
+
+/// Completes a send, returning output that did not reach the peer.
+///
+/// The page was taken out of the write buffer when the send was submitted, so
+/// it is counted as in-flight output. Whatever the kernel did not accept has
+/// to go back, otherwise it is both lost and left counted as outstanding.
+fn complete_send(ctx: &IoContext, mut buf: BytePage, res: io::Result<usize>) -> io::Result<usize> {
+    if let Ok(n) = res
+        && n < buf.len()
+    {
+        buf.advance_to(n);
+        ctx.with_write_dst(|pages| pages.prepend(buf));
+    }
+    res.and_then(write_status)
 }
 
 impl StreamOpsStorage {
@@ -372,7 +388,7 @@ impl StreamOpsStorage {
                 #[cfg(feature = "trace")]
                 log::trace!("{}: Rcv({id})", item.ctx.tag());
 
-                let mut buf = item.ctx.get_read_buf();
+                let mut buf = item.ctx.take_read_buf();
                 let s = buf.chunk_mut();
                 let buf_ptr = s.as_mut_ptr();
                 let buf_len = s.len() as u32;
@@ -410,7 +426,7 @@ impl StreamOpsStorage {
     fn send(&mut self, id: usize, api: &ReactorApi) {
         if let Some(item) = self.streams.get_mut(id) {
             if item.wr_op.is_none() {
-                let page = item.ctx.with_write_buf(BytePages::take);
+                let page = item.ctx.with_write_dst(BytePages::take);
                 if let Some(buf) = page {
                     #[cfg(feature = "trace")]
                     log::trace!("{}: Snd({id}) size:{:?}", item.ctx.tag(), buf.len());
@@ -528,6 +544,12 @@ impl StreamCtl {
                     self.id
                 );
                 let fd = storage.streams[self.id].fd();
+                if storage.streams[self.id].rd_op.is_none() {
+                    // `pause_read()` above only submits a cancel, so a recv can
+                    // still be in flight; draining now would race it. Nothing is
+                    // lost by skipping, that recv empties the queue itself.
+                    crate::helpers::drain_raw_socket(fd.0);
+                }
                 let (tx, rx) = self.inner.pool.channel();
                 let op_id = storage.add_operation(Operation::shutdown(tx));
                 self.inner

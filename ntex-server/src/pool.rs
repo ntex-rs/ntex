@@ -14,7 +14,7 @@ pub struct WorkerPool {
     pub(crate) stop_runtime: bool,
     pub(crate) stop_on_panic: bool,
     pub(crate) graceful_shutdown: bool,
-    pub(crate) shutdown_timeout: Millis,
+    pub(crate) graceful_shutdown_timeout: Millis,
     pub(crate) affinity: bool,
 }
 
@@ -40,7 +40,7 @@ impl WorkerPool {
             stop_runtime: false,
             stop_on_panic: false,
             graceful_shutdown: false,
-            shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
+            graceful_shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
             affinity: false,
         }
     }
@@ -108,9 +108,14 @@ impl WorkerPool {
     /// serving requests. Workers that are still alive after the timeout are
     /// forcefully dropped.
     ///
-    /// By default, the shutdown timeout is set to 30 seconds.
-    pub fn shutdown_timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
-        self.shutdown_timeout = timeout.into();
+    /// This bounds the worker as a whole, not an individual connection. Each
+    /// connection is bound separately by `IoConfig::set_shutdown_timeout`, so
+    /// this value should leave room for the connections a worker is still
+    /// draining to shut down themselves.
+    ///
+    /// By default, the timeout is set to 30 seconds.
+    pub fn graceful_shutdown_timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
+        self.graceful_shutdown_timeout = timeout.into();
         self
     }
 

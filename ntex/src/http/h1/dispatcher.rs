@@ -285,7 +285,7 @@ where
 
         log::trace!("{}: Trying to read http message", self.io.tag());
 
-        let buffered = self.io.with_read_buf(|buf| buf.len()) as u32;
+        let buffered = self.io.with_read_dst(|buf| buf.len()) as u32;
         if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
             self.read_consumed = self
                 .read_consumed
@@ -355,7 +355,7 @@ where
                         ready!(self.poll_read_request(cx))
                     }
                 } else if self.codec.is_reading_hdrs() {
-                    let remains = self.io.with_read_buf(|buf| buf.len()) as u32;
+                    let remains = self.io.with_read_dst(|buf| buf.len()) as u32;
                     self.start_headers_timer(buffered, remains);
                     ready!(self.poll_read_request(cx))
                 } else {
@@ -536,8 +536,8 @@ where
                 loop {
                     let buffered = if self.flags.contains(Flags::READ_PL_TIMEOUT) {
                         Some(
-                            io.map(|io| io.with_read_buf(|buf| buf.len()))
-                                .unwrap_or_else(|| self.io.with_read_buf(|buf| buf.len())),
+                            io.map(|io| io.with_read_dst(|buf| buf.len()))
+                                .unwrap_or_else(|| self.io.with_read_dst(|buf| buf.len())),
                         )
                     } else {
                         None
@@ -593,9 +593,9 @@ where
                                 RecvError::KeepAlive => {
                                     if let Some(buffered) = buffered {
                                         let remains = io
-                                            .map(|io| io.with_read_buf(|buf| buf.len()))
+                                            .map(|io| io.with_read_dst(|buf| buf.len()))
                                             .unwrap_or_else(|| {
-                                                self.io.with_read_buf(|buf| buf.len())
+                                                self.io.with_read_dst(|buf| buf.len())
                                             });
                                         self.read_consumed =
                                             self.read_consumed.saturating_add(
@@ -1391,7 +1391,7 @@ mod tests {
                     .add(
                         nio::IoConfig::new()
                             .set_read_buf(15 * 1024, 1024, 16)
-                            .set_write_buf(15 * 1024, 1024, 16),
+                            .set_write_buf(15 * 1024),
                     )
                     .add(HttpServiceConfig::new().set_max_buf_size(32 * 1024)),
             );
@@ -1553,11 +1553,11 @@ mod tests {
         assert_eq!(num.load(Ordering::Relaxed), 65_536);
 
         // response message + chunking encoding
-        assert_eq!(state.with_write_buf(|buf| buf.len()).unwrap(), 65629);
+        assert_eq!(state.with_write_src(|buf| buf.len()).unwrap(), 65629);
 
         client.remote_buffer_cap(65536);
         sleep(Millis(50)).await;
-        assert_eq!(state.with_write_buf(|buf| { buf.len() }).unwrap(), 93);
+        assert_eq!(state.with_write_src(|buf| { buf.len() }).unwrap(), 93);
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert_eq!(num.load(Ordering::Relaxed), 65_536 * 2);

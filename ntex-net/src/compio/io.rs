@@ -79,7 +79,34 @@ impl IoBuf for CompioPage {
     }
 }
 
-async fn run<T: AsyncRead + AsyncWrite + Clone + Unpin + 'static>(io: T, ctx: IoContext) {
+/// Closes both directions of the connection.
+///
+/// `AsyncWrite::shutdown()` only shuts down the write direction, but
+/// [`Readiness::Close`] must close the read direction as well.
+trait Terminate {
+    fn terminate(&self) -> io::Result<()>;
+}
+
+impl Terminate for compio_net::TcpStream {
+    fn terminate(&self) -> io::Result<()> {
+        let sock = socket2::SockRef::from(self);
+        crate::helpers::drain_socket(&sock);
+        sock.shutdown(std::net::Shutdown::Both)
+    }
+}
+
+impl Terminate for compio_net::UnixStream {
+    fn terminate(&self) -> io::Result<()> {
+        let sock = socket2::SockRef::from(self);
+        crate::helpers::drain_socket(&sock);
+        sock.shutdown(std::net::Shutdown::Both)
+    }
+}
+
+async fn run<T: AsyncRead + AsyncWrite + Clone + Terminate + Unpin + 'static>(
+    io: T,
+    ctx: IoContext,
+) {
     let wr_io = io.clone();
     let wr_ctx = ctx.clone();
     let wr_task = compio_runtime::spawn(async move {
@@ -99,7 +126,7 @@ async fn read<T>(io: T, ctx: &IoContext)
 where
     T: AsyncRead + AsyncWrite + Clone + Unpin,
 {
-    let mut read_fut = Some(Box::pin(read_buf(&io, ctx.get_read_buf())));
+    let mut read_fut = Some(Box::pin(read_buf(&io, ctx.take_read_buf())));
 
     loop {
         if read_ready(ctx).await {
@@ -108,21 +135,17 @@ where
 
         match select(read_fut.as_mut().unwrap(), not_read_ready(ctx)).await {
             Either::Left(BufResult(result, cbuf)) => {
-                if ctx.update_read_status(cbuf.0, Poll::Ready(result)) == IoTaskStatus::Stop {
+                if ctx.release_read_buf(cbuf.0, Poll::Ready(result)) == IoTaskStatus::Stop {
                     break;
                 }
-                read_fut = Some(Box::pin(read_buf(&io, ctx.get_read_buf())));
+                read_fut = Some(Box::pin(read_buf(&io, ctx.take_read_buf())));
             }
             Either::Right(true) => break,
             Either::Right(false) => (),
         }
     }
 
-    log::trace!("{}: Shuting down io {:?}", ctx.tag(), ctx.is_stopped());
-    if !ctx.is_stopped() {
-        let result = poll_fn(|cx| ctx.shutdown(true, cx)).await;
-        log::trace!("{}: Shuting down complete {result:?}", ctx.tag());
-    }
+    log::trace!("{}: Read task shutdown", ctx.tag());
 }
 
 async fn read_buf<T>(io: &T, buf: BytesMut) -> BufResult<usize, CompioBuf>
@@ -152,33 +175,26 @@ async fn not_read_ready(ctx: &IoContext) -> bool {
 
 async fn write<T>(mut io: T, ctx: &IoContext)
 where
-    T: AsyncRead + AsyncWrite + Clone,
+    T: AsyncRead + AsyncWrite + Clone + Terminate,
 {
     loop {
         match poll_fn(|cx| ctx.poll_write_ready(cx)).await {
             Readiness::Ready => {
-                let bufs = ctx.with_write_buf(build_bufs);
+                let bufs = ctx.with_write_dst(build_bufs);
+
+                // The status is not actionable here. `Io` and `Pause` are
+                // resolved by the next `poll_write_ready()`, and `Stop` means
+                // the connection is already aborted, so that reports `Close`
+                // and the transport is torn down there.
                 if bufs.is_empty() {
-                    if ctx.update_write_status(Ok(false)) == IoTaskStatus::Stop {
-                        break;
-                    }
-                } else if write_buf(&mut io, ctx, bufs).await == IoTaskStatus::Stop {
-                    let res = io.shutdown().await;
-                    ctx.stopped(res.err());
-                    break;
+                    ctx.update_write_status(Ok(0));
+                } else {
+                    write_buf(&mut io, ctx, bufs).await;
                 }
             }
-            Readiness::Shutdown => {
-                let bufs = ctx.with_write_buf(build_bufs);
-                write_buf(&mut io, ctx, bufs).await;
-                let res = io.shutdown().await;
-                ctx.stopped(res.err());
+            Readiness::Close => {
+                ctx.stopped(io.terminate().err());
                 break;
-            }
-            Readiness::Terminate => {
-                let res = io.shutdown().await;
-                ctx.stopped(res.err());
-                return;
             }
         }
     }
@@ -202,7 +218,7 @@ fn build_bufs(buf: &mut BytePages) -> Vec<CompioPage> {
     bufs
 }
 
-async fn write_buf<T>(io: &mut T, ctx: &IoContext, mut bufs: Vec<CompioPage>) -> IoTaskStatus
+async fn write_buf<T>(io: &mut T, ctx: &IoContext, mut bufs: Vec<CompioPage>)
 where
     T: AsyncRead + AsyncWrite,
 {
@@ -238,13 +254,25 @@ where
                         break;
                     }
                 }
-                Ok(true)
+                Ok(n)
             }
             Err(e) => Err(e),
         };
         if ctx.update_write_status(result) == IoTaskStatus::Stop {
-            return IoTaskStatus::Stop;
+            // Pages still held here are counted as in-flight output, hand
+            // back whatever did not reach the peer.
+            return_pages(ctx, bufs);
+            return;
         }
     }
-    IoTaskStatus::Io
+}
+
+fn return_pages(ctx: &IoContext, mut bufs: Vec<CompioPage>) {
+    if !bufs.is_empty() {
+        ctx.with_write_dst(|dst| {
+            while let Some(page) = bufs.pop() {
+                dst.prepend(page.0);
+            }
+        });
+    }
 }

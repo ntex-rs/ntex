@@ -848,7 +848,7 @@ async fn test_web_server() {
             .listen(
                 tcp,
                 SharedCfg::new("TEST")
-                    .add(IoConfig::new().set_disconnect_timeout(Seconds(1)))
+                    .add(IoConfig::new().set_shutdown_timeout(Seconds(1)))
                     .add(
                         HttpServiceConfig::new()
                             .set_headers_read_rate(Seconds(1), Seconds(5), 128)

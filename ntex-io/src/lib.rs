@@ -53,25 +53,27 @@ pub use self::flags::Flags;
 pub enum Readiness {
     /// The I/O task may proceed with I/O operations.
     Ready,
-    /// Initiates a graceful I/O shutdown.
-    Shutdown,
-    /// Immediately terminates the I/O stream.
-    Terminate,
+    /// The transport must be closed.
+    ///
+    /// The I/O task must close both directions of the connection and then
+    /// release it. For a socket this is `shutdown(SHUT_RDWR)` followed by
+    /// `close()`. Any operation still in flight should be canceled.
+    ///
+    /// This covers both a graceful shutdown and an immediate termination, and
+    /// the task does not need to tell them apart: buffered output is drained
+    /// before this is reported on the graceful path, so in either case there
+    /// is nothing left to flush.
+    Close,
 }
 
 impl Readiness {
     /// Merges two readiness states without regard to argument order.
     ///
-    /// Terminal states take precedence: `Terminate` overrides every other
-    /// state, followed by `Shutdown`. If neither terminal state is present,
-    /// `Pending` overrides `Ready`.
+    /// `Close` overrides every other state, and `Pending` overrides `Ready`.
     pub fn merge(val1: Poll<Readiness>, val2: Poll<Readiness>) -> Poll<Readiness> {
         match (val1, val2) {
-            (Poll::Ready(Readiness::Terminate), _) | (_, Poll::Ready(Readiness::Terminate)) => {
-                Poll::Ready(Readiness::Terminate)
-            }
-            (Poll::Ready(Readiness::Shutdown), _) | (_, Poll::Ready(Readiness::Shutdown)) => {
-                Poll::Ready(Readiness::Shutdown)
+            (Poll::Ready(Readiness::Close), _) | (_, Poll::Ready(Readiness::Close)) => {
+                Poll::Ready(Readiness::Close)
             }
             (Poll::Pending, _) | (_, Poll::Pending) => Poll::Pending,
             (Poll::Ready(Readiness::Ready), Poll::Ready(Readiness::Ready)) => {
@@ -110,11 +112,18 @@ pub trait FilterLayer: fmt::Debug + 'static {
     /// the transport-facing destination buffer.
     fn process_write_buf(&self, buf: &FilterBuf<'_>) -> IoResult<()>;
 
-    /// Performs one step of graceful filter shutdown.
+    /// Performs graceful filter shutdown.
     ///
     /// Returning `Poll::Pending` keeps the filter active and causes shutdown to
     /// be polled again after the I/O task is notified. A ready result allows
     /// shutdown to continue toward the transport.
+    ///
+    /// A filter that waits for input from the peer must check
+    /// [`IoRef::is_read_eof`] and return a ready result once it is set: after a
+    /// clean read EOF no further input can arrive, so pending forever would
+    /// only stall the close until the shutdown timeout expires. The runtime
+    /// also ends the shutdown phase itself in that case, but it cannot know
+    /// whether the filter considers the shutdown complete.
     fn shutdown(&self, buf: &FilterBuf<'_>) -> IoResult<Poll<()>> {
         Ok(Poll::Ready(()))
     }
@@ -144,8 +153,7 @@ pub trait IoCallbacks {
 /// Control handle for transport-specific I/O tasks.
 ///
 /// The handle is called synchronously by the connection state and must not
-/// block. It can use [`IoContext::notify`] to wake a transport task after
-/// readiness changes.
+/// block.
 pub trait Handle {
     /// Returns type-indexed transport information.
     fn query(&self, _: TypeId) -> Option<Box<dyn Any>> {
@@ -155,20 +163,20 @@ pub trait Handle {
     #[inline]
     /// Requests that the transport start or resume a write operation.
     fn write(&self, _: &IoContext) {}
-
-    #[inline]
-    /// Notifies the I/O context that readiness has changed.
-    fn notify(&self, ctx: &IoContext) {
-        ctx.notify();
-    }
 }
 
 /// Current status of the I/O state.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum IoTaskStatus {
-    /// Continue performing I/O operations immediately.
+    /// Work remains, the task should perform another I/O operation.
+    ///
+    /// This reports that the connection still has work to do, not that the
+    /// transport can accept or supply bytes right now. A task must re-arm
+    /// transport readiness before the next operation. On the write side it is
+    /// returned whenever output is still buffered, including after an attempt
+    /// that made no progress.
     Io,
-    /// Pause the task until the context or handle wakes it.
+    /// Pause the task until the context wakes it.
     Pause,
     /// Stop the task and release its transport resources.
     Stop,
@@ -181,7 +189,14 @@ pub enum IoStatusUpdate {
     KeepAlive,
     /// Write backpressure is currently active.
     WriteBackpressure,
-    /// Peer has disconnected.
+    /// The connection is no longer usable.
+    ///
+    /// Reported once the connection has closed, whether because the peer
+    /// disconnected, the transport failed, or the shutdown was started
+    /// locally with [`IoRef::close`](crate::IoRef::close) or
+    /// [`IoRef::terminate`](crate::IoRef::terminate). Carries the transport
+    /// error when the connection ended because of one, and `None` when it
+    /// closed cleanly.
     PeerGone(Option<IoError>),
 }
 
@@ -193,7 +208,14 @@ pub enum RecvError<U: Decoder> {
     WriteBackpressure,
     /// Failed to decode an incoming frame.
     Decoder(U::Error),
-    /// The peer has disconnected.
+    /// The connection is no longer usable.
+    ///
+    /// Reported once the connection has closed, whether because the peer
+    /// disconnected, the transport failed, or the shutdown was started
+    /// locally with [`IoRef::close`](crate::IoRef::close) or
+    /// [`IoRef::terminate`](crate::IoRef::terminate). Carries the transport
+    /// error when the connection ended because of one, and `None` when it
+    /// closed cleanly.
     PeerGone(Option<IoError>),
 }
 
@@ -255,8 +277,7 @@ mod tests {
         let states = [
             Poll::Pending,
             Poll::Ready(Readiness::Ready),
-            Poll::Ready(Readiness::Shutdown),
-            Poll::Ready(Readiness::Terminate),
+            Poll::Ready(Readiness::Close),
         ];
 
         for val1 in states {
@@ -270,15 +291,12 @@ mod tests {
             Poll::Pending
         );
         assert_eq!(
-            Readiness::merge(Poll::Pending, Poll::Ready(Readiness::Shutdown)),
-            Poll::Ready(Readiness::Shutdown)
+            Readiness::merge(Poll::Pending, Poll::Ready(Readiness::Close)),
+            Poll::Ready(Readiness::Close)
         );
         assert_eq!(
-            Readiness::merge(
-                Poll::Ready(Readiness::Shutdown),
-                Poll::Ready(Readiness::Terminate)
-            ),
-            Poll::Ready(Readiness::Terminate)
+            Readiness::merge(Poll::Ready(Readiness::Ready), Poll::Ready(Readiness::Close)),
+            Poll::Ready(Readiness::Close)
         );
     }
 }

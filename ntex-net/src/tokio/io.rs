@@ -30,8 +30,6 @@ trait Stream: AsyncRead + AsyncWrite + Unpin {
 
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>>;
 
-    fn shutdown(&self) -> io::Result<()>;
-
     fn terminate(&self) -> io::Result<()>;
 
     fn try_read(&self, buf: &mut [u8]) -> io::Result<usize>;
@@ -50,12 +48,10 @@ impl Stream for TcpStream {
         TcpStream::poll_write_ready(self, cx)
     }
 
-    fn shutdown(&self) -> io::Result<()> {
-        socket2::SockRef::from(self).shutdown(std::net::Shutdown::Write)
-    }
-
     fn terminate(&self) -> io::Result<()> {
-        socket2::SockRef::from(self).shutdown(std::net::Shutdown::Both)
+        let sock = socket2::SockRef::from(self);
+        crate::helpers::drain_socket(&sock);
+        sock.shutdown(std::net::Shutdown::Both)
     }
 
     fn try_read(&self, buf: &mut [u8]) -> io::Result<usize> {
@@ -81,12 +77,10 @@ impl Stream for tok_io::net::UnixStream {
         tok_io::net::UnixStream::poll_write_ready(self, cx)
     }
 
-    fn shutdown(&self) -> io::Result<()> {
-        socket2::SockRef::from(self).shutdown(std::net::Shutdown::Write)
-    }
-
     fn terminate(&self) -> io::Result<()> {
-        socket2::SockRef::from(self).shutdown(std::net::Shutdown::Both)
+        let sock = socket2::SockRef::from(self);
+        crate::helpers::drain_socket(&sock);
+        sock.shutdown(std::net::Shutdown::Both)
     }
 
     fn try_read(&self, buf: &mut [u8]) -> io::Result<usize> {
@@ -118,8 +112,6 @@ impl Handle for HandleWrapper {
     fn write(&self, ctx: &IoContext) {
         let _ = write(self.0.as_ref(), ctx, true);
     }
-
-    fn notify(&self, _: &IoContext) {}
 }
 
 #[cfg(unix)]
@@ -134,12 +126,6 @@ impl Handle for HandleWrapperUnix {
     fn write(&self, ctx: &IoContext) {
         let _ = write(self.0.as_ref(), ctx, true);
     }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum Status {
-    Shutdown,
-    Terminate,
 }
 
 async fn run_rd<T>(io: Rc<T>, ctx: IoContext)
@@ -176,7 +162,7 @@ where
                         }
                     }
                 }
-                Readiness::Shutdown | Readiness::Terminate => Poll::Ready(()),
+                Readiness::Close => Poll::Ready(()),
             };
         }
     })
@@ -194,7 +180,7 @@ async fn run_wrt<T>(io: Rc<T>, ctx: IoContext)
 where
     T: Stream,
 {
-    let st = poll_fn(|cx| {
+    poll_fn(|cx| {
         let ctx_state = ctx.poll_write_ready(cx);
         #[cfg(feature = "trace")]
         log::trace!(
@@ -213,43 +199,22 @@ where
                     Ok(()) => match write(io.as_ref(), &ctx, false) {
                         WrtStatus::More => continue,
                         WrtStatus::Pending => Poll::Pending,
-                        WrtStatus::Terminate => Poll::Ready(Status::Terminate),
+                        WrtStatus::Terminate => Poll::Ready(()),
                     },
                     Err(err) => {
                         ctx.update_write_status(Err(err));
-                        Poll::Ready(Status::Terminate)
+                        Poll::Ready(())
                     }
                 };
             },
-            Readiness::Shutdown => Poll::Ready(Status::Shutdown),
-            Readiness::Terminate => Poll::Ready(Status::Terminate),
+            Readiness::Close => Poll::Ready(()),
         }
     })
     .await;
 
-    log::trace!("{}: Shuting down io {:?}", ctx.tag(), ctx.is_stopped());
-    if !ctx.is_stopped() {
-        let flush = st == Status::Shutdown;
-        poll_fn(|cx| match ready!(io.poll_write_ready(cx)) {
-            Ok(()) => {
-                if write(io.as_ref(), &ctx, false) == WrtStatus::Terminate {
-                    Poll::Ready(())
-                } else {
-                    ctx.shutdown(flush, cx)
-                }
-            }
-            Err(err) => {
-                ctx.update_write_status(Err(err));
-                Poll::Ready(())
-            }
-        })
-        .await;
-    }
+    log::trace!("{}: Shuting down io", ctx.tag());
 
-    let result = match st {
-        Status::Shutdown => io.shutdown(),
-        Status::Terminate => io.terminate(),
-    };
+    let result = io.terminate();
 
     log::trace!("{}: Shutdown complete {result:?}", ctx.tag());
     ctx.stopped(result.err());
@@ -262,7 +227,7 @@ fn write<T>(io: &T, ctx: &IoContext, direct: bool) -> WrtStatus
 where
     T: Stream,
 {
-    let result = ctx.with_write_buf(|dst| {
+    let result = ctx.with_write_dst(|dst| {
         let mut pages: [Option<BytePage>; MAX_WRITE_ITEMS] = [
             None, None, None, None, None, None, None, None, None, None, None, None, None, None,
             None, None,
@@ -332,12 +297,12 @@ where
                     if val == 0 {
                         ctx.stop(None);
                     }
-                    Ok(val > 0)
+                    Ok(val)
                 }
-                Poll::Pending => Ok(false),
+                Poll::Pending => Ok(0),
             }
         } else {
-            Ok(false)
+            Ok(0)
         }
     });
 
@@ -384,35 +349,35 @@ fn write_io<T: Stream>(
 }
 
 fn read<T: Stream + Unpin>(io: &T, ctx: &IoContext) -> Poll<IoTaskStatus> {
-    let mut buf = ctx.get_read_buf();
-
-    #[cfg(feature = "trace")]
-    log::trace!(
-        "{}: Read attempt, buf len({}) cap({})",
-        ctx.tag(),
-        buf.len(),
-        buf.remaining_mut()
-    );
-
-    // read data from socket
-    let io_res = io.try_read(unsafe { &mut *(ptr::from_mut(buf.chunk_mut()) as *mut [u8]) });
-
     let mut pending = false;
-    let status = match io_res {
-        Ok(0) => Poll::Ready(Ok(0)),
-        Ok(n) => {
-            // Safety: This is guaranteed to be the number of initialized
-            // bytes due to the invariants provided by `try_read()`.
-            unsafe { buf.advance_mut(n) };
-            Poll::Ready(Ok(n))
+
+    let result = ctx.with_read_buf(|buf| {
+        #[cfg(feature = "trace")]
+        log::trace!(
+            "{}: Read attempt, buf len({}) cap({})",
+            ctx.tag(),
+            buf.len(),
+            buf.remaining_mut()
+        );
+
+        // read data from socket
+        let io_res = io.try_read(unsafe { &mut *(ptr::from_mut(buf.chunk_mut()) as *mut [u8]) });
+
+        match io_res {
+            Ok(0) => Poll::Ready(Ok(0)),
+            Ok(n) => {
+                // Safety: This is guaranteed to be the number of initialized
+                // bytes due to the invariants provided by `try_read()`.
+                unsafe { buf.advance_mut(n) };
+                Poll::Ready(Ok(n))
+            }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                pending = true;
+                Poll::Pending
+            }
+            Err(e) => Poll::Ready(Err(e)),
         }
-        Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-            pending = true;
-            Poll::Pending
-        }
-        Err(e) => Poll::Ready(Err(e)),
-    };
-    let result = ctx.update_read_status(buf, status);
+    });
 
     #[cfg(feature = "trace")]
     log::trace!(
@@ -457,7 +422,7 @@ impl AsyncRead for TokioIoBoxed {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        let len = self.0.with_read_buf(|src| {
+        let len = self.0.with_read_dst(|src| {
             let len = cmp::min(src.len(), buf.remaining());
             buf.put_slice(&src.split_to(len));
             len

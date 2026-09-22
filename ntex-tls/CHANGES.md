@@ -1,5 +1,9 @@
 # Changes
 
+## [4.1.0] - 2026-09-22
+
+* openssl: complete shutdown after a clean peer EOF, its close_notify will never arrive
+
 ## [4.0.0] - 2026-09-14
 
 * Migrate to ntex-service 5

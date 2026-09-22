@@ -6,7 +6,7 @@ use ntex_service::cfg::SharedCfg;
 use ntex_util::time::Seconds;
 
 use crate::ops::{Id, Iops, TimerHandle};
-use crate::{Decoded, Filter, FilterBuf, Flags, IoConfig, IoContext, IoRef, types};
+use crate::{Decoded, Filter, FilterBuf, Flags, Handle, IoConfig, IoContext, IoRef, types};
 
 impl IoRef {
     #[inline]
@@ -22,7 +22,7 @@ impl IoRef {
     }
 
     #[doc(hidden)]
-    /// Gets the current state flags.
+    /// Gets the state flags. (for debug purpose only)
     pub fn flags(&self) -> Flags {
         self.0.flags.clone()
     }
@@ -46,7 +46,12 @@ impl IoRef {
     }
 
     #[inline]
-    /// Checks whether the I/O stream is closed.
+    /// Checks whether the I/O stream is closed or closing.
+    ///
+    /// This becomes `true` as soon as graceful shutdown or force termination
+    /// starts, so buffered output may still be flushing. Use
+    /// [`is_stopping`](Self::is_stopping) and
+    /// [`is_terminating`](Self::is_terminating) to tell the two paths apart.
     pub fn is_closed(&self) -> bool {
         self.0.flags.is_closed()
     }
@@ -60,7 +65,7 @@ impl IoRef {
     }
 
     #[inline]
-    /// Checks whether the connection entered graceful transport shutdown.
+    /// Checks whether the transport entered graceful shutdown.
     ///
     /// This state remains set after backend teardown completes.
     pub fn is_stopping(&self) -> bool {
@@ -80,7 +85,29 @@ impl IoRef {
     }
 
     #[inline]
+    /// Checks whether read back-pressure is enabled.
+    ///
+    /// This becomes `true` once unread data in the application-facing read
+    /// buffer reaches the configured high watermark, which parks the transport
+    /// read task.
+    ///
+    /// Two different paths release it. Consuming through
+    /// [`decode`](Self::decode), [`with_buf`](Self::with_buf),
+    /// [`with_read_src`](Self::with_read_src) or
+    /// [`with_read_dst`](Self::with_read_dst) releases it once the buffer has
+    /// fallen to at most half the high watermark. Asking for more input through
+    /// [`Io::poll_read_more`](crate::Io::poll_read_more), and the methods built
+    /// on it, releases it immediately however much data is still buffered.
+    pub fn is_rd_backpressure(&self) -> bool {
+        self.0.flags.is_rd_backpressure()
+    }
+
+    #[inline]
     /// Checks whether write back-pressure is enabled.
+    ///
+    /// This becomes `true` once unwritten data in the transport-facing write
+    /// buffer reaches the configured high watermark. Draining enough of the
+    /// buffer releases it.
     pub fn is_wr_backpressure(&self) -> bool {
         self.0.flags.is_wr_backpressure()
     }
@@ -109,16 +136,19 @@ impl IoRef {
     #[inline]
     /// Encodes an item into the write buffer.
     ///
-    /// This method reports codec errors only. If the connection is already
-    /// closing or closed, the item is not encoded and the call returns
-    /// `Ok(())`. Use [`encode_slice`](Self::encode_slice) or
-    /// [`encode_bytes`](Self::encode_bytes) when transport-state errors must be
-    /// observable.
+    /// This method reports codec errors only. Any `io::Error` produced while
+    /// buffering is discarded: if the connection is already closing or closed
+    /// the item is not encoded, and a transport or filter error raised by an
+    /// eager backend write is dropped. Such errors remain observable later
+    /// through [`crate::Io::poll_flush`] or [`crate::Io::poll_recv`]. Use
+    /// [`encode_slice`](Self::encode_slice) or
+    /// [`encode_bytes`](Self::encode_bytes) when they must be observed at the
+    /// call site.
     pub fn encode<U>(&self, item: U::Item, codec: &U) -> Result<(), <U as Encoder>::Error>
     where
         U: Encoder,
     {
-        self.with_write_buf(|buf| codec.encodev(item, buf))
+        self.with_write_src(|buf| codec.encodev(item, buf))
             .unwrap_or_else(|_| Ok(()))
     }
 
@@ -128,7 +158,7 @@ impl IoRef {
     /// If this triggers an eager backend write, any transport or filter error
     /// from that write is returned immediately.
     pub fn encode_slice(&self, src: &[u8]) -> io::Result<()> {
-        self.with_write_buf(|buf| buf.extend_from_slice(src))
+        self.with_write_src(|buf| buf.extend_from_slice(src))
     }
 
     #[inline]
@@ -140,10 +170,15 @@ impl IoRef {
     where
         BytePage: From<B>,
     {
-        self.with_write_buf(|buf| buf.append(src))
+        self.with_write_src(|buf| buf.append(src))
     }
 
     /// Attempts to decode a frame from the read buffer.
+    ///
+    /// This mutates the read state: it clears read readiness, and consuming
+    /// enough bytes may release read backpressure. It also cancels a pause
+    /// installed by [`Io::poll_read_pause`](crate::Io::poll_read_pause) and wakes the transport
+    /// read task.
     pub fn decode<U>(
         &self,
         codec: &U,
@@ -160,6 +195,14 @@ impl IoRef {
     }
 
     /// Attempts to decode a frame from the read buffer.
+    ///
+    /// `Decoded::consumed` reports the bytes taken by this attempt and
+    /// `Decoded::remains` the bytes left in the application-facing read
+    /// buffer.
+    ///
+    /// Like [`decode`](Self::decode), this mutates the read state: it clears
+    /// read readiness, may release read backpressure, and cancels a pause
+    /// installed by [`Io::poll_read_pause`](crate::Io::poll_read_pause).
     pub fn decode_item<U>(
         &self,
         codec: &U,
@@ -220,6 +263,11 @@ impl IoRef {
     /// Filter callbacks run before and after `f`, and any produced write data
     /// is scheduled for delivery after the closure returns. Errors from an
     /// eager backend write are returned to the caller.
+    ///
+    /// The destination exposed by
+    /// [`FilterBuf::with_read_buffers`](crate::FilterBuf::with_read_buffers) is
+    /// the application-facing read destination, so consuming enough of it
+    /// releases read backpressure and cancels an installed read pause.
     pub fn with_buf<F, R>(&self, f: F) -> io::Result<R>
     where
         F: FnOnce(&mut FilterBuf<'_>) -> R,
@@ -227,16 +275,28 @@ impl IoRef {
         self.with_callbacks(|cb| cb.before_processing(self));
         let result = self.0.buffer.with_filter(self, |ctx| ctx.with_buffer(f));
         self.with_callbacks(|cb| cb.after_processing(self));
+        self.release_read_destination();
 
         self.consolidate_write_state(false)?;
         Ok(result)
     }
 
-    /// Provides mutable access to the application-facing read buffer.
+    /// Provides mutable access to the application-facing read destination.
     ///
-    /// Consuming bytes may release read backpressure and wake the transport
-    /// read task.
-    pub fn with_read_buf<F, R>(&self, f: F) -> R
+    /// This holds the decoded bytes the application consumes; see
+    /// [`with_read_src`](Self::with_read_src) for the transport-facing source.
+    ///
+    /// This mutates the read state whether or not `f` consumes anything. While
+    /// read back-pressure is active nothing is released until the buffer has
+    /// fallen to at most half the high watermark, so until then read readiness
+    /// and any installed read pause are left in place. Once it has, or when
+    /// back-pressure was not active, read readiness is cleared and a pause
+    /// installed by [`Io::poll_read_pause`](crate::Io::poll_read_pause) is
+    /// cancelled, waking the transport read task.
+    ///
+    /// Use [`crate::Io::poll_read_more`] rather than this method to check
+    /// whether data is available.
+    pub fn with_read_dst<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
@@ -247,12 +307,16 @@ impl IoRef {
         })
     }
 
-    /// Provides mutable access to the application-facing write buffer.
+    /// Provides mutable access to the application-facing write source.
+    ///
+    /// This holds the bytes the application produces; see
+    /// [`with_write_dst`](Self::with_write_dst) for the transport-facing
+    /// destination.
     ///
     /// Returns an error without invoking `f` if the connection is closing or
     /// closed. Data appended by `f` is scheduled for delivery. If that starts
     /// an eager backend write, its transport or filter error is returned.
-    pub fn with_write_buf<F, R>(&self, f: F) -> io::Result<R>
+    pub fn with_write_src<F, R>(&self, f: F) -> io::Result<R>
     where
         F: FnOnce(&mut BytePages) -> R,
     {
@@ -272,27 +336,59 @@ impl IoRef {
     }
 
     #[inline]
-    /// Provides mutable access to the transport-facing read buffer.
+    /// Provides mutable access to the transport-facing read source.
     ///
-    /// This is primarily intended for transport and filter implementations.
-    pub fn with_read_src_buf<F, R>(&self, f: F) -> R
+    /// This is the buffer the transport fills; it is the counterpart of the
+    /// application-facing destination exposed by
+    /// [`with_read_dst`](Self::with_read_dst). Primarily intended for transport
+    /// and filter implementations.
+    ///
+    /// Without a filter installed this is the same buffer as the
+    /// application-facing destination, so consuming enough of it releases read
+    /// backpressure and cancels an installed read pause. Unlike
+    /// [`with_read_dst`](Self::with_read_dst) it never clears read readiness.
+    pub fn with_read_src<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
-        self.0.buffer.with_read_src(self, f)
+        let result = self.0.buffer.with_read_src(self, f);
+        self.release_read_destination();
+        result
     }
 
     #[inline]
-    /// Provides mutable access to the transport-facing write buffer.
+    /// Provides mutable access to the transport-facing write destination.
     ///
-    /// This is primarily intended for transport and filter implementations.
-    pub fn with_write_dst_buf<F, R>(&self, f: F) -> R
+    /// This is the buffer the transport drains; it is the counterpart of the
+    /// application-facing source exposed by
+    /// [`with_write_src`](Self::with_write_src). Primarily intended for
+    /// transport and filter implementations.
+    pub fn with_write_dst<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytePages) -> R,
     {
         self.0.buffer.with_write_dst(f)
     }
 
+    /// Schedules buffered output for delivery and updates write state.
+    ///
+    /// When output is buffered and the write task is paused, this either
+    /// performs an eager in-place write through the transport handle or
+    /// schedules a write operation. An eager write requires direct writes to be
+    /// enabled and, unless `force` is set, at least
+    /// [`IoConfig::write_buf_threshold`](crate::IoConfig::write_buf_threshold)
+    /// bytes to be buffered; `force` makes any non-empty buffer eligible. A
+    /// write operation is scheduled when an eager write leaves data behind, or
+    /// when no eager write was attempted.
+    ///
+    /// Returns the connection error once the connection is stopping or
+    /// terminating with an error set. This is how a failed eager write or
+    /// filter reaches the caller, and it also prevents further eager writes on
+    /// a connection that is already gone.
+    ///
+    /// Finally enables write back-pressure and wakes the dispatcher if buffered
+    /// output has reached the configured high watermark. The size is re-read
+    /// first because an eager write may have drained it.
     pub(crate) fn consolidate_write_state(&self, force: bool) -> io::Result<()> {
         let st = &self.0;
 
@@ -346,7 +442,8 @@ impl IoRef {
         }
 
         // A direct write may have changed the amount of buffered data.
-        let size = st.buffer.write_buf_size();
+        // In-flight output counts too: it has not reached the peer yet.
+        let size = st.write_outstanding();
 
         // Enable backpressure
         if !st.flags.is_wr_backpressure() && st.is_wr_backpressure_needed(size) {
@@ -356,6 +453,22 @@ impl IoRef {
         Ok(())
     }
 
+    /// Updates read state after the application-facing destination was accessed.
+    ///
+    /// While read back-pressure is active nothing is released until `buf` has
+    /// fallen to at most half the high watermark. Until then read readiness and
+    /// any installed read pause are deliberately left in place, keeping the
+    /// transport read task parked. Once it has, read readiness and
+    /// back-pressure are cleared together; without back-pressure only read
+    /// readiness is cleared.
+    ///
+    /// Whenever something is released, a pause installed by
+    /// [`Io::poll_read_pause`](crate::Io::poll_read_pause) is cancelled and the
+    /// transport read task is woken.
+    ///
+    /// See [`release_read_destination`](Self::release_read_destination) for the
+    /// variant used when the caller may have drained a different buffer of the
+    /// filter chain.
     fn update_read_destination(&self, buf: &mut BytesMut) {
         let st = &self.0;
 
@@ -375,6 +488,30 @@ impl IoRef {
             st.flags.unset_all_read_flags();
         } else {
             st.flags.unset_read_ready();
+        }
+
+        if st.flags.is_read_paused() {
+            st.wake_read_task();
+            st.flags.unset_read_paused();
+        }
+    }
+
+    /// Releases read backpressure and any installed read pause.
+    ///
+    /// Used by the accessors that can drain the application-facing read
+    /// destination without going through
+    /// [`with_read_dst`](Self::with_read_dst). Unlike
+    /// `update_read_destination()` this never clears read readiness, because
+    /// the caller may have touched a different buffer of the chain. It only
+    /// removes a stale pause, so it can never suppress a wakeup.
+    fn release_read_destination(&self) {
+        let st = &self.0;
+
+        if st.flags.is_rd_backpressure() {
+            if !st.should_disable_rd_backpressure(st.buffer.read_dst_size()) {
+                return;
+            }
+            st.flags.unset_all_read_flags();
         }
 
         if st.flags.is_read_paused() {
@@ -455,8 +592,10 @@ impl IoRef {
     /// Returns a future that resolves when the complete I/O stream disconnects.
     ///
     /// A clean peer read EOF does not resolve this future because the write
-    /// half remains usable. It resolves when local shutdown or force
-    /// termination closes the complete transport.
+    /// half remains usable. It resolves once the transport backend reports
+    /// that teardown has finished, which happens after local shutdown or
+    /// force termination. [`terminate`](Self::terminate) requests that
+    /// teardown but does not itself resolve the future.
     pub fn on_disconnect(&self) -> crate::OnDisconnect {
         crate::OnDisconnect::new(self.0.clone())
     }
@@ -481,7 +620,7 @@ impl IoRef {
             );
             let ctx = unsafe { &*(ptr::from_ref(self).cast::<IoContext>()) };
             hnd.write(ctx);
-            self.0.handle.set(Some(hnd));
+            self.restore_handle(hnd);
         }
         if self.0.flags.is_write_paused() {
             WakeWriteTask::No
@@ -490,10 +629,19 @@ impl IoRef {
         }
     }
 
-    pub(crate) fn call_notify(&self) {
-        if let Some(hnd) = self.0.handle.take() {
-            let ctx = unsafe { &*(ptr::from_ref(self).cast::<IoContext>()) };
-            hnd.notify(ctx);
+    /// Reinstalls the transport handle after a reentrant transport callback.
+    ///
+    /// The handle is taken for the duration of the call so that a nested
+    /// `call_write()` cannot reenter the transport. If the
+    /// callback terminated the connection, `terminate_connection()` and
+    /// `stop_connection()` found the slot empty and could not release the
+    /// transport, so the handle is dropped here instead of being reinstalled.
+    /// A graceful shutdown keeps it: the write task still needs the transport
+    /// to shut it down.
+    fn restore_handle(&self, hnd: Box<dyn Handle>) {
+        if self.0.flags.is_terminating() || self.0.flags.is_terminated() {
+            drop(hnd);
+        } else {
             self.0.handle.set(Some(hnd));
         }
     }
@@ -595,9 +743,9 @@ mod tests {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
         let state = Io::from(server);
-        assert_eq!(0, state.with_write_dst_buf(|b| b.len()));
+        assert_eq!(0, state.with_write_dst(|b| b.len()));
         state.encode_slice(b"test").unwrap();
-        assert_eq!(4, state.with_write_dst_buf(|b| b.len()));
+        assert_eq!(4, state.with_write_dst(|b| b.len()));
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"test"));
 
@@ -723,7 +871,7 @@ mod tests {
         assert!(state.encode_bytes(Bytes::from_static(BIN)).is_err());
         assert!(
             state
-                .with_write_buf(|buf| buf.extend_from_slice(BIN))
+                .with_write_src(|buf| buf.extend_from_slice(BIN))
                 .is_err()
         );
     }
@@ -732,7 +880,6 @@ mod tests {
     struct Counter<F> {
         layer: F,
         idx: usize,
-        in_bytes: Rc<Cell<usize>>,
         out_bytes: Rc<Cell<usize>>,
         read_order: Rc<RefCell<Vec<usize>>>,
         write_order: Rc<RefCell<Vec<usize>>>,
@@ -741,10 +888,7 @@ mod tests {
     impl<F: Filter> Filter for Counter<F> {
         fn process_read_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()> {
             self.read_order.borrow_mut().push(self.idx);
-            let result = self.layer.process_read_buf(ctx);
-            self.in_bytes
-                .set(self.in_bytes.get() + ctx.new_read_bytes());
-            result
+            self.layer.process_read_buf(ctx)
         }
 
         fn process_write_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()> {
@@ -764,7 +908,6 @@ mod tests {
 
     #[ntex::test]
     async fn filter() {
-        let in_bytes = Rc::new(Cell::new(0));
         let out_bytes = Rc::new(Cell::new(0));
         let read_order = Rc::new(RefCell::new(Vec::new()));
         let write_order = Rc::new(RefCell::new(Vec::new()));
@@ -774,7 +917,6 @@ mod tests {
             .map_filter(|layer| Counter {
                 layer,
                 idx: 1,
-                in_bytes: in_bytes.clone(),
                 out_bytes: out_bytes.clone(),
                 read_order: read_order.clone(),
                 write_order: write_order.clone(),
@@ -796,13 +938,11 @@ mod tests {
         let msg = io.recv(&BytesCodec).await.unwrap().unwrap();
         assert_eq!(msg, Bytes::from_static(BIN));
 
-        assert_eq!(in_bytes.get(), BIN.len() * 2);
         assert_eq!(out_bytes.get(), 8);
     }
 
     #[ntex::test]
     async fn boxed_filter() {
-        let in_bytes = Rc::new(Cell::new(0));
         let out_bytes = Rc::new(Cell::new(0));
         let read_order = Rc::new(RefCell::new(Vec::new()));
         let write_order = Rc::new(RefCell::new(Vec::new()));
@@ -812,7 +952,6 @@ mod tests {
             .map_filter(|layer| Counter {
                 layer,
                 idx: 2,
-                in_bytes: in_bytes.clone(),
                 out_bytes: out_bytes.clone(),
                 read_order: read_order.clone(),
                 write_order: write_order.clone(),
@@ -820,7 +959,6 @@ mod tests {
             .map_filter(|layer| Counter {
                 layer,
                 idx: 1,
-                in_bytes: in_bytes.clone(),
                 out_bytes: out_bytes.clone(),
                 read_order: read_order.clone(),
                 write_order: write_order.clone(),
@@ -839,14 +977,13 @@ mod tests {
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"test"));
 
-        assert_eq!(in_bytes.get(), BIN.len() * 2);
         assert_eq!(out_bytes.get(), 16);
         assert_eq!(state.0.buffer.with_write_dst(|b| b.len()), 0);
 
         // refs
-        assert_eq!(Rc::strong_count(&in_bytes), 3);
+        assert_eq!(Rc::strong_count(&out_bytes), 3);
         drop(state);
-        assert_eq!(Rc::strong_count(&in_bytes), 1);
+        assert_eq!(Rc::strong_count(&out_bytes), 1);
         assert_eq!(*read_order.borrow(), &[1, 2][..]);
         assert_eq!(*write_order.borrow(), &[1, 2, 1, 2, 1, 2][..]);
     }

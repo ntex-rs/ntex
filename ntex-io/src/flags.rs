@@ -3,8 +3,9 @@ use std::{cell::Cell, fmt};
 pub struct Flags(Cell<FlagsKind>);
 
 bitflags::bitflags! {
+    /// All 16 bits are in use; widen the representation before adding a flag.
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-    pub struct FlagsKind: u32 {
+    pub struct FlagsKind: u16 {
         /// io is closed
         const IO_STOPPED          = 0b0000_0000_0000_0001;
         /// shutdown io tasks
@@ -12,7 +13,7 @@ bitflags::bitflags! {
         /// shutting down filters
         const IO_STOPPING_FILTERS = 0b0000_0000_0000_0100;
         /// force termination or transport failure is in progress
-        const IO_TERMINATING      = 0b0001_0000_0000_0000_0000;
+        const IO_TERMINATING      = 0b0000_0100_0000_0000;
 
         /// pause io read
         const RD_PAUSED           = 0b0000_0000_0001_0000;
@@ -32,8 +33,6 @@ bitflags::bitflags! {
         const WR_FLUSH            = 0b0000_0001_0000_0000;
         /// write task paused
         const WR_PAUSED           = 0b0000_0010_0000_0000;
-        /// write any data and notify dispatcher
-        const WR_NOTIFY           = 0b0000_0100_0000_0000;
         /// write op is scheduled
         const WR_SEND_OP          = 0b0000_1000_0000_0000;
 
@@ -99,6 +98,14 @@ impl Flags {
         self.contains(FlagsKind::IO_STOPPED)
     }
 
+    /// Checks whether the connection is aborting or already gone.
+    ///
+    /// Unlike [`is_closed`](Self::is_closed) this does not cover the graceful
+    /// `IO_STOPPING` phase, during which buffered output is still written out.
+    pub(crate) fn is_aborted(&self) -> bool {
+        self.intersects(FlagsKind::IO_STOPPED | FlagsKind::IO_TERMINATING)
+    }
+
     /// Checks whether the connection entered graceful transport shutdown.
     ///
     /// This state remains set after backend teardown completes.
@@ -128,10 +135,6 @@ impl Flags {
 
     pub(crate) fn is_stopping_filters(&self) -> bool {
         self.contains(FlagsKind::IO_STOPPING_FILTERS)
-    }
-
-    pub(crate) fn is_write_notify(&self) -> bool {
-        self.contains(FlagsKind::WR_NOTIFY)
     }
 
     pub(crate) fn is_write_flush(&self) -> bool {
@@ -211,10 +214,6 @@ impl Flags {
         self.insert(FlagsKind::WR_PAUSED);
     }
 
-    pub(crate) fn set_write_notify(&self) {
-        self.insert(FlagsKind::WR_NOTIFY);
-    }
-
     pub(crate) fn set_wr_send_scheduled(&self) {
         self.insert(FlagsKind::WR_SEND_OP);
     }
@@ -267,10 +266,6 @@ impl Flags {
 
     pub(crate) fn unset_write_paused(&self) {
         self.remove(FlagsKind::WR_PAUSED);
-    }
-
-    pub(crate) fn unset_write_notify(&self) {
-        self.remove(FlagsKind::WR_NOTIFY);
     }
 
     pub(crate) fn unset_wr_send_scheduled(&self) {

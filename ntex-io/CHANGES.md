@@ -1,28 +1,86 @@
 # Changes
 
-## [4.1.0] - 2026-09-21
+## [4.1.0] - 2026-09-22
 
-* Fix api consistency for IoContext::update_read_status()
+* Io::recv() reports a truncated stream as UnexpectedEof instead of Ok(None),
+  a peer that closed its write half while the codec still held a partial item
+  is no longer indistinguishable from a clean end of stream. Input left over
+  after a locally started shutdown is not treated as truncation
 
+* Add IoContext::with_read_buf(), it hands the read buffer to the transport in
+  place instead of handing out a detached buffer that has to be appended back,
+  so a readiness based backend no longer pays a buffer swap and a copy for
+  every read
+* Pause the read side during the transport shutdown phase, the filters are done
+  by then so no further input can be used. The receive queue is discarded by the
+  transport itself, just before it closes the connection
+* Apply read back-pressure during the filter shutdown phase, Io::poll_shutdown()
+  cleared the back-pressure flag on every poll, so a peer that kept sending
+  could grow the read buffer without bound and the blocked shutdown detection
+  could never fire. Only the read pause is cleared now
+* Rename IoConfig::disconnect_timeout()/set_disconnect_timeout() to
+  shutdown_timeout()/set_shutdown_timeout(), it bounds the graceful shutdown
+  process rather than an abrupt disconnect
+* Remove Handle::notify(), FilterCtx::notify() and IoContext::notify(), nothing
+  triggered that path, read readiness is derived from connection flags and every
+  transition that changes it already wakes the read task
+* Account for output owned by the transport in the total write buffer size, a
+  completion based backend takes pages out of the write buffer and keeps them
+  until the operation completes. Those bytes now count towards flush
+  completion, write back-pressure and the shutdown drain, previously a full
+  flush could report success and back-pressure could be released while output
+  had not reached the peer yet
+* IoContext::update_write_status() takes the number of bytes written to the
+  peer, so that a backend holding write pages can report their progress
+* Drain buffered output during graceful shutdown instead of discarding it, the
+  transport shutdown phase now writes out whatever the filters produced before
+  closing the connection
+* Bound both graceful shutdown phases with a single shutdown timeout,
+  previously the transport shutdown phase was unbounded
+* Do not terminate the connection when a read fails while filters are shutting
+  down, the transport shutdown phase still drains buffered output
+* Replace Readiness::Shutdown and Readiness::Terminate with a single
+  Readiness::Close, io backends handled both identically. It requires closing
+  both directions of the connection; buffered output is drained before it is
+  reported for a graceful shutdown
+* Release read back-pressure and any read pause when IoRef::with_read_src() or
+  IoRef::with_buf() drain the application read destination, previously the
+  connection could stall permanently
+* Remove FilterCtx::new_read_bytes(), it had no consumers
+* Remove Io::pause(), the pause it installed could be silently cancelled
+* IoContext::update_write_status() takes io::Result<()> instead of io::Result<bool>
+* Release the transport handle when a direct write or notify callback terminates the connection
+* Io::poll_shutdown() no longer discards the read-ready flag
+* Io::poll_status_update() releases write back-pressure without reporting another
+  WriteBackpressure update, matching Io::poll_flush()
+* Add IoRef::is_rd_backpressure(), the read counterpart of is_wr_backpressure()
+* Report a clean read EOF to the filter chain exactly once
+* Complete filter shutdown after a clean peer EOF instead of waiting for the disconnect
+  timeout, no further input can arrive
+* Rename Io::read() to Io::read_exact(), it fills the whole buffer
+* Do not discard buffered output when filter shutdown cannot complete, wait for the write
+  buffer to drain (bounded by the disconnect timeout) before closing the transport
+* Rename buffer accessors to name their side of the chain:
+  IoRef::with_read_buf() to with_read_dst(),
+      with_write_buf() to with_write_src(),
+      with_read_src_buf() to with_read_src(),
+      with_write_dst_buf() to with_write_dst(),
+  IoContext::with_write_buf() to with_write_dst()
+* Remove IoContext::shutdown(), it is unreachable in every transport impl
+* Rename IoContext::get_read_buf() to take_read_buf() and
+  IoContext::update_read_status() to release_read_buf(), the pair moves the read
+  buffer out of the io state and back, the old names did not say so
+* Fix api consistency for IoContext::release_read_buf()
 * Fix peer EOF force-terminates instead of gracefully closing
-
 * Io::shutdown().await waits until physical transport shutdown
-
 * Added distinct IO_TERMINATING state for force-close and transport failures
-
 * Zero disconnect timeout disables the forced filter-shutdown deadline
-
 * Stopped timer clears any pending timeout notification
-
 * Filter shutdown timeout returns io::ErrorKind::TimedOut
-
 * Disconnect waiters resolve only after the backend closes connection
-
 * Backpressure remains active until the buffer reaches half of the high watermark
-
 * Fix read_notify() can wait forever after EOF with buffered data
-
-* Fix, recalculate buf size after shortcur write
+* Fix, recalculate buf size after shortcut write
 
 ## [4.0.1] - 2026-09-18
 

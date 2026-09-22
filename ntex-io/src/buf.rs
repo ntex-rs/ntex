@@ -109,12 +109,8 @@ impl Stack {
         let mut ctx = FilterCtx {
             io,
             idx: 0,
-            nbytes: 0,
             stack: self,
-            st: FilterUpdates {
-                wants_write: false,
-                notify: false,
-            },
+            st: FilterUpdates { wants_write: false },
         };
         f(&mut ctx)
     }
@@ -137,16 +133,12 @@ impl Stack {
         });
     }
 
-    pub(crate) fn process_read_buf(&self, io: &IoRef, nbytes: usize) -> io::Result<FilterUpdates> {
+    pub(crate) fn process_read_buf(&self, io: &IoRef) -> io::Result<FilterUpdates> {
         let mut ctx = FilterCtx {
             io,
-            nbytes,
             idx: 0,
             stack: self,
-            st: FilterUpdates {
-                wants_write: false,
-                notify: false,
-            },
+            st: FilterUpdates { wants_write: false },
         };
         io.with_callbacks(|cb| cb.before_processing(io));
         let result = io.filter().process_read_buf(&mut ctx);
@@ -155,20 +147,12 @@ impl Stack {
         result.map(|()| ctx.st)
     }
 
-    pub(crate) fn process_read_buf_no_cb(
-        &self,
-        io: &IoRef,
-        nbytes: usize,
-    ) -> io::Result<FilterUpdates> {
+    pub(crate) fn process_read_buf_no_cb(&self, io: &IoRef) -> io::Result<FilterUpdates> {
         let mut ctx = FilterCtx {
             io,
-            nbytes,
             idx: 0,
             stack: self,
-            st: FilterUpdates {
-                wants_write: false,
-                notify: false,
-            },
+            st: FilterUpdates { wants_write: false },
         };
         io.filter().process_read_buf(&mut ctx).map(|()| ctx.st)
     }
@@ -180,12 +164,8 @@ impl Stack {
             let mut ctx = FilterCtx {
                 io,
                 idx: 0,
-                nbytes: 0,
                 stack: self,
-                st: FilterUpdates {
-                    wants_write: true,
-                    notify: false,
-                },
+                st: FilterUpdates { wants_write: true },
             };
             io.with_callbacks(|cb| cb.before_processing(io));
             let res = io.filter().process_write_buf(&mut ctx);
@@ -202,12 +182,8 @@ impl Stack {
             let mut ctx = FilterCtx {
                 io,
                 idx: 0,
-                nbytes: 0,
                 stack: self,
-                st: FilterUpdates {
-                    wants_write: true,
-                    notify: false,
-                },
+                st: FilterUpdates { wants_write: true },
             };
             io.filter().process_write_buf(&mut ctx)
         }
@@ -217,12 +193,8 @@ impl Stack {
         let mut ctx = FilterCtx {
             io,
             idx: 0,
-            nbytes: 0,
             stack: self,
-            st: FilterUpdates {
-                wants_write: true,
-                notify: false,
-            },
+            st: FilterUpdates { wants_write: true },
         };
         io.with_callbacks(|cb| cb.before_processing(io));
         let res = io.filter().process_write_buf(&mut ctx);
@@ -298,20 +270,18 @@ impl Buffer {
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct FilterUpdates {
     pub(crate) wants_write: bool,
-    pub(crate) notify: bool,
 }
 
 #[derive(Debug)]
 /// Context used while traversing a complete filter chain.
 ///
-/// A context tracks the current layer and accumulated notifications.
-/// [`with_next`](Self::with_next) advances to the inner layer, while
-/// [`with_buffer`](Self::with_buffer) exposes the buffers adjacent to the
+/// A context tracks the current layer and the write activity accumulated while
+/// traversing it. [`with_next`](Self::with_next) advances to the inner layer,
+/// while [`with_buffer`](Self::with_buffer) exposes the buffers adjacent to the
 /// current layer.
 pub struct FilterCtx<'a> {
     io: &'a IoRef,
     idx: usize,
-    nbytes: usize,
     stack: &'a Stack,
     st: FilterUpdates,
 }
@@ -327,22 +297,6 @@ impl FilterCtx<'_> {
     /// Gets the I/O tag.
     pub fn tag(&self) -> &'static str {
         self.io.tag()
-    }
-
-    #[inline]
-    /// Returns the number of bytes added by the latest transport read.
-    ///
-    /// This is zero when filters are invoked for clean read EOF. Use
-    /// [`IoRef::is_read_eof`](crate::IoRef::is_read_eof) to distinguish EOF
-    /// from other zero-byte processing passes.
-    pub fn new_read_bytes(&self) -> usize {
-        self.nbytes
-    }
-
-    #[inline]
-    /// Requests a transport readiness notification after processing.
-    pub fn notify(&mut self) {
-        self.st.notify = true;
     }
 
     #[inline]
@@ -574,7 +528,6 @@ mod tests {
         stack.with_filter(&ioref, |ctx| {
             assert_eq!(ctx.io(), &ioref);
             assert_eq!(ctx.tag(), ioref.tag());
-            assert_eq!(ctx.new_read_bytes(), 0);
             assert_eq!(ctx.read_dst_size(), 0);
 
             ctx.with_buffer(|buf| {
@@ -611,7 +564,6 @@ mod tests {
         stack.with_write_src(|buf| buf.put_slice(b"output"));
 
         let updates = stack.with_filter(&ioref, |ctx| {
-            ctx.notify();
             assert_eq!(ctx.write_dst_size(), 0);
             ctx.with_buffer(|buf| {
                 buf.with_write_buffers(|src, dst| {
@@ -623,7 +575,6 @@ mod tests {
             ctx.st
         });
 
-        assert!(updates.notify);
         assert!(updates.wants_write);
         assert_eq!(stack.write_buf_size(), 6);
         assert_eq!(

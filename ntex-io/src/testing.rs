@@ -393,26 +393,10 @@ impl Handle for Rc<IoTest> {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum Status {
-    Shutdown,
-    Terminate,
-}
-
 async fn run(io: Rc<IoTest>, ctx: IoContext) {
-    let st = poll_fn(|cx| turn(&io, &ctx, cx)).await;
+    poll_fn(|cx| turn(&io, &ctx, cx)).await;
 
     log::debug!("{}: Shuting down io", ctx.tag());
-    if !ctx.is_stopped() {
-        let flush = st == Status::Shutdown;
-        poll_fn(|cx| {
-            if turn(&io, &ctx, cx) == Poll::Ready(Status::Terminate) {
-                return Poll::Ready(());
-            }
-            ctx.shutdown(flush, cx)
-        })
-        .await;
-    }
 
     // shutdown WRITE side
     io.local
@@ -426,33 +410,30 @@ async fn run(io: Rc<IoTest>, ctx: IoContext) {
     ctx.stopped(None);
 }
 
-fn turn(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<Status> {
+fn turn(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<()> {
     let read = match ctx.poll_read_ready(cx) {
         Poll::Ready(Readiness::Ready) => read(io, ctx, cx),
-        Poll::Ready(Readiness::Shutdown | Readiness::Terminate) => Poll::Ready(()),
+        Poll::Ready(Readiness::Close) => Poll::Ready(()),
         Poll::Pending => Poll::Pending,
     };
 
     let write = match ctx.poll_write_ready(cx) {
         Poll::Ready(Readiness::Ready) => write(io, ctx, cx),
-        Poll::Ready(Readiness::Shutdown) => Poll::Ready(Status::Shutdown),
-        Poll::Ready(Readiness::Terminate) => Poll::Ready(Status::Terminate),
+        Poll::Ready(Readiness::Close) => Poll::Ready(()),
         Poll::Pending => Poll::Pending,
     };
 
     if read.is_pending() && write.is_pending() {
         Poll::Pending
-    } else if write.is_ready() {
-        write
     } else {
-        Poll::Ready(Status::Terminate)
+        Poll::Ready(())
     }
 }
 
-fn write(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<Status> {
-    let result = ctx.with_write_buf(|buf| write_io(io, buf, cx, ctx));
+fn write(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<()> {
+    let result = ctx.with_write_dst(|buf| write_io(io, buf, cx, ctx));
     if ctx.update_write_status(result) == IoTaskStatus::Stop {
-        Poll::Ready(Status::Terminate)
+        Poll::Ready(())
     } else {
         Poll::Pending
     }
@@ -460,11 +441,12 @@ fn write(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<Status> {
 
 fn read(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<()> {
     loop {
-        let mut buf = ctx.get_read_buf();
-
-        let result = io.poll_read_buf(cx, &mut buf);
-        let pending = result.is_pending();
-        let result = ctx.update_read_status(buf, result);
+        let mut pending = false;
+        let result = ctx.with_read_buf(|buf| {
+            let result = io.poll_read_buf(cx, buf);
+            pending = result.is_pending();
+            result
+        });
         return match result {
             IoTaskStatus::Io => {
                 if pending {
@@ -485,7 +467,7 @@ pub(super) fn write_io(
     buf: &mut BytePages,
     cx: &mut Context<'_>,
     ctx: &IoContext,
-) -> io::Result<bool> {
+) -> io::Result<usize> {
     let tag = ctx.tag();
     let mut written = 0;
 
@@ -515,7 +497,7 @@ pub(super) fn write_io(
     }
 
     log::debug!("{tag}: flushed {written} bytes, remaining: {}", buf.len());
-    Ok(written > 0)
+    Ok(written)
 }
 
 #[cfg(test)]

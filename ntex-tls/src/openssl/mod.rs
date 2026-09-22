@@ -149,7 +149,7 @@ impl FilterLayer for SslFilter {
 
     fn shutdown(&self, buf: &FilterBuf<'_>) -> io::Result<Poll<()>> {
         let ssl_result = self.with_buffers(buf, |_| self.inner.borrow_mut().shutdown());
-        match ssl_result {
+        let result = match ssl_result {
             Ok(ssl::ShutdownResult::Sent) => Ok(Poll::Pending),
             Ok(ssl::ShutdownResult::Received) => Ok(Poll::Ready(())),
             Err(ref e) if e.code() == ssl::ErrorCode::ZERO_RETURN => Ok(Poll::Ready(())),
@@ -162,7 +162,14 @@ impl FilterLayer for SslFilter {
                 Ok(Poll::Pending)
             }
             Err(e) => Err(e.into_io_error().unwrap_or_else(io::Error::other)),
+        };
+
+        // Our close_notify has been sent, but the peer closed the connection
+        // without sending its own; it is never going to arrive.
+        if matches!(result, Ok(Poll::Pending)) && buf.io().is_read_eof() {
+            return Ok(Poll::Ready(()));
         }
+        result
     }
 
     fn process_read_buf(&self, rb: &FilterBuf<'_>) -> io::Result<()> {
