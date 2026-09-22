@@ -4,7 +4,8 @@
 
 * Discard the socket receive queue before closing a connection, closing a
   socket with unread input aborts it with an RST and loses the output that the
-  graceful shutdown just drained
+  graceful shutdown just drained. The io-uring backend leaves this to a recv
+  that is already in flight rather than racing it
 
 * Report the number of bytes written to the peer from every backend, so that
   output a completion based backend still owns is accounted for as outstanding

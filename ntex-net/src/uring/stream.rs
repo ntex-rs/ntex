@@ -544,7 +544,12 @@ impl StreamCtl {
                     self.id
                 );
                 let fd = storage.streams[self.id].fd();
-                crate::helpers::drain_raw_socket(fd.0);
+                if storage.streams[self.id].rd_op.is_none() {
+                    // `pause_read()` above only submits a cancel, so a recv can
+                    // still be in flight; draining now would race it. Nothing is
+                    // lost by skipping, that recv empties the queue itself.
+                    crate::helpers::drain_raw_socket(fd.0);
+                }
                 let (tx, rx) = self.inner.pool.channel();
                 let op_id = storage.add_operation(Operation::shutdown(tx));
                 self.inner

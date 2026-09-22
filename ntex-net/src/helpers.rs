@@ -54,6 +54,12 @@ const MAX_DRAIN_CHUNKS: usize = 16;
 /// until it is empty or [`MAX_DRAIN_CHUNKS`] have been discarded, so a peer that
 /// keeps sending cannot hold the shutdown up. Input that arrives after the last
 /// read can still abort the connection, that race cannot be closed.
+///
+/// This runs on the write task, which on a completion based backend can leave a
+/// read operation in flight, so the two may end up sharing the queue between
+/// them. That is harmless, input is discarded in this phase either way, and a
+/// backend that can cheaply tell an operation is in flight is free to leave the
+/// draining to it instead.
 pub(crate) fn drain_socket(sock: &socket2::SockRef<'_>) {
     if sock.set_nonblocking(true).is_err() {
         return;
