@@ -292,11 +292,6 @@ impl Flags {
         self.remove(FlagsKind::RD_PAUSED);
     }
 
-    /// Resumes reads without discarding the "input available" signal.
-    pub(crate) fn resume_reads(&self) {
-        self.remove(FlagsKind::RD_PAUSED | FlagsKind::RD_BACKPRESSURE);
-    }
-
     /// Checks `RD_NOTIFY` and unsets
     pub(crate) fn check_read_notifed(&self) -> bool {
         if self.contains(FlagsKind::RD_NOTIFIED) {

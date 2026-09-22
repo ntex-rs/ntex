@@ -2,6 +2,10 @@
 
 ## [4.1.0] - 2026-09-22
 
+* Apply read back-pressure during the filter shutdown phase, Io::poll_shutdown()
+  cleared the back-pressure flag on every poll, so a peer that kept sending
+  could grow the read buffer without bound and the blocked shutdown detection
+  could never fire. Only the read pause is cleared now
 * Rename IoConfig::disconnect_timeout()/set_disconnect_timeout() to
   shutdown_timeout()/set_shutdown_timeout(), it bounds the graceful shutdown
   process rather than an abrupt disconnect

@@ -889,7 +889,13 @@ impl<F> Io<F> {
             // observe a peer EOF and filters can complete their shutdown
             // handshake. `BUF_R_READY` is deliberately left alone: it marks
             // input the dispatcher has not consumed yet.
-            st.flags.resume_reads();
+            //
+            // Only the pause is cleared. Backpressure means the read buffer is
+            // full, which the shutdown must still respect: clearing it on every
+            // poll would let a peer that keeps sending grow the buffer without
+            // bound, and would hide the blocked shutdown detection in
+            // `poll_filters_shutdown`, which tests for exactly that flag.
+            st.flags.unset_read_paused();
 
             st.wake_read_task();
             st.wake_write_task();
@@ -2351,6 +2357,107 @@ mod tests {
 
         // buffered output still reached the peer
         assert_eq!(peer.read_any(), Bytes::from_static(b"bye"));
+    }
+
+    /// A filter that forwards input and never finishes its own shutdown.
+    #[derive(Debug)]
+    struct StuckShutdown(Cell<bool>);
+
+    impl FilterLayer for StuckShutdown {
+        fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+            buf.with_read_buffers(|src, dst| {
+                if let Some(src) = src {
+                    dst.extend_from_slice(src);
+                    src.clear();
+                }
+            });
+            Ok(())
+        }
+
+        fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+            buf.with_write_buffers(BytePages::move_to);
+            Ok(())
+        }
+
+        fn shutdown(&self, _: &FilterBuf<'_>) -> io::Result<Poll<()>> {
+            self.0.set(true);
+            Ok(Poll::Pending)
+        }
+    }
+
+    #[ntex::test]
+    async fn filter_shutdown_applies_read_backpressure() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024 * 1024);
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV").add(
+                IoConfig::default()
+                    .set_read_buf(1024, 256, 8)
+                    .set_shutdown_timeout(ntex_util::time::Seconds(30)),
+            ),
+        )
+        .add_filter(StuckShutdown(Cell::new(false)));
+
+        let ioref = io.get_ref();
+        let high = 1024;
+        ntex::rt::spawn(async move {
+            let _ = io.shutdown().await;
+        });
+        sleep(Millis(50)).await;
+
+        // The filter never completes, so the connection stays in the filter
+        // shutdown phase while the peer keeps sending.
+        for _ in 0..40 {
+            client.write("A".repeat(1024));
+            sleep(Millis(5)).await;
+        }
+        sleep(Millis(100)).await;
+
+        // Reads are backpressured instead of draining the peer without bound.
+        let buffered = ioref.with_read_dst(|buf| buf.len());
+        assert!(
+            buffered <= high * 2,
+            "read buffer grew to {buffered} with a high watermark of {high}"
+        );
+        assert!(
+            client.remote_buffer(|buf| !buf.is_empty()),
+            "peer send buffer was drained despite read backpressure"
+        );
+    }
+
+    #[ntex::test]
+    async fn filter_shutdown_blocked_by_unconsumed_input() {
+        // The dispatcher stops consuming with a full read buffer, so the filter
+        // cannot receive the input it is waiting for. The shutdown gives up on
+        // the filter handshake promptly instead of reading without bound until
+        // the deadline.
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024 * 1024);
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV").add(
+                IoConfig::default()
+                    .set_read_buf(1024, 256, 8)
+                    .set_shutdown_timeout(ntex_util::time::Seconds(30)),
+            ),
+        )
+        .add_filter(StuckShutdown(Cell::new(false)));
+
+        client.write("A".repeat(4096));
+        sleep(Millis(50)).await;
+        assert!(
+            io.get_ref().is_rd_backpressure(),
+            "read backpressure was not active before the shutdown"
+        );
+
+        // Completes well inside the 30 second deadline, so it is the blocked
+        // detection that ends the phase rather than the timeout.
+        let err = timeout(Millis(3000), io.shutdown())
+            .await
+            .expect("shutdown did not complete")
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Other);
     }
 
     #[ntex::test]
