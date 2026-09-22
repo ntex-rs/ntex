@@ -92,9 +92,10 @@ impl IoRef {
     /// read task.
     ///
     /// Two different paths release it. Consuming through
-    /// [`decode`](Self::decode) or [`with_read_dst`](Self::with_read_dst)
-    /// releases it once the buffer has fallen to at most half the high
-    /// watermark. Asking for more input through
+    /// [`decode`](Self::decode), [`with_buf`](Self::with_buf),
+    /// [`with_read_src`](Self::with_read_src) or
+    /// [`with_read_dst`](Self::with_read_dst) releases it once the buffer has
+    /// fallen to at most half the high watermark. Asking for more input through
     /// [`Io::poll_read_more`](crate::Io::poll_read_more), and the methods built
     /// on it, releases it immediately however much data is still buffered.
     pub fn is_rd_backpressure(&self) -> bool {

@@ -93,7 +93,6 @@ impl Terminate for compio_net::TcpStream {
     }
 }
 
-#[cfg(unix)]
 impl Terminate for compio_net::UnixStream {
     fn terminate(&self) -> io::Result<()> {
         socket2::SockRef::from(self).shutdown(std::net::Shutdown::Both)

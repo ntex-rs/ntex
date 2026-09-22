@@ -37,14 +37,24 @@ the configured high-water mark is reached.
 
 The write task follows the same pattern. It waits for
 [`IoContext::poll_write_ready`], obtains queued data with
-[`IoContext::with_write_dst`], and reports the outcome through
-[`IoContext::update_write_status`]. ntex can then apply write backpressure,
-resume waiting services, and coordinate graceful shutdown.
+[`IoContext::with_write_dst`], and reports through
+[`IoContext::update_write_status`] how many bytes reached the peer. ntex can
+then apply write backpressure, resume waiting services, and coordinate
+graceful shutdown.
+
+A transport does not have to write the bytes before it reports. Completion
+based backends take ownership of whole pages and keep them until the operation
+completes. Those bytes leave the write buffer but have not reached the peer, so
+ntex counts them as outstanding output until the transport either reports them
+as written or returns them to the buffer. Flush completion, write backpressure,
+and the shutdown drain all account for them.
 
 Both methods return an [`IoTaskStatus`]. `Io` means work remains, not that the
 transport is ready, so a task re-arms transport readiness before its next
 operation. On the write side it is returned whenever output is still buffered,
-including after an attempt that made no progress.
+including after an attempt that made no progress. Output the transport already
+owns does not keep the task running, because its completion wakes the task
+again.
 
 Socket types integrate with the I/O subsystem by implementing [`IoStream`].
 Its `start()` method receives an [`IoContext`], starts the transport-specific
@@ -86,6 +96,7 @@ async fn write_task(socket: Rc<TcpStream>, ctx: IoContext) {
             write_to_socket(&socket, buf)
         });
 
+        // `result` carries the number of bytes that reached the peer
         match ctx.update_write_status(result) {
             IoTaskStatus::Io => {}
             IoTaskStatus::Pause => wait_for_queued_output(&ctx).await,
@@ -188,10 +199,12 @@ These settings are used by different parts of the stack:
 - The keep-alive timeout and frame read-rate limits are interpreted by
   protocol dispatchers. A frame read-rate limit protects a decoder from peers
   that send one incomplete frame too slowly.
-- The graceful-disconnect timeout limits how long the I/O subsystem waits for
-  filters and pending output during shutdown.
+- The graceful-disconnect timeout bounds both phases of shutdown together: the
+  filter shutdown and the transport drain of pending output.
 - The read and write high-water marks enable backpressure. Write backpressure
-  is released after buffered output falls to half its high-water mark.
+  is released after outstanding output falls to half its high-water mark,
+  counting both buffered output and output a transport has taken ownership of
+  but not yet written to the peer.
 - The read low-water mark controls how much free capacity is reserved before
   another socket read. The cache-size argument limits the number of eligible
   read buffers retained in the per-thread cache.
@@ -335,8 +348,9 @@ insufficient, the buffer grows and may allocate additional storage.
 
 Read backpressure is based on the size of the application-facing read buffer.
 When it reaches the configured high-water mark, ntex pauses the transport read
-task. Consuming input through [`IoRef::decode`] or [`IoRef::with_read_dst`]
-wakes the read task once the buffered input falls to half that mark.
+task. Consuming input through [`IoRef::decode`], [`IoRef::with_buf`],
+[`IoRef::with_read_src`] or [`IoRef::with_read_dst`] wakes the read task once
+the buffered input falls to half that mark.
 [`Io::recv`] and [`Io::read_exact`] wait for more input, so they release
 backpressure regardless of how much is still buffered.
 
@@ -357,9 +371,10 @@ write threshold can trigger an earlier write while the application is still
 producing output, reducing latency for large responses.
 
 Use [`Io::flush`] to wait for write progress. `flush(false)` returns
-immediately while the buffered output is below the high-water mark. If the
-high-water mark has been reached, it waits until the buffered output falls to
-half that mark. `flush(true)` waits until all queued data has been written.
+immediately while the outstanding output is below the high-water mark. If the
+high-water mark has been reached, it waits until the outstanding output falls
+to half that mark. `flush(true)` waits until all queued data has reached the
+peer, including data a transport has taken ownership of but not yet written.
 [`Io::send`] combines codec encoding with a full flush.
 
 This separation allows codecs and application services to work with bytes
@@ -379,6 +394,8 @@ enforces buffer limits and backpressure.
 [`IoRef::encode_bytes`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.encode_bytes
 [`IoRef::encode_slice`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.encode_slice
 [`IoRef::with_read_dst`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.with_read_dst
+[`IoRef::with_read_src`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.with_read_src
+[`IoRef::with_buf`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.with_buf
 
 ## Connection lifecycle and shutdown
 
@@ -391,8 +408,8 @@ requires attention. [`Io::poll_status_update`] reports the next status as an
 [`IoStatusUpdate`] value:
 
 - `KeepAlive` when the configured keep-alive timeout has expired.
-- `WriteBackpressure` when queued output has reached the write high-water
-  mark, so the producer should stop and flush.
+- `WriteBackpressure` when outstanding output has reached the write
+  high-water mark, so the producer should stop and flush.
 - `PeerGone` once the connection has closed, whether the peer disconnected,
   the transport failed, or the shutdown was started locally. It carries the
   transport error if one occurred, and `None` after a clean close.
@@ -408,14 +425,24 @@ open, so a service can still finish encoding and flushing its response before
 closing.
 
 [`IoRef::close`] requests a graceful shutdown and returns immediately.
-[`Io::shutdown`] drives that shutdown to completion: it flushes queued output,
-gives every filter a chance to emit its own closing data through
-[`FilterLayer::shutdown`], such as a TLS `close_notify` or a WebSocket close
-frame, and then shuts the transport down. Reads keep running throughout, so
-closing data sent by the peer is still processed.
+[`Io::shutdown`] drives that shutdown to completion, in two phases.
 
-The graceful-disconnect timeout bounds this process. [`IoRef::terminate`] skips
-it entirely and drops the connection without flushing pending output.
+In the first phase both directions stay open and every filter gets a chance to
+emit its own closing data through [`FilterLayer::shutdown`], such as a TLS
+`close_notify` or a WebSocket close frame. Reads keep running and are processed
+normally, so closing data sent by the peer still reaches the filters. A read
+failure does not abort the shutdown; it only means the filter handshake cannot
+finish.
+
+The second phase belongs to the transport. It drains the remaining output into
+the connection, reading and discarding any further input so that the receive
+queue is empty when the socket is closed, and then closes both directions.
+Input is no longer delivered to the application in this phase.
+
+A single graceful-disconnect timeout bounds both phases; if it elapses the
+connection is terminated and any undrained output is discarded.
+[`IoRef::terminate`] skips the process entirely and drops the connection
+without flushing pending output.
 
 [`FilterLayer::shutdown`]: https://docs.rs/ntex/latest/ntex/io/trait.FilterLayer.html#method.shutdown
 [`Io::poll_recv`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.poll_recv

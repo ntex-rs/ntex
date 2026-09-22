@@ -607,9 +607,11 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Wakes the write task and requests a flush of buffered data.
+    /// Wakes the write task and requests a flush of queued output.
     ///
-    /// This is the asynchronous counterpart to `poll_flush`.
+    /// This is the asynchronous counterpart to `poll_flush`. A full flush
+    /// completes once all output has reached the peer, including output a
+    /// transport has taken ownership of but not yet written.
     pub async fn flush(&self, full: bool) -> io::Result<()> {
         poll_fn(|cx| self.poll_flush(cx, full)).await
     }
@@ -617,8 +619,14 @@ impl<F> Io<F> {
     #[inline]
     /// Gracefully shuts down the I/O stream.
     ///
-    /// This completes after filters and buffered output have been flushed and
-    /// the transport backend has finished its shutdown operation.
+    /// Shutdown runs in two phases, bounded together by a single
+    /// disconnect timeout. First the filters shut down while both directions
+    /// stay open, so a filter can emit its closing data and read the peer's.
+    /// Then the transport drains the remaining output, reading and discarding
+    /// any further input, and closes the connection.
+    ///
+    /// This completes once the transport backend has finished its shutdown
+    /// operation.
     pub async fn shutdown(&self) -> io::Result<()> {
         poll_fn(|cx| self.poll_shutdown(cx)).await
     }
@@ -631,9 +639,10 @@ impl<F> Io<F> {
     /// buffer check.
     ///
     /// The release is unconditional: unlike consumption through
-    /// [`IoRef::decode`] or [`IoRef::with_read_dst`], which waits for the read
-    /// buffer to fall to at most half the high watermark, this releases read
-    /// backpressure however much data is still buffered. Asking for more input
+    /// [`IoRef::decode`], [`IoRef::with_buf`], [`IoRef::with_read_src`] or
+    /// [`IoRef::with_read_dst`], which waits for the read buffer to fall to at
+    /// most half the high watermark, this releases read backpressure however
+    /// much data is still buffered. Asking for more input
     /// is taken as the dispatcher declaring itself able to accept it.
     ///
     /// # Returns

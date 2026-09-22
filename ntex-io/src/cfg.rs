@@ -84,10 +84,12 @@ pub struct BufConfig {
     ///
     /// Buffers whose capacity is not greater than this value are not cached.
     pub low: usize,
-    /// Buffered byte count at which active backpressure is released.
+    /// Outstanding byte count at which active backpressure is released.
     ///
-    /// For [`IoConfig::write_buf`] this releases write backpressure; for
-    /// [`IoConfig::read_buf`] it releases read backpressure.
+    /// For [`IoConfig::write_buf`] this releases write backpressure, counting
+    /// buffered output together with output a transport has taken ownership of
+    /// but not yet written to the peer; for [`IoConfig::read_buf`] it releases
+    /// read backpressure.
     ///
     /// This is set to half of `high` by the configuration builders.
     pub half: usize,
@@ -375,9 +377,11 @@ impl IoConfig {
 
     /// Sets write-buffer watermarks and cache capacity.
     ///
-    /// `high_watermark` enables write backpressure at this buffered size and
-    /// must be greater than zero. Backpressure is released after the buffered
-    /// size falls to half of this value. `low_watermark` controls which empty
+    /// `high_watermark` enables write backpressure at this outstanding size and
+    /// must be greater than zero. Backpressure is released after the
+    /// outstanding size falls to half of this value. Outstanding output is the
+    /// buffered output plus any output a transport has taken ownership of but
+    /// not yet written to the peer. `low_watermark` controls which empty
     /// buffers are eligible for caching, and `cache_size` limits the number
     /// retained per thread and configuration.
     ///
