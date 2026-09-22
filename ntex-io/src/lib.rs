@@ -177,7 +177,7 @@ pub enum IoTaskStatus {
     /// returned whenever output is still buffered, including after an attempt
     /// that made no progress.
     Io,
-    /// Pause the task until the context or handle wakes it.
+    /// Pause the task until the context wakes it.
     Pause,
     /// Stop the task and release its transport resources.
     Stop,

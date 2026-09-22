@@ -49,8 +49,8 @@ impl IoContext {
         &self.0.0
     }
 
-    #[doc(hidden)]
     #[inline]
+    /// Gets the ID.
     pub fn id(&self) -> Id {
         self.0.id()
     }
@@ -483,11 +483,6 @@ impl IoContext {
             st.set_shutdown_error(err);
         }
         st.filters_stopped();
-    }
-
-    /// Notifies read tasks.
-    pub fn notify(&self) {
-        self.0.0.wake_read_task();
     }
 }
 
