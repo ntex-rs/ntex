@@ -121,7 +121,7 @@ pub trait FilterLayer: fmt::Debug + 'static {
     /// A filter that waits for input from the peer must check
     /// [`IoRef::is_read_eof`] and return a ready result once it is set: after a
     /// clean read EOF no further input can arrive, so pending forever would
-    /// only stall the close until the disconnect timeout expires. The runtime
+    /// only stall the close until the shutdown timeout expires. The runtime
     /// also ends the shutdown phase itself in that case, but it cannot know
     /// whether the filter considers the shutdown complete.
     fn shutdown(&self, buf: &FilterBuf<'_>) -> IoResult<Poll<()>> {

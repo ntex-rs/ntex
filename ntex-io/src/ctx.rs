@@ -24,7 +24,7 @@ use crate::{Flags, Id, IoRef, IoTaskStatus, Readiness, io::IoState};
 /// while both directions stay open. In the second, buffered output is drained
 /// into the transport and incoming data is read and discarded;
 /// [`Readiness::Close`] is reported only once nothing is left to write. A
-/// single disconnect timeout bounds both phases, and terminates the connection
+/// single shutdown timeout bounds both phases, and terminates the connection
 /// if it elapses.
 ///
 /// So by the time the loop exits there is nothing left to drain, whether the
@@ -361,12 +361,12 @@ impl IoContext {
     /// also ended early when the filters cannot finish: after a clean read EOF,
     /// because no further input can arrive, which is a normal close rather than
     /// an error; when buffered input is left unconsumed, which is reported as a
-    /// blocked shutdown; and when the disconnect timeout elapses. An I/O error
+    /// blocked shutdown; and when the shutdown timeout elapses. An I/O error
     /// terminates the connection instead.
     ///
     /// The deadline is kept once it has expired so that
     /// [`poll_shutdown_deadline`](Self::poll_shutdown_deadline) sees it
-    /// expired, which is what makes one `disconnect_timeout` bound both
+    /// expired, which is what makes one `shutdown_timeout` bound both
     /// phases.
     fn poll_filters_shutdown(&self, cx: &mut Context<'_>) {
         let st = &self.st();
@@ -426,12 +426,12 @@ impl IoContext {
             return;
         }
 
-        if st.cfg.disconnect_timeout().non_zero() {
+        if st.cfg.shutdown_timeout().non_zero() {
             // filter shutdown timeout
             let timeout = st
                 .shutdown_timeout
                 .take()
-                .unwrap_or_else(|| sleep(st.cfg.disconnect_timeout()));
+                .unwrap_or_else(|| sleep(st.cfg.shutdown_timeout()));
             if timeout.poll_elapsed(cx).is_ready() {
                 Self::stop_filters(
                     st,
@@ -451,12 +451,12 @@ impl IoContext {
     /// Polls the shutdown deadline during the transport shutdown phase.
     ///
     /// The deadline is created when filter shutdown starts and is not reset
-    /// here, so a single `disconnect_timeout` bounds both shutdown phases. When
+    /// here, so a single `shutdown_timeout` bounds both shutdown phases. When
     /// it elapses the connection is terminated and any output that has not
     /// reached the transport is lost.
     fn poll_shutdown_deadline(&self, cx: &mut Context<'_>) {
         let st = &self.st();
-        if !st.flags.is_stopping() || !st.cfg.disconnect_timeout().non_zero() {
+        if !st.flags.is_stopping() || !st.cfg.shutdown_timeout().non_zero() {
             return;
         }
 
@@ -471,7 +471,7 @@ impl IoContext {
         let timeout = st
             .shutdown_timeout
             .take()
-            .unwrap_or_else(|| sleep(st.cfg.disconnect_timeout()));
+            .unwrap_or_else(|| sleep(st.cfg.shutdown_timeout()));
         if timeout.poll_elapsed(cx).is_ready() {
             let len = st.write_outstanding();
             if len != 0 {

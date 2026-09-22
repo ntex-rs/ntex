@@ -198,9 +198,14 @@ where
     /// serving requests. Workers that are still alive after the timeout are
     /// forcefully dropped.
     ///
-    /// By default, the shutdown timeout is set to 30 seconds.
-    pub fn shutdown_timeout(mut self, sec: Seconds) -> Self {
-        self.builder = self.builder.shutdown_timeout(sec);
+    /// This bounds the worker as a whole, not an individual connection. Each
+    /// connection is bound separately by `IoConfig::set_shutdown_timeout`, so
+    /// this value should leave room for the connections a worker is still
+    /// draining to shut down themselves.
+    ///
+    /// By default, the timeout is set to 30 seconds.
+    pub fn graceful_shutdown_timeout(mut self, sec: Seconds) -> Self {
+        self.builder = self.builder.graceful_shutdown_timeout(sec);
         self
     }
 

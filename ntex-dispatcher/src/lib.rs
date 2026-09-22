@@ -1176,7 +1176,7 @@ mod tests {
 
         let cfg = SharedCfg::new("DBG").add(
             IoConfig::new()
-                .set_disconnect_timeout(Seconds(1))
+                .set_shutdown_timeout(Seconds(1))
                 .set_keepalive_timeout(Seconds(1)),
         );
 

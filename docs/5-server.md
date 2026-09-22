@@ -108,8 +108,10 @@ provides several ways to configure the accept loop and worker pool:
 - `maxconn()` sets the maximum number of concurrent connections per worker.
 - `enable_affinity()` pins workers to CPU cores when possible.
 - `stop_on_panic()` stops the entire server if a worker panics.
-- `shutdown_timeout()` sets the maximum time allowed for a graceful worker
-  shutdown. The default is 30 seconds.
+- `graceful_shutdown_timeout()` sets the maximum time allowed for a graceful
+  worker shutdown. The default is 30 seconds. This bounds the worker as a
+  whole; each connection is bound separately by
+  `IoConfig::set_shutdown_timeout`.
 - `status_handler()` receives readiness updates from the accept loop.
 - `disable_signals()` turns off the server's built-in signal handling.
 
@@ -123,7 +125,7 @@ let builder = ntex::server::build()
     .workers(4)
     .backlog(1024)
     .maxconn(20_000)
-    .shutdown_timeout(Seconds(15))
+    .graceful_shutdown_timeout(Seconds(15))
     .stop_on_panic();
 ```
 
@@ -205,7 +207,7 @@ async fn main() -> std::io::Result<()> {
     let cfg = SharedCfg::new("HTTP")
         .add(
             IoConfig::new()
-                .set_disconnect_timeout(Seconds(1))
+                .set_shutdown_timeout(Seconds(1))
                 .set_write_page_size(BytePageSize::Size16),
         )
         .add(

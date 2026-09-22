@@ -221,7 +221,7 @@ let cfg = SharedCfg::new("my-protocol")
         IoConfig::new()
             .set_connect_timeout(Millis(5_000))
             .set_keepalive_timeout(Seconds(30))
-            .set_disconnect_timeout(Seconds(2))
+            .set_shutdown_timeout(Seconds(2))
             .set_frame_read_rate(Seconds(2), Seconds(10), 1_024)
             .set_read_buf(32 * 1024, 1024, 16)
             .set_write_buf(32 * 1024)
@@ -237,7 +237,7 @@ These settings are used by different parts of the stack:
 - The keep-alive timeout and frame read-rate limits are interpreted by
   protocol dispatchers. A frame read-rate limit protects a decoder from peers
   that send one incomplete frame too slowly.
-- The graceful-disconnect timeout bounds both phases of shutdown together: the
+- The graceful-shutdown timeout bounds both phases of shutdown together: the
   filter shutdown and the transport drain of pending output.
 - The read and write high-water marks enable backpressure. Write backpressure
   is released after outstanding output falls to half its high-water mark,
@@ -252,7 +252,7 @@ These settings are used by different parts of the stack:
   threshold controls when supported transports attempt an early direct write.
 
 Connection and keep-alive timeouts are disabled by default. Frame read-rate
-limits are also disabled. The default graceful-disconnect timeout is one
+limits are also disabled. The default graceful-shutdown timeout is one
 second, and the default read and write high-water marks are approximately
 16 KiB.
 
@@ -480,7 +480,7 @@ the connection, reading and discarding any further input so that the receive
 queue is empty when the socket is closed, and then closes both directions.
 Input is no longer delivered to the application in this phase.
 
-A single graceful-disconnect timeout bounds both phases; if it elapses the
+A single graceful-shutdown timeout bounds both phases; if it elapses the
 connection is terminated and any undrained output is discarded.
 [`IoRef::terminate`] skips the process entirely and drops the connection
 without flushing pending output.

@@ -135,7 +135,7 @@ impl IoState {
 
     pub(super) fn filters_stopped(&self) {
         // the shutdown deadline carries over into the transport shutdown
-        // phase, so that a single `disconnect_timeout` bounds both phases
+        // phase, so that a single `shutdown_timeout` bounds both phases
         self.wake_read_task();
         self.wake_write_task();
         self.wake_dispatch_task();
@@ -620,13 +620,15 @@ impl<F> Io<F> {
     /// Gracefully shuts down the I/O stream.
     ///
     /// Shutdown runs in two phases, bounded together by a single
-    /// disconnect timeout. First the filters shut down while both directions
-    /// stay open, so a filter can emit its closing data and read the peer's.
-    /// Then the transport drains the remaining output, reading and discarding
-    /// any further input, and closes the connection.
+    /// [`IoConfig::set_shutdown_timeout`]. First the filters shut down while
+    /// both directions stay open, so a filter can emit its closing data and
+    /// read the peer's. Then the transport drains the remaining output,
+    /// reading and discarding any further input, and closes the connection.
     ///
     /// This completes once the transport backend has finished its shutdown
-    /// operation.
+    /// operation, not merely once the output has been drained.
+    ///
+    /// [`IoConfig::set_shutdown_timeout`]: crate::IoConfig::set_shutdown_timeout
     pub async fn shutdown(&self) -> io::Result<()> {
         poll_fn(|cx| self.poll_shutdown(cx)).await
     }
@@ -1985,7 +1987,7 @@ mod tests {
             SharedCfg::new("SRV").add(
                 IoConfig::default()
                     .set_read_buf(8, 4, 16)
-                    .set_disconnect_timeout(ntex_util::time::Seconds(2)),
+                    .set_shutdown_timeout(ntex_util::time::Seconds(2)),
             ),
         );
 
@@ -2020,7 +2022,7 @@ mod tests {
         assert_eq!(&data[..], b"response-tail");
 
         // the connection still closes gracefully afterwards (within the
-        // disconnect timeout) instead of hanging
+        // shutdown timeout) instead of hanging
         ntex_util::time::timeout(Millis(4000), io.on_disconnect())
             .await
             .expect("io stream did not disconnect after flush");
@@ -2198,7 +2200,7 @@ mod tests {
     }
 
     #[ntex::test]
-    async fn zero_disconnect_timeout_does_not_force_filter_shutdown() {
+    async fn zero_shutdown_timeout_does_not_force_filter_shutdown() {
         #[derive(Debug)]
         struct PendingShutdown(Rc<Cell<bool>>);
 
@@ -2225,7 +2227,7 @@ mod tests {
         let io = Io::new(
             server,
             SharedCfg::new("SRV")
-                .add(IoConfig::default().set_disconnect_timeout(ntex_util::time::Seconds::ZERO)),
+                .add(IoConfig::default().set_shutdown_timeout(ntex_util::time::Seconds::ZERO)),
         )
         .add_filter(PendingShutdown(ready.clone()));
 
@@ -2328,7 +2330,7 @@ mod tests {
         let io = Io::new(
             server,
             SharedCfg::new("SRV")
-                .add(IoConfig::default().set_disconnect_timeout(ntex_util::time::Seconds(30))),
+                .add(IoConfig::default().set_shutdown_timeout(ntex_util::time::Seconds(30))),
         )
         .add_filter(PendingShutdown);
 
@@ -2340,7 +2342,7 @@ mod tests {
         assert!(io.read_more().await.unwrap().is_none());
         assert!(io.st().flags.is_read_eof());
 
-        // the shutdown completes without waiting for the disconnect timeout
+        // the shutdown completes without waiting for the shutdown timeout
         timeout(Millis(1000), io.shutdown())
             .await
             .expect("transport shutdown did not complete")
@@ -2374,7 +2376,7 @@ mod tests {
         let io = Io::new(
             server,
             SharedCfg::new("SRV")
-                .add(IoConfig::default().set_disconnect_timeout(ntex_util::time::Seconds(1))),
+                .add(IoConfig::default().set_shutdown_timeout(ntex_util::time::Seconds(1))),
         )
         .add_filter(PendingShutdown);
 
@@ -2420,7 +2422,7 @@ mod tests {
             SharedCfg::new("SRV").add(
                 IoConfig::default()
                     .set_read_buf(8, 4, 16)
-                    .set_disconnect_timeout(ntex_util::time::Seconds(10)),
+                    .set_shutdown_timeout(ntex_util::time::Seconds(10)),
             ),
         )
         .add_filter(ClosingShutdown(Cell::new(false)));
@@ -2483,7 +2485,7 @@ mod tests {
             SharedCfg::new("SRV").add(
                 IoConfig::default()
                     .set_read_buf(8, 4, 16)
-                    .set_disconnect_timeout(ntex_util::time::Seconds(1)),
+                    .set_shutdown_timeout(ntex_util::time::Seconds(1)),
             ),
         )
         .add_filter(ClosingShutdown(Cell::new(false)));
@@ -2497,7 +2499,7 @@ mod tests {
             .unwrap_err();
         assert!(io.st().flags.is_terminated());
 
-        // both phases stall, yet a single disconnect timeout covers them: a
+        // both phases stall, yet a single shutdown timeout covers them: a
         // per-phase deadline would take twice as long
         let elapsed = start.elapsed();
         assert!(
@@ -2531,7 +2533,7 @@ mod tests {
             SharedCfg::new("SRV").add(
                 IoConfig::default()
                     .set_read_buf(8, 4, 16)
-                    .set_disconnect_timeout(ntex_util::time::Seconds(10)),
+                    .set_shutdown_timeout(ntex_util::time::Seconds(10)),
             ),
         )
         .add_filter(PendingShutdown);

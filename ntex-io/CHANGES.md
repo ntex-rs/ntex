@@ -2,9 +2,9 @@
 
 ## [4.1.0] - 2026-09-22
 
-* IoConfig::set_write_buf() takes only the high watermark, the low watermark and
-  cache size were never read for output, which is held in BytePages rather than
-  cached read buffers
+* Rename IoConfig::disconnect_timeout()/set_disconnect_timeout() to
+  shutdown_timeout()/set_shutdown_timeout(), it bounds the graceful shutdown
+  process rather than an abrupt disconnect
 * Remove Handle::notify(), FilterCtx::notify() and IoContext::notify(), nothing
   triggered that path, read readiness is derived from connection flags and every
   transition that changes it already wakes the read task
@@ -19,7 +19,7 @@
 * Drain buffered output during graceful shutdown instead of discarding it, the
   transport shutdown phase now writes out whatever the filters produced before
   closing the connection
-* Bound both graceful shutdown phases with a single disconnect timeout,
+* Bound both graceful shutdown phases with a single shutdown timeout,
   previously the transport shutdown phase was unbounded
 * Do not terminate the connection when a read fails while filters are shutting
   down, the transport shutdown phase still drains buffered output

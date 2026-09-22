@@ -20,7 +20,7 @@ thread_local! {
 pub struct IoConfig {
     connect_timeout: Millis,
     keepalive_timeout: Seconds,
-    disconnect_timeout: Seconds,
+    shutdown_timeout: Seconds,
     frame_read_rate: Option<FrameReadRate>,
 
     // io read/write cache and params
@@ -117,7 +117,7 @@ impl IoConfig {
             config,
             connect_timeout: Millis::ZERO,
             keepalive_timeout: Seconds(0),
-            disconnect_timeout: Seconds(1),
+            shutdown_timeout: Seconds(1),
             frame_read_rate: None,
 
             read_buf: BufConfig {
@@ -160,9 +160,9 @@ impl IoConfig {
     }
 
     #[inline]
-    /// Returns the graceful disconnect timeout.
-    pub fn disconnect_timeout(&self) -> Seconds {
-        self.disconnect_timeout
+    /// Returns the graceful shutdown timeout.
+    pub fn shutdown_timeout(&self) -> Seconds {
+        self.shutdown_timeout
     }
 
     #[inline]
@@ -216,16 +216,35 @@ impl IoConfig {
         self
     }
 
-    /// Sets the graceful disconnect timeout.
+    /// Sets the graceful shutdown timeout.
     ///
-    /// If filter shutdown does not complete within this duration, transport
-    /// teardown continues and [`crate::Io::shutdown`] returns a timed-out
-    /// error after the transport has stopped.
+    /// A graceful shutdown runs in two phases, and this single timeout bounds
+    /// them together rather than applying to each one:
     ///
-    /// A zero duration disables the timeout. The default is one second.
+    /// 1. **Filter shutdown.** Both directions stay open, so a filter can emit
+    ///    its closing data and still read the peer's. A TLS filter sends its
+    ///    `close_notify` here, and a WebSocket filter its close frame.
+    /// 2. **Transport shutdown.** The remaining output is drained to the peer
+    ///    while further input is read and discarded, then the connection is
+    ///    closed.
+    ///
+    /// The deadline is armed when the first phase begins and is not restarted
+    /// for the second, so a filter that shuts down slowly leaves less time to
+    /// drain. Expiry in the first phase moves on to the second rather than
+    /// giving up; only expiry in the second terminates the connection, and
+    /// output that has not reached the transport is then lost. Either way
+    /// [`crate::Io::shutdown`] reports a timed-out error once the transport
+    /// has stopped.
+    ///
+    /// The timeout does not apply when there is nothing to drain, so a
+    /// connection with no pending output never fails on it.
+    ///
+    /// A zero duration disables the timeout, which lets a peer that never
+    /// completes the exchange hold the connection open. The default is one
+    /// second.
     #[must_use]
-    pub fn set_disconnect_timeout<T: Into<Seconds>>(mut self, timeout: T) -> Self {
-        self.disconnect_timeout = timeout.into();
+    pub fn set_shutdown_timeout<T: Into<Seconds>>(mut self, timeout: T) -> Self {
+        self.shutdown_timeout = timeout.into();
         self
     }
 
