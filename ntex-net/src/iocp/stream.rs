@@ -157,6 +157,7 @@ impl Handler for StreamOpsHandler {
                     #[cfg(feature = "trace")]
                     log::trace!("{_tag}: CloseWait({:?})", io);
                     ntex_rt::spawn_blocking(move || {
+                        crate::helpers::drain_raw_socket(io as _);
                         let _ = syscall!(SOCKET, WinSock::shutdown(io, 2));
                         let _ = syscall!(SOCKET, WinSock::closesocket(io));
                         #[cfg(feature = "trace")]
@@ -231,6 +232,7 @@ impl StreamCtl {
                 #[cfg(feature = "trace")]
                 log::trace!("{_tag}: Close({io:?})");
                 ntex_rt::spawn(ntex_rt::spawn_blocking(move || {
+                    crate::helpers::drain_raw_socket(io as _);
                     syscall!(SOCKET, WinSock::shutdown(io, 2)).map(|_| ())?;
                     syscall!(SOCKET, WinSock::closesocket(io)).map(|_| ())
                 }))

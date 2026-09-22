@@ -22,7 +22,7 @@ use crate::{Flags, Id, IoRef, IoTaskStatus, Readiness, io::IoState};
 ///
 /// Graceful shutdown runs in two phases. In the first the filters shut down
 /// while both directions stay open. In the second, buffered output is drained
-/// into the transport and incoming data is read and discarded;
+/// into the transport while the read side is paused;
 /// [`Readiness::Close`] is reported only once nothing is left to write. A
 /// single shutdown timeout bounds both phases, and terminates the connection
 /// if it elapses.
@@ -71,9 +71,9 @@ impl IoContext {
     /// Checks readiness for read operations.
     ///
     /// Resolves to [`Readiness::Ready`] or [`Readiness::Close`], or stays
-    /// `Pending`. Reads continue throughout a graceful shutdown, first so that
-    /// filters can complete theirs, then to drain and discard whatever the peer
-    /// still sends, so `Close` is resolved here only once the connection is
+    /// `Pending`. Reads continue through the filter shutdown phase so that
+    /// filters can complete theirs, and are paused for the transport shutdown
+    /// phase, so `Close` is resolved here only once the connection is
     /// terminated.
     pub fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         self.poll_filters_shutdown(cx);
@@ -161,8 +161,9 @@ impl IoContext {
         );
 
         // Transport shutdown phase, the filters are shut down and the
-        // connection is about to be closed. Input is drained and discarded so
-        // that the socket receive queue is empty when it is closed.
+        // connection is about to be closed. The read task is paused, but a read
+        // issued before the transition can still complete here; its input is
+        // discarded because nothing can consume it anymore.
         if st.flags.is_stopping() {
             let mut buf = buf;
             buf.clear();

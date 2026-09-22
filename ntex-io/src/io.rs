@@ -622,8 +622,8 @@ impl<F> Io<F> {
     /// Shutdown runs in two phases, bounded together by a single
     /// [`IoConfig::set_shutdown_timeout`]. First the filters shut down while
     /// both directions stay open, so a filter can emit its closing data and
-    /// read the peer's. Then the transport drains the remaining output,
-    /// reading and discarding any further input, and closes the connection.
+    /// read the peer's. Then the transport drains the remaining output, pauses
+    /// the read side, and closes the connection.
     ///
     /// This completes once the transport backend has finished its shutdown
     /// operation, not merely once the output has been drained.
@@ -2057,7 +2057,7 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        assert!(!io.is_closed());
+        assert!(!io.st().flags.is_terminated());
 
         io.encode(Bytes::from_static(b"response"), &BytesCodec)
             .unwrap();
@@ -2239,7 +2239,7 @@ mod tests {
 
         io.close();
         sleep(Millis(50)).await;
-        assert!(!io.is_closed());
+        assert!(!io.st().flags.is_terminated());
     }
 
     #[ntex::test]
@@ -2383,6 +2383,36 @@ mod tests {
             self.0.set(true);
             Ok(Poll::Pending)
         }
+    }
+
+    #[ntex::test]
+    async fn transport_shutdown_pauses_read_task() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = Io::new(server, SharedCfg::new("SRV"));
+
+        client.write("before");
+        sleep(Millis(25)).await;
+        assert_eq!(
+            io.recv(&BytesCodec).await.unwrap().unwrap(),
+            b"before".as_ref()
+        );
+
+        // stall the output so the transport shutdown phase does not complete
+        client.remote_buffer_cap(0);
+        io.get_ref().with_write_dst(|b| b.extend_from_slice(b"out"));
+
+        // enter the transport shutdown phase
+        io.st().flags.set_filter_stopping();
+        io.st().flags.set_filters_stopped();
+        io.st().wake_read_task();
+
+        // the filters are done, so input is left in the transport; it is
+        // discarded by the transport itself right before it closes
+        client.write("after");
+        sleep(Millis(50)).await;
+        assert!(!io.st().flags.is_terminated());
+        assert_eq!(client.remote_buffer(|buf| buf.len()), 5);
     }
 
     #[ntex::test]

@@ -224,9 +224,9 @@ impl IoConfig {
     /// 1. **Filter shutdown.** Both directions stay open, so a filter can emit
     ///    its closing data and still read the peer's. A TLS filter sends its
     ///    `close_notify` here, and a WebSocket filter its close frame.
-    /// 2. **Transport shutdown.** The remaining output is drained to the peer
-    ///    while further input is read and discarded, then the connection is
-    ///    closed.
+    /// 2. **Transport shutdown.** The remaining output is drained to the peer.
+    ///    The read side is paused, and whatever the peer still sent is
+    ///    discarded, then the connection is closed.
     ///
     /// The deadline is armed when the first phase begins and is not restarted
     /// for the second, so a filter that shuts down slowly leaves less time to

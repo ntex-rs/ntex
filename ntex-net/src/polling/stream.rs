@@ -357,6 +357,7 @@ impl StreamCtl {
                 let item = &mut streams[self.id as usize];
                 let fd = item.fd();
                 ntex_rt::spawn(ntex_rt::spawn_blocking(move || {
+                    crate::helpers::drain_raw_socket(fd);
                     syscall!(libc::shutdown(fd, libc::SHUT_RDWR)).map(|_| ())
                 }))
             })

@@ -96,12 +96,11 @@ impl Filter for Base {
                 // closed read side.
                 Poll::Pending
             } else if st.flags.is_stopping() {
-                // Transport shutdown phase. The filters are done, so incoming
-                // data is read and discarded: it keeps the peer from stalling
-                // and leaves the receive queue empty when the socket is closed,
-                // which would otherwise abort the connection with an RST and
-                // lose the output being drained.
-                Poll::Ready(Readiness::Ready)
+                // Transport shutdown phase. The filters are done, so no further
+                // input can be used and the read task pauses. The receive queue
+                // is drained by the transport itself, just before it closes the
+                // connection.
+                Poll::Pending
             } else if st.flags.is_stopping_filters() {
                 // A filter may still need input to complete its shutdown, so
                 // keep reading even though the application paused reads.

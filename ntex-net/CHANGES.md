@@ -1,6 +1,10 @@
 # Changes
 
-## [4.1.0] - 2026-09-21
+## [4.1.0] - 2026-09-23
+
+* Discard the socket receive queue before closing a connection, closing a
+  socket with unread input aborts it with an RST and loses the output that the
+  graceful shutdown just drained
 
 * Report the number of bytes written to the peer from every backend, so that
   output a completion based backend still owns is accounted for as outstanding

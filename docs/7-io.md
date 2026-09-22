@@ -64,7 +64,10 @@ Both readiness methods resolve to a [`Readiness`] value rather than a plain
 ready signal. `Readiness::Ready` allows the task to perform its next operation.
 `Readiness::Close` means the connection must be taken down: the task closes
 both directions and releases the socket, cancelling anything still in flight.
-For a socket this is `shutdown(SHUT_RDWR)` followed by `close()`.
+For a socket this is `shutdown(SHUT_RDWR)` followed by `close()`. Whatever the
+peer still has in the receive queue should be discarded first, because closing
+a socket with unread input aborts the connection with an RST and loses the
+output that was just drained.
 
 `Readiness::Close` covers a graceful shutdown and an immediate termination
 alike, and a task does not need to tell them apart. On the graceful path the
@@ -476,8 +479,9 @@ failure does not abort the shutdown; it only means the filter handshake cannot
 finish.
 
 The second phase belongs to the transport. It drains the remaining output into
-the connection, reading and discarding any further input so that the receive
-queue is empty when the socket is closed, and then closes both directions.
+the connection and then closes both directions. The read side is paused: the
+filters are done, so no further input can be used, and the transport discards
+whatever is left in the receive queue just before it closes.
 Input is no longer delivered to the application in this phase.
 
 A single graceful-shutdown timeout bounds both phases; if it elapses the

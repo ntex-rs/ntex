@@ -2,6 +2,9 @@
 
 ## [4.1.0] - 2026-09-22
 
+* Pause the read side during the transport shutdown phase, the filters are done
+  by then so no further input can be used. The receive queue is discarded by the
+  transport itself, just before it closes the connection
 * Apply read back-pressure during the filter shutdown phase, Io::poll_shutdown()
   cleared the back-pressure flag on every poll, so a peer that kept sending
   could grow the read buffer without bound and the blocked shutdown detection

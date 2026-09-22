@@ -49,7 +49,9 @@ impl Stream for TcpStream {
     }
 
     fn terminate(&self) -> io::Result<()> {
-        socket2::SockRef::from(self).shutdown(std::net::Shutdown::Both)
+        let sock = socket2::SockRef::from(self);
+        crate::helpers::drain_socket(&sock);
+        sock.shutdown(std::net::Shutdown::Both)
     }
 
     fn try_read(&self, buf: &mut [u8]) -> io::Result<usize> {
@@ -76,7 +78,9 @@ impl Stream for tok_io::net::UnixStream {
     }
 
     fn terminate(&self) -> io::Result<()> {
-        socket2::SockRef::from(self).shutdown(std::net::Shutdown::Both)
+        let sock = socket2::SockRef::from(self);
+        crate::helpers::drain_socket(&sock);
+        sock.shutdown(std::net::Shutdown::Both)
     }
 
     fn try_read(&self, buf: &mut [u8]) -> io::Result<usize> {

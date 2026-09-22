@@ -544,6 +544,7 @@ impl StreamCtl {
                     self.id
                 );
                 let fd = storage.streams[self.id].fd();
+                crate::helpers::drain_raw_socket(fd.0);
                 let (tx, rx) = self.inner.pool.channel();
                 let op_id = storage.add_operation(Operation::shutdown(tx));
                 self.inner
