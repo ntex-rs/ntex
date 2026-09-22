@@ -2123,6 +2123,55 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn transport_shutdown_drain_wakes_write_task() {
+        #[derive(Debug)]
+        struct DormantTransport;
+
+        impl IoStream for DormantTransport {
+            fn start(self, _: IoContext) -> Box<dyn Handle> {
+                Box::new(self)
+            }
+        }
+
+        impl Handle for DormantTransport {}
+
+        let io = Io::from(DormantTransport);
+        let ctx = IoContext::new(io.get_ref());
+
+        // enter the transport shutdown phase with output still queued
+        io.encode_slice(b"tail").unwrap();
+        io.st().flags.set_filter_stopping();
+        io.st().flags.set_filters_stopped();
+        assert_eq!(io.st().buffer.write_buf_size(), 4);
+
+        // the write task is asked to drain it
+        assert!(matches!(
+            lazy(|cx| ctx.poll_write_ready(cx)).await,
+            Poll::Ready(Readiness::Ready)
+        ));
+        assert!(io.st().write_task.is_set());
+
+        // the transport writes everything out
+        let res = ctx.with_write_dst(|buf| {
+            let mut written = 0;
+            while let Some(page) = buf.take() {
+                written += page.len();
+            }
+            Ok(written)
+        });
+        assert_eq!(ctx.update_write_status(res), IoTaskStatus::Pause);
+        assert_eq!(io.st().write_outstanding(), 0);
+
+        // `poll_write_ready` reports `Close` only on another poll, so the
+        // drain must have woken the write task for the shutdown to complete
+        assert!(!io.st().write_task.is_set());
+        assert!(matches!(
+            lazy(|cx| ctx.poll_write_ready(cx)).await,
+            Poll::Ready(Readiness::Close)
+        ));
+    }
+
+    #[ntex::test]
     async fn termination_waits_for_transport_stop() {
         #[derive(Debug)]
         struct DormantTransport;

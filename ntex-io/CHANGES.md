@@ -2,6 +2,11 @@
 
 ## [4.1.0] - 2026-09-22
 
+* Wake the write task when the write buffer drains during the transport
+  shutdown phase, only poll_write_ready() can report that the phase is over so
+  a backend that drives reads and writes from separate tasks could stall until
+  the shutdown timeout elapsed
+
 * Io::recv() reports a truncated stream as UnexpectedEof instead of Ok(None),
   a peer that closed its write half while the codec still held a partial item
   is no longer indistinguishable from a clean end of stream. Input left over

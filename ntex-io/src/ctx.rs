@@ -388,6 +388,15 @@ impl IoContext {
                     if st.flags.is_stopping_filters() {
                         st.wake_read_task();
                     }
+                    if st.flags.is_stopping() && outstanding == 0 {
+                        // The transport shutdown phase ends once buffered
+                        // output is drained, but only `poll_write_ready`
+                        // reports that, so the write task has to run once more
+                        // to observe it. A backend that drives both directions
+                        // from a single task is covered by the read wake above,
+                        // one that splits them is not.
+                        st.wake_write_task();
+                    }
                     IoTaskStatus::Pause
                 } else {
                     st.flags.unset_write_paused();
