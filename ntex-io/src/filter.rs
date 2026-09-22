@@ -57,14 +57,17 @@ pub trait Filter: 'static {
 
     /// Checks whether transport read operations may proceed.
     ///
-    /// Never resolves to [`Readiness::Shutdown`]: reads continue during
-    /// graceful shutdown so that filters can complete theirs.
+    /// Reads continue throughout a graceful shutdown, first so that filters can
+    /// complete theirs, then to drain and discard whatever the peer still
+    /// sends, so [`Readiness::Close`] is resolved only once the connection is
+    /// terminated.
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness>;
 
     /// Checks whether transport write operations may proceed.
     ///
-    /// Resolves to [`Readiness::Shutdown`] once the connection enters graceful
-    /// shutdown.
+    /// Resolves to [`Readiness::Close`] once the connection is terminated, or
+    /// once it enters a graceful shutdown and all buffered output has reached
+    /// the transport.
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness>;
 }
 
@@ -81,8 +84,8 @@ impl Filter for Base {
 
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         let st = &self.0.0;
-        if st.flags.is_closed() {
-            Poll::Ready(Readiness::Terminate)
+        if st.flags.is_aborted() {
+            Poll::Ready(Readiness::Close)
         } else {
             st.read_task.register(cx.waker());
 
@@ -92,6 +95,13 @@ impl Filter for Base {
                 // waits for input would otherwise keep the transport polling a
                 // closed read side.
                 Poll::Pending
+            } else if st.flags.is_stopping() {
+                // Transport shutdown phase. The filters are done, so incoming
+                // data is read and discarded: it keeps the peer from stalling
+                // and leaves the receive queue empty when the socket is closed,
+                // which would otherwise abort the connection with an RST and
+                // lose the output being drained.
+                Poll::Ready(Readiness::Ready)
             } else if st.flags.is_stopping_filters() {
                 // A filter may still need input to complete its shutdown, so
                 // keep reading even though the application paused reads.
@@ -106,14 +116,26 @@ impl Filter for Base {
     }
 
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
-        if self.0.0.flags.is_terminated() || self.0.0.flags.is_terminating() {
-            Poll::Ready(Readiness::Terminate)
+        let st = &self.0.0;
+        if st.flags.is_aborted() {
+            Poll::Ready(Readiness::Close)
         } else {
-            self.0.0.write_task.register(cx.waker());
+            st.write_task.register(cx.waker());
 
-            if self.0.0.flags.is_stopping() {
-                Poll::Ready(Readiness::Shutdown)
-            } else if self.0.0.flags.is_write_paused() {
+            if st.flags.is_stopping() {
+                // Transport shutdown phase. Buffered output is drained into the
+                // transport first; `Readiness::Close` is reported only once
+                // nothing is left to write.
+                if st.buffer.write_buf_size() != 0 {
+                    Poll::Ready(Readiness::Ready)
+                } else if st.flags.is_wr_send_scheduled() {
+                    // a submitted write is still in flight, its completion
+                    // wakes the write task
+                    Poll::Pending
+                } else {
+                    Poll::Ready(Readiness::Close)
+                }
+            } else if st.flags.is_write_paused() {
                 Poll::Pending
             } else {
                 Poll::Ready(Readiness::Ready)
@@ -200,12 +222,12 @@ impl Filter for NullFilter {
 
     #[inline]
     fn poll_read_ready(&self, _: &mut Context<'_>) -> Poll<Readiness> {
-        Poll::Ready(Readiness::Terminate)
+        Poll::Ready(Readiness::Close)
     }
 
     #[inline]
     fn poll_write_ready(&self, _: &mut Context<'_>) -> Poll<Readiness> {
-        Poll::Ready(Readiness::Terminate)
+        Poll::Ready(Readiness::Close)
     }
 
     #[inline]

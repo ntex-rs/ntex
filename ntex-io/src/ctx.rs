@@ -16,18 +16,21 @@ use crate::{Flags, Id, IoRef, IoTaskStatus, Readiness, io::IoState};
 /// # Shutdown
 ///
 /// A transport task runs until [`poll_read_ready`](Self::poll_read_ready) or
-/// [`poll_write_ready`](Self::poll_write_ready) reports
-/// [`Readiness::Shutdown`]/[`Readiness::Terminate`], or until a status update
-/// returns [`IoTaskStatus::Stop`]. All of those imply that the connection is
-/// already closing or closed.
+/// [`poll_write_ready`](Self::poll_write_ready) reports [`Readiness::Close`],
+/// or until a status update returns [`IoTaskStatus::Stop`]. All of those imply
+/// that the connection is already closing or closed.
 ///
-/// Graceful shutdown normally waits for buffered output to reach the transport
-/// first, so by the time the loop exits there is nothing left to drain. That
-/// wait is bounded: if filter shutdown cannot complete, the disconnect timeout
-/// elapses, or the connection is terminated, the task is told to stop while
-/// output is still buffered, and that output is discarded rather than written.
-/// A task must therefore never attempt a final flush on the way out; it should
-/// close the transport immediately and report the outcome through
+/// Graceful shutdown runs in two phases. In the first the filters shut down
+/// while both directions stay open. In the second, buffered output is drained
+/// into the transport and incoming data is read and discarded;
+/// [`Readiness::Close`] is reported only once nothing is left to write. A
+/// single disconnect timeout bounds both phases, and terminates the connection
+/// if it elapses.
+///
+/// So by the time the loop exits there is nothing left to drain, whether the
+/// connection was shut down gracefully or terminated. A task must never attempt
+/// a final flush on the way out; it should close both directions of the
+/// transport immediately and report the outcome through
 /// [`stopped`](Self::stopped).
 pub struct IoContext(IoRef);
 
@@ -67,10 +70,11 @@ impl IoContext {
     #[inline]
     /// Checks readiness for read operations.
     ///
-    /// Resolves to [`Readiness::Ready`] or [`Readiness::Terminate`], or stays
-    /// `Pending`. [`Readiness::Shutdown`] is never reported here: reads
-    /// continue during graceful shutdown so that filters can complete theirs,
-    /// so a read task needs no arm for it.
+    /// Resolves to [`Readiness::Ready`] or [`Readiness::Close`], or stays
+    /// `Pending`. Reads continue throughout a graceful shutdown, first so that
+    /// filters can complete theirs, then to drain and discard whatever the peer
+    /// still sends, so `Close` is resolved here only once the connection is
+    /// terminated.
     pub fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         self.shutdown_filters(cx);
         self.0.filter().poll_read_ready(cx)
@@ -79,10 +83,12 @@ impl IoContext {
     #[inline]
     /// Checks readiness for write operations.
     ///
-    /// Unlike the read path this reports [`Readiness::Shutdown`] once the
-    /// connection enters graceful shutdown, which tells the write task to close
-    /// the transport write side instead of writing.
+    /// Resolves to [`Readiness::Ready`] or [`Readiness::Close`], or stays
+    /// `Pending`. Unlike the read path this reports `Close` at the end of a
+    /// graceful shutdown as well, once buffered output has been drained, so the
+    /// task must not flush again.
     pub fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
+        self.poll_shutdown_deadline(cx);
         self.0.filter().poll_write_ready(cx)
     }
 
@@ -154,6 +160,28 @@ impl IoContext {
             st.flags
         );
 
+        // Transport shutdown phase, the filters are shut down and the
+        // connection is about to be closed. Input is drained and discarded so
+        // that the socket receive queue is empty when it is closed.
+        if st.flags.is_stopping() {
+            let mut buf = buf;
+            buf.clear();
+            st.buffer.set_read_buf(buf, self.0.cfg());
+
+            return match status {
+                Poll::Ready(Ok(n)) if n != 0 => IoTaskStatus::Io,
+                // A zero-length read is a clean eof; an error means the peer is
+                // gone. Either way there is nothing left to drain. Neither
+                // terminates the connection: the write side keeps draining
+                // until it completes or the shutdown deadline elapses.
+                Poll::Ready(_) => {
+                    st.flags.set_read_eof();
+                    IoTaskStatus::Pause
+                }
+                Poll::Pending => IoTaskStatus::Pause,
+            };
+        }
+
         // release read buffer
         st.buffer.set_read_buf(buf, self.0.cfg());
 
@@ -210,9 +238,18 @@ impl IoContext {
         };
 
         if let Err(err) = result {
-            st.terminate_connection(Some(err));
-            IoTaskStatus::Stop
-        } else if st.flags.is_closed() {
+            // A read failure while the filters are shutting down does not
+            // terminate the connection: the filter handshake cannot complete,
+            // but buffered output is still drained by the transport shutdown
+            // phase.
+            if st.flags.is_stopping_filters() {
+                Self::stop_filters(st, Some(err));
+                IoTaskStatus::Pause
+            } else {
+                st.terminate_connection(Some(err));
+                IoTaskStatus::Stop
+            }
+        } else if st.flags.is_aborted() {
             IoTaskStatus::Stop
         } else if st.flags.is_read_eof() || st.flags.is_read_paused_or_backpressure() {
             IoTaskStatus::Pause
@@ -272,7 +309,7 @@ impl IoContext {
                     st.wake_dispatch_task();
                 }
 
-                if st.flags.is_closed() {
+                if st.flags.is_aborted() {
                     IoTaskStatus::Stop
                 } else if len == 0 {
                     // All data has been written, pause the write task.
@@ -340,13 +377,10 @@ impl IoContext {
             && !eof
             && (st.flags.is_read_paused() || st.flags.is_read_ready_and_backpressure());
 
-        // The shutdown cannot complete, but stay in the filter shutdown phase
-        // until buffered output has reached the transport; setting
-        // `IO_STOPPING` makes the write task close instead of writing. The
-        // disconnect timeout below bounds the wait, and `update_write_status()`
-        // wakes the read task once the write buffer drains. Without a
-        // disconnect timeout the wait would be unbounded.
-        if (eof || blocked) && (flushed || !st.cfg.disconnect_timeout().non_zero()) {
+        // The filter shutdown cannot complete. Move on to the transport
+        // shutdown phase, which drains whatever output has been produced so far
+        // and then closes the connection.
+        if eof || blocked {
             if eof {
                 log::debug!("{}: Peer closed before filter shutdown completed", st.tag());
             }
@@ -363,34 +397,69 @@ impl IoContext {
             if timeout.poll_elapsed(cx).is_ready() {
                 Self::stop_filters(
                     st,
-                    Some(if blocked {
-                        blocked_err()
-                    } else {
-                        io::Error::new(io::ErrorKind::TimedOut, "filter shutdown timed out")
-                    }),
+                    Some(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "filter shutdown timed out",
+                    )),
                 );
-            } else {
-                st.shutdown_timeout.set(Some(timeout));
             }
+            // the deadline is put back even once it has elapsed, so that the
+            // transport shutdown phase sees it expired instead of starting a
+            // second one
+            st.shutdown_timeout.set(Some(timeout));
+        }
+    }
+
+    /// Polls the shutdown deadline during the transport shutdown phase.
+    ///
+    /// The deadline is created when filter shutdown starts and is not reset
+    /// here, so a single `disconnect_timeout` bounds both shutdown phases. When
+    /// it elapses the connection is terminated and any output that has not
+    /// reached the transport is lost.
+    fn poll_shutdown_deadline(&self, cx: &mut Context<'_>) {
+        let st = &self.st();
+        if !st.flags.is_stopping() || !st.cfg.disconnect_timeout().non_zero() {
+            return;
+        }
+
+        // Nothing is left to drain, so the connection closes cleanly on the
+        // next readiness check and the deadline does not apply. Without this
+        // the shutdown would be reported as timed out whenever the filter
+        // phase happened to consume the whole deadline.
+        if st.buffer.write_buf_size() == 0 && !st.flags.is_wr_send_scheduled() {
+            return;
+        }
+
+        let timeout = st
+            .shutdown_timeout
+            .take()
+            .unwrap_or_else(|| sleep(st.cfg.disconnect_timeout()));
+        if timeout.poll_elapsed(cx).is_ready() {
+            let len = st.buffer.write_buf_size();
+            if len != 0 {
+                log::warn!(
+                    "{}: Shutdown timed out, discarding {len} bytes of buffered output",
+                    st.tag()
+                );
+            }
+            st.terminate_connection(Some(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "io shutdown timed out",
+            )));
+        } else {
+            st.shutdown_timeout.set(Some(timeout));
         }
     }
 
     /// Leaves the filter shutdown phase after an incomplete shutdown.
     ///
-    /// Output that has not reached the transport by this point is lost, because
-    /// `IO_STOPPING` makes the write task close instead of writing.
+    /// Output that has not reached the transport is not lost: the transport
+    /// shutdown phase drains it before closing the connection.
     ///
     /// The error is recorded here rather than when the failure is first
     /// detected: while an error is set, `IoRef::consolidate_write_state()`
     /// short-circuits, which would stop the write buffer from draining.
     fn stop_filters(st: &IoState, err: Option<io::Error>) {
-        let len = st.buffer.write_buf_size();
-        if len != 0 {
-            log::warn!(
-                "{}: Filter shutdown did not complete, discarding {len} bytes of buffered output",
-                st.tag()
-            );
-        }
         if let Some(err) = err {
             st.set_shutdown_error(err);
         }

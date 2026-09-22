@@ -54,7 +54,7 @@ fn poll_readiness(ctl: &StreamCtl, ctx: &IoContext, cx: &mut Context<'_>) -> Pol
             ctl.resume_read();
             Poll::Pending
         }
-        Poll::Ready(Readiness::Shutdown | Readiness::Terminate) => Poll::Ready(()),
+        Poll::Ready(Readiness::Close) => Poll::Ready(()),
         Poll::Pending => {
             ctl.pause_read();
             Poll::Pending
@@ -66,7 +66,7 @@ fn poll_readiness(ctl: &StreamCtl, ctx: &IoContext, cx: &mut Context<'_>) -> Pol
             ctl.resume_write();
             Poll::Pending
         }
-        Poll::Ready(Readiness::Shutdown | Readiness::Terminate) => Poll::Ready(()),
+        Poll::Ready(Readiness::Close) => Poll::Ready(()),
         Poll::Pending => Poll::Pending,
     };
 

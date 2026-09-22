@@ -2,6 +2,17 @@
 
 ## [4.1.0] - 2026-09-22
 
+* Drain buffered output during graceful shutdown instead of discarding it, the
+  transport shutdown phase now writes out whatever the filters produced before
+  closing the connection
+* Bound both graceful shutdown phases with a single disconnect timeout,
+  previously the transport shutdown phase was unbounded
+* Do not terminate the connection when a read fails while filters are shutting
+  down, the transport shutdown phase still drains buffered output
+* Replace Readiness::Shutdown and Readiness::Terminate with a single
+  Readiness::Close, io backends handled both identically. It requires closing
+  both directions of the connection; buffered output is drained before it is
+  reported for a graceful shutdown
 * Release read back-pressure and any read pause when IoRef::with_read_src() or
   IoRef::with_buf() drain the application read destination, previously the
   connection could stall permanently

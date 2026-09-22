@@ -2,6 +2,13 @@
 
 ## [4.1.0] - 2026-09-21
 
+* Close both directions of the connection at the end of a graceful shutdown in
+  the tokio and compio backends, previously they only shut down the write
+  direction
+
+* Fix compio backend hang, the io task could stop without reporting completion
+  to the io context if the write buffer was empty
+
 * Drop unreachable IoContext::shutdown() step from io task shutdown
 
 * Support eager writes with the IOCP backend

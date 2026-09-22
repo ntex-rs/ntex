@@ -123,8 +123,8 @@ impl IoState {
     }
 
     pub(super) fn filters_stopped(&self) {
-        // the filter shutdown deadline is no longer needed
-        self.shutdown_timeout.set(None);
+        // the shutdown deadline carries over into the transport shutdown
+        // phase, so that a single `disconnect_timeout` bounds both phases
         self.wake_read_task();
         self.wake_write_task();
         self.wake_dispatch_task();
@@ -1258,7 +1258,7 @@ mod tests {
         // read task ready
         assert_eq!(
             lazy(|cx| ctx.poll_read_ready(cx)).await,
-            Poll::Ready(Readiness::Terminate)
+            Poll::Ready(Readiness::Close)
         );
     }
 
@@ -1601,7 +1601,7 @@ mod tests {
         // write task ready
         assert_eq!(
             lazy(|cx| ctx.poll_write_ready(cx)).await,
-            Poll::Ready(Readiness::Terminate)
+            Poll::Ready(Readiness::Close)
         );
         // flush returns error
         let Poll::Ready(Err(err)) = lazy(|cx| io.poll_flush(cx, false)).await else {
@@ -2210,8 +2210,9 @@ mod tests {
         io.close();
         sleep(Millis(50)).await;
 
-        // filter shutdown is blocked, but the closing record must not be dropped
-        assert!(!io.st().flags.is_stopping());
+        // the filter shutdown is blocked, so the transport shutdown phase
+        // starts right away and takes over draining the closing record
+        assert!(io.st().flags.is_stopping());
 
         // let the peer accept the buffered bytes
         client.remote_buffer_cap(1024);
@@ -2223,15 +2224,67 @@ mod tests {
             Bytes::from_static(b"bye")
         );
 
-        // once the record is delivered the filter shutdown phase ends
-        sleep(Millis(50)).await;
-        assert!(io.st().flags.is_stopping());
-
         let err = timeout(Millis(1000), io.shutdown())
             .await
             .expect("transport shutdown did not complete")
             .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::Other);
+    }
+
+    #[ntex::test]
+    async fn one_deadline_bounds_both_shutdown_phases() {
+        #[derive(Debug)]
+        struct ClosingShutdown(Cell<bool>);
+
+        impl FilterLayer for ClosingShutdown {
+            fn process_read_buf(&self, _: &FilterBuf<'_>) -> io::Result<()> {
+                Ok(())
+            }
+
+            fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                buf.with_write_buffers(BytePages::move_to);
+                Ok(())
+            }
+
+            fn shutdown(&self, buf: &FilterBuf<'_>) -> io::Result<Poll<()>> {
+                if !self.0.replace(true) {
+                    buf.with_write_buffers(|_, dst| dst.extend_from_slice(b"bye"));
+                }
+                Ok(Poll::Pending)
+            }
+        }
+
+        let (client, server) = IoTest::create();
+        // the peer never accepts the closing record, so neither the filter
+        // shutdown nor the transport drain can ever complete
+        client.remote_buffer_cap(0);
+
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV").add(
+                IoConfig::default()
+                    .set_read_buf(8, 4, 16)
+                    .set_disconnect_timeout(ntex_util::time::Seconds(1)),
+            ),
+        )
+        .add_filter(ClosingShutdown(Cell::new(false)));
+
+        let start = std::time::Instant::now();
+        io.close();
+
+        timeout(Millis(5000), io.shutdown())
+            .await
+            .expect("transport shutdown did not complete")
+            .unwrap_err();
+        assert!(io.st().flags.is_terminated());
+
+        // both phases stall, yet a single disconnect timeout covers them: a
+        // per-phase deadline would take twice as long
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(1600),
+            "shutdown took {elapsed:?}, the deadline did not span both phases"
+        );
     }
 
     #[ntex::test]

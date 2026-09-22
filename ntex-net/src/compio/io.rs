@@ -79,7 +79,31 @@ impl IoBuf for CompioPage {
     }
 }
 
-async fn run<T: AsyncRead + AsyncWrite + Clone + Unpin + 'static>(io: T, ctx: IoContext) {
+/// Closes both directions of the connection.
+///
+/// `AsyncWrite::shutdown()` only shuts down the write direction, but
+/// [`Readiness::Close`] must close the read direction as well.
+trait Terminate {
+    fn terminate(&self) -> io::Result<()>;
+}
+
+impl Terminate for compio_net::TcpStream {
+    fn terminate(&self) -> io::Result<()> {
+        socket2::SockRef::from(self).shutdown(std::net::Shutdown::Both)
+    }
+}
+
+#[cfg(unix)]
+impl Terminate for compio_net::UnixStream {
+    fn terminate(&self) -> io::Result<()> {
+        socket2::SockRef::from(self).shutdown(std::net::Shutdown::Both)
+    }
+}
+
+async fn run<T: AsyncRead + AsyncWrite + Clone + Terminate + Unpin + 'static>(
+    io: T,
+    ctx: IoContext,
+) {
     let wr_io = io.clone();
     let wr_ctx = ctx.clone();
     let wr_task = compio_runtime::spawn(async move {
@@ -148,33 +172,26 @@ async fn not_read_ready(ctx: &IoContext) -> bool {
 
 async fn write<T>(mut io: T, ctx: &IoContext)
 where
-    T: AsyncRead + AsyncWrite + Clone,
+    T: AsyncRead + AsyncWrite + Clone + Terminate,
 {
     loop {
         match poll_fn(|cx| ctx.poll_write_ready(cx)).await {
             Readiness::Ready => {
                 let bufs = ctx.with_write_dst(build_bufs);
+                // `Stop` means the connection is already closing or closed, so
+                // the next `poll_write_ready()` reports `Close` and tears the
+                // transport down there.
                 if bufs.is_empty() {
                     if ctx.update_write_status(Ok(())) == IoTaskStatus::Stop {
-                        break;
+                        continue;
                     }
                 } else if write_buf(&mut io, ctx, bufs).await == IoTaskStatus::Stop {
-                    let res = io.shutdown().await;
-                    ctx.stopped(res.err());
-                    break;
+                    continue;
                 }
             }
-            Readiness::Shutdown => {
-                let bufs = ctx.with_write_dst(build_bufs);
-                write_buf(&mut io, ctx, bufs).await;
-                let res = io.shutdown().await;
-                ctx.stopped(res.err());
+            Readiness::Close => {
+                ctx.stopped(io.terminate().err());
                 break;
-            }
-            Readiness::Terminate => {
-                let res = io.shutdown().await;
-                ctx.stopped(res.err());
-                return;
             }
         }
     }

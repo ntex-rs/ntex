@@ -53,28 +53,28 @@ pub use self::flags::Flags;
 pub enum Readiness {
     /// The I/O task may proceed with I/O operations.
     Ready,
-    /// Initiates a graceful I/O shutdown.
+    /// The transport must be closed.
     ///
-    /// Reported by write readiness only. Read readiness never reports it,
-    /// because filters may still need input to complete their own shutdown.
-    Shutdown,
-    /// Immediately terminates the I/O stream.
-    Terminate,
+    /// The I/O task must close both directions of the connection and then
+    /// release it. For a socket this is `shutdown(SHUT_RDWR)` followed by
+    /// `close()`. Any operation still in flight should be canceled.
+    ///
+    /// This covers both a graceful shutdown and an immediate termination. The
+    /// task does not need to tell them apart: buffered output is drained before
+    /// this is reported on the graceful path, so in either case there is
+    /// nothing left to flush. A task that does care can still distinguish them
+    /// through [`IoContext::flags`].
+    Close,
 }
 
 impl Readiness {
     /// Merges two readiness states without regard to argument order.
     ///
-    /// Terminal states take precedence: `Terminate` overrides every other
-    /// state, followed by `Shutdown`. If neither terminal state is present,
-    /// `Pending` overrides `Ready`.
+    /// `Close` overrides every other state, and `Pending` overrides `Ready`.
     pub fn merge(val1: Poll<Readiness>, val2: Poll<Readiness>) -> Poll<Readiness> {
         match (val1, val2) {
-            (Poll::Ready(Readiness::Terminate), _) | (_, Poll::Ready(Readiness::Terminate)) => {
-                Poll::Ready(Readiness::Terminate)
-            }
-            (Poll::Ready(Readiness::Shutdown), _) | (_, Poll::Ready(Readiness::Shutdown)) => {
-                Poll::Ready(Readiness::Shutdown)
+            (Poll::Ready(Readiness::Close), _) | (_, Poll::Ready(Readiness::Close)) => {
+                Poll::Ready(Readiness::Close)
             }
             (Poll::Pending, _) | (_, Poll::Pending) => Poll::Pending,
             (Poll::Ready(Readiness::Ready), Poll::Ready(Readiness::Ready)) => {
@@ -285,8 +285,7 @@ mod tests {
         let states = [
             Poll::Pending,
             Poll::Ready(Readiness::Ready),
-            Poll::Ready(Readiness::Shutdown),
-            Poll::Ready(Readiness::Terminate),
+            Poll::Ready(Readiness::Close),
         ];
 
         for val1 in states {
@@ -300,15 +299,12 @@ mod tests {
             Poll::Pending
         );
         assert_eq!(
-            Readiness::merge(Poll::Pending, Poll::Ready(Readiness::Shutdown)),
-            Poll::Ready(Readiness::Shutdown)
+            Readiness::merge(Poll::Pending, Poll::Ready(Readiness::Close)),
+            Poll::Ready(Readiness::Close)
         );
         assert_eq!(
-            Readiness::merge(
-                Poll::Ready(Readiness::Shutdown),
-                Poll::Ready(Readiness::Terminate)
-            ),
-            Poll::Ready(Readiness::Terminate)
+            Readiness::merge(Poll::Ready(Readiness::Ready), Poll::Ready(Readiness::Close)),
+            Poll::Ready(Readiness::Close)
         );
     }
 }

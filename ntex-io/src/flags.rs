@@ -97,6 +97,14 @@ impl Flags {
         self.contains(FlagsKind::IO_STOPPED)
     }
 
+    /// Checks whether the connection is aborting or already gone.
+    ///
+    /// Unlike [`is_closed`](Self::is_closed) this does not cover the graceful
+    /// `IO_STOPPING` phase, during which buffered output is still written out.
+    pub(crate) fn is_aborted(&self) -> bool {
+        self.intersects(FlagsKind::IO_STOPPED | FlagsKind::IO_TERMINATING)
+    }
+
     /// Checks whether the connection entered graceful transport shutdown.
     ///
     /// This state remains set after backend teardown completes.

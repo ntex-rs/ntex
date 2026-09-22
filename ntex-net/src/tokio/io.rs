@@ -30,8 +30,6 @@ trait Stream: AsyncRead + AsyncWrite + Unpin {
 
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>>;
 
-    fn shutdown(&self) -> io::Result<()>;
-
     fn terminate(&self) -> io::Result<()>;
 
     fn try_read(&self, buf: &mut [u8]) -> io::Result<usize>;
@@ -48,10 +46,6 @@ impl Stream for TcpStream {
 
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         TcpStream::poll_write_ready(self, cx)
-    }
-
-    fn shutdown(&self) -> io::Result<()> {
-        socket2::SockRef::from(self).shutdown(std::net::Shutdown::Write)
     }
 
     fn terminate(&self) -> io::Result<()> {
@@ -79,10 +73,6 @@ impl Stream for tok_io::net::UnixStream {
 
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         tok_io::net::UnixStream::poll_write_ready(self, cx)
-    }
-
-    fn shutdown(&self) -> io::Result<()> {
-        socket2::SockRef::from(self).shutdown(std::net::Shutdown::Write)
     }
 
     fn terminate(&self) -> io::Result<()> {
@@ -136,12 +126,6 @@ impl Handle for HandleWrapperUnix {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum Status {
-    Shutdown,
-    Terminate,
-}
-
 async fn run_rd<T>(io: Rc<T>, ctx: IoContext)
 where
     T: Stream + Unpin,
@@ -176,7 +160,7 @@ where
                         }
                     }
                 }
-                Readiness::Shutdown | Readiness::Terminate => Poll::Ready(()),
+                Readiness::Close => Poll::Ready(()),
             };
         }
     })
@@ -194,7 +178,7 @@ async fn run_wrt<T>(io: Rc<T>, ctx: IoContext)
 where
     T: Stream,
 {
-    let st = poll_fn(|cx| {
+    poll_fn(|cx| {
         let ctx_state = ctx.poll_write_ready(cx);
         #[cfg(feature = "trace")]
         log::trace!(
@@ -213,26 +197,22 @@ where
                     Ok(()) => match write(io.as_ref(), &ctx, false) {
                         WrtStatus::More => continue,
                         WrtStatus::Pending => Poll::Pending,
-                        WrtStatus::Terminate => Poll::Ready(Status::Terminate),
+                        WrtStatus::Terminate => Poll::Ready(()),
                     },
                     Err(err) => {
                         ctx.update_write_status(Err(err));
-                        Poll::Ready(Status::Terminate)
+                        Poll::Ready(())
                     }
                 };
             },
-            Readiness::Shutdown => Poll::Ready(Status::Shutdown),
-            Readiness::Terminate => Poll::Ready(Status::Terminate),
+            Readiness::Close => Poll::Ready(()),
         }
     })
     .await;
 
     log::trace!("{}: Shuting down io", ctx.tag());
 
-    let result = match st {
-        Status::Shutdown => io.shutdown(),
-        Status::Terminate => io.terminate(),
-    };
+    let result = io.terminate();
 
     log::trace!("{}: Shutdown complete {result:?}", ctx.tag());
     ctx.stopped(result.err());
