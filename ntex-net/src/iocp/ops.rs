@@ -73,7 +73,7 @@ impl ReadOperation {
                 let e = err.raw_os_error();
                 if e != Some(ERROR_NOT_FOUND as _) && e != Some(ERROR_OPERATION_ABORTED as _) {
                     self.ctx
-                        .update_read_status(self.buf.take().unwrap(), Poll::Ready(Err(err)));
+                        .release_read_buf(self.buf.take().unwrap(), Poll::Ready(Err(err)));
                     return true;
                 }
             }
@@ -95,7 +95,7 @@ impl ReadOperation {
         log::trace!("{}: Rcv({})", self.ctx.tag(), self.io);
 
         loop {
-            let mut buf = self.ctx.get_read_buf();
+            let mut buf = self.ctx.take_read_buf();
             let s = buf.chunk_mut();
             let lpbufs = [WSABUF {
                 len: s.len() as u32,
@@ -123,7 +123,7 @@ impl ReadOperation {
                     }
                     if self
                         .ctx
-                        .update_read_status(buf, Poll::Ready(Ok(size as usize)))
+                        .release_read_buf(buf, Poll::Ready(Ok(size as usize)))
                         == IoTaskStatus::Io
                         && size != 0
                     {
@@ -131,7 +131,7 @@ impl ReadOperation {
                     }
                 }
                 Poll::Ready(Err(err)) => {
-                    self.ctx.update_read_status(buf, Poll::Ready(Err(err)));
+                    self.ctx.release_read_buf(buf, Poll::Ready(Err(err)));
                 }
                 Poll::Pending => {
                     self.buf = Some(buf);
@@ -163,12 +163,12 @@ impl ReadOperation {
                         // SAFETY: windows tells us how many bytes it read
                         unsafe { buf.advance_mut(size) };
                     }
-                    rd.ctx.update_read_status(buf, Poll::Ready(Ok(size)))
+                    rd.ctx.release_read_buf(buf, Poll::Ready(Ok(size)))
                 }
                 Err(err) if err.raw_os_error() == Some(ERROR_OPERATION_ABORTED as _) => {
-                    rd.ctx.update_read_status(buf, Poll::Pending)
+                    rd.ctx.release_read_buf(buf, Poll::Pending)
                 }
-                Err(err) => rd.ctx.update_read_status(buf, Poll::Ready(Err(err))),
+                Err(err) => rd.ctx.release_read_buf(buf, Poll::Ready(Err(err))),
             };
             if rd.flags.contains(Flags::CLOSING) {
                 Some(rd.id)

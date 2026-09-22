@@ -9,7 +9,7 @@ use crate::{Flags, Id, IoRef, IoTaskStatus, Readiness, io::IoState};
 ///
 /// Transport implementations obtain buffers from this context, perform
 /// nonblocking I/O, and return completion through
-/// [`update_read_status`](Self::update_read_status) and
+/// [`release_read_buf`](Self::release_read_buf) and
 /// [`update_write_status`](Self::update_write_status). Their return value tells
 /// the task whether to continue, pause until notified, or stop.
 ///
@@ -109,15 +109,21 @@ impl IoContext {
 
     /// Takes a buffer for the next transport read.
     ///
-    /// The returned buffer must be passed back exactly once through
-    /// [`update_read_status`](Self::update_read_status), even when the read
+    /// The returned buffer must be released exactly once through
+    /// [`release_read_buf`](Self::release_read_buf), even when the read
     /// fails or would otherwise stop the task.
-    pub fn get_read_buf(&self) -> BytesMut {
+    ///
+    /// This hands out a buffer of its own while the dispatcher still has input
+    /// to consume, because the read buffer is moved out of the io state until
+    /// it is released and the dispatcher would not find it. A transport whose
+    /// read completes without suspending can avoid that with
+    /// [`with_read_buf`](Self::with_read_buf).
+    pub fn take_read_buf(&self) -> BytesMut {
         let st = self.st();
 
         if st.flags.is_read_ready() {
-            // The dispatcher has not consumed the read buffer yet,
-            // so we must not modify it.
+            // The dispatcher has not consumed the read buffer yet, so it must
+            // stay in place and the read goes to a buffer of its own.
             st.get_read_buf()
         } else if let Some(mut buf) = st.buffer.get_read_buf() {
             self.0.resize_read_buf(&mut buf);
@@ -132,7 +138,10 @@ impl IoContext {
         self.0.resize_read_buf(buf);
     }
 
-    /// Returns a transport read buffer and reports the read result.
+    /// Releases a transport read buffer and reports the read result.
+    ///
+    /// This is the counterpart of [`take_read_buf`](Self::take_read_buf); every
+    /// buffer it hands out must come back here exactly once.
     ///
     /// `Poll::Ready(Ok(n))` reports that `n` bytes were appended to `buf`.
     /// Zero marks the transport read side as closed and invokes the read filter
@@ -145,11 +154,7 @@ impl IoContext {
     ///
     /// The returned [`IoTaskStatus`] instructs the read task to continue
     /// immediately, pause until notified, or stop.
-    pub fn update_read_status(
-        &self,
-        buf: BytesMut,
-        status: Poll<io::Result<usize>>,
-    ) -> IoTaskStatus {
+    pub fn release_read_buf(&self, buf: BytesMut, status: Poll<io::Result<usize>>) -> IoTaskStatus {
         let st = self.st();
         let orig = st.buffer.read_dst_size();
 
@@ -168,23 +173,69 @@ impl IoContext {
             let mut buf = buf;
             buf.clear();
             st.buffer.set_read_buf(buf, self.0.cfg());
+            stopping_read_status(st, &status)
+        } else {
+            // release read buffer
+            st.buffer.set_read_buf(buf, self.0.cfg());
 
-            return match status {
-                Poll::Ready(Ok(n)) if n != 0 => IoTaskStatus::Io,
-                // A zero-length read is a clean eof; an error means the peer is
-                // gone. Either way there is nothing left to drain. Neither
-                // terminates the connection: the write side keeps draining
-                // until it completes or the shutdown deadline elapses.
-                Poll::Ready(_) => {
-                    st.flags.set_read_eof();
-                    IoTaskStatus::Pause
-                }
-                Poll::Pending => IoTaskStatus::Pause,
-            };
+            self.process_read_status(orig, status)
         }
+    }
 
-        // release read buffer
-        st.buffer.set_read_buf(buf, self.0.cfg());
+    /// Reads into the read buffer in place and reports the read result.
+    ///
+    /// This is the counterpart of [`take_read_buf`](Self::take_read_buf) and
+    /// [`release_read_buf`](Self::release_read_buf) for a transport whose
+    /// read completes without suspending. `f` reads into the buffer it is
+    /// given and reports the same status `release_read_buf` takes, with the
+    /// same meaning.
+    ///
+    /// The buffer is not moved out of the io state for the duration of the
+    /// call, so no temporary buffer is taken from the pool and no append is
+    /// needed to put the result back. A transport that keeps the buffer across
+    /// a suspension point cannot use this: the buffer would be missing while
+    /// the dispatcher looks for input, so it must take one of its own through
+    /// `take_read_buf` instead.
+    ///
+    /// `f` must not read from this io again, a nested read terminates the
+    /// connection.
+    pub fn with_read_buf<F>(&self, f: F) -> IoTaskStatus
+    where
+        F: FnOnce(&mut BytesMut) -> Poll<io::Result<usize>>,
+    {
+        let st = self.st();
+        let orig = st.buffer.read_dst_size();
+        let stopping = st.flags.is_stopping();
+
+        let status = st.buffer.with_read_src(&self.0, |buf| {
+            self.0.resize_read_buf(buf);
+            let status = f(buf);
+            if stopping {
+                // the filters are done, nothing can consume this input anymore
+                buf.clear();
+            }
+            status
+        });
+
+        #[cfg(feature = "trace")]
+        log::trace!(
+            "{}: rd-status = {status:?} orig:{orig:?} flags:{:?}",
+            st.tag(),
+            st.flags
+        );
+
+        if stopping {
+            stopping_read_status(st, &status)
+        } else {
+            self.process_read_status(orig, status)
+        }
+    }
+
+    /// Processes input that reached the transport-facing read buffer.
+    ///
+    /// `orig` is the size of the destination read buffer before the read.
+    fn process_read_status(&self, orig: usize, status: Poll<io::Result<usize>>) -> IoTaskStatus {
+        let st = self.st();
 
         // process read buf
         let result = match status {
@@ -243,7 +294,7 @@ impl IoContext {
             // but buffered output is still drained by the transport shutdown
             // phase.
             if st.flags.is_stopping_filters() {
-                Self::stop_filters(st, Some(err));
+                stop_filters(st, Some(err));
                 IoTaskStatus::Pause
             } else {
                 st.terminate_connection(Some(err));
@@ -423,7 +474,7 @@ impl IoContext {
             if eof {
                 log::debug!("{}: Peer closed before filter shutdown completed", st.tag());
             }
-            Self::stop_filters(st, blocked.then(blocked_err));
+            stop_filters(st, blocked.then(blocked_err));
             return;
         }
 
@@ -434,7 +485,7 @@ impl IoContext {
                 .take()
                 .unwrap_or_else(|| sleep(st.cfg.shutdown_timeout()));
             if timeout.poll_elapsed(cx).is_ready() {
-                Self::stop_filters(
+                stop_filters(
                     st,
                     Some(io::Error::new(
                         io::ErrorKind::TimedOut,
@@ -489,25 +540,40 @@ impl IoContext {
             st.shutdown_timeout.set(Some(timeout));
         }
     }
-
-    /// Leaves the filter shutdown phase after an incomplete shutdown.
-    ///
-    /// Output that has not reached the transport is not lost: the transport
-    /// shutdown phase drains it before closing the connection.
-    ///
-    /// The error is recorded here rather than when the failure is first
-    /// detected: while an error is set, `IoRef::consolidate_write_state()`
-    /// short-circuits, which would stop the write buffer from draining.
-    fn stop_filters(st: &IoState, err: Option<io::Error>) {
-        if let Some(err) = err {
-            st.set_shutdown_error(err);
-        }
-        st.filters_stopped();
-    }
 }
 
 fn blocked_err() -> io::Error {
     io::Error::other("filter shutdown blocked by unread buffered data")
+}
+
+/// Leaves the filter shutdown phase after an incomplete shutdown.
+///
+/// Output that has not reached the transport is not lost: the transport
+/// shutdown phase drains it before closing the connection.
+///
+/// The error is recorded here rather than when the failure is first
+/// detected: while an error is set, `IoRef::consolidate_write_state()`
+/// short-circuits, which would stop the write buffer from draining.
+fn stop_filters(st: &IoState, err: Option<io::Error>) {
+    if let Some(err) = err {
+        st.set_shutdown_error(err);
+    }
+    st.filters_stopped();
+}
+
+/// Reports a read that completed during the transport shutdown phase.
+///
+/// Neither a clean eof nor an error terminates the connection: the write
+/// side keeps draining until it completes or the shutdown deadline elapses.
+fn stopping_read_status(st: &IoState, status: &Poll<io::Result<usize>>) -> IoTaskStatus {
+    match status {
+        Poll::Ready(Ok(n)) if *n != 0 => IoTaskStatus::Io,
+        Poll::Ready(_) => {
+            st.flags.set_read_eof();
+            IoTaskStatus::Pause
+        }
+        Poll::Pending => IoTaskStatus::Pause,
+    }
 }
 
 impl Clone for IoContext {
@@ -541,13 +607,13 @@ mod tests {
 
         assert!(lazy(|cx| state.poll_read_more(cx)).await.is_pending());
         assert_ne!(
-            ctx.update_read_status(ctx.get_read_buf(), Poll::Pending),
+            ctx.release_read_buf(ctx.take_read_buf(), Poll::Pending),
             IoTaskStatus::Stop
         );
         assert!(lazy(|cx| state.poll_read_more(cx)).await.is_pending());
 
         assert_eq!(
-            ctx.update_read_status(ctx.get_read_buf(), Poll::Ready(Ok(0))),
+            ctx.release_read_buf(ctx.take_read_buf(), Poll::Ready(Ok(0))),
             IoTaskStatus::Pause
         );
         assert!(matches!(
@@ -579,8 +645,8 @@ mod tests {
         let ctx = IoContext::new(state.get_ref());
 
         // data arrives, then a clean eof
-        ctx.update_read_status(BytesMut::copy_from_slice(b"12345"), Poll::Ready(Ok(5)));
-        ctx.update_read_status(ctx.get_read_buf(), Poll::Ready(Ok(0)));
+        ctx.release_read_buf(BytesMut::copy_from_slice(b"12345"), Poll::Ready(Ok(5)));
+        ctx.release_read_buf(ctx.take_read_buf(), Poll::Ready(Ok(0)));
 
         // the buffered input is reported once
         assert!(matches!(
@@ -607,7 +673,7 @@ mod tests {
         let ctx = IoContext::new(state.get_ref());
 
         // input arrives but the dispatcher has not consumed it yet
-        ctx.update_read_status(BytesMut::copy_from_slice(b"12345"), Poll::Ready(Ok(5)));
+        ctx.release_read_buf(BytesMut::copy_from_slice(b"12345"), Poll::Ready(Ok(5)));
         assert!(ctx.flags().is_read_ready());
 
         // starting a shutdown must not discard the "input available" signal
@@ -616,7 +682,7 @@ mod tests {
 
         // so the read task is handed a fresh buffer instead of the one the
         // dispatcher still has to decode
-        assert!(ctx.get_read_buf().is_empty());
+        assert!(ctx.take_read_buf().is_empty());
         assert_eq!(state.with_read_dst(BytesMut::take), b"12345");
     }
 
@@ -628,7 +694,7 @@ mod tests {
 
         for _ in 0..3 {
             assert_eq!(
-                ctx.update_read_status(ctx.get_read_buf(), Poll::Ready(Ok(0))),
+                ctx.release_read_buf(ctx.take_read_buf(), Poll::Ready(Ok(0))),
                 IoTaskStatus::Pause
             );
             assert!(state.is_read_eof());
@@ -644,7 +710,7 @@ mod tests {
 
         assert!(lazy(|cx| state.poll_read_notify(cx)).await.is_pending());
         assert_eq!(
-            ctx.update_read_status(ctx.get_read_buf(), Poll::Ready(Ok(0))),
+            ctx.release_read_buf(ctx.take_read_buf(), Poll::Ready(Ok(0))),
             IoTaskStatus::Pause
         );
         assert!(state.is_read_eof());
@@ -690,7 +756,7 @@ mod tests {
         let ctx = IoContext::new(state.get_ref());
 
         assert_eq!(
-            ctx.update_read_status(ctx.get_read_buf(), Poll::Ready(Ok(0))),
+            ctx.release_read_buf(ctx.take_read_buf(), Poll::Ready(Ok(0))),
             IoTaskStatus::Stop
         );
         assert!(state.is_read_eof());

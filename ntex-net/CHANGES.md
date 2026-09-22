@@ -2,6 +2,9 @@
 
 ## [4.1.0] - 2026-09-23
 
+* Read into the io context buffer in place in the tokio and polling backends,
+  they read synchronously so they no longer need a detached buffer
+
 * Discard the socket receive queue before closing a connection, closing a
   socket with unread input aborts it with an RST and loses the output that the
   graceful shutdown just drained. The io-uring backend leaves this to a recv
@@ -24,7 +27,7 @@
 
 * Support eager writes with the IOCP backend
 
-* Update IoContext::update_read_status() api usage
+* Update IoContext::take_read_buf()/release_read_buf() api usage
 
 * Update IoContext::update_write_status() api usage
 

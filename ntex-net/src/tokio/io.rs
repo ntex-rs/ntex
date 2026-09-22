@@ -349,35 +349,35 @@ fn write_io<T: Stream>(
 }
 
 fn read<T: Stream + Unpin>(io: &T, ctx: &IoContext) -> Poll<IoTaskStatus> {
-    let mut buf = ctx.get_read_buf();
-
-    #[cfg(feature = "trace")]
-    log::trace!(
-        "{}: Read attempt, buf len({}) cap({})",
-        ctx.tag(),
-        buf.len(),
-        buf.remaining_mut()
-    );
-
-    // read data from socket
-    let io_res = io.try_read(unsafe { &mut *(ptr::from_mut(buf.chunk_mut()) as *mut [u8]) });
-
     let mut pending = false;
-    let status = match io_res {
-        Ok(0) => Poll::Ready(Ok(0)),
-        Ok(n) => {
-            // Safety: This is guaranteed to be the number of initialized
-            // bytes due to the invariants provided by `try_read()`.
-            unsafe { buf.advance_mut(n) };
-            Poll::Ready(Ok(n))
+
+    let result = ctx.with_read_buf(|buf| {
+        #[cfg(feature = "trace")]
+        log::trace!(
+            "{}: Read attempt, buf len({}) cap({})",
+            ctx.tag(),
+            buf.len(),
+            buf.remaining_mut()
+        );
+
+        // read data from socket
+        let io_res = io.try_read(unsafe { &mut *(ptr::from_mut(buf.chunk_mut()) as *mut [u8]) });
+
+        match io_res {
+            Ok(0) => Poll::Ready(Ok(0)),
+            Ok(n) => {
+                // Safety: This is guaranteed to be the number of initialized
+                // bytes due to the invariants provided by `try_read()`.
+                unsafe { buf.advance_mut(n) };
+                Poll::Ready(Ok(n))
+            }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                pending = true;
+                Poll::Pending
+            }
+            Err(e) => Poll::Ready(Err(e)),
         }
-        Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-            pending = true;
-            Poll::Pending
-        }
-        Err(e) => Poll::Ready(Err(e)),
-    };
-    let result = ctx.update_read_status(buf, status);
+    });
 
     #[cfg(feature = "trace")]
     log::trace!(

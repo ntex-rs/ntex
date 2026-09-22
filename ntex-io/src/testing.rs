@@ -441,11 +441,12 @@ fn write(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<()> {
 
 fn read(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<()> {
     loop {
-        let mut buf = ctx.get_read_buf();
-
-        let result = io.poll_read_buf(cx, &mut buf);
-        let pending = result.is_pending();
-        let result = ctx.update_read_status(buf, result);
+        let mut pending = false;
+        let result = ctx.with_read_buf(|buf| {
+            let result = io.poll_read_buf(cx, buf);
+            pending = result.is_pending();
+            result
+        });
         return match result {
             IoTaskStatus::Io => {
                 if pending {

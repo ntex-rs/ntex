@@ -490,24 +490,24 @@ impl StreamItem {
 
     fn read(&mut self) -> IoTaskStatus {
         let fd = self.fd();
-        let mut buf = self.ctx.get_read_buf();
-
-        let chunk = buf.chunk_mut();
-        let chunk_len = chunk.len();
-        let chunk_ptr = chunk.as_mut_ptr();
-
-        let result = syscall!(break libc::read(fd, chunk_ptr.cast(), chunk_len));
         #[cfg(feature = "trace")]
-        log::trace!("{}: {fd:?}-Rdt sz() = {result:?}", self.tag());
+        let tag = self.tag();
 
-        match result {
-            Poll::Ready(Ok(0)) => self.ctx.update_read_status(buf, Poll::Ready(Ok(0))),
-            Poll::Ready(Ok(n)) => {
+        self.ctx.with_read_buf(|buf| {
+            let chunk = buf.chunk_mut();
+            let chunk_len = chunk.len();
+            let chunk_ptr = chunk.as_mut_ptr();
+
+            let result = syscall!(break libc::read(fd, chunk_ptr.cast(), chunk_len));
+            #[cfg(feature = "trace")]
+            log::trace!("{tag}: {fd:?}-Rdt sz() = {result:?}");
+
+            if let Poll::Ready(Ok(n)) = result
+                && n != 0
+            {
                 unsafe { buf.advance_mut(n) };
-                self.ctx.update_read_status(buf, Poll::Ready(Ok(n)))
             }
-            Poll::Ready(Err(err)) => self.ctx.update_read_status(buf, Poll::Ready(Err(err))),
-            Poll::Pending => self.ctx.update_read_status(buf, Poll::Pending),
-        }
+            result
+        })
     }
 }

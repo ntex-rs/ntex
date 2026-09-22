@@ -189,7 +189,7 @@ impl Handler for StreamOpsHandler {
                         item.rd_op.take();
                         item.flags.remove(Flags::RD_CANCELING);
 
-                        let res = item.ctx.update_read_status(buf, Poll::Pending);
+                        let res = item.ctx.release_read_buf(buf, Poll::Pending);
                         if item.flags.contains(Flags::RD_REISSUE) || res == IoTaskStatus::Io {
                             item.flags.remove(Flags::RD_REISSUE);
                             st.recv(id, false, &self.inner.api);
@@ -254,7 +254,7 @@ impl Handler for StreamOpsHandler {
                                 st.recv_more(id, buf, &self.inner.api);
                             } else {
                                 item.flags.remove(Flags::RD_MORE);
-                                if item.ctx.update_read_status(buf, Poll::Ready(res))
+                                if item.ctx.release_read_buf(buf, Poll::Ready(res))
                                     == IoTaskStatus::Io
                                 {
                                     st.recv(id, self.inner.api.is_new(), &self.inner.api);
@@ -388,7 +388,7 @@ impl StreamOpsStorage {
                 #[cfg(feature = "trace")]
                 log::trace!("{}: Rcv({id})", item.ctx.tag());
 
-                let mut buf = item.ctx.get_read_buf();
+                let mut buf = item.ctx.take_read_buf();
                 let s = buf.chunk_mut();
                 let buf_ptr = s.as_mut_ptr();
                 let buf_len = s.len() as u32;

@@ -2,6 +2,11 @@
 
 ## [4.1.0] - 2026-09-22
 
+* Add IoContext::with_read_buf(), it hands the read buffer to the transport in
+  place instead of handing out a detached buffer that has to be appended back,
+  so a readiness based backend no longer pays a buffer swap and a copy for
+  every read
+
 * Pause the read side during the transport shutdown phase, the filters are done
   by then so no further input can be used. The receive queue is discarded by the
   transport itself, just before it closes the connection
@@ -58,7 +63,10 @@
       with_write_dst_buf() to with_write_dst(),
   IoContext::with_write_buf() to with_write_dst()
 * Remove IoContext::shutdown(), it is unreachable in every transport impl
-* Fix api consistency for IoContext::update_read_status()
+* Rename IoContext::get_read_buf() to take_read_buf() and
+  IoContext::update_read_status() to release_read_buf(), the pair moves the read
+  buffer out of the io state and back, the old names did not say so
+* Fix api consistency for IoContext::release_read_buf()
 * Fix peer EOF force-terminates instead of gracefully closing
 * Io::shutdown().await waits until physical transport shutdown
 * Added distinct IO_TERMINATING state for force-close and transport failures

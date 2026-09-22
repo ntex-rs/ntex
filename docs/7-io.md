@@ -34,10 +34,15 @@ built-in adapters typically use cooperating read and write tasks, but this is
 an implementation detail rather than part of the `IoStream` contract.
 
 The read task cooperates with ntex backpressure. It reads only while
-[`IoContext::poll_read_ready`] permits more input. After reading, it returns the
-buffer and result through [`IoContext::update_read_status`]. This allows the I/O
+[`IoContext::poll_read_ready`] permits more input. It takes a buffer through
+[`IoContext::take_read_buf`] and releases it with the result through
+[`IoContext::release_read_buf`]. This allows the I/O
 subsystem to process filters, wake the dispatcher, and pause further reads when
 the configured high-water mark is reached.
+
+A backend that reads synchronously, without holding the buffer across an await,
+should use [`IoContext::with_read_buf`] instead. It combines the two steps and
+borrows the read buffer in place, so no buffer is detached and appended back.
 
 The write task follows the same pattern. It waits for
 [`IoContext::poll_write_ready`], obtains queued data with
@@ -107,10 +112,10 @@ async fn read_task(socket: Rc<TcpStream>, ctx: IoContext) {
             Readiness::Close => break,
         }
 
-        let mut buf = ctx.get_read_buf();
+        let mut buf = ctx.take_read_buf();
         let result = read_from_socket(&socket, &mut buf);
 
-        match ctx.update_read_status(buf, result) {
+        match ctx.release_read_buf(buf, result) {
             IoTaskStatus::Io => {}
             IoTaskStatus::Pause => wait_for_read_resume(&ctx).await,
             IoTaskStatus::Stop => break,
@@ -162,7 +167,9 @@ into the I/O write buffer without depending on the concrete socket type.
 [`IoContext::poll_write_ready`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.poll_write_ready
 [`IoContext::stop`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.stop
 [`IoContext::stopped`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.stopped
-[`IoContext::update_read_status`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.update_read_status
+[`IoContext::with_read_buf`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.with_read_buf
+[`IoContext::take_read_buf`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.take_read_buf
+[`IoContext::release_read_buf`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.release_read_buf
 [`IoContext::update_write_status`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.update_write_status
 [`IoContext::with_write_dst`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.with_write_dst
 [`IoRef`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html
