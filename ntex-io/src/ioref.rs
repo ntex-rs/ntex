@@ -369,6 +369,25 @@ impl IoRef {
         self.0.buffer.with_write_dst(f)
     }
 
+    /// Schedules buffered output for delivery and updates write state.
+    ///
+    /// When output is buffered and the write task is paused, this either
+    /// performs an eager in-place write through the transport handle or
+    /// schedules a write operation. An eager write requires direct writes to be
+    /// enabled and, unless `force` is set, at least
+    /// [`IoConfig::write_buf_threshold`](crate::IoConfig::write_buf_threshold)
+    /// bytes to be buffered; `force` makes any non-empty buffer eligible. A
+    /// write operation is scheduled when an eager write leaves data behind, or
+    /// when no eager write was attempted.
+    ///
+    /// Returns the connection error once the connection is stopping or
+    /// terminating with an error set. This is how a failed eager write or
+    /// filter reaches the caller, and it also prevents further eager writes on
+    /// a connection that is already gone.
+    ///
+    /// Finally enables write back-pressure and wakes the dispatcher if buffered
+    /// output has reached the configured high watermark. The size is re-read
+    /// first because an eager write may have drained it.
     pub(crate) fn consolidate_write_state(&self, force: bool) -> io::Result<()> {
         let st = &self.0;
 
@@ -432,6 +451,22 @@ impl IoRef {
         Ok(())
     }
 
+    /// Updates read state after the application-facing destination was accessed.
+    ///
+    /// While read back-pressure is active nothing is released until `buf` has
+    /// fallen to at most half the high watermark. Until then read readiness and
+    /// any installed read pause are deliberately left in place, keeping the
+    /// transport read task parked. Once it has, read readiness and
+    /// back-pressure are cleared together; without back-pressure only read
+    /// readiness is cleared.
+    ///
+    /// Whenever something is released, a pause installed by
+    /// [`Io::poll_read_pause`](crate::Io::poll_read_pause) is cancelled and the
+    /// transport read task is woken.
+    ///
+    /// See [`release_read_destination`](Self::release_read_destination) for the
+    /// variant used when the caller may have drained a different buffer of the
+    /// filter chain.
     fn update_read_destination(&self, buf: &mut BytesMut) {
         let st = &self.0;
 
