@@ -222,15 +222,14 @@ impl IoContext {
                         st.flags.set_read_notifed();
                     }
 
-                    // Check if the filter wrote data during buffer processing
+                    // A filter may write data while processing reads, for
+                    // example a TLS handshake record. Such output can land in
+                    // an intermediate buffer that `write_buf_size()` does not
+                    // account for, so the write chain is forced from the
+                    // outermost layer to move it to the transport.
                     if status.wants_write {
                         st.buffer.process_write_buf_force(&self.0)?;
                         self.0.consolidate_write_state(false)?;
-                    }
-
-                    // Check whether the filter notifies about readiness changes
-                    if status.notify {
-                        self.0.call_notify();
                     }
                     Ok(())
                 })

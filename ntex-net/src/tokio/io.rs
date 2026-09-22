@@ -108,8 +108,6 @@ impl Handle for HandleWrapper {
     fn write(&self, ctx: &IoContext) {
         let _ = write(self.0.as_ref(), ctx, true);
     }
-
-    fn notify(&self, _: &IoContext) {}
 }
 
 #[cfg(unix)]

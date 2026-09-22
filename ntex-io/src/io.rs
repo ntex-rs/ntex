@@ -2233,6 +2233,73 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn intermediate_filter_output_reaches_transport() {
+        // A filter that emits output while processing reads, the way a TLS
+        // layer emits handshake records.
+        #[derive(Debug)]
+        struct Emit;
+
+        impl FilterLayer for Emit {
+            fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                buf.with_read_buffers(|src, dst| {
+                    if let Some(src) = src {
+                        dst.extend_from_slice(src);
+                        src.clear();
+                    }
+                });
+                buf.with_write_buffers(|_, dst| dst.extend_from_slice(b"pong"));
+                Ok(())
+            }
+
+            fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                buf.with_write_buffers(BytePages::move_to);
+                Ok(())
+            }
+
+            fn shutdown(&self, _: &FilterBuf<'_>) -> io::Result<Poll<()>> {
+                Ok(Poll::Ready(()))
+            }
+        }
+
+        #[derive(Debug)]
+        struct Passthrough;
+
+        impl FilterLayer for Passthrough {
+            fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                buf.with_read_buffers(|src, dst| {
+                    if let Some(src) = src {
+                        dst.extend_from_slice(src);
+                        src.clear();
+                    }
+                });
+                Ok(())
+            }
+
+            fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                buf.with_write_buffers(BytePages::move_to);
+                Ok(())
+            }
+
+            fn shutdown(&self, _: &FilterBuf<'_>) -> io::Result<Poll<()>> {
+                Ok(Poll::Ready(()))
+            }
+        }
+
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        // Two layers, so the bytes `Emit` writes during read processing land in
+        // an intermediate buffer that `Stack::write_buf_size()` does not count.
+        // Only the forced write-chain pass moves them out to the transport.
+        let io = Io::from(server).add_filter(Passthrough).add_filter(Emit);
+
+        client.write("ping");
+        let _ = io.recv(&BytesCodec).await.unwrap();
+        sleep(Millis(50)).await;
+        assert!(client.read_any().starts_with(b"pong"));
+    }
+
+    #[ntex::test]
     async fn peer_eof_completes_filter_shutdown() {
         #[derive(Debug)]
         struct PendingShutdown;

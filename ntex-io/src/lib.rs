@@ -154,8 +154,7 @@ pub trait IoCallbacks {
 /// Control handle for transport-specific I/O tasks.
 ///
 /// The handle is called synchronously by the connection state and must not
-/// block. It can use [`IoContext::notify`] to wake a transport task after
-/// readiness changes.
+/// block.
 pub trait Handle {
     /// Returns type-indexed transport information.
     fn query(&self, _: TypeId) -> Option<Box<dyn Any>> {
@@ -165,12 +164,6 @@ pub trait Handle {
     #[inline]
     /// Requests that the transport start or resume a write operation.
     fn write(&self, _: &IoContext) {}
-
-    #[inline]
-    /// Notifies the I/O context that readiness has changed.
-    fn notify(&self, ctx: &IoContext) {
-        ctx.notify();
-    }
 }
 
 /// Current status of the I/O state.

@@ -629,18 +629,10 @@ impl IoRef {
         }
     }
 
-    pub(crate) fn call_notify(&self) {
-        if let Some(hnd) = self.0.handle.take() {
-            let ctx = unsafe { &*(ptr::from_ref(self).cast::<IoContext>()) };
-            hnd.notify(ctx);
-            self.restore_handle(hnd);
-        }
-    }
-
     /// Reinstalls the transport handle after a reentrant transport callback.
     ///
     /// The handle is taken for the duration of the call so that a nested
-    /// `call_write()`/`call_notify()` cannot reenter the transport. If the
+    /// `call_write()` cannot reenter the transport. If the
     /// callback terminated the connection, `terminate_connection()` and
     /// `stop_connection()` found the slot empty and could not release the
     /// transport, so the handle is dropped here instead of being reinstalled.

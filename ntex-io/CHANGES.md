@@ -2,6 +2,8 @@
 
 ## [4.1.0] - 2026-09-22
 
+* Remove Handle::notify() and FilterCtx::notify(), nothing triggered that path,
+  a filter reports readiness changes through the buffers it returns
 * Account for output owned by the transport in the total write buffer size, a
   completion based backend takes pages out of the write buffer and keeps them
   until the operation completes. Those bytes now count towards flush
