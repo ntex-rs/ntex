@@ -122,7 +122,15 @@ impl IoRef {
     /// Force-closes the connection.
     ///
     /// The dispatcher does not wait for incomplete responses. The I/O stream is
-    /// terminated without any graceful period.
+    /// terminated without any graceful period, and whatever is still buffered
+    /// is discarded.
+    ///
+    /// The transport aborts the connection instead of closing it gracefully, so
+    /// the peer most likely observes an `RST` rather than a clean end of
+    /// stream, and output that has not been acknowledged yet is lost. That is
+    /// what keeps a truncated response distinguishable from a complete one, but
+    /// it also means this must not be used to end a connection normally. Use
+    /// [`close`](Self::close) for that.
     pub fn terminate(&self) {
         log::trace!("{}: Terminate io stream object", self.tag());
         self.0.terminate_connection(None);

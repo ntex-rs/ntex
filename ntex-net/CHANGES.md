@@ -2,6 +2,10 @@
 
 ## [4.1.0] - 2026-09-23
 
+* Reset the connection on a force close instead of closing it gracefully, the
+  receive queue drain and SHUT_RDWR turned a truncated response into a clean
+  FIN that a peer could not tell apart from a complete one
+
 * Drop poll interest before tearing a connection down in the polling backend,
   and drain its receive queue on the reactor thread instead of the blocking
   pool, the socket is still registered so the drain raced the reactor

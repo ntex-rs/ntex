@@ -533,7 +533,21 @@ impl StreamItem {
 }
 
 impl StreamCtl {
-    pub(crate) async fn shutdown(&self) -> io::Result<()> {
+    pub(crate) async fn shutdown(&self, terminate: bool) -> io::Result<()> {
+        if terminate {
+            // The connection was force-closed, so it is released without the
+            // graceful close: the receive queue is not drained and no
+            // `SHUT_RDWR` is submitted. The socket is aborted instead, so that
+            // the peer sees an RST and cannot mistake a truncated stream for a
+            // complete one. Dropping this handle submits the `Close` that
+            // releases the descriptor.
+            self.inner.with(|storage| {
+                storage.pause_read(self.id, &self.inner.api);
+                crate::helpers::abort_raw_socket(storage.streams[self.id].fd().0);
+            });
+            return Ok(());
+        }
+
         self.inner
             .with(|storage| {
                 storage.pause_read(self.id, &self.inner.api);

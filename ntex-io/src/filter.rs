@@ -60,14 +60,16 @@ pub trait Filter: 'static {
     /// Reads continue through the filter shutdown phase so that filters can
     /// complete theirs, and are paused for the transport shutdown phase, so
     /// [`Readiness::Close`] is resolved only once the connection is
-    /// terminated.
+    /// terminated. A force close reports [`Readiness::Terminate`] instead,
+    /// which releases the connection without a graceful close.
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness>;
 
     /// Checks whether transport write operations may proceed.
     ///
-    /// Resolves to [`Readiness::Close`] once the connection is terminated, or
-    /// once it enters a graceful shutdown and all buffered output has reached
-    /// the transport.
+    /// Resolves to [`Readiness::Close`] once the connection enters a graceful
+    /// shutdown and all buffered output has reached the transport, and to
+    /// [`Readiness::Terminate`] when the connection is force-closed or
+    /// aborted by an error.
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness>;
 }
 
@@ -84,7 +86,9 @@ impl Filter for Base {
 
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         let st = &self.0.0;
-        if st.flags.is_aborted() {
+        if st.flags.is_terminating() {
+            Poll::Ready(Readiness::Terminate)
+        } else if st.flags.is_terminated() {
             Poll::Ready(Readiness::Close)
         } else {
             st.read_task.register(cx.waker());
@@ -116,7 +120,9 @@ impl Filter for Base {
 
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         let st = &self.0.0;
-        if st.flags.is_aborted() {
+        if st.flags.is_terminating() {
+            Poll::Ready(Readiness::Terminate)
+        } else if st.flags.is_terminated() {
             Poll::Ready(Readiness::Close)
         } else {
             st.write_task.register(cx.waker());
@@ -219,14 +225,19 @@ impl Filter for NullFilter {
         None
     }
 
+    // A transport only ever polls this filter after `Io` has been dropped,
+    // which terminates the connection and discards whatever was still
+    // buffered. Reporting `Close` would let the transport close the connection
+    // gracefully, so a response that never reached the peer would look like a
+    // complete one.
     #[inline]
     fn poll_read_ready(&self, _: &mut Context<'_>) -> Poll<Readiness> {
-        Poll::Ready(Readiness::Close)
+        Poll::Ready(Readiness::Terminate)
     }
 
     #[inline]
     fn poll_write_ready(&self, _: &mut Context<'_>) -> Poll<Readiness> {
-        Poll::Ready(Readiness::Close)
+        Poll::Ready(Readiness::Terminate)
     }
 
     #[inline]

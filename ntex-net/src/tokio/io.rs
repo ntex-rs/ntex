@@ -30,7 +30,11 @@ trait Stream: AsyncRead + AsyncWrite + Unpin {
 
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>>;
 
+    /// Closes both directions gracefully, after draining the receive queue.
     fn terminate(&self) -> io::Result<()>;
+
+    /// Arranges for the socket to be reset instead of closed gracefully.
+    fn abort(&self);
 
     fn try_read(&self, buf: &mut [u8]) -> io::Result<usize>;
 
@@ -52,6 +56,10 @@ impl Stream for TcpStream {
         let sock = socket2::SockRef::from(self);
         crate::helpers::drain_socket(&sock);
         sock.shutdown(std::net::Shutdown::Both)
+    }
+
+    fn abort(&self) {
+        crate::helpers::abort_socket(&socket2::SockRef::from(self));
     }
 
     fn try_read(&self, buf: &mut [u8]) -> io::Result<usize> {
@@ -81,6 +89,10 @@ impl Stream for tok_io::net::UnixStream {
         let sock = socket2::SockRef::from(self);
         crate::helpers::drain_socket(&sock);
         sock.shutdown(std::net::Shutdown::Both)
+    }
+
+    fn abort(&self) {
+        crate::helpers::abort_socket(&socket2::SockRef::from(self));
     }
 
     fn try_read(&self, buf: &mut [u8]) -> io::Result<usize> {
@@ -162,7 +174,7 @@ where
                         }
                     }
                 }
-                Readiness::Close => Poll::Ready(()),
+                Readiness::Close | Readiness::Terminate => Poll::Ready(()),
             };
         }
     })
@@ -180,7 +192,7 @@ async fn run_wrt<T>(io: Rc<T>, ctx: IoContext)
 where
     T: Stream,
 {
-    poll_fn(|cx| {
+    let terminate = poll_fn(|cx| {
         let ctx_state = ctx.poll_write_ready(cx);
         #[cfg(feature = "trace")]
         log::trace!(
@@ -199,22 +211,31 @@ where
                     Ok(()) => match write(io.as_ref(), &ctx, false) {
                         WrtStatus::More => continue,
                         WrtStatus::Pending => Poll::Pending,
-                        WrtStatus::Terminate => Poll::Ready(()),
+                        // the connection has been aborted already
+                        WrtStatus::Terminate => Poll::Ready(true),
                     },
                     Err(err) => {
                         ctx.update_write_status(Err(err));
-                        Poll::Ready(())
+                        Poll::Ready(true)
                     }
                 };
             },
-            Readiness::Close => Poll::Ready(()),
+            Readiness::Close => Poll::Ready(false),
+            Readiness::Terminate => Poll::Ready(true),
         }
     })
     .await;
 
     log::trace!("{}: Shuting down io", ctx.tag());
 
-    let result = io.terminate();
+    // A force-closed connection is aborted instead of closed gracefully, so
+    // that a truncated stream is not terminated by a clean `FIN`.
+    let result = if terminate {
+        io.abort();
+        Ok(())
+    } else {
+        io.terminate()
+    };
 
     log::trace!("{}: Shutdown complete {result:?}", ctx.tag());
     ctx.stopped(result.err());

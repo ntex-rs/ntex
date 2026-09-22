@@ -167,11 +167,11 @@ mod tests {
         );
         assert_eq!(
             std::future::poll_fn(|cx| NullFilter.poll_read_ready(cx)).await,
-            crate::Readiness::Close
+            crate::Readiness::Terminate
         );
         assert_eq!(
             std::future::poll_fn(|cx| NullFilter.poll_write_ready(cx)).await,
-            crate::Readiness::Close
+            crate::Readiness::Terminate
         );
         assert!(
             stack

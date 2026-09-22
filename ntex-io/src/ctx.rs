@@ -16,9 +16,10 @@ use crate::{Flags, Id, IoRef, IoTaskStatus, Readiness, io::IoState};
 /// # Shutdown
 ///
 /// A transport task runs until [`poll_read_ready`](Self::poll_read_ready) or
-/// [`poll_write_ready`](Self::poll_write_ready) reports [`Readiness::Close`],
-/// or until a status update returns [`IoTaskStatus::Stop`]. All of those imply
-/// that the connection is already closing or closed.
+/// [`poll_write_ready`](Self::poll_write_ready) reports [`Readiness::Close`] or
+/// [`Readiness::Terminate`], or until a status update returns
+/// [`IoTaskStatus::Stop`]. All of those imply that the connection is already
+/// closing or closed.
 ///
 /// Graceful shutdown runs in two phases. In the first the filters shut down
 /// while both directions stay open. In the second, buffered output is drained
@@ -29,9 +30,12 @@ use crate::{Flags, Id, IoRef, IoTaskStatus, Readiness, io::IoState};
 ///
 /// So by the time the loop exits there is nothing left to drain, whether the
 /// connection was shut down gracefully or terminated. A task must never attempt
-/// a final flush on the way out; it should close both directions of the
-/// transport immediately and report the outcome through
-/// [`stopped`](Self::stopped).
+/// a final flush on the way out; it should release the transport immediately
+/// and report the outcome through [`stopped`](Self::stopped). The two variants
+/// differ only in how the transport is released: [`Readiness::Close`] closes
+/// both directions gracefully, while [`Readiness::Terminate`] skips the
+/// graceful close so that an aborted connection stays distinguishable from one
+/// that ended normally.
 pub struct IoContext(IoRef);
 
 impl fmt::Debug for IoContext {
@@ -70,11 +74,11 @@ impl IoContext {
     #[inline]
     /// Checks readiness for read operations.
     ///
-    /// Resolves to [`Readiness::Ready`] or [`Readiness::Close`], or stays
-    /// `Pending`. Reads continue through the filter shutdown phase so that
-    /// filters can complete theirs, and are paused for the transport shutdown
-    /// phase, so `Close` is resolved here only once the connection is
-    /// terminated.
+    /// Resolves to [`Readiness::Ready`], [`Readiness::Close`] or
+    /// [`Readiness::Terminate`], or stays `Pending`. Reads continue through the
+    /// filter shutdown phase so that filters can complete theirs, and are
+    /// paused for the transport shutdown phase, so `Close` is resolved here
+    /// only once the connection is terminated.
     pub fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         self.poll_filters_shutdown(cx);
         self.0.filter().poll_read_ready(cx)
@@ -83,10 +87,10 @@ impl IoContext {
     #[inline]
     /// Checks readiness for write operations.
     ///
-    /// Resolves to [`Readiness::Ready`] or [`Readiness::Close`], or stays
-    /// `Pending`. Unlike the read path this reports `Close` at the end of a
-    /// graceful shutdown as well, once buffered output has been drained, so the
-    /// task must not flush again.
+    /// Resolves to [`Readiness::Ready`], [`Readiness::Close`] or
+    /// [`Readiness::Terminate`], or stays `Pending`. Unlike the read path this
+    /// reports `Close` at the end of a graceful shutdown as well, once buffered
+    /// output has been drained, so the task must not flush again.
     pub fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         self.poll_shutdown_deadline(cx);
         self.0.filter().poll_write_ready(cx)

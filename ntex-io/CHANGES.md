@@ -2,6 +2,14 @@
 
 ## [4.1.0] - 2026-09-22
 
+* Dropping an Io now terminates the connection instead of closing it
+  gracefully, a service that returned without shutting down discarded whatever
+  it had encoded yet the peer saw a clean end of stream
+
+* Add Readiness::Terminate, reported when a connection is force-closed through
+  IoRef::terminate() or aborted by an error. Readiness::Close now means a
+  graceful close only, so a transport can tell the two apart
+
 * Wake the write task when the write buffer drains during the transport
   shutdown phase, only poll_write_ready() can report that the phase is over so
   a backend that drives reads and writes from separate tasks could stall until

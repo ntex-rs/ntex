@@ -377,6 +377,15 @@ impl StreamCtl {
             .and_then(|res| res)
     }
 
+    /// Arranges for the socket to be aborted instead of closed gracefully.
+    ///
+    /// The descriptor itself is released when this handle is dropped.
+    pub(crate) fn abort(&self) {
+        self.inner.with(|streams| {
+            crate::helpers::abort_raw_socket(streams[self.id as usize].fd());
+        });
+    }
+
     /// Modify poll interest for the stream
     pub(crate) fn interest(&self, rd: bool, wr: bool) {
         self.inner.interest(self.id, rd, wr);

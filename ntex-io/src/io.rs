@@ -1349,7 +1349,7 @@ mod tests {
         // read task ready
         assert_eq!(
             lazy(|cx| ctx.poll_read_ready(cx)).await,
-            Poll::Ready(Readiness::Close)
+            Poll::Ready(Readiness::Terminate)
         );
     }
 
@@ -1692,7 +1692,7 @@ mod tests {
         // write task ready
         assert_eq!(
             lazy(|cx| ctx.poll_write_ready(cx)).await,
-            Poll::Ready(Readiness::Close)
+            Poll::Ready(Readiness::Terminate)
         );
         // flush returns error
         let Poll::Ready(Err(err)) = lazy(|cx| io.poll_flush(cx, false)).await else {

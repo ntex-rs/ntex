@@ -10,6 +10,23 @@ use windows_sys::Win32::Networking::WinSock;
 use super::{Handler, Overlapped, Reactor, ReactorApi, ops};
 use crate::helpers::Queue;
 
+/// Releases a socket, gracefully unless the connection was force-closed.
+///
+/// A graceful close drains the receive queue so that a pending `RST` cannot
+/// destroy output that has not reached the peer yet, and shuts both directions
+/// down before closing. A force close skips both and resets the connection
+/// instead, so that the peer cannot mistake a truncated stream for a complete
+/// one.
+fn close_socket(io: WinSock::SOCKET, terminate: bool) -> io::Result<()> {
+    if terminate {
+        crate::helpers::abort_raw_socket(io as _);
+    } else {
+        crate::helpers::drain_raw_socket(io as _);
+        syscall!(SOCKET, WinSock::shutdown(io, 2)).map(|_| ())?;
+    }
+    syscall!(SOCKET, WinSock::closesocket(io)).map(|_| ())
+}
+
 #[derive(Clone)]
 pub(crate) struct StreamOps(Rc<StreamOpsInner>);
 
@@ -26,6 +43,8 @@ pub(crate) struct WeakStreamCtl {
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     struct Flags: u8 {
+        /// the connection was force-closed, release it without a graceful close
+        const TERMINATE    = 0b0001_0000;
         const CLOSED       = 0b0010_0000;
         const DROPPED_PRI  = 0b0100_0000;
         const DROPPED_SEC  = 0b1000_0000;
@@ -156,10 +175,9 @@ impl Handler for StreamOpsHandler {
                     let io = item.io.as_raw_socket() as _;
                     #[cfg(feature = "trace")]
                     log::trace!("{_tag}: CloseWait({:?})", io);
+                    let terminate = item.flags.contains(Flags::TERMINATE);
                     ntex_rt::spawn_blocking(move || {
-                        crate::helpers::drain_raw_socket(io as _);
-                        let _ = syscall!(SOCKET, WinSock::shutdown(io, 2));
-                        let _ = syscall!(SOCKET, WinSock::closesocket(io));
+                        let _ = close_socket(io, terminate);
                         #[cfg(feature = "trace")]
                         log::trace!("{_tag}: WaitClosed({:?})", io);
                     })
@@ -205,9 +223,14 @@ impl StreamOpsInner {
 }
 
 impl StreamCtl {
-    pub(crate) async fn shutdown(&self) -> io::Result<()> {
+    pub(crate) async fn shutdown(&self, terminate: bool) -> io::Result<()> {
         let result = self.inner.with(|st| {
             if let Some(item) = st.streams.get_mut(self.id) {
+                if terminate {
+                    // the connection was force-closed, so the deferred close
+                    // below and the drop paths must skip the graceful close too
+                    item.flags.insert(Flags::TERMINATE);
+                }
                 if item.flags.contains(Flags::CLOSED) {
                     None
                 } else if item.rd_op.pause(true) && item.wr_op.pause() {
@@ -231,15 +254,11 @@ impl StreamCtl {
             Some(Either::Left((_tag, io))) => {
                 #[cfg(feature = "trace")]
                 log::trace!("{_tag}: Close({io:?})");
-                ntex_rt::spawn(ntex_rt::spawn_blocking(move || {
-                    crate::helpers::drain_raw_socket(io as _);
-                    syscall!(SOCKET, WinSock::shutdown(io, 2)).map(|_| ())?;
-                    syscall!(SOCKET, WinSock::closesocket(io)).map(|_| ())
-                }))
-                .await
-                .map_err(io::Error::other)
-                .and_then(|res| res.map_err(io::Error::other))
-                .and_then(|res| res)
+                ntex_rt::spawn(ntex_rt::spawn_blocking(move || close_socket(io, terminate)))
+                    .await
+                    .map_err(io::Error::other)
+                    .and_then(|res| res.map_err(io::Error::other))
+                    .and_then(|res| res)
             }
             Some(Either::Right(rx)) => rx
                 .await
@@ -290,11 +309,8 @@ impl StreamOpsStorage {
             let item = self.streams.remove(id);
             if !item.flags.contains(Flags::CLOSED) {
                 let io = item.io.as_raw_socket() as _;
-                ntex_rt::spawn_blocking(move || {
-                    syscall!(SOCKET, WinSock::shutdown(io, 2)).map(|_| ())?;
-                    syscall!(SOCKET, WinSock::closesocket(io)).map(|_| ())
-                })
-                .detach();
+                let terminate = item.flags.contains(Flags::TERMINATE);
+                ntex_rt::spawn_blocking(move || close_socket(io, terminate)).detach();
             }
             mem::forget(item.io);
         } else {
@@ -318,11 +334,8 @@ impl StreamOpsStorage {
             let item = self.streams.remove(id);
             if !item.flags.contains(Flags::CLOSED) {
                 let io = item.io.as_raw_socket() as _;
-                ntex_rt::spawn_blocking(move || {
-                    syscall!(SOCKET, WinSock::shutdown(io, 2)).map(|_| ())?;
-                    syscall!(SOCKET, WinSock::closesocket(io)).map(|_| ())
-                })
-                .detach();
+                let terminate = item.flags.contains(Flags::TERMINATE);
+                ntex_rt::spawn_blocking(move || close_socket(io, terminate)).detach();
             }
             mem::forget(item.io);
         } else {

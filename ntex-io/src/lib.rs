@@ -53,25 +53,37 @@ pub use self::flags::Flags;
 pub enum Readiness {
     /// The I/O task may proceed with I/O operations.
     Ready,
-    /// The transport must be closed.
+    /// The transport must be closed gracefully.
     ///
     /// The I/O task must close both directions of the connection and then
     /// release it. For a socket this is `shutdown(SHUT_RDWR)` followed by
     /// `close()`. Any operation still in flight should be canceled.
     ///
-    /// This covers both a graceful shutdown and an immediate termination, and
-    /// the task does not need to tell them apart: buffered output is drained
-    /// before this is reported on the graceful path, so in either case there
-    /// is nothing left to flush.
+    /// Buffered output has already been drained before this is reported, so
+    /// there is nothing left to flush.
     Close,
+    /// The transport must be released immediately.
+    ///
+    /// The connection was force-closed through
+    /// [`IoRef::terminate`](crate::IoRef::terminate) or aborted by an I/O
+    /// error, so whatever is still buffered is discarded on purpose. The I/O
+    /// task must not perform a graceful close: no receive queue drain and no
+    /// `shutdown(SHUT_RDWR)`, just release the connection. That keeps an
+    /// aborted stream distinguishable from one that ended normally, instead of
+    /// terminating a truncated response with a clean `FIN`.
+    Terminate,
 }
 
 impl Readiness {
     /// Merges two readiness states without regard to argument order.
     ///
-    /// `Close` overrides every other state, and `Pending` overrides `Ready`.
+    /// `Terminate` overrides every other state, `Close` overrides `Pending` and
+    /// `Ready`, and `Pending` overrides `Ready`.
     pub fn merge(val1: Poll<Readiness>, val2: Poll<Readiness>) -> Poll<Readiness> {
         match (val1, val2) {
+            (Poll::Ready(Readiness::Terminate), _) | (_, Poll::Ready(Readiness::Terminate)) => {
+                Poll::Ready(Readiness::Terminate)
+            }
             (Poll::Ready(Readiness::Close), _) | (_, Poll::Ready(Readiness::Close)) => {
                 Poll::Ready(Readiness::Close)
             }
@@ -278,6 +290,7 @@ mod tests {
             Poll::Pending,
             Poll::Ready(Readiness::Ready),
             Poll::Ready(Readiness::Close),
+            Poll::Ready(Readiness::Terminate),
         ];
 
         for val1 in states {
@@ -297,6 +310,17 @@ mod tests {
         assert_eq!(
             Readiness::merge(Poll::Ready(Readiness::Ready), Poll::Ready(Readiness::Close)),
             Poll::Ready(Readiness::Close)
+        );
+        assert_eq!(
+            Readiness::merge(Poll::Pending, Poll::Ready(Readiness::Terminate)),
+            Poll::Ready(Readiness::Terminate)
+        );
+        assert_eq!(
+            Readiness::merge(
+                Poll::Ready(Readiness::Close),
+                Poll::Ready(Readiness::Terminate)
+            ),
+            Poll::Ready(Readiness::Terminate)
         );
     }
 }
