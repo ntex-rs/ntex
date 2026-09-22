@@ -1388,6 +1388,73 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn read_src_releases_read_backpressure() {
+        let (client, server) = IoTest::create();
+
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(64, 32, 12)),
+        );
+        assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
+
+        client.write(BIN2);
+        client.write(BIN2);
+        sleep(Millis(50)).await;
+        assert!(io.flags().is_rd_backpressure());
+
+        // On a filterless Io the transport-facing source aliases the
+        // application-facing read destination.
+        let len = io.get_ref().with_read_src(|buf| {
+            let len = buf.len();
+            buf.clear();
+            len
+        });
+        assert!(len > 0);
+        assert!(!io.flags().is_rd_backpressure());
+        assert!(!io.flags().is_read_paused());
+
+        // reads resume
+        client.write(BIN2);
+        sleep(Millis(50)).await;
+        assert!(io.flags().is_read_ready());
+    }
+
+    #[ntex::test]
+    async fn with_buf_releases_read_backpressure() {
+        let (client, server) = IoTest::create();
+
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(64, 32, 12)),
+        );
+        assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
+
+        client.write(BIN2);
+        client.write(BIN2);
+        sleep(Millis(50)).await;
+        assert!(io.flags().is_rd_backpressure());
+
+        let len = io
+            .get_ref()
+            .with_buf(|buf| {
+                buf.with_read_buffers(|_, dst| {
+                    let len = dst.len();
+                    dst.clear();
+                    len
+                })
+            })
+            .unwrap();
+        assert!(len > 0);
+        assert!(!io.flags().is_rd_backpressure());
+        assert!(!io.flags().is_read_paused());
+
+        // reads resume
+        client.write(BIN2);
+        sleep(Millis(50)).await;
+        assert!(io.flags().is_read_ready());
+    }
+
+    #[ntex::test]
     async fn write() {
         let io = Io::new(
             IoTest::create().0,

@@ -255,6 +255,11 @@ impl IoRef {
     /// Filter callbacks run before and after `f`, and any produced write data
     /// is scheduled for delivery after the closure returns. Errors from an
     /// eager backend write are returned to the caller.
+    ///
+    /// The destination exposed by
+    /// [`FilterBuf::with_read_buffers`](crate::FilterBuf::with_read_buffers) is
+    /// the application-facing read destination, so consuming enough of it
+    /// releases read backpressure and cancels an installed read pause.
     pub fn with_buf<F, R>(&self, f: F) -> io::Result<R>
     where
         F: FnOnce(&mut FilterBuf<'_>) -> R,
@@ -262,6 +267,7 @@ impl IoRef {
         self.with_callbacks(|cb| cb.before_processing(self));
         let result = self.0.buffer.with_filter(self, |ctx| ctx.with_buffer(f));
         self.with_callbacks(|cb| cb.after_processing(self));
+        self.release_read_destination();
 
         self.consolidate_write_state(false)?;
         Ok(result)
@@ -324,11 +330,18 @@ impl IoRef {
     /// application-facing destination exposed by
     /// [`with_read_dst`](Self::with_read_dst). Primarily intended for transport
     /// and filter implementations.
+    ///
+    /// Without a filter installed this is the same buffer as the
+    /// application-facing destination, so consuming enough of it releases read
+    /// backpressure and cancels an installed read pause. Unlike
+    /// [`with_read_dst`](Self::with_read_dst) it never clears read readiness.
     pub fn with_read_src<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
-        self.0.buffer.with_read_src(self, f)
+        let result = self.0.buffer.with_read_src(self, f);
+        self.release_read_destination();
+        result
     }
 
     #[inline]
@@ -427,6 +440,30 @@ impl IoRef {
             st.flags.unset_all_read_flags();
         } else {
             st.flags.unset_read_ready();
+        }
+
+        if st.flags.is_read_paused() {
+            st.wake_read_task();
+            st.flags.unset_read_paused();
+        }
+    }
+
+    /// Releases read backpressure and any installed read pause.
+    ///
+    /// Used by the accessors that can drain the application-facing read
+    /// destination without going through
+    /// [`with_read_dst`](Self::with_read_dst). Unlike
+    /// `update_read_destination()` this never clears read readiness, because
+    /// the caller may have touched a different buffer of the chain. It only
+    /// removes a stale pause, so it can never suppress a wakeup.
+    fn release_read_destination(&self) {
+        let st = &self.0;
+
+        if st.flags.is_rd_backpressure() {
+            if !st.should_disable_rd_backpressure(st.buffer.read_dst_size()) {
+                return;
+            }
+            st.flags.unset_all_read_flags();
         }
 
         if st.flags.is_read_paused() {
