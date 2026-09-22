@@ -72,9 +72,14 @@ impl ReadOperation {
             ) {
                 let e = err.raw_os_error();
                 if e != Some(ERROR_NOT_FOUND as _) && e != Some(ERROR_OPERATION_ABORTED as _) {
-                    self.ctx
-                        .release_read_buf(self.buf.take().unwrap(), Poll::Ready(Err(err)));
-                    return true;
+                    // The recv is still live and the kernel still owns the read
+                    // buffer, so fall through and wait for the completion rather
+                    // than recycling the buffer and reporting the op as finished.
+                    log::error!(
+                        "{}: failed to cancel recv({}): {err:?}",
+                        self.ctx.tag(),
+                        self.io
+                    );
                 }
             }
             if closing {
@@ -228,7 +233,14 @@ impl WriteOperation {
             ) {
                 let e = err.raw_os_error();
                 if e != Some(ERROR_NOT_FOUND as _) && e != Some(ERROR_OPERATION_ABORTED as _) {
-                    return true;
+                    // The send is still live and the kernel still owns the queued
+                    // pages, so fall through and wait for the completion rather
+                    // than reporting the op as finished and closing under it.
+                    log::error!(
+                        "{}: failed to cancel send({}): {err:?}",
+                        self.ctx.tag(),
+                        self.io
+                    );
                 }
             }
             self.flags.insert(Flags::CLOSING);
