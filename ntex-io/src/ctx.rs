@@ -19,11 +19,16 @@ use crate::{Flags, Id, IoRef, IoTaskStatus, Readiness, io::IoState};
 /// [`poll_write_ready`](Self::poll_write_ready) reports
 /// [`Readiness::Shutdown`]/[`Readiness::Terminate`], or until a status update
 /// returns [`IoTaskStatus::Stop`]. All of those imply that the connection is
-/// already closing or closed, so once the loop exits there is nothing left for
-/// the task to drain: buffered output has already been written, because an
-/// empty write buffer is a precondition of entering graceful shutdown. The
-/// task should therefore close the transport immediately and report the outcome
-/// through [`stopped`](Self::stopped).
+/// already closing or closed.
+///
+/// Graceful shutdown normally waits for buffered output to reach the transport
+/// first, so by the time the loop exits there is nothing left to drain. That
+/// wait is bounded: if filter shutdown cannot complete, the disconnect timeout
+/// elapses, or the connection is terminated, the task is told to stop while
+/// output is still buffered, and that output is discarded rather than written.
+/// A task must therefore never attempt a final flush on the way out; it should
+/// close the transport immediately and report the outcome through
+/// [`stopped`](Self::stopped).
 pub struct IoContext(IoRef);
 
 impl fmt::Debug for IoContext {
@@ -61,6 +66,11 @@ impl IoContext {
 
     #[inline]
     /// Checks readiness for read operations.
+    ///
+    /// Resolves to [`Readiness::Ready`] or [`Readiness::Terminate`], or stays
+    /// `Pending`. [`Readiness::Shutdown`] is never reported here: reads
+    /// continue during graceful shutdown so that filters can complete theirs,
+    /// so a read task needs no arm for it.
     pub fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         self.shutdown_filters(cx);
         self.0.filter().poll_read_ready(cx)
@@ -68,6 +78,10 @@ impl IoContext {
 
     #[inline]
     /// Checks readiness for write operations.
+    ///
+    /// Unlike the read path this reports [`Readiness::Shutdown`] once the
+    /// connection enters graceful shutdown, which tells the write task to close
+    /// the transport write side instead of writing.
     pub fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         self.0.filter().poll_write_ready(cx)
     }

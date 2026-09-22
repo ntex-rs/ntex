@@ -54,6 +54,9 @@ pub enum Readiness {
     /// The I/O task may proceed with I/O operations.
     Ready,
     /// Initiates a graceful I/O shutdown.
+    ///
+    /// Reported by write readiness only. Read readiness never reports it,
+    /// because filters may still need input to complete their own shutdown.
     Shutdown,
     /// Immediately terminates the I/O stream.
     Terminate,

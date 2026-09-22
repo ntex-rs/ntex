@@ -56,9 +56,15 @@ pub trait Filter: 'static {
     fn shutdown(&self, ctx: &mut FilterCtx<'_>) -> io::Result<Poll<()>>;
 
     /// Checks whether transport read operations may proceed.
+    ///
+    /// Never resolves to [`Readiness::Shutdown`]: reads continue during
+    /// graceful shutdown so that filters can complete theirs.
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness>;
 
     /// Checks whether transport write operations may proceed.
+    ///
+    /// Resolves to [`Readiness::Shutdown`] once the connection enters graceful
+    /// shutdown.
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness>;
 }
 

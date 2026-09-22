@@ -1668,7 +1668,7 @@ mod tests {
 
         impl Handle for DirectWrite {
             fn write(&self, ctx: &IoContext) {
-                ctx.with_write_dst(|buf| buf.clear());
+                ctx.with_write_dst(BytePages::clear);
                 let _ = ctx.update_write_status(Ok(()));
             }
         }
@@ -2093,13 +2093,13 @@ mod tests {
             }
 
             fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
-                buf.with_write_buffers(|src, dst| src.move_to(dst));
+                buf.with_write_buffers(BytePages::move_to);
                 Ok(())
             }
 
             fn shutdown(&self, buf: &FilterBuf<'_>) -> io::Result<Poll<()>> {
                 // waits for input that can never arrive after a clean eof
-                buf.with_write_buffers(|src, dst| src.move_to(dst));
+                buf.with_write_buffers(BytePages::move_to);
                 Ok(Poll::Pending)
             }
         }
@@ -2179,7 +2179,7 @@ mod tests {
             }
 
             fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
-                buf.with_write_buffers(|src, dst| src.move_to(dst));
+                buf.with_write_buffers(BytePages::move_to);
                 Ok(())
             }
 

@@ -19,9 +19,12 @@
 * Rename Io::read() to Io::read_exact(), it fills the whole buffer
 * Do not discard buffered output when filter shutdown cannot complete, wait for the write
   buffer to drain (bounded by the disconnect timeout) before closing the transport
-* Rename buffer accessors to name their side of the chain: IoRef::with_read_buf() to
-  with_read_dst(), with_write_buf() to with_write_src(), with_read_src_buf() to with_read_src(),
-  with_write_dst_buf() to with_write_dst(), and IoContext::with_write_buf() to with_write_dst()
+* Rename buffer accessors to name their side of the chain:
+  IoRef::with_read_buf() to with_read_dst(),
+      with_write_buf() to with_write_src(),
+      with_read_src_buf() to with_read_src(),
+      with_write_dst_buf() to with_write_dst(),
+  IoContext::with_write_buf() to with_write_dst()
 * Remove IoContext::shutdown(), it is unreachable in every transport impl
 * Fix api consistency for IoContext::update_read_status()
 * Fix peer EOF force-terminates instead of gracefully closing
