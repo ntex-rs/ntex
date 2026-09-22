@@ -6,7 +6,6 @@
   place instead of handing out a detached buffer that has to be appended back,
   so a readiness based backend no longer pays a buffer swap and a copy for
   every read
-
 * Pause the read side during the transport shutdown phase, the filters are done
   by then so no further input can be used. The receive queue is discarded by the
   transport itself, just before it closes the connection

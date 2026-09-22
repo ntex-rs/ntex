@@ -181,15 +181,15 @@ where
         match poll_fn(|cx| ctx.poll_write_ready(cx)).await {
             Readiness::Ready => {
                 let bufs = ctx.with_write_dst(build_bufs);
-                // `Stop` means the connection is already closing or closed, so
-                // the next `poll_write_ready()` reports `Close` and tears the
-                // transport down there.
+
+                // The status is not actionable here. `Io` and `Pause` are
+                // resolved by the next `poll_write_ready()`, and `Stop` means
+                // the connection is already aborted, so that reports `Close`
+                // and the transport is torn down there.
                 if bufs.is_empty() {
-                    if ctx.update_write_status(Ok(0)) == IoTaskStatus::Stop {
-                        continue;
-                    }
-                } else if write_buf(&mut io, ctx, bufs).await == IoTaskStatus::Stop {
-                    continue;
+                    ctx.update_write_status(Ok(0));
+                } else {
+                    write_buf(&mut io, ctx, bufs).await;
                 }
             }
             Readiness::Close => {
@@ -218,7 +218,7 @@ fn build_bufs(buf: &mut BytePages) -> Vec<CompioPage> {
     bufs
 }
 
-async fn write_buf<T>(io: &mut T, ctx: &IoContext, mut bufs: Vec<CompioPage>) -> IoTaskStatus
+async fn write_buf<T>(io: &mut T, ctx: &IoContext, mut bufs: Vec<CompioPage>)
 where
     T: AsyncRead + AsyncWrite,
 {
@@ -262,10 +262,9 @@ where
             // Pages still held here are counted as in-flight output, hand
             // back whatever did not reach the peer.
             return_pages(ctx, bufs);
-            return IoTaskStatus::Stop;
+            return;
         }
     }
-    IoTaskStatus::Io
 }
 
 fn return_pages(ctx: &IoContext, mut bufs: Vec<CompioPage>) {
