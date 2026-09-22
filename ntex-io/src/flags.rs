@@ -280,7 +280,10 @@ impl Flags {
         self.remove(FlagsKind::DSP_W_BACKPRESSURE | FlagsKind::WR_FLUSH);
     }
 
-    pub(crate) fn unset_all_read_flags(&self) {
+    /// `RD_PAUSED` is deliberately left set, even though
+    /// `set_read_ready_and_backpressure()` installs it. Callers rely on the
+    /// pause surviving so that they can detect it and wake the read task.
+    pub(crate) fn unset_read_ready_and_backpressure(&self) {
         self.remove(FlagsKind::BUF_R_READY | FlagsKind::RD_BACKPRESSURE);
     }
 

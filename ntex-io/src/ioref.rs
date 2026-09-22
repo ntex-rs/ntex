@@ -485,7 +485,7 @@ impl IoRef {
             if !st.should_disable_rd_backpressure(buf.len()) {
                 return;
             }
-            st.flags.unset_all_read_flags();
+            st.flags.unset_read_ready_and_backpressure();
         } else {
             st.flags.unset_read_ready();
         }
@@ -511,7 +511,7 @@ impl IoRef {
             if !st.should_disable_rd_backpressure(st.buffer.read_dst_size()) {
                 return;
             }
-            st.flags.unset_all_read_flags();
+            st.flags.unset_read_ready_and_backpressure();
         }
 
         if st.flags.is_read_paused() {

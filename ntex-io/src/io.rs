@@ -698,7 +698,7 @@ impl<F> Io<F> {
             // If the dispatcher requests more data but no read occurs,
             // restart the read task.
             if st.flags.is_read_paused_or_backpressure() {
-                st.flags.unset_all_read_flags();
+                st.flags.unset_read_ready_and_backpressure();
                 st.flags.unset_read_paused();
                 st.wake_read_task();
                 if ready {
