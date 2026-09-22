@@ -477,10 +477,11 @@ impl StreamItem {
                         io::ErrorKind::WriteZero,
                         "failed to write frame to transport",
                     )),
-                    _ => Ok(()),
+                    Poll::Ready(n) => Ok(n),
+                    Poll::Pending => Ok(0),
                 }
             } else {
-                Ok(())
+                Ok(0)
             }
         });
         self.ctx.update_write_status(res)

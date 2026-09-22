@@ -2,6 +2,14 @@
 
 ## [4.1.0] - 2026-09-22
 
+* Account for output owned by the transport in the total write buffer size, a
+  completion based backend takes pages out of the write buffer and keeps them
+  until the operation completes. Those bytes now count towards flush
+  completion, write back-pressure and the shutdown drain, previously a full
+  flush could report success and back-pressure could be released while output
+  had not reached the peer yet
+* IoContext::update_write_status() takes the number of bytes written to the
+  peer, so that a backend holding write pages can report their progress
 * Drain buffered output during graceful shutdown instead of discarding it, the
   transport shutdown phase now writes out whatever the filters produced before
   closing the connection

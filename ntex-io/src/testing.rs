@@ -466,7 +466,7 @@ pub(super) fn write_io(
     buf: &mut BytePages,
     cx: &mut Context<'_>,
     ctx: &IoContext,
-) -> io::Result<()> {
+) -> io::Result<usize> {
     let tag = ctx.tag();
     let mut written = 0;
 
@@ -496,7 +496,7 @@ pub(super) fn write_io(
     }
 
     log::debug!("{tag}: flushed {written} bytes, remaining: {}", buf.len());
-    Ok(())
+    Ok(written)
 }
 
 #[cfg(test)]

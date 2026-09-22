@@ -204,7 +204,7 @@ impl Handler for StreamOpsHandler {
                         item.wr_op.take();
                         item.flags.remove(Flags::WR_CANCELING);
 
-                        let res = item.ctx.update_write_status(Ok(()));
+                        let res = item.ctx.update_write_status(Ok(0));
                         if item.flags.contains(Flags::WR_REISSUE) || res == IoTaskStatus::Io {
                             item.flags.remove(Flags::WR_REISSUE);
                             st.send(id, &self.inner.api);
@@ -274,7 +274,8 @@ impl Handler for StreamOpsHandler {
                         );
 
                         if cqueue::notif(flags) {
-                            let res = result.unwrap_or(res).and_then(write_status);
+                            let res = result.unwrap_or(res);
+                            let res = complete_send(&item.ctx, buf, res);
                             if item.ctx.update_write_status(res) == IoTaskStatus::Io {
                                 st.send(id, &self.inner.api);
                             }
@@ -298,7 +299,7 @@ impl Handler for StreamOpsHandler {
                             item.wr_op.take();
 
                             // release buffer and try to send next chunk
-                            let res = res.and_then(write_status);
+                            let res = complete_send(&item.ctx, buf, res);
                             if item.ctx.update_write_status(res) == IoTaskStatus::Io {
                                 st.send(id, &self.inner.api);
                             }
@@ -354,15 +355,30 @@ impl Handler for StreamOpsHandler {
     }
 }
 
-fn write_status(n: usize) -> io::Result<()> {
+fn write_status(n: usize) -> io::Result<usize> {
     if n == 0 {
         Err(io::Error::new(
             io::ErrorKind::WriteZero,
             "failed to write frame to transport",
         ))
     } else {
-        Ok(())
+        Ok(n)
     }
+}
+
+/// Completes a send, returning output that did not reach the peer.
+///
+/// The page was taken out of the write buffer when the send was submitted, so
+/// it is counted as in-flight output. Whatever the kernel did not accept has
+/// to go back, otherwise it is both lost and left counted as outstanding.
+fn complete_send(ctx: &IoContext, mut buf: BytePage, res: io::Result<usize>) -> io::Result<usize> {
+    if let Ok(n) = res
+        && n < buf.len()
+    {
+        buf.advance_to(n);
+        ctx.with_write_dst(|pages| pages.prepend(buf));
+    }
+    res.and_then(write_status)
 }
 
 impl StreamOpsStorage {

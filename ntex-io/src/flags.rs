@@ -3,8 +3,9 @@ use std::{cell::Cell, fmt};
 pub struct Flags(Cell<FlagsKind>);
 
 bitflags::bitflags! {
+    /// All 16 bits are in use; widen the representation before adding a flag.
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-    pub struct FlagsKind: u32 {
+    pub struct FlagsKind: u16 {
         /// io is closed
         const IO_STOPPED          = 0b0000_0000_0000_0001;
         /// shutdown io tasks
@@ -12,7 +13,7 @@ bitflags::bitflags! {
         /// shutting down filters
         const IO_STOPPING_FILTERS = 0b0000_0000_0000_0100;
         /// force termination or transport failure is in progress
-        const IO_TERMINATING      = 0b0001_0000_0000_0000_0000;
+        const IO_TERMINATING      = 0b0000_0100_0000_0000;
 
         /// pause io read
         const RD_PAUSED           = 0b0000_0000_0001_0000;

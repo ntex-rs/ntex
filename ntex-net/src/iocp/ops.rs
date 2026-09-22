@@ -303,7 +303,7 @@ impl WriteOperation {
                                     "failed to write frame to transport",
                                 ))
                             } else {
-                                Ok(())
+                                Ok(written)
                             }
                         }
                         Poll::Ready(Err(err)) => {
@@ -318,11 +318,11 @@ impl WriteOperation {
                         Poll::Pending => {
                             self.pages_num = num as u8;
                             self.flags.insert(Flags::WAITING);
-                            Ok(())
+                            Ok(0)
                         }
                     }
                 } else {
-                    Ok(())
+                    Ok(0)
                 }
             });
 
@@ -347,8 +347,9 @@ impl WriteOperation {
                 io::ErrorKind::WriteZero,
                 "failed to write frame to transport",
             )),
-            Ok(mut sent) => {
+            Ok(written) => {
                 // remove written bytes
+                let mut sent = written;
                 for page in wr.pages[..num].iter_mut() {
                     if let Some(p) = page {
                         let len = cmp::min(p.len(), sent);
@@ -363,7 +364,7 @@ impl WriteOperation {
                     }
                     break;
                 }
-                Ok(())
+                Ok(written)
             }
             Err(err) => Err(err),
         };

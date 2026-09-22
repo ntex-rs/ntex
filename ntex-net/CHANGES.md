@@ -2,6 +2,12 @@
 
 ## [4.1.0] - 2026-09-21
 
+* Report the number of bytes written to the peer from every backend, so that
+  output a completion based backend still owns is accounted for as outstanding
+
+* Return output that did not reach the peer back to the write buffer in the
+  io-uring backend, a partial send silently dropped the rest of the page
+
 * Close both directions of the connection at the end of a graceful shutdown in
   the tokio and compio backends, previously they only shut down the write
   direction

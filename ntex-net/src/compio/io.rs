@@ -182,7 +182,7 @@ where
                 // the next `poll_write_ready()` reports `Close` and tears the
                 // transport down there.
                 if bufs.is_empty() {
-                    if ctx.update_write_status(Ok(())) == IoTaskStatus::Stop {
+                    if ctx.update_write_status(Ok(0)) == IoTaskStatus::Stop {
                         continue;
                     }
                 } else if write_buf(&mut io, ctx, bufs).await == IoTaskStatus::Stop {
@@ -251,13 +251,26 @@ where
                         break;
                     }
                 }
-                Ok(())
+                Ok(n)
             }
             Err(e) => Err(e),
         };
         if ctx.update_write_status(result) == IoTaskStatus::Stop {
+            // Pages still held here are counted as in-flight output, hand
+            // back whatever did not reach the peer.
+            return_pages(ctx, bufs);
             return IoTaskStatus::Stop;
         }
     }
     IoTaskStatus::Io
+}
+
+fn return_pages(ctx: &IoContext, mut bufs: Vec<CompioPage>) {
+    if !bufs.is_empty() {
+        ctx.with_write_dst(|dst| {
+            while let Some(page) = bufs.pop() {
+                dst.prepend(page.0);
+            }
+        });
+    }
 }

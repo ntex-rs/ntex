@@ -128,9 +128,9 @@ impl Filter for Base {
                 // nothing is left to write.
                 if st.buffer.write_buf_size() != 0 {
                     Poll::Ready(Readiness::Ready)
-                } else if st.flags.is_wr_send_scheduled() {
-                    // a submitted write is still in flight, its completion
-                    // wakes the write task
+                } else if st.wr_inflight.get() != 0 {
+                    // the transport still holds output that has not reached
+                    // the peer, its completion wakes the write task
                     Poll::Pending
                 } else {
                     Poll::Ready(Readiness::Close)

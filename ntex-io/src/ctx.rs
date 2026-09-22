@@ -263,56 +263,76 @@ impl IoContext {
     /// This holds the encoded bytes that are ready to be written out.
     ///
     /// Pending filter output is processed before `f` is invoked. The transport
-    /// should remove only bytes it successfully writes and then report the
-    /// result with [`update_write_status`](Self::update_write_status).
+    /// may write bytes out directly, or take ownership of pages and write them
+    /// later; any page it removes is counted as in-flight output until it is
+    /// either returned to this buffer or reported as written through
+    /// [`update_write_status`](Self::update_write_status).
     pub fn with_write_dst<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytePages) -> R,
     {
+        let st = self.st();
+
         // Write buffer processing may be delayed
-        if let Err(e) = self.st().buffer.process_write_buf(&self.0) {
-            self.st().terminate_connection(Some(e));
+        if let Err(e) = st.buffer.process_write_buf(&self.0) {
+            st.terminate_connection(Some(e));
         }
 
-        self.st().buffer.with_write_dst(|buffer| f(buffer))
+        let before = st.buffer.write_buf_size();
+        let result = st.buffer.with_write_dst(|buffer| f(buffer));
+        st.track_wr_inflight(before, st.buffer.write_buf_size());
+
+        result
     }
 
     /// Updates the write status.
     ///
-    /// `Ok(())` reports that the write attempt completed without error, whether
-    /// or not it moved any bytes; the resulting status is derived from how much
-    /// output is still buffered. An error terminates the connection. The
-    /// returned [`IoTaskStatus`] instructs the write task to continue, pause
-    /// until notified, or stop.
-    pub fn update_write_status(&self, status: io::Result<()>) -> IoTaskStatus {
+    /// `Ok(n)` reports that the write attempt completed without error and that
+    /// `n` bytes reached the peer; `n` is zero when the attempt moved nothing.
+    /// Any page the transport is still holding stays counted as outstanding
+    /// output, so it must either be returned to the write buffer or reported
+    /// here. An error terminates the connection. The returned
+    /// [`IoTaskStatus`] instructs the write task to continue, pause until
+    /// notified, or stop.
+    pub fn update_write_status(&self, status: io::Result<usize>) -> IoTaskStatus {
         let st = &self.st();
 
         #[cfg(feature = "trace")]
         log::trace!(
-            "{}: write-status == {status:?} buf:{} flags:{:?}",
+            "{}: write-status == {status:?} buf:{} inflight:{} flags:{:?}",
             st.tag(),
             st.buffer.write_buf_size(),
+            st.wr_inflight.get(),
             st.flags
         );
 
         match status {
-            Ok(()) => {
+            Ok(written) => {
+                st.wr_inflight_written(written);
+
                 let len = st.buffer.write_buf_size();
+                let outstanding = st.write_outstanding();
+
                 // Full flush is active
                 if st.flags.is_write_flush() {
-                    // The write buffer must be fully written
-                    if len == 0 {
+                    // All output must reach the peer, including in-flight pages
+                    if outstanding == 0 {
                         st.wake_dispatch_task();
                     }
-                } else if st.flags.is_wr_backpressure() && st.should_disable_wr_backpressure(len) {
-                    // Write backpressure is active and write buffer is below threshold
+                } else if st.flags.is_wr_backpressure()
+                    && st.should_disable_wr_backpressure(outstanding)
+                {
+                    // Write backpressure is active and outstanding output is
+                    // below the threshold
                     st.wake_dispatch_task();
                 }
 
                 if st.flags.is_aborted() {
                     IoTaskStatus::Stop
                 } else if len == 0 {
-                    // All data has been written, pause the write task.
+                    // Nothing left to submit, pause the write task. In-flight
+                    // pages are not actionable here, their completion wakes
+                    // the task again.
                     st.flags.set_write_paused();
                     if st.flags.is_stopping_filters() {
                         st.wake_read_task();
@@ -426,7 +446,7 @@ impl IoContext {
         // next readiness check and the deadline does not apply. Without this
         // the shutdown would be reported as timed out whenever the filter
         // phase happened to consume the whole deadline.
-        if st.buffer.write_buf_size() == 0 && !st.flags.is_wr_send_scheduled() {
+        if st.write_outstanding() == 0 {
             return;
         }
 
@@ -435,7 +455,7 @@ impl IoContext {
             .take()
             .unwrap_or_else(|| sleep(st.cfg.disconnect_timeout()));
         if timeout.poll_elapsed(cx).is_ready() {
-            let len = st.buffer.write_buf_size();
+            let len = st.write_outstanding();
             if len != 0 {
                 log::warn!(
                     "{}: Shutdown timed out, discarding {len} bytes of buffered output",

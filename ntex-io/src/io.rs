@@ -61,6 +61,11 @@ pub struct Io<F = Base>(UnsafeCell<IoRef>, marker::PhantomData<F>);
 #[derive(Clone)]
 pub struct IoRef(pub(super) Rc<IoState>);
 
+/// Saturating conversion used for the in-flight write counter.
+fn as_u32(v: usize) -> u32 {
+    u32::try_from(v).unwrap_or(u32::MAX)
+}
+
 pub(crate) struct IoState {
     filter: FilterPtr,
     pub(super) id: Cell<Id>,
@@ -74,6 +79,12 @@ pub(crate) struct IoState {
     pub(super) handle: Cell<Option<Box<dyn Handle>>>,
     pub(super) timeout: Cell<TimerHandle>,
     pub(super) shutdown_timeout: Cell<Option<Sleep>>,
+    /// Bytes handed to the transport that have not reached the peer yet.
+    ///
+    /// Completion based transports take ownership of write pages and keep them
+    /// until the operation completes, so those bytes are no longer in
+    /// `buffer`. They are still outstanding output and must be accounted for.
+    pub(super) wr_inflight: Cell<u32>,
     pub(super) extensions: Extensions,
 }
 
@@ -150,6 +161,8 @@ impl IoState {
         if !self.flags.is_terminated() && !self.flags.is_terminating() {
             log::trace!("{}: Terminate io", self.cfg.tag());
             self.flags.set_terminate();
+            // buffers held by the transport are gone with it
+            self.wr_inflight.set(0);
             self.wake_read_task();
             self.wake_write_task();
             self.wake_dispatch_task();
@@ -162,6 +175,8 @@ impl IoState {
             log::trace!("{}: Stop io with error {:?}", self.cfg.tag(), err);
             self.set_error(err);
             self.flags.set_stopped();
+            // buffers held by the transport are gone with it
+            self.wr_inflight.set(0);
             self.wake_read_task();
             self.wake_write_task();
             self.wake_dispatch_task();
@@ -198,6 +213,35 @@ impl IoState {
 
     pub(super) fn should_disable_wr_backpressure(&self, size: usize) -> bool {
         size <= self.cfg.write_buf().half
+    }
+
+    /// Total output that has not reached the peer yet.
+    ///
+    /// This is the buffered output plus whatever the transport has taken
+    /// ownership of but not written out. Flush completion, write
+    /// back-pressure and the shutdown drain are all decided on this value,
+    /// because until it reaches zero the peer has not seen everything.
+    pub(super) fn write_outstanding(&self) -> usize {
+        self.buffer.write_buf_size() + self.wr_inflight.get() as usize
+    }
+
+    /// Records bytes taken by, or returned from, the transport.
+    pub(super) fn track_wr_inflight(&self, before: usize, after: usize) {
+        let inflight = self.wr_inflight.get();
+        if after < before {
+            self.wr_inflight
+                .set(inflight.saturating_add(as_u32(before - after)));
+        } else {
+            // the transport returned unwritten output to the buffer
+            self.wr_inflight
+                .set(inflight.saturating_sub(as_u32(after - before)));
+        }
+    }
+
+    /// Records output that reached the peer.
+    pub(super) fn wr_inflight_written(&self, written: usize) {
+        self.wr_inflight
+            .set(self.wr_inflight.get().saturating_sub(as_u32(written)));
     }
 
     pub(super) fn wake_read_task(&self) {
@@ -269,6 +313,7 @@ impl Io {
             handle: Cell::new(None),
             timeout: Cell::new(TimerHandle::default()),
             shutdown_timeout: Cell::new(None),
+            wr_inflight: Cell::new(0),
             extensions: Extensions::default(),
         });
         inner.filter.set(Base::new(IoRef(inner.clone())));
@@ -306,6 +351,7 @@ impl IoRef {
             handle: Cell::new(None),
             timeout: Cell::new(TimerHandle::default()),
             shutdown_timeout: Cell::new(None),
+            wr_inflight: Cell::new(0),
             extensions: Extensions::default(),
         }))
     }
@@ -764,8 +810,12 @@ impl<F> Io<F> {
     /// Wakes the write task and instructs it to flush data.
     ///
     /// If `full` is true, wakes the dispatcher when all data has been flushed;
-    /// otherwise, active write backpressure is released when the buffered size
-    /// reaches half of the configured high watermark.
+    /// otherwise, active write backpressure is released when the outstanding
+    /// size reaches half of the configured high watermark.
+    ///
+    /// Output that a completion based transport has taken ownership of counts
+    /// as outstanding until it reaches the peer, so a full flush does not
+    /// complete while a write is still in flight.
     pub fn poll_flush(&self, cx: &mut Context<'_>, full: bool) -> Poll<io::Result<()>> {
         let st = self.st();
 
@@ -773,7 +823,7 @@ impl<F> Io<F> {
         st.buffer.process_write_buf_force(self)?;
         self.consolidate_write_state(false)?;
 
-        let len = st.buffer.write_buf_size();
+        let len = st.write_outstanding();
         if len > 0 {
             if st.flags.is_closed() {
                 return Poll::Ready(Err(st.error_or_disconnected()));
@@ -872,8 +922,8 @@ impl<F> Io<F> {
         } else if st.flags.check_dispatcher_timeout() {
             Poll::Ready(IoStatusUpdate::KeepAlive)
         } else if st.flags.is_wr_backpressure() {
-            // write backpressure is enabled and write buf smaller than half
-            if st.should_disable_wr_backpressure(st.buffer.write_buf_size()) {
+            // write backpressure is enabled and outstanding output is smaller than half
+            if st.should_disable_wr_backpressure(st.write_outstanding()) {
                 st.flags.unset_wr_backpressure();
                 Poll::Pending
             } else {
@@ -1538,7 +1588,7 @@ mod tests {
         // wrote 4 bytes to io
         assert_eq!(ctx.with_write_dst(|buf| buf.split_to(4).freeze()), b"1234");
         // continue to write
-        assert_eq!(ctx.update_write_status(Ok(())), IoTaskStatus::Io);
+        assert_eq!(ctx.update_write_status(Ok(4)), IoTaskStatus::Io);
         // write task can proceed
         assert_eq!(
             lazy(|cx| ctx.poll_write_ready(cx)).await,
@@ -1574,7 +1624,7 @@ mod tests {
         // write task is not paused, so send-buf op is not scheduled
         assert!(!io.st().flags.is_wr_send_scheduled());
         // update status, no more work
-        assert_eq!(ctx.update_write_status(Ok(())), IoTaskStatus::Pause);
+        assert_eq!(ctx.update_write_status(Ok(8)), IoTaskStatus::Pause);
         // write task is paused
         assert!(io.st().flags.is_write_paused());
         // flush is still enabled
@@ -1668,8 +1718,12 @@ mod tests {
 
         impl Handle for DirectWrite {
             fn write(&self, ctx: &IoContext) {
-                ctx.with_write_dst(BytePages::clear);
-                let _ = ctx.update_write_status(Ok(()));
+                let n = ctx.with_write_dst(|buf| {
+                    let n = buf.len();
+                    buf.clear();
+                    n
+                });
+                let _ = ctx.update_write_status(Ok(n));
             }
         }
 
@@ -1807,17 +1861,104 @@ mod tests {
         assert!(io.flags().is_wr_backpressure());
 
         assert_eq!(ctx.with_write_dst(|buf| buf.split_to(1).len()), 1);
-        assert_eq!(ctx.update_write_status(Ok(())), IoTaskStatus::Io);
+        assert_eq!(ctx.update_write_status(Ok(1)), IoTaskStatus::Io);
         assert!(lazy(|cx| io.poll_flush(cx, false)).await.is_pending());
         assert!(io.flags().is_wr_backpressure());
 
         assert_eq!(ctx.with_write_dst(|buf| buf.split_to(3).len()), 3);
-        assert_eq!(ctx.update_write_status(Ok(())), IoTaskStatus::Io);
+        assert_eq!(ctx.update_write_status(Ok(3)), IoTaskStatus::Io);
         assert!(matches!(
             lazy(|cx| io.poll_flush(cx, false)).await,
             Poll::Ready(Ok(()))
         ));
         assert!(!io.flags().is_wr_backpressure());
+    }
+
+    #[ntex::test]
+    async fn full_flush_waits_for_inflight_write() {
+        // A completion based transport takes ownership of the write pages, so
+        // the write buffer empties before the bytes reach the peer. A full
+        // flush must not complete until they have.
+        let io = Io::new(
+            IoTest::create().0,
+            SharedCfg::new("SRV").add(IoConfig::default()),
+        );
+        let ctx = IoContext::new(io.get_ref());
+
+        io.encode_slice(b"12345678").unwrap();
+
+        let page = ctx.with_write_dst(BytePages::take).unwrap();
+        assert_eq!(page.len(), 8);
+        // the buffer is empty, the output is in flight
+        assert_eq!(io.st().buffer.write_buf_size(), 0);
+        assert_eq!(io.st().write_outstanding(), 8);
+
+        assert!(lazy(|cx| io.poll_flush(cx, true)).await.is_pending());
+
+        // the transport reports the write
+        assert_eq!(ctx.update_write_status(Ok(page.len())), IoTaskStatus::Pause);
+        assert_eq!(io.st().write_outstanding(), 0);
+        assert!(matches!(
+            lazy(|cx| io.poll_flush(cx, true)).await,
+            Poll::Ready(Ok(()))
+        ));
+    }
+
+    #[ntex::test]
+    async fn write_backpressure_counts_inflight_output() {
+        // Output owned by the transport is still outstanding, so it keeps
+        // back-pressure in place.
+        let io = Io::new(
+            IoTest::create().0,
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8, 4, 16)),
+        );
+        let ctx = IoContext::new(io.get_ref());
+
+        io.encode_slice(b"12345678").unwrap();
+        assert!(io.flags().is_wr_backpressure());
+
+        let page = ctx.with_write_dst(BytePages::take).unwrap();
+        assert_eq!(io.st().buffer.write_buf_size(), 0);
+
+        // nothing reached the peer yet, so back-pressure stays enabled
+        assert!(lazy(|cx| io.poll_flush(cx, false)).await.is_pending());
+        assert!(io.flags().is_wr_backpressure());
+
+        assert_eq!(ctx.update_write_status(Ok(page.len())), IoTaskStatus::Pause);
+        assert!(matches!(
+            lazy(|cx| io.poll_flush(cx, false)).await,
+            Poll::Ready(Ok(()))
+        ));
+        assert!(!io.flags().is_wr_backpressure());
+    }
+
+    #[ntex::test]
+    async fn transport_shutdown_waits_for_inflight_write() {
+        // The transport shutdown phase reports `Close` once the output has
+        // been drained. Output the transport already owns has not been
+        // drained until it is reported as written.
+        let io = Io::new(
+            IoTest::create().0,
+            SharedCfg::new("SRV").add(IoConfig::default()),
+        );
+        let ctx = IoContext::new(io.get_ref());
+
+        io.encode_slice(b"12345678").unwrap();
+        let page = ctx.with_write_dst(BytePages::take).unwrap();
+
+        // enter the transport shutdown phase
+        io.st().flags.set_filter_stopping();
+        io.st().filters_stopped();
+        assert!(io.st().flags.is_stopping());
+
+        // nothing left to submit, but the output is still in flight
+        assert_eq!(lazy(|cx| ctx.poll_write_ready(cx)).await, Poll::Pending);
+
+        assert_eq!(ctx.update_write_status(Ok(page.len())), IoTaskStatus::Pause);
+        assert_eq!(
+            lazy(|cx| ctx.poll_write_ready(cx)).await,
+            Poll::Ready(Readiness::Close)
+        );
     }
 
     #[ntex::test]
