@@ -3,6 +3,9 @@ use std::{future::Future, pin::Pin, task::Context, task::Poll};
 use crate::future::Either;
 
 /// Waits for either one of two differently-typed futures to complete.
+///
+/// `fut_a` is polled first, so it wins when both futures are ready during the
+/// same poll. The other future is dropped.
 pub async fn select<A, B>(fut_a: A, fut_b: B) -> Either<A::Output, B::Output>
 where
     A: Future,

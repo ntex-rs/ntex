@@ -3,7 +3,7 @@ use std::{cell::Cell, fmt, future::poll_fn, task::Context, task::Poll};
 
 use crate::task::LocalWaker;
 
-/// Creates a new futures-aware, channel.
+/// Creates a new futures-aware bounded(1) channel.
 pub fn channel<T>() -> Inplace<T> {
     Inplace {
         value: Cell::new(None),
@@ -43,12 +43,12 @@ impl<T> Inplace<T> {
         }
     }
 
-    /// Wait until the oneshot is ready and return value
+    /// Waits until a value has been sent and takes it.
     pub async fn recv(&self) -> T {
         poll_fn(|cx| self.poll_recv(cx)).await
     }
 
-    /// Polls the oneshot to determine if value is ready
+    /// Polls for a sent value and takes it.
     pub fn poll_recv(&self, cx: &mut Context<'_>) -> Poll<T> {
         // If we've got a value, then skip the logic below as we're done.
         if let Some(val) = self.value.take() {

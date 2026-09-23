@@ -5,12 +5,12 @@ use std::{fmt, future::Future, pin::Pin, task::Context, task::Poll};
 use super::{Canceled, cell::Cell};
 use crate::task::LocalWaker;
 
-/// Creates a new futures-aware, pool of one-shot's.
+/// Creates a new futures-aware pool of one-shot channels.
 pub fn new<T>() -> Pool<T> {
     Pool(Cell::new(Slab::new()))
 }
 
-/// Futures-aware, pool of one-shot's.
+/// A futures-aware pool of one-shot channels.
 pub struct Pool<T>(Cell<Slab<Inner<T>>>);
 
 impl<T> fmt::Debug for Pool<T> {
@@ -159,7 +159,9 @@ impl<T> Drop for Sender<T> {
 }
 
 impl<T> Receiver<T> {
-    /// Polls the oneshot to determine if value is ready
+    /// Polls for the value.
+    ///
+    /// Returns [`Canceled`] if the sender is dropped without sending a value.
     pub fn poll_recv(&self, cx: &mut Context<'_>) -> Poll<Result<T, Canceled>> {
         let inner = get_inner(&self.inner, self.token);
 

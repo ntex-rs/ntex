@@ -1,9 +1,9 @@
 use std::ops;
 
-/// A Duration type to represent a span of time.
+/// A span of time in milliseconds, for timeouts.
 ///
-/// This type is designed for timeouts. Milliseconds resolution
-/// is too small to keep generic time.
+/// The value is a `u32`, so the longest representable span is about 49 days.
+/// Arithmetic saturates instead of overflowing.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Millis(pub u32);
 
@@ -21,16 +21,18 @@ impl Millis {
     }
 
     #[inline]
+    /// Returns `true` if the duration is zero.
     pub const fn is_zero(&self) -> bool {
         self.0 == 0
     }
 
     #[inline]
+    /// Returns `true` if the duration is not zero.
     pub const fn non_zero(self) -> bool {
         self.0 != 0
     }
 
-    /// Call function `f` if duration is none zero.
+    /// Calls `f` if the duration is not zero.
     #[inline]
     pub fn map<F, R>(&self, f: F) -> Option<R>
     where
@@ -135,7 +137,9 @@ impl From<Millis> for std::time::Duration {
     }
 }
 
-/// A Seconds type to represent a span of time in seconds.
+/// A span of time in whole seconds.
+///
+/// The value is a `u16`, so the longest representable span is about 18 hours.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Seconds(pub u16);
 
@@ -147,11 +151,13 @@ impl Seconds {
     pub const ONE: Seconds = Seconds(1);
 
     #[inline]
+    /// Creates a duration of `secs` seconds.
     pub const fn new(secs: u16) -> Seconds {
         Seconds(secs)
     }
 
     #[inline]
+    /// Creates a duration of `secs` seconds, saturating at [`u16::MAX`].
     pub const fn checked_new(secs: usize) -> Seconds {
         let secs = if (u16::MAX as usize) < secs {
             u16::MAX
@@ -162,21 +168,24 @@ impl Seconds {
     }
 
     #[inline]
+    /// Returns `true` if the duration is zero.
     pub const fn is_zero(self) -> bool {
         self.0 == 0
     }
 
     #[inline]
+    /// Returns `true` if the duration is not zero.
     pub const fn non_zero(self) -> bool {
         self.0 != 0
     }
 
     #[inline]
+    /// Returns the number of seconds.
     pub const fn seconds(self) -> u64 {
         self.0 as u64
     }
 
-    /// Call function `f` if seconds is none zero.
+    /// Calls `f` with the duration in milliseconds if it is not zero.
     #[inline]
     pub fn map<F, R>(&self, f: F) -> Option<R>
     where

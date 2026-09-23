@@ -131,6 +131,7 @@ impl Sleep {
     }
 
     #[inline]
+    /// Polls until this timer has elapsed.
     pub fn poll_elapsed(&self, cx: &mut task::Context<'_>) -> Poll<()> {
         self.hnd.poll_elapsed(cx)
     }

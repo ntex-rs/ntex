@@ -8,7 +8,7 @@ use futures_core::{FusedStream, Stream};
 use super::cell::Cell;
 use crate::task::LocalWaker;
 
-/// Creates a unbounded in-memory channel with buffered storage.
+/// Creates an unbounded in-memory channel.
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
     let shared = Cell::new(Shared {
         has_receiver: true,
@@ -51,17 +51,18 @@ impl<T> Sender<T> {
         Ok(())
     }
 
-    /// Closes the sender half
+    /// Closes the channel for every sender.
     ///
-    /// This prevents any further messages from being sent on the channel while
-    /// still enabling the receiver to drain messages that are buffered.
+    /// This prevents any further messages from being sent on the channel, by
+    /// this sender or any of its clones, while still enabling the receiver to
+    /// drain messages that are buffered.
     pub fn close(&self) {
         let shared = self.shared.get_mut();
         shared.has_receiver = false;
         shared.blocked_recv.wake();
     }
 
-    /// Returns whether this channel is closed without needing a context.
+    /// Returns `true` if the channel is closed or the receiver has been dropped.
     pub fn is_closed(&self) -> bool {
         self.shared.strong_count() == 1 || !self.shared.get_ref().has_receiver
     }
@@ -119,16 +120,18 @@ impl<T> Receiver<T> {
         self.shared.strong_count() == 1 || !self.shared.get_ref().has_receiver
     }
 
-    /// Attempt to pull out the next value of this receiver, registering
-    /// the current task for wakeup if the value is not yet available,
-    /// and returning None if the stream is exhausted.
+    /// Waits for the next message.
+    ///
+    /// Returns `None` once the channel is closed or every sender has been
+    /// dropped, and every buffered message has been received.
     pub async fn recv(&self) -> Option<T> {
         poll_fn(|cx| self.poll_recv(cx)).await
     }
 
-    /// Attempt to pull out the next value of this receiver, registering
-    /// the current task for wakeup if the value is not yet available,
-    /// and returning None if the stream is exhausted.
+    /// Polls for the next message.
+    ///
+    /// Returns `Ready(None)` once the channel is closed or every sender has
+    /// been dropped, and every buffered message has been received.
     pub fn poll_recv(&self, cx: &mut Context<'_>) -> Poll<Option<T>> {
         let shared = self.shared.get_mut();
 

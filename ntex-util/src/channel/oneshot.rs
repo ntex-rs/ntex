@@ -78,12 +78,16 @@ impl<T> Drop for Sender<T> {
 }
 
 impl<T> Receiver<T> {
-    /// Wait until the oneshot is ready and return value
+    /// Waits for the value.
+    ///
+    /// Returns [`Canceled`] if the sender is dropped without sending a value.
     pub async fn recv(&self) -> Result<T, Canceled> {
         poll_fn(|cx| self.poll_recv(cx)).await
     }
 
-    /// Polls the oneshot to determine if value is ready
+    /// Polls for the value.
+    ///
+    /// Returns [`Canceled`] if the sender is dropped without sending a value.
     pub fn poll_recv(&self, cx: &mut Context<'_>) -> Poll<Result<T, Canceled>> {
         // If we've got a value, then skip the logic below as we're done.
         if let Some(val) = self.inner.get_mut().value.take() {

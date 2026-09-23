@@ -4,9 +4,11 @@ use ntex_service::{Ctx, Service, ServiceFactory};
 
 use crate::time::{Millis, Sleep, now, sleep};
 
-/// `KeepAlive` service factory
+/// Middleware that fails readiness once the service has been idle too long.
 ///
-/// Controls min time between requests.
+/// Every call records the current time and passes the request through
+/// unchanged. When no call has been made for the keep-alive duration,
+/// [`ready`](Service::ready) fails with the error produced by `f`.
 pub struct KeepAlive<F, E>
 where
     F: Fn() -> E + Clone,
@@ -19,10 +21,10 @@ impl<F, E> KeepAlive<F, E>
 where
     F: Fn() -> E + Clone,
 {
-    /// Construct `KeepAlive` service factory.
+    /// Creates keep-alive middleware.
     ///
-    /// ka - keep-alive timeout
-    /// err - error factory function
+    /// `ka` is the maximum idle time between calls, and `f` creates the error
+    /// returned once it is exceeded.
     pub fn new(ka: Millis, f: F) -> Self {
         KeepAlive { f, ka }
     }
@@ -68,6 +70,9 @@ where
     }
 }
 
+/// A service that fails readiness once it has been idle too long.
+///
+/// See [`KeepAlive`] for details.
 pub struct KeepAliveService<F, E>
 where
     F: Fn() -> E,
@@ -82,6 +87,10 @@ impl<F, E> KeepAliveService<F, E>
 where
     F: Fn() -> E,
 {
+    /// Creates a keep-alive service with the maximum idle time `dur`.
+    ///
+    /// `f` creates the error returned once the service has been idle longer
+    /// than `dur`.
     pub fn new(dur: Millis, f: F) -> Self {
         let expire = Cell::new(now());
 
