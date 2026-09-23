@@ -1046,7 +1046,18 @@ impl<F> Drop for Io<F> {
                 log::trace!("{}: Io is dropped, terminate connection", st.tag());
             }
 
-            st.force_close_connection();
+            if st.write_outstanding() == 0 {
+                // Everything the application wrote has reached the transport,
+                // so the connection can end with a normal FIN and the peer
+                // sees a clean end of stream.
+                st.terminate_connection(None);
+            } else {
+                // Output is still buffered and the filter chain is about to go
+                // away, so it can never be delivered. Abort instead, so that
+                // the peer cannot mistake a truncated stream for a complete
+                // one.
+                st.force_close_connection();
+            }
             st.filter.drop_filter::<F>();
         }
 
@@ -1401,6 +1412,66 @@ mod tests {
         let ctx = IoContext::new(io.get_ref());
         io.terminate();
         assert!(io.st().flags.is_force_closing());
+        assert_eq!(
+            lazy(|cx| ctx.poll_read_ready(cx)).await,
+            Poll::Ready(Readiness::Terminate)
+        );
+        assert_eq!(
+            lazy(|cx| ctx.poll_write_ready(cx)).await,
+            Poll::Ready(Readiness::Terminate)
+        );
+    }
+
+    #[ntex::test]
+    async fn drop_closes_gracefully_once_output_is_flushed() {
+        // Nothing is left to deliver, so the transport ends the connection with
+        // a normal FIN and the peer sees a clean end of stream.
+        let io = Io::new(IoTest::create().0, SharedCfg::new("SRV"));
+        let ioref = io.get_ref();
+        let ctx = IoContext::new(io.get_ref());
+        assert_eq!(io.st().write_outstanding(), 0);
+        drop(io);
+        assert!(!ioref.0.flags.is_force_closing());
+        assert_eq!(
+            lazy(|cx| ctx.poll_read_ready(cx)).await,
+            Poll::Ready(Readiness::Close)
+        );
+        assert_eq!(
+            lazy(|cx| ctx.poll_write_ready(cx)).await,
+            Poll::Ready(Readiness::Close)
+        );
+    }
+
+    #[ntex::test]
+    async fn drop_aborts_when_output_would_be_lost() {
+        // The filter chain goes away with the `Io`, so buffered output can
+        // never be delivered. Aborting keeps a truncated stream distinguishable
+        // from a complete one.
+        let io = Io::new(IoTest::create().0, SharedCfg::new("SRV"));
+        let ioref = io.get_ref();
+        let ctx = IoContext::new(io.get_ref());
+        io.encode_slice(b"not delivered").unwrap();
+        assert_ne!(io.st().write_outstanding(), 0);
+        drop(io);
+        assert!(ioref.0.flags.is_force_closing());
+        assert_eq!(
+            lazy(|cx| ctx.poll_read_ready(cx)).await,
+            Poll::Ready(Readiness::Terminate)
+        );
+        assert_eq!(
+            lazy(|cx| ctx.poll_write_ready(cx)).await,
+            Poll::Ready(Readiness::Terminate)
+        );
+    }
+
+    #[ntex::test]
+    async fn force_close_survives_filter_replacement() {
+        // Dropping `Io` swaps the chain for `NullFilter`, which cannot see the
+        // io state, so an explicit terminate must still be honoured afterwards.
+        let io = Io::new(IoTest::create().0, SharedCfg::new("SRV"));
+        let ctx = IoContext::new(io.get_ref());
+        io.terminate();
+        drop(io);
         assert_eq!(
             lazy(|cx| ctx.poll_read_ready(cx)).await,
             Poll::Ready(Readiness::Terminate)

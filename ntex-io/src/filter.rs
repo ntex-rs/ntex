@@ -60,18 +60,21 @@ pub trait Filter: 'static {
     /// Reads continue through the filter shutdown phase so that filters can
     /// complete theirs, and are paused for the transport shutdown phase, so
     /// [`Readiness::Close`] is resolved only once the connection is
-    /// terminated. An explicit force close through
-    /// [`IoRef::terminate`](crate::IoRef::terminate) reports
-    /// [`Readiness::Terminate`] instead, which releases the connection without
-    /// a graceful close.
+    /// terminated. A force close reports [`Readiness::Terminate`] instead,
+    /// which releases the connection without a graceful close. That decision is
+    /// made by [`IoContext`](crate::IoContext) rather than by the chain, so
+    /// that it survives the chain being dropped along with
+    /// [`Io`](crate::Io).
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness>;
 
     /// Checks whether transport write operations may proceed.
     ///
     /// Resolves to [`Readiness::Close`] once the connection enters a graceful
     /// shutdown and all buffered output has reached the transport, or as soon
-    /// as it ends because of a failure, and to [`Readiness::Terminate`] when it
-    /// is force-closed through [`IoRef::terminate`](crate::IoRef::terminate).
+    /// as it ends because of a failure. See [`poll_read_ready`] for the
+    /// force-close case.
+    ///
+    /// [`poll_read_ready`]: Self::poll_read_ready
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness>;
 }
 
@@ -236,19 +239,19 @@ impl Filter for NullFilter {
         None
     }
 
-    // A transport only ever polls this filter after `Io` has been dropped,
-    // which terminates the connection and discards whatever was still
-    // buffered. Reporting `Close` would let the transport close the connection
-    // gracefully, so a response that never reached the peer would look like a
-    // complete one.
+    // The filter chain is gone once `Io` has been dropped, so nothing is left
+    // that could process buffered data. The connection is closed gracefully;
+    // `IoContext` reports `Readiness::Terminate` on top of this when the
+    // application asked for a force close, or when the drop had to discard
+    // output that never reached the peer.
     #[inline]
     fn poll_read_ready(&self, _: &mut Context<'_>) -> Poll<Readiness> {
-        Poll::Ready(Readiness::Terminate)
+        Poll::Ready(Readiness::Close)
     }
 
     #[inline]
     fn poll_write_ready(&self, _: &mut Context<'_>) -> Poll<Readiness> {
-        Poll::Ready(Readiness::Terminate)
+        Poll::Ready(Readiness::Close)
     }
 
     #[inline]

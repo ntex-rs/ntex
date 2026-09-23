@@ -7,9 +7,15 @@
   to abort the connection as well, a graceful close that was already draining
   was turned into a reset. They now report Readiness::Close
 
-* Dropping an Io now terminates the connection instead of closing it
-  gracefully, a service that returned without shutting down discarded whatever
-  it had encoded yet the peer saw a clean end of stream
+* Dropping an Io terminates the connection when output it accepted has not
+  reached the transport, a service that returned without shutting down
+  discarded whatever it had encoded yet the peer saw a clean end of stream.
+  Once everything has been flushed the connection is still closed gracefully,
+  so a service that finished its work ends with a normal FIN
+
+* Fix NullFilter reporting Readiness::Terminate unconditionally, which aborted
+  every dropped Io regardless of the io state and made a peer see a reset
+  where it should have seen a clean end of stream
 
 * Add Readiness::Terminate, reported when a connection is force-closed through
   IoRef::terminate() or aborted by an error. Readiness::Close now means a

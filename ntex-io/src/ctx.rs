@@ -35,8 +35,10 @@ use crate::{Flags, Id, IoRef, IoTaskStatus, Readiness, io::IoState};
 /// differ only in how the transport is released: [`Readiness::Close`] closes
 /// both directions gracefully, while [`Readiness::Terminate`] skips the
 /// graceful close so that an aborted connection stays distinguishable from one
-/// that ended normally. Only an explicit
-/// [`IoRef::terminate`](crate::IoRef::terminate) reports `Terminate`; every
+/// that ended normally. `Terminate` is reported for an explicit
+/// [`IoRef::terminate`](crate::IoRef::terminate), and when [`Io`](crate::Io) is
+/// dropped while output it accepted has not reached the transport, because the
+/// filter chain goes away with it and that output can never be delivered. Every
 /// other way a connection can end, an expired shutdown timeout included,
 /// reports `Close`.
 pub struct IoContext(IoRef);
@@ -83,6 +85,12 @@ impl IoContext {
     /// paused for the transport shutdown phase, so `Close` is resolved here
     /// only once the connection is terminated.
     pub fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
+        if self.st().flags.is_force_closing() {
+            // The filter chain is replaced by `NullFilter` when `Io` is
+            // dropped, so the force-close decision is made here rather than in
+            // the chain: it has to survive that replacement.
+            return Poll::Ready(Readiness::Terminate);
+        }
         self.poll_filters_shutdown(cx);
         self.0.filter().poll_read_ready(cx)
     }
@@ -95,6 +103,10 @@ impl IoContext {
     /// reports `Close` at the end of a graceful shutdown as well, once buffered
     /// output has been drained, so the task must not flush again.
     pub fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
+        if self.st().flags.is_force_closing() {
+            // see `poll_read_ready`
+            return Poll::Ready(Readiness::Terminate);
+        }
         self.poll_shutdown_deadline(cx);
         self.0.filter().poll_write_ready(cx)
     }
