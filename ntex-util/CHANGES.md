@@ -4,6 +4,8 @@
 
 * The first `Interval` tick completes immediately, matching tokio's `interval`
 
+* Round zero delays in `Sleep::reset()` and the `Interval` period up to 1 ms
+
 * Propagate `Buffer::cancel_on_shutdown()` to the created service
 
 * Improve API documentation for channels, timers, futures, and services
