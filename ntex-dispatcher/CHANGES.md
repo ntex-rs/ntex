@@ -8,6 +8,12 @@
 
 * Start frame read-rate tracking for the first frame when the connection arrives
 
+* Start frame read-rate tracking when the codec consumes partial frame data without leaving it in the read buffer
+
+* Run the keep-alive timer only while the connection is idle; it is stopped while a frame is read or handled and starts once the last response is done
+
+* Keep the remaining frame read budget and progress when the service stops being ready in the middle of a frame; the elapsed part of the read period is charged to the budget
+
 * Transport failures and force-closes cancel the dispatcher-held pending response future
 
 ## [4.0.1] - 2026-09-18

@@ -209,6 +209,12 @@ impl IoConfig {
 
     /// Sets the keep-alive timeout.
     ///
+    /// The dispatcher runs the timer only while the connection is idle: no
+    /// input is buffered, no partial frame is being read, and no decoded
+    /// frames are being handled. It starts once the last response is done.
+    /// Partial frames are bounded by
+    /// [frame read-rate](Self::set_frame_read_rate) limits instead.
+    ///
     /// A zero duration disables the timeout. It is disabled by default.
     #[must_use]
     pub fn set_keepalive_timeout<T: Into<Seconds>>(mut self, timeout: T) -> Self {
@@ -260,12 +266,13 @@ impl IoConfig {
     /// Sets read-rate parameters for a single decoded frame.
     ///
     /// Rate tracking starts when a new connection arrives, for its first
-    /// frame, and later whenever a decoder returns no complete item while
-    /// leaving partial frame data in the read buffer. The dispatcher then
+    /// frame, and later whenever a decoder returns no complete item after
+    /// receiving partial frame data, whether the data is left in the read
+    /// buffer or consumed into the decoder's own state. The dispatcher then
     /// allows one `timeout` period for additional data to arrive.
     ///
-    /// When that period expires, the dispatcher compares the buffered-byte
-    /// progress since the previous check with `rate`:
+    /// When that period expires, the dispatcher compares the bytes received
+    /// for the frame since the previous check with `rate`:
     ///
     /// - If the progress is greater than `rate`, the deadline is extended by
     ///   another `timeout` period.
@@ -282,7 +289,7 @@ impl IoConfig {
     ///
     /// A zero `timeout` disables frame read-rate enforcement and ignores
     /// `max_timeout` and `rate`. With a non-zero timeout and `rate` set to zero,
-    /// any positive buffered-byte progress permits another period.
+    /// any positive byte progress permits another period.
     ///
     /// A new connection must therefore deliver its first frame within these
     /// limits. After a frame has been decoded, idle connections with no

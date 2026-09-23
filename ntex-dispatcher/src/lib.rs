@@ -11,7 +11,7 @@
 #![deny(clippy::pedantic)]
 #![allow(clippy::cast_possible_truncation)]
 use std::task::{Context, Poll, ready};
-use std::{cell::Cell, fmt, future::Future, io, pin::Pin, rc::Rc};
+use std::{cell::Cell, cmp, fmt, future::Future, io, pin::Pin, rc::Rc};
 
 use ntex_codec::{Decoder, Encoder};
 use ntex_io::{Decoded, IoBoxed, IoStatusUpdate, RecvError};
@@ -566,6 +566,20 @@ where
                     self.shared.io.tag()
                 );
 
+                // charge the elapsed part of the frame read period
+                if !self.charge_read_period() {
+                    log::trace!(
+                        "{}: Max payload timeout has been reached during pause",
+                        self.shared.io.tag()
+                    );
+                    self.st = DispatcherState::Stop;
+                    self.read.timer = ReadTimer::Stopped;
+                    self.shared.io.stop_timer();
+                    return Poll::Ready(PollService::ItemWait(DispatchItem::Stop(
+                        Reason::ReadTimeout,
+                    )));
+                }
+
                 // remove all timers
                 self.shared.remove_flags(Flags::IDLE);
                 self.read.timer = ReadTimer::Stopped;
@@ -621,14 +635,39 @@ where
         }
     }
 
+    /// Charges the elapsed part of the current frame read period to the
+    /// frame's budget before the timer is stopped.
+    ///
+    /// Returns `false` if the budget is exhausted.
+    fn charge_read_period(&mut self) -> bool {
+        if self.read.timer != ReadTimer::FrameRead {
+            return true;
+        }
+        let Some(params) = self.shared.io.cfg().frame_read_rate() else {
+            return true;
+        };
+        if params.max_timeout.is_zero() {
+            return true;
+        }
+        let Some(p) = self.read.phase.progress() else {
+            return true;
+        };
+
+        let left = self.shared.io.timer_handle().remains();
+        let elapsed = params.timeout.0.saturating_sub(left.0);
+        p.max_timeout = Seconds(p.max_timeout.0.saturating_sub(elapsed));
+        !p.max_timeout.is_zero()
+    }
+
     fn update_timer(&mut self, decoded: &Decoded<<U as Decoder>::Item>) {
         let remains = decoded.remains as u32;
 
         // got parsed frame
         if decoded.item.is_some() {
             self.read.phase = ReadPhase::Idle;
-            if self.read.timer == ReadTimer::FrameRead {
-                // the frame is complete, the read timer must not fire as keep-alive
+            if self.read.timer != ReadTimer::Stopped {
+                // keep-alive and frame read timers do not apply while the frame
+                // is handled
                 self.shared.io.stop_timer();
             }
             self.read.timer = ReadTimer::Stopped;
@@ -641,11 +680,15 @@ where
                 p.remains = remains;
             }
         } else if remains == 0
+            && decoded.consumed == 0
             && (!matches!(self.read.phase, ReadPhase::FirstFrame(_))
                 || self.shared.io.cfg().frame_read_rate().is_none())
         {
-            // no new data, start keep-alive timer
-            if self.shared.contains(Flags::KA_ENABLED) && self.read.timer != ReadTimer::KeepAlive {
+            // no new data and no frames are handled, start keep-alive timer
+            if self.shared.contains(Flags::KA_ENABLED)
+                && self.read.timer != ReadTimer::KeepAlive
+                && self.shared.inflight.get() == 0
+            {
                 log::trace!(
                     "{}: Start keep-alive timer {:?}",
                     self.shared.io.tag(),
@@ -657,12 +700,29 @@ where
                     .start_timer(self.shared.io.cfg().keepalive_timeout());
             }
         } else if let Some(params) = self.shared.io.cfg().frame_read_rate() {
-            // we got new data but not enough to parse single frame
+            // we got new data but not enough to parse single frame, the data
+            // is either buffered or consumed into the codec state
             // start read timer
-            let progress = ReadProgress {
-                remains,
-                consumed: remains + decoded.consumed as u32,
-                max_timeout: params.max_timeout,
+            let received = remains + decoded.consumed as u32;
+            let progress = match self.read.phase.progress() {
+                // the timer was stopped while the service was not ready,
+                // continue the frame with its remaining progress and budget
+                Some(p) => ReadProgress {
+                    remains,
+                    consumed: p
+                        .consumed
+                        .saturating_add(received.saturating_sub(p.remains)),
+                    max_timeout: if p.max_timeout.is_zero() || params.max_timeout.is_zero() {
+                        params.max_timeout
+                    } else {
+                        cmp::min(p.max_timeout, params.max_timeout)
+                    },
+                },
+                None => ReadProgress {
+                    remains,
+                    consumed: received,
+                    max_timeout: params.max_timeout,
+                },
             };
             self.read.phase = match self.read.phase {
                 ReadPhase::FirstFrame(_) => ReadPhase::FirstFrame(progress),
@@ -670,6 +730,10 @@ where
             };
             self.read.timer = ReadTimer::FrameRead;
             self.shared.io.start_timer(params.timeout);
+        } else if self.read.timer == ReadTimer::KeepAlive {
+            // a frame has started, keep-alive does not apply while it is read
+            self.read.timer = ReadTimer::Stopped;
+            self.shared.io.stop_timer();
         }
     }
 
@@ -1839,5 +1903,257 @@ mod tests {
         sleep(Millis(4500)).await;
         assert!(!client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0]);
+    }
+
+    /// Service whose readiness waits on a gate installed by the test.
+    struct GateSrv(Rc<RefCell<Option<oneshot::Receiver<()>>>>, Rc<Cell<bool>>);
+
+    impl Service<(), DispatchItem<BCodec>> for GateSrv {
+        type Res = Option<Bytes>;
+        type Error = ();
+
+        async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
+            let rx = self.0.borrow_mut().take();
+            if let Some(rx) = rx {
+                let _ = rx.await;
+            }
+            Ok(())
+        }
+
+        async fn call(
+            &self,
+            msg: DispatchItem<BCodec>,
+            _: Ctx<'_, Self>,
+        ) -> Result<Option<Bytes>, Self::Error> {
+            if let DispatchItem::Stop(Reason::ReadTimeout) = msg {
+                self.1.set(true);
+            }
+            Ok(None)
+        }
+    }
+
+    /// A frame keeps its remaining read budget when the service stops being
+    /// ready in the middle of the frame.
+    #[ntex::test]
+    async fn read_rate_budget_survives_service_pause() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let gate = Rc::new(RefCell::new(None));
+        let timed_out = Rc::new(Cell::new(false));
+        let io = Io::new(
+            server,
+            SharedCfg::new("TEST").add(
+                IoConfig::new()
+                    .set_keepalive_timeout(Seconds::ZERO)
+                    .set_frame_read_rate(Seconds(1), Seconds(2), 2),
+            ),
+        );
+        let disp = Dispatcher::new(
+            io,
+            BCodec(1024),
+            Pipeline::new((), GateSrv(gate.clone(), timed_out.clone())),
+        );
+        spawn(async move {
+            let _ = disp.await;
+        });
+
+        // the first period is extended, one period of budget remains
+        for _ in 0..5 {
+            client.write("abc");
+            sleep(Millis(500)).await;
+        }
+
+        // pause the service in the middle of the frame
+        let (tx, rx) = oneshot::channel();
+        *gate.borrow_mut() = Some(rx);
+        client.write("abc");
+        sleep(Millis(300)).await;
+        let _ = tx.send(());
+
+        // the next expiry exhausts the remaining budget
+        for _ in 0..5 {
+            client.write("abc");
+            sleep(Millis(500)).await;
+        }
+        assert!(client.is_closed());
+        assert!(timed_out.get());
+    }
+
+    /// Short service pauses cannot keep restarting the frame read period.
+    #[ntex::test]
+    async fn read_rate_budget_charged_on_service_pause() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let gate = Rc::new(RefCell::new(None));
+        let timed_out = Rc::new(Cell::new(false));
+        let io = Io::new(
+            server,
+            SharedCfg::new("TEST").add(
+                IoConfig::new()
+                    .set_keepalive_timeout(Seconds::ZERO)
+                    .set_frame_read_rate(Seconds(1), Seconds(3), 2),
+            ),
+        );
+        let disp = Dispatcher::new(
+            io,
+            BCodec(1024),
+            Pipeline::new((), GateSrv(gate.clone(), timed_out.clone())),
+        );
+        spawn(async move {
+            let _ = disp.await;
+        });
+
+        client.write("abc");
+        for _ in 0..16 {
+            sleep(Millis(500)).await;
+            let (tx, rx) = oneshot::channel();
+            *gate.borrow_mut() = Some(rx);
+            client.write("abc");
+            sleep(Millis(100)).await;
+            let _ = tx.send(());
+            if client.is_closed() {
+                break;
+            }
+        }
+        assert!(client.is_closed());
+        assert!(timed_out.get());
+    }
+
+    /// Frame read-rate tracking starts when the codec consumes partial frame
+    /// data into its own state and leaves nothing buffered.
+    #[ntex::test]
+    async fn read_rate_starts_for_consumed_partial_frame() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let data = Arc::new(Mutex::new(RefCell::new(Vec::new())));
+        let data2 = data.clone();
+
+        let io = Io::new(
+            server,
+            SharedCfg::new("TEST").add(
+                IoConfig::new()
+                    .set_keepalive_timeout(Seconds(30))
+                    .set_frame_read_rate(Seconds(1), Seconds(2), 2),
+            ),
+        );
+        let disp = Dispatcher::new(
+            io,
+            DropCodec,
+            Pipeline::new(
+                (),
+                ntex_service::fn_service(move |msg: DispatchItem<DropCodec>| {
+                    let data = data2.clone();
+                    async move {
+                        match msg {
+                            DispatchItem::Item(_) => data.lock().unwrap().borrow_mut().push(0),
+                            DispatchItem::Stop(Reason::ReadTimeout) => {
+                                data.lock().unwrap().borrow_mut().push(1);
+                            }
+                            _ => (),
+                        }
+                        Ok::<_, ()>(None)
+                    }
+                }),
+            ),
+        );
+        spawn(async move {
+            let _ = disp.await;
+        });
+
+        client.write("12345678");
+        sleep(Millis(100)).await;
+        // the codec consumes the whole input without producing a frame
+        client.write("1#");
+        sleep(Millis(4500)).await;
+        assert!(client.is_closed());
+        assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
+    }
+
+    fn keepalive_dispatcher(
+        server: IoTest,
+        delay: Millis,
+        data: Arc<Mutex<RefCell<Vec<usize>>>>,
+    ) -> Dispatcher<BCodec, ()> {
+        let io = Io::new(
+            server,
+            SharedCfg::new("TEST").add(IoConfig::new().set_keepalive_timeout(Seconds(1))),
+        );
+        Dispatcher::new(
+            io,
+            BCodec(8),
+            Pipeline::new(
+                (),
+                ntex_service::fn_service(move |msg: DispatchItem<BCodec>| {
+                    let data = data.clone();
+                    async move {
+                        match msg {
+                            DispatchItem::Item(bytes) => {
+                                sleep(delay).await;
+                                data.lock().unwrap().borrow_mut().push(0);
+                                return Ok::<_, ()>(Some(bytes));
+                            }
+                            DispatchItem::Stop(Reason::KeepAliveTimeout) => {
+                                data.lock().unwrap().borrow_mut().push(1);
+                            }
+                            _ => (),
+                        }
+                        Ok(None)
+                    }
+                }),
+            ),
+        )
+    }
+
+    /// The keep-alive timer is not active while a frame is handled, it starts
+    /// once the response is done.
+    #[ntex::test]
+    async fn keepalive_inactive_during_frame_handling() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let data = Arc::new(Mutex::new(RefCell::new(Vec::new())));
+        let disp = keepalive_dispatcher(server, Millis(2500), data.clone());
+        spawn(async move {
+            let _ = disp.await;
+        });
+
+        client.write("12345678");
+        sleep(Millis(3000)).await;
+        assert!(!client.is_closed());
+        assert_eq!(&data.lock().unwrap().borrow()[..], &[0]);
+
+        sleep(Millis(3000)).await;
+        assert!(client.is_closed());
+        assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
+    }
+
+    /// The keep-alive timer is not active while a partial frame is read.
+    #[ntex::test]
+    async fn keepalive_inactive_during_frame_read() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let data = Arc::new(Mutex::new(RefCell::new(Vec::new())));
+        let disp = keepalive_dispatcher(server, Millis(0), data.clone());
+        spawn(async move {
+            let _ = disp.await;
+        });
+
+        // keep-alive is armed for the idle connection, then a frame starts
+        sleep(Millis(200)).await;
+        client.write("1234");
+        sleep(Millis(3500)).await;
+        assert!(!client.is_closed());
+
+        client.write("5678");
+        let buf = client.read().await.unwrap();
+        assert_eq!(buf, Bytes::from_static(b"12345678"));
+
+        sleep(Millis(3000)).await;
+        assert!(client.is_closed());
+        assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
     }
 }
