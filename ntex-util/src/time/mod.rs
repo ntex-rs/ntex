@@ -33,8 +33,10 @@ pub fn deadline<T: Into<Millis>>(dur: T) -> Deadline {
 
 /// Creates an [`Interval`] that ticks every `period`.
 ///
-/// An interval will tick indefinitely. At any time, the [`Interval`] value can
-/// be dropped. This cancels the interval.
+/// The first tick completes immediately, and each later tick completes
+/// `period` after the previous one was observed. An interval will tick
+/// indefinitely. At any time, the [`Interval`] value can be dropped. This
+/// cancels the interval.
 #[inline]
 pub fn interval<T: Into<Millis>>(period: T) -> Interval {
     Interval::new(period.into())
@@ -94,6 +96,8 @@ pub struct Sleep {
 
 impl Sleep {
     /// Creates a new sleep future.
+    ///
+    /// A zero duration is rounded up to 1 ms.
     #[inline]
     pub fn new(duration: Millis) -> Sleep {
         Sleep {
@@ -119,9 +123,9 @@ impl Sleep {
     /// future completes without having to create new associated state.
     ///
     /// This function can be called both before and after the future has
-    /// completed.
+    /// completed. A zero duration is rounded up to 1 ms.
     pub fn reset<T: Into<Millis>>(&self, millis: T) {
-        self.hnd.reset(u64::from(millis.into().0));
+        self.hnd.reset(u64::from(cmp::max(millis.into().0, 1)));
     }
 
     #[inline]
@@ -131,6 +135,7 @@ impl Sleep {
     }
 
     #[inline]
+    /// Polls until this timer has elapsed.
     pub fn poll_elapsed(&self, cx: &mut task::Context<'_>) -> Poll<()> {
         self.hnd.poll_elapsed(cx)
     }
@@ -334,11 +339,14 @@ pub struct Interval {
 
 impl Interval {
     /// Creates an interval with the specified period.
+    ///
+    /// The first tick completes immediately. A zero period is rounded up to
+    /// 1 ms.
     #[inline]
     pub fn new(period: Millis) -> Interval {
         Interval {
-            hnd: TimerHandle::new(u64::from(period.0)),
-            period: period.0,
+            hnd: TimerHandle::new(0),
+            period: cmp::max(period.0, 1),
         }
     }
 
@@ -457,10 +465,16 @@ mod tests {
         let first_time = now();
         let fut = sleep(Millis(10000));
         assert!(!fut.is_elapsed());
+        // a zero delay is rounded up to 1 ms
         fut.reset(Millis::ZERO);
+        assert!(!fut.is_elapsed());
         fut.await;
         let second_time = now();
-        assert!(second_time - first_time < time::Duration::from_millis(1));
+        assert!(second_time - first_time >= time::Duration::from_millis(1));
+
+        let fut = sleep(Millis::ZERO);
+        assert!(!fut.is_elapsed());
+        fut.await;
 
         let first_time = now();
         let fut = Sleep {
@@ -514,8 +528,23 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn test_interval_zero_period() {
+        let int = interval(Millis::ZERO);
+        int.tick().await;
+
+        // a zero period is rounded up to 1 ms instead of ticking on every poll
+        assert!(lazy(|cx| int.poll_tick(cx)).await.is_pending());
+        int.tick().await;
+    }
+
+    #[ntex::test]
     async fn test_interval() {
         let mut int = interval(Millis(250));
+
+        // the first tick completes immediately
+        let time = time::Instant::now();
+        int.tick().await;
+        assert!(time.elapsed() < time::Duration::from_millis(50));
 
         let time = time::Instant::now();
         int.tick().await;
@@ -539,6 +568,7 @@ mod tests {
     #[ntex::test]
     async fn test_interval_one_sec() {
         let int = interval(Millis::ONE_SEC);
+        int.tick().await;
 
         for _i in 0..3 {
             let time = time::Instant::now();

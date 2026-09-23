@@ -2,8 +2,11 @@ use std::{error, fmt, future::Future, io, pin::Pin, task::Context, task::Poll};
 
 use ntex_service::{Ctx, Service};
 
-/// Combines two different futures, streams, or sinks having the same associated types into a single
-/// type.
+/// A value of one of two types.
+///
+/// `Either` is a [`Future`] when both variants are futures with the same
+/// output, and a [`Service`] when both variants are services with the same
+/// request, response, and error types.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Either<A, B> {
     /// First branch of the type
@@ -23,7 +26,7 @@ impl<A, B> Either<A, B> {
     }
 
     #[inline]
-    /// Return true if the value is the `Left` variant.
+    /// Returns `true` if the value is the `Left` variant.
     pub fn is_left(&self) -> bool {
         match *self {
             Either::Left(_) => true,
@@ -32,13 +35,13 @@ impl<A, B> Either<A, B> {
     }
 
     #[inline]
-    /// Return true if the value is the `Right` variant.
+    /// Returns `true` if the value is the `Right` variant.
     pub fn is_right(&self) -> bool {
         !self.is_left()
     }
 
     #[inline]
-    /// Convert the left side of `Either<L, R>` to an `Option<L>`.
+    /// Converts the left side of `Either<A, B>` to an `Option<A>`.
     pub fn left(self) -> Option<A> {
         match self {
             Either::Left(l) => Some(l),
@@ -47,7 +50,7 @@ impl<A, B> Either<A, B> {
     }
 
     #[inline]
-    /// Convert the right side of `Either<L, R>` to an `Option<R>`.
+    /// Converts the right side of `Either<A, B>` to an `Option<B>`.
     pub fn right(self) -> Option<B> {
         match self {
             Either::Left(_) => None,
@@ -56,7 +59,7 @@ impl<A, B> Either<A, B> {
     }
 
     #[inline]
-    /// Convert `&Either<L, R>` to `Either<&L, &R>`.
+    /// Converts `&Either<A, B>` to `Either<&A, &B>`.
     pub fn as_ref(&self) -> Either<&A, &B> {
         match *self {
             Either::Left(ref inner) => Either::Left(inner),
@@ -65,7 +68,7 @@ impl<A, B> Either<A, B> {
     }
 
     #[inline]
-    /// Convert `&mut Either<L, R>` to `Either<&mut L, &mut R>`.
+    /// Converts `&mut Either<A, B>` to `Either<&mut A, &mut B>`.
     pub fn as_mut(&mut self) -> Either<&mut A, &mut B> {
         match *self {
             Either::Left(ref mut inner) => Either::Left(inner),
@@ -76,7 +79,7 @@ impl<A, B> Either<A, B> {
 
 impl<T> Either<T, T> {
     #[inline]
-    /// Extract the value of an either over two equivalent types.
+    /// Extracts the value of an `Either` over two equal types.
     pub fn into_inner(self) -> T {
         match self {
             Either::Left(x) | Either::Right(x) => x,

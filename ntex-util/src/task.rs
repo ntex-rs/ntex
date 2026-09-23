@@ -48,7 +48,8 @@ impl LocalWaker {
     #[inline]
     /// Calls `wake` on the last `Waker` passed to `register`.
     ///
-    /// If `register` has not been called yet, then this does nothing.
+    /// The waker is consumed, so a later `wake` does nothing until `register`
+    /// is called again. If no waker is registered, this does nothing.
     pub fn wake(&self) {
         if let Some(waker) = self.take() {
             waker.wake();
@@ -58,7 +59,8 @@ impl LocalWaker {
     #[inline]
     /// Calls `wake` on the last `Waker` passed to `register`.
     ///
-    /// If `register` has not been called yet, then this returns `false`.
+    /// Returns `false` if no waker is registered. Like [`wake`](Self::wake),
+    /// this consumes the registered waker.
     pub fn wake_checked(&self) -> bool {
         if let Some(waker) = self.take() {
             waker.wake();
@@ -76,7 +78,7 @@ impl LocalWaker {
     }
 
     #[doc(hidden)]
-    /// Check if waker is set
+    /// Returns `true` if a waker is registered.
     pub fn is_set(&self) -> bool {
         let waker = self.waker.take();
         let set = waker.is_some();
@@ -85,6 +87,7 @@ impl LocalWaker {
     }
 }
 
+/// Cloning creates an empty `LocalWaker`; the registered waker is not copied.
 impl Clone for LocalWaker {
     fn clone(&self) -> Self {
         LocalWaker::new()
