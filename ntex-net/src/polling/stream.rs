@@ -489,8 +489,13 @@ impl StreamItem {
     /// subscribed at most once per connection: re-arming it after it has fired
     /// would report immediately and spin without making progress, so every
     /// site that arms interest must go through here.
+    ///
+    /// `HUP` is deliberately not subscribed. This backend is Unix-only, and
+    /// every reactor behind it reports hangup without being asked: epoll and
+    /// `poll` treat it as output-only, and kqueue ignores the interest bit
+    /// outright. `RDHUP` is the sole exception that has to be requested.
     fn renew_event(&self, readable: bool, writable: bool) -> Event {
-        let mut ev = Event::new(0, readable, writable).with_interrupt();
+        let mut ev = Event::new(0, readable, writable);
         ev.set_rd_interrupt(!self.flags.contains(Flags::RD_HUP));
         ev
     }
@@ -738,10 +743,11 @@ mod tests {
         use std::{io::Write, net::Shutdown};
 
         use super::*;
-        /// The upstream split must keep `HUP` and `RDHUP` distinct. If
-        /// `with_interrupt` ever subscribes `RDHUP` again, the poller spins on
-        /// every peer `FIN`, so pin the round-trip here. Only epoll represents
-        /// these flags.
+        /// The upstream split must keep `HUP` and `RDHUP` distinct. `RDHUP` is
+        /// the only interest this backend subscribes, and it is unsubscribed
+        /// once latched; were the two to alias, that unsubscribe would not take
+        /// and the poller would spin on every peer `FIN`. Only epoll represents
+        /// these flags, so pin the round-trip in both directions here.
         #[cfg(target_os = "linux")]
         #[ntex::test]
         async fn event_flags_keep_hup_and_rd_hup_separate() {
