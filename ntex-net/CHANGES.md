@@ -2,6 +2,9 @@
 
 ## [4.1.0] - 2026-09-23
 
+* Return the pages a failed write took to the write buffer in the polling and
+  tokio backends, they were dropped and stayed counted as in-flight output
+
 * Arm write interest from the out-of-band write path in the polling backend
   instead of leaving it to the write task, which retried the write only to
   have it block again

@@ -508,17 +508,19 @@ impl StreamItem {
 
             if num > 0 {
                 let fd = self.fd();
+                // An error must not return early: the pages taken above still
+                // have to go back to the write buffer.
                 let res = if num == 1 {
                     let io = unsafe { bufs[0].assume_init_ref().as_ptr() };
                     syscall!(break libc::write(fd, io.cast(), size))
                 } else {
                     syscall!(break libc::writev(fd, bufs.as_ptr().cast(), num as i32))
-                }?;
+                };
                 #[cfg(feature = "trace")]
                 log::trace!("{}: {fd:?}-Wrt buf({num}:{size}) ({res:?})", self.ctx.tag());
 
                 // remove written bytes
-                if let Poll::Ready(mut written) = res {
+                if let Poll::Ready(Ok(mut written)) = res {
                     for page in pages[..num].iter_mut().flatten() {
                         let len = cmp::min(page.len(), written);
                         page.advance_to(len);
@@ -535,7 +537,7 @@ impl StreamItem {
                     }
                 }
 
-                match res {
+                match res? {
                     Poll::Ready(0) => Err(io::Error::new(
                         io::ErrorKind::WriteZero,
                         "failed to write frame to transport",
@@ -802,6 +804,29 @@ mod tests {
             fixture.teardown();
 
             assert!(armed, "write interest was lost on a repeat write");
+        }
+
+        /// A failed write must hand the pages it took back to the write
+        /// buffer. Dropping them loses the output and leaves it counted as in
+        /// flight, which nothing will ever report as written.
+        #[ntex::test]
+        async fn failed_write_returns_pages_to_the_buffer() {
+            let mut fixture = Fixture::new();
+            fixture.io.encode_slice(b"hello").unwrap();
+            // Closing the peer makes the next write fail with `EPIPE`.
+            drop(mem::replace(
+                &mut fixture.peer,
+                UnixStream::pair().unwrap().0,
+            ));
+
+            fixture.ops.0.write_stream(fixture.id as u32);
+
+            let buffered = fixture.io.with_write_dst(|b| b.len());
+            let closed = !fixture.io.is_active();
+            fixture.teardown();
+
+            assert!(closed, "write error did not stop the stream");
+            assert_eq!(buffered, 5, "failed write dropped its pages");
         }
     }
 }

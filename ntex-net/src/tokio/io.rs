@@ -281,14 +281,12 @@ where
             // SAFETY: initialize in previous block
             let bufs = unsafe { &*(&raw const bufs[..num] as *const [std::io::IoSlice<'_>]) };
 
-            let result = match write_io(ctx, io, bufs) {
-                Poll::Ready(Ok(val)) => Poll::Ready(val),
-                Poll::Ready(Err(err)) => return Err(err),
-                Poll::Pending => Poll::Pending,
-            };
+            // An error must not return early: the pages taken above still
+            // have to go back to the write buffer.
+            let result = write_io(ctx, io, bufs);
 
             // remove written bytes
-            if let Poll::Ready(mut written) = result {
+            if let Poll::Ready(Ok(mut written)) = result {
                 for page in pages[..num].iter_mut().flatten() {
                     let len = cmp::min(page.len(), written);
                     page.advance_to(len);
@@ -313,7 +311,7 @@ where
                 ctx.flags()
             );
 
-            match result {
+            match result? {
                 Poll::Ready(val) => {
                     if val == 0 {
                         ctx.stop(None);
@@ -523,5 +521,48 @@ mod tests {
         // Keep the Io alive until after EOF is observed. Dropping it must not be
         // what closes the peer-facing write half.
         drop(io);
+    }
+
+    struct CaptureCtx(std::rc::Rc<std::cell::Cell<Option<IoContext>>>);
+
+    struct NoHandle;
+
+    impl ntex_io::Handle for NoHandle {}
+
+    impl ntex_io::IoStream for CaptureCtx {
+        fn start(self, ctx: IoContext) -> Box<dyn ntex_io::Handle> {
+            self.0.set(Some(ctx));
+            Box::new(NoHandle)
+        }
+    }
+
+    /// A failed write must hand the pages it took back to the write buffer.
+    /// Dropping them loses the output and leaves it counted as in flight,
+    /// which nothing will ever report as written.
+    #[ntex::test]
+    async fn failed_write_returns_pages_to_the_buffer() {
+        let listener = net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let _peer = listener.accept().unwrap();
+        stream.set_nonblocking(true).unwrap();
+        // Our own write half is shut, so the next write fails with `EPIPE`.
+        stream.shutdown(net::Shutdown::Write).unwrap();
+        let stream = tok_io::net::TcpStream::from_std(stream).unwrap();
+        // `try_write` reports `WouldBlock` until readiness has been observed.
+        stream.writable().await.unwrap();
+
+        let slot = std::rc::Rc::new(std::cell::Cell::new(None));
+        let io = Io::new(CaptureCtx(slot.clone()), SharedCfg::default());
+        let ctx = slot.take().unwrap();
+        io.encode_slice(b"hello").unwrap();
+
+        let status = write(&stream, &ctx, true);
+
+        assert!(matches!(status, WrtStatus::Terminate));
+        assert_eq!(
+            io.with_write_dst(|b| b.len()),
+            5,
+            "failed write dropped its pages"
+        );
     }
 }
