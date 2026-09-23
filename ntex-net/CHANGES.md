@@ -2,9 +2,23 @@
 
 ## [4.1.0] - 2026-09-23
 
+* Treat peer half-close as read eof in the io-uring backend, as the polling
+  backend does. `POLLRDHUP` terminated the connection, so a response to a
+  peer that half-closed after its request was dropped and the peer saw a
+  clean close. Only `POLLHUP` and `POLLERR` terminate the connection now, and
+  `POLLHUP` is deferred while pending input is still being read
+
+* Detect reset of a half-closed connection in the io-uring backend. io-uring
+  always reports `POLLRDHUP`, so a socket poll could not wait for `POLLHUP`
+  or `POLLERR` after half-close and an idle connection never terminated.
+  Half-closed sockets are now watched through an epoll instance instead
+
+* Reset read cancel state when a canceled `Recv` completes normally in the
+  io-uring backend, the stale state disabled later read pauses
+
 * Cancel in-flight operations of a stream before closing it in the io-uring
   backend. `Close` only removes the descriptor from the file table, pending
-  operations (the `POLLRDHUP` poll in particular) kept the socket open, so a
+  operations (the disconnect poll in particular) kept the socket open, so a
   force-closed or dropped connection was neither reset nor closed until the
   peer went away
 

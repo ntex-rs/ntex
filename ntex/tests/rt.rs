@@ -247,7 +247,8 @@ async fn idle_disconnect_uring() {
     use std::sync::Mutex;
 
     use ntex::io::{Io, IoConfig};
-    use ntex::{SharedCfg, connect::Connect, time::Millis, time::sleep, util::Bytes};
+    use ntex::{SharedCfg, codec::BytesCodec, connect::Connect, util::Bytes};
+    use ntex::{time::Millis, time::sleep, time::timeout};
 
     const DATA: &[u8] = b"Hello World Hello World Hello World Hello World Hello World \
                           Hello World Hello World Hello World Hello World Hello World \
@@ -298,7 +299,17 @@ async fn idle_disconnect_uring() {
     let io = ntex::connect::connect_with(msg, &cfg).await.unwrap();
     rx.await.unwrap();
 
-    io.on_disconnect().await;
+    // Server close is a FIN, which is indistinguishable from a half-close, so
+    // it is observed as eof once all input is read
+    let mut total = 0;
+    let res = timeout(Millis(5000), async {
+        while let Ok(Some(item)) = io.recv(&BytesCodec).await {
+            total += item.len();
+        }
+    })
+    .await;
+    assert!(res.is_ok(), "eof is not observed");
+    assert_eq!(total, DATA.len() * 2);
 }
 
 #[cfg(target_os = "linux")]
