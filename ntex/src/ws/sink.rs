@@ -30,7 +30,7 @@ impl WsSink {
             let close_timeout = self.0.cfg.close_timeout;
             rt::spawn(async move {
                 select(sleep(close_timeout), io.on_disconnect()).await;
-                if !io.is_closed() {
+                if io.is_active() {
                     io.close();
                 }
             });
@@ -79,6 +79,6 @@ mod tests {
         assert!(!client.is_server_dropped());
 
         sleep(Millis(75)).await;
-        assert!(sink.io().is_closed());
+        assert!(!sink.io().is_active());
     }
 }

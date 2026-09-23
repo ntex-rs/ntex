@@ -2,6 +2,15 @@
 
 ## [4.1.0] - 2026-09-22
 
+* Add IoRef::is_active(), which reports that the connection is still in its
+  active state. It becomes false as soon as any kind of close starts, whether
+  it was closed locally, force-terminated, or the transport reported the peer
+  as gone
+
+* IoRef::is_closed() now reports that closing has finished and the backend
+  released the underlying socket. It used to become true part way through a
+  close, so callers that want that meaning should use !IoRef::is_active()
+
 * Readiness::Terminate is reported only for an explicit IoRef::terminate().
   A transport failure, a filter failure or an expired shutdown deadline used
   to abort the connection as well, a graceful close that was already draining

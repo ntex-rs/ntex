@@ -788,6 +788,6 @@ mod tests {
             IoTaskStatus::Stop
         );
         assert!(state.is_read_eof());
-        assert!(state.is_terminating());
+        assert!(state.flags().is_terminating());
     }
 }

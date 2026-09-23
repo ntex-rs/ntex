@@ -164,17 +164,19 @@ impl IoState {
     /// [`terminate_connection`](Self::terminate_connection) and let the
     /// transport close the connection gracefully.
     pub(super) fn force_close_connection(&self) {
-        if !self.flags.is_terminated() {
-            self.flags.set_force_close();
-        }
-        self.terminate_connection(None);
+        self.begin_terminate(None, true);
     }
 
     pub(super) fn terminate_connection(&self, err: Option<io::Error>) {
+        self.begin_terminate(err, false);
+    }
+
+    /// Moves the connection onto the termination path and runs the teardown
+    /// work, which only the first call to get here performs.
+    fn begin_terminate(&self, err: Option<io::Error>, force: bool) {
         self.set_error(err);
-        if !self.flags.is_terminated() && !self.flags.is_terminating() {
+        if self.flags.begin_terminate(force) {
             log::trace!("{}: Terminate io", self.cfg.tag());
-            self.flags.set_terminate();
             // buffers held by the transport are gone with it
             self.wr_inflight.set(0);
             self.wake_read_task();
@@ -185,7 +187,7 @@ impl IoState {
     }
 
     pub(super) fn stop_connection(&self, err: Option<io::Error>) {
-        if !self.flags.is_terminated() {
+        if !self.flags.is_closed() {
             log::trace!("{}: Stop io with error {:?}", self.cfg.tag(), err);
             self.set_error(err);
             self.flags.set_stopped();
@@ -201,7 +203,7 @@ impl IoState {
 
     /// Gracefully shuts down the read and write I/O tasks.
     pub(super) fn start_shutdown(&self) {
-        if !self.flags.is_stopping_any() {
+        if self.flags.is_active() {
             log::trace!("{}: Initiate io shutdown {:?}", self.cfg.tag(), self.flags);
             self.flags.set_filter_stopping();
             self.wake_read_task();
@@ -696,7 +698,7 @@ impl<F> Io<F> {
     pub fn poll_read_more(&self, cx: &mut Context<'_>) -> Poll<io::Result<Option<()>>> {
         let st = self.st();
 
-        if st.flags.is_closed() {
+        if st.flags.is_peer_gone() {
             if let Some(err) = st.error() {
                 Poll::Ready(Err(err))
             } else {
@@ -874,7 +876,7 @@ impl<F> Io<F> {
 
         let len = st.write_outstanding();
         if len > 0 {
-            if st.flags.is_closed() {
+            if st.flags.is_peer_gone() {
                 return Poll::Ready(Err(st.error_or_disconnected()));
             } else if full {
                 st.flags.set_wants_write_flush();
@@ -891,7 +893,7 @@ impl<F> Io<F> {
                 return Poll::Pending;
             }
         }
-        if st.flags.is_closed() && !st.flags.is_write_flush() {
+        if st.flags.is_peer_gone() && !st.flags.is_write_flush() {
             Poll::Ready(Err(st.error_or_disconnected()))
         } else {
             st.flags.unset_wr_backpressure_and_flush();
@@ -907,7 +909,7 @@ impl<F> Io<F> {
     pub fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let st = self.st();
 
-        if st.flags.is_terminated() {
+        if st.flags.is_closed() {
             if let Some(err) = st.error() {
                 Poll::Ready(Err(err))
             } else {
@@ -972,7 +974,7 @@ impl<F> Io<F> {
     pub fn poll_status_update(&self, cx: &mut Context<'_>) -> Poll<IoStatusUpdate> {
         let st = self.st();
         st.dispatch_task.register(cx.waker());
-        if st.flags.is_closed() {
+        if st.flags.is_peer_gone() {
             Poll::Ready(IoStatusUpdate::PeerGone(st.error()))
         } else if st.flags.check_dispatcher_timeout() {
             Poll::Ready(IoStatusUpdate::KeepAlive)
@@ -1042,7 +1044,7 @@ impl<F> Drop for Io<F> {
         if st.filter.is_set() {
             // filter is unsafe and must be dropped explicitly,
             // and won't be dropped without special attention
-            if !st.flags.is_terminated() {
+            if !st.flags.is_closed() {
                 log::trace!("{}: Io is dropped, terminate connection", st.tag());
             }
 
@@ -1080,7 +1082,7 @@ pub struct OnDisconnect {
 
 impl OnDisconnect {
     pub(super) fn new(inner: Rc<IoState>) -> Self {
-        Self::new_inner(inner.flags.is_terminated(), inner)
+        Self::new_inner(inner.flags.is_closed(), inner)
     }
 
     fn new_inner(disconnected: bool, inner: Rc<IoState>) -> Self {
@@ -1095,7 +1097,7 @@ impl OnDisconnect {
     #[inline]
     /// Checks if the I/O stream is disconnected.
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<()> {
-        if self.token == usize::MAX || self.inner.flags.is_terminated() {
+        if self.token == usize::MAX || self.inner.flags.is_closed() {
             Poll::Ready(())
         } else {
             self.inner
@@ -1844,7 +1846,7 @@ mod tests {
         // purely local graceful shutdown, the peer does nothing
         io.shutdown().await.unwrap();
 
-        assert!(io.is_closed());
+        assert!(!io.is_active());
         assert!(matches!(
             lazy(|cx| io.poll_status_update(cx)).await,
             Poll::Ready(IoStatusUpdate::PeerGone(None))
@@ -1938,7 +1940,7 @@ mod tests {
         let err = io.encode_slice(BIN2).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::ConnectionReset);
         assert_eq!(err.to_string(), "connection reset");
-        assert!(io.is_terminating());
+        assert!(io.st().flags.is_terminating());
     }
 
     #[ntex::test]
@@ -1974,7 +1976,7 @@ mod tests {
         );
 
         io.encode_slice(BIN2).unwrap_err();
-        assert!(io.is_terminating());
+        assert!(io.st().flags.is_terminating());
 
         // the handle is taken for the duration of the direct write, so the
         // terminate it triggered could not release the transport itself
@@ -2204,7 +2206,7 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        assert!(!io.st().flags.is_terminated());
+        assert!(!io.st().flags.is_closed());
 
         io.encode(Bytes::from_static(b"response"), &BytesCodec)
             .unwrap();
@@ -2249,6 +2251,31 @@ mod tests {
             Poll::Ready(Ok(()))
         ));
         assert!(lazy(|cx| waiter.poll_ready(cx)).await.is_ready());
+    }
+
+    /// The transport can report the connection gone straight from the active
+    /// state, so being stopped reports every earlier state as reached. That
+    /// must not be mistaken for having gone through a graceful shutdown and
+    /// discard input that arrived before the connection went away.
+    #[ntex::test]
+    async fn a_stopped_connection_keeps_its_buffered_input() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        client.write(TEXT);
+
+        let io = Io::from(server);
+        io.read_more().await.unwrap().unwrap();
+        assert_eq!(io.with_read_dst(|buf| buf.len()), BIN.len());
+
+        IoContext::new(io.get_ref()).stopped(None);
+        assert!(io.is_closed() && !io.is_active());
+        // the shutdown states report as reached even though none was run
+        assert!(io.st().flags.is_stopping() && !io.st().flags.is_shutting_down_filters());
+        assert_eq!(
+            io.with_read_dst(|buf| buf.len()),
+            BIN.len(),
+            "input received before the transport went away was discarded"
+        );
     }
 
     #[ntex::test]
@@ -2322,7 +2349,7 @@ mod tests {
         )));
 
         assert!(io.st().flags.is_terminating());
-        assert!(!io.st().flags.is_terminated());
+        assert!(!io.st().flags.is_closed());
         assert!(lazy(|cx| io.poll_shutdown(cx)).await.is_pending());
         assert!(lazy(|cx| waiter.poll_ready(cx)).await.is_pending());
 
@@ -2435,7 +2462,7 @@ mod tests {
 
         io.close();
         sleep(Millis(50)).await;
-        assert!(!io.st().flags.is_terminated());
+        assert!(!io.st().flags.is_closed());
     }
 
     #[ntex::test]
@@ -2549,7 +2576,7 @@ mod tests {
             .await
             .expect("transport shutdown did not complete")
             .unwrap();
-        assert!(io.st().flags.is_terminated());
+        assert!(io.st().flags.is_closed());
 
         // buffered output still reached the peer
         assert_eq!(peer.read_any(), Bytes::from_static(b"bye"));
@@ -2607,7 +2634,7 @@ mod tests {
         // discarded by the transport itself right before it closes
         client.write("after");
         sleep(Millis(50)).await;
-        assert!(!io.st().flags.is_terminated());
+        assert!(!io.st().flags.is_closed());
         assert_eq!(client.remote_buffer(|buf| buf.len()), 5);
     }
 
@@ -2718,7 +2745,7 @@ mod tests {
             .expect("transport shutdown did not complete")
             .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::TimedOut);
-        assert!(io.st().flags.is_terminated());
+        assert!(io.st().flags.is_closed());
         assert!(!io.st().flags.is_terminating());
     }
 
@@ -2830,7 +2857,7 @@ mod tests {
             .await
             .expect("transport shutdown did not complete")
             .unwrap_err();
-        assert!(io.st().flags.is_terminated());
+        assert!(io.st().flags.is_closed());
 
         // both phases stall, yet a single shutdown timeout covers them: a
         // per-phase deadline would take twice as long
@@ -2880,7 +2907,7 @@ mod tests {
             .expect("transport shutdown did not complete")
             .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::Other);
-        assert!(io.st().flags.is_terminated());
+        assert!(io.st().flags.is_closed());
         assert!(!io.st().flags.is_terminating());
     }
 
@@ -2906,14 +2933,14 @@ mod tests {
         let st = io.st();
         assert!(lazy(|cx| io.poll_status_update(cx)).await.is_pending());
         assert!(st.dispatch_task.is_set());
-        assert!(!st.flags.is_closed());
+        assert!(!st.flags.is_peer_gone());
         assert!(!st.flags.is_stopping_filters());
 
         let ctx = IoContext::new(io.get_ref());
 
         // == init shutdown
         io.close();
-        assert!(!st.flags.is_closed());
+        assert!(!st.flags.is_peer_gone());
         assert!(st.flags.is_stopping_filters());
         // encoding is not allowed in shutting down stage
         let err = io.with_write_src(|_| 1).unwrap_err();
@@ -2931,16 +2958,16 @@ mod tests {
 
         // == terminate
         ctx.stop(None);
-        assert!(st.flags.is_closed());
+        assert!(st.flags.is_peer_gone());
         assert!(st.flags.is_terminating());
-        assert!(!st.flags.is_terminated());
+        assert!(!st.flags.is_closed());
         assert!(st.flags.is_stopping_filters());
 
         let err = io.with_write_src(|_| 1).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotConnected);
 
         ctx.stopped(None);
-        assert!(st.flags.is_terminated());
+        assert!(st.flags.is_closed());
     }
 
     struct FixedSize(usize);

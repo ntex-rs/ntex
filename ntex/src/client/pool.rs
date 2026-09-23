@@ -287,7 +287,7 @@ impl Inner {
                 let io = conn.io;
                 match io {
                     ConnectionType::H1(ref s) => {
-                        if s.is_closed() || s.is_read_eof() {
+                        if !s.is_active() || s.is_read_eof() {
                             continue;
                         }
                         let is_valid = s.with_read_dst(|buf| {
@@ -562,7 +562,7 @@ impl Acquired {
             let mut inner = inner.borrow_mut();
             inner.acquired -= 1;
             let close = close
-                || matches!(&io, ConnectionType::H1(io) if io.is_closed() || io.is_read_eof());
+                || matches!(&io, ConnectionType::H1(io) if !io.is_active() || io.is_read_eof());
             if close {
                 log::trace!(
                     "{:?}: Releasing and closing connection for {:?}",

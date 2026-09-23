@@ -772,7 +772,7 @@ mod tests {
 
             let latched = fixture.flags().contains(Flags::RD_HUP);
             let eof = fixture.io.is_read_eof();
-            let closed = fixture.io.is_closed();
+            let closed = !fixture.io.is_active();
             fixture.teardown();
 
             assert!(latched, "RD_HUP was not latched");
@@ -835,7 +835,7 @@ mod tests {
 
             fixture.fire(Notify::HUP);
 
-            let closed = fixture.io.is_closed();
+            let closed = !fixture.io.is_active();
             fixture.teardown();
 
             assert!(closed, "EPOLLERR did not stop the stream");
