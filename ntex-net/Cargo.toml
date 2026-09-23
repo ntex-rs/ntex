@@ -47,12 +47,12 @@ ntex-http = { workspace = true }
 ntex-io = { workspace = true }
 ntex-rt = { workspace = true }
 ntex-util = { workspace = true }
-polling = { workspace = true }
 
 bitflags = { workspace = true }
 cfg-if = { workspace = true }
 log = { workspace = true }
 libc = { workspace = true }
+polling = { workspace = true }
 slab = { workspace = true }
 socket2 = { workspace = true, features = ["all"] }
 scoped-tls = { workspace = true }
