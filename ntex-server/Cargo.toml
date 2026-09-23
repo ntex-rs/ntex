@@ -25,7 +25,7 @@ ntex-net = { workspace = true }
 ntex-service = { workspace = true }
 ntex-rt = { workspace = true }
 ntex-util = { workspace = true }
-ntex-polling = { workspace = true }
+polling = { workspace = true }
 
 async-channel = { workspace = true }
 atomic-waker = { workspace = true }

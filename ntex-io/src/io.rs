@@ -1061,6 +1061,11 @@ impl<F> Drop for Io<F> {
                 st.force_close_connection();
             }
             st.filter.drop_filter::<F>();
+
+            // Callbacks may hold an `IoRef` to this connection, which would keep
+            // the state alive through a reference cycle. They are dropped outside
+            // the extensions borrow, because their destructor may use the `IoRef`.
+            drop(st.extensions.take_callbacks());
         }
 
         IoManager::unregister(self.io_ref());
@@ -1166,6 +1171,27 @@ mod tests {
         server.st().flags.set_wr_backpressure();
         let item = server.recv(&BytesCodec).await.ok().unwrap().unwrap();
         assert_eq!(item, TEXT);
+    }
+
+    /// Callbacks that hold an `IoRef` must not keep the connection state alive
+    /// after the `Io` is dropped.
+    #[ntex::test]
+    async fn test_drop_releases_callbacks() {
+        struct Cb(#[allow(dead_code)] IoRef);
+        impl crate::IoCallbacks for Cb {
+            fn before_processing(&self, _: &IoRef) {}
+            fn after_processing(&self, _: &IoRef) {}
+        }
+
+        let (client, server) = IoTest::create();
+        let server = Io::new(server, SharedCfg::new("SRV"));
+        server.register_filter_callbacks(Cb(server.get_ref()));
+        let state = Rc::downgrade(&server.io_ref().0);
+
+        drop(server);
+        client.close().await;
+        sleep(Millis(50)).await;
+        assert!(state.upgrade().is_none());
     }
 
     #[ntex::test]

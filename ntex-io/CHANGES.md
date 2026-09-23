@@ -2,6 +2,9 @@
 
 ## [4.1.0] - 2026-09-22
 
+* Drop the filter callbacks together with the Io. Callbacks that held an
+  IoRef used to keep the connection state alive through a reference cycle
+
 * Add IoRef::is_active(), which reports that the connection is still in its
   active state. It becomes false as soon as any kind of close starts, whether
   it was closed locally, force-terminated, or the transport reported the peer

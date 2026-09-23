@@ -95,6 +95,12 @@ impl Extensions {
         });
     }
 
+    pub(super) fn take_callbacks(&self) -> Option<Box<dyn IoCallbacks>> {
+        let mut callbacks = None;
+        self.with_opt(|inner| callbacks = inner.callbacks.take());
+        callbacks
+    }
+
     pub(crate) fn with_callbacks<F>(&self, f: F)
     where
         F: FnOnce(&dyn IoCallbacks),

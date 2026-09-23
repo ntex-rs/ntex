@@ -5,8 +5,8 @@ use std::{collections::VecDeque, num::NonZeroUsize, time::Duration};
 #[cfg(unix)]
 use std::os::unix::net::UnixStream as OsUnixStream;
 
+use ::polling::{Event, Events, PollMode, Poller};
 use ntex_io::Io;
-use ntex_polling::{Event, Events, PollMode, Poller};
 use ntex_rt::{DriverType, Notify, PollResult, Runtime};
 use ntex_service::cfg::SharedCfg;
 use socket2::{Protocol, SockAddr, Socket, Type};

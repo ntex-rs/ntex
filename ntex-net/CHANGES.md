@@ -7,14 +7,12 @@
   canceled before cleanup, then every socket still owned by the backend is
   closed, which also breaks the `IoContext` reference cycle
 
+* Return the pages a failed write took to the write buffer in the polling and
+  tokio backends, they were dropped and stayed counted as in-flight output
+
 * Arm write interest from the out-of-band write path in the polling backend
   instead of leaving it to the write task, which retried the write only to
   have it block again
-
-* Subscribe to `EPOLLRDHUP` in the polling backend so a peer half-close is
-  observed directly. It is a level condition, so it is subscribed at most once
-  per connection and only acted upon while read interest is armed, which keeps
-  read back-pressure intact and avoids re-arming without progress
 
 * Treat `EPOLLERR` as terminal in the polling backend, it is reported whether
   or not it was requested and re-arming on it makes no progress

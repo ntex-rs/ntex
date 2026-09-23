@@ -74,7 +74,6 @@ ntex-service = "5.0.1"
 ntex-tls = "4.1.0"
 ntex-util = "4.1.0"
 
-ntex-polling = "3.11.1"
 ntex-io-uring = "0.7.120"
 ntex-httparse = "2.1.0"
 
@@ -118,6 +117,7 @@ openssl = "0.10"
 tls_openssl = { version = "0.10", package = "openssl" }
 parking_lot = "0.12.5"
 percent-encoding = "2.3"
+polling = "3.11.0"
 pin-project-lite = "0.2"
 proc-macro2 = "1.0.105"
 quote = "1.0.43"
