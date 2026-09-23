@@ -275,18 +275,23 @@ impl Handler for StreamOpsHandler {
                             }
 
                             // handle IORING_CQE_F_SOCK_NONEMPTY flag
-                            if cqueue::sock_nonempty(flags) && !(matches!(res, Ok(0) | Err(_))) {
-                                // In case of disconnect, sock_nonempty is set to true.
-                                // First completion contains data, second Recv(0)
-                                // Before receiving Recv(0), POLLHUP can be triggered
-                                // Reactor must read all recv() call before handling
-                                // disconnects
+                            //
+                            // In case of disconnect, sock_nonempty is set to true.
+                            // First completion contains data, second Recv(0)
+                            // Before receiving Recv(0), POLLHUP can be triggered
+                            // Reactor must read all recv() call before handling
+                            // disconnects
+                            let more = cqueue::sock_nonempty(flags) && !matches!(res, Ok(0) | Err(_));
+
+                            // Input is released on every completion, so that read
+                            // back-pressure and pauses stop the chain of reads
+                            let status = item.ctx.release_read_buf(buf, Poll::Ready(res));
+                            if more && status == IoTaskStatus::Io {
                                 item.flags.insert(Flags::RD_MORE);
-                                st.recv_more(id, buf, &self.inner.api);
+                                st.recv(id, false, &self.inner.api);
                             } else {
                                 item.flags.remove(Flags::RD_MORE);
-                                let status = item.ctx.release_read_buf(buf, Poll::Ready(res));
-                                if item.flags.contains(Flags::HUP_DEFERRED) {
+                                if !more && item.flags.contains(Flags::HUP_DEFERRED) {
                                     // input is drained, handle deferred disconnect
                                     item.flags.remove(Flags::HUP_DEFERRED);
                                     item.ctx.stop(None);

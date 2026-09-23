@@ -2,6 +2,12 @@
 
 ## [4.1.0] - 2026-09-23
 
+* Respect read back-pressure in the io-uring backend. While the socket had
+  more input queued, reads were chained into one growing buffer that was
+  released only once the socket drained, so buffered input was unbounded.
+  Every completed read is released now and the chain stops on pause or
+  back-pressure
+
 * Treat peer half-close as read eof in the io-uring backend, as the polling
   backend does. `POLLRDHUP` terminated the connection, so a response to a
   peer that half-closed after its request was dropped and the peer saw a
