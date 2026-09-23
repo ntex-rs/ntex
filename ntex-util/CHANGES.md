@@ -2,6 +2,8 @@
 
 ## [4.1.0] - 2026-09-21
 
+* The first `Interval` tick completes immediately, matching tokio's `interval`
+
 * Propagate `Buffer::cancel_on_shutdown()` to the created service
 
 * Improve API documentation for channels, timers, futures, and services

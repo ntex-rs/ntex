@@ -33,8 +33,10 @@ pub fn deadline<T: Into<Millis>>(dur: T) -> Deadline {
 
 /// Creates an [`Interval`] that ticks every `period`.
 ///
-/// An interval will tick indefinitely. At any time, the [`Interval`] value can
-/// be dropped. This cancels the interval.
+/// The first tick completes immediately, and each later tick completes
+/// `period` after the previous one was observed. An interval will tick
+/// indefinitely. At any time, the [`Interval`] value can be dropped. This
+/// cancels the interval.
 #[inline]
 pub fn interval<T: Into<Millis>>(period: T) -> Interval {
     Interval::new(period.into())
@@ -335,10 +337,12 @@ pub struct Interval {
 
 impl Interval {
     /// Creates an interval with the specified period.
+    ///
+    /// The first tick completes immediately.
     #[inline]
     pub fn new(period: Millis) -> Interval {
         Interval {
-            hnd: TimerHandle::new(u64::from(period.0)),
+            hnd: TimerHandle::new(0),
             period: period.0,
         }
     }
@@ -518,6 +522,11 @@ mod tests {
     async fn test_interval() {
         let mut int = interval(Millis(250));
 
+        // the first tick completes immediately
+        let time = time::Instant::now();
+        int.tick().await;
+        assert!(time.elapsed() < time::Duration::from_millis(50));
+
         let time = time::Instant::now();
         int.tick().await;
         let elapsed = time.elapsed();
@@ -540,6 +549,7 @@ mod tests {
     #[ntex::test]
     async fn test_interval_one_sec() {
         let int = interval(Millis::ONE_SEC);
+        int.tick().await;
 
         for _i in 0..3 {
             let time = time::Instant::now();
