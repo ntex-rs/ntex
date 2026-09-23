@@ -312,7 +312,8 @@ impl Flags {
         self.insert(FlagsKind::DSP_W_BACKPRESSURE);
     }
 
-    pub(crate) fn set_filter_stopping(&self) {
+    /// Starts a graceful shutdown with the filter chain.
+    pub(crate) fn enter_filters_stopping(&self) {
         if self.phase.get() == Phase::Active {
             self.phase.set(Phase::FiltersStopping(Manner::Graceful));
         }
@@ -380,7 +381,7 @@ impl Flags {
     }
 
     /// Moves on to transport shutdown, keeping how the connection ends.
-    pub(crate) fn set_filters_stopped(&self) {
+    pub(crate) fn enter_transport_shutdown(&self) {
         match self.phase.get() {
             Phase::Active => self.phase.set(Phase::TransportShutdown(Manner::Graceful)),
             Phase::FiltersStopping(m) => self.phase.set(Phase::TransportShutdown(m)),
@@ -485,25 +486,25 @@ mod tests {
         assert!(!f.is_stopping_filters());
         assert!(!f.is_stopping());
 
-        f.set_filter_stopping();
+        f.enter_filters_stopping();
         assert!(f.is_stopping_filters());
         assert!(f.is_shutting_down_filters());
         assert!(!f.is_stopping());
 
-        f.set_filters_stopped();
+        f.enter_transport_shutdown();
         assert!(f.is_stopping());
         // the earlier stage stays reported, and is no longer the current one
         assert!(f.is_stopping_filters());
         assert!(!f.is_shutting_down_filters());
 
         // an earlier stage cannot pull the connection back
-        f.set_filter_stopping();
+        f.enter_filters_stopping();
         assert!(f.is_stopping());
 
         // stopped is terminal
         f.set_stopped();
-        f.set_filter_stopping();
-        f.set_filters_stopped();
+        f.enter_filters_stopping();
+        f.enter_transport_shutdown();
         assert!(f.is_closed());
     }
 
@@ -518,8 +519,8 @@ mod tests {
     fn stopped_is_the_last_state_whichever_route_reached_it() {
         // walked the whole shutdown
         let graceful = Flags::new(false);
-        graceful.set_filter_stopping();
-        graceful.set_filters_stopped();
+        graceful.enter_filters_stopping();
+        graceful.enter_transport_shutdown();
         graceful.set_stopped();
 
         // the transport reported the connection gone while it was still active
@@ -598,11 +599,11 @@ mod tests {
                     let op = code % OPS;
                     code /= OPS;
                     match op {
-                        0 => f.set_filter_stopping(),
+                        0 => f.enter_filters_stopping(),
                         // only reachable from inside filter shutdown
                         1 => {
                             if f.is_stopping_filters() {
-                                f.set_filters_stopped();
+                                f.enter_transport_shutdown();
                             }
                         }
                         2 => {
@@ -638,7 +639,7 @@ mod tests {
             let f = Flags::new(false);
             f.begin_terminate(force);
             assert_eq!(f.phase.get(), Phase::FiltersStopping(manner));
-            f.set_filters_stopped();
+            f.enter_transport_shutdown();
             assert_eq!(f.phase.get(), Phase::TransportShutdown(manner));
             assert_eq!(f.is_force_closing(), force);
         }
@@ -658,7 +659,7 @@ mod tests {
             // stopped during transport shutdown
             let f = Flags::new(false);
             f.begin_terminate(force);
-            f.set_filters_stopped();
+            f.enter_transport_shutdown();
             f.set_stopped();
             assert_eq!(f.phase.get(), Phase::Stopped(manner));
             assert!(f.is_closed() && f.is_terminating());
@@ -667,8 +668,8 @@ mod tests {
 
         // a clean close stays clean
         let f = Flags::new(false);
-        f.set_filter_stopping();
-        f.set_filters_stopped();
+        f.enter_filters_stopping();
+        f.enter_transport_shutdown();
         f.set_stopped();
         assert_eq!(f.phase.get(), Phase::Stopped(Manner::Graceful));
         assert!(!f.is_terminating());

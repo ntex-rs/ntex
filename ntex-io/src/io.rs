@@ -139,7 +139,7 @@ impl IoState {
         self.wake_read_task();
         self.wake_write_task();
         self.wake_dispatch_task();
-        self.flags.set_filters_stopped();
+        self.flags.enter_transport_shutdown();
     }
 
     fn set_error(&self, err: Option<io::Error>) {
@@ -205,7 +205,7 @@ impl IoState {
     pub(super) fn start_shutdown(&self) {
         if self.flags.is_active() {
             log::trace!("{}: Initiate io shutdown {:?}", self.cfg.tag(), self.flags);
-            self.flags.set_filter_stopping();
+            self.flags.enter_filters_stopping();
             self.wake_read_task();
             self.wake_write_task();
         }
@@ -2115,7 +2115,7 @@ mod tests {
         let page = ctx.with_write_dst(BytePages::take).unwrap();
 
         // enter the transport shutdown phase
-        io.st().flags.set_filter_stopping();
+        io.st().flags.enter_filters_stopping();
         io.st().filters_stopped();
         assert!(io.st().flags.is_stopping());
 
@@ -2240,7 +2240,7 @@ mod tests {
         let io = Io::from(DormantTransport);
         let ctx = IoContext::new(io.get_ref());
         let waiter = io.on_disconnect();
-        io.st().flags.set_filters_stopped();
+        io.st().flags.enter_transport_shutdown();
 
         assert!(lazy(|cx| io.poll_shutdown(cx)).await.is_pending());
         assert!(lazy(|cx| waiter.poll_ready(cx)).await.is_pending());
@@ -2296,8 +2296,8 @@ mod tests {
 
         // enter the transport shutdown phase with output still queued
         io.encode_slice(b"tail").unwrap();
-        io.st().flags.set_filter_stopping();
-        io.st().flags.set_filters_stopped();
+        io.st().flags.enter_filters_stopping();
+        io.st().flags.enter_transport_shutdown();
         assert_eq!(io.st().buffer.write_buf_size(), 4);
 
         // the write task is asked to drain it
@@ -2626,8 +2626,8 @@ mod tests {
         io.get_ref().with_write_dst(|b| b.extend_from_slice(b"out"));
 
         // enter the transport shutdown phase
-        io.st().flags.set_filter_stopping();
-        io.st().flags.set_filters_stopped();
+        io.st().flags.enter_filters_stopping();
+        io.st().flags.enter_transport_shutdown();
         io.st().wake_read_task();
 
         // the filters are done, so input is left in the transport; it is
