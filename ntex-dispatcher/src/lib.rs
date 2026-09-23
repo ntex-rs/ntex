@@ -89,10 +89,83 @@ bitflags::bitflags! {
         const READY_ERR     = 0b000_0001;
         const IO_ERR        = 0b000_0010;
         const KA_ENABLED    = 0b000_0100;
-        const KA_TIMEOUT    = 0b000_1000;
-        const READ_TIMEOUT  = 0b001_0000;
-        const IDLE          = 0b010_0000;
+        const IDLE          = 0b000_1000;
     }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct ReadState {
+    phase: ReadPhase,
+    timer: ReadTimer,
+}
+
+/// Progress of frame decoding on the connection.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum ReadPhase {
+    /// No partial frame is buffered and at least one frame has been decoded.
+    Idle,
+    /// The connection has not decoded its first frame yet.
+    FirstFrame(ReadProgress),
+    /// A later frame has started but is not complete.
+    ReadingFrame(ReadProgress),
+}
+
+/// The purpose of the currently armed I/O timer.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum ReadTimer {
+    Stopped,
+    KeepAlive,
+    FrameRead,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct ReadProgress {
+    /// Application read buffer length at the last decode attempt.
+    remains: u32,
+    /// Bytes received during the current rate period, including bytes the
+    /// codec consumed without producing a frame.
+    consumed: u32,
+    /// Remaining cumulative frame-read budget.
+    max_timeout: Seconds,
+}
+
+impl ReadState {
+    /// Starts frame read-rate tracking for the first frame when it is
+    /// configured, so a new connection must start sending data in time.
+    fn new(io: &IoBoxed) -> Self {
+        if let Some(params) = io.cfg().frame_read_rate() {
+            io.start_timer(params.timeout);
+            ReadState {
+                phase: ReadPhase::FirstFrame(ReadProgress {
+                    max_timeout: params.max_timeout,
+                    ..ReadProgress::EMPTY
+                }),
+                timer: ReadTimer::FrameRead,
+            }
+        } else {
+            ReadState {
+                phase: ReadPhase::FirstFrame(ReadProgress::EMPTY),
+                timer: ReadTimer::Stopped,
+            }
+        }
+    }
+}
+
+impl ReadPhase {
+    fn progress(&mut self) -> Option<&mut ReadProgress> {
+        match self {
+            ReadPhase::Idle => None,
+            ReadPhase::FirstFrame(p) | ReadPhase::ReadingFrame(p) => Some(p),
+        }
+    }
+}
+
+impl ReadProgress {
+    const EMPTY: ReadProgress = ReadProgress {
+        remains: 0,
+        consumed: 0,
+        max_timeout: Seconds::ZERO,
+    };
 }
 
 struct DispatcherInner<U, Err>
@@ -103,9 +176,7 @@ where
     error: Option<Err>,
     shared: Rc<DispatcherShared<U, Err>>,
     response: Option<PipelineCall<DispatchItem<U>, Option<Response<U>>, Err>>,
-    read_remains: u32,
-    read_remains_prev: u32,
-    read_max_timeout: Seconds,
+    read: ReadState,
 }
 
 pub(crate) struct DispatcherShared<U, Err>
@@ -185,12 +256,10 @@ where
 
         Dispatcher {
             inner: DispatcherInner {
+                read: ReadState::new(&shared.io),
                 shared,
                 response: None,
                 error: None,
-                read_remains: 0,
-                read_remains_prev: 0,
-                read_max_timeout: Seconds::ZERO,
                 st: DispatcherState::Processing,
             },
         }
@@ -498,8 +567,8 @@ where
                 );
 
                 // remove all timers
-                self.shared
-                    .remove_flags(Flags::KA_TIMEOUT | Flags::READ_TIMEOUT | Flags::IDLE);
+                self.shared.remove_flags(Flags::IDLE);
+                self.read.timer = ReadTimer::Stopped;
                 self.shared.io.stop_timer();
 
                 match ready!(self.shared.io.poll_read_pause(cx)) {
@@ -553,23 +622,36 @@ where
     }
 
     fn update_timer(&mut self, decoded: &Decoded<<U as Decoder>::Item>) {
+        let remains = decoded.remains as u32;
+
         // got parsed frame
         if decoded.item.is_some() {
-            self.read_remains = 0;
-            self.shared
-                .remove_flags(Flags::KA_TIMEOUT | Flags::READ_TIMEOUT | Flags::IDLE);
-        } else if self.shared.contains(Flags::READ_TIMEOUT) {
+            self.read.phase = ReadPhase::Idle;
+            if self.read.timer == ReadTimer::FrameRead {
+                // the frame is complete, the read timer must not fire as keep-alive
+                self.shared.io.stop_timer();
+            }
+            self.read.timer = ReadTimer::Stopped;
+            self.shared.remove_flags(Flags::IDLE);
+        } else if self.read.timer == ReadTimer::FrameRead {
             // received new data but not enough for parsing complete frame
-            self.read_remains = decoded.remains as u32;
-        } else if self.read_remains == 0 && decoded.remains == 0 {
+            if let Some(p) = self.read.phase.progress() {
+                let received = (remains + decoded.consumed as u32).saturating_sub(p.remains);
+                p.consumed = p.consumed.saturating_add(received);
+                p.remains = remains;
+            }
+        } else if remains == 0
+            && (!matches!(self.read.phase, ReadPhase::FirstFrame(_))
+                || self.shared.io.cfg().frame_read_rate().is_none())
+        {
             // no new data, start keep-alive timer
-            if self.shared.contains(Flags::KA_ENABLED) && !self.shared.contains(Flags::KA_TIMEOUT) {
+            if self.shared.contains(Flags::KA_ENABLED) && self.read.timer != ReadTimer::KeepAlive {
                 log::trace!(
                     "{}: Start keep-alive timer {:?}",
                     self.shared.io.tag(),
                     self.shared.io.cfg().keepalive_timeout()
                 );
-                self.shared.insert_flags(Flags::KA_TIMEOUT);
+                self.read.timer = ReadTimer::KeepAlive;
                 self.shared
                     .io
                     .start_timer(self.shared.io.cfg().keepalive_timeout());
@@ -577,32 +659,41 @@ where
         } else if let Some(params) = self.shared.io.cfg().frame_read_rate() {
             // we got new data but not enough to parse single frame
             // start read timer
-            self.shared.insert_flags(Flags::READ_TIMEOUT);
-
-            self.read_remains = decoded.remains as u32;
-            self.read_remains_prev = 0;
-            self.read_max_timeout = params.max_timeout;
+            let progress = ReadProgress {
+                remains,
+                consumed: remains + decoded.consumed as u32,
+                max_timeout: params.max_timeout,
+            };
+            self.read.phase = match self.read.phase {
+                ReadPhase::FirstFrame(_) => ReadPhase::FirstFrame(progress),
+                ReadPhase::Idle | ReadPhase::ReadingFrame(_) => ReadPhase::ReadingFrame(progress),
+            };
+            self.read.timer = ReadTimer::FrameRead;
             self.shared.io.start_timer(params.timeout);
         }
     }
 
     fn handle_timeout(&mut self) -> Result<(), Reason<U>> {
-        // check read timer
-        if self.shared.contains(Flags::READ_TIMEOUT) {
-            if let Some(params) = self.shared.io.cfg().frame_read_rate() {
-                let total = self.read_remains - self.read_remains_prev;
+        match self.read.timer {
+            // check read timer
+            ReadTimer::FrameRead => {
+                let Some(params) = self.shared.io.cfg().frame_read_rate() else {
+                    return Ok(());
+                };
+                let Some(p) = self.read.phase.progress() else {
+                    return Ok(());
+                };
 
                 // read rate, start timer for next period
-                if total > params.rate {
-                    self.read_remains_prev = self.read_remains;
-                    self.read_remains = 0;
+                if p.consumed > params.rate {
+                    let total = p.consumed;
+                    p.consumed = 0;
 
                     if !params.max_timeout.is_zero() {
-                        self.read_max_timeout =
-                            Seconds(self.read_max_timeout.0.saturating_sub(params.timeout.0));
+                        p.max_timeout = Seconds(p.max_timeout.0.saturating_sub(params.timeout.0));
                     }
 
-                    if params.max_timeout.is_zero() || !self.read_max_timeout.is_zero() {
+                    if params.max_timeout.is_zero() || !p.max_timeout.is_zero() {
                         log::trace!(
                             "{}: Frame read rate {:?}, extend timer",
                             self.shared.io.tag(),
@@ -617,17 +708,22 @@ where
                     );
                 }
                 Err(Reason::ReadTimeout)
-            } else {
-                Ok(())
             }
-        } else if self.shared.contains(Flags::KA_TIMEOUT | Flags::IDLE) {
-            log::trace!(
-                "{}: Keep-alive error, stopping dispatcher",
-                self.shared.io.tag()
-            );
-            Err(Reason::KeepAliveTimeout)
-        } else {
-            Ok(())
+            ReadTimer::KeepAlive => {
+                log::trace!(
+                    "{}: Keep-alive error, stopping dispatcher",
+                    self.shared.io.tag()
+                );
+                Err(Reason::KeepAliveTimeout)
+            }
+            ReadTimer::Stopped if self.shared.contains(Flags::IDLE) => {
+                log::trace!(
+                    "{}: Idle timeout, stopping dispatcher",
+                    self.shared.io.tag()
+                );
+                Err(Reason::KeepAliveTimeout)
+            }
+            ReadTimer::Stopped => Ok(()),
         }
     }
 }
@@ -763,13 +859,11 @@ mod tests {
             (
                 Dispatcher {
                     inner: DispatcherInner {
+                        read: ReadState::new(&shared.io),
                         shared,
                         error: None,
                         st: DispatcherState::Processing,
                         response: None,
-                        read_remains: 0,
-                        read_remains_prev: 0,
-                        read_max_timeout: Seconds::ZERO,
                     },
                 },
                 inner,
@@ -811,7 +905,7 @@ mod tests {
         sleep(Millis(75)).await;
         assert!(client.is_server_dropped());
 
-        assert!(format!("{:?}", super::Flags::KA_TIMEOUT.clone()).contains("KA_TIMEOUT"));
+        assert!(format!("{:?}", super::Flags::IDLE.clone()).contains("IDLE"));
     }
 
     #[ntex::test]
@@ -1529,5 +1623,221 @@ mod tests {
         client.close().await;
         let _ = rx.await;
         assert_eq!(cnt.get(), 2);
+    }
+
+    /// A completed frame stops the read timer, so it cannot close an idle
+    /// connection when keep-alive is disabled.
+    #[ntex::test]
+    async fn read_timer_stopped_after_frame() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let data = Arc::new(Mutex::new(RefCell::new(Vec::new())));
+        let data2 = data.clone();
+
+        let io = Io::new(
+            server,
+            SharedCfg::new("TEST").add(
+                IoConfig::new()
+                    .set_keepalive_timeout(Seconds::ZERO)
+                    .set_frame_read_rate(Seconds(1), Seconds(5), 2),
+            ),
+        );
+        let disp = Dispatcher::new(
+            io,
+            BCodec(8),
+            Pipeline::new(
+                (),
+                ntex_service::fn_service(move |msg: DispatchItem<BCodec>| {
+                    let data = data2.clone();
+                    async move {
+                        match msg {
+                            DispatchItem::Item(bytes) => {
+                                data.lock().unwrap().borrow_mut().push(0);
+                                return Ok::<_, ()>(Some(bytes));
+                            }
+                            DispatchItem::Stop(_) => data.lock().unwrap().borrow_mut().push(1),
+                            DispatchItem::Control(_) => (),
+                        }
+                        Ok(None)
+                    }
+                }),
+            ),
+        );
+        spawn(async move {
+            let _ = disp.await;
+        });
+
+        client.write("1234");
+        sleep(Millis(200)).await;
+        client.write("5678");
+        let buf = client.read().await.unwrap();
+        assert_eq!(buf, Bytes::from_static(b"12345678"));
+
+        sleep(Millis(2500)).await;
+        assert!(!client.is_closed());
+        assert_eq!(&data.lock().unwrap().borrow()[..], &[0]);
+    }
+
+    /// Drops buffered bytes up to and including `#`; frames are 8 bytes.
+    struct DropCodec;
+
+    impl Encoder for DropCodec {
+        type Item = Bytes;
+        type Error = io::Error;
+
+        fn encodev(&self, item: Bytes, dst: &mut BytePages) -> Result<(), Self::Error> {
+            dst.append(item);
+            Ok(())
+        }
+    }
+
+    impl Decoder for DropCodec {
+        type Item = Bytes;
+        type Error = io::Error;
+
+        fn decode(&self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+            if let Some(n) = src.iter().position(|b| *b == b'#') {
+                let _ = src.split_to(n + 1);
+            }
+            if src.len() < 8 {
+                Ok(None)
+            } else {
+                Ok(Some(src.split_to(8)))
+            }
+        }
+    }
+
+    /// Bytes consumed by the codec without producing a frame count as read
+    /// progress.
+    #[ntex::test]
+    async fn read_rate_counts_consumed_bytes() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let data = Arc::new(Mutex::new(RefCell::new(Vec::new())));
+        let data2 = data.clone();
+
+        let io = Io::new(
+            server,
+            SharedCfg::new("TEST").add(
+                IoConfig::new()
+                    .set_keepalive_timeout(Seconds::ZERO)
+                    .set_frame_read_rate(Seconds(1), Seconds(10), 2),
+            ),
+        );
+        let disp = Dispatcher::new(
+            io,
+            DropCodec,
+            Pipeline::new(
+                (),
+                ntex_service::fn_service(move |msg: DispatchItem<DropCodec>| {
+                    let data = data2.clone();
+                    async move {
+                        if let DispatchItem::Stop(Reason::ReadTimeout) = msg {
+                            data.lock().unwrap().borrow_mut().push(1);
+                        }
+                        Ok::<_, ()>(None)
+                    }
+                }),
+            ),
+        );
+        spawn(async move {
+            let _ = disp.await;
+        });
+
+        client.write("123");
+        for _ in 0..7 {
+            sleep(Millis(700)).await;
+            client.write("abc#");
+        }
+        assert!(!client.is_closed());
+        assert!(data.lock().unwrap().borrow().is_empty());
+
+        // no progress, the frame read timer expires
+        sleep(Millis(4500)).await;
+        assert!(client.is_closed());
+        assert_eq!(&data.lock().unwrap().borrow()[..], &[1]);
+    }
+
+    fn first_frame_dispatcher(
+        server: IoTest,
+        data: Arc<Mutex<RefCell<Vec<usize>>>>,
+    ) -> Dispatcher<BCodec, ()> {
+        let io = Io::new(
+            server,
+            SharedCfg::new("TEST").add(
+                IoConfig::new()
+                    .set_keepalive_timeout(Seconds(30))
+                    .set_frame_read_rate(Seconds(1), Seconds(2), 2),
+            ),
+        );
+        Dispatcher::new(
+            io,
+            BCodec(8),
+            Pipeline::new(
+                (),
+                ntex_service::fn_service(move |msg: DispatchItem<BCodec>| {
+                    let data = data.clone();
+                    async move {
+                        match msg {
+                            DispatchItem::Item(bytes) => {
+                                data.lock().unwrap().borrow_mut().push(0);
+                                return Ok::<_, ()>(Some(bytes));
+                            }
+                            DispatchItem::Stop(Reason::ReadTimeout) => {
+                                data.lock().unwrap().borrow_mut().push(1);
+                            }
+                            DispatchItem::Stop(Reason::KeepAliveTimeout) => {
+                                data.lock().unwrap().borrow_mut().push(2);
+                            }
+                            _ => (),
+                        }
+                        Ok(None)
+                    }
+                }),
+            ),
+        )
+    }
+
+    /// Frame read-rate tracking starts when the connection arrives, so a
+    /// silent peer is closed before the keep-alive timeout.
+    #[ntex::test]
+    async fn first_frame_read_rate_silent_peer() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let data = Arc::new(Mutex::new(RefCell::new(Vec::new())));
+        let disp = first_frame_dispatcher(server, data.clone());
+        spawn(async move {
+            let _ = disp.await;
+        });
+
+        sleep(Millis(4500)).await;
+        assert!(client.is_closed());
+        assert_eq!(&data.lock().unwrap().borrow()[..], &[1]);
+    }
+
+    /// Completing the first frame stops frame read-rate tracking, and the
+    /// keep-alive timer governs the idle connection.
+    #[ntex::test]
+    async fn first_frame_read_rate_then_keepalive() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let data = Arc::new(Mutex::new(RefCell::new(Vec::new())));
+        let disp = first_frame_dispatcher(server, data.clone());
+        spawn(async move {
+            let _ = disp.await;
+        });
+
+        sleep(Millis(200)).await;
+        client.write("12345678");
+        let buf = client.read().await.unwrap();
+        assert_eq!(buf, Bytes::from_static(b"12345678"));
+
+        sleep(Millis(4500)).await;
+        assert!(!client.is_closed());
+        assert_eq!(&data.lock().unwrap().borrow()[..], &[0]);
     }
 }

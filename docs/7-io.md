@@ -246,7 +246,9 @@ These settings are used by different parts of the stack:
   an outgoing connection.
 - The keep-alive timeout and frame read-rate limits are interpreted by
   protocol dispatchers. A frame read-rate limit protects a decoder from peers
-  that send one incomplete frame too slowly.
+  that send one incomplete frame too slowly. It also applies to the first
+  frame of a new connection, so a peer that connects and stays silent is
+  closed once the limit expires.
 - The graceful-shutdown timeout bounds both phases of shutdown together: the
   filter shutdown and the transport drain of pending output. It cannot be
   disabled; a zero timeout is rejected.

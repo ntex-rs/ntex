@@ -259,7 +259,8 @@ impl IoConfig {
 
     /// Sets read-rate parameters for a single decoded frame.
     ///
-    /// Rate tracking starts when a decoder returns no complete item while
+    /// Rate tracking starts when a new connection arrives, for its first
+    /// frame, and later whenever a decoder returns no complete item while
     /// leaving partial frame data in the read buffer. The dispatcher then
     /// allows one `timeout` period for additional data to arrive.
     ///
@@ -283,8 +284,9 @@ impl IoConfig {
     /// `max_timeout` and `rate`. With a non-zero timeout and `rate` set to zero,
     /// any positive buffered-byte progress permits another period.
     ///
-    /// This setting applies only after a frame has started. Idle connections
-    /// with no partial frame are governed separately by
+    /// A new connection must therefore deliver its first frame within these
+    /// limits. After a frame has been decoded, idle connections with no
+    /// partial frame are governed separately by
     /// [`set_keepalive_timeout`](Self::set_keepalive_timeout).
     ///
     /// Frame read-rate enforcement is disabled by default.

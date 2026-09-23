@@ -2,6 +2,12 @@
 
 ## [4.1.0] - 2026-09-21
 
+* Stop the frame read timer when a frame completes, so it cannot close the connection as a keep-alive timeout
+
+* Count bytes consumed by the codec as frame read progress; a shrinking read buffer no longer underflows the rate check
+
+* Start frame read-rate tracking for the first frame when the connection arrives
+
 * Transport failures and force-closes cancel the dispatcher-held pending response future
 
 ## [4.0.1] - 2026-09-18
