@@ -108,6 +108,11 @@ impl IoRef {
     /// This becomes `true` once unwritten data in the transport-facing write
     /// buffer reaches the configured high watermark. Draining enough of the
     /// buffer releases it.
+    ///
+    /// Nothing enforces the signal: encoding continues to succeed while it is
+    /// set. Producers that are not driven by a dispatcher should check this
+    /// before encoding more, or the write buffer grows without bound. See
+    /// [`encode`](Self::encode).
     pub fn is_wr_backpressure(&self) -> bool {
         self.0.flags.is_wr_backpressure()
     }
@@ -152,6 +157,18 @@ impl IoRef {
     /// [`encode_slice`](Self::encode_slice) or
     /// [`encode_bytes`](Self::encode_bytes) when they must be observed at the
     /// call site.
+    ///
+    /// # Back-pressure is advisory
+    ///
+    /// Encoding never blocks and never refuses. Once buffered output reaches
+    /// the configured high watermark this arms write back-pressure and wakes
+    /// the dispatch task, but the item is still buffered and `Ok` is still
+    /// returned. A caller that keeps encoding without consulting
+    /// [`is_wr_backpressure`](Self::is_wr_backpressure), or awaiting
+    /// [`Io::poll_status_update`](crate::Io::poll_status_update) or
+    /// [`Io::poll_flush`](crate::Io::poll_flush), will grow the write buffer
+    /// without bound, because a slow peer cannot slow the producer down on its
+    /// own. Honouring the signal is the caller's responsibility.
     pub fn encode<U>(&self, item: U::Item, codec: &U) -> Result<(), <U as Encoder>::Error>
     where
         U: Encoder,
@@ -165,6 +182,8 @@ impl IoRef {
     ///
     /// If this triggers an eager backend write, any transport or filter error
     /// from that write is returned immediately.
+    ///
+    /// Write back-pressure is advisory here too; see [`encode`](Self::encode).
     pub fn encode_slice(&self, src: &[u8]) -> io::Result<()> {
         self.with_write_src(|buf| buf.extend_from_slice(src))
     }
@@ -174,6 +193,8 @@ impl IoRef {
     ///
     /// If this triggers an eager backend write, any transport or filter error
     /// from that write is returned immediately.
+    ///
+    /// Write back-pressure is advisory here too; see [`encode`](Self::encode).
     pub fn encode_bytes<B>(&self, src: B) -> io::Result<()>
     where
         BytePage: From<B>,
