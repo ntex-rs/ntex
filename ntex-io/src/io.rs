@@ -755,13 +755,13 @@ impl<F> Io<F> {
                 Poll::Ready(Ok(None))
             }
         } else if st.flags.is_read_eof() {
-            let notified = st.flags.check_read_notifed();
+            let notified = st.flags.take_read_notified();
             if notified && st.flags.is_read_ready() {
                 Poll::Ready(Ok(Some(())))
             } else {
                 Poll::Ready(Ok(None))
             }
-        } else if st.flags.check_read_notifed() {
+        } else if st.flags.take_read_notified() {
             Poll::Ready(Ok(Some(())))
         } else {
             st.flags.set_read_notify();
@@ -2452,6 +2452,45 @@ mod tests {
         let err = io.read_exact(&mut [0]).await.unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::ConnectionReset);
         assert_eq!(err.to_string(), "connection reset");
+    }
+
+    /// Reads pause under back-pressure, so a filter shutdown that waits for
+    /// input cannot complete while it holds, even once the dispatcher has
+    /// taken the buffered input. Readiness must not ask for reads that would
+    /// pause: a readiness based transport would then never re-arm read
+    /// interest.
+    #[ntex::test]
+    async fn filter_shutdown_is_blocked_by_read_backpressure() {
+        #[derive(Debug)]
+        struct PendingShutdown;
+
+        impl FilterLayer for PendingShutdown {
+            fn process_read_buf(&self, _: &FilterBuf<'_>) -> io::Result<()> {
+                Ok(())
+            }
+
+            fn process_write_buf(&self, _: &FilterBuf<'_>) -> io::Result<()> {
+                Ok(())
+            }
+
+            fn shutdown(&self, _: &FilterBuf<'_>) -> io::Result<Poll<()>> {
+                Ok(Poll::Pending)
+            }
+        }
+
+        let (_client, server) = IoTest::create();
+        let io = Io::new(server, SharedCfg::new("SRV")).add_filter(PendingShutdown);
+
+        // The dispatcher decoded part of the input: read readiness is cleared,
+        // but the buffer is still above the back-pressure release mark.
+        io.st().flags.set_read_ready_and_backpressure();
+        io.st().flags.unset_read_ready();
+        // shutdown clears the read pause and keeps the back-pressure
+        assert!(lazy(|cx| io.poll_shutdown(cx)).await.is_pending());
+
+        let ctx = IoContext::new(io.get_ref());
+        assert_eq!(lazy(|cx| ctx.poll_read_ready(cx)).await, Poll::Pending);
+        assert!(io.st().flags.is_stopping());
     }
 
     #[ntex::test]

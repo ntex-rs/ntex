@@ -2,6 +2,11 @@
 
 ## [4.1.0] - 2026-09-22
 
+* Read back-pressure blocks filter shutdown even after the dispatcher has
+  taken the buffered input. Readiness used to ask for reads that would pause,
+  so readiness based transports never re-armed read interest and the shutdown
+  waited for the shutdown timeout
+
 * Drop the filter callbacks together with the Io. Callbacks that held an
   IoRef used to keep the connection state alive through a reference cycle
 

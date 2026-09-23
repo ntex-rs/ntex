@@ -76,8 +76,9 @@ bitflags::bitflags! {
         /// transport read side reached clean EOF
         const RD_EOF              = 1 << 3;
 
-        /// read any data and notify dispatcher
+        /// a `read_notify()` waiter wants to hear about the next transport read
         const RD_NOTIFY           = 1 << 4;
+        /// a transport read completed while `RD_NOTIFY` was set
         const RD_NOTIFIED         = 1 << 5;
 
         /// new data is available in read buffer
@@ -292,10 +293,6 @@ impl Flags {
         self.intersects(FlagsKind::RD_PAUSED | FlagsKind::RD_BACKPRESSURE)
     }
 
-    pub(crate) fn is_read_ready_and_backpressure(&self) -> bool {
-        self.contains(FlagsKind::BUF_R_READY | FlagsKind::RD_BACKPRESSURE)
-    }
-
     pub(crate) fn set_read_paused(&self) {
         self.insert(FlagsKind::RD_PAUSED);
     }
@@ -364,7 +361,7 @@ impl Flags {
         self.insert(FlagsKind::RD_NOTIFY);
     }
 
-    pub(crate) fn set_read_notifed(&self) {
+    pub(crate) fn set_read_notified(&self) {
         self.insert(FlagsKind::RD_NOTIFIED);
     }
 
@@ -420,8 +417,10 @@ impl Flags {
         self.remove(FlagsKind::RD_PAUSED);
     }
 
-    /// Checks `RD_NOTIFY` and unsets
-    pub(crate) fn check_read_notifed(&self) -> bool {
+    /// Reports whether a transport read completed for the `read_notify()`
+    /// waiter, and ends that wait by clearing both `RD_NOTIFY` and
+    /// `RD_NOTIFIED`.
+    pub(crate) fn take_read_notified(&self) -> bool {
         if self.contains(FlagsKind::RD_NOTIFIED) {
             self.remove(FlagsKind::RD_NOTIFY | FlagsKind::RD_NOTIFIED);
             true

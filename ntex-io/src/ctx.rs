@@ -290,7 +290,7 @@ impl IoContext {
                         // If the "notify" flag is set, we must wake the
                         // dispatcher task whenever data is read from the source.
                         st.wake_dispatch_task();
-                        st.flags.set_read_notifed();
+                        st.flags.set_read_notified();
                     }
 
                     // A filter may write data while processing reads, for
@@ -440,8 +440,8 @@ impl IoContext {
     /// reached the transport, and the transport shutdown phase begins. It is
     /// also ended early when the filters cannot finish: after a clean read EOF,
     /// because no further input can arrive, which is a normal close rather than
-    /// an error; when buffered input is left unconsumed, which is reported as a
-    /// blocked shutdown; and when the shutdown timeout elapses. An I/O error
+    /// an error; when reads are paused or back-pressured, which is reported as
+    /// a blocked shutdown; and when the shutdown timeout elapses. An I/O error
     /// terminates the connection instead.
     ///
     /// The deadline is kept once it has expired so that
@@ -490,10 +490,12 @@ impl IoContext {
         let eof = !ready && st.flags.is_read_eof();
 
         // If the read buffer is not consumed it is unlikely that the filter
-        // will ever complete its shutdown.
-        let blocked = !ready
-            && !eof
-            && (st.flags.is_read_paused() || st.flags.is_read_ready_and_backpressure());
+        // will ever complete its shutdown. Back-pressure counts on its own,
+        // even once the dispatcher has taken the buffered input: reads pause
+        // under it, so the transport would neither read the input the filter
+        // waits for nor arm read interest for it.
+        let blocked =
+            !ready && !eof && (st.flags.is_read_paused() || st.flags.is_rd_backpressure());
 
         // The filter shutdown cannot complete. Move on to the transport
         // shutdown phase, which drains whatever output has been produced so far
