@@ -2,6 +2,10 @@
 
 ## [4.1.0] - 2026-09-23
 
+* Arm write interest from the out-of-band write path in the polling backend
+  instead of leaving it to the write task, which retried the write only to
+  have it block again
+
 * Subscribe to `EPOLLRDHUP` in the polling backend so a peer half-close is
   observed directly. It is a level condition, so it is subscribed at most once
   per connection and only acted upon while read interest is armed, which keeps

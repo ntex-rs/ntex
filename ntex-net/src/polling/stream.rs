@@ -141,7 +141,8 @@ impl StreamOpsHandler {
                 return;
             }
             let io = &mut streams[id];
-            let mut renew = Event::new(0, false, false).with_interrupt();
+            let mut renew_rd = false;
+            let mut renew_wr = false;
             #[cfg(feature = "trace")]
             log::trace!("{}: {:?}-Evt {ev:?} {:?}", io.tag(), io.fd(), io.flags);
 
@@ -155,48 +156,39 @@ impl StreamOpsHandler {
             let read_hup = ev.contains(Notify::RD_HUP) && io.flags.contains(Flags::RD);
 
             if ev.contains(Notify::READABLE) || read_hup {
-                // A single read per notification, unlike the other backends
-                // which loop until the io layer stops them. `BufConfig::resize`
-                // hands the read a chunk of at least `high` bytes, and read
-                // back-pressure engages at `high`, so one read can already
-                // reach the watermark; a second one would return `Pause`.
                 if io.read() == IoTaskStatus::Io {
-                    renew.readable = true;
+                    renew_rd = true;
                     io.flags.insert(Flags::RD);
                 } else {
                     io.flags.remove(Flags::RD);
                 }
             } else if io.flags.contains(Flags::RD) {
-                renew.readable = true;
+                renew_rd = true;
             }
 
             if ev.contains(Notify::WRITABLE) {
                 if io.write() == IoTaskStatus::Io {
-                    renew.writable = true;
+                    renew_wr = true;
                     io.flags.insert(Flags::WR);
                 } else {
                     io.flags.remove(Flags::WR);
                 }
             } else if io.flags.contains(Flags::WR) {
-                renew.writable = true;
+                renew_wr = true;
             }
 
             if ev.contains(Notify::HUP) {
                 io.ctx.stop(None);
             } else {
-                // `RDHUP` is a level condition, so it is subscribed at most
-                // once; re-arming it after it fired would report immediately
-                // and spin without progress.
-                renew.set_rd_interrupt(!io.flags.contains(Flags::RD_HUP));
                 #[cfg(feature = "trace")]
                 log::trace!(
-                    "{}: {:?}-Renew rd({:?}) wr({:?})",
+                    "{}: {:?}-Renew rd({renew_rd:?}) wr({renew_wr:?})",
                     io.tag(),
-                    io.fd(),
-                    renew.readable,
-                    renew.writable
+                    io.fd()
                 );
-                self.inner.api.modify(io.fd(), id as u32, renew);
+                self.inner
+                    .api
+                    .modify(io.fd(), id as u32, io.renew_event(renew_rd, renew_wr));
             }
         });
     }
@@ -260,7 +252,7 @@ impl StreamOpsInner {
     fn write_stream(&self, id: u32) {
         if let Some(mut streams) = self.streams.take() {
             if let Some(item) = streams.get_mut(id as usize) {
-                item.write();
+                self.write_item(id, item);
             }
             self.streams.set(Some(streams));
         } else {
@@ -269,6 +261,25 @@ impl StreamOpsInner {
             // Delay the write until the streams slab is released,
             // dropping it would stall the connection.
             self.delayed_feed.push(IdType::Write(id));
+        }
+    }
+
+    /// Writes buffered output and arms write interest if any is left.
+    ///
+    /// This runs outside the write task, on the stack of whoever filled the
+    /// write buffer. Arming here rather than leaving it to the write task
+    /// saves a write syscall: `interest()` finds `Flags::WR` already set and
+    /// returns without retrying the write.
+    ///
+    /// Interest is only ever added. Output that drained completely leaves the
+    /// arming in place and costs at most one spurious writable event, which
+    /// `handle_event` clears; disarming here would cost a syscall on the
+    /// common path instead.
+    fn write_item(&self, id: u32, item: &mut StreamItem) {
+        if item.write() == IoTaskStatus::Io && !item.flags.contains(Flags::WR) {
+            item.flags.insert(Flags::WR);
+            let event = item.renew_event(item.flags.contains(Flags::RD), true);
+            self.api.modify(item.fd(), id, event);
         }
     }
 
@@ -326,7 +337,7 @@ impl StreamOpsInner {
                     IdType::Weak(id) => StreamOpsInner::drop_weak_stream(id, &mut streams),
                     IdType::Write(id) => {
                         if let Some(item) = streams.get_mut(id as usize) {
-                            item.write();
+                            self.write_item(id, item);
                         }
                     }
                 }
@@ -339,7 +350,8 @@ impl StreamOpsInner {
     fn interest(&self, id: u32, rd: bool, wr: bool) {
         self.with(|streams| {
             let io = &mut streams[id as usize];
-            let mut event = Event::new(0, false, false).with_interrupt();
+            let mut event_rd = false;
+            let mut event_wr = false;
             #[cfg(feature = "trace")]
             log::trace!(
                 "{}: {:?}-Mod rd({rd:?}) wr({wr:?}) {:?}",
@@ -351,10 +363,10 @@ impl StreamOpsInner {
             let mut want_update_read = true;
             if rd {
                 if io.flags.contains(Flags::RD) {
-                    event.readable = true;
+                    event_rd = true;
                     want_update_read = false;
                 } else if io.read() == IoTaskStatus::Io {
-                    event.readable = true;
+                    event_rd = true;
                     io.flags.insert(Flags::RD);
                 } else {
                     want_update_read = false;
@@ -368,10 +380,10 @@ impl StreamOpsInner {
             let mut want_update_write = true;
             if wr {
                 if io.flags.contains(Flags::WR) {
-                    event.writable = true;
+                    event_wr = true;
                     want_update_write = false;
                 } else if io.write() == IoTaskStatus::Io {
-                    event.writable = true;
+                    event_wr = true;
                     io.flags.insert(Flags::WR);
                 } else {
                     want_update_write = false;
@@ -383,18 +395,14 @@ impl StreamOpsInner {
             }
 
             if want_update_read || want_update_write {
-                if !io.flags.contains(Flags::RD_HUP) {
-                    event.set_rd_interrupt(true);
-                }
                 #[cfg(feature = "trace")]
                 log::trace!(
-                    "{}: {:?}-Upd rd({:?}) wr({:?})",
+                    "{}: {:?}-Upd rd({event_rd:?}) wr({event_wr:?})",
                     io.tag(),
-                    io.fd(),
-                    event.readable,
-                    event.writable
+                    io.fd()
                 );
-                self.api.modify(io.fd(), id, event);
+                self.api
+                    .modify(io.fd(), id, io.renew_event(event_rd, event_wr));
             }
         });
     }
@@ -474,6 +482,19 @@ impl Drop for WeakStreamCtl {
 }
 
 impl StreamItem {
+    /// Builds the event to arm poll interest with.
+    ///
+    /// `modify` replaces the whole interest set, so both directions have to be
+    /// restated on every update. `RDHUP` is a level condition and is therefore
+    /// subscribed at most once per connection: re-arming it after it has fired
+    /// would report immediately and spin without making progress, so every
+    /// site that arms interest must go through here.
+    fn renew_event(&self, readable: bool, writable: bool) -> Event {
+        let mut ev = Event::new(0, readable, writable).with_interrupt();
+        ev.set_rd_interrupt(!self.flags.contains(Flags::RD_HUP));
+        ev
+    }
+
     fn fd(&self) -> os::fd::RawFd {
         self.io.as_raw_fd()
     }
@@ -648,6 +669,67 @@ mod tests {
         drop(io);
     }
 
+    struct Fixture {
+        io: Io,
+        ops: StreamOps,
+        handler: StreamOpsHandler,
+        id: usize,
+        peer: UnixStream,
+        _ctl: StreamCtl,
+        _reactor: Reactor,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let reactor = Reactor::new().unwrap();
+            let ops = StreamOps::get(&reactor);
+            let (socket, peer) = UnixStream::pair().unwrap();
+            socket.set_nonblocking(true).unwrap();
+            let ctl = Rc::new(Cell::new(None));
+            let io = Io::new(
+                TestStream {
+                    socket: Socket::from(socket),
+                    ops: ops.clone(),
+                    ctl: ctl.clone(),
+                },
+                SharedCfg::default(),
+            );
+            let ctl = ctl.take().unwrap();
+            Fixture {
+                id: ctl.id as usize,
+                handler: StreamOpsHandler {
+                    inner: ops.0.clone(),
+                },
+                io,
+                ops,
+                peer,
+                _ctl: ctl,
+                _reactor: reactor,
+            }
+        }
+
+        /// Arm read interest, mirroring what `interest(id, true, _)` leaves
+        /// behind once the io layer has asked for reads.
+        fn arm_read(&self) {
+            self.ops
+                .0
+                .with(|streams| streams[self.id].flags.insert(Flags::RD));
+        }
+
+        fn fire(&mut self, notify: Notify) {
+            let id = self.id;
+            self.handler.handle_event(id, notify);
+        }
+
+        fn flags(&self) -> Flags {
+            self.ops.0.with(|streams| streams[self.id].flags)
+        }
+
+        fn teardown(mut self) {
+            self.handler.cleanup();
+        }
+    }
+
     /// Half-close and terminal-condition handling.
     ///
     /// These drive `handle_event` directly, so the policy is covered on every
@@ -656,68 +738,6 @@ mod tests {
         use std::{io::Write, net::Shutdown};
 
         use super::*;
-
-        struct Fixture {
-            io: Io,
-            ops: StreamOps,
-            handler: StreamOpsHandler,
-            id: usize,
-            peer: UnixStream,
-            _ctl: StreamCtl,
-            _reactor: Reactor,
-        }
-
-        impl Fixture {
-            fn new() -> Self {
-                let reactor = Reactor::new().unwrap();
-                let ops = StreamOps::get(&reactor);
-                let (socket, peer) = UnixStream::pair().unwrap();
-                socket.set_nonblocking(true).unwrap();
-                let ctl = Rc::new(Cell::new(None));
-                let io = Io::new(
-                    TestStream {
-                        socket: Socket::from(socket),
-                        ops: ops.clone(),
-                        ctl: ctl.clone(),
-                    },
-                    SharedCfg::default(),
-                );
-                let ctl = ctl.take().unwrap();
-                Fixture {
-                    id: ctl.id as usize,
-                    handler: StreamOpsHandler {
-                        inner: ops.0.clone(),
-                    },
-                    io,
-                    ops,
-                    peer,
-                    _ctl: ctl,
-                    _reactor: reactor,
-                }
-            }
-
-            /// Arm read interest, mirroring what `interest(id, true, _)` leaves
-            /// behind once the io layer has asked for reads.
-            fn arm_read(&self) {
-                self.ops
-                    .0
-                    .with(|streams| streams[self.id].flags.insert(Flags::RD));
-            }
-
-            fn fire(&mut self, notify: Notify) {
-                let id = self.id;
-                self.handler.handle_event(id, notify);
-            }
-
-            fn flags(&self) -> Flags {
-                self.ops.0.with(|streams| streams[self.id].flags)
-            }
-
-            fn teardown(mut self) {
-                self.handler.cleanup();
-            }
-        }
-
         /// The upstream split must keep `HUP` and `RDHUP` distinct. If
         /// `with_interrupt` ever subscribes `RDHUP` again, the poller spins on
         /// every peer `FIN`, so pin the round-trip here. Only epoll represents
@@ -813,6 +833,79 @@ mod tests {
             fixture.teardown();
 
             assert!(closed, "EPOLLERR did not stop the stream");
+        }
+    }
+    /// Out-of-band writes, performed on the stack of whoever filled the write
+    /// buffer rather than by the write task.
+    mod write {
+        use super::*;
+
+        /// More than one `MAX_WRITE_SIZE` chunk, so output is guaranteed to be
+        /// left over whatever the socket accepts.
+        const LARGE: usize = MAX_WRITE_SIZE * 2;
+
+        /// Output left over after a direct write must arm write interest here.
+        /// Leaving it to the write task costs an extra write syscall, and
+        /// setting `Flags::WR` without telling the reactor would stall the
+        /// connection: `interest()` would believe it was already armed.
+        #[ntex::test]
+        async fn direct_write_arms_write_interest() {
+            let fixture = Fixture::new();
+            fixture.io.encode_slice(&vec![b'x'; LARGE]).unwrap();
+            assert!(!fixture.flags().contains(Flags::WR));
+
+            fixture.ops.0.write_stream(fixture.id as u32);
+
+            let armed = fixture.flags().contains(Flags::WR);
+            fixture.teardown();
+
+            assert!(armed, "leftover output did not arm write interest");
+        }
+
+        /// Output that drained completely needs no interest.
+        #[ntex::test]
+        async fn drained_write_does_not_arm_write_interest() {
+            let fixture = Fixture::new();
+            fixture.io.encode_slice(b"small").unwrap();
+
+            fixture.ops.0.write_stream(fixture.id as u32);
+
+            let armed = fixture.flags().contains(Flags::WR);
+            fixture.teardown();
+
+            assert!(!armed, "drained output armed write interest");
+        }
+
+        /// Arming is additive, so a second write must not disturb it.
+        #[ntex::test]
+        async fn repeated_direct_writes_keep_interest_armed() {
+            let fixture = Fixture::new();
+            fixture.io.encode_slice(&vec![b'x'; LARGE]).unwrap();
+            fixture.ops.0.write_stream(fixture.id as u32);
+            fixture.ops.0.write_stream(fixture.id as u32);
+
+            let armed = fixture.flags().contains(Flags::WR);
+            fixture.teardown();
+
+            assert!(armed, "write interest was lost on a repeat write");
+        }
+
+        /// `renew_event` is the single place that decides `RDHUP`
+        /// subscription, so a latched stream must never re-subscribe.
+        #[cfg(target_os = "linux")]
+        #[ntex::test]
+        async fn renew_event_honours_the_rd_hup_latch() {
+            let fixture = Fixture::new();
+            let (before, after) = fixture.ops.0.with(|streams| {
+                let io = &mut streams[fixture.id];
+                let before = io.renew_event(true, true).is_rd_interrupt();
+                io.flags.insert(Flags::RD_HUP);
+                (before, io.renew_event(true, true).is_rd_interrupt())
+            });
+            fixture.teardown();
+
+            assert!(before, "RDHUP was not subscribed before the latch");
+            assert!(!after, "RDHUP was re-subscribed after the latch");
         }
     }
 }
