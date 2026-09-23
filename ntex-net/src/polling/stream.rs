@@ -28,11 +28,6 @@ bitflags::bitflags! {
     struct Flags: u8 {
         const RD          = 0b0000_0001;
         const WR          = 0b0000_0010;
-        /// Peer half-close has been observed, do not subscribe to it again.
-        ///
-        /// `RDHUP` is a level condition, re-arming while subscribed re-reports
-        /// it immediately and the poller would spin without making progress.
-        const RD_HUP      = 0b0000_0100;
         const DROPPED_PRI = 0b0001_0000;
         const DROPPED_SEC = 0b0010_0000;
     }
@@ -97,6 +92,8 @@ impl StreamOps {
             }
         });
 
+        // Hangup is never subscribed: epoll and `poll` report `HUP` and `ERR`
+        // whatever the interest, and kqueue ignores the bit.
         self.0
             .api
             .attach(fd, stream.id, Event::new(0, false, false));
@@ -120,16 +117,19 @@ bitflags::bitflags! {
     /// A notification reduced to the parts the stream handler acts on.
     ///
     /// Kept separate from `Event` so the policy can be exercised on backends
-    /// whose `Event` cannot represent `RD_HUP` or `HUP` (kqueue reports both
-    /// as absent).
+    /// whose `Event` cannot represent `HUP` (kqueue reports it as absent).
+    ///
+    /// A peer half-close needs no bit of its own: the kernel reports it as
+    /// readable, and the read that follows returns eof once buffered input is
+    /// drained. `EPOLLRDHUP` would only announce it early, ahead of that
+    /// input, which is of no use while read back-pressure holds the input
+    /// back.
     #[derive(Copy, Clone, Debug)]
     struct Notify: u8 {
         const READABLE = 0b0000_0001;
         const WRITABLE = 0b0000_0010;
-        /// Peer closed its write side, `EPOLLRDHUP`.
-        const RD_HUP   = 0b0000_0100;
         /// Terminal condition, `EPOLLHUP` or `EPOLLERR`.
-        const HUP      = 0b0000_1000;
+        const HUP      = 0b0000_0100;
     }
 }
 
@@ -146,16 +146,7 @@ impl StreamOpsHandler {
             #[cfg(feature = "trace")]
             log::trace!("{}: {:?}-Evt {ev:?} {:?}", io.tag(), io.fd(), io.flags);
 
-            if ev.contains(Notify::RD_HUP) {
-                io.flags.insert(Flags::RD_HUP);
-            }
-
-            // A half-close is only acted upon while read interest is armed.
-            // If the io layer paused reads, delivering eof now would bypass
-            // back-pressure; `interest()` performs the read once it resumes.
-            let read_hup = ev.contains(Notify::RD_HUP) && io.flags.contains(Flags::RD);
-
-            if ev.contains(Notify::READABLE) || read_hup {
+            if ev.contains(Notify::READABLE) {
                 if io.read() == IoTaskStatus::Io {
                     renew_rd = true;
                     io.flags.insert(Flags::RD);
@@ -188,7 +179,7 @@ impl StreamOpsHandler {
                 );
                 self.inner
                     .api
-                    .modify(io.fd(), id as u32, io.renew_event(renew_rd, renew_wr));
+                    .modify(io.fd(), id as u32, Event::new(0, renew_rd, renew_wr));
             }
         });
     }
@@ -199,7 +190,6 @@ impl Handler for StreamOpsHandler {
         let mut notify = Notify::empty();
         notify.set(Notify::READABLE, ev.readable);
         notify.set(Notify::WRITABLE, ev.writable);
-        notify.set(Notify::RD_HUP, ev.is_rd_interrupt());
         // `EPOLLERR` is terminal and, like `EPOLLHUP`, is reported whether or
         // not it was requested. Re-arming on it makes no progress.
         notify.set(Notify::HUP, ev.is_interrupt() || ev.is_err() == Some(true));
@@ -278,7 +268,7 @@ impl StreamOpsInner {
     fn write_item(&self, id: u32, item: &mut StreamItem) {
         if item.write() == IoTaskStatus::Io && !item.flags.contains(Flags::WR) {
             item.flags.insert(Flags::WR);
-            let event = item.renew_event(item.flags.contains(Flags::RD), true);
+            let event = Event::new(0, item.flags.contains(Flags::RD), true);
             self.api.modify(item.fd(), id, event);
         }
     }
@@ -402,7 +392,7 @@ impl StreamOpsInner {
                     io.fd()
                 );
                 self.api
-                    .modify(io.fd(), id, io.renew_event(event_rd, event_wr));
+                    .modify(io.fd(), id, Event::new(0, event_rd, event_wr));
             }
         });
     }
@@ -582,24 +572,6 @@ impl StreamItem {
             result
         })
     }
-
-    /// Builds the event to arm poll interest with.
-    ///
-    /// `modify` replaces the whole interest set, so both directions have to be
-    /// restated on every update. `RDHUP` is a level condition and is therefore
-    /// subscribed at most once per connection: re-arming it after it has fired
-    /// would report immediately and spin without making progress, so every
-    /// site that arms interest must go through here.
-    ///
-    /// `HUP` is deliberately not subscribed. This backend is Unix-only, and
-    /// every reactor behind it reports hangup without being asked: epoll and
-    /// `poll` treat it as output-only, and kqueue ignores the interest bit
-    /// outright. `RDHUP` is the sole exception that has to be requested.
-    fn renew_event(&self, readable: bool, writable: bool) -> Event {
-        let mut ev = Event::new(0, readable, writable);
-        ev.set_rd_interrupt(!self.flags.contains(Flags::RD_HUP));
-        ev
-    }
 }
 
 #[cfg(test)]
@@ -738,92 +710,28 @@ mod tests {
     /// Half-close and terminal-condition handling.
     ///
     /// These drive `handle_event` directly, so the policy is covered on every
-    /// platform even though only epoll ever reports `RDHUP` or `ERR`.
+    /// platform even though only epoll ever reports `ERR`.
     mod hup {
-        use std::{io::Write, net::Shutdown};
+        use std::net::Shutdown;
 
         use super::*;
-        /// The upstream split must keep `HUP` and `RDHUP` distinct. `RDHUP` is
-        /// the only interest this backend subscribes, and it is unsubscribed
-        /// once latched; were the two to alias, that unsubscribe would not take
-        /// and the poller would spin on every peer `FIN`. Only epoll represents
-        /// these flags, so pin the round-trip in both directions here.
-        #[cfg(target_os = "linux")]
-        #[ntex::test]
-        async fn event_flags_keep_hup_and_rd_hup_separate() {
-            let hup = Event::new(0, false, false).with_interrupt();
-            assert!(hup.is_interrupt());
-            assert!(!hup.is_rd_interrupt(), "with_interrupt subscribed RDHUP");
 
-            let rd_hup = Event::new(0, false, false).with_rd_interrupt();
-            assert!(rd_hup.is_rd_interrupt());
-            assert!(!rd_hup.is_interrupt(), "with_rd_interrupt subscribed HUP");
-        }
-
-        /// A peer half-close while reads are armed must surface as eof, not as
-        /// a hard stop: buffered output still has to drain.
+        /// A peer half-close is reported as readable. It must surface as eof,
+        /// not as a hard stop: buffered output still has to drain.
         #[ntex::test]
-        async fn rd_hup_with_read_armed_delivers_eof() {
+        async fn half_close_with_read_armed_delivers_eof() {
             let mut fixture = Fixture::new();
             fixture.arm_read();
             fixture.peer.shutdown(Shutdown::Write).unwrap();
 
-            fixture.fire(Notify::RD_HUP);
+            fixture.fire(Notify::READABLE);
 
-            let latched = fixture.flags().contains(Flags::RD_HUP);
             let eof = fixture.io.is_read_eof();
             let closed = !fixture.io.is_active();
             fixture.teardown();
 
-            assert!(latched, "RD_HUP was not latched");
             assert!(eof, "half-close did not reach the io layer");
             assert!(!closed, "half-close terminated the connection");
-        }
-
-        /// With reads paused the half-close is only latched. Delivering eof
-        /// here would push past read back-pressure; `interest()` picks it up
-        /// when the io layer resumes.
-        #[ntex::test]
-        async fn rd_hup_with_read_paused_defers_eof() {
-            let mut fixture = Fixture::new();
-            (&fixture.peer).write_all(b"hello").unwrap();
-            fixture.peer.shutdown(Shutdown::Write).unwrap();
-
-            // Fired twice: a latched RDHUP must not be re-subscribed, and a
-            // repeat must not read either, which is what a spin would look
-            // like from here.
-            fixture.fire(Notify::RD_HUP);
-            fixture.fire(Notify::RD_HUP);
-
-            let latched = fixture.flags().contains(Flags::RD_HUP);
-            let armed = fixture.flags().contains(Flags::RD);
-            let eof = fixture.io.is_read_eof();
-            let buffered = fixture.io.with_read_dst(|b| b.len());
-            fixture.teardown();
-
-            assert!(latched, "RD_HUP was not latched");
-            assert!(!armed, "paused read interest was armed");
-            assert!(!eof, "eof bypassed read back-pressure");
-            assert_eq!(buffered, 0, "read ran while reads were paused");
-        }
-
-        /// Once latched the half-close is delivered by the next armed read
-        /// rather than being lost.
-        #[ntex::test]
-        async fn latched_rd_hup_delivers_eof_when_reads_resume() {
-            let mut fixture = Fixture::new();
-            fixture.peer.shutdown(Shutdown::Write).unwrap();
-            fixture.fire(Notify::RD_HUP);
-            assert!(!fixture.io.is_read_eof());
-
-            fixture.ops.0.interest(fixture.id as u32, true, false);
-
-            let eof = fixture.io.is_read_eof();
-            let latched = fixture.flags().contains(Flags::RD_HUP);
-            fixture.teardown();
-
-            assert!(latched, "RD_HUP latch was cleared");
-            assert!(eof, "eof was lost after the latch");
         }
 
         /// `EPOLLERR` is terminal and is reported whether or not it was
@@ -894,24 +802,6 @@ mod tests {
             fixture.teardown();
 
             assert!(armed, "write interest was lost on a repeat write");
-        }
-
-        /// `renew_event` is the single place that decides `RDHUP`
-        /// subscription, so a latched stream must never re-subscribe.
-        #[cfg(target_os = "linux")]
-        #[ntex::test]
-        async fn renew_event_honours_the_rd_hup_latch() {
-            let fixture = Fixture::new();
-            let (before, after) = fixture.ops.0.with(|streams| {
-                let io = &mut streams[fixture.id];
-                let before = io.renew_event(true, true).is_rd_interrupt();
-                io.flags.insert(Flags::RD_HUP);
-                (before, io.renew_event(true, true).is_rd_interrupt())
-            });
-            fixture.teardown();
-
-            assert!(before, "RDHUP was not subscribed before the latch");
-            assert!(!after, "RDHUP was re-subscribed after the latch");
         }
     }
 }

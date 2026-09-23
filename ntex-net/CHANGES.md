@@ -6,11 +6,6 @@
   instead of leaving it to the write task, which retried the write only to
   have it block again
 
-* Subscribe to `EPOLLRDHUP` in the polling backend so a peer half-close is
-  observed directly. It is a level condition, so it is subscribed at most once
-  per connection and only acted upon while read interest is armed, which keeps
-  read back-pressure intact and avoids re-arming without progress
-
 * Treat `EPOLLERR` as terminal in the polling backend, it is reported whether
   or not it was requested and re-arming on it makes no progress
 

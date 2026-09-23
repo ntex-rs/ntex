@@ -47,7 +47,7 @@ ntex-http = { workspace = true }
 ntex-io = { workspace = true }
 ntex-rt = { workspace = true }
 ntex-util = { workspace = true }
-ntex-polling = { workspace = true }
+polling = { workspace = true }
 
 bitflags = { workspace = true }
 cfg-if = { workspace = true }
