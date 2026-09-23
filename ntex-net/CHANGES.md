@@ -2,6 +2,47 @@
 
 ## [4.1.0] - 2026-09-23
 
+* Treat peer half-close as read eof in the io-uring backend, as the polling
+  backend does. `POLLRDHUP` terminated the connection, so a response to a
+  peer that half-closed after its request was dropped and the peer saw a
+  clean close. The disconnect poll is removed, disconnects are detected by
+  reads and writes
+
+* Reset read cancel state when a canceled `Recv` completes normally in the
+  io-uring backend, the stale state disabled later read pauses
+
+* Cancel in-flight operations of a stream before closing it in the io-uring
+  backend. `Close` only removes the descriptor from the file table, pending
+  operations kept the socket open, so a
+  force-closed or dropped connection was neither reset nor closed until the
+  peer went away
+
+* Fix socket leak on runtime shutdown in the io-uring backend. Operations
+  queued during the last turn are submitted and all in-flight operations are
+  canceled before cleanup, then every socket still owned by the backend is
+  closed, which also breaks the `IoContext` reference cycle
+
+* Return the pages a failed write took to the write buffer in the polling and
+  tokio backends, they were dropped and stayed counted as in-flight output
+
+* Arm write interest from the out-of-band write path in the polling backend
+  instead of leaving it to the write task, which retried the write only to
+  have it block again
+
+* Treat `EPOLLERR` as terminal in the polling backend, it is reported whether
+  or not it was requested and re-arming on it makes no progress
+
+* Fix polling reactor cleanup leaking sockets whose primary handle was dropped
+  but whose secondary drop had not yet been processed
+
+* Reset the connection on a force close instead of closing it gracefully, the
+  receive queue drain and SHUT_RDWR turned a truncated response into a clean
+  FIN that a peer could not tell apart from a complete one
+
+* Drop poll interest before tearing a connection down in the polling backend,
+  and drain its receive queue on the reactor thread instead of the blocking
+  pool, the socket is still registered so the drain raced the reactor
+
 * Read into the io context buffer in place in the tokio and polling backends,
   they read synchronously so they no longer need a detached buffer
 

@@ -38,6 +38,39 @@ pub(crate) fn close_socket(sock: Socket) {
     .detach();
 }
 
+/// Arranges for a socket to be aborted rather than closed gracefully.
+///
+/// Sets `SO_LINGER` to zero, which makes the following `close()` discard
+/// whatever has not reached the peer yet and send an RST instead of a FIN.
+/// Without this a force-closed connection still ends with a normal FIN, so a
+/// truncated response is indistinguishable from a complete one.
+///
+/// A failure is ignored: the connection is being torn down either way, and the
+/// only consequence is that the peer sees a graceful close.
+pub(crate) fn abort_socket(sock: &socket2::SockRef<'_>) {
+    let _ = sock.set_linger(Some(std::time::Duration::ZERO));
+}
+
+/// Arranges for a socket referenced by its raw handle to be aborted.
+///
+/// See [`abort_socket()`].
+#[cfg(unix)]
+pub(crate) fn abort_raw_socket(fd: std::os::fd::RawFd) {
+    // SAFETY: the fd is owned by the caller and outlives the borrow
+    let fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) };
+    abort_socket(&socket2::SockRef::from(&fd));
+}
+
+/// Arranges for a socket referenced by its raw handle to be aborted.
+///
+/// See [`abort_socket()`].
+#[cfg(windows)]
+pub(crate) fn abort_raw_socket(socket: std::os::windows::io::RawSocket) {
+    // SAFETY: the socket is owned by the caller and outlives the borrow
+    let socket = unsafe { std::os::windows::io::BorrowedSocket::borrow_raw(socket) };
+    abort_socket(&socket2::SockRef::from(&socket));
+}
+
 /// Maximum amount of input discarded by [`drain_socket()`], in 4kB chunks.
 const MAX_DRAIN_CHUNKS: usize = 16;
 
@@ -55,11 +88,12 @@ const MAX_DRAIN_CHUNKS: usize = 16;
 /// keeps sending cannot hold the shutdown up. Input that arrives after the last
 /// read can still abort the connection, that race cannot be closed.
 ///
-/// This runs on the write task, which on a completion based backend can leave a
-/// read operation in flight, so the two may end up sharing the queue between
-/// them. That is harmless, input is discarded in this phase either way, and a
-/// backend that can cheaply tell an operation is in flight is free to leave the
-/// draining to it instead.
+/// This runs on the thread that drives the connection, which on a completion
+/// based backend can leave a read operation in flight, so the two may end up
+/// sharing the queue between them. That is harmless, input is discarded in this
+/// phase either way, and a backend that can cheaply tell an operation is in
+/// flight is free to leave the draining to it instead. It must not be moved off
+/// that thread while the socket is still registered with a reactor.
 pub(crate) fn drain_socket(sock: &socket2::SockRef<'_>) {
     if sock.set_nonblocking(true).is_err() {
         return;

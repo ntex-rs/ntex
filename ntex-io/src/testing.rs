@@ -413,13 +413,13 @@ async fn run(io: Rc<IoTest>, ctx: IoContext) {
 fn turn(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<()> {
     let read = match ctx.poll_read_ready(cx) {
         Poll::Ready(Readiness::Ready) => read(io, ctx, cx),
-        Poll::Ready(Readiness::Close) => Poll::Ready(()),
+        Poll::Ready(Readiness::Close | Readiness::Terminate) => Poll::Ready(()),
         Poll::Pending => Poll::Pending,
     };
 
     let write = match ctx.poll_write_ready(cx) {
         Poll::Ready(Readiness::Ready) => write(io, ctx, cx),
-        Poll::Ready(Readiness::Close) => Poll::Ready(()),
+        Poll::Ready(Readiness::Close | Readiness::Terminate) => Poll::Ready(()),
         Poll::Pending => Poll::Pending,
     };
 

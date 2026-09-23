@@ -12,6 +12,7 @@ license = "MIT OR Apache-2.0"
 edition = "2024"
 rust-version = "1.97"
 
+
 [lib]
 name = "ntex_net"
 path = "src/lib.rs"
@@ -47,12 +48,12 @@ ntex-http = { workspace = true }
 ntex-io = { workspace = true }
 ntex-rt = { workspace = true }
 ntex-util = { workspace = true }
-ntex-polling = { workspace = true }
 
 bitflags = { workspace = true }
 cfg-if = { workspace = true }
 log = { workspace = true }
 libc = { workspace = true }
+polling = { workspace = true }
 slab = { workspace = true }
 socket2 = { workspace = true, features = ["all"] }
 scoped-tls = { workspace = true }

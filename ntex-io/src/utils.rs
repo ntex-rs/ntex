@@ -95,6 +95,12 @@ impl Extensions {
         });
     }
 
+    pub(super) fn take_callbacks(&self) -> Option<Box<dyn IoCallbacks>> {
+        let mut callbacks = None;
+        self.with_opt(|inner| callbacks = inner.callbacks.take());
+        callbacks
+    }
+
     pub(crate) fn with_callbacks<F>(&self, f: F)
     where
         F: FnOnce(&dyn IoCallbacks),
@@ -165,6 +171,9 @@ mod tests {
                 .unwrap()
                 .is_ready()
         );
+        // The chain is gone, so the transport closes the connection
+        // gracefully. `IoContext` escalates to `Terminate` when the connection
+        // was force-closed; `NullFilter` itself cannot see that state.
         assert_eq!(
             std::future::poll_fn(|cx| NullFilter.poll_read_ready(cx)).await,
             crate::Readiness::Close

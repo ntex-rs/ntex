@@ -2,6 +2,8 @@
 
 ## [4.2.0] - 2026-09-22
 
+* Replace `ntex-polling` with the upstream `polling` crate
+
 * Rename `WorkerPool::shutdown_timeout()` and `ServerBuilder::shutdown_timeout()`
   to `graceful_shutdown_timeout()`, to distinguish the worker level timeout from
   the per connection `IoConfig::set_shutdown_timeout()`

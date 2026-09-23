@@ -31,19 +31,21 @@ enum IdType {
 
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-    struct Flags: u8 {
-        const RD_CANCELING = 0b0000_0001;
-        const RD_REISSUE   = 0b0000_0010;
-        const RD_MORE      = 0b0000_0100;
-        const WR_CANCELING = 0b0000_1000;
-        const WR_REISSUE   = 0b0001_0000;
-        const NO_ZC        = 0b0010_0000;
-        const DROPPED_PRI  = 0b0100_0000;
-        const DROPPED_SEC  = 0b1000_0000;
+    struct Flags: u16 {
+        const RD_CANCELING = 0b0000_0000_0001;
+        const RD_REISSUE   = 0b0000_0000_0010;
+        const WR_CANCELING = 0b0000_0000_1000;
+        const WR_REISSUE   = 0b0000_0001_0000;
+        const NO_ZC        = 0b0000_0010_0000;
+        const DROPPED_PRI  = 0b0000_0100_0000;
+        const DROPPED_SEC  = 0b0000_1000_0000;
+        /// `Close` is submitted, descriptor belongs to the kernel
+        const CLOSING      = 0b0001_0000_0000;
     }
 }
 
 const ZC_SIZE: u32 = 1536;
+const ZC_MAX_SIZE: u32 = 128 * 1024;
 const IORING_RECVSEND_POLL_FIRST: u16 = 1;
 
 #[derive(Debug)]
@@ -65,9 +67,6 @@ enum Operation {
         id: usize,
         buf: BytePage,
         result: Option<io::Result<usize>>,
-    },
-    Poll {
-        id: usize,
     },
     Shutdown {
         tx: Option<pool::Sender<io::Result<()>>>,
@@ -151,14 +150,7 @@ impl StreamOps {
             flags: if zc { self.0.default_flags } else { Flags::NO_ZC },
         };
 
-        let id = self.0.with(|st| {
-            // handle RDHUP event
-            let op = opcode::PollAdd::new(item.fd(), libc::POLLRDHUP as u32).build();
-            let id = st.streams.insert(item);
-            let op_id = st.ops.insert(Some(Operation::Poll { id })) as u32;
-            self.0.api.submit(op_id, op);
-            id
-        });
+        let id = self.0.with(|st| st.streams.insert(item));
         (
             StreamCtl {
                 id,
@@ -211,10 +203,7 @@ impl Handler for StreamOpsHandler {
                         }
                     }
                 }
-                Operation::Nop
-                | Operation::Poll { .. }
-                | Operation::Close { .. }
-                | Operation::Shutdown { .. } => {}
+                Operation::Nop | Operation::Close { .. } | Operation::Shutdown { .. } => {}
             });
     }
 
@@ -230,8 +219,10 @@ impl Handler for StreamOpsHandler {
                             item.ctx.tag(),
                             cqueue::sock_nonempty(flags));
 
-                        // reset op reference
+                        // reset op reference, a pending cancel lost the race
+                        // with this completion and has nothing to cancel anymore
                         let _ = item.rd_op.take();
+                        item.flags.remove(Flags::RD_CANCELING | Flags::RD_REISSUE);
 
                         // handle WouldBlock
                         if matches!(res, Err(ref e) if e.kind() == io::ErrorKind::WouldBlock || e.raw_os_error() == Some(::libc::EINPROGRESS)) {
@@ -243,22 +234,14 @@ impl Handler for StreamOpsHandler {
                                 unsafe { buf.advance_mut(size) };
                             }
 
-                            // handle IORING_CQE_F_SOCK_NONEMPTY flag
-                            if cqueue::sock_nonempty(flags) && !(matches!(res, Ok(0) | Err(_))) {
-                                // In case of disconnect, sock_nonempty is set to true.
-                                // First completion contains data, second Recv(0)
-                                // Before receiving Recv(0), POLLRDHUP is triggered
-                                // Reactor must read all recv() call before handling
-                                // disconnects
-                                item.flags.insert(Flags::RD_MORE);
+                            // handle IORING_CQE_F_SOCK_NONEMPTY flag, more input
+                            // is queued, keep reading into the same buffer
+                            if cqueue::sock_nonempty(flags) && !matches!(res, Ok(0) | Err(_)) {
                                 st.recv_more(id, buf, &self.inner.api);
-                            } else {
-                                item.flags.remove(Flags::RD_MORE);
-                                if item.ctx.release_read_buf(buf, Poll::Ready(res))
-                                    == IoTaskStatus::Io
-                                {
-                                    st.recv(id, self.inner.api.is_new(), &self.inner.api);
-                                }
+                            } else if item.ctx.release_read_buf(buf, Poll::Ready(res))
+                                == IoTaskStatus::Io
+                            {
+                                st.recv(id, self.inner.api.is_new(), &self.inner.api);
                             }
                         }
                     }
@@ -306,12 +289,6 @@ impl Handler for StreamOpsHandler {
                         }
                     }
                 }
-                Operation::Poll { id } => {
-                    if let Some(item) = st.streams.get_mut(id)
-                        && !item.flags.contains(Flags::RD_MORE) {
-                            item.ctx.stop(res.err());
-                        }
-                }
                 Operation::Shutdown { tx } => {
                     if let Some(tx) = tx {
                         let _ = tx.send(res.map(|_| ()));
@@ -338,16 +315,22 @@ impl Handler for StreamOpsHandler {
     }
 
     fn cleanup(&mut self) {
-        if let Some(v) = self.inner.storage.take() {
-            for (_, val) in &v.streams {
-                if !val.flags.contains(Flags::DROPPED_PRI) {
+        // Reactor has flushed pending submissions and canceled all in-flight
+        // operations. Release every socket here, otherwise stored `IoContext`s
+        // keep `StreamOpsInner` alive through the io handle and nothing closes.
+        if let Some(mut v) = self.inner.storage.take() {
+            for item in v.streams.drain() {
+                if item.flags.intersects(Flags::DROPPED_PRI | Flags::CLOSING) {
+                    // descriptor is closed or being closed by the kernel
+                    mem::forget(item.io);
+                } else {
                     log::trace!(
-                        "{}: Unclosed sockets {:?}",
-                        val.ctx.tag(),
-                        val.io.peer_addr()
+                        "{}: Unclosed socket {:?}",
+                        item.ctx.tag(),
+                        item.io.peer_addr()
                     );
+                    drop(item.io);
                 }
-                let _ = self.inner.api.cancel_all_sync(val.fd());
             }
             self.inner.storage.set(Some(v));
         }
@@ -383,7 +366,9 @@ fn complete_send(ctx: &IoContext, mut buf: BytePage, res: io::Result<usize>) -> 
 
 impl StreamOpsStorage {
     fn recv(&mut self, id: usize, poll_first: bool, api: &ReactorApi) {
-        if let Some(item) = self.streams.get_mut(id) {
+        if let Some(item) = self.streams.get_mut(id)
+            && !item.flags.contains(Flags::CLOSING)
+        {
             if item.rd_op.is_none() {
                 #[cfg(feature = "trace")]
                 log::trace!("{}: Rcv({id})", item.ctx.tag());
@@ -408,7 +393,9 @@ impl StreamOpsStorage {
     }
 
     fn recv_more(&mut self, id: usize, mut buf: BytesMut, api: &ReactorApi) {
-        if let Some(item) = self.streams.get_mut(id) {
+        if let Some(item) = self.streams.get_mut(id)
+            && !item.flags.contains(Flags::CLOSING)
+        {
             item.ctx.resize_read_buf(&mut buf);
 
             let slice = buf.chunk_mut();
@@ -424,7 +411,9 @@ impl StreamOpsStorage {
     }
 
     fn send(&mut self, id: usize, api: &ReactorApi) {
-        if let Some(item) = self.streams.get_mut(id) {
+        if let Some(item) = self.streams.get_mut(id)
+            && !item.flags.contains(Flags::CLOSING)
+        {
             if item.wr_op.is_none() {
                 let page = item.ctx.with_write_dst(BytePages::take);
                 if let Some(buf) = page {
@@ -447,10 +436,12 @@ impl StreamOpsStorage {
                         };
 
                     api.submit_inline(op_id, move |entry| {
-                        if item.flags.contains(Flags::NO_ZC) || buf_len <= ZC_SIZE {
-                            opcode2::Send::with(entry, item.fd()).buffer(buf_ptr, buf_len);
-                        } else {
+                        if !item.flags.contains(Flags::NO_ZC)
+                            && (ZC_SIZE..=ZC_MAX_SIZE).contains(&buf_len)
+                        {
                             opcode2::SendZc::with(entry, item.fd()).buffer(buf_ptr, buf_len);
+                        } else {
+                            opcode2::Send::with(entry, item.fd()).buffer(buf_ptr, buf_len);
                         }
                     });
                 }
@@ -465,7 +456,9 @@ impl StreamOpsStorage {
     }
 
     fn pause_read(&mut self, id: usize, api: &ReactorApi) {
-        let item = &mut self.streams[id];
+        let Some(item) = self.streams.get_mut(id) else {
+            return;
+        };
         if let Some(rd_op) = item.rd_op
             && !item.flags.contains(Flags::RD_CANCELING)
         {
@@ -477,8 +470,29 @@ impl StreamOpsStorage {
 
     fn drop_stream(&mut self, id: usize, api: &ReactorApi) {
         // Dropping while `StreamOps` handling event
-        let item = &mut self.streams[id];
+        let Some(item) = self.streams.get_mut(id) else {
+            return;
+        };
         log::trace!("{}: Close ({:?})", item.tag(), item.fd());
+
+        item.flags.insert(Flags::CLOSING);
+
+        // `Close` only removes the descriptor from the file table, in-flight
+        // operations keep the socket open, so no FIN or RST is sent until
+        // they complete. Operations are canceled by id, which does not
+        // depend on the descriptor still being present in the table.
+        if let Some(op) = item.rd_op
+            && !item.flags.contains(Flags::RD_CANCELING)
+        {
+            item.flags.insert(Flags::RD_CANCELING);
+            api.cancel(op.get());
+        }
+        if let Some(op) = item.wr_op
+            && !item.flags.contains(Flags::WR_CANCELING)
+        {
+            item.flags.insert(Flags::WR_CANCELING);
+            api.cancel(op.get());
+        }
 
         let entry = opcode::Close::new(item.fd()).build();
         let op_id = self.add_operation(Operation::Close { id });
@@ -487,7 +501,9 @@ impl StreamOpsStorage {
 
     fn drop_weak_stream(&mut self, id: usize) {
         // Dropping while `StreamOps` handling event
-        let item = &mut self.streams[id];
+        let Some(item) = self.streams.get_mut(id) else {
+            return;
+        };
         if item.flags.contains(Flags::DROPPED_PRI) {
             // io is closed already, remove from storage
             let item = self.streams.remove(id);
@@ -533,7 +549,21 @@ impl StreamItem {
 }
 
 impl StreamCtl {
-    pub(crate) async fn shutdown(&self) -> io::Result<()> {
+    pub(crate) async fn shutdown(&self, terminate: bool) -> io::Result<()> {
+        if terminate {
+            // The connection was force-closed, so it is released without the
+            // graceful close: the receive queue is not drained and no
+            // `SHUT_RDWR` is submitted. The socket is aborted instead, so that
+            // the peer sees an RST and cannot mistake a truncated stream for a
+            // complete one. Dropping this handle submits the `Close` that
+            // releases the descriptor.
+            self.inner.with(|storage| {
+                storage.pause_read(self.id, &self.inner.api);
+                crate::helpers::abort_raw_socket(storage.streams[self.id].fd().0);
+            });
+            return Ok(());
+        }
+
         self.inner
             .with(|storage| {
                 storage.pause_read(self.id, &self.inner.api);
@@ -589,11 +619,12 @@ impl Drop for StreamCtl {
 }
 
 impl WeakStreamCtl {
-    pub(crate) fn with_io<F, R>(&self, f: F) -> R
+    pub(crate) fn with_io<F, R>(&self, f: F) -> Option<R>
     where
         F: FnOnce(&Socket) -> R,
     {
-        self.inner.with(|storage| f(&storage.streams[self.id].io))
+        self.inner
+            .with(|storage| storage.streams.get(self.id).map(|item| f(&item.io)))
     }
 }
 

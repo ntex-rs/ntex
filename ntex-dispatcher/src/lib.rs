@@ -306,7 +306,7 @@ where
                                         inner.shared.io.tag(),
                                         err
                                     );
-                                    if err.is_some() || inner.shared.io.is_terminating() {
+                                    if err.is_some() {
                                         inner.shared.insert_flags(Flags::IO_ERR);
                                     }
                                     inner.st = DispatcherState::Stop;
@@ -380,18 +380,11 @@ where
                             }
                             Poll::Pending => (),
                         }
-                    } else if inner.shared.io.is_terminating() {
-                        inner.shared.insert_flags(Flags::IO_ERR);
-                        continue;
-                    } else if inner.shared.io.is_closed() {
+                    } else if !inner.shared.io.is_active() {
                         inner.shared.io.poll_dispatch(cx);
                     } else if !inner.shared.contains(Flags::IO_ERR) {
                         match ready!(inner.shared.io.poll_status_update(cx)) {
                             IoStatusUpdate::PeerGone(_) => {
-                                if inner.shared.io.is_terminating() {
-                                    inner.shared.insert_flags(Flags::IO_ERR);
-                                    continue;
-                                }
                                 inner.shared.io.poll_dispatch(cx);
                             }
                             IoStatusUpdate::KeepAlive => continue,
@@ -531,7 +524,7 @@ where
                             self.shared.io.tag(),
                             err
                         );
-                        if err.is_some() || self.shared.io.is_terminating() {
+                        if err.is_some() {
                             self.shared.insert_flags(Flags::IO_ERR);
                         }
                         self.st = DispatcherState::Stop;
@@ -1209,7 +1202,7 @@ mod tests {
         sleep(Millis(2000)).await;
 
         // write side must be closed, dispatcher should fail with keep-alive
-        assert!(state.0.is_stopping());
+        assert!(!state.0.is_active());
         assert!(client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
     }
@@ -1258,7 +1251,7 @@ mod tests {
         sleep(Millis(2000)).await;
 
         // write side must be closed, dispatcher should fail with keep-alive
-        assert!(state.0.is_stopping());
+        assert!(!state.0.is_active());
         assert!(client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
     }
@@ -1368,15 +1361,15 @@ mod tests {
 
         client.write("1");
         sleep(Millis(1000)).await;
-        assert!(!state.0.is_stopping());
+        assert!(state.0.is_active());
         client.write("23");
         sleep(Millis(1000)).await;
-        assert!(!state.0.is_stopping());
+        assert!(state.0.is_active());
         client.write("4");
         sleep(Millis(2000)).await;
 
         // write side must be closed, dispatcher should fail with keep-alive
-        assert!(state.0.is_stopping());
+        assert!(!state.0.is_active());
         assert!(client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
     }
@@ -1429,7 +1422,7 @@ mod tests {
         assert_eq!(buf, Bytes::from_static(b"1"));
 
         sleep(Millis(1000)).await;
-        assert!(state.0.is_stopping());
+        assert!(!state.0.is_active());
         assert!(client.is_closed());
     }
 

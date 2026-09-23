@@ -2,7 +2,7 @@ use std::{io, rc::Rc};
 
 use ntex::io::{Io, types::PeerAddr};
 use ntex::server::{NoConfig, build_test_server, test_server};
-use ntex::service::{Pipeline, Service, cfg::SharedCfg, service};
+use ntex::service::{Pipeline, cfg::SharedCfg, service};
 use ntex::{codec::BytesCodec, connect::Connect, time, util::Bytes};
 
 #[cfg(feature = "rustls")]
@@ -180,7 +180,7 @@ async fn test_schannel_string() {
 async fn test_rustls_string() {
     use std::{fs::File, io::BufReader};
 
-    use ntex::{io::types::HttpProtocol, server::rustls};
+    use ntex::{Service, io::types::HttpProtocol, server::rustls};
     use ntex_tls::rustls::{PeerCert, PeerCertChain, TlsConnector};
 
     let srv = test_server(async || {
@@ -241,7 +241,7 @@ async fn test_rustls_peer_close_notify_closes_io() {
     use std::io::{Read as _, Write as _};
     use std::{sync::Arc, time::Duration};
 
-    use ntex::server::rustls;
+    use ntex::{Service, server::rustls};
     use tls_rustls::pki_types::ServerName;
 
     let srv = test_server(async || {
@@ -315,7 +315,7 @@ async fn test_rustls_shutdown_sends_close_notify() {
     use std::io::{Read, Write};
     use std::sync::Arc;
 
-    use ntex::server::rustls;
+    use ntex::{Service, server::rustls};
 
     let srv = test_server(async || {
         rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc())
@@ -367,7 +367,7 @@ async fn test_rustls_keyupdate_response_flushed() {
     use std::io::{Read, Write};
     use std::sync::Arc;
 
-    use ntex::server::rustls;
+    use ntex::{Service, server::rustls};
     use tls_rustls::pki_types::ServerName;
 
     let srv = test_server(async || {
@@ -507,7 +507,7 @@ async fn test_uri() {
 #[cfg(feature = "rustls")]
 #[ntex::test]
 async fn test_rustls_uri() {
-    use ntex::server::rustls;
+    use ntex::{Service, server::rustls};
 
     let srv = test_server(async || {
         rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc())

@@ -241,71 +241,14 @@ async fn system_storage() {
     assert_eq!(val2, 10);
 }
 
-#[cfg(all(target_os = "linux", feature = "neon-polling"))]
-#[ntex::test]
-async fn idle_disconnect_polling() {
-    use std::sync::Mutex;
-
-    use ntex::connect::Connect;
-    use ntex::{SharedCfg, io::Io, io::IoConfig, time::Millis, time::sleep, util::Bytes};
-
-    const DATA: &[u8] = b"Hello World Hello World Hello World Hello World Hello World \
-                          Hello World Hello World Hello World Hello World Hello World \
-                          Hello World Hello World Hello World Hello World Hello World \
-                          Hello World Hello World Hello World Hello World Hello World \
-                          Hello World Hello World Hello World Hello World Hello World \
-                          Hello World Hello World Hello World Hello World Hello World \
-                          Hello World Hello World Hello World Hello World Hello World \
-                          Hello World Hello World Hello World Hello World Hello World \
-                          Hello World Hello World Hello World Hello World Hello World \
-                          Hello World Hello World Hello World Hello World Hello World \
-                          Hello World Hello World Hello World Hello World Hello World \
-                          Hello World Hello World Hello World Hello World Hello World \
-                          Hello World Hello World Hello World Hello World Hello World \
-                          Hello World Hello World Hello World Hello World Hello World \
-                          Hello World Hello World Hello World Hello World Hello World \
-                          Hello World Hello World Hello World Hello World Hello World \
-                          Hello World Hello World Hello World Hello World Hello World \
-                          Hello World Hello World Hello World Hello World Hello World \
-                          Hello World Hello World Hello World Hello World Hello World \
-                          Hello World Hello World Hello World Hello World Hello World \
-                          Hello World Hello World Hello World Hello World Hello World";
-
-    let (tx, rx) = ::oneshot::channel();
-    let tx = Arc::new(Mutex::new(Some(tx)));
-
-    let server = ntex::server::test_server(async move || {
-        let tx = tx.clone();
-        ntex::fn_service(move |io: Io<_>| {
-            tx.lock().unwrap().take().unwrap().send(()).unwrap();
-
-            async move {
-                io.encode_bytes(Bytes::from_static(DATA)).unwrap();
-                sleep(Millis(250)).await;
-                io.close();
-                Ok::<_, ()>(())
-            }
-        })
-    });
-
-    let cfg = SharedCfg::new("NEON")
-        .add(IoConfig::new().set_read_buf(24, 12, 16))
-        .build();
-
-    let msg = Connect::new(server.addr());
-    let io = ntex::connect::connect_with(msg, &cfg).await.unwrap();
-    rx.await.unwrap();
-
-    io.on_disconnect().await;
-}
-
 #[cfg(all(target_os = "linux", feature = "neon-uring"))]
 #[ntex::test]
 async fn idle_disconnect_uring() {
     use std::sync::Mutex;
 
     use ntex::io::{Io, IoConfig};
-    use ntex::{SharedCfg, connect::Connect, time::Millis, time::sleep, util::Bytes};
+    use ntex::{SharedCfg, codec::BytesCodec, connect::Connect, util::Bytes};
+    use ntex::{time::Millis, time::sleep, time::timeout};
 
     const DATA: &[u8] = b"Hello World Hello World Hello World Hello World Hello World \
                           Hello World Hello World Hello World Hello World Hello World \
@@ -356,7 +299,17 @@ async fn idle_disconnect_uring() {
     let io = ntex::connect::connect_with(msg, &cfg).await.unwrap();
     rx.await.unwrap();
 
-    io.on_disconnect().await;
+    // Server close is a FIN, which is indistinguishable from a half-close, so
+    // it is observed as eof once all input is read
+    let mut total = 0;
+    let res = timeout(Millis(5000), async {
+        while let Ok(Some(item)) = io.recv(&BytesCodec).await {
+            total += item.len();
+        }
+    })
+    .await;
+    assert!(res.is_ok(), "eof is not observed");
+    assert_eq!(total, DATA.len() * 2);
 }
 
 #[cfg(target_os = "linux")]

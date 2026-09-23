@@ -60,14 +60,21 @@ pub trait Filter: 'static {
     /// Reads continue through the filter shutdown phase so that filters can
     /// complete theirs, and are paused for the transport shutdown phase, so
     /// [`Readiness::Close`] is resolved only once the connection is
-    /// terminated.
+    /// terminated. A force close reports [`Readiness::Terminate`] instead,
+    /// which releases the connection without a graceful close. That decision is
+    /// made by [`IoContext`](crate::IoContext) rather than by the chain, so
+    /// that it survives the chain being dropped along with
+    /// [`Io`](crate::Io).
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness>;
 
     /// Checks whether transport write operations may proceed.
     ///
-    /// Resolves to [`Readiness::Close`] once the connection is terminated, or
-    /// once it enters a graceful shutdown and all buffered output has reached
-    /// the transport.
+    /// Resolves to [`Readiness::Close`] once the connection enters a graceful
+    /// shutdown and all buffered output has reached the transport, or as soon
+    /// as it ends because of a failure. See [`poll_read_ready`] for the
+    /// force-close case.
+    ///
+    /// [`poll_read_ready`]: Self::poll_read_ready
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness>;
 }
 
@@ -84,7 +91,15 @@ impl Filter for Base {
 
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         let st = &self.0.0;
-        if st.flags.is_aborted() {
+        if st.flags.is_force_closing() {
+            // Only an explicit `IoRef::terminate()` aborts the connection. A
+            // transport failure, a filter failure or an expired shutdown
+            // deadline end the connection too, but the transport still closes
+            // it gracefully.
+            Poll::Ready(Readiness::Terminate)
+        } else if st.flags.is_aborted() {
+            // The connection ended because of a failure, so no further input
+            // can be used; the transport closes it gracefully.
             Poll::Ready(Readiness::Close)
         } else {
             st.read_task.register(cx.waker());
@@ -116,7 +131,12 @@ impl Filter for Base {
 
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         let st = &self.0.0;
-        if st.flags.is_aborted() {
+        if st.flags.is_force_closing() {
+            // see `poll_read_ready`
+            Poll::Ready(Readiness::Terminate)
+        } else if st.flags.is_aborted() {
+            // The connection ended because of a failure, so there is nothing
+            // left to drain; the transport closes it gracefully.
             Poll::Ready(Readiness::Close)
         } else {
             st.write_task.register(cx.waker());
@@ -219,6 +239,11 @@ impl Filter for NullFilter {
         None
     }
 
+    // The filter chain is gone once `Io` has been dropped, so nothing is left
+    // that could process buffered data. The connection is closed gracefully;
+    // `IoContext` reports `Readiness::Terminate` on top of this when the
+    // application asked for a force close, or when the drop had to discard
+    // output that never reached the peer.
     #[inline]
     fn poll_read_ready(&self, _: &mut Context<'_>) -> Poll<Readiness> {
         Poll::Ready(Readiness::Close)

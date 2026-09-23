@@ -2,6 +2,54 @@
 
 ## [4.1.0] - 2026-09-22
 
+* IoConfig::set_shutdown_timeout() panics on a zero timeout. A zero timeout
+  used to disable the deadline, which let a peer that never reads hold the
+  connection open forever during a graceful shutdown
+
+* Read back-pressure blocks filter shutdown even after the dispatcher has
+  taken the buffered input. Readiness used to ask for reads that would pause,
+  so readiness based transports never re-armed read interest and the shutdown
+  waited for the shutdown timeout
+
+* Drop the filter callbacks together with the Io. Callbacks that held an
+  IoRef used to keep the connection state alive through a reference cycle
+
+* IoRef::register_filter_callbacks() discards the callbacks once the
+  connection is closed or its Io has been dropped
+
+* Add IoRef::is_active(), which reports that the connection is still in its
+  active state. It becomes false as soon as any kind of close starts, whether
+  it was closed locally, force-terminated, or the transport reported the peer
+  as gone
+
+* IoRef::is_closed() now reports that closing has finished and the backend
+  released the underlying socket. It used to become true part way through a
+  close, so callers that want that meaning should use !IoRef::is_active()
+
+* Readiness::Terminate is reported only for an explicit IoRef::terminate().
+  A transport failure, a filter failure or an expired shutdown deadline used
+  to abort the connection as well, a graceful close that was already draining
+  was turned into a reset. They now report Readiness::Close
+
+* Dropping an Io terminates the connection when output it accepted has not
+  reached the transport, a service that returned without shutting down
+  discarded whatever it had encoded yet the peer saw a clean end of stream.
+  Once everything has been flushed the connection is still closed gracefully,
+  so a service that finished its work ends with a normal FIN
+
+* Fix NullFilter reporting Readiness::Terminate unconditionally, which aborted
+  every dropped Io regardless of the io state and made a peer see a reset
+  where it should have seen a clean end of stream
+
+* Add Readiness::Terminate, reported when a connection is force-closed through
+  IoRef::terminate() or aborted by an error. Readiness::Close now means a
+  graceful close only, so a transport can tell the two apart
+
+* Wake the write task when the write buffer drains during the transport
+  shutdown phase, only poll_write_ready() can report that the phase is over so
+  a backend that drives reads and writes from separate tasks could stall until
+  the shutdown timeout elapsed
+
 * Io::recv() reports a truncated stream as UnexpectedEof instead of Ok(None),
   a peer that closed its write half while the codec still held a partial item
   is no longer indistinguishable from a clean end of stream. Input left over

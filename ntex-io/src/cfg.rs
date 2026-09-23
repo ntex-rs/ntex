@@ -239,12 +239,21 @@ impl IoConfig {
     /// The timeout does not apply when there is nothing to drain, so a
     /// connection with no pending output never fails on it.
     ///
-    /// A zero duration disables the timeout, which lets a peer that never
-    /// completes the exchange hold the connection open. The default is one
-    /// second.
+    /// The default is one second.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `timeout` is zero. Without a deadline, a peer that never
+    /// completes the exchange, or never reads the remaining output, could
+    /// hold the connection open forever.
     #[must_use]
     pub fn set_shutdown_timeout<T: Into<Seconds>>(mut self, timeout: T) -> Self {
-        self.shutdown_timeout = timeout.into();
+        let timeout = timeout.into();
+        assert!(
+            timeout.non_zero(),
+            "shutdown timeout must be greater than zero"
+        );
+        self.shutdown_timeout = timeout;
         self
     }
 
@@ -581,5 +590,11 @@ mod tests {
         let mut cfg = *IoConfig::new().read_buf();
         cfg.high = 0;
         cfg.resize_min(&mut BytesMut::new(), 1024);
+    }
+
+    #[test]
+    #[should_panic(expected = "shutdown timeout must be greater than zero")]
+    fn zero_shutdown_timeout_is_rejected() {
+        let _ = IoConfig::new().set_shutdown_timeout(Seconds::ZERO);
     }
 }

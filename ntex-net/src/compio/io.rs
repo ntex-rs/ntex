@@ -79,12 +79,18 @@ impl IoBuf for CompioPage {
     }
 }
 
-/// Closes both directions of the connection.
+/// Closes both directions of the connection gracefully.
 ///
 /// `AsyncWrite::shutdown()` only shuts down the write direction, but
-/// [`Readiness::Close`] must close the read direction as well.
+/// [`Readiness::Close`] must close the read direction as well. This is not used
+/// for [`Readiness::Terminate`], which releases the connection without a
+/// graceful close.
 trait Terminate {
+    /// Closes both directions gracefully, after draining the receive queue.
     fn terminate(&self) -> io::Result<()>;
+
+    /// Arranges for the socket to be reset instead of closed gracefully.
+    fn abort(&self);
 }
 
 impl Terminate for compio_net::TcpStream {
@@ -93,6 +99,10 @@ impl Terminate for compio_net::TcpStream {
         crate::helpers::drain_socket(&sock);
         sock.shutdown(std::net::Shutdown::Both)
     }
+
+    fn abort(&self) {
+        crate::helpers::abort_socket(&socket2::SockRef::from(self));
+    }
 }
 
 impl Terminate for compio_net::UnixStream {
@@ -100,6 +110,10 @@ impl Terminate for compio_net::UnixStream {
         let sock = socket2::SockRef::from(self);
         crate::helpers::drain_socket(&sock);
         sock.shutdown(std::net::Shutdown::Both)
+    }
+
+    fn abort(&self) {
+        crate::helpers::abort_socket(&socket2::SockRef::from(self));
     }
 }
 
@@ -194,6 +208,16 @@ where
             }
             Readiness::Close => {
                 ctx.stopped(io.terminate().err());
+                break;
+            }
+            Readiness::Terminate => {
+                // The connection was force-closed, so the socket is aborted
+                // rather than closed gracefully: the peer sees an RST and
+                // cannot mistake a truncated stream for a complete one.
+                // Dropping the transport releases the descriptor once both
+                // tasks are done with it.
+                io.abort();
+                ctx.stopped(None);
                 break;
             }
         }

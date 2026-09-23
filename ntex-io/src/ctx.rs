@@ -16,9 +16,10 @@ use crate::{Flags, Id, IoRef, IoTaskStatus, Readiness, io::IoState};
 /// # Shutdown
 ///
 /// A transport task runs until [`poll_read_ready`](Self::poll_read_ready) or
-/// [`poll_write_ready`](Self::poll_write_ready) reports [`Readiness::Close`],
-/// or until a status update returns [`IoTaskStatus::Stop`]. All of those imply
-/// that the connection is already closing or closed.
+/// [`poll_write_ready`](Self::poll_write_ready) reports [`Readiness::Close`] or
+/// [`Readiness::Terminate`], or until a status update returns
+/// [`IoTaskStatus::Stop`]. All of those imply that the connection is already
+/// closing or closed.
 ///
 /// Graceful shutdown runs in two phases. In the first the filters shut down
 /// while both directions stay open. In the second, buffered output is drained
@@ -29,9 +30,17 @@ use crate::{Flags, Id, IoRef, IoTaskStatus, Readiness, io::IoState};
 ///
 /// So by the time the loop exits there is nothing left to drain, whether the
 /// connection was shut down gracefully or terminated. A task must never attempt
-/// a final flush on the way out; it should close both directions of the
-/// transport immediately and report the outcome through
-/// [`stopped`](Self::stopped).
+/// a final flush on the way out; it should release the transport immediately
+/// and report the outcome through [`stopped`](Self::stopped). The two variants
+/// differ only in how the transport is released: [`Readiness::Close`] closes
+/// both directions gracefully, while [`Readiness::Terminate`] skips the
+/// graceful close so that an aborted connection stays distinguishable from one
+/// that ended normally. `Terminate` is reported for an explicit
+/// [`IoRef::terminate`](crate::IoRef::terminate), and when [`Io`](crate::Io) is
+/// dropped while output it accepted has not reached the transport, because the
+/// filter chain goes away with it and that output can never be delivered. Every
+/// other way a connection can end, an expired shutdown timeout included,
+/// reports `Close`.
 pub struct IoContext(IoRef);
 
 impl fmt::Debug for IoContext {
@@ -70,12 +79,18 @@ impl IoContext {
     #[inline]
     /// Checks readiness for read operations.
     ///
-    /// Resolves to [`Readiness::Ready`] or [`Readiness::Close`], or stays
-    /// `Pending`. Reads continue through the filter shutdown phase so that
-    /// filters can complete theirs, and are paused for the transport shutdown
-    /// phase, so `Close` is resolved here only once the connection is
-    /// terminated.
+    /// Resolves to [`Readiness::Ready`], [`Readiness::Close`] or
+    /// [`Readiness::Terminate`], or stays `Pending`. Reads continue through the
+    /// filter shutdown phase so that filters can complete theirs, and are
+    /// paused for the transport shutdown phase, so `Close` is resolved here
+    /// only once the connection is terminated.
     pub fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
+        if self.st().flags.is_force_closing() {
+            // The filter chain is replaced by `NullFilter` when `Io` is
+            // dropped, so the force-close decision is made here rather than in
+            // the chain: it has to survive that replacement.
+            return Poll::Ready(Readiness::Terminate);
+        }
         self.poll_filters_shutdown(cx);
         self.0.filter().poll_read_ready(cx)
     }
@@ -83,11 +98,15 @@ impl IoContext {
     #[inline]
     /// Checks readiness for write operations.
     ///
-    /// Resolves to [`Readiness::Ready`] or [`Readiness::Close`], or stays
-    /// `Pending`. Unlike the read path this reports `Close` at the end of a
-    /// graceful shutdown as well, once buffered output has been drained, so the
-    /// task must not flush again.
+    /// Resolves to [`Readiness::Ready`], [`Readiness::Close`] or
+    /// [`Readiness::Terminate`], or stays `Pending`. Unlike the read path this
+    /// reports `Close` at the end of a graceful shutdown as well, once buffered
+    /// output has been drained, so the task must not flush again.
     pub fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
+        if self.st().flags.is_force_closing() {
+            // see `poll_read_ready`
+            return Poll::Ready(Readiness::Terminate);
+        }
         self.poll_shutdown_deadline(cx);
         self.0.filter().poll_write_ready(cx)
     }
@@ -271,7 +290,7 @@ impl IoContext {
                         // If the "notify" flag is set, we must wake the
                         // dispatcher task whenever data is read from the source.
                         st.wake_dispatch_task();
-                        st.flags.set_read_notifed();
+                        st.flags.set_read_notified();
                     }
 
                     // A filter may write data while processing reads, for
@@ -388,6 +407,15 @@ impl IoContext {
                     if st.flags.is_stopping_filters() {
                         st.wake_read_task();
                     }
+                    if st.flags.is_stopping() && outstanding == 0 {
+                        // The transport shutdown phase ends once buffered
+                        // output is drained, but only `poll_write_ready`
+                        // reports that, so the write task has to run once more
+                        // to observe it. A backend that drives both directions
+                        // from a single task is covered by the read wake above,
+                        // one that splits them is not.
+                        st.wake_write_task();
+                    }
                     IoTaskStatus::Pause
                 } else {
                     st.flags.unset_write_paused();
@@ -412,8 +440,8 @@ impl IoContext {
     /// reached the transport, and the transport shutdown phase begins. It is
     /// also ended early when the filters cannot finish: after a clean read EOF,
     /// because no further input can arrive, which is a normal close rather than
-    /// an error; when buffered input is left unconsumed, which is reported as a
-    /// blocked shutdown; and when the shutdown timeout elapses. An I/O error
+    /// an error; when reads are paused or back-pressured, which is reported as
+    /// a blocked shutdown; and when the shutdown timeout elapses. An I/O error
     /// terminates the connection instead.
     ///
     /// The deadline is kept once it has expired so that
@@ -462,10 +490,12 @@ impl IoContext {
         let eof = !ready && st.flags.is_read_eof();
 
         // If the read buffer is not consumed it is unlikely that the filter
-        // will ever complete its shutdown.
-        let blocked = !ready
-            && !eof
-            && (st.flags.is_read_paused() || st.flags.is_read_ready_and_backpressure());
+        // will ever complete its shutdown. Back-pressure counts on its own,
+        // even once the dispatcher has taken the buffered input: reads pause
+        // under it, so the transport would neither read the input the filter
+        // waits for nor arm read interest for it.
+        let blocked =
+            !ready && !eof && (st.flags.is_read_paused() || st.flags.is_rd_backpressure());
 
         // The filter shutdown cannot complete. Move on to the transport
         // shutdown phase, which drains whatever output has been produced so far
@@ -478,26 +508,24 @@ impl IoContext {
             return;
         }
 
-        if st.cfg.shutdown_timeout().non_zero() {
-            // filter shutdown timeout
-            let timeout = st
-                .shutdown_timeout
-                .take()
-                .unwrap_or_else(|| sleep(st.cfg.shutdown_timeout()));
-            if timeout.poll_elapsed(cx).is_ready() {
-                stop_filters(
-                    st,
-                    Some(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "filter shutdown timed out",
-                    )),
-                );
-            }
-            // the deadline is put back even once it has elapsed, so that the
-            // transport shutdown phase sees it expired instead of starting a
-            // second one
-            st.shutdown_timeout.set(Some(timeout));
+        // filter shutdown timeout
+        let timeout = st
+            .shutdown_timeout
+            .take()
+            .unwrap_or_else(|| sleep(st.cfg.shutdown_timeout()));
+        if timeout.poll_elapsed(cx).is_ready() {
+            stop_filters(
+                st,
+                Some(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "filter shutdown timed out",
+                )),
+            );
         }
+        // the deadline is put back even once it has elapsed, so that the
+        // transport shutdown phase sees it expired instead of starting a
+        // second one
+        st.shutdown_timeout.set(Some(timeout));
     }
 
     /// Polls the shutdown deadline during the transport shutdown phase.
@@ -508,7 +536,7 @@ impl IoContext {
     /// reached the transport is lost.
     fn poll_shutdown_deadline(&self, cx: &mut Context<'_>) {
         let st = &self.st();
-        if !st.flags.is_stopping() || !st.cfg.shutdown_timeout().non_zero() {
+        if !st.flags.is_stopping() {
             return;
         }
 
@@ -760,6 +788,6 @@ mod tests {
             IoTaskStatus::Stop
         );
         assert!(state.is_read_eof());
-        assert!(state.is_terminating());
+        assert!(state.flags().is_terminating());
     }
 }

@@ -248,7 +248,8 @@ These settings are used by different parts of the stack:
   protocol dispatchers. A frame read-rate limit protects a decoder from peers
   that send one incomplete frame too slowly.
 - The graceful-shutdown timeout bounds both phases of shutdown together: the
-  filter shutdown and the transport drain of pending output.
+  filter shutdown and the transport drain of pending output. It cannot be
+  disabled; a zero timeout is rejected.
 - The read and write high-water marks enable backpressure. Write backpressure
   is released after outstanding output falls to half its high-water mark,
   counting both buffered output and output a transport has taken ownership of

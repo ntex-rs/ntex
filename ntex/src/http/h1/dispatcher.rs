@@ -386,9 +386,7 @@ where
         // we don't need to process responses if socket is disconnected
         // but we still want to handle requests with app service
         // so we skip response processing for dropped connection
-        if self.io.is_closed() {
-            self.ctl_peer_gone(None)
-        } else {
+        if self.io.is_active() {
             let result = self
                 .io
                 .encode(Message::Item((msg, body.size())), &self.codec)
@@ -413,6 +411,8 @@ where
                 },
                 Err(err) => self.ctl_proto_err(err.into()),
             }
+        } else {
+            self.ctl_peer_gone(None)
         }
     }
 
@@ -421,7 +421,7 @@ where
         cx: &mut Context<'_>,
         body: &mut ResponseBody<B>,
     ) -> Poll<State<F, B, Err>> {
-        if self.io.is_closed() {
+        if !self.io.is_active() {
             return Poll::Ready(self.ctl_peer_gone(None));
         } else if self.disconnect.is_none()
             && let Poll::Ready(Some(_)) = self.poll_request_payload(cx)
@@ -1040,7 +1040,7 @@ mod tests {
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
 
         assert!(h1.inner.flags.contains(Flags::READ_KA_TIMEOUT));
-        assert!(!h1.inner.io.is_closed());
+        assert!(h1.inner.io.is_active());
         sleep(Millis(50)).await;
         assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
 
@@ -1087,7 +1087,7 @@ mod tests {
         assert!(h1.inner.flags.contains(Flags::READ_HDRS_TIMEOUT));
         assert!(!h1.inner.flags.contains(Flags::READ_KA_TIMEOUT));
         assert_eq!(h1.inner.read_consumed, partial.len() as u32);
-        assert!(!h1.inner.io.is_closed());
+        assert!(h1.inner.io.is_active());
 
         client.write("\r\n\r\n");
         sleep(Millis(50)).await;
@@ -1123,7 +1123,7 @@ mod tests {
         );
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
-        assert!(!h1.inner.io.is_closed());
+        assert!(h1.inner.io.is_active());
 
         client.write("GET / HTTP/1.1\r\n\r\n");
         sleep(Millis(50)).await;
@@ -1243,14 +1243,14 @@ mod tests {
         sleep(Millis(50)).await;
 
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
-        assert!(h1.inner.io.is_closed());
+        assert!(!h1.inner.io.is_active());
         sleep(Millis(50)).await;
 
         client.local_buffer(|buf| assert_eq!(&buf[..26], b"HTTP/1.1 400 Bad Request\r\n"));
 
         client.close().await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
-        assert!(h1.inner.io.is_closed());
+        assert!(!h1.inner.io.is_active());
     }
 
     #[crate::rt_test]
@@ -1412,7 +1412,7 @@ mod tests {
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         sleep(Millis(50)).await;
         poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.unwrap();
-        assert!(h1.inner.io.is_closed());
+        assert!(!h1.inner.io.is_active());
 
         let mut buf = BytesMut::from(&client.read().await.unwrap()[..]);
         assert_eq!(
@@ -2027,7 +2027,7 @@ mod tests {
         // required because io shutdown is async oper
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
 
-        assert!(h1.inner.io.is_closed());
+        assert!(!h1.inner.io.is_active());
         let buf = client.local_buffer(BytesMut::take);
         assert_eq!(&buf[..28], b"HTTP/1.1 500 Internal Server");
         assert_eq!(&buf[buf.len() - 5..], b"error");
@@ -2115,7 +2115,7 @@ mod tests {
         // required because io shutdown is async oper
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
 
-        assert!(h1.inner.io.is_closed());
+        assert!(!h1.inner.io.is_active());
         let buf = client.local_buffer(BytesMut::take);
         assert_eq!(
             &buf[..55],

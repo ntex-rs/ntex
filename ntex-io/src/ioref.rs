@@ -46,14 +46,16 @@ impl IoRef {
     }
 
     #[inline]
-    /// Checks whether the I/O stream is closed or closing.
+    /// Checks whether the I/O stream is active.
     ///
-    /// This becomes `true` as soon as graceful shutdown or force termination
-    /// starts, so buffered output may still be flushing. Use
-    /// [`is_stopping`](Self::is_stopping) and
-    /// [`is_terminating`](Self::is_terminating) to tell the two paths apart.
-    pub fn is_closed(&self) -> bool {
-        self.0.flags.is_closed()
+    /// This becomes `false` as soon as the connection leaves its active
+    /// state, whether it was closed locally, force-terminated, or the
+    /// transport reported the peer as gone. Closing is not instantaneous, so
+    /// buffered output may still be flushing and buffered input stays
+    /// readable after this goes `false`; use
+    /// [`is_closed`](Self::is_closed) to ask whether closing has finished.
+    pub fn is_active(&self) -> bool {
+        self.0.flags.is_active()
     }
 
     #[inline]
@@ -65,23 +67,18 @@ impl IoRef {
     }
 
     #[inline]
-    /// Checks whether the transport entered graceful shutdown.
+    /// Checks whether the I/O stream is closed.
     ///
-    /// This state remains set after backend teardown completes.
-    pub fn is_stopping(&self) -> bool {
-        self.0.flags.is_stopping()
-    }
-
-    #[inline]
-    /// Checks whether the stream entered the force-termination path.
+    /// This becomes `true` once the backend released the underlying socket
+    /// and transport teardown has finished, so nothing further can be read
+    /// from or delivered to the peer. Every way a connection can end reaches
+    /// this state, whether it closed gracefully, was force-terminated or the
+    /// peer disappeared. Use [`is_active`](Self::is_active) to also cover a
+    /// close that is still in progress.
     ///
-    /// This becomes `true` after [`terminate`](Self::terminate) is called or
-    /// an I/O or filter error requests immediate termination. Unlike graceful
-    /// shutdown, pending application work is not drained. The value remains
-    /// `true` after backend teardown completes so callers can distinguish a
-    /// terminated stream from one that closed gracefully.
-    pub fn is_terminating(&self) -> bool {
-        self.0.flags.is_terminating()
+    /// Buffered input that was already received stays readable.
+    pub fn is_closed(&self) -> bool {
+        self.0.flags.is_closed()
     }
 
     #[inline]
@@ -108,6 +105,11 @@ impl IoRef {
     /// This becomes `true` once unwritten data in the transport-facing write
     /// buffer reaches the configured high watermark. Draining enough of the
     /// buffer releases it.
+    ///
+    /// Nothing enforces the signal: encoding continues to succeed while it is
+    /// set. Producers that are not driven by a dispatcher should check this
+    /// before encoding more, or the write buffer grows without bound. See
+    /// [`encode`](Self::encode).
     pub fn is_wr_backpressure(&self) -> bool {
         self.0.flags.is_wr_backpressure()
     }
@@ -122,10 +124,18 @@ impl IoRef {
     /// Force-closes the connection.
     ///
     /// The dispatcher does not wait for incomplete responses. The I/O stream is
-    /// terminated without any graceful period.
+    /// terminated without any graceful period, and whatever is still buffered
+    /// is discarded.
+    ///
+    /// The transport aborts the connection instead of closing it gracefully, so
+    /// the peer most likely observes an `RST` rather than a clean end of
+    /// stream, and output that has not been acknowledged yet is lost. That is
+    /// what keeps a truncated response distinguishable from a complete one, but
+    /// it also means this must not be used to end a connection normally. Use
+    /// [`close`](Self::close) for that.
     pub fn terminate(&self) {
         log::trace!("{}: Terminate io stream object", self.tag());
-        self.0.terminate_connection(None);
+        self.0.force_close_connection();
     }
 
     /// Queries filter-specific data.
@@ -144,6 +154,18 @@ impl IoRef {
     /// [`encode_slice`](Self::encode_slice) or
     /// [`encode_bytes`](Self::encode_bytes) when they must be observed at the
     /// call site.
+    ///
+    /// # Back-pressure is advisory
+    ///
+    /// Encoding never blocks and never refuses. Once buffered output reaches
+    /// the configured high watermark this arms write back-pressure and wakes
+    /// the dispatch task, but the item is still buffered and `Ok` is still
+    /// returned. A caller that keeps encoding without consulting
+    /// [`is_wr_backpressure`](Self::is_wr_backpressure), or awaiting
+    /// [`Io::poll_status_update`](crate::Io::poll_status_update) or
+    /// [`Io::poll_flush`](crate::Io::poll_flush), will grow the write buffer
+    /// without bound, because a slow peer cannot slow the producer down on its
+    /// own. Honouring the signal is the caller's responsibility.
     pub fn encode<U>(&self, item: U::Item, codec: &U) -> Result<(), <U as Encoder>::Error>
     where
         U: Encoder,
@@ -157,6 +179,8 @@ impl IoRef {
     ///
     /// If this triggers an eager backend write, any transport or filter error
     /// from that write is returned immediately.
+    ///
+    /// Write back-pressure is advisory here too; see [`encode`](Self::encode).
     pub fn encode_slice(&self, src: &[u8]) -> io::Result<()> {
         self.with_write_src(|buf| buf.extend_from_slice(src))
     }
@@ -166,6 +190,8 @@ impl IoRef {
     ///
     /// If this triggers an eager backend write, any transport or filter error
     /// from that write is returned immediately.
+    ///
+    /// Write back-pressure is advisory here too; see [`encode`](Self::encode).
     pub fn encode_bytes<B>(&self, src: B) -> io::Result<()>
     where
         BytePage: From<B>,
@@ -322,16 +348,14 @@ impl IoRef {
     {
         let st = &self.0;
 
-        if st.flags.is_stopping_any() {
-            if st.flags.is_closed() {
-                Err(st.error_or_disconnected())
-            } else {
-                Err(io::Error::other("I/O stream is closing"))
-            }
-        } else {
+        if st.flags.is_active() {
             let result = st.buffer.with_write_src(f);
             self.consolidate_write_state(false)?;
             Ok(result)
+        } else if st.flags.is_peer_gone() {
+            Err(st.error_or_disconnected())
+        } else {
+            Err(io::Error::other("I/O stream is closing"))
         }
     }
 
@@ -435,7 +459,7 @@ impl IoRef {
             }
         }
 
-        if st.flags.is_stopping_any()
+        if !st.flags.is_active()
             && let Some(err) = st.error()
         {
             return Err(err);
@@ -485,7 +509,7 @@ impl IoRef {
             if !st.should_disable_rd_backpressure(buf.len()) {
                 return;
             }
-            st.flags.unset_all_read_flags();
+            st.flags.unset_read_ready_and_backpressure();
         } else {
             st.flags.unset_read_ready();
         }
@@ -511,7 +535,7 @@ impl IoRef {
             if !st.should_disable_rd_backpressure(st.buffer.read_dst_size()) {
                 return;
             }
-            st.flags.unset_all_read_flags();
+            st.flags.unset_read_ready_and_backpressure();
         }
 
         if st.flags.is_read_paused() {
@@ -602,8 +626,15 @@ impl IoRef {
 
     #[doc(hidden)]
     /// Register filter callbacks
+    ///
+    /// The callbacks are discarded once the connection is closed or its `Io`
+    /// has been dropped. They are released together with the `Io`, so storing
+    /// them afterwards could keep the connection state alive through an
+    /// `IoRef` they hold.
     pub fn register_filter_callbacks<F: crate::IoCallbacks + 'static>(&self, f: F) {
-        self.0.extensions.register_filter_callbacks(f);
+        if !self.0.flags.is_closed() && !self.0.is_io_dropped() {
+            self.0.extensions.register_filter_callbacks(f);
+        }
     }
 
     /// Call handle write method, returns true if
@@ -639,7 +670,7 @@ impl IoRef {
     /// A graceful shutdown keeps it: the write task still needs the transport
     /// to shut it down.
     fn restore_handle(&self, hnd: Box<dyn Handle>) {
-        if self.0.flags.is_terminating() || self.0.flags.is_terminated() {
+        if self.0.flags.is_terminating() || self.0.flags.is_closed() {
             drop(hnd);
         } else {
             self.0.handle.set(Some(hnd));
@@ -695,6 +726,35 @@ mod tests {
     use ntex_util::time::{Millis, sleep, timeout};
 
     use super::*;
+
+    /// The three public lifecycle predicates answer different questions and
+    /// must not be read as stages of one another.
+    #[ntex::test]
+    async fn lifecycle_predicates_are_independent() {
+        // a force termination starts: it ends abnormally and is closing, but
+        // the backend still holds the socket
+        let (_client, server) = IoTest::create();
+        let io = Io::from(server);
+        assert!(io.is_active() && !io.flags().is_terminating() && !io.is_closed());
+
+        io.terminate();
+        assert!(!io.is_active());
+        assert!(io.flags().is_terminating());
+        assert!(!io.is_closed(), "socket released before teardown ran");
+
+        // a graceful shutdown also releases the socket, without ever being an
+        // abnormal ending
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = Io::from(server);
+        io.shutdown().await.unwrap();
+        assert!(io.is_closed());
+        assert!(!io.is_active());
+        assert!(
+            !io.flags().is_terminating(),
+            "a graceful shutdown reported as an abort"
+        );
+    }
     use crate::{FilterCtx, Io, testing::IoTest};
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
@@ -727,7 +787,7 @@ mod tests {
         client.read_error(io::Error::other("err"));
         let msg = state.recv(&BytesCodec).await;
         assert!(msg.is_err());
-        assert!(state.flags().is_terminated());
+        assert!(state.flags().is_closed());
 
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
@@ -737,7 +797,7 @@ mod tests {
         let res = poll_fn(|cx| Poll::Ready(state.poll_recv(&BytesCodec, cx))).await;
         if let Poll::Ready(msg) = res {
             assert!(msg.is_err());
-            assert!(state.flags().is_terminated());
+            assert!(state.flags().is_closed());
         }
 
         let (client, server) = IoTest::create();
@@ -764,7 +824,7 @@ mod tests {
             Either::Right(ref err)
                 if err.kind() == io::ErrorKind::Other && err.to_string() == "err"
         ));
-        assert!(state.flags().is_terminated());
+        assert!(state.flags().is_closed());
 
         let res = state.send(Bytes::from_static(b"test"), &BytesCodec).await;
         assert!(res.is_err());
@@ -775,9 +835,9 @@ mod tests {
         state.terminate();
         assert!(state.flags().is_terminating());
         assert!(!state.flags().is_stopping());
-        assert!(!state.flags().is_terminated());
+        assert!(!state.flags().is_closed());
         state.shutdown().await.unwrap();
-        assert!(state.flags().is_terminated());
+        assert!(state.flags().is_closed());
     }
 
     #[ntex::test]
@@ -796,7 +856,7 @@ mod tests {
             err,
             Either::Right(ref err) if err.kind() == io::ErrorKind::WriteZero
         ));
-        assert!(state.flags().is_terminated());
+        assert!(state.flags().is_closed());
     }
 
     #[ntex::test]
@@ -816,7 +876,7 @@ mod tests {
         );
         client.close().await;
         assert!(state.is_read_eof());
-        assert!(!state.is_closed());
+        assert!(state.is_active());
         assert_eq!(
             lazy(|cx| Pin::new(&mut waiter).poll(cx)).await,
             Poll::Pending
@@ -866,7 +926,7 @@ mod tests {
         let state = Io::from(server);
         state.terminate();
 
-        assert!(state.is_closed());
+        assert!(!state.is_active());
         assert!(state.encode_slice(TEXT.as_bytes()).is_err());
         assert!(state.encode_bytes(Bytes::from_static(BIN)).is_err());
         assert!(
