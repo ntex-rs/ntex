@@ -1,5 +1,4 @@
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::{cell::Cell, io, mem, num::NonZeroU32, rc::Rc, task::Poll};
+use std::{cell::Cell, io, mem, num::NonZeroU32, os::fd::AsRawFd, rc::Rc, task::Poll};
 
 use ntex_bytes::{BufMut, BytePage, BytePages, BytesMut};
 use ntex_io::{IoContext, IoTaskStatus};
@@ -35,7 +34,6 @@ bitflags::bitflags! {
     struct Flags: u16 {
         const RD_CANCELING = 0b0000_0000_0001;
         const RD_REISSUE   = 0b0000_0000_0010;
-        const RD_MORE      = 0b0000_0000_0100;
         const WR_CANCELING = 0b0000_0000_1000;
         const WR_REISSUE   = 0b0000_0001_0000;
         const NO_ZC        = 0b0000_0010_0000;
@@ -43,10 +41,6 @@ bitflags::bitflags! {
         const DROPPED_SEC  = 0b0000_1000_0000;
         /// `Close` is submitted, descriptor belongs to the kernel
         const CLOSING      = 0b0001_0000_0000;
-        /// `POLLHUP` fired while `RD_MORE` reads were in progress
-        const HUP_DEFERRED = 0b0010_0000_0000;
-        /// Descriptor is registered in the `HupWatcher` epoll instance
-        const WATCHED      = 0b0100_0000_0000;
     }
 }
 
@@ -59,7 +53,6 @@ struct StreamItem {
     flags: Flags,
     rd_op: Option<NonZeroU32>,
     wr_op: Option<NonZeroU32>,
-    poll_op: Option<NonZeroU32>,
     ctx: IoContext,
 }
 
@@ -74,11 +67,6 @@ enum Operation {
         buf: BytePage,
         result: Option<io::Result<usize>>,
     },
-    Poll {
-        id: usize,
-    },
-    /// Readiness of the `HupWatcher` epoll instance
-    Watch,
     Shutdown {
         tx: Option<pool::Sender<io::Result<()>>>,
     },
@@ -104,21 +92,6 @@ struct StreamOpsInner {
 struct StreamOpsStorage {
     ops: Slab<Option<Operation>>,
     streams: Slab<StreamItem>,
-    watcher: HupWatcher,
-}
-
-/// Watches half-closed sockets for `POLLHUP` and `POLLERR`.
-///
-/// io-uring always adds `POLLRDHUP` to the poll mask, so after the peer
-/// half-closes the connection, a socket poll completes immediately and cannot
-/// be used to wait for terminal conditions. epoll reports only requested
-/// events plus `EPOLLHUP` and `EPOLLERR`, so half-closed sockets are moved
-/// to an epoll instance, which is in turn polled through io-uring.
-#[derive(Default)]
-struct HupWatcher {
-    epoll: Option<OwnedFd>,
-    op: Option<NonZeroU32>,
-    count: usize,
 }
 
 impl StreamOps {
@@ -152,7 +125,6 @@ impl StreamOps {
                     storage: Cell::new(Some(Box::new(StreamOpsStorage {
                         ops,
                         streams: Slab::new(),
-                        watcher: HupWatcher::default(),
                     }))),
                 });
                 inner = Some(ops.clone());
@@ -174,15 +146,10 @@ impl StreamOps {
             ctx,
             rd_op: None,
             wr_op: None,
-            poll_op: None,
             flags: if zc { self.0.default_flags } else { Flags::NO_ZC },
         };
 
-        let id = self.0.with(|st| {
-            let id = st.streams.insert(item);
-            st.arm_poll(id, &self.0.api);
-            id
-        });
+        let id = self.0.with(|st| st.streams.insert(item));
         (
             StreamCtl {
                 id,
@@ -235,14 +202,6 @@ impl Handler for StreamOpsHandler {
                         }
                     }
                 }
-                Operation::Poll { id } => {
-                    if let Some(item) = st.streams.get_mut(id) {
-                        item.poll_op.take();
-                    }
-                }
-                Operation::Watch => {
-                    st.watcher.op.take();
-                }
                 Operation::Nop | Operation::Close { .. } | Operation::Shutdown { .. } => {}
             });
     }
@@ -274,30 +233,14 @@ impl Handler for StreamOpsHandler {
                                 unsafe { buf.advance_mut(size) };
                             }
 
-                            // handle IORING_CQE_F_SOCK_NONEMPTY flag
-                            //
-                            // In case of disconnect, sock_nonempty is set to true.
-                            // First completion contains data, second Recv(0)
-                            // Before receiving Recv(0), POLLHUP can be triggered
-                            // Reactor must read all recv() call before handling
-                            // disconnects
-                            let more = cqueue::sock_nonempty(flags) && !matches!(res, Ok(0) | Err(_));
-
-                            // Input is released on every completion, so that read
-                            // back-pressure and pauses stop the chain of reads
-                            let status = item.ctx.release_read_buf(buf, Poll::Ready(res));
-                            if more && status == IoTaskStatus::Io {
-                                item.flags.insert(Flags::RD_MORE);
-                                st.recv(id, false, &self.inner.api);
-                            } else {
-                                item.flags.remove(Flags::RD_MORE);
-                                if !more && item.flags.contains(Flags::HUP_DEFERRED) {
-                                    // input is drained, handle deferred disconnect
-                                    item.flags.remove(Flags::HUP_DEFERRED);
-                                    item.ctx.stop(None);
-                                } else if status == IoTaskStatus::Io {
-                                    st.recv(id, self.inner.api.is_new(), &self.inner.api);
-                                }
+                            // handle IORING_CQE_F_SOCK_NONEMPTY flag, more input
+                            // is queued, keep reading into the same buffer
+                            if cqueue::sock_nonempty(flags) && !matches!(res, Ok(0) | Err(_)) {
+                                st.recv_more(id, buf, &self.inner.api);
+                            } else if item.ctx.release_read_buf(buf, Poll::Ready(res))
+                                == IoTaskStatus::Io
+                            {
+                                st.recv(id, self.inner.api.is_new(), &self.inner.api);
                             }
                         }
                     }
@@ -345,28 +288,6 @@ impl Handler for StreamOpsHandler {
                         }
                     }
                 }
-                Operation::Poll { id } => {
-                    if let Some(item) = st.streams.get_mut(id) {
-                        item.poll_op.take();
-                        #[allow(clippy::cast_sign_loss)]
-                        match res {
-                            Ok(ev) if ev & libc::POLLERR as usize != 0 => item.error(),
-                            Ok(ev) if ev & libc::POLLHUP as usize != 0 => item.hangup(),
-                            // `POLLRDHUP`, peer half-closed the connection.
-                            // Re-arming would complete immediately again
-                            Ok(_) => st.watch(id, &self.inner.api),
-                            Err(e) => item.ctx.stop(Some(e)),
-                        }
-                    }
-                }
-                Operation::Watch => {
-                    st.watcher.op.take();
-                    if res.is_ok() {
-                        st.watch_completed(&self.inner.api);
-                    } else {
-                        log::error!("HUP watcher poll failed: {res:?}");
-                    }
-                }
                 Operation::Shutdown { tx } => {
                     if let Some(tx) = tx {
                         let _ = tx.send(res.map(|_| ()));
@@ -410,7 +331,6 @@ impl Handler for StreamOpsHandler {
                     drop(item.io);
                 }
             }
-            v.watcher = HupWatcher::default();
             self.inner.storage.set(Some(v));
         }
         self.inner.delayed_feed.clear();
@@ -528,155 +448,8 @@ impl StreamOpsStorage {
         }
     }
 
-    /// Watch for terminal conditions, `POLLHUP` and `POLLERR`
-    fn arm_poll(&mut self, id: usize, api: &ReactorApi) {
-        if let Some(item) = self.streams.get_mut(id)
-            && item.poll_op.is_none()
-            && !item.flags.contains(Flags::CLOSING)
-        {
-            let op =
-                opcode::PollAdd::new(item.fd(), (libc::POLLHUP | libc::POLLERR) as u32).build();
-            let op_id = self.ops.insert(Some(Operation::Poll { id })) as u32;
-            item.poll_op = NonZeroU32::new(op_id);
-            api.submit(op_id, op);
-        }
-    }
-
     fn add_operation(&mut self, op: Operation) -> u32 {
         self.ops.insert(Some(op)) as u32
-    }
-
-    /// Move half-closed socket to the `HupWatcher`
-    fn watch(&mut self, id: usize, api: &ReactorApi) {
-        let Some(item) = self.streams.get_mut(id) else {
-            return;
-        };
-        if item.flags.intersects(Flags::WATCHED | Flags::CLOSING) {
-            return;
-        }
-        let epoll = if let Some(ref epoll) = self.watcher.epoll {
-            epoll
-        } else {
-            // SAFETY: plain syscall, result is checked
-            let fd = unsafe { libc::epoll_create1(libc::EPOLL_CLOEXEC) };
-            if fd < 0 {
-                log::error!("Cannot create HUP watcher: {}", io::Error::last_os_error());
-                return;
-            }
-            // SAFETY: `fd` is a new descriptor owned by nobody else
-            self.watcher
-                .epoll
-                .insert(unsafe { OwnedFd::from_raw_fd(fd) })
-        };
-
-        // `EPOLLHUP` and `EPOLLERR` are always reported
-        let mut ev = libc::epoll_event {
-            events: libc::EPOLLONESHOT as u32,
-            u64: id as u64,
-        };
-        // SAFETY: both descriptors are valid, `ev` outlives the call
-        let res = unsafe {
-            libc::epoll_ctl(
-                epoll.as_raw_fd(),
-                libc::EPOLL_CTL_ADD,
-                item.io.as_raw_fd(),
-                &raw mut ev,
-            )
-        };
-        if res < 0 {
-            log::error!(
-                "{}: Cannot watch half-closed socket: {}",
-                item.tag(),
-                io::Error::last_os_error()
-            );
-            return;
-        }
-        #[cfg(feature = "trace")]
-        log::trace!("{}: Watch HUP({id})", item.tag());
-
-        item.flags.insert(Flags::WATCHED);
-        self.watcher.count += 1;
-        self.arm_watcher(api);
-    }
-
-    /// Remove socket from the `HupWatcher`
-    fn unwatch(&mut self, id: usize) {
-        if let Some(item) = self.streams.get_mut(id)
-            && item.flags.contains(Flags::WATCHED)
-        {
-            item.flags.remove(Flags::WATCHED);
-            self.watcher.count -= 1;
-            if let Some(ref epoll) = self.watcher.epoll {
-                // SAFETY: both descriptors are valid
-                unsafe {
-                    libc::epoll_ctl(
-                        epoll.as_raw_fd(),
-                        libc::EPOLL_CTL_DEL,
-                        item.io.as_raw_fd(),
-                        std::ptr::null_mut(),
-                    );
-                }
-            }
-        }
-    }
-
-    fn arm_watcher(&mut self, api: &ReactorApi) {
-        if self.watcher.op.is_none()
-            && self.watcher.count > 0
-            && let Some(ref epoll) = self.watcher.epoll
-        {
-            let op = opcode::PollAdd::new(Fd(epoll.as_raw_fd()), libc::POLLIN as u32).build();
-            let op_id = self.add_operation(Operation::Watch);
-            self.watcher.op = NonZeroU32::new(op_id);
-            api.submit(op_id, op);
-        }
-    }
-
-    fn watch_completed(&mut self, api: &ReactorApi) {
-        const EVENTS: i32 = 64;
-
-        let Some(epfd) = self.watcher.epoll.as_ref().map(AsRawFd::as_raw_fd) else {
-            return;
-        };
-        let mut events = [libc::epoll_event { events: 0, u64: 0 }; EVENTS as usize];
-        loop {
-            // SAFETY: `events` is valid for `EVENTS` entries, zero timeout
-            let n = unsafe { libc::epoll_wait(epfd, events.as_mut_ptr(), EVENTS, 0) };
-            let Ok(n) = usize::try_from(n) else {
-                let err = io::Error::last_os_error();
-                if err.kind() == io::ErrorKind::Interrupted {
-                    continue;
-                }
-                log::error!("HUP watcher failed: {err}");
-                break;
-            };
-
-            for ev in &events[..n] {
-                let (flags, id) = (ev.events, ev.u64);
-                #[allow(clippy::cast_possible_truncation)]
-                let id = id as usize;
-                // registration is one-shot, the event can be reported only once
-                self.unwatch(id);
-
-                if let Some(item) = self.streams.get_mut(id)
-                    && !item.flags.contains(Flags::CLOSING)
-                {
-                    #[cfg(feature = "trace")]
-                    log::trace!("{}: HUP watcher({id}) {flags:#x}", item.tag());
-
-                    #[allow(clippy::cast_sign_loss)]
-                    if flags & libc::EPOLLERR as u32 != 0 {
-                        item.error();
-                    } else if flags & libc::EPOLLHUP as u32 != 0 {
-                        item.hangup();
-                    }
-                }
-            }
-            if n < EVENTS as usize {
-                break;
-            }
-        }
-        self.arm_watcher(api);
     }
 
     fn pause_read(&mut self, id: usize, api: &ReactorApi) {
@@ -693,9 +466,6 @@ impl StreamOpsStorage {
     }
 
     fn drop_stream(&mut self, id: usize, api: &ReactorApi) {
-        // descriptor must leave the epoll set while it is still valid
-        self.unwatch(id);
-
         // Dropping while `StreamOps` handling event
         let Some(item) = self.streams.get_mut(id) else {
             return;
@@ -706,9 +476,8 @@ impl StreamOpsStorage {
 
         // `Close` only removes the descriptor from the file table, in-flight
         // operations keep the socket open, so no FIN or RST is sent until
-        // they complete. The `POLLHUP` poll in particular completes only
-        // once the connection is gone. Operations are canceled by id, which does
-        // not depend on the descriptor still being present in the table.
+        // they complete. Operations are canceled by id, which does not
+        // depend on the descriptor still being present in the table.
         if let Some(op) = item.rd_op
             && !item.flags.contains(Flags::RD_CANCELING)
         {
@@ -719,9 +488,6 @@ impl StreamOpsStorage {
             && !item.flags.contains(Flags::WR_CANCELING)
         {
             item.flags.insert(Flags::WR_CANCELING);
-            api.cancel(op.get());
-        }
-        if let Some(op) = item.poll_op {
             api.cancel(op.get());
         }
 
@@ -776,23 +542,6 @@ impl StreamItem {
 
     fn tag(&self) -> &'static str {
         self.ctx.tag()
-    }
-
-    /// Socket reported `POLLERR`
-    fn error(&mut self) {
-        let err = self.io.take_error().ok().flatten();
-        self.ctx.stop(err);
-    }
-
-    /// Socket reported `POLLHUP`
-    fn hangup(&mut self) {
-        if self.flags.contains(Flags::RD_MORE) {
-            // Notification is one-shot, remember the
-            // disconnect until pending input is read
-            self.flags.insert(Flags::HUP_DEFERRED);
-        } else {
-            self.ctx.stop(None);
-        }
     }
 }
 

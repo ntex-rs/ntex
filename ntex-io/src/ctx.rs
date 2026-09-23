@@ -508,26 +508,24 @@ impl IoContext {
             return;
         }
 
-        if st.cfg.shutdown_timeout().non_zero() {
-            // filter shutdown timeout
-            let timeout = st
-                .shutdown_timeout
-                .take()
-                .unwrap_or_else(|| sleep(st.cfg.shutdown_timeout()));
-            if timeout.poll_elapsed(cx).is_ready() {
-                stop_filters(
-                    st,
-                    Some(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "filter shutdown timed out",
-                    )),
-                );
-            }
-            // the deadline is put back even once it has elapsed, so that the
-            // transport shutdown phase sees it expired instead of starting a
-            // second one
-            st.shutdown_timeout.set(Some(timeout));
+        // filter shutdown timeout
+        let timeout = st
+            .shutdown_timeout
+            .take()
+            .unwrap_or_else(|| sleep(st.cfg.shutdown_timeout()));
+        if timeout.poll_elapsed(cx).is_ready() {
+            stop_filters(
+                st,
+                Some(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "filter shutdown timed out",
+                )),
+            );
         }
+        // the deadline is put back even once it has elapsed, so that the
+        // transport shutdown phase sees it expired instead of starting a
+        // second one
+        st.shutdown_timeout.set(Some(timeout));
     }
 
     /// Polls the shutdown deadline during the transport shutdown phase.
@@ -538,7 +536,7 @@ impl IoContext {
     /// reached the transport is lost.
     fn poll_shutdown_deadline(&self, cx: &mut Context<'_>) {
         let st = &self.st();
-        if !st.flags.is_stopping() || !st.cfg.shutdown_timeout().non_zero() {
+        if !st.flags.is_stopping() {
             return;
         }
 

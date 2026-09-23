@@ -2536,43 +2536,6 @@ mod tests {
     }
 
     #[ntex::test]
-    async fn zero_shutdown_timeout_does_not_force_filter_shutdown() {
-        #[derive(Debug)]
-        struct PendingShutdown(Rc<Cell<bool>>);
-
-        impl FilterLayer for PendingShutdown {
-            fn process_read_buf(&self, _: &FilterBuf<'_>) -> io::Result<()> {
-                Ok(())
-            }
-
-            fn process_write_buf(&self, _: &FilterBuf<'_>) -> io::Result<()> {
-                Ok(())
-            }
-
-            fn shutdown(&self, _: &FilterBuf<'_>) -> io::Result<Poll<()>> {
-                if self.0.get() {
-                    Ok(Poll::Ready(()))
-                } else {
-                    Ok(Poll::Pending)
-                }
-            }
-        }
-
-        let (_client, server) = IoTest::create();
-        let ready = Rc::new(Cell::new(false));
-        let io = Io::new(
-            server,
-            SharedCfg::new("SRV")
-                .add(IoConfig::default().set_shutdown_timeout(ntex_util::time::Seconds::ZERO)),
-        )
-        .add_filter(PendingShutdown(ready.clone()));
-
-        io.close();
-        sleep(Millis(50)).await;
-        assert!(!io.st().flags.is_closed());
-    }
-
-    #[ntex::test]
     async fn intermediate_filter_output_reaches_transport() {
         // A filter that emits output while processing reads, the way a TLS
         // layer emits handshake records.
