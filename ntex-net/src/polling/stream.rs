@@ -28,6 +28,11 @@ bitflags::bitflags! {
     struct Flags: u8 {
         const RD          = 0b0000_0001;
         const WR          = 0b0000_0010;
+        /// Peer half-close has been observed, do not subscribe to it again.
+        ///
+        /// `RDHUP` is a level condition, re-arming while subscribed re-reports
+        /// it immediately and the poller would spin without making progress.
+        const RD_HUP      = 0b0000_0100;
         const DROPPED_PRI = 0b0001_0000;
         const DROPPED_SEC = 0b0010_0000;
     }
@@ -111,8 +116,26 @@ impl Clone for StreamOps {
     }
 }
 
-impl Handler for StreamOpsHandler {
-    fn event(&mut self, id: usize, ev: Event) {
+bitflags::bitflags! {
+    /// A notification reduced to the parts the stream handler acts on.
+    ///
+    /// Kept separate from `Event` so the policy can be exercised on backends
+    /// whose `Event` cannot represent `RD_HUP` or `HUP` (kqueue reports both
+    /// as absent).
+    #[derive(Copy, Clone, Debug)]
+    struct Notify: u8 {
+        const READABLE = 0b0000_0001;
+        const WRITABLE = 0b0000_0010;
+        /// Peer closed its write side, `EPOLLRDHUP`.
+        const RD_HUP   = 0b0000_0100;
+        /// Terminal condition, `EPOLLHUP` or `EPOLLERR`.
+        const HUP      = 0b0000_1000;
+    }
+}
+
+impl StreamOpsHandler {
+    /// Apply a notification to a stream.
+    fn handle_event(&mut self, id: usize, ev: Notify) {
         self.inner.with(|streams| {
             if !streams.contains(id) {
                 return;
@@ -120,16 +143,18 @@ impl Handler for StreamOpsHandler {
             let io = &mut streams[id];
             let mut renew = Event::new(0, false, false).with_interrupt();
             #[cfg(feature = "trace")]
-            log::trace!(
-                "{}: {:?}-Evt rd({:?}) wr({:?}) {:?}",
-                io.tag(),
-                io.fd(),
-                ev.readable,
-                ev.writable,
-                io.flags
-            );
+            log::trace!("{}: {:?}-Evt {ev:?} {:?}", io.tag(), io.fd(), io.flags);
 
-            if ev.readable {
+            if ev.contains(Notify::RD_HUP) {
+                io.flags.insert(Flags::RD_HUP);
+            }
+
+            // A half-close is only acted upon while read interest is armed.
+            // If the io layer paused reads, delivering eof now would bypass
+            // back-pressure; `interest()` performs the read once it resumes.
+            let read_hup = ev.contains(Notify::RD_HUP) && io.flags.contains(Flags::RD);
+
+            if ev.contains(Notify::READABLE) || read_hup {
                 // A single read per notification, unlike the other backends
                 // which loop until the io layer stops them. `BufConfig::resize`
                 // hands the read a chunk of at least `high` bytes, and read
@@ -145,7 +170,7 @@ impl Handler for StreamOpsHandler {
                 renew.readable = true;
             }
 
-            if ev.writable {
+            if ev.contains(Notify::WRITABLE) {
                 if io.write() == IoTaskStatus::Io {
                     renew.writable = true;
                     io.flags.insert(Flags::WR);
@@ -156,9 +181,13 @@ impl Handler for StreamOpsHandler {
                 renew.writable = true;
             }
 
-            if ev.is_interrupt() {
+            if ev.contains(Notify::HUP) {
                 io.ctx.stop(None);
             } else {
+                // `RDHUP` is a level condition, so it is subscribed at most
+                // once; re-arming it after it fired would report immediately
+                // and spin without progress.
+                renew.set_rd_interrupt(!io.flags.contains(Flags::RD_HUP));
                 #[cfg(feature = "trace")]
                 log::trace!(
                     "{}: {:?}-Renew rd({:?}) wr({:?})",
@@ -170,6 +199,19 @@ impl Handler for StreamOpsHandler {
                 self.inner.api.modify(io.fd(), id as u32, renew);
             }
         });
+    }
+}
+
+impl Handler for StreamOpsHandler {
+    fn event(&mut self, id: usize, ev: Event) {
+        let mut notify = Notify::empty();
+        notify.set(Notify::READABLE, ev.readable);
+        notify.set(Notify::WRITABLE, ev.writable);
+        notify.set(Notify::RD_HUP, ev.is_rd_interrupt());
+        // `EPOLLERR` is terminal and, like `EPOLLHUP`, is reported whether or
+        // not it was requested. Re-arming on it makes no progress.
+        notify.set(Notify::HUP, ev.is_interrupt() || ev.is_err() == Some(true));
+        self.handle_event(id, notify);
     }
 
     fn error(&mut self, id: usize, err: io::Error) {
@@ -341,6 +383,9 @@ impl StreamOpsInner {
             }
 
             if want_update_read || want_update_write {
+                if !io.flags.contains(Flags::RD_HUP) {
+                    event.set_rd_interrupt(true);
+                }
                 #[cfg(feature = "trace")]
                 log::trace!(
                     "{}: {:?}-Upd rd({:?}) wr({:?})",
@@ -601,5 +646,173 @@ mod tests {
         assert!(ops.0.delayed_feed.is_empty());
         handler.cleanup();
         drop(io);
+    }
+
+    /// Half-close and terminal-condition handling.
+    ///
+    /// These drive `handle_event` directly, so the policy is covered on every
+    /// platform even though only epoll ever reports `RDHUP` or `ERR`.
+    mod hup {
+        use std::{io::Write, net::Shutdown};
+
+        use super::*;
+
+        struct Fixture {
+            io: Io,
+            ops: StreamOps,
+            handler: StreamOpsHandler,
+            id: usize,
+            peer: UnixStream,
+            _ctl: StreamCtl,
+            _reactor: Reactor,
+        }
+
+        impl Fixture {
+            fn new() -> Self {
+                let reactor = Reactor::new().unwrap();
+                let ops = StreamOps::get(&reactor);
+                let (socket, peer) = UnixStream::pair().unwrap();
+                socket.set_nonblocking(true).unwrap();
+                let ctl = Rc::new(Cell::new(None));
+                let io = Io::new(
+                    TestStream {
+                        socket: Socket::from(socket),
+                        ops: ops.clone(),
+                        ctl: ctl.clone(),
+                    },
+                    SharedCfg::default(),
+                );
+                let ctl = ctl.take().unwrap();
+                Fixture {
+                    id: ctl.id as usize,
+                    handler: StreamOpsHandler {
+                        inner: ops.0.clone(),
+                    },
+                    io,
+                    ops,
+                    peer,
+                    _ctl: ctl,
+                    _reactor: reactor,
+                }
+            }
+
+            /// Arm read interest, mirroring what `interest(id, true, _)` leaves
+            /// behind once the io layer has asked for reads.
+            fn arm_read(&self) {
+                self.ops
+                    .0
+                    .with(|streams| streams[self.id].flags.insert(Flags::RD));
+            }
+
+            fn fire(&mut self, notify: Notify) {
+                let id = self.id;
+                self.handler.handle_event(id, notify);
+            }
+
+            fn flags(&self) -> Flags {
+                self.ops.0.with(|streams| streams[self.id].flags)
+            }
+
+            fn teardown(mut self) {
+                self.handler.cleanup();
+            }
+        }
+
+        /// The upstream split must keep `HUP` and `RDHUP` distinct. If
+        /// `with_interrupt` ever subscribes `RDHUP` again, the poller spins on
+        /// every peer `FIN`, so pin the round-trip here. Only epoll represents
+        /// these flags.
+        #[cfg(target_os = "linux")]
+        #[ntex::test]
+        async fn event_flags_keep_hup_and_rd_hup_separate() {
+            let hup = Event::new(0, false, false).with_interrupt();
+            assert!(hup.is_interrupt());
+            assert!(!hup.is_rd_interrupt(), "with_interrupt subscribed RDHUP");
+
+            let rd_hup = Event::new(0, false, false).with_rd_interrupt();
+            assert!(rd_hup.is_rd_interrupt());
+            assert!(!rd_hup.is_interrupt(), "with_rd_interrupt subscribed HUP");
+        }
+
+        /// A peer half-close while reads are armed must surface as eof, not as
+        /// a hard stop: buffered output still has to drain.
+        #[ntex::test]
+        async fn rd_hup_with_read_armed_delivers_eof() {
+            let mut fixture = Fixture::new();
+            fixture.arm_read();
+            fixture.peer.shutdown(Shutdown::Write).unwrap();
+
+            fixture.fire(Notify::RD_HUP);
+
+            let latched = fixture.flags().contains(Flags::RD_HUP);
+            let eof = fixture.io.is_read_eof();
+            let closed = fixture.io.is_closed();
+            fixture.teardown();
+
+            assert!(latched, "RD_HUP was not latched");
+            assert!(eof, "half-close did not reach the io layer");
+            assert!(!closed, "half-close terminated the connection");
+        }
+
+        /// With reads paused the half-close is only latched. Delivering eof
+        /// here would push past read back-pressure; `interest()` picks it up
+        /// when the io layer resumes.
+        #[ntex::test]
+        async fn rd_hup_with_read_paused_defers_eof() {
+            let mut fixture = Fixture::new();
+            (&fixture.peer).write_all(b"hello").unwrap();
+            fixture.peer.shutdown(Shutdown::Write).unwrap();
+
+            // Fired twice: a latched RDHUP must not be re-subscribed, and a
+            // repeat must not read either, which is what a spin would look
+            // like from here.
+            fixture.fire(Notify::RD_HUP);
+            fixture.fire(Notify::RD_HUP);
+
+            let latched = fixture.flags().contains(Flags::RD_HUP);
+            let armed = fixture.flags().contains(Flags::RD);
+            let eof = fixture.io.is_read_eof();
+            let buffered = fixture.io.with_read_dst(|b| b.len());
+            fixture.teardown();
+
+            assert!(latched, "RD_HUP was not latched");
+            assert!(!armed, "paused read interest was armed");
+            assert!(!eof, "eof bypassed read back-pressure");
+            assert_eq!(buffered, 0, "read ran while reads were paused");
+        }
+
+        /// Once latched the half-close is delivered by the next armed read
+        /// rather than being lost.
+        #[ntex::test]
+        async fn latched_rd_hup_delivers_eof_when_reads_resume() {
+            let mut fixture = Fixture::new();
+            fixture.peer.shutdown(Shutdown::Write).unwrap();
+            fixture.fire(Notify::RD_HUP);
+            assert!(!fixture.io.is_read_eof());
+
+            fixture.ops.0.interest(fixture.id as u32, true, false);
+
+            let eof = fixture.io.is_read_eof();
+            let latched = fixture.flags().contains(Flags::RD_HUP);
+            fixture.teardown();
+
+            assert!(latched, "RD_HUP latch was cleared");
+            assert!(eof, "eof was lost after the latch");
+        }
+
+        /// `EPOLLERR` is terminal and is reported whether or not it was
+        /// requested, so it must stop the stream instead of re-arming.
+        #[ntex::test]
+        async fn err_stops_the_stream() {
+            let mut fixture = Fixture::new();
+            fixture.arm_read();
+
+            fixture.fire(Notify::HUP);
+
+            let closed = fixture.io.is_closed();
+            fixture.teardown();
+
+            assert!(closed, "EPOLLERR did not stop the stream");
+        }
     }
 }
