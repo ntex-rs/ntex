@@ -137,7 +137,7 @@ async fn test_openssl_read_before_error() {
 #[cfg(all(windows, feature = "openssl"))]
 #[ntex::test]
 async fn test_schannel_string() {
-    use ntex::{Service, io::types::HttpProtocol, server::openssl};
+    use ntex::{io::types::HttpProtocol, server::openssl};
     use ntex_tls::schannel::{ClientConfig, PeerCert, TlsConnector};
     use tls_openssl::x509::X509;
 
