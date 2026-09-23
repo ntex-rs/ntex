@@ -45,6 +45,7 @@ bitflags::bitflags! {
 }
 
 const ZC_SIZE: u32 = 1536;
+const ZC_MAX_SIZE: u32 = 128 * 1024;
 const IORING_RECVSEND_POLL_FIRST: u16 = 1;
 
 #[derive(Debug)]
@@ -435,10 +436,12 @@ impl StreamOpsStorage {
                         };
 
                     api.submit_inline(op_id, move |entry| {
-                        if item.flags.contains(Flags::NO_ZC) || buf_len <= ZC_SIZE {
-                            opcode2::Send::with(entry, item.fd()).buffer(buf_ptr, buf_len);
-                        } else {
+                        if !item.flags.contains(Flags::NO_ZC)
+                            && (ZC_SIZE..=ZC_MAX_SIZE).contains(&buf_len)
+                        {
                             opcode2::SendZc::with(entry, item.fd()).buffer(buf_ptr, buf_len);
+                        } else {
+                            opcode2::Send::with(entry, item.fd()).buffer(buf_ptr, buf_len);
                         }
                     });
                 }
