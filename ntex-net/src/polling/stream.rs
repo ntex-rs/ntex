@@ -482,24 +482,6 @@ impl Drop for WeakStreamCtl {
 }
 
 impl StreamItem {
-    /// Builds the event to arm poll interest with.
-    ///
-    /// `modify` replaces the whole interest set, so both directions have to be
-    /// restated on every update. `RDHUP` is a level condition and is therefore
-    /// subscribed at most once per connection: re-arming it after it has fired
-    /// would report immediately and spin without making progress, so every
-    /// site that arms interest must go through here.
-    ///
-    /// `HUP` is deliberately not subscribed. This backend is Unix-only, and
-    /// every reactor behind it reports hangup without being asked: epoll and
-    /// `poll` treat it as output-only, and kqueue ignores the interest bit
-    /// outright. `RDHUP` is the sole exception that has to be requested.
-    fn renew_event(&self, readable: bool, writable: bool) -> Event {
-        let mut ev = Event::new(0, readable, writable);
-        ev.set_rd_interrupt(!self.flags.contains(Flags::RD_HUP));
-        ev
-    }
-
     fn fd(&self) -> os::fd::RawFd {
         self.io.as_raw_fd()
     }
@@ -599,6 +581,24 @@ impl StreamItem {
             }
             result
         })
+    }
+
+    /// Builds the event to arm poll interest with.
+    ///
+    /// `modify` replaces the whole interest set, so both directions have to be
+    /// restated on every update. `RDHUP` is a level condition and is therefore
+    /// subscribed at most once per connection: re-arming it after it has fired
+    /// would report immediately and spin without making progress, so every
+    /// site that arms interest must go through here.
+    ///
+    /// `HUP` is deliberately not subscribed. This backend is Unix-only, and
+    /// every reactor behind it reports hangup without being asked: epoll and
+    /// `poll` treat it as output-only, and kqueue ignores the interest bit
+    /// outright. `RDHUP` is the sole exception that has to be requested.
+    fn renew_event(&self, readable: bool, writable: bool) -> Event {
+        let mut ev = Event::new(0, readable, writable);
+        ev.set_rd_interrupt(!self.flags.contains(Flags::RD_HUP));
+        ev
     }
 }
 
