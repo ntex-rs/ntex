@@ -2,6 +2,11 @@
 
 ## [4.1.0] - 2026-09-23
 
+* Fix socket leak on runtime shutdown in the io-uring backend. Operations
+  queued during the last turn are submitted and all in-flight operations are
+  canceled before cleanup, then every socket still owned by the backend is
+  closed, which also breaks the `IoContext` reference cycle
+
 * Arm write interest from the out-of-band write path in the polling backend
   instead of leaving it to the write task, which retried the write only to
   have it block again

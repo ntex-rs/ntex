@@ -31,15 +31,17 @@ enum IdType {
 
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-    struct Flags: u8 {
-        const RD_CANCELING = 0b0000_0001;
-        const RD_REISSUE   = 0b0000_0010;
-        const RD_MORE      = 0b0000_0100;
-        const WR_CANCELING = 0b0000_1000;
-        const WR_REISSUE   = 0b0001_0000;
-        const NO_ZC        = 0b0010_0000;
-        const DROPPED_PRI  = 0b0100_0000;
-        const DROPPED_SEC  = 0b1000_0000;
+    struct Flags: u16 {
+        const RD_CANCELING = 0b0000_0000_0001;
+        const RD_REISSUE   = 0b0000_0000_0010;
+        const RD_MORE      = 0b0000_0000_0100;
+        const WR_CANCELING = 0b0000_0000_1000;
+        const WR_REISSUE   = 0b0000_0001_0000;
+        const NO_ZC        = 0b0000_0010_0000;
+        const DROPPED_PRI  = 0b0000_0100_0000;
+        const DROPPED_SEC  = 0b0000_1000_0000;
+        /// `Close` is submitted, descriptor belongs to the kernel
+        const CLOSING      = 0b0001_0000_0000;
     }
 }
 
@@ -338,16 +340,22 @@ impl Handler for StreamOpsHandler {
     }
 
     fn cleanup(&mut self) {
-        if let Some(v) = self.inner.storage.take() {
-            for (_, val) in &v.streams {
-                if !val.flags.contains(Flags::DROPPED_PRI) {
+        // Reactor has flushed pending submissions and canceled all in-flight
+        // operations. Release every socket here, otherwise stored `IoContext`s
+        // keep `StreamOpsInner` alive through the io handle and nothing closes.
+        if let Some(mut v) = self.inner.storage.take() {
+            for item in v.streams.drain() {
+                if item.flags.intersects(Flags::DROPPED_PRI | Flags::CLOSING) {
+                    // descriptor is closed or being closed by the kernel
+                    mem::forget(item.io);
+                } else {
                     log::trace!(
-                        "{}: Unclosed sockets {:?}",
-                        val.ctx.tag(),
-                        val.io.peer_addr()
+                        "{}: Unclosed socket {:?}",
+                        item.ctx.tag(),
+                        item.io.peer_addr()
                     );
+                    drop(item.io);
                 }
-                let _ = self.inner.api.cancel_all_sync(val.fd());
             }
             self.inner.storage.set(Some(v));
         }
@@ -465,7 +473,9 @@ impl StreamOpsStorage {
     }
 
     fn pause_read(&mut self, id: usize, api: &ReactorApi) {
-        let item = &mut self.streams[id];
+        let Some(item) = self.streams.get_mut(id) else {
+            return;
+        };
         if let Some(rd_op) = item.rd_op
             && !item.flags.contains(Flags::RD_CANCELING)
         {
@@ -477,9 +487,12 @@ impl StreamOpsStorage {
 
     fn drop_stream(&mut self, id: usize, api: &ReactorApi) {
         // Dropping while `StreamOps` handling event
-        let item = &mut self.streams[id];
+        let Some(item) = self.streams.get_mut(id) else {
+            return;
+        };
         log::trace!("{}: Close ({:?})", item.tag(), item.fd());
 
+        item.flags.insert(Flags::CLOSING);
         let entry = opcode::Close::new(item.fd()).build();
         let op_id = self.add_operation(Operation::Close { id });
         api.submit(op_id, entry);
@@ -487,7 +500,9 @@ impl StreamOpsStorage {
 
     fn drop_weak_stream(&mut self, id: usize) {
         // Dropping while `StreamOps` handling event
-        let item = &mut self.streams[id];
+        let Some(item) = self.streams.get_mut(id) else {
+            return;
+        };
         if item.flags.contains(Flags::DROPPED_PRI) {
             // io is closed already, remove from storage
             let item = self.streams.remove(id);
@@ -603,11 +618,12 @@ impl Drop for StreamCtl {
 }
 
 impl WeakStreamCtl {
-    pub(crate) fn with_io<F, R>(&self, f: F) -> R
+    pub(crate) fn with_io<F, R>(&self, f: F) -> Option<R>
     where
         F: FnOnce(&Socket) -> R,
     {
-        self.inner.with(|storage| f(&storage.streams[self.id].io))
+        self.inner
+            .with(|storage| storage.streams.get(self.id).map(|item| f(&item.io)))
     }
 }
 

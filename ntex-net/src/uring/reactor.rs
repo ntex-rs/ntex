@@ -9,7 +9,7 @@ use ntex_io::Io;
 use ntex_io_uring::cqueue::{self, Entry as CEntry, more};
 use ntex_io_uring::opcode::{AsyncCancel, PollAdd};
 use ntex_io_uring::squeue::{Entry as SEntry, SubmissionQueue};
-use ntex_io_uring::{IoUring, Probe, types::CancelBuilder, types::Fd};
+use ntex_io_uring::{IoUring, Probe, Submitter, types::CancelBuilder, types::Fd};
 use ntex_rt::{DriverType, Notify, PollResult, Runtime, syscall};
 use ntex_service::cfg::SharedCfg;
 use socket2::{Protocol, SockAddr, Socket, Type};
@@ -266,6 +266,33 @@ impl Reactor {
         }
     }
 
+    /// Submit all pending changes to the kernel
+    fn flush(&self, sq: SubmissionQueue<'_, SEntry>, submitter: &Submitter<'_>) {
+        let mut retries = 0;
+        loop {
+            let more_changes = self.apply_changes(sq);
+            sq.sync();
+
+            if let Err(e) = submitter.submit() {
+                match e.raw_os_error() {
+                    Some(libc::ETIME | libc::EBUSY | libc::EAGAIN | libc::EINTR)
+                        if retries < 16 =>
+                    {
+                        retries += 1;
+                        continue;
+                    }
+                    _ => {
+                        log::error!("Cannot submit pending operations: {e:?}");
+                        break;
+                    }
+                }
+            }
+            if !more_changes {
+                break;
+            }
+        }
+    }
+
     /// Handle ring completions, forward changes to specific handler
     fn poll_completions(
         &self,
@@ -423,6 +450,16 @@ impl ntex_rt::Driver for Reactor {
 
         // cleanup handlers
         if result.is_ok() {
+            // Operations queued during the last turn (`Close` of dropped
+            // streams in particular) have not reached the kernel yet.
+            self.flush(sq, &submitter);
+
+            // Handlers release buffers and sockets referenced by in-flight
+            // operations, the kernel must be done with all of them first.
+            if let Err(e) = submitter.register_sync_cancel(None, CancelBuilder::any()) {
+                log::error!("Cannot cancel in-flight operations: {e:?}");
+            }
+
             for mut h in self.handlers.take().unwrap().into_iter() {
                 h.hnd.cleanup();
             }
