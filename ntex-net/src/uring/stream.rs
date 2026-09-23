@@ -54,6 +54,7 @@ struct StreamItem {
     flags: Flags,
     rd_op: Option<NonZeroU32>,
     wr_op: Option<NonZeroU32>,
+    poll_op: Option<NonZeroU32>,
     ctx: IoContext,
 }
 
@@ -150,6 +151,7 @@ impl StreamOps {
             ctx,
             rd_op: None,
             wr_op: None,
+            poll_op: None,
             flags: if zc { self.0.default_flags } else { Flags::NO_ZC },
         };
 
@@ -158,6 +160,7 @@ impl StreamOps {
             let op = opcode::PollAdd::new(item.fd(), libc::POLLRDHUP as u32).build();
             let id = st.streams.insert(item);
             let op_id = st.ops.insert(Some(Operation::Poll { id })) as u32;
+            st.streams[id].poll_op = NonZeroU32::new(op_id);
             self.0.api.submit(op_id, op);
             id
         });
@@ -213,10 +216,12 @@ impl Handler for StreamOpsHandler {
                         }
                     }
                 }
-                Operation::Nop
-                | Operation::Poll { .. }
-                | Operation::Close { .. }
-                | Operation::Shutdown { .. } => {}
+                Operation::Poll { id } => {
+                    if let Some(item) = st.streams.get_mut(id) {
+                        item.poll_op.take();
+                    }
+                }
+                Operation::Nop | Operation::Close { .. } | Operation::Shutdown { .. } => {}
             });
     }
 
@@ -309,10 +314,12 @@ impl Handler for StreamOpsHandler {
                     }
                 }
                 Operation::Poll { id } => {
-                    if let Some(item) = st.streams.get_mut(id)
-                        && !item.flags.contains(Flags::RD_MORE) {
+                    if let Some(item) = st.streams.get_mut(id) {
+                        item.poll_op.take();
+                        if !item.flags.contains(Flags::RD_MORE) {
                             item.ctx.stop(res.err());
                         }
+                    }
                 }
                 Operation::Shutdown { tx } => {
                     if let Some(tx) = tx {
@@ -391,7 +398,9 @@ fn complete_send(ctx: &IoContext, mut buf: BytePage, res: io::Result<usize>) -> 
 
 impl StreamOpsStorage {
     fn recv(&mut self, id: usize, poll_first: bool, api: &ReactorApi) {
-        if let Some(item) = self.streams.get_mut(id) {
+        if let Some(item) = self.streams.get_mut(id)
+            && !item.flags.contains(Flags::CLOSING)
+        {
             if item.rd_op.is_none() {
                 #[cfg(feature = "trace")]
                 log::trace!("{}: Rcv({id})", item.ctx.tag());
@@ -416,7 +425,9 @@ impl StreamOpsStorage {
     }
 
     fn recv_more(&mut self, id: usize, mut buf: BytesMut, api: &ReactorApi) {
-        if let Some(item) = self.streams.get_mut(id) {
+        if let Some(item) = self.streams.get_mut(id)
+            && !item.flags.contains(Flags::CLOSING)
+        {
             item.ctx.resize_read_buf(&mut buf);
 
             let slice = buf.chunk_mut();
@@ -432,7 +443,9 @@ impl StreamOpsStorage {
     }
 
     fn send(&mut self, id: usize, api: &ReactorApi) {
-        if let Some(item) = self.streams.get_mut(id) {
+        if let Some(item) = self.streams.get_mut(id)
+            && !item.flags.contains(Flags::CLOSING)
+        {
             if item.wr_op.is_none() {
                 let page = item.ctx.with_write_dst(BytePages::take);
                 if let Some(buf) = page {
@@ -493,6 +506,28 @@ impl StreamOpsStorage {
         log::trace!("{}: Close ({:?})", item.tag(), item.fd());
 
         item.flags.insert(Flags::CLOSING);
+
+        // `Close` only removes the descriptor from the file table, in-flight
+        // operations keep the socket open, so no FIN or RST is sent until
+        // they complete. The `POLLRDHUP` poll in particular completes only
+        // once the peer goes away. Operations are canceled by id, which does
+        // not depend on the descriptor still being present in the table.
+        if let Some(op) = item.rd_op
+            && !item.flags.contains(Flags::RD_CANCELING)
+        {
+            item.flags.insert(Flags::RD_CANCELING);
+            api.cancel(op.get());
+        }
+        if let Some(op) = item.wr_op
+            && !item.flags.contains(Flags::WR_CANCELING)
+        {
+            item.flags.insert(Flags::WR_CANCELING);
+            api.cancel(op.get());
+        }
+        if let Some(op) = item.poll_op {
+            api.cancel(op.get());
+        }
+
         let entry = opcode::Close::new(item.fd()).build();
         let op_id = self.add_operation(Operation::Close { id });
         api.submit(op_id, entry);

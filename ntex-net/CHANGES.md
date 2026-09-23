@@ -2,6 +2,12 @@
 
 ## [4.1.0] - 2026-09-23
 
+* Cancel in-flight operations of a stream before closing it in the io-uring
+  backend. `Close` only removes the descriptor from the file table, pending
+  operations (the `POLLRDHUP` poll in particular) kept the socket open, so a
+  force-closed or dropped connection was neither reset nor closed until the
+  peer went away
+
 * Fix socket leak on runtime shutdown in the io-uring backend. Operations
   queued during the last turn are submitted and all in-flight operations are
   canceled before cleanup, then every socket still owned by the backend is
