@@ -626,8 +626,15 @@ impl IoRef {
 
     #[doc(hidden)]
     /// Register filter callbacks
+    ///
+    /// The callbacks are discarded once the connection is closed or its `Io`
+    /// has been dropped. They are released together with the `Io`, so storing
+    /// them afterwards could keep the connection state alive through an
+    /// `IoRef` they hold.
     pub fn register_filter_callbacks<F: crate::IoCallbacks + 'static>(&self, f: F) {
-        self.0.extensions.register_filter_callbacks(f);
+        if !self.0.flags.is_closed() && !self.0.is_io_dropped() {
+            self.0.extensions.register_filter_callbacks(f);
+        }
     }
 
     /// Call handle write method, returns true if

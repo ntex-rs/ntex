@@ -97,6 +97,11 @@ impl IoState {
         self.cfg.tag()
     }
 
+    /// Checks whether the `Io` that owned the filter chain has been dropped.
+    pub(super) fn is_io_dropped(&self) -> bool {
+        !self.filter.is_set()
+    }
+
     pub(super) fn filter(&self) -> &dyn Filter {
         self.filter.get()
     }
@@ -1192,6 +1197,43 @@ mod tests {
         client.close().await;
         sleep(Millis(50)).await;
         assert!(state.upgrade().is_none());
+    }
+
+    /// Callbacks registered through a leftover `IoRef` once the `Io` is
+    /// dropped, or the connection is closed, must not be stored.
+    #[ntex::test]
+    async fn test_callbacks_not_registered_after_drop_or_close() {
+        struct Cb(#[allow(dead_code)] IoRef, Rc<Cell<usize>>);
+        impl crate::IoCallbacks for Cb {
+            fn before_processing(&self, _: &IoRef) {
+                self.1.set(self.1.get() + 1);
+            }
+            fn after_processing(&self, _: &IoRef) {}
+        }
+
+        // dropped, teardown still in progress
+        let (client, server) = IoTest::create();
+        let server = Io::new(server, SharedCfg::new("SRV"));
+        let io = server.get_ref();
+        let state = Rc::downgrade(&io.0);
+        drop(server);
+        io.register_filter_callbacks(Cb(io.clone(), Rc::default()));
+        drop(io);
+        client.close().await;
+        sleep(Millis(50)).await;
+        assert!(state.upgrade().is_none());
+
+        // closed, `Io` still alive
+        let (client, server) = IoTest::create();
+        let server = Io::new(server, SharedCfg::new("SRV"));
+        client.close().await;
+        server.close();
+        let _ = server.shutdown().await;
+        assert!(server.is_closed());
+        let calls = Rc::new(Cell::new(0));
+        server.register_filter_callbacks(Cb(server.get_ref(), calls.clone()));
+        server.with_callbacks(|cb| cb.before_processing(&server));
+        assert_eq!(calls.get(), 0);
     }
 
     #[ntex::test]
