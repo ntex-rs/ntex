@@ -11,6 +11,9 @@
 
 * Stop the frame read timer when a frame completes
 
+* Stop keep-alive and frame read timers during write backpressure when no write
+  timeout is configured, as frames are not decoded then
+
 * Count bytes consumed by the codec as frame read progress
 
 * Start frame read-rate tracking for the first frame when the connection arrives

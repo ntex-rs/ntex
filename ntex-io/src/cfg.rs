@@ -307,10 +307,11 @@ impl IoConfig {
     /// partial frame are governed separately by
     /// [`set_keepalive_timeout`](Self::set_keepalive_timeout).
     ///
-    /// The timer is suspended while write backpressure is active; the elapsed
-    /// part of the period is charged to `max_timeout`. While the service is
-    /// not ready the timer is stopped as well, and tracking restarts with a
-    /// fresh period and `max_timeout` budget once the service is ready.
+    /// The timer is stopped while write backpressure is active, when frames
+    /// are not decoded, and a new period starts once decoding resumes. While
+    /// the service is not ready the timer is stopped as well, and tracking
+    /// restarts with a fresh period and `max_timeout` budget once the service
+    /// is ready.
     ///
     /// Frame read-rate enforcement is disabled by default.
     #[must_use]

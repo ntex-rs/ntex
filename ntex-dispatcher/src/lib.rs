@@ -485,9 +485,17 @@ where
     }
 
     /// Starts the write timeout when write backpressure is enabled.
+    ///
+    /// Frames are not decoded during backpressure, so read-side timers are
+    /// stopped when no write timeout is configured.
     fn start_write_timer(&mut self) {
         let timeout = self.shared.io.cfg().write_timeout();
-        if self.timers.active != Timer::Write && !timeout.is_zero() {
+        if timeout.is_zero() {
+            if self.timers.active != Timer::Stopped {
+                self.timers.active = Timer::Stopped;
+                self.shared.io.stop_timer();
+            }
+        } else if self.timers.active != Timer::Write {
             self.timers.active = Timer::Write;
             self.shared.io.start_timer(timeout);
         }
@@ -2285,5 +2293,74 @@ mod tests {
                 "item", "bp-on"
             ]
         );
+    }
+
+    /// Service with a slow item handler and a large response.
+    struct SlowWriteSrv(Events);
+
+    impl Service<(), DispatchItem<BCodec>> for SlowWriteSrv {
+        type Res = Option<Bytes>;
+        type Error = ();
+
+        async fn call(
+            &self,
+            msg: DispatchItem<BCodec>,
+            _: Ctx<'_, Self>,
+        ) -> Result<Option<Bytes>, Self::Error> {
+            let ev = match msg {
+                DispatchItem::Item(_) => {
+                    sleep(Millis(300)).await;
+                    self.0.borrow_mut().push("item");
+                    return Ok(Some(Bytes::from(vec![b'x'; 8192])));
+                }
+                DispatchItem::Control(Control::WBackPressureEnabled) => "bp-on",
+                DispatchItem::Control(Control::WBackPressureDisabled) => "bp-off",
+                DispatchItem::Stop(Reason::ReadTimeout) => "read-timeout",
+                DispatchItem::Stop(_) => "stop",
+            };
+            self.0.borrow_mut().push(ev);
+            Ok(None)
+        }
+    }
+
+    /// Without a write timeout, the frame read timer does not run during
+    /// write backpressure, while no frames are decoded.
+    #[ntex::test]
+    async fn read_rate_stopped_during_write_backpressure() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+
+        let events: Events = Rc::new(RefCell::new(Vec::new()));
+        let io = Io::new(
+            server,
+            SharedCfg::new("TEST").add(IoConfig::new().set_write_buf(1024).set_frame_read_rate(
+                Seconds(1),
+                Seconds::ZERO,
+                0,
+            )),
+        );
+        let disp = Dispatcher::new(
+            io,
+            BCodec(8),
+            Pipeline::new((), SlowWriteSrv(events.clone())),
+        );
+        spawn(async move {
+            let _ = disp.await;
+        });
+
+        // a partial frame arrives while the first frame is handled, then
+        // the response enables write backpressure
+        client.write("12345678");
+        sleep(Millis(100)).await;
+        client.write("1");
+        sleep(Millis(400)).await;
+        assert_eq!(&events.borrow()[..], &["item", "bp-on"]);
+
+        // the peer keeps sending partial frame bytes
+        for _ in 0..10 {
+            sleep(Millis(500)).await;
+            client.write("1");
+        }
+        assert_eq!(&events.borrow()[..], &["item", "bp-on"]);
     }
 }
