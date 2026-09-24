@@ -445,6 +445,21 @@ mod tests {
     }
 
     #[crate::rt_test]
+    async fn test_responder_serialize_error() {
+        struct Invalid;
+
+        impl Serialize for Invalid {
+            fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+                Err(serde::ser::Error::custom("invalid"))
+            }
+        }
+
+        let req = TestRequest::default().to_http_request();
+        let resp = respond_to(Json(Invalid), &req).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[crate::rt_test]
     async fn test_extract() {
         let (req, mut pl, ()) = TestRequest::default()
             .header(

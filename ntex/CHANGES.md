@@ -8,6 +8,10 @@
 * Fix pooled web requests keeping the resource map of another application,
   which made `HttpRequest::url_for()` resolve against the wrong routes
 
+* Render `serde_json` and `serde_urlencoded` serialization errors as
+  `500 Internal Server Error` instead of `400 Bad Request` in the default web
+  error domain
+
 ## [4.0.0] - 2026-09-18
 
 * Migrate to `ntex-service` 5 and its typed service state model. Service

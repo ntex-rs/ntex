@@ -29,24 +29,30 @@ impl<St> WebResponseError<St, DefaultError> for DefaultError {
 
 // =========== DefaultError impls =========
 
-/// `InternalServerError` for `StateExtractorError`
+/// `BadRequest` for `StateExtractorError`
 impl<St> WebResponseError<St, DefaultError> for error::StateExtractorError {
     fn error_response(&self, _: &St) -> HttpResponse {
         HttpResponse::render_with(StatusCode::BAD_REQUEST, self)
     }
 }
 
-/// `InternalServerError` for `JsonError`
+/// `InternalServerError` for `JsonError`.
+///
+/// Serialization errors are server-side failures, such as a `Json<T>` or
+/// `Form<T>` responder failing to encode its value.
 impl<St> WebResponseError<St, DefaultError> for JsonError {
     fn error_response(&self, _: &St) -> HttpResponse {
-        HttpResponse::render_with(StatusCode::BAD_REQUEST, self)
+        HttpResponse::render_with(StatusCode::INTERNAL_SERVER_ERROR, self)
     }
 }
 
-/// `InternalServerError` for `FormError`
+/// `InternalServerError` for `FormError`.
+///
+/// Serialization errors are server-side failures, such as a `Json<T>` or
+/// `Form<T>` responder failing to encode its value.
 impl<St> WebResponseError<St, DefaultError> for FormError {
     fn error_response(&self, _: &St) -> HttpResponse {
-        HttpResponse::render_with(StatusCode::BAD_REQUEST, self)
+        HttpResponse::render_with(StatusCode::INTERNAL_SERVER_ERROR, self)
     }
 }
 
