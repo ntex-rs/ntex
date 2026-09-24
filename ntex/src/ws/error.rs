@@ -20,6 +20,9 @@ pub enum WsError<E> {
     /// Reading a frame timed out.
     #[error("Frame read timeout")]
     ReadTimeout,
+    /// Write backpressure stayed enabled for longer than the write timeout.
+    #[error("Write timeout")]
+    WriteTimeout,
     /// WebSocket protocol error.
     #[error("Ws protocol level error")]
     Protocol(#[source] ProtocolError),

@@ -246,7 +246,14 @@ These settings are used by different parts of the stack:
   an outgoing connection.
 - The keep-alive timeout and frame read-rate limits are interpreted by
   protocol dispatchers. A frame read-rate limit protects a decoder from peers
-  that send one incomplete frame too slowly.
+  that send one incomplete frame too slowly. It also applies to the first
+  frame of a new connection, so a peer that connects and stays silent is
+  closed once the limit expires. A write timeout protects against peers
+  that stop reading: it bounds how long write backpressure may stay enabled,
+  from the moment it is enabled until it is disabled, before the dispatcher
+  stops with a write timeout. Keep-alive and read-rate timers do not run
+  during that time. Output left after backpressure is disabled is bounded
+  only by keep-alive.
 - The graceful-shutdown timeout bounds both phases of shutdown together: the
   filter shutdown and the transport drain of pending output. It cannot be
   disabled; a zero timeout is rejected.
@@ -263,9 +270,9 @@ These settings are used by different parts of the stack:
   threshold controls when supported transports attempt an early direct write.
 
 Connection and keep-alive timeouts are disabled by default. Frame read-rate
-limits are also disabled. The default graceful-shutdown timeout is one
-second, and the default read and write high-water marks are approximately
-16 KiB.
+limits and the write timeout are also disabled. The default graceful-shutdown
+timeout is one second, and the default read and write high-water marks are
+approximately 16 KiB.
 
 An established connection can switch to another shared configuration with
 [`Io::set_config`]. This is useful when a protocol upgrade changes timeout or

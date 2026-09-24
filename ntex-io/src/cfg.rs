@@ -22,6 +22,7 @@ pub struct IoConfig {
     keepalive_timeout: Seconds,
     shutdown_timeout: Seconds,
     frame_read_rate: Option<FrameReadRate>,
+    write_timeout: Seconds,
 
     // io read/write cache and params
     read_buf: BufConfig,
@@ -119,6 +120,7 @@ impl IoConfig {
             keepalive_timeout: Seconds(0),
             shutdown_timeout: Seconds(1),
             frame_read_rate: None,
+            write_timeout: Seconds(0),
 
             read_buf: BufConfig {
                 idx,
@@ -172,6 +174,14 @@ impl IoConfig {
     }
 
     #[inline]
+    /// Returns the write backpressure timeout.
+    ///
+    /// A zero value means the timeout is disabled.
+    pub fn write_timeout(&self) -> Seconds {
+        self.write_timeout
+    }
+
+    #[inline]
     /// Returns the read-buffer configuration.
     pub fn read_buf(&self) -> &BufConfig {
         &self.read_buf
@@ -208,6 +218,13 @@ impl IoConfig {
     }
 
     /// Sets the keep-alive timeout.
+    ///
+    /// The dispatcher runs the timer only while the connection is idle: no
+    /// input is buffered, no partial frame is being read, and no decoded
+    /// frames are being handled. It starts once the last response is done.
+    /// Partial frames are bounded by
+    /// [frame read-rate](Self::set_frame_read_rate) limits instead, and write
+    /// backpressure by the [write timeout](Self::set_write_timeout).
     ///
     /// A zero duration disables the timeout. It is disabled by default.
     #[must_use]
@@ -259,12 +276,14 @@ impl IoConfig {
 
     /// Sets read-rate parameters for a single decoded frame.
     ///
-    /// Rate tracking starts when a decoder returns no complete item while
-    /// leaving partial frame data in the read buffer. The dispatcher then
+    /// Rate tracking starts when a new connection arrives, for its first
+    /// frame, and later whenever a decoder returns no complete item after
+    /// receiving partial frame data, whether the data is left in the read
+    /// buffer or consumed into the decoder's own state. The dispatcher then
     /// allows one `timeout` period for additional data to arrive.
     ///
-    /// When that period expires, the dispatcher compares the buffered-byte
-    /// progress since the previous check with `rate`:
+    /// When that period expires, the dispatcher compares the bytes received
+    /// for the frame since the previous check with `rate`:
     ///
     /// - If the progress is greater than `rate`, the deadline is extended by
     ///   another `timeout` period.
@@ -281,11 +300,18 @@ impl IoConfig {
     ///
     /// A zero `timeout` disables frame read-rate enforcement and ignores
     /// `max_timeout` and `rate`. With a non-zero timeout and `rate` set to zero,
-    /// any positive buffered-byte progress permits another period.
+    /// any positive byte progress permits another period.
     ///
-    /// This setting applies only after a frame has started. Idle connections
-    /// with no partial frame are governed separately by
+    /// A new connection must therefore deliver its first frame within these
+    /// limits. After a frame has been decoded, idle connections with no
+    /// partial frame are governed separately by
     /// [`set_keepalive_timeout`](Self::set_keepalive_timeout).
+    ///
+    /// The timer is stopped while write backpressure is active, when frames
+    /// are not decoded, and a new period starts once decoding resumes. While
+    /// the service is not ready the timer is stopped as well, and tracking
+    /// restarts with a fresh period and `max_timeout` budget once the service
+    /// is ready.
     ///
     /// Frame read-rate enforcement is disabled by default.
     #[must_use]
@@ -304,6 +330,30 @@ impl IoConfig {
                 rate,
             })
         };
+        self
+    }
+
+    /// Sets the write backpressure timeout.
+    ///
+    /// Write backpressure is enabled when outstanding output reaches the
+    /// [write buffer](Self::set_write_buf) high watermark and disabled once the
+    /// peer has accepted enough of it. The timeout covers that whole period:
+    /// if backpressure is still enabled when it expires, the dispatcher stops
+    /// with a write timeout. Each backpressure period starts a fresh timeout,
+    /// however much the peer read during the previous one. Without a write
+    /// timeout, a peer that stops reading during backpressure can hold the
+    /// connection open indefinitely.
+    ///
+    /// The timeout does not apply once backpressure is disabled, even though
+    /// output is still outstanding. A peer that stops reading at that point
+    /// can leave up to half of the high watermark unwritten; only the
+    /// [keep-alive timeout](Self::set_keepalive_timeout), when enabled, bounds
+    /// such a connection until it is shut down.
+    ///
+    /// A zero duration disables the timeout. It is disabled by default.
+    #[must_use]
+    pub fn set_write_timeout(mut self, timeout: Seconds) -> Self {
+        self.write_timeout = timeout;
         self
     }
 
@@ -570,6 +620,18 @@ mod tests {
 
         let cfg = cfg.set_frame_read_rate(Seconds::ZERO, Seconds(10), 1024);
         assert!(cfg.frame_read_rate().is_none());
+    }
+
+    #[test]
+    fn write_timeout_configuration() {
+        let cfg = IoConfig::new();
+        assert!(cfg.write_timeout().is_zero());
+
+        let cfg = cfg.set_write_timeout(Seconds(3));
+        assert_eq!(cfg.write_timeout(), Seconds(3));
+
+        let cfg = cfg.set_write_timeout(Seconds::ZERO);
+        assert!(cfg.write_timeout().is_zero());
     }
 
     #[test]

@@ -26,8 +26,8 @@ use crate::{Cfg, Service, SharedCfg, channel::mpsc, rt, time::timeout, ws};
 
 use super::cfg::is_token;
 use super::error::{WsClientError, WsConfigError, WsError};
-use super::handshake::header_contains_token;
-use super::{WsClientConfig, transport::WsTransport};
+use super::proto::{CloseCode, CloseReason};
+use super::{WsClientConfig, handshake::header_contains_token, transport::WsTransport};
 
 thread_local! {
     static CFG: SharedCfg = SharedCfg::new("WS-CLIENT").into();
@@ -455,8 +455,15 @@ impl WsConnection<Sealed> {
                     result
                 }
                 DispatchItem::Control(_) => Ok(None),
+                DispatchItem::Stop(Reason::Service) => {
+                    Ok(Some(ws::Message::Close(Some(CloseReason {
+                        code: CloseCode::Away,
+                        description: None,
+                    }))))
+                }
                 DispatchItem::Stop(Reason::KeepAliveTimeout) => Err(WsError::KeepAlive),
                 DispatchItem::Stop(Reason::ReadTimeout) => Err(WsError::ReadTimeout),
+                DispatchItem::Stop(Reason::WriteTimeout) => Err(WsError::WriteTimeout),
                 DispatchItem::Stop(Reason::Decoder(e) | Reason::Encoder(e)) => {
                     Err(WsError::Protocol(e))
                 }

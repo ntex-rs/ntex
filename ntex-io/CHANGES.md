@@ -2,6 +2,9 @@
 
 ## [4.1.0] - 2026-09-22
 
+* Add IoConfig::set_write_timeout() for bounding how long write
+  backpressure may stay enabled
+
 * IoConfig::set_shutdown_timeout() panics on a zero timeout. A zero timeout
   used to disable the deadline, which let a peer that never reads hold the
   connection open forever during a graceful shutdown
