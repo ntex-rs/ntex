@@ -20,6 +20,11 @@ use crate::helpers::Queue;
 ///
 /// The socket is closed even if the graceful shutdown fails. The
 /// shutdown error, if any, is reported in preference to a close error.
+///
+/// Callers other than `cleanup()`, which runs on the reactor thread, run this
+/// on the blocking pool. That is safe for the drain: they only get here once
+/// neither the recv nor the send is in flight, and no new recv can be started,
+/// since only the connection task issues one and it is done by then.
 fn close_socket(io: WinSock::SOCKET, terminate: bool) -> io::Result<()> {
     let shutdown = if terminate {
         crate::helpers::abort_raw_socket(io as _);
@@ -192,14 +197,15 @@ impl Handler for StreamOpsHandler {
                     #[cfg(feature = "trace")]
                     log::trace!("{_tag}: CloseWait({:?})", io);
                     let terminate = item.flags.contains(Flags::TERMINATE);
+                    // Started right away rather than inside the task below: if
+                    // the runtime stops before that task runs, the socket must
+                    // still be closed, and `cleanup()` skips `CLOSED` items.
+                    let close = ntex_rt::spawn_blocking(move || close_socket(io, terminate));
                     // `shutdown()` is waiting on `tx`, and reports the result
                     // through `IoContext::stopped`, so it must not resolve
                     // before the socket is actually closed
                     ntex_rt::spawn(async move {
-                        let res = ntex_rt::spawn_blocking(move || close_socket(io, terminate))
-                            .await
-                            .map_err(io::Error::other)
-                            .and_then(|res| res);
+                        let res = close.await.map_err(io::Error::other).and_then(|res| res);
                         #[cfg(feature = "trace")]
                         log::trace!("{_tag}: WaitClosed({:?})", io);
                         let _ = tx.send(res);
@@ -215,6 +221,38 @@ impl Handler for StreamOpsHandler {
     }
 
     fn cleanup(&mut self) {
+        // The reactor has stopped, so nothing will close the sockets that are
+        // still registered: stored `IoContext`s keep `StreamOpsInner` alive
+        // through the io handle, and the drop paths never run for them.
+        if let Some(mut storage) = self.inner.storage.take() {
+            for item in storage.streams.drain() {
+                if item.flags.contains(Flags::CLOSED) {
+                    // a close job owns the socket
+                    mem::forget(item.io);
+                    continue;
+                }
+                let io = item.io.as_raw_socket() as _;
+                let tag = item.rd_op.tag();
+                log::trace!(
+                    "{tag}: Unclosed socket ({io:?}) {:?}",
+                    item.addr.as_socket()
+                );
+                if let Err(err) = close_socket(io, item.flags.contains(Flags::TERMINATE)) {
+                    log::error!("{tag}: Cannot close socket ({io:?}), {err:?}");
+                }
+                if item.rd_op.is_pending() || item.wr_op.is_pending() {
+                    // Closing the socket cancels the pending operations, but
+                    // the kernel still writes their completion into the
+                    // `OVERLAPPED` and buffers inside the item, and nothing
+                    // dequeues it anymore. Leak the item so that memory stays
+                    // valid.
+                    mem::forget(item);
+                } else {
+                    mem::forget(item.io);
+                }
+            }
+            self.inner.storage.set(Some(storage));
+        }
         self.inner.delayed_feed.clear();
     }
 }
@@ -318,8 +356,11 @@ impl StreamCtl {
 
 impl StreamOpsStorage {
     fn drop_stream(&mut self, id: usize) {
-        // Dropping while `StreamOps` handling event
-        let item = &mut self.streams[id];
+        // Dropping while `StreamOps` handling event. The item is gone if
+        // `cleanup()` already released it.
+        let Some(item) = self.streams.get_mut(id) else {
+            return;
+        };
         #[cfg(feature = "trace")]
         log::trace!(
             "{}: DropStream ({:?}) f:{:?}",
@@ -329,21 +370,17 @@ impl StreamOpsStorage {
         );
 
         if item.flags.contains(Flags::DROPPED_SEC) {
-            let item = self.streams.remove(id);
-            if !item.flags.contains(Flags::CLOSED) {
-                let io = item.io.as_raw_socket() as _;
-                let terminate = item.flags.contains(Flags::TERMINATE);
-                close_socket_detached(io, terminate, item.rd_op.tag());
-            }
-            mem::forget(item.io);
+            Self::release(self.streams.remove(id));
         } else {
             item.flags.insert(Flags::DROPPED_PRI);
         }
     }
 
     fn drop_weak_stream(&mut self, id: usize) {
-        // Dropping while `StreamOps` handling event
-        let item = &mut self.streams[id];
+        // see `drop_stream`
+        let Some(item) = self.streams.get_mut(id) else {
+            return;
+        };
         #[cfg(feature = "trace")]
         log::trace!(
             "{}: DropStreamSec ({:?}) f:{:?}",
@@ -353,17 +390,32 @@ impl StreamOpsStorage {
         );
 
         if item.flags.contains(Flags::DROPPED_PRI) {
-            // io is closed already, remove from storage
-            let item = self.streams.remove(id);
-            if !item.flags.contains(Flags::CLOSED) {
-                let io = item.io.as_raw_socket() as _;
-                let terminate = item.flags.contains(Flags::TERMINATE);
-                close_socket_detached(io, terminate, item.rd_op.tag());
-            }
-            mem::forget(item.io);
+            Self::release(self.streams.remove(id));
         } else {
             item.flags.insert(Flags::DROPPED_SEC);
         }
+    }
+
+    /// Frees an item once both handles are gone, closing its socket unless a
+    /// close job already owns it.
+    fn release(item: Box<StreamItem>) {
+        // The item holds the `OVERLAPPED` and buffers of its operations, so
+        // freeing it while one is in flight lets the kernel complete into freed
+        // memory. The connection task closes the socket, which waits for both
+        // operations, before it drops its handle, and `cleanup()` takes the
+        // items that are still registered at shutdown, so this cannot happen
+        // today.
+        debug_assert!(
+            !item.rd_op.is_pending() && !item.wr_op.is_pending(),
+            "{}: stream released with an operation in flight",
+            item.rd_op.tag()
+        );
+        if !item.flags.contains(Flags::CLOSED) {
+            let io = item.io.as_raw_socket() as _;
+            let terminate = item.flags.contains(Flags::TERMINATE);
+            close_socket_detached(io, terminate, item.rd_op.tag());
+        }
+        mem::forget(item.io);
     }
 }
 
@@ -448,5 +500,114 @@ mod tests {
             "the shutdown error must still be reported"
         );
         assert!(!open, "socket leaked after a failed shutdown");
+    }
+
+    struct TestStream {
+        socket: Socket,
+        ops: StreamOps,
+        ctl: Rc<Cell<Option<StreamCtl>>>,
+    }
+
+    struct TestHandle {
+        _ctl: WeakStreamCtl,
+    }
+
+    impl ntex_io::Handle for TestHandle {
+        fn query(&self, _: std::any::TypeId) -> Option<Box<dyn std::any::Any>> {
+            None
+        }
+    }
+
+    impl ntex_io::IoStream for TestStream {
+        fn start(self, ctx: IoContext) -> Box<dyn ntex_io::Handle> {
+            let addr = self.socket.peer_addr().unwrap();
+            let (ctl, weak) = self.ops.register(self.socket, addr, ctx);
+            self.ctl.set(Some(ctl));
+            Box::new(TestHandle { _ctl: weak })
+        }
+    }
+
+    /// Registers the client end of a loopback connection with a private
+    /// reactor, and returns it along with the peer end.
+    fn registered(
+        reactor: &Reactor,
+    ) -> (
+        ntex_io::Io,
+        StreamCtl,
+        StreamOps,
+        WinSock::SOCKET,
+        std::net::TcpStream,
+    ) {
+        let lst = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = std::net::TcpStream::connect(lst.local_addr().unwrap()).unwrap();
+        let (peer, _) = lst.accept().unwrap();
+        peer.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+
+        let ops = StreamOps::get(reactor);
+        let raw = client.as_raw_socket() as WinSock::SOCKET;
+        ops.0.api.attach(raw as _, true).unwrap();
+        let ctl = Rc::new(Cell::new(None));
+        let io = ntex_io::Io::new(
+            TestStream {
+                socket: Socket::from(client),
+                ops: ops.clone(),
+                ctl: ctl.clone(),
+            },
+            ntex_service::cfg::SharedCfg::default(),
+        );
+        (io, ctl.take().unwrap(), ops, raw, peer)
+    }
+
+    fn cleanup(ops: &StreamOps) {
+        StreamOpsHandler {
+            inner: ops.0.clone(),
+        }
+        .cleanup();
+    }
+
+    /// Asserts the socket is closed, and releases it if it is not.
+    fn assert_closed(io: WinSock::SOCKET, peer: &mut std::net::TcpStream) {
+        let open = is_open(io);
+        if open {
+            unsafe { WinSock::closesocket(io) };
+        }
+        assert!(!open, "cleanup leaked the socket");
+        let mut buf = [0u8; 16];
+        assert_eq!(std::io::Read::read(peer, &mut buf).unwrap(), 0);
+    }
+
+    /// A socket that is still open when the runtime stops must be closed by
+    /// `cleanup()`, and handles dropped afterwards must not touch it again.
+    #[ntex::test]
+    async fn cleanup_closes_idle_socket() {
+        let reactor = Reactor::new().unwrap();
+        let (io, ctl, ops, raw, mut peer) = registered(&reactor);
+
+        cleanup(&ops);
+        assert_closed(raw, &mut peer);
+
+        drop(ctl);
+        drop(io);
+        cleanup(&ops);
+    }
+
+    /// A socket with a recv in flight must be closed too. The item stays
+    /// allocated, since the kernel still completes the recv into it.
+    #[ntex::test]
+    async fn cleanup_closes_socket_with_pending_recv() {
+        let reactor = Reactor::new().unwrap();
+        let (io, ctl, ops, raw, mut peer) = registered(&reactor);
+        ctl.read();
+        assert!(
+            ops.0.with(|st| st.streams[ctl.id].rd_op.is_pending()),
+            "recv completed without data"
+        );
+
+        cleanup(&ops);
+        assert_closed(raw, &mut peer);
+
+        drop(ctl);
+        drop(io);
     }
 }

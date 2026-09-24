@@ -14,6 +14,11 @@
   also reports its outcome only once the socket is closed, and with the
   error, instead of reporting success before closing it
 
+* Close sockets that are still open when the runtime stops in the IOCP
+  backend. They were never closed. A socket with an operation still in
+  flight is closed, but its state is kept allocated, since the kernel
+  completes the cancelled operation into it after the reactor has stopped
+
 * Treat peer half-close as read eof in the io-uring backend, as the polling
   backend does. `POLLRDHUP` terminated the connection, so a response to a
   peer that half-closed after its request was dropped and the peer saw a

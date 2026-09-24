@@ -56,6 +56,11 @@ impl ReadOperation {
         self.ctx.tag()
     }
 
+    /// Whether a recv is in flight, so the kernel still owns this operation.
+    pub(crate) fn is_pending(&self) -> bool {
+        self.flags.contains(Flags::WAITING)
+    }
+
     pub(crate) fn pause(&mut self, closing: bool) -> bool {
         if self.flags.contains(Flags::WAITING) {
             #[cfg(feature = "trace")]
@@ -223,6 +228,11 @@ impl WriteOperation {
             pages: [const { None }; MAX_WRITE_BUFS],
             pages_num: 0,
         }
+    }
+
+    /// Whether a send is in flight, so the kernel still owns this operation.
+    pub(crate) fn is_pending(&self) -> bool {
+        self.flags.contains(Flags::WAITING)
     }
 
     pub(crate) fn pause(&mut self) -> bool {
