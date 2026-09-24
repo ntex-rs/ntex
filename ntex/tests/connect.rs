@@ -278,6 +278,9 @@ async fn test_rustls_peer_close_notify_closes_io() {
         assert_eq!(&echo, b"hello");
     }
 
+    // set before close_notify, the server may close the socket right after it
+    tcp.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+
     // send TLS close_notify, but keep the tcp stream fully open
     // (no shutdown of the write side - tls level half-close only);
     // queue one more plaintext record so that plaintext and close_notify
@@ -290,7 +293,6 @@ async fn test_rustls_peer_close_notify_closes_io() {
     tcp.flush().unwrap();
 
     // server must close the connection in a timely manner
-    tcp.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
     let mut buf = [0u8; 4096];
     loop {
         match tcp.read(&mut buf) {
@@ -425,6 +427,8 @@ async fn test_rustls_keyupdate_response_flushed() {
     assert_eq!(echo, b"ping");
 
     // request a key update; the server must answer with its own KeyUpdate
+    tcp.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .unwrap();
     conn.refresh_traffic_keys().unwrap();
     while conn.wants_write() {
         conn.write_tls(&mut tcp).unwrap();
@@ -432,8 +436,6 @@ async fn test_rustls_keyupdate_response_flushed() {
 
     // the connection is otherwise idle; the server's KeyUpdate response
     // (generated while processing incoming data) must still reach the wire
-    tcp.set_read_timeout(Some(std::time::Duration::from_secs(5)))
-        .unwrap();
     match conn.read_tls(&mut tcp) {
         Ok(n) if n > 0 => {
             conn.process_new_packets().unwrap();

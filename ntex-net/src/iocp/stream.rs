@@ -457,7 +457,7 @@ impl Drop for WeakStreamCtl {
 
 #[cfg(test)]
 mod tests {
-    use std::os::windows::io::IntoRawSocket;
+    use std::os::windows::io::{FromRawSocket, IntoRawSocket};
 
     use socket2::{Domain, Protocol, Type};
 
@@ -478,18 +478,33 @@ mod tests {
         res == 0
     }
 
+    /// Whether `io` is still the socket bound to `addr`. Tests run in
+    /// parallel, a closed handle value may already belong to another test.
+    fn is_ours(io: WinSock::SOCKET, addr: &socket2::SockAddr) -> bool {
+        is_open(io) && {
+            let s = mem::ManuallyDrop::new(unsafe { Socket::from_raw_socket(io as _) });
+            s.local_addr().is_ok_and(|a| a == *addr)
+        }
+    }
+
     /// A failed graceful shutdown must not leave the socket open: the caller
     /// has already given up ownership of it, so nothing else would close it.
     #[test]
     fn close_socket_closes_when_shutdown_fails() {
         // `shutdown` fails with `WSAENOTCONN` on a socket that never connected
-        let io = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))
-            .unwrap()
-            .into_raw_socket() as WinSock::SOCKET;
+        let sock = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP)).unwrap();
+        sock.bind(
+            &"127.0.0.1:0"
+                .parse::<std::net::SocketAddr>()
+                .unwrap()
+                .into(),
+        )
+        .unwrap();
+        let addr = sock.local_addr().unwrap();
+        let io = sock.into_raw_socket() as WinSock::SOCKET;
 
         let res = close_socket(io, false);
-        // checked right away, before the handle value can be reused
-        let open = is_open(io);
+        let open = is_ours(io, &addr);
         if open {
             unsafe { WinSock::closesocket(io) };
         }
@@ -568,7 +583,7 @@ mod tests {
 
     /// Asserts the socket is closed, and releases it if it is not.
     fn assert_closed(io: WinSock::SOCKET, peer: &mut std::net::TcpStream) {
-        let open = is_open(io);
+        let open = is_ours(io, &peer.peer_addr().unwrap().into());
         if open {
             unsafe { WinSock::closesocket(io) };
         }
