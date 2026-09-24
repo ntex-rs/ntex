@@ -2,6 +2,9 @@
 
 ## [4.1.0] - 2026-09-22
 
+* Add IoContext::shutdown_timeout() so io backends can bound their own
+  socket close by the connection's shutdown timeout
+
 * Add IoConfig::set_write_timeout() for bounding how long write
   backpressure may stay enabled
 

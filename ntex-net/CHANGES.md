@@ -2,6 +2,14 @@
 
 ## [4.1.0] - 2026-09-23
 
+* Bound the IOCP socket close by the connection's shutdown timeout. The
+  close waits for cancelled operations to complete before closing the
+  socket, and a cancellation that never completed left the socket open and
+  `Io::shutdown()` pending forever. Once the timeout expires the socket is
+  now closed with a reset and the close fails with `TimedOut`; the stream
+  is released when the operations complete. No read or write is started
+  once the close has begun
+
 * Update the connect context of client sockets in the IOCP backend. Sockets
   connected with `ConnectEx` stayed partially connected, so `shutdown` failed
   with `WSAENOTCONN`: a graceful close skipped `closesocket`, leaking the

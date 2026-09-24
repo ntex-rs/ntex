@@ -1,8 +1,9 @@
-use std::{cell::Cell, io, mem, os::windows::io::AsRawSocket, rc::Rc};
+use std::{cell::Cell, io, mem, os::windows::io::AsRawSocket, pin::pin, rc::Rc};
 
 use ntex_io::IoContext;
 use ntex_rt::{Arbiter, syscall};
-use ntex_util::{channel::pool, future::Either};
+use ntex_util::future::{Either, select};
+use ntex_util::{channel::pool, time::sleep};
 use slab::Slab;
 use socket2::{SockAddr, Socket};
 use windows_sys::Win32::Networking::WinSock;
@@ -211,6 +212,10 @@ impl Handler for StreamOpsHandler {
                         let _ = tx.send(res);
                     })
                     .detach();
+                } else {
+                    // a forced close does not wait for the completions, the
+                    // item is freed once the last one arrives
+                    st.release_if_done(id);
                 }
             });
         }
@@ -227,8 +232,13 @@ impl Handler for StreamOpsHandler {
         if let Some(mut storage) = self.inner.storage.take() {
             for item in storage.streams.drain() {
                 if item.flags.contains(Flags::CLOSED) {
-                    // a close job owns the socket
-                    mem::forget(item.io);
+                    // a close job owns the socket, a forced close may have left
+                    // operations in flight, see below
+                    if item.rd_op.is_pending() || item.wr_op.is_pending() {
+                        mem::forget(item);
+                    } else {
+                        mem::forget(item.io);
+                    }
                     continue;
                 }
                 let io = item.io.as_raw_socket() as _;
@@ -304,7 +314,7 @@ impl StreamCtl {
                 } else {
                     let (tx, rx) = self.inner.pool.channel();
                     item.close = Some(tx);
-                    Some(Either::Right(rx))
+                    Some(Either::Right((rx, item.rd_op.shutdown_timeout())))
                 }
             } else {
                 None
@@ -321,17 +331,47 @@ impl StreamCtl {
                     .and_then(|res| res.map_err(io::Error::other))
                     .and_then(|res| res)
             }
-            Some(Either::Right(rx)) => rx
-                .await
-                .map_err(|_| io::Error::other("Unexpected"))
-                .and_then(|res| res),
+            Some(Either::Right((rx, timeout))) => {
+                let mut rx = pin!(rx);
+                if let Either::Left(res) = select(rx.as_mut(), sleep(timeout)).await {
+                    return res
+                        .map_err(|_| io::Error::other("Unexpected"))
+                        .and_then(|res| res);
+                }
+                // A cancelled operation has not completed in time, it may never
+                // do. Closing the socket completes it, unless the close has
+                // started meanwhile.
+                let Some((tag, io)) = self.inner.with(|st| st.force_close(self.id)) else {
+                    return rx
+                        .await
+                        .map_err(|_| io::Error::other("Unexpected"))
+                        .and_then(|res| res);
+                };
+                log::warn!(
+                    "{tag}: Cancelled operations did not complete in {timeout:?}, closing socket ({io:?})"
+                );
+                let res = ntex_rt::spawn(ntex_rt::spawn_blocking(move || close_socket(io, true)))
+                    .await
+                    .map_err(io::Error::other)
+                    .and_then(|res| res.map_err(io::Error::other))
+                    .and_then(|res| res);
+                if let Err(err) = res {
+                    log::error!("{tag}: Cannot close socket ({io:?}), {err:?}");
+                }
+                Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "cancelled operations did not complete",
+                ))
+            }
             None => Ok(()),
         }
     }
 
     pub(crate) fn read(&self) {
         self.inner.with(|st| {
-            if let Some(item) = st.streams.get_mut(self.id) {
+            if let Some(item) = st.streams.get_mut(self.id)
+                && !item.is_closing()
+            {
                 item.rd_op.read();
             }
         });
@@ -339,7 +379,9 @@ impl StreamCtl {
 
     pub(crate) fn write(&self) {
         self.inner.with(|st| {
-            if let Some(item) = st.streams.get_mut(self.id) {
+            if let Some(item) = st.streams.get_mut(self.id)
+                && !item.is_closing()
+            {
                 item.wr_op.write();
             }
         });
@@ -347,10 +389,20 @@ impl StreamCtl {
 
     pub(crate) fn pause(&self) {
         self.inner.with(|st| {
-            if let Some(item) = st.streams.get_mut(self.id) {
+            if let Some(item) = st.streams.get_mut(self.id)
+                && !item.is_closing()
+            {
                 item.rd_op.pause(false);
             }
         });
+    }
+}
+
+impl StreamItem {
+    /// Whether the close has started. No operation may be started then, and
+    /// once the socket is closed its handle value may belong to another one.
+    fn is_closing(&self) -> bool {
+        self.close.is_some() || self.flags.contains(Flags::CLOSED)
     }
 }
 
@@ -369,11 +421,8 @@ impl StreamOpsStorage {
             item.flags,
         );
 
-        if item.flags.contains(Flags::DROPPED_SEC) {
-            Self::release(self.streams.remove(id));
-        } else {
-            item.flags.insert(Flags::DROPPED_PRI);
-        }
+        item.flags.insert(Flags::DROPPED_PRI);
+        self.release_if_done(id);
     }
 
     fn drop_weak_stream(&mut self, id: usize) {
@@ -389,11 +438,42 @@ impl StreamOpsStorage {
             item.flags,
         );
 
-        if item.flags.contains(Flags::DROPPED_PRI) {
-            Self::release(self.streams.remove(id));
-        } else {
-            item.flags.insert(Flags::DROPPED_SEC);
+        item.flags.insert(Flags::DROPPED_SEC);
+        self.release_if_done(id);
+    }
+
+    /// Frees an item once both handles are gone and no operation is in flight.
+    ///
+    /// Operations can still be in flight after a forced close, the completion
+    /// of the last one calls this again.
+    fn release_if_done(&mut self, id: usize) {
+        let Some(item) = self.streams.get_mut(id) else {
+            return;
+        };
+        if !item.flags.contains(Flags::DROPPED_PRI | Flags::DROPPED_SEC) {
+            return;
         }
+        if item.rd_op.is_pending() || item.wr_op.is_pending() {
+            if !item.flags.contains(Flags::CLOSED) {
+                // dropped without a shutdown, cancel so that the completions
+                // arrive; once closed, the handle value may be reused
+                item.rd_op.pause(true);
+                item.wr_op.pause();
+            }
+            return;
+        }
+        Self::release(self.streams.remove(id));
+    }
+
+    /// Stops waiting for cancelled operations and takes over the close.
+    ///
+    /// Returns the socket to close, or `None` if the close has already started
+    /// because the operations completed meanwhile.
+    fn force_close(&mut self, id: usize) -> Option<(&'static str, WinSock::SOCKET)> {
+        let item = self.streams.get_mut(id)?;
+        item.close.take()?;
+        item.flags.insert(Flags::CLOSED | Flags::TERMINATE);
+        Some((item.rd_op.tag(), item.io.as_raw_socket() as _))
     }
 
     /// Frees an item once both handles are gone, closing its socket unless a
@@ -401,10 +481,8 @@ impl StreamOpsStorage {
     fn release(item: Box<StreamItem>) {
         // The item holds the `OVERLAPPED` and buffers of its operations, so
         // freeing it while one is in flight lets the kernel complete into freed
-        // memory. The connection task closes the socket, which waits for both
-        // operations, before it drops its handle, and `cleanup()` takes the
-        // items that are still registered at shutdown, so this cannot happen
-        // today.
+        // memory. `release_if_done()` waits for both operations, and
+        // `cleanup()` takes the items that are still registered at shutdown.
         debug_assert!(
             !item.rd_op.is_pending() && !item.wr_op.is_pending(),
             "{}: stream released with an operation in flight",
@@ -437,7 +515,9 @@ impl WeakStreamCtl {
 
     pub(crate) fn write(&self) {
         self.inner.with(|st| {
-            if let Some(item) = st.streams.get_mut(self.id) {
+            if let Some(item) = st.streams.get_mut(self.id)
+                && !item.is_closing()
+            {
                 item.wr_op.write();
             }
         });
@@ -624,5 +704,57 @@ mod tests {
 
         drop(ctl);
         drop(io);
+    }
+
+    /// Delivers an aborted completion for a recv marked by `fake_pending()`.
+    fn complete_aborted_recv(ops: &StreamOps, id: usize) {
+        let optr = ops
+            .0
+            .with(|st| (&raw mut st.streams[id].rd_op).cast::<Overlapped>());
+        let err = io::Error::from_raw_os_error(
+            i32::try_from(windows_sys::Win32::Foundation::ERROR_OPERATION_ABORTED).unwrap(),
+        );
+        StreamOpsHandler {
+            inner: ops.0.clone(),
+        }
+        .completed(ops::RD_OP, Err(err), optr);
+    }
+
+    /// A close waiting for a cancelled recv that never completes must give up
+    /// after the shutdown timeout and close the socket, resetting the
+    /// connection. The item stays allocated until the recv does complete.
+    #[ntex::test]
+    async fn shutdown_closes_socket_when_cancel_does_not_complete() {
+        let reactor = Reactor::new().unwrap();
+        let (io, ctl, ops, raw, mut peer) = registered(&reactor);
+        let id = ctl.id;
+        ops.0.with(|st| st.streams[id].rd_op.fake_pending());
+
+        let err = ntex::time::timeout(ntex::time::Seconds(5), ctl.shutdown(false))
+            .await
+            .expect("close waited for the recv past the shutdown timeout")
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+
+        let open = is_ours(raw, &peer.peer_addr().unwrap().into());
+        if open {
+            unsafe { WinSock::closesocket(raw) };
+        }
+        assert!(!open, "socket not closed");
+        let mut buf = [0u8; 16];
+        let err = std::io::Read::read(&mut peer, &mut buf).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::ConnectionReset);
+
+        drop(ctl);
+        drop(io);
+        assert!(
+            ops.0.with(|st| st.streams.contains(id)),
+            "item freed with a recv in flight"
+        );
+        complete_aborted_recv(&ops, id);
+        assert!(
+            !ops.0.with(|st| st.streams.contains(id)),
+            "item not freed after the completion"
+        );
     }
 }

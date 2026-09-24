@@ -56,6 +56,20 @@ impl ReadOperation {
         self.ctx.tag()
     }
 
+    /// The connection's shutdown timeout, it bounds the wait for cancelled
+    /// operations too.
+    pub(crate) fn shutdown_timeout(&self) -> ntex_util::time::Seconds {
+        self.ctx.shutdown_timeout()
+    }
+
+    /// Marks a recv as in flight without issuing one, so that the kernel never
+    /// completes it, as when a cancel does not take.
+    #[cfg(test)]
+    pub(crate) fn fake_pending(&mut self) {
+        self.buf = Some(self.ctx.take_read_buf());
+        self.flags.insert(Flags::WAITING);
+    }
+
     /// Whether a recv is in flight, so the kernel still owns this operation.
     pub(crate) fn is_pending(&self) -> bool {
         self.flags.contains(Flags::WAITING)

@@ -74,6 +74,10 @@ jobs:
           Get-ChildItem C:\vcpkg\installed\x64-windows\bin
           Get-ChildItem C:\vcpkg\installed\x64-windows\lib
 
+      - name: Clippy (neon-iocp)
+        run: |
+          cargo clippy --all --no-default-features --features="ntex/neon-iocp,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+
       - name: Run tests (neon-iocp)
         timeout-minutes: 10
         run: |
