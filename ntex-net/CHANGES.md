@@ -2,6 +2,11 @@
 
 ## [4.1.0] - 2026-09-23
 
+* Disable io-uring zero-copy sends for a connection once the kernel reports
+  that it copied the data anyway (loopback, veth, NICs without scatter-gather),
+  using `IORING_SEND_ZC_REPORT_USAGE`; kernels without it fall back to plain
+  zero-copy. Zero-copy is used only for sends of 16KiB or more
+
 * Gather up to 16 write pages into one io-uring send with `SendMsg` /
   `SendMsgZc`, up to 256KiB, or 128KiB for zero-copy. A send op per page
   took a ring round-trip for every page and limited write throughput.

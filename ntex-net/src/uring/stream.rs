@@ -48,12 +48,16 @@ bitflags::bitflags! {
     }
 }
 
-const ZC_SIZE: u32 = 1536;
+/// Smaller sends are copied, zero-copy setup costs more than it saves
+const ZC_SIZE: u32 = 16 * 1024;
 const ZC_MAX_SIZE: u32 = 128 * 1024;
 /// Limits for the pages gathered into one send
 const SEND_MAX_PAGES: usize = 16;
 const SEND_MAX_SIZE: usize = 256 * 1024;
 const IORING_RECVSEND_POLL_FIRST: u16 = 1;
+/// Ask the kernel to report in the notification whether data was copied
+const IORING_SEND_ZC_REPORT_USAGE: u16 = 8;
+const IORING_NOTIF_USAGE_ZC_COPIED: usize = 1 << 31;
 
 #[derive(Debug)]
 struct StreamItem {
@@ -93,6 +97,17 @@ struct SendBuf {
     pages: [Option<BytePage>; SEND_MAX_PAGES],
     iov: [libc::iovec; SEND_MAX_PAGES],
     msg: libc::msghdr,
+    /// Zero-copy send with `IORING_SEND_ZC_REPORT_USAGE`
+    zc_report: bool,
+    /// Output was already returned to the write buffer for a resend
+    resent: bool,
+}
+
+impl SendBuf {
+    /// The kernel rejected `IORING_SEND_ZC_REPORT_USAGE`
+    fn report_unsupported(&self, res: &io::Result<usize>) -> bool {
+        self.zc_report && matches!(res, Err(e) if e.raw_os_error() == Some(libc::EINVAL))
+    }
 }
 
 impl std::fmt::Debug for SendBuf {
@@ -186,6 +201,8 @@ struct StreamOpsInner {
 struct StreamOpsStorage {
     ops: Slab<Option<Operation>>,
     streams: Slab<StreamItem>,
+    /// `IORING_SEND_ZC_REPORT_USAGE` is supported, cleared on first `EINVAL`
+    zc_report: bool,
 }
 
 impl StreamOps {
@@ -225,6 +242,7 @@ impl StreamOps {
                     storage: Cell::new(Some(Box::new(StreamOpsStorage {
                         ops,
                         streams: Slab::new(),
+                        zc_report: true,
                     }))),
                 });
                 inner = Some(ops.clone());
@@ -354,7 +372,7 @@ impl Handler for StreamOpsHandler {
                         }
                     }
                 }
-                Operation::Send { id, buf, result } => {
+                Operation::Send { id, mut buf, result } => {
                     if let Some(item) = st.streams.get_mut(id) {
                         #[cfg(feature = "trace")]
                         log::trace!(
@@ -365,6 +383,20 @@ impl Handler for StreamOpsHandler {
                         );
 
                         if cqueue::notif(flags) {
+                            // the kernel copied data anyway (loopback, veth, no
+                            // scatter-gather), zero-copy only adds overhead
+                            if buf.zc_report
+                                && matches!(res, Ok(v) if v & IORING_NOTIF_USAGE_ZC_COPIED != 0)
+                                && !item.flags.contains(Flags::NO_ZC)
+                            {
+                                #[cfg(feature = "trace")]
+                                log::trace!("{}: Zero-copy send was copied, disable ({:?})", item.tag(), item.fd());
+                                item.flags.insert(Flags::NO_ZC);
+                            }
+                            if buf.resent {
+                                let _ = st.ops.remove(user_data);
+                                return;
+                            }
                             let has_result = result.is_some();
                             let res = result.unwrap_or(res);
                             if matches!(res, Err(ref e) if e.raw_os_error() == Some(libc::ECANCELED)) {
@@ -401,6 +433,13 @@ impl Handler for StreamOpsHandler {
                                     buf.release_shared(&item.ctx, n);
                                 }
                                 st.send(id, &self.inner.api);
+                            } else if buf.report_unsupported(&res) {
+                                log::debug!("{}: IORING_SEND_ZC_REPORT_USAGE is not supported", item.tag());
+                                // the kernel may hold pages until the notification
+                                buf.release_shared(&item.ctx, 0);
+                                buf.resent = true;
+                                st.zc_report = false;
+                                st.send(id, &self.inner.api);
                             }
                             // insert op back for "notify" handling
                             st.ops[user_data] = Some(Operation::Send {
@@ -412,6 +451,17 @@ impl Handler for StreamOpsHandler {
                         } else {
                             // reset op reference
                             item.wr_op.take();
+
+                            // kernel does not support `IORING_SEND_ZC_REPORT_USAGE`,
+                            // resend without it
+                            if buf.report_unsupported(&res) {
+                                log::debug!("{}: IORING_SEND_ZC_REPORT_USAGE is not supported", item.tag());
+                                buf.release(&item.ctx, 0);
+                                st.zc_report = false;
+                                st.send(id, &self.inner.api);
+                                let _ = st.ops.remove(user_data);
+                                return;
+                            }
 
                             // release buffer and try to send next chunk
                             let res = complete_send(&item.ctx, *buf, res);
@@ -572,6 +622,8 @@ impl StreamOpsStorage {
                         }; SEND_MAX_PAGES],
                         // SAFETY: all-zero is a valid `msghdr`
                         msg: unsafe { mem::zeroed() },
+                        zc_report: false,
+                        resent: false,
                     });
                     buf.pages[0] = Some(first);
                     for slot in &mut buf.pages[1..max_pages] {
@@ -593,6 +645,12 @@ impl StreamOpsStorage {
                 let use_zc = zc
                     && (ZC_SIZE as usize..=ZC_MAX_SIZE as usize).contains(&len)
                     && (num == 1 || !item.flags.contains(Flags::NO_ZC_MSG));
+                buf.zc_report = use_zc && self.zc_report;
+                let zc_flags = if buf.zc_report {
+                    IORING_SEND_ZC_REPORT_USAGE
+                } else {
+                    0
+                };
 
                 #[cfg(feature = "trace")]
                 log::trace!(
@@ -606,12 +664,16 @@ impl StreamOpsStorage {
                     let ptr = buf.pages().next().map(|page| unsafe { page.as_ptr() });
                     let (ptr, len) = (ptr.unwrap_or_default(), len as u32);
                     if use_zc {
-                        opcode::SendZc::new(item.fd(), ptr, len).build()
+                        opcode::SendZc::new(item.fd(), ptr, len)
+                            .zc_flags(zc_flags)
+                            .build()
                     } else {
                         opcode::Send::new(item.fd(), ptr, len).build()
                     }
                 } else {
-                    let SendBuf { pages, iov, msg } = &mut *buf;
+                    let SendBuf {
+                        pages, iov, msg, ..
+                    } = &mut *buf;
                     for (iov, page) in iov.iter_mut().zip(pages.iter().flatten()) {
                         iov.iov_base = unsafe { page.as_ptr() }.cast_mut().cast();
                         iov.iov_len = page.len();
@@ -620,7 +682,9 @@ impl StreamOpsStorage {
                     msg.msg_iovlen = num as _;
                     let msg = &raw const buf.msg;
                     if use_zc {
-                        opcode::SendMsgZc::new(item.fd(), msg).build()
+                        opcode::SendMsgZc::new(item.fd(), msg)
+                            .ioprio(zc_flags)
+                            .build()
                     } else {
                         opcode::SendMsg::new(item.fd(), msg).build()
                     }

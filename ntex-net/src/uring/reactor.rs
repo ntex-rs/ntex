@@ -335,11 +335,12 @@ impl Reactor {
                             handlers[batch].modified = true;
                             handlers[batch].hnd.canceled(user_data);
                         } else {
-                            let result = if result < 0 {
+                            // zero-copy notification result is a set of flags
+                            let result = if result < 0 && !cqueue::notif(entry.flags()) {
                                 Err(io::Error::from_raw_os_error(-result))
                             } else {
                                 #[allow(clippy::cast_sign_loss)]
-                                Ok(result as _)
+                                Ok(result as u32 as _)
                             };
                             handlers[batch].modified = true;
                             handlers[batch]
