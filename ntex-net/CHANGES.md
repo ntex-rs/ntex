@@ -2,6 +2,12 @@
 
 ## [4.1.0] - 2026-09-23
 
+* Gather up to 16 write pages into one io-uring send with `SendMsg` /
+  `SendMsgZc`, up to 256KiB, or 128KiB for zero-copy. A send op per page
+  took a ring round-trip for every page and limited write throughput.
+  Send buffers are boxed, so the kernel no longer references pages stored
+  in the operations slab, which moves its entries when it grows
+
 * Fix reordered output after a partial io-uring zero-copy send. The next
   chunk was sent right away while the unsent remainder was only returned to
   the write buffer once the notification arrived, so it reached the peer
