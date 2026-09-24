@@ -438,6 +438,7 @@ where
                     self.timers.active = Timer::Stopped;
                     self.shared.io.stop_timer();
                 }
+                self.timers.reset_read(self.shared.io.cfg());
 
                 match ready!(self.shared.io.poll_read_pause(cx)) {
                     IoStatusUpdate::KeepAlive => {
@@ -1740,9 +1741,14 @@ mod tests {
             let _ = disp.await;
         });
 
+        // each cycle lets the frame timer extend the period twice, the
+        // budget allows two extensions, so it must be restored by the pause
         client.write("abc");
-        for _ in 0..16 {
-            sleep(Millis(500)).await;
+        for _ in 0..5 {
+            for _ in 0..3 {
+                sleep(Millis(700)).await;
+                client.write("abc");
+            }
             let (tx, rx) = oneshot::channel();
             *gate.borrow_mut() = Some(rx);
             client.write("abc");

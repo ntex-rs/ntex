@@ -16,6 +16,9 @@
 
 * Count bytes consumed by the codec as frame read progress
 
+* Restart frame read-rate tracking with a fresh period and `max_timeout` budget
+  when the service is not ready
+
 * Start frame read-rate tracking for the first frame when the connection arrives
 
 * Run the keep-alive timer only while the connection is idle; it is stopped

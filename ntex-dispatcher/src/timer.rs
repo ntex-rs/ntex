@@ -103,6 +103,15 @@ impl Timers {
         }
     }
 
+    /// Restarts rate tracking of a partial frame with a fresh period and
+    /// `max_timeout` budget, used when the service is not ready.
+    pub(crate) fn reset_read(&mut self, cfg: &IoConfig) {
+        if let (Some(params), Some(p)) = (cfg.frame_read_rate(), self.read.progress()) {
+            p.consumed = 0;
+            p.max_timeout = params.max_timeout;
+        }
+    }
+
     /// Selects the read-side timer.
     ///
     /// A frame being read is bounded by the frame read rate, when one is
