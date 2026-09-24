@@ -1,5 +1,10 @@
 # Changes
 
+## [Unreleased]
+
+* Add WsError::WriteTimeout for WebSocket dispatchers stopped by the write
+  backpressure timeout
+
 ## [4.0.0] - 2026-09-18
 
 * Migrate to `ntex-service` 5 and its typed service state model. Service

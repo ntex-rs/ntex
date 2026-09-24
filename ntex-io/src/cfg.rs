@@ -22,6 +22,7 @@ pub struct IoConfig {
     keepalive_timeout: Seconds,
     shutdown_timeout: Seconds,
     frame_read_rate: Option<FrameReadRate>,
+    write_timeout: Seconds,
 
     // io read/write cache and params
     read_buf: BufConfig,
@@ -119,6 +120,7 @@ impl IoConfig {
             keepalive_timeout: Seconds(0),
             shutdown_timeout: Seconds(1),
             frame_read_rate: None,
+            write_timeout: Seconds(0),
 
             read_buf: BufConfig {
                 idx,
@@ -172,6 +174,14 @@ impl IoConfig {
     }
 
     #[inline]
+    /// Returns the write backpressure timeout.
+    ///
+    /// A zero value means the timeout is disabled.
+    pub fn write_timeout(&self) -> Seconds {
+        self.write_timeout
+    }
+
+    #[inline]
     /// Returns the read-buffer configuration.
     pub fn read_buf(&self) -> &BufConfig {
         &self.read_buf
@@ -213,7 +223,8 @@ impl IoConfig {
     /// input is buffered, no partial frame is being read, and no decoded
     /// frames are being handled. It starts once the last response is done.
     /// Partial frames are bounded by
-    /// [frame read-rate](Self::set_frame_read_rate) limits instead.
+    /// [frame read-rate](Self::set_frame_read_rate) limits instead, and write
+    /// backpressure by the [write timeout](Self::set_write_timeout).
     ///
     /// A zero duration disables the timeout. It is disabled by default.
     #[must_use]
@@ -296,6 +307,9 @@ impl IoConfig {
     /// partial frame are governed separately by
     /// [`set_keepalive_timeout`](Self::set_keepalive_timeout).
     ///
+    /// The timer is suspended while write backpressure is active; the elapsed
+    /// part of the period is charged to `max_timeout`.
+    ///
     /// Frame read-rate enforcement is disabled by default.
     #[must_use]
     pub fn set_frame_read_rate(
@@ -313,6 +327,24 @@ impl IoConfig {
                 rate,
             })
         };
+        self
+    }
+
+    /// Sets the write backpressure timeout.
+    ///
+    /// Write backpressure is enabled when outstanding output reaches the
+    /// [write buffer](Self::set_write_buf) high watermark and disabled once the
+    /// peer has accepted enough of it. The timeout covers that whole period:
+    /// if backpressure is still enabled when it expires, the dispatcher stops
+    /// with a write timeout. Each backpressure period starts a fresh timeout,
+    /// however much the peer read during the previous one. Without a write
+    /// timeout, a peer that stops reading during backpressure can hold the
+    /// connection open indefinitely.
+    ///
+    /// A zero duration disables the timeout. It is disabled by default.
+    #[must_use]
+    pub fn set_write_timeout(mut self, timeout: Seconds) -> Self {
+        self.write_timeout = timeout;
         self
     }
 
@@ -579,6 +611,18 @@ mod tests {
 
         let cfg = cfg.set_frame_read_rate(Seconds::ZERO, Seconds(10), 1024);
         assert!(cfg.frame_read_rate().is_none());
+    }
+
+    #[test]
+    fn write_timeout_configuration() {
+        let cfg = IoConfig::new();
+        assert!(cfg.write_timeout().is_zero());
+
+        let cfg = cfg.set_write_timeout(Seconds(3));
+        assert_eq!(cfg.write_timeout(), Seconds(3));
+
+        let cfg = cfg.set_write_timeout(Seconds::ZERO);
+        assert!(cfg.write_timeout().is_zero());
     }
 
     #[test]

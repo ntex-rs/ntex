@@ -2,6 +2,12 @@
 
 ## [4.1.0] - 2026-09-21
 
+* Enforce the IoConfig write timeout from the moment write backpressure is
+  enabled until it is disabled; a peer that does not release backpressure in
+  time is stopped with the new Reason::WriteTimeout. Keep-alive and frame read
+  timers are suspended meanwhile, and the elapsed frame read period is charged
+  to the frame's budget
+
 * Stop the frame read timer when a frame completes, so it cannot close the connection as a keep-alive timeout
 
 * Count bytes consumed by the codec as frame read progress; a shrinking read buffer no longer underflows the rate check
@@ -13,6 +19,11 @@
 * Run the keep-alive timer only while the connection is idle; it is stopped while a frame is read or handled and starts once the last response is done
 
 * Keep the remaining frame read budget and progress when the service stops being ready in the middle of a frame; the elapsed part of the read period is charged to the budget
+
+* Handle external timeouts (`IoRef::notify_timeout()`) the same way while the
+  service is paused: an idle dispatcher, with no frames in flight, is stopped
+  with Reason::KeepAliveTimeout, otherwise the timeout is ignored. Pausing no
+  longer discards a pending external timeout
 
 * Transport failures and force-closes cancel the dispatcher-held pending response future
 

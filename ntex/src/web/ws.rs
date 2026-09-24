@@ -194,6 +194,7 @@ where
             DispatchItem::Control(_) => Ok(None),
             DispatchItem::Stop(Reason::KeepAliveTimeout) => Err(WsError::KeepAlive),
             DispatchItem::Stop(Reason::ReadTimeout) => Err(WsError::ReadTimeout),
+            DispatchItem::Stop(Reason::WriteTimeout) => Err(WsError::WriteTimeout),
             DispatchItem::Stop(Reason::Decoder(e) | Reason::Encoder(e)) => {
                 Err(WsError::Protocol(e))
             }
