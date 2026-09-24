@@ -233,6 +233,9 @@ impl ClientRequest {
     #[inline]
     #[must_use]
     /// Sets the request connection type.
+    ///
+    /// See [`RequestHead::set_connection_type()`](crate::http::RequestHead::set_connection_type)
+    /// for how repeated calls are resolved.
     pub fn set_connection_type(mut self, ctype: ConnectionType) -> Self {
         self.request.head.set_connection_type(ctype);
         self
@@ -350,9 +353,9 @@ impl ClientRequest {
     #[must_use]
     /// Sets the response-header timeout for this request.
     ///
-    /// This overrides the client-wide timeout. The timeout covers sending the
-    /// request and receiving the response head after a connection has been
-    /// acquired.
+    /// This overrides the client-wide timeout. The timeout covers receiving the
+    /// response head after the request has been sent. A zero duration uses the
+    /// client-wide timeout.
     ///
     /// The client-wide default is 5 seconds.
     pub fn timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {

@@ -85,7 +85,7 @@ impl<St> WebRequest<St> {
         self.req.head()
     }
 
-    /// This method returns reference to the request head
+    /// This method returns mutable reference to the request head
     #[inline]
     pub fn head_mut(&mut self) -> &mut RequestHead {
         self.req.head_mut()
@@ -148,7 +148,10 @@ impl<St> WebRequest<St> {
             .and_then(|io| io.query::<types::PeerAddr>().get().map(|addr| addr.0))
     }
 
-    /// Get request's payload
+    /// Take request's payload.
+    ///
+    /// The payload is replaced with an empty one, so subsequent calls return
+    /// an empty payload.
     #[inline]
     pub fn take_payload(&mut self) -> Payload {
         self.payload.take()

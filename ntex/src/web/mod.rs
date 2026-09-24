@@ -135,6 +135,7 @@ pub mod dev {
     pub use crate::web::route::IntoRoutes;
     pub use crate::web::service::{WebServiceAdapter, WebServiceConfig, WebServiceFactory};
 
+    /// Application state used by `App::default()`.
     pub type DefaultState = ();
 
     use crate::web::{Handler, HandlerSt};

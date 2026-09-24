@@ -12,6 +12,14 @@
   `500 Internal Server Error` instead of `400 Bad Request` in the default web
   error domain
 
+* Apply `web::test::TestRequest::peer_addr()` to generated requests
+
+* Resolve relative paths in `web::test::TestServer::request()` against the test
+  server url
+
+* Use `timeout + 15s` as the cumulative request-head limit when
+  `HttpServiceConfig::set_client_timeout()` re-enables header-read timing
+
 ## [4.0.0] - 2026-09-18
 
 * Migrate to `ntex-service` 5 and its typed service state model. Service

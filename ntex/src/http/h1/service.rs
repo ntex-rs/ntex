@@ -30,7 +30,7 @@ where
     Req::State: Clone,
     Err: ResponseError + 'static,
 {
-    /// Create new `HttpService` instance with config.
+    /// Create new `H1Service` instance.
     pub(crate) fn new<Sf>(sf: impl IntoServiceFactory<Sf, Req::State, Request>) -> Self
     where
         Sf: ServiceFactory<Req::State, Request, Error = Err> + 'static,
@@ -60,7 +60,8 @@ where
     /// Provides the HTTP/1 control service.
     ///
     /// The control service receives connection, request, expectation, upgrade,
-    /// error, and disconnect events. Returning [`Control::ack`] applies the
+    /// and disconnect events. Service and protocol errors are reported by the
+    /// disconnect event. Returning [`Control::ack`] applies the
     /// default action for each event.
     pub fn control<I, Sf>(self, ctl: I) -> Self
     where

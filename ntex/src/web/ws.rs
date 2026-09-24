@@ -21,18 +21,24 @@ thread_local! {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use ntex::web::{self, HttpRequest, HttpResponse};
-/// use ntex::web::ws;
+/// ```rust
+/// use ntex::web::{self, HttpRequest, ws};
 ///
-/// async fn handler(req: HttpRequest) -> Result<HttpResponse, web::Error> {
-///     // Note: convert to owned String since `req` will be moved
-///     let chosen: Option<String> = ws::subprotocols(&req)
-///         .find(|p| *p == "my-subprotocol")
-///         .map(String::from);
-///
-///     ws::start(req, chosen, factory).await
+/// async fn service(frame: ws::Frame) -> Result<Option<ws::Message>, std::io::Error> {
+///     // handle incoming frames
+///     Ok(None)
 /// }
+///
+/// async fn handler(req: HttpRequest) {
+///     let chosen = ws::subprotocols(&req)
+///         .find(|p| *p == "my-subprotocol");
+///
+///     if let Err(err) = ws::start(&req, chosen, service).await {
+///         eprintln!("WebSocket error: {err:?}");
+///     }
+/// }
+///
+/// let app = web::App::default().route("/ws", web::get().to(handler));
 /// ```
 pub fn subprotocols(req: &HttpRequest) -> impl Iterator<Item = &str> {
     req.headers()
@@ -54,18 +60,24 @@ pub fn subprotocols(req: &HttpRequest) -> impl Iterator<Item = &str> {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use ntex::web::{self, HttpRequest, HttpResponse};
-/// use ntex::web::ws;
+/// ```rust
+/// use ntex::web::{self, HttpRequest, ws};
 ///
-/// async fn handler(req: HttpRequest) -> Result<HttpResponse, web::Error> {
-///     // Note: convert to owned String since `req` will be moved
-///     let chosen: Option<String> = ws::subprotocols(&req)
-///         .find(|p| *p == "graphql-ws" || *p == "graphql-transport-ws")
-///         .map(String::from);
-///
-///     ws::start(req, chosen, factory).await
+/// async fn service(frame: ws::Frame) -> Result<Option<ws::Message>, std::io::Error> {
+///     // handle incoming frames
+///     Ok(None)
 /// }
+///
+/// async fn handler(req: HttpRequest) {
+///     let chosen = ws::subprotocols(&req)
+///         .find(|p| *p == "graphql-ws" || *p == "graphql-transport-ws");
+///
+///     if let Err(err) = ws::start(&req, chosen, service).await {
+///         eprintln!("WebSocket error: {err:?}");
+///     }
+/// }
+///
+/// let app = web::App::default().route("/ws", web::get().to(handler));
 /// ```
 pub async fn start<S>(
     req: &HttpRequest,

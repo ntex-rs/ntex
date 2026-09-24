@@ -130,8 +130,9 @@ impl Codec {
     /// Returns whether the most recently decoded request upgrades the
     /// connection.
     ///
-    /// This state remains available to an upgrade handler after the HTTP
-    /// dispatcher relinquishes the connection.
+    /// The flag is updated each time a request is decoded. It is not cleared
+    /// when the dispatcher hands the connection to an upgrade handler, so the
+    /// handler's codec still reports the upgrade.
     pub fn upgrade(&self) -> bool {
         self.flags.get().contains(Flags::UPGRADE)
     }

@@ -30,6 +30,30 @@ use crate::web::httprequest::HttpRequest;
 use crate::web::rmap::ResourceMap;
 use crate::web::{FromRequest, HttpResponse, Responder, State, WebRequest, WebResponse};
 
+fn set_peer_addr(head: &mut http::Message<http::RequestHead>, addr: Option<SocketAddr>) {
+    #[derive(Debug)]
+    struct TestIo {
+        io: crate::io::Io,
+        _peer: crate::io::testing::IoTest,
+    }
+
+    impl http::IoAccess for TestIo {
+        fn get(&self) -> Option<&crate::io::IoRef> {
+            Some(self.io.as_ref())
+        }
+
+        fn take(&self) -> Option<(crate::io::IoBoxed, http::h1::Codec)> {
+            None
+        }
+    }
+
+    if let Some(addr) = addr {
+        let (client, server) = crate::io::testing::IoTest::create();
+        let io = crate::io::Io::new(server.set_peer_addr(addr), SharedCfg::default());
+        head.io = http::CurrentIo::new(Rc::new(TestIo { io, _peer: client }));
+    }
+}
+
 /// Create service that always responds with `HttpResponse::Ok()`
 pub fn ok_service<St: State, In>()
 -> impl Service<St, WebRequest<In>, Res = WebResponse, Error = std::convert::Infallible> {
@@ -208,7 +232,7 @@ where
 ///         .to_request();
 ///
 ///     let resp = test::call_service(&mut app, req).await;
-///     let result = test::read_body(resp);
+///     let result = test::read_body(resp).await;
 ///     assert_eq!(result, Bytes::from_static(b"welcome!"));
 /// }
 /// ```
@@ -251,9 +275,9 @@ where
 ///     let mut app = test::init_service(
 ///         App::new().service(
 ///             web::resource("/people")
-///                 .route(web::post().to(async |person: web::Json<Person>| {
+///                 .route(web::post().to(async |person: web::types::Json<Person>| {
 ///                     HttpResponse::Ok()
-///                         .json(person.into_inner())})
+///                         .json(&person.into_inner())})
 ///                     ))
 ///     ).await;
 ///
@@ -262,7 +286,7 @@ where
 ///     let req = test::TestRequest::post()
 ///         .uri("/people")
 ///         .header(header::CONTENT_TYPE, "application/json")
-///         .set_payload(payload)
+///         .payload(payload)
 ///         .to_request();
 ///
 ///     let result: Person = test::read_response_json(&mut app, req).await;
@@ -307,7 +331,7 @@ pub async fn respond_to<T: Responder>(slf: T, req: &HttpRequest) -> HttpResponse
 /// use ntex::web::{self, test, HttpRequest, HttpResponse};
 ///
 /// async fn index(req: HttpRequest) -> HttpResponse {
-///     if let Some(hdr) = req.headers().get(header::CONTENT_TYPE) {
+///     if req.headers().contains_key(header::CONTENT_TYPE) {
 ///         HttpResponse::Ok().into()
 ///     } else {
 ///         HttpResponse::BadRequest().into()
@@ -319,11 +343,11 @@ pub async fn respond_to<T: Responder>(slf: T, req: &HttpRequest) -> HttpResponse
 ///     let req = test::TestRequest::with_header("content-type", "text/plain")
 ///         .to_http_request();
 ///
-///     let resp = index(req).await.unwrap();
+///     let resp = index(req).await;
 ///     assert_eq!(resp.status(), StatusCode::OK);
 ///
 ///     let req = test::TestRequest::default().to_http_request();
-///     let resp = index(req).await.unwrap();
+///     let resp = index(req).await;
 ///     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 /// }
 /// ```
@@ -453,6 +477,9 @@ impl<St> TestRequest<St> {
 
     #[must_use]
     /// Set peer addr.
+    ///
+    /// The address is returned by `peer_addr()` of the generated request.
+    /// Requests with a peer address must be created inside the ntex runtime.
     pub fn peer_addr(mut self, addr: SocketAddr) -> Self {
         self.peer_addr = Some(addr);
         self
@@ -503,9 +530,10 @@ impl<St> TestRequest<St> {
     }
 
     #[must_use]
-    /// Set application data.
+    /// Set application state.
     ///
-    /// This is equivalent of `App::data()` method for testing purpose.
+    /// This is equivalent of [`WebAppConfig::set_state()`] method for testing
+    /// purpose. The value is available via `HttpRequest::app_state()`.
     pub fn app_state<T: Send + Sync + 'static>(mut self, data: T) -> Self {
         self.config = self.config.set_state(data);
         self
@@ -528,7 +556,8 @@ impl<St> TestRequest<St> {
     #[must_use]
     /// Complete request creation and generate `WebRequest` instance.
     pub fn to_srv_request(mut self) -> WebRequest<St> {
-        let (head, payload) = self.req.build().into_parts();
+        let (mut head, payload) = self.req.build().into_parts();
+        set_peer_addr(&mut head, self.peer_addr);
         *self.path.get_mut() = head.uri.clone();
         let cfg = SharedCfg::new("TEST").add(self.config).build();
 
@@ -548,7 +577,8 @@ impl<St> TestRequest<St> {
     #[must_use]
     /// Complete request creation and generate `HttpRequest` instance.
     pub fn to_http_request(mut self) -> HttpRequest {
-        let (head, _) = self.req.build().into_parts();
+        let (mut head, _) = self.req.build().into_parts();
+        set_peer_addr(&mut head, self.peer_addr);
         *self.path.get_mut() = head.uri.clone();
         let cfg = SharedCfg::new("TEST").add(self.config).build();
 
@@ -558,7 +588,8 @@ impl<St> TestRequest<St> {
     #[must_use]
     /// Complete request creation and generate `HttpRequest` and `Payload` instances.
     pub fn to_http_parts(mut self) -> (HttpRequest, Payload, St) {
-        let (head, payload) = self.req.build().into_parts();
+        let (mut head, payload) = self.req.build().into_parts();
+        set_peer_addr(&mut head, self.peer_addr);
         *self.path.get_mut() = head.uri.clone();
         let cfg = SharedCfg::new("TEST").add(self.config).build();
 
@@ -584,8 +615,8 @@ impl<St> TestRequest<St> {
 ///
 /// #[ntex::test]
 /// async fn test_example() {
-///     let mut srv = test::server(
-///         || App::new().service(
+///     let srv = test::server(
+///         async |_| App::new().service(
 ///                 web::resource("/").to(my_handler))
 ///     );
 ///
@@ -622,7 +653,7 @@ where
 ///
 /// #[ntex::test]
 /// async fn test_example() {
-///     let mut srv = test::server_with(test::config().h1().port(4000), ||
+///     let srv = test::server_with(test::config().h1(), async |_|
 ///         App::new().service(web::resource("/").to(my_handler))
 ///     );
 ///
@@ -919,6 +950,9 @@ impl TestServerConfig {
     }
 
     #[must_use]
+    /// Use an already bound TCP listener for the test server.
+    ///
+    /// When set, the configured port is ignored.
     pub fn listener(mut self, listener: net::TcpListener) -> Self {
         self.listener = Some(listener);
         self
@@ -952,7 +986,7 @@ pub struct TestServer {
 }
 
 impl TestServer {
-    /// Construct test server url
+    /// Returns the test server's socket address.
     pub fn addr(&self) -> net::SocketAddr {
         self.addr
     }
@@ -1008,9 +1042,17 @@ impl TestServer {
         self.client.query(self.url(path.as_ref()).as_str())
     }
 
-    /// Connect to test http server
+    /// Create client request with the specified method
+    ///
+    /// A relative `path` is resolved against the test server url, an absolute
+    /// url (containing `://`) is used as is.
     pub fn request<S: AsRef<str>>(&self, method: Method, path: S) -> ClientRequest {
-        self.client.request(method, path.as_ref())
+        let path = path.as_ref();
+        if path.contains("://") {
+            self.client.request(method, path)
+        } else {
+            self.client.request(method, self.url(path).as_str())
+        }
     }
 
     /// Load response's body
@@ -1094,7 +1136,7 @@ mod tests {
             .to_http_request();
         assert!(req.headers().contains_key(header::CONTENT_TYPE));
         assert!(req.headers().contains_key(header::DATE));
-        assert_eq!(req.peer_addr(), None);
+        assert_eq!(req.peer_addr(), Some("127.0.0.1:8081".parse().unwrap()));
         assert_eq!(&req.match_info()["test"], "123");
         assert_eq!(req.version(), Version::HTTP_2);
         let data = req.app_state::<u64>().unwrap();

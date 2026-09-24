@@ -3,13 +3,20 @@ use std::{fmt, marker::PhantomData, rc::Rc};
 use super::{FromRequest, Responder, State, WebRequest, WebResponse, WebResponseError};
 use crate::util::BoxFuture;
 
-/// Async fn handler
+/// Async fn handler that receives the application and request state.
+///
+/// Implemented for async functions and closures whose first two arguments are
+/// the application state `&St` and the request state `U`, followed by up to 16
+/// extractors. `T` is the tuple of extractor types. Register such handlers with
+/// [`Route::to_with_state()`](crate::web::Route::to_with_state).
 pub trait HandlerSt<St, U, T>: 'static
 where
     St: State,
 {
+    /// Handler result, converted into a response.
     type Output: Responder<St>;
 
+    /// Call the handler with the states and extracted values.
     async fn call(&self, st: &St, req: U, param: T) -> Self::Output;
 }
 
@@ -27,13 +34,20 @@ where
     }
 }
 
-/// Async fn handler
+/// Async fn handler.
+///
+/// Implemented for async functions and closures that take up to 16
+/// extractors. `T` is the tuple of extractor types. Register such handlers with
+/// [`Route::to()`](crate::web::Route::to). Use [`HandlerSt`] when the handler
+/// needs the application or request state.
 pub trait Handler<St, T>: 'static
 where
     St: State,
 {
+    /// Handler result, converted into a response.
     type Output: Responder<St>;
 
+    /// Call the handler with the extracted values.
     async fn call(&self, param: T) -> Self::Output;
 }
 

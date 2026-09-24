@@ -43,8 +43,8 @@ use super::{FromRequest, HttpResponse, State, WebRequest, WebResponse};
 /// );
 /// ```
 ///
-/// [`web::get()`]: super::get
-/// [`web::post()`]: super::post
+/// [`web::get()`]: super::get()
+/// [`web::post()`]: super::post()
 pub struct Route<St: State, In = ()> {
     handler: Rc<dyn HandlerFn<St, In>>,
     methods: Vec<Method>,
@@ -283,6 +283,7 @@ impl<St: State, In> Service<St, WebRequest<In>> for RouteService<St, In> {
 
 /// Convert object to a vec of routes
 pub trait IntoRoutes<St: State, In> {
+    /// Convert into a list of routes.
     fn routes(self) -> Vec<Route<St, In>>;
 }
 

@@ -1,3 +1,4 @@
+//! Middleware stack types used by applications, scopes, and resources.
 use std::marker::PhantomData;
 
 use crate::error::Failure;
@@ -13,6 +14,7 @@ pub struct WebStack<St, Inner, Outer> {
 }
 
 impl<St, Inner, Outer> WebStack<St, Inner, Outer> {
+    /// Create a stack that applies `inner` first and then wraps it with `outer`.
     pub fn new(inner: Inner, outer: Outer) -> Self {
         WebStack {
             inner,
@@ -38,6 +40,9 @@ where
     }
 }
 
+/// Service produced by [`WebStack`] layers.
+///
+/// Wraps a middleware service and converts its errors into [`WebError`].
 #[derive(Debug)]
 pub struct WebMiddleware<S, St> {
     svc: S,
@@ -78,6 +83,10 @@ where
     crate::forward_shutdown!(St, svc);
 }
 
+/// Identity request filter.
+///
+/// The default filter of applications, scopes, and resources. It passes
+/// requests through unchanged.
 #[derive(derive_more::Debug)]
 #[debug("Filter")]
 pub struct Filter<St, In>(PhantomData<(St, In)>);

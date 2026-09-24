@@ -164,14 +164,20 @@ impl HttpServiceConfig {
     /// A zero duration disables header-read timing, allowing a new connection
     /// to wait indefinitely for its first request independently of the
     /// keep-alive policy. The default is one second.
+    ///
+    /// This sets the measurement interval of the request-head read rate. The
+    /// cumulative limit and required rate configured by
+    /// [`set_headers_read_rate`](Self::set_headers_read_rate) are kept. If
+    /// header-read timing was disabled, it is enabled again with the default
+    /// rate of 256 bytes and a cumulative limit of `timeout` plus 15 seconds.
     pub fn set_client_timeout(mut self, timeout: Seconds) -> Self {
         if timeout.is_zero() {
             self.headers_read_rate = None;
         } else {
             let mut rate = self.headers_read_rate.unwrap_or(FrameReadRate {
                 rate: 256,
-                timeout: Seconds(5),
-                max_timeout: Seconds(15),
+                timeout,
+                max_timeout: timeout + Seconds(15),
             });
             rate.timeout = timeout;
             self.headers_read_rate = Some(rate);

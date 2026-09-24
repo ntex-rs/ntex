@@ -24,6 +24,10 @@ pub trait WebResponseError<St, Err>: Error + 'static {
         HttpResponse::render_with(StatusCode::INTERNAL_SERVER_ERROR, &self)
     }
 
+    /// Convert the error into a boxed trait object.
+    ///
+    /// Used when the error is stored in a [`WebError`]. `WebError` overrides
+    /// this method to return its inner error without boxing it again.
     fn into(self) -> Box<dyn WebResponseError<St, Err>>
     where
         Self: Sized,
@@ -34,9 +38,16 @@ pub trait WebResponseError<St, Err>: Error + 'static {
 
 // ========================== WebErrorImpl ====================
 
+/// Type-erased web error for the `Err` error domain.
+///
+/// Web services, middleware, and filters use `WebError` as their error type.
+/// It stores any error that implements [`WebResponseError`] for the same
+/// application state and error domain, and renders it with that
+/// implementation.
 pub struct WebError<St = (), Err = DefaultError>(pub(crate) Box<dyn WebResponseError<St, Err>>);
 
 impl<St: 'static, Err: 'static> WebError<St, Err> {
+    /// Create `WebError` from an error that can be rendered for this domain.
     pub fn from_err<E: WebResponseError<St, Err>>(err: E) -> Self {
         Self(err.into())
     }
@@ -104,13 +115,6 @@ where
     }
 }
 
-/// Errors which can occur when attempting to work with `State` extractor
-#[derive(Debug, Copy, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum StateExtractorError {
-    #[error("App state is not configured, to configure use App::state()")]
-    NotConfigured,
-}
-
 /// Errors which can occur when attempting to generate resource uri.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum UrlGenerationError {
@@ -136,11 +140,16 @@ pub enum UrlencodedError {
     /// Cannot decode chunked transfer encoding
     #[error("Cannot decode chunked transfer encoding")]
     Chunked,
-    /// Payload size is bigger than allowed. (default: 256kB)
+    /// Payload size is bigger than allowed. (default: 16kB)
     #[error(
         "Urlencoded payload size is bigger ({size} bytes) than allowed (default: {limit} bytes)"
     )]
-    Overflow { size: usize, limit: usize },
+    Overflow {
+        /// Size of the payload, in bytes.
+        size: usize,
+        /// Configured payload size limit, in bytes.
+        limit: usize,
+    },
     /// Payload size is unknown
     #[error("Payload size is unknown")]
     UnknownLength,
@@ -208,6 +217,9 @@ pub enum QueryPayloadError {
     ),
 }
 
+/// Errors that can occur while reading a request payload.
+///
+/// Returned by the `Bytes` and `String` extractors and by the `Payload` stream.
 #[derive(Debug, thiserror::Error)]
 pub enum PayloadError {
     /// Http error.
@@ -217,34 +229,45 @@ pub enum PayloadError {
         #[source]
         error::HttpError,
     ),
+    /// Error while reading the payload stream.
     #[error("{0}")]
     Payload(
         #[from]
         #[source]
         error::PayloadError,
     ),
+    /// Invalid content type or charset.
     #[error("{0}")]
     ContentType(
         #[from]
         #[source]
         error::ContentTypeError,
     ),
+    /// The body cannot be decoded with the request's charset.
     #[error("Cannot decode body")]
     Decoding,
 }
 
 /// Helper type that can wrap any error and generate custom response.
 ///
-/// In following example any `io::Error` will be converted into "BAD REQUEST"
-/// response as opposite to *INTERNAL SERVER ERROR* which is defined by
-/// default.
+/// `InternalError` renders the wrapped error with a fixed status code, or with a
+/// prepared response, and implements [`WebResponseError`] for every error
+/// domain. The `Error*` helpers in this module, such as [`ErrorBadRequest`],
+/// create `InternalError` values.
+///
+/// In the following example an `io::Error` is rendered as `400 Bad Request`
+/// instead of the default `500 Internal Server Error`.
 ///
 /// ```rust
-/// use ntex::http::Request;
+/// use ntex::http::StatusCode;
+/// use ntex::web::{self, InternalError};
 ///
-/// fn index(req: Request) -> Result<&'static str, std::io::Error> {
-///     Err(std::io::Error::new(std::io::ErrorKind::Other, "error"))
+/// async fn index() -> Result<&'static str, InternalError<std::io::Error>> {
+///     let err = std::io::Error::other("error");
+///     Err(InternalError::new(err, StatusCode::BAD_REQUEST))
 /// }
+///
+/// let app = web::App::default().route("/", web::get().to(index));
 /// ```
 pub struct InternalError<T> {
     cause: T,

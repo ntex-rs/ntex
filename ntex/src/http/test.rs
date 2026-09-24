@@ -87,7 +87,7 @@ impl TestRequest {
     }
 
     #[must_use]
-    /// Create `TestRequest` and set header.
+    /// Create `TestRequest` and append header.
     pub fn with_header<K, V>(key: K, value: V) -> TestRequest
     where
         HeaderName: TryFrom<K>,
@@ -115,7 +115,9 @@ impl TestRequest {
         self
     }
 
-    /// Set a header.
+    /// Append a header.
+    ///
+    /// Existing values for the same header name are kept.
     pub fn header<K, V>(&mut self, key: K, value: V) -> &mut Self
     where
         HeaderName: TryFrom<K>,
@@ -214,23 +216,15 @@ fn parts(parts: &mut Option<Inner>) -> &mut Inner {
 /// # Examples
 ///
 /// ```rust
-/// use ntex::http;
-/// use ntex::web::{self, App, HttpResponse};
-///
-/// async fn my_handler() -> Result<HttpResponse, std::io::Error> {
-///     Ok(HttpResponse::Ok().into())
-/// }
+/// use ntex::http::{self, Method, Response};
 ///
 /// #[ntex::test]
 /// async fn test_example() {
-///     let mut srv = http::test::server(
-///         || http::HttpService::new(
-///             App::new().service(
-///                 web::resource("/").to(my_handler))
-///         )
-///     );
+///     let srv = http::test::server(async |_| {
+///         http::HttpService::h1(async |_| Ok::<_, std::io::Error>(Response::Ok().build()))
+///     });
 ///
-///     let req = srv.get("/");
+///     let req = srv.request(Method::GET, "/");
 ///     let response = req.send().await.unwrap();
 ///     assert!(response.status().is_success());
 /// }
@@ -250,31 +244,29 @@ where
     )
 }
 
-/// Start test server
+/// Start test server with custom configuration
 ///
-/// `TestServer` is very simple test server that simplify process of writing
-/// integration tests cases for ntex web applications.
+/// Same as [`server()`], but the server uses the provided shared configuration.
 ///
 /// # Examples
 ///
 /// ```rust
-/// use ntex::http;
-/// use ntex::web::{self, App, HttpResponse};
-///
-/// async fn my_handler() -> Result<HttpResponse, std::io::Error> {
-///     Ok(HttpResponse::Ok().into())
-/// }
+/// use ntex::http::{self, Method, Response};
+/// use ntex::{SharedCfg, io::IoConfig, time::Seconds};
 ///
 /// #[ntex::test]
 /// async fn test_example() {
-///     let mut srv = http::test::server(
-///         || http::HttpService::new(
-///             App::new().service(
-///                 web::resource("/").to(my_handler))
-///         )
+///     let srv = http::test::server_with_config(
+///         async |_| {
+///             http::HttpService::h1(async |_| {
+///                 Ok::<_, std::io::Error>(Response::Ok().build())
+///             })
+///         },
+///         SharedCfg::new("TEST-SRV")
+///             .add(IoConfig::new().set_shutdown_timeout(Seconds(1))),
 ///     );
 ///
-///     let req = srv.get("/");
+///     let req = srv.request(Method::GET, "/");
 ///     let response = req.send().await.unwrap();
 ///     assert!(response.status().is_success());
 /// }

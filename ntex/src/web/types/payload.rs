@@ -10,7 +10,7 @@ use crate::http::{HttpMessage, error, header};
 use crate::util::{BoxFuture, Bytes, BytesMut, Stream, stream_recv};
 use crate::web::{FromRequest, HttpRequest, State, error::PayloadError};
 
-/// Payload extractor returns request 's payload stream.
+/// Payload extractor returns request's payload stream.
 ///
 /// ## Example
 ///
@@ -120,7 +120,7 @@ impl<St: State> FromRequest<St> for Payload {
 ///
 /// Loads request's payload and construct Bytes instance.
 ///
-/// [**`PayloadConfig`**](struct.PayloadConfig.html) allows to configure
+/// [`PayloadConfig`] allows to configure
 /// extraction process.
 ///
 /// ## Example
@@ -169,7 +169,7 @@ impl<St: State> FromRequest<St> for Bytes {
 ///
 /// Text extractor automatically decode body according to the request's charset.
 ///
-/// [**`PayloadConfig`**](struct.PayloadConfig.html) allows to configure
+/// [`PayloadConfig`] allows to configure
 /// extraction process.
 ///
 /// ## Example
@@ -304,7 +304,7 @@ impl Default for PayloadConfig {
 /// Load http message body.
 ///
 /// By default only 256Kb payload reads to a memory, then
-/// `PayloadError::Overflow` get returned. Use `MessageBody::limit()`
+/// `PayloadError::Overflow` is returned. Use `HttpMessageBody::limit()`
 /// method to change upper limit.
 struct HttpMessageBody {
     limit: usize,

@@ -49,7 +49,8 @@ struct ClientCodecInner {
 impl ClientCodec {
     /// Create HTTP/1 codec.
     ///
-    /// `keepalive_enabled` how response `connection` header get generated.
+    /// `keep_alive` controls whether connections are kept alive, which affects
+    /// how the `connection` header is generated.
     pub(crate) fn new(keep_alive: bool, cfg: Cfg<HttpServiceConfig>) -> Self {
         let flags = if keep_alive {
             Flags::KEEPALIVE_ENABLED

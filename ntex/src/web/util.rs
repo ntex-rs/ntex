@@ -33,7 +33,7 @@ use super::{HttpResponse, HttpResponseBuilder, State, WebResponseError};
 ///
 /// By default, each segment matches the regular expression `[^{}/]+`.
 ///
-/// You can also specify a custom regex in the form `{identifier:regex}`:
+/// You can also specify a custom regex in the form `{identifier:regex}`.
 ///
 /// For instance, to route `GET`-requests on any route matching
 /// `/users/{userid}/{friend}` and store `userid` and `friend` in

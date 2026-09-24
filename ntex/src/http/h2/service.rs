@@ -32,7 +32,7 @@ where
     Req::State: Clone,
     Err: ResponseError + 'static,
 {
-    /// Create new `HttpService` instance with config.
+    /// Create new `H2Service` instance.
     pub(crate) fn new<Sf>(sf: impl IntoServiceFactory<Sf, Req::State, Request>) -> Self
     where
         Sf: ServiceFactory<Req::State, Request, Error = Err> + 'static,

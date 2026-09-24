@@ -160,6 +160,10 @@ impl RequestHead {
 
     #[inline]
     /// Sets the request connection behavior.
+    ///
+    /// Connection types are flags, and calling this method again does not clear
+    /// a previously set type. When several are set, `Close` takes precedence
+    /// over `KeepAlive`, which takes precedence over `Upgrade`.
     pub fn set_connection_type(&mut self, ctype: ConnectionType) {
         match ctype {
             ConnectionType::Close => self.flags.insert(Flags::CLOSE),
@@ -319,6 +323,10 @@ impl ResponseHead {
 
     #[inline]
     /// Sets the response connection behavior.
+    ///
+    /// Connection types are flags, and calling this method again does not clear
+    /// a previously set type. When several are set, `Close` takes precedence
+    /// over `KeepAlive`, which takes precedence over `Upgrade`.
     pub fn set_connection_type(&mut self, ctype: ConnectionType) {
         match ctype {
             ConnectionType::Close => self.flags.insert(Flags::CLOSE),

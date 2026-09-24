@@ -1,8 +1,17 @@
 //! WebSocket protocol support.
 //!
 //! Use [`handshake()`] or [`handshake_response()`] to perform a server-side
-//! opening handshake. For framed WebSocket communication, use [`WsTransport`]
-//! with [`WsSink`], or use [`WsClient`] to establish a client connection.
+//! opening handshake, and [`WsClient`] to establish a client connection.
+//!
+//! Framed communication uses [`Codec`] to encode and decode [`Frame`]s and
+//! [`Message`]s. On the client side, [`WsConnection::start()`] runs a frame
+//! handling service, [`WsConnection::receiver()`] returns a stream of frames,
+//! and [`WsConnection::sink()`] returns a [`WsSink`] for sending messages.
+//!
+//! [`WsTransport`] is a byte-stream filter instead: binary and continuation
+//! frames are exposed as raw bytes, text frames are rejected, and control
+//! frames are handled internally. Use [`WsConnection::into_transport()`] to
+//! run a byte-oriented protocol over a WebSocket connection.
 mod cfg;
 mod client;
 mod codec;

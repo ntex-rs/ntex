@@ -10,7 +10,9 @@ use crate::{http::Payload, router::PathDeserializer};
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 /// Extract typed information from the request's path.
 ///
-/// [**`PathConfig`**](struct.PathConfig.html) allows to configure extraction process.
+/// If the path segments cannot be deserialized into `T`, extraction fails with
+/// [`PathError`](crate::web::error::PathError), which the default error domain
+/// renders as `404 Not Found`.
 ///
 /// ## Example
 ///
@@ -19,7 +21,7 @@ use crate::{http::Payload, router::PathDeserializer};
 ///
 /// /// extract path info from "/{username}/{count}/index.html" url
 /// /// {username} - deserializes to a String
-/// /// {count} -  - deserializes to a u32
+/// /// {count} - deserializes to a u32
 /// async fn index(info: web::types::Path<(String, u32)>) -> String {
 ///     format!("Welcome {}! {}", info.0, info.1)
 /// }
@@ -52,7 +54,7 @@ use crate::{http::Payload, router::PathDeserializer};
 /// fn main() {
 ///     let app = web::App::default().service(
 ///         web::resource("/{username}/index.html") // <- define path parameters
-///              .route(web::get().to(index)) // <- use handler with Path` extractor
+///              .route(web::get().to(index)) // <- use handler with `Path` extractor
 ///     );
 /// }
 /// ```
@@ -114,7 +116,7 @@ impl<T: fmt::Display> fmt::Display for Path<T> {
 ///
 /// /// extract path info from "/{username}/{count}/index.html" url
 /// /// {username} - deserializes to a String
-/// /// {count} -  - deserializes to a u32
+/// /// {count} - deserializes to a u32
 /// async fn index(info: web::types::Path<(String, u32)>) -> String {
 ///     format!("Welcome {}! {}", info.0, info.1)
 /// }
@@ -147,7 +149,7 @@ impl<T: fmt::Display> fmt::Display for Path<T> {
 /// fn main() {
 ///     let app = web::App::default().service(
 ///         web::resource("/{username}/index.html") // <- define path parameters
-///              .route(web::get().to(index)) // <- use handler with Path` extractor
+///              .route(web::get().to(index)) // <- use handler with `Path` extractor
 ///     );
 /// }
 /// ```

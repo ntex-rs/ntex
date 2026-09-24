@@ -193,7 +193,7 @@ where
     /// Registers a web service with the application.
     ///
     /// A service defines its own path and guards through [`WebServiceFactory`].
-    /// Common services include [`Resource`], [`Scope`], handlers created with
+    /// Common services include [`Resource`], [`Scope`](crate::web::Scope), handlers created with
     /// route attribute macros, and custom services built with `web::service()`.
     ///
     /// Use a resource to group several routes, filters, middleware, or a
@@ -320,7 +320,7 @@ where
     /// such as the host, secure-connection flag, local address, and request pool
     /// size. It can also store typed configuration values with
     /// [`WebAppConfig::set_state()`]; those values are available through
-    /// [`HttpRequest::app_state()`] and [`WebRequest::app_state()`].
+    /// [`HttpRequest::app_state()`](crate::web::HttpRequest::app_state) and [`WebRequest::app_state()`].
     ///
     /// Without an explicit configuration, each request uses the
     /// [`WebAppConfig`] from its I/O context, or the default configuration if
@@ -440,7 +440,7 @@ where
     /// before `DefaultHeaders`.
     ///
     /// Custom middleware should call the wrapped service through
-    /// [`Ctx::call()`] so readiness and lifecycle events are handled
+    /// [`Ctx::call()`](crate::Ctx::call) so readiness and lifecycle events are handled
     /// correctly.
     ///
     /// ```rust

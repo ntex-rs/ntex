@@ -87,6 +87,9 @@ pub struct ResourceServices<St: State, In, Out, M, F> {
 
 impl<St: State, In: 'static> Resource<St, In, In> {
     #[allow(clippy::needless_pass_by_value)]
+    /// Create a resource for the given path pattern or patterns.
+    ///
+    /// Same as [`web::resource()`](crate::web::resource).
     pub fn new<T: IntoPattern>(path: T) -> Resource<St, In, In> {
         Resource {
             rdef: path.patterns(),

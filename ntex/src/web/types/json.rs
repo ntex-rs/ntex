@@ -20,7 +20,7 @@ use crate::web::{FromRequest, HttpRequest, Responder, State};
 /// To extract typed information from request's body, the type `T` must
 /// implement the `Deserialize` trait from *serde*.
 ///
-/// [**`JsonConfig`**](struct.JsonConfig.html) allows to configure extraction
+/// [`JsonConfig`] allows to configure extraction
 /// process.
 ///
 /// ## Example
@@ -130,7 +130,7 @@ where
 /// To extract typed information from request's body, the type `T` must
 /// implement the `Deserialize` trait from *serde*.
 ///
-/// [**`JsonConfig`**](struct.JsonConfig.html) allows to configure extraction
+/// [`JsonConfig`] allows to configure extraction
 /// process.
 ///
 /// ## Example
@@ -275,8 +275,9 @@ impl fmt::Debug for JsonConfig {
 /// Returns error:
 ///
 /// * content type is not `application/json`
-///   (unless specified in [`JsonConfig`](struct.JsonConfig.html))
-/// * content length is greater than 256k
+///   (unless specified in [`JsonConfig`])
+/// * content length is greater than the limit (256k by default; the `Json`
+///   extractor sets it from [`JsonConfig`], 32k by default)
 struct JsonBody<U> {
     limit: usize,
     length: Option<usize>,

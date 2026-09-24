@@ -8,6 +8,11 @@ use crate::util::HashMap;
 #[cfg(feature = "url")]
 use crate::web::httprequest::HttpRequest;
 
+/// Map of registered resources, used for URL generation.
+///
+/// The map is built from the application's resource definitions and is used
+/// by [`HttpRequest::url_for()`](crate::web::HttpRequest::url_for) to resolve
+/// named and external resources.
 #[derive(Clone, Debug)]
 pub struct ResourceMap {
     #[allow(dead_code)]
@@ -18,6 +23,7 @@ pub struct ResourceMap {
 }
 
 impl ResourceMap {
+    /// Create an empty resource map for the `root` resource.
     pub fn new(root: ResourceDef) -> Self {
         ResourceMap {
             root,
@@ -27,6 +33,11 @@ impl ResourceMap {
         }
     }
 
+    /// Add a resource pattern, optionally with the resource map of a nested
+    /// scope.
+    ///
+    /// Assigns the pattern its id within this map. Named patterns can be used
+    /// for URL generation.
     pub fn add(&mut self, pattern: &mut ResourceDef, nested: Option<Rc<ResourceMap>>) {
         pattern.set_id(self.patterns.len() as u16);
         self.patterns.push((pattern.clone(), nested));
@@ -50,7 +61,7 @@ impl ResourceMap {
 impl ResourceMap {
     /// Generate url for named resource
     ///
-    /// Check [`HttpRequest::url_for()`](../struct.HttpRequest.html#method.url_for) for detailed information.
+    /// Check [`HttpRequest::url_for()`](crate::web::HttpRequest::url_for) for detailed information.
     pub fn url_for<U, I>(
         &self,
         req: &HttpRequest,
