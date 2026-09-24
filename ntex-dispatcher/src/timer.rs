@@ -48,7 +48,11 @@ pub(crate) struct ReadProgress {
 impl Timers {
     /// Starts frame read-rate tracking for the first frame when it is
     /// configured, so a new connection must start sending data in time.
+    ///
+    /// A timer or timeout left on the transport does not apply to the new
+    /// dispatcher.
     pub(crate) fn new(io: &IoBoxed) -> Self {
+        io.stop_timer();
         if let Some(params) = io.cfg().frame_read_rate() {
             io.start_timer(params.timeout);
             Timers {
@@ -59,7 +63,6 @@ impl Timers {
                 }),
             }
         } else {
-            io.stop_timer();
             Timers {
                 active: Timer::Stopped,
                 read: ReadPhase::Idle,
