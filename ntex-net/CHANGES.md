@@ -19,6 +19,9 @@
   flight is closed, but its state is kept allocated, since the kernel
   completes the cancelled operation into it after the reactor has stopped
 
+* Report the socket error on `EPOLLERR` in the polling backend. When no read or
+  write surfaced it, a reset was reported as a clean close
+
 * Treat peer half-close as read eof in the io-uring backend, as the polling
   backend does. `POLLRDHUP` terminated the connection, so a response to a
   peer that half-closed after its request was dropped and the peer saw a

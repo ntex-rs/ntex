@@ -113,29 +113,14 @@ impl Clone for StreamOps {
     }
 }
 
-bitflags::bitflags! {
-    /// A notification reduced to the parts the stream handler acts on.
-    ///
-    /// Kept separate from `Event` so the policy can be exercised on backends
-    /// whose `Event` cannot represent `HUP` (kqueue reports it as absent).
-    ///
-    /// A peer half-close needs no bit of its own: the kernel reports it as
-    /// readable, and the read that follows returns eof once buffered input is
-    /// drained. `EPOLLRDHUP` would only announce it early, ahead of that
-    /// input, which is of no use while read back-pressure holds the input
-    /// back.
-    #[derive(Copy, Clone, Debug)]
-    struct Notify: u8 {
-        const READABLE = 0b0000_0001;
-        const WRITABLE = 0b0000_0010;
-        /// Terminal condition, `EPOLLHUP` or `EPOLLERR`.
-        const HUP      = 0b0000_0100;
-    }
-}
-
-impl StreamOpsHandler {
+impl Handler for StreamOpsHandler {
     /// Apply a notification to a stream.
-    fn handle_event(&mut self, id: usize, ev: Notify) {
+    ///
+    /// A peer half-close is reported as readable, and the read that follows
+    /// returns eof once buffered input is drained. `EPOLLRDHUP` would only
+    /// announce it early, ahead of that input, which is of no use while read
+    /// back-pressure holds the input back.
+    fn event(&mut self, id: usize, ev: Event) {
         self.inner.with(|streams| {
             if !streams.contains(id) {
                 return;
@@ -146,7 +131,7 @@ impl StreamOpsHandler {
             #[cfg(feature = "trace")]
             log::trace!("{}: {:?}-Evt {ev:?} {:?}", io.tag(), io.fd(), io.flags);
 
-            if ev.contains(Notify::READABLE) {
+            if ev.readable {
                 if io.read() == IoTaskStatus::Io {
                     renew_rd = true;
                     io.flags.insert(Flags::RD);
@@ -157,7 +142,7 @@ impl StreamOpsHandler {
                 renew_rd = true;
             }
 
-            if ev.contains(Notify::WRITABLE) {
+            if ev.writable {
                 if io.write() == IoTaskStatus::Io {
                     renew_wr = true;
                     io.flags.insert(Flags::WR);
@@ -168,7 +153,19 @@ impl StreamOpsHandler {
                 renew_wr = true;
             }
 
-            if ev.contains(Notify::HUP) {
+            // `EPOLLERR` and `EPOLLHUP` are terminal and are reported whether
+            // or not they were requested. Re-arming on them makes no progress.
+            // kqueue reports neither, failures surface through reads and
+            // writes instead.
+            if ev.is_err() == Some(true) {
+                // The error is not surfaced by a read or write when their
+                // interest is not armed, so it is taken from the socket. It
+                // may already have been consumed by an earlier operation.
+                let err = io.io.take_error().ok().flatten().unwrap_or_else(|| {
+                    io::Error::new(io::ErrorKind::ConnectionReset, "transport error")
+                });
+                io.ctx.stop(Some(err));
+            } else if ev.is_interrupt() {
                 io.ctx.stop(None);
             } else {
                 #[cfg(feature = "trace")]
@@ -182,18 +179,6 @@ impl StreamOpsHandler {
                     .modify(io.fd(), id as u32, Event::new(0, renew_rd, renew_wr));
             }
         });
-    }
-}
-
-impl Handler for StreamOpsHandler {
-    fn event(&mut self, id: usize, ev: Event) {
-        let mut notify = Notify::empty();
-        notify.set(Notify::READABLE, ev.readable);
-        notify.set(Notify::WRITABLE, ev.writable);
-        // `EPOLLERR` is terminal and, like `EPOLLHUP`, is reported whether or
-        // not it was requested. Re-arming on it makes no progress.
-        notify.set(Notify::HUP, ev.is_interrupt() || ev.is_err() == Some(true));
-        self.handle_event(id, notify);
     }
 
     fn error(&mut self, id: usize, err: io::Error) {
@@ -263,7 +248,7 @@ impl StreamOpsInner {
     ///
     /// Interest is only ever added. Output that drained completely leaves the
     /// arming in place and costs at most one spurious writable event, which
-    /// `handle_event` clears; disarming here would cost a syscall on the
+    /// `event` clears; disarming here would cost a syscall on the
     /// common path instead.
     fn write_item(&self, id: u32, item: &mut StreamItem) {
         if item.write() == IoTaskStatus::Io && !item.flags.contains(Flags::WR) {
@@ -695,9 +680,9 @@ mod tests {
                 .with(|streams| streams[self.id].flags.insert(Flags::RD));
         }
 
-        fn fire(&mut self, notify: Notify) {
+        fn fire(&mut self, ev: Event) {
             let id = self.id;
-            self.handler.handle_event(id, notify);
+            self.handler.event(id, ev);
         }
 
         fn flags(&self) -> Flags {
@@ -711,8 +696,7 @@ mod tests {
 
     /// Half-close and terminal-condition handling.
     ///
-    /// These drive `handle_event` directly, so the policy is covered on every
-    /// platform even though only epoll ever reports `ERR`.
+    /// Only epoll reports `HUP` and `ERR`, so those tests run on Linux.
     mod hup {
         use std::net::Shutdown;
 
@@ -726,7 +710,7 @@ mod tests {
             fixture.arm_read();
             fixture.peer.shutdown(Shutdown::Write).unwrap();
 
-            fixture.fire(Notify::READABLE);
+            fixture.fire(Event::readable(0));
 
             let eof = fixture.io.is_read_eof();
             let closed = !fixture.io.is_active();
@@ -736,21 +720,90 @@ mod tests {
             assert!(!closed, "half-close terminated the connection");
         }
 
-        /// `EPOLLERR` is terminal and is reported whether or not it was
-        /// requested, so it must stop the stream instead of re-arming.
+        /// A plain `EPOLLHUP` is a clean close.
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         #[ntex::test]
-        async fn err_stops_the_stream() {
+        async fn hup_stops_the_stream_cleanly() {
             let mut fixture = Fixture::new();
-            fixture.arm_read();
 
-            fixture.fire(Notify::HUP);
+            fixture.fire(Event::none(0).with_interrupt());
 
             let closed = !fixture.io.is_active();
+            let err = peer_gone_error(&fixture.io).await;
             fixture.teardown();
 
-            assert!(closed, "EPOLLERR did not stop the stream");
+            assert!(closed, "EPOLLHUP did not stop the stream");
+            assert!(err.is_none(), "EPOLLHUP reported an error: {err:?}");
+        }
+
+        /// `EPOLLERR` is terminal and is reported whether or not it was
+        /// requested. A reset reported by it while read interest is not armed
+        /// stops the stream with the socket error.
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[ntex::test]
+        async fn err_without_read_armed_reports_socket_error() {
+            use ::polling::{Events, PollMode, Poller};
+
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let peer = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            let (socket, _) = listener.accept().unwrap();
+            socket.set_nonblocking(true).unwrap();
+
+            // a separate poller observes the kernel event for the socket
+            let poller = Poller::new().unwrap();
+            unsafe {
+                poller
+                    .add_with_mode(&socket, Event::none(0), PollMode::Oneshot)
+                    .unwrap();
+            }
+
+            let reactor = Reactor::new().unwrap();
+            let ops = StreamOps::get(&reactor);
+            let ctl = Rc::new(Cell::new(None));
+            let io = Io::new(
+                TestStream {
+                    socket: Socket::from(socket),
+                    ops: ops.clone(),
+                    ctl: ctl.clone(),
+                },
+                SharedCfg::default(),
+            );
+            let ctl = ctl.take().unwrap();
+            let mut handler = StreamOpsHandler {
+                inner: ops.0.clone(),
+            };
+
+            // abortive close sends a reset
+            let peer = Socket::from(peer);
+            peer.set_linger(Some(std::time::Duration::ZERO)).unwrap();
+            drop(peer);
+
+            let mut events = Events::new();
+            poller
+                .wait(&mut events, Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            let ev = events.iter().next().expect("no event for the reset");
+            assert_eq!(ev.is_err(), Some(true));
+            assert!(!ev.readable);
+
+            handler.event(ctl.id as usize, ev);
+
+            let err = peer_gone_error(&io).await;
+            handler.cleanup();
+            drop(ctl);
+
+            assert_eq!(err.and_then(|e| e.raw_os_error()), Some(libc::ECONNRESET));
+        }
+
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        async fn peer_gone_error(io: &Io) -> Option<io::Error> {
+            match std::future::poll_fn(|cx| io.poll_status_update(cx)).await {
+                ntex_io::IoStatusUpdate::PeerGone(err) => err,
+                st => panic!("unexpected status {st:?}"),
+            }
         }
     }
+
     /// Out-of-band writes, performed on the stack of whoever filled the write
     /// buffer rather than by the write task.
     mod write {
