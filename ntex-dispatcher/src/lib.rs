@@ -2134,7 +2134,8 @@ mod tests {
     }
 
     /// The write timeout keeps running while the service is not ready during
-    /// write backpressure.
+    /// write backpressure, and the stop item is delivered without waiting for
+    /// readiness.
     #[ntex::test]
     async fn write_timeout_during_service_pause() {
         let (client, server) = IoTest::create();
@@ -2153,17 +2154,15 @@ mod tests {
         // the service is not ready for a while
         let (tx, rx) = oneshot::channel::<()>();
         *gate.borrow_mut() = Some(rx);
-        sleep(Millis(3500)).await;
-        assert_eq!(&events.borrow()[..], &["item", "bp-on"]);
-
-        // the stop item waits for readiness
-        drop(tx);
-        sleep(Millis(100)).await;
+        sleep(Millis(2500)).await;
         assert_eq!(&events.borrow()[..], &["item", "bp-on", "write-timeout"]);
-        // shutdown drains output within the shutdown timeout
+
+        // shutdown does not wait for readiness and drains output within
+        // the shutdown timeout
         sleep(Millis(2500)).await;
         assert!(client.is_closed());
         assert_eq!(&events.borrow()[..], &["item", "bp-on", "write-timeout"]);
+        drop(tx);
     }
 
     /// Backpressure released while the service is not ready ends the write
