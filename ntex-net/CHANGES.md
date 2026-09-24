@@ -2,6 +2,12 @@
 
 ## [4.1.0] - 2026-09-23
 
+* Update the connect context of client sockets in the IOCP backend. Sockets
+  connected with `ConnectEx` stayed partially connected, so `shutdown` failed
+  with `WSAENOTCONN`: a graceful close skipped `closesocket`, leaking the
+  socket and never sending a `FIN`, and a force close ended with a `FIN`
+  instead of a reset
+
 * Treat peer half-close as read eof in the io-uring backend, as the polling
   backend does. `POLLRDHUP` terminated the connection, so a response to a
   peer that half-closed after its request was dropped and the peer saw a
