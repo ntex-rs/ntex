@@ -956,7 +956,7 @@ mod tests {
         assert_eq!(req.head().headers_vec().len(), 0);
 
         let cfg: SharedCfg = SharedCfg::new("dbg")
-            .add(HttpServiceConfig::default().set_enable_headers_vec())
+            .add(HttpServiceConfig::default().set_headers_vec(true))
             .into();
         let reader = MessageDecoder::<Request>::new(cfg.get());
         let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
@@ -982,7 +982,7 @@ mod tests {
         assert_eq!(res.headers_vec().len(), 0);
 
         let cfg: SharedCfg = SharedCfg::new("dbg")
-            .add(HttpServiceConfig::default().set_enable_headers_vec())
+            .add(HttpServiceConfig::default().set_headers_vec(true))
             .into();
         let reader = MessageDecoder::<ResponseHead>::new(cfg.get());
         let (res, _) = reader.decode(&mut buf).unwrap().unwrap();

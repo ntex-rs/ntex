@@ -110,7 +110,7 @@ where
     /// it when its first service is created.
     ///
     /// The default is 25,600 connections per worker.
-    pub fn maxconn(self, num: usize) -> Self {
+    pub fn max_connections(self, num: usize) -> Self {
         super::max_concurrent_connections(num);
         self
     }

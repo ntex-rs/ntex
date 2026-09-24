@@ -82,12 +82,12 @@ Data shared between workers must still use thread-safe types such as `Arc`,
 atomics, or locks.
 
 Each worker can handle up to 25,600 concurrent connections by default. Use
-`maxconn()` to change this limit:
+`max_connections()` to change this limit:
 
 ```rust
 let builder = ntex::server::build()
     .workers(4)
-    .maxconn(10_000);
+    .max_connections(10_000);
 ```
 
 When a worker reaches its limit, the server stops sending new connections to
@@ -95,7 +95,7 @@ that worker. If all workers are at capacity, the listeners stop accepting
 connections until space becomes available.
 
 The limit is a process-wide setting shared by every server in the process.
-`maxconn()` applies it immediately, and each worker reads it when it starts,
+`max_connections()` applies it immediately, and each worker reads it when it starts,
 so call it before `run()`.
 
 ## Server Configuration
@@ -107,7 +107,7 @@ provides several ways to configure the accept loop and worker pool:
   thread names. It defaults to the system name.
 - `workers()` sets the number of worker threads.
 - `backlog()` sets the socket listen backlog. Call it before `bind()`.
-- `maxconn()` sets the maximum number of concurrent connections per worker.
+- `max_connections()` sets the maximum number of concurrent connections per worker.
 - `enable_affinity()` pins workers to CPU cores when possible.
 - `stop_on_panic()` stops the entire server if a worker panics or its service
   cannot be created. Without it, a failed worker is restarted. The stop is
@@ -128,7 +128,7 @@ let builder = ntex::server::build()
     .name("api")
     .workers(4)
     .backlog(1024)
-    .maxconn(20_000)
+    .max_connections(20_000)
     .graceful_shutdown_timeout(Seconds(15))
     .stop_on_panic();
 ```

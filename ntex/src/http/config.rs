@@ -192,8 +192,8 @@ impl HttpServiceConfig {
     /// [`RequestHead::headers_vec`](crate::http::RequestHead::headers_vec) or
     /// [`ResponseHead::headers_vec`](crate::http::ResponseHead::headers_vec).
     /// The normal header map remains populated. This is disabled by default.
-    pub fn set_enable_headers_vec(mut self) -> Self {
-        self.headers_vec = true;
+    pub fn set_headers_vec(mut self, enabled: bool) -> Self {
+        self.headers_vec = enabled;
         self
     }
 

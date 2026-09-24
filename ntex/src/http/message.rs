@@ -87,7 +87,7 @@ pub struct RequestHead {
     /// Headers in their original order and with their original names.
     ///
     /// This collection is populated only when
-    /// [`HttpServiceConfig::set_enable_headers_vec`](crate::http::HttpServiceConfig::set_enable_headers_vec)
+    /// [`HttpServiceConfig::set_headers_vec`](crate::http::HttpServiceConfig::set_headers_vec)
     /// is enabled.
     pub headers_vec: Vec<HeaderItem>,
     /// Request-local type map.
@@ -266,7 +266,7 @@ pub struct ResponseHead {
     /// Headers in their original order and with their original names.
     ///
     /// This collection is populated when decoding a response with
-    /// [`HttpServiceConfig::set_enable_headers_vec`](crate::http::HttpServiceConfig::set_enable_headers_vec)
+    /// [`HttpServiceConfig::set_headers_vec`](crate::http::HttpServiceConfig::set_headers_vec)
     /// enabled.
     pub headers_vec: Vec<HeaderItem>,
     /// Custom reason phrase, or `None` to use the status code's standard phrase.

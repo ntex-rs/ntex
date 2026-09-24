@@ -36,13 +36,6 @@ impl<St> WebResponseError<St, DefaultError> for DefaultError {
 
 // =========== DefaultError impls =========
 
-/// `BadRequest` for `StateExtractorError`
-impl<St> WebResponseError<St, DefaultError> for error::StateExtractorError {
-    fn error_response(&self, _: &St) -> HttpResponse {
-        HttpResponse::render_with(StatusCode::BAD_REQUEST, self)
-    }
-}
-
 /// `InternalServerError` for `JsonError`.
 ///
 /// Serialization errors are server-side failures, such as a `Json<T>` or

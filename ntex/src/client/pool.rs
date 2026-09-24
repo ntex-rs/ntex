@@ -625,9 +625,9 @@ mod tests {
         let cfg = SharedCfg::new("C")
             .add(
                 ClientConfig::new()
-                    .set_keep_alive(Seconds(10))
+                    .set_keepalive(Seconds(10))
                     .set_lifetime(Seconds(10))
-                    .set_limit(1),
+                    .set_connection_limit(1),
             )
             .build();
 
@@ -737,9 +737,9 @@ mod tests {
         let cfg = SharedCfg::new("C")
             .add(
                 ClientConfig::new()
-                    .set_keep_alive(Seconds(10))
+                    .set_keepalive(Seconds(10))
                     .set_lifetime(Seconds(10))
-                    .set_limit(1),
+                    .set_connection_limit(1),
             )
             .build();
 

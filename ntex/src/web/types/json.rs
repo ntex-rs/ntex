@@ -237,6 +237,9 @@ impl JsonConfig {
 
     #[must_use]
     /// Set predicate for allowed content types.
+    ///
+    /// JSON content types (`*/json` and `*/*+json`) are always accepted. The
+    /// predicate can accept additional types.
     pub fn content_type<F>(mut self, predicate: F) -> Self
     where
         F: Fn(mime::Mime) -> bool + Send + Sync + 'static,

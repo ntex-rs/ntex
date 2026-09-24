@@ -261,7 +261,7 @@ async fn test_connection_wait_queue() {
     let client = Client::with_config(
         ClientConfig::new()
             .set_response_timeout(Seconds(30))
-            .set_limit(1),
+            .set_connection_limit(1),
     );
 
     // req 1
@@ -303,7 +303,7 @@ async fn test_connection_wait_queue_force_close() {
 
     let client = Client::with_config(
         ClientConfig::new()
-            .set_limit(1)
+            .set_connection_limit(1)
             .set_response_timeout(Seconds(30)),
     );
 

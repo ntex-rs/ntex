@@ -66,20 +66,25 @@ impl ClientConfig {
     }
 
     /// Returns the response-header timeout.
-    pub fn timeout(&self) -> Millis {
+    pub fn response_timeout(&self) -> Millis {
         self.timeout
     }
 
     /// Returns the maximum response payload size.
     ///
     /// A value of zero disables the limit.
-    pub fn payload_limit(&self) -> usize {
+    pub fn response_payload_limit(&self) -> usize {
         self.pl_limit
     }
 
     /// Returns the timeout for reading a complete response payload.
-    pub fn payload_timeout(&self) -> Millis {
+    pub fn response_payload_timeout(&self) -> Millis {
         self.pl_timeout
+    }
+
+    /// Returns the maximum number of simultaneous connections per connection pool.
+    pub fn connection_limit(&self) -> usize {
+        self.limit
     }
 
     #[must_use]
@@ -88,7 +93,7 @@ impl ClientConfig {
     /// The limit is shared by all hosts. A client keeps separate pools for
     /// plain and TLS connections, and each pool has its own limit. A value of
     /// zero disables the limit. The default is 8.
-    pub fn set_limit(mut self, limit: usize) -> Self {
+    pub fn set_connection_limit(mut self, limit: usize) -> Self {
         self.limit = limit;
         self
     }
@@ -100,7 +105,7 @@ impl ClientConfig {
     /// reused. Expiration is checked lazily, when a connection for the same
     /// host is next requested; the expired connection is closed at that point.
     /// The default is 15 seconds.
-    pub fn set_keep_alive<T: Into<Seconds>>(mut self, dur: T) -> Self {
+    pub fn set_keepalive<T: Into<Seconds>>(mut self, dur: T) -> Self {
         self.conn_keep_alive = dur.into().into();
         self
     }
@@ -129,6 +134,8 @@ impl ClientConfig {
 
     #[must_use]
     /// Disables the response-header timeout.
+    ///
+    /// This is the same as `set_response_timeout(Millis::ZERO)`.
     pub fn disable_timeout(mut self) -> Self {
         self.timeout = Millis::ZERO;
         self

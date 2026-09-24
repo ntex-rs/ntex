@@ -20,6 +20,19 @@
 * Use `timeout + 15s` as the cumulative request-head limit when
   `HttpServiceConfig::set_client_timeout()` re-enables header-read timing
 
+* Rename API methods for consistency; the old names are deprecated:
+  * `ClientConfig::timeout()`, `payload_limit()`, `payload_timeout()` to
+    `response_timeout()`, `response_payload_limit()`, `response_payload_timeout()`
+  * `ClientConfig::set_limit()` to `set_connection_limit()`, and add
+    `connection_limit()`
+  * `ClientConfig::set_keep_alive()` to `set_keepalive()`
+  * `WsClientConfig::set_header_if_unset()` to `set_header_if_none()`
+  * `HttpServiceConfig::set_enable_headers_vec()` to `set_headers_vec(bool)`
+  * `HttpServer::maxconn()` to `max_connections()`, and `maxconnrate()` to
+    `max_tls_handshakes()`
+
+* Add `PayloadConfig::content_type()` predicate, matching `JsonConfig::content_type()`
+
 ## [4.0.0] - 2026-09-18
 
 * Migrate to `ntex-service` 5 and its typed service state model. Service

@@ -134,8 +134,8 @@ where
     /// for each worker.
     ///
     /// By default max connections is set to a 25k.
-    pub fn maxconn(mut self, num: usize) -> Self {
-        self.builder = self.builder.maxconn(num);
+    pub fn max_connections(mut self, num: usize) -> Self {
+        self.builder = self.builder.max_connections(num);
         self
     }
 
@@ -148,7 +148,7 @@ where
     /// usage of TLS handshakes.
     ///
     /// By default the limit is 256.
-    pub fn maxconnrate(self, num: usize) -> Self {
+    pub fn max_tls_handshakes(self, num: usize) -> Self {
         ntex_tls::max_concurrent_ssl_accept(num);
         self
     }
