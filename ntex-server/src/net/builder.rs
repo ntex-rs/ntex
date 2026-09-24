@@ -63,7 +63,8 @@ where
     #[must_use]
     /// Sets the server name.
     ///
-    /// The name is also used for worker threads.
+    /// The name is also used for the accept and worker thread names. It
+    /// defaults to the current system name.
     pub fn name<T: AsRef<str>>(mut self, name: T) -> Self {
         self.name = name.as_ref().to_string();
         self.accept.name(self.name.as_str());
@@ -81,7 +82,7 @@ where
     }
 
     #[must_use]
-    /// Set the maximum number of pending connections.
+    /// Sets the maximum number of pending connections.
     ///
     /// This refers to the number of clients that can be waiting to be served.
     /// Exceeding this number results in the client getting an error when
@@ -90,7 +91,9 @@ where
     ///
     /// Generally set in the 64-2048 range. Default value is 2048.
     ///
-    /// This method should be called before `bind()` method call.
+    /// It applies to listeners created by later [`bind`](Self::bind) and
+    /// [`configure`](Self::configure) calls. It does not affect listeners
+    /// passed to [`listen`](Self::listen) or `listen_uds`.
     pub fn backlog(mut self, num: i32) -> Self {
         self.backlog = num;
         self
@@ -99,8 +102,12 @@ where
     #[must_use]
     /// Sets the maximum per-worker number of concurrent connections.
     ///
-    /// All socket listeners will stop accepting connections when this limit is
-    /// reached for each worker.
+    /// A worker stops taking new connections while it is at this limit. When
+    /// no worker can take a connection, the listeners stop accepting.
+    ///
+    /// The limit is a process-wide setting shared by every server in the
+    /// process. Set it before the server starts, because each worker reads
+    /// it when its first service is created.
     ///
     /// The default is 25,600 connections per worker.
     pub fn maxconn(self, num: usize) -> Self {
@@ -109,16 +116,20 @@ where
     }
 
     #[must_use]
-    /// Stops the current ntex runtime when the server is dropped.
+    /// Stops the current ntex runtime after the server has stopped.
     ///
-    /// By default "stop runtime" is disabled.
+    /// By default, "stop runtime" is disabled.
     pub fn stop_runtime(mut self) -> Self {
         self.pool = self.pool.stop_runtime();
         self
     }
 
     #[must_use]
-    /// Stops the server when one of the workers panics.
+    /// Stops the server when one of the workers fails.
+    ///
+    /// A worker fails when it panics or its service cannot be created. The
+    /// stop is graceful only if [`graceful_shutdown`](Self::graceful_shutdown)
+    /// is enabled. Without this option, a failed worker is restarted.
     ///
     /// By default, "stop on panic" is disabled.
     pub fn stop_on_panic(mut self) -> Self {
@@ -127,9 +138,9 @@ where
     }
 
     #[must_use]
-    /// Disable signal handling.
+    /// Disables signal handling.
     ///
-    /// By default, signal handling is enabled.
+    /// By default, the server stops on SIGINT, SIGTERM, and SIGQUIT.
     pub fn disable_signals(mut self) -> Self {
         self.pool = self.pool.disable_signals();
         self
@@ -145,11 +156,13 @@ where
     }
 
     #[must_use]
-    /// Graceful shutdown.
+    /// Enables graceful shutdown on SIGQUIT, fatal signals, and panics.
     ///
-    /// Gracefully shuts down on SIGSEGV or SIGQUIT and app panics.
-    /// Graceful shutdown is always enabled for SIGTERM.
-    /// By default, it is disabled for SIGSEGV and SIGQUIT and panics.
+    /// When enabled, SIGQUIT, SIGSEGV, SIGABRT, application panics, and
+    /// worker failures with "stop on panic" stop the server gracefully.
+    /// SIGTERM always stops gracefully and SIGINT always stops immediately.
+    ///
+    /// By default, these events stop the server immediately.
     pub fn graceful_shutdown(mut self) -> Self {
         self.pool = self.pool.graceful_shutdown();
         self
@@ -176,7 +189,10 @@ where
     #[must_use]
     /// Sets the server status handler.
     ///
-    /// The server calls this handler on every internal status update.
+    /// The handler runs on the accept thread. It receives
+    /// [`ServerStatus::Ready`] when the listeners resume accepting and
+    /// [`ServerStatus::NotReady`] when they pause. The same status may be
+    /// reported more than once.
     pub fn status_handler<F>(mut self, handler: F) -> Self
     where
         F: FnMut(ServerStatus) + Send + 'static,
@@ -185,11 +201,13 @@ where
         self
     }
 
-    /// Executes asynchronous configuration as part of the server building
+    /// Runs asynchronous configuration as part of the server building
     /// process.
     ///
-    /// This function is useful for moving parts of configuration to a
-    /// different module or even library.
+    /// Listeners registered on the [`ServiceConfig`] are added to the server.
+    /// Services for them are attached per worker in
+    /// [`ServiceConfig::on_worker_start`]. This is useful for moving parts of
+    /// the configuration to a different module or library.
     pub async fn configure<F>(mut self, f: F) -> io::Result<Self>
     where
         F: AsyncFnOnce(ServiceConfig<Cfg>) -> io::Result<()>,
@@ -208,6 +226,14 @@ where
 
     #[allow(clippy::needless_pass_by_value)]
     /// Binds TCP listeners and registers a service factory.
+    ///
+    /// A listener is created for every address resolved from `addr`. Binding
+    /// succeeds if at least one of them binds; addresses that fail to bind
+    /// are skipped.
+    ///
+    /// `cfg` is the I/O configuration for accepted connections. `factory` is
+    /// called once per worker with that worker's application state and
+    /// returns the connection service.
     pub fn bind<F, S, I>(
         mut self,
         name: impl AsRef<str>,
@@ -242,6 +268,10 @@ where
 
     #[cfg(unix)]
     /// Binds a Unix domain socket and registers a service factory.
+    ///
+    /// Any existing file at `addr` is removed before binding. The socket file
+    /// is removed again when the server stops. See [`bind`](Self::bind) for
+    /// `cfg` and `factory`.
     pub fn bind_uds<F, I, S>(
         self,
         name: impl AsRef<str>,
@@ -273,7 +303,8 @@ where
     /// Registers a service factory for an existing Unix domain listener.
     ///
     /// This is useful for socket activation, including listeners acquired
-    /// through systemd.
+    /// through systemd. The listener is switched to non-blocking mode. See
+    /// [`bind`](Self::bind) for `cfg` and `factory`.
     pub fn listen_uds<F, I, S>(
         mut self,
         name: impl AsRef<str>,
@@ -298,6 +329,9 @@ where
     }
 
     /// Registers a service factory for an existing TCP listener.
+    ///
+    /// The listener is switched to non-blocking mode. See
+    /// [`bind`](Self::bind) for `cfg` and `factory`.
     pub fn listen<F, S, I>(
         mut self,
         name: impl AsRef<str>,
@@ -322,6 +356,10 @@ where
     }
 
     /// Starts processing incoming connections and returns a server controller.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no listener has been registered.
     pub fn run(self) -> Server<Connection> {
         assert!(
             !self.sockets.is_empty(),
@@ -358,6 +396,9 @@ impl<Cfg> fmt::Debug for ServerBuilder<Cfg> {
 }
 
 /// Binds TCP listeners for every address resolved from `addr`.
+///
+/// Succeeds if at least one address binds and returns only the listeners that
+/// bound. Otherwise, returns the last bind error.
 pub fn bind_addr<S: net::ToSocketAddrs>(
     addr: S,
     backlog: i32,

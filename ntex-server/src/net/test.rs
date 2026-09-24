@@ -1,4 +1,4 @@
-//! Test server
+//! Test server utilities.
 #![allow(clippy::missing_panics_doc)]
 use std::{fmt, io, marker::PhantomData, net, rc::Rc, thread, time};
 
@@ -11,7 +11,10 @@ use uuid::Uuid;
 
 use super::{NoConfig, Server, ServerAppConfig, ServerBuilder};
 
-/// Test server builder
+/// Builder for a single-worker test server.
+///
+/// The server listens on an ephemeral `127.0.0.1` port and runs in a separate
+/// thread with its own runtime.
 pub struct TestServerBuilder<Cfg, F, Sf, I> {
     id: Uuid,
     cfg: Cfg,
@@ -38,7 +41,7 @@ where
     S: Service<(), Io> + 'static,
 {
     #[must_use]
-    /// Create test server builder
+    /// Creates a test server builder for the specified service factory.
     pub fn new(factory: F) -> Self {
         Self {
             factory,
@@ -59,7 +62,7 @@ where
     Cfg: ServerAppConfig + 'static,
 {
     #[must_use]
-    /// Create test server builder with server configuration
+    /// Creates a test server builder with application configuration.
     pub fn with(cfg: Cfg, factory: F) -> Self {
         Self {
             cfg,
@@ -72,20 +75,20 @@ where
     }
 
     #[must_use]
-    /// Set server io configuration
+    /// Sets the I/O configuration for accepted server connections.
     pub fn config<T: Into<SharedCfg>>(mut self, cfg: T) -> Self {
         self.config = cfg.into();
         self
     }
 
     #[must_use]
-    /// Set client io configuration
+    /// Sets the I/O configuration used by [`TestServer::connect`].
     pub fn client_config<T: Into<SharedCfg>>(mut self, cfg: T) -> Self {
         self.client_config = cfg.into();
         self
     }
 
-    /// Start test server
+    /// Starts the test server and returns its controller.
     pub fn start(self) -> TestServer {
         log::debug!("Starting test server {:?}", self.id);
         let cfg = self.cfg;
@@ -132,10 +135,10 @@ where
     }
 }
 
-/// Start test server
+/// Starts a test server for the specified service factory.
 ///
-/// `TestServer` is very simple test server that simplify process of writing
-/// integration tests cases for ntex web applications.
+/// [`TestServer`] is a simple server that makes it easier to write
+/// integration tests for ntex applications.
 ///
 /// # Examples
 ///
@@ -149,14 +152,14 @@ where
 ///
 /// #[ntex::test]
 /// async fn test_example() {
-///     let mut srv = server::test_server(
+///     let srv = server::test_server(
 ///         async || http::HttpService::new(
 ///             App::new().service(
 ///                 web::resource("/").to(my_handler))
 ///         )
 ///     );
 ///
-///     let req = Client::new().get("http://127.0.0.1:{}", srv.addr().port());
+///     let req = Client::new().get(format!("http://127.0.0.1:{}", srv.addr().port()).as_str());
 ///     let response = req.send().await.unwrap();
 ///     assert!(response.status().is_success());
 /// }
@@ -169,7 +172,11 @@ where
     TestServerBuilder::new(factory).start()
 }
 
-/// Start new server with server builder
+/// Starts a test server configured by a server builder.
+///
+/// `factory` receives a single-worker builder with signals disabled and must
+/// register the listeners. The returned server's address is `127.0.0.1:0`;
+/// call [`TestServer::set_addr`] before using [`TestServer::connect`].
 pub fn build_test_server<Cfg, F>(cfg: Cfg, factory: F) -> TestServer
 where
     Cfg: ServerAppConfig,
@@ -213,7 +220,10 @@ where
 }
 
 #[derive(Clone, Debug)]
-/// Test server controller
+/// Test server controller.
+///
+/// Dropping the last clone stops the server and its runtime, blocking the
+/// current thread for about 100 ms.
 pub struct TestServer {
     addr: net::SocketAddr,
     inner: Rc<TestServerInner>,
@@ -228,33 +238,39 @@ struct TestServerInner {
 }
 
 impl TestServer {
-    /// Test server socket addr
+    /// Returns the server address.
     pub fn addr(&self) -> net::SocketAddr {
         self.addr
     }
 
     #[must_use]
+    /// Sets the address used by [`connect`](Self::connect).
     pub fn set_addr(mut self, addr: net::SocketAddr) -> Self {
         self.addr = addr;
         self
     }
 
-    /// Test client shared config
+    /// Returns the client I/O configuration.
     pub fn config(&self) -> SharedCfg {
         self.inner.cfg.clone()
     }
 
-    /// Connect to server, return Io
+    /// Connects to the server address.
     pub async fn connect(&self) -> io::Result<Io> {
         tcp_connect(self.addr, self.inner.cfg.clone()).await
     }
 
-    /// Stop http server by stopping the runtime.
+    /// Requests a graceful server stop.
+    ///
+    /// Returns without waiting for the stop to complete.
     pub fn stop(&self) {
         drop(self.inner.server.stop(true));
     }
 
-    /// Get first available unused address
+    /// Returns a currently unused local address.
+    ///
+    /// The port is released before this returns, so another process may take
+    /// it first.
     pub fn unused_addr() -> net::SocketAddr {
         let addr: net::SocketAddr = "127.0.0.1:0".parse().unwrap();
         let socket = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
@@ -264,7 +280,7 @@ impl TestServer {
         tcp.local_addr().unwrap()
     }
 
-    /// Get access to the running Server
+    /// Returns the running server controller.
     pub fn server(&self) -> Server {
         self.inner.server.clone()
     }

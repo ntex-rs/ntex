@@ -16,7 +16,8 @@ pub(crate) struct ServerShared {
 /// Controller and completion future for a running server.
 ///
 /// Clones can pause, resume, stop, or submit items to the server. Awaiting a
-/// `Server` resolves when the server has stopped.
+/// `Server` resolves when the server has stopped. It always resolves to
+/// `Ok(())`.
 #[derive(Debug)]
 pub struct Server<T> {
     shared: Arc<ServerShared>,
@@ -45,6 +46,10 @@ impl<T> Server<T> {
     /// Submits an item to the worker pool.
     ///
     /// Returns the item unchanged if the server is paused or cannot accept it.
+    ///
+    /// The server starts paused and resumes once the first worker is ready.
+    /// It also pauses itself while no worker is available, so items submitted
+    /// right after start or during worker restarts may be rejected.
     pub fn process(&self, item: T) -> Result<(), T> {
         if self.shared.paused.load(Ordering::Acquire) {
             Err(item)
@@ -61,8 +66,9 @@ impl<T> Server<T> {
 
     /// Pauses processing new items.
     ///
-    /// For network servers, pending connections may be dropped. Existing
-    /// connections remain active.
+    /// For network servers, listeners stop accepting connections, so new
+    /// connections wait in the kernel listen backlog. Existing connections
+    /// remain active.
     pub fn pause(&self) -> impl Future<Output = ()> + use<T> {
         let (tx, rx) = oneshot::channel();
         let _ = self.cmd.try_send(ServerCommand::Pause(tx));
@@ -82,8 +88,12 @@ impl<T> Server<T> {
 
     /// Stops processing new items and shuts down all workers.
     ///
-    /// If `graceful` is `true`, workers are given time to finish active work
-    /// before they are stopped.
+    /// If `graceful` is `true`, workers are given up to the graceful shutdown
+    /// timeout to finish active work before they are stopped. A zero timeout
+    /// makes the stop non-graceful.
+    ///
+    /// The returned future resolves once the stop has completed. If the
+    /// server has already stopped, it resolves immediately.
     pub fn stop(&self, graceful: bool) -> impl Future<Output = ()> + use<T> {
         let (tx, rx) = oneshot::channel();
         let _ = self.cmd.try_send(ServerCommand::Stop {

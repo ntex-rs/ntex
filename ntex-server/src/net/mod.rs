@@ -24,6 +24,7 @@ pub use self::service::StreamServer;
 pub use self::socket::{Connection, Stream};
 pub use self::test::{TestServer, TestServerBuilder, build_test_server, test_server};
 
+/// Controller for a running network server.
 pub type Server = crate::Server<Connection>;
 
 #[non_exhaustive]
@@ -74,10 +75,7 @@ thread_local! {
 
 /// Sets the maximum per-worker number of concurrent connections.
 ///
-/// All socket listeners will stop accepting connections when this limit is
-/// reached for each worker.
-///
-/// By default max connections is set to a 25k per worker.
+/// By default, the limit is 25,600 connections per worker.
 pub(super) fn max_concurrent_connections(num: usize) {
     MAX_CONNS.store(num, Ordering::Relaxed);
     MAX_CONNS_COUNTER.with(|conns| conns.set_capacity(num));

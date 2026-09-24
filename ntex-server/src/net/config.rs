@@ -7,6 +7,13 @@ use ntex_util::{HashMap, future::BoxFuture};
 use super::factory::{FactoryService, FactoryServiceType, NetService, ServerService};
 use super::{ServerAppConfig, Token, builder::bind_addr, socket::Listener};
 
+/// Listener and worker configuration used by [`ServerBuilder::configure`].
+///
+/// Listeners are registered by name. Each worker then runs the
+/// [`on_worker_start`](Self::on_worker_start) callbacks, which attach a
+/// service to each name through [`ServiceRuntime::service`].
+///
+/// [`ServerBuilder::configure`]: super::ServerBuilder::configure
 #[derive(Debug)]
 pub struct ServiceConfig<Cfg: ServerAppConfig>(pub(super) Rc<RefCell<ServiceConfigInner<Cfg>>>);
 
@@ -54,7 +61,12 @@ impl<Cfg: ServerAppConfig> ServiceConfig<Cfg> {
         })))
     }
 
-    /// Add new service to the server.
+    /// Binds TCP listeners under the specified name.
+    ///
+    /// A listener is created for every address resolved from `addr`, using
+    /// the builder's backlog. Binding succeeds if at least one address binds.
+    /// The service for `name` is attached later with
+    /// [`ServiceRuntime::service`].
     pub fn bind(&self, name: impl AsRef<str>, addr: impl net::ToSocketAddrs) -> io::Result<&Self> {
         let mut inner = self.0.borrow_mut();
 
@@ -77,7 +89,10 @@ impl<Cfg: ServerAppConfig> ServiceConfig<Cfg> {
         Ok(self)
     }
 
-    /// Add new service to the server.
+    /// Registers an existing TCP listener under the specified name.
+    ///
+    /// The listener is switched to non-blocking mode. The service for `name`
+    /// is attached later with [`ServiceRuntime::service`].
     pub fn listen(&self, name: impl AsRef<str>, lst: net::TcpListener) -> &Self {
         let mut inner = self.0.borrow_mut();
         let socket = Socket {
@@ -93,10 +108,13 @@ impl<Cfg: ServerAppConfig> ServiceConfig<Cfg> {
         self
     }
 
-    /// Register async service configuration function.
+    /// Registers an asynchronous worker configuration callback.
     ///
-    /// This function get called during worker runtime configuration stage.
-    /// It get executed in the worker thread.
+    /// The callback runs on each worker thread while the worker creates its
+    /// services, and it should attach a service to every registered name.
+    /// Multiple callbacks run in registration order. An error fails the
+    /// worker's service creation. Names left without a service are logged
+    /// as errors, and their connections are dropped.
     pub fn on_worker_start<F>(&self, f: F) -> &Self
     where
         F: AsyncFnOnce(ServiceRuntime<Cfg::State>) -> io::Result<()> + Send + Clone + 'static,
@@ -153,6 +171,9 @@ impl<Cfg: ServerAppConfig> ServiceConfig<Cfg> {
     }
 }
 
+/// Per-worker runtime used to attach services to named listeners.
+///
+/// Passed to [`ServiceConfig::on_worker_start`] callbacks.
 pub struct ServiceRuntime<Cfg>(Cfg, Rc<RefCell<ServiceRuntimeInner>>);
 
 #[derive(Debug, Clone)]
@@ -194,19 +215,21 @@ impl<Cfg: Clone + 'static> ServiceRuntime<Cfg> {
         }
     }
 
-    /// Server configuration
+    /// Returns the application state passed to services.
     pub fn cfg(&self) -> &Cfg {
         &self.0
     }
 
-    /// Register service.
+    /// Attaches a service to the listeners registered under `name`.
     ///
-    /// Name of the service must be registered during configuration stage with
-    /// `ServiceConfig::bind()` or `ServiceConfig::listen()` methods.
+    /// The name must be registered during the configuration stage with
+    /// [`ServiceConfig::bind`] or [`ServiceConfig::listen`]. `cfg` is the I/O
+    /// configuration for connections accepted by those listeners. Attaching
+    /// a service to the same name again replaces the previous one.
     ///
     /// # Panics
     ///
-    /// Panics if service with specified name is registered already
+    /// Panics if no listener is registered under `name`.
     pub fn service<S>(
         &self,
         name: &str,
@@ -235,7 +258,10 @@ impl<Cfg: Clone + 'static> ServiceRuntime<Cfg> {
         self
     }
 
-    /// Map server configuration.
+    /// Returns a runtime that passes `st` as the state to services.
+    ///
+    /// Services registered through the returned runtime share the same
+    /// listeners as this runtime.
     pub fn map_cfg<T>(&self, st: T) -> ServiceRuntime<T>
     where
         T: Clone + 'static,

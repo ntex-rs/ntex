@@ -64,16 +64,20 @@ impl WorkerPool {
     }
 
     #[must_use]
-    /// Stops the current ntex runtime when the server manager is dropped.
+    /// Stops the current ntex runtime after the server has stopped.
     ///
-    /// By default "stop runtime" is disabled.
+    /// By default, "stop runtime" is disabled.
     pub fn stop_runtime(mut self) -> Self {
         self.stop_runtime = true;
         self
     }
 
     #[must_use]
-    /// Stops the server when one of the workers panics.
+    /// Stops the server when one of the workers fails.
+    ///
+    /// A worker fails when it panics or its service cannot be created. The
+    /// stop is graceful only if [`graceful_shutdown`](Self::graceful_shutdown)
+    /// is enabled. Without this option, a failed worker is restarted.
     ///
     /// By default, "stop on panic" is disabled.
     pub fn stop_on_panic(mut self) -> Self {
@@ -82,20 +86,22 @@ impl WorkerPool {
     }
 
     #[must_use]
-    /// Disable signal handling.
+    /// Disables signal handling.
     ///
-    /// By default, signal handling is enabled.
+    /// By default, the server stops on SIGINT, SIGTERM, and SIGQUIT.
     pub fn disable_signals(mut self) -> Self {
         self.no_signals = true;
         self
     }
 
     #[must_use]
-    /// Graceful shutdown.
+    /// Enables graceful shutdown on SIGQUIT, fatal signals, and panics.
     ///
-    /// Gracefully shuts down on SIGSEGV or SIGQUIT and app panics.
-    /// Graceful shutdown is always enabled for SIGTERM.
-    /// By default, it is disabled for SIGSEGV and SIGQUIT and panics.
+    /// When enabled, SIGQUIT, SIGSEGV, SIGABRT, application panics, and
+    /// worker failures with "stop on panic" stop the server gracefully.
+    /// SIGTERM always stops gracefully and SIGINT always stops immediately.
+    ///
+    /// By default, these events stop the server immediately.
     pub fn graceful_shutdown(mut self) -> Self {
         self.graceful_shutdown = true;
         self

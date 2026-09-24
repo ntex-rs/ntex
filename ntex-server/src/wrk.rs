@@ -30,14 +30,18 @@ pub enum WorkerStatus {
     /// The worker is temporarily unable to accept an item.
     #[default]
     Unavailable,
-    /// The worker stopped unexpectedly.
+    /// The worker has stopped.
+    ///
+    /// Reported when the worker panics, its service cannot be created, or
+    /// it finishes a regular stop.
     Failed,
 }
 
 #[derive(Debug)]
 /// Server worker.
 ///
-/// Worker accepts message via unbounded channel and starts processing.
+/// A worker runs one service instance on its own arbiter thread. It receives
+/// items through an unbounded channel. Clones refer to the same worker.
 pub struct Worker<T> {
     name: String,
     reqs: Sender<T>,
@@ -48,12 +52,17 @@ pub struct Worker<T> {
 #[derive(Debug)]
 /// Future returned when stopping a worker.
 ///
-/// This future resolves when the worker finishes processing incoming items and
-/// stops its arbiter.
+/// Resolves to `true` if the worker's service shut down within the timeout,
+/// or if the worker was already gone. Resolves to `false` if the timeout
+/// expired, or if the worker was stopped before its service was created.
 pub struct WorkerStop(oneshot::AsyncReceiver<bool>);
 
 impl<T> Worker<T> {
     /// Starts a worker on a new arbiter thread.
+    ///
+    /// Returns immediately. The worker reports
+    /// [`Unavailable`](WorkerStatus::Unavailable) until its service is
+    /// created. If `cid` is set, the worker thread is pinned to that core.
     pub fn start<F>(name: String, cfg: F, cid: Option<CoreId>) -> Worker<T>
     where
         T: Send + 'static,
@@ -113,8 +122,9 @@ impl<T> Worker<T> {
     #[inline]
     /// Sends a message to the worker.
     ///
-    /// Returns `Ok` if the worker accepts the message.
-    /// Otherwise, returns the message as `Err`.
+    /// Returns `Ok` if the message was queued. The message is queued even if
+    /// the worker is currently unavailable. Returns the message as `Err` if
+    /// the worker has stopped.
     pub fn send(&self, msg: T) -> Result<(), T> {
         self.reqs.try_send(msg).map_err(TrySendError::into_inner)
     }
@@ -130,7 +140,9 @@ impl<T> Worker<T> {
         }
     }
 
-    /// Wait for worker status updates.
+    /// Waits for the next worker status change and returns the new status.
+    ///
+    /// Returns immediately if the worker has failed.
     pub async fn wait_for_status(&mut self) -> WorkerStatus {
         if self.avail.failed() {
             WorkerStatus::Failed
@@ -140,9 +152,10 @@ impl<T> Worker<T> {
         }
     }
 
-    /// Stop the worker.
+    /// Stops the worker.
     ///
-    /// If the timeout is zero, forcefully shut down the worker.
+    /// The worker stops accepting items and shuts down its service, waiting
+    /// up to `timeout`. A zero timeout uses the default of 3 seconds.
     pub fn stop(&self, timeout: Millis) -> WorkerStop {
         let (result, rx) = oneshot::async_channel();
         let _ = self.stop.try_send(Shutdown { timeout, result });
