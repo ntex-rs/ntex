@@ -31,14 +31,20 @@ fn cfg() -> SharedCfg {
 /// Accepts one connection, stalls, then reads until it ends and reports the
 /// byte count and how it ended. The read timeout keeps a connection that is
 /// never closed from hanging the test; it shows up as `TimedOut`.
+///
+/// The timeout is set on the listener and inherited by the accepted socket.
+/// Setting it on the accepted socket instead races the client: once the
+/// connection has been reset, Linux rejects `setsockopt` with `EINVAL`.
 fn peer() -> (net::SocketAddr, oneshot::Receiver<(usize, Outcome)>) {
     let lst = net::TcpListener::bind("127.0.0.1:0").unwrap();
+    socket2::SockRef::from(&lst)
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
     let addr = lst.local_addr().unwrap();
     let (tx, rx) = oneshot::channel();
     thread::spawn(move || {
         let (mut sock, _) = lst.accept().unwrap();
         thread::sleep(STALL);
-        sock.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         let mut buf = vec![0u8; 64 * 1024];
         let mut total = 0;
         let outcome = loop {

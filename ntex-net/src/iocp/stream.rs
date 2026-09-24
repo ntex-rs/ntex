@@ -17,14 +17,31 @@ use crate::helpers::Queue;
 /// down before closing. A force close skips both and resets the connection
 /// instead, so that the peer cannot mistake a truncated stream for a complete
 /// one.
+///
+/// The socket is closed even if the graceful shutdown fails. The
+/// shutdown error, if any, is reported in preference to a close error.
 fn close_socket(io: WinSock::SOCKET, terminate: bool) -> io::Result<()> {
-    if terminate {
+    let shutdown = if terminate {
         crate::helpers::abort_raw_socket(io as _);
+        Ok(())
     } else {
         crate::helpers::drain_raw_socket(io as _);
-        syscall!(SOCKET, WinSock::shutdown(io, 2)).map(|_| ())?;
-    }
-    syscall!(SOCKET, WinSock::closesocket(io)).map(|_| ())
+        syscall!(SOCKET, WinSock::shutdown(io, 2)).map(|_| ())
+    };
+    let close = syscall!(SOCKET, WinSock::closesocket(io)).map(|_| ());
+    shutdown.and(close)
+}
+
+/// Releases a socket whose owner is gone, logging failures.
+///
+/// Used where there is nobody left to report the outcome to.
+fn close_socket_detached(io: WinSock::SOCKET, terminate: bool, tag: &'static str) {
+    ntex_rt::spawn_blocking(move || {
+        if let Err(err) = close_socket(io, terminate) {
+            log::error!("{tag}: Cannot close socket ({io:?}), {err:?}");
+        }
+    })
+    .detach();
 }
 
 #[derive(Clone)]
@@ -170,16 +187,22 @@ impl Handler for StreamOpsHandler {
                     && let Some(tx) = item.close.take()
                 {
                     item.flags.insert(Flags::CLOSED);
-                    let _ = tx.send(Ok(()));
                     let _tag = item.rd_op.tag();
                     let io = item.io.as_raw_socket() as _;
                     #[cfg(feature = "trace")]
                     log::trace!("{_tag}: CloseWait({:?})", io);
                     let terminate = item.flags.contains(Flags::TERMINATE);
-                    ntex_rt::spawn_blocking(move || {
-                        let _ = close_socket(io, terminate);
+                    // `shutdown()` is waiting on `tx`, and reports the result
+                    // through `IoContext::stopped`, so it must not resolve
+                    // before the socket is actually closed
+                    ntex_rt::spawn(async move {
+                        let res = ntex_rt::spawn_blocking(move || close_socket(io, terminate))
+                            .await
+                            .map_err(io::Error::other)
+                            .and_then(|res| res);
                         #[cfg(feature = "trace")]
                         log::trace!("{_tag}: WaitClosed({:?})", io);
+                        let _ = tx.send(res);
                     })
                     .detach();
                 }
@@ -310,7 +333,7 @@ impl StreamOpsStorage {
             if !item.flags.contains(Flags::CLOSED) {
                 let io = item.io.as_raw_socket() as _;
                 let terminate = item.flags.contains(Flags::TERMINATE);
-                ntex_rt::spawn_blocking(move || close_socket(io, terminate)).detach();
+                close_socket_detached(io, terminate, item.rd_op.tag());
             }
             mem::forget(item.io);
         } else {
@@ -335,7 +358,7 @@ impl StreamOpsStorage {
             if !item.flags.contains(Flags::CLOSED) {
                 let io = item.io.as_raw_socket() as _;
                 let terminate = item.flags.contains(Flags::TERMINATE);
-                ntex_rt::spawn_blocking(move || close_socket(io, terminate)).detach();
+                close_socket_detached(io, terminate, item.rd_op.tag());
             }
             mem::forget(item.io);
         } else {
@@ -377,5 +400,53 @@ impl Drop for WeakStreamCtl {
         } else {
             self.inner.delayed_feed.push(IdType::Weak(self.id as u32));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::windows::io::IntoRawSocket;
+
+    use socket2::{Domain, Protocol, Type};
+
+    use super::*;
+
+    fn is_open(io: WinSock::SOCKET) -> bool {
+        let mut val = 0i32;
+        let mut len = i32::try_from(mem::size_of::<i32>()).unwrap();
+        let res = unsafe {
+            WinSock::getsockopt(
+                io,
+                WinSock::SOL_SOCKET,
+                WinSock::SO_TYPE,
+                (&raw mut val).cast(),
+                &raw mut len,
+            )
+        };
+        res == 0
+    }
+
+    /// A failed graceful shutdown must not leave the socket open: the caller
+    /// has already given up ownership of it, so nothing else would close it.
+    #[test]
+    fn close_socket_closes_when_shutdown_fails() {
+        // `shutdown` fails with `WSAENOTCONN` on a socket that never connected
+        let io = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))
+            .unwrap()
+            .into_raw_socket() as WinSock::SOCKET;
+
+        let res = close_socket(io, false);
+        // checked right away, before the handle value can be reused
+        let open = is_open(io);
+        if open {
+            unsafe { WinSock::closesocket(io) };
+        }
+
+        assert_eq!(
+            res.unwrap_err().raw_os_error(),
+            Some(WinSock::WSAENOTCONN),
+            "the shutdown error must still be reported"
+        );
+        assert!(!open, "socket leaked after a failed shutdown");
     }
 }

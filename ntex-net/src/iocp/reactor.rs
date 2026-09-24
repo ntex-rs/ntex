@@ -62,6 +62,7 @@ impl ReactorApi {
 /// IOCP reactor.
 pub struct Reactor {
     hid: Cell<u32>,
+    #[allow(clippy::struct_field_names)]
     reactor: Arc<ReactorInner>,
     #[allow(clippy::box_collection, clippy::type_complexity)]
     handlers: Cell<Option<Box<Vec<Box<dyn Handler>>>>>,

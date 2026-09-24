@@ -296,7 +296,7 @@ impl WriteOperation {
                             let written = sent as usize;
                             let mut sent = written;
                             // remove written bytes
-                            for page in self.pages[..num].iter_mut() {
+                            for page in &mut self.pages[..num] {
                                 if let Some(p) = page {
                                     let len = cmp::min(p.len(), sent);
                                     p.advance_to(len);
@@ -371,7 +371,7 @@ impl WriteOperation {
             Ok(written) => {
                 // remove written bytes
                 let mut sent = written;
-                for page in wr.pages[..num].iter_mut() {
+                for page in &mut wr.pages[..num] {
                     if let Some(p) = page {
                         let len = cmp::min(p.len(), sent);
                         p.advance_to(len);

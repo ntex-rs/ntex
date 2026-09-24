@@ -115,8 +115,8 @@ impl ConnectOps {
                 Poll::Pending => {
                     entry.insert(op);
                 }
-                Poll::Ready(Ok(())) => op.complete(Ok(()), &self.0.streams),
-                Poll::Ready(Err(err)) => op.complete(Err(err), &self.0.streams),
+                Poll::Ready(Ok(())) => (*op).complete(Ok(()), &self.0.streams),
+                Poll::Ready(Err(err)) => (*op).complete(Err(err), &self.0.streams),
             }
             rx
         }
@@ -124,7 +124,7 @@ impl ConnectOps {
 }
 
 impl ConnectOp {
-    fn complete(self: Box<Self>, res: io::Result<()>, streams: &StreamOps) {
+    fn complete(self, res: io::Result<()>, streams: &StreamOps) {
         match res.and_then(|()| update_connect_context(&self.sock)) {
             Ok(()) => {
                 let io = if self.addr.domain() == Domain::UNIX {
@@ -173,7 +173,7 @@ impl Handler for ConnectOpsHandler {
                 op.sock.as_raw_socket(),
             );
 
-            op.complete(res.map(|_| ()), &self.inner.streams);
+            (*op).complete(res.map(|_| ()), &self.inner.streams);
         }
     }
 

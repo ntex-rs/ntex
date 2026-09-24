@@ -8,6 +8,12 @@
   socket and never sending a `FIN`, and a force close ended with a `FIN`
   instead of a reset
 
+* Always close the socket in the IOCP backend, even if the graceful
+  `shutdown` fails. The socket was released without `closesocket` on a
+  failed `shutdown`, leaking it. The close that follows pending operations
+  also reports its outcome only once the socket is closed, and with the
+  error, instead of reporting success before closing it
+
 * Treat peer half-close as read eof in the io-uring backend, as the polling
   backend does. `POLLRDHUP` terminated the connection, so a response to a
   peer that half-closed after its request was dropped and the peer saw a

@@ -150,7 +150,7 @@ async fn read_pause_churn_is_lossless() {
         rounds += 1;
         // Yielding between reads leaves the socket idle, so the reactor has to
         // tear down and re-arm the receive rather than keeping one pending.
-        if rounds % 8 == 0 {
+        if rounds.is_multiple_of(8) {
             ntex::time::sleep(Duration::from_millis(1)).await;
         }
     }
