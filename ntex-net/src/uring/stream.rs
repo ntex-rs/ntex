@@ -227,7 +227,7 @@ impl Handler for StreamOpsHandler {
                         // handle WouldBlock
                         if matches!(res, Err(ref e) if e.kind() == io::ErrorKind::WouldBlock || e.raw_os_error() == Some(::libc::EINPROGRESS)) {
                             log::error!("{}: Received WouldBlock {:?}, id: {:?}", item.tag(), res, item.ctx.id());
-                            st.recv_more(id, buf, &self.inner.api);
+                            st.recv_more(id, buf, true, &self.inner.api);
                         } else {
                             if let Ok(size) = res && size > 0 {
                                 // SAFETY: kernel tells us how many bytes it read
@@ -235,9 +235,14 @@ impl Handler for StreamOpsHandler {
                             }
 
                             // handle IORING_CQE_F_SOCK_NONEMPTY flag, more input
-                            // is queued, keep reading into the same buffer
-                            if cqueue::sock_nonempty(flags) && !matches!(res, Ok(0) | Err(_)) {
-                                st.recv_more(id, buf, &self.inner.api);
+                            // is queued, keep reading into the same buffer until
+                            // it is full. The buffer is not grown, so read
+                            // backpressure applies once it is released
+                            if cqueue::sock_nonempty(flags)
+                                && buf.remaining_mut() > 0
+                                && !matches!(res, Ok(0) | Err(_))
+                            {
+                                st.recv_more(id, buf, false, &self.inner.api);
                             } else if item.ctx.release_read_buf(buf, Poll::Ready(res))
                                 == IoTaskStatus::Io
                             {
@@ -411,11 +416,13 @@ impl StreamOpsStorage {
         }
     }
 
-    fn recv_more(&mut self, id: usize, mut buf: BytesMut, api: &ReactorApi) {
+    fn recv_more(&mut self, id: usize, mut buf: BytesMut, resize: bool, api: &ReactorApi) {
         if let Some(item) = self.streams.get_mut(id)
             && !item.flags.contains(Flags::CLOSING)
         {
-            item.ctx.resize_read_buf(&mut buf);
+            if resize {
+                item.ctx.resize_read_buf(&mut buf);
+            }
 
             let slice = buf.chunk_mut();
             let buf_ptr = slice.as_mut_ptr();
