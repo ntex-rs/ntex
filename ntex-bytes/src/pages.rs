@@ -813,7 +813,7 @@ mod tests {
 
         let p = BytePage::from(Bytes::copy_from_slice(&[1; 64]));
         assert_eq!(p.info(), PageKind::Bytes);
-        let p = BytePage::from(BytesMut::copy_from_slice(&[1; 64]));
+        let p = BytePage::from(BytesMut::copy_from_slice(&[1; 64][..]));
         assert_eq!(p.info(), PageKind::Storage);
         let p = BytePage::from(vec![1; 64]);
         assert_eq!(p.info(), PageKind::Vec);
