@@ -192,6 +192,12 @@ where
                 result
             }
             DispatchItem::Control(_) => Ok(None),
+            DispatchItem::Stop(Reason::Service) => {
+                Ok(Some(Message::Close(Some(ws::CloseReason {
+                    code: ws::CloseCode::Away,
+                    description: None,
+                }))))
+            }
             DispatchItem::Stop(Reason::KeepAliveTimeout) => Err(WsError::KeepAlive),
             DispatchItem::Stop(Reason::ReadTimeout) => Err(WsError::ReadTimeout),
             DispatchItem::Stop(Reason::WriteTimeout) => Err(WsError::WriteTimeout),

@@ -998,7 +998,7 @@ impl<F> Io<F> {
 
     #[inline]
     /// Registers a dispatch task.
-    pub fn poll_dispatch(&self, cx: &mut Context<'_>) {
+    pub fn register_dispatch(&self, cx: &mut Context<'_>) {
         self.st().dispatch_task.register(cx.waker());
     }
 }
@@ -1389,7 +1389,7 @@ mod tests {
         );
 
         // register dispatcher task
-        lazy(|cx| io.poll_dispatch(cx)).await;
+        lazy(|cx| io.register_dispatch(cx)).await;
 
         // == Enable backpressure, 4 bytes in buffer + 4 more
         ctx.release_read_buf(BytesMut::copy_from_slice(b"1234"), Poll::Ready(Ok(4)));
@@ -1411,7 +1411,7 @@ mod tests {
         assert!(!io.st().flags.is_rd_backpressure());
 
         // register dispatcher task
-        lazy(|cx| io.poll_dispatch(cx)).await;
+        lazy(|cx| io.register_dispatch(cx)).await;
 
         // == No backpressure, 4 bytes in buffer + 3 more
         ctx.release_read_buf(BytesMut::copy_from_slice(b"567"), Poll::Ready(Ok(3)));

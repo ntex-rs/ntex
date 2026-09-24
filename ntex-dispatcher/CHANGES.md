@@ -2,6 +2,8 @@
 
 ## [4.1.0] - 2026-09-21
 
+* Simplify internal state
+
 * Enforce the IoConfig write timeout from the moment write backpressure is
   enabled until it is disabled; a peer that does not release backpressure in
   time is stopped with the new Reason::WriteTimeout. Backpressure released while

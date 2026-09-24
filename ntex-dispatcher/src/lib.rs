@@ -45,6 +45,8 @@ pub enum Control {
 
 /// Reason a dispatcher is stopping.
 pub enum Reason<U: Encoder + Decoder> {
+    /// Service error
+    Service,
     /// The transport disconnected.
     ///
     /// The value contains the underlying I/O error when one was available.
@@ -93,17 +95,17 @@ pin_project_lite::pin_project! {
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     struct Flags: u8  {
-        const READY_ERR     = 0b000_0001;
-        const IO_ERR        = 0b000_0010;
         const KA_ENABLED    = 0b000_0100;
     }
 }
+
+type Call<U, Err> = PipelineCall<DispatchItem<U>, Option<Response<U>>, Err>;
 
 struct DispatcherInner<U, Err>
 where
     U: Encoder + Decoder + 'static,
 {
-    st: DispatcherState,
+    st: DispatcherState<U, Err>,
     error: Option<Err>,
     shared: Rc<DispatcherShared<U, Err>>,
     response: Option<PipelineCall<DispatchItem<U>, Option<Response<U>>, Err>>,
@@ -117,17 +119,18 @@ where
     io: IoBoxed,
     codec: U,
     service: Pipeline<DispatchItem<U>, Option<Response<U>>, Err>,
-    flags: Cell<Flags>,
+    flags: Flags,
     error: Cell<Option<DispatcherError<Err, <U as Encoder>::Error>>>,
     inflight: Cell<u32>,
 }
 
-#[derive(Copy, Clone, Debug)]
-enum DispatcherState {
+#[derive(Debug)]
+enum DispatcherState<U: Encoder + Decoder, Err> {
     Processing,
     Backpressure,
-    Stop,
+    Stop(Call<U, Err>),
     Shutdown,
+    ShutdownIo,
 }
 
 #[derive(Debug)]
@@ -138,7 +141,6 @@ enum DispatcherError<S, U> {
 
 enum PollService<U: Encoder + Decoder> {
     Item(DispatchItem<U>),
-    ItemWait(DispatchItem<U>),
     Continue,
     Ready,
 }
@@ -180,7 +182,7 @@ where
             io,
             codec,
             service,
-            flags: Cell::new(flags),
+            flags,
             error: Cell::new(None),
             inflight: Cell::new(0),
         });
@@ -215,16 +217,6 @@ where
         if wake {
             io.notify_dispatcher();
         }
-    }
-
-    fn contains(&self, f: Flags) -> bool {
-        self.flags.get().intersects(f)
-    }
-
-    fn insert_flags(&self, f: Flags) {
-        let mut flags = self.flags.get();
-        flags.insert(f);
-        self.flags.set(flags);
     }
 }
 
@@ -265,11 +257,9 @@ where
                                 }
                                 Err(RecvError::KeepAlive) => {
                                     if let Err(ctl) = inner.handle_timeout() {
-                                        inner.st = DispatcherState::Stop;
-                                        (DispatchItem::Stop(ctl), true)
-                                    } else {
-                                        continue;
+                                        inner.st = inner.stop(ctl);
                                     }
+                                    continue;
                                 }
                                 Err(RecvError::WriteBackpressure) => {
                                     // instruct write task to notify dispatcher when data is flushed
@@ -283,8 +273,8 @@ where
                                         inner.shared.io.tag(),
                                         err
                                     );
-                                    inner.st = DispatcherState::Stop;
-                                    (DispatchItem::Stop(Reason::Decoder(err)), true)
+                                    inner.st = inner.stop(Reason::Decoder(err));
+                                    continue;
                                 }
                                 Err(RecvError::PeerGone(err)) => {
                                     log::trace!(
@@ -292,16 +282,12 @@ where
                                         inner.shared.io.tag(),
                                         err
                                     );
-                                    if err.is_some() {
-                                        inner.shared.insert_flags(Flags::IO_ERR);
-                                    }
-                                    inner.st = DispatcherState::Stop;
-                                    (DispatchItem::Stop(Reason::Io(err)), true)
+                                    inner.st = inner.stop(Reason::Io(err));
+                                    continue;
                                 }
                             }
                         }
-                        PollService::Item(item) => (item, true),
-                        PollService::ItemWait(item) => (item, false),
+                        PollService::Item(item) => (item, false),
                         PollService::Continue => continue,
                     };
 
@@ -311,11 +297,9 @@ where
                 DispatcherState::Backpressure => {
                     match ready!(inner.poll_service(cx)) {
                         PollService::Ready
-                        | PollService::ItemWait(DispatchItem::Control(
-                            Control::WBackPressureEnabled,
-                        )) => (),
-                        PollService::Item(item) => inner.call_service(cx, item, true),
-                        PollService::ItemWait(item) => inner.call_service(cx, item, false),
+                        | PollService::Item(DispatchItem::Control(Control::WBackPressureEnabled)) =>
+                            {}
+                        PollService::Item(item) => inner.call_service(cx, item, false),
                         PollService::Continue => continue,
                     }
 
@@ -324,15 +308,13 @@ where
                         inner.shared.io.poll_status_update(cx)
                         && let Err(reason) = inner.handle_timeout()
                     {
-                        inner.st = DispatcherState::Stop;
-                        inner.call_service(cx, DispatchItem::Stop(reason), false);
+                        inner.st = inner.stop(reason);
                         continue;
                     }
 
                     let item = if let Err(err) = ready!(inner.shared.io.poll_flush(cx, false)) {
-                        inner.shared.insert_flags(Flags::IO_ERR);
-                        inner.st = DispatcherState::Stop;
-                        DispatchItem::Stop(Reason::Io(Some(err)))
+                        inner.st = inner.stop(Reason::Io(Some(err)));
+                        continue;
                     } else {
                         // Stops the write timeout when write backpressure is disabled.
                         inner.timers.active = Timer::Stopped;
@@ -342,87 +324,42 @@ where
                     };
                     inner.call_service(cx, item, false);
                 }
-                // drain service responses and shutdown io
-                DispatcherState::Stop => {
-                    inner.shared.io.stop_timer();
-
-                    if inner.shared.contains(Flags::IO_ERR) {
-                        inner.response = None;
-                        return if inner.shared.io.poll_shutdown(cx).is_ready() {
-                            Poll::Ready(if let Some(err) = inner.error.take() {
-                                Err(err)
-                            } else {
-                                Ok(())
-                            })
-                        } else {
-                            Poll::Pending
-                        };
-                    }
-
+                // deliver stop to service
+                DispatcherState::Stop(ref mut stop) => {
                     // service may relay on poll_ready for response results
-                    if !inner.shared.contains(Flags::READY_ERR)
-                        && let Poll::Ready(res) = inner.shared.service.poll_ready(cx)
-                        && res.is_err()
-                    {
-                        inner.shared.insert_flags(Flags::READY_ERR);
-                    }
+                    let _ = inner.shared.service.poll_ready(cx);
 
-                    if inner.shared.inflight.get() == 0 {
-                        match inner.shared.io.poll_shutdown(cx) {
-                            Poll::Ready(Ok(())) => {
-                                inner.st = DispatcherState::Shutdown;
-                                continue;
-                            }
-                            Poll::Ready(Err(_)) => {
-                                inner.shared.insert_flags(Flags::IO_ERR);
-                                continue;
-                            }
-                            Poll::Pending => (),
-                        }
-                    } else if !inner.shared.io.is_active() {
-                        inner.shared.io.poll_dispatch(cx);
-                    } else if !inner.shared.contains(Flags::IO_ERR) {
-                        match ready!(inner.shared.io.poll_status_update(cx)) {
-                            IoStatusUpdate::PeerGone(_) => {
-                                inner.shared.io.poll_dispatch(cx);
-                            }
-                            IoStatusUpdate::KeepAlive => continue,
-                            IoStatusUpdate::WriteBackpressure => {
-                                if ready!(inner.shared.io.poll_flush(cx, true)).is_err() {
-                                    inner.shared.insert_flags(Flags::IO_ERR);
-                                }
-                                continue;
-                            }
-                        }
-                    } else {
-                        inner.shared.io.poll_dispatch(cx);
-                    }
-                    return Poll::Pending;
+                    let result = ready!(Pin::new(stop).poll(cx));
+                    inner.shared.handle_result(result, &inner.shared.io, false);
+                    inner.shared.io.stop_timer();
+                    inner.st = DispatcherState::Shutdown;
                 }
-                // shutdown service
+                // drain service responses and shutdown service
                 DispatcherState::Shutdown => {
-                    if inner.shared.contains(Flags::IO_ERR) {
-                        return Poll::Ready(if let Some(err) = inner.error.take() {
-                            Err(err)
-                        } else {
-                            Ok(())
-                        });
+                    // service may relay on poll_ready for response results
+                    let _ = inner.shared.service.poll_ready(cx);
+
+                    if inner.shared.inflight.get() != 0 {
+                        inner.shared.io.register_dispatch(cx);
+                        return Poll::Pending;
                     }
 
-                    return if inner.shared.service.poll_shutdown(cx).is_ready() {
-                        log::trace!(
-                            "{}: Service shutdown is completed, stop",
-                            inner.shared.io.tag()
-                        );
+                    ready!(inner.shared.service.poll_shutdown(cx));
+                    log::trace!(
+                        "{}: Service shutdown is completed, stop",
+                        inner.shared.io.tag()
+                    );
+                    inner.st = DispatcherState::ShutdownIo;
+                }
+                // shutdown io
+                DispatcherState::ShutdownIo => {
+                    let _ = ready!(inner.shared.io.poll_shutdown(cx));
 
-                        Poll::Ready(if let Some(err) = inner.error.take() {
-                            Err(err)
-                        } else {
-                            Ok(())
-                        })
+                    return Poll::Ready(if let Some(err) = inner.error.take() {
+                        Err(err)
                     } else {
-                        Poll::Pending
-                    };
+                        Ok(())
+                    });
                 }
             }
         }
@@ -434,6 +371,11 @@ where
     U: Decoder + Encoder + 'static,
     Err: 'static,
 {
+    fn stop(&self, reason: Reason<U>) -> DispatcherState<U, Err> {
+        self.shared.inflight.set(self.shared.inflight.get() + 1);
+        DispatcherState::Stop(self.shared.service.call_nowait(DispatchItem::Stop(reason)))
+    }
+
     fn call_service(&mut self, cx: &mut Context<'_>, item: DispatchItem<U>, nowait: bool) {
         let mut fut = if nowait {
             self.shared.service.call_nowait(item)
@@ -465,17 +407,16 @@ where
                 "{}: Error occurred, stopping dispatcher",
                 self.shared.io.tag()
             );
-            self.st = DispatcherState::Stop;
-
             match err {
                 DispatcherError::Encoder(err) => {
-                    PollService::Item(DispatchItem::Stop(Reason::Encoder(err)))
+                    self.st = self.stop(Reason::Encoder(err));
                 }
                 DispatcherError::Service(err) => {
                     self.error = Some(err);
-                    PollService::Continue
+                    self.st = self.stop(Reason::Service);
                 }
             }
+            PollService::Continue
         } else {
             PollService::Ready
         }
@@ -506,11 +447,9 @@ where
                                 self.shared.io.tag(),
                                 reason
                             );
-                            self.st = DispatcherState::Stop;
-                            Poll::Ready(PollService::ItemWait(DispatchItem::Stop(reason)))
-                        } else {
-                            Poll::Ready(PollService::Continue)
+                            self.st = self.stop(reason);
                         }
+                        Poll::Ready(PollService::Continue)
                     }
                     IoStatusUpdate::PeerGone(err) => {
                         log::trace!(
@@ -518,18 +457,15 @@ where
                             self.shared.io.tag(),
                             err
                         );
-                        if err.is_some() {
-                            self.shared.insert_flags(Flags::IO_ERR);
-                        }
-                        self.st = DispatcherState::Stop;
-                        Poll::Ready(PollService::ItemWait(DispatchItem::Stop(Reason::Io(err))))
+                        self.st = self.stop(Reason::Io(err));
+                        Poll::Ready(PollService::Continue)
                     }
                     IoStatusUpdate::WriteBackpressure => {
                         if !matches!(self.st, DispatcherState::Backpressure) {
                             self.start_write_timer();
                         }
                         self.st = DispatcherState::Backpressure;
-                        Poll::Ready(PollService::ItemWait(DispatchItem::Control(
+                        Poll::Ready(PollService::Item(DispatchItem::Control(
                             Control::WBackPressureEnabled,
                         )))
                     }
@@ -541,9 +477,8 @@ where
                     "{}: Service readiness check failed, stopping",
                     self.shared.io.tag()
                 );
-                self.st = DispatcherState::Stop;
+                self.st = self.stop(Reason::Service);
                 self.error = Some(err);
-                self.shared.insert_flags(Flags::READY_ERR);
                 Poll::Ready(PollService::Continue)
             }
         }
@@ -571,7 +506,7 @@ where
         let handling = item || self.shared.inflight.get() != 0;
         let timer = self.timers.select(
             self.shared.io.cfg(),
-            self.shared.contains(Flags::KA_ENABLED),
+            self.shared.flags.contains(Flags::KA_ENABLED),
             handling,
         );
         self.set_timer(timer);
@@ -701,6 +636,9 @@ where
 {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
+            Reason::Service => {
+                write!(fmt, "Reason::Service")
+            }
             Reason::Io(ref err) => {
                 write!(fmt, "Reason::Io({err:?})")
             }
@@ -797,8 +735,8 @@ mod tests {
 
             let shared = Rc::new(DispatcherShared {
                 codec,
+                flags,
                 io: io.into(),
-                flags: Cell::new(flags),
                 error: Cell::new(None),
                 inflight: Cell::new(0),
                 service: Pipeline::new((), service),
@@ -985,8 +923,8 @@ mod tests {
         client.close().await;
         assert!(client.is_server_dropped());
 
-        // service must be checked for readiness only once
-        assert_eq!(counter.get(), 1);
+        // service must be checked for readiness all the time
+        assert_eq!(counter.get(), 3);
     }
 
     #[ntex::test]
@@ -1111,54 +1049,6 @@ mod tests {
         // close read side
         state.close();
         let _ = rx.recv().await;
-    }
-
-    #[ntex::test]
-    async fn io_error_does_not_wait_for_pending_service_call() {
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop2 = stop.clone();
-        let (client, server) = IoTest::create();
-        client.remote_buffer_cap(1024);
-
-        let (mut disp, _) = Dispatcher::debug(
-            Io::from(server),
-            BytesCodec,
-            ntex_service::fn_service(move |msg: DispatchItem<BytesCodec>| {
-                let stop = stop2.clone();
-                async move {
-                    match msg {
-                        DispatchItem::Item(_) => {
-                            std::future::pending::<Result<Option<Bytes>, ()>>().await
-                        }
-                        DispatchItem::Stop(Reason::Io(Some(_))) => {
-                            stop.store(true, Relaxed);
-                            Ok(None)
-                        }
-                        _ => Ok(None),
-                    }
-                }
-            }),
-        );
-
-        client.write("request");
-        assert!(lazy(|cx| Pin::new(&mut disp).poll(cx)).await.is_pending());
-
-        client.read_error(io::Error::new(
-            io::ErrorKind::ConnectionReset,
-            "connection reset",
-        ));
-        timeout(Millis(1000), poll_fn(|cx| Pin::new(&mut disp).poll(cx)))
-            .await
-            .expect("dispatcher waited for pending service call")
-            .unwrap();
-
-        timeout(Millis(1000), async {
-            while !stop.load(Relaxed) {
-                sleep(Millis(10)).await;
-            }
-        })
-        .await
-        .expect("service did not receive I/O stop notification");
     }
 
     #[ntex::test]
