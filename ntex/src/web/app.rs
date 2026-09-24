@@ -898,4 +898,38 @@ mod tests {
         let body = read_body(resp).await;
         assert_eq!(body, Bytes::from_static(b"https://youtube.com/watch/12345"));
     }
+
+    #[cfg(feature = "url")]
+    #[crate::rt_test]
+    async fn test_pooled_request_resource_map() {
+        use crate::util::Bytes;
+
+        async fn url(req: HttpRequest) -> HttpResponse {
+            HttpResponse::Ok().body(format!("{}", req.url_for("docs", ["1"]).unwrap()))
+        }
+
+        let srv1 = init_service(
+            App::new()
+                .external_resource("docs", "https://one.example.com/{page}")
+                .route("/test", web::get().to(url)),
+        )
+        .await;
+        let srv2 = init_service(
+            App::new()
+                .external_resource("docs", "https://two.example.com/{page}")
+                .route("/test", web::get().to(url)),
+        )
+        .await;
+
+        for _ in 0..2 {
+            for (srv, expected) in [
+                (&srv1, &b"https://one.example.com/1"[..]),
+                (&srv2, &b"https://two.example.com/1"[..]),
+            ] {
+                let req = TestRequest::with_uri("/test").to_request();
+                let resp = call_service(srv, req).await;
+                assert_eq!(read_body(resp).await, Bytes::from_static(expected));
+            }
+        }
+    }
 }

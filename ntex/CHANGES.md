@@ -5,6 +5,9 @@
 * Add WsError::WriteTimeout for WebSocket dispatchers stopped by the write
   backpressure timeout
 
+* Fix pooled web requests keeping the resource map of another application,
+  which made `HttpRequest::url_for()` resolve against the wrong routes
+
 ## [4.0.0] - 2026-09-18
 
 * Migrate to `ntex-service` 5 and its typed service state model. Service

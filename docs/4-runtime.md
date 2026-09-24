@@ -33,9 +33,11 @@ Enable the `tokio` feature to run ntex on Tokio:
 ntex = { version = "4", features = ["tokio"] }
 ```
 
-ntex keeps its single-threaded runtime when using Tokio. Tokio provides
-the underlying local task scheduler and I/O driver, while ntex tasks remain on
-the runtime thread where they were started.
+Each arbiter runs a Tokio current-thread runtime with a `LocalSet`. If a Tokio
+runtime is already active on the thread, ntex reuses it instead of creating a
+new one. Because ntex tasks run inside Tokio, crates built on Tokio, such as
+`tokio::time`, `tokio::sync`, or Tokio-based clients, can be used directly from
+ntex services.
 
 ## Compio
 
@@ -46,8 +48,11 @@ Enable the `compio` feature to use Compio:
 ntex = { version = "4", features = ["compio"] }
 ```
 
-Compio provides completion-based I/O and local task execution. As with the
-Tokio backend, ntex services run within a single-threaded execution context.
+Each arbiter runs its own Compio runtime, and Compio chooses the I/O driver
+for the platform, such as io_uring on Linux or IOCP on Windows. The native
+`neon-*` reactor features have no effect with this backend. Because ntex tasks
+run inside the Compio runtime, other Compio-based crates can be used from ntex
+services.
 
 ## Native runtime
 
@@ -137,8 +142,9 @@ let arbiter = ntex::rt::Arbiter::current();
 
 `Arbiter::new()` starts another execution thread in the current system.
 `Arbiter::stop()` requests that its event loop stop, and `join()` waits for an
-arbiter-owned thread to exit. The system's primary arbiter does not own a
-joinable thread handle.
+arbiter-owned thread to exit. The system's primary arbiter runs on the thread
+that started the system, so it has no thread handle and `join()` on it returns
+`Ok(())` immediately.
 
 A simple way to think about the two types is:
 
@@ -250,9 +256,12 @@ and
 Ping round-trip records are collected on all supported platforms and are
 available through [`System::list_arbiter_pings`]. On Linux, when process
 signal handling is enabled, exceeding the configured threshold also triggers
-an attempt to capture a backtrace from the unresponsive arbiter. Backtrace
-capture is diagnostic and does not guarantee that every stall can be
-identified.
+an attempt to capture a backtrace from the unresponsive arbiter. The system
+sends `SIGUSR2` to the stalled thread and records the backtrace from a
+`SIGUSR2` handler. ntex installs that handler on Unix whenever signal handling
+is enabled, so applications that rely on `SIGUSR2` for their own purposes
+should take this into account. Backtrace capture is diagnostic and
+does not guarantee that every stall can be identified.
 
 [`System::list_arbiter_pings`]: https://docs.rs/ntex-rt/latest/ntex_rt/struct.System.html#method.list_arbiter_pings
 

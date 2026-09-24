@@ -16,7 +16,7 @@ pub(crate) struct HttpRequestInner {
     pub(crate) head: Message<RequestHead>,
     pub(crate) path: Path<Uri>,
     pub(crate) config: Cfg<WebAppConfig>,
-    rmap: Rc<ResourceMap>,
+    pub(crate) rmap: Rc<ResourceMap>,
 }
 
 impl HttpRequest {

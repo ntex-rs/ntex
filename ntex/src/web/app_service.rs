@@ -200,6 +200,10 @@ where
             let inner = Rc::get_mut(&mut req.0).unwrap();
             inner.path.set(head.uri.clone());
             inner.head = head;
+            // the pool is shared by all applications that use this config
+            if !Rc::ptr_eq(&inner.rmap, &self.rmap) {
+                inner.rmap = self.rmap.clone();
+            }
             req
         } else {
             HttpRequest::new(Path::new(head.uri.clone()), head, self.rmap.clone(), config)

@@ -19,8 +19,9 @@ trait Service<St, Req> {
 }
 ```
 
-A service borrows state through [`Ctx`]; it does not own the state itself.
-State is available during calls, readiness checks, and shutdown:
+A service borrows the pipeline state through [`Ctx`] instead of owning it. The
+service can still own its own fields, such as configuration or inner services.
+The pipeline state is available during calls, readiness checks, and shutdown:
 
 ```rust,ignore
 async fn call(&self, req: Req, ctx: Ctx<'_, Self, AppState>) -> Result<Self::Res, Self::Error> {
@@ -208,10 +209,16 @@ with an accepted connection and then provide that state to the HTTP request and
 control-service pipelines. This keeps connection setup state separate from the
 HTTP request value while preserving its concrete type.
 
+A plain `Io` also implements `RequestState` with `()` as its state, so an
+ordinary server can pass accepted connections to `HttpService` without
+wrapping them. See
+[Passing Connection State to the HTTP Service](6-server-app.md#passing-connection-state-to-the-http-service)
+for an example that wraps an accepted `Io` in `State`.
+
 [`Ctx`]: https://docs.rs/ntex/latest/ntex/struct.Ctx.html
 [`Ctx::call`]: https://docs.rs/ntex/latest/ntex/struct.Ctx.html#method.call
 [`Ctx::call_nowait`]: https://docs.rs/ntex/latest/ntex/struct.Ctx.html#method.call_nowait
-[`fn_service_st`]: https://docs.rs/ntex/latest/ntex/fn.fn_service_st.html
+[`fn_service_st`]: https://docs.rs/ntex/latest/ntex/service/fn.fn_service_st.html
 [`IntoService`]: https://docs.rs/ntex/latest/ntex/trait.IntoService.html
 [`map_state`]: https://docs.rs/ntex/latest/ntex/service/fn.map_state.html
 [`Pipeline::new`]: https://docs.rs/ntex/latest/ntex/struct.Pipeline.html#method.new

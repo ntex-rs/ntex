@@ -8,7 +8,7 @@ build web applications.
 - [Service State](./3-state.md)
 - [Runtime](./4-runtime.md)
 - [Server](./5-server.md)
-- [Application State Management](./6-server-app.md)
+- [Worker and Request State](./6-server-app.md)
 - [I/O Abstraction Layer](./7-io.md)
 - Web Application Framework
   - [Applications and Routing](./8.1-web-app.md)
