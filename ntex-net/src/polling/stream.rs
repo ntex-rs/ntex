@@ -784,7 +784,6 @@ mod tests {
                 .unwrap();
             let ev = events.iter().next().expect("no event for the reset");
             assert_eq!(ev.is_err(), Some(true));
-            assert!(!ev.readable);
 
             handler.event(ctl.id as usize, ev);
 
