@@ -368,13 +368,22 @@ impl StreamCtl {
     }
 
     pub(crate) fn read(&self) {
-        self.inner.with(|st| {
-            if let Some(item) = st.streams.get_mut(self.id)
-                && !item.is_closing()
-            {
-                item.rd_op.read();
-            }
+        let op = self.inner.with(|st| {
+            st.streams
+                .get_mut(self.id)
+                .filter(|item| !item.is_closing())
+                .map(|item| &raw mut item.rd_op)
         });
+        if let Some(op) = op {
+            // Issued outside `with()`: a recv that completes immediately runs
+            // the read filters, and output they produce may be written right
+            // away through `WeakStreamCtl::write`, which needs the storage.
+            //
+            // SAFETY: the item is boxed, so its address is stable, and it is
+            // only freed once this handle is dropped or the reactor stops. A
+            // close only starts from `shutdown()`, never from within the read.
+            unsafe { (*op).read() };
+        }
     }
 
     pub(crate) fn write(&self) {

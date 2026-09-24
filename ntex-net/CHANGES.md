@@ -2,6 +2,12 @@
 
 ## [4.1.0] - 2026-09-23
 
+* Fix a panic in the IOCP backend when a filter writes while processing
+  input, as a TLS server answering a ClientHello does. A recv that completed
+  immediately ran the read filters while the stream storage was taken, so a
+  direct write of their output, once it reached the write buffer threshold,
+  panicked and left the storage taken, breaking every stream on that thread
+
 * Bound io-uring reads chained on `IORING_CQE_F_SOCK_NONEMPTY` by the read
   buffer's capacity. The chain grew the buffer while the peer kept sending
   and ignored read backpressure; it now stops once the buffer is full and
