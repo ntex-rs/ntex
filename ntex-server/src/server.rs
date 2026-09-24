@@ -25,6 +25,13 @@ pub struct Server<T> {
     stop: Option<oneshot::AsyncReceiver<()>>,
 }
 
+impl Server<crate::net::Connection> {
+    /// Creates a network server builder with no application configuration.
+    pub fn builder() -> crate::net::ServerBuilder {
+        crate::net::ServerBuilder::default()
+    }
+}
+
 impl<T> Server<T> {
     pub(crate) fn new(cmd: Sender<ServerCommand<T>>, shared: Arc<ServerShared>) -> Self {
         Server {
@@ -32,11 +39,6 @@ impl<T> Server<T> {
             shared,
             stop: None,
         }
-    }
-
-    /// Creates a network server builder with no application configuration.
-    pub fn builder() -> crate::net::ServerBuilder {
-        crate::net::ServerBuilder::default()
     }
 
     pub(crate) fn signal(&self, sig: Signal) {
