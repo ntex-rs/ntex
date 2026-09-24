@@ -2,6 +2,13 @@
 
 ## [4.1.0] - 2026-09-23
 
+* Fix reordered output after a partial io-uring zero-copy send. The next
+  chunk was sent right away while the unsent remainder was only returned to
+  the write buffer once the notification arrived, so it reached the peer
+  after later data. The remainder is now returned before the next send; it
+  shares the page's data, only `Vec` backed pages are copied, and the page
+  itself stays with the kernel until the notification
+
 * Fix a panic in the IOCP backend when a filter writes while processing
   input, as a TLS server answering a ClientHello does. A recv that completed
   immediately ran the read filters while the stream storage was taken, so a

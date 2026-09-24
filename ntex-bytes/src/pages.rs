@@ -535,6 +535,17 @@ impl BytePage {
         }
     }
 
+    #[inline]
+    #[doc(hidden)]
+    /// Returns the kind of storage backing this page.
+    pub fn info(&self) -> crate::info::PageKind {
+        match &self.inner {
+            StorageType::Bytes(_) => crate::info::PageKind::Bytes,
+            StorageType::Storage(_) => crate::info::PageKind::Storage,
+            StorageType::Vec(_) => crate::info::PageKind::Vec,
+        }
+    }
+
     /// Splits the buffer into two at the given index.
     ///
     /// Afterwards, `self` contains elements `[at, len)`, and the returned `BytePage`
@@ -795,6 +806,18 @@ mod tests {
     use rand::Rng;
 
     use super::*;
+
+    #[test]
+    fn page_info() {
+        use crate::info::PageKind;
+
+        let p = BytePage::from(Bytes::copy_from_slice(&[1; 64]));
+        assert_eq!(p.info(), PageKind::Bytes);
+        let p = BytePage::from(BytesMut::copy_from_slice(&[1; 64]));
+        assert_eq!(p.info(), PageKind::Storage);
+        let p = BytePage::from(vec![1; 64]);
+        assert_eq!(p.info(), PageKind::Vec);
+    }
 
     #[test]
     fn pages() {

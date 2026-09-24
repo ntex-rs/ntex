@@ -1,6 +1,6 @@
 use std::{cell::Cell, io, mem, num::NonZeroU32, os::fd::AsRawFd, rc::Rc, task::Poll};
 
-use ntex_bytes::{BufMut, BytePage, BytePages, BytesMut};
+use ntex_bytes::{BufMut, BytePage, BytePages, Bytes, BytesMut, info::PageKind};
 use ntex_io::{IoContext, IoTaskStatus};
 use ntex_io_uring::{cqueue, opcode, opcode2, types::Fd};
 use ntex_rt::Arbiter;
@@ -262,6 +262,7 @@ impl Handler for StreamOpsHandler {
                         );
 
                         if cqueue::notif(flags) {
+                            let has_result = result.is_some();
                             let res = result.unwrap_or(res);
                             if matches!(res, Err(ref e) if e.raw_os_error() == Some(libc::ECANCELED)) {
                                 #[cfg(feature = "trace")]
@@ -277,7 +278,12 @@ impl Handler for StreamOpsHandler {
                                 let _ = st.ops.remove(user_data);
                                 return;
                             }
-                            let res = complete_send(&item.ctx, buf, res);
+                            // unsent output was returned with the first completion
+                            let res = if has_result {
+                                res.and_then(write_status)
+                            } else {
+                                complete_send(&item.ctx, buf, res)
+                            };
                             if item.ctx.update_write_status(res) == IoTaskStatus::Io {
                                 st.send(id, &self.inner.api);
                             }
@@ -285,8 +291,27 @@ impl Handler for StreamOpsHandler {
                             // reset op reference
                             item.wr_op.take();
 
-                            // try to send next chunk
-                            if matches!(&res, Ok(n) if *n > 0) {
+                            if let Ok(n) = res && n > 0 {
+                                // Unsent output has to go back before the next
+                                // chunk is sent to keep output in order. The
+                                // kernel references the page until the
+                                // notification arrives, so the page must not be
+                                // moved: the remainder shares its data, or is a
+                                // copy for `Vec` pages whose split would copy
+                                // and free the original
+                                if n < buf.len() {
+                                    let rest = if buf.info() == PageKind::Vec {
+                                        BytePage::from(Bytes::copy_from_slice(&buf[n..]))
+                                    } else {
+                                        // `freeze` gives a view of its own, advancing
+                                        // a shared `BytesMut` storage in place would
+                                        // move the start of the original page too
+                                        let mut rest = BytePage::from(buf.clone().freeze());
+                                        rest.advance_to(n);
+                                        rest
+                                    };
+                                    item.ctx.with_write_dst(|pages| pages.prepend(rest));
+                                }
                                 st.send(id, &self.inner.api);
                             }
                             // insert op back for "notify" handling

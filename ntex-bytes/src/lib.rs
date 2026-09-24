@@ -106,6 +106,17 @@ pub mod info {
         Vec,
         StExt,
     }
+
+    /// Storage backing a [`BytePage`](crate::BytePage).
+    #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+    pub enum PageKind {
+        /// Backed by `Bytes`, cloning shares the data.
+        Bytes,
+        /// Backed by `BytesMut` storage, cloning shares the data.
+        Storage,
+        /// Backed by `Vec<u8>`, cloning or splitting copies the data.
+        Vec,
+    }
 }
 
 /// Capacity category used when allocating [`BytePage`] storage.
