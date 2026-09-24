@@ -252,7 +252,8 @@ These settings are used by different parts of the stack:
   that stop reading: it bounds how long write backpressure may stay enabled,
   from the moment it is enabled until it is disabled, before the dispatcher
   stops with a write timeout. Keep-alive and read-rate timers do not run
-  during that time.
+  during that time. Output left after backpressure is disabled is bounded
+  only by keep-alive.
 - The graceful-shutdown timeout bounds both phases of shutdown together: the
   filter shutdown and the transport drain of pending output. It cannot be
   disabled; a zero timeout is rejected.

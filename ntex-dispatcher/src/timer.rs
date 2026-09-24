@@ -18,10 +18,9 @@ pub(crate) struct Timers {
 pub(crate) enum ReadPhase {
     /// No partial frame is buffered.
     Idle,
-    /// The connection has not decoded its first frame yet and a frame
-    /// read rate is configured.
-    FirstFrame(ReadProgress),
-    /// A frame has started but is not complete.
+    /// A frame has started but is not complete. A new connection starts in
+    /// this phase when a frame read rate is configured, so its first frame is
+    /// tracked before any data arrives.
     ReadingFrame(ReadProgress),
 }
 
@@ -54,12 +53,13 @@ impl Timers {
             io.start_timer(params.timeout);
             Timers {
                 active: Timer::FrameRead,
-                read: ReadPhase::FirstFrame(ReadProgress {
+                read: ReadPhase::ReadingFrame(ReadProgress {
                     max_timeout: params.max_timeout,
                     ..ReadProgress::EMPTY
                 }),
             }
         } else {
+            io.stop_timer();
             Timers {
                 active: Timer::Stopped,
                 read: ReadPhase::Idle,
@@ -110,7 +110,7 @@ impl Timers {
     /// partial frame is buffered and no frame is handled.
     pub(crate) fn select(&self, cfg: &IoConfig, keepalive: bool, handling: bool) -> Timer {
         match self.read {
-            ReadPhase::FirstFrame(_) | ReadPhase::ReadingFrame(_) => {
+            ReadPhase::ReadingFrame(_) => {
                 if cfg.frame_read_rate().is_some() {
                     Timer::FrameRead
                 } else {
@@ -132,7 +132,7 @@ impl ReadPhase {
     pub(crate) fn progress(&mut self) -> Option<&mut ReadProgress> {
         match self {
             ReadPhase::Idle => None,
-            ReadPhase::FirstFrame(p) | ReadPhase::ReadingFrame(p) => Some(p),
+            ReadPhase::ReadingFrame(p) => Some(p),
         }
     }
 }

@@ -272,15 +272,10 @@ where
                                     }
                                 }
                                 Err(RecvError::WriteBackpressure) => {
-                                    if inner.suspend_read_timer() {
-                                        // instruct write task to notify dispatcher when data is flushed
-                                        inner.start_write_timer();
-                                        inner.st = DispatcherState::Backpressure;
-                                        (DispatchItem::Control(Control::WBackPressureEnabled), true)
-                                    } else {
-                                        inner.st = DispatcherState::Stop;
-                                        (DispatchItem::Stop(Reason::ReadTimeout), true)
-                                    }
+                                    // instruct write task to notify dispatcher when data is flushed
+                                    inner.start_write_timer();
+                                    inner.st = DispatcherState::Backpressure;
+                                    (DispatchItem::Control(Control::WBackPressureEnabled), true)
                                 }
                                 Err(RecvError::Decoder(err)) => {
                                     log::trace!(
@@ -329,19 +324,19 @@ where
                         inner.shared.io.poll_status_update(cx)
                         && let Err(reason) = inner.handle_timeout()
                     {
-                        inner.stop_write_timer();
                         inner.st = DispatcherState::Stop;
                         inner.call_service(cx, DispatchItem::Stop(reason), false);
                         continue;
                     }
 
                     let item = if let Err(err) = ready!(inner.shared.io.poll_flush(cx, false)) {
-                        inner.stop_write_timer();
                         inner.shared.insert_flags(Flags::IO_ERR);
                         inner.st = DispatcherState::Stop;
                         DispatchItem::Stop(Reason::Io(Some(err)))
                     } else {
-                        inner.stop_write_timer();
+                        // Stops the write timeout when write backpressure is disabled.
+                        inner.timers.active = Timer::Stopped;
+                        inner.shared.io.stop_timer();
                         inner.st = DispatcherState::Processing;
                         DispatchItem::Control(Control::WBackPressureDisabled)
                     };
@@ -498,18 +493,9 @@ where
                 );
 
                 // the write timeout keeps running while the service is paused
-                if self.timers.active != Timer::Write {
-                    // remove all timers
-                    if !self.suspend_read_timer() {
-                        log::trace!(
-                            "{}: Max payload timeout has been reached during pause",
-                            self.shared.io.tag()
-                        );
-                        self.st = DispatcherState::Stop;
-                        return Poll::Ready(PollService::ItemWait(DispatchItem::Stop(
-                            Reason::ReadTimeout,
-                        )));
-                    }
+                if self.timers.active != Timer::Write && self.timers.active != Timer::Stopped {
+                    self.timers.active = Timer::Stopped;
+                    self.shared.io.stop_timer();
                 }
 
                 match ready!(self.shared.io.poll_read_pause(cx)) {
@@ -520,7 +506,6 @@ where
                                 self.shared.io.tag(),
                                 reason
                             );
-                            self.stop_write_timer();
                             self.st = DispatcherState::Stop;
                             Poll::Ready(PollService::ItemWait(DispatchItem::Stop(reason)))
                         } else {
@@ -564,20 +549,6 @@ where
         }
     }
 
-    /// Charges the elapsed part of the frame read period and stops the
-    /// keep-alive or frame read timer.
-    ///
-    /// Returns `false` if the frame read budget is exhausted.
-    fn suspend_read_timer(&mut self) -> bool {
-        let charged = self.charge_read_period();
-        // stopping clears a pending external timeout, keep it when no timer is armed
-        if self.timers.active != Timer::Stopped {
-            self.timers.active = Timer::Stopped;
-            self.shared.io.stop_timer();
-        }
-        charged
-    }
-
     /// Starts the write timeout when write backpressure is enabled.
     fn start_write_timer(&mut self) {
         let timeout = self.shared.io.cfg().write_timeout();
@@ -585,38 +556,6 @@ where
             self.timers.active = Timer::Write;
             self.shared.io.start_timer(timeout);
         }
-    }
-
-    /// Stops the write timeout when write backpressure is disabled.
-    fn stop_write_timer(&mut self) {
-        if self.timers.active == Timer::Write {
-            self.timers.active = Timer::Stopped;
-            self.shared.io.stop_timer();
-        }
-    }
-
-    /// Charges the elapsed part of the current frame read period to the
-    /// frame's budget before the timer is stopped.
-    ///
-    /// Returns `false` if the budget is exhausted.
-    fn charge_read_period(&mut self) -> bool {
-        if self.timers.active != Timer::FrameRead {
-            return true;
-        }
-        let Some(params) = self.shared.io.cfg().frame_read_rate() else {
-            return true;
-        };
-        if params.max_timeout.is_zero() {
-            return true;
-        }
-        let Some(p) = self.timers.read.progress() else {
-            return true;
-        };
-
-        let left = self.shared.io.timer_handle().remains();
-        let elapsed = params.timeout.0.saturating_sub(left.0);
-        p.max_timeout = Seconds(p.max_timeout.0.saturating_sub(elapsed));
-        !p.max_timeout.is_zero()
     }
 
     fn update_timer(&mut self, decoded: &Decoded<<U as Decoder>::Item>) {
@@ -701,6 +640,11 @@ where
                     );
                 }
                 Err(Reason::ReadTimeout)
+            }
+            // backpressure can be released unnoticed while the service is paused
+            Timer::Write if !self.shared.io.is_wr_backpressure() => {
+                self.timers.active = Timer::Stopped;
+                Ok(())
             }
             Timer::Write => {
                 log::trace!(
@@ -1872,57 +1816,10 @@ mod tests {
         }
     }
 
-    /// A frame keeps its remaining read budget when the service stops being
-    /// ready in the middle of the frame.
+    /// A service pause restarts frame read-rate tracking with a fresh budget,
+    /// repeated pauses do not exhaust it.
     #[ntex::test]
-    async fn read_rate_budget_survives_service_pause() {
-        let (client, server) = IoTest::create();
-        client.remote_buffer_cap(1024);
-
-        let gate = Rc::new(RefCell::new(None));
-        let timed_out = Rc::new(Cell::new(false));
-        let io = Io::new(
-            server,
-            SharedCfg::new("TEST").add(
-                IoConfig::new()
-                    .set_keepalive_timeout(Seconds::ZERO)
-                    .set_frame_read_rate(Seconds(1), Seconds(2), 2),
-            ),
-        );
-        let disp = Dispatcher::new(
-            io,
-            BCodec(1024),
-            Pipeline::new((), GateSrv(gate.clone(), timed_out.clone())),
-        );
-        spawn(async move {
-            let _ = disp.await;
-        });
-
-        // the first period is extended, one period of budget remains
-        for _ in 0..5 {
-            client.write("abc");
-            sleep(Millis(500)).await;
-        }
-
-        // pause the service in the middle of the frame
-        let (tx, rx) = oneshot::channel();
-        *gate.borrow_mut() = Some(rx);
-        client.write("abc");
-        sleep(Millis(300)).await;
-        let _ = tx.send(());
-
-        // the next expiry exhausts the remaining budget
-        for _ in 0..5 {
-            client.write("abc");
-            sleep(Millis(500)).await;
-        }
-        assert!(client.is_closed());
-        assert!(timed_out.get());
-    }
-
-    /// Short service pauses cannot keep restarting the frame read period.
-    #[ntex::test]
-    async fn read_rate_budget_charged_on_service_pause() {
+    async fn read_rate_budget_reset_on_service_pause() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
 
@@ -1953,10 +1850,50 @@ mod tests {
             client.write("abc");
             sleep(Millis(100)).await;
             let _ = tx.send(());
-            if client.is_closed() {
-                break;
-            }
         }
+        assert!(!client.is_closed());
+        assert!(!timed_out.get());
+    }
+
+    /// Frame read-rate tracking restarts after a service pause, a peer that
+    /// stops sending is still closed.
+    #[ntex::test]
+    async fn read_rate_restarts_after_service_pause() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let gate = Rc::new(RefCell::new(None));
+        let timed_out = Rc::new(Cell::new(false));
+        let io = Io::new(
+            server,
+            SharedCfg::new("TEST").add(
+                IoConfig::new()
+                    .set_keepalive_timeout(Seconds::ZERO)
+                    .set_frame_read_rate(Seconds(1), Seconds::ZERO, 2),
+            ),
+        );
+        let disp = Dispatcher::new(
+            io,
+            BCodec(1024),
+            Pipeline::new((), GateSrv(gate.clone(), timed_out.clone())),
+        );
+        spawn(async move {
+            let _ = disp.await;
+        });
+
+        client.write("abc");
+        sleep(Millis(100)).await;
+        let (tx, rx) = oneshot::channel();
+        *gate.borrow_mut() = Some(rx);
+        client.write("abc");
+        sleep(Millis(1500)).await;
+        let _ = tx.send(());
+
+        // no more data after the pause, the data sent during the pause
+        // extends the first period
+        sleep(Millis(1500)).await;
+        assert!(!client.is_closed());
+        sleep(Millis(3500)).await;
         assert!(client.is_closed());
         assert!(timed_out.get());
     }
@@ -2337,6 +2274,37 @@ mod tests {
         sleep(Millis(2500)).await;
         assert!(client.is_closed());
         assert_eq!(&events.borrow()[..], &["item", "bp-on", "write-timeout"]);
+    }
+
+    /// Backpressure released while the service is not ready ends the write
+    /// timeout, even though the dispatcher observes the release later.
+    #[ntex::test]
+    async fn write_timeout_released_during_service_pause() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+
+        let (disp, gate, events) =
+            write_dispatcher(server, IoConfig::new().set_write_timeout(Seconds(1)), 8192);
+        spawn(async move {
+            let _ = disp.await;
+        });
+
+        client.write("12345678");
+        sleep(Millis(100)).await;
+        assert_eq!(&events.borrow()[..], &["item", "bp-on"]);
+
+        // the service is not ready while the peer drains the output
+        let (tx, rx) = oneshot::channel::<()>();
+        *gate.borrow_mut() = Some(rx);
+        client.remote_buffer_cap(65536);
+        sleep(Millis(100)).await;
+        assert_eq!(client.read_any().len(), 8192);
+        sleep(Millis(3500)).await;
+
+        drop(tx);
+        sleep(Millis(100)).await;
+        assert!(!client.is_closed());
+        assert_eq!(&events.borrow()[..], &["item", "bp-on", "bp-off"]);
     }
 
     /// Keep-alive starts again once write backpressure is released.

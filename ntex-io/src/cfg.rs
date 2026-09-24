@@ -308,7 +308,9 @@ impl IoConfig {
     /// [`set_keepalive_timeout`](Self::set_keepalive_timeout).
     ///
     /// The timer is suspended while write backpressure is active; the elapsed
-    /// part of the period is charged to `max_timeout`.
+    /// part of the period is charged to `max_timeout`. While the service is
+    /// not ready the timer is stopped as well, and tracking restarts with a
+    /// fresh period and `max_timeout` budget once the service is ready.
     ///
     /// Frame read-rate enforcement is disabled by default.
     #[must_use]
@@ -340,6 +342,12 @@ impl IoConfig {
     /// however much the peer read during the previous one. Without a write
     /// timeout, a peer that stops reading during backpressure can hold the
     /// connection open indefinitely.
+    ///
+    /// The timeout does not apply once backpressure is disabled, even though
+    /// output is still outstanding. A peer that stops reading at that point
+    /// can leave up to half of the high watermark unwritten; only the
+    /// [keep-alive timeout](Self::set_keepalive_timeout), when enabled, bounds
+    /// such a connection until it is shut down.
     ///
     /// A zero duration disables the timeout. It is disabled by default.
     #[must_use]
