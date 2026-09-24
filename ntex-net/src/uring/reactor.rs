@@ -329,7 +329,9 @@ impl Reactor {
                         let user_data = (user_data & Self::DATA_MASK) as usize;
 
                         let result = entry.result();
-                        if result == -libc::ECANCELED {
+                        // A canceled zero-copy send still posts a notification,
+                        // the operation must stay alive until it arrives.
+                        if result == -libc::ECANCELED && !more(entry.flags()) {
                             handlers[batch].modified = true;
                             handlers[batch].hnd.canceled(user_data);
                         } else {

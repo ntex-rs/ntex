@@ -2,6 +2,11 @@
 
 ## [4.1.0] - 2026-09-23
 
+* Keep io-uring zero-copy sends alive until their notification arrives. A
+  send that completed after its stream was closed, or was canceled, was
+  released before the notification, which then panicked with `invalid key`
+  and freed a buffer the kernel still referenced
+
 * Bound the IOCP socket close by the connection's shutdown timeout. The
   close waits for cancelled operations to complete before closing the
   socket, and a cancellation that never completed left the socket open and

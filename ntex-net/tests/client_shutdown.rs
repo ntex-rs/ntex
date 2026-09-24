@@ -22,9 +22,15 @@ enum Outcome {
     Err(ErrorKind),
 }
 
+/// The shutdown timeout leaves room to deliver `PAYLOAD` on slower backends,
+/// a graceful close discards output still queued when it expires.
 fn cfg() -> SharedCfg {
     SharedCfg::new("CLIENT")
-        .add(IoConfig::new().set_read_buf(8192, 512, 16))
+        .add(
+            IoConfig::new()
+                .set_read_buf(8192, 512, 16)
+                .set_shutdown_timeout(ntex::time::Seconds(5)),
+        )
         .build()
 }
 

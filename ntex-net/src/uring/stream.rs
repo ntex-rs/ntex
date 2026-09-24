@@ -258,6 +258,20 @@ impl Handler for StreamOpsHandler {
 
                         if cqueue::notif(flags) {
                             let res = result.unwrap_or(res);
+                            if matches!(res, Err(ref e) if e.raw_os_error() == Some(libc::ECANCELED)) {
+                                #[cfg(feature = "trace")]
+                                log::trace!("{}: Send canceled: {:?}", item.tag(), item.fd());
+                                item.ctx.with_write_dst(|pages| pages.prepend(buf));
+                                item.flags.remove(Flags::WR_CANCELING);
+
+                                let res = item.ctx.update_write_status(Ok(0));
+                                if item.flags.contains(Flags::WR_REISSUE) || res == IoTaskStatus::Io {
+                                    item.flags.remove(Flags::WR_REISSUE);
+                                    st.send(id, &self.inner.api);
+                                }
+                                let _ = st.ops.remove(user_data);
+                                return;
+                            }
                             let res = complete_send(&item.ctx, buf, res);
                             if item.ctx.update_write_status(res) == IoTaskStatus::Io {
                                 st.send(id, &self.inner.api);
@@ -287,6 +301,11 @@ impl Handler for StreamOpsHandler {
                                 st.send(id, &self.inner.api);
                             }
                         }
+                    } else if cqueue::more(flags) && !cqueue::notif(flags) {
+                        // stream is gone, but the kernel still holds the buffer
+                        // until the zero-copy notification arrives
+                        st.ops[user_data] = Some(Operation::Send { id, buf, result: None });
+                        return;
                     }
                 }
                 Operation::Shutdown { tx } => {
