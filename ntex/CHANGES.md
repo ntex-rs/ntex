@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+* Fix HTTP/1 streaming responses using chunked transfer coding for HTTP/1.0
+  requests, and keeping the connection alive for responses delimited by
+  connection close
+
 * Fix HTTP/1 responses with `1xx` (except `101`), `204`, or `304` status
   writing body bytes and `304` responses writing a length header
 

@@ -217,7 +217,7 @@ impl Encoder for Codec {
                 }
 
                 // encode message
-                self.encoder.encode(
+                let ctype = self.encoder.encode(
                     dst,
                     &res,
                     self.flags.get().contains(Flags::HEAD),
@@ -227,6 +227,7 @@ impl Encoder for Codec {
                     self.ctype.get(),
                     None,
                 )?;
+                self.ctype.set(ctype);
             }
             Message::Chunk(Some(bytes)) => {
                 self.encoder.encode_chunk(bytes, dst)?;
@@ -289,6 +290,60 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn encode_stream(req: &str, res: Response<()>) -> (String, bool) {
+        let cfg: SharedCfg = SharedCfg::new("DBG").add(HttpServiceConfig::new()).into();
+        let codec = Codec::new(0, cfg.get());
+        let mut buf = BytesMut::from(req);
+        codec.decode(&mut buf).unwrap().unwrap();
+
+        let mut out = BytePages::default();
+        codec
+            .encodev(Message::Item((res, BodySize::Stream)), &mut out)
+            .unwrap();
+        codec
+            .encodev(Message::Chunk(Some(Bytes::from_static(b"abc"))), &mut out)
+            .unwrap();
+        codec.encodev(Message::Chunk(None), &mut out).unwrap();
+
+        let mut data = Vec::new();
+        while let Some(chunk) = out.take() {
+            data.extend_from_slice(&chunk);
+        }
+        (String::from_utf8(data).unwrap(), codec.keepalive())
+    }
+
+    /// HTTP/1.0 streaming responses are not chunked, a streaming response
+    /// delimited by connection close closes the connection.
+    #[crate::rt_test]
+    async fn test_http10_stream_response_is_not_chunked() {
+        use crate::http::StatusCode;
+
+        let (data, keepalive) = encode_stream(
+            "GET / HTTP/1.0\r\nconnection: keep-alive\r\n\r\n",
+            Response::with_body(StatusCode::OK, ()),
+        );
+        assert!(data.starts_with("HTTP/1.0 200 OK\r\n"), "{data:?}");
+        assert!(!data.contains("transfer-encoding"), "{data:?}");
+        assert!(!data.contains("keep-alive"), "{data:?}");
+        assert!(data.ends_with("\r\n\r\nabc"), "{data:?}");
+        assert!(!keepalive);
+
+        let (data, keepalive) = encode_stream(
+            "GET / HTTP/1.1\r\n\r\n",
+            Response::with_body(StatusCode::OK, ()),
+        );
+        assert!(data.contains("transfer-encoding: chunked\r\n"), "{data:?}");
+        assert!(data.ends_with("3\r\nabc\r\n0\r\n\r\n"), "{data:?}");
+        assert!(keepalive);
+
+        let mut res = Response::with_body(StatusCode::OK, ());
+        res.head_mut().no_chunking(true);
+        let (data, keepalive) = encode_stream("GET / HTTP/1.1\r\n\r\n", res);
+        assert!(data.contains("connection: close\r\n"), "{data:?}");
+        assert!(data.ends_with("\r\n\r\nabc"), "{data:?}");
+        assert!(!keepalive);
     }
 
     #[test]

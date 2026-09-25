@@ -150,8 +150,9 @@ impl MessageType for Response<()> {
         Some(self.head().status)
     }
 
+    /// HTTP/1.0 does not support chunked transfer coding.
     fn chunked(&self) -> bool {
-        self.head().chunked()
+        self.head().chunked() && self.head().version >= Version::HTTP_11
     }
 
     fn headers(&self) -> &HeaderMap {
@@ -234,7 +235,7 @@ impl<T: MessageType> MessageEncoder<T> {
         length: BodySize,
         ctype: ConnectionType,
         extra_headers: Option<HeaderMap>,
-    ) -> Result<(), EncodeError> {
+    ) -> Result<ConnectionType, EncodeError> {
         // a response with a bodyless status never sends body bytes
         let length = if message.status().is_some_and(is_bodyless) {
             BodySize::None
@@ -259,8 +260,20 @@ impl<T: MessageType> MessageEncoder<T> {
             });
         }
 
+        // a response body delimited by connection close ends the connection
+        let ctype = if message.status().is_some()
+            && !stream
+            && self.te.get().kind == TransferEncodingKind::Eof
+            && ctype == ConnectionType::KeepAlive
+        {
+            ConnectionType::Close
+        } else {
+            ctype
+        };
+
         message.encode_status(dst);
-        message.encode_headers(dst, version, length, ctype, extra_headers)
+        message.encode_headers(dst, version, length, ctype, extra_headers)?;
+        Ok(ctype)
     }
 }
 
