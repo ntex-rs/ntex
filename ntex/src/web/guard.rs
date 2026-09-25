@@ -6,22 +6,23 @@
 //! It is possible to add guards to *scopes*, *resources*
 //! and *routes*. ntex provide several guards by default, like various
 //! http methods, header, etc. To become a guard, type must implement `Guard`
-//! trait. Simple functions coulds guards as well.
+//! trait. Simple functions can be used as guards as well, see [`fn_guard`].
+//!
+//! Multiple guards on the same route, resource, or scope must all match.
 //!
 //! Guards can not modify the request object. But it is possible
 //! to store extra attributes on a request by using the `Extensions` container.
 //! Extensions containers are available via the `RequestHead::extensions()` method.
 //!
 //! ```rust
-//! use ntex::http::Method;
 //! use ntex::web::{self, guard, App, HttpResponse};
 //!
 //! fn main() {
 //!     App::default().service(web::resource("/index.html").route(
 //!         web::route()
 //!              .guard(guard::Post())
-//!              .guard(guard::fn_guard(|head| head.method == Method::GET))
-//!              .to(async || { HttpResponse::MethodNotAllowed() }))
+//!              .guard(guard::fn_guard(|head| head.headers.contains_key("x-api-key")))
+//!              .to(async || { HttpResponse::Ok() }))
 //!     );
 //! }
 //! ```
@@ -382,6 +383,11 @@ pub struct HostGuard(String, Option<String>);
 impl HostGuard {
     #[must_use]
     /// Set request scheme to match.
+    ///
+    /// The scheme is taken from the `Host` header value, or from the request
+    /// uri if the header is missing. A `Host` header normally contains no
+    /// scheme; in that case the scheme is not checked and the guard matches on
+    /// the host name alone. Do not rely on this check for security decisions.
     pub fn scheme<H: AsRef<str>>(mut self, scheme: H) -> HostGuard {
         self.1 = Some(scheme.as_ref().to_string());
         self

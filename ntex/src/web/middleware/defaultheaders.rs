@@ -80,6 +80,8 @@ impl DefaultHeaders {
 
     #[must_use]
     /// Set *CONTENT-TYPE* header if response does not contain this header.
+    ///
+    /// The header is set to `application/octet-stream`.
     pub fn content_type(mut self) -> Self {
         Rc::get_mut(&mut self.inner)
             .expect("Multiple copies exist")

@@ -52,12 +52,12 @@ use crate::web::{HttpResponse, WebRequest, WebResponse};
 ///
 /// `%b`  Size of response in bytes, excluding HTTP headers
 ///
-/// `%T` Time taken to serve the request, in seconds with floating fraction in
-/// .06f format
+/// `%T`  Time taken to serve the request, in seconds with six decimal places
 ///
-/// `%D`  Time taken to serve the request, in milliseconds
+/// `%D`  Time taken to serve the request, in milliseconds with six decimal
+/// places
 ///
-/// `%U`  Request URL
+/// `%U`  Request URL path, without the query string
 ///
 /// `%{FOO}i`  `request.headers["FOO"]`
 ///
@@ -230,10 +230,10 @@ impl Default for Format {
 impl Format {
     /// Create a `Format` from a format string.
     ///
-    /// Returns `None` if the format string syntax is incorrect.
+    /// Text that is not a recognized format specifier is logged verbatim.
     fn new(s: &str) -> Format {
         log::trace!("Access log format: {s}");
-        let fmt = Regex::new(r"%(\{([A-Za-z0-9\-_]+)\}([ioe])|[atPrUsbTD]?)").unwrap();
+        let fmt = Regex::new(r"%(\{([A-Za-z0-9\-_]+)\}([ioe])|[%atrUsbTD]?)").unwrap();
 
         let mut idx = 0;
         let mut results = Vec::new();
@@ -496,6 +496,26 @@ mod tests {
         };
         let s = format!("{}", FormatDisplay(&render));
         assert!(s.contains("/test/route/yeah"));
+    }
+
+    #[crate::rt_test]
+    async fn test_percent_format() {
+        let mut format = Format::new("100%% %U");
+        let req = TestRequest::default().uri("/test").to_srv_request();
+
+        let now = time::SystemTime::now();
+        for unit in &mut format.0 {
+            unit.render_request(now, &req);
+        }
+
+        let render = |fmt: &mut fmt::Formatter<'_>| {
+            for unit in &format.0 {
+                unit.render(fmt, 1024, now)?;
+            }
+            Ok(())
+        };
+        let s = format!("{}", FormatDisplay(&render));
+        assert_eq!(s, "100% /test");
     }
 
     #[crate::rt_test]

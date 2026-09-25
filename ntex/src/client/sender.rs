@@ -43,7 +43,7 @@ impl Service<SharedCfg, ServiceRequest> for Sender {
         let config = ctx.st().get::<ClientConfig>();
 
         if timeout.is_zero() {
-            timeout = config.timeout();
+            timeout = config.response_timeout();
         }
 
         let req = ClientRawRequest {

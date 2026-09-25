@@ -30,7 +30,10 @@ pub struct Compress {
 }
 
 impl Compress {
-    /// Create new `Compress` middleware with default encoding.
+    /// Create new `Compress` middleware with the specified encoding.
+    ///
+    /// Use `Compress::default()` to select the encoding automatically
+    /// ([`ContentEncoding::Auto`]).
     pub fn new(encoding: ContentEncoding) -> Self {
         Compress { enc: encoding }
     }

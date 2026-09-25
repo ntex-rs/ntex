@@ -118,7 +118,7 @@ where
     /// attempting to connect. It should only affect servers under significant
     /// load.
     ///
-    /// Generally set in the 64-2048 range. Default value is 2048.
+    /// Generally set in the 64-2048 range. Default value is 1024.
     ///
     /// This method should be called before `bind()` method call.
     pub fn backlog(mut self, backlog: i32) -> Self {
@@ -134,19 +134,21 @@ where
     /// for each worker.
     ///
     /// By default max connections is set to a 25k.
-    pub fn maxconn(mut self, num: usize) -> Self {
-        self.builder = self.builder.maxconn(num);
+    pub fn max_connections(mut self, num: usize) -> Self {
+        self.builder = self.builder.max_connections(num);
         self
     }
 
     #[must_use]
-    /// Sets the maximum per-worker concurrent connection establish process.
+    /// Sets the maximum per-worker number of concurrent TLS handshakes.
     ///
-    /// All listeners will stop accepting connections when this limit is reached. It
-    /// can be used to limit the global SSL CPU usage.
+    /// This limit applies only to TLS acceptors (OpenSSL and rustls). When it is
+    /// reached, TLS acceptors stop accepting new handshakes until one completes.
+    /// Plain TCP listeners are not affected. It can be used to limit the CPU
+    /// usage of TLS handshakes.
     ///
-    /// By default max connections is set to a 256.
-    pub fn maxconnrate(self, num: usize) -> Self {
+    /// By default the limit is 256.
+    pub fn max_tls_handshakes(self, num: usize) -> Self {
         ntex_tls::max_concurrent_ssl_accept(num);
         self
     }
@@ -155,10 +157,10 @@ where
     /// Set server host name.
     ///
     /// Host name is used by application router as a hostname for url generation.
-    /// Check [`ConnectionInfo`](./dev/struct.ConnectionInfo.html#method.host)
+    /// Check [`ConnectionInfo::host()`](crate::web::dev::ConnectionInfo::host)
     /// documentation for more information.
     ///
-    /// By default host name is set to a "localhost" value.
+    /// By default host name is set to a "localhost:8080" value.
     pub fn server_hostname<T: AsRef<str>>(self, val: T) -> Self {
         self.config.lock().unwrap().host = Some(val.as_ref().to_owned());
         self
@@ -221,9 +223,11 @@ where
     #[must_use]
     /// Graceful shutdown.
     ///
-    /// Gracefully shuts down on SIGSEGV or SIGQUIT and app panics.
-    /// Graceful shutdown is always enabled for SIGTERM.
-    /// By default, it is disabled for SIGSEGV and SIGQUIT and panics.
+    /// When enabled, SIGQUIT, SIGSEGV, SIGABRT, and application panics stop the
+    /// server gracefully. SIGTERM always stops the server gracefully, and SIGINT
+    /// always stops it immediately.
+    ///
+    /// By default, these events stop the server immediately.
     pub fn graceful_shutdown(mut self) -> Self {
         self.builder = self.builder.graceful_shutdown();
         self

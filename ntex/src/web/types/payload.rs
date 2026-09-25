@@ -1,6 +1,7 @@
 //! Payload/Bytes/String extractors
 use std::{
-    borrow::Cow, convert::Infallible, future::Future, pin::Pin, str, task::Context, task::Poll,
+    borrow::Cow, convert::Infallible, fmt, future::Future, pin::Pin, str, sync::Arc, task::Context,
+    task::Poll,
 };
 
 use encoding_rs::UTF_8;
@@ -10,7 +11,7 @@ use crate::http::{HttpMessage, error, header};
 use crate::util::{BoxFuture, Bytes, BytesMut, Stream, stream_recv};
 use crate::web::{FromRequest, HttpRequest, State, error::PayloadError};
 
-/// Payload extractor returns request 's payload stream.
+/// Payload extractor returns request's payload stream.
 ///
 /// ## Example
 ///
@@ -120,7 +121,7 @@ impl<St: State> FromRequest<St> for Payload {
 ///
 /// Loads request's payload and construct Bytes instance.
 ///
-/// [**`PayloadConfig`**](struct.PayloadConfig.html) allows to configure
+/// [`PayloadConfig`] allows to configure
 /// extraction process.
 ///
 /// ## Example
@@ -169,7 +170,7 @@ impl<St: State> FromRequest<St> for Bytes {
 ///
 /// Text extractor automatically decode body according to the request's charset.
 ///
-/// [**`PayloadConfig`**](struct.PayloadConfig.html) allows to configure
+/// [`PayloadConfig`] allows to configure
 /// extraction process.
 ///
 /// ## Example
@@ -235,10 +236,10 @@ impl<St: State> FromRequest<St> for String {
 }
 
 /// Payload configuration for request's payload.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PayloadConfig {
     limit: usize,
-    mimetype: Option<Mime>,
+    content_type: Option<Arc<dyn Fn(Mime) -> bool + Send + Sync>>,
 }
 
 impl PayloadConfig {
@@ -261,20 +262,35 @@ impl PayloadConfig {
     }
 
     #[must_use]
+    /// Set predicate for allowed content types.
+    ///
+    /// The predicate receives the request's parsed `Content-Type`. A request
+    /// without a `Content-Type` header, or one the predicate rejects, fails
+    /// with a content-type error. By default the content type is not checked.
+    pub fn content_type<F>(mut self, predicate: F) -> Self
+    where
+        F: Fn(Mime) -> bool + Send + Sync + 'static,
+    {
+        self.content_type = Some(Arc::new(predicate));
+        self
+    }
+
+    #[must_use]
     /// Set required mime-type of the request.
     ///
-    /// By default mime type is not enforced.
-    pub fn mimetype(mut self, mt: Mime) -> Self {
-        self.mimetype = Some(mt);
-        self
+    /// This is a shorthand for [`content_type`](Self::content_type) with a
+    /// predicate that accepts only `mt`. The comparison includes parameters,
+    /// such as `charset`. By default mime type is not enforced.
+    pub fn mimetype(self, mt: Mime) -> Self {
+        self.content_type(move |req_mt| req_mt == mt)
     }
 
     fn check_mimetype(&self, req: &HttpRequest) -> Result<(), PayloadError> {
         // check content-type
-        if let Some(ref mt) = self.mimetype {
+        if let Some(ref predicate) = self.content_type {
             match req.mime_type() {
-                Ok(Some(ref req_mt)) => {
-                    if mt != req_mt {
+                Ok(Some(req_mt)) => {
+                    if !predicate(req_mt) {
                         return Err(PayloadError::from(error::ContentTypeError::Unexpected));
                     }
                 }
@@ -294,8 +310,23 @@ impl Default for PayloadConfig {
     fn default() -> Self {
         PayloadConfig {
             limit: 262_144,
-            mimetype: None,
+            content_type: None,
         }
+    }
+}
+
+impl fmt::Debug for PayloadConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PayloadConfig")
+            .field("limit", &self.limit)
+            .field(
+                "content_type",
+                &self
+                    .content_type
+                    .as_ref()
+                    .map(|_| "Arc<dyn Fn(mime::Mime) -> bool + Send + Sync>"),
+            )
+            .finish()
     }
 }
 
@@ -304,7 +335,7 @@ impl Default for PayloadConfig {
 /// Load http message body.
 ///
 /// By default only 256Kb payload reads to a memory, then
-/// `PayloadError::Overflow` get returned. Use `MessageBody::limit()`
+/// `PayloadError::Overflow` is returned. Use `HttpMessageBody::limit()`
 /// method to change upper limit.
 struct HttpMessageBody {
     limit: usize,
@@ -425,6 +456,17 @@ mod tests {
         let req =
             TestRequest::with_header(header::CONTENT_TYPE, "application/json").to_http_request();
         assert!(cfg.check_mimetype(&req).is_ok());
+
+        let cfg = PayloadConfig::default()
+            .content_type(|mt| mt.type_() == mime::TEXT && mt.subtype() == mime::PLAIN);
+        let req =
+            TestRequest::with_header(header::CONTENT_TYPE, "application/json").to_http_request();
+        assert!(cfg.check_mimetype(&req).is_err());
+
+        let req = TestRequest::with_header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .to_http_request();
+        assert!(cfg.check_mimetype(&req).is_ok());
+        assert!(format!("{cfg:?}").contains("PayloadConfig"));
     }
 
     #[crate::rt_test]

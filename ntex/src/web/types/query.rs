@@ -12,7 +12,9 @@ use crate::web::{FromRequest, HttpRequest, State, error::QueryPayloadError};
 /// be decoded into any type which depends upon data ordering e.g. tuples or tuple-structs.
 /// Attempts to do so will *fail at runtime*.
 ///
-/// [**`QueryConfig`**](struct.QueryConfig.html) allows to configure extraction process.
+/// If the query string cannot be deserialized into `T`, extraction fails with
+/// [`QueryPayloadError`](crate::web::error::QueryPayloadError), which the default
+/// error domain renders as `400 Bad Request`.
 ///
 /// ## Example
 ///
@@ -32,8 +34,9 @@ use crate::web::{FromRequest, HttpRequest, State, error::QueryPayloadError};
 /// }
 ///
 /// // Use `Query` extractor for query information (and destructure it within the signature).
-/// // This handler gets called only if the request's query string contains a `username` field.
-/// // The correct request for this handler would be `/index.html?id=64&response_type=Code"`.
+/// // If `id` or `response_type` is missing or invalid, extraction fails and the
+/// // handler is not called.
+/// // The correct request for this handler would be `/index.html?id=64&response_type=Code`.
 /// async fn index(web::types::Query(info): web::types::Query<AuthRequest>) -> String {
 ///     format!("Authorization request for client with id={} and type={:?}!", info.id, info.response_type)
 /// }
@@ -110,8 +113,9 @@ impl<T: fmt::Display> fmt::Display for Query<T> {
 /// }
 ///
 /// // Use `Query` extractor for query information.
-/// // This handler get called only if request's query contains `username` field
-/// // The correct request for this handler would be `/index.html?id=64&response_type=Code"`
+/// // If `id` or `response_type` is missing or invalid, extraction fails and the
+/// // handler is not called.
+/// // The correct request for this handler would be `/index.html?id=64&response_type=Code`
 /// async fn index(info: web::types::Query<AuthRequest>) -> String {
 ///     format!("Authorization request for client with id={} and type={:?}!", info.id, info.response_type)
 /// }

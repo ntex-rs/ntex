@@ -71,10 +71,10 @@ impl WebAppConfig {
     /// Server host name
     ///
     /// Host name is used by application router as a hostname for url generation.
-    /// Check [`ConnectionInfo`](./struct.ConnectionInfo.html#method.host)
+    /// Check [`ConnectionInfo::host()`](crate::web::dev::ConnectionInfo::host)
     /// documentation for more information.
     ///
-    /// By default host name is set to a "localhost" value.
+    /// By default host name is set to a "localhost:8080" value.
     pub fn host(&self) -> &str {
         &self.host
     }
@@ -99,7 +99,7 @@ impl WebAppConfig {
     #[must_use]
     /// Set server host name.
     ///
-    /// By default host name is set to a "localhost" value.
+    /// By default host name is set to a "localhost:8080" value.
     pub fn set_host(mut self, host: String) -> Self {
         self.host = host;
         self
@@ -113,7 +113,7 @@ impl WebAppConfig {
     }
 
     #[must_use]
-    /// Returns the socket address of the local half of this TCP connection.
+    /// Set the socket address of the local half of the TCP connection.
     pub fn set_local_addr(mut self, addr: SocketAddr) -> Self {
         self.addr = addr;
         self
@@ -131,7 +131,7 @@ impl WebAppConfig {
     #[must_use]
     /// Set application level arbitrary state item.
     ///
-    /// Application state stored with `.state()` method is available
+    /// Application state stored with `.set_state()` method is available
     /// via `HttpRequest::app_state()` method at runtime.
     pub fn set_state<T: Send + Sync + 'static>(mut self, val: T) -> Self {
         self.state
@@ -174,6 +174,7 @@ pub struct ServiceConfig<St, In = ()> {
 }
 
 impl<St: State, In: 'static> ServiceConfig<St, In> {
+    /// Create a service configuration with the given external resources.
     pub fn new(external: Vec<ResourceDef>) -> Self {
         Self {
             external,

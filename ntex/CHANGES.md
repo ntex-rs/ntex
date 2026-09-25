@@ -2,8 +2,104 @@
 
 ## [Unreleased]
 
+* Fix HTTP/1 client losing an early response, such as `413`, when the server
+  closes the connection before the request body is sent
+
+* Fix HTTP/1 client returning interim `1xx` responses instead of the final
+  response
+
+* Fix HTTP/1 client reusing connections after HTTP/1.0 responses without
+  `Connection: keep-alive`
+
+* Fix HTTP/1 client omitting non-default ports 80 and 443 from the `Host` header
+
+* Fix HTTP/1 client response payload panic when polled after completion
+
+* Fix HTTP/1 client dropping the body of HTTP/1.1 responses delimited by
+  connection close, and accepting truncated HTTP/1.0 response bodies
+
+* Fix HTTP/1 client waiting for a body of `1xx`, `204`, or `304` responses
+  with `Content-Length` or `Transfer-Encoding` headers
+
+* Fix HTTP/1 websocket upgrade requests depending on header order to ignore
+  `Content-Length: 0`, and dropping a non-zero `Content-Length`
+
+* Accept and discard HTTP/1 chunked request and response trailer fields
+  instead of rejecting the payload
+
+* Fix HTTP/1 `Connection` header parsing ignoring tokens after the first
+  5 bytes, matching tokens by prefix, and letting a later header override
+  an earlier one
+
+* Fix an empty HTTP/1 chunked response body chunk terminating the body and
+  dropping the remaining chunks
+
+* Fix HTTP/1 streaming responses using chunked transfer coding for HTTP/1.0
+  requests, and keeping the connection alive for responses delimited by
+  connection close
+
+* Fix HTTP/1 responses with `1xx` (except `101`), `204`, or `304` status
+  writing body bytes and `304` responses writing a length header
+
+* Fix undefined behavior in the HTTP/1 encoder number formatting, which
+  created an uninitialized buffer
+
+* Fix HTTP/1 decoder panic on header names longer than 65535 bytes, the
+  request is rejected with a header decode error
+
+* Continue the interrupted HTTP/1 payload read-rate interval when payload
+  timing resumes after backpressure, instead of starting a new interval, and
+  check an interval that expired before the pause
+
 * Add WsError::WriteTimeout for WebSocket dispatchers stopped by the write
   backpressure timeout
+
+* Fix pooled web requests keeping the resource map of another application,
+  which made `HttpRequest::url_for()` resolve against the wrong routes
+
+* Render `serde_json` and `serde_urlencoded` serialization errors as
+  `500 Internal Server Error` instead of `400 Bad Request` in the default web
+  error domain
+
+* Apply `web::test::TestRequest::peer_addr()` to generated requests
+
+* Resolve relative paths in `web::test::TestServer::request()` against the test
+  server url
+
+* Use `timeout + 15s` as the cumulative request-head limit when
+  `HttpServiceConfig::set_client_timeout()` re-enables header-read timing
+
+* Rename API methods for consistency; the old names are deprecated:
+  * `ClientConfig::timeout()`, `payload_limit()`, `payload_timeout()` to
+    `response_timeout()`, `response_payload_limit()`, `response_payload_timeout()`
+  * `ClientConfig::set_limit()` to `set_connection_limit()`, and add
+    `connection_limit()`
+  * `ClientConfig::set_keep_alive()` to `set_keepalive()`
+  * `WsClientConfig::set_header_if_unset()` to `set_header_if_none()`
+  * `HttpServiceConfig::set_enable_headers_vec()` to `set_headers_vec(bool)`
+  * `HttpServer::maxconn()` to `max_connections()`, and `maxconnrate()` to
+    `max_tls_handshakes()`
+
+* Add `PayloadConfig::content_type()` predicate, matching `JsonConfig::content_type()`
+
+* Add `HttpServiceConfig::set_write_timeout()` to bound HTTP/1 write
+  backpressure, a client that stops reading responses could hold a connection
+  open indefinitely. An unfinished request payload fails with a timed-out
+  `PayloadError::Io`
+
+* Decode already received HTTP/1 request payload before failing a paused
+  payload read-rate timer without budget left
+
+* Start the HTTP/1 payload read-rate timer for `Expect: 100-continue` requests
+  only after `100 Continue` is sent, so slow expectation handling no longer
+  causes a `408 Request Timeout`
+
+* Start the HTTP/1 request-head read-rate timer of the first request with its
+  first byte, a new connection waits for that byte for the client timeout only
+
+* Keep the HTTP/1 keep-alive timer running for a partially received request
+  head when request-head timing is disabled, previously the first byte of the
+  next request stopped it and the connection could stay open forever
 
 ## [4.0.0] - 2026-09-18
 

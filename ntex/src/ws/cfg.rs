@@ -179,7 +179,7 @@ impl WsClientConfig {
     }
 
     /// Sets a handshake header if it is not already present.
-    pub fn set_header_if_unset<K, V>(mut self, key: K, value: V) -> Result<Self, HttpError>
+    pub fn set_header_if_none<K, V>(mut self, key: K, value: V) -> Result<Self, HttpError>
     where
         HeaderName: TryFrom<K>,
         HeaderValue: TryFrom<V>,

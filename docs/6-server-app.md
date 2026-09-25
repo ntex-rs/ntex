@@ -1,4 +1,4 @@
-# Application state management
+# Worker and request state
 
 Each ntex worker runs its own single-threaded runtime. To make use of multiple
 CPU cores, the server starts several workers and distributes incoming
@@ -15,12 +15,21 @@ fetching settings from an external service.
 Next, ntex uses that configuration to initialize each worker. The
 `ServerAppConfig` trait controls this part of the process. You provide the
 server with an object that implements `ServerAppConfig`, and the server calls
-its `create()` method once inside each worker.
+its `create()` method inside each worker every time that worker starts. If a
+worker fails and is restarted, `create()` runs again and the restarted worker
+gets fresh state.
 
 The configuration object must implement `Send + Sync` because the server shares
 it across worker threads. The state returned by `create()` is different: it
 belongs to one worker and stays on that worker's thread. As a result, worker
 state can contain single-threaded types such as `Rc` and `RefCell`.
+
+Worker state must also implement `Clone`. The server clones it for every
+listener, and servers such as `web::server_with_config()` clone it again for
+every connection. Put data that should be shared by all connections of a worker
+behind a shared handle, such as `Rc<RefCell<T>>` or `Rc<Cache>`, so that
+the clones refer to the same value. Plain fields are copied, and changes to
+them are not visible to other clones.
 
 The `create()` method is asynchronous, so it can do more than simply construct
 a struct. It can open database connections, create client instances, initialize
@@ -33,20 +42,33 @@ struct AppBuilder {
     // Configuration shared across the process
 }
 
+#[derive(Clone)]
 struct AppState {
-    // Resources owned by one worker
+    // Resources owned by one worker, usually behind `Rc`
 }
 
 impl ServerAppConfig for AppBuilder {
     type State = AppState;
 
-    // Called once inside each worker.
+    // Called each time a worker starts.
     async fn create(&self) -> io::Result<Self::State> {
         Ok(AppState {
             // Initialize this worker's resources.
         })
     }
 }
+```
+
+A separate type is not always necessary. `ServerAppConfig` is also implemented
+for async closures that return `io::Result<State>`, and `NoConfig` provides
+unit state for servers that do not need any:
+
+```rust
+let server = ntex::server::build_with_config(async || {
+    Ok(AppState {
+        // ...
+    })
+});
 ```
 
 ## Creating the Worker Application
@@ -79,7 +101,8 @@ async fn main() -> std::io::Result<()> {
 Here, `AppBuilder` holds the process-wide configuration and implements
 `ServerAppConfig`. For every worker, ntex calls `AppBuilder::create()` to
 produce a new `AppState`. It then passes that state to the application factory,
-which builds a separate `web::App` instance for the worker.
+which builds the worker's `web::App` factory. The `App` service itself is
+created for each connection, with its own clone of the worker state.
 
 The factory can use the state while setting up the application and its
 services. The same state is also available to the worker's connection-handler
@@ -88,9 +111,11 @@ pipelines throughout their lifecycle.
 ## Worker-Local and Process-Wide State
 
 A worker creates its state once and reuses it for every connection it handles.
-It does not create a fresh state for every connection.
+It does not call `create()` for every connection. Connections receive clones of
+the worker state, so values behind `Rc` are shared by every connection of that
+worker.
 
-This means that connections handled by the same worker see the same state.
+This means that connections handled by the same worker see the same shared data.
 Connections handled by different workers, however, use different state
 instances. Updating local state in one worker does not automatically update the
 state in another worker.
@@ -235,13 +260,14 @@ async fn main() -> std::io::Result<()> {
 
     ntex::server::build_with_config(builder)
         .bind(
+            "handler",
             "127.0.0.1:8080",
             SharedCfg::new("S"),
             async |_state: &AppState| {
                 // Build the connection-handler service.
                 ntex::service(handle_io)
             },
-        )
+        )?
         .run()
         .await
 }
@@ -250,13 +276,14 @@ async fn main() -> std::io::Result<()> {
 The factory is called once for each worker and receives that worker's
 `AppState`. It can use the state to configure the service during construction.
 
-The server places the returned service and the worker state in a pipeline. When
+The server places the returned service and a clone of the worker state in a
+pipeline. When
 a connection is dispatched to `handle_io` service, the pipeline passes access to the
 same `AppState` instance alongside the connection.
 
-Each worker has its own state. Connections handled by the same worker share one
-state instance, but connections handled by different workers do not
-automatically share state.
+Each worker has its own state. Connections handled by the same worker share the
+data behind the state's shared handles, but connections handled by different
+workers do not automatically share state.
 
 ## State Accumulation
 
@@ -296,6 +323,11 @@ through a service chain.
 Pipeline state is shared across calls, while accumulated state belongs to
 a single request. Every connection moving through the pipeline carries
 its own state.
+
+`State<St, Req>` is the most common implementation, but it is not the only
+one. A `(St, Req)` tuple also implements `RequestState`, which is convenient
+for small services. `Io` and `IoBoxed` implement it with `()` state, so a plain
+connection can be passed to any service that expects a `RequestState`.
 
 The ntex protocol servers support `RequestState`, including `ntex::http`,
 ntex-h2, ntex-mqtt, and ntex-amqp.
@@ -511,13 +543,6 @@ In this way, the request type shows how far the request has moved through the
 processing chain. Each service declares the state it expects and the state it
 produces, and Rust checks that the services are connected in the right order.
 
-There are therefore two kinds of state in a web application:
-
-- Pipeline state contains application or connection information and
-  is reused across requests.
-- `WebRequest<ReqState>` contains information collected for one request and
-  disappears when that request is complete.
-
-Keeping them separate lets the application reuse connection-level resources
-while building up request-specific information as each request moves through
-the service chain.
+Keeping pipeline state and request state separate lets the application reuse
+connection-level resources while building up request-specific information as
+each request moves through the service chain.

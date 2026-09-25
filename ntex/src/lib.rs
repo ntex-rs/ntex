@@ -8,7 +8,7 @@
 //! - [`web`] for HTTP applications and servers
 //! - [`client`] for outgoing HTTP requests
 //! - [`http`] for lower-level HTTP services and message types
-//! - [`service`] for composing services and middleware
+//! - [`service`](mod@service) for composing services and middleware
 //! - [`ws`] for WebSocket protocol support (enabled by the `ws` feature)
 //!
 //! ## Runtime selection
@@ -19,6 +19,11 @@
 //!
 //! ## Crate features
 //!
+//! - `tokio` selects the Tokio runtime backend.
+//! - `compio` selects the Compio runtime backend.
+//! - `neon-polling`, `neon-uring`, and `neon-iocp` select the Neon runtime
+//!   with the polling, io-uring, or IOCP reactor.
+//! - `neon` is deprecated and has no effect.
 //! - `ws` (default) enables WebSocket support.
 //! - `openssl` enables TLS support through OpenSSL.
 //! - `rustls` enables TLS support through rustls.
@@ -27,6 +32,7 @@
 //! - `url` enables URL generation and URL-aware request helpers.
 //! - `no-test-logging` disables automatic logging configuration in
 //!   [`test`](macro@test).
+//! - `trace` enables additional trace-level logging.
 #![deny(clippy::pedantic)]
 #![allow(
     type_alias_bounds,
@@ -78,11 +84,13 @@ pub mod connect {
 
     #[cfg(feature = "openssl")]
     pub mod openssl {
+        //! TLS connector support through OpenSSL.
         pub use ntex_tls::openssl::*;
     }
 
     #[cfg(feature = "rustls")]
     pub mod rustls {
+        //! TLS connector support through rustls.
         pub use ntex_tls::rustls::*;
     }
 }

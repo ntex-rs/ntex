@@ -9,7 +9,7 @@ use crate::http::error::{DecodeError, EncodeError, PayloadError};
 use crate::http::h1::{
     Message, MessageType, PayloadDecoder, PayloadItem, PayloadType, decoder, encoder,
 };
-use crate::http::{ConnectionType, Method, RequestHead, ResponseHead, Version};
+use crate::http::{ConnectionType, Method, RequestHead, ResponseHead, StatusCode, Version};
 use crate::service::cfg::Cfg;
 use crate::util::{BytePages, Bytes, BytesMut};
 
@@ -49,7 +49,8 @@ struct ClientCodecInner {
 impl ClientCodec {
     /// Create HTTP/1 codec.
     ///
-    /// `keepalive_enabled` how response `connection` header get generated.
+    /// `keep_alive` controls whether connections are kept alive, which affects
+    /// how the `connection` header is generated.
     pub(crate) fn new(keep_alive: bool, cfg: Cfg<HttpServiceConfig>) -> Self {
         let flags = if keep_alive {
             Flags::KEEPALIVE_ENABLED
@@ -71,6 +72,11 @@ impl ClientCodec {
     /// Check if last response is keep-alive
     pub(crate) fn keepalive(&self) -> bool {
         self.inner.ctype.get() == ConnectionType::KeepAlive
+    }
+
+    /// Do not keep the connection alive after the current response
+    pub(crate) fn set_close(&self) {
+        self.inner.ctype.set(ConnectionType::Close);
     }
 
     /// Check last request's message type
@@ -95,6 +101,15 @@ impl ClientPayloadCodec {
     pub(crate) fn keepalive(&self) -> bool {
         self.inner.ctype.get() == ConnectionType::KeepAlive
     }
+
+    /// Check if the payload is delimited by connection close
+    pub(crate) fn eof_delimited(&self) -> bool {
+        self.inner
+            .payload
+            .borrow()
+            .as_ref()
+            .is_some_and(PayloadDecoder::is_eof)
+    }
 }
 
 impl Decoder for ClientCodec {
@@ -107,12 +122,26 @@ impl Decoder for ClientCodec {
             "Payload decoder is set"
         );
 
-        if let Some((req, payload)) = self.inner.decoder.decode(src)? {
-            if let Some(ctype) = req.ctype() {
+        loop {
+            let Some((req, payload)) = self.inner.decoder.decode(src)? else {
+                return Ok(None);
+            };
+
+            // skip interim responses, `101` is the final response for upgrades
+            if req.status.is_informational() && req.status != StatusCode::SWITCHING_PROTOCOLS {
+                log::trace!("Skipping interim response: {}", req.status);
+                continue;
+            }
+
+            match req.ctype() {
                 // do not use peer's keep-alive
-                if ctype != ConnectionType::KeepAlive {
-                    self.inner.ctype.set(ctype);
+                Some(ConnectionType::KeepAlive) => (),
+                Some(ctype) => self.inner.ctype.set(ctype),
+                // HTTP/1.0 connections are not persistent by default
+                None if req.version < Version::HTTP_11 => {
+                    self.inner.ctype.set(ConnectionType::Close);
                 }
+                None => (),
             }
 
             if self.inner.flags.get().contains(Flags::HEAD) {
@@ -131,9 +160,7 @@ impl Decoder for ClientCodec {
                     }
                 }
             }
-            Ok(Some(req))
-        } else {
-            Ok(None)
+            return Ok(Some(req));
         }
     }
 }
@@ -213,5 +240,66 @@ impl Encoder for ClientCodec {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::service::cfg::SharedCfg;
+
+    #[test]
+    fn test_skip_interim_responses() {
+        let cfg: SharedCfg = SharedCfg::new("DBG").add(HttpServiceConfig::new()).into();
+        let codec = ClientCodec::new(true, cfg.get());
+
+        let mut buf = BytesMut::from(
+            "HTTP/1.1 100 Continue\r\n\r\n\
+             HTTP/1.1 103 Early Hints\r\nlink: </style.css>\r\n\r\n\
+             HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok",
+        );
+        let head = codec.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(head.status, StatusCode::OK);
+        assert!(!head.headers.contains_key("link"));
+        assert_eq!(codec.message_type(), MessageType::Payload);
+        assert_eq!(&buf[..], b"ok");
+
+        // final response is not available yet
+        let codec = ClientCodec::new(true, cfg.get());
+        let mut buf = BytesMut::from("HTTP/1.1 103 Early Hints\r\n\r\nHTTP/1.1 200");
+        assert!(codec.decode(&mut buf).unwrap().is_none());
+        buf.extend_from_slice(b" OK\r\ncontent-length: 0\r\n\r\n");
+        let head = codec.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(head.status, StatusCode::OK);
+
+        // `101` is a final response
+        let codec = ClientCodec::new(true, cfg.get());
+        let mut buf = BytesMut::from("HTTP/1.1 101 Switching Protocols\r\n\r\n");
+        let head = codec.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(head.status, StatusCode::SWITCHING_PROTOCOLS);
+    }
+
+    #[test]
+    fn test_http10_response_keepalive() {
+        let cfg: SharedCfg = SharedCfg::new("DBG").add(HttpServiceConfig::new()).into();
+        for (resp, keepalive) in [
+            ("HTTP/1.0 200 OK\r\ncontent-length: 0\r\n\r\n", false),
+            (
+                "HTTP/1.0 200 OK\r\nconnection: keep-alive\r\ncontent-length: 0\r\n\r\n",
+                true,
+            ),
+            ("HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n", true),
+            (
+                "HTTP/1.1 200 OK\r\nconnection: close\r\ncontent-length: 0\r\n\r\n",
+                false,
+            ),
+        ] {
+            let codec = ClientCodec::new(true, cfg.get());
+            // request was sent with keep-alive
+            codec.inner.ctype.set(ConnectionType::KeepAlive);
+            let mut buf = BytesMut::from(resp);
+            codec.decode(&mut buf).unwrap().unwrap();
+            assert_eq!(codec.keepalive(), keepalive, "{resp:?}");
+        }
     }
 }

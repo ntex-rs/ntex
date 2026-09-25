@@ -1,10 +1,9 @@
 //! HTTP/1 protocol dispatcher
-use std::task::{Context, Poll, ready};
-use std::{future, io, mem, pin::Pin, rc::Rc};
+use std::{future, io, mem, pin::Pin, rc::Rc, task::Context, task::Poll, task::ready};
 
 use crate::io::{Decoded, Filter, Io, IoStatusUpdate, RecvError};
 use crate::service::pipeline::{Pipeline, PipelineCall};
-use crate::{channel::bstream, time::Seconds, util::Either, util::clone_io_error};
+use crate::{channel::bstream, util::clone_io_error};
 
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
 use crate::http::error::{DispatchError, PayloadError, ResponseError};
@@ -13,34 +12,7 @@ use crate::http::{self, config::DispatcherConfig, request::Request, response::Re
 
 use super::control::{Control, ControlAck, ControlResult, ServiceDisconnectReason};
 use super::decoder::{PayloadDecoder, PayloadItem, PayloadType};
-use super::{Message, ProtocolError, codec::Codec};
-
-fn read_timeout(timeout: Seconds, max_timeout: Seconds) -> (Seconds, Seconds) {
-    if max_timeout.is_zero() {
-        (timeout, Seconds::ZERO)
-    } else {
-        let timeout = Seconds(timeout.0.min(max_timeout.0));
-        (timeout, Seconds(max_timeout.0.saturating_sub(timeout.0)))
-    }
-}
-
-bitflags::bitflags! {
-    #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-    pub struct Flags: u8 {
-        /// No request has been decoded yet
-        const FIRST_REQUEST        = 0b0000_0001;
-        /// Disconnect
-        const DISCONNECT_SENT      = 0b0000_0010;
-        /// Keep-alive is enabled
-        const READ_KA_TIMEOUT      = 0b0001_0000;
-        /// Read headers timer is enabled
-        const READ_HDRS_TIMEOUT    = 0b0010_0000;
-        /// Read headers payload is enabled
-        const READ_PL_TIMEOUT      = 0b0100_0000;
-        /// Payload timer is paused by application backpressure
-        const READ_PL_PAUSED       = 0b1000_0000;
-    }
-}
+use super::{Message, ProtocolError, codec::Codec, timer::Timer, timer::Timers};
 
 pin_project_lite::pin_project! {
     /// Dispatcher for HTTP/1.1 protocol
@@ -66,19 +38,35 @@ enum State<F, B, Err> {
     Stop,
 }
 
+/// Request payload failure
+#[derive(Debug)]
+enum PayloadFailure {
+    /// Protocol error or payload read timeout
+    Protocol(ProtocolError),
+    /// Peer is gone or write backpressure timeout
+    PeerGone(Option<io::Error>),
+}
+
+/// Control service disconnect state
+#[derive(Debug)]
+enum Disconnect {
+    None,
+    /// Disconnect reason to send once the current response is written
+    Pending(ServiceDisconnectReason),
+    /// Disconnect control message has been sent
+    Sent,
+}
+
 struct DispatcherInner<F, B, Err> {
     io: Rc<Io<F>>,
-    flags: Flags,
+    codec: Codec,
+    timers: Timers,
+    config: DispatcherConfig,
+    disconnect: Disconnect,
     service: Pipeline<Request, Response<B>, Err>,
     control: Pipeline<Control<F, Err>, ControlAck<F>, DispatchError>,
-    disconnect: Option<ServiceDisconnectReason>,
-    codec: Codec,
-    config: DispatcherConfig,
     payload: Option<(PayloadDecoder, bstream::Sender<PayloadError>)>,
-    pending_payload_error: Option<Either<ProtocolError, Option<io::Error>>>,
-    read_remains: u32,
-    read_consumed: u32,
-    read_max_timeout: Seconds,
+    pending_payload_error: Option<PayloadFailure>,
 }
 
 impl<F, B, Err> Dispatcher<F, B, Err>
@@ -98,29 +86,20 @@ where
         let codec = Codec::new(id, io.shared().get());
 
         // slow-request timer
-        let (flags, max_timeout) = if let Some(cfg) = &codec.cfg.headers_read_rate {
-            let (timeout, max_timeout) = read_timeout(cfg.timeout, cfg.max_timeout);
-            io.start_timer(timeout);
-            (Flags::FIRST_REQUEST | Flags::READ_HDRS_TIMEOUT, max_timeout)
-        } else {
-            (Flags::FIRST_REQUEST, Seconds::ZERO)
-        };
+        let timers = Timers::new(&io, codec.cfg.headers_read_rate);
 
         Dispatcher {
             st: State::ReadRequest,
             inner: DispatcherInner {
-                flags,
                 codec,
+                timers,
+                config,
                 service,
                 control,
-                config,
                 io: Rc::new(io),
                 payload: None,
                 pending_payload_error: None,
-                read_remains: 0,
-                read_consumed: 0,
-                read_max_timeout: max_timeout,
-                disconnect: None,
+                disconnect: Disconnect::None,
             },
         }
     }
@@ -148,13 +127,14 @@ where
                     }
                     Poll::Ready(Err(err)) => inner.ctl_error(err),
                     Poll::Pending => {
-                        // state changed because of error.
+                        // state changed because of error
+                        // otherwise .poll_request() returns Poll::Pending
+                        let st = ready!(inner.poll_request(cx));
+
                         // spawn current publish future to runtime
                         // so it could complete error handling
-                        let st = ready!(inner.poll_request(cx));
-                        if inner.payload.is_some()
-                            && let State::CallPublish { fut } =
-                                mem::replace(&mut *this.st, State::ReadRequest)
+                        if let State::CallPublish { fut } =
+                            mem::replace(&mut *this.st, State::ReadRequest)
                         {
                             crate::rt::spawn(fut);
                         }
@@ -169,8 +149,7 @@ where
                             // Check for payload errors while waiting for the control
                             // service, but preserve the in-flight control call.
                             if inner.pending_payload_error.is_none()
-                                && let Poll::Ready(Err(err)) =
-                                    inner.poll_request_payload_inner::<F>(None, cx)
+                                && let Poll::Ready(Err(err)) = inner.poll_request_payload_inner(cx)
                             {
                                 inner.pending_payload_error = Some(err);
                             }
@@ -179,60 +158,47 @@ where
                     };
 
                     match result {
-                        Ok(ControlAck { result }) => {
-                            if let Some(err) = inner.pending_payload_error.take() {
-                                match err {
-                                    Either::Left(err) => inner.ctl_proto_err(err),
-                                    Either::Right(err) => inner.ctl_peer_gone(err),
+                        Ok(ControlAck { result }) => match result {
+                            ControlResult::Publish(req) => inner.publish(req),
+                            ControlResult::Response(res, body)
+                            | ControlResult::Error(res, body)
+                            | ControlResult::ProtocolError(res, body) => {
+                                inner.send_response(res, body.into())
+                            }
+                            ControlResult::Continue(req) => {
+                                let result =
+                                    inner.io.encode_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
+                                if let Err(err) = result {
+                                    *this.st = inner.ctl_peer_gone(Some(err));
+                                    continue;
                                 }
-                            } else {
-                                match result {
-                                    ControlResult::Publish(req) => inner.publish(req),
-                                    ControlResult::Response(res, body)
-                                    | ControlResult::Error(res, body)
-                                    | ControlResult::ProtocolError(res, body) => {
-                                        inner.send_response(res, body.into())
-                                    }
-                                    ControlResult::Continue(req) => {
-                                        let result =
-                                            inner.io.encode_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
-                                        if let Err(err) = result {
-                                            *this.st = inner.ctl_peer_gone(Some(err));
-                                            continue;
-                                        }
-                                        if req.upgrade() {
-                                            inner.ctl_upgrade(req)
-                                        } else {
-                                            inner.publish(req)
-                                        }
-                                    }
-                                    ControlResult::Expect(req) => {
-                                        inner.control(Control::expect(req))
-                                    }
-                                    ControlResult::ExpectFailed(res, body) => {
-                                        inner.disconnect =
-                                            Some(ServiceDisconnectReason::ExpectFailed);
-                                        inner.send_response(res, body.into())
-                                    }
-                                    ControlResult::Upgrade(req) => inner.ctl_upgrade(req),
-                                    ControlResult::UpgradeAck(req) => {
-                                        inner.disconnect =
-                                            Some(ServiceDisconnectReason::UpgradeHandled);
-                                        inner.publish(req)
-                                    }
-                                    ControlResult::UpgradeHandled => inner.ctl_svc_disconnect(
-                                        ServiceDisconnectReason::UpgradeHandled,
-                                    ),
-                                    ControlResult::UpgradeFailed(res, body) => {
-                                        inner.disconnect =
-                                            Some(ServiceDisconnectReason::UpgradeFailed);
-                                        inner.send_response(res, body.into())
-                                    }
-                                    ControlResult::Stop => inner.stop(),
-                                    ControlResult::Connect(_) => unreachable!(),
+                                inner.start_payload_timer();
+                                if req.upgrade() {
+                                    inner.ctl_upgrade(req)
+                                } else {
+                                    inner.publish(req)
                                 }
                             }
-                        }
+                            ControlResult::Expect(req) => inner.control(Control::expect(req)),
+                            ControlResult::ExpectFailed(res, body) => {
+                                inner.set_disconnect(ServiceDisconnectReason::ExpectFailed);
+                                inner.send_response(res, body.into())
+                            }
+                            ControlResult::Upgrade(req) => inner.ctl_upgrade(req),
+                            ControlResult::UpgradeAck(req) => {
+                                inner.set_disconnect(ServiceDisconnectReason::UpgradeHandled);
+                                inner.publish(req)
+                            }
+                            ControlResult::UpgradeHandled => {
+                                inner.ctl_svc_disconnect(ServiceDisconnectReason::UpgradeHandled)
+                            }
+                            ControlResult::UpgradeFailed(res, body) => {
+                                inner.set_disconnect(ServiceDisconnectReason::UpgradeFailed);
+                                inner.send_response(res, body.into())
+                            }
+                            ControlResult::Stop => inner.stop(),
+                            ControlResult::Connect(_) => unreachable!(),
+                        },
                         Err(err) => {
                             log::error!("{}: Control plain error: {}", inner.io.tag(), err);
                             return Poll::Ready(Err(err));
@@ -277,95 +243,110 @@ where
     Err: ResponseError + 'static,
 {
     fn poll_read_request(&mut self, cx: &mut Context<'_>) -> Poll<State<F, B, Err>> {
-        // stop dispatcher
-        if self.config.is_shutdown() {
-            log::trace!("{}: Service is shutting down", self.io.tag());
-            return Poll::Ready(self.ctl_svc_disconnect(ServiceDisconnectReason::Shutdown));
-        }
-
-        log::trace!("{}: Trying to read http message", self.io.tag());
-
-        let buffered = self.io.with_read_dst(|buf| buf.len()) as u32;
-        if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
-            self.read_consumed = self
-                .read_consumed
-                .saturating_add(buffered.saturating_sub(self.read_remains));
-            self.read_remains = buffered;
-        }
-
-        let result = match self.io.poll_recv_decode(&self.codec, cx) {
-            Ok(decoded) => {
-                if let Some(st) = self.update_hdrs_timer(&decoded) {
-                    return Poll::Ready(st);
-                }
-                if let Some(item) = decoded.item {
-                    Ok(item)
-                } else {
-                    return Poll::Pending;
-                }
+        loop {
+            // stop dispatcher
+            if self.config.is_shutdown() {
+                log::trace!("{}: Service is shutting down", self.io.tag());
+                return Poll::Ready(self.ctl_svc_disconnect(ServiceDisconnectReason::Shutdown));
             }
-            Err(err) => Err(err),
-        };
 
-        // decode incoming bytes stream
-        let st = match result {
-            Ok((mut req, pl)) => {
-                log::trace!(
-                    "{}: Http message is received: {:?} and payload {:?}",
-                    self.io.tag(),
-                    req,
-                    pl
-                );
-                req.head_mut().io = CurrentIo::Ref(self.io.get_ref());
+            log::trace!("{}: Trying to read http message", self.io.tag());
+            self.release_write_timer();
 
-                // configure request payload
-                match pl {
-                    PayloadType::None => (),
-                    PayloadType::Payload(decoder) | PayloadType::Stream(decoder) => {
-                        let (ps, pl) = bstream::channel();
-                        req.replace_payload(http::Payload::H1(pl));
-                        self.payload = Some((decoder, ps));
+            let buffered = self.io.with_read_dst(|buf| buf.len()) as u32;
+            self.timers.headers_buffered(buffered);
+
+            let result = match self.io.poll_recv_decode(&self.codec, cx) {
+                Ok(decoded) => {
+                    if let Some(st) = self.update_hdrs_timer(&decoded) {
+                        return Poll::Ready(st);
                     }
-                }
-                self.control(Control::request(req))
-            }
-            Err(RecvError::WriteBackpressure) => {
-                if let Err(err) = ready!(self.io.poll_flush(cx, false)) {
-                    log::trace!("{}: Peer is gone with {:?}", self.io.tag(), err);
-                    self.ctl_peer_gone(Some(err))
-                } else {
-                    ready!(self.poll_read_request(cx))
-                }
-            }
-            Err(RecvError::Decoder(err)) => {
-                // Malformed requests, respond with 400
-                log::trace!("{}: Malformed request: {:?}", self.io.tag(), err);
-                self.ctl_proto_err(err.into())
-            }
-            Err(RecvError::PeerGone(err)) => {
-                log::trace!("{}: Peer is gone with {:?}", self.io.tag(), err);
-                self.ctl_peer_gone(err)
-            }
-            Err(RecvError::KeepAlive) => {
-                if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
-                    if let Err(err) = self.handle_timeout() {
-                        log::trace!("{}: Slow request timeout", self.io.tag());
-                        self.ctl_proto_err(err)
+                    if let Some(item) = decoded.item {
+                        Ok(item)
                     } else {
-                        ready!(self.poll_read_request(cx))
+                        return Poll::Pending;
                     }
-                } else if self.codec.is_reading_hdrs() {
-                    let remains = self.io.with_read_dst(|buf| buf.len()) as u32;
-                    self.start_headers_timer(buffered, remains);
-                    ready!(self.poll_read_request(cx))
-                } else {
-                    log::trace!("{}: Keep-alive timeout, close connection", self.io.tag());
-                    self.ctl_keepalive(true)
                 }
-            }
-        };
+                Err(err) => Err(err),
+            };
 
-        Poll::Ready(st)
+            // decode incoming bytes stream
+            let st = match result {
+                Ok((mut req, pl)) => {
+                    log::trace!(
+                        "{}: Http message is received: {:?} and payload {:?}",
+                        self.io.tag(),
+                        req,
+                        pl
+                    );
+                    req.head_mut().io = CurrentIo::Ref(self.io.get_ref());
+
+                    // configure request payload
+                    match pl {
+                        PayloadType::None => (),
+                        PayloadType::Payload(decoder) | PayloadType::Stream(decoder) => {
+                            let (ps, pl) = bstream::channel();
+                            req.replace_payload(http::Payload::H1(pl));
+                            self.payload = Some((decoder, ps));
+
+                            // the client does not send the body before `100 Continue`
+                            if !req.head().expect() {
+                                self.start_payload_timer();
+                            }
+                        }
+                    }
+                    self.control(Control::request(req))
+                }
+                Err(RecvError::WriteBackpressure) => {
+                    if let Err(err) = ready!(self.poll_flush_timed(cx)) {
+                        log::trace!("{}: Peer is gone with {:?}", self.io.tag(), err);
+                        self.ctl_peer_gone(Some(err))
+                    } else {
+                        continue;
+                    }
+                }
+                Err(RecvError::Decoder(err)) => {
+                    // Malformed requests, respond with 400
+                    log::trace!("{}: Malformed request: {:?}", self.io.tag(), err);
+                    self.ctl_proto_err(err.into())
+                }
+                Err(RecvError::PeerGone(err)) => {
+                    log::trace!("{}: Peer is gone with {:?}", self.io.tag(), err);
+                    self.ctl_peer_gone(err)
+                }
+                Err(RecvError::KeepAlive) => {
+                    if self.timers.active.is_write() {
+                        if let Err(err) = self.write_timer_expired() {
+                            self.ctl_peer_gone(Some(err))
+                        } else {
+                            continue;
+                        }
+                    } else if self.timers.active == Timer::Headers {
+                        if let Err(err) = self.handle_timeout() {
+                            log::trace!("{}: Slow request timeout", self.io.tag());
+                            self.ctl_proto_err(err)
+                        } else {
+                            continue;
+                        }
+                    } else if self.start_headers_timer(
+                        self.codec.is_reading_hdrs(),
+                        buffered,
+                        self.io.with_read_dst(|buf| buf.len()) as u32,
+                    ) {
+                        // a partial request head wins over keep-alive or client timeout
+                        continue;
+                    } else if self.timers.active == Timer::ClientTimeout {
+                        log::trace!("{}: Client timeout, no request", self.io.tag());
+                        self.ctl_proto_err(ProtocolError::SlowRequestTimeout)
+                    } else {
+                        log::trace!("{}: Keep-alive timeout, close connection", self.io.tag());
+                        self.ctl_keepalive(true)
+                    }
+                }
+            };
+
+            return Poll::Ready(st);
+        }
     }
 
     fn send_response(&mut self, mut msg: Response<()>, body: ResponseBody<B>) -> State<F, B, Err> {
@@ -398,15 +379,7 @@ where
 
             match result {
                 Ok(()) => match body.size() {
-                    BodySize::None | BodySize::Empty => {
-                        if let Some(st) = self.check_disconnect() {
-                            st
-                        } else if self.payload.is_some() {
-                            State::ReadPayload
-                        } else {
-                            State::ReadRequest
-                        }
-                    }
+                    BodySize::None | BodySize::Empty => self.response_done(),
                     _ => State::SendPayload { body },
                 },
                 Err(err) => self.ctl_proto_err(err.into()),
@@ -421,15 +394,34 @@ where
         cx: &mut Context<'_>,
         body: &mut ResponseBody<B>,
     ) -> Poll<State<F, B, Err>> {
-        if !self.io.is_active() {
+        let payload_err = if let Some(err) = self.pending_payload_error.take() {
+            Some(err)
+        } else if !self.io.is_active() {
             return Poll::Ready(self.ctl_peer_gone(None));
-        } else if self.disconnect.is_none()
-            && let Poll::Ready(Some(_)) = self.poll_request_payload(cx)
+        } else if !matches!(self.disconnect, Disconnect::Pending(_))
+            && let Poll::Ready(Err(err)) = self.poll_request_payload_inner(cx)
         {
-            self.disconnect = Some(ServiceDisconnectReason::PayloadDropped);
+            Some(err)
+        } else {
+            None
+        };
+        match payload_err {
+            // peer is gone or write timeout, the response cannot be completed
+            Some(PayloadFailure::PeerGone(err)) => return Poll::Ready(self.ctl_peer_gone(err)),
+            // the response head is sent, an error response is not possible,
+            // finish the response and then stop
+            Some(PayloadFailure::Protocol(err)) => {
+                log::trace!("{}: Request payload error: {:?}", self.io.tag(), err);
+                self.disconnect = Disconnect::Sent;
+            }
+            None => (),
         }
         loop {
-            let _ = ready!(self.io.poll_flush(cx, false));
+            if let Err(err) = ready!(self.poll_flush_timed(cx))
+                && err.kind() == io::ErrorKind::TimedOut
+            {
+                return Poll::Ready(self.ctl_peer_gone(Some(err)));
+            }
             let item = ready!(body.poll_next_chunk(cx));
 
             let st = match item {
@@ -441,15 +433,15 @@ where
                     }
                 }
                 None => {
-                    log::trace!("{}: Response payload eof {:?}", self.io.tag(), self.flags);
+                    log::trace!(
+                        "{}: Response payload eof {:?}",
+                        self.io.tag(),
+                        self.disconnect
+                    );
                     if let Err(err) = self.io.encode(Message::Chunk(None), &self.codec) {
                         self.ctl_proto_err(err.into())
-                    } else if let Some(st) = self.check_disconnect() {
-                        st
-                    } else if self.payload.is_some() {
-                        State::ReadPayload
                     } else {
-                        State::ReadRequest
+                        self.response_done()
                     }
                 }
                 Some(Err(err)) => {
@@ -474,10 +466,29 @@ where
             } else {
                 Poll::Pending
             }
+        } else if let Some(st) = self.take_payload_error() {
+            Poll::Ready(st)
         } else {
             // check for io changes, it could be close while waiting for service call
-            match ready!(self.io.poll_status_update(cx)) {
-                IoStatusUpdate::KeepAlive | IoStatusUpdate::WriteBackpressure => Poll::Pending,
+            let Poll::Ready(status) = self.io.poll_status_update(cx) else {
+                // write backpressure can be disabled by the status update
+                self.release_write_timer();
+                return Poll::Pending;
+            };
+            match status {
+                IoStatusUpdate::KeepAlive if self.timers.active.is_write() => {
+                    if let Err(err) = self.write_timer_expired() {
+                        Poll::Ready(self.ctl_peer_gone(Some(err)))
+                    } else {
+                        Poll::Pending
+                    }
+                }
+                IoStatusUpdate::KeepAlive => Poll::Pending,
+                IoStatusUpdate::WriteBackpressure => {
+                    self.timers
+                        .start_write(&self.io, self.codec.cfg.write_timeout);
+                    Poll::Pending
+                }
                 IoStatusUpdate::PeerGone(e) => Poll::Ready(self.ctl_peer_gone(e)),
             }
         }
@@ -491,137 +502,93 @@ where
 
     /// Process request's payload
     fn poll_request_payload(&mut self, cx: &mut Context<'_>) -> Poll<Option<State<F, B, Err>>> {
-        if let Err(err) = ready!(self.poll_request_payload_inner::<F>(None, cx)) {
-            Poll::Ready(Some(match err {
-                Either::Left(e) => self.ctl_proto_err(e),
-                Either::Right(e) => self.ctl_peer_gone(e),
-            }))
+        let result = if let Some(err) = self.pending_payload_error.take() {
+            Err(err)
         } else {
-            Poll::Ready(None)
-        }
+            ready!(self.poll_request_payload_inner(cx))
+        };
+        Poll::Ready(result.err().map(|err| self.ctl_payload_err(err)))
     }
 
-    #[allow(clippy::map_unwrap_or)]
     /// Process request's payload
-    fn poll_request_payload_inner<Fi>(
+    fn poll_request_payload_inner(
         &mut self,
-        io: Option<&Io<Fi>>,
         cx: &mut Context<'_>,
-    ) -> Poll<Result<(), Either<ProtocolError, Option<io::Error>>>> {
+    ) -> Poll<Result<(), PayloadFailure>> {
         // check if payload data is required
-        if self.payload.is_none() {
+        let Some((_, sender)) = &self.payload else {
             return Poll::Ready(Ok(()));
-        }
+        };
 
-        match self.payload.as_ref().unwrap().1.poll_ready(cx) {
+        match sender.poll_ready(cx) {
             Poll::Ready(bstream::Status::Ready) => {
-                if self.flags.contains(Flags::READ_PL_PAUSED)
-                    && self
-                        .codec
-                        .cfg
-                        .payload_read_rate
-                        .as_ref()
-                        .is_some_and(|cfg| cfg.max_timeout.non_zero())
-                    && self.read_max_timeout.is_zero()
-                {
-                    self.set_payload_error(PayloadError::Io(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "Payload read timeout",
-                    )));
-                    return Poll::Ready(Err(Either::Left(ProtocolError::SlowPayloadTimeout)));
-                }
-
                 // read request payload
                 let mut updated = false;
+                self.release_write_timer();
                 loop {
-                    let buffered = if self.flags.contains(Flags::READ_PL_TIMEOUT) {
-                        Some(
-                            io.map(|io| io.with_read_dst(|buf| buf.len()))
-                                .unwrap_or_else(|| self.io.with_read_dst(|buf| buf.len())),
-                        )
-                    } else {
-                        None
+                    let buffered = self.io.with_read_dst(|buf| buf.len());
+                    let Some((payload_codec, sender)) = self.payload.as_mut() else {
+                        break;
                     };
-                    let recv_result = io
-                        .map(|io| io.poll_recv_decode(&self.payload.as_ref().unwrap().0, cx))
-                        .unwrap_or_else(|| {
-                            self.io
-                                .poll_recv_decode(&self.payload.as_ref().unwrap().0, cx)
-                        });
 
-                    let res = match recv_result {
+                    let err = match self.io.poll_recv_decode(payload_codec, cx) {
                         Ok(decoded) => {
-                            self.update_payload_timer(&decoded);
-                            if let Some(item) = decoded.item {
-                                updated = true;
-                                Ok(item)
-                            } else {
-                                break;
-                            }
-                        }
-                        Err(err) => Err(err),
-                    };
-
-                    match res {
-                        Ok(PayloadItem::Chunk(chunk)) => {
-                            self.payload.as_mut().unwrap().1.feed_data(chunk);
-                        }
-                        Ok(PayloadItem::Eof) => {
-                            self.io.stop_timer();
-                            self.flags
-                                .remove(Flags::READ_PL_TIMEOUT | Flags::READ_PL_PAUSED);
-                            self.payload.as_mut().unwrap().1.feed_eof();
-                            self.payload = None;
-                            break;
-                        }
-                        Err(err) => {
-                            let err = match err {
-                                RecvError::WriteBackpressure => {
-                                    let flush_result = io
-                                        .map(|io| io.poll_flush(cx, false))
-                                        .unwrap_or_else(|| self.io.poll_flush(cx, false));
-
-                                    if flush_result
-                                        .map_err(|e| Either::Right(Some(e)))?
-                                        .is_pending()
-                                    {
-                                        self.pause_payload_timer();
-                                        break;
-                                    }
+                            self.timers
+                                .payload_decoded(&self.io, decoded.consumed as u32);
+                            match decoded.item {
+                                Some(PayloadItem::Chunk(chunk)) => {
+                                    updated = true;
+                                    sender.feed_data(chunk);
                                     continue;
                                 }
-                                RecvError::KeepAlive => {
-                                    if let Some(buffered) = buffered {
-                                        let remains = io
-                                            .map(|io| io.with_read_dst(|buf| buf.len()))
-                                            .unwrap_or_else(|| {
-                                                self.io.with_read_dst(|buf| buf.len())
-                                            });
-                                        self.read_consumed =
-                                            self.read_consumed.saturating_add(
-                                                buffered.saturating_sub(remains) as u32,
-                                            );
-                                    }
-                                    if let Err(err) = self.handle_timeout() {
-                                        Either::Left(err)
-                                    } else {
-                                        continue;
-                                    }
+                                Some(PayloadItem::Eof) => {
+                                    updated = true;
+                                    sender.feed_eof();
+                                    self.timers.payload_done(&self.io);
+                                    self.payload = None;
+                                    break;
                                 }
-                                RecvError::PeerGone(err) => {
-                                    self.set_payload_error(PayloadError::Incomplete(
-                                        err.as_ref().map(clone_io_error),
-                                    ));
-                                    Either::Right(err)
-                                }
-                                RecvError::Decoder(e) => {
-                                    self.set_payload_error(PayloadError::Decode(e));
-                                    Either::Left(ProtocolError::Decode(e))
-                                }
-                            };
-                            return Poll::Ready(Err(err));
+                                None => break,
+                            }
                         }
-                    }
+                        Err(RecvError::WriteBackpressure) => match self.poll_flush_timed(cx) {
+                            Poll::Ready(Ok(())) => continue,
+                            Poll::Ready(Err(err)) => PayloadFailure::PeerGone(Some(err)),
+                            Poll::Pending => {
+                                self.timers.pause_payload(&self.io);
+                                break;
+                            }
+                        },
+                        Err(RecvError::KeepAlive) if self.timers.active.is_write() => {
+                            if let Err(err) = self.write_timer_expired() {
+                                PayloadFailure::PeerGone(Some(err))
+                            } else {
+                                continue;
+                            }
+                        }
+                        Err(RecvError::KeepAlive) => {
+                            // the decode attempt can consume bytes without an item
+                            let remains = self.io.with_read_dst(|buf| buf.len());
+                            self.timers
+                                .payload_consumed(buffered.saturating_sub(remains) as u32);
+                            if let Err(err) = self.handle_timeout() {
+                                PayloadFailure::Protocol(err)
+                            } else {
+                                continue;
+                            }
+                        }
+                        Err(RecvError::PeerGone(err)) => {
+                            self.set_payload_error(PayloadError::Incomplete(
+                                err.as_ref().map(clone_io_error),
+                            ));
+                            PayloadFailure::PeerGone(err)
+                        }
+                        Err(RecvError::Decoder(e)) => {
+                            self.set_payload_error(PayloadError::Decode(e));
+                            PayloadFailure::Protocol(ProtocolError::Decode(e))
+                        }
+                    };
+                    return Poll::Ready(Err(err));
                 }
                 if updated {
                     Poll::Ready(Ok(()))
@@ -630,7 +597,7 @@ where
                 }
             }
             Poll::Pending => {
-                self.pause_payload_timer();
+                self.timers.pause_payload(&self.io);
                 Poll::Pending
             }
             Poll::Ready(bstream::Status::Dropped | bstream::Status::Eof) => {
@@ -638,78 +605,87 @@ where
                 // wait until future completes and then close
                 // connection
                 self.payload = None;
-                self.disconnect = Some(ServiceDisconnectReason::PayloadDropped);
+                self.set_disconnect(ServiceDisconnectReason::PayloadDropped);
                 Poll::Pending
             }
         }
     }
 
-    fn pause_payload_timer(&mut self) {
-        if self.flags.contains(Flags::READ_PL_TIMEOUT) {
-            self.flags.remove(Flags::READ_PL_TIMEOUT);
-            self.flags.insert(Flags::READ_PL_PAUSED);
-            if let Some(cfg) = &self.codec.cfg.payload_read_rate
-                && cfg.max_timeout.non_zero()
-            {
-                let remains = self.io.timer_handle().remains();
-                self.read_max_timeout = Seconds(self.read_max_timeout.0.saturating_add(remains.0));
+    /// Flushes output during write backpressure, bounded by the write
+    /// timeout.
+    fn poll_flush_timed(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        loop {
+            if let Poll::Ready(res) = self.io.poll_flush(cx, false) {
+                self.timers.stop_write(&self.io);
+                return Poll::Ready(res);
             }
-            self.io.stop_timer();
+            self.timers
+                .start_write(&self.io, self.codec.cfg.write_timeout);
+            if !self.timers.active.is_write() {
+                return Poll::Pending;
+            }
+            // the timer is reported through the status update
+            match self.io.poll_status_update(cx) {
+                Poll::Ready(IoStatusUpdate::KeepAlive) => {
+                    if let Err(err) = self.write_timer_expired() {
+                        return Poll::Ready(Err(err));
+                    }
+                }
+                Poll::Pending if !self.io.is_wr_backpressure() => (),
+                _ => return Poll::Pending,
+            }
+        }
+    }
+
+    /// Handles expiry of the write timer.
+    ///
+    /// Fails the request payload and returns the write timeout error if
+    /// write backpressure is still enabled, otherwise stops the timer.
+    fn write_timer_expired(&mut self) -> io::Result<()> {
+        if self.io.is_wr_backpressure() {
+            log::trace!("{}: Write backpressure timeout", self.io.tag());
+            self.set_payload_error(PayloadError::Io(write_timeout_error()));
+            Err(write_timeout_error())
+        } else {
+            self.timers.stop_write(&self.io);
+            Ok(())
+        }
+    }
+
+    /// Stops the write timer if write backpressure has been disabled.
+    fn release_write_timer(&mut self) {
+        if self.timers.active.is_write() && !self.io.is_wr_backpressure() {
+            self.timers.stop_write(&self.io);
         }
     }
 
     fn handle_timeout(&mut self) -> Result<(), ProtocolError> {
         // check read rate
-        let cfg = if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
-            &self.codec.cfg.headers_read_rate
-        } else if self.flags.contains(Flags::READ_PL_TIMEOUT) {
-            &self.codec.cfg.payload_read_rate
-        } else {
+        let (cfg, payload) = match self.timers.active {
+            Timer::Headers => (&self.codec.cfg.headers_read_rate, false),
+            Timer::Payload => (&self.codec.cfg.payload_read_rate, true),
+            _ => return Ok(()),
+        };
+        let Some(cfg) = *cfg else {
             return Ok(());
         };
+        if self.timers.extend(&self.io, cfg) {
+            return Ok(());
+        }
 
-        if let Some(cfg) = cfg {
-            let total = self.read_consumed;
-            self.read_consumed = 0;
-
-            if total > cfg.rate {
-                let timeout = if cfg.max_timeout.is_zero() {
-                    Some(cfg.timeout)
-                } else if self.read_max_timeout.is_zero() {
-                    None
-                } else {
-                    let (timeout, remaining) = read_timeout(cfg.timeout, self.read_max_timeout);
-                    self.read_max_timeout = remaining;
-                    Some(timeout)
-                };
-
-                if let Some(timeout) = timeout {
-                    log::trace!(
-                        "{}: Bytes read rate {:?}, extend timer",
-                        self.io.tag(),
-                        total
-                    );
-                    self.io.start_timer(timeout);
-                    return Ok(());
-                }
-            }
-
-            log::trace!(
-                "{}: Timeout during reading, {:?}",
-                self.io.tag(),
-                self.flags
-            );
-            if self.flags.contains(Flags::READ_PL_TIMEOUT) {
-                self.set_payload_error(PayloadError::Io(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "Payload read timeout",
-                )));
-                Err(ProtocolError::SlowPayloadTimeout)
-            } else {
-                Err(ProtocolError::SlowRequestTimeout)
-            }
+        log::trace!(
+            "{}: Timeout during reading, {:?}",
+            self.io.tag(),
+            self.timers.active
+        );
+        if payload {
+            self.set_payload_error(PayloadError::Io(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "Payload read timeout",
+            )));
+            Err(ProtocolError::SlowPayloadTimeout)
         } else {
-            Ok(())
+            Err(ProtocolError::SlowRequestTimeout)
         }
     }
 
@@ -717,110 +693,95 @@ where
         &mut self,
         decoded: &Decoded<(Request, PayloadType)>,
     ) -> Option<State<F, B, Err>> {
-        // got parsed frame
+        let partial = self.codec.is_reading_hdrs() || decoded.remains != 0;
+        let remains = decoded.remains as u32;
+
         if decoded.item.is_some() {
-            self.read_remains = 0;
-            self.read_consumed = 0;
-            self.flags.remove(
-                Flags::FIRST_REQUEST
-                    | Flags::READ_KA_TIMEOUT
-                    | Flags::READ_HDRS_TIMEOUT
-                    | Flags::READ_PL_TIMEOUT
-                    | Flags::READ_PL_PAUSED,
-            );
-            self.io.stop_timer();
-        } else if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
+            // got parsed frame
+            self.timers.reset(&self.io);
+        } else if self.timers.active == Timer::Headers {
             // received new data but not enough for parsing complete frame
-            self.read_remains = decoded.remains as u32;
-        } else if !self.flags.contains(Flags::FIRST_REQUEST)
-            && self.read_remains == 0
-            && decoded.remains == 0
-            && !self.codec.is_reading_hdrs()
-        {
-            // no new data, start keep-alive timer
-            if self.codec.keepalive() {
-                if !self.flags.contains(Flags::READ_KA_TIMEOUT) && self.codec.cfg.ka_enabled {
-                    log::debug!(
-                        "{}: Start keep-alive timer {:?}",
-                        self.io.tag(),
-                        self.codec.cfg.keep_alive
-                    );
-                    self.flags.insert(Flags::READ_KA_TIMEOUT);
-                    self.io.start_timer(self.codec.cfg.keep_alive);
-                }
-            } else {
-                self.io.close();
-                return Some(self.ctl_keepalive(false));
+            self.timers.progress.remains = remains;
+        } else if self.start_headers_timer(
+            partial,
+            (decoded.consumed as u32).saturating_add(remains),
+            remains,
+        ) {
+            // the headers read rate bounds a partial request head, for the
+            // first request it starts with the first received byte
+        } else if self.timers.active == Timer::ClientTimeout {
+            // only the headers read rate bounds the first request
+        } else if partial || self.codec.keepalive() {
+            // without a headers read rate the keep-alive timer bounds a
+            // partial request head
+            if self.codec.cfg.ka_enabled {
+                self.timers
+                    .start_keepalive(&self.io, self.codec.cfg.keep_alive);
             }
-        } else if self.codec.is_reading_hdrs()
-            && !self.flags.contains(Flags::READ_HDRS_TIMEOUT)
-            && (self.flags.contains(Flags::READ_KA_TIMEOUT)
-                || self.codec.cfg.headers_read_rate.is_some())
-        {
-            self.start_headers_timer(
-                (decoded.consumed as u32).saturating_add(decoded.remains as u32),
-                decoded.remains as u32,
-            );
+        } else {
+            self.io.close();
+            return Some(self.ctl_keepalive(false));
         }
         None
     }
 
-    fn start_headers_timer(&mut self, consumed: u32, remains: u32) {
-        self.flags
-            .remove(Flags::READ_KA_TIMEOUT | Flags::READ_PL_TIMEOUT);
-        self.read_remains = remains;
-        self.read_consumed = consumed;
-
-        if let Some(cfg) = &self.codec.cfg.headers_read_rate {
-            log::debug!(
-                "{}: Start headers read timer {:?}",
-                self.io.tag(),
-                cfg.timeout
-            );
-            self.flags.insert(Flags::READ_HDRS_TIMEOUT);
-
-            let (timeout, max_timeout) = read_timeout(cfg.timeout, cfg.max_timeout);
-            self.read_max_timeout = max_timeout;
-            self.io.start_timer(timeout);
+    /// Starts request-head timing for a partial request head.
+    ///
+    /// Returns `false` if the head is not partial or no headers read rate
+    /// is configured.
+    fn start_headers_timer(&mut self, partial: bool, consumed: u32, remains: u32) -> bool {
+        let rate = self.codec.cfg.headers_read_rate;
+        if partial && rate.is_some() {
+            self.timers.start_headers(&self.io, rate, consumed, remains);
+            true
         } else {
-            self.io.stop_timer();
+            false
         }
     }
 
-    fn update_payload_timer(&mut self, decoded: &Decoded<PayloadItem>) {
-        if self.flags.contains(Flags::READ_PL_TIMEOUT) {
-            self.read_consumed = self.read_consumed.saturating_add(decoded.consumed as u32);
-        } else if let Some(cfg) = &self.codec.cfg.payload_read_rate {
-            log::debug!("{}: Start payload timer {:?}", self.io.tag(), cfg.timeout);
-
-            // start payload timer
-            let paused = self.flags.contains(Flags::READ_PL_PAUSED);
-            let max_timeout = if paused {
-                self.flags.remove(Flags::READ_PL_PAUSED);
-                if cfg.max_timeout.is_zero() {
-                    Seconds::ZERO
-                } else {
-                    self.read_max_timeout
-                }
-            } else {
-                cfg.max_timeout
-            };
-            self.flags.insert(Flags::READ_PL_TIMEOUT);
-
-            let (timeout, max_timeout) = read_timeout(cfg.timeout, max_timeout);
-            if paused {
-                self.read_consumed = self.read_consumed.saturating_add(decoded.consumed as u32);
-            } else {
-                self.read_consumed = decoded.consumed as u32;
-            }
-            self.read_max_timeout = max_timeout;
-            self.io.start_timer(timeout);
+    /// Starts payload timing for the current request if it is not started
+    /// yet, an expectation can be handled without `100 Continue`.
+    fn start_payload_timer(&mut self) {
+        if self.payload.is_some() && matches!(self.timers.active, Timer::Stopped | Timer::Write) {
+            self.timers
+                .start_payload(&self.io, self.codec.cfg.payload_read_rate);
         }
     }
 
-    fn publish(&self, req: Request) -> State<F, B, Err> {
+    /// Handles a sent response: reports a pending disconnect, or reads
+    /// the rest of the request payload, or the next request.
+    fn response_done(&mut self) -> State<F, B, Err> {
+        if let Some(st) = self.check_disconnect() {
+            st
+        } else if self.payload.is_some() {
+            self.start_payload_timer();
+            State::ReadPayload
+        } else {
+            State::ReadRequest
+        }
+    }
+
+    fn publish(&mut self, req: Request) -> State<F, B, Err> {
+        // payload failed while waiting for the control service
+        if let Some(st) = self.take_payload_error() {
+            return st;
+        }
+        self.start_payload_timer();
         State::CallPublish {
             fut: self.service.call_nowait(req),
+        }
+    }
+
+    fn take_payload_error(&mut self) -> Option<State<F, B, Err>> {
+        self.pending_payload_error
+            .take()
+            .map(|err| self.ctl_payload_err(err))
+    }
+
+    fn ctl_payload_err(&mut self, err: PayloadFailure) -> State<F, B, Err> {
+        match err {
+            PayloadFailure::Protocol(err) => self.ctl_proto_err(err),
+            PayloadFailure::PeerGone(err) => self.ctl_peer_gone(err),
         }
     }
 
@@ -855,36 +816,45 @@ where
         self.ctl_disconnect(Control::svc_disconnect(reason))
     }
 
+    /// Records a disconnect reason, unless a disconnect has been sent.
+    fn set_disconnect(&mut self, reason: ServiceDisconnectReason) {
+        if !matches!(self.disconnect, Disconnect::Sent) {
+            self.disconnect = Disconnect::Pending(reason);
+        }
+    }
+
     fn ctl_disconnect(&mut self, req: Control<F, Err>) -> State<F, B, Err> {
-        if self.flags.contains(Flags::DISCONNECT_SENT) {
+        if matches!(
+            mem::replace(&mut self.disconnect, Disconnect::Sent),
+            Disconnect::Sent
+        ) {
             self.stop()
         } else {
-            self.flags.insert(Flags::DISCONNECT_SENT);
-            State::CallControl {
-                fut: self.control.call_nowait(req),
-            }
+            self.control(req)
         }
     }
 
     fn check_disconnect(&mut self) -> Option<State<F, B, Err>> {
-        if self.flags.contains(Flags::DISCONNECT_SENT) {
-            Some(self.stop())
-        } else if let Some(reason) = self.disconnect.take() {
-            self.flags.insert(Flags::DISCONNECT_SENT);
-            Some(State::CallControl {
-                fut: self.control.call_nowait(Control::svc_disconnect(reason)),
-            })
-        } else {
-            None
+        match mem::replace(&mut self.disconnect, Disconnect::Sent) {
+            Disconnect::None => {
+                self.disconnect = Disconnect::None;
+                None
+            }
+            Disconnect::Pending(reason) => Some(self.control(Control::svc_disconnect(reason))),
+            Disconnect::Sent => Some(self.stop()),
         }
     }
 
     fn stop(&mut self) -> State<F, B, Err> {
         log::debug!("{}: Dispatcher is stopped", self.io.tag());
 
-        self.io.stop_timer();
+        self.timers.stop(&self.io);
         State::Stop
     }
+}
+
+fn write_timeout_error() -> io::Error {
+    io::Error::new(io::ErrorKind::TimedOut, "Write backpressure timeout")
 }
 
 #[cfg(test)]
@@ -901,26 +871,11 @@ mod tests {
     use crate::http::{KeepAlive, ResponseHead, StatusCode, body};
     use crate::io::{self as nio, Base, testing::IoTest};
     use crate::service::{IntoService, Service, cfg::SharedCfg, fn_service};
-    use crate::time::{Millis, sleep, timeout};
+    use crate::time::{Millis, Seconds, sleep, timeout};
     use crate::util::{Bytes, BytesMut, lazy, stream_recv};
     use crate::{client::ClientCodec, codec::Decoder};
 
     const BUFFER_SIZE: usize = 32_768;
-
-    #[test]
-    fn test_read_timeout_is_bounded_by_maximum() {
-        let (timeout, remaining) = read_timeout(Seconds(10), Seconds(15));
-        assert_eq!(timeout, Seconds(10));
-        assert_eq!(remaining, Seconds(5));
-
-        let (timeout, remaining) = read_timeout(Seconds(10), remaining);
-        assert_eq!(timeout, Seconds(5));
-        assert_eq!(remaining, Seconds::ZERO);
-
-        let (timeout, remaining) = read_timeout(Seconds(10), Seconds(3));
-        assert_eq!(timeout, Seconds(3));
-        assert_eq!(remaining, Seconds::ZERO);
-    }
 
     #[crate::rt_test]
     async fn test_payload_timer_resume_preserves_maximum() {
@@ -939,30 +894,184 @@ mod tests {
             Pipeline::new((), DefaultControlService),
             DispatcherConfig::default(),
         );
-        let decoded = Decoded {
-            item: None,
-            remains: 0,
-            consumed: 2,
-        };
+
+        h1.inner.timers.stop(&h1.inner.io);
+        h1.inner.payload = Some((
+            PayloadDecoder::length(4),
+            bstream::channel::<PayloadError>().0,
+        ));
+        h1.inner.start_payload_timer();
+        h1.inner.timers.payload_decoded(&h1.inner.io, 2);
+        assert_eq!(h1.inner.timers.progress.max_timeout, Seconds(5));
+        assert!(h1.inner.handle_timeout().is_ok());
+        assert_eq!(h1.inner.timers.progress.max_timeout, Seconds::ZERO);
+        assert_eq!(h1.inner.io.timer_handle().remains(), Seconds(5));
+
+        h1.inner.timers.pause_payload(&h1.inner.io);
+        assert_eq!(h1.inner.timers.active, Timer::PayloadPaused);
+        assert_eq!(h1.inner.timers.progress.period, Seconds(5));
+        assert_eq!(h1.inner.timers.progress.max_timeout, Seconds::ZERO);
+
+        h1.inner.timers.payload_decoded(&h1.inner.io, 2);
+        assert_ne!(h1.inner.timers.active, Timer::PayloadPaused);
+        assert_eq!(h1.inner.timers.progress.max_timeout, Seconds::ZERO);
+        assert_eq!(h1.inner.io.timer_handle().remains(), Seconds(5));
+    }
+
+    /// A sent disconnect absorbs pending and later disconnect reasons.
+    #[crate::rt_test]
+    async fn test_disconnect_state() {
+        let (_client, server) = IoTest::create();
+        let config: SharedCfg = SharedCfg::new("SVC").into();
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
+            ),
+            Pipeline::new((), DefaultControlService),
+            DispatcherConfig::default(),
+        );
+
+        assert!(h1.inner.check_disconnect().is_none());
+        assert!(matches!(h1.inner.disconnect, Disconnect::None));
 
         h1.inner
-            .flags
-            .remove(Flags::FIRST_REQUEST | Flags::READ_HDRS_TIMEOUT);
-        h1.inner.io.stop_timer();
-        h1.inner.update_payload_timer(&decoded);
-        assert_eq!(h1.inner.read_max_timeout, Seconds(5));
-        assert!(h1.inner.handle_timeout().is_ok());
-        assert_eq!(h1.inner.read_max_timeout, Seconds::ZERO);
-        assert_eq!(h1.inner.io.timer_handle().remains(), Seconds(5));
+            .set_disconnect(ServiceDisconnectReason::ExpectFailed);
+        assert!(matches!(
+            h1.inner.disconnect,
+            Disconnect::Pending(ServiceDisconnectReason::ExpectFailed)
+        ));
+        assert!(matches!(
+            h1.inner.ctl_peer_gone(None),
+            State::CallControl { .. }
+        ));
+        assert!(matches!(h1.inner.disconnect, Disconnect::Sent));
 
-        h1.inner.pause_payload_timer();
-        assert!(h1.inner.flags.contains(Flags::READ_PL_PAUSED));
-        assert_eq!(h1.inner.read_max_timeout, Seconds(5));
+        h1.inner
+            .set_disconnect(ServiceDisconnectReason::PayloadDropped);
+        assert!(matches!(h1.inner.disconnect, Disconnect::Sent));
+        assert!(matches!(h1.inner.check_disconnect(), Some(State::Stop)));
+        assert!(matches!(h1.inner.ctl_peer_gone(None), State::Stop));
+    }
 
-        h1.inner.update_payload_timer(&decoded);
-        assert!(!h1.inner.flags.contains(Flags::READ_PL_PAUSED));
-        assert_eq!(h1.inner.read_max_timeout, Seconds::ZERO);
-        assert_eq!(h1.inner.io.timer_handle().remains(), Seconds(5));
+    fn exhausted_payload_h1(
+        server: IoTest,
+        rate: u32,
+    ) -> (
+        Dispatcher<Base, body::Body, io::Error>,
+        bstream::Receiver<PayloadError>,
+    ) {
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(HttpServiceConfig::new().set_payload_read_rate(Seconds(1), Seconds(5), rate))
+            .into();
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
+            ),
+            Pipeline::new((), DefaultControlService),
+            DispatcherConfig::default(),
+        );
+        let (tx, rx) = bstream::channel::<PayloadError>();
+        h1.inner.payload = Some((PayloadDecoder::length(4), tx));
+        h1.inner.timers.stop(&h1.inner.io);
+        h1.inner.timers.active = Timer::PayloadPaused;
+        h1.inner.timers.progress.max_timeout = Seconds::ZERO;
+        (h1, rx)
+    }
+
+    /// Resuming without budget left decodes the buffered payload first.
+    #[crate::rt_test]
+    async fn test_exhausted_payload_budget_decodes_buffered_data() {
+        let (client, server) = IoTest::create();
+        let (mut h1, mut rx) = exhausted_payload_h1(server, 1);
+
+        client.write("test");
+        sleep(Millis(50)).await;
+        let res = lazy(|cx| h1.inner.poll_request_payload_inner(cx)).await;
+        assert!(matches!(res, Poll::Ready(Ok(()))));
+        assert!(h1.inner.payload.is_none());
+        assert_eq!(
+            stream_recv(&mut rx).await.unwrap().unwrap(),
+            Bytes::from("test")
+        );
+        assert!(stream_recv(&mut rx).await.is_none());
+
+        let (client, server) = IoTest::create();
+        let (mut h1, mut rx) = exhausted_payload_h1(server, 1);
+
+        client.write("te");
+        sleep(Millis(50)).await;
+        let res = lazy(|cx| h1.inner.poll_request_payload_inner(cx)).await;
+        assert!(matches!(
+            res,
+            Poll::Ready(Err(PayloadFailure::Protocol(
+                ProtocolError::SlowPayloadTimeout
+            )))
+        ));
+        assert_eq!(
+            stream_recv(&mut rx).await.unwrap().unwrap(),
+            Bytes::from("te")
+        );
+        assert!(stream_recv(&mut rx).await.unwrap().is_err());
+    }
+
+    /// Resuming continues the interrupted period instead of starting a new one.
+    #[crate::rt_test]
+    async fn test_payload_resume_continues_period() {
+        let (client, server) = IoTest::create();
+        let (mut h1, _rx) = exhausted_payload_h1(server, 1);
+        h1.inner.timers.progress.period = Seconds(3);
+        h1.inner.timers.progress.max_timeout = Seconds(2);
+
+        client.write("te");
+        sleep(Millis(50)).await;
+        let res = lazy(|cx| h1.inner.poll_request_payload_inner(cx)).await;
+        assert!(matches!(res, Poll::Ready(Ok(()))));
+        assert!(h1.inner.payload.is_some());
+        assert_eq!(h1.inner.timers.active, Timer::Payload);
+        assert_eq!(h1.inner.io.timer_handle().remains(), Seconds(3));
+        assert_eq!(h1.inner.timers.progress.max_timeout, Seconds(2));
+    }
+
+    /// A period that expired before pausing is checked on resume.
+    #[crate::rt_test]
+    async fn test_payload_resume_checks_expired_period() {
+        let (client, server) = IoTest::create();
+        let (mut h1, mut rx) = exhausted_payload_h1(server, 1000);
+        h1.inner.timers.progress.max_timeout = Seconds(4);
+
+        client.write("te");
+        sleep(Millis(50)).await;
+        let res = lazy(|cx| h1.inner.poll_request_payload_inner(cx)).await;
+        assert!(matches!(
+            res,
+            Poll::Ready(Err(PayloadFailure::Protocol(
+                ProtocolError::SlowPayloadTimeout
+            )))
+        ));
+        assert_eq!(
+            stream_recv(&mut rx).await.unwrap().unwrap(),
+            Bytes::from("te")
+        );
+
+        // enough data was received, the next period starts
+        let (client, server) = IoTest::create();
+        let (mut h1, _rx) = exhausted_payload_h1(server, 1);
+        h1.inner.timers.progress.max_timeout = Seconds(4);
+
+        client.write("te");
+        sleep(Millis(50)).await;
+        let res = lazy(|cx| h1.inner.poll_request_payload_inner(cx)).await;
+        assert!(matches!(res, Poll::Ready(Ok(()))));
+        assert!(h1.inner.payload.is_some());
+        assert_eq!(h1.inner.timers.active, Timer::Payload);
+        assert_eq!(h1.inner.io.timer_handle().remains(), Seconds(1));
+        assert_eq!(h1.inner.timers.progress.max_timeout, Seconds(3));
     }
 
     #[crate::rt_test]
@@ -1039,7 +1148,7 @@ mod tests {
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
 
-        assert!(h1.inner.flags.contains(Flags::READ_KA_TIMEOUT));
+        assert_eq!(h1.inner.timers.active, Timer::KeepAlive);
         assert!(h1.inner.io.is_active());
         sleep(Millis(50)).await;
         assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
@@ -1074,7 +1183,7 @@ mod tests {
         client.write("GET /first HTTP/1.1\r\n\r\n");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
-        assert!(h1.inner.flags.contains(Flags::READ_KA_TIMEOUT));
+        assert_eq!(h1.inner.timers.active, Timer::KeepAlive);
         sleep(Millis(50)).await;
         assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
 
@@ -1084,9 +1193,9 @@ mod tests {
         h1.inner.io.notify_timeout();
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
-        assert!(h1.inner.flags.contains(Flags::READ_HDRS_TIMEOUT));
-        assert!(!h1.inner.flags.contains(Flags::READ_KA_TIMEOUT));
-        assert_eq!(h1.inner.read_consumed, partial.len() as u32);
+        assert_eq!(h1.inner.timers.active, Timer::Headers);
+        assert_ne!(h1.inner.timers.active, Timer::KeepAlive);
+        assert_eq!(h1.inner.timers.progress.consumed, partial.len() as u32);
         assert!(h1.inner.io.is_active());
 
         client.write("\r\n\r\n");
@@ -1097,6 +1206,169 @@ mod tests {
 
         client.close().await;
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+    }
+
+    fn keepalive_h1(server: IoTest) -> Dispatcher<Base, body::Body, io::Error> {
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(
+                HttpServiceConfig::new()
+                    .set_client_timeout(Seconds::ZERO)
+                    .set_keepalive(Seconds(1)),
+            )
+            .into();
+
+        Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
+            ),
+            Pipeline::new((), DefaultControlService),
+            DispatcherConfig::default(),
+        )
+    }
+
+    /// Without request-head timing, waiting for the first request is not
+    /// bounded by keep-alive, for an idle or a partially received request.
+    #[crate::rt_test]
+    async fn test_first_request_unbounded_without_header_timeout() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let mut h1 = keepalive_h1(server);
+
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert_eq!(h1.inner.timers.active, Timer::ClientTimeout);
+        sleep(Millis(2200)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(h1.inner.io.is_active());
+
+        client.write("GET / HTTP/1.1\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert_eq!(h1.inner.timers.active, Timer::ClientTimeout);
+        sleep(Millis(2200)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(h1.inner.io.is_active());
+
+        client.write("\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        sleep(Millis(50)).await;
+        assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
+
+        client.close().await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+    }
+
+    /// Without request-head timing, a partial next request does not stop the
+    /// keep-alive timer.
+    #[crate::rt_test]
+    async fn test_partial_next_request_keepalive_without_header_timeout() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let mut h1 = keepalive_h1(server);
+
+        client.write("GET /first HTTP/1.1\r\n\r\nGET /next HTTP/1.1\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        sleep(Millis(50)).await;
+        assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
+        assert_eq!(h1.inner.timers.active, Timer::KeepAlive);
+
+        client.write("host: example.com");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert_eq!(h1.inner.timers.active, Timer::KeepAlive);
+
+        let res = timeout(Millis(3000), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
+        assert!(res.unwrap().is_ok());
+        assert!(client.read_any().is_empty());
+    }
+
+    fn client_timeout_h1(server: IoTest) -> Dispatcher<Base, body::Body, io::Error> {
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(
+                HttpServiceConfig::new()
+                    .set_headers_read_rate(Seconds(1), Seconds(5), 1024)
+                    .set_keepalive(KeepAlive::Disabled),
+            )
+            .into();
+
+        Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
+            ),
+            Pipeline::new((), DefaultControlService),
+            DispatcherConfig::default(),
+        )
+    }
+
+    /// A new connection that sends nothing is bounded by the client timeout.
+    #[crate::rt_test]
+    async fn test_client_timeout_without_request() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let mut h1 = client_timeout_h1(server);
+
+        assert_eq!(h1.inner.timers.active, Timer::ClientTimeout);
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert_eq!(h1.inner.timers.active, Timer::ClientTimeout);
+
+        let res = timeout(Millis(3000), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
+        assert!(res.unwrap().is_ok());
+        assert!(
+            client
+                .read_any()
+                .starts_with(b"HTTP/1.1 408 Request Timeout\r\n")
+        );
+    }
+
+    /// The headers read rate starts with the first byte of the first request,
+    /// with the complete cumulative budget.
+    #[crate::rt_test]
+    async fn test_headers_rate_starts_with_first_byte() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let mut h1 = client_timeout_h1(server);
+
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert_eq!(h1.inner.timers.active, Timer::ClientTimeout);
+
+        let partial = "GET / HTTP/1.1\r\n";
+        client.write(partial);
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert_eq!(h1.inner.timers.active, Timer::Headers);
+        assert_eq!(h1.inner.timers.progress.consumed, partial.len() as u32);
+        assert_eq!(h1.inner.timers.progress.max_timeout, Seconds(4));
+
+        client.write("\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        sleep(Millis(50)).await;
+        assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
+    }
+
+    /// The first byte arriving together with the client timeout wins.
+    #[crate::rt_test]
+    async fn test_first_byte_wins_client_timeout() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let mut h1 = client_timeout_h1(server);
+
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        client.write("GET / HTTP/1.1\r\n");
+        sleep(Millis(50)).await;
+        h1.inner.io.notify_timeout();
+
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert_eq!(h1.inner.timers.active, Timer::Headers);
+        assert!(h1.inner.io.is_active());
+        assert!(client.read_any().is_empty());
     }
 
     #[crate::rt_test]
@@ -1455,6 +1727,145 @@ mod tests {
         assert!(mark.load(Ordering::Relaxed));
     }
 
+    fn write_timeout_h1(
+        server: IoTest,
+        cfg: HttpServiceConfig,
+        payload: Rc<RefCell<Option<http::Payload>>>,
+    ) -> Dispatcher<Base, body::Body, io::Error> {
+        let config: SharedCfg = SharedCfg::new("SVC").add(cfg).into();
+        Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(move |mut req: Request| {
+                    payload.borrow_mut().replace(req.take_payload());
+                    async { Ok::<_, io::Error>(Response::Ok().body("x".repeat(128 * 1024))) }
+                }),
+            ),
+            Pipeline::new((), DefaultControlService),
+            DispatcherConfig::default(),
+        )
+    }
+
+    /// A client that stops reading the response is disconnected by the write
+    /// timeout.
+    #[crate::rt_test]
+    async fn test_write_timeout_during_response() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let mut h1 = write_timeout_h1(
+            server,
+            HttpServiceConfig::new().set_write_timeout(Seconds(1)),
+            Rc::default(),
+        );
+
+        client.write("GET / HTTP/1.1\r\n\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(h1.inner.io.is_wr_backpressure());
+        assert_eq!(h1.inner.timers.active, Timer::Write);
+
+        let res = timeout(Millis(5000), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
+        assert!(res.unwrap().is_ok());
+        assert!(client.is_closed());
+    }
+
+    /// The write timeout stops the dispatcher while sending a response with
+    /// an unfinished request payload.
+    #[crate::rt_test]
+    async fn test_write_timeout_with_unfinished_payload() {
+        let payload = Rc::new(RefCell::new(None));
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let mut h1 = write_timeout_h1(
+            server,
+            HttpServiceConfig::new().set_write_timeout(Seconds(1)),
+            payload.clone(),
+        );
+
+        client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\n\r\nb");
+        let res = timeout(Millis(5000), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
+        assert!(res.unwrap().is_ok());
+
+        let mut payload = payload.borrow_mut().take().unwrap();
+        let mut timed_out = false;
+        while let Some(item) = payload.recv().await {
+            if let Err(PayloadError::Io(err)) = item {
+                assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+                timed_out = true;
+            }
+        }
+        assert!(timed_out);
+    }
+
+    /// A delayed protocol error does not interrupt a response whose head has
+    /// been sent.
+    #[crate::rt_test]
+    async fn test_delayed_protocol_error_finishes_response() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let mut h1 = write_timeout_h1(server, HttpServiceConfig::new(), Rc::default());
+        h1.inner.pending_payload_error =
+            Some(PayloadFailure::Protocol(ProtocolError::SlowPayloadTimeout));
+
+        let mut body = ResponseBody::from(body::Body::from("body"));
+        let st = lazy(|cx| h1.inner.poll_send_payload(cx, &mut body)).await;
+        assert!(matches!(st, Poll::Ready(State::Stop)));
+        assert!(matches!(h1.inner.disconnect, Disconnect::Sent));
+        assert!(h1.inner.pending_payload_error.is_none());
+    }
+
+    /// Without a write timeout, write backpressure is not bounded.
+    #[crate::rt_test]
+    async fn test_no_write_timeout_during_response() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let mut h1 = write_timeout_h1(server, HttpServiceConfig::new(), Rc::default());
+
+        client.write("GET / HTTP/1.1\r\n\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert_eq!(h1.inner.timers.active, Timer::Stopped);
+
+        let res = timeout(Millis(2500), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
+        assert!(res.is_err());
+        assert!(!client.is_closed());
+    }
+
+    /// The write timer keeps paused payload timing and restores it once
+    /// backpressure is disabled.
+    #[crate::rt_test]
+    async fn test_write_timer_restores_payload_timer() {
+        let payload = Rc::new(RefCell::new(None));
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let mut h1 = write_timeout_h1(
+            server,
+            HttpServiceConfig::new()
+                .set_write_timeout(Seconds(5))
+                .set_payload_read_rate(Seconds(10), Seconds(20), 1),
+            payload.clone(),
+        );
+
+        client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\n\r\nb");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert_eq!(h1.inner.timers.active, Timer::WriteWithPayload);
+        assert_eq!(h1.inner.timers.progress.period, Seconds(10));
+        assert_eq!(h1.inner.timers.progress.max_timeout, Seconds(10));
+
+        client.remote_buffer_cap(256 * 1024);
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert_eq!(h1.inner.timers.active, Timer::Payload);
+
+        payload.borrow_mut().take();
+        client.close().await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+    }
+
     #[crate::rt_test]
     async fn test_payload_timer_pauses_for_write_backpressure() {
         let payload = Rc::new(RefCell::new(None));
@@ -1483,19 +1894,19 @@ mod tests {
         client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\n\r\nb");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
-        assert!(h1.inner.flags.contains(Flags::READ_PL_TIMEOUT));
+        assert_eq!(h1.inner.timers.active, Timer::Payload);
         assert!(h1.inner.io.is_wr_backpressure());
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
-        assert!(h1.inner.flags.contains(Flags::READ_PL_PAUSED));
-        assert!(!h1.inner.flags.contains(Flags::READ_PL_TIMEOUT));
+        assert_eq!(h1.inner.timers.active, Timer::PayloadPaused);
+        assert_ne!(h1.inner.timers.active, Timer::Payload);
         assert!(!h1.inner.io.timer_handle().is_set());
 
         client.remote_buffer_cap(256 * 1024);
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
-        assert!(h1.inner.flags.contains(Flags::READ_PL_TIMEOUT));
-        assert!(!h1.inner.flags.contains(Flags::READ_PL_PAUSED));
+        assert_eq!(h1.inner.timers.active, Timer::Payload);
+        assert_ne!(h1.inner.timers.active, Timer::PayloadPaused);
 
         client.write("ody");
         sleep(Millis(50)).await;
@@ -1776,6 +2187,111 @@ mod tests {
 
         client.close().await;
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+    }
+
+    #[crate::rt_test]
+    async fn test_payload_timer_waits_for_expect_continue() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(
+                HttpServiceConfig::new()
+                    .set_payload_read_rate(Seconds(1), Seconds(2), 1)
+                    .set_keepalive(KeepAlive::Disabled),
+            )
+            .into();
+
+        let h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |mut req: Request| {
+                    let mut body = BytesMut::new();
+                    while let Some(chunk) = req.payload().recv().await {
+                        body.extend_from_slice(&chunk.unwrap());
+                    }
+                    assert_eq!(&body[..], b"test");
+                    Ok::<_, io::Error>(Response::Ok().build())
+                }),
+            ),
+            Pipeline::new(
+                (),
+                fn_service(async |req: Control<Base, io::Error>| {
+                    if let Control::Expect(exc) = req {
+                        // slower than the payload read-rate limits
+                        sleep(Millis(3100)).await;
+                        Ok::<_, DispatchError>(exc.ack())
+                    } else {
+                        Ok(req.ack())
+                    }
+                }),
+            ),
+            DispatcherConfig::default(),
+        );
+        crate::rt::spawn(h1);
+
+        client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\nexpect: 100-continue\r\n\r\n");
+        sleep(Millis(3300)).await;
+        let buf = client.read_any();
+        assert_eq!(&buf[..], b"HTTP/1.1 100 Continue\r\n\r\n");
+
+        client.write("test");
+        sleep(Millis(100)).await;
+        let buf = client.read_any();
+        assert!(buf.starts_with(b"HTTP/1.1 200 OK\r\n"), "{buf:?}");
+    }
+
+    /// An expectation answered with a final response starts payload timing
+    /// once the dispatcher reads the rest of the payload.
+    #[crate::rt_test]
+    async fn test_payload_timer_starts_after_expect_response() {
+        let stash = Rc::new(RefCell::new(None));
+        let stash2 = stash.clone();
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(HttpServiceConfig::new().set_payload_read_rate(Seconds(1), Seconds(2), 1))
+            .into();
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
+            ),
+            Pipeline::new(
+                (),
+                fn_service(move |req: Control<Base, io::Error>| {
+                    let stash = stash2.clone();
+                    async move {
+                        if let Control::Request(mut req) = req {
+                            // keep the payload stream alive
+                            stash.borrow_mut().replace(req.get_mut().take_payload());
+                            Ok::<_, DispatchError>(req.fail_with(Response::Forbidden().build()))
+                        } else {
+                            Ok(req.ack())
+                        }
+                    }
+                }),
+            ),
+            DispatcherConfig::default(),
+        );
+
+        client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\nexpect: 100-continue\r\n\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(client.read_any().starts_with(b"HTTP/1.1 403 Forbidden\r\n"));
+        assert!(matches!(h1.st, State::ReadPayload));
+        assert_eq!(h1.inner.timers.active, Timer::Payload);
+
+        let res = timeout(Millis(3500), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
+        assert!(res.unwrap().is_ok());
+        assert!(stash.borrow().is_some());
     }
 
     #[crate::rt_test]

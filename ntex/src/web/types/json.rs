@@ -20,7 +20,7 @@ use crate::web::{FromRequest, HttpRequest, Responder, State};
 /// To extract typed information from request's body, the type `T` must
 /// implement the `Deserialize` trait from *serde*.
 ///
-/// [**`JsonConfig`**](struct.JsonConfig.html) allows to configure extraction
+/// [`JsonConfig`] allows to configure extraction
 /// process.
 ///
 /// ## Example
@@ -130,7 +130,7 @@ where
 /// To extract typed information from request's body, the type `T` must
 /// implement the `Deserialize` trait from *serde*.
 ///
-/// [**`JsonConfig`**](struct.JsonConfig.html) allows to configure extraction
+/// [`JsonConfig`] allows to configure extraction
 /// process.
 ///
 /// ## Example
@@ -237,6 +237,9 @@ impl JsonConfig {
 
     #[must_use]
     /// Set predicate for allowed content types.
+    ///
+    /// JSON content types (`*/json` and `*/*+json`) are always accepted. The
+    /// predicate can accept additional types.
     pub fn content_type<F>(mut self, predicate: F) -> Self
     where
         F: Fn(mime::Mime) -> bool + Send + Sync + 'static,
@@ -275,8 +278,9 @@ impl fmt::Debug for JsonConfig {
 /// Returns error:
 ///
 /// * content type is not `application/json`
-///   (unless specified in [`JsonConfig`](struct.JsonConfig.html))
-/// * content length is greater than 256k
+///   (unless specified in [`JsonConfig`])
+/// * content length is greater than the limit (256k by default; the `Json`
+///   extractor sets it from [`JsonConfig`], 32k by default)
 struct JsonBody<U> {
     limit: usize,
     length: Option<usize>,
@@ -442,6 +446,21 @@ mod tests {
         );
 
         assert_eq!(resp.get_body_ref(), b"{\"name\":\"test\"}");
+    }
+
+    #[crate::rt_test]
+    async fn test_responder_serialize_error() {
+        struct Invalid;
+
+        impl Serialize for Invalid {
+            fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+                Err(serde::ser::Error::custom("invalid"))
+            }
+        }
+
+        let req = TestRequest::default().to_http_request();
+        let resp = respond_to(Json(Invalid), &req).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[crate::rt_test]

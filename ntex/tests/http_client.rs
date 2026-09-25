@@ -261,7 +261,7 @@ async fn test_connection_wait_queue() {
     let client = Client::with_config(
         ClientConfig::new()
             .set_response_timeout(Seconds(30))
-            .set_limit(1),
+            .set_connection_limit(1),
     );
 
     // req 1
@@ -303,7 +303,7 @@ async fn test_connection_wait_queue_force_close() {
 
     let client = Client::with_config(
         ClientConfig::new()
-            .set_limit(1)
+            .set_connection_limit(1)
             .set_response_timeout(Seconds(30)),
     );
 
@@ -654,6 +654,96 @@ async fn client_read_until_eof() {
     // read response
     let bytes = response.body().await.unwrap();
     assert_eq!(bytes, Bytes::from_static(b"welcome!"));
+}
+
+/// Starts a raw server that answers every request with `response`, then closes.
+fn raw_server(response: &'static [u8]) -> std::net::SocketAddr {
+    let addr = ntex::server::TestServer::unused_addr();
+    let lst = std::net::TcpListener::bind(addr).unwrap();
+    std::thread::spawn(move || {
+        for mut stream in lst.incoming().flatten() {
+            let mut b = [0; 1000];
+            let _ = stream.read(&mut b);
+            let _ = stream.write_all(response);
+            let _ = stream.shutdown(net::Shutdown::Both);
+        }
+    });
+    addr
+}
+
+#[ntex::test]
+async fn client_read_until_eof_http11() {
+    let addr = raw_server(b"HTTP/1.1 200 OK\r\nconnection: close\r\n\r\nwelcome!");
+
+    let response = Client::new()
+        .get(format!("http://{addr}/").as_str())
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes, Bytes::from_static(b"welcome!"));
+}
+
+#[ntex::test]
+async fn client_payload_poll_after_eof() {
+    let addr = raw_server(b"HTTP/1.1 200 OK\r\ncontent-length: 8\r\n\r\nwelcome!");
+
+    let response = Client::new()
+        .get(format!("http://{addr}/").as_str())
+        .no_decompress()
+        .send()
+        .await
+        .unwrap();
+    let mut payload = response.take_payload();
+    let chunk = ntex::util::stream_recv(&mut payload)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(chunk, Bytes::from_static(b"welcome!"));
+    assert!(ntex::util::stream_recv(&mut payload).await.is_none());
+    assert!(ntex::util::stream_recv(&mut payload).await.is_none());
+}
+
+#[ntex::test]
+async fn client_early_response() {
+    let addr = ntex::server::TestServer::unused_addr();
+    let lst = std::net::TcpListener::bind(addr).unwrap();
+    std::thread::spawn(move || {
+        for mut stream in lst.incoming().flatten() {
+            let mut b = [0; 1024];
+            let _ = stream.read(&mut b);
+            let _ = stream
+                .write_all(b"HTTP/1.1 413 Payload Too Large\r\ncontent-length: 8\r\n\r\ntoo big!");
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            // close with unread request body
+            drop(stream);
+        }
+    });
+
+    let body = Bytes::from(vec![b'x'; 64 * 1024 * 1024]);
+    let response = Client::builder()
+        .build(ClientConfig::new().set_response_timeout(Seconds(30)))
+        .post(format!("http://{addr}/").as_str())
+        .send_body(body)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), ntex::http::StatusCode::PAYLOAD_TOO_LARGE);
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes, Bytes::from_static(b"too big!"));
+}
+
+#[ntex::test]
+async fn client_truncated_body_http10() {
+    let addr = raw_server(b"HTTP/1.0 200 OK\r\ncontent-length: 20\r\n\r\nwelcome!");
+
+    let response = Client::new()
+        .get(format!("http://{addr}/").as_str())
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    assert!(response.body().await.is_err());
 }
 
 #[ntex::test]

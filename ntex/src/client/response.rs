@@ -246,8 +246,8 @@ impl MessageBody {
             err: None,
             fut: Some(ReadBody::new(
                 res.take_payload(),
-                res.config.payload_limit(),
-                res.config.payload_timeout(),
+                res.config.response_payload_limit(),
+                res.config.response_payload_timeout(),
                 res.config.clone(),
             )),
         }
@@ -369,8 +369,8 @@ where
             err: None,
             fut: Some(ReadBody::new(
                 res.take_payload(),
-                res.config.payload_limit(),
-                res.config.payload_timeout(),
+                res.config.response_payload_limit(),
+                res.config.response_payload_timeout(),
                 res.config.clone(),
             )),
             _t: PhantomData,

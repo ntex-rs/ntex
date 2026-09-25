@@ -253,7 +253,9 @@ These settings are used by different parts of the stack:
   from the moment it is enabled until it is disabled, before the dispatcher
   stops with a write timeout. Keep-alive and read-rate timers do not run
   during that time. Output left after backpressure is disabled is bounded
-  only by keep-alive.
+  only by keep-alive. The HTTP/1 dispatcher does not use these settings; it
+  is configured by `HttpServiceConfig`, including its own
+  `set_write_timeout()`.
 - The graceful-shutdown timeout bounds both phases of shutdown together: the
   filter shutdown and the transport drain of pending output. It cannot be
   disabled; a zero timeout is rejected.

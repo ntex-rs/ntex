@@ -9,7 +9,11 @@ use super::accept::{AcceptNotify, AcceptorCommand};
 use super::factory::{FactoryServiceType, NetService};
 use super::{MAX_CONNS_COUNTER, Token, socket::Connection};
 
-/// Net streaming server
+/// Worker configuration for network servers.
+///
+/// Created by [`ServerBuilder::run`](super::ServerBuilder::run). Each worker
+/// creates its application state and the services for all registered
+/// listeners.
 pub struct StreamServer<Cfg> {
     accept: AcceptNotify,
     state: Arc<Cfg>,
@@ -102,6 +106,7 @@ impl<Cfg: ServerAppConfig> Clone for StreamServer<Cfg> {
     }
 }
 
+/// Per-worker service that dispatches connections to listener services.
 pub struct StreamService {
     tokens: HashMap<Token, (usize, SharedCfg)>,
     services: Vec<Box<dyn NetService>>,

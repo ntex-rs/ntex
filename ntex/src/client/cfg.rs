@@ -66,27 +66,34 @@ impl ClientConfig {
     }
 
     /// Returns the response-header timeout.
-    pub fn timeout(&self) -> Millis {
+    pub fn response_timeout(&self) -> Millis {
         self.timeout
     }
 
     /// Returns the maximum response payload size.
     ///
     /// A value of zero disables the limit.
-    pub fn payload_limit(&self) -> usize {
+    pub fn response_payload_limit(&self) -> usize {
         self.pl_limit
     }
 
     /// Returns the timeout for reading a complete response payload.
-    pub fn payload_timeout(&self) -> Millis {
+    pub fn response_payload_timeout(&self) -> Millis {
         self.pl_timeout
     }
 
+    /// Returns the maximum number of simultaneous connections per connection pool.
+    pub fn connection_limit(&self) -> usize {
+        self.limit
+    }
+
     #[must_use]
-    /// Sets the maximum number of simultaneous connections per scheme.
+    /// Sets the maximum number of simultaneous connections per connection pool.
     ///
-    /// A value of zero disables the limit. The default is 8.
-    pub fn set_limit(mut self, limit: usize) -> Self {
+    /// The limit is shared by all hosts. A client keeps separate pools for
+    /// plain and TLS connections, and each pool has its own limit. A value of
+    /// zero disables the limit. The default is 8.
+    pub fn set_connection_limit(mut self, limit: usize) -> Self {
         self.limit = limit;
         self
     }
@@ -94,9 +101,11 @@ impl ClientConfig {
     #[must_use]
     /// Sets the keep-alive period for idle pooled connections.
     ///
-    /// A pooled connection is closed when it has been idle longer than this
-    /// period. The default is 15 seconds.
-    pub fn set_keep_alive<T: Into<Seconds>>(mut self, dur: T) -> Self {
+    /// A pooled connection that has been idle longer than this period is not
+    /// reused. Expiration is checked lazily, when a connection for the same
+    /// host is next requested; the expired connection is closed at that point.
+    /// The default is 15 seconds.
+    pub fn set_keepalive<T: Into<Seconds>>(mut self, dur: T) -> Self {
         self.conn_keep_alive = dur.into().into();
         self
     }
@@ -104,8 +113,9 @@ impl ClientConfig {
     #[must_use]
     /// Sets the maximum lifetime of a pooled connection.
     ///
-    /// A connection is closed after this period regardless of how recently it
-    /// was used. The default is 75 seconds.
+    /// A connection older than this period is not reused, regardless of how
+    /// recently it was used. Like the keep-alive period, this is checked when a
+    /// connection for the same host is next requested. The default is 75 seconds.
     pub fn set_lifetime<T: Into<Seconds>>(mut self, dur: T) -> Self {
         self.conn_lifetime = dur.into().into();
         self
@@ -114,8 +124,9 @@ impl ClientConfig {
     #[must_use]
     /// Sets the response-header timeout.
     ///
-    /// The timeout covers sending the request and receiving the response head
-    /// after a connection has been acquired. The default is 5 seconds.
+    /// The timeout covers receiving the response head after the request has
+    /// been sent. Connecting and sending the request are not included. A zero
+    /// duration disables the timeout. The default is 5 seconds.
     pub fn set_response_timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
         self.timeout = timeout.into();
         self
@@ -123,6 +134,8 @@ impl ClientConfig {
 
     #[must_use]
     /// Disables the response-header timeout.
+    ///
+    /// This is the same as `set_response_timeout(Millis::ZERO)`.
     pub fn disable_timeout(mut self) -> Self {
         self.timeout = Millis::ZERO;
         self

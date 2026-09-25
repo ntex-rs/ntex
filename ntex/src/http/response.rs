@@ -433,6 +433,9 @@ impl ResponseBuilder {
     }
 
     /// Marks the response connection as persistent.
+    ///
+    /// Has no effect if the response connection is already marked to be
+    /// closed, see [`ResponseHead::set_connection_type()`].
     #[inline]
     pub fn keep_alive(&mut self) -> &mut Self {
         if let Some(parts) = parts(&mut self.head, self.err) {

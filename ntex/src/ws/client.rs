@@ -720,9 +720,9 @@ mod tests {
             .set_server_mode()
             .set_protocols(["v1", "v2"])
             .unwrap()
-            .set_header_if_unset(header::CONTENT_TYPE, "json")
+            .set_header_if_none(header::CONTENT_TYPE, "json")
             .unwrap()
-            .set_header_if_unset(header::CONTENT_TYPE, "text")
+            .set_header_if_none(header::CONTENT_TYPE, "text")
             .unwrap()
             .set_cookie(Cookie::build(("cookie1", "value1")));
 

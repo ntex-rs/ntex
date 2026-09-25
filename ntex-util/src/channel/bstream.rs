@@ -7,8 +7,10 @@ use ntex_bytes::Bytes;
 
 use crate::{Stream, task::LocalWaker};
 
-/// max buffer size 32k
-const MAX_BUFFER_SIZE: usize = 32_768;
+/// Default high watermark, 32 KiB
+const HIGH_WATERMARK: u32 = 32_768;
+/// Default low watermark, 16 KiB
+const LOW_WATERMARK: u32 = HIGH_WATERMARK / 2;
 
 /// Indicates the current status of a byte stream.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -70,16 +72,30 @@ pub struct Receiver<E> {
 }
 
 impl<E> Receiver<E> {
+    /// Sets the sender backpressure watermarks.
+    ///
+    /// Once buffered data reaches `high` bytes, [`Sender::poll_ready`] stops
+    /// reporting [`Status::Ready`] until the receiver drains the buffer to
+    /// `low` bytes or less, so the sender is not woken for every consumed
+    /// chunk. `low` is capped below `high`.
+    ///
+    /// Sending does not enforce the watermarks, so producers must cooperate
+    /// by waiting for readiness. Changing the watermarks immediately updates
+    /// and, when needed, wakes sender readiness: the sender is ready if
+    /// buffered data is below `high`. The defaults are 32 KiB and 16 KiB.
+    #[inline]
+    pub fn set_watermarks(&self, high: u32, low: u32) {
+        self.inner.set_watermarks(high, low);
+    }
+
     /// Sets the sender backpressure threshold.
     ///
-    /// Once buffered data reaches this size, [`Sender::poll_ready`] stops
-    /// reporting [`Status::Ready`] until the receiver consumes enough data.
-    /// Sending does not enforce the threshold, so producers must cooperate by
-    /// waiting for readiness. Changing the threshold immediately updates and,
-    /// when needed, wakes sender readiness. The default is 32 KiB.
+    /// Sets the high watermark to `size` and the low watermark to half of it.
     #[inline]
+    #[deprecated(since = "4.2.0", note = "Use `Receiver::set_watermarks()` instead")]
     pub fn max_buffer_size(&self, size: usize) {
-        self.inner.set_max_buffer_size(size);
+        let size = u32::try_from(size).unwrap_or(u32::MAX);
+        self.inner.set_watermarks(size, size / 2);
     }
 
     /// Puts previously read data back at the front of the stream.
@@ -232,9 +248,10 @@ struct Inner<E> {
     flags: Cell<Flags>,
     err: Cell<Option<E>>,
     items: RefCell<VecDeque<Bytes>>,
-    max_buffer_size: Cell<usize>,
     recv_task: LocalWaker,
     send_task: LocalWaker,
+    high_watermark: Cell<u32>,
+    low_watermark: Cell<u32>,
 }
 
 impl<E> Inner<E> {
@@ -247,7 +264,8 @@ impl<E> Inner<E> {
             items: RefCell::new(VecDeque::new()),
             recv_task: LocalWaker::new(),
             send_task: LocalWaker::new(),
-            max_buffer_size: Cell::new(MAX_BUFFER_SIZE),
+            high_watermark: Cell::new(HIGH_WATERMARK),
+            low_watermark: Cell::new(LOW_WATERMARK),
         }
     }
 
@@ -263,15 +281,16 @@ impl<E> Inner<E> {
         self.flags.set(flags);
     }
 
-    fn set_max_buffer_size(&self, size: usize) {
-        self.max_buffer_size.set(size);
+    fn set_watermarks(&self, high: u32, low: u32) {
+        self.high_watermark.set(high);
+        self.low_watermark.set(low.min(high.saturating_sub(1)));
 
         let flags = self.flags.get();
         if flags.intersects(Flags::EOF | Flags::ERROR | Flags::SENDER_GONE) {
             return;
         }
 
-        if self.len.get() < size {
+        if self.len.get() < high as usize {
             if !flags.contains(Flags::NEED_READ) {
                 self.insert_flag(Flags::NEED_READ);
                 self.send_task.wake();
@@ -300,7 +319,7 @@ impl<E> Inner<E> {
         self.items.borrow_mut().push_back(data);
         self.recv_task.wake();
 
-        if len >= self.max_buffer_size.get() {
+        if len >= self.high_watermark.get() as usize {
             self.remove_flag(Flags::NEED_READ);
         }
     }
@@ -309,10 +328,9 @@ impl<E> Inner<E> {
         self.items.borrow_mut().pop_front().inspect(|data| {
             let len = self.len.get() - data.len();
 
-            // check size of stream buffer,
-            // if stream has more space wake up sender
+            // wake up sender once the buffer is drained to the low watermark
             self.len.set(len);
-            if len < self.max_buffer_size.get() {
+            if len <= self.low_watermark.get() as usize {
                 self.insert_flag(Flags::NEED_READ);
                 self.send_task.wake();
             }
@@ -333,7 +351,8 @@ impl<E> fmt::Debug for Inner<E> {
             .field("len", &self.len)
             .field("flags", &self.flags)
             .field("items", &self.items.borrow())
-            .field("max_buffer_size", &self.max_buffer_size)
+            .field("high_watermark", &self.high_watermark)
+            .field("low_watermark", &self.low_watermark)
             .field("recv_task", &self.recv_task)
             .field("send_task", &self.send_task)
             .finish()
@@ -348,7 +367,7 @@ mod tests {
     #[ntex::test]
     async fn test_eof() {
         let (tx, rx) = eof::<()>();
-        rx.max_buffer_size(100);
+        rx.set_watermarks(100, 50);
         assert!(rx.read().await.is_none());
         assert_eq!(tx.ready().await, Status::Eof);
     }
@@ -382,21 +401,84 @@ mod tests {
     #[ntex::test]
     async fn buffer_size_updates_sender_readiness() {
         let (tx, rx) = channel::<()>();
-        rx.max_buffer_size(4);
+        rx.set_watermarks(4, 2);
         tx.feed_data(Bytes::from_static(b"data"));
 
         assert!(lazy(|cx| tx.poll_ready(cx)).await.is_pending());
         assert!(rx.inner.send_task.is_set());
 
-        rx.max_buffer_size(5);
+        rx.set_watermarks(5, 2);
         assert!(!rx.inner.send_task.is_set());
         assert_eq!(
             lazy(|cx| tx.poll_ready(cx)).await,
             Poll::Ready(Status::Ready)
         );
 
-        rx.max_buffer_size(4);
+        rx.set_watermarks(4, 2);
         assert!(lazy(|cx| tx.poll_ready(cx)).await.is_pending());
+    }
+
+    #[ntex::test]
+    async fn sender_resumes_at_low_watermark() {
+        let (tx, rx) = channel::<()>();
+        rx.set_watermarks(8, 4);
+        for _ in 0..4 {
+            tx.feed_data(Bytes::from_static(b"da"));
+        }
+        assert!(lazy(|cx| tx.poll_ready(cx)).await.is_pending());
+
+        // above the low watermark
+        assert!(rx.read().await.is_some());
+        assert!(rx.inner.send_task.is_set());
+        assert!(lazy(|cx| tx.poll_ready(cx)).await.is_pending());
+
+        // at the low watermark
+        assert!(rx.read().await.is_some());
+        assert!(!rx.inner.send_task.is_set());
+        assert_eq!(
+            lazy(|cx| tx.poll_ready(cx)).await,
+            Poll::Ready(Status::Ready)
+        );
+
+        // low watermark is capped below the high watermark
+        let (tx, rx) = channel::<()>();
+        rx.set_watermarks(4, 10);
+        for _ in 0..3 {
+            tx.feed_data(Bytes::from_static(b"da"));
+        }
+        assert!(rx.read().await.is_some());
+        assert!(lazy(|cx| tx.poll_ready(cx)).await.is_pending());
+        assert!(rx.read().await.is_some());
+        assert_eq!(
+            lazy(|cx| tx.poll_ready(cx)).await,
+            Poll::Ready(Status::Ready)
+        );
+    }
+
+    #[ntex::test]
+    async fn custom_low_watermark() {
+        let (tx, rx) = channel::<()>();
+        rx.set_watermarks(8, 2);
+        for _ in 0..4 {
+            tx.feed_data(Bytes::from_static(b"da"));
+        }
+        assert!(rx.read().await.is_some());
+        assert!(rx.read().await.is_some());
+        assert!(lazy(|cx| tx.poll_ready(cx)).await.is_pending());
+        assert!(rx.read().await.is_some());
+        assert_eq!(
+            lazy(|cx| tx.poll_ready(cx)).await,
+            Poll::Ready(Status::Ready)
+        );
+    }
+
+    #[ntex::test]
+    #[allow(deprecated)]
+    async fn deprecated_max_buffer_size() {
+        let (_tx, rx) = channel::<()>();
+        rx.max_buffer_size(10);
+        assert_eq!(rx.inner.high_watermark.get(), 10);
+        assert_eq!(rx.inner.low_watermark.get(), 5);
     }
 
     #[ntex::test]

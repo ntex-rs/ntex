@@ -16,7 +16,7 @@ pub(crate) struct HttpRequestInner {
     pub(crate) head: Message<RequestHead>,
     pub(crate) path: Path<Uri>,
     pub(crate) config: Cfg<WebAppConfig>,
-    rmap: Rc<ResourceMap>,
+    pub(crate) rmap: Rc<ResourceMap>,
 }
 
 impl HttpRequest {
@@ -43,8 +43,8 @@ impl HttpRequest {
         &self.0.head
     }
 
-    /// This method returns muttable reference to the request head.
-    /// panics if multiple references of http request exists.
+    /// This method returns mutable reference to the request head.
+    /// Panics if multiple references of http request exists.
     #[inline]
     pub(crate) fn head_mut(&mut self) -> &mut RequestHead {
         &mut Rc::get_mut(&mut self.0).unwrap().head

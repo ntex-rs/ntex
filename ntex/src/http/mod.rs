@@ -20,7 +20,7 @@ pub mod h1;
 pub mod h2;
 pub mod test;
 
-pub(crate) use self::message::Message;
+pub(crate) use self::message::{CurrentIo, IoAccess, Message};
 
 pub use self::config::{DateService, HttpServiceConfig, KeepAlive};
 pub use self::error::ResponseError;
@@ -65,7 +65,7 @@ use crate::{IntoService, Service, io::Filter, io::Io, io::Layer, server::TlsErro
 /// ALPN behavior comes from the supplied `acceptor`; configure it with
 /// [`ALPN_PROTO_H1`], [`ALPN_PROTO_H2`], or [`ALPN_PROTOS`] as appropriate.
 /// TLS failures and inner-service failures are mapped to the corresponding
-/// [`TlsError`](crate::server::TlsError) variants.
+/// [`TlsError`] variants.
 pub fn openssl<F, S, St>(
     acceptor: tls_openssl::ssl::SslAcceptor,
     service: impl IntoService<S, St, Io<Layer<SslFilter, F>>>,
@@ -88,7 +88,7 @@ use crate::server::rustls::{TlsAcceptor, TlsServerFilter};
 /// Pass the supported ALPN protocol identifiers in `protos` to enable HTTP/2
 /// negotiation. If the configuration already contains ALPN protocols, they
 /// are preserved. TLS failures and inner-service failures are mapped to the
-/// corresponding [`TlsError`](crate::server::TlsError) variants.
+/// corresponding [`TlsError`] variants.
 pub fn rustls<F, S, St>(
     mut config: tls_rustls::ServerConfig,
     protos: &[&str],

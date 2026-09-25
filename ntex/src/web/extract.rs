@@ -105,7 +105,7 @@ pub trait FromRequest<St>: Sized {
 ///
 /// fn main() {
 ///     let app = App::default().service(
-///         web::resource("/users/:first").route(
+///         web::resource("/users/{first}").route(
 ///             web::post().to(index))
 ///     );
 /// }
@@ -172,7 +172,7 @@ where
 ///
 /// fn main() {
 ///     let app = App::default().service(
-///         web::resource("/users/:first").route(web::post().to(index))
+///         web::resource("/users/{first}").route(web::post().to(index))
 ///     );
 /// }
 /// ```

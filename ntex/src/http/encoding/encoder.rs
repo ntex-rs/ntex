@@ -13,6 +13,9 @@ use super::Writer;
 
 const INPLACE: usize = 1024;
 
+/// Response body encoder.
+///
+/// Compresses a response body with the selected content encoding.
 pub struct Encoder<B> {
     eof: bool,
     body: EncoderBody<B>,
@@ -21,6 +24,13 @@ pub struct Encoder<B> {
 }
 
 impl<B: MessageBody> Encoder<B> {
+    /// Wrap a response body in an encoder for `encoding`.
+    ///
+    /// On success the `Content-Encoding` header is set and chunked
+    /// transfer-encoding is enabled. The body is returned unchanged if the
+    /// encoding is not supported, is `Identity` or `Auto`, if the response
+    /// already has a `Content-Encoding` header, if the status is
+    /// `101 Switching Protocols` or `204 No Content`, or if the body is empty.
     pub fn response(
         encoding: ContentEncoding,
         head: &mut ResponseHead,

@@ -14,7 +14,7 @@ use crate::web::{FromRequest, HttpRequest, Responder, State};
 
 /// Form data helper (`application/x-www-form-urlencoded`)
 ///
-/// Can be use to extract url-encoded data from the request body,
+/// Can be used to extract url-encoded data from the request body,
 /// or send url-encoded data as the response.
 ///
 /// ## Extract
@@ -22,7 +22,7 @@ use crate::web::{FromRequest, HttpRequest, Responder, State};
 /// To extract typed information from request's body, the type `T` must
 /// implement the `Deserialize` trait from *serde*.
 ///
-/// [**`FormConfig`**](struct.FormConfig.html) allows to configure extraction
+/// [`FormConfig`] allows to configure extraction
 /// process.
 ///
 /// ### Example
@@ -35,9 +35,11 @@ use crate::web::{FromRequest, HttpRequest, Responder, State};
 /// }
 ///
 /// /// Extract form data using serde.
-/// /// This handler get called only if content type is *x-www-form-urlencoded*
-/// /// and content of the request could be deserialized to a `FormData` struct
-/// fn index(form: web::types::Form<FormData>) -> String {
+/// ///
+/// /// If the content type is not *x-www-form-urlencoded* or the body cannot be
+/// /// deserialized to a `FormData` struct, the extractor fails with
+/// /// `UrlencodedError` and the handler is not called.
+/// async fn index(form: web::types::Form<FormData>) -> String {
 ///     format!("Welcome {}!", form.username)
 /// }
 /// # fn main() {}
@@ -62,7 +64,7 @@ use crate::web::{FromRequest, HttpRequest, Responder, State};
 /// // Will return a 200 response with header
 /// // `Content-Type: application/x-www-form-urlencoded`
 /// // and body "name=ntex&age=123"
-/// fn index() -> web::types::Form<SomeForm> {
+/// async fn index() -> web::types::Form<SomeForm> {
 ///     web::types::Form(SomeForm {
 ///         name: "ntex".into(),
 ///         age: 123
@@ -202,7 +204,8 @@ impl Default for FormConfig {
 /// Returns error:
 ///
 /// * content type is not `application/x-www-form-urlencoded`
-/// * content-length is greater than 32k
+/// * content-length is greater than the limit (32k by default; the `Form`
+///   extractor sets it from [`FormConfig`], 16k by default)
 ///
 struct UrlEncoded<U> {
     #[cfg(feature = "compress")]
@@ -266,7 +269,7 @@ impl<U> UrlEncoded<U> {
         }
     }
 
-    /// Change max size of payload. By default max size is 256Kb
+    /// Change max size of payload. By default max size is 32Kb
     fn limit(mut self, limit: usize) -> Self {
         self.limit = limit;
         self

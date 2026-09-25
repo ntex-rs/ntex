@@ -4,6 +4,7 @@ use ntex_http::header::{HeaderName, HeaderValue};
 use ntex_http::{Method, StatusCode, Uri, Version, header};
 use ntex_httparse::{self as httparse, HeaderParsed, Status};
 
+use super::encoder::is_bodyless;
 use crate::http::config::HttpServiceConfig;
 use crate::http::message::{ConnectionType, ResponseHead};
 use crate::http::{HeaderItem, error::DecodeError, header::HeaderMap, request::Request};
@@ -101,9 +102,12 @@ impl<T: MessageType> MessageDecoder<T> {
                     if inner.val.as_mut().unwrap().headers_mut().len() >= inner.cfg.max_headers {
                         return Poll::Ready(Err(DecodeError::MaxHeaders));
                     }
-                    let name =
+                    // the parser validates name characters, but not its length
+                    let Ok(name) =
                         HeaderName::from_bytes(&buf[inner.hdr.name.start..inner.hdr.name.end])
-                            .unwrap();
+                    else {
+                        return Poll::Ready(Err(DecodeError::Header));
+                    };
 
                     // SAFETY: ntex-httparse checks header value for validity
                     let value = unsafe {
@@ -240,24 +244,40 @@ bitflags::bitflags! {
         const EXPECT       = 0b0010;
         const CHUNKED      = 0b0100;
         const SEEN_TE      = 0b1000;
+        const CONN_CLOSE   = 0b0001_0000;
+        const CONN_KA      = 0b0010_0000;
+        const CONN_UPGRADE = 0b0100_0000;
+        const WS_UPGRADE   = 0b1000_0000;
     }
 }
 
 #[derive(Default, Debug)]
 pub(crate) struct State {
-    ka: Option<ConnectionType>,
     flags: Flags,
     content_length: Option<u64>,
     version: Version,
 }
 
 impl State {
+    fn connection_types(&self) -> impl Iterator<Item = ConnectionType> {
+        [
+            (Flags::CONN_CLOSE, ConnectionType::Close),
+            (Flags::CONN_KA, ConnectionType::KeepAlive),
+            (Flags::CONN_UPGRADE, ConnectionType::Upgrade),
+        ]
+        .into_iter()
+        .filter_map(|(flag, ctype)| self.flags.contains(flag).then_some(ctype))
+    }
+
     fn payload_length(&self) -> PayloadLength {
         // https://tools.ietf.org/html/rfc7230#section-3.3.3
         if self.flags.contains(Flags::CHUNKED) {
             // Chunked encoding
             PayloadLength::Payload(PayloadType::Payload(PayloadDecoder::chunked()))
-        } else if let Some(len) = self.content_length {
+        } else if let Some(len) = self.content_length
+            // some clients (dart) send "content-length: 0" with websocket upgrade
+            && !(len == 0 && self.flags.contains(Flags::WS_UPGRADE))
+        {
             // Content-Length
             PayloadLength::Payload(PayloadType::Payload(PayloadDecoder::length(len)))
         } else if self.flags.contains(Flags::HAS_UPGRADE) {
@@ -343,20 +363,16 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
             }
             // connection keep-alive state
             header::CONNECTION => {
-                st.ka = if let Ok(val) = value.to_str() {
-                    connection_type(val)
-                } else {
-                    None
-                };
+                st.flags.insert(connection_flags(value.as_bytes()));
             }
             header::UPGRADE => {
                 st.flags.insert(Flags::HAS_UPGRADE);
-                // check content-length, some clients (dart)
-                // sends "content-length: 0" with websocket upgrade
-                if let Ok(val) = value.to_str().map(str::trim)
-                    && val.eq_ignore_ascii_case("websocket")
+                if value
+                    .as_bytes()
+                    .trim_ascii()
+                    .eq_ignore_ascii_case(b"websocket")
                 {
-                    st.content_length = None;
+                    st.flags.insert(Flags::WS_UPGRADE);
                 }
             }
             header::EXPECT => {
@@ -422,7 +438,7 @@ impl MessageType for Request {
             return Err(DecodeError::Header);
         }
 
-        if let Some(ctype) = st.ka {
+        for ctype in st.connection_types() {
             self.head_mut().set_connection_type(ctype);
         }
         if st.flags.contains(Flags::EXPECT) {
@@ -492,90 +508,56 @@ impl MessageType for ResponseHead {
     fn set_payload_length(
         &mut self,
         st: &mut State,
-        mut length: PayloadLength,
+        length: PayloadLength,
     ) -> Result<PayloadType, DecodeError> {
-        // Remove CL value if 0 now that all headers and HTTP/1.0 special cases are processed.
-        // Protects against some request smuggling attacks.
-        // See https://github.com/actix/actix-web/issues/2767.
-        if length.is_zero() {
-            length = PayloadLength::None;
+        for ctype in st.connection_types() {
+            self.set_connection_type(ctype);
         }
 
-        if let Some(ka) = st.ka {
-            self.set_connection_type(ka);
+        // `1xx` (except `101`), `204` and `304` responses never have a body,
+        // `Content-Length` of `304` describes the selected representation
+        if is_bodyless(self.status) {
+            return Ok(PayloadType::None);
         }
 
         // message payload
-        let decoder = if let PayloadLength::Payload(pl) = length {
-            pl
-        } else if self.status == StatusCode::SWITCHING_PROTOCOLS {
-            // switching protocol or connect
+        let decoder = if self.status == StatusCode::SWITCHING_PROTOCOLS
+            && (length.is_zero() || !matches!(length, PayloadLength::Payload(_)))
+        {
+            // switching protocol
             PayloadType::Stream(PayloadDecoder::eof())
+        } else if length.is_zero() {
+            PayloadType::None
+        } else if let PayloadLength::Payload(pl) = length {
+            pl
         } else {
-            // for HTTP/1.0 read to eof and close connection
-            if self.version == Version::HTTP_10 {
-                self.set_connection_type(ConnectionType::Close);
-                PayloadType::Payload(PayloadDecoder::eof())
-            } else {
-                PayloadType::None
-            }
+            // no declared length, read to eof and close connection
+            // see https://www.rfc-editor.org/rfc/rfc9112#section-6.3
+            self.set_connection_type(ConnectionType::Close);
+            PayloadType::Payload(PayloadDecoder::eof())
         };
 
         Ok(decoder)
     }
 }
 
-const S_KEEP_ALIVE: &str = "keep-alive";
-const S_CLOSE: &str = "close";
-const S_UPGRADE: &str = "upgrade";
-
-fn connection_type(val: &str) -> Option<ConnectionType> {
-    let l = val.len();
-    let bytes = val.as_bytes();
-    for i in 0..bytes.len() {
-        if i >= S_CLOSE.len() {
-            return None;
-        }
-        let result = match bytes[i] {
-            b'k' | b'K' => {
-                let pos = i + S_KEEP_ALIVE.len();
-                if l >= pos && val[i..pos].eq_ignore_ascii_case(S_KEEP_ALIVE) {
-                    Some((ConnectionType::KeepAlive, pos))
-                } else {
-                    None
-                }
-            }
-            b'c' | b'C' => {
-                let pos = i + S_CLOSE.len();
-                if l >= pos && val[i..pos].eq_ignore_ascii_case(S_CLOSE) {
-                    Some((ConnectionType::Close, pos))
-                } else {
-                    None
-                }
-            }
-            b'u' | b'U' => {
-                let pos = i + S_UPGRADE.len();
-                if l >= pos && val[i..pos].eq_ignore_ascii_case(S_UPGRADE) {
-                    Some((ConnectionType::Upgrade, pos))
-                } else {
-                    None
-                }
-            }
-            _ => continue,
-        };
-
-        if let Some((t, pos)) = result {
-            let next = pos + 1;
-            if val.len() > next {
-                if matches!(bytes[next], b' ' | b',' | b'\r' | b'\n') {
-                    return Some(t);
-                }
-            } else {
-                return Some(t);
-            }
+/// Collects the connection options listed in a `Connection` header value.
+///
+/// The value is a comma-separated list of case-insensitive tokens, see
+/// [RFC 9110 section 7.6.1](https://www.rfc-editor.org/rfc/rfc9110#section-7.6.1).
+fn connection_flags(val: &[u8]) -> Flags {
+    let mut flags = Flags::empty();
+    for token in val.split(|&b| b == b',') {
+        let token = token.trim_ascii();
+        if token.eq_ignore_ascii_case(b"close") {
+            flags.insert(Flags::CONN_CLOSE);
+        } else if token.eq_ignore_ascii_case(b"keep-alive") {
+            flags.insert(Flags::CONN_KA);
+        } else if token.eq_ignore_ascii_case(b"upgrade") {
+            flags.insert(Flags::CONN_UPGRADE);
         }
     }
-    None
+    flags
 }
 
 thread_local! {
@@ -635,6 +617,11 @@ impl PayloadDecoder {
             kind: Cell::new(Kind::Eof),
         }
     }
+
+    /// Returns `true` if the payload is delimited by connection close.
+    pub(crate) fn is_eof(&self) -> bool {
+        self.kind.get() == Kind::Eof
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -669,6 +656,8 @@ enum ChunkedState {
     BodyLf,
     EndCr,
     EndLf,
+    Trailer,
+    TrailerLf,
     End,
 }
 
@@ -777,6 +766,8 @@ impl ChunkedState {
             ChunkedState::BodyLf => ChunkedState::read_body_lf(body),
             ChunkedState::EndCr => ChunkedState::read_end_cr(body),
             ChunkedState::EndLf => ChunkedState::read_end_lf(body),
+            ChunkedState::Trailer => ChunkedState::read_trailer(body),
+            ChunkedState::TrailerLf => ChunkedState::read_trailer_lf(body),
             ChunkedState::End => Poll::Ready(Ok(ChunkedState::End)),
         }
     }
@@ -826,7 +817,38 @@ impl ChunkedState {
     fn read_end_cr(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, DecodeError>> {
         match byte!(rdr) {
             b'\r' => Poll::Ready(Ok(ChunkedState::EndLf)),
+            // trailer field, must start with a field name character
+            b if is_tchar(b) => Poll::Ready(Ok(ChunkedState::Trailer)),
             _ => Poll::Ready(Err(DecodeError::InvalidInput("Invalid chunk end CR"))),
+        }
+    }
+
+    /// Skips a trailer field line, trailer fields are not exposed.
+    fn read_trailer(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, DecodeError>> {
+        for (idx, b) in rdr.iter().enumerate() {
+            match *b {
+                b'\r' => {
+                    rdr.advance_to(idx + 1);
+                    return Poll::Ready(Ok(ChunkedState::TrailerLf));
+                }
+                b'\t' | b' '..=b'~' | 0x80..=0xff => (),
+                _ => {
+                    return Poll::Ready(Err(DecodeError::InvalidInput(
+                        "Invalid chunked trailer field",
+                    )));
+                }
+            }
+        }
+        rdr.clear();
+        Poll::Pending
+    }
+
+    fn read_trailer_lf(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, DecodeError>> {
+        match byte!(rdr) {
+            b'\n' => Poll::Ready(Ok(ChunkedState::EndCr)),
+            _ => Poll::Ready(Err(DecodeError::InvalidInput(
+                "Invalid chunked trailer field LF",
+            ))),
         }
     }
 
@@ -836,6 +858,11 @@ impl ChunkedState {
             _ => Poll::Ready(Err(DecodeError::InvalidInput("Invalid chunk end LF"))),
         }
     }
+}
+
+/// Checks for a `tchar`, see [RFC 9110 section 5.6.2](https://www.rfc-editor.org/rfc/rfc9110#section-5.6.2).
+fn is_tchar(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)
 }
 
 #[cfg(test)]
@@ -890,6 +917,20 @@ mod tests {
     }
 
     #[test]
+    fn test_too_long_header_name() {
+        let mut buf = BytesMut::from("GET / HTTP/1.1\r\n");
+        let reader = MessageDecoder::<Request>::default();
+        assert!(reader.decode(&mut buf).unwrap().is_none());
+
+        // the partial name stays within the buffer limit
+        buf.extend_from_slice("a".repeat(64 * 1024 - 16).as_bytes());
+        assert!(reader.decode(&mut buf).unwrap().is_none());
+
+        buf.extend_from_slice(b"aaaaaaaaaaaaaaaaaaaa: v\r\n\r\n");
+        assert!(matches!(reader.decode(&mut buf), Err(DecodeError::Header)));
+    }
+
+    #[test]
     fn test_parse() {
         let mut buf = BytesMut::from("GET /test HTTP/1.1\r\n\r\n");
 
@@ -912,19 +953,69 @@ mod tests {
     }
 
     #[test]
-    fn test_connection_type() {
-        for s in &["Close", "Close\r\n", "close,", "close "] {
-            assert_eq!(connection_type(s), Some(ConnectionType::Close));
+    fn test_connection_flags() {
+        for s in ["Close", "close,", "close ", " close", "\tclose"] {
+            assert_eq!(connection_flags(s.as_bytes()), Flags::CONN_CLOSE);
         }
-        for s in &["upgrade", "upGrade\r\n", "upgrade,", "upgrade "] {
-            assert_eq!(connection_type(s), Some(ConnectionType::Upgrade));
+        for s in ["upgrade", "upGrade", "upgrade,", "upgrade "] {
+            assert_eq!(connection_flags(s.as_bytes()), Flags::CONN_UPGRADE);
         }
-        for s in &["keep-alive", "keep-Alive\r\n", "keep-alive,", "Keep-alive "] {
-            assert_eq!(connection_type(s), Some(ConnectionType::KeepAlive));
+        for s in ["keep-alive", "keep-Alive", "keep-alive,", "Keep-alive "] {
+            assert_eq!(connection_flags(s.as_bytes()), Flags::CONN_KA);
         }
-        for s in &["keep-aliv", "clos\r\n", "clos", "upgrad"] {
-            assert_eq!(connection_type(s), None);
+        for s in [
+            "keep-aliv",
+            "clos",
+            "upgrad",
+            "closed",
+            "close-x",
+            "upgrades",
+            "x-close",
+            "keep-alivex",
+            "",
+        ] {
+            assert_eq!(connection_flags(s.as_bytes()), Flags::empty(), "{s:?}");
         }
+        // tokens past the first 5 bytes
+        assert_eq!(connection_flags(b"te, trailers, close"), Flags::CONN_CLOSE);
+        assert_eq!(
+            connection_flags(b"keep-alive, Upgrade"),
+            Flags::CONN_KA | Flags::CONN_UPGRADE
+        );
+    }
+
+    #[test]
+    fn test_conn_multiple_tokens() {
+        let mut buf = BytesMut::from(
+            "GET /test HTTP/1.1\r\n\
+             connection: te, trailers, close\r\n\r\n",
+        );
+        let req = parse_ready!(&mut buf);
+        assert_eq!(req.head().connection_type(), ConnectionType::Close);
+
+        let mut buf = BytesMut::from(
+            "GET /test HTTP/1.1\r\n\
+             connection: closed\r\n\r\n",
+        );
+        let req = parse_ready!(&mut buf);
+        assert_eq!(req.head().connection_type(), ConnectionType::KeepAlive);
+
+        // `close` in an earlier header is not overridden by a later one
+        let mut buf = BytesMut::from(
+            "GET /test HTTP/1.1\r\n\
+             connection: close\r\n\
+             connection: keep-alive\r\n\r\n",
+        );
+        let req = parse_ready!(&mut buf);
+        assert_eq!(req.head().connection_type(), ConnectionType::Close);
+
+        let mut buf = BytesMut::from(
+            "GET /test HTTP/1.1\r\n\
+             upgrade: websocket\r\n\
+             connection: keep-alive, Upgrade\r\n\r\n",
+        );
+        let req = parse_ready!(&mut buf);
+        assert!(req.upgrade());
     }
 
     #[test]
@@ -956,7 +1047,7 @@ mod tests {
         assert_eq!(req.head().headers_vec().len(), 0);
 
         let cfg: SharedCfg = SharedCfg::new("dbg")
-            .add(HttpServiceConfig::default().set_enable_headers_vec())
+            .add(HttpServiceConfig::default().set_headers_vec(true))
             .into();
         let reader = MessageDecoder::<Request>::new(cfg.get());
         let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
@@ -982,7 +1073,7 @@ mod tests {
         assert_eq!(res.headers_vec().len(), 0);
 
         let cfg: SharedCfg = SharedCfg::new("dbg")
-            .add(HttpServiceConfig::default().set_enable_headers_vec())
+            .add(HttpServiceConfig::default().set_headers_vec(true))
             .into();
         let reader = MessageDecoder::<ResponseHead>::new(cfg.get());
         let (res, _) = reader.decode(&mut buf).unwrap().unwrap();
@@ -1389,6 +1480,50 @@ mod tests {
     }
 
     #[test]
+    fn test_http_request_upgrade_content_length() {
+        let reader = MessageDecoder::<Request>::default();
+
+        // zero content-length is ignored regardless of header order
+        for hdrs in [
+            "content-length: 0\r\nupgrade: websocket\r\n",
+            "upgrade: websocket\r\ncontent-length: 0\r\n",
+        ] {
+            let mut buf = BytesMut::from(
+                format!("GET /test HTTP/1.1\r\nconnection: upgrade\r\n{hdrs}\r\nraw").as_str(),
+            );
+            let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();
+            assert!(req.upgrade(), "{hdrs:?}");
+            assert!(pl.is_unhandled(), "{hdrs:?}");
+        }
+
+        // non-zero content-length delimits the body regardless of header order
+        for hdrs in [
+            "content-length: 4\r\nupgrade: websocket\r\n",
+            "upgrade: websocket\r\ncontent-length: 4\r\n",
+        ] {
+            let mut buf = BytesMut::from(
+                format!("GET /test HTTP/1.1\r\nconnection: upgrade\r\n{hdrs}\r\ndata").as_str(),
+            );
+            let (_, pl) = reader.decode(&mut buf).unwrap().unwrap();
+            let pl = pl.unwrap();
+            assert_eq!(
+                pl.decode(&mut buf).unwrap().unwrap().chunk().as_ref(),
+                b"data"
+            );
+            assert!(pl.decode(&mut buf).unwrap().unwrap().eof());
+        }
+
+        // duplicate content-length is rejected even after websocket upgrade
+        let mut buf = BytesMut::from(
+            "GET /test HTTP/1.1\r\n\
+             content-length: 4\r\n\
+             upgrade: websocket\r\n\
+             content-length: 10\r\n\r\n",
+        );
+        assert!(reader.decode(&mut buf).is_err());
+    }
+
+    #[test]
     fn test_http_request_parser_utf8() {
         let mut buf = BytesMut::from(
             "GET /test HTTP/1.1\r\n\
@@ -1509,10 +1644,6 @@ mod tests {
         let msg = pl.decode(&mut buf).unwrap().unwrap();
         assert_eq!(msg.chunk().as_ref(), b"li");
 
-        //trailers
-        //buf.feed_data("test: test\r\n");
-        //not_ready!(reader.parse(&mut buf, &mut readbuf));
-
         buf.extend(b"ne\r\n0\r\n");
         let msg = pl.decode(&mut buf).unwrap().unwrap();
         assert_eq!(msg.chunk().as_ref(), b"ne");
@@ -1520,6 +1651,59 @@ mod tests {
 
         buf.extend(b"\r\n");
         assert!(pl.decode(&mut buf).unwrap().unwrap().eof());
+    }
+
+    #[test]
+    fn test_parse_chunked_payload_trailers() {
+        let mut buf = BytesMut::from(
+            "POST /test HTTP/1.1\r\n\
+             transfer-encoding: chunked\r\n\r\n\
+             4\r\ndata\r\n0\r\n\
+             test: test\r\n\
+             x-checksum: \tabc 123\r\n\r\n\
+             GET /next HTTP/1.1\r\n\r\n",
+        );
+        let reader = MessageDecoder::<Request>::default();
+        let (_, pl) = reader.decode(&mut buf).unwrap().unwrap();
+        let pl = pl.unwrap();
+        assert_eq!(
+            pl.decode(&mut buf).unwrap().unwrap().chunk().as_ref(),
+            b"data"
+        );
+        assert!(pl.decode(&mut buf).unwrap().unwrap().eof());
+        let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(req.path(), "/next");
+        assert!(buf.is_empty());
+
+        // trailers split across reads
+        let mut buf = BytesMut::from(
+            "POST /test HTTP/1.1\r\n\
+             transfer-encoding: chunked\r\n\r\n",
+        );
+        let (_, pl) = reader.decode(&mut buf).unwrap().unwrap();
+        let pl = pl.unwrap();
+        for part in ["0\r\n", "te", "st: te", "st\r", "\n", "\r"] {
+            buf.extend(part.as_bytes());
+            assert!(pl.decode(&mut buf).unwrap().is_none(), "{part:?}");
+        }
+        buf.extend(b"\n");
+        assert!(pl.decode(&mut buf).unwrap().unwrap().eof());
+
+        // invalid trailers
+        for trailer in [
+            "test: te\nst\r\n\r\n",
+            "test\x00\r\n\r\n",
+            " test: v\r\n\r\n",
+            "test: v\rx",
+        ] {
+            let mut buf = BytesMut::from(
+                "POST /test HTTP/1.1\r\n\
+                 transfer-encoding: chunked\r\n\r\n0\r\n",
+            );
+            buf.extend(trailer.as_bytes());
+            let (_, pl) = reader.decode(&mut buf).unwrap().unwrap();
+            assert!(pl.unwrap().decode(&mut buf).is_err(), "{trailer:?}");
+        }
     }
 
     #[test]
@@ -1541,6 +1725,72 @@ mod tests {
         assert_eq!(chunk, Bytes::from_static(b"line"));
         let msg = pl.decode(&mut buf).unwrap().unwrap();
         assert!(msg.eof());
+    }
+
+    #[test]
+    fn test_response_bodyless_status() {
+        for (head, rest) in [
+            (
+                "HTTP/1.1 304 Not Modified\r\ncontent-length: 10\r\n\r\n",
+                "",
+            ),
+            ("HTTP/1.1 204 No Content\r\ncontent-length: 10\r\n\r\n", ""),
+            (
+                "HTTP/1.1 204 No Content\r\ntransfer-encoding: chunked\r\n\r\n",
+                "",
+            ),
+            (
+                "HTTP/1.1 100 Continue\r\ncontent-length: 2\r\n\r\n",
+                "HTTP/1.1 200 OK\r\n\r\n",
+            ),
+            ("HTTP/1.0 304 Not Modified\r\n\r\n", "next"),
+        ] {
+            let mut buf = BytesMut::from(format!("{head}{rest}").as_str());
+            let reader = MessageDecoder::<ResponseHead>::default();
+            let (_, pl) = reader.decode(&mut buf).unwrap().unwrap();
+            assert!(matches!(pl, PayloadType::None), "{head:?}");
+            assert_eq!(buf, rest.as_bytes(), "{head:?}");
+        }
+
+        let mut buf = BytesMut::from("HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok");
+        let reader = MessageDecoder::<ResponseHead>::default();
+        let (_, pl) = reader.decode(&mut buf).unwrap().unwrap();
+        let pl = pl.unwrap();
+        assert_eq!(
+            pl.decode(&mut buf).unwrap().unwrap().chunk().as_ref(),
+            b"ok"
+        );
+    }
+
+    #[test]
+    fn test_response_read_until_eof() {
+        for version in ["1.0", "1.1"] {
+            let mut buf =
+                BytesMut::from(format!("HTTP/{version} 200 OK\r\n\r\ntest data").as_str());
+            let reader = MessageDecoder::<ResponseHead>::default();
+            let (msg, pl) = reader.decode(&mut buf).unwrap().unwrap();
+            assert_eq!(msg.connection_type(), ConnectionType::Close, "{version}");
+            let pl = pl.unwrap();
+            assert!(pl.is_eof(), "{version}");
+            let chunk = pl.decode(&mut buf).unwrap().unwrap();
+            assert_eq!(chunk, PayloadItem::Chunk(Bytes::from_static(b"test data")));
+        }
+
+        // zero content-length has no payload
+        for version in ["1.0", "1.1"] {
+            let mut buf = BytesMut::from(
+                format!("HTTP/{version} 200 OK\r\ncontent-length: 0\r\n\r\n").as_str(),
+            );
+            let reader = MessageDecoder::<ResponseHead>::default();
+            let (_, pl) = reader.decode(&mut buf).unwrap().unwrap();
+            assert!(matches!(pl, PayloadType::None), "{version}");
+        }
+
+        let mut buf =
+            BytesMut::from("HTTP/1.1 101 Switching Protocols\r\ncontent-length: 0\r\n\r\n");
+        let reader = MessageDecoder::<ResponseHead>::default();
+        let (_, pl) = reader.decode(&mut buf).unwrap().unwrap();
+        assert!(matches!(pl, PayloadType::Stream(_)));
     }
 
     #[test]

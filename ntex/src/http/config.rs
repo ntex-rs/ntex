@@ -52,6 +52,7 @@ pub struct HttpServiceConfig {
     pub(super) max_buf_size: usize,
     pub(super) headers_read_rate: Option<FrameReadRate>,
     pub(super) payload_read_rate: Option<FrameReadRate>,
+    pub(super) write_timeout: Seconds,
 
     config: CfgContext,
 }
@@ -101,6 +102,7 @@ impl HttpServiceConfig {
             max_buf_size: 64 * 1024,
             headers_vec: false,
             payload_read_rate: None,
+            write_timeout: Seconds::ZERO,
             config: CfgContext::default(),
         }
     }
@@ -130,6 +132,9 @@ impl HttpServiceConfig {
     /// Sets the server keep-alive behavior.
     ///
     /// By default, idle persistent connections are closed after five seconds.
+    /// The keep-alive timeout does not apply before the first request. If
+    /// request-head timing is disabled, it also bounds a partially received
+    /// request head after the first request.
     pub fn set_keepalive<W: Into<KeepAlive>>(mut self, val: W) -> Self {
         let (keep_alive, ka_enabled) = match val.into() {
             KeepAlive::Timeout(val) => (val, true),
@@ -159,23 +164,59 @@ impl HttpServiceConfig {
     #[must_use]
     /// Sets the initial timeout for reading request headers.
     ///
-    /// If the client does not begin transmitting a complete header block
-    /// within this period, the request is rejected with `408 Request Timeout`.
-    /// A zero duration disables header-read timing, allowing a new connection
-    /// to wait indefinitely for its first request independently of the
-    /// keep-alive policy. The default is one second.
+    /// A new connection must send the first byte of its first request within
+    /// this period, otherwise it is rejected with `408 Request Timeout`. The
+    /// request-head read rate starts with that byte, and this period is also
+    /// its measurement interval. A zero duration disables header-read timing.
+    /// A new connection can then wait indefinitely for its first request,
+    /// while on a persistent connection the keep-alive timeout bounds both
+    /// waiting for the next request and reading its head. The default is one
+    /// second.
+    ///
+    /// HTTP/1 timers have one-second resolution, a timeout can expire up to
+    /// one second later than configured.
+    ///
+    /// This sets the measurement interval of the request-head read rate. The
+    /// cumulative limit and required rate configured by
+    /// [`set_headers_read_rate`](Self::set_headers_read_rate) are kept. If
+    /// header-read timing was disabled, it is enabled again with the default
+    /// rate of 256 bytes and a cumulative limit of `timeout` plus 15 seconds.
     pub fn set_client_timeout(mut self, timeout: Seconds) -> Self {
         if timeout.is_zero() {
             self.headers_read_rate = None;
         } else {
             let mut rate = self.headers_read_rate.unwrap_or(FrameReadRate {
                 rate: 256,
-                timeout: Seconds(5),
-                max_timeout: Seconds(15),
+                timeout,
+                max_timeout: timeout + Seconds(15),
             });
             rate.timeout = timeout;
             self.headers_read_rate = Some(rate);
         }
+        self
+    }
+
+    #[must_use]
+    /// Sets the HTTP/1 write backpressure timeout.
+    ///
+    /// Write backpressure is enabled when outstanding output reaches the I/O
+    /// write buffer high watermark, and disabled once the peer has accepted
+    /// enough of it. If backpressure is still enabled when the timeout
+    /// expires, the connection is closed, and the HTTP/1 control service
+    /// receives a peer-gone event with an [`io::ErrorKind::TimedOut`](std::io::ErrorKind::TimedOut)
+    /// error. An unfinished request payload stream receives a
+    /// [`PayloadError::Io`](crate::http::error::PayloadError::Io) with the
+    /// same error kind. Each backpressure period starts a fresh timeout.
+    ///
+    /// Without a write timeout, a client that stops reading responses can hold
+    /// the connection open indefinitely. Payload read-rate timing is paused
+    /// during write backpressure and resumes once it is disabled.
+    ///
+    /// Timers have one-second resolution, the timeout can expire up to one
+    /// second later than configured. A zero duration disables the timeout. It
+    /// is disabled by default.
+    pub fn set_write_timeout(mut self, timeout: Seconds) -> Self {
+        self.write_timeout = timeout;
         self
     }
 
@@ -186,8 +227,8 @@ impl HttpServiceConfig {
     /// [`RequestHead::headers_vec`](crate::http::RequestHead::headers_vec) or
     /// [`ResponseHead::headers_vec`](crate::http::ResponseHead::headers_vec).
     /// The normal header map remains populated. This is disabled by default.
-    pub fn set_enable_headers_vec(mut self) -> Self {
-        self.headers_vec = true;
+    pub fn set_headers_vec(mut self, enabled: bool) -> Self {
+        self.headers_vec = enabled;
         self
     }
 
@@ -195,9 +236,11 @@ impl HttpServiceConfig {
     /// Sets read-rate limits for request headers.
     ///
     /// This setting protects HTTP/1 connections from clients that send a
-    /// request line or headers too slowly. The timer starts when the connection
-    /// begins waiting for the initial request. On a persistent connection, it
-    /// starts again after bytes for the next request head arrive.
+    /// request line or headers too slowly. The timer starts when the first
+    /// bytes of a request head arrive, on a new connection as well as on a
+    /// persistent one. Until the first byte of the first request arrives, a
+    /// new connection waits for at most one `timeout` interval, the
+    /// [client timeout](Self::set_client_timeout), without rate extension.
     ///
     /// `timeout` is the duration of one measurement interval. When an interval
     /// expires, the dispatcher grants another interval only if more than
@@ -206,12 +249,15 @@ impl HttpServiceConfig {
     /// request-head bytes count toward progress, including request-line and
     /// header bytes that the incremental parser has already consumed.
     ///
-    /// A zero `timeout` disables request-head timing. A zero `max_timeout`
+    /// A zero `timeout` disables request-head timing. The first request of a
+    /// connection is then unbounded, and the keep-alive timeout bounds waiting
+    /// for and reading each following request head. A zero `max_timeout`
     /// removes the cumulative limit, allowing the deadline to be extended
     /// indefinitely while the required read rate is maintained. When
     /// `max_timeout` is not an exact multiple of `timeout`, the final
     /// measurement interval is shortened so the cumulative limit is not
-    /// exceeded.
+    /// exceeded. Intervals have one-second resolution and can expire up to one
+    /// second later than configured.
     ///
     /// If the request head misses its deadline, the HTTP/1 control service
     /// receives
@@ -257,22 +303,32 @@ impl HttpServiceConfig {
     ///
     /// This setting protects HTTP/1 connections from clients that send a
     /// request body too slowly. The timer starts when the dispatcher begins
-    /// decoding a request payload. At the end of each `timeout`
-    /// interval, another interval is granted only if more than `rate` bytes
-    /// were decoded.
+    /// decoding a request payload. For a request with `Expect: 100-continue`,
+    /// it starts only once `100 Continue` has been sent, the request has been
+    /// passed to the application, or a response has been sent and the rest of
+    /// the payload is read, because the client does not send the body before
+    /// that. At the end of each `timeout` interval, another interval is
+    /// granted only if more than `rate` bytes were decoded.
     ///
     /// The timer runs only while the dispatcher can read and forward payload
     /// data. It is paused while application payload backpressure or response
     /// write backpressure prevents further reads, so those conditions are not
-    /// treated as a slow network peer. Pausing preserves the unused portion of
-    /// the cumulative `max_timeout`; resuming does not grant a new maximum
-    /// period. The timer stops when the complete payload has been decoded.
+    /// treated as a slow network peer. Write backpressure is bounded by the
+    /// [write timeout](Self::set_write_timeout). Pausing preserves the unused
+    /// portion of the current measurement interval, and resuming continues
+    /// that interval rather than starting a new one, so the bytes decoded
+    /// before and after the pause are measured together. If the interval
+    /// expired before the pause, already received payload data is decoded
+    /// on resume and then the read rate is checked. The timer stops when the
+    /// complete payload has been decoded.
     ///
     /// A zero `timeout` disables payload timing. A zero `max_timeout` removes
     /// the cumulative limit, allowing the deadline to be extended indefinitely
     /// while the required read rate is maintained. When `max_timeout` is not
     /// an exact multiple of `timeout`, the final measurement interval is
-    /// shortened so the cumulative limit is not exceeded.
+    /// shortened so the cumulative limit is not exceeded. Intervals have
+    /// one-second resolution and can expire up to one second later than
+    /// configured.
     ///
     /// If the payload misses its deadline, its stream receives a timed-out
     /// [`PayloadError`](crate::http::error::PayloadError), and the HTTP/1

@@ -10,6 +10,10 @@ use crate::util::{Bytes, Stream};
 
 const INPLACE: usize = 2049;
 
+/// Payload stream decoder.
+///
+/// Decompresses a stream of payload chunks. `gzip` and `deflate` are decoded;
+/// other encodings pass the stream through unchanged.
 #[derive(derive_more::Debug)]
 pub struct Decoder<S> {
     #[debug(skip)]
@@ -24,7 +28,7 @@ impl<S> Decoder<S>
 where
     S: Stream<Item = Result<Bytes, PayloadError>>,
 {
-    /// Construct a decoder.
+    /// Construct a decoder for the given content encoding.
     #[inline]
     pub fn new(stream: S, encoding: ContentEncoding) -> Decoder<S> {
         let inner = match encoding {
@@ -44,7 +48,9 @@ where
         }
     }
 
-    /// Construct decoder based on headers.
+    /// Construct decoder based on the `Content-Encoding` header.
+    ///
+    /// A missing or invalid header selects the `Identity` encoding.
     #[inline]
     pub fn from_headers(stream: S, headers: &HeaderMap) -> Decoder<S> {
         // check content-encoding

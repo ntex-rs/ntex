@@ -588,7 +588,20 @@ async fn test_content_length() {
     let value = HeaderValue::from_static("0");
 
     {
-        for i in 0..4 {
+        // the client skips interim responses, check raw `1xx` responses
+        for i in [1, 3] {
+            for method in ["GET", "HEAD"] {
+                let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+                let _ = stream.write_all(format!("{method} /{i} HTTP/1.1\r\n\r\n").as_bytes());
+                let mut data = vec![0; 1024];
+                let n = stream.read(&mut data).unwrap();
+                let data = String::from_utf8_lossy(&data[..n]).to_lowercase();
+                assert!(data.starts_with("http/1.1 1"), "{data:?}");
+                assert!(!data.contains("content-length"), "{data:?}");
+            }
+        }
+
+        for i in [0, 2] {
             let req = srv.request(Method::GET, format!("/{i}"));
             let response = req.send().await.unwrap();
             assert_eq!(response.headers().get(&header), None);

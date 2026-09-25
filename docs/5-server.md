@@ -39,7 +39,7 @@ async fn main() -> std::io::Result<()> {
 
 `bind()` takes four arguments:
 
-1. A service name used in logs and status reports.
+1. A service name used in logs and to match listeners with their services.
 2. An address that implements `ToSocketAddrs`.
 3. A [`SharedCfg`](https://docs.rs/ntex-service/latest/ntex_service/cfg/struct.SharedCfg.html)
    value containing connection and protocol settings.
@@ -49,9 +49,9 @@ The factory is called for each worker and receives that worker's application
 state. It creates the service that handles accepted
 [`Io`](https://docs.rs/ntex-io/latest/ntex_io/struct.Io.html) objects.
 
-In this example, `HttpService` turns each connection into an HTTP service. The
-server itself does not depend on a particular protocol, so you can use the same
-builder with other streaming protocols.
+In this example, `HttpService` handles each connection with the HTTP
+protocol. The server itself does not depend on a particular protocol, so you
+can use the same builder with other streaming protocols.
 
 `bind()` creates and owns the listening socket. Use `listen()` when the socket
 has already been created by the application, a supervisor, or a
@@ -69,45 +69,49 @@ By default, the server starts one worker for each available logical CPU. You
 can choose a different number with `workers()`:
 
 ```rust
-let server = ntex::server::build()
-    .workers(4)
-    // Add services with `bind()` or `listen()`.
-    # ;
+let builder = ntex::server::build().workers(4);
+// Add services with `bind()` or `listen()`.
 ```
 
-The service factory passed to `bind()` is called once for each worker. Once a
-service has been constructed, it does not need to implement `Send` or `Sync`.
-This means that worker-local types such as `Rc` and `RefCell` can be used
-inside a service.
+The service factory passed to `bind()` is called once for each worker. The
+factory must be `Send` and `Clone`, but the service it creates never needs to
+implement `Send` or `Sync`. This means that worker-local types such as `Rc`
+and `RefCell` can be used inside a service.
 
 Data shared between workers must still use thread-safe types such as `Arc`,
 atomics, or locks.
 
 Each worker can handle up to 25,600 concurrent connections by default. Use
-`maxconn()` to change this limit:
+`max_connections()` to change this limit:
 
 ```rust
-let server = ntex::server::build()
+let builder = ntex::server::build()
     .workers(4)
-    .maxconn(10_000)
-    # ;
+    .max_connections(10_000);
 ```
 
 When a worker reaches its limit, the server stops sending new connections to
 that worker. If all workers are at capacity, the listeners stop accepting
 connections until space becomes available.
 
+The limit is a process-wide setting shared by every server in the process.
+`max_connections()` applies it immediately, and each worker reads it when it starts,
+so call it before `run()`.
+
 ## Server Configuration
 
 [`ServerBuilder`](https://docs.rs/ntex-server/ntex_server/net/struct.ServerBuilder.html)
 provides several ways to configure the accept loop and worker pool:
 
-- `name()` sets the names used for the server and worker threads.
+- `name()` sets the server name, which is also used for the accept and worker
+  thread names. It defaults to the system name.
 - `workers()` sets the number of worker threads.
 - `backlog()` sets the socket listen backlog. Call it before `bind()`.
-- `maxconn()` sets the maximum number of concurrent connections per worker.
+- `max_connections()` sets the maximum number of concurrent connections per worker.
 - `enable_affinity()` pins workers to CPU cores when possible.
-- `stop_on_panic()` stops the entire server if a worker panics.
+- `stop_on_panic()` stops the entire server if a worker panics or its service
+  cannot be created. Without it, a failed worker is restarted. The stop is
+  graceful only if `graceful_shutdown()` is enabled.
 - `graceful_shutdown_timeout()` sets the maximum time allowed for a graceful
   worker shutdown. The default is 30 seconds. This bounds the worker as a
   whole; each connection is bound separately by
@@ -124,7 +128,7 @@ let builder = ntex::server::build()
     .name("api")
     .workers(4)
     .backlog(1024)
-    .maxconn(20_000)
+    .max_connections(20_000)
     .graceful_shutdown_timeout(Seconds(15))
     .stop_on_panic();
 ```
@@ -136,9 +140,8 @@ let builder = ntex::server::build()
 controller. Awaiting this controller waits for the server to stop:
 
 ```rust
-let builder = ntex::server::build()
-    // Add services with `bind()` or `listen()`.
-    # ;
+let builder = ntex::server::build();
+// Add services with `bind()` or `listen()`.
 
 let server = builder.run();
 server.await?;
@@ -159,18 +162,28 @@ server.await?;
 ```
 
 `pause()` temporarily stops accepting new connections without closing active
-ones. `resume()` starts accepting connections again.
+ones. New connections wait in the kernel listen backlog. `resume()` starts
+accepting connections again. The server also pauses itself while no worker is
+available and resumes once one is ready.
 
 Use `stop(true)` for a graceful shutdown. Workers are given time to finish
 their active work, up to the configured shutdown timeout. Use `stop(false)` to
-stop them immediately.
+stop without waiting for the workers. Each worker still gets up to 3 seconds
+to shut down its services.
 
-Signal handling is enabled by default:
+Signal handling is enabled by default. On Unix:
 
 - `SIGTERM` starts a graceful shutdown.
 - `SIGINT` starts an immediate shutdown.
-- On Unix, `SIGQUIT` starts an immediate shutdown unless
-  `graceful_shutdown()` is enabled.
+- `SIGQUIT` starts an immediate shutdown unless `graceful_shutdown()` is
+  enabled.
+- `SIGHUP` is ignored.
+
+If panic handling is enabled for the runtime, `SIGSEGV`, `SIGABRT`, and
+application panics also stop the server. Like `SIGQUIT`, these stops are
+graceful only if `graceful_shutdown()` is enabled.
+
+On Windows, only Ctrl-C is handled. It behaves like `SIGINT`.
 
 Applications that install their own signal handlers should call
 `disable_signals()` and use the server controller to stop the server.
@@ -237,6 +250,30 @@ Protocol services and acceptors read their own configuration types from the
 same `SharedCfg` value. In this example, the HTTP service uses
 [`HttpServiceConfig`](https://docs.rs/ntex/ntex/http/struct.HttpServiceConfig.html)
 to set the maximum number of headers and the keep-alive timeout.
+
+`HttpServiceConfig` also configures the HTTP/1 timers that protect against slow
+peers:
+
+- The client timeout (`set_client_timeout()`) bounds the wait for the first
+  byte of the first request on a new connection.
+- The header read rate (`set_headers_read_rate()`) requires the request head
+  to arrive at a minimum rate, within a cumulative limit.
+- The payload read rate (`set_payload_read_rate()`) does the same for the
+  request body. It is disabled by default.
+- The write timeout (`set_write_timeout()`) bounds how long the peer may keep
+  write backpressure enabled by not reading the response. It is disabled by
+  default.
+
+The payload read-rate timer runs only while the dispatcher can read and forward
+body data. It pauses when the application stops consuming the body stream, or
+when write backpressure prevents further reads, because these conditions are
+not caused by a slow sender. If a write timeout is configured, it runs while
+write backpressure lasts. When reading resumes, the timer continues the interrupted
+measurement interval instead of starting a new one, so the bytes received before
+and after the pause are measured together. If that interval expired before the
+pause, the dispatcher first decodes the body data it has already received, then
+checks the read rate. Time spent paused does not count against the payload
+limits.
 
 Other configuration types include:
 

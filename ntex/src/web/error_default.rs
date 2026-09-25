@@ -15,6 +15,13 @@ use super::{HttpResponse, WebResponseError, error};
 
 // =========== DefaultError marker ============
 
+/// Default web error domain.
+///
+/// `DefaultError` is a marker type used as [`State::Error`](crate::web::State::Error).
+/// It selects the built-in renderers for ntex errors: request data errors are
+/// rendered as `4xx` responses and server-side failures as `5xx` responses,
+/// with the error's `Display` text as a plain-text body. The marker itself is
+/// never constructed.
 #[derive(Debug, thiserror::Error)]
 #[error("Default error marker")]
 pub struct DefaultError {
@@ -29,29 +36,28 @@ impl<St> WebResponseError<St, DefaultError> for DefaultError {
 
 // =========== DefaultError impls =========
 
-/// `InternalServerError` for `StateExtractorError`
-impl<St> WebResponseError<St, DefaultError> for error::StateExtractorError {
-    fn error_response(&self, _: &St) -> HttpResponse {
-        HttpResponse::render_with(StatusCode::BAD_REQUEST, self)
-    }
-}
-
-/// `InternalServerError` for `JsonError`
+/// `InternalServerError` for `JsonError`.
+///
+/// Serialization errors are server-side failures, such as a `Json<T>` or
+/// `Form<T>` responder failing to encode its value.
 impl<St> WebResponseError<St, DefaultError> for JsonError {
     fn error_response(&self, _: &St) -> HttpResponse {
-        HttpResponse::render_with(StatusCode::BAD_REQUEST, self)
+        HttpResponse::render_with(StatusCode::INTERNAL_SERVER_ERROR, self)
     }
 }
 
-/// `InternalServerError` for `FormError`
+/// `InternalServerError` for `FormError`.
+///
+/// Serialization errors are server-side failures, such as a `Json<T>` or
+/// `Form<T>` responder failing to encode its value.
 impl<St> WebResponseError<St, DefaultError> for FormError {
     fn error_response(&self, _: &St) -> HttpResponse {
-        HttpResponse::render_with(StatusCode::BAD_REQUEST, self)
+        HttpResponse::render_with(StatusCode::INTERNAL_SERVER_ERROR, self)
     }
 }
 
 #[cfg(feature = "openssl")]
-/// `InternalServerError` for `openssl::ssl::Error`
+/// `BadRequest` for `openssl::ssl::Error`
 impl<St> WebResponseError<St, DefaultError> for tls_openssl::ssl::Error {
     fn error_response(&self, _: &St) -> HttpResponse {
         HttpResponse::render_with(StatusCode::BAD_REQUEST, self)
@@ -115,7 +121,7 @@ impl<St> WebResponseError<St, DefaultError> for io::Error {
     }
 }
 
-/// `InternalServerError` for `UrlGeneratorError`
+/// `InternalServerError` for `UrlGenerationError`
 impl<St> WebResponseError<St, DefaultError> for error::UrlGenerationError {
     fn error_response(&self, _: &St) -> HttpResponse {
         HttpResponse::render_with(StatusCode::INTERNAL_SERVER_ERROR, self)
@@ -134,7 +140,9 @@ impl<St> WebResponseError<St, DefaultError> for error::UrlencodedError {
     }
 }
 
-/// Return `BadRequest` for `JsonPayloadError`
+/// Response renderer for `JsonPayloadError`
+///
+/// Returns `PayloadTooLarge` for `Overflow` and `BadRequest` otherwise.
 impl<St> WebResponseError<St, DefaultError> for error::JsonPayloadError {
     fn error_response(&self, _: &St) -> HttpResponse {
         let status = match self {

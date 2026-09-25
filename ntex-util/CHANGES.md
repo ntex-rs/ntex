@@ -1,5 +1,13 @@
 # Changes
 
+## [Unreleased]
+
+* `bstream` wakes a sender blocked by backpressure once the buffer is drained
+  to the low watermark, instead of after every consumed chunk
+
+* Add `bstream::Receiver::set_watermarks()` to configure the high and low
+  watermarks, deprecate `bstream::Receiver::max_buffer_size()`
+
 ## [4.1.0] - 2026-09-21
 
 * The first `Interval` tick completes immediately, matching tokio's `interval`

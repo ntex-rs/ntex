@@ -1,6 +1,8 @@
 # Changes
 
-## [4.2.0] - 2026-09-22
+## [4.2.0] - 2026-09-25
+
+* Rename `ServerBuilder::maxconn()` to `max_connections()`; the old name is deprecated
 
 * Replace `ntex-polling` with the upstream `polling` crate
 

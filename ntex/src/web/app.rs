@@ -193,7 +193,7 @@ where
     /// Registers a web service with the application.
     ///
     /// A service defines its own path and guards through [`WebServiceFactory`].
-    /// Common services include [`Resource`], [`Scope`], handlers created with
+    /// Common services include [`Resource`], [`Scope`](crate::web::Scope), handlers created with
     /// route attribute macros, and custom services built with `web::service()`.
     ///
     /// Use a resource to group several routes, filters, middleware, or a
@@ -320,7 +320,7 @@ where
     /// such as the host, secure-connection flag, local address, and request pool
     /// size. It can also store typed configuration values with
     /// [`WebAppConfig::set_state()`]; those values are available through
-    /// [`HttpRequest::app_state()`] and [`WebRequest::app_state()`].
+    /// [`HttpRequest::app_state()`](crate::web::HttpRequest::app_state) and [`WebRequest::app_state()`].
     ///
     /// Without an explicit configuration, each request uses the
     /// [`WebAppConfig`] from its I/O context, or the default configuration if
@@ -440,7 +440,7 @@ where
     /// before `DefaultHeaders`.
     ///
     /// Custom middleware should call the wrapped service through
-    /// [`Ctx::call()`] so readiness and lifecycle events are handled
+    /// [`Ctx::call()`](crate::Ctx::call) so readiness and lifecycle events are handled
     /// correctly.
     ///
     /// ```rust
@@ -897,5 +897,39 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = read_body(resp).await;
         assert_eq!(body, Bytes::from_static(b"https://youtube.com/watch/12345"));
+    }
+
+    #[cfg(feature = "url")]
+    #[crate::rt_test]
+    async fn test_pooled_request_resource_map() {
+        use crate::util::Bytes;
+
+        async fn url(req: HttpRequest) -> HttpResponse {
+            HttpResponse::Ok().body(format!("{}", req.url_for("docs", ["1"]).unwrap()))
+        }
+
+        let srv1 = init_service(
+            App::new()
+                .external_resource("docs", "https://one.example.com/{page}")
+                .route("/test", web::get().to(url)),
+        )
+        .await;
+        let srv2 = init_service(
+            App::new()
+                .external_resource("docs", "https://two.example.com/{page}")
+                .route("/test", web::get().to(url)),
+        )
+        .await;
+
+        for _ in 0..2 {
+            for (srv, expected) in [
+                (&srv1, &b"https://one.example.com/1"[..]),
+                (&srv2, &b"https://two.example.com/1"[..]),
+            ] {
+                let req = TestRequest::with_uri("/test").to_request();
+                let resp = call_service(srv, req).await;
+                assert_eq!(read_body(resp).await, Bytes::from_static(expected));
+            }
+        }
     }
 }

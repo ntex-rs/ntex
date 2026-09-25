@@ -5,9 +5,12 @@ use ntex_service::cfg::SharedCfg;
 
 use super::Token;
 
+/// Accepted socket stream.
 #[derive(Debug)]
 pub enum Stream {
+    /// TCP stream.
     Tcp(net::TcpStream),
+    /// Unix domain socket stream.
     #[cfg(unix)]
     Uds(std::os::unix::net::UnixStream),
 }
@@ -22,6 +25,7 @@ impl Stream {
     }
 }
 
+/// Accepted connection dispatched to a worker.
 #[derive(Debug)]
 pub struct Connection {
     pub(crate) io: Stream,

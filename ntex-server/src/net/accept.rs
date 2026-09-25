@@ -14,12 +14,18 @@ const EXIT_TIMEOUT: Duration = Duration::from_millis(100);
 const ERR_TIMEOUT: Duration = Duration::from_millis(500);
 const ERR_SLEEP_TIMEOUT: Millis = Millis(525);
 
+/// Command sent to the accept loop.
 #[derive(Debug)]
 pub enum AcceptorCommand {
+    /// Stops accepting and closes the listeners, then signals the sender.
     Stop(oneshot::Sender<()>),
+    /// Stops accepting and closes the listeners immediately.
     Terminate,
+    /// Stops accepting connections.
     Pause,
+    /// Resumes accepting connections.
     Resume,
+    /// Re-registers listeners that were paused after an accept error.
     Timer,
 }
 
@@ -32,6 +38,7 @@ struct ServerSocketInfo {
     timeout: Cell<Option<Instant>>,
 }
 
+/// Handle for sending commands to the accept loop.
 #[derive(Debug, Clone)]
 pub struct AcceptNotify(Arc<Poller>, mpsc::Sender<AcceptorCommand>);
 
@@ -40,13 +47,17 @@ impl AcceptNotify {
         AcceptNotify(waker, tx)
     }
 
+    /// Sends a command and wakes the accept loop.
     pub fn send(&self, cmd: AcceptorCommand) {
         let _ = self.1.send(cmd);
         let _ = self.0.notify();
     }
 }
 
-/// Streamin io accept loop
+/// Accept loop for network listeners.
+///
+/// The loop runs on its own thread and passes accepted connections to the
+/// server.
 pub struct AcceptLoop {
     name: String,
     testing: bool,
@@ -62,7 +73,11 @@ impl Default for AcceptLoop {
 }
 
 impl AcceptLoop {
-    /// Create accept loop
+    /// Creates an accept loop.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the poller cannot be created.
     pub fn new() -> AcceptLoop {
         // Create a poller instance
         let poll = Arc::new(
@@ -83,18 +98,21 @@ impl AcceptLoop {
         }
     }
 
-    /// Set server name.
+    /// Sets the server name.
     ///
-    /// Name is used for worker thread name
+    /// The accept thread is named `{name}:accept`.
     pub fn name<T: AsRef<str>>(&mut self, name: T) {
         self.name = format!("{}:accept", name.as_ref());
     }
 
-    /// Get notification api for the loop
+    /// Returns a handle for sending commands to the loop.
     pub fn notify(&self) -> AcceptNotify {
         self.notify.clone()
     }
 
+    /// Sets the handler that receives accept status changes.
+    ///
+    /// See [`ServerBuilder::status_handler`](super::ServerBuilder::status_handler).
     pub fn set_status_handler<F>(&mut self, f: F)
     where
         F: FnMut(ServerStatus) + Send + 'static,
@@ -102,11 +120,14 @@ impl AcceptLoop {
         self.status_handler = Some(Box::new(f));
     }
 
+    /// Enables test mode, which skips the exit delay on stop.
     pub fn testing(&mut self) {
         self.testing = true;
     }
 
-    /// Start accept loop
+    /// Starts the accept loop on a new thread.
+    ///
+    /// Blocks until the listeners are registered.
     pub fn start(mut self, socks: Vec<(Token, Listener)>, srv: Server) {
         let (tx, rx_start) = oneshot::channel();
         let (rx, poll) = self

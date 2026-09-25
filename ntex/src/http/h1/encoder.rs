@@ -4,7 +4,7 @@
     clippy::cast_sign_loss,
     clippy::too_many_arguments
 )]
-use std::{cell::Cell, cmp, io::Write, marker::PhantomData, mem, ptr, slice};
+use std::{cell::Cell, cmp, io::Write, marker::PhantomData, ptr, slice};
 
 use crate::http::config::DateService;
 use crate::http::error::EncodeError;
@@ -62,15 +62,11 @@ pub(crate) trait MessageType: Sized {
 
         // Content length
         if let Some(status) = self.status() {
-            match status {
-                StatusCode::NO_CONTENT | StatusCode::CONTINUE | StatusCode::PROCESSING => {
-                    length = BodySize::None;
-                }
-                StatusCode::SWITCHING_PROTOCOLS => {
-                    skip_len = true;
-                    length = BodySize::Stream;
-                }
-                _ => (),
+            if status == StatusCode::SWITCHING_PROTOCOLS {
+                skip_len = true;
+                length = BodySize::Stream;
+            } else if is_bodyless(status) {
+                length = BodySize::None;
             }
         }
         match length {
@@ -154,8 +150,9 @@ impl MessageType for Response<()> {
         Some(self.head().status)
     }
 
+    /// HTTP/1.0 does not support chunked transfer coding.
     fn chunked(&self) -> bool {
-        self.head().chunked()
+        self.head().chunked() && self.head().version >= Version::HTTP_11
     }
 
     fn headers(&self) -> &HeaderMap {
@@ -238,7 +235,14 @@ impl<T: MessageType> MessageEncoder<T> {
         length: BodySize,
         ctype: ConnectionType,
         extra_headers: Option<HeaderMap>,
-    ) -> Result<(), EncodeError> {
+    ) -> Result<ConnectionType, EncodeError> {
+        // a response with a bodyless status never sends body bytes
+        let length = if message.status().is_some_and(is_bodyless) {
+            BodySize::None
+        } else {
+            length
+        };
+
         // transfer encoding
         if head {
             self.te.set(TransferEncoding::empty());
@@ -256,9 +260,30 @@ impl<T: MessageType> MessageEncoder<T> {
             });
         }
 
+        // a response body delimited by connection close ends the connection
+        let ctype = if message.status().is_some()
+            && !stream
+            && self.te.get().kind == TransferEncodingKind::Eof
+            && ctype == ConnectionType::KeepAlive
+        {
+            ConnectionType::Close
+        } else {
+            ctype
+        };
+
         message.encode_status(dst);
-        message.encode_headers(dst, version, length, ctype, extra_headers)
+        message.encode_headers(dst, version, length, ctype, extra_headers)?;
+        Ok(ctype)
     }
+}
+
+/// Returns `true` for statuses that never have a response body:
+/// informational (except `101 Switching Protocols`), `204 No Content`,
+/// and `304 Not Modified`.
+pub(super) fn is_bodyless(status: StatusCode) -> bool {
+    status == StatusCode::NO_CONTENT
+        || status == StatusCode::NOT_MODIFIED
+        || (status.is_informational() && status != StatusCode::SWITCHING_PROTOCOLS)
 }
 
 /// Encoders to handle different Transfer-Encodings.
@@ -331,18 +356,15 @@ impl TransferEncoding {
                     return Ok(true);
                 }
 
-                let result = if msg.is_empty() {
-                    buf.extend_from_slice(b"0\r\n\r\n");
-                    self.kind = TransferEncodingKind::Chunked(true);
-                    true
-                } else {
+                // an empty chunk would be the last-chunk, only `encode_eof`
+                // terminates the body
+                if !msg.is_empty() {
                     writeln!(buf, "{:X}\r", msg.len()).map_err(EncodeError::Fmt)?;
 
                     buf.append(msg);
                     buf.extend_from_slice(b"\r\n");
-                    false
-                };
-                Ok(result)
+                }
+                Ok(false)
             }
             TransferEncodingKind::Length(mut remaining) => {
                 if remaining > 0 {
@@ -476,8 +498,7 @@ fn write_content_length(mut n: u64, bytes: &mut BytePages) {
 pub(crate) fn convert_usize<B: BufMut>(mut n: u64, bytes: &mut B, eol: bool) {
     unsafe {
         let mut curr: isize = 39;
-        #[allow(invalid_value, clippy::uninit_assumed_init)]
-        let mut buf: [u8; 41] = mem::MaybeUninit::uninit().assume_init();
+        let mut buf = [0u8; 41];
         buf[39] = b'\r';
         buf[40] = b'\n';
         let buf_ptr = buf.as_mut_ptr();
@@ -541,8 +562,17 @@ mod tests {
         let mut bytes = BytePages::default();
         let mut enc = TransferEncoding::chunked();
         assert!(!enc.encode(b"test".into(), &mut bytes).ok().unwrap());
-        assert!(enc.encode(b"".into(), &mut bytes).ok().unwrap());
-        assert_eq!(bytes.take().unwrap().as_ref(), b"4\r\ntest\r\n0\r\n\r\n");
+        // an empty chunk does not terminate the body
+        assert!(!enc.encode(b"".into(), &mut bytes).ok().unwrap());
+        assert!(!enc.encode(b"line".into(), &mut bytes).ok().unwrap());
+        enc.encode_eof(&mut bytes).unwrap();
+        assert!(enc.encode(b"late".into(), &mut bytes).ok().unwrap());
+
+        let mut data = Vec::new();
+        while let Some(chunk) = bytes.take() {
+            data.extend_from_slice(&chunk);
+        }
+        assert_eq!(data, b"4\r\ntest\r\n4\r\nline\r\n0\r\n\r\n");
     }
 
     #[test]
@@ -574,6 +604,18 @@ mod tests {
         assert!(data.contains("connection: close\r\n"));
         assert!(data.contains("authorization: another authorization\r\n"));
         assert!(data.contains("date: date\r\n"));
+    }
+
+    #[test]
+    fn test_convert_usize() {
+        for n in [0, 7, 42, 999, 10_000, 123_456_789, u64::MAX] {
+            let mut b = BytePages::default();
+            convert_usize(n, &mut b, false);
+            assert_eq!(b.take().unwrap().as_ref(), n.to_string().as_bytes());
+
+            convert_usize(n, &mut b, true);
+            assert_eq!(b.take().unwrap().as_ref(), format!("{n}\r\n").as_bytes());
+        }
     }
 
     #[test]
