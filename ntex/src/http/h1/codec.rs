@@ -248,6 +248,49 @@ mod tests {
         util::Bytes,
     };
 
+    /// Bodyless statuses do not write body bytes or length headers.
+    #[crate::rt_test]
+    async fn test_bodyless_status_has_no_body() {
+        use crate::http::StatusCode;
+
+        let cfg: SharedCfg = SharedCfg::new("DBG").add(HttpServiceConfig::new()).into();
+        for status in [
+            StatusCode::CONTINUE,
+            StatusCode::from_u16(103).unwrap(),
+            StatusCode::NO_CONTENT,
+            StatusCode::NOT_MODIFIED,
+        ] {
+            for size in [BodySize::Sized(3), BodySize::Stream] {
+                let codec = Codec::new(0, cfg.get());
+                let mut buf = BytesMut::from("GET / HTTP/1.1\r\n\r\n");
+                codec.decode(&mut buf).unwrap().unwrap();
+
+                let mut out = BytePages::default();
+                let res = Response::with_body(status, ());
+                codec.encodev(Message::Item((res, size)), &mut out).unwrap();
+                codec
+                    .encodev(Message::Chunk(Some(Bytes::from_static(b"abc"))), &mut out)
+                    .unwrap();
+                codec.encodev(Message::Chunk(None), &mut out).unwrap();
+
+                let mut data = Vec::new();
+                while let Some(chunk) = out.take() {
+                    data.extend_from_slice(&chunk);
+                }
+                let data = String::from_utf8(data).unwrap();
+                assert!(data.ends_with("\r\n\r\n"), "{status} {size:?}: {data:?}");
+                assert!(
+                    !data.contains("content-length"),
+                    "{status} {size:?}: {data:?}"
+                );
+                assert!(
+                    !data.contains("transfer-encoding"),
+                    "{status} {size:?}: {data:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn test_http_request_chunked_payload_and_next_message() {
         let cfg: SharedCfg = SharedCfg::new("DBG").add(HttpServiceConfig::new()).into();

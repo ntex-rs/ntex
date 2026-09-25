@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* Fix HTTP/1 responses with `1xx` (except `101`), `204`, or `304` status
+  writing body bytes and `304` responses writing a length header
+
 * Fix undefined behavior in the HTTP/1 encoder number formatting, which
   created an uninitialized buffer
 

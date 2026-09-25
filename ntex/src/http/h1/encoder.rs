@@ -62,15 +62,11 @@ pub(crate) trait MessageType: Sized {
 
         // Content length
         if let Some(status) = self.status() {
-            match status {
-                StatusCode::NO_CONTENT | StatusCode::CONTINUE | StatusCode::PROCESSING => {
-                    length = BodySize::None;
-                }
-                StatusCode::SWITCHING_PROTOCOLS => {
-                    skip_len = true;
-                    length = BodySize::Stream;
-                }
-                _ => (),
+            if status == StatusCode::SWITCHING_PROTOCOLS {
+                skip_len = true;
+                length = BodySize::Stream;
+            } else if is_bodyless(status) {
+                length = BodySize::None;
             }
         }
         match length {
@@ -239,6 +235,13 @@ impl<T: MessageType> MessageEncoder<T> {
         ctype: ConnectionType,
         extra_headers: Option<HeaderMap>,
     ) -> Result<(), EncodeError> {
+        // a response with a bodyless status never sends body bytes
+        let length = if message.status().is_some_and(is_bodyless) {
+            BodySize::None
+        } else {
+            length
+        };
+
         // transfer encoding
         if head {
             self.te.set(TransferEncoding::empty());
@@ -259,6 +262,15 @@ impl<T: MessageType> MessageEncoder<T> {
         message.encode_status(dst);
         message.encode_headers(dst, version, length, ctype, extra_headers)
     }
+}
+
+/// Returns `true` for statuses that never have a response body:
+/// informational (except `101 Switching Protocols`), `204 No Content`,
+/// and `304 Not Modified`.
+fn is_bodyless(status: StatusCode) -> bool {
+    status == StatusCode::NO_CONTENT
+        || status == StatusCode::NOT_MODIFIED
+        || (status.is_informational() && status != StatusCode::SWITCHING_PROTOCOLS)
 }
 
 /// Encoders to handle different Transfer-Encodings.
