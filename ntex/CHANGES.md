@@ -37,6 +37,13 @@
   only after `100 Continue` is sent, so slow expectation handling no longer
   causes a `408 Request Timeout`
 
+* Start the HTTP/1 request-head read-rate timer of the first request with its
+  first byte, a new connection waits for that byte for the client timeout only
+
+* Keep the HTTP/1 keep-alive timer running for a partially received request
+  head when request-head timing is disabled, previously the first byte of the
+  next request stopped it and the connection could stay open forever
+
 ## [4.0.0] - 2026-09-18
 
 * Migrate to `ntex-service` 5 and its typed service state model. Service

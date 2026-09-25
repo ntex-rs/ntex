@@ -11,14 +11,16 @@ use crate::time::Seconds;
 pub(super) struct Timers {
     pub(super) active: Timer,
     pub(super) progress: ReadProgress,
-    /// The payload timer is held until `100 Continue` or a response is sent.
-    pub(super) payload_hold: bool,
 }
 
 /// The purpose of the armed dispatcher timer.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(super) enum Timer {
     Stopped,
+    /// New connection, waiting for the first byte of the first request.
+    /// The transport timer is armed only if request-head timing is
+    /// configured, otherwise waiting is unbounded.
+    ClientTimeout,
     /// Idle persistent connection, waiting for the next request.
     KeepAlive,
     /// Request-head read rate.
@@ -61,22 +63,22 @@ pub(super) fn read_timeout(timeout: Seconds, max_timeout: Seconds) -> (Seconds, 
 }
 
 impl Timers {
-    /// Starts request-head timing for the first request when it is
-    /// configured, so a new connection must start sending data in time.
+    /// Starts the client timeout when request-head timing is configured, so
+    /// a new connection must start sending its first request in time.
+    ///
+    /// Request-head read-rate timing starts with the first received byte.
     ///
     /// A timer or timeout left on the transport does not apply to the new
     /// dispatcher.
     pub(super) fn new(io: &IoRef, headers: Option<FrameReadRate>) -> Self {
         io.stop_timer();
-        let mut timers = Timers {
-            active: Timer::Stopped,
-            progress: ReadProgress::EMPTY,
-            payload_hold: false,
-        };
         if let Some(cfg) = headers {
-            timers.start(io, Timer::Headers, cfg, cfg.max_timeout);
+            io.start_timer(cfg.timeout);
         }
-        timers
+        Timers {
+            active: Timer::ClientTimeout,
+            progress: ReadProgress::EMPTY,
+        }
     }
 
     /// Arms the transport timer for a rate period of `timer`.
@@ -96,7 +98,6 @@ impl Timers {
     /// Resets the state after a request head has been decoded.
     pub(super) fn reset(&mut self, io: &IoRef) {
         self.progress = ReadProgress::EMPTY;
-        self.payload_hold = false;
         self.stop(io);
     }
 
@@ -143,36 +144,42 @@ impl Timers {
         }
     }
 
+    /// Starts request-payload timing with a fresh budget.
+    pub(super) fn start_payload(&mut self, io: &IoRef, cfg: Option<FrameReadRate>) {
+        if let Some(cfg) = cfg {
+            log::debug!("{}: Start payload timer {:?}", io.tag(), cfg.timeout);
+            self.progress.consumed = 0;
+            self.start(io, Timer::Payload, cfg, cfg.max_timeout);
+        }
+    }
+
     /// Records payload bytes consumed by a decode attempt.
     ///
-    /// Starts payload timing if it is not running. Resuming a paused timer
-    /// keeps the received bytes and the remaining cumulative budget.
+    /// Resumes paused payload timing, keeping the received bytes and the
+    /// remaining cumulative budget. Stopped timing is not started.
     pub(super) fn payload_decoded(
         &mut self,
         io: &IoRef,
         cfg: Option<FrameReadRate>,
         consumed: u32,
     ) {
-        if self.payload_hold {
-            return;
-        }
-        if self.active == Timer::Payload {
-            self.progress.consumed = self.progress.consumed.saturating_add(consumed);
-        } else if let Some(cfg) = cfg {
-            log::debug!("{}: Start payload timer {:?}", io.tag(), cfg.timeout);
-
-            let max_timeout = if self.active == Timer::PayloadPaused {
+        match self.active {
+            Timer::Payload => {
                 self.progress.consumed = self.progress.consumed.saturating_add(consumed);
-                if cfg.max_timeout.is_zero() {
-                    Seconds::ZERO
-                } else {
-                    self.progress.max_timeout
+            }
+            Timer::PayloadPaused => {
+                if let Some(cfg) = cfg {
+                    log::debug!("{}: Resume payload timer {:?}", io.tag(), cfg.timeout);
+                    self.progress.consumed = self.progress.consumed.saturating_add(consumed);
+                    let max_timeout = if cfg.max_timeout.is_zero() {
+                        Seconds::ZERO
+                    } else {
+                        self.progress.max_timeout
+                    };
+                    self.start(io, Timer::Payload, cfg, max_timeout);
                 }
-            } else {
-                self.progress.consumed = consumed;
-                cfg.max_timeout
-            };
-            self.start(io, Timer::Payload, cfg, max_timeout);
+            }
+            _ => (),
         }
     }
 

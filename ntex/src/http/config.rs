@@ -130,6 +130,9 @@ impl HttpServiceConfig {
     /// Sets the server keep-alive behavior.
     ///
     /// By default, idle persistent connections are closed after five seconds.
+    /// The keep-alive timeout does not apply before the first request. If
+    /// request-head timing is disabled, it also bounds a partially received
+    /// request head after the first request.
     pub fn set_keepalive<W: Into<KeepAlive>>(mut self, val: W) -> Self {
         let (keep_alive, ka_enabled) = match val.into() {
             KeepAlive::Timeout(val) => (val, true),
@@ -159,11 +162,13 @@ impl HttpServiceConfig {
     #[must_use]
     /// Sets the initial timeout for reading request headers.
     ///
-    /// If the client does not begin transmitting a complete header block
-    /// within this period, the request is rejected with `408 Request Timeout`.
-    /// A zero duration disables header-read timing, allowing a new connection
-    /// to wait indefinitely for its first request independently of the
-    /// keep-alive policy. The default is one second.
+    /// A new connection must send the first byte of its first request within
+    /// this period, otherwise it is rejected with `408 Request Timeout`. The
+    /// request-head read rate starts with that byte, and this period is also
+    /// its measurement interval. A zero duration disables header-read timing.
+    /// A new connection can then wait indefinitely for its first request,
+    /// while on a persistent connection the keep-alive timeout bounds both
+    /// waiting for the next request and reading its head. The default is one second.
     ///
     /// This sets the measurement interval of the request-head read rate. The
     /// cumulative limit and required rate configured by
@@ -201,9 +206,11 @@ impl HttpServiceConfig {
     /// Sets read-rate limits for request headers.
     ///
     /// This setting protects HTTP/1 connections from clients that send a
-    /// request line or headers too slowly. The timer starts when the connection
-    /// begins waiting for the initial request. On a persistent connection, it
-    /// starts again after bytes for the next request head arrive.
+    /// request line or headers too slowly. The timer starts when the first
+    /// bytes of a request head arrive, on a new connection as well as on a
+    /// persistent one. Until the first byte of the first request arrives, a
+    /// new connection waits for at most one `timeout` interval, the
+    /// [client timeout](Self::set_client_timeout), without rate extension.
     ///
     /// `timeout` is the duration of one measurement interval. When an interval
     /// expires, the dispatcher grants another interval only if more than
@@ -212,7 +219,10 @@ impl HttpServiceConfig {
     /// request-head bytes count toward progress, including request-line and
     /// header bytes that the incremental parser has already consumed.
     ///
-    /// A zero `timeout` disables request-head timing. A zero `max_timeout`
+    /// A zero `timeout` disables request-head timing. The first request of a
+    /// connection is then unbounded, and the keep-alive timeout bounds waiting
+    /// for and reading each following request head. A zero
+    /// `max_timeout`
     /// removes the cumulative limit, allowing the deadline to be extended
     /// indefinitely while the required read rate is maintained. When
     /// `max_timeout` is not an exact multiple of `timeout`, the final

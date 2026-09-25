@@ -19,10 +19,8 @@ use super::{Message, ProtocolError, codec::Codec};
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     pub struct Flags: u8 {
-        /// No request has been decoded yet
-        const FIRST_REQUEST        = 0b0000_0001;
         /// Disconnect
-        const DISCONNECT_SENT      = 0b0000_0010;
+        const DISCONNECT_SENT      = 0b0000_0001;
     }
 }
 
@@ -53,14 +51,14 @@ enum State<F, B, Err> {
 struct DispatcherInner<F, B, Err> {
     io: Rc<Io<F>>,
     flags: Flags,
+    codec: Codec,
+    timers: Timers,
+    config: DispatcherConfig,
     service: Pipeline<Request, Response<B>, Err>,
     control: Pipeline<Control<F, Err>, ControlAck<F>, DispatchError>,
     disconnect: Option<ServiceDisconnectReason>,
-    codec: Codec,
-    config: DispatcherConfig,
     payload: Option<(PayloadDecoder, bstream::Sender<PayloadError>)>,
     pending_payload_error: Option<Either<ProtocolError, Option<io::Error>>>,
-    timers: Timers,
 }
 
 impl<F, B, Err> Dispatcher<F, B, Err>
@@ -85,15 +83,15 @@ where
         Dispatcher {
             st: State::ReadRequest,
             inner: DispatcherInner {
-                flags: Flags::FIRST_REQUEST,
                 codec,
+                timers,
+                config,
                 service,
                 control,
-                config,
+                flags: Flags::empty(),
                 io: Rc::new(io),
                 payload: None,
                 pending_payload_error: None,
-                timers,
                 disconnect: None,
             },
         }
@@ -168,13 +166,13 @@ where
                                         inner.send_response(res, body.into())
                                     }
                                     ControlResult::Continue(req) => {
-                                        inner.timers.payload_hold = false;
                                         let result =
                                             inner.io.encode_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
                                         if let Err(err) = result {
                                             *this.st = inner.ctl_peer_gone(Some(err));
                                             continue;
                                         }
+                                        inner.start_payload_timer();
                                         if req.upgrade() {
                                             inner.ctl_upgrade(req)
                                         } else {
@@ -297,8 +295,8 @@ where
                         self.payload = Some((decoder, ps));
 
                         // the client does not send the body before `100 Continue`
-                        if req.head().expect() {
-                            self.timers.payload_hold = true;
+                        if !req.head().expect() {
+                            self.start_payload_timer();
                         }
                     }
                 }
@@ -329,10 +327,15 @@ where
                     } else {
                         ready!(self.poll_read_request(cx))
                     }
-                } else if self.codec.is_reading_hdrs() {
+                } else if self.codec.is_reading_hdrs() && self.codec.cfg.headers_read_rate.is_some()
+                {
+                    // a partial request head wins over keep-alive or client timeout
                     let remains = self.io.with_read_dst(|buf| buf.len()) as u32;
                     self.start_headers_timer(buffered, remains);
                     ready!(self.poll_read_request(cx))
+                } else if self.timers.active == Timer::ClientTimeout {
+                    log::trace!("{}: Client timeout, no request", self.io.tag());
+                    self.ctl_proto_err(ProtocolError::SlowRequestTimeout)
                 } else {
                     log::trace!("{}: Keep-alive timeout, close connection", self.io.tag());
                     self.ctl_keepalive(true)
@@ -350,7 +353,7 @@ where
             msg,
             body.size()
         );
-        self.timers.payload_hold = false;
+        self.start_payload_timer();
 
         // close connection if payload stream is dropped and not consumed
         if let Some((_pl, snd)) = &self.payload
@@ -656,34 +659,42 @@ where
     ) -> Option<State<F, B, Err>> {
         // got parsed frame
         if decoded.item.is_some() {
-            self.flags.remove(Flags::FIRST_REQUEST);
             self.timers.reset(&self.io);
         } else if self.timers.active == Timer::Headers {
             // received new data but not enough for parsing complete frame
             self.timers.progress.remains = decoded.remains as u32;
-        } else if !self.flags.contains(Flags::FIRST_REQUEST)
-            && self.timers.progress.remains == 0
-            && decoded.remains == 0
-            && !self.codec.is_reading_hdrs()
-        {
-            // no new data, start keep-alive timer
-            if self.codec.keepalive() {
-                if self.codec.cfg.ka_enabled {
-                    self.timers
-                        .start_keepalive(&self.io, self.codec.cfg.keep_alive);
-                }
-            } else {
-                self.io.close();
-                return Some(self.ctl_keepalive(false));
+        } else if self.timers.active == Timer::ClientTimeout {
+            // only the headers read rate bounds the first request, it starts
+            // with the first received byte
+            if (self.codec.is_reading_hdrs() || decoded.remains != 0)
+                && self.codec.cfg.headers_read_rate.is_some()
+            {
+                self.start_headers_timer(
+                    (decoded.consumed as u32).saturating_add(decoded.remains as u32),
+                    decoded.remains as u32,
+                );
             }
-        } else if self.codec.is_reading_hdrs()
-            && (self.timers.active == Timer::KeepAlive
-                || self.codec.cfg.headers_read_rate.is_some())
-        {
-            self.start_headers_timer(
-                (decoded.consumed as u32).saturating_add(decoded.remains as u32),
-                decoded.remains as u32,
-            );
+        } else if self.codec.is_reading_hdrs() || decoded.remains != 0 {
+            // partial request head, without a headers read rate the
+            // keep-alive timer bounds it
+            if self.codec.cfg.headers_read_rate.is_some() {
+                self.start_headers_timer(
+                    (decoded.consumed as u32).saturating_add(decoded.remains as u32),
+                    decoded.remains as u32,
+                );
+            } else if self.codec.cfg.ka_enabled {
+                self.timers
+                    .start_keepalive(&self.io, self.codec.cfg.keep_alive);
+            }
+        } else if self.codec.keepalive() {
+            // no new data, start keep-alive timer
+            if self.codec.cfg.ka_enabled {
+                self.timers
+                    .start_keepalive(&self.io, self.codec.cfg.keep_alive);
+            }
+        } else {
+            self.io.close();
+            return Some(self.ctl_keepalive(false));
         }
         None
     }
@@ -705,8 +716,17 @@ where
         );
     }
 
+    /// Starts payload timing for the current request if it is not started
+    /// yet, an expectation can be handled without `100 Continue`.
+    fn start_payload_timer(&mut self) {
+        if self.payload.is_some() && self.timers.active == Timer::Stopped {
+            self.timers
+                .start_payload(&self.io, self.codec.cfg.payload_read_rate);
+        }
+    }
+
     fn publish(&mut self, req: Request) -> State<F, B, Err> {
-        self.timers.payload_hold = false;
+        self.start_payload_timer();
         State::CallPublish {
             fut: self.service.call_nowait(req),
         }
@@ -818,8 +838,12 @@ mod tests {
             consumed: 2,
         };
 
-        h1.inner.flags.remove(Flags::FIRST_REQUEST);
         h1.inner.timers.stop(&h1.inner.io);
+        h1.inner.payload = Some((
+            PayloadDecoder::length(4),
+            bstream::channel::<PayloadError>().0,
+        ));
+        h1.inner.start_payload_timer();
         h1.inner.update_payload_timer(&decoded);
         assert_eq!(h1.inner.timers.progress.max_timeout, Seconds(5));
         assert!(h1.inner.handle_timeout().is_ok());
@@ -968,6 +992,169 @@ mod tests {
 
         client.close().await;
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+    }
+
+    fn keepalive_h1(server: IoTest) -> Dispatcher<Base, body::Body, io::Error> {
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(
+                HttpServiceConfig::new()
+                    .set_client_timeout(Seconds::ZERO)
+                    .set_keepalive(Seconds(1)),
+            )
+            .into();
+
+        Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
+            ),
+            Pipeline::new((), DefaultControlService),
+            DispatcherConfig::default(),
+        )
+    }
+
+    /// Without request-head timing, waiting for the first request is not
+    /// bounded by keep-alive, for an idle or a partially received request.
+    #[crate::rt_test]
+    async fn test_first_request_unbounded_without_header_timeout() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let mut h1 = keepalive_h1(server);
+
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert_eq!(h1.inner.timers.active, Timer::ClientTimeout);
+        sleep(Millis(2200)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(h1.inner.io.is_active());
+
+        client.write("GET / HTTP/1.1\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert_eq!(h1.inner.timers.active, Timer::ClientTimeout);
+        sleep(Millis(2200)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(h1.inner.io.is_active());
+
+        client.write("\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        sleep(Millis(50)).await;
+        assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
+
+        client.close().await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+    }
+
+    /// Without request-head timing, a partial next request does not stop the
+    /// keep-alive timer.
+    #[crate::rt_test]
+    async fn test_partial_next_request_keepalive_without_header_timeout() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let mut h1 = keepalive_h1(server);
+
+        client.write("GET /first HTTP/1.1\r\n\r\nGET /next HTTP/1.1\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        sleep(Millis(50)).await;
+        assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
+        assert_eq!(h1.inner.timers.active, Timer::KeepAlive);
+
+        client.write("host: example.com");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert_eq!(h1.inner.timers.active, Timer::KeepAlive);
+
+        let res = timeout(Millis(3000), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
+        assert!(res.unwrap().is_ok());
+        assert!(client.read_any().is_empty());
+    }
+
+    fn client_timeout_h1(server: IoTest) -> Dispatcher<Base, body::Body, io::Error> {
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(
+                HttpServiceConfig::new()
+                    .set_headers_read_rate(Seconds(1), Seconds(5), 1024)
+                    .set_keepalive(KeepAlive::Disabled),
+            )
+            .into();
+
+        Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
+            ),
+            Pipeline::new((), DefaultControlService),
+            DispatcherConfig::default(),
+        )
+    }
+
+    /// A new connection that sends nothing is bounded by the client timeout.
+    #[crate::rt_test]
+    async fn test_client_timeout_without_request() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let mut h1 = client_timeout_h1(server);
+
+        assert_eq!(h1.inner.timers.active, Timer::ClientTimeout);
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert_eq!(h1.inner.timers.active, Timer::ClientTimeout);
+
+        let res = timeout(Millis(3000), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
+        assert!(res.unwrap().is_ok());
+        assert!(
+            client
+                .read_any()
+                .starts_with(b"HTTP/1.1 408 Request Timeout\r\n")
+        );
+    }
+
+    /// The headers read rate starts with the first byte of the first request,
+    /// with the complete cumulative budget.
+    #[crate::rt_test]
+    async fn test_headers_rate_starts_with_first_byte() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let mut h1 = client_timeout_h1(server);
+
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert_eq!(h1.inner.timers.active, Timer::ClientTimeout);
+
+        let partial = "GET / HTTP/1.1\r\n";
+        client.write(partial);
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert_eq!(h1.inner.timers.active, Timer::Headers);
+        assert_eq!(h1.inner.timers.progress.consumed, partial.len() as u32);
+        assert_eq!(h1.inner.timers.progress.max_timeout, Seconds(4));
+
+        client.write("\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        sleep(Millis(50)).await;
+        assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
+    }
+
+    /// The first byte arriving together with the client timeout wins.
+    #[crate::rt_test]
+    async fn test_first_byte_wins_client_timeout() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let mut h1 = client_timeout_h1(server);
+
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        client.write("GET / HTTP/1.1\r\n");
+        sleep(Millis(50)).await;
+        h1.inner.io.notify_timeout();
+
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert_eq!(h1.inner.timers.active, Timer::Headers);
+        assert!(h1.inner.io.is_active());
+        assert!(client.read_any().is_empty());
     }
 
     #[crate::rt_test]
