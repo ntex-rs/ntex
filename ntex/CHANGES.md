@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* Fix HTTP client pool with connection limit `0` never waking requests
+  waiting for a connection
+
 * Fix HTTP/1 client losing an early response, such as `413`, when the server
   closes the connection before the request body is sent
 

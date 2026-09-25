@@ -328,7 +328,7 @@ impl Inner {
     fn check_availibility(&mut self) {
         let mut waiters = self.waiters.borrow_mut();
         waiters.cleanup();
-        if !waiters.waiters.is_empty() && self.acquired < self.cfg.limit {
+        if !waiters.waiters.is_empty() && (self.cfg.limit == 0 || self.acquired < self.cfg.limit) {
             let _ = self.waker.send(());
         }
     }
@@ -616,6 +616,44 @@ mod tests {
     use crate::service::{Pipeline, boxed, fn_service};
     use crate::time::{Millis, Seconds, sleep};
     use crate::{io as nio, testing::IoTest, util::lazy};
+
+    #[crate::rt_test]
+    async fn test_unlimited_concurrent_connect() {
+        let store = Rc::new(RefCell::new(Vec::new()));
+        let store2 = store.clone();
+
+        let cfg = SharedCfg::new("C")
+            .add(ClientConfig::new().set_connection_limit(0))
+            .build();
+        let pool = ConnectionPool::new(
+            ConnectorPipeline::new(boxed::service(fn_service(move |_| {
+                let (client, server) = IoTest::create();
+                store2.borrow_mut().push(server);
+                Box::pin(async move {
+                    sleep(Millis(10)).await;
+                    Ok(IoBoxed::from(nio::Io::new(client, SharedCfg::default())))
+                })
+            }))),
+            cfg.get(),
+        );
+        let pipe = Pipeline::new(cfg, pool.clone());
+        let req = Connect {
+            uri: Uri::try_from("http://localhost/test").unwrap(),
+            addr: None,
+        };
+
+        // second request waits for the pending connect to the same host
+        let (c1, c2) = crate::time::timeout(
+            Millis(1000),
+            crate::util::join(pipe.call(req.clone()), pipe.call(req.clone())),
+        )
+        .await
+        .unwrap();
+        assert!(c1.is_ok());
+        assert!(c2.is_ok());
+        assert_eq!(store.borrow().len(), 2);
+        assert_eq!(pool.0.inner.borrow().acquired, 2);
+    }
 
     #[crate::rt_test]
     async fn test_basics() {
