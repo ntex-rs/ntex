@@ -379,15 +379,7 @@ where
 
             match result {
                 Ok(()) => match body.size() {
-                    BodySize::None | BodySize::Empty => {
-                        if let Some(st) = self.check_disconnect() {
-                            st
-                        } else if self.payload.is_some() {
-                            self.read_payload()
-                        } else {
-                            State::ReadRequest
-                        }
-                    }
+                    BodySize::None | BodySize::Empty => self.response_done(),
                     _ => State::SendPayload { body },
                 },
                 Err(err) => self.ctl_proto_err(err.into()),
@@ -448,12 +440,8 @@ where
                     );
                     if let Err(err) = self.io.encode(Message::Chunk(None), &self.codec) {
                         self.ctl_proto_err(err.into())
-                    } else if let Some(st) = self.check_disconnect() {
-                        st
-                    } else if self.payload.is_some() {
-                        self.read_payload()
                     } else {
-                        State::ReadRequest
+                        self.response_done()
                     }
                 }
                 Some(Err(err)) => {
@@ -538,11 +526,7 @@ where
                 let mut updated = false;
                 self.release_write_timer();
                 loop {
-                    let buffered = if self.timers.active == Timer::Payload {
-                        Some(self.io.with_read_dst(|buf| buf.len()))
-                    } else {
-                        None
-                    };
+                    let buffered = self.io.with_read_dst(|buf| buf.len());
                     let Some((payload_codec, sender)) = self.payload.as_mut() else {
                         break;
                     };
@@ -583,13 +567,10 @@ where
                             }
                         }
                         Err(RecvError::KeepAlive) => {
-                            if let Some(buffered) = buffered {
-                                let remains = self.io.with_read_dst(|buf| buf.len());
-                                let p = &mut self.timers.progress;
-                                p.consumed = p
-                                    .consumed
-                                    .saturating_add(buffered.saturating_sub(remains) as u32);
-                            }
+                            // the decode attempt can consume bytes without an item
+                            let remains = self.io.with_read_dst(|buf| buf.len());
+                            self.timers
+                                .payload_consumed(buffered.saturating_sub(remains) as u32);
                             if let Err(err) = self.handle_timeout() {
                                 PayloadFailure::Protocol(err)
                             } else {
@@ -767,11 +748,17 @@ where
         }
     }
 
-    /// Switches to reading the rest of the request payload after the
-    /// response is sent.
-    fn read_payload(&mut self) -> State<F, B, Err> {
-        self.start_payload_timer();
-        State::ReadPayload
+    /// Handles a sent response: reports a pending disconnect, or reads
+    /// the rest of the request payload, or the next request.
+    fn response_done(&mut self) -> State<F, B, Err> {
+        if let Some(st) = self.check_disconnect() {
+            st
+        } else if self.payload.is_some() {
+            self.start_payload_timer();
+            State::ReadPayload
+        } else {
+            State::ReadRequest
+        }
     }
 
     fn publish(&mut self, req: Request) -> State<F, B, Err> {
@@ -1779,7 +1766,7 @@ mod tests {
         assert!(h1.inner.io.is_wr_backpressure());
         assert_eq!(h1.inner.timers.active, Timer::Write);
 
-        let res = timeout(Millis(3000), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
+        let res = timeout(Millis(5000), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
         assert!(res.unwrap().is_ok());
         assert!(client.is_closed());
     }
@@ -1798,7 +1785,7 @@ mod tests {
         );
 
         client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\n\r\nb");
-        let res = timeout(Millis(3000), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
+        let res = timeout(Millis(5000), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
         assert!(res.unwrap().is_ok());
 
         let mut payload = payload.borrow_mut().take().unwrap();

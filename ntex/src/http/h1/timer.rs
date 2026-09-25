@@ -192,6 +192,13 @@ impl Timers {
         }
     }
 
+    /// Records payload bytes consumed during running payload timing.
+    pub(super) fn payload_consumed(&mut self, consumed: u32) {
+        if self.active == Timer::Payload {
+            self.progress.consumed = self.progress.consumed.saturating_add(consumed);
+        }
+    }
+
     /// Records payload bytes consumed by a decode attempt.
     ///
     /// Resumes paused payload timing, keeping the received bytes, the
@@ -199,15 +206,13 @@ impl Timers {
     /// Stopped timing is not started.
     pub(super) fn payload_decoded(&mut self, io: &IoRef, consumed: u32) {
         match self.active {
-            Timer::Payload => {
-                self.progress.consumed = self.progress.consumed.saturating_add(consumed);
-            }
+            Timer::Payload => self.payload_consumed(consumed),
             Timer::PayloadPaused => {
                 let period = self.progress.period;
                 log::trace!("{}: Resume payload timer {:?}", io.tag(), period);
-                self.progress.consumed = self.progress.consumed.saturating_add(consumed);
-                self.progress.period = Seconds::ZERO;
                 self.active = Timer::Payload;
+                self.payload_consumed(consumed);
+                self.progress.period = Seconds::ZERO;
                 if period.is_zero() {
                     // the interrupted period has expired, check the read rate
                     io.notify_timeout();
