@@ -686,6 +686,26 @@ async fn client_read_until_eof_http11() {
 }
 
 #[ntex::test]
+async fn client_payload_poll_after_eof() {
+    let addr = raw_server(b"HTTP/1.1 200 OK\r\ncontent-length: 8\r\n\r\nwelcome!");
+
+    let response = Client::new()
+        .get(format!("http://{addr}/").as_str())
+        .no_decompress()
+        .send()
+        .await
+        .unwrap();
+    let mut payload = response.take_payload();
+    let chunk = ntex::util::stream_recv(&mut payload)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(chunk, Bytes::from_static(b"welcome!"));
+    assert!(ntex::util::stream_recv(&mut payload).await.is_none());
+    assert!(ntex::util::stream_recv(&mut payload).await.is_none());
+}
+
+#[ntex::test]
 async fn client_truncated_body_http10() {
     let addr = raw_server(b"HTTP/1.0 200 OK\r\ncontent-length: 20\r\n\r\nwelcome!");
 

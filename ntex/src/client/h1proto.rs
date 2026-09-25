@@ -170,7 +170,10 @@ impl Stream for PlStream {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.as_mut();
         loop {
-            let item = ready!(this.io.as_ref().unwrap().poll_recv(&this.codec, cx));
+            let Some(io) = this.io.as_ref() else {
+                return Poll::Ready(None);
+            };
+            let item = ready!(io.poll_recv(&this.codec, cx));
             return Poll::Ready(Some(match item {
                 Ok(chunk) => {
                     if let Some(chunk) = chunk {

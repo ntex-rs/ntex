@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+* Fix HTTP/1 client response payload panic when polled after completion
+
 * Fix HTTP/1 client dropping the body of HTTP/1.1 responses delimited by
   connection close, and accepting truncated HTTP/1.0 response bodies
 
