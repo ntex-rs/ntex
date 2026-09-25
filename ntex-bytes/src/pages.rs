@@ -546,6 +546,16 @@ impl BytePage {
         }
     }
 
+    #[inline]
+    #[doc(hidden)]
+    /// Returns `true` if the data is stored inside the `BytePage` itself.
+    ///
+    /// Moving an inline page moves its data, pointers from `as_ptr()` do not
+    /// survive the move.
+    pub fn is_inline(&self) -> bool {
+        matches!(&self.inner, StorageType::Bytes(b) if b.is_inline())
+    }
+
     /// Splits the buffer into two at the given index.
     ///
     /// Afterwards, `self` contains elements `[at, len)`, and the returned `BytePage`
@@ -817,6 +827,11 @@ mod tests {
         assert_eq!(p.info(), PageKind::Storage);
         let p = BytePage::from(vec![1; 64]);
         assert_eq!(p.info(), PageKind::Vec);
+        assert!(!p.is_inline());
+
+        assert!(BytePage::from(Bytes::copy_from_slice(&[1; 4])).is_inline());
+        assert!(!BytePage::from(Bytes::copy_from_slice(&[1; 64])).is_inline());
+        assert!(!BytePage::from(BytesMut::copy_from_slice(&[1; 4][..])).is_inline());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use std::{cell::Cell, io, mem, num::NonZeroU32, os::fd::AsRawFd, rc::Rc, task::Poll};
 
-use ntex_bytes::{BufMut, BytePage, Bytes, BytesMut, info::PageKind};
+use ntex_bytes::{BufMut, BytePage, BytePages, Bytes, BytesMut, info::PageKind};
 use ntex_io::{IoContext, IoTaskStatus};
 use ntex_io_uring::{cqueue, opcode, opcode2, types::Fd};
 use ntex_rt::Arbiter;
@@ -74,10 +74,17 @@ enum Operation {
         id: usize,
         buf: BytesMut,
     },
+    /// Send of gathered pages, or of an inline page
     Send {
         id: usize,
         buf: Box<SendBuf>,
-        result: Option<io::Result<usize>>,
+        state: SendState,
+    },
+    /// Send of a single heap backed page, no allocation required
+    SendOne {
+        id: usize,
+        page: BytePage,
+        state: SendState,
     },
     Shutdown {
         tx: Option<pool::Sender<io::Result<()>>>,
@@ -97,16 +104,173 @@ struct SendBuf {
     pages: [Option<BytePage>; SEND_MAX_PAGES],
     iov: [libc::iovec; SEND_MAX_PAGES],
     msg: libc::msghdr,
+}
+
+#[derive(Debug)]
+struct SendState {
+    /// Result of the first completion of a zero-copy send
+    result: Option<io::Result<usize>>,
+    /// Zero-copy send
+    zc: bool,
     /// Zero-copy send with `IORING_SEND_ZC_REPORT_USAGE`
     zc_report: bool,
     /// Output was already returned to the write buffer for a resend
     resent: bool,
 }
 
-impl SendBuf {
+impl Operation {
+    /// Splits `Send` and `SendOne` operations for shared completion handling
+    fn into_send(self) -> (usize, SendData, SendState) {
+        match self {
+            Operation::Send { id, buf, state } => (id, SendData::Pages(buf), state),
+            Operation::SendOne { id, page, state } => (id, SendData::Page(page), state),
+            _ => unreachable!("not a send operation"),
+        }
+    }
+}
+
+/// Output of one send operation.
+///
+/// A single page is stored in the operation itself, the kernel references
+/// its heap data, which does not move with the operations slab. Inline pages
+/// and gathered pages are boxed.
+#[derive(Debug)]
+enum SendData {
+    Page(BytePage),
+    Pages(Box<SendBuf>),
+}
+
+/// Zero-copy send failure that is resolved by resending the output
+#[derive(Copy, Clone, Debug)]
+enum ZcRetry {
     /// The kernel rejected `IORING_SEND_ZC_REPORT_USAGE`
-    fn report_unsupported(&self, res: &io::Result<usize>) -> bool {
-        self.zc_report && matches!(res, Err(e) if e.raw_os_error() == Some(libc::EINVAL))
+    NoReport,
+    /// Pinned pages are charged against `RLIMIT_MEMLOCK` until the
+    /// notification arrives, the limit is shared by all connections
+    NoMem,
+}
+
+impl ZcRetry {
+    fn check(state: &SendState, res: &io::Result<usize>) -> Option<Self> {
+        match res.as_ref().err()?.raw_os_error()? {
+            libc::EINVAL if state.zc_report => Some(ZcRetry::NoReport),
+            libc::ENOMEM | libc::ENOBUFS if state.zc => Some(ZcRetry::NoMem),
+            _ => None,
+        }
+    }
+
+    fn apply(self, item: &mut StreamItem, zc_report: &mut bool) {
+        match self {
+            ZcRetry::NoReport => {
+                log::debug!(
+                    "{}: IORING_SEND_ZC_REPORT_USAGE is not supported",
+                    item.tag()
+                );
+                *zc_report = false;
+            }
+            ZcRetry::NoMem => {
+                log::debug!(
+                    "{}: Zero-copy send failed with no memory, disable ({:?})",
+                    item.tag(),
+                    item.fd()
+                );
+                item.flags.insert(Flags::NO_ZC);
+            }
+        }
+    }
+}
+
+/// Output of `page` past `offset` that shares the page's data, or a copy for
+/// `Vec` pages whose split would copy and free the original.
+fn shared_tail(page: &BytePage, offset: usize) -> BytePage {
+    if page.info() == PageKind::Vec {
+        BytePage::from(Bytes::copy_from_slice(&page[offset..]))
+    } else {
+        // `freeze` gives a view of its own, advancing a shared `BytesMut`
+        // storage in place would move the start of the original page too
+        let mut p = BytePage::from(page.clone().freeze());
+        p.advance_to(offset);
+        p
+    }
+}
+
+impl SendData {
+    /// Takes output for one send, gathering up to `max_pages` pages and
+    /// `max_size` bytes.
+    fn take(dst: &mut BytePages, max_pages: usize, max_size: usize) -> Option<Self> {
+        let first = dst.take()?;
+        let second = if max_pages > 1 { dst.take() } else { None };
+        let second = match second {
+            Some(page) if first.len() + page.len() <= max_size => page,
+            second => {
+                if let Some(page) = second {
+                    dst.prepend(page);
+                }
+                // the kernel references the page data by address
+                // while the operation moves with the slab
+                if !first.is_inline() {
+                    return Some(SendData::Page(first));
+                }
+                let mut buf = SendBuf::new();
+                buf.pages[0] = Some(first);
+                return Some(SendData::Pages(buf));
+            }
+        };
+        let mut size = first.len() + second.len();
+        let mut buf = SendBuf::new();
+        buf.pages[0] = Some(first);
+        buf.pages[1] = Some(second);
+        for slot in &mut buf.pages[2..max_pages] {
+            let Some(page) = dst.take() else { break };
+            if size + page.len() > max_size {
+                dst.prepend(page);
+                break;
+            }
+            size += page.len();
+            *slot = Some(page);
+        }
+        Some(SendData::Pages(buf))
+    }
+
+    fn into_op(self, id: usize, state: SendState) -> Operation {
+        match self {
+            SendData::Page(page) => Operation::SendOne { id, page, state },
+            SendData::Pages(buf) => Operation::Send { id, buf, state },
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            SendData::Page(page) => page.len(),
+            SendData::Pages(buf) => buf.len(),
+        }
+    }
+
+    /// Returns output past `sent` to the write buffer, the kernel is done
+    /// with the pages.
+    fn release(self, ctx: &IoContext, sent: usize) {
+        match self {
+            SendData::Page(mut page) => {
+                if sent < page.len() {
+                    page.advance_to(sent);
+                    ctx.with_write_dst(|dst| dst.prepend(page));
+                }
+            }
+            SendData::Pages(buf) => buf.release(ctx, sent),
+        }
+    }
+
+    /// Returns output past `sent` to the write buffer while the kernel still
+    /// references the pages until the zero-copy notification arrives.
+    fn release_shared(&self, ctx: &IoContext, sent: usize) {
+        match self {
+            SendData::Page(page) => {
+                if sent < page.len() {
+                    ctx.with_write_dst(|dst| dst.prepend(shared_tail(page, sent)));
+                }
+            }
+            SendData::Pages(buf) => buf.release_shared(ctx, sent),
+        }
     }
 }
 
@@ -120,6 +284,18 @@ impl std::fmt::Debug for SendBuf {
 }
 
 impl SendBuf {
+    fn new() -> Box<Self> {
+        Box::new(SendBuf {
+            pages: [const { None }; SEND_MAX_PAGES],
+            iov: [libc::iovec {
+                iov_base: std::ptr::null_mut(),
+                iov_len: 0,
+            }; SEND_MAX_PAGES],
+            // SAFETY: all-zero is a valid `msghdr`
+            msg: unsafe { mem::zeroed() },
+        })
+    }
+
     fn pages(&self) -> impl Iterator<Item = &BytePage> {
         self.pages.iter().map_while(Option::as_ref)
     }
@@ -141,7 +317,7 @@ impl SendBuf {
 
     /// Returns output past `sent` to the write buffer, the kernel is done
     /// with the pages.
-    fn release(mut self, ctx: &IoContext, sent: usize) {
+    fn release(mut self: Box<Self>, ctx: &IoContext, sent: usize) {
         if let Some((idx, offset)) = self.unsent(sent) {
             ctx.with_write_dst(|dst| {
                 for i in (idx..SEND_MAX_PAGES).rev() {
@@ -158,26 +334,13 @@ impl SendBuf {
 
     /// Returns output past `sent` to the write buffer while the kernel still
     /// references the pages until the zero-copy notification arrives.
-    ///
-    /// The pages must not be moved, the returned output shares their data,
-    /// or is a copy for `Vec` pages whose split would copy and free the
-    /// original.
     fn release_shared(&self, ctx: &IoContext, sent: usize) {
         if let Some((idx, offset)) = self.unsent(sent) {
             ctx.with_write_dst(|dst| {
                 for i in (idx..SEND_MAX_PAGES).rev() {
                     if let Some(page) = &self.pages[i] {
                         let offset = if i == idx { offset } else { 0 };
-                        dst.prepend(if page.info() == PageKind::Vec {
-                            BytePage::from(Bytes::copy_from_slice(&page[offset..]))
-                        } else {
-                            // `freeze` gives a view of its own, advancing a
-                            // shared `BytesMut` storage in place would move
-                            // the start of the original page too
-                            let mut p = BytePage::from(page.clone().freeze());
-                            p.advance_to(offset);
-                            p
-                        });
+                        dst.prepend(shared_tail(page, offset));
                     }
                 }
             });
@@ -309,7 +472,8 @@ impl Handler for StreamOpsHandler {
                         }
                     }
                 }
-                Operation::Send { id, buf, .. } => {
+                op @ (Operation::Send { .. } | Operation::SendOne { .. }) => {
+                    let (id, buf, _) = op.into_send();
                     if let Some(item) = st.streams.get_mut(id) {
                         #[cfg(feature = "trace")]
                         log::trace!("{}: Send canceled: {:?}", item.tag(), item.fd());
@@ -372,7 +536,8 @@ impl Handler for StreamOpsHandler {
                         }
                     }
                 }
-                Operation::Send { id, mut buf, result } => {
+                op @ (Operation::Send { .. } | Operation::SendOne { .. }) => {
+                    let (id, buf, mut state) = op.into_send();
                     if let Some(item) = st.streams.get_mut(id) {
                         #[cfg(feature = "trace")]
                         log::trace!(
@@ -385,7 +550,7 @@ impl Handler for StreamOpsHandler {
                         if cqueue::notif(flags) {
                             // the kernel copied data anyway (loopback, veth, no
                             // scatter-gather), zero-copy only adds overhead
-                            if buf.zc_report
+                            if state.zc_report
                                 && matches!(res, Ok(v) if v & IORING_NOTIF_USAGE_ZC_COPIED != 0)
                                 && !item.flags.contains(Flags::NO_ZC)
                             {
@@ -393,12 +558,12 @@ impl Handler for StreamOpsHandler {
                                 log::trace!("{}: Zero-copy send was copied, disable ({:?})", item.tag(), item.fd());
                                 item.flags.insert(Flags::NO_ZC);
                             }
-                            if buf.resent {
+                            if state.resent {
                                 let _ = st.ops.remove(user_data);
                                 return;
                             }
-                            let has_result = result.is_some();
-                            let res = result.unwrap_or(res);
+                            let has_result = state.result.is_some();
+                            let res = state.result.unwrap_or(res);
                             if matches!(res, Err(ref e) if e.raw_os_error() == Some(libc::ECANCELED)) {
                                 #[cfg(feature = "trace")]
                                 log::trace!("{}: Send canceled: {:?}", item.tag(), item.fd());
@@ -417,7 +582,7 @@ impl Handler for StreamOpsHandler {
                             let res = if has_result {
                                 res.and_then(write_status)
                             } else {
-                                complete_send(&item.ctx, *buf, res)
+                                complete_send(&item.ctx, buf, res)
                             };
                             if item.ctx.update_write_status(res) == IoTaskStatus::Io {
                                 st.send(id, &self.inner.api);
@@ -433,38 +598,33 @@ impl Handler for StreamOpsHandler {
                                     buf.release_shared(&item.ctx, n);
                                 }
                                 st.send(id, &self.inner.api);
-                            } else if buf.report_unsupported(&res) {
-                                log::debug!("{}: IORING_SEND_ZC_REPORT_USAGE is not supported", item.tag());
+                            } else if let Some(retry) = ZcRetry::check(&state, &res) {
+                                retry.apply(item, &mut st.zc_report);
                                 // the kernel may hold pages until the notification
                                 buf.release_shared(&item.ctx, 0);
-                                buf.resent = true;
-                                st.zc_report = false;
+                                state.resent = true;
                                 st.send(id, &self.inner.api);
                             }
                             // insert op back for "notify" handling
-                            st.ops[user_data] = Some(Operation::Send {
-                                id,
-                                buf,
-                                result: Some(res) });
+                            state.result = Some(res);
+                            st.ops[user_data] = Some(buf.into_op(id, state));
                             // we reuse same op id
                             return
                         } else {
                             // reset op reference
                             item.wr_op.take();
 
-                            // kernel does not support `IORING_SEND_ZC_REPORT_USAGE`,
-                            // resend without it
-                            if buf.report_unsupported(&res) {
-                                log::debug!("{}: IORING_SEND_ZC_REPORT_USAGE is not supported", item.tag());
+                            // resend without the failed zero-copy feature
+                            if let Some(retry) = ZcRetry::check(&state, &res) {
+                                retry.apply(item, &mut st.zc_report);
                                 buf.release(&item.ctx, 0);
-                                st.zc_report = false;
                                 st.send(id, &self.inner.api);
                                 let _ = st.ops.remove(user_data);
                                 return;
                             }
 
                             // release buffer and try to send next chunk
-                            let res = complete_send(&item.ctx, *buf, res);
+                            let res = complete_send(&item.ctx, buf, res);
                             if item.ctx.update_write_status(res) == IoTaskStatus::Io {
                                 st.send(id, &self.inner.api);
                             }
@@ -472,7 +632,7 @@ impl Handler for StreamOpsHandler {
                     } else if cqueue::more(flags) && !cqueue::notif(flags) {
                         // stream is gone, but the kernel still holds the buffer
                         // until the zero-copy notification arrives
-                        st.ops[user_data] = Some(Operation::Send { id, buf, result: None });
+                        st.ops[user_data] = Some(buf.into_op(id, state));
                         return;
                     }
                 }
@@ -541,7 +701,7 @@ fn write_status(n: usize) -> io::Result<usize> {
 /// The pages were taken out of the write buffer when the send was submitted,
 /// so they are counted as in-flight output. Whatever the kernel did not accept
 /// has to go back, otherwise it is both lost and left counted as outstanding.
-fn complete_send(ctx: &IoContext, buf: SendBuf, res: io::Result<usize>) -> io::Result<usize> {
+fn complete_send(ctx: &IoContext, buf: SendData, res: io::Result<usize>) -> io::Result<usize> {
     if let Ok(n) = res
         && n < buf.len()
     {
@@ -611,46 +771,22 @@ impl StreamOpsStorage {
                 };
                 // a zero-copy send is limited to `ZC_MAX_SIZE`
                 let max_size = if zc { ZC_MAX_SIZE as usize } else { SEND_MAX_SIZE };
-                let buf = item.ctx.with_write_dst(|dst| {
-                    let first = dst.take()?;
-                    let mut size = first.len();
-                    let mut buf = Box::new(SendBuf {
-                        pages: [const { None }; SEND_MAX_PAGES],
-                        iov: [libc::iovec {
-                            iov_base: std::ptr::null_mut(),
-                            iov_len: 0,
-                        }; SEND_MAX_PAGES],
-                        // SAFETY: all-zero is a valid `msghdr`
-                        msg: unsafe { mem::zeroed() },
-                        zc_report: false,
-                        resent: false,
-                    });
-                    buf.pages[0] = Some(first);
-                    for slot in &mut buf.pages[1..max_pages] {
-                        let Some(page) = dst.take() else { break };
-                        if size + page.len() > max_size {
-                            dst.prepend(page);
-                            break;
-                        }
-                        size += page.len();
-                        *slot = Some(page);
-                    }
-                    Some(buf)
-                });
+                let buf = item
+                    .ctx
+                    .with_write_dst(|dst| SendData::take(dst, max_pages, max_size));
                 let Some(mut buf) = buf else {
                     return;
                 };
                 let len = buf.len();
-                let num = buf.pages().count();
+                let num = match &buf {
+                    SendData::Page(_) => 1,
+                    SendData::Pages(buf) => buf.pages().count(),
+                };
                 let use_zc = zc
                     && (ZC_SIZE as usize..=ZC_MAX_SIZE as usize).contains(&len)
                     && (num == 1 || !item.flags.contains(Flags::NO_ZC_MSG));
-                buf.zc_report = use_zc && self.zc_report;
-                let zc_flags = if buf.zc_report {
-                    IORING_SEND_ZC_REPORT_USAGE
-                } else {
-                    0
-                };
+                let zc_report = use_zc && self.zc_report;
+                let zc_flags = if zc_report { IORING_SEND_ZC_REPORT_USAGE } else { 0 };
 
                 #[cfg(feature = "trace")]
                 log::trace!(
@@ -658,11 +794,19 @@ impl StreamOpsStorage {
                     item.ctx.tag(),
                 );
 
-                // SAFETY: pages are stored in the boxed `SendBuf` and are not
-                // moved until the operation completes
+                // SAFETY: a single page is heap backed, gathered pages are
+                // stored in the boxed `SendBuf`, the data does not move until
+                // the operation completes
                 let entry = if num == 1 {
-                    let ptr = buf.pages().next().map(|page| unsafe { page.as_ptr() });
-                    let (ptr, len) = (ptr.unwrap_or_default(), len as u32);
+                    let ptr = match &buf {
+                        SendData::Page(page) => unsafe { page.as_ptr() },
+                        SendData::Pages(buf) => buf
+                            .pages()
+                            .next()
+                            .map(|page| unsafe { page.as_ptr() })
+                            .unwrap_or_default(),
+                    };
+                    let len = len as u32;
                     if use_zc {
                         opcode::SendZc::new(item.fd(), ptr, len)
                             .zc_flags(zc_flags)
@@ -671,9 +815,10 @@ impl StreamOpsStorage {
                         opcode::Send::new(item.fd(), ptr, len).build()
                     }
                 } else {
-                    let SendBuf {
-                        pages, iov, msg, ..
-                    } = &mut *buf;
+                    let SendData::Pages(buf) = &mut buf else {
+                        unreachable!()
+                    };
+                    let SendBuf { pages, iov, msg } = &mut **buf;
                     for (iov, page) in iov.iter_mut().zip(pages.iter().flatten()) {
                         iov.iov_base = unsafe { page.as_ptr() }.cast_mut().cast();
                         iov.iov_len = page.len();
@@ -690,11 +835,15 @@ impl StreamOpsStorage {
                     }
                 };
 
-                let op_id = self.ops.insert(Some(Operation::Send {
+                let op_id = self.ops.insert(Some(buf.into_op(
                     id,
-                    buf,
-                    result: None,
-                })) as u32;
+                    SendState {
+                        result: None,
+                        zc: use_zc,
+                        zc_report,
+                        resent: false,
+                    },
+                ))) as u32;
                 item.wr_op = NonZeroU32::new(op_id);
                 api.submit(op_id, entry);
             } else if item.flags.contains(Flags::WR_CANCELING) {

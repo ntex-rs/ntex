@@ -119,6 +119,52 @@ async fn stalled_peer_throttles_writer_and_loses_nothing() {
     assert_eq!(seen, TOTAL, "expected {TOTAL} bytes, peer got {seen}");
 }
 
+/// Inline pages keep their data inside the page itself, so a send may only
+/// point into them once they sit where they stay until the send completes.
+/// Without a send buffer every send of inline pages stays in flight, while the
+/// peer is stalled and then while it reads slowly; no byte may be lost or
+/// corrupted.
+#[ntex::test]
+async fn inline_pages_survive_pending_and_partial_sends() {
+    const TOTAL: usize = 256 * 1024;
+    const SMALL: usize = 13;
+    const BATCH: usize = 256;
+
+    let (go, go_rx) = mpsc::channel();
+    let (addr, done) = peer(go_rx, 16);
+    let sock = net::TcpStream::connect(addr).unwrap();
+    // without a send buffer the kernel sends straight from the pages, so every
+    // send stays in flight until the peer takes the data
+    socket2::SockRef::from(&sock)
+        .set_send_buffer_size(0)
+        .unwrap();
+    let io = ntex_net::from_tcp_stream(sock, cfg()).unwrap();
+    let payload = pattern(TOTAL);
+
+    let producer = ntex::rt::spawn(async move {
+        for batch in payload.chunks(SMALL * BATCH) {
+            for chunk in batch.chunks(SMALL) {
+                let page = Bytes::copy_from_slice(chunk);
+                assert!(page.is_inline());
+                io.encode_bytes(page).unwrap();
+            }
+            io.flush(false).await.unwrap();
+        }
+        io.flush(true).await.unwrap();
+        io.shutdown().await.unwrap();
+    });
+
+    // the kernel buffers fill up and sends of inline pages stay in flight
+    ntex::time::sleep(Duration::from_millis(300)).await;
+    go.send(()).unwrap();
+    ntex::time::timeout(Duration::from_secs(60), producer)
+        .await
+        .expect("producer did not finish")
+        .unwrap();
+    let seen = done.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert_eq!(seen, TOTAL, "expected {TOTAL} bytes, peer got {seen}");
+}
+
 /// A peer that reads in small pieces with pauses keeps sends partially
 /// completing; no byte may be lost across them.
 #[ntex::test]

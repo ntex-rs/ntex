@@ -479,11 +479,15 @@ impl StreamItem {
             while let Some(page) = wrt.take() {
                 size += page.len();
 
+                // An inline page keeps its data inside itself, so the slice
+                // must be taken from where the page stays until the write.
+                pages[num] = Some(page);
+                let page = pages[num].as_ref().unwrap();
+
                 // SAFETY: Page is stored in `pages` for lifetime of `bufs`
                 bufs[num] = mem::MaybeUninit::new(io::IoSlice::new(unsafe {
                     mem::transmute::<&[u8], &[u8]>(page.as_ref())
                 }));
-                pages[num] = Some(page);
 
                 num += 1;
                 if num == MAX_WRITE_ITEMS || size >= MAX_WRITE_SIZE {

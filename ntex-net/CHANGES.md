@@ -2,10 +2,23 @@
 
 ## [4.1.0] - 2026-09-23
 
+* Fix corrupted output in the polling backend when a write includes inline
+  pages. The write vector pointed into each page before it was moved into
+  place, so for a page stored inline it pointed at a reused local, and the
+  last such page was sent in place of the others
+
+* Resend with a plain send when an io-uring zero-copy send fails with
+  `ENOMEM` or `ENOBUFS` and disable zero-copy for the connection. Pinned
+  pages are charged against `RLIMIT_MEMLOCK`, shared by all connections,
+  and exhausting it terminated the connection
+
 * Disable io-uring zero-copy sends for a connection once the kernel reports
   that it copied the data anyway (loopback, veth, NICs without scatter-gather),
   using `IORING_SEND_ZC_REPORT_USAGE`; kernels without it fall back to plain
   zero-copy. Zero-copy is used only for sends of 16KiB or more
+
+* Send a single heap backed page with an io-uring `SendOne` operation that
+  stores the page itself, without allocating a boxed send buffer
 
 * Gather up to 16 write pages into one io-uring send with `SendMsg` /
   `SendMsgZc`, up to 256KiB, or 128KiB for zero-copy. A send op per page
