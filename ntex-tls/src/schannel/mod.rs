@@ -16,12 +16,12 @@ use windows_sys::Win32::Security::Authentication::Identity::{
     ISC_REQ_CONFIDENTIALITY, ISC_REQ_EXTENDED_ERROR, ISC_REQ_REPLAY_DETECT,
     ISC_REQ_SEQUENCE_DETECT, ISC_REQ_STREAM, InitializeSecurityContextW, QueryContextAttributesW,
     SCH_CRED_AUTO_CRED_VALIDATION, SCH_CRED_MANUAL_CRED_VALIDATION, SCH_CRED_NO_SERVERNAME_CHECK,
-    SCH_USE_STRONG_CRYPTO, SCHANNEL_ALERT, SCHANNEL_ALERT_TOKEN, SCHANNEL_CRED,
-    SCHANNEL_CRED_VERSION, SCHANNEL_SHUTDOWN, SECBUFFER_APPLICATION_PROTOCOLS, SECBUFFER_DATA,
-    SECBUFFER_EMPTY, SECBUFFER_EXTRA, SECBUFFER_STREAM_HEADER, SECBUFFER_STREAM_TRAILER,
-    SECBUFFER_TOKEN, SECBUFFER_VERSION, SECPKG_ATTR_APPLICATION_PROTOCOL,
-    SECPKG_ATTR_REMOTE_CERT_CONTEXT, SECPKG_ATTR_STREAM_SIZES, SECPKG_CRED_OUTBOUND,
-    SECURITY_NATIVE_DREP, SecApplicationProtocolNegotiationExt_ALPN,
+    SCH_CREDENTIALS, SCH_CREDENTIALS_VERSION, SCH_USE_STRONG_CRYPTO, SCHANNEL_ALERT,
+    SCHANNEL_ALERT_TOKEN, SCHANNEL_CRED, SCHANNEL_CRED_VERSION, SCHANNEL_SHUTDOWN,
+    SECBUFFER_APPLICATION_PROTOCOLS, SECBUFFER_DATA, SECBUFFER_EMPTY, SECBUFFER_EXTRA,
+    SECBUFFER_STREAM_HEADER, SECBUFFER_STREAM_TRAILER, SECBUFFER_TOKEN, SECBUFFER_VERSION,
+    SECPKG_ATTR_APPLICATION_PROTOCOL, SECPKG_ATTR_REMOTE_CERT_CONTEXT, SECPKG_ATTR_STREAM_SIZES,
+    SECPKG_CRED_OUTBOUND, SECURITY_NATIVE_DREP, SecApplicationProtocolNegotiationExt_ALPN,
     SecApplicationProtocolNegotiationStatus_Success, SecBuffer, SecBufferDesc,
     SecPkgContext_ApplicationProtocol, SecPkgContext_StreamSizes, TLS1_ALERT_BAD_CERTIFICATE,
     TLS1_ALERT_CERTIFICATE_EXPIRED, TLS1_ALERT_CERTIFICATE_REVOKED, TLS1_ALERT_FATAL,
@@ -110,24 +110,36 @@ unsafe impl Sync for Credentials {}
 
 impl Credentials {
     fn acquire(verify: bool) -> io::Result<Self> {
-        let mut cred = unsafe { mem::zeroed::<SecHandle>() };
-        let mut expiry = 0i64;
-        let mut schannel_cred = unsafe { mem::zeroed::<SCHANNEL_CRED>() };
-        schannel_cred.dwVersion = SCHANNEL_CRED_VERSION;
-        schannel_cred.dwFlags = SCH_USE_STRONG_CRYPTO;
+        let mut flags = SCH_USE_STRONG_CRYPTO;
         if verify {
-            schannel_cred.dwFlags |= SCH_CRED_AUTO_CRED_VALIDATION;
+            flags |= SCH_CRED_AUTO_CRED_VALIDATION;
         } else {
-            schannel_cred.dwFlags |= SCH_CRED_MANUAL_CRED_VALIDATION | SCH_CRED_NO_SERVERNAME_CHECK;
+            flags |= SCH_CRED_MANUAL_CRED_VALIDATION | SCH_CRED_NO_SERVERNAME_CHECK;
         }
 
+        // SCH_CREDENTIALS enables the system default protocols, including TLS 1.3
+        let mut sch_cred = unsafe { mem::zeroed::<SCH_CREDENTIALS>() };
+        sch_cred.dwVersion = SCH_CREDENTIALS_VERSION;
+        sch_cred.dwFlags = flags;
+        Self::acquire_with((&raw mut sch_cred).cast()).or_else(|_| {
+            // Windows before 10 1809 supports SCHANNEL_CRED only
+            let mut schannel_cred = unsafe { mem::zeroed::<SCHANNEL_CRED>() };
+            schannel_cred.dwVersion = SCHANNEL_CRED_VERSION;
+            schannel_cred.dwFlags = flags;
+            Self::acquire_with((&raw mut schannel_cred).cast())
+        })
+    }
+
+    fn acquire_with(auth_data: *mut std::ffi::c_void) -> io::Result<Self> {
+        let mut cred = unsafe { mem::zeroed::<SecHandle>() };
+        let mut expiry = 0i64;
         let status = unsafe {
             AcquireCredentialsHandleW(
                 ptr::null(),
                 UNISP_NAME_W,
                 SECPKG_CRED_OUTBOUND,
                 ptr::null(),
-                (&raw mut schannel_cred).cast(),
+                auth_data,
                 None,
                 ptr::null(),
                 &raw mut cred,
@@ -184,6 +196,8 @@ enum State {
     Closed,
     /// The handshake failed and an alert has been queued
     Failed,
+    /// Post-handshake exchange, writes wait until it completes
+    Renegotiating,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,6 +207,8 @@ enum Decrypted {
     Pending,
     /// Peer sent `close_notify`
     Closed,
+    /// Post-handshake message, the context must be driven by ISC
+    Renegotiate,
 }
 
 struct Context {
@@ -464,6 +480,23 @@ impl Context {
         Ok(sizes)
     }
 
+    /// Encrypts all pending plaintext pages from `src` into `dst`.
+    fn encrypt_pages(
+        &mut self,
+        src: &mut ntex_bytes::BytePages,
+        dst: &mut ntex_bytes::BytePages,
+    ) -> io::Result<()> {
+        while let Some(mut page) = src.take() {
+            let written = self.encrypt(&page, dst)?;
+            page.advance_to(written);
+            src.prepend(page);
+            if written == 0 {
+                break;
+            }
+        }
+        Ok(())
+    }
+
     /// Encrypts one TLS record from `src` into `dst`.
     ///
     /// The record is encrypted in place in the free space of the current
@@ -598,15 +631,12 @@ impl Context {
             unsafe { DecryptMessage(&raw const self.ctxt, &raw const desc, 0, &raw mut qop) };
 
         match status {
-            SEC_E_OK => {}
+            SEC_E_OK | SEC_I_RENEGOTIATE => {}
             SEC_E_INCOMPLETE_MESSAGE => return Ok(Decrypted::Pending),
             SEC_I_CONTEXT_EXPIRED => {
                 // peer sent close_notify, data after it is ignored
                 src.clear();
                 return Ok(Decrypted::Closed);
-            }
-            SEC_I_RENEGOTIATE => {
-                return Err(io::Error::other("TLS renegotiation is not supported"));
             }
             _ => return Err(sspi_error("DecryptMessage", status)),
         }
@@ -622,7 +652,11 @@ impl Context {
         if consumed != 0 {
             src.advance_to(consumed);
         }
-        Ok(if produced || consumed != 0 {
+        Ok(if status == SEC_I_RENEGOTIATE {
+            // a post-handshake message (TLS 1.3 session ticket, key update)
+            // or a TLS 1.2 renegotiation, the rest of the input goes to ISC
+            Decrypted::Renegotiate
+        } else if produced || consumed != 0 {
             Decrypted::Progress
         } else {
             Decrypted::Pending
@@ -734,58 +768,51 @@ impl FilterLayer for SchannelFilter {
 
     fn process_read_buf(&self, rb: &FilterBuf<'_>) -> io::Result<()> {
         let inner = self.inner_mut();
-        if inner.state == State::Failed {
-            return Ok(());
-        }
-        if inner.state == State::Handshaking {
-            loop {
-                let state = rb.with_write_buffers(|_, dst| {
-                    let len = dst.len();
-                    rb.with_read_src(|src| inner.ctx.handshake_step(src.as_mut(), dst))
-                        .or_else(|err| {
-                            if dst.len() == len {
-                                Err(err)
-                            } else {
-                                // keep the io open until connect() flushes the alert
-                                inner.state = State::Failed;
-                                inner.error = Some(err);
-                                Ok(HandshakeState::NeedRead)
-                            }
-                        })
-                })?;
-                match state {
-                    HandshakeState::Done => break,
-                    HandshakeState::NeedRead => return Ok(()),
-                    HandshakeState::Continue => {}
+        loop {
+            match inner.state {
+                State::Failed => return Ok(()),
+                State::Handshaking | State::Renegotiating => {
+                    if !inner.handshake(rb)? {
+                        return Ok(());
+                    }
                 }
+                State::Streaming | State::Closed => {}
             }
-            inner.state = State::Streaming;
-        }
 
-        let closed = rb.with_read_buffers(|r_src, r_dst| -> io::Result<bool> {
-            if let Some(src) = r_src {
-                if inner.peer_closed {
-                    src.clear();
-                    return Ok(false);
-                }
-                while !src.is_empty() {
-                    match inner.ctx.decrypt(src, r_dst)? {
-                        Decrypted::Progress => {}
-                        Decrypted::Pending => break,
-                        Decrypted::Closed => {
-                            inner.peer_closed = true;
-                            return Ok(true);
+            let res = rb.with_read_buffers(|r_src, r_dst| -> io::Result<Decrypted> {
+                if let Some(src) = r_src {
+                    if inner.peer_closed {
+                        src.clear();
+                        return Ok(Decrypted::Pending);
+                    }
+                    while !src.is_empty() {
+                        match inner.ctx.decrypt(src, r_dst)? {
+                            Decrypted::Progress => {}
+                            Decrypted::Pending => break,
+                            res @ (Decrypted::Closed | Decrypted::Renegotiate) => return Ok(res),
                         }
                     }
                 }
+                Ok(Decrypted::Pending)
+            })?;
+            match res {
+                Decrypted::Closed => {
+                    inner.peer_closed = true;
+                    // peer sent close_notify, start graceful shutdown
+                    rb.io().close();
+                    return Ok(());
+                }
+                // the context is shut down, but a post-handshake message still
+                // has to be processed before the next record can be decrypted
+                Decrypted::Renegotiate if inner.state == State::Closed => {
+                    rb.with_write_buffers(|_, dst| {
+                        rb.with_read_src(|src| inner.ctx.handshake_step(src.as_mut(), dst))
+                    })?;
+                }
+                Decrypted::Renegotiate => inner.state = State::Renegotiating,
+                Decrypted::Progress | Decrypted::Pending => return Ok(()),
             }
-            Ok(false)
-        })?;
-        if closed {
-            // peer sent close_notify, start graceful shutdown
-            rb.io().close();
         }
-        Ok(())
     }
 
     fn process_write_buf(&self, wb: &FilterBuf<'_>) -> io::Result<()> {
@@ -793,18 +820,41 @@ impl FilterLayer for SchannelFilter {
         if inner.state != State::Streaming {
             return Ok(());
         }
+        wb.with_write_buffers(|w_src, w_dst| inner.ctx.encrypt_pages(w_src, w_dst))
+    }
+}
 
-        wb.with_write_buffers(|w_src, w_dst| {
-            while let Some(mut page) = w_src.take() {
-                let written = inner.ctx.encrypt(&page, w_dst)?;
-                page.advance_to(written);
-                w_src.prepend(page);
-                if written == 0 {
-                    break;
-                }
+impl Schannel {
+    /// Drives the handshake with buffered input, returns `true` once it is done.
+    fn handshake(&mut self, rb: &FilterBuf<'_>) -> io::Result<bool> {
+        let renegotiating = self.state == State::Renegotiating;
+        loop {
+            let state = rb.with_write_buffers(|_, dst| {
+                let len = dst.len();
+                rb.with_read_src(|src| self.ctx.handshake_step(src.as_mut(), dst))
+                    .or_else(|err| {
+                        if renegotiating || dst.len() == len {
+                            Err(err)
+                        } else {
+                            // keep the io open until connect() flushes the alert
+                            self.state = State::Failed;
+                            self.error = Some(err);
+                            Ok(HandshakeState::NeedRead)
+                        }
+                    })
+            })?;
+            match state {
+                HandshakeState::Done => break,
+                HandshakeState::NeedRead => return Ok(false),
+                HandshakeState::Continue => {}
             }
-            Ok(())
-        })
+        }
+        self.state = State::Streaming;
+        if renegotiating {
+            // writes were held back during the exchange
+            rb.with_write_buffers(|w_src, w_dst| self.ctx.encrypt_pages(w_src, w_dst))?;
+        }
+        Ok(true)
     }
 }
 

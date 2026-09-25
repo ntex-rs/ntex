@@ -11,7 +11,16 @@ use ntex_tls::schannel::{ClientConfig, TlsConnector};
 use tls_openssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod};
 
 fn ssl_acceptor() -> SslAcceptor {
-    let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
+    ssl_acceptor_version(None)
+}
+
+/// TLS 1.2 and 1.3 by default, or a single protocol version.
+fn ssl_acceptor_version(version: Option<tls_openssl::ssl::SslVersion>) -> SslAcceptor {
+    let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls()).unwrap();
+    if version.is_some() {
+        builder.set_min_proto_version(version).unwrap();
+        builder.set_max_proto_version(version).unwrap();
+    }
     builder
         .set_private_key_file("./tests/key.pem", SslFiletype::PEM)
         .unwrap();
@@ -28,6 +37,32 @@ fn ssl_acceptor() -> SslAcceptor {
     });
     builder.set_alpn_protos(b"\x02h2").unwrap();
     builder.build()
+}
+
+/// Waits for a server thread without blocking the runtime, the client may
+/// still have handshake data to send (TLS 1.3 client sends the last flight).
+async fn join<T>(handle: std::thread::JoinHandle<T>) -> T {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !handle.is_finished() {
+        assert!(std::time::Instant::now() < deadline, "server thread hangs");
+        ntex::time::sleep(ntex::time::Millis(5)).await;
+    }
+    handle.join().unwrap()
+}
+
+/// Receives from a server thread without blocking the runtime.
+async fn recv<T>(rx: &std::sync::mpsc::Receiver<T>) -> T {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        match rx.try_recv() {
+            Ok(v) => return v,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                assert!(std::time::Instant::now() < deadline, "server thread hangs");
+                ntex::time::sleep(ntex::time::Millis(5)).await;
+            }
+            Err(e) => panic!("{e}"),
+        }
+    }
 }
 
 #[ntex::test]
@@ -93,7 +128,7 @@ async fn test_handshake_failure_sends_alert() {
         .call(Connect::new("localhost").set_addr(Some(addr)))
         .await;
     assert!(res.is_err());
-    let err = server.join().unwrap();
+    let err = join(server).await;
     assert!(err.contains("alert unknown ca"), "no alert received: {err}");
 }
 
@@ -110,7 +145,7 @@ async fn test_alpn_protocols() {
         let seen2 = seen.clone();
         let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
         let server = std::thread::spawn(move || {
-            let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
+            let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls()).unwrap();
             builder
                 .set_private_key_file("./tests/key.pem", SslFiletype::PEM)
                 .unwrap();
@@ -139,7 +174,7 @@ async fn test_alpn_protocols() {
             .unwrap();
         let proto = io.query::<HttpProtocol>().get().unwrap();
         done_tx.send(()).unwrap();
-        server.join().unwrap();
+        join(server).await;
         let seen = seen.lock().unwrap().take();
         (seen, proto)
     }
@@ -274,7 +309,7 @@ async fn test_records_fit_write_pages() {
     io.encode(ntex::util::Bytes::copy_from_slice(large), &BytesCodec)
         .unwrap();
     let res = ntex::time::timeout(ntex::time::Millis(15_000), io.recv(&BytesCodec)).await;
-    let received = server.join().unwrap();
+    let received = join(server).await;
     assert_eq!(res.unwrap().unwrap().unwrap(), "done");
     assert!(received == data, "plaintext corrupted");
 
@@ -334,8 +369,8 @@ async fn test_shutdown_sends_close_notify() {
     io.shutdown().await.unwrap();
     drop(io);
 
-    let (received, result, close_notify) = rx.recv().unwrap();
-    server.join().unwrap();
+    let (received, result, close_notify) = recv(&rx).await;
+    join(server).await;
     assert_eq!(received, b"bye");
     assert_eq!(result, Ok(()));
     assert!(close_notify, "peer did not receive close_notify");
@@ -381,8 +416,8 @@ async fn test_shutdown_waits_for_peer_close_notify() {
     let elapsed = start.elapsed();
     done_tx.send(()).unwrap();
 
-    let (result, reply) = rx.recv().unwrap();
-    server.join().unwrap();
+    let (result, reply) = recv(&rx).await;
+    join(server).await;
     assert_eq!(result, Ok(0), "server did not receive close_notify");
     assert!(reply.is_ok(), "{reply:?}");
     assert!(res.is_ok(), "{res:?}");
@@ -395,6 +430,62 @@ async fn test_shutdown_waits_for_peer_close_notify() {
         "the peer's close_notify was not received: {elapsed:?}"
     );
     drop(io);
+}
+
+/// Data exchange and clean shutdown with a single protocol version, returns
+/// the version seen by the server.
+async fn exchange(version: tls_openssl::ssl::SslVersion) -> String {
+    use ntex::{codec::BytesCodec, connect::Connect, service::Pipeline};
+    use std::io::{Read, Write};
+    use std::time::Duration;
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (sock, _) = listener.accept().unwrap();
+        sock.set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut stream = ssl_acceptor_version(Some(version)).accept(sock).unwrap();
+        // TLS 1.3 session tickets are sent before the data
+        stream.write_all(b"hello").unwrap();
+        let mut buf = [0u8; 4];
+        stream.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"ping");
+        stream.write_all(b"pong").unwrap();
+        let mut buf = [0u8; 64];
+        assert_eq!(stream.read(&mut buf).unwrap(), 0, "no close_notify");
+        stream.shutdown().unwrap();
+        stream.ssl().version_str().to_string()
+    });
+
+    let conn = Pipeline::new(SharedCfg::default(), schannel_connector());
+    let io = conn
+        .call(Connect::new("localhost").set_addr(Some(addr)))
+        .await
+        .unwrap();
+    assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "hello");
+    io.send(ntex::util::Bytes::from_static(b"ping"), &BytesCodec)
+        .await
+        .unwrap();
+    assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "pong");
+    ntex::time::timeout(ntex::time::Millis(10_000), io.shutdown())
+        .await
+        .expect("shutdown timed out")
+        .unwrap();
+    join(server).await
+}
+
+/// TLS 1.3 post-handshake messages (session tickets) must be processed.
+#[ntex::test]
+async fn test_tls13_post_handshake_messages() {
+    let version = exchange(tls_openssl::ssl::SslVersion::TLS1_3).await;
+    assert_eq!(version, "TLSv1.3");
+}
+
+#[ntex::test]
+async fn test_tls12() {
+    let version = exchange(tls_openssl::ssl::SslVersion::TLS1_2).await;
+    assert_eq!(version, "TLSv1.2");
 }
 
 #[ntex::test]
@@ -414,6 +505,8 @@ async fn test_session_resumption() {
                 .unwrap();
             let mut stream = acceptor.accept(sock).unwrap();
             let reused = stream.ssl().session_reused();
+            // TLS 1.3 session tickets are sent before the data
+            std::io::Write::write_all(&mut stream, b"hello").unwrap();
             // complete a clean shutdown, so the session stays resumable
             let mut buf = [0u8; 64];
             let _ = stream.read(&mut buf);
@@ -431,11 +524,13 @@ async fn test_session_resumption() {
             .call(Connect::new("localhost").set_addr(Some(addr)))
             .await
             .unwrap();
+        let data = io.recv(&ntex::codec::BytesCodec).await.unwrap().unwrap();
+        assert_eq!(data, "hello");
         io.shutdown().await.unwrap();
         drop(io);
-        reused.push(rx.recv_timeout(Duration::from_secs(10)).unwrap());
+        reused.push(recv(&rx).await);
     }
-    server.join().unwrap();
+    join(server).await;
     assert_eq!(reused, [false, true, true], "sessions are not resumed");
 }
 
@@ -473,7 +568,7 @@ async fn test_handshake_then_eof() {
     done_tx.send(()).unwrap();
     // unblock accept
     let _ = std::net::TcpStream::connect(addr);
-    server.join().unwrap();
+    join(server).await;
 }
 
 #[ntex::test]
@@ -512,8 +607,8 @@ async fn test_peer_close_notify_closes_io() {
     assert!(matches!(item, Ok(None)), "{item:?}");
     let _ = time::timeout(Duration::from_secs(5), io.shutdown()).await;
 
-    let (result, close_notify) = rx.recv().unwrap();
-    server.join().unwrap();
+    let (result, close_notify) = recv(&rx).await;
+    join(server).await;
     assert_eq!(result, Ok(0));
     assert!(close_notify, "peer did not receive close_notify");
     drop(io);

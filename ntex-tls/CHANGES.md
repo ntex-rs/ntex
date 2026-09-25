@@ -2,6 +2,10 @@
 
 ## [4.1.0] - 2026-09-22
 
+* schannel: enable TLS 1.3 with `SCH_CREDENTIALS` (falls back to `SCHANNEL_CRED`),
+  process post-handshake messages (session tickets, key updates, renegotiation)
+  instead of failing the connection
+
 * schannel: share the credentials handle between connections made with the
   same `ClientConfig`, so Schannel can resume TLS sessions
 
