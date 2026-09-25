@@ -28,9 +28,7 @@ use windows_sys::Win32::Security::Authentication::Identity::{
     TLS1_ALERT_HANDSHAKE_FAILURE, TLS1_ALERT_UNKNOWN_CA, UNISP_NAME_W,
 };
 use windows_sys::Win32::Security::Credentials::SecHandle;
-use windows_sys::Win32::Security::Cryptography::{
-    CERT_CONTEXT, CertDuplicateCertificateContext, CertFreeCertificateContext,
-};
+use windows_sys::Win32::Security::Cryptography::{CERT_CONTEXT, CertFreeCertificateContext};
 
 mod connect;
 pub use self::connect::TlsConnector;
@@ -248,95 +246,31 @@ impl Context {
         })
     }
 
-    #[allow(clippy::too_many_lines)]
     fn handshake_step(
         &mut self,
         input: Option<&mut BytesMut>,
         output: &mut ntex_bytes::BytePages,
     ) -> io::Result<HandshakeState> {
-        let mut out_buf = SecBuffer {
-            cbBuffer: 0,
-            BufferType: SECBUFFER_TOKEN,
-            pvBuffer: ptr::null_mut(),
-        };
-        let mut out_desc = SecBufferDesc {
-            ulVersion: SECBUFFER_VERSION,
-            cBuffers: 1,
-            pBuffers: &raw mut out_buf,
-        };
-
-        let mut in_bufs = [
-            SecBuffer {
-                cbBuffer: 0,
-                BufferType: SECBUFFER_EMPTY,
-                pvBuffer: ptr::null_mut(),
-            },
-            SecBuffer {
-                cbBuffer: 0,
-                BufferType: SECBUFFER_EMPTY,
-                pvBuffer: ptr::null_mut(),
-            },
-            SecBuffer {
-                cbBuffer: 0,
-                BufferType: SECBUFFER_EMPTY,
-                pvBuffer: ptr::null_mut(),
-            },
-        ];
+        let mut in_bufs = [EMPTY_BUFFER; 3];
+        if let Some(src) = input.as_ref().filter(|src| !src.is_empty()) {
+            in_bufs[0] = sec_buffer(
+                SECBUFFER_TOKEN,
+                buffer_len(src.len())?,
+                src.as_ptr().cast_mut().cast(),
+            );
+        }
         // ALPN is part of the ClientHello, only the first call needs it
         if !self.have_ctxt
-            && let Some(alpn) = self.alpn.as_ref()
+            && let Some(alpn) = &self.alpn
         {
-            in_bufs[2] = SecBuffer {
-                cbBuffer: u32::try_from(alpn.len())
-                    .map_err(|_| io::Error::other("TLS ALPN buffer is too large"))?,
-                BufferType: SECBUFFER_APPLICATION_PROTOCOLS,
-                pvBuffer: alpn.as_ptr().cast_mut().cast(),
-            };
+            in_bufs[2] = sec_buffer(
+                SECBUFFER_APPLICATION_PROTOCOLS,
+                buffer_len(alpn.len())?,
+                alpn.as_ptr().cast_mut().cast(),
+            );
         }
-        let in_desc = SecBufferDesc {
-            ulVersion: SECBUFFER_VERSION,
-            cBuffers: u32::try_from(in_bufs.len()).expect("static SecBuffer count fits u32"),
-            pBuffers: in_bufs.as_mut_ptr(),
-        };
-
-        let mut input_len = 0usize;
-        if let Some(src) = input.as_ref() {
-            input_len = src.len();
-            if input_len != 0 {
-                in_bufs[0].BufferType = SECBUFFER_TOKEN;
-                in_bufs[0].cbBuffer = u32::try_from(input_len)
-                    .map_err(|_| io::Error::other("TLS input buffer is too large"))?;
-                in_bufs[0].pvBuffer = src.as_ptr().cast_mut().cast();
-            }
-        }
-        let input_desc = &raw const in_desc;
-
-        let mut attrs = 0u32;
-        let mut expiry = 0i64;
-        let ctxt = if self.have_ctxt {
-            &raw const self.ctxt
-        } else {
-            ptr::null()
-        };
-        let status = unsafe {
-            InitializeSecurityContextW(
-                &raw const self.cred.0,
-                ctxt,
-                self.target.as_ptr(),
-                ISC_FLAGS,
-                0,
-                SECURITY_NATIVE_DREP,
-                input_desc,
-                0,
-                &raw mut self.ctxt,
-                &raw mut out_desc,
-                &raw mut attrs,
-                &raw mut expiry,
-            )
-        };
-        self.have_ctxt = true;
-        let has_token = !out_buf.pvBuffer.is_null() && out_buf.cbBuffer != 0;
-        take_token(&out_buf, output);
+        let in_desc = buffer_desc(&mut in_bufs);
+        let (status, has_token) = self.initialize(&raw const in_desc, output);
 
         if status == SEC_E_INCOMPLETE_MESSAGE {
             return Ok(HandshakeState::NeedRead);
@@ -352,11 +286,8 @@ impl Context {
         let mut consumed = 0;
         let mut extra = 0;
         if let Some(src) = input {
-            extra = in_bufs
-                .iter()
-                .find(|buf| buf.BufferType == SECBUFFER_EXTRA)
-                .map_or(0, |buf| buf.cbBuffer as usize);
-            consumed = input_len.saturating_sub(extra);
+            extra = extra_len(&in_bufs);
+            consumed = src.len().saturating_sub(extra);
             if consumed != 0 {
                 src.advance_to(consumed);
             }
@@ -370,6 +301,45 @@ impl Context {
         } else {
             Ok(HandshakeState::NeedRead)
         }
+    }
+
+    /// Calls `InitializeSecurityContextW` and appends the output token to `output`.
+    ///
+    /// Returns the status and whether a token was produced.
+    fn initialize(
+        &mut self,
+        input: *const SecBufferDesc,
+        output: &mut ntex_bytes::BytePages,
+    ) -> (windows_sys::core::HRESULT, bool) {
+        let mut out_buf = sec_buffer(SECBUFFER_TOKEN, 0, ptr::null_mut());
+        let mut out_desc = buffer_desc(slice::from_mut(&mut out_buf));
+        let mut attrs = 0u32;
+        let mut expiry = 0i64;
+        let ctxt = if self.have_ctxt {
+            &raw const self.ctxt
+        } else {
+            ptr::null()
+        };
+        let status = unsafe {
+            InitializeSecurityContextW(
+                &raw const self.cred.0,
+                ctxt,
+                self.target.as_ptr(),
+                ISC_FLAGS,
+                0,
+                SECURITY_NATIVE_DREP,
+                input,
+                0,
+                &raw mut self.ctxt,
+                &raw mut out_desc,
+                &raw mut attrs,
+                &raw mut expiry,
+            )
+        };
+        self.have_ctxt = true;
+        let has_token = !out_buf.pvBuffer.is_null() && out_buf.cbBuffer != 0;
+        take_token(&out_buf, output);
+        (status, has_token)
     }
 
     /// Generates a `close_notify` alert and appends it to `output`.
@@ -405,51 +375,18 @@ impl Context {
         name: &'static str,
         output: &mut ntex_bytes::BytePages,
     ) -> io::Result<()> {
-        let mut in_buf = SecBuffer {
-            cbBuffer: u32::try_from(mem::size_of::<T>()).expect("control token size fits u32"),
-            BufferType: SECBUFFER_TOKEN,
-            pvBuffer: ptr::from_mut(token).cast(),
-        };
-        let in_desc = SecBufferDesc {
-            ulVersion: SECBUFFER_VERSION,
-            cBuffers: 1,
-            pBuffers: &raw mut in_buf,
-        };
+        let mut in_buf = sec_buffer(
+            SECBUFFER_TOKEN,
+            u32::try_from(mem::size_of::<T>()).expect("control token size fits u32"),
+            ptr::from_mut(token).cast(),
+        );
+        let in_desc = buffer_desc(slice::from_mut(&mut in_buf));
         let status = unsafe { ApplyControlToken(&raw const self.ctxt, &raw const in_desc) };
         if status != SEC_E_OK {
             return Err(sspi_error(name, status));
         }
 
-        let mut out_buf = SecBuffer {
-            cbBuffer: 0,
-            BufferType: SECBUFFER_TOKEN,
-            pvBuffer: ptr::null_mut(),
-        };
-        let mut out_desc = SecBufferDesc {
-            ulVersion: SECBUFFER_VERSION,
-            cBuffers: 1,
-            pBuffers: &raw mut out_buf,
-        };
-        let mut attrs = 0u32;
-        let mut expiry = 0i64;
-        let status = unsafe {
-            InitializeSecurityContextW(
-                &raw const self.cred.0,
-                &raw const self.ctxt,
-                self.target.as_ptr(),
-                ISC_FLAGS,
-                0,
-                SECURITY_NATIVE_DREP,
-                ptr::null(),
-                0,
-                &raw mut self.ctxt,
-                &raw mut out_desc,
-                &raw mut attrs,
-                &raw mut expiry,
-            )
-        };
-        take_token(&out_buf, output);
-
+        let (status, _) = self.initialize(ptr::null(), output);
         if status == SEC_E_OK || status == SEC_I_CONTEXT_EXPIRED {
             Ok(())
         } else {
@@ -555,41 +492,24 @@ impl Context {
         unsafe { ptr::copy_nonoverlapping(src.as_ptr(), frame.add(header_len), len) };
 
         let mut bufs = [
-            SecBuffer {
-                cbBuffer: sizes.cbHeader,
-                BufferType: SECBUFFER_STREAM_HEADER,
-                pvBuffer: frame.cast(),
-            },
-            SecBuffer {
-                cbBuffer: u32::try_from(len).expect("TLS message length fits u32"),
-                BufferType: SECBUFFER_DATA,
-                pvBuffer: unsafe { frame.add(header_len).cast() },
-            },
-            SecBuffer {
-                cbBuffer: sizes.cbTrailer,
-                BufferType: SECBUFFER_STREAM_TRAILER,
-                pvBuffer: unsafe { frame.add(header_len + len).cast() },
-            },
-            SecBuffer {
-                cbBuffer: 0,
-                BufferType: SECBUFFER_EMPTY,
-                pvBuffer: ptr::null_mut(),
-            },
+            sec_buffer(SECBUFFER_STREAM_HEADER, sizes.cbHeader, frame.cast()),
+            sec_buffer(
+                SECBUFFER_DATA,
+                u32::try_from(len).expect("TLS message length fits u32"),
+                unsafe { frame.add(header_len).cast() },
+            ),
+            sec_buffer(SECBUFFER_STREAM_TRAILER, sizes.cbTrailer, unsafe {
+                frame.add(header_len + len).cast()
+            }),
+            EMPTY_BUFFER,
         ];
-        let desc = SecBufferDesc {
-            ulVersion: SECBUFFER_VERSION,
-            cBuffers: u32::try_from(bufs.len()).expect("static SecBuffer count fits u32"),
-            pBuffers: bufs.as_mut_ptr(),
-        };
+        let desc = buffer_desc(&mut bufs);
         let status = unsafe { EncryptMessage(&raw const self.ctxt, 0, &raw const desc, 0) };
         if status != SEC_E_OK {
             return Err(sspi_error("EncryptMessage", status));
         }
-
-        let tls_len = usize::try_from(bufs[0].cbBuffer).expect("TLS header length fits usize")
-            + usize::try_from(bufs[1].cbBuffer).expect("TLS data length fits usize")
-            + usize::try_from(bufs[2].cbBuffer).expect("TLS trailer length fits usize");
-        Ok(tls_len)
+        // header, data and trailer
+        Ok(bufs[..3].iter().map(|buf| buf.cbBuffer as usize).sum())
     }
 
     fn decrypt(&mut self, src: &mut BytesMut, dst: &mut BytesMut) -> io::Result<Decrypted> {
@@ -599,33 +519,16 @@ impl Context {
 
         let input_len = src.len();
         let mut bufs = [
-            SecBuffer {
-                cbBuffer: u32::try_from(input_len)
-                    .map_err(|_| io::Error::other("TLS input buffer is too large"))?,
-                BufferType: SECBUFFER_DATA,
-                pvBuffer: src.as_mut_ptr().cast(),
-            },
-            SecBuffer {
-                cbBuffer: 0,
-                BufferType: SECBUFFER_EMPTY,
-                pvBuffer: ptr::null_mut(),
-            },
-            SecBuffer {
-                cbBuffer: 0,
-                BufferType: SECBUFFER_EMPTY,
-                pvBuffer: ptr::null_mut(),
-            },
-            SecBuffer {
-                cbBuffer: 0,
-                BufferType: SECBUFFER_EMPTY,
-                pvBuffer: ptr::null_mut(),
-            },
+            sec_buffer(
+                SECBUFFER_DATA,
+                buffer_len(input_len)?,
+                src.as_mut_ptr().cast(),
+            ),
+            EMPTY_BUFFER,
+            EMPTY_BUFFER,
+            EMPTY_BUFFER,
         ];
-        let desc = SecBufferDesc {
-            ulVersion: SECBUFFER_VERSION,
-            cBuffers: u32::try_from(bufs.len()).expect("static SecBuffer count fits u32"),
-            pBuffers: bufs.as_mut_ptr(),
-        };
+        let desc = buffer_desc(&mut bufs);
         let mut qop = 0u32;
         let status =
             unsafe { DecryptMessage(&raw const self.ctxt, &raw const desc, 0, &raw mut qop) };
@@ -642,12 +545,10 @@ impl Context {
         }
 
         let (data, extra) = decrypted_parts(&bufs);
-        let produced = if let Some(data) = data {
+        if let Some(data) = data {
             dst.put_slice(data);
-            true
-        } else {
-            false
-        };
+        }
+        let produced = data.is_some();
         let consumed = input_len.saturating_sub(extra);
         if consumed != 0 {
             src.advance_to(consumed);
@@ -676,22 +577,14 @@ impl Context {
             return None;
         }
 
-        let duplicated = unsafe { CertDuplicateCertificateContext(cert) };
+        // the context is owned by the caller
         unsafe {
+            let bytes =
+                slice::from_raw_parts((*cert).pbCertEncoded, (*cert).cbCertEncoded as usize)
+                    .to_vec();
             CertFreeCertificateContext(cert);
+            Some(bytes)
         }
-        if duplicated.is_null() {
-            return None;
-        }
-
-        let bytes = unsafe {
-            let cert = &*duplicated;
-            slice::from_raw_parts(cert.pbCertEncoded, cert.cbCertEncoded as usize).to_vec()
-        };
-        unsafe {
-            CertFreeCertificateContext(duplicated);
-        }
-        Some(bytes)
     }
 
     fn alpn_protocol(&self) -> Option<Vec<u8>> {
@@ -820,7 +713,7 @@ impl FilterLayer for SchannelFilter {
         if inner.state != State::Streaming {
             return Ok(());
         }
-        wb.with_write_buffers(|w_src, w_dst| inner.ctx.encrypt_pages(w_src, w_dst))
+        inner.encrypt_writes(wb)
     }
 }
 
@@ -852,9 +745,13 @@ impl Schannel {
         self.state = State::Streaming;
         if renegotiating {
             // writes were held back during the exchange
-            rb.with_write_buffers(|w_src, w_dst| self.ctx.encrypt_pages(w_src, w_dst))?;
+            self.encrypt_writes(rb)?;
         }
         Ok(true)
+    }
+
+    fn encrypt_writes(&mut self, buf: &FilterBuf<'_>) -> io::Result<()> {
+        buf.with_write_buffers(|src, dst| self.ctx.encrypt_pages(src, dst))
     }
 }
 
@@ -967,11 +864,37 @@ fn decrypted_parts(bufs: &[SecBuffer]) -> (Option<&[u8]>, usize) {
         .map(|buf| unsafe {
             slice::from_raw_parts(buf.pvBuffer.cast::<u8>(), buf.cbBuffer as usize)
         });
-    let extra = bufs
-        .iter()
+    (data, extra_len(bufs))
+}
+
+/// Unprocessed input length reported by a `SECBUFFER_EXTRA` buffer.
+fn extra_len(bufs: &[SecBuffer]) -> usize {
+    bufs.iter()
         .find(|buf| buf.BufferType == SECBUFFER_EXTRA)
-        .map_or(0, |buf| buf.cbBuffer as usize);
-    (data, extra)
+        .map_or(0, |buf| buf.cbBuffer as usize)
+}
+
+const EMPTY_BUFFER: SecBuffer = sec_buffer(SECBUFFER_EMPTY, 0, ptr::null_mut());
+
+const fn sec_buffer(ty: u32, len: u32, ptr: *mut std::ffi::c_void) -> SecBuffer {
+    SecBuffer {
+        cbBuffer: len,
+        BufferType: ty,
+        pvBuffer: ptr,
+    }
+}
+
+/// Describes `bufs`, the descriptor must not outlive them.
+fn buffer_desc(bufs: &mut [SecBuffer]) -> SecBufferDesc {
+    SecBufferDesc {
+        ulVersion: SECBUFFER_VERSION,
+        cBuffers: u32::try_from(bufs.len()).expect("SecBuffer count fits u32"),
+        pBuffers: bufs.as_mut_ptr(),
+    }
+}
+
+fn buffer_len(len: usize) -> io::Result<u32> {
+    u32::try_from(len).map_err(|_| io::Error::other("TLS buffer is too large"))
 }
 
 fn alpn_buffer<T: AsRef<[u8]>>(protocols: &[T]) -> Option<Arc<[u8]>> {
@@ -1028,11 +951,7 @@ mod tests {
     #[test]
     fn test_decrypted_parts_by_type() {
         let mut payload = *b"hello";
-        let buf = |ty, len, ptr: *mut u8| SecBuffer {
-            cbBuffer: len,
-            BufferType: ty,
-            pvBuffer: ptr.cast(),
-        };
+        let buf = |ty, len, ptr: *mut u8| sec_buffer(ty, len, ptr.cast());
         let bufs = [
             buf(SECBUFFER_STREAM_HEADER, 13, ptr::null_mut()),
             buf(SECBUFFER_EXTRA, 7, ptr::null_mut()),

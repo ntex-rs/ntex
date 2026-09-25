@@ -24,10 +24,7 @@ impl<A: Address> Default for TlsConnector<Connector<A>> {
 impl<A: Address> TlsConnector<Connector<A>> {
     /// Construct new Schannel connector factory.
     pub fn new() -> Self {
-        TlsConnector {
-            svc: Connector::default(),
-            config: ClientConfig::default(),
-        }
+        Self::with_config(ClientConfig::default())
     }
 
     /// Construct new Schannel connector factory with custom configuration.
@@ -72,27 +69,25 @@ where
         let tag = io.tag();
         log::trace!("{tag}: TLS Handshake start for: {host:?}");
 
-        match timeout_checked(
+        let res = timeout_checked(
             cfg.handshake_timeout(),
             connect_io(io, &host, self.config.clone()),
         )
         .await
-        {
-            Ok(Ok(io)) => {
+        .unwrap_or_else(|()| {
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "TLS Handshake timeout",
+            ))
+        });
+        match res {
+            Ok(io) => {
                 log::trace!("{tag}: TLS Handshake success: {host:?}");
                 Ok(io)
             }
-            Ok(Err(e)) => {
+            Err(e) => {
                 log::trace!("{tag}: TLS Handshake error: {e:?}");
                 Err(ConnectError::from(e).into())
-            }
-            Err(()) => {
-                log::trace!("{tag}: TLS Handshake timeout");
-                Err(ConnectError::from(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "TLS Handshake timeout",
-                ))
-                .into())
             }
         }
     }
