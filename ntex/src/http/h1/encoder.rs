@@ -356,18 +356,15 @@ impl TransferEncoding {
                     return Ok(true);
                 }
 
-                let result = if msg.is_empty() {
-                    buf.extend_from_slice(b"0\r\n\r\n");
-                    self.kind = TransferEncodingKind::Chunked(true);
-                    true
-                } else {
+                // an empty chunk would be the last-chunk, only `encode_eof`
+                // terminates the body
+                if !msg.is_empty() {
                     writeln!(buf, "{:X}\r", msg.len()).map_err(EncodeError::Fmt)?;
 
                     buf.append(msg);
                     buf.extend_from_slice(b"\r\n");
-                    false
-                };
-                Ok(result)
+                }
+                Ok(false)
             }
             TransferEncodingKind::Length(mut remaining) => {
                 if remaining > 0 {
@@ -565,8 +562,17 @@ mod tests {
         let mut bytes = BytePages::default();
         let mut enc = TransferEncoding::chunked();
         assert!(!enc.encode(b"test".into(), &mut bytes).ok().unwrap());
-        assert!(enc.encode(b"".into(), &mut bytes).ok().unwrap());
-        assert_eq!(bytes.take().unwrap().as_ref(), b"4\r\ntest\r\n0\r\n\r\n");
+        // an empty chunk does not terminate the body
+        assert!(!enc.encode(b"".into(), &mut bytes).ok().unwrap());
+        assert!(!enc.encode(b"line".into(), &mut bytes).ok().unwrap());
+        enc.encode_eof(&mut bytes).unwrap();
+        assert!(enc.encode(b"late".into(), &mut bytes).ok().unwrap());
+
+        let mut data = Vec::new();
+        while let Some(chunk) = bytes.take() {
+            data.extend_from_slice(&chunk);
+        }
+        assert_eq!(data, b"4\r\ntest\r\n4\r\nline\r\n0\r\n\r\n");
     }
 
     #[test]

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* Fix an empty HTTP/1 chunked response body chunk terminating the body and
+  dropping the remaining chunks
+
 * Fix HTTP/1 streaming responses using chunked transfer coding for HTTP/1.0
   requests, and keeping the connection alive for responses delimited by
   connection close
