@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* Fix HTTP/1 client returning interim `1xx` responses instead of the final
+  response
+
 * Fix HTTP/1 client reusing connections after HTTP/1.0 responses without
   `Connection: keep-alive`
 

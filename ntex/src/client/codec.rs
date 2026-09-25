@@ -9,7 +9,7 @@ use crate::http::error::{DecodeError, EncodeError, PayloadError};
 use crate::http::h1::{
     Message, MessageType, PayloadDecoder, PayloadItem, PayloadType, decoder, encoder,
 };
-use crate::http::{ConnectionType, Method, RequestHead, ResponseHead, Version};
+use crate::http::{ConnectionType, Method, RequestHead, ResponseHead, StatusCode, Version};
 use crate::service::cfg::Cfg;
 use crate::util::{BytePages, Bytes, BytesMut};
 
@@ -117,7 +117,17 @@ impl Decoder for ClientCodec {
             "Payload decoder is set"
         );
 
-        if let Some((req, payload)) = self.inner.decoder.decode(src)? {
+        loop {
+            let Some((req, payload)) = self.inner.decoder.decode(src)? else {
+                return Ok(None);
+            };
+
+            // skip interim responses, `101` is the final response for upgrades
+            if req.status.is_informational() && req.status != StatusCode::SWITCHING_PROTOCOLS {
+                log::trace!("Skipping interim response: {}", req.status);
+                continue;
+            }
+
             match req.ctype() {
                 // do not use peer's keep-alive
                 Some(ConnectionType::KeepAlive) => (),
@@ -145,9 +155,7 @@ impl Decoder for ClientCodec {
                     }
                 }
             }
-            Ok(Some(req))
-        } else {
-            Ok(None)
+            return Ok(Some(req));
         }
     }
 }
@@ -234,6 +242,37 @@ impl Encoder for ClientCodec {
 mod tests {
     use super::*;
     use crate::service::cfg::SharedCfg;
+
+    #[test]
+    fn test_skip_interim_responses() {
+        let cfg: SharedCfg = SharedCfg::new("DBG").add(HttpServiceConfig::new()).into();
+        let codec = ClientCodec::new(true, cfg.get());
+
+        let mut buf = BytesMut::from(
+            "HTTP/1.1 100 Continue\r\n\r\n\
+             HTTP/1.1 103 Early Hints\r\nlink: </style.css>\r\n\r\n\
+             HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok",
+        );
+        let head = codec.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(head.status, StatusCode::OK);
+        assert!(!head.headers.contains_key("link"));
+        assert_eq!(codec.message_type(), MessageType::Payload);
+        assert_eq!(&buf[..], b"ok");
+
+        // final response is not available yet
+        let codec = ClientCodec::new(true, cfg.get());
+        let mut buf = BytesMut::from("HTTP/1.1 103 Early Hints\r\n\r\nHTTP/1.1 200");
+        assert!(codec.decode(&mut buf).unwrap().is_none());
+        buf.extend_from_slice(b" OK\r\ncontent-length: 0\r\n\r\n");
+        let head = codec.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(head.status, StatusCode::OK);
+
+        // `101` is a final response
+        let codec = ClientCodec::new(true, cfg.get());
+        let mut buf = BytesMut::from("HTTP/1.1 101 Switching Protocols\r\n\r\n");
+        let head = codec.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(head.status, StatusCode::SWITCHING_PROTOCOLS);
+    }
 
     #[test]
     fn test_http10_response_keepalive() {
