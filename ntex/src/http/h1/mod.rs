@@ -11,6 +11,7 @@ mod default;
 mod dispatcher;
 pub(crate) mod encoder;
 mod service;
+mod timer;
 
 /// Connection lifecycle messages and acknowledgements.
 pub mod control;

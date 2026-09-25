@@ -4,7 +4,7 @@ use std::{future, io, mem, pin::Pin, rc::Rc};
 
 use crate::io::{Decoded, Filter, Io, IoStatusUpdate, RecvError};
 use crate::service::pipeline::{Pipeline, PipelineCall};
-use crate::{channel::bstream, time::Seconds, util::Either, util::clone_io_error};
+use crate::{channel::bstream, util::Either, util::clone_io_error};
 
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
 use crate::http::error::{DispatchError, PayloadError, ResponseError};
@@ -13,16 +13,8 @@ use crate::http::{self, config::DispatcherConfig, request::Request, response::Re
 
 use super::control::{Control, ControlAck, ControlResult, ServiceDisconnectReason};
 use super::decoder::{PayloadDecoder, PayloadItem, PayloadType};
+use super::timer::{Timer, Timers};
 use super::{Message, ProtocolError, codec::Codec};
-
-fn read_timeout(timeout: Seconds, max_timeout: Seconds) -> (Seconds, Seconds) {
-    if max_timeout.is_zero() {
-        (timeout, Seconds::ZERO)
-    } else {
-        let timeout = Seconds(timeout.0.min(max_timeout.0));
-        (timeout, Seconds(max_timeout.0.saturating_sub(timeout.0)))
-    }
-}
 
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -31,16 +23,6 @@ bitflags::bitflags! {
         const FIRST_REQUEST        = 0b0000_0001;
         /// Disconnect
         const DISCONNECT_SENT      = 0b0000_0010;
-        /// Payload timer is held until `100 Continue` or a response is sent
-        const READ_PL_EXPECT       = 0b0000_0100;
-        /// Keep-alive is enabled
-        const READ_KA_TIMEOUT      = 0b0001_0000;
-        /// Read headers timer is enabled
-        const READ_HDRS_TIMEOUT    = 0b0010_0000;
-        /// Read headers payload is enabled
-        const READ_PL_TIMEOUT      = 0b0100_0000;
-        /// Payload timer is paused by application backpressure
-        const READ_PL_PAUSED       = 0b1000_0000;
     }
 }
 
@@ -78,9 +60,7 @@ struct DispatcherInner<F, B, Err> {
     config: DispatcherConfig,
     payload: Option<(PayloadDecoder, bstream::Sender<PayloadError>)>,
     pending_payload_error: Option<Either<ProtocolError, Option<io::Error>>>,
-    read_remains: u32,
-    read_consumed: u32,
-    read_max_timeout: Seconds,
+    timers: Timers,
 }
 
 impl<F, B, Err> Dispatcher<F, B, Err>
@@ -100,18 +80,12 @@ where
         let codec = Codec::new(id, io.shared().get());
 
         // slow-request timer
-        let (flags, max_timeout) = if let Some(cfg) = &codec.cfg.headers_read_rate {
-            let (timeout, max_timeout) = read_timeout(cfg.timeout, cfg.max_timeout);
-            io.start_timer(timeout);
-            (Flags::FIRST_REQUEST | Flags::READ_HDRS_TIMEOUT, max_timeout)
-        } else {
-            (Flags::FIRST_REQUEST, Seconds::ZERO)
-        };
+        let timers = Timers::new(&io, codec.cfg.headers_read_rate);
 
         Dispatcher {
             st: State::ReadRequest,
             inner: DispatcherInner {
-                flags,
+                flags: Flags::FIRST_REQUEST,
                 codec,
                 service,
                 control,
@@ -119,9 +93,7 @@ where
                 io: Rc::new(io),
                 payload: None,
                 pending_payload_error: None,
-                read_remains: 0,
-                read_consumed: 0,
-                read_max_timeout: max_timeout,
+                timers,
                 disconnect: None,
             },
         }
@@ -196,7 +168,7 @@ where
                                         inner.send_response(res, body.into())
                                     }
                                     ControlResult::Continue(req) => {
-                                        inner.flags.remove(Flags::READ_PL_EXPECT);
+                                        inner.timers.payload_hold = false;
                                         let result =
                                             inner.io.encode_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
                                         if let Err(err) = result {
@@ -289,12 +261,7 @@ where
         log::trace!("{}: Trying to read http message", self.io.tag());
 
         let buffered = self.io.with_read_dst(|buf| buf.len()) as u32;
-        if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
-            self.read_consumed = self
-                .read_consumed
-                .saturating_add(buffered.saturating_sub(self.read_remains));
-            self.read_remains = buffered;
-        }
+        self.timers.headers_buffered(buffered);
 
         let result = match self.io.poll_recv_decode(&self.codec, cx) {
             Ok(decoded) => {
@@ -331,7 +298,7 @@ where
 
                         // the client does not send the body before `100 Continue`
                         if req.head().expect() {
-                            self.flags.insert(Flags::READ_PL_EXPECT);
+                            self.timers.payload_hold = true;
                         }
                     }
                 }
@@ -355,7 +322,7 @@ where
                 self.ctl_peer_gone(err)
             }
             Err(RecvError::KeepAlive) => {
-                if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
+                if self.timers.active == Timer::Headers {
                     if let Err(err) = self.handle_timeout() {
                         log::trace!("{}: Slow request timeout", self.io.tag());
                         self.ctl_proto_err(err)
@@ -383,7 +350,7 @@ where
             msg,
             body.size()
         );
-        self.flags.remove(Flags::READ_PL_EXPECT);
+        self.timers.payload_hold = false;
 
         // close connection if payload stream is dropped and not consumed
         if let Some((_pl, snd)) = &self.payload
@@ -525,14 +492,9 @@ where
 
         match self.payload.as_ref().unwrap().1.poll_ready(cx) {
             Poll::Ready(bstream::Status::Ready) => {
-                if self.flags.contains(Flags::READ_PL_PAUSED)
-                    && self
-                        .codec
-                        .cfg
-                        .payload_read_rate
-                        .as_ref()
-                        .is_some_and(|cfg| cfg.max_timeout.non_zero())
-                    && self.read_max_timeout.is_zero()
+                if self
+                    .timers
+                    .payload_budget_exhausted(self.codec.cfg.payload_read_rate)
                 {
                     self.set_payload_error(PayloadError::Io(io::Error::new(
                         io::ErrorKind::TimedOut,
@@ -544,7 +506,7 @@ where
                 // read request payload
                 let mut updated = false;
                 loop {
-                    let buffered = if self.flags.contains(Flags::READ_PL_TIMEOUT) {
+                    let buffered = if self.timers.active == Timer::Payload {
                         Some(
                             io.map(|io| io.with_read_dst(|buf| buf.len()))
                                 .unwrap_or_else(|| self.io.with_read_dst(|buf| buf.len())),
@@ -577,9 +539,7 @@ where
                             self.payload.as_mut().unwrap().1.feed_data(chunk);
                         }
                         Ok(PayloadItem::Eof) => {
-                            self.io.stop_timer();
-                            self.flags
-                                .remove(Flags::READ_PL_TIMEOUT | Flags::READ_PL_PAUSED);
+                            self.timers.stop(&self.io);
                             self.payload.as_mut().unwrap().1.feed_eof();
                             self.payload = None;
                             break;
@@ -607,8 +567,9 @@ where
                                             .unwrap_or_else(|| {
                                                 self.io.with_read_dst(|buf| buf.len())
                                             });
-                                        self.read_consumed =
-                                            self.read_consumed.saturating_add(
+                                        let p = &mut self.timers.progress;
+                                        p.consumed =
+                                            p.consumed.saturating_add(
                                                 buffered.saturating_sub(remains) as u32,
                                             );
                                     }
@@ -655,71 +616,37 @@ where
     }
 
     fn pause_payload_timer(&mut self) {
-        if self.flags.contains(Flags::READ_PL_TIMEOUT) {
-            self.flags.remove(Flags::READ_PL_TIMEOUT);
-            self.flags.insert(Flags::READ_PL_PAUSED);
-            if let Some(cfg) = &self.codec.cfg.payload_read_rate
-                && cfg.max_timeout.non_zero()
-            {
-                let remains = self.io.timer_handle().remains();
-                self.read_max_timeout = Seconds(self.read_max_timeout.0.saturating_add(remains.0));
-            }
-            self.io.stop_timer();
-        }
+        self.timers
+            .pause_payload(&self.io, self.codec.cfg.payload_read_rate);
     }
 
     fn handle_timeout(&mut self) -> Result<(), ProtocolError> {
         // check read rate
-        let cfg = if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
-            &self.codec.cfg.headers_read_rate
-        } else if self.flags.contains(Flags::READ_PL_TIMEOUT) {
-            &self.codec.cfg.payload_read_rate
-        } else {
+        let (cfg, payload) = match self.timers.active {
+            Timer::Headers => (&self.codec.cfg.headers_read_rate, false),
+            Timer::Payload => (&self.codec.cfg.payload_read_rate, true),
+            _ => return Ok(()),
+        };
+        let Some(cfg) = *cfg else {
             return Ok(());
         };
+        if self.timers.extend(&self.io, cfg) {
+            return Ok(());
+        }
 
-        if let Some(cfg) = cfg {
-            let total = self.read_consumed;
-            self.read_consumed = 0;
-
-            if total > cfg.rate {
-                let timeout = if cfg.max_timeout.is_zero() {
-                    Some(cfg.timeout)
-                } else if self.read_max_timeout.is_zero() {
-                    None
-                } else {
-                    let (timeout, remaining) = read_timeout(cfg.timeout, self.read_max_timeout);
-                    self.read_max_timeout = remaining;
-                    Some(timeout)
-                };
-
-                if let Some(timeout) = timeout {
-                    log::trace!(
-                        "{}: Bytes read rate {:?}, extend timer",
-                        self.io.tag(),
-                        total
-                    );
-                    self.io.start_timer(timeout);
-                    return Ok(());
-                }
-            }
-
-            log::trace!(
-                "{}: Timeout during reading, {:?}",
-                self.io.tag(),
-                self.flags
-            );
-            if self.flags.contains(Flags::READ_PL_TIMEOUT) {
-                self.set_payload_error(PayloadError::Io(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "Payload read timeout",
-                )));
-                Err(ProtocolError::SlowPayloadTimeout)
-            } else {
-                Err(ProtocolError::SlowRequestTimeout)
-            }
+        log::trace!(
+            "{}: Timeout during reading, {:?}",
+            self.io.tag(),
+            self.timers.active
+        );
+        if payload {
+            self.set_payload_error(PayloadError::Io(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "Payload read timeout",
+            )));
+            Err(ProtocolError::SlowPayloadTimeout)
         } else {
-            Ok(())
+            Err(ProtocolError::SlowRequestTimeout)
         }
     }
 
@@ -729,43 +656,28 @@ where
     ) -> Option<State<F, B, Err>> {
         // got parsed frame
         if decoded.item.is_some() {
-            self.read_remains = 0;
-            self.read_consumed = 0;
-            self.flags.remove(
-                Flags::FIRST_REQUEST
-                    | Flags::READ_KA_TIMEOUT
-                    | Flags::READ_HDRS_TIMEOUT
-                    | Flags::READ_PL_TIMEOUT
-                    | Flags::READ_PL_PAUSED
-                    | Flags::READ_PL_EXPECT,
-            );
-            self.io.stop_timer();
-        } else if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
+            self.flags.remove(Flags::FIRST_REQUEST);
+            self.timers.reset(&self.io);
+        } else if self.timers.active == Timer::Headers {
             // received new data but not enough for parsing complete frame
-            self.read_remains = decoded.remains as u32;
+            self.timers.progress.remains = decoded.remains as u32;
         } else if !self.flags.contains(Flags::FIRST_REQUEST)
-            && self.read_remains == 0
+            && self.timers.progress.remains == 0
             && decoded.remains == 0
             && !self.codec.is_reading_hdrs()
         {
             // no new data, start keep-alive timer
             if self.codec.keepalive() {
-                if !self.flags.contains(Flags::READ_KA_TIMEOUT) && self.codec.cfg.ka_enabled {
-                    log::debug!(
-                        "{}: Start keep-alive timer {:?}",
-                        self.io.tag(),
-                        self.codec.cfg.keep_alive
-                    );
-                    self.flags.insert(Flags::READ_KA_TIMEOUT);
-                    self.io.start_timer(self.codec.cfg.keep_alive);
+                if self.codec.cfg.ka_enabled {
+                    self.timers
+                        .start_keepalive(&self.io, self.codec.cfg.keep_alive);
                 }
             } else {
                 self.io.close();
                 return Some(self.ctl_keepalive(false));
             }
         } else if self.codec.is_reading_hdrs()
-            && !self.flags.contains(Flags::READ_HDRS_TIMEOUT)
-            && (self.flags.contains(Flags::READ_KA_TIMEOUT)
+            && (self.timers.active == Timer::KeepAlive
                 || self.codec.cfg.headers_read_rate.is_some())
         {
             self.start_headers_timer(
@@ -777,63 +689,24 @@ where
     }
 
     fn start_headers_timer(&mut self, consumed: u32, remains: u32) {
-        self.flags
-            .remove(Flags::READ_KA_TIMEOUT | Flags::READ_PL_TIMEOUT);
-        self.read_remains = remains;
-        self.read_consumed = consumed;
-
-        if let Some(cfg) = &self.codec.cfg.headers_read_rate {
-            log::debug!(
-                "{}: Start headers read timer {:?}",
-                self.io.tag(),
-                cfg.timeout
-            );
-            self.flags.insert(Flags::READ_HDRS_TIMEOUT);
-
-            let (timeout, max_timeout) = read_timeout(cfg.timeout, cfg.max_timeout);
-            self.read_max_timeout = max_timeout;
-            self.io.start_timer(timeout);
-        } else {
-            self.io.stop_timer();
-        }
+        self.timers.start_headers(
+            &self.io,
+            self.codec.cfg.headers_read_rate,
+            consumed,
+            remains,
+        );
     }
 
     fn update_payload_timer(&mut self, decoded: &Decoded<PayloadItem>) {
-        if self.flags.contains(Flags::READ_PL_EXPECT) {
-            return;
-        }
-        if self.flags.contains(Flags::READ_PL_TIMEOUT) {
-            self.read_consumed = self.read_consumed.saturating_add(decoded.consumed as u32);
-        } else if let Some(cfg) = &self.codec.cfg.payload_read_rate {
-            log::debug!("{}: Start payload timer {:?}", self.io.tag(), cfg.timeout);
-
-            // start payload timer
-            let paused = self.flags.contains(Flags::READ_PL_PAUSED);
-            let max_timeout = if paused {
-                self.flags.remove(Flags::READ_PL_PAUSED);
-                if cfg.max_timeout.is_zero() {
-                    Seconds::ZERO
-                } else {
-                    self.read_max_timeout
-                }
-            } else {
-                cfg.max_timeout
-            };
-            self.flags.insert(Flags::READ_PL_TIMEOUT);
-
-            let (timeout, max_timeout) = read_timeout(cfg.timeout, max_timeout);
-            if paused {
-                self.read_consumed = self.read_consumed.saturating_add(decoded.consumed as u32);
-            } else {
-                self.read_consumed = decoded.consumed as u32;
-            }
-            self.read_max_timeout = max_timeout;
-            self.io.start_timer(timeout);
-        }
+        self.timers.payload_decoded(
+            &self.io,
+            self.codec.cfg.payload_read_rate,
+            decoded.consumed as u32,
+        );
     }
 
     fn publish(&mut self, req: Request) -> State<F, B, Err> {
-        self.flags.remove(Flags::READ_PL_EXPECT);
+        self.timers.payload_hold = false;
         State::CallPublish {
             fut: self.service.call_nowait(req),
         }
@@ -897,7 +770,7 @@ where
     fn stop(&mut self) -> State<F, B, Err> {
         log::debug!("{}: Dispatcher is stopped", self.io.tag());
 
-        self.io.stop_timer();
+        self.timers.stop(&self.io);
         State::Stop
     }
 }
@@ -916,26 +789,11 @@ mod tests {
     use crate::http::{KeepAlive, ResponseHead, StatusCode, body};
     use crate::io::{self as nio, Base, testing::IoTest};
     use crate::service::{IntoService, Service, cfg::SharedCfg, fn_service};
-    use crate::time::{Millis, sleep, timeout};
+    use crate::time::{Millis, Seconds, sleep, timeout};
     use crate::util::{Bytes, BytesMut, lazy, stream_recv};
     use crate::{client::ClientCodec, codec::Decoder};
 
     const BUFFER_SIZE: usize = 32_768;
-
-    #[test]
-    fn test_read_timeout_is_bounded_by_maximum() {
-        let (timeout, remaining) = read_timeout(Seconds(10), Seconds(15));
-        assert_eq!(timeout, Seconds(10));
-        assert_eq!(remaining, Seconds(5));
-
-        let (timeout, remaining) = read_timeout(Seconds(10), remaining);
-        assert_eq!(timeout, Seconds(5));
-        assert_eq!(remaining, Seconds::ZERO);
-
-        let (timeout, remaining) = read_timeout(Seconds(10), Seconds(3));
-        assert_eq!(timeout, Seconds(3));
-        assert_eq!(remaining, Seconds::ZERO);
-    }
 
     #[crate::rt_test]
     async fn test_payload_timer_resume_preserves_maximum() {
@@ -960,23 +818,21 @@ mod tests {
             consumed: 2,
         };
 
-        h1.inner
-            .flags
-            .remove(Flags::FIRST_REQUEST | Flags::READ_HDRS_TIMEOUT);
-        h1.inner.io.stop_timer();
+        h1.inner.flags.remove(Flags::FIRST_REQUEST);
+        h1.inner.timers.stop(&h1.inner.io);
         h1.inner.update_payload_timer(&decoded);
-        assert_eq!(h1.inner.read_max_timeout, Seconds(5));
+        assert_eq!(h1.inner.timers.progress.max_timeout, Seconds(5));
         assert!(h1.inner.handle_timeout().is_ok());
-        assert_eq!(h1.inner.read_max_timeout, Seconds::ZERO);
+        assert_eq!(h1.inner.timers.progress.max_timeout, Seconds::ZERO);
         assert_eq!(h1.inner.io.timer_handle().remains(), Seconds(5));
 
         h1.inner.pause_payload_timer();
-        assert!(h1.inner.flags.contains(Flags::READ_PL_PAUSED));
-        assert_eq!(h1.inner.read_max_timeout, Seconds(5));
+        assert_eq!(h1.inner.timers.active, Timer::PayloadPaused);
+        assert_eq!(h1.inner.timers.progress.max_timeout, Seconds(5));
 
         h1.inner.update_payload_timer(&decoded);
-        assert!(!h1.inner.flags.contains(Flags::READ_PL_PAUSED));
-        assert_eq!(h1.inner.read_max_timeout, Seconds::ZERO);
+        assert_ne!(h1.inner.timers.active, Timer::PayloadPaused);
+        assert_eq!(h1.inner.timers.progress.max_timeout, Seconds::ZERO);
         assert_eq!(h1.inner.io.timer_handle().remains(), Seconds(5));
     }
 
@@ -1054,7 +910,7 @@ mod tests {
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
 
-        assert!(h1.inner.flags.contains(Flags::READ_KA_TIMEOUT));
+        assert_eq!(h1.inner.timers.active, Timer::KeepAlive);
         assert!(h1.inner.io.is_active());
         sleep(Millis(50)).await;
         assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
@@ -1089,7 +945,7 @@ mod tests {
         client.write("GET /first HTTP/1.1\r\n\r\n");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
-        assert!(h1.inner.flags.contains(Flags::READ_KA_TIMEOUT));
+        assert_eq!(h1.inner.timers.active, Timer::KeepAlive);
         sleep(Millis(50)).await;
         assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
 
@@ -1099,9 +955,9 @@ mod tests {
         h1.inner.io.notify_timeout();
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
-        assert!(h1.inner.flags.contains(Flags::READ_HDRS_TIMEOUT));
-        assert!(!h1.inner.flags.contains(Flags::READ_KA_TIMEOUT));
-        assert_eq!(h1.inner.read_consumed, partial.len() as u32);
+        assert_eq!(h1.inner.timers.active, Timer::Headers);
+        assert_ne!(h1.inner.timers.active, Timer::KeepAlive);
+        assert_eq!(h1.inner.timers.progress.consumed, partial.len() as u32);
         assert!(h1.inner.io.is_active());
 
         client.write("\r\n\r\n");
@@ -1498,19 +1354,19 @@ mod tests {
         client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\n\r\nb");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
-        assert!(h1.inner.flags.contains(Flags::READ_PL_TIMEOUT));
+        assert_eq!(h1.inner.timers.active, Timer::Payload);
         assert!(h1.inner.io.is_wr_backpressure());
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
-        assert!(h1.inner.flags.contains(Flags::READ_PL_PAUSED));
-        assert!(!h1.inner.flags.contains(Flags::READ_PL_TIMEOUT));
+        assert_eq!(h1.inner.timers.active, Timer::PayloadPaused);
+        assert_ne!(h1.inner.timers.active, Timer::Payload);
         assert!(!h1.inner.io.timer_handle().is_set());
 
         client.remote_buffer_cap(256 * 1024);
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
-        assert!(h1.inner.flags.contains(Flags::READ_PL_TIMEOUT));
-        assert!(!h1.inner.flags.contains(Flags::READ_PL_PAUSED));
+        assert_eq!(h1.inner.timers.active, Timer::Payload);
+        assert_ne!(h1.inner.timers.active, Timer::PayloadPaused);
 
         client.write("ody");
         sleep(Millis(50)).await;
