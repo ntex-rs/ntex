@@ -1,6 +1,5 @@
 //! HTTP/1 protocol dispatcher
-use std::task::{Context, Poll, ready};
-use std::{future, io, mem, pin::Pin, rc::Rc};
+use std::{future, io, mem, pin::Pin, rc::Rc, task::Context, task::Poll, task::ready};
 
 use crate::io::{Decoded, Filter, Io, IoStatusUpdate, RecvError};
 use crate::service::pipeline::{Pipeline, PipelineCall};
@@ -13,16 +12,7 @@ use crate::http::{self, config::DispatcherConfig, request::Request, response::Re
 
 use super::control::{Control, ControlAck, ControlResult, ServiceDisconnectReason};
 use super::decoder::{PayloadDecoder, PayloadItem, PayloadType};
-use super::timer::{Timer, Timers};
-use super::{Message, ProtocolError, codec::Codec};
-
-bitflags::bitflags! {
-    #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-    pub struct Flags: u8 {
-        /// Disconnect
-        const DISCONNECT_SENT      = 0b0000_0001;
-    }
-}
+use super::{Message, ProtocolError, codec::Codec, timer::Timer, timer::Timers};
 
 pin_project_lite::pin_project! {
     /// Dispatcher for HTTP/1.1 protocol
@@ -48,15 +38,24 @@ enum State<F, B, Err> {
     Stop,
 }
 
+/// Control service disconnect state
+#[derive(Debug)]
+enum Disconnect {
+    None,
+    /// Disconnect reason to send once the current response is written
+    Pending(ServiceDisconnectReason),
+    /// Disconnect control message has been sent
+    Sent,
+}
+
 struct DispatcherInner<F, B, Err> {
     io: Rc<Io<F>>,
-    flags: Flags,
     codec: Codec,
     timers: Timers,
     config: DispatcherConfig,
+    disconnect: Disconnect,
     service: Pipeline<Request, Response<B>, Err>,
     control: Pipeline<Control<F, Err>, ControlAck<F>, DispatchError>,
-    disconnect: Option<ServiceDisconnectReason>,
     payload: Option<(PayloadDecoder, bstream::Sender<PayloadError>)>,
     pending_payload_error: Option<Either<ProtocolError, Option<io::Error>>>,
 }
@@ -88,11 +87,10 @@ where
                 config,
                 service,
                 control,
-                flags: Flags::empty(),
                 io: Rc::new(io),
                 payload: None,
                 pending_payload_error: None,
-                disconnect: None,
+                disconnect: Disconnect::None,
             },
         }
     }
@@ -184,22 +182,22 @@ where
                                         inner.control(Control::expect(req))
                                     }
                                     ControlResult::ExpectFailed(res, body) => {
-                                        inner.disconnect =
-                                            Some(ServiceDisconnectReason::ExpectFailed);
+                                        inner.set_disconnect(ServiceDisconnectReason::ExpectFailed);
                                         inner.send_response(res, body.into())
                                     }
                                     ControlResult::Upgrade(req) => inner.ctl_upgrade(req),
                                     ControlResult::UpgradeAck(req) => {
-                                        inner.disconnect =
-                                            Some(ServiceDisconnectReason::UpgradeHandled);
+                                        inner.set_disconnect(
+                                            ServiceDisconnectReason::UpgradeHandled,
+                                        );
                                         inner.publish(req)
                                     }
                                     ControlResult::UpgradeHandled => inner.ctl_svc_disconnect(
                                         ServiceDisconnectReason::UpgradeHandled,
                                     ),
                                     ControlResult::UpgradeFailed(res, body) => {
-                                        inner.disconnect =
-                                            Some(ServiceDisconnectReason::UpgradeFailed);
+                                        inner
+                                            .set_disconnect(ServiceDisconnectReason::UpgradeFailed);
                                         inner.send_response(res, body.into())
                                     }
                                     ControlResult::Stop => inner.stop(),
@@ -411,10 +409,10 @@ where
     ) -> Poll<State<F, B, Err>> {
         if !self.io.is_active() {
             return Poll::Ready(self.ctl_peer_gone(None));
-        } else if self.disconnect.is_none()
+        } else if !matches!(self.disconnect, Disconnect::Pending(_))
             && let Poll::Ready(Some(_)) = self.poll_request_payload(cx)
         {
-            self.disconnect = Some(ServiceDisconnectReason::PayloadDropped);
+            self.set_disconnect(ServiceDisconnectReason::PayloadDropped);
         }
         loop {
             if let Err(err) = ready!(self.poll_flush_timed(cx))
@@ -435,7 +433,11 @@ where
                     }
                 }
                 None => {
-                    log::trace!("{}: Response payload eof {:?}", self.io.tag(), self.flags);
+                    log::trace!(
+                        "{}: Response payload eof {:?}",
+                        self.io.tag(),
+                        self.disconnect
+                    );
                     if let Err(err) = self.io.encode(Message::Chunk(None), &self.codec) {
                         self.ctl_proto_err(err.into())
                     } else if let Some(st) = self.check_disconnect() {
@@ -654,7 +656,7 @@ where
                 // wait until future completes and then close
                 // connection
                 self.payload = None;
-                self.disconnect = Some(ServiceDisconnectReason::PayloadDropped);
+                self.set_disconnect(ServiceDisconnectReason::PayloadDropped);
                 Poll::Pending
             }
         }
@@ -843,11 +845,20 @@ where
         self.ctl_disconnect(Control::svc_disconnect(reason))
     }
 
+    /// Records a disconnect reason, unless a disconnect has been sent.
+    fn set_disconnect(&mut self, reason: ServiceDisconnectReason) {
+        if !matches!(self.disconnect, Disconnect::Sent) {
+            self.disconnect = Disconnect::Pending(reason);
+        }
+    }
+
     fn ctl_disconnect(&mut self, req: Control<F, Err>) -> State<F, B, Err> {
-        if self.flags.contains(Flags::DISCONNECT_SENT) {
+        if matches!(
+            mem::replace(&mut self.disconnect, Disconnect::Sent),
+            Disconnect::Sent
+        ) {
             self.stop()
         } else {
-            self.flags.insert(Flags::DISCONNECT_SENT);
             State::CallControl {
                 fut: self.control.call_nowait(req),
             }
@@ -855,15 +866,15 @@ where
     }
 
     fn check_disconnect(&mut self) -> Option<State<F, B, Err>> {
-        if self.flags.contains(Flags::DISCONNECT_SENT) {
-            Some(self.stop())
-        } else if let Some(reason) = self.disconnect.take() {
-            self.flags.insert(Flags::DISCONNECT_SENT);
-            Some(State::CallControl {
+        match mem::replace(&mut self.disconnect, Disconnect::Sent) {
+            Disconnect::None => {
+                self.disconnect = Disconnect::None;
+                None
+            }
+            Disconnect::Pending(reason) => Some(State::CallControl {
                 fut: self.control.call_nowait(Control::svc_disconnect(reason)),
-            })
-        } else {
-            None
+            }),
+            Disconnect::Sent => Some(self.stop()),
         }
     }
 
@@ -943,6 +954,44 @@ mod tests {
         assert_ne!(h1.inner.timers.active, Timer::PayloadPaused);
         assert_eq!(h1.inner.timers.progress.max_timeout, Seconds::ZERO);
         assert_eq!(h1.inner.io.timer_handle().remains(), Seconds(5));
+    }
+
+    /// A sent disconnect absorbs pending and later disconnect reasons.
+    #[crate::rt_test]
+    async fn test_disconnect_state() {
+        let (_client, server) = IoTest::create();
+        let config: SharedCfg = SharedCfg::new("SVC").into();
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
+            ),
+            Pipeline::new((), DefaultControlService),
+            DispatcherConfig::default(),
+        );
+
+        assert!(h1.inner.check_disconnect().is_none());
+        assert!(matches!(h1.inner.disconnect, Disconnect::None));
+
+        h1.inner
+            .set_disconnect(ServiceDisconnectReason::ExpectFailed);
+        assert!(matches!(
+            h1.inner.disconnect,
+            Disconnect::Pending(ServiceDisconnectReason::ExpectFailed)
+        ));
+        assert!(matches!(
+            h1.inner.ctl_peer_gone(None),
+            State::CallControl { .. }
+        ));
+        assert!(matches!(h1.inner.disconnect, Disconnect::Sent));
+
+        h1.inner
+            .set_disconnect(ServiceDisconnectReason::PayloadDropped);
+        assert!(matches!(h1.inner.disconnect, Disconnect::Sent));
+        assert!(matches!(h1.inner.check_disconnect(), Some(State::Stop)));
+        assert!(matches!(h1.inner.ctl_peer_gone(None), State::Stop));
     }
 
     fn exhausted_payload_h1(
