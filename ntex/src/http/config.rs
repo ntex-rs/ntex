@@ -168,7 +168,11 @@ impl HttpServiceConfig {
     /// its measurement interval. A zero duration disables header-read timing.
     /// A new connection can then wait indefinitely for its first request,
     /// while on a persistent connection the keep-alive timeout bounds both
-    /// waiting for the next request and reading its head. The default is one second.
+    /// waiting for the next request and reading its head. The default is one
+    /// second.
+    ///
+    /// HTTP/1 timers have one-second resolution, a timeout can expire up to
+    /// one second later than configured.
     ///
     /// This sets the measurement interval of the request-head read rate. The
     /// cumulative limit and required rate configured by
@@ -221,13 +225,13 @@ impl HttpServiceConfig {
     ///
     /// A zero `timeout` disables request-head timing. The first request of a
     /// connection is then unbounded, and the keep-alive timeout bounds waiting
-    /// for and reading each following request head. A zero
-    /// `max_timeout`
+    /// for and reading each following request head. A zero `max_timeout`
     /// removes the cumulative limit, allowing the deadline to be extended
     /// indefinitely while the required read rate is maintained. When
     /// `max_timeout` is not an exact multiple of `timeout`, the final
     /// measurement interval is shortened so the cumulative limit is not
-    /// exceeded.
+    /// exceeded. Intervals have one-second resolution and can expire up to one
+    /// second later than configured.
     ///
     /// If the request head misses its deadline, the HTTP/1 control service
     /// receives
@@ -274,11 +278,11 @@ impl HttpServiceConfig {
     /// This setting protects HTTP/1 connections from clients that send a
     /// request body too slowly. The timer starts when the dispatcher begins
     /// decoding a request payload. For a request with `Expect: 100-continue`,
-    /// it starts only once `100 Continue` has been sent or the request has been
-    /// passed to the application, because the client does not send the body
-    /// before that. At the end of each `timeout`
-    /// interval, another interval is granted only if more than `rate` bytes
-    /// were decoded.
+    /// it starts only once `100 Continue` has been sent, the request has been
+    /// passed to the application, or a response has been sent and the rest of
+    /// the payload is read, because the client does not send the body before
+    /// that. At the end of each `timeout` interval, another interval is
+    /// granted only if more than `rate` bytes were decoded.
     ///
     /// The timer runs only while the dispatcher can read and forward payload
     /// data. It is paused while application payload backpressure or response
@@ -291,7 +295,9 @@ impl HttpServiceConfig {
     /// the cumulative limit, allowing the deadline to be extended indefinitely
     /// while the required read rate is maintained. When `max_timeout` is not
     /// an exact multiple of `timeout`, the final measurement interval is
-    /// shortened so the cumulative limit is not exceeded.
+    /// shortened so the cumulative limit is not exceeded. Intervals have
+    /// one-second resolution and can expire up to one second later than
+    /// configured.
     ///
     /// If the payload misses its deadline, its stream receives a timed-out
     /// [`PayloadError`](crate::http::error::PayloadError), and the HTTP/1

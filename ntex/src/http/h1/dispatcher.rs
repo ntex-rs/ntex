@@ -120,13 +120,14 @@ where
                     }
                     Poll::Ready(Err(err)) => inner.ctl_error(err),
                     Poll::Pending => {
-                        // state changed because of error.
+                        // state changed because of error
+                        // otherwise .poll_request() returns Poll::Pending
+                        let st = ready!(inner.poll_request(cx));
+
                         // spawn current publish future to runtime
                         // so it could complete error handling
-                        let st = ready!(inner.poll_request(cx));
-                        if inner.payload.is_some()
-                            && let State::CallPublish { fut } =
-                                mem::replace(&mut *this.st, State::ReadRequest)
+                        if let State::CallPublish { fut } =
+                            mem::replace(&mut *this.st, State::ReadRequest)
                         {
                             crate::rt::spawn(fut);
                         }
@@ -353,8 +354,6 @@ where
             msg,
             body.size()
         );
-        self.start_payload_timer();
-
         // close connection if payload stream is dropped and not consumed
         if let Some((_pl, snd)) = &self.payload
             && snd.is_closed()
@@ -382,7 +381,7 @@ where
                         if let Some(st) = self.check_disconnect() {
                             st
                         } else if self.payload.is_some() {
-                            State::ReadPayload
+                            self.read_payload()
                         } else {
                             State::ReadRequest
                         }
@@ -427,7 +426,7 @@ where
                     } else if let Some(st) = self.check_disconnect() {
                         st
                     } else if self.payload.is_some() {
-                        State::ReadPayload
+                        self.read_payload()
                     } else {
                         State::ReadRequest
                     }
@@ -723,6 +722,13 @@ where
             self.timers
                 .start_payload(&self.io, self.codec.cfg.payload_read_rate);
         }
+    }
+
+    /// Switches to reading the rest of the request payload after the
+    /// response is sent.
+    fn read_payload(&mut self) -> State<F, B, Err> {
+        self.start_payload_timer();
+        State::ReadPayload
     }
 
     fn publish(&mut self, req: Request) -> State<F, B, Err> {
@@ -1888,6 +1894,57 @@ mod tests {
         sleep(Millis(100)).await;
         let buf = client.read_any();
         assert!(buf.starts_with(b"HTTP/1.1 200 OK\r\n"), "{buf:?}");
+    }
+
+    /// An expectation answered with a final response starts payload timing
+    /// once the dispatcher reads the rest of the payload.
+    #[crate::rt_test]
+    async fn test_payload_timer_starts_after_expect_response() {
+        let stash = Rc::new(RefCell::new(None));
+        let stash2 = stash.clone();
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(HttpServiceConfig::new().set_payload_read_rate(Seconds(1), Seconds(2), 1))
+            .into();
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
+            ),
+            Pipeline::new(
+                (),
+                fn_service(move |req: Control<Base, io::Error>| {
+                    let stash = stash2.clone();
+                    async move {
+                        if let Control::Request(mut req) = req {
+                            // keep the payload stream alive
+                            stash.borrow_mut().replace(req.get_mut().take_payload());
+                            Ok::<_, DispatchError>(req.fail_with(Response::Forbidden().build()))
+                        } else {
+                            Ok(req.ack())
+                        }
+                    }
+                }),
+            ),
+            DispatcherConfig::default(),
+        );
+
+        client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\nexpect: 100-continue\r\n\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(client.read_any().starts_with(b"HTTP/1.1 403 Forbidden\r\n"));
+        assert!(matches!(h1.st, State::ReadPayload));
+        assert_eq!(h1.inner.timers.active, Timer::Payload);
+
+        let res = timeout(Millis(3500), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
+        assert!(res.unwrap().is_ok());
+        assert!(stash.borrow().is_some());
     }
 
     #[crate::rt_test]
