@@ -13,8 +13,8 @@ pub(crate) async fn lookup<T: Address>(
 ) -> Result<Connect<T>, Error<ConnectError>> {
     if req.addr.is_some() || req.req.addr().is_some() {
         Ok(req)
-    } else if let Ok(ip) = parse(req.host()).0.parse() {
-        req.addr = Some(Either::Left(net::SocketAddr::new(ip, req.port())));
+    } else if let Some(addr) = ip_literal(parse(req.host()).0, req.port()) {
+        req.addr = Some(Either::Left(addr));
         Ok(req)
     } else {
         log::trace!("{tag}: DNS Resolver - resolving host {:?}", req.host());
@@ -65,9 +65,34 @@ pub(crate) async fn lookup<T: Address>(
     }
 }
 
+/// Parses an ip address, including an IPv6 address with a numeric zone id (`fe80::1%3`).
+fn ip_literal(host: &str, port: u16) -> Option<net::SocketAddr> {
+    if let Ok(ip) = host.parse() {
+        return Some(net::SocketAddr::new(ip, port));
+    }
+    let (ip, zone) = host.split_once('%')?;
+    let ip = ip.parse().ok()?;
+    let scope_id = zone.parse().ok()?;
+    Some(net::SocketAddrV6::new(ip, port, 0, scope_id).into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ip_literals() {
+        let addr = ip_literal("fe80::1%3", 80).unwrap();
+        assert_eq!(addr, "[fe80::1%3]:80".parse().unwrap());
+        let net::SocketAddr::V6(addr) = addr else {
+            panic!("expected v6 address")
+        };
+        assert_eq!(addr.scope_id(), 3);
+        assert_eq!(ip_literal("::1", 80), Some("[::1]:80".parse().unwrap()));
+        assert_eq!(ip_literal("fe80::1%eth0", 80), None);
+        assert_eq!(ip_literal("127.0.0.1%3", 80), None);
+        assert_eq!(ip_literal("localhost", 80), None);
+    }
 
     #[allow(clippy::clone_on_copy)]
     #[ntex::test]
@@ -94,6 +119,8 @@ mod tests {
             ("[::1]:8080", None, "[::1]:8080"),
             ("[::1]", Some(9090), "[::1]:9090"),
             ("::1", Some(9090), "[::1]:9090"),
+            ("fe80::1%3", Some(80), "[fe80::1%3]:80"),
+            ("[fe80::1%3]:8080", None, "[fe80::1%3]:8080"),
         ] {
             let mut req = Connect::new(host);
             if let Some(port) = port {

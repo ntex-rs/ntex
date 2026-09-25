@@ -2,6 +2,12 @@
 
 ## [4.1.0] - 2026-09-22
 
+* rustls: graceful shutdown waits for the peer's `close_notify` (or read eof),
+  like the openssl filter, instead of completing right after sending its own
+
+* schannel: complete the handshake when the peer's last handshake flight is read
+  together with its eof, instead of failing with `UnexpectedEof`
+
 * schannel: start a graceful shutdown when the peer sends `close_notify`,
   instead of leaving the connection half-open
 

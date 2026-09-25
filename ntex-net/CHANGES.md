@@ -11,6 +11,11 @@
   resolve `[v6]`, `[v6]:port` and bare `v6` hosts (including `Uri` hosts)
   without DNS lookup
 
+* Fix `Connect` display repeating the port of `host:port` hosts, IPv6 hosts are
+  displayed in brackets
+
+* Resolve IPv6 hosts with a numeric zone id (`fe80::1%3`) without DNS lookup
+
 * Fix corrupted output in the polling backend when a write includes inline
   pages. The write vector pointed into each page before it was moved into
   place, so for a page stored inline it pointed at a reused local, and the

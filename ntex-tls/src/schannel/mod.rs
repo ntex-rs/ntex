@@ -812,10 +812,12 @@ pub async fn connect<F: Filter>(
         return Ok(io);
     }
 
+    // the read that reports eof may also carry the peer's last handshake flight
+    let mut eof = false;
     loop {
-        io.read_notify()
-            .await?
-            .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "disconnected"))?;
+        if io.read_notify().await?.is_none() {
+            eof = true;
+        }
         io.flush(false).await?;
 
         if let Some(err) = io.filter().take_error() {
@@ -825,6 +827,9 @@ pub async fn connect<F: Filter>(
         }
         if !io.filter().is_handshaking() {
             return Ok(io);
+        }
+        if eof {
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "disconnected"));
         }
     }
 }

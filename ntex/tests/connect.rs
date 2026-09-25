@@ -641,6 +641,61 @@ async fn test_rustls_shutdown_sends_close_notify() {
 
 #[cfg(feature = "rustls")]
 #[ntex::test]
+async fn test_rustls_shutdown_waits_for_peer_close_notify() {
+    use std::io::{Read, Write};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use ntex::{Service, server::rustls};
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let srv = test_server(move || {
+        let tx = tx.clone();
+        async move {
+            rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc()).and_then(move |io: Io<_>| {
+                let tx = tx.clone();
+                async move {
+                    io.recv(&BytesCodec).await.unwrap().unwrap();
+                    let start = Instant::now();
+                    let res = io.shutdown().await;
+                    let _ = tx.send((res, start.elapsed()));
+                    Ok::<_, io::Error>(())
+                }
+            })
+        }
+    });
+
+    let cfg = Arc::new(rustls_utils::tls_connector());
+    let name = tls_rustls::pki_types::ServerName::try_from("localhost").unwrap();
+    let mut conn = tls_rustls::ClientConnection::new(cfg, name).unwrap();
+    let mut sock = std::net::TcpStream::connect(srv.addr()).unwrap();
+    sock.set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let mut tls = tls_rustls::Stream::new(&mut conn, &mut sock);
+    tls.write_all(b"go").unwrap();
+    tls.flush().unwrap();
+
+    // server's close_notify
+    let mut tmp = [0u8; 1024];
+    assert_eq!(tls.read(&mut tmp).unwrap(), 0);
+
+    // answer it late, the server must still be waiting for it
+    std::thread::sleep(Duration::from_millis(300));
+    tls.conn.send_close_notify();
+    tls.flush().unwrap();
+
+    // socket stays open, only the close_notify can complete the shutdown
+    // before the shutdown timeout (1 second by default)
+    let (res, elapsed) = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    res.unwrap();
+    assert!(
+        elapsed >= Duration::from_millis(300) && elapsed < Duration::from_millis(900),
+        "shutdown took {elapsed:?}"
+    );
+}
+
+#[cfg(feature = "rustls")]
+#[ntex::test]
 async fn test_rustls_keyupdate_response_flushed() {
     use std::io::{Read, Write};
     use std::sync::Arc;

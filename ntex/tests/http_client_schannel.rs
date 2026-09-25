@@ -342,6 +342,43 @@ async fn test_shutdown_sends_close_notify() {
 }
 
 #[ntex::test]
+async fn test_handshake_then_eof() {
+    use ntex::{connect::Connect, service::Pipeline};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    let server = std::thread::spawn(move || {
+        let acceptor = ssl_acceptor();
+        let mut streams = Vec::new();
+        while done_rx.try_recv().is_err() {
+            let (sock, _) = listener.accept().unwrap();
+            if let Ok(stream) = acceptor.accept(sock) {
+                // the last handshake flight is followed by eof
+                stream
+                    .get_ref()
+                    .shutdown(std::net::Shutdown::Write)
+                    .unwrap();
+                streams.push(stream);
+            }
+        }
+    });
+
+    let conn = Pipeline::new(SharedCfg::default(), schannel_connector());
+    for _ in 0..20 {
+        let io = conn
+            .call(Connect::new("localhost").set_addr(Some(addr)))
+            .await
+            .expect("handshake followed by eof must succeed");
+        assert!(matches!(io.recv(&ntex::codec::BytesCodec).await, Ok(None)));
+    }
+    done_tx.send(()).unwrap();
+    // unblock accept
+    let _ = std::net::TcpStream::connect(addr);
+    server.join().unwrap();
+}
+
+#[ntex::test]
 async fn test_peer_close_notify_closes_io() {
     use ntex::{codec::BytesCodec, connect::Connect, service::Pipeline, time};
     use std::io::Read;

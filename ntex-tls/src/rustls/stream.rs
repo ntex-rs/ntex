@@ -151,9 +151,19 @@ where
         self.write_tls_records(buf)?;
 
         if self.session.wants_write() {
-            Ok(Poll::Pending)
-        } else {
+            return Ok(Poll::Pending);
+        }
+
+        // wait for the peer's close_notify, unless the peer already closed
+        // the connection and it is never going to arrive
+        let state = self
+            .session
+            .process_new_packets()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        if state.peer_has_closed() || buf.io().is_read_eof() {
             Ok(Poll::Ready(()))
+        } else {
+            Ok(Poll::Pending)
         }
     }
 }

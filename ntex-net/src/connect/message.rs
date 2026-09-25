@@ -209,7 +209,12 @@ impl<T: Address> From<T> for Connect<T> {
 
 impl<T: Address> fmt::Display for Connect<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.host(), self.port())
+        let (host, _) = parse(self.host());
+        if host.contains(':') {
+            write!(f, "[{host}]:{}", self.port())
+        } else {
+            write!(f, "{host}:{}", self.port())
+        }
     }
 }
 
@@ -329,6 +334,24 @@ mod tests {
 
         assert_eq!(Connect::new("[::1]:8080").port(), 8080);
         assert_eq!(Connect::new("::1").set_port(80).port(), 80);
+    }
+
+    #[test]
+    fn display() {
+        assert_eq!(
+            Connect::new("example.com:443").to_string(),
+            "example.com:443"
+        );
+        assert_eq!(
+            Connect::new("example.com").set_port(80).to_string(),
+            "example.com:80"
+        );
+        assert_eq!(Connect::new("[::1]:8080").to_string(), "[::1]:8080");
+        assert_eq!(Connect::new("::1").set_port(80).to_string(), "[::1]:80");
+        assert_eq!(
+            Connect::new("fe80::1%3").set_port(80).to_string(),
+            "[fe80::1%3]:80"
+        );
     }
 
     #[test]
