@@ -115,27 +115,52 @@ impl ConnectOps {
                 Poll::Pending => {
                     entry.insert(op);
                 }
-                Poll::Ready(Ok(())) => {
-                    if op.addr.domain() == Domain::UNIX {
-                        let _ = op.sender.send(Ok(Io::new(
-                            UnixStream(op.sock, op.addr, self.0.streams.clone()),
-                            op.cfg,
-                        )));
-                    } else {
-                        let _ = op.sender.send(Ok(Io::new(
-                            TcpStream(op.sock, op.addr, self.0.streams.clone()),
-                            op.cfg,
-                        )));
-                    }
-                }
-                Poll::Ready(Err(err)) => {
-                    let _ = op.sender.send(Err(err));
-                    crate::helpers::close_socket(op.sock);
-                }
+                Poll::Ready(Ok(())) => (*op).complete(Ok(()), &self.0.streams),
+                Poll::Ready(Err(err)) => (*op).complete(Err(err), &self.0.streams),
             }
             rx
         }
     }
+}
+
+impl ConnectOp {
+    fn complete(self, res: io::Result<()>, streams: &StreamOps) {
+        match res.and_then(|()| update_connect_context(&self.sock)) {
+            Ok(()) => {
+                let io = if self.addr.domain() == Domain::UNIX {
+                    Io::new(UnixStream(self.sock, self.addr, streams.clone()), self.cfg)
+                } else {
+                    Io::new(TcpStream(self.sock, self.addr, streams.clone()), self.cfg)
+                };
+                let _ = self.sender.send(Ok(io));
+            }
+            Err(err) => {
+                let _ = self.sender.send(Err(err));
+                crate::helpers::close_socket(self.sock);
+            }
+        }
+    }
+}
+
+/// Completes the connected state of a socket connected with `ConnectEx`.
+///
+/// Until this is set the socket is only partially connected: `shutdown`
+/// fails with `WSAENOTCONN`, and socket options such as `SO_LINGER` do not
+/// take effect on close. Without it a graceful close never sends a `FIN`
+/// and leaks the socket, and a force close ends with a `FIN` instead of an
+/// `RST`.
+fn update_connect_context(sock: &Socket) -> io::Result<()> {
+    syscall!(
+        SOCKET,
+        WinSock::setsockopt(
+            sock.as_raw_socket() as _,
+            WinSock::SOL_SOCKET,
+            WinSock::SO_UPDATE_CONNECT_CONTEXT,
+            ptr::null(),
+            0,
+        )
+    )
+    .map(|_| ())
 }
 
 impl Handler for ConnectOpsHandler {
@@ -148,25 +173,7 @@ impl Handler for ConnectOpsHandler {
                 op.sock.as_raw_socket(),
             );
 
-            match res {
-                Ok(_) => {
-                    if op.addr.domain() == Domain::UNIX {
-                        let _ = op.sender.send(Ok(Io::new(
-                            UnixStream(op.sock, op.addr, self.inner.streams.clone()),
-                            op.cfg,
-                        )));
-                    } else {
-                        let _ = op.sender.send(Ok(Io::new(
-                            TcpStream(op.sock, op.addr, self.inner.streams.clone()),
-                            op.cfg,
-                        )));
-                    }
-                }
-                Err(err) => {
-                    let _ = op.sender.send(Err(err));
-                    crate::helpers::close_socket(op.sock);
-                }
-            }
+            (*op).complete(res.map(|_| ()), &self.inner.streams);
         }
     }
 

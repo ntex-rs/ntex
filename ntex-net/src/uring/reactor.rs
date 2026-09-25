@@ -329,15 +329,18 @@ impl Reactor {
                         let user_data = (user_data & Self::DATA_MASK) as usize;
 
                         let result = entry.result();
-                        if result == -libc::ECANCELED {
+                        // A canceled zero-copy send still posts a notification,
+                        // the operation must stay alive until it arrives.
+                        if result == -libc::ECANCELED && !more(entry.flags()) {
                             handlers[batch].modified = true;
                             handlers[batch].hnd.canceled(user_data);
                         } else {
-                            let result = if result < 0 {
+                            // zero-copy notification result is a set of flags
+                            let result = if result < 0 && !cqueue::notif(entry.flags()) {
                                 Err(io::Error::from_raw_os_error(-result))
                             } else {
                                 #[allow(clippy::cast_sign_loss)]
-                                Ok(result as _)
+                                Ok(result as u32 as _)
                             };
                             handlers[batch].modified = true;
                             handlers[batch]

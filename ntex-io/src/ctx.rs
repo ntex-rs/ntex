@@ -1,7 +1,7 @@
 use std::{fmt, io, task::Context, task::Poll};
 
 use ntex_bytes::{BytePages, BytesMut};
-use ntex_util::time::sleep;
+use ntex_util::time::{Seconds, sleep};
 
 use crate::{Flags, Id, IoRef, IoTaskStatus, Readiness, io::IoState};
 
@@ -74,6 +74,16 @@ impl IoContext {
     /// Gets the state flags. (for debug purpose only)
     pub fn flags(&self) -> Flags {
         self.0.flags()
+    }
+
+    #[inline]
+    /// Gets the configured shutdown timeout.
+    ///
+    /// A backend whose own teardown can stall, such as one waiting for
+    /// cancelled operations to complete, can bound it with this, as the
+    /// graceful shutdown before it is bounded.
+    pub fn shutdown_timeout(&self) -> Seconds {
+        self.0.cfg().shutdown_timeout()
     }
 
     #[inline]

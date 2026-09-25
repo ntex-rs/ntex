@@ -62,6 +62,7 @@ impl ReactorApi {
 /// IOCP reactor.
 pub struct Reactor {
     hid: Cell<u32>,
+    #[allow(clippy::struct_field_names)]
     reactor: Arc<ReactorInner>,
     #[allow(clippy::box_collection, clippy::type_complexity)]
     handlers: Cell<Option<Box<Vec<Box<dyn Handler>>>>>,
@@ -210,8 +211,10 @@ impl Reactor {
                     | ERROR_BROKEN_PIPE
                     | ERROR_PIPE_CONNECTED
                     | ERROR_PIPE_NOT_CONNECTED
-                    | ERROR_NO_DATA
-                    | ERROR_MORE_DATA => Ok(0),
+                    | ERROR_NO_DATA => Ok(0),
+                    // Partial transfer: data was delivered and more remains, so
+                    // reporting 0 here would be read as a clean eof / write-zero.
+                    ERROR_MORE_DATA => Ok(overlapped.base.InternalHigh),
                     _ => Err(io::Error::from_raw_os_error(error.cast_signed())),
                 }
             };

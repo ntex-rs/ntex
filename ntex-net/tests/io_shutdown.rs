@@ -45,8 +45,10 @@ async fn force_close_resets_connection() {
     });
 
     let mut sock = net::TcpStream::connect(srv.addr()).unwrap();
-    sock.write_all(b"ping").unwrap();
+    // set before the request: once the server has reset the connection,
+    // Linux rejects `setsockopt` with `EINVAL`
     sock.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    sock.write_all(b"ping").unwrap();
     // let the connection be torn down before the receive queue is drained
     thread::sleep(Duration::from_millis(400));
 
@@ -73,8 +75,8 @@ async fn graceful_shutdown_closes_cleanly() {
     });
 
     let mut sock = net::TcpStream::connect(srv.addr()).unwrap();
-    sock.write_all(b"ping").unwrap();
     sock.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    sock.write_all(b"ping").unwrap();
 
     let (total, outcome) = read_to_end(&mut sock);
     assert_eq!(outcome, Outcome::Eof);
@@ -97,8 +99,9 @@ async fn drop_resets_connection() {
     });
 
     let mut sock = net::TcpStream::connect(srv.addr()).unwrap();
-    sock.write_all(b"ping").unwrap();
+    // see `force_close_resets_connection`
     sock.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    sock.write_all(b"ping").unwrap();
 
     let (total, outcome) = read_to_end(&mut sock);
     assert_eq!(

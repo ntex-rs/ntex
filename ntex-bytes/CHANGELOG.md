@@ -1,5 +1,11 @@
 # Changes
 
+## [1.10.0] (unreleased)
+
+* Add `BytePage::info()` to report the kind of storage backing a page
+
+* Add `BytePage::is_inline()` to report whether page data is stored inline
+
 ## [1.9.0] (2026-07-17)
 
 * Mark `BytePage::as_ptr()` as `unsafe`, as it has additional requirements that make it unsafe

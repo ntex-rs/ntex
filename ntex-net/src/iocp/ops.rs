@@ -56,6 +56,25 @@ impl ReadOperation {
         self.ctx.tag()
     }
 
+    /// The connection's shutdown timeout, it bounds the wait for cancelled
+    /// operations too.
+    pub(crate) fn shutdown_timeout(&self) -> ntex_util::time::Seconds {
+        self.ctx.shutdown_timeout()
+    }
+
+    /// Marks a recv as in flight without issuing one, so that the kernel never
+    /// completes it, as when a cancel does not take.
+    #[cfg(test)]
+    pub(crate) fn fake_pending(&mut self) {
+        self.buf = Some(self.ctx.take_read_buf());
+        self.flags.insert(Flags::WAITING);
+    }
+
+    /// Whether a recv is in flight, so the kernel still owns this operation.
+    pub(crate) fn is_pending(&self) -> bool {
+        self.flags.contains(Flags::WAITING)
+    }
+
     pub(crate) fn pause(&mut self, closing: bool) -> bool {
         if self.flags.contains(Flags::WAITING) {
             #[cfg(feature = "trace")]
@@ -72,9 +91,14 @@ impl ReadOperation {
             ) {
                 let e = err.raw_os_error();
                 if e != Some(ERROR_NOT_FOUND as _) && e != Some(ERROR_OPERATION_ABORTED as _) {
-                    self.ctx
-                        .release_read_buf(self.buf.take().unwrap(), Poll::Ready(Err(err)));
-                    return true;
+                    // The recv is still live and the kernel still owns the read
+                    // buffer, so fall through and wait for the completion rather
+                    // than recycling the buffer and reporting the op as finished.
+                    log::error!(
+                        "{}: failed to cancel recv({}): {err:?}",
+                        self.ctx.tag(),
+                        self.io
+                    );
                 }
             }
             if closing {
@@ -166,6 +190,15 @@ impl ReadOperation {
                     rd.ctx.release_read_buf(buf, Poll::Ready(Ok(size)))
                 }
                 Err(err) if err.raw_os_error() == Some(ERROR_OPERATION_ABORTED as _) => {
+                    // A cancelled recv is not expected to have transferred anything,
+                    // but the kernel reports the transfer count regardless of status,
+                    // so keep whatever it did deliver instead of silently dropping it.
+                    let size = rd.overlapped.base.InternalHigh;
+                    debug_assert_eq!(size, 0, "cancelled recv reported {size} transferred bytes");
+                    if size != 0 {
+                        // SAFETY: windows tells us how many bytes it read
+                        unsafe { buf.advance_mut(size) };
+                    }
                     rd.ctx.release_read_buf(buf, Poll::Pending)
                 }
                 Err(err) => rd.ctx.release_read_buf(buf, Poll::Ready(Err(err))),
@@ -211,6 +244,11 @@ impl WriteOperation {
         }
     }
 
+    /// Whether a send is in flight, so the kernel still owns this operation.
+    pub(crate) fn is_pending(&self) -> bool {
+        self.flags.contains(Flags::WAITING)
+    }
+
     pub(crate) fn pause(&mut self) -> bool {
         if self.flags.contains(Flags::WAITING) {
             if let Err(err) = syscall!(
@@ -219,7 +257,14 @@ impl WriteOperation {
             ) {
                 let e = err.raw_os_error();
                 if e != Some(ERROR_NOT_FOUND as _) && e != Some(ERROR_OPERATION_ABORTED as _) {
-                    return true;
+                    // The send is still live and the kernel still owns the queued
+                    // pages, so fall through and wait for the completion rather
+                    // than reporting the op as finished and closing under it.
+                    log::error!(
+                        "{}: failed to cancel send({}): {err:?}",
+                        self.ctx.tag(),
+                        self.io
+                    );
                 }
             }
             self.flags.insert(Flags::CLOSING);
@@ -275,7 +320,7 @@ impl WriteOperation {
                             let written = sent as usize;
                             let mut sent = written;
                             // remove written bytes
-                            for page in self.pages[..num].iter_mut() {
+                            for page in &mut self.pages[..num] {
                                 if let Some(p) = page {
                                     let len = cmp::min(p.len(), sent);
                                     p.advance_to(len);
@@ -350,7 +395,7 @@ impl WriteOperation {
             Ok(written) => {
                 // remove written bytes
                 let mut sent = written;
-                for page in wr.pages[..num].iter_mut() {
+                for page in &mut wr.pages[..num] {
                     if let Some(p) = page {
                         let len = cmp::min(p.len(), sent);
                         p.advance_to(len);

@@ -265,11 +265,14 @@ where
         while let Some(page) = dst.take() {
             size += page.len();
 
-            // SAFETY: Page is stored in `pages` for lifetime of `bufs`
+            // The slice is taken from the stored page, an inline page keeps
+            // its data in the `BytePage` itself and moving it moves the data.
+            // SAFETY: Page is stored in `pages` for lifetime of `bufs` and is
+            // not moved until `bufs` is dropped
+            let page = pages[num].insert(page);
             bufs[num] = mem::MaybeUninit::new(io::IoSlice::new(unsafe {
                 mem::transmute::<&[u8], &[u8]>(page.as_ref())
             }));
-            pages[num] = Some(page);
 
             num += 1;
             if num == MAX_WRITE_ITEMS || size >= MAX_WRITE_SIZE {

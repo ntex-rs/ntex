@@ -2,6 +2,85 @@
 
 ## [4.1.0] - 2026-09-23
 
+* Fix corrupted output in the polling backend when a write includes inline
+  pages. The write vector pointed into each page before it was moved into
+  place, so for a page stored inline it pointed at a reused local, and the
+  last such page was sent in place of the others
+
+* Fix corrupted output in the tokio backend when the write buffer holds
+  inline pages. The write slice was taken before the page was moved into
+  the pages array, so it pointed at the data's old location
+
+* Resend with a plain send when an io-uring zero-copy send fails with
+  `ENOMEM` or `ENOBUFS` and disable zero-copy for the connection. Pinned
+  pages are charged against `RLIMIT_MEMLOCK`, shared by all connections,
+  and exhausting it terminated the connection
+
+* Disable io-uring zero-copy sends for a connection once the kernel reports
+  that it copied the data anyway (loopback, veth, NICs without scatter-gather),
+  using `IORING_SEND_ZC_REPORT_USAGE`; kernels without it fall back to plain
+  zero-copy. Zero-copy is used only for sends of 16KiB or more
+
+* Send a single heap backed page with an io-uring `SendOne` operation that
+  stores the page itself, without allocating a boxed send buffer
+
+* Gather up to 16 write pages into one io-uring send with `SendMsg` /
+  `SendMsgZc`, up to 256KiB, or 128KiB for zero-copy. A send op per page
+  took a ring round-trip for every page and limited write throughput.
+  Send buffers are boxed, so the kernel no longer references pages stored
+  in the operations slab, which moves its entries when it grows
+
+* Fix reordered output after a partial io-uring zero-copy send. The next
+  chunk was sent right away while the unsent remainder was only returned to
+  the write buffer once the notification arrived, so it reached the peer
+  after later data. The remainder is now returned before the next send; it
+  shares the page's data, only `Vec` backed pages are copied, and the page
+  itself stays with the kernel until the notification
+
+* Fix a panic in the IOCP backend when a filter writes while processing
+  input, as a TLS server answering a ClientHello does. A recv that completed
+  immediately ran the read filters while the stream storage was taken, so a
+  direct write of their output, once it reached the write buffer threshold,
+  panicked and left the storage taken, breaking every stream on that thread
+
+* Bound io-uring reads chained on `IORING_CQE_F_SOCK_NONEMPTY` by the read
+  buffer's capacity. The chain grew the buffer while the peer kept sending
+  and ignored read backpressure; it now stops once the buffer is full and
+  releases it, so the high watermark applies
+
+* Keep io-uring zero-copy sends alive until their notification arrives. A
+  send that completed after its stream was closed, or was canceled, was
+  released before the notification, which then panicked with `invalid key`
+  and freed a buffer the kernel still referenced
+
+* Bound the IOCP socket close by the connection's shutdown timeout. The
+  close waits for cancelled operations to complete before closing the
+  socket, and a cancellation that never completed left the socket open and
+  `Io::shutdown()` pending forever. Once the timeout expires the socket is
+  now closed with a reset and the close fails with `TimedOut`; the stream
+  is released when the operations complete. No read or write is started
+  once the close has begun
+
+* Update the connect context of client sockets in the IOCP backend. Sockets
+  connected with `ConnectEx` stayed partially connected, so `shutdown` failed
+  with `WSAENOTCONN`: a graceful close skipped `closesocket`, leaking the
+  socket and never sending a `FIN`, and a force close ended with a `FIN`
+  instead of a reset
+
+* Always close the socket in the IOCP backend, even if the graceful
+  `shutdown` fails. The socket was released without `closesocket` on a
+  failed `shutdown`, leaking it. The close that follows pending operations
+  also reports its outcome only once the socket is closed, and with the
+  error, instead of reporting success before closing it
+
+* Close sockets that are still open when the runtime stops in the IOCP
+  backend. They were never closed. A socket with an operation still in
+  flight is closed, but its state is kept allocated, since the kernel
+  completes the cancelled operation into it after the reactor has stopped
+
+* Report the socket error on `EPOLLERR` in the polling backend. When no read or
+  write surfaced it, a reset was reported as a clean close
+
 * Treat peer half-close as read eof in the io-uring backend, as the polling
   backend does. `POLLRDHUP` terminated the connection, so a response to a
   peer that half-closed after its request was dropped and the peer saw a
