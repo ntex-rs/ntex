@@ -134,9 +134,11 @@ async fn inline_pages_survive_pending_and_partial_sends() {
     let (addr, done) = peer(go_rx, 16);
     let sock = net::TcpStream::connect(addr).unwrap();
     // without a send buffer the kernel sends straight from the pages, so every
-    // send stays in flight until the peer takes the data
+    // send stays in flight until the peer takes the data. Only Windows accepts
+    // zero, BSDs reject it with `EINVAL` and Linux raises it to its minimum
+    let sndbuf = if cfg!(windows) { 0 } else { 4096 };
     socket2::SockRef::from(&sock)
-        .set_send_buffer_size(0)
+        .set_send_buffer_size(sndbuf)
         .unwrap();
     let io = ntex_net::from_tcp_stream(sock, cfg()).unwrap();
     let payload = pattern(TOTAL);
