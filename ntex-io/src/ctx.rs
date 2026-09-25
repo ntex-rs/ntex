@@ -317,6 +317,14 @@ impl IoContext {
             }),
         };
 
+        // The filter shutdown step runs from `poll_read_ready()`, and new
+        // input may be what it waits for, e.g. the peer's TLS close_notify.
+        // Without a wakeup it would only be retried on the next unrelated
+        // wakeup, which may be the shutdown deadline.
+        if result.is_ok() && st.flags.is_shutting_down_filters() {
+            st.wake_read_task();
+        }
+
         if let Err(err) = result {
             // A read failure while the filters are shutting down does not
             // terminate the connection: the filter handshake cannot complete,

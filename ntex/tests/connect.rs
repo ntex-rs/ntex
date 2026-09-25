@@ -184,6 +184,61 @@ async fn test_openssl_shutdown_sends_close_notify() {
     );
 }
 
+#[cfg(feature = "openssl")]
+#[ntex::test]
+async fn test_openssl_shutdown_completes_on_peer_close_notify() {
+    use std::io::{Read, Write};
+    use std::time::{Duration, Instant};
+
+    use ntex::server::openssl;
+    use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode, SslVersion};
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let srv = test_server(move || {
+        let tx = tx.clone();
+        async move {
+            service(openssl::SslAcceptor::new(ssl_acceptor())).and_then(move |io: Io<_>| {
+                let tx = tx.clone();
+                async move {
+                    io.recv(&BytesCodec).await.unwrap().unwrap();
+                    io.encode(Bytes::from(vec![b'x'; 1024 * 1024]), &BytesCodec)
+                        .unwrap();
+                    let start = Instant::now();
+                    let res = io.shutdown().await;
+                    let _ = tx.send((res, start.elapsed()));
+                    Ok::<_, io::Error>(())
+                }
+            })
+        }
+    });
+
+    let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+    builder.set_verify(SslVerifyMode::NONE);
+    builder
+        .set_max_proto_version(Some(SslVersion::TLS1_2))
+        .unwrap();
+    let sock = std::net::TcpStream::connect(srv.addr()).unwrap();
+    sock.set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let mut tls = builder.build().connect("localhost", sock).unwrap();
+    tls.write_all(b"go").unwrap();
+    tls.flush().unwrap();
+
+    let mut tmp = [0u8; 16 * 1024];
+    while tls.read(&mut tmp).unwrap() != 0 {}
+    // answer the server's close_notify
+    tls.shutdown().unwrap();
+
+    // the peer's close_notify completes the shutdown, it must not wait for
+    // the shutdown timeout (1 second by default)
+    let (res, elapsed) = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    res.unwrap();
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "shutdown took {elapsed:?}"
+    );
+}
+
 #[cfg(all(windows, feature = "openssl"))]
 #[ntex::test]
 async fn test_schannel_string() {
