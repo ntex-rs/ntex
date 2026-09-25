@@ -70,6 +70,67 @@ fn schannel_connector() -> TlsConnector<ntex::connect::Connector<&'static str>> 
     TlsConnector::with_config(ClientConfig::new().danger_accept_invalid_certs(true))
 }
 
+/// ALPN protocols offered by the client follow the configuration.
+#[ntex::test]
+async fn test_alpn_protocols() {
+    use ntex::{connect::Connect, io::types::HttpProtocol, service::Pipeline};
+    use std::sync::Mutex;
+
+    async fn offered(config: ClientConfig) -> (Option<Vec<u8>>, HttpProtocol) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen = Arc::new(Mutex::new(None));
+        let seen2 = seen.clone();
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
+            builder
+                .set_private_key_file("./tests/key.pem", SslFiletype::PEM)
+                .unwrap();
+            builder
+                .set_certificate_chain_file("./tests/cert.pem")
+                .unwrap();
+            builder.set_alpn_select_callback(move |_, protos| {
+                *seen2.lock().unwrap() = Some(protos.to_vec());
+                tls_openssl::ssl::select_next_proto(b"\x02h2\x08http/1.1", protos)
+                    .ok_or(AlpnError::NOACK)
+            });
+            let (sock, _) = listener.accept().unwrap();
+            let _stream = builder.build().accept(sock).unwrap();
+            let _ = done_rx.recv();
+        });
+
+        let conn = Pipeline::new(
+            SharedCfg::default(),
+            TlsConnector::<ntex::connect::Connector<&'static str>>::with_config(
+                config.danger_accept_invalid_certs(true),
+            ),
+        );
+        let io = conn
+            .call(Connect::new("localhost").set_addr(Some(addr)))
+            .await
+            .unwrap();
+        let proto = io.query::<HttpProtocol>().get().unwrap();
+        done_tx.send(()).unwrap();
+        server.join().unwrap();
+        let seen = seen.lock().unwrap().take();
+        (seen, proto)
+    }
+
+    assert_eq!(
+        offered(ClientConfig::new()).await,
+        (Some(b"\x02h2\x08http/1.1".to_vec()), HttpProtocol::Http2)
+    );
+    assert_eq!(
+        offered(ClientConfig::new().set_alpn_protocols(&["http/1.1"])).await,
+        (Some(b"\x08http/1.1".to_vec()), HttpProtocol::Http1)
+    );
+    assert_eq!(
+        offered(ClientConfig::new().set_alpn_protocols::<&str>(&[])).await,
+        (None, HttpProtocol::Http1)
+    );
+}
+
 /// A write page larger than one TLS record must be fully encrypted in a single
 /// filter pass, not one record per transport write completion.
 #[ntex::test]

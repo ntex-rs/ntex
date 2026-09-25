@@ -1,6 +1,6 @@
 //! An implementation of TLS streams backed by Windows Schannel.
 #![cfg(windows)]
-use std::{any, cell::UnsafeCell, cmp, io, mem, ptr, slice, task::Poll};
+use std::{any, cell::UnsafeCell, cmp, io, mem, ptr, slice, sync::Arc, task::Poll};
 
 use ntex_bytes::{BufMut, BytesMut};
 use ntex_io::{Filter, FilterBuf, FilterLayer, Io, Layer, types};
@@ -34,6 +34,8 @@ pub use self::connect::TlsConnector;
 #[derive(Clone, Debug)]
 pub struct ClientConfig {
     verify: bool,
+    /// Prebuilt `SECBUFFER_APPLICATION_PROTOCOLS` buffer, `None` disables ALPN.
+    alpn: Option<Arc<[u8]>>,
 }
 
 impl Default for ClientConfig {
@@ -44,15 +46,34 @@ impl Default for ClientConfig {
 
 impl ClientConfig {
     /// Construct default Schannel client configuration.
+    ///
+    /// ALPN offers `h2` and `http/1.1`.
     #[must_use]
     pub fn new() -> Self {
-        Self { verify: true }
+        Self {
+            verify: true,
+            alpn: alpn_buffer(&[b"h2".as_slice(), b"http/1.1".as_slice()]),
+        }
     }
 
     /// Accept invalid server certificates and hostnames.
     #[must_use]
     pub fn danger_accept_invalid_certs(mut self, accept_invalid_certs: bool) -> Self {
         self.verify = !accept_invalid_certs;
+        self
+    }
+
+    /// Set ALPN protocols offered to the server, in preference order.
+    ///
+    /// An empty list disables ALPN.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a protocol is empty or longer than 255 bytes, or the encoded
+    /// list exceeds 65535 bytes.
+    #[must_use]
+    pub fn set_alpn_protocols<T: AsRef<[u8]>>(mut self, protocols: &[T]) -> Self {
+        self.alpn = alpn_buffer(protocols);
         self
     }
 }
@@ -86,6 +107,7 @@ struct Context {
     ctxt: SecHandle,
     have_ctxt: bool,
     target: Vec<u16>,
+    alpn: Option<Arc<[u8]>>,
     sizes: Option<SecPkgContext_StreamSizes>,
 }
 
@@ -140,6 +162,7 @@ impl Context {
             ctxt: unsafe { mem::zeroed::<SecHandle>() },
             have_ctxt: false,
             target: domain.encode_utf16().chain(Some(0)).collect(),
+            alpn: config.alpn.clone(),
             sizes: None,
         })
     }
@@ -161,7 +184,6 @@ impl Context {
             pBuffers: &raw mut out_buf,
         };
 
-        let mut alpn = alpn_buffer();
         let mut in_bufs = [
             SecBuffer {
                 cbBuffer: 0,
@@ -174,12 +196,22 @@ impl Context {
                 pvBuffer: ptr::null_mut(),
             },
             SecBuffer {
+                cbBuffer: 0,
+                BufferType: SECBUFFER_EMPTY,
+                pvBuffer: ptr::null_mut(),
+            },
+        ];
+        // ALPN is part of the ClientHello, only the first call needs it
+        if !self.have_ctxt
+            && let Some(alpn) = self.alpn.as_ref()
+        {
+            in_bufs[2] = SecBuffer {
                 cbBuffer: u32::try_from(alpn.len())
                     .map_err(|_| io::Error::other("TLS ALPN buffer is too large"))?,
                 BufferType: SECBUFFER_APPLICATION_PROTOCOLS,
-                pvBuffer: alpn.as_mut_ptr().cast(),
-            },
-        ];
+                pvBuffer: alpn.as_ptr().cast_mut().cast(),
+            };
+        }
         let in_desc = SecBufferDesc {
             ulVersion: SECBUFFER_VERSION,
             cBuffers: u32::try_from(in_bufs.len()).expect("static SecBuffer count fits u32"),
@@ -731,20 +763,32 @@ fn take_token(buf: &SecBuffer, output: &mut ntex_bytes::BytePages) {
     }
 }
 
-fn alpn_buffer() -> Vec<u8> {
+fn alpn_buffer<T: AsRef<[u8]>>(protocols: &[T]) -> Option<Arc<[u8]>> {
     // Layout for SECBUFFER_APPLICATION_PROTOCOLS:
     // u32 ProtocolListsSize, then one or more protocol lists.
     // Each protocol list is u32 negotiation extension, u16 list size, then ALPN wire list.
-    const ALPN_WIRE: &[u8] = b"\x02h2\x08http/1.1";
-    let list_size = u16::try_from(ALPN_WIRE.len()).expect("static ALPN list fits u16");
+    if protocols.is_empty() {
+        return None;
+    }
+    let mut wire = Vec::new();
+    for proto in protocols {
+        let proto = proto.as_ref();
+        let len = u8::try_from(proto.len())
+            .ok()
+            .filter(|len| *len != 0)
+            .expect("ALPN protocol must be 1..=255 bytes");
+        wire.push(len);
+        wire.extend_from_slice(proto);
+    }
+    let list_size = u16::try_from(wire.len()).expect("ALPN protocol list fits u16");
     let protocol_lists_size = 4u32 + 2 + u32::from(list_size);
 
     let mut buf = Vec::with_capacity(4 + protocol_lists_size as usize);
     buf.extend_from_slice(&protocol_lists_size.to_ne_bytes());
     buf.extend_from_slice(&(SecApplicationProtocolNegotiationExt_ALPN as u32).to_ne_bytes());
     buf.extend_from_slice(&list_size.to_ne_bytes());
-    buf.extend_from_slice(ALPN_WIRE);
-    buf
+    buf.extend_from_slice(&wire);
+    Some(buf.into())
 }
 
 fn sspi_error(context: &'static str, status: windows_sys::core::HRESULT) -> io::Error {
@@ -765,3 +809,29 @@ impl std::fmt::Display for SspiError {
 }
 
 impl std::error::Error for SspiError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_alpn_buffer() {
+        assert!(alpn_buffer::<&[u8]>(&[]).is_none());
+
+        let buf = alpn_buffer(&[b"h2".as_slice(), b"http/1.1".as_slice()]).unwrap();
+        let wire = b"\x02h2\x08http/1.1";
+        assert_eq!(&buf[..4], &(4u32 + 2 + 12).to_ne_bytes());
+        assert_eq!(
+            &buf[4..8],
+            &(SecApplicationProtocolNegotiationExt_ALPN as u32).to_ne_bytes()
+        );
+        assert_eq!(&buf[8..10], &12u16.to_ne_bytes());
+        assert_eq!(&buf[10..], wire);
+    }
+
+    #[test]
+    #[should_panic(expected = "ALPN protocol must be 1..=255 bytes")]
+    fn test_alpn_empty_protocol() {
+        let _ = ClientConfig::new().set_alpn_protocols(&[b"".as_slice()]);
+    }
+}

@@ -2,6 +2,8 @@
 
 ## [4.1.0] - 2026-09-22
 
+* schannel: add `ClientConfig::set_alpn_protocols()`, send ALPN only with the ClientHello
+
 * schannel: encrypt records in place into write pages, no per-record allocation and copy
 
 * Fix IPv6 server name extraction in openssl, rustls and schannel connectors
