@@ -332,34 +332,78 @@ impl Context {
         Ok(sizes)
     }
 
+    /// Encrypts one TLS record from `src` into `dst`.
+    ///
+    /// The record is encrypted in place in the free space of the current
+    /// destination page, shrinking it to fit. When the page has almost no room
+    /// left, the record goes to a separate frame of at most one page.
     fn encrypt(&mut self, src: &[u8], dst: &mut ntex_bytes::BytePages) -> io::Result<usize> {
+        // smallest record worth encrypting into the rest of the current page
+        const MIN_RECORD: usize = 1024;
+
         let sizes = self.query_stream_sizes()?;
         let len = cmp::min(src.len(), sizes.cbMaximumMessage as usize);
         if len == 0 {
             return Ok(0);
         }
+        let overhead = (sizes.cbHeader + sizes.cbTrailer) as usize;
 
+        // a full page is pushed out by `with_bytes_mut`, the next record starts a new one
+        let written = dst.with_bytes_mut(|page| {
+            let avail = page.remaining_mut();
+            if avail >= overhead + cmp::min(len, MIN_RECORD) {
+                let len = cmp::min(len, avail - overhead);
+                let tls_len =
+                    self.encrypt_into(&src[..len], page.chunk_mut().as_mut_ptr(), sizes)?;
+                unsafe { page.advance_mut(tls_len) };
+                Ok(Some(len))
+            } else {
+                Ok::<_, io::Error>(None)
+            }
+        })?;
+        if let Some(written) = written {
+            return Ok(written);
+        }
+
+        let len = cmp::min(
+            len,
+            dst.page_size().capacity().saturating_sub(overhead).max(1),
+        );
+        let mut frame = BytesMut::with_capacity(overhead + len);
+        let tls_len = self.encrypt_into(&src[..len], frame.chunk_mut().as_mut_ptr(), sizes)?;
+        unsafe { frame.advance_mut(tls_len) };
+        dst.append(frame);
+        Ok(len)
+    }
+
+    /// Encrypts `src` into a record at `frame`, returns the record length.
+    ///
+    /// `frame` must be valid for writes of header, `src.len()` and trailer bytes.
+    fn encrypt_into(
+        &mut self,
+        src: &[u8],
+        frame: *mut u8,
+        sizes: SecPkgContext_StreamSizes,
+    ) -> io::Result<usize> {
         let header_len = sizes.cbHeader as usize;
-        let trailer_len = sizes.cbTrailer as usize;
-        let mut frame = BytesMut::with_capacity(header_len + len + trailer_len);
-        frame.resize(header_len + len + trailer_len, 0);
-        frame[header_len..header_len + len].copy_from_slice(&src[..len]);
+        let len = src.len();
+        unsafe { ptr::copy_nonoverlapping(src.as_ptr(), frame.add(header_len), len) };
 
         let mut bufs = [
             SecBuffer {
                 cbBuffer: sizes.cbHeader,
                 BufferType: SECBUFFER_STREAM_HEADER,
-                pvBuffer: frame.as_mut_ptr().cast(),
+                pvBuffer: frame.cast(),
             },
             SecBuffer {
                 cbBuffer: u32::try_from(len).expect("TLS message length fits u32"),
                 BufferType: SECBUFFER_DATA,
-                pvBuffer: unsafe { frame.as_mut_ptr().add(header_len).cast() },
+                pvBuffer: unsafe { frame.add(header_len).cast() },
             },
             SecBuffer {
                 cbBuffer: sizes.cbTrailer,
                 BufferType: SECBUFFER_STREAM_TRAILER,
-                pvBuffer: unsafe { frame.as_mut_ptr().add(header_len + len).cast() },
+                pvBuffer: unsafe { frame.add(header_len + len).cast() },
             },
             SecBuffer {
                 cbBuffer: 0,
@@ -380,9 +424,7 @@ impl Context {
         let tls_len = usize::try_from(bufs[0].cbBuffer).expect("TLS header length fits usize")
             + usize::try_from(bufs[1].cbBuffer).expect("TLS data length fits usize")
             + usize::try_from(bufs[2].cbBuffer).expect("TLS trailer length fits usize");
-        frame.truncate(tls_len);
-        dst.append(frame);
-        Ok(len)
+        Ok(tls_len)
     }
 
     fn decrypt(&mut self, src: &mut BytesMut, dst: &mut BytesMut) -> io::Result<bool> {

@@ -110,3 +110,35 @@ async fn drop_resets_connection() {
         "dropped io delivered {total} bytes and ended cleanly"
     );
 }
+
+/// A graceful shutdown must be bounded by the shutdown timeout when the peer
+/// stops reading, even while a transport write is in flight.
+#[ntex::test]
+async fn shutdown_times_out_on_stalled_peer() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let srv = test_server(move || {
+        let tx = tx.clone();
+        async move {
+            fn_service(move |io: Io<_>| {
+                let tx = tx.clone();
+                async move {
+                    let _ = io.recv(&BytesCodec).await;
+                    io.encode(Bytes::from(vec![b'y'; 4 * PAYLOAD]), &BytesCodec)
+                        .unwrap();
+                    let _ = tx.send(io.shutdown().await);
+                    Ok::<_, ()>(())
+                }
+            })
+        }
+    });
+
+    let mut sock = net::TcpStream::connect(srv.addr()).unwrap();
+    sock.write_all(b"ping").unwrap();
+
+    // the peer never reads, the default shutdown timeout is one second
+    let res = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("shutdown did not complete");
+    assert_eq!(res.unwrap_err().kind(), ErrorKind::TimedOut);
+    drop(sock);
+}

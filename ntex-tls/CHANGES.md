@@ -2,6 +2,8 @@
 
 ## [4.1.0] - 2026-09-22
 
+* schannel: encrypt records in place into write pages, no per-record allocation and copy
+
 * Fix IPv6 server name extraction in openssl, rustls and schannel connectors
 
 * openssl: enable read-ahead, fewer BIO reads per TLS record

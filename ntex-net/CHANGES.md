@@ -2,6 +2,11 @@
 
 ## [4.1.0] - 2026-09-23
 
+* Fix compio graceful shutdown hanging past the shutdown timeout when the peer
+  stops reading. The write task waited on the in-flight write and never polled
+  the shutdown deadline; the write is now cancelled once the connection is
+  terminated
+
 * Fix IPv6 host handling in `Connect`: parse the port of `[v6]:port`, and
   resolve `[v6]`, `[v6]:port` and bare `v6` hosts (including `Uri` hosts)
   without DNS lookup

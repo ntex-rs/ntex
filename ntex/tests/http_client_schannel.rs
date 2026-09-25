@@ -116,6 +116,98 @@ async fn test_large_write_encrypted_in_one_pass() {
     assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "done");
 }
 
+/// Records must be encrypted in place into the transport's write pages.
+#[ntex::test]
+async fn test_records_fit_write_pages() {
+    use ntex::{codec::BytesCodec, connect::Connect, service::Pipeline};
+    use std::io::{Read, Write};
+    use std::sync::{Arc, Mutex};
+
+    const SIZE: usize = 256 * 1024;
+
+    #[derive(Debug)]
+    struct Recorder(std::net::TcpStream, Arc<Mutex<Vec<u8>>>);
+
+    impl Read for Recorder {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.0.read(buf)?;
+            self.1.lock().unwrap().extend_from_slice(&buf[..n]);
+            Ok(n)
+        }
+    }
+
+    impl Write for Recorder {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.write(buf)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.0.flush()
+        }
+    }
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let raw = Arc::new(Mutex::new(Vec::new()));
+    let raw2 = raw.clone();
+    let server = std::thread::spawn(move || {
+        let (sock, _) = listener.accept().unwrap();
+        let mut stream = ssl_acceptor().accept(Recorder(sock, raw2)).unwrap();
+        stream
+            .get_ref()
+            .0
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .unwrap();
+        let mut buf = vec![0u8; 64 * 1024];
+        let mut received = Vec::with_capacity(SIZE);
+        while received.len() < SIZE {
+            let n = stream.read(&mut buf).unwrap();
+            received.extend_from_slice(&buf[..n]);
+        }
+        stream.write_all(b"done").unwrap();
+        received
+    });
+
+    let conn = Pipeline::new(SharedCfg::default(), schannel_connector());
+    let io = conn
+        .call(Connect::new("localhost").set_addr(Some(addr)))
+        .await
+        .unwrap();
+    let data: Vec<u8> = (0..SIZE).map(|i| (i % 251) as u8).collect();
+    // small writes leave partially filled pages, then one large write
+    let (small, large) = data.split_at(SIZE / 4);
+    for chunk in small.chunks(997) {
+        io.encode(ntex::util::Bytes::copy_from_slice(chunk), &BytesCodec)
+            .unwrap();
+        if chunk[0] % 4 == 0 {
+            ntex::time::sleep(ntex::time::Millis(1)).await;
+        }
+    }
+    io.encode(ntex::util::Bytes::copy_from_slice(large), &BytesCodec)
+        .unwrap();
+    let res = ntex::time::timeout(ntex::time::Millis(15_000), io.recv(&BytesCodec)).await;
+    let received = server.join().unwrap();
+    assert_eq!(res.unwrap().unwrap().unwrap(), "done");
+    assert!(received == data, "plaintext corrupted");
+
+    let raw = raw.lock().unwrap();
+    let mut pos = 0;
+    let mut records = Vec::new();
+    while pos + 5 <= raw.len() {
+        let len = u16::from_be_bytes([raw[pos + 3], raw[pos + 4]]) as usize;
+        if raw[pos] == 23 {
+            records.push(5 + len);
+        }
+        pos += 5 + len;
+    }
+    assert!(records.len() > SIZE / 16384, "{records:?}");
+    let page = ntex::util::BytePageSize::Size16.capacity();
+    assert!(
+        records.iter().all(|len| *len <= page),
+        "records larger than a write page: {records:?}"
+    );
+}
+
 /// Graceful shutdown must send close_notify to the peer.
 #[ntex::test]
 async fn test_shutdown_sends_close_notify() {
