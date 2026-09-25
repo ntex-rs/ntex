@@ -204,7 +204,7 @@ impl Timers {
             }
             Timer::PayloadPaused => {
                 let period = self.progress.period;
-                log::debug!("{}: Resume payload timer {:?}", io.tag(), period);
+                log::trace!("{}: Resume payload timer {:?}", io.tag(), period);
                 self.progress.consumed = self.progress.consumed.saturating_add(consumed);
                 self.progress.period = Seconds::ZERO;
                 self.active = Timer::Payload;

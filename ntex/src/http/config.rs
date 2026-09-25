@@ -204,7 +204,9 @@ impl HttpServiceConfig {
     /// enough of it. If backpressure is still enabled when the timeout
     /// expires, the connection is closed, and the HTTP/1 control service
     /// receives a peer-gone event with an [`io::ErrorKind::TimedOut`](std::io::ErrorKind::TimedOut)
-    /// error. Each backpressure period starts a fresh timeout.
+    /// error. An unfinished request payload stream receives a
+    /// [`PayloadError::Io`](crate::http::error::PayloadError::Io) with the
+    /// same error kind. Each backpressure period starts a fresh timeout.
     ///
     /// Without a write timeout, a client that stops reading responses can hold
     /// the connection open indefinitely. Payload read-rate timing is paused

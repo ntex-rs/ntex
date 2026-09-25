@@ -39,7 +39,8 @@
 
 * Add `HttpServiceConfig::set_write_timeout()` to bound HTTP/1 write
   backpressure, a client that stops reading responses could hold a connection
-  open indefinitely
+  open indefinitely. An unfinished request payload fails with a timed-out
+  `PayloadError::Io`
 
 * Decode already received HTTP/1 request payload before failing a paused
   payload read-rate timer without budget left

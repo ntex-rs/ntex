@@ -393,19 +393,34 @@ where
         cx: &mut Context<'_>,
         body: &mut ResponseBody<B>,
     ) -> Poll<State<F, B, Err>> {
-        if !self.io.is_active() {
+        let payload_err = if let Some(err) = self.pending_payload_error.take() {
+            Some(err)
+        } else if !self.io.is_active() {
             return Poll::Ready(self.ctl_peer_gone(None));
         } else if !matches!(self.disconnect, Disconnect::Pending(_))
-            && let Poll::Ready(Some(_)) = self.poll_request_payload(cx)
+            && let Poll::Ready(Err(err)) = self.poll_request_payload_inner::<F>(None, cx)
         {
-            self.set_disconnect(ServiceDisconnectReason::PayloadDropped);
+            Some(err)
+        } else {
+            None
+        };
+        match payload_err {
+            // peer is gone or write timeout, the response cannot be completed
+            Some(Either::Right(err)) => return Poll::Ready(self.ctl_peer_gone(err)),
+            // the response head is sent, an error response is not possible,
+            // finish the response and then stop
+            Some(Either::Left(err)) => {
+                log::trace!("{}: Request payload error: {:?}", self.io.tag(), err);
+                self.disconnect = Disconnect::Sent;
+            }
+            None => (),
         }
         loop {
             if let Err(err) = ready!(self.poll_flush_timed(cx))
                 && err.kind() == io::ErrorKind::TimedOut
             {
                 log::trace!("{}: Write backpressure timeout", self.io.tag());
-                self.set_payload_error(PayloadError::Incomplete(Some(write_timeout_error())));
+                self.set_payload_error(PayloadError::Io(write_timeout_error()));
                 return Poll::Ready(self.ctl_peer_gone(Some(err)));
             }
             let item = ready!(body.poll_next_chunk(cx));
@@ -580,8 +595,8 @@ where
                                         Poll::Ready(Ok(())) => continue,
                                         Poll::Ready(Err(err)) => {
                                             if err.kind() == io::ErrorKind::TimedOut {
-                                                self.set_payload_error(PayloadError::Incomplete(
-                                                    Some(write_timeout_error()),
+                                                self.set_payload_error(PayloadError::Io(
+                                                    write_timeout_error(),
                                                 ));
                                             }
                                             Either::Right(Some(err))
@@ -594,9 +609,9 @@ where
                                 }
                                 RecvError::KeepAlive if self.timers.active.is_write() => {
                                     if self.io.is_wr_backpressure() {
-                                        self.set_payload_error(PayloadError::Incomplete(Some(
+                                        self.set_payload_error(PayloadError::Io(
                                             write_timeout_error(),
-                                        )));
+                                        ));
                                         Either::Right(Some(write_timeout_error()))
                                     } else {
                                         self.timers.stop_write(&self.io);
@@ -1799,6 +1814,50 @@ mod tests {
         let res = timeout(Millis(3000), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
         assert!(res.unwrap().is_ok());
         assert!(client.is_closed());
+    }
+
+    /// The write timeout stops the dispatcher while sending a response with
+    /// an unfinished request payload.
+    #[crate::rt_test]
+    async fn test_write_timeout_with_unfinished_payload() {
+        let payload = Rc::new(RefCell::new(None));
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let mut h1 = write_timeout_h1(
+            server,
+            HttpServiceConfig::new().set_write_timeout(Seconds(1)),
+            payload.clone(),
+        );
+
+        client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\n\r\nb");
+        let res = timeout(Millis(3000), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
+        assert!(res.unwrap().is_ok());
+
+        let mut payload = payload.borrow_mut().take().unwrap();
+        let mut timed_out = false;
+        while let Some(item) = payload.recv().await {
+            if let Err(PayloadError::Io(err)) = item {
+                assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+                timed_out = true;
+            }
+        }
+        assert!(timed_out);
+    }
+
+    /// A delayed protocol error does not interrupt a response whose head has
+    /// been sent.
+    #[crate::rt_test]
+    async fn test_delayed_protocol_error_finishes_response() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let mut h1 = write_timeout_h1(server, HttpServiceConfig::new(), Rc::default());
+        h1.inner.pending_payload_error = Some(Either::Left(ProtocolError::SlowPayloadTimeout));
+
+        let mut body = ResponseBody::from(body::Body::from("body"));
+        let st = lazy(|cx| h1.inner.poll_send_payload(cx, &mut body)).await;
+        assert!(matches!(st, Poll::Ready(State::Stop)));
+        assert!(matches!(h1.inner.disconnect, Disconnect::Sent));
+        assert!(h1.inner.pending_payload_error.is_none());
     }
 
     /// Without a write timeout, write backpressure is not bounded.
