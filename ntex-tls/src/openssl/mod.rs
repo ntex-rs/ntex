@@ -277,13 +277,14 @@ pub async fn connect<F: Filter>(
     let filter = SslFilter::new(stream);
     let io = io.add_filter(filter);
 
+    let mut eof = false;
     loop {
         let result = io.with_buf(|buf| {
             let filter = io.filter();
             filter.with_buffers(buf, |s, _| s.connect())
         })?;
 
-        if handle_result(&io, result).await?.is_some() {
+        if handle_result(&io, result, &mut eof).await?.is_some() {
             break;
         }
     }
@@ -291,14 +292,26 @@ pub async fn connect<F: Filter>(
     Ok(io)
 }
 
-async fn handle_result<F>(io: &Io<F>, result: Result<(), ssl::Error>) -> io::Result<Option<()>> {
+async fn handle_result<F>(
+    io: &Io<F>,
+    result: Result<(), ssl::Error>,
+    eof: &mut bool,
+) -> io::Result<Option<()>> {
     match result {
         Ok(v) => Ok(Some(v)),
         Err(e) => match e.code() {
-            ssl::ErrorCode::WANT_READ => match io.read_notify().await? {
-                None => Err(io::Error::new(io::ErrorKind::UnexpectedEof, "disconnected")),
-                _ => Ok(None),
-            },
+            ssl::ErrorCode::WANT_READ => {
+                if *eof {
+                    return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "disconnected"));
+                }
+                // The read that reports eof may also carry the peer's last
+                // handshake flight, so the handshake is stepped once more
+                // before the eof is treated as a failure.
+                if io.read_notify().await?.is_none() {
+                    *eof = true;
+                }
+                Ok(None)
+            }
             ssl::ErrorCode::WANT_WRITE => Ok(None),
             _ => Err(io::Error::other(e)),
         },

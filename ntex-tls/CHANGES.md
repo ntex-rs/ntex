@@ -2,6 +2,12 @@
 
 ## [4.1.0] - 2026-09-22
 
+* openssl: a zero handshake timeout disables the timeout on the acceptor as
+  documented, instead of failing handshakes that take longer than a timer tick
+
+* openssl: complete the handshake when the peer's last handshake flight is read
+  together with its eof, instead of failing with `UnexpectedEof`
+
 * schannel: send a fatal alert to the peer when the handshake fails
 
 * schannel: add `ClientConfig::set_alpn_protocols()`, send ALPN only with the ClientHello

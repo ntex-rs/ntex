@@ -43,7 +43,7 @@ impl<F: Filter, St> Service<St, Io<F>> for SslAcceptor {
         let ssl = ssl::Ssl::new(self.acceptor.context()).map_err(io::Error::other)?;
         let cfg: Cfg<TlsConfig> = io.cfg().ctx().get();
 
-        time::timeout(cfg.handshake_timeout(), async {
+        time::timeout_checked(cfg.handshake_timeout(), async {
             let mut stream = super::new_stream(&io, ssl)?;
             let _ = stream.accept();
 
@@ -51,12 +51,13 @@ impl<F: Filter, St> Service<St, Io<F>> for SslAcceptor {
             let io = io.add_filter(filter);
 
             log::trace!("Accepting tls connection");
+            let mut eof = false;
             loop {
                 let result = io.with_buf(|buf| {
                     let filter = io.filter();
                     filter.with_buffers(buf, |s, _| s.accept())
                 })?;
-                if super::handle_result(&io, result).await?.is_some() {
+                if super::handle_result(&io, result, &mut eof).await?.is_some() {
                     break;
                 }
             }
