@@ -33,6 +33,9 @@
 
 * Add `PayloadConfig::content_type()` predicate, matching `JsonConfig::content_type()`
 
+* Decode already received HTTP/1 request payload before failing a paused
+  payload read-rate timer without budget left
+
 * Start the HTTP/1 payload read-rate timer for `Expect: 100-continue` requests
   only after `100 Continue` is sent, so slow expectation handling no longer
   causes a `408 Request Timeout`

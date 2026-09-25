@@ -494,17 +494,6 @@ where
 
         match self.payload.as_ref().unwrap().1.poll_ready(cx) {
             Poll::Ready(bstream::Status::Ready) => {
-                if self
-                    .timers
-                    .payload_budget_exhausted(self.codec.cfg.payload_read_rate)
-                {
-                    self.set_payload_error(PayloadError::Io(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "Payload read timeout",
-                    )));
-                    return Poll::Ready(Err(Either::Left(ProtocolError::SlowPayloadTimeout)));
-                }
-
                 // read request payload
                 let mut updated = false;
                 loop {
@@ -529,6 +518,19 @@ where
                             if let Some(item) = decoded.item {
                                 updated = true;
                                 Ok(item)
+                            } else if self
+                                .timers
+                                .payload_budget_exhausted(self.codec.cfg.payload_read_rate)
+                            {
+                                // buffered data is decoded, but the cumulative
+                                // budget does not allow waiting for more
+                                self.set_payload_error(PayloadError::Io(io::Error::new(
+                                    io::ErrorKind::TimedOut,
+                                    "Payload read timeout",
+                                )));
+                                return Poll::Ready(Err(Either::Left(
+                                    ProtocolError::SlowPayloadTimeout,
+                                )));
                             } else {
                                 break;
                             }
@@ -864,6 +866,67 @@ mod tests {
         assert_ne!(h1.inner.timers.active, Timer::PayloadPaused);
         assert_eq!(h1.inner.timers.progress.max_timeout, Seconds::ZERO);
         assert_eq!(h1.inner.io.timer_handle().remains(), Seconds(5));
+    }
+
+    fn exhausted_payload_h1(
+        server: IoTest,
+    ) -> (
+        Dispatcher<Base, body::Body, io::Error>,
+        bstream::Receiver<PayloadError>,
+    ) {
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(HttpServiceConfig::new().set_payload_read_rate(Seconds(1), Seconds(5), 1))
+            .into();
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
+            ),
+            Pipeline::new((), DefaultControlService),
+            DispatcherConfig::default(),
+        );
+        let (tx, rx) = bstream::channel::<PayloadError>();
+        h1.inner.payload = Some((PayloadDecoder::length(4), tx));
+        h1.inner.timers.stop(&h1.inner.io);
+        h1.inner.timers.active = Timer::PayloadPaused;
+        h1.inner.timers.progress.max_timeout = Seconds::ZERO;
+        (h1, rx)
+    }
+
+    /// Resuming without budget left decodes the buffered payload first.
+    #[crate::rt_test]
+    async fn test_exhausted_payload_budget_decodes_buffered_data() {
+        let (client, server) = IoTest::create();
+        let (mut h1, mut rx) = exhausted_payload_h1(server);
+
+        client.write("test");
+        sleep(Millis(50)).await;
+        let res = lazy(|cx| h1.inner.poll_request_payload_inner::<Base>(None, cx)).await;
+        assert!(matches!(res, Poll::Ready(Ok(()))));
+        assert!(h1.inner.payload.is_none());
+        assert_eq!(
+            stream_recv(&mut rx).await.unwrap().unwrap(),
+            Bytes::from("test")
+        );
+        assert!(stream_recv(&mut rx).await.is_none());
+
+        let (client, server) = IoTest::create();
+        let (mut h1, mut rx) = exhausted_payload_h1(server);
+
+        client.write("te");
+        sleep(Millis(50)).await;
+        let res = lazy(|cx| h1.inner.poll_request_payload_inner::<Base>(None, cx)).await;
+        assert!(matches!(
+            res,
+            Poll::Ready(Err(Either::Left(ProtocolError::SlowPayloadTimeout)))
+        ));
+        assert_eq!(
+            stream_recv(&mut rx).await.unwrap().unwrap(),
+            Bytes::from("te")
+        );
+        assert!(stream_recv(&mut rx).await.unwrap().is_err());
     }
 
     #[crate::rt_test]

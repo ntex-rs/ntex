@@ -289,7 +289,8 @@ impl HttpServiceConfig {
     /// write backpressure prevents further reads, so those conditions are not
     /// treated as a slow network peer. Pausing preserves the unused portion of
     /// the cumulative `max_timeout`; resuming does not grant a new maximum
-    /// period. The timer stops when the complete payload has been decoded.
+    /// period. If no budget is left, already received payload data is still
+    /// decoded, and the request fails only when more data is needed. The timer stops when the complete payload has been decoded.
     ///
     /// A zero `timeout` disables payload timing. A zero `max_timeout` removes
     /// the cumulative limit, allowing the deadline to be extended indefinitely

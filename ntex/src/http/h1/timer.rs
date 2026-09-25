@@ -156,7 +156,8 @@ impl Timers {
     /// Records payload bytes consumed by a decode attempt.
     ///
     /// Resumes paused payload timing, keeping the received bytes and the
-    /// remaining cumulative budget. Stopped timing is not started.
+    /// remaining cumulative budget. Stopped timing is not started, paused
+    /// timing without budget left is not resumed.
     pub(super) fn payload_decoded(
         &mut self,
         io: &IoRef,
@@ -168,7 +169,9 @@ impl Timers {
                 self.progress.consumed = self.progress.consumed.saturating_add(consumed);
             }
             Timer::PayloadPaused => {
-                if let Some(cfg) = cfg {
+                if self.payload_budget_exhausted(cfg) {
+                    self.progress.consumed = self.progress.consumed.saturating_add(consumed);
+                } else if let Some(cfg) = cfg {
                     log::debug!("{}: Resume payload timer {:?}", io.tag(), cfg.timeout);
                     self.progress.consumed = self.progress.consumed.saturating_add(consumed);
                     let max_timeout = if cfg.max_timeout.is_zero() {
