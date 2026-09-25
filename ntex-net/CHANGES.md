@@ -7,6 +7,10 @@
   place, so for a page stored inline it pointed at a reused local, and the
   last such page was sent in place of the others
 
+* Fix corrupted output in the tokio backend when the write buffer holds
+  inline pages. The write slice was taken before the page was moved into
+  the pages array, so it pointed at the data's old location
+
 * Resend with a plain send when an io-uring zero-copy send fails with
   `ENOMEM` or `ENOBUFS` and disable zero-copy for the connection. Pinned
   pages are charged against `RLIMIT_MEMLOCK`, shared by all connections,
