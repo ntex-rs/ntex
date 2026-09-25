@@ -2,6 +2,9 @@
 
 ## [4.1.0] - 2026-09-22
 
+* schannel: share the credentials handle between connections made with the
+  same `ClientConfig`, so Schannel can resume TLS sessions
+
 * schannel: graceful shutdown waits for the peer's `close_notify` (or read eof),
   like the openssl and rustls filters
 

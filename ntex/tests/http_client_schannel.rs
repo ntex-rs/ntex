@@ -398,6 +398,48 @@ async fn test_shutdown_waits_for_peer_close_notify() {
 }
 
 #[ntex::test]
+async fn test_session_resumption() {
+    use ntex::{connect::Connect, service::Pipeline};
+    use std::io::Read;
+    use std::time::Duration;
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let acceptor = ssl_acceptor();
+        for _ in 0..3 {
+            let (sock, _) = listener.accept().unwrap();
+            sock.set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            let mut stream = acceptor.accept(sock).unwrap();
+            let reused = stream.ssl().session_reused();
+            // complete a clean shutdown, so the session stays resumable
+            let mut buf = [0u8; 64];
+            let _ = stream.read(&mut buf);
+            let _ = stream.shutdown();
+            tx.send(reused).unwrap();
+        }
+    });
+
+    let connector = schannel_connector();
+    let mut reused = Vec::new();
+    for _ in 0..3 {
+        // a new pipeline per connection, the config is shared by clones
+        let conn = Pipeline::new(SharedCfg::default(), connector.clone());
+        let io = conn
+            .call(Connect::new("localhost").set_addr(Some(addr)))
+            .await
+            .unwrap();
+        io.shutdown().await.unwrap();
+        drop(io);
+        reused.push(rx.recv_timeout(Duration::from_secs(10)).unwrap());
+    }
+    server.join().unwrap();
+    assert_eq!(reused, [false, true, true], "sessions are not resumed");
+}
+
+#[ntex::test]
 async fn test_handshake_then_eof() {
     use ntex::{connect::Connect, service::Pipeline};
 

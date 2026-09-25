@@ -1,6 +1,7 @@
 //! An implementation of TLS streams backed by Windows Schannel.
 #![cfg(windows)]
-use std::{any, cell::UnsafeCell, cmp, io, mem, ptr, slice, sync::Arc, task::Poll};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::{any, cell::UnsafeCell, cmp, io, mem, ptr, slice, task::Poll};
 
 use ntex_bytes::{BufMut, BytesMut};
 use ntex_io::{Filter, FilterBuf, FilterLayer, Io, Layer, types};
@@ -35,11 +36,16 @@ mod connect;
 pub use self::connect::TlsConnector;
 
 /// Windows Schannel client configuration.
+///
+/// Clones share the credentials handle, so connections made with the same
+/// configuration can resume TLS sessions.
 #[derive(Clone, Debug)]
 pub struct ClientConfig {
     verify: bool,
     /// Prebuilt `SECBUFFER_APPLICATION_PROTOCOLS` buffer, `None` disables ALPN.
     alpn: Option<Arc<[u8]>>,
+    /// Lazily acquired credentials, Schannel caches sessions per credentials handle.
+    cred: Arc<Mutex<Option<Arc<Credentials>>>>,
 }
 
 impl Default for ClientConfig {
@@ -57,6 +63,7 @@ impl ClientConfig {
         Self {
             verify: true,
             alpn: alpn_buffer(&[b"h2".as_slice(), b"http/1.1".as_slice()]),
+            cred: Arc::default(),
         }
     }
 
@@ -64,6 +71,8 @@ impl ClientConfig {
     #[must_use]
     pub fn danger_accept_invalid_certs(mut self, accept_invalid_certs: bool) -> Self {
         self.verify = !accept_invalid_certs;
+        // credentials depend on the validation mode
+        self.cred = Arc::default();
         self
     }
 
@@ -79,6 +88,71 @@ impl ClientConfig {
     pub fn set_alpn_protocols<T: AsRef<[u8]>>(mut self, protocols: &[T]) -> Self {
         self.alpn = alpn_buffer(protocols);
         self
+    }
+
+    fn credentials(&self) -> io::Result<Arc<Credentials>> {
+        let mut cred = self.cred.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(cred) = &*cred {
+            return Ok(cred.clone());
+        }
+        let new = Arc::new(Credentials::acquire(self.verify)?);
+        *cred = Some(new.clone());
+        Ok(new)
+    }
+}
+
+/// Schannel outbound credentials handle.
+struct Credentials(SecHandle);
+
+// Schannel credentials handles can be used from multiple threads.
+unsafe impl Send for Credentials {}
+unsafe impl Sync for Credentials {}
+
+impl Credentials {
+    fn acquire(verify: bool) -> io::Result<Self> {
+        let mut cred = unsafe { mem::zeroed::<SecHandle>() };
+        let mut expiry = 0i64;
+        let mut schannel_cred = unsafe { mem::zeroed::<SCHANNEL_CRED>() };
+        schannel_cred.dwVersion = SCHANNEL_CRED_VERSION;
+        schannel_cred.dwFlags = SCH_USE_STRONG_CRYPTO;
+        if verify {
+            schannel_cred.dwFlags |= SCH_CRED_AUTO_CRED_VALIDATION;
+        } else {
+            schannel_cred.dwFlags |= SCH_CRED_MANUAL_CRED_VALIDATION | SCH_CRED_NO_SERVERNAME_CHECK;
+        }
+
+        let status = unsafe {
+            AcquireCredentialsHandleW(
+                ptr::null(),
+                UNISP_NAME_W,
+                SECPKG_CRED_OUTBOUND,
+                ptr::null(),
+                (&raw mut schannel_cred).cast(),
+                None,
+                ptr::null(),
+                &raw mut cred,
+                &raw mut expiry,
+            )
+        };
+        if status == SEC_E_OK {
+            Ok(Self(cred))
+        } else {
+            Err(sspi_error("AcquireCredentialsHandleW", status))
+        }
+    }
+}
+
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Credentials").finish_non_exhaustive()
+    }
+}
+
+impl Drop for Credentials {
+    fn drop(&mut self) {
+        unsafe {
+            FreeCredentialsHandle(&raw const self.0);
+        }
     }
 }
 
@@ -122,7 +196,7 @@ enum Decrypted {
 }
 
 struct Context {
-    cred: SecHandle,
+    cred: Arc<Credentials>,
     ctxt: SecHandle,
     have_ctxt: bool,
     target: Vec<u16>,
@@ -148,36 +222,8 @@ enum HandshakeState {
 
 impl Context {
     fn new(domain: &str, config: &ClientConfig) -> io::Result<Self> {
-        let mut cred = unsafe { mem::zeroed::<SecHandle>() };
-        let mut expiry = 0i64;
-        let mut schannel_cred = unsafe { mem::zeroed::<SCHANNEL_CRED>() };
-        schannel_cred.dwVersion = SCHANNEL_CRED_VERSION;
-        schannel_cred.dwFlags = SCH_USE_STRONG_CRYPTO;
-        if config.verify {
-            schannel_cred.dwFlags |= SCH_CRED_AUTO_CRED_VALIDATION;
-        } else {
-            schannel_cred.dwFlags |= SCH_CRED_MANUAL_CRED_VALIDATION | SCH_CRED_NO_SERVERNAME_CHECK;
-        }
-
-        let status = unsafe {
-            AcquireCredentialsHandleW(
-                ptr::null(),
-                UNISP_NAME_W,
-                SECPKG_CRED_OUTBOUND,
-                ptr::null(),
-                (&raw mut schannel_cred).cast(),
-                None,
-                ptr::null(),
-                &raw mut cred,
-                &raw mut expiry,
-            )
-        };
-        if status != SEC_E_OK {
-            return Err(sspi_error("AcquireCredentialsHandleW", status));
-        }
-
         Ok(Self {
-            cred,
+            cred: config.credentials()?,
             ctxt: unsafe { mem::zeroed::<SecHandle>() },
             have_ctxt: false,
             target: domain.encode_utf16().chain(Some(0)).collect(),
@@ -258,7 +304,7 @@ impl Context {
         };
         let status = unsafe {
             InitializeSecurityContextW(
-                &raw const self.cred,
+                &raw const self.cred.0,
                 ctxt,
                 self.target.as_ptr(),
                 ISC_FLAGS,
@@ -372,7 +418,7 @@ impl Context {
         let mut expiry = 0i64;
         let status = unsafe {
             InitializeSecurityContextW(
-                &raw const self.cred,
+                &raw const self.cred.0,
                 &raw const self.ctxt,
                 self.target.as_ptr(),
                 ISC_FLAGS,
@@ -640,7 +686,6 @@ impl Drop for Context {
             if self.have_ctxt {
                 DeleteSecurityContext(&raw const self.ctxt);
             }
-            FreeCredentialsHandle(&raw const self.cred);
         }
     }
 }
@@ -955,6 +1000,19 @@ mod tests {
             buf(SECBUFFER_EMPTY, 0, ptr::null_mut()),
         ];
         assert_eq!(decrypted_parts(&bufs), (None, 0));
+    }
+
+    #[test]
+    fn test_shared_credentials() {
+        let cfg = ClientConfig::new();
+        let cred = cfg.credentials().unwrap();
+        assert!(Arc::ptr_eq(&cred, &cfg.credentials().unwrap()));
+        assert!(Arc::ptr_eq(&cred, &cfg.clone().credentials().unwrap()));
+
+        // validation mode is part of the credentials
+        let danger = cfg.clone().danger_accept_invalid_certs(true);
+        assert!(!Arc::ptr_eq(&cred, &danger.credentials().unwrap()));
+        assert!(Arc::ptr_eq(&cred, &cfg.credentials().unwrap()));
     }
 
     #[test]
