@@ -9,16 +9,16 @@ use windows_sys::Win32::Foundation::{
     SEC_I_RENEGOTIATE,
 };
 use windows_sys::Win32::Security::Authentication::Identity::{
-    AcquireCredentialsHandleW, DecryptMessage, DeleteSecurityContext, EncryptMessage,
-    FreeContextBuffer, FreeCredentialsHandle, ISC_REQ_ALLOCATE_MEMORY, ISC_REQ_CONFIDENTIALITY,
-    ISC_REQ_EXTENDED_ERROR, ISC_REQ_REPLAY_DETECT, ISC_REQ_SEQUENCE_DETECT, ISC_REQ_STREAM,
-    InitializeSecurityContextW, QueryContextAttributesW, SCH_CRED_AUTO_CRED_VALIDATION,
-    SCH_CRED_MANUAL_CRED_VALIDATION, SCH_CRED_NO_SERVERNAME_CHECK, SCH_USE_STRONG_CRYPTO,
-    SCHANNEL_CRED, SCHANNEL_CRED_VERSION, SECBUFFER_APPLICATION_PROTOCOLS, SECBUFFER_DATA,
-    SECBUFFER_EMPTY, SECBUFFER_EXTRA, SECBUFFER_STREAM_HEADER, SECBUFFER_STREAM_TRAILER,
-    SECBUFFER_TOKEN, SECBUFFER_VERSION, SECPKG_ATTR_APPLICATION_PROTOCOL,
-    SECPKG_ATTR_REMOTE_CERT_CONTEXT, SECPKG_ATTR_STREAM_SIZES, SECPKG_CRED_OUTBOUND,
-    SECURITY_NATIVE_DREP, SecApplicationProtocolNegotiationExt_ALPN,
+    AcquireCredentialsHandleW, ApplyControlToken, DecryptMessage, DeleteSecurityContext,
+    EncryptMessage, FreeContextBuffer, FreeCredentialsHandle, ISC_REQ_ALLOCATE_MEMORY,
+    ISC_REQ_CONFIDENTIALITY, ISC_REQ_EXTENDED_ERROR, ISC_REQ_REPLAY_DETECT,
+    ISC_REQ_SEQUENCE_DETECT, ISC_REQ_STREAM, InitializeSecurityContextW, QueryContextAttributesW,
+    SCH_CRED_AUTO_CRED_VALIDATION, SCH_CRED_MANUAL_CRED_VALIDATION, SCH_CRED_NO_SERVERNAME_CHECK,
+    SCH_USE_STRONG_CRYPTO, SCHANNEL_CRED, SCHANNEL_CRED_VERSION, SCHANNEL_SHUTDOWN,
+    SECBUFFER_APPLICATION_PROTOCOLS, SECBUFFER_DATA, SECBUFFER_EMPTY, SECBUFFER_EXTRA,
+    SECBUFFER_STREAM_HEADER, SECBUFFER_STREAM_TRAILER, SECBUFFER_TOKEN, SECBUFFER_VERSION,
+    SECPKG_ATTR_APPLICATION_PROTOCOL, SECPKG_ATTR_REMOTE_CERT_CONTEXT, SECPKG_ATTR_STREAM_SIZES,
+    SECPKG_CRED_OUTBOUND, SECURITY_NATIVE_DREP, SecApplicationProtocolNegotiationExt_ALPN,
     SecApplicationProtocolNegotiationStatus_Success, SecBuffer, SecBufferDesc,
     SecPkgContext_ApplicationProtocol, SecPkgContext_StreamSizes, UNISP_NAME_W,
 };
@@ -77,6 +77,8 @@ struct Schannel {
 enum State {
     Handshaking,
     Streaming,
+    /// `close_notify` has been queued
+    Closed,
 }
 
 struct Context {
@@ -208,12 +210,7 @@ impl Context {
                 &raw const self.cred,
                 ctxt,
                 self.target.as_ptr(),
-                ISC_REQ_SEQUENCE_DETECT
-                    | ISC_REQ_REPLAY_DETECT
-                    | ISC_REQ_CONFIDENTIALITY
-                    | ISC_REQ_ALLOCATE_MEMORY
-                    | ISC_REQ_EXTENDED_ERROR
-                    | ISC_REQ_STREAM,
+                ISC_FLAGS,
                 0,
                 SECURITY_NATIVE_DREP,
                 input_desc,
@@ -225,18 +222,7 @@ impl Context {
             )
         };
         self.have_ctxt = true;
-
-        if !out_buf.pvBuffer.is_null() {
-            if out_buf.cbBuffer != 0 {
-                let token = unsafe {
-                    slice::from_raw_parts(out_buf.pvBuffer.cast::<u8>(), out_buf.cbBuffer as usize)
-                };
-                output.put_slice(token);
-            }
-            unsafe {
-                FreeContextBuffer(out_buf.pvBuffer);
-            }
-        }
+        take_token(&out_buf, output);
 
         if status == SEC_E_INCOMPLETE_MESSAGE {
             return Ok(HandshakeState::NeedRead);
@@ -265,6 +251,61 @@ impl Context {
             Ok(HandshakeState::Continue)
         } else {
             Ok(HandshakeState::NeedRead)
+        }
+    }
+
+    /// Generates a `close_notify` alert and appends it to `output`.
+    fn close_notify(&mut self, output: &mut ntex_bytes::BytePages) -> io::Result<()> {
+        let mut token = SCHANNEL_SHUTDOWN;
+        let mut in_buf = SecBuffer {
+            cbBuffer: u32::try_from(mem::size_of_val(&token)).expect("u32 size fits u32"),
+            BufferType: SECBUFFER_TOKEN,
+            pvBuffer: (&raw mut token).cast(),
+        };
+        let in_desc = SecBufferDesc {
+            ulVersion: SECBUFFER_VERSION,
+            cBuffers: 1,
+            pBuffers: &raw mut in_buf,
+        };
+        let status = unsafe { ApplyControlToken(&raw const self.ctxt, &raw const in_desc) };
+        if status != SEC_E_OK {
+            return Err(sspi_error("ApplyControlToken(SCHANNEL_SHUTDOWN)", status));
+        }
+
+        let mut out_buf = SecBuffer {
+            cbBuffer: 0,
+            BufferType: SECBUFFER_TOKEN,
+            pvBuffer: ptr::null_mut(),
+        };
+        let mut out_desc = SecBufferDesc {
+            ulVersion: SECBUFFER_VERSION,
+            cBuffers: 1,
+            pBuffers: &raw mut out_buf,
+        };
+        let mut attrs = 0u32;
+        let mut expiry = 0i64;
+        let status = unsafe {
+            InitializeSecurityContextW(
+                &raw const self.cred,
+                &raw const self.ctxt,
+                self.target.as_ptr(),
+                ISC_FLAGS,
+                0,
+                SECURITY_NATIVE_DREP,
+                ptr::null(),
+                0,
+                &raw mut self.ctxt,
+                &raw mut out_desc,
+                &raw mut attrs,
+                &raw mut expiry,
+            )
+        };
+        take_token(&out_buf, output);
+
+        if status == SEC_E_OK || status == SEC_I_CONTEXT_EXPIRED {
+            Ok(())
+        } else {
+            Err(sspi_error("InitializeSecurityContextW(shutdown)", status))
         }
     }
 
@@ -483,7 +524,7 @@ impl FilterLayer for SchannelFilter {
         const H2: &[u8] = b"h2";
 
         let inner = self.inner.borrow();
-        if inner.state != State::Streaming {
+        if inner.state == State::Handshaking {
             return None;
         }
 
@@ -504,7 +545,13 @@ impl FilterLayer for SchannelFilter {
         }
     }
 
-    fn shutdown(&self, _: &FilterBuf<'_>) -> io::Result<Poll<()>> {
+    fn shutdown(&self, buf: &FilterBuf<'_>) -> io::Result<Poll<()>> {
+        let mut inner = self.inner.borrow_mut();
+        if inner.state == State::Streaming {
+            // pending application data has been encrypted by process_write_buf
+            inner.state = State::Closed;
+            buf.with_write_buffers(|_, dst| inner.ctx.close_notify(dst))?;
+        }
         Ok(Poll::Ready(()))
     }
 
@@ -605,6 +652,27 @@ pub async fn connect<F: Filter>(
 
         if !io.filter().is_handshaking() {
             return Ok(io);
+        }
+    }
+}
+
+const ISC_FLAGS: u32 = ISC_REQ_SEQUENCE_DETECT
+    | ISC_REQ_REPLAY_DETECT
+    | ISC_REQ_CONFIDENTIALITY
+    | ISC_REQ_ALLOCATE_MEMORY
+    | ISC_REQ_EXTENDED_ERROR
+    | ISC_REQ_STREAM;
+
+/// Moves a token allocated by `InitializeSecurityContextW` to `output`.
+fn take_token(buf: &SecBuffer, output: &mut ntex_bytes::BytePages) {
+    if !buf.pvBuffer.is_null() {
+        if buf.cbBuffer != 0 {
+            let token =
+                unsafe { slice::from_raw_parts(buf.pvBuffer.cast::<u8>(), buf.cbBuffer as usize) };
+            output.put_slice(token);
+        }
+        unsafe {
+            FreeContextBuffer(buf.pvBuffer);
         }
     }
 }

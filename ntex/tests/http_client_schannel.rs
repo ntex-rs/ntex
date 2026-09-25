@@ -115,3 +115,48 @@ async fn test_large_write_encrypted_in_one_pass() {
     io.flush(true).await.unwrap();
     assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "done");
 }
+
+/// Graceful shutdown must send close_notify to the peer.
+#[ntex::test]
+async fn test_shutdown_sends_close_notify() {
+    use ntex::{codec::BytesCodec, connect::Connect, service::Pipeline};
+    use std::io::{Read, Write};
+    use tls_openssl::ssl::ShutdownState;
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let (sock, _) = listener.accept().unwrap();
+        let mut stream = ssl_acceptor().accept(sock).unwrap();
+        stream.write_all(b"test").unwrap();
+        let mut buf = [0u8; 64];
+        let mut received = Vec::new();
+        let result = loop {
+            match stream.read(&mut buf) {
+                Ok(0) => break Ok(()),
+                Ok(n) => received.extend_from_slice(&buf[..n]),
+                Err(e) => break Err(e.to_string()),
+            }
+        };
+        let close_notify = stream.get_shutdown().contains(ShutdownState::RECEIVED);
+        tx.send((received, result, close_notify)).unwrap();
+    });
+
+    let conn = Pipeline::new(SharedCfg::default(), schannel_connector());
+    let io = conn
+        .call(Connect::new("localhost").set_addr(Some(addr)))
+        .await
+        .unwrap();
+    assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "test");
+    io.encode(ntex::util::Bytes::from_static(b"bye"), &BytesCodec)
+        .unwrap();
+    io.shutdown().await.unwrap();
+    drop(io);
+
+    let (received, result, close_notify) = rx.recv().unwrap();
+    server.join().unwrap();
+    assert_eq!(received, b"bye");
+    assert_eq!(result, Ok(()));
+    assert!(close_notify, "peer did not receive close_notify");
+}

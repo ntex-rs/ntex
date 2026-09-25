@@ -12,6 +12,8 @@
 
 * schannel: continue the handshake when a step leaves buffered input
 
+* schannel: send close_notify on shutdown
+
 * openssl: complete shutdown after a clean peer EOF, its close_notify will never arrive
 
 ## [4.0.0] - 2026-09-14
