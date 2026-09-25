@@ -6,7 +6,7 @@ use crate::error::{Error, ErrorMapping, with_service};
 use crate::http::body::{Body, BodySize, MessageBody};
 use crate::http::error::PayloadError;
 use crate::http::header::{HOST, HeaderValue};
-use crate::http::{Payload, PayloadStream, ResponseHead, Version, h1};
+use crate::http::{Payload, PayloadStream, ResponseHead, h1};
 use crate::io::{IoBoxed, RecvError};
 use crate::service::cfg::Configuration;
 use crate::time::{Millis, timeout_checked};
@@ -103,13 +103,7 @@ async fn send_request_inner(
         release_connection(io, !codec.keepalive(), created, pool);
         Ok((head, Payload::None))
     } else {
-        let pl: PayloadStream = Box::pin(PlStream::new(
-            io,
-            codec,
-            created,
-            pool,
-            head.version == Version::HTTP_10,
-        ));
+        let pl: PayloadStream = Box::pin(PlStream::new(io, codec, created, pool));
         Ok((head, pl.into()))
     }
 }
@@ -153,24 +147,19 @@ pub(super) struct PlStream {
     io: Option<IoBoxed>,
     codec: ClientPayloadCodec,
     created: Instant,
-    http_10: bool,
+    eof_delimited: bool,
     pool: Option<Acquired>,
 }
 
 impl PlStream {
-    fn new(
-        io: IoBoxed,
-        codec: ClientCodec,
-        created: Instant,
-        pool: Option<Acquired>,
-        http_10: bool,
-    ) -> Self {
+    fn new(io: IoBoxed, codec: ClientCodec, created: Instant, pool: Option<Acquired>) -> Self {
+        let codec = codec.into_payload_codec();
         PlStream {
             io: Some(io),
-            codec: codec.into_payload_codec(),
+            eof_delimited: codec.eof_delimited(),
+            codec,
             created,
             pool,
-            http_10,
         }
     }
 }
@@ -207,7 +196,7 @@ impl Stream for PlStream {
                 Err(RecvError::Decoder(err)) => Err(err),
                 Err(RecvError::PeerGone(Some(err))) => Err(PayloadError::Incomplete(Some(err))),
                 Err(RecvError::PeerGone(None)) => {
-                    if this.http_10 {
+                    if this.eof_delimited {
                         return Poll::Ready(None);
                     }
                     Err(PayloadError::Incomplete(None))

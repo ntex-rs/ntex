@@ -656,6 +656,48 @@ async fn client_read_until_eof() {
     assert_eq!(bytes, Bytes::from_static(b"welcome!"));
 }
 
+/// Starts a raw server that answers every request with `response`, then closes.
+fn raw_server(response: &'static [u8]) -> std::net::SocketAddr {
+    let addr = ntex::server::TestServer::unused_addr();
+    let lst = std::net::TcpListener::bind(addr).unwrap();
+    std::thread::spawn(move || {
+        for mut stream in lst.incoming().flatten() {
+            let mut b = [0; 1000];
+            let _ = stream.read(&mut b);
+            let _ = stream.write_all(response);
+            let _ = stream.shutdown(net::Shutdown::Both);
+        }
+    });
+    addr
+}
+
+#[ntex::test]
+async fn client_read_until_eof_http11() {
+    let addr = raw_server(b"HTTP/1.1 200 OK\r\nconnection: close\r\n\r\nwelcome!");
+
+    let response = Client::new()
+        .get(format!("http://{addr}/").as_str())
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes, Bytes::from_static(b"welcome!"));
+}
+
+#[ntex::test]
+async fn client_truncated_body_http10() {
+    let addr = raw_server(b"HTTP/1.0 200 OK\r\ncontent-length: 20\r\n\r\nwelcome!");
+
+    let response = Client::new()
+        .get(format!("http://{addr}/").as_str())
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    assert!(response.body().await.is_err());
+}
+
 #[ntex::test]
 async fn client_basic_auth() {
     let srv = test::server(async |_| {

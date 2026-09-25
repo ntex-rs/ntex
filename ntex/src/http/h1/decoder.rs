@@ -508,15 +508,8 @@ impl MessageType for ResponseHead {
     fn set_payload_length(
         &mut self,
         st: &mut State,
-        mut length: PayloadLength,
+        length: PayloadLength,
     ) -> Result<PayloadType, DecodeError> {
-        // Remove CL value if 0 now that all headers and HTTP/1.0 special cases are processed.
-        // Protects against some request smuggling attacks.
-        // See https://github.com/actix/actix-web/issues/2767.
-        if length.is_zero() {
-            length = PayloadLength::None;
-        }
-
         for ctype in st.connection_types() {
             self.set_connection_type(ctype);
         }
@@ -528,19 +521,20 @@ impl MessageType for ResponseHead {
         }
 
         // message payload
-        let decoder = if let PayloadLength::Payload(pl) = length {
-            pl
-        } else if self.status == StatusCode::SWITCHING_PROTOCOLS {
-            // switching protocol or connect
+        let decoder = if self.status == StatusCode::SWITCHING_PROTOCOLS
+            && (length.is_zero() || !matches!(length, PayloadLength::Payload(_)))
+        {
+            // switching protocol
             PayloadType::Stream(PayloadDecoder::eof())
+        } else if length.is_zero() {
+            PayloadType::None
+        } else if let PayloadLength::Payload(pl) = length {
+            pl
         } else {
-            // for HTTP/1.0 read to eof and close connection
-            if self.version == Version::HTTP_10 {
-                self.set_connection_type(ConnectionType::Close);
-                PayloadType::Payload(PayloadDecoder::eof())
-            } else {
-                PayloadType::None
-            }
+            // no declared length, read to eof and close connection
+            // see https://www.rfc-editor.org/rfc/rfc9112#section-6.3
+            self.set_connection_type(ConnectionType::Close);
+            PayloadType::Payload(PayloadDecoder::eof())
         };
 
         Ok(decoder)
@@ -622,6 +616,11 @@ impl PayloadDecoder {
         PayloadDecoder {
             kind: Cell::new(Kind::Eof),
         }
+    }
+
+    /// Returns `true` if the payload is delimited by connection close.
+    pub(crate) fn is_eof(&self) -> bool {
+        self.kind.get() == Kind::Eof
     }
 }
 
@@ -1761,6 +1760,37 @@ mod tests {
             pl.decode(&mut buf).unwrap().unwrap().chunk().as_ref(),
             b"ok"
         );
+    }
+
+    #[test]
+    fn test_response_read_until_eof() {
+        for version in ["1.0", "1.1"] {
+            let mut buf =
+                BytesMut::from(format!("HTTP/{version} 200 OK\r\n\r\ntest data").as_str());
+            let reader = MessageDecoder::<ResponseHead>::default();
+            let (msg, pl) = reader.decode(&mut buf).unwrap().unwrap();
+            assert_eq!(msg.connection_type(), ConnectionType::Close, "{version}");
+            let pl = pl.unwrap();
+            assert!(pl.is_eof(), "{version}");
+            let chunk = pl.decode(&mut buf).unwrap().unwrap();
+            assert_eq!(chunk, PayloadItem::Chunk(Bytes::from_static(b"test data")));
+        }
+
+        // zero content-length has no payload
+        for version in ["1.0", "1.1"] {
+            let mut buf = BytesMut::from(
+                format!("HTTP/{version} 200 OK\r\ncontent-length: 0\r\n\r\n").as_str(),
+            );
+            let reader = MessageDecoder::<ResponseHead>::default();
+            let (_, pl) = reader.decode(&mut buf).unwrap().unwrap();
+            assert!(matches!(pl, PayloadType::None), "{version}");
+        }
+
+        let mut buf =
+            BytesMut::from("HTTP/1.1 101 Switching Protocols\r\ncontent-length: 0\r\n\r\n");
+        let reader = MessageDecoder::<ResponseHead>::default();
+        let (_, pl) = reader.decode(&mut buf).unwrap().unwrap();
+        assert!(matches!(pl, PayloadType::Stream(_)));
     }
 
     #[test]

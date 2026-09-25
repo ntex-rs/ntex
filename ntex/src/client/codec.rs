@@ -96,6 +96,15 @@ impl ClientPayloadCodec {
     pub(crate) fn keepalive(&self) -> bool {
         self.inner.ctype.get() == ConnectionType::KeepAlive
     }
+
+    /// Check if the payload is delimited by connection close
+    pub(crate) fn eof_delimited(&self) -> bool {
+        self.inner
+            .payload
+            .borrow()
+            .as_ref()
+            .is_some_and(PayloadDecoder::is_eof)
+    }
 }
 
 impl Decoder for ClientCodec {
