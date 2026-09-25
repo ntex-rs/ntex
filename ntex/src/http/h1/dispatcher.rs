@@ -471,11 +471,8 @@ where
             } else {
                 Poll::Pending
             }
-        } else if let Some(err) = self.pending_payload_error.take() {
-            match err {
-                Either::Left(err) => Poll::Ready(self.ctl_proto_err(err)),
-                Either::Right(err) => Poll::Ready(self.ctl_peer_gone(err)),
-            }
+        } else if let Some(st) = self.take_payload_error() {
+            Poll::Ready(st)
         } else {
             // check for io changes, it could be close while waiting for service call
             let Poll::Ready(status) = self.io.poll_status_update(cx) else {
@@ -511,11 +508,8 @@ where
 
     /// Process request's payload
     fn poll_request_payload(&mut self, cx: &mut Context<'_>) -> Poll<Option<State<F, B, Err>>> {
-        if let Some(err) = self.pending_payload_error.take() {
-            match err {
-                Either::Left(err) => Poll::Ready(Some(self.ctl_proto_err(err))),
-                Either::Right(err) => Poll::Ready(Some(self.ctl_peer_gone(err))),
-            }
+        if let Some(st) = self.take_payload_error() {
+            Poll::Ready(Some(st))
         } else if let Err(err) = ready!(self.poll_request_payload_inner::<F>(None, cx)) {
             Poll::Ready(Some(match err {
                 Either::Left(e) => self.ctl_proto_err(e),
@@ -819,10 +813,21 @@ where
     }
 
     fn publish(&mut self, req: Request) -> State<F, B, Err> {
+        // payload failed while waiting for the control service
+        if let Some(st) = self.take_payload_error() {
+            return st;
+        }
         self.start_payload_timer();
         State::CallPublish {
             fut: self.service.call_nowait(req),
         }
+    }
+
+    fn take_payload_error(&mut self) -> Option<State<F, B, Err>> {
+        self.pending_payload_error.take().map(|err| match err {
+            Either::Left(err) => self.ctl_proto_err(err),
+            Either::Right(err) => self.ctl_peer_gone(err),
+        })
     }
 
     fn control(&self, req: Control<F, Err>) -> State<F, B, Err> {
