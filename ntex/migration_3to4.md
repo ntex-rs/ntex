@@ -123,7 +123,7 @@ use ntex::client::{Client, ClientConfig};
 fn create_client() -> Client {
     let cfg = SharedCfg::new("client").add(
         ClientConfig::new()
-            .set_connection_limit(8)
+            .set_h1_connection_limit(8)
             .set_response_payload_limit(256 * 1024),
     );
 
