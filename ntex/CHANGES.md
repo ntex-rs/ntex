@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* Fix HTTP/1 client reusing connections after HTTP/1.0 responses without
+  `Connection: keep-alive`
+
 * Fix HTTP/1 client omitting non-default ports 80 and 443 from the `Host` header
 
 * Fix HTTP/1 client response payload panic when polled after completion

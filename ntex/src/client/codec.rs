@@ -118,11 +118,15 @@ impl Decoder for ClientCodec {
         );
 
         if let Some((req, payload)) = self.inner.decoder.decode(src)? {
-            if let Some(ctype) = req.ctype() {
+            match req.ctype() {
                 // do not use peer's keep-alive
-                if ctype != ConnectionType::KeepAlive {
-                    self.inner.ctype.set(ctype);
+                Some(ConnectionType::KeepAlive) => (),
+                Some(ctype) => self.inner.ctype.set(ctype),
+                // HTTP/1.0 connections are not persistent by default
+                None if req.version < Version::HTTP_11 => {
+                    self.inner.ctype.set(ConnectionType::Close);
                 }
+                None => (),
             }
 
             if self.inner.flags.get().contains(Flags::HEAD) {
@@ -223,5 +227,35 @@ impl Encoder for ClientCodec {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::service::cfg::SharedCfg;
+
+    #[test]
+    fn test_http10_response_keepalive() {
+        let cfg: SharedCfg = SharedCfg::new("DBG").add(HttpServiceConfig::new()).into();
+        for (resp, keepalive) in [
+            ("HTTP/1.0 200 OK\r\ncontent-length: 0\r\n\r\n", false),
+            (
+                "HTTP/1.0 200 OK\r\nconnection: keep-alive\r\ncontent-length: 0\r\n\r\n",
+                true,
+            ),
+            ("HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n", true),
+            (
+                "HTTP/1.1 200 OK\r\nconnection: close\r\ncontent-length: 0\r\n\r\n",
+                false,
+            ),
+        ] {
+            let codec = ClientCodec::new(true, cfg.get());
+            // request was sent with keep-alive
+            codec.inner.ctype.set(ConnectionType::KeepAlive);
+            let mut buf = BytesMut::from(resp);
+            codec.decode(&mut buf).unwrap().unwrap();
+            assert_eq!(codec.keepalive(), keepalive, "{resp:?}");
+        }
     }
 }
