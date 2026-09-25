@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* Fix HTTP/1 client losing an early response, such as `413`, when the server
+  closes the connection before the request body is sent
+
 * Fix HTTP/1 client returning interim `1xx` responses instead of the final
   response
 

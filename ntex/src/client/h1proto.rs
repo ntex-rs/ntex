@@ -10,7 +10,7 @@ use crate::http::{Payload, PayloadStream, ResponseHead, Uri, h1};
 use crate::io::{IoBoxed, RecvError};
 use crate::service::cfg::Configuration;
 use crate::time::{Millis, timeout_checked};
-use crate::util::{BufMut, Bytes, BytesMut, Stream};
+use crate::util::{BufMut, Bytes, BytesMut, Stream, lazy};
 
 use super::connection::{Connection, ConnectionType};
 use super::error::{ClientError, ConnectError};
@@ -62,7 +62,20 @@ async fn send_request_inner(
     match body.size() {
         BodySize::None | BodySize::Empty | BodySize::Sized(0) => (),
         _ => {
-            send_body(body, &io, &codec).await?;
+            if let Err(err) = send_body(body, &io, &codec).await {
+                // the server may respond early, for example with `413`, and close
+                // the connection before the body is sent, use the received response
+                return if let Poll::Ready(Ok(head)) = lazy(|cx| io.poll_recv(&codec, cx)).await {
+                    log::trace!(
+                        "{}: http1 response is received before request body is sent",
+                        io.tag()
+                    );
+                    codec.set_close();
+                    Ok(response(io, codec, head, created, pool))
+                } else {
+                    Err(err)
+                };
+            }
         }
     }
 
@@ -89,12 +102,22 @@ async fn send_request_inner(
         .map_err(|()| Error::from(ClientError::Timeout))
         .and_then(|res| res)?;
 
+    Ok(response(io, codec, head, created, pool))
+}
+
+fn response(
+    io: IoBoxed,
+    codec: ClientCodec,
+    head: ResponseHead,
+    created: Instant,
+    pool: Option<Acquired>,
+) -> (ResponseHead, Payload) {
     if codec.message_type() == h1::MessageType::None {
         release_connection(io, !codec.keepalive(), created, pool);
-        Ok((head, Payload::None))
+        (head, Payload::None)
     } else {
         let pl: PayloadStream = Box::pin(PlStream::new(io, codec, created, pool));
-        Ok((head, pl.into()))
+        (head, pl.into())
     }
 }
 

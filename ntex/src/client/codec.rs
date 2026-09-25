@@ -74,6 +74,11 @@ impl ClientCodec {
         self.inner.ctype.get() == ConnectionType::KeepAlive
     }
 
+    /// Do not keep the connection alive after the current response
+    pub(crate) fn set_close(&self) {
+        self.inner.ctype.set(ConnectionType::Close);
+    }
+
     /// Check last request's message type
     pub(crate) fn message_type(&self) -> MessageType {
         if self.inner.flags.get().contains(Flags::STREAM) {
