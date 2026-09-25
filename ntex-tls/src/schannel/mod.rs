@@ -5,7 +5,8 @@ use std::{any, cell::UnsafeCell, cmp, io, mem, ptr, slice, sync::Arc, task::Poll
 use ntex_bytes::{BufMut, BytesMut};
 use ntex_io::{Filter, FilterBuf, FilterLayer, Io, Layer, types};
 use windows_sys::Win32::Foundation::{
-    SEC_E_INCOMPLETE_MESSAGE, SEC_E_OK, SEC_I_CONTEXT_EXPIRED, SEC_I_CONTINUE_NEEDED,
+    CRYPT_E_REVOKED, SEC_E_CERT_EXPIRED, SEC_E_CERT_UNKNOWN, SEC_E_INCOMPLETE_MESSAGE, SEC_E_OK,
+    SEC_E_UNTRUSTED_ROOT, SEC_E_WRONG_PRINCIPAL, SEC_I_CONTEXT_EXPIRED, SEC_I_CONTINUE_NEEDED,
     SEC_I_RENEGOTIATE,
 };
 use windows_sys::Win32::Security::Authentication::Identity::{
@@ -14,13 +15,16 @@ use windows_sys::Win32::Security::Authentication::Identity::{
     ISC_REQ_CONFIDENTIALITY, ISC_REQ_EXTENDED_ERROR, ISC_REQ_REPLAY_DETECT,
     ISC_REQ_SEQUENCE_DETECT, ISC_REQ_STREAM, InitializeSecurityContextW, QueryContextAttributesW,
     SCH_CRED_AUTO_CRED_VALIDATION, SCH_CRED_MANUAL_CRED_VALIDATION, SCH_CRED_NO_SERVERNAME_CHECK,
-    SCH_USE_STRONG_CRYPTO, SCHANNEL_CRED, SCHANNEL_CRED_VERSION, SCHANNEL_SHUTDOWN,
-    SECBUFFER_APPLICATION_PROTOCOLS, SECBUFFER_DATA, SECBUFFER_EMPTY, SECBUFFER_EXTRA,
-    SECBUFFER_STREAM_HEADER, SECBUFFER_STREAM_TRAILER, SECBUFFER_TOKEN, SECBUFFER_VERSION,
-    SECPKG_ATTR_APPLICATION_PROTOCOL, SECPKG_ATTR_REMOTE_CERT_CONTEXT, SECPKG_ATTR_STREAM_SIZES,
-    SECPKG_CRED_OUTBOUND, SECURITY_NATIVE_DREP, SecApplicationProtocolNegotiationExt_ALPN,
+    SCH_USE_STRONG_CRYPTO, SCHANNEL_ALERT, SCHANNEL_ALERT_TOKEN, SCHANNEL_CRED,
+    SCHANNEL_CRED_VERSION, SCHANNEL_SHUTDOWN, SECBUFFER_APPLICATION_PROTOCOLS, SECBUFFER_DATA,
+    SECBUFFER_EMPTY, SECBUFFER_EXTRA, SECBUFFER_STREAM_HEADER, SECBUFFER_STREAM_TRAILER,
+    SECBUFFER_TOKEN, SECBUFFER_VERSION, SECPKG_ATTR_APPLICATION_PROTOCOL,
+    SECPKG_ATTR_REMOTE_CERT_CONTEXT, SECPKG_ATTR_STREAM_SIZES, SECPKG_CRED_OUTBOUND,
+    SECURITY_NATIVE_DREP, SecApplicationProtocolNegotiationExt_ALPN,
     SecApplicationProtocolNegotiationStatus_Success, SecBuffer, SecBufferDesc,
-    SecPkgContext_ApplicationProtocol, SecPkgContext_StreamSizes, UNISP_NAME_W,
+    SecPkgContext_ApplicationProtocol, SecPkgContext_StreamSizes, TLS1_ALERT_BAD_CERTIFICATE,
+    TLS1_ALERT_CERTIFICATE_EXPIRED, TLS1_ALERT_CERTIFICATE_REVOKED, TLS1_ALERT_FATAL,
+    TLS1_ALERT_HANDSHAKE_FAILURE, TLS1_ALERT_UNKNOWN_CA, UNISP_NAME_W,
 };
 use windows_sys::Win32::Security::Credentials::SecHandle;
 use windows_sys::Win32::Security::Cryptography::{
@@ -92,6 +96,8 @@ pub struct SchannelFilter {
 struct Schannel {
     ctx: Context,
     state: State,
+    /// Handshake error, reported by `connect()` after the alert is flushed
+    error: Option<io::Error>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,6 +106,8 @@ enum State {
     Streaming,
     /// `close_notify` has been queued
     Closed,
+    /// The handshake failed and an alert has been queued
+    Failed,
 }
 
 struct Context {
@@ -254,12 +262,17 @@ impl Context {
             )
         };
         self.have_ctxt = true;
+        let has_token = !out_buf.pvBuffer.is_null() && out_buf.cbBuffer != 0;
         take_token(&out_buf, output);
 
         if status == SEC_E_INCOMPLETE_MESSAGE {
             return Ok(HandshakeState::NeedRead);
         }
         if status != SEC_E_OK && status != SEC_I_CONTINUE_NEEDED {
+            if !has_token {
+                // e.g. certificate validation fails without an alert, best effort
+                let _ = self.fatal_alert(status, output);
+            }
             return Err(sspi_error("InitializeSecurityContextW", status));
         }
 
@@ -289,10 +302,40 @@ impl Context {
     /// Generates a `close_notify` alert and appends it to `output`.
     fn close_notify(&mut self, output: &mut ntex_bytes::BytePages) -> io::Result<()> {
         let mut token = SCHANNEL_SHUTDOWN;
+        self.control_token(&mut token, "SCHANNEL_SHUTDOWN", output)
+    }
+
+    /// Generates a fatal alert for a failed handshake and appends it to `output`.
+    fn fatal_alert(
+        &mut self,
+        status: windows_sys::core::HRESULT,
+        output: &mut ntex_bytes::BytePages,
+    ) -> io::Result<()> {
+        let mut token = SCHANNEL_ALERT_TOKEN {
+            dwTokenType: SCHANNEL_ALERT,
+            dwAlertType: TLS1_ALERT_FATAL,
+            dwAlertNumber: match status {
+                SEC_E_UNTRUSTED_ROOT => TLS1_ALERT_UNKNOWN_CA,
+                SEC_E_CERT_EXPIRED => TLS1_ALERT_CERTIFICATE_EXPIRED,
+                CRYPT_E_REVOKED => TLS1_ALERT_CERTIFICATE_REVOKED,
+                SEC_E_WRONG_PRINCIPAL | SEC_E_CERT_UNKNOWN => TLS1_ALERT_BAD_CERTIFICATE,
+                _ => TLS1_ALERT_HANDSHAKE_FAILURE,
+            },
+        };
+        self.control_token(&mut token, "SCHANNEL_ALERT", output)
+    }
+
+    /// Applies a control token and appends the resulting record to `output`.
+    fn control_token<T>(
+        &mut self,
+        token: &mut T,
+        name: &'static str,
+        output: &mut ntex_bytes::BytePages,
+    ) -> io::Result<()> {
         let mut in_buf = SecBuffer {
-            cbBuffer: u32::try_from(mem::size_of_val(&token)).expect("u32 size fits u32"),
+            cbBuffer: u32::try_from(mem::size_of::<T>()).expect("control token size fits u32"),
             BufferType: SECBUFFER_TOKEN,
-            pvBuffer: (&raw mut token).cast(),
+            pvBuffer: ptr::from_mut(token).cast(),
         };
         let in_desc = SecBufferDesc {
             ulVersion: SECBUFFER_VERSION,
@@ -301,7 +344,7 @@ impl Context {
         };
         let status = unsafe { ApplyControlToken(&raw const self.ctxt, &raw const in_desc) };
         if status != SEC_E_OK {
-            return Err(sspi_error("ApplyControlToken(SCHANNEL_SHUTDOWN)", status));
+            return Err(sspi_error(name, status));
         }
 
         let mut out_buf = SecBuffer {
@@ -337,7 +380,7 @@ impl Context {
         if status == SEC_E_OK || status == SEC_I_CONTEXT_EXPIRED {
             Ok(())
         } else {
-            Err(sspi_error("InitializeSecurityContextW(shutdown)", status))
+            Err(sspi_error(name, status))
         }
     }
 
@@ -598,7 +641,7 @@ impl FilterLayer for SchannelFilter {
         const H2: &[u8] = b"h2";
 
         let inner = self.inner();
-        if inner.state == State::Handshaking {
+        if matches!(inner.state, State::Handshaking | State::Failed) {
             return None;
         }
 
@@ -631,10 +674,24 @@ impl FilterLayer for SchannelFilter {
 
     fn process_read_buf(&self, rb: &FilterBuf<'_>) -> io::Result<()> {
         let inner = self.inner_mut();
+        if inner.state == State::Failed {
+            return Ok(());
+        }
         if inner.state == State::Handshaking {
             loop {
                 let state = rb.with_write_buffers(|_, dst| {
+                    let len = dst.len();
                     rb.with_read_src(|src| inner.ctx.handshake_step(src.as_mut(), dst))
+                        .or_else(|err| {
+                            if dst.len() == len {
+                                Err(err)
+                            } else {
+                                // keep the io open until connect() flushes the alert
+                                inner.state = State::Failed;
+                                inner.error = Some(err);
+                                Ok(HandshakeState::NeedRead)
+                            }
+                        })
                 })?;
                 match state {
                     HandshakeState::Done => break,
@@ -708,6 +765,10 @@ impl SchannelFilter {
     fn is_handshaking(&self) -> bool {
         self.inner().state == State::Handshaking
     }
+
+    fn take_error(&self) -> Option<io::Error> {
+        self.inner_mut().error.take()
+    }
 }
 
 pub async fn connect<F: Filter>(
@@ -719,6 +780,7 @@ pub async fn connect<F: Filter>(
         inner: UnsafeCell::new(Schannel {
             ctx: Context::new(domain, &config)?,
             state: State::Handshaking,
+            error: None,
         }),
     };
     let io = io.add_filter(filter);
@@ -736,6 +798,11 @@ pub async fn connect<F: Filter>(
             .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "disconnected"))?;
         io.flush(false).await?;
 
+        if let Some(err) = io.filter().take_error() {
+            // make sure the alert reaches the peer before the io is dropped
+            let _ = io.flush(true).await;
+            return Err(err);
+        }
         if !io.filter().is_handshaking() {
             return Ok(io);
         }

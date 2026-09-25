@@ -2,6 +2,8 @@
 
 ## [4.1.0] - 2026-09-22
 
+* schannel: send a fatal alert to the peer when the handshake fails
+
 * schannel: add `ClientConfig::set_alpn_protocols()`, send ALPN only with the ClientHello
 
 * schannel: encrypt records in place into write pages, no per-record allocation and copy

@@ -70,6 +70,33 @@ fn schannel_connector() -> TlsConnector<ntex::connect::Connector<&'static str>> 
     TlsConnector::with_config(ClientConfig::new().danger_accept_invalid_certs(true))
 }
 
+/// A failed handshake must send the TLS alert to the peer.
+#[ntex::test]
+async fn test_handshake_failure_sends_alert() {
+    use ntex::{connect::Connect, service::Pipeline};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (sock, _) = listener.accept().unwrap();
+        sock.set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .unwrap();
+        ssl_acceptor().accept(sock).unwrap_err().to_string()
+    });
+
+    // self-signed server certificate fails verification
+    let conn = Pipeline::new(
+        SharedCfg::default(),
+        TlsConnector::<ntex::connect::Connector<&'static str>>::with_config(ClientConfig::new()),
+    );
+    let res = conn
+        .call(Connect::new("localhost").set_addr(Some(addr)))
+        .await;
+    assert!(res.is_err());
+    let err = server.join().unwrap();
+    assert!(err.contains("alert unknown ca"), "no alert received: {err}");
+}
+
 /// ALPN protocols offered by the client follow the configuration.
 #[ntex::test]
 async fn test_alpn_protocols() {
