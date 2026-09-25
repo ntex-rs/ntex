@@ -6,7 +6,7 @@ use crate::error::{Error, ErrorMapping, with_service};
 use crate::http::body::{Body, BodySize, MessageBody};
 use crate::http::error::PayloadError;
 use crate::http::header::{HOST, HeaderValue};
-use crate::http::{Payload, PayloadStream, ResponseHead, h1};
+use crate::http::{Payload, PayloadStream, ResponseHead, Uri, h1};
 use crate::io::{IoBoxed, RecvError};
 use crate::service::cfg::Configuration;
 use crate::time::{Millis, timeout_checked};
@@ -41,19 +41,9 @@ async fn send_request_inner(
 ) -> Result<(ResponseHead, Payload), Error<ClientError>> {
     // set request host header
     if !req.head.headers.contains_key(HOST)
-        && let Some(host) = req.head.uri.host()
+        && let Some(value) = host_header(&req.head.uri)
     {
-        let mut wrt = BytesMut::with_capacity(host.len() + 16);
-
-        let _ = match req.head.uri.port_u16() {
-            None | Some(80 | 443) => write!(wrt, "{host}"),
-            Some(port) => write!(wrt, "{host}:{port}"),
-        };
-
-        match HeaderValue::from_shared(wrt.take()) {
-            Ok(value) => req.head.headers.insert(HOST, value),
-            Err(e) => log::error!("Cannot set HOST header {e}"),
-        }
+        req.head.headers.insert(HOST, value);
     }
 
     log::trace!(
@@ -105,6 +95,29 @@ async fn send_request_inner(
     } else {
         let pl: PayloadStream = Box::pin(PlStream::new(io, codec, created, pool));
         Ok((head, pl.into()))
+    }
+}
+
+/// Builds the `Host` header value, the port is omitted if it is the scheme's default.
+fn host_header(uri: &Uri) -> Option<HeaderValue> {
+    let host = uri.host()?;
+    let default_port = match uri.scheme_str() {
+        Some("https" | "wss") => 443,
+        _ => 80,
+    };
+
+    let mut wrt = BytesMut::with_capacity(host.len() + 6);
+    let _ = match uri.port_u16() {
+        Some(port) if port != default_port => write!(wrt, "{host}:{port}"),
+        _ => write!(wrt, "{host}"),
+    };
+
+    match HeaderValue::from_shared(wrt.take()) {
+        Ok(value) => Some(value),
+        Err(e) => {
+            log::error!("Cannot set HOST header {e}");
+            None
+        }
     }
 }
 
@@ -225,5 +238,30 @@ fn release_connection(
             Connection::new(ConnectionType::H1(io), created, None),
             false,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_host_header() {
+        for (uri, host) in [
+            ("http://example.com/", "example.com"),
+            ("http://example.com:80/", "example.com"),
+            ("http://example.com:443/", "example.com:443"),
+            ("http://example.com:8080/", "example.com:8080"),
+            ("https://example.com:443/", "example.com"),
+            ("https://example.com:80/", "example.com:80"),
+            ("ws://example.com:80/", "example.com"),
+            ("wss://example.com:443/", "example.com"),
+            ("wss://example.com:80/", "example.com:80"),
+            ("http://[::1]:8080/", "[::1]:8080"),
+        ] {
+            let uri = Uri::try_from(uri).unwrap();
+            assert_eq!(host_header(&uri).unwrap(), host, "{uri}");
+        }
+        assert!(host_header(&Uri::from_static("/path")).is_none());
     }
 }

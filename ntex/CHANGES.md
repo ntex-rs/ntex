@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+* Fix HTTP/1 client omitting non-default ports 80 and 443 from the `Host` header
+
 * Fix HTTP/1 client response payload panic when polled after completion
 
 * Fix HTTP/1 client dropping the body of HTTP/1.1 responses delimited by
