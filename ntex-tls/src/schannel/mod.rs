@@ -98,6 +98,8 @@ struct Schannel {
     state: State,
     /// Handshake error, reported by `connect()` after the alert is flushed
     error: Option<io::Error>,
+    /// Peer sent `close_notify`
+    peer_closed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,6 +110,15 @@ enum State {
     Closed,
     /// The handshake failed and an alert has been queued
     Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Decrypted {
+    Progress,
+    /// Needs more input
+    Pending,
+    /// Peer sent `close_notify`
+    Closed,
 }
 
 struct Context {
@@ -502,9 +513,9 @@ impl Context {
         Ok(tls_len)
     }
 
-    fn decrypt(&mut self, src: &mut BytesMut, dst: &mut BytesMut) -> io::Result<bool> {
+    fn decrypt(&mut self, src: &mut BytesMut, dst: &mut BytesMut) -> io::Result<Decrypted> {
         if src.is_empty() {
-            return Ok(false);
+            return Ok(Decrypted::Pending);
         }
 
         let input_len = src.len();
@@ -542,10 +553,11 @@ impl Context {
 
         match status {
             SEC_E_OK => {}
-            SEC_E_INCOMPLETE_MESSAGE => return Ok(false),
+            SEC_E_INCOMPLETE_MESSAGE => return Ok(Decrypted::Pending),
             SEC_I_CONTEXT_EXPIRED => {
+                // peer sent close_notify, data after it is ignored
                 src.clear();
-                return Ok(false);
+                return Ok(Decrypted::Closed);
             }
             SEC_I_RENEGOTIATE => {
                 return Err(io::Error::other("TLS renegotiation is not supported"));
@@ -553,25 +565,22 @@ impl Context {
             _ => return Err(sspi_error("DecryptMessage", status)),
         }
 
-        let mut produced = false;
-        if bufs[1].BufferType == SECBUFFER_DATA && bufs[1].cbBuffer != 0 {
-            let data = unsafe {
-                slice::from_raw_parts(bufs[1].pvBuffer.cast::<u8>(), bufs[1].cbBuffer as usize)
-            };
+        let (data, extra) = decrypted_parts(&bufs);
+        let produced = if let Some(data) = data {
             dst.put_slice(data);
-            produced = true;
-        }
-
-        let extra = if bufs[3].BufferType == SECBUFFER_EXTRA {
-            bufs[3].cbBuffer as usize
+            true
         } else {
-            0
+            false
         };
         let consumed = input_len.saturating_sub(extra);
         if consumed != 0 {
             src.advance_to(consumed);
         }
-        Ok(produced || consumed != 0)
+        Ok(if produced || consumed != 0 {
+            Decrypted::Progress
+        } else {
+            Decrypted::Pending
+        })
     }
 
     fn peer_cert(&self) -> Option<Vec<u8>> {
@@ -702,20 +711,30 @@ impl FilterLayer for SchannelFilter {
             inner.state = State::Streaming;
         }
 
-        rb.with_read_buffers(|r_src, r_dst| {
+        let closed = rb.with_read_buffers(|r_src, r_dst| -> io::Result<bool> {
             if let Some(src) = r_src {
-                loop {
-                    let progressed = inner.ctx.decrypt(src, r_dst)?;
-                    if !progressed {
-                        break;
-                    }
-                    if src.is_empty() {
-                        break;
+                if inner.peer_closed {
+                    src.clear();
+                    return Ok(false);
+                }
+                while !src.is_empty() {
+                    match inner.ctx.decrypt(src, r_dst)? {
+                        Decrypted::Progress => {}
+                        Decrypted::Pending => break,
+                        Decrypted::Closed => {
+                            inner.peer_closed = true;
+                            return Ok(true);
+                        }
                     }
                 }
             }
-            Ok(())
-        })
+            Ok(false)
+        })?;
+        if closed {
+            // peer sent close_notify, start graceful shutdown
+            rb.io().close();
+        }
+        Ok(())
     }
 
     fn process_write_buf(&self, wb: &FilterBuf<'_>) -> io::Result<()> {
@@ -781,6 +800,7 @@ pub async fn connect<F: Filter>(
             ctx: Context::new(domain, &config)?,
             state: State::Handshaking,
             error: None,
+            peer_closed: false,
         }),
     };
     let io = io.add_filter(filter);
@@ -828,6 +848,24 @@ fn take_token(buf: &SecBuffer, output: &mut ntex_bytes::BytePages) {
             FreeContextBuffer(buf.pvBuffer);
         }
     }
+}
+
+/// Locate the decrypted payload and the unprocessed input length by buffer type,
+/// `DecryptMessage` does not guarantee the position of output buffers.
+fn decrypted_parts(bufs: &[SecBuffer]) -> (Option<&[u8]>, usize) {
+    let data = bufs
+        .iter()
+        .find(|buf| {
+            buf.BufferType == SECBUFFER_DATA && buf.cbBuffer != 0 && !buf.pvBuffer.is_null()
+        })
+        .map(|buf| unsafe {
+            slice::from_raw_parts(buf.pvBuffer.cast::<u8>(), buf.cbBuffer as usize)
+        });
+    let extra = bufs
+        .iter()
+        .find(|buf| buf.BufferType == SECBUFFER_EXTRA)
+        .map_or(0, |buf| buf.cbBuffer as usize);
+    (data, extra)
 }
 
 fn alpn_buffer<T: AsRef<[u8]>>(protocols: &[T]) -> Option<Arc<[u8]>> {
@@ -880,6 +918,33 @@ impl std::error::Error for SspiError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_decrypted_parts_by_type() {
+        let mut payload = *b"hello";
+        let buf = |ty, len, ptr: *mut u8| SecBuffer {
+            cbBuffer: len,
+            BufferType: ty,
+            pvBuffer: ptr.cast(),
+        };
+        let bufs = [
+            buf(SECBUFFER_STREAM_HEADER, 13, ptr::null_mut()),
+            buf(SECBUFFER_EXTRA, 7, ptr::null_mut()),
+            buf(SECBUFFER_STREAM_TRAILER, 16, ptr::null_mut()),
+            buf(SECBUFFER_DATA, 5, payload.as_mut_ptr()),
+        ];
+        let (data, extra) = decrypted_parts(&bufs);
+        assert_eq!(data, Some(&b"hello"[..]));
+        assert_eq!(extra, 7);
+
+        let bufs = [
+            buf(SECBUFFER_STREAM_HEADER, 13, ptr::null_mut()),
+            buf(SECBUFFER_DATA, 0, payload.as_mut_ptr()),
+            buf(SECBUFFER_STREAM_TRAILER, 16, ptr::null_mut()),
+            buf(SECBUFFER_EMPTY, 0, ptr::null_mut()),
+        ];
+        assert_eq!(decrypted_parts(&bufs), (None, 0));
+    }
 
     #[test]
     fn test_alpn_buffer() {

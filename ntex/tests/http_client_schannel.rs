@@ -340,3 +340,46 @@ async fn test_shutdown_sends_close_notify() {
     assert_eq!(result, Ok(()));
     assert!(close_notify, "peer did not receive close_notify");
 }
+
+#[ntex::test]
+async fn test_peer_close_notify_closes_io() {
+    use ntex::{codec::BytesCodec, connect::Connect, service::Pipeline, time};
+    use std::io::Read;
+    use std::time::Duration;
+    use tls_openssl::ssl::ShutdownState;
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let (sock, _) = listener.accept().unwrap();
+        sock.set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut stream = ssl_acceptor().accept(sock).unwrap();
+        // data and close_notify, the tcp connection stays open
+        std::io::Write::write_all(&mut stream, b"test").unwrap();
+        stream.shutdown().unwrap();
+        let mut buf = [0u8; 64];
+        let result = stream.read(&mut buf).map_err(|e| e.to_string());
+        let close_notify = stream.get_shutdown().contains(ShutdownState::RECEIVED);
+        tx.send((result, close_notify)).unwrap();
+    });
+
+    let conn = Pipeline::new(SharedCfg::default(), schannel_connector());
+    let io = conn
+        .call(Connect::new("localhost").set_addr(Some(addr)))
+        .await
+        .unwrap();
+    assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "test");
+    let item = time::timeout(Duration::from_secs(5), io.recv(&BytesCodec))
+        .await
+        .expect("io is not closed after peer close_notify");
+    assert!(matches!(item, Ok(None)), "{item:?}");
+    let _ = time::timeout(Duration::from_secs(5), io.shutdown()).await;
+
+    let (result, close_notify) = rx.recv().unwrap();
+    server.join().unwrap();
+    assert_eq!(result, Ok(0));
+    assert!(close_notify, "peer did not receive close_notify");
+    drop(io);
+}

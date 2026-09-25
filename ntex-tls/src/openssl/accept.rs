@@ -3,7 +3,7 @@ use std::{fmt, io};
 use ntex_io::{Filter, Io, Layer};
 use ntex_service::cfg::Cfg;
 use ntex_service::{Ctx, Service, cfg::Configuration};
-use ntex_util::{services::Counter, time};
+use ntex_util::services::Counter;
 use tls_openssl::ssl;
 
 use crate::{MAX_SSL_ACCEPT_COUNTER, TlsConfig, openssl::SslFilter};
@@ -43,30 +43,8 @@ impl<F: Filter, St> Service<St, Io<F>> for SslAcceptor {
         let ssl = ssl::Ssl::new(self.acceptor.context()).map_err(io::Error::other)?;
         let cfg: Cfg<TlsConfig> = io.cfg().ctx().get();
 
-        time::timeout_checked(cfg.handshake_timeout(), async {
-            let mut stream = super::new_stream(&io, ssl)?;
-            let _ = stream.accept();
-
-            let filter = SslFilter::new(stream);
-            let io = io.add_filter(filter);
-
-            log::trace!("Accepting tls connection");
-            let mut eof = false;
-            loop {
-                let result = io.with_buf(|buf| {
-                    let filter = io.filter();
-                    filter.with_buffers(buf, |s, _| s.accept())
-                })?;
-                if super::handle_result(&io, result, &mut eof).await?.is_some() {
-                    break;
-                }
-            }
-
-            Ok(io)
-        })
-        .await
-        .map_err(|()| io::Error::new(io::ErrorKind::TimedOut, "ssl handshake timeout"))
-        .and_then(|item| item)
+        log::trace!("{}: Accepting tls connection", io.tag());
+        super::with_timeout(cfg.handshake_timeout(), super::handshake(io, ssl, true)).await
     }
 }
 

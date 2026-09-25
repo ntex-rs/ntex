@@ -1,8 +1,8 @@
-//! An implementation of SSL streams for ntex backed by OpenSSL
+//! TLS server filter backed by rustls
 use std::{any, cell::UnsafeCell, io, sync::Arc, task::Poll};
 
 use ntex_io::{Filter, FilterBuf, FilterLayer, Io, Layer};
-use ntex_util::{time, time::Millis};
+use ntex_util::time::Millis;
 use tls_rustls::{ServerConfig, ServerConnection};
 
 use crate::{Servername, rustls::Stream};
@@ -16,15 +16,15 @@ pub struct TlsServerFilter {
 impl FilterLayer for TlsServerFilter {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         self.stream(|s| {
-            if let Some(item) = s.query(id) {
-                Some(item)
-            } else if id == any::TypeId::of::<Servername>() {
-                s.session
-                    .server_name()
-                    .map(|name| Box::new(Servername(name.to_string())) as Box<dyn any::Any>)
-            } else {
-                None
-            }
+            s.query(id).or_else(|| {
+                if id == any::TypeId::of::<Servername>() {
+                    s.session
+                        .server_name()
+                        .map(|name| Box::new(Servername(name.to_string())) as Box<dyn any::Any>)
+                } else {
+                    None
+                }
+            })
         })
     }
 
@@ -49,34 +49,23 @@ impl TlsServerFilter {
     ) -> Result<Io<Layer<TlsServerFilter, F>>, io::Error> {
         log::trace!("{}: Initiate server connection", io.tag());
 
-        time::timeout_checked(timeout, async {
+        super::with_timeout(timeout, async {
             let mut session = ServerConnection::new(cfg).map_err(io::Error::other)?;
             session.set_buffer_limit(Some(io.cfg().write_page_size().capacity()));
             let io = io.add_filter(TlsServerFilter {
                 session: UnsafeCell::new(session),
             });
 
-            let mut eof = false;
-            loop {
-                let (wants_write, handshaking) = {
-                    let s = unsafe { &*io.filter().session.get() };
-                    (s.wants_write(), s.is_handshaking())
-                };
-                if wants_write {
-                    io.flush(false).await?;
-                }
-
-                if handshaking {
-                    super::wait_for_read(&io, &mut eof).await?;
-                } else {
-                    log::trace!("{}: TLS Handshake successed", io.tag());
-                    return Ok(io);
-                }
-            }
+            super::handshake(&io, || io.filter().state()).await?;
+            log::trace!("{}: TLS Handshake successed", io.tag());
+            Ok(io)
         })
         .await
-        .map_err(|()| io::Error::new(io::ErrorKind::TimedOut, "rustls handshake timeout"))
-        .and_then(|item| item)
+    }
+
+    fn state(&self) -> (bool, bool) {
+        let s = unsafe { &*self.session.get() };
+        (s.wants_write(), s.is_handshaking())
     }
 
     fn stream<F, R>(&self, f: F) -> R

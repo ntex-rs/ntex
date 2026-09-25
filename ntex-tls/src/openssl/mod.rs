@@ -1,9 +1,11 @@
 //! An implementation of SSL streams for ntex backed by OpenSSL
-use std::{any, borrow::ToOwned, cell::UnsafeCell, cmp, io, mem::MaybeUninit, ptr, task::Poll};
+use std::future::Future;
+use std::{any, borrow::ToOwned, cell::UnsafeCell, cmp, io, ptr, task::Poll};
 
 use foreign_types_shared::ForeignType;
 use ntex_bytes::{BufMut, BytePages, BytesMut};
 use ntex_io::{Filter, FilterBuf, FilterLayer, Io, Layer, types};
+use ntex_util::time::{Millis, timeout_checked};
 use openssl_sys as ffi;
 use tls_openssl::ssl::{self, NameType, SslStream};
 use tls_openssl::x509::X509;
@@ -191,29 +193,22 @@ impl FilterLayer for SslFilter {
                     }
 
                     let chunk = dst.chunk_mut();
-                    let chunk = unsafe {
-                        std::slice::from_raw_parts_mut(
-                            chunk.as_mut_ptr().cast::<MaybeUninit<u8>>(),
-                            chunk.len(),
-                        )
-                    };
-                    let result = match stream.ssl_read_uninit(chunk) {
-                        Ok(v) => {
-                            unsafe { dst.advance_mut(v) };
-                            continue;
-                        }
-                        Err(ref e) if e.code() == ssl::ErrorCode::WANT_READ => Ok(()),
-                        Err(ref e) if e.code() == ssl::ErrorCode::WANT_WRITE => Ok(()),
-                        Err(ref e) if e.code() == ssl::ErrorCode::ZERO_RETURN => {
-                            rb.io().close();
-                            Ok(())
-                        }
+                    match stream.ssl_read_uninit(chunk.as_mut()) {
+                        Ok(v) => unsafe { dst.advance_mut(v) },
                         Err(e) => {
-                            log::trace!("{}: SSL Error: {:?}", rb.tag(), e);
-                            Err(io::Error::other(e))
+                            return match e.code() {
+                                ssl::ErrorCode::WANT_READ | ssl::ErrorCode::WANT_WRITE => Ok(()),
+                                ssl::ErrorCode::ZERO_RETURN => {
+                                    rb.io().close();
+                                    Ok(())
+                                }
+                                _ => {
+                                    log::trace!("{}: SSL Error: {:?}", rb.tag(), e);
+                                    Err(io::Error::other(e))
+                                }
+                            };
                         }
-                    };
-                    return result;
+                    }
                 }
             })
         })
@@ -222,23 +217,21 @@ impl FilterLayer for SslFilter {
     fn process_write_buf(&self, wb: &FilterBuf<'_>) -> io::Result<()> {
         self.with_buffers(wb, |stream, buf| {
             buf.with_write_buffers(|w_src, _| {
-                if !w_src.is_empty() {
-                    while let Some(mut page) = w_src.take() {
-                        match stream.ssl_write(&page) {
-                            Ok(v) => {
-                                page.advance_to(v);
-                                w_src.prepend(page);
-                            }
-                            Err(e)
-                                if matches!(
-                                    e.code(),
-                                    ssl::ErrorCode::WANT_READ | ssl::ErrorCode::WANT_WRITE
-                                ) =>
-                            {
-                                break;
-                            }
-                            Err(e) => return Err(io::Error::other(e)),
+                while let Some(mut page) = w_src.take() {
+                    match stream.ssl_write(&page) {
+                        Ok(v) => {
+                            page.advance_to(v);
+                            w_src.prepend(page);
                         }
+                        Err(e)
+                            if matches!(
+                                e.code(),
+                                ssl::ErrorCode::WANT_READ | ssl::ErrorCode::WANT_WRITE
+                            ) =>
+                        {
+                            break;
+                        }
+                        Err(e) => return Err(io::Error::other(e)),
                     }
                 }
                 Ok(())
@@ -271,49 +264,54 @@ pub async fn connect<F: Filter>(
     io: Io<F>,
     ssl: ssl::Ssl,
 ) -> Result<Io<Layer<SslFilter, F>>, io::Error> {
-    let mut stream = new_stream(&io, ssl)?;
-    let _ = stream.connect();
+    handshake(io, ssl, false).await
+}
 
-    let filter = SslFilter::new(stream);
-    let io = io.add_filter(filter);
+/// Add ssl filter to the io stream and drive the handshake to completion
+async fn handshake<F: Filter>(
+    io: Io<F>,
+    mut ssl: ssl::Ssl,
+    accept: bool,
+) -> io::Result<Io<Layer<SslFilter, F>>> {
+    if accept {
+        ssl.set_accept_state();
+    } else {
+        ssl.set_connect_state();
+    }
+    let stream = new_stream(&io, ssl)?;
+    let io = io.add_filter(SslFilter::new(stream));
 
     let mut eof = false;
     loop {
-        let result = io.with_buf(|buf| {
-            let filter = io.filter();
-            filter.with_buffers(buf, |s, _| s.connect())
-        })?;
-
-        if handle_result(&io, result, &mut eof).await?.is_some() {
-            break;
+        let result = io.with_buf(|buf| io.filter().with_buffers(buf, |s, _| s.do_handshake()))?;
+        match result {
+            Ok(()) => return Ok(io),
+            Err(e) => match e.code() {
+                ssl::ErrorCode::WANT_READ => {
+                    if eof {
+                        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "disconnected"));
+                    }
+                    // The read that reports eof may also carry the peer's last
+                    // handshake flight, so the handshake is stepped once more
+                    // before the eof is treated as a failure.
+                    eof = io.read_notify().await?.is_none();
+                }
+                ssl::ErrorCode::WANT_WRITE => {}
+                _ => return Err(io::Error::other(e)),
+            },
         }
     }
-
-    Ok(io)
 }
 
-async fn handle_result<F>(
-    io: &Io<F>,
-    result: Result<(), ssl::Error>,
-    eof: &mut bool,
-) -> io::Result<Option<()>> {
-    match result {
-        Ok(v) => Ok(Some(v)),
-        Err(e) => match e.code() {
-            ssl::ErrorCode::WANT_READ => {
-                if *eof {
-                    return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "disconnected"));
-                }
-                // The read that reports eof may also carry the peer's last
-                // handshake flight, so the handshake is stepped once more
-                // before the eof is treated as a failure.
-                if io.read_notify().await?.is_none() {
-                    *eof = true;
-                }
-                Ok(None)
-            }
-            ssl::ErrorCode::WANT_WRITE => Ok(None),
-            _ => Err(io::Error::other(e)),
-        },
-    }
+/// Run handshake with timeout, zero timeout disables it
+async fn with_timeout<R>(
+    timeout: Millis,
+    fut: impl Future<Output = io::Result<R>>,
+) -> io::Result<R> {
+    timeout_checked(timeout, fut).await.unwrap_or_else(|()| {
+        Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "SSL Handshake timeout",
+        ))
+    })
 }

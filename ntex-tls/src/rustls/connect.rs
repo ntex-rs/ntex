@@ -4,7 +4,6 @@ use ntex_error::Error;
 use ntex_io::{Filter, Io, Layer};
 use ntex_net::connect::{Address, Connect, ConnectError, Connector};
 use ntex_service::{Ctx, IntoService, Service, cfg::SharedCfg};
-use ntex_util::time::timeout_checked;
 use tls_rustls::{ClientConfig, pki_types::ServerName};
 
 use crate::{TlsConfig, rustls::TlsClientFilter};
@@ -85,34 +84,23 @@ where
         let io = ctx.call(&self.svc, req).await?;
         log::trace!("{}: TLS Handshake start for: {host:?}", cfg.tag());
 
-        let config = self.config.clone();
+        let result = async {
+            let name = ServerName::try_from(host.as_str()).map_err(io::Error::other)?;
+            let fut = TlsClientFilter::create(io, self.config.clone(), name.to_owned());
+            super::with_timeout(cfg.handshake_timeout(), fut).await
+        }
+        .await;
 
-        async {
-            let host =
-                ServerName::try_from(host).map_err(|e| ConnectError::from(io::Error::other(e)))?;
-
-            let connect_fut = TlsClientFilter::create(io, config, host.clone());
-            match timeout_checked(cfg.handshake_timeout(), connect_fut).await {
-                Ok(Ok(io)) => {
-                    log::trace!("{}: TLS Handshake success: {host:?}", cfg.tag());
-                    Ok(io)
-                }
-                Ok(Err(e)) => {
-                    log::trace!("{}: TLS Handshake error: {e:?}", cfg.tag());
-                    Err(ConnectError::from(e).into())
-                }
-                Err(()) => {
-                    log::trace!("{}: TLS Handshake timeout", cfg.tag());
-                    Err(ConnectError::from(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "TLS Handshake timeout",
-                    ))
-                    .into())
-                }
+        match result {
+            Ok(io) => {
+                log::trace!("{}: TLS Handshake success: {host:?}", cfg.tag());
+                Ok(io)
+            }
+            Err(e) => {
+                log::trace!("{}: TLS Handshake error: {e:?}", cfg.tag());
+                Err(Error::from(ConnectError::from(e)).set_service(cfg.service()))
             }
         }
-        .await
-        .map_err(|e: Error<_>| e.set_service(cfg.service()))
     }
 
     ntex_service::forward_ready!(SharedCfg, svc);

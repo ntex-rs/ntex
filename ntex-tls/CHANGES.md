@@ -2,6 +2,12 @@
 
 ## [4.1.0] - 2026-09-22
 
+* schannel: start a graceful shutdown when the peer sends `close_notify`,
+  instead of leaving the connection half-open
+
+* schannel: locate decrypted data and extra input by buffer type instead of
+  fixed `DecryptMessage` buffer positions
+
 * rustls: a zero handshake timeout disables the timeout on the acceptor as
   documented, instead of failing handshakes that take longer than a timer tick
 
