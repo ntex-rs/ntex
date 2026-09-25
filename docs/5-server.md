@@ -251,6 +251,30 @@ same `SharedCfg` value. In this example, the HTTP service uses
 [`HttpServiceConfig`](https://docs.rs/ntex/ntex/http/struct.HttpServiceConfig.html)
 to set the maximum number of headers and the keep-alive timeout.
 
+`HttpServiceConfig` also configures the HTTP/1 timers that protect against slow
+peers:
+
+- The client timeout (`set_client_timeout()`) bounds the wait for the first
+  byte of the first request on a new connection.
+- The header read rate (`set_headers_read_rate()`) requires the request head
+  to arrive at a minimum rate, within a cumulative limit.
+- The payload read rate (`set_payload_read_rate()`) does the same for the
+  request body. It is disabled by default.
+- The write timeout (`set_write_timeout()`) bounds how long the peer may keep
+  write backpressure enabled by not reading the response. It is disabled by
+  default.
+
+The payload read-rate timer runs only while the dispatcher can read and forward
+body data. It pauses when the application stops consuming the body stream, or
+when write backpressure prevents further reads, because these conditions are
+not caused by a slow sender. If a write timeout is configured, it runs while
+write backpressure lasts. When reading resumes, the timer continues the interrupted
+measurement interval instead of starting a new one, so the bytes received before
+and after the pause are measured together. If that interval expired before the
+pause, the dispatcher first decodes the body data it has already received, then
+checks the read rate. Time spent paused does not count against the payload
+limits.
+
 Other configuration types include:
 
 - [`TlsConfig`](https://docs.rs/ntex-tls/ntex_tls/struct.TlsConfig.html)

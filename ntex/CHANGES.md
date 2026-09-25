@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+* Continue the interrupted HTTP/1 payload read-rate interval when payload
+  timing resumes after backpressure, instead of starting a new interval, and
+  check an interval that expired before the pause
+
 * Add WsError::WriteTimeout for WebSocket dispatchers stopped by the write
   backpressure timeout
 
@@ -32,6 +36,10 @@
     `max_tls_handshakes()`
 
 * Add `PayloadConfig::content_type()` predicate, matching `JsonConfig::content_type()`
+
+* Add `HttpServiceConfig::set_write_timeout()` to bound HTTP/1 write
+  backpressure, a client that stops reading responses could hold a connection
+  open indefinitely
 
 * Decode already received HTTP/1 request payload before failing a paused
   payload read-rate timer without budget left

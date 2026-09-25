@@ -30,6 +30,18 @@ pub(super) enum Timer {
     /// Payload timing is paused by application or write backpressure, the
     /// transport timer is stopped but the remaining budget is kept.
     PayloadPaused,
+    /// Write backpressure timeout.
+    Write,
+    /// Write backpressure timeout, paused payload timing is restored once
+    /// backpressure is disabled.
+    WriteWithPayload,
+}
+
+impl Timer {
+    /// Returns `true` for the write backpressure timer.
+    pub(super) fn is_write(self) -> bool {
+        matches!(self, Timer::Write | Timer::WriteWithPayload)
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -40,6 +52,8 @@ pub(super) struct ReadProgress {
     pub(super) consumed: u32,
     /// Remaining cumulative read budget, after the current period.
     pub(super) max_timeout: Seconds,
+    /// Unused part of the current period while payload timing is paused.
+    pub(super) period: Seconds,
 }
 
 impl ReadProgress {
@@ -47,6 +61,7 @@ impl ReadProgress {
         remains: 0,
         consumed: 0,
         max_timeout: Seconds::ZERO,
+        period: Seconds::ZERO,
     };
 }
 
@@ -96,9 +111,23 @@ impl Timers {
     }
 
     /// Resets the state after a request head has been decoded.
+    ///
+    /// A running write timer keeps running, buffered requests can be decoded
+    /// during write backpressure.
     pub(super) fn reset(&mut self, io: &IoRef) {
         self.progress = ReadProgress::EMPTY;
-        self.stop(io);
+        self.payload_done(io);
+    }
+
+    /// Stops payload timing after the payload has been decoded.
+    ///
+    /// A running write timer keeps running.
+    pub(super) fn payload_done(&mut self, io: &IoRef) {
+        if self.active.is_write() {
+            self.active = Timer::Write;
+        } else {
+            self.stop(io);
+        }
     }
 
     /// Starts the keep-alive timer for an idle connection, a running
@@ -145,68 +174,94 @@ impl Timers {
     }
 
     /// Starts request-payload timing with a fresh budget.
+    ///
+    /// During write backpressure, payload timing starts paused and resumes
+    /// once backpressure is disabled.
     pub(super) fn start_payload(&mut self, io: &IoRef, cfg: Option<FrameReadRate>) {
         if let Some(cfg) = cfg {
-            log::debug!("{}: Start payload timer {:?}", io.tag(), cfg.timeout);
             self.progress.consumed = 0;
-            self.start(io, Timer::Payload, cfg, cfg.max_timeout);
+            if self.active.is_write() {
+                let (period, max_timeout) = read_timeout(cfg.timeout, cfg.max_timeout);
+                self.progress.period = period;
+                self.progress.max_timeout = max_timeout;
+                self.active = Timer::WriteWithPayload;
+            } else {
+                log::debug!("{}: Start payload timer {:?}", io.tag(), cfg.timeout);
+                self.start(io, Timer::Payload, cfg, cfg.max_timeout);
+            }
         }
     }
 
     /// Records payload bytes consumed by a decode attempt.
     ///
-    /// Resumes paused payload timing, keeping the received bytes and the
-    /// remaining cumulative budget. Stopped timing is not started, paused
-    /// timing without budget left is not resumed.
-    pub(super) fn payload_decoded(
-        &mut self,
-        io: &IoRef,
-        cfg: Option<FrameReadRate>,
-        consumed: u32,
-    ) {
+    /// Resumes paused payload timing, keeping the received bytes, the
+    /// unused part of the interrupted period, and the cumulative budget.
+    /// Stopped timing is not started.
+    pub(super) fn payload_decoded(&mut self, io: &IoRef, consumed: u32) {
         match self.active {
             Timer::Payload => {
                 self.progress.consumed = self.progress.consumed.saturating_add(consumed);
             }
             Timer::PayloadPaused => {
-                if self.payload_budget_exhausted(cfg) {
-                    self.progress.consumed = self.progress.consumed.saturating_add(consumed);
-                } else if let Some(cfg) = cfg {
-                    log::debug!("{}: Resume payload timer {:?}", io.tag(), cfg.timeout);
-                    self.progress.consumed = self.progress.consumed.saturating_add(consumed);
-                    let max_timeout = if cfg.max_timeout.is_zero() {
-                        Seconds::ZERO
-                    } else {
-                        self.progress.max_timeout
-                    };
-                    self.start(io, Timer::Payload, cfg, max_timeout);
+                let period = self.progress.period;
+                log::debug!("{}: Resume payload timer {:?}", io.tag(), period);
+                self.progress.consumed = self.progress.consumed.saturating_add(consumed);
+                self.progress.period = Seconds::ZERO;
+                self.active = Timer::Payload;
+                if period.is_zero() {
+                    // the interrupted period has expired, check the read rate
+                    io.notify_timeout();
+                } else {
+                    io.start_timer(period);
                 }
             }
             _ => (),
         }
     }
 
-    /// Pauses payload timing, the unused part of the current period is
-    /// returned to the cumulative budget.
-    pub(super) fn pause_payload(&mut self, io: &IoRef, cfg: Option<FrameReadRate>) {
+    /// Pauses payload timing, keeping the unused part of the current period.
+    ///
+    /// The period continues when payload timing resumes, a period that
+    /// expired before pausing is checked on resume.
+    pub(super) fn pause_payload(&mut self, io: &IoRef) {
         if self.active == Timer::Payload {
-            if let Some(cfg) = cfg
-                && cfg.max_timeout.non_zero()
-            {
-                let remains = io.timer_handle().remains();
-                self.progress.max_timeout =
-                    Seconds(self.progress.max_timeout.0.saturating_add(remains.0));
-            }
+            self.progress.period = io.timer_handle().remains();
             io.stop_timer();
             self.active = Timer::PayloadPaused;
         }
     }
 
-    /// Returns `true` if paused payload timing has no cumulative budget left.
-    pub(super) fn payload_budget_exhausted(&self, cfg: Option<FrameReadRate>) -> bool {
-        self.active == Timer::PayloadPaused
-            && cfg.is_some_and(|cfg| cfg.max_timeout.non_zero())
-            && self.progress.max_timeout.is_zero()
+    /// Starts the write backpressure timer, a running write timer keeps
+    /// running.
+    ///
+    /// Running payload timing is paused, other read timers are stopped.
+    pub(super) fn start_write(&mut self, io: &IoRef, timeout: Seconds) {
+        if timeout.non_zero() && !self.active.is_write() {
+            log::debug!("{}: Start write timer {:?}", io.tag(), timeout);
+            self.pause_payload(io);
+            self.active = if self.active == Timer::PayloadPaused {
+                Timer::WriteWithPayload
+            } else {
+                Timer::Write
+            };
+            io.stop_timer();
+            io.start_timer(timeout);
+        }
+    }
+
+    /// Stops the write backpressure timer and restores paused payload timing.
+    pub(super) fn stop_write(&mut self, io: &IoRef) {
+        match self.active {
+            Timer::Write => {
+                io.stop_timer();
+                self.active = Timer::Stopped;
+            }
+            Timer::WriteWithPayload => {
+                io.stop_timer();
+                self.active = Timer::PayloadPaused;
+            }
+            _ => (),
+        }
     }
 
     /// Handles expiry of a read-rate period.
@@ -242,6 +297,45 @@ impl Timers {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::io::{Io, testing::IoTest};
+
+    /// Decoding buffered requests during write backpressure does not restart
+    /// the write timer.
+    #[crate::rt_test]
+    async fn test_write_timer_survives_decoded_requests() {
+        let (_client, server) = IoTest::create();
+        let io = Io::from(server);
+        let io = io.get_ref();
+        let rate = Some(FrameReadRate {
+            rate: 1,
+            timeout: Seconds(2),
+            max_timeout: Seconds(10),
+        });
+        let mut timers = Timers::new(&io, None);
+
+        timers.start_write(&io, Seconds(5));
+        assert_eq!(timers.active, Timer::Write);
+        let deadline = io.timer_handle();
+        assert!(deadline.is_set());
+
+        timers.reset(&io);
+        assert_eq!(timers.active, Timer::Write);
+
+        timers.start_payload(&io, rate);
+        assert_eq!(timers.active, Timer::WriteWithPayload);
+        assert_eq!(timers.progress.period, Seconds(2));
+        assert_eq!(timers.progress.max_timeout, Seconds(8));
+
+        timers.payload_done(&io);
+        assert_eq!(timers.active, Timer::Write);
+        timers.start_write(&io, Seconds(5));
+        assert_eq!(io.timer_handle(), deadline);
+
+        timers.start_payload(&io, rate);
+        timers.stop_write(&io);
+        assert_eq!(timers.active, Timer::PayloadPaused);
+        assert!(!io.timer_handle().is_set());
+    }
 
     #[test]
     fn test_read_timeout_is_bounded_by_maximum() {

@@ -52,6 +52,7 @@ pub struct HttpServiceConfig {
     pub(super) max_buf_size: usize,
     pub(super) headers_read_rate: Option<FrameReadRate>,
     pub(super) payload_read_rate: Option<FrameReadRate>,
+    pub(super) write_timeout: Seconds,
 
     config: CfgContext,
 }
@@ -101,6 +102,7 @@ impl HttpServiceConfig {
             max_buf_size: 64 * 1024,
             headers_vec: false,
             payload_read_rate: None,
+            write_timeout: Seconds::ZERO,
             config: CfgContext::default(),
         }
     }
@@ -191,6 +193,28 @@ impl HttpServiceConfig {
             rate.timeout = timeout;
             self.headers_read_rate = Some(rate);
         }
+        self
+    }
+
+    #[must_use]
+    /// Sets the HTTP/1 write backpressure timeout.
+    ///
+    /// Write backpressure is enabled when outstanding output reaches the I/O
+    /// write buffer high watermark, and disabled once the peer has accepted
+    /// enough of it. If backpressure is still enabled when the timeout
+    /// expires, the connection is closed, and the HTTP/1 control service
+    /// receives a peer-gone event with an [`io::ErrorKind::TimedOut`](std::io::ErrorKind::TimedOut)
+    /// error. Each backpressure period starts a fresh timeout.
+    ///
+    /// Without a write timeout, a client that stops reading responses can hold
+    /// the connection open indefinitely. Payload read-rate timing is paused
+    /// during write backpressure and resumes once it is disabled.
+    ///
+    /// Timers have one-second resolution, the timeout can expire up to one
+    /// second later than configured. A zero duration disables the timeout. It
+    /// is disabled by default.
+    pub fn set_write_timeout(mut self, timeout: Seconds) -> Self {
+        self.write_timeout = timeout;
         self
     }
 
@@ -287,10 +311,14 @@ impl HttpServiceConfig {
     /// The timer runs only while the dispatcher can read and forward payload
     /// data. It is paused while application payload backpressure or response
     /// write backpressure prevents further reads, so those conditions are not
-    /// treated as a slow network peer. Pausing preserves the unused portion of
-    /// the cumulative `max_timeout`; resuming does not grant a new maximum
-    /// period. If no budget is left, already received payload data is still
-    /// decoded, and the request fails only when more data is needed. The timer stops when the complete payload has been decoded.
+    /// treated as a slow network peer. Write backpressure is bounded by the
+    /// [write timeout](Self::set_write_timeout). Pausing preserves the unused
+    /// portion of the current measurement interval, and resuming continues
+    /// that interval rather than starting a new one, so the bytes decoded
+    /// before and after the pause are measured together. If the interval
+    /// expired before the pause, already received payload data is decoded
+    /// on resume and then the read rate is checked. The timer stops when the
+    /// complete payload has been decoded.
     ///
     /// A zero `timeout` disables payload timing. A zero `max_timeout` removes
     /// the cumulative limit, allowing the deadline to be extended indefinitely
