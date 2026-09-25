@@ -60,7 +60,7 @@ pub(super) struct Inner {
     available: HashMap<Key, VecDeque<AvailableConnection>>,
     h2: HashMap<Key, Vec<H2Client>>,
     connecting: HashSet<Key>,
-    waker: inplace::Inplace<()>,
+    waker: Rc<inplace::Inplace<()>>,
     waiters: Rc<RefCell<Waiters>>,
 }
 
@@ -78,7 +78,7 @@ impl ConnectionPool {
             available: HashMap::default(),
             h2: HashMap::default(),
             connecting: HashSet::default(),
-            waker: inplace::channel(),
+            waker: Rc::new(inplace::channel()),
             waiters: waiters.clone(),
         }));
 
@@ -311,8 +311,8 @@ impl Inner {
                 .iter()
                 .filter(|conn| conn.has_capacity(cfg.h2_max_streams))
                 .min_by_key(|conn| conn.streams());
-            if let Some(conn) = conn {
-                return Acquire::Acquired(ConnectionType::H2(conn.begin()), conn.created());
+            if let Some((conn, created)) = conn.and_then(|c| Some((c.begin()?, c.created()))) {
+                return Acquire::Acquired(ConnectionType::H2(conn), created);
             }
             h2_saturated = connections.len();
             if connections.is_empty() {
@@ -529,8 +529,10 @@ fn open_connection(
                     // wake up waiters, connection can be shared
                     drop(guard);
 
-                    let conn = Connection::new(ConnectionType::H2(conn), now(), None);
-                    if tx.send(Ok(conn)).is_err() {
+                    let result = conn
+                        .map(|conn| Connection::new(ConnectionType::H2(conn), now(), None))
+                        .ok_or_else(|| Error::from(ConnectError::Disconnected(None)));
+                    if tx.send(result).is_err() {
                         log::trace!(
                             "{}: Waiter for {:?} is gone while connecting to host",
                             cfg.tag(),
@@ -562,15 +564,19 @@ fn add_h2_client(
     key: &Key,
     client: h2::client::SimpleClient,
 ) -> H2Client {
-    let weak = Rc::downgrade(inner);
-    let client = H2Client::new(client, move || {
-        // request is completed, stream is available
-        if let Some(inner) = weak.upgrade()
-            && let Ok(mut inner) = inner.try_borrow_mut()
-        {
-            inner.check_availibility();
-        }
-    });
+    // wake the pool task when a stream becomes available, the connection
+    // state is checked by the task
+    {
+        let inner = inner.borrow();
+        let waker = inner.waker.clone();
+        let waiters = inner.waiters.clone();
+        client.on_capacity(move || {
+            if waiters.try_borrow().map_or(true, |w| !w.waiters.is_empty()) {
+                let _ = waker.send(());
+            }
+        });
+    }
+    let client = H2Client::new(client);
     inner
         .borrow_mut()
         .h2
@@ -874,6 +880,42 @@ mod tests {
         drop(conn);
         drop(req2);
         assert_eq!(h2.streams(), 0);
+    }
+
+    #[crate::rt_test]
+    async fn test_h2_waiter_woken_by_connection_capacity() {
+        fn settings(max_streams: u8) -> [u8; 15] {
+            // SETTINGS frame with SETTINGS_MAX_CONCURRENT_STREAMS
+            [0, 0, 6, 4, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, max_streams]
+        }
+
+        let (pipe, pool) = h2_pool(ClientConfig::new().set_h2_connection_limit(1));
+        let (h2, server) = h2_conn(&pool);
+        server.write(settings(0));
+        for _ in 0..20 {
+            if !h2.has_capacity(0) {
+                break;
+            }
+            sleep(Millis(25)).await;
+        }
+        assert!(!h2.has_capacity(0));
+
+        let req = Connect {
+            uri: Uri::try_from("http://localhost/test").unwrap(),
+            addr: None,
+        };
+        let mut fut = std::pin::pin!(pipe.call(req));
+        assert!(lazy(|cx| fut.as_mut().poll(cx)).await.is_pending());
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| fut.as_mut().poll(cx)).await.is_pending());
+
+        // peer raises its limit, no request completes
+        server.write(settings(1));
+        let conn = crate::time::timeout(Millis(1000), fut)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(conn.protocol(), HttpProtocol::Http2);
     }
 
     #[crate::rt_test]

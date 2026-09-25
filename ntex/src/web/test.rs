@@ -797,7 +797,7 @@ where
                     .set_max_header_list_size(256 * 1024)
                     .set_max_header_continuation_frames(96),
             )
-            .add(ClientConfig::new().set_h1_lifetime(Seconds::ZERO))
+            .add(ClientConfig::new())
             .add(
                 WsClientConfig::new()
                     .set_address(addr)

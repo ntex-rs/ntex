@@ -2,9 +2,15 @@
 
 ## [Unreleased]
 
+* Fix HTTP client requests waiting for HTTP/2 stream capacity not being woken when the
+  connection releases a stream after the request completes, the peer raises its stream
+  limit, or the connection closes
+
 * `ClientConfig::set_h1_keepalive(Seconds::ZERO)` and `set_h1_lifetime(Seconds::ZERO)` disable
   the idle and lifetime checks, as for the HTTP/2 settings; previously pooled connections were
   never reused
+
+* `web::test::server()` client uses the default `ClientConfig`, as `http::test::server()` does
 
 * Fix HTTP client pool shutdown leaving requests waiting for a connection pending forever,
   keeping idle connections open and accepting new requests

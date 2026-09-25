@@ -1,6 +1,7 @@
 use std::{cell::Cell, fmt::Write, future::poll_fn, io, rc::Rc, time::Instant};
 
-use ntex_h2::{self as h2, client::RecvStream, client::SimpleClient, frame};
+use ntex_h2::client::{RecvStream, SimpleClient, StreamReservation};
+use ntex_h2::{self as h2, frame};
 
 use crate::error::{Error, ErrorMapping, with_service};
 use crate::http::body::{Body, BodySize, MessageBody};
@@ -88,12 +89,12 @@ async fn send_request_inner(
             ByteString::try_from(buf).unwrap()
         },
     );
-    let res = client
-        .client
-        .send(req.head.method.clone(), path, hdrs, eof)
-        .await;
-    // stream is counted by the connection from now on
-    client.pending.take();
+    let method = req.head.method.clone();
+    let res = if let Some(reservation) = client.reservation.take() {
+        reservation.send(method, path, hdrs, eof)
+    } else {
+        client.client.send(method, path, hdrs, eof).await
+    };
     let (snd_stream, rcv_stream) = res.into_error()?;
 
     // send body
@@ -269,17 +270,29 @@ async fn send_body(
     }
 }
 
-#[derive(Clone)]
 /// Shared HTTP/2 connection.
 ///
 /// Pool keeps a copy without activity. Copies returned by [`H2Client::begin`]
-/// carry an activity guard that is held until the request, including its
-/// request body and response payload, is complete.
+/// carry a stream reservation, used by the request, and an activity guard
+/// that is held until the request, including its request body and response
+/// payload, is complete.
 pub(super) struct H2Client {
     client: SimpleClient,
     state: Rc<H2State>,
     activity: Option<H2Activity>,
-    pending: Option<H2Pending>,
+    reservation: Option<StreamReservation>,
+}
+
+impl Clone for H2Client {
+    /// Stream reservation is not cloned.
+    fn clone(&self) -> Self {
+        Self {
+            client: self.client.clone(),
+            state: self.state.clone(),
+            activity: self.activity.clone(),
+            reservation: None,
+        }
+    }
 }
 
 impl std::fmt::Debug for H2Client {
@@ -296,9 +309,6 @@ struct H2State {
     used: Cell<Instant>,
     // number of live activity guards
     guards: Cell<u32>,
-    // number of requests that have not opened a stream yet
-    pending: Cell<u32>,
-    on_release: Box<dyn Fn()>,
 }
 
 /// In-flight request guard.
@@ -326,34 +336,11 @@ impl Drop for H2Activity {
         if guards == 0 {
             self.0.used.set(now());
         }
-        (self.0.on_release)();
-    }
-}
-
-/// Reserves a stream until the request opens it.
-struct H2Pending(Rc<H2State>);
-
-impl H2Pending {
-    fn new(state: &Rc<H2State>) -> Self {
-        state.pending.set(state.pending.get() + 1);
-        H2Pending(state.clone())
-    }
-}
-
-impl Clone for H2Pending {
-    fn clone(&self) -> Self {
-        H2Pending::new(&self.0)
-    }
-}
-
-impl Drop for H2Pending {
-    fn drop(&mut self) {
-        self.0.pending.set(self.0.pending.get() - 1);
     }
 }
 
 impl H2Client {
-    pub(super) fn new(client: SimpleClient, on_release: impl Fn() + 'static) -> Self {
+    pub(super) fn new(client: SimpleClient) -> Self {
         let created = now();
         Self {
             client,
@@ -361,22 +348,23 @@ impl H2Client {
                 created: Cell::new(created),
                 used: Cell::new(created),
                 guards: Cell::new(0),
-                pending: Cell::new(0),
-                on_release: Box::new(on_release),
             }),
             activity: None,
-            pending: None,
+            reservation: None,
         }
     }
 
     /// Starts a new request on this connection.
-    pub(super) fn begin(&self) -> Self {
-        Self {
+    ///
+    /// Returns `None` if a stream cannot be reserved.
+    pub(super) fn begin(&self) -> Option<Self> {
+        let reservation = self.client.reserve()?;
+        Some(Self {
             client: self.client.clone(),
             state: self.state.clone(),
             activity: Some(H2Activity::new(&self.state)),
-            pending: Some(H2Pending::new(&self.state)),
-        }
+            reservation: Some(reservation),
+        })
     }
 
     #[cfg(test)]
@@ -400,10 +388,9 @@ impl H2Client {
         self.state.guards.get() == 0
     }
 
-    /// Returns the number of open streams, including requests
-    /// that have not opened a stream yet.
+    /// Returns the number of open streams, including reserved streams.
     pub(super) fn streams(&self) -> u32 {
-        self.client.active_streams() + self.state.pending.get()
+        self.client.active_streams()
     }
 
     /// Returns whether the connection can start another request.
