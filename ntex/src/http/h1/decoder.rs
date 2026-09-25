@@ -243,18 +243,30 @@ bitflags::bitflags! {
         const EXPECT       = 0b0010;
         const CHUNKED      = 0b0100;
         const SEEN_TE      = 0b1000;
+        const CONN_CLOSE   = 0b0001_0000;
+        const CONN_KA      = 0b0010_0000;
+        const CONN_UPGRADE = 0b0100_0000;
     }
 }
 
 #[derive(Default, Debug)]
 pub(crate) struct State {
-    ka: Option<ConnectionType>,
     flags: Flags,
     content_length: Option<u64>,
     version: Version,
 }
 
 impl State {
+    fn connection_types(&self) -> impl Iterator<Item = ConnectionType> {
+        [
+            (Flags::CONN_CLOSE, ConnectionType::Close),
+            (Flags::CONN_KA, ConnectionType::KeepAlive),
+            (Flags::CONN_UPGRADE, ConnectionType::Upgrade),
+        ]
+        .into_iter()
+        .filter_map(|(flag, ctype)| self.flags.contains(flag).then_some(ctype))
+    }
+
     fn payload_length(&self) -> PayloadLength {
         // https://tools.ietf.org/html/rfc7230#section-3.3.3
         if self.flags.contains(Flags::CHUNKED) {
@@ -346,11 +358,7 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
             }
             // connection keep-alive state
             header::CONNECTION => {
-                st.ka = if let Ok(val) = value.to_str() {
-                    connection_type(val)
-                } else {
-                    None
-                };
+                st.flags.insert(connection_flags(value.as_bytes()));
             }
             header::UPGRADE => {
                 st.flags.insert(Flags::HAS_UPGRADE);
@@ -425,7 +433,7 @@ impl MessageType for Request {
             return Err(DecodeError::Header);
         }
 
-        if let Some(ctype) = st.ka {
+        for ctype in st.connection_types() {
             self.head_mut().set_connection_type(ctype);
         }
         if st.flags.contains(Flags::EXPECT) {
@@ -504,8 +512,8 @@ impl MessageType for ResponseHead {
             length = PayloadLength::None;
         }
 
-        if let Some(ka) = st.ka {
-            self.set_connection_type(ka);
+        for ctype in st.connection_types() {
+            self.set_connection_type(ctype);
         }
 
         // message payload
@@ -528,57 +536,23 @@ impl MessageType for ResponseHead {
     }
 }
 
-const S_KEEP_ALIVE: &str = "keep-alive";
-const S_CLOSE: &str = "close";
-const S_UPGRADE: &str = "upgrade";
-
-fn connection_type(val: &str) -> Option<ConnectionType> {
-    let l = val.len();
-    let bytes = val.as_bytes();
-    for i in 0..bytes.len() {
-        if i >= S_CLOSE.len() {
-            return None;
-        }
-        let result = match bytes[i] {
-            b'k' | b'K' => {
-                let pos = i + S_KEEP_ALIVE.len();
-                if l >= pos && val[i..pos].eq_ignore_ascii_case(S_KEEP_ALIVE) {
-                    Some((ConnectionType::KeepAlive, pos))
-                } else {
-                    None
-                }
-            }
-            b'c' | b'C' => {
-                let pos = i + S_CLOSE.len();
-                if l >= pos && val[i..pos].eq_ignore_ascii_case(S_CLOSE) {
-                    Some((ConnectionType::Close, pos))
-                } else {
-                    None
-                }
-            }
-            b'u' | b'U' => {
-                let pos = i + S_UPGRADE.len();
-                if l >= pos && val[i..pos].eq_ignore_ascii_case(S_UPGRADE) {
-                    Some((ConnectionType::Upgrade, pos))
-                } else {
-                    None
-                }
-            }
-            _ => continue,
-        };
-
-        if let Some((t, pos)) = result {
-            let next = pos + 1;
-            if val.len() > next {
-                if matches!(bytes[next], b' ' | b',' | b'\r' | b'\n') {
-                    return Some(t);
-                }
-            } else {
-                return Some(t);
-            }
+/// Collects the connection options listed in a `Connection` header value.
+///
+/// The value is a comma-separated list of case-insensitive tokens, see
+/// [RFC 9110 section 7.6.1](https://www.rfc-editor.org/rfc/rfc9110#section-7.6.1).
+fn connection_flags(val: &[u8]) -> Flags {
+    let mut flags = Flags::empty();
+    for token in val.split(|&b| b == b',') {
+        let token = token.trim_ascii();
+        if token.eq_ignore_ascii_case(b"close") {
+            flags.insert(Flags::CONN_CLOSE);
+        } else if token.eq_ignore_ascii_case(b"keep-alive") {
+            flags.insert(Flags::CONN_KA);
+        } else if token.eq_ignore_ascii_case(b"upgrade") {
+            flags.insert(Flags::CONN_UPGRADE);
         }
     }
-    None
+    flags
 }
 
 thread_local! {
@@ -929,19 +903,69 @@ mod tests {
     }
 
     #[test]
-    fn test_connection_type() {
-        for s in &["Close", "Close\r\n", "close,", "close "] {
-            assert_eq!(connection_type(s), Some(ConnectionType::Close));
+    fn test_connection_flags() {
+        for s in ["Close", "close,", "close ", " close", "\tclose"] {
+            assert_eq!(connection_flags(s.as_bytes()), Flags::CONN_CLOSE);
         }
-        for s in &["upgrade", "upGrade\r\n", "upgrade,", "upgrade "] {
-            assert_eq!(connection_type(s), Some(ConnectionType::Upgrade));
+        for s in ["upgrade", "upGrade", "upgrade,", "upgrade "] {
+            assert_eq!(connection_flags(s.as_bytes()), Flags::CONN_UPGRADE);
         }
-        for s in &["keep-alive", "keep-Alive\r\n", "keep-alive,", "Keep-alive "] {
-            assert_eq!(connection_type(s), Some(ConnectionType::KeepAlive));
+        for s in ["keep-alive", "keep-Alive", "keep-alive,", "Keep-alive "] {
+            assert_eq!(connection_flags(s.as_bytes()), Flags::CONN_KA);
         }
-        for s in &["keep-aliv", "clos\r\n", "clos", "upgrad"] {
-            assert_eq!(connection_type(s), None);
+        for s in [
+            "keep-aliv",
+            "clos",
+            "upgrad",
+            "closed",
+            "close-x",
+            "upgrades",
+            "x-close",
+            "keep-alivex",
+            "",
+        ] {
+            assert_eq!(connection_flags(s.as_bytes()), Flags::empty(), "{s:?}");
         }
+        // tokens past the first 5 bytes
+        assert_eq!(connection_flags(b"te, trailers, close"), Flags::CONN_CLOSE);
+        assert_eq!(
+            connection_flags(b"keep-alive, Upgrade"),
+            Flags::CONN_KA | Flags::CONN_UPGRADE
+        );
+    }
+
+    #[test]
+    fn test_conn_multiple_tokens() {
+        let mut buf = BytesMut::from(
+            "GET /test HTTP/1.1\r\n\
+             connection: te, trailers, close\r\n\r\n",
+        );
+        let req = parse_ready!(&mut buf);
+        assert_eq!(req.head().connection_type(), ConnectionType::Close);
+
+        let mut buf = BytesMut::from(
+            "GET /test HTTP/1.1\r\n\
+             connection: closed\r\n\r\n",
+        );
+        let req = parse_ready!(&mut buf);
+        assert_eq!(req.head().connection_type(), ConnectionType::KeepAlive);
+
+        // `close` in an earlier header is not overridden by a later one
+        let mut buf = BytesMut::from(
+            "GET /test HTTP/1.1\r\n\
+             connection: close\r\n\
+             connection: keep-alive\r\n\r\n",
+        );
+        let req = parse_ready!(&mut buf);
+        assert_eq!(req.head().connection_type(), ConnectionType::Close);
+
+        let mut buf = BytesMut::from(
+            "GET /test HTTP/1.1\r\n\
+             upgrade: websocket\r\n\
+             connection: keep-alive, Upgrade\r\n\r\n",
+        );
+        let req = parse_ready!(&mut buf);
+        assert!(req.upgrade());
     }
 
     #[test]

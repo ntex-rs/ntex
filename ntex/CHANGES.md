@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+* Fix HTTP/1 `Connection` header parsing ignoring tokens after the first
+  5 bytes, matching tokens by prefix, and letting a later header override
+  an earlier one
+
 * Fix an empty HTTP/1 chunked response body chunk terminating the body and
   dropping the remaining chunks
 
