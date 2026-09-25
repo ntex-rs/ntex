@@ -678,7 +678,13 @@ impl FilterLayer for SchannelFilter {
             inner.state = State::Closed;
             buf.with_write_buffers(|_, dst| inner.ctx.close_notify(dst))?;
         }
-        Ok(Poll::Ready(()))
+        // wait for the peer's close_notify, unless the peer already closed
+        // the connection and it is never going to arrive
+        if inner.state == State::Closed && !inner.peer_closed && !buf.io().is_read_eof() {
+            Ok(Poll::Pending)
+        } else {
+            Ok(Poll::Ready(()))
+        }
     }
 
     fn process_read_buf(&self, rb: &FilterBuf<'_>) -> io::Result<()> {

@@ -342,6 +342,62 @@ async fn test_shutdown_sends_close_notify() {
 }
 
 #[ntex::test]
+async fn test_shutdown_waits_for_peer_close_notify() {
+    use ntex::{connect::Connect, service::Pipeline, time};
+    use std::io::Read;
+    use std::time::{Duration, Instant};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    let server = std::thread::spawn(move || {
+        let (sock, _) = listener.accept().unwrap();
+        sock.set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut stream = ssl_acceptor().accept(sock).unwrap();
+        let mut buf = [0u8; 64];
+        let result = stream.read(&mut buf).map_err(|e| e.to_string());
+        std::thread::sleep(Duration::from_millis(300));
+        // reply with close_notify, the tcp connection stays open
+        let reply = stream.shutdown().map_err(|e| e.to_string());
+        tx.send((result, reply)).unwrap();
+        let _ = done_rx.recv_timeout(Duration::from_secs(10));
+    });
+
+    let cfg: SharedCfg = SharedCfg::new("CLIENT")
+        .add(ntex::io::IoConfig::new().set_shutdown_timeout(ntex::time::Seconds(5)))
+        .into();
+    let conn = Pipeline::new(cfg, schannel_connector());
+    let io = conn
+        .call(Connect::new("localhost").set_addr(Some(addr)))
+        .await
+        .unwrap();
+
+    let start = Instant::now();
+    let res = time::timeout(Duration::from_secs(10), io.shutdown())
+        .await
+        .expect("shutdown did not complete");
+    let elapsed = start.elapsed();
+    done_tx.send(()).unwrap();
+
+    let (result, reply) = rx.recv().unwrap();
+    server.join().unwrap();
+    assert_eq!(result, Ok(0), "server did not receive close_notify");
+    assert!(reply.is_ok(), "{reply:?}");
+    assert!(res.is_ok(), "{res:?}");
+    assert!(
+        elapsed >= Duration::from_millis(250),
+        "shutdown did not wait for the peer's close_notify: {elapsed:?}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "the peer's close_notify was not received: {elapsed:?}"
+    );
+    drop(io);
+}
+
+#[ntex::test]
 async fn test_handshake_then_eof() {
     use ntex::{connect::Connect, service::Pipeline};
 

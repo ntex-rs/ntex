@@ -2,6 +2,9 @@
 
 ## [4.1.0] - 2026-09-22
 
+* schannel: graceful shutdown waits for the peer's `close_notify` (or read eof),
+  like the openssl and rustls filters
+
 * rustls: graceful shutdown waits for the peer's `close_notify` (or read eof),
   like the openssl filter, instead of completing right after sending its own
 
