@@ -4,7 +4,7 @@ use ntex_error::Error;
 use ntex_rt::spawn_blocking;
 use ntex_util::future::Either;
 
-use super::{Address, Connect, ConnectError};
+use super::{Address, Connect, ConnectError, message::parse};
 
 /// Lookup ip addresses for provided host
 pub(crate) async fn lookup<T: Address>(
@@ -13,17 +13,13 @@ pub(crate) async fn lookup<T: Address>(
 ) -> Result<Connect<T>, Error<ConnectError>> {
     if req.addr.is_some() || req.req.addr().is_some() {
         Ok(req)
-    } else if let Ok(ip) = req.host().parse() {
+    } else if let Ok(ip) = parse(req.host()).0.parse() {
         req.addr = Some(Either::Left(net::SocketAddr::new(ip, req.port())));
         Ok(req)
     } else {
         log::trace!("{tag}: DNS Resolver - resolving host {:?}", req.host());
 
-        let host = if req.host().contains(':') {
-            req.host().to_string()
-        } else {
-            format!("{}:{}", req.host(), req.port())
-        };
+        let host = (parse(req.host()).0.to_string(), req.port());
 
         let fut = spawn_blocking(move || net::ToSocketAddrs::to_socket_addrs(&host));
         match fut.await {
@@ -89,5 +85,34 @@ mod tests {
         let addrs: Vec<_> = res.addrs().collect();
         assert_eq!(addrs.len(), 1);
         assert!(addrs.contains(&addr));
+    }
+
+    #[ntex::test]
+    async fn resolver_ip_literals() {
+        for (host, port, expected) in [
+            ("127.0.0.1:8080", None, "127.0.0.1:8080"),
+            ("[::1]:8080", None, "[::1]:8080"),
+            ("[::1]", Some(9090), "[::1]:9090"),
+            ("::1", Some(9090), "[::1]:9090"),
+        ] {
+            let mut req = Connect::new(host);
+            if let Some(port) = port {
+                req = req.set_port(port);
+            }
+            let res = lookup(req, "").await.unwrap();
+            let addrs: Vec<_> = res.addrs().collect();
+            assert_eq!(addrs, vec![expected.parse().unwrap()], "{host}");
+        }
+
+        let uri = ntex_http::Uri::from_static("http://[::1]:8080/");
+        let res = lookup(Connect::new(uri), "").await.unwrap();
+        let addrs: Vec<_> = res.addrs().collect();
+        assert_eq!(addrs, vec!["[::1]:8080".parse().unwrap()]);
+
+        let res = lookup(Connect::new("localhost:8080"), "").await.unwrap();
+        assert!(
+            res.addrs()
+                .all(|a| a.port() == 8080 && a.ip().is_loopback())
+        );
     }
 }

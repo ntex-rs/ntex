@@ -92,7 +92,7 @@ where
         req: Connect<A>,
         ctx: Ctx<'_, Self, SharedCfg>,
     ) -> Result<Self::Res, Self::Error> {
-        let host = req.host().split(':').next().unwrap().to_string();
+        let host = crate::server_name(req.host()).to_string();
         let io = ctx.call(&self.svc, req).await?;
         self.connect(io, &host, ctx.st()).await
     }

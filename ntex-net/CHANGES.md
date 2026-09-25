@@ -2,6 +2,10 @@
 
 ## [4.1.0] - 2026-09-23
 
+* Fix IPv6 host handling in `Connect`: parse the port of `[v6]:port`, and
+  resolve `[v6]`, `[v6]:port` and bare `v6` hosts (including `Uri` hosts)
+  without DNS lookup
+
 * Fix corrupted output in the polling backend when a write includes inline
   pages. The write vector pointed into each page before it was moved into
   place, so for a page stored inline it pointed at a reused local, and the

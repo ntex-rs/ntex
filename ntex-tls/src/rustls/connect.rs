@@ -80,7 +80,7 @@ where
         ctx: Ctx<'_, Self, SharedCfg>,
     ) -> Result<Self::Res, Self::Error> {
         let cfg = ctx.st().get::<TlsConfig>();
-        let host = req.host().split(':').next().unwrap().to_owned();
+        let host = crate::server_name(req.host()).to_owned();
 
         let io = ctx.call(&self.svc, req).await?;
         log::trace!("{}: TLS Handshake start for: {host:?}", cfg.tag());

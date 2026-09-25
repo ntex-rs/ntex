@@ -2,6 +2,8 @@
 
 ## [4.1.0] - 2026-09-22
 
+* Fix IPv6 server name extraction in openssl, rustls and schannel connectors
+
 * openssl: enable read-ahead, fewer BIO reads per TLS record
 
 * openssl: read into uninitialized buffer via ssl_read_uninit

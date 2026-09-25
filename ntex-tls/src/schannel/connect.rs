@@ -66,7 +66,7 @@ where
         ctx: Ctx<'_, Self, SharedCfg>,
     ) -> Result<Self::Res, Self::Error> {
         let cfg = ctx.st().get::<TlsConfig>();
-        let host = message.host().split(':').next().unwrap().to_string();
+        let host = crate::server_name(message.host()).to_string();
 
         let io = ctx.call(&self.svc, message).await?;
         let tag = io.tag();
