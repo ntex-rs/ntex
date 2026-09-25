@@ -134,6 +134,56 @@ async fn test_openssl_read_before_error() {
     assert!(io.recv(&BytesCodec).await.unwrap().is_none());
 }
 
+#[cfg(feature = "openssl")]
+#[ntex::test]
+async fn test_openssl_shutdown_sends_close_notify() {
+    use std::io::{Read, Write};
+
+    use ntex::server::openssl;
+    use tls_openssl::ssl::{ShutdownState, SslConnector, SslMethod, SslVerifyMode};
+
+    let srv = test_server(async || {
+        service(openssl::SslAcceptor::new(ssl_acceptor())).and_then(async move |io: Io<_>| {
+            let item = io.recv(&BytesCodec).await.unwrap().unwrap();
+            io.send(item, &BytesCodec).await.unwrap();
+            // graceful shutdown, must deliver TLS close_notify to the peer
+            io.shutdown().await.unwrap();
+            Ok::<_, io::Error>(())
+        })
+    });
+
+    // raw blocking openssl client
+    let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+    builder.set_verify(SslVerifyMode::NONE);
+    let sock = std::net::TcpStream::connect(srv.addr()).unwrap();
+    sock.set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .unwrap();
+    let mut tls = builder.build().connect("localhost", sock).unwrap();
+
+    tls.write_all(b"hello").unwrap();
+    tls.flush().unwrap();
+
+    let mut echo = [0u8; 5];
+    tls.read_exact(&mut echo).unwrap();
+    assert_eq!(&echo, b"hello");
+
+    // keep reading until EOF. Depending on the OpenSSL version a TCP close
+    // without close_notify is reported as an error or as `Ok(0)`, so the
+    // shutdown state tells whether close_notify was received
+    let mut tmp = [0u8; 1024];
+    loop {
+        match tls.read(&mut tmp) {
+            Ok(0) => break,
+            Ok(_) => continue,
+            Err(e) => panic!("expected clean EOF (close_notify), got error: {e:?}"),
+        }
+    }
+    assert!(
+        tls.get_shutdown().contains(ShutdownState::RECEIVED),
+        "peer closed without close_notify"
+    );
+}
+
 #[cfg(all(windows, feature = "openssl"))]
 #[ntex::test]
 async fn test_schannel_string() {

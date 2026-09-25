@@ -1,6 +1,6 @@
 //! An implementation of TLS streams backed by Windows Schannel.
 #![cfg(windows)]
-use std::{any, cell::RefCell, cmp, io, mem, ptr, slice, task::Poll};
+use std::{any, cell::UnsafeCell, cmp, io, mem, ptr, slice, task::Poll};
 
 use ntex_bytes::{BufMut, BytesMut};
 use ntex_io::{Filter, FilterBuf, FilterLayer, Io, Layer, types};
@@ -64,7 +64,7 @@ pub struct PeerCert(pub Vec<u8>);
 #[derive(Debug)]
 /// An implementation of TLS streams backed by Windows Schannel.
 pub struct SchannelFilter {
-    inner: RefCell<Schannel>,
+    inner: UnsafeCell<Schannel>,
 }
 
 #[derive(Debug)]
@@ -523,7 +523,7 @@ impl FilterLayer for SchannelFilter {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         const H2: &[u8] = b"h2";
 
-        let inner = self.inner.borrow();
+        let inner = self.inner();
         if inner.state == State::Handshaking {
             return None;
         }
@@ -546,7 +546,7 @@ impl FilterLayer for SchannelFilter {
     }
 
     fn shutdown(&self, buf: &FilterBuf<'_>) -> io::Result<Poll<()>> {
-        let mut inner = self.inner.borrow_mut();
+        let inner = self.inner_mut();
         if inner.state == State::Streaming {
             // pending application data has been encrypted by process_write_buf
             inner.state = State::Closed;
@@ -556,7 +556,7 @@ impl FilterLayer for SchannelFilter {
     }
 
     fn process_read_buf(&self, rb: &FilterBuf<'_>) -> io::Result<()> {
-        let mut inner = self.inner.borrow_mut();
+        let inner = self.inner_mut();
         if inner.state == State::Handshaking {
             loop {
                 let state = rb.with_write_buffers(|_, dst| {
@@ -588,7 +588,7 @@ impl FilterLayer for SchannelFilter {
     }
 
     fn process_write_buf(&self, wb: &FilterBuf<'_>) -> io::Result<()> {
-        let mut inner = self.inner.borrow_mut();
+        let inner = self.inner_mut();
         if inner.state != State::Streaming {
             return Ok(());
         }
@@ -608,8 +608,20 @@ impl FilterLayer for SchannelFilter {
 }
 
 impl SchannelFilter {
+    fn inner(&self) -> &Schannel {
+        // SAFETY: the filter is single-threaded and no method re-enters the
+        // filter while it holds a reference to the state.
+        unsafe { &*self.inner.get() }
+    }
+
+    #[allow(clippy::mut_from_ref)]
+    fn inner_mut(&self) -> &mut Schannel {
+        // SAFETY: see inner().
+        unsafe { &mut *self.inner.get() }
+    }
+
     fn start_handshake(&self, buf: &FilterBuf<'_>) -> io::Result<HandshakeState> {
-        let mut inner = self.inner.borrow_mut();
+        let inner = self.inner_mut();
         buf.with_write_buffers(|_, dst| {
             let state = inner.ctx.handshake_step(None, dst)?;
             if state == HandshakeState::Done {
@@ -620,7 +632,7 @@ impl SchannelFilter {
     }
 
     fn is_handshaking(&self) -> bool {
-        self.inner.borrow().state == State::Handshaking
+        self.inner().state == State::Handshaking
     }
 }
 
@@ -630,7 +642,7 @@ pub async fn connect<F: Filter>(
     config: ClientConfig,
 ) -> io::Result<Io<Layer<SchannelFilter, F>>> {
     let filter = SchannelFilter {
-        inner: RefCell::new(Schannel {
+        inner: UnsafeCell::new(Schannel {
             ctx: Context::new(domain, &config)?,
             state: State::Handshaking,
         }),
