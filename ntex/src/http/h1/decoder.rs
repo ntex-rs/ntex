@@ -101,9 +101,12 @@ impl<T: MessageType> MessageDecoder<T> {
                     if inner.val.as_mut().unwrap().headers_mut().len() >= inner.cfg.max_headers {
                         return Poll::Ready(Err(DecodeError::MaxHeaders));
                     }
-                    let name =
+                    // the parser validates name characters, but not its length
+                    let Ok(name) =
                         HeaderName::from_bytes(&buf[inner.hdr.name.start..inner.hdr.name.end])
-                            .unwrap();
+                    else {
+                        return Poll::Ready(Err(DecodeError::Header));
+                    };
 
                     // SAFETY: ntex-httparse checks header value for validity
                     let value = unsafe {
@@ -887,6 +890,20 @@ mod tests {
                 _ => unreachable!("Error expected"),
             }
         }};
+    }
+
+    #[test]
+    fn test_too_long_header_name() {
+        let mut buf = BytesMut::from("GET / HTTP/1.1\r\n");
+        let reader = MessageDecoder::<Request>::default();
+        assert!(reader.decode(&mut buf).unwrap().is_none());
+
+        // the partial name stays within the buffer limit
+        buf.extend_from_slice("a".repeat(64 * 1024 - 16).as_bytes());
+        assert!(reader.decode(&mut buf).unwrap().is_none());
+
+        buf.extend_from_slice(b"aaaaaaaaaaaaaaaaaaaa: v\r\n\r\n");
+        assert!(matches!(reader.decode(&mut buf), Err(DecodeError::Header)));
     }
 
     #[test]

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* Fix HTTP/1 decoder panic on header names longer than 65535 bytes, the
+  request is rejected with a header decode error
+
 * Continue the interrupted HTTP/1 payload read-rate interval when payload
   timing resumes after backpressure, instead of starting a new interval, and
   check an interval that expired before the pause
