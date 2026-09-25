@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+* `ClientConfig::set_h1_keepalive(Seconds::ZERO)` and `set_h1_lifetime(Seconds::ZERO)` disable
+  the idle and lifetime checks, as for the HTTP/2 settings; previously pooled connections were
+  never reused
+
 * Fix HTTP client pool shutdown leaving requests waiting for a connection pending forever,
   keeping idle connections open and accepting new requests
 

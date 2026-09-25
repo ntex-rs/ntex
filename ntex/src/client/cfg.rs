@@ -136,7 +136,9 @@ impl ClientConfig {
     /// A pooled connection that has been idle longer than this period is not
     /// reused. Expiration is checked lazily, when a connection for the same
     /// host is next requested; the expired connection is closed at that point.
-    /// The default is 15 seconds.
+    /// A zero duration disables the idle check; use
+    /// [`ClientRequest::force_close`](super::ClientRequest::force_close) to
+    /// avoid reusing a connection. The default is 15 seconds.
     pub fn set_h1_keepalive<T: Into<Seconds>>(mut self, dur: T) -> Self {
         self.h1_keep_alive = dur.into().into();
         self
@@ -148,7 +150,8 @@ impl ClientConfig {
     /// HTTP/2 connections use [`set_h2_lifetime`](Self::set_h2_lifetime).
     /// A connection older than this period is not reused, regardless of how
     /// recently it was used. Like the keep-alive period, this is checked when a
-    /// connection for the same host is next requested. The default is 75 seconds.
+    /// connection for the same host is next requested. A zero duration disables
+    /// the limit. The default is 75 seconds.
     pub fn set_h1_lifetime<T: Into<Seconds>>(mut self, dur: T) -> Self {
         self.h1_lifetime = dur.into().into();
         self

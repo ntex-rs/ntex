@@ -338,8 +338,9 @@ impl Inner {
         if let Some(ref mut connections) = self.available.get_mut(key) {
             while let Some(conn) = connections.pop_back() {
                 // check if it still usable
-                if (now - conn.used) > self.cfg.h1_keep_alive
-                    || (now - conn.created) > self.cfg.h1_lifetime
+                if (!self.cfg.h1_keep_alive.is_zero() && (now - conn.used) > self.cfg.h1_keep_alive)
+                    || (!self.cfg.h1_lifetime.is_zero()
+                        && (now - conn.created) > self.cfg.h1_lifetime)
                 {
                     let io = conn.io;
                     spawn(async move {
@@ -964,6 +965,50 @@ mod tests {
         let res = crate::time::timeout(Millis(500), pipe.call(req("host1"))).await;
         assert!(res.unwrap().is_err());
         assert_eq!(store.borrow().len(), 3);
+    }
+
+    #[crate::rt_test]
+    async fn test_h1_zero_keepalive_lifetime() {
+        async fn reused(cfg: ClientConfig) -> bool {
+            let cfg = SharedCfg::new("C").add(cfg).build();
+            let store = Rc::new(RefCell::new(Vec::new()));
+            let store2 = store.clone();
+            let pool = ConnectionPool::new(
+                ConnectorPipeline::new(boxed::service(fn_service(move |_| {
+                    let (client, server) = IoTest::create();
+                    store2.borrow_mut().push(server);
+                    Box::pin(async move {
+                        Ok(IoBoxed::from(nio::Io::new(client, SharedCfg::default())))
+                    })
+                }))),
+                cfg.get(),
+            );
+            let pipe = Pipeline::new(cfg, pool.clone());
+            let req = Connect {
+                uri: Uri::try_from("http://localhost/test").unwrap(),
+                addr: None,
+            };
+            pipe.call(req).await.unwrap().release(false);
+
+            let mut inner = pool.0.inner.borrow_mut();
+            for conn in inner.available.values_mut().flatten() {
+                conn.used = secs_ago(3600);
+                conn.created = secs_ago(3600);
+            }
+            matches!(inner.acquire(&h2_key()), Acquire::Acquired(..))
+        }
+
+        // zero disables idle and lifetime checks
+        assert!(
+            reused(
+                ClientConfig::new()
+                    .set_h1_keepalive(Seconds::ZERO)
+                    .set_h1_lifetime(Seconds::ZERO)
+            )
+            .await
+        );
+        assert!(!reused(ClientConfig::new().set_h1_lifetime(Seconds::ZERO)).await);
+        assert!(!reused(ClientConfig::new().set_h1_keepalive(Seconds::ZERO)).await);
     }
 
     #[crate::rt_test]
