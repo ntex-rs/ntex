@@ -562,6 +562,7 @@ impl Acquired {
             let mut inner = inner.borrow_mut();
             inner.acquired -= 1;
             let close = close
+                || inner.stopped
                 || matches!(&io, ConnectionType::H1(io) if !io.is_active() || io.is_read_eof());
             if close {
                 log::trace!(
@@ -653,6 +654,37 @@ mod tests {
         assert!(c2.is_ok());
         assert_eq!(store.borrow().len(), 2);
         assert_eq!(pool.0.inner.borrow().acquired, 2);
+    }
+
+    #[crate::rt_test]
+    async fn test_release_after_stop() {
+        let store = Rc::new(RefCell::new(Vec::new()));
+        let store2 = store.clone();
+
+        let cfg = SharedCfg::new("C").add(ClientConfig::new()).build();
+        let pool = ConnectionPool::new(
+            ConnectorPipeline::new(boxed::service(fn_service(move |_| {
+                let (client, server) = IoTest::create();
+                store2.borrow_mut().push(server);
+                Box::pin(
+                    async move { Ok(IoBoxed::from(nio::Io::new(client, SharedCfg::default()))) },
+                )
+            }))),
+            cfg.get(),
+        );
+        let pipe = Pipeline::new(cfg, pool.clone());
+        let req = Connect {
+            uri: Uri::try_from("http://localhost/test").unwrap(),
+            addr: None,
+        };
+
+        let conn = pipe.call(req).await.unwrap();
+        pipe.shutdown().await;
+        assert!(pool.0.inner.borrow().stopped);
+
+        conn.release(false);
+        assert_eq!(pool.0.inner.borrow().acquired, 0);
+        assert!(pool.0.inner.borrow().available.is_empty());
     }
 
     #[crate::rt_test]

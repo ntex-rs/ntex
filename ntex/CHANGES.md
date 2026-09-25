@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+* Fix HTTP client pool keeping connections released after the pool is stopped
+
 * Fix HTTP client pool with connection limit `0` never waking requests
   waiting for a connection
 
