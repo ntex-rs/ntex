@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* Fix HTTP/1 client waiting for a body of `1xx`, `204`, or `304` responses
+  with `Content-Length` or `Transfer-Encoding` headers
+
 * Fix HTTP/1 websocket upgrade requests depending on header order to ignore
   `Content-Length: 0`, and dropping a non-zero `Content-Length`
 

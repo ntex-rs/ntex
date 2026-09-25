@@ -4,6 +4,7 @@ use ntex_http::header::{HeaderName, HeaderValue};
 use ntex_http::{Method, StatusCode, Uri, Version, header};
 use ntex_httparse::{self as httparse, HeaderParsed, Status};
 
+use super::encoder::is_bodyless;
 use crate::http::config::HttpServiceConfig;
 use crate::http::message::{ConnectionType, ResponseHead};
 use crate::http::{HeaderItem, error::DecodeError, header::HeaderMap, request::Request};
@@ -518,6 +519,12 @@ impl MessageType for ResponseHead {
 
         for ctype in st.connection_types() {
             self.set_connection_type(ctype);
+        }
+
+        // `1xx` (except `101`), `204` and `304` responses never have a body,
+        // `Content-Length` of `304` describes the selected representation
+        if is_bodyless(self.status) {
+            return Ok(PayloadType::None);
         }
 
         // message payload
@@ -1719,6 +1726,41 @@ mod tests {
         assert_eq!(chunk, Bytes::from_static(b"line"));
         let msg = pl.decode(&mut buf).unwrap().unwrap();
         assert!(msg.eof());
+    }
+
+    #[test]
+    fn test_response_bodyless_status() {
+        for (head, rest) in [
+            (
+                "HTTP/1.1 304 Not Modified\r\ncontent-length: 10\r\n\r\n",
+                "",
+            ),
+            ("HTTP/1.1 204 No Content\r\ncontent-length: 10\r\n\r\n", ""),
+            (
+                "HTTP/1.1 204 No Content\r\ntransfer-encoding: chunked\r\n\r\n",
+                "",
+            ),
+            (
+                "HTTP/1.1 100 Continue\r\ncontent-length: 2\r\n\r\n",
+                "HTTP/1.1 200 OK\r\n\r\n",
+            ),
+            ("HTTP/1.0 304 Not Modified\r\n\r\n", "next"),
+        ] {
+            let mut buf = BytesMut::from(format!("{head}{rest}").as_str());
+            let reader = MessageDecoder::<ResponseHead>::default();
+            let (_, pl) = reader.decode(&mut buf).unwrap().unwrap();
+            assert!(matches!(pl, PayloadType::None), "{head:?}");
+            assert_eq!(buf, rest.as_bytes(), "{head:?}");
+        }
+
+        let mut buf = BytesMut::from("HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok");
+        let reader = MessageDecoder::<ResponseHead>::default();
+        let (_, pl) = reader.decode(&mut buf).unwrap().unwrap();
+        let pl = pl.unwrap();
+        assert_eq!(
+            pl.decode(&mut buf).unwrap().unwrap().chunk().as_ref(),
+            b"ok"
+        );
     }
 
     #[test]

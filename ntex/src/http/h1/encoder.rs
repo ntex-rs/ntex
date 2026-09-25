@@ -280,7 +280,7 @@ impl<T: MessageType> MessageEncoder<T> {
 /// Returns `true` for statuses that never have a response body:
 /// informational (except `101 Switching Protocols`), `204 No Content`,
 /// and `304 Not Modified`.
-fn is_bodyless(status: StatusCode) -> bool {
+pub(super) fn is_bodyless(status: StatusCode) -> bool {
     status == StatusCode::NO_CONTENT
         || status == StatusCode::NOT_MODIFIED
         || (status.is_informational() && status != StatusCode::SWITCHING_PROTOCOLS)
