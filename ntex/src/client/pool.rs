@@ -276,10 +276,14 @@ impl Inner {
                 if (now - conn.used) > self.cfg.conn_keep_alive
                     || (now - conn.created) > self.cfg.conn_lifetime
                 {
-                    if let ConnectionType::H1(io) = conn.io {
-                        spawn(async move {
-                            let _ = io.shutdown().await;
-                        });
+                    match conn.io {
+                        ConnectionType::H1(io) => {
+                            spawn(async move {
+                                let _ = io.shutdown().await;
+                            });
+                        }
+                        // disconnects after in-flight streams are completed
+                        ConnectionType::H2(io) => io.close(),
                     }
                     continue;
                 }
@@ -654,6 +658,57 @@ mod tests {
         assert!(c2.is_ok());
         assert_eq!(store.borrow().len(), 2);
         assert_eq!(pool.0.inner.borrow().acquired, 2);
+    }
+
+    #[crate::rt_test]
+    async fn test_expired_h2_is_closed() {
+        let cfg = SharedCfg::new("C")
+            .add(ClientConfig::new().set_keepalive(Seconds(1)))
+            .build();
+        let pool = ConnectionPool::new(
+            ConnectorPipeline::new(boxed::service(fn_service(|_| {
+                Box::pin(async { Err(Error::from(ConnectError::Unresolved)) })
+            }))),
+            cfg.get(),
+        );
+
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(64 * 1024);
+        let io = nio::Io::new(client, SharedCfg::default());
+        let h2 = H2Client::new(h2::client::SimpleClient::new(
+            IoBoxed::from(io),
+            Scheme::HTTP,
+            ByteString::from_static("localhost"),
+        ));
+        let key = Key::from(Authority::from_static("localhost"));
+        let used = now()
+            .checked_sub(std::time::Duration::from_secs(2))
+            .unwrap();
+        pool.0
+            .inner
+            .borrow_mut()
+            .available
+            .entry(key.clone())
+            .or_default()
+            .push_back(AvailableConnection {
+                io: ConnectionType::H2(h2.clone()),
+                used,
+                created: used,
+            });
+
+        assert!(matches!(
+            pool.0.inner.borrow_mut().acquire(&key),
+            Acquire::Available
+        ));
+        // graceful disconnect, peer does not respond
+        for _ in 0..60 {
+            if h2.is_closed() {
+                break;
+            }
+            sleep(Millis(50)).await;
+        }
+        assert!(h2.is_closed());
+        assert!(server.is_closed());
     }
 
     #[crate::rt_test]
