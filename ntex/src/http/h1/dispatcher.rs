@@ -243,107 +243,110 @@ where
     Err: ResponseError + 'static,
 {
     fn poll_read_request(&mut self, cx: &mut Context<'_>) -> Poll<State<F, B, Err>> {
-        // stop dispatcher
-        if self.config.is_shutdown() {
-            log::trace!("{}: Service is shutting down", self.io.tag());
-            return Poll::Ready(self.ctl_svc_disconnect(ServiceDisconnectReason::Shutdown));
-        }
-
-        log::trace!("{}: Trying to read http message", self.io.tag());
-        self.release_write_timer();
-
-        let buffered = self.io.with_read_dst(|buf| buf.len()) as u32;
-        self.timers.headers_buffered(buffered);
-
-        let result = match self.io.poll_recv_decode(&self.codec, cx) {
-            Ok(decoded) => {
-                if let Some(st) = self.update_hdrs_timer(&decoded) {
-                    return Poll::Ready(st);
-                }
-                if let Some(item) = decoded.item {
-                    Ok(item)
-                } else {
-                    return Poll::Pending;
-                }
+        loop {
+            // stop dispatcher
+            if self.config.is_shutdown() {
+                log::trace!("{}: Service is shutting down", self.io.tag());
+                return Poll::Ready(self.ctl_svc_disconnect(ServiceDisconnectReason::Shutdown));
             }
-            Err(err) => Err(err),
-        };
 
-        // decode incoming bytes stream
-        let st = match result {
-            Ok((mut req, pl)) => {
-                log::trace!(
-                    "{}: Http message is received: {:?} and payload {:?}",
-                    self.io.tag(),
-                    req,
-                    pl
-                );
-                req.head_mut().io = CurrentIo::Ref(self.io.get_ref());
+            log::trace!("{}: Trying to read http message", self.io.tag());
+            self.release_write_timer();
 
-                // configure request payload
-                match pl {
-                    PayloadType::None => (),
-                    PayloadType::Payload(decoder) | PayloadType::Stream(decoder) => {
-                        let (ps, pl) = bstream::channel();
-                        req.replace_payload(http::Payload::H1(pl));
-                        self.payload = Some((decoder, ps));
+            let buffered = self.io.with_read_dst(|buf| buf.len()) as u32;
+            self.timers.headers_buffered(buffered);
 
-                        // the client does not send the body before `100 Continue`
-                        if !req.head().expect() {
-                            self.start_payload_timer();
+            let result = match self.io.poll_recv_decode(&self.codec, cx) {
+                Ok(decoded) => {
+                    if let Some(st) = self.update_hdrs_timer(&decoded) {
+                        return Poll::Ready(st);
+                    }
+                    if let Some(item) = decoded.item {
+                        Ok(item)
+                    } else {
+                        return Poll::Pending;
+                    }
+                }
+                Err(err) => Err(err),
+            };
+
+            // decode incoming bytes stream
+            let st = match result {
+                Ok((mut req, pl)) => {
+                    log::trace!(
+                        "{}: Http message is received: {:?} and payload {:?}",
+                        self.io.tag(),
+                        req,
+                        pl
+                    );
+                    req.head_mut().io = CurrentIo::Ref(self.io.get_ref());
+
+                    // configure request payload
+                    match pl {
+                        PayloadType::None => (),
+                        PayloadType::Payload(decoder) | PayloadType::Stream(decoder) => {
+                            let (ps, pl) = bstream::channel();
+                            req.replace_payload(http::Payload::H1(pl));
+                            self.payload = Some((decoder, ps));
+
+                            // the client does not send the body before `100 Continue`
+                            if !req.head().expect() {
+                                self.start_payload_timer();
+                            }
                         }
                     }
+                    self.control(Control::request(req))
                 }
-                self.control(Control::request(req))
-            }
-            Err(RecvError::WriteBackpressure) => {
-                if let Err(err) = ready!(self.poll_flush_timed(cx)) {
-                    log::trace!("{}: Peer is gone with {:?}", self.io.tag(), err);
-                    self.ctl_peer_gone(Some(err))
-                } else {
-                    ready!(self.poll_read_request(cx))
-                }
-            }
-            Err(RecvError::Decoder(err)) => {
-                // Malformed requests, respond with 400
-                log::trace!("{}: Malformed request: {:?}", self.io.tag(), err);
-                self.ctl_proto_err(err.into())
-            }
-            Err(RecvError::PeerGone(err)) => {
-                log::trace!("{}: Peer is gone with {:?}", self.io.tag(), err);
-                self.ctl_peer_gone(err)
-            }
-            Err(RecvError::KeepAlive) => {
-                if self.timers.active.is_write() {
-                    if let Err(err) = self.write_timer_expired() {
+                Err(RecvError::WriteBackpressure) => {
+                    if let Err(err) = ready!(self.poll_flush_timed(cx)) {
+                        log::trace!("{}: Peer is gone with {:?}", self.io.tag(), err);
                         self.ctl_peer_gone(Some(err))
                     } else {
-                        ready!(self.poll_read_request(cx))
+                        continue;
                     }
-                } else if self.timers.active == Timer::Headers {
-                    if let Err(err) = self.handle_timeout() {
-                        log::trace!("{}: Slow request timeout", self.io.tag());
-                        self.ctl_proto_err(err)
-                    } else {
-                        ready!(self.poll_read_request(cx))
-                    }
-                } else if self.codec.is_reading_hdrs() && self.codec.cfg.headers_read_rate.is_some()
-                {
-                    // a partial request head wins over keep-alive or client timeout
-                    let remains = self.io.with_read_dst(|buf| buf.len()) as u32;
-                    self.start_headers_timer(buffered, remains);
-                    ready!(self.poll_read_request(cx))
-                } else if self.timers.active == Timer::ClientTimeout {
-                    log::trace!("{}: Client timeout, no request", self.io.tag());
-                    self.ctl_proto_err(ProtocolError::SlowRequestTimeout)
-                } else {
-                    log::trace!("{}: Keep-alive timeout, close connection", self.io.tag());
-                    self.ctl_keepalive(true)
                 }
-            }
-        };
+                Err(RecvError::Decoder(err)) => {
+                    // Malformed requests, respond with 400
+                    log::trace!("{}: Malformed request: {:?}", self.io.tag(), err);
+                    self.ctl_proto_err(err.into())
+                }
+                Err(RecvError::PeerGone(err)) => {
+                    log::trace!("{}: Peer is gone with {:?}", self.io.tag(), err);
+                    self.ctl_peer_gone(err)
+                }
+                Err(RecvError::KeepAlive) => {
+                    if self.timers.active.is_write() {
+                        if let Err(err) = self.write_timer_expired() {
+                            self.ctl_peer_gone(Some(err))
+                        } else {
+                            continue;
+                        }
+                    } else if self.timers.active == Timer::Headers {
+                        if let Err(err) = self.handle_timeout() {
+                            log::trace!("{}: Slow request timeout", self.io.tag());
+                            self.ctl_proto_err(err)
+                        } else {
+                            continue;
+                        }
+                    } else if self.start_headers_timer(
+                        self.codec.is_reading_hdrs(),
+                        buffered,
+                        self.io.with_read_dst(|buf| buf.len()) as u32,
+                    ) {
+                        // a partial request head wins over keep-alive or client timeout
+                        continue;
+                    } else if self.timers.active == Timer::ClientTimeout {
+                        log::trace!("{}: Client timeout, no request", self.io.tag());
+                        self.ctl_proto_err(ProtocolError::SlowRequestTimeout)
+                    } else {
+                        log::trace!("{}: Keep-alive timeout, close connection", self.io.tag());
+                        self.ctl_keepalive(true)
+                    }
+                }
+            };
 
-        Poll::Ready(st)
+            return Poll::Ready(st);
+        }
     }
 
     fn send_response(&mut self, mut msg: Response<()>, body: ResponseBody<B>) -> State<F, B, Err> {
@@ -525,11 +528,11 @@ where
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), PayloadFailure>> {
         // check if payload data is required
-        if self.payload.is_none() {
+        let Some((_, sender)) = &self.payload else {
             return Poll::Ready(Ok(()));
-        }
+        };
 
-        match self.payload.as_ref().unwrap().1.poll_ready(cx) {
+        match sender.poll_ready(cx) {
             Poll::Ready(bstream::Status::Ready) => {
                 // read request payload
                 let mut updated = false;
@@ -540,80 +543,71 @@ where
                     } else {
                         None
                     };
-                    let recv_result = self
-                        .io
-                        .poll_recv_decode(&self.payload.as_ref().unwrap().0, cx);
+                    let Some((payload_codec, sender)) = self.payload.as_mut() else {
+                        break;
+                    };
 
-                    let res = match recv_result {
+                    let err = match self.io.poll_recv_decode(payload_codec, cx) {
                         Ok(decoded) => {
                             self.timers
                                 .payload_decoded(&self.io, decoded.consumed as u32);
-                            if let Some(item) = decoded.item {
-                                updated = true;
-                                Ok(item)
-                            } else {
-                                break;
+                            match decoded.item {
+                                Some(PayloadItem::Chunk(chunk)) => {
+                                    updated = true;
+                                    sender.feed_data(chunk);
+                                    continue;
+                                }
+                                Some(PayloadItem::Eof) => {
+                                    updated = true;
+                                    sender.feed_eof();
+                                    self.timers.payload_done(&self.io);
+                                    self.payload = None;
+                                    break;
+                                }
+                                None => break,
                             }
                         }
-                        Err(err) => Err(err),
+                        Err(RecvError::WriteBackpressure) => match self.poll_flush_timed(cx) {
+                            Poll::Ready(Ok(())) => continue,
+                            Poll::Ready(Err(err)) => PayloadFailure::PeerGone(Some(err)),
+                            Poll::Pending => {
+                                self.timers.pause_payload(&self.io);
+                                break;
+                            }
+                        },
+                        Err(RecvError::KeepAlive) if self.timers.active.is_write() => {
+                            if let Err(err) = self.write_timer_expired() {
+                                PayloadFailure::PeerGone(Some(err))
+                            } else {
+                                continue;
+                            }
+                        }
+                        Err(RecvError::KeepAlive) => {
+                            if let Some(buffered) = buffered {
+                                let remains = self.io.with_read_dst(|buf| buf.len());
+                                let p = &mut self.timers.progress;
+                                p.consumed = p
+                                    .consumed
+                                    .saturating_add(buffered.saturating_sub(remains) as u32);
+                            }
+                            if let Err(err) = self.handle_timeout() {
+                                PayloadFailure::Protocol(err)
+                            } else {
+                                continue;
+                            }
+                        }
+                        Err(RecvError::PeerGone(err)) => {
+                            self.set_payload_error(PayloadError::Incomplete(
+                                err.as_ref().map(clone_io_error),
+                            ));
+                            PayloadFailure::PeerGone(err)
+                        }
+                        Err(RecvError::Decoder(e)) => {
+                            self.set_payload_error(PayloadError::Decode(e));
+                            PayloadFailure::Protocol(ProtocolError::Decode(e))
+                        }
                     };
-
-                    match res {
-                        Ok(PayloadItem::Chunk(chunk)) => {
-                            self.payload.as_mut().unwrap().1.feed_data(chunk);
-                        }
-                        Ok(PayloadItem::Eof) => {
-                            self.timers.payload_done(&self.io);
-                            self.payload.as_mut().unwrap().1.feed_eof();
-                            self.payload = None;
-                            break;
-                        }
-                        Err(err) => {
-                            let err = match err {
-                                RecvError::WriteBackpressure => match self.poll_flush_timed(cx) {
-                                    Poll::Ready(Ok(())) => continue,
-                                    Poll::Ready(Err(err)) => PayloadFailure::PeerGone(Some(err)),
-                                    Poll::Pending => {
-                                        self.timers.pause_payload(&self.io);
-                                        break;
-                                    }
-                                },
-                                RecvError::KeepAlive if self.timers.active.is_write() => {
-                                    if let Err(err) = self.write_timer_expired() {
-                                        PayloadFailure::PeerGone(Some(err))
-                                    } else {
-                                        continue;
-                                    }
-                                }
-                                RecvError::KeepAlive => {
-                                    if let Some(buffered) = buffered {
-                                        let remains = self.io.with_read_dst(|buf| buf.len());
-                                        let p = &mut self.timers.progress;
-                                        p.consumed =
-                                            p.consumed.saturating_add(
-                                                buffered.saturating_sub(remains) as u32,
-                                            );
-                                    }
-                                    if let Err(err) = self.handle_timeout() {
-                                        PayloadFailure::Protocol(err)
-                                    } else {
-                                        continue;
-                                    }
-                                }
-                                RecvError::PeerGone(err) => {
-                                    self.set_payload_error(PayloadError::Incomplete(
-                                        err.as_ref().map(clone_io_error),
-                                    ));
-                                    PayloadFailure::PeerGone(err)
-                                }
-                                RecvError::Decoder(e) => {
-                                    self.set_payload_error(PayloadError::Decode(e));
-                                    PayloadFailure::Protocol(ProtocolError::Decode(e))
-                                }
-                            };
-                            return Poll::Ready(Err(err));
-                        }
-                    }
+                    return Poll::Ready(Err(err));
                 }
                 if updated {
                     Poll::Ready(Ok(()))
@@ -718,37 +712,27 @@ where
         &mut self,
         decoded: &Decoded<(Request, PayloadType)>,
     ) -> Option<State<F, B, Err>> {
-        // got parsed frame
+        let partial = self.codec.is_reading_hdrs() || decoded.remains != 0;
+        let remains = decoded.remains as u32;
+
         if decoded.item.is_some() {
+            // got parsed frame
             self.timers.reset(&self.io);
         } else if self.timers.active == Timer::Headers {
             // received new data but not enough for parsing complete frame
-            self.timers.progress.remains = decoded.remains as u32;
+            self.timers.progress.remains = remains;
+        } else if self.start_headers_timer(
+            partial,
+            (decoded.consumed as u32).saturating_add(remains),
+            remains,
+        ) {
+            // the headers read rate bounds a partial request head, for the
+            // first request it starts with the first received byte
         } else if self.timers.active == Timer::ClientTimeout {
-            // only the headers read rate bounds the first request, it starts
-            // with the first received byte
-            if (self.codec.is_reading_hdrs() || decoded.remains != 0)
-                && self.codec.cfg.headers_read_rate.is_some()
-            {
-                self.start_headers_timer(
-                    (decoded.consumed as u32).saturating_add(decoded.remains as u32),
-                    decoded.remains as u32,
-                );
-            }
-        } else if self.codec.is_reading_hdrs() || decoded.remains != 0 {
-            // partial request head, without a headers read rate the
-            // keep-alive timer bounds it
-            if self.codec.cfg.headers_read_rate.is_some() {
-                self.start_headers_timer(
-                    (decoded.consumed as u32).saturating_add(decoded.remains as u32),
-                    decoded.remains as u32,
-                );
-            } else if self.codec.cfg.ka_enabled {
-                self.timers
-                    .start_keepalive(&self.io, self.codec.cfg.keep_alive);
-            }
-        } else if self.codec.keepalive() {
-            // no new data, start keep-alive timer
+            // only the headers read rate bounds the first request
+        } else if partial || self.codec.keepalive() {
+            // without a headers read rate the keep-alive timer bounds a
+            // partial request head
             if self.codec.cfg.ka_enabled {
                 self.timers
                     .start_keepalive(&self.io, self.codec.cfg.keep_alive);
@@ -760,13 +744,18 @@ where
         None
     }
 
-    fn start_headers_timer(&mut self, consumed: u32, remains: u32) {
-        self.timers.start_headers(
-            &self.io,
-            self.codec.cfg.headers_read_rate,
-            consumed,
-            remains,
-        );
+    /// Starts request-head timing for a partial request head.
+    ///
+    /// Returns `false` if the head is not partial or no headers read rate
+    /// is configured.
+    fn start_headers_timer(&mut self, partial: bool, consumed: u32, remains: u32) -> bool {
+        let rate = self.codec.cfg.headers_read_rate;
+        if partial && rate.is_some() {
+            self.timers.start_headers(&self.io, rate, consumed, remains);
+            true
+        } else {
+            false
+        }
     }
 
     /// Starts payload timing for the current request if it is not started
