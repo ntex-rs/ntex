@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* Accept and discard HTTP/1 chunked request and response trailer fields
+  instead of rejecting the payload
+
 * Fix HTTP/1 `Connection` header parsing ignoring tokens after the first
   5 bytes, matching tokens by prefix, and letting a later header override
   an earlier one

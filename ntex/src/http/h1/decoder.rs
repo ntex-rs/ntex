@@ -646,6 +646,8 @@ enum ChunkedState {
     BodyLf,
     EndCr,
     EndLf,
+    Trailer,
+    TrailerLf,
     End,
 }
 
@@ -754,6 +756,8 @@ impl ChunkedState {
             ChunkedState::BodyLf => ChunkedState::read_body_lf(body),
             ChunkedState::EndCr => ChunkedState::read_end_cr(body),
             ChunkedState::EndLf => ChunkedState::read_end_lf(body),
+            ChunkedState::Trailer => ChunkedState::read_trailer(body),
+            ChunkedState::TrailerLf => ChunkedState::read_trailer_lf(body),
             ChunkedState::End => Poll::Ready(Ok(ChunkedState::End)),
         }
     }
@@ -803,7 +807,38 @@ impl ChunkedState {
     fn read_end_cr(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, DecodeError>> {
         match byte!(rdr) {
             b'\r' => Poll::Ready(Ok(ChunkedState::EndLf)),
+            // trailer field, must start with a field name character
+            b if is_tchar(b) => Poll::Ready(Ok(ChunkedState::Trailer)),
             _ => Poll::Ready(Err(DecodeError::InvalidInput("Invalid chunk end CR"))),
+        }
+    }
+
+    /// Skips a trailer field line, trailer fields are not exposed.
+    fn read_trailer(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, DecodeError>> {
+        for (idx, b) in rdr.iter().enumerate() {
+            match *b {
+                b'\r' => {
+                    rdr.advance_to(idx + 1);
+                    return Poll::Ready(Ok(ChunkedState::TrailerLf));
+                }
+                b'\t' | b' '..=b'~' | 0x80..=0xff => (),
+                _ => {
+                    return Poll::Ready(Err(DecodeError::InvalidInput(
+                        "Invalid chunked trailer field",
+                    )));
+                }
+            }
+        }
+        rdr.clear();
+        Poll::Pending
+    }
+
+    fn read_trailer_lf(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, DecodeError>> {
+        match byte!(rdr) {
+            b'\n' => Poll::Ready(Ok(ChunkedState::EndCr)),
+            _ => Poll::Ready(Err(DecodeError::InvalidInput(
+                "Invalid chunked trailer field LF",
+            ))),
         }
     }
 
@@ -813,6 +848,11 @@ impl ChunkedState {
             _ => Poll::Ready(Err(DecodeError::InvalidInput("Invalid chunk end LF"))),
         }
     }
+}
+
+/// Checks for a `tchar`, see [RFC 9110 section 5.6.2](https://www.rfc-editor.org/rfc/rfc9110#section-5.6.2).
+fn is_tchar(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)
 }
 
 #[cfg(test)]
@@ -1550,10 +1590,6 @@ mod tests {
         let msg = pl.decode(&mut buf).unwrap().unwrap();
         assert_eq!(msg.chunk().as_ref(), b"li");
 
-        //trailers
-        //buf.feed_data("test: test\r\n");
-        //not_ready!(reader.parse(&mut buf, &mut readbuf));
-
         buf.extend(b"ne\r\n0\r\n");
         let msg = pl.decode(&mut buf).unwrap().unwrap();
         assert_eq!(msg.chunk().as_ref(), b"ne");
@@ -1561,6 +1597,59 @@ mod tests {
 
         buf.extend(b"\r\n");
         assert!(pl.decode(&mut buf).unwrap().unwrap().eof());
+    }
+
+    #[test]
+    fn test_parse_chunked_payload_trailers() {
+        let mut buf = BytesMut::from(
+            "POST /test HTTP/1.1\r\n\
+             transfer-encoding: chunked\r\n\r\n\
+             4\r\ndata\r\n0\r\n\
+             test: test\r\n\
+             x-checksum: \tabc 123\r\n\r\n\
+             GET /next HTTP/1.1\r\n\r\n",
+        );
+        let reader = MessageDecoder::<Request>::default();
+        let (_, pl) = reader.decode(&mut buf).unwrap().unwrap();
+        let pl = pl.unwrap();
+        assert_eq!(
+            pl.decode(&mut buf).unwrap().unwrap().chunk().as_ref(),
+            b"data"
+        );
+        assert!(pl.decode(&mut buf).unwrap().unwrap().eof());
+        let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(req.path(), "/next");
+        assert!(buf.is_empty());
+
+        // trailers split across reads
+        let mut buf = BytesMut::from(
+            "POST /test HTTP/1.1\r\n\
+             transfer-encoding: chunked\r\n\r\n",
+        );
+        let (_, pl) = reader.decode(&mut buf).unwrap().unwrap();
+        let pl = pl.unwrap();
+        for part in ["0\r\n", "te", "st: te", "st\r", "\n", "\r"] {
+            buf.extend(part.as_bytes());
+            assert!(pl.decode(&mut buf).unwrap().is_none(), "{part:?}");
+        }
+        buf.extend(b"\n");
+        assert!(pl.decode(&mut buf).unwrap().unwrap().eof());
+
+        // invalid trailers
+        for trailer in [
+            "test: te\nst\r\n\r\n",
+            "test\x00\r\n\r\n",
+            " test: v\r\n\r\n",
+            "test: v\rx",
+        ] {
+            let mut buf = BytesMut::from(
+                "POST /test HTTP/1.1\r\n\
+                 transfer-encoding: chunked\r\n\r\n0\r\n",
+            );
+            buf.extend(trailer.as_bytes());
+            let (_, pl) = reader.decode(&mut buf).unwrap().unwrap();
+            assert!(pl.unwrap().decode(&mut buf).is_err(), "{trailer:?}");
+        }
     }
 
     #[test]
