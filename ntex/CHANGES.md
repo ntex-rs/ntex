@@ -33,6 +33,10 @@
 
 * Add `PayloadConfig::content_type()` predicate, matching `JsonConfig::content_type()`
 
+* Start the HTTP/1 payload read-rate timer for `Expect: 100-continue` requests
+  only after `100 Continue` is sent, so slow expectation handling no longer
+  causes a `408 Request Timeout`
+
 ## [4.0.0] - 2026-09-18
 
 * Migrate to `ntex-service` 5 and its typed service state model. Service

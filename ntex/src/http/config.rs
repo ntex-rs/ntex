@@ -263,7 +263,10 @@ impl HttpServiceConfig {
     ///
     /// This setting protects HTTP/1 connections from clients that send a
     /// request body too slowly. The timer starts when the dispatcher begins
-    /// decoding a request payload. At the end of each `timeout`
+    /// decoding a request payload. For a request with `Expect: 100-continue`,
+    /// it starts only once `100 Continue` has been sent or the request has been
+    /// passed to the application, because the client does not send the body
+    /// before that. At the end of each `timeout`
     /// interval, another interval is granted only if more than `rate` bytes
     /// were decoded.
     ///

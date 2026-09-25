@@ -31,6 +31,8 @@ bitflags::bitflags! {
         const FIRST_REQUEST        = 0b0000_0001;
         /// Disconnect
         const DISCONNECT_SENT      = 0b0000_0010;
+        /// Payload timer is held until `100 Continue` or a response is sent
+        const READ_PL_EXPECT       = 0b0000_0100;
         /// Keep-alive is enabled
         const READ_KA_TIMEOUT      = 0b0001_0000;
         /// Read headers timer is enabled
@@ -194,6 +196,7 @@ where
                                         inner.send_response(res, body.into())
                                     }
                                     ControlResult::Continue(req) => {
+                                        inner.flags.remove(Flags::READ_PL_EXPECT);
                                         let result =
                                             inner.io.encode_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
                                         if let Err(err) = result {
@@ -325,6 +328,11 @@ where
                         let (ps, pl) = bstream::channel();
                         req.replace_payload(http::Payload::H1(pl));
                         self.payload = Some((decoder, ps));
+
+                        // the client does not send the body before `100 Continue`
+                        if req.head().expect() {
+                            self.flags.insert(Flags::READ_PL_EXPECT);
+                        }
                     }
                 }
                 self.control(Control::request(req))
@@ -375,6 +383,8 @@ where
             msg,
             body.size()
         );
+        self.flags.remove(Flags::READ_PL_EXPECT);
+
         // close connection if payload stream is dropped and not consumed
         if let Some((_pl, snd)) = &self.payload
             && snd.is_closed()
@@ -726,7 +736,8 @@ where
                     | Flags::READ_KA_TIMEOUT
                     | Flags::READ_HDRS_TIMEOUT
                     | Flags::READ_PL_TIMEOUT
-                    | Flags::READ_PL_PAUSED,
+                    | Flags::READ_PL_PAUSED
+                    | Flags::READ_PL_EXPECT,
             );
             self.io.stop_timer();
         } else if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
@@ -788,6 +799,9 @@ where
     }
 
     fn update_payload_timer(&mut self, decoded: &Decoded<PayloadItem>) {
+        if self.flags.contains(Flags::READ_PL_EXPECT) {
+            return;
+        }
         if self.flags.contains(Flags::READ_PL_TIMEOUT) {
             self.read_consumed = self.read_consumed.saturating_add(decoded.consumed as u32);
         } else if let Some(cfg) = &self.codec.cfg.payload_read_rate {
@@ -818,7 +832,8 @@ where
         }
     }
 
-    fn publish(&self, req: Request) -> State<F, B, Err> {
+    fn publish(&mut self, req: Request) -> State<F, B, Err> {
+        self.flags.remove(Flags::READ_PL_EXPECT);
         State::CallPublish {
             fut: self.service.call_nowait(req),
         }
@@ -1776,6 +1791,60 @@ mod tests {
 
         client.close().await;
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+    }
+
+    #[crate::rt_test]
+    async fn test_payload_timer_waits_for_expect_continue() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(
+                HttpServiceConfig::new()
+                    .set_payload_read_rate(Seconds(1), Seconds(2), 1)
+                    .set_keepalive(KeepAlive::Disabled),
+            )
+            .into();
+
+        let h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |mut req: Request| {
+                    let mut body = BytesMut::new();
+                    while let Some(chunk) = req.payload().recv().await {
+                        body.extend_from_slice(&chunk.unwrap());
+                    }
+                    assert_eq!(&body[..], b"test");
+                    Ok::<_, io::Error>(Response::Ok().build())
+                }),
+            ),
+            Pipeline::new(
+                (),
+                fn_service(async |req: Control<Base, io::Error>| {
+                    if let Control::Expect(exc) = req {
+                        // slower than the payload read-rate limits
+                        sleep(Millis(3100)).await;
+                        Ok::<_, DispatchError>(exc.ack())
+                    } else {
+                        Ok(req.ack())
+                    }
+                }),
+            ),
+            DispatcherConfig::default(),
+        );
+        crate::rt::spawn(h1);
+
+        client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\nexpect: 100-continue\r\n\r\n");
+        sleep(Millis(3300)).await;
+        let buf = client.read_any();
+        assert_eq!(&buf[..], b"HTTP/1.1 100 Continue\r\n\r\n");
+
+        client.write("test");
+        sleep(Millis(100)).await;
+        let buf = client.read_any();
+        assert!(buf.starts_with(b"HTTP/1.1 200 OK\r\n"), "{buf:?}");
     }
 
     #[crate::rt_test]
