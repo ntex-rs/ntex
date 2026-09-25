@@ -150,61 +150,47 @@ where
                     };
 
                     match result {
-                        Ok(ControlAck { result }) => {
-                            if let Some(err) = inner.pending_payload_error.take() {
-                                match err {
-                                    Either::Left(err) => inner.ctl_proto_err(err),
-                                    Either::Right(err) => inner.ctl_peer_gone(err),
+                        Ok(ControlAck { result }) => match result {
+                            ControlResult::Publish(req) => inner.publish(req),
+                            ControlResult::Response(res, body)
+                            | ControlResult::Error(res, body)
+                            | ControlResult::ProtocolError(res, body) => {
+                                inner.send_response(res, body.into())
+                            }
+                            ControlResult::Continue(req) => {
+                                let result =
+                                    inner.io.encode_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
+                                if let Err(err) = result {
+                                    *this.st = inner.ctl_peer_gone(Some(err));
+                                    continue;
                                 }
-                            } else {
-                                match result {
-                                    ControlResult::Publish(req) => inner.publish(req),
-                                    ControlResult::Response(res, body)
-                                    | ControlResult::Error(res, body)
-                                    | ControlResult::ProtocolError(res, body) => {
-                                        inner.send_response(res, body.into())
-                                    }
-                                    ControlResult::Continue(req) => {
-                                        let result =
-                                            inner.io.encode_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
-                                        if let Err(err) = result {
-                                            *this.st = inner.ctl_peer_gone(Some(err));
-                                            continue;
-                                        }
-                                        inner.start_payload_timer();
-                                        if req.upgrade() {
-                                            inner.ctl_upgrade(req)
-                                        } else {
-                                            inner.publish(req)
-                                        }
-                                    }
-                                    ControlResult::Expect(req) => {
-                                        inner.control(Control::expect(req))
-                                    }
-                                    ControlResult::ExpectFailed(res, body) => {
-                                        inner.set_disconnect(ServiceDisconnectReason::ExpectFailed);
-                                        inner.send_response(res, body.into())
-                                    }
-                                    ControlResult::Upgrade(req) => inner.ctl_upgrade(req),
-                                    ControlResult::UpgradeAck(req) => {
-                                        inner.set_disconnect(
-                                            ServiceDisconnectReason::UpgradeHandled,
-                                        );
-                                        inner.publish(req)
-                                    }
-                                    ControlResult::UpgradeHandled => inner.ctl_svc_disconnect(
-                                        ServiceDisconnectReason::UpgradeHandled,
-                                    ),
-                                    ControlResult::UpgradeFailed(res, body) => {
-                                        inner
-                                            .set_disconnect(ServiceDisconnectReason::UpgradeFailed);
-                                        inner.send_response(res, body.into())
-                                    }
-                                    ControlResult::Stop => inner.stop(),
-                                    ControlResult::Connect(_) => unreachable!(),
+                                inner.start_payload_timer();
+                                if req.upgrade() {
+                                    inner.ctl_upgrade(req)
+                                } else {
+                                    inner.publish(req)
                                 }
                             }
-                        }
+                            ControlResult::Expect(req) => inner.control(Control::expect(req)),
+                            ControlResult::ExpectFailed(res, body) => {
+                                inner.set_disconnect(ServiceDisconnectReason::ExpectFailed);
+                                inner.send_response(res, body.into())
+                            }
+                            ControlResult::Upgrade(req) => inner.ctl_upgrade(req),
+                            ControlResult::UpgradeAck(req) => {
+                                inner.set_disconnect(ServiceDisconnectReason::UpgradeHandled);
+                                inner.publish(req)
+                            }
+                            ControlResult::UpgradeHandled => {
+                                inner.ctl_svc_disconnect(ServiceDisconnectReason::UpgradeHandled)
+                            }
+                            ControlResult::UpgradeFailed(res, body) => {
+                                inner.set_disconnect(ServiceDisconnectReason::UpgradeFailed);
+                                inner.send_response(res, body.into())
+                            }
+                            ControlResult::Stop => inner.stop(),
+                            ControlResult::Connect(_) => unreachable!(),
+                        },
                         Err(err) => {
                             log::error!("{}: Control plain error: {}", inner.io.tag(), err);
                             return Poll::Ready(Err(err));
@@ -470,6 +456,11 @@ where
             } else {
                 Poll::Pending
             }
+        } else if let Some(err) = self.pending_payload_error.take() {
+            match err {
+                Either::Left(err) => Poll::Ready(self.ctl_proto_err(err)),
+                Either::Right(err) => Poll::Ready(self.ctl_peer_gone(err)),
+            }
         } else {
             // check for io changes, it could be close while waiting for service call
             let Poll::Ready(status) = self.io.poll_status_update(cx) else {
@@ -505,7 +496,12 @@ where
 
     /// Process request's payload
     fn poll_request_payload(&mut self, cx: &mut Context<'_>) -> Poll<Option<State<F, B, Err>>> {
-        if let Err(err) = ready!(self.poll_request_payload_inner::<F>(None, cx)) {
+        if let Some(err) = self.pending_payload_error.take() {
+            match err {
+                Either::Left(err) => Poll::Ready(Some(self.ctl_proto_err(err))),
+                Either::Right(err) => Poll::Ready(Some(self.ctl_peer_gone(err))),
+            }
+        } else if let Err(err) = ready!(self.poll_request_payload_inner::<F>(None, cx)) {
             Poll::Ready(Some(match err {
                 Either::Left(e) => self.ctl_proto_err(e),
                 Either::Right(e) => self.ctl_peer_gone(e),
