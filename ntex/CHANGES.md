@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* Fix HTTP/1 websocket upgrade requests depending on header order to ignore
+  `Content-Length: 0`, and dropping a non-zero `Content-Length`
+
 * Accept and discard HTTP/1 chunked request and response trailer fields
   instead of rejecting the payload
 

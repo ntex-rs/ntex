@@ -246,6 +246,7 @@ bitflags::bitflags! {
         const CONN_CLOSE   = 0b0001_0000;
         const CONN_KA      = 0b0010_0000;
         const CONN_UPGRADE = 0b0100_0000;
+        const WS_UPGRADE   = 0b1000_0000;
     }
 }
 
@@ -272,7 +273,10 @@ impl State {
         if self.flags.contains(Flags::CHUNKED) {
             // Chunked encoding
             PayloadLength::Payload(PayloadType::Payload(PayloadDecoder::chunked()))
-        } else if let Some(len) = self.content_length {
+        } else if let Some(len) = self.content_length
+            // some clients (dart) send "content-length: 0" with websocket upgrade
+            && !(len == 0 && self.flags.contains(Flags::WS_UPGRADE))
+        {
             // Content-Length
             PayloadLength::Payload(PayloadType::Payload(PayloadDecoder::length(len)))
         } else if self.flags.contains(Flags::HAS_UPGRADE) {
@@ -362,12 +366,12 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
             }
             header::UPGRADE => {
                 st.flags.insert(Flags::HAS_UPGRADE);
-                // check content-length, some clients (dart)
-                // sends "content-length: 0" with websocket upgrade
-                if let Ok(val) = value.to_str().map(str::trim)
-                    && val.eq_ignore_ascii_case("websocket")
+                if value
+                    .as_bytes()
+                    .trim_ascii()
+                    .eq_ignore_ascii_case(b"websocket")
                 {
-                    st.content_length = None;
+                    st.flags.insert(Flags::WS_UPGRADE);
                 }
             }
             header::EXPECT => {
@@ -1467,6 +1471,50 @@ mod tests {
         assert_eq!(req.head().connection_type(), ConnectionType::Upgrade);
         assert!(req.upgrade());
         assert!(pl.is_unhandled());
+    }
+
+    #[test]
+    fn test_http_request_upgrade_content_length() {
+        let reader = MessageDecoder::<Request>::default();
+
+        // zero content-length is ignored regardless of header order
+        for hdrs in [
+            "content-length: 0\r\nupgrade: websocket\r\n",
+            "upgrade: websocket\r\ncontent-length: 0\r\n",
+        ] {
+            let mut buf = BytesMut::from(
+                format!("GET /test HTTP/1.1\r\nconnection: upgrade\r\n{hdrs}\r\nraw").as_str(),
+            );
+            let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();
+            assert!(req.upgrade(), "{hdrs:?}");
+            assert!(pl.is_unhandled(), "{hdrs:?}");
+        }
+
+        // non-zero content-length delimits the body regardless of header order
+        for hdrs in [
+            "content-length: 4\r\nupgrade: websocket\r\n",
+            "upgrade: websocket\r\ncontent-length: 4\r\n",
+        ] {
+            let mut buf = BytesMut::from(
+                format!("GET /test HTTP/1.1\r\nconnection: upgrade\r\n{hdrs}\r\ndata").as_str(),
+            );
+            let (_, pl) = reader.decode(&mut buf).unwrap().unwrap();
+            let pl = pl.unwrap();
+            assert_eq!(
+                pl.decode(&mut buf).unwrap().unwrap().chunk().as_ref(),
+                b"data"
+            );
+            assert!(pl.decode(&mut buf).unwrap().unwrap().eof());
+        }
+
+        // duplicate content-length is rejected even after websocket upgrade
+        let mut buf = BytesMut::from(
+            "GET /test HTTP/1.1\r\n\
+             content-length: 4\r\n\
+             upgrade: websocket\r\n\
+             content-length: 10\r\n\r\n",
+        );
+        assert!(reader.decode(&mut buf).is_err());
     }
 
     #[test]
