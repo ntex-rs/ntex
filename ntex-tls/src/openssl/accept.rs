@@ -1,6 +1,5 @@
-use std::{cell::RefCell, fmt, io};
+use std::{fmt, io};
 
-use ntex_bytes::BytePages;
 use ntex_io::{Filter, Io, Layer};
 use ntex_service::cfg::Cfg;
 use ntex_service::{Ctx, Service, cfg::Configuration};
@@ -45,23 +44,17 @@ impl<F: Filter, St> Service<St, Io<F>> for SslAcceptor {
         let cfg: Cfg<TlsConfig> = io.cfg().ctx().get();
 
         time::timeout(cfg.handshake_timeout(), async {
-            let inner = super::IoInner {
-                source: None,
-                destination: BytePages::new(io.cfg().write_page_size()),
-            };
-            let mut stream = ssl::SslStream::new(ssl, inner).map_err(io::Error::other)?;
+            let mut stream = super::new_stream(&io, ssl)?;
             let _ = stream.accept();
 
-            let filter = SslFilter {
-                inner: RefCell::new(stream),
-            };
+            let filter = SslFilter::new(stream);
             let io = io.add_filter(filter);
 
             log::trace!("Accepting tls connection");
             loop {
                 let result = io.with_buf(|buf| {
                     let filter = io.filter();
-                    filter.with_buffers(buf, |_| filter.inner.borrow_mut().accept())
+                    filter.with_buffers(buf, |s, _| s.accept())
                 })?;
                 if super::handle_result(&io, result).await?.is_some() {
                     break;

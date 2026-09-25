@@ -99,6 +99,8 @@ impl std::fmt::Debug for Context {
 enum HandshakeState {
     Done,
     NeedRead,
+    /// More handshake input is already buffered, call again without reading.
+    Continue,
 }
 
 impl Context {
@@ -243,12 +245,14 @@ impl Context {
             return Err(sspi_error("InitializeSecurityContextW", status));
         }
 
+        let mut consumed = 0;
+        let mut extra = 0;
         if let Some(src) = input {
-            let extra = in_bufs
+            extra = in_bufs
                 .iter()
                 .find(|buf| buf.BufferType == SECBUFFER_EXTRA)
                 .map_or(0, |buf| buf.cbBuffer as usize);
-            let consumed = input_len.saturating_sub(extra);
+            consumed = input_len.saturating_sub(extra);
             if consumed != 0 {
                 src.advance_to(consumed);
             }
@@ -257,6 +261,8 @@ impl Context {
         if status == SEC_E_OK {
             self.query_stream_sizes()?;
             Ok(HandshakeState::Done)
+        } else if extra != 0 && consumed != 0 {
+            Ok(HandshakeState::Continue)
         } else {
             Ok(HandshakeState::NeedRead)
         }
@@ -505,11 +511,15 @@ impl FilterLayer for SchannelFilter {
     fn process_read_buf(&self, rb: &FilterBuf<'_>) -> io::Result<()> {
         let mut inner = self.inner.borrow_mut();
         if inner.state == State::Handshaking {
-            let state = rb.with_write_buffers(|_, dst| {
-                rb.with_read_src(|src| inner.ctx.handshake_step(src.as_mut(), dst))
-            })?;
-            if state == HandshakeState::NeedRead {
-                return Ok(());
+            loop {
+                let state = rb.with_write_buffers(|_, dst| {
+                    rb.with_read_src(|src| inner.ctx.handshake_step(src.as_mut(), dst))
+                })?;
+                match state {
+                    HandshakeState::Done => break,
+                    HandshakeState::NeedRead => return Ok(()),
+                    HandshakeState::Continue => {}
+                }
             }
             inner.state = State::Streaming;
         }
@@ -540,7 +550,8 @@ impl FilterLayer for SchannelFilter {
             while let Some(mut page) = w_src.take() {
                 let written = inner.ctx.encrypt(&page, w_dst)?;
                 page.advance_to(written);
-                if w_src.prepend(page) {
+                w_src.prepend(page);
+                if written == 0 {
                     break;
                 }
             }

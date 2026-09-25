@@ -2,6 +2,16 @@
 
 ## [4.1.0] - 2026-09-22
 
+* openssl: enable read-ahead, fewer BIO reads per TLS record
+
+* openssl: read into uninitialized buffer via ssl_read_uninit
+
+* openssl: replace RefCell with UnsafeCell in SslFilter
+
+* schannel: encrypt all pending write pages in one pass, not one record per transport write
+
+* schannel: continue the handshake when a step leaves buffered input
+
 * openssl: complete shutdown after a clean peer EOF, its close_notify will never arrive
 
 ## [4.0.0] - 2026-09-14

@@ -23,7 +23,7 @@ workspace = true
 default = []
 
 # openssl
-openssl = ["tls_openssl"]
+openssl = ["tls_openssl", "openssl-sys", "foreign-types-shared"]
 
 # rustls support
 rustls = ["tls_rustls", "tls_rustls/std"]
@@ -45,6 +45,8 @@ thiserror = { workspace = true }
 
 # openssl
 tls_openssl = { workspace = true, optional = true }
+openssl-sys = { workspace = true, optional = true }
+foreign-types-shared = { workspace = true, optional = true }
 
 # rustls
 tls_rustls = { workspace = true, optional = true }
