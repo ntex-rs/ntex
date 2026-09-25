@@ -2,6 +2,12 @@
 
 ## [4.1.0] - 2026-09-22
 
+* rustls: a zero handshake timeout disables the timeout on the acceptor as
+  documented, instead of failing handshakes that take longer than a timer tick
+
+* rustls: complete the handshake when the peer's last handshake flight is read
+  together with its eof, instead of failing with `NotConnected`
+
 * openssl: a zero handshake timeout disables the timeout on the acceptor as
   documented, instead of failing handshakes that take longer than a timer tick
 

@@ -49,13 +49,14 @@ impl TlsServerFilter {
     ) -> Result<Io<Layer<TlsServerFilter, F>>, io::Error> {
         log::trace!("{}: Initiate server connection", io.tag());
 
-        time::timeout(timeout, async {
+        time::timeout_checked(timeout, async {
             let mut session = ServerConnection::new(cfg).map_err(io::Error::other)?;
             session.set_buffer_limit(Some(io.cfg().write_page_size().capacity()));
             let io = io.add_filter(TlsServerFilter {
                 session: UnsafeCell::new(session),
             });
 
+            let mut eof = false;
             loop {
                 let (wants_write, handshaking) = {
                     let s = unsafe { &*io.filter().session.get() };
@@ -66,9 +67,7 @@ impl TlsServerFilter {
                 }
 
                 if handshaking {
-                    io.read_notify().await?.ok_or_else(|| {
-                        io::Error::new(io::ErrorKind::NotConnected, "disconnected")
-                    })?;
+                    super::wait_for_read(&io, &mut eof).await?;
                 } else {
                     log::trace!("{}: TLS Handshake successed", io.tag());
                     return Ok(io);

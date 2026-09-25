@@ -42,6 +42,7 @@ impl TlsClientFilter {
             session: UnsafeCell::new(session),
         });
 
+        let mut eof = false;
         loop {
             let (wants_write, handshaking) = {
                 let s = unsafe { &*io.filter().session.get() };
@@ -52,9 +53,7 @@ impl TlsClientFilter {
             }
 
             if handshaking {
-                io.read_notify()
-                    .await?
-                    .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "disconnected"))?;
+                super::wait_for_read(&io, &mut eof).await?;
             } else {
                 return Ok(io);
             }
