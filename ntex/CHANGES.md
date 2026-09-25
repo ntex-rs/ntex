@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* Fix undefined behavior in the HTTP/1 encoder number formatting, which
+  created an uninitialized buffer
+
 * Fix HTTP/1 decoder panic on header names longer than 65535 bytes, the
   request is rejected with a header decode error
 

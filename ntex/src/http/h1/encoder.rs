@@ -4,7 +4,7 @@
     clippy::cast_sign_loss,
     clippy::too_many_arguments
 )]
-use std::{cell::Cell, cmp, io::Write, marker::PhantomData, mem, ptr, slice};
+use std::{cell::Cell, cmp, io::Write, marker::PhantomData, ptr, slice};
 
 use crate::http::config::DateService;
 use crate::http::error::EncodeError;
@@ -476,8 +476,7 @@ fn write_content_length(mut n: u64, bytes: &mut BytePages) {
 pub(crate) fn convert_usize<B: BufMut>(mut n: u64, bytes: &mut B, eol: bool) {
     unsafe {
         let mut curr: isize = 39;
-        #[allow(invalid_value, clippy::uninit_assumed_init)]
-        let mut buf: [u8; 41] = mem::MaybeUninit::uninit().assume_init();
+        let mut buf = [0u8; 41];
         buf[39] = b'\r';
         buf[40] = b'\n';
         let buf_ptr = buf.as_mut_ptr();
@@ -574,6 +573,18 @@ mod tests {
         assert!(data.contains("connection: close\r\n"));
         assert!(data.contains("authorization: another authorization\r\n"));
         assert!(data.contains("date: date\r\n"));
+    }
+
+    #[test]
+    fn test_convert_usize() {
+        for n in [0, 7, 42, 999, 10_000, 123_456_789, u64::MAX] {
+            let mut b = BytePages::default();
+            convert_usize(n, &mut b, false);
+            assert_eq!(b.take().unwrap().as_ref(), n.to_string().as_bytes());
+
+            convert_usize(n, &mut b, true);
+            assert_eq!(b.take().unwrap().as_ref(), format!("{n}\r\n").as_bytes());
+        }
     }
 
     #[test]
