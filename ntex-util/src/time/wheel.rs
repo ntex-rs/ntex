@@ -174,7 +174,9 @@ impl TimerHandle {
 
 impl Drop for TimerHandle {
     fn drop(&mut self) {
-        TIMER.with(|t| {
+        // the wheel is already destroyed if the handle is dropped by
+        // another thread-local destructor
+        let _ = TIMER.try_with(|t| {
             t.with_wheel(|w| {
                 w.unlink(self.0.get());
                 w.timers.remove(self.0.get());
@@ -721,6 +723,31 @@ mod tests {
     use super::*;
     use crate::time::{Millis, interval, sleep};
 
+    /// A handle dropped by a thread-local destructor after the wheel is
+    /// destroyed must not panic.
+    #[test]
+    fn test_drop_handle_after_wheel_destroyed() {
+        use std::cell::RefCell;
+
+        thread_local! {
+            static HOLDER: RefCell<Option<TimerHandle>> = const { RefCell::new(None) };
+        }
+
+        let res = std::thread::spawn(|| {
+            // register the holder destructor first, the wheel is destroyed
+            // before it, destructors run in reverse registration order
+            HOLDER.with(|h| h.borrow_mut().take());
+            ntex::rt::System::build()
+                .build(ntex::rt::DefaultRuntime)
+                .block_on(async {
+                    let hnd = TimerHandle::new(1000);
+                    HOLDER.with(|h| *h.borrow_mut() = Some(hnd));
+                });
+        })
+        .join();
+        assert!(res.is_ok());
+    }
+
     fn entry() -> TimerEntry {
         TimerEntry {
             bucket: None,
@@ -891,17 +918,20 @@ mod tests {
     #[ntex::test]
     async fn test_late_wakeup_does_not_drift() {
         let start = Instant::now();
-        let fut1 = sleep(Millis(100));
-        let fut2 = sleep(Millis(300));
+        let fut1 = sleep(Millis(50));
+        let fut2 = sleep(Millis(600));
 
-        // block the thread, the driver wakes up 150ms late for `fut1`
-        std::thread::sleep(Duration::from_millis(250));
+        // block the thread, the driver wakes up ~450ms late for `fut1`.
+        // `fut2` expires at ~620ms, with drift it would expire ~550ms after
+        // the late wakeup, i.e. after ~1050ms. The bound leaves room for
+        // scheduling latency on loaded machines.
+        std::thread::sleep(Duration::from_millis(500));
         fut1.await;
         fut2.await;
 
         let elapsed = start.elapsed();
         assert!(
-            elapsed >= Duration::from_millis(300) && elapsed < Duration::from_millis(400),
+            elapsed >= Duration::from_millis(600) && elapsed < Duration::from_millis(900),
             "elapsed: {elapsed:?}"
         );
     }

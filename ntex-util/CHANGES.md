@@ -23,6 +23,9 @@
 * Dropping the lowres timer driver no longer stops the timer wheel, and dropping
   either driver no longer allows the other one to be spawned twice
 
+* Fix abort when a `TimerHandle` is dropped by a thread-local destructor after
+  the timer wheel is destroyed
+
 * Add `mpsc::Sender::poll_closed()` and `mpsc::Sender::closed()` to wait until the receiver
   is dropped or the channel is closed
 
