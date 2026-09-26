@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* `ws::WsTransport` echoes the peer's close code when it answers a close frame, and rejects text
+  frames with close code 1003 (`Unsupported`) instead of 1002
+
 * Dropping the receiver returned by `ws::WsConnection::receiver()` sends a close frame and
   closes the connection, instead of keeping it open until the peer sends another frame
 
