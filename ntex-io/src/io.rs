@@ -2878,6 +2878,44 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn filter_failure_output_passes_inner_filters() {
+        /// Answers any input with "err", closes and fails.
+        #[derive(Debug)]
+        struct FailOnInput;
+
+        impl FilterLayer for FailOnInput {
+            fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                if buf.with_read_src(|src| src.take().is_some()) {
+                    buf.with_write_buffers(|_, dst| dst.extend_from_slice(b"err"));
+                    buf.io().close();
+                    Err(io::Error::new(io::ErrorKind::InvalidData, "failed"))
+                } else {
+                    Ok(())
+                }
+            }
+
+            fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                buf.with_write_buffers(BytePages::move_to);
+                Ok(())
+            }
+        }
+
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = Io::new(server, SharedCfg::new("SRV"))
+            .add_filter(Passthrough)
+            .add_filter(FailOnInput);
+
+        client.write("input");
+        let err = io.recv(&BytesCodec).await.unwrap_err();
+        assert_eq!(err.into_inner().kind(), io::ErrorKind::InvalidData);
+        sleep(Millis(50)).await;
+
+        assert_eq!(client.read_any(), Bytes::from_static(b"err"));
+        assert!(io.is_closed());
+    }
+
+    #[ntex::test]
     async fn filter_shutdown_timeout_is_reported() {
         #[derive(Debug)]
         struct PendingShutdown;

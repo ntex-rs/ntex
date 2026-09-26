@@ -337,6 +337,10 @@ impl IoContext {
             // but buffered output is still drained by the transport shutdown
             // phase.
             if st.flags.is_stopping_filters() {
+                // Output the filters produced before the failure, for example
+                // a close notification, may sit in an intermediate buffer that
+                // the transport shutdown phase does not drain.
+                let _ = st.buffer.process_write_buf_force(&self.0);
                 stop_filters(st, Some(err));
                 IoTaskStatus::Pause
             } else {

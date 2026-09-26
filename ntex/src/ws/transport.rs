@@ -41,19 +41,10 @@ impl WsTransport {
         f.insert(flags);
         self.flags.set(f);
     }
-}
 
-impl FilterLayer for WsTransport {
-    #[inline]
-    fn shutdown(&self, buf: &FilterBuf<'_>) -> io::Result<Poll<()>> {
-        let flags = self.flags.get();
-        if !flags.contains(Flags::CLOSED) {
+    fn send_close(&self, buf: &FilterBuf<'_>, code: CloseCode) {
+        if !self.flags.get().contains(Flags::CLOSED) {
             self.insert_flags(Flags::CLOSED);
-            let code = if flags.contains(Flags::PROTO_ERR) {
-                CloseCode::Protocol
-            } else {
-                CloseCode::Normal
-            };
             let _ = buf.with_write_buffers(|_, w_dst| {
                 self.codec.encode(
                     Message::Close(Some(CloseReason {
@@ -64,6 +55,23 @@ impl FilterLayer for WsTransport {
                 )
             });
         }
+    }
+
+    /// Fails the connection: sends a protocol error close frame and starts a
+    /// graceful shutdown, so the frame is delivered before the connection
+    /// is closed with `err`.
+    fn fail(&self, buf: &FilterBuf<'_>, err: io::Error) -> io::Error {
+        self.insert_flags(Flags::PROTO_ERR);
+        self.send_close(buf, CloseCode::Protocol);
+        buf.io().close();
+        err
+    }
+}
+
+impl FilterLayer for WsTransport {
+    #[inline]
+    fn shutdown(&self, buf: &FilterBuf<'_>) -> io::Result<Poll<()>> {
+        self.send_close(buf, CloseCode::Normal);
 
         // Wait for the peer's close frame. It cannot arrive after read eof,
         // and a failed connection is not required to wait for it.
@@ -81,8 +89,7 @@ impl FilterLayer for WsTransport {
                 loop {
                     let Some(frame) = self.codec.decode(src).map_err(|e| {
                         log::trace!("Failed to decode ws codec frames: {e:?}");
-                        self.insert_flags(Flags::PROTO_ERR);
-                        io::Error::new(io::ErrorKind::InvalidData, e)
+                        self.fail(buf, io::Error::new(io::ErrorKind::InvalidData, e))
                     })?
                     else {
                         break;
@@ -95,17 +102,21 @@ impl FilterLayer for WsTransport {
                             Item::FirstBinary(bin) | Item::Continue(bin) | Item::Last(bin),
                         ) => dst.extend_from_slice(&bin),
                         Frame::Continuation(Item::FirstText(_)) => {
-                            self.insert_flags(Flags::PROTO_ERR);
-                            return Err(io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                "WebSocket Text continuation frames are not supported",
+                            return Err(self.fail(
+                                buf,
+                                io::Error::new(
+                                    io::ErrorKind::InvalidData,
+                                    "WebSocket Text continuation frames are not supported",
+                                ),
                             ));
                         }
                         Frame::Text(_) => {
-                            self.insert_flags(Flags::PROTO_ERR);
-                            return Err(io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                "WebSockets Text frames are not supported",
+                            return Err(self.fail(
+                                buf,
+                                io::Error::new(
+                                    io::ErrorKind::InvalidData,
+                                    "WebSockets Text frames are not supported",
+                                ),
                             ));
                         }
                         Frame::Ping(msg) => {
@@ -128,6 +139,11 @@ impl FilterLayer for WsTransport {
 
     fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
         buf.with_write_buffers(|w_src, w_dst| -> Result<(), super::error::ProtocolError> {
+            if self.flags.get().contains(Flags::CLOSED) {
+                // nothing can be sent after the close frame
+                w_src.clear();
+                return Ok(());
+            }
             while let Some(page) = w_src.take() {
                 self.codec.encode_page(page, w_dst)?;
             }
@@ -208,11 +224,55 @@ mod tests {
     }
 
     fn assert_close_sent(client: &IoTest) {
+        assert_close_code(client, CloseCode::Normal);
+    }
+
+    fn assert_close_code(client: &IoTest, code: CloseCode) {
         let mut data = BytesMut::from(&client.read_any()[..]);
         assert_eq!(
             Codec::new().set_client_mode().decode(&mut data).unwrap(),
-            Some(Frame::Close(Some(CloseCode::Normal.into())))
+            Some(Frame::Close(Some(code.into())))
         );
+    }
+
+    async fn protocol_error_sends_close<F: Filter>(client: IoTest, io: Io<F>, input: Bytes) {
+        client.remote_buffer_cap(1024);
+        let io = WsTransport::create(io, Codec::new());
+
+        client.write(input);
+        let err = io.recv(&crate::codec::BytesCodec).await.unwrap_err();
+        assert_eq!(err.into_inner().kind(), io::ErrorKind::InvalidData);
+        sleep(Millis(50)).await;
+
+        assert_close_code(&client, CloseCode::Protocol);
+        assert!(io.is_closed());
+    }
+
+    #[crate::rt_test]
+    async fn invalid_frame_sends_protocol_close() {
+        // an unmasked frame from a client
+        let (client, server) = IoTest::create();
+        let input = Bytes::from_static(&[0x82, 0x01, 0x00]);
+        protocol_error_sends_close(client, Io::from(server), input).await;
+    }
+
+    #[crate::rt_test]
+    async fn invalid_frame_sends_protocol_close_over_inner_filter() {
+        let (client, server) = IoTest::create();
+        let io = Io::from(server).add_filter(Passthrough);
+        let input = Bytes::from_static(&[0x82, 0x01, 0x00]);
+        protocol_error_sends_close(client, io, input).await;
+    }
+
+    #[crate::rt_test]
+    async fn text_frame_sends_protocol_close() {
+        let (client, server) = IoTest::create();
+        let mut input = BytePages::default();
+        Codec::new()
+            .set_client_mode()
+            .encodev(Message::Text("text".into()), &mut input)
+            .unwrap();
+        protocol_error_sends_close(client, Io::from(server), Bytes::from(input)).await;
     }
 
     async fn shutdown_waits_for_peer_close<F: Filter>(client: IoTest, io: Io<F>) {

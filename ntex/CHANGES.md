@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* `ws::WsTransport` sends a protocol error close frame (1002) before closing the connection on
+  invalid input, output written after the close frame is discarded
+
 * `ws::WsTransport` shutdown waits for the peer's close frame, until read EOF or the shutdown
   timeout, instead of closing the connection right after sending its own
 

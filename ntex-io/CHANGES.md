@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* Fix output written by a filter that fails on read during shutdown being lost when the filter
+  is stacked over another filter
+
 * Fix output written by a pending filter shutdown not reaching the transport when the filter
   is stacked over another filter
 
