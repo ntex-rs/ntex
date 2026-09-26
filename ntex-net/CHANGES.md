@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* Fix lost input in the compio backend, a read shorter than the unconsumed
+  input already in the read buffer was dropped
+
 * Do not report `NotConnected` from a graceful shutdown as a transport error, macOS
   fails `shutdown()` with `ENOTCONN` once the peer has closed the connection
 
