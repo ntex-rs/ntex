@@ -396,7 +396,9 @@ impl StreamCtl {
                 // to run inline.
                 crate::helpers::drain_raw_socket(fd);
                 ntex_rt::spawn(ntex_rt::spawn_blocking(move || {
-                    syscall!(libc::shutdown(fd, libc::SHUT_RDWR)).map(|_| ())
+                    crate::helpers::shutdown_result(
+                        syscall!(libc::shutdown(fd, libc::SHUT_RDWR)).map(|_| ()),
+                    )
                 }))
             })
             .await

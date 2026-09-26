@@ -144,3 +144,32 @@ async fn shutdown_times_out_on_stalled_peer() {
     assert_eq!(res.unwrap_err().kind(), ErrorKind::TimedOut);
     drop(sock);
 }
+
+/// A graceful shutdown after the peer has closed the connection must succeed.
+///
+/// Some platforms, e.g. macOS, fail `shutdown()` with `ENOTCONN` once the peer
+/// has closed, the connection is closed either way.
+#[ntex::test]
+async fn shutdown_after_peer_close_succeeds() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let srv = test_server(async move || {
+        let tx = tx.clone();
+        fn_service(move |io: Io<_>| {
+            let tx = tx.clone();
+            async move {
+                // read until the peer closes
+                while let Ok(Some(_)) = io.recv(&BytesCodec).await {}
+                ntex::time::sleep(Duration::from_millis(100)).await;
+                let _ = tx.send(io.shutdown().await.map_err(|e| e.kind()));
+                Ok::<_, ()>(())
+            }
+        })
+    });
+
+    let mut sock = net::TcpStream::connect(srv.addr()).unwrap();
+    sock.write_all(b"ping").unwrap();
+    drop(sock);
+
+    let res = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(res, Ok(()));
+}

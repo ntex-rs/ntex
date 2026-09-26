@@ -55,7 +55,7 @@ impl Stream for TcpStream {
     fn terminate(&self) -> io::Result<()> {
         let sock = socket2::SockRef::from(self);
         crate::helpers::drain_socket(&sock);
-        sock.shutdown(std::net::Shutdown::Both)
+        crate::helpers::shutdown_result(sock.shutdown(std::net::Shutdown::Both))
     }
 
     fn abort(&self) {
@@ -88,7 +88,7 @@ impl Stream for tok_io::net::UnixStream {
     fn terminate(&self) -> io::Result<()> {
         let sock = socket2::SockRef::from(self);
         crate::helpers::drain_socket(&sock);
-        sock.shutdown(std::net::Shutdown::Both)
+        crate::helpers::shutdown_result(sock.shutdown(std::net::Shutdown::Both))
     }
 
     fn abort(&self) {

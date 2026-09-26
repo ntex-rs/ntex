@@ -97,7 +97,7 @@ impl Terminate for compio_net::TcpStream {
     fn terminate(&self) -> io::Result<()> {
         let sock = socket2::SockRef::from(self);
         crate::helpers::drain_socket(&sock);
-        sock.shutdown(std::net::Shutdown::Both)
+        crate::helpers::shutdown_result(sock.shutdown(std::net::Shutdown::Both))
     }
 
     fn abort(&self) {
@@ -109,7 +109,7 @@ impl Terminate for compio_net::UnixStream {
     fn terminate(&self) -> io::Result<()> {
         let sock = socket2::SockRef::from(self);
         crate::helpers::drain_socket(&sock);
-        sock.shutdown(std::net::Shutdown::Both)
+        crate::helpers::shutdown_result(sock.shutdown(std::net::Shutdown::Both))
     }
 
     fn abort(&self) {
