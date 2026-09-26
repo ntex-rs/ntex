@@ -830,3 +830,314 @@ async fn test_peer_close_notify_closes_io() {
     assert!(close_notify, "peer did not receive close_notify");
     drop(io);
 }
+
+/// Writes in small pieces with pauses, pieces span record boundaries, so the
+/// peer reads partial records and the start of the next record with the end
+/// of the previous one.
+#[derive(Debug)]
+struct Trickle {
+    sock: std::net::TcpStream,
+    pending: Vec<u8>,
+    piece: usize,
+}
+
+impl Trickle {
+    fn new(sock: std::net::TcpStream) -> Self {
+        Self {
+            sock,
+            pending: Vec::new(),
+            piece: 0,
+        }
+    }
+
+    /// Sends complete pieces, or everything with `all`.
+    fn send(&mut self, all: bool) -> std::io::Result<()> {
+        const PIECES: [usize; 5] = [1, 3, 7, 100, 1000];
+        loop {
+            let piece = PIECES[self.piece % PIECES.len()];
+            if self.pending.is_empty() || (!all && self.pending.len() < piece) {
+                return Ok(());
+            }
+            let n = self.pending.len().min(piece);
+            std::io::Write::write_all(&mut self.sock, &self.pending[..n])?;
+            self.pending.drain(..n);
+            self.piece += 1;
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+}
+
+impl std::io::Read for Trickle {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.send(true)?;
+        self.sock.read(buf)
+    }
+}
+
+impl std::io::Write for Trickle {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.pending.extend_from_slice(buf);
+        self.send(false)?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.send(true)
+    }
+}
+
+/// Records split at any byte, including handshake messages and record headers.
+#[ntex::test]
+async fn test_fragmented_records() {
+    use ntex::{codec::BytesCodec, connect::Connect, service::Pipeline};
+    use std::io::{Read, Write};
+    use tls_openssl::ssl::SslVersion;
+
+    let payload: Vec<u8> = (0..40_000u32).map(|i| (i % 251) as u8).collect();
+    for version in [SslVersion::TLS1_2, SslVersion::TLS1_3] {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let data = payload.clone();
+        let server = std::thread::spawn(move || {
+            let (sock, _) = listener.accept().unwrap();
+            sock.set_nodelay(true).unwrap();
+            sock.set_read_timeout(Some(std::time::Duration::from_secs(10)))
+                .unwrap();
+            let mut stream = ssl_acceptor_version(Some(version))
+                .accept(Trickle::new(sock))
+                .unwrap();
+            stream.write_all(&data).unwrap();
+            stream.flush().unwrap();
+            let mut buf = [0u8; 4];
+            stream.read_exact(&mut buf).unwrap();
+            assert_eq!(&buf, b"ping");
+            stream.write_all(b"pong").unwrap();
+            stream.flush().unwrap();
+            let mut buf = [0u8; 64];
+            assert_eq!(stream.read(&mut buf).unwrap(), 0, "no close_notify");
+            let _ = stream.shutdown();
+            let _ = stream.flush();
+        });
+
+        let conn = Pipeline::new(SharedCfg::default(), schannel_connector());
+        let io = conn
+            .call(Connect::new("localhost").set_addr(Some(addr)))
+            .await
+            .unwrap();
+        let mut received = Vec::new();
+        while received.len() < payload.len() {
+            received.extend_from_slice(&io.recv(&BytesCodec).await.unwrap().unwrap());
+        }
+        assert!(received == payload, "{version:?}");
+        io.send(ntex::util::Bytes::from_static(b"ping"), &BytesCodec)
+            .await
+            .unwrap();
+        assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "pong");
+        io.shutdown().await.unwrap();
+        join(server).await;
+    }
+}
+
+/// Buffers writes until the next read or an explicit `send()`.
+#[derive(Debug)]
+struct Coalesce {
+    sock: std::net::TcpStream,
+    pending: Vec<u8>,
+}
+
+impl Coalesce {
+    fn send(&mut self) -> std::io::Result<()> {
+        std::io::Write::write_all(&mut self.sock, &self.pending)?;
+        self.pending.clear();
+        Ok(())
+    }
+}
+
+impl std::io::Read for Coalesce {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.send()?;
+        self.sock.read(buf)
+    }
+}
+
+impl std::io::Write for Coalesce {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.pending.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Application data in the same segment as the server's last handshake flight
+/// (TLS 1.2 `Finished`, TLS 1.3 session tickets).
+#[ntex::test]
+async fn test_data_with_last_handshake_flight() {
+    use ntex::{codec::BytesCodec, connect::Connect, service::Pipeline};
+    use std::io::{Read, Write};
+    use tls_openssl::ssl::SslVersion;
+
+    for version in [SslVersion::TLS1_2, SslVersion::TLS1_3] {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (sock, _) = listener.accept().unwrap();
+            sock.set_read_timeout(Some(std::time::Duration::from_secs(10)))
+                .unwrap();
+            let sock = Coalesce {
+                sock,
+                pending: Vec::new(),
+            };
+            let mut stream = ssl_acceptor_version(Some(version)).accept(sock).unwrap();
+            stream.write_all(b"hello").unwrap();
+            stream.get_mut().send().unwrap();
+            let mut buf = [0u8; 64];
+            assert_eq!(stream.read(&mut buf).unwrap(), 0, "no close_notify");
+            let _ = stream.shutdown();
+            stream.get_mut().send().unwrap();
+        });
+
+        let conn = Pipeline::new(SharedCfg::default(), schannel_connector());
+        let io = conn
+            .call(Connect::new("localhost").set_addr(Some(addr)))
+            .await
+            .unwrap();
+        let item = ntex::time::timeout(ntex::time::Millis(5_000), io.recv(&BytesCodec))
+            .await
+            .expect("data after the handshake is not delivered");
+        assert_eq!(item.unwrap().unwrap(), "hello", "{version:?}");
+        io.shutdown().await.unwrap();
+        join(server).await;
+    }
+}
+
+/// A corrupted record fails the read (or the connect, if it arrives with the
+/// handshake), instead of hanging or reporting a clean eof.
+#[ntex::test]
+async fn test_corrupted_record_fails_read() {
+    use ntex::{codec::BytesCodec, connect::Connect, service::Pipeline};
+    use std::io::{Read, Write};
+    use tls_openssl::ssl::SslVersion;
+
+    for (version, mid_stream) in [
+        (SslVersion::TLS1_2, true),
+        (SslVersion::TLS1_3, true),
+        (SslVersion::TLS1_2, false),
+        (SslVersion::TLS1_3, false),
+    ] {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            let (sock, _) = listener.accept().unwrap();
+            sock.set_read_timeout(Some(std::time::Duration::from_secs(10)))
+                .unwrap();
+            let mut stream = ssl_acceptor_version(Some(version)).accept(sock).unwrap();
+            if mid_stream {
+                stream.write_all(b"hello").unwrap();
+                let mut buf = [0u8; 4];
+                stream.read_exact(&mut buf).unwrap();
+                assert_eq!(&buf, b"ping");
+            }
+            // application data record with a forged payload
+            let mut record = vec![0x17, 0x03, 0x03, 0x00, 0x40];
+            record.extend((0..0x40u8).map(|i| i.wrapping_mul(37)));
+            stream.get_ref().write_all(&record).unwrap();
+            // keep the connection open
+            let _ = done_rx.recv_timeout(std::time::Duration::from_secs(10));
+        });
+
+        let conn = Pipeline::new(SharedCfg::default(), schannel_connector());
+        let connect = conn.call(Connect::new("localhost").set_addr(Some(addr)));
+        let io = ntex::time::timeout(ntex::time::Millis(5_000), connect)
+            .await
+            .expect("connect hangs");
+        if mid_stream {
+            let io = io.unwrap();
+            assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "hello");
+            io.send(ntex::util::Bytes::from_static(b"ping"), &BytesCodec)
+                .await
+                .unwrap();
+            let item = ntex::time::timeout(ntex::time::Millis(5_000), io.recv(&BytesCodec))
+                .await
+                .expect("corrupted record is not detected");
+            assert!(item.is_err(), "{version:?}: {item:?}");
+        } else if let Ok(io) = io {
+            // TLS 1.3 completes the handshake before the record is read
+            let item = ntex::time::timeout(ntex::time::Millis(5_000), io.recv(&BytesCodec))
+                .await
+                .expect("corrupted record is not detected");
+            assert!(item.is_err(), "{version:?}: {item:?}");
+        }
+        done_tx.send(()).unwrap();
+        join(server).await;
+    }
+}
+
+/// Server initiated TLS 1.2 renegotiation, data is exchanged with the new keys.
+#[ntex::test]
+async fn test_tls12_renegotiation() {
+    use ntex::{codec::BytesCodec, connect::Connect, service::Pipeline};
+    use std::io::{Read, Write};
+    use std::time::{Duration, Instant};
+    use tls_openssl::ssl::{SslOptions, SslVersion};
+
+    unsafe extern "C" {
+        fn SSL_renegotiate(ssl: *mut std::ffi::c_void) -> std::ffi::c_int;
+        fn SSL_renegotiate_pending(ssl: *const std::ffi::c_void) -> std::ffi::c_int;
+        fn SSL_do_handshake(ssl: *mut std::ffi::c_void) -> std::ffi::c_int;
+    }
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let mut builder = ssl_acceptor_builder(Some(SslVersion::TLS1_2));
+        builder.clear_options(SslOptions::NO_RENEGOTIATION);
+        let (sock, _) = listener.accept().unwrap();
+        sock.set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        let mut stream = builder.build().accept(sock).unwrap();
+        stream.write_all(b"hello").unwrap();
+
+        // `SslRef` is the `SSL` pointer
+        let ssl = std::ptr::from_ref(stream.ssl()).cast_mut().cast();
+        assert_eq!(unsafe { SSL_renegotiate(ssl) }, 1);
+        // sends HelloRequest, the client's handshake is processed by reads
+        assert_eq!(unsafe { SSL_do_handshake(ssl) }, 1);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut buf = [0u8; 64];
+        while unsafe { SSL_renegotiate_pending(ssl) } != 0 {
+            assert!(Instant::now() < deadline, "renegotiation is not completed");
+            match stream.read(&mut buf) {
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) => {}
+                res => panic!("unexpected read: {res:?}"),
+            }
+        }
+        stream.write_all(b"pong").unwrap();
+        stream
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        assert_eq!(stream.read(&mut buf).unwrap(), 0, "no close_notify");
+        let _ = stream.shutdown();
+    });
+
+    let conn = Pipeline::new(SharedCfg::default(), schannel_connector());
+    let io = conn
+        .call(Connect::new("localhost").set_addr(Some(addr)))
+        .await
+        .unwrap();
+    assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "hello");
+    let item = ntex::time::timeout(ntex::time::Millis(10_000), io.recv(&BytesCodec))
+        .await
+        .expect("data after renegotiation is not delivered");
+    assert_eq!(item.unwrap().unwrap(), "pong");
+    io.shutdown().await.unwrap();
+    join(server).await;
+}

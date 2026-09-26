@@ -41,6 +41,12 @@ pub use self::connect::TlsConnector;
 ///
 /// Clones share the credentials handle, so connections made with the same
 /// configuration can resume TLS sessions.
+///
+/// Schannel offers a cached session's protocol version only. After a TLS 1.2
+/// session with a server, the next connection to the same server name offers
+/// TLS 1.2 only and fails if the server no longer supports it. The cache
+/// expires after 10 hours by default (`ClientCacheTime`); a new configuration
+/// starts with an empty cache.
 #[derive(Clone, Debug)]
 pub struct ClientConfig {
     verify: bool,
