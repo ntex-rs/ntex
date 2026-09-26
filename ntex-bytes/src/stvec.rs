@@ -154,14 +154,29 @@ impl StorageVec {
         unsafe { (*self.0.as_ptr()).is_unique() }
     }
 
-    /// The caller must guarantee that `StorageVec` is not being used for
-    /// memory modification.
-    pub(crate) unsafe fn clone(&self) -> StorageVec {
-        let ref_cnt = self.0.as_ref().ref_count.fetch_add(1, Relaxed);
-        if ref_cnt == u32::MAX {
-            abort();
+    /// Returns an immutable view of the data, `self` stays usable.
+    ///
+    /// The view shares the allocation, so `self` is no longer unique while
+    /// it exists. There is never more than one `StorageVec` per allocation.
+    pub(crate) fn shallow_freeze(&self) -> Storage {
+        unsafe {
+            if self.len() <= INLINE_CAP {
+                Storage::from_ptr_inline(self.as_ptr(), self.len())
+            } else {
+                let inner = self.0.as_ref();
+                let ref_cnt = inner.ref_count.fetch_add(1, Relaxed);
+                if ref_cnt == u32::MAX {
+                    abort();
+                }
+
+                let offset = inner.offset as usize;
+                Storage {
+                    ptr: (self.0.as_ptr().cast::<u8>()).add(offset),
+                    len: self.len(),
+                    offset: NonZeroUsize::new_unchecked((offset << KIND_OFFSET_BITS) ^ KIND_VEC),
+                }
+            }
         }
-        StorageVec(self.0)
     }
 
     pub(crate) fn freeze(self) -> Storage {
@@ -571,8 +586,11 @@ mod tests {
     #[test]
     fn is_unique_synchronizes_with_release() {
         let mut st = StorageVec::with_capacity(64);
-        st.put_u8(1);
-        let other = unsafe { st.clone() };
+        for _ in 0..=INLINE_CAP {
+            st.put_u8(1);
+        }
+        let other = st.shallow_freeze();
+        assert!(!other.is_inline());
         let handle = std::thread::spawn(move || {
             let val = other.as_ref()[0];
             drop(other);

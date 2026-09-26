@@ -908,3 +908,57 @@ fn advance_to_does_not_truncate_count() {
         BytePage::from(b"hello".to_vec()).advance_to(CNT);
     });
 }
+
+fn storage_page(data: &[u8]) -> BytePage {
+    let mut buf = BytesMut::with_capacity(128);
+    buf.extend_from_slice(data);
+    let page = BytePage::from(buf);
+    assert_eq!(page.info(), ntex_bytes::info::PageKind::Storage);
+    page
+}
+
+#[test]
+fn page_clone_is_independent() {
+    let data = [b'a'; 64];
+
+    let mut p = storage_page(&data);
+    let c = p.clone();
+    p.advance_to(6);
+    assert_eq!(c, &data[..]);
+    assert_eq!(p, &data[6..]);
+
+    let p = storage_page(&data);
+    let c = p.clone();
+    let c2 = c.clone();
+    let mut m = BytesMut::from(p);
+    m[0] = b'X';
+    m.extend_from_slice(b"!!");
+    let mut m2 = BytesMut::from(c2);
+    m2.extend_from_slice(b"??");
+    assert_eq!(c, &data[..]);
+    assert_eq!(&m[..], [&b"X"[..], &data[1..], b"!!"].concat());
+    assert_eq!(&m2[..], [&data[..], b"??"].concat());
+
+    // a unique page is converted without a copy
+    let p = storage_page(&data);
+    let ptr = p.as_ref().as_ptr();
+    drop(p.clone());
+    assert_eq!(BytesMut::from(p).as_ptr(), ptr);
+}
+
+#[test]
+fn page_clone_across_threads() {
+    let data = [b'a'; 64];
+    let mut p = storage_page(&data);
+    let c = p.clone();
+
+    let t = std::thread::spawn(move || {
+        let mut c = c;
+        c.advance_to(1);
+        c
+    });
+    p.advance_to(2);
+    let c = t.join().unwrap();
+    assert_eq!(c, &data[1..]);
+    assert_eq!(p, &data[2..]);
+}

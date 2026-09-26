@@ -680,11 +680,11 @@ impl Clone for BytePage {
     fn clone(&self) -> Self {
         let inner = match &self.inner {
             StorageType::Bytes(b) => StorageType::Bytes(b.clone()),
-            StorageType::Storage(st) => {
-                // SAFETY: We garantee that `st` is not being used
-                // for modification. `st` is marked as non-unique after clone
-                StorageType::Storage(unsafe { st.clone() })
-            }
+            // The clone is an immutable view, `st` must stay the only
+            // handle that can modify the shared header and spare capacity
+            StorageType::Storage(st) => StorageType::Bytes(Bytes {
+                storage: st.shallow_freeze(),
+            }),
             StorageType::Vec(b) => StorageType::Bytes(Bytes::copy_from_slice(b)),
         };
 
@@ -794,7 +794,14 @@ impl From<BytePage> for BytesMut {
     fn from(page: BytePage) -> Self {
         match page.inner {
             StorageType::Bytes(b) => b.into(),
-            StorageType::Storage(storage) => BytesMut { storage },
+            // clones of the page may still read the data
+            StorageType::Storage(mut storage) => {
+                if storage.is_unique() {
+                    BytesMut { storage }
+                } else {
+                    BytesMut::copy_from_slice(storage.as_ref())
+                }
+            }
             StorageType::Vec(v) => BytesMut::copy_from_slice(&v),
         }
     }
@@ -1080,8 +1087,26 @@ mod tests {
         }
         let p2 = p.clone();
         assert_eq!(p, p2);
+        // short data is copied into an inline view
+        assert!(matches!(p2.inner, StorageType::Bytes(_)));
         if let StorageType::Storage(mut st) = p.inner {
+            assert!(st.is_unique());
+        } else {
+            panic!()
+        }
+
+        let mut p = BytePage::from(BytesMut::copy_from_slice([b'1'; 64]));
+        let p2 = p.clone();
+        assert_eq!(p, p2);
+        assert!(matches!(p2.inner, StorageType::Bytes(_)));
+        if let StorageType::Storage(ref mut st) = p.inner {
             assert!(!st.is_unique());
+        } else {
+            panic!()
+        }
+        drop(p2);
+        if let StorageType::Storage(mut st) = p.inner {
+            assert!(st.is_unique());
         } else {
             panic!()
         }

@@ -26,6 +26,8 @@
 
 * Fix `BytesMut::advance_to()` and `BytePage::advance_to()` truncating counts of 4 GiB or more
 
+* Fix clones of `BytePage` sharing mutable state, a clone is now an immutable view
+
 ## [1.9.0] (2026-07-17)
 
 * Mark `BytePage::as_ptr()` as `unsafe`, as it has additional requirements that make it unsafe
