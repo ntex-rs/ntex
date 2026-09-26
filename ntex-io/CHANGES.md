@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+<<<<<<< HEAD
 * Fix output written by a filter that fails on read during shutdown being lost when the filter
   is stacked over another filter
 
@@ -12,6 +13,10 @@
 
 * Rename `IoStatusUpdate::KeepAlive` to `IoStatusUpdate::Timeout`, it reports any
   dispatcher timer expiration
+=======
+* Rename `IoStatusUpdate::KeepAlive` and `RecvError::KeepAlive` to `Timeout`, they
+  report any dispatcher timer expiration
+>>>>>>> d906a1653 (Rename Reason::KeepAliveTimeout to Reason::KeepAlive)
 
 * Fix filter shutdown waiting for the shutdown timeout when the input it
   needs, such as the peer's TLS close_notify, arrived during the shutdown.

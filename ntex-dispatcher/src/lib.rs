@@ -59,7 +59,7 @@ pub enum Reason<U: Encoder + Decoder> {
     /// Incoming bytes could not be decoded.
     Decoder(<U as Decoder>::Error),
     /// The connection exceeded its keep-alive timeout.
-    KeepAliveTimeout,
+    KeepAlive,
     /// A complete frame was not received within the configured read deadline.
     ReadTimeout,
     /// Write backpressure stayed enabled for longer than the configured
@@ -259,7 +259,7 @@ where
                                         return Poll::Pending;
                                     }
                                 }
-                                Err(RecvError::KeepAlive) => {
+                                Err(RecvError::Timeout) => {
                                     if let Err(ctl) = inner.handle_timeout() {
                                         inner.st = inner.stop(ctl);
                                     }
@@ -609,7 +609,7 @@ where
                     "{}: Keep-alive error, stopping dispatcher",
                     self.shared.io.tag()
                 );
-                Err(Reason::KeepAliveTimeout)
+                Err(Reason::KeepAlive)
             }
             // external timeout, applies to idle connection
             Timer::Stopped if self.shared.inflight.get() == 0 => {
@@ -617,7 +617,7 @@ where
                     "{}: Idle timeout, stopping dispatcher",
                     self.shared.io.tag()
                 );
-                Err(Reason::KeepAliveTimeout)
+                Err(Reason::KeepAlive)
             }
             Timer::Stopped => Ok(()),
         }
@@ -650,7 +650,7 @@ where
             Reason::Io(err) => f.debug_tuple("Reason::Io").field(err).finish(),
             Reason::Encoder(err) => f.debug_tuple("Reason::Encoder").field(err).finish(),
             Reason::Decoder(err) => f.debug_tuple("Reason::Decoder").field(err).finish(),
-            Reason::KeepAliveTimeout => f.write_str("Reason::KeepAliveTimeout"),
+            Reason::KeepAlive => f.write_str("Reason::KeepAlive"),
             Reason::ReadTimeout => f.write_str("Reason::ReadTimeout"),
             Reason::WriteTimeout => f.write_str("Reason::WriteTimeout"),
         }
@@ -1082,7 +1082,7 @@ mod tests {
                             data.lock().unwrap().borrow_mut().push(0);
                             return Ok::<_, ()>(Some(bytes));
                         }
-                        DispatchItem::Stop(Reason::KeepAliveTimeout) => {
+                        DispatchItem::Stop(Reason::KeepAlive) => {
                             data.lock().unwrap().borrow_mut().push(1);
                         }
                         _ => (),
@@ -1130,7 +1130,7 @@ mod tests {
                             data.lock().unwrap().borrow_mut().push(0);
                             return Ok::<_, ()>(Some(bytes));
                         }
-                        DispatchItem::Stop(Reason::KeepAliveTimeout) => {
+                        DispatchItem::Stop(Reason::KeepAlive) => {
                             data.lock().unwrap().borrow_mut().push(1);
                         }
                         _ => (),
@@ -1180,7 +1180,7 @@ mod tests {
                             data.lock().unwrap().borrow_mut().push(0);
                             return Ok::<_, ()>(Some(bytes));
                         }
-                        DispatchItem::Stop(Reason::KeepAliveTimeout) => {
+                        DispatchItem::Stop(Reason::KeepAlive) => {
                             data.lock().unwrap().borrow_mut().push(1);
                         }
                         _ => (),
@@ -1668,7 +1668,7 @@ mod tests {
                             DispatchItem::Stop(Reason::ReadTimeout) => {
                                 data.lock().unwrap().borrow_mut().push(1);
                             }
-                            DispatchItem::Stop(Reason::KeepAliveTimeout) => {
+                            DispatchItem::Stop(Reason::KeepAlive) => {
                                 data.lock().unwrap().borrow_mut().push(2);
                             }
                             _ => (),
@@ -2002,7 +2002,7 @@ mod tests {
                                 data.lock().unwrap().borrow_mut().push(0);
                                 return Ok::<_, ()>(Some(bytes));
                             }
-                            DispatchItem::Stop(Reason::KeepAliveTimeout) => {
+                            DispatchItem::Stop(Reason::KeepAlive) => {
                                 data.lock().unwrap().borrow_mut().push(1);
                             }
                             _ => (),
@@ -2096,7 +2096,7 @@ mod tests {
                 DispatchItem::Control(Control::WBackPressureEnabled) => "bp-on",
                 DispatchItem::Control(Control::WBackPressureDisabled) => "bp-off",
                 DispatchItem::Stop(Reason::WriteTimeout) => "write-timeout",
-                DispatchItem::Stop(Reason::KeepAliveTimeout) => "keepalive",
+                DispatchItem::Stop(Reason::KeepAlive) => "keepalive",
                 DispatchItem::Stop(Reason::ReadTimeout) => "read-timeout",
                 DispatchItem::Stop(_) => "stop",
             };

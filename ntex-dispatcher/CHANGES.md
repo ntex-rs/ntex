@@ -2,8 +2,14 @@
 
 ## [Unreleased]
 
+<<<<<<< HEAD
 * Return the service error from the `DispatchItem::Stop` call, it was dropped and the dispatcher
   resolved to `Ok(())`
+=======
+* Rename `Reason::KeepAliveTimeout` to `Reason::KeepAlive`
+
+* Internal cleanup, drop `bitflags` and `pin-project-lite` dependencies
+>>>>>>> d906a1653 (Rename Reason::KeepAliveTimeout to Reason::KeepAlive)
 
 * Internal cleanup, drop `bitflags` and `pin-project-lite` dependencies
 

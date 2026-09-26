@@ -542,7 +542,7 @@ impl<F> Io<F> {
         loop {
             return match poll_fn(|cx| self.poll_recv(codec, cx)).await {
                 Ok(item) => Ok(Some(item)),
-                Err(RecvError::KeepAlive) => Err(Either::Right(io::Error::new(
+                Err(RecvError::Timeout) => Err(Either::Right(io::Error::new(
                     io::ErrorKind::TimedOut,
                     "Timeout",
                 ))),
@@ -841,7 +841,7 @@ impl<F> Io<F> {
         } else if st.flags.is_stopping() || st.flags.is_terminating() {
             Err(RecvError::PeerGone(st.error()))
         } else if st.flags.check_dispatcher_timeout() {
-            Err(RecvError::KeepAlive)
+            Err(RecvError::Timeout)
         } else if st.flags.is_wr_backpressure() {
             Err(RecvError::WriteBackpressure)
         } else {

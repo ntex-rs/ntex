@@ -314,7 +314,7 @@ where
                     log::trace!("{}: Peer is gone with {:?}", self.io.tag(), err);
                     self.ctl_peer_gone(err)
                 }
-                Err(RecvError::KeepAlive) => {
+                Err(RecvError::Timeout) => {
                     if self.timers.active.is_write() {
                         if let Err(err) = self.write_timer_expired() {
                             self.ctl_peer_gone(Some(err))
@@ -559,14 +559,14 @@ where
                                 break;
                             }
                         },
-                        Err(RecvError::KeepAlive) if self.timers.active.is_write() => {
+                        Err(RecvError::Timeout) if self.timers.active.is_write() => {
                             if let Err(err) = self.write_timer_expired() {
                                 PayloadFailure::PeerGone(Some(err))
                             } else {
                                 continue;
                             }
                         }
-                        Err(RecvError::KeepAlive) => {
+                        Err(RecvError::Timeout) => {
                             // the decode attempt can consume bytes without an item
                             let remains = self.io.with_read_dst(|buf| buf.len());
                             self.timers
