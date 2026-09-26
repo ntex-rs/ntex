@@ -1,6 +1,6 @@
 #![allow(clippy::missing_panics_doc)]
 use std::sync::{Arc, atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering};
-use std::{any::Any, any::TypeId, cell::RefCell, fmt, mem, panic, pin::Pin, thread};
+use std::{any::Any, any::TypeId, cell::RefCell, fmt, mem, panic, pin::Pin, rc::Rc, thread};
 
 use async_channel::{Receiver, Sender, unbounded};
 use parking_lot::Mutex;
@@ -9,7 +9,8 @@ use crate::{Handle, HashMap, Id, System};
 
 thread_local!(
     static ADDR: RefCell<Option<Arbiter>> = const { RefCell::new(None) };
-    static STORAGE: RefCell<HashMap<TypeId, Box<dyn Any>>> = RefCell::new(HashMap::default());
+    static STORAGE: RefCell<HashMap<TypeId, Rc<dyn Any>>> = RefCell::new(HashMap::default());
+    static ON_SHUTDOWN: RefCell<Vec<Box<dyn FnOnce()>>> = const { RefCell::new(Vec::new()) };
 );
 
 pub(super) static COUNT: AtomicUsize = AtomicUsize::new(99);
@@ -67,7 +68,7 @@ impl Arbiter {
         let aid = COUNT.fetch_add(1, Ordering::Relaxed);
         let arb = Arbiter::with_sender(id, aid, Arc::new(name), tx, Arc::default());
         ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
-        STORAGE.with(|cell| cell.borrow_mut().clear());
+        clear_storage();
 
         (
             arb,
@@ -129,7 +130,7 @@ impl Arbiter {
 
                 let sys2 = sys.clone();
                 let (stop, stop_rx) = oneshot::channel();
-                STORAGE.with(|cell| cell.borrow_mut().clear());
+                clear_storage();
 
                 let on_stop = Arc::new(Mutex::new(Vec::new()));
                 let on_stop2 = on_stop.clone();
@@ -166,6 +167,8 @@ impl Arbiter {
 
                 // unregister arbiter
                 sys2.unregister_arbiter(Id(id));
+                // skipped by `block_on` if the event loop panicked
+                run_shutdown_callbacks();
                 unsafe {
                     remove_all_items();
                 }
@@ -243,22 +246,48 @@ impl Arbiter {
     }
 
     /// Returns a value from thread-local arbiter storage, inserting it if absent.
+    ///
+    /// If the storage has already been destroyed because the thread is
+    /// exiting, the value returned by `f` is not stored.
     pub fn get_value<T, F>(f: F) -> T
     where
         T: Clone + 'static,
         F: FnOnce() -> T,
     {
-        STORAGE.with(move |cell| {
-            let mut st = cell.borrow_mut();
-            if let Some(boxed) = st.get(&TypeId::of::<T>())
-                && let Some(val) = (&**boxed as &(dyn Any + 'static)).downcast_ref::<T>()
-            {
-                return val.clone();
-            }
-            let val = f();
-            st.insert(TypeId::of::<T>(), Box::new(val.clone()));
-            val
-        })
+        let mut f = Some(f);
+        STORAGE
+            .try_with(|cell| {
+                let mut st = cell.borrow_mut();
+                if let Some(boxed) = st.get(&TypeId::of::<T>())
+                    && let Some(val) = (&**boxed as &(dyn Any + 'static)).downcast_ref::<T>()
+                {
+                    return val.clone();
+                }
+                let val = (f.take().unwrap())();
+                st.insert(TypeId::of::<T>(), Rc::new(val.clone()));
+                val
+            })
+            .unwrap_or_else(|_| (f.take().unwrap())())
+    }
+
+    /// Registers a callback to run when the current thread's arbiter shuts down.
+    ///
+    /// Callbacks run once, in registration order, on the arbiter's thread when
+    /// its stop is requested, by [`Arbiter::stop()`] or [`System::stop()`],
+    /// while the event loop is still running. An arbiter that ends without a
+    /// stop request, such as one driven by
+    /// [`SystemRunner::block_on()`](crate::SystemRunner::block_on), runs them
+    /// once its event loop has exited instead. A callback registered by
+    /// another callback runs in the same shutdown.
+    ///
+    /// If the thread is exiting and its thread-local storage has already been
+    /// destroyed, `f` is dropped without running.
+    pub fn on_shutdown<F>(f: F)
+    where
+        F: FnOnce() + 'static,
+    {
+        let f: Box<dyn FnOnce()> = Box::new(f);
+        let _ = ON_SHUTDOWN.try_with(move |cell| cell.borrow_mut().push(f));
     }
 
     #[must_use]
@@ -304,7 +333,10 @@ impl ArbiterController {
         loop {
             match self.rx.recv().await {
                 Ok(ArbiterCommand::Stop) => {
+                    // the system arbiter has no `stop`, `System::stop()`
+                    // runs its callbacks
                     if let Some(stop) = self.stop.take() {
+                        run_shutdown_callbacks();
                         let _ = stop.send(0);
                     }
                 }
@@ -317,43 +349,76 @@ impl ArbiterController {
     }
 }
 
+/// Runs the callbacks registered with [`Arbiter::on_shutdown()`], including
+/// ones registered while they run.
+pub(crate) fn run_shutdown_callbacks() {
+    loop {
+        let callbacks = ON_SHUTDOWN
+            .try_with(|cell| mem::take(&mut *cell.borrow_mut()))
+            .unwrap_or_default();
+        if callbacks.is_empty() {
+            break;
+        }
+        for f in callbacks {
+            f();
+        }
+    }
+}
+
 /// Inserts a value into the current arbiter's thread-local storage.
+///
+/// If the storage has already been destroyed because the thread is
+/// exiting, the value is dropped.
 pub fn set_item<T: 'static>(item: T) {
-    STORAGE.with(move |cell| cell.borrow_mut().insert(TypeId::of::<T>(), Box::new(item)));
+    let item: Rc<dyn Any> = Rc::new(item);
+    let old = STORAGE
+        .try_with(move |cell| cell.borrow_mut().insert(TypeId::of::<T>(), item))
+        .ok()
+        .flatten();
+    drop(old);
 }
 
 /// Returns a cloned value from the current arbiter's thread-local storage.
+///
+/// Returns `None` if the storage has already been destroyed because the
+/// thread is exiting.
 pub fn get_item<T: Clone + 'static>() -> Option<T> {
-    STORAGE.with(move |cell| {
-        cell.borrow()
-            .get(&TypeId::of::<T>())
-            .and_then(|boxed| boxed.downcast_ref())
-            .cloned()
-    })
+    STORAGE
+        .try_with(move |cell| {
+            cell.borrow()
+                .get(&TypeId::of::<T>())
+                .and_then(|boxed| boxed.downcast_ref())
+                .cloned()
+        })
+        .ok()
+        .flatten()
 }
 
 /// Provides access to a value in the current arbiter's thread-local storage.
 ///
 /// A default value is inserted if the requested type is not already present.
+/// If the storage has already been destroyed because the thread is exiting,
+/// `f` receives a temporary default value that is not stored.
 pub fn with_item<T: Default + 'static, F, R>(f: F) -> R
 where
     F: FnOnce(&T) -> R,
 {
-    STORAGE.with(move |cell| {
-        // SAFETY: value of T is stored in heap, manipulation
-        // with STORAGE are not affected location of T
-        let val: &T = unsafe {
-            let mut st = cell.borrow_mut();
-            if let Some(boxed) = st.get(&TypeId::of::<T>()) {
-                std::mem::transmute::<&T, &T>(boxed.downcast_ref::<T>().unwrap())
-            } else {
-                st.insert(TypeId::of::<T>(), Box::new(T::default()));
-                let boxed = st.get(&TypeId::of::<T>()).unwrap();
-                std::mem::transmute::<&T, &T>(boxed.downcast_ref::<T>().unwrap())
-            }
-        };
-        f(val)
-    })
+    // `f` holds its own reference, so the value stays alive even if `f`
+    // replaces or removes it
+    let val = STORAGE
+        .try_with(|cell| {
+            let existing = cell.borrow().get(&TypeId::of::<T>()).cloned();
+            existing.unwrap_or_else(|| {
+                let val: Rc<dyn Any> = Rc::new(T::default());
+                cell.borrow_mut().insert(TypeId::of::<T>(), val.clone());
+                val
+            })
+        })
+        .ok();
+    match val {
+        Some(val) => f(val.downcast_ref::<T>().unwrap()),
+        None => f(&T::default()),
+    }
 }
 
 #[doc(hidden)]
@@ -363,15 +428,128 @@ where
 ///
 /// All outstanding calls to [`with_item`] must have completed.
 pub unsafe fn remove_all_items() {
-    STORAGE.with(move |cell| {
+    clear_storage();
+    System::remove_current();
+}
+
+/// Removes all items from the storage.
+///
+/// Each item is dropped outside of the storage borrow, so that its destructor
+/// may access the storage. Items it inserts are removed too.
+fn clear_storage() {
+    let _ = STORAGE.try_with(|cell| {
         loop {
             let mut items = cell.borrow_mut();
             let Some(key) = items.keys().next().copied() else {
                 break;
             };
-            items.remove(&key);
+            let item = items.remove(&key);
             drop(items);
+            drop(item);
         }
     });
-    System::remove_current();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Clone, Default)]
+    struct Value(usize);
+
+    fn use_storage() {
+        set_item(Value(1));
+        let _ = get_item::<Value>();
+        with_item::<Value, _, _>(|v| v.0);
+        Arbiter::get_value(|| Value(2));
+    }
+
+    struct UseOnDrop;
+
+    impl Drop for UseOnDrop {
+        fn drop(&mut self) {
+            use_storage();
+        }
+    }
+
+    thread_local!(static HOLD: RefCell<Option<UseOnDrop>> = const { RefCell::new(None) });
+
+    #[test]
+    fn storage_access_during_thread_exit() {
+        // item stored in STORAGE accesses STORAGE while it is destroyed
+        thread::spawn(|| set_item(UseOnDrop)).join().unwrap();
+
+        // other thread local accesses STORAGE, in both destruction orders
+        thread::spawn(|| {
+            HOLD.with(|h| *h.borrow_mut() = Some(UseOnDrop));
+            use_storage();
+        })
+        .join()
+        .unwrap();
+        thread::spawn(|| {
+            use_storage();
+            HOLD.with(|h| *h.borrow_mut() = Some(UseOnDrop));
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn with_item_value_outlives_replacement() {
+        #[derive(Clone, Default)]
+        struct Item(std::rc::Rc<Vec<u8>>);
+
+        thread::spawn(|| {
+            set_item(Item(std::rc::Rc::new(vec![1; 64])));
+            let len = with_item::<Item, _, _>(|item| {
+                // replaces and frees the stored value while `f` holds its clone
+                set_item(Item::default());
+                unsafe { remove_all_items() };
+                item.0.len()
+            });
+            assert_eq!(len, 64);
+            assert!(get_item::<Item>().is_none());
+            assert_eq!(with_item::<Item, _, _>(|item| item.0.len()), 0);
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn remove_all_items_drops_outside_borrow() {
+        struct Item;
+
+        impl Drop for Item {
+            fn drop(&mut self) {
+                let _ = get_item::<u32>();
+                set_item(2u64);
+            }
+        }
+
+        thread::spawn(|| {
+            set_item(Item);
+            set_item(1u32);
+            unsafe { remove_all_items() };
+            assert!(get_item::<u32>().is_none());
+            assert!(get_item::<u64>().is_none(), "item inserted by a destructor");
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn storage_fallback_values() {
+        struct Check;
+
+        impl Drop for Check {
+            fn drop(&mut self) {
+                set_item(Value(5));
+                assert!(get_item::<Value>().is_none());
+                assert_eq!(with_item::<Value, _, _>(|v| v.0), 0);
+                assert_eq!(Arbiter::get_value(|| Value(3)).0, 3);
+                assert_eq!(Arbiter::get_value(|| Value(4)).0, 4);
+            }
+        }
+        thread::spawn(|| set_item(Check)).join().unwrap();
+    }
 }

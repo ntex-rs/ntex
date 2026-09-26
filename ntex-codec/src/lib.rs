@@ -84,8 +84,8 @@ pub trait Encoder {
     ///
     /// `dst` is the write buffer, a list of pages. [`BytePages::append`] adds
     /// a `Bytes` value as a page of its own without copying it, while
-    /// [`BytePages::extend_from_slice`] and [`BytePages::with_bytes_mut`] copy
-    /// into the pages.
+    /// [`BytePages::extend_from_slice`] and the [`BufMut`](ntex_bytes::BufMut)
+    /// methods copy into the pages.
     ///
     /// Output written to `dst` is not rolled back when this returns an
     /// error, it is sent like any other output. Validate the frame before

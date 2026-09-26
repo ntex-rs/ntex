@@ -31,21 +31,26 @@ impl BytePages {
     pub fn new(size: BytePageSize) -> Self {
         debug_assert!(size != BytePageSize::Unset, "Page cannot be Unset");
 
-        let st = CACHE.with(move |c| {
-            let mut cache = c.take().unwrap();
-
-            let item = if let Some(mut item) = cache.pop() {
-                item.size = size;
+        // the cache is unavailable while the thread-local is being destroyed
+        let cached = CACHE
+            .try_with(|c| {
+                let mut cache = c.take()?;
+                let item = cache.pop();
+                c.set(Some(cache));
                 item
-            } else {
-                Box::new(Inner {
-                    size,
-                    pages: VecDeque::with_capacity(8),
-                })
-            };
-            c.set(Some(cache));
+            })
+            .ok()
+            .flatten();
+
+        let st = if let Some(mut item) = cached {
+            item.size = size;
             item
-        });
+        } else {
+            Box::new(Inner {
+                size,
+                pages: VecDeque::with_capacity(8),
+            })
+        };
 
         BytePages {
             st: Some(st),
@@ -302,6 +307,26 @@ impl BytePages {
     }
 
     /// Provides mutable access to the current writable page.
+    ///
+    /// The current page, or a new page of [`page_size`](Self::page_size) if
+    /// there is none, is passed to `f` as a [`BytesMut`]. After `f` returns,
+    /// the buffer becomes the current page again. If its length has reached
+    /// the page size, it is pushed onto the page list instead. If `f` changed
+    /// the buffer's capacity (for example by reserving more space), the page
+    /// is no longer returned to the page cache when it is released.
+    ///
+    /// This is a low-level API intended for ntex internals and may change
+    /// without notice.
+    ///
+    /// # Panics
+    ///
+    /// `f` must not panic. The page is not reference-counted while `f` runs,
+    /// so unwinding out of `f` releases it twice, which is undefined behavior.
+    #[doc(hidden)]
+    #[deprecated(
+        since = "1.10.0",
+        note = "not panic safe, use the `BufMut` methods of `BytePages` instead"
+    )]
     pub fn with_bytes_mut<F, R>(&mut self, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
@@ -359,15 +384,18 @@ impl BytePages {
 
 impl Drop for BytePages {
     fn drop(&mut self) {
-        CACHE.with(move |c| {
-            let mut cache = c.take().unwrap();
-            if cache.len() < CACHE_SIZE {
-                let mut st = self.st.take().unwrap();
-                st.pages.clear();
-                cache.push(st);
-            }
-            c.set(Some(cache));
-        });
+        if let Some(mut st) = self.st.take() {
+            st.pages.clear();
+            // the cache is unavailable while the thread-local is being destroyed
+            let _ = CACHE.try_with(move |c| {
+                if let Some(mut cache) = c.take() {
+                    if cache.len() < CACHE_SIZE {
+                        cache.push(st);
+                    }
+                    c.set(Some(cache));
+                }
+            });
+        }
     }
 }
 
@@ -607,8 +635,13 @@ impl BytePage {
     pub fn advance_to(&mut self, cnt: usize) {
         match &mut self.inner {
             StorageType::Bytes(b) => b.advance_to(cnt),
-            StorageType::Storage(b) => unsafe { b.set_start(cnt as u32) },
+            StorageType::Storage(b) => unsafe { b.set_start(cnt) },
             StorageType::Vec(b) => {
+                assert!(
+                    cnt <= b.len(),
+                    "cannot advance past the end of the buffer, cnt:{cnt} len:{}",
+                    b.len()
+                );
                 self.inner = StorageType::Bytes(Bytes::copy_from_slice(&b[cnt..]));
             }
         }
@@ -647,11 +680,11 @@ impl Clone for BytePage {
     fn clone(&self) -> Self {
         let inner = match &self.inner {
             StorageType::Bytes(b) => StorageType::Bytes(b.clone()),
-            StorageType::Storage(st) => {
-                // SAFETY: We garantee that `st` is not being used
-                // for modification. `st` is marked as non-unique after clone
-                StorageType::Storage(unsafe { st.clone() })
-            }
+            // The clone is an immutable view, `st` must stay the only
+            // handle that can modify the shared header and spare capacity
+            StorageType::Storage(st) => StorageType::Bytes(Bytes {
+                storage: st.shallow_freeze(),
+            }),
             StorageType::Vec(b) => StorageType::Bytes(Bytes::copy_from_slice(b)),
         };
 
@@ -761,7 +794,14 @@ impl From<BytePage> for BytesMut {
     fn from(page: BytePage) -> Self {
         match page.inner {
             StorageType::Bytes(b) => b.into(),
-            StorageType::Storage(storage) => BytesMut { storage },
+            // clones of the page may still read the data
+            StorageType::Storage(mut storage) => {
+                if storage.is_unique() {
+                    BytesMut { storage }
+                } else {
+                    BytesMut::copy_from_slice(storage.as_ref())
+                }
+            }
             StorageType::Vec(v) => BytesMut::copy_from_slice(&v),
         }
     }
@@ -1004,6 +1044,7 @@ mod tests {
 
         // .with_bytes_mut()
         let mut pages = BytePages::default();
+        #[allow(deprecated)]
         pages.with_bytes_mut(|buf| buf.extend_from_slice(b"123"));
         assert_eq!(pages.len(), 3);
         let p = pages.freeze();
@@ -1016,6 +1057,7 @@ mod tests {
             .collect::<String>();
 
         let mut pages = BytePages::default();
+        #[allow(deprecated)]
         pages.with_bytes_mut(|buf| buf.extend_from_slice(data.as_bytes()));
         assert_eq!(pages.len(), 65_536);
         let p = pages.freeze();
@@ -1045,8 +1087,26 @@ mod tests {
         }
         let p2 = p.clone();
         assert_eq!(p, p2);
+        // short data is copied into an inline view
+        assert!(matches!(p2.inner, StorageType::Bytes(_)));
         if let StorageType::Storage(mut st) = p.inner {
+            assert!(st.is_unique());
+        } else {
+            panic!()
+        }
+
+        let mut p = BytePage::from(BytesMut::copy_from_slice([b'1'; 64]));
+        let p2 = p.clone();
+        assert_eq!(p, p2);
+        assert!(matches!(p2.inner, StorageType::Bytes(_)));
+        if let StorageType::Storage(ref mut st) = p.inner {
             assert!(!st.is_unique());
+        } else {
+            panic!()
+        }
+        drop(p2);
+        if let StorageType::Storage(mut st) = p.inner {
+            assert!(st.is_unique());
         } else {
             panic!()
         }

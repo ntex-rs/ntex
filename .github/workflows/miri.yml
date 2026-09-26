@@ -32,6 +32,9 @@ jobs:
         # Run all of your tests inside of Miri interpreter
         run: cargo miri test -p ntex-bytes
 
+      - name: Run Miri (bytes, big-endian)
+        run: cargo miri test -p ntex-bytes --target s390x-unknown-linux-gnu
+
       - name: Run Miri (ntex-service::cfg)
         # Run all of your tests inside of Miri interpreter
         run: cargo miri test -p ntex-service -- --test "cfg::tests::"

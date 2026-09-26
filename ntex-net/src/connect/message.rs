@@ -94,9 +94,10 @@ impl<T: Address> Connect<T> {
         }
     }
 
-    /// Sets the fallback port used when the address does not provide one.
+    /// Sets the port used when [`Address::port()`] does not provide one.
     ///
-    /// The default fallback port is zero.
+    /// This replaces the port parsed from a `host:port` host by
+    /// [`new()`](Self::new), which is zero if the host has none.
     #[must_use]
     pub fn set_port(mut self, port: u16) -> Self {
         self.port = port;
@@ -132,7 +133,8 @@ impl<T: Address> Connect<T> {
         self.req.host()
     }
 
-    /// Returns the explicit or fallback port.
+    /// Returns the port from [`Address::port()`], or the one parsed from the
+    /// host or set by [`set_port()`](Self::set_port).
     pub fn port(&self) -> u16 {
         self.req.port().unwrap_or(self.port)
     }

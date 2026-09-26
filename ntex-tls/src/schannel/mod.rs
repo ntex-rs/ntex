@@ -519,21 +519,15 @@ impl Context {
         }
         let overhead = (sizes.cbHeader + sizes.cbTrailer) as usize;
 
-        // a full page is pushed out by `with_bytes_mut`, the next record starts a new one
-        let written = dst.with_bytes_mut(|page| {
-            let avail = page.remaining_mut();
-            if avail >= overhead + cmp::min(len, MIN_RECORD) {
-                let len = cmp::min(len, avail - overhead);
-                let tls_len =
-                    self.encrypt_into(&src[..len], page.chunk_mut().as_mut_ptr(), sizes)?;
-                unsafe { page.advance_mut(tls_len) };
-                Ok(Some(len))
-            } else {
-                Ok::<_, io::Error>(None)
-            }
-        })?;
-        if let Some(written) = written {
-            return Ok(written);
+        // encrypt in place into the current page, allocating one if needed;
+        // a full page is pushed out by the next write to `dst`
+        let chunk = dst.chunk_mut();
+        let avail = chunk.len();
+        if avail >= overhead + cmp::min(len, MIN_RECORD) {
+            let len = cmp::min(len, avail - overhead);
+            let tls_len = self.encrypt_into(&src[..len], chunk.as_mut_ptr(), sizes)?;
+            unsafe { dst.advance_mut(tls_len) };
+            return Ok(len);
         }
 
         let len = cmp::min(

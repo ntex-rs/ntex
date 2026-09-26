@@ -1,8 +1,8 @@
 #![allow(clippy::cast_possible_truncation)]
 use std::collections::{BTreeMap, VecDeque};
-use std::{cell::Cell, mem, num::NonZeroUsize, ops, time::Duration, time::Instant};
+use std::{cell::RefCell, mem, num::NonZeroUsize, ops, rc::Rc, time::Duration, time::Instant};
 
-use ntex_rt::with_item;
+use ntex_rt::Arbiter;
 use ntex_util::time::{Seconds, now, sleep};
 use ntex_util::{HashSet, spawn};
 use slab::Slab;
@@ -11,6 +11,10 @@ use crate::IoRef;
 
 const CAP: usize = 64;
 const SEC: Duration = Duration::from_secs(1);
+
+thread_local! {
+    static MANAGER: RefCell<Option<IoManager>> = const { RefCell::new(None) };
+}
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
 /// Opaque identifier assigned to a registered I/O stream.
@@ -194,18 +198,10 @@ impl Drop for TimerGuard {
     }
 }
 
-struct IoStorage(Cell<Option<Box<IoManager>>>);
-
 pub(crate) struct IoManager {
     storage: Slab<Option<IoRef>>,
     timers: TimerStorage,
     pub(crate) iops: Iops,
-}
-
-impl Default for IoStorage {
-    fn default() -> IoStorage {
-        IoStorage(Cell::new(Some(Box::new(IoManager::default()))))
-    }
 }
 
 impl Default for IoManager {
@@ -231,16 +227,37 @@ impl Default for IoManager {
 }
 
 impl IoManager {
+    /// Calls `f` with the current thread's manager.
+    ///
+    /// The manager is created on first use and dropped when the arbiter shuts
+    /// down, so that its state does not carry over to the next runtime on the
+    /// same thread. If the thread-local storage has already been destroyed
+    /// because the thread is exiting, `f` receives a temporary manager.
     fn with<F, R>(f: F) -> R
     where
         F: FnOnce(&mut IoManager) -> R,
     {
-        with_item::<IoStorage, _, _>(|st| {
-            let mut mgr = st.0.take().unwrap();
-            let result = f(&mut mgr);
-            st.0.set(Some(mgr));
-            result
-        })
+        let mut f = Some(f);
+        MANAGER
+            .try_with(|cell| {
+                let mut mgr = cell.borrow_mut();
+                let mgr = mgr.get_or_insert_with(|| {
+                    Arbiter::on_shutdown(IoManager::reset);
+                    IoManager::default()
+                });
+                (f.take().unwrap())(mgr)
+            })
+            .unwrap_or_else(|_| (f.take().unwrap())(&mut IoManager::default()))
+    }
+
+    fn reset() {
+        // dropped outside of the borrow, the registered streams it holds may
+        // unregister themselves
+        let mgr = MANAGER
+            .try_with(|cell| cell.borrow_mut().take())
+            .ok()
+            .flatten();
+        drop(mgr);
     }
 
     fn get(&self, id: Id) -> Option<&IoRef> {
@@ -264,7 +281,11 @@ impl IoManager {
         if let Some(id) = io.id().0 {
             io.0.id.set(Id(None));
             IoManager::with(|manager| {
-                if manager.storage.contains(id.get()) {
+                // the manager may have been reset since the stream registered,
+                // the id can belong to another stream then
+                if let Some(Some(item)) = manager.storage.get(id.get())
+                    && Rc::ptr_eq(&item.0, &io.0)
+                {
                     manager.storage.remove(id.get());
                 }
             });
@@ -306,5 +327,42 @@ impl Iops {
     #[cfg(test)]
     pub(crate) fn is_registered(io: &IoRef) -> bool {
         IoManager::with(|mgr| mgr.iops.ops.contains(&io.id()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ntex::rt::{DefaultRuntime, System};
+
+    use super::*;
+
+    fn has_manager() -> bool {
+        MANAGER.with(|mgr| mgr.borrow().is_some())
+    }
+
+    /// The manager must not carry over to the next runtime on the thread, a
+    /// write scheduled by a runtime that has stopped would block the writes of
+    /// the next one.
+    #[test]
+    fn manager_reset_on_shutdown() {
+        std::thread::spawn(|| {
+            System::new("test", DefaultRuntime).block_on(async {
+                Iops::schedule_write(Id(None));
+                assert!(has_manager());
+            });
+            assert!(!has_manager());
+
+            System::build()
+                .build(DefaultRuntime)
+                .run(|| {
+                    Iops::schedule_write(Id(None));
+                    System::current().stop();
+                    Ok(())
+                })
+                .unwrap();
+            assert!(!has_manager());
+        })
+        .join()
+        .unwrap();
     }
 }

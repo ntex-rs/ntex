@@ -47,12 +47,19 @@ impl Handle for HandleUnixWrapper {
     }
 }
 
+/// Read view over the spare capacity of a read buffer.
+///
+/// Compio receives into the whole `as_uninit()` slice and then sets the
+/// length it read with `advance_to()`, a no-op unless it exceeds `as_init()`.
+/// The buffer may already hold input the filters have not consumed yet, so
+/// compio is shown an empty buffer spanning just the spare capacity and the
+/// read is appended after that input.
 struct CompioBuf(BytesMut);
 
 impl IoBuf for CompioBuf {
     #[inline]
     fn as_init(&self) -> &[u8] {
-        self.0.as_ref()
+        &[]
     }
 }
 
@@ -318,5 +325,35 @@ fn return_pages(ctx: &IoContext, mut bufs: Vec<CompioPage>) {
                 dst.prepend(page.0);
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Receives `data` the way compio does, into `as_uninit()` then `advance_to()`.
+    fn recv(buf: &mut CompioBuf, data: &[u8]) {
+        let dst = buf.as_uninit();
+        for (d, s) in dst.iter_mut().zip(data) {
+            d.write(*s);
+        }
+        unsafe { buf.advance_to(data.len()) };
+    }
+
+    #[test]
+    fn read_appends_to_unconsumed_input() {
+        let mut bytes = BytesMut::with_capacity(1024);
+        bytes.extend_from_slice(&[b'a'; 108]);
+        let mut buf = CompioBuf(bytes);
+
+        // shorter and longer than the input already in the buffer
+        recv(&mut buf, b"b");
+        recv(&mut buf, &[b'c'; 160]);
+
+        let mut expected = vec![b'a'; 108];
+        expected.push(b'b');
+        expected.extend_from_slice(&[b'c'; 160]);
+        assert_eq!(&buf.0[..], &expected[..]);
     }
 }

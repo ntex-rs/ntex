@@ -736,3 +736,229 @@ fn bytes_vec() {
     let bytes = BytesMut::from(data);
     assert_eq!(bytes, b"\x01\x02\x03");
 }
+
+#[test]
+fn reserve_capacity_not_greater_than_len() {
+    let data = [7u8; 1000];
+    for cap in [0, 10, 999, 1000] {
+        let mut buf = BytesMut::copy_from_slice(&data[..]);
+        let ptr = buf.as_ptr();
+        buf.reserve_capacity(cap);
+        assert_eq!(buf.as_ptr(), ptr);
+        assert_eq!(&buf[..], &data[..]);
+        assert!(buf.capacity() >= buf.len());
+        assert_eq!(buf.capacity() - buf.len(), buf.remaining_mut());
+
+        buf.put_slice(&[1; 100]);
+        assert_eq!(buf.len(), 1100);
+        assert_eq!(&buf[1000..], &[1; 100][..]);
+    }
+
+    let mut buf = BytesMut::copy_from_slice(&data[..]);
+    buf.reserve_capacity(1001);
+    assert!(buf.capacity() >= 1001);
+    assert_eq!(&buf[..], &data[..]);
+}
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+#[should_panic(expected = "exceeds maximum")]
+fn with_capacity_over_u32() {
+    let _ = BytesMut::with_capacity(u32::MAX as usize);
+}
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+#[should_panic(expected = "exceeds maximum")]
+fn reserve_over_u32() {
+    let mut buf = BytesMut::copy_from_slice(b"hello");
+    buf.reserve(u32::MAX as usize);
+}
+
+#[test]
+#[should_panic(expected = "buffer capacity overflow")]
+fn reserve_overflows_usize() {
+    let mut buf = BytesMut::copy_from_slice(b"hello");
+    buf.reserve(usize::MAX);
+}
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+#[should_panic]
+fn set_len_over_u32() {
+    let mut buf = BytesMut::with_capacity(64);
+    unsafe { buf.set_len((1 << 32) + 5) };
+}
+
+fn assert_advance_panics(name: &str, f: impl FnOnce()) {
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    assert!(res.is_err(), "{name}: advance_to past len must panic");
+}
+
+#[test]
+fn advance_to_past_len_panics() {
+    let long = vec![b'x'; 100];
+
+    let mut buf = BytesMut::with_capacity(64);
+    buf.extend_from_slice(b"hello");
+    buf.advance_to(5);
+    assert!(buf.is_empty());
+    assert_advance_panics("BytesMut", || {
+        let mut buf = BytesMut::with_capacity(64);
+        buf.extend_from_slice(b"hello");
+        buf.advance_to(6);
+    });
+
+    let mut b = Bytes::from(long.clone());
+    b.advance_to(100);
+    assert!(b.is_empty());
+    assert_advance_panics("Bytes vec", || {
+        let mut b = Bytes::from(long.clone());
+        b.truncate(50);
+        b.advance_to(51);
+    });
+    assert_advance_panics("Bytes inline", || {
+        let mut b = Bytes::copy_from_slice(b"abc");
+        assert!(b.is_inline());
+        b.advance_to(4);
+    });
+    assert_advance_panics("Bytes static", || {
+        Bytes::from_static(b"abc").advance_to(4);
+    });
+    assert_advance_panics("Bytes split_to", || {
+        let _ = Bytes::from(long.clone()).split_to(101);
+    });
+    assert_advance_panics("BytePage", || {
+        let mut buf = BytesMut::with_capacity(64);
+        buf.extend_from_slice(b"hello");
+        BytePage::from(buf).advance_to(6);
+    });
+}
+
+#[test]
+fn split_to_view_truncate_and_trimdown() {
+    let data: Vec<u8> = (0..1000u32).map(|i| i as u8).collect();
+    let mut buf = BytesMut::with_capacity(1000);
+    buf.extend_from_slice(&data);
+
+    // the `BytesMut` view capacity is smaller than the `Bytes` view length
+    let mut b = buf.split_to(900);
+    assert_eq!(buf.capacity(), 100);
+    assert_eq!(b.info().capacity, 1000 + ntex_bytes::METADATA_SIZE);
+
+    b.truncate(800);
+    assert_eq!(b, &data[..800]);
+
+    let mut b2 = b.clone();
+    b2.trimdown();
+    assert_eq!(b2, &data[..800]);
+    b.trimdown();
+    assert_eq!(b, &data[..800]);
+    assert_eq!(buf, &data[900..]);
+}
+
+#[test]
+fn bytes_handle_concurrent_with_bytes_mut() {
+    let mut buf = BytesMut::with_capacity(1024);
+    buf.extend_from_slice(&[1u8; 512]);
+    let b = buf.split_to(256);
+
+    let t = std::thread::spawn(move || {
+        let mut b = b;
+        let info = b.info();
+        let b2 = b.clone();
+        b.truncate(200);
+        b.trimdown();
+        drop(b2);
+        (info, b)
+    });
+    buf.extend_from_slice(&[2u8; 16]);
+    buf.advance_to(8);
+    let _ = buf.split_to(32);
+    buf.reserve(64);
+    unsafe { buf.set_len(buf.len() - 1) };
+
+    let (info, b) = t.join().unwrap();
+    assert_eq!(info.capacity, 1024 + ntex_bytes::METADATA_SIZE);
+    assert_eq!(b, &[1u8; 200][..]);
+    assert_eq!(buf.len(), 256 + 16 - 8 - 32 - 1);
+}
+
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn advance_to_does_not_truncate_count() {
+    const CNT: usize = (1 << 32) + 1;
+
+    assert_advance_panics("BytesMut", || {
+        let mut buf = BytesMut::with_capacity(64);
+        buf.extend_from_slice(b"hello");
+        buf.advance_to(CNT);
+    });
+    assert_advance_panics("BytesMut split_to", || {
+        let mut buf = BytesMut::with_capacity(64);
+        buf.extend_from_slice(b"hello");
+        let _ = buf.split_to(CNT);
+    });
+    assert_advance_panics("BytePage", || {
+        let mut buf = BytesMut::with_capacity(64);
+        buf.extend_from_slice(b"hello");
+        BytePage::from(buf).advance_to(CNT);
+    });
+    assert_advance_panics("BytePage vec", || {
+        BytePage::from(b"hello".to_vec()).advance_to(CNT);
+    });
+}
+
+fn storage_page(data: &[u8]) -> BytePage {
+    let mut buf = BytesMut::with_capacity(128);
+    buf.extend_from_slice(data);
+    let page = BytePage::from(buf);
+    assert_eq!(page.info(), ntex_bytes::info::PageKind::Storage);
+    page
+}
+
+#[test]
+fn page_clone_is_independent() {
+    let data = [b'a'; 64];
+
+    let mut p = storage_page(&data);
+    let c = p.clone();
+    p.advance_to(6);
+    assert_eq!(c, &data[..]);
+    assert_eq!(p, &data[6..]);
+
+    let p = storage_page(&data);
+    let c = p.clone();
+    let c2 = c.clone();
+    let mut m = BytesMut::from(p);
+    m[0] = b'X';
+    m.extend_from_slice(b"!!");
+    let mut m2 = BytesMut::from(c2);
+    m2.extend_from_slice(b"??");
+    assert_eq!(c, &data[..]);
+    assert_eq!(&m[..], [&b"X"[..], &data[1..], b"!!"].concat());
+    assert_eq!(&m2[..], [&data[..], b"??"].concat());
+
+    // a unique page is converted without a copy
+    let p = storage_page(&data);
+    let ptr = p.as_ref().as_ptr();
+    drop(p.clone());
+    assert_eq!(BytesMut::from(p).as_ptr(), ptr);
+}
+
+#[test]
+fn page_clone_across_threads() {
+    let data = [b'a'; 64];
+    let mut p = storage_page(&data);
+    let c = p.clone();
+
+    let t = std::thread::spawn(move || {
+        let mut c = c;
+        c.advance_to(1);
+        c
+    });
+    p.advance_to(2);
+    let c = t.join().unwrap();
+    assert_eq!(c, &data[1..]);
+    assert_eq!(p, &data[2..]);
+}

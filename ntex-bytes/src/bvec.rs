@@ -55,8 +55,8 @@ impl BytesMut {
     ///
     /// # Panics
     ///
-    /// Panics if `capacity` exceeds 60 bits on 64-bit systems or 28 bits on
-    /// 32-bit systems.
+    /// Panics if `capacity` exceeds `u32::MAX` minus the buffer
+    /// header size, just under 4 GiB.
     ///
     /// # Examples
     ///
@@ -282,7 +282,7 @@ impl BytesMut {
     #[inline]
     pub fn advance_to(&mut self, cnt: usize) {
         unsafe {
-            self.storage.set_start(cnt as u32);
+            self.storage.set_start(cnt);
         }
     }
 
@@ -350,8 +350,8 @@ impl BytesMut {
     ///
     /// # Panics
     ///
-    /// Panics if `new_len` exceeds 60 bits on 64-bit systems or 28 bits on
-    /// 32-bit systems.
+    /// Panics if `new_len` exceeds `u32::MAX` minus the buffer
+    /// header size, just under 4 GiB.
     ///
     /// # Examples
     ///
@@ -425,8 +425,8 @@ impl BytesMut {
     ///
     /// # Panics
     ///
-    /// Panics if the new capacity exceeds 60 bits on 64-bit systems or 28 bits
-    /// on 32-bit systems.
+    /// Panics if the new capacity exceeds `u32::MAX` minus the buffer
+    /// header size, just under 4 GiB.
     ///
     /// # Examples
     ///
@@ -460,28 +460,30 @@ impl BytesMut {
     /// assert_eq!(buf.capacity(), 128);
     /// assert_eq!(buf.as_ptr(), ptr);
     /// ```
-    ///
-    /// # Panics
-    ///
-    /// Panics if the new capacity overflows `usize`.
     #[inline]
     pub fn reserve(&mut self, additional: usize) {
         self.storage.reserve(additional);
     }
 
-    /// Reserves capacity for inserting additional bytes into the given `BytesMut`.
+    /// Moves the contents into a newly allocated buffer with capacity `cap`.
     ///
-    /// This is equivalent to calling
-    /// `BytesMut::reserve(capacity - BytesMut::remaining_mut())`.
+    /// If `cap` is greater than [`len`](Self::len), a new buffer is allocated,
+    /// the current contents are copied into it, and afterwards
+    /// [`capacity`](Self::capacity) is at least `cap`. The new buffer is not
+    /// shared with any [`Bytes`] previously split off this `BytesMut`.
+    ///
+    /// If `cap` is less than or equal to `len`, this method does nothing: the
+    /// contents are neither reallocated nor truncated.
+    ///
+    /// Unlike [`reserve`](Self::reserve), this always allocates when
+    /// `cap > len`, even if the current buffer is already large enough.
     ///
     /// # Panics
     ///
-    /// Panics if the new capacity exceeds 60 bits on 64-bit systems or 28 bits
-    /// on 32-bit systems.
+    /// Panics if `cap` exceeds `u32::MAX` minus the buffer
+    /// header size, just under 4 GiB.
     ///
     /// # Examples
-    ///
-    /// In the following example, a new buffer is allocated.
     ///
     /// ```
     /// use ntex_bytes::BytesMut;
@@ -489,7 +491,13 @@ impl BytesMut {
     /// let mut buf = BytesMut::copy_from_slice(&b"hello"[..]);
     /// buf.reserve_capacity(128);
     /// assert!(buf.capacity() >= 128);
-    /// assert!(buf.len() >= 5);
+    /// assert_eq!(&buf[..], b"hello");
+    ///
+    /// // `cap <= len` keeps the current buffer
+    /// let ptr = buf.as_ptr();
+    /// buf.reserve_capacity(2);
+    /// assert_eq!(buf.as_ptr(), ptr);
+    /// assert_eq!(&buf[..], b"hello");
     /// ```
     #[inline]
     pub fn reserve_capacity(&mut self, cap: usize) {

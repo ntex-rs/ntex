@@ -2,10 +2,19 @@
 
 ## [Unreleased]
 
+* Fix lost input in the compio backend, a read shorter than the unconsumed
+  input already in the read buffer was dropped
+
 * Do not report `NotConnected` from a graceful shutdown as a transport error, macOS
   fails `shutdown()` with `ENOTCONN` once the peer has closed the connection
 
 ## [4.1.0] - 2026-09-23
+
+* Fix aliasing violation in the IOCP backend when a write was issued while a
+  recv completed immediately, the operations are now boxed separately
+
+* Fix IOCP shutdown not cancelling an in-flight send while a recv was also
+  pending, the send could start another one after the close had begun
 
 * Fix compio graceful shutdown hanging past the shutdown timeout when the peer
   stops reading. The write task waited on the in-flight write and never polled

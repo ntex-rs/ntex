@@ -1,5 +1,22 @@
 # Changes
 
+## [4.0.0] - unreleased
+
+* Fix use-after-free in `with_item()` when the callback replaces or removes
+  the stored value
+
+* Fix panic when a value in arbiter storage accesses the storage from its
+  destructor while the storage is cleared
+
+* Add `Arbiter::on_shutdown()`, registers a callback that runs when the current
+  arbiter shuts down
+
+* Fix use-after-free in `with_item()` when the item was replaced or removed
+  while `f` was running. `with_item()` now requires `T: Clone` and passes a
+  clone of the item to `f`
+
+* Fix process abort when arbiter storage is accessed during thread-local destruction
+
 ## [3.17.3] - 2026-09-18
 
 * Api docs improvements
