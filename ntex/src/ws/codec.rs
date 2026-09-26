@@ -5,7 +5,7 @@ use crate::util::{BytePage, BytePages, ByteString, Bytes, BytesMut};
 
 use super::error::ProtocolError;
 use super::frame::Parser;
-use super::proto::{CloseCode, CloseReason, OpCode};
+use super::proto::{CloseReason, OpCode};
 
 /// An outgoing WebSocket message.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -284,20 +284,7 @@ impl Decoder for Codec {
                         }
                         OpCode::Close => {
                             if let Some(pl) = payload {
-                                let reason = Parser::parse_close_payload(&pl)?;
-                                if !self.flags.get().contains(Flags::SERVER)
-                                    && matches!(
-                                        reason,
-                                        Some(CloseReason {
-                                            code: CloseCode::Extension,
-                                            ..
-                                        })
-                                    )
-                                {
-                                    Err(ProtocolError::InvalidCloseCode(1010))
-                                } else {
-                                    Ok(Some(Frame::Close(reason)))
-                                }
+                                Ok(Some(Frame::Close(Parser::parse_close_payload(&pl)?)))
                             } else {
                                 Ok(Some(Frame::Close(None)))
                             }
@@ -365,6 +352,7 @@ impl Decoder for Codec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ws::CloseCode;
 
     #[test]
     fn text_payload_is_not_validated() {
@@ -377,11 +365,23 @@ mod tests {
     }
 
     #[test]
-    fn rejects_server_extension_close_code() {
+    fn accepts_extension_close_code() {
+        // servers should not send 1010, but receivers accept it
         let codec = Codec::new().set_client_mode();
         let mut close = BytesMut::from(&[0x88, 0x02, 0x03, 0xf2][..]);
         assert!(matches!(
             codec.decode(&mut close),
+            Ok(Some(Frame::Close(Some(CloseReason {
+                code: CloseCode::Extension,
+                ..
+            }))))
+        ));
+
+        // servers still cannot send it
+        let codec = Codec::new();
+        let mut dst = BytePages::default();
+        assert!(matches!(
+            codec.encodev(Message::Close(Some(CloseCode::Extension.into())), &mut dst),
             Err(ProtocolError::InvalidCloseCode(1010))
         ));
     }

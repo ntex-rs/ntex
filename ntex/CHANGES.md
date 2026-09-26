@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+* WebSocket client codec accepts a received close code 1010 (`Extension`), servers still cannot
+  send it
+
+* Fix HTTP client pool keeping an HTTP/2 connection that cannot open new streams, for example
+  after the peer sends GOAWAY; requests waited or failed until the peer closed the connection
+
 * Fix `ws::Codec::encode_page()` writing a final binary frame in the middle of a fragmented
   message, it now returns `ProtocolError::ContinuationStarted`
 

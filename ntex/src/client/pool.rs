@@ -307,12 +307,19 @@ impl Inner {
             });
 
             // use least loaded connection
-            let conn = connections
+            while let Some(idx) = connections
                 .iter()
-                .filter(|conn| conn.has_capacity(cfg.h2_max_streams))
-                .min_by_key(|conn| conn.streams());
-            if let Some((conn, created)) = conn.and_then(|c| Some((c.begin()?, c.created()))) {
-                return Acquire::Acquired(ConnectionType::H2(conn), created);
+                .enumerate()
+                .filter(|(_, conn)| conn.has_capacity(cfg.h2_max_streams))
+                .min_by_key(|(_, conn)| conn.streams())
+                .map(|(idx, _)| idx)
+            {
+                if let Some(conn) = connections[idx].begin() {
+                    let created = conn.created();
+                    return Acquire::Acquired(ConnectionType::H2(conn), created);
+                }
+                // connection cannot open new streams, for example after GOAWAY
+                connections.swap_remove(idx).close();
             }
             h2_saturated = connections.len();
             if connections.is_empty() {
@@ -936,6 +943,35 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(conn.protocol(), HttpProtocol::Http2);
+    }
+
+    #[crate::rt_test]
+    async fn test_h2_goaway_connection_is_removed() {
+        let (_, pool) = h2_pool(ClientConfig::new().set_h2_connection_limit(1));
+        let (h2, server) = h2_conn(&pool);
+        let req = acquire_h2(&pool).unwrap();
+
+        // GOAWAY, last stream id 0, NO_ERROR
+        server.write([0, 0, 8, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        for _ in 0..20 {
+            if h2.begin().is_none() {
+                break;
+            }
+            sleep(Millis(25)).await;
+        }
+        assert!(h2.begin().is_none());
+        assert!(!h2.is_closed());
+        assert!(h2.has_capacity(0));
+
+        // connection is removed, a new one can be opened
+        assert!(matches!(
+            pool.0.inner.borrow_mut().acquire(&h2_key()),
+            Acquire::Available
+        ));
+        assert!(pool.0.inner.borrow().h2.is_empty());
+        drop(req);
+        wait_closed(&h2).await;
+        assert!(h2.is_closed());
     }
 
     #[crate::rt_test]
