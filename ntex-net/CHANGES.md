@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* Fix panic on compio runtime shutdown when a dropped task spawned a new task
+  from its destructor, e.g. an h2 stream sending RST_STREAM
+
 * Fix lost input in the compio backend, a read shorter than the unconsumed
   input already in the read buffer was dropped
 
@@ -180,6 +183,8 @@
 * Update IoContext::update_write_status() api usage
 
 * Produce io::ErrorKind::WriteZero for backend impl
+
+* Update compio to 0.19
 
 ## [4.0.1] - 2026-09-18
 
