@@ -1,3 +1,7 @@
+/// Decodes percent-encoded bytes.
+///
+/// Returns `None` if there is nothing to decode, or if the decoded bytes are
+/// not valid utf-8.
 pub(super) fn requote(val: &[u8]) -> Option<String> {
     let mut has_pct = 0;
     let mut pct = [b'%', 0, 0];
@@ -40,9 +44,9 @@ pub(super) fn requote(val: &[u8]) -> Option<String> {
         if has_pct > 0 {
             data.extend(&pct[..has_pct]);
         }
-        // Unsafe: we get data from http::Uri, which does utf-8 checks already
-        // this code only decodes valid pct encoded values
-        Some(unsafe { String::from_utf8_unchecked(data) })
+        // decoded bytes are not necessarily valid utf-8, e.g. `%FF`, such
+        // segment is kept percent-encoded
+        String::from_utf8(data).ok()
     } else {
         None
     }
@@ -64,4 +68,19 @@ fn from_hex(v: u8) -> Option<u8> {
 #[inline]
 fn restore_ch(d1: u8, d2: u8) -> Option<u8> {
     from_hex(d1).and_then(|d1| from_hex(d2).map(move |d2| (d1 << 4) | d2))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::requote;
+
+    #[test]
+    fn requote_rejects_invalid_utf8() {
+        assert_eq!(requote(b"test"), None);
+        assert_eq!(requote(b"%C3%A9").as_deref(), Some("\u{e9}"));
+        assert_eq!(requote(b"%FF"), None);
+        assert_eq!(requote(b"%FF%FE"), None);
+        assert_eq!(requote(b"a%C3"), None);
+        assert_eq!(requote(b"%C3%A9%FF"), None);
+    }
 }

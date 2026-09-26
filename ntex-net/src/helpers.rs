@@ -38,6 +38,19 @@ pub(crate) fn close_socket(sock: Socket) {
     .detach();
 }
 
+/// Maps the result of a graceful `shutdown(SHUT_RDWR)`.
+///
+/// Once the peer has closed the connection some platforms, e.g. macOS, fail
+/// the shutdown with `ENOTCONN`. The connection is closed either way, so this
+/// is not reported as a transport error.
+#[allow(dead_code)]
+pub(crate) fn shutdown_result(res: std::io::Result<()>) -> std::io::Result<()> {
+    match res {
+        Err(e) if e.kind() == std::io::ErrorKind::NotConnected => Ok(()),
+        res => res,
+    }
+}
+
 /// Arranges for a socket to be aborted rather than closed gracefully.
 ///
 /// Sets `SO_LINGER` to zero, which makes the following `close()` discard

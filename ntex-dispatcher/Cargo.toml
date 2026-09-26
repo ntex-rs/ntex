@@ -25,9 +25,7 @@ ntex-codec = { workspace = true }
 ntex-util = { workspace = true }
 ntex-service = { workspace = true }
 
-bitflags = { workspace = true }
 log = { workspace = true }
-pin-project-lite = { workspace = true }
 
 [dev-dependencies]
 ntex = { workspace = true }

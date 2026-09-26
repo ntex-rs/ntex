@@ -1,5 +1,10 @@
 # Changes
 
+## [Unreleased]
+
+* Do not report `NotConnected` from a graceful shutdown as a transport error, macOS
+  fails `shutdown()` with `ENOTCONN` once the peer has closed the connection
+
 ## [4.1.0] - 2026-09-23
 
 * Fix compio graceful shutdown hanging past the shutdown timeout when the peer

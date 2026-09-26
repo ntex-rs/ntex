@@ -314,7 +314,7 @@ where
                     log::trace!("{}: Peer is gone with {:?}", self.io.tag(), err);
                     self.ctl_peer_gone(err)
                 }
-                Err(RecvError::KeepAlive) => {
+                Err(RecvError::Timeout) => {
                     if self.timers.active.is_write() {
                         if let Err(err) = self.write_timer_expired() {
                             self.ctl_peer_gone(Some(err))
@@ -476,14 +476,14 @@ where
                 return Poll::Pending;
             };
             match status {
-                IoStatusUpdate::KeepAlive if self.timers.active.is_write() => {
+                IoStatusUpdate::Timeout if self.timers.active.is_write() => {
                     if let Err(err) = self.write_timer_expired() {
                         Poll::Ready(self.ctl_peer_gone(Some(err)))
                     } else {
                         Poll::Pending
                     }
                 }
-                IoStatusUpdate::KeepAlive => Poll::Pending,
+                IoStatusUpdate::Timeout => Poll::Pending,
                 IoStatusUpdate::WriteBackpressure => {
                     self.timers
                         .start_write(&self.io, self.codec.cfg.write_timeout);
@@ -559,14 +559,14 @@ where
                                 break;
                             }
                         },
-                        Err(RecvError::KeepAlive) if self.timers.active.is_write() => {
+                        Err(RecvError::Timeout) if self.timers.active.is_write() => {
                             if let Err(err) = self.write_timer_expired() {
                                 PayloadFailure::PeerGone(Some(err))
                             } else {
                                 continue;
                             }
                         }
-                        Err(RecvError::KeepAlive) => {
+                        Err(RecvError::Timeout) => {
                             // the decode attempt can consume bytes without an item
                             let remains = self.io.with_read_dst(|buf| buf.len());
                             self.timers
@@ -626,7 +626,7 @@ where
             }
             // the timer is reported through the status update
             match self.io.poll_status_update(cx) {
-                Poll::Ready(IoStatusUpdate::KeepAlive) => {
+                Poll::Ready(IoStatusUpdate::Timeout) => {
                     if let Err(err) = self.write_timer_expired() {
                         return Poll::Ready(Err(err));
                     }

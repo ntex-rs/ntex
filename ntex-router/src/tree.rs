@@ -220,7 +220,7 @@ impl Tree {
                             if let Some((val, skip)) = result {
                                 let path = resource.resource_path();
                                 path.segments = segments;
-                                path.skip += skip as u16;
+                                path.skip += skip as u32;
                                 return Some(val);
                             }
                         }
@@ -272,7 +272,7 @@ impl Tree {
                             if let Some((val, skip)) = result {
                                 let path = resource.resource_path();
                                 path.segments = segments;
-                                path.skip += skip as u16;
+                                path.skip += skip as u32;
                                 return Some(val);
                             }
                         }
@@ -299,7 +299,7 @@ impl Tree {
             if let Some((val, skip)) = res {
                 let path = resource.resource_path();
                 path.segments = segments;
-                path.skip += skip as u16;
+                path.skip += skip as u32;
                 return Some(val);
             }
         }
@@ -415,8 +415,8 @@ impl Tree {
                                     PathItem::Segment(m.as_str().to_string())
                                 } else {
                                     PathItem::IdxSegment(
-                                        (base_skip + (skip + m.start()) as isize) as u16,
-                                        (base_skip + (skip + m.end()) as isize) as u16,
+                                        (base_skip + (skip + m.start()) as isize) as u32,
+                                        (base_skip + (skip + m.end()) as isize) as u32,
                                     )
                                 };
                                 segments.push((name, item));

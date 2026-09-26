@@ -2,9 +2,17 @@ use super::tree::Tree;
 use super::{IntoPattern, Resource, ResourceDef, ResourcePath};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// Id of a matched resource.
+///
+/// It is the id set with [`ResourceDef::set_id()`], resources without an
+/// explicitly set id all have id `0`.
 pub struct ResourceId(u16);
 
 /// Resource router.
+///
+/// Maps paths to values of type `T`. Each resource can also have an optional
+/// value of type `U` used by the `recognize_*checked` methods. Resources are
+/// matched in registration order, the first matching resource wins.
 #[derive(Debug, Clone)]
 pub struct Router<T, U = ()> {
     tree: Tree,
@@ -13,6 +21,7 @@ pub struct Router<T, U = ()> {
 }
 
 impl<T, U> Router<T, U> {
+    /// Creates a router builder.
     pub fn builder() -> RouterBuilder<T, U> {
         RouterBuilder {
             resources: Vec::new(),
@@ -21,11 +30,15 @@ impl<T, U> Router<T, U> {
     }
 
     #[doc(hidden)]
-    #[deprecated]
+    #[deprecated(note = "Use `Router::builder()`")]
     pub fn build() -> RouterBuilder<T, U> {
         Self::builder()
     }
 
+    /// Finds the first resource that matches the path.
+    ///
+    /// On a match, the values of dynamic segments are stored in `resource`,
+    /// and a prefix match skips the matched part of the path.
     pub fn recognize<R, P>(&self, resource: &mut R) -> Option<(&T, ResourceId)>
     where
         R: Resource<P>,
@@ -43,6 +56,7 @@ impl<T, U> Router<T, U> {
         }
     }
 
+    /// Same as [`recognize()`](Self::recognize), returns a mutable reference.
     pub fn recognize_mut<R, P>(&mut self, resource: &mut R) -> Option<(&mut T, ResourceId)>
     where
         R: Resource<P>,
@@ -60,6 +74,10 @@ impl<T, U> Router<T, U> {
         }
     }
 
+    /// Finds the first resource that matches the path and passes `check`.
+    ///
+    /// `check` is called for each matching resource with the resource and the
+    /// resource's optional value of type `U`.
     pub fn recognize_checked<R, P, F>(&self, resource: &mut R, check: F) -> Option<(&T, ResourceId)>
     where
         F: Fn(&R, Option<&U>) -> bool,
@@ -84,6 +102,8 @@ impl<T, U> Router<T, U> {
         }
     }
 
+    /// Same as [`recognize_checked()`](Self::recognize_checked), returns a
+    /// mutable reference.
     pub fn recognize_mut_checked<R, P, F>(
         &mut self,
         resource: &mut R,
@@ -114,6 +134,12 @@ impl<T, U> Router<T, U> {
 }
 
 #[derive(Debug)]
+/// Router builder, see [`Router::builder()`].
+///
+/// The registration methods return the registered entry: the resource
+/// definition, the value and the optional value used by the
+/// `recognize_*checked` methods. It can be used to set the resource id or
+/// name, or the optional value.
 pub struct RouterBuilder<T, U = ()> {
     insensitive: bool,
     resources: Vec<(ResourceDef, T, Option<U>)>,
@@ -128,7 +154,8 @@ impl<T, U> RouterBuilder<T, U> {
         self.insensitive = true;
     }
 
-    /// Register resource for specified path.
+    /// Register resource for specified path patterns, see
+    /// [`ResourceDef::new()`].
     pub fn path<P: IntoPattern>(
         &mut self,
         path: P,
@@ -139,7 +166,8 @@ impl<T, U> RouterBuilder<T, U> {
         self.resources.last_mut().unwrap()
     }
 
-    /// Register resource for specified path prefix.
+    /// Register resource for specified path prefix, see
+    /// [`ResourceDef::prefix()`].
     pub fn prefix(&mut self, prefix: &str, resource: T) -> &mut (ResourceDef, T, Option<U>) {
         self.resources
             .push((ResourceDef::prefix(prefix), resource, None));
@@ -172,7 +200,7 @@ impl<T, U> RouterBuilder<T, U> {
     }
 
     #[doc(hidden)]
-    #[deprecated]
+    #[deprecated(note = "Use `RouterBuilder::build()`")]
     pub fn finish(self) -> Router<T, U> {
         self.build()
     }
@@ -301,6 +329,33 @@ mod tests {
 
         let mut path = Path::new("/test.jsoN");
         assert!(router.recognize_mut(&mut path).is_none());
+    }
+
+    #[test]
+    fn test_recognizer_long_path() {
+        let mut router = Router::<usize>::builder();
+        router.path("/{name}/{id}/{tail}*", 10);
+        let router = router.build();
+
+        let name = "a".repeat(u16::MAX as usize + 10);
+        let mut path = Path::new(format!("/{name}/1/test/tail"));
+        assert_eq!(router.recognize(&mut path), Some((&10, ResourceId(0))));
+        assert_eq!(path.get("name"), Some(name.as_str()));
+        assert_eq!(path.get("id"), Some("1"));
+        assert_eq!(path.get("tail"), Some("test/tail"));
+
+        let mut router = Router::<usize>::builder();
+        router.prefix("/prefix", 10);
+        let router = router.build();
+
+        let mut path = Path::new(format!("/prefix/{name}"));
+        path.skip(u32::from(u16::MAX) + 1);
+        assert_eq!(router.recognize(&mut path), None);
+
+        let mut path = Path::new(format!("/{name}/prefix/test"));
+        path.skip(name.len() as u32 + 1);
+        assert_eq!(router.recognize(&mut path), Some((&10, ResourceId(0))));
+        assert_eq!(path.path(), "/test");
     }
 
     #[test]

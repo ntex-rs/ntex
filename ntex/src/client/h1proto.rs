@@ -224,7 +224,7 @@ impl Stream for PlStream {
                         return Poll::Ready(None);
                     }
                 }
-                Err(RecvError::KeepAlive) => Err(PayloadError::from(io::Error::new(
+                Err(RecvError::Timeout) => Err(PayloadError::from(io::Error::new(
                     io::ErrorKind::TimedOut,
                     "Keep-alive",
                 ))),

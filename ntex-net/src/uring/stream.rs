@@ -990,7 +990,7 @@ impl StreamCtl {
             })
             .await
             .map_err(|_| io::Error::other("gone"))
-            .and_then(|item| item)
+            .and_then(crate::helpers::shutdown_result)
     }
 
     pub(crate) fn resume_read(&self) {

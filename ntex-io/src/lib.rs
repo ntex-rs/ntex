@@ -202,8 +202,8 @@ pub enum IoTaskStatus {
 /// I/O status update events.
 #[derive(Debug)]
 pub enum IoStatusUpdate {
-    /// Keep-alive timeout has occurred.
-    KeepAlive,
+    /// The dispatcher timer has expired.
+    Timeout,
     /// Write backpressure is currently active.
     WriteBackpressure,
     /// The connection is no longer usable.
@@ -219,8 +219,8 @@ pub enum IoStatusUpdate {
 
 /// Errors that can occur while receiving data.
 pub enum RecvError<U: Decoder> {
-    /// A keep-alive timeout occurred.
-    KeepAlive,
+    /// The dispatcher timer has expired.
+    Timeout,
     /// Write backpressure is currently active.
     WriteBackpressure,
     /// Failed to decode an incoming frame.
@@ -243,8 +243,8 @@ where
 {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            RecvError::KeepAlive => {
-                write!(fmt, "RecvError::KeepAlive")
+            RecvError::Timeout => {
+                write!(fmt, "RecvError::Timeout")
             }
             RecvError::WriteBackpressure => {
                 write!(fmt, "RecvError::WriteBackpressure")
@@ -267,8 +267,8 @@ mod tests {
 
     #[test]
     fn test_fmt() {
-        assert!(format!("{:?}", IoStatusUpdate::KeepAlive).contains("KeepAlive"));
-        assert!(format!("{:?}", RecvError::<BytesCodec>::KeepAlive).contains("KeepAlive"));
+        assert!(format!("{:?}", IoStatusUpdate::Timeout).contains("Timeout"));
+        assert!(format!("{:?}", RecvError::<BytesCodec>::Timeout).contains("Timeout"));
         assert!(
             format!("{:?}", RecvError::<BytesCodec>::WriteBackpressure)
                 .contains("WriteBackpressure")
