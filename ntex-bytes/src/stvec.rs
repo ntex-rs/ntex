@@ -128,7 +128,7 @@ impl StorageVec {
     }
 
     pub(crate) fn is_unique(&mut self) -> bool {
-        unsafe { (*self.0.as_ptr()).ref_count.load(Relaxed) == 1 }
+        unsafe { (*self.0.as_ptr()).is_unique() }
     }
 
     /// The caller must guarantee that `StorageVec` is not being used for
@@ -519,5 +519,25 @@ mod tests {
 
         let st = StorageVec::sized(BytePageSize::Size8);
         assert_eq!(addr, st.0);
+    }
+
+    // Run under miri: without `Acquire`, the write below races with the read
+    // made by the other thread before it released its handle.
+    #[test]
+    fn is_unique_synchronizes_with_release() {
+        let mut st = StorageVec::with_capacity(64);
+        st.put_u8(1);
+        let other = unsafe { st.clone() };
+        let handle = std::thread::spawn(move || {
+            let val = other.as_ref()[0];
+            drop(other);
+            val
+        });
+
+        while !st.is_unique() {
+            std::thread::yield_now();
+        }
+        st.as_mut()[0] = 2;
+        assert_eq!(handle.join().unwrap(), 1);
     }
 }
