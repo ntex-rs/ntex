@@ -2,6 +2,9 @@
 
 ## [4.0.0] - unreleased
 
+* compio: `spawn()` drops the future while the runtime shuts down, a task that
+  spawned from its destructor corrupted the task queue being cleared
+
 * Fix use-after-free in `with_item()` when the callback replaces or removes
   the stored value
 

@@ -1,9 +1,23 @@
 use std::task::{Context, Poll, ready};
-use std::{fmt, future::Future, future::poll_fn, pin::Pin};
+use std::{cell::Cell, fmt, future::Future, future::poll_fn, pin::Pin};
 
 use async_channel::Sender;
 
 use crate::arbiter::{Arbiter, ArbiterCommand};
+
+thread_local! {
+    static STOPPING: Cell<bool> = const { Cell::new(false) };
+}
+
+#[doc(hidden)]
+/// Marks the compio runtime of the current thread as stopping.
+///
+/// While set, [`spawn()`] drops the future instead of spawning it. The runtime
+/// drops its remaining tasks on shutdown, and a destructor that spawns a new
+/// task would insert it into the task queue while the queue is being cleared.
+pub fn set_stopping(stopping: bool) {
+    STOPPING.with(|s| s.set(stopping));
+}
 
 /// Spawn a future on the current thread.
 ///
@@ -14,11 +28,19 @@ use crate::arbiter::{Arbiter, ArbiterCommand};
 /// # Panics
 ///
 /// This function panics if ntex system is not running.
+///
+/// If the runtime is shutting down, the future is dropped without running and
+/// the returned handle resolves to [`JoinError`].
 #[inline]
 pub fn spawn<F>(f: F) -> JoinHandle<F::Output>
 where
     F: Future + 'static,
 {
+    if STOPPING.with(Cell::get) {
+        drop(f);
+        return JoinHandle { task: None };
+    }
+
     let task = if let Some(mut data) = crate::task::Data::load() {
         compio_runtime::spawn(async move {
             let mut f = std::pin::pin!(f);
