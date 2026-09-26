@@ -3,6 +3,7 @@
 ## [4.1.0] - 2026-09-22
 
 * schannel: add `ClientConfig::set_client_cert()` with `ClientCert::from_store()`
+  and `ClientCert::from_store_by_subject()`
 
 * schannel: do not send a client certificate picked from the user's store,
   complete the handshake without one when the server requests it

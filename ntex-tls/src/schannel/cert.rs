@@ -1,12 +1,13 @@
 use std::{fmt, io, ptr, sync::Arc};
 
 use windows_sys::Win32::Security::Cryptography::{
-    CERT_CONTEXT, CERT_FIND_SHA1_HASH, CERT_KEY_CONTEXT_PROP_ID, CERT_KEY_PROV_INFO_PROP_ID,
-    CERT_NCRYPT_KEY_HANDLE_PROP_ID, CERT_STORE_OPEN_EXISTING_FLAG, CERT_STORE_PROV_SYSTEM_W,
-    CERT_STORE_READONLY_FLAG, CERT_SYSTEM_STORE_CURRENT_USER, CERT_SYSTEM_STORE_LOCAL_MACHINE,
-    CRYPT_INTEGER_BLOB, CertCloseStore, CertFindCertificateInStore, CertFreeCertificateContext,
-    CertGetCertificateContextProperty, CertOpenStore, HCERTSTORE, PKCS_7_ASN_ENCODING,
-    X509_ASN_ENCODING,
+    CERT_CONTEXT, CERT_FIND_SHA1_HASH, CERT_FIND_SUBJECT_STR_W, CERT_KEY_CONTEXT_PROP_ID,
+    CERT_KEY_PROV_INFO_PROP_ID, CERT_NCRYPT_KEY_HANDLE_PROP_ID, CERT_STORE_OPEN_EXISTING_FLAG,
+    CERT_STORE_PROV_SYSTEM_W, CERT_STORE_READONLY_FLAG, CERT_SYSTEM_STORE_CURRENT_USER,
+    CERT_SYSTEM_STORE_LOCAL_MACHINE, CRYPT_INTEGER_BLOB, CertCloseStore,
+    CertDuplicateCertificateContext, CertFindCertificateInStore, CertFreeCertificateContext,
+    CertGetCertificateContextProperty, CertOpenStore, CertVerifyTimeValidity, HCERTSTORE,
+    PKCS_7_ASN_ENCODING, X509_ASN_ENCODING,
 };
 
 /// Client certificate with its private key, sent when the server requests one.
@@ -37,24 +38,7 @@ impl ClientCert {
         store: &str,
         thumbprint: &[u8; 20],
     ) -> io::Result<Self> {
-        let location = match location {
-            CertStoreLocation::CurrentUser => CERT_SYSTEM_STORE_CURRENT_USER,
-            CertStoreLocation::LocalMachine => CERT_SYSTEM_STORE_LOCAL_MACHINE,
-        };
-        let name = wide(store);
-        let store = unsafe {
-            CertOpenStore(
-                CERT_STORE_PROV_SYSTEM_W,
-                0,
-                0,
-                location | CERT_STORE_READONLY_FLAG | CERT_STORE_OPEN_EXISTING_FLAG,
-                name.as_ptr().cast(),
-            )
-        };
-        if store.is_null() {
-            return Err(io::Error::last_os_error());
-        }
-        let store = Store(store);
+        let store = Store::open(location, store)?;
 
         let hash = CRYPT_INTEGER_BLOB {
             cbData: 20,
@@ -85,6 +69,69 @@ impl ClientCert {
                 "client certificate has no private key",
             ))
         }
+    }
+
+    /// Loads a certificate by its subject name from a system store, for
+    /// example `"MY"` (Personal).
+    ///
+    /// `subject` matches any part of the subject name, case-insensitively,
+    /// for example `"client.example.com"` or `"CN=client.example.com"`.
+    /// Only currently valid certificates with a private key are considered,
+    /// the one that expires last is used.
+    ///
+    /// # Errors
+    ///
+    /// Fails if `subject` is empty, the store cannot be opened, or no matching
+    /// certificate is found.
+    pub fn from_store_by_subject(
+        location: CertStoreLocation,
+        store: &str,
+        subject: &str,
+    ) -> io::Result<Self> {
+        if subject.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "client certificate subject is empty",
+            ));
+        }
+        let store = Store::open(location, store)?;
+        let subject = wide(subject);
+
+        let mut found: Option<(u64, CertContext)> = None;
+        let mut cert = ptr::null();
+        loop {
+            // frees the previous context
+            cert = unsafe {
+                CertFindCertificateInStore(
+                    store.0,
+                    X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+                    0,
+                    CERT_FIND_SUBJECT_STR_W,
+                    subject.as_ptr().cast(),
+                    cert,
+                )
+            };
+            if cert.is_null() {
+                break;
+            }
+            let info = unsafe { (*cert).pCertInfo };
+            if unsafe { CertVerifyTimeValidity(ptr::null(), info) } != 0 || !has_private_key(cert) {
+                continue;
+            }
+            let not_after = unsafe { (*info).NotAfter };
+            let not_after =
+                u64::from(not_after.dwHighDateTime) << 32 | u64::from(not_after.dwLowDateTime);
+            if found.as_ref().is_none_or(|(last, _)| not_after > *last) {
+                let cert = CertContext(unsafe { CertDuplicateCertificateContext(cert) });
+                found = Some((not_after, cert));
+            }
+        }
+        found.map(|(_, cert)| Self(Arc::new(cert))).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "no valid client certificate with a private key matches the subject",
+            )
+        })
     }
 
     /// Certificate in DER encoding.
@@ -122,6 +169,30 @@ impl Drop for CertContext {
 
 struct Store(HCERTSTORE);
 
+impl Store {
+    fn open(location: CertStoreLocation, name: &str) -> io::Result<Self> {
+        let location = match location {
+            CertStoreLocation::CurrentUser => CERT_SYSTEM_STORE_CURRENT_USER,
+            CertStoreLocation::LocalMachine => CERT_SYSTEM_STORE_LOCAL_MACHINE,
+        };
+        let name = wide(name);
+        let store = unsafe {
+            CertOpenStore(
+                CERT_STORE_PROV_SYSTEM_W,
+                0,
+                0,
+                location | CERT_STORE_READONLY_FLAG | CERT_STORE_OPEN_EXISTING_FLAG,
+                name.as_ptr().cast(),
+            )
+        };
+        if store.is_null() {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(Self(store))
+        }
+    }
+}
+
 impl Drop for Store {
     fn drop(&mut self) {
         // open certificate contexts keep the store alive
@@ -157,5 +228,20 @@ mod tests {
         let err =
             ClientCert::from_store(CertStoreLocation::CurrentUser, "MY", &[0; 20]).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn test_from_store_by_subject_not_found() {
+        let err = ClientCert::from_store_by_subject(
+            CertStoreLocation::CurrentUser,
+            "MY",
+            "CN=ntex no such subject 3f0c",
+        )
+        .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+
+        let err = ClientCert::from_store_by_subject(CertStoreLocation::CurrentUser, "MY", "")
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     }
 }

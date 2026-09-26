@@ -123,8 +123,10 @@ async fn shutdown_times_out_on_stalled_peer() {
                 let tx = tx.clone();
                 async move {
                     let _ = io.recv(&BytesCodec).await;
-                    io.encode(Bytes::from(vec![b'y'; 4 * PAYLOAD]), &BytesCodec)
-                        .unwrap();
+                    // copied into regular write pages: a single large page is
+                    // one send, and Windows completes a send of any size at
+                    // once while its send backlog is below `SO_SNDBUF`
+                    io.encode_slice(&vec![b'y'; 4 * PAYLOAD]).unwrap();
                     let _ = tx.send(io.shutdown().await);
                     Ok::<_, ()>(())
                 }

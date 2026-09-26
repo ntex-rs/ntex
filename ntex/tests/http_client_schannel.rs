@@ -530,57 +530,97 @@ async fn test_client_cert_request() {
     }
 }
 
+/// A self-signed client certificate, valid for the `days` range from now.
+struct TestClientCert {
+    cert: tls_openssl::x509::X509,
+    pfx: Vec<u8>,
+    thumbprint: [u8; 20],
+}
+
+impl TestClientCert {
+    fn new(subject: &str, days: std::ops::Range<u32>) -> Self {
+        use tls_openssl::{asn1::Asn1Time, hash::MessageDigest, pkcs12::Pkcs12, pkey::PKey};
+        use tls_openssl::{rsa::Rsa, x509::X509Builder, x509::X509NameBuilder};
+
+        let key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+        let mut name = X509NameBuilder::new().unwrap();
+        name.append_entry_by_text("CN", subject).unwrap();
+        let name = name.build();
+        let mut builder = X509Builder::new().unwrap();
+        builder.set_version(2).unwrap();
+        builder.set_subject_name(&name).unwrap();
+        builder.set_issuer_name(&name).unwrap();
+        builder.set_pubkey(&key).unwrap();
+        builder
+            .set_not_before(&Asn1Time::days_from_now(days.start).unwrap())
+            .unwrap();
+        builder
+            .set_not_after(&Asn1Time::days_from_now(days.end).unwrap())
+            .unwrap();
+        builder.sign(&key, MessageDigest::sha256()).unwrap();
+        let cert = builder.build();
+        let pfx = Pkcs12::builder()
+            .name(subject)
+            .pkey(&key)
+            .cert(&cert)
+            .build2("secret")
+            .unwrap()
+            .to_der()
+            .unwrap();
+
+        let thumbprint: [u8; 20] = cert
+            .digest(MessageDigest::sha1())
+            .unwrap()
+            .as_ref()
+            .try_into()
+            .unwrap();
+        Self {
+            cert,
+            pfx,
+            thumbprint,
+        }
+    }
+
+    /// Installs the certificate and its key to the user's personal store.
+    fn install(&self) -> InstalledCert {
+        let thumbprint_hex: String = self.thumbprint.iter().map(|b| format!("{b:02X}")).collect();
+        let pfx_path = std::env::temp_dir().join(format!("ntex-client-{thumbprint_hex}.pfx"));
+        std::fs::write(&pfx_path, &self.pfx).unwrap();
+        let installed = InstalledCert(thumbprint_hex, pfx_path.clone());
+        assert!(powershell(&format!(
+            "Import-PfxCertificate -FilePath '{}' -CertStoreLocation Cert:\\CurrentUser\\My \
+             -Password (ConvertTo-SecureString secret -AsPlainText -Force) | Out-Null",
+            pfx_path.display()
+        )));
+        installed
+    }
+}
+
 /// The configured client certificate is sent to a server that requires one.
 #[ntex::test]
 async fn test_client_cert() {
     use ntex::{connect::Connect, service::Pipeline};
     use std::io::Read;
     use tls_openssl::ssl::{SslVerifyMode, SslVersion};
-    use tls_openssl::{asn1::Asn1Time, hash::MessageDigest, pkcs12::Pkcs12, pkey::PKey};
-    use tls_openssl::{rsa::Rsa, x509::X509Builder, x509::X509NameBuilder};
-
-    let key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
-    let mut name = X509NameBuilder::new().unwrap();
-    name.append_entry_by_text("CN", "ntex client").unwrap();
-    let name = name.build();
-    let mut builder = X509Builder::new().unwrap();
-    builder.set_version(2).unwrap();
-    builder.set_subject_name(&name).unwrap();
-    builder.set_issuer_name(&name).unwrap();
-    builder.set_pubkey(&key).unwrap();
-    builder
-        .set_not_before(&Asn1Time::days_from_now(0).unwrap())
-        .unwrap();
-    builder
-        .set_not_after(&Asn1Time::days_from_now(1).unwrap())
-        .unwrap();
-    builder.sign(&key, MessageDigest::sha256()).unwrap();
-    let cert = builder.build();
-    let pfx = Pkcs12::builder()
-        .name("ntex client")
-        .pkey(&key)
-        .cert(&cert)
-        .build2("secret")
-        .unwrap()
-        .to_der()
-        .unwrap();
-
-    // install the certificate and its key to the user's personal store
-    let thumbprint: [u8; 20] = cert
-        .digest(MessageDigest::sha1())
-        .unwrap()
-        .as_ref()
-        .try_into()
-        .unwrap();
-    let thumbprint_hex: String = thumbprint.iter().map(|b| format!("{b:02X}")).collect();
-    let pfx_path = std::env::temp_dir().join(format!("ntex-client-{thumbprint_hex}.pfx"));
-    std::fs::write(&pfx_path, pfx).unwrap();
-    let _installed = InstalledCert(thumbprint_hex.clone(), pfx_path.clone());
-    assert!(powershell(&format!(
-        "Import-PfxCertificate -FilePath '{}' -CertStoreLocation Cert:\\CurrentUser\\My \
-         -Password (ConvertTo-SecureString secret -AsPlainText -Force) | Out-Null",
-        pfx_path.display()
-    )));
+    let subject = format!(
+        "ntex client {}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    let cert = TestClientCert::new(&subject, 0..2);
+    // system stores list certificates by descending thumbprint, list this one first
+    let earlier = loop {
+        let earlier = TestClientCert::new(&subject, 0..1);
+        if earlier.thumbprint > cert.thumbprint {
+            break earlier;
+        }
+    };
+    let not_yet_valid = TestClientCert::new(&subject, 1..3);
+    let _installed = [cert.install(), earlier.install(), not_yet_valid.install()];
+    let (cert, thumbprint) = (cert.cert, cert.thumbprint);
 
     let client_cert = ntex_tls::schannel::ClientCert::from_store(
         ntex_tls::schannel::CertStoreLocation::CurrentUser,
@@ -588,15 +628,25 @@ async fn test_client_cert() {
         &thumbprint,
     )
     .unwrap();
-    assert_eq!(client_cert.der(), cert.to_der().unwrap());
+    assert!(client_cert.der() == cert.to_der().unwrap());
+    let by_subject = ntex_tls::schannel::ClientCert::from_store_by_subject(
+        ntex_tls::schannel::CertStoreLocation::CurrentUser,
+        "MY",
+        &subject.to_uppercase(),
+    )
+    .unwrap();
+    assert!(by_subject.der() == cert.to_der().unwrap());
 
-    for version in [SslVersion::TLS1_2, SslVersion::TLS1_3] {
+    for (version, client_cert) in [
+        (SslVersion::TLS1_2, client_cert),
+        (SslVersion::TLS1_3, by_subject),
+    ] {
         // a new config per version, a cached TLS 1.2 session limits the next
         // ClientHello to TLS 1.2
         let connector = TlsConnector::<ntex::connect::Connector<&'static str>>::with_config(
             ClientConfig::new()
                 .danger_accept_invalid_certs(true)
-                .set_client_cert(client_cert.clone()),
+                .set_client_cert(client_cert),
         );
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
