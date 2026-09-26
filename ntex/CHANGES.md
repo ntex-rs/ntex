@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* WebSocket client `Host` header no longer includes the URI's userinfo, and omits the scheme's
+  default port, like the HTTP client
+
 * `ws::WsConnection::receiver()` answers the peer's close frame, echoing its close code, unless
   a close frame was already sent; sinks returned by `ws::WsConnection::sink()` share state
 

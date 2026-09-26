@@ -14,7 +14,7 @@ use tls_rustls::ClientConfig as RustlsClientConfig;
 use base64::{Engine, engine::general_purpose::STANDARD as base64};
 use nanorand::Rng;
 
-use crate::client::{ClientCodec, ClientConfig, ClientRawRequest, ClientResponse};
+use crate::client::{ClientCodec, ClientConfig, ClientRawRequest, ClientResponse, host_header};
 use crate::connect::{Connect, ConnectError, Connector};
 use crate::error::{Error, ErrorMapping};
 use crate::http::header::{self, HeaderMap, HeaderValue};
@@ -173,9 +173,10 @@ where
             }
         }
 
-        // host header
-        if !head.headers.contains_key(header::HOST) {
-            let val = HeaderValue::from_str(self.uri.authority().unwrap().as_str()).unwrap();
+        // host header, without userinfo and the scheme's default port
+        if !head.headers.contains_key(header::HOST)
+            && let Some(val) = host_header(&self.uri)
+        {
             head.headers.insert(header::HOST, val);
         }
 

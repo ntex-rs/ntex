@@ -375,3 +375,42 @@ async fn test_receiver_does_not_answer_close_reply() {
         vec![ws::Frame::Close(Some(ws::CloseCode::Normal.into()))]
     );
 }
+
+#[ntex::test]
+async fn test_host_header_excludes_userinfo() {
+    let (host_tx, host_rx) = std::sync::mpsc::channel();
+    let srv = test_server(async move |_| {
+        let host_tx = host_tx.clone();
+        HttpService::new(async |_| Ok::<_, io::Error>(Response::NotFound())).h1_control(
+            async move |req: h1::Control<_, _>| {
+                let ack = if let h1::Control::Upgrade(upg) = req {
+                    let (ack, io, req, codec) = upg.handle();
+                    let _ = host_tx.send(req.head().headers.get(ntex::http::header::HOST).cloned());
+                    let res = handshake_response(req.head()).build();
+                    io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
+                        .unwrap();
+                    let _ = io.recv(&ws::Codec::default()).await;
+                    ack
+                } else {
+                    req.ack()
+                };
+                Ok::<_, io::Error>(ack)
+            },
+        )
+    });
+
+    let addr = srv.addr();
+    let _con = ws::WsClient::new(
+        format!("ws://user:secret@{addr}/"),
+        ws::WsClientConfig::new().set_address(addr),
+    )
+    .connect()
+    .await
+    .unwrap();
+
+    let host = host_rx
+        .recv_timeout(std::time::Duration::from_secs(3))
+        .unwrap()
+        .unwrap();
+    assert_eq!(host, addr.to_string().as_str());
+}

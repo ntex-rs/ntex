@@ -41,6 +41,7 @@ pub use self::service::{ServiceRequest, ServiceResponse};
 pub use self::test::TestResponse;
 
 pub(crate) use self::codec::{ClientCodec, ClientPayloadCodec};
+pub(crate) use self::h1proto::host_header;
 use crate::client::error::ConnectError;
 use crate::http::{HeaderMap, Method, RequestHead, Uri, body::BodySize, error::HttpError};
 use crate::service::{cfg::SharedCfg, pipeline::PipelineState};
