@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+* Streamline the timer wheel, `now()` and `system_time()` no longer touch the wheel
+  when the cached time is valid, and the per-thread wheel is ~4KiB smaller
+
+* `TimerHandle::reset()` no longer adds an extra 16ms tick to short delays
+
 * Add `mpsc::Sender::poll_closed()` and `mpsc::Sender::closed()` to wait until the receiver
   is dropped or the channel is closed
 
