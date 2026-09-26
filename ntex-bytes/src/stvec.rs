@@ -27,6 +27,9 @@ const KIND_OFFSET_BITS: usize = 2;
 pub const METADATA_SIZE: usize = mem::size_of::<SharedVec>();
 const METADATA_SIZE_U32: u32 = METADATA_SIZE as u32;
 
+/// Maximum buffer capacity, offsets and sizes are stored as `u32`.
+pub(crate) const MAX_CAPACITY: usize = u32::MAX as usize - METADATA_SIZE;
+
 // Inline buffer capacity. This is the size of `Storage` minus 1 byte for the
 // metadata.
 #[cfg(target_pointer_width = "64")]
@@ -253,7 +256,9 @@ impl StorageVec {
 
             // Reserving involves abandoning the currently shared buffer and
             // allocating a new vector with the requested capacity.
-            let new_cap = len + additional;
+            let new_cap = len
+                .checked_add(additional)
+                .expect("buffer capacity overflow");
 
             if inner.is_unique() {
                 let capacity = (inner.offset as usize) + (inner.capacity as usize);
@@ -286,7 +291,7 @@ impl StorageVec {
     #[inline]
     pub(crate) unsafe fn set_len(&mut self, len: usize) {
         let inner = self.0.as_mut();
-        assert!(len as u32 <= inner.capacity);
+        assert!(len <= inner.capacity as usize);
 
         inner.len = len as u32;
         inner.remaining = inner.capacity - (len as u32);
@@ -377,6 +382,10 @@ impl SharedVec {
     }
 
     fn alloc_with_capacity(size: BytePageSize, cap: usize, len: u32) -> *mut u8 {
+        assert!(
+            cap <= MAX_CAPACITY,
+            "buffer capacity {cap} exceeds maximum {MAX_CAPACITY}"
+        );
         let layout = shared_vec_layout(cap).unwrap();
 
         // Alloc memory and store data

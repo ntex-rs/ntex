@@ -55,8 +55,8 @@ impl BytesMut {
     ///
     /// # Panics
     ///
-    /// Panics if `capacity` exceeds 60 bits on 64-bit systems or 28 bits on
-    /// 32-bit systems.
+    /// Panics if `capacity` exceeds `u32::MAX` minus the buffer
+    /// header size, just under 4 GiB.
     ///
     /// # Examples
     ///
@@ -350,8 +350,8 @@ impl BytesMut {
     ///
     /// # Panics
     ///
-    /// Panics if `new_len` exceeds 60 bits on 64-bit systems or 28 bits on
-    /// 32-bit systems.
+    /// Panics if `new_len` exceeds `u32::MAX` minus the buffer
+    /// header size, just under 4 GiB.
     ///
     /// # Examples
     ///
@@ -425,8 +425,8 @@ impl BytesMut {
     ///
     /// # Panics
     ///
-    /// Panics if the new capacity exceeds 60 bits on 64-bit systems or 28 bits
-    /// on 32-bit systems.
+    /// Panics if the new capacity exceeds `u32::MAX` minus the buffer
+    /// header size, just under 4 GiB.
     ///
     /// # Examples
     ///
@@ -460,10 +460,6 @@ impl BytesMut {
     /// assert_eq!(buf.capacity(), 128);
     /// assert_eq!(buf.as_ptr(), ptr);
     /// ```
-    ///
-    /// # Panics
-    ///
-    /// Panics if the new capacity overflows `usize`.
     #[inline]
     pub fn reserve(&mut self, additional: usize) {
         self.storage.reserve(additional);
@@ -484,7 +480,8 @@ impl BytesMut {
     ///
     /// # Panics
     ///
-    /// Panics if the new capacity overflows `isize`.
+    /// Panics if `cap` exceeds `u32::MAX` minus the buffer
+    /// header size, just under 4 GiB.
     ///
     /// # Examples
     ///

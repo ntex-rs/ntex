@@ -759,3 +759,33 @@ fn reserve_capacity_not_greater_than_len() {
     assert!(buf.capacity() >= 1001);
     assert_eq!(&buf[..], &data[..]);
 }
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+#[should_panic(expected = "exceeds maximum")]
+fn with_capacity_over_u32() {
+    let _ = BytesMut::with_capacity(u32::MAX as usize);
+}
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+#[should_panic(expected = "exceeds maximum")]
+fn reserve_over_u32() {
+    let mut buf = BytesMut::copy_from_slice(b"hello");
+    buf.reserve(u32::MAX as usize);
+}
+
+#[test]
+#[should_panic(expected = "buffer capacity overflow")]
+fn reserve_overflows_usize() {
+    let mut buf = BytesMut::copy_from_slice(b"hello");
+    buf.reserve(usize::MAX);
+}
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+#[should_panic]
+fn set_len_over_u32() {
+    let mut buf = BytesMut::with_capacity(64);
+    unsafe { buf.set_len((1 << 32) + 5) };
+}

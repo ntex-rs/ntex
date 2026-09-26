@@ -16,6 +16,8 @@
 
 * Fix storage kind detection on big-endian platforms
 
+* Fix memory corruption with buffers of 4 GiB or more, capacity is limited to just under 4 GiB
+
 ## [1.9.0] (2026-07-17)
 
 * Mark `BytePage::as_ptr()` as `unsafe`, as it has additional requirements that make it unsafe
