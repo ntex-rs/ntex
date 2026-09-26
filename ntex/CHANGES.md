@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* JSON bodies of `web::types::Json`, `ResponseBuilder::json()` and client JSON requests are
+  serialized directly into the body buffer instead of being copied from a `String`
+
 * HTTP client cookies are appended to a `Cookie` header set on the request or client, instead of
   replacing it
 
