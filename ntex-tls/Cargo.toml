@@ -67,3 +67,7 @@ env_logger = { workspace = true }
 rustls-pemfile = { workspace = true }
 webpki-roots = { workspace = true }
 tls_rustls = { workspace = true, features = ["ring", "std"] }
+
+[[example]]
+name = "schannel-client"
+required-features = ["schannel"]
