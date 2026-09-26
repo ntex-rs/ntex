@@ -70,6 +70,7 @@ bitflags::bitflags! {
         const R_CONTINUATION = 0b0000_0010;
         const W_CONTINUATION = 0b0000_0100;
         const CLOSED         = 0b0000_1000;
+        const R_CLOSED       = 0b0001_0000;
     }
 }
 
@@ -268,6 +269,12 @@ impl Decoder for Codec {
     type Error = ProtocolError;
 
     fn decode(&self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        // the peer must not send anything after its close frame, discard it
+        if self.flags.get().contains(Flags::R_CLOSED) {
+            src.clear();
+            return Ok(None);
+        }
+
         match Parser::parse(src, self.flags.get().contains(Flags::SERVER), self.max_size) {
             Ok(Some((finished, opcode, payload))) => {
                 // handle continuation
@@ -283,11 +290,13 @@ impl Decoder for Codec {
                             }
                         }
                         OpCode::Close => {
-                            if let Some(pl) = payload {
-                                Ok(Some(Frame::Close(Parser::parse_close_payload(&pl)?)))
+                            let reason = if let Some(pl) = payload {
+                                Parser::parse_close_payload(&pl)?
                             } else {
-                                Ok(Some(Frame::Close(None)))
-                            }
+                                None
+                            };
+                            self.insert_flags(Flags::R_CLOSED);
+                            Ok(Some(Frame::Close(reason)))
                         }
                         OpCode::Ping => Ok(Some(Frame::Ping(payload.unwrap_or_default()))),
                         OpCode::Pong => Ok(Some(Frame::Pong(payload.unwrap_or_default()))),
@@ -363,6 +372,23 @@ mod tests {
             codec.decode(&mut frame),
             Ok(Some(Frame::Text(data))) if data == Bytes::from_static(&[0xff])
         ));
+    }
+
+    #[test]
+    fn input_after_close_is_discarded() {
+        let codec = Codec::new().set_client_mode();
+        // close frame, followed by a text frame
+        let mut src = BytesMut::from(&[0x88, 0x00, 0x81, 0x01, b'a'][..]);
+        assert!(matches!(
+            codec.decode(&mut src),
+            Ok(Some(Frame::Close(None)))
+        ));
+        assert!(matches!(codec.decode(&mut src), Ok(None)));
+        assert!(src.is_empty());
+
+        src.extend_from_slice(&[0x81, 0x01, b'b']);
+        assert!(matches!(codec.decode(&mut src), Ok(None)));
+        assert!(src.is_empty());
     }
 
     #[test]

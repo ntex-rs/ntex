@@ -1,5 +1,10 @@
 # Changes
 
+## [Unreleased]
+
+* Return the service error from the `DispatchItem::Stop` call, it was dropped and the dispatcher
+  resolved to `Ok(())`
+
 ## [4.1.0] - 2026-09-21
 
 * Report `Reason::Io(Some(UnexpectedEof))` when the peer closes cleanly while

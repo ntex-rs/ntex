@@ -347,6 +347,13 @@ where
 
                     let result = ready!(Pin::new(stop).poll(cx));
                     inner.shared.handle_result(result, &inner.shared.io, false);
+                    // the dispatcher returns a service error from the stop call,
+                    // unless it is stopping because of an earlier one
+                    if let Some(DispatcherError::Service(err)) = inner.shared.error.take()
+                        && inner.error.is_none()
+                    {
+                        inner.error = Some(err);
+                    }
                     inner.shared.io.stop_timer();
                     inner.st = DispatcherState::Shutdown;
                 }
@@ -1444,6 +1451,41 @@ mod tests {
         sleep(Millis(50)).await;
 
         reason.borrow_mut().take().expect("dispatcher did not stop")
+    }
+
+    #[ntex::test]
+    async fn stop_call_error_is_returned() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let (disp, _) = Dispatcher::debug(
+            Io::from(server),
+            BCodec(8),
+            ntex_service::fn_service(async move |msg: DispatchItem<BCodec>| match msg {
+                DispatchItem::Stop(_) => Err("stop"),
+                _ => Ok(None),
+            }),
+        );
+        client.close().await;
+        assert_eq!(disp.await, Err("stop"));
+    }
+
+    #[ntex::test]
+    async fn earlier_service_error_is_kept() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        client.write("12345678");
+
+        let (disp, _) = Dispatcher::debug(
+            Io::from(server),
+            BCodec(8),
+            ntex_service::fn_service(async move |msg: DispatchItem<BCodec>| match msg {
+                DispatchItem::Item(_) => Err("item"),
+                DispatchItem::Stop(_) => Err("stop"),
+                DispatchItem::Control(_) => Ok(None),
+            }),
+        );
+        assert_eq!(disp.await, Err("item"));
     }
 
     #[ntex::test]

@@ -1,5 +1,5 @@
 //! WebSocket client.
-use std::{fmt, marker, pin};
+use std::{fmt, marker, pin, rc::Rc};
 
 #[cfg(feature = "openssl")]
 use crate::connect::openssl;
@@ -367,13 +367,15 @@ impl<F> fmt::Debug for WsClient<F> {
 /// the underlying I/O stream.
 pub struct WsConnection<F> {
     io: Io<F>,
-    codec: ws::Codec,
+    codec: Rc<ws::Codec>,
     sink: ws::WsSink,
     res: ClientResponse,
 }
 
 impl<F> WsConnection<F> {
     fn new(io: Io<F>, res: ClientResponse, codec: ws::Codec) -> Self {
+        // the dispatcher and all sinks share the codec state
+        let codec = Rc::new(codec);
         let sink = ws::WsSink::new(io.get_ref(), codec.clone(), io.shared().get());
         Self {
             io,
@@ -406,7 +408,7 @@ impl<F> WsConnection<F> {
     /// Consumes the connection and returns its I/O stream, codec, and
     /// opening-handshake response.
     pub fn into_inner(self) -> (Io<F>, ws::Codec, ClientResponse) {
-        (self.io, self.codec, self.res)
+        (self.io, (*self.codec).clone(), self.res)
     }
 }
 
@@ -482,7 +484,7 @@ impl WsConnection<Sealed> {
         let service = apply_fn(
             svc.into_service().map_err(WsError::Service),
             async move |req, svc| match req {
-                DispatchItem::<ws::Codec>::Item(item) => {
+                DispatchItem::<Rc<ws::Codec>>::Item(item) => {
                     let close = matches!(item, ws::Frame::Close(_));
                     let result = svc.call(item).await;
                     if matches!(&result, Ok(Some(ws::Message::Close(_)))) {
@@ -494,7 +496,8 @@ impl WsConnection<Sealed> {
                     }
                     result
                 }
-                DispatchItem::Control(_) => Ok(None),
+                // a clean disconnect is not an error
+                DispatchItem::Control(_) | DispatchItem::Stop(Reason::Io(None)) => Ok(None),
                 DispatchItem::Stop(Reason::Service) => {
                     Ok(Some(ws::Message::Close(Some(CloseReason {
                         code: CloseCode::Away,
@@ -504,9 +507,14 @@ impl WsConnection<Sealed> {
                 DispatchItem::Stop(Reason::KeepAliveTimeout) => Err(WsError::KeepAlive),
                 DispatchItem::Stop(Reason::ReadTimeout) => Err(WsError::ReadTimeout),
                 DispatchItem::Stop(Reason::WriteTimeout) => Err(WsError::WriteTimeout),
-                DispatchItem::Stop(Reason::Decoder(e) | Reason::Encoder(e)) => {
+                DispatchItem::Stop(Reason::Decoder(e)) => {
+                    if !sink.is_closed() {
+                        let reason = CloseReason::from(CloseCode::Protocol);
+                        let _ = sink.send(ws::Message::Close(Some(reason))).await;
+                    }
                     Err(WsError::Protocol(e))
                 }
+                DispatchItem::Stop(Reason::Encoder(e)) => Err(WsError::Protocol(e)),
                 DispatchItem::Stop(Reason::Io(e)) => Err(WsError::Disconnected(e)),
             },
         );
@@ -528,7 +536,7 @@ impl<F: Filter> WsConnection<F> {
 
     /// Converts the connection into a binary WebSocket transport.
     pub fn into_transport(self) -> Io<Layer<WsTransport, F>> {
-        WsTransport::create(self.io, self.codec)
+        WsTransport::create(self.io, (*self.codec).clone())
     }
 }
 

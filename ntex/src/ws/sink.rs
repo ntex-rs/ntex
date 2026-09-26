@@ -10,13 +10,21 @@ pub struct WsSink(Rc<WsSinkInner>);
 #[derive(Debug)]
 struct WsSinkInner {
     io: IoRef,
-    codec: ws::Codec,
+    codec: Rc<ws::Codec>,
     cfg: Cfg<ws::WsClientConfig>,
 }
 
 impl WsSink {
-    pub(crate) fn new(io: IoRef, codec: ws::Codec, cfg: Cfg<ws::WsClientConfig>) -> Self {
-        Self(Rc::new(WsSinkInner { io, codec, cfg }))
+    pub(crate) fn new(
+        io: IoRef,
+        codec: impl Into<Rc<ws::Codec>>,
+        cfg: Cfg<ws::WsClientConfig>,
+    ) -> Self {
+        Self(Rc::new(WsSinkInner {
+            io,
+            codec: codec.into(),
+            cfg,
+        }))
     }
 
     /// Returns the underlying I/O handle.

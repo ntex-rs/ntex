@@ -414,3 +414,51 @@ async fn test_host_header_excludes_userinfo() {
         .unwrap();
     assert_eq!(host, addr.to_string().as_str());
 }
+
+#[ntex::test]
+async fn test_protocol_error_sends_close() {
+    let (frames_tx, frames_rx) = std::sync::mpsc::channel();
+    let srv = test_server(async move |_| {
+        let frames_tx = frames_tx.clone();
+        HttpService::new(async |_| Ok::<_, io::Error>(Response::NotFound())).h1_control(
+            async move |req: h1::Control<_, _>| {
+                let ack = if let h1::Control::Upgrade(upg) = req {
+                    let (ack, io, req, codec) = upg.handle();
+                    let res = handshake_response(req.head()).build();
+                    io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
+                        .unwrap();
+
+                    // frame with a reserved opcode
+                    io.send(Bytes::from_static(&[0x83, 0x00]), &BytesCodec)
+                        .await
+                        .unwrap();
+                    let codec = ws::Codec::default();
+                    let mut frames = Vec::new();
+                    while let Ok(Some(frame)) = io.recv(&codec).await {
+                        frames.push(frame);
+                    }
+                    let _ = frames_tx.send(frames);
+                    ack
+                } else {
+                    req.ack()
+                };
+                Ok::<_, io::Error>(ack)
+            },
+        )
+    });
+
+    let rx = close_handshake_client(&srv).await.receiver();
+    let item = rx.recv().await;
+    assert!(
+        matches!(item, Some(Err(ws::error::WsError::Protocol(_)))),
+        "{item:?}"
+    );
+    assert!(rx.recv().await.is_none());
+
+    assert_eq!(
+        frames_rx
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .unwrap(),
+        vec![ws::Frame::Close(Some(ws::CloseCode::Protocol.into()))]
+    );
+}

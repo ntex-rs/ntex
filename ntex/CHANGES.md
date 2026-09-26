@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+* `ws::WsConnection::start()` sends a protocol error close frame (1002) on invalid input. The
+  dispatcher and the connection's sinks share codec state
+
+* `ws::Codec` discards input received after the peer's close frame
+
+* WebSocket client and `web::ws::start()` treat a clean disconnect as the end of the connection,
+  instead of `WsError::Disconnected(None)`
+
 * WebSocket client cookies are appended to a `Cookie` header set in `ws::WsClientConfig`, instead
   of replacing it
 

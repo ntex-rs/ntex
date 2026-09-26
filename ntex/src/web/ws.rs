@@ -203,7 +203,8 @@ where
                 }
                 result
             }
-            DispatchItem::Control(_) => Ok(None),
+            // a clean disconnect is not an error
+            DispatchItem::Control(_) | DispatchItem::Stop(Reason::Io(None)) => Ok(None),
             DispatchItem::Stop(Reason::Service) => {
                 Ok(Some(Message::Close(Some(ws::CloseReason {
                     code: ws::CloseCode::Away,
