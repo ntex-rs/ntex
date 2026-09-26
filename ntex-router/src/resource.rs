@@ -124,7 +124,10 @@ impl ResourceDef {
         ResourceDef::create(patterns, true)
     }
 
-    /// Resource id
+    /// Resource id, `0` by default
+    ///
+    /// A matched resource is reported with this id, see
+    /// [`ResourceId`](crate::ResourceId).
     pub fn id(&self) -> u16 {
         self.id
     }
@@ -156,12 +159,12 @@ impl ResourceDef {
         }
     }
 
-    /// Resource pattern name
+    /// Resource name, empty by default
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// Mutable reference to a name of a resource definition.
+    /// Mutable reference to the resource name
     pub fn name_mut(&mut self) -> &mut String {
         &mut self.name
     }
@@ -177,7 +180,10 @@ impl ResourceDef {
     }
 
     /// Build resource path from elements, using the primary pattern.
-    /// Returns `true` on success.
+    ///
+    /// Elements are used for dynamic segments in pattern order. The path is
+    /// appended to `path`. Returns `false` if there are not enough elements,
+    /// `path` then contains a partially built path.
     pub fn resource_path<U, I>(&self, path: &mut String, elements: &mut U) -> bool
     where
         U: Iterator<Item = I>,
@@ -199,7 +205,9 @@ impl ResourceDef {
     }
 
     /// Build resource path from named elements, using the primary pattern.
-    /// Returns `true` on success.
+    ///
+    /// The path is appended to `path`. Returns `false` if an element is
+    /// missing, `path` then contains a partially built path.
     pub fn resource_path_named<K, V, S>(
         &self,
         path: &mut String,

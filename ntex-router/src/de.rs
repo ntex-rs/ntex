@@ -41,11 +41,17 @@ macro_rules! parse_single_value {
 }
 
 #[derive(Debug)]
+/// Serde deserializer for the dynamic segments of a matched [`Path`].
+///
+/// A struct or map is deserialized from segments by name, a tuple or
+/// sequence from segments in pattern order, a single value from the only
+/// segment. See [`Path::load()`].
 pub struct PathDeserializer<'de, T: ResourcePath> {
     path: &'de Path<T>,
 }
 
 impl<'de, T: ResourcePath + 'de> PathDeserializer<'de, T> {
+    /// Creates a deserializer for the path.
     pub fn new(path: &'de Path<T>) -> Self {
         PathDeserializer { path }
     }

@@ -14,7 +14,8 @@ pub(super) enum PathItem {
 
 /// Resource path match information
 ///
-/// If resource path contains variable patterns, `Path` stores them.
+/// Wraps a path source and stores the values of dynamic segments matched by
+/// a [`Router`](crate::Router).
 #[derive(Debug)]
 pub struct Path<T> {
     resource: T,
@@ -43,6 +44,7 @@ impl<T: Clone> Clone for Path<T> {
 }
 
 impl<T: ResourcePath> Path<T> {
+    /// Creates a new path state for the path source.
     pub fn new(resource: T) -> Path<T> {
         Path {
             resource,
@@ -64,7 +66,8 @@ impl<T: ResourcePath> Path<T> {
     }
 
     #[inline]
-    /// Path
+    /// Path that is not matched yet, e.g. the rest of the path after a prefix
+    /// resource matched.
     pub fn path(&self) -> &str {
         let skip = self.skip as usize;
         let path = self.resource.path();
@@ -72,7 +75,7 @@ impl<T: ResourcePath> Path<T> {
     }
 
     #[inline]
-    /// Set new path
+    /// Set new path source and reset state
     pub fn set(&mut self, resource: T) {
         self.skip = 0;
         self.resource = resource;
@@ -80,14 +83,14 @@ impl<T: ResourcePath> Path<T> {
     }
 
     #[inline]
-    /// Reset state
+    /// Reset skipped length and matched segments
     pub fn reset(&mut self) {
         self.skip = 0;
         self.segments.clear();
     }
 
     #[inline]
-    /// Skip first `n` chars in path
+    /// Skip first `n` bytes in path, matching starts after them
     pub fn skip(&mut self, n: u16) {
         self.skip += n;
     }
@@ -102,18 +105,21 @@ impl<T: ResourcePath> Path<T> {
     }
 
     #[inline]
-    /// Check if there are any matched patterns
+    /// Check if there are any matched segments
     pub fn is_empty(&self) -> bool {
         self.segments.is_empty()
     }
 
     #[inline]
-    /// Check number of extracted parameters
+    /// Number of matched segments
     pub fn len(&self) -> usize {
         self.segments.len()
     }
 
-    /// Get matched parameter by name without type conversion
+    /// Get matched segment by name without type conversion
+    ///
+    /// If no segment is named `tail`, the `tail` key returns the unprocessed
+    /// part of the path, see [`unprocessed()`](Self::unprocessed).
     pub fn get(&self, key: &str) -> Option<&str> {
         for item in &self.segments {
             if key == item.0 {
@@ -138,15 +144,16 @@ impl<T: ResourcePath> Path<T> {
         &self.resource.path()[(self.skip as usize)..]
     }
 
-    /// Get matched parameter by name.
+    /// Get matched segment by name.
     ///
-    /// If keyed parameter is not available empty string is used as default
-    /// value.
+    /// Returns an empty string if the segment is not available. This is a
+    /// path segment, not a query string parameter.
     pub fn query(&self, key: &str) -> &str {
         self.get(key).unwrap_or_default()
     }
 
-    /// Return iterator to items in parameter container
+    /// Iterator over matched segments as `(name, value)` pairs, in pattern
+    /// order
     pub fn iter(&self) -> PathIter<'_, T> {
         PathIter {
             idx: 0,
@@ -154,13 +161,15 @@ impl<T: ResourcePath> Path<T> {
         }
     }
 
-    /// Try to deserialize matching parameters to a specified type `U`
+    /// Try to deserialize matched segments to a specified type `U`
+    ///
+    /// See [`PathDeserializer`].
     pub fn load<'de, U: serde::Deserialize<'de>>(&'de self) -> Result<U, de::value::Error> {
         de::Deserialize::deserialize(PathDeserializer::new(self))
     }
 }
 
-/// Iterator to items in parameter container
+/// Iterator over matched segments, see [`Path::iter()`]
 #[derive(Debug)]
 pub struct PathIter<'a, T> {
     idx: usize,
