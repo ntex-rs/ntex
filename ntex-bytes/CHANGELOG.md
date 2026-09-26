@@ -22,6 +22,8 @@
 
 * Fix `advance_to()` not panicking when advancing past the end of the buffer
 
+* Fix `Bytes::truncate()` and `Bytes::trimdown()` panics, and a data race, for `Bytes` split from a `BytesMut`
+
 ## [1.9.0] (2026-07-17)
 
 * Mark `BytePage::as_ptr()` as `unsafe`, as it has additional requirements that make it unsafe

@@ -301,7 +301,11 @@ impl Storage {
     pub(crate) fn capacity(&self) -> usize {
         let kind = self.kind();
         match kind {
-            KIND_VEC => unsafe { (*self.shared_vec()).capacity() },
+            // capacity from the start of this view to the end of the allocation
+            KIND_VEC => unsafe {
+                stvec::SharedVec::capacity(self.shared_vec()) + stvec::METADATA_SIZE
+                    - (self.offset.get() >> KIND_OFFSET_BITS)
+            },
             KIND_STEXT => unsafe { ((*self.st_vtable()).len)(self.st_addr(), self.st_len()) },
             KIND_INLINE => INLINE_CAP,
             _ => self.len,
@@ -377,7 +381,8 @@ impl Storage {
         let kind = self.kind();
         match kind {
             KIND_VEC => {
-                assert!(len <= self.capacity());
+                // other handles may use the memory past the end of this view
+                assert!(len <= self.len);
                 self.len = len;
             }
             KIND_STEXT => {
@@ -581,11 +586,13 @@ impl Storage {
 
         let (id, refs, capacity) = unsafe {
             if kind == KIND_VEC {
+                // the other header fields belong to the `BytesMut` handle
+                // and can be modified concurrently
                 let ptr = self.shared_vec();
                 (
                     ptr as usize,
                     (*ptr).ref_count.load(Relaxed),
-                    (*ptr).offset as usize + (*ptr).len as usize + (*ptr).remaining as usize,
+                    stvec::SharedVec::capacity(ptr) + stvec::METADATA_SIZE,
                 )
             } else {
                 (0, 0, 0)

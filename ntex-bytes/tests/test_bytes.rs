@@ -834,3 +834,52 @@ fn advance_to_past_len_panics() {
         BytePage::from(buf).advance_to(6);
     });
 }
+
+#[test]
+fn split_to_view_truncate_and_trimdown() {
+    let data: Vec<u8> = (0..1000u32).map(|i| i as u8).collect();
+    let mut buf = BytesMut::with_capacity(1000);
+    buf.extend_from_slice(&data);
+
+    // the `BytesMut` view capacity is smaller than the `Bytes` view length
+    let mut b = buf.split_to(900);
+    assert_eq!(buf.capacity(), 100);
+    assert_eq!(b.info().capacity, 1000 + ntex_bytes::METADATA_SIZE);
+
+    b.truncate(800);
+    assert_eq!(b, &data[..800]);
+
+    let mut b2 = b.clone();
+    b2.trimdown();
+    assert_eq!(b2, &data[..800]);
+    b.trimdown();
+    assert_eq!(b, &data[..800]);
+    assert_eq!(buf, &data[900..]);
+}
+
+#[test]
+fn bytes_handle_concurrent_with_bytes_mut() {
+    let mut buf = BytesMut::with_capacity(1024);
+    buf.extend_from_slice(&[1u8; 512]);
+    let b = buf.split_to(256);
+
+    let t = std::thread::spawn(move || {
+        let mut b = b;
+        let info = b.info();
+        let b2 = b.clone();
+        b.truncate(200);
+        b.trimdown();
+        drop(b2);
+        (info, b)
+    });
+    buf.extend_from_slice(&[2u8; 16]);
+    buf.advance_to(8);
+    let _ = buf.split_to(32);
+    buf.reserve(64);
+    unsafe { buf.set_len(buf.len() - 1) };
+
+    let (info, b) = t.join().unwrap();
+    assert_eq!(info.capacity, 1024 + ntex_bytes::METADATA_SIZE);
+    assert_eq!(b, &[1u8; 200][..]);
+    assert_eq!(buf.len(), 256 + 16 - 8 - 32 - 1);
+}
