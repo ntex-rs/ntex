@@ -2,6 +2,9 @@
 
 ## [1.10.0] (unreleased)
 
+* `BytePages::copy_to()` and `BytePages::clone()` share the current page instead
+  of copying it
+
 * `BytePages::len()` and `is_empty()` are O(1), the length of the pages is
   tracked instead of summed on each call
 

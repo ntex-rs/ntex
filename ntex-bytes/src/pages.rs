@@ -211,7 +211,11 @@ impl BytePages {
         }
 
         if let Some(st) = &self.current {
-            pages.append(BytePage::from(Bytes::copy_from_slice(st.as_ref())));
+            // an immutable view, `st` stays the only handle that can write
+            // to the spare capacity
+            pages.append(Bytes {
+                storage: st.shallow_freeze(),
+            });
         }
     }
 
@@ -1060,6 +1064,28 @@ mod tests {
         let pages = BytePages::new(BytePageSize::Size8);
         assert_len(&pages);
         assert!(pages.is_empty());
+    }
+
+    #[test]
+    fn pages_copy_to_shares_current() {
+        let mut pages = BytePages::new(BytePageSize::Size8);
+        pages.put_slice(&[1; 64]);
+        let ptr = unsafe { pages.current.as_ref().unwrap().as_ptr() };
+
+        let mut copy = BytePages::new(BytePageSize::Size8);
+        pages.copy_to(&mut copy);
+        let page = copy.take().unwrap();
+        assert_eq!(unsafe { page.as_ptr() }, ptr.cast_const());
+        assert_eq!(page.as_ref(), &[1; 64][..]);
+
+        // the source keeps writing to the page it shares with the copy
+        pages.put_slice(&[2; 64]);
+        assert_eq!(unsafe { pages.current.as_ref().unwrap().as_ptr() }, ptr);
+        assert_eq!(page.as_ref(), &[1; 64][..]);
+        assert_eq!(pages.len(), 128);
+
+        drop(pages);
+        assert_eq!(page.as_ref(), &[1; 64][..]);
     }
 
     #[test]
