@@ -198,6 +198,10 @@ where
                 // Discard the write buffer; it won't be processed
                 ctx.clear_write_buf();
             } else {
+                // Output produced by this filter's shutdown sits in the buffer
+                // of the inner filter, which only runs its write processing
+                // here, so move it towards the transport while waiting.
+                ctx.with_next(|ctx| self.1.process_write_buf(ctx))?;
                 return Ok(Poll::Pending);
             }
         }

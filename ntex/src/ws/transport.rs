@@ -11,7 +11,7 @@ bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     struct Flags: u8  {
         const CLOSED       = 0b0001;
-        const CONTINUATION = 0b0010;
+        const PEER_CLOSED  = 0b0010;
         const PROTO_ERR    = 0b0100;
     }
 }
@@ -41,21 +41,6 @@ impl WsTransport {
         f.insert(flags);
         self.flags.set(f);
     }
-
-    fn remove_flags(&self, flags: Flags) {
-        let mut f = self.flags.get();
-        f.remove(flags);
-        self.flags.set(f);
-    }
-
-    fn continuation_must_start(&self, err_message: &'static str) -> io::Result<()> {
-        if self.flags.get().contains(Flags::CONTINUATION) {
-            Ok(())
-        } else {
-            self.insert_flags(Flags::PROTO_ERR);
-            Err(io::Error::new(io::ErrorKind::InvalidData, err_message))
-        }
-    }
 }
 
 impl FilterLayer for WsTransport {
@@ -79,7 +64,15 @@ impl FilterLayer for WsTransport {
                 )
             });
         }
-        Ok(Poll::Ready(()))
+
+        // Wait for the peer's close frame. It cannot arrive after read eof,
+        // and a failed connection is not required to wait for it.
+        let flags = self.flags.get();
+        if flags.intersects(Flags::PEER_CLOSED | Flags::PROTO_ERR) || buf.io().is_read_eof() {
+            Ok(Poll::Ready(()))
+        } else {
+            Ok(Poll::Pending)
+        }
     }
 
     fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
@@ -96,22 +89,11 @@ impl FilterLayer for WsTransport {
                     };
 
                     match frame {
-                        Frame::Binary(bin) => dst.extend_from_slice(&bin),
-                        Frame::Continuation(Item::FirstBinary(bin)) => {
-                            self.insert_flags(Flags::CONTINUATION);
-                            dst.extend_from_slice(&bin);
-                        }
-                        Frame::Continuation(Item::Continue(bin)) => {
-                            self.continuation_must_start("Continuation frame is not started")?;
-                            dst.extend_from_slice(&bin);
-                        }
-                        Frame::Continuation(Item::Last(bin)) => {
-                            self.continuation_must_start(
-                                "Continuation frame is not started, last frame is received",
-                            )?;
-                            dst.extend_from_slice(&bin);
-                            self.remove_flags(Flags::CONTINUATION);
-                        }
+                        // the codec enforces fragment ordering
+                        Frame::Binary(bin)
+                        | Frame::Continuation(
+                            Item::FirstBinary(bin) | Item::Continue(bin) | Item::Last(bin),
+                        ) => dst.extend_from_slice(&bin),
                         Frame::Continuation(Item::FirstText(_)) => {
                             self.insert_flags(Flags::PROTO_ERR);
                             return Err(io::Error::new(
@@ -133,6 +115,7 @@ impl FilterLayer for WsTransport {
                         }
                         Frame::Pong(_) => (),
                         Frame::Close(_) => {
+                            self.insert_flags(Flags::PEER_CLOSED);
                             buf.io().close();
                             break;
                         }
@@ -173,5 +156,116 @@ impl<F: Filter> Service<(), Io<F>> for WsTransportService {
 
     async fn call(&self, io: Io<F>, _: Ctx<'_, Self, ()>) -> Result<Self::Res, Self::Error> {
         Ok(WsTransport::create(io, self.codec.clone()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::Cell, rc::Rc};
+
+    use super::*;
+    use crate::io::testing::IoTest;
+    use crate::time::{Millis, sleep};
+    use crate::util::{BytePages, Bytes, BytesMut};
+
+    #[derive(Debug)]
+    struct Passthrough;
+
+    impl FilterLayer for Passthrough {
+        fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+            buf.with_read_buffers(|src, dst| {
+                if let Some(src) = src {
+                    dst.extend_from_slice(src);
+                    src.clear();
+                }
+            });
+            Ok(())
+        }
+
+        fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+            buf.with_write_buffers(BytePages::move_to);
+            Ok(())
+        }
+    }
+
+    fn peer_close() -> Bytes {
+        let mut dst = BytePages::default();
+        Codec::new()
+            .set_client_mode()
+            .encodev(Message::Close(None), &mut dst)
+            .unwrap();
+        Bytes::from(dst)
+    }
+
+    fn start_shutdown<F: Filter>(io: Io<F>) -> Rc<Cell<bool>> {
+        let done = Rc::new(Cell::new(false));
+        let done2 = done.clone();
+        crate::rt::spawn(async move {
+            let _ = io.shutdown().await;
+            done2.set(true);
+        });
+        done
+    }
+
+    fn assert_close_sent(client: &IoTest) {
+        let mut data = BytesMut::from(&client.read_any()[..]);
+        assert_eq!(
+            Codec::new().set_client_mode().decode(&mut data).unwrap(),
+            Some(Frame::Close(Some(CloseCode::Normal.into())))
+        );
+    }
+
+    async fn shutdown_waits_for_peer_close<F: Filter>(client: IoTest, io: Io<F>) {
+        client.remote_buffer_cap(1024);
+        let io = WsTransport::create(io, Codec::new());
+        let done = start_shutdown(io);
+        sleep(Millis(50)).await;
+
+        assert_close_sent(&client);
+        assert!(!done.get());
+
+        client.write(peer_close());
+        sleep(Millis(50)).await;
+        assert!(done.get());
+    }
+
+    #[crate::rt_test]
+    async fn shutdown_waits_for_close_reply() {
+        let (client, server) = IoTest::create();
+        shutdown_waits_for_peer_close(client, Io::from(server)).await;
+    }
+
+    #[crate::rt_test]
+    async fn shutdown_waits_for_close_reply_over_inner_filter() {
+        let (client, server) = IoTest::create();
+        shutdown_waits_for_peer_close(client, Io::from(server).add_filter(Passthrough)).await;
+    }
+
+    #[crate::rt_test]
+    async fn shutdown_completes_on_read_eof() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let done = start_shutdown(WsTransport::create(Io::from(server), Codec::new()));
+        sleep(Millis(50)).await;
+        assert_close_sent(&client);
+        assert!(!done.get());
+
+        client.close().await;
+        sleep(Millis(50)).await;
+        assert!(done.get());
+    }
+
+    #[crate::rt_test]
+    async fn peer_close_completes_shutdown() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = WsTransport::create(Io::from(server), Codec::new());
+
+        client.write(peer_close());
+        assert!(io.recv(&crate::codec::BytesCodec).await.unwrap().is_none());
+        sleep(Millis(50)).await;
+
+        assert_close_sent(&client);
+        assert!(io.is_closed());
     }
 }

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* `ws::WsTransport` shutdown waits for the peer's close frame, until read EOF or the shutdown
+  timeout, instead of closing the connection right after sending its own
+
 * WebSocket client codec accepts a received close code 1010 (`Extension`), servers still cannot
   send it
 

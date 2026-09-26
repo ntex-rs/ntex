@@ -312,6 +312,12 @@ impl IoContext {
                         st.buffer.process_write_buf_force(&self.0)?;
                         self.0.consolidate_write_state(false)?;
                     }
+
+                    // The input may be what a filter waits for to complete its
+                    // shutdown, which is polled by the read task.
+                    if st.flags.is_shutting_down_filters() {
+                        st.wake_read_task();
+                    }
                     Ok(())
                 })
             }),

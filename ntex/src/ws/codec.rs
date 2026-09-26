@@ -337,9 +337,10 @@ impl Decoder for Codec {
                                 ))))
                             }
                         }
-                        OpCode::Ping => Ok(Some(Frame::Ping(payload.unwrap_or_else(Bytes::new)))),
-                        OpCode::Pong => Ok(Some(Frame::Pong(payload.unwrap_or_else(Bytes::new)))),
-                        OpCode::Close => Err(ProtocolError::FragmentedControlFrame(opcode)),
+                        // rejected by the parser, kept for exhaustiveness
+                        OpCode::Ping | OpCode::Pong | OpCode::Close => {
+                            Err(ProtocolError::FragmentedControlFrame(opcode))
+                        }
                     }
                 }
             }

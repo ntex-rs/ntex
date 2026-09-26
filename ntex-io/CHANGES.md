@@ -1,5 +1,12 @@
 # Changes
 
+## [Unreleased]
+
+* Fix output written by a pending filter shutdown not reaching the transport when the filter
+  is stacked over another filter
+
+* Fix a filter shutdown waiting for peer input not being polled again after that input is read
+
 ## [4.1.0] - 2026-09-22
 
 * Fix filter shutdown waiting for the shutdown timeout when the input it
