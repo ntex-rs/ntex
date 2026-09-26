@@ -39,7 +39,9 @@
 //! Two tasks are spawned lazily on the current thread:
 //!
 //! * [`TimerDriver`] sleeps until the next occupied bucket expires and wakes
-//!   the timers stored in it.
+//!   the timers stored in it. The clock advances to the scheduled time of the
+//!   bucket, not to the time the driver woke up, so a late wakeup does not
+//!   delay later timers. Buckets that are overdue are processed at once.
 //! * [`LowresTimerDriver`] invalidates the cached [`now()`] and
 //!   [`system_time()`] values every 5 milliseconds.
 //!
@@ -78,7 +80,7 @@ const WHEEL_TIMEOUT_CUTOFF: u64 = lvl_start(LVL_DEPTH);
 const WHEEL_TIMEOUT_MAX: u64 = WHEEL_TIMEOUT_CUTOFF - lvl_gran(LVL_DEPTH - 1);
 
 /// Refresh interval of the cached time.
-const LOWRES_RESOLUTION: Duration = Duration::from_millis(5);
+const LOWRES_RESOLUTION: Duration = Duration::from_millis(500);
 
 /// Shift of the level clock relative to the wheel clock.
 const fn lvl_shift(lvl: u64) -> u64 {
@@ -193,8 +195,6 @@ bitflags::bitflags! {
     struct Flags: u8 {
         /// The timer driver task is spawned.
         const DRIVER_STARTED = 0b0000_0001;
-        /// `next_expiry` moved earlier, the driver must re-arm its sleep.
-        const DRIVER_RECALC  = 0b0000_0010;
         /// The cached time is populated and its refresh sleep is armed.
         const LOWRES_TIMER   = 0b0000_1000;
         /// The lowres driver task is spawned.
@@ -212,7 +212,8 @@ thread_local! {
 struct Timer {
     /// Wheel clock in units, the expiry that was processed last.
     elapsed: Cell<u64>,
-    /// Instant that corresponds to `elapsed`, set lazily on first use.
+    /// Instant that corresponds to `elapsed`, the scheduled time of the last
+    /// processed expiry. Set lazily when the wheel is idle.
     elapsed_time: Cell<Option<Instant>>,
     /// Expiry of the earliest occupied bucket, `u64::MAX` if the wheel is empty.
     next_expiry: Cell<u64>,
@@ -428,12 +429,17 @@ impl Timer {
         if expiry < self.next_expiry.get() {
             self.next_expiry.set(expiry);
             if self.flags.get().contains(Flags::DRIVER_STARTED) {
-                self.insert_flags(Flags::DRIVER_RECALC);
                 self.driver.wake();
             } else {
                 TimerDriver::start(self);
             }
         }
+    }
+
+    /// Instant at which the bucket expiring at `expiry` is due.
+    fn expiry_time(&self, expiry: u64) -> Instant {
+        self.elapsed_time()
+            + Duration::from_millis(to_millis(expiry.saturating_sub(self.elapsed.get())))
     }
 
     /// Returns the expiry of the earliest occupied bucket.
@@ -470,11 +476,6 @@ impl Timer {
         }
 
         if next < u64::MAX { Some(next) } else { None }
-    }
-
-    /// Time until the next expiry, relative to `elapsed_time`.
-    fn next_expiry_ms(&self) -> u64 {
-        to_millis(self.next_expiry.get().saturating_sub(self.elapsed.get()))
     }
 
     /// Marks all timers as elapsed and resets the wheel, tasks are not woken.
@@ -576,16 +577,23 @@ impl Wheel {
 struct TimerDriver {
     timer: Rc<Timer>,
     sleep: Delay,
+    /// Deadline the sleep is armed for.
+    armed: Option<Instant>,
 }
 
 impl TimerDriver {
     fn start(timer: &Rc<Timer>) {
         timer.insert_flags(Flags::DRIVER_STARTED);
 
+        let deadline = timer.expiry_time(timer.next_expiry.get());
         crate::spawn(TimerDriver {
-            sleep: Delay::new(Duration::from_millis(timer.next_expiry_ms())),
             timer: timer.clone(),
+            sleep: Delay::new(deadline.saturating_duration_since(Instant::now())),
+            armed: Some(deadline),
         });
+
+        // start lowres driver
+        timer.refresh_lowres();
     }
 }
 
@@ -603,37 +611,49 @@ impl Future for TimerDriver {
         let timer = &this.timer;
         timer.driver.register(cx.waker());
 
-        let mut flags = timer.flags.get();
-        if flags.contains(Flags::DRIVER_RECALC) {
-            flags.remove(Flags::DRIVER_RECALC);
-            timer.flags.set(flags);
+        let now = Instant::now();
+        timer.lowres_time.set(Some(now));
 
-            let since = Instant::now().saturating_duration_since(timer.elapsed_time());
-            let deadline = Duration::from_millis(timer.next_expiry_ms()).saturating_sub(since);
-            this.sleep.reset(deadline);
-        }
+        loop {
+            let expiry = timer.next_expiry.get();
+            if expiry == u64::MAX {
+                // the wheel is empty, a new timer wakes the driver
+                return Poll::Pending;
+            }
 
-        // a fired `Delay` stays ready, the wheel is idle until a timer is added
-        while timer.next_expiry.get() != u64::MAX && Pin::new(&mut this.sleep).poll(cx).is_ready() {
-            // advance the clock to the expired bucket
-            timer.elapsed.set(timer.next_expiry.get());
-            timer.elapsed_time.set(Some(Instant::now()));
+            let deadline = timer.expiry_time(expiry);
+            if deadline > now {
+                if this.armed != Some(deadline) {
+                    this.armed = Some(deadline);
+                    this.sleep.reset(deadline.saturating_duration_since(now));
+                }
+                if Pin::new(&mut this.sleep).poll(cx).is_pending() {
+                    return Poll::Pending;
+                }
+                if deadline > now {
+                    // the sleep fired before the deadline, re-arm it
+                    this.armed = None;
+                    continue;
+                }
+            }
+
+            // Advance the clock to the scheduled time of the bucket, a late
+            // wakeup must not shift the timers that expire later
+            timer.elapsed.set(expiry);
+            timer.elapsed_time.set(Some(deadline));
 
             let next = timer.with_wheel(|w| {
-                w.execute_expired_timers(timer.elapsed.get());
+                w.execute_expired_timers(expiry);
                 timer.next_pending_bucket(w)
             });
 
             if let Some(next) = next {
                 timer.next_expiry.set(next);
-                this.sleep
-                    .reset(Duration::from_millis(timer.next_expiry_ms()));
             } else {
                 timer.next_expiry.set(u64::MAX);
                 timer.elapsed_time.set(None);
             }
         }
-        Poll::Pending
     }
 }
 
@@ -782,6 +802,25 @@ mod tests {
             assert!(w.unlink(b));
             assert_eq!(w.occupied, [0; LVL_DEPTH as usize]);
         });
+    }
+
+    /// A late wakeup must not delay the timers that expire later.
+    #[ntex::test]
+    async fn test_late_wakeup_does_not_drift() {
+        let start = Instant::now();
+        let fut1 = sleep(Millis(100));
+        let fut2 = sleep(Millis(300));
+
+        // block the thread, the driver wakes up 150ms late for `fut1`
+        std::thread::sleep(Duration::from_millis(250));
+        fut1.await;
+        fut2.await;
+
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(300) && elapsed < Duration::from_millis(400),
+            "elapsed: {elapsed:?}"
+        );
     }
 
     #[ntex::test]

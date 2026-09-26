@@ -7,6 +7,9 @@
 
 * `TimerHandle::reset()` no longer adds an extra 16ms tick to short delays
 
+* Fix timer drift, a late wakeup of the timer driver delayed all later timers by
+  the same amount; overdue timers now fire in a single pass
+
 * Add `mpsc::Sender::poll_closed()` and `mpsc::Sender::closed()` to wait until the receiver
   is dropped or the channel is closed
 
