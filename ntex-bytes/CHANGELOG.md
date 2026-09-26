@@ -6,6 +6,16 @@
 
 * Add `BytePage::is_inline()` to report whether page data is stored inline
 
+* Deprecate and hide `BytePages::with_bytes_mut()`, it is not panic safe
+
+* Fix heap overflow in `BytesMut::reserve_capacity()` if capacity is less than length, it does nothing now
+
+* Fix `Buf::get_int()` and `Buf::get_int_le()` sign extension for less than 8 bytes
+
+* Fix missing synchronization when reusing a `BytePage` buffer released by another thread
+
+* Fix storage kind detection on big-endian platforms
+
 ## [1.9.0] (2026-07-17)
 
 * Mark `BytePage::as_ptr()` as `unsafe`, as it has additional requirements that make it unsafe

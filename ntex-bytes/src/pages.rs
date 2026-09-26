@@ -302,6 +302,26 @@ impl BytePages {
     }
 
     /// Provides mutable access to the current writable page.
+    ///
+    /// The current page, or a new page of [`page_size`](Self::page_size) if
+    /// there is none, is passed to `f` as a [`BytesMut`]. After `f` returns,
+    /// the buffer becomes the current page again. If its length has reached
+    /// the page size, it is pushed onto the page list instead. If `f` changed
+    /// the buffer's capacity (for example by reserving more space), the page
+    /// is no longer returned to the page cache when it is released.
+    ///
+    /// This is a low-level API intended for ntex internals and may change
+    /// without notice.
+    ///
+    /// # Panics
+    ///
+    /// `f` must not panic. The page is not reference-counted while `f` runs,
+    /// so unwinding out of `f` releases it twice, which is undefined behavior.
+    #[doc(hidden)]
+    #[deprecated(
+        since = "1.10.0",
+        note = "not panic safe, use the `BufMut` methods of `BytePages` instead"
+    )]
     pub fn with_bytes_mut<F, R>(&mut self, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
@@ -1004,6 +1024,7 @@ mod tests {
 
         // .with_bytes_mut()
         let mut pages = BytePages::default();
+        #[allow(deprecated)]
         pages.with_bytes_mut(|buf| buf.extend_from_slice(b"123"));
         assert_eq!(pages.len(), 3);
         let p = pages.freeze();
@@ -1016,6 +1037,7 @@ mod tests {
             .collect::<String>();
 
         let mut pages = BytePages::default();
+        #[allow(deprecated)]
         pages.with_bytes_mut(|buf| buf.extend_from_slice(data.as_bytes()));
         assert_eq!(pages.len(), 65_536);
         let p = pages.freeze();
