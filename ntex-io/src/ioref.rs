@@ -1014,7 +1014,11 @@ mod tests {
         let msg = io.recv(&BytesCodec).await.unwrap().unwrap();
         assert_eq!(msg, Bytes::from_static(BIN));
 
-        assert_eq!(out_bytes.get(), 8);
+        // the number of write passes depends on how often the runtime polls
+        // `send()`, each pass sees the 4 queued bytes until the transport
+        // writes them, at least once from `send()` and once from the transport
+        assert!(out_bytes.get() >= 8, "{}", out_bytes.get());
+        assert_eq!(out_bytes.get() % 4, 0, "{}", out_bytes.get());
     }
 
     #[ntex::test]
@@ -1053,7 +1057,12 @@ mod tests {
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"test"));
 
-        assert_eq!(out_bytes.get(), 16);
+        // the number of write passes depends on how often the runtime polls
+        // `send()`, each pass sees the 4 queued bytes in both layers until the
+        // transport writes them, at least once from `send()` and once from the
+        // transport
+        assert!(out_bytes.get() >= 16, "{}", out_bytes.get());
+        assert_eq!(out_bytes.get() % 8, 0, "{}", out_bytes.get());
         assert_eq!(state.0.buffer.with_write_dst(|b| b.len()), 0);
 
         // refs
@@ -1061,6 +1070,11 @@ mod tests {
         drop(state);
         assert_eq!(Rc::strong_count(&out_bytes), 1);
         assert_eq!(*read_order.borrow(), &[1, 2][..]);
-        assert_eq!(*write_order.borrow(), &[1, 2, 1, 2, 1, 2][..]);
+        let write_order = write_order.borrow();
+        assert!(write_order.len() >= 6, "{write_order:?}");
+        assert!(
+            write_order.chunks(2).all(|c| c == [1, 2]),
+            "{write_order:?}"
+        );
     }
 }
