@@ -142,6 +142,8 @@ mod http_support {
     use super::ResourcePath;
     use http::Uri;
 
+    /// Path segments are percent-decoded, segments that would not decode to
+    /// valid utf-8 are kept percent-encoded.
     impl ResourcePath for Uri {
         fn path(&self) -> &str {
             self.path()

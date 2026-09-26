@@ -309,7 +309,7 @@ impl ResourceDef {
                 end = Some(idx);
                 pattern = rem;
             } else {
-                re += rem;
+                re.push_str(&escape(rem));
                 rem = "";
                 break;
             }
@@ -389,7 +389,7 @@ impl ResourceDef {
         if !pattern.is_empty() {
             // handle tail expression for static segment
             if let Some(stripped) = pattern.strip_suffix('*') {
-                let pattern = Regex::new(&format!("^{stripped}(.+)")).unwrap();
+                let pattern = Regex::new(&format!("^{}(.+)", escape(stripped))).unwrap();
                 pelems.push(Segment::Dynamic {
                     pattern,
                     names: Vec::new(),
@@ -692,6 +692,10 @@ mod tests {
         test_single_value!("/%252F/", "%2F");
         test_single_value!("/%m/", "%m");
         test_single_value!("/%mm/", "%mm");
+        // decoded bytes that are not valid utf-8 are kept percent-encoded
+        test_single_value!("/%C3%A9/", "\u{e9}");
+        test_single_value!("/%FF%FE/", "%FF%FE");
+        test_single_value!("/test%C3/", "test%C3");
         test_single_value!("/test%mm/", "test%mm");
         test_single_value!(
             "/http%3A%2F%2Flocalhost%3A80%2Ffoo/",
@@ -725,6 +729,28 @@ mod tests {
         };
         assert_ne!(seg, seg2);
         assert_eq!(seg2, seg2);
+    }
+
+    #[test]
+    fn test_parse_escapes_literals() {
+        // literal after a dynamic segment
+        let mut resource = Path::new("/foo.json");
+        let tree = Tree::new(&ResourceDef::new("/{source}.json"), 1);
+        assert_eq!(tree.find(&mut resource), Some(1));
+        assert_eq!(resource.get("source").unwrap(), "foo");
+        assert_eq!(tree.find(&mut Path::new("/fooXjson")), None);
+
+        let tree = Tree::new(&ResourceDef::new("/{name}.[x]"), 1);
+        assert_eq!(tree.find(&mut Path::new("/a.[x]")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("/a.x")), None);
+
+        // static tail
+        let tree = Tree::new(&ResourceDef::new("/files.v*"), 1);
+        assert_eq!(tree.find(&mut Path::new("/files.v1")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("/filesXv1")), None);
+
+        let tree = Tree::new(&ResourceDef::new("/files(*"), 1);
+        assert_eq!(tree.find(&mut Path::new("/files(1")), Some(1));
     }
 
     #[test]
