@@ -31,21 +31,26 @@ impl BytePages {
     pub fn new(size: BytePageSize) -> Self {
         debug_assert!(size != BytePageSize::Unset, "Page cannot be Unset");
 
-        let st = CACHE.with(move |c| {
-            let mut cache = c.take().unwrap();
-
-            let item = if let Some(mut item) = cache.pop() {
-                item.size = size;
+        // the cache is unavailable while the thread-local is being destroyed
+        let cached = CACHE
+            .try_with(|c| {
+                let mut cache = c.take()?;
+                let item = cache.pop();
+                c.set(Some(cache));
                 item
-            } else {
-                Box::new(Inner {
-                    size,
-                    pages: VecDeque::with_capacity(8),
-                })
-            };
-            c.set(Some(cache));
+            })
+            .ok()
+            .flatten();
+
+        let st = if let Some(mut item) = cached {
+            item.size = size;
             item
-        });
+        } else {
+            Box::new(Inner {
+                size,
+                pages: VecDeque::with_capacity(8),
+            })
+        };
 
         BytePages {
             st: Some(st),
@@ -379,15 +384,18 @@ impl BytePages {
 
 impl Drop for BytePages {
     fn drop(&mut self) {
-        CACHE.with(move |c| {
-            let mut cache = c.take().unwrap();
-            if cache.len() < CACHE_SIZE {
-                let mut st = self.st.take().unwrap();
-                st.pages.clear();
-                cache.push(st);
-            }
-            c.set(Some(cache));
-        });
+        if let Some(mut st) = self.st.take() {
+            st.pages.clear();
+            // the cache is unavailable while the thread-local is being destroyed
+            let _ = CACHE.try_with(move |c| {
+                if let Some(mut cache) = c.take() {
+                    if cache.len() < CACHE_SIZE {
+                        cache.push(st);
+                    }
+                    c.set(Some(cache));
+                }
+            });
+        }
     }
 }
 

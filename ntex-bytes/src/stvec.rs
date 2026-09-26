@@ -45,20 +45,25 @@ impl StorageVec {
 
     /// Create new empty storage with specified size category
     pub(crate) fn sized(size: BytePageSize) -> StorageVec {
-        CACHE.with(|c| {
-            let mut cst = c.take().unwrap();
-            let item = cst.cache[size as usize].pop();
-            c.set(Some(cst));
-
-            if let Some(mut item) = item {
-                unsafe {
-                    item.as_inner().size = size;
-                }
+        // the cache is unavailable while the thread-local is being destroyed
+        let cached = CACHE
+            .try_with(|c| {
+                let mut cst = c.take()?;
+                let item = cst.cache[size as usize].pop();
+                c.set(Some(cst));
                 item
-            } else {
-                StorageVec(SharedVec::create(size, size.capacity(), &[]))
+            })
+            .ok()
+            .flatten();
+
+        if let Some(mut item) = cached {
+            unsafe {
+                item.as_inner().size = size;
             }
-        })
+            item
+        } else {
+            StorageVec(SharedVec::create(size, size.capacity(), &[]))
+        }
     }
 
     /// Create new storage with capacity and copy slice
@@ -341,10 +346,11 @@ thread_local! {
 }
 
 pub(crate) fn set_pages_cache(size: usize) {
-    CACHE.with(|c| {
-        let mut cst = c.take().unwrap();
-        cst.size = size;
-        c.set(Some(cst));
+    let _ = CACHE.try_with(|c| {
+        if let Some(mut cst) = c.take() {
+            cst.size = size;
+            c.set(Some(cst));
+        }
     });
 }
 
@@ -458,8 +464,12 @@ pub(crate) fn release_shared_vec(ptr: *mut SharedVec) {
         // Try to put to cache
         let size = (*ptr).size;
         if size != BytePageSize::Unset {
-            let cached = CACHE.with(|c| {
-                let mut cst = c.take().unwrap();
+            // the cache is unavailable while the thread-local is being destroyed,
+            // the page is freed instead
+            let cached = CACHE.try_with(|c| {
+                let Some(mut cst) = c.take() else {
+                    return false;
+                };
                 let res = if cst.cache[size as usize].len() < cst.size {
                     let capacity = cap - METADATA_SIZE_U32;
                     (*ptr).len = 0;
@@ -476,7 +486,7 @@ pub(crate) fn release_shared_vec(ptr: *mut SharedVec) {
                 c.set(Some(cst));
                 res
             });
-            if cached {
+            if matches!(cached, Ok(true)) {
                 return;
             }
         }
