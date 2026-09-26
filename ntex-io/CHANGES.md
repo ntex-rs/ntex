@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* Fix `Io::poll_shutdown()` waking the transport tasks on every poll, which kept the compio
+  runtime from polling for I/O completions and stalled the shutdown until its timeout
+
 * Fix output written by a filter that fails on read during shutdown being lost when the filter
   is stacked over another filter
 
