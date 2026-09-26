@@ -332,6 +332,33 @@ mod tests {
     }
 
     #[test]
+    fn test_recognizer_long_path() {
+        let mut router = Router::<usize>::builder();
+        router.path("/{name}/{id}/{tail}*", 10);
+        let router = router.build();
+
+        let name = "a".repeat(u16::MAX as usize + 10);
+        let mut path = Path::new(format!("/{name}/1/test/tail"));
+        assert_eq!(router.recognize(&mut path), Some((&10, ResourceId(0))));
+        assert_eq!(path.get("name"), Some(name.as_str()));
+        assert_eq!(path.get("id"), Some("1"));
+        assert_eq!(path.get("tail"), Some("test/tail"));
+
+        let mut router = Router::<usize>::builder();
+        router.prefix("/prefix", 10);
+        let router = router.build();
+
+        let mut path = Path::new(format!("/prefix/{name}"));
+        path.skip(u32::from(u16::MAX) + 1);
+        assert_eq!(router.recognize(&mut path), None);
+
+        let mut path = Path::new(format!("/{name}/prefix/test"));
+        path.skip(name.len() as u32 + 1);
+        assert_eq!(router.recognize(&mut path), Some((&10, ResourceId(0))));
+        assert_eq!(path.path(), "/test");
+    }
+
+    #[test]
     fn test_recognizer_with_path_skip() {
         let mut router = Router::<usize>::builder();
         router.path("/name", 10).0.set_id(0);

@@ -334,7 +334,7 @@ where
                     let _ = inner.shared.service.poll_ready(cx);
 
                     let result = ready!(Pin::new(stop).poll(cx));
-                    inner.shared.handle_result(result, &inner.shared.io, false);
+                    inner.shared.handle_result(result, false);
                     // the dispatcher returns a service error from the stop call,
                     // unless it is stopping because of an earlier one
                     if let Some(DispatcherError::Service(err)) = inner.shared.error.take()

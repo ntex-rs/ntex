@@ -9,7 +9,7 @@ use crate::{Resource, ResourcePath};
 pub(super) enum PathItem {
     Static(&'static str),
     Segment(String),
-    IdxSegment(u16, u16),
+    IdxSegment(u32, u32),
 }
 
 /// Resource path match information
@@ -19,7 +19,7 @@ pub(super) enum PathItem {
 #[derive(Debug)]
 pub struct Path<T> {
     resource: T,
-    pub(super) skip: u16,
+    pub(super) skip: u32,
     pub(super) segments: Vec<(&'static str, PathItem)>,
 }
 
@@ -91,7 +91,7 @@ impl<T: ResourcePath> Path<T> {
 
     #[inline]
     /// Skip first `n` bytes in path, matching starts after them
-    pub fn skip(&mut self, n: u16) {
+    pub fn skip(&mut self, n: u32) {
         self.skip += n;
     }
 

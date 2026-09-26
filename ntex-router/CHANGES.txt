@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* Fix wrong segment values for paths longer than 64KiB, offsets were stored
+  as `u16` and wrapped. `Path::skip()` takes `u32`
+
 * Fix undefined behavior, percent-decoding of `http::Uri` path segments could
   produce invalid utf-8, e.g. `%FF`. Such segments are kept percent-encoded
 
