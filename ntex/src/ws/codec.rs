@@ -151,7 +151,7 @@ impl Encoder for Codec {
     type Item = Message;
     type Error = ProtocolError;
 
-    fn encodev(&self, item: Message, dst: &mut BytePages) -> Result<(), Self::Error> {
+    fn encode(&self, item: Message, dst: &mut BytePages) -> Result<(), Self::Error> {
         if self.is_closed() {
             return Err(ProtocolError::Closed);
         }
@@ -387,13 +387,13 @@ mod tests {
         let codec = Codec::new();
         let mut dst = BytePages::default();
         codec
-            .encodev(
+            .encode(
                 Message::Continuation(Item::FirstBinary(Bytes::new())),
                 &mut dst,
             )
             .unwrap();
         assert!(matches!(
-            codec.encodev(Message::Text("text".into()), &mut dst),
+            codec.encode(Message::Text("text".into()), &mut dst),
             Err(ProtocolError::ContinuationStarted)
         ));
     }
@@ -402,10 +402,10 @@ mod tests {
     fn rejects_messages_after_close() {
         let codec = Codec::new();
         let mut dst = BytePages::default();
-        codec.encodev(Message::Close(None), &mut dst).unwrap();
+        codec.encode(Message::Close(None), &mut dst).unwrap();
 
         assert!(matches!(
-            codec.encodev(Message::Text("text".into()), &mut dst),
+            codec.encode(Message::Text("text".into()), &mut dst),
             Err(ProtocolError::Closed)
         ));
         assert!(matches!(

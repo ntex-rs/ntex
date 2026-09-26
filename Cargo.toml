@@ -59,7 +59,7 @@ ntex-h2 = { git = "https://github.com/ntex-rs/ntex-h2.git", branch = "refine-api
 [workspace.dependencies]
 ntex = "4.0.0-beta.14"
 ntex-bytes = "1.10.0"
-ntex-codec = "1.2.1"
+ntex-codec = "2.0.0"
 ntex-dispatcher = "4.1.0"
 ntex-error = "2.6.0"
 ntex-h2 = "4.2.0"

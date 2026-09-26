@@ -50,6 +50,9 @@ pub enum Reason<U: Encoder + Decoder> {
     /// The transport disconnected.
     ///
     /// The value contains the underlying I/O error when one was available.
+    /// If the peer closed its side cleanly while undecodable bytes were left
+    /// in the read buffer, the stream was truncated and the value contains an
+    /// [`io::ErrorKind::UnexpectedEof`] error.
     Io(Option<io::Error>),
     /// A service response could not be encoded.
     Encoder(<U as Encoder>::Error),
@@ -62,6 +65,18 @@ pub enum Reason<U: Encoder + Decoder> {
     /// Write backpressure stayed enabled for longer than the configured
     /// write timeout.
     WriteTimeout,
+}
+
+/// Reports a truncated stream, the peer closed cleanly in the middle of a frame.
+fn truncated(io: &IoBoxed) -> Option<io::Error> {
+    if io.is_read_eof() && io.with_read_dst(|buf| !buf.is_empty()) {
+        Some(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "bytes remaining on stream",
+        ))
+    } else {
+        None
+    }
 }
 
 pin_project_lite::pin_project! {
@@ -277,6 +292,7 @@ where
                                     continue;
                                 }
                                 Err(RecvError::PeerGone(err)) => {
+                                    let err = err.or_else(|| truncated(&inner.shared.io));
                                     log::trace!(
                                         "{}: Peer is gone, stopping dispatcher: {:?}",
                                         inner.shared.io.tag(),
@@ -705,7 +721,7 @@ mod tests {
         type Item = Bytes;
         type Error = io::Error;
 
-        fn encodev(&self, item: Bytes, dst: &mut BytePages) -> Result<(), Self::Error> {
+        fn encode(&self, item: Bytes, dst: &mut BytePages) -> Result<(), Self::Error> {
             dst.append(item);
             Ok(())
         }
@@ -1402,6 +1418,47 @@ mod tests {
         assert!(handled.load(Relaxed));
     }
 
+    async fn stop_reason_at_eof(input: &'static str) -> Option<io::ErrorKind> {
+        let reason = Rc::new(RefCell::new(None));
+        let reason2 = reason.clone();
+
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        client.write(input);
+
+        let (disp, _) = Dispatcher::debug(
+            Io::from(server),
+            BCodec(8),
+            ntex_service::fn_service(move |msg: DispatchItem<BCodec>| {
+                if let DispatchItem::Stop(Reason::Io(err)) = msg {
+                    *reason2.borrow_mut() = Some(err.map(|e| e.kind()));
+                }
+                async move { Ok::<_, ()>(None) }
+            }),
+        );
+        spawn(async move {
+            let _ = disp.await;
+        });
+        sleep(Millis(25)).await;
+        client.close().await;
+        sleep(Millis(50)).await;
+
+        reason.borrow_mut().take().expect("dispatcher did not stop")
+    }
+
+    #[ntex::test]
+    async fn peer_eof_reports_truncated_frame() {
+        assert_eq!(
+            stop_reason_at_eof("123").await,
+            Some(io::ErrorKind::UnexpectedEof)
+        );
+    }
+
+    #[ntex::test]
+    async fn peer_eof_after_whole_frame_is_clean() {
+        assert_eq!(stop_reason_at_eof("12345678").await, None);
+    }
+
     /// Service becomes not ready and write backpressure is enabled
     #[ntex::test]
     async fn service_is_not_ready_and_backpressure() {
@@ -1533,7 +1590,7 @@ mod tests {
         type Item = Bytes;
         type Error = io::Error;
 
-        fn encodev(&self, item: Bytes, dst: &mut BytePages) -> Result<(), Self::Error> {
+        fn encode(&self, item: Bytes, dst: &mut BytePages) -> Result<(), Self::Error> {
             dst.append(item);
             Ok(())
         }

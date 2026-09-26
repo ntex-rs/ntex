@@ -198,7 +198,7 @@ impl Encoder for ClientCodec {
     type Item = Message<ClientRawRequest>;
     type Error = EncodeError;
 
-    fn encodev(&self, item: Self::Item, dst: &mut BytePages) -> Result<(), Self::Error> {
+    fn encode(&self, item: Self::Item, dst: &mut BytePages) -> Result<(), Self::Error> {
         match item {
             Message::Item(mut req) => {
                 let inner = &self.inner;

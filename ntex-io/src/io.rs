@@ -3091,6 +3091,52 @@ mod tests {
         assert!(io.recv(&FixedSize(8)).await.unwrap().is_none());
     }
 
+    /// Fixed size frames, the last frame may be shorter once at eof.
+    struct FixedSizeEof(usize, std::cell::Cell<usize>);
+
+    impl Decoder for FixedSizeEof {
+        type Item = Bytes;
+        type Error = io::Error;
+
+        fn decode(&self, src: &mut BytesMut) -> Result<Option<Bytes>, io::Error> {
+            FixedSize(self.0).decode(src)
+        }
+
+        fn decode_eof(&self, src: &mut BytesMut) -> Result<Option<Bytes>, io::Error> {
+            self.1.set(self.1.get() + 1);
+            if src.is_empty() {
+                Ok(None)
+            } else {
+                let len = src.len().min(self.0);
+                Ok(Some(src.split_to(len)))
+            }
+        }
+    }
+
+    #[ntex::test]
+    async fn recv_uses_decode_eof_after_eof() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = Io::new(server, SharedCfg::new("SRV"));
+        let codec = FixedSizeEof(8, std::cell::Cell::new(0));
+
+        client.write("12345678");
+        sleep(Millis(25)).await;
+        assert_eq!(io.recv(&codec).await.unwrap().unwrap(), "12345678");
+        // not at eof yet
+        assert_eq!(codec.1.get(), 0);
+
+        // a partial frame, then the peer goes away
+        client.write("123");
+        sleep(Millis(25)).await;
+        client.close().await;
+
+        assert_eq!(io.recv(&codec).await.unwrap().unwrap(), "123");
+        assert!(io.recv(&codec).await.unwrap().is_none());
+        assert!(codec.1.get() >= 2);
+        assert_eq!(io.with_read_dst(|b| b.len()), 0);
+    }
+
     #[ntex::test]
     async fn recv_local_shutdown_is_not_truncation() {
         let (client, server) = IoTest::create();

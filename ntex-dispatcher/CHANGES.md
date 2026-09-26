@@ -2,6 +2,9 @@
 
 ## [4.1.0] - 2026-09-21
 
+* Report `Reason::Io(Some(UnexpectedEof))` when the peer closes cleanly while
+  undecodable bytes remain in the read buffer, instead of a clean disconnect
+
 * Simplify internal state
 
 * Enforce the IoConfig write timeout from the moment write backpressure is

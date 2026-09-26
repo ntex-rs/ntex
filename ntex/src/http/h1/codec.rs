@@ -44,7 +44,7 @@ bitflags! {
 ///
 /// # Encoding
 ///
-/// [`Encoder::encodev`] accepts a
+/// [`Encoder::encode`] accepts a
 /// [`Message<(Response<()>, BodySize)>`](Message). Encode the response head
 /// first, followed by body chunks and a final `Message::Chunk(None)` when the
 /// response has a body. The codec selects fixed-length, chunked, or
@@ -203,7 +203,7 @@ impl Encoder for Codec {
     type Item = Message<(Response<()>, BodySize)>;
     type Error = EncodeError;
 
-    fn encodev(&self, item: Self::Item, dst: &mut BytePages) -> Result<(), Self::Error> {
+    fn encode(&self, item: Self::Item, dst: &mut BytePages) -> Result<(), Self::Error> {
         match item {
             Message::Item((mut res, length)) => {
                 // set response version
@@ -268,11 +268,11 @@ mod tests {
 
                 let mut out = BytePages::default();
                 let res = Response::with_body(status, ());
-                codec.encodev(Message::Item((res, size)), &mut out).unwrap();
+                codec.encode(Message::Item((res, size)), &mut out).unwrap();
                 codec
-                    .encodev(Message::Chunk(Some(Bytes::from_static(b"abc"))), &mut out)
+                    .encode(Message::Chunk(Some(Bytes::from_static(b"abc"))), &mut out)
                     .unwrap();
-                codec.encodev(Message::Chunk(None), &mut out).unwrap();
+                codec.encode(Message::Chunk(None), &mut out).unwrap();
 
                 let mut data = Vec::new();
                 while let Some(chunk) = out.take() {
@@ -300,12 +300,12 @@ mod tests {
 
         let mut out = BytePages::default();
         codec
-            .encodev(Message::Item((res, BodySize::Stream)), &mut out)
+            .encode(Message::Item((res, BodySize::Stream)), &mut out)
             .unwrap();
         codec
-            .encodev(Message::Chunk(Some(Bytes::from_static(b"abc"))), &mut out)
+            .encode(Message::Chunk(Some(Bytes::from_static(b"abc"))), &mut out)
             .unwrap();
-        codec.encodev(Message::Chunk(None), &mut out).unwrap();
+        codec.encode(Message::Chunk(None), &mut out).unwrap();
 
         let mut data = Vec::new();
         while let Some(chunk) = out.take() {

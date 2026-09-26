@@ -70,7 +70,7 @@ impl FilterLayer for WsTransport {
                 CloseCode::Normal
             };
             let _ = buf.with_write_buffers(|_, w_dst| {
-                self.codec.encodev(
+                self.codec.encode(
                     Message::Close(Some(CloseReason {
                         code,
                         description: None,
@@ -128,7 +128,7 @@ impl FilterLayer for WsTransport {
                         }
                         Frame::Ping(msg) => {
                             buf.with_write_buffers(|_, w_dst| {
-                                let _ = self.codec.encodev(Message::Pong(msg), w_dst);
+                                let _ = self.codec.encode(Message::Pong(msg), w_dst);
                             });
                         }
                         Frame::Pong(_) => (),

@@ -170,7 +170,7 @@ impl IoRef {
     where
         U: Encoder,
     {
-        self.with_write_src(|buf| codec.encodev(item, buf))
+        self.with_write_src(|buf| codec.encode(item, buf))
             .unwrap_or_else(|_| Ok(()))
     }
 
@@ -201,6 +201,9 @@ impl IoRef {
 
     /// Attempts to decode a frame from the read buffer.
     ///
+    /// Once the transport reached eof this uses [`Decoder::decode_eof`]
+    /// instead of [`Decoder::decode`].
+    ///
     /// This mutates the read state: it clears read readiness, and consuming
     /// enough bytes may release read backpressure. It also cancels a pause
     /// installed by [`Io::poll_read_pause`](crate::Io::poll_read_pause) and wakes the transport
@@ -213,7 +216,7 @@ impl IoRef {
         U: Decoder,
     {
         self.0.buffer.with_read_dst(self, |buf| {
-            let res = codec.decode(buf);
+            let res = self.decode_buf(codec, buf);
             self.0.flags.unset_read_ready();
             self.update_read_destination(buf);
             res
@@ -224,7 +227,8 @@ impl IoRef {
     ///
     /// `Decoded::consumed` reports the bytes taken by this attempt and
     /// `Decoded::remains` the bytes left in the application-facing read
-    /// buffer.
+    /// buffer. Once the transport reached eof this uses
+    /// [`Decoder::decode_eof`] instead of [`Decoder::decode`].
     ///
     /// Like [`decode`](Self::decode), this mutates the read state: it clears
     /// read readiness, may release read backpressure, and cancels a pause
@@ -238,7 +242,7 @@ impl IoRef {
     {
         self.0.buffer.with_read_dst(self, |buf| {
             let len = buf.len();
-            let res = codec.decode(buf).map(|item| Decoded {
+            let res = self.decode_buf(codec, buf).map(|item| Decoded {
                 item,
                 remains: buf.len(),
                 consumed: len - buf.len(),
@@ -247,6 +251,18 @@ impl IoRef {
             self.update_read_destination(buf);
             res
         })
+    }
+
+    fn decode_buf<U: Decoder>(
+        &self,
+        codec: &U,
+        buf: &mut BytesMut,
+    ) -> Result<Option<U::Item>, U::Error> {
+        if self.0.flags.is_read_eof() {
+            codec.decode_eof(buf)
+        } else {
+            codec.decode(buf)
+        }
     }
 
     /// Sends the write buffer to the I/O layer.

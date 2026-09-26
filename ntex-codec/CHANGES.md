@@ -1,5 +1,13 @@
 # Changes
 
+## [2.0.0] - 2026-09-26
+
+* Remove deprecated `Encoder::encode()` method with `BytesMut` buffer
+
+* Rename `Encoder::encodev()` to `Encoder::encode()`, it is required now
+
+* Add `Decoder::decode_eof()`, used instead of `decode()` once the transport reached eof
+
 ## [1.2.1] - 2026-05-06
 
 * Use optimized BytePages::with_bytes_mut() method
