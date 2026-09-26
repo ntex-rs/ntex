@@ -1,5 +1,5 @@
 //! WebSocket client.
-use std::{fmt, marker};
+use std::{fmt, marker, pin};
 
 #[cfg(feature = "openssl")]
 use crate::connect::openssl;
@@ -22,6 +22,7 @@ use crate::http::{ConnectionType, Message, Method, RequestHead, StatusCode, Uri}
 use crate::http::{body::BodySize, error::HttpError};
 use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, Layer, Reason, Sealed};
 use crate::service::{IntoService, Pipeline, apply_fn, fn_service};
+use crate::util::{Either, select};
 use crate::{Cfg, Service, SharedCfg, channel::mpsc, rt, time::timeout, ws};
 
 use super::cfg::is_token;
@@ -400,23 +401,36 @@ impl WsConnection<Sealed> {
     /// Starts the WebSocket dispatcher and returns a channel of received frames.
     ///
     /// The dispatcher runs in a spawned task. Protocol and connection errors
-    /// are delivered through the returned channel.
+    /// are delivered through the returned channel. Dropping the receiver sends
+    /// a close frame and closes the connection once the peer responds or the
+    /// closing-handshake timeout expires.
     pub fn receiver(self) -> mpsc::Receiver<Result<ws::Frame, WsError<()>>> {
         let (tx, rx): (_, mpsc::Receiver<Result<ws::Frame, WsError<()>>>) = mpsc::channel();
 
         rt::spawn(async move {
             let tx2 = tx.clone();
             let io = self.io.get_ref();
+            let sink = self.sink();
 
-            let result = self
-                .start(fn_service(async move |item: ws::Frame| {
-                    match tx.send(Ok(item)) {
-                        Ok(()) => (),
-                        Err(_) => io.close(),
-                    }
-                    Ok::<Option<ws::Message>, ()>(None)
-                }))
-                .await;
+            let fut = self.start(fn_service(async move |item: ws::Frame| {
+                match tx.send(Ok(item)) {
+                    Ok(()) => (),
+                    Err(_) => io.close(),
+                }
+                Ok::<Option<ws::Message>, ()>(None)
+            }));
+            let mut fut = pin::pin!(fut);
+
+            let result = match select(fut.as_mut(), tx2.closed()).await {
+                Either::Left(result) => result,
+                Either::Right(()) => {
+                    // the receiver is dropped, start the closing handshake
+                    let _ = sink
+                        .send(ws::Message::Close(Some(CloseCode::Normal.into())))
+                        .await;
+                    fut.await
+                }
+            };
 
             if let Err(e) = result {
                 let _ = tx2.send(Err(e));

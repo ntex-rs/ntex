@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* Dropping the receiver returned by `ws::WsConnection::receiver()` sends a close frame and
+  closes the connection, instead of keeping it open until the peer sends another frame
+
 * `ws::WsTransport` sends a protocol error close frame (1002) before closing the connection on
   invalid input, output written after the close frame is discarded
 

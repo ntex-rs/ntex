@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* Add `mpsc::Sender::poll_closed()` and `mpsc::Sender::closed()` to wait until the receiver
+  is dropped or the channel is closed
+
 * `bstream` wakes a sender blocked by backpressure once the buffer is drained
   to the low watermark, instead of after every consumed chunk
 

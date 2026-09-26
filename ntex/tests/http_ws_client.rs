@@ -213,3 +213,65 @@ async fn test_upgrade_handler_with_await() {
     .await
     .unwrap();
 }
+
+#[ntex::test]
+async fn test_receiver_drop_closes_connection() {
+    let (closed_tx, closed_rx) = std::sync::mpsc::channel();
+    let srv = test_server(async move |_| {
+        let closed_tx = closed_tx.clone();
+        HttpService::new(async |_| Ok::<_, io::Error>(Response::NotFound())).h1_control(
+            async move |req: h1::Control<_, _>| {
+                let ack = if let h1::Control::Upgrade(upg) = req {
+                    let (ack, io, req, codec) = upg.handle();
+                    let res = handshake_response(req.head()).build();
+                    io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
+                        .unwrap();
+
+                    let closed_tx = closed_tx.clone();
+                    let _ = Dispatcher::new(
+                        io.seal(),
+                        ws::Codec::default(),
+                        Pipeline::new((), async move |msg: DispatchItem<ws::Codec>| {
+                            if let DispatchItem::Item(ws::Frame::Close(reason)) = &msg {
+                                let _ = closed_tx.send(reason.clone());
+                            }
+                            ws_service(msg).await
+                        }),
+                    )
+                    .await;
+                    ack
+                } else {
+                    req.ack()
+                };
+                Ok::<_, io::Error>(ack)
+            },
+        )
+    });
+
+    let con = ws::WsClient::new(
+        srv.url("/"),
+        ws::WsClientConfig::new()
+            .set_address(srv.addr())
+            .set_handshake_timeout(Seconds(30)),
+    )
+    .connect()
+    .await
+    .unwrap()
+    .seal();
+    let sink = con.sink();
+    let rx = con.receiver();
+    ntex::time::sleep(ntex::time::Millis(50)).await;
+    assert!(sink.io().is_active());
+
+    // the peer is idle, dropping the receiver still closes the connection
+    drop(rx);
+    ntex::time::timeout(Seconds(3), sink.on_disconnect())
+        .await
+        .expect("connection is not closed");
+    assert_eq!(
+        closed_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap(),
+        Some(ws::CloseCode::Normal.into())
+    );
+}
