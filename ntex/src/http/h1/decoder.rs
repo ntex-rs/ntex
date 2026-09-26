@@ -24,6 +24,8 @@ struct Inner<T> {
     hdr_st: httparse::State,
     cfg: Cfg<HttpServiceConfig>,
     consumed: usize,
+    /// number of parsed header lines of the current message
+    headers: u16,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -60,6 +62,7 @@ impl<T: MessageType> MessageDecoder<T> {
                 hdr: httparse::Header::default(),
                 hdr_st: httparse::State::default(),
                 consumed: 0,
+                headers: 0,
             }))),
         }
     }
@@ -78,6 +81,7 @@ impl<T: MessageType> Clone for MessageDecoder<T> {
                 st: State::default(),
                 val: None,
                 consumed: 0,
+                headers: 0,
                 hdr: httparse::Header::default(),
                 hdr_st: httparse::State::default(),
                 cfg: inner.cfg.clone(),
@@ -99,9 +103,11 @@ impl<T: MessageType> MessageDecoder<T> {
                 HeaderParsed::Header(len) => {
                     let buf = src.split_to(len);
 
-                    if inner.val.as_mut().unwrap().headers_mut().len() >= inner.cfg.max_headers {
+                    // repeated header names count separately
+                    if inner.headers >= inner.cfg.max_headers {
                         return Poll::Ready(Err(DecodeError::MaxHeaders));
                     }
+                    inner.headers += 1;
                     // the parser validates name characters, but not its length
                     let Ok(name) =
                         HeaderName::from_bytes(&buf[inner.hdr.name.start..inner.hdr.name.end])
@@ -183,6 +189,7 @@ impl<T: MessageType> Decoder for MessageDecoder<T> {
                     let consumed = inner.consumed + len - src.len();
                     inner.st = State::default();
                     inner.consumed = 0;
+                    inner.headers = 0;
                     self.hdrs.set(false);
                     (Ok(Some((val, pl))), consumed)
                 }
@@ -1993,6 +2000,34 @@ mod tests {
         let mut buf = BytesMut::from(TEXT);
         let err = reader.decode(&mut buf).err().unwrap();
         assert_eq!(err, DecodeError::MaxHeaders);
+    }
+
+    #[test]
+    fn test_max_headers_repeated_names() {
+        let cfg: SharedCfg = SharedCfg::new("test")
+            .add(HttpServiceConfig::new().set_max_headers(2))
+            .into();
+
+        // repeated names count separately
+        let reader = MessageDecoder::<Request>::new(cfg.get());
+        let mut buf = BytesMut::from("GET / HTTP/1.1\r\nX: 1\r\nX: 2\r\nX: 3\r\n\r\n");
+        assert_eq!(reader.decode(&mut buf).err(), Some(DecodeError::MaxHeaders));
+
+        // count is kept across partial reads
+        let reader = MessageDecoder::<Request>::new(cfg.get());
+        let mut buf = BytesMut::from("GET / HTTP/1.1\r\nX: 1\r\nX: 2\r\n");
+        assert!(reader.decode(&mut buf).unwrap().is_none());
+        buf.extend_from_slice(b"X: 3\r\n\r\n");
+        assert_eq!(reader.decode(&mut buf).err(), Some(DecodeError::MaxHeaders));
+
+        // count is reset for the next message
+        let reader = MessageDecoder::<Request>::new(cfg.get());
+        let mut buf = BytesMut::from(
+            "GET / HTTP/1.1\r\nX: 1\r\nX: 2\r\n\r\nGET / HTTP/1.1\r\nX: 1\r\nX: 2\r\n\r\n",
+        );
+        let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(req.headers().get_all("x").count(), 2);
+        assert!(reader.decode(&mut buf).unwrap().is_some());
     }
 
     #[test]

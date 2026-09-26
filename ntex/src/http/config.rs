@@ -48,7 +48,7 @@ pub struct HttpServiceConfig {
     pub(super) keep_alive: Seconds,
     pub(super) ka_enabled: bool,
     pub(super) headers_vec: bool,
-    pub(super) max_headers: usize,
+    pub(super) max_headers: u16,
     pub(super) max_buf_size: usize,
     pub(super) headers_read_rate: Option<FrameReadRate>,
     pub(super) payload_read_rate: Option<FrameReadRate>,
@@ -110,9 +110,11 @@ impl HttpServiceConfig {
     #[must_use]
     /// Sets the maximum number of headers in a message.
     ///
+    /// Every header line counts, including repeated header names.
+    ///
     /// Requests exceeding this limit are rejected with
     /// `431 Request Header Fields Too Large`. The default is 96.
-    pub fn set_max_headers(mut self, val: usize) -> Self {
+    pub fn set_max_headers(mut self, val: u16) -> Self {
         self.max_headers = val;
         self
     }

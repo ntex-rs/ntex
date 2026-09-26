@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* Fix HTTP/1 `max_headers` limit counting distinct header names, repeated header names
+  are counted separately
+
 * Fix HTTP client requests failing when their HTTP/2 connection reaches `h2_lifetime` after
   the connection is acquired but before the request is sent
 
