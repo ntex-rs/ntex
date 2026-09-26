@@ -7,6 +7,9 @@
 
 ## [4.1.0] - 2026-09-23
 
+* Fix aliasing violation in the IOCP backend when a write was issued while a
+  recv completed immediately, the operations are now boxed separately
+
 * Fix IOCP shutdown not cancelling an in-flight send while a recv was also
   pending, the send could start another one after the close had begun
 
