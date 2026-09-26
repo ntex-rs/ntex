@@ -282,7 +282,7 @@ impl BytesMut {
     #[inline]
     pub fn advance_to(&mut self, cnt: usize) {
         unsafe {
-            self.storage.set_start(cnt as u32);
+            self.storage.set_start(cnt);
         }
     }
 

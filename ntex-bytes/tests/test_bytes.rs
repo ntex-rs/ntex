@@ -883,3 +883,28 @@ fn bytes_handle_concurrent_with_bytes_mut() {
     assert_eq!(b, &[1u8; 200][..]);
     assert_eq!(buf.len(), 256 + 16 - 8 - 32 - 1);
 }
+
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn advance_to_does_not_truncate_count() {
+    const CNT: usize = (1 << 32) + 1;
+
+    assert_advance_panics("BytesMut", || {
+        let mut buf = BytesMut::with_capacity(64);
+        buf.extend_from_slice(b"hello");
+        buf.advance_to(CNT);
+    });
+    assert_advance_panics("BytesMut split_to", || {
+        let mut buf = BytesMut::with_capacity(64);
+        buf.extend_from_slice(b"hello");
+        let _ = buf.split_to(CNT);
+    });
+    assert_advance_panics("BytePage", || {
+        let mut buf = BytesMut::with_capacity(64);
+        buf.extend_from_slice(b"hello");
+        BytePage::from(buf).advance_to(CNT);
+    });
+    assert_advance_panics("BytePage vec", || {
+        BytePage::from(b"hello".to_vec()).advance_to(CNT);
+    });
+}

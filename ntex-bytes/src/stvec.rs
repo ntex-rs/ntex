@@ -203,7 +203,7 @@ impl StorageVec {
                     offset: NonZeroUsize::new_unchecked((offset << KIND_OFFSET_BITS) ^ KIND_VEC),
                 }
             };
-            self.set_start(at as u32);
+            self.set_start(at);
 
             other
         }
@@ -315,15 +315,25 @@ impl StorageVec {
         (*inner).remaining = (capacity - len) as u32;
     }
 
-    pub(crate) unsafe fn set_start(&mut self, start: u32) {
+    /// Moves the start of the view forward by `start` bytes.
+    ///
+    /// `start` is checked against the view length as `usize`, before it is
+    /// narrowed to the `u32` header fields, so values of 4 GiB or more
+    /// cannot wrap around.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `start` is greater than the view length.
+    pub(crate) unsafe fn set_start(&mut self, start: usize) {
         if start != 0 {
             let inner = self.as_inner();
 
             assert!(
-                start <= (*inner).len,
+                start <= (*inner).len as usize,
                 "cannot advance past the end of the buffer, cnt:{start} len:{}",
                 (*inner).len,
             );
+            let start = start as u32;
 
             // Updating the start of the view is setting `offset` to point to the
             // new start and updating the `len` field to reflect the new length

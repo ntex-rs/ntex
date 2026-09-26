@@ -24,6 +24,8 @@
 
 * Fix `Bytes::truncate()` and `Bytes::trimdown()` panics, and a data race, for `Bytes` split from a `BytesMut`
 
+* Fix `BytesMut::advance_to()` and `BytePage::advance_to()` truncating counts of 4 GiB or more
+
 ## [1.9.0] (2026-07-17)
 
 * Mark `BytePage::as_ptr()` as `unsafe`, as it has additional requirements that make it unsafe

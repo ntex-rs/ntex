@@ -635,8 +635,13 @@ impl BytePage {
     pub fn advance_to(&mut self, cnt: usize) {
         match &mut self.inner {
             StorageType::Bytes(b) => b.advance_to(cnt),
-            StorageType::Storage(b) => unsafe { b.set_start(cnt as u32) },
+            StorageType::Storage(b) => unsafe { b.set_start(cnt) },
             StorageType::Vec(b) => {
+                assert!(
+                    cnt <= b.len(),
+                    "cannot advance past the end of the buffer, cnt:{cnt} len:{}",
+                    b.len()
+                );
                 self.inner = StorageType::Bytes(Bytes::copy_from_slice(&b[cnt..]));
             }
         }
