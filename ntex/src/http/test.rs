@@ -8,7 +8,9 @@ use ntex_tls::TlsConfig;
 use uuid::Uuid;
 
 use crate::channel::bstream;
-use crate::client::{Client, ClientRequest, ClientResponse, error::ClientPayloadError};
+use crate::client::{
+    Client, ClientConfig, ClientRequest, ClientResponse, error::ClientPayloadError,
+};
 use crate::error::Error;
 #[cfg(feature = "ws")]
 use crate::io::Filter;
@@ -336,6 +338,11 @@ impl TestServer {
             .add(IoConfig::new().set_connect_timeout(connect_timeout))
             .add(TlsConfig::new().set_handshake_timeout(timeout))
             .add(
+                ClientConfig::new()
+                    .set_response_timeout(Seconds(30))
+                    .set_response_payload_timeout(Seconds(30)),
+            )
+            .add(
                 ntex_h2::ServiceConfig::new()
                     .set_max_header_list_size(256 * 1024)
                     .set_max_header_continuation_frames(96),
@@ -360,14 +367,21 @@ impl TestServer {
     }
 
     #[must_use]
-    /// Sets the TLS handshake and TCP connection timeouts used by the client.
+    /// Sets the client timeouts.
     ///
-    /// `timeout` controls the TLS handshake timeout, while `connect_timeout`
-    /// controls how long the client waits to establish a connection.
+    /// `timeout` controls the TLS handshake, response-header and response
+    /// payload timeouts, while `connect_timeout` controls how long the client
+    /// waits to establish a connection. By default the response timeouts are
+    /// 30 seconds.
     pub fn set_client_timeout(mut self, timeout: Seconds, connect_timeout: Millis) -> Self {
         self.cfg = SharedCfg::new("TEST-CLIENT")
             .add(IoConfig::new().set_connect_timeout(connect_timeout))
             .add(TlsConfig::new().set_handshake_timeout(timeout))
+            .add(
+                ClientConfig::new()
+                    .set_response_timeout(timeout)
+                    .set_response_payload_timeout(timeout),
+            )
             .add(
                 ntex_h2::ServiceConfig::new()
                     .set_max_header_list_size(256 * 1024)

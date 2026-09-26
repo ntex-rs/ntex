@@ -135,3 +135,62 @@ async fn test_h2_stream_limit_waits_for_payload() {
     assert_eq!(response.body().await.unwrap(), Bytes::from_static(b"data"));
     assert_eq!(num.load(Ordering::Relaxed), 1);
 }
+
+#[ntex::test]
+async fn test_h2_keepalive_waits_for_request_body() {
+    use ntex::client::ClientConfig;
+    use ntex::http::{Payload, Request, Response};
+    use ntex::time::{Millis, sleep};
+    use ntex::util::{Bytes, stream_recv};
+
+    let num = Arc::new(AtomicUsize::new(0));
+    let num2 = num.clone();
+
+    let srv = test_server(async move |_| {
+        let num2 = num2.clone();
+        service(async move |io| {
+            num2.fetch_add(1, Ordering::Relaxed);
+            Ok(io)
+        })
+        .and_then(http::openssl(
+            ssl_acceptor(),
+            HttpService::h2(async |mut req: Request| {
+                // drain the request body after the response is sent
+                let mut pl: Payload = req.take_payload();
+                ntex::rt::spawn(
+                    async move { while let Some(Ok(_)) = stream_recv(&mut pl).await {} },
+                );
+                Ok::<_, std::io::Error>(Response::Ok().body("ok"))
+            }),
+        ))
+    });
+
+    let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+    builder.set_verify(SslVerifyMode::NONE);
+    let _ = builder.set_alpn_protos(b"\x02h2\x08http/1.1");
+
+    let client = Client::builder().openssl(builder.build()).build(
+        SharedCfg::new("CLI")
+            .add(ClientConfig::new().set_h2_keepalive(Seconds(1)))
+            .build(),
+    );
+
+    // request body upload outlives the response
+    let body = Box::pin(futures_util::stream::unfold(0, async |i| {
+        if i < 10 {
+            sleep(Millis(200)).await;
+            Some((Ok::<_, std::io::Error>(Bytes::from_static(b"chunk")), i + 1))
+        } else {
+            None
+        }
+    }));
+    let response = client.post(srv.surl("/")).send_stream(body).await.unwrap();
+    assert_eq!(response.version(), Version::HTTP_2);
+    assert_eq!(response.body().await.unwrap(), Bytes::from_static(b"ok"));
+
+    // upload is still active, connection is not idle
+    sleep(Millis(1500)).await;
+    let response = client.get(srv.surl("/")).send().await.unwrap();
+    assert!(response.status().is_success());
+    assert_eq!(num.load(Ordering::Relaxed), 1);
+}
