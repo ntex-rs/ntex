@@ -7,6 +7,14 @@
 
 * `TimerHandle::reset()` no longer adds an extra 16ms tick to short delays
 
+* Fix early timer expiry, a timer was measured from the cached time, which
+  goes stale while the thread is blocked; timers now use `Instant::now()`
+
+* The cached `time::now()` and `time::system_time()` values are refreshed every
+  300ms instead of 5ms
+
+* Remove `time::query_system_time()`, it was identical to `time::system_time()`
+
 * Fix timer drift, a late wakeup of the timer driver delayed all later timers by
   the same amount; overdue timers now fire in a single pass
 

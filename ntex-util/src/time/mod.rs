@@ -10,7 +10,7 @@ mod types;
 mod wheel;
 
 pub use self::types::{Millis, Seconds};
-pub use self::wheel::{TimerHandle, now, query_system_time, system_time};
+pub use self::wheel::{TimerHandle, now, system_time};
 
 /// Waits until `dur` has elapsed.
 ///
@@ -411,7 +411,8 @@ mod tests {
         assert!(second_time - first_time >= time::Duration::from_millis(25));
     }
 
-    /// State Under Test: Two calls of `system_time()` return the same value if they are done within 1ms interval.
+    /// State Under Test: Two calls of `system_time()` return the same value if they are done within the
+    /// resolution interval.
     ///
     /// Expected Behavior: Two back-to-back calls of `now()` return the same value.
     #[ntex::test]
@@ -419,10 +420,9 @@ mod tests {
         sleep(Seconds(1)).await;
 
         assert_eq!(system_time(), system_time());
-        assert_eq!(system_time(), query_system_time());
     }
 
-    /// State Under Test: `system_time()` updates returned value every 1ms period.
+    /// State Under Test: `system_time()` updates returned value every resolution interval (300ms).
     ///
     /// Expected Behavior: Two calls of `system_time()` made in subsequent resolution interval return different values
     /// and second value is greater than the first one at least by a resolution interval.
@@ -430,7 +430,7 @@ mod tests {
     async fn system_time_service_time_updates_after_resolution_interval() {
         sleep(Millis(100)).await;
 
-        let wait_time = 300;
+        let wait_time = 600;
 
         let first_time = system_time()
             .duration_since(time::SystemTime::UNIX_EPOCH)

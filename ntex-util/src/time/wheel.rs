@@ -27,8 +27,9 @@
 //! | 7     | ~9.3 h      | ~3 d .. ~24.5 d  |
 //!
 //! Longer delays are clamped to the capacity of the wheel. The expiry is
-//! rounded up to the granularity of the level, so a timer never fires early
-//! but may fire up to one granularity late. Timers are not cascaded to finer
+//! rounded up to the granularity of the level and the delay is measured from
+//! [`Instant::now()`], so a timer never fires early but may fire up to one
+//! granularity late. Timers are not cascaded to finer
 //! levels, which keeps insertion and removal `O(1)`.
 //!
 //! A bitmap per level tracks occupied buckets, the next expiry is found by
@@ -43,7 +44,7 @@
 //!   bucket, not to the time the driver woke up, so a late wakeup does not
 //!   delay later timers. Buckets that are overdue are processed at once.
 //! * [`LowresTimerDriver`] invalidates the cached [`now()`] and
-//!   [`system_time()`] values every 5 milliseconds.
+//!   [`system_time()`] values every 300 milliseconds.
 //!
 //! Dropping either driver, i.e. when the runtime stops, stops the wheel and
 //! marks all timers as elapsed.
@@ -80,7 +81,7 @@ const WHEEL_TIMEOUT_CUTOFF: u64 = lvl_start(LVL_DEPTH);
 const WHEEL_TIMEOUT_MAX: u64 = WHEEL_TIMEOUT_CUTOFF - lvl_gran(LVL_DEPTH - 1);
 
 /// Refresh interval of the cached time.
-const LOWRES_RESOLUTION: Duration = Duration::from_millis(500);
+const LOWRES_RESOLUTION: Duration = Duration::from_millis(300);
 
 /// Shift of the level clock relative to the wheel clock.
 const fn lvl_shift(lvl: u64) -> u64 {
@@ -112,7 +113,7 @@ const fn as_millis(dur: Duration) -> u64 {
 
 /// Returns a cached approximation of the current instant.
 ///
-/// The cached value is refreshed at roughly 5 millisecond intervals.
+/// The cached value is refreshed at roughly 300 millisecond intervals.
 #[inline]
 pub fn now() -> Instant {
     TIMER.with(Timer::now)
@@ -120,18 +121,9 @@ pub fn now() -> Instant {
 
 /// Returns a cached approximation of the current system time.
 ///
-/// The cached value is refreshed at roughly 5 millisecond intervals.
+/// The cached value is refreshed at roughly 300 millisecond intervals.
 #[inline]
 pub fn system_time() -> SystemTime {
-    TIMER.with(Timer::system_time)
-}
-
-/// Returns the cached system time without starting the timer driver.
-///
-/// Before the cache has been initialized, this falls back to
-/// [`SystemTime::now`].
-#[inline]
-pub fn query_system_time() -> SystemTime {
     TIMER.with(Timer::system_time)
 }
 
@@ -391,8 +383,10 @@ impl Timer {
     fn calc_bucket(self: &Rc<Self>, millis: u64) -> (usize, u64) {
         self.insert_flags(Flags::RUNNING);
 
-        // the delay is measured from the wheel clock
-        let since = self.now().saturating_duration_since(self.elapsed_time());
+        // The delay is measured from the wheel clock. The cached time is not
+        // used, it goes stale while the thread is blocked and the timer would
+        // fire early by its age
+        let since = Instant::now().saturating_duration_since(self.elapsed_time());
         let delta = to_units(as_millis(since) + millis);
         self.calc_wheel_index(self.elapsed.get().wrapping_add(delta), delta)
     }
@@ -802,6 +796,22 @@ mod tests {
             assert!(w.unlink(b));
             assert_eq!(w.occupied, [0; LVL_DEPTH as usize]);
         });
+    }
+
+    /// A short timer is measured from the current time, not from the cached
+    /// time that went stale while the thread was blocked.
+    #[ntex::test]
+    async fn test_short_timer_after_blocking() {
+        let _hnd = sleep(Millis(10_000));
+        let _ = now();
+
+        // the lowres driver cannot run, the cached time goes stale
+        std::thread::sleep(Duration::from_millis(100));
+
+        let start = Instant::now();
+        sleep(Millis(50)).await;
+        let elapsed = start.elapsed();
+        assert!(elapsed >= Duration::from_millis(50), "elapsed: {elapsed:?}");
     }
 
     /// A late wakeup must not delay the timers that expire later.
