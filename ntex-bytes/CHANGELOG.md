@@ -2,6 +2,9 @@
 
 ## [1.10.0] (unreleased)
 
+* `BytesMut::from(BytePages)` and `Bytes::from(BytePages)` take a single page
+  without copying
+
 * `BytePages::copy_to()` and `BytePages::clone()` share the current page instead
   of copying it
 

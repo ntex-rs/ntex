@@ -495,13 +495,20 @@ impl io::Write for BytePages {
 }
 
 impl From<BytePages> for Bytes {
-    fn from(pages: BytePages) -> Bytes {
-        BytesMut::from(pages).freeze()
+    /// A single page is converted without copying.
+    fn from(mut pages: BytePages) -> Bytes {
+        pages.freeze()
     }
 }
 
 impl From<BytePages> for BytesMut {
+    /// A single page is converted without copying if nothing else refers to
+    /// its buffer.
     fn from(mut pages: BytePages) -> BytesMut {
+        if pages.num_pages() == 1 {
+            return BytesMut::from(pages.take().unwrap());
+        }
+
         let mut buf = BytesMut::with_capacity(pages.len());
         while let Some(p) = pages.take() {
             buf.extend_from_slice(&p);
@@ -1086,6 +1093,65 @@ mod tests {
 
         drop(pages);
         assert_eq!(page.as_ref(), &[1; 64][..]);
+    }
+
+    #[test]
+    fn pages_into_bytes_single_page() {
+        // the current page
+        let mut pages = BytePages::new(BytePageSize::Size8);
+        pages.put_slice(&[1; 64]);
+        let ptr = unsafe { pages.current.as_ref().unwrap().as_ptr() };
+        let mut buf = BytesMut::from(pages);
+        assert_eq!(buf.as_ptr(), ptr.cast_const());
+        assert_eq!(&buf[..], &[1; 64][..]);
+        // the rest of the page is spare capacity
+        assert_eq!(buf.capacity(), BytePageSize::Size8.capacity());
+        buf.extend_from_slice(&[2; 64]);
+        assert_eq!(buf.as_ptr(), ptr.cast_const());
+
+        let mut pages = BytePages::new(BytePageSize::Size8);
+        pages.put_slice(&[1; 64]);
+        let ptr = unsafe { pages.current.as_ref().unwrap().as_ptr() };
+        let b = Bytes::from(pages);
+        assert_eq!(b.as_ptr(), ptr.cast_const());
+        assert_eq!(&b[..], &[1; 64][..]);
+
+        // a `Bytes` page
+        let src = Bytes::copy_from_slice(&[3; 64]);
+        let ptr = src.as_ptr();
+        let mut pages = BytePages::new(BytePageSize::Size8);
+        pages.prepend(src);
+        assert_eq!(BytesMut::from(pages).as_ptr(), ptr);
+
+        // a shared page is copied
+        let src = Bytes::copy_from_slice(&[3; 64]);
+        let mut pages = BytePages::new(BytePageSize::Size8);
+        pages.prepend(&src);
+        let mut buf = BytesMut::from(pages);
+        assert_ne!(buf.as_ptr(), src.as_ptr());
+        buf[0] = 4;
+        assert_eq!(&src[..], &[3; 64][..]);
+    }
+
+    #[test]
+    fn pages_into_bytes_multiple_pages() {
+        let mut pages = BytePages::new(BytePageSize::Size8);
+        pages.prepend(Bytes::copy_from_slice(&[1; 64]));
+        pages.put_slice(&[2; 64]);
+        assert_eq!(pages.num_pages(), 2);
+        let buf = BytesMut::from(pages);
+        assert_eq!(&buf[..64], &[1; 64][..]);
+        assert_eq!(&buf[64..], &[2; 64][..]);
+
+        let mut pages = BytePages::new(BytePageSize::Size8);
+        pages.prepend(Bytes::copy_from_slice(&[1; 64]));
+        pages.put_slice(&[2; 64]);
+        let b = Bytes::from(pages);
+        assert_eq!(&b[..64], &[1; 64][..]);
+        assert_eq!(&b[64..], &[2; 64][..]);
+
+        assert!(BytesMut::from(BytePages::new(BytePageSize::Size8)).is_empty());
+        assert!(Bytes::from(BytePages::new(BytePageSize::Size8)).is_empty());
     }
 
     #[test]
