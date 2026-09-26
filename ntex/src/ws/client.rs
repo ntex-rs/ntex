@@ -183,21 +183,27 @@ where
         #[cfg(feature = "cookie")]
         {
             use percent_encoding::percent_encode;
-            use std::fmt::Write as FmtWrite;
+            use std::io::Write;
 
-            // set cookies
+            // set cookies, appended to a configured `Cookie` header
             if let Some(ref jar) = self.cfg.cookies {
-                let mut cookie = String::new();
-                for c in jar.delta() {
+                let mut cookie = head
+                    .headers
+                    .get(header::COOKIE)
+                    .map(|v| v.as_bytes().to_vec())
+                    .unwrap_or_default();
+                for c in jar.iter() {
                     let name = percent_encode(c.name().as_bytes(), crate::http::helpers::USERINFO);
                     let value =
                         percent_encode(c.value().as_bytes(), crate::http::helpers::USERINFO);
-                    let _ = write!(cookie, "; {name}={value}");
+                    if !cookie.is_empty() {
+                        cookie.extend_from_slice(b"; ");
+                    }
+                    let _ = write!(cookie, "{name}={value}");
                 }
-                head.headers.insert(
-                    header::COOKIE,
-                    HeaderValue::from_str(&cookie.as_str()[2..]).unwrap(),
-                );
+                if let Ok(val) = HeaderValue::from_bytes(&cookie) {
+                    head.headers.insert(header::COOKIE, val);
+                }
             }
         }
 
@@ -292,7 +298,7 @@ where
             })?;
             if hdr_key.as_bytes() != encoded.as_bytes() {
                 log::trace!(
-                    "{tag}: Invalid challenge response: expected: {encoded} received: {key:?}"
+                    "{tag}: Invalid challenge response: expected: {encoded} received: {hdr_key:?}"
                 );
                 return Err(Error::from(WsClientError::InvalidChallengeResponse(
                     encoded,
@@ -777,6 +783,29 @@ mod tests {
         );
     }
 
+    /// Runs `connect()` over an in-memory stream, returns the handshake request.
+    async fn handshake_request(uri: &str, cfg: WsClientConfig) -> String {
+        use crate::{testing::IoTest, util::Bytes};
+        use std::cell::RefCell;
+
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+        let io = RefCell::new(Some(Io::new(server, SharedCfg::default())));
+        let ws = WsClient::new(uri, cfg).connector(fn_service(async move |_: Connect<Uri>| {
+            Ok::<_, Error<ConnectError>>(io.borrow_mut().take().unwrap())
+        }));
+        let fut = rt::spawn(async move { ws.connect().await.map(drop) });
+
+        let mut req = Vec::new();
+        while !req.ends_with(b"\r\n\r\n") {
+            let buf: Bytes = client.read().await.unwrap();
+            req.extend_from_slice(&buf);
+        }
+        client.close().await;
+        let _ = fut.await;
+        String::from_utf8(req).unwrap()
+    }
+
     #[crate::rt_test]
     async fn pooled_request_head_method_is_get() {
         // a request head released back to the thread-local message pool keeps its
@@ -785,5 +814,39 @@ mod tests {
         let mut head = Message::<RequestHead>::new();
         head.method = Method::POST;
         drop(head);
+
+        let req = handshake_request("ws://localhost/", WsClientConfig::new()).await;
+        assert!(req.starts_with("GET / HTTP/1.1\r\n"), "{req}");
+    }
+
+    #[cfg(feature = "cookie")]
+    #[crate::rt_test]
+    async fn cookies_extend_configured_header() {
+        use coo_kie::Cookie;
+
+        let cfg = || {
+            WsClientConfig::new()
+                .set_cookie(Cookie::build(("c1", "v1")))
+                .set_cookie(Cookie::build(("c2", "v2")))
+        };
+        let req = handshake_request("ws://localhost/", cfg()).await;
+        let cookie = req
+            .lines()
+            .find_map(|l| l.strip_prefix("cookie: "))
+            .unwrap();
+        let mut cookies: Vec<_> = cookie.split("; ").collect();
+        cookies.sort_unstable();
+        assert_eq!(cookies, ["c1=v1", "c2=v2"]);
+
+        let cfg = cfg().set_header(header::COOKIE, "c0=v0").unwrap();
+        let req = handshake_request("ws://localhost/", cfg).await;
+        let cookie = req
+            .lines()
+            .find_map(|l| l.strip_prefix("cookie: "))
+            .unwrap();
+        assert!(cookie.starts_with("c0=v0; "), "{cookie}");
+        let mut cookies: Vec<_> = cookie.split("; ").collect();
+        cookies.sort_unstable();
+        assert_eq!(cookies, ["c0=v0", "c1=v1", "c2=v2"]);
     }
 }

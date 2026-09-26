@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* WebSocket client cookies are appended to a `Cookie` header set in `ws::WsClientConfig`, instead
+  of replacing it
+
 * WebSocket client `Host` header no longer includes the URI's userinfo, and omits the scheme's
   default port, like the HTTP client
 
