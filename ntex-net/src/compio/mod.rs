@@ -1,5 +1,8 @@
 #[cfg(unix)]
 use std::os::unix::net::UnixStream as OsUnixStream;
+use std::pin::Pin;
+use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};
+use std::task::{Context, Poll, Wake, Waker};
 
 use compio_runtime::Runtime;
 use ntex_io::Io;
@@ -43,7 +46,65 @@ pub(crate) fn block_on<F: Future<Output = ()>>(fut: F) {
     );
     let _reset = ResetGuard;
     let rt = RtGuard(Runtime::new().unwrap());
-    rt.0.block_on(fut);
+    rt.0.block_on(PollWhenWoken {
+        fut: Box::pin(fut),
+        flag: None,
+    });
+}
+
+/// Polls the future only after it has been woken.
+///
+/// compio's `block_on` polls the future on every turn of its loop, not only
+/// when it was woken. A future that wakes another task whenever it is
+/// pending would then wake a task on every turn. Every task wakeup also wakes
+/// the driver, and a woken IOCP driver skips polling for I/O completions, so
+/// I/O would never complete.
+struct PollWhenWoken<F> {
+    fut: Pin<Box<F>>,
+    flag: Option<(Arc<WakeFlag>, Waker)>,
+}
+
+struct WakeFlag {
+    woken: AtomicBool,
+    waker: Waker,
+}
+
+impl Wake for WakeFlag {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.woken.store(true, Ordering::Release);
+        self.waker.wake_by_ref();
+    }
+}
+
+impl<F: Future> Future for PollWhenWoken<F> {
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
+        let this = self.get_mut();
+
+        if let Some((flag, _)) = &this.flag
+            && flag.waker.will_wake(cx.waker())
+        {
+            // cleared before polling, a wakeup during the poll is kept
+            if !flag.woken.swap(false, Ordering::Acquire) {
+                return Poll::Pending;
+            }
+        } else {
+            let flag = Arc::new(WakeFlag {
+                woken: AtomicBool::new(false),
+                waker: cx.waker().clone(),
+            });
+            let waker = Waker::from(flag.clone());
+            this.flag = Some((flag, waker));
+        }
+
+        let waker = &this.flag.as_ref().unwrap().1;
+        this.fut.as_mut().poll(&mut Context::from_waker(waker))
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -147,5 +208,54 @@ mod tests {
         })
         .join()
         .unwrap();
+    }
+
+    /// compio polls the `block_on` future on every turn of its loop. A future
+    /// that wakes another task whenever it is polled, as the h2 payload does
+    /// for its connection, must not keep the driver from completing I/O.
+    #[test]
+    fn io_completes_while_main_future_wakes_tasks() {
+        use std::{cell::RefCell, future::poll_fn, io::Write, pin::pin, task::Poll, task::Waker};
+
+        use ntex::codec::BytesCodec;
+        use ntex_service::cfg::SharedCfg;
+        use ntex_util::time::{Millis, timeout};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let srv = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            // the read is issued before the data arrives
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            sock.write_all(b"hello").unwrap();
+            sock
+        });
+
+        System::new("test", DefaultRuntime).block_on(async move {
+            let task: Rc<RefCell<Option<Waker>>> = Rc::default();
+            let task2 = task.clone();
+            ntex_rt::spawn(poll_fn(move |cx| {
+                *task2.borrow_mut() = Some(cx.waker().clone());
+                Poll::<()>::Pending
+            }));
+
+            let io = crate::tcp_connect(addr, SharedCfg::default())
+                .await
+                .unwrap();
+            let mut recv = pin!(io.recv(&BytesCodec));
+            let msg = timeout(
+                Millis(5_000),
+                poll_fn(|cx| {
+                    if let Some(waker) = task.borrow().as_ref() {
+                        waker.wake_by_ref();
+                    }
+                    recv.as_mut().poll(cx)
+                }),
+            )
+            .await
+            .expect("read did not complete");
+            assert_eq!(msg.unwrap().unwrap(), "hello");
+        });
+        drop(srv.join().unwrap());
     }
 }

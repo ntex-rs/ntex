@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* Fix stalled I/O in the compio backend when the `block_on` future woke another task
+  whenever it was polled, e.g. while reading an h2 response body
+
 * Fix panic on compio runtime shutdown when a dropped task spawned a new task
   from its destructor, e.g. an h2 stream sending RST_STREAM
 
