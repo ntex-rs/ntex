@@ -92,7 +92,7 @@ impl Parser {
                 return Ok(None);
             }
 
-            let mask = u32::from_le_bytes(TryFrom::try_from(&src[idx..idx + 4]).unwrap());
+            let mask = u32::from_ne_bytes(TryFrom::try_from(&src[idx..idx + 4]).unwrap());
             idx += 4;
             Some(mask)
         } else {
@@ -229,7 +229,7 @@ impl Parser {
             let mask: u32 = nanorand::tls_rng().generate();
             let mut buf = BytesMut::from(payload);
             apply_mask(&mut buf, mask);
-            dst.put_u32_le(mask);
+            dst.extend_from_slice(&mask.to_ne_bytes());
             dst.append::<BytesMut>(buf);
         } else {
             dst.append::<BytePage>(payload);
