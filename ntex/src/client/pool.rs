@@ -806,6 +806,26 @@ mod tests {
     }
 
     #[crate::rt_test]
+    async fn test_expired_h2_lifetime_waits_for_reserved() {
+        let (_, pool) = h2_pool(ClientConfig::new().set_h2_lifetime(Seconds(1)));
+        let (h2, server) = h2_conn(&pool);
+        let req = acquire_h2(&pool).unwrap();
+        h2.set_times(secs_ago(2), now());
+
+        // request is acquired but not sent yet
+        assert!(acquire_h2(&pool).is_none());
+        assert!(pool.0.inner.borrow().h2.is_empty());
+        assert!(h2.is_disconnecting());
+        wait_closed(&h2).await;
+        assert!(!h2.is_closed());
+        assert!(!server.is_closed());
+
+        drop(req);
+        wait_closed(&h2).await;
+        assert!(server.is_closed());
+    }
+
+    #[crate::rt_test]
     async fn test_h2_lifecycle_settings() {
         // http/1 settings do not apply to http/2 connections
         let (_, pool) = h2_pool(

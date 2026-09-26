@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* Fix HTTP client requests failing when their HTTP/2 connection reaches `h2_lifetime` after
+  the connection is acquired but before the request is sent
+
 * Fix HTTP client requests waiting for HTTP/2 stream capacity not being woken when the
   connection releases a stream after the request completes, the peer raises its stream
   limit, or the connection closes
