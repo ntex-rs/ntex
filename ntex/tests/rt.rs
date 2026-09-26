@@ -227,6 +227,64 @@ fn test_spawn_cb() {
     assert!(val > 0);
 }
 
+/// `Arbiter::on_shutdown()` callbacks run on stop request, while the arbiter
+/// is still running, including callbacks registered by callbacks.
+#[test]
+fn test_on_shutdown_arbiter() {
+    System::new("test", ntex::rt::DefaultRuntime).block_on(async {
+        let (tx, rx) = oneshot::channel();
+        let mut arb = Arbiter::new();
+        arb.handle()
+            .spawn(async move {
+                Arbiter::on_shutdown(move || {
+                    Arbiter::on_shutdown(move || {
+                        let _ = tx.send(Arbiter::current().is_running());
+                    });
+                });
+            })
+            .await
+            .unwrap();
+
+        arb.stop();
+        assert!(
+            rx.await.unwrap(),
+            "callback ran after the event loop exited"
+        );
+        arb.join().unwrap();
+    });
+}
+
+/// The system arbiter runs them on `System::stop()`, and on exit of an event
+/// loop that ends without a stop request.
+#[test]
+fn test_on_shutdown_system() {
+    thread::spawn(|| {
+        let ran = std::rc::Rc::new(std::cell::Cell::new(0));
+
+        let ran2 = ran.clone();
+        System::build()
+            .build(ntex::rt::DefaultRuntime)
+            .run(move || {
+                Arbiter::on_shutdown(move || ran2.set(ran2.get() + 1));
+                System::current().stop();
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(ran.get(), 1);
+
+        let ran2 = ran.clone();
+        System::new("test", ntex::rt::DefaultRuntime).block_on(async move {
+            let ran3 = ran2.clone();
+            Arbiter::on_shutdown(move || ran3.set(ran3.get() + 1));
+            sleep(Millis(10)).await;
+            assert_eq!(ran2.get(), 1, "callback ran before shutdown");
+        });
+        assert_eq!(ran.get(), 2);
+    })
+    .join()
+    .unwrap();
+}
+
 #[ntex::test]
 async fn system_storage() {
     let val = System::current().get_value::<usize>(|| 10);

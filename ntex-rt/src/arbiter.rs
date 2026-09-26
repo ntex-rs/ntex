@@ -10,6 +10,7 @@ use crate::{Handle, HashMap, Id, System};
 thread_local!(
     static ADDR: RefCell<Option<Arbiter>> = const { RefCell::new(None) };
     static STORAGE: RefCell<HashMap<TypeId, Box<dyn Any>>> = RefCell::new(HashMap::default());
+    static ON_SHUTDOWN: RefCell<Vec<Box<dyn FnOnce()>>> = const { RefCell::new(Vec::new()) };
 );
 
 pub(super) static COUNT: AtomicUsize = AtomicUsize::new(99);
@@ -166,6 +167,8 @@ impl Arbiter {
 
                 // unregister arbiter
                 sys2.unregister_arbiter(Id(id));
+                // skipped by `block_on` if the event loop panicked
+                run_shutdown_callbacks();
                 unsafe {
                     remove_all_items();
                 }
@@ -267,6 +270,26 @@ impl Arbiter {
             .unwrap_or_else(|_| (f.take().unwrap())())
     }
 
+    /// Registers a callback to run when the current thread's arbiter shuts down.
+    ///
+    /// Callbacks run once, in registration order, on the arbiter's thread when
+    /// its stop is requested, by [`Arbiter::stop()`] or [`System::stop()`],
+    /// while the event loop is still running. An arbiter that ends without a
+    /// stop request, such as one driven by
+    /// [`SystemRunner::block_on()`](crate::SystemRunner::block_on), runs them
+    /// once its event loop has exited instead. A callback registered by
+    /// another callback runs in the same shutdown.
+    ///
+    /// If the thread is exiting and its thread-local storage has already been
+    /// destroyed, `f` is dropped without running.
+    pub fn on_shutdown<F>(f: F)
+    where
+        F: FnOnce() + 'static,
+    {
+        let f: Box<dyn FnOnce()> = Box::new(f);
+        let _ = ON_SHUTDOWN.try_with(move |cell| cell.borrow_mut().push(f));
+    }
+
     #[must_use]
     /// Adds a callback to run after the arbiter stops.
     pub fn on_stop<F>(self, f: F) -> Self
@@ -310,7 +333,10 @@ impl ArbiterController {
         loop {
             match self.rx.recv().await {
                 Ok(ArbiterCommand::Stop) => {
+                    // the system arbiter has no `stop`, `System::stop()`
+                    // runs its callbacks
                     if let Some(stop) = self.stop.take() {
+                        run_shutdown_callbacks();
                         let _ = stop.send(0);
                     }
                 }
@@ -319,6 +345,22 @@ impl ArbiterController {
                 }
                 Err(_) => break,
             }
+        }
+    }
+}
+
+/// Runs the callbacks registered with [`Arbiter::on_shutdown()`], including
+/// ones registered while they run.
+pub(crate) fn run_shutdown_callbacks() {
+    loop {
+        let callbacks = ON_SHUTDOWN
+            .try_with(|cell| mem::take(&mut *cell.borrow_mut()))
+            .unwrap_or_default();
+        if callbacks.is_empty() {
+            break;
+        }
+        for f in callbacks {
+            f();
         }
     }
 }

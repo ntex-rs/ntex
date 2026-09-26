@@ -1,6 +1,13 @@
 # Changes
 
-## [3.17.4] - unreleased
+## [4.0.0] - unreleased
+
+* Add `Arbiter::on_shutdown()`, registers a callback that runs when the current
+  arbiter shuts down
+
+* Fix use-after-free in `with_item()` when the item was replaced or removed
+  while `f` was running. `with_item()` now requires `T: Clone` and passes a
+  clone of the item to `f`
 
 * Fix process abort when arbiter storage is accessed during thread-local destruction
 

@@ -412,6 +412,9 @@ impl SystemSupport {
                         arb.stop();
                     }
                     arbiters.all.clear();
+                    drop(arbiters);
+
+                    crate::arbiter::run_shutdown_callbacks();
 
                     // stop event loop
                     if let Some(stop) = self.stop.take() {

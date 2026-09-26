@@ -121,6 +121,7 @@ where
         *result_inner.borrow_mut() = Some(r);
     }))?;
 
+    crate::arbiter::run_shutdown_callbacks();
     unsafe {
         crate::remove_all_items();
     }
