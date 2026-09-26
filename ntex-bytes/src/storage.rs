@@ -413,6 +413,12 @@ impl Storage {
             return;
         }
 
+        assert!(
+            start <= self.len(),
+            "cannot advance past the end of the buffer, cnt:{start} len:{}",
+            self.len()
+        );
+
         match self.kind() {
             KIND_VEC => {
                 let shared = self.shared_vec();
@@ -423,17 +429,11 @@ impl Storage {
                 let offset = (self.offset.get() >> KIND_OFFSET_BITS) + start;
 
                 self.ptr = (shared.cast::<u8>()).add(offset);
-                if self.len >= start {
-                    self.len -= start;
-                } else {
-                    self.len = 0;
-                }
+                self.len -= start;
 
                 self.offset = NonZeroUsize::new_unchecked((offset << KIND_OFFSET_BITS) ^ KIND_VEC);
             }
             KIND_INLINE => {
-                assert!(start <= INLINE_CAP);
-
                 let len = self.inline_len();
                 if len <= start {
                     self.set_inline_len(0);
@@ -453,12 +453,10 @@ impl Storage {
                 }
             }
             KIND_STEXT => {
-                assert!(start <= self.capacity());
                 *self = Storage::from_slice(&self.as_ref()[start..]);
             }
             _ => {
                 // set len for static storage
-                assert!(start <= self.len);
                 self.len -= start;
                 self.ptr = self.ptr.add(start);
             }

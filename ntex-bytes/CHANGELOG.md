@@ -20,6 +20,8 @@
 
 * Fix process abort when buffers are released or allocated during thread-local destruction
 
+* Fix `advance_to()` not panicking when advancing past the end of the buffer
+
 ## [1.9.0] (2026-07-17)
 
 * Mark `BytePage::as_ptr()` as `unsafe`, as it has additional requirements that make it unsafe

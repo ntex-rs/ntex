@@ -307,24 +307,16 @@ impl StorageVec {
             let inner = self.as_inner();
 
             assert!(
-                start <= inner.capacity,
-                "Cannot set start position offset:{} len:{} cap:{} remaining:{} new-len:{start}",
-                inner.offset,
+                start <= inner.len,
+                "cannot advance past the end of the buffer, cnt:{start} len:{}",
                 inner.len,
-                inner.capacity,
-                inner.remaining,
             );
 
             // Updating the start of the view is setting `offset` to point to the
             // new start and updating the `len` field to reflect the new length
             // of the view.
             inner.offset += start;
-
-            if inner.len > start {
-                inner.len -= start;
-            } else {
-                inner.len = 0;
-            }
+            inner.len -= start;
             inner.remaining = inner.capacity - inner.len - start;
             inner.capacity = inner.remaining + inner.len;
         }

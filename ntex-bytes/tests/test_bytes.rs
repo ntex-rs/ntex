@@ -789,3 +789,48 @@ fn set_len_over_u32() {
     let mut buf = BytesMut::with_capacity(64);
     unsafe { buf.set_len((1 << 32) + 5) };
 }
+
+fn assert_advance_panics(name: &str, f: impl FnOnce()) {
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    assert!(res.is_err(), "{name}: advance_to past len must panic");
+}
+
+#[test]
+fn advance_to_past_len_panics() {
+    let long = vec![b'x'; 100];
+
+    let mut buf = BytesMut::with_capacity(64);
+    buf.extend_from_slice(b"hello");
+    buf.advance_to(5);
+    assert!(buf.is_empty());
+    assert_advance_panics("BytesMut", || {
+        let mut buf = BytesMut::with_capacity(64);
+        buf.extend_from_slice(b"hello");
+        buf.advance_to(6);
+    });
+
+    let mut b = Bytes::from(long.clone());
+    b.advance_to(100);
+    assert!(b.is_empty());
+    assert_advance_panics("Bytes vec", || {
+        let mut b = Bytes::from(long.clone());
+        b.truncate(50);
+        b.advance_to(51);
+    });
+    assert_advance_panics("Bytes inline", || {
+        let mut b = Bytes::copy_from_slice(b"abc");
+        assert!(b.is_inline());
+        b.advance_to(4);
+    });
+    assert_advance_panics("Bytes static", || {
+        Bytes::from_static(b"abc").advance_to(4);
+    });
+    assert_advance_panics("Bytes split_to", || {
+        let _ = Bytes::from(long.clone()).split_to(101);
+    });
+    assert_advance_panics("BytePage", || {
+        let mut buf = BytesMut::with_capacity(64);
+        buf.extend_from_slice(b"hello");
+        BytePage::from(buf).advance_to(6);
+    });
+}
