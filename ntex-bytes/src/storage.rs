@@ -573,40 +573,9 @@ impl Storage {
 
     #[inline]
     fn kind(&self) -> usize {
-        // This function is going to probably raise some eyebrows. The function
-        // returns true if the buffer is stored inline. This is done by checking
-        // the least significant bit in the `ptr` field.
-        //
-        // Now, you may notice that `ptr` is an `AtomicPtr` and this is
-        // accessing it as a normal field without performing an atomic load...
-        //
-        // Again, the function only cares about the least significant bit, and
-        // this bit is set when `Storage` is created and never changed after that.
-        // All platforms have atomic "word" operations and won't randomly flip
-        // bits, so even without any explicit atomic operations, reading the
-        // flag will be correct.
-        //
-        // This function is very critical performance wise as it is called for
-        // every operation. Performing an atomic load would mess with the
-        // compiler's ability to optimize. Simple benchmarks show up to a 10%
-        // slowdown using a `Relaxed` atomic load on x86.
-
-        #[cfg(target_endian = "little")]
-        #[inline]
-        fn imp(ptr: usize) -> usize {
-            ptr & KIND_MASK
-        }
-
-        #[cfg(target_endian = "big")]
-        #[inline]
-        fn imp(arc: usize) -> usize {
-            unsafe {
-                let p: *const u8 = arc as *const u8;
-                *p & KIND_MASK
-            }
-        }
-
-        imp(self.offset.get())
+        // The kind is stored in the low bits of `offset` for every storage kind,
+        // on both little- and big-endian targets.
+        self.offset.get() & KIND_MASK
     }
 
     pub(crate) fn info(&self) -> Info {
