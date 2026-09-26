@@ -46,8 +46,9 @@
 //! * [`LowresTimerDriver`] invalidates the cached [`now()`] and
 //!   [`system_time()`] values every 300 milliseconds.
 //!
-//! Dropping either driver, i.e. when the runtime stops, stops the wheel and
-//! marks all timers as elapsed.
+//! Dropping the timer driver, i.e. when the runtime stops, stops the wheel and
+//! marks all timers as elapsed. Dropping the lowres driver invalidates the
+//! cached time.
 use std::num::NonZeroUsize;
 use std::time::{Duration, Instant, SystemTime};
 use std::{cell::Cell, cmp, future::Future, pin::Pin, rc::Rc, task, task::Poll};
@@ -358,11 +359,11 @@ impl Timer {
         TimerHandle(NonZeroUsize::new(no).unwrap())
     }
 
-    /// Moves the timer to a new bucket, a zero delay elapses it without waking
-    /// its task.
+    /// Moves the timer to a new bucket, a zero delay elapses it and wakes its
+    /// task.
     fn update_timer(self: &Rc<Self>, hnd: usize, millis: u64) {
         if millis == 0 {
-            self.with_wheel(|w| w.unlink(hnd));
+            self.remove_timer(hnd);
         } else {
             let (idx, expiry) = self.calc_bucket(millis);
             self.with_wheel(|w| w.relink(hnd, idx));
@@ -472,8 +473,26 @@ impl Timer {
         if next < u64::MAX { Some(next) } else { None }
     }
 
-    /// Marks all timers as elapsed and resets the wheel, tasks are not woken.
+    /// Removes `flags`, and `RUNNING` so the cached time is not populated and
+    /// no driver is spawned after the runtime stopped.
+    fn remove_flags(&self, flags: Flags) {
+        let mut f = self.flags.get();
+        f.remove(flags | Flags::RUNNING);
+        self.flags.set(f);
+    }
+
+    /// Invalidates the cached time, called when the lowres driver is dropped.
+    fn stop_lowres(&self) {
+        self.remove_flags(Flags::LOWRES_DRIVER | Flags::LOWRES_TIMER);
+        self.lowres_time.set(None);
+        self.lowres_stime.set(None);
+    }
+
+    /// Marks all timers as elapsed and resets the wheel, called when the timer
+    /// driver is dropped. Tasks are not woken, the runtime is stopping.
     fn stop_wheel(&self) {
+        self.remove_flags(Flags::DRIVER_STARTED);
+
         // the wheel is in use if a driver is dropped from a timer operation
         if let Some(mut wheel) = self.wheel.take() {
             let Wheel {
@@ -488,12 +507,9 @@ impl Timer {
             }
             *occupied = [0; LVL_DEPTH as usize];
 
-            self.flags.set(Flags::empty());
             self.next_expiry.set(u64::MAX);
             self.elapsed.set(0);
             self.elapsed_time.set(None);
-            self.lowres_time.set(None);
-            self.lowres_stime.set(None);
             self.wheel.set(Some(wheel));
         }
     }
@@ -670,7 +686,7 @@ impl LowresTimerDriver {
 
 impl Drop for LowresTimerDriver {
     fn drop(&mut self) {
-        self.timer.stop_wheel();
+        self.timer.stop_lowres();
     }
 }
 
@@ -794,6 +810,63 @@ mod tests {
             assert_eq!(w.timers[b].bucket, Some(LVL_SIZE as u16 + 5));
 
             assert!(w.unlink(b));
+            assert_eq!(w.occupied, [0; LVL_DEPTH as usize]);
+        });
+    }
+
+    /// `reset(0)` elapses the timer and wakes the task waiting for it.
+    #[ntex::test]
+    async fn test_reset_zero_wakes_task() {
+        let hnd = Rc::new(TimerHandle::new(10_000));
+        let hnd2 = hnd.clone();
+        crate::spawn(async move { hnd2.reset(0) });
+
+        // the sleep wakes the task if `reset(0)` does not
+        let start = Instant::now();
+        crate::future::select(
+            std::future::poll_fn(|cx| hnd.poll_elapsed(cx)),
+            sleep(Millis(500)),
+        )
+        .await;
+        let elapsed = start.elapsed();
+        assert!(elapsed < Duration::from_millis(100), "elapsed: {elapsed:?}");
+    }
+
+    /// Dropping one driver does not reset the state of the other one.
+    #[test]
+    fn test_driver_drop_keeps_other_driver() {
+        let timer = Rc::new(Timer::new());
+        let no = timer.with_wheel(|w| {
+            let no = w.timers.insert(entry());
+            w.link(no, 3);
+            no
+        });
+        timer.next_expiry.set(3);
+        timer.lowres_time.set(Some(Instant::now()));
+        timer.insert_flags(
+            Flags::RUNNING | Flags::DRIVER_STARTED | Flags::LOWRES_DRIVER | Flags::LOWRES_TIMER,
+        );
+
+        drop(LowresTimerDriver {
+            timer: timer.clone(),
+            sleep: Delay::new(Duration::ZERO),
+        });
+        assert_eq!(timer.flags.get(), Flags::DRIVER_STARTED);
+        assert!(timer.lowres_time.get().is_none());
+        // timers are still pending
+        assert_eq!(timer.next_expiry.get(), 3);
+        timer.with_wheel(|w| assert_eq!(w.timers[no].bucket, Some(3)));
+
+        timer.insert_flags(Flags::RUNNING | Flags::LOWRES_DRIVER);
+        drop(TimerDriver {
+            timer: timer.clone(),
+            sleep: Delay::new(Duration::ZERO),
+            armed: None,
+        });
+        assert_eq!(timer.flags.get(), Flags::LOWRES_DRIVER);
+        assert_eq!(timer.next_expiry.get(), u64::MAX);
+        timer.with_wheel(|w| {
+            assert!(w.timers[no].bucket.is_none());
             assert_eq!(w.occupied, [0; LVL_DEPTH as usize]);
         });
     }

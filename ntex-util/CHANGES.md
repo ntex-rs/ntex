@@ -18,6 +18,11 @@
 * Fix timer drift, a late wakeup of the timer driver delayed all later timers by
   the same amount; overdue timers now fire in a single pass
 
+* Fix `TimerHandle::reset(0)` not waking the task waiting on the timer
+
+* Dropping the lowres timer driver no longer stops the timer wheel, and dropping
+  either driver no longer allows the other one to be spawned twice
+
 * Add `mpsc::Sender::poll_closed()` and `mpsc::Sender::closed()` to wait until the receiver
   is dropped or the channel is closed
 
