@@ -16,7 +16,7 @@ use std::{cell::Cell, fmt, future::Future, io, pin::Pin, rc::Rc};
 use ntex_codec::{Decoder, Encoder};
 use ntex_io::{Decoded, IoBoxed, IoStatusUpdate, RecvError};
 use ntex_service::pipeline::{Pipeline, PipelineCall};
-use ntex_util::{future::Either, spawn, time::Seconds};
+use ntex_util::{spawn, time::Seconds};
 
 mod timer;
 
@@ -79,42 +79,41 @@ fn truncated(io: &IoBoxed) -> Option<io::Error> {
     }
 }
 
-pin_project_lite::pin_project! {
-    /// Future that dispatches decoded transport frames to a service.
-    ///
-    /// The service receives [`DispatchItem`] values and returns
-    /// `Option<U::Item>`, where `Some(item)` is encoded and written to the
-    /// transport and `None` produces no response.
-    ///
-    /// Multiple service calls may be in flight concurrently. When the
-    /// transport applies write backpressure, the dispatcher pauses normal
-    /// reads and emits [`Control::WBackPressureEnabled`]. It emits
-    /// [`Control::WBackPressureDisabled`] before resuming normal processing.
-    ///
-    /// Before shutdown, transport and codec failures are delivered to the
-    /// service as [`DispatchItem::Stop`]. The future resolves to `Err` only
-    /// when the service itself fails. Graceful and protocol stops drain service
-    /// calls before shutdown; transport failures abandon pending calls after
-    /// delivering the stop notification so they cannot block teardown.
-    pub struct Dispatcher<U, Err>
-    where
-        U: Encoder,
-        U: Decoder,
-        U: 'static,
-        Err: 'static,
-    {
-        inner: DispatcherInner<U, Err>,
-    }
+/// Future that dispatches decoded transport frames to a service.
+///
+/// The service receives [`DispatchItem`] values and returns
+/// `Option<U::Item>`, where `Some(item)` is encoded and written to the
+/// transport and `None` produces no response.
+///
+/// Multiple service calls may be in flight concurrently. When the
+/// transport applies write backpressure, the dispatcher pauses normal
+/// reads and emits [`Control::WBackPressureEnabled`]. It emits
+/// [`Control::WBackPressureDisabled`] before resuming normal processing.
+///
+/// Before shutdown, transport and codec failures are delivered to the
+/// service as [`DispatchItem::Stop`]. The future resolves to `Err` only
+/// when the service itself fails. Graceful and protocol stops drain service
+/// calls before shutdown; transport failures abandon pending calls after
+/// delivering the stop notification so they cannot block teardown.
+pub struct Dispatcher<U, Err>
+where
+    U: Encoder + Decoder + 'static,
+    Err: 'static,
+{
+    inner: DispatcherInner<U, Err>,
 }
 
-bitflags::bitflags! {
-    #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-    struct Flags: u8  {
-        const KA_ENABLED    = 0b000_0100;
+// The dispatcher never pins its fields, all futures it polls are `Unpin`.
+impl<U: Encoder + Decoder, Err> Unpin for Dispatcher<U, Err> {}
+
+impl<U: Encoder + Decoder, Err> fmt::Debug for Dispatcher<U, Err> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Dispatcher").finish_non_exhaustive()
     }
 }
 
 type Call<U, Err> = PipelineCall<DispatchItem<U>, Option<Response<U>>, Err>;
+type Service<U, Err> = Pipeline<DispatchItem<U>, Option<Response<U>>, Err>;
 
 struct DispatcherInner<U, Err>
 where
@@ -123,7 +122,7 @@ where
     st: DispatcherState<U, Err>,
     error: Option<Err>,
     shared: Rc<DispatcherShared<U, Err>>,
-    response: Option<PipelineCall<DispatchItem<U>, Option<Response<U>>, Err>>,
+    response: Option<Call<U, Err>>,
     timers: Timers,
 }
 
@@ -133,8 +132,8 @@ where
 {
     io: IoBoxed,
     codec: U,
-    service: Pipeline<DispatchItem<U>, Option<Response<U>>, Err>,
-    flags: Flags,
+    service: Service<U, Err>,
+    keepalive: bool,
     error: Cell<Option<DispatcherError<Err, <U as Encoder>::Error>>>,
     inflight: Cell<u32>,
 }
@@ -160,15 +159,6 @@ enum PollService<U: Encoder + Decoder> {
     Ready,
 }
 
-impl<S, U> From<Either<S, U>> for DispatcherError<S, U> {
-    fn from(err: Either<S, U>) -> Self {
-        match err {
-            Either::Left(err) => DispatcherError::Service(err),
-            Either::Right(err) => DispatcherError::Encoder(err),
-        }
-    }
-}
-
 impl<U, Err> Dispatcher<U, Err>
 where
     U: Decoder + Encoder + 'static,
@@ -178,26 +168,16 @@ where
     ///
     /// Keep-alive and frame-read timeout behavior is taken from the transport's
     /// `ntex_io::IoConfig`.
-    pub fn new<Io>(
-        io: Io,
-        codec: U,
-        service: Pipeline<DispatchItem<U>, Option<Response<U>>, Err>,
-    ) -> Dispatcher<U, Err>
+    pub fn new<Io>(io: Io, codec: U, service: Service<U, Err>) -> Dispatcher<U, Err>
     where
         IoBoxed: From<Io>,
     {
         let io = IoBoxed::from(io);
-        let flags = if io.cfg().keepalive_timeout().is_zero() {
-            Flags::empty()
-        } else {
-            Flags::KA_ENABLED
-        };
-
         let shared = Rc::new(DispatcherShared {
+            keepalive: !io.cfg().keepalive_timeout().is_zero(),
             io,
             codec,
             service,
-            flags,
             error: Cell::new(None),
             inflight: Cell::new(0),
         });
@@ -216,12 +196,22 @@ where
 
 impl<U, Err> DispatcherShared<U, Err>
 where
-    U: Encoder + Decoder,
+    U: Encoder + Decoder + 'static,
+    Err: 'static,
 {
-    fn handle_result(&self, item: Result<Option<Response<U>>, Err>, io: &IoBoxed, wake: bool) {
+    fn call(&self, item: DispatchItem<U>, nowait: bool) -> Call<U, Err> {
+        self.inflight.set(self.inflight.get() + 1);
+        if nowait {
+            self.service.call_nowait(item)
+        } else {
+            self.service.call_static(item)
+        }
+    }
+
+    fn handle_result(&self, item: Result<Option<Response<U>>, Err>, wake: bool) {
         match item {
             Ok(Some(val)) => {
-                if let Err(err) = io.encode(val, &self.codec) {
+                if let Err(err) = self.io.encode(val, &self.codec) {
                     self.error.set(Some(DispatcherError::Encoder(err)));
                 }
             }
@@ -230,7 +220,7 @@ where
         }
         self.inflight.set(self.inflight.get() - 1);
         if wake {
-            io.notify_dispatcher();
+            self.io.notify_dispatcher();
         }
     }
 }
@@ -243,15 +233,14 @@ where
     type Output = Result<(), Err>;
 
     #[allow(clippy::too_many_lines)]
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.as_mut().project();
-        let inner = this.inner;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let inner = &mut self.get_mut().inner;
 
         // handle service response future
         if let Some(fut) = inner.response.as_mut()
             && let Poll::Ready(item) = Pin::new(fut).poll(cx)
         {
-            inner.shared.handle_result(item, &inner.shared.io, false);
+            inner.shared.handle_result(item, false);
             inner.response = None;
         }
 
@@ -320,7 +309,7 @@ where
                     }
 
                     // check write timeout
-                    if let Poll::Ready(IoStatusUpdate::KeepAlive) =
+                    if let Poll::Ready(IoStatusUpdate::Timeout) =
                         inner.shared.io.poll_status_update(cx)
                         && let Err(reason) = inner.handle_timeout()
                     {
@@ -333,8 +322,7 @@ where
                         continue;
                     } else {
                         // Stops the write timeout when write backpressure is disabled.
-                        inner.timers.active = Timer::Stopped;
-                        inner.shared.io.stop_timer();
+                        inner.stop_timer();
                         inner.st = DispatcherState::Processing;
                         DispatchItem::Control(Control::WBackPressureDisabled)
                     };
@@ -395,22 +383,16 @@ where
     Err: 'static,
 {
     fn stop(&self, reason: Reason<U>) -> DispatcherState<U, Err> {
-        self.shared.inflight.set(self.shared.inflight.get() + 1);
-        DispatcherState::Stop(self.shared.service.call_nowait(DispatchItem::Stop(reason)))
+        DispatcherState::Stop(self.shared.call(DispatchItem::Stop(reason), true))
     }
 
     fn call_service(&mut self, cx: &mut Context<'_>, item: DispatchItem<U>, nowait: bool) {
-        let mut fut = if nowait {
-            self.shared.service.call_nowait(item)
-        } else {
-            self.shared.service.call_static(item)
-        };
-        self.shared.inflight.set(self.shared.inflight.get() + 1);
+        let mut fut = self.shared.call(item, nowait);
 
         // optimize first call
         if self.response.is_none() {
             if let Poll::Ready(result) = Pin::new(&mut fut).poll(cx) {
-                self.shared.handle_result(result, &self.shared.io, false);
+                self.shared.handle_result(result, false);
             } else {
                 self.response = Some(fut);
             }
@@ -418,7 +400,7 @@ where
             let shared = self.shared.clone();
             spawn(async move {
                 let result = fut.await;
-                shared.handle_result(result, &shared.io, true);
+                shared.handle_result(result, true);
             });
         }
     }
@@ -457,14 +439,13 @@ where
                 );
 
                 // the write timeout keeps running while the service is paused
-                if self.timers.active != Timer::Write && self.timers.active != Timer::Stopped {
-                    self.timers.active = Timer::Stopped;
-                    self.shared.io.stop_timer();
+                if self.timers.active != Timer::Write {
+                    self.stop_timer();
                 }
                 self.timers.reset_read(self.shared.io.cfg());
 
                 match ready!(self.shared.io.poll_read_pause(cx)) {
-                    IoStatusUpdate::KeepAlive => {
+                    IoStatusUpdate::Timeout => {
                         if let Err(reason) = self.handle_timeout() {
                             log::trace!(
                                 "{}: Timeout during pause, stopping dispatcher: {:?}",
@@ -515,10 +496,7 @@ where
     fn start_write_timer(&mut self) {
         let timeout = self.shared.io.cfg().write_timeout();
         if timeout.is_zero() {
-            if self.timers.active != Timer::Stopped {
-                self.timers.active = Timer::Stopped;
-                self.shared.io.stop_timer();
-            }
+            self.stop_timer();
         } else if self.timers.active != Timer::Write {
             self.timers.active = Timer::Write;
             self.shared.io.start_timer(timeout);
@@ -536,12 +514,18 @@ where
 
         // keep-alive and frame read timers do not apply while a frame is handled
         let handling = item || self.shared.inflight.get() != 0;
-        let timer = self.timers.select(
-            self.shared.io.cfg(),
-            self.shared.flags.contains(Flags::KA_ENABLED),
-            handling,
-        );
+        let timer = self
+            .timers
+            .select(self.shared.io.cfg(), self.shared.keepalive, handling);
         self.set_timer(timer);
+    }
+
+    /// Stops the dispatcher timer, if it is armed.
+    fn stop_timer(&mut self) {
+        if self.timers.active != Timer::Stopped {
+            self.timers.active = Timer::Stopped;
+            self.shared.io.stop_timer();
+        }
     }
 
     /// Arms the dispatcher timer for a read-side purpose, an armed timer
@@ -645,17 +629,11 @@ where
     U: Encoder + Decoder,
     <U as Decoder>::Item: fmt::Debug,
 {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            DispatchItem::Item(ref item) => {
-                write!(fmt, "DispatchItem::Item({item:?})")
-            }
-            DispatchItem::Control(ref e) => {
-                write!(fmt, "DispatchItem::Control({e:?})")
-            }
-            DispatchItem::Stop(ref e) => {
-                write!(fmt, "DispatchItem::Stop({e:?})")
-            }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DispatchItem::Item(item) => f.debug_tuple("DispatchItem::Item").field(item).finish(),
+            DispatchItem::Control(e) => f.debug_tuple("DispatchItem::Control").field(e).finish(),
+            DispatchItem::Stop(e) => f.debug_tuple("DispatchItem::Stop").field(e).finish(),
         }
     }
 }
@@ -666,29 +644,15 @@ where
     <U as Encoder>::Error: fmt::Debug,
     <U as Decoder>::Error: fmt::Debug,
 {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            Reason::Service => {
-                write!(fmt, "Reason::Service")
-            }
-            Reason::Io(ref err) => {
-                write!(fmt, "Reason::Io({err:?})")
-            }
-            Reason::Encoder(ref err) => {
-                write!(fmt, "Reason::Encoder({err:?})")
-            }
-            Reason::Decoder(ref err) => {
-                write!(fmt, "Reason::Decoder({err:?})")
-            }
-            Reason::KeepAliveTimeout => {
-                write!(fmt, "Reason::KeepAliveTimeout")
-            }
-            Reason::ReadTimeout => {
-                write!(fmt, "Reason::ReadTimeout")
-            }
-            Reason::WriteTimeout => {
-                write!(fmt, "Reason::WriteTimeout")
-            }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Reason::Service => f.write_str("Reason::Service"),
+            Reason::Io(err) => f.debug_tuple("Reason::Io").field(err).finish(),
+            Reason::Encoder(err) => f.debug_tuple("Reason::Encoder").field(err).finish(),
+            Reason::Decoder(err) => f.debug_tuple("Reason::Decoder").field(err).finish(),
+            Reason::KeepAliveTimeout => f.write_str("Reason::KeepAliveTimeout"),
+            Reason::ReadTimeout => f.write_str("Reason::ReadTimeout"),
+            Reason::WriteTimeout => f.write_str("Reason::WriteTimeout"),
         }
     }
 }
@@ -756,36 +720,8 @@ mod tests {
         where
             S: Service<(), DispatchItem<U>, Res = Option<Response<U>>, Error = Err> + 'static,
         {
-            let flags = if io.cfg().keepalive_timeout().is_zero() {
-                super::Flags::empty()
-            } else {
-                super::Flags::KA_ENABLED
-            };
-
-            let inner = State(io.get_ref());
-            io.start_timer(Seconds::ONE);
-
-            let shared = Rc::new(DispatcherShared {
-                codec,
-                flags,
-                io: io.into(),
-                error: Cell::new(None),
-                inflight: Cell::new(0),
-                service: Pipeline::new((), service),
-            });
-
-            (
-                Dispatcher {
-                    inner: DispatcherInner {
-                        timers: Timers::new(&shared.io),
-                        shared,
-                        error: None,
-                        st: DispatcherState::Processing,
-                        response: None,
-                    },
-                },
-                inner,
-            )
+            let st = State(io.get_ref());
+            (Dispatcher::new(io, codec, Pipeline::new((), service)), st)
         }
     }
 
@@ -822,8 +758,6 @@ mod tests {
         client.close().await;
         sleep(Millis(75)).await;
         assert!(client.is_server_dropped());
-
-        assert!(format!("{:?}", super::Flags::KA_ENABLED.clone()).contains("KA_ENABLED"));
     }
 
     #[ntex::test]

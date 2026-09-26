@@ -10,7 +10,8 @@
 
 * Fix a filter shutdown waiting for peer input not being polled again after that input is read
 
-## [4.1.0] - 2026-09-22
+* Rename `IoStatusUpdate::KeepAlive` to `IoStatusUpdate::Timeout`, it reports any
+  dispatcher timer expiration
 
 * Fix filter shutdown waiting for the shutdown timeout when the input it
   needs, such as the peer's TLS close_notify, arrived during the shutdown.

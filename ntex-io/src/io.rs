@@ -969,7 +969,7 @@ impl<F> Io<F> {
     #[inline]
     /// Polls for available status updates.
     ///
-    /// `KeepAlive` consumes the pending dispatcher-timeout notification.
+    /// `Timeout` consumes the pending dispatcher-timeout notification.
     /// `WriteBackpressure` is reported while backpressure is active. The poll
     /// that observes the write buffer falling below its release threshold
     /// releases backpressure and reports no status update, matching
@@ -982,7 +982,7 @@ impl<F> Io<F> {
         if st.flags.is_peer_gone() {
             Poll::Ready(IoStatusUpdate::PeerGone(st.error()))
         } else if st.flags.check_dispatcher_timeout() {
-            Poll::Ready(IoStatusUpdate::KeepAlive)
+            Poll::Ready(IoStatusUpdate::Timeout)
         } else if st.flags.is_wr_backpressure() {
             // write backpressure is enabled and outstanding output is smaller than half
             if st.should_disable_wr_backpressure(st.write_outstanding()) {

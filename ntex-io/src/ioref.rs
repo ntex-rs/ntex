@@ -587,7 +587,7 @@ impl IoRef {
     ///
     /// The timer uses second-granularity deadlines. When it expires,
     /// [`poll_status_update`](crate::Io::poll_status_update) reports
-    /// [`IoStatusUpdate::KeepAlive`](crate::IoStatusUpdate::KeepAlive).
+    /// [`IoStatusUpdate::Timeout`](crate::IoStatusUpdate::Timeout).
     ///
     /// A zero timeout cancels the current timer but does not consume a timeout
     /// notification that has already been delivered. Use

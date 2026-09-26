@@ -5,7 +5,7 @@
 * Return the service error from the `DispatchItem::Stop` call, it was dropped and the dispatcher
   resolved to `Ok(())`
 
-## [4.1.0] - 2026-09-21
+* Internal cleanup, drop `bitflags` and `pin-project-lite` dependencies
 
 * Report `Reason::Io(Some(UnexpectedEof))` when the peer closes cleanly while
   undecodable bytes remain in the read buffer, instead of a clean disconnect
