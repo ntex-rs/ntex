@@ -1,6 +1,6 @@
 #![allow(clippy::missing_panics_doc)]
 use std::sync::{Arc, atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering};
-use std::{any::Any, any::TypeId, cell::RefCell, fmt, mem, panic, pin::Pin, thread};
+use std::{any::Any, any::TypeId, cell::RefCell, fmt, mem, panic, pin::Pin, rc::Rc, thread};
 
 use async_channel::{Receiver, Sender, unbounded};
 use parking_lot::Mutex;
@@ -9,7 +9,7 @@ use crate::{Handle, HashMap, Id, System};
 
 thread_local!(
     static ADDR: RefCell<Option<Arbiter>> = const { RefCell::new(None) };
-    static STORAGE: RefCell<HashMap<TypeId, Box<dyn Any>>> = RefCell::new(HashMap::default());
+    static STORAGE: RefCell<HashMap<TypeId, Rc<dyn Any>>> = RefCell::new(HashMap::default());
     static ON_SHUTDOWN: RefCell<Vec<Box<dyn FnOnce()>>> = const { RefCell::new(Vec::new()) };
 );
 
@@ -264,7 +264,7 @@ impl Arbiter {
                     return val.clone();
                 }
                 let val = (f.take().unwrap())();
-                st.insert(TypeId::of::<T>(), Box::new(val.clone()));
+                st.insert(TypeId::of::<T>(), Rc::new(val.clone()));
                 val
             })
             .unwrap_or_else(|_| (f.take().unwrap())())
@@ -370,7 +370,7 @@ pub(crate) fn run_shutdown_callbacks() {
 /// If the storage has already been destroyed because the thread is
 /// exiting, the value is dropped.
 pub fn set_item<T: 'static>(item: T) {
-    let item: Box<dyn Any> = Box::new(item);
+    let item: Rc<dyn Any> = Rc::new(item);
     let old = STORAGE
         .try_with(move |cell| cell.borrow_mut().insert(TypeId::of::<T>(), item))
         .ok()
@@ -403,25 +403,21 @@ pub fn with_item<T: Default + 'static, F, R>(f: F) -> R
 where
     F: FnOnce(&T) -> R,
 {
-    let mut f = Some(f);
-    let result = STORAGE.try_with(|cell| {
-        // SAFETY: value of T is stored in heap, manipulation
-        // with STORAGE are not affected location of T
-        let val: &T = unsafe {
-            let mut st = cell.borrow_mut();
-            if let Some(boxed) = st.get(&TypeId::of::<T>()) {
-                std::mem::transmute::<&T, &T>(boxed.downcast_ref::<T>().unwrap())
-            } else {
-                st.insert(TypeId::of::<T>(), Box::new(T::default()));
-                let boxed = st.get(&TypeId::of::<T>()).unwrap();
-                std::mem::transmute::<&T, &T>(boxed.downcast_ref::<T>().unwrap())
-            }
-        };
-        (f.take().unwrap())(val)
-    });
-    match result {
-        Ok(res) => res,
-        Err(_) => (f.take().unwrap())(&T::default()),
+    // `f` holds its own reference, so the value stays alive even if `f`
+    // replaces or removes it
+    let val = STORAGE
+        .try_with(|cell| {
+            let existing = cell.borrow().get(&TypeId::of::<T>()).cloned();
+            existing.unwrap_or_else(|| {
+                let val: Rc<dyn Any> = Rc::new(T::default());
+                cell.borrow_mut().insert(TypeId::of::<T>(), val.clone());
+                val
+            })
+        })
+        .ok();
+    match val {
+        Some(val) => f(val.downcast_ref::<T>().unwrap()),
+        None => f(&T::default()),
     }
 }
 

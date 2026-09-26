@@ -2,6 +2,9 @@
 
 ## [4.0.0] - unreleased
 
+* Fix use-after-free in `with_item()` when the callback replaces or removes
+  the stored value
+
 * Fix panic when a value in arbiter storage accesses the storage from its
   destructor while the storage is cleared
 
