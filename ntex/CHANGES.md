@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* HTTP client cookies are appended to a `Cookie` header set on the request or client, instead of
+  replacing it
+
 * `web::ws::start()` sends a protocol error close frame (1002) on invalid input
 
 * `ws::WsSink` implements `Encoder` and `Decoder`, WebSocket dispatchers use the sink as codec, so

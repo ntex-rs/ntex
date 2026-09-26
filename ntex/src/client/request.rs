@@ -491,24 +491,30 @@ impl ClientRequest {
             }
         }?;
 
-        // set cookies
+        // set cookies, appended to an existing `Cookie` header
         #[cfg(feature = "cookie")]
         {
             use percent_encoding::percent_encode;
-            use std::fmt::Write as FmtWrite;
+            use std::io::Write;
 
-            if let Some(ref mut jar) = self.cookies {
-                let mut cookie = String::new();
-                for c in jar.delta() {
+            if let Some(ref jar) = self.cookies {
+                let headers = &mut self.request.head.headers;
+                let mut cookie = headers
+                    .get(header::COOKIE)
+                    .map(|v| v.as_bytes().to_vec())
+                    .unwrap_or_default();
+                for c in jar.iter() {
                     let name = percent_encode(c.name().as_bytes(), crate::http::helpers::USERINFO);
                     let value =
                         percent_encode(c.value().as_bytes(), crate::http::helpers::USERINFO);
-                    let _ = write!(cookie, "; {name}={value}");
+                    if !cookie.is_empty() {
+                        cookie.extend_from_slice(b"; ");
+                    }
+                    let _ = write!(cookie, "{name}={value}");
                 }
-                self.request.head.headers.insert(
-                    header::COOKIE,
-                    HeaderValue::from_str(&cookie.as_str()[2..]).unwrap(),
-                );
+                if let Ok(val) = HeaderValue::from_bytes(&cookie) {
+                    headers.insert(header::COOKIE, val);
+                }
             }
         }
 
@@ -601,6 +607,33 @@ mod tests {
         assert_eq!(req.get_method(), Method::PUT);
         let _ = req.headers_mut();
         let _ = req.send_body("").await;
+    }
+
+    #[cfg(feature = "cookie")]
+    #[crate::rt_test]
+    async fn cookies_extend_cookie_header() {
+        use coo_kie::Cookie;
+
+        fn cookie_header(req: &mut ClientRequest) -> String {
+            req.prep_for_sending_inner().unwrap();
+            let val = req.request.head.headers.get(header::COOKIE).unwrap();
+            val.to_str().unwrap().to_string()
+        }
+
+        let mut req = Client::new()
+            .get("http://localhost/")
+            .cookie(Cookie::build(("c1", "v1")))
+            .cookie(Cookie::build(("c2", "v2")));
+        let cookie = cookie_header(&mut req);
+        let mut cookies: Vec<_> = cookie.split("; ").collect();
+        cookies.sort_unstable();
+        assert_eq!(cookies, ["c1=v1", "c2=v2"]);
+
+        let mut req = Client::new()
+            .get("http://localhost/")
+            .header(header::COOKIE, "c0=v0")
+            .cookie(Cookie::build(("c1", "v1")));
+        assert_eq!(cookie_header(&mut req), "c0=v0; c1=v1");
     }
 
     #[crate::rt_test]
