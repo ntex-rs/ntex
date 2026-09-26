@@ -14,6 +14,12 @@ use crate::{http::Payload, router::PathDeserializer};
 /// [`PathError`](crate::web::error::PathError), which the default error domain
 /// renders as `404 Not Found`.
 ///
+/// Path segments are percent-decoded after the path is split on `/`, so
+/// extracted values can contain any character, including `/`. For example
+/// `/files/..%2F..%2Fetc` matches `/files/{name}` with `name` set to
+/// `../../etc`. Validate such values before using them, e.g. as a file system
+/// path.
+///
 /// ## Example
 ///
 /// ```rust

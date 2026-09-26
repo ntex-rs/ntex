@@ -12,7 +12,7 @@
   resource path building, it used the last one. `Eq` and `Hash` compare all
   patterns. Add `ResourceDef::patterns()`
 
-* Fix `ResourceDef` docs
+* Fix `ResourceDef` docs, document percent-decoding of path segments
 
 ## [1.0.0] - 2025-11-24
 

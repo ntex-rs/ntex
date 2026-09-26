@@ -35,6 +35,11 @@ pub trait Resource<T: ResourcePath> {
 pub trait ResourcePath {
     fn path(&self) -> &str;
 
+    /// Decodes a path segment before it is matched.
+    ///
+    /// The path is split into segments on `/` before decoding, so a decoded
+    /// segment may contain `/`. The default implementation returns the
+    /// segment unchanged.
     fn unquote(s: &str) -> std::borrow::Cow<'_, str> {
         s.into()
     }
@@ -144,6 +149,12 @@ mod http_support {
 
     /// Path segments are percent-decoded, segments that would not decode to
     /// valid utf-8 are kept percent-encoded.
+    ///
+    /// Segments are decoded after the path is split on `/`, so parameter
+    /// values can contain any character, including `/` and `%`. For example
+    /// `/files/..%2F..%2Fetc` matches `/files/{name}` with `name` set to
+    /// `../../etc`. Such values must be validated before they are used, e.g.
+    /// as a file system path.
     impl ResourcePath for Uri {
         fn path(&self) -> &str {
             self.path()
