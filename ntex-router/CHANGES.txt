@@ -8,6 +8,12 @@
 * Fix static text in patterns being used as a regex, e.g. `/{name}.json` matched
   `/fooXjson` and `/files(*` panicked
 
+* `ResourceDef` with several patterns uses the first one for `pattern()` and
+  resource path building, it used the last one. `Eq` and `Hash` compare all
+  patterns. Add `ResourceDef::patterns()`
+
+* Fix `ResourceDef` docs
+
 ## [1.0.0] - 2025-11-24
 
 * Use ntex-bytes 1.0
