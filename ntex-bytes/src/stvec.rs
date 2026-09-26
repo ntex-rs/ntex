@@ -2,7 +2,7 @@ use crate::alloc::alloc::{self, Layout, LayoutError};
 
 use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::atomic::{self, AtomicU32};
-use std::{cell::Cell, mem, num::NonZeroUsize, ptr, ptr::NonNull, slice};
+use std::{cell::Cell, cmp, mem, num::NonZeroUsize, ptr, ptr::NonNull, slice};
 
 use crate::{BytePageSize, storage::Storage};
 
@@ -311,7 +311,10 @@ impl StorageVec {
                     return;
                 }
             }
-            // Create a new storage
+            // Create a new storage. It is at least twice the length, so
+            // appending in small steps reallocates a logarithmic number of
+            // times, a buffer holding little data still gets what it asked for.
+            let new_cap = cmp::max(new_cap, cmp::min(len.saturating_mul(2), MAX_CAPACITY));
             *self = StorageVec(SharedVec::create(
                 BytePageSize::Unset,
                 new_cap,

@@ -2,6 +2,9 @@
 
 ## [1.10.0] (unreleased)
 
+* `BytesMut` grows to at least twice its length when it reallocates, appending
+  in small steps no longer reallocates and copies the buffer on every write
+
 * `BytesMut::from(BytePages)` and `Bytes::from(BytePages)` take a single page
   without copying
 

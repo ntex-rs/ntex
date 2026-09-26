@@ -423,6 +423,11 @@ impl BytesMut {
     /// buffer's capacity, then the current view will be copied to the front of
     /// the buffer and the handle will take ownership of the full buffer.
     ///
+    /// Otherwise a new buffer is allocated. Its capacity is at least twice the
+    /// current length, so appending in small steps reallocates a logarithmic
+    /// number of times. Use [`reserve_capacity`](Self::reserve_capacity) to
+    /// allocate an exact capacity.
+    ///
     /// # Panics
     ///
     /// Panics if the new capacity exceeds `u32::MAX` minus the buffer
@@ -984,6 +989,142 @@ impl From<&Bytes> for BytesMut {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn growth_is_amortized() {
+        let mut buf = BytesMut::with_capacity(0);
+        let mut cap = buf.capacity();
+        let mut reallocs = 0;
+        for _ in 0..10_000 {
+            buf.put_slice(b"abcdefgh");
+            if buf.capacity() != cap {
+                reallocs += 1;
+                cap = buf.capacity();
+            }
+        }
+        assert_eq!(buf.len(), 80_000);
+        assert!(reallocs <= 16, "reallocs: {reallocs}");
+
+        // writes through `io::Write` and `fmt::Write` grow the same way
+        let mut buf = BytesMut::with_capacity(0);
+        for i in 0..1000 {
+            std::fmt::Write::write_fmt(&mut buf, format_args!("{i:08}")).unwrap();
+        }
+        assert_eq!(buf.len(), 8000);
+        assert!(buf.capacity() < 16_000);
+    }
+
+    #[test]
+    fn growth_of_little_data_is_exact() {
+        let mut buf = BytesMut::copy_from_slice(b"hello");
+        buf.reserve(64 * 1024);
+        assert_eq!(buf.capacity(), 5 + 64 * 1024);
+
+        // a buffer shared with split off `Bytes`
+        let mut buf = BytesMut::with_capacity(1024);
+        buf.extend_from_slice(&[1; 1024]);
+        let head = buf.split_to(1000);
+        buf.reserve(4096);
+        assert_eq!(buf.capacity(), 24 + 4096);
+        assert_eq!(&head[..], &[1; 1000][..]);
+    }
+
+    #[test]
+    fn from_unique_bytes_reuses_buffer() {
+        let mut buf = BytesMut::with_capacity(256);
+        buf.extend_from_slice(&[1; 64]);
+        let b = buf.freeze();
+        let ptr = b.as_ptr();
+
+        let mut m = BytesMut::from(b);
+        assert_eq!(m.as_ptr(), ptr);
+        assert_eq!(&m[..], &[1; 64][..]);
+        assert_eq!(m.capacity(), 256);
+
+        // spare capacity past the view is writable
+        m.extend_from_slice(&[2; 192]);
+        assert_eq!(m.as_ptr(), ptr);
+        assert_eq!(&m[64..], &[2; 192][..]);
+    }
+
+    #[test]
+    fn from_unique_bytes_subview() {
+        let mut buf = BytesMut::with_capacity(256);
+        buf.extend_from_slice(&[1; 128]);
+        let mut b = buf.freeze();
+        let head = b.split_to(32);
+        drop(head);
+        b.truncate(64);
+        let ptr = b.as_ptr();
+
+        let mut m = BytesMut::from(b);
+        assert_eq!(m.as_ptr(), ptr);
+        assert_eq!(m.len(), 64);
+        assert_eq!(m.capacity(), 256 - 32);
+
+        // the dropped tail of the view is spare capacity again
+        m.extend_from_slice(&[3; 160]);
+        assert_eq!(m.as_ptr(), ptr);
+        assert_eq!(&m[..64], &[1; 64][..]);
+        assert_eq!(&m[64..], &[3; 160][..]);
+    }
+
+    #[test]
+    fn from_shared_bytes_copies() {
+        let b = BytesMut::copy_from_slice([1; 64]).freeze();
+        let b2 = b.clone();
+
+        let mut m = BytesMut::from(b);
+        assert_ne!(m.as_ptr(), b2.as_ptr());
+        m[0] = 2;
+        assert_eq!(&b2[..], &[1; 64][..]);
+
+        // the buffer is still referenced by a `BytesMut`
+        let mut buf = BytesMut::with_capacity(256);
+        buf.extend_from_slice(&[1; 64]);
+        let b = buf.take();
+        let m = BytesMut::from(b);
+        assert_ne!(m.as_ptr(), buf.as_ptr());
+        buf.extend_from_slice(&[2; 64]);
+        assert_eq!(&m[..], &[1; 64][..]);
+    }
+
+    // Run under miri: without `Acquire`, the header update races with the
+    // read made by the other thread before it released its handle.
+    #[test]
+    fn from_bytes_synchronizes_with_release() {
+        let b = BytesMut::copy_from_slice([1; 64]).freeze();
+        let other = b.clone();
+        let handle = std::thread::spawn(move || {
+            let val = other[0];
+            drop(other);
+            val
+        });
+
+        let ptr = b.as_ptr();
+        let mut storage = b.storage;
+        let mut m = loop {
+            match storage.try_into_vec() {
+                Ok(storage) => break BytesMut { storage },
+                Err(st) => {
+                    storage = st;
+                    std::thread::yield_now();
+                }
+            }
+        };
+        assert_eq!(m.as_ptr(), ptr);
+        m[0] = 2;
+        assert_eq!(handle.join().unwrap(), 1);
+    }
+
+    #[test]
+    fn from_inline_and_static_bytes() {
+        let m = BytesMut::from(Bytes::copy_from_slice(b"inline"));
+        assert_eq!(&m[..], b"inline");
+
+        let m = BytesMut::from(Bytes::from_static(&[1; 64]));
+        assert_eq!(&m[..], &[1; 64][..]);
+    }
 
     #[test]
     fn bvec_read() {
