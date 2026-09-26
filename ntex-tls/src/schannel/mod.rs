@@ -5,6 +5,7 @@ use std::{any, cell::UnsafeCell, cmp, io, mem, ptr, slice, task::Poll};
 
 use ntex_bytes::{BufMut, BytesMut};
 use ntex_io::{Filter, FilterBuf, FilterLayer, Io, Layer, types};
+use windows_sys::Wdk::System::SystemServices::RtlGetVersion;
 use windows_sys::Win32::Foundation::{
     CRYPT_E_REVOKED, SEC_E_CERT_EXPIRED, SEC_E_CERT_UNKNOWN, SEC_E_INCOMPLETE_MESSAGE, SEC_E_OK,
     SEC_E_UNTRUSTED_ROOT, SEC_E_WRONG_PRINCIPAL, SEC_I_CONTEXT_EXPIRED, SEC_I_CONTINUE_NEEDED,
@@ -29,6 +30,7 @@ use windows_sys::Win32::Security::Authentication::Identity::{
 };
 use windows_sys::Win32::Security::Credentials::SecHandle;
 use windows_sys::Win32::Security::Cryptography::{CERT_CONTEXT, CertFreeCertificateContext};
+use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
 
 mod cert;
 mod connect;
@@ -143,26 +145,26 @@ impl Credentials {
             (0, ptr::null_mut())
         };
 
-        // SCH_CREDENTIALS enables the system default protocols, including TLS 1.3
-        let mut sch_cred = unsafe { mem::zeroed::<SCH_CREDENTIALS>() };
-        sch_cred.dwVersion = SCH_CREDENTIALS_VERSION;
-        sch_cred.dwFlags = flags;
-        sch_cred.cCreds = num_certs;
-        sch_cred.paCred = certs;
-        Self::acquire_with((&raw mut sch_cred).cast())
-            .or_else(|_| {
-                // Windows before 10 1809 supports SCHANNEL_CRED only
-                let mut schannel_cred = unsafe { mem::zeroed::<SCHANNEL_CRED>() };
-                schannel_cred.dwVersion = SCHANNEL_CRED_VERSION;
-                schannel_cred.dwFlags = flags;
-                schannel_cred.cCreds = num_certs;
-                schannel_cred.paCred = certs;
-                Self::acquire_with((&raw mut schannel_cred).cast())
-            })
-            .map(|handle| Self {
-                handle,
-                _cert: cert.cloned(),
-            })
+        let handle = if supports_sch_credentials() {
+            // SCH_CREDENTIALS enables the system default protocols, including TLS 1.3
+            let mut sch_cred = unsafe { mem::zeroed::<SCH_CREDENTIALS>() };
+            sch_cred.dwVersion = SCH_CREDENTIALS_VERSION;
+            sch_cred.dwFlags = flags;
+            sch_cred.cCreds = num_certs;
+            sch_cred.paCred = certs;
+            Self::acquire_with((&raw mut sch_cred).cast())
+        } else {
+            let mut schannel_cred = unsafe { mem::zeroed::<SCHANNEL_CRED>() };
+            schannel_cred.dwVersion = SCHANNEL_CRED_VERSION;
+            schannel_cred.dwFlags = flags;
+            schannel_cred.cCreds = num_certs;
+            schannel_cred.paCred = certs;
+            Self::acquire_with((&raw mut schannel_cred).cast())
+        };
+        handle.map(|handle| Self {
+            handle,
+            _cert: cert.cloned(),
+        })
     }
 
     fn acquire_with(auth_data: *mut std::ffi::c_void) -> io::Result<SecHandle> {
@@ -187,6 +189,22 @@ impl Credentials {
             Err(sspi_error("AcquireCredentialsHandleW", status))
         }
     }
+}
+
+/// `SCH_CREDENTIALS` is supported since Windows 10 1809, earlier versions
+/// support `SCHANNEL_CRED` only.
+///
+/// Errors of `SCH_CREDENTIALS` are reported as is, a fallback to
+/// `SCHANNEL_CRED` would hide them and offer older protocols only.
+fn supports_sch_credentials() -> bool {
+    let mut info = unsafe { mem::zeroed::<OSVERSIONINFOW>() };
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        info.dwOSVersionInfoSize = u32::try_from(mem::size_of::<OSVERSIONINFOW>()).unwrap_or(0);
+    }
+    // unlike GetVersionExW, not affected by the application manifest
+    unsafe { RtlGetVersion(&raw mut info) };
+    (info.dwMajorVersion, info.dwBuildNumber) >= (10, 17763)
 }
 
 impl std::fmt::Debug for Credentials {
@@ -992,6 +1010,72 @@ impl std::error::Error for SspiError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Credentials errors are reported, Schannel rejects a client key that
+    /// is not persisted.
+    #[cfg(feature = "openssl")]
+    #[test]
+    fn test_credentials_error_is_reported() {
+        use tls_openssl::{asn1::Asn1Time, hash::MessageDigest, pkcs12::Pkcs12, pkey::PKey};
+        use tls_openssl::{rsa::Rsa, x509::X509Builder, x509::X509NameBuilder};
+        use windows_sys::Win32::Security::Cryptography::{
+            CRYPT_INTEGER_BLOB, CertCloseStore, CertDuplicateCertificateContext,
+            CertEnumCertificatesInStore, PFXImportCertStore, PKCS12_ALWAYS_CNG_KSP,
+            PKCS12_NO_PERSIST_KEY,
+        };
+
+        assert!(supports_sch_credentials());
+
+        let key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+        let mut name = X509NameBuilder::new().unwrap();
+        name.append_entry_by_text("CN", "ntex client").unwrap();
+        let name = name.build();
+        let mut builder = X509Builder::new().unwrap();
+        builder.set_version(2).unwrap();
+        builder.set_subject_name(&name).unwrap();
+        builder.set_issuer_name(&name).unwrap();
+        builder.set_pubkey(&key).unwrap();
+        builder
+            .set_not_before(&Asn1Time::days_from_now(0).unwrap())
+            .unwrap();
+        builder
+            .set_not_after(&Asn1Time::days_from_now(1).unwrap())
+            .unwrap();
+        builder.sign(&key, MessageDigest::sha256()).unwrap();
+        let cert = builder.build();
+        let pfx = Pkcs12::builder()
+            .pkey(&key)
+            .cert(&cert)
+            .build2("")
+            .unwrap()
+            .to_der()
+            .unwrap();
+
+        let blob = CRYPT_INTEGER_BLOB {
+            cbData: u32::try_from(pfx.len()).unwrap(),
+            pbData: pfx.as_ptr().cast_mut(),
+        };
+        let password = [0u16];
+        let cert = unsafe {
+            let store = PFXImportCertStore(
+                &raw const blob,
+                password.as_ptr(),
+                PKCS12_NO_PERSIST_KEY | PKCS12_ALWAYS_CNG_KSP,
+            );
+            assert!(!store.is_null());
+            let cert =
+                CertDuplicateCertificateContext(CertEnumCertificatesInStore(store, ptr::null()));
+            CertCloseStore(store, 0);
+            ClientCert::from_context(cert)
+        };
+
+        let err = Credentials::acquire(false, Some(&cert)).unwrap_err();
+        let err = err.get_ref().unwrap().downcast_ref::<SspiError>().unwrap();
+        assert_eq!(
+            err.status,
+            windows_sys::Win32::Foundation::SEC_E_UNKNOWN_CREDENTIALS
+        );
+    }
 
     #[test]
     fn test_decrypted_parts_by_type() {

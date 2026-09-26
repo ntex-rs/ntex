@@ -57,6 +57,8 @@ windows-sys = { workspace = true, optional = true, features = [
     "Win32_Security_Authentication_Identity",
     "Win32_Security_Credentials",
     "Win32_Security_Cryptography",
+    "Win32_System_SystemInformation",
+    "Wdk_System_SystemServices",
 ] }
 
 [dev-dependencies]

@@ -144,6 +144,12 @@ impl ClientCert {
     pub(super) fn as_ptr(&self) -> *const CERT_CONTEXT {
         self.0.0
     }
+
+    /// Takes ownership of a certificate context.
+    #[cfg(test)]
+    pub(super) fn from_context(cert: *const CERT_CONTEXT) -> Self {
+        Self(Arc::new(CertContext(cert)))
+    }
 }
 
 impl fmt::Debug for ClientCert {
