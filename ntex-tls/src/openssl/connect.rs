@@ -4,10 +4,9 @@ use ntex_error::Error;
 use ntex_io::{Filter, Io, Layer};
 use ntex_net::connect::{Address, Connect, ConnectError, Connector};
 use ntex_service::{Ctx, IntoService, Service, cfg::SharedCfg};
-use ntex_util::time::timeout_checked;
 use tls_openssl::ssl::SslConnector as OpensslConnector;
 
-use crate::{TlsConfig, openssl::SslFilter, openssl::connect as connect_io};
+use crate::{TlsConfig, openssl::SslFilter};
 
 #[derive(Clone, Debug)]
 pub struct SslConnector<S> {
@@ -47,36 +46,26 @@ impl<S> SslConnector<S> {
         let cfg = cfg.get::<TlsConfig>();
         log::trace!("{}: SSL Handshake start for: {host:?} {io:?}", cfg.tag());
 
-        async {
-            let config = self
+        let result = async {
+            let ssl = self
                 .openssl
                 .configure()
-                .map_err(|e| ConnectError::from(io::Error::new(io::ErrorKind::InvalidInput, e)))?;
-            let ssl = config
-                .into_ssl(host)
-                .map_err(|e| ConnectError::from(io::Error::new(io::ErrorKind::InvalidInput, e)))?;
+                .and_then(|config| config.into_ssl(host))
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+            super::with_timeout(cfg.handshake_timeout(), super::handshake(io, ssl, false)).await
+        }
+        .await;
 
-            match timeout_checked(cfg.handshake_timeout(), connect_io(io, ssl)).await {
-                Ok(Ok(io)) => {
-                    log::trace!("{}: SSL Handshake success: {host:?}", cfg.tag());
-                    Ok(io)
-                }
-                Ok(Err(e)) => {
-                    log::trace!("{}: SSL Handshake error: {e:?}", cfg.tag());
-                    Err(ConnectError::from(e).into())
-                }
-                Err(()) => {
-                    log::trace!("{}: SSL Handshake timeout", cfg.tag());
-                    Err(ConnectError::from(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "SSL Handshake timeout",
-                    ))
-                    .into())
-                }
+        match result {
+            Ok(io) => {
+                log::trace!("{}: SSL Handshake success: {host:?}", cfg.tag());
+                Ok(io)
+            }
+            Err(e) => {
+                log::trace!("{}: SSL Handshake error: {e:?}", cfg.tag());
+                Err(Error::from(ConnectError::from(e)).set_service(cfg.service()))
             }
         }
-        .await
-        .map_err(|e: Error<_>| e.set_service(cfg.service()))
     }
 }
 
@@ -92,7 +81,7 @@ where
         req: Connect<A>,
         ctx: Ctx<'_, Self, SharedCfg>,
     ) -> Result<Self::Res, Self::Error> {
-        let host = req.host().split(':').next().unwrap().to_string();
+        let host = crate::server_name(req.host()).to_string();
         let io = ctx.call(&self.svc, req).await?;
         self.connect(io, &host, ctx.st()).await
     }

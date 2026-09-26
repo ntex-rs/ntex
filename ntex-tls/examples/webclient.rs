@@ -12,14 +12,6 @@ async fn main() -> Result<(), Error<ClientError>> {
     builder.set_verify(SslVerifyMode::NONE);
 
     // h2 alpn config
-    builder.set_alpn_select_callback(|_, protos| {
-        const H2: &[u8] = b"\x02h2";
-        if protos.windows(3).any(|window| window == H2) {
-            Ok(b"h2")
-        } else {
-            Err(ssl::AlpnError::NOACK)
-        }
-    });
     builder.set_alpn_protos(b"\x02h2").unwrap();
 
     // create client

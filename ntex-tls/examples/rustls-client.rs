@@ -24,10 +24,9 @@ async fn main() -> io::Result<()> {
 
     let connector = Pipeline::new(cfg, connect::rustls::TlsConnector::new(config));
 
-    //let io = connector.call("www.rust-lang.org:443").await.unwrap();
     let io = connector.call("127.0.0.1:8443".into()).await.unwrap();
     println!("Connected to tls server {:?}", io.query::<PeerAddr>().get());
-    io.send(Bytes::from_static(b"GET /\r\n\r\n"), &codec::BytesCodec)
+    io.send(Bytes::from_static(b"hello"), &codec::BytesCodec)
         .await
         .map_err(Either::into_inner)?;
 

@@ -110,3 +110,36 @@ pub enum TlsError<E> {
     Tls(std::io::Error),
     Service(E),
 }
+
+/// Strips the port and IPv6 brackets from a connect host.
+///
+/// Accepts `host`, `host:port`, `[v6]`, `[v6]:port` and a bare `v6` address.
+#[allow(dead_code)]
+fn server_name(host: &str) -> &str {
+    if let Some(rest) = host.strip_prefix('[') {
+        rest.split_once(']').map_or(host, |(ip, _)| ip)
+    } else {
+        match host.split_once(':') {
+            Some((name, port)) if !port.contains(':') => name,
+            _ => host,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::server_name;
+
+    #[test]
+    fn test_server_name() {
+        assert_eq!(server_name("example.com"), "example.com");
+        assert_eq!(server_name("example.com:443"), "example.com");
+        assert_eq!(server_name("127.0.0.1:8080"), "127.0.0.1");
+        assert_eq!(server_name("[::1]"), "::1");
+        assert_eq!(server_name("[::1]:443"), "::1");
+        assert_eq!(server_name("[fe80::1%25eth0]:443"), "fe80::1%25eth0");
+        assert_eq!(server_name("::1"), "::1");
+        assert_eq!(server_name("2001:db8::1"), "2001:db8::1");
+        assert_eq!(server_name(""), "");
+    }
+}

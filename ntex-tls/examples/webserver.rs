@@ -12,12 +12,15 @@ async fn main() -> io::Result<()> {
     println!("Started openssl web server: 127.0.0.1:8443");
 
     // load ssl keys
-    let mut builder = ssl::SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
+    let mut builder = ssl::SslAcceptor::mozilla_intermediate_v5(SslMethod::tls()).unwrap();
     builder
-        .set_private_key_file("./examples/key.pem", SslFiletype::PEM)
+        .set_private_key_file(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/examples/key.pem"),
+            SslFiletype::PEM,
+        )
         .unwrap();
     builder
-        .set_certificate_chain_file("./examples/cert.pem")
+        .set_certificate_chain_file(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/cert.pem"))
         .unwrap();
 
     // h2 alpn config
@@ -34,7 +37,7 @@ async fn main() -> io::Result<()> {
     let acceptor = builder.build();
 
     // start server
-    server::ServerBuilder::default()
+    server::build()
         .bind(
             "basic",
             "127.0.0.1:8443",

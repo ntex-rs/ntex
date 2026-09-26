@@ -8,17 +8,21 @@ use tls_openssl::ssl::{self, SslFiletype, SslMethod, SslVerifyMode};
 async fn main() -> io::Result<()> {
     env_logger::init();
 
-    println!("Started openssl echp server: 127.0.0.1:8443");
+    println!("Started openssl echo server: 127.0.0.1:8443");
 
     // load ssl keys
-    let mut builder = ssl::SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
-    builder.set_verify(SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT);
+    let mut builder = ssl::SslAcceptor::mozilla_intermediate_v5(SslMethod::tls()).unwrap();
+    // request an optional client certificate, any certificate is accepted,
+    // add `SslVerifyMode::FAIL_IF_NO_PEER_CERT` to require one
     builder.set_verify_callback(SslVerifyMode::PEER, |_success, _ctx| true);
     builder
-        .set_private_key_file("./examples/key.pem", SslFiletype::PEM)
+        .set_private_key_file(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/examples/key.pem"),
+            SslFiletype::PEM,
+        )
         .unwrap();
     builder
-        .set_certificate_chain_file("./examples/cert.pem")
+        .set_certificate_chain_file(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/cert.pem"))
         .unwrap();
     let acceptor = builder.build();
 

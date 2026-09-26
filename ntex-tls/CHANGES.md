@@ -2,6 +2,68 @@
 
 ## [4.1.0] - 2026-09-22
 
+* schannel: add `ClientConfig::set_client_cert()` with `ClientCert::from_store()`
+  and `ClientCert::from_store_by_subject()`
+
+* schannel: do not send a client certificate picked from the user's store,
+  complete the handshake without one when the server requests it
+
+* schannel: enable TLS 1.3 with `SCH_CREDENTIALS` (`SCHANNEL_CRED` before
+  Windows 10 1809), process post-handshake messages (session tickets, key updates,
+  renegotiation) instead of failing the connection
+
+* schannel: share the credentials handle between connections made with the
+  same `ClientConfig`, so Schannel can resume TLS sessions
+
+* schannel: graceful shutdown waits for the peer's `close_notify` (or read eof),
+  like the openssl and rustls filters
+
+* rustls: graceful shutdown waits for the peer's `close_notify` (or read eof),
+  like the openssl filter, instead of completing right after sending its own
+
+* schannel: complete the handshake when the peer's last handshake flight is read
+  together with its eof, instead of failing with `UnexpectedEof`
+
+* schannel: start a graceful shutdown when the peer sends `close_notify`,
+  instead of leaving the connection half-open
+
+* schannel: locate decrypted data and extra input by buffer type instead of
+  fixed `DecryptMessage` buffer positions
+
+* rustls: a zero handshake timeout disables the timeout on the acceptor as
+  documented, instead of failing handshakes that take longer than a timer tick
+
+* rustls: complete the handshake when the peer's last handshake flight is read
+  together with its eof, instead of failing with `NotConnected`
+
+* openssl: a zero handshake timeout disables the timeout on the acceptor as
+  documented, instead of failing handshakes that take longer than a timer tick
+
+* openssl: complete the handshake when the peer's last handshake flight is read
+  together with its eof, instead of failing with `UnexpectedEof`
+
+* schannel: send a fatal alert to the peer when the handshake fails
+
+* schannel: add `ClientConfig::set_alpn_protocols()`, send ALPN only with the ClientHello
+
+* schannel: encrypt records in place into write pages, no per-record allocation and copy
+
+* Fix IPv6 server name extraction in openssl, rustls and schannel connectors
+
+* openssl: enable read-ahead, fewer BIO reads per TLS record
+
+* openssl: read into uninitialized buffer via ssl_read_uninit
+
+* openssl: replace RefCell with UnsafeCell in SslFilter
+
+* schannel: encrypt all pending write pages in one pass, not one record per transport write
+
+* schannel: continue the handshake when a step leaves buffered input
+
+* schannel: send close_notify on shutdown
+
+* schannel: replace RefCell with UnsafeCell in SchannelFilter
+
 * openssl: complete shutdown after a clean peer EOF, its close_notify will never arrive
 
 ## [4.0.0] - 2026-09-14

@@ -134,6 +134,282 @@ async fn test_openssl_read_before_error() {
     assert!(io.recv(&BytesCodec).await.unwrap().is_none());
 }
 
+#[cfg(feature = "openssl")]
+#[ntex::test]
+async fn test_openssl_shutdown_sends_close_notify() {
+    use std::io::{Read, Write};
+
+    use ntex::server::openssl;
+    use tls_openssl::ssl::{ShutdownState, SslConnector, SslMethod, SslVerifyMode};
+
+    let srv = test_server(async || {
+        service(openssl::SslAcceptor::new(ssl_acceptor())).and_then(async move |io: Io<_>| {
+            let item = io.recv(&BytesCodec).await.unwrap().unwrap();
+            io.send(item, &BytesCodec).await.unwrap();
+            // graceful shutdown, must deliver TLS close_notify to the peer
+            io.shutdown().await.unwrap();
+            Ok::<_, io::Error>(())
+        })
+    });
+
+    // raw blocking openssl client
+    let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+    builder.set_verify(SslVerifyMode::NONE);
+    let sock = std::net::TcpStream::connect(srv.addr()).unwrap();
+    sock.set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .unwrap();
+    let mut tls = builder.build().connect("localhost", sock).unwrap();
+
+    tls.write_all(b"hello").unwrap();
+    tls.flush().unwrap();
+
+    let mut echo = [0u8; 5];
+    tls.read_exact(&mut echo).unwrap();
+    assert_eq!(&echo, b"hello");
+
+    // keep reading until EOF. Depending on the OpenSSL version a TCP close
+    // without close_notify is reported as an error or as `Ok(0)`, so the
+    // shutdown state tells whether close_notify was received
+    let mut tmp = [0u8; 1024];
+    loop {
+        match tls.read(&mut tmp) {
+            Ok(0) => break,
+            Ok(_) => continue,
+            Err(e) => panic!("expected clean EOF (close_notify), got error: {e:?}"),
+        }
+    }
+    assert!(
+        tls.get_shutdown().contains(ShutdownState::RECEIVED),
+        "peer closed without close_notify"
+    );
+}
+
+#[cfg(feature = "openssl")]
+#[ntex::test]
+async fn test_openssl_shutdown_completes_on_peer_close_notify() {
+    use std::io::{Read, Write};
+    use std::time::{Duration, Instant};
+
+    use ntex::server::openssl;
+    use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode, SslVersion};
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let srv = test_server(move || {
+        let tx = tx.clone();
+        async move {
+            service(openssl::SslAcceptor::new(ssl_acceptor())).and_then(move |io: Io<_>| {
+                let tx = tx.clone();
+                async move {
+                    io.recv(&BytesCodec).await.unwrap().unwrap();
+                    io.encode(Bytes::from(vec![b'x'; 1024 * 1024]), &BytesCodec)
+                        .unwrap();
+                    let start = Instant::now();
+                    let res = io.shutdown().await;
+                    let _ = tx.send((res, start.elapsed()));
+                    Ok::<_, io::Error>(())
+                }
+            })
+        }
+    });
+
+    let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+    builder.set_verify(SslVerifyMode::NONE);
+    builder
+        .set_max_proto_version(Some(SslVersion::TLS1_2))
+        .unwrap();
+    let sock = std::net::TcpStream::connect(srv.addr()).unwrap();
+    sock.set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let mut tls = builder.build().connect("localhost", sock).unwrap();
+    tls.write_all(b"go").unwrap();
+    tls.flush().unwrap();
+
+    let mut tmp = [0u8; 16 * 1024];
+    while tls.read(&mut tmp).unwrap() != 0 {}
+    // answer the server's close_notify
+    tls.shutdown().unwrap();
+
+    // the peer's close_notify completes the shutdown, it must not wait for
+    // the shutdown timeout (1 second by default)
+    let (res, elapsed) = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    res.unwrap();
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "shutdown took {elapsed:?}"
+    );
+}
+
+#[cfg(feature = "openssl")]
+#[ntex::test]
+async fn test_openssl_accept_zero_handshake_timeout() {
+    use std::time::Duration;
+
+    use ntex::{server::TestServerBuilder, server::openssl, time::Seconds};
+    use ntex_tls::TlsConfig;
+    use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+
+    // zero disables the handshake timeout
+    let srv = TestServerBuilder::new(async || {
+        service(openssl::SslAcceptor::new(ssl_acceptor())).and_then(async move |io: Io<_>| {
+            let item = io.recv(&BytesCodec).await.unwrap().unwrap();
+            io.send(item, &BytesCodec).await.unwrap();
+            Ok::<_, io::Error>(())
+        })
+    })
+    .config(SharedCfg::new("SRV").add(TlsConfig::new().set_handshake_timeout(Seconds(0))))
+    .start();
+
+    let sock = std::net::TcpStream::connect(srv.addr()).unwrap();
+    sock.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    // a handshake that is not done within a timer tick
+    std::thread::sleep(Duration::from_millis(200));
+
+    let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+    builder.set_verify(SslVerifyMode::NONE);
+    let mut tls = builder.build().connect("localhost", sock).unwrap();
+
+    use std::io::{Read, Write};
+    tls.write_all(b"hello").unwrap();
+    let mut echo = [0u8; 5];
+    tls.read_exact(&mut echo).unwrap();
+    assert_eq!(&echo, b"hello");
+}
+
+#[cfg(feature = "openssl")]
+#[ntex::test]
+async fn test_openssl_accept_handshake_then_eof() {
+    use std::time::Duration;
+
+    use ntex::server::openssl;
+    use tls_openssl::ssl::{SslAcceptor, SslConnector, SslFiletype, SslMethod, SslVerifyMode};
+
+    fn tls13_acceptor() -> SslAcceptor {
+        let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls()).unwrap();
+        builder
+            .set_private_key_file("./tests/key.pem", SslFiletype::PEM)
+            .unwrap();
+        builder
+            .set_certificate_chain_file("./tests/cert.pem")
+            .unwrap();
+        builder.build()
+    }
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let srv = test_server(move || {
+        let tx = tx.clone();
+        async move {
+            let tx2 = tx.clone();
+            service(openssl::SslAcceptor::new(tls13_acceptor()))
+                .map_err(move |e| {
+                    let _ = tx2.send(Err(e.to_string()));
+                    e
+                })
+                .and_then(move |io: Io<_>| {
+                    let tx = tx.clone();
+                    async move {
+                        let _ = tx.send(Ok(io.recv(&BytesCodec).await.is_ok_and(|v| v.is_none())));
+                        Ok::<_, io::Error>(())
+                    }
+                })
+        }
+    });
+
+    let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+    builder.set_verify(SslVerifyMode::NONE);
+    let connector = builder.build();
+
+    // the peer's last handshake flight and its eof are often read together
+    for _ in 0..20 {
+        let sock = std::net::TcpStream::connect(srv.addr()).unwrap();
+        let tls = connector.connect("localhost", sock).unwrap();
+        tls.get_ref().shutdown(std::net::Shutdown::Write).unwrap();
+
+        let res = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(res, Ok(true), "handshake followed by eof must succeed");
+    }
+}
+
+#[cfg(all(feature = "rustls", feature = "openssl"))]
+#[ntex::test]
+async fn test_rustls_accept_zero_handshake_timeout() {
+    use std::io::{Read, Write};
+    use std::time::Duration;
+
+    use ntex::{server::TestServerBuilder, server::rustls, time::Seconds};
+    use ntex_tls::TlsConfig;
+    use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+
+    // zero disables the handshake timeout
+    let srv = TestServerBuilder::new(async || {
+        service(rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc())).and_then(
+            async move |io: Io<_>| {
+                let item = io.recv(&BytesCodec).await.unwrap().unwrap();
+                io.send(item, &BytesCodec).await.unwrap();
+                Ok::<_, io::Error>(())
+            },
+        )
+    })
+    .config(SharedCfg::new("SRV").add(TlsConfig::new().set_handshake_timeout(Seconds(0))))
+    .start();
+
+    let sock = std::net::TcpStream::connect(srv.addr()).unwrap();
+    sock.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    // a handshake that is not done within a timer tick
+    std::thread::sleep(Duration::from_millis(200));
+
+    let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+    builder.set_verify(SslVerifyMode::NONE);
+    let mut tls = builder.build().connect("localhost", sock).unwrap();
+
+    tls.write_all(b"hello").unwrap();
+    let mut echo = [0u8; 5];
+    tls.read_exact(&mut echo).unwrap();
+    assert_eq!(&echo, b"hello");
+}
+
+#[cfg(all(feature = "rustls", feature = "openssl"))]
+#[ntex::test]
+async fn test_rustls_accept_handshake_then_eof() {
+    use std::time::Duration;
+
+    use ntex::server::rustls;
+    use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let srv = test_server(move || {
+        let tx = tx.clone();
+        async move {
+            let tx2 = tx.clone();
+            service(rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc()))
+                .map_err(move |e| {
+                    let _ = tx2.send(Err(e.to_string()));
+                    e
+                })
+                .and_then(move |io: Io<_>| {
+                    let tx = tx.clone();
+                    async move {
+                        let _ = tx.send(Ok(io.recv(&BytesCodec).await.is_ok_and(|v| v.is_none())));
+                        Ok::<_, io::Error>(())
+                    }
+                })
+        }
+    });
+
+    let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+    builder.set_verify(SslVerifyMode::NONE);
+    let connector = builder.build();
+
+    // the peer's last handshake flight and its eof are often read together
+    for _ in 0..20 {
+        let sock = std::net::TcpStream::connect(srv.addr()).unwrap();
+        let tls = connector.connect("localhost", sock).unwrap();
+        tls.get_ref().shutdown(std::net::Shutdown::Write).unwrap();
+
+        let res = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(res, Ok(true), "handshake followed by eof must succeed");
+    }
+}
+
 #[cfg(all(windows, feature = "openssl"))]
 #[ntex::test]
 async fn test_schannel_string() {
@@ -361,6 +637,61 @@ async fn test_rustls_shutdown_sends_close_notify() {
             Err(e) => panic!("expected clean EOF (close_notify), got error: {e:?}"),
         }
     }
+}
+
+#[cfg(feature = "rustls")]
+#[ntex::test]
+async fn test_rustls_shutdown_waits_for_peer_close_notify() {
+    use std::io::{Read, Write};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use ntex::{Service, server::rustls};
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let srv = test_server(move || {
+        let tx = tx.clone();
+        async move {
+            rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc()).and_then(move |io: Io<_>| {
+                let tx = tx.clone();
+                async move {
+                    io.recv(&BytesCodec).await.unwrap().unwrap();
+                    let start = Instant::now();
+                    let res = io.shutdown().await;
+                    let _ = tx.send((res, start.elapsed()));
+                    Ok::<_, io::Error>(())
+                }
+            })
+        }
+    });
+
+    let cfg = Arc::new(rustls_utils::tls_connector());
+    let name = tls_rustls::pki_types::ServerName::try_from("localhost").unwrap();
+    let mut conn = tls_rustls::ClientConnection::new(cfg, name).unwrap();
+    let mut sock = std::net::TcpStream::connect(srv.addr()).unwrap();
+    sock.set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let mut tls = tls_rustls::Stream::new(&mut conn, &mut sock);
+    tls.write_all(b"go").unwrap();
+    tls.flush().unwrap();
+
+    // server's close_notify
+    let mut tmp = [0u8; 1024];
+    assert_eq!(tls.read(&mut tmp).unwrap(), 0);
+
+    // answer it late, the server must still be waiting for it
+    std::thread::sleep(Duration::from_millis(300));
+    tls.conn.send_close_notify();
+    tls.flush().unwrap();
+
+    // socket stays open, only the close_notify can complete the shutdown
+    // before the shutdown timeout (1 second by default)
+    let (res, elapsed) = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    res.unwrap();
+    assert!(
+        elapsed >= Duration::from_millis(300) && elapsed < Duration::from_millis(900),
+        "shutdown took {elapsed:?}"
+    );
 }
 
 #[cfg(feature = "rustls")]

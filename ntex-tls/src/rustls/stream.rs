@@ -1,6 +1,6 @@
 use std::{any, io, io::Write, ops::Deref, ops::DerefMut, task::Poll};
 
-use ntex_bytes::{BufMut, BytePages};
+use ntex_bytes::BufMut;
 use ntex_io::{FilterBuf, types};
 use tls_rustls::{ConnectionCommon, SideData};
 
@@ -37,21 +37,11 @@ where
             };
             Some(Box::new(proto))
         } else if id == any::TypeId::of::<PeerCert<'_>>() {
-            if let Some(cert_chain) = self.session.peer_certificates() {
-                if let Some(cert) = cert_chain.first() {
-                    Some(Box::new(PeerCert(cert.to_owned())))
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
+            let cert = self.session.peer_certificates()?.first()?;
+            Some(Box::new(PeerCert(cert.to_owned())))
         } else if id == any::TypeId::of::<PeerCertChain<'_>>() {
-            if let Some(cert_chain) = self.session.peer_certificates() {
-                Some(Box::new(PeerCertChain(cert_chain.to_vec())))
-            } else {
-                None
-            }
+            let chain = self.session.peer_certificates()?;
+            Some(Box::new(PeerCertChain(chain.to_vec())))
         } else {
             None
         }
@@ -59,38 +49,37 @@ where
 
     pub(crate) fn process_read_buf(&mut self, buf: &FilterBuf<'_>) -> io::Result<()> {
         let result = buf.with_read_buffers(|r_src, r_dst| {
-            if let Some(src) = r_src {
-                loop {
-                    match self.session.read_tls(src) {
-                        Ok(_) => {}
-                        Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => break,
-                        Err(err) => return Err(err),
-                    }
-                    let state = self
-                        .session
-                        .process_new_packets()
-                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-
-                    let new_b = state.plaintext_bytes_to_read();
-                    if new_b > 0 {
-                        r_dst.reserve(new_b);
-
-                        let chunk: &mut [u8] =
-                            unsafe { &mut *(&raw mut *r_dst.chunk_mut() as *mut [u8]) };
-                        let v = io::Read::read(&mut self.session.reader(), chunk)?;
-                        unsafe { r_dst.advance_mut(v) };
-                    } else if state.peer_has_closed() {
-                        // peer sent close_notify, start graceful shutdown
-                        buf.io().close();
-                        break;
-                    } else if src.is_empty() {
-                        break;
-                    }
+            let Some(src) = r_src else {
+                return Ok(());
+            };
+            loop {
+                match self.session.read_tls(src) {
+                    Ok(_) => {}
+                    Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(err) => return Err(err),
                 }
-                Ok::<_, io::Error>(())
-            } else {
-                Ok(())
+                let state = self
+                    .session
+                    .process_new_packets()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+                let new_b = state.plaintext_bytes_to_read();
+                if new_b > 0 {
+                    r_dst.reserve(new_b);
+
+                    let chunk: &mut [u8] =
+                        unsafe { &mut *(&raw mut *r_dst.chunk_mut() as *mut [u8]) };
+                    let v = io::Read::read(&mut self.session.reader(), chunk)?;
+                    unsafe { r_dst.advance_mut(v) };
+                } else if state.peer_has_closed() {
+                    // peer sent close_notify, start graceful shutdown
+                    buf.io().close();
+                    break;
+                } else if src.is_empty() {
+                    break;
+                }
             }
+            Ok::<_, io::Error>(())
         });
 
         // flush tls records generated while processing incoming data
@@ -125,9 +114,8 @@ where
 
                 // write tls records to output buffer
                 if self.session.wants_write() {
-                    let mut wrp = Wrapper { w_dst, buf };
                     loop {
-                        match self.session.write_tls(&mut wrp) {
+                        match self.session.write_tls(w_dst) {
                             Ok(0) => continue 'outer,
                             Ok(_) => {}
                             Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => {
@@ -145,9 +133,8 @@ where
     /// Write pending tls records to the output buffer
     fn write_tls_records(&mut self, buf: &FilterBuf<'_>) -> io::Result<()> {
         buf.with_write_buffers(|_, w_dst| {
-            let mut wrp = Wrapper { w_dst, buf };
             while self.session.wants_write() {
-                self.session.write_tls(&mut wrp)?;
+                self.session.write_tls(w_dst)?;
             }
             Ok(())
         })
@@ -164,37 +151,19 @@ where
         self.write_tls_records(buf)?;
 
         if self.session.wants_write() {
-            Ok(Poll::Pending)
-        } else {
-            Ok(Poll::Ready(()))
+            return Ok(Poll::Pending);
         }
-    }
-}
 
-pub(crate) struct Wrapper<'a> {
-    w_dst: &'a mut BytePages,
-    buf: &'a FilterBuf<'a>,
-}
-
-impl io::Read for Wrapper<'_> {
-    fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
-        self.buf.with_read_src(|r_src| {
-            if let Some(b) = r_src {
-                io::Read::read(b, dst)
-            } else {
-                Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
-            }
-        })
-    }
-}
-
-impl io::Write for Wrapper<'_> {
-    fn write(&mut self, src: &[u8]) -> io::Result<usize> {
-        self.w_dst.put_slice(src);
-        Ok(src.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
+        // wait for the peer's close_notify, unless the peer already closed
+        // the connection and it is never going to arrive
+        let state = self
+            .session
+            .process_new_packets()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        if state.peer_has_closed() || buf.io().is_read_eof() {
+            Ok(Poll::Ready(()))
+        } else {
+            Ok(Poll::Pending)
+        }
     }
 }

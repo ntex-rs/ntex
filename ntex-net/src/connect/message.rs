@@ -209,7 +209,12 @@ impl<T: Address> From<T> for Connect<T> {
 
 impl<T: Address> fmt::Display for Connect<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.host(), self.port())
+        let (host, _) = parse(self.host());
+        if host.contains(':') {
+            write!(f, "[{host}]:{}", self.port())
+        } else {
+            write!(f, "{host}:{}", self.port())
+        }
     }
 }
 
@@ -277,18 +282,22 @@ impl ExactSizeIterator for ConnectTakeAddrsIter {}
 
 impl FusedIterator for ConnectTakeAddrsIter {}
 
-fn parse(host: &str) -> (&str, Option<u16>) {
-    let mut parts_iter = host.splitn(2, ':');
-    if let Some(host) = parts_iter.next() {
-        let port_str = parts_iter.next().unwrap_or("");
-        if let Ok(port) = port_str.parse::<u16>() {
-            (host, Some(port))
-        } else {
-            (host, None)
+/// Splits `host`, `host:port`, `[v6]`, `[v6]:port` or bare `v6` into host and port.
+///
+/// Brackets are stripped from IPv6 hosts.
+pub(super) fn parse(host: &str) -> (&str, Option<u16>) {
+    let (name, port) = if let Some(rest) = host.strip_prefix('[') {
+        match rest.split_once(']') {
+            Some((ip, tail)) => (ip, tail.strip_prefix(':')),
+            None => (host, None),
         }
     } else {
-        (host, None)
-    }
+        match host.split_once(':') {
+            Some((name, port)) if !port.contains(':') => (name, Some(port)),
+            _ => (host, None),
+        }
+    };
+    (name, port.and_then(|p| p.parse::<u16>().ok()))
 }
 
 #[cfg(test)]
@@ -307,6 +316,42 @@ mod tests {
         let s = ByteString::from("test");
         assert_eq!(s.host(), "test");
         assert_eq!(s.port(), None);
+    }
+
+    #[test]
+    fn parse_host() {
+        assert_eq!(parse("example.com"), ("example.com", None));
+        assert_eq!(parse("example.com:443"), ("example.com", Some(443)));
+        assert_eq!(parse("example.com:bad"), ("example.com", None));
+        assert_eq!(parse("127.0.0.1:8080"), ("127.0.0.1", Some(8080)));
+        assert_eq!(parse("[::1]"), ("::1", None));
+        assert_eq!(parse("[::1]:443"), ("::1", Some(443)));
+        assert_eq!(parse("[::1]443"), ("::1", None));
+        assert_eq!(parse("::1"), ("::1", None));
+        assert_eq!(parse("2001:db8::1"), ("2001:db8::1", None));
+        assert_eq!(parse("[::1"), ("[::1", None));
+        assert_eq!(parse(""), ("", None));
+
+        assert_eq!(Connect::new("[::1]:8080").port(), 8080);
+        assert_eq!(Connect::new("::1").set_port(80).port(), 80);
+    }
+
+    #[test]
+    fn display() {
+        assert_eq!(
+            Connect::new("example.com:443").to_string(),
+            "example.com:443"
+        );
+        assert_eq!(
+            Connect::new("example.com").set_port(80).to_string(),
+            "example.com:80"
+        );
+        assert_eq!(Connect::new("[::1]:8080").to_string(), "[::1]:8080");
+        assert_eq!(Connect::new("::1").set_port(80).to_string(), "[::1]:80");
+        assert_eq!(
+            Connect::new("fe80::1%3").set_port(80).to_string(),
+            "[fe80::1%3]:80"
+        );
     }
 
     #[test]

@@ -247,15 +247,26 @@ where
     T: AsyncRead + AsyncWrite,
 {
     while !bufs.is_empty() {
-        let result = if bufs.len() == 1 {
-            let BufResult(result, buf) = io.write(bufs.pop().unwrap()).await;
-            bufs.push(buf);
-            result
-        } else {
-            let BufResult(result, bufs1) = io.write_vectored(bufs).await;
-            bufs = bufs1;
-            result
+        let op = async {
+            if bufs.len() == 1 {
+                let BufResult(result, buf) = io.write(bufs.pop().unwrap()).await;
+                (result, vec![buf])
+            } else {
+                let BufResult(result, bufs) = io.write_vectored(bufs).await;
+                (result, bufs)
+            }
         };
+
+        // A peer that stops reading keeps the write pending indefinitely, so
+        // the connection state is watched as well: the shutdown deadline is
+        // only polled from `poll_write_ready()`, and a terminated connection
+        // must not wait for the write. Dropping the operation cancels it, the
+        // pages are released with it.
+        let (result, rest) = match select(op, write_closed(ctx)).await {
+            Either::Left(res) => res,
+            Either::Right(()) => return,
+        };
+        bufs = rest;
 
         let result = match result {
             Ok(0) => Err(io::Error::new(
@@ -289,6 +300,15 @@ where
             return;
         }
     }
+}
+
+/// Resolves once the connection no longer accepts output.
+async fn write_closed(ctx: &IoContext) {
+    poll_fn(|cx| match ctx.poll_write_ready(cx) {
+        Poll::Ready(Readiness::Terminate | Readiness::Close) => Poll::Ready(()),
+        _ => Poll::Pending,
+    })
+    .await;
 }
 
 fn return_pages(ctx: &IoContext, mut bufs: Vec<CompioPage>) {

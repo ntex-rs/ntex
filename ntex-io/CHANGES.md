@@ -2,6 +2,10 @@
 
 ## [4.1.0] - 2026-09-22
 
+* Fix filter shutdown waiting for the shutdown timeout when the input it
+  needs, such as the peer's TLS close_notify, arrived during the shutdown.
+  Reads in the filter shutdown phase now re-poll the shutdown
+
 * Add IoContext::shutdown_timeout() so io backends can bound their own
   socket close by the connection's shutdown timeout
 

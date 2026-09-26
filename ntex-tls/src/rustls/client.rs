@@ -1,4 +1,4 @@
-//! An implementation of SSL streams for ntex backed by OpenSSL
+//! TLS client filter backed by rustls
 use std::{any, cell::UnsafeCell, io, sync::Arc, task::Poll};
 
 use ntex_io::{Filter, FilterBuf, FilterLayer, Io, Layer};
@@ -42,23 +42,13 @@ impl TlsClientFilter {
             session: UnsafeCell::new(session),
         });
 
-        loop {
-            let (wants_write, handshaking) = {
-                let s = unsafe { &*io.filter().session.get() };
-                (s.wants_write(), s.is_handshaking())
-            };
-            if wants_write {
-                io.flush(false).await?;
-            }
+        super::handshake(&io, || io.filter().state()).await?;
+        Ok(io)
+    }
 
-            if handshaking {
-                io.read_notify()
-                    .await?
-                    .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "disconnected"))?;
-            } else {
-                return Ok(io);
-            }
-        }
+    fn state(&self) -> (bool, bool) {
+        let s = unsafe { &*self.session.get() };
+        (s.wants_write(), s.is_handshaking())
     }
 
     fn stream<F, R>(&self, f: F) -> R

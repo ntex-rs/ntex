@@ -2,6 +2,20 @@
 
 ## [4.1.0] - 2026-09-23
 
+* Fix compio graceful shutdown hanging past the shutdown timeout when the peer
+  stops reading. The write task waited on the in-flight write and never polled
+  the shutdown deadline; the write is now cancelled once the connection is
+  terminated
+
+* Fix IPv6 host handling in `Connect`: parse the port of `[v6]:port`, and
+  resolve `[v6]`, `[v6]:port` and bare `v6` hosts (including `Uri` hosts)
+  without DNS lookup
+
+* Fix `Connect` display repeating the port of `host:port` hosts, IPv6 hosts are
+  displayed in brackets
+
+* Resolve IPv6 hosts with a numeric zone id (`fe80::1%3`) without DNS lookup
+
 * Fix corrupted output in the polling backend when a write includes inline
   pages. The write vector pointed into each page before it was moved into
   place, so for a page stored inline it pointed at a reused local, and the
