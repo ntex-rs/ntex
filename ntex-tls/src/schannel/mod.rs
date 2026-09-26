@@ -8,16 +8,16 @@ use ntex_io::{Filter, FilterBuf, FilterLayer, Io, Layer, types};
 use windows_sys::Win32::Foundation::{
     CRYPT_E_REVOKED, SEC_E_CERT_EXPIRED, SEC_E_CERT_UNKNOWN, SEC_E_INCOMPLETE_MESSAGE, SEC_E_OK,
     SEC_E_UNTRUSTED_ROOT, SEC_E_WRONG_PRINCIPAL, SEC_I_CONTEXT_EXPIRED, SEC_I_CONTINUE_NEEDED,
-    SEC_I_RENEGOTIATE,
+    SEC_I_INCOMPLETE_CREDENTIALS, SEC_I_RENEGOTIATE,
 };
 use windows_sys::Win32::Security::Authentication::Identity::{
     AcquireCredentialsHandleW, ApplyControlToken, DecryptMessage, DeleteSecurityContext,
     EncryptMessage, FreeContextBuffer, FreeCredentialsHandle, ISC_REQ_ALLOCATE_MEMORY,
     ISC_REQ_CONFIDENTIALITY, ISC_REQ_EXTENDED_ERROR, ISC_REQ_REPLAY_DETECT,
     ISC_REQ_SEQUENCE_DETECT, ISC_REQ_STREAM, InitializeSecurityContextW, QueryContextAttributesW,
-    SCH_CRED_AUTO_CRED_VALIDATION, SCH_CRED_MANUAL_CRED_VALIDATION, SCH_CRED_NO_SERVERNAME_CHECK,
-    SCH_CREDENTIALS, SCH_CREDENTIALS_VERSION, SCH_USE_STRONG_CRYPTO, SCHANNEL_ALERT,
-    SCHANNEL_ALERT_TOKEN, SCHANNEL_CRED, SCHANNEL_CRED_VERSION, SCHANNEL_SHUTDOWN,
+    SCH_CRED_AUTO_CRED_VALIDATION, SCH_CRED_MANUAL_CRED_VALIDATION, SCH_CRED_NO_DEFAULT_CREDS,
+    SCH_CRED_NO_SERVERNAME_CHECK, SCH_CREDENTIALS, SCH_CREDENTIALS_VERSION, SCH_USE_STRONG_CRYPTO,
+    SCHANNEL_ALERT, SCHANNEL_ALERT_TOKEN, SCHANNEL_CRED, SCHANNEL_CRED_VERSION, SCHANNEL_SHUTDOWN,
     SECBUFFER_APPLICATION_PROTOCOLS, SECBUFFER_DATA, SECBUFFER_EMPTY, SECBUFFER_EXTRA,
     SECBUFFER_STREAM_HEADER, SECBUFFER_STREAM_TRAILER, SECBUFFER_TOKEN, SECBUFFER_VERSION,
     SECPKG_ATTR_APPLICATION_PROTOCOL, SECPKG_ATTR_REMOTE_CERT_CONTEXT, SECPKG_ATTR_STREAM_SIZES,
@@ -30,7 +30,9 @@ use windows_sys::Win32::Security::Authentication::Identity::{
 use windows_sys::Win32::Security::Credentials::SecHandle;
 use windows_sys::Win32::Security::Cryptography::{CERT_CONTEXT, CertFreeCertificateContext};
 
+mod cert;
 mod connect;
+pub use self::cert::{CertStoreLocation, ClientCert};
 pub use self::connect::TlsConnector;
 
 /// Windows Schannel client configuration.
@@ -42,6 +44,8 @@ pub struct ClientConfig {
     verify: bool,
     /// Prebuilt `SECBUFFER_APPLICATION_PROTOCOLS` buffer, `None` disables ALPN.
     alpn: Option<Arc<[u8]>>,
+    /// Client certificate, sent when the server requests one
+    cert: Option<ClientCert>,
     /// Lazily acquired credentials, Schannel caches sessions per credentials handle.
     cred: Arc<Mutex<Option<Arc<Credentials>>>>,
 }
@@ -61,6 +65,7 @@ impl ClientConfig {
         Self {
             verify: true,
             alpn: alpn_buffer(&[b"h2".as_slice(), b"http/1.1".as_slice()]),
+            cert: None,
             cred: Arc::default(),
         }
     }
@@ -88,47 +93,79 @@ impl ClientConfig {
         self
     }
 
+    /// Set the client certificate, sent when the server requests one.
+    ///
+    /// Without it, no certificate is sent.
+    #[must_use]
+    pub fn set_client_cert(mut self, cert: ClientCert) -> Self {
+        self.cert = Some(cert);
+        // credentials carry the certificate
+        self.cred = Arc::default();
+        self
+    }
+
     fn credentials(&self) -> io::Result<Arc<Credentials>> {
         let mut cred = self.cred.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(cred) = &*cred {
             return Ok(cred.clone());
         }
-        let new = Arc::new(Credentials::acquire(self.verify)?);
+        let new = Arc::new(Credentials::acquire(self.verify, self.cert.as_ref())?);
         *cred = Some(new.clone());
         Ok(new)
     }
 }
 
 /// Schannel outbound credentials handle.
-struct Credentials(SecHandle);
+struct Credentials {
+    handle: SecHandle,
+    /// Keeps the certificate alive
+    _cert: Option<ClientCert>,
+}
 
 // Schannel credentials handles can be used from multiple threads.
 unsafe impl Send for Credentials {}
 unsafe impl Sync for Credentials {}
 
 impl Credentials {
-    fn acquire(verify: bool) -> io::Result<Self> {
-        let mut flags = SCH_USE_STRONG_CRYPTO;
+    fn acquire(verify: bool, cert: Option<&ClientCert>) -> io::Result<Self> {
+        // never pick a client certificate from the user's store on its own
+        let mut flags = SCH_USE_STRONG_CRYPTO | SCH_CRED_NO_DEFAULT_CREDS;
         if verify {
             flags |= SCH_CRED_AUTO_CRED_VALIDATION;
         } else {
             flags |= SCH_CRED_MANUAL_CRED_VALIDATION | SCH_CRED_NO_SERVERNAME_CHECK;
         }
+        // Schannel keeps its own reference to the certificate
+        let mut certs = [cert.map_or(ptr::null_mut(), |cert| cert.as_ptr().cast_mut())];
+        let (num_certs, certs) = if cert.is_some() {
+            (1, certs.as_mut_ptr())
+        } else {
+            (0, ptr::null_mut())
+        };
 
         // SCH_CREDENTIALS enables the system default protocols, including TLS 1.3
         let mut sch_cred = unsafe { mem::zeroed::<SCH_CREDENTIALS>() };
         sch_cred.dwVersion = SCH_CREDENTIALS_VERSION;
         sch_cred.dwFlags = flags;
-        Self::acquire_with((&raw mut sch_cred).cast()).or_else(|_| {
-            // Windows before 10 1809 supports SCHANNEL_CRED only
-            let mut schannel_cred = unsafe { mem::zeroed::<SCHANNEL_CRED>() };
-            schannel_cred.dwVersion = SCHANNEL_CRED_VERSION;
-            schannel_cred.dwFlags = flags;
-            Self::acquire_with((&raw mut schannel_cred).cast())
-        })
+        sch_cred.cCreds = num_certs;
+        sch_cred.paCred = certs;
+        Self::acquire_with((&raw mut sch_cred).cast())
+            .or_else(|_| {
+                // Windows before 10 1809 supports SCHANNEL_CRED only
+                let mut schannel_cred = unsafe { mem::zeroed::<SCHANNEL_CRED>() };
+                schannel_cred.dwVersion = SCHANNEL_CRED_VERSION;
+                schannel_cred.dwFlags = flags;
+                schannel_cred.cCreds = num_certs;
+                schannel_cred.paCred = certs;
+                Self::acquire_with((&raw mut schannel_cred).cast())
+            })
+            .map(|handle| Self {
+                handle,
+                _cert: cert.cloned(),
+            })
     }
 
-    fn acquire_with(auth_data: *mut std::ffi::c_void) -> io::Result<Self> {
+    fn acquire_with(auth_data: *mut std::ffi::c_void) -> io::Result<SecHandle> {
         let mut cred = unsafe { mem::zeroed::<SecHandle>() };
         let mut expiry = 0i64;
         let status = unsafe {
@@ -145,7 +182,7 @@ impl Credentials {
             )
         };
         if status == SEC_E_OK {
-            Ok(Self(cred))
+            Ok(cred)
         } else {
             Err(sspi_error("AcquireCredentialsHandleW", status))
         }
@@ -161,7 +198,7 @@ impl std::fmt::Debug for Credentials {
 impl Drop for Credentials {
     fn drop(&mut self) {
         unsafe {
-            FreeCredentialsHandle(&raw const self.0);
+            FreeCredentialsHandle(&raw const self.handle);
         }
     }
 }
@@ -216,6 +253,8 @@ struct Context {
     target: Vec<u16>,
     alpn: Option<Arc<[u8]>>,
     sizes: Option<SecPkgContext_StreamSizes>,
+    /// The server asked for a client certificate
+    cert_requested: bool,
 }
 
 impl std::fmt::Debug for Context {
@@ -243,6 +282,7 @@ impl Context {
             target: domain.encode_utf16().chain(Some(0)).collect(),
             alpn: config.alpn.clone(),
             sizes: None,
+            cert_requested: false,
         })
     }
 
@@ -272,6 +312,11 @@ impl Context {
         let in_desc = buffer_desc(&mut in_bufs);
         let (status, has_token) = self.initialize(&raw const in_desc, output);
 
+        if status == SEC_I_INCOMPLETE_CREDENTIALS && !mem::replace(&mut self.cert_requested, true) {
+            // the server asks for a client certificate, the same input
+            // continues the handshake without one
+            return Ok(HandshakeState::Continue);
+        }
         if status == SEC_E_INCOMPLETE_MESSAGE {
             return Ok(HandshakeState::NeedRead);
         }
@@ -322,7 +367,7 @@ impl Context {
         };
         let status = unsafe {
             InitializeSecurityContextW(
-                &raw const self.cred.0,
+                &raw const self.cred.handle,
                 ctxt,
                 self.target.as_ptr(),
                 ISC_FLAGS,

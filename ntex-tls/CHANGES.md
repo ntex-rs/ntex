@@ -2,6 +2,11 @@
 
 ## [4.1.0] - 2026-09-22
 
+* schannel: add `ClientConfig::set_client_cert()` with `ClientCert::from_store()`
+
+* schannel: do not send a client certificate picked from the user's store,
+  complete the handshake without one when the server requests it
+
 * schannel: enable TLS 1.3 with `SCH_CREDENTIALS` (falls back to `SCHANNEL_CRED`),
   process post-handshake messages (session tickets, key updates, renegotiation)
   instead of failing the connection

@@ -16,6 +16,12 @@ fn ssl_acceptor() -> SslAcceptor {
 
 /// TLS 1.2 and 1.3 by default, or a single protocol version.
 fn ssl_acceptor_version(version: Option<tls_openssl::ssl::SslVersion>) -> SslAcceptor {
+    ssl_acceptor_builder(version).build()
+}
+
+fn ssl_acceptor_builder(
+    version: Option<tls_openssl::ssl::SslVersion>,
+) -> tls_openssl::ssl::SslAcceptorBuilder {
     let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls()).unwrap();
     if version.is_some() {
         builder.set_min_proto_version(version).unwrap();
@@ -36,7 +42,7 @@ fn ssl_acceptor_version(version: Option<tls_openssl::ssl::SslVersion>) -> SslAcc
         }
     });
     builder.set_alpn_protos(b"\x02h2").unwrap();
-    builder.build()
+    builder
 }
 
 /// Waits for a server thread without blocking the runtime, the client may
@@ -486,6 +492,167 @@ async fn test_tls13_post_handshake_messages() {
 async fn test_tls12() {
     let version = exchange(tls_openssl::ssl::SslVersion::TLS1_2).await;
     assert_eq!(version, "TLSv1.2");
+}
+
+/// An optional client certificate request completes the handshake without
+/// a certificate, Schannel must not pick one from the user's store.
+#[ntex::test]
+async fn test_client_cert_request() {
+    use ntex::{connect::Connect, service::Pipeline};
+    use std::io::Read;
+    use tls_openssl::ssl::{SslVerifyMode, SslVersion};
+
+    for version in [SslVersion::TLS1_2, SslVersion::TLS1_3] {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let mut builder = ssl_acceptor_builder(Some(version));
+            builder.set_verify_callback(SslVerifyMode::PEER, |_, _| true);
+            let (sock, _) = listener.accept().unwrap();
+            sock.set_read_timeout(Some(std::time::Duration::from_secs(10)))
+                .unwrap();
+            let mut stream = builder.build().accept(sock).unwrap();
+            std::io::Write::write_all(&mut stream, b"hello").unwrap();
+            let mut buf = [0u8; 64];
+            let _ = stream.read(&mut buf);
+            stream.ssl().peer_certificate().is_some()
+        });
+
+        let conn = Pipeline::new(SharedCfg::default(), schannel_connector());
+        let io = conn
+            .call(Connect::new("localhost").set_addr(Some(addr)))
+            .await
+            .expect("optional client certificate request must not fail");
+        let data = io.recv(&ntex::codec::BytesCodec).await.unwrap().unwrap();
+        assert_eq!(data, "hello");
+        io.shutdown().await.unwrap();
+        assert!(!join(server).await, "client certificate was sent");
+    }
+}
+
+/// The configured client certificate is sent to a server that requires one.
+#[ntex::test]
+async fn test_client_cert() {
+    use ntex::{connect::Connect, service::Pipeline};
+    use std::io::Read;
+    use tls_openssl::ssl::{SslVerifyMode, SslVersion};
+    use tls_openssl::{asn1::Asn1Time, hash::MessageDigest, pkcs12::Pkcs12, pkey::PKey};
+    use tls_openssl::{rsa::Rsa, x509::X509Builder, x509::X509NameBuilder};
+
+    let key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+    let mut name = X509NameBuilder::new().unwrap();
+    name.append_entry_by_text("CN", "ntex client").unwrap();
+    let name = name.build();
+    let mut builder = X509Builder::new().unwrap();
+    builder.set_version(2).unwrap();
+    builder.set_subject_name(&name).unwrap();
+    builder.set_issuer_name(&name).unwrap();
+    builder.set_pubkey(&key).unwrap();
+    builder
+        .set_not_before(&Asn1Time::days_from_now(0).unwrap())
+        .unwrap();
+    builder
+        .set_not_after(&Asn1Time::days_from_now(1).unwrap())
+        .unwrap();
+    builder.sign(&key, MessageDigest::sha256()).unwrap();
+    let cert = builder.build();
+    let pfx = Pkcs12::builder()
+        .name("ntex client")
+        .pkey(&key)
+        .cert(&cert)
+        .build2("secret")
+        .unwrap()
+        .to_der()
+        .unwrap();
+
+    // install the certificate and its key to the user's personal store
+    let thumbprint: [u8; 20] = cert
+        .digest(MessageDigest::sha1())
+        .unwrap()
+        .as_ref()
+        .try_into()
+        .unwrap();
+    let thumbprint_hex: String = thumbprint.iter().map(|b| format!("{b:02X}")).collect();
+    let pfx_path = std::env::temp_dir().join(format!("ntex-client-{thumbprint_hex}.pfx"));
+    std::fs::write(&pfx_path, pfx).unwrap();
+    let _installed = InstalledCert(thumbprint_hex.clone(), pfx_path.clone());
+    assert!(powershell(&format!(
+        "Import-PfxCertificate -FilePath '{}' -CertStoreLocation Cert:\\CurrentUser\\My \
+         -Password (ConvertTo-SecureString secret -AsPlainText -Force) | Out-Null",
+        pfx_path.display()
+    )));
+
+    let client_cert = ntex_tls::schannel::ClientCert::from_store(
+        ntex_tls::schannel::CertStoreLocation::CurrentUser,
+        "MY",
+        &thumbprint,
+    )
+    .unwrap();
+    assert_eq!(client_cert.der(), cert.to_der().unwrap());
+
+    for version in [SslVersion::TLS1_2, SslVersion::TLS1_3] {
+        // a new config per version, a cached TLS 1.2 session limits the next
+        // ClientHello to TLS 1.2
+        let connector = TlsConnector::<ntex::connect::Connector<&'static str>>::with_config(
+            ClientConfig::new()
+                .danger_accept_invalid_certs(true)
+                .set_client_cert(client_cert.clone()),
+        );
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let mut builder = ssl_acceptor_builder(Some(version));
+            builder.set_verify_callback(
+                SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT,
+                |_, _| true,
+            );
+            let (sock, _) = listener.accept().unwrap();
+            sock.set_read_timeout(Some(std::time::Duration::from_secs(10)))
+                .unwrap();
+            let mut stream = builder.build().accept(sock).unwrap();
+            std::io::Write::write_all(&mut stream, b"hello").unwrap();
+            let mut buf = [0u8; 64];
+            let _ = stream.read(&mut buf);
+            stream.ssl().peer_certificate().map(|c| c.to_der().unwrap())
+        });
+
+        let conn = Pipeline::new(SharedCfg::default(), connector);
+        let io = conn
+            .call(Connect::new("localhost").set_addr(Some(addr)))
+            .await
+            .unwrap();
+        let data = io.recv(&ntex::codec::BytesCodec).await.unwrap().unwrap();
+        assert_eq!(data, "hello");
+        io.shutdown().await.unwrap();
+        assert_eq!(
+            join(server).await,
+            Some(cert.to_der().unwrap()),
+            "{version:?}"
+        );
+    }
+}
+
+/// Runs a Windows `PowerShell` script, the module path of a parent `pwsh`
+/// prevents loading of the built-in modules.
+fn powershell(script: &str) -> bool {
+    std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .env_remove("PSModulePath")
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// Removes an installed certificate, its private key and the PFX file.
+struct InstalledCert(String, std::path::PathBuf);
+
+impl Drop for InstalledCert {
+    fn drop(&mut self) {
+        powershell(&format!(
+            "Remove-Item Cert:\\CurrentUser\\My\\{} -DeleteKey",
+            self.0
+        ));
+        let _ = std::fs::remove_file(&self.1);
+    }
 }
 
 #[ntex::test]
