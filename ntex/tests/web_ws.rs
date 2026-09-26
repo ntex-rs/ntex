@@ -193,7 +193,7 @@ async fn web_ws_service_close_timeout() {
                 let _ = ws::start_with(
                     &req,
                     None,
-                    service::fn_service(async |item: DispatchItem<ntex::ws::Codec>| {
+                    service::fn_service(async |item: DispatchItem<ws::WsSink>| {
                         let msg = match item {
                             DispatchItem::Item(ws::Frame::Text(text)) => Some(ws::Message::Text(
                                 String::from_utf8_lossy(&text).as_ref().into(),
@@ -478,4 +478,51 @@ async fn web_ws_shutdown_propagation() {
     shutdown_rx
         .recv_timeout(std::time::Duration::from_secs(1))
         .expect("Service shutdown was not called");
+}
+
+#[ntex::test]
+async fn web_ws_sink_shares_close_state() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let srv = test::server(async move |_| {
+        let tx = tx.clone();
+        App::new().service(
+            web::resource("/").route(web::to(async move |req: HttpRequest| {
+                let tx = tx.clone();
+                let _ = ws::start(
+                    &req,
+                    None,
+                    service::fn_service_st(async move |sink: &ws::WsSink, frame: ws::Frame| {
+                        match frame {
+                            ws::Frame::Text(txt) if txt == "close" => {
+                                Ok(Some(ws::Message::Close(None)))
+                            }
+                            ws::Frame::Text(_) => {
+                                // the service already sent a close message
+                                let res = sink.send(ws::Message::Text("late".into())).await;
+                                let _ = tx.send(res.is_err());
+                                Ok::<_, io::Error>(None)
+                            }
+                            _ => Ok(None),
+                        }
+                    }),
+                )
+                .await;
+            })),
+        )
+    });
+
+    let (io, codec, _) = srv.ws().await.unwrap().into_inner();
+    io.send(ws::Message::Text("close".into()), &codec)
+        .await
+        .unwrap();
+    let item = io.recv(&codec).await.unwrap().unwrap();
+    assert_eq!(item, ws::Frame::Close(None));
+
+    io.send(ws::Message::Text("send".into()), &codec)
+        .await
+        .unwrap();
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_secs(3)).unwrap(),
+        "sink sent a message after the close message"
+    );
 }

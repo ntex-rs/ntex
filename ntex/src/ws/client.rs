@@ -1,5 +1,5 @@
 //! WebSocket client.
-use std::{fmt, marker, pin, rc::Rc};
+use std::{fmt, marker, pin};
 
 #[cfg(feature = "openssl")]
 use crate::connect::openssl;
@@ -367,27 +367,20 @@ impl<F> fmt::Debug for WsClient<F> {
 /// the underlying I/O stream.
 pub struct WsConnection<F> {
     io: Io<F>,
-    codec: Rc<ws::Codec>,
     sink: ws::WsSink,
     res: ClientResponse,
 }
 
 impl<F> WsConnection<F> {
     fn new(io: Io<F>, res: ClientResponse, codec: ws::Codec) -> Self {
-        // the dispatcher and all sinks share the codec state
-        let codec = Rc::new(codec);
-        let sink = ws::WsSink::new(io.get_ref(), codec.clone(), io.shared().get());
-        Self {
-            io,
-            codec,
-            sink,
-            res,
-        }
+        // the sink is also the dispatcher's codec, they share the codec state
+        let sink = ws::WsSink::new(io.get_ref(), codec, io.shared().get());
+        Self { io, sink, res }
     }
 
     /// Returns the connection's WebSocket codec.
     pub fn codec(&self) -> &ws::Codec {
-        &self.codec
+        self.sink.codec()
     }
 
     /// Returns the opening-handshake response.
@@ -408,7 +401,7 @@ impl<F> WsConnection<F> {
     /// Consumes the connection and returns its I/O stream, codec, and
     /// opening-handshake response.
     pub fn into_inner(self) -> (Io<F>, ws::Codec, ClientResponse) {
-        (self.io, (*self.codec).clone(), self.res)
+        (self.io, self.sink.codec().clone(), self.res)
     }
 }
 
@@ -484,7 +477,7 @@ impl WsConnection<Sealed> {
         let service = apply_fn(
             svc.into_service().map_err(WsError::Service),
             async move |req, svc| match req {
-                DispatchItem::<Rc<ws::Codec>>::Item(item) => {
+                DispatchItem::<ws::WsSink>::Item(item) => {
                     let close = matches!(item, ws::Frame::Close(_));
                     let result = svc.call(item).await;
                     if matches!(&result, Ok(Some(ws::Message::Close(_)))) {
@@ -519,7 +512,7 @@ impl WsConnection<Sealed> {
             },
         );
 
-        Dispatcher::new(self.io, self.codec, Pipeline::new((), service)).await
+        Dispatcher::new(self.io, self.sink, Pipeline::new((), service)).await
     }
 }
 
@@ -528,7 +521,6 @@ impl<F: Filter> WsConnection<F> {
     pub fn seal(self) -> WsConnection<Sealed> {
         WsConnection {
             io: self.io.seal(),
-            codec: self.codec,
             sink: self.sink,
             res: self.res,
         }
@@ -536,7 +528,7 @@ impl<F: Filter> WsConnection<F> {
 
     /// Converts the connection into a binary WebSocket transport.
     pub fn into_transport(self) -> Io<Layer<WsTransport, F>> {
-        WsTransport::create(self.io, (*self.codec).clone())
+        WsTransport::create(self.io, self.sink.codec().clone())
     }
 }
 

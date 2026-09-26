@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+* `ws::WsSink` implements `Encoder` and `Decoder`, WebSocket dispatchers use the sink as codec, so
+  sinks cannot send messages after the service returned a close message. `web::ws::start_with()`
+  service handles `DispatchItem<WsSink>` instead of `DispatchItem<ws::Codec>`
+
 * `ws::WsConnection::start()` sends a protocol error close frame (1002) on invalid input. The
   dispatcher and the connection's sinks share codec state
 
