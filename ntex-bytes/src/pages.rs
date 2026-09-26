@@ -16,6 +16,8 @@ pub struct BytePages {
 #[derive(Debug)]
 struct Inner {
     size: BytePageSize,
+    /// Total length of `pages`, so `len()` does not walk them.
+    len: usize,
     pages: VecDeque<BytePage>,
 }
 
@@ -48,6 +50,7 @@ impl BytePages {
         } else {
             Box::new(Inner {
                 size,
+                len: 0,
                 pages: VecDeque::with_capacity(8),
             })
         };
@@ -62,12 +65,25 @@ impl BytePages {
         &self.st.as_ref().unwrap().pages
     }
 
-    fn pages_mut(&mut self) -> &mut VecDeque<BytePage> {
-        &mut self.st.as_mut().unwrap().pages
+    // Pages are only added and removed through these methods, which keep
+    // `Inner::len` up to date. A page in the list is never modified in place.
+    fn push_front(&mut self, page: BytePage) {
+        let st = self.st.as_mut().unwrap();
+        st.len += page.len();
+        st.pages.push_front(page);
+    }
+
+    fn pop_front(&mut self) -> Option<BytePage> {
+        let st = self.st.as_mut().unwrap();
+        let page = st.pages.pop_front()?;
+        st.len -= page.len();
+        Some(page)
     }
 
     fn push_back(&mut self, page: BytePage) {
-        let pages = &mut self.st.as_mut().unwrap().pages;
+        let st = self.st.as_mut().unwrap();
+        st.len += page.len();
+        let pages = &mut st.pages;
         pages.push_back(page);
 
         #[cfg(feature = "overuse")]
@@ -101,7 +117,7 @@ impl BytePages {
         if p.is_empty() {
             false
         } else {
-            self.pages_mut().push_front(p);
+            self.push_front(p);
             true
         }
     }
@@ -126,24 +142,12 @@ impl BytePages {
             } else if p.len() <= self.remaining_mut() {
                 self.put_slice(p.as_ref());
             } else {
-                let page = self.current.take();
-                let pages = self.pages_mut();
-
                 // push current storage to stack
-                if let Some(page) = page {
-                    pages.push_back(From::from(page));
+                if let Some(page) = self.current.take() {
+                    self.push_back(From::from(page));
                 }
                 // add buffer to stack
-                pages.push_back(p);
-
-                #[cfg(feature = "overuse")]
-                if pages.len() == 128 {
-                    log::debug!(
-                        "Number of pages {}\n{:?}",
-                        pages.len(),
-                        backtrace::Backtrace::new()
-                    );
-                }
+                self.push_back(p);
             }
         }
     }
@@ -161,9 +165,7 @@ impl BytePages {
     #[inline]
     /// Returns the total number of buffered bytes.
     pub fn len(&self) -> usize {
-        self.pages()
-            .iter()
-            .fold(self.current_len(), |c, page| c + page.len())
+        self.st.as_ref().unwrap().len + self.current_len()
     }
 
     fn current_len(&self) -> usize {
@@ -176,12 +178,7 @@ impl BytePages {
     #[inline]
     /// Returns `true` if no bytes are buffered.
     pub fn is_empty(&self) -> bool {
-        for p in self.pages() {
-            if !p.is_empty() {
-                return false;
-            }
-        }
-        self.current_len() == 0
+        self.len() == 0
     }
 
     #[inline]
@@ -196,7 +193,7 @@ impl BytePages {
 
     /// Returns the first page from the collection.
     pub fn take(&mut self) -> Option<BytePage> {
-        if let Some(page) = self.pages_mut().pop_front() {
+        if let Some(page) = self.pop_front() {
             Some(page)
         } else {
             self.current.take().map(BytePage::from)
@@ -248,19 +245,15 @@ impl BytePages {
     /// Depending on the underlying storage, this operation might be `O(1)` or could
     /// involve a memory copy.
     pub fn split_into(&mut self, mut at: usize, to: &mut BytePages) {
-        {
-            let pages = self.pages_mut();
+        while let Some(mut page) = self.pop_front() {
+            let len = cmp::min(page.len(), at);
+            to.append(page.split_to(len));
 
-            while let Some(mut page) = pages.pop_front() {
-                let len = cmp::min(page.len(), at);
-                to.append(page.split_to(len));
-
-                if !page.is_empty() {
-                    pages.push_front(page);
-                    return;
-                }
-                at -= len;
+            if !page.is_empty() {
+                self.push_front(page);
+                return;
             }
+            at -= len;
         }
         if at > 0
             && let Some(mut page) = self.take()
@@ -386,6 +379,7 @@ impl Drop for BytePages {
     fn drop(&mut self) {
         if let Some(mut st) = self.st.take() {
             st.pages.clear();
+            st.len = 0;
             // the cache is unavailable while the thread-local is being destroyed
             let _ = CACHE.try_with(move |c| {
                 if let Some(mut cache) = c.take() {
@@ -967,13 +961,105 @@ mod tests {
             let mut pages = BytePages::new(BytePageSize::Size8);
             pages.extend_from_slice(b"a");
             pages.append(Bytes::copy_from_slice(b"123"));
-            pages.pages_mut().push_back(p);
+            pages.push_back(p);
             assert_eq!(format!("{pages:?}"), "BytePages(b\"b\", b\"a123\")");
 
             assert_eq!(pages.len(), 5);
             pages.clear();
             assert_eq!(pages.len(), 0);
         }
+    }
+
+    /// Checks the tracked length against the pages.
+    fn assert_len(pages: &BytePages) {
+        let len = pages.pages().iter().map(|p| p.len()).sum::<usize>() + pages.current_len();
+        assert_eq!(pages.len(), len);
+        assert_eq!(pages.is_empty(), len == 0);
+    }
+
+    #[test]
+    fn pages_len_tracking() {
+        let mut rng = rand::rng();
+        let mut pages = BytePages::new(BytePageSize::Size8);
+        let mut other = BytePages::new(BytePageSize::Size8);
+        let mut expected = 0;
+
+        let (iters, max) = if cfg!(miri) { (100, 256) } else { (2000, 12 * 1024) };
+        for _ in 0..iters {
+            let n = rng.random_range(0..max);
+            match rng.random_range(0..9) {
+                0 => {
+                    pages.extend_from_slice(&vec![1; n]);
+                    expected += n;
+                }
+                1 => {
+                    pages.append(Bytes::copy_from_slice(&vec![2; n]));
+                    expected += n;
+                }
+                2 => {
+                    if pages.prepend(BytesMut::copy_from_slice(vec![3; n])) {
+                        expected += n;
+                    }
+                }
+                3 => {
+                    if let Some(p) = pages.take() {
+                        expected -= p.len();
+                    }
+                }
+                4 => {
+                    let at = cmp::min(n, expected);
+                    let split = pages.split_to(at);
+                    assert_len(&split);
+                    assert_eq!(split.len(), at);
+                    expected -= at;
+                }
+                5 => {
+                    let at = cmp::min(n, expected);
+                    pages.split_into(at, &mut other);
+                    expected -= at;
+                }
+                6 => {
+                    other.move_to(&mut pages);
+                    assert_len(&other);
+                    assert!(other.is_empty());
+                    expected = pages.len();
+                }
+                7 => {
+                    let mut copy = BytePages::new(BytePageSize::Size8);
+                    pages.copy_to(&mut copy);
+                    assert_len(&copy);
+                    assert_eq!(copy.len(), expected);
+                }
+                _ => {
+                    pages.put_u8(4);
+                    expected += 1;
+                }
+            }
+            assert_len(&pages);
+            assert_len(&other);
+            assert_eq!(pages.len(), expected);
+        }
+
+        let len = pages.len();
+        assert_eq!(pages.freeze().len(), len);
+        assert_len(&pages);
+        assert!(pages.is_empty());
+        pages.extend_from_slice(b"123");
+        pages.clear();
+        assert_len(&pages);
+        assert!(pages.is_empty());
+    }
+
+    #[test]
+    fn pages_len_after_cache_reuse() {
+        let mut pages = BytePages::new(BytePageSize::Size8);
+        pages.append(Bytes::copy_from_slice(&[1; 64]));
+        pages.append(Bytes::copy_from_slice(&[1; 64]));
+        drop(pages);
+
+        let pages = BytePages::new(BytePageSize::Size8);
+        assert_len(&pages);
+        assert!(pages.is_empty());
     }
 
     #[test]

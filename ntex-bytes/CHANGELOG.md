@@ -2,6 +2,12 @@
 
 ## [1.10.0] (unreleased)
 
+* `BytePages::len()` and `is_empty()` are O(1), the length of the pages is
+  tracked instead of summed on each call
+
+* `BytesMut::from(Bytes)` reuses the buffer instead of copying when the `Bytes`
+  is the only handle to it
+
 * Add `BytePage::info()` to report the kind of storage backing a page
 
 * Add `BytePage::is_inline()` to report whether page data is stored inline
