@@ -188,8 +188,7 @@ impl Handler for StreamOpsHandler {
             self.inner.with(|st| {
                 if let Some(item) = st.streams.get_mut(id)
                     && !item.flags.contains(Flags::CLOSED)
-                    && item.rd_op.pause(true)
-                    && item.wr_op.pause()
+                    && item.pause_ops()
                     && let Some(tx) = item.close.take()
                 {
                     item.flags.insert(Flags::CLOSED);
@@ -304,7 +303,7 @@ impl StreamCtl {
                 }
                 if item.flags.contains(Flags::CLOSED) {
                     None
-                } else if item.rd_op.pause(true) && item.wr_op.pause() {
+                } else if item.pause_ops() {
                     // no outstanding ops
                     item.flags.insert(Flags::CLOSED);
                     Some(Either::Left((
@@ -408,6 +407,17 @@ impl StreamCtl {
 }
 
 impl StreamItem {
+    /// Cancels the operations in flight, and marks them as closing so their
+    /// completions start the close. Returns `true` if none is in flight.
+    ///
+    /// Both are always paused: a send left running would issue the next one
+    /// once it completes.
+    fn pause_ops(&mut self) -> bool {
+        let rd = self.rd_op.pause(true);
+        let wr = self.wr_op.pause();
+        rd && wr
+    }
+
     /// Whether the close has started. No operation may be started then, and
     /// once the socket is closed its handle value may belong to another one.
     fn is_closing(&self) -> bool {
@@ -720,13 +730,65 @@ mod tests {
         let optr = ops
             .0
             .with(|st| (&raw mut st.streams[id].rd_op).cast::<Overlapped>());
+        complete_aborted(ops, ops::RD_OP, optr);
+    }
+
+    /// Delivers an aborted completion for a send marked by `fake_pending()`.
+    fn complete_aborted_send(ops: &StreamOps, id: usize) {
+        let optr = ops
+            .0
+            .with(|st| (&raw mut st.streams[id].wr_op).cast::<Overlapped>());
+        complete_aborted(ops, ops::WR_OP, optr);
+    }
+
+    fn complete_aborted(ops: &StreamOps, udata: u32, optr: *mut Overlapped) {
         let err = io::Error::from_raw_os_error(
             i32::try_from(windows_sys::Win32::Foundation::ERROR_OPERATION_ABORTED).unwrap(),
         );
         StreamOpsHandler {
             inner: ops.0.clone(),
         }
-        .completed(ops::RD_OP, Err(err), optr);
+        .completed(udata, Err(err), optr);
+    }
+
+    /// A shutdown with both a recv and a send in flight must cancel both. A
+    /// send left running would start the next one once it completes, and a
+    /// stalled one would hold up the close until the shutdown timeout.
+    #[ntex::test]
+    async fn shutdown_cancels_pending_recv_and_send() {
+        let reactor = Reactor::new().unwrap();
+        let (io, ctl, ops, raw, mut peer) = registered(&reactor);
+        let id = ctl.id;
+        ops.0.with(|st| {
+            st.streams[id].rd_op.fake_pending();
+            st.streams[id].wr_op.fake_pending();
+        });
+
+        {
+            let mut fut = pin!(ntex::time::timeout(
+                ntex::time::Seconds(5),
+                ctl.shutdown(false)
+            ));
+            std::future::poll_fn(|cx| {
+                assert!(fut.as_mut().poll(cx).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
+            assert!(
+                ops.0.with(|st| st.streams[id].wr_op.is_closing()),
+                "send in flight not cancelled"
+            );
+
+            complete_aborted_send(&ops, id);
+            complete_aborted_recv(&ops, id);
+            fut.await
+                .expect("close did not start after both completions")
+                .unwrap();
+        }
+        assert_closed(raw, &mut peer);
+
+        drop(ctl);
+        drop(io);
     }
 
     /// A close waiting for a cancelled recv that never completes must give up

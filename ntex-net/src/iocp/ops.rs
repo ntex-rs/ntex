@@ -244,6 +244,18 @@ impl WriteOperation {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn fake_pending(&mut self) {
+        self.pages_num = 0;
+        self.flags.insert(Flags::WAITING);
+    }
+
+    /// Whether the send was cancelled for a close.
+    #[cfg(test)]
+    pub(crate) fn is_closing(&self) -> bool {
+        self.flags.contains(Flags::CLOSING)
+    }
+
     /// Whether a send is in flight, so the kernel still owns this operation.
     pub(crate) fn is_pending(&self) -> bool {
         self.flags.contains(Flags::WAITING)

@@ -7,6 +7,9 @@
 
 ## [4.1.0] - 2026-09-23
 
+* Fix IOCP shutdown not cancelling an in-flight send while a recv was also
+  pending, the send could start another one after the close had begun
+
 * Fix compio graceful shutdown hanging past the shutdown timeout when the peer
   stops reading. The write task waited on the in-flight write and never polled
   the shutdown deadline; the write is now cancelled once the connection is
