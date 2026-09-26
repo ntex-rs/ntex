@@ -2,6 +2,42 @@
 
 ## [Unreleased]
 
+* Fix HTTP/1 `max_headers` limit counting distinct header names, repeated header names
+  are counted separately
+
+* Fix HTTP client requests failing when their HTTP/2 connection reaches `h2_lifetime` after
+  the connection is acquired but before the request is sent
+
+* Fix HTTP client requests waiting for HTTP/2 stream capacity not being woken when the
+  connection releases a stream after the request completes, the peer raises its stream
+  limit, or the connection closes
+
+* `ClientConfig::set_h1_keepalive(Seconds::ZERO)` and `set_h1_lifetime(Seconds::ZERO)` disable
+  the idle and lifetime checks, as for the HTTP/2 settings; previously pooled connections were
+  never reused
+
+* `web::test::server()` client uses the default `ClientConfig`, as `http::test::server()` does
+
+* Fix HTTP client pool shutdown leaving requests waiting for a connection pending forever,
+  keeping idle connections open and accepting new requests
+
+* Rename `ClientConfig::set_keepalive()`, `set_lifetime()`, `set_connection_limit()` and
+  `connection_limit()` to `set_h1_keepalive()`, `set_h1_lifetime()`,
+  `set_h1_connection_limit()` and `h1_connection_limit()`
+
+* Add separate HTTP/2 settings to the HTTP client pool: `ClientConfig::set_h2_keepalive()`,
+  `set_h2_lifetime()`, `set_h2_connection_limit()` and `set_h2_max_streams()`.
+  The pool can open several HTTP/2 connections per host when existing ones are saturated,
+  HTTP/2 idle time is measured from completion of the last request, and HTTP/2 requests
+  no longer count against `set_h1_connection_limit()`
+
+* Fix HTTP client pool not closing expired HTTP/2 connections
+
+* Fix HTTP client pool keeping connections released after the pool is stopped
+
+* Fix HTTP client pool with connection limit `0` never waking requests
+  waiting for a connection
+
 * Fix HTTP/1 client losing an early response, such as `413`, when the server
   closes the connection before the request body is sent
 

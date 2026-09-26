@@ -1,4 +1,4 @@
-# ntex framework documentation
+# ntex framework guide
 
 Learn how ntex services fit together, run servers, manage state and I/O, and
 build web applications.

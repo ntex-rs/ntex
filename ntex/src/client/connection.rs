@@ -14,15 +14,6 @@ pub(super) enum ConnectionType {
     H2(h2proto::H2Client),
 }
 
-impl ConnectionType {
-    pub(super) fn tag(&self) -> &'static str {
-        match &self {
-            ConnectionType::H1(io) => io.tag(),
-            ConnectionType::H2(io) => io.tag(),
-        }
-    }
-}
-
 impl fmt::Debug for ConnectionType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

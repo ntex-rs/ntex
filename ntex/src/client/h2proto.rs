@@ -1,12 +1,13 @@
-use std::{fmt::Write, future::poll_fn, io, rc::Rc};
+use std::{cell::Cell, fmt::Write, future::poll_fn, io, rc::Rc, time::Instant};
 
-use ntex_h2::{self as h2, client::RecvStream, client::SimpleClient, frame};
+use ntex_h2::client::{RecvStream, SimpleClient, StreamReservation};
+use ntex_h2::{self as h2, frame};
 
 use crate::error::{Error, ErrorMapping, with_service};
 use crate::http::body::{Body, BodySize, MessageBody};
 use crate::http::header::{self, HeaderMap, HeaderValue};
 use crate::http::{Method, Payload, ResponseHead, Version, h2::Payload as H2Payload};
-use crate::time::{Millis, timeout_checked};
+use crate::time::{Millis, now, timeout_checked};
 use crate::util::{ByteString, Bytes, BytesMut, Either, select};
 
 use super::{ClientRawRequest, error::ClientError, error::ConnectError};
@@ -25,7 +26,7 @@ pub(super) async fn send_request(
 }
 
 async fn send_request_inner(
-    client: H2Client,
+    mut client: H2Client,
     req: ClientRawRequest,
     body: Body,
     timeout: Millis,
@@ -88,17 +89,21 @@ async fn send_request_inner(
             ByteString::try_from(buf).unwrap()
         },
     );
-    let (snd_stream, rcv_stream) = client
-        .client
-        .send(req.head.method.clone(), path, hdrs, eof)
-        .await
-        .into_error()?;
+    let method = req.head.method.clone();
+    let res = if let Some(reservation) = client.reservation.take() {
+        reservation.send(method, path, hdrs, eof)
+    } else {
+        client.client.send(method, path, hdrs, eof).await
+    };
+    let (snd_stream, rcv_stream) = res.into_error()?;
 
     // send body
     if !eof {
         // sending body is async process, we can handle upload and download
         // at the same time
+        let activity = client.activity.clone();
         crate::rt::spawn(async move {
+            let _activity = activity;
             if let Err(e) = send_body(body, &snd_stream).await {
                 log::error!("{}: Cannot send body: {e:?}", snd_stream.tag());
                 snd_stream.reset(frame::Reason::INTERNAL_ERROR);
@@ -106,7 +111,7 @@ async fn send_request_inner(
         });
     }
 
-    timeout_checked(timeout, get_response(rcv_stream))
+    timeout_checked(timeout, get_response(rcv_stream, client.activity.clone()))
         .await
         .map_err(|()| Error::from(ClientError::Timeout))
         .and_then(|res| res)
@@ -114,6 +119,7 @@ async fn send_request_inner(
 
 async fn get_response(
     rcv_stream: RecvStream,
+    activity: Option<H2Activity>,
 ) -> Result<(ResponseHead, Payload), Error<ClientError>> {
     let h2::Message { stream, kind } = rcv_stream
         .recv()
@@ -150,6 +156,7 @@ async fn get_response(
                         let (pl, payload) = H2Payload::create(stream.empty_capacity());
 
                         crate::rt::spawn(async move {
+                            let _activity = activity;
                             loop {
                                 #[allow(unused_variables)]
                                 let h2::Message { stream, kind } = match select(
@@ -263,14 +270,144 @@ async fn send_body(
     }
 }
 
-#[derive(Clone)]
+/// Shared HTTP/2 connection.
+///
+/// Pool keeps a copy without activity. Copies returned by [`H2Client::begin`]
+/// carry a stream reservation, used by the request, and an activity guard
+/// that is held until the request, including its request body and response
+/// payload, is complete.
 pub(super) struct H2Client {
     client: SimpleClient,
+    state: Rc<H2State>,
+    activity: Option<H2Activity>,
+    reservation: Option<StreamReservation>,
+}
+
+impl Clone for H2Client {
+    /// Stream reservation is not cloned.
+    fn clone(&self) -> Self {
+        Self {
+            client: self.client.clone(),
+            state: self.state.clone(),
+            activity: self.activity.clone(),
+            reservation: None,
+        }
+    }
+}
+
+impl std::fmt::Debug for H2Client {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("H2Client")
+            .field("streams", &self.streams())
+            .field("closed", &self.is_closed())
+            .finish()
+    }
+}
+
+struct H2State {
+    created: Cell<Instant>,
+    used: Cell<Instant>,
+    // number of live activity guards
+    guards: Cell<u32>,
+}
+
+/// In-flight request guard.
+///
+/// Every copy is counted, the connection is idle when no copies are left.
+pub(super) struct H2Activity(Rc<H2State>);
+
+impl H2Activity {
+    fn new(state: &Rc<H2State>) -> Self {
+        state.guards.set(state.guards.get() + 1);
+        H2Activity(state.clone())
+    }
+}
+
+impl Clone for H2Activity {
+    fn clone(&self) -> Self {
+        H2Activity::new(&self.0)
+    }
+}
+
+impl Drop for H2Activity {
+    fn drop(&mut self) {
+        let guards = self.0.guards.get() - 1;
+        self.0.guards.set(guards);
+        if guards == 0 {
+            self.0.used.set(now());
+        }
+    }
 }
 
 impl H2Client {
     pub(super) fn new(client: SimpleClient) -> Self {
-        Self { client }
+        let created = now();
+        Self {
+            client,
+            state: Rc::new(H2State {
+                created: Cell::new(created),
+                used: Cell::new(created),
+                guards: Cell::new(0),
+            }),
+            activity: None,
+            reservation: None,
+        }
+    }
+
+    /// Starts a new request on this connection.
+    ///
+    /// Returns `None` if a stream cannot be reserved.
+    pub(super) fn begin(&self) -> Option<Self> {
+        let reservation = self.client.reserve()?;
+        Some(Self {
+            client: self.client.clone(),
+            state: self.state.clone(),
+            activity: Some(H2Activity::new(&self.state)),
+            reservation: Some(reservation),
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_times(&self, created: Instant, used: Instant) {
+        self.state.created.set(created);
+        self.state.used.set(used);
+    }
+
+    /// Returns when the connection was created.
+    pub(super) fn created(&self) -> Instant {
+        self.state.created.get()
+    }
+
+    /// Returns when the last request completed.
+    pub(super) fn used(&self) -> Instant {
+        self.state.used.get()
+    }
+
+    /// Returns whether the connection has no in-flight requests.
+    pub(super) fn is_idle(&self) -> bool {
+        self.state.guards.get() == 0
+    }
+
+    /// Returns the number of open streams, including reserved streams.
+    pub(super) fn streams(&self) -> u32 {
+        self.client.active_streams()
+    }
+
+    /// Returns whether the connection can start another request.
+    ///
+    /// A zero `max_streams` uses only the peer's stream limit.
+    pub(super) fn has_capacity(&self, max_streams: u32) -> bool {
+        let limit = match (self.client.max_streams(), max_streams) {
+            (Some(peer), 0) => Some(peer),
+            (Some(peer), max) => Some(peer.min(max)),
+            (None, 0) => None,
+            (None, max) => Some(max),
+        };
+        limit.is_none_or(|limit| self.streams() < limit)
+    }
+
+    pub(super) fn is_disconnecting(&self) -> bool {
+        self.client.is_disconnecting()
     }
 
     pub(super) fn tag(&self) -> &'static str {

@@ -18,9 +18,13 @@ pub struct ClientConfig {
     pub(super) timeout: Millis,
     pub(super) pl_limit: usize,
     pub(super) pl_timeout: Millis,
-    pub(super) conn_lifetime: Duration,
-    pub(super) conn_keep_alive: Duration,
-    pub(super) limit: usize,
+    pub(super) h1_lifetime: Duration,
+    pub(super) h1_keep_alive: Duration,
+    pub(super) h1_limit: usize,
+    pub(super) h2_lifetime: Duration,
+    pub(super) h2_keep_alive: Duration,
+    pub(super) h2_limit: usize,
+    pub(super) h2_max_streams: u32,
 
     config: CfgContext,
 }
@@ -52,9 +56,13 @@ impl ClientConfig {
             timeout: Millis(5_000),
             pl_limit: 262_144,
             pl_timeout: Millis(10_000),
-            conn_lifetime: Duration::from_secs(75),
-            conn_keep_alive: Duration::from_secs(15),
-            limit: 8,
+            h1_lifetime: Duration::from_secs(75),
+            h1_keep_alive: Duration::from_secs(15),
+            h1_limit: 8,
+            h2_lifetime: Duration::from_secs(3600),
+            h2_keep_alive: Duration::from_secs(60),
+            h2_limit: 16,
+            h2_max_streams: 100,
 
             config: CfgContext::default(),
         }
@@ -82,42 +90,125 @@ impl ClientConfig {
         self.pl_timeout
     }
 
-    /// Returns the maximum number of simultaneous connections per connection pool.
-    pub fn connection_limit(&self) -> usize {
-        self.limit
+    /// Returns the maximum number of simultaneous HTTP/1 connections per connection pool.
+    pub fn h1_connection_limit(&self) -> usize {
+        self.h1_limit
+    }
+
+    /// Returns the maximum number of HTTP/2 connections per host.
+    pub fn h2_connection_limit(&self) -> usize {
+        self.h2_limit
+    }
+
+    /// Returns the maximum number of concurrent requests per HTTP/2 connection.
+    pub fn h2_max_streams(&self) -> u32 {
+        self.h2_max_streams
+    }
+
+    /// Returns the keep-alive period for idle HTTP/2 connections.
+    pub fn h2_keepalive(&self) -> Seconds {
+        Seconds(self.h2_keep_alive.as_secs().try_into().unwrap_or(u16::MAX))
+    }
+
+    /// Returns the maximum lifetime of an HTTP/2 connection.
+    pub fn h2_lifetime(&self) -> Seconds {
+        Seconds(self.h2_lifetime.as_secs().try_into().unwrap_or(u16::MAX))
     }
 
     #[must_use]
     /// Sets the maximum number of simultaneous connections per connection pool.
     ///
     /// The limit is shared by all hosts. A client keeps separate pools for
-    /// plain and TLS connections, and each pool has its own limit. A value of
+    /// plain and TLS connections, and each pool has its own limit. The limit
+    /// counts HTTP/1 connections in use and connections being opened;
+    /// HTTP/2 connections are limited by
+    /// [`set_h2_connection_limit`](Self::set_h2_connection_limit). A value of
     /// zero disables the limit. The default is 8.
-    pub fn set_connection_limit(mut self, limit: usize) -> Self {
-        self.limit = limit;
+    pub fn set_h1_connection_limit(mut self, limit: usize) -> Self {
+        self.h1_limit = limit;
         self
     }
 
     #[must_use]
-    /// Sets the keep-alive period for idle pooled connections.
+    /// Sets the keep-alive period for idle pooled HTTP/1 connections.
     ///
+    /// HTTP/2 connections use [`set_h2_keepalive`](Self::set_h2_keepalive).
     /// A pooled connection that has been idle longer than this period is not
     /// reused. Expiration is checked lazily, when a connection for the same
     /// host is next requested; the expired connection is closed at that point.
-    /// The default is 15 seconds.
-    pub fn set_keepalive<T: Into<Seconds>>(mut self, dur: T) -> Self {
-        self.conn_keep_alive = dur.into().into();
+    /// A zero duration disables the idle check; use
+    /// [`ClientRequest::force_close`](super::ClientRequest::force_close) to
+    /// avoid reusing a connection. The default is 15 seconds.
+    pub fn set_h1_keepalive<T: Into<Seconds>>(mut self, dur: T) -> Self {
+        self.h1_keep_alive = dur.into().into();
         self
     }
 
     #[must_use]
-    /// Sets the maximum lifetime of a pooled connection.
+    /// Sets the maximum lifetime of a pooled HTTP/1 connection.
     ///
+    /// HTTP/2 connections use [`set_h2_lifetime`](Self::set_h2_lifetime).
     /// A connection older than this period is not reused, regardless of how
     /// recently it was used. Like the keep-alive period, this is checked when a
-    /// connection for the same host is next requested. The default is 75 seconds.
-    pub fn set_lifetime<T: Into<Seconds>>(mut self, dur: T) -> Self {
-        self.conn_lifetime = dur.into().into();
+    /// connection for the same host is next requested. A zero duration disables
+    /// the limit. The default is 75 seconds.
+    pub fn set_h1_lifetime<T: Into<Seconds>>(mut self, dur: T) -> Self {
+        self.h1_lifetime = dur.into().into();
+        self
+    }
+
+    #[must_use]
+    /// Sets the maximum number of HTTP/2 connections per host.
+    ///
+    /// HTTP/2 connections are shared by concurrent requests. A new connection
+    /// to a host is opened only when every existing HTTP/2 connection to that
+    /// host has reached its stream limit, see
+    /// [`set_h2_max_streams`](Self::set_h2_max_streams). When the limit is
+    /// reached, requests wait for a free stream.
+    ///
+    /// Requests on established HTTP/2 connections do not count against
+    /// [`set_h1_connection_limit`](Self::set_h1_connection_limit); opening a new
+    /// connection does, because the protocol is not known until the
+    /// connection is established. A value of zero disables the limit.
+    /// The default is 16.
+    pub fn set_h2_connection_limit(mut self, limit: usize) -> Self {
+        self.h2_limit = limit;
+        self
+    }
+
+    #[must_use]
+    /// Sets the maximum number of concurrent requests per HTTP/2 connection.
+    ///
+    /// The peer's `SETTINGS_MAX_CONCURRENT_STREAMS` also applies; the lower of
+    /// the two is used. A value of zero uses only the peer's setting.
+    /// The default is 100.
+    pub fn set_h2_max_streams(mut self, limit: u32) -> Self {
+        self.h2_max_streams = limit;
+        self
+    }
+
+    #[must_use]
+    /// Sets the keep-alive period for idle HTTP/2 connections.
+    ///
+    /// An HTTP/2 connection is idle when it has no in-flight requests; the
+    /// period is measured from the completion of its last request, including
+    /// the response payload. An idle connection older than this period is
+    /// closed when a connection for the same host is next requested.
+    /// A zero duration disables the idle check. The default is 60 seconds.
+    pub fn set_h2_keepalive<T: Into<Seconds>>(mut self, dur: T) -> Self {
+        self.h2_keep_alive = dur.into().into();
+        self
+    }
+
+    #[must_use]
+    /// Sets the maximum lifetime of an HTTP/2 connection.
+    ///
+    /// An HTTP/2 connection older than this period is not used for new
+    /// requests and is closed gracefully, after its in-flight requests
+    /// complete. This is checked when a connection for the same host is next
+    /// requested. A zero duration disables the limit. The default is 1 hour.
+    pub fn set_h2_lifetime<T: Into<Seconds>>(mut self, dur: T) -> Self {
+        self.h2_lifetime = dur.into().into();
         self
     }
 
@@ -207,6 +298,29 @@ mod tests {
     fn basics() {
         let cfg = ClientConfig::new().disable_timeout();
         assert_eq!(cfg.timeout, Millis::ZERO);
+    }
+
+    #[test]
+    fn h2_settings() {
+        let cfg = ClientConfig::new();
+        assert_eq!(cfg.h2_connection_limit(), 16);
+        assert_eq!(cfg.h2_max_streams(), 100);
+        assert_eq!(cfg.h2_keepalive(), Seconds(60));
+        assert_eq!(cfg.h2_lifetime(), Seconds(3600));
+
+        let cfg = cfg
+            .set_h2_connection_limit(2)
+            .set_h2_max_streams(10)
+            .set_h2_keepalive(Seconds(5))
+            .set_h2_lifetime(Seconds(50));
+        assert_eq!(cfg.h2_connection_limit(), 2);
+        assert_eq!(cfg.h2_max_streams(), 10);
+        assert_eq!(cfg.h2_keepalive(), Seconds(5));
+        assert_eq!(cfg.h2_lifetime(), Seconds(50));
+        // http/1 settings are not affected
+        assert_eq!(cfg.h1_connection_limit(), 8);
+        assert_eq!(cfg.h1_keep_alive, Duration::from_secs(15));
+        assert_eq!(cfg.h1_lifetime, Duration::from_secs(75));
     }
 
     #[test]

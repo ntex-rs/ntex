@@ -36,7 +36,7 @@ enum Acquire {
 
 #[derive(Debug)]
 struct AvailableConnection {
-    io: ConnectionType,
+    io: IoBoxed,
     used: Instant,
     created: Instant,
 }
@@ -58,8 +58,9 @@ pub(super) struct Inner {
     stopped: bool,
     acquired: usize,
     available: HashMap<Key, VecDeque<AvailableConnection>>,
+    h2: HashMap<Key, Vec<H2Client>>,
     connecting: HashSet<Key>,
-    waker: inplace::Inplace<()>,
+    waker: Rc<inplace::Inplace<()>>,
     waiters: Rc<RefCell<Waiters>>,
 }
 
@@ -75,8 +76,9 @@ impl ConnectionPool {
             stopped: false,
             acquired: 0,
             available: HashMap::default(),
+            h2: HashMap::default(),
             connecting: HashSet::default(),
-            waker: inplace::channel(),
+            waker: Rc::new(inplace::channel()),
             waiters: waiters.clone(),
         }));
 
@@ -104,10 +106,7 @@ impl Drop for ConnectionPool {
     fn drop(&mut self) {
         if Rc::strong_count(&self.0) == 1 {
             self.0.stop.take();
-            self.0.waiters.borrow_mut().waiters.clear();
-            let mut inner = self.0.inner.borrow_mut();
-            inner.stopped = true;
-            let _ = inner.waker.send(());
+            self.0.inner.borrow_mut().stop();
         }
     }
 }
@@ -140,7 +139,7 @@ impl Service<SharedCfg, Connect> for ConnectionPool {
     #[inline]
     async fn shutdown(&self, ctx: Ctx<'_, Self, SharedCfg>) {
         self.0.stop.take();
-        self.0.inner.borrow_mut().stopped = true;
+        self.0.inner.borrow_mut().stop();
         self.0.svc.shutdown(ctx.st()).await;
     }
 
@@ -160,6 +159,10 @@ impl Service<SharedCfg, Connect> for ConnectionPool {
             return Err(ConnectError::Unresolved.into());
         };
 
+        if inner.borrow().stopped {
+            return Err(ConnectError::Disconnected(None).into());
+        }
+
         // acquire connection
         let result = inner.borrow_mut().acquire(&key);
         match result {
@@ -171,11 +174,9 @@ impl Service<SharedCfg, Connect> for ConnectionPool {
                     io,
                     req.uri
                 );
-                Ok(Connection::new(
-                    io,
-                    created,
-                    Some(Acquired::new(key, inner)),
-                ))
+                // http/2 requests are not counted by the connection limit
+                let pool = matches!(io, ConnectionType::H1(_)).then(|| Acquired::new(key, inner));
+                Ok(Connection::new(io, created, pool))
             }
             // open new tcp connection
             Acquire::Available => {
@@ -261,60 +262,109 @@ impl Waiters {
 }
 
 impl Inner {
+    /// Stops the pool, fails pending waiters and closes pooled connections
+    fn stop(&mut self) {
+        self.stopped = true;
+        let _ = self.waker.send(());
+
+        // waiters receive `Disconnected` error
+        let waiters = std::mem::take(&mut self.waiters.borrow_mut().waiters);
+        drop(waiters);
+
+        for conn in self.available.drain().flat_map(|(_, conns)| conns) {
+            let io = conn.io;
+            spawn(async move {
+                let _ = io.shutdown().await;
+            });
+        }
+        // disconnects after in-flight streams are completed
+        for conn in self.h2.drain().flat_map(|(_, conns)| conns) {
+            conn.close();
+        }
+    }
+
     fn acquire(&mut self, key: &Key) -> Acquire {
+        let now = now();
+
+        // shared http/2 connections, cleanup stale connections at the same time
+        let mut h2_saturated = 0;
+        if let Some(connections) = self.h2.get_mut(key) {
+            let cfg = &self.cfg;
+            connections.retain(|conn| {
+                if conn.is_closed() || conn.is_disconnecting() {
+                    return false;
+                }
+                let expired = (!cfg.h2_lifetime.is_zero()
+                    && (now - conn.created()) > cfg.h2_lifetime)
+                    || (!cfg.h2_keep_alive.is_zero()
+                        && conn.is_idle()
+                        && (now - conn.used()) > cfg.h2_keep_alive);
+                if expired {
+                    // disconnects after in-flight streams are completed
+                    conn.close();
+                }
+                !expired
+            });
+
+            // use least loaded connection
+            let conn = connections
+                .iter()
+                .filter(|conn| conn.has_capacity(cfg.h2_max_streams))
+                .min_by_key(|conn| conn.streams());
+            if let Some((conn, created)) = conn.and_then(|c| Some((c.begin()?, c.created()))) {
+                return Acquire::Acquired(ConnectionType::H2(conn), created);
+            }
+            h2_saturated = connections.len();
+            if connections.is_empty() {
+                self.h2.remove(key);
+            }
+        }
+
+        // all http/2 connections are busy
+        if h2_saturated > 0
+            && ((self.cfg.h2_limit > 0 && h2_saturated >= self.cfg.h2_limit)
+                || self.connecting.contains(key))
+        {
+            return Acquire::NotAvailable;
+        }
+
         // check limits
-        if self.cfg.limit > 0 && self.acquired >= self.cfg.limit {
+        if self.cfg.h1_connection_limit() > 0 && self.acquired >= self.cfg.h1_connection_limit() {
             return Acquire::NotAvailable;
         }
 
         // check if open connection is available
         // cleanup stale connections at the same time
         if let Some(ref mut connections) = self.available.get_mut(key) {
-            let now = now();
             while let Some(conn) = connections.pop_back() {
                 // check if it still usable
-                if (now - conn.used) > self.cfg.conn_keep_alive
-                    || (now - conn.created) > self.cfg.conn_lifetime
+                if (!self.cfg.h1_keep_alive.is_zero() && (now - conn.used) > self.cfg.h1_keep_alive)
+                    || (!self.cfg.h1_lifetime.is_zero()
+                        && (now - conn.created) > self.cfg.h1_lifetime)
                 {
-                    if let ConnectionType::H1(io) = conn.io {
-                        spawn(async move {
-                            let _ = io.shutdown().await;
-                        });
-                    }
+                    let io = conn.io;
+                    spawn(async move {
+                        let _ = io.shutdown().await;
+                    });
                     continue;
                 }
 
                 let io = conn.io;
-                match io {
-                    ConnectionType::H1(ref s) => {
-                        if !s.is_active() || s.is_read_eof() {
-                            continue;
-                        }
-                        let is_valid = s.with_read_dst(|buf| {
-                            if buf.is_empty() || (buf.len() == 2 && &buf[..] == b"\r\n") {
-                                buf.clear();
-                                true
-                            } else {
-                                false
-                            }
-                        });
-                        if !is_valid {
-                            continue;
-                        }
-                    }
-                    ConnectionType::H2(ref s) => {
-                        if s.is_closed() {
-                            continue;
-                        }
-                        let conn = AvailableConnection {
-                            io: ConnectionType::H2(s.clone()),
-                            used: now,
-                            created: conn.created,
-                        };
-                        connections.push_front(conn);
-                    }
+                if !io.is_active() || io.is_read_eof() {
+                    continue;
                 }
-                return Acquire::Acquired(io, conn.created);
+                let is_valid = io.with_read_dst(|buf| {
+                    if buf.is_empty() || (buf.len() == 2 && &buf[..] == b"\r\n") {
+                        buf.clear();
+                        true
+                    } else {
+                        false
+                    }
+                });
+                if !is_valid {
+                    continue;
+                }
+                return Acquire::Acquired(ConnectionType::H1(io), conn.created);
             }
         }
 
@@ -328,7 +378,8 @@ impl Inner {
     fn check_availibility(&mut self) {
         let mut waiters = self.waiters.borrow_mut();
         waiters.cleanup();
-        if !waiters.waiters.is_empty() && self.acquired < self.cfg.limit {
+        // http/2 capacity does not depend on the connection limit
+        if !waiters.waiters.is_empty() {
             let _ = self.waker.send(());
         }
     }
@@ -371,11 +422,9 @@ async fn run_connection_pool(
                             );
                             cleanup = true;
                             let (_, tx) = waiters.pop_front().unwrap();
-                            let _ = tx.send(Ok(Connection::new(
-                                io,
-                                created,
-                                Some(Acquired::new(key.clone(), inner.clone())),
-                            )));
+                            let pool = matches!(io, ConnectionType::H1(_))
+                                .then(|| Acquired::new(key.clone(), inner.clone()));
+                            let _ = tx.send(Ok(Connection::new(io, created, pool)));
                         }
                         Acquire::Available => {
                             log::trace!(
@@ -476,24 +525,20 @@ fn open_connection(
                         uri.scheme().cloned().unwrap_or(Scheme::HTTPS),
                         auth,
                     );
-                    let guard = guard.consume();
-                    let client = H2Client::new(client);
-                    let conn = Connection::new(
-                        ConnectionType::H2(client.clone()),
-                        now(),
-                        Some(guard.clone()),
-                    );
-                    if tx.send(Ok(conn)).is_err() {
-                        // waiter is gone, return connection to pool
+                    let conn = add_h2_client(&inner, &key, client).begin();
+                    // wake up waiters, connection can be shared
+                    drop(guard);
+
+                    let result = conn
+                        .map(|conn| Connection::new(ConnectionType::H2(conn), now(), None))
+                        .ok_or_else(|| Error::from(ConnectError::Disconnected(None)));
+                    if tx.send(result).is_err() {
                         log::trace!(
                             "{}: Waiter for {:?} is gone while connecting to host",
                             cfg.tag(),
                             key.authority
                         );
                     }
-
-                    // put h2 connection to list of available connections
-                    Connection::new(ConnectionType::H2(client), now(), Some(guard)).release(false);
                 } else {
                     log::trace!(
                         "{}: Connection for {:?} is established, init http1 connection",
@@ -511,6 +556,34 @@ fn open_connection(
             }
         }
     });
+}
+
+/// Adds shared http/2 connection to the pool
+fn add_h2_client(
+    inner: &Rc<RefCell<Inner>>,
+    key: &Key,
+    client: h2::client::SimpleClient,
+) -> H2Client {
+    // wake the pool task when a stream becomes available, the connection
+    // state is checked by the task
+    {
+        let inner = inner.borrow();
+        let waker = inner.waker.clone();
+        let waiters = inner.waiters.clone();
+        client.on_capacity(move || {
+            if waiters.try_borrow().map_or(true, |w| !w.waiters.is_empty()) {
+                let _ = waker.send(());
+            }
+        });
+    }
+    let client = H2Client::new(client);
+    inner
+        .borrow_mut()
+        .h2
+        .entry(key.clone())
+        .or_default()
+        .push(client.clone());
+    client
 }
 
 struct OpenGuard {
@@ -552,31 +625,25 @@ impl Acquired {
         Acquired(key, Some(inner))
     }
 
-    fn clone(&self) -> Self {
-        Acquired::new(self.0.clone(), self.1.as_ref().unwrap().clone())
-    }
-
     pub(super) fn release(&mut self, conn: Connection, close: bool) {
         if let Some(inner) = self.1.take() {
             let (io, created, _) = conn.into_inner();
             let mut inner = inner.borrow_mut();
             inner.acquired -= 1;
-            let close = close
-                || matches!(&io, ConnectionType::H1(io) if !io.is_active() || io.is_read_eof());
-            if close {
+            // http/2 connections are shared and stay in the pool
+            let ConnectionType::H1(io) = io else {
+                inner.check_availibility();
+                return;
+            };
+            if close || inner.stopped || !io.is_active() || io.is_read_eof() {
                 log::trace!(
                     "{:?}: Releasing and closing connection for {:?}",
                     io.tag(),
                     self.0.authority
                 );
-                match io {
-                    ConnectionType::H1(io) => {
-                        spawn(async move {
-                            let _ = io.shutdown().await;
-                        });
-                    }
-                    ConnectionType::H2(io) => io.close(),
-                }
+                spawn(async move {
+                    let _ = io.shutdown().await;
+                });
             } else {
                 log::trace!(
                     "{:?}: Releasing connection for {:?}",
@@ -618,6 +685,426 @@ mod tests {
     use crate::{io as nio, testing::IoTest, util::lazy};
 
     #[crate::rt_test]
+    async fn test_unlimited_concurrent_connect() {
+        let store = Rc::new(RefCell::new(Vec::new()));
+        let store2 = store.clone();
+
+        let cfg = SharedCfg::new("C")
+            .add(ClientConfig::new().set_h1_connection_limit(0))
+            .build();
+        let pool = ConnectionPool::new(
+            ConnectorPipeline::new(boxed::service(fn_service(move |_| {
+                let (client, server) = IoTest::create();
+                store2.borrow_mut().push(server);
+                Box::pin(async move {
+                    sleep(Millis(10)).await;
+                    Ok(IoBoxed::from(nio::Io::new(client, SharedCfg::default())))
+                })
+            }))),
+            cfg.get(),
+        );
+        let pipe = Pipeline::new(cfg, pool.clone());
+        let req = Connect {
+            uri: Uri::try_from("http://localhost/test").unwrap(),
+            addr: None,
+        };
+
+        // second request waits for the pending connect to the same host
+        let (c1, c2) = crate::time::timeout(
+            Millis(1000),
+            crate::util::join(pipe.call(req.clone()), pipe.call(req.clone())),
+        )
+        .await
+        .unwrap();
+        assert!(c1.is_ok());
+        assert!(c2.is_ok());
+        assert_eq!(store.borrow().len(), 2);
+        assert_eq!(pool.0.inner.borrow().acquired, 2);
+    }
+
+    fn h2_pool(
+        cfg: ClientConfig,
+    ) -> (
+        Pipeline<Connect, Connection, Error<ConnectError>>,
+        ConnectionPool,
+    ) {
+        let cfg = SharedCfg::new("C").add(cfg).build();
+        let pool = ConnectionPool::new(
+            ConnectorPipeline::new(boxed::service(fn_service(|_| {
+                Box::pin(async { Err(Error::from(ConnectError::Unresolved)) })
+            }))),
+            cfg.get(),
+        );
+        (Pipeline::new(cfg, pool.clone()), pool)
+    }
+
+    fn h2_conn(pool: &ConnectionPool) -> (H2Client, IoTest) {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(64 * 1024);
+        let io = nio::Io::new(client, SharedCfg::default());
+        let client = h2::client::SimpleClient::new(
+            IoBoxed::from(io),
+            Scheme::HTTP,
+            ByteString::from_static("localhost"),
+        );
+        let key = Key::from(Authority::from_static("localhost"));
+        (add_h2_client(&pool.0.inner, &key, client), server)
+    }
+
+    fn h2_key() -> Key {
+        Key::from(Authority::from_static("localhost"))
+    }
+
+    fn secs_ago(secs: u64) -> Instant {
+        now()
+            .checked_sub(std::time::Duration::from_secs(secs))
+            .unwrap()
+    }
+
+    fn acquire_h2(pool: &ConnectionPool) -> Option<H2Client> {
+        match pool.0.inner.borrow_mut().acquire(&h2_key()) {
+            Acquire::Acquired(ConnectionType::H2(conn), _) => Some(conn),
+            _ => None,
+        }
+    }
+
+    async fn wait_closed(h2: &H2Client) {
+        // graceful disconnect, peer does not respond
+        for _ in 0..60 {
+            if h2.is_closed() {
+                break;
+            }
+            sleep(Millis(50)).await;
+        }
+    }
+
+    #[crate::rt_test]
+    async fn test_expired_h2_is_closed() {
+        let (_, pool) = h2_pool(ClientConfig::new().set_h2_keepalive(Seconds(1)));
+        let (h2, server) = h2_conn(&pool);
+        h2.set_times(secs_ago(2), secs_ago(2));
+
+        assert!(matches!(
+            pool.0.inner.borrow_mut().acquire(&h2_key()),
+            Acquire::Available
+        ));
+        assert!(pool.0.inner.borrow().h2.is_empty());
+        wait_closed(&h2).await;
+        assert!(h2.is_closed());
+        assert!(server.is_closed());
+    }
+
+    #[crate::rt_test]
+    async fn test_expired_h2_lifetime() {
+        let (_, pool) = h2_pool(ClientConfig::new().set_h2_lifetime(Seconds(1)));
+        let (h2, server) = h2_conn(&pool);
+        h2.set_times(secs_ago(2), now());
+
+        assert!(acquire_h2(&pool).is_none());
+        wait_closed(&h2).await;
+        assert!(server.is_closed());
+    }
+
+    #[crate::rt_test]
+    async fn test_expired_h2_lifetime_waits_for_reserved() {
+        let (_, pool) = h2_pool(ClientConfig::new().set_h2_lifetime(Seconds(1)));
+        let (h2, server) = h2_conn(&pool);
+        let req = acquire_h2(&pool).unwrap();
+        h2.set_times(secs_ago(2), now());
+
+        // request is acquired but not sent yet
+        assert!(acquire_h2(&pool).is_none());
+        assert!(pool.0.inner.borrow().h2.is_empty());
+        assert!(h2.is_disconnecting());
+        wait_closed(&h2).await;
+        assert!(!h2.is_closed());
+        assert!(!server.is_closed());
+
+        drop(req);
+        wait_closed(&h2).await;
+        assert!(server.is_closed());
+    }
+
+    #[crate::rt_test]
+    async fn test_h2_lifecycle_settings() {
+        // http/1 settings do not apply to http/2 connections
+        let (_, pool) = h2_pool(
+            ClientConfig::new()
+                .set_h1_keepalive(Seconds(1))
+                .set_h1_lifetime(Seconds(1))
+                .set_h2_keepalive(Seconds(5)),
+        );
+        let (h2, _server) = h2_conn(&pool);
+        h2.set_times(secs_ago(3), secs_ago(3));
+        let req = acquire_h2(&pool).unwrap();
+        assert_eq!(h2.streams(), 1);
+
+        // idle period is measured from completion of the last request
+        h2.set_times(secs_ago(10), secs_ago(10));
+        assert!(acquire_h2(&pool).is_some());
+        assert_eq!(h2.streams(), 1);
+        drop(req);
+        assert_eq!(h2.streams(), 0);
+        assert!(acquire_h2(&pool).is_some());
+        assert!(!h2.is_disconnecting());
+
+        // idle connection is expired
+        h2.set_times(secs_ago(10), secs_ago(10));
+        assert!(acquire_h2(&pool).is_none());
+        assert!(pool.0.inner.borrow().h2.is_empty());
+    }
+
+    #[crate::rt_test]
+    async fn test_h2_streams_limit() {
+        let (pipe, pool) = h2_pool(
+            ClientConfig::new()
+                .set_h1_connection_limit(1)
+                .set_h2_connection_limit(1)
+                .set_h2_max_streams(2),
+        );
+        let (h2, _server) = h2_conn(&pool);
+
+        let req = Connect {
+            uri: Uri::try_from("http://localhost/test").unwrap(),
+            addr: None,
+        };
+
+        // http/2 requests do not count against the connection limit
+        let req1 = pipe.call(req.clone()).await.unwrap();
+        let req2 = acquire_h2(&pool).unwrap();
+        assert_eq!(h2.streams(), 2);
+        assert_eq!(pool.0.inner.borrow().acquired, 0);
+
+        // connection is saturated, h2 connection limit is reached
+        assert!(matches!(
+            pool.0.inner.borrow_mut().acquire(&h2_key()),
+            Acquire::NotAvailable
+        ));
+
+        // waiter is woken up when a request completes,
+        // even if the connection limit is reached by http/1 connections
+        pool.0.inner.borrow_mut().acquired = 1;
+        let mut fut = std::pin::pin!(pipe.call(req));
+        assert!(lazy(|cx| fut.as_mut().poll(cx)).await.is_pending());
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| fut.as_mut().poll(cx)).await.is_pending());
+        drop(req1);
+        let conn = crate::time::timeout(Millis(1000), fut)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(conn.protocol(), HttpProtocol::Http2);
+        assert_eq!(h2.streams(), 2);
+        assert_eq!(pool.0.inner.borrow().acquired, 1);
+        pool.0.inner.borrow_mut().acquired = 0;
+        drop(conn);
+        drop(req2);
+        assert_eq!(h2.streams(), 0);
+    }
+
+    #[crate::rt_test]
+    async fn test_h2_waiter_woken_by_connection_capacity() {
+        fn settings(max_streams: u8) -> [u8; 15] {
+            // SETTINGS frame with SETTINGS_MAX_CONCURRENT_STREAMS
+            [0, 0, 6, 4, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, max_streams]
+        }
+
+        let (pipe, pool) = h2_pool(ClientConfig::new().set_h2_connection_limit(1));
+        let (h2, server) = h2_conn(&pool);
+        server.write(settings(0));
+        for _ in 0..20 {
+            if !h2.has_capacity(0) {
+                break;
+            }
+            sleep(Millis(25)).await;
+        }
+        assert!(!h2.has_capacity(0));
+
+        let req = Connect {
+            uri: Uri::try_from("http://localhost/test").unwrap(),
+            addr: None,
+        };
+        let mut fut = std::pin::pin!(pipe.call(req));
+        assert!(lazy(|cx| fut.as_mut().poll(cx)).await.is_pending());
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| fut.as_mut().poll(cx)).await.is_pending());
+
+        // peer raises its limit, no request completes
+        server.write(settings(1));
+        let conn = crate::time::timeout(Millis(1000), fut)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(conn.protocol(), HttpProtocol::Http2);
+    }
+
+    #[crate::rt_test]
+    async fn test_h2_new_connection_when_saturated() {
+        let (_, pool) = h2_pool(
+            ClientConfig::new()
+                .set_h2_connection_limit(2)
+                .set_h2_max_streams(2),
+        );
+        let (h1, _s1) = h2_conn(&pool);
+        let _req1 = acquire_h2(&pool).unwrap();
+        let req2 = acquire_h2(&pool).unwrap();
+        assert!(matches!(
+            pool.0.inner.borrow_mut().acquire(&h2_key()),
+            Acquire::Available
+        ));
+
+        // least loaded connection is used
+        let (h2, _s2) = h2_conn(&pool);
+        drop(req2);
+        let _req3 = acquire_h2(&pool).unwrap();
+        assert_eq!(h1.streams(), 1);
+        assert_eq!(h2.streams(), 1);
+        let _req4 = acquire_h2(&pool).unwrap();
+        let _req5 = acquire_h2(&pool).unwrap();
+        assert_eq!(h1.streams(), 2);
+        assert_eq!(h2.streams(), 2);
+        assert!(matches!(
+            pool.0.inner.borrow_mut().acquire(&h2_key()),
+            Acquire::NotAvailable
+        ));
+    }
+
+    #[crate::rt_test]
+    async fn test_shutdown_closes_pool() {
+        let store = Rc::new(RefCell::new(Vec::new()));
+        let store2 = store.clone();
+
+        let cfg = SharedCfg::new("C")
+            .add(ClientConfig::new().set_h1_connection_limit(2))
+            .build();
+        let pool = ConnectionPool::new(
+            ConnectorPipeline::new(boxed::service(fn_service(move |_| {
+                let (client, server) = IoTest::create();
+                store2.borrow_mut().push(server);
+                Box::pin(
+                    async move { Ok(IoBoxed::from(nio::Io::new(client, SharedCfg::default()))) },
+                )
+            }))),
+            cfg.get(),
+        );
+        let pipe = Pipeline::new(cfg, pool.clone());
+        let req = |host: &str| Connect {
+            uri: Uri::try_from(format!("http://{host}/test")).unwrap(),
+            addr: None,
+        };
+
+        // idle http/1 and http/2 connections
+        pipe.call(req("host1")).await.unwrap().release(false);
+        let (h2, h2srv) = h2_conn(&pool);
+        drop(h2);
+
+        // pool is full, waiter
+        let _c2 = pipe.call(req("host2")).await.unwrap();
+        let _c3 = pipe.call(req("host3")).await.unwrap();
+        let mut fut = std::pin::pin!(pipe.call(req("host4")));
+        assert!(lazy(|cx| fut.as_mut().poll(cx)).await.is_pending());
+
+        pipe.shutdown().await;
+
+        // waiter is failed
+        let res = crate::time::timeout(Millis(500), fut).await.unwrap();
+        assert!(res.is_err());
+
+        // pooled connections are closed
+        assert!(pool.0.inner.borrow().available.is_empty());
+        assert!(pool.0.inner.borrow().h2.is_empty());
+        let h1srv = store.borrow()[0].clone();
+        for _ in 0..60 {
+            if h1srv.is_closed() && h2srv.is_closed() {
+                break;
+            }
+            sleep(Millis(50)).await;
+        }
+        assert!(h1srv.is_closed());
+        assert!(h2srv.is_closed());
+
+        // new requests are rejected
+        let res = crate::time::timeout(Millis(500), pipe.call(req("host1"))).await;
+        assert!(res.unwrap().is_err());
+        assert_eq!(store.borrow().len(), 3);
+    }
+
+    #[crate::rt_test]
+    async fn test_h1_zero_keepalive_lifetime() {
+        async fn reused(cfg: ClientConfig) -> bool {
+            let cfg = SharedCfg::new("C").add(cfg).build();
+            let store = Rc::new(RefCell::new(Vec::new()));
+            let store2 = store.clone();
+            let pool = ConnectionPool::new(
+                ConnectorPipeline::new(boxed::service(fn_service(move |_| {
+                    let (client, server) = IoTest::create();
+                    store2.borrow_mut().push(server);
+                    Box::pin(async move {
+                        Ok(IoBoxed::from(nio::Io::new(client, SharedCfg::default())))
+                    })
+                }))),
+                cfg.get(),
+            );
+            let pipe = Pipeline::new(cfg, pool.clone());
+            let req = Connect {
+                uri: Uri::try_from("http://localhost/test").unwrap(),
+                addr: None,
+            };
+            pipe.call(req).await.unwrap().release(false);
+
+            let mut inner = pool.0.inner.borrow_mut();
+            for conn in inner.available.values_mut().flatten() {
+                conn.used = secs_ago(3600);
+                conn.created = secs_ago(3600);
+            }
+            matches!(inner.acquire(&h2_key()), Acquire::Acquired(..))
+        }
+
+        // zero disables idle and lifetime checks
+        assert!(
+            reused(
+                ClientConfig::new()
+                    .set_h1_keepalive(Seconds::ZERO)
+                    .set_h1_lifetime(Seconds::ZERO)
+            )
+            .await
+        );
+        assert!(!reused(ClientConfig::new().set_h1_lifetime(Seconds::ZERO)).await);
+        assert!(!reused(ClientConfig::new().set_h1_keepalive(Seconds::ZERO)).await);
+    }
+
+    #[crate::rt_test]
+    async fn test_release_after_stop() {
+        let store = Rc::new(RefCell::new(Vec::new()));
+        let store2 = store.clone();
+
+        let cfg = SharedCfg::new("C").add(ClientConfig::new()).build();
+        let pool = ConnectionPool::new(
+            ConnectorPipeline::new(boxed::service(fn_service(move |_| {
+                let (client, server) = IoTest::create();
+                store2.borrow_mut().push(server);
+                Box::pin(
+                    async move { Ok(IoBoxed::from(nio::Io::new(client, SharedCfg::default()))) },
+                )
+            }))),
+            cfg.get(),
+        );
+        let pipe = Pipeline::new(cfg, pool.clone());
+        let req = Connect {
+            uri: Uri::try_from("http://localhost/test").unwrap(),
+            addr: None,
+        };
+
+        let conn = pipe.call(req).await.unwrap();
+        pipe.shutdown().await;
+        assert!(pool.0.inner.borrow().stopped);
+
+        conn.release(false);
+        assert_eq!(pool.0.inner.borrow().acquired, 0);
+        assert!(pool.0.inner.borrow().available.is_empty());
+    }
+
+    #[crate::rt_test]
     async fn test_basics() {
         let store = Rc::new(RefCell::new(Vec::new()));
         let store2 = store.clone();
@@ -625,9 +1112,9 @@ mod tests {
         let cfg = SharedCfg::new("C")
             .add(
                 ClientConfig::new()
-                    .set_keepalive(Seconds(10))
-                    .set_lifetime(Seconds(10))
-                    .set_connection_limit(1),
+                    .set_h1_keepalive(Seconds(10))
+                    .set_h1_lifetime(Seconds(10))
+                    .set_h1_connection_limit(1),
             )
             .build();
 
@@ -737,9 +1224,9 @@ mod tests {
         let cfg = SharedCfg::new("C")
             .add(
                 ClientConfig::new()
-                    .set_keepalive(Seconds(10))
-                    .set_lifetime(Seconds(10))
-                    .set_connection_limit(1),
+                    .set_h1_keepalive(Seconds(10))
+                    .set_h1_lifetime(Seconds(10))
+                    .set_h1_connection_limit(1),
             )
             .build();
 

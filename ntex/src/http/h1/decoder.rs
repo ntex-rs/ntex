@@ -24,6 +24,8 @@ struct Inner<T> {
     hdr_st: httparse::State,
     cfg: Cfg<HttpServiceConfig>,
     consumed: usize,
+    /// number of parsed header lines of the current message
+    headers: u16,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -60,6 +62,7 @@ impl<T: MessageType> MessageDecoder<T> {
                 hdr: httparse::Header::default(),
                 hdr_st: httparse::State::default(),
                 consumed: 0,
+                headers: 0,
             }))),
         }
     }
@@ -78,6 +81,7 @@ impl<T: MessageType> Clone for MessageDecoder<T> {
                 st: State::default(),
                 val: None,
                 consumed: 0,
+                headers: 0,
                 hdr: httparse::Header::default(),
                 hdr_st: httparse::State::default(),
                 cfg: inner.cfg.clone(),
@@ -99,9 +103,11 @@ impl<T: MessageType> MessageDecoder<T> {
                 HeaderParsed::Header(len) => {
                     let buf = src.split_to(len);
 
-                    if inner.val.as_mut().unwrap().headers_mut().len() >= inner.cfg.max_headers {
+                    // repeated header names count separately
+                    if inner.headers >= inner.cfg.max_headers {
                         return Poll::Ready(Err(DecodeError::MaxHeaders));
                     }
+                    inner.headers += 1;
                     // the parser validates name characters, but not its length
                     let Ok(name) =
                         HeaderName::from_bytes(&buf[inner.hdr.name.start..inner.hdr.name.end])
@@ -153,8 +159,29 @@ impl<T: MessageType> Decoder for MessageDecoder<T> {
     type Error = DecodeError;
 
     fn decode(&self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        let len = src.len();
         let mut inner = self.inner.take().unwrap();
+        let result = self.decode_message(src, &mut inner);
+        if result.is_err() {
+            // start the next message from a clean state
+            inner.val = None;
+            inner.st = State::default();
+            inner.hdr_st = httparse::State::default();
+            inner.consumed = 0;
+            inner.headers = 0;
+            self.hdrs.set(false);
+        }
+        self.inner.set(Some(inner));
+        result
+    }
+}
+
+impl<T: MessageType> MessageDecoder<T> {
+    fn decode_message(
+        &self,
+        src: &mut BytesMut,
+        inner: &mut Inner<T>,
+    ) -> Result<Option<(T, PayloadType)>, DecodeError> {
+        let len = src.len();
 
         if len > 0 {
             self.hdrs.set(true);
@@ -175,7 +202,7 @@ impl<T: MessageType> Decoder for MessageDecoder<T> {
         }
 
         let (result, buf_size) = if inner.val.is_some() {
-            match MessageDecoder::<T>::decode_headers(src, &mut inner) {
+            match MessageDecoder::<T>::decode_headers(src, inner) {
                 Poll::Ready(Ok(())) => {
                     let mut val = inner.val.take().unwrap();
                     let pl_len = inner.st.payload_length();
@@ -183,6 +210,7 @@ impl<T: MessageType> Decoder for MessageDecoder<T> {
                     let consumed = inner.consumed + len - src.len();
                     inner.st = State::default();
                     inner.consumed = 0;
+                    inner.headers = 0;
                     self.hdrs.set(false);
                     (Ok(Some((val, pl))), consumed)
                 }
@@ -201,7 +229,6 @@ impl<T: MessageType> Decoder for MessageDecoder<T> {
             log::trace!("MAX_BUFFER_SIZE of data reached, closing");
             return Err(DecodeError::TooLarge(buf_size));
         }
-        self.inner.set(Some(inner));
         result
     }
 }
@@ -1993,6 +2020,68 @@ mod tests {
         let mut buf = BytesMut::from(TEXT);
         let err = reader.decode(&mut buf).err().unwrap();
         assert_eq!(err, DecodeError::MaxHeaders);
+    }
+
+    #[test]
+    fn test_max_headers_repeated_names() {
+        let cfg: SharedCfg = SharedCfg::new("test")
+            .add(HttpServiceConfig::new().set_max_headers(2))
+            .into();
+
+        // repeated names count separately
+        let reader = MessageDecoder::<Request>::new(cfg.get());
+        let mut buf = BytesMut::from("GET / HTTP/1.1\r\nX: 1\r\nX: 2\r\nX: 3\r\n\r\n");
+        assert_eq!(reader.decode(&mut buf).err(), Some(DecodeError::MaxHeaders));
+
+        // count is kept across partial reads
+        let reader = MessageDecoder::<Request>::new(cfg.get());
+        let mut buf = BytesMut::from("GET / HTTP/1.1\r\nX: 1\r\nX: 2\r\n");
+        assert!(reader.decode(&mut buf).unwrap().is_none());
+        buf.extend_from_slice(b"X: 3\r\n\r\n");
+        assert_eq!(reader.decode(&mut buf).err(), Some(DecodeError::MaxHeaders));
+
+        // count is reset for the next message
+        let reader = MessageDecoder::<Request>::new(cfg.get());
+        let mut buf = BytesMut::from(
+            "GET / HTTP/1.1\r\nX: 1\r\nX: 2\r\n\r\nGET / HTTP/1.1\r\nX: 1\r\nX: 2\r\n\r\n",
+        );
+        let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(req.headers().get_all("x").count(), 2);
+        assert!(reader.decode(&mut buf).unwrap().is_some());
+    }
+
+    #[test]
+    fn test_decoder_reusable_after_error() {
+        const VALID: &str = "GET /ok HTTP/1.1\r\nHost: example.com\r\n\r\n";
+
+        let cfg: SharedCfg = SharedCfg::new("test")
+            .add(
+                HttpServiceConfig::new()
+                    .set_max_headers(2)
+                    .set_max_buf_size(128),
+            )
+            .into();
+        let reader = MessageDecoder::<Request>::new(cfg.get());
+
+        let invalid = [
+            // request line
+            "G\x00T / HTTP/1.1\r\n\r\n".to_string(),
+            // header
+            "GET / HTTP/1.1\r\nContent-Length: x\r\n\r\n".to_string(),
+            // partial head followed by too many headers
+            "GET / HTTP/1.1\r\nA: 1\r\nB: 2\r\nC: 3\r\n".to_string(),
+            // message head is too large
+            format!("GET / HTTP/1.1\r\nA: {}\r\n", "a".repeat(200)),
+        ];
+        for text in invalid {
+            let mut buf = BytesMut::from(text.as_str());
+            assert!(reader.decode(&mut buf).is_err(), "{text:?}");
+
+            let mut buf = BytesMut::from(VALID);
+            let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
+            assert_eq!(req.path(), "/ok");
+            assert_eq!(req.headers().len(), 1);
+        }
     }
 
     #[test]
