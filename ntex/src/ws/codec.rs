@@ -124,10 +124,14 @@ impl Codec {
     /// # Errors
     ///
     /// Returns [`ProtocolError::Closed`] if a close message has already been
-    /// encoded.
+    /// encoded, or [`ProtocolError::ContinuationStarted`] if a fragmented
+    /// message is in progress.
     pub fn encode_page(&self, page: BytePage, dst: &mut BytePages) -> Result<(), ProtocolError> {
         if self.is_closed() {
             return Err(ProtocolError::Closed);
+        }
+        if self.flags.get().contains(Flags::W_CONTINUATION) {
+            return Err(ProtocolError::ContinuationStarted);
         }
         Parser::write_message(
             dst,
@@ -396,6 +400,17 @@ mod tests {
             codec.encode(Message::Text("text".into()), &mut dst),
             Err(ProtocolError::ContinuationStarted)
         ));
+        assert!(matches!(
+            codec.encode_page(BytePage::from(Bytes::new()), &mut dst),
+            Err(ProtocolError::ContinuationStarted)
+        ));
+
+        codec
+            .encodev(Message::Continuation(Item::Last(Bytes::new())), &mut dst)
+            .unwrap();
+        codec
+            .encode_page(BytePage::from(Bytes::new()), &mut dst)
+            .unwrap();
     }
 
     #[test]

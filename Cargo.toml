@@ -131,7 +131,8 @@ nohash-hasher = "0.2.0"
 nanorand = { version = "0.8", default-features = false, features = [
     "std",
     "wyrand",
-    "entropy"
+    "entropy",
+    "tls"
 ] }
 scoped-tls = "1.0.1"
 serde = { version = "1", features = ["derive"] }

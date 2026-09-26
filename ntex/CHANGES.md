@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+* Fix `ws::Codec::encode_page()` writing a final binary frame in the middle of a fragmented
+  message, it now returns `ProtocolError::ContinuationStarted`
+
+* WebSocket client frame masks and handshake keys use nanorand's thread-local generator instead
+  of seeding a new one from system entropy every time
+
 * Fix HTTP/1 `max_headers` limit counting distinct header names, repeated header names
   are counted separately
 

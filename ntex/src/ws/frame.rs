@@ -1,4 +1,4 @@
-use nanorand::{Rng, WyRand};
+use nanorand::Rng;
 
 use super::proto::{CloseCode, CloseReason, OpCode};
 use super::{error::ProtocolError, mask::apply_mask};
@@ -226,7 +226,7 @@ impl Parser {
         }
 
         if mask {
-            let mask: u32 = WyRand::new().generate();
+            let mask: u32 = nanorand::tls_rng().generate();
             let mut buf = BytesMut::from(payload);
             apply_mask(&mut buf, mask);
             dst.put_u32_le(mask);
@@ -433,6 +433,25 @@ mod tests {
         } else {
             unreachable!("error");
         }
+    }
+
+    #[test]
+    fn test_masked_frames_roundtrip_with_distinct_masks() {
+        let mut masks = Vec::new();
+        for _ in 0..4 {
+            let mut pages = BytePages::default();
+            Parser::write_message(&mut pages, Bytes::from("data"), OpCode::Binary, true, true)
+                .unwrap();
+            let mut buf = BytesMut::from(&Bytes::from(pages)[..]);
+            masks.push(buf[2..6].to_vec());
+
+            let frame = extract(Parser::parse(&mut buf, true, 1024));
+            assert!(frame.finished);
+            assert_eq!(frame.opcode, OpCode::Binary);
+            assert_eq!(frame.payload, Bytes::from("data"));
+        }
+        masks.dedup();
+        assert!(masks.len() > 1);
     }
 
     #[test]
