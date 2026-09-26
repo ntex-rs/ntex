@@ -2,6 +2,56 @@
 
 ## [Unreleased]
 
+* HTTP client cookies are appended to a `Cookie` header set on the request or client, instead of
+  replacing it
+
+* `web::ws::start()` sends a protocol error close frame (1002) on invalid input
+
+* `ws::WsSink` implements `Encoder` and `Decoder`, WebSocket dispatchers use the sink as codec, so
+  sinks cannot send messages after the service returned a close message. `web::ws::start_with()`
+  service handles `DispatchItem<WsSink>` instead of `DispatchItem<ws::Codec>`
+
+* `ws::WsConnection::start()` sends a protocol error close frame (1002) on invalid input. The
+  dispatcher and the connection's sinks share codec state
+
+* `ws::Codec` discards input received after the peer's close frame
+
+* WebSocket client and `web::ws::start()` treat a clean disconnect as the end of the connection,
+  instead of `WsError::Disconnected(None)`
+
+* WebSocket client cookies are appended to a `Cookie` header set in `ws::WsClientConfig`, instead
+  of replacing it
+
+* WebSocket client `Host` header no longer includes the URI's userinfo, and omits the scheme's
+  default port, like the HTTP client
+
+* `ws::WsConnection::receiver()` answers the peer's close frame, echoing its close code, unless
+  a close frame was already sent; sinks returned by `ws::WsConnection::sink()` share state
+
+* `ws::WsTransport` echoes the peer's close code when it answers a close frame, and rejects text
+  frames with close code 1003 (`Unsupported`) instead of 1002
+
+* Dropping the receiver returned by `ws::WsConnection::receiver()` sends a close frame and
+  closes the connection, instead of keeping it open until the peer sends another frame
+
+* `ws::WsTransport` sends a protocol error close frame (1002) before closing the connection on
+  invalid input, output written after the close frame is discarded
+
+* `ws::WsTransport` shutdown waits for the peer's close frame, until read EOF or the shutdown
+  timeout, instead of closing the connection right after sending its own
+
+* WebSocket client codec accepts a received close code 1010 (`Extension`), servers still cannot
+  send it
+
+* Fix HTTP client pool keeping an HTTP/2 connection that cannot open new streams, for example
+  after the peer sends GOAWAY; requests waited or failed until the peer closed the connection
+
+* Fix `ws::Codec::encode_page()` writing a final binary frame in the middle of a fragmented
+  message, it now returns `ProtocolError::ContinuationStarted`
+
+* WebSocket client frame masks and handshake keys use nanorand's thread-local generator instead
+  of seeding a new one from system entropy every time
+
 * Fix HTTP/1 `max_headers` limit counting distinct header names, repeated header names
   are counted separately
 

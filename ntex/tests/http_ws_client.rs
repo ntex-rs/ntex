@@ -213,3 +213,252 @@ async fn test_upgrade_handler_with_await() {
     .await
     .unwrap();
 }
+
+#[ntex::test]
+async fn test_receiver_drop_closes_connection() {
+    let (closed_tx, closed_rx) = std::sync::mpsc::channel();
+    let srv = test_server(async move |_| {
+        let closed_tx = closed_tx.clone();
+        HttpService::new(async |_| Ok::<_, io::Error>(Response::NotFound())).h1_control(
+            async move |req: h1::Control<_, _>| {
+                let ack = if let h1::Control::Upgrade(upg) = req {
+                    let (ack, io, req, codec) = upg.handle();
+                    let res = handshake_response(req.head()).build();
+                    io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
+                        .unwrap();
+
+                    let closed_tx = closed_tx.clone();
+                    let _ = Dispatcher::new(
+                        io.seal(),
+                        ws::Codec::default(),
+                        Pipeline::new((), async move |msg: DispatchItem<ws::Codec>| {
+                            if let DispatchItem::Item(ws::Frame::Close(reason)) = &msg {
+                                let _ = closed_tx.send(reason.clone());
+                            }
+                            ws_service(msg).await
+                        }),
+                    )
+                    .await;
+                    ack
+                } else {
+                    req.ack()
+                };
+                Ok::<_, io::Error>(ack)
+            },
+        )
+    });
+
+    let con = ws::WsClient::new(
+        srv.url("/"),
+        ws::WsClientConfig::new()
+            .set_address(srv.addr())
+            .set_handshake_timeout(Seconds(30)),
+    )
+    .connect()
+    .await
+    .unwrap()
+    .seal();
+    let sink = con.sink();
+    let rx = con.receiver();
+    ntex::time::sleep(ntex::time::Millis(50)).await;
+    assert!(sink.io().is_active());
+
+    // the peer is idle, dropping the receiver still closes the connection
+    drop(rx);
+    ntex::time::timeout(Seconds(3), sink.on_disconnect())
+        .await
+        .expect("connection is not closed");
+    assert_eq!(
+        closed_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap(),
+        Some(ws::CloseCode::Normal.into())
+    );
+}
+
+/// Starts a server that runs the peer side of the closing handshake and reports
+/// the frames it receives until the client closes the connection.
+fn close_handshake_server(
+    server_first: bool,
+) -> (
+    ntex::http::test::TestServer,
+    std::sync::mpsc::Receiver<Vec<ws::Frame>>,
+) {
+    let (frames_tx, frames_rx) = std::sync::mpsc::channel();
+    let srv = test_server(async move |_| {
+        let frames_tx = frames_tx.clone();
+        HttpService::new(async |_| Ok::<_, io::Error>(Response::NotFound())).h1_control(
+            async move |req: h1::Control<_, _>| {
+                let ack = if let h1::Control::Upgrade(upg) = req {
+                    let (ack, io, req, codec) = upg.handle();
+                    let res = handshake_response(req.head()).build();
+                    io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
+                        .unwrap();
+
+                    let codec = ws::Codec::default();
+                    if server_first {
+                        io.send(ws::Message::Close(Some(ws::CloseCode::Away.into())), &codec)
+                            .await
+                            .unwrap();
+                    }
+                    let mut frames = Vec::new();
+                    while let Ok(Some(frame)) = io.recv(&codec).await {
+                        if !server_first && matches!(frame, ws::Frame::Close(_)) {
+                            let _ = io.send(ws::Message::Close(None), &codec).await;
+                        }
+                        frames.push(frame);
+                    }
+                    let _ = frames_tx.send(frames);
+                    ack
+                } else {
+                    req.ack()
+                };
+                Ok::<_, io::Error>(ack)
+            },
+        )
+    });
+    (srv, frames_rx)
+}
+
+async fn close_handshake_client(
+    srv: &ntex::http::test::TestServer,
+) -> ws::WsConnection<ntex::io::Sealed> {
+    ws::WsClient::new(
+        srv.url("/"),
+        ws::WsClientConfig::new()
+            .set_address(srv.addr())
+            .set_handshake_timeout(Seconds(30)),
+    )
+    .connect()
+    .await
+    .unwrap()
+    .seal()
+}
+
+#[ntex::test]
+async fn test_receiver_answers_peer_close() {
+    let (srv, frames) = close_handshake_server(true);
+    let rx = close_handshake_client(&srv).await.receiver();
+
+    let item = rx.recv().await.unwrap().unwrap();
+    assert_eq!(item, ws::Frame::Close(Some(ws::CloseCode::Away.into())));
+    assert!(rx.recv().await.is_none());
+
+    // the client echoed the close code
+    assert_eq!(
+        frames
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .unwrap(),
+        vec![ws::Frame::Close(Some(ws::CloseCode::Away.into()))]
+    );
+}
+
+#[ntex::test]
+async fn test_receiver_does_not_answer_close_reply() {
+    let (srv, frames) = close_handshake_server(false);
+    let con = close_handshake_client(&srv).await;
+    let sink = con.sink();
+    let rx = con.receiver();
+
+    sink.send(ws::Message::Close(Some(ws::CloseCode::Normal.into())))
+        .await
+        .unwrap();
+    let item = rx.recv().await.unwrap().unwrap();
+    assert_eq!(item, ws::Frame::Close(None));
+    assert!(rx.recv().await.is_none());
+
+    // the peer's close frame is a reply, it is not answered again
+    assert_eq!(
+        frames
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .unwrap(),
+        vec![ws::Frame::Close(Some(ws::CloseCode::Normal.into()))]
+    );
+}
+
+#[ntex::test]
+async fn test_host_header_excludes_userinfo() {
+    let (host_tx, host_rx) = std::sync::mpsc::channel();
+    let srv = test_server(async move |_| {
+        let host_tx = host_tx.clone();
+        HttpService::new(async |_| Ok::<_, io::Error>(Response::NotFound())).h1_control(
+            async move |req: h1::Control<_, _>| {
+                let ack = if let h1::Control::Upgrade(upg) = req {
+                    let (ack, io, req, codec) = upg.handle();
+                    let _ = host_tx.send(req.head().headers.get(ntex::http::header::HOST).cloned());
+                    let res = handshake_response(req.head()).build();
+                    io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
+                        .unwrap();
+                    let _ = io.recv(&ws::Codec::default()).await;
+                    ack
+                } else {
+                    req.ack()
+                };
+                Ok::<_, io::Error>(ack)
+            },
+        )
+    });
+
+    let addr = srv.addr();
+    let _con = ws::WsClient::new(
+        format!("ws://user:secret@{addr}/"),
+        ws::WsClientConfig::new().set_address(addr),
+    )
+    .connect()
+    .await
+    .unwrap();
+
+    let host = host_rx
+        .recv_timeout(std::time::Duration::from_secs(3))
+        .unwrap()
+        .unwrap();
+    assert_eq!(host, addr.to_string().as_str());
+}
+
+#[ntex::test]
+async fn test_protocol_error_sends_close() {
+    let (frames_tx, frames_rx) = std::sync::mpsc::channel();
+    let srv = test_server(async move |_| {
+        let frames_tx = frames_tx.clone();
+        HttpService::new(async |_| Ok::<_, io::Error>(Response::NotFound())).h1_control(
+            async move |req: h1::Control<_, _>| {
+                let ack = if let h1::Control::Upgrade(upg) = req {
+                    let (ack, io, req, codec) = upg.handle();
+                    let res = handshake_response(req.head()).build();
+                    io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
+                        .unwrap();
+
+                    // frame with a reserved opcode
+                    io.send(Bytes::from_static(&[0x83, 0x00]), &BytesCodec)
+                        .await
+                        .unwrap();
+                    let codec = ws::Codec::default();
+                    let mut frames = Vec::new();
+                    while let Ok(Some(frame)) = io.recv(&codec).await {
+                        frames.push(frame);
+                    }
+                    let _ = frames_tx.send(frames);
+                    ack
+                } else {
+                    req.ack()
+                };
+                Ok::<_, io::Error>(ack)
+            },
+        )
+    });
+
+    let rx = close_handshake_client(&srv).await.receiver();
+    let item = rx.recv().await;
+    assert!(
+        matches!(item, Some(Err(ws::error::WsError::Protocol(_)))),
+        "{item:?}"
+    );
+    assert!(rx.recv().await.is_none());
+
+    assert_eq!(
+        frames_rx
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .unwrap(),
+        vec![ws::Frame::Close(Some(ws::CloseCode::Protocol.into()))]
+    );
+}

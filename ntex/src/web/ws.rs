@@ -107,11 +107,10 @@ where
 pub async fn start_with<S, Err>(
     req: &HttpRequest,
     subprotocol: Option<&str>,
-    f: impl IntoService<S, WsSink, DispatchItem<ws::Codec>>,
+    f: impl IntoService<S, WsSink, DispatchItem<WsSink>>,
 ) -> Result<(), WsError<Err>>
 where
-    S: Service<WsSink, DispatchItem<ws::Codec>, Res = Option<Message>, Error = WsError<Err>>
-        + 'static,
+    S: Service<WsSink, DispatchItem<WsSink>, Res = Option<Message>, Error = WsError<Err>> + 'static,
     S::Error: fmt::Debug,
     Err: 'static,
 {
@@ -139,9 +138,8 @@ where
         .map_err(|_| HandshakeError::NoWebsocketUpgrade)?;
     log::trace!("Ws handshake verification completed for {:?}", req.path());
 
-    // create sink
-    let codec = ws::Codec::new();
-    let sink = WsSink::new(io.get_ref(), codec.clone(), io.shared().get());
+    // create sink, it is also the dispatcher's codec
+    let sink = WsSink::new(io.get_ref(), ws::Codec::new(), io.shared().get());
 
     // create ws service
     // SAFETY: the HTTP dispatcher has transferred ownership of `io` to this
@@ -163,7 +161,7 @@ where
         }
         result
     });
-    let result = crate::io::Dispatcher::new(io, codec, Pipeline::new(sink, service)).await;
+    let result = crate::io::Dispatcher::new(io, sink.clone(), Pipeline::new(sink, service)).await;
     log::trace!("Ws handler is terminated: {result:?}");
 
     result
@@ -174,7 +172,7 @@ struct DispatchService<S> {
     svc: S,
 }
 
-impl<S, E> Service<WsSink, DispatchItem<ws::Codec>> for DispatchService<S>
+impl<S, E> Service<WsSink, DispatchItem<WsSink>> for DispatchService<S>
 where
     S: Service<WsSink, Frame, Res = Option<Message>, Error = E>,
     E: fmt::Debug,
@@ -187,7 +185,7 @@ where
 
     async fn call(
         &self,
-        req: DispatchItem<ws::Codec>,
+        req: DispatchItem<WsSink>,
         ctx: Ctx<'_, Self, WsSink>,
     ) -> Result<Self::Res, Self::Error> {
         match req {
@@ -203,7 +201,8 @@ where
                 }
                 result
             }
-            DispatchItem::Control(_) => Ok(None),
+            // a clean disconnect is not an error
+            DispatchItem::Control(_) | DispatchItem::Stop(Reason::Io(None)) => Ok(None),
             DispatchItem::Stop(Reason::Service) => {
                 Ok(Some(Message::Close(Some(ws::CloseReason {
                     code: ws::CloseCode::Away,
@@ -213,9 +212,15 @@ where
             DispatchItem::Stop(Reason::KeepAliveTimeout) => Err(WsError::KeepAlive),
             DispatchItem::Stop(Reason::ReadTimeout) => Err(WsError::ReadTimeout),
             DispatchItem::Stop(Reason::WriteTimeout) => Err(WsError::WriteTimeout),
-            DispatchItem::Stop(Reason::Decoder(e) | Reason::Encoder(e)) => {
+            DispatchItem::Stop(Reason::Decoder(e)) => {
+                let sink = ctx.st();
+                if !sink.is_closed() {
+                    let reason = ws::CloseReason::from(ws::CloseCode::Protocol);
+                    let _ = sink.send(Message::Close(Some(reason))).await;
+                }
                 Err(WsError::Protocol(e))
             }
+            DispatchItem::Stop(Reason::Encoder(e)) => Err(WsError::Protocol(e)),
             DispatchItem::Stop(Reason::Io(e)) => Err(WsError::Disconnected(e)),
         }
     }

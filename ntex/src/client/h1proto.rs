@@ -122,7 +122,7 @@ fn response(
 }
 
 /// Builds the `Host` header value, the port is omitted if it is the scheme's default.
-fn host_header(uri: &Uri) -> Option<HeaderValue> {
+pub(crate) fn host_header(uri: &Uri) -> Option<HeaderValue> {
     let host = uri.host()?;
     let default_port = match uri.scheme_str() {
         Some("https" | "wss") => 443,

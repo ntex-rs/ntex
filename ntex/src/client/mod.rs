@@ -41,6 +41,8 @@ pub use self::service::{ServiceRequest, ServiceResponse};
 pub use self::test::TestResponse;
 
 pub(crate) use self::codec::{ClientCodec, ClientPayloadCodec};
+#[cfg(feature = "ws")]
+pub(crate) use self::h1proto::host_header;
 use crate::client::error::ConnectError;
 use crate::http::{HeaderMap, Method, RequestHead, Uri, body::BodySize, error::HttpError};
 use crate::service::{cfg::SharedCfg, pipeline::PipelineState};
@@ -72,6 +74,24 @@ pub(crate) struct Connect {
 ///     println!("Response: {response:?}");
 /// }
 /// ```
+///
+/// # Shutdown
+///
+/// Clones of a client share its connection pools. A pool is stopped once the
+/// last clone and every request created from it are dropped, and dropping does
+/// not wait for connections to close:
+///
+/// - Requests waiting for a connection fail with
+///   [`ConnectError::Disconnected`].
+/// - Idle HTTP/1 connections are shut down in the background, bounded by the
+///   I/O [shutdown timeout](crate::io::IoConfig::set_shutdown_timeout).
+/// - HTTP/2 connections stop accepting requests and are closed gracefully in
+///   the background once their in-flight requests have completed. Their
+///   closing is not bounded by a timeout.
+/// - Responses that are still being read keep their connections. An HTTP/1
+///   connection is closed instead of being returned to the stopped pool.
+/// - A connection that is still being established is closed once the
+///   connect completes.
 #[derive(Debug, Clone)]
 pub struct Client {
     cfg: Cfg<ClientConfig>,

@@ -1,5 +1,5 @@
 //! WebSocket client.
-use std::{fmt, marker};
+use std::{fmt, marker, pin};
 
 #[cfg(feature = "openssl")]
 use crate::connect::openssl;
@@ -12,9 +12,9 @@ use crate::connect::rustls::{TlsClientFilter, TlsConnector};
 use tls_rustls::ClientConfig as RustlsClientConfig;
 
 use base64::{Engine, engine::general_purpose::STANDARD as base64};
-use nanorand::{Rng, WyRand};
+use nanorand::Rng;
 
-use crate::client::{ClientCodec, ClientConfig, ClientRawRequest, ClientResponse};
+use crate::client::{ClientCodec, ClientConfig, ClientRawRequest, ClientResponse, host_header};
 use crate::connect::{Connect, ConnectError, Connector};
 use crate::error::{Error, ErrorMapping};
 use crate::http::header::{self, HeaderMap, HeaderValue};
@@ -22,6 +22,7 @@ use crate::http::{ConnectionType, Message, Method, RequestHead, StatusCode, Uri}
 use crate::http::{body::BodySize, error::HttpError};
 use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, Layer, Reason, Sealed};
 use crate::service::{IntoService, Pipeline, apply_fn, fn_service};
+use crate::util::{Either, select};
 use crate::{Cfg, Service, SharedCfg, channel::mpsc, rt, time::timeout, ws};
 
 use super::cfg::is_token;
@@ -172,30 +173,37 @@ where
             }
         }
 
-        // host header
-        if !head.headers.contains_key(header::HOST) {
-            let val = HeaderValue::from_str(self.uri.authority().unwrap().as_str()).unwrap();
+        // host header, without userinfo and the scheme's default port
+        if !head.headers.contains_key(header::HOST)
+            && let Some(val) = host_header(&self.uri)
+        {
             head.headers.insert(header::HOST, val);
         }
 
         #[cfg(feature = "cookie")]
         {
             use percent_encoding::percent_encode;
-            use std::fmt::Write as FmtWrite;
+            use std::io::Write;
 
-            // set cookies
+            // set cookies, appended to a configured `Cookie` header
             if let Some(ref jar) = self.cfg.cookies {
-                let mut cookie = String::new();
-                for c in jar.delta() {
+                let mut cookie = head
+                    .headers
+                    .get(header::COOKIE)
+                    .map(|v| v.as_bytes().to_vec())
+                    .unwrap_or_default();
+                for c in jar.iter() {
                     let name = percent_encode(c.name().as_bytes(), crate::http::helpers::USERINFO);
                     let value =
                         percent_encode(c.value().as_bytes(), crate::http::helpers::USERINFO);
-                    let _ = write!(cookie, "; {name}={value}");
+                    if !cookie.is_empty() {
+                        cookie.extend_from_slice(b"; ");
+                    }
+                    let _ = write!(cookie, "{name}={value}");
                 }
-                head.headers.insert(
-                    header::COOKIE,
-                    HeaderValue::from_str(&cookie.as_str()[2..]).unwrap(),
-                );
+                if let Ok(val) = HeaderValue::from_bytes(&cookie) {
+                    head.headers.insert(header::COOKIE, val);
+                }
             }
         }
 
@@ -203,7 +211,7 @@ where
         // a base64-encoded (see Section 4 of [RFC4648]) value that,
         // when decoded, is 16 bytes in length (RFC 6455)
         let mut sec_key: [u8; 16] = [0; 16];
-        WyRand::new().fill(&mut sec_key);
+        nanorand::tls_rng().fill(&mut sec_key);
         let key = base64.encode(sec_key);
 
         head.headers.insert(
@@ -290,7 +298,7 @@ where
             })?;
             if hdr_key.as_bytes() != encoded.as_bytes() {
                 log::trace!(
-                    "{tag}: Invalid challenge response: expected: {encoded} received: {key:?}"
+                    "{tag}: Invalid challenge response: expected: {encoded} received: {hdr_key:?}"
                 );
                 return Err(Error::from(WsClientError::InvalidChallengeResponse(
                     encoded,
@@ -359,18 +367,20 @@ impl<F> fmt::Debug for WsClient<F> {
 /// the underlying I/O stream.
 pub struct WsConnection<F> {
     io: Io<F>,
-    codec: ws::Codec,
+    sink: ws::WsSink,
     res: ClientResponse,
 }
 
 impl<F> WsConnection<F> {
     fn new(io: Io<F>, res: ClientResponse, codec: ws::Codec) -> Self {
-        Self { io, codec, res }
+        // the sink is also the dispatcher's codec, they share the codec state
+        let sink = ws::WsSink::new(io.get_ref(), codec, io.shared().get());
+        Self { io, sink, res }
     }
 
     /// Returns the connection's WebSocket codec.
     pub fn codec(&self) -> &ws::Codec {
-        &self.codec
+        self.sink.codec()
     }
 
     /// Returns the opening-handshake response.
@@ -380,19 +390,18 @@ impl<F> WsConnection<F> {
 }
 
 impl<F> WsConnection<F> {
-    /// Creates a sink for sending messages over this connection.
+    /// Returns a sink for sending messages over this connection.
+    ///
+    /// All sinks of a connection share the same state, so a message cannot be
+    /// sent through any of them once one has sent a close message.
     pub fn sink(&self) -> ws::WsSink {
-        ws::WsSink::new(
-            self.io.get_ref(),
-            self.codec.clone(),
-            self.io.shared().get(),
-        )
+        self.sink.clone()
     }
 
     /// Consumes the connection and returns its I/O stream, codec, and
     /// opening-handshake response.
     pub fn into_inner(self) -> (Io<F>, ws::Codec, ClientResponse) {
-        (self.io, self.codec, self.res)
+        (self.io, self.sink.codec().clone(), self.res)
     }
 }
 
@@ -400,23 +409,49 @@ impl WsConnection<Sealed> {
     /// Starts the WebSocket dispatcher and returns a channel of received frames.
     ///
     /// The dispatcher runs in a spawned task. Protocol and connection errors
-    /// are delivered through the returned channel.
+    /// are delivered through the returned channel. A close frame from the peer
+    /// is answered automatically, unless a close message has already been sent
+    /// through a sink of this connection. Dropping the receiver sends
+    /// a close frame and closes the connection once the peer responds or the
+    /// closing-handshake timeout expires.
     pub fn receiver(self) -> mpsc::Receiver<Result<ws::Frame, WsError<()>>> {
         let (tx, rx): (_, mpsc::Receiver<Result<ws::Frame, WsError<()>>>) = mpsc::channel();
 
         rt::spawn(async move {
             let tx2 = tx.clone();
             let io = self.io.get_ref();
+            let sink = self.sink();
+            let sink2 = sink.clone();
 
-            let result = self
-                .start(fn_service(async move |item: ws::Frame| {
-                    match tx.send(Ok(item)) {
-                        Ok(()) => (),
-                        Err(_) => io.close(),
+            let fut = self.start(fn_service(async move |item: ws::Frame| {
+                if let ws::Frame::Close(reason) = &item
+                    && !sink2.is_closed()
+                {
+                    // answer the peer's close frame, echoing its code
+                    let reply = reason.as_ref().map(|r| CloseReason::from(r.code));
+                    if sink2.send(ws::Message::Close(reply)).await.is_err() {
+                        let reply = CloseReason::from(CloseCode::Normal);
+                        let _ = sink2.send(ws::Message::Close(Some(reply))).await;
                     }
-                    Ok::<Option<ws::Message>, ()>(None)
-                }))
-                .await;
+                }
+                match tx.send(Ok(item)) {
+                    Ok(()) => (),
+                    Err(_) => io.close(),
+                }
+                Ok::<Option<ws::Message>, ()>(None)
+            }));
+            let mut fut = pin::pin!(fut);
+
+            let result = match select(fut.as_mut(), tx2.closed()).await {
+                Either::Left(result) => result,
+                Either::Right(()) => {
+                    // the receiver is dropped, start the closing handshake
+                    let _ = sink
+                        .send(ws::Message::Close(Some(CloseCode::Normal.into())))
+                        .await;
+                    fut.await
+                }
+            };
 
             if let Err(e) = result {
                 let _ = tx2.send(Err(e));
@@ -442,7 +477,7 @@ impl WsConnection<Sealed> {
         let service = apply_fn(
             svc.into_service().map_err(WsError::Service),
             async move |req, svc| match req {
-                DispatchItem::<ws::Codec>::Item(item) => {
+                DispatchItem::<ws::WsSink>::Item(item) => {
                     let close = matches!(item, ws::Frame::Close(_));
                     let result = svc.call(item).await;
                     if matches!(&result, Ok(Some(ws::Message::Close(_)))) {
@@ -454,7 +489,8 @@ impl WsConnection<Sealed> {
                     }
                     result
                 }
-                DispatchItem::Control(_) => Ok(None),
+                // a clean disconnect is not an error
+                DispatchItem::Control(_) | DispatchItem::Stop(Reason::Io(None)) => Ok(None),
                 DispatchItem::Stop(Reason::Service) => {
                     Ok(Some(ws::Message::Close(Some(CloseReason {
                         code: CloseCode::Away,
@@ -464,14 +500,19 @@ impl WsConnection<Sealed> {
                 DispatchItem::Stop(Reason::KeepAliveTimeout) => Err(WsError::KeepAlive),
                 DispatchItem::Stop(Reason::ReadTimeout) => Err(WsError::ReadTimeout),
                 DispatchItem::Stop(Reason::WriteTimeout) => Err(WsError::WriteTimeout),
-                DispatchItem::Stop(Reason::Decoder(e) | Reason::Encoder(e)) => {
+                DispatchItem::Stop(Reason::Decoder(e)) => {
+                    if !sink.is_closed() {
+                        let reason = CloseReason::from(CloseCode::Protocol);
+                        let _ = sink.send(ws::Message::Close(Some(reason))).await;
+                    }
                     Err(WsError::Protocol(e))
                 }
+                DispatchItem::Stop(Reason::Encoder(e)) => Err(WsError::Protocol(e)),
                 DispatchItem::Stop(Reason::Io(e)) => Err(WsError::Disconnected(e)),
             },
         );
 
-        Dispatcher::new(self.io, self.codec, Pipeline::new((), service)).await
+        Dispatcher::new(self.io, self.sink, Pipeline::new((), service)).await
     }
 }
 
@@ -480,14 +521,14 @@ impl<F: Filter> WsConnection<F> {
     pub fn seal(self) -> WsConnection<Sealed> {
         WsConnection {
             io: self.io.seal(),
-            codec: self.codec,
+            sink: self.sink,
             res: self.res,
         }
     }
 
     /// Converts the connection into a binary WebSocket transport.
     pub fn into_transport(self) -> Io<Layer<WsTransport, F>> {
-        WsTransport::create(self.io, self.codec)
+        WsTransport::create(self.io, self.sink.codec().clone())
     }
 }
 
@@ -742,6 +783,29 @@ mod tests {
         );
     }
 
+    /// Runs `connect()` over an in-memory stream, returns the handshake request.
+    async fn handshake_request(uri: &str, cfg: WsClientConfig) -> String {
+        use crate::{testing::IoTest, util::Bytes};
+        use std::cell::RefCell;
+
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+        let io = RefCell::new(Some(Io::new(server, SharedCfg::default())));
+        let ws = WsClient::new(uri, cfg).connector(fn_service(async move |_: Connect<Uri>| {
+            Ok::<_, Error<ConnectError>>(io.borrow_mut().take().unwrap())
+        }));
+        let fut = rt::spawn(async move { ws.connect().await.map(drop) });
+
+        let mut req = Vec::new();
+        while !req.ends_with(b"\r\n\r\n") {
+            let buf: Bytes = client.read().await.unwrap();
+            req.extend_from_slice(&buf);
+        }
+        client.close().await;
+        let _ = fut.await;
+        String::from_utf8(req).unwrap()
+    }
+
     #[crate::rt_test]
     async fn pooled_request_head_method_is_get() {
         // a request head released back to the thread-local message pool keeps its
@@ -750,5 +814,39 @@ mod tests {
         let mut head = Message::<RequestHead>::new();
         head.method = Method::POST;
         drop(head);
+
+        let req = handshake_request("ws://localhost/", WsClientConfig::new()).await;
+        assert!(req.starts_with("GET / HTTP/1.1\r\n"), "{req}");
+    }
+
+    #[cfg(feature = "cookie")]
+    #[crate::rt_test]
+    async fn cookies_extend_configured_header() {
+        use coo_kie::Cookie;
+
+        let cfg = || {
+            WsClientConfig::new()
+                .set_cookie(Cookie::build(("c1", "v1")))
+                .set_cookie(Cookie::build(("c2", "v2")))
+        };
+        let req = handshake_request("ws://localhost/", cfg()).await;
+        let cookie = req
+            .lines()
+            .find_map(|l| l.strip_prefix("cookie: "))
+            .unwrap();
+        let mut cookies: Vec<_> = cookie.split("; ").collect();
+        cookies.sort_unstable();
+        assert_eq!(cookies, ["c1=v1", "c2=v2"]);
+
+        let cfg = cfg().set_header(header::COOKIE, "c0=v0").unwrap();
+        let req = handshake_request("ws://localhost/", cfg).await;
+        let cookie = req
+            .lines()
+            .find_map(|l| l.strip_prefix("cookie: "))
+            .unwrap();
+        assert!(cookie.starts_with("c0=v0; "), "{cookie}");
+        let mut cookies: Vec<_> = cookie.split("; ").collect();
+        cookies.sort_unstable();
+        assert_eq!(cookies, ["c0=v0", "c1=v1", "c2=v2"]);
     }
 }

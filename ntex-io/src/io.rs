@@ -2783,6 +2783,138 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::Other);
     }
 
+    #[derive(Debug)]
+    struct Passthrough;
+
+    impl FilterLayer for Passthrough {
+        fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+            buf.with_read_buffers(|src, dst| {
+                if let Some(src) = src {
+                    dst.extend_from_slice(src);
+                    src.clear();
+                }
+            });
+            Ok(())
+        }
+
+        fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+            buf.with_write_buffers(BytePages::move_to);
+            Ok(())
+        }
+    }
+
+    /// A filter that sends "bye" on shutdown and waits for the peer's "ack".
+    #[derive(Debug, Default)]
+    struct AckShutdown {
+        sent: Cell<bool>,
+        acked: Cell<bool>,
+    }
+
+    impl FilterLayer for AckShutdown {
+        fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+            buf.with_read_buffers(|src, dst| {
+                if let Some(src) = src {
+                    if self.sent.get() && &src[..] == b"ack" {
+                        self.acked.set(true);
+                    } else {
+                        dst.extend_from_slice(src);
+                    }
+                    src.clear();
+                }
+            });
+            Ok(())
+        }
+
+        fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+            buf.with_write_buffers(BytePages::move_to);
+            Ok(())
+        }
+
+        fn shutdown(&self, buf: &FilterBuf<'_>) -> io::Result<Poll<()>> {
+            if !self.sent.replace(true) {
+                buf.with_write_buffers(|_, dst| dst.extend_from_slice(b"bye"));
+            }
+            Ok(if self.acked.get() {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            })
+        }
+    }
+
+    async fn filter_shutdown_waits_for_peer<F: Filter>(client: IoTest, io: Io<F>) {
+        client.remote_buffer_cap(1024);
+        let io = io.add_filter(AckShutdown::default());
+        let done = Rc::new(Cell::new(false));
+        let done2 = done.clone();
+        ntex::rt::spawn(async move {
+            io.shutdown().await.unwrap();
+            done2.set(true);
+        });
+        sleep(Millis(50)).await;
+
+        // the shutdown output reached the peer while the filter is pending
+        assert_eq!(client.read_any(), Bytes::from_static(b"bye"));
+        assert!(!done.get());
+
+        // the peer's input completes the filter shutdown
+        client.write("ack");
+        sleep(Millis(50)).await;
+        assert!(done.get());
+    }
+
+    #[ntex::test]
+    async fn filter_shutdown_completes_on_peer_input() {
+        let (client, server) = IoTest::create();
+        let io = Io::new(server, SharedCfg::new("SRV"));
+        filter_shutdown_waits_for_peer(client, io).await;
+    }
+
+    #[ntex::test]
+    async fn filter_shutdown_output_passes_inner_filters() {
+        let (client, server) = IoTest::create();
+        let io = Io::new(server, SharedCfg::new("SRV")).add_filter(Passthrough);
+        filter_shutdown_waits_for_peer(client, io).await;
+    }
+
+    #[ntex::test]
+    async fn filter_failure_output_passes_inner_filters() {
+        /// Answers any input with "err", closes and fails.
+        #[derive(Debug)]
+        struct FailOnInput;
+
+        impl FilterLayer for FailOnInput {
+            fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                if buf.with_read_src(|src| src.take().is_some()) {
+                    buf.with_write_buffers(|_, dst| dst.extend_from_slice(b"err"));
+                    buf.io().close();
+                    Err(io::Error::new(io::ErrorKind::InvalidData, "failed"))
+                } else {
+                    Ok(())
+                }
+            }
+
+            fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                buf.with_write_buffers(BytePages::move_to);
+                Ok(())
+            }
+        }
+
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = Io::new(server, SharedCfg::new("SRV"))
+            .add_filter(Passthrough)
+            .add_filter(FailOnInput);
+
+        client.write("input");
+        let err = io.recv(&BytesCodec).await.unwrap_err();
+        assert_eq!(err.into_inner().kind(), io::ErrorKind::InvalidData);
+        sleep(Millis(50)).await;
+
+        assert_eq!(client.read_any(), Bytes::from_static(b"err"));
+        assert!(io.is_closed());
+    }
+
     #[ntex::test]
     async fn filter_shutdown_timeout_is_reported() {
         #[derive(Debug)]
