@@ -151,6 +151,33 @@ fn test_get_u16() {
     assert_eq!(0x5421, buf.get_u16_le());
 }
 
+#[test]
+fn test_get_int_sign_extends() {
+    let mut buf = &b"\xff\xfe\x80\x7f"[..];
+    assert_eq!(-2, buf.get_int(2));
+    assert_eq!(-128, buf.get_int(1));
+    assert_eq!(127, buf.get_int(1));
+
+    let mut buf = &b"\xfe\xff\x00\x80"[..];
+    assert_eq!(-2, buf.get_int_le(2));
+    assert_eq!(-32768, buf.get_int_le(2));
+
+    assert_eq!(0, (&b""[..]).get_int(0));
+
+    for n in [i64::MIN, -65536, -2, -1, 0, 1, 255, i64::MAX] {
+        for nbytes in 1..=8 {
+            let shift = (8 - nbytes) * 8;
+            let expected = (n << shift) >> shift;
+
+            let mut buf = BytesMut::new();
+            buf.put_int(n, nbytes);
+            buf.put_int_le(n, nbytes);
+            assert_eq!(expected, buf.get_int(nbytes), "{n} {nbytes}");
+            assert_eq!(expected, buf.get_int_le(nbytes), "{n} {nbytes}");
+        }
+    }
+}
+
 #[cfg(not(target_os = "macos"))]
 #[test]
 #[should_panic]

@@ -40,6 +40,16 @@ macro_rules! buf_get_impl {
     }};
 }
 
+/// Interprets the low `nbytes` bytes of `val` as a two's complement integer.
+fn sign_extend(val: u64, nbytes: usize) -> i64 {
+    if nbytes == 0 {
+        0
+    } else {
+        let shift = (8 - nbytes) * 8;
+        ((val << shift).cast_signed()) >> shift
+    }
+}
+
 /// Read bytes from a buffer.
 ///
 /// A buffer stores bytes in memory such that read operations are infallible.
@@ -647,8 +657,9 @@ pub trait Buf {
     /// ```
     /// use ntex_bytes::Buf;
     ///
-    /// let mut buf = &b"\x01\x02\x03 hello"[..];
+    /// let mut buf = &b"\x01\x02\x03\xff\xfe"[..];
     /// assert_eq!(0x010203, buf.get_int(3));
+    /// assert_eq!(-2, buf.get_int(2));
     /// ```
     ///
     /// # Panics
@@ -656,7 +667,7 @@ pub trait Buf {
     /// This function panics if there is not enough remaining data in `self`.
     #[inline]
     fn get_int(&mut self, nbytes: usize) -> i64 {
-        buf_get_impl!(be => self, i64, nbytes);
+        sign_extend(self.get_uint(nbytes), nbytes)
     }
 
     /// Gets a signed n-byte integer from `self` in little-endian byte order.
@@ -668,8 +679,9 @@ pub trait Buf {
     /// ```
     /// use ntex_bytes::Buf;
     ///
-    /// let mut buf = &b"\x03\x02\x01 hello"[..];
+    /// let mut buf = &b"\x03\x02\x01\xfe\xff"[..];
     /// assert_eq!(0x010203, buf.get_int_le(3));
+    /// assert_eq!(-2, buf.get_int_le(2));
     /// ```
     ///
     /// # Panics
@@ -677,7 +689,7 @@ pub trait Buf {
     /// This function panics if there is not enough remaining data in `self`.
     #[inline]
     fn get_int_le(&mut self, nbytes: usize) -> i64 {
-        buf_get_impl!(le => self, i64, nbytes);
+        sign_extend(self.get_uint_le(nbytes), nbytes)
     }
 
     /// Gets an IEEE754 single-precision (4 bytes) floating point number from

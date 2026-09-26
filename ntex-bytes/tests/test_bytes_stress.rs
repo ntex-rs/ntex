@@ -1,16 +1,13 @@
 use ntex_bytes::Bytes;
 
 #[test]
-// Only run these tests on little endian systems. CI uses qemu for testing
-// little endian... and qemu doesn't really support threading all that well.
-#[cfg(target_endian = "little")]
 fn stress() {
     // Tests promoting a buffer from a vec -> shared in a concurrent situation
     use std::sync::{Arc, Barrier};
     use std::thread;
 
     const THREADS: usize = 8;
-    const ITERS: usize = 1_000;
+    const ITERS: usize = if cfg!(miri) { 50 } else { 1_000 };
 
     for i in 0..ITERS {
         let data = [i as u8; 256];

@@ -123,7 +123,7 @@ const KIND_OFFSET_BITS: usize = 2;
 
 pub(crate) const MIN_CAPACITY: usize = 128 - crate::METADATA_SIZE;
 
-// Bit op constants for extracting the inline length value from the `ptr` field.
+// Bit op constants for extracting the inline length value from the `offset` field.
 const INLINE_LEN_MASK: usize = 0b1111_1100;
 
 // Byte offset from the start of `Storage` to where the inline buffer data
