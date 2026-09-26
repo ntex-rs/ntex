@@ -2,6 +2,9 @@
 
 ## [4.0.0] - unreleased
 
+* Fix panic when a value in arbiter storage accesses the storage from its
+  destructor while the storage is cleared
+
 * Add `Arbiter::on_shutdown()`, registers a callback that runs when the current
   arbiter shuts down
 

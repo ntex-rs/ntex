@@ -68,7 +68,7 @@ impl Arbiter {
         let aid = COUNT.fetch_add(1, Ordering::Relaxed);
         let arb = Arbiter::with_sender(id, aid, Arc::new(name), tx, Arc::default());
         ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
-        let _ = STORAGE.try_with(|cell| cell.borrow_mut().clear());
+        clear_storage();
 
         (
             arb,
@@ -130,7 +130,7 @@ impl Arbiter {
 
                 let sys2 = sys.clone();
                 let (stop, stop_rx) = oneshot::channel();
-                let _ = STORAGE.try_with(|cell| cell.borrow_mut().clear());
+                clear_storage();
 
                 let on_stop = Arc::new(Mutex::new(Vec::new()));
                 let on_stop2 = on_stop.clone();
@@ -432,17 +432,26 @@ where
 ///
 /// All outstanding calls to [`with_item`] must have completed.
 pub unsafe fn remove_all_items() {
-    let _ = STORAGE.try_with(move |cell| {
+    clear_storage();
+    System::remove_current();
+}
+
+/// Removes all items from the storage.
+///
+/// Each item is dropped outside of the storage borrow, so that its destructor
+/// may access the storage. Items it inserts are removed too.
+fn clear_storage() {
+    let _ = STORAGE.try_with(|cell| {
         loop {
             let mut items = cell.borrow_mut();
             let Some(key) = items.keys().next().copied() else {
                 break;
             };
-            items.remove(&key);
+            let item = items.remove(&key);
             drop(items);
+            drop(item);
         }
     });
-    System::remove_current();
 }
 
 #[cfg(test)]
@@ -484,6 +493,49 @@ mod tests {
         thread::spawn(|| {
             use_storage();
             HOLD.with(|h| *h.borrow_mut() = Some(UseOnDrop));
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn with_item_value_outlives_replacement() {
+        #[derive(Clone, Default)]
+        struct Item(std::rc::Rc<Vec<u8>>);
+
+        thread::spawn(|| {
+            set_item(Item(std::rc::Rc::new(vec![1; 64])));
+            let len = with_item::<Item, _, _>(|item| {
+                // replaces and frees the stored value while `f` holds its clone
+                set_item(Item::default());
+                unsafe { remove_all_items() };
+                item.0.len()
+            });
+            assert_eq!(len, 64);
+            assert!(get_item::<Item>().is_none());
+            assert_eq!(with_item::<Item, _, _>(|item| item.0.len()), 0);
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn remove_all_items_drops_outside_borrow() {
+        struct Item;
+
+        impl Drop for Item {
+            fn drop(&mut self) {
+                let _ = get_item::<u32>();
+                set_item(2u64);
+            }
+        }
+
+        thread::spawn(|| {
+            set_item(Item);
+            set_item(1u32);
+            unsafe { remove_all_items() };
+            assert!(get_item::<u32>().is_none());
+            assert!(get_item::<u64>().is_none(), "item inserted by a destructor");
         })
         .join()
         .unwrap();
