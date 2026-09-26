@@ -24,6 +24,11 @@ impl WsSink {
         &self.0.io
     }
 
+    /// Returns `true` after a close message has been sent through this sink.
+    pub(crate) fn is_closed(&self) -> bool {
+        self.0.codec.is_closed()
+    }
+
     pub(crate) fn start_close_timeout(&self) {
         if self.0.cfg.close_timeout.non_zero() {
             let io = self.0.io.clone();

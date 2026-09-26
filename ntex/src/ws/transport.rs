@@ -49,11 +49,11 @@ impl WsTransport {
             self.insert_flags(Flags::CLOSED);
             buf.with_write_buffers(|_, w_dst| {
                 let reason = code.map(CloseReason::from);
-                if self.codec.encodev(Message::Close(reason), w_dst).is_err() {
+                if self.codec.encode(Message::Close(reason), w_dst).is_err() {
                     // an echoed code this side cannot send, for example 1010
                     // from a server
                     let reason = CloseReason::from(CloseCode::Normal);
-                    let _ = self.codec.encodev(Message::Close(Some(reason)), w_dst);
+                    let _ = self.codec.encode(Message::Close(Some(reason)), w_dst);
                 }
             });
         }
@@ -220,7 +220,7 @@ mod tests {
         let mut dst = BytePages::default();
         Codec::new()
             .set_client_mode()
-            .encodev(Message::Close(code.map(CloseReason::from)), &mut dst)
+            .encode(Message::Close(code.map(CloseReason::from)), &mut dst)
             .unwrap();
         Bytes::from(dst)
     }
@@ -287,7 +287,7 @@ mod tests {
         let mut input = BytePages::default();
         Codec::new()
             .set_client_mode()
-            .encodev(Message::Text("text".into()), &mut input)
+            .encode(Message::Text("text".into()), &mut input)
             .unwrap();
         let input = Bytes::from(input);
         error_sends_close(client, Io::from(server), input, CloseCode::Unsupported).await;

@@ -382,7 +382,7 @@ mod tests {
         let codec = Codec::new();
         let mut dst = BytePages::default();
         assert!(matches!(
-            codec.encodev(Message::Close(Some(CloseCode::Extension.into())), &mut dst),
+            codec.encode(Message::Close(Some(CloseCode::Extension.into())), &mut dst),
             Err(ProtocolError::InvalidCloseCode(1010))
         ));
     }
@@ -407,7 +407,7 @@ mod tests {
         ));
 
         codec
-            .encodev(Message::Continuation(Item::Last(Bytes::new())), &mut dst)
+            .encode(Message::Continuation(Item::Last(Bytes::new())), &mut dst)
             .unwrap();
         codec
             .encode_page(BytePage::from(Bytes::new()), &mut dst)

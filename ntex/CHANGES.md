@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* `ws::WsConnection::receiver()` answers the peer's close frame, echoing its close code, unless
+  a close frame was already sent; sinks returned by `ws::WsConnection::sink()` share state
+
 * `ws::WsTransport` echoes the peer's close code when it answers a close frame, and rejects text
   frames with close code 1003 (`Unsupported`) instead of 1002
 

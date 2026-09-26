@@ -361,12 +361,19 @@ impl<F> fmt::Debug for WsClient<F> {
 pub struct WsConnection<F> {
     io: Io<F>,
     codec: ws::Codec,
+    sink: ws::WsSink,
     res: ClientResponse,
 }
 
 impl<F> WsConnection<F> {
     fn new(io: Io<F>, res: ClientResponse, codec: ws::Codec) -> Self {
-        Self { io, codec, res }
+        let sink = ws::WsSink::new(io.get_ref(), codec.clone(), io.shared().get());
+        Self {
+            io,
+            codec,
+            sink,
+            res,
+        }
     }
 
     /// Returns the connection's WebSocket codec.
@@ -381,13 +388,12 @@ impl<F> WsConnection<F> {
 }
 
 impl<F> WsConnection<F> {
-    /// Creates a sink for sending messages over this connection.
+    /// Returns a sink for sending messages over this connection.
+    ///
+    /// All sinks of a connection share the same state, so a message cannot be
+    /// sent through any of them once one has sent a close message.
     pub fn sink(&self) -> ws::WsSink {
-        ws::WsSink::new(
-            self.io.get_ref(),
-            self.codec.clone(),
-            self.io.shared().get(),
-        )
+        self.sink.clone()
     }
 
     /// Consumes the connection and returns its I/O stream, codec, and
@@ -401,7 +407,9 @@ impl WsConnection<Sealed> {
     /// Starts the WebSocket dispatcher and returns a channel of received frames.
     ///
     /// The dispatcher runs in a spawned task. Protocol and connection errors
-    /// are delivered through the returned channel. Dropping the receiver sends
+    /// are delivered through the returned channel. A close frame from the peer
+    /// is answered automatically, unless a close message has already been sent
+    /// through a sink of this connection. Dropping the receiver sends
     /// a close frame and closes the connection once the peer responds or the
     /// closing-handshake timeout expires.
     pub fn receiver(self) -> mpsc::Receiver<Result<ws::Frame, WsError<()>>> {
@@ -411,8 +419,19 @@ impl WsConnection<Sealed> {
             let tx2 = tx.clone();
             let io = self.io.get_ref();
             let sink = self.sink();
+            let sink2 = sink.clone();
 
             let fut = self.start(fn_service(async move |item: ws::Frame| {
+                if let ws::Frame::Close(reason) = &item
+                    && !sink2.is_closed()
+                {
+                    // answer the peer's close frame, echoing its code
+                    let reply = reason.as_ref().map(|r| CloseReason::from(r.code));
+                    if sink2.send(ws::Message::Close(reply)).await.is_err() {
+                        let reply = CloseReason::from(CloseCode::Normal);
+                        let _ = sink2.send(ws::Message::Close(Some(reply))).await;
+                    }
+                }
                 match tx.send(Ok(item)) {
                     Ok(()) => (),
                     Err(_) => io.close(),
@@ -495,6 +514,7 @@ impl<F: Filter> WsConnection<F> {
         WsConnection {
             io: self.io.seal(),
             codec: self.codec,
+            sink: self.sink,
             res: self.res,
         }
     }
