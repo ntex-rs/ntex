@@ -1,5 +1,9 @@
 # Changes
 
+## [3.17.4] - unreleased
+
+* Fix process abort when arbiter storage is accessed during thread-local destruction
+
 ## [3.17.3] - 2026-09-18
 
 * Api docs improvements

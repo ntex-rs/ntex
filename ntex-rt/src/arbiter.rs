@@ -67,7 +67,7 @@ impl Arbiter {
         let aid = COUNT.fetch_add(1, Ordering::Relaxed);
         let arb = Arbiter::with_sender(id, aid, Arc::new(name), tx, Arc::default());
         ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
-        STORAGE.with(|cell| cell.borrow_mut().clear());
+        let _ = STORAGE.try_with(|cell| cell.borrow_mut().clear());
 
         (
             arb,
@@ -129,7 +129,7 @@ impl Arbiter {
 
                 let sys2 = sys.clone();
                 let (stop, stop_rx) = oneshot::channel();
-                STORAGE.with(|cell| cell.borrow_mut().clear());
+                let _ = STORAGE.try_with(|cell| cell.borrow_mut().clear());
 
                 let on_stop = Arc::new(Mutex::new(Vec::new()));
                 let on_stop2 = on_stop.clone();
@@ -243,22 +243,28 @@ impl Arbiter {
     }
 
     /// Returns a value from thread-local arbiter storage, inserting it if absent.
+    ///
+    /// If the storage has already been destroyed because the thread is
+    /// exiting, the value returned by `f` is not stored.
     pub fn get_value<T, F>(f: F) -> T
     where
         T: Clone + 'static,
         F: FnOnce() -> T,
     {
-        STORAGE.with(move |cell| {
-            let mut st = cell.borrow_mut();
-            if let Some(boxed) = st.get(&TypeId::of::<T>())
-                && let Some(val) = (&**boxed as &(dyn Any + 'static)).downcast_ref::<T>()
-            {
-                return val.clone();
-            }
-            let val = f();
-            st.insert(TypeId::of::<T>(), Box::new(val.clone()));
-            val
-        })
+        let mut f = Some(f);
+        STORAGE
+            .try_with(|cell| {
+                let mut st = cell.borrow_mut();
+                if let Some(boxed) = st.get(&TypeId::of::<T>())
+                    && let Some(val) = (&**boxed as &(dyn Any + 'static)).downcast_ref::<T>()
+                {
+                    return val.clone();
+                }
+                let val = (f.take().unwrap())();
+                st.insert(TypeId::of::<T>(), Box::new(val.clone()));
+                val
+            })
+            .unwrap_or_else(|_| (f.take().unwrap())())
     }
 
     #[must_use]
@@ -318,28 +324,45 @@ impl ArbiterController {
 }
 
 /// Inserts a value into the current arbiter's thread-local storage.
+///
+/// If the storage has already been destroyed because the thread is
+/// exiting, the value is dropped.
 pub fn set_item<T: 'static>(item: T) {
-    STORAGE.with(move |cell| cell.borrow_mut().insert(TypeId::of::<T>(), Box::new(item)));
+    let item: Box<dyn Any> = Box::new(item);
+    let old = STORAGE
+        .try_with(move |cell| cell.borrow_mut().insert(TypeId::of::<T>(), item))
+        .ok()
+        .flatten();
+    drop(old);
 }
 
 /// Returns a cloned value from the current arbiter's thread-local storage.
+///
+/// Returns `None` if the storage has already been destroyed because the
+/// thread is exiting.
 pub fn get_item<T: Clone + 'static>() -> Option<T> {
-    STORAGE.with(move |cell| {
-        cell.borrow()
-            .get(&TypeId::of::<T>())
-            .and_then(|boxed| boxed.downcast_ref())
-            .cloned()
-    })
+    STORAGE
+        .try_with(move |cell| {
+            cell.borrow()
+                .get(&TypeId::of::<T>())
+                .and_then(|boxed| boxed.downcast_ref())
+                .cloned()
+        })
+        .ok()
+        .flatten()
 }
 
 /// Provides access to a value in the current arbiter's thread-local storage.
 ///
 /// A default value is inserted if the requested type is not already present.
+/// If the storage has already been destroyed because the thread is exiting,
+/// `f` receives a temporary default value that is not stored.
 pub fn with_item<T: Default + 'static, F, R>(f: F) -> R
 where
     F: FnOnce(&T) -> R,
 {
-    STORAGE.with(move |cell| {
+    let mut f = Some(f);
+    let result = STORAGE.try_with(|cell| {
         // SAFETY: value of T is stored in heap, manipulation
         // with STORAGE are not affected location of T
         let val: &T = unsafe {
@@ -352,8 +375,12 @@ where
                 std::mem::transmute::<&T, &T>(boxed.downcast_ref::<T>().unwrap())
             }
         };
-        f(val)
-    })
+        (f.take().unwrap())(val)
+    });
+    match result {
+        Ok(res) => res,
+        Err(_) => (f.take().unwrap())(&T::default()),
+    }
 }
 
 #[doc(hidden)]
@@ -363,7 +390,7 @@ where
 ///
 /// All outstanding calls to [`with_item`] must have completed.
 pub unsafe fn remove_all_items() {
-    STORAGE.with(move |cell| {
+    let _ = STORAGE.try_with(move |cell| {
         loop {
             let mut items = cell.borrow_mut();
             let Some(key) = items.keys().next().copied() else {
@@ -374,4 +401,65 @@ pub unsafe fn remove_all_items() {
         }
     });
     System::remove_current();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Clone, Default)]
+    struct Value(usize);
+
+    fn use_storage() {
+        set_item(Value(1));
+        let _ = get_item::<Value>();
+        with_item::<Value, _, _>(|v| v.0);
+        Arbiter::get_value(|| Value(2));
+    }
+
+    struct UseOnDrop;
+
+    impl Drop for UseOnDrop {
+        fn drop(&mut self) {
+            use_storage();
+        }
+    }
+
+    thread_local!(static HOLD: RefCell<Option<UseOnDrop>> = const { RefCell::new(None) });
+
+    #[test]
+    fn storage_access_during_thread_exit() {
+        // item stored in STORAGE accesses STORAGE while it is destroyed
+        thread::spawn(|| set_item(UseOnDrop)).join().unwrap();
+
+        // other thread local accesses STORAGE, in both destruction orders
+        thread::spawn(|| {
+            HOLD.with(|h| *h.borrow_mut() = Some(UseOnDrop));
+            use_storage();
+        })
+        .join()
+        .unwrap();
+        thread::spawn(|| {
+            use_storage();
+            HOLD.with(|h| *h.borrow_mut() = Some(UseOnDrop));
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn storage_fallback_values() {
+        struct Check;
+
+        impl Drop for Check {
+            fn drop(&mut self) {
+                set_item(Value(5));
+                assert!(get_item::<Value>().is_none());
+                assert_eq!(with_item::<Value, _, _>(|v| v.0), 0);
+                assert_eq!(Arbiter::get_value(|| Value(3)).0, 3);
+                assert_eq!(Arbiter::get_value(|| Value(4)).0, 4);
+            }
+        }
+        thread::spawn(|| set_item(Check)).join().unwrap();
+    }
 }
