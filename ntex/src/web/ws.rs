@@ -212,9 +212,15 @@ where
             DispatchItem::Stop(Reason::KeepAliveTimeout) => Err(WsError::KeepAlive),
             DispatchItem::Stop(Reason::ReadTimeout) => Err(WsError::ReadTimeout),
             DispatchItem::Stop(Reason::WriteTimeout) => Err(WsError::WriteTimeout),
-            DispatchItem::Stop(Reason::Decoder(e) | Reason::Encoder(e)) => {
+            DispatchItem::Stop(Reason::Decoder(e)) => {
+                let sink = ctx.st();
+                if !sink.is_closed() {
+                    let reason = ws::CloseReason::from(ws::CloseCode::Protocol);
+                    let _ = sink.send(Message::Close(Some(reason))).await;
+                }
                 Err(WsError::Protocol(e))
             }
+            DispatchItem::Stop(Reason::Encoder(e)) => Err(WsError::Protocol(e)),
             DispatchItem::Stop(Reason::Io(e)) => Err(WsError::Disconnected(e)),
         }
     }

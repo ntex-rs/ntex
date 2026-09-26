@@ -526,3 +526,29 @@ async fn web_ws_sink_shares_close_state() {
         "sink sent a message after the close message"
     );
 }
+
+#[ntex::test]
+async fn web_ws_protocol_error_sends_close() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let srv = test::server(async move |_| {
+        let tx = tx.clone();
+        App::new().service(
+            web::resource("/").route(web::to(async move |req: HttpRequest| {
+                let res = ws::start(&req, None, ws_service).await;
+                let _ = tx.send(matches!(res, Err(WsError::Protocol(_))));
+            })),
+        )
+    });
+
+    let (io, codec, _) = srv.ws().await.unwrap().into_inner();
+    // frame with a reserved opcode
+    io.send(
+        Bytes::from_static(&[0x83, 0x80, 0, 0, 0, 0]),
+        &ntex::codec::BytesCodec,
+    )
+    .await
+    .unwrap();
+    let item = io.recv(&codec).await.unwrap().unwrap();
+    assert_eq!(item, ws::Frame::Close(Some(ws::CloseCode::Protocol.into())));
+    assert!(rx.recv_timeout(std::time::Duration::from_secs(3)).unwrap());
+}
