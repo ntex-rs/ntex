@@ -60,7 +60,7 @@ impl StorageVec {
 
     /// Create new storage with capacity and copy slice
     ///
-    /// Caller must guarantee cap is larger or equal to src length
+    /// Panics if `capacity` is smaller than `src` length
     pub(crate) fn from_slice(capacity: usize, src: &[u8]) -> StorageVec {
         StorageVec(SharedVec::create(BytePageSize::Unset, capacity, src))
     }
@@ -226,11 +226,13 @@ impl StorageVec {
     /// Copy data for new storage
     #[inline]
     pub(crate) fn reserve_capacity(&mut self, capacity: usize) {
-        *self = StorageVec(SharedVec::create(
-            BytePageSize::Unset,
-            capacity,
-            self.as_ref(),
-        ));
+        if capacity > self.len() {
+            *self = StorageVec(SharedVec::create(
+                BytePageSize::Unset,
+                capacity,
+                self.as_ref(),
+            ));
+        }
     }
 
     #[inline]
@@ -357,6 +359,11 @@ impl Default for Cache {
 
 impl SharedVec {
     pub(crate) fn create(size: BytePageSize, cap: usize, src: &[u8]) -> NonNull<SharedVec> {
+        assert!(
+            cap >= src.len(),
+            "SharedVec capacity {cap} is smaller than data length {}",
+            src.len()
+        );
         let ptr = Self::alloc_with_capacity(size, cap, src.len() as u32);
 
         // copy slice

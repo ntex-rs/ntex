@@ -736,3 +736,26 @@ fn bytes_vec() {
     let bytes = BytesMut::from(data);
     assert_eq!(bytes, b"\x01\x02\x03");
 }
+
+#[test]
+fn reserve_capacity_not_greater_than_len() {
+    let data = [7u8; 1000];
+    for cap in [0, 10, 999, 1000] {
+        let mut buf = BytesMut::copy_from_slice(&data[..]);
+        let ptr = buf.as_ptr();
+        buf.reserve_capacity(cap);
+        assert_eq!(buf.as_ptr(), ptr);
+        assert_eq!(&buf[..], &data[..]);
+        assert!(buf.capacity() >= buf.len());
+        assert_eq!(buf.capacity() - buf.len(), buf.remaining_mut());
+
+        buf.put_slice(&[1; 100]);
+        assert_eq!(buf.len(), 1100);
+        assert_eq!(&buf[1000..], &[1; 100][..]);
+    }
+
+    let mut buf = BytesMut::copy_from_slice(&data[..]);
+    buf.reserve_capacity(1001);
+    assert!(buf.capacity() >= 1001);
+    assert_eq!(&buf[..], &data[..]);
+}
