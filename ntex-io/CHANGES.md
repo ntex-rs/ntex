@@ -2,6 +2,10 @@
 
 ## [4.1.0] - Unreleased
 
+* `IoContext` is `#[repr(transparent)]`, making the internal `&IoRef` to `&IoContext` cast sound
+
+* `Io::add_filter` no longer creates a `&mut IoState` that overlaps other accesses
+
 * The filter stack reserves room for two filter layers up front, installing a filter no longer
   reallocates the stack
 

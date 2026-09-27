@@ -41,6 +41,8 @@ use crate::{Flags, Id, IoRef, IoTaskStatus, Readiness, io::IoState};
 /// filter chain goes away with it and that output can never be delivered. Every
 /// other way a connection can end, an expired shutdown timeout included,
 /// reports `Close`.
+// `repr(transparent)` is required: `IoRef::call_write` casts `&IoRef` to `&IoContext`.
+#[repr(transparent)]
 pub struct IoContext(IoRef);
 
 impl fmt::Debug for IoContext {

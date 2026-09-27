@@ -475,9 +475,13 @@ impl<F: Filter> Io<F> {
         //
         // Safety: no references into the buffer storage are retained.
         // All APIs first remove the buffer from storage before processing it.
-        unsafe { &mut *(Rc::as_ptr(&state.0).cast_mut()) }
-            .buffer
-            .add_layer(state.0.cfg.write_page_size());
+        // The page size is read first and the exclusive borrow covers only
+        // the `buffer` field, so no other access overlaps it.
+        let page_size = state.0.cfg.write_page_size();
+        unsafe {
+            let buffer = &raw mut (*Rc::as_ptr(&state.0).cast_mut()).buffer;
+            (*buffer).add_layer(page_size);
+        }
 
         // Replace current filter
         state.0.filter.add_filter::<F, U>(nf);
