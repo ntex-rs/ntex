@@ -103,7 +103,7 @@ impl ByteString {
     /// Panics if `at > len`.
     #[must_use]
     pub fn split_off(&mut self, at: usize) -> ByteString {
-        // check str
+        // panics unless `at` is on a char boundary
         let _ = self.split_at(at);
 
         ByteString(self.0.split_off(at))
@@ -134,7 +134,7 @@ impl ByteString {
     /// Panics if `at > len`.
     #[must_use]
     pub fn split_to(&mut self, at: usize) -> ByteString {
-        // check str
+        // panics unless `at` is on a char boundary
         let _ = self.split_at(at);
 
         ByteString(self.0.split_to(at))

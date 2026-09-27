@@ -123,13 +123,15 @@ const KIND_OFFSET_BITS: usize = 2;
 
 pub(crate) const MIN_CAPACITY: usize = 128 - crate::METADATA_SIZE;
 
-// Bit op constants for extracting the inline length value from the `offset` field.
+// Mask of the inline length bits in the low byte of the `offset` field.
 const INLINE_LEN_MASK: usize = 0b1111_1100;
 
 // Byte offset from the start of `Storage` to where the inline buffer data
-// starts. On little endian platforms, the first byte of the struct is the
-// storage flag, so the data is shifted by a byte. On big endian systems, the
-// data starts at the beginning of the struct.
+// starts. The low byte of `offset` holds the kind and the inline length. On
+// little endian platforms `offset` is the first field and its low byte is the
+// first byte of the struct, so the data is shifted by a byte. On big endian
+// platforms `offset` is the last field and its low byte is the last byte of the
+// struct, so the data starts at the beginning of the struct.
 #[cfg(target_endian = "little")]
 const INLINE_DATA_OFFSET: isize = 1;
 #[cfg(target_endian = "big")]
@@ -146,7 +148,7 @@ pub(crate) const INLINE_CAP: usize = 3 * 4 - 1;
 const PTR_INLINE: NonZeroUsize = NonZeroUsize::new(KIND_INLINE).unwrap();
 // Static storage
 const PTR_STATIC: NonZeroUsize = NonZeroUsize::new(KIND_STATIC).unwrap();
-// Default offset
+// Offset of a new vec storage, the data starts right after the `SharedVec` header
 const DEFAUILT_OFFSET: NonZeroUsize =
     NonZeroUsize::new((stvec::METADATA_SIZE << KIND_OFFSET_BITS) ^ KIND_VEC).unwrap();
 
@@ -365,8 +367,9 @@ impl Storage {
     pub(crate) fn trimdown(&mut self) {
         let kind = self.kind();
 
-        // trim down only if buffer is not inline or static and
-        // buffer's unused space is greater than 64 bytes
+        // inline and static buffers are left as is. Data that fits inline is
+        // moved inline, otherwise the data is copied into an exact-sized
+        // buffer if at least 64 bytes of capacity are unused
         if !(kind == KIND_INLINE || kind == KIND_STATIC) {
             if self.len() <= INLINE_CAP {
                 *self = unsafe { Storage::from_ptr_inline(self.as_ptr(), self.len()) };
@@ -400,7 +403,7 @@ impl Storage {
     }
 
     /// Set the length of the inline buffer. This is done by writing to the
-    /// least significant byte of the `arc` field.
+    /// inline length bits in the least significant byte of the `offset` field.
     #[inline]
     fn set_inline_len(&mut self, len: usize) {
         debug_assert!(len <= INLINE_CAP);
@@ -461,7 +464,7 @@ impl Storage {
                 *self = Storage::from_slice(&self.as_ref()[start..]);
             }
             _ => {
-                // set len for static storage
+                // advance the start of static storage
                 self.len -= start;
                 self.ptr = self.ptr.add(start);
             }
@@ -494,26 +497,18 @@ impl Storage {
     /// Increments the ref count. This should only be done if it is known that
     /// it can be done safely. As such, this fn is not public, instead other
     /// fns will use this one while maintaining the guarantees.
-    /// Parameter `mut_self` should only be set to `true` if caller holds
-    /// `&mut self` reference.
     ///
     /// "Safely" is defined as not exposing two `BytesMut` values that point to
     /// the same byte window.
     ///
     /// This function is thread safe.
     unsafe fn shallow_clone(&self) -> Storage {
-        // Always check `inline` first, because if the handle is using inline
-        // data storage, all of the `Storage` struct fields will be gibberish.
+        // Check the kind first, if the handle is using inline data storage,
+        // the `ptr` and `len` fields hold data and must not be dereferenced.
         //
-        // Additionally, if kind is STATIC, then ptr is *never* changed, making
-        // it safe and faster to check for it now before an atomic acquire.
-        //
-        // The value returned by `kind` isn't itself safe, but the value could
-        // inform what operations to take, and unsafely do something without
-        // synchronization.
-        //
-        // KIND_INLINE and KIND_STATIC will *never* change, so branches on that
-        // information is safe.
+        // Inline and static storage own no shared state, a bitwise copy is
+        // a valid clone. The kind of a handle never changes while it is
+        // borrowed, so branching on it is safe.
         let kind = self.kind();
 
         if kind == KIND_INLINE || kind == KIND_STATIC {

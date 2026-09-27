@@ -5,7 +5,7 @@ macro_rules! buf_get_impl {
         const SIZE: usize = mem::size_of::<$typ>();
         // try to convert directly from the bytes
         // this Option<ret> trick is to avoid keeping a borrow on self
-        // when advance() is called (mut borrow) and to call bytes() only once
+        // when advance() is called (mut borrow) and to call chunk() only once
         #[allow(clippy::ptr_as_ptr)]
         let ret = $this
             .chunk()

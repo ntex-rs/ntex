@@ -135,18 +135,18 @@ impl BytePages {
                         self.current = Some(st);
                     }
                     Err(page) => {
-                        // add buffer to stack
+                        // add buffer to the page list
                         self.push_back(page);
                     }
                 }
             } else if p.len() <= self.spare() {
                 self.put_slice(p.as_ref());
             } else {
-                // push current storage to stack
+                // move current page to the page list
                 if let Some(page) = self.current.take() {
                     self.push_back(From::from(page));
                 }
-                // add buffer to stack
+                // add buffer to the page list
                 self.push_back(p);
             }
         }
@@ -356,7 +356,7 @@ impl BytePages {
 
         let res = f(&mut buf);
 
-        // `buf.storage` cal re-allocate, makes self.current invalid
+        // `f` can re-allocate `buf.storage`, which invalidates `st`
         st.0 = buf.storage.0;
         if buf.capacity() != cap {
             buf.storage.unsize();
@@ -364,7 +364,7 @@ impl BytePages {
         // buf.storage.0 uses same pointer as self.current.0
         mem::forget(buf);
 
-        // add new page
+        // a full page moves to the page list
         if st.len() >= self.page_size().capacity() {
             self.push_back(BytePage::from(st));
         } else {
@@ -384,7 +384,7 @@ impl BytePages {
             .unwrap_or_else(|| StorageVec::sized(self.page_size()));
         let result = f(&mut st);
 
-        // add new page
+        // a full page moves to the page list
         if st.is_full() {
             self.push_back(BytePage::from(st));
         } else {

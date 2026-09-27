@@ -609,7 +609,6 @@ impl BufMut for BytesMut {
     #[inline]
     fn chunk_mut(&mut self) -> &mut UninitSlice {
         unsafe {
-            // This will never panic as `len` can never become invalid
             let ptr = &mut self.storage.as_ptr();
             UninitSlice::from_raw_parts_mut(ptr.add(self.len()), self.remaining_mut())
         }
@@ -700,7 +699,6 @@ unsafe impl bytes::buf::BufMut for BytesMut {
             self.reserve(64);
         }
         unsafe {
-            // This will never panic as `len` can never become invalid
             let ptr = self.storage.as_ptr();
             bytes::buf::UninitSlice::from_raw_parts_mut(
                 ptr.add(self.len()),

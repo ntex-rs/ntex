@@ -43,8 +43,7 @@ impl StorageExt for Arc<str> {
     }
 }
 
-// # SAFETY
-// Implementation must contain valid string which Arc<str> does
+// SAFETY: `Arc<str>` always holds valid UTF-8
 unsafe impl StorageExtStr for Arc<str> {}
 
 #[cfg(test)]

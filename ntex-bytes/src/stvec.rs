@@ -38,8 +38,7 @@ const METADATA_SIZE_U32: u32 = METADATA_SIZE as u32;
 /// Maximum buffer capacity, offsets and sizes are stored as `u32`.
 pub(crate) const MAX_CAPACITY: usize = u32::MAX as usize - METADATA_SIZE;
 
-// Inline buffer capacity. This is the size of `Storage` minus 1 byte for the
-// metadata.
+// Inline buffer capacity, must match `storage::INLINE_CAP`.
 #[cfg(target_pointer_width = "64")]
 pub(crate) const INLINE_CAP: usize = 3 * 8 - 1;
 #[cfg(target_pointer_width = "32")]
@@ -316,8 +315,8 @@ impl StorageVec {
             let inner = self.as_inner();
             let len = (*inner).len as usize;
 
-            // Reserving involves abandoning the currently shared buffer and
-            // allocating a new vector with the requested capacity.
+            // A unique buffer is reclaimed or grown in place, otherwise the
+            // data is copied into a new allocation.
             let new_cap = len
                 .checked_add(additional)
                 .expect("buffer capacity overflow");
@@ -537,7 +536,7 @@ impl SharedVec {
     }
 
     fn is_unique(&self) -> bool {
-        // This is same as Shared::is_unique() but for KIND_VEC
+        // Acquire synchronizes with the Release decrement of other handles
         self.ref_count.load(Acquire) == 1
     }
 
@@ -553,7 +552,7 @@ impl SharedVec {
 }
 
 pub(crate) fn release_shared_vec(ptr: *mut SharedVec) {
-    // `Shared` storage... follow the drop steps from Arc.
+    // follow the drop steps from Arc
     unsafe {
         if (*ptr).ref_count.fetch_sub(1, Release) != 1 {
             return;
@@ -575,7 +574,7 @@ pub(crate) fn release_shared_vec(ptr: *mut SharedVec) {
         // > through this reference must obviously happened before), and an
         // > "acquire" operation before deleting the object.
         //
-        // [1]: (www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html)
+        // [1]: https://www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html
         atomic::fence(Acquire);
 
         let capacity = (*ptr).capacity;
