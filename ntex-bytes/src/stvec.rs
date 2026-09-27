@@ -32,6 +32,7 @@ pub(crate) struct StorageVec(pub(crate) NonNull<SharedVec>);
 const KIND_VEC: usize = 0b01;
 const KIND_OFFSET_BITS: usize = 2;
 
+/// Size of the header stored in front of the data of every heap buffer.
 pub const METADATA_SIZE: usize = mem::size_of::<SharedVec>();
 const METADATA_SIZE_U32: u32 = METADATA_SIZE as u32;
 

@@ -79,7 +79,7 @@ pub trait Buf {
     /// the buffer.
     ///
     /// This value is greater than or equal to the length of the slice returned
-    /// by `bytes`.
+    /// by `chunk`.
     ///
     /// # Examples
     ///
@@ -132,7 +132,7 @@ pub trait Buf {
 
     /// Advance the internal cursor of the Buf
     ///
-    /// The next call to `bytes` will return a slice starting `cnt` bytes
+    /// The next call to `chunk` will return a slice starting `cnt` bytes
     /// further into the underlying buffer.
     ///
     /// # Examples
@@ -621,7 +621,8 @@ pub trait Buf {
     ///
     /// # Panics
     ///
-    /// This function panics if there is not enough remaining data in `self`.
+    /// This function panics if there is not enough remaining data in `self`,
+    /// or if `nbytes > 8`.
     #[inline]
     fn get_uint(&mut self, nbytes: usize) -> u64 {
         buf_get_impl!(be => self, u64, nbytes);
@@ -642,7 +643,8 @@ pub trait Buf {
     ///
     /// # Panics
     ///
-    /// This function panics if there is not enough remaining data in `self`.
+    /// This function panics if there is not enough remaining data in `self`,
+    /// or if `nbytes > 8`.
     #[inline]
     fn get_uint_le(&mut self, nbytes: usize) -> u64 {
         buf_get_impl!(le => self, u64, nbytes);
@@ -664,7 +666,8 @@ pub trait Buf {
     ///
     /// # Panics
     ///
-    /// This function panics if there is not enough remaining data in `self`.
+    /// This function panics if there is not enough remaining data in `self`,
+    /// or if `nbytes > 8`.
     #[inline]
     fn get_int(&mut self, nbytes: usize) -> i64 {
         sign_extend(self.get_uint(nbytes), nbytes)
@@ -686,7 +689,8 @@ pub trait Buf {
     ///
     /// # Panics
     ///
-    /// This function panics if there is not enough remaining data in `self`.
+    /// This function panics if there is not enough remaining data in `self`,
+    /// or if `nbytes > 8`.
     #[inline]
     fn get_int_le(&mut self, nbytes: usize) -> i64 {
         sign_extend(self.get_uint_le(nbytes), nbytes)

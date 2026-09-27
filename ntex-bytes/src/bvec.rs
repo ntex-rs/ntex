@@ -315,7 +315,7 @@ impl BytesMut {
 
     /// Splits the bytes into two at the given index.
     ///
-    /// Does nothing if `at > len`.
+    /// Returns `None` if `at > len`.
     #[inline]
     #[must_use]
     pub fn split_to_checked(&mut self, at: usize) -> Option<Bytes> {
@@ -334,8 +334,9 @@ impl BytesMut {
     /// If `len` is greater than the buffer's current length, this has no
     /// effect.
     ///
-    /// The [`split_off`] method can emulate `truncate`, but this causes the
-    /// excess bytes to be returned instead of dropped.
+    /// `truncate(0)` on a buffer that is not shared with any other handle
+    /// also reclaims the capacity in front of the current view, see
+    /// [`clear`](Self::clear).
     ///
     /// # Examples
     ///
@@ -346,14 +347,16 @@ impl BytesMut {
     /// buf.truncate(5);
     /// assert_eq!(buf, b"hello"[..]);
     /// ```
-    ///
-    /// [`split_off`]: #method.split_off
     #[inline]
     pub fn truncate(&mut self, len: usize) {
         self.storage.truncate(len);
     }
 
     /// Clears the buffer, removing all data.
+    ///
+    /// If no other handle refers to the underlying buffer (see
+    /// [`is_unique`](Self::is_unique)), the view is reset to the start of the
+    /// allocation, so the full capacity becomes available again.
     ///
     /// # Examples
     ///
@@ -433,8 +436,7 @@ impl BytesMut {
     ///
     /// # Panics
     ///
-    /// This method will panic if `len` is out of bounds for the underlying
-    /// slice or if it comes after the `end` of the configured window.
+    /// Panics if `len > self.capacity()`.
     #[inline]
     pub unsafe fn set_len(&mut self, len: usize) {
         self.storage.set_len(len);
@@ -450,9 +452,10 @@ impl BytesMut {
     /// buffer's capacity, then the current view will be copied to the front of
     /// the buffer and the handle will take ownership of the full buffer.
     ///
-    /// Otherwise a new buffer is allocated. Its capacity is at least twice the
-    /// current length, so appending in small steps reallocates a logarithmic
-    /// number of times. Use [`reserve_capacity`](Self::reserve_capacity) to
+    /// Otherwise a unique buffer that is not a pooled page is reallocated,
+    /// often in place, and a new buffer is allocated in all other cases. The
+    /// new capacity is at least twice the current length, so appending in
+    /// small steps reallocates a logarithmic number of times. Use [`reserve_capacity`](Self::reserve_capacity) to
     /// allocate an exact capacity.
     ///
     /// # Panics

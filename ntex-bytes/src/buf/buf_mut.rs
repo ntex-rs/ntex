@@ -4,12 +4,15 @@ use super::{UninitSlice, Writer};
 
 /// A trait for values that provide sequential write access to bytes.
 ///
-/// Write bytes to a buffer
-///
 /// A buffer stores bytes in memory such that write operations are infallible.
 /// The underlying storage may or may not be in contiguous memory. A `BufMut`
 /// value is a cursor into the buffer. Writing to `BufMut` advances the cursor
 /// position.
+///
+/// Fixed-size buffers such as `&mut [u8]` panic when a write does not fit.
+/// Growable buffers such as `Vec<u8>`, [`BytesMut`](crate::BytesMut) and
+/// [`BytePages`](crate::BytePages) allocate more space on demand instead, so
+/// the `put_*` methods never run out of capacity for them.
 ///
 /// The simplest `BufMut` is a `Vec<u8>`.
 ///
@@ -52,11 +55,13 @@ pub trait BufMut {
 
     /// Advance the internal cursor of the `BufMut`
     ///
-    /// The next call to `bytes_mut` will return a slice starting `cnt` bytes
+    /// The next call to `chunk_mut` will return a slice starting `cnt` bytes
     /// further into the underlying buffer.
     ///
-    /// This function is unsafe because there is no guarantee that the bytes
-    /// being advanced past have been initialized.
+    /// # Safety
+    ///
+    /// The caller must ensure that the `cnt` bytes being advanced past have
+    /// been initialized.
     ///
     /// # Examples
     ///
@@ -88,7 +93,6 @@ pub trait BufMut {
     /// the call must behave as if `cnt == self.remaining_mut()`.
     ///
     /// A call with `cnt == 0` should never panic and be a no-op.
-    #[allow(clippy::missing_safety_doc)]
     unsafe fn advance_mut(&mut self, cnt: usize);
 
     /// Returns true if there is space in `self` for more bytes.
@@ -146,10 +150,10 @@ pub trait BufMut {
     ///
     /// # Implementer notes
     ///
-    /// This function should never panic. `bytes_mut` should return an empty
+    /// This function should never panic. `chunk_mut` should return an empty
     /// slice **if and only if** `remaining_mut` returns 0. In other words,
-    /// `bytes_mut` returning an empty slice implies that `remaining_mut` will
-    /// return 0 and `remaining_mut` returning 0 implies that `bytes_mut` will
+    /// `chunk_mut` returning an empty slice implies that `remaining_mut` will
+    /// return 0 and `remaining_mut` returning 0 implies that `chunk_mut` will
     /// return an empty slice.
     fn chunk_mut(&mut self) -> &mut UninitSlice;
 
@@ -667,7 +671,7 @@ pub trait BufMut {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining capacity in
-    /// `self`.
+    /// `self`, or if `nbytes > 8`.
     #[inline]
     fn put_uint(&mut self, n: u64, nbytes: usize) {
         self.put_slice(&n.to_be_bytes()[mem::size_of_val(&n) - nbytes..]);
@@ -690,7 +694,7 @@ pub trait BufMut {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining capacity in
-    /// `self`.
+    /// `self`, or if `nbytes > 8`.
     #[inline]
     fn put_uint_le(&mut self, n: u64, nbytes: usize) {
         self.put_slice(&n.to_le_bytes()[0..nbytes]);
@@ -713,7 +717,7 @@ pub trait BufMut {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining capacity in
-    /// `self`.
+    /// `self`, or if `nbytes > 8`.
     #[inline]
     fn put_int(&mut self, n: i64, nbytes: usize) {
         self.put_slice(&n.to_be_bytes()[mem::size_of_val(&n) - nbytes..]);
@@ -736,13 +740,13 @@ pub trait BufMut {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining capacity in
-    /// `self`.
+    /// `self`, or if `nbytes > 8`.
     #[inline]
     fn put_int_le(&mut self, n: i64, nbytes: usize) {
         self.put_slice(&n.to_le_bytes()[0..nbytes]);
     }
 
-    /// Writes  an IEEE754 single-precision (4 bytes) floating point number to
+    /// Writes an IEEE754 single-precision (4 bytes) floating point number to
     /// `self` in big-endian byte order.
     ///
     /// The current position is advanced by 4.
@@ -766,7 +770,7 @@ pub trait BufMut {
         self.put_u32(n.to_bits());
     }
 
-    /// Writes  an IEEE754 single-precision (4 bytes) floating point number to
+    /// Writes an IEEE754 single-precision (4 bytes) floating point number to
     /// `self` in little-endian byte order.
     ///
     /// The current position is advanced by 4.
@@ -790,7 +794,7 @@ pub trait BufMut {
         self.put_u32_le(n.to_bits());
     }
 
-    /// Writes  an IEEE754 double-precision (8 bytes) floating point number to
+    /// Writes an IEEE754 double-precision (8 bytes) floating point number to
     /// `self` in big-endian byte order.
     ///
     /// The current position is advanced by 8.
@@ -814,7 +818,7 @@ pub trait BufMut {
         self.put_u64(n.to_bits());
     }
 
-    /// Writes  an IEEE754 double-precision (8 bytes) floating point number to
+    /// Writes an IEEE754 double-precision (8 bytes) floating point number to
     /// `self` in little-endian byte order.
     ///
     /// The current position is advanced by 8.
@@ -842,9 +846,10 @@ pub trait BufMut {
     /// Creates an adaptor which implements the `Write` trait for `self`.
     ///
     /// This function returns a new value which implements `Write` by adapting
-    /// the `Write` trait functions to the `BufMut` trait functions. Given that
-    /// `BufMut` operations are infallible, none of the `Write` functions will
-    /// return with `Err`.
+    /// the `Write` trait functions to the `BufMut` trait functions. `write`
+    /// and `flush` never return `Err`, but `write` stores only as many bytes
+    /// as fit into a fixed-size buffer, so `write_all` fails with
+    /// [`WriteZero`](std::io::ErrorKind::WriteZero) once such a buffer is full.
     ///
     /// # Examples
     ///

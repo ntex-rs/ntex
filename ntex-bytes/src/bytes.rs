@@ -54,10 +54,9 @@ use crate::{Buf, BytesMut, buf::IntoIter, debug, storage::INLINE_CAP, storage::S
 /// # Sharing
 ///
 /// The memory itself is reference counted, and multiple `Bytes` objects may
-/// point to the same region. Each `Bytes` handle point to different sections within
-/// the memory region, and `Bytes` handle may or may not have overlapping views
+/// point to the same region. Each `Bytes` handle points to a section of the
+/// memory region, and `Bytes` handles may or may not have overlapping views
 /// into the memory.
-///
 ///
 /// ```text
 ///
@@ -202,7 +201,8 @@ impl Bytes {
     /// Returns a slice of self for the provided range.
     ///
     /// This will increment the reference count for the underlying memory and
-    /// return a new `Bytes` handle set to the slice.
+    /// return a new `Bytes` handle set to the slice. A slice that fits inline
+    /// is copied instead.
     ///
     /// This operation is `O(1)`.
     ///
@@ -231,7 +231,7 @@ impl Bytes {
 
     /// Returns a slice of self for the provided range.
     ///
-    /// Does nothing if `begin <= end` or `end <= self.len()`
+    /// Returns `None` unless `begin <= end` and `end <= self.len()`.
     #[must_use]
     pub fn slice_checked(&self, range: impl ops::RangeBounds<usize>) -> Option<Bytes> {
         use std::ops::Bound;
@@ -240,12 +240,12 @@ impl Bytes {
 
         let begin = match range.start_bound() {
             Bound::Included(&n) => n,
-            Bound::Excluded(&n) => n + 1,
+            Bound::Excluded(&n) => n.checked_add(1)?,
             Bound::Unbounded => 0,
         };
 
         let end = match range.end_bound() {
-            Bound::Included(&n) => n + 1,
+            Bound::Included(&n) => n.checked_add(1)?,
             Bound::Excluded(&n) => n,
             Bound::Unbounded => len,
         };
@@ -291,15 +291,17 @@ impl Bytes {
     ///
     /// # Panics
     ///
-    /// Requires that the given `sub` slice is in fact contained within the
+    /// Requires that the given `subset` slice is in fact contained within the
     /// `Bytes` buffer; otherwise this function will panic.
     #[must_use]
     pub fn slice_ref(&self, subset: &[u8]) -> Bytes {
         self.slice_ref_checked(subset)
-            .expect("Given `sub` slice is not contained within the `Bytes` buffer")
+            .expect("Given `subset` slice is not contained within the `Bytes` buffer")
     }
 
     /// Returns a slice of self that is equivalent to the given `subset`.
+    ///
+    /// Returns `None` if `subset` is not contained within the `Bytes` buffer.
     #[must_use]
     pub fn slice_ref_checked(&self, subset: &[u8]) -> Option<Bytes> {
         let bytes_p = self.as_ptr() as usize;
@@ -347,7 +349,7 @@ impl Bytes {
 
     /// Splits the bytes into two at the given index.
     ///
-    /// Does nothing if `at > self.len()`
+    /// Returns `None` if `at > self.len()`.
     #[must_use]
     pub fn split_off_checked(&mut self, at: usize) -> Option<Bytes> {
         if at <= self.len() {
@@ -396,7 +398,7 @@ impl Bytes {
 
     /// Splits the bytes into two at the given index.
     ///
-    /// Does nothing if `at > len`.
+    /// Returns `None` if `at > len`.
     #[must_use]
     pub fn split_to_checked(&mut self, at: usize) -> Option<Bytes> {
         if at <= self.len() {
@@ -444,7 +446,7 @@ impl Bytes {
     /// rest.
     ///
     /// If `len` is greater than the buffer's current length, this has no
-    /// effect. `Data` may be inlined if the slice fits.
+    /// effect. The data may be inlined if it fits.
     ///
     /// The [`split_off`] method can emulate `truncate`, but this causes the
     /// excess bytes to be returned instead of dropped.
@@ -922,6 +924,18 @@ mod tests {
     const LONG: &[u8] = b"mary had a1 little la2mb, little lamb, little lamb, little lamb, little lamb, little lamb \
         mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb \
         mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb \0";
+
+    #[test]
+    fn slice_checked_max_bounds() {
+        use std::ops::Bound;
+
+        let b = Bytes::from(LONG.to_vec());
+        assert!(b.slice_checked(..=usize::MAX).is_none());
+        assert!(
+            b.slice_checked((Bound::Excluded(usize::MAX), Bound::Unbounded))
+                .is_none()
+        );
+    }
 
     #[test]
     #[allow(

@@ -122,7 +122,13 @@ impl BytePages {
         }
     }
 
-    /// Appends a new page to the back of the collection.
+    /// Appends a page to the back of the collection.
+    ///
+    /// Empty pages are ignored. If the current page holds no data and `buf` is
+    /// a unique buffer with spare capacity, it becomes the new current page.
+    /// If the data fits into the spare capacity of the current page, it is
+    /// copied there. Otherwise the current page is closed and `buf` is added
+    /// as a separate page without copying.
     pub fn append<T>(&mut self, buf: T)
     where
         BytePage: From<T>,
@@ -199,7 +205,10 @@ impl BytePages {
         }
     }
 
-    /// Returns the first page from the collection.
+    /// Removes and returns the first page from the collection.
+    ///
+    /// The current writable page is returned last. Returns `None` if there are
+    /// no pages.
     pub fn take(&mut self) -> Option<BytePage> {
         if let Some(page) = self.pop_front() {
             Some(page)
@@ -209,10 +218,12 @@ impl BytePages {
     }
 
     #[inline]
-    /// Copies all buffered data into another [`BytePages`] value.
+    /// Appends all buffered data to another [`BytePages`] value, `self` is
+    /// left unchanged.
     ///
-    /// Depending on the underlying storage, this operation might be `O(1)` or could
-    /// involve a memory copy.
+    /// Pages are shared with `pages` rather than copied, unless they are small
+    /// enough to be copied into the spare capacity of the current page of
+    /// `pages`, see [`append`](Self::append).
     pub fn copy_to(&self, pages: &mut BytePages) {
         for p in self.pages() {
             pages.append(p.clone());
@@ -228,7 +239,10 @@ impl BytePages {
     }
 
     #[inline]
-    /// Moves all buffered data into another [`BytePages`] value.
+    /// Moves all buffered data to the back of another [`BytePages`] value,
+    /// leaving `self` empty.
+    ///
+    /// Pages are moved according to the rules of [`append`](Self::append).
     pub fn move_to(&mut self, pages: &mut BytePages) {
         while let Some(page) = self.take() {
             pages.append(page);
@@ -238,7 +252,7 @@ impl BytePages {
     /// Splits the buffer into two at the given index.
     ///
     /// Afterwards, `self` contains elements `[at, len)`, and the returned [`BytePages`]
-    /// contains elements `[0, at)`.
+    /// contains elements `[0, at)`. If `at > len`, all data is moved.
     ///
     /// Depending on the underlying storage, this operation might be `O(1)` or could
     /// involve a memory copy.
@@ -251,8 +265,8 @@ impl BytePages {
 
     /// Splits the buffer, adding the resulting items to the supplied pages object.
     ///
-    /// Afterwards, `self` contains elements `[at, len)`, and `to`
-    /// contains elements `[0, at)`.
+    /// Afterwards, `self` contains elements `[at, len)`, and elements `[0, at)`
+    /// are appended to `to`. If `at > len`, all data is moved.
     ///
     /// Depending on the underlying storage, this operation might be `O(1)` or could
     /// involve a memory copy.
@@ -594,10 +608,10 @@ impl BytePage {
     ///
     /// # Safety
     ///
-    /// One of the possible page storage types is `Bytes`.
-    /// A `Bytes` value may store its data inline, in which case `as_ptr()` returns
-    /// a pointer into the `Bytes` object itself. Moving the `BytePage` may
-    /// therefore invalidate the returned pointer.
+    /// The returned pointer may only be dereferenced while the page is neither
+    /// moved, modified nor dropped, and only for [`len`](Self::len) bytes. An
+    /// inline page stores its data inside the `BytePage` itself, so moving the
+    /// page invalidates the pointer, see [`is_inline`](Self::is_inline).
     pub unsafe fn as_ptr(&self) -> *const u8 {
         unsafe {
             match &self.inner {
@@ -632,7 +646,7 @@ impl BytePage {
     /// Splits the buffer into two at the given index.
     ///
     /// Afterwards, `self` contains elements `[at, len)`, and the returned `BytePage`
-    /// contains elements `[0, at)`.
+    /// contains elements `[0, at)`. If `at > len`, all data is moved.
     ///
     /// Depending on the underlying storage, this operation might be `O(1)` or could
     /// involve a memory copy.
@@ -671,7 +685,8 @@ impl BytePage {
     /// Advance the internal cursor.
     ///
     /// Afterwards `self` contains elements `[cnt, len)`.
-    /// This is an `O(1)` operation.
+    /// This is an `O(1)` operation, except for pages backed by a `Vec<u8>`,
+    /// whose remaining data is copied.
     ///
     /// # Panics
     ///

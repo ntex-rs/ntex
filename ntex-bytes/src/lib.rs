@@ -43,6 +43,13 @@
 //! See [`Bytes`] and [`BytesMut`] for details about sharing, splitting, and
 //! allocation behavior.
 //!
+//! # Interoperability
+//!
+//! [`Bytes`] and [`BytesMut`] implement the [`Buf`](::bytes::Buf) trait of the
+//! `bytes` crate, and [`BytesMut`] also implements its
+//! [`BufMut`](::bytes::BufMut) trait. [`Bytes`] and [`ByteString`] implement
+//! `serde`'s `Serialize` and `Deserialize`.
+//!
 //! # Crate features
 //!
 //! - `simd` enables SIMD-accelerated UTF-8 validation.
@@ -138,6 +145,10 @@ pub enum BytePageSize {
     /// A 64 KiB page.
     Size64 = 6,
     /// No fixed page category.
+    ///
+    /// Buffers of this category are sized on demand and never returned to
+    /// the page cache. When it is used to allocate a new page, the page gets
+    /// the 64 KiB capacity.
     Unset = 7,
 }
 
@@ -164,6 +175,8 @@ impl BytePageSize {
     }
 
     /// Returns the recommended write-buffer threshold for this page size.
+    ///
+    /// This is half of the category size, but at most 16 KiB.
     pub const fn half_capacity(self) -> usize {
         match self {
             BytePageSize::Size4 => 2 * 1024,
