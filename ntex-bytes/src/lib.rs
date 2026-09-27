@@ -143,7 +143,15 @@ pub enum BytePageSize {
 
 impl BytePageSize {
     /// Returns the page capacity in bytes.
+    ///
+    /// A page is allocated together with its header, the capacity is the
+    /// category size minus the header, so the allocation is exactly the
+    /// category size and fits the allocator's size classes.
     pub const fn capacity(self) -> usize {
+        self.alloc_size() - stvec::METADATA_SIZE
+    }
+
+    const fn alloc_size(self) -> usize {
         match self {
             BytePageSize::Size4 => 4 * 1024,
             BytePageSize::Size8 => 8 * 1024,
@@ -183,14 +191,15 @@ mod tests {
 
     #[test]
     fn page_size() {
-        assert_eq!(BytePageSize::Size4.capacity(), 4 * 1024);
-        assert_eq!(BytePageSize::Size8.capacity(), 8 * 1024);
-        assert_eq!(BytePageSize::Size16.capacity(), 16 * 1024);
-        assert_eq!(BytePageSize::Size24.capacity(), 24 * 1024);
-        assert_eq!(BytePageSize::Size32.capacity(), 32 * 1024);
-        assert_eq!(BytePageSize::Size48.capacity(), 48 * 1024);
-        assert_eq!(BytePageSize::Size64.capacity(), 64 * 1024);
-        assert_eq!(BytePageSize::Unset.capacity(), 64 * 1024);
+        const META: usize = stvec::METADATA_SIZE;
+        assert_eq!(BytePageSize::Size4.capacity(), 4 * 1024 - META);
+        assert_eq!(BytePageSize::Size8.capacity(), 8 * 1024 - META);
+        assert_eq!(BytePageSize::Size16.capacity(), 16 * 1024 - META);
+        assert_eq!(BytePageSize::Size24.capacity(), 24 * 1024 - META);
+        assert_eq!(BytePageSize::Size32.capacity(), 32 * 1024 - META);
+        assert_eq!(BytePageSize::Size48.capacity(), 48 * 1024 - META);
+        assert_eq!(BytePageSize::Size64.capacity(), 64 * 1024 - META);
+        assert_eq!(BytePageSize::Unset.capacity(), 64 * 1024 - META);
         assert_eq!(BytePageSize::Size4.half_capacity(), 2 * 1024);
         assert_eq!(BytePageSize::Size8.half_capacity(), 4 * 1024);
         assert_eq!(BytePageSize::Size16.half_capacity(), 8 * 1024);

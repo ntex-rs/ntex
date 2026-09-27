@@ -422,7 +422,6 @@ impl Drop for StorageVec {
     }
 }
 
-// TODO: Drop *mut SharedVec on thread local destroy
 thread_local! {
     static CACHE: Cell<Option<Box<Cache>>> = Cell::new(Some(Box::default()));
 }
@@ -640,6 +639,20 @@ mod tests {
 
         let st = StorageVec::sized(BytePageSize::Size8);
         assert_eq!(addr, st.0);
+    }
+
+    #[test]
+    fn page_allocation_is_category_size() {
+        for (size, alloc) in [
+            (BytePageSize::Size4, 4 * 1024),
+            (BytePageSize::Size16, 16 * 1024),
+            (BytePageSize::Size64, 64 * 1024),
+        ] {
+            let st = StorageVec::sized(size);
+            assert_eq!(st.capacity(), size.capacity());
+            let layout = shared_vec_layout(st.capacity()).unwrap();
+            assert_eq!(layout.size(), alloc, "{size:?}");
+        }
     }
 
     // Run under miri: without `Acquire`, the write below races with the read

@@ -399,6 +399,8 @@ impl Drop for BytePages {
     fn drop(&mut self) {
         if let Some(mut st) = self.st.take() {
             st.pages.clear();
+            // a large write must not pin its page list in the cache
+            st.pages.shrink_to(8);
             st.len = 0;
             // the cache is unavailable while the thread-local is being destroyed
             let _ = CACHE.try_with(move |c| {
@@ -919,6 +921,7 @@ mod tests {
 
     #[test]
     fn pages() {
+        let cap = BytePageSize::Size8.capacity();
         unsafe {
             // pages
             let mut pages = BytePages::new(BytePageSize::Size8);
@@ -939,7 +942,7 @@ mod tests {
             assert_eq!(p.len(), 1);
             assert_eq!(p.as_ref(), b"a");
 
-            pgs.extend_from_slice("a".repeat(8 * 1024 - 1).as_bytes());
+            pgs.extend_from_slice("a".repeat(cap - 1).as_bytes());
             assert_eq!(pgs.num_pages(), 1);
             pgs.put_u8(b'a');
             assert_eq!(pgs.num_pages(), 1);
@@ -948,18 +951,18 @@ mod tests {
             pgs.put_u8(b'a');
             assert_eq!(pgs.num_pages(), 2);
 
-            pgs.append(Bytes::copy_from_slice("a".repeat(8 * 1024).as_bytes()));
+            pgs.append(Bytes::copy_from_slice("a".repeat(cap).as_bytes()));
             assert_eq!(pgs.num_pages(), 3);
             assert!(pgs.current.is_none());
 
             // page
             let p = pages.take().unwrap();
-            assert_eq!(p.len(), 8192);
+            assert_eq!(p.len(), cap);
             let p = pages.take().unwrap();
-            assert_eq!(p.len(), 1025);
+            assert_eq!(p.len(), 9217 - cap);
             assert!(!p.is_empty());
             assert_eq!(p.as_ref().as_ptr(), p.as_ptr());
-            assert_eq!(p.as_ref(), "a".repeat(1025).as_bytes());
+            assert_eq!(p.as_ref(), "a".repeat(9217 - cap).as_bytes());
             assert!(pages.take().is_none());
 
             let p = BytePage::from(Bytes::copy_from_slice(b"123"));
@@ -1227,6 +1230,23 @@ mod tests {
         let mut pages = BytePages::new(BytePageSize::Size8);
         let n = pages.chunk_mut().len();
         unsafe { pages.advance_mut(n + 1) };
+    }
+
+    #[test]
+    fn cached_pages_list_is_shrunk() {
+        let mut pages = BytePages::new(BytePageSize::Size4);
+        for _ in 0..200 {
+            pages.append(Bytes::from_static(b"page"));
+        }
+        assert!(pages.pages().capacity() >= 200);
+        drop(pages);
+
+        let pages = BytePages::new(BytePageSize::Size4);
+        assert!(
+            pages.pages().capacity() < 200,
+            "{}",
+            pages.pages().capacity()
+        );
     }
 
     #[test]

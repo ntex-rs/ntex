@@ -2,6 +2,13 @@
 
 ## [1.10.0] (unreleased)
 
+* Sized pages allocate exactly their category size (4 KiB, 8 KiB, ...), the
+  page header is taken from the data capacity, so pages fit allocator size
+  classes. `BytePageSize::capacity()` reports the data capacity
+
+* Cached `BytePages` shrink their page list on drop, a large `BytePages` no
+  longer keeps its page list allocation in the thread-local cache
+
 * `BufMut` for `BytePages` treats the pages as growable: `remaining_mut()`
   reports `usize::MAX - len`, `chunk_mut()` starts a new page when the current
   one is full, `put()` copies across pages instead of panicking, and
