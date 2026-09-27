@@ -389,10 +389,10 @@ fn fns_defined_for_bytes() {
     assert!(bytes > "g".to_string());
     assert!(bytes > "g".as_bytes().to_vec());
     assert!(bytes > Bytes::from("g"));
-    assert!("g" > bytes);
-    assert!("g".to_string() > bytes);
-    assert!("g".as_bytes().to_vec() > bytes);
-    assert!([b'g'] > bytes);
+    assert!("g" < bytes);
+    assert!("g".to_string() < bytes);
+    assert!("g".as_bytes().to_vec() < bytes);
+    assert!([b'g'] < bytes);
     assert!(Bytes::from(&"g"[..]) < bytes);
 
     assert_eq!(bytes, "hello world");
@@ -961,4 +961,57 @@ fn page_clone_across_threads() {
     let c = t.join().unwrap();
     assert_eq!(c, &data[1..]);
     assert_eq!(p, &data[2..]);
+}
+
+#[test]
+fn buf_mut_put_grows() {
+    let data = vec![7u8; 5000];
+    let mut buf = BytesMut::new();
+    BufMut::put(&mut buf, &data[..]);
+    assert_eq!(&buf[..], &data[..]);
+
+    // source larger than the spare capacity
+    let src = Bytes::from(data.clone());
+    let mut buf = BytesMut::with_capacity(16);
+    BufMut::put(&mut buf, &b"ab"[..]);
+    BufMut::put(&mut buf, src);
+    assert_eq!(&buf[..2], b"ab");
+    assert_eq!(&buf[2..], &data[..]);
+}
+
+#[test]
+#[allow(deprecated)]
+fn buf_mut_writer_and_forwarding_grow() {
+    use std::io::Write;
+
+    let data = vec![5u8; 5000];
+
+    // Writer writes all of src into a full BytesMut
+    let mut buf = BytesMut::with_capacity(16);
+    buf.extend_from_slice(&[0; 16]);
+    let mut w = buf.writer();
+    w.write_all(&data).unwrap();
+    let buf = w.into_inner();
+    assert_eq!(&buf[16..], &data[..]);
+
+    // &mut BytesMut and Box<BytesMut> forward to the growable impl
+    fn fill<B: BufMut>(mut b: B, data: &[u8]) {
+        b.put_slice(data);
+        b.put(data);
+        b.put_u8(1);
+        b.put_i8(2);
+    }
+    let mut buf = BytesMut::new();
+    fill(&mut buf, &data);
+    assert_eq!(buf.len(), 2 * data.len() + 2);
+    let mut buf = Box::new(BytesMut::new());
+    fill(&mut buf, &data);
+    assert_eq!(buf.len(), 2 * data.len() + 2);
+
+    // fixed buffers still write partially
+    let mut dst = [0u8; 4];
+    let mut w = (&mut dst[..]).writer();
+    assert_eq!(w.write(b"abcdef").unwrap(), 4);
+    assert_eq!(w.write(b"x").unwrap(), 0);
+    assert_eq!(&dst, b"abcd");
 }

@@ -32,7 +32,9 @@ fn drop_str(addr: *const u8, len: usize) {
 
 const ARC_STR_VTABLE: StorageVTable = StorageVTable::new(as_ptr, len, clone_str, drop_str);
 
-impl StorageExt for Arc<str> {
+// SAFETY: the vtable shares and releases the `Arc<str>` allocation, which
+// stays valid and immutable until the last handle is dropped
+unsafe impl StorageExt for Arc<str> {
     fn create(self) -> (*const u8, usize, &'static StorageVTable) {
         let ptr = Arc::into_raw(self) as *const [u8];
 
@@ -43,8 +45,7 @@ impl StorageExt for Arc<str> {
     }
 }
 
-// # SAFETY
-// Implementation must contain valid string which Arc<str> does
+// SAFETY: `Arc<str>` always holds valid UTF-8
 unsafe impl StorageExtStr for Arc<str> {}
 
 #[cfg(test)]

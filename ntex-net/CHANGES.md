@@ -2,11 +2,24 @@
 
 ## [4.1.0] - Unreleased
 
+* IOCP: refuse sockets from non-IFS layered service providers (LSPs), which can
+  post completions for synchronously completed operations and corrupt reused
+  operation slots
+
+* IOCP: close the sockets of connects still pending when the runtime stops, and
+  keep their `OVERLAPPED` allocated since the kernel still completes into it
+
+* The compio runtime start log reports the actual driver, it always reported `Poll`
+
 * Fix stalled I/O in the compio backend when the `block_on` future woke another task
   whenever it was polled, e.g. while reading an h2 response body
 
 * Fix panic on compio runtime shutdown when a dropped task spawned a new task
   from its destructor, e.g. an h2 stream sending RST_STREAM
+
+* IOCP reads wait for input with a zero-byte recv and then read it in place,
+  idle connections no longer hold a read buffer and input arriving while
+  earlier input is unconsumed is appended without a second buffer
 
 * Fix lost input in the compio backend, a read shorter than the unconsumed
   input already in the read buffer was dropped

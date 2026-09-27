@@ -2,9 +2,9 @@ use crate::alloc::alloc::{self, Layout, LayoutError};
 
 use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::atomic::{self, AtomicU32};
-use std::{cell::Cell, mem, num::NonZeroUsize, ptr, ptr::NonNull, slice};
+use std::{cell::Cell, cmp, mem, num::NonZeroUsize, ptr, ptr::NonNull, slice};
 
-use crate::{BytePageSize, storage::Storage};
+use crate::{BytePageSize, buf::UninitSlice, storage::INLINE_CAP, storage::Storage};
 
 #[derive(Debug)]
 /// Thread-safe reference-counted container for the shared storage.
@@ -32,18 +32,12 @@ pub(crate) struct StorageVec(pub(crate) NonNull<SharedVec>);
 const KIND_VEC: usize = 0b01;
 const KIND_OFFSET_BITS: usize = 2;
 
+/// Size of the header stored in front of the data of every heap buffer.
 pub const METADATA_SIZE: usize = mem::size_of::<SharedVec>();
 const METADATA_SIZE_U32: u32 = METADATA_SIZE as u32;
 
 /// Maximum buffer capacity, offsets and sizes are stored as `u32`.
 pub(crate) const MAX_CAPACITY: usize = u32::MAX as usize - METADATA_SIZE;
-
-// Inline buffer capacity. This is the size of `Storage` minus 1 byte for the
-// metadata.
-#[cfg(target_pointer_width = "64")]
-pub(crate) const INLINE_CAP: usize = 3 * 8 - 1;
-#[cfg(target_pointer_width = "32")]
-pub(crate) const INLINE_CAP: usize = 3 * 4 - 1;
 
 impl StorageVec {
     /// Create new empty storage with specified capacity
@@ -83,12 +77,6 @@ impl StorageVec {
 
     pub(crate) fn unsize(&mut self) {
         unsafe { (*self.0.as_ptr()).size = BytePageSize::Unset }
-    }
-
-    #[allow(dead_code)]
-    /// Returns the page size type
-    pub(crate) fn page_size(&self) -> BytePageSize {
-        unsafe { (*self.0.as_ptr()).size }
     }
 
     /// Return a slice for the handle's view into the shared buffer
@@ -131,6 +119,22 @@ impl StorageVec {
         }
     }
 
+    /// Returns the spare capacity after the data.
+    #[inline]
+    pub(crate) fn spare_mut(&mut self) -> &mut UninitSlice {
+        // SAFETY: `remaining` bytes after `len` are allocated and owned by this view
+        unsafe { UninitSlice::from_raw_parts_mut(self.as_ptr().add(self.len()), self.remaining()) }
+    }
+
+    /// Appends as much of `src` as fits, returns the number of bytes copied.
+    #[inline]
+    pub(crate) fn put_slice_partial(&mut self, src: &[u8]) -> usize {
+        let cnt = cmp::min(src.len(), self.remaining());
+        self.spare_mut()[..cnt].copy_from_slice(&src[..cnt]);
+        unsafe { self.set_len(self.len() + cnt) };
+        cnt
+    }
+
     pub(crate) fn len(&self) -> usize {
         unsafe { (*self.0.as_ptr()).len as usize }
     }
@@ -150,8 +154,37 @@ impl StorageVec {
         unsafe { (*self.0.as_ptr()).remaining == 0 }
     }
 
-    pub(crate) fn is_unique(&mut self) -> bool {
+    pub(crate) fn is_unique(&self) -> bool {
         unsafe { (*self.0.as_ptr()).is_unique() }
+    }
+
+    /// Takes ownership of the allocation of a frozen view, if the view holds
+    /// the only reference to it.
+    ///
+    /// The view becomes the `BytesMut` view, the rest of the allocation past
+    /// it is spare capacity.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must point to a live `SharedVec` referenced by the caller, the
+    /// view `offset..offset + len` must be within the allocation. On success
+    /// the caller's reference is transferred to the returned handle.
+    pub(crate) unsafe fn from_unique_view(
+        ptr: *mut SharedVec,
+        offset: usize,
+        len: usize,
+    ) -> Option<StorageVec> {
+        // `Acquire` synchronizes with the `Release` decrement of the handles
+        // dropped by other threads, their accesses happen before the header
+        // is updated below.
+        if !(*ptr).is_unique() {
+            return None;
+        }
+        let end = (*ptr).capacity + METADATA_SIZE_U32;
+        (*ptr).offset = offset as u32;
+        (*ptr).len = len as u32;
+        (*ptr).remaining = end - (offset + len) as u32;
+        Some(StorageVec(NonNull::new_unchecked(ptr)))
     }
 
     /// Returns an immutable view of the data, `self` stays usable.
@@ -287,8 +320,8 @@ impl StorageVec {
             let inner = self.as_inner();
             let len = (*inner).len as usize;
 
-            // Reserving involves abandoning the currently shared buffer and
-            // allocating a new vector with the requested capacity.
+            // A unique buffer is reclaimed or grown in place, otherwise the
+            // data is copied into a new allocation.
             let new_cap = len
                 .checked_add(additional)
                 .expect("buffer capacity overflow");
@@ -310,13 +343,65 @@ impl StorageVec {
                     }
                     return;
                 }
+
+                // Grow the allocation instead of copying into a new one, the
+                // allocator can often extend it in place. A pooled page keeps
+                // its size class, it goes back to the page cache on release.
+                if (*inner).size == BytePageSize::Unset {
+                    self.realloc(len, capacity, grown_capacity(len, new_cap));
+                    return;
+                }
             }
             // Create a new storage
             *self = StorageVec(SharedVec::create(
                 BytePageSize::Unset,
-                new_cap,
+                grown_capacity(len, new_cap),
                 self.as_ref(),
             ));
+        }
+    }
+
+    /// Grows the unique, unpooled allocation to hold `new_cap` bytes.
+    ///
+    /// # Safety
+    ///
+    /// The handle must be the only reference to the allocation, `len` and
+    /// `capacity` must be its current length and capacity.
+    unsafe fn realloc(&mut self, len: usize, capacity: usize, new_cap: usize) {
+        assert!(
+            new_cap <= MAX_CAPACITY,
+            "buffer capacity {new_cap} exceeds maximum {MAX_CAPACITY}"
+        );
+        let old_layout = shared_vec_layout(capacity).unwrap();
+        let new_layout = shared_vec_layout(new_cap).unwrap();
+
+        unsafe {
+            let ptr = self.0.as_ptr();
+
+            // move the data to the start, it is at the start of the new
+            // capacity as well. The header is consistent before allocating,
+            // the allocation error handler may unwind.
+            let offset = (*ptr).offset as usize;
+            if offset != METADATA_SIZE {
+                if len != 0 {
+                    let data = ptr.cast::<u8>();
+                    ptr::copy(data.add(offset), data.add(METADATA_SIZE), len);
+                }
+                (*ptr).offset = METADATA_SIZE_U32;
+                (*ptr).remaining = (capacity - len) as u32;
+            }
+
+            let new_ptr = alloc::realloc(ptr.cast(), old_layout, new_layout.size());
+            if new_ptr.is_null() {
+                alloc::handle_alloc_error(new_layout);
+            }
+
+            #[allow(clippy::cast_ptr_alignment)]
+            let inner = new_ptr.cast::<SharedVec>();
+            let capacity = (new_layout.size() - METADATA_SIZE) as u32;
+            (*inner).capacity = capacity;
+            (*inner).remaining = capacity - len as u32;
+            self.0 = NonNull::new_unchecked(inner);
         }
     }
 
@@ -370,7 +455,6 @@ impl Drop for StorageVec {
     }
 }
 
-// TODO: Drop *mut SharedVec on thread local destroy
 thread_local! {
     static CACHE: Cell<Option<Box<Cache>>> = Cell::new(Some(Box::default()));
 }
@@ -384,6 +468,9 @@ pub(crate) fn set_pages_cache(size: usize) {
     });
 }
 
+/// Default number of cached pages per page size.
+const DEFAULT_PAGES_CACHE: usize = 16;
+
 struct Cache {
     size: usize,
     cache: [Vec<StorageVec>; 7],
@@ -392,7 +479,7 @@ struct Cache {
 impl Default for Cache {
     fn default() -> Self {
         Self {
-            size: 128,
+            size: DEFAULT_PAGES_CACHE,
             cache: Default::default(),
         }
     }
@@ -454,7 +541,7 @@ impl SharedVec {
     }
 
     fn is_unique(&self) -> bool {
-        // This is same as Shared::is_unique() but for KIND_VEC
+        // Acquire synchronizes with the Release decrement of other handles
         self.ref_count.load(Acquire) == 1
     }
 
@@ -470,7 +557,7 @@ impl SharedVec {
 }
 
 pub(crate) fn release_shared_vec(ptr: *mut SharedVec) {
-    // `Shared` storage... follow the drop steps from Arc.
+    // follow the drop steps from Arc
     unsafe {
         if (*ptr).ref_count.fetch_sub(1, Release) != 1 {
             return;
@@ -492,7 +579,7 @@ pub(crate) fn release_shared_vec(ptr: *mut SharedVec) {
         // > through this reference must obviously happened before), and an
         // > "acquire" operation before deleting the object.
         //
-        // [1]: (www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html)
+        // [1]: https://www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html
         atomic::fence(Acquire);
 
         let capacity = (*ptr).capacity;
@@ -532,6 +619,15 @@ pub(crate) fn release_shared_vec(ptr: *mut SharedVec) {
     }
 }
 
+/// The capacity a buffer of `len` bytes grows to when it needs `required`.
+///
+/// It is at least twice the length, so appending in small steps reallocates a
+/// logarithmic number of times, a buffer holding little data still gets what
+/// it asked for.
+fn grown_capacity(len: usize, required: usize) -> usize {
+    cmp::max(required, cmp::min(len.saturating_mul(2), MAX_CAPACITY))
+}
+
 const fn shared_vec_layout(cap: usize) -> Result<Layout, LayoutError> {
     let s_layout = match Layout::from_size_align(cap, Layout::new::<u8>().align()) {
         Ok(l) => l,
@@ -543,22 +639,10 @@ const fn shared_vec_layout(cap: usize) -> Result<Layout, LayoutError> {
     }
 }
 
-// While there is `std::process:abort`, it's only available in Rust 1.17, and
-// our minimum supported version is currently 1.15. So, this acts as an abort
-// by triggering a double panic, which always aborts in Rust.
-struct Abort;
-
-impl Drop for Abort {
-    fn drop(&mut self) {
-        panic!();
-    }
-}
-
 #[inline(never)]
 #[cold]
-pub(crate) fn abort() {
-    let _a = Abort;
-    panic!();
+pub(crate) fn abort() -> ! {
+    std::process::abort()
 }
 
 #[cfg(test)]
@@ -571,7 +655,7 @@ mod tests {
         super::CACHE.with(|cache| cache.set(Some(Box::default())));
 
         let mut st = StorageVec::sized(BytePageSize::Size8);
-        assert_eq!(st.page_size(), BytePageSize::Size8);
+        assert_eq!(unsafe { (*st.0.as_ptr()).size }, BytePageSize::Size8);
 
         st.put_u8(b'h');
         let addr = st.0;
@@ -579,6 +663,39 @@ mod tests {
 
         let st = StorageVec::sized(BytePageSize::Size8);
         assert_eq!(addr, st.0);
+    }
+
+    #[test]
+    fn default_cache_limit_per_page_size() {
+        super::CACHE.with(|cache| cache.set(Some(Box::default())));
+
+        let pages: Vec<_> = (0..20)
+            .map(|_| StorageVec::sized(BytePageSize::Size4))
+            .collect();
+        drop(pages);
+
+        let cached = super::CACHE.with(|c| {
+            let cst = c.take().unwrap();
+            let len = cst.cache[BytePageSize::Size4 as usize].len();
+            c.set(Some(cst));
+            len
+        });
+        assert_eq!(cached, super::DEFAULT_PAGES_CACHE);
+        assert_eq!(super::DEFAULT_PAGES_CACHE, 16);
+    }
+
+    #[test]
+    fn page_allocation_is_category_size() {
+        for (size, alloc) in [
+            (BytePageSize::Size4, 4 * 1024),
+            (BytePageSize::Size16, 16 * 1024),
+            (BytePageSize::Size64, 64 * 1024),
+        ] {
+            let st = StorageVec::sized(size);
+            assert_eq!(st.capacity(), size.capacity());
+            let layout = shared_vec_layout(st.capacity()).unwrap();
+            assert_eq!(layout.size(), alloc, "{size:?}");
+        }
     }
 
     // Run under miri: without `Acquire`, the write below races with the read
@@ -602,5 +719,71 @@ mod tests {
         }
         st.as_mut()[0] = 2;
         assert_eq!(handle.join().unwrap(), 1);
+    }
+
+    fn pattern(len: usize) -> Vec<u8> {
+        (0..len).map(|i| i as u8).collect()
+    }
+
+    #[test]
+    fn reserve_grows_unique_buffer() {
+        let data = pattern(100);
+        let mut st = StorageVec::from_slice(100, &data);
+        st.reserve(1000);
+        assert_eq!(st.as_ref(), &data[..]);
+        assert!(st.capacity() >= 1100);
+        assert_eq!(st.remaining(), st.capacity() - st.len());
+
+        // the view may start past the allocation start
+        let mut st = StorageVec::from_slice(100, &data);
+        unsafe { st.set_start(30) };
+        st.reserve(1000);
+        assert_eq!(st.as_ref(), &data[30..]);
+        assert!(st.capacity() >= 1070);
+        assert_eq!(st.remaining(), st.capacity() - st.len());
+        for i in 0..1000 {
+            st.put_u8(i as u8);
+        }
+        assert_eq!(&st.as_ref()[..70], &data[30..]);
+        assert_eq!(st.len(), 1070);
+
+        // nothing left in the view
+        let mut st = StorageVec::from_slice(100, &data);
+        unsafe { st.set_start(100) };
+        st.reserve(1000);
+        assert!(st.as_ref().is_empty());
+        assert_eq!(st.remaining(), st.capacity());
+    }
+
+    #[test]
+    fn reserve_keeps_shared_views() {
+        let data = pattern(100);
+        let mut st = StorageVec::from_slice(100, &data);
+        let view = st.shallow_freeze();
+        assert!(!view.is_inline());
+        st.reserve(1000);
+        st.as_mut()[0] = 0xff;
+        assert_eq!(view.as_ref(), &data[..]);
+        assert_eq!(&st.as_ref()[1..], &data[1..]);
+    }
+
+    #[test]
+    fn reserve_pooled_page_leaves_page_to_cache() {
+        super::CACHE.with(|cache| cache.set(Some(Box::default())));
+
+        let mut st = StorageVec::sized(BytePageSize::Size8);
+        let page = st.0;
+        let data = pattern(st.capacity());
+        for b in &data {
+            st.put_u8(*b);
+        }
+        st.reserve(1);
+        assert_eq!(unsafe { (*st.0.as_ptr()).size }, BytePageSize::Unset);
+        assert_ne!(st.0, page);
+        assert_eq!(st.as_ref(), &data[..]);
+
+        // the page went back to the cache with its size class
+        let st2 = StorageVec::sized(BytePageSize::Size8);
+        assert_eq!(st2.0, page);
     }
 }

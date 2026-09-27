@@ -16,7 +16,7 @@ impl fmt::Debug for BsDebug<'_> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         write!(fmt, "b\"")?;
         for &c in self.0 {
-            // https://doc.rust-lang.org/reference.html#byte-escapes
+            // https://doc.rust-lang.org/reference/tokens.html#byte-escapes
             if c == b'\n' {
                 write!(fmt, "\\n")?;
             } else if c == b'\r' {

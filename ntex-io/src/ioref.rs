@@ -208,6 +208,9 @@ impl IoRef {
     /// enough bytes may release read backpressure. It also cancels a pause
     /// installed by [`Io::poll_read_pause`](crate::Io::poll_read_pause) and wakes the transport
     /// read task.
+    ///
+    /// Decoded frames that share the read buffer's allocation keep the whole
+    /// buffer alive, see [`IoConfig::set_read_buf`](crate::IoConfig::set_read_buf).
     pub fn decode<U>(
         &self,
         codec: &U,

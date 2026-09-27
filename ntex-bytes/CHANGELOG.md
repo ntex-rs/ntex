@@ -2,6 +2,78 @@
 
 ## [1.10.0] (unreleased)
 
+* Fix reversed result of `PartialOrd<Bytes>` for slices, arrays, `str`, `Vec<u8>`
+  and `String`
+
+* Generate the shared `Bytes`/`BytesMut` trait impls and the `BufMut::put_*`
+  integer methods with macros
+
+* Reduce and narrow `unsafe` blocks in the buffer copy and storage code
+
+* `BytePage` implements `PartialEq` against `[u8]`, `[u8; N]`, `str`, `Vec<u8>`
+  and `String`, in both directions
+
+* Add `BytesMut::is_unique()`
+
+* Mark `StorageExt` as an `unsafe` trait, `Bytes` trusts the pointers and lengths
+  returned by its vtable
+
+* `Bytes::slice_checked()` returns `None` instead of overflowing for bounds
+  at `usize::MAX`
+
+* `BytePages::new()` and `BytePages::set_page_size()` panic on
+  `BytePageSize::Unset`, instead of panicking on the first write and disabling
+  the page cache of the thread
+
+* Add the `unsafe` `UninitSlice::as_uninit_slice_mut()` and deprecate
+  `AsMut<[MaybeUninit<u8>]>` for `UninitSlice`, which is unsound as safe code
+  could write uninitialized bytes into initialized memory
+
+* `BufMut::advance_mut()` for `Vec<u8>` panics when advancing past the capacity,
+  instead of exposing uninitialized memory
+
+* `BufMut::put()` for `BytesMut` grows the buffer instead of panicking when
+  the source is larger than the spare capacity
+
+* The page cache keeps at most 16 pages per page size by default, down from
+  128, use `set_pages_cache()` to change it
+
+* Sized pages allocate exactly their category size (4 KiB, 8 KiB, ...), the
+  page header is taken from the data capacity, so pages fit allocator size
+  classes. `BytePageSize::capacity()` reports the data capacity
+
+* Cached `BytePages` shrink their page list on drop, a large `BytePages` no
+  longer keeps its page list allocation in the thread-local cache
+
+* `BufMut` for `BytePages` treats the pages as growable: `remaining_mut()`
+  reports `usize::MAX - len`, `chunk_mut()` starts a new page when the current
+  one is full, `put()` copies across pages instead of panicking, and
+  `advance_mut(0)` no longer panics without a current page
+
+* `BytesMut` grows to at least twice its length when it reallocates, appending
+  in small steps no longer reallocates and copies the buffer on every write
+
+* `BytesMut::from(BytePages)` and `Bytes::from(BytePages)` take a single page
+  without copying
+
+* `BytePages::copy_to()` and `BytePages::clone()` share the current page instead
+  of copying it
+
+* `BytePages::split_to()` and `split_into()` keep the current page writable when
+  splitting inside it, the rest of the page is no longer wasted
+
+* Growing a `BytesMut` that is the only handle to an unpooled buffer uses `realloc`
+  instead of allocating and copying
+
+* `BytePages::len()` and `is_empty()` are O(1), the length of the pages is
+  tracked instead of summed on each call
+
+* `BytesMut::from(Bytes)` reuses the buffer instead of copying when the `Bytes`
+  is the only handle to it
+
+* Fix `Bytes::trimdown()` and `ByteString::trimdown()` for views near the end of a shared allocation,
+  such views retained the whole allocation
+
 * Add `BytePage::info()` to report the kind of storage backing a page
 
 * Add `BytePage::is_inline()` to report whether page data is stored inline

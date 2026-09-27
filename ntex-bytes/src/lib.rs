@@ -43,6 +43,13 @@
 //! See [`Bytes`] and [`BytesMut`] for details about sharing, splitting, and
 //! allocation behavior.
 //!
+//! # Interoperability
+//!
+//! [`Bytes`] and [`BytesMut`] implement the [`Buf`](::bytes::Buf) trait of the
+//! `bytes` crate, and [`BytesMut`] also implements its
+//! [`BufMut`](::bytes::BufMut) trait. [`Bytes`] and [`ByteString`] implement
+//! `serde`'s `Serialize` and `Deserialize`.
+//!
 //! # Crate features
 //!
 //! - `simd` enables SIMD-accelerated UTF-8 validation.
@@ -59,6 +66,9 @@
 )]
 
 extern crate alloc;
+
+#[macro_use]
+mod macros;
 
 pub mod buf;
 pub use crate::buf::{Buf, BufMut};
@@ -138,12 +148,24 @@ pub enum BytePageSize {
     /// A 64 KiB page.
     Size64 = 6,
     /// No fixed page category.
+    ///
+    /// Buffers of this category are sized on demand and never returned to
+    /// the page cache. It cannot be used as the page size of
+    /// [`BytePages`].
     Unset = 7,
 }
 
 impl BytePageSize {
     /// Returns the page capacity in bytes.
+    ///
+    /// A page is allocated together with its header, the capacity is the
+    /// category size minus the header, so the allocation is exactly the
+    /// category size and fits the allocator's size classes.
     pub const fn capacity(self) -> usize {
+        self.alloc_size() - stvec::METADATA_SIZE
+    }
+
+    const fn alloc_size(self) -> usize {
         match self {
             BytePageSize::Size4 => 4 * 1024,
             BytePageSize::Size8 => 8 * 1024,
@@ -156,6 +178,8 @@ impl BytePageSize {
     }
 
     /// Returns the recommended write-buffer threshold for this page size.
+    ///
+    /// This is half of the category size, but at most 16 KiB.
     pub const fn half_capacity(self) -> usize {
         match self {
             BytePageSize::Size4 => 2 * 1024,
@@ -170,7 +194,8 @@ impl BytePageSize {
     }
 }
 
-/// Sets the maximum number of cached page allocations for the current thread.
+/// Sets the maximum number of cached page allocations per page size for the
+/// current thread, the default is 16.
 ///
 /// This setting affects only the thread on which it is called.
 pub fn set_pages_cache(size: usize) {
@@ -183,14 +208,15 @@ mod tests {
 
     #[test]
     fn page_size() {
-        assert_eq!(BytePageSize::Size4.capacity(), 4 * 1024);
-        assert_eq!(BytePageSize::Size8.capacity(), 8 * 1024);
-        assert_eq!(BytePageSize::Size16.capacity(), 16 * 1024);
-        assert_eq!(BytePageSize::Size24.capacity(), 24 * 1024);
-        assert_eq!(BytePageSize::Size32.capacity(), 32 * 1024);
-        assert_eq!(BytePageSize::Size48.capacity(), 48 * 1024);
-        assert_eq!(BytePageSize::Size64.capacity(), 64 * 1024);
-        assert_eq!(BytePageSize::Unset.capacity(), 64 * 1024);
+        const META: usize = stvec::METADATA_SIZE;
+        assert_eq!(BytePageSize::Size4.capacity(), 4 * 1024 - META);
+        assert_eq!(BytePageSize::Size8.capacity(), 8 * 1024 - META);
+        assert_eq!(BytePageSize::Size16.capacity(), 16 * 1024 - META);
+        assert_eq!(BytePageSize::Size24.capacity(), 24 * 1024 - META);
+        assert_eq!(BytePageSize::Size32.capacity(), 32 * 1024 - META);
+        assert_eq!(BytePageSize::Size48.capacity(), 48 * 1024 - META);
+        assert_eq!(BytePageSize::Size64.capacity(), 64 * 1024 - META);
+        assert_eq!(BytePageSize::Unset.capacity(), 64 * 1024 - META);
         assert_eq!(BytePageSize::Size4.half_capacity(), 2 * 1024);
         assert_eq!(BytePageSize::Size8.half_capacity(), 4 * 1024);
         assert_eq!(BytePageSize::Size16.half_capacity(), 8 * 1024);

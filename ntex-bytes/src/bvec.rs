@@ -1,6 +1,6 @@
-use std::{borrow, cmp, fmt, io, ops::Deref, ops::DerefMut, ptr};
+use std::{borrow, fmt, io, ops::DerefMut, ptr};
 
-use crate::{Buf, BufMut, Bytes, buf::IntoIter, buf::UninitSlice, stvec::StorageVec};
+use crate::{Buf, BufMut, Bytes, buf::UninitSlice, stvec::StorageVec};
 
 /// A unique reference to a contiguous slice of memory.
 ///
@@ -161,6 +161,33 @@ impl BytesMut {
         self.storage.capacity()
     }
 
+    /// Returns `true` if no other handle refers to the underlying buffer.
+    ///
+    /// Values split off with [`split_to`](Self::split_to) or frozen into
+    /// [`Bytes`] share the buffer with `self`. While they exist, clearing
+    /// `self` does not reclaim the capacity in front of it, and the whole
+    /// allocation stays alive as long as any of them does.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ntex_bytes::BytesMut;
+    ///
+    /// let mut buf = BytesMut::with_capacity(64);
+    /// buf.extend_from_slice(&[0; 32]);
+    /// assert!(buf.is_unique());
+    ///
+    /// let head = buf.split_to(30);
+    /// assert!(!buf.is_unique());
+    ///
+    /// drop(head);
+    /// assert!(buf.is_unique());
+    /// ```
+    #[inline]
+    pub fn is_unique(&self) -> bool {
+        self.storage.is_unique()
+    }
+
     /// Converts `self` into an immutable `Bytes`.
     ///
     /// The conversion is zero cost and is used to indicate that the slice
@@ -288,7 +315,7 @@ impl BytesMut {
 
     /// Splits the bytes into two at the given index.
     ///
-    /// Does nothing if `at > len`.
+    /// Returns `None` if `at > len`.
     #[inline]
     #[must_use]
     pub fn split_to_checked(&mut self, at: usize) -> Option<Bytes> {
@@ -307,8 +334,9 @@ impl BytesMut {
     /// If `len` is greater than the buffer's current length, this has no
     /// effect.
     ///
-    /// The [`split_off`] method can emulate `truncate`, but this causes the
-    /// excess bytes to be returned instead of dropped.
+    /// `truncate(0)` on a buffer that is not shared with any other handle
+    /// also reclaims the capacity in front of the current view, see
+    /// [`clear`](Self::clear).
     ///
     /// # Examples
     ///
@@ -319,14 +347,16 @@ impl BytesMut {
     /// buf.truncate(5);
     /// assert_eq!(buf, b"hello"[..]);
     /// ```
-    ///
-    /// [`split_off`]: #method.split_off
     #[inline]
     pub fn truncate(&mut self, len: usize) {
         self.storage.truncate(len);
     }
 
     /// Clears the buffer, removing all data.
+    ///
+    /// If no other handle refers to the underlying buffer (see
+    /// [`is_unique`](Self::is_unique)), the view is reset to the start of the
+    /// allocation, so the full capacity becomes available again.
     ///
     /// # Examples
     ///
@@ -406,8 +436,7 @@ impl BytesMut {
     ///
     /// # Panics
     ///
-    /// This method will panic if `len` is out of bounds for the underlying
-    /// slice or if it comes after the `end` of the configured window.
+    /// Panics if `len > self.capacity()`.
     #[inline]
     pub unsafe fn set_len(&mut self, len: usize) {
         self.storage.set_len(len);
@@ -422,6 +451,12 @@ impl BytesMut {
     /// and the requested capacity is less than or equal to the existing
     /// buffer's capacity, then the current view will be copied to the front of
     /// the buffer and the handle will take ownership of the full buffer.
+    ///
+    /// Otherwise a unique buffer that is not a pooled page is reallocated,
+    /// often in place, and a new buffer is allocated in all other cases. The
+    /// new capacity is at least twice the current length, so appending in
+    /// small steps reallocates a logarithmic number of times. Use [`reserve_capacity`](Self::reserve_capacity) to
+    /// allocate an exact capacity.
     ///
     /// # Panics
     ///
@@ -545,22 +580,11 @@ impl BytesMut {
     }
 }
 
-impl Buf for BytesMut {
-    #[inline]
-    fn remaining(&self) -> usize {
-        self.len()
-    }
+impl_buf!(BytesMut {});
 
-    #[inline]
-    fn chunk(&self) -> &[u8] {
-        self.storage.as_ref()
-    }
+impl_slice_traits!(BytesMut);
 
-    #[inline]
-    fn advance(&mut self, cnt: usize) {
-        self.advance_to(cnt);
-    }
-}
+impl_partial_eq!(BytesMut);
 
 impl BufMut for BytesMut {
     #[inline]
@@ -576,22 +600,33 @@ impl BufMut for BytesMut {
 
     #[inline]
     fn chunk_mut(&mut self) -> &mut UninitSlice {
-        unsafe {
-            // This will never panic as `len` can never become invalid
-            let ptr = &mut self.storage.as_ptr();
-            UninitSlice::from_raw_parts_mut(ptr.add(self.len()), self.remaining_mut())
+        self.storage.spare_mut()
+    }
+
+    #[inline]
+    fn put<T: Buf>(&mut self, mut src: T)
+    where
+        Self: Sized,
+    {
+        self.reserve(src.remaining());
+        while src.has_remaining() {
+            let chunk = src.chunk();
+            let len = chunk.len();
+            self.put_slice(chunk);
+            src.advance(len);
         }
     }
 
     #[inline]
     fn put_slice(&mut self, src: &[u8]) {
-        let len = src.len();
-        self.reserve(len);
+        self.reserve(src.len());
+        self.storage.put_slice_partial(src);
+    }
 
-        unsafe {
-            ptr::copy_nonoverlapping(src.as_ptr(), self.chunk_mut().as_mut_ptr(), len);
-            self.advance_mut(len);
-        }
+    #[inline]
+    fn put_slice_partial(&mut self, src: &[u8]) -> usize {
+        self.put_slice(src);
+        src.len()
     }
 
     #[inline]
@@ -606,38 +641,31 @@ impl BufMut for BytesMut {
     }
 }
 
-impl bytes::buf::Buf for BytesMut {
-    #[inline]
-    fn remaining(&self) -> usize {
-        self.len()
-    }
-
-    #[inline]
-    fn chunk(&self) -> &[u8] {
-        self.storage.as_ref()
-    }
-
-    #[inline]
-    fn advance(&mut self, cnt: usize) {
-        self.advance_to(cnt);
-    }
-}
-
+/// Interop with the `bytes` crate: like `bytes::BytesMut`, the buffer grows on
+/// demand, so `remaining_mut()` reports `usize::MAX - len` and `chunk_mut()`
+/// is never empty. The native [`BufMut`] impl reports spare capacity instead.
 unsafe impl bytes::buf::BufMut for BytesMut {
     #[inline]
     fn remaining_mut(&self) -> usize {
-        BufMut::remaining_mut(self)
+        usize::MAX - self.len()
     }
 
     #[inline]
     unsafe fn advance_mut(&mut self, cnt: usize) {
+        let remaining = BufMut::remaining_mut(self);
+        assert!(
+            cnt <= remaining,
+            "cannot advance past `remaining_mut`: {cnt:?} <= {remaining:?}"
+        );
         BufMut::advance_mut(self, cnt);
     }
 
     #[inline]
     fn chunk_mut(&mut self) -> &mut bytes::buf::UninitSlice {
+        if BufMut::remaining_mut(self) == 0 {
+            self.reserve(64);
+        }
         unsafe {
-            // This will never panic as `len` can never become invalid
             let ptr = self.storage.as_ptr();
             bytes::buf::UninitSlice::from_raw_parts_mut(
                 ptr.add(self.len()),
@@ -647,8 +675,31 @@ unsafe impl bytes::buf::BufMut for BytesMut {
     }
 
     #[inline]
+    fn put<T: bytes::buf::Buf>(&mut self, mut src: T)
+    where
+        Self: Sized,
+    {
+        self.reserve(src.remaining());
+        while src.has_remaining() {
+            let chunk = src.chunk();
+            let len = chunk.len();
+            BufMut::put_slice(self, chunk);
+            src.advance(len);
+        }
+    }
+
+    #[inline]
     fn put_slice(&mut self, src: &[u8]) {
         BufMut::put_slice(self, src);
+    }
+
+    #[inline]
+    fn put_bytes(&mut self, val: u8, cnt: usize) {
+        self.reserve(cnt);
+        unsafe {
+            ptr::write_bytes(self.storage.as_ptr().add(self.len()), val, cnt);
+            BufMut::advance_mut(self, cnt);
+        }
     }
 
     #[inline]
@@ -662,26 +713,10 @@ unsafe impl bytes::buf::BufMut for BytesMut {
     }
 }
 
-impl AsRef<[u8]> for BytesMut {
-    #[inline]
-    fn as_ref(&self) -> &[u8] {
-        self.storage.as_ref()
-    }
-}
-
 impl AsMut<[u8]> for BytesMut {
     #[inline]
     fn as_mut(&mut self) -> &mut [u8] {
         self.storage.as_mut()
-    }
-}
-
-impl Deref for BytesMut {
-    type Target = [u8];
-
-    #[inline]
-    fn deref(&self) -> &[u8] {
-        self.as_ref()
     }
 }
 
@@ -701,20 +736,6 @@ impl PartialEq for BytesMut {
     }
 }
 
-impl Default for BytesMut {
-    #[inline]
-    fn default() -> BytesMut {
-        BytesMut::new()
-    }
-}
-
-impl borrow::Borrow<[u8]> for BytesMut {
-    #[inline]
-    fn borrow(&self) -> &[u8] {
-        self.as_ref()
-    }
-}
-
 impl borrow::BorrowMut<[u8]> for BytesMut {
     #[inline]
     fn borrow_mut(&mut self) -> &mut [u8] {
@@ -728,16 +749,13 @@ impl PartialEq<Bytes> for BytesMut {
     }
 }
 
-impl io::Read for BytesMut {
-    fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
-        let len = cmp::min(self.len(), dst.len());
-        if len > 0 {
-            dst[..len].copy_from_slice(&self[..len]);
-            self.advance_to(len);
-        }
-        Ok(len)
+impl PartialEq<BytesMut> for Bytes {
+    fn eq(&self, other: &BytesMut) -> bool {
+        *other == *self
     }
 }
+
+impl_read!(BytesMut);
 
 impl io::Write for BytesMut {
     fn write(&mut self, src: &[u8]) -> Result<usize, io::Error> {
@@ -747,12 +765,6 @@ impl io::Write for BytesMut {
 
     fn flush(&mut self) -> Result<(), io::Error> {
         Ok(())
-    }
-}
-
-impl fmt::Debug for BytesMut {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&crate::debug::BsDebug(self.storage.as_ref()), fmt)
     }
 }
 
@@ -771,35 +783,13 @@ impl Clone for BytesMut {
     }
 }
 
-impl IntoIterator for BytesMut {
-    type Item = u8;
-    type IntoIter = IntoIter<BytesMut>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        IntoIter::new(self)
-    }
-}
-
-impl<'a> IntoIterator for &'a BytesMut {
-    type Item = &'a u8;
-    type IntoIter = std::slice::Iter<'a, u8>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.as_ref().iter()
-    }
-}
-
 impl FromIterator<u8> for BytesMut {
     fn from_iter<T: IntoIterator<Item = u8>>(into_iter: T) -> Self {
         let iter = into_iter.into_iter();
         let (min, maybe_max) = iter.size_hint();
 
         let mut out = BytesMut::with_capacity(maybe_max.unwrap_or(min));
-        for i in iter {
-            out.reserve(1);
-            out.put_u8(i);
-        }
-
+        out.extend(iter);
         out
     }
 }
@@ -816,14 +806,8 @@ impl Extend<u8> for BytesMut {
         T: IntoIterator<Item = u8>,
     {
         let iter = iter.into_iter();
-
-        let (lower, _) = iter.size_hint();
-        self.reserve(lower);
-
-        for (idx, b) in iter.enumerate() {
-            if idx >= lower {
-                self.reserve(1);
-            }
+        self.reserve(iter.size_hint().0);
+        for b in iter {
             self.put_u8(b);
         }
     }
@@ -835,99 +819,6 @@ impl<'a> Extend<&'a u8> for BytesMut {
         T: IntoIterator<Item = &'a u8>,
     {
         self.extend(iter.into_iter().copied());
-    }
-}
-
-impl PartialEq<[u8]> for BytesMut {
-    fn eq(&self, other: &[u8]) -> bool {
-        &**self == other
-    }
-}
-
-impl<const N: usize> PartialEq<[u8; N]> for BytesMut {
-    fn eq(&self, other: &[u8; N]) -> bool {
-        &**self == other
-    }
-}
-
-impl PartialEq<BytesMut> for [u8] {
-    fn eq(&self, other: &BytesMut) -> bool {
-        *other == *self
-    }
-}
-
-impl<const N: usize> PartialEq<BytesMut> for [u8; N] {
-    fn eq(&self, other: &BytesMut) -> bool {
-        *other == *self
-    }
-}
-
-impl<const N: usize> PartialEq<BytesMut> for &[u8; N] {
-    fn eq(&self, other: &BytesMut) -> bool {
-        *other == *self
-    }
-}
-
-impl PartialEq<str> for BytesMut {
-    fn eq(&self, other: &str) -> bool {
-        &**self == other.as_bytes()
-    }
-}
-
-impl PartialEq<BytesMut> for str {
-    fn eq(&self, other: &BytesMut) -> bool {
-        *other == *self
-    }
-}
-
-impl PartialEq<Vec<u8>> for BytesMut {
-    fn eq(&self, other: &Vec<u8>) -> bool {
-        *self == other[..]
-    }
-}
-
-impl PartialEq<BytesMut> for Vec<u8> {
-    fn eq(&self, other: &BytesMut) -> bool {
-        *other == *self
-    }
-}
-
-impl PartialEq<String> for BytesMut {
-    fn eq(&self, other: &String) -> bool {
-        *self == other[..]
-    }
-}
-
-impl PartialEq<BytesMut> for String {
-    fn eq(&self, other: &BytesMut) -> bool {
-        *other == *self
-    }
-}
-
-impl<'a, T: ?Sized> PartialEq<&'a T> for BytesMut
-where
-    BytesMut: PartialEq<T>,
-{
-    fn eq(&self, other: &&'a T) -> bool {
-        *self == **other
-    }
-}
-
-impl PartialEq<BytesMut> for &[u8] {
-    fn eq(&self, other: &BytesMut) -> bool {
-        *other == *self
-    }
-}
-
-impl PartialEq<BytesMut> for &str {
-    fn eq(&self, other: &BytesMut) -> bool {
-        *other == *self
-    }
-}
-
-impl PartialEq<BytesMut> for Bytes {
-    fn eq(&self, other: &BytesMut) -> bool {
-        other[..] == self[..]
     }
 }
 
@@ -969,8 +860,10 @@ impl<'a> From<&'a str> for BytesMut {
 impl From<Bytes> for BytesMut {
     #[inline]
     fn from(src: Bytes) -> BytesMut {
-        //src.try_mut().unwrap_or_else(|src| BytesMut::copy_from_slice(&src[..]))
-        BytesMut::copy_from_slice(&src[..])
+        match src.storage.try_into_vec() {
+            Ok(storage) => BytesMut { storage },
+            Err(storage) => BytesMut::copy_from_slice(storage.as_ref()),
+        }
     }
 }
 
@@ -984,6 +877,142 @@ impl From<&Bytes> for BytesMut {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn growth_is_amortized() {
+        let mut buf = BytesMut::with_capacity(0);
+        let mut cap = buf.capacity();
+        let mut reallocs = 0;
+        for _ in 0..10_000 {
+            buf.put_slice(b"abcdefgh");
+            if buf.capacity() != cap {
+                reallocs += 1;
+                cap = buf.capacity();
+            }
+        }
+        assert_eq!(buf.len(), 80_000);
+        assert!(reallocs <= 16, "reallocs: {reallocs}");
+
+        // writes through `io::Write` and `fmt::Write` grow the same way
+        let mut buf = BytesMut::with_capacity(0);
+        for i in 0..1000 {
+            std::fmt::Write::write_fmt(&mut buf, format_args!("{i:08}")).unwrap();
+        }
+        assert_eq!(buf.len(), 8000);
+        assert!(buf.capacity() < 16_000);
+    }
+
+    #[test]
+    fn growth_of_little_data_is_exact() {
+        let mut buf = BytesMut::copy_from_slice(b"hello");
+        buf.reserve(64 * 1024);
+        assert_eq!(buf.capacity(), 5 + 64 * 1024);
+
+        // a buffer shared with split off `Bytes`
+        let mut buf = BytesMut::with_capacity(1024);
+        buf.extend_from_slice(&[1; 1024]);
+        let head = buf.split_to(1000);
+        buf.reserve(4096);
+        assert_eq!(buf.capacity(), 24 + 4096);
+        assert_eq!(&head[..], &[1; 1000][..]);
+    }
+
+    #[test]
+    fn from_unique_bytes_reuses_buffer() {
+        let mut buf = BytesMut::with_capacity(256);
+        buf.extend_from_slice(&[1; 64]);
+        let b = buf.freeze();
+        let ptr = b.as_ptr();
+
+        let mut m = BytesMut::from(b);
+        assert_eq!(m.as_ptr(), ptr);
+        assert_eq!(&m[..], &[1; 64][..]);
+        assert_eq!(m.capacity(), 256);
+
+        // spare capacity past the view is writable
+        m.extend_from_slice(&[2; 192]);
+        assert_eq!(m.as_ptr(), ptr);
+        assert_eq!(&m[64..], &[2; 192][..]);
+    }
+
+    #[test]
+    fn from_unique_bytes_subview() {
+        let mut buf = BytesMut::with_capacity(256);
+        buf.extend_from_slice(&[1; 128]);
+        let mut b = buf.freeze();
+        let head = b.split_to(32);
+        drop(head);
+        b.truncate(64);
+        let ptr = b.as_ptr();
+
+        let mut m = BytesMut::from(b);
+        assert_eq!(m.as_ptr(), ptr);
+        assert_eq!(m.len(), 64);
+        assert_eq!(m.capacity(), 256 - 32);
+
+        // the dropped tail of the view is spare capacity again
+        m.extend_from_slice(&[3; 160]);
+        assert_eq!(m.as_ptr(), ptr);
+        assert_eq!(&m[..64], &[1; 64][..]);
+        assert_eq!(&m[64..], &[3; 160][..]);
+    }
+
+    #[test]
+    fn from_shared_bytes_copies() {
+        let b = BytesMut::copy_from_slice([1; 64]).freeze();
+        let b2 = b.clone();
+
+        let mut m = BytesMut::from(b);
+        assert_ne!(m.as_ptr(), b2.as_ptr());
+        m[0] = 2;
+        assert_eq!(&b2[..], &[1; 64][..]);
+
+        // the buffer is still referenced by a `BytesMut`
+        let mut buf = BytesMut::with_capacity(256);
+        buf.extend_from_slice(&[1; 64]);
+        let b = buf.take();
+        let m = BytesMut::from(b);
+        assert_ne!(m.as_ptr(), buf.as_ptr());
+        buf.extend_from_slice(&[2; 64]);
+        assert_eq!(&m[..], &[1; 64][..]);
+    }
+
+    // Run under miri: without `Acquire`, the header update races with the
+    // read made by the other thread before it released its handle.
+    #[test]
+    fn from_bytes_synchronizes_with_release() {
+        let b = BytesMut::copy_from_slice([1; 64]).freeze();
+        let other = b.clone();
+        let handle = std::thread::spawn(move || {
+            let val = other[0];
+            drop(other);
+            val
+        });
+
+        let ptr = b.as_ptr();
+        let mut storage = b.storage;
+        let mut m = loop {
+            match storage.try_into_vec() {
+                Ok(storage) => break BytesMut { storage },
+                Err(st) => {
+                    storage = st;
+                    std::thread::yield_now();
+                }
+            }
+        };
+        assert_eq!(m.as_ptr(), ptr);
+        m[0] = 2;
+        assert_eq!(handle.join().unwrap(), 1);
+    }
+
+    #[test]
+    fn from_inline_and_static_bytes() {
+        let m = BytesMut::from(Bytes::copy_from_slice(b"inline"));
+        assert_eq!(&m[..], b"inline");
+
+        let m = BytesMut::from(Bytes::from_static(&[1; 64]));
+        assert_eq!(&m[..], &[1; 64][..]);
+    }
 
     #[test]
     fn bvec_read() {

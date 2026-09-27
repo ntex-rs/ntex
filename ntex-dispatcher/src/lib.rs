@@ -907,7 +907,7 @@ mod tests {
             server,
             SharedCfg::new("TEST").add(
                 IoConfig::new()
-                    .set_read_buf(8 * 1024, 1024, 16)
+                    .set_read_buf(8 * 1024, 1024)
                     .set_write_buf(16 * 1024),
             ),
         );
@@ -979,7 +979,7 @@ mod tests {
                 SharedCfg::new("TEST").add(
                     IoConfig::new()
                         .set_keepalive_timeout(Seconds::ZERO)
-                        .set_read_buf(1024, 512, 16),
+                        .set_read_buf(1024, 512),
                 ),
             ),
             BytesCodec,

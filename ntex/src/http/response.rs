@@ -649,7 +649,7 @@ impl ResponseBuilder {
     /// Panics if serialization succeeds after the builder has already
     /// produced or transferred a response.
     pub fn json<T: Serialize>(&mut self, value: &T) -> Response {
-        match serde_json::to_string(value) {
+        match super::helpers::json_body(value) {
             Ok(body) => {
                 let contains = if let Some(parts) = parts(&mut self.head, self.err) {
                     parts.headers.contains_key(header::CONTENT_TYPE)

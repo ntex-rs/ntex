@@ -38,7 +38,7 @@ impl Builder {
             panics: false,
             testing: false,
             pool_limit: 256,
-            pool_recv_timeout: time::Duration::from_secs(60),
+            pool_recv_timeout: time::Duration::from_mins(1),
         }
     }
 

@@ -67,8 +67,8 @@ impl ByteString {
     ///
     /// # Panics
     ///
-    /// Requires that `begin <= end` and `end <= self.len()`, otherwise slicing
-    /// will panic.
+    /// Requires that `begin <= end`, `end <= self.len()` and that both bounds
+    /// lie on UTF-8 char boundaries, otherwise slicing will panic.
     #[must_use]
     pub fn slice(
         &self,
@@ -100,10 +100,10 @@ impl ByteString {
     ///
     /// # Panics
     ///
-    /// Panics if `at > len`.
+    /// Panics if `at > len` or if `at` does not lie on a UTF-8 char boundary.
     #[must_use]
     pub fn split_off(&mut self, at: usize) -> ByteString {
-        // check str
+        // panics unless `at` is on a char boundary
         let _ = self.split_at(at);
 
         ByteString(self.0.split_off(at))
@@ -112,7 +112,7 @@ impl ByteString {
     /// Splits the string into two at the given byte index.
     ///
     /// Afterwards `self` contains elements `[at, len)`, and the returned
-    /// `Bytes` contains elements `[0, at)`.
+    /// `ByteString` contains elements `[0, at)`.
     ///
     /// This is an `O(1)` operation that just increases the reference count and
     /// sets a few indices.
@@ -131,10 +131,10 @@ impl ByteString {
     ///
     /// # Panics
     ///
-    /// Panics if `at > len`.
+    /// Panics if `at > len` or if `at` does not lie on a UTF-8 char boundary.
     #[must_use]
     pub fn split_to(&mut self, at: usize) -> ByteString {
-        // check str
+        // panics unless `at` is on a char boundary
         let _ = self.split_at(at);
 
         ByteString(self.0.split_to(at))

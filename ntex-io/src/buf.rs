@@ -24,23 +24,22 @@ impl fmt::Debug for Stack {
 
 impl Stack {
     pub(crate) fn new(size: BytePageSize) -> Self {
-        Self {
-            buffers: vec![
-                Buffer {
-                    read: Cell::new(None),
-                    write: Cell::new(Some(BytePages::new(size))),
-                },
-                Buffer {
-                    read: Cell::new(None),
-                    write: Cell::new(Some(BytePages::new(size))),
-                },
-            ],
-        }
+        // room for two filter layers, e.g. TLS over a proxy protocol,
+        // without reallocating
+        let mut buffers = Vec::with_capacity(4);
+        buffers.push(Buffer {
+            read: Cell::new(None),
+            write: Cell::new(Some(BytePages::new(size))),
+        });
+        // Only exposed as the inner side of `FilterBuf` when no layer
+        // is installed; its write pages are allocated on demand.
+        buffers.push(Buffer::default());
+        Self { buffers }
     }
 
     pub(crate) fn set_page_size(&self, size: BytePageSize) {
         for b in &self.buffers {
-            b.with_write(|b| b.set_page_size(size));
+            b.with_write_if_set(|b| b.set_page_size(size));
         }
     }
 
@@ -122,6 +121,9 @@ impl Stack {
     pub(crate) fn set_read_buf(&self, buf: BytesMut, cfg: &IoConfig) {
         self.with_last(move |buffer| {
             if let Some(mut first_buf) = buffer.read.take() {
+                // grow through the configured policy, so the merged buffer
+                // stays cacheable when the data fits
+                cfg.read_buf().resize_min(&mut first_buf, buf.len());
                 first_buf.extend_from_slice(&buf);
                 cfg.read_buf().release(buf);
                 buffer.read.set(Some(first_buf));
@@ -211,9 +213,29 @@ impl Stack {
 
         res
     }
+
+    /// Releases the data of every buffer once nothing can consume it anymore.
+    ///
+    /// Read buffers go back to the cache and write pages are freed, the
+    /// buffers themselves stay usable.
+    pub(crate) fn release(&self, cfg: &IoConfig) {
+        for b in &self.buffers {
+            if let Some(buf) = b.read.take() {
+                cfg.read_buf().release(buf);
+            }
+            b.with_write_if_set(BytePages::clear);
+        }
+    }
 }
 
 impl Buffer {
+    fn with_write_if_set(&self, f: impl FnOnce(&mut BytePages)) {
+        if let Some(mut wb) = self.write.take() {
+            f(&mut wb);
+            self.write.set(Some(wb));
+        }
+    }
+
     fn is_write_empty(&self) -> bool {
         self.with_write(|b| b.is_empty())
     }
@@ -446,7 +468,10 @@ impl FilterBuf<'_> {
         F: FnOnce(&mut BytePages, &mut BytePages) -> R,
     {
         let mut write_curr = self.curr.write.take().unwrap();
-        let mut write_next = self.next.write.take().unwrap();
+        let (mut write_next, on_demand) = match self.next.write.take() {
+            Some(b) => (b, false),
+            None => (BytePages::new(write_curr.page_size()), true),
+        };
         let write_len = if self.wants_write.get() {
             0
         } else {
@@ -459,8 +484,20 @@ impl FilterBuf<'_> {
             self.wants_write.set(true);
         }
 
+        // Without a filter layer there is no transport-facing write buffer, the
+        // transport writes from the application-facing one. Output written
+        // here is never delivered.
+        let undelivered = on_demand && !write_next.is_empty();
+
         self.curr.write.set(Some(write_curr));
-        self.next.write.set(Some(write_next));
+        if !on_demand || undelivered {
+            self.next.write.set(Some(write_next));
+        }
+        debug_assert!(
+            !undelivered,
+            "{}: output written to the write destination of the innermost filter buffer is never sent",
+            self.io.tag()
+        );
         result
     }
 }
@@ -499,13 +536,20 @@ mod tests {
         assert_eq!(stack.read_dst_size(), 0);
         assert_eq!(stack.write_buf_size(), 0);
 
+        // two layers fit without reallocating
+        let ptr = stack.buffers.as_ptr();
         stack.add_layer(BytePageSize::Size16);
+        stack.add_layer(BytePageSize::Size16);
+        assert_eq!(stack.buffers.as_ptr(), ptr);
+        stack.buffers.remove(0);
         assert_eq!(stack.buffers.len(), 3);
 
         stack.set_page_size(BytePageSize::Size32);
-        for buffer in &stack.buffers {
+        let (inner, layers) = stack.buffers.split_last().unwrap();
+        for buffer in layers {
             buffer.with_write(|buf| assert_eq!(buf.page_size(), BytePageSize::Size32));
         }
+        assert!(inner.write.take().is_none());
 
         stack.set_read_buf(BytesMut::from(&b"one"[..]), ioref.cfg());
         stack.set_read_buf(BytesMut::from(&b"-two"[..]), ioref.cfg());
@@ -514,6 +558,34 @@ mod tests {
 
         stack.set_read_buf(BytesMut::new(), ioref.cfg());
         assert!(stack.get_read_buf().is_none());
+    }
+
+    #[ntex::test]
+    async fn set_read_buf_merges_into_cacheable_buffer() {
+        let (_, server) = IoTest::create();
+        let io = Io::from(server);
+        let ioref = io.get_ref();
+        let cfg = ioref.cfg().read_buf();
+        let stack = Stack::new(BytePageSize::Size8);
+
+        // unconsumed input, most of the buffer is taken by a decoded frame
+        // that is still alive
+        let mut first = cfg.get();
+        first.extend_from_slice(&vec![1; cfg.high - 100]);
+        let frame = first.split_to(cfg.high - 1100);
+        stack.set_read_buf(first, ioref.cfg());
+
+        // a read into a buffer of its own completes
+        let mut second = cfg.get();
+        second.extend_from_slice(&[2; 4000]);
+        stack.set_read_buf(second, ioref.cfg());
+
+        let merged = stack.get_read_buf().unwrap();
+        assert_eq!(merged.len(), 5000);
+        assert_eq!(&merged[..1000], &[1; 1000][..]);
+        assert_eq!(&merged[1000..], &[2; 4000][..]);
+        assert_eq!(merged.capacity(), cfg.high);
+        assert_eq!(frame.len(), cfg.high - 1100);
     }
 
     #[ntex::test]
@@ -552,6 +624,45 @@ mod tests {
             });
         });
         assert_eq!(stack.get_read_buf().as_deref(), Some(b"next".as_ref()));
+    }
+
+    #[ntex::test]
+    async fn innermost_write_buffer_is_on_demand() {
+        let (_, server) = IoTest::create();
+        let io = Io::from(server);
+        let ioref = io.get_ref();
+        let stack = Stack::new(BytePageSize::Size8);
+        let inner = &stack.buffers[1];
+        assert!(inner.write.take().is_none());
+        stack.release(ioref.cfg());
+
+        // a filter without layers sees an empty inner buffer, which is not
+        // kept unless something is written to it
+        stack.with_write_src(|buf| buf.put_slice(b"out"));
+        stack.with_filter(&ioref, |ctx| {
+            ctx.with_buffer(|buf| {
+                buf.with_write_buffers(|src, dst| {
+                    assert_eq!(src.len(), 3);
+                    assert!(dst.is_empty());
+                });
+            });
+        });
+        assert!(inner.write.take().is_none());
+    }
+
+    #[cfg(debug_assertions)]
+    #[ntex::test]
+    #[should_panic(expected = "is never sent")]
+    async fn innermost_write_destination_output_asserts() {
+        let (_, server) = IoTest::create();
+        let io = Io::from(server);
+        let ioref = io.get_ref();
+        let stack = Stack::new(BytePageSize::Size8);
+
+        stack.with_write_src(|buf| buf.put_slice(b"out"));
+        stack.with_filter(&ioref, |ctx| {
+            ctx.with_buffer(|buf| buf.with_write_buffers(BytePages::move_to));
+        });
     }
 
     #[ntex::test]

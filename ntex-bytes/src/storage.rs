@@ -123,13 +123,15 @@ const KIND_OFFSET_BITS: usize = 2;
 
 pub(crate) const MIN_CAPACITY: usize = 128 - crate::METADATA_SIZE;
 
-// Bit op constants for extracting the inline length value from the `offset` field.
+// Mask of the inline length bits in the low byte of the `offset` field.
 const INLINE_LEN_MASK: usize = 0b1111_1100;
 
 // Byte offset from the start of `Storage` to where the inline buffer data
-// starts. On little endian platforms, the first byte of the struct is the
-// storage flag, so the data is shifted by a byte. On big endian systems, the
-// data starts at the beginning of the struct.
+// starts. The low byte of `offset` holds the kind and the inline length. On
+// little endian platforms `offset` is the first field and its low byte is the
+// first byte of the struct, so the data is shifted by a byte. On big endian
+// platforms `offset` is the last field and its low byte is the last byte of the
+// struct, so the data starts at the beginning of the struct.
 #[cfg(target_endian = "little")]
 const INLINE_DATA_OFFSET: isize = 1;
 #[cfg(target_endian = "big")]
@@ -146,8 +148,8 @@ pub(crate) const INLINE_CAP: usize = 3 * 4 - 1;
 const PTR_INLINE: NonZeroUsize = NonZeroUsize::new(KIND_INLINE).unwrap();
 // Static storage
 const PTR_STATIC: NonZeroUsize = NonZeroUsize::new(KIND_STATIC).unwrap();
-// Default offset
-const DEFAUILT_OFFSET: NonZeroUsize =
+// Offset of a new vec storage, the data starts right after the `SharedVec` header
+const DEFAULT_OFFSET: NonZeroUsize =
     NonZeroUsize::new((stvec::METADATA_SIZE << KIND_OFFSET_BITS) ^ KIND_VEC).unwrap();
 
 /*
@@ -197,13 +199,12 @@ impl Storage {
 
     #[inline]
     fn from_slice_with_capacity(cap: usize, src: &[u8]) -> Storage {
-        unsafe {
-            let shared = stvec::SharedVec::create(BytePageSize::Unset, cap, src);
-            Storage {
-                len: src.len(),
-                ptr: shared.as_ptr().add(1).cast::<u8>(),
-                offset: DEFAUILT_OFFSET,
-            }
+        let shared = stvec::SharedVec::create(BytePageSize::Unset, cap, src);
+        Storage {
+            len: src.len(),
+            // SAFETY: the data follows the `SharedVec` header in the allocation
+            ptr: unsafe { shared.as_ptr().add(1).cast::<u8>() },
+            offset: DEFAULT_OFFSET,
         }
     }
 
@@ -222,23 +223,24 @@ impl Storage {
 
     /// Return a slice for the handle's view into the shared buffer
     pub(crate) fn as_ref(&self) -> &[u8] {
-        unsafe {
-            match self.kind() {
-                KIND_INLINE => slice::from_raw_parts(self.inline_ptr_ro(), self.inline_len()),
-                KIND_STEXT => slice::from_raw_parts(self.as_ptr(), self.len()),
-                _ => slice::from_raw_parts(self.ptr, self.len),
-            }
+        match self.kind() {
+            // SAFETY: the inline buffer holds `inline_len` initialized bytes
+            KIND_INLINE => unsafe {
+                slice::from_raw_parts(self.inline_ptr_ro(), self.inline_len())
+            },
+            // SAFETY: `StorageExt` guarantees the vtable pointer and length
+            KIND_STEXT => unsafe { slice::from_raw_parts(self.as_ptr(), self.len()) },
+            // SAFETY: vec and static storage point to `len` initialized bytes
+            _ => unsafe { slice::from_raw_parts(self.ptr, self.len) },
         }
     }
 
     /// Return a raw pointer to data
     pub(crate) unsafe fn as_ptr(&self) -> *const u8 {
-        unsafe {
-            match self.kind() {
-                KIND_INLINE => self.inline_ptr_ro(),
-                KIND_STEXT => ((*self.st_vtable()).as_ptr)(self.st_addr(), self.st_len()),
-                _ => self.ptr,
-            }
+        match self.kind() {
+            KIND_INLINE => self.inline_ptr_ro(),
+            KIND_STEXT => ((*self.st_vtable()).as_ptr)(self.st_addr(), self.st_len()),
+            _ => self.ptr,
         }
     }
 
@@ -251,26 +253,12 @@ impl Storage {
     }
 
     pub(crate) fn get_u8(&mut self) -> u8 {
-        unsafe {
-            let ret = match self.kind() {
-                KIND_INLINE => {
-                    assert!(self.inline_len() >= 1);
-                    *self.inline_ptr_ro()
-                }
-                KIND_STEXT => {
-                    let vt = &*self.st_vtable();
-                    let len = (vt.len)(self.st_addr(), self.st_len());
-                    assert!(len >= 1);
-                    *(vt.as_ptr)(self.st_addr(), self.st_len())
-                }
-                _ => {
-                    assert!(self.len >= 1);
-                    *self.ptr
-                }
-            };
-            self.set_start(1);
-            ret
-        }
+        let data = self.as_ref();
+        assert!(!data.is_empty());
+        let ret = data[0];
+        // SAFETY: the view holds at least one byte
+        unsafe { self.set_start(1) };
+        ret
     }
 
     /// Pointer to the start of the inline buffer
@@ -365,12 +353,21 @@ impl Storage {
     pub(crate) fn trimdown(&mut self) {
         let kind = self.kind();
 
-        // trim down only if buffer is not inline or static and
-        // buffer's unused space is greater than 64 bytes
+        // inline and static buffers are left as is. Data that fits inline is
+        // moved inline, otherwise the data is copied into an exact-sized
+        // buffer if at least 64 bytes of capacity are unused
         if !(kind == KIND_INLINE || kind == KIND_STATIC) {
+            // a shared view retains the whole allocation, including
+            // the space before the start of the view
+            let capacity = if kind == KIND_VEC {
+                unsafe { stvec::SharedVec::capacity(self.shared_vec()) }
+            } else {
+                self.capacity()
+            };
+
             if self.len() <= INLINE_CAP {
                 *self = unsafe { Storage::from_ptr_inline(self.as_ptr(), self.len()) };
-            } else if self.capacity() - self.len() >= 64 {
+            } else if capacity - self.len() >= 64 {
                 *self = Storage::from_slice_with_capacity(self.len(), self.as_ref());
             }
         }
@@ -400,7 +397,7 @@ impl Storage {
     }
 
     /// Set the length of the inline buffer. This is done by writing to the
-    /// least significant byte of the `arc` field.
+    /// inline length bits in the least significant byte of the `offset` field.
     #[inline]
     fn set_inline_len(&mut self, len: usize) {
         debug_assert!(len <= INLINE_CAP);
@@ -461,7 +458,7 @@ impl Storage {
                 *self = Storage::from_slice(&self.as_ref()[start..]);
             }
             _ => {
-                // set len for static storage
+                // advance the start of static storage
                 self.len -= start;
                 self.ptr = self.ptr.add(start);
             }
@@ -494,26 +491,18 @@ impl Storage {
     /// Increments the ref count. This should only be done if it is known that
     /// it can be done safely. As such, this fn is not public, instead other
     /// fns will use this one while maintaining the guarantees.
-    /// Parameter `mut_self` should only be set to `true` if caller holds
-    /// `&mut self` reference.
     ///
     /// "Safely" is defined as not exposing two `BytesMut` values that point to
     /// the same byte window.
     ///
     /// This function is thread safe.
     unsafe fn shallow_clone(&self) -> Storage {
-        // Always check `inline` first, because if the handle is using inline
-        // data storage, all of the `Storage` struct fields will be gibberish.
+        // Check the kind first, if the handle is using inline data storage,
+        // the `ptr` and `len` fields hold data and must not be dereferenced.
         //
-        // Additionally, if kind is STATIC, then ptr is *never* changed, making
-        // it safe and faster to check for it now before an atomic acquire.
-        //
-        // The value returned by `kind` isn't itself safe, but the value could
-        // inform what operations to take, and unsafely do something without
-        // synchronization.
-        //
-        // KIND_INLINE and KIND_STATIC will *never* change, so branches on that
-        // information is safe.
+        // Inline and static storage own no shared state, a bitwise copy is
+        // a valid clone. The kind of a handle never changes while it is
+        // borrowed, so branching on it is safe.
         let kind = self.kind();
 
         if kind == KIND_INLINE || kind == KIND_STATIC {
@@ -548,6 +537,21 @@ impl Storage {
     #[inline]
     pub(crate) fn is_inline(&self) -> bool {
         self.kind() == KIND_INLINE
+    }
+
+    /// Converts into a `StorageVec` without copying if this is the only
+    /// reference to a shared vec.
+    pub(crate) fn try_into_vec(self) -> Result<stvec::StorageVec, Storage> {
+        if self.kind() == KIND_VEC {
+            let offset = self.offset.get() >> KIND_OFFSET_BITS;
+            let st =
+                unsafe { stvec::StorageVec::from_unique_view(self.shared_vec(), offset, self.len) };
+            if let Some(st) = st {
+                mem::forget(self);
+                return Ok(st);
+            }
+        }
+        Err(self)
     }
 
     #[inline]
@@ -667,6 +671,15 @@ mod tests {
         assert_eq!(&b[..], &LONG[..16]);
         b.trimdown();
         assert!(b.is_inline());
+
+        // a view at the end of a larger allocation
+        let src = Bytes::from(LONG.to_vec());
+        let mut b = src.slice(LONG.len() - 40..);
+        assert!(b.storage.capacity() - b.len() < 64);
+        b.trimdown();
+        assert_eq!(&b[..], &LONG[LONG.len() - 40..]);
+        assert_eq!(b.storage.capacity(), 40);
+        assert!(!src.as_ref().as_ptr_range().contains(&b.as_ptr()));
     }
 
     #[test]
@@ -700,18 +713,21 @@ mod tests {
         assert_eq!(bv.as_ref().len(), 5);
         assert_eq!(bv.as_ref()[0], b"h"[0]);
         assert_eq!(bv.remaining_mut(), 0);
+        // growth is at least twice the length
         bv.reserve(1);
-        assert_eq!(bv.remaining_mut(), 1);
+        assert_eq!(bv.capacity(), 10);
+        assert_eq!(bv.remaining_mut(), 5);
         bv.put_u8(b" "[0]);
         assert_eq!(bv.as_ref(), &b"hello "[..]);
-        assert_eq!(bv.remaining_mut(), 0);
+        assert_eq!(bv.remaining_mut(), 4);
         bv.reserve(5);
-        assert_eq!(bv.remaining_mut(), 5);
+        assert_eq!(bv.capacity(), 12);
+        assert_eq!(bv.remaining_mut(), 6);
         bv.put("world");
         assert_eq!(bv, "hello world");
         bv.advance_to(6);
         assert_eq!(bv, "world");
-        assert_eq!(bv.remaining_mut(), 0);
+        assert_eq!(bv.remaining_mut(), 1);
 
         let bv = BytesMut::copy_from_slice(&b"hello world"[..]);
         let b = Bytes::from(bv);

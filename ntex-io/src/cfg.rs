@@ -1,18 +1,43 @@
 //! I/O buffer, timeout, and frame-rate configuration.
 
-use std::cell::UnsafeCell;
+use std::cell::{Cell, UnsafeCell};
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ntex_bytes::{BytePageSize, BytesMut, buf::BufMut};
 use ntex_service::cfg::{CfgContext, Configuration};
 use ntex_util::{time::Millis, time::Seconds};
 
-const DEFAULT_CACHE_SIZE: usize = 128;
+const DEFAULT_CACHE_LIMIT: usize = 1024 * 1024;
 const DEFAULT_HIGH: usize = 16 * 1024 - 24;
 const DEFAULT_LOW: usize = 512 + 24;
 const DEFAULT_HALF: usize = (16 * 1024 - 24) / 2;
+// read buffers above `high` double in capacity, by at most this much at once
+const MAX_GROW_STEP: usize = 1024 * 1024;
+
+static CACHE_LIMIT: AtomicUsize = AtomicUsize::new(DEFAULT_CACHE_LIMIT);
 
 thread_local! {
     static CACHE: LocalCache = LocalCache::new();
+}
+
+/// Sets the most read-buffer capacity, in bytes, each thread keeps cached.
+///
+/// Every thread keeps one cache of empty read buffers, shared by all
+/// configurations. Once the capacity of the cached buffers exceeds this
+/// limit, the least recently released buffers are freed. A thread applies a
+/// new limit the next time it releases a buffer. Zero disables the cache.
+///
+/// The default is 1 MiB.
+pub fn set_read_buf_cache_limit(limit: usize) {
+    CACHE_LIMIT.store(limit, Ordering::Relaxed);
+}
+
+/// Returns the per-thread read-buffer cache limit, in bytes.
+///
+/// See [`set_read_buf_cache_limit`].
+pub fn read_buf_cache_limit() -> usize {
+    CACHE_LIMIT.load(Ordering::Relaxed)
 }
 
 #[derive(Debug)]
@@ -48,8 +73,6 @@ impl Configuration for IoConfig {
     }
 
     fn set_ctx(&mut self, ctx: CfgContext) {
-        self.read_buf.idx = ctx.id();
-        self.write_buf.idx = ctx.id();
         self.config = ctx;
     }
 }
@@ -70,21 +93,22 @@ pub struct FrameReadRate {
 
 /// Buffer allocation and backpressure thresholds.
 #[derive(Copy, Clone, Debug)]
+#[non_exhaustive]
 pub struct BufConfig {
     /// Buffered byte count at which backpressure is enabled.
     ///
     /// For [`IoConfig::read_buf`] this is also the capacity of a freshly
-    /// allocated buffer, the growth increment used by
-    /// [`resize_min`](Self::resize_min), and the free capacity guaranteed by
-    /// [`resize`](Self::resize). For [`IoConfig::write_buf`] it is only a
+    /// allocated buffer, the capacity [`resize`](Self::resize) compacts
+    /// buffered data into, and the largest capacity that is cached. For
+    /// [`IoConfig::write_buf`] it is only a
     /// watermark; page sizing is controlled by
     /// [`IoConfig::set_write_page_size`].
     pub high: usize,
     /// Free-capacity threshold below which [`resize`](Self::resize) grows a
     /// buffer.
     ///
-    /// This is the trigger for a resize, not the amount of free capacity the
-    /// resize produces; see [`resize`](Self::resize).
+    /// This is the trigger for a resize, and the least free capacity a resize
+    /// that compacts the buffer produces; see [`resize`](Self::resize).
     ///
     /// Buffers whose capacity is not greater than this value are not cached.
     ///
@@ -101,9 +125,6 @@ pub struct BufConfig {
     ///
     /// This is set to half of `high` by the configuration builders.
     pub half: usize,
-    idx: usize,
-    first: bool,
-    cache_size: usize,
 }
 
 impl IoConfig {
@@ -111,11 +132,8 @@ impl IoConfig {
     #[must_use]
     /// Creates an I/O configuration with default settings.
     pub fn new() -> IoConfig {
-        let config = CfgContext::default();
-        let idx = config.id();
-
         IoConfig {
-            config,
+            config: CfgContext::default(),
             connect_timeout: Millis::ZERO,
             keepalive_timeout: Seconds(0),
             shutdown_timeout: Seconds(1),
@@ -123,20 +141,14 @@ impl IoConfig {
             write_timeout: Seconds(0),
 
             read_buf: BufConfig {
-                idx,
                 high: DEFAULT_HIGH,
                 low: DEFAULT_LOW,
                 half: DEFAULT_HALF,
-                first: true,
-                cache_size: DEFAULT_CACHE_SIZE,
             },
             write_buf: BufConfig {
-                idx,
                 high: DEFAULT_HIGH,
                 low: DEFAULT_LOW,
                 half: DEFAULT_HALF,
-                first: false,
-                cache_size: DEFAULT_CACHE_SIZE,
             },
             write_page_size: BytePageSize::Size16,
             write_buf_threshold: BytePageSize::Size16.half_capacity(),
@@ -357,15 +369,30 @@ impl IoConfig {
         self
     }
 
-    /// Sets read-buffer watermarks and cache capacity.
+    /// Sets read-buffer watermarks.
     ///
     /// `high_watermark` enables read backpressure when the application-facing
     /// buffer reaches this size. It is also the capacity of a freshly
-    /// allocated read buffer, the increment by which buffers grow, and the
-    /// free capacity a resize guarantees. It must be greater than zero.
+    /// allocated read buffer and the capacity buffered data is compacted into
+    /// when free capacity runs low; larger data grows the buffer by doubling
+    /// its capacity. It must be greater than zero.
     /// `low_watermark` is the free-capacity threshold below which a read
-    /// buffer is grown. `cache_size` limits the number of eligible buffers
-    /// retained per thread and configuration.
+    /// buffer is compacted or grown.
+    ///
+    /// Empty read buffers are kept in a per-thread cache shared by all
+    /// configurations, see [`set_read_buf_cache_limit`]. A connection holding
+    /// unconsumed input, such as the start of a frame that has not fully
+    /// arrived, keeps its whole read buffer, so each such connection uses at
+    /// least `high_watermark` bytes until the rest arrives. Read-rate timeouts,
+    /// see [`set_frame_read_rate`](Self::set_frame_read_rate), bound how long
+    /// a slow peer can hold it.
+    ///
+    /// Frames that a codec splits off the read buffer, such as `Bytes`
+    /// payloads, share its allocation. A frame kept alive keeps the whole
+    /// read buffer allocated, and the buffer is not returned to the cache, so
+    /// retaining many small frames can use far more memory than their size.
+    /// Copy long-lived frames or call [`Bytes::trimdown`](ntex_bytes::Bytes::trimdown)
+    /// on them to release the rest of the buffer.
     ///
     /// Read backpressure is released once the application-facing buffer falls
     /// to half of `high_watermark`.
@@ -377,17 +404,11 @@ impl IoConfig {
     ///
     /// Panics if `high_watermark` is zero.
     #[must_use]
-    pub fn set_read_buf(
-        mut self,
-        high_watermark: usize,
-        low_watermark: usize,
-        cache_size: usize,
-    ) -> Self {
+    pub fn set_read_buf(mut self, high_watermark: usize, low_watermark: usize) -> Self {
         assert!(
             high_watermark > 0,
             "read buffer high watermark must be greater than zero"
         );
-        self.read_buf.cache_size = cache_size;
         self.read_buf.high = high_watermark;
         self.read_buf.low = low_watermark;
         self.read_buf.half = high_watermark >> 1;
@@ -471,8 +492,7 @@ impl IoConfig {
     /// buffered output plus any output a transport has taken ownership of but
     /// not yet written to the peer.
     ///
-    /// Unlike [`set_read_buf`](Self::set_read_buf) this takes no low watermark
-    /// or cache size. Output is held in [`BytePages`](ntex_bytes::BytePages),
+    /// Unlike [`set_read_buf`](Self::set_read_buf) this takes no low watermark. Output is held in [`BytePages`](ntex_bytes::BytePages),
     /// which are sized by [`set_write_page_size`](Self::set_write_page_size)
     /// and are not served from the read-buffer cache.
     ///
@@ -495,15 +515,21 @@ impl IoConfig {
 
 impl BufConfig {
     #[inline]
-    /// Acquires an empty buffer from this configuration's thread-local cache.
+    /// Acquires an empty buffer from the thread-local cache.
     ///
-    /// If the cache is empty, allocates a buffer with capacity `high`.
+    /// Returns the most recently released buffer that is eligible for this
+    /// configuration, see [`release`](Self::release). If there is none,
+    /// allocates a buffer with capacity `high`.
     pub fn get(&self) -> BytesMut {
-        if let Some(buf) = CACHE.with(|c| c.with(self.idx, self.first, |c: &mut Vec<_>| c.pop())) {
+        if let Some(buf) = CACHE.with(|c| c.get(self)) {
             buf
         } else {
             BytesMut::with_capacity(self.high)
         }
+    }
+
+    fn is_cacheable(&self, cap: usize) -> bool {
+        cap > self.low && cap <= self.high
     }
 
     /// Creates a new uncached buffer with the specified capacity.
@@ -512,84 +538,121 @@ impl BufConfig {
     }
 
     #[inline]
-    /// Ensures that the buffer has at least `high` bytes of free capacity.
+    /// Makes room for another read once free capacity falls below `low`.
     ///
-    /// The buffer is grown only when its free capacity has fallen below `low`;
-    /// `low` is the trigger for the resize, while `high` is the amount of free
-    /// capacity the resize guarantees.
+    /// When the buffered data plus `low` fits into `high`, the data is moved
+    /// into a buffer of capacity `high`, so the free capacity afterwards is
+    /// `high` minus the buffered length. Only larger data grows the buffer
+    /// beyond `high`, in which case at least `high` bytes are free afterwards.
     pub fn resize(&self, buf: &mut BytesMut) {
         if buf.remaining_mut() < self.low {
-            self.resize_min(buf, self.high);
+            if buf.len() + self.low <= self.high {
+                self.resize_min(buf, self.low);
+            } else {
+                self.resize_min(buf, self.high);
+            }
         }
     }
 
     #[inline]
     /// Ensures that the buffer has at least `size` bytes of remaining capacity.
     ///
+    /// When the buffered data plus `size` fits into `high`, the data is moved
+    /// into a cached buffer of capacity `high`, and the old buffer is returned
+    /// to the cache. Otherwise the buffer is reallocated with double its
+    /// capacity, growing by at most 1 MiB at once, or with enough capacity for
+    /// `size` more bytes if that is larger. Buffers grown beyond `high` are
+    /// never cached.
+    ///
     /// # Panics
     ///
     /// Panics if growth is required and `high` is zero.
     pub fn resize_min(&self, buf: &mut BytesMut, size: usize) {
-        let mut avail = buf.remaining_mut();
+        let avail = buf.remaining_mut();
         if avail < size {
             assert!(
                 self.high > 0,
                 "buffer high watermark must be greater than zero"
             );
-            let mut new_cap = buf.capacity();
-            while avail < size {
-                avail += self.high;
-                new_cap += self.high;
+            if buf.len() + size <= self.high {
+                let mut new_buf = self.get();
+                if new_buf.capacity() < self.high {
+                    new_buf = BytesMut::with_capacity(self.high);
+                }
+                new_buf.extend_from_slice(buf);
+                self.release(std::mem::replace(buf, new_buf));
+                return;
             }
+
+            let len = buf.len();
+            let cap = buf.capacity();
+            let new_cap = (len + size).max(cap + cap.min(MAX_GROW_STEP));
             buf.reserve_capacity(new_cap);
         }
     }
 
     #[inline]
-    /// Returns an eligible buffer to this configuration's thread-local cache.
+    /// Returns an eligible buffer to the thread-local cache.
     ///
-    /// The buffer is retained only when its capacity is greater than `low`, no
-    /// greater than `high`, and this configuration's cache is not full.
+    /// The buffer is retained only when its capacity is greater than `low` and
+    /// no greater than `high`, and no other handle refers to its allocation.
+    /// A buffer that still shares its allocation with split-off data is
+    /// dropped instead: its capacity covers only the part after that data, but
+    /// caching it would keep the whole allocation alive. If the cache then
+    /// holds more capacity than [`read_buf_cache_limit`], the least recently
+    /// released buffers are freed.
     pub fn release(&self, mut buf: BytesMut) {
-        let cap = buf.capacity();
-        if cap > self.low && cap <= self.high {
-            CACHE.with(|c| {
-                c.with(self.idx, self.first, |v: &mut Vec<_>| {
-                    if v.len() < self.cache_size {
-                        buf.clear();
-                        v.push(buf);
-                    }
-                });
-            });
+        // Uniqueness can only be gained, never lost, so a buffer that is
+        // unique here is fully reclaimed by `clear()`.
+        if buf.is_unique() {
+            buf.clear();
+            if self.is_cacheable(buf.capacity()) {
+                CACHE.with(|c| c.release(buf));
+            }
         }
     }
 }
 
 struct LocalCache {
-    cache: UnsafeCell<Vec<(Vec<BytesMut>, Vec<BytesMut>)>>,
+    bufs: UnsafeCell<VecDeque<BytesMut>>,
+    size: Cell<usize>,
 }
 
 impl LocalCache {
     fn new() -> Self {
         Self {
-            cache: UnsafeCell::new(Vec::with_capacity(16)),
+            bufs: UnsafeCell::new(VecDeque::new()),
+            size: Cell::new(0),
         }
     }
 
-    fn with<F, R>(&self, idx: usize, first: bool, f: F) -> R
-    where
-        F: FnOnce(&mut Vec<BytesMut>) -> R,
-    {
-        let cache = unsafe { &mut *self.cache.get() };
+    fn get(&self, cfg: &BufConfig) -> Option<BytesMut> {
+        // SAFETY: the cache is thread-local and never borrowed across calls
+        let bufs = unsafe { &mut *self.bufs.get() };
+        let pos = bufs.iter().rposition(|b| cfg.is_cacheable(b.capacity()))?;
+        let buf = bufs.remove(pos)?;
+        self.size.set(self.size.get() - buf.capacity());
+        Some(buf)
+    }
 
-        while cache.len() <= idx {
-            cache.push((Vec::new(), Vec::new()));
+    fn release(&self, buf: BytesMut) {
+        // SAFETY: the cache is thread-local and never borrowed across calls
+        let bufs = unsafe { &mut *self.bufs.get() };
+        let limit = read_buf_cache_limit();
+        let mut size = self.size.get() + buf.capacity();
+        bufs.push_back(buf);
+        while size > limit {
+            let Some(buf) = bufs.pop_front() else { break };
+            size -= buf.capacity();
         }
-        if first {
-            f(&mut cache[idx].0)
-        } else {
-            f(&mut cache[idx].1)
-        }
+        self.size.set(size);
+    }
+
+    #[cfg(test)]
+    fn clear(&self) {
+        // SAFETY: the cache is thread-local and never borrowed across calls
+        unsafe { (*self.bufs.get()).clear() };
+        self.size.set(0);
     }
 }
 
@@ -599,9 +662,7 @@ mod tests {
 
     #[test]
     fn buffer_configuration() {
-        let cfg = IoConfig::new()
-            .set_read_buf(1024, 128, 4)
-            .set_write_buf(2048);
+        let cfg = IoConfig::new().set_read_buf(1024, 128).set_write_buf(2048);
 
         assert_eq!(cfg.read_buf().high, 1024);
         assert_eq!(cfg.read_buf().low, 128);
@@ -637,7 +698,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "read buffer high watermark must be greater than zero")]
     fn zero_read_high_watermark() {
-        let _ = IoConfig::new().set_read_buf(0, 128, 4);
+        let _ = IoConfig::new().set_read_buf(0, 128);
     }
 
     #[test]
@@ -652,6 +713,147 @@ mod tests {
         let mut cfg = *IoConfig::new().read_buf();
         cfg.high = 0;
         cfg.resize_min(&mut BytesMut::new(), 1024);
+    }
+
+    #[test]
+    fn resize_compacts_into_cached_buffer() {
+        let cfg = *IoConfig::new().set_read_buf(4096, 512).read_buf();
+
+        // leftover input at the end of a consumed buffer
+        let mut buf = cfg.get();
+        buf.extend_from_slice(&[1; 4000]);
+        let _ = buf.split_to(3900);
+        assert!(buf.remaining_mut() < cfg.low);
+
+        cfg.resize(&mut buf);
+        assert_eq!(&buf[..], &[1; 100][..]);
+        assert_eq!(buf.capacity(), cfg.high);
+        assert_eq!(buf.remaining_mut(), cfg.high - 100);
+
+        // the compacted buffer can be cached again
+        buf.clear();
+        cfg.release(buf);
+        let buf = cfg.get();
+        assert_eq!(buf.capacity(), cfg.high);
+
+        // an explicit minimum that fits is compacted too
+        let mut buf = cfg.get();
+        buf.extend_from_slice(&[2; 3000]);
+        cfg.resize_min(&mut buf, 1000);
+        assert_eq!(buf.capacity(), cfg.high);
+        assert_eq!(&buf[..], &[2; 3000][..]);
+
+        // data that does not fit grows the buffer
+        let mut buf = cfg.get();
+        buf.extend_from_slice(&[3; 3800]);
+        cfg.resize(&mut buf);
+        assert_eq!(buf.len(), 3800);
+        assert!(buf.remaining_mut() >= cfg.high);
+    }
+
+    #[test]
+    fn cache_is_shared_by_configs() {
+        CACHE.with(LocalCache::clear);
+        let a = *IoConfig::new().read_buf();
+        let b = *IoConfig::new().set_read_buf(DEFAULT_HIGH, 1024).read_buf();
+
+        let buf = a.get();
+        let ptr = buf.as_ptr();
+        a.release(buf);
+        let buf = b.get();
+        assert_eq!(buf.as_ptr(), ptr, "buffer released by another config");
+
+        // a buffer not eligible for the requesting config stays cached
+        let small = *IoConfig::new().set_read_buf(4096, 512).read_buf();
+        b.release(buf);
+        let buf = small.get();
+        assert_ne!(buf.as_ptr(), ptr);
+        assert_eq!(b.get().as_ptr(), ptr);
+        drop(buf);
+    }
+
+    #[test]
+    fn cache_is_bounded_by_capacity() {
+        CACHE.with(LocalCache::clear);
+        let cfg = *IoConfig::new().read_buf();
+        let limit = read_buf_cache_limit();
+        assert_eq!(limit, DEFAULT_CACHE_LIMIT);
+
+        let bufs: Vec<_> = (0..limit / cfg.high + 8).map(|_| cfg.get()).collect();
+        let ptrs: Vec<_> = bufs.iter().map(|b| b.as_ptr()).collect();
+        for buf in bufs {
+            cfg.release(buf);
+        }
+        let size = CACHE.with(|c| c.size.get());
+        assert!(size <= limit, "cache holds {size} bytes");
+        assert!(size + cfg.high > limit);
+
+        // the oldest buffers were freed, the newest are handed out first
+        let n = size / cfg.high;
+        for ptr in ptrs.iter().rev().take(n) {
+            assert_eq!(cfg.get().as_ptr(), *ptr);
+        }
+        assert_eq!(CACHE.with(|c| c.size.get()), 0);
+    }
+
+    #[test]
+    fn large_buffers_grow_by_doubling_and_are_not_cached() {
+        CACHE.with(LocalCache::clear);
+        let cfg = *IoConfig::new().read_buf();
+
+        // reads that fill the buffer until a 1 MiB frame is buffered
+        let mut buf = cfg.get();
+        let mut grows = 0;
+        while buf.len() < 1024 * 1024 {
+            let (ptr, cap) = (buf.as_ptr(), buf.capacity());
+            cfg.resize(&mut buf);
+            if buf.as_ptr() != ptr {
+                grows += 1;
+                assert!(buf.capacity() >= 2 * cap, "{cap} -> {}", buf.capacity());
+            }
+            let n = buf.remaining_mut();
+            buf.extend_from_slice(&vec![1; n]);
+        }
+        assert!(grows <= 8, "{grows} reallocations");
+        assert!(buf.capacity() <= 2 * 1024 * 1024 + cfg.high);
+
+        // the step is limited for very large buffers
+        let mut big = BytesMut::with_capacity(4 * MAX_GROW_STEP);
+        big.extend_from_slice(&vec![2; 4 * MAX_GROW_STEP]);
+        cfg.resize_min(&mut big, 1);
+        assert_eq!(big.capacity(), 5 * MAX_GROW_STEP);
+        drop(big);
+
+        // grown buffers are dropped, even once most of the data is consumed
+        let len = buf.len();
+        drop(buf.split_to(len - 10));
+        assert!(buf.is_unique());
+        cfg.release(buf);
+        assert_eq!(CACHE.with(|c| c.size.get()), 0);
+    }
+
+    #[test]
+    fn shared_buffer_is_not_cached() {
+        CACHE.with(LocalCache::clear);
+        let cfg = *IoConfig::new().read_buf();
+
+        // a decoded frame still refers to the start of the buffer
+        let mut buf = cfg.get();
+        buf.extend_from_slice(&vec![1; cfg.high - 1000]);
+        let frame = buf.split_to(buf.len());
+        assert!(cfg.is_cacheable(buf.capacity()));
+        cfg.release(buf);
+        assert_eq!(CACHE.with(|c| c.size.get()), 0);
+
+        // once the frame is gone the whole buffer is reclaimed and cached
+        let mut buf = cfg.get();
+        buf.extend_from_slice(&vec![2; cfg.high - 1000]);
+        let frame2 = buf.split_to(buf.len());
+        drop(frame2);
+        cfg.release(buf);
+        assert_eq!(CACHE.with(|c| c.size.get()), cfg.high);
+        assert_eq!(cfg.get().capacity(), cfg.high);
+        drop(frame);
     }
 
     #[test]

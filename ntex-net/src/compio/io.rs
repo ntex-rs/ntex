@@ -65,7 +65,8 @@ impl IoBuf for CompioBuf {
 
 impl IoBufMut for CompioBuf {
     fn as_uninit(&mut self) -> &mut [mem::MaybeUninit<u8>] {
-        self.0.chunk_mut().as_mut()
+        // SAFETY: compio only writes bytes read from the socket
+        unsafe { self.0.chunk_mut().as_uninit_slice_mut() }
     }
 }
 

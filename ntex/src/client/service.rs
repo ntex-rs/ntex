@@ -85,7 +85,7 @@ impl ServiceRequest {
     }
 
     pub(super) fn set_json<T: Serialize>(&mut self, value: &T) -> Result<(), ClientError> {
-        self.body = serde_json::to_string(value)
+        self.body = crate::http::helpers::json_body(value)
             .map_err(|e| ClientError::Error(Rc::new(e)))?
             .into();
         self.set_header_if_none(header::CONTENT_TYPE, "application/json")?;

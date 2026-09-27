@@ -475,9 +475,13 @@ impl<F: Filter> Io<F> {
         //
         // Safety: no references into the buffer storage are retained.
         // All APIs first remove the buffer from storage before processing it.
-        unsafe { &mut *(Rc::as_ptr(&state.0).cast_mut()) }
-            .buffer
-            .add_layer(state.0.cfg.write_page_size());
+        // The page size is read first and the exclusive borrow covers only
+        // the `buffer` field, so no other access overlaps it.
+        let page_size = state.0.cfg.write_page_size();
+        unsafe {
+            let buffer = &raw mut (*Rc::as_ptr(&state.0).cast_mut()).buffer;
+            (*buffer).add_layer(page_size);
+        }
 
         // Replace current filter
         state.0.filter.add_filter::<F, U>(nf);
@@ -493,6 +497,7 @@ impl<F: Filter> Io<F> {
         io
     }
 
+    #[allow(clippy::items_after_statements)]
     /// Wraps the current layer with a wrapper.
     pub fn map_filter<U, R>(self, f: U) -> Io<R>
     where
@@ -507,9 +512,25 @@ impl<F: Filter> Io<F> {
             self.st().terminate_connection(Some(e));
         }
 
-        let state = self.take_io_ref();
-        state.0.filter.map_filter::<F, U, R>(f);
+        // `f` owns the filter, if it unwinds the filter chain is gone and the
+        // connection must be torn down here, `Drop for Io` skips it without
+        // a filter
+        struct Guard<'a>(&'a IoRef);
 
+        impl Drop for Guard<'_> {
+            fn drop(&mut self) {
+                let st = &self.0.0;
+                st.force_close_connection();
+                st.buffer.release(self.0.cfg());
+                drop(st.extensions.take_callbacks());
+            }
+        }
+
+        let guard = Guard(self.io_ref());
+        self.st().filter.map_filter::<F, U, R>(f);
+        mem::forget(guard);
+
+        let state = self.take_io_ref();
         let io = Io(UnsafeCell::new(state), marker::PhantomData);
         io.with_callbacks(|cb| cb.after_processing(&io));
         io
@@ -1072,6 +1093,11 @@ impl<F> Drop for Io<F> {
             }
             st.filter.drop_filter::<F>();
 
+            // Nothing can consume buffered input or deliver buffered output
+            // anymore, but the state may outlive the `Io` for a while, held by
+            // the transport while it closes or by other `IoRef` handles.
+            st.buffer.release(self.io_ref().cfg());
+
             // Callbacks may hold an `IoRef` to this connection, which would keep
             // the state alive through a reference cycle. They are dropped outside
             // the extensions borrow, because their destructor may use the `IoRef`.
@@ -1321,7 +1347,7 @@ mod tests {
     async fn read() {
         let io = Io::new(
             IoTest::create().0,
-            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(8, 4, 16)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(8, 4)),
         );
         assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
         assert!(io.st().dispatch_task.is_set());
@@ -1540,6 +1566,34 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn drop_releases_buffers() {
+        // The state can outlive the `Io`, held by the transport while it closes
+        // or by other handles, but nothing can use its buffers anymore.
+        let io = Io::new(IoTest::create().0, SharedCfg::new("SRV"));
+        let ioref = io.get_ref();
+        let ctx = IoContext::new(io.get_ref());
+        ctx.release_read_buf(BytesMut::copy_from_slice(b"unread"), Poll::Ready(Ok(6)));
+        io.encode_slice(b"not delivered").unwrap();
+        assert_eq!(ioref.0.buffer.read_dst_size(), 6);
+        assert_ne!(ioref.0.buffer.write_buf_size(), 0);
+
+        drop(io);
+        assert_eq!(ioref.0.buffer.read_dst_size(), 0);
+        assert!(ioref.0.buffer.get_read_buf().is_none());
+        assert_eq!(ioref.0.buffer.write_buf_size(), 0);
+
+        // input of a read that was in flight is discarded
+        ctx.release_read_buf(BytesMut::copy_from_slice(b"late"), Poll::Ready(Ok(4)));
+        assert!(ioref.0.buffer.get_read_buf().is_none());
+        ctx.with_read_buf(|buf| {
+            buf.extend_from_slice(b"late");
+            Poll::Ready(Ok(4))
+        });
+        assert!(ioref.0.buffer.get_read_buf().is_none());
+        assert_eq!(ioref.0.buffer.read_dst_size(), 0);
+    }
+
+    #[ntex::test]
     async fn force_close_survives_filter_replacement() {
         // Dropping `Io` swaps the chain for `NullFilter`, which cannot see the
         // io state, so an explicit terminate must still be honoured afterwards.
@@ -1561,7 +1615,7 @@ mod tests {
     async fn read_notify() {
         let io = Io::new(
             IoTest::create().0,
-            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(8, 4, 16)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(8, 4)),
         );
         assert!(!io.st().flags.is_read_notify());
         assert!(lazy(|cx| io.poll_read_notify(cx)).await.is_pending());
@@ -1680,7 +1734,7 @@ mod tests {
 
         let io = Io::new(
             server,
-            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(64, 32, 12)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(64, 32)),
         );
         assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
 
@@ -1707,7 +1761,7 @@ mod tests {
 
         let io = Io::new(
             server,
-            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(64, 32, 12)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(64, 32)),
         );
         assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
 
@@ -1739,7 +1793,7 @@ mod tests {
 
         let io = Io::new(
             server,
-            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(64, 32, 12)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(64, 32)),
         );
         assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
 
@@ -2214,7 +2268,7 @@ mod tests {
             server,
             SharedCfg::new("SRV").add(
                 IoConfig::default()
-                    .set_read_buf(8, 4, 16)
+                    .set_read_buf(8, 4)
                     .set_shutdown_timeout(ntex_util::time::Seconds(2)),
             ),
         );
@@ -2773,7 +2827,7 @@ mod tests {
             server,
             SharedCfg::new("SRV").add(
                 IoConfig::default()
-                    .set_read_buf(1024, 256, 8)
+                    .set_read_buf(1024, 256)
                     .set_shutdown_timeout(ntex_util::time::Seconds(30)),
             ),
         )
@@ -2818,7 +2872,7 @@ mod tests {
             server,
             SharedCfg::new("SRV").add(
                 IoConfig::default()
-                    .set_read_buf(1024, 256, 8)
+                    .set_read_buf(1024, 256)
                     .set_shutdown_timeout(ntex_util::time::Seconds(30)),
             ),
         )
@@ -3040,7 +3094,7 @@ mod tests {
             server,
             SharedCfg::new("SRV").add(
                 IoConfig::default()
-                    .set_read_buf(8, 4, 16)
+                    .set_read_buf(8, 4)
                     .set_shutdown_timeout(ntex_util::time::Seconds(10)),
             ),
         )
@@ -3103,7 +3157,7 @@ mod tests {
             server,
             SharedCfg::new("SRV").add(
                 IoConfig::default()
-                    .set_read_buf(8, 4, 16)
+                    .set_read_buf(8, 4)
                     .set_shutdown_timeout(ntex_util::time::Seconds(1)),
             ),
         )
@@ -3151,7 +3205,7 @@ mod tests {
             server,
             SharedCfg::new("SRV").add(
                 IoConfig::default()
-                    .set_read_buf(8, 4, 16)
+                    .set_read_buf(8, 4)
                     .set_shutdown_timeout(ntex_util::time::Seconds(10)),
             ),
         )

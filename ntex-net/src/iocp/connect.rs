@@ -177,7 +177,34 @@ impl Handler for ConnectOpsHandler {
         }
     }
 
-    fn cleanup(&mut self) {}
+    fn cleanup(&mut self) {
+        // The reactor has stopped, so the completions of pending `ConnectEx`
+        // calls are never dequeued. Closing the socket cancels the connect,
+        // but the kernel still writes its completion into the `OVERLAPPED`,
+        // so the op allocation is leaked to keep that memory valid. The
+        // other fields are dropped, which closes the socket and the channel.
+        let ops = mem::take(&mut *self.inner.ops.borrow_mut());
+        for (_, op) in ops {
+            let op = Box::into_raw(op);
+            // SAFETY: each field is read once and the allocation is never
+            // freed or dropped, so nothing is dropped twice
+            let (sock, addr, sender, cfg) = unsafe {
+                (
+                    ptr::read(&raw const (*op).sock),
+                    ptr::read(&raw const (*op).addr),
+                    ptr::read(&raw const (*op).sender),
+                    ptr::read(&raw const (*op).cfg),
+                )
+            };
+            log::trace!(
+                "{}: Cancel pending connect ({})",
+                cfg.tag(),
+                sock.as_raw_socket()
+            );
+            drop(sock);
+            drop((addr, sender, cfg));
+        }
+    }
 }
 
 fn get_wsa_fn<F>(sock: RawSocket, fguid: GUID) -> io::Result<Option<F>> {
@@ -198,4 +225,49 @@ fn get_wsa_fn<F>(sock: RawSocket, fguid: GUID) -> io::Result<Option<F>> {
         )
     )?;
     Ok(fptr)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::windows::io::FromRawSocket;
+
+    use super::*;
+
+    /// Whether `io` is still an open socket bound to `addr`. Tests run in
+    /// parallel, a closed handle value may already belong to another test.
+    fn is_ours(io: RawSocket, addr: &SockAddr) -> bool {
+        let s = mem::ManuallyDrop::new(unsafe { Socket::from_raw_socket(io) });
+        s.local_addr().is_ok_and(|a| a == *addr)
+    }
+
+    /// A connect still in flight when the runtime stops must be cancelled:
+    /// its socket is closed and the waiting receiver gets an error.
+    #[ntex::test]
+    async fn cleanup_cancels_pending_connect() {
+        let reactor = Reactor::new().unwrap();
+        let ops = ConnectOps::get(&reactor);
+
+        // nothing listens on the port, a loopback connect is retried for a while
+        let addr = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let sock = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP)).unwrap();
+        let raw = sock.as_raw_socket();
+        let rx = ops.connect(sock, addr.into(), SharedCfg::default());
+        assert_eq!(ops.0.ops.borrow().len(), 1, "connect did not stay pending");
+        let local = mem::ManuallyDrop::new(unsafe { Socket::from_raw_socket(raw) })
+            .local_addr()
+            .unwrap();
+
+        ConnectOpsHandler {
+            inner: ops.0.clone(),
+        }
+        .cleanup();
+
+        assert!(ops.0.ops.borrow().is_empty());
+        assert!(!is_ours(raw, &local), "cleanup leaked the socket");
+        let err = rx.await.unwrap_err();
+        assert_eq!(err.to_string(), "IO Driver is gone");
+    }
 }

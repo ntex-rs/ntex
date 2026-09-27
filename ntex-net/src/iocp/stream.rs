@@ -150,7 +150,26 @@ impl StreamOps {
         let id = entry.key();
 
         // read op
-        let rd_op = Box::new(ops::ReadOperation::new(id, sock, ctx.clone(), &self.0.api));
+        //
+        // A non-blocking socket is read in place without waiting for the kernel
+        // to report it readable first; overlapped operations are not affected
+        let nonblocking = match io.set_nonblocking(true) {
+            Ok(()) => true,
+            Err(err) => {
+                log::error!(
+                    "{}: Cannot switch socket({sock:?}) to non-blocking mode, {err:?}",
+                    ctx.tag()
+                );
+                false
+            }
+        };
+        let rd_op = Box::new(ops::ReadOperation::new(
+            id,
+            sock,
+            ctx.clone(),
+            &self.0.api,
+            nonblocking,
+        ));
 
         // write op
         let wr_op = Box::new(ops::WriteOperation::new(id, sock, ctx, &self.0.api));
@@ -721,6 +740,58 @@ mod tests {
         assert!(
             ops.0.with(|st| st.streams[ctl.id].rd_op.is_pending()),
             "recv completed without data"
+        );
+
+        cleanup(&ops);
+        assert_closed(raw, &mut peer);
+
+        drop(ctl);
+        drop(io);
+    }
+
+    /// A recv waiting for input on an idle connection must not hold a read
+    /// buffer, the kernel is only asked to report that input is available.
+    #[ntex::test]
+    async fn idle_recv_holds_no_read_buffer() {
+        let reactor = Reactor::new().unwrap();
+        let (io, ctl, ops, raw, mut peer) = registered(&reactor);
+        let cfg = io.cfg().read_buf();
+        let buf = cfg.get();
+        let ptr = buf.as_ptr();
+        cfg.release(buf);
+
+        ctl.read();
+        assert!(
+            ops.0.with(|st| st.streams[ctl.id].rd_op.is_pending()),
+            "recv completed without data"
+        );
+        let buf = cfg.get();
+        assert_eq!(buf.as_ptr(), ptr, "idle recv took a read buffer");
+        cfg.release(buf);
+
+        cleanup(&ops);
+        assert_closed(raw, &mut peer);
+
+        drop(ctl);
+        drop(io);
+    }
+
+    /// Available input is read in place, then a recv waits for more.
+    #[ntex::test]
+    async fn available_input_is_read_in_place() {
+        let reactor = Reactor::new().unwrap();
+        let (io, ctl, ops, raw, mut peer) = registered(&reactor);
+        std::io::Write::write_all(&mut peer, b"hello").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        ctl.read();
+        assert!(
+            ops.0.with(|st| st.streams[ctl.id].rd_op.is_pending()),
+            "no recv waits for more input"
+        );
+        assert_eq!(
+            io.with_read_dst(|buf| buf.split_to(buf.len())),
+            b"hello".as_ref()
         );
 
         cleanup(&ops);

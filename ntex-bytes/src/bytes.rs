@@ -1,6 +1,6 @@
-use std::{borrow, cmp, fmt, hash, io, mem, ops};
+use std::{cmp, hash, mem, ops};
 
-use crate::{Buf, BytesMut, buf::IntoIter, debug, storage::INLINE_CAP, storage::Storage};
+use crate::{Buf, BytesMut, storage::INLINE_CAP, storage::Storage};
 
 /// A reference counted contiguous slice of memory.
 ///
@@ -54,10 +54,9 @@ use crate::{Buf, BytesMut, buf::IntoIter, debug, storage::INLINE_CAP, storage::S
 /// # Sharing
 ///
 /// The memory itself is reference counted, and multiple `Bytes` objects may
-/// point to the same region. Each `Bytes` handle point to different sections within
-/// the memory region, and `Bytes` handle may or may not have overlapping views
+/// point to the same region. Each `Bytes` handle points to a section of the
+/// memory region, and `Bytes` handles may or may not have overlapping views
 /// into the memory.
-///
 ///
 /// ```text
 ///
@@ -202,7 +201,8 @@ impl Bytes {
     /// Returns a slice of self for the provided range.
     ///
     /// This will increment the reference count for the underlying memory and
-    /// return a new `Bytes` handle set to the slice.
+    /// return a new `Bytes` handle set to the slice. A slice that fits inline
+    /// is copied instead.
     ///
     /// This operation is `O(1)`.
     ///
@@ -231,7 +231,7 @@ impl Bytes {
 
     /// Returns a slice of self for the provided range.
     ///
-    /// Does nothing if `begin <= end` or `end <= self.len()`
+    /// Returns `None` unless `begin <= end` and `end <= self.len()`.
     #[must_use]
     pub fn slice_checked(&self, range: impl ops::RangeBounds<usize>) -> Option<Bytes> {
         use std::ops::Bound;
@@ -240,12 +240,12 @@ impl Bytes {
 
         let begin = match range.start_bound() {
             Bound::Included(&n) => n,
-            Bound::Excluded(&n) => n + 1,
+            Bound::Excluded(&n) => n.checked_add(1)?,
             Bound::Unbounded => 0,
         };
 
         let end = match range.end_bound() {
-            Bound::Included(&n) => n + 1,
+            Bound::Included(&n) => n.checked_add(1)?,
             Bound::Excluded(&n) => n,
             Bound::Unbounded => len,
         };
@@ -291,15 +291,17 @@ impl Bytes {
     ///
     /// # Panics
     ///
-    /// Requires that the given `sub` slice is in fact contained within the
+    /// Requires that the given `subset` slice is in fact contained within the
     /// `Bytes` buffer; otherwise this function will panic.
     #[must_use]
     pub fn slice_ref(&self, subset: &[u8]) -> Bytes {
         self.slice_ref_checked(subset)
-            .expect("Given `sub` slice is not contained within the `Bytes` buffer")
+            .expect("Given `subset` slice is not contained within the `Bytes` buffer")
     }
 
     /// Returns a slice of self that is equivalent to the given `subset`.
+    ///
+    /// Returns `None` if `subset` is not contained within the `Bytes` buffer.
     #[must_use]
     pub fn slice_ref_checked(&self, subset: &[u8]) -> Option<Bytes> {
         let bytes_p = self.as_ptr() as usize;
@@ -347,7 +349,7 @@ impl Bytes {
 
     /// Splits the bytes into two at the given index.
     ///
-    /// Does nothing if `at > self.len()`
+    /// Returns `None` if `at > self.len()`.
     #[must_use]
     pub fn split_off_checked(&mut self, at: usize) -> Option<Bytes> {
         if at <= self.len() {
@@ -396,7 +398,7 @@ impl Bytes {
 
     /// Splits the bytes into two at the given index.
     ///
-    /// Does nothing if `at > len`.
+    /// Returns `None` if `at > len`.
     #[must_use]
     pub fn split_to_checked(&mut self, at: usize) -> Option<Bytes> {
         if at <= self.len() {
@@ -444,7 +446,7 @@ impl Bytes {
     /// rest.
     ///
     /// If `len` is greater than the buffer's current length, this has no
-    /// effect. `Data` may be inlined if the slice fits.
+    /// effect. The data may be inlined if it fits.
     ///
     /// The [`split_off`] method can emulate `truncate`, but this causes the
     /// excess bytes to be returned instead of dropped.
@@ -468,7 +470,9 @@ impl Bytes {
     /// Compacts the underlying storage to this value's current byte range.
     ///
     /// This can reduce retained capacity when this value is a small view into a
-    /// larger allocation. The visible bytes are unchanged.
+    /// larger allocation, anywhere within the allocation. The data is copied if
+    /// the allocation is larger than the view by at least 64 bytes, views up to
+    /// the inline capacity are always inlined. The visible bytes are unchanged.
     ///
     /// # Examples
     ///
@@ -526,71 +530,20 @@ impl Bytes {
     }
 }
 
-impl Buf for Bytes {
-    #[inline]
-    fn remaining(&self) -> usize {
-        self.len()
-    }
-
-    #[inline]
-    fn chunk(&self) -> &[u8] {
-        self.storage.as_ref()
-    }
-
-    #[inline]
-    fn advance(&mut self, cnt: usize) {
-        self.advance_to(cnt);
-    }
-
+impl_buf!(Bytes {
     #[inline]
     fn get_u8(&mut self) -> u8 {
         self.storage.get_u8()
     }
-}
+});
 
-impl bytes::buf::Buf for Bytes {
-    #[inline]
-    fn remaining(&self) -> usize {
-        self.len()
-    }
-
-    #[inline]
-    fn chunk(&self) -> &[u8] {
-        self.storage.as_ref()
-    }
-
-    #[inline]
-    fn advance(&mut self, cnt: usize) {
-        self.advance_to(cnt);
-    }
-
-    #[inline]
-    fn get_u8(&mut self) -> u8 {
-        self.storage.get_u8()
-    }
-}
+impl_slice_traits!(Bytes);
 
 impl Clone for Bytes {
     fn clone(&self) -> Bytes {
         Bytes {
             storage: self.storage.clone(),
         }
-    }
-}
-
-impl AsRef<[u8]> for Bytes {
-    #[inline]
-    fn as_ref(&self) -> &[u8] {
-        self.storage.as_ref()
-    }
-}
-
-impl ops::Deref for Bytes {
-    type Target = [u8];
-
-    #[inline]
-    fn deref(&self) -> &[u8] {
-        self.storage.as_ref()
     }
 }
 
@@ -679,29 +632,7 @@ impl Ord for Bytes {
     }
 }
 
-impl Default for Bytes {
-    #[inline]
-    fn default() -> Bytes {
-        Bytes::new()
-    }
-}
-
-impl io::Read for Bytes {
-    fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
-        let len = cmp::min(self.len(), dst.len());
-        if len > 0 {
-            dst[..len].copy_from_slice(&self[..len]);
-            self.advance_to(len);
-        }
-        Ok(len)
-    }
-}
-
-impl fmt::Debug for Bytes {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&debug::BsDebug(self.storage.as_ref()), fmt)
-    }
-}
+impl_read!(Bytes);
 
 impl hash::Hash for Bytes {
     fn hash<H>(&self, state: &mut H)
@@ -713,203 +644,8 @@ impl hash::Hash for Bytes {
     }
 }
 
-impl borrow::Borrow<[u8]> for Bytes {
-    fn borrow(&self) -> &[u8] {
-        self.as_ref()
-    }
-}
-
-impl IntoIterator for Bytes {
-    type Item = u8;
-    type IntoIter = IntoIter<Bytes>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        IntoIter::new(self)
-    }
-}
-
-impl<'a> IntoIterator for &'a Bytes {
-    type Item = &'a u8;
-    type IntoIter = std::slice::Iter<'a, u8>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.as_ref().iter()
-    }
-}
-
-/*
- *
- * ===== PartialEq / PartialOrd =====
- *
- */
-
-impl PartialEq<[u8]> for Bytes {
-    fn eq(&self, other: &[u8]) -> bool {
-        self.storage.as_ref() == other
-    }
-}
-
-impl<const N: usize> PartialEq<[u8; N]> for Bytes {
-    fn eq(&self, other: &[u8; N]) -> bool {
-        self.storage.as_ref() == other.as_ref()
-    }
-}
-
-impl PartialOrd<[u8]> for Bytes {
-    fn partial_cmp(&self, other: &[u8]) -> Option<cmp::Ordering> {
-        self.storage.as_ref().partial_cmp(other)
-    }
-}
-
-impl<const N: usize> PartialOrd<[u8; N]> for Bytes {
-    fn partial_cmp(&self, other: &[u8; N]) -> Option<cmp::Ordering> {
-        self.storage.as_ref().partial_cmp(other.as_ref())
-    }
-}
-
-impl PartialEq<Bytes> for [u8] {
-    fn eq(&self, other: &Bytes) -> bool {
-        *other == *self
-    }
-}
-
-impl<const N: usize> PartialEq<Bytes> for [u8; N] {
-    fn eq(&self, other: &Bytes) -> bool {
-        *other == *self
-    }
-}
-
-impl<const N: usize> PartialEq<Bytes> for &[u8; N] {
-    fn eq(&self, other: &Bytes) -> bool {
-        *other == *self
-    }
-}
-
-impl PartialOrd<Bytes> for [u8] {
-    fn partial_cmp(&self, other: &Bytes) -> Option<cmp::Ordering> {
-        other.partial_cmp(self)
-    }
-}
-
-impl<const N: usize> PartialOrd<Bytes> for [u8; N] {
-    fn partial_cmp(&self, other: &Bytes) -> Option<cmp::Ordering> {
-        other.partial_cmp(self)
-    }
-}
-
-impl PartialEq<str> for Bytes {
-    fn eq(&self, other: &str) -> bool {
-        self.storage.as_ref() == other.as_bytes()
-    }
-}
-
-impl PartialOrd<str> for Bytes {
-    fn partial_cmp(&self, other: &str) -> Option<cmp::Ordering> {
-        self.storage.as_ref().partial_cmp(other.as_bytes())
-    }
-}
-
-impl PartialEq<Bytes> for str {
-    fn eq(&self, other: &Bytes) -> bool {
-        *other == *self
-    }
-}
-
-impl PartialOrd<Bytes> for str {
-    fn partial_cmp(&self, other: &Bytes) -> Option<cmp::Ordering> {
-        other.partial_cmp(self)
-    }
-}
-
-impl PartialEq<Vec<u8>> for Bytes {
-    fn eq(&self, other: &Vec<u8>) -> bool {
-        *self == other[..]
-    }
-}
-
-impl PartialOrd<Vec<u8>> for Bytes {
-    fn partial_cmp(&self, other: &Vec<u8>) -> Option<cmp::Ordering> {
-        self.storage.as_ref().partial_cmp(&other[..])
-    }
-}
-
-impl PartialEq<Bytes> for Vec<u8> {
-    fn eq(&self, other: &Bytes) -> bool {
-        *other == *self
-    }
-}
-
-impl PartialOrd<Bytes> for Vec<u8> {
-    fn partial_cmp(&self, other: &Bytes) -> Option<cmp::Ordering> {
-        other.partial_cmp(self)
-    }
-}
-
-impl PartialEq<String> for Bytes {
-    fn eq(&self, other: &String) -> bool {
-        *self == other[..]
-    }
-}
-
-impl PartialOrd<String> for Bytes {
-    fn partial_cmp(&self, other: &String) -> Option<cmp::Ordering> {
-        self.storage.as_ref().partial_cmp(other.as_bytes())
-    }
-}
-
-impl PartialEq<Bytes> for String {
-    fn eq(&self, other: &Bytes) -> bool {
-        *other == *self
-    }
-}
-
-impl PartialOrd<Bytes> for String {
-    fn partial_cmp(&self, other: &Bytes) -> Option<cmp::Ordering> {
-        other.partial_cmp(self)
-    }
-}
-
-impl PartialEq<Bytes> for &[u8] {
-    fn eq(&self, other: &Bytes) -> bool {
-        *other == *self
-    }
-}
-
-impl PartialOrd<Bytes> for &[u8] {
-    fn partial_cmp(&self, other: &Bytes) -> Option<cmp::Ordering> {
-        other.partial_cmp(self)
-    }
-}
-
-impl PartialEq<Bytes> for &str {
-    fn eq(&self, other: &Bytes) -> bool {
-        *other == *self
-    }
-}
-
-impl PartialOrd<Bytes> for &str {
-    fn partial_cmp(&self, other: &Bytes) -> Option<cmp::Ordering> {
-        other.partial_cmp(self)
-    }
-}
-
-impl<'a, T: ?Sized> PartialEq<&'a T> for Bytes
-where
-    Bytes: PartialEq<T>,
-{
-    fn eq(&self, other: &&'a T) -> bool {
-        *self == **other
-    }
-}
-
-impl<'a, T: ?Sized> PartialOrd<&'a T> for Bytes
-where
-    Bytes: PartialOrd<T>,
-{
-    fn partial_cmp(&self, other: &&'a T) -> Option<cmp::Ordering> {
-        self.partial_cmp(&**other)
-    }
-}
+impl_partial_eq!(Bytes);
+impl_partial_ord!(Bytes);
 
 #[cfg(test)]
 #[allow(unused_must_use)]
@@ -922,6 +658,34 @@ mod tests {
     const LONG: &[u8] = b"mary had a1 little la2mb, little lamb, little lamb, little lamb, little lamb, little lamb \
         mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb \
         mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb \0";
+
+    #[test]
+    #[allow(clippy::op_ref, clippy::cmp_owned)]
+    fn partial_ord_reverse() {
+        let b = Bytes::from_static(b"b");
+        assert!(b"a"[..] < b);
+        assert!(*b"a" < b);
+        assert!(*"a" < b);
+        assert!(b"a".to_vec() < b);
+        assert!(String::from("a") < b);
+        assert!(&b"a"[..] < b);
+        assert!("a" < b);
+        assert!(b"c"[..] > b);
+        assert!("c" > b);
+        assert_eq!(b"b"[..].partial_cmp(&b), Some(cmp::Ordering::Equal));
+    }
+
+    #[test]
+    fn slice_checked_max_bounds() {
+        use std::ops::Bound;
+
+        let b = Bytes::from(LONG.to_vec());
+        assert!(b.slice_checked(..=usize::MAX).is_none());
+        assert!(
+            b.slice_checked((Bound::Excluded(usize::MAX), Bound::Unbounded))
+                .is_none()
+        );
+    }
 
     #[test]
     #[allow(
@@ -966,10 +730,10 @@ mod tests {
         assert_eq!(&b, &LONG[1..10]);
 
         let mut b = Bytes::from(b"123");
-        assert!(&b"12"[..] > &b);
+        assert!(&b"12"[..] < &b);
         assert_eq!("123", &b);
-        assert!("12" > &b);
-        assert!("12" > b);
+        assert!("12" < &b);
+        assert!("12" < b);
         assert_eq!(b.get_u8(), b'1');
         assert_eq!("23", &b);
 

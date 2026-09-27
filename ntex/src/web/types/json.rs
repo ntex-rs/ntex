@@ -113,7 +113,7 @@ where
     JsonError: WebResponseError<St, St::Error>,
 {
     async fn respond_to(self, st: &St, _: &HttpRequest) -> Response {
-        let body = match serde_json::to_string(&self.0) {
+        let body = match crate::http::helpers::json_body(&self.0) {
             Ok(body) => body,
             Err(e) => return e.error_response(st),
         };

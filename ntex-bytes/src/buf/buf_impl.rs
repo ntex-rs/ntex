@@ -1,11 +1,11 @@
-use std::{cmp, mem, ptr};
+use std::{cmp, mem};
 
 macro_rules! buf_get_impl {
     ($this:ident, $typ:tt::$conv:tt) => {{
         const SIZE: usize = mem::size_of::<$typ>();
         // try to convert directly from the bytes
         // this Option<ret> trick is to avoid keeping a borrow on self
-        // when advance() is called (mut borrow) and to call bytes() only once
+        // when advance() is called (mut borrow) and to call chunk() only once
         #[allow(clippy::ptr_as_ptr)]
         let ret = $this
             .chunk()
@@ -79,7 +79,7 @@ pub trait Buf {
     /// the buffer.
     ///
     /// This value is greater than or equal to the length of the slice returned
-    /// by `bytes`.
+    /// by `chunk`.
     ///
     /// # Examples
     ///
@@ -132,7 +132,7 @@ pub trait Buf {
 
     /// Advance the internal cursor of the Buf
     ///
-    /// The next call to `bytes` will return a slice starting `cnt` bytes
+    /// The next call to `chunk` will return a slice starting `cnt` bytes
     /// further into the underlying buffer.
     ///
     /// # Examples
@@ -210,16 +210,10 @@ pub trait Buf {
         assert!(self.remaining() >= dst.len());
 
         while off < dst.len() {
-            let cnt;
-
-            unsafe {
-                let src = self.chunk();
-                cnt = cmp::min(src.len(), dst.len() - off);
-
-                ptr::copy_nonoverlapping(src.as_ptr(), dst[off..].as_mut_ptr(), cnt);
-
-                off += cnt;
-            }
+            let src = self.chunk();
+            let cnt = cmp::min(src.len(), dst.len() - off);
+            dst[off..off + cnt].copy_from_slice(&src[..cnt]);
+            off += cnt;
 
             self.advance(cnt);
         }
@@ -621,7 +615,8 @@ pub trait Buf {
     ///
     /// # Panics
     ///
-    /// This function panics if there is not enough remaining data in `self`.
+    /// This function panics if there is not enough remaining data in `self`,
+    /// or if `nbytes > 8`.
     #[inline]
     fn get_uint(&mut self, nbytes: usize) -> u64 {
         buf_get_impl!(be => self, u64, nbytes);
@@ -642,7 +637,8 @@ pub trait Buf {
     ///
     /// # Panics
     ///
-    /// This function panics if there is not enough remaining data in `self`.
+    /// This function panics if there is not enough remaining data in `self`,
+    /// or if `nbytes > 8`.
     #[inline]
     fn get_uint_le(&mut self, nbytes: usize) -> u64 {
         buf_get_impl!(le => self, u64, nbytes);
@@ -664,7 +660,8 @@ pub trait Buf {
     ///
     /// # Panics
     ///
-    /// This function panics if there is not enough remaining data in `self`.
+    /// This function panics if there is not enough remaining data in `self`,
+    /// or if `nbytes > 8`.
     #[inline]
     fn get_int(&mut self, nbytes: usize) -> i64 {
         sign_extend(self.get_uint(nbytes), nbytes)
@@ -686,7 +683,8 @@ pub trait Buf {
     ///
     /// # Panics
     ///
-    /// This function panics if there is not enough remaining data in `self`.
+    /// This function panics if there is not enough remaining data in `self`,
+    /// or if `nbytes > 8`.
     #[inline]
     fn get_int_le(&mut self, nbytes: usize) -> i64 {
         sign_extend(self.get_uint_le(nbytes), nbytes)

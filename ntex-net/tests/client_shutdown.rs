@@ -28,7 +28,7 @@ fn cfg() -> SharedCfg {
     SharedCfg::new("CLIENT")
         .add(
             IoConfig::new()
-                .set_read_buf(8192, 512, 16)
+                .set_read_buf(8192, 512)
                 .set_shutdown_timeout(ntex::time::Seconds(5)),
         )
         .build()

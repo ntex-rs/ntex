@@ -2,6 +2,33 @@
 
 ## [4.1.0] - Unreleased
 
+* A filter added over a sealed `Io` is stored typed, so `Io::filter()` and `Io::map_filter()`
+  on it no longer panic with "Filter is sealed", e.g. a TLS handshake over `IoBoxed`
+
+* `Io<Sealed>::map_filter()` no longer panics with "Filter is sealed"
+
+* A panic in the `Io::map_filter()` closure closes the connection, before it stayed open
+  without a filter until the peer went away
+
+* The `dyn Filter` pointer of a typed filter is derived from the raw box pointer, the reference
+  it was taken from before is invalidated by `Box::into_raw` under Stacked Borrows
+
+* `IoContext` is `#[repr(transparent)]`, making the internal `&IoRef` to `&IoContext` cast sound
+
+* `Io::add_filter` no longer creates a `&mut IoState` that overlaps other accesses
+
+* The filter stack reserves room for two filter layers up front, installing a filter no longer
+  reallocates the stack
+
+* Read buffers larger than `high` grow by doubling their capacity, by at most 1 MiB at once,
+  instead of in steps of `high`, so buffering a large frame no longer copies it once per step
+
+* The read buffer cache no longer keeps buffers that share their allocation with split off
+  data, it neither pins whole allocations for decoded frames nor hands out small leftovers
+
+* The innermost buffer of the filter stack allocates its write pages on demand,
+  a connection no longer allocates a write buffer it never uses
+
 * Fix `Io::poll_shutdown()` waking the transport tasks on every poll, which kept the compio
   runtime from polling for I/O completions and stalled the shutdown until its timeout
 
@@ -11,6 +38,23 @@
   pending
 
 * `TimerHandle::remains()` rounds the remaining time up
+
+* Read buffers are cached in one per-thread cache shared by all configurations
+  and bounded by the capacity it holds, 1 MiB by default, see
+  `cfg::set_read_buf_cache_limit()`. The least recently released buffers are
+  freed first
+
+* Breaking: `IoConfig::set_read_buf()` no longer takes a cache size
+
+* Size the read buffer through `BufConfig::resize_min()` when a read completes
+  while earlier input is still unconsumed, so the merged buffer stays cacheable
+
+* Release buffered input and output when `Io` is dropped, instead of keeping it
+  until the transport and every `IoRef` let go of the connection state
+
+* `BufConfig::resize()` and `resize_min()` move buffered data into a cached
+  buffer of capacity `high` when it fits, instead of allocating a larger buffer
+  that could not be cached again
 
 * Fix output written by a filter that fails on read during shutdown being lost when the filter
   is stacked over another filter
