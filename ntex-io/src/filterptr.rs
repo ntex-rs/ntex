@@ -7,6 +7,15 @@ enum Repr {
     Sealed(Box<dyn Filter>),
 }
 
+impl Repr {
+    fn typed<F: Filter>(filter: F) -> Self {
+        // derive the `dyn` pointer from the raw pointer, a reference taken
+        // from the `Box` is invalidated by `Box::into_raw`
+        let ptr = Box::into_raw(Box::new(filter));
+        Repr::Filter(ptr.cast_const().cast(), ptr.cast_const() as *const dyn Filter)
+    }
+}
+
 impl Default for Repr {
     fn default() -> Self {
         Repr::Filter(ptr::null(), NullFilter::get())
@@ -31,9 +40,8 @@ impl FilterPtr {
     }
 
     pub(crate) fn set<F: Filter>(&self, filter: F) {
-        let filter = Box::new(filter);
-        let filter_ref = ptr::from_ref::<dyn Filter>(filter.as_ref());
-        *self.as_mut() = Repr::Filter(Box::into_raw(filter).cast(), filter_ref);
+        *self.as_mut() = Repr::typed(filter);
+
     }
 
     /// Get filter, panic if it is not filter
@@ -86,12 +94,9 @@ impl FilterPtr {
         assert!(self.is_set(), "Filter is not set");
 
         let repr = match self.as_ref() {
-            Repr::Filter(..) => {
-                let filter = Box::new(Layer::new(new, *self.take_filter::<F>()));
-                let filter_ref = ptr::from_ref::<dyn Filter>(filter.as_ref());
-                Repr::Filter(Box::into_raw(filter).cast(), filter_ref)
-            }
-            Repr::Sealed(..) => Repr::Sealed(Box::new(Layer::new(new, self.take_sealed()))),
+            Repr::Filter(..) => Repr::typed(Layer::new(new, *self.take_filter::<F>())),
+            // The new layer is typed, only a bare `Sealed` stays in `Repr::Sealed`
+            Repr::Sealed(..) => Repr::typed(Layer::new(new, self.take_sealed())),
         };
         *self.as_mut() = repr;
     }
@@ -101,9 +106,8 @@ impl FilterPtr {
         U: FnOnce(F) -> R,
         R: Filter,
     {
-        let filter = Box::new(f(*self.take_filter::<F>()));
-        let filter_ref = ptr::from_ref::<dyn Filter>(filter.as_ref());
-        *self.as_mut() = Repr::Filter(Box::into_raw(filter).cast(), filter_ref);
+        *self.as_mut() = Repr::typed(f(*self.take_filter::<F>()));
+
     }
 
     pub(crate) fn seal<F: Filter>(&self) {
@@ -217,6 +221,24 @@ mod tests {
 
         let io = Io::from(IoTestWrapper).seal();
         let _io: Io<Layer<DropFilter, Sealed>> = io.add_filter(f);
+    }
+
+    #[test]
+    fn miri_sealed_layer_typed_access() {
+        let p = Rc::new(Cell::new(0));
+
+        let io = Io::from(IoTestWrapper).seal();
+        let io = io.add_filter(DropFilter { p: p.clone() });
+        assert!(Rc::ptr_eq(&io.filter().p, &p));
+
+        let io = io.map_filter(|layer| layer);
+        assert!(Rc::ptr_eq(&io.filter().p, &p));
+        let io = io.add_filter(DropFilter { p: p.clone() });
+        assert!(Rc::ptr_eq(&io.filter().p, &p));
+        assert_eq!(p.get(), 0);
+
+        drop(io);
+        assert_eq!(p.get(), 2);
     }
 
     #[test]

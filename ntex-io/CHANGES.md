@@ -2,6 +2,12 @@
 
 ## [4.1.0] - Unreleased
 
+* A filter added over a sealed `Io` is stored typed, so `Io::filter()` and `Io::map_filter()`
+  on it no longer panic with "Filter is sealed", e.g. a TLS handshake over `IoBoxed`
+
+* The `dyn Filter` pointer of a typed filter is derived from the raw box pointer, the reference
+  it was taken from before is invalidated by `Box::into_raw` under Stacked Borrows
+
 * `IoContext` is `#[repr(transparent)]`, making the internal `&IoRef` to `&IoContext` cast sound
 
 * `Io::add_filter` no longer creates a `&mut IoState` that overlaps other accesses
