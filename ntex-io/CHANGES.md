@@ -2,6 +2,9 @@
 
 ## [4.1.0] - Unreleased
 
+* The filter stack reserves room for two filter layers up front, installing a filter no longer
+  reallocates the stack
+
 * Read buffers larger than `high` grow by doubling their capacity, by at most 1 MiB at once,
   instead of in steps of `high`, so buffering a large frame no longer copies it once per step
 

@@ -24,17 +24,17 @@ impl fmt::Debug for Stack {
 
 impl Stack {
     pub(crate) fn new(size: BytePageSize) -> Self {
-        Self {
-            buffers: vec![
-                Buffer {
-                    read: Cell::new(None),
-                    write: Cell::new(Some(BytePages::new(size))),
-                },
-                // Only exposed as the inner side of `FilterBuf` when no layer
-                // is installed; its write pages are allocated on demand.
-                Buffer::default(),
-            ],
-        }
+        // room for two filter layers, e.g. TLS over a proxy protocol,
+        // without reallocating
+        let mut buffers = Vec::with_capacity(4);
+        buffers.push(Buffer {
+            read: Cell::new(None),
+            write: Cell::new(Some(BytePages::new(size))),
+        });
+        // Only exposed as the inner side of `FilterBuf` when no layer
+        // is installed; its write pages are allocated on demand.
+        buffers.push(Buffer::default());
+        Self { buffers }
     }
 
     pub(crate) fn set_page_size(&self, size: BytePageSize) {
@@ -536,7 +536,12 @@ mod tests {
         assert_eq!(stack.read_dst_size(), 0);
         assert_eq!(stack.write_buf_size(), 0);
 
+        // two layers fit without reallocating
+        let ptr = stack.buffers.as_ptr();
         stack.add_layer(BytePageSize::Size16);
+        stack.add_layer(BytePageSize::Size16);
+        assert_eq!(stack.buffers.as_ptr(), ptr);
+        stack.buffers.remove(0);
         assert_eq!(stack.buffers.len(), 3);
 
         stack.set_page_size(BytePageSize::Size32);
