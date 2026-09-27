@@ -1,4 +1,4 @@
-use std::{cmp, hash, io, mem, ops};
+use std::{cmp, hash, mem, ops};
 
 use crate::{Buf, BytesMut, storage::INLINE_CAP, storage::Storage};
 
@@ -632,16 +632,7 @@ impl Ord for Bytes {
     }
 }
 
-impl io::Read for Bytes {
-    fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
-        let len = cmp::min(self.len(), dst.len());
-        if len > 0 {
-            dst[..len].copy_from_slice(&self[..len]);
-            self.advance_to(len);
-        }
-        Ok(len)
-    }
-}
+impl_read!(Bytes);
 
 impl hash::Hash for Bytes {
     fn hash<H>(&self, state: &mut H)

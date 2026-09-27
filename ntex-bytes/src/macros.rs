@@ -1,5 +1,6 @@
-//! Trait impls shared by `Bytes` and `BytesMut`, both keep their data in a
-//! `storage` field and provide `new()`, `len()` and `advance_to()`.
+//! Trait impls shared by `Bytes`, `BytesMut` and `BytePage`. `impl_buf!` and
+//! `impl_slice_traits!` expect a `storage` field and a `new()` constructor,
+//! `impl_buf!` and `impl_read!` expect `len()` and `advance_to()`.
 
 /// Implements `ntex_bytes::Buf` and `bytes::Buf`, `extra` items go to both.
 macro_rules! impl_buf {
@@ -103,37 +104,53 @@ macro_rules! impl_slice_traits {
     };
 }
 
+/// Implements `io::Read`, consuming the data from the front.
+macro_rules! impl_read {
+    ($ty:ty) => {
+        impl ::std::io::Read for $ty {
+            fn read(&mut self, dst: &mut [u8]) -> ::std::io::Result<usize> {
+                let len = ::std::cmp::min(self.len(), dst.len());
+                if len > 0 {
+                    dst[..len].copy_from_slice(&self[..len]);
+                    self.advance_to(len);
+                }
+                Ok(len)
+            }
+        }
+    };
+}
+
 /// Implements `PartialEq` against byte and string slices, arrays, vectors and
-/// references, in both directions.
+/// references, in both directions. Requires `AsRef<[u8]>`.
 macro_rules! impl_partial_eq {
     ($ty:ident) => {
         impl PartialEq<[u8]> for $ty {
             fn eq(&self, other: &[u8]) -> bool {
-                self.storage.as_ref() == other
+                AsRef::<[u8]>::as_ref(self) == other
             }
         }
 
         impl<const N: usize> PartialEq<[u8; N]> for $ty {
             fn eq(&self, other: &[u8; N]) -> bool {
-                self.storage.as_ref() == other.as_slice()
+                AsRef::<[u8]>::as_ref(self) == other.as_slice()
             }
         }
 
         impl PartialEq<str> for $ty {
             fn eq(&self, other: &str) -> bool {
-                self.storage.as_ref() == other.as_bytes()
+                AsRef::<[u8]>::as_ref(self) == other.as_bytes()
             }
         }
 
         impl PartialEq<Vec<u8>> for $ty {
             fn eq(&self, other: &Vec<u8>) -> bool {
-                self.storage.as_ref() == other.as_slice()
+                AsRef::<[u8]>::as_ref(self) == other.as_slice()
             }
         }
 
         impl PartialEq<String> for $ty {
             fn eq(&self, other: &String) -> bool {
-                self.storage.as_ref() == other.as_bytes()
+                AsRef::<[u8]>::as_ref(self) == other.as_bytes()
             }
         }
 

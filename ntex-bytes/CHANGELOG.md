@@ -8,6 +8,9 @@
 * Generate the shared `Bytes`/`BytesMut` trait impls and the `BufMut::put_*`
   integer methods with macros
 
+* `BytePage` implements `PartialEq` against `[u8]`, `[u8; N]`, `str`, `Vec<u8>`
+  and `String`, in both directions
+
 * Add `BytesMut::is_unique()`
 
 * Mark `StorageExt` as an `unsafe` trait, `Bytes` trusts the pointers and lengths

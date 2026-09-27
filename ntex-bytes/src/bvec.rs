@@ -1,4 +1,4 @@
-use std::{borrow, cmp, fmt, io, ops::DerefMut, ptr};
+use std::{borrow, fmt, io, ops::DerefMut, ptr};
 
 use crate::{Buf, BufMut, Bytes, buf::UninitSlice, stvec::StorageVec};
 
@@ -757,16 +757,13 @@ impl PartialEq<Bytes> for BytesMut {
     }
 }
 
-impl io::Read for BytesMut {
-    fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
-        let len = cmp::min(self.len(), dst.len());
-        if len > 0 {
-            dst[..len].copy_from_slice(&self[..len]);
-            self.advance_to(len);
-        }
-        Ok(len)
+impl PartialEq<BytesMut> for Bytes {
+    fn eq(&self, other: &BytesMut) -> bool {
+        *other == *self
     }
 }
+
+impl_read!(BytesMut);
 
 impl io::Write for BytesMut {
     fn write(&mut self, src: &[u8]) -> Result<usize, io::Error> {
@@ -800,11 +797,7 @@ impl FromIterator<u8> for BytesMut {
         let (min, maybe_max) = iter.size_hint();
 
         let mut out = BytesMut::with_capacity(maybe_max.unwrap_or(min));
-        for i in iter {
-            out.reserve(1);
-            out.put_u8(i);
-        }
-
+        out.extend(iter);
         out
     }
 }
@@ -821,14 +814,8 @@ impl Extend<u8> for BytesMut {
         T: IntoIterator<Item = u8>,
     {
         let iter = iter.into_iter();
-
-        let (lower, _) = iter.size_hint();
-        self.reserve(lower);
-
-        for (idx, b) in iter.enumerate() {
-            if idx >= lower {
-                self.reserve(1);
-            }
+        self.reserve(iter.size_hint().0);
+        for b in iter {
             self.put_u8(b);
         }
     }
@@ -840,12 +827,6 @@ impl<'a> Extend<&'a u8> for BytesMut {
         T: IntoIterator<Item = &'a u8>,
     {
         self.extend(iter.into_iter().copied());
-    }
-}
-
-impl PartialEq<BytesMut> for Bytes {
-    fn eq(&self, other: &BytesMut) -> bool {
-        other[..] == self[..]
     }
 }
 

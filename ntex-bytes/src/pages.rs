@@ -825,19 +825,19 @@ impl From<Vec<u8>> for BytePage {
 
 impl From<&'static str> for BytePage {
     fn from(buf: &'static str) -> Self {
-        BytePage::from(Bytes::from_static(buf.as_bytes()))
+        Bytes::from_static(buf.as_bytes()).into()
     }
 }
 
 impl From<&'static [u8]> for BytePage {
     fn from(buf: &'static [u8]) -> Self {
-        BytePage::from(Bytes::from_static(buf))
+        Bytes::from_static(buf).into()
     }
 }
 
 impl<const N: usize> From<&'static [u8; N]> for BytePage {
-    fn from(src: &'static [u8; N]) -> Self {
-        BytePage::from(Bytes::from_static(src))
+    fn from(buf: &'static [u8; N]) -> Self {
+        Bytes::from_static(buf).into()
     }
 }
 
@@ -874,28 +874,9 @@ impl PartialEq for BytePage {
     }
 }
 
-impl<'a> PartialEq<&'a [u8]> for BytePage {
-    fn eq(&self, other: &&'a [u8]) -> bool {
-        self.as_ref() == *other
-    }
-}
+impl_partial_eq!(BytePage);
 
-impl<'a, const N: usize> PartialEq<&'a [u8; N]> for BytePage {
-    fn eq(&self, other: &&'a [u8; N]) -> bool {
-        self.as_ref() == other.as_ref()
-    }
-}
-
-impl io::Read for BytePage {
-    fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
-        let len = cmp::min(self.len(), dst.len());
-        if len > 0 {
-            dst[..len].copy_from_slice(&self[..len]);
-            self.advance_to(len);
-        }
-        Ok(len)
-    }
-}
+impl_read!(BytePage);
 
 impl ops::Deref for BytePage {
     type Target = [u8];
@@ -917,6 +898,39 @@ mod tests {
     use rand::Rng;
 
     use super::*;
+
+    #[test]
+    #[allow(clippy::op_ref, clippy::cmp_owned)]
+    fn page_eq_and_read() {
+        use std::io::Read;
+
+        let mut page = BytePage::from(Vec::from(&b"hello"[..]));
+        assert_eq!(page, b"hello"[..]);
+        assert_eq!(page, *b"hello");
+        assert_eq!(page, b"hello");
+        assert_eq!(page, &b"hello"[..]);
+        assert_eq!(page, "hello");
+        assert_eq!(page, *"hello");
+        assert_eq!(page, b"hello".to_vec());
+        assert_eq!(page, String::from("hello"));
+        assert_eq!(b"hello"[..], page);
+        assert_eq!(*b"hello", page);
+        assert_eq!(b"hello", page);
+        assert_eq!(&b"hello"[..], page);
+        assert_eq!("hello", page);
+        assert_eq!(*"hello", page);
+        assert_eq!(b"hello".to_vec(), page);
+        assert_eq!(String::from("hello"), page);
+        assert_ne!(page, "hell");
+
+        let mut buf = [0u8; 3];
+        assert_eq!(page.read(&mut buf).unwrap(), 3);
+        assert_eq!(&buf, b"hel");
+        assert_eq!(page, "lo");
+        assert_eq!(page.read(&mut buf).unwrap(), 2);
+        assert_eq!(page.read(&mut buf).unwrap(), 0);
+        assert!(page.is_empty());
+    }
 
     #[test]
     fn page_info() {
