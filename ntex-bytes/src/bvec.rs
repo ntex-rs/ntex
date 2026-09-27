@@ -589,6 +589,20 @@ impl BufMut for BytesMut {
     }
 
     #[inline]
+    fn put<T: Buf>(&mut self, mut src: T)
+    where
+        Self: Sized,
+    {
+        self.reserve(src.remaining());
+        while src.has_remaining() {
+            let chunk = src.chunk();
+            let len = chunk.len();
+            self.put_slice(chunk);
+            src.advance(len);
+        }
+    }
+
+    #[inline]
     fn put_slice(&mut self, src: &[u8]) {
         let len = src.len();
         self.reserve(len);

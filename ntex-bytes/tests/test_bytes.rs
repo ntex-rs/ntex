@@ -962,3 +962,19 @@ fn page_clone_across_threads() {
     assert_eq!(c, &data[1..]);
     assert_eq!(p, &data[2..]);
 }
+
+#[test]
+fn buf_mut_put_grows() {
+    let data = vec![7u8; 5000];
+    let mut buf = BytesMut::new();
+    BufMut::put(&mut buf, &data[..]);
+    assert_eq!(&buf[..], &data[..]);
+
+    // source larger than the spare capacity
+    let src = Bytes::from(data.clone());
+    let mut buf = BytesMut::with_capacity(16);
+    BufMut::put(&mut buf, &b"ab"[..]);
+    BufMut::put(&mut buf, src);
+    assert_eq!(&buf[..2], b"ab");
+    assert_eq!(&buf[2..], &data[..]);
+}

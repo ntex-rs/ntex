@@ -2,6 +2,9 @@
 
 ## [1.10.0] (unreleased)
 
+* `BufMut::put()` for `BytesMut` grows the buffer instead of panicking when
+  the source is larger than the spare capacity
+
 * The page cache keeps at most 16 pages per page size by default, down from
   128, use `set_pages_cache()` to change it
 
