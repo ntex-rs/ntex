@@ -595,21 +595,13 @@ impl BytePage {
     #[inline]
     /// Returns the number of bytes contained in this `BytePage`.
     pub fn len(&self) -> usize {
-        match &self.inner {
-            StorageType::Bytes(b) => b.len(),
-            StorageType::Storage(b) => b.len(),
-            StorageType::Vec(b) => b.len(),
-        }
+        self.as_ref().len()
     }
 
     #[inline]
     /// Returns `true` if the page is empty.
     pub fn is_empty(&self) -> bool {
-        match &self.inner {
-            StorageType::Bytes(b) => b.is_empty(),
-            StorageType::Storage(b) => b.len() == 0,
-            StorageType::Vec(b) => b.is_empty(),
-        }
+        self.len() == 0
     }
 
     #[inline]

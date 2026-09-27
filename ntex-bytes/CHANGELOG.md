@@ -2,6 +2,9 @@
 
 ## [1.10.0] (unreleased)
 
+* Generate the shared `Bytes`/`BytesMut` trait impls and the `BufMut::put_*`
+  integer methods with macros
+
 * Add `BytesMut::is_unique()`
 
 * Mark `StorageExt` as an `unsafe` trait, `Bytes` trusts the pointers and lengths

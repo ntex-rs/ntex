@@ -1,6 +1,6 @@
-use std::{borrow, cmp, fmt, io, ops::Deref, ops::DerefMut, ptr};
+use std::{borrow, cmp, fmt, io, ops::DerefMut, ptr};
 
-use crate::{Buf, BufMut, Bytes, buf::IntoIter, buf::UninitSlice, stvec::StorageVec};
+use crate::{Buf, BufMut, Bytes, buf::UninitSlice, stvec::StorageVec};
 
 /// A unique reference to a contiguous slice of memory.
 ///
@@ -580,22 +580,11 @@ impl BytesMut {
     }
 }
 
-impl Buf for BytesMut {
-    #[inline]
-    fn remaining(&self) -> usize {
-        self.len()
-    }
+impl_buf!(BytesMut {});
 
-    #[inline]
-    fn chunk(&self) -> &[u8] {
-        self.storage.as_ref()
-    }
+impl_slice_traits!(BytesMut);
 
-    #[inline]
-    fn advance(&mut self, cnt: usize) {
-        self.advance_to(cnt);
-    }
-}
+impl_partial_eq!(BytesMut);
 
 impl BufMut for BytesMut {
     #[inline]
@@ -657,23 +646,6 @@ impl BufMut for BytesMut {
     #[inline]
     fn put_i8(&mut self, n: i8) {
         self.put_u8(n as u8);
-    }
-}
-
-impl bytes::buf::Buf for BytesMut {
-    #[inline]
-    fn remaining(&self) -> usize {
-        self.len()
-    }
-
-    #[inline]
-    fn chunk(&self) -> &[u8] {
-        self.storage.as_ref()
-    }
-
-    #[inline]
-    fn advance(&mut self, cnt: usize) {
-        self.advance_to(cnt);
     }
 }
 
@@ -749,26 +721,10 @@ unsafe impl bytes::buf::BufMut for BytesMut {
     }
 }
 
-impl AsRef<[u8]> for BytesMut {
-    #[inline]
-    fn as_ref(&self) -> &[u8] {
-        self.storage.as_ref()
-    }
-}
-
 impl AsMut<[u8]> for BytesMut {
     #[inline]
     fn as_mut(&mut self) -> &mut [u8] {
         self.storage.as_mut()
-    }
-}
-
-impl Deref for BytesMut {
-    type Target = [u8];
-
-    #[inline]
-    fn deref(&self) -> &[u8] {
-        self.as_ref()
     }
 }
 
@@ -785,20 +741,6 @@ impl PartialEq for BytesMut {
     #[inline]
     fn eq(&self, other: &BytesMut) -> bool {
         self.storage.as_ref() == other.storage.as_ref()
-    }
-}
-
-impl Default for BytesMut {
-    #[inline]
-    fn default() -> BytesMut {
-        BytesMut::new()
-    }
-}
-
-impl borrow::Borrow<[u8]> for BytesMut {
-    #[inline]
-    fn borrow(&self) -> &[u8] {
-        self.as_ref()
     }
 }
 
@@ -837,12 +779,6 @@ impl io::Write for BytesMut {
     }
 }
 
-impl fmt::Debug for BytesMut {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&crate::debug::BsDebug(self.storage.as_ref()), fmt)
-    }
-}
-
 impl fmt::Write for BytesMut {
     #[inline]
     fn write_str(&mut self, s: &str) -> fmt::Result {
@@ -855,24 +791,6 @@ impl Clone for BytesMut {
     #[inline]
     fn clone(&self) -> BytesMut {
         BytesMut::from(&self[..])
-    }
-}
-
-impl IntoIterator for BytesMut {
-    type Item = u8;
-    type IntoIter = IntoIter<BytesMut>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        IntoIter::new(self)
-    }
-}
-
-impl<'a> IntoIterator for &'a BytesMut {
-    type Item = &'a u8;
-    type IntoIter = std::slice::Iter<'a, u8>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.as_ref().iter()
     }
 }
 
@@ -922,93 +840,6 @@ impl<'a> Extend<&'a u8> for BytesMut {
         T: IntoIterator<Item = &'a u8>,
     {
         self.extend(iter.into_iter().copied());
-    }
-}
-
-impl PartialEq<[u8]> for BytesMut {
-    fn eq(&self, other: &[u8]) -> bool {
-        &**self == other
-    }
-}
-
-impl<const N: usize> PartialEq<[u8; N]> for BytesMut {
-    fn eq(&self, other: &[u8; N]) -> bool {
-        &**self == other
-    }
-}
-
-impl PartialEq<BytesMut> for [u8] {
-    fn eq(&self, other: &BytesMut) -> bool {
-        *other == *self
-    }
-}
-
-impl<const N: usize> PartialEq<BytesMut> for [u8; N] {
-    fn eq(&self, other: &BytesMut) -> bool {
-        *other == *self
-    }
-}
-
-impl<const N: usize> PartialEq<BytesMut> for &[u8; N] {
-    fn eq(&self, other: &BytesMut) -> bool {
-        *other == *self
-    }
-}
-
-impl PartialEq<str> for BytesMut {
-    fn eq(&self, other: &str) -> bool {
-        &**self == other.as_bytes()
-    }
-}
-
-impl PartialEq<BytesMut> for str {
-    fn eq(&self, other: &BytesMut) -> bool {
-        *other == *self
-    }
-}
-
-impl PartialEq<Vec<u8>> for BytesMut {
-    fn eq(&self, other: &Vec<u8>) -> bool {
-        *self == other[..]
-    }
-}
-
-impl PartialEq<BytesMut> for Vec<u8> {
-    fn eq(&self, other: &BytesMut) -> bool {
-        *other == *self
-    }
-}
-
-impl PartialEq<String> for BytesMut {
-    fn eq(&self, other: &String) -> bool {
-        *self == other[..]
-    }
-}
-
-impl PartialEq<BytesMut> for String {
-    fn eq(&self, other: &BytesMut) -> bool {
-        *other == *self
-    }
-}
-
-impl<'a, T: ?Sized> PartialEq<&'a T> for BytesMut
-where
-    BytesMut: PartialEq<T>,
-{
-    fn eq(&self, other: &&'a T) -> bool {
-        *self == **other
-    }
-}
-
-impl PartialEq<BytesMut> for &[u8] {
-    fn eq(&self, other: &BytesMut) -> bool {
-        *other == *self
-    }
-}
-
-impl PartialEq<BytesMut> for &str {
-    fn eq(&self, other: &BytesMut) -> bool {
-        *other == *self
     }
 }
 

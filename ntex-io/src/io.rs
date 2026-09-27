@@ -497,6 +497,7 @@ impl<F: Filter> Io<F> {
         io
     }
 
+    #[allow(clippy::items_after_statements)]
     /// Wraps the current layer with a wrapper.
     pub fn map_filter<U, R>(self, f: U) -> Io<R>
     where

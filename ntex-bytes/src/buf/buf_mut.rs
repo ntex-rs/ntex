@@ -2,6 +2,33 @@ use std::{cmp, mem, ptr};
 
 use super::{UninitSlice, Writer};
 
+/// Generates the fixed-width integer `put_*` methods of `BufMut`, with docs.
+macro_rules! put_int_impl {
+    ($($name:ident, $ty:ty, $conv:ident, $what:literal, $order:literal, $size:literal, $val:literal, $bytes:literal;)*) => {$(
+        #[doc = concat!("Writes ", $what, " to `self` in ", $order, " byte order.")]
+        ///
+        #[doc = concat!("The current position is advanced by ", $size, ".")]
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use ntex_bytes::BufMut;
+        ///
+        /// let mut buf = vec![];
+        #[doc = concat!("buf.", stringify!($name), "(", $val, ");")]
+        #[doc = concat!("assert_eq!(buf, b\"", $bytes, "\");")]
+        /// ```
+        ///
+        /// # Panics
+        ///
+        /// This function panics if there is not enough remaining capacity in
+        /// `self`.
+        #[inline]
+        fn $name(&mut self, n: $ty) {
+            self.put_slice(&n.$conv());
+        }
+    )*};
+}
 /// A trait for values that provide sequential write access to bytes.
 ///
 /// A buffer stores bytes in memory such that write operations are infallible.
@@ -286,372 +313,23 @@ pub trait BufMut {
         self.put_slice(&[n as u8]);
     }
 
-    /// Writes an unsigned 16 bit integer to `self` in big-endian byte order.
-    ///
-    /// The current position is advanced by 2.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ntex_bytes::BufMut;
-    ///
-    /// let mut buf = vec![];
-    /// buf.put_u16(0x0809);
-    /// assert_eq!(buf, b"\x08\x09");
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This function panics if there is not enough remaining capacity in
-    /// `self`.
-    #[inline]
-    fn put_u16(&mut self, n: u16) {
-        self.put_slice(&n.to_be_bytes());
-    }
-
-    /// Writes an unsigned 16 bit integer to `self` in little-endian byte order.
-    ///
-    /// The current position is advanced by 2.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ntex_bytes::BufMut;
-    ///
-    /// let mut buf = vec![];
-    /// buf.put_u16_le(0x0809);
-    /// assert_eq!(buf, b"\x09\x08");
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This function panics if there is not enough remaining capacity in
-    /// `self`.
-    #[inline]
-    fn put_u16_le(&mut self, n: u16) {
-        self.put_slice(&n.to_le_bytes());
-    }
-
-    /// Writes a signed 16 bit integer to `self` in big-endian byte order.
-    ///
-    /// The current position is advanced by 2.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ntex_bytes::BufMut;
-    ///
-    /// let mut buf = vec![];
-    /// buf.put_i16(0x0809);
-    /// assert_eq!(buf, b"\x08\x09");
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This function panics if there is not enough remaining capacity in
-    /// `self`.
-    #[inline]
-    fn put_i16(&mut self, n: i16) {
-        self.put_slice(&n.to_be_bytes());
-    }
-
-    /// Writes a signed 16 bit integer to `self` in little-endian byte order.
-    ///
-    /// The current position is advanced by 2.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ntex_bytes::BufMut;
-    ///
-    /// let mut buf = vec![];
-    /// buf.put_i16_le(0x0809);
-    /// assert_eq!(buf, b"\x09\x08");
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This function panics if there is not enough remaining capacity in
-    /// `self`.
-    #[inline]
-    fn put_i16_le(&mut self, n: i16) {
-        self.put_slice(&n.to_le_bytes());
-    }
-
-    /// Writes an unsigned 32 bit integer to `self` in big-endian byte order.
-    ///
-    /// The current position is advanced by 4.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ntex_bytes::BufMut;
-    ///
-    /// let mut buf = vec![];
-    /// buf.put_u32(0x0809A0A1);
-    /// assert_eq!(buf, b"\x08\x09\xA0\xA1");
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This function panics if there is not enough remaining capacity in
-    /// `self`.
-    #[inline]
-    fn put_u32(&mut self, n: u32) {
-        self.put_slice(&n.to_be_bytes());
-    }
-
-    /// Writes an unsigned 32 bit integer to `self` in little-endian byte order.
-    ///
-    /// The current position is advanced by 4.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ntex_bytes::BufMut;
-    ///
-    /// let mut buf = vec![];
-    /// buf.put_u32_le(0x0809A0A1);
-    /// assert_eq!(buf, b"\xA1\xA0\x09\x08");
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This function panics if there is not enough remaining capacity in
-    /// `self`.
-    #[inline]
-    fn put_u32_le(&mut self, n: u32) {
-        self.put_slice(&n.to_le_bytes());
-    }
-
-    /// Writes a signed 32 bit integer to `self` in big-endian byte order.
-    ///
-    /// The current position is advanced by 4.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ntex_bytes::BufMut;
-    ///
-    /// let mut buf = vec![];
-    /// buf.put_i32(0x0809A0A1);
-    /// assert_eq!(buf, b"\x08\x09\xA0\xA1");
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This function panics if there is not enough remaining capacity in
-    /// `self`.
-    #[inline]
-    fn put_i32(&mut self, n: i32) {
-        self.put_slice(&n.to_be_bytes());
-    }
-
-    /// Writes a signed 32 bit integer to `self` in little-endian byte order.
-    ///
-    /// The current position is advanced by 4.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ntex_bytes::BufMut;
-    ///
-    /// let mut buf = vec![];
-    /// buf.put_i32_le(0x0809A0A1);
-    /// assert_eq!(buf, b"\xA1\xA0\x09\x08");
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This function panics if there is not enough remaining capacity in
-    /// `self`.
-    #[inline]
-    fn put_i32_le(&mut self, n: i32) {
-        self.put_slice(&n.to_le_bytes());
-    }
-
-    /// Writes an unsigned 64 bit integer to `self` in the big-endian byte order.
-    ///
-    /// The current position is advanced by 8.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ntex_bytes::BufMut;
-    ///
-    /// let mut buf = vec![];
-    /// buf.put_u64(0x0102030405060708);
-    /// assert_eq!(buf, b"\x01\x02\x03\x04\x05\x06\x07\x08");
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This function panics if there is not enough remaining capacity in
-    /// `self`.
-    #[inline]
-    fn put_u64(&mut self, n: u64) {
-        self.put_slice(&n.to_be_bytes());
-    }
-
-    /// Writes an unsigned 64 bit integer to `self` in little-endian byte order.
-    ///
-    /// The current position is advanced by 8.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ntex_bytes::BufMut;
-    ///
-    /// let mut buf = vec![];
-    /// buf.put_u64_le(0x0102030405060708);
-    /// assert_eq!(buf, b"\x08\x07\x06\x05\x04\x03\x02\x01");
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This function panics if there is not enough remaining capacity in
-    /// `self`.
-    #[inline]
-    fn put_u64_le(&mut self, n: u64) {
-        self.put_slice(&n.to_le_bytes());
-    }
-
-    /// Writes a signed 64 bit integer to `self` in the big-endian byte order.
-    ///
-    /// The current position is advanced by 8.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ntex_bytes::BufMut;
-    ///
-    /// let mut buf = vec![];
-    /// buf.put_i64(0x0102030405060708);
-    /// assert_eq!(buf, b"\x01\x02\x03\x04\x05\x06\x07\x08");
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This function panics if there is not enough remaining capacity in
-    /// `self`.
-    #[inline]
-    fn put_i64(&mut self, n: i64) {
-        self.put_slice(&n.to_be_bytes());
-    }
-
-    /// Writes a signed 64 bit integer to `self` in little-endian byte order.
-    ///
-    /// The current position is advanced by 8.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ntex_bytes::BufMut;
-    ///
-    /// let mut buf = vec![];
-    /// buf.put_i64_le(0x0102030405060708);
-    /// assert_eq!(buf, b"\x08\x07\x06\x05\x04\x03\x02\x01");
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This function panics if there is not enough remaining capacity in
-    /// `self`.
-    #[inline]
-    fn put_i64_le(&mut self, n: i64) {
-        self.put_slice(&n.to_le_bytes());
-    }
-
-    /// Writes an unsigned 128 bit integer to `self` in the big-endian byte order.
-    ///
-    /// The current position is advanced by 16.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ntex_bytes::BufMut;
-    ///
-    /// let mut buf = vec![];
-    /// buf.put_u128(0x01020304050607080910111213141516);
-    /// assert_eq!(buf, b"\x01\x02\x03\x04\x05\x06\x07\x08\x09\x10\x11\x12\x13\x14\x15\x16");
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This function panics if there is not enough remaining capacity in
-    /// `self`.
-    #[inline]
-    fn put_u128(&mut self, n: u128) {
-        self.put_slice(&n.to_be_bytes());
-    }
-
-    /// Writes an unsigned 128 bit integer to `self` in little-endian byte order.
-    ///
-    /// The current position is advanced by 16.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ntex_bytes::BufMut;
-    ///
-    /// let mut buf = vec![];
-    /// buf.put_u128_le(0x01020304050607080910111213141516);
-    /// assert_eq!(buf, b"\x16\x15\x14\x13\x12\x11\x10\x09\x08\x07\x06\x05\x04\x03\x02\x01");
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This function panics if there is not enough remaining capacity in
-    /// `self`.
-    #[inline]
-    fn put_u128_le(&mut self, n: u128) {
-        self.put_slice(&n.to_le_bytes());
-    }
-
-    /// Writes a signed 128 bit integer to `self` in the big-endian byte order.
-    ///
-    /// The current position is advanced by 16.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ntex_bytes::BufMut;
-    ///
-    /// let mut buf = vec![];
-    /// buf.put_i128(0x01020304050607080910111213141516);
-    /// assert_eq!(buf, b"\x01\x02\x03\x04\x05\x06\x07\x08\x09\x10\x11\x12\x13\x14\x15\x16");
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This function panics if there is not enough remaining capacity in
-    /// `self`.
-    #[inline]
-    fn put_i128(&mut self, n: i128) {
-        self.put_slice(&n.to_be_bytes());
-    }
-
-    /// Writes a signed 128 bit integer to `self` in little-endian byte order.
-    ///
-    /// The current position is advanced by 16.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ntex_bytes::BufMut;
-    ///
-    /// let mut buf = vec![];
-    /// buf.put_i128_le(0x01020304050607080910111213141516);
-    /// assert_eq!(buf, b"\x16\x15\x14\x13\x12\x11\x10\x09\x08\x07\x06\x05\x04\x03\x02\x01");
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This function panics if there is not enough remaining capacity in
-    /// `self`.
-    #[inline]
-    fn put_i128_le(&mut self, n: i128) {
-        self.put_slice(&n.to_le_bytes());
+    put_int_impl! {
+        put_u16, u16, to_be_bytes, "an unsigned 16 bit integer", "big-endian", 2, "0x0809", r"\x08\x09";
+        put_u16_le, u16, to_le_bytes, "an unsigned 16 bit integer", "little-endian", 2, "0x0809", r"\x09\x08";
+        put_i16, i16, to_be_bytes, "a signed 16 bit integer", "big-endian", 2, "0x0809", r"\x08\x09";
+        put_i16_le, i16, to_le_bytes, "a signed 16 bit integer", "little-endian", 2, "0x0809", r"\x09\x08";
+        put_u32, u32, to_be_bytes, "an unsigned 32 bit integer", "big-endian", 4, "0x0809A0A1", r"\x08\x09\xA0\xA1";
+        put_u32_le, u32, to_le_bytes, "an unsigned 32 bit integer", "little-endian", 4, "0x0809A0A1", r"\xA1\xA0\x09\x08";
+        put_i32, i32, to_be_bytes, "a signed 32 bit integer", "big-endian", 4, "0x0809A0A1", r"\x08\x09\xA0\xA1";
+        put_i32_le, i32, to_le_bytes, "a signed 32 bit integer", "little-endian", 4, "0x0809A0A1", r"\xA1\xA0\x09\x08";
+        put_u64, u64, to_be_bytes, "an unsigned 64 bit integer", "big-endian", 8, "0x0102030405060708", r"\x01\x02\x03\x04\x05\x06\x07\x08";
+        put_u64_le, u64, to_le_bytes, "an unsigned 64 bit integer", "little-endian", 8, "0x0102030405060708", r"\x08\x07\x06\x05\x04\x03\x02\x01";
+        put_i64, i64, to_be_bytes, "a signed 64 bit integer", "big-endian", 8, "0x0102030405060708", r"\x01\x02\x03\x04\x05\x06\x07\x08";
+        put_i64_le, i64, to_le_bytes, "a signed 64 bit integer", "little-endian", 8, "0x0102030405060708", r"\x08\x07\x06\x05\x04\x03\x02\x01";
+        put_u128, u128, to_be_bytes, "an unsigned 128 bit integer", "big-endian", 16, "0x01020304050607080910111213141516", r"\x01\x02\x03\x04\x05\x06\x07\x08\x09\x10\x11\x12\x13\x14\x15\x16";
+        put_u128_le, u128, to_le_bytes, "an unsigned 128 bit integer", "little-endian", 16, "0x01020304050607080910111213141516", r"\x16\x15\x14\x13\x12\x11\x10\x09\x08\x07\x06\x05\x04\x03\x02\x01";
+        put_i128, i128, to_be_bytes, "a signed 128 bit integer", "big-endian", 16, "0x01020304050607080910111213141516", r"\x01\x02\x03\x04\x05\x06\x07\x08\x09\x10\x11\x12\x13\x14\x15\x16";
+        put_i128_le, i128, to_le_bytes, "a signed 128 bit integer", "little-endian", 16, "0x01020304050607080910111213141516", r"\x16\x15\x14\x13\x12\x11\x10\x09\x08\x07\x06\x05\x04\x03\x02\x01";
     }
 
     /// Writes an unsigned n-byte integer to `self` in big-endian byte order.

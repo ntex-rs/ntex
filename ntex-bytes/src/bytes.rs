@@ -1,6 +1,6 @@
-use std::{borrow, cmp, fmt, hash, io, mem, ops};
+use std::{cmp, hash, io, mem, ops};
 
-use crate::{Buf, BytesMut, buf::IntoIter, debug, storage::INLINE_CAP, storage::Storage};
+use crate::{Buf, BytesMut, storage::INLINE_CAP, storage::Storage};
 
 /// A reference counted contiguous slice of memory.
 ///
@@ -530,71 +530,20 @@ impl Bytes {
     }
 }
 
-impl Buf for Bytes {
-    #[inline]
-    fn remaining(&self) -> usize {
-        self.len()
-    }
-
-    #[inline]
-    fn chunk(&self) -> &[u8] {
-        self.storage.as_ref()
-    }
-
-    #[inline]
-    fn advance(&mut self, cnt: usize) {
-        self.advance_to(cnt);
-    }
-
+impl_buf!(Bytes {
     #[inline]
     fn get_u8(&mut self) -> u8 {
         self.storage.get_u8()
     }
-}
+});
 
-impl bytes::buf::Buf for Bytes {
-    #[inline]
-    fn remaining(&self) -> usize {
-        self.len()
-    }
-
-    #[inline]
-    fn chunk(&self) -> &[u8] {
-        self.storage.as_ref()
-    }
-
-    #[inline]
-    fn advance(&mut self, cnt: usize) {
-        self.advance_to(cnt);
-    }
-
-    #[inline]
-    fn get_u8(&mut self) -> u8 {
-        self.storage.get_u8()
-    }
-}
+impl_slice_traits!(Bytes);
 
 impl Clone for Bytes {
     fn clone(&self) -> Bytes {
         Bytes {
             storage: self.storage.clone(),
         }
-    }
-}
-
-impl AsRef<[u8]> for Bytes {
-    #[inline]
-    fn as_ref(&self) -> &[u8] {
-        self.storage.as_ref()
-    }
-}
-
-impl ops::Deref for Bytes {
-    type Target = [u8];
-
-    #[inline]
-    fn deref(&self) -> &[u8] {
-        self.storage.as_ref()
     }
 }
 
@@ -683,13 +632,6 @@ impl Ord for Bytes {
     }
 }
 
-impl Default for Bytes {
-    #[inline]
-    fn default() -> Bytes {
-        Bytes::new()
-    }
-}
-
 impl io::Read for Bytes {
     fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
         let len = cmp::min(self.len(), dst.len());
@@ -698,12 +640,6 @@ impl io::Read for Bytes {
             self.advance_to(len);
         }
         Ok(len)
-    }
-}
-
-impl fmt::Debug for Bytes {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&debug::BsDebug(self.storage.as_ref()), fmt)
     }
 }
 
@@ -717,203 +653,8 @@ impl hash::Hash for Bytes {
     }
 }
 
-impl borrow::Borrow<[u8]> for Bytes {
-    fn borrow(&self) -> &[u8] {
-        self.as_ref()
-    }
-}
-
-impl IntoIterator for Bytes {
-    type Item = u8;
-    type IntoIter = IntoIter<Bytes>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        IntoIter::new(self)
-    }
-}
-
-impl<'a> IntoIterator for &'a Bytes {
-    type Item = &'a u8;
-    type IntoIter = std::slice::Iter<'a, u8>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.as_ref().iter()
-    }
-}
-
-/*
- *
- * ===== PartialEq / PartialOrd =====
- *
- */
-
-impl PartialEq<[u8]> for Bytes {
-    fn eq(&self, other: &[u8]) -> bool {
-        self.storage.as_ref() == other
-    }
-}
-
-impl<const N: usize> PartialEq<[u8; N]> for Bytes {
-    fn eq(&self, other: &[u8; N]) -> bool {
-        self.storage.as_ref() == other.as_ref()
-    }
-}
-
-impl PartialOrd<[u8]> for Bytes {
-    fn partial_cmp(&self, other: &[u8]) -> Option<cmp::Ordering> {
-        self.storage.as_ref().partial_cmp(other)
-    }
-}
-
-impl<const N: usize> PartialOrd<[u8; N]> for Bytes {
-    fn partial_cmp(&self, other: &[u8; N]) -> Option<cmp::Ordering> {
-        self.storage.as_ref().partial_cmp(other.as_ref())
-    }
-}
-
-impl PartialEq<Bytes> for [u8] {
-    fn eq(&self, other: &Bytes) -> bool {
-        *other == *self
-    }
-}
-
-impl<const N: usize> PartialEq<Bytes> for [u8; N] {
-    fn eq(&self, other: &Bytes) -> bool {
-        *other == *self
-    }
-}
-
-impl<const N: usize> PartialEq<Bytes> for &[u8; N] {
-    fn eq(&self, other: &Bytes) -> bool {
-        *other == *self
-    }
-}
-
-impl PartialOrd<Bytes> for [u8] {
-    fn partial_cmp(&self, other: &Bytes) -> Option<cmp::Ordering> {
-        other.partial_cmp(self)
-    }
-}
-
-impl<const N: usize> PartialOrd<Bytes> for [u8; N] {
-    fn partial_cmp(&self, other: &Bytes) -> Option<cmp::Ordering> {
-        other.partial_cmp(self)
-    }
-}
-
-impl PartialEq<str> for Bytes {
-    fn eq(&self, other: &str) -> bool {
-        self.storage.as_ref() == other.as_bytes()
-    }
-}
-
-impl PartialOrd<str> for Bytes {
-    fn partial_cmp(&self, other: &str) -> Option<cmp::Ordering> {
-        self.storage.as_ref().partial_cmp(other.as_bytes())
-    }
-}
-
-impl PartialEq<Bytes> for str {
-    fn eq(&self, other: &Bytes) -> bool {
-        *other == *self
-    }
-}
-
-impl PartialOrd<Bytes> for str {
-    fn partial_cmp(&self, other: &Bytes) -> Option<cmp::Ordering> {
-        other.partial_cmp(self)
-    }
-}
-
-impl PartialEq<Vec<u8>> for Bytes {
-    fn eq(&self, other: &Vec<u8>) -> bool {
-        *self == other[..]
-    }
-}
-
-impl PartialOrd<Vec<u8>> for Bytes {
-    fn partial_cmp(&self, other: &Vec<u8>) -> Option<cmp::Ordering> {
-        self.storage.as_ref().partial_cmp(&other[..])
-    }
-}
-
-impl PartialEq<Bytes> for Vec<u8> {
-    fn eq(&self, other: &Bytes) -> bool {
-        *other == *self
-    }
-}
-
-impl PartialOrd<Bytes> for Vec<u8> {
-    fn partial_cmp(&self, other: &Bytes) -> Option<cmp::Ordering> {
-        other.partial_cmp(self)
-    }
-}
-
-impl PartialEq<String> for Bytes {
-    fn eq(&self, other: &String) -> bool {
-        *self == other[..]
-    }
-}
-
-impl PartialOrd<String> for Bytes {
-    fn partial_cmp(&self, other: &String) -> Option<cmp::Ordering> {
-        self.storage.as_ref().partial_cmp(other.as_bytes())
-    }
-}
-
-impl PartialEq<Bytes> for String {
-    fn eq(&self, other: &Bytes) -> bool {
-        *other == *self
-    }
-}
-
-impl PartialOrd<Bytes> for String {
-    fn partial_cmp(&self, other: &Bytes) -> Option<cmp::Ordering> {
-        other.partial_cmp(self)
-    }
-}
-
-impl PartialEq<Bytes> for &[u8] {
-    fn eq(&self, other: &Bytes) -> bool {
-        *other == *self
-    }
-}
-
-impl PartialOrd<Bytes> for &[u8] {
-    fn partial_cmp(&self, other: &Bytes) -> Option<cmp::Ordering> {
-        other.partial_cmp(self)
-    }
-}
-
-impl PartialEq<Bytes> for &str {
-    fn eq(&self, other: &Bytes) -> bool {
-        *other == *self
-    }
-}
-
-impl PartialOrd<Bytes> for &str {
-    fn partial_cmp(&self, other: &Bytes) -> Option<cmp::Ordering> {
-        other.partial_cmp(self)
-    }
-}
-
-impl<'a, T: ?Sized> PartialEq<&'a T> for Bytes
-where
-    Bytes: PartialEq<T>,
-{
-    fn eq(&self, other: &&'a T) -> bool {
-        *self == **other
-    }
-}
-
-impl<'a, T: ?Sized> PartialOrd<&'a T> for Bytes
-where
-    Bytes: PartialOrd<T>,
-{
-    fn partial_cmp(&self, other: &&'a T) -> Option<cmp::Ordering> {
-        self.partial_cmp(&**other)
-    }
-}
+impl_partial_eq!(Bytes);
+impl_partial_ord!(Bytes);
 
 #[cfg(test)]
 #[allow(unused_must_use)]

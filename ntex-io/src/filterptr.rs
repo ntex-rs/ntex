@@ -12,7 +12,10 @@ impl Repr {
         // derive the `dyn` pointer from the raw pointer, a reference taken
         // from the `Box` is invalidated by `Box::into_raw`
         let ptr = Box::into_raw(Box::new(filter));
-        Repr::Filter(ptr.cast_const().cast(), ptr.cast_const() as *const dyn Filter)
+        Repr::Filter(
+            ptr.cast_const().cast(),
+            ptr.cast_const() as *const dyn Filter,
+        )
     }
 }
 
@@ -41,7 +44,6 @@ impl FilterPtr {
 
     pub(crate) fn set<F: Filter>(&self, filter: F) {
         *self.as_mut() = Repr::typed(filter);
-
     }
 
     /// Get filter, panic if it is not filter

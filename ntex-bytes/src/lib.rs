@@ -67,6 +67,9 @@
 
 extern crate alloc;
 
+#[macro_use]
+mod macros;
+
 pub mod buf;
 pub use crate::buf::{Buf, BufMut};
 

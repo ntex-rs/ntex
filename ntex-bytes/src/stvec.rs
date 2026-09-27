@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::atomic::{self, AtomicU32};
 use std::{cell::Cell, cmp, mem, num::NonZeroUsize, ptr, ptr::NonNull, slice};
 
-use crate::{BytePageSize, storage::Storage};
+use crate::{BytePageSize, storage::INLINE_CAP, storage::Storage};
 
 #[derive(Debug)]
 /// Thread-safe reference-counted container for the shared storage.
@@ -38,12 +38,6 @@ const METADATA_SIZE_U32: u32 = METADATA_SIZE as u32;
 
 /// Maximum buffer capacity, offsets and sizes are stored as `u32`.
 pub(crate) const MAX_CAPACITY: usize = u32::MAX as usize - METADATA_SIZE;
-
-// Inline buffer capacity, must match `storage::INLINE_CAP`.
-#[cfg(target_pointer_width = "64")]
-pub(crate) const INLINE_CAP: usize = 3 * 8 - 1;
-#[cfg(target_pointer_width = "32")]
-pub(crate) const INLINE_CAP: usize = 3 * 4 - 1;
 
 impl StorageVec {
     /// Create new empty storage with specified capacity
@@ -83,12 +77,6 @@ impl StorageVec {
 
     pub(crate) fn unsize(&mut self) {
         unsafe { (*self.0.as_ptr()).size = BytePageSize::Unset }
-    }
-
-    #[allow(dead_code)]
-    /// Returns the page size type
-    pub(crate) fn page_size(&self) -> BytePageSize {
-        unsafe { (*self.0.as_ptr()).size }
     }
 
     /// Return a slice for the handle's view into the shared buffer
@@ -651,7 +639,7 @@ mod tests {
         super::CACHE.with(|cache| cache.set(Some(Box::default())));
 
         let mut st = StorageVec::sized(BytePageSize::Size8);
-        assert_eq!(st.page_size(), BytePageSize::Size8);
+        assert_eq!(unsafe { (*st.0.as_ptr()).size }, BytePageSize::Size8);
 
         st.put_u8(b'h');
         let addr = st.0;
@@ -774,7 +762,7 @@ mod tests {
             st.put_u8(*b);
         }
         st.reserve(1);
-        assert_eq!(st.page_size(), BytePageSize::Unset);
+        assert_eq!(unsafe { (*st.0.as_ptr()).size }, BytePageSize::Unset);
         assert_ne!(st.0, page);
         assert_eq!(st.as_ref(), &data[..]);
 
