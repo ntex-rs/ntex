@@ -2,6 +2,9 @@
 
 ## [4.1.0] - Unreleased
 
+* The read buffer cache no longer keeps buffers that share their allocation with split off
+  data, it neither pins whole allocations for decoded frames nor hands out small leftovers
+
 * The innermost buffer of the filter stack allocates its write pages on demand,
   a connection no longer allocates a write buffer it never uses
 

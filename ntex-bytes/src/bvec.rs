@@ -161,6 +161,33 @@ impl BytesMut {
         self.storage.capacity()
     }
 
+    /// Returns `true` if no other handle refers to the underlying buffer.
+    ///
+    /// Values split off with [`split_to`](Self::split_to) or frozen into
+    /// [`Bytes`] share the buffer with `self`. While they exist, clearing
+    /// `self` does not reclaim the capacity in front of it, and the whole
+    /// allocation stays alive as long as any of them does.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ntex_bytes::BytesMut;
+    ///
+    /// let mut buf = BytesMut::with_capacity(64);
+    /// buf.extend_from_slice(&[0; 32]);
+    /// assert!(buf.is_unique());
+    ///
+    /// let head = buf.split_to(30);
+    /// assert!(!buf.is_unique());
+    ///
+    /// drop(head);
+    /// assert!(buf.is_unique());
+    /// ```
+    #[inline]
+    pub fn is_unique(&self) -> bool {
+        self.storage.is_unique()
+    }
+
     /// Converts `self` into an immutable `Bytes`.
     ///
     /// The conversion is zero cost and is used to indicate that the slice

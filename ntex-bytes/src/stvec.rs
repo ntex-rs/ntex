@@ -150,7 +150,7 @@ impl StorageVec {
         unsafe { (*self.0.as_ptr()).remaining == 0 }
     }
 
-    pub(crate) fn is_unique(&mut self) -> bool {
+    pub(crate) fn is_unique(&self) -> bool {
         unsafe { (*self.0.as_ptr()).is_unique() }
     }
 

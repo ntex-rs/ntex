@@ -2,6 +2,8 @@
 
 ## [1.10.0] (unreleased)
 
+* Add `BytesMut::is_unique()`
+
 * `BufMut::put()` for `BytesMut` grows the buffer instead of panicking when
   the source is larger than the spare capacity
 

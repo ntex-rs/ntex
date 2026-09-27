@@ -706,7 +706,7 @@ impl BytePage {
     }
 
     fn into_storage(self) -> Result<StorageVec, Self> {
-        if let StorageType::Storage(mut st) = self.inner {
+        if let StorageType::Storage(st) = self.inner {
             // SAFETY: Converting back to `StorageVec` requires uniqueness.
             if !st.is_full() && st.is_unique() {
                 Ok(st)
@@ -840,7 +840,7 @@ impl From<BytePage> for BytesMut {
         match page.inner {
             StorageType::Bytes(b) => b.into(),
             // clones of the page may still read the data
-            StorageType::Storage(mut storage) => {
+            StorageType::Storage(storage) => {
                 if storage.is_unique() {
                     BytesMut { storage }
                 } else {

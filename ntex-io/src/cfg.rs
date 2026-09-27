@@ -580,12 +580,20 @@ impl BufConfig {
     /// Returns an eligible buffer to the thread-local cache.
     ///
     /// The buffer is retained only when its capacity is greater than `low` and
-    /// no greater than `high`. If the cache then holds more capacity than
-    /// [`read_buf_cache_limit`], the least recently released buffers are freed.
+    /// no greater than `high`, and no other handle refers to its allocation.
+    /// A buffer that still shares its allocation with split-off data is
+    /// dropped instead: its capacity covers only the part after that data, but
+    /// caching it would keep the whole allocation alive. If the cache then
+    /// holds more capacity than [`read_buf_cache_limit`], the least recently
+    /// released buffers are freed.
     pub fn release(&self, mut buf: BytesMut) {
-        buf.clear();
-        if self.is_cacheable(buf.capacity()) {
-            CACHE.with(|c| c.release(buf));
+        // Uniqueness can only be gained, never lost, so a buffer that is
+        // unique here is fully reclaimed by `clear()`.
+        if buf.is_unique() {
+            buf.clear();
+            if self.is_cacheable(buf.capacity()) {
+                CACHE.with(|c| c.release(buf));
+            }
         }
     }
 }
@@ -771,6 +779,30 @@ mod tests {
             assert_eq!(cfg.get().as_ptr(), *ptr);
         }
         assert_eq!(CACHE.with(|c| c.size.get()), 0);
+    }
+
+    #[test]
+    fn shared_buffer_is_not_cached() {
+        CACHE.with(LocalCache::clear);
+        let cfg = *IoConfig::new().read_buf();
+
+        // a decoded frame still refers to the start of the buffer
+        let mut buf = cfg.get();
+        buf.extend_from_slice(&vec![1; cfg.high - 1000]);
+        let frame = buf.split_to(buf.len());
+        assert!(cfg.is_cacheable(buf.capacity()));
+        cfg.release(buf);
+        assert_eq!(CACHE.with(|c| c.size.get()), 0);
+
+        // once the frame is gone the whole buffer is reclaimed and cached
+        let mut buf = cfg.get();
+        buf.extend_from_slice(&vec![2; cfg.high - 1000]);
+        let frame2 = buf.split_to(buf.len());
+        drop(frame2);
+        cfg.release(buf);
+        assert_eq!(CACHE.with(|c| c.size.get()), cfg.high);
+        assert_eq!(cfg.get().capacity(), cfg.high);
+        drop(frame);
     }
 
     #[test]
