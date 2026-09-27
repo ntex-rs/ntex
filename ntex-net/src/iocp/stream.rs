@@ -553,8 +553,10 @@ impl Drop for StreamCtl {
 }
 
 impl WeakStreamCtl {
-    pub(crate) fn peer_addr(&self) -> SockAddr {
-        self.inner.with(|st| st.streams[self.id].addr.clone())
+    /// Returns the peer address, or `None` once `cleanup()` released the stream.
+    pub(crate) fn peer_addr(&self) -> Option<SockAddr> {
+        self.inner
+            .with(|st| st.streams.get(self.id).map(|item| item.addr.clone()))
     }
 
     pub(crate) fn write(&self) {
@@ -652,8 +654,8 @@ mod tests {
     }
 
     impl ntex_io::Handle for TestHandle {
-        fn query(&self, _: std::any::TypeId) -> Option<Box<dyn std::any::Any>> {
-            None
+        fn query(&self, id: std::any::TypeId) -> Option<Box<dyn std::any::Any>> {
+            super::super::io::query(&self._ctl, id)
         }
     }
 
@@ -723,8 +725,15 @@ mod tests {
         let reactor = Reactor::new().unwrap();
         let (io, ctl, ops, raw, mut peer) = registered(&reactor);
 
+        let addr = peer.local_addr().unwrap();
+        assert_eq!(
+            io.query::<ntex_io::types::PeerAddr>().get().unwrap().0,
+            addr
+        );
+
         cleanup(&ops);
         assert_closed(raw, &mut peer);
+        assert!(io.query::<ntex_io::types::PeerAddr>().get().is_none());
 
         drop(ctl);
         drop(io);

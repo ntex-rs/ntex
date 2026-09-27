@@ -2,6 +2,9 @@
 
 ## [4.1.0] - Unreleased
 
+* IOCP: querying `PeerAddr` after the runtime stopped returns `None` instead of
+  panicking
+
 * IOCP: derive the `OVERLAPPED` pointer handed to the kernel from the pointer
   owning the op, instead of a shared borrow of its first field
 
