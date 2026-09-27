@@ -219,7 +219,7 @@ where
                     if let Some(st) = inner.check_disconnect() {
                         st
                     } else {
-                        ready!(result).unwrap_or(State::ReadRequest)
+                        ready!(result).unwrap_or_else(|| inner.next_request())
                     }
                 }
                 // send response body
@@ -757,7 +757,19 @@ where
             self.start_payload_timer();
             State::ReadPayload
         } else {
+            self.next_request()
+        }
+    }
+
+    /// Reads the next request, unless the last response closes the
+    /// connection, then pipelined requests are not processed.
+    fn next_request(&mut self) -> State<F, B, Err> {
+        if self.codec.keepalive() {
             State::ReadRequest
+        } else {
+            log::trace!("{}: Connection is not persistent, close", self.io.tag());
+            self.io.close();
+            self.ctl_keepalive(false)
         }
     }
 
@@ -1549,6 +1561,53 @@ mod tests {
 
         client.close().await;
         assert!(client.is_server_dropped());
+    }
+
+    #[crate::rt_test]
+    async fn test_pipeline_after_close() {
+        for (req, res) in [
+            (
+                "GET /test1 HTTP/1.1\r\nconnection: close\r\n\r\n",
+                "HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n",
+            ),
+            (
+                "GET /test1 HTTP/1.0\r\n\r\n",
+                "HTTP/1.0 200 OK\r\ncontent-length: 0\r\n",
+            ),
+            (
+                "POST /test1 HTTP/1.1\r\nconnection: close\r\ncontent-length: 4\r\n\r\nbody",
+                "HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n",
+            ),
+        ] {
+            let (client, server) = IoTest::create();
+            client.remote_buffer_cap(4096);
+            let calls = Rc::new(Cell::new(0));
+            let calls2 = calls.clone();
+            spawn_h1(server, move |mut req: Request| {
+                calls2.set(calls2.get() + 1);
+                async move {
+                    let mut pl = req.take_payload();
+                    while let Some(item) = crate::util::stream_recv(&mut pl).await {
+                        item.unwrap();
+                    }
+                    Ok::<_, io::Error>(Response::Ok().build())
+                }
+            });
+
+            // the next request is pipelined behind a non-persistent request
+            client.write(format!("{req}GET /test2 HTTP/1.1\r\n\r\n"));
+            sleep(Millis(100)).await;
+
+            let buf = client.read_any();
+            assert!(buf.starts_with(res.as_bytes()), "{req:?} {buf:?}");
+            assert_eq!(
+                buf.windows(7).filter(|w| w == b"HTTP/1.").count(),
+                1,
+                "{req:?}"
+            );
+            assert_eq!(calls.get(), 1, "{req:?}");
+            assert!(client.is_server_dropped(), "{req:?}");
+        }
     }
 
     #[crate::rt_test]

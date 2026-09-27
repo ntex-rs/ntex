@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* HTTP/1 closes the connection after a non-persistent response, pipelined requests
+  that follow it are not processed
+
 * HTTP/1 limits chunk extensions to 16KiB per payload, an endless chunk-size line
   was buffered without limit
 
