@@ -11,6 +11,12 @@
 * `BytePages::copy_to()` and `BytePages::clone()` share the current page instead
   of copying it
 
+* `BytePages::split_to()` and `split_into()` keep the current page writable when
+  splitting inside it, the rest of the page is no longer wasted
+
+* Growing a `BytesMut` that is the only handle to an unpooled buffer uses `realloc`
+  instead of allocating and copying
+
 * `BytePages::len()` and `is_empty()` are O(1), the length of the pages is
   tracked instead of summed on each call
 

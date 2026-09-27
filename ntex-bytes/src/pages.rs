@@ -260,11 +260,19 @@ impl BytePages {
             at -= len;
         }
         if at > 0
-            && let Some(mut page) = self.take()
+            && let Some(mut st) = self.current.take()
         {
-            let len = cmp::min(page.len(), at);
-            to.append(page.split_to(len));
-            self.append(page);
+            if at < st.len() {
+                // the remainder stays writable, so its spare capacity is kept
+                to.append(Bytes {
+                    storage: st.split_to(at),
+                });
+                self.current = Some(st);
+            } else if st.len() == 0 {
+                self.current = Some(st);
+            } else {
+                to.append(BytePage::from(st));
+            }
         }
     }
 
@@ -1093,6 +1101,58 @@ mod tests {
 
         drop(pages);
         assert_eq!(page.as_ref(), &[1; 64][..]);
+    }
+
+    #[test]
+    fn pages_split_keeps_current_writable() {
+        let mut pages = BytePages::new(BytePageSize::Size8);
+        pages.put_slice(&[1; 64]);
+        let ptr = unsafe { pages.current.as_ref().unwrap().as_ptr() };
+        let remaining = pages.remaining_mut();
+
+        let mut head = pages.split_to(40);
+        assert_eq!(head.len(), 40);
+        assert_eq!(pages.len(), 24);
+        assert_eq!(pages.num_pages(), 1);
+        assert_eq!(pages.remaining_mut(), remaining);
+
+        // new data goes into the same page
+        pages.put_slice(&[2; 16]);
+        assert_eq!(pages.num_pages(), 1);
+        assert_eq!(
+            unsafe { pages.current.as_ref().unwrap().as_ptr() },
+            ptr.wrapping_add(40)
+        );
+        let mut expected = vec![1; 24];
+        expected.extend_from_slice(&[2; 16]);
+        assert_eq!(&pages.freeze()[..], &expected[..]);
+        assert_eq!(&head.freeze()[..], &[1; 40][..]);
+
+        // an inline head
+        let mut pages = BytePages::new(BytePageSize::Size8);
+        pages.put_slice(&[1; 64]);
+        let mut to = BytePages::new(BytePageSize::Size8);
+        pages.split_into(2, &mut to);
+        assert_eq!(&to.freeze()[..], &[1; 2][..]);
+        assert_eq!(pages.remaining_mut(), remaining);
+        assert_eq!(pages.len(), 62);
+
+        // the whole current page moves with its spare capacity
+        let mut pages = BytePages::new(BytePageSize::Size8);
+        pages.put_slice(&[1; 64]);
+        let ptr = unsafe { pages.current.as_ref().unwrap().as_ptr() };
+        let to = pages.split_to(64);
+        assert!(pages.is_empty());
+        assert_eq!(pages.num_pages(), 0);
+        assert_eq!(to.remaining_mut(), remaining);
+        assert_eq!(unsafe { to.current.as_ref().unwrap().as_ptr() }, ptr);
+
+        // an empty current page stays in place
+        let mut pages = BytePages::new(BytePageSize::Size8);
+        let _ = pages.chunk_mut();
+        let head = pages.split_to(10);
+        assert!(head.is_empty());
+        assert_eq!(pages.remaining_mut(), remaining + 64);
     }
 
     #[test]
