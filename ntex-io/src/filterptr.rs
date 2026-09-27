@@ -1,4 +1,4 @@
-use std::{cell::UnsafeCell, mem, ptr};
+use std::{any, cell::UnsafeCell, mem, ptr};
 
 use crate::{Filter, FilterLayer, Layer, Sealed, filter::NullFilter};
 
@@ -106,8 +106,22 @@ impl FilterPtr {
         U: FnOnce(F) -> R,
         R: Filter,
     {
-        *self.as_mut() = Repr::typed(f(*self.take_filter::<F>()));
+        *self.as_mut() = Repr::typed(f(self.take_owned::<F>()));
+    }
 
+    /// Takes the filter by value, `F` is `Sealed` if the filter is sealed
+    fn take_owned<F: Filter>(&self) -> F {
+        if matches!(self.as_ref(), Repr::Sealed(..)) {
+            assert!(
+                any::TypeId::of::<F>() == any::TypeId::of::<Sealed>(),
+                "Filter is sealed"
+            );
+            let sealed = mem::ManuallyDrop::new(self.take_sealed());
+            // Safety: `F` is `Sealed`
+            unsafe { ptr::read(ptr::from_ref(&*sealed).cast::<F>()) }
+        } else {
+            *self.take_filter::<F>()
+        }
     }
 
     pub(crate) fn seal<F: Filter>(&self) {
@@ -239,6 +253,35 @@ mod tests {
 
         drop(io);
         assert_eq!(p.get(), 2);
+    }
+
+    #[test]
+    fn miri_sealed_map_filter() {
+        let p = Rc::new(Cell::new(0));
+
+        let io = Io::from(IoTestWrapper).seal();
+        let io: Io<Sealed> = io.map_filter(|sealed| sealed);
+        let io = io.map_filter(|sealed| Layer::new(DropFilter { p: p.clone() }, sealed));
+        assert!(Rc::ptr_eq(&io.filter().p, &p));
+
+        drop(io);
+        assert_eq!(p.get(), 1);
+    }
+
+    #[ntex::test]
+    async fn map_filter_panic_closes_connection() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = Io::from(server);
+        let ioref = io.get_ref();
+        io.encode_slice(b"out").unwrap();
+
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            io.map_filter(|_: Base| -> Base { panic!("map failed") })
+        }));
+        assert!(res.is_err());
+        assert!(!ioref.is_active());
+        drop(client);
     }
 
     #[test]

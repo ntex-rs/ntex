@@ -511,9 +511,25 @@ impl<F: Filter> Io<F> {
             self.st().terminate_connection(Some(e));
         }
 
-        let state = self.take_io_ref();
-        state.0.filter.map_filter::<F, U, R>(f);
+        // `f` owns the filter, if it unwinds the filter chain is gone and the
+        // connection must be torn down here, `Drop for Io` skips it without
+        // a filter
+        struct Guard<'a>(&'a IoRef);
 
+        impl Drop for Guard<'_> {
+            fn drop(&mut self) {
+                let st = &self.0.0;
+                st.force_close_connection();
+                st.buffer.release(self.0.cfg());
+                drop(st.extensions.take_callbacks());
+            }
+        }
+
+        let guard = Guard(self.io_ref());
+        self.st().filter.map_filter::<F, U, R>(f);
+        mem::forget(guard);
+
+        let state = self.take_io_ref();
         let io = Io(UnsafeCell::new(state), marker::PhantomData);
         io.with_callbacks(|cb| cb.after_processing(&io));
         io

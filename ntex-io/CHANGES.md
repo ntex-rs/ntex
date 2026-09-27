@@ -5,6 +5,11 @@
 * A filter added over a sealed `Io` is stored typed, so `Io::filter()` and `Io::map_filter()`
   on it no longer panic with "Filter is sealed", e.g. a TLS handshake over `IoBoxed`
 
+* `Io<Sealed>::map_filter()` no longer panics with "Filter is sealed"
+
+* A panic in the `Io::map_filter()` closure closes the connection, before it stayed open
+  without a filter until the peer went away
+
 * The `dyn Filter` pointer of a typed filter is derived from the raw box pointer, the reference
   it was taken from before is invalidated by `Box::into_raw` under Stacked Borrows
 
