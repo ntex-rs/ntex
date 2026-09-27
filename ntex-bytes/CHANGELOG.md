@@ -10,6 +10,9 @@
 * `Bytes::slice_checked()` returns `None` instead of overflowing for bounds
   at `usize::MAX`
 
+* `BufMut::advance_mut()` for `Vec<u8>` panics when advancing past the capacity,
+  instead of exposing uninitialized memory
+
 * `BufMut::put()` for `BytesMut` grows the buffer instead of panicking when
   the source is larger than the spare capacity
 

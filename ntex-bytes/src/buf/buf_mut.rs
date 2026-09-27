@@ -924,11 +924,11 @@ impl BufMut for Vec<u8> {
     unsafe fn advance_mut(&mut self, cnt: usize) {
         let len = self.len();
         let remaining = self.capacity() - len;
-        if cnt > remaining {
-            // Reserve additional capacity, and ensure that the total length
-            // will not overflow usize.
-            self.reserve(cnt);
-        }
+        // only the spare capacity exposed by `chunk_mut` can be initialized
+        assert!(
+            cnt <= remaining,
+            "cannot advance past the capacity of the buffer, cnt:{cnt} remaining:{remaining}"
+        );
 
         self.set_len(len + cnt);
     }

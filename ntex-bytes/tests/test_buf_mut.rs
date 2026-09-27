@@ -44,13 +44,20 @@ fn test_put_u16() {
 
 #[test]
 fn test_vec_advance_mut() {
-    // Regression test for carllerche/bytes#108.
     let mut buf = Vec::with_capacity(8);
     unsafe {
-        buf.advance_mut(12);
-        assert_eq!(buf.len(), 12);
-        assert!(buf.capacity() >= 12, "capacity: {}", buf.capacity());
+        buf.chunk_mut()[0..8].copy_from_slice(b"12345678");
+        buf.advance_mut(8);
     }
+    assert_eq!(buf, b"12345678");
+}
+
+#[test]
+#[should_panic(expected = "cannot advance past the capacity")]
+fn test_vec_advance_mut_past_capacity() {
+    let mut buf = Vec::<u8>::with_capacity(8);
+    // the bytes past the capacity cannot have been initialized
+    unsafe { buf.advance_mut(buf.capacity() + 1) };
 }
 
 #[test]
