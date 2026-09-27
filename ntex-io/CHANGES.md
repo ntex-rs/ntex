@@ -7,7 +7,10 @@
 
 * Fix dispatcher timers expiring a second late and drifting, the timer ticks
   at whole seconds of the clock; a `t` seconds timer expires after at least `t`
-  and less than `t + 1` seconds
+  and less than `t + 1` seconds, or after `t` seconds if no other timers are
+  pending
+
+* `TimerHandle::remains()` rounds the remaining time up
 
 * Fix output written by a filter that fails on read during shutdown being lost when the filter
   is stacked over another filter

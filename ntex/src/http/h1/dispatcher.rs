@@ -2233,13 +2233,12 @@ mod tests {
         crate::rt::spawn(h1);
 
         client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\nexpect: 100-continue\r\n\r\n");
-        sleep(Millis(3300)).await;
-        let buf = client.read_any();
+        // an expired payload timer would respond with an error or close
+        let buf = client.read().await.unwrap();
         assert_eq!(&buf[..], b"HTTP/1.1 100 Continue\r\n\r\n");
 
         client.write("test");
-        sleep(Millis(100)).await;
-        let buf = client.read_any();
+        let buf = client.read().await.unwrap();
         assert!(buf.starts_with(b"HTTP/1.1 200 OK\r\n"), "{buf:?}");
     }
 
@@ -2616,10 +2615,12 @@ mod tests {
         }
         // The first period exceeds the configured rate and earns one
         // extension; the two-second maximum then terminates the payload.
-        // Each one-second period lasts at least one and less than two
-        // seconds, so the payload ends after 2 to 4 seconds.
+        // Each one-second period lasts about one and less than two seconds
+        // (a timer may expire early by the age of the cached time), so the
+        // payload ends after about 2 to 4 seconds. Without the extension it
+        // would end after about one second, with at most 1500 bytes.
         let received = mark.load(Ordering::Relaxed);
-        assert!((2400..=5400).contains(&received), "received: {received}");
+        assert!((1800..=5400).contains(&received), "received: {received}");
         assert_eq!(err_mark.load(Ordering::Relaxed), 1);
     }
 

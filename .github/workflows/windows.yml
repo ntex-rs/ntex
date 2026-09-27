@@ -74,11 +74,6 @@ jobs:
           Get-ChildItem C:\vcpkg\installed\x64-windows\bin
           Get-ChildItem C:\vcpkg\installed\x64-windows\lib
 
-      - name: Run tests (compio)
-        timeout-minutes: 10
-        run: |
-          cargo nextest run --retries=3 --all --no-default-features --no-fail-fast --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws" -- --skip test_timer
-
       - name: Clippy (neon-iocp)
         if: matrix.version == 'stable'
         run: |
@@ -87,9 +82,14 @@ jobs:
       - name: Run tests (neon-iocp)
         timeout-minutes: 10
         run: |
-          cargo nextest run --retries=3 --all --no-default-features --no-fail-fast --features="ntex/neon-iocp,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws" -- --skip test_timer
+          cargo nextest run --retries=3 --all --no-default-features --no-fail-fast --features="ntex/neon-iocp,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Run tests (tokio)
         timeout-minutes: 10
         run: |
-          cargo nextest run --retries=3 --all --no-default-features --no-fail-fast --features="ntex/tokio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws" -- --skip test_timer
+          cargo nextest run --retries=3 --all --no-default-features --no-fail-fast --features="ntex/tokio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+
+      - name: Run tests (compio)
+        timeout-minutes: 10
+        run: |
+          cargo nextest run --retries=3 --all --no-default-features --no-fail-fast --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"

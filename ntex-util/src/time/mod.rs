@@ -422,7 +422,7 @@ mod tests {
         assert_eq!(system_time(), system_time());
     }
 
-    /// State Under Test: `system_time()` updates returned value every resolution interval (300ms).
+    /// State Under Test: `system_time()` updates returned value every resolution interval (150ms).
     ///
     /// Expected Behavior: Two calls of `system_time()` made in subsequent resolution interval return different values
     /// and second value is greater than the first one at least by a resolution interval.

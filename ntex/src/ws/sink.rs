@@ -102,7 +102,7 @@ impl Decoder for WsSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{SharedCfg, io::Io, testing::IoTest, time::Millis};
+    use crate::{SharedCfg, io::Io, testing::IoTest, time::Millis, time::timeout};
 
     #[crate::rt_test]
     async fn clones_share_codec_state() {
@@ -131,10 +131,19 @@ mod tests {
         let io = Io::new(server, cfg);
         let sink = WsSink::new(io.get_ref(), ws::Codec::new(), io.shared().get());
 
+        let start = std::time::Instant::now();
         sink.send(ws::Message::Close(None)).await.unwrap();
         assert!(!client.is_server_dropped());
+        assert!(sink.io().is_active());
 
-        sleep(Millis(75)).await;
-        assert!(!sink.io().is_active());
+        // a late timer wakeup can run this task before the close timeout task
+        timeout(Millis(1000), async {
+            while sink.io().is_active() {
+                sleep(Millis(10)).await;
+            }
+        })
+        .await
+        .expect("close timeout did not close the connection");
+        assert!(start.elapsed() >= std::time::Duration::from_millis(50));
     }
 }

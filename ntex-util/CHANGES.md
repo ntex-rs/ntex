@@ -11,7 +11,7 @@
   goes stale while the thread is blocked; timers now use `Instant::now()`
 
 * The cached `time::now()` and `time::system_time()` values are refreshed every
-  300ms instead of 5ms
+  150ms instead of 5ms
 
 * Remove `time::query_system_time()`, it was identical to `time::system_time()`
 

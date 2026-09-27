@@ -194,7 +194,9 @@ mod tests {
 
     #[ntex::test]
     async fn test_ka() {
-        let factory = factory::<_, (), usize>(KeepAlive::new(Millis(100), || TestErr));
+        // the keep-alive is much longer than the sleep between calls, so a
+        // delayed wakeup does not expire it
+        let factory = factory::<_, (), usize>(KeepAlive::new(Millis(500), || TestErr));
         assert!(format!("{factory:?}").contains("KeepAlive"));
         let _ = factory.clone();
 

@@ -44,7 +44,7 @@
 //!   bucket, not to the time the driver woke up, so a late wakeup does not
 //!   delay later timers. Buckets that are overdue are processed at once.
 //! * [`LowresTimerDriver`] invalidates the cached [`now()`] and
-//!   [`system_time()`] values every 300 milliseconds.
+//!   [`system_time()`] values every 150 milliseconds.
 //!
 //! Dropping the timer driver, i.e. when the runtime stops, stops the wheel and
 //! marks all timers as elapsed. Dropping the lowres driver invalidates the
@@ -82,7 +82,7 @@ const WHEEL_TIMEOUT_CUTOFF: u64 = lvl_start(LVL_DEPTH);
 const WHEEL_TIMEOUT_MAX: u64 = WHEEL_TIMEOUT_CUTOFF - lvl_gran(LVL_DEPTH - 1);
 
 /// Refresh interval of the cached time.
-const LOWRES_RESOLUTION: Duration = Duration::from_millis(300);
+const LOWRES_RESOLUTION: Duration = Duration::from_millis(150);
 
 /// Shift of the level clock relative to the wheel clock.
 const fn lvl_shift(lvl: u64) -> u64 {
@@ -114,7 +114,7 @@ const fn as_millis(dur: Duration) -> u64 {
 
 /// Returns a cached approximation of the current instant.
 ///
-/// The cached value is refreshed at roughly 300 millisecond intervals.
+/// The cached value is refreshed at roughly 150 millisecond intervals.
 #[inline]
 pub fn now() -> Instant {
     TIMER.with(Timer::now)
@@ -122,7 +122,7 @@ pub fn now() -> Instant {
 
 /// Returns a cached approximation of the current system time.
 ///
-/// The cached value is refreshed at roughly 300 millisecond intervals.
+/// The cached value is refreshed at roughly 150 millisecond intervals.
 #[inline]
 pub fn system_time() -> SystemTime {
     TIMER.with(Timer::system_time)
