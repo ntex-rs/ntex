@@ -2,6 +2,9 @@
 
 ## [4.1.0] - Unreleased
 
+* The innermost buffer of the filter stack allocates its write pages on demand,
+  a connection no longer allocates a write buffer it never uses
+
 * Fix `Io::poll_shutdown()` waking the transport tasks on every poll, which kept the compio
   runtime from polling for I/O completions and stalled the shutdown until its timeout
 

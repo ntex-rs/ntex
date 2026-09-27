@@ -30,17 +30,16 @@ impl Stack {
                     read: Cell::new(None),
                     write: Cell::new(Some(BytePages::new(size))),
                 },
-                Buffer {
-                    read: Cell::new(None),
-                    write: Cell::new(Some(BytePages::new(size))),
-                },
+                // Only exposed as the inner side of `FilterBuf` when no layer
+                // is installed; its write pages are allocated on demand.
+                Buffer::default(),
             ],
         }
     }
 
     pub(crate) fn set_page_size(&self, size: BytePageSize) {
         for b in &self.buffers {
-            b.with_write(|b| b.set_page_size(size));
+            b.with_write_if_set(|b| b.set_page_size(size));
         }
     }
 
@@ -224,12 +223,19 @@ impl Stack {
             if let Some(buf) = b.read.take() {
                 cfg.read_buf().release(buf);
             }
-            b.with_write(BytePages::clear);
+            b.with_write_if_set(BytePages::clear);
         }
     }
 }
 
 impl Buffer {
+    fn with_write_if_set(&self, f: impl FnOnce(&mut BytePages)) {
+        if let Some(mut wb) = self.write.take() {
+            f(&mut wb);
+            self.write.set(Some(wb));
+        }
+    }
+
     fn is_write_empty(&self) -> bool {
         self.with_write(|b| b.is_empty())
     }
@@ -462,7 +468,10 @@ impl FilterBuf<'_> {
         F: FnOnce(&mut BytePages, &mut BytePages) -> R,
     {
         let mut write_curr = self.curr.write.take().unwrap();
-        let mut write_next = self.next.write.take().unwrap();
+        let (mut write_next, on_demand) = match self.next.write.take() {
+            Some(b) => (b, false),
+            None => (BytePages::new(write_curr.page_size()), true),
+        };
         let write_len = if self.wants_write.get() {
             0
         } else {
@@ -475,8 +484,20 @@ impl FilterBuf<'_> {
             self.wants_write.set(true);
         }
 
+        // Without a filter layer there is no transport-facing write buffer, the
+        // transport writes from the application-facing one. Output written
+        // here is never delivered.
+        let undelivered = on_demand && !write_next.is_empty();
+
         self.curr.write.set(Some(write_curr));
-        self.next.write.set(Some(write_next));
+        if !on_demand || undelivered {
+            self.next.write.set(Some(write_next));
+        }
+        debug_assert!(
+            !undelivered,
+            "{}: output written to the write destination of the innermost filter buffer is never sent",
+            self.io.tag()
+        );
         result
     }
 }
@@ -519,9 +540,11 @@ mod tests {
         assert_eq!(stack.buffers.len(), 3);
 
         stack.set_page_size(BytePageSize::Size32);
-        for buffer in &stack.buffers {
+        let (inner, layers) = stack.buffers.split_last().unwrap();
+        for buffer in layers {
             buffer.with_write(|buf| assert_eq!(buf.page_size(), BytePageSize::Size32));
         }
+        assert!(inner.write.take().is_none());
 
         stack.set_read_buf(BytesMut::from(&b"one"[..]), ioref.cfg());
         stack.set_read_buf(BytesMut::from(&b"-two"[..]), ioref.cfg());
@@ -596,6 +619,45 @@ mod tests {
             });
         });
         assert_eq!(stack.get_read_buf().as_deref(), Some(b"next".as_ref()));
+    }
+
+    #[ntex::test]
+    async fn innermost_write_buffer_is_on_demand() {
+        let (_, server) = IoTest::create();
+        let io = Io::from(server);
+        let ioref = io.get_ref();
+        let stack = Stack::new(BytePageSize::Size8);
+        let inner = &stack.buffers[1];
+        assert!(inner.write.take().is_none());
+        stack.release(ioref.cfg());
+
+        // a filter without layers sees an empty inner buffer, which is not
+        // kept unless something is written to it
+        stack.with_write_src(|buf| buf.put_slice(b"out"));
+        stack.with_filter(&ioref, |ctx| {
+            ctx.with_buffer(|buf| {
+                buf.with_write_buffers(|src, dst| {
+                    assert_eq!(src.len(), 3);
+                    assert!(dst.is_empty());
+                });
+            });
+        });
+        assert!(inner.write.take().is_none());
+    }
+
+    #[cfg(debug_assertions)]
+    #[ntex::test]
+    #[should_panic(expected = "is never sent")]
+    async fn innermost_write_destination_output_asserts() {
+        let (_, server) = IoTest::create();
+        let io = Io::from(server);
+        let ioref = io.get_ref();
+        let stack = Stack::new(BytePageSize::Size8);
+
+        stack.with_write_src(|buf| buf.put_slice(b"out"));
+        stack.with_filter(&ioref, |ctx| {
+            ctx.with_buffer(|buf| buf.with_write_buffers(|src, dst| src.move_to(dst)));
+        });
     }
 
     #[ntex::test]
