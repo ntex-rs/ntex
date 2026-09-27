@@ -39,13 +39,9 @@ impl Drop for ResetGuard {
 /// Runs the provided future, blocking the current thread until the future
 /// completes.
 pub(crate) fn block_on<F: Future<Output = ()>>(fut: F) {
-    log::info!(
-        "Starting compio runtime, driver {:?}",
-        compio_runtime::Runtime::try_with_current(Runtime::driver_type)
-            .unwrap_or(compio_driver::DriverType::Poll)
-    );
     let _reset = ResetGuard;
     let rt = RtGuard(Runtime::new().unwrap());
+    log::info!("Starting compio runtime, driver {:?}", rt.0.driver_type());
     rt.0.block_on(PollWhenWoken {
         fut: Box::pin(fut),
         flag: None,

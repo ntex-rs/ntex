@@ -2,6 +2,8 @@
 
 ## [4.1.0] - Unreleased
 
+* The compio runtime start log reports the actual driver, it always reported `Poll`
+
 * Fix stalled I/O in the compio backend when the `block_on` future woke another task
   whenever it was polled, e.g. while reading an h2 response body
 
