@@ -316,7 +316,17 @@ impl State {
 }
 
 pub(crate) trait MessageType: fmt::Debug + Sized {
+    /// `true` for request messages.
+    const REQUEST: bool;
+
     fn msg_version(&self) -> Version;
+
+    /// `Expect` and `Upgrade` must be ignored in HTTP/1.0 requests,
+    /// see [RFC 9110 section 10.1.1](https://www.rfc-editor.org/rfc/rfc9110#section-10.1.1)
+    /// and [section 7.8](https://www.rfc-editor.org/rfc/rfc9110#section-7.8).
+    fn ignore_http11_features(st: &State) -> bool {
+        Self::REQUEST && st.version < Version::HTTP_11
+    }
 
     fn headers_mut(&mut self) -> &mut HeaderMap;
 
@@ -390,8 +400,13 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
             }
             // connection keep-alive state
             header::CONNECTION => {
-                st.flags.insert(connection_flags(value.as_bytes()));
+                let mut flags = connection_flags(value.as_bytes());
+                if Self::ignore_http11_features(st) {
+                    flags.remove(Flags::CONN_UPGRADE);
+                }
+                st.flags.insert(flags);
             }
+            header::UPGRADE | header::EXPECT if Self::ignore_http11_features(st) => (),
             header::UPGRADE => {
                 st.flags.insert(Flags::HAS_UPGRADE);
                 if value
@@ -417,6 +432,8 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
 }
 
 impl MessageType for Request {
+    const REQUEST: bool = true;
+
     fn msg_version(&self) -> Version {
         self.version()
     }
@@ -502,6 +519,8 @@ impl MessageType for Request {
 }
 
 impl MessageType for ResponseHead {
+    const REQUEST: bool = false;
+
     fn msg_version(&self) -> Version {
         self.version
     }
@@ -1450,6 +1469,41 @@ mod tests {
 
         assert!(req.upgrade());
         assert_eq!(req.head().connection_type(), ConnectionType::Upgrade);
+    }
+
+    #[test]
+    fn test_http10_ignores_expect_and_upgrade() {
+        let mut buf = BytesMut::from(
+            "GET /test HTTP/1.0\r\n\
+             connection: keep-alive, upgrade\r\n\
+             upgrade: websocket\r\n\
+             expect: 100-continue\r\n\r\n\
+             GET /next HTTP/1.0\r\n\r\n",
+        );
+        let reader = MessageDecoder::<Request>::default();
+        let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();
+        assert!(!req.upgrade());
+        assert!(!req.head().expect());
+        assert_eq!(req.head().connection_type(), ConnectionType::KeepAlive);
+        assert_eq!(pl, PayloadType::None);
+        // the headers are still available
+        assert_eq!(req.headers().get(header::UPGRADE).unwrap(), "websocket");
+        assert_eq!(req.headers().get(header::EXPECT).unwrap(), "100-continue");
+        // the next request is not consumed as upgraded stream
+        let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(req.path(), "/next");
+
+        // HTTP/1.1 is not affected
+        let mut buf = BytesMut::from(
+            "GET /test HTTP/1.1\r\n\
+             connection: upgrade\r\n\
+             upgrade: websocket\r\n\
+             expect: 100-continue\r\n\r\n",
+        );
+        let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();
+        assert!(req.upgrade());
+        assert!(req.head().expect());
+        assert!(matches!(pl, PayloadType::Stream(_)));
     }
 
     #[test]

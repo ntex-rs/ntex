@@ -1611,6 +1611,48 @@ mod tests {
     }
 
     #[crate::rt_test]
+    async fn test_http10_expect_and_upgrade_ignored() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let seen2 = seen.clone();
+        spawn_h1(server, move |mut req: Request| {
+            seen2
+                .borrow_mut()
+                .push((req.path().to_string(), req.upgrade()));
+            async move {
+                let mut pl = req.take_payload();
+                while let Some(item) = crate::util::stream_recv(&mut pl).await {
+                    item.unwrap();
+                }
+                Ok::<_, io::Error>(Response::Ok().build())
+            }
+        });
+
+        client.write(
+            "POST /test1 HTTP/1.0\r\nconnection: keep-alive\r\n\
+             expect: 100-continue\r\ncontent-length: 4\r\n\r\nbody\
+             GET /test2 HTTP/1.0\r\nconnection: keep-alive, upgrade\r\n\
+             upgrade: websocket\r\n\r\n\
+             GET /test3 HTTP/1.0\r\n\r\n",
+        );
+        sleep(Millis(100)).await;
+
+        let buf = client.read_any();
+        // no interim response for an HTTP/1.0 client
+        assert!(buf.starts_with(b"HTTP/1.0 200 OK\r\n"), "{buf:?}");
+        assert!(!buf.windows(3).any(|w| w == b"100"), "{buf:?}");
+        assert_eq!(
+            *seen.borrow(),
+            [
+                ("/test1".to_string(), false),
+                ("/test2".to_string(), false),
+                ("/test3".to_string(), false)
+            ]
+        );
+    }
+
+    #[crate::rt_test]
     async fn test_pipeline_with_payload() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);

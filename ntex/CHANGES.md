@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* HTTP/1 ignores `Expect` and `Upgrade` in HTTP/1.0 requests, no `100 Continue` is
+  sent to HTTP/1.0 clients
+
 * HTTP/1 closes the connection after a non-persistent response, pipelined requests
   that follow it are not processed
 
