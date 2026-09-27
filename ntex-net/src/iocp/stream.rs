@@ -8,7 +8,7 @@ use slab::Slab;
 use socket2::{SockAddr, Socket};
 use windows_sys::Win32::Networking::WinSock;
 
-use super::{Handler, Overlapped, Reactor, ReactorApi, ops};
+use super::{Handler, OpBox, Overlapped, Reactor, ReactorApi, ops};
 use crate::helpers::Queue;
 
 /// Releases a socket, gracefully unless the connection was force-closed.
@@ -82,8 +82,8 @@ struct StreamItem {
     // Boxed so that a reference to the item does not cover them: a recv that
     // completes immediately runs the read filters inside `ReadOperation::read()`,
     // and a write they issue borrows the item while that `&mut` is live.
-    rd_op: Box<ops::ReadOperation>,
-    wr_op: Box<ops::WriteOperation>,
+    rd_op: OpBox<ops::ReadOperation>,
+    wr_op: OpBox<ops::WriteOperation>,
     close: Option<pool::Sender<io::Result<()>>>,
 }
 
@@ -163,7 +163,7 @@ impl StreamOps {
                 false
             }
         };
-        let rd_op = Box::new(ops::ReadOperation::new(
+        let rd_op = OpBox::new(ops::ReadOperation::new(
             id,
             sock,
             ctx.clone(),
@@ -172,7 +172,7 @@ impl StreamOps {
         ));
 
         // write op
-        let wr_op = Box::new(ops::WriteOperation::new(id, sock, ctx, &self.0.api));
+        let wr_op = OpBox::new(ops::WriteOperation::new(id, sock, ctx, &self.0.api));
 
         entry.insert(Box::new(StreamItem {
             io,
@@ -393,14 +393,15 @@ impl StreamCtl {
             st.streams
                 .get_mut(self.id)
                 .filter(|item| !item.is_closing())
-                .map(|item| &raw mut *item.rd_op)
+                .map(|item| item.rd_op.as_ptr())
         });
         if let Some(op) = op {
             // Issued outside `with()`: a recv that completes immediately runs
             // the read filters, and output they produce may be written right
             // away through `WeakStreamCtl::write`, which needs the storage.
             //
-            // SAFETY: the operation is boxed, so its address is stable, and it
+            // SAFETY: the operation is owned by an `OpBox`, so its address is
+            // stable, and it
             // is only freed once this handle is dropped or the reactor stops. A
             // close only starts from `shutdown()`, never from within the read.
             // A write issued from within the read borrows the item, which does
@@ -805,7 +806,7 @@ mod tests {
     fn complete_aborted_recv(ops: &StreamOps, id: usize) {
         let optr = ops
             .0
-            .with(|st| (&raw mut *st.streams[id].rd_op).cast::<Overlapped>());
+            .with(|st| st.streams[id].rd_op.as_ptr().cast::<Overlapped>());
         complete_aborted(ops, ops::RD_OP, optr);
     }
 
@@ -813,7 +814,7 @@ mod tests {
     fn complete_aborted_send(ops: &StreamOps, id: usize) {
         let optr = ops
             .0
-            .with(|st| (&raw mut *st.streams[id].wr_op).cast::<Overlapped>());
+            .with(|st| st.streams[id].wr_op.as_ptr().cast::<Overlapped>());
         complete_aborted(ops, ops::WR_OP, optr);
     }
 
