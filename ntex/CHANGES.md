@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+* HTTP/2 server resets the stream with `NO_ERROR` if the response is complete and the request
+  payload is dropped unread, or is dropped later and more request data arrives, the stream
+  does not keep the stream slot
+
+* HTTP/2 server accepts `CONNECT` requests without `:path`, the request uri is the authority
+
 * JSON bodies of `web::types::Json`, `ResponseBuilder::json()` and client JSON requests are
   serialized directly into the body buffer instead of being copied from a `String`
 

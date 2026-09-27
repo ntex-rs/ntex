@@ -156,7 +156,14 @@ struct PublishService<Err> {
     id: usize,
     io: IoRef,
     svc: Pipeline<Request, Response, Err>,
-    streams: RefCell<HashMap<StreamId, PayloadSender>>,
+    streams: RefCell<HashMap<StreamId, StreamPayload>>,
+}
+
+/// Request payload of a stream.
+struct StreamPayload {
+    sender: PayloadSender,
+    /// The response is complete
+    complete: bool,
 }
 
 impl<Err> PublishService<Err>
@@ -202,7 +209,13 @@ where
                         stream.id()
                     );
                     let (sender, payload) = Payload::create(stream.empty_capacity());
-                    self.streams.borrow_mut().insert(stream.id(), sender);
+                    self.streams.borrow_mut().insert(
+                        stream.id(),
+                        StreamPayload {
+                            sender,
+                            complete: false,
+                        },
+                    );
                     Some(payload)
                 };
                 (self.io.clone(), pseudo, headers, eof, pl)
@@ -215,8 +228,16 @@ where
                     stream.id(),
                     data.len()
                 );
-                if let Some(sender) = self.streams.borrow_mut().get_mut(&stream.id()) {
-                    sender.feed_data(data, cap);
+                let mut streams = self.streams.borrow_mut();
+                if let Some(pl) = streams.get(&stream.id()) {
+                    if pl.complete && pl.sender.is_dropped() {
+                        // the response is complete, the request body is dropped unread
+                        streams.remove(&stream.id());
+                        drop(streams);
+                        stream.reset(h2::frame::Reason::NO_ERROR);
+                    } else {
+                        pl.sender.feed_data(data, cap);
+                    }
                 } else {
                     log::error!(
                         "{}: Payload stream does not exists for {:?}",
@@ -232,7 +253,9 @@ where
                     self.io.tag(),
                     stream.id()
                 );
-                if let Some(sender) = self.streams.borrow_mut().remove(&stream.id()) {
+                if let Some(StreamPayload { sender, .. }) =
+                    self.streams.borrow_mut().remove(&stream.id())
+                {
                     match item {
                         h2::StreamEof::Data(data) => {
                             sender.feed_eof(data);
@@ -249,8 +272,9 @@ where
             }
             h2::MessageKind::Disconnect(err) => {
                 log::debug!("{}: Connection is disconnected {err:?}", self.io.tag());
-                if let Some(sender) = self.streams.borrow_mut().remove(&stream.id()) {
-                    sender.set_error(io::Error::new(io::ErrorKind::UnexpectedEof, err).into());
+                if let Some(pl) = self.streams.borrow_mut().remove(&stream.id()) {
+                    pl.sender
+                        .set_error(io::Error::new(io::ErrorKind::UnexpectedEof, err).into());
                 }
                 return Ok(());
             }
@@ -267,14 +291,21 @@ where
             Request::new()
         };
 
-        let path = pseudo.path.ok_or(H2Error::MissingPseudo("Path"))?;
         let method = pseudo.method.ok_or(H2Error::MissingPseudo("Method"))?;
 
         let head = req.head_mut();
-        head.uri = if let Some(ref authority) = pseudo.authority {
+        head.uri = if method == Method::CONNECT
+            && pseudo.path.is_none()
+            && let Some(ref authority) = pseudo.authority
+        {
+            // CONNECT request uses the authority form
+            Uri::try_from(authority.as_str()).map_err(Error::from_err)?
+        } else if let Some(ref authority) = pseudo.authority {
+            let path = pseudo.path.ok_or(H2Error::MissingPseudo("Path"))?;
             let scheme = pseudo.scheme.ok_or(H2Error::MissingPseudo("Scheme"))?;
             Uri::try_from(format!("{scheme}://{authority}{path}")).map_err(Error::from_err)?
         } else {
+            let path = pseudo.path.ok_or(H2Error::MissingPseudo("Path"))?;
             Uri::try_from(path.as_str()).map_err(Error::from_err)?
         };
         let is_head_req = method == Method::HEAD;
@@ -343,6 +374,19 @@ where
                         return Err(H2Error::Stream(e).into());
                     }
                 }
+            }
+        }
+
+        // the response is complete, an unread request body must not keep the stream
+        let id = stream.id();
+        let mut streams = self.streams.borrow_mut();
+        if let Some(pl) = streams.get_mut(&id) {
+            if pl.sender.is_dropped() {
+                streams.remove(&id);
+                drop(streams);
+                stream.reset(h2::frame::Reason::NO_ERROR);
+            } else {
+                pl.complete = true;
             }
         }
         Ok(())
