@@ -635,7 +635,7 @@ impl PayloadDecoder {
 
     pub(super) fn chunked() -> PayloadDecoder {
         PayloadDecoder {
-            kind: Cell::new(Kind::Chunked(ChunkedState::Size, 0)),
+            kind: Cell::new(Kind::Chunked(ChunkedState::Size, 0, 0)),
         }
     }
 
@@ -657,7 +657,11 @@ enum Kind {
     /// integer.
     Length(u64),
     /// A Reader used when Transfer-Encoding is `chunked`.
-    Chunked(ChunkedState, u64),
+    ///
+    /// Holds the chunked state, the remaining size of the current chunk and
+    /// the number of chunk-size line bytes beyond the size digits, such as
+    /// chunk extensions, received so far.
+    Chunked(ChunkedState, u64, u32),
     /// A Reader used for responses that don't indicate a length or chunked.
     ///
     /// Note: This should only used for `Response`s. It is illegal for a
@@ -674,6 +678,10 @@ enum Kind {
     /// > status code and then close the connection.
     Eof,
 }
+
+/// Maximum number of chunk-size line bytes beyond the size digits, such as
+/// chunk extensions, accepted for a chunked payload.
+const MAX_CHUNK_EXTENSIONS: u32 = 16 * 1024;
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 enum ChunkedState {
@@ -717,11 +725,11 @@ impl Decoder for PayloadDecoder {
                     Ok(Some(PayloadItem::Chunk(buf)))
                 }
             }
-            Kind::Chunked(ref mut state, ref mut size) => {
+            Kind::Chunked(ref mut state, ref mut size, ref mut ext) => {
                 let result = loop {
                     let mut buf = None;
                     // advances the chunked state
-                    *state = match state.step(src, size, &mut buf) {
+                    *state = match state.step(src, size, ext, &mut buf) {
                         Poll::Pending => break Ok(None),
                         Poll::Ready(Ok(state)) => state,
                         Poll::Ready(Err(e)) => break Err(e),
@@ -770,24 +778,11 @@ impl ChunkedState {
         self,
         body: &mut BytesMut,
         size: &mut u64,
+        ext: &mut u32,
         buf: &mut Option<Bytes>,
     ) -> Poll<Result<ChunkedState, DecodeError>> {
         match self {
-            ChunkedState::Size => match httparse::parse_chunk_size(body) {
-                Ok(httparse::Status::Complete((pos, sz))) => {
-                    body.advance_to(pos);
-                    *size = sz;
-                    if sz > 0 {
-                        Poll::Ready(Ok(ChunkedState::Body))
-                    } else {
-                        Poll::Ready(Ok(ChunkedState::EndCr))
-                    }
-                }
-                Ok(httparse::Status::Partial) => Poll::Pending,
-                Err(_) => Poll::Ready(Err(DecodeError::InvalidInput(
-                    "Invalid chunk size line: Invalid Size",
-                ))),
-            },
+            ChunkedState::Size => ChunkedState::read_size(body, size, ext),
             ChunkedState::Body => ChunkedState::read_body(body, size, buf),
             ChunkedState::BodyCr => ChunkedState::read_body_cr(body),
             ChunkedState::BodyLf => ChunkedState::read_body_lf(body),
@@ -796,6 +791,51 @@ impl ChunkedState {
             ChunkedState::Trailer => ChunkedState::read_trailer(body),
             ChunkedState::TrailerLf => ChunkedState::read_trailer_lf(body),
             ChunkedState::End => Poll::Ready(Ok(ChunkedState::End)),
+        }
+    }
+
+    /// Reads a chunk-size line.
+    ///
+    /// Bytes beyond the size digits, chunk extensions and whitespace, are
+    /// ignored but count against [`MAX_CHUNK_EXTENSIONS`] for the whole
+    /// payload, which also bounds a partially received line.
+    fn read_size(
+        rdr: &mut BytesMut,
+        size: &mut u64,
+        ext: &mut u32,
+    ) -> Poll<Result<ChunkedState, DecodeError>> {
+        match httparse::parse_chunk_size(rdr) {
+            Ok(httparse::Status::Complete((pos, sz))) => {
+                let digits = rdr.iter().take_while(|b| b.is_ascii_hexdigit()).count();
+                // the line ends with CRLF
+                *ext = ext.saturating_add((pos - digits - 2) as u32);
+                if *ext > MAX_CHUNK_EXTENSIONS {
+                    return Poll::Ready(Err(DecodeError::InvalidInput(
+                        "Chunk extensions are too large",
+                    )));
+                }
+                rdr.advance_to(pos);
+                *size = sz;
+                if sz > 0 {
+                    Poll::Ready(Ok(ChunkedState::Body))
+                } else {
+                    Poll::Ready(Ok(ChunkedState::EndCr))
+                }
+            }
+            Ok(httparse::Status::Partial) => {
+                // at most 16 size digits and CRLF, parsing restarts on each call
+                let max = (MAX_CHUNK_EXTENSIONS - *ext) as usize + 18;
+                if rdr.len() > max {
+                    Poll::Ready(Err(DecodeError::InvalidInput(
+                        "Chunk extensions are too large",
+                    )))
+                } else {
+                    Poll::Pending
+                }
+            }
+            Err(_) => Poll::Ready(Err(DecodeError::InvalidInput(
+                "Invalid chunk size line: Invalid Size",
+            ))),
         }
     }
 
@@ -1752,6 +1792,61 @@ mod tests {
         assert_eq!(chunk, Bytes::from_static(b"line"));
         let msg = pl.decode(&mut buf).unwrap().unwrap();
         assert!(msg.eof());
+    }
+
+    fn chunked_payload() -> (PayloadDecoder, BytesMut) {
+        let mut buf = BytesMut::from("POST /test HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\n");
+        let reader = MessageDecoder::<Request>::default();
+        let (_, pl) = reader.decode(&mut buf).unwrap().unwrap();
+        (pl.unwrap(), buf)
+    }
+
+    #[test]
+    fn test_chunk_extensions_limit() {
+        // a size line that never ends is not buffered without limit
+        let (pl, mut buf) = chunked_payload();
+        buf.extend(b"1;");
+        let mut failed = false;
+        for _ in 0..64 {
+            buf.extend(&[b'a'; 1024]);
+            match pl.decode(&mut buf) {
+                Ok(None) => (),
+                Err(_) => {
+                    failed = true;
+                    break;
+                }
+                Ok(Some(item)) => panic!("unexpected item {item:?}"),
+            }
+        }
+        assert!(failed);
+        assert!(buf.len() <= MAX_CHUNK_EXTENSIONS as usize + 1024 + 20);
+
+        // extensions are limited for the whole payload
+        let (pl, mut buf) = chunked_payload();
+        let ext = "a".repeat(1023);
+        let mut result = Ok(());
+        for _ in 0..32 {
+            buf.extend(format!("1;{ext}\r\nx\r\n").as_bytes());
+            match pl.decode(&mut buf) {
+                Ok(Some(PayloadItem::Chunk(chunk))) => assert_eq!(chunk, "x"),
+                Ok(item) => panic!("unexpected item {item:?}"),
+                Err(err) => {
+                    result = Err(err);
+                    break;
+                }
+            }
+        }
+        assert!(result.is_err());
+
+        // extensions up to the limit are accepted
+        let (pl, mut buf) = chunked_payload();
+        let ext = "a".repeat(MAX_CHUNK_EXTENSIONS as usize - 1);
+        buf.extend(format!("10;{ext}\r\n0123456789abcdef\r\n0\r\n\r\n").as_bytes());
+        assert_eq!(
+            pl.decode(&mut buf).unwrap().unwrap().chunk(),
+            "0123456789abcdef"
+        );
+        assert!(pl.decode(&mut buf).unwrap().unwrap().eof());
     }
 
     #[test]
