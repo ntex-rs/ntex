@@ -216,14 +216,14 @@ macro_rules! impl_partial_ord {
 
         impl<const N: usize> PartialOrd<$ty> for [u8; N] {
             fn partial_cmp(&self, other: &$ty) -> Option<::std::cmp::Ordering> {
-                other.partial_cmp(self)
+                other.partial_cmp(self).map(::std::cmp::Ordering::reverse)
             }
         }
     };
     (@rev $ty:ident, $($other:ty),*) => {$(
         impl PartialOrd<$ty> for $other {
             fn partial_cmp(&self, other: &$ty) -> Option<::std::cmp::Ordering> {
-                other.partial_cmp(self)
+                other.partial_cmp(self).map(::std::cmp::Ordering::reverse)
             }
         }
     )*};

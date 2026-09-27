@@ -669,6 +669,22 @@ mod tests {
         mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb \0";
 
     #[test]
+    #[allow(clippy::op_ref, clippy::cmp_owned)]
+    fn partial_ord_reverse() {
+        let b = Bytes::from_static(b"b");
+        assert!(b"a"[..] < b);
+        assert!(*b"a" < b);
+        assert!(*"a" < b);
+        assert!(b"a".to_vec() < b);
+        assert!(String::from("a") < b);
+        assert!(&b"a"[..] < b);
+        assert!("a" < b);
+        assert!(b"c"[..] > b);
+        assert!("c" > b);
+        assert_eq!(b"b"[..].partial_cmp(&b), Some(cmp::Ordering::Equal));
+    }
+
+    #[test]
     fn slice_checked_max_bounds() {
         use std::ops::Bound;
 
@@ -723,10 +739,10 @@ mod tests {
         assert_eq!(&b, &LONG[1..10]);
 
         let mut b = Bytes::from(b"123");
-        assert!(&b"12"[..] > &b);
+        assert!(&b"12"[..] < &b);
         assert_eq!("123", &b);
-        assert!("12" > &b);
-        assert!("12" > b);
+        assert!("12" < &b);
+        assert!("12" < b);
         assert_eq!(b.get_u8(), b'1');
         assert_eq!("23", &b);
 

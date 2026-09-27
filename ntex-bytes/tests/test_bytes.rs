@@ -389,10 +389,10 @@ fn fns_defined_for_bytes() {
     assert!(bytes > "g".to_string());
     assert!(bytes > "g".as_bytes().to_vec());
     assert!(bytes > Bytes::from("g"));
-    assert!("g" > bytes);
-    assert!("g".to_string() > bytes);
-    assert!("g".as_bytes().to_vec() > bytes);
-    assert!([b'g'] > bytes);
+    assert!("g" < bytes);
+    assert!("g".to_string() < bytes);
+    assert!("g".as_bytes().to_vec() < bytes);
+    assert!([b'g'] < bytes);
     assert!(Bytes::from(&"g"[..]) < bytes);
 
     assert_eq!(bytes, "hello world");

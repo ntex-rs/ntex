@@ -2,6 +2,9 @@
 
 ## [1.10.0] (unreleased)
 
+* Fix reversed result of `PartialOrd<Bytes>` for slices, arrays, `str`, `Vec<u8>`
+  and `String`
+
 * Generate the shared `Bytes`/`BytesMut` trait impls and the `BufMut::put_*`
   integer methods with macros
 
