@@ -452,40 +452,43 @@ mod tests {
     async fn test_sleep_0() {
         sleep(Seconds(1)).await;
 
-        let first_time = now();
+        let first_time = time::Instant::now();
         sleep(Millis(0)).await;
-        let second_time = now();
+        let second_time = time::Instant::now();
         assert!(second_time - first_time >= time::Duration::from_millis(1));
 
-        let first_time = now();
+        let first_time = time::Instant::now();
         sleep(Millis(1)).await;
-        let second_time = now();
+        let second_time = time::Instant::now();
         assert!(second_time - first_time >= time::Duration::from_millis(1));
 
-        let first_time = now();
+        let first_time = time::Instant::now();
         let fut = sleep(Millis(10000));
         assert!(!fut.is_elapsed());
         // a zero delay is rounded up to 1 ms
         fut.reset(Millis::ZERO);
         assert!(!fut.is_elapsed());
         fut.await;
-        let second_time = now();
+        let second_time = time::Instant::now();
         assert!(second_time - first_time >= time::Duration::from_millis(1));
 
         let fut = sleep(Millis::ZERO);
         assert!(!fut.is_elapsed());
         fut.await;
 
-        let first_time = now();
+        // the cached `now()` may be refreshed between two calls, measure
+        // with the clock. An elapsed timer completes without waiting for the
+        // timer driver, the bound leaves room for scheduling latency
+        let first_time = time::Instant::now();
         let fut = Sleep {
             hnd: TimerHandle::new(0),
         };
         assert!(fut.is_elapsed());
         fut.await;
-        let second_time = now();
-        assert!(second_time - first_time < time::Duration::from_millis(1));
+        let second_time = time::Instant::now();
+        assert!(second_time - first_time < time::Duration::from_millis(50));
 
-        let first_time = now();
+        let first_time = time::Instant::now();
         let fut = Rc::new(sleep(Millis(10_0000)));
         let s = fut.clone();
         ntex::rt::spawn(async move {
@@ -493,8 +496,8 @@ mod tests {
         });
         poll_fn(|cx| fut.poll_elapsed(cx)).await;
         assert!(fut.is_elapsed());
-        let second_time = now();
-        assert!(second_time - first_time < time::Duration::from_millis(1));
+        let second_time = time::Instant::now();
+        assert!(second_time - first_time < time::Duration::from_millis(50));
     }
 
     #[ntex::test]
@@ -587,7 +590,9 @@ mod tests {
         let result = timeout_checked(Millis(200), sleep(Millis(100))).await;
         assert!(result.is_ok());
 
-        let result = timeout_checked(Millis(5), sleep(Millis(100))).await;
+        // a future that never completes, a late timer driver would elapse
+        // a competing sleep in the same pass
+        let result = timeout_checked(Millis(5), std::future::pending::<()>()).await;
         assert!(result.is_err());
 
         let result = timeout_checked(Millis(0), sleep(Millis(100))).await;
