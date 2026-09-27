@@ -2,6 +2,9 @@
 
 ## [4.1.0] - Unreleased
 
+* IOCP: close the sockets of connects still pending when the runtime stops, and
+  keep their `OVERLAPPED` allocated since the kernel still completes into it
+
 * The compio runtime start log reports the actual driver, it always reported `Poll`
 
 * Fix stalled I/O in the compio backend when the `block_on` future woke another task
