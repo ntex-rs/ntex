@@ -4,6 +4,9 @@
 
 * Add `BytesMut::is_unique()`
 
+* Mark `StorageExt` as an `unsafe` trait, `Bytes` trusts the pointers and lengths
+  returned by its vtable
+
 * `Bytes::slice_checked()` returns `None` instead of overflowing for bounds
   at `usize::MAX`
 

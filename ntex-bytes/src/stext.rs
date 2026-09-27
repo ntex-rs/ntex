@@ -21,8 +21,8 @@ impl StorageVTable {
     ///   data, or `None` to make the clone copy the data instead.
     /// - `drop` releases the handle.
     ///
-    /// The data must stay valid and unchanged until the last handle is
-    /// dropped.
+    /// The requirements these functions must meet are listed on
+    /// [`StorageExt`].
     pub const fn new(
         as_ptr: unsafe fn(*const u8, usize) -> *const u8,
         len: unsafe fn(*const u8, usize) -> usize,
@@ -40,7 +40,20 @@ impl StorageVTable {
 
 /// Types that can be used as external storage for [`Bytes`], see
 /// [`Bytes::from_ext`].
-pub trait StorageExt: Send + Sync {
+///
+/// # Safety
+///
+/// `Bytes` trusts the values returned by `create` without checking them:
+///
+/// - For the returned `(addr, len)` pair, and for every pair returned by the
+///   vtable's `clone`, `as_ptr` and `len` must describe memory that is
+///   readable for `len` bytes and stays valid and unchanged until `drop` is
+///   called for that pair.
+/// - The vtable functions can be called from any thread.
+///
+/// `Bytes` calls `drop` exactly once for each pair and does not use the pair
+/// afterwards.
+pub unsafe trait StorageExt: Send + Sync {
     /// Converts the value into an `(addr, len)` pair and the vtable that
     /// operates on it.
     fn create(self) -> (*const u8, usize, &'static StorageVTable);

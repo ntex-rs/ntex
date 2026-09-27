@@ -149,7 +149,7 @@ const PTR_INLINE: NonZeroUsize = NonZeroUsize::new(KIND_INLINE).unwrap();
 // Static storage
 const PTR_STATIC: NonZeroUsize = NonZeroUsize::new(KIND_STATIC).unwrap();
 // Offset of a new vec storage, the data starts right after the `SharedVec` header
-const DEFAUILT_OFFSET: NonZeroUsize =
+const DEFAULT_OFFSET: NonZeroUsize =
     NonZeroUsize::new((stvec::METADATA_SIZE << KIND_OFFSET_BITS) ^ KIND_VEC).unwrap();
 
 /*
@@ -204,7 +204,7 @@ impl Storage {
             Storage {
                 len: src.len(),
                 ptr: shared.as_ptr().add(1).cast::<u8>(),
-                offset: DEFAUILT_OFFSET,
+                offset: DEFAULT_OFFSET,
             }
         }
     }
