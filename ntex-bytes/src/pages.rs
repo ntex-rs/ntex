@@ -26,6 +26,9 @@ thread_local! {
 }
 const CACHE_SIZE: usize = 128;
 
+/// Appended data up to this size is copied into the current page.
+const APPEND_COPY_LIMIT: usize = 4096;
+
 impl BytePages {
     /// Creates a new `BytePages` with the specified page size.
     ///
@@ -135,9 +138,11 @@ impl BytePages {
     ///
     /// Empty pages are ignored. If the current page holds no data and `buf` is
     /// a unique buffer with spare capacity, it becomes the new current page.
-    /// If the data fits into the spare capacity of the current page, it is
-    /// copied there. Otherwise the current page is closed and `buf` is added
-    /// as a separate page without copying.
+    /// Data of up to 4 KiB is copied into the current page, and into new
+    /// pages as needed. Larger data is added as a separate page without
+    /// copying: the filled part of the current page is split off in front of
+    /// it, and the spare capacity of the current page stays available for
+    /// later writes.
     pub fn append<T>(&mut self, buf: T)
     where
         BytePage: From<T>,
@@ -154,14 +159,14 @@ impl BytePages {
                         self.push_back(page);
                     }
                 }
-            } else if p.len() <= self.spare() {
+            } else if p.len() <= APPEND_COPY_LIMIT {
                 self.put_slice(p.as_ref());
             } else {
-                // move current page to the page list
-                if let Some(page) = self.current.take() {
-                    self.push_back(From::from(page));
+                // the current page is never full, its spare capacity is kept
+                if let Some(st) = self.current.as_mut() {
+                    let head = st.split_to(st.len());
+                    self.push_back(<BytePage as From<Bytes>>::from(Bytes { storage: head }));
                 }
-                // add buffer to the page list
                 self.push_back(p);
             }
         }
@@ -207,7 +212,7 @@ impl BytePages {
     #[inline]
     /// Returns the number of allocated pages containing buffered data.
     pub fn num_pages(&self) -> usize {
-        if self.current.is_none() {
+        if self.current_len() == 0 {
             self.pages().len()
         } else {
             self.pages().len() + 1
@@ -217,10 +222,13 @@ impl BytePages {
     /// Removes and returns the first page from the collection.
     ///
     /// The current writable page is returned last. Returns `None` if there are
-    /// no pages.
+    /// no pages with data, an empty current page keeps its spare capacity for
+    /// later writes.
     pub fn take(&mut self) -> Option<BytePage> {
         if let Some(page) = self.pop_front() {
             Some(page)
+        } else if self.current_len() == 0 {
+            None
         } else {
             self.current.take().map(BytePage::from)
         }
@@ -231,8 +239,8 @@ impl BytePages {
     /// left unchanged.
     ///
     /// Pages are shared with `pages` rather than copied, unless they are small
-    /// enough to be copied into the spare capacity of the current page of
-    /// `pages`, see [`append`](Self::append).
+    /// enough to be copied into the current page of `pages`, see
+    /// [`append`](Self::append).
     pub fn copy_to(&self, pages: &mut BytePages) {
         for p in self.pages() {
             pages.append(p.clone());
@@ -936,6 +944,56 @@ mod tests {
     }
 
     #[test]
+    fn append_copies_small_and_splits_for_large() {
+        let cap = BytePageSize::Size16.capacity();
+        let mut pages = BytePages::new(BytePageSize::Size16);
+        pages.extend_from_slice(b"head\r\n");
+
+        // small data is copied into the current page
+        pages.append(Bytes::copy_from_slice(&[1; APPEND_COPY_LIMIT]));
+        assert_eq!(pages.num_pages(), 1);
+        assert_eq!(pages.current_len(), 6 + APPEND_COPY_LIMIT);
+
+        // large data is not copied, the filled part is split off in front
+        let body = Bytes::copy_from_slice(&[2; APPEND_COPY_LIMIT + 1]);
+        let body_ptr = body.as_ptr();
+        pages.append(body.clone());
+        assert_eq!(pages.num_pages(), 2);
+        assert_eq!(pages.current_len(), 0);
+        assert_eq!(pages.spare(), cap - 6 - APPEND_COPY_LIMIT);
+
+        // later writes use the spare capacity of the current page
+        let page_ptr = pages.pages()[0].as_ref().as_ptr();
+        pages.extend_from_slice(b"\r\n");
+        assert_eq!(pages.num_pages(), 3);
+        let tail_ptr = pages.current.as_ref().unwrap().as_ref().as_ptr();
+        assert_eq!(tail_ptr, page_ptr.wrapping_add(6 + APPEND_COPY_LIMIT));
+
+        let mut expected = b"head\r\n".to_vec();
+        expected.extend_from_slice(&[1; APPEND_COPY_LIMIT]);
+        expected.extend_from_slice(&body);
+        expected.extend_from_slice(b"\r\n");
+        assert_eq!(pages.len(), expected.len());
+
+        let first = pages.take().unwrap();
+        let second = pages.take().unwrap();
+        assert_eq!(second.as_ref().as_ptr(), body_ptr);
+        let third = pages.take().unwrap();
+        assert!(pages.take().is_none());
+        let data = [first.as_ref(), second.as_ref(), third.as_ref()].concat();
+        assert_eq!(data, expected);
+
+        // draining the pages keeps an empty current page for later writes
+        pages.extend_from_slice(b"x");
+        pages.append(body);
+        assert_eq!(pages.take().unwrap().as_ref(), b"x");
+        assert_eq!(pages.take().unwrap().len(), APPEND_COPY_LIMIT + 1);
+        assert!(pages.take().is_none());
+        assert_eq!(pages.num_pages(), 0);
+        assert_eq!(pages.spare(), cap - 1);
+    }
+
+    #[test]
     fn pages() {
         let cap = BytePageSize::Size8.capacity();
         unsafe {
@@ -969,7 +1027,8 @@ mod tests {
 
             pgs.append(Bytes::copy_from_slice("a".repeat(cap).as_bytes()));
             assert_eq!(pgs.num_pages(), 3);
-            assert!(pgs.current.is_none());
+            assert_eq!(pgs.current_len(), 0);
+            assert_eq!(pgs.spare(), cap - 1);
 
             // page
             let p = pages.take().unwrap();
@@ -1218,7 +1277,8 @@ mod tests {
             pages.advance_mut(n);
         }
         assert!(pages.chunk_mut().len() > 0);
-        assert_eq!(pages.num_pages(), 2);
+        // the new current page holds no data yet
+        assert_eq!(pages.num_pages(), 1);
         unsafe {
             *pages.chunk_mut().as_mut_ptr() = 2;
             pages.advance_mut(1);
