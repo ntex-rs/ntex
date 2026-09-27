@@ -177,21 +177,11 @@ pub trait BufMut {
     where
         Self: Sized,
     {
-        assert!(self.remaining_mut() >= src.remaining());
-
         while src.has_remaining() {
             let s = src.chunk();
-            let d = self.chunk_mut();
-            let l = cmp::min(s.len(), d.len());
-
-            unsafe {
-                ptr::copy_nonoverlapping(s.as_ptr(), d.as_mut_ptr(), l);
-            }
-
+            let l = s.len();
+            self.put_slice(s);
             src.advance(l);
-            unsafe {
-                self.advance_mut(l);
-            }
         }
     }
 
@@ -235,6 +225,15 @@ pub trait BufMut {
                 self.advance_mut(cnt);
             }
         }
+    }
+
+    #[doc(hidden)]
+    /// Writes as much of `src` as `self` can hold, returns the number of bytes
+    /// written. Buffers that grow on demand write all of `src`.
+    fn put_slice_partial(&mut self, src: &[u8]) -> usize {
+        let n = cmp::min(self.remaining_mut(), src.len());
+        self.put_slice(&src[..n]);
+        n
     }
 
     /// Writes an unsigned 8 bit integer to `self`.
@@ -870,32 +869,44 @@ pub trait BufMut {
     }
 }
 
+macro_rules! deref_forward_bufmut {
+    () => {
+        fn remaining_mut(&self) -> usize {
+            (**self).remaining_mut()
+        }
+
+        fn chunk_mut(&mut self) -> &mut UninitSlice {
+            (**self).chunk_mut()
+        }
+
+        unsafe fn advance_mut(&mut self, cnt: usize) {
+            (**self).advance_mut(cnt);
+        }
+
+        fn put_slice(&mut self, src: &[u8]) {
+            (**self).put_slice(src);
+        }
+
+        fn put_slice_partial(&mut self, src: &[u8]) -> usize {
+            (**self).put_slice_partial(src)
+        }
+
+        fn put_u8(&mut self, n: u8) {
+            (**self).put_u8(n);
+        }
+
+        fn put_i8(&mut self, n: i8) {
+            (**self).put_i8(n);
+        }
+    };
+}
+
 impl<T: BufMut + ?Sized> BufMut for &mut T {
-    fn remaining_mut(&self) -> usize {
-        (**self).remaining_mut()
-    }
-
-    fn chunk_mut(&mut self) -> &mut UninitSlice {
-        (**self).chunk_mut()
-    }
-
-    unsafe fn advance_mut(&mut self, cnt: usize) {
-        (**self).advance_mut(cnt);
-    }
+    deref_forward_bufmut!();
 }
 
 impl<T: BufMut + ?Sized> BufMut for Box<T> {
-    fn remaining_mut(&self) -> usize {
-        (**self).remaining_mut()
-    }
-
-    fn chunk_mut(&mut self) -> &mut UninitSlice {
-        (**self).chunk_mut()
-    }
-
-    unsafe fn advance_mut(&mut self, cnt: usize) {
-        (**self).advance_mut(cnt);
-    }
+    deref_forward_bufmut!();
 }
 
 impl BufMut for Vec<u8> {
