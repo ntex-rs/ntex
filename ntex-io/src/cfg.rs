@@ -387,6 +387,13 @@ impl IoConfig {
     /// see [`set_frame_read_rate`](Self::set_frame_read_rate), bound how long
     /// a slow peer can hold it.
     ///
+    /// Frames that a codec splits off the read buffer, such as `Bytes`
+    /// payloads, share its allocation. A frame kept alive keeps the whole
+    /// read buffer allocated, and the buffer is not returned to the cache, so
+    /// retaining many small frames can use far more memory than their size.
+    /// Copy long-lived frames or call [`Bytes::trimdown`](ntex_bytes::Bytes::trimdown)
+    /// on them to release the rest of the buffer.
+    ///
     /// Read backpressure is released once the application-facing buffer falls
     /// to half of `high_watermark`.
     ///

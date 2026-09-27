@@ -1436,7 +1436,7 @@ mod tests {
         assert_eq!(p, p2);
         // short data is copied into an inline view
         assert!(matches!(p2.inner, StorageType::Bytes(_)));
-        if let StorageType::Storage(mut st) = p.inner {
+        if let StorageType::Storage(st) = p.inner {
             assert!(st.is_unique());
         } else {
             panic!()
@@ -1452,7 +1452,7 @@ mod tests {
             panic!()
         }
         drop(p2);
-        if let StorageType::Storage(mut st) = p.inner {
+        if let StorageType::Storage(st) = p.inner {
             assert!(st.is_unique());
         } else {
             panic!()
