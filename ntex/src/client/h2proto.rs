@@ -231,9 +231,9 @@ async fn get_response(
                     };
                     Ok((head, payload))
                 }
-                None => Err(Error::from(ClientError::H2(
-                    h2::OperationError::Stream(h2::StreamError::MissingPseudo("status")),
-                ))),
+                None => Err(Error::from(ClientError::H2(h2::OperationError::Stream(
+                    h2::StreamError::MissingPseudo("status"),
+                )))),
             }
         }
         h2::MessageKind::Disconnect(err) => Err(err.map(ClientError::H2)),
