@@ -99,6 +99,11 @@ impl Drop for PayloadSender {
 }
 
 impl PayloadSender {
+    /// Checks if the payload stream is dropped.
+    pub(crate) fn is_dropped(&self) -> bool {
+        self.inner.strong_count() == 0
+    }
+
     /// Closes the payload stream with an error.
     pub fn set_error(&self, err: PayloadError) {
         if let Some(shared) = self.inner.upgrade() {
