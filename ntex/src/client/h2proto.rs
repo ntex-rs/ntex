@@ -105,7 +105,7 @@ async fn send_request_inner(
         crate::rt::spawn(async move {
             let _activity = activity;
             if let Err(e) = send_body(body, &snd_stream).await {
-                log::error!("{}: Cannot send body: {e:?}", snd_stream.tag());
+                log::debug!("{}: Cannot send body: {e:?}", snd_stream.tag());
                 snd_stream.reset(frame::Reason::INTERNAL_ERROR);
             }
         });
