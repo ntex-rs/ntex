@@ -2,6 +2,8 @@
 
 ## [4.1.0] - Unreleased
 
+* The I/O timer ticker resets one sleep timer for every tick instead of creating a new one
+
 * Growing a read buffer beyond the high watermark compacts a unique buffer in place or
   reallocates it, before it always allocated a new buffer and copied the data
 

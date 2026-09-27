@@ -172,15 +172,10 @@ impl TimerStorage {
 
         spawn(async move {
             let guard = TimerGuard;
+            // one wheel timer is reset for every tick
+            let timer = sleep(Self::next_tick());
             loop {
-                // tick at the next whole second of the clock, a late tick
-                // does not delay the later ones
-                let next = IoManager::with(|mgr| {
-                    let t = &mgr.timers;
-                    let next = t.base + Duration::from_secs(u64::from(t.current) + 1);
-                    next.saturating_duration_since(Instant::now())
-                });
-                sleep(Millis(next.as_millis() as u32 + 1)).await;
+                timer.wait().await;
 
                 let stop = IoManager::with(|mgr| {
                     let current = mgr.timers.update_current();
@@ -212,9 +207,21 @@ impl TimerStorage {
                 if stop {
                     break;
                 }
+                timer.reset(Self::next_tick());
             }
             drop(guard);
         });
+    }
+
+    /// Returns the delay until the next whole second of the timer clock, a
+    /// late tick does not delay the later ones.
+    fn next_tick() -> Millis {
+        let next = IoManager::with(|mgr| {
+            let t = &mgr.timers;
+            let next = t.base + Duration::from_secs(u64::from(t.current) + 1);
+            next.saturating_duration_since(Instant::now())
+        });
+        Millis(next.as_millis() as u32 + 1)
     }
 }
 
