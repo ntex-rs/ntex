@@ -371,9 +371,17 @@ impl Storage {
         // moved inline, otherwise the data is copied into an exact-sized
         // buffer if at least 64 bytes of capacity are unused
         if !(kind == KIND_INLINE || kind == KIND_STATIC) {
+            // a shared view retains the whole allocation, including
+            // the space before the start of the view
+            let capacity = if kind == KIND_VEC {
+                unsafe { stvec::SharedVec::capacity(self.shared_vec()) }
+            } else {
+                self.capacity()
+            };
+
             if self.len() <= INLINE_CAP {
                 *self = unsafe { Storage::from_ptr_inline(self.as_ptr(), self.len()) };
-            } else if self.capacity() - self.len() >= 64 {
+            } else if capacity - self.len() >= 64 {
                 *self = Storage::from_slice_with_capacity(self.len(), self.as_ref());
             }
         }
@@ -677,6 +685,15 @@ mod tests {
         assert_eq!(&b[..], &LONG[..16]);
         b.trimdown();
         assert!(b.is_inline());
+
+        // a view at the end of a larger allocation
+        let src = Bytes::from(LONG.to_vec());
+        let mut b = src.slice(LONG.len() - 40..);
+        assert!(b.storage.capacity() - b.len() < 64);
+        b.trimdown();
+        assert_eq!(&b[..], &LONG[LONG.len() - 40..]);
+        assert_eq!(b.storage.capacity(), 40);
+        assert!(!src.as_ref().as_ptr_range().contains(&b.as_ptr()));
     }
 
     #[test]

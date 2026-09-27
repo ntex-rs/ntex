@@ -56,6 +56,9 @@
 * `BytesMut::from(Bytes)` reuses the buffer instead of copying when the `Bytes`
   is the only handle to it
 
+* Fix `Bytes::trimdown()` and `ByteString::trimdown()` for views near the end of a shared allocation,
+  such views retained the whole allocation
+
 * Add `BytePage::info()` to report the kind of storage backing a page
 
 * Add `BytePage::is_inline()` to report whether page data is stored inline

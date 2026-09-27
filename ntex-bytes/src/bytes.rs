@@ -470,7 +470,9 @@ impl Bytes {
     /// Compacts the underlying storage to this value's current byte range.
     ///
     /// This can reduce retained capacity when this value is a small view into a
-    /// larger allocation. The visible bytes are unchanged.
+    /// larger allocation, anywhere within the allocation. The data is copied if
+    /// the allocation is larger than the view by at least 64 bytes, views up to
+    /// the inline capacity are always inlined. The visible bytes are unchanged.
     ///
     /// # Examples
     ///
