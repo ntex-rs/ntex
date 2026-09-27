@@ -430,16 +430,18 @@ impl DispatcherConfig {
         id
     }
 
-    pub(super) fn remove_io(&self, io: &IoRef) -> usize {
-        let mut inflight = self.0.inflight.borrow_mut();
-        inflight.remove(io);
-        inflight.len()
-    }
-
-    pub(super) fn insert_io(&self, io: &IoRef) -> usize {
+    /// Registers an in-flight connection.
+    ///
+    /// Returns the guard that unregisters the connection when dropped, and
+    /// the number of in-flight connections.
+    pub(super) fn insert_io(&self, io: &IoRef) -> (InflightGuard, usize) {
         let mut inflight = self.0.inflight.borrow_mut();
         inflight.insert(io.clone());
-        inflight.len()
+        let guard = InflightGuard {
+            config: self.clone(),
+            io: io.clone(),
+        };
+        (guard, inflight.len())
     }
 
     /// Service is shutting down
@@ -470,6 +472,28 @@ impl DispatcherConfig {
     pub(super) fn notify_shutdown(&self) {
         if let Some(tx) = self.0.tx.take() {
             let _ = tx.send(());
+        }
+    }
+}
+
+/// Unregisters an in-flight connection when dropped.
+///
+/// The connection is unregistered even if its future is dropped before it
+/// completes, a pending shutdown is notified once no connections are left.
+pub(super) struct InflightGuard {
+    config: DispatcherConfig,
+    io: IoRef,
+}
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        let inflight = {
+            let mut inflight = self.config.0.inflight.borrow_mut();
+            inflight.remove(&self.io);
+            inflight.len()
+        };
+        if inflight == 0 && self.config.is_shutdown() {
+            self.config.notify_shutdown();
         }
     }
 }

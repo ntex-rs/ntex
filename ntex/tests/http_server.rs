@@ -956,6 +956,60 @@ async fn test_h1_gracefull_shutdown() {
     assert_eq!(count.load(Ordering::Relaxed), 0);
 }
 
+struct FailingControl;
+
+impl<St, F, E> ntex::ServiceFactory<St, Control<F, E>> for FailingControl
+where
+    F: ntex::io::Filter,
+    E: ntex::http::ResponseError,
+{
+    type Res = h1::ControlAck<F>;
+    type Error = io::Error;
+    type Service = FailingControl;
+    type InitError = io::Error;
+
+    async fn create(&self, _: &St) -> Result<Self::Service, Self::InitError> {
+        Err(io::Error::other("control init failed"))
+    }
+}
+
+impl<St, F, E> ntex::Service<St, Control<F, E>> for FailingControl
+where
+    F: ntex::io::Filter,
+    E: ntex::http::ResponseError,
+{
+    type Res = h1::ControlAck<F>;
+    type Error = io::Error;
+
+    async fn call(
+        &self,
+        req: Control<F, E>,
+        _: ntex::Ctx<'_, Self, St>,
+    ) -> Result<Self::Res, Self::Error> {
+        Ok(req.ack())
+    }
+}
+
+#[ntex::test]
+async fn test_h1_control_init_error_does_not_block_shutdown() {
+    let srv = test_server(async |_| {
+        HttpService::new(async |_: Request| Ok::<_, io::Error>(Response::Ok().build()))
+            .h1_control(FailingControl)
+    });
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let _ = stream.write_all(b"GET /index.html HTTP/1.1\r\n\r\n");
+    let mut data = Vec::new();
+    let _ = stream.read_to_end(&mut data);
+    assert!(data.is_empty());
+
+    let res = ntex::time::timeout(Seconds(5), srv.stop(true)).await;
+    assert!(
+        res.is_ok(),
+        "graceful shutdown waited for leaked connection"
+    );
+}
+
 #[ntex::test]
 async fn test_h1_gracefull_shutdown_2() {
     let count = Arc::new(AtomicUsize::new(0));

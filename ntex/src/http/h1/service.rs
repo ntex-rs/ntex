@@ -100,7 +100,7 @@ where
 
         let id = self.config.next_id();
         let ioref = io.get_ref();
-        let inflight = self.config.insert_io(&ioref);
+        let (_guard, inflight) = self.config.insert_io(&ioref);
 
         log::trace!(
             "{}: New http1 connection {id}, peer address {:?}, inflight: {}",
@@ -109,13 +109,7 @@ where
             inflight
         );
 
-        let result = handle_io(id, io, svc, ctl, self.config.clone()).await;
-
-        let inflight = self.config.remove_io(&ioref);
-        if inflight == 0 && self.config.is_shutdown() {
-            self.config.notify_shutdown();
-        }
-        result
+        handle_io(id, io, svc, ctl, self.config.clone()).await
     }
 
     async fn ready(&self, _: Ctx<'_, Self, St>) -> Result<(), Self::Error> {

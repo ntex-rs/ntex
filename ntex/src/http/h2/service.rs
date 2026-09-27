@@ -97,20 +97,14 @@ where
 
         let id = self.config.next_id();
         let ioref = io.get_ref();
-        let inflight = self.config.insert_io(&ioref);
+        let (_guard, inflight) = self.config.insert_io(&ioref);
         log::trace!(
             "{}: New http2 connection {id}, peer address {:?}, inflight: {inflight}",
             io.tag(),
             io.query::<types::PeerAddr>().get()
         );
 
-        let result = handle(id, io.into(), svc, ctl).await;
-
-        let inflight = self.config.remove_io(&ioref);
-        if inflight == 0 && self.config.is_shutdown() {
-            self.config.notify_shutdown();
-        }
-        result
+        handle(id, io.into(), svc, ctl).await
     }
 
     #[inline]
