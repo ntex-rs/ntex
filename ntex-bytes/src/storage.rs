@@ -550,6 +550,21 @@ impl Storage {
         self.kind() == KIND_INLINE
     }
 
+    /// Converts into a `StorageVec` without copying if this is the only
+    /// reference to a shared vec.
+    pub(crate) fn try_into_vec(self) -> Result<stvec::StorageVec, Storage> {
+        if self.kind() == KIND_VEC {
+            let offset = self.offset.get() >> KIND_OFFSET_BITS;
+            let st =
+                unsafe { stvec::StorageVec::from_unique_view(self.shared_vec(), offset, self.len) };
+            if let Some(st) = st {
+                mem::forget(self);
+                return Ok(st);
+            }
+        }
+        Err(self)
+    }
+
     #[inline]
     fn shared_vec(&self) -> *mut stvec::SharedVec {
         let offset = self.offset.get() >> KIND_OFFSET_BITS;

@@ -1022,8 +1022,10 @@ impl<'a> From<&'a str> for BytesMut {
 impl From<Bytes> for BytesMut {
     #[inline]
     fn from(src: Bytes) -> BytesMut {
-        //src.try_mut().unwrap_or_else(|src| BytesMut::copy_from_slice(&src[..]))
-        BytesMut::copy_from_slice(&src[..])
+        match src.storage.try_into_vec() {
+            Ok(storage) => BytesMut { storage },
+            Err(storage) => BytesMut::copy_from_slice(storage.as_ref()),
+        }
     }
 }
 

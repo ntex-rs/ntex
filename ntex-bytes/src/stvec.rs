@@ -154,6 +154,35 @@ impl StorageVec {
         unsafe { (*self.0.as_ptr()).is_unique() }
     }
 
+    /// Takes ownership of the allocation of a frozen view, if the view holds
+    /// the only reference to it.
+    ///
+    /// The view becomes the `BytesMut` view, the rest of the allocation past
+    /// it is spare capacity.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must point to a live `SharedVec` referenced by the caller, the
+    /// view `offset..offset + len` must be within the allocation. On success
+    /// the caller's reference is transferred to the returned handle.
+    pub(crate) unsafe fn from_unique_view(
+        ptr: *mut SharedVec,
+        offset: usize,
+        len: usize,
+    ) -> Option<StorageVec> {
+        // `Acquire` synchronizes with the `Release` decrement of the handles
+        // dropped by other threads, their accesses happen before the header
+        // is updated below.
+        if !(*ptr).is_unique() {
+            return None;
+        }
+        let end = (*ptr).capacity + METADATA_SIZE_U32;
+        (*ptr).offset = offset as u32;
+        (*ptr).len = len as u32;
+        (*ptr).remaining = end - (offset + len) as u32;
+        Some(StorageVec(NonNull::new_unchecked(ptr)))
+    }
+
     /// Returns an immutable view of the data, `self` stays usable.
     ///
     /// The view shares the allocation, so `self` is no longer unique while
