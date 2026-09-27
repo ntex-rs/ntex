@@ -140,8 +140,43 @@ impl UninitSlice {
     pub fn len(&self) -> usize {
         self.0.len()
     }
+
+    /// Returns the slice as a mutable slice of [`MaybeUninit<u8>`].
+    ///
+    /// # Safety
+    ///
+    /// The memory may already be initialized, for example when the slice was
+    /// returned by the [`BufMut`](crate::BufMut) implementation for
+    /// `&mut [u8]`. The caller **must not** write uninitialized bytes to the
+    /// returned slice.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ntex_bytes::BufMut;
+    ///
+    /// let mut data = [0, 1, 2];
+    /// let mut slice = &mut data[..];
+    /// let uninit = unsafe { BufMut::chunk_mut(&mut slice).as_uninit_slice_mut() };
+    /// uninit[0].write(b'a');
+    ///
+    /// assert_eq!(data[0], b'a');
+    /// ```
+    #[inline]
+    pub unsafe fn as_uninit_slice_mut(&mut self) -> &mut [MaybeUninit<u8>] {
+        &mut self.0
+    }
 }
 
+/// Deprecated, use [`UninitSlice::as_uninit_slice_mut`] instead.
+///
+/// This impl is unsound. The memory may already be initialized, for example
+/// when the slice was returned by the [`BufMut`](crate::BufMut) implementation
+/// for `&mut [u8]`, and safe code can write uninitialized bytes to the
+/// returned slice. It will be removed in the next major release.
+///
+/// Rust does not allow `#[deprecated]` on trait impls, so using this impl
+/// does not emit a warning.
 impl AsMut<[MaybeUninit<u8>]> for UninitSlice {
     fn as_mut(&mut self) -> &mut [MaybeUninit<u8>] {
         &mut self.0

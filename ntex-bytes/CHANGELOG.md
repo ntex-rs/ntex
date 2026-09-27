@@ -10,6 +10,10 @@
 * `Bytes::slice_checked()` returns `None` instead of overflowing for bounds
   at `usize::MAX`
 
+* Add the `unsafe` `UninitSlice::as_uninit_slice_mut()` and deprecate
+  `AsMut<[MaybeUninit<u8>]>` for `UninitSlice`, which is unsound as safe code
+  could write uninitialized bytes into initialized memory
+
 * `BufMut::advance_mut()` for `Vec<u8>` panics when advancing past the capacity,
   instead of exposing uninitialized memory
 

@@ -59,8 +59,8 @@ impl ClientConfig {
             h1_lifetime: Duration::from_secs(75),
             h1_keep_alive: Duration::from_secs(15),
             h1_limit: 8,
-            h2_lifetime: Duration::from_secs(3600),
-            h2_keep_alive: Duration::from_secs(60),
+            h2_lifetime: Duration::from_hours(1),
+            h2_keep_alive: Duration::from_mins(1),
             h2_limit: 16,
             h2_max_streams: 100,
 

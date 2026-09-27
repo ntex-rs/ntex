@@ -661,7 +661,7 @@ mod tests {
 
         stack.with_write_src(|buf| buf.put_slice(b"out"));
         stack.with_filter(&ioref, |ctx| {
-            ctx.with_buffer(|buf| buf.with_write_buffers(|src, dst| src.move_to(dst)));
+            ctx.with_buffer(|buf| buf.with_write_buffers(BytePages::move_to));
         });
     }
 
