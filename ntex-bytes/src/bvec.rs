@@ -500,6 +500,40 @@ impl BytesMut {
         self.storage.reserve(additional);
     }
 
+    /// Reserves capacity for exactly `additional` more bytes to be inserted
+    /// into the given `BytesMut`.
+    ///
+    /// Behaves like [`reserve`](Self::reserve), it reclaims the existing buffer
+    /// when possible and reallocates a unique buffer that is not a pooled page,
+    /// but a new allocation is sized to hold exactly `additional` more bytes
+    /// instead of growing to at least twice the current length. Unlike
+    /// [`reserve_capacity`](Self::reserve_capacity), the contents are not moved
+    /// when the buffer already has enough remaining capacity.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the new capacity exceeds `u32::MAX` minus the buffer
+    /// header size, just under 4 GiB.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ntex_bytes::BytesMut;
+    ///
+    /// let mut buf = BytesMut::copy_from_slice(&[0; 1000][..]);
+    /// buf.reserve_exact(24);
+    /// assert_eq!(buf.capacity(), 1024);
+    ///
+    /// // enough remaining capacity keeps the current buffer
+    /// let ptr = buf.as_ptr();
+    /// buf.reserve_exact(24);
+    /// assert_eq!(buf.as_ptr(), ptr);
+    /// ```
+    #[inline]
+    pub fn reserve_exact(&mut self, additional: usize) {
+        self.storage.reserve_exact(additional);
+    }
+
     /// Moves the contents into a newly allocated buffer with capacity `cap`.
     ///
     /// If `cap` is greater than [`len`](Self::len), a new buffer is allocated,

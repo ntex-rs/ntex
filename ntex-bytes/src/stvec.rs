@@ -312,10 +312,19 @@ impl StorageVec {
             return;
         }
 
-        self.reserve_inner(additional);
+        self.reserve_inner(additional, false);
     }
 
-    fn reserve_inner(&mut self, additional: usize) {
+    #[inline]
+    pub(crate) fn reserve_exact(&mut self, additional: usize) {
+        if additional <= self.remaining() {
+            return;
+        }
+
+        self.reserve_inner(additional, true);
+    }
+
+    fn reserve_inner(&mut self, additional: usize, exact: bool) {
         unsafe {
             let inner = self.as_inner();
             let len = (*inner).len as usize;
@@ -325,6 +334,11 @@ impl StorageVec {
             let new_cap = len
                 .checked_add(additional)
                 .expect("buffer capacity overflow");
+            let grow_cap = if exact {
+                new_cap
+            } else {
+                grown_capacity(len, new_cap)
+            };
 
             if (*inner).is_unique() {
                 let capacity = (*inner).capacity as usize;
@@ -348,14 +362,14 @@ impl StorageVec {
                 // allocator can often extend it in place. A pooled page keeps
                 // its size class, it goes back to the page cache on release.
                 if (*inner).size == BytePageSize::Unset {
-                    self.realloc(len, capacity, grown_capacity(len, new_cap));
+                    self.realloc(len, capacity, grow_cap);
                     return;
                 }
             }
             // Create a new storage
             *self = StorageVec(SharedVec::create(
                 BytePageSize::Unset,
-                grown_capacity(len, new_cap),
+                grow_cap,
                 self.as_ref(),
             ));
         }

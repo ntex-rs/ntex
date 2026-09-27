@@ -2,6 +2,9 @@
 
 ## [4.1.0] - Unreleased
 
+* Growing a read buffer beyond the high watermark compacts a unique buffer in place or
+  reallocates it, before it always allocated a new buffer and copied the data
+
 * A filter added over a sealed `Io` is stored typed, so `Io::filter()` and `Io::map_filter()`
   on it no longer panic with "Filter is sealed", e.g. a TLS handshake over `IoBoxed`
 

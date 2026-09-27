@@ -2,6 +2,9 @@
 
 ## [1.10.0] (unreleased)
 
+* Add `BytesMut::reserve_exact()`, it reclaims or reallocates like `reserve()` but grows
+  to exactly the requested capacity
+
 * Fix reversed result of `PartialOrd<Bytes>` for slices, arrays, `str`, `Vec<u8>`
   and `String`
 
