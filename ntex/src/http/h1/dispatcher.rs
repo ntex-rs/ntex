@@ -238,6 +238,15 @@ where
     }
 }
 
+impl<F, B, Err> Drop for DispatcherInner<F, B, Err> {
+    fn drop(&mut self) {
+        // a detached service call must not wait for the rest of the payload
+        if let Some((_, sender)) = self.payload.take() {
+            sender.set_error(PayloadError::Incomplete(None));
+        }
+    }
+}
+
 impl<F, B, Err> DispatcherInner<F, B, Err>
 where
     F: Filter,
@@ -512,9 +521,10 @@ where
         }
     }
 
+    /// Fails the request payload, the payload stream ends with `err`.
     fn set_payload_error(&mut self, err: PayloadError) {
-        if let Some(ref mut payload) = self.payload {
-            payload.1.set_error(err);
+        if let Some((_, sender)) = self.payload.take() {
+            sender.set_error(err);
         }
     }
 
@@ -571,7 +581,12 @@ where
                         }
                         Err(RecvError::WriteBackpressure) => match self.poll_flush_timed(cx) {
                             Poll::Ready(Ok(())) => continue,
-                            Poll::Ready(Err(err)) => PayloadFailure::PeerGone(Some(err)),
+                            Poll::Ready(Err(err)) => {
+                                self.set_payload_error(PayloadError::Incomplete(Some(
+                                    clone_io_error(&err),
+                                )));
+                                PayloadFailure::PeerGone(Some(err))
+                            }
                             Poll::Pending => {
                                 self.timers.pause_payload(&self.io);
                                 break;
@@ -1012,6 +1027,54 @@ mod tests {
         h1.inner.timers.active = Timer::PayloadPaused;
         h1.inner.timers.progress.max_timeout = Seconds::ZERO;
         (h1, rx)
+    }
+
+    /// A detached payload reader is woken with an error when the dispatcher
+    /// is dropped before the payload is complete.
+    #[crate::rt_test]
+    async fn test_dropped_dispatcher_fails_detached_payload() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let result = Rc::new(RefCell::new(None));
+        let result2 = result.clone();
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, SharedCfg::new("SVC")),
+            Pipeline::new(
+                (),
+                fn_service(move |mut req: Request| {
+                    let result = result2.clone();
+                    async move {
+                        let mut pl = req.take_payload();
+                        crate::rt::spawn(async move {
+                            let mut last = None;
+                            while let Some(item) = pl.recv().await {
+                                last = Some(item);
+                            }
+                            *result.borrow_mut() = Some(last);
+                        });
+                        Ok::<_, io::Error>(Response::Ok().build())
+                    }
+                }),
+            ),
+            Pipeline::new((), DefaultControlService),
+            DispatcherConfig::default(),
+        );
+
+        client.write("POST / HTTP/1.1\r\ncontent-length: 10\r\n\r\npart");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        sleep(Millis(50)).await;
+        assert!(result.borrow().is_none());
+
+        drop(h1);
+        sleep(Millis(50)).await;
+        let res = result.borrow_mut().take();
+        assert!(
+            matches!(res, Some(Some(Err(PayloadError::Incomplete(None))))),
+            "{res:?}"
+        );
     }
 
     /// Resuming without budget left decodes the buffered payload first.

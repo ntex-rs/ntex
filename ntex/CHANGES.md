@@ -21,6 +21,10 @@
   headers, and HTTP/1.1 requests without `Host`, use `HttpServiceConfig::set_host_validation()`
   to disable
 
+* HTTP/1 fails an unfinished request payload with `PayloadError::Incomplete` when the
+  dispatcher stops, before a detached payload reader could wait forever or see a truncated
+  payload as complete
+
 * HTTP/1 ignores `Expect` and `Upgrade` in HTTP/1.0 requests, no `100 Continue` is
   sent to HTTP/1.0 clients
 
