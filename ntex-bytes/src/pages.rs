@@ -480,7 +480,7 @@ impl BufMut for BytePages {
             self.current = Some(StorageVec::sized(self.page_size()));
         }
         unsafe {
-            // This will never panic as `len` can never become invalid
+            // `current` is set, a new page is allocated above if there is no spare capacity
             let st = self.current.as_ref().unwrap();
             let ptr = &mut st.as_ptr();
             UninitSlice::from_raw_parts_mut(ptr.add(st.len()), st.remaining())
