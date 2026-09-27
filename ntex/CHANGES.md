@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+* HTTP/1 ignores `Expect` and `Upgrade` in HTTP/1.0 requests, no `100 Continue` is
+  sent to HTTP/1.0 clients
+
+* HTTP/1 closes the connection after a non-persistent response, pipelined requests
+  that follow it are not processed
+
+* HTTP/1 limits chunk extensions to 16KiB per payload, an endless chunk-size line
+  was buffered without limit
+
 * HTTP/2 server resets the stream with `NO_ERROR` if the response is complete and the request
   payload is dropped unread, or is dropped later and more request data arrives, the stream
   does not keep the stream slot
