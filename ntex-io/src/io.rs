@@ -934,10 +934,15 @@ impl<F> Io<F> {
             // poll would let a peer that keeps sending grow the buffer without
             // bound, and would hide the blocked shutdown detection in
             // `poll_filters_shutdown`, which tests for exactly that flag.
-            st.flags.unset_read_paused();
-
-            st.wake_read_task();
-            st.wake_write_task();
+            //
+            // The tasks are woken only when this changes their state:
+            // `start_shutdown` wakes both. Waking them on every poll would let
+            // a caller that is polled spuriously keep the runtime busy with
+            // wakeups; compio then never polls for I/O completions.
+            if st.flags.is_read_paused() {
+                st.flags.unset_read_paused();
+                st.wake_read_task();
+            }
             st.dispatch_task.register(cx.waker());
             Poll::Pending
         }
@@ -2706,6 +2711,58 @@ mod tests {
         sleep(Millis(50)).await;
         assert!(!io.st().flags.is_closed());
         assert_eq!(client.remote_buffer(|buf| buf.len()), 5);
+    }
+
+    /// Counts the wakeups delivered through the waker it provides.
+    #[derive(Default)]
+    struct WakeCounter(std::sync::atomic::AtomicUsize);
+
+    impl std::task::Wake for WakeCounter {
+        fn wake(self: std::sync::Arc<Self>) {
+            self.wake_by_ref();
+        }
+
+        fn wake_by_ref(self: &std::sync::Arc<Self>) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    impl WakeCounter {
+        fn count(&self) -> usize {
+            self.0.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    #[ntex::test]
+    async fn repeated_shutdown_polls_do_not_wake_tasks() {
+        use std::{sync::Arc, task::Waker};
+
+        let (_client, server) = IoTest::create();
+        let io = Io::new(server, SharedCfg::new("SRV")).add_filter(StuckShutdown(Cell::new(false)));
+
+        let waker = Waker::noop();
+        let mut cx = Context::from_waker(waker);
+        assert!(io.poll_shutdown(&mut cx).is_pending());
+        assert!(io.st().flags.is_stopping_filters());
+
+        // Polling again without any state change must not wake the transport
+        // tasks. A runtime that polls the caller spuriously, as compio does
+        // for `block_on`, would otherwise be kept busy with wakeups.
+        let rd = Arc::new(WakeCounter::default());
+        let wr = Arc::new(WakeCounter::default());
+        io.st().read_task.register(&Waker::from(rd.clone()));
+        io.st().write_task.register(&Waker::from(wr.clone()));
+        for _ in 0..3 {
+            assert!(io.poll_shutdown(&mut cx).is_pending());
+        }
+        assert_eq!(rd.count(), 0);
+        assert_eq!(wr.count(), 0);
+
+        // Paused reads are resumed, the filter may need the input.
+        io.st().flags.set_read_paused();
+        assert!(io.poll_shutdown(&mut cx).is_pending());
+        assert!(!io.st().flags.is_read_paused());
+        assert_eq!(rd.count(), 1);
     }
 
     #[ntex::test]

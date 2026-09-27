@@ -2,6 +2,9 @@
 
 ## [4.0.0] - unreleased
 
+* compio: `spawn()` drops the future while the runtime shuts down, a task that
+  spawned from its destructor corrupted the task queue being cleared
+
 * Fix use-after-free in `with_item()` when the callback replaces or removes
   the stored value
 
@@ -16,6 +19,8 @@
   clone of the item to `f`
 
 * Fix process abort when arbiter storage is accessed during thread-local destruction
+
+* Update compio to 0.19
 
 ## [3.17.3] - 2026-09-18
 
