@@ -9,7 +9,9 @@ use slab::Slab;
 
 use crate::IoRef;
 
-const CAP: usize = 64;
+const CAP: usize = 32;
+/// Timer sets with a larger capacity are dropped instead of cached.
+const MAX_CACHED_SET_CAP: usize = 512;
 
 thread_local! {
     static MANAGER: RefCell<Option<IoManager>> = const { RefCell::new(None) };
@@ -110,10 +112,17 @@ impl TimerStorage {
             if items.is_empty() {
                 // the timer stops once no timers are left
                 let items = self.notifications.remove(&hnd.0).unwrap();
-                if self.cache.len() < CAP {
-                    self.cache.push_back(items);
-                }
+                self.recycle(items);
             }
+        }
+    }
+
+    /// Returns an empty timer set to the cache, a set grown by a burst of
+    /// timers is dropped so its capacity is not retained.
+    fn recycle(&mut self, items: HashSet<Id>) {
+        debug_assert!(items.is_empty());
+        if self.cache.len() < CAP && items.capacity() <= MAX_CACHED_SET_CAP {
+            self.cache.push_back(items);
         }
     }
 
@@ -191,9 +200,7 @@ impl TimerStorage {
                                 io.notify_timeout();
                             }
                         }
-                        if mgr.timers.cache.len() < CAP {
-                            mgr.timers.cache.push_back(items);
-                        }
+                        mgr.timers.recycle(items);
                     }
 
                     if mgr.timers.notifications.is_empty() {
@@ -379,6 +386,39 @@ mod tests {
         let st = std::future::poll_fn(|cx| io.poll_status_update(cx)).await;
         assert!(matches!(st, crate::IoStatusUpdate::Timeout));
         start.elapsed()
+    }
+
+    #[test]
+    fn large_timer_sets_are_not_cached() {
+        let mut timers = TimerStorage {
+            running: false,
+            base: Instant::now(),
+            current: 0,
+            cache: VecDeque::new(),
+            notifications: BTreeMap::new(),
+        };
+
+        let mut small = HashSet::default();
+        small.insert(Id(NonZeroUsize::new(1)));
+        small.clear();
+        timers.recycle(small);
+        assert_eq!(timers.cache.len(), 1);
+
+        // a set grown by a burst of timers is dropped
+        let mut large = HashSet::default();
+        for i in 1..=10_000 {
+            large.insert(Id(NonZeroUsize::new(i)));
+        }
+        large.clear();
+        timers.recycle(large);
+        assert_eq!(timers.cache.len(), 1);
+        assert!(timers.cache[0].capacity() <= MAX_CACHED_SET_CAP);
+
+        // the cache holds at most `CAP` sets
+        for _ in 0..2 * CAP {
+            timers.recycle(HashSet::default());
+        }
+        assert_eq!(timers.cache.len(), CAP);
     }
 
     /// A timer started while no timers are pending expires after its

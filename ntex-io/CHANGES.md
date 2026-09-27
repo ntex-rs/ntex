@@ -2,6 +2,9 @@
 
 ## [4.1.0] - Unreleased
 
+* The I/O timer caches only timer sets for up to 512 streams, a set grown by a burst of timers
+  is dropped instead of retaining its capacity
+
 * The I/O timer ticker resets one sleep timer for every tick instead of creating a new one
 
 * Growing a read buffer beyond the high watermark compacts a unique buffer in place or
