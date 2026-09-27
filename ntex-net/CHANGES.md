@@ -2,6 +2,10 @@
 
 ## [4.1.0] - Unreleased
 
+* IOCP: refuse sockets from non-IFS layered service providers (LSPs), which can
+  post completions for synchronously completed operations and corrupt reused
+  operation slots
+
 * IOCP: close the sockets of connects still pending when the runtime stops, and
   keep their `OVERLAPPED` allocated since the kernel still completes into it
 

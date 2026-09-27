@@ -1,5 +1,5 @@
 use std::os::windows::io::{AsRawHandle, AsRawSocket, FromRawHandle, OwnedHandle, RawHandle};
-use std::{cell::Cell, fmt, io, net, ptr, sync::Arc};
+use std::{cell::Cell, fmt, io, mem, net, ptr, sync::Arc};
 
 use windows_sys::Win32::{
     Foundation::{
@@ -7,6 +7,7 @@ use windows_sys::Win32::{
         ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, INVALID_HANDLE_VALUE, NTSTATUS,
         RtlNtStatusToDosError, WAIT_TIMEOUT,
     },
+    Networking::WinSock,
     Storage::FileSystem::SetFileCompletionNotificationModes,
     System::{
         IO::{
@@ -251,6 +252,9 @@ impl ReactorInner {
     }
 
     fn attach(&self, h: RawHandle, skip_iocp_on_success: bool) -> io::Result<()> {
+        if skip_iocp_on_success {
+            check_ifs_socket(h)?;
+        }
         syscall!(
             BOOL,
             CreateIoCompletionPort(h, self.port.as_raw_handle(), 0, 0) as isize
@@ -264,6 +268,36 @@ impl ReactorInner {
                 )
             )?;
         }
+        Ok(())
+    }
+}
+
+/// Fails for sockets whose provider does not return IFS handles.
+///
+/// A non-IFS layered service provider (LSP) can post a completion packet for
+/// an operation that completed synchronously, even with
+/// `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` set. The reactor already handles
+/// such operations inline, so the extra packet would complete the slot a
+/// second time, possibly after it was reused by another operation.
+fn check_ifs_socket(h: RawHandle) -> io::Result<()> {
+    let mut info: WinSock::WSAPROTOCOL_INFOW = unsafe { mem::zeroed() };
+    let mut len = i32::try_from(mem::size_of_val(&info)).unwrap();
+    syscall!(
+        SOCKET,
+        WinSock::getsockopt(
+            h as _,
+            WinSock::SOL_SOCKET,
+            WinSock::SO_PROTOCOL_INFOW,
+            (&raw mut info).cast(),
+            &raw mut len,
+        )
+    )?;
+    if info.dwServiceFlags1 & WinSock::XP1_IFS_HANDLES == 0 {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Socket provider does not support IFS handles, non-IFS LSPs are not supported",
+        ))
+    } else {
         Ok(())
     }
 }
@@ -317,4 +351,29 @@ impl Handler for Dummy {
     fn completed(&mut self, _: u32, _: io::Result<usize>, _: *mut Overlapped) {}
 
     fn cleanup(&mut self) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Sockets of the base Winsock providers return IFS handles and can be
+    /// attached with `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`.
+    #[test]
+    fn attach_accepts_ifs_socket() {
+        let reactor = ReactorInner::new().unwrap();
+        for ty in [Type::STREAM, Type::DGRAM] {
+            let sock = Socket::new(socket2::Domain::IPV4, ty, None).unwrap();
+            check_ifs_socket(sock.as_raw_socket() as _).unwrap();
+            reactor.attach(sock.as_raw_socket() as _, true).unwrap();
+        }
+    }
+
+    /// Handles that are not sockets are rejected rather than attached
+    /// without the check.
+    #[test]
+    fn check_ifs_rejects_non_socket() {
+        let file = std::fs::File::open(std::env::current_exe().unwrap()).unwrap();
+        assert!(check_ifs_socket(file.as_raw_handle()).is_err());
+    }
 }
