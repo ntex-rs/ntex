@@ -66,7 +66,7 @@ fn test_bytes_mut_buf() {
     assert_eq!(bytes::buf::Buf::remaining(&buf), 5);
     assert_eq!(bytes::buf::Buf::chunk(&buf), b"hello");
 
-    assert_eq!(bytes::buf::BufMut::remaining_mut(&mut buf), 25);
+    assert_eq!(bytes::buf::BufMut::remaining_mut(&mut buf), usize::MAX - 5);
     bytes::buf::Buf::advance(&mut buf, 2);
 
     assert_eq!(bytes::buf::Buf::remaining(&buf), 3);
@@ -114,7 +114,7 @@ fn test_bytes_vec_buf() {
     assert_eq!(bytes::buf::Buf::remaining(&buf), 5);
     assert_eq!(bytes::buf::Buf::chunk(&buf), b"hello");
 
-    assert_eq!(bytes::buf::BufMut::remaining_mut(&mut buf), 0);
+    assert_eq!(bytes::buf::BufMut::remaining_mut(&mut buf), usize::MAX - 5);
     bytes::buf::Buf::advance(&mut buf, 2);
 
     assert_eq!(bytes::buf::Buf::remaining(&buf), 3);
@@ -135,6 +135,48 @@ fn test_bytes_vec_buf() {
         bytes::buf::BufMut::advance_mut(&mut buf, 1);
     }
     assert_eq!(&bytes::buf::Buf::chunk(&buf), b"12345");
+}
+
+/// Encoders written for the `bytes` crate, such as prost, check
+/// `remaining_mut()` up front and expect a growable buffer.
+#[test]
+fn test_bytes_mut_buf_grows() {
+    fn encode(buf: &mut impl bytes::buf::BufMut, data: &[u8]) -> Result<(), ()> {
+        if buf.remaining_mut() < data.len() {
+            return Err(());
+        }
+        buf.put_slice(data);
+        Ok(())
+    }
+
+    let mut buf = BytesMut::from(b"x");
+    encode(&mut buf, &[1; 100]).unwrap();
+    assert_eq!(&buf[1..], &[1; 100][..]);
+
+    // a full buffer still hands out room to write into
+    let mut buf = BytesMut::from(b"hello");
+    assert!(bytes::buf::BufMut::chunk_mut(&mut buf).len() > 0);
+    let mut w = bytes::buf::BufMut::writer(buf);
+    std::io::Write::write_all(&mut w, b" world").unwrap();
+    assert_eq!(w.into_inner(), b"hello world"[..]);
+
+    let mut buf = BytesMut::from(b"a");
+    bytes::buf::BufMut::put(&mut buf, &[2u8; 100][..]);
+    bytes::buf::BufMut::put(&mut buf, bytes::Buf::chain(&b"bc"[..], &b"de"[..]));
+    bytes::buf::BufMut::put_bytes(&mut buf, 3, 50);
+    assert_eq!(buf.len(), 1 + 100 + 4 + 50);
+    assert_eq!(&buf[..1], b"a");
+    assert_eq!(&buf[1..101], &[2; 100][..]);
+    assert_eq!(&buf[101..105], b"bcde");
+    assert_eq!(&buf[105..], &[3; 50][..]);
+}
+
+#[test]
+#[should_panic(expected = "cannot advance past `remaining_mut`")]
+fn test_bytes_mut_buf_advance_past_capacity() {
+    let mut buf = BytesMut::with_capacity(8);
+    let cap = buf.capacity();
+    unsafe { bytes::buf::BufMut::advance_mut(&mut buf, cap + 1) };
 }
 
 #[test]

@@ -2,6 +2,11 @@
 
 ## [1.10.0] (unreleased)
 
+* `BufMut` for `BytePages` treats the pages as growable: `remaining_mut()`
+  reports `usize::MAX - len`, `chunk_mut()` starts a new page when the current
+  one is full, `put()` copies across pages instead of panicking, and
+  `advance_mut(0)` no longer panics without a current page
+
 * `BytesMut` grows to at least twice its length when it reallocates, appending
   in small steps no longer reallocates and copies the buffer on every write
 

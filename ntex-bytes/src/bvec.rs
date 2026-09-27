@@ -628,19 +628,30 @@ impl bytes::buf::Buf for BytesMut {
     }
 }
 
+/// Interop with the `bytes` crate: like `bytes::BytesMut`, the buffer grows on
+/// demand, so `remaining_mut()` reports `usize::MAX - len` and `chunk_mut()`
+/// is never empty. The native [`BufMut`] impl reports spare capacity instead.
 unsafe impl bytes::buf::BufMut for BytesMut {
     #[inline]
     fn remaining_mut(&self) -> usize {
-        BufMut::remaining_mut(self)
+        usize::MAX - self.len()
     }
 
     #[inline]
     unsafe fn advance_mut(&mut self, cnt: usize) {
+        let remaining = BufMut::remaining_mut(self);
+        assert!(
+            cnt <= remaining,
+            "cannot advance past `remaining_mut`: {cnt:?} <= {remaining:?}"
+        );
         BufMut::advance_mut(self, cnt);
     }
 
     #[inline]
     fn chunk_mut(&mut self) -> &mut bytes::buf::UninitSlice {
+        if BufMut::remaining_mut(self) == 0 {
+            self.reserve(64);
+        }
         unsafe {
             // This will never panic as `len` can never become invalid
             let ptr = self.storage.as_ptr();
@@ -652,8 +663,31 @@ unsafe impl bytes::buf::BufMut for BytesMut {
     }
 
     #[inline]
+    fn put<T: bytes::buf::Buf>(&mut self, mut src: T)
+    where
+        Self: Sized,
+    {
+        self.reserve(src.remaining());
+        while src.has_remaining() {
+            let chunk = src.chunk();
+            let len = chunk.len();
+            BufMut::put_slice(self, chunk);
+            src.advance(len);
+        }
+    }
+
+    #[inline]
     fn put_slice(&mut self, src: &[u8]) {
         BufMut::put_slice(self, src);
+    }
+
+    #[inline]
+    fn put_bytes(&mut self, val: u8, cnt: usize) {
+        self.reserve(cnt);
+        unsafe {
+            ptr::write_bytes(self.storage.as_ptr().add(self.len()), val, cnt);
+            BufMut::advance_mut(self, cnt);
+        }
     }
 
     #[inline]

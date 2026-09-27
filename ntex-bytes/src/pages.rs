@@ -1,7 +1,7 @@
 #![allow(clippy::missing_panics_doc, clippy::box_collection)]
 use std::{borrow::Borrow, cell::Cell, cmp, collections::VecDeque, fmt, io, mem, ops, ptr};
 
-use crate::{BufMut, BytePageSize, ByteString, Bytes, BytesMut};
+use crate::{Buf, BufMut, BytePageSize, ByteString, Bytes, BytesMut};
 use crate::{buf::UninitSlice, stvec::StorageVec};
 
 /// A growable sequence of byte pages.
@@ -139,7 +139,7 @@ impl BytePages {
                         self.push_back(page);
                     }
                 }
-            } else if p.len() <= self.remaining_mut() {
+            } else if p.len() <= self.spare() {
                 self.put_slice(p.as_ref());
             } else {
                 // push current storage to stack
@@ -172,6 +172,14 @@ impl BytePages {
         self.current
             .as_ref()
             .map(StorageVec::len)
+            .unwrap_or_default()
+    }
+
+    // spare capacity of the current page
+    fn spare(&self) -> usize {
+        self.current
+            .as_ref()
+            .map(StorageVec::remaining)
             .unwrap_or_default()
     }
 
@@ -424,32 +432,54 @@ impl Default for BytePages {
     }
 }
 
+/// Pages are allocated on demand, so `remaining_mut()` reports
+/// `usize::MAX - len` and `chunk_mut()` is never empty. The chunk covers the
+/// spare capacity of the current page only.
 impl BufMut for BytePages {
     #[inline]
     fn remaining_mut(&self) -> usize {
-        self.current
-            .as_ref()
-            .map(StorageVec::remaining)
-            .unwrap_or_default()
+        usize::MAX - self.len()
     }
 
     #[inline]
     unsafe fn advance_mut(&mut self, cnt: usize) {
-        // This call will panic if `cnt` is too big
+        if cnt == 0 {
+            return;
+        }
+        let spare = self.spare();
+        assert!(
+            cnt <= spare,
+            "cannot advance past the current page: {cnt:?} <= {spare:?}"
+        );
         let st = self.current.as_mut().unwrap();
         st.set_len(st.len() + cnt);
     }
 
     #[inline]
     fn chunk_mut(&mut self) -> &mut UninitSlice {
-        unsafe {
-            if self.current.is_none() {
-                self.current = Some(StorageVec::sized(self.page_size()));
+        if self.spare() == 0 {
+            if let Some(st) = self.current.take() {
+                self.push_back(BytePage::from(st));
             }
+            self.current = Some(StorageVec::sized(self.page_size()));
+        }
+        unsafe {
             // This will never panic as `len` can never become invalid
             let st = self.current.as_ref().unwrap();
             let ptr = &mut st.as_ptr();
-            UninitSlice::from_raw_parts_mut(ptr.add(st.len()), self.remaining_mut())
+            UninitSlice::from_raw_parts_mut(ptr.add(st.len()), st.remaining())
+        }
+    }
+
+    fn put<T: Buf>(&mut self, mut src: T)
+    where
+        Self: Sized,
+    {
+        while src.has_remaining() {
+            let chunk = src.chunk();
+            let len = chunk.len();
+            self.put_slice(chunk);
+            src.advance(len);
         }
     }
 
@@ -1108,13 +1138,13 @@ mod tests {
         let mut pages = BytePages::new(BytePageSize::Size8);
         pages.put_slice(&[1; 64]);
         let ptr = unsafe { pages.current.as_ref().unwrap().as_ptr() };
-        let remaining = pages.remaining_mut();
+        let remaining = pages.spare();
 
         let mut head = pages.split_to(40);
         assert_eq!(head.len(), 40);
         assert_eq!(pages.len(), 24);
         assert_eq!(pages.num_pages(), 1);
-        assert_eq!(pages.remaining_mut(), remaining);
+        assert_eq!(pages.spare(), remaining);
 
         // new data goes into the same page
         pages.put_slice(&[2; 16]);
@@ -1134,7 +1164,7 @@ mod tests {
         let mut to = BytePages::new(BytePageSize::Size8);
         pages.split_into(2, &mut to);
         assert_eq!(&to.freeze()[..], &[1; 2][..]);
-        assert_eq!(pages.remaining_mut(), remaining);
+        assert_eq!(pages.spare(), remaining);
         assert_eq!(pages.len(), 62);
 
         // the whole current page moves with its spare capacity
@@ -1144,7 +1174,7 @@ mod tests {
         let to = pages.split_to(64);
         assert!(pages.is_empty());
         assert_eq!(pages.num_pages(), 0);
-        assert_eq!(to.remaining_mut(), remaining);
+        assert_eq!(to.spare(), remaining);
         assert_eq!(unsafe { to.current.as_ref().unwrap().as_ptr() }, ptr);
 
         // an empty current page stays in place
@@ -1152,7 +1182,51 @@ mod tests {
         let _ = pages.chunk_mut();
         let head = pages.split_to(10);
         assert!(head.is_empty());
-        assert_eq!(pages.remaining_mut(), remaining + 64);
+        assert_eq!(pages.spare(), remaining + 64);
+    }
+
+    #[test]
+    fn pages_buf_mut_grows() {
+        let mut pages = BytePages::new(BytePageSize::Size8);
+        assert!(pages.has_remaining_mut());
+        assert_eq!(pages.remaining_mut(), usize::MAX);
+        unsafe { pages.advance_mut(0) };
+
+        // filling the current page through `chunk_mut` starts a new one
+        let n = pages.chunk_mut().len();
+        unsafe {
+            ptr::write_bytes(pages.chunk_mut().as_mut_ptr(), 1, n);
+            pages.advance_mut(n);
+        }
+        assert!(pages.chunk_mut().len() > 0);
+        assert_eq!(pages.num_pages(), 2);
+        unsafe {
+            *pages.chunk_mut().as_mut_ptr() = 2;
+            pages.advance_mut(1);
+        }
+        assert_eq!(pages.len(), n + 1);
+        assert_eq!(pages.remaining_mut(), usize::MAX - n - 1);
+
+        // `put` and the writer are not limited to the current page
+        let mut pages = BytePages::new(BytePageSize::Size8);
+        pages.put(&[3u8; 200][..]);
+        pages.put(Bytes::from_static(b"abcd"));
+        #[allow(deprecated)]
+        let mut w = pages.writer();
+        io::Write::write_all(&mut w, &[4; 100]).unwrap();
+        let mut pages = w.into_inner();
+        let mut expected = vec![3; 200];
+        expected.extend_from_slice(b"abcd");
+        expected.extend_from_slice(&[4; 100]);
+        assert_eq!(&pages.freeze()[..], &expected[..]);
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot advance past the current page")]
+    fn pages_advance_past_current_page() {
+        let mut pages = BytePages::new(BytePageSize::Size8);
+        let n = pages.chunk_mut().len();
+        unsafe { pages.advance_mut(n + 1) };
     }
 
     #[test]
