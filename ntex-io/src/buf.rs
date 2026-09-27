@@ -211,6 +211,19 @@ impl Stack {
 
         res
     }
+
+    /// Releases the data of every buffer once nothing can consume it anymore.
+    ///
+    /// Read buffers go back to the cache and write pages are freed, the
+    /// buffers themselves stay usable.
+    pub(crate) fn release(&self, cfg: &IoConfig) {
+        for b in &self.buffers {
+            if let Some(buf) = b.read.take() {
+                cfg.read_buf().release(buf);
+            }
+            b.with_write(BytePages::clear);
+        }
+    }
 }
 
 impl Buffer {

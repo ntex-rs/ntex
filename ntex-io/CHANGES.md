@@ -12,6 +12,9 @@
 
 * `TimerHandle::remains()` rounds the remaining time up
 
+* Release buffered input and output when `Io` is dropped, instead of keeping it
+  until the transport and every `IoRef` let go of the connection state
+
 * `BufConfig::resize()` and `resize_min()` move buffered data into a cached
   buffer of capacity `high` when it fits, instead of allocating a larger buffer
   that could not be cached again

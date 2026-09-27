@@ -1072,6 +1072,11 @@ impl<F> Drop for Io<F> {
             }
             st.filter.drop_filter::<F>();
 
+            // Nothing can consume buffered input or deliver buffered output
+            // anymore, but the state may outlive the `Io` for a while, held by
+            // the transport while it closes or by other `IoRef` handles.
+            st.buffer.release(self.io_ref().cfg());
+
             // Callbacks may hold an `IoRef` to this connection, which would keep
             // the state alive through a reference cycle. They are dropped outside
             // the extensions borrow, because their destructor may use the `IoRef`.
@@ -1537,6 +1542,34 @@ mod tests {
             lazy(|cx| ctx.poll_write_ready(cx)).await,
             Poll::Ready(Readiness::Terminate)
         );
+    }
+
+    #[ntex::test]
+    async fn drop_releases_buffers() {
+        // The state can outlive the `Io`, held by the transport while it closes
+        // or by other handles, but nothing can use its buffers anymore.
+        let io = Io::new(IoTest::create().0, SharedCfg::new("SRV"));
+        let ioref = io.get_ref();
+        let ctx = IoContext::new(io.get_ref());
+        ctx.release_read_buf(BytesMut::copy_from_slice(b"unread"), Poll::Ready(Ok(6)));
+        io.encode_slice(b"not delivered").unwrap();
+        assert_eq!(ioref.0.buffer.read_dst_size(), 6);
+        assert_ne!(ioref.0.buffer.write_buf_size(), 0);
+
+        drop(io);
+        assert_eq!(ioref.0.buffer.read_dst_size(), 0);
+        assert!(ioref.0.buffer.get_read_buf().is_none());
+        assert_eq!(ioref.0.buffer.write_buf_size(), 0);
+
+        // input of a read that was in flight is discarded
+        ctx.release_read_buf(BytesMut::copy_from_slice(b"late"), Poll::Ready(Ok(4)));
+        assert!(ioref.0.buffer.get_read_buf().is_none());
+        ctx.with_read_buf(|buf| {
+            buf.extend_from_slice(b"late");
+            Poll::Ready(Ok(4))
+        });
+        assert!(ioref.0.buffer.get_read_buf().is_none());
+        assert_eq!(ioref.0.buffer.read_dst_size(), 0);
     }
 
     #[ntex::test]

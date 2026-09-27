@@ -204,6 +204,11 @@ impl IoContext {
             st.buffer.set_read_buf(buf, self.0.cfg());
             stopping_read_status(st, &status)
         } else {
+            let mut buf = buf;
+            if st.is_io_dropped() {
+                // the `Io` is gone, nothing can consume this input anymore
+                buf.clear();
+            }
             // release read buffer
             st.buffer.set_read_buf(buf, self.0.cfg());
 
@@ -235,12 +240,14 @@ impl IoContext {
         let st = self.st();
         let orig = st.buffer.read_dst_size();
         let stopping = st.flags.is_stopping();
+        let discard = stopping || st.is_io_dropped();
 
         let status = st.buffer.with_read_src(&self.0, |buf| {
             self.0.resize_read_buf(buf);
             let status = f(buf);
-            if stopping {
-                // the filters are done, nothing can consume this input anymore
+            if discard {
+                // the filters are done or the `Io` is gone, nothing can
+                // consume this input anymore
                 buf.clear();
             }
             status
