@@ -350,7 +350,7 @@ async fn idle_disconnect_uring() {
     });
 
     let cfg = SharedCfg::new("NEON-URING")
-        .add(IoConfig::new().set_read_buf(24, 12, 16))
+        .add(IoConfig::new().set_read_buf(24, 12))
         .build();
 
     let msg = Connect::new(server.addr());

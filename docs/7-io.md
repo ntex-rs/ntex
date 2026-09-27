@@ -233,7 +233,7 @@ let cfg = SharedCfg::new("my-protocol")
             .set_keepalive_timeout(Seconds(30))
             .set_shutdown_timeout(Seconds(2))
             .set_frame_read_rate(Seconds(2), Seconds(10), 1_024)
-            .set_read_buf(32 * 1024, 1024, 16)
+            .set_read_buf(32 * 1024, 1024)
             .set_write_buf(32 * 1024)
             .set_write_buf_threshold(8 * 1024),
     )
@@ -264,10 +264,9 @@ These settings are used by different parts of the stack:
   counting both buffered output and output a transport has taken ownership of
   but not yet written to the peer.
 - The read low-water mark controls how much free capacity is reserved before
-  another socket read. The cache-size argument limits the number of eligible
-  read buffers retained in the per-thread cache. Neither applies to output,
-  which is held in [`BytePages`] rather than cached read buffers, so the write
-  setting takes only a high-water mark.
+  another socket read. It does not apply to output, which is held in
+  [`BytePages`] rather than cached read buffers, so the write setting takes
+  only a high-water mark.
 - The write page size controls newly allocated [`BytePages`], while the write
   threshold controls when supported transports attempt an early direct write.
 
@@ -402,7 +401,10 @@ useful when a decoded message must retain part of the input after the decoder
 continues processing later data.
 
 ntex reuses eligible read buffers through a per-thread cache and retains spare
-capacity where possible. Before another socket read, the adapter obtains a
+capacity where possible. The cache is shared by all configurations and holds at
+most 1 MiB of buffer capacity per thread by default, the least recently
+released buffers are freed first; `ntex::io::cfg::set_read_buf_cache_limit()`
+changes the limit. Before another socket read, the adapter obtains a
 buffer from `IoContext`. ntex ensures that a reused buffer has at least the
 configured low-water mark available. If the retained capacity is
 insufficient, the buffer grows and may allocate additional storage.

@@ -1326,7 +1326,7 @@ mod tests {
     async fn read() {
         let io = Io::new(
             IoTest::create().0,
-            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(8, 4, 16)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(8, 4)),
         );
         assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
         assert!(io.st().dispatch_task.is_set());
@@ -1594,7 +1594,7 @@ mod tests {
     async fn read_notify() {
         let io = Io::new(
             IoTest::create().0,
-            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(8, 4, 16)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(8, 4)),
         );
         assert!(!io.st().flags.is_read_notify());
         assert!(lazy(|cx| io.poll_read_notify(cx)).await.is_pending());
@@ -1713,7 +1713,7 @@ mod tests {
 
         let io = Io::new(
             server,
-            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(64, 32, 12)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(64, 32)),
         );
         assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
 
@@ -1740,7 +1740,7 @@ mod tests {
 
         let io = Io::new(
             server,
-            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(64, 32, 12)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(64, 32)),
         );
         assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
 
@@ -1772,7 +1772,7 @@ mod tests {
 
         let io = Io::new(
             server,
-            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(64, 32, 12)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(64, 32)),
         );
         assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
 
@@ -2247,7 +2247,7 @@ mod tests {
             server,
             SharedCfg::new("SRV").add(
                 IoConfig::default()
-                    .set_read_buf(8, 4, 16)
+                    .set_read_buf(8, 4)
                     .set_shutdown_timeout(ntex_util::time::Seconds(2)),
             ),
         );
@@ -2806,7 +2806,7 @@ mod tests {
             server,
             SharedCfg::new("SRV").add(
                 IoConfig::default()
-                    .set_read_buf(1024, 256, 8)
+                    .set_read_buf(1024, 256)
                     .set_shutdown_timeout(ntex_util::time::Seconds(30)),
             ),
         )
@@ -2851,7 +2851,7 @@ mod tests {
             server,
             SharedCfg::new("SRV").add(
                 IoConfig::default()
-                    .set_read_buf(1024, 256, 8)
+                    .set_read_buf(1024, 256)
                     .set_shutdown_timeout(ntex_util::time::Seconds(30)),
             ),
         )
@@ -3073,7 +3073,7 @@ mod tests {
             server,
             SharedCfg::new("SRV").add(
                 IoConfig::default()
-                    .set_read_buf(8, 4, 16)
+                    .set_read_buf(8, 4)
                     .set_shutdown_timeout(ntex_util::time::Seconds(10)),
             ),
         )
@@ -3136,7 +3136,7 @@ mod tests {
             server,
             SharedCfg::new("SRV").add(
                 IoConfig::default()
-                    .set_read_buf(8, 4, 16)
+                    .set_read_buf(8, 4)
                     .set_shutdown_timeout(ntex_util::time::Seconds(1)),
             ),
         )
@@ -3184,7 +3184,7 @@ mod tests {
             server,
             SharedCfg::new("SRV").add(
                 IoConfig::default()
-                    .set_read_buf(8, 4, 16)
+                    .set_read_buf(8, 4)
                     .set_shutdown_timeout(ntex_util::time::Seconds(10)),
             ),
         )

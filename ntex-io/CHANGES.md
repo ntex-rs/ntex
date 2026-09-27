@@ -12,6 +12,13 @@
 
 * `TimerHandle::remains()` rounds the remaining time up
 
+* Read buffers are cached in one per-thread cache shared by all configurations
+  and bounded by the capacity it holds, 1 MiB by default, see
+  `cfg::set_read_buf_cache_limit()`. The least recently released buffers are
+  freed first
+
+* Breaking: `IoConfig::set_read_buf()` no longer takes a cache size
+
 * Size the read buffer through `BufConfig::resize_min()` when a read completes
   while earlier input is still unconsumed, so the merged buffer stays cacheable
 

@@ -19,7 +19,7 @@ const LOW: usize = 512;
 
 fn cfg(high: usize, low: usize) -> SharedCfg {
     SharedCfg::new("TEST")
-        .add(IoConfig::new().set_read_buf(high, low, 16))
+        .add(IoConfig::new().set_read_buf(high, low))
         .build()
 }
 
