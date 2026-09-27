@@ -74,17 +74,17 @@ pub struct BufConfig {
     /// Buffered byte count at which backpressure is enabled.
     ///
     /// For [`IoConfig::read_buf`] this is also the capacity of a freshly
-    /// allocated buffer, the growth increment used by
-    /// [`resize_min`](Self::resize_min), and the free capacity guaranteed by
-    /// [`resize`](Self::resize). For [`IoConfig::write_buf`] it is only a
+    /// allocated buffer, the capacity [`resize`](Self::resize) compacts
+    /// buffered data into, and the growth increment for data that does not
+    /// fit. For [`IoConfig::write_buf`] it is only a
     /// watermark; page sizing is controlled by
     /// [`IoConfig::set_write_page_size`].
     pub high: usize,
     /// Free-capacity threshold below which [`resize`](Self::resize) grows a
     /// buffer.
     ///
-    /// This is the trigger for a resize, not the amount of free capacity the
-    /// resize produces; see [`resize`](Self::resize).
+    /// This is the trigger for a resize, and the least free capacity a resize
+    /// that compacts the buffer produces; see [`resize`](Self::resize).
     ///
     /// Buffers whose capacity is not greater than this value are not cached.
     ///
@@ -361,10 +361,11 @@ impl IoConfig {
     ///
     /// `high_watermark` enables read backpressure when the application-facing
     /// buffer reaches this size. It is also the capacity of a freshly
-    /// allocated read buffer, the increment by which buffers grow, and the
-    /// free capacity a resize guarantees. It must be greater than zero.
+    /// allocated read buffer, the capacity buffered data is compacted into
+    /// when free capacity runs low, and the increment by which larger buffers
+    /// grow. It must be greater than zero.
     /// `low_watermark` is the free-capacity threshold below which a read
-    /// buffer is grown. `cache_size` limits the number of eligible buffers
+    /// buffer is compacted or grown. `cache_size` limits the number of eligible buffers
     /// retained per thread and configuration.
     ///
     /// Read backpressure is released once the application-facing buffer falls
@@ -512,19 +513,28 @@ impl BufConfig {
     }
 
     #[inline]
-    /// Ensures that the buffer has at least `high` bytes of free capacity.
+    /// Makes room for another read once free capacity falls below `low`.
     ///
-    /// The buffer is grown only when its free capacity has fallen below `low`;
-    /// `low` is the trigger for the resize, while `high` is the amount of free
-    /// capacity the resize guarantees.
+    /// When the buffered data plus `low` fits into `high`, the data is moved
+    /// into a buffer of capacity `high`, so the free capacity afterwards is
+    /// `high` minus the buffered length. Only larger data grows the buffer
+    /// beyond `high`, in which case at least `high` bytes are free afterwards.
     pub fn resize(&self, buf: &mut BytesMut) {
         if buf.remaining_mut() < self.low {
-            self.resize_min(buf, self.high);
+            if buf.len() + self.low <= self.high {
+                self.resize_min(buf, self.low);
+            } else {
+                self.resize_min(buf, self.high);
+            }
         }
     }
 
     #[inline]
     /// Ensures that the buffer has at least `size` bytes of remaining capacity.
+    ///
+    /// When the buffered data plus `size` fits into `high`, the data is moved
+    /// into a cached buffer of capacity `high`, and the old buffer is returned
+    /// to the cache. Otherwise the buffer grows in steps of `high`.
     ///
     /// # Panics
     ///
@@ -536,6 +546,16 @@ impl BufConfig {
                 self.high > 0,
                 "buffer high watermark must be greater than zero"
             );
+            if buf.len() + size <= self.high {
+                let mut new_buf = self.get();
+                if new_buf.capacity() < self.high {
+                    new_buf = BytesMut::with_capacity(self.high);
+                }
+                new_buf.extend_from_slice(buf);
+                self.release(std::mem::replace(buf, new_buf));
+                return;
+            }
+
             let mut new_cap = buf.capacity();
             while avail < size {
                 avail += self.high;
@@ -652,6 +672,42 @@ mod tests {
         let mut cfg = *IoConfig::new().read_buf();
         cfg.high = 0;
         cfg.resize_min(&mut BytesMut::new(), 1024);
+    }
+
+    #[test]
+    fn resize_compacts_into_cached_buffer() {
+        let cfg = *IoConfig::new().set_read_buf(4096, 512, 4).read_buf();
+
+        // leftover input at the end of a consumed buffer
+        let mut buf = cfg.get();
+        buf.extend_from_slice(&[1; 4000]);
+        let _ = buf.split_to(3900);
+        assert!(buf.remaining_mut() < cfg.low);
+
+        cfg.resize(&mut buf);
+        assert_eq!(&buf[..], &[1; 100][..]);
+        assert_eq!(buf.capacity(), cfg.high);
+        assert_eq!(buf.remaining_mut(), cfg.high - 100);
+
+        // the compacted buffer can be cached again
+        buf.clear();
+        cfg.release(buf);
+        let buf = cfg.get();
+        assert_eq!(buf.capacity(), cfg.high);
+
+        // an explicit minimum that fits is compacted too
+        let mut buf = cfg.get();
+        buf.extend_from_slice(&[2; 3000]);
+        cfg.resize_min(&mut buf, 1000);
+        assert_eq!(buf.capacity(), cfg.high);
+        assert_eq!(&buf[..], &[2; 3000][..]);
+
+        // data that does not fit grows the buffer
+        let mut buf = cfg.get();
+        buf.extend_from_slice(&[3; 3800]);
+        cfg.resize(&mut buf);
+        assert_eq!(buf.len(), 3800);
+        assert!(buf.remaining_mut() >= cfg.high);
     }
 
     #[test]

@@ -991,7 +991,7 @@ mod tests {
 
     /// Checks the tracked length against the pages.
     fn assert_len(pages: &BytePages) {
-        let len = pages.pages().iter().map(|p| p.len()).sum::<usize>() + pages.current_len();
+        let len = pages.pages().iter().map(BytePage::len).sum::<usize>() + pages.current_len();
         assert_eq!(pages.len(), len);
         assert_eq!(pages.is_empty(), len == 0);
     }

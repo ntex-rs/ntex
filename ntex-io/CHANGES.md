@@ -12,6 +12,10 @@
 
 * `TimerHandle::remains()` rounds the remaining time up
 
+* `BufConfig::resize()` and `resize_min()` move buffered data into a cached
+  buffer of capacity `high` when it fits, instead of allocating a larger buffer
+  that could not be cached again
+
 * Fix output written by a filter that fails on read during shutdown being lost when the filter
   is stacked over another filter
 
