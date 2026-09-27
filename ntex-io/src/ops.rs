@@ -3,14 +3,13 @@ use std::collections::{BTreeMap, VecDeque};
 use std::{cell::RefCell, mem, num::NonZeroUsize, ops, rc::Rc, time::Duration, time::Instant};
 
 use ntex_rt::Arbiter;
-use ntex_util::time::{Seconds, now, sleep};
+use ntex_util::time::{Millis, Seconds, now, sleep};
 use ntex_util::{HashSet, spawn};
 use slab::Slab;
 
 use crate::IoRef;
 
 const CAP: usize = 64;
-const SEC: Duration = Duration::from_secs(1);
 
 thread_local! {
     static MANAGER: RefCell<Option<IoManager>> = const { RefCell::new(None) };
@@ -26,8 +25,12 @@ pub struct Id(Option<NonZeroUsize>);
 /// Handle to an I/O dispatcher timer.
 ///
 /// Handles represent second-granularity deadlines managed by the current
-/// thread's I/O manager. A handle becomes stale after its timer is stopped or
-/// replaced and must not be used as an independent cancellation token.
+/// thread's I/O manager, a timer started with a `t` seconds timeout expires
+/// after at least `t` and less than `t + 1` seconds. The timer clock starts
+/// a new second when a timer starts while no other timers are pending, such
+/// a timer expires after `t` seconds. A handle becomes stale
+/// after its timer is stopped or replaced and must not be used as an
+/// independent cancellation token.
 pub struct TimerHandle(u32);
 
 impl TimerHandle {
@@ -44,18 +47,13 @@ impl TimerHandle {
 
     /// Returns the whole seconds remaining until this handle's deadline.
     ///
-    /// Returns zero if the deadline has elapsed. The result is based on the
-    /// current thread's I/O timer clock.
+    /// Returns zero if the deadline has elapsed. The remaining time is
+    /// measured from the cached [`now()`](ntex_util::time::now), which lags
+    /// the clock, and is rounded up.
     pub fn remains(&self) -> Seconds {
-        IoManager::with(|mgr| {
-            let cur = mgr.timers.current;
-            if self.0 <= cur {
-                Seconds::ZERO
-            } else {
-                #[allow(clippy::cast_possible_truncation)]
-                Seconds((self.0 - cur) as u16)
-            }
-        })
+        let rem = self.instant().saturating_duration_since(now());
+        let secs = rem.as_secs() + u64::from(rem.subsec_nanos() != 0);
+        Seconds(secs.min(u64::from(u16::MAX)) as u16)
     }
 
     /// Returns the instant represented by this handle.
@@ -68,7 +66,7 @@ impl TimerHandle {
 
     pub(crate) fn update(self, timeout: Seconds, io: &IoRef) -> TimerHandle {
         IoManager::with(|mgr| {
-            let new_hnd = mgr.timers.current + u32::from(timeout.0);
+            let new_hnd = mgr.timers.deadline(timeout);
             if self.0 == new_hnd || self.0 == new_hnd + 1 {
                 self
             } else {
@@ -99,6 +97,7 @@ impl ops::Add<Seconds> for TimerHandle {
 struct TimerStorage {
     running: bool,
     base: Instant,
+    /// Whole seconds elapsed since `base`, the keys up to it have expired.
     current: u32,
     cache: VecDeque<HashSet<Id>>,
     notifications: BTreeMap<u32, HashSet<Id>>,
@@ -106,31 +105,59 @@ struct TimerStorage {
 
 impl TimerStorage {
     fn unregister(&mut self, hnd: TimerHandle, io: &IoRef) {
-        if let Some(states) = self.notifications.get_mut(&hnd.0) {
-            states.remove(&io.id());
+        if let Some(items) = self.notifications.get_mut(&hnd.0) {
+            items.remove(&io.id());
+            if items.is_empty() {
+                // the timer stops once no timers are left
+                let items = self.notifications.remove(&hnd.0).unwrap();
+                if self.cache.len() < CAP {
+                    self.cache.push_back(items);
+                }
+            }
+        }
+    }
+
+    /// Updates `current` from the clock.
+    fn update_current(&mut self) -> u32 {
+        self.current = self.base.elapsed().as_secs() as u32;
+        self.current
+    }
+
+    /// Returns the key of a timer started now, it expires after at least
+    /// `timeout` and less than `timeout + 1` seconds.
+    ///
+    /// The start is the cached [`now()`](ntex_util::time::now), a timer
+    /// expires early by the age of the cached time.
+    fn deadline(&mut self, timeout: Seconds) -> u32 {
+        let elapsed = now().saturating_duration_since(self.base);
+        let secs = elapsed.as_secs() as u32;
+        if secs < self.current {
+            // the cached time lags the ticker, keys up to `current` expired
+            return self.current + 1 + u32::from(timeout.0);
+        }
+        self.current = secs;
+
+        if self.notifications.is_empty() {
+            // no timers are pending, start the clock second now so a timer
+            // expires after exactly `timeout`. `current` does not change,
+            // stale handles cannot match a new key
+            self.base += Duration::new(0, elapsed.subsec_nanos());
+            self.current + u32::from(timeout.0)
+        } else {
+            let partial = u32::from(elapsed.subsec_nanos() != 0);
+            self.current + partial + u32::from(timeout.0)
         }
     }
 
     fn register(&mut self, timeout: Seconds, io: &IoRef) -> TimerHandle {
-        // setup current delta
-        if !self.running {
-            self.current = (now() - self.base).as_secs() as u32;
+        let hnd = self.deadline(timeout);
+        if let Some(items) = self.notifications.get_mut(&hnd) {
+            items.insert(io.id());
+        } else {
+            let mut items = self.cache.pop_front().unwrap_or_default();
+            items.insert(io.id());
+            self.notifications.insert(hnd, items);
         }
-
-        let hnd = {
-            let hnd = self.current + u32::from(timeout.0);
-
-            // insert key
-            if let Some(item) = self.notifications.range_mut(hnd..=hnd).next() {
-                item.1.insert(io.id());
-                *item.0
-            } else {
-                let mut items = self.cache.pop_front().unwrap_or_default();
-                items.insert(io.id());
-                self.notifications.insert(hnd, items);
-                hnd
-            }
-        };
 
         self.run_timer();
 
@@ -146,30 +173,34 @@ impl TimerStorage {
         spawn(async move {
             let guard = TimerGuard;
             loop {
-                sleep(SEC).await;
-                let stop = IoManager::with(|mgr| {
-                    let current = mgr.timers.current;
-                    mgr.timers.current = current + 1;
+                // tick at the next whole second of the clock, a late tick
+                // does not delay the later ones
+                let next = IoManager::with(|mgr| {
+                    let t = &mgr.timers;
+                    let next = t.base + Duration::from_secs(u64::from(t.current) + 1);
+                    next.saturating_duration_since(Instant::now())
+                });
+                sleep(Millis(next.as_millis() as u32 + 1)).await;
 
-                    // notify io dispatcher
-                    while let Some(key) = mgr.timers.notifications.keys().next() {
-                        let key = *key;
-                        if key <= current {
-                            let mut items = mgr.timers.notifications.remove(&key).unwrap();
-                            for id in items.drain() {
-                                if let Some(io) = mgr.get(id) {
-                                    io.notify_timeout();
-                                }
-                            }
-                            if mgr.timers.cache.len() <= CAP {
-                                mgr.timers.cache.push_back(items);
-                            }
-                        } else {
+                let stop = IoManager::with(|mgr| {
+                    let current = mgr.timers.update_current();
+
+                    // notify io dispatchers of all expired timers
+                    while let Some(entry) = mgr.timers.notifications.first_entry() {
+                        if *entry.key() > current {
                             break;
+                        }
+                        let mut items = entry.remove();
+                        for id in items.drain() {
+                            if let Some(io) = mgr.get(id) {
+                                io.notify_timeout();
+                            }
+                        }
+                        if mgr.timers.cache.len() < CAP {
+                            mgr.timers.cache.push_back(items);
                         }
                     }
 
-                    // new tick
                     if mgr.timers.notifications.is_empty() {
                         mgr.timers.running = false;
                         true
@@ -335,6 +366,60 @@ mod tests {
     use ntex::rt::{DefaultRuntime, System};
 
     use super::*;
+
+    async fn wait_timeout(io: &crate::Io) -> Duration {
+        let start = Instant::now();
+        let st = std::future::poll_fn(|cx| io.poll_status_update(cx)).await;
+        assert!(matches!(st, crate::IoStatusUpdate::Timeout));
+        start.elapsed()
+    }
+
+    /// A timer started while no timers are pending expires after its
+    /// timeout, the ticker does not add a second.
+    #[ntex::test]
+    async fn timer_expires_after_timeout() {
+        use ntex_service::cfg::SharedCfg;
+
+        use crate::{Io, testing::IoTest};
+
+        let (_client, server) = IoTest::create();
+        let io = Io::new(server, SharedCfg::new("T"));
+
+        // the clock is not aligned to the start of the runtime
+        sleep(Millis(500)).await;
+
+        io.start_timer(Seconds(1));
+        let elapsed = wait_timeout(&io).await;
+        assert!(
+            elapsed >= Duration::from_secs(1) && elapsed < Duration::from_millis(1300),
+            "elapsed: {elapsed:?}"
+        );
+    }
+
+    /// A timer started while other timers are pending expires within a
+    /// second after its timeout.
+    #[ntex::test]
+    async fn timer_expires_within_second_after_timeout() {
+        use ntex_service::cfg::SharedCfg;
+
+        use crate::{Io, testing::IoTest};
+
+        let (_client1, server1) = IoTest::create();
+        let (_client2, server2) = IoTest::create();
+        let io1 = Io::new(server1, SharedCfg::new("T"));
+        let io2 = Io::new(server2, SharedCfg::new("T"));
+
+        io1.start_timer(Seconds(10));
+        sleep(Millis(500)).await;
+
+        // expires at the second clock second
+        io2.start_timer(Seconds(1));
+        let elapsed = wait_timeout(&io2).await;
+        assert!(
+            elapsed >= Duration::from_secs(1) && elapsed < Duration::from_millis(1800),
+            "elapsed: {elapsed:?}"
+        );
+    }
 
     fn has_manager() -> bool {
         MANAGER.with(|mgr| mgr.borrow().is_some())

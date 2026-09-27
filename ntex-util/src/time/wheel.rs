@@ -1,67 +1,112 @@
-//! Time wheel based timer service.
+//! Hierarchical timer wheel backing ntex timers.
 //!
-//! Inspired by linux kernel timers system
-#![allow(arithmetic_overflow)]
+//! The design follows the Linux kernel timer wheel (`kernel/time/timer.c`).
+//!
+//! # Clock
+//!
+//! The wheel counts time in *units* of 16 milliseconds (`1 << UNITS`). The
+//! wheel clock `elapsed` is the unit of the last processed expiry, and
+//! `elapsed_time` is the [`Instant`] that corresponds to it. Timer deadlines
+//! are converted to units relative to this pair.
+//!
+//! # Levels
+//!
+//! The wheel has `LVL_DEPTH` (8) levels of `LVL_SIZE` (64) buckets. Each level
+//! is 8 times coarser than the previous one, a timer is placed on the first
+//! level that can represent its delay:
+//!
+//! | Level | Granularity | Range            |
+//! |-------|-------------|------------------|
+//! | 0     | 16 ms       | 0 .. ~1 s        |
+//! | 1     | 128 ms      | ~1 s .. ~8 s     |
+//! | 2     | ~1 s        | ~8 s .. ~64 s    |
+//! | 3     | ~8 s        | ~64 s .. ~8.6 m  |
+//! | 4     | ~65 s       | ~8.6 m .. ~69 m  |
+//! | 5     | ~8.7 m      | ~69 m .. ~9.2 h  |
+//! | 6     | ~70 m       | ~9.2 h .. ~3 d   |
+//! | 7     | ~9.3 h      | ~3 d .. ~24.5 d  |
+//!
+//! Longer delays are clamped to the capacity of the wheel. The expiry is
+//! rounded up to the granularity of the level and the delay is measured from
+//! [`Instant::now()`], so a timer never fires early but may fire up to one
+//! granularity late. Timers are not cascaded to finer
+//! levels, which keeps insertion and removal `O(1)`.
+//!
+//! A bitmap per level tracks occupied buckets, the next expiry is found by
+//! scanning the bitmaps instead of the buckets.
+//!
+//! # Drivers
+//!
+//! Two tasks are spawned lazily on the current thread:
+//!
+//! * [`TimerDriver`] sleeps until the next occupied bucket expires and wakes
+//!   the timers stored in it. The clock advances to the scheduled time of the
+//!   bucket, not to the time the driver woke up, so a late wakeup does not
+//!   delay later timers. Buckets that are overdue are processed at once.
+//! * [`LowresTimerDriver`] invalidates the cached [`now()`] and
+//!   [`system_time()`] values every 150 milliseconds.
+//!
+//! Dropping the timer driver, i.e. when the runtime stops, stops the wheel and
+//! marks all timers as elapsed. Dropping the lowres driver invalidates the
+//! cached time.
 use std::num::NonZeroUsize;
 use std::time::{Duration, Instant, SystemTime};
-use std::{cell::Cell, cmp::max, future::Future, mem, pin::Pin, rc::Rc, task, task::Poll};
+use std::{cell::Cell, cmp, future::Future, pin::Pin, rc::Rc, task, task::Poll};
 
 use futures_timer::Delay;
 use slab::Slab;
 
 use crate::task::LocalWaker;
 
-// Clock divisor for the next level
+/// Resolution of the wheel clock, a unit is `1 << UNITS` milliseconds.
+const UNITS: u64 = 4;
+
+/// Each level is `LVL_CLK_DIV` times coarser than the previous one.
 const LVL_CLK_SHIFT: u64 = 3;
 const LVL_CLK_DIV: u64 = 1 << LVL_CLK_SHIFT;
 const LVL_CLK_MASK: u64 = LVL_CLK_DIV - 1;
 
-const fn lvl_shift(n: u64) -> u64 {
-    n * LVL_CLK_SHIFT
-}
-
-const fn lvl_gran(n: u64) -> u64 {
-    1 << lvl_shift(n)
-}
-
-// Resolution:
-// 0: 1 millis
-// 4: ~17 millis
-const UNITS: u64 = 4;
-// const UNITS: u64 = 0;
-
-const fn to_units(n: u64) -> u64 {
-    n >> UNITS
-}
-
-const fn to_millis(n: u64) -> u64 {
-    n << UNITS
-}
-
-// The time start value for each level to select the bucket at enqueue time
-const fn lvl_start(lvl: u64) -> u64 {
-    (LVL_SIZE - 1) << ((lvl - 1) * LVL_CLK_SHIFT)
-}
-
-// Size of each clock level
+/// Number of buckets per level.
 const LVL_BITS: u64 = 6;
 const LVL_SIZE: u64 = 1 << LVL_BITS;
 const LVL_MASK: u64 = LVL_SIZE - 1;
 
-// Level depth
+/// Number of levels.
 const LVL_DEPTH: u64 = 8;
 
-const fn lvl_offs(n: u64) -> u64 {
-    n * LVL_SIZE
+/// Total number of buckets.
+const WHEEL_SIZE: usize = (LVL_SIZE * LVL_DEPTH) as usize;
+
+/// Delays at or above the cutoff are clamped to `WHEEL_TIMEOUT_MAX`.
+const WHEEL_TIMEOUT_CUTOFF: u64 = lvl_start(LVL_DEPTH);
+const WHEEL_TIMEOUT_MAX: u64 = WHEEL_TIMEOUT_CUTOFF - lvl_gran(LVL_DEPTH - 1);
+
+/// Refresh interval of the cached time.
+const LOWRES_RESOLUTION: Duration = Duration::from_millis(150);
+
+/// Shift of the level clock relative to the wheel clock.
+const fn lvl_shift(lvl: u64) -> u64 {
+    lvl * LVL_CLK_SHIFT
 }
 
-// The cutoff (max. capacity of the wheel)
-const WHEEL_TIMEOUT_CUTOFF: u64 = lvl_start(LVL_DEPTH);
-const WHEEL_TIMEOUT_MAX: u64 = WHEEL_TIMEOUT_CUTOFF - (lvl_gran(LVL_DEPTH - 1));
-const WHEEL_SIZE: usize = (LVL_SIZE as usize) * (LVL_DEPTH as usize);
+/// Granularity of a level in units.
+const fn lvl_gran(lvl: u64) -> u64 {
+    1 << lvl_shift(lvl)
+}
 
-// Low res time resolution
-const LOWRES_RESOLUTION: Duration = Duration::from_millis(5);
+/// Smallest delay in units that is stored on level `lvl`, `lvl` must be at
+/// least 1.
+const fn lvl_start(lvl: u64) -> u64 {
+    (LVL_SIZE - 1) << ((lvl - 1) * LVL_CLK_SHIFT)
+}
+
+const fn to_units(millis: u64) -> u64 {
+    millis >> UNITS
+}
+
+const fn to_millis(units: u64) -> u64 {
+    units << UNITS
+}
 
 const fn as_millis(dur: Duration) -> u64 {
     dur.as_secs() * 1_000 + (dur.subsec_millis() as u64)
@@ -69,27 +114,18 @@ const fn as_millis(dur: Duration) -> u64 {
 
 /// Returns a cached approximation of the current instant.
 ///
-/// The cached value is refreshed at roughly 5 millisecond intervals.
+/// The cached value is refreshed at roughly 150 millisecond intervals.
 #[inline]
 pub fn now() -> Instant {
-    TIMER.with(|t| t.with_mod(|inner| t.now(inner)))
+    TIMER.with(Timer::now)
 }
 
 /// Returns a cached approximation of the current system time.
 ///
-/// The cached value is refreshed at roughly 5 millisecond intervals.
+/// The cached value is refreshed at roughly 150 millisecond intervals.
 #[inline]
 pub fn system_time() -> SystemTime {
-    TIMER.with(|t| t.with_mod(|inner| t.system_time(inner)))
-}
-
-/// Returns the cached system time without starting the timer driver.
-///
-/// Before the cache has been initialized, this falls back to
-/// [`SystemTime::now`].
-#[inline]
-pub fn query_system_time() -> SystemTime {
-    TIMER.with(|t| t.with_mod(|inner| t.system_time(inner)))
+    TIMER.with(Timer::system_time)
 }
 
 #[derive(Debug)]
@@ -117,14 +153,14 @@ impl TimerHandle {
 
     /// Returns `true` if this timer has elapsed.
     pub fn is_elapsed(&self) -> bool {
-        TIMER.with(|t| t.with_mod(|m| m.timers[self.0.get()].bucket.is_none()))
+        TIMER.with(|t| t.with_wheel(|w| w.timers[self.0.get()].bucket.is_none()))
     }
 
     /// Polls until this timer has elapsed.
     pub fn poll_elapsed(&self, cx: &mut task::Context<'_>) -> Poll<()> {
         TIMER.with(|t| {
-            t.with_mod(|inner| {
-                let entry = &inner.timers[self.0.get()];
+            t.with_wheel(|w| {
+                let entry = &w.timers[self.0.get()];
                 if entry.bucket.is_none() {
                     Poll::Ready(())
                 } else {
@@ -138,59 +174,83 @@ impl TimerHandle {
 
 impl Drop for TimerHandle {
     fn drop(&mut self) {
-        TIMER.with(|t| t.with_mod(|inner| inner.remove_timer_bucket(self.0.get(), true)));
+        // the wheel is already destroyed if the handle is dropped by
+        // another thread-local destructor
+        let _ = TIMER.try_with(|t| {
+            t.with_wheel(|w| {
+                w.unlink(self.0.get());
+                w.timers.remove(self.0.get());
+            });
+        });
     }
 }
 
 bitflags::bitflags! {
-    #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-    pub struct Flags: u8 {
+    #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+    struct Flags: u8 {
+        /// The timer driver task is spawned.
         const DRIVER_STARTED = 0b0000_0001;
-        const DRIVER_RECALC  = 0b0000_0010;
+        /// The cached time is populated and its refresh sleep is armed.
         const LOWRES_TIMER   = 0b0000_1000;
+        /// The lowres driver task is spawned.
         const LOWRES_DRIVER  = 0b0001_0000;
+        /// A timer was scheduled, `now()` and `system_time()` cache the time.
         const RUNNING        = 0b0010_0000;
     }
 }
 
 thread_local! {
-    static TIMER: Timer = Timer::new();
+    static TIMER: Rc<Timer> = Rc::new(Timer::new());
 }
 
-struct Timer(Rc<TimerInner>);
-
-struct TimerInner {
+/// Per-thread timer state, shared by the timer handles and the driver tasks.
+struct Timer {
+    /// Wheel clock in units, the expiry that was processed last.
     elapsed: Cell<u64>,
+    /// Instant that corresponds to `elapsed`, the scheduled time of the last
+    /// processed expiry. Set lazily when the wheel is idle.
     elapsed_time: Cell<Option<Instant>>,
+    /// Expiry of the earliest occupied bucket, `u64::MAX` if the wheel is empty.
     next_expiry: Cell<u64>,
     flags: Cell<Flags>,
     driver: LocalWaker,
     lowres_time: Cell<Option<Instant>>,
     lowres_stime: Cell<Option<SystemTime>>,
     lowres_driver: LocalWaker,
-    inner: Cell<Option<Box<TimerMod>>>,
+    /// Taken out of the cell for the duration of an operation.
+    wheel: Cell<Option<Box<Wheel>>>,
 }
 
-struct TimerMod {
+/// Timer storage.
+struct Wheel {
+    /// Timer entries indexed by handle, slot 0 is reserved so handles are
+    /// non-zero.
     timers: Slab<TimerEntry>,
-    driver_sleep: Delay,
-    buckets: Vec<Bucket>,
-    /// Bit field tracking which bucket currently contain entries.
-    occupied: [u64; WHEEL_SIZE],
-    lowres_driver_sleep: Delay,
+    /// Handles of the timers stored in each bucket, `lvl * LVL_SIZE + offset`.
+    buckets: Box<[Slab<usize>]>,
+    /// Occupied buckets of each level, bit `n` is set if bucket `n` has timers.
+    occupied: [u64; LVL_DEPTH as usize],
+}
+
+#[derive(Debug)]
+struct TimerEntry {
+    /// Bucket index, `None` once the timer has elapsed.
+    bucket: Option<u16>,
+    /// Key of the entry in the bucket.
+    bucket_entry: usize,
+    task: LocalWaker,
 }
 
 impl Timer {
     fn new() -> Self {
         let mut timers = Slab::default();
-        // insert one entry, so 0 key is preoccupied
         timers.insert(TimerEntry {
             bucket: None,
             bucket_entry: 0,
             task: LocalWaker::new(),
         });
 
-        Timer(Rc::new(TimerInner {
+        Timer {
             elapsed: Cell::new(0),
             elapsed_time: Cell::new(None),
             next_expiry: Cell::new(u64::MAX),
@@ -199,322 +259,69 @@ impl Timer {
             lowres_time: Cell::new(None),
             lowres_stime: Cell::new(None),
             lowres_driver: LocalWaker::new(),
-            inner: Cell::new(Some(Box::new(TimerMod {
+            wheel: Cell::new(Some(Box::new(Wheel {
                 timers,
-                buckets: Self::create_buckets(),
-                driver_sleep: Delay::new(Duration::ZERO),
-                occupied: [0; WHEEL_SIZE],
-                lowres_driver_sleep: Delay::new(Duration::ZERO),
+                buckets: (0..WHEEL_SIZE).map(|_| Slab::new()).collect(),
+                occupied: [0; LVL_DEPTH as usize],
             }))),
-        }))
+        }
     }
 
-    fn with_mod<F, R>(&self, f: F) -> R
+    fn with_wheel<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&mut TimerMod) -> R,
+        F: FnOnce(&mut Wheel) -> R,
     {
-        let mut m = self.0.inner.take().unwrap();
-        let result = f(&mut m);
-        self.0.inner.set(Some(m));
+        let mut wheel = self.wheel.take().unwrap();
+        let result = f(&mut wheel);
+        self.wheel.set(Some(wheel));
         result
     }
 
-    fn create_buckets() -> Vec<Bucket> {
-        let mut buckets = Vec::with_capacity(WHEEL_SIZE);
-        for idx in 0..WHEEL_SIZE {
-            let lvl = idx / (LVL_SIZE as usize);
-            let offs = idx % (LVL_SIZE as usize);
-            buckets.push(Bucket::new(lvl, offs));
-        }
-        buckets
+    fn insert_flags(&self, flags: Flags) -> Flags {
+        let mut f = self.flags.get();
+        f.insert(flags);
+        self.flags.set(f);
+        f
     }
 
-    fn now(&self, inner: &mut TimerMod) -> Instant {
-        if let Some(cur) = self.0.lowres_time.get() {
+    /// Returns the cached instant, the cache is populated only while the wheel
+    /// is running.
+    fn now(self: &Rc<Self>) -> Instant {
+        if let Some(cur) = self.lowres_time.get() {
             cur
         } else {
             let now = Instant::now();
-
-            let flags = self.0.flags.get();
-            if flags.contains(Flags::RUNNING) {
-                self.0.lowres_time.set(Some(now));
-
-                if flags.contains(Flags::LOWRES_DRIVER) {
-                    self.0.lowres_driver.wake();
-                } else {
-                    LowresTimerDriver::start(self.0.clone(), inner);
-                }
+            if self.flags.get().contains(Flags::RUNNING) {
+                self.lowres_time.set(Some(now));
+                self.refresh_lowres();
             }
             now
         }
     }
 
-    fn system_time(&self, inner: &mut TimerMod) -> SystemTime {
-        if let Some(cur) = self.0.lowres_stime.get() {
+    fn system_time(self: &Rc<Self>) -> SystemTime {
+        if let Some(cur) = self.lowres_stime.get() {
             cur
         } else {
             let now = SystemTime::now();
-            let flags = self.0.flags.get();
-
-            if flags.contains(Flags::RUNNING) {
-                self.0.lowres_stime.set(Some(now));
-
-                if flags.contains(Flags::LOWRES_DRIVER) {
-                    self.0.lowres_driver.wake();
-                } else {
-                    LowresTimerDriver::start(self.0.clone(), inner);
-                }
+            if self.flags.get().contains(Flags::RUNNING) {
+                self.lowres_stime.set(Some(now));
+                self.refresh_lowres();
             }
             now
         }
     }
 
-    /// Add the timer into the hash bucket
-    fn add_timer(&self, millis: u64) -> TimerHandle {
-        self.with_mod(|inner| {
-            if millis == 0 {
-                let entry = inner.timers.vacant_entry();
-                let no = entry.key();
-
-                entry.insert(TimerEntry {
-                    bucket_entry: 0,
-                    bucket: None,
-                    task: LocalWaker::new(),
-                });
-                // SAFETY: We add TimerEntry for 0 position in constructor
-                return TimerHandle(unsafe { NonZeroUsize::new_unchecked(no) });
-            }
-
-            let mut flags = self.0.flags.get();
-            flags.insert(Flags::RUNNING);
-            self.0.flags.set(flags);
-
-            let now = self.now(inner);
-            let elapsed_time = self.0.elapsed_time();
-            let delta = if now >= elapsed_time {
-                to_units(as_millis(now - elapsed_time) + millis)
-            } else {
-                to_units(millis)
-            };
-
-            let (no, bucket_expiry) = {
-                // crate timer entry
-                let (idx, bucket_expiry) = self
-                    .0
-                    .calc_wheel_index(self.0.elapsed.get().wrapping_add(delta), delta);
-
-                let no = inner.add_entry(idx);
-                (no, bucket_expiry)
-            };
-
-            // Check whether new bucket expire earlier
-            if bucket_expiry < self.0.next_expiry.get() {
-                self.0.next_expiry.set(bucket_expiry);
-                if flags.contains(Flags::DRIVER_STARTED) {
-                    flags.insert(Flags::DRIVER_RECALC);
-                    self.0.flags.set(flags);
-                    self.0.driver.wake();
-                } else {
-                    TimerDriver::start(self.0.clone(), inner);
-                }
-            }
-
-            // SAFETY: We add TimerEntry for 0 position in constructor
-            TimerHandle(unsafe { NonZeroUsize::new_unchecked(no) })
-        })
-    }
-
-    /// Remove timer and wake task
-    fn remove_timer(&self, hnd: usize) {
-        self.with_mod(|inner| {
-            inner.remove_timer_bucket(hnd, false);
-            inner.timers[hnd].complete();
-        });
-    }
-
-    /// Update existing timer
-    fn update_timer(&self, hnd: usize, millis: u64) {
-        self.with_mod(|inner| {
-            if millis == 0 {
-                inner.remove_timer_bucket(hnd, false);
-                inner.timers[hnd].bucket = None;
-                return;
-            }
-
-            let now = self.now(inner);
-            let elapsed_time = self.0.elapsed_time();
-            let delta = if now >= elapsed_time {
-                max(to_units(as_millis(now - elapsed_time) + millis), 1)
-            } else {
-                max(to_units(millis), 1)
-            };
-
-            let bucket_expiry = {
-                // calc bucket
-                let (idx, bucket_expiry) = self
-                    .0
-                    .calc_wheel_index(self.0.elapsed.get().wrapping_add(delta), delta);
-
-                inner.update_entry(hnd, idx);
-
-                bucket_expiry
-            };
-
-            // Check whether new bucket expire earlier
-            if bucket_expiry < self.0.next_expiry.get() {
-                self.0.next_expiry.set(bucket_expiry);
-                let mut flags = self.0.flags.get();
-                if flags.contains(Flags::DRIVER_STARTED) {
-                    flags.insert(Flags::DRIVER_RECALC);
-                    self.0.flags.set(flags);
-                    self.0.driver.wake();
-                } else {
-                    TimerDriver::start(self.0.clone(), inner);
-                }
-            }
-        });
-    }
-}
-
-impl TimerMod {
-    fn execute_expired_timers(&mut self, mut clk: u64) {
-        for lvl in 0..LVL_DEPTH {
-            let idx = (clk & LVL_MASK) + lvl * LVL_SIZE;
-            let b = &mut self.buckets[idx as usize];
-            if !b.entries.is_empty() {
-                self.occupied[b.lvl as usize] &= b.bit_n;
-                for no in b.entries.drain() {
-                    if let Some(timer) = self.timers.get_mut(no) {
-                        timer.complete();
-                    }
-                }
-            }
-
-            // Is it time to look at the next level?
-            if (clk & LVL_CLK_MASK) != 0 {
-                break;
-            }
-            // Shift clock for the next level granularity
-            clk >>= LVL_CLK_SHIFT;
-        }
-    }
-
-    fn remove_timer_bucket(&mut self, handle: usize, remove_handle: bool) {
-        let entry = &mut self.timers[handle];
-        if let Some(bucket) = entry.bucket {
-            let b = &mut self.buckets[bucket as usize];
-            b.entries.remove(entry.bucket_entry);
-            if b.entries.is_empty() {
-                self.occupied[b.lvl as usize] &= b.bit_n;
-            }
-        }
-
-        if remove_handle {
-            self.timers.remove(handle);
-        }
-    }
-
-    fn add_entry(&mut self, idx: usize) -> usize {
-        let entry = self.timers.vacant_entry();
-        let no = entry.key();
-        let bucket = &mut self.buckets[idx];
-        let bucket_entry = bucket.add_entry(no);
-
-        entry.insert(TimerEntry {
-            bucket_entry,
-            bucket: Some(idx as u16),
-            task: LocalWaker::new(),
-        });
-        self.occupied[bucket.lvl as usize] |= bucket.bit;
-
-        no
-    }
-
-    fn update_entry(&mut self, hnd: usize, idx: usize) {
-        let entry = &mut self.timers[hnd];
-
-        // cleanup active timer
-        if let Some(bucket) = entry.bucket {
-            // do not do anything if wheel bucket is the same
-            if idx == bucket as usize {
-                return;
-            }
-
-            // remove timer entry from current bucket
-            let b = &mut self.buckets[bucket as usize];
-            b.entries.remove(entry.bucket_entry);
-            if b.entries.is_empty() {
-                self.occupied[b.lvl as usize] &= b.bit_n;
-            }
-        }
-
-        // put timer to new bucket
-        let bucket = &mut self.buckets[idx];
-        entry.bucket = Some(idx as u16);
-        entry.bucket_entry = bucket.add_entry(hnd);
-
-        self.occupied[bucket.lvl as usize] |= bucket.bit;
-    }
-}
-
-impl TimerInner {
-    fn with_mod<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&mut TimerMod) -> R,
-    {
-        let mut m = self.inner.take().unwrap();
-        let result = f(&mut m);
-        self.inner.set(Some(m));
-        result
-    }
-
-    fn calc_wheel_index(&self, expires: u64, delta: u64) -> (usize, u64) {
-        if delta < lvl_start(1) {
-            Self::calc_index(expires, 0)
-        } else if delta < lvl_start(2) {
-            Self::calc_index(expires, 1)
-        } else if delta < lvl_start(3) {
-            Self::calc_index(expires, 2)
-        } else if delta < lvl_start(4) {
-            Self::calc_index(expires, 3)
-        } else if delta < lvl_start(5) {
-            Self::calc_index(expires, 4)
-        } else if delta < lvl_start(6) {
-            Self::calc_index(expires, 5)
-        } else if delta < lvl_start(7) {
-            Self::calc_index(expires, 6)
-        } else if delta < lvl_start(8) {
-            Self::calc_index(expires, 7)
+    /// Arms the invalidation of the cached time.
+    fn refresh_lowres(self: &Rc<Self>) {
+        if self.flags.get().contains(Flags::LOWRES_DRIVER) {
+            self.lowres_driver.wake();
         } else {
-            // Force expire obscene large timeouts to expire at the
-            // capacity limit of the wheel.
-            if delta >= WHEEL_TIMEOUT_CUTOFF {
-                Self::calc_index(
-                    self.elapsed.get().wrapping_add(WHEEL_TIMEOUT_MAX),
-                    LVL_DEPTH - 1,
-                )
-            } else {
-                Self::calc_index(expires, LVL_DEPTH - 1)
-            }
+            LowresTimerDriver::start(self);
         }
     }
 
-    /// Helper function to calculate the bucket index and bucket expiration
-    fn calc_index(expires: u64, lvl: u64) -> (usize, u64) {
-        // The timer wheel has to guarantee that a timer does not fire
-        // early. Early expiry can happen due to:
-        // - Timer is armed at the edge of a tick
-        // - Truncation of the expiry time in the outer wheel levels
-        //
-        // Round up with level granularity to prevent this.
-
-        let expires = (expires + lvl_gran(lvl)) >> lvl_shift(lvl);
-        (
-            (lvl_offs(lvl) + (expires & LVL_MASK)) as usize,
-            expires << lvl_shift(lvl),
-        )
-    }
-
+    /// Instant that corresponds to the wheel clock.
     fn elapsed_time(&self) -> Instant {
         if let Some(elapsed_time) = self.elapsed_time.get() {
             elapsed_time
@@ -525,40 +332,142 @@ impl TimerInner {
         }
     }
 
-    fn execute_expired_timers(&self, inner: &mut TimerMod) {
-        inner.execute_expired_timers(self.next_expiry.get());
+    fn add_timer(self: &Rc<Self>, millis: u64) -> TimerHandle {
+        let no = if millis == 0 {
+            // elapsed immediately
+            self.with_wheel(|w| {
+                w.timers.insert(TimerEntry {
+                    bucket: None,
+                    bucket_entry: 0,
+                    task: LocalWaker::new(),
+                })
+            })
+        } else {
+            let (idx, expiry) = self.calc_bucket(millis);
+            let no = self.with_wheel(|w| {
+                let no = w.timers.insert(TimerEntry {
+                    bucket: None,
+                    bucket_entry: 0,
+                    task: LocalWaker::new(),
+                });
+                w.link(no, idx);
+                no
+            });
+            self.update_next_expiry(expiry);
+            no
+        };
+
+        // slot 0 is reserved in `Timer::new()`
+        TimerHandle(NonZeroUsize::new(no).unwrap())
     }
 
-    /// Find next expiration bucket
-    fn next_pending_bucket(&self, inner: &mut TimerMod) -> Option<u64> {
+    /// Moves the timer to a new bucket, a zero delay elapses it and wakes its
+    /// task.
+    fn update_timer(self: &Rc<Self>, hnd: usize, millis: u64) {
+        if millis == 0 {
+            self.remove_timer(hnd);
+        } else {
+            let (idx, expiry) = self.calc_bucket(millis);
+            self.with_wheel(|w| w.relink(hnd, idx));
+            self.update_next_expiry(expiry);
+        }
+    }
+
+    /// Elapses the timer and wakes its task.
+    fn remove_timer(&self, hnd: usize) {
+        self.with_wheel(|w| {
+            if w.unlink(hnd) {
+                w.timers[hnd].task.wake();
+            }
+        });
+    }
+
+    /// Returns the bucket index and the bucket expiry for a delay starting now.
+    fn calc_bucket(self: &Rc<Self>, millis: u64) -> (usize, u64) {
+        self.insert_flags(Flags::RUNNING);
+
+        // The delay is measured from the wheel clock. The cached time is not
+        // used, it goes stale while the thread is blocked and the timer would
+        // fire early by its age
+        let since = Instant::now().saturating_duration_since(self.elapsed_time());
+        let delta = to_units(as_millis(since) + millis);
+        self.calc_wheel_index(self.elapsed.get().wrapping_add(delta), delta)
+    }
+
+    /// Selects the level for a timer that expires at `expires`, `delta` units
+    /// from now.
+    fn calc_wheel_index(&self, expires: u64, delta: u64) -> (usize, u64) {
+        for lvl in 0..LVL_DEPTH {
+            if delta < lvl_start(lvl + 1) {
+                return Self::calc_index(expires, lvl);
+            }
+        }
+        // expire larger delays at the capacity limit of the wheel
+        Self::calc_index(
+            self.elapsed.get().wrapping_add(WHEEL_TIMEOUT_MAX),
+            LVL_DEPTH - 1,
+        )
+    }
+
+    /// Returns the bucket index and the bucket expiry on level `lvl`.
+    fn calc_index(expires: u64, lvl: u64) -> (usize, u64) {
+        // The timer must not fire early. Early expiry can happen because the
+        // timer is armed at the edge of a tick, or because the expiry is
+        // truncated to the level granularity, round up to prevent it.
+        let expires = (expires + lvl_gran(lvl)) >> lvl_shift(lvl);
+        (
+            (lvl * LVL_SIZE + (expires & LVL_MASK)) as usize,
+            expires << lvl_shift(lvl),
+        )
+    }
+
+    /// Wakes the driver if the new bucket expires before the current deadline.
+    fn update_next_expiry(self: &Rc<Self>, expiry: u64) {
+        if expiry < self.next_expiry.get() {
+            self.next_expiry.set(expiry);
+            if self.flags.get().contains(Flags::DRIVER_STARTED) {
+                self.driver.wake();
+            } else {
+                TimerDriver::start(self);
+            }
+        }
+    }
+
+    /// Instant at which the bucket expiring at `expiry` is due.
+    fn expiry_time(&self, expiry: u64) -> Instant {
+        self.elapsed_time()
+            + Duration::from_millis(to_millis(expiry.saturating_sub(self.elapsed.get())))
+    }
+
+    /// Returns the expiry of the earliest occupied bucket.
+    fn next_pending_bucket(&self, wheel: &Wheel) -> Option<u64> {
         let mut clk = self.elapsed.get();
         let mut next = u64::MAX;
 
         for lvl in 0..LVL_DEPTH {
             let lvl_clk = clk & LVL_CLK_MASK;
-            let occupied = inner.occupied[lvl as usize];
-            let pos = if occupied == 0 {
-                -1
-            } else {
-                let zeros = occupied
-                    .rotate_right((clk & LVL_MASK) as u32)
-                    .trailing_zeros() as usize;
-                zeros as isize
-            };
+            let occupied = wheel.occupied[lvl as usize];
 
-            if pos >= 0 {
-                let tmp = (clk + pos as u64) << lvl_shift(lvl);
-                if tmp < next {
-                    next = tmp;
-                }
+            if occupied != 0 {
+                // distance to the next occupied bucket, wrapping around the level
+                let pos = u64::from(
+                    occupied
+                        .rotate_right((clk & LVL_MASK) as u32)
+                        .trailing_zeros(),
+                );
+                next = cmp::min(next, (clk + pos) << lvl_shift(lvl));
 
-                // If the next expiration happens before we reach
-                // the next level, no need to check further.
-                if (pos as u64) <= ((LVL_CLK_DIV - lvl_clk) & LVL_CLK_MASK) {
+                // The next level is reached once the clock of this level wraps
+                // to a multiple of `LVL_CLK_DIV`, an earlier bucket here cannot
+                // be preceded by one of the next level.
+                if pos <= ((LVL_CLK_DIV - lvl_clk) & LVL_CLK_MASK) {
                     break;
                 }
             }
 
+            // Clock of the next level. A partially elapsed tick of this level
+            // is rounded up, as the next level bucket it belongs to was already
+            // processed.
             clk >>= LVL_CLK_SHIFT;
             clk += u64::from(lvl_clk != 0);
         }
@@ -566,182 +475,246 @@ impl TimerInner {
         if next < u64::MAX { Some(next) } else { None }
     }
 
-    /// Get next expiry time in millis
-    fn next_expiry_ms(&self) -> u64 {
-        to_millis(self.next_expiry.get().saturating_sub(self.elapsed.get()))
+    /// Removes `flags`, and `RUNNING` so the cached time is not populated and
+    /// no driver is spawned after the runtime stopped.
+    fn remove_flags(&self, flags: Flags) {
+        let mut f = self.flags.get();
+        f.remove(flags | Flags::RUNNING);
+        self.flags.set(f);
     }
 
+    /// Invalidates the cached time, called when the lowres driver is dropped.
+    fn stop_lowres(&self) {
+        self.remove_flags(Flags::LOWRES_DRIVER | Flags::LOWRES_TIMER);
+        self.lowres_time.set(None);
+        self.lowres_stime.set(None);
+    }
+
+    /// Marks all timers as elapsed and resets the wheel, called when the timer
+    /// driver is dropped. Tasks are not woken, the runtime is stopping.
     fn stop_wheel(&self) {
-        // mark all timers as elapsed
-        if let Some(mut inner) = self.inner.take() {
-            let mut buckets = mem::take(&mut inner.buckets);
-            for b in &mut buckets {
-                for no in b.entries.drain() {
-                    inner.timers[no].bucket = None;
+        self.remove_flags(Flags::DRIVER_STARTED);
+
+        // the wheel is in use if a driver is dropped from a timer operation
+        if let Some(mut wheel) = self.wheel.take() {
+            let Wheel {
+                timers,
+                buckets,
+                occupied,
+            } = &mut *wheel;
+            for bucket in buckets.iter_mut() {
+                for no in bucket.drain() {
+                    timers[no].bucket = None;
                 }
             }
+            *occupied = [0; LVL_DEPTH as usize];
 
-            // cleanup info
-            self.flags.set(Flags::empty());
             self.next_expiry.set(u64::MAX);
             self.elapsed.set(0);
             self.elapsed_time.set(None);
-            self.lowres_time.set(None);
-            self.lowres_stime.set(None);
-
-            inner.buckets = buckets;
-            inner.occupied = [0; WHEEL_SIZE];
-            self.inner.set(Some(inner));
+            self.wheel.set(Some(wheel));
         }
     }
 }
 
-#[derive(Debug)]
-struct Bucket {
-    lvl: u32,
-    bit: u64,
-    bit_n: u64,
-    entries: Slab<usize>,
-}
-
-impl Bucket {
-    fn add_entry(&mut self, no: usize) -> usize {
-        self.entries.insert(no)
+impl Wheel {
+    /// Level and occupied bit of a bucket.
+    fn bucket_bit(idx: usize) -> (usize, u64) {
+        (idx / LVL_SIZE as usize, 1 << (idx % LVL_SIZE as usize))
     }
-}
 
-impl Bucket {
-    fn new(lvl: usize, offs: usize) -> Self {
-        let bit = 1 << (offs as u64);
-        Bucket {
-            bit,
-            lvl: lvl as u32,
-            bit_n: !bit,
-            entries: Slab::default(),
+    /// Stores the timer in bucket `idx`.
+    fn link(&mut self, hnd: usize, idx: usize) {
+        let entry = &mut self.timers[hnd];
+        entry.bucket = Some(idx as u16);
+        entry.bucket_entry = self.buckets[idx].insert(hnd);
+
+        let (lvl, bit) = Self::bucket_bit(idx);
+        self.occupied[lvl] |= bit;
+    }
+
+    /// Removes the timer from its bucket and marks it as elapsed.
+    ///
+    /// Returns `false` if the timer has already elapsed.
+    fn unlink(&mut self, hnd: usize) -> bool {
+        let entry = &mut self.timers[hnd];
+        if let Some(idx) = entry.bucket.take() {
+            let idx = idx as usize;
+            let bucket = &mut self.buckets[idx];
+            bucket.remove(entry.bucket_entry);
+            if bucket.is_empty() {
+                let (lvl, bit) = Self::bucket_bit(idx);
+                self.occupied[lvl] &= !bit;
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Moves the timer to bucket `idx`.
+    fn relink(&mut self, hnd: usize, idx: usize) {
+        if self.timers[hnd].bucket != Some(idx as u16) {
+            self.unlink(hnd);
+            self.link(hnd, idx);
+        }
+    }
+
+    /// Wakes the timers of the buckets that expire at `clk`.
+    fn execute_expired_timers(&mut self, mut clk: u64) {
+        for lvl in 0..LVL_DEPTH {
+            let idx = ((clk & LVL_MASK) + lvl * LVL_SIZE) as usize;
+            let bucket = &mut self.buckets[idx];
+            if !bucket.is_empty() {
+                let (lvl, bit) = Self::bucket_bit(idx);
+                self.occupied[lvl] &= !bit;
+                for no in bucket.drain() {
+                    let entry = &mut self.timers[no];
+                    entry.bucket = None;
+                    entry.task.wake();
+                }
+            }
+
+            // The next level expires only when the clock is a multiple of its
+            // granularity
+            if (clk & LVL_CLK_MASK) != 0 {
+                break;
+            }
+            clk >>= LVL_CLK_SHIFT;
         }
     }
 }
 
-#[derive(Debug)]
-struct TimerEntry {
-    bucket: Option<u16>,
-    bucket_entry: usize,
-    task: LocalWaker,
+/// Task that sleeps until the next bucket expires and wakes its timers.
+struct TimerDriver {
+    timer: Rc<Timer>,
+    sleep: Delay,
+    /// Deadline the sleep is armed for.
+    armed: Option<Instant>,
 }
-
-impl TimerEntry {
-    fn complete(&mut self) {
-        if self.bucket.is_some() {
-            self.bucket.take();
-            self.task.wake();
-        }
-    }
-}
-
-struct TimerDriver(Rc<TimerInner>);
 
 impl TimerDriver {
-    fn start(timer: Rc<TimerInner>, inner: &mut TimerMod) {
-        let mut flags = timer.flags.get();
-        flags.insert(Flags::DRIVER_STARTED);
-        timer.flags.set(flags);
-        inner.driver_sleep = Delay::new(Duration::from_millis(timer.next_expiry_ms()));
+    fn start(timer: &Rc<Timer>) {
+        timer.insert_flags(Flags::DRIVER_STARTED);
 
-        crate::spawn(TimerDriver(timer));
+        let deadline = timer.expiry_time(timer.next_expiry.get());
+        crate::spawn(TimerDriver {
+            timer: timer.clone(),
+            sleep: Delay::new(deadline.saturating_duration_since(Instant::now())),
+            armed: Some(deadline),
+        });
+
+        // start lowres driver
+        timer.refresh_lowres();
     }
 }
 
 impl Drop for TimerDriver {
     fn drop(&mut self) {
-        self.0.stop_wheel();
+        self.timer.stop_wheel();
     }
 }
 
 impl Future for TimerDriver {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
-        self.0.driver.register(cx.waker());
+    fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
+        let this = &mut *self;
+        let timer = &this.timer;
+        timer.driver.register(cx.waker());
 
-        self.0.with_mod(|inner| {
-            let mut flags = self.0.flags.get();
-            if flags.contains(Flags::DRIVER_RECALC) {
-                flags.remove(Flags::DRIVER_RECALC);
-                self.0.flags.set(flags);
+        let now = Instant::now();
+        timer.lowres_time.set(Some(now));
 
-                let now = Instant::now();
-                let deadline = if let Some(diff) = now.checked_duration_since(self.0.elapsed_time())
-                {
-                    Duration::from_millis(self.0.next_expiry_ms()).saturating_sub(diff)
-                } else {
-                    Duration::from_millis(self.0.next_expiry_ms())
-                };
-                inner.driver_sleep.reset(deadline);
-            }
-
-            loop {
-                if Pin::new(&mut inner.driver_sleep).poll(cx).is_ready() {
-                    let now = Instant::now();
-                    self.0.elapsed.set(self.0.next_expiry.get());
-                    self.0.elapsed_time.set(Some(now));
-                    self.0.execute_expired_timers(inner);
-
-                    if let Some(next_expiry) = self.0.next_pending_bucket(inner) {
-                        self.0.next_expiry.set(next_expiry);
-                        let dur = Duration::from_millis(self.0.next_expiry_ms());
-                        inner.driver_sleep.reset(dur);
-                        continue;
-                    }
-                    self.0.next_expiry.set(u64::MAX);
-                    self.0.elapsed_time.set(None);
-                }
+        loop {
+            let expiry = timer.next_expiry.get();
+            if expiry == u64::MAX {
+                // the wheel is empty, a new timer wakes the driver
                 return Poll::Pending;
             }
-        })
+
+            let deadline = timer.expiry_time(expiry);
+            if deadline > now {
+                if this.armed != Some(deadline) {
+                    this.armed = Some(deadline);
+                    this.sleep.reset(deadline.saturating_duration_since(now));
+                }
+                if Pin::new(&mut this.sleep).poll(cx).is_pending() {
+                    return Poll::Pending;
+                }
+                if deadline > now {
+                    // the sleep fired before the deadline, re-arm it
+                    this.armed = None;
+                    continue;
+                }
+            }
+
+            // Advance the clock to the scheduled time of the bucket, a late
+            // wakeup must not shift the timers that expire later
+            timer.elapsed.set(expiry);
+            timer.elapsed_time.set(Some(deadline));
+
+            let next = timer.with_wheel(|w| {
+                w.execute_expired_timers(expiry);
+                timer.next_pending_bucket(w)
+            });
+
+            if let Some(next) = next {
+                timer.next_expiry.set(next);
+            } else {
+                timer.next_expiry.set(u64::MAX);
+                timer.elapsed_time.set(None);
+            }
+        }
     }
 }
 
-struct LowresTimerDriver(Rc<TimerInner>);
+/// Task that invalidates the cached time every `LOWRES_RESOLUTION`.
+struct LowresTimerDriver {
+    timer: Rc<Timer>,
+    sleep: Delay,
+}
 
 impl LowresTimerDriver {
-    fn start(timer: Rc<TimerInner>, inner: &mut TimerMod) {
-        let mut flags = timer.flags.get();
-        flags.insert(Flags::LOWRES_DRIVER);
-        timer.flags.set(flags);
-        inner.lowres_driver_sleep = Delay::new(LOWRES_RESOLUTION);
+    fn start(timer: &Rc<Timer>) {
+        timer.insert_flags(Flags::LOWRES_DRIVER);
 
-        crate::spawn(LowresTimerDriver(timer));
+        crate::spawn(LowresTimerDriver {
+            timer: timer.clone(),
+            sleep: Delay::new(LOWRES_RESOLUTION),
+        });
     }
 }
 
 impl Drop for LowresTimerDriver {
     fn drop(&mut self) {
-        self.0.stop_wheel();
+        self.timer.stop_lowres();
     }
 }
 
 impl Future for LowresTimerDriver {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
-        self.0.lowres_driver.register(cx.waker());
+    fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
+        let this = &mut *self;
+        let timer = &this.timer;
+        timer.lowres_driver.register(cx.waker());
 
-        self.0.with_mod(|inner| {
-            let mut flags = self.0.flags.get();
-            if !flags.contains(Flags::LOWRES_TIMER) {
-                flags.insert(Flags::LOWRES_TIMER);
-                self.0.flags.set(flags);
-                inner.lowres_driver_sleep.reset(LOWRES_RESOLUTION);
-            }
+        // the cache was populated, invalidate it after `LOWRES_RESOLUTION`
+        let mut flags = timer.flags.get();
+        if !flags.contains(Flags::LOWRES_TIMER) {
+            flags.insert(Flags::LOWRES_TIMER);
+            timer.flags.set(flags);
+            this.sleep.reset(LOWRES_RESOLUTION);
+        }
 
-            if Pin::new(&mut inner.lowres_driver_sleep).poll(cx).is_ready() {
-                self.0.lowres_time.set(None);
-                self.0.lowres_stime.set(None);
-                flags.remove(Flags::LOWRES_TIMER);
-                self.0.flags.set(flags);
-            }
-            Poll::Pending
-        })
+        if Pin::new(&mut this.sleep).poll(cx).is_ready() {
+            timer.lowres_time.set(None);
+            timer.lowres_stime.set(None);
+            flags.remove(Flags::LOWRES_TIMER);
+            timer.flags.set(flags);
+        }
+        Poll::Pending
     }
 }
 
@@ -749,6 +722,219 @@ impl Future for LowresTimerDriver {
 mod tests {
     use super::*;
     use crate::time::{Millis, interval, sleep};
+
+    /// A handle dropped by a thread-local destructor after the wheel is
+    /// destroyed must not panic.
+    #[test]
+    fn test_drop_handle_after_wheel_destroyed() {
+        use std::cell::RefCell;
+
+        thread_local! {
+            static HOLDER: RefCell<Option<TimerHandle>> = const { RefCell::new(None) };
+        }
+
+        let res = std::thread::spawn(|| {
+            // register the holder destructor first, the wheel is destroyed
+            // before it, destructors run in reverse registration order
+            HOLDER.with(|h| h.borrow_mut().take());
+            ntex::rt::System::build()
+                .build(ntex::rt::DefaultRuntime)
+                .block_on(async {
+                    let hnd = TimerHandle::new(1000);
+                    HOLDER.with(|h| *h.borrow_mut() = Some(hnd));
+                });
+        })
+        .join();
+        assert!(res.is_ok());
+    }
+
+    fn entry() -> TimerEntry {
+        TimerEntry {
+            bucket: None,
+            bucket_entry: 0,
+            task: LocalWaker::new(),
+        }
+    }
+
+    /// Bucket expiry is never earlier than the requested delay, and at most
+    /// one level granularity later.
+    #[test]
+    fn test_bucket_expiry_bounds() {
+        let timer = Timer::new();
+        for elapsed in [0, 1, 7, 8, 63, 64, 511, 12_345, 1 << 30] {
+            timer.elapsed.set(elapsed);
+            let mut delta = 0;
+            while delta < WHEEL_TIMEOUT_CUTOFF {
+                let (idx, expiry) = timer.calc_wheel_index(elapsed + delta, delta);
+                let lvl = (idx / LVL_SIZE as usize) as u64;
+                assert!(expiry > elapsed + delta, "{elapsed} {delta} {expiry}");
+                assert!(
+                    expiry <= elapsed + delta + lvl_gran(lvl),
+                    "{elapsed} {delta} {expiry}"
+                );
+                assert_eq!(expiry % lvl_gran(lvl), 0);
+                assert_eq!(
+                    ((expiry >> lvl_shift(lvl)) & LVL_MASK) as usize,
+                    idx % LVL_SIZE as usize
+                );
+                delta = delta * 2 + 1;
+            }
+
+            // clamped to the capacity of the wheel
+            let (_, expiry) =
+                timer.calc_wheel_index(elapsed + u64::from(u32::MAX), u64::from(u32::MAX));
+            assert!(expiry <= elapsed + WHEEL_TIMEOUT_CUTOFF);
+        }
+    }
+
+    /// The next pending bucket is the earliest occupied one, and executing it
+    /// wakes only its timers.
+    #[test]
+    fn test_next_pending_bucket() {
+        let timer = Timer::new();
+        timer.elapsed.set(1000);
+
+        timer.with_wheel(|w| {
+            assert_eq!(timer.next_pending_bucket(w), None);
+
+            let mut expected = Vec::new();
+            for delta in [5000, 30, 700, 100_000] {
+                let (idx, expiry) = timer.calc_wheel_index(1000 + delta, delta);
+                let no = w.timers.insert(entry());
+                w.link(no, idx);
+                expected.push((expiry, no));
+            }
+            expected.sort_unstable();
+
+            for (expiry, no) in expected {
+                assert_eq!(timer.next_pending_bucket(w), Some(expiry));
+                timer.elapsed.set(expiry);
+                w.execute_expired_timers(expiry);
+                assert!(w.timers[no].bucket.is_none());
+            }
+            assert_eq!(timer.next_pending_bucket(w), None);
+            assert_eq!(w.occupied, [0; LVL_DEPTH as usize]);
+        });
+    }
+
+    #[test]
+    fn test_unlink_relink() {
+        let timer = Timer::new();
+        timer.with_wheel(|w| {
+            let a = w.timers.insert(entry());
+            let b = w.timers.insert(entry());
+            w.link(a, 3);
+            w.link(b, 3);
+            assert_eq!(w.occupied[0], 1 << 3);
+
+            assert!(w.unlink(a));
+            assert!(!w.unlink(a));
+            assert_eq!(w.occupied[0], 1 << 3);
+
+            w.relink(b, LVL_SIZE as usize + 5);
+            assert_eq!(w.occupied[0], 0);
+            assert_eq!(w.occupied[1], 1 << 5);
+            assert_eq!(w.timers[b].bucket, Some(LVL_SIZE as u16 + 5));
+
+            assert!(w.unlink(b));
+            assert_eq!(w.occupied, [0; LVL_DEPTH as usize]);
+        });
+    }
+
+    /// `reset(0)` elapses the timer and wakes the task waiting for it.
+    #[ntex::test]
+    async fn test_reset_zero_wakes_task() {
+        let hnd = Rc::new(TimerHandle::new(10_000));
+        let hnd2 = hnd.clone();
+        crate::spawn(async move { hnd2.reset(0) });
+
+        // the sleep wakes the task if `reset(0)` does not
+        let start = Instant::now();
+        crate::future::select(
+            std::future::poll_fn(|cx| hnd.poll_elapsed(cx)),
+            sleep(Millis(500)),
+        )
+        .await;
+        let elapsed = start.elapsed();
+        assert!(elapsed < Duration::from_millis(100), "elapsed: {elapsed:?}");
+    }
+
+    /// Dropping one driver does not reset the state of the other one.
+    #[test]
+    fn test_driver_drop_keeps_other_driver() {
+        let timer = Rc::new(Timer::new());
+        let no = timer.with_wheel(|w| {
+            let no = w.timers.insert(entry());
+            w.link(no, 3);
+            no
+        });
+        timer.next_expiry.set(3);
+        timer.lowres_time.set(Some(Instant::now()));
+        timer.insert_flags(
+            Flags::RUNNING | Flags::DRIVER_STARTED | Flags::LOWRES_DRIVER | Flags::LOWRES_TIMER,
+        );
+
+        drop(LowresTimerDriver {
+            timer: timer.clone(),
+            sleep: Delay::new(Duration::ZERO),
+        });
+        assert_eq!(timer.flags.get(), Flags::DRIVER_STARTED);
+        assert!(timer.lowres_time.get().is_none());
+        // timers are still pending
+        assert_eq!(timer.next_expiry.get(), 3);
+        timer.with_wheel(|w| assert_eq!(w.timers[no].bucket, Some(3)));
+
+        timer.insert_flags(Flags::RUNNING | Flags::LOWRES_DRIVER);
+        drop(TimerDriver {
+            timer: timer.clone(),
+            sleep: Delay::new(Duration::ZERO),
+            armed: None,
+        });
+        assert_eq!(timer.flags.get(), Flags::LOWRES_DRIVER);
+        assert_eq!(timer.next_expiry.get(), u64::MAX);
+        timer.with_wheel(|w| {
+            assert!(w.timers[no].bucket.is_none());
+            assert_eq!(w.occupied, [0; LVL_DEPTH as usize]);
+        });
+    }
+
+    /// A short timer is measured from the current time, not from the cached
+    /// time that went stale while the thread was blocked.
+    #[ntex::test]
+    async fn test_short_timer_after_blocking() {
+        let _hnd = sleep(Millis(10_000));
+        let _ = now();
+
+        // the lowres driver cannot run, the cached time goes stale
+        std::thread::sleep(Duration::from_millis(100));
+
+        let start = Instant::now();
+        sleep(Millis(50)).await;
+        let elapsed = start.elapsed();
+        assert!(elapsed >= Duration::from_millis(50), "elapsed: {elapsed:?}");
+    }
+
+    /// A late wakeup must not delay the timers that expire later.
+    #[ntex::test]
+    async fn test_late_wakeup_does_not_drift() {
+        let start = Instant::now();
+        let fut1 = sleep(Millis(50));
+        let fut2 = sleep(Millis(600));
+
+        // block the thread, the driver wakes up ~450ms late for `fut1`.
+        // `fut2` expires at ~620ms, with drift it would expire ~550ms after
+        // the late wakeup, i.e. after ~1050ms. The bound leaves room for
+        // scheduling latency on loaded machines.
+        std::thread::sleep(Duration::from_millis(500));
+        fut1.await;
+        fut2.await;
+
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(600) && elapsed < Duration::from_millis(900),
+            "elapsed: {elapsed:?}"
+        );
+    }
 
     #[ntex::test]
     #[allow(unused_variables, clippy::used_underscore_binding)]

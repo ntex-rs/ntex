@@ -668,7 +668,7 @@ mod tests {
     use ntex_io::{Io, IoConfig, IoRef, testing::IoTest};
     use ntex_service::{Ctx, Pipeline, Service, cfg::SharedCfg};
     use ntex_util::time::{Millis, sleep, timeout};
-    use ntex_util::{channel::oneshot, future::lazy};
+    use ntex_util::{channel::condition::Condition, channel::oneshot, future::lazy};
     use rand::Rng;
 
     use super::*;
@@ -1021,6 +1021,8 @@ mod tests {
     async fn application_close_waits_for_pending_service_call() {
         let started = Arc::new(AtomicBool::new(false));
         let started2 = started.clone();
+        let release = Condition::<()>::new();
+        let release2 = release.clone();
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
 
@@ -1029,10 +1031,11 @@ mod tests {
             BytesCodec,
             ntex_service::fn_service(move |msg: DispatchItem<BytesCodec>| {
                 let started = started2.clone();
+                let waiter = release2.wait();
                 async move {
                     if matches!(msg, DispatchItem::Item(_)) {
                         started.store(true, Relaxed);
-                        sleep(Millis(200)).await;
+                        let _ = waiter.ready().await;
                     }
                     Ok::<_, ()>(None)
                 }
@@ -1040,16 +1043,23 @@ mod tests {
         );
 
         client.write("request");
-        sleep(Millis(25)).await;
-        assert!(lazy(|cx| Pin::new(&mut disp).poll(cx)).await.is_pending());
+        for _ in 0..100 {
+            assert!(lazy(|cx| Pin::new(&mut disp).poll(cx)).await.is_pending());
+            if started.load(Relaxed) {
+                break;
+            }
+            sleep(Millis(10)).await;
+        }
         assert!(started.load(Relaxed));
 
+        // the service call is pending until it is released
         state.close();
         assert!(
             timeout(Millis(50), poll_fn(|cx| Pin::new(&mut disp).poll(cx)))
                 .await
                 .is_err()
         );
+        release.notify(());
         timeout(Millis(1000), poll_fn(|cx| Pin::new(&mut disp).poll(cx)))
             .await
             .expect("dispatcher did not drain pending service call")
@@ -1257,8 +1267,10 @@ mod tests {
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"12345678"));
 
+        // the first period receives 3 bytes and is extended, the second one
+        // receives 1 byte and fails
         client.write("1");
-        sleep(Millis(1000)).await;
+        sleep(Millis(500)).await;
         assert!(state.0.is_active());
         client.write("23");
         sleep(Millis(1000)).await;

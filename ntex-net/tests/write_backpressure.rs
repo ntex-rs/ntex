@@ -135,8 +135,14 @@ async fn inline_pages_survive_pending_and_partial_sends() {
     let sock = net::TcpStream::connect(addr).unwrap();
     // without a send buffer the kernel sends straight from the pages, so every
     // send stays in flight until the peer takes the data. Only Windows accepts
-    // zero, BSDs reject it with `EINVAL` and Linux raises it to its minimum
-    let sndbuf = if cfg!(windows) { 0 } else { 4096 };
+    // zero, BSDs reject it with `EINVAL` and Linux raises it to its minimum.
+    // Tokio polls readiness instead of issuing overlapped sends, and without
+    // a send buffer Windows never reports the socket writable again
+    let sndbuf = if cfg!(all(windows, not(feature = "tokio"))) {
+        0
+    } else {
+        4096
+    };
     socket2::SockRef::from(&sock)
         .set_send_buffer_size(sndbuf)
         .unwrap();

@@ -2233,13 +2233,12 @@ mod tests {
         crate::rt::spawn(h1);
 
         client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\nexpect: 100-continue\r\n\r\n");
-        sleep(Millis(3300)).await;
-        let buf = client.read_any();
+        // an expired payload timer would respond with an error or close
+        let buf = client.read().await.unwrap();
         assert_eq!(&buf[..], b"HTTP/1.1 100 Continue\r\n\r\n");
 
         client.write("test");
-        sleep(Millis(100)).await;
-        let buf = client.read_any();
+        let buf = client.read().await.unwrap();
         assert!(buf.starts_with(b"HTTP/1.1 200 OK\r\n"), "{buf:?}");
     }
 
@@ -2607,15 +2606,21 @@ mod tests {
         client.write("GET /test HTTP/1.1\r\nContent-Length: 1048576\r\n\r\n");
         sleep(Millis(50)).await;
 
-        // send partial data to server
-        for _ in 1..8 {
-            let random_bytes: Vec<u8> = (0..256).map(|_| rand::random::<u8>()).collect();
+        // send partial data to server, 1200 bytes per second exceeds the
+        // configured rate in every period
+        for _ in 0..20 {
+            let random_bytes: Vec<u8> = (0..300).map(|_| rand::random::<u8>()).collect();
             client.write(random_bytes);
-            sleep(Millis(750)).await;
+            sleep(Millis(250)).await;
         }
-        // The first interval exceeds the configured rate and earns one
+        // The first period exceeds the configured rate and earns one
         // extension; the two-second maximum then terminates the payload.
-        assert_eq!(mark.load(Ordering::Relaxed), 1536);
+        // Each one-second period lasts about one and less than two seconds
+        // (a timer may expire early by the age of the cached time), so the
+        // payload ends after about 2 to 4 seconds. Without the extension it
+        // would end after about one second, with at most 1500 bytes.
+        let received = mark.load(Ordering::Relaxed);
+        assert!((1800..=5400).contains(&received), "received: {received}");
         assert_eq!(err_mark.load(Ordering::Relaxed), 1);
     }
 

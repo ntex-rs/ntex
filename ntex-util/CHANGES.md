@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+* Streamline the timer wheel, `now()` and `system_time()` no longer touch the wheel
+  when the cached time is valid, and the per-thread wheel is ~4KiB smaller
+
+* `TimerHandle::reset()` no longer adds an extra 16ms tick to short delays
+
+* Fix early timer expiry, a timer was measured from the cached time, which
+  goes stale while the thread is blocked; timers now use `Instant::now()`
+
+* The cached `time::now()` and `time::system_time()` values are refreshed every
+  150ms instead of 5ms
+
+* Remove `time::query_system_time()`, it was identical to `time::system_time()`
+
+* Fix timer drift, a late wakeup of the timer driver delayed all later timers by
+  the same amount; overdue timers now fire in a single pass
+
+* Fix `TimerHandle::reset(0)` not waking the task waiting on the timer
+
+* Dropping the lowres timer driver no longer stops the timer wheel, and dropping
+  either driver no longer allows the other one to be spawned twice
+
+* Fix abort when a `TimerHandle` is dropped by a thread-local destructor after
+  the timer wheel is destroyed
+
 * Add `mpsc::Sender::poll_closed()` and `mpsc::Sender::closed()` to wait until the receiver
   is dropped or the channel is closed
 
