@@ -10,6 +10,10 @@
 * `Bytes::slice_checked()` returns `None` instead of overflowing for bounds
   at `usize::MAX`
 
+* `BytePages::new()` and `BytePages::set_page_size()` panic on
+  `BytePageSize::Unset`, instead of panicking on the first write and disabling
+  the page cache of the thread
+
 * Add the `unsafe` `UninitSlice::as_uninit_slice_mut()` and deprecate
   `AsMut<[MaybeUninit<u8>]>` for `UninitSlice`, which is unsound as safe code
   could write uninitialized bytes into initialized memory

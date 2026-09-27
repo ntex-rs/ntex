@@ -30,8 +30,12 @@ impl BytePages {
     /// Creates a new `BytePages` with the specified page size.
     ///
     /// Pages are allocated lazily using the specified capacity category.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `size` is [`BytePageSize::Unset`].
     pub fn new(size: BytePageSize) -> Self {
-        debug_assert!(size != BytePageSize::Unset, "Page cannot be Unset");
+        assert!(size != BytePageSize::Unset, "Page size cannot be Unset");
 
         // the cache is unavailable while the thread-local is being destroyed
         let cached = CACHE
@@ -102,7 +106,12 @@ impl BytePages {
     }
 
     /// Sets the page size for new pages.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `size` is [`BytePageSize::Unset`].
     pub fn set_page_size(&mut self, size: BytePageSize) {
+        assert!(size != BytePageSize::Unset, "Page size cannot be Unset");
         self.st.as_mut().unwrap().size = size;
     }
 
@@ -1245,6 +1254,19 @@ mod tests {
         let mut pages = BytePages::new(BytePageSize::Size8);
         let n = pages.chunk_mut().len();
         unsafe { pages.advance_mut(n + 1) };
+    }
+
+    #[test]
+    #[should_panic(expected = "Page size cannot be Unset")]
+    fn pages_new_unset() {
+        let _ = BytePages::new(BytePageSize::Unset);
+    }
+
+    #[test]
+    #[should_panic(expected = "Page size cannot be Unset")]
+    fn pages_set_page_size_unset() {
+        let mut pages = BytePages::new(BytePageSize::Size8);
+        pages.set_page_size(BytePageSize::Unset);
     }
 
     #[test]

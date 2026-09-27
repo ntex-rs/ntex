@@ -147,8 +147,8 @@ pub enum BytePageSize {
     /// No fixed page category.
     ///
     /// Buffers of this category are sized on demand and never returned to
-    /// the page cache. When it is used to allocate a new page, the page gets
-    /// the 64 KiB capacity.
+    /// the page cache. It cannot be used as the page size of
+    /// [`BytePages`].
     Unset = 7,
 }
 
