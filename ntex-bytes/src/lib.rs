@@ -178,7 +178,8 @@ impl BytePageSize {
     }
 }
 
-/// Sets the maximum number of cached page allocations for the current thread.
+/// Sets the maximum number of cached page allocations per page size for the
+/// current thread, the default is 16.
 ///
 /// This setting affects only the thread on which it is called.
 pub fn set_pages_cache(size: usize) {

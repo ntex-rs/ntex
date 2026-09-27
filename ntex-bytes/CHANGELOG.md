@@ -2,6 +2,9 @@
 
 ## [1.10.0] (unreleased)
 
+* The page cache keeps at most 16 pages per page size by default, down from
+  128, use `set_pages_cache()` to change it
+
 * Sized pages allocate exactly their category size (4 KiB, 8 KiB, ...), the
   page header is taken from the data capacity, so pages fit allocator size
   classes. `BytePageSize::capacity()` reports the data capacity

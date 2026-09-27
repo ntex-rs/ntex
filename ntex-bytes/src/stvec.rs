@@ -435,6 +435,9 @@ pub(crate) fn set_pages_cache(size: usize) {
     });
 }
 
+/// Default number of cached pages per page size.
+const DEFAULT_PAGES_CACHE: usize = 16;
+
 struct Cache {
     size: usize,
     cache: [Vec<StorageVec>; 7],
@@ -443,7 +446,7 @@ struct Cache {
 impl Default for Cache {
     fn default() -> Self {
         Self {
-            size: 128,
+            size: DEFAULT_PAGES_CACHE,
             cache: Default::default(),
         }
     }
@@ -639,6 +642,25 @@ mod tests {
 
         let st = StorageVec::sized(BytePageSize::Size8);
         assert_eq!(addr, st.0);
+    }
+
+    #[test]
+    fn default_cache_limit_per_page_size() {
+        super::CACHE.with(|cache| cache.set(Some(Box::default())));
+
+        let pages: Vec<_> = (0..20)
+            .map(|_| StorageVec::sized(BytePageSize::Size4))
+            .collect();
+        drop(pages);
+
+        let cached = super::CACHE.with(|c| {
+            let cst = c.take().unwrap();
+            let len = cst.cache[BytePageSize::Size4 as usize].len();
+            c.set(Some(cst));
+            len
+        });
+        assert_eq!(cached, super::DEFAULT_PAGES_CACHE);
+        assert_eq!(super::DEFAULT_PAGES_CACHE, 16);
     }
 
     #[test]
