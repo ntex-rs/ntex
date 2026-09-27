@@ -2,6 +2,9 @@
 
 ## [4.1.0] - Unreleased
 
+* Read buffers larger than `high` grow by doubling their capacity, by at most 1 MiB at once,
+  instead of in steps of `high`, so buffering a large frame no longer copies it once per step
+
 * The read buffer cache no longer keeps buffers that share their allocation with split off
   data, it neither pins whole allocations for decoded frames nor hands out small leftovers
 

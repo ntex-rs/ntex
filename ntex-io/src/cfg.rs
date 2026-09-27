@@ -12,6 +12,8 @@ const DEFAULT_CACHE_LIMIT: usize = 1024 * 1024;
 const DEFAULT_HIGH: usize = 16 * 1024 - 24;
 const DEFAULT_LOW: usize = 512 + 24;
 const DEFAULT_HALF: usize = (16 * 1024 - 24) / 2;
+// read buffers above `high` double in capacity, by at most this much at once
+const MAX_GROW_STEP: usize = 1024 * 1024;
 
 static CACHE_LIMIT: AtomicUsize = AtomicUsize::new(DEFAULT_CACHE_LIMIT);
 
@@ -97,8 +99,8 @@ pub struct BufConfig {
     ///
     /// For [`IoConfig::read_buf`] this is also the capacity of a freshly
     /// allocated buffer, the capacity [`resize`](Self::resize) compacts
-    /// buffered data into, and the growth increment for data that does not
-    /// fit. For [`IoConfig::write_buf`] it is only a
+    /// buffered data into, and the largest capacity that is cached. For
+    /// [`IoConfig::write_buf`] it is only a
     /// watermark; page sizing is controlled by
     /// [`IoConfig::set_write_page_size`].
     pub high: usize,
@@ -371,14 +373,19 @@ impl IoConfig {
     ///
     /// `high_watermark` enables read backpressure when the application-facing
     /// buffer reaches this size. It is also the capacity of a freshly
-    /// allocated read buffer, the capacity buffered data is compacted into
-    /// when free capacity runs low, and the increment by which larger buffers
-    /// grow. It must be greater than zero.
+    /// allocated read buffer and the capacity buffered data is compacted into
+    /// when free capacity runs low; larger data grows the buffer by doubling
+    /// its capacity. It must be greater than zero.
     /// `low_watermark` is the free-capacity threshold below which a read
     /// buffer is compacted or grown.
     ///
     /// Empty read buffers are kept in a per-thread cache shared by all
-    /// configurations, see [`set_read_buf_cache_limit`].
+    /// configurations, see [`set_read_buf_cache_limit`]. A connection holding
+    /// unconsumed input, such as the start of a frame that has not fully
+    /// arrived, keeps its whole read buffer, so each such connection uses at
+    /// least `high_watermark` bytes until the rest arrives. Read-rate timeouts,
+    /// see [`set_frame_read_rate`](Self::set_frame_read_rate), bound how long
+    /// a slow peer can hold it.
     ///
     /// Read backpressure is released once the application-facing buffer falls
     /// to half of `high_watermark`.
@@ -545,13 +552,16 @@ impl BufConfig {
     ///
     /// When the buffered data plus `size` fits into `high`, the data is moved
     /// into a cached buffer of capacity `high`, and the old buffer is returned
-    /// to the cache. Otherwise the buffer grows in steps of `high`.
+    /// to the cache. Otherwise the buffer is reallocated with double its
+    /// capacity, growing by at most 1 MiB at once, or with enough capacity for
+    /// `size` more bytes if that is larger. Buffers grown beyond `high` are
+    /// never cached.
     ///
     /// # Panics
     ///
     /// Panics if growth is required and `high` is zero.
     pub fn resize_min(&self, buf: &mut BytesMut, size: usize) {
-        let mut avail = buf.remaining_mut();
+        let avail = buf.remaining_mut();
         if avail < size {
             assert!(
                 self.high > 0,
@@ -567,11 +577,9 @@ impl BufConfig {
                 return;
             }
 
-            let mut new_cap = buf.capacity();
-            while avail < size {
-                avail += self.high;
-                new_cap += self.high;
-            }
+            let len = buf.len();
+            let cap = buf.capacity();
+            let new_cap = (len + size).max(cap + cap.min(MAX_GROW_STEP));
             buf.reserve_capacity(new_cap);
         }
     }
@@ -778,6 +786,42 @@ mod tests {
         for ptr in ptrs.iter().rev().take(n) {
             assert_eq!(cfg.get().as_ptr(), *ptr);
         }
+        assert_eq!(CACHE.with(|c| c.size.get()), 0);
+    }
+
+    #[test]
+    fn large_buffers_grow_by_doubling_and_are_not_cached() {
+        CACHE.with(LocalCache::clear);
+        let cfg = *IoConfig::new().read_buf();
+
+        // reads that fill the buffer until a 1 MiB frame is buffered
+        let mut buf = cfg.get();
+        let mut grows = 0;
+        while buf.len() < 1024 * 1024 {
+            let (ptr, cap) = (buf.as_ptr(), buf.capacity());
+            cfg.resize(&mut buf);
+            if buf.as_ptr() != ptr {
+                grows += 1;
+                assert!(buf.capacity() >= 2 * cap, "{cap} -> {}", buf.capacity());
+            }
+            let n = buf.remaining_mut();
+            buf.extend_from_slice(&vec![1; n]);
+        }
+        assert!(grows <= 8, "{grows} reallocations");
+        assert!(buf.capacity() <= 2 * 1024 * 1024 + cfg.high);
+
+        // the step is limited for very large buffers
+        let mut big = BytesMut::with_capacity(4 * MAX_GROW_STEP);
+        big.extend_from_slice(&vec![2; 4 * MAX_GROW_STEP]);
+        cfg.resize_min(&mut big, 1);
+        assert_eq!(big.capacity(), 5 * MAX_GROW_STEP);
+        drop(big);
+
+        // grown buffers are dropped, even once most of the data is consumed
+        let len = buf.len();
+        drop(buf.split_to(len - 10));
+        assert!(buf.is_unique());
+        cfg.release(buf);
         assert_eq!(CACHE.with(|c| c.size.get()), 0);
     }
 
