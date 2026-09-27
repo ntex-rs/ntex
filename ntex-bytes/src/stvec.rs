@@ -310,16 +310,65 @@ impl StorageVec {
                     }
                     return;
                 }
+
+                // Grow the allocation instead of copying into a new one, the
+                // allocator can often extend it in place. A pooled page keeps
+                // its size class, it goes back to the page cache on release.
+                if (*inner).size == BytePageSize::Unset {
+                    self.realloc(len, capacity, grown_capacity(len, new_cap));
+                    return;
+                }
             }
-            // Create a new storage. It is at least twice the length, so
-            // appending in small steps reallocates a logarithmic number of
-            // times, a buffer holding little data still gets what it asked for.
-            let new_cap = cmp::max(new_cap, cmp::min(len.saturating_mul(2), MAX_CAPACITY));
+            // Create a new storage
             *self = StorageVec(SharedVec::create(
                 BytePageSize::Unset,
-                new_cap,
+                grown_capacity(len, new_cap),
                 self.as_ref(),
             ));
+        }
+    }
+
+    /// Grows the unique, unpooled allocation to hold `new_cap` bytes.
+    ///
+    /// # Safety
+    ///
+    /// The handle must be the only reference to the allocation, `len` and
+    /// `capacity` must be its current length and capacity.
+    unsafe fn realloc(&mut self, len: usize, capacity: usize, new_cap: usize) {
+        assert!(
+            new_cap <= MAX_CAPACITY,
+            "buffer capacity {new_cap} exceeds maximum {MAX_CAPACITY}"
+        );
+        let old_layout = shared_vec_layout(capacity).unwrap();
+        let new_layout = shared_vec_layout(new_cap).unwrap();
+
+        unsafe {
+            let ptr = self.0.as_ptr();
+
+            // move the data to the start, it is at the start of the new
+            // capacity as well. The header is consistent before allocating,
+            // the allocation error handler may unwind.
+            let offset = (*ptr).offset as usize;
+            if offset != METADATA_SIZE {
+                if len != 0 {
+                    let data = ptr.cast::<u8>();
+                    ptr::copy(data.add(offset), data.add(METADATA_SIZE), len);
+                }
+                (*ptr).offset = METADATA_SIZE_U32;
+                (*ptr).remaining = (capacity - len) as u32;
+            }
+
+            let new_ptr = alloc::realloc(ptr.cast(), old_layout, new_layout.size());
+            if new_ptr.is_null() {
+                alloc::handle_alloc_error(new_layout);
+            }
+
+            #[allow(clippy::cast_ptr_alignment)]
+            let inner = new_ptr.cast::<SharedVec>();
+            let capacity = (new_layout.size() - METADATA_SIZE) as u32;
+            (*inner).capacity = capacity;
+            (*inner).remaining = capacity - len as u32;
+            self.0 = NonNull::new_unchecked(inner);
         }
     }
 
@@ -535,6 +584,15 @@ pub(crate) fn release_shared_vec(ptr: *mut SharedVec) {
     }
 }
 
+/// The capacity a buffer of `len` bytes grows to when it needs `required`.
+///
+/// It is at least twice the length, so appending in small steps reallocates a
+/// logarithmic number of times, a buffer holding little data still gets what
+/// it asked for.
+fn grown_capacity(len: usize, required: usize) -> usize {
+    cmp::max(required, cmp::min(len.saturating_mul(2), MAX_CAPACITY))
+}
+
 const fn shared_vec_layout(cap: usize) -> Result<Layout, LayoutError> {
     let s_layout = match Layout::from_size_align(cap, Layout::new::<u8>().align()) {
         Ok(l) => l,
@@ -605,5 +663,71 @@ mod tests {
         }
         st.as_mut()[0] = 2;
         assert_eq!(handle.join().unwrap(), 1);
+    }
+
+    fn pattern(len: usize) -> Vec<u8> {
+        (0..len).map(|i| i as u8).collect()
+    }
+
+    #[test]
+    fn reserve_grows_unique_buffer() {
+        let data = pattern(100);
+        let mut st = StorageVec::from_slice(100, &data);
+        st.reserve(1000);
+        assert_eq!(st.as_ref(), &data[..]);
+        assert!(st.capacity() >= 1100);
+        assert_eq!(st.remaining(), st.capacity() - st.len());
+
+        // the view may start past the allocation start
+        let mut st = StorageVec::from_slice(100, &data);
+        unsafe { st.set_start(30) };
+        st.reserve(1000);
+        assert_eq!(st.as_ref(), &data[30..]);
+        assert!(st.capacity() >= 1070);
+        assert_eq!(st.remaining(), st.capacity() - st.len());
+        for i in 0..1000 {
+            st.put_u8(i as u8);
+        }
+        assert_eq!(&st.as_ref()[..70], &data[30..]);
+        assert_eq!(st.len(), 1070);
+
+        // nothing left in the view
+        let mut st = StorageVec::from_slice(100, &data);
+        unsafe { st.set_start(100) };
+        st.reserve(1000);
+        assert!(st.as_ref().is_empty());
+        assert_eq!(st.remaining(), st.capacity());
+    }
+
+    #[test]
+    fn reserve_keeps_shared_views() {
+        let data = pattern(100);
+        let mut st = StorageVec::from_slice(100, &data);
+        let view = st.shallow_freeze();
+        assert!(!view.is_inline());
+        st.reserve(1000);
+        st.as_mut()[0] = 0xff;
+        assert_eq!(view.as_ref(), &data[..]);
+        assert_eq!(&st.as_ref()[1..], &data[1..]);
+    }
+
+    #[test]
+    fn reserve_pooled_page_leaves_page_to_cache() {
+        super::CACHE.with(|cache| cache.set(Some(Box::default())));
+
+        let mut st = StorageVec::sized(BytePageSize::Size8);
+        let page = st.0;
+        let data = pattern(st.capacity());
+        for b in &data {
+            st.put_u8(*b);
+        }
+        st.reserve(1);
+        assert_eq!(st.page_size(), BytePageSize::Unset);
+        assert_ne!(st.0, page);
+        assert_eq!(st.as_ref(), &data[..]);
+
+        // the page went back to the cache with its size class
+        let st2 = StorageVec::sized(BytePageSize::Size8);
+        assert_eq!(st2.0, page);
     }
 }
