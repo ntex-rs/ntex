@@ -199,13 +199,12 @@ impl Storage {
 
     #[inline]
     fn from_slice_with_capacity(cap: usize, src: &[u8]) -> Storage {
-        unsafe {
-            let shared = stvec::SharedVec::create(BytePageSize::Unset, cap, src);
-            Storage {
-                len: src.len(),
-                ptr: shared.as_ptr().add(1).cast::<u8>(),
-                offset: DEFAULT_OFFSET,
-            }
+        let shared = stvec::SharedVec::create(BytePageSize::Unset, cap, src);
+        Storage {
+            len: src.len(),
+            // SAFETY: the data follows the `SharedVec` header in the allocation
+            ptr: unsafe { shared.as_ptr().add(1).cast::<u8>() },
+            offset: DEFAULT_OFFSET,
         }
     }
 
@@ -224,23 +223,24 @@ impl Storage {
 
     /// Return a slice for the handle's view into the shared buffer
     pub(crate) fn as_ref(&self) -> &[u8] {
-        unsafe {
-            match self.kind() {
-                KIND_INLINE => slice::from_raw_parts(self.inline_ptr_ro(), self.inline_len()),
-                KIND_STEXT => slice::from_raw_parts(self.as_ptr(), self.len()),
-                _ => slice::from_raw_parts(self.ptr, self.len),
-            }
+        match self.kind() {
+            // SAFETY: the inline buffer holds `inline_len` initialized bytes
+            KIND_INLINE => unsafe {
+                slice::from_raw_parts(self.inline_ptr_ro(), self.inline_len())
+            },
+            // SAFETY: `StorageExt` guarantees the vtable pointer and length
+            KIND_STEXT => unsafe { slice::from_raw_parts(self.as_ptr(), self.len()) },
+            // SAFETY: vec and static storage point to `len` initialized bytes
+            _ => unsafe { slice::from_raw_parts(self.ptr, self.len) },
         }
     }
 
     /// Return a raw pointer to data
     pub(crate) unsafe fn as_ptr(&self) -> *const u8 {
-        unsafe {
-            match self.kind() {
-                KIND_INLINE => self.inline_ptr_ro(),
-                KIND_STEXT => ((*self.st_vtable()).as_ptr)(self.st_addr(), self.st_len()),
-                _ => self.ptr,
-            }
+        match self.kind() {
+            KIND_INLINE => self.inline_ptr_ro(),
+            KIND_STEXT => ((*self.st_vtable()).as_ptr)(self.st_addr(), self.st_len()),
+            _ => self.ptr,
         }
     }
 
@@ -253,26 +253,12 @@ impl Storage {
     }
 
     pub(crate) fn get_u8(&mut self) -> u8 {
-        unsafe {
-            let ret = match self.kind() {
-                KIND_INLINE => {
-                    assert!(self.inline_len() >= 1);
-                    *self.inline_ptr_ro()
-                }
-                KIND_STEXT => {
-                    let vt = &*self.st_vtable();
-                    let len = (vt.len)(self.st_addr(), self.st_len());
-                    assert!(len >= 1);
-                    *(vt.as_ptr)(self.st_addr(), self.st_len())
-                }
-                _ => {
-                    assert!(self.len >= 1);
-                    *self.ptr
-                }
-            };
-            self.set_start(1);
-            ret
-        }
+        let data = self.as_ref();
+        assert!(!data.is_empty());
+        let ret = data[0];
+        // SAFETY: the view holds at least one byte
+        unsafe { self.set_start(1) };
+        ret
     }
 
     /// Pointer to the start of the inline buffer

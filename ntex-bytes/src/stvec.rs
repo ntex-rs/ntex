@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::atomic::{self, AtomicU32};
 use std::{cell::Cell, cmp, mem, num::NonZeroUsize, ptr, ptr::NonNull, slice};
 
-use crate::{BytePageSize, storage::INLINE_CAP, storage::Storage};
+use crate::{BytePageSize, buf::UninitSlice, storage::INLINE_CAP, storage::Storage};
 
 #[derive(Debug)]
 /// Thread-safe reference-counted container for the shared storage.
@@ -117,6 +117,22 @@ impl StorageVec {
             (*inner).remaining -= 1;
             *self.as_ptr().add(len) = n;
         }
+    }
+
+    /// Returns the spare capacity after the data.
+    #[inline]
+    pub(crate) fn spare_mut(&mut self) -> &mut UninitSlice {
+        // SAFETY: `remaining` bytes after `len` are allocated and owned by this view
+        unsafe { UninitSlice::from_raw_parts_mut(self.as_ptr().add(self.len()), self.remaining()) }
+    }
+
+    /// Appends as much of `src` as fits, returns the number of bytes copied.
+    #[inline]
+    pub(crate) fn put_slice_partial(&mut self, src: &[u8]) -> usize {
+        let cnt = cmp::min(src.len(), self.remaining());
+        self.spare_mut()[..cnt].copy_from_slice(&src[..cnt]);
+        unsafe { self.set_len(self.len() + cnt) };
+        cnt
     }
 
     pub(crate) fn len(&self) -> usize {

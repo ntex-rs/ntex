@@ -1,4 +1,4 @@
-use std::{cmp, mem, ptr};
+use std::{cmp, mem};
 
 macro_rules! buf_get_impl {
     ($this:ident, $typ:tt::$conv:tt) => {{
@@ -210,16 +210,10 @@ pub trait Buf {
         assert!(self.remaining() >= dst.len());
 
         while off < dst.len() {
-            let cnt;
-
-            unsafe {
-                let src = self.chunk();
-                cnt = cmp::min(src.len(), dst.len() - off);
-
-                ptr::copy_nonoverlapping(src.as_ptr(), dst[off..].as_mut_ptr(), cnt);
-
-                off += cnt;
-            }
+            let src = self.chunk();
+            let cnt = cmp::min(src.len(), dst.len() - off);
+            dst[off..off + cnt].copy_from_slice(&src[..cnt]);
+            off += cnt;
 
             self.advance(cnt);
         }

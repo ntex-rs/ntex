@@ -600,10 +600,7 @@ impl BufMut for BytesMut {
 
     #[inline]
     fn chunk_mut(&mut self) -> &mut UninitSlice {
-        unsafe {
-            let ptr = &mut self.storage.as_ptr();
-            UninitSlice::from_raw_parts_mut(ptr.add(self.len()), self.remaining_mut())
-        }
+        self.storage.spare_mut()
     }
 
     #[inline]
@@ -622,13 +619,8 @@ impl BufMut for BytesMut {
 
     #[inline]
     fn put_slice(&mut self, src: &[u8]) {
-        let len = src.len();
-        self.reserve(len);
-
-        unsafe {
-            ptr::copy_nonoverlapping(src.as_ptr(), self.chunk_mut().as_mut_ptr(), len);
-            self.advance_mut(len);
-        }
+        self.reserve(src.len());
+        self.storage.put_slice_partial(src);
     }
 
     #[inline]

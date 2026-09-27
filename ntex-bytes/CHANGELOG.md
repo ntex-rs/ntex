@@ -8,6 +8,8 @@
 * Generate the shared `Bytes`/`BytesMut` trait impls and the `BufMut::put_*`
   integer methods with macros
 
+* Reduce and narrow `unsafe` blocks in the buffer copy and storage code
+
 * `BytePage` implements `PartialEq` against `[u8]`, `[u8; N]`, `str`, `Vec<u8>`
   and `String`, in both directions
 

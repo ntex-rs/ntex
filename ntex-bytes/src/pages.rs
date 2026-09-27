@@ -1,5 +1,5 @@
 #![allow(clippy::missing_panics_doc, clippy::box_collection)]
-use std::{borrow::Borrow, cell::Cell, cmp, collections::VecDeque, fmt, io, mem, ops, ptr};
+use std::{borrow::Borrow, cell::Cell, cmp, collections::VecDeque, fmt, io, mem, ops};
 
 use crate::{Buf, BufMut, BytePageSize, ByteString, Bytes, BytesMut};
 use crate::{buf::UninitSlice, stvec::StorageVec};
@@ -488,12 +488,8 @@ impl BufMut for BytePages {
             }
             self.current = Some(StorageVec::sized(self.page_size()));
         }
-        unsafe {
-            // `current` is set, a new page is allocated above if there is no spare capacity
-            let st = self.current.as_ref().unwrap();
-            let ptr = &mut st.as_ptr();
-            UninitSlice::from_raw_parts_mut(ptr.add(st.len()), st.remaining())
-        }
+        // `current` is set, a new page is allocated above if there is no spare capacity
+        self.current.as_mut().unwrap().spare_mut()
     }
 
     fn put<T: Buf>(&mut self, mut src: T)
@@ -510,17 +506,7 @@ impl BufMut for BytePages {
 
     fn put_slice(&mut self, mut src: &[u8]) {
         while !src.is_empty() {
-            let amount = self.with_current(|st| {
-                let amount = cmp::min(src.len(), st.remaining());
-                unsafe {
-                    let ptr = &mut st.as_ptr();
-                    let chunk = UninitSlice::from_raw_parts_mut(ptr.add(st.len()), st.remaining());
-
-                    ptr::copy_nonoverlapping(src.as_ptr(), chunk.as_mut_ptr(), amount);
-                    st.set_len(st.len() + amount);
-                }
-                amount
-            });
+            let amount = self.with_current(|st| st.put_slice_partial(src));
 
             src = &src[amount..];
         }
@@ -1228,7 +1214,7 @@ mod tests {
         // filling the current page through `chunk_mut` starts a new one
         let n = pages.chunk_mut().len();
         unsafe {
-            ptr::write_bytes(pages.chunk_mut().as_mut_ptr(), 1, n);
+            std::ptr::write_bytes(pages.chunk_mut().as_mut_ptr(), 1, n);
             pages.advance_mut(n);
         }
         assert!(pages.chunk_mut().len() > 0);

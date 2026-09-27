@@ -1,4 +1,4 @@
-use std::{cmp, mem, ptr};
+use std::{cmp, mem};
 
 use super::{UninitSlice, Writer};
 
@@ -241,16 +241,10 @@ pub trait BufMut {
         assert!(self.remaining_mut() >= src.len(), "buffer overflow");
 
         while off < src.len() {
-            let cnt;
-
-            unsafe {
-                let dst = self.chunk_mut();
-                cnt = cmp::min(dst.len(), src.len() - off);
-
-                ptr::copy_nonoverlapping(src[off..].as_ptr(), dst.as_mut_ptr(), cnt);
-
-                off += cnt;
-            }
+            let dst = self.chunk_mut();
+            let cnt = cmp::min(dst.len(), src.len() - off);
+            dst[..cnt].copy_from_slice(&src[off..off + cnt]);
+            off += cnt;
 
             unsafe {
                 self.advance_mut(cnt);
@@ -633,8 +627,8 @@ impl BufMut for &mut [u8] {
 
     #[inline]
     fn chunk_mut(&mut self) -> &mut UninitSlice {
-        // UninitSlice is repr(transparent), so safe to transmute
-        unsafe { &mut *(ptr::from_mut::<[u8]>(*self) as *mut _) }
+        // the bytes are initialized, `UninitSlice` never reads or de-initializes them
+        unsafe { UninitSlice::from_raw_parts_mut(self.as_mut_ptr(), self.len()) }
     }
 
     #[inline]
