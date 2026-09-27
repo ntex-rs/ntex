@@ -1,6 +1,6 @@
 # Changes
 
-## [Unreleased]
+## [2.0.0] - Unreleased
 
 * Fix wrong segment values for paths longer than 64KiB, offsets were stored
   as `u16` and wrapped. `Path::skip()` takes `u32`

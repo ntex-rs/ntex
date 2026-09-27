@@ -1,6 +1,6 @@
 # Changes
 
-## [4.2.0] - 2026-09-25
+## [4.2.0] - Unreleased
 
 * Rename `ServerBuilder::maxconn()` to `max_connections()`; the old name is deprecated
 

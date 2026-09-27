@@ -1,6 +1,6 @@
 # Changes
 
-## [Unreleased]
+## [4.1.0] - Unreleased
 
 * Fix stalled I/O in the compio backend when the `block_on` future woke another task
   whenever it was polled, e.g. while reading an h2 response body
@@ -13,8 +13,6 @@
 
 * Do not report `NotConnected` from a graceful shutdown as a transport error, macOS
   fails `shutdown()` with `ENOTCONN` once the peer has closed the connection
-
-## [4.1.0] - 2026-09-23
 
 * Fix aliasing violation in the IOCP backend when a write was issued while a
   recv completed immediately, the operations are now boxed separately

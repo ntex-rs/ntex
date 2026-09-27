@@ -232,7 +232,7 @@ async fn get_response(
                     Ok((head, payload))
                 }
                 None => Err(Error::from(ClientError::H2(
-                    h2::OperationError::Connection(h2::ConnectionError::MissingPseudo("Status")),
+                    h2::OperationError::Stream(h2::StreamError::MissingPseudo("status")),
                 ))),
             }
         }

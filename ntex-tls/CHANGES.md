@@ -1,6 +1,6 @@
 # Changes
 
-## [4.1.0] - 2026-09-22
+## [4.1.0] - Unreleased
 
 * schannel: add `ClientConfig::set_client_cert()` with `ClientCert::from_store()`
   and `ClientCert::from_store_by_subject()`

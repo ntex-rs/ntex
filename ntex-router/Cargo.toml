@@ -1,6 +1,6 @@
 [package]
 name = "ntex-router"
-version = "1.1.0"
+version = "2.0.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Path router"
 keywords = ["ntex"]
@@ -8,7 +8,7 @@ repository = "https://github.com/ntex-rs/ntex.git"
 documentation = "https://docs.rs/ntex-router/"
 license = "MIT OR Apache-2.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.97"
 
 [lib]
 name = "ntex_router"

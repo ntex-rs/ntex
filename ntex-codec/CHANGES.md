@@ -1,6 +1,6 @@
 # Changes
 
-## [2.0.0] - 2026-09-26
+## [2.0.0] - 2026-09-..
 
 * Remove deprecated `Encoder::encode()` method with `BytesMut` buffer
 
