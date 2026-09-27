@@ -606,22 +606,10 @@ const fn shared_vec_layout(cap: usize) -> Result<Layout, LayoutError> {
     }
 }
 
-// While there is `std::process:abort`, it's only available in Rust 1.17, and
-// our minimum supported version is currently 1.15. So, this acts as an abort
-// by triggering a double panic, which always aborts in Rust.
-struct Abort;
-
-impl Drop for Abort {
-    fn drop(&mut self) {
-        panic!();
-    }
-}
-
 #[inline(never)]
 #[cold]
-pub(crate) fn abort() {
-    let _a = Abort;
-    panic!();
+pub(crate) fn abort() -> ! {
+    std::process::abort()
 }
 
 #[cfg(test)]
