@@ -122,6 +122,9 @@ impl Stack {
     pub(crate) fn set_read_buf(&self, buf: BytesMut, cfg: &IoConfig) {
         self.with_last(move |buffer| {
             if let Some(mut first_buf) = buffer.read.take() {
+                // grow through the configured policy, so the merged buffer
+                // stays cacheable when the data fits
+                cfg.read_buf().resize_min(&mut first_buf, buf.len());
                 first_buf.extend_from_slice(&buf);
                 cfg.read_buf().release(buf);
                 buffer.read.set(Some(first_buf));
@@ -527,6 +530,34 @@ mod tests {
 
         stack.set_read_buf(BytesMut::new(), ioref.cfg());
         assert!(stack.get_read_buf().is_none());
+    }
+
+    #[ntex::test]
+    async fn set_read_buf_merges_into_cacheable_buffer() {
+        let (_, server) = IoTest::create();
+        let io = Io::from(server);
+        let ioref = io.get_ref();
+        let cfg = ioref.cfg().read_buf();
+        let stack = Stack::new(BytePageSize::Size8);
+
+        // unconsumed input, most of the buffer is taken by a decoded frame
+        // that is still alive
+        let mut first = cfg.get();
+        first.extend_from_slice(&vec![1; cfg.high - 100]);
+        let frame = first.split_to(cfg.high - 1100);
+        stack.set_read_buf(first, ioref.cfg());
+
+        // a read into a buffer of its own completes
+        let mut second = cfg.get();
+        second.extend_from_slice(&[2; 4000]);
+        stack.set_read_buf(second, ioref.cfg());
+
+        let merged = stack.get_read_buf().unwrap();
+        assert_eq!(merged.len(), 5000);
+        assert_eq!(&merged[..1000], &[1; 1000][..]);
+        assert_eq!(&merged[1000..], &[2; 4000][..]);
+        assert_eq!(merged.capacity(), cfg.high);
+        assert_eq!(frame.len(), cfg.high - 1100);
     }
 
     #[ntex::test]

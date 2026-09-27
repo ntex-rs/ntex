@@ -12,6 +12,9 @@
 
 * `TimerHandle::remains()` rounds the remaining time up
 
+* Size the read buffer through `BufConfig::resize_min()` when a read completes
+  while earlier input is still unconsumed, so the merged buffer stays cacheable
+
 * Release buffered input and output when `Io` is dropped, instead of keeping it
   until the transport and every `IoRef` let go of the connection state
 

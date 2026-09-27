@@ -7,11 +7,11 @@ use windows_sys::Win32::{
         ERROR_MORE_DATA, ERROR_NO_DATA, ERROR_NOT_FOUND, ERROR_OPERATION_ABORTED,
         ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, GetLastError,
     },
-    Networking::WinSock::{WSABUF, WSARecv, WSASend},
+    Networking::WinSock::{SOCKET_ERROR, WSABUF, WSAEWOULDBLOCK, WSARecv, WSASend, recv},
     System::IO::CancelIoEx,
 };
 
-use ntex_bytes::{BufMut, BytePage, BytesMut};
+use ntex_bytes::{BufMut, BytePage};
 use ntex_io::{IoContext, IoTaskStatus};
 use ntex_rt::syscall;
 
@@ -26,6 +26,9 @@ bitflags::bitflags! {
     struct Flags: u8 {
         const WAITING     = 0b0000_0001;
         const CLOSING     = 0b0000_0010;
+        /// The socket could not be switched to non-blocking mode, so it is
+        /// only read once the kernel reported it readable.
+        const BLOCKING    = 0b0000_0100;
     }
 }
 
@@ -36,19 +39,31 @@ pub(crate) struct ReadOperation {
     id: usize, // idx for StreamItem
     io: RawSocket,
     ctx: IoContext,
-    buf: Option<BytesMut>,
     flags: Flags,
 }
 
 impl ReadOperation {
-    pub(crate) fn new(id: usize, io: RawSocket, ctx: IoContext, api: &ReactorApi) -> Self {
+    /// Creates the read operation of a socket.
+    ///
+    /// `nonblocking` tells whether the socket is in non-blocking mode, which
+    /// lets it be read without waiting for the kernel to report it readable.
+    pub(crate) fn new(
+        id: usize,
+        io: RawSocket,
+        ctx: IoContext,
+        api: &ReactorApi,
+        nonblocking: bool,
+    ) -> Self {
         Self {
             overlapped: api.overlapped(RD_OP),
             id,
             io,
             ctx,
-            buf: None,
-            flags: Flags::empty(),
+            flags: if nonblocking {
+                Flags::empty()
+            } else {
+                Flags::BLOCKING
+            },
         }
     }
 
@@ -66,7 +81,6 @@ impl ReadOperation {
     /// completes it, as when a cancel does not take.
     #[cfg(test)]
     pub(crate) fn fake_pending(&mut self) {
-        self.buf = Some(self.ctx.take_read_buf());
         self.flags.insert(Flags::WAITING);
     }
 
@@ -91,9 +105,9 @@ impl ReadOperation {
             ) {
                 let e = err.raw_os_error();
                 if e != Some(ERROR_NOT_FOUND as _) && e != Some(ERROR_OPERATION_ABORTED as _) {
-                    // The recv is still live and the kernel still owns the read
-                    // buffer, so fall through and wait for the completion rather
-                    // than recycling the buffer and reporting the op as finished.
+                    // The recv is still live and the kernel still owns the
+                    // operation, so fall through and wait for the completion
+                    // rather than reporting the op as finished.
                     log::error!(
                         "{}: failed to cancel recv({}): {err:?}",
                         self.ctx.tag(),
@@ -110,6 +124,13 @@ impl ReadOperation {
         }
     }
 
+    /// Reads available input into the read buffer of the connection.
+    ///
+    /// Input is read in place with a non-blocking `recv`. Once the socket has
+    /// no more input, a zero-byte overlapped recv is posted to wait for more,
+    /// so no buffer is handed to the kernel while the connection is idle, and
+    /// input that arrives while earlier input is still unconsumed is appended
+    /// to it instead of going into a buffer of its own.
     pub(crate) fn read(&mut self) {
         if self.flags.contains(Flags::WAITING) {
             return;
@@ -118,12 +139,45 @@ impl ReadOperation {
         #[cfg(feature = "trace")]
         log::trace!("{}: Rcv({})", self.ctx.tag(), self.io);
 
+        // A blocking socket is only read once it has been reported readable
+        let mut readable = !self.flags.contains(Flags::BLOCKING);
         loop {
-            let mut buf = self.ctx.take_read_buf();
-            let s = buf.chunk_mut();
+            if readable {
+                // a read that fills the buffer is likely to leave more input
+                // behind, a shorter one most likely drained the socket
+                let mut drained = false;
+                let st = self.ctx.with_read_buf(|buf| {
+                    let chunk = buf.chunk_mut();
+                    let len = i32::try_from(chunk.len()).unwrap_or(i32::MAX);
+                    let res = unsafe { recv(self.io as _, chunk.as_mut_ptr(), len, 0) };
+                    if res == SOCKET_ERROR {
+                        let err = io::Error::last_os_error();
+                        if err.raw_os_error() == Some(WSAEWOULDBLOCK) {
+                            drained = true;
+                            Poll::Pending
+                        } else {
+                            Poll::Ready(Err(err))
+                        }
+                    } else {
+                        let size = usize::try_from(res).unwrap_or_default();
+                        drained = res < len;
+                        // SAFETY: winsock tells us how many bytes it read
+                        unsafe { buf.advance_mut(size) };
+                        Poll::Ready(Ok(size))
+                    }
+                });
+                if st != IoTaskStatus::Io {
+                    break;
+                }
+                if !drained && !self.flags.contains(Flags::BLOCKING) {
+                    continue;
+                }
+            }
+
+            // wait for more input without handing a buffer to the kernel
             let lpbufs = [WSABUF {
-                len: s.len() as u32,
-                buf: s.as_mut_ptr(),
+                len: 0,
+                buf: ptr::null_mut(),
             }];
             let mut size = 0;
             let mut flags = 0;
@@ -140,29 +194,17 @@ impl ReadOperation {
             };
 
             match winsock_result(result) {
-                Poll::Ready(Ok(())) => {
-                    if size != 0 {
-                        // SAFETY: windows tells us how many bytes it read
-                        unsafe { buf.advance_mut(size as usize) };
-                    }
-                    if self
-                        .ctx
-                        .release_read_buf(buf, Poll::Ready(Ok(size as usize)))
-                        == IoTaskStatus::Io
-                        && size != 0
-                    {
-                        continue;
-                    }
-                }
+                // input is available already, completions are skipped on success
+                Poll::Ready(Ok(())) => readable = true,
                 Poll::Ready(Err(err)) => {
-                    self.ctx.release_read_buf(buf, Poll::Ready(Err(err)));
+                    self.ctx.with_read_buf(|_| Poll::Ready(Err(err)));
+                    break;
                 }
                 Poll::Pending => {
-                    self.buf = Some(buf);
                     self.flags.insert(Flags::WAITING);
+                    break;
                 }
             }
-            break;
         }
     }
 
@@ -180,42 +222,24 @@ impl ReadOperation {
 
         rd.flags.remove(Flags::WAITING);
 
-        if let Some(mut buf) = rd.buf.take() {
-            let st = match res {
-                Ok(size) => {
-                    if size != 0 {
-                        // SAFETY: windows tells us how many bytes it read
-                        unsafe { buf.advance_mut(size) };
-                    }
-                    rd.ctx.release_read_buf(buf, Poll::Ready(Ok(size)))
-                }
-                Err(err) if err.raw_os_error() == Some(ERROR_OPERATION_ABORTED as _) => {
-                    // A cancelled recv is not expected to have transferred anything,
-                    // but the kernel reports the transfer count regardless of status,
-                    // so keep whatever it did deliver instead of silently dropping it.
-                    let size = rd.overlapped.base.InternalHigh;
-                    debug_assert_eq!(size, 0, "cancelled recv reported {size} transferred bytes");
-                    if size != 0 {
-                        // SAFETY: windows tells us how many bytes it read
-                        unsafe { buf.advance_mut(size) };
-                    }
-                    rd.ctx.release_read_buf(buf, Poll::Pending)
-                }
-                Err(err) => rd.ctx.release_read_buf(buf, Poll::Ready(Err(err))),
-            };
-            if rd.flags.contains(Flags::CLOSING) {
-                Some(rd.id)
-            } else {
-                if st == IoTaskStatus::Io {
+        // The recv is zero-byte, it only reports that input is available. The
+        // input stays in the socket, and a close discards it.
+        if rd.flags.contains(Flags::CLOSING) {
+            return Some(rd.id);
+        }
+        match res {
+            Ok(_) => rd.read(),
+            // canceled by a pause, reading resumes if the pause is already over
+            Err(err) if err.raw_os_error() == Some(ERROR_OPERATION_ABORTED as _) => {
+                if rd.ctx.with_read_buf(|_| Poll::Pending) == IoTaskStatus::Io {
                     rd.read();
                 }
-                None
             }
-        } else if rd.flags.contains(Flags::CLOSING) {
-            Some(rd.id)
-        } else {
-            None
+            Err(err) => {
+                rd.ctx.with_read_buf(|_| Poll::Ready(Err(err)));
+            }
         }
+        None
     }
 }
 

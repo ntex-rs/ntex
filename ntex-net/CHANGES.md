@@ -8,6 +8,10 @@
 * Fix panic on compio runtime shutdown when a dropped task spawned a new task
   from its destructor, e.g. an h2 stream sending RST_STREAM
 
+* IOCP reads wait for input with a zero-byte recv and then read it in place,
+  idle connections no longer hold a read buffer and input arriving while
+  earlier input is unconsumed is appended without a second buffer
+
 * Fix lost input in the compio backend, a read shorter than the unconsumed
   input already in the read buffer was dropped
 
