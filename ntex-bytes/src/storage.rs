@@ -222,6 +222,7 @@ impl Storage {
     }
 
     /// Return a slice for the handle's view into the shared buffer
+    #[inline]
     pub(crate) fn as_ref(&self) -> &[u8] {
         match self.kind() {
             // SAFETY: the inline buffer holds `inline_len` initialized bytes
@@ -244,6 +245,7 @@ impl Storage {
         }
     }
 
+    #[inline]
     pub(crate) fn len(&self) -> usize {
         match self.kind() {
             KIND_STEXT => unsafe { ((*self.st_vtable()).len)(self.st_addr(), self.st_len()) },

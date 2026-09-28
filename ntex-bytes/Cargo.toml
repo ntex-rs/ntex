@@ -12,6 +12,9 @@ edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 
+[lib]
+bench = false
+
 [features]
 default = []
 
@@ -34,3 +37,12 @@ backtrace = { workspace = true, optional = true }
 rand = { workspace = true }
 serde_test = { workspace = true }
 serde_json = { workspace = true }
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "bytes"
+harness = false
+
+[[bench]]
+name = "buf"
+harness = false
