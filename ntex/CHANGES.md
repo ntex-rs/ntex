@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+* HTTP/1 decoder splits header names and values off the read buffer directly, without splitting
+  each header line first
+
+* WebSocket client sends every value of a multi-valued handshake header, before only the first
+  one was sent
+
 * HTTP client `JsonBody` returns `PayloadError::UnknownLength` for an invalid `Content-Length`
   header, as `MessageBody` does
 

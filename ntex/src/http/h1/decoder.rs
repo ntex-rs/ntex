@@ -108,34 +108,43 @@ impl<T: MessageType> MessageDecoder<T> {
             };
             match result {
                 HeaderParsed::Header(len) => {
-                    let buf = src.split_to(len);
-
                     // repeated header names count separately
                     if inner.headers >= inner.cfg.max_headers {
                         return Poll::Ready(Err(DecodeError::MaxHeaders));
                     }
                     inner.headers += 1;
+                    let (n, v) = (inner.hdr.name, inner.hdr.value);
                     // the parser validates name characters, but not its length
-                    let Ok(name) =
-                        HeaderName::from_bytes(&buf[inner.hdr.name.start..inner.hdr.name.end])
-                    else {
+                    let Ok(name) = HeaderName::from_bytes(&src[n.start..n.end]) else {
                         return Poll::Ready(Err(DecodeError::Header));
                     };
 
-                    // SAFETY: ntex-httparse checks header value for validity
-                    let value = unsafe {
-                        HeaderValue::from_shared_unchecked(
-                            buf.slice(inner.hdr.value.start..inner.hdr.value.end),
-                        )
+                    // name and value are split off `src` directly, without
+                    // splitting the whole line first, `pos` is the number of
+                    // bytes of the line already removed from `src`
+                    let mut pos = 0;
+                    let origin = if inner.cfg.headers_vec {
+                        src.advance_to(n.start);
+                        pos = n.end;
+                        Some(src.split_to(n.end - n.start))
+                    } else {
+                        None
                     };
+                    let value = if v.start == v.end {
+                        Bytes::new()
+                    } else {
+                        src.advance_to(v.start - pos);
+                        pos = v.end;
+                        src.split_to(v.end - v.start)
+                    };
+                    src.advance_to(len - pos);
 
-                    // SAFETY: ntex-httparse checks header name validity
-                    if inner.cfg.headers_vec {
-                        let origin = unsafe {
-                            ByteString::from_bytes_unchecked(
-                                buf.slice(inner.hdr.name.start..inner.hdr.name.end),
-                            )
-                        };
+                    // SAFETY: ntex-httparse checks header value for validity
+                    let value = unsafe { HeaderValue::from_shared_unchecked(value) };
+
+                    if let Some(origin) = origin {
+                        // SAFETY: ntex-httparse checks header name validity
+                        let origin = unsafe { ByteString::from_bytes_unchecked(origin) };
                         inner.val.as_mut().unwrap().set_headers_item(HeaderItem {
                             origin,
                             name: name.clone(),
@@ -1609,6 +1618,76 @@ mod tests {
         assert_eq!(res.headers_vec()[1].origin, "Content-Length");
         assert_eq!(res.headers_vec()[2].origin, "tesT");
         assert_eq!(res.headers_vec()[2].value, "456");
+    }
+
+    #[test]
+    fn parse_header_values_split_from_buffer() {
+        const LONG_NAME: &str = "X-A-Very-Long-Header-Name-Over-Inline";
+        const LONG_VALUE: &str = "a value longer than the inline capacity of bytes";
+        let text = format!(
+            "POST /test HTTP/1.1\r\n\
+            Host: a\r\n\
+            X-Empty:\r\n\
+            X-Ws: \t \r\n\
+            {LONG_NAME}: \t{LONG_VALUE} \t\r\n\
+            Short: v\r\n\
+            Content-Length: 4\r\n\
+            \r\n\
+            body"
+        );
+
+        for headers_vec in [false, true] {
+            let cfg: SharedCfg = SharedCfg::new("dbg")
+                .add(HttpServiceConfig::default().set_headers_vec(headers_vec))
+                .into();
+            for chunk in [text.len(), 1] {
+                let reader = MessageDecoder::<Request>::new(cfg.get());
+                let mut buf = BytesMut::new();
+                let mut req = None;
+                let mut fed = 0;
+                for part in text.as_bytes().chunks(chunk) {
+                    buf.extend_from_slice(part);
+                    fed += part.len();
+                    if let Some((r, _)) = reader.decode(&mut buf).unwrap() {
+                        req = Some(r);
+                        break;
+                    }
+                }
+                buf.extend_from_slice(&text.as_bytes()[fed..]);
+                let req = req.unwrap();
+                let ctx = format!("headers_vec {headers_vec} chunk {chunk}");
+                assert_eq!(&buf[..], b"body", "{ctx}");
+
+                let h = req.headers();
+                assert_eq!(h.get("x-empty").unwrap(), "", "{ctx}");
+                assert_eq!(h.get("x-ws").unwrap(), "", "{ctx}");
+                assert_eq!(h.get(LONG_NAME).unwrap(), LONG_VALUE, "{ctx}");
+                assert_eq!(h.get("short").unwrap(), "v", "{ctx}");
+                assert_eq!(h.get(header::CONTENT_LENGTH).unwrap(), "4", "{ctx}");
+
+                let items = req.head().headers_vec();
+                if headers_vec {
+                    let origins: Vec<_> = items.iter().map(|i| &i.origin[..]).collect();
+                    assert_eq!(
+                        origins,
+                        [
+                            "Host",
+                            "X-Empty",
+                            "X-Ws",
+                            LONG_NAME,
+                            "Short",
+                            "Content-Length"
+                        ],
+                        "{ctx}"
+                    );
+                    let values: Vec<_> = items.iter().map(|i| i.value.as_bytes()).collect();
+                    let expected: [&[u8]; 6] = [b"a", b"", b"", LONG_VALUE.as_bytes(), b"v", b"4"];
+                    assert_eq!(values, expected, "{ctx}");
+                } else {
+                    assert!(items.is_empty(), "{ctx}");
+                }
+            }
+        }
     }
 
     #[test]

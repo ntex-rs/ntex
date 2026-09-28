@@ -159,53 +159,7 @@ where
             return Err(Error::from(WsClientError::Config(err)).set_service(self.cfg.service()));
         }
 
-        let mut head = Message::<RequestHead>::new();
-        // the message pool may return a recycled head whose method is not GET
-        // (e.g. previously used by the HTTP/1 server dispatcher for a POST request)
-        head.method = Method::GET;
-        head.uri = self.uri.clone();
-        head.set_connection_type(ConnectionType::Upgrade);
-
-        // copy headers
-        for (key, value) in &self.cfg.headers {
-            if !head.headers().contains_key(key) {
-                head.headers_mut().insert(key.clone(), value.clone());
-            }
-        }
-
-        // host header, without userinfo and the scheme's default port
-        if !head.headers.contains_key(header::HOST)
-            && let Some(val) = host_header(&self.uri)
-        {
-            head.headers.insert(header::HOST, val);
-        }
-
-        #[cfg(feature = "cookie")]
-        {
-            use percent_encoding::percent_encode;
-            use std::io::Write;
-
-            // set cookies, appended to a configured `Cookie` header
-            if let Some(ref jar) = self.cfg.cookies {
-                let mut cookie = head
-                    .headers
-                    .get(header::COOKIE)
-                    .map(|v| v.as_bytes().to_vec())
-                    .unwrap_or_default();
-                for c in jar.iter() {
-                    let name = percent_encode(c.name().as_bytes(), crate::http::helpers::USERINFO);
-                    let value =
-                        percent_encode(c.value().as_bytes(), crate::http::helpers::USERINFO);
-                    if !cookie.is_empty() {
-                        cookie.extend_from_slice(b"; ");
-                    }
-                    let _ = write!(cookie, "{name}={value}");
-                }
-                if let Ok(val) = HeaderValue::from_bytes(&cookie) {
-                    head.headers.insert(header::COOKIE, val);
-                }
-            }
-        }
+        let mut head = self.request_head();
 
         // Generate a random key for the `Sec-WebSocket-Key` header.
         // a base64-encoded (see Section 4 of [RFC4648]) value that,
@@ -325,6 +279,61 @@ where
                     .set_client_mode()
             },
         ))
+    }
+}
+
+impl<F> WsClient<F> {
+    /// Creates the handshake request head without the `Sec-WebSocket-Key`.
+    fn request_head(&self) -> Message<RequestHead> {
+        let mut head = Message::<RequestHead>::new();
+        // the message pool may return a recycled head whose method is not GET
+        // (e.g. previously used by the HTTP/1 server dispatcher for a POST request)
+        head.method = Method::GET;
+        head.uri = self.uri.clone();
+        head.set_connection_type(ConnectionType::Upgrade);
+
+        // copy headers, the head is empty
+        for (key, value) in &self.cfg.headers {
+            head.headers_mut().append(key.clone(), value.clone());
+        }
+
+        // host header, without userinfo and the scheme's default port
+        if !head.headers.contains_key(header::HOST)
+            && let Some(val) = host_header(&self.uri)
+        {
+            head.headers.insert(header::HOST, val);
+        }
+
+        #[cfg(feature = "cookie")]
+        {
+            use percent_encoding::percent_encode;
+            use std::io::Write;
+
+            // set cookies, appended to a configured `Cookie` header
+            if let Some(ref jar) = self.cfg.cookies {
+                let mut cookie = Vec::new();
+                for value in head.headers.get_all(header::COOKIE) {
+                    if !cookie.is_empty() {
+                        cookie.extend_from_slice(b"; ");
+                    }
+                    cookie.extend_from_slice(value.as_bytes());
+                }
+                for c in jar.iter() {
+                    let name = percent_encode(c.name().as_bytes(), crate::http::helpers::USERINFO);
+                    let value =
+                        percent_encode(c.value().as_bytes(), crate::http::helpers::USERINFO);
+                    if !cookie.is_empty() {
+                        cookie.extend_from_slice(b"; ");
+                    }
+                    let _ = write!(cookie, "{name}={value}");
+                }
+                if let Ok(val) = HeaderValue::from_bytes(&cookie) {
+                    head.headers.insert(header::COOKIE, val);
+                }
+            }
+        }
+
+        head
     }
 }
 
@@ -548,6 +557,30 @@ mod tests {
     async fn test_debug() {
         let client = WsClient::new("http://localhost", SharedCfg::default());
         assert!(format!("{client:?}").contains("WsClient"));
+    }
+
+    #[crate::rt_test]
+    async fn request_head_keeps_all_header_values() {
+        let mut cfg = WsClientConfig::new();
+        cfg.headers
+            .append(header::ACCEPT, HeaderValue::from_static("a"));
+        cfg.headers
+            .append(header::ACCEPT, HeaderValue::from_static("b"));
+        #[cfg(feature = "cookie")]
+        {
+            cfg.headers
+                .append(header::COOKIE, HeaderValue::from_static("x=1"));
+            cfg.headers
+                .append(header::COOKIE, HeaderValue::from_static("y=2"));
+            cfg = cfg.set_cookie(coo_kie::Cookie::new("z", "3"));
+        }
+        let client = WsClient::new("http://localhost", SharedCfg::new("WS").add(cfg));
+
+        let head = client.request_head();
+        let values: Vec<_> = head.headers.get_all(header::ACCEPT).collect();
+        assert_eq!(values, ["a", "b"]);
+        #[cfg(feature = "cookie")]
+        assert_eq!(head.headers.get(header::COOKIE).unwrap(), "x=1; y=2; z=3");
     }
 
     #[crate::rt_test]
