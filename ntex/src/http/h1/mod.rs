@@ -122,6 +122,9 @@ impl super::ResponseError for ProtocolError {
             ProtocolError::Decode(super::error::DecodeError::StartLineTooLong(_)) => {
                 super::Response::UriTooLong().into()
             }
+            ProtocolError::Decode(super::error::DecodeError::UnsupportedTransferCoding) => {
+                super::Response::NotImplemented().into()
+            }
             ProtocolError::Decode(_) => super::Response::BadRequest().into(),
             ProtocolError::SlowRequestTimeout | ProtocolError::SlowPayloadTimeout => {
                 super::Response::RequestTimeout().into()

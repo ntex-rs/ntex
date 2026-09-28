@@ -303,6 +303,7 @@ bitflags::bitflags! {
         const CONN_UPGRADE = 0b0100_0000;
         const WS_UPGRADE   = 0b1000_0000;
         const SEEN_HOST    = 0b0001_0000_0000;
+        const TE_OTHER     = 0b0010_0000_0000;
     }
 }
 
@@ -398,9 +399,10 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
     ) -> Result<(), DecodeError> {
         match name {
             header::CONTENT_LENGTH
-                if st.content_length.is_some() || st.flags.contains(Flags::CHUNKED) =>
+                if st.content_length.is_some()
+                    || st.flags.intersects(Flags::CHUNKED | Flags::TE_OTHER) =>
             {
-                log::trace!("multiple Content-Length not allowed");
+                log::trace!("multiple Content-Length or Transfer-Encoding with Content-Length");
                 return Err(DecodeError::Header);
             }
             header::CONTENT_LENGTH => match value.to_str() {
@@ -430,19 +432,30 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
             }
             header::TRANSFER_ENCODING if st.version == Version::HTTP_11 => {
                 st.flags.insert(Flags::SEEN_TE);
-                if let Ok(s) = value.to_str().map(str::trim) {
-                    if s.eq_ignore_ascii_case("chunked") && st.content_length.is_none() {
-                        st.flags.insert(Flags::CHUNKED);
-                    } else if !Self::REQUEST && s.eq_ignore_ascii_case("identity") {
-                        // obsolete coding, tolerated in responses only. A request
-                        // without final chunked coding is rejected, see
-                        // https://www.rfc-editor.org/rfc/rfc9112#section-6.3
-                    } else {
-                        log::trace!("illegal Transfer-Encoding: {s:?}");
+                let Some((chunked, other)) = transfer_codings(value.as_bytes()) else {
+                    log::trace!("illegal Transfer-Encoding: {value:?}");
+                    return Err(DecodeError::Header);
+                };
+                if st.content_length.is_some() && (chunked || other) {
+                    log::trace!("Transfer-Encoding with Content-Length not allowed");
+                    return Err(DecodeError::Header);
+                }
+                if chunked {
+                    st.flags.insert(Flags::CHUNKED);
+                } else if other {
+                    // a response without final chunked coding is delimited by
+                    // connection close, see https://www.rfc-editor.org/rfc/rfc9112#section-6.3
+                    st.flags.insert(Flags::TE_OTHER);
+                }
+                if Self::REQUEST {
+                    if !chunked {
+                        log::trace!("request without final chunked coding: {value:?}");
                         return Err(DecodeError::Header);
                     }
-                } else {
-                    return Err(DecodeError::Header);
+                    if other {
+                        log::trace!("unsupported transfer coding: {value:?}");
+                        return Err(DecodeError::UnsupportedTransferCoding);
+                    }
                 }
             }
             header::TRANSFER_ENCODING if st.version == Version::HTTP_10 => {
@@ -691,6 +704,44 @@ fn is_valid_host(val: &[u8]) -> bool {
         .iter()
         .position(|&b| b == b':')
         .is_none_or(|pos| val[host_end + pos + 1..].iter().all(u8::is_ascii_digit))
+}
+
+/// Parses a `Transfer-Encoding` value.
+///
+/// Returns whether `chunked` is the final transfer coding, and whether other
+/// codings are applied, the obsolete `identity` coding is ignored. `None` if
+/// the value is malformed or `chunked` is applied more than once, see
+/// [RFC 9112 section 6.1](https://www.rfc-editor.org/rfc/rfc9112#section-6.1).
+fn transfer_codings(val: &[u8]) -> Option<(bool, bool)> {
+    let mut chunked = false;
+    let mut seen_chunked = false;
+    let mut other = false;
+    // empty list elements are allowed, see RFC 9110 section 5.6.1
+    for coding in val.split(|&b| b == b',').map(<[u8]>::trim_ascii) {
+        if coding.is_empty() {
+            continue;
+        }
+        let name = coding.split(|&b| b == b';').next().unwrap_or_default();
+        let name = name.trim_ascii();
+        if name.is_empty() || !name.iter().copied().all(is_tchar) {
+            return None;
+        }
+        if name.eq_ignore_ascii_case(b"chunked") {
+            // chunked has no parameters
+            if seen_chunked || name.len() != coding.len() {
+                return None;
+            }
+            chunked = true;
+            seen_chunked = true;
+        } else if chunked {
+            // chunked is not the final coding
+            chunked = false;
+            other = true;
+        } else if !name.eq_ignore_ascii_case(b"identity") {
+            other = true;
+        }
+    }
+    Some((chunked, other))
 }
 
 fn connection_flags(val: &[u8]) -> Flags {
@@ -2710,6 +2761,100 @@ mod tests {
              0\r\n",
         );
         expect_parse_err!(&mut buf);
+    }
+
+    #[test]
+    fn test_transfer_codings() {
+        for (val, res) in [
+            ("chunked", Some((true, false))),
+            (" Chunked ", Some((true, false))),
+            ("gzip, chunked", Some((true, true))),
+            ("gzip;q=1 ,, chunked,", Some((true, true))),
+            ("identity, chunked", Some((true, false))),
+            ("identity", Some((false, false))),
+            ("gzip", Some((false, true))),
+            ("chunked, gzip", Some((false, true))),
+            ("chunked, chunked", None),
+            ("chunked, gzip, chunked", None),
+            ("chunked;a=b", None),
+            ("gz ip", None),
+            (";a=b", None),
+        ] {
+            assert_eq!(transfer_codings(val.as_bytes()), res, "{val:?}");
+        }
+    }
+
+    #[test]
+    fn test_request_transfer_codings() {
+        for (val, res) in [
+            ("gzip, chunked", Err(DecodeError::UnsupportedTransferCoding)),
+            ("chunked, gzip", Err(DecodeError::Header)),
+            ("gzip", Err(DecodeError::Header)),
+            ("chunked, chunked", Err(DecodeError::Header)),
+            ("identity, chunked", Ok(())),
+            ("chunked,", Ok(())),
+        ] {
+            let mut buf = BytesMut::from(
+                format!("POST / HTTP/1.1\r\nhost: a\r\ntransfer-encoding: {val}\r\n\r\n").as_str(),
+            );
+            let reader = MessageDecoder::<Request>::default();
+            let result = reader.decode(&mut buf).map(|msg| {
+                let (req, pl) = msg.unwrap();
+                assert!(req.chunked().unwrap());
+                assert_eq!(pl, PayloadType::Payload(PayloadDecoder::chunked()));
+            });
+            assert_eq!(result, res, "{val:?}");
+        }
+    }
+
+    #[test]
+    fn test_response_transfer_codings() {
+        // final chunked coding frames the payload, other codings are not decoded
+        let mut buf = BytesMut::from(
+            "HTTP/1.1 200 OK\r\ntransfer-encoding: gzip, chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n",
+        );
+        let reader = MessageDecoder::<ResponseHead>::default();
+        let (res, pl) = reader.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(
+            res.headers.get(header::TRANSFER_ENCODING).unwrap(),
+            "gzip, chunked"
+        );
+        let pl = pl.unwrap();
+        assert_eq!(
+            pl.decode(&mut buf).unwrap(),
+            Some(PayloadItem::Chunk("abc".into()))
+        );
+        assert_eq!(pl.decode(&mut buf).unwrap(), Some(PayloadItem::Eof));
+
+        // without final chunked coding the payload is delimited by connection close
+        for val in ["gzip", "chunked, gzip"] {
+            let mut buf = BytesMut::from(
+                format!("HTTP/1.1 200 OK\r\ntransfer-encoding: {val}\r\n\r\n3\r\nabc").as_str(),
+            );
+            let (res, pl) = reader.decode(&mut buf).unwrap().unwrap();
+            assert_eq!(res.connection_type(), ConnectionType::Close, "{val:?}");
+            let pl = pl.unwrap();
+            assert!(pl.is_eof(), "{val:?}");
+            assert_eq!(
+                pl.decode(&mut buf).unwrap(),
+                Some(PayloadItem::Chunk("3\r\nabc".into()))
+            );
+        }
+
+        // codings with Content-Length are rejected in either order
+        for hdrs in [
+            "content-length: 3\r\ntransfer-encoding: gzip\r\n",
+            "transfer-encoding: gzip\r\ncontent-length: 3\r\n",
+            "transfer-encoding: gzip, chunked\r\ncontent-length: 3\r\n",
+        ] {
+            let mut buf = BytesMut::from(format!("HTTP/1.1 200 OK\r\n{hdrs}\r\nabc").as_str());
+            let reader = MessageDecoder::<ResponseHead>::default();
+            assert_eq!(
+                reader.decode(&mut buf).err(),
+                Some(DecodeError::Header),
+                "{hdrs:?}"
+            );
+        }
     }
 
     #[test]

@@ -96,6 +96,9 @@ pub enum DecodeError {
     /// A request or status line exceeds the configured limit.
     #[error("Request or status line is too long")]
     StartLineTooLong(usize),
+    /// A request applies a transfer coding other than `chunked`.
+    #[error("Unsupported transfer coding")]
+    UnsupportedTransferCoding,
     /// A message reached EOF, but is not complete.
     #[error("Message is incomplete")]
     Incomplete,

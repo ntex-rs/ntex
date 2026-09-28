@@ -11,6 +11,11 @@
 
 * HTTP/1 does not restart the keep-alive timer for every request of a persistent connection
 
+* HTTP/1 parses `Transfer-Encoding` as a list of codings. A request with codings other than
+  final `chunked` is rejected with `501 Not Implemented` (new `DecodeError::UnsupportedTransferCoding`),
+  a response with final `chunked` is framed by chunked coding and a response without final
+  `chunked` is delimited by connection close, such messages were rejected
+
 * HTTP/1 parses an incomplete start line incrementally, an invalid start line is
   rejected as soon as the bad byte arrives instead of after the line end
 

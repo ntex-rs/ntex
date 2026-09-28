@@ -1134,3 +1134,25 @@ async fn test_h1_request_line_too_long() {
     let n = stream.read(&mut data).unwrap();
     assert!(data[..n].starts_with(b"HTTP/1.1 200"));
 }
+
+#[ntex::test]
+async fn test_h1_unsupported_transfer_coding() {
+    let srv = test_server(async |_| {
+        HttpService::h1(async |_: Request| Ok::<_, io::Error>(Response::Ok().build()))
+    });
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let _ = stream.write_all(
+        b"POST / HTTP/1.1\r\nhost: a\r\ntransfer-encoding: gzip, chunked\r\n\r\n0\r\n\r\n",
+    );
+    let mut data = vec![0; 1024];
+    let n = stream.read(&mut data).unwrap();
+    assert!(data[..n].starts_with(b"HTTP/1.1 501"), "{:?}", &data[..n]);
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let _ = stream.write_all(
+        b"POST / HTTP/1.1\r\nhost: a\r\ntransfer-encoding: chunked, gzip\r\n\r\n0\r\n\r\n",
+    );
+    let n = stream.read(&mut data).unwrap();
+    assert!(data[..n].starts_with(b"HTTP/1.1 400"), "{:?}", &data[..n]);
+}
