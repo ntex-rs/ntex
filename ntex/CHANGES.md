@@ -8,6 +8,9 @@
 * `web::ws::start()` sends the handshake error response and closes the connection when the
   handshake of an upgrade request fails, before the handler's response was sent
 
+* HTTP/1 validates a partially received chunk-size line incrementally, the line was parsed
+  from the start on every read
+
 * HTTP/1 writes the chunk size line without `fmt` formatting
 
 * Remove unused `EncodeError::Fmt`

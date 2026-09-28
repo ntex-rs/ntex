@@ -805,6 +805,8 @@ impl PayloadDecoder {
         let limits = ChunkedLimits {
             ext: 0,
             trailers: 0,
+            line: 0,
+            line_state: SizeLine::Unknown,
         };
         PayloadDecoder {
             kind: Cell::new(Kind::Chunked(ChunkedState::Size, 0, limits)),
@@ -870,6 +872,35 @@ struct ChunkedLimits {
     ext: u32,
     /// trailer section bytes received so far
     trailers: u32,
+    /// bytes of a partially received chunk-size line that are validated
+    line: u32,
+    /// parser state at the end of the validated bytes
+    line_state: SizeLine,
+}
+
+/// Parser state of a partially received chunk-size line.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum SizeLine {
+    /// the line must be parsed from the start
+    Unknown,
+    /// whitespace after the chunk size
+    Lws,
+    /// chunk extensions
+    Ext,
+}
+
+impl SizeLine {
+    /// Returns `true` if bytes do not change the parser state.
+    fn is_neutral(self, bytes: &[u8]) -> bool {
+        match self {
+            SizeLine::Unknown => false,
+            SizeLine::Lws => bytes.iter().all(|&b| b == b' ' || b == b'\t'),
+            // any octet except control characters other than HTAB, `\r` ends the line
+            SizeLine::Ext => bytes
+                .iter()
+                .all(|&b| b == b'\t' || (b >= 0x20 && b != 0x7f)),
+        }
+    }
 }
 
 impl ChunkedLimits {
@@ -1016,7 +1047,7 @@ impl ChunkedState {
         buf: &mut Option<Bytes>,
     ) -> Poll<Result<ChunkedState, DecodeError>> {
         match self {
-            ChunkedState::Size => ChunkedState::read_size(body, size, &mut limits.ext),
+            ChunkedState::Size => ChunkedState::read_size(body, size, limits),
             ChunkedState::Body => ChunkedState::read_body(body, size, buf),
             ChunkedState::BodyCr => ChunkedState::read_body_cr(body),
             ChunkedState::BodyLf => ChunkedState::read_body_lf(body),
@@ -1036,14 +1067,34 @@ impl ChunkedState {
     fn read_size(
         rdr: &mut BytesMut,
         size: &mut u64,
-        ext: &mut u32,
+        limits: &mut ChunkedLimits,
     ) -> Poll<Result<ChunkedState, DecodeError>> {
+        // at most 16 size digits and CRLF
+        let max = (MAX_CHUNK_EXTENSIONS - limits.ext) as usize + 18;
+
+        // bytes of a partial line are validated once, new bytes that do
+        // not change the parser state do not need to parse the line again
+        let line = limits.line as usize;
+        if line != 0 && line <= rdr.len() && limits.line_state.is_neutral(&rdr[line..]) {
+            return if rdr.len() > max {
+                Poll::Ready(Err(DecodeError::InvalidInput(
+                    "Chunk extensions are too large",
+                )))
+            } else {
+                limits.line = rdr.len() as u32;
+                Poll::Pending
+            };
+        }
+
         match httparse::parse_chunk_size(rdr) {
             Ok(httparse::Status::Complete((pos, sz))) => {
+                limits.line = 0;
+                limits.line_state = SizeLine::Unknown;
+
                 let digits = rdr.iter().take_while(|b| b.is_ascii_hexdigit()).count();
                 // the line ends with CRLF
-                *ext = ext.saturating_add((pos - digits - 2) as u32);
-                if *ext > MAX_CHUNK_EXTENSIONS {
+                limits.ext = limits.ext.saturating_add((pos - digits - 2) as u32);
+                if limits.ext > MAX_CHUNK_EXTENSIONS {
                     return Poll::Ready(Err(DecodeError::InvalidInput(
                         "Chunk extensions are too large",
                     )));
@@ -1057,15 +1108,23 @@ impl ChunkedState {
                 }
             }
             Ok(httparse::Status::Partial) => {
-                // at most 16 size digits and CRLF, parsing restarts on each call
-                let max = (MAX_CHUNK_EXTENSIONS - *ext) as usize + 18;
                 if rdr.len() > max {
-                    Poll::Ready(Err(DecodeError::InvalidInput(
+                    return Poll::Ready(Err(DecodeError::InvalidInput(
                         "Chunk extensions are too large",
-                    )))
-                } else {
-                    Poll::Pending
+                    )));
                 }
+                limits.line = rdr.len() as u32;
+                limits.line_state = if rdr.last() == Some(&b'\r') {
+                    // `\n` must follow
+                    SizeLine::Unknown
+                } else if rdr.contains(&b';') {
+                    SizeLine::Ext
+                } else if rdr.iter().any(|&b| b == b' ' || b == b'\t') {
+                    SizeLine::Lws
+                } else {
+                    SizeLine::Unknown
+                };
+                Poll::Pending
             }
             Err(_) => Poll::Ready(Err(DecodeError::InvalidInput(
                 "Invalid chunk size line: Invalid Size",
@@ -2557,6 +2616,62 @@ mod tests {
             "0123456789abcdef"
         );
         assert!(pl.decode(&mut buf).unwrap().unwrap().eof());
+    }
+
+    #[test]
+    fn test_chunk_size_line_byte_by_byte() {
+        let feed = |line: &[u8]| {
+            let (pl, mut buf) = chunked_payload();
+            let mut data = Vec::new();
+            for (idx, b) in line.iter().enumerate() {
+                buf.extend_from_slice(&[*b]);
+                match pl.decode(&mut buf) {
+                    Ok(None) => (),
+                    Ok(Some(item)) => data.extend_from_slice(&item.chunk()),
+                    Err(_) => return Err(idx),
+                }
+            }
+            Ok(data)
+        };
+
+        // valid lines
+        for line in [
+            &b"4;a=b;c\r\ndata"[..],
+            b"4 \t ;ext\t\x80\r\ndata",
+            b"4  \r\ndata",
+            b"4\r\ndata",
+        ] {
+            assert_eq!(feed(line).unwrap(), b"data", "{line:?}");
+        }
+
+        // invalid lines fail at the invalid byte
+        for (line, pos) in [
+            (&b"4;aaaa\x01aaaa\r\n"[..], 6),
+            (b"4;aa\x7f", 4),
+            (b"4;aa\ra", 5),
+            (b"4;aa\na", 4),
+            (b"4   5", 4),
+            (b"4  x", 3),
+            (b"4\rx", 2),
+        ] {
+            assert_eq!(feed(line).map(|_| ()), Err(pos), "{line:?}");
+        }
+
+        // long extension fed byte by byte
+        let mut line = b"10;".to_vec();
+        line.extend(std::iter::repeat_n(b'a', MAX_CHUNK_EXTENSIONS as usize - 1));
+        line.extend_from_slice(b"\r\n0123456789abcdef");
+        assert_eq!(feed(&line).unwrap(), b"0123456789abcdef");
+
+        let mut line = b"10;".to_vec();
+        line.extend(std::iter::repeat_n(b'a', MAX_CHUNK_EXTENSIONS as usize + 1));
+        line.extend_from_slice(b"\r\n");
+        assert!(feed(&line).is_err());
+
+        // a line that never ends fails at the limit
+        let line = vec![b'a'; MAX_CHUNK_EXTENSIONS as usize];
+        let line = [&b"1;"[..], &line, &line].concat();
+        assert!(feed(&line).is_err());
     }
 
     #[test]
