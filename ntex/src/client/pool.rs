@@ -521,16 +521,10 @@ fn open_connection(
                         io.tag(),
                         key.authority
                     );
-                    let auth = if let Some(auth) = uri.authority() {
-                        format!("{auth}").into()
-                    } else {
-                        ByteString::new()
-                    };
-
                     let client = h2::client::SimpleClient::new(
                         io,
                         uri.scheme().cloned().unwrap_or(Scheme::HTTPS),
-                        auth,
+                        h2_authority(&uri),
                     );
                     let conn = add_h2_client(&inner, &key, client).begin();
                     // wake up waiters, connection can be shared
@@ -563,6 +557,15 @@ fn open_connection(
             }
         }
     });
+}
+
+/// Builds the `:authority` value, the deprecated userinfo is omitted (RFC 9113 §8.3.1)
+fn h2_authority(uri: &Uri) -> ByteString {
+    match (uri.host(), uri.port()) {
+        (Some(host), Some(port)) => format!("{host}:{port}").into(),
+        (Some(host), None) => ByteString::from(host),
+        (None, _) => ByteString::new(),
+    }
 }
 
 /// Adds shared http/2 connection to the pool
@@ -690,6 +693,20 @@ mod tests {
     use crate::service::{Pipeline, boxed, fn_service};
     use crate::time::{Millis, Seconds, sleep};
     use crate::{io as nio, testing::IoTest, util::lazy};
+
+    #[test]
+    fn test_h2_authority() {
+        for (uri, auth) in [
+            ("https://example.com/path", "example.com"),
+            ("https://example.com:443/", "example.com:443"),
+            ("https://user:pass@example.com/", "example.com"),
+            ("http://user@example.com:8080/", "example.com:8080"),
+            ("http://user:pass@[::1]:8080/", "[::1]:8080"),
+        ] {
+            assert_eq!(h2_authority(&Uri::try_from(uri).unwrap()), auth, "{uri}");
+        }
+        assert_eq!(h2_authority(&Uri::from_static("/path")), "");
+    }
 
     #[crate::rt_test]
     async fn test_unlimited_concurrent_connect() {
