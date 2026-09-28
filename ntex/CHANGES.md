@@ -8,6 +8,9 @@
 * HTTP/1 treats every '101 Switching Protocols' response as an upgrade, a response without
   `.upgrade()` kept the connection reading HTTP/1 requests
 
+* HTTP/1 matches `Expect: 100-continue` case-insensitively, any value starting with `100-`
+  was taken as `100-continue`
+
 * HTTP/1 merges small chunks of a chunked payload into payload chunks of up to 16KiB, a
   payload of tiny chunks was buffered as a separate item per chunk
 

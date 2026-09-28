@@ -481,11 +481,15 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
                     st.flags.insert(Flags::WS_UPGRADE);
                 }
             }
-            header::EXPECT => {
-                let bytes = value.as_bytes();
-                if bytes.len() >= 4 && &bytes[0..4] == b"100-" {
-                    st.flags.insert(Flags::EXPECT);
-                }
+            // a list of case-insensitive expectations, only `100-continue`
+            // is defined, see RFC 9110 section 10.1.1
+            header::EXPECT
+                if value
+                    .as_bytes()
+                    .split(|&b| b == b',')
+                    .any(|e| e.trim_ascii().eq_ignore_ascii_case(b"100-continue")) =>
+            {
+                st.flags.insert(Flags::EXPECT);
             }
             _ => (),
         }
@@ -1845,6 +1849,30 @@ mod tests {
         let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();
         assert!(req.upgrade());
         assert!(matches!(pl, PayloadType::Stream(_)));
+    }
+
+    #[test]
+    fn test_expect_100_continue() {
+        let reader = MessageDecoder::<Request>::default();
+        for (val, expect) in [
+            ("100-continue", true),
+            ("100-Continue", true),
+            (" 100-CONTINUE ", true),
+            ("foo, 100-continue", true),
+            ("100-foo", false),
+            ("100-continuex", false),
+            ("100", false),
+            ("", false),
+        ] {
+            let mut buf = BytesMut::from(
+                format!(
+                    "POST /test HTTP/1.1\r\nhost: a\r\nexpect: {val}\r\ncontent-length: 1\r\n\r\n"
+                )
+                .as_str(),
+            );
+            let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
+            assert_eq!(req.head().expect(), expect, "{val:?}");
+        }
     }
 
     #[test]
