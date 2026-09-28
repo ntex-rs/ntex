@@ -34,7 +34,7 @@ impl Service<SharedCfg, ServiceRequest> for Sender {
             addr,
             body,
             headers,
-            mut timeout,
+            timeout,
             response_decompress,
         } = req;
 
@@ -42,9 +42,7 @@ impl Service<SharedCfg, ServiceRequest> for Sender {
         let con = ctx.call(&self.connector, Connect { uri, addr }).await?;
         let config = ctx.st().get::<ClientConfig>();
 
-        if timeout.is_zero() {
-            timeout = config.response_timeout();
-        }
+        let timeout = timeout.unwrap_or_else(|| config.response_timeout());
 
         let req = ClientRawRequest {
             head,

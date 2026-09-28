@@ -358,12 +358,12 @@ impl ClientRequest {
     /// Sets the response-header timeout for this request.
     ///
     /// This overrides the client-wide timeout. The timeout covers receiving the
-    /// response head after the request has been sent. A zero duration uses the
-    /// client-wide timeout.
+    /// response head after the request has been sent. A zero duration disables
+    /// the timeout for this request.
     ///
     /// The client-wide default is 5 seconds.
     pub fn timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
-        self.request.timeout = timeout.into();
+        self.request.timeout = Some(timeout.into());
         self
     }
 

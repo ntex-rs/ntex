@@ -131,6 +131,27 @@ async fn test_timeout_override() {
 }
 
 #[ntex::test]
+async fn test_timeout_disable_override() {
+    let srv = test::server(async |_| {
+        App::new().service(web::resource("/").route(web::to(async || {
+            sleep(Millis(500)).await;
+            HttpResponse::Ok().body(STR)
+        })))
+    });
+
+    let client = Client::with_config(ClientConfig::new().set_response_timeout(Millis(100)));
+
+    // zero disables the client-wide timeout for this request
+    let res = client
+        .get(srv.url("/"))
+        .timeout(Millis::ZERO)
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success());
+}
+
+#[ntex::test]
 async fn test_connection_reuse() {
     let num = Arc::new(AtomicUsize::new(0));
     let num2 = num.clone();

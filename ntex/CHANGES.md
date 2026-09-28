@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* HTTP client `ClientRequest::timeout(Millis::ZERO)` disables the response timeout for the request,
+  as `ClientConfig::set_response_timeout(Millis::ZERO)` does, it used the client-wide timeout
+
 * Web renders HTTP client `ClientError::Timeout` as `504 Gateway Timeout`
 
 * HTTP client reports an invalid request URI as `ClientError::Url(InvalidUrl::Http)`
