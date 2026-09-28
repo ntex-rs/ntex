@@ -55,11 +55,23 @@ impl WsSink {
 
     /// Encodes and queues a message for the peer.
     ///
+    /// Data messages (text, binary and continuation) wait while write
+    /// back-pressure is enabled, until the write buffer can accept more
+    /// output. Control messages are queued immediately.
+    ///
     /// Sending a close message starts the closing handshake. The connection
     /// remains open for the peer's close response and is shut down when the
     /// configured closing-handshake timeout expires.
     pub async fn send(&self, item: ws::Message) -> Result<(), ws::error::ProtocolError> {
         let close = matches!(item, ws::Message::Close(_));
+
+        if matches!(
+            item,
+            ws::Message::Text(_) | ws::Message::Binary(_) | ws::Message::Continuation(_)
+        ) {
+            // a closed connection drops the message in `encode`, as before
+            let _ = self.0.io.write_ready().await;
+        }
 
         if let Err(e) = self.0.io.encode(item, &self.0.codec) {
             Err(e)
@@ -120,6 +132,65 @@ mod tests {
             sink.send(ws::Message::Text("t".into())).await,
             Err(ws::error::ProtocolError::Closed)
         ));
+    }
+
+    #[crate::rt_test]
+    async fn send_waits_for_write_backpressure() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let cfg = SharedCfg::new("WS-TEST").add(crate::io::IoConfig::new().set_write_buf(64));
+        let io = Io::new(server, cfg);
+        let sink = WsSink::new(io.get_ref(), ws::Codec::new(), io.shared().get());
+
+        sink.send(ws::Message::Binary(vec![0; 128].into()))
+            .await
+            .unwrap();
+        assert!(io.is_wr_backpressure());
+
+        // control messages are not delayed
+        sink.send(ws::Message::Ping("p".into())).await.unwrap();
+
+        let sent = std::rc::Rc::new(std::cell::Cell::new(false));
+        let (sink2, sent2) = (sink.clone(), sent.clone());
+        let handle = rt::spawn(async move {
+            sink2.send(ws::Message::Text("t".into())).await.unwrap();
+            sent2.set(true);
+        });
+        sleep(Millis(50)).await;
+        assert!(!sent.get());
+
+        // the peer reads, the write buffer drains
+        client.remote_buffer_cap(4096);
+        let _ = client.read().await;
+        timeout(Millis(1000), handle)
+            .await
+            .expect("send was not released")
+            .unwrap();
+        assert!(sent.get());
+    }
+
+    #[crate::rt_test]
+    async fn send_on_disconnect_does_not_wait() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let cfg = SharedCfg::new("WS-TEST").add(crate::io::IoConfig::new().set_write_buf(64));
+        let io = Io::new(server, cfg);
+        let sink = WsSink::new(io.get_ref(), ws::Codec::new(), io.shared().get());
+
+        sink.send(ws::Message::Binary(vec![0; 128].into()))
+            .await
+            .unwrap();
+        assert!(io.is_wr_backpressure());
+
+        let (sink2, io2) = (sink.clone(), io.get_ref());
+        rt::spawn(async move {
+            sleep(Millis(20)).await;
+            io2.terminate();
+        });
+        timeout(Millis(1000), sink2.send(ws::Message::Text("t".into())))
+            .await
+            .expect("send was not released")
+            .unwrap();
     }
 
     #[crate::rt_test]

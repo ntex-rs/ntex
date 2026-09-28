@@ -1,7 +1,10 @@
 use std::{cell::Cell, task::Poll, task::Waker};
 
 use ntex_service::state::{RequestState, State};
-use ntex_util::task::LocalWaker;
+use ntex_util::{
+    channel::condition::{Condition, Waiter},
+    task::LocalWaker,
+};
 
 use crate::{Filter, Io, IoBoxed, IoCallbacks};
 
@@ -20,7 +23,11 @@ pub(crate) struct Extensions(Cell<Option<Box<ExtensionsInner>>>);
 
 #[derive(Default)]
 pub(crate) struct ExtensionsInner {
+    // tasks waiting for the connection disconnect, indexed by registration token
     disconnect: Option<Vec<LocalWaker>>,
+    // tasks waiting for the write back-pressure release
+    wr_waiters: Option<Condition>,
+    // filter callbacks registered for io events
     pub(crate) callbacks: Option<Box<dyn IoCallbacks>>,
 }
 
@@ -87,6 +94,18 @@ impl Extensions {
                 Poll::Ready(())
             }
         })
+    }
+
+    pub(super) fn write_waiter(&self) -> Waiter {
+        self.with(|inner| inner.wr_waiters.get_or_insert_with(Condition::new).wait())
+    }
+
+    pub(super) fn notify_write_waiters(&self) {
+        self.with_opt(|inner| {
+            if let Some(ref waiters) = inner.wr_waiters {
+                waiters.notify(());
+            }
+        });
     }
 
     pub(super) fn register_filter_callbacks<T: IoCallbacks + 'static>(&self, cb: T) {

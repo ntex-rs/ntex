@@ -429,6 +429,13 @@ impl IoContext {
                     st.wake_dispatch_task();
                 }
 
+                // Producers waiting for the write back-pressure release, the
+                // flag itself is released by the dispatcher. Repeated calls
+                // until then are cheap, a notified waiter's waker is consumed.
+                if st.flags.is_wr_backpressure() && st.should_disable_wr_backpressure(outstanding) {
+                    st.wake_write_waiters();
+                }
+
                 if st.flags.is_aborted() {
                     IoTaskStatus::Stop
                 } else if len == 0 {

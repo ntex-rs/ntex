@@ -144,6 +144,7 @@ impl IoState {
         self.wake_read_task();
         self.wake_write_task();
         self.wake_dispatch_task();
+        self.wake_write_waiters();
         self.flags.enter_transport_shutdown();
     }
 
@@ -187,6 +188,7 @@ impl IoState {
             self.wake_read_task();
             self.wake_write_task();
             self.wake_dispatch_task();
+            self.wake_write_waiters();
             self.handle.take();
         }
     }
@@ -201,6 +203,7 @@ impl IoState {
             self.wake_read_task();
             self.wake_write_task();
             self.wake_dispatch_task();
+            self.wake_write_waiters();
             self.notify_disconnect();
             self.handle.take();
         }
@@ -277,6 +280,41 @@ impl IoState {
 
     pub(super) fn wake_dispatch_task(&self) {
         self.dispatch_task.wake();
+    }
+
+    pub(super) fn wake_write_waiters(&self) {
+        self.extensions.notify_write_waiters();
+    }
+
+    /// Returns `Some` once more output can be written or the connection is gone.
+    pub(super) fn check_write_ready(&self) -> Option<io::Result<()>> {
+        if self.flags.is_peer_gone() {
+            Some(Err(self.error_or_disconnected()))
+        } else if !self.flags.is_wr_backpressure()
+            || self.should_disable_wr_backpressure(self.write_outstanding())
+        {
+            Some(Ok(()))
+        } else {
+            None
+        }
+    }
+
+    pub(super) async fn write_ready(&self) -> io::Result<()> {
+        if let Some(res) = self.check_write_ready() {
+            return res;
+        }
+
+        let waiter = self.extensions.write_waiter();
+        poll_fn(|cx| {
+            if let Some(res) = self.check_write_ready() {
+                Poll::Ready(res)
+            } else {
+                // a notified waiter registers the waker again
+                let _ = waiter.poll_ready(cx);
+                Poll::Pending
+            }
+        })
+        .await
     }
 }
 
@@ -2167,6 +2205,99 @@ mod tests {
             Poll::Ready(Ok(()))
         ));
         assert!(!io.flags().is_wr_backpressure());
+    }
+
+    #[ntex::test]
+    async fn write_ready_waits_for_release_threshold() {
+        let io = Io::new(
+            IoTest::create().0,
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8)),
+        );
+        let ctx = IoContext::new(io.get_ref());
+
+        // no back-pressure
+        assert!(io.write_ready().await.is_ok());
+
+        io.encode_slice(b"12345678").unwrap();
+        assert!(io.flags().is_wr_backpressure());
+
+        // several producers wait at once
+        let done = Rc::new(Cell::new(0));
+        for _ in 0..2 {
+            let (io, done) = (io.get_ref(), done.clone());
+            ntex_util::spawn(async move {
+                io.write_ready().await.unwrap();
+                done.set(done.get() + 1);
+            });
+        }
+        sleep(Millis(10)).await;
+        assert_eq!(done.get(), 0);
+
+        // above the release threshold
+        assert_eq!(ctx.with_write_dst(|buf| buf.split_to(1).len()), 1);
+        assert_eq!(ctx.update_write_status(Ok(1)), IoTaskStatus::Io);
+        sleep(Millis(10)).await;
+        assert_eq!(done.get(), 0);
+
+        // the write task wakes the producers, the dispatcher does not run
+        assert_eq!(ctx.with_write_dst(|buf| buf.split_to(3).len()), 3);
+        assert_eq!(ctx.update_write_status(Ok(3)), IoTaskStatus::Io);
+        sleep(Millis(10)).await;
+        assert_eq!(done.get(), 2);
+        assert!(io.flags().is_wr_backpressure());
+        assert!(io.write_ready().await.is_ok());
+    }
+
+    #[ntex::test]
+    async fn write_ready_released_during_full_flush() {
+        let io = Io::new(
+            IoTest::create().0,
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8)),
+        );
+        let ctx = IoContext::new(io.get_ref());
+
+        io.encode_slice(b"12345678").unwrap();
+        assert!(lazy(|cx| io.poll_flush(cx, true)).await.is_pending());
+        assert!(io.flags().is_write_flush());
+
+        let done = Rc::new(Cell::new(false));
+        let (io2, done2) = (io.get_ref(), done.clone());
+        ntex_util::spawn(async move {
+            io2.write_ready().await.unwrap();
+            done2.set(true);
+        });
+        sleep(Millis(10)).await;
+        assert!(!done.get());
+
+        assert_eq!(ctx.with_write_dst(|buf| buf.split_to(4).len()), 4);
+        assert_eq!(ctx.update_write_status(Ok(4)), IoTaskStatus::Io);
+        sleep(Millis(10)).await;
+        assert!(done.get());
+    }
+
+    #[ntex::test]
+    async fn write_ready_fails_on_disconnect() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8)),
+        );
+        io.encode_slice(b"12345678").unwrap();
+        assert!(io.flags().is_wr_backpressure());
+
+        let res = Rc::new(Cell::new(None));
+        let (io2, res2) = (io.get_ref(), res.clone());
+        ntex_util::spawn(async move {
+            res2.set(Some(io2.write_ready().await.is_err()));
+        });
+        sleep(Millis(10)).await;
+        assert_eq!(res.get(), None);
+
+        io.terminate();
+        sleep(Millis(10)).await;
+        assert_eq!(res.get(), Some(true));
+        assert!(io.write_ready().await.is_err());
     }
 
     #[ntex::test]
