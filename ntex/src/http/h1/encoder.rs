@@ -91,7 +91,8 @@ pub(crate) trait MessageType: Sized {
             ConnectionType::KeepAlive if version < Version::HTTP_11 => {
                 dst.extend_from_slice(b"connection: keep-alive\r\n");
             }
-            ConnectionType::Close if version >= Version::HTTP_11 => {
+            // a response is sent as HTTP/1.1, which is persistent by default
+            ConnectionType::Close if version >= Version::HTTP_11 || self.status().is_some() => {
                 dst.extend_from_slice(b"connection: close\r\n");
             }
             _ => (),
@@ -164,8 +165,8 @@ impl MessageType for Response<()> {
         let head = self.head();
         let reason = head.reason().as_bytes();
 
-        // status line
-        write_status_line(head.version, head.status.as_u16(), dst);
+        // the highest supported version, see RFC 9110 section 2.5
+        write_status_line(head.status.as_u16(), dst);
         dst.extend_from_slice(reason);
     }
 }
@@ -426,13 +427,8 @@ const DEC_DIGITS_LUT: &[u8] = b"0001020304050607080910111213141516171819\
 const STATUS_LINE_BUF_SIZE: usize = 13;
 
 #[allow(clippy::cast_possible_wrap)]
-fn write_status_line(version: Version, mut n: u16, bytes: &mut BytePages) {
-    let mut buf: [u8; STATUS_LINE_BUF_SIZE] = match version {
-        Version::HTTP_2 => *b"HTTP/2       ",
-        Version::HTTP_10 => *b"HTTP/1.0     ",
-        Version::HTTP_09 => *b"HTTP/0.9     ",
-        _ => *b"HTTP/1.1     ",
-    };
+fn write_status_line(mut n: u16, bytes: &mut BytePages) {
+    let mut buf: [u8; STATUS_LINE_BUF_SIZE] = *b"HTTP/1.1     ";
 
     let mut curr: isize = 12;
     let buf_ptr = buf.as_mut_ptr();

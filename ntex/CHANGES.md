@@ -7,6 +7,10 @@
 
 * HTTP/1 does not send `transfer-encoding: chunked` in `101 Switching Protocols` responses
 
+* HTTP/1 sends responses to HTTP/1.0 requests with the `HTTP/1.1` status line, as
+  RFC 9110 section 2.5 recommends, and a non-persistent response includes `connection: close`.
+  Chunked coding is still not used for HTTP/1.0 clients
+
 * HTTP/1 replaces informational (1xx) service responses, except `101 Switching Protocols`,
   with `500 Internal Server Error`, an interim response was sent as the final response
 

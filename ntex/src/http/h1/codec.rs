@@ -385,9 +385,10 @@ mod tests {
             "GET / HTTP/1.0\r\nconnection: keep-alive\r\n\r\n",
             Response::with_body(StatusCode::OK, ()),
         );
-        assert!(data.starts_with("HTTP/1.0 200 OK\r\n"), "{data:?}");
+        assert!(data.starts_with("HTTP/1.1 200 OK\r\n"), "{data:?}");
         assert!(!data.contains("transfer-encoding"), "{data:?}");
         assert!(!data.contains("keep-alive"), "{data:?}");
+        assert!(data.contains("connection: close\r\n"), "{data:?}");
         assert!(data.ends_with("\r\n\r\nabc"), "{data:?}");
         assert!(!keepalive);
 

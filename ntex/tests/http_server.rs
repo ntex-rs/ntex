@@ -435,8 +435,10 @@ async fn test_http10_keepalive_default_close() {
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream.write_all(b"GET /test/tests/test HTTP/1.0\r\n\r\n");
     let mut data = vec![0; 1024];
-    let _ = stream.read(&mut data);
-    assert_eq!(&data[..17], b"HTTP/1.0 200 OK\r\n");
+    let n = stream.read(&mut data).unwrap();
+    assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
+    // an HTTP/1.1 response is persistent by default
+    assert!(data[..n].windows(19).any(|w| w == b"connection: close\r\n"));
 
     let mut data = vec![0; 1024];
     let res = stream.read(&mut data).unwrap();
@@ -452,14 +454,21 @@ async fn test_http10_keepalive() {
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream.write_all(b"GET /test/tests/test HTTP/1.0\r\nconnection: keep-alive\r\n\r\n");
     let mut data = vec![0; 1024];
-    let _ = stream.read(&mut data);
-    assert_eq!(&data[..17], b"HTTP/1.0 200 OK\r\n");
+    let n = stream.read(&mut data).unwrap();
+    assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
+    assert!(
+        data[..n]
+            .windows(24)
+            .any(|w| w == b"connection: keep-alive\r\n")
+    );
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream.write_all(b"GET /test/tests/test HTTP/1.0\r\n\r\n");
     let mut data = vec![0; 1024];
-    let _ = stream.read(&mut data);
-    assert_eq!(&data[..17], b"HTTP/1.0 200 OK\r\n");
+    let n = stream.read(&mut data).unwrap();
+    assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
+    // an HTTP/1.1 response is persistent by default
+    assert!(data[..n].windows(19).any(|w| w == b"connection: close\r\n"));
 
     let mut data = vec![0; 1024];
     let res = stream.read(&mut data).unwrap();

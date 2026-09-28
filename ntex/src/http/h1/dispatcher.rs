@@ -1588,7 +1588,7 @@ mod tests {
         let _ = lazy(|cx| Pin::new(&mut h1).poll(cx)).await;
         sleep(Millis(50)).await;
 
-        client.local_buffer(|buf| assert_eq!(&buf[..15], b"HTTP/1.0 200 OK"));
+        client.local_buffer(|buf| assert_eq!(&buf[..15], b"HTTP/1.1 200 OK"));
         client.close().await;
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
@@ -1653,7 +1653,7 @@ mod tests {
             ),
             (
                 "GET /test1 HTTP/1.0\r\n\r\n",
-                "HTTP/1.0 200 OK\r\ncontent-length: 0\r\n",
+                "HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n",
             ),
             (
                 "POST /test1 HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\ncontent-length: 4\r\n\r\nbody",
@@ -1829,7 +1829,7 @@ mod tests {
 
         let buf = client.read_any();
         // no interim response for an HTTP/1.0 client
-        assert!(buf.starts_with(b"HTTP/1.0 200 OK\r\n"), "{buf:?}");
+        assert!(buf.starts_with(b"HTTP/1.1 200 OK\r\n"), "{buf:?}");
         assert!(!buf.windows(3).any(|w| w == b"100"), "{buf:?}");
         assert_eq!(
             *seen.borrow(),
