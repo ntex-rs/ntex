@@ -181,7 +181,20 @@ where
             self.cfg.addr
         );
 
+        // the connector attributes its own errors
         let io = self.connector.call(msg).await.into_error()?;
+        self.handshake(io, head, &key)
+            .await
+            .map_err(|e| e.set_service(self.cfg.service()))
+    }
+
+    /// Sends the handshake request and validates the response.
+    async fn handshake(
+        &self,
+        io: Io<F>,
+        head: Message<RequestHead>,
+        key: &str,
+    ) -> Result<WsConnection<F>, Error<WsClientError>> {
         let tag = io.tag();
 
         // create Framed and send request

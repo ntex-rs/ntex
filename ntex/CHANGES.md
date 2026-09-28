@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* WebSocket client handshake errors carry the client's service name, before it was only set on
+  configuration errors
+
 * `ws::WsSink::send()` waits while write back-pressure is enabled before queueing a data message,
   a fast sender grew the write buffer without bound
 

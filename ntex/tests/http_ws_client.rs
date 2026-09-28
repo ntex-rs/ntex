@@ -377,6 +377,27 @@ async fn test_receiver_does_not_answer_close_reply() {
 }
 
 #[ntex::test]
+async fn test_handshake_error_has_service() {
+    use ntex::error::ErrorDiagnostic;
+
+    // the upgrade request is answered with a regular response
+    let srv = test_server(async |_| HttpService::new(async |_| Ok::<_, io::Error>(Response::Ok())));
+
+    let cfg = SharedCfg::new("WS-TEST")
+        .service("ws-client-svc")
+        .add(ws::WsClientConfig::new().set_address(srv.addr()));
+    let err = ws::WsClient::new(format!("http://{}/", srv.addr()), cfg)
+        .connect()
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        *err,
+        ws::error::WsClientError::InvalidResponseStatus(_)
+    ));
+    assert_eq!(err.service(), Some("ws-client-svc"));
+}
+
+#[ntex::test]
 async fn test_host_header_excludes_userinfo() {
     let (host_tx, host_rx) = std::sync::mpsc::channel();
     let srv = test_server(async move |_| {
