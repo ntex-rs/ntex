@@ -4,7 +4,7 @@
     clippy::cast_sign_loss,
     clippy::too_many_arguments
 )]
-use std::{cell::Cell, cmp, io::Write, marker::PhantomData, ptr, slice};
+use std::{cell::Cell, cmp, marker::PhantomData, ptr, slice};
 
 use crate::http::config::DateService;
 use crate::http::error::EncodeError;
@@ -208,11 +208,7 @@ impl MessageType for RequestHead {
 
 impl<T: MessageType> MessageEncoder<T> {
     /// Encode message
-    pub(crate) fn encode_chunk(
-        &self,
-        msg: Bytes,
-        buf: &mut BytePages,
-    ) -> Result<bool, EncodeError> {
+    pub(crate) fn encode_chunk(&self, msg: Bytes, buf: &mut BytePages) -> bool {
         let mut te = self.te.get();
         let result = te.encode(msg, buf);
         self.te.set(te);
@@ -347,39 +343,35 @@ impl TransferEncoding {
 
     /// Encode message. Return `EOF` state of encoder
     #[inline]
-    pub(crate) fn encode(
-        &mut self,
-        mut msg: Bytes,
-        buf: &mut BytePages,
-    ) -> Result<bool, EncodeError> {
+    pub(crate) fn encode(&mut self, mut msg: Bytes, buf: &mut BytePages) -> bool {
         match self.kind {
             TransferEncodingKind::Eof => {
                 if msg.is_empty() {
-                    Ok(true)
+                    true
                 } else {
                     buf.append(msg);
-                    Ok(false)
+                    false
                 }
             }
             TransferEncodingKind::Chunked(eof) => {
                 if eof {
-                    return Ok(true);
+                    return true;
                 }
 
                 // an empty chunk would be the last-chunk, only `encode_eof`
                 // terminates the body
                 if !msg.is_empty() {
-                    writeln!(buf, "{:X}\r", msg.len()).map_err(EncodeError::Fmt)?;
+                    write_chunk_size(msg.len(), buf);
 
                     buf.append(msg);
                     buf.extend_from_slice(b"\r\n");
                 }
-                Ok(false)
+                false
             }
             TransferEncodingKind::Length(mut remaining) => {
                 if remaining > 0 {
                     if msg.is_empty() {
-                        return Ok(remaining == 0);
+                        return remaining == 0;
                     }
                     let len = cmp::min(remaining, msg.len() as u64);
 
@@ -387,9 +379,9 @@ impl TransferEncoding {
 
                     remaining -= len;
                     self.kind = TransferEncodingKind::Length(remaining);
-                    Ok(remaining == 0)
+                    remaining == 0
                 } else {
-                    Ok(true)
+                    true
                 }
             }
         }
@@ -458,6 +450,23 @@ fn write_status_line(mut n: u16, bytes: &mut BytePages) {
     if four {
         bytes.put_u8(b' ');
     }
+}
+
+/// Writes the chunk size line, the size in uppercase hex and CRLF.
+fn write_chunk_size(n: usize, bytes: &mut BytePages) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+
+    // up to 16 digits for a 64-bit size and CRLF
+    let mut buf = [0u8; 18];
+    let digits = if n == 0 { 1 } else { n.ilog2() as usize / 4 + 1 };
+    let mut n = n;
+    for pos in (0..digits).rev() {
+        buf[pos] = HEX[n & 0xf];
+        n >>= 4;
+    }
+    buf[digits] = b'\r';
+    buf[digits + 1] = b'\n';
+    bytes.extend_from_slice(&buf[..digits + 2]);
 }
 
 /// NOTE: bytes object has to contain enough space
@@ -566,12 +575,12 @@ mod tests {
     fn test_chunked_te() {
         let mut bytes = BytePages::default();
         let mut enc = TransferEncoding::chunked();
-        assert!(!enc.encode(b"test".into(), &mut bytes).ok().unwrap());
+        assert!(!enc.encode(b"test".into(), &mut bytes));
         // an empty chunk does not terminate the body
-        assert!(!enc.encode(b"".into(), &mut bytes).ok().unwrap());
-        assert!(!enc.encode(b"line".into(), &mut bytes).ok().unwrap());
+        assert!(!enc.encode(b"".into(), &mut bytes));
+        assert!(!enc.encode(b"line".into(), &mut bytes));
         enc.encode_eof(&mut bytes).unwrap();
-        assert!(enc.encode(b"late".into(), &mut bytes).ok().unwrap());
+        assert!(enc.encode(b"late".into(), &mut bytes));
 
         let mut data = Vec::new();
         while let Some(chunk) = bytes.take() {
@@ -620,6 +629,32 @@ mod tests {
 
             convert_usize(n, &mut b, true);
             assert_eq!(b.take().unwrap().as_ref(), format!("{n}\r\n").as_bytes());
+        }
+    }
+
+    #[test]
+    fn test_write_chunk_size() {
+        for n in [
+            0,
+            1,
+            9,
+            10,
+            15,
+            16,
+            255,
+            256,
+            4095,
+            4096,
+            0x00AB_CDEF,
+            usize::MAX,
+        ] {
+            let mut b = BytePages::default();
+            write_chunk_size(n, &mut b);
+            let mut data = Vec::new();
+            while let Some(chunk) = b.take() {
+                data.extend_from_slice(&chunk);
+            }
+            assert_eq!(data, format!("{n:X}\r\n").into_bytes());
         }
     }
 

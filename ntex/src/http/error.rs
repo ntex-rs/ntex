@@ -61,7 +61,7 @@ impl ResponseError for io::Error {}
 impl ResponseError for serde_json::error::Error {}
 
 /// Errors that can occur while encoding HTTP streams.
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Clone, Debug)]
 pub enum EncodeError {
     /// An invalid `HttpVersion`, such as `HTP/1.1`
     #[error("Unsupported HTTP version specified, {0:?}")]
@@ -70,20 +70,6 @@ pub enum EncodeError {
     /// The encoded stream ended before the message was complete.
     #[error("Unexpected end of bytes stream")]
     UnexpectedEof,
-
-    /// Internal error
-    #[error("Formater error")]
-    Fmt(#[source] io::Error),
-}
-
-impl Clone for EncodeError {
-    fn clone(&self) -> Self {
-        match self {
-            EncodeError::UnexpectedEof => EncodeError::UnexpectedEof,
-            EncodeError::UnsupportedVersion(err) => EncodeError::UnsupportedVersion(*err),
-            EncodeError::Fmt(err) => EncodeError::Fmt(clone_io_error(err)),
-        }
-    }
 }
 
 /// Errors that can occur while parsing HTTP streams.

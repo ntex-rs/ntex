@@ -232,7 +232,7 @@ impl Encoder for Codec {
                 self.ctype.set(ctype);
             }
             Message::Chunk(Some(bytes)) => {
-                self.encoder.encode_chunk(bytes, dst)?;
+                self.encoder.encode_chunk(bytes, dst);
             }
             Message::Chunk(None) => {
                 self.encoder.encode_eof(dst)?;

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+* HTTP/1 writes the chunk size line without `fmt` formatting
+
+* Remove unused `EncodeError::Fmt`
+
 * HTTP/1 applies the default control actions without calling a control service, unless one
   is provided with `H1Service::control()` or `HttpService::h1_control()`
 

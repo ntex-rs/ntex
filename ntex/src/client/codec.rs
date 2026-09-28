@@ -233,7 +233,7 @@ impl Encoder for ClientCodec {
                 )?;
             }
             Message::Chunk(Some(bytes)) => {
-                self.inner.encoder.encode_chunk(bytes, dst)?;
+                self.inner.encoder.encode_chunk(bytes, dst);
             }
             Message::Chunk(None) => {
                 self.inner.encoder.encode_eof(dst)?;
