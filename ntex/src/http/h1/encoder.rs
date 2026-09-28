@@ -8,7 +8,7 @@ use std::{cell::Cell, cmp, marker::PhantomData, ptr, slice};
 
 use crate::http::config::DateService;
 use crate::http::error::EncodeError;
-use crate::http::header::{CONNECTION, CONTENT_LENGTH, DATE, TRANSFER_ENCODING, Value};
+use crate::http::header::{CONNECTION, CONTENT_LENGTH, DATE, HeaderName, TRANSFER_ENCODING, Value};
 use crate::http::message::{ConnectionType, RequestHead};
 use crate::http::{HeaderMap, Method, Response, StatusCode, Version, body::BodySize};
 use crate::{util::BufMut, util::BytePages, util::Bytes};
@@ -98,40 +98,36 @@ pub(crate) trait MessageType: Sized {
             _ => (),
         }
 
-        // merging headers from head and extra headers. HeaderMap::new() does not allocate.
-        let extra_headers = extra_headers.unwrap_or_default();
-        let headers = self
-            .headers()
-            .iter_inner()
-            .filter(|(name, _)| !extra_headers.contains_key(*name))
-            .chain(extra_headers.iter_inner());
-
-        // write headers
+        // write headers, extra headers replace headers with the same name
         let mut has_date = false;
-        for (key, value) in headers {
+        let mut write = |key: &HeaderName, value: &Value| {
             match *key {
-                CONNECTION => continue,
-                TRANSFER_ENCODING | CONTENT_LENGTH if skip_len => continue,
-                DATE => {
-                    has_date = true;
-                }
+                CONNECTION => return,
+                TRANSFER_ENCODING | CONTENT_LENGTH if skip_len => return,
+                DATE => has_date = true,
                 _ => (),
             }
             match value {
-                Value::One(val) => {
-                    dst.put_slice(key.as_ref());
-                    dst.put_slice(b": ");
-                    dst.put_slice(val.as_ref());
-                    dst.put_slice(b"\r\n");
-                }
+                Value::One(val) => put_header(dst, key.as_ref(), val.as_ref()),
                 Value::Multi(vec) => {
                     for val in vec {
-                        dst.put_slice(key.as_ref());
-                        dst.put_slice(b": ");
-                        dst.put_slice(val.as_ref());
-                        dst.put_slice(b"\r\n");
+                        put_header(dst, key.as_ref(), val.as_ref());
                     }
                 }
+            }
+        };
+        if let Some(extra) = extra_headers.as_ref() {
+            for (key, value) in self.headers().iter_inner() {
+                if !extra.contains_key(key) {
+                    write(key, value);
+                }
+            }
+            for (key, value) in extra.iter_inner() {
+                write(key, value);
+            }
+        } else {
+            for (key, value) in self.headers().iter_inner() {
+                write(key, value);
             }
         }
 
@@ -164,11 +160,9 @@ impl MessageType for Response<()> {
 
     fn encode_status(&self, dst: &mut BytePages) {
         let head = self.head();
-        let reason = head.reason().as_bytes();
 
         // the highest supported version, see RFC 9110 section 2.5
-        write_status_line(head.status.as_u16(), dst);
-        dst.extend_from_slice(reason);
+        write_status_line(head.status, head.reason().as_bytes(), dst);
     }
 }
 
@@ -438,45 +432,58 @@ impl TransferEncoding {
     }
 }
 
+/// Writes a `name: value` header line.
+#[inline]
+fn put_header(dst: &mut BytePages, name: &[u8], value: &[u8]) {
+    let len = name.len() + value.len() + 4;
+    let spare = dst.chunk_mut();
+    if spare.len() >= len {
+        // SAFETY: the spare capacity of the current page holds `len` bytes
+        unsafe {
+            let p = spare.as_mut_ptr();
+            ptr::copy_nonoverlapping(name.as_ptr(), p, name.len());
+            let p = p.add(name.len());
+            ptr::copy_nonoverlapping(b": ".as_ptr(), p, 2);
+            let p = p.add(2);
+            ptr::copy_nonoverlapping(value.as_ptr(), p, value.len());
+            ptr::copy_nonoverlapping(b"\r\n".as_ptr(), p.add(value.len()), 2);
+            dst.advance_mut(len);
+        }
+    } else {
+        dst.put_slice(name);
+        dst.put_slice(b": ");
+        dst.put_slice(value);
+        dst.put_slice(b"\r\n");
+    }
+}
+
 const DEC_DIGITS_LUT: &[u8] = b"0001020304050607080910111213141516171819\
       2021222324252627282930313233343536373839\
       4041424344454647484950515253545556575859\
       6061626364656667686970717273747576777879\
       8081828384858687888990919293949596979899";
 
-const STATUS_LINE_BUF_SIZE: usize = 13;
+/// Writes `HTTP/1.1 <code> <reason>`.
+fn write_status_line(status: StatusCode, reason: &[u8], dst: &mut BytePages) {
+    let n = status.as_u16();
+    let mut line = *b"HTTP/1.1 000 ";
+    line[9] = b'0' + (n / 100) as u8;
+    line[10] = b'0' + (n / 10 % 10) as u8;
+    line[11] = b'0' + (n % 10) as u8;
 
-#[allow(clippy::cast_possible_wrap)]
-fn write_status_line(mut n: u16, bytes: &mut BytePages) {
-    let mut buf: [u8; STATUS_LINE_BUF_SIZE] = *b"HTTP/1.1     ";
-
-    let mut curr: isize = 12;
-    let buf_ptr = buf.as_mut_ptr();
-    let lut_ptr = DEC_DIGITS_LUT.as_ptr();
-    let four = n > 999;
-
-    // decode 2 more chars, if > 2 chars
-    let d1 = (n % 100) << 1;
-    n /= 100;
-    curr -= 2;
-
-    unsafe {
-        ptr::copy_nonoverlapping(lut_ptr.offset(d1 as isize), buf_ptr.offset(curr), 2);
-
-        // decode last 1 or 2 chars
-        if n < 10 {
-            curr -= 1;
-            *buf_ptr.offset(curr) = (n as u8) + b'0';
-        } else {
-            let d1 = n << 1;
-            curr -= 2;
-            ptr::copy_nonoverlapping(lut_ptr.offset(d1 as isize), buf_ptr.offset(curr), 2);
+    let len = line.len() + reason.len();
+    let spare = dst.chunk_mut();
+    if spare.len() >= len {
+        // SAFETY: the spare capacity of the current page holds `len` bytes
+        unsafe {
+            let p = spare.as_mut_ptr();
+            ptr::copy_nonoverlapping(line.as_ptr(), p, line.len());
+            ptr::copy_nonoverlapping(reason.as_ptr(), p.add(line.len()), reason.len());
+            dst.advance_mut(len);
         }
-    }
-
-    bytes.extend_from_slice(&buf);
-    if four {
-        bytes.put_u8(b' ');
+    } else {
+        dst.put_slice(&line);
+        dst.put_slice(reason);
     }
 }
 
@@ -815,5 +822,43 @@ mod tests {
         assert_eq!(b.take().unwrap().as_ref(), b"\r\ncontent-length: 5909\r\n");
         write_content_length(25999, &mut b);
         assert_eq!(b.take().unwrap().as_ref(), b"\r\ncontent-length: 25999\r\n");
+    }
+
+    #[test]
+    fn test_write_status_line() {
+        for n in [100, 101, 200, 204, 404, 599, 999] {
+            let status = StatusCode::from_u16(n).unwrap();
+            let mut b = BytePages::default();
+            write_status_line(status, b"Reason", &mut b);
+            assert_eq!(
+                b.take().unwrap().as_ref(),
+                format!("HTTP/1.1 {n} Reason").as_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn test_put_header_page_boundary() {
+        use crate::util::BytePageSize;
+
+        let mut b = BytePages::new(BytePageSize::Size4);
+        b.put_u8(b'x');
+        let spare = b.chunk_mut().len() + 1;
+
+        // the header line ends before, exactly at and after the page end
+        let line = b"x-name: value\r\n";
+        for fill in spare - line.len() - 2..=spare {
+            let mut b = BytePages::new(BytePageSize::Size4);
+            b.extend_from_slice(&vec![b'.'; fill]);
+            put_header(&mut b, b"x-name", b"value");
+            write_status_line(StatusCode::OK, b"OK", &mut b);
+
+            let mut data = Vec::new();
+            while let Some(chunk) = b.take() {
+                data.extend_from_slice(&chunk);
+            }
+            assert_eq!(&data[..fill], &vec![b'.'; fill][..]);
+            assert_eq!(&data[fill..], b"x-name: value\r\nHTTP/1.1 200 OK");
+        }
     }
 }

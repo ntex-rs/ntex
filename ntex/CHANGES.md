@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+* `ws::WsSink::send()` waits while write back-pressure is enabled before queueing a data message,
+  a fast sender grew the write buffer without bound
+
+* HTTP/1 encoder writes the status line and each header line with one copy and skips the
+  extra headers lookup when there are none
+
 * HTTP/1 decoder splits header names and values off the read buffer directly, without splitting
   each header line first
 
