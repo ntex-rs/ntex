@@ -363,7 +363,6 @@ impl<N: std::fmt::Display, V> FromIterator<(N, V)> for HeaderMap
 where
     HeaderName: TryFrom<N>,
     Value: TryFrom<V>,
-    V: std::fmt::Debug,
 {
     #[inline]
     #[allow(clippy::mutable_key_type)]
@@ -423,6 +422,13 @@ impl TryFrom<&str> for Value {
             .map(str::trim)
             .filter_map(|v| HeaderValue::from_str(v).ok())
             .collect::<Value>())
+    }
+}
+
+impl TryFrom<String> for Value {
+    type Error = crate::header::InvalidHeaderValue;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Value::try_from(value.as_str())
     }
 }
 
@@ -550,6 +556,19 @@ impl fmt::Debug for HeaderMap {
 mod tests {
     use super::*;
     use crate::header::{ACCEPT_ENCODING, CONTENT_TYPE};
+
+    #[test]
+    fn test_from_iter_string_values() {
+        let map: HeaderMap = vec![
+            ("Connection".to_string(), "keep-alive".to_string()),
+            ("Accept".to_string(), "text/html, */*".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(map.get("Connection").unwrap(), "keep-alive");
+        let accept: Vec<_> = map.get_all("Accept").collect();
+        assert_eq!(accept, ["text/html", "*/*"]);
+    }
 
     #[test]
     fn test_from_iter() {

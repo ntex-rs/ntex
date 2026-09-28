@@ -4,6 +4,8 @@
 
 * HeaderValue hash ignores the sensitive flag, consistent with equality
 
+* HeaderMap can be collected from String header values
+
 ## [1.2.0] - 2026-05-02
 
 * Add BytePages support to Body
