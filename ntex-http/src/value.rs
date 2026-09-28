@@ -15,7 +15,7 @@ use ntex_bytes::{ByteString, Bytes, BytesMut};
 ///
 /// To handle this, the `HeaderValue` is useable as a type and can be compared
 /// with strings and implements `Debug`. [`to_str`](Self::to_str) returns an
-/// error if the value contains bytes outside visible ASCII.
+/// error if the value contains bytes other than HTAB and visible ASCII.
 #[derive(Clone, Eq)]
 pub struct HeaderValue {
     inner: Bytes,
