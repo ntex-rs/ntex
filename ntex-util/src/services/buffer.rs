@@ -1,7 +1,7 @@
 //! Service that buffers incoming requests.
 #![allow(clippy::type_complexity)]
 use std::cell::{Cell, RefCell};
-use std::{collections::VecDeque, fmt, future, marker, task, task::Poll};
+use std::{collections::VecDeque, fmt, marker, task::Poll};
 
 use ntex_service::{Ctx, Middleware, Service, pipeline::PipelineState};
 
@@ -9,6 +9,8 @@ use crate::channel::oneshot;
 
 #[derive(Copy, Clone, Debug)]
 /// Middleware that buffers requests while the wrapped service is not ready.
+///
+/// See [`BufferService`] for how buffered requests are released.
 ///
 /// The default buffer capacity is 16 requests.
 pub struct Buffer<St: Clone, Req, Res, Err> {
@@ -95,6 +97,12 @@ impl<E: fmt::Display + fmt::Debug> std::error::Error for BufferServiceError<E> {
 
 /// A service that buffers requests while its wrapped service is not ready.
 ///
+/// Buffered requests are released in order, one at a time: the next one is
+/// released only after the previous one has completed its call or was
+/// dropped. Shutdown drains the buffer the same way, unless
+/// [`cancel_on_shutdown`](Self::cancel_on_shutdown) is set, and shuts down the
+/// wrapped service afterwards.
+///
 /// The default buffer capacity is 16 requests.
 pub struct BufferService<St, Req, Res, Err> {
     size: usize,
@@ -103,7 +111,6 @@ pub struct BufferService<St, Req, Res, Err> {
     buf: RefCell<VecDeque<oneshot::Sender<oneshot::Sender<()>>>>,
     next_call: RefCell<Option<oneshot::Receiver<()>>>,
     cancel_on_shutdown: bool,
-    readiness: Cell<Option<task::Waker>>,
 }
 
 impl<St, Req, Res, Err> BufferService<St, Req, Res, Err>
@@ -120,7 +127,6 @@ where
             buf: RefCell::new(VecDeque::with_capacity(size)),
             next_call: RefCell::default(),
             cancel_on_shutdown: false,
-            readiness: Cell::new(None),
         }
     }
 
@@ -158,7 +164,8 @@ where
     type Error = BufferServiceError<Err>;
 
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
-        // hold advancement until the last released task either makes a call or is dropped
+        // hold advancement until the last released task completes its call or
+        // is dropped
         let next_call = self.next_call.borrow_mut().take();
         if let Some(next_call) = next_call {
             let _ = next_call.recv().await;
@@ -175,8 +182,7 @@ where
                     Poll::Ready(Ok(()))
                 } else {
                     log::trace!("Buffer limit exceeded");
-                    // service is not ready
-                    let _ = self.readiness.take().map(task::Waker::wake);
+                    // service is not ready, its readiness wakes this task
                     Poll::Pending
                 }
             } else {
@@ -199,40 +205,37 @@ where
     }
 
     async fn shutdown(&self, ctx: Ctx<'_, Self, St>) {
-        // hold advancement until the last released task either makes a call or is dropped
-        let next_call = self.next_call.borrow_mut().take();
-        if let Some(next_call) = next_call {
-            let _ = next_call.recv().await;
-        }
+        // buffered requests are released one at a time, as in `ready()`
+        loop {
+            // hold advancement until the last released task completes its call
+            // or is dropped
+            let next_call = self.next_call.borrow_mut().take();
+            if let Some(next_call) = next_call {
+                let _ = next_call.recv().await;
+            }
 
-        future::poll_fn(|cx| {
-            let mut buffer = self.buf.borrow_mut();
             if self.cancel_on_shutdown {
-                buffer.clear();
+                self.buf.borrow_mut().clear();
+            }
+            if self.buf.borrow().is_empty() {
+                break;
             }
 
-            if !buffer.is_empty() {
-                if task::ready!(self.service.poll_ready(cx, ctx.st())).is_err() {
-                    log::error!("Buffered inner service failed while buffer flushing on shutdown");
-                    return Poll::Ready(());
-                }
+            if self.service.ready(ctx.st()).await.is_err() {
+                log::error!("Buffered inner service failed while buffer flushing on shutdown");
+                break;
+            }
 
-                while let Some(sender) = buffer.pop_front() {
-                    let (next_call_tx, next_call_rx) = oneshot::channel();
-                    if sender.send(next_call_tx).is_err() || next_call_rx.poll_recv(cx).is_ready() {
-                        // the task is gone
-                        continue;
-                    }
+            let mut buffer = self.buf.borrow_mut();
+            while let Some(sender) = buffer.pop_front() {
+                let (next_call_tx, next_call_rx) = oneshot::channel();
+                if sender.send(next_call_tx).is_ok() {
                     self.next_call.borrow_mut().replace(next_call_rx);
-                    if buffer.is_empty() {
-                        break;
-                    }
-                    return Poll::Pending;
+                    break;
                 }
+                // the task is gone
             }
-            Poll::Ready(())
-        })
-        .await;
+        }
 
         self.service.shutdown(ctx.st()).await;
     }
@@ -245,7 +248,7 @@ where
             let (tx, rx) = oneshot::channel();
             self.buf.borrow_mut().push_back(tx);
 
-            // release
+            // released, the guard is held until the call completes
             let _task_guard = rx.recv().await.map_err(|_| {
                 log::trace!("Buffered service request canceled");
                 BufferServiceError::RequestCanceled
@@ -560,5 +563,75 @@ mod tests {
         crate::time::sleep(Duration::from_millis(25)).await;
 
         assert!(inner.completed.get());
+    }
+
+    #[derive(Default)]
+    struct DrainInner {
+        ready: Cell<bool>,
+        waker: LocalWaker,
+        active: Cell<usize>,
+        max: Cell<usize>,
+        count: Cell<usize>,
+        active_on_shutdown: Cell<Option<usize>>,
+    }
+
+    struct DrainService(Rc<DrainInner>);
+
+    impl Service<(), ()> for DrainService {
+        type Res = ();
+        type Error = ();
+
+        async fn ready(&self, ctx: Ctx<'_, Self, ()>) -> Result<(), ()> {
+            ctx.poll_fn(|cx| {
+                self.0.waker.register(cx.waker());
+                if self.0.ready.get() {
+                    Poll::Ready(Ok(()))
+                } else {
+                    Poll::Pending
+                }
+            })
+            .await
+        }
+
+        async fn call(&self, (): (), _: Ctx<'_, Self, ()>) -> Result<(), ()> {
+            let inner = &self.0;
+            inner.active.set(inner.active.get() + 1);
+            inner.max.set(inner.max.get().max(inner.active.get()));
+            crate::time::sleep(Duration::from_millis(25)).await;
+            inner.active.set(inner.active.get() - 1);
+            inner.count.set(inner.count.get() + 1);
+            Ok(())
+        }
+
+        async fn shutdown(&self, _: Ctx<'_, Self, ()>) {
+            self.0.active_on_shutdown.set(Some(self.0.active.get()));
+        }
+    }
+
+    #[ntex::test]
+    async fn shutdown_drains_buffer_one_at_a_time() {
+        let inner = Rc::new(DrainInner::default());
+        let srv = Pipeline::new(
+            (),
+            BufferService::new(4, PipelineState::new(DrainService(inner.clone()))),
+        );
+
+        for _ in 0..2 {
+            srv.ready().await.unwrap();
+            let srv = srv.bind();
+            ntex::rt::spawn(async move {
+                srv.call(()).await.unwrap();
+            });
+        }
+        crate::time::sleep(Duration::from_millis(10)).await;
+        assert_eq!(inner.count.get(), 0);
+
+        inner.ready.set(true);
+        inner.waker.wake();
+        srv.shutdown().await;
+
+        assert_eq!(inner.count.get(), 2);
+        assert_eq!(inner.max.get(), 1);
+        assert_eq!(inner.active_on_shutdown.get(), Some(0));
     }
 }

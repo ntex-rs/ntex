@@ -5,6 +5,10 @@
 * Dropping the last `bstream::Sender` wakes a pending read, before the receiver
   could wait forever
 
+* `BufferService` shutdown releases buffered requests one at a time, as
+  readiness does, and shuts down the wrapped service after the last one
+  completes
+
 * Fix `Counter::unavailable()`, it was never woken once the counter reached
   its capacity
 
