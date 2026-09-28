@@ -6,20 +6,20 @@ use crate::service::pipeline::{Pipeline, PipelineFactory};
 use crate::service::{Ctx, IntoServiceFactory, RequestState, Service, ServiceFactory};
 
 use super::control::{Control, ControlAck, ControlResult};
-use super::default::DefaultControlService;
 use super::dispatcher::Dispatcher;
 
 /// Server transport service that dispatches HTTP/1 requests.
 ///
 /// Construct this service with [`HttpService::h1`](crate::http::HttpService::h1).
 /// Request handling is delegated to the configured application service, while
-/// connection lifecycle events use [`DefaultControlService`] unless replaced
-/// with [`control`](Self::control).
+/// connection lifecycle events get their default action unless a control
+/// service is provided with [`control`](Self::control).
 #[derive(derive_more::Debug)]
 #[debug("H1Service")]
 pub struct H1Service<F, Req: RequestState<Io<F>>, Err> {
     sf: crate::http::HttpPipeline<Req::State, Err>,
-    ctl: crate::http::Ctl1Pipeline<Req::State, F, Err>,
+    /// Without a control service the default action is applied to every event.
+    ctl: Option<crate::http::Ctl1Pipeline<Req::State, F, Err>>,
     config: DispatcherConfig,
 }
 
@@ -43,7 +43,7 @@ where
                     .map(Into::into)
                     .map_init_err(|e| DispatchError::Control(e.fail())),
             ),
-            ctl: PipelineFactory::new(DefaultControlService),
+            ctl: None,
             config: DispatcherConfig::default(),
         }
     }
@@ -72,11 +72,11 @@ where
     {
         H1Service {
             sf: self.sf,
-            ctl: PipelineFactory::new(
+            ctl: Some(PipelineFactory::new(
                 ctl.into_factory()
                     .map_err(|e| DispatchError::Service(e.fail()))
                     .map_init_err(|e| DispatchError::Control(e.fail())),
-            ),
+            )),
             config: self.config,
         }
     }
@@ -96,7 +96,10 @@ where
         let (st, io) = req.unpack();
 
         let svc = self.sf.create(st.clone()).await?;
-        let ctl = self.ctl.create(st).await?;
+        let ctl = match &self.ctl {
+            Some(ctl) => Some(ctl.create(st).await?),
+            None => None,
+        };
 
         let id = self.config.next_id();
         let ioref = io.get_ref();
@@ -132,7 +135,7 @@ pub(crate) async fn handle_io<F, Err>(
     id: usize,
     io: Io<F>,
     svc: Pipeline<Request, Response, Err>,
-    ctl: Pipeline<Control<F, Err>, ControlAck<F>, DispatchError>,
+    ctl: Option<Pipeline<Control<F, Err>, ControlAck<F>, DispatchError>>,
     config: DispatcherConfig,
 ) -> Result<(), DispatchError>
 where
@@ -140,9 +143,14 @@ where
     Err: ResponseError + 'static,
 {
     // Notify control service
-    let ack = ctl.call_nowait(Control::connect(id, io)).await?;
-    let ControlResult::Connect(io) = ack.result else {
-        unreachable!();
+    let io = if let Some(ctl) = &ctl {
+        let ack = ctl.call_nowait(Control::connect(id, io)).await?;
+        let ControlResult::Connect(io) = ack.result else {
+            unreachable!();
+        };
+        io
+    } else {
+        io
     };
 
     Dispatcher::new(id, io, svc, ctl, config).await

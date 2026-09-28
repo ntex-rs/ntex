@@ -66,7 +66,7 @@ struct DispatcherInner<F, B, Err> {
     config: DispatcherConfig,
     disconnect: Disconnect,
     service: Pipeline<Request, Response<B>, Err>,
-    control: Pipeline<Control<F, Err>, ControlAck<F>, DispatchError>,
+    control: Option<Pipeline<Control<F, Err>, ControlAck<F>, DispatchError>>,
     payload: Option<(PayloadDecoder, bstream::Sender<PayloadError>)>,
     pending_payload_error: Option<PayloadFailure>,
 }
@@ -78,11 +78,14 @@ where
     Err: ResponseError + 'static,
 {
     /// Construct new `Dispatcher` instance with outgoing messages stream.
+    ///
+    /// Without a control service the default action is applied to every
+    /// control message.
     pub(in crate::http) fn new(
         id: usize,
         io: Io<F>,
         service: Pipeline<Request, Response<B>, Err>,
-        control: Pipeline<Control<F, Err>, ControlAck<F>, DispatchError>,
+        control: Option<Pipeline<Control<F, Err>, ControlAck<F>, DispatchError>>,
         config: DispatcherConfig,
     ) -> Self {
         let codec = Codec::new(id, io.shared().get());
@@ -160,47 +163,7 @@ where
                     };
 
                     match result {
-                        Ok(ControlAck { result }) => match result {
-                            ControlResult::Publish(req) => inner.publish(req),
-                            ControlResult::Response(res, body)
-                            | ControlResult::Error(res, body)
-                            | ControlResult::ProtocolError(res, body) => {
-                                inner.send_response(res, body.into())
-                            }
-                            ControlResult::Continue(req) => {
-                                let result =
-                                    inner.io.encode_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
-                                if let Err(err) = result {
-                                    *this.st = inner.ctl_peer_gone(Some(err));
-                                    continue;
-                                }
-                                inner.start_payload_timer();
-                                if req.upgrade() {
-                                    inner.ctl_upgrade(req)
-                                } else {
-                                    inner.publish(req)
-                                }
-                            }
-                            ControlResult::Expect(req) => inner.control(Control::expect(req)),
-                            ControlResult::ExpectFailed(res, body) => {
-                                inner.set_disconnect(ServiceDisconnectReason::ExpectFailed);
-                                inner.send_response(res, body.into())
-                            }
-                            ControlResult::Upgrade(req) => inner.ctl_upgrade(req),
-                            ControlResult::UpgradeAck(req) => {
-                                inner.set_disconnect(ServiceDisconnectReason::UpgradeHandled);
-                                inner.publish(req)
-                            }
-                            ControlResult::UpgradeHandled => {
-                                inner.ctl_svc_disconnect(ServiceDisconnectReason::UpgradeHandled)
-                            }
-                            ControlResult::UpgradeFailed(res, body) => {
-                                inner.set_disconnect(ServiceDisconnectReason::UpgradeFailed);
-                                inner.send_response(res, body.into())
-                            }
-                            ControlResult::Stop => inner.stop(),
-                            ControlResult::Connect(_) => unreachable!(),
-                        },
+                        Ok(ControlAck { result }) => inner.control_result(result),
                         Err(err) => {
                             log::error!("{}: Control plain error: {}", inner.io.tag(), err);
                             return Poll::Ready(Err(err));
@@ -840,9 +803,56 @@ where
         }
     }
 
-    fn control(&self, req: Control<F, Err>) -> State<F, B, Err> {
-        State::CallControl {
-            fut: self.control.call_nowait(req),
+    /// Applies the control service acknowledgement.
+    fn control_result(&mut self, result: ControlResult<F>) -> State<F, B, Err> {
+        match result {
+            ControlResult::Publish(req) => self.publish(req),
+            ControlResult::Response(res, body)
+            | ControlResult::Error(res, body)
+            | ControlResult::ProtocolError(res, body) => self.send_response(res, body.into()),
+            ControlResult::Continue(req) => {
+                let result = self.io.encode_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
+                if let Err(err) = result {
+                    return self.ctl_peer_gone(Some(err));
+                }
+                self.start_payload_timer();
+                if req.upgrade() {
+                    self.ctl_upgrade(req)
+                } else {
+                    self.publish(req)
+                }
+            }
+            ControlResult::Expect(req) => self.control(Control::expect(req)),
+            ControlResult::ExpectFailed(res, body) => {
+                self.set_disconnect(ServiceDisconnectReason::ExpectFailed);
+                self.send_response(res, body.into())
+            }
+            ControlResult::Upgrade(req) => self.ctl_upgrade(req),
+            ControlResult::UpgradeAck(req) => {
+                self.set_disconnect(ServiceDisconnectReason::UpgradeHandled);
+                self.publish(req)
+            }
+            ControlResult::UpgradeHandled => {
+                self.ctl_svc_disconnect(ServiceDisconnectReason::UpgradeHandled)
+            }
+            ControlResult::UpgradeFailed(res, body) => {
+                self.set_disconnect(ServiceDisconnectReason::UpgradeFailed);
+                self.send_response(res, body.into())
+            }
+            ControlResult::Stop => self.stop(),
+            ControlResult::Connect(_) => unreachable!(),
+        }
+    }
+
+    /// Sends a control message, without a control service the default action
+    /// is applied.
+    fn control(&mut self, req: Control<F, Err>) -> State<F, B, Err> {
+        if let Some(ctl) = &self.control {
+            State::CallControl {
+                fut: ctl.call_nowait(req),
+            }
+        } else {
+            self.control_result(req.ack().result)
         }
     }
 
@@ -922,7 +932,7 @@ mod tests {
 
     use super::*;
     use crate::http::config::HttpServiceConfig;
-    use crate::http::h1::{DefaultControlService, control::Reason};
+    use crate::http::h1::control::Reason;
     use crate::http::{KeepAlive, ResponseHead, StatusCode, body};
     use crate::io::{self as nio, Base, testing::IoTest};
     use crate::service::{IntoService, Service, cfg::SharedCfg, fn_service};
@@ -946,7 +956,7 @@ mod tests {
                 (),
                 fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         );
 
@@ -985,7 +995,7 @@ mod tests {
                 (),
                 fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         );
 
@@ -998,10 +1008,8 @@ mod tests {
             h1.inner.disconnect,
             Disconnect::Pending(ServiceDisconnectReason::ExpectFailed)
         ));
-        assert!(matches!(
-            h1.inner.ctl_peer_gone(None),
-            State::CallControl { .. }
-        ));
+        // without a control service the disconnect is acknowledged in place
+        assert!(matches!(h1.inner.ctl_peer_gone(None), State::Stop));
         assert!(matches!(h1.inner.disconnect, Disconnect::Sent));
 
         h1.inner
@@ -1028,7 +1036,7 @@ mod tests {
                 (),
                 fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         );
         let (tx, rx) = bstream::channel::<PayloadError>();
@@ -1068,7 +1076,7 @@ mod tests {
                     }
                 }),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         );
 
@@ -1200,7 +1208,7 @@ mod tests {
                     Ok::<_, io::Error>(Response::Ok().build())
                 }),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         );
 
@@ -1237,7 +1245,7 @@ mod tests {
                     Ok::<_, io::Error>(Response::Ok().build())
                 }),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         );
 
@@ -1279,7 +1287,7 @@ mod tests {
                 (),
                 fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         );
 
@@ -1327,7 +1335,7 @@ mod tests {
                 (),
                 fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         )
     }
@@ -1357,7 +1365,7 @@ mod tests {
                     Ok::<_, io::Error>(Response::Ok().build())
                 }),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         );
 
@@ -1464,7 +1472,7 @@ mod tests {
                 (),
                 fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         )
     }
@@ -1552,7 +1560,7 @@ mod tests {
                 (),
                 fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         );
 
@@ -1588,7 +1596,7 @@ mod tests {
             0,
             nio::Io::new(stream, cfg.clone()),
             Pipeline::new((), s.into_service().map(Into::into)),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         )
     }
@@ -1613,7 +1621,7 @@ mod tests {
             0,
             nio::Io::new(stream, cfg),
             Pipeline::new((), s.into_service().map(Into::into)),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         ));
     }
@@ -1642,7 +1650,7 @@ mod tests {
             0,
             nio::Io::new(server, config),
             Pipeline::new((), async |_| Ok::<_, io::Error>(Response::Ok().build())),
-            Pipeline::new(
+            Some(Pipeline::new(
                 (),
                 fn_service(async move |req: Control<_, _>| {
                     if let Control::Request(_) = req {
@@ -1650,7 +1658,7 @@ mod tests {
                     }
                     Ok::<_, DispatchError>(req.ack())
                 }),
-            ),
+            )),
             DispatcherConfig::default(),
         );
         sleep(Millis(50)).await;
@@ -2131,7 +2139,7 @@ mod tests {
                     async { Ok::<_, io::Error>(Response::Ok().body("x".repeat(128 * 1024))) }
                 }),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         )
     }
@@ -2275,7 +2283,7 @@ mod tests {
                     async { Ok::<_, io::Error>(Response::Ok().body("x".repeat(128 * 1024))) }
                 }),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         );
 
@@ -2433,7 +2441,7 @@ mod tests {
                     Ok::<_, io::Error>(Response::Ok().build())
                 }),
             ),
-            Pipeline::new(
+            Some(Pipeline::new(
                 (),
                 fn_service(async move |msg: Control<_, _>| {
                     if let Control::Disconnect(Reason::PeerGone(err)) = &msg {
@@ -2442,7 +2450,7 @@ mod tests {
                     }
                     Ok::<_, DispatchError>(msg.ack())
                 }),
-            ),
+            )),
             DispatcherConfig::default(),
         );
 
@@ -2479,7 +2487,7 @@ mod tests {
                     Ok::<_, io::Error>(Response::Ok().build())
                 }),
             ),
-            Pipeline::new(
+            Some(Pipeline::new(
                 (),
                 fn_service(async move |msg: Control<_, _>| {
                     if let Control::Disconnect(Reason::PeerGone(err)) = &msg {
@@ -2491,7 +2499,7 @@ mod tests {
                     }
                     Ok::<_, DispatchError>(msg.ack())
                 }),
-            ),
+            )),
             DispatcherConfig::default(),
         );
 
@@ -2523,7 +2531,7 @@ mod tests {
                 (),
                 fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         );
 
@@ -2558,7 +2566,7 @@ mod tests {
                     Ok::<_, io::Error>(Response::Ok().build())
                 }),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         );
 
@@ -2604,7 +2612,7 @@ mod tests {
                     Ok::<_, io::Error>(Response::Ok().build())
                 }),
             ),
-            Pipeline::new(
+            Some(Pipeline::new(
                 (),
                 fn_service(async |req: Control<Base, io::Error>| {
                     if let Control::Expect(exc) = req {
@@ -2615,7 +2623,7 @@ mod tests {
                         Ok(req.ack())
                     }
                 }),
-            ),
+            )),
             DispatcherConfig::default(),
         );
         crate::rt::spawn(h1);
@@ -2649,7 +2657,7 @@ mod tests {
                 (),
                 fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
             ),
-            Pipeline::new(
+            Some(Pipeline::new(
                 (),
                 fn_service(move |req: Control<Base, io::Error>| {
                     let stash = stash2.clone();
@@ -2663,7 +2671,7 @@ mod tests {
                         }
                     }
                 }),
-            ),
+            )),
             DispatcherConfig::default(),
         );
 
@@ -2700,7 +2708,7 @@ mod tests {
                     Ok::<_, io::Error>(Response::Ok().build())
                 }),
             ),
-            Pipeline::new(
+            Some(Pipeline::new(
                 (),
                 fn_service(async move |msg: Control<_, _>| {
                     match &msg {
@@ -2712,7 +2720,7 @@ mod tests {
                     }
                     Ok::<_, DispatchError>(msg.ack())
                 }),
-            ),
+            )),
             DispatcherConfig::default(),
         );
 
@@ -2744,7 +2752,7 @@ mod tests {
                     Ok::<_, io::Error>(Response::Ok().build())
                 }),
             ),
-            Pipeline::new(
+            Some(Pipeline::new(
                 (),
                 fn_service(async move |msg: Control<_, _>| {
                     match &msg {
@@ -2758,7 +2766,7 @@ mod tests {
                     }
                     Ok::<_, DispatchError>(msg.ack())
                 }),
-            ),
+            )),
             DispatcherConfig::default(),
         );
 
@@ -2792,7 +2800,7 @@ mod tests {
                     async { Err::<Response<()>, _>(io::Error::other("service error")) }
                 }),
             ),
-            Pipeline::new(
+            Some(Pipeline::new(
                 (),
                 fn_service(async move |msg: Control<_, io::Error>| {
                     let wait = match &msg {
@@ -2812,7 +2820,7 @@ mod tests {
                     }
                     Ok::<_, DispatchError>(msg.ack())
                 }),
-            ),
+            )),
             DispatcherConfig::default(),
         );
 
@@ -2980,7 +2988,7 @@ mod tests {
             0,
             nio::Io::new(server, config),
             Pipeline::new((), fn_service(svc)),
-            Pipeline::new(
+            Some(Pipeline::new(
                 (),
                 fn_service(async move |msg: Control<_, _>| {
                     if let Control::Disconnect(Reason::ProtocolError(ref err)) = msg
@@ -2990,7 +2998,7 @@ mod tests {
                     }
                     Ok::<_, DispatchError>(msg.ack())
                 }),
-            ),
+            )),
             DispatcherConfig::default(),
         );
         crate::rt::spawn(disp);

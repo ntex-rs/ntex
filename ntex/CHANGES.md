@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* HTTP/1 applies the default control actions without calling a control service, unless one
+  is provided with `H1Service::control()` or `HttpService::h1_control()`
+
 * HTTP/1 does not restart the keep-alive timer for every request of a persistent connection
 
 * HTTP/1 parses an incomplete start line incrementally, an invalid start line is
