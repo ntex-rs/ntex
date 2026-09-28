@@ -8,6 +8,9 @@
 * `web::ws::start()` sends the handshake error response and closes the connection when the
   handshake of an upgrade request fails, before the handler's response was sent
 
+* HTTP client `TestResponse` adds a separate `Set-Cookie` header per cookie, including cookie
+  attributes
+
 * HTTP client `basic_auth()`, `bearer_auth()` and `content_length()` replace an existing header,
   `ClientConfig::set_basic_auth()` and `set_bearer_auth()` replace a configured `Authorization` header
 
