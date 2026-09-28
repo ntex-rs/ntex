@@ -811,7 +811,7 @@ impl PayloadDecoder {
         }
     }
 
-    pub(super) fn eof() -> PayloadDecoder {
+    pub(crate) fn eof() -> PayloadDecoder {
         PayloadDecoder {
             kind: Cell::new(Kind::Eof),
         }

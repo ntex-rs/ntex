@@ -11,6 +11,10 @@
 
 * HTTP/1 does not restart the keep-alive timer for every request of a persistent connection
 
+* HTTP/1 client treats a `2xx` response to `CONNECT` as a tunnel, framing headers are ignored,
+  the payload is read until connection close and the connection is not reused, the connection
+  was returned to the pool
+
 * HTTP/2 client does not send connection-specific headers `Upgrade`, `Keep-Alive`, `Proxy-Connection`
   and `TE` other than `trailers`, extra headers are filtered too, a `Host` header is not sent,
   `:authority` of the connection is used

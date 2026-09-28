@@ -17,6 +17,7 @@ bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     struct Flags: u8 {
         const HEAD              = 0b0000_0001;
+        const CONNECT           = 0b0000_0010;
         const KEEPALIVE_ENABLED = 0b0000_1000;
         const STREAM            = 0b0001_0000;
     }
@@ -144,7 +145,14 @@ impl Decoder for ClientCodec {
                 None => (),
             }
 
-            if self.inner.flags.get().contains(Flags::HEAD) {
+            let flags = self.inner.flags.get();
+            if flags.contains(Flags::CONNECT) && req.status.is_success() {
+                // the connection becomes a tunnel, framing headers are ignored
+                // see https://www.rfc-editor.org/rfc/rfc9112#section-6.3
+                self.inner.ctype.set(ConnectionType::Close);
+                *self.inner.payload.borrow_mut() = Some(PayloadDecoder::eof());
+                self.inner.flags.set(flags | Flags::STREAM);
+            } else if flags.contains(Flags::HEAD) {
                 self.inner.payload.borrow_mut().take();
             } else {
                 match payload {
@@ -205,6 +213,7 @@ impl Encoder for ClientCodec {
                 inner.version.set(req.head.version);
                 let mut flags = inner.flags.get();
                 flags.set(Flags::HEAD, req.head.method == Method::HEAD);
+                flags.set(Flags::CONNECT, req.head.method == Method::CONNECT);
                 inner.flags.set(flags);
 
                 // connection status
@@ -301,5 +310,53 @@ mod tests {
             codec.decode(&mut buf).unwrap().unwrap();
             assert_eq!(codec.keepalive(), keepalive, "{resp:?}");
         }
+    }
+
+    #[crate::rt_test]
+    async fn test_connect_response_is_tunnel() {
+        let cfg: SharedCfg = SharedCfg::new("DBG").add(HttpServiceConfig::new()).into();
+        let connect = |codec: &ClientCodec| {
+            let mut head = crate::http::Message::<RequestHead>::new();
+            head.method = Method::CONNECT;
+            head.uri = crate::http::Uri::from_static("http://example.com:443");
+            let req = ClientRawRequest {
+                head,
+                headers: None,
+                size: crate::http::body::BodySize::None,
+            };
+            codec
+                .encode(Message::Item(req), &mut BytePages::default())
+                .unwrap();
+        };
+
+        // framing headers of a 2xx response are ignored
+        for resp in [
+            "HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\ntunnel",
+            "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\ntunnel",
+            "HTTP/1.1 200 OK\r\n\r\ntunnel",
+        ] {
+            let codec = ClientCodec::new(true, cfg.get());
+            connect(&codec);
+            let mut buf = BytesMut::from(resp);
+            let head = codec.decode(&mut buf).unwrap().unwrap();
+            assert_eq!(head.status, StatusCode::OK);
+            assert_eq!(codec.message_type(), MessageType::Stream, "{resp:?}");
+            assert!(!codec.keepalive(), "{resp:?}");
+
+            let codec = codec.into_payload_codec();
+            assert!(codec.eof_delimited());
+            assert_eq!(codec.decode(&mut buf).unwrap(), Some(Some("tunnel".into())));
+        }
+
+        // other responses use regular framing
+        let codec = ClientCodec::new(true, cfg.get());
+        connect(&codec);
+        let mut buf = BytesMut::from(
+            "HTTP/1.1 407 Proxy Authentication Required\r\ncontent-length: 2\r\n\r\nno",
+        );
+        let head = codec.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(head.status, StatusCode::PROXY_AUTHENTICATION_REQUIRED);
+        assert_eq!(codec.message_type(), MessageType::Payload);
+        assert!(codec.keepalive());
     }
 }
