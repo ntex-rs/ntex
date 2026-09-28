@@ -7,7 +7,7 @@ use crate::http::body::BodySize;
 use crate::http::config::{DateService, HttpServiceConfig};
 use crate::http::error::{DecodeError, EncodeError};
 use crate::http::message::ConnectionType;
-use crate::http::{Method, Version, request::Request, response::Response};
+use crate::http::{Method, StatusCode, Version, request::Request, response::Response};
 use crate::{Cfg, util::BytePages, util::BytesMut};
 
 use super::{Message, decoder, decoder::PayloadType, encoder};
@@ -209,8 +209,10 @@ impl Encoder for Codec {
                 // set response version
                 res.head_mut().version = self.version.get();
 
-                // connection status
-                if let Some(ct) = res.head().ctype()
+                // connection status, http/1 cannot continue after 101
+                if res.status() == StatusCode::SWITCHING_PROTOCOLS {
+                    self.ctype.set(ConnectionType::Upgrade);
+                } else if let Some(ct) = res.head().ctype()
                     && ct != ConnectionType::KeepAlive
                 {
                     self.ctype.set(ct);
@@ -293,6 +295,34 @@ mod tests {
     }
 
     /// A response without body size information is framed with a zero length.
+    #[crate::rt_test]
+    async fn test_switching_protocols_ends_http1() {
+        let cfg: SharedCfg = SharedCfg::new("DBG").add(HttpServiceConfig::new()).into();
+        let codec = Codec::new(0, cfg.get());
+        let mut buf = BytesMut::from("GET / HTTP/1.1\r\nhost: a\r\n\r\n");
+        codec.decode(&mut buf).unwrap().unwrap();
+        assert!(codec.keepalive());
+
+        // no `.upgrade()` on the response
+        let mut out = BytePages::default();
+        codec
+            .encode(
+                Message::Item((
+                    Response::with_body(StatusCode::SWITCHING_PROTOCOLS, ()),
+                    BodySize::None,
+                )),
+                &mut out,
+            )
+            .unwrap();
+        let mut data = Vec::new();
+        while let Some(chunk) = out.take() {
+            data.extend_from_slice(&chunk);
+        }
+        let data = String::from_utf8(data).unwrap();
+        assert!(data.contains("connection: upgrade\r\n"), "{data:?}");
+        assert!(!codec.keepalive());
+    }
+
     #[crate::rt_test]
     async fn test_response_without_body_has_length() {
         use crate::http::{StatusCode, header};

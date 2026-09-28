@@ -17,7 +17,7 @@ pub(crate) struct MessageDecoder<T: MessageType> {
     inner: Cell<Option<Box<Inner<T>>>>,
 }
 
-struct Inner<T> {
+struct Inner<T: MessageType> {
     st: State,
     val: Option<T>,
     hdr: httparse::Header,
@@ -26,8 +26,9 @@ struct Inner<T> {
     consumed: usize,
     /// number of parsed header lines of the current message
     headers: u16,
-    /// bytes of an incomplete start line already scanned
-    scanned: usize,
+    /// start line parser, resumed after a partial start line
+    line: T::Parser,
+    line_st: httparse::State,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -65,7 +66,8 @@ impl<T: MessageType> MessageDecoder<T> {
                 hdr_st: httparse::State::default(),
                 consumed: 0,
                 headers: 0,
-                scanned: 0,
+                line: T::Parser::default(),
+                line_st: httparse::State::default(),
             }))),
         }
     }
@@ -85,7 +87,8 @@ impl<T: MessageType> Clone for MessageDecoder<T> {
                 val: None,
                 consumed: 0,
                 headers: 0,
-                scanned: 0,
+                line: T::Parser::default(),
+                line_st: httparse::State::default(),
                 hdr: httparse::Header::default(),
                 hdr_st: httparse::State::default(),
                 cfg: inner.cfg.clone(),
@@ -172,7 +175,7 @@ impl<T: MessageType> Decoder for MessageDecoder<T> {
             inner.hdr_st = httparse::State::default();
             inner.consumed = 0;
             inner.headers = 0;
-            inner.scanned = 0;
+            inner.line_st = httparse::State::default();
             self.hdrs.set(false);
         }
         self.inner.set(Some(inner));
@@ -190,40 +193,33 @@ impl<T: MessageType> MessageDecoder<T> {
             self.hdrs.set(true);
         }
 
-        // an incomplete start line is parsed again only once new data contains
-        // its end, re-parsing it on every read is quadratic
-        if inner.val.is_none() {
+        // leading empty lines are not part of the start line and its size
+        // limit, positions in `line_st` stay valid only while nothing is
+        // removed from `src`
+        if inner.val.is_none() && inner.line_st == httparse::State::default() {
             let skip = empty_lines(src);
             if skip > 0 {
                 src.advance_to(skip);
                 inner.consumed += skip;
-                inner.scanned = inner.scanned.saturating_sub(skip);
             }
         }
         let len = src.len();
-        let scanned = inner.scanned.min(len);
         let max_line = inner.cfg.max_start_line_size;
-        if inner.val.is_none() && (scanned == 0 || src[scanned..].contains(&b'\n')) {
-            let mut cache = BUF.with(|b| b.take().unwrap());
-            let result = match T::decode(src, &mut cache) {
-                Poll::Ready(Ok(_)) if len - src.len() > max_line => {
-                    Err(DecodeError::StartLineTooLong(len - src.len()))
+        if inner.val.is_none() {
+            // the parser resumes from `line_st`, so data of an incomplete
+            // start line is not scanned again on the next read
+            match T::decode(src, &mut inner.line, &mut inner.line_st)? {
+                Poll::Ready(_) if len - src.len() > max_line => {
+                    return Err(DecodeError::StartLineTooLong(len - src.len()));
                 }
-                Poll::Ready(Ok(val)) => {
+                Poll::Ready(val) => {
+                    inner.line_st = httparse::State::default();
                     inner.st.version = val.msg_version();
                     inner.st.validate_host = T::REQUEST && inner.cfg.validate_host;
                     inner.val = Some(val);
-                    inner.scanned = 0;
-                    Ok(())
                 }
-                Poll::Ready(Err(e)) => Err(e),
-                Poll::Pending => {
-                    inner.scanned = len;
-                    Ok(())
-                }
-            };
-            BUF.with(move |b| b.set(Some(cache)));
-            result?;
+                Poll::Pending => {}
+            }
         }
         if inner.val.is_none() && len > max_line {
             return Err(DecodeError::StartLineTooLong(len));
@@ -364,6 +360,9 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
     /// `true` for request messages.
     const REQUEST: bool;
 
+    /// Resumable start line parser.
+    type Parser: Default;
+
     fn msg_version(&self) -> Version;
 
     /// `Expect` and `Upgrade` must be ignored in HTTP/1.0 requests,
@@ -375,7 +374,13 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
 
     fn headers_mut(&mut self) -> &mut HeaderMap;
 
-    fn decode(src: &mut BytesMut, cache: &mut HeadersBuf) -> Poll<Result<Self, DecodeError>>;
+    /// Decodes the start line, resuming from `st` saved by a previous
+    /// `Pending` result for the same buffer.
+    fn decode(
+        src: &mut BytesMut,
+        parser: &mut Self::Parser,
+        st: &mut httparse::State,
+    ) -> Result<Poll<Self>, DecodeError>;
 
     fn set_payload_length(
         &mut self,
@@ -493,6 +498,8 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
 impl MessageType for Request {
     const REQUEST: bool = true;
 
+    type Parser = httparse::Request;
+
     fn msg_version(&self) -> Version {
         self.version()
     }
@@ -501,13 +508,17 @@ impl MessageType for Request {
         &mut self.head_mut().headers
     }
 
-    fn decode(src: &mut BytesMut, cache: &mut HeadersBuf) -> Poll<Result<Self, DecodeError>> {
-        match cache.req.parse(src)? {
+    fn decode(
+        src: &mut BytesMut,
+        req: &mut httparse::Request,
+        st: &mut httparse::State,
+    ) -> Result<Poll<Self>, DecodeError> {
+        match req.parse_with_state(src, st)? {
             Status::Complete(pos) => {
-                let method = Method::from_bytes(&src[cache.req.method.start..cache.req.method.end])
+                let method = Method::from_bytes(&src[req.method.start..req.method.end])
                     .map_err(|_| DecodeError::Method)?;
-                let uri = Uri::try_from(&src[cache.req.path.start..cache.req.path.end])?;
-                let version = if cache.req.version == 1 {
+                let uri = Uri::try_from(&src[req.path.start..req.path.end])?;
+                let version = if req.version == 1 {
                     Version::HTTP_11
                 } else {
                     Version::HTTP_10
@@ -519,9 +530,9 @@ impl MessageType for Request {
                 head.uri = uri;
                 head.method = method;
                 head.version = version;
-                Poll::Ready(Ok(msg))
+                Ok(Poll::Ready(msg))
             }
-            Status::Partial => Poll::Pending,
+            Status::Partial => Ok(Poll::Pending),
         }
     }
 
@@ -587,6 +598,8 @@ impl MessageType for Request {
 impl MessageType for ResponseHead {
     const REQUEST: bool = false;
 
+    type Parser = httparse::Response;
+
     fn msg_version(&self) -> Version {
         self.version
     }
@@ -595,21 +608,24 @@ impl MessageType for ResponseHead {
         &mut self.headers
     }
 
-    fn decode(src: &mut BytesMut, cache: &mut HeadersBuf) -> Poll<Result<Self, DecodeError>> {
-        match cache.res.parse(src)? {
+    fn decode(
+        src: &mut BytesMut,
+        res: &mut httparse::Response,
+        st: &mut httparse::State,
+    ) -> Result<Poll<Self>, DecodeError> {
+        match res.parse_with_state(src, st)? {
             Status::Complete(pos) => {
-                let version = if cache.res.version == 1 {
+                let version = if res.version == 1 {
                     Version::HTTP_11
                 } else {
                     Version::HTTP_10
                 };
-                let status =
-                    StatusCode::from_u16(cache.res.code).map_err(|_| DecodeError::Status)?;
+                let status = StatusCode::from_u16(res.code).map_err(|_| DecodeError::Status)?;
 
                 src.advance_to(pos);
-                Poll::Ready(Ok(ResponseHead::new(status, version)))
+                Ok(Poll::Ready(ResponseHead::new(status, version)))
             }
-            Status::Partial => Poll::Pending,
+            Status::Partial => Ok(Poll::Pending),
         }
     }
 
@@ -686,16 +702,6 @@ fn connection_flags(val: &[u8]) -> Flags {
         }
     }
     flags
-}
-
-thread_local! {
-    static BUF: Cell<Option<Box<HeadersBuf>>> = Cell::new(Some(Box::new(HeadersBuf::default())));
-}
-
-#[derive(Copy, Clone, Default)]
-pub(crate) struct HeadersBuf {
-    req: httparse::Request,
-    res: httparse::Response,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1173,25 +1179,23 @@ mod tests {
     }
 
     #[test]
-    fn test_partial_start_line_is_not_reparsed() {
+    fn test_partial_start_line_is_resumed() {
         let reader = MessageDecoder::<Request>::default();
         let mut buf = BytesMut::from("GET /");
         assert!(reader.decode(&mut buf).unwrap().is_none());
 
-        // no line end, the start line is not parsed again
+        // an invalid byte is rejected without waiting for the line end
         buf.extend_from_slice(b"\x01");
-        assert!(reader.decode(&mut buf).unwrap().is_none());
-        buf.extend_from_slice(b"a b");
-        assert!(reader.decode(&mut buf).unwrap().is_none());
-
-        // line end, the invalid start line is parsed
-        buf.extend_from_slice(b"\r\n");
         assert!(reader.decode(&mut buf).is_err());
+
+        // the decoder starts over after an error
+        let mut buf = BytesMut::from("GET /a HTTP/1.1\r\nhost: a\r\n\r\n");
+        assert_eq!(reader.decode(&mut buf).unwrap().unwrap().0.path(), "/a");
 
         // byte by byte
         let reader = MessageDecoder::<Request>::default();
         let mut buf = BytesMut::new();
-        for b in b"GET /test/path HTTP/1.1\r\nhost: a\r\n\r" {
+        for b in b"\r\nGET  /test/path HTTP/1.1\r\nhost: a\r\n\r" {
             buf.extend_from_slice(&[*b]);
             assert!(reader.decode(&mut buf).unwrap().is_none());
         }
@@ -1199,6 +1203,30 @@ mod tests {
         let req = reader.decode(&mut buf).unwrap().unwrap().0;
         assert_eq!(req.path(), "/test/path");
         assert_eq!(req.headers().get("host").unwrap(), "a");
+
+        let reader = MessageDecoder::<ResponseHead>::default();
+        let mut buf = BytesMut::new();
+        for b in b"HTTP/1.1 404 Not Found\r\n\r" {
+            buf.extend_from_slice(&[*b]);
+            assert!(reader.decode(&mut buf).unwrap().is_none());
+        }
+        buf.extend_from_slice(b"\n");
+        let res = reader.decode(&mut buf).unwrap().unwrap().0;
+        assert_eq!(res.status, StatusCode::NOT_FOUND);
+
+        // partial start lines of different connections on one thread
+        let r1 = MessageDecoder::<Request>::default();
+        let r2 = MessageDecoder::<Request>::default();
+        let mut b1 = BytesMut::from("PUT /one HT");
+        let mut b2 = BytesMut::from("DELETE /two HT");
+        assert!(r1.decode(&mut b1).unwrap().is_none());
+        assert!(r2.decode(&mut b2).unwrap().is_none());
+        b1.extend_from_slice(b"TP/1.1\r\nhost: a\r\n\r\n");
+        b2.extend_from_slice(b"TP/1.0\r\n\r\n");
+        let req = r1.decode(&mut b1).unwrap().unwrap().0;
+        assert_eq!((req.method(), req.path()), (&Method::PUT, "/one"));
+        let req = r2.decode(&mut b2).unwrap().unwrap().0;
+        assert_eq!((req.method(), req.path()), (&Method::DELETE, "/two"));
     }
 
     #[test]

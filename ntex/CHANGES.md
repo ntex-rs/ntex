@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+* HTTP/1 parses an incomplete start line incrementally, an invalid start line is
+  rejected as soon as the bad byte arrives instead of after the line end
+
+* HTTP/1 treats every '101 Switching Protocols' response as an upgrade, a response without
+  `.upgrade()` kept the connection reading HTTP/1 requests
+
 * HTTP/1 sends `content-length: 0` for responses without a body size, such responses
   were sent without framing headers
 
