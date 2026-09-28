@@ -206,6 +206,9 @@ impl<T: MessageType> MessageDecoder<T> {
             match MessageDecoder::<T>::decode_headers(src, inner) {
                 Poll::Ready(Ok(())) => {
                     let mut val = inner.val.take().unwrap();
+                    if T::REQUEST {
+                        inner.st.check_upgrade();
+                    }
                     let pl_len = inner.st.payload_length();
                     let pl = val.set_payload_length(&mut inner.st, pl_len)?;
                     let consumed = inner.consumed + len - src.len();
@@ -297,6 +300,18 @@ impl State {
         ]
         .into_iter()
         .filter_map(|(flag, ctype)| self.flags.contains(flag).then_some(ctype))
+    }
+
+    /// An upgrade requires both `Upgrade` and the `upgrade` connection option,
+    /// see [RFC 9110 section 7.8](https://www.rfc-editor.org/rfc/rfc9110#section-7.8).
+    fn check_upgrade(&mut self) {
+        if !self
+            .flags
+            .contains(Flags::HAS_UPGRADE | Flags::CONN_UPGRADE)
+        {
+            self.flags
+                .remove(Flags::HAS_UPGRADE | Flags::WS_UPGRADE | Flags::CONN_UPGRADE);
+        }
     }
 
     fn payload_length(&self) -> PayloadLength {
@@ -1522,6 +1537,46 @@ mod tests {
 
         assert!(req.upgrade());
         assert_eq!(req.head().connection_type(), ConnectionType::Upgrade);
+    }
+
+    #[test]
+    fn test_upgrade_requires_connection_option() {
+        let reader = MessageDecoder::<Request>::default();
+        for req in [
+            "GET /test HTTP/1.1\r\nhost: a\r\nupgrade: websocket\r\n\r\n",
+            "GET /test HTTP/1.1\r\nhost: a\r\nconnection: upgrade\r\n\r\n",
+            "GET /test HTTP/1.1\r\nhost: a\r\nconnection: keep-alive\r\n\
+             upgrade: websocket\r\ncontent-length: 0\r\n\r\n",
+        ] {
+            let mut buf =
+                BytesMut::from(format!("{req}GET /next HTTP/1.1\r\nhost: a\r\n\r\n").as_str());
+            let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();
+            assert!(!req.upgrade(), "{req:?}");
+            assert_eq!(req.head().connection_type(), ConnectionType::KeepAlive);
+            assert_eq!(pl, PayloadType::None);
+            // the next request is not consumed as upgraded stream
+            let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
+            assert_eq!(req.path(), "/next");
+        }
+
+        // a body is not treated as an upgraded stream
+        let mut buf = BytesMut::from(
+            "POST /test HTTP/1.1\r\nhost: a\r\nupgrade: h2c\r\n\
+             content-length: 4\r\n\r\nbody",
+        );
+        let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();
+        assert!(!req.upgrade());
+        assert!(matches!(pl, PayloadType::Payload(_)));
+        assert_eq!(req.headers().get(header::UPGRADE).unwrap(), "h2c");
+
+        // both are present
+        let mut buf = BytesMut::from(
+            "GET /test HTTP/1.1\r\nhost: a\r\nconnection: keep-alive, Upgrade\r\n\
+             upgrade: websocket\r\n\r\n",
+        );
+        let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();
+        assert!(req.upgrade());
+        assert!(matches!(pl, PayloadType::Stream(_)));
     }
 
     #[test]

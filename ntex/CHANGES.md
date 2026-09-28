@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* HTTP/1 upgrades the connection only if the request contains both `Upgrade` and
+  `Connection: upgrade`, otherwise the upgrade is ignored
+
 * HTTP/1 rejects chunk extensions that contain control characters other than HTAB, a bare
   LF in a chunk extension was accepted
 

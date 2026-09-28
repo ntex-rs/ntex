@@ -1613,6 +1613,42 @@ mod tests {
     }
 
     #[crate::rt_test]
+    async fn test_upgrade_without_connection_option() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let seen2 = seen.clone();
+        spawn_h1(server, move |req: Request| {
+            seen2
+                .borrow_mut()
+                .push((req.path().to_string(), req.upgrade()));
+            async { Ok::<_, io::Error>(Response::Ok().build()) }
+        });
+
+        client.write(
+            "GET /test1 HTTP/1.1\r\nhost: a\r\nupgrade: websocket\r\n\r\n\
+             GET /test2 HTTP/1.1\r\nhost: a\r\nconnection: upgrade\r\n\r\n\
+             GET /test3 HTTP/1.1\r\nhost: a\r\n\r\n",
+        );
+        sleep(Millis(100)).await;
+
+        let buf = client.read_any();
+        assert_eq!(
+            buf.windows(15).filter(|w| w == b"HTTP/1.1 200 OK").count(),
+            3,
+            "{buf:?}"
+        );
+        assert_eq!(
+            *seen.borrow(),
+            [
+                ("/test1".to_string(), false),
+                ("/test2".to_string(), false),
+                ("/test3".to_string(), false)
+            ]
+        );
+    }
+
+    #[crate::rt_test]
     async fn test_http10_expect_and_upgrade_ignored() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);

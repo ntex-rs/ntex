@@ -387,7 +387,7 @@ mod tests {
         let codec = Codec::new(0, cfg.get());
         let mut buf = BytesMut::from(
             "GET /test HTTP/1.1\r\nhost: localhost\r\n\
-             connection: upgrade\r\n\r\n",
+             connection: upgrade\r\nupgrade: websocket\r\n\r\n",
         );
         let _item = codec.decode(&mut buf).unwrap().unwrap();
         assert!(codec.upgrade());
