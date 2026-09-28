@@ -251,6 +251,36 @@ mod tests {
         util::Bytes,
     };
 
+    /// A status code without a canonical reason has an empty reason phrase.
+    #[crate::rt_test]
+    async fn test_unknown_status_reason() {
+        use crate::http::StatusCode;
+
+        let cfg: SharedCfg = SharedCfg::new("DBG").add(HttpServiceConfig::new()).into();
+        let codec = Codec::new(0, cfg.get());
+        let mut buf = BytesMut::from("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        codec.decode(&mut buf).unwrap().unwrap();
+
+        let status = StatusCode::from_u16(599).unwrap();
+        let res = Response::with_body(status, ());
+        assert_eq!(res.head().reason(), "");
+        let mut out = BytePages::default();
+        codec
+            .encode(Message::Item((res, BodySize::Empty)), &mut out)
+            .unwrap();
+        let data = out.take().unwrap();
+        assert!(data.starts_with(b"HTTP/1.1 599 \r\n"), "{data:?}");
+
+        let mut res = Response::with_body(status, ());
+        res.head_mut().reason = Some("Custom");
+        let mut out = BytePages::default();
+        codec
+            .encode(Message::Item((res, BodySize::Empty)), &mut out)
+            .unwrap();
+        let data = out.take().unwrap();
+        assert!(data.starts_with(b"HTTP/1.1 599 Custom\r\n"), "{data:?}");
+    }
+
     /// Bodyless statuses do not write body bytes or length headers.
     #[crate::rt_test]
     async fn test_bodyless_status_has_no_body() {

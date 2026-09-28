@@ -365,14 +365,14 @@ impl ResponseHead {
     }
 
     /// Returns the custom or canonical reason phrase.
+    ///
+    /// The reason phrase is empty for a status code without a canonical reason.
     #[inline]
     pub fn reason(&self) -> &str {
         if let Some(reason) = self.reason {
             reason
         } else {
-            self.status
-                .canonical_reason()
-                .unwrap_or("<unknown status code>")
+            self.status.canonical_reason().unwrap_or("")
         }
     }
 
