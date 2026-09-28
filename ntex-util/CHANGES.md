@@ -5,6 +5,10 @@
 * Dropping the last `bstream::Sender` wakes a pending read, before the receiver
   could wait forever
 
+* Fix `OneRequestService`: a dropped call no longer blocks the service forever,
+  every waiting caller is woken, and calls cannot overlap after several callers
+  observe readiness
+
 * Fix memory corruption in `mpsc::Receiver` drop when a buffered message sends
   on the same channel from its `Drop`
 
