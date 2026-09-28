@@ -3,11 +3,10 @@
     clippy::no_effect,
     clippy::missing_safety_doc
 )]
-use std::{cmp, error::Error, fmt, str, str::FromStr};
+use std::{cmp, error::Error, fmt, hash, str, str::FromStr};
 
 use ntex_bytes::{ByteString, Bytes};
 
-#[allow(clippy::derived_hash_with_manual_eq)]
 /// Represents an HTTP header field value.
 ///
 /// In practice, HTTP header field values are usually valid ASCII. However, the
@@ -17,7 +16,7 @@ use ntex_bytes::{ByteString, Bytes};
 /// To handle this, the `HeaderValue` is useable as a type and can be compared
 /// with strings and implements `Debug`. [`to_str`](Self::to_str) returns an
 /// error if the value contains bytes outside visible ASCII.
-#[derive(Clone, Hash, Eq)]
+#[derive(Clone, Eq)]
 pub struct HeaderValue {
     inner: Bytes,
     is_sensitive: bool,
@@ -494,7 +493,15 @@ impl fmt::Display for ToStrError {
     }
 }
 
-// ===== PartialEq / PartialOrd =====
+// ===== Hash / PartialEq / PartialOrd =====
+
+// Must agree with `PartialEq`, which ignores the sensitive flag
+impl hash::Hash for HeaderValue {
+    #[inline]
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        self.inner.hash(state);
+    }
+}
 
 impl PartialEq for HeaderValue {
     #[inline]
@@ -708,6 +715,18 @@ from_integers! {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_hash_ignores_sensitive() {
+        use std::hash::{BuildHasher, RandomState};
+
+        let state = RandomState::new();
+        let hdr = HeaderValue::from_static("secret");
+        let mut sensitive = hdr.clone();
+        sensitive.set_sensitive(true);
+        assert_eq!(hdr, sensitive);
+        assert_eq!(state.hash_one(&hdr), state.hash_one(&sensitive));
+    }
 
     #[test]
     #[allow(clippy::op_ref, clippy::cmp_owned)]

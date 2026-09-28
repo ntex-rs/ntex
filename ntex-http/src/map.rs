@@ -224,9 +224,8 @@ impl HeaderMap {
     /// Returns a view of all values associated with a key.
     ///
     /// The returned view does not incur any allocations and allows iterating
-    /// the values associated with the key.  See [`GetAll`] for more details.
-    /// Returns `None` if there are no values associated with the key.
-    ///
+    /// the values associated with the key. The iterator is empty if there are
+    /// no values associated with the key.
     pub fn get_all<N: AsName>(&self, name: N) -> GetAll<'_> {
         GetAll {
             idx: 0,
@@ -237,7 +236,7 @@ impl HeaderMap {
     /// Returns a mutable reference to the value associated with the key.
     ///
     /// If there are multiple values associated with the key, then the first one
-    /// is returned. Use `entry` to get all values associated with a given
+    /// is returned. Use `get_all` to get all values associated with a given
     /// key. Returns `None` if there are no values associated with the key.
     pub fn get_mut<N: AsName>(&mut self, name: N) -> Option<&mut HeaderValue> {
         match name.as_name() {

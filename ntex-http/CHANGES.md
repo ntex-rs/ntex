@@ -1,5 +1,9 @@
 # Changes
 
+## [Unreleased]
+
+* HeaderValue hash ignores the sensitive flag, consistent with equality
+
 ## [1.2.0] - 2026-05-02
 
 * Add BytePages support to Body
