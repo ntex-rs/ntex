@@ -1050,3 +1050,55 @@ async fn test_h1_gracefull_shutdown_2() {
     let _ = rx.await;
     assert_eq!(count.load(Ordering::Relaxed), 0);
 }
+
+#[ntex::test]
+async fn test_h2_request_body_dropped_after_response_resets_stream() {
+    use ntex::http::{HeaderMap, Payload, uri::Scheme};
+    use ntex::util::stream_recv;
+    use ntex_h2::{MessageKind, client::SimpleClient};
+
+    let srv = test_server(async |_| {
+        HttpService::h2(async |mut req: Request| {
+            // the request body is held after the response and dropped later
+            let mut pl: Payload = req.take_payload();
+            rt::spawn(async move {
+                let _ = stream_recv(&mut pl).await;
+                sleep(Millis(200)).await;
+                drop(pl);
+            });
+            Ok::<_, io::Error>(Response::Ok().body("ok"))
+        })
+    });
+
+    let io = ntex::connect::connect(srv.addr()).await.unwrap();
+    let client = SimpleClient::new(io, Scheme::HTTP, "localhost".into());
+    let (snd, rcv) = client
+        .send(Method::POST, "/".into(), HeaderMap::default(), false)
+        .await
+        .unwrap();
+    snd.send_payload(Bytes::from_static(b"chunk"), false)
+        .await
+        .unwrap();
+
+    // complete response, the request body is still open
+    let mut eof = false;
+    while let Some(msg) = rcv.recv().await {
+        match msg.kind {
+            MessageKind::Headers { eof: true, .. } | MessageKind::Eof(_) => {
+                eof = true;
+                break;
+            }
+            _ => (),
+        }
+    }
+    assert!(eof);
+
+    // no data frame follows, the stream is reset when the body is dropped
+    sleep(Millis(500)).await;
+    assert!(
+        snd.send_payload(Bytes::from_static(b"chunk"), false)
+            .await
+            .is_err(),
+        "request stream is not reset"
+    );
+}

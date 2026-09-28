@@ -68,6 +68,9 @@ impl Drop for Payload {
     fn drop(&mut self) {
         self.inner.io_task.wake();
         self.inner.insert_flags(Flags::DROPPED);
+        if let Some(f) = self.inner.on_drop.take() {
+            f();
+        }
     }
 }
 
@@ -90,10 +93,11 @@ pub struct PayloadSender {
 
 impl Drop for PayloadSender {
     fn drop(&mut self) {
-        if let Some(shared) = self.inner.upgrade()
-            && !shared.flags.get().contains(Flags::EOF)
-        {
-            self.set_error(PayloadError::Incomplete(None));
+        if let Some(shared) = self.inner.upgrade() {
+            drop(shared.on_drop.take());
+            if !shared.flags.get().contains(Flags::EOF) {
+                shared.set_error(PayloadError::Incomplete(None));
+            }
         }
     }
 }
@@ -132,6 +136,13 @@ impl PayloadSender {
         }
     }
 
+    /// Registers a callback that runs if the payload is dropped while the sender is alive.
+    pub(crate) fn on_drop(&self, f: impl FnOnce() + 'static) {
+        if let Some(shared) = self.inner.upgrade() {
+            shared.on_drop.set(Some(Box::new(f)));
+        }
+    }
+
     pub(crate) fn on_cancel(&self, w: &Waker) -> Poll<()> {
         if let Some(shared) = self.inner.upgrade() {
             if shared.flags.get().contains(Flags::DROPPED) {
@@ -154,6 +165,7 @@ struct Inner {
     task: LocalWaker,
     io_task: LocalWaker,
     stream: Cell<Option<h2::Stream>>,
+    on_drop: Cell<Option<Box<dyn FnOnce()>>>,
 }
 
 impl Inner {
@@ -166,6 +178,7 @@ impl Inner {
             items: RefCell::new(VecDeque::new()),
             task: LocalWaker::new(),
             io_task: LocalWaker::new(),
+            on_drop: Cell::new(None),
         }
     }
 

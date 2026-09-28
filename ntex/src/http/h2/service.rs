@@ -1,4 +1,4 @@
-use std::{cell::RefCell, future::poll_fn, io, mem};
+use std::{cell::RefCell, future::poll_fn, io, mem, rc::Rc};
 
 use ntex_h2::{self as h2, frame::StreamId, server};
 
@@ -150,7 +150,7 @@ struct PublishService<Err> {
     id: usize,
     io: IoRef,
     svc: Pipeline<Request, Response, Err>,
-    streams: RefCell<HashMap<StreamId, StreamPayload>>,
+    streams: Rc<RefCell<HashMap<StreamId, StreamPayload>>>,
 }
 
 /// Request payload of a stream.
@@ -169,7 +169,7 @@ where
             id,
             io,
             svc,
-            streams: RefCell::new(HashMap::default()),
+            streams: Rc::new(RefCell::new(HashMap::default())),
         }
     }
 }
@@ -380,7 +380,17 @@ where
                 drop(streams);
                 stream.reset(h2::frame::Reason::NO_ERROR);
             } else {
+                // the app still holds the request body, release the stream once it is dropped
                 pl.complete = true;
+                let streams = Rc::downgrade(&self.streams);
+                pl.sender.on_drop(move || {
+                    if let Some(streams) = streams.upgrade()
+                        && let Ok(mut streams) = streams.try_borrow_mut()
+                    {
+                        streams.remove(&id);
+                    }
+                    stream.reset(h2::frame::Reason::NO_ERROR);
+                });
             }
         }
         Ok(())
