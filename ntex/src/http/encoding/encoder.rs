@@ -99,18 +99,26 @@ impl<B> fmt::Debug for EncoderBody<B> {
 
 impl<B: MessageBody> MessageBody for Encoder<B> {
     fn size(&self) -> BodySize {
-        if self.inner.is_none() {
-            match self.body {
-                EncoderBody::Bytes(ref b) => b.size(),
-                EncoderBody::Stream(ref b) => b.size(),
-                EncoderBody::BoxedStream(ref b) => b.size(),
-            }
-        } else {
-            BodySize::Stream
-        }
+        BodySize::Stream
     }
 
     fn poll_next_chunk(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Bytes, Rc<dyn std::error::Error>>>> {
+        let result = self.poll_encoded(cx);
+        if let Poll::Ready(Some(Err(_))) = result {
+            // the encoder state is lost, the stream must not continue with raw data
+            self.eof = true;
+            self.inner = None;
+            self.fut = None;
+        }
+        result
+    }
+}
+
+impl<B: MessageBody> Encoder<B> {
+    fn poll_encoded(
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Bytes, Rc<dyn std::error::Error>>>> {
@@ -167,7 +175,7 @@ impl<B: MessageBody> MessageBody for Encoder<B> {
                             }));
                         }
                     } else {
-                        return Poll::Ready(Some(Ok(chunk)));
+                        return Poll::Ready(None);
                     }
                 }
                 Poll::Ready(None) => {
@@ -256,5 +264,28 @@ impl fmt::Debug for ContentEncoder {
             ContentEncoder::Deflate(_) => write!(f, "ContentEncoder::Deflate"),
             ContentEncoder::Gzip(_) => write!(f, "ContentEncoder::Gzip"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::poll_fn;
+
+    use super::*;
+
+    #[crate::rt_test]
+    async fn encoder_is_fused_after_error() {
+        let mut enc = Encoder::<Body> {
+            eof: false,
+            body: EncoderBody::Bytes(Bytes::from_static(b"raw data")),
+            inner: None,
+            fut: Some(spawn_blocking(|| Err(io::Error::other("encode failed")))),
+        };
+        assert_eq!(enc.size(), BodySize::Stream);
+
+        let res = poll_fn(|cx| enc.poll_next_chunk(cx)).await;
+        assert!(matches!(res, Some(Err(_))));
+        assert_eq!(enc.size(), BodySize::Stream);
+        assert!(poll_fn(|cx| enc.poll_next_chunk(cx)).await.is_none());
     }
 }

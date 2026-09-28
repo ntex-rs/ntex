@@ -21,6 +21,9 @@
   headers, and HTTP/1.1 requests without `Host`, use `HttpServiceConfig::set_host_validation()`
   to disable
 
+* Response body encoder ends the stream after an encoding error, before polling it again
+  sent the remaining body uncompressed
+
 * HTTP/2 resets the request stream when a request body held by the application is
   dropped after the response is complete, before the stream was kept until the next
   data frame or the connection closed
