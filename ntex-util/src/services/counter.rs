@@ -40,7 +40,7 @@ impl Counter {
         CounterGuard::new(self.1.clone())
     }
 
-    /// Changes the capacity and wakes tasks waiting for availability.
+    /// Changes the capacity and wakes waiting tasks.
     pub fn set_capacity(&self, cap: usize) {
         self.1.capacity.set(cap);
         self.1.notify();
@@ -69,7 +69,8 @@ impl Counter {
     /// Waits until the counter reaches its capacity (i.e., becomes unavailable).
     pub async fn unavailable(&self) {
         poll_fn(|cx| {
-            if self.poll_available(cx) {
+            if self.is_available() {
+                self.1.tasks.borrow()[self.0].register(cx.waker());
                 Poll::Pending
             } else {
                 Poll::Ready(())
@@ -132,7 +133,11 @@ impl Drop for CounterGuard {
 
 impl CounterInner {
     fn inc(&self) {
-        self.count.set(self.count.get() + 1);
+        let num = self.count.get() + 1;
+        self.count.set(num);
+        if num == self.capacity.get() {
+            self.notify();
+        }
     }
 
     fn dec(&self) {
@@ -148,5 +153,54 @@ impl CounterInner {
         for (_, task) in &*tasks {
             task.wake();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+    use crate::time::sleep;
+
+    #[ntex::test]
+    async fn test_unavailable_is_woken() {
+        let counter = Counter::new(2);
+        let done = Rc::new(Cell::new(false));
+
+        let (c, d) = (counter.clone(), done.clone());
+        crate::spawn(async move {
+            c.unavailable().await;
+            d.set(true);
+        });
+        sleep(Duration::from_millis(10)).await;
+        assert!(!done.get());
+
+        let _g1 = counter.get();
+        sleep(Duration::from_millis(10)).await;
+        assert!(!done.get());
+
+        let _g2 = counter.get();
+        sleep(Duration::from_millis(10)).await;
+        assert!(done.get());
+    }
+
+    #[ntex::test]
+    async fn test_available_is_woken() {
+        let counter = Counter::new(1);
+        let guard = counter.get();
+        let done = Rc::new(Cell::new(false));
+
+        let (c, d) = (counter.clone(), done.clone());
+        crate::spawn(async move {
+            c.available().await;
+            d.set(true);
+        });
+        sleep(Duration::from_millis(10)).await;
+        assert!(!done.get());
+
+        drop(guard);
+        sleep(Duration::from_millis(10)).await;
+        assert!(done.get());
     }
 }

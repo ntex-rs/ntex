@@ -215,15 +215,18 @@ impl<E> Sender<E> {
     }
 
     /// Polls until the stream needs more data or reaches a terminal state.
+    ///
+    /// Terminal states take precedence: [`Status::Dropped`] is returned once
+    /// the receiver is gone or an error was set, [`Status::Eof`] after EOF.
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Status> {
         if let Some(shared) = self.inner.upgrade() {
             let flags = shared.flags.get();
-            if flags.contains(Flags::NEED_READ) {
-                Poll::Ready(Status::Ready)
-            } else if flags.contains(Flags::SENDER_GONE | Flags::ERROR) {
+            if flags.intersects(Flags::SENDER_GONE | Flags::ERROR) {
                 Poll::Ready(Status::Dropped)
-            } else if flags.intersects(Flags::EOF) {
+            } else if flags.contains(Flags::EOF) {
                 Poll::Ready(Status::Eof)
+            } else if flags.contains(Flags::NEED_READ) {
+                Poll::Ready(Status::Ready)
             } else {
                 shared.send_task.register(cx.waker());
                 Poll::Pending
@@ -504,5 +507,21 @@ mod tests {
         assert!(!payload.is_eof());
         drop(sender);
         assert!(payload.is_eof());
+    }
+
+    #[ntex::test]
+    async fn test_ready_terminal_states() {
+        let (tx, _rx) = channel::<()>();
+        assert_eq!(tx.ready().await, Status::Ready);
+        tx.set_error(());
+        assert_eq!(tx.ready().await, Status::Dropped);
+
+        let (tx, _rx) = channel::<()>();
+        tx.feed_eof();
+        assert_eq!(tx.ready().await, Status::Eof);
+
+        let (tx, rx) = channel::<()>();
+        drop(rx);
+        assert_eq!(tx.ready().await, Status::Dropped);
     }
 }

@@ -5,6 +5,29 @@
 * Dropping the last `bstream::Sender` wakes a pending read, before the receiver
   could wait forever
 
+* `BufferService` shutdown releases buffered requests one at a time, as
+  readiness does, and shuts down the wrapped service after the last one
+  completes
+
+* Fix `Counter::unavailable()`, it was never woken once the counter reached
+  its capacity
+
+* `mpsc::Receiver` is reported as terminated only after buffered messages are
+  received
+
+* Fix `bstream::Sender::poll_ready()`, it now reports `Status::Dropped` after an
+  error and `Status::Eof` after EOF instead of `Status::Ready`
+
+* `LocalWaker::register()` no longer clones the waker when the same waker is
+  already registered
+
+* Fix `OneRequestService`: a dropped call no longer blocks the service forever,
+  every waiting caller is woken, and calls cannot overlap after several callers
+  observe readiness
+
+* Fix memory corruption in `mpsc::Receiver` drop when a buffered message sends
+  on the same channel from its `Drop`
+
 * Streamline the timer wheel, `now()` and `system_time()` no longer touch the wheel
   when the cached time is valid, and the per-thread wheel is ~4KiB smaller
 

@@ -42,7 +42,16 @@ impl LocalWaker {
     ///
     /// Returns `true` if a waker was already registered.
     pub fn register(&self, waker: &Waker) -> bool {
-        self.waker.replace(Some(waker.clone())).is_some()
+        match self.waker.take() {
+            Some(prev) if prev.will_wake(waker) => {
+                self.waker.set(Some(prev));
+                true
+            }
+            prev => {
+                self.waker.set(Some(waker.clone()));
+                prev.is_some()
+            }
+        }
     }
 
     #[inline]
@@ -133,5 +142,43 @@ mod test {
     #[ntex::test]
     async fn yield_test() {
         yield_to().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::task::{RawWaker, RawWakerVTable};
+
+    use super::*;
+
+    static CLONES: AtomicUsize = AtomicUsize::new(0);
+
+    static VTABLE: RawWakerVTable = RawWakerVTable::new(
+        |p| {
+            CLONES.fetch_add(1, Ordering::Relaxed);
+            RawWaker::new(p, &VTABLE)
+        },
+        |_| {},
+        |_| {},
+        |_| {},
+    );
+
+    #[test]
+    fn test_register_same_waker() {
+        static A: u8 = 0;
+        static B: u8 = 0;
+        let a = unsafe { Waker::from_raw(RawWaker::new((&raw const A).cast(), &VTABLE)) };
+        let b = unsafe { Waker::from_raw(RawWaker::new((&raw const B).cast(), &VTABLE)) };
+
+        let w = LocalWaker::new();
+        assert!(!w.register(&a));
+        assert!(w.register(&a));
+        assert!(w.register(&a));
+        assert_eq!(CLONES.load(Ordering::Relaxed), 1);
+
+        assert!(w.register(&b));
+        assert_eq!(CLONES.load(Ordering::Relaxed), 2);
+        assert!(w.take().unwrap().will_wake(&b));
     }
 }

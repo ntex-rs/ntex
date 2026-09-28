@@ -190,8 +190,10 @@ impl<T> Stream for Receiver<T> {
 }
 
 impl<T> FusedStream for Receiver<T> {
+    /// Returns `true` once the channel is closed and every buffered message
+    /// has been received.
     fn is_terminated(&self) -> bool {
-        self.is_closed()
+        self.is_closed() && self.shared.get_ref().buffer.is_empty()
     }
 }
 
@@ -200,9 +202,12 @@ impl<T> UnwindSafe for Receiver<T> {}
 impl<T> Drop for Receiver<T> {
     fn drop(&mut self) {
         let shared = self.shared.get_mut();
-        shared.buffer.clear();
         shared.has_receiver = false;
+        let buffer = std::mem::take(&mut shared.buffer);
         shared.closed.wake();
+
+        // queued messages may send on this channel from their `Drop`
+        drop(buffer);
     }
 }
 
@@ -332,5 +337,51 @@ mod tests {
         tx.close();
         assert!(!tx.shared.get_ref().closed.is_set());
         tx2.closed().await;
+    }
+
+    #[test]
+    fn test_drop_receiver_reentrant_send() {
+        use std::rc::Rc;
+
+        struct Msg(Option<Sender<Msg>>, Rc<std::cell::Cell<usize>>);
+
+        impl Drop for Msg {
+            fn drop(&mut self) {
+                self.1.set(self.1.get() + 1);
+                if let Some(tx) = self.0.take() {
+                    assert!(tx.send(Msg(None, self.1.clone())).is_err());
+                }
+            }
+        }
+
+        let drops = Rc::new(std::cell::Cell::new(0));
+        let (tx, rx) = channel();
+        for _ in 0..4 {
+            tx.send(Msg(Some(tx.clone()), drops.clone())).unwrap();
+        }
+        drop(rx);
+        assert_eq!(drops.get(), 8);
+        assert!(tx.is_closed());
+    }
+
+    #[ntex::test]
+    async fn test_fused_drains_buffer() {
+        let (tx, mut rx) = channel();
+        tx.send(1).unwrap();
+        tx.send(2).unwrap();
+        drop(tx);
+
+        assert!(!rx.is_terminated());
+        assert_eq!(stream_recv(&mut rx).await, Some(1));
+        assert_eq!(stream_recv(&mut rx).await, Some(2));
+        assert!(rx.is_terminated());
+        assert_eq!(stream_recv(&mut rx).await, None);
+
+        let (tx, mut rx) = channel();
+        tx.send(1).unwrap();
+        rx.close();
+        assert!(!rx.is_terminated());
+        assert_eq!(stream_recv(&mut rx).await, Some(1));
+        assert!(rx.is_terminated());
     }
 }
