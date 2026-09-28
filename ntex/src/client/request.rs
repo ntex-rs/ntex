@@ -277,11 +277,13 @@ impl ClientRequest {
     #[inline]
     #[must_use]
     pub fn content_length(self, len: u64) -> Self {
-        self.header(header::CONTENT_LENGTH, len)
+        self.set_header(header::CONTENT_LENGTH, len)
     }
 
     #[must_use]
     /// Sets the HTTP basic authentication header.
+    ///
+    /// Replaces any existing `Authorization` header, including a client default.
     pub fn basic_auth<U>(self, username: U, password: Option<&str>) -> Self
     where
         U: fmt::Display,
@@ -290,7 +292,7 @@ impl ClientRequest {
             Some(password) => format!("{username}:{password}"),
             None => format!("{username}:"),
         };
-        self.header(
+        self.set_header(
             header::AUTHORIZATION,
             format!("Basic {}", base64.encode(auth)),
         )
@@ -298,11 +300,13 @@ impl ClientRequest {
 
     #[must_use]
     /// Sets the HTTP bearer authentication header.
+    ///
+    /// Replaces any existing `Authorization` header, including a client default.
     pub fn bearer_auth<T>(self, token: T) -> Self
     where
         T: fmt::Display,
     {
-        self.header(header::AUTHORIZATION, format!("Bearer {token}"))
+        self.set_header(header::AUTHORIZATION, format!("Bearer {token}"))
     }
 
     #[must_use]
@@ -727,6 +731,49 @@ mod tests {
                 .unwrap(),
             "Bearer someS3cr3tAutht0k3n"
         );
+    }
+
+    #[crate::rt_test]
+    async fn client_auth_replaces_header() {
+        let client = Client::builder().build(
+            SharedCfg::new("TEST").add(ClientConfig::new().set_bearer_auth("token").unwrap()),
+        );
+        let req = client
+            .get("/")
+            .basic_auth("username", Some("password"))
+            .content_length(1)
+            .content_length(2);
+        let headers = &req.request.head.headers;
+        let auth: Vec<_> = headers
+            .get_all(header::AUTHORIZATION)
+            .map(|v| v.to_str().unwrap())
+            .collect();
+        assert_eq!(auth, ["Basic dXNlcm5hbWU6cGFzc3dvcmQ="]);
+        let len: Vec<_> = headers
+            .get_all(header::CONTENT_LENGTH)
+            .map(|v| v.to_str().unwrap())
+            .collect();
+        assert_eq!(len, ["2"]);
+
+        let req = Client::new()
+            .get("/")
+            .basic_auth("a", None)
+            .bearer_auth("b");
+        assert_eq!(
+            req.request
+                .head
+                .headers
+                .get_all(header::AUTHORIZATION)
+                .count(),
+            1
+        );
+
+        let cfg = ClientConfig::new()
+            .set_basic_auth("a", None)
+            .unwrap()
+            .set_bearer_auth("b")
+            .unwrap();
+        assert_eq!(cfg.headers().get_all(header::AUTHORIZATION).count(), 1);
     }
 
     #[crate::rt_test]
