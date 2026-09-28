@@ -103,6 +103,10 @@ pub enum ConnectError {
     #[error("Connector has been disconnected")]
     Disconnected(#[source] Option<io::Error>),
 
+    /// The connector received invalid input.
+    #[error("Invalid connect input")]
+    InvalidInput,
+
     /// The connector received an unresolved host name.
     #[error("Connector received `Connect` method with unresolved host")]
     Unresolved,
@@ -115,6 +119,7 @@ impl ErrorDiagnostic for ConnectError {
             ConnectError::Resolver(..) => "ntex-client-connect-Resolver",
             ConnectError::NoRecords => "ntex-client-connect-NoRecords",
             ConnectError::Disconnected(_) => "ntex-client-connect-Disconnected",
+            ConnectError::InvalidInput => "ntex-client-connect-InvalidInput",
             ConnectError::Unresolved => "ntex-client-connect-Unresolved",
         }
     }
@@ -133,6 +138,7 @@ impl Clone for ConnectError {
                     ConnectError::Disconnected(None)
                 }
             }
+            ConnectError::InvalidInput => ConnectError::InvalidInput,
             ConnectError::Unresolved => ConnectError::Unresolved,
         }
     }
@@ -143,7 +149,7 @@ impl From<crate::connect::ConnectError> for ConnectError {
         match err {
             crate::connect::ConnectError::Resolver(e) => ConnectError::Resolver(e),
             crate::connect::ConnectError::NoRecords => ConnectError::NoRecords,
-            crate::connect::ConnectError::InvalidInput => panic!(),
+            crate::connect::ConnectError::InvalidInput => ConnectError::InvalidInput,
             crate::connect::ConnectError::Unresolved => ConnectError::Unresolved,
             crate::connect::ConnectError::Io(e) => ConnectError::Disconnected(Some(e)),
         }
@@ -282,5 +288,18 @@ impl ErrorDiagnostic for ClientError {
             ClientError::Error(_) => "ntex-client-Error",
             ClientError::H2(err) => err.signature(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connect_error_from() {
+        let err = ConnectError::from(crate::connect::ConnectError::InvalidInput);
+        assert!(matches!(err, ConnectError::InvalidInput));
+        assert_eq!(err.signature(), "ntex-client-connect-InvalidInput");
+        assert!(matches!(err.clone(), ConnectError::InvalidInput));
     }
 }

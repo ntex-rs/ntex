@@ -391,25 +391,27 @@ impl ClientRequest {
     /// Serialization errors are stored and returned by the next `send*` call.
     #[must_use]
     pub fn query<T: Serialize>(mut self, query: &T) -> Self {
-        let mut parts = self.request.head.uri.clone().into_parts();
-
-        if let Some(path_and_query) = parts.path_and_query {
-            let query = match serde_urlencoded::to_string(query) {
-                Ok(query) => query,
-                Err(err) => {
-                    self.err = Some(ClientError::Error(Rc::new(err)));
-                    return self;
-                }
-            };
-            let path = path_and_query.path();
-            parts.path_and_query = format!("{path}?{query}").parse().ok();
-
-            match Uri::from_parts(parts) {
-                Ok(uri) => self.request.head.uri = uri,
-                Err(e) => self.err = Some(InvalidUrl::Http(e.into()).into()),
+        let query = match serde_urlencoded::to_string(query) {
+            Ok(query) => query,
+            Err(err) => {
+                self.err = Some(ClientError::Error(Rc::new(err)));
+                return self;
             }
-        }
+        };
 
+        let mut parts = self.request.head.uri.clone().into_parts();
+        let path = parts.path_and_query.as_ref().map_or("/", |pq| pq.path());
+        let result = format!("{path}?{query}")
+            .parse()
+            .map_err(HttpError::from)
+            .and_then(|pq| {
+                parts.path_and_query = Some(pq);
+                Uri::from_parts(parts).map_err(HttpError::from)
+            });
+        match result {
+            Ok(uri) => self.request.head.uri = uri,
+            Err(e) => self.err = Some(InvalidUrl::Http(e).into()),
+        }
         self
     }
 }
@@ -465,13 +467,11 @@ impl ClientRequest {
         self.svc.call(self.request).await.map(Into::into)
     }
 
-    #[allow(unused_mut)]
     fn prep_for_sending(&mut self) -> Result<(), Error<ClientError>> {
         self.prep_for_sending_inner()
             .map_err(|e| e.set_service(self.cfg.service()))
     }
 
-    #[allow(unused_mut)]
     fn prep_for_sending_inner(&mut self) -> Result<(), Error<ClientError>> {
         if let Some(e) = self.err.take() {
             return Err(e.into());
@@ -802,5 +802,16 @@ mod tests {
 
         let req = Client::new().get("/").query(&InvalidQuery);
         assert!(matches!(req.err, Some(ClientError::Error(_))));
+
+        // uri without path
+        let req = Client::new().get("http://localhost").query(&[("k", "v")]);
+        assert!(req.err.is_none());
+        assert_eq!(req.get_uri(), "http://localhost/?k=v");
+
+        // existing query is replaced, path is preserved
+        let req = Client::new()
+            .get("http://localhost/p?a=1")
+            .query(&[("k", "v")]);
+        assert_eq!(req.get_uri(), "http://localhost/p?k=v");
     }
 }
