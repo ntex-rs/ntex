@@ -401,8 +401,10 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
                 if let Ok(s) = value.to_str().map(str::trim) {
                     if s.eq_ignore_ascii_case("chunked") && st.content_length.is_none() {
                         st.flags.insert(Flags::CHUNKED);
-                    } else if s.eq_ignore_ascii_case("identity") {
-                        // allow silently since multiple TE headers are already checked
+                    } else if !Self::REQUEST && s.eq_ignore_ascii_case("identity") {
+                        // obsolete coding, tolerated in responses only. A request
+                        // without final chunked coding is rejected, see
+                        // https://www.rfc-editor.org/rfc/rfc9112#section-6.3
                     } else {
                         log::trace!("illegal Transfer-Encoding: {s:?}");
                         return Err(DecodeError::Header);
@@ -2303,20 +2305,32 @@ mod tests {
     }
 
     #[test]
-    fn test_transfer_encoding_content_length() {
-        let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
-             Host: example.com\r\n\
-             Content-Length: 3\r\n\
-             Transfer-Encoding: identity\r\n\
-             \r\n\
-             0\r\n",
-        );
+    fn test_transfer_encoding_identity() {
+        for req in [
+            "GET /test HTTP/1.1\r\nHost: a\r\n\
+             Content-Length: 3\r\nTransfer-Encoding: identity\r\n\r\n0\r\n",
+            "GET /test HTTP/1.1\r\nHost: a\r\n\
+             Transfer-Encoding: identity\r\nContent-Length: 3\r\n\r\n0\r\n",
+            "GET /test HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: identity\r\n\r\n",
+            "GET /test HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: Identity \r\n\r\n",
+        ] {
+            let mut buf = BytesMut::from(req);
+            let reader = MessageDecoder::<Request>::default();
+            assert_eq!(
+                reader.decode(&mut buf).err(),
+                Some(DecodeError::Header),
+                "{req:?}"
+            );
+        }
 
-        let reader = MessageDecoder::<Request>::default();
+        // responses are tolerated
+        let mut buf = BytesMut::from(
+            "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\
+             Transfer-Encoding: identity\r\n\r\n0\r\n",
+        );
+        let reader = MessageDecoder::<ResponseHead>::default();
         let (_msg, pl) = reader.decode(&mut buf).unwrap().unwrap();
         let pl = pl.unwrap();
-
         let chunk = pl.decode(&mut buf).unwrap().unwrap();
         assert_eq!(chunk, PayloadItem::Chunk(Bytes::from_static(b"0\r\n")));
     }

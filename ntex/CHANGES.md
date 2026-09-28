@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* HTTP/1 rejects requests with `Transfer-Encoding: identity`, the obsolete coding was
+  accepted and a request with `Content-Length` was framed by its length
+
 * HTTP/1 upgrades the connection only if the request contains both `Upgrade` and
   `Connection: upgrade`, otherwise the upgrade is ignored
 
