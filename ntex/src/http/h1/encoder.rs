@@ -10,7 +10,7 @@ use crate::http::config::DateService;
 use crate::http::error::EncodeError;
 use crate::http::header::{CONNECTION, CONTENT_LENGTH, DATE, TRANSFER_ENCODING, Value};
 use crate::http::message::{ConnectionType, RequestHead};
-use crate::http::{HeaderMap, Response, StatusCode, Version, body::BodySize};
+use crate::http::{HeaderMap, Method, Response, StatusCode, Version, body::BodySize};
 use crate::{util::BufMut, util::BytePages, util::Bytes};
 
 #[derive(Debug)]
@@ -187,12 +187,26 @@ impl MessageType for RequestHead {
     fn encode_status(&self, dst: &mut BytePages) {
         dst.put_slice(self.method.as_str().as_bytes());
         dst.put_u8(b' ');
-        dst.put_slice(
-            self.uri
-                .path_and_query()
-                .map_or("/", |u| u.as_str())
-                .as_bytes(),
-        );
+        if let (&Method::CONNECT, Some(host)) = (&self.method, self.uri.host()) {
+            // authority-form, see RFC 9112 section 3.2.3
+            let port = self
+                .uri
+                .port_u16()
+                .unwrap_or_else(|| match self.uri.scheme_str() {
+                    Some("https" | "wss") => 443,
+                    _ => 80,
+                });
+            dst.put_slice(host.as_bytes());
+            dst.put_u8(b':');
+            dst.put_slice(port.to_string().as_bytes());
+        } else {
+            dst.put_slice(
+                self.uri
+                    .path_and_query()
+                    .map_or("/", |u| u.as_str())
+                    .as_bytes(),
+            );
+        }
         dst.put_u8(b' ');
         dst.put_slice(
             // only HTTP-0.9/1.1
@@ -618,6 +632,45 @@ mod tests {
         assert!(data.contains("connection: close\r\n"));
         assert!(data.contains("authorization: another authorization\r\n"));
         assert!(data.contains("date: date\r\n"));
+    }
+
+    #[test]
+    fn test_connect_authority_form() {
+        let encode = |method: Method, uri: &str| {
+            let head = RequestHead {
+                method,
+                uri: uri.parse().unwrap(),
+                ..Default::default()
+            };
+            let mut bytes = BytePages::default();
+            head.encode_status(&mut bytes);
+            String::from_utf8(Vec::from(bytes.take().unwrap().as_ref())).unwrap()
+        };
+
+        assert_eq!(
+            encode(Method::CONNECT, "http://example.com:8080/path"),
+            "CONNECT example.com:8080 HTTP/1.1"
+        );
+        assert_eq!(
+            encode(Method::CONNECT, "https://example.com/"),
+            "CONNECT example.com:443 HTTP/1.1"
+        );
+        assert_eq!(
+            encode(Method::CONNECT, "http://example.com"),
+            "CONNECT example.com:80 HTTP/1.1"
+        );
+        assert_eq!(
+            encode(Method::CONNECT, "example.com:5000"),
+            "CONNECT example.com:5000 HTTP/1.1"
+        );
+        assert_eq!(
+            encode(Method::CONNECT, "http://[::1]:5000"),
+            "CONNECT [::1]:5000 HTTP/1.1"
+        );
+        assert_eq!(
+            encode(Method::GET, "http://example.com:8080/path?q=1"),
+            "GET /path?q=1 HTTP/1.1"
+        );
     }
 
     #[test]

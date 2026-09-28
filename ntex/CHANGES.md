@@ -11,6 +11,9 @@
 
 * HTTP/1 does not restart the keep-alive timer for every request of a persistent connection
 
+* HTTP/1 client sends `CONNECT` requests in authority-form (`host:port`), the path
+  was sent instead
+
 * HTTP/1 parses `Transfer-Encoding` as a list of codings. A request with codings other than
   final `chunked` is rejected with `501 Not Implemented` (new `DecodeError::UnsupportedTransferCoding`),
   a response with final `chunked` is framed by chunked coding and a response without final
