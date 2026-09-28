@@ -1117,7 +1117,10 @@ async fn test_h1_request_line_too_long() {
     assert!(data[..n].starts_with(b"HTTP/1.1 414"));
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-    let req = format!("GET /{} HTTP/1.1\r\n\r\n", "a".repeat(16 * 1024 - 20));
+    let req = format!(
+        "GET /{} HTTP/1.1\r\nhost: a\r\n\r\n",
+        "a".repeat(16 * 1024 - 20)
+    );
     let _ = stream.write_all(req.as_bytes());
     let n = stream.read(&mut data).unwrap();
     assert!(data[..n].starts_with(b"HTTP/1.1 200"));

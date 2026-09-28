@@ -1210,7 +1210,7 @@ mod tests {
             assert!(reader.decode(&mut buf).unwrap().is_none());
             assert!(buf.is_empty());
         }
-        buf.extend_from_slice(b"\nGET /test HTTP/1.1\r\n\r\n");
+        buf.extend_from_slice(b"\nGET /test HTTP/1.1\r\nhost: a\r\n\r\n");
         let req = reader.decode(&mut buf).unwrap().unwrap().0;
         assert_eq!(req.path(), "/test");
 
@@ -1241,7 +1241,7 @@ mod tests {
         let line = format!("GET /{} HTTP/1.1\r\n", "a".repeat(16));
         assert_eq!(line.len(), 32);
         let reader = MessageDecoder::<Request>::new(cfg.get());
-        let mut buf = BytesMut::from(format!("{line}\r\n").as_str());
+        let mut buf = BytesMut::from(format!("{line}host: a\r\n\r\n").as_str());
         assert!(reader.decode(&mut buf).unwrap().is_some());
 
         let reader = MessageDecoder::<Request>::new(cfg.get());
@@ -1265,8 +1265,9 @@ mod tests {
 
         // headers are not limited
         let reader = MessageDecoder::<Request>::new(cfg.get());
-        let mut buf =
-            BytesMut::from(format!("GET / HTTP/1.1\r\nx: {}\r\n\r\n", "a".repeat(64)).as_str());
+        let mut buf = BytesMut::from(
+            format!("GET / HTTP/1.1\r\nhost: a\r\nx: {}\r\n\r\n", "a".repeat(64)).as_str(),
+        );
         assert!(reader.decode(&mut buf).unwrap().is_some());
 
         // default limit

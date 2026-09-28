@@ -1062,7 +1062,7 @@ mod tests {
             DispatcherConfig::default(),
         );
 
-        client.write("POST / HTTP/1.1\r\ncontent-length: 10\r\n\r\npart");
+        client.write("POST / HTTP/1.1\r\nhost: a\r\ncontent-length: 10\r\n\r\npart");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         sleep(Millis(50)).await;
@@ -1691,6 +1691,35 @@ mod tests {
             assert_eq!(calls.get(), 1, "{req:?}");
             assert!(client.is_server_dropped(), "{req:?}");
         }
+    }
+
+    #[crate::rt_test]
+    async fn test_response_without_body_is_framed() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+        spawn_h1(server, move |req: Request| async move {
+            if req.path() == "/test1" {
+                Ok::<_, io::Error>(Response::Ok().body(body::Body::None))
+            } else {
+                Ok(Response::Ok().body("next"))
+            }
+        });
+
+        client.write(
+            "GET /test1 HTTP/1.1\r\nhost: a\r\n\r\n\
+             GET /test2 HTTP/1.1\r\nhost: a\r\n\r\n",
+        );
+        sleep(Millis(100)).await;
+
+        let buf = client.read_any();
+        let data = String::from_utf8(buf.to_vec()).unwrap();
+        let (first, second) = data.split_at(data.rfind("HTTP/1.1 200 OK").unwrap());
+        assert!(first.starts_with("HTTP/1.1 200 OK\r\n"), "{data:?}");
+        assert!(first.contains("\r\ncontent-length: 0\r\n"), "{data:?}");
+        assert!(first.ends_with("\r\n\r\n"), "{data:?}");
+        assert!(second.contains("\r\ncontent-length: 4\r\n"), "{data:?}");
+        assert!(second.ends_with("\r\n\r\nnext"), "{data:?}");
+        assert!(!client.is_server_dropped());
     }
 
     #[crate::rt_test]

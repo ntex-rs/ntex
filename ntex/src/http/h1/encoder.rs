@@ -63,8 +63,9 @@ pub(crate) trait MessageType: Sized {
         // Content length
         if let Some(status) = self.status() {
             if status == StatusCode::SWITCHING_PROTOCOLS {
+                // no framing headers in 1xx responses, see RFC 9112 section 6.1
                 skip_len = true;
-                length = BodySize::Stream;
+                length = BodySize::None;
             } else if is_bodyless(status) {
                 length = BodySize::None;
             }
@@ -237,10 +238,18 @@ impl<T: MessageType> MessageEncoder<T> {
         extra_headers: Option<HeaderMap>,
     ) -> Result<ConnectionType, EncodeError> {
         // a response with a bodyless status never sends body bytes
-        let length = if message.status().is_some_and(is_bodyless) {
-            BodySize::None
-        } else {
-            length
+        let length = match message.status() {
+            Some(status) if is_bodyless(status) => BodySize::None,
+            // a response body without framing would be delimited by connection
+            // close, see RFC 9112 section 6.3
+            Some(status)
+                if length == BodySize::None
+                    && !head
+                    && status != StatusCode::SWITCHING_PROTOCOLS =>
+            {
+                BodySize::Empty
+            }
+            _ => length,
         };
 
         // transfer encoding

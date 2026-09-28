@@ -292,6 +292,67 @@ mod tests {
         }
     }
 
+    /// A response without body size information is framed with a zero length.
+    #[crate::rt_test]
+    async fn test_response_without_body_has_length() {
+        use crate::http::{StatusCode, header};
+
+        let encode = |req: &str, res: Response<()>| {
+            let cfg: SharedCfg = SharedCfg::new("DBG").add(HttpServiceConfig::new()).into();
+            let codec = Codec::new(0, cfg.get());
+            let mut buf = BytesMut::from(req);
+            codec.decode(&mut buf).unwrap().unwrap();
+
+            let mut out = BytePages::default();
+            codec
+                .encode(Message::Item((res, BodySize::None)), &mut out)
+                .unwrap();
+            let mut data = Vec::new();
+            while let Some(chunk) = out.take() {
+                data.extend_from_slice(&chunk);
+            }
+            (String::from_utf8(data).unwrap(), codec.keepalive())
+        };
+        let get = "GET / HTTP/1.1\r\nhost: a\r\n\r\n";
+
+        let (data, keepalive) = encode(get, Response::with_body(StatusCode::OK, ()));
+        assert!(data.contains("\r\ncontent-length: 0\r\n"), "{data:?}");
+        assert!(keepalive);
+
+        // a length set by the service is replaced
+        let mut res = Response::with_body(StatusCode::NOT_FOUND, ());
+        res.headers_mut().insert(
+            header::CONTENT_LENGTH,
+            header::HeaderValue::from_static("10"),
+        );
+        let (data, _) = encode(get, res);
+        assert_eq!(data.matches("content-length").count(), 1, "{data:?}");
+        assert!(data.contains("\r\ncontent-length: 0\r\n"), "{data:?}");
+
+        let (data, keepalive) = encode(
+            "GET / HTTP/1.0\r\nconnection: keep-alive\r\n\r\n",
+            Response::with_body(StatusCode::OK, ()),
+        );
+        assert!(data.contains("\r\ncontent-length: 0\r\n"), "{data:?}");
+        assert!(data.contains("connection: keep-alive\r\n"), "{data:?}");
+        assert!(keepalive);
+
+        // no body is expected
+        for (req, status) in [
+            ("HEAD / HTTP/1.1\r\nhost: a\r\n\r\n", StatusCode::OK),
+            (get, StatusCode::NO_CONTENT),
+            (get, StatusCode::NOT_MODIFIED),
+            (
+                "GET / HTTP/1.1\r\nhost: a\r\nconnection: upgrade\r\nupgrade: websocket\r\n\r\n",
+                StatusCode::SWITCHING_PROTOCOLS,
+            ),
+        ] {
+            let (data, _) = encode(req, Response::with_body(status, ()));
+            assert!(!data.contains("content-length"), "{status} {data:?}");
+            assert!(!data.contains("transfer-encoding"), "{status} {data:?}");
+        }
+    }
+
     fn encode_stream(req: &str, res: Response<()>) -> (String, bool) {
         let cfg: SharedCfg = SharedCfg::new("DBG").add(HttpServiceConfig::new()).into();
         let codec = Codec::new(0, cfg.get());

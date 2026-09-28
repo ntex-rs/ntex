@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+* HTTP/1 sends `content-length: 0` for responses without a body size, such responses
+  were sent without framing headers
+
+* HTTP/1 does not send `transfer-encoding: chunked` in `101 Switching Protocols` responses
+
 * HTTP/1 replaces informational (1xx) service responses, except `101 Switching Protocols`,
   with `500 Internal Server Error`, an interim response was sent as the final response
 
