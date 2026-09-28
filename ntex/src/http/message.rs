@@ -452,6 +452,18 @@ impl Message<ResponseHead> {
         msg.status = status;
         msg
     }
+
+    /// Copies the response head into a new message, extensions are not copied.
+    pub(crate) fn copy(&self) -> Self {
+        let mut msg = Self::with_status(self.status);
+        msg.version = self.version;
+        msg.headers = self.headers.clone();
+        msg.headers_vec.clone_from(&self.headers_vec);
+        msg.reason = self.reason;
+        msg.io = self.io.clone();
+        msg.flags = self.flags;
+        msg
+    }
 }
 
 impl<T: Head> Clone for Message<T> {

@@ -21,6 +21,9 @@
   headers, and HTTP/1.1 requests without `Host`, use `HttpServiceConfig::set_host_validation()`
   to disable
 
+* `Response::take()` copies the response head without extensions, before both responses
+  shared the head and modifying either of them panicked
+
 * HTTP/1 limits the request or status line to 16KiB, configurable with
   `HttpServiceConfig::set_max_start_line_size()`, a longer request line is rejected with
   `414 URI Too Long`, add `DecodeError::StartLineTooLong`

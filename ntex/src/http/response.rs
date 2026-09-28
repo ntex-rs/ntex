@@ -253,11 +253,12 @@ impl Response<Body> {
     #[must_use]
     /// Takes the response body while preserving its metadata.
     ///
-    /// The returned response contains the original body and a clone of the
-    /// response head. This response is left with an empty body.
+    /// The returned response contains the original body and a copy of the
+    /// response head without its extensions. This response is left with an
+    /// empty body, both responses can be modified independently.
     pub fn take(&mut self) -> Response {
         Response {
-            head: self.head.clone(),
+            head: self.head.copy(),
             body: self.body.take_body(),
         }
     }
@@ -879,6 +880,32 @@ impl<B: MessageBody> Error for Response<B> {}
 mod tests {
     use super::*;
     use crate::http::header::{CONTENT_TYPE, COOKIE};
+
+    #[test]
+    fn test_take_copies_head() {
+        let mut resp = Response::NotFound()
+            .header(CONTENT_TYPE, "text/plain")
+            .reason("Nope")
+            .body("body");
+        resp.extensions_mut().insert(1u8);
+
+        let mut taken = resp.take();
+        assert_eq!(taken.status(), StatusCode::NOT_FOUND);
+        assert_eq!(taken.head().reason, Some("Nope"));
+        assert_eq!(taken.headers().get(CONTENT_TYPE).unwrap(), "text/plain");
+        assert_eq!(taken.get_body_ref(), b"body");
+        assert!(taken.extensions().get::<u8>().is_none());
+
+        // both responses can be modified
+        *taken.status_mut() = StatusCode::OK;
+        taken.headers_mut().remove(CONTENT_TYPE);
+        resp.headers_mut()
+            .insert(COOKIE, HeaderValue::from_static("a=b"));
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        assert!(resp.headers().contains_key(CONTENT_TYPE));
+        assert!(!taken.headers().contains_key(COOKIE));
+        assert_eq!(resp.extensions().get::<u8>(), Some(&1));
+    }
 
     #[test]
     fn test_debug() {
