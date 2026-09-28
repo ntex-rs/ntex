@@ -695,6 +695,12 @@ pub enum PayloadItem {
 /// [`DecodeError`] reports malformed payload framing, such as an invalid
 /// chunk-size or chunk terminator. Cloning preserves the current payload
 /// framing state.
+///
+/// Chunk extensions and trailer fields are validated and skipped, they are
+/// not exposed. A chunked payload is rejected with
+/// [`DecodeError::InvalidInput`] if its chunk extensions exceed 16 KiB in
+/// total, or if its trailer section, including line terminators, exceeds
+/// 4 KiB.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PayloadDecoder {
     kind: Cell<Kind>,
@@ -708,8 +714,12 @@ impl PayloadDecoder {
     }
 
     pub(super) fn chunked() -> PayloadDecoder {
+        let limits = ChunkedLimits {
+            ext: 0,
+            trailers: 0,
+        };
         PayloadDecoder {
-            kind: Cell::new(Kind::Chunked(ChunkedState::Size, 0, 0)),
+            kind: Cell::new(Kind::Chunked(ChunkedState::Size, 0, limits)),
         }
     }
 
@@ -733,9 +743,8 @@ enum Kind {
     /// A Reader used when Transfer-Encoding is `chunked`.
     ///
     /// Holds the chunked state, the remaining size of the current chunk and
-    /// the number of chunk-size line bytes beyond the size digits, such as
-    /// chunk extensions, received so far.
-    Chunked(ChunkedState, u64, u32),
+    /// the size limits.
+    Chunked(ChunkedState, u64, ChunkedLimits),
     /// A Reader used for responses that don't indicate a length or chunked.
     ///
     /// Note: This should only used for `Response`s. It is illegal for a
@@ -756,6 +765,29 @@ enum Kind {
 /// Maximum number of chunk-size line bytes beyond the size digits, such as
 /// chunk extensions, accepted for a chunked payload.
 const MAX_CHUNK_EXTENSIONS: u32 = 16 * 1024;
+
+/// Maximum size of the trailer section, including line terminators, accepted
+/// for a chunked payload.
+const MAX_CHUNK_TRAILERS: u32 = 4 * 1024;
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+struct ChunkedLimits {
+    /// chunk-size line bytes beyond the size digits received so far
+    ext: u32,
+    /// trailer section bytes received so far
+    trailers: u32,
+}
+
+impl ChunkedLimits {
+    fn add_trailers(&mut self, len: usize) -> Result<(), DecodeError> {
+        self.trailers = self.trailers.saturating_add(len as u32);
+        if self.trailers > MAX_CHUNK_TRAILERS {
+            Err(DecodeError::InvalidInput("Chunked trailers are too large"))
+        } else {
+            Ok(())
+        }
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 enum ChunkedState {
@@ -799,11 +831,11 @@ impl Decoder for PayloadDecoder {
                     Ok(Some(PayloadItem::Chunk(buf)))
                 }
             }
-            Kind::Chunked(ref mut state, ref mut size, ref mut ext) => {
+            Kind::Chunked(ref mut state, ref mut size, ref mut limits) => {
                 let result = loop {
                     let mut buf = None;
                     // advances the chunked state
-                    *state = match state.step(src, size, ext, &mut buf) {
+                    *state = match state.step(src, size, limits, &mut buf) {
                         Poll::Pending => break Ok(None),
                         Poll::Ready(Ok(state)) => state,
                         Poll::Ready(Err(e)) => break Err(e),
@@ -852,18 +884,18 @@ impl ChunkedState {
         self,
         body: &mut BytesMut,
         size: &mut u64,
-        ext: &mut u32,
+        limits: &mut ChunkedLimits,
         buf: &mut Option<Bytes>,
     ) -> Poll<Result<ChunkedState, DecodeError>> {
         match self {
-            ChunkedState::Size => ChunkedState::read_size(body, size, ext),
+            ChunkedState::Size => ChunkedState::read_size(body, size, &mut limits.ext),
             ChunkedState::Body => ChunkedState::read_body(body, size, buf),
             ChunkedState::BodyCr => ChunkedState::read_body_cr(body),
             ChunkedState::BodyLf => ChunkedState::read_body_lf(body),
-            ChunkedState::EndCr => ChunkedState::read_end_cr(body),
+            ChunkedState::EndCr => ChunkedState::read_end_cr(body, limits),
             ChunkedState::EndLf => ChunkedState::read_end_lf(body),
-            ChunkedState::Trailer => ChunkedState::read_trailer(body),
-            ChunkedState::TrailerLf => ChunkedState::read_trailer_lf(body),
+            ChunkedState::Trailer => ChunkedState::read_trailer(body, limits),
+            ChunkedState::TrailerLf => ChunkedState::read_trailer_lf(body, limits),
             ChunkedState::End => Poll::Ready(Ok(ChunkedState::End)),
         }
     }
@@ -965,22 +997,34 @@ impl ChunkedState {
         }
     }
 
-    fn read_end_cr(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, DecodeError>> {
+    fn read_end_cr(
+        rdr: &mut BytesMut,
+        limits: &mut ChunkedLimits,
+    ) -> Poll<Result<ChunkedState, DecodeError>> {
         match byte!(rdr) {
             b'\r' => Poll::Ready(Ok(ChunkedState::EndLf)),
             // trailer field, must start with a field name character
-            b if is_tchar(b) => Poll::Ready(Ok(ChunkedState::Trailer)),
+            b if is_tchar(b) => Poll::Ready(limits.add_trailers(1).map(|()| ChunkedState::Trailer)),
             _ => Poll::Ready(Err(DecodeError::InvalidInput("Invalid chunk end CR"))),
         }
     }
 
     /// Skips a trailer field line, trailer fields are not exposed.
-    fn read_trailer(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, DecodeError>> {
+    ///
+    /// The trailer section counts against [`MAX_CHUNK_TRAILERS`].
+    fn read_trailer(
+        rdr: &mut BytesMut,
+        limits: &mut ChunkedLimits,
+    ) -> Poll<Result<ChunkedState, DecodeError>> {
         for (idx, b) in rdr.iter().enumerate() {
             match *b {
                 b'\r' => {
                     rdr.advance_to(idx + 1);
-                    return Poll::Ready(Ok(ChunkedState::TrailerLf));
+                    return Poll::Ready(
+                        limits
+                            .add_trailers(idx + 1)
+                            .map(|()| ChunkedState::TrailerLf),
+                    );
                 }
                 b'\t' | b' '..=b'~' | 0x80..=0xff => (),
                 _ => {
@@ -990,13 +1034,21 @@ impl ChunkedState {
                 }
             }
         }
+        let len = rdr.len();
         rdr.clear();
-        Poll::Pending
+        if let Err(err) = limits.add_trailers(len) {
+            Poll::Ready(Err(err))
+        } else {
+            Poll::Pending
+        }
     }
 
-    fn read_trailer_lf(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, DecodeError>> {
+    fn read_trailer_lf(
+        rdr: &mut BytesMut,
+        limits: &mut ChunkedLimits,
+    ) -> Poll<Result<ChunkedState, DecodeError>> {
         match byte!(rdr) {
-            b'\n' => Poll::Ready(Ok(ChunkedState::EndCr)),
+            b'\n' => Poll::Ready(limits.add_trailers(1).map(|()| ChunkedState::EndCr)),
             _ => Poll::Ready(Err(DecodeError::InvalidInput(
                 "Invalid chunked trailer field LF",
             ))),
@@ -1942,6 +1994,57 @@ mod tests {
 
         buf.extend(b"\r\n");
         assert!(pl.decode(&mut buf).unwrap().unwrap().eof());
+    }
+
+    #[test]
+    fn test_chunked_trailers_limit() {
+        let decode = |trailers: &[u8], split: bool| {
+            let (pl, mut buf) = chunked_payload();
+            buf.extend_from_slice(b"4\r\ndata\r\n0\r\n");
+            assert_eq!(pl.decode(&mut buf).unwrap().unwrap().chunk().len(), 4);
+
+            let mut data = trailers.to_vec();
+            data.extend_from_slice(b"\r\n");
+            let step = if split { 1 } else { data.len() };
+            for part in data.chunks(step) {
+                buf.extend_from_slice(part);
+                match pl.decode(&mut buf) {
+                    Ok(None) => (),
+                    Ok(Some(item)) => return Ok(item.eof()),
+                    Err(err) => return Err(err),
+                }
+            }
+            Ok(false)
+        };
+        let max = MAX_CHUNK_TRAILERS as usize;
+
+        // a single field
+        let field = |len: usize| format!("x: {}\r\n", "v".repeat(len - 5)).into_bytes();
+        for split in [false, true] {
+            assert_eq!(decode(&field(max), split), Ok(true), "{split}");
+            assert!(
+                matches!(
+                    decode(&field(max + 1), split),
+                    Err(DecodeError::InvalidInput(_))
+                ),
+                "{split}"
+            );
+            // an endless field line
+            assert!(
+                matches!(
+                    decode(&[&b"x: "[..], &vec![b'v'; max * 2]].concat(), split),
+                    Err(DecodeError::InvalidInput(_))
+                ),
+                "{split}"
+            );
+        }
+
+        // many small fields
+        assert_eq!(decode(&b"x: y\r\n".repeat(max / 6), false), Ok(true));
+        assert!(matches!(
+            decode(&b"x: y\r\n".repeat(max / 6 + 1), false),
+            Err(DecodeError::InvalidInput(_))
+        ));
     }
 
     #[test]

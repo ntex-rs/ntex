@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* HTTP/1 limits the trailer section of chunked payloads to 4KiB, trailer fields were
+  skipped without limit
+
 * HTTP/1 rejects requests with `Transfer-Encoding: identity`, the obsolete coding was
   accepted and a request with `Content-Length` was framed by its length
 
