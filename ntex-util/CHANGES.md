@@ -5,6 +5,9 @@
 * Dropping the last `bstream::Sender` wakes a pending read, before the receiver
   could wait forever
 
+* `LocalWaker::register()` no longer clones the waker when the same waker is
+  already registered
+
 * Fix `OneRequestService`: a dropped call no longer blocks the service forever,
   every waiting caller is woken, and calls cannot overlap after several callers
   observe readiness
