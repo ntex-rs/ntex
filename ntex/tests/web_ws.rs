@@ -306,8 +306,36 @@ async fn web_ws_rejects_unrequested_subprotocol() {
     .connect()
     .await;
 
-    assert!(result.is_err());
+    let err = result.map(|_| ()).unwrap_err();
+    assert!(matches!(
+        *err,
+        WsClientError::InvalidResponseStatus(StatusCode::BAD_REQUEST)
+    ));
     assert!(rx.recv().unwrap());
+}
+
+#[ntex::test]
+async fn web_ws_handshake_error_response() {
+    let srv = test::server(async |_| {
+        App::new().service(web::resource("/").route(web::to(async |req: HttpRequest| {
+            let _ = ws::start(&req, None, ws_service).await;
+        })))
+    });
+
+    let response = srv
+        .get("/")
+        .header("upgrade", "websocket")
+        .header("sec-websocket-version", "8")
+        .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .set_connection_type(ntex::http::ConnectionType::Upgrade)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response.headers().get("sec-websocket-version").unwrap(),
+        "13"
+    );
 }
 
 #[ntex::test]

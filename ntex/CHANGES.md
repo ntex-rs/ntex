@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+* WebSocket handshake accepts only version 13, a rejected version is answered with
+  `Sec-WebSocket-Version: 13`
+
+* `web::ws::start()` sends the handshake error response and closes the connection when the
+  handshake of an upgrade request fails, before the handler's response was sent
+
 * HTTP/1 writes the chunk size line without `fmt` formatting
 
 * Remove unused `EncodeError::Fmt`

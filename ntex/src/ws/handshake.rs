@@ -21,7 +21,12 @@ pub fn handshake(req: &RequestHead) -> Result<ResponseBuilder, HandshakeError> {
 /// Verifies a WebSocket opening-handshake request.
 ///
 /// The request must use `GET`, request a connection upgrade to WebSocket,
-/// include a `Sec-WebSocket-Key`, and use WebSocket version 7, 8, or 13.
+/// include a `Sec-WebSocket-Key`, and use WebSocket version 13.
+///
+/// # Errors
+///
+/// Returns [`HandshakeError`] when the request method or required upgrade
+/// headers are invalid.
 pub fn verify_handshake(req: &RequestHead) -> Result<(), HandshakeError> {
     // WebSocket accepts only GET
     if req.method != Method::GET {
@@ -42,14 +47,8 @@ pub fn verify_handshake(req: &RequestHead) -> Result<(), HandshakeError> {
     if !req.headers().contains_key(header::SEC_WEBSOCKET_VERSION) {
         return Err(HandshakeError::NoVersionHeader);
     }
-    let supported_ver = {
-        if let Some(hdr) = req.headers().get(header::SEC_WEBSOCKET_VERSION) {
-            hdr == "13" || hdr == "8" || hdr == "7"
-        } else {
-            false
-        }
-    };
-    if !supported_ver {
+    let mut versions = req.headers().get_all(header::SEC_WEBSOCKET_VERSION);
+    if versions.next().is_none_or(|ver| ver != "13") || versions.next().is_some() {
         return Err(HandshakeError::UnsupportedVersion);
     }
 
@@ -267,6 +266,27 @@ mod tests {
     }
 
     #[test]
+    fn test_only_version_13_is_supported() {
+        let req = |versions: &[&'static str]| {
+            let mut req = TestRequest::default();
+            req.header(header::UPGRADE, "websocket")
+                .header(header::CONNECTION, "upgrade")
+                .header(header::SEC_WEBSOCKET_KEY, "dGhlIHNhbXBsZSBub25jZQ==");
+            for ver in versions {
+                req.header(header::SEC_WEBSOCKET_VERSION, *ver);
+            }
+            req.build()
+        };
+        assert!(verify_handshake(req(&["13"]).head()).is_ok());
+        for versions in [&["8"][..], &["7"], &["13", "8"]] {
+            assert_eq!(
+                verify_handshake(req(versions).head()),
+                Err(HandshakeError::UnsupportedVersion)
+            );
+        }
+    }
+
+    #[test]
     fn test_wserror_http_response() {
         let resp: Response = HandshakeError::GetMethodRequired.error_response();
         assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
@@ -278,6 +298,10 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let resp: Response = HandshakeError::UnsupportedVersion.error_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            resp.headers().get(header::SEC_WEBSOCKET_VERSION).unwrap(),
+            "13"
+        );
         let resp: Response = HandshakeError::BadWebsocketKey.error_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let resp: Response = HandshakeError::BadWebsocketProtocol.error_response();

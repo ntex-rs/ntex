@@ -243,9 +243,11 @@ impl<St> WebResponseError<St, DefaultError> for HandshakeError {
                 .build(),
             HandshakeError::NoVersionHeader => HttpResponse::BadRequest()
                 .reason("Websocket version header is required")
+                .header(header::SEC_WEBSOCKET_VERSION, "13")
                 .build(),
             HandshakeError::UnsupportedVersion => HttpResponse::BadRequest()
                 .reason("Unsupported version")
+                .header(header::SEC_WEBSOCKET_VERSION, "13")
                 .build(),
             HandshakeError::BadWebsocketKey => {
                 HttpResponse::BadRequest().reason("Handshake error").build()

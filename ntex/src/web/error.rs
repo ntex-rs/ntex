@@ -939,6 +939,10 @@ mod tests {
             &(),
         );
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            resp.headers().get(header::SEC_WEBSOCKET_VERSION).unwrap(),
+            "13"
+        );
         let resp = WebResponseError::<_, DefaultError>::error_response(
             &HandshakeError::BadWebsocketKey,
             &(),
