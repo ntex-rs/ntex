@@ -359,79 +359,6 @@ impl AsName for &String {
     }
 }
 
-impl<N: std::fmt::Display, V> FromIterator<(N, V)> for HeaderMap
-where
-    HeaderName: TryFrom<N>,
-    Value: TryFrom<V>,
-{
-    #[inline]
-    #[allow(clippy::mutable_key_type)]
-    fn from_iter<T: IntoIterator<Item = (N, V)>>(iter: T) -> Self {
-        let map = iter
-            .into_iter()
-            .filter_map(|(n, v)| {
-                let name = format!("{n}");
-                match (HeaderName::try_from(n), Value::try_from(v)) {
-                    (Ok(n), Ok(v)) => Some((n, v)),
-                    (Ok(n), Err(_)) => {
-                        log::warn!("failed to parse `{n}` header value");
-                        None
-                    }
-                    (Err(_), Ok(_)) => {
-                        log::warn!("invalid HTTP header name: {name}");
-                        None
-                    }
-                    (Err(_), Err(_)) => {
-                        log::warn!("invalid HTTP header name `{name}` and value");
-                        None
-                    }
-                }
-            })
-            .fold(HashMap::default(), |mut map: HashMap<_, Value>, (n, v)| {
-                match map.entry(n) {
-                    Entry::Occupied(mut oc) => oc.get_mut().extend(v),
-                    Entry::Vacant(va) => {
-                        let _ = va.insert(v);
-                    }
-                }
-                map
-            });
-        HeaderMap { inner: map }
-    }
-}
-
-impl FromIterator<HeaderValue> for Value {
-    fn from_iter<T: IntoIterator<Item = HeaderValue>>(iter: T) -> Self {
-        let mut iter = iter.into_iter();
-        let value = iter.next().map(Value::One);
-        let mut value = match value {
-            Some(v) => v,
-            _ => Value::One(HeaderValue::from_static("")),
-        };
-        value.extend(iter);
-        value
-    }
-}
-
-impl TryFrom<&str> for Value {
-    type Error = crate::header::InvalidHeaderValue;
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Ok(value
-            .split(',')
-            .filter(|v| !v.is_empty())
-            .map(str::trim)
-            .filter_map(|v| HeaderValue::from_str(v).ok())
-            .collect::<Value>())
-    }
-}
-
-impl TryFrom<String> for Value {
-    type Error = crate::header::InvalidHeaderValue;
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Value::try_from(value.as_str())
-    }
-}
-
 #[derive(Debug)]
 pub struct GetAll<'a> {
     idx: usize,
@@ -556,46 +483,6 @@ impl fmt::Debug for HeaderMap {
 mod tests {
     use super::*;
     use crate::header::{ACCEPT_ENCODING, CONTENT_TYPE};
-
-    #[test]
-    fn test_from_iter_string_values() {
-        let map: HeaderMap = vec![
-            ("Connection".to_string(), "keep-alive".to_string()),
-            ("Accept".to_string(), "text/html, */*".to_string()),
-        ]
-        .into_iter()
-        .collect();
-        assert_eq!(map.get("Connection").unwrap(), "keep-alive");
-        let accept: Vec<_> = map.get_all("Accept").collect();
-        assert_eq!(accept, ["text/html", "*/*"]);
-    }
-
-    #[test]
-    fn test_from_iter() {
-        let vec = vec![
-            ("Connection", "keep-alive"),
-            ("Accept", "text/html"),
-            (
-                "Accept",
-                "*/*, application/xhtml+xml, application/xml;q=0.9, image/webp,",
-            ),
-        ];
-        let map = HeaderMap::from_iter(vec);
-        assert_eq!(
-            map.get("Connection"),
-            Some(&HeaderValue::from_static("keep-alive"))
-        );
-        assert_eq!(
-            map.get_all("Accept").collect::<Vec<&HeaderValue>>(),
-            vec![
-                &HeaderValue::from_static("text/html"),
-                &HeaderValue::from_static("*/*"),
-                &HeaderValue::from_static("application/xhtml+xml"),
-                &HeaderValue::from_static("application/xml;q=0.9"),
-                &HeaderValue::from_static("image/webp"),
-            ]
-        );
-    }
 
     #[test]
     #[allow(clippy::needless_borrow, clippy::needless_borrows_for_generic_args)]
