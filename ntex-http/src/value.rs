@@ -15,7 +15,7 @@ use ntex_bytes::{ByteString, Bytes};
 ///
 /// To handle this, the `HeaderValue` is useable as a type and can be compared
 /// with strings and implements `Debug`. [`to_str`](Self::to_str) returns an
-/// error if the value contains bytes outside visible ASCII.
+/// error if the value contains bytes other than HTAB and visible ASCII.
 #[derive(Clone, Eq)]
 pub struct HeaderValue {
     inner: Bytes,
@@ -43,8 +43,8 @@ impl HeaderValue {
     /// Convert a static string to a `HeaderValue`.
     ///
     /// This function will not perform any copying, however the string is
-    /// checked to ensure that no invalid characters are present. Only visible
-    /// ASCII characters (32-126) are permitted.
+    /// checked to ensure that no invalid characters are present. Only HTAB and
+    /// visible ASCII characters (32-126) are permitted.
     ///
     /// # Panics
     ///
@@ -80,9 +80,9 @@ impl HeaderValue {
     /// Attempt to convert a string to a `HeaderValue`.
     ///
     /// If the argument contains invalid header value characters, an error is
-    /// returned. Only visible ASCII characters (32-126) are permitted. Use
-    /// `from_bytes` to create a `HeaderValue` that includes opaque octets
-    /// (128-255).
+    /// returned. The same bytes as in [`from_bytes`](Self::from_bytes) are
+    /// permitted, so non-ASCII characters are accepted, but such a value is not
+    /// returned by [`to_str`](Self::to_str).
     ///
     /// # Examples
     ///
@@ -90,6 +90,9 @@ impl HeaderValue {
     /// # use ntex_http::header::HeaderValue;
     /// let val = HeaderValue::from_str("hello").unwrap();
     /// assert_eq!(val, "hello");
+    ///
+    /// let val = HeaderValue::from_str("caf\u{e9}").unwrap();
+    /// assert!(val.to_str().is_err());
     /// ```
     ///
     /// An invalid value
@@ -107,8 +110,8 @@ impl HeaderValue {
     /// Attempt to convert a byte slice to a `HeaderValue`.
     ///
     /// If the argument contains invalid header value bytes, an error is
-    /// returned. Only byte values between 32 and 255 (inclusive) are permitted,
-    /// excluding byte 127 (DEL).
+    /// returned. Only HTAB and byte values between 32 and 255 (inclusive) are
+    /// permitted, excluding byte 127 (DEL).
     ///
     /// # Examples
     ///
@@ -133,7 +136,8 @@ impl HeaderValue {
     /// Attempt to convert a `Bytes` buffer to a `HeaderValue`.
     ///
     /// The conversion avoids copying when `src` can be converted into the
-    /// internal [`Bytes`] representation without allocation.
+    /// internal [`Bytes`] representation without allocation. The same bytes as
+    /// in [`from_bytes`](Self::from_bytes) are permitted.
     pub fn from_shared<T>(src: T) -> Result<HeaderValue, InvalidHeaderValue>
     where
         Bytes: From<T>,
@@ -156,7 +160,7 @@ impl HeaderValue {
     /// # Safety
     ///
     /// `src` must contain only bytes allowed in an HTTP header field value:
-    /// bytes 32 through 255, excluding 127.
+    /// HTAB and bytes 32 through 255, excluding 127.
     pub unsafe fn from_shared_unchecked(src: Bytes) -> HeaderValue {
         HeaderValue {
             inner: src,
@@ -179,8 +183,8 @@ impl HeaderValue {
         })
     }
 
-    /// Yields a `&str` slice if the `HeaderValue` only contains visible ASCII
-    /// chars.
+    /// Yields a `&str` slice if the `HeaderValue` only contains HTAB and visible
+    /// ASCII chars (32-126).
     ///
     /// This function will perform a scan of the header value, checking all the
     /// characters.
