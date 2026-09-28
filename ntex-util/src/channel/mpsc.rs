@@ -190,8 +190,10 @@ impl<T> Stream for Receiver<T> {
 }
 
 impl<T> FusedStream for Receiver<T> {
+    /// Returns `true` once the channel is closed and every buffered message
+    /// has been received.
     fn is_terminated(&self) -> bool {
-        self.is_closed()
+        self.is_closed() && self.shared.get_ref().buffer.is_empty()
     }
 }
 
@@ -360,5 +362,26 @@ mod tests {
         drop(rx);
         assert_eq!(drops.get(), 8);
         assert!(tx.is_closed());
+    }
+
+    #[ntex::test]
+    async fn test_fused_drains_buffer() {
+        let (tx, mut rx) = channel();
+        tx.send(1).unwrap();
+        tx.send(2).unwrap();
+        drop(tx);
+
+        assert!(!rx.is_terminated());
+        assert_eq!(stream_recv(&mut rx).await, Some(1));
+        assert_eq!(stream_recv(&mut rx).await, Some(2));
+        assert!(rx.is_terminated());
+        assert_eq!(stream_recv(&mut rx).await, None);
+
+        let (tx, mut rx) = channel();
+        tx.send(1).unwrap();
+        rx.close();
+        assert!(!rx.is_terminated());
+        assert_eq!(stream_recv(&mut rx).await, Some(1));
+        assert!(rx.is_terminated());
     }
 }
