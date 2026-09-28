@@ -21,6 +21,9 @@
   headers, and HTTP/1.1 requests without `Host`, use `HttpServiceConfig::set_host_validation()`
   to disable
 
+* Dropping a request or response that holds another request or response in its
+  extensions, or dropping one during thread-local teardown, no longer panics
+
 * HTTP services unregister an in-flight connection even if creating the control
   service fails or the connection future is dropped, before graceful shutdown waited
   for the leaked connection until the shutdown timeout
