@@ -5,6 +5,9 @@
 * Dropping the last `bstream::Sender` wakes a pending read, before the receiver
   could wait forever
 
+* Fix `Counter::unavailable()`, it was never woken once the counter reached
+  its capacity
+
 * `mpsc::Receiver` is reported as terminated only after buffered messages are
   received
 
