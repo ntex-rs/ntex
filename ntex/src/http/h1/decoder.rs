@@ -990,16 +990,6 @@ impl ChunkedState {
         match httparse::parse_chunk_size(rdr) {
             Ok(httparse::Status::Complete((pos, sz))) => {
                 let digits = rdr.iter().take_while(|b| b.is_ascii_hexdigit()).count();
-                // the parser accepts any octet in extensions, a bare LF or other
-                // control characters could be treated as line end by other parsers
-                if rdr[digits..pos - 2]
-                    .iter()
-                    .any(|&b| b != b'\t' && (b < b' ' || b == 0x7f))
-                {
-                    return Poll::Ready(Err(DecodeError::InvalidInput(
-                        "Invalid chunk size line: Invalid Extension",
-                    )));
-                }
                 // the line ends with CRLF
                 *ext = ext.saturating_add((pos - digits - 2) as u32);
                 if *ext > MAX_CHUNK_EXTENSIONS {
