@@ -11,6 +11,9 @@
 
 * HTTP/1 does not restart the keep-alive timer for every request of a persistent connection
 
+* HTTP/2 client skips interim `1xx` responses, an interim response was returned as the
+  final response
+
 * HTTP/1 client sends `CONNECT` requests in authority-form (`host:port`), the path
   was sent instead
 

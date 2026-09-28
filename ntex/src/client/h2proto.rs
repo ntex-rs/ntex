@@ -121,10 +121,21 @@ async fn get_response(
     rcv_stream: RecvStream,
     activity: Option<H2Activity>,
 ) -> Result<(ResponseHead, Payload), Error<ClientError>> {
-    let h2::Message { stream, kind } = rcv_stream
-        .recv()
-        .await
-        .ok_or(ClientError::Connect(ConnectError::Disconnected(None)))?;
+    let h2::Message { stream, kind } = loop {
+        let msg = rcv_stream
+            .recv()
+            .await
+            .ok_or(ClientError::Connect(ConnectError::Disconnected(None)))?;
+
+        // skip interim responses
+        if let h2::MessageKind::Headers { ref pseudo, .. } = msg.kind
+            && pseudo.status.is_some_and(|s| s.is_informational())
+        {
+            log::trace!("Skipping interim response: {:?}", pseudo.status);
+            continue;
+        }
+        break msg;
+    };
 
     match kind {
         h2::MessageKind::Headers {
@@ -424,5 +435,43 @@ impl H2Client {
 
     pub(super) fn is_closed(&self) -> bool {
         self.client.is_closed()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::http::{Message, StatusCode, uri::Scheme};
+    use crate::io::{Io, IoBoxed, testing::IoTest};
+    use crate::{SharedCfg, time::sleep};
+
+    #[crate::rt_test]
+    async fn test_skip_interim_responses() {
+        let (io, server) = IoTest::create();
+        io.remote_buffer_cap(64 * 1024);
+        let client = H2Client::new(SimpleClient::new(
+            IoBoxed::from(Io::new(io, SharedCfg::default())),
+            Scheme::HTTP,
+            ByteString::from_static("localhost"),
+        ));
+        server.write([0, 0, 0, 4, 0, 0, 0, 0, 0]);
+        sleep(Millis(50)).await;
+
+        let req = ClientRawRequest {
+            head: Message::new(),
+            headers: None,
+            size: BodySize::None,
+        };
+        let fut = crate::rt::spawn(send_request_inner(client, req, Body::None, Millis(5_000)));
+        sleep(Millis(50)).await;
+
+        // 103 and 100 interim responses, then 200 with END_STREAM
+        server.write([0, 0, 5, 1, 4, 0, 0, 0, 1, 0x08, 3, b'1', b'0', b'3']);
+        server.write([0, 0, 5, 1, 4, 0, 0, 0, 1, 0x08, 3, b'1', b'0', b'0']);
+        server.write([0, 0, 1, 1, 5, 0, 0, 0, 1, 0x88]);
+
+        let (head, payload) = fut.await.unwrap().unwrap();
+        assert_eq!(head.status, StatusCode::OK);
+        assert!(matches!(payload, Payload::None));
     }
 }
