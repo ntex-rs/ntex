@@ -251,7 +251,14 @@ mod tests {
             });
         }
 
-        crate::time::sleep(Duration::from_millis(200)).await;
+        // calls run one after another, wait for all of them with a generous
+        // deadline, timers on loaded CI runners overshoot a lot
+        for _ in 0..100 {
+            if done.get() == 4 {
+                break;
+            }
+            crate::time::sleep(Duration::from_millis(50)).await;
+        }
         assert_eq!(done.get(), 4);
         assert_eq!(max.get(), 1);
     }
