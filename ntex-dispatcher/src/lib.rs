@@ -456,6 +456,17 @@ where
                         }
                         Poll::Ready(PollService::Continue)
                     }
+                    // frames that were already received are dispatched once
+                    // the service is ready, as in the processing state
+                    IoStatusUpdate::PeerGone(_)
+                        if self.shared.io.with_read_dst(|buf| !buf.is_empty()) =>
+                    {
+                        log::trace!(
+                            "{}: Peer is gone during pause, wait for service",
+                            self.shared.io.tag()
+                        );
+                        Poll::Pending
+                    }
                     IoStatusUpdate::PeerGone(err) => {
                         log::trace!(
                             "{}: Peer is gone during pause, stopping dispatcher: {:?}",
@@ -1397,6 +1408,72 @@ mod tests {
         sleep(Millis(50)).await;
 
         reason.borrow_mut().take().expect("dispatcher did not stop")
+    }
+
+    /// Frames buffered while the service is not ready are dispatched even
+    /// when the transport fails during the pause.
+    #[ntex::test]
+    async fn peer_gone_during_pause_dispatches_buffered_frames() {
+        struct Srv(Condition, Rc<RefCell<Vec<String>>>);
+
+        impl Service<(), DispatchItem<BCodec>> for Srv {
+            type Res = Option<Bytes>;
+            type Error = ();
+
+            async fn ready(&self, _: Ctx<'_, Self>) -> Result<(), Self::Error> {
+                if self.1.borrow().len() == 1 {
+                    self.0.wait().await;
+                }
+                Ok(())
+            }
+
+            async fn call(
+                &self,
+                msg: DispatchItem<BCodec>,
+                _: Ctx<'_, Self>,
+            ) -> Result<Option<Bytes>, Self::Error> {
+                match msg {
+                    DispatchItem::Item(msg) => {
+                        self.1
+                            .borrow_mut()
+                            .push(String::from_utf8_lossy(&msg).into_owned());
+                        return Ok(Some(msg));
+                    }
+                    DispatchItem::Stop(Reason::Io(err)) => self
+                        .1
+                        .borrow_mut()
+                        .push(format!("stop: {:?}", err.map(|e| e.kind()))),
+                    _ => (),
+                }
+                Ok(None)
+            }
+        }
+
+        let gate = Condition::new();
+        let items = Rc::new(RefCell::new(Vec::new()));
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        // the response to the first frame fails while the service is paused
+        client.write_error(io::Error::new(io::ErrorKind::ConnectionReset, "reset"));
+        client.write("1234567887654321");
+
+        let (disp, _) = Dispatcher::debug(
+            Io::from(server),
+            BCodec(8),
+            Srv(gate.clone(), items.clone()),
+        );
+        spawn(async move {
+            let _ = disp.await;
+        });
+        sleep(Millis(25)).await;
+
+        gate.notify(());
+        sleep(Millis(50)).await;
+
+        assert_eq!(
+            *items.borrow(),
+            ["12345678", "87654321", "stop: Some(ConnectionReset)"]
+        );
     }
 
     #[ntex::test]
