@@ -62,6 +62,11 @@ where
         }
     }
 
+    /// Returns `true` if the stream is decoded.
+    pub(crate) fn is_decoding(&self) -> bool {
+        self.inner.is_some()
+    }
+
     /// Construct decoder based on the `Content-Encoding` header.
     ///
     /// A missing or invalid header selects the `Identity` encoding.

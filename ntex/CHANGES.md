@@ -8,6 +8,8 @@
 * `web::ws::start()` sends the handshake error response and closes the connection when the
   handshake of an upgrade request fails, before the handler's response was sent
 
+* HTTP client removes `Content-Encoding` and `Content-Length` headers of a decompressed response
+
 * HTTP/1 validates a partially received chunk-size line incrementally, the line was parsed
   from the start on every read
 

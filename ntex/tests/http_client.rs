@@ -411,10 +411,28 @@ async fn test_client_gzip_encoding() {
     // client request
     let response = srv.post("/").send().await.unwrap();
     assert!(response.status().is_success());
+    // headers of the encoded payload are removed
+    assert!(!response.headers().contains_key("content-encoding"));
+    assert!(!response.headers().contains_key("content-length"));
 
     // read response
     let bytes = response.body().await.unwrap();
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
+
+    // encoded payload
+    let response = srv.post("/").no_decompress().send().await.unwrap();
+    assert_eq!(response.headers().get("content-encoding").unwrap(), "gzip");
+    let len: usize = response
+        .headers()
+        .get("content-length")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes.len(), len);
+    assert_ne!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
 #[ntex::test]
