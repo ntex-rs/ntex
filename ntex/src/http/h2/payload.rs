@@ -129,13 +129,6 @@ impl PayloadSender {
         }
     }
 
-    /// Associates the payload with its HTTP/2 stream.
-    pub fn set_stream(&self, stream: Option<h2::Stream>) {
-        if let Some(shared) = self.inner.upgrade() {
-            shared.stream.set(stream);
-        }
-    }
-
     /// Registers a callback that runs if the payload is dropped while the sender is alive.
     pub(crate) fn on_drop(&self, f: impl FnOnce() + 'static) {
         if let Some(shared) = self.inner.upgrade() {
@@ -164,7 +157,6 @@ struct Inner {
     items: RefCell<VecDeque<Bytes>>,
     task: LocalWaker,
     io_task: LocalWaker,
-    stream: Cell<Option<h2::Stream>>,
     on_drop: Cell<Option<Box<dyn FnOnce()>>>,
 }
 
@@ -174,7 +166,6 @@ impl Inner {
             cap: Cell::new(Some(cap)),
             flags: Cell::new(Flags::empty()),
             err: Cell::new(None),
-            stream: Cell::new(None),
             items: RefCell::new(VecDeque::new()),
             task: LocalWaker::new(),
             io_task: LocalWaker::new(),
