@@ -3,7 +3,7 @@
     clippy::no_effect,
     clippy::missing_safety_doc
 )]
-use std::{cmp, error::Error, fmt, hash, str, str::FromStr};
+use std::{cmp, fmt, hash, str, str::FromStr};
 
 use ntex_bytes::{ByteString, Bytes, BytesMut};
 
@@ -22,7 +22,7 @@ pub struct HeaderValue {
     is_sensitive: bool,
 }
 
-#[derive(thiserror::Error, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[derive(thiserror::Error, Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[error("Invalid HTTP header value")]
 /// A possible error when converting a `HeaderValue` from a string or byte
 /// slice.
@@ -34,7 +34,8 @@ pub struct InvalidHeaderValue {
 ///
 /// Header field values may contain opaque bytes, in which case it is not
 /// possible to represent the value as a string.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(thiserror::Error, Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[error("failed to convert header to a str")]
 pub struct ToStrError {
     _priv: (),
 }
@@ -499,22 +500,6 @@ fn is_valid(b: u8) -> bool {
     b >= 32 && b != 127 || b == b'\t'
 }
 
-impl fmt::Debug for InvalidHeaderValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("InvalidHeaderValue")
-            // skip _priv noise
-            .finish()
-    }
-}
-
-impl Error for ToStrError {}
-
-impl fmt::Display for ToStrError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("failed to convert header to a str")
-    }
-}
-
 // ===== Hash / PartialEq / PartialOrd =====
 
 // Must agree with `PartialEq`, which ignores the sensitive flag
@@ -849,8 +834,8 @@ mod tests {
         sensitive.set_sensitive(true);
         assert_eq!("Sensitive", format!("{sensitive:?}"));
 
-        let s = format!("{:?}", InvalidHeaderValue { _priv: {} });
-        assert_eq!(s, "InvalidHeaderValue");
+        let s = format!("{}", InvalidHeaderValue { _priv: {} });
+        assert_eq!(s, "Invalid HTTP header value");
 
         let s = format!("{}", ToStrError { _priv: {} });
         assert_eq!(s, "failed to convert header to a str");
