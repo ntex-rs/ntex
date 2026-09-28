@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* HTTP/1 replaces informational (1xx) service responses, except `101 Switching Protocols`,
+  with `500 Internal Server Error`, an interim response was sent as the final response
+
 * HTTP/1 limits the trailer section of chunked payloads to 4KiB, trailer fields were
   skipped without limit
 

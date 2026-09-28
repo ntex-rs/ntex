@@ -5,10 +5,12 @@ use crate::io::{Decoded, Filter, Io, IoStatusUpdate, RecvError};
 use crate::service::pipeline::{Pipeline, PipelineCall};
 use crate::{channel::bstream, util::clone_io_error};
 
-use crate::http::body::{BodySize, MessageBody, ResponseBody};
+use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::error::{DispatchError, PayloadError, ResponseError};
 use crate::http::message::CurrentIo;
-use crate::http::{self, config::DispatcherConfig, request::Request, response::Response};
+use crate::http::{
+    self, StatusCode, config::DispatcherConfig, request::Request, response::Response,
+};
 
 use super::control::{Control, ControlAck, ControlResult, ServiceDisconnectReason};
 use super::decoder::{PayloadDecoder, PayloadItem, PayloadType};
@@ -349,7 +351,23 @@ where
         }
     }
 
-    fn send_response(&mut self, mut msg: Response<()>, body: ResponseBody<B>) -> State<F, B, Err> {
+    fn send_response(
+        &mut self,
+        mut msg: Response<()>,
+        mut body: ResponseBody<B>,
+    ) -> State<F, B, Err> {
+        // an interim response cannot complete the request, the next response would
+        // be taken as its final response, see RFC 9110 section 15.2
+        let status = msg.status();
+        if status.is_informational() && status != StatusCode::SWITCHING_PROTOCOLS {
+            log::error!(
+                "{}: Informational response {status} is not supported, sending 500",
+                self.io.tag()
+            );
+            msg = Response::new(StatusCode::INTERNAL_SERVER_ERROR).drop_body();
+            body = ResponseBody::Other(Body::Empty);
+        }
+
         log::trace!(
             "{}: Sending response: {:?} body: {:?}",
             self.io.tag(),
@@ -1609,6 +1627,47 @@ mod tests {
             );
             assert_eq!(calls.get(), 1, "{req:?}");
             assert!(client.is_server_dropped(), "{req:?}");
+        }
+    }
+
+    #[crate::rt_test]
+    async fn test_informational_response_is_replaced() {
+        for status in [
+            StatusCode::CONTINUE,
+            StatusCode::PROCESSING,
+            StatusCode::EARLY_HINTS,
+        ] {
+            let (client, server) = IoTest::create();
+            client.remote_buffer_cap(4096);
+            spawn_h1(server, move |req: Request| async move {
+                if req.path() == "/test1" {
+                    Ok::<_, io::Error>(Response::builder(status).body("interim"))
+                } else {
+                    Ok(Response::Ok().build())
+                }
+            });
+
+            client.write(
+                "GET /test1 HTTP/1.1\r\nhost: a\r\n\r\n\
+                 GET /test2 HTTP/1.1\r\nhost: a\r\n\r\n",
+            );
+            sleep(Millis(100)).await;
+
+            let buf = client.read_any();
+            assert!(
+                buf.starts_with(b"HTTP/1.1 500 Internal Server Error\r\ncontent-length: 0\r\n"),
+                "{status} {buf:?}"
+            );
+            assert_eq!(
+                buf.windows(9).filter(|w| w == b"HTTP/1.1 ").count(),
+                2,
+                "{status} {buf:?}"
+            );
+            assert!(!buf.windows(7).any(|w| w == b"interim"), "{status} {buf:?}");
+            assert!(
+                buf.windows(15).any(|w| w == b"HTTP/1.1 200 OK"),
+                "{status} {buf:?}"
+            );
         }
     }
 

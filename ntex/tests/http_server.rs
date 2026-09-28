@@ -597,7 +597,7 @@ async fn test_content_length() {
     let value = HeaderValue::from_static("0");
 
     {
-        // the client skips interim responses, check raw `1xx` responses
+        // interim `1xx` responses cannot be final, they are replaced with 500
         for i in [1, 3] {
             for method in ["GET", "HEAD"] {
                 let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
@@ -607,8 +607,8 @@ async fn test_content_length() {
                 let mut data = vec![0; 1024];
                 let n = stream.read(&mut data).unwrap();
                 let data = String::from_utf8_lossy(&data[..n]).to_lowercase();
-                assert!(data.starts_with("http/1.1 1"), "{data:?}");
-                assert!(!data.contains("content-length"), "{data:?}");
+                assert!(data.starts_with("http/1.1 500"), "{data:?}");
+                assert!(data.contains("content-length: 0\r\n"), "{data:?}");
             }
         }
 
