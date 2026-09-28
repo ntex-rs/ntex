@@ -206,13 +206,8 @@ impl<St> WebResponseError<St, DefaultError> for http::error::ContentTypeError {
 impl<St> WebResponseError<St, DefaultError> for client::error::ClientError {
     fn error_response(&self, _: &St) -> HttpResponse {
         let status = match &self {
-            client::error::ClientError::Connect(err) => {
-                if matches!(err, client::error::ConnectError::Timeout) {
-                    StatusCode::GATEWAY_TIMEOUT
-                } else {
-                    StatusCode::BAD_REQUEST
-                }
-            }
+            client::error::ClientError::Connect(_) => StatusCode::BAD_REQUEST,
+            client::error::ClientError::Timeout => StatusCode::GATEWAY_TIMEOUT,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
 

@@ -3,9 +3,6 @@ use std::{error::Error as StdError, io, ops::Deref, rc::Rc};
 
 use serde_json::error::Error as JsonError;
 
-#[cfg(feature = "openssl")]
-use tls_openssl::ssl::{Error as SslError, HandshakeError};
-
 use crate::error::ErrorDiagnostic;
 use crate::http::error::{DecodeError, EncodeError, HttpError, PayloadError};
 use crate::util::{Either, clone_io_error};
@@ -90,16 +87,6 @@ pub enum ConnectError {
     #[error("SSL is not supported")]
     SslIsNotSupported,
 
-    /// OpenSSL configuration or protocol error.
-    #[cfg(feature = "openssl")]
-    #[error("{0}")]
-    SslError(#[source] Rc<SslError>),
-
-    /// OpenSSL handshake error.
-    #[cfg(feature = "openssl")]
-    #[error("{0}")]
-    SslHandshakeError(#[source] Rc<dyn StdError>),
-
     /// The host name could not be resolved.
     #[error("Failed resolving hostname: {0}")]
     Resolver(
@@ -111,10 +98,6 @@ pub enum ConnectError {
     /// No DNS records were found.
     #[error("No dns records found for the input")]
     NoRecords,
-
-    /// Establishing the connection timed out.
-    #[error("Timeout while establishing connection")]
-    Timeout,
 
     /// The connector disconnected.
     #[error("Connector has been disconnected")]
@@ -129,13 +112,8 @@ impl ErrorDiagnostic for ConnectError {
     fn signature(&self) -> &'static str {
         match self {
             ConnectError::SslIsNotSupported => "ntex-client-connect-SslIsNotSupported",
-            #[cfg(feature = "openssl")]
-            ConnectError::SslError(_) => "ntex-client-connect-SslError",
-            #[cfg(feature = "openssl")]
-            ConnectError::SslHandshakeError(_) => "ntex-client-connect-SslHandshakeError",
             ConnectError::Resolver(..) => "ntex-client-connect-Resolver",
             ConnectError::NoRecords => "ntex-client-connect-NoRecords",
-            ConnectError::Timeout => "ntex-client-connect-Timeout",
             ConnectError::Disconnected(_) => "ntex-client-connect-Disconnected",
             ConnectError::Unresolved => "ntex-client-connect-Unresolved",
         }
@@ -146,13 +124,8 @@ impl Clone for ConnectError {
     fn clone(&self) -> Self {
         match self {
             ConnectError::SslIsNotSupported => ConnectError::SslIsNotSupported,
-            #[cfg(feature = "openssl")]
-            ConnectError::SslError(e) => ConnectError::SslError(e.clone()),
-            #[cfg(feature = "openssl")]
-            ConnectError::SslHandshakeError(e) => ConnectError::SslHandshakeError(e.clone()),
             ConnectError::Resolver(e) => ConnectError::Resolver(clone_io_error(e)),
             ConnectError::NoRecords => ConnectError::NoRecords,
-            ConnectError::Timeout => ConnectError::Timeout,
             ConnectError::Disconnected(e) => {
                 if let Some(e) = e {
                     ConnectError::Disconnected(Some(clone_io_error(e)))
@@ -165,13 +138,6 @@ impl Clone for ConnectError {
     }
 }
 
-#[cfg(feature = "openssl")]
-impl From<SslError> for ConnectError {
-    fn from(err: SslError) -> Self {
-        ConnectError::SslError(Rc::new(err))
-    }
-}
-
 impl From<crate::connect::ConnectError> for ConnectError {
     fn from(err: crate::connect::ConnectError) -> ConnectError {
         match err {
@@ -181,13 +147,6 @@ impl From<crate::connect::ConnectError> for ConnectError {
             crate::connect::ConnectError::Unresolved => ConnectError::Unresolved,
             crate::connect::ConnectError::Io(e) => ConnectError::Disconnected(Some(e)),
         }
-    }
-}
-
-#[cfg(feature = "openssl")]
-impl<T: StdError + 'static> From<HandshakeError<T>> for ConnectError {
-    fn from(err: HandshakeError<T>) -> ConnectError {
-        ConnectError::SslHandshakeError(Rc::new(err))
     }
 }
 
@@ -250,7 +209,7 @@ pub enum ClientError {
         #[source]
         DecodeError,
     ),
-    /// Http error
+    /// Invalid request header
     #[error("{0}")]
     Http(
         #[from]
@@ -267,11 +226,8 @@ pub enum ClientError {
     /// Response took too long
     #[error("Timeout while waiting for response")]
     Timeout,
-    /// Tunnels are not supported for http2 connection
-    #[error("Tunnels are not supported for http2 connection")]
-    TunnelNotSupported,
-    /// Error sending request body
-    #[error("Error sending request body {0}")]
+    /// Other error, for example a request body or query serialization error
+    #[error("{0}")]
     Error(
         #[from]
         #[source]
@@ -289,7 +245,6 @@ impl Clone for ClientError {
             ClientError::Http(err) => ClientError::Http(*err),
             ClientError::H2(err) => ClientError::H2(*err),
             ClientError::Timeout => ClientError::Timeout,
-            ClientError::TunnelNotSupported => ClientError::TunnelNotSupported,
             ClientError::Error(err) => ClientError::Error(err.clone()),
             ClientError::Send(err) => ClientError::Send(crate::util::clone_io_error(err)),
         }
@@ -324,8 +279,7 @@ impl ErrorDiagnostic for ClientError {
             ClientError::Request(_) => "ntex-client-Request",
             ClientError::Response(_) => "ntex-client-Response",
             ClientError::Timeout => "ntex-client-Timeout",
-            ClientError::TunnelNotSupported => "ntex-client-TunnelNotSupported",
-            ClientError::Error(_) => "ntex-client-SendBody",
+            ClientError::Error(_) => "ntex-client-Error",
             ClientError::H2(err) => err.signature(),
         }
     }

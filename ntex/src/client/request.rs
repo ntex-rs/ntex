@@ -81,7 +81,7 @@ impl ClientRequest {
     {
         match Uri::try_from(uri) {
             Ok(uri) => self.request.head.uri = uri,
-            Err(e) => self.err = Some(ClientError::Http(e.into())),
+            Err(e) => self.err = Some(InvalidUrl::Http(e.into()).into()),
         }
         self
     }
@@ -406,7 +406,7 @@ impl ClientRequest {
 
             match Uri::from_parts(parts) {
                 Ok(uri) => self.request.head.uri = uri,
-                Err(e) => self.err = Some(ClientError::Http(e.into())),
+                Err(e) => self.err = Some(InvalidUrl::Http(e.into()).into()),
             }
         }
 
@@ -774,6 +774,23 @@ mod tests {
             .set_bearer_auth("b")
             .unwrap();
         assert_eq!(cfg.headers().get_all(header::AUTHORIZATION).count(), 1);
+    }
+
+    #[crate::rt_test]
+    async fn client_invalid_url() {
+        let req = Client::new().get("http://local host/");
+        assert!(matches!(
+            req.err,
+            Some(ClientError::Url(InvalidUrl::Http(_)))
+        ));
+        let err = req.send().await.unwrap_err();
+        assert!(matches!(
+            err.into_error(),
+            ClientError::Url(InvalidUrl::Http(_))
+        ));
+
+        let req = Client::new().get("/").header("bad header", "1");
+        assert!(matches!(req.err, Some(ClientError::Http(_))));
     }
 
     #[crate::rt_test]

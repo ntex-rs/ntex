@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+* Web renders HTTP client `ClientError::Timeout` as `504 Gateway Timeout`
+
+* HTTP client reports an invalid request URI as `ClientError::Url(InvalidUrl::Http)`
+
+* Remove unused HTTP client error variants `ClientError::TunnelNotSupported`,
+  `ConnectError::Timeout`, `ConnectError::SslError` and `ConnectError::SslHandshakeError`
+
 * WebSocket handshake accepts only version 13, a rejected version is answered with
   `Sec-WebSocket-Version: 13`
 
