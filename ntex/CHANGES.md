@@ -8,6 +8,9 @@
 * HTTP/1 treats every '101 Switching Protocols' response as an upgrade, a response without
   `.upgrade()` kept the connection reading HTTP/1 requests
 
+* HTTP/1 merges small chunks of a chunked payload into payload chunks of up to 16KiB, a
+  payload of tiny chunks was buffered as a separate item per chunk
+
 * HTTP/1 sends `content-length: 0` for responses without a body size, such responses
   were sent without framing headers
 

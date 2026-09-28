@@ -462,11 +462,9 @@ mod tests {
                 .iter(),
         );
 
+        // small chunks are merged
         let msg = pl.decode(&mut buf).unwrap().unwrap();
-        assert_eq!(msg, PayloadItem::Chunk(Bytes::from_static(b"data")));
-
-        let msg = pl.decode(&mut buf).unwrap().unwrap();
-        assert_eq!(msg, PayloadItem::Chunk(Bytes::from_static(b"line")));
+        assert_eq!(msg, PayloadItem::Chunk(Bytes::from_static(b"dataline")));
 
         let msg = pl.decode(&mut buf).unwrap().unwrap();
         assert_eq!(msg, PayloadItem::Eof);

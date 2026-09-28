@@ -803,6 +803,12 @@ const MAX_CHUNK_EXTENSIONS: u32 = 16 * 1024;
 /// for a chunked payload.
 const MAX_CHUNK_TRAILERS: u32 = 4 * 1024;
 
+/// Chunks smaller than this are merged with the following chunks.
+const SMALL_CHUNK: usize = 1024;
+
+/// Maximum size of merged chunks.
+const MAX_MERGED_CHUNKS: usize = 16 * 1024;
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 struct ChunkedLimits {
     /// chunk-size line bytes beyond the size digits received so far
@@ -865,7 +871,17 @@ impl Decoder for PayloadDecoder {
                 }
             }
             Kind::Chunked(ref mut state, ref mut size, ref mut limits) => {
+                // small chunks are merged into one item, the payload of tiny
+                // chunks would be buffered as many items
+                let mut data: Option<Bytes> = None;
+                let mut merged: Option<BytesMut> = None;
                 let result = loop {
+                    // a large chunk is not copied into merged chunks
+                    if *state == ChunkedState::Body && *size >= SMALL_CHUNK as u64 && data.is_some()
+                    {
+                        break Ok(None);
+                    }
+
                     let mut buf = None;
                     // advances the chunked state
                     *state = match state.step(src, size, limits, &mut buf) {
@@ -880,14 +896,38 @@ impl Decoder for PayloadDecoder {
                     }
 
                     if let Some(buf) = buf {
-                        break Ok(Some(PayloadItem::Chunk(buf)));
+                        let len = if let Some(first) = &data {
+                            let m = merged.get_or_insert_with(|| {
+                                let cap = first.len() + buf.len() + src.len();
+                                let mut m = BytesMut::with_capacity(cap.min(MAX_MERGED_CHUNKS));
+                                m.extend_from_slice(first);
+                                m
+                            });
+                            m.extend_from_slice(&buf);
+                            m.len()
+                        } else {
+                            let len = buf.len();
+                            data = Some(buf);
+                            len
+                        };
+                        if len >= SMALL_CHUNK && (merged.is_none() || len >= MAX_MERGED_CHUNKS) {
+                            break Ok(None);
+                        }
                     }
                     if src.is_empty() {
                         break Ok(None);
                     }
                 };
                 self.kind.set(kind);
-                result
+
+                // the end of the payload is reported on the next call
+                match result {
+                    Ok(_) if data.is_some() => {
+                        let data = merged.map_or_else(|| data.unwrap(), BytesMut::freeze);
+                        Ok(Some(PayloadItem::Chunk(data)))
+                    }
+                    result => result,
+                }
             }
             Kind::Eof => {
                 if src.is_empty() {
@@ -2090,11 +2130,7 @@ mod tests {
         buf.extend(b"4\r\ndata\r\n4\r\nline\r\n0\r\n\r\n");
         assert_eq!(
             pl.decode(&mut buf).unwrap().unwrap().chunk().as_ref(),
-            b"data"
-        );
-        assert_eq!(
-            pl.decode(&mut buf).unwrap().unwrap().chunk().as_ref(),
-            b"line"
+            b"dataline"
         );
         assert!(pl.decode(&mut buf).unwrap().unwrap().eof());
     }
@@ -2117,9 +2153,7 @@ mod tests {
                 .iter(),
         );
         let msg = pl.decode(&mut buf).unwrap().unwrap();
-        assert_eq!(msg.chunk().as_ref(), b"data");
-        let msg = pl.decode(&mut buf).unwrap().unwrap();
-        assert_eq!(msg.chunk().as_ref(), b"line");
+        assert_eq!(msg.chunk().as_ref(), b"dataline");
         let msg = pl.decode(&mut buf).unwrap().unwrap();
         assert!(msg.eof());
 
@@ -2288,11 +2322,90 @@ mod tests {
 
         buf.extend(b"4;test\r\ndata\r\n4\r\nline\r\n0\r\n\r\n"); // test: test\r\n\r\n")
         let chunk = pl.decode(&mut buf).unwrap().unwrap().chunk();
-        assert_eq!(chunk, Bytes::from_static(b"data"));
-        let chunk = pl.decode(&mut buf).unwrap().unwrap().chunk();
-        assert_eq!(chunk, Bytes::from_static(b"line"));
+        assert_eq!(chunk, Bytes::from_static(b"dataline"));
         let msg = pl.decode(&mut buf).unwrap().unwrap();
         assert!(msg.eof());
+    }
+
+    fn decode_all(pl: &PayloadDecoder, buf: &mut BytesMut) -> Vec<Bytes> {
+        let mut items = Vec::new();
+        while let Some(item) = pl.decode(buf).unwrap() {
+            match item {
+                PayloadItem::Chunk(chunk) => items.push(chunk),
+                PayloadItem::Eof => break,
+            }
+        }
+        items
+    }
+
+    #[test]
+    fn test_small_chunks_are_merged() {
+        let (pl, mut buf) = chunked_payload();
+        for _ in 0..40_000 {
+            buf.extend_from_slice(b"1\r\na\r\n");
+        }
+        buf.extend_from_slice(b"0\r\n\r\n");
+        let items = decode_all(&pl, &mut buf);
+        let lens: Vec<_> = items.iter().map(Bytes::len).collect();
+        assert_eq!(
+            lens,
+            [
+                MAX_MERGED_CHUNKS,
+                MAX_MERGED_CHUNKS,
+                40_000 - 2 * MAX_MERGED_CHUNKS
+            ]
+        );
+        assert!(items.iter().all(|c| c.iter().all(|b| *b == b'a')));
+        assert!(buf.is_empty());
+
+        // merged chunks are returned before the end of the payload
+        let (pl, mut buf) = chunked_payload();
+        buf.extend_from_slice(b"2\r\nab\r\n2\r\ncd\r\n0\r\n\r\n");
+        assert_eq!(
+            pl.decode(&mut buf).unwrap(),
+            Some(PayloadItem::Chunk("abcd".into()))
+        );
+        assert_eq!(pl.decode(&mut buf).unwrap(), Some(PayloadItem::Eof));
+
+        // incomplete chunk
+        let (pl, mut buf) = chunked_payload();
+        buf.extend_from_slice(b"2\r\nab\r\n5\r\ncd");
+        assert_eq!(
+            pl.decode(&mut buf).unwrap(),
+            Some(PayloadItem::Chunk("abcd".into()))
+        );
+        assert_eq!(pl.decode(&mut buf).unwrap(), None);
+        buf.extend_from_slice(b"efg\r\n0\r\n\r\n");
+        assert_eq!(
+            pl.decode(&mut buf).unwrap(),
+            Some(PayloadItem::Chunk("efg".into()))
+        );
+        assert_eq!(pl.decode(&mut buf).unwrap(), Some(PayloadItem::Eof));
+    }
+
+    #[test]
+    fn test_large_chunks_are_not_merged() {
+        let large = "x".repeat(SMALL_CHUNK);
+        let (pl, mut buf) = chunked_payload();
+        buf.extend_from_slice(format!("3\r\nabc\r\n{:X}\r\n{large}\r\n", large.len()).as_bytes());
+        buf.extend_from_slice(
+            format!("{:X}\r\n{large}\r\n2\r\nxy\r\n0\r\n\r\n", large.len()).as_bytes(),
+        );
+        let range = buf.as_ptr() as usize..buf.as_ptr() as usize + buf.len();
+
+        let items = decode_all(&pl, &mut buf);
+        assert_eq!(
+            items,
+            [
+                Bytes::from("abc"),
+                large.clone().into(),
+                large.into(),
+                "xy".into()
+            ]
+        );
+        // large chunks are not copied
+        assert!(range.contains(&(items[1].as_ptr() as usize)));
+        assert!(range.contains(&(items[2].as_ptr() as usize)));
     }
 
     fn chunked_payload() -> (PayloadDecoder, BytesMut) {
