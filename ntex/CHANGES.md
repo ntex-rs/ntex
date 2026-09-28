@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* HTTP/1 rejects chunk extensions that contain control characters other than HTAB, a bare
+  LF in a chunk extension was accepted
+
 * HTTP/1 rejects requests with `400 Bad Request` if they contain multiple or invalid `Host`
   headers, and HTTP/1.1 requests without `Host`, use `HttpServiceConfig::set_host_validation()`
   to disable

@@ -864,6 +864,16 @@ impl ChunkedState {
         match httparse::parse_chunk_size(rdr) {
             Ok(httparse::Status::Complete((pos, sz))) => {
                 let digits = rdr.iter().take_while(|b| b.is_ascii_hexdigit()).count();
+                // the parser accepts any octet in extensions, a bare LF or other
+                // control characters could be treated as line end by other parsers
+                if rdr[digits..pos - 2]
+                    .iter()
+                    .any(|&b| b != b'\t' && (b < b' ' || b == 0x7f))
+                {
+                    return Poll::Ready(Err(DecodeError::InvalidInput(
+                        "Invalid chunk size line: Invalid Extension",
+                    )));
+                }
                 // the line ends with CRLF
                 *ext = ext.saturating_add((pos - digits - 2) as u32);
                 if *ext > MAX_CHUNK_EXTENSIONS {
@@ -1958,6 +1968,31 @@ mod tests {
         let reader = MessageDecoder::<Request>::default();
         let (_, pl) = reader.decode(&mut buf).unwrap().unwrap();
         (pl.unwrap(), buf)
+    }
+
+    #[test]
+    fn test_chunk_extension_control_chars() {
+        for line in [
+            &b"4;a\nX\r\n"[..],
+            b"4;a=\"\nX\"\r\n",
+            b"4;a\x00\r\n",
+            b"4;a\x7f\r\n",
+            b"4 \n;a\r\n",
+        ] {
+            let (pl, mut buf) = chunked_payload();
+            buf.extend_from_slice(line);
+            buf.extend_from_slice(b"data\r\n0\r\n\r\n");
+            assert!(
+                matches!(pl.decode(&mut buf), Err(DecodeError::InvalidInput(_))),
+                "{line:?}"
+            );
+        }
+
+        let (pl, mut buf) = chunked_payload();
+        buf.extend_from_slice(b"4 ;a=\"b\tc \x80\";d\t\r\ndata\r\n0\r\n\r\n");
+        let chunk = pl.decode(&mut buf).unwrap().unwrap().chunk();
+        assert_eq!(chunk, Bytes::from_static(b"data"));
+        assert!(pl.decode(&mut buf).unwrap().unwrap().eof());
     }
 
     #[test]
