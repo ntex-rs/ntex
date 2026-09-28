@@ -245,22 +245,10 @@ impl Stream for PlStream {
     }
 }
 
-fn release_connection(
-    io: IoBoxed,
-    force_close: bool,
-    created: Instant,
-    mut pool: Option<Acquired>,
-) {
-    if force_close || !io.is_active() || io.is_read_eof() || io.with_read_dst(|buf| !buf.is_empty())
-    {
-        if let Some(mut pool) = pool.take() {
-            pool.release(Connection::new(ConnectionType::H1(io), created, None), true);
-        }
-    } else if let Some(mut pool) = pool.take() {
-        pool.release(
-            Connection::new(ConnectionType::H1(io), created, None),
-            false,
-        );
+fn release_connection(io: IoBoxed, force_close: bool, created: Instant, pool: Option<Acquired>) {
+    if let Some(pool) = pool {
+        let close = force_close || io.with_read_dst(|buf| !buf.is_empty());
+        pool.release(io, created, close);
     }
 }
 
