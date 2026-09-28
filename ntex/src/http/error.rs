@@ -107,6 +107,9 @@ pub enum DecodeError {
     /// A message head is too large to be reasonable.
     #[error("Message head is too large")]
     TooLarge(usize),
+    /// A request or status line exceeds the configured limit.
+    #[error("Request or status line is too long")]
+    StartLineTooLong(usize),
     /// A message reached EOF, but is not complete.
     #[error("Message is incomplete")]
     Incomplete,

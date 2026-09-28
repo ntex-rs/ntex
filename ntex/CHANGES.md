@@ -21,6 +21,14 @@
   headers, and HTTP/1.1 requests without `Host`, use `HttpServiceConfig::set_host_validation()`
   to disable
 
+* HTTP/1 limits the request or status line to 16KiB, configurable with
+  `HttpServiceConfig::set_max_start_line_size()`, a longer request line is rejected with
+  `414 URI Too Long`, add `DecodeError::StartLineTooLong`
+
+* HTTP/1 parses an incomplete request or status line again only when new data contains
+  a line end, and drops leading empty lines, before a start line sent in small pieces was
+  re-parsed on every read
+
 * Response body encoder ends the stream after an encoding error, before polling it again
   sent the remaining body uncompressed
 

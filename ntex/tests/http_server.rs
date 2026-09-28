@@ -1102,3 +1102,23 @@ async fn test_h2_request_body_dropped_after_response_resets_stream() {
         "request stream is not reset"
     );
 }
+
+#[ntex::test]
+async fn test_h1_request_line_too_long() {
+    let srv = test_server(async |_| {
+        HttpService::h1(async |_: Request| Ok::<_, io::Error>(Response::Ok().build()))
+    });
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let req = format!("GET /{} HTTP/1.1\r\n\r\n", "a".repeat(16 * 1024));
+    let _ = stream.write_all(req.as_bytes());
+    let mut data = vec![0; 1024];
+    let n = stream.read(&mut data).unwrap();
+    assert!(data[..n].starts_with(b"HTTP/1.1 414"));
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let req = format!("GET /{} HTTP/1.1\r\n\r\n", "a".repeat(16 * 1024 - 20));
+    let _ = stream.write_all(req.as_bytes());
+    let n = stream.read(&mut data).unwrap();
+    assert!(data[..n].starts_with(b"HTTP/1.1 200"));
+}

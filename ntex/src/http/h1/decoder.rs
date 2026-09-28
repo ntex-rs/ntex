@@ -26,6 +26,8 @@ struct Inner<T> {
     consumed: usize,
     /// number of parsed header lines of the current message
     headers: u16,
+    /// bytes of an incomplete start line already scanned
+    scanned: usize,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -63,6 +65,7 @@ impl<T: MessageType> MessageDecoder<T> {
                 hdr_st: httparse::State::default(),
                 consumed: 0,
                 headers: 0,
+                scanned: 0,
             }))),
         }
     }
@@ -82,6 +85,7 @@ impl<T: MessageType> Clone for MessageDecoder<T> {
                 val: None,
                 consumed: 0,
                 headers: 0,
+                scanned: 0,
                 hdr: httparse::Header::default(),
                 hdr_st: httparse::State::default(),
                 cfg: inner.cfg.clone(),
@@ -168,6 +172,7 @@ impl<T: MessageType> Decoder for MessageDecoder<T> {
             inner.hdr_st = httparse::State::default();
             inner.consumed = 0;
             inner.headers = 0;
+            inner.scanned = 0;
             self.hdrs.set(false);
         }
         self.inner.set(Some(inner));
@@ -181,25 +186,47 @@ impl<T: MessageType> MessageDecoder<T> {
         src: &mut BytesMut,
         inner: &mut Inner<T>,
     ) -> Result<Option<(T, PayloadType)>, DecodeError> {
-        let len = src.len();
-
-        if len > 0 {
+        if !src.is_empty() {
             self.hdrs.set(true);
         }
+
+        // an incomplete start line is parsed again only once new data contains
+        // its end, re-parsing it on every read is quadratic
         if inner.val.is_none() {
+            let skip = empty_lines(src);
+            if skip > 0 {
+                src.advance_to(skip);
+                inner.consumed += skip;
+                inner.scanned = inner.scanned.saturating_sub(skip);
+            }
+        }
+        let len = src.len();
+        let scanned = inner.scanned.min(len);
+        let max_line = inner.cfg.max_start_line_size;
+        if inner.val.is_none() && (scanned == 0 || src[scanned..].contains(&b'\n')) {
             let mut cache = BUF.with(|b| b.take().unwrap());
             let result = match T::decode(src, &mut cache) {
+                Poll::Ready(Ok(_)) if len - src.len() > max_line => {
+                    Err(DecodeError::StartLineTooLong(len - src.len()))
+                }
                 Poll::Ready(Ok(val)) => {
                     inner.st.version = val.msg_version();
                     inner.st.validate_host = T::REQUEST && inner.cfg.validate_host;
                     inner.val = Some(val);
+                    inner.scanned = 0;
                     Ok(())
                 }
                 Poll::Ready(Err(e)) => Err(e),
-                Poll::Pending => Ok(()),
+                Poll::Pending => {
+                    inner.scanned = len;
+                    Ok(())
+                }
             };
             BUF.with(move |b| b.set(Some(cache)));
             result?;
+        }
+        if inner.val.is_none() && len > max_line {
+            return Err(DecodeError::StartLineTooLong(len));
         }
 
         let (result, buf_size) = if inner.val.is_some() {
@@ -226,7 +253,7 @@ impl<T: MessageType> MessageDecoder<T> {
                 Poll::Ready(Err(e)) => (Err(e), 0),
             }
         } else {
-            (Ok(None), len)
+            (Ok(None), inner.consumed + len)
         };
 
         if buf_size > inner.cfg.max_buf_size {
@@ -1063,6 +1090,18 @@ impl ChunkedState {
     }
 }
 
+/// Returns the length of complete empty lines at the start of `buf`.
+fn empty_lines(buf: &[u8]) -> usize {
+    let mut pos = 0;
+    loop {
+        match &buf[pos..] {
+            [b'\n', ..] => pos += 1,
+            [b'\r', b'\n', ..] => pos += 2,
+            _ => return pos,
+        }
+    }
+}
+
 /// Checks for a `tchar`, see [RFC 9110 section 5.6.2](https://www.rfc-editor.org/rfc/rfc9110#section-5.6.2).
 fn is_tchar(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)
@@ -1131,6 +1170,112 @@ mod tests {
 
         buf.extend_from_slice(b"aaaaaaaaaaaaaaaaaaaa: v\r\n\r\n");
         assert!(matches!(reader.decode(&mut buf), Err(DecodeError::Header)));
+    }
+
+    #[test]
+    fn test_partial_start_line_is_not_reparsed() {
+        let reader = MessageDecoder::<Request>::default();
+        let mut buf = BytesMut::from("GET /");
+        assert!(reader.decode(&mut buf).unwrap().is_none());
+
+        // no line end, the start line is not parsed again
+        buf.extend_from_slice(b"\x01");
+        assert!(reader.decode(&mut buf).unwrap().is_none());
+        buf.extend_from_slice(b"a b");
+        assert!(reader.decode(&mut buf).unwrap().is_none());
+
+        // line end, the invalid start line is parsed
+        buf.extend_from_slice(b"\r\n");
+        assert!(reader.decode(&mut buf).is_err());
+
+        // byte by byte
+        let reader = MessageDecoder::<Request>::default();
+        let mut buf = BytesMut::new();
+        for b in b"GET /test/path HTTP/1.1\r\nhost: a\r\n\r" {
+            buf.extend_from_slice(&[*b]);
+            assert!(reader.decode(&mut buf).unwrap().is_none());
+        }
+        buf.extend_from_slice(b"\n");
+        let req = reader.decode(&mut buf).unwrap().unwrap().0;
+        assert_eq!(req.path(), "/test/path");
+        assert_eq!(req.headers().get("host").unwrap(), "a");
+    }
+
+    #[test]
+    fn test_leading_empty_lines() {
+        let reader = MessageDecoder::<Request>::default();
+        let mut buf = BytesMut::new();
+        for _ in 0..10 {
+            buf.extend_from_slice(b"\r\n");
+            assert!(reader.decode(&mut buf).unwrap().is_none());
+            assert!(buf.is_empty());
+        }
+        buf.extend_from_slice(b"\nGET /test HTTP/1.1\r\n\r\n");
+        let req = reader.decode(&mut buf).unwrap().unwrap().0;
+        assert_eq!(req.path(), "/test");
+
+        // empty lines count towards the buffer limit
+        let cfg: SharedCfg = SharedCfg::new("test")
+            .add(HttpServiceConfig::new().set_max_buf_size(10))
+            .into();
+        let reader = MessageDecoder::<Request>::new(cfg.get());
+        let mut buf = BytesMut::new();
+        let mut res = Ok(None);
+        for _ in 0..6 {
+            buf.extend_from_slice(b"\r\n");
+            res = reader.decode(&mut buf);
+            if res.is_err() {
+                break;
+            }
+        }
+        assert_eq!(res.err(), Some(DecodeError::TooLarge(12)));
+    }
+
+    #[test]
+    fn test_max_start_line_size() {
+        let cfg: SharedCfg = SharedCfg::new("test")
+            .add(HttpServiceConfig::new().set_max_start_line_size(32))
+            .into();
+
+        // the limit includes the line end
+        let line = format!("GET /{} HTTP/1.1\r\n", "a".repeat(16));
+        assert_eq!(line.len(), 32);
+        let reader = MessageDecoder::<Request>::new(cfg.get());
+        let mut buf = BytesMut::from(format!("{line}\r\n").as_str());
+        assert!(reader.decode(&mut buf).unwrap().is_some());
+
+        let reader = MessageDecoder::<Request>::new(cfg.get());
+        let mut buf = BytesMut::from(format!("GET /{} HTTP/1.1\r\n\r\n", "a".repeat(17)).as_str());
+        assert_eq!(
+            reader.decode(&mut buf).err(),
+            Some(DecodeError::StartLineTooLong(33))
+        );
+
+        // incomplete line
+        let reader = MessageDecoder::<Request>::new(cfg.get());
+        let mut buf = BytesMut::from("GET /");
+        assert!(reader.decode(&mut buf).unwrap().is_none());
+        buf.extend_from_slice("a".repeat(27).as_bytes());
+        assert!(reader.decode(&mut buf).unwrap().is_none());
+        buf.extend_from_slice(b"a");
+        assert_eq!(
+            reader.decode(&mut buf).err(),
+            Some(DecodeError::StartLineTooLong(33))
+        );
+
+        // headers are not limited
+        let reader = MessageDecoder::<Request>::new(cfg.get());
+        let mut buf =
+            BytesMut::from(format!("GET / HTTP/1.1\r\nx: {}\r\n\r\n", "a".repeat(64)).as_str());
+        assert!(reader.decode(&mut buf).unwrap().is_some());
+
+        // default limit
+        let reader = MessageDecoder::<Request>::default();
+        let mut buf = BytesMut::from(format!("GET /{}", "a".repeat(16 * 1024)).as_str());
+        assert!(matches!(
+            reader.decode(&mut buf),
+            Err(DecodeError::StartLineTooLong(_))
+        ));
     }
 
     #[test]

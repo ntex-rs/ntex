@@ -42,8 +42,9 @@ impl From<Option<usize>> for KeepAlive {
 /// Configuration shared by HTTP/1 and HTTP/2 server services.
 ///
 /// The default configuration enables persistent HTTP/1 connections with a
-/// five-second idle timeout, allows 96 headers, limits the message-head buffer
-/// to 64 KiB, and applies a one-second initial request-header timeout.
+/// five-second idle timeout, allows 96 headers, limits the request or status
+/// line to 16 KiB and the message-head buffer to 64 KiB, and applies a
+/// one-second initial request-header timeout.
 pub struct HttpServiceConfig {
     pub(super) keep_alive: Seconds,
     pub(super) ka_enabled: bool,
@@ -51,6 +52,7 @@ pub struct HttpServiceConfig {
     pub(super) validate_host: bool,
     pub(super) max_headers: u16,
     pub(super) max_buf_size: usize,
+    pub(super) max_start_line_size: usize,
     pub(super) headers_read_rate: Option<FrameReadRate>,
     pub(super) payload_read_rate: Option<FrameReadRate>,
     pub(super) write_timeout: Seconds,
@@ -101,6 +103,7 @@ impl HttpServiceConfig {
             }),
             max_headers: 96,
             max_buf_size: 64 * 1024,
+            max_start_line_size: 16 * 1024,
             headers_vec: false,
             validate_host: true,
             payload_read_rate: None,
@@ -129,6 +132,18 @@ impl HttpServiceConfig {
     /// are rejected. The default is 64 KiB.
     pub fn set_max_buf_size(mut self, val: usize) -> Self {
         self.max_buf_size = val;
+        self
+    }
+
+    #[must_use]
+    /// Sets the maximum size of an HTTP/1 request or status line.
+    ///
+    /// The line, including its line end, may occupy up to and including this
+    /// number of bytes. Requests with a longer request line are rejected with
+    /// `414 URI Too Long`. The line is also limited by
+    /// [`set_max_buf_size`](Self::set_max_buf_size). The default is 16 KiB.
+    pub fn set_max_start_line_size(mut self, val: usize) -> Self {
+        self.max_start_line_size = val;
         self
     }
 
