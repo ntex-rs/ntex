@@ -707,7 +707,12 @@ mod tests {
     fn h2_conn(pool: &ConnectionPool) -> (H2Client, IoTest) {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(64 * 1024);
-        let io = nio::Io::new(client, SharedCfg::default());
+        // the peer never acknowledges SETTINGS, which must not close the
+        // connection while a test waits
+        let cfg = SharedCfg::new("H2")
+            .add(h2::ServiceConfig::new().set_settings_timeout(Seconds::ZERO))
+            .build();
+        let io = nio::Io::new(client, cfg);
         let client = h2::client::SimpleClient::new(
             IoBoxed::from(io),
             Scheme::HTTP,
