@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* HTTP client `JsonBody` returns `PayloadError::UnknownLength` for an invalid `Content-Length`
+  header, as `MessageBody` does
+
 * HTTP client `ClientRequest::timeout(Millis::ZERO)` disables the response timeout for the request,
   as `ClientConfig::set_response_timeout(Millis::ZERO)` does, it used the client-wide timeout
 
