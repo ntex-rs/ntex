@@ -10,6 +10,11 @@ use crate::util::{Bytes, Stream};
 
 const INPLACE: usize = 2049;
 
+/// Decoding stops at this output size, the rest of the input is decoded by the next poll.
+///
+/// A single write or flush of the decoder adds at most 32KiB, so chunks stay below 96KiB.
+const MAX_CHUNK_SIZE: usize = 32 * 1024;
+
 /// Payload stream decoder.
 ///
 /// Decompresses a stream of payload chunks. `gzip` and `deflate` are decoded;
@@ -20,9 +25,16 @@ pub struct Decoder<S> {
     inner: Option<ContentDecoder>,
     stream: S,
     eof: bool,
+    /// The stream is decoded
+    decode: bool,
+    /// Input that is not decoded yet
     #[debug(skip)]
-    fut: Option<BlockingResult<Result<(Option<Bytes>, ContentDecoder), io::Error>>>,
+    pending: Option<Bytes>,
+    #[debug(skip)]
+    fut: Option<BlockingResult<DecodeResult>>,
 }
+
+type DecodeResult = Result<(Option<Bytes>, ContentDecoder, Bytes), io::Error>;
 
 impl<S> Decoder<S>
 where
@@ -41,10 +53,12 @@ where
             _ => None,
         };
         Decoder {
+            decode: inner.is_some(),
             inner,
             stream,
             fut: None,
             eof: false,
+            pending: None,
         }
     }
 
@@ -75,19 +89,61 @@ where
     type Item = Result<Bytes, PayloadError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let result = self.poll_decoded(cx);
+        if let Poll::Ready(Some(Err(_))) = result
+            && self.decode
+            && self.inner.is_none()
+        {
+            // the decoder state is lost, the stream must not continue with raw data
+            self.eof = true;
+            self.fut = None;
+            self.pending = None;
+        }
+        result
+    }
+}
+
+impl<S> Decoder<S>
+where
+    S: Stream<Item = Result<Bytes, PayloadError>> + Unpin,
+{
+    fn poll_decoded(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, PayloadError>>> {
         loop {
             if let Some(ref mut fut) = self.fut {
-                let (chunk, decoder) = match Pin::new(fut).poll(cx) {
+                let (chunk, decoder, rest) = match Pin::new(fut).poll(cx) {
                     Poll::Ready(Ok(Ok(item))) => item,
                     Poll::Ready(Ok(Err(e))) => return Poll::Ready(Some(Err(e.into()))),
                     Poll::Ready(Err(e)) => return Poll::Ready(Some(Err(e.into()))),
                     Poll::Pending => return Poll::Pending,
                 };
                 self.inner = Some(decoder);
-                self.fut.take();
+                self.fut = None;
+                if !rest.is_empty() {
+                    self.pending = Some(rest);
+                }
                 if let Some(chunk) = chunk {
                     return Poll::Ready(Some(Ok(chunk)));
                 }
+            }
+
+            if let Some(mut data) = self.pending.take() {
+                let mut decoder = self.inner.take().unwrap();
+                if data.len() < INPLACE {
+                    let chunk = decoder.feed_data(&mut data)?;
+                    self.inner = Some(decoder);
+                    if !data.is_empty() {
+                        self.pending = Some(data);
+                    }
+                    if let Some(chunk) = chunk {
+                        return Poll::Ready(Some(Ok(chunk)));
+                    }
+                } else {
+                    self.fut = Some(spawn_blocking(move || {
+                        let chunk = decoder.feed_data(&mut data)?;
+                        Ok((chunk, decoder, data))
+                    }));
+                }
+                continue;
             }
 
             if self.eof {
@@ -97,18 +153,9 @@ where
             match Pin::new(&mut self.stream).poll_next(cx) {
                 Poll::Ready(Some(Err(err))) => return Poll::Ready(Some(Err(err))),
                 Poll::Ready(Some(Ok(chunk))) => {
-                    if let Some(mut decoder) = self.inner.take() {
-                        if chunk.len() < INPLACE {
-                            let chunk = decoder.feed_data(&chunk)?;
-                            self.inner = Some(decoder);
-                            if let Some(chunk) = chunk {
-                                return Poll::Ready(Some(Ok(chunk)));
-                            }
-                        } else {
-                            self.fut = Some(spawn_blocking(move || {
-                                let chunk = decoder.feed_data(&chunk)?;
-                                Ok((chunk, decoder))
-                            }));
+                    if self.inner.is_some() {
+                        if !chunk.is_empty() {
+                            self.pending = Some(chunk);
                         }
                         continue;
                     }
@@ -126,10 +173,9 @@ where
                         Poll::Ready(None)
                     };
                 }
-                Poll::Pending => break,
+                Poll::Pending => return Poll::Pending,
             }
         }
-        Poll::Pending
     }
 }
 
@@ -158,24 +204,103 @@ impl ContentDecoder {
         }
     }
 
-    fn feed_data(&mut self, data: &Bytes) -> io::Result<Option<Bytes>> {
-        match self {
-            ContentDecoder::Gzip(decoder) => match decoder.write_all(data) {
-                Ok(()) => {
-                    decoder.flush()?;
-                    let b = decoder.get_mut().take();
-                    if b.is_empty() { Ok(None) } else { Ok(Some(b)) }
-                }
-                Err(e) => Err(e),
-            },
-            ContentDecoder::Deflate(decoder) => match decoder.write_all(data) {
-                Ok(()) => {
-                    decoder.flush()?;
-                    let b = decoder.get_mut().take();
-                    if b.is_empty() { Ok(None) } else { Ok(Some(b)) }
-                }
-                Err(e) => Err(e),
-            },
+    /// Decodes `data` until the output reaches `MAX_CHUNK_SIZE`.
+    ///
+    /// Decoded input is removed from `data`.
+    fn feed_data(&mut self, data: &mut Bytes) -> io::Result<Option<Bytes>> {
+        while !data.is_empty() && self.output_len() < MAX_CHUNK_SIZE {
+            let n = match self {
+                ContentDecoder::Gzip(decoder) => decoder.write(data)?,
+                ContentDecoder::Deflate(decoder) => decoder.write(data)?,
+            };
+            if n == 0 {
+                return Err(io::ErrorKind::WriteZero.into());
+            }
+            data.advance_to(n);
         }
+        if data.is_empty() {
+            match self {
+                ContentDecoder::Gzip(decoder) => decoder.flush()?,
+                ContentDecoder::Deflate(decoder) => decoder.flush()?,
+            }
+        }
+
+        let b = match self {
+            ContentDecoder::Gzip(decoder) => decoder.get_mut().take(),
+            ContentDecoder::Deflate(decoder) => decoder.get_mut().take(),
+        };
+        if b.is_empty() { Ok(None) } else { Ok(Some(b)) }
+    }
+
+    fn output_len(&self) -> usize {
+        match self {
+            ContentDecoder::Gzip(decoder) => decoder.get_ref().len(),
+            ContentDecoder::Deflate(decoder) => decoder.get_ref().len(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use flate2::{Compression, write::GzEncoder, write::ZlibEncoder};
+    use futures_util::stream::{self, StreamExt};
+
+    use super::*;
+
+    const BOMB_SIZE: usize = 16 * 1024 * 1024;
+
+    fn bomb(encoding: ContentEncoding) -> Vec<u8> {
+        let data = vec![0u8; BOMB_SIZE];
+        if encoding == ContentEncoding::Gzip {
+            let mut e = GzEncoder::new(Vec::new(), Compression::best());
+            e.write_all(&data).unwrap();
+            e.finish().unwrap()
+        } else {
+            let mut e = ZlibEncoder::new(Vec::new(), Compression::best());
+            e.write_all(&data).unwrap();
+            e.finish().unwrap()
+        }
+    }
+
+    #[crate::rt_test]
+    async fn decoded_chunks_are_bounded() {
+        for encoding in [ContentEncoding::Gzip, ContentEncoding::Deflate] {
+            let compressed = bomb(encoding);
+            assert!(compressed.len() < 32 * 1024);
+
+            // a single chunk is decoded on the blocking pool, small chunks in place
+            for size in [compressed.len(), INPLACE - 1] {
+                let chunks: Vec<_> = compressed
+                    .chunks(size)
+                    .map(|c| Ok::<_, PayloadError>(Bytes::copy_from_slice(c)))
+                    .collect();
+                let mut decoder = Decoder::new(stream::iter(chunks), encoding);
+
+                let mut total = 0;
+                let mut max = 0;
+                while let Some(chunk) = decoder.next().await {
+                    let chunk = chunk.unwrap();
+                    assert!(chunk.iter().all(|b| *b == 0));
+                    max = max.max(chunk.len());
+                    total += chunk.len();
+                }
+                assert_eq!(total, BOMB_SIZE);
+                assert!(
+                    max <= 3 * MAX_CHUNK_SIZE,
+                    "{encoding:?} chunk of {max} bytes"
+                );
+            }
+        }
+    }
+
+    #[crate::rt_test]
+    async fn decoder_is_fused_after_error() {
+        let chunks = vec![
+            Ok::<_, PayloadError>(Bytes::from_static(b"not gzip data")),
+            Ok(Bytes::from_static(b"raw")),
+        ];
+        let mut decoder = Decoder::new(stream::iter(chunks), ContentEncoding::Gzip);
+        assert!(matches!(decoder.next().await, Some(Err(_))));
+        assert!(decoder.next().await.is_none());
     }
 }

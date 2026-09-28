@@ -23,6 +23,10 @@ impl Writer {
     fn take(&mut self) -> Bytes {
         self.buf.take()
     }
+
+    fn len(&self) -> usize {
+        self.buf.len()
+    }
 }
 
 impl io::Write for Writer {

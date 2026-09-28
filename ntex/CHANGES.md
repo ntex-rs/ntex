@@ -21,6 +21,11 @@
   headers, and HTTP/1.1 requests without `Host`, use `HttpServiceConfig::set_host_validation()`
   to disable
 
+* Payload decoder limits decompressed chunks to less than 96KiB, before a single compressed
+  chunk was decompressed at once and a small gzip or deflate body could allocate
+  gigabytes before payload size limits applied, the decoder ends the stream after
+  a decoding error
+
 * `Response::take()` copies the response head without extensions, before both responses
   shared the head and modifying either of them panicked
 
