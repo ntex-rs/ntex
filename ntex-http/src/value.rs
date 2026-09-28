@@ -5,7 +5,7 @@
 )]
 use std::{cmp, error::Error, fmt, hash, str, str::FromStr};
 
-use ntex_bytes::{ByteString, Bytes};
+use ntex_bytes::{ByteString, Bytes, BytesMut};
 
 /// Represents an HTTP header field value.
 ///
@@ -454,6 +454,24 @@ impl TryFrom<Vec<u8>> for HeaderValue {
     }
 }
 
+impl TryFrom<Bytes> for HeaderValue {
+    type Error = InvalidHeaderValue;
+
+    #[inline]
+    fn try_from(bytes: Bytes) -> Result<Self, Self::Error> {
+        HeaderValue::from_shared(bytes)
+    }
+}
+
+impl TryFrom<BytesMut> for HeaderValue {
+    type Error = InvalidHeaderValue;
+
+    #[inline]
+    fn try_from(bytes: BytesMut) -> Result<Self, Self::Error> {
+        HeaderValue::from_shared(bytes)
+    }
+}
+
 impl From<HeaderValue> for http::header::HeaderValue {
     #[inline]
     fn from(t: HeaderValue) -> Self {
@@ -792,6 +810,13 @@ mod tests {
     #[test]
     fn test_try_from() {
         HeaderValue::try_from(vec![127]).unwrap_err();
+
+        let hdr = HeaderValue::try_from(Bytes::from_static(b"upgrade")).unwrap();
+        assert_eq!(hdr, "upgrade");
+        HeaderValue::try_from(Bytes::from_static(b"\n")).unwrap_err();
+        let hdr = HeaderValue::try_from(BytesMut::copy_from_slice(b"upgrade")).unwrap();
+        assert_eq!(hdr, "upgrade");
+        HeaderValue::try_from(BytesMut::copy_from_slice(b"\n")).unwrap_err();
     }
 
     #[test]

@@ -6,6 +6,8 @@
 
 * Remove FromIterator for HeaderMap, it split string values on commas and dropped invalid values
 
+* Add TryFrom<Bytes> and TryFrom<BytesMut> for HeaderValue
+
 ## [1.2.0] - 2026-05-02
 
 * Add BytePages support to Body
