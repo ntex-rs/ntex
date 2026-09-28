@@ -109,9 +109,25 @@ impl IoRef {
     /// Nothing enforces the signal: encoding continues to succeed while it is
     /// set. Producers that are not driven by a dispatcher should check this
     /// before encoding more, or the write buffer grows without bound. See
-    /// [`encode`](Self::encode).
+    /// [`encode`](Self::encode) and [`write_ready`](Self::write_ready).
     pub fn is_wr_backpressure(&self) -> bool {
         self.0.flags.is_wr_backpressure()
+    }
+
+    /// Waits until the write buffer can accept more output.
+    ///
+    /// Completes immediately unless write back-pressure is enabled. While it
+    /// is, waits until the outstanding output falls to the release threshold
+    /// (half of the high watermark), the level at which the dispatcher
+    /// releases back-pressure. Any number of tasks can wait at once, the
+    /// write task wakes them without involving the dispatcher.
+    ///
+    /// Producers that are not driven by a dispatcher can await this before
+    /// encoding more, so the write buffer does not grow without bound.
+    ///
+    /// Fails once the connection is closing or closed.
+    pub async fn write_ready(&self) -> io::Result<()> {
+        self.0.write_ready().await
     }
 
     /// Gracefully closes the connection.

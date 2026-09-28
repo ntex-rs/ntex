@@ -2,6 +2,9 @@
 
 ## [4.1.0] - Unreleased
 
+* Add `IoRef::write_ready()`, waits until write back-pressure is released, any number of
+  producers can wait, the write task wakes them without the dispatcher
+
 * Fix busy loop during graceful shutdown, a pending read woke the read task
   while filters were shutting down, until the shutdown deadline
 
