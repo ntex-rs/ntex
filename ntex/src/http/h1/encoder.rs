@@ -135,8 +135,9 @@ pub(crate) trait MessageType: Sized {
             }
         }
 
-        // optimized date header, set_date writes \r\n
-        if has_date {
+        // optimized date header, set_date writes \r\n, a request does not
+        // need a date, see RFC 9110 section 6.6.1
+        if has_date || self.status().is_none() {
             // msg eof
             dst.extend_from_slice(b"\r\n");
         } else {
@@ -684,6 +685,22 @@ mod tests {
             encode(Method::GET, "http://example.com:8080/path?q=1"),
             "GET /path?q=1 HTTP/1.1"
         );
+    }
+
+    #[crate::rt_test]
+    async fn test_request_without_date() {
+        let mut bytes = BytePages::default();
+        let head = RequestHead::default();
+        let _ = head.encode_headers(
+            &mut bytes,
+            Version::HTTP_11,
+            BodySize::None,
+            ConnectionType::KeepAlive,
+            None,
+        );
+        let data = String::from_utf8(bytes.take().unwrap().to_vec()).unwrap();
+        assert!(!data.contains("date:"), "{data:?}");
+        assert!(data.ends_with("\r\n\r\n"), "{data:?}");
     }
 
     #[crate::rt_test]

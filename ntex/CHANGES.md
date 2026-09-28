@@ -11,6 +11,8 @@
 
 * HTTP/1 does not restart the keep-alive timer for every request of a persistent connection
 
+* HTTP/1 client does not add a `Date` header to requests
+
 * HTTP/1 client does not use chunked coding for HTTP/1.0 requests, a streaming request body
   without chunked coding and `Content-Length` header fails with new `EncodeError::UnknownLength`,
   the body was sent without framing
