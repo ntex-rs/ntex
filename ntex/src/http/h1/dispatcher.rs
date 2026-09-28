@@ -1113,7 +1113,7 @@ mod tests {
             DispatcherConfig::default(),
         );
 
-        client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\n\r\n");
+        client.write("POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 4\r\n\r\n");
         sleep(Millis(50)).await;
         h1.inner.io.notify_timeout();
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
@@ -1150,7 +1150,7 @@ mod tests {
             DispatcherConfig::default(),
         );
 
-        client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\n\r\n");
+        client.write("POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 4\r\n\r\n");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
 
@@ -1192,7 +1192,7 @@ mod tests {
             DispatcherConfig::default(),
         );
 
-        client.write("GET /first HTTP/1.1\r\n\r\n");
+        client.write("GET /first HTTP/1.1\r\nhost: localhost\r\n\r\n");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert_eq!(h1.inner.timers.active, Timer::KeepAlive);
@@ -1255,7 +1255,7 @@ mod tests {
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert!(h1.inner.io.is_active());
 
-        client.write("GET / HTTP/1.1\r\n");
+        client.write("GET / HTTP/1.1\r\nhost: localhost\r\n");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert_eq!(h1.inner.timers.active, Timer::ClientTimeout);
@@ -1281,7 +1281,7 @@ mod tests {
         client.remote_buffer_cap(1024);
         let mut h1 = keepalive_h1(server);
 
-        client.write("GET /first HTTP/1.1\r\n\r\nGET /next HTTP/1.1\r\n");
+        client.write("GET /first HTTP/1.1\r\nhost: localhost\r\n\r\nGET /next HTTP/1.1\r\nhost: localhost\r\n");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         sleep(Millis(50)).await;
@@ -1350,7 +1350,7 @@ mod tests {
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert_eq!(h1.inner.timers.active, Timer::ClientTimeout);
 
-        let partial = "GET / HTTP/1.1\r\n";
+        let partial = "GET / HTTP/1.1\r\nhost: localhost\r\n";
         client.write(partial);
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
@@ -1373,7 +1373,7 @@ mod tests {
         let mut h1 = client_timeout_h1(server);
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
-        client.write("GET / HTTP/1.1\r\n");
+        client.write("GET / HTTP/1.1\r\nhost: localhost\r\n");
         sleep(Millis(50)).await;
         h1.inner.io.notify_timeout();
 
@@ -1409,7 +1409,7 @@ mod tests {
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert!(h1.inner.io.is_active());
 
-        client.write("GET / HTTP/1.1\r\n\r\n");
+        client.write("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
         sleep(Millis(50)).await;
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
 
@@ -1544,14 +1544,14 @@ mod tests {
         let mut decoder = ClientCodec::new(true, SharedCfg::default().get());
         spawn_h1(server, async |_| Ok::<_, io::Error>(Response::Ok().build()));
 
-        client.write("GET /test1 HTTP/1.1\r\n\r\n");
+        client.write("GET /test1 HTTP/1.1\r\nhost: localhost\r\n\r\n");
 
         let mut buf = BytesMut::from(&client.read().await.unwrap()[..]);
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(!client.is_server_dropped());
 
-        client.write("GET /test2 HTTP/1.1\r\n\r\n");
-        client.write("GET /test3 HTTP/1.1\r\n\r\n");
+        client.write("GET /test2 HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        client.write("GET /test3 HTTP/1.1\r\nhost: localhost\r\n\r\n");
 
         let mut buf = BytesMut::from(&client.read().await.unwrap()[..]);
         assert!(load(&mut decoder, &mut buf).status.is_success());
@@ -1567,7 +1567,7 @@ mod tests {
     async fn test_pipeline_after_close() {
         for (req, res) in [
             (
-                "GET /test1 HTTP/1.1\r\nconnection: close\r\n\r\n",
+                "GET /test1 HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n",
                 "HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n",
             ),
             (
@@ -1575,7 +1575,7 @@ mod tests {
                 "HTTP/1.0 200 OK\r\ncontent-length: 0\r\n",
             ),
             (
-                "POST /test1 HTTP/1.1\r\nconnection: close\r\ncontent-length: 4\r\n\r\nbody",
+                "POST /test1 HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\ncontent-length: 4\r\n\r\nbody",
                 "HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n",
             ),
         ] {
@@ -1595,7 +1595,9 @@ mod tests {
             });
 
             // the next request is pipelined behind a non-persistent request
-            client.write(format!("{req}GET /test2 HTTP/1.1\r\n\r\n"));
+            client.write(format!(
+                "{req}GET /test2 HTTP/1.1\r\nhost: localhost\r\n\r\n"
+            ));
             sleep(Millis(100)).await;
 
             let buf = client.read_any();
@@ -1653,6 +1655,35 @@ mod tests {
     }
 
     #[crate::rt_test]
+    async fn test_invalid_host_rejected() {
+        for req in [
+            "GET /test HTTP/1.1\r\n\r\n",
+            "GET /test HTTP/1.1\r\nhost: a\r\nhost: b\r\n\r\n",
+            "GET /test HTTP/1.1\r\nhost: user@a\r\n\r\n",
+        ] {
+            let (client, server) = IoTest::create();
+            client.remote_buffer_cap(4096);
+            let calls = Rc::new(Cell::new(0));
+            let calls2 = calls.clone();
+            spawn_h1(server, move |_| {
+                calls2.set(calls2.get() + 1);
+                async { Ok::<_, io::Error>(Response::Ok().build()) }
+            });
+
+            client.write(req);
+            sleep(Millis(100)).await;
+
+            let buf = client.read_any();
+            assert!(
+                buf.starts_with(b"HTTP/1.1 400 Bad Request\r\n"),
+                "{req:?} {buf:?}"
+            );
+            assert_eq!(calls.get(), 0, "{req:?}");
+            assert!(client.is_server_dropped(), "{req:?}");
+        }
+    }
+
+    #[crate::rt_test]
     async fn test_pipeline_with_payload() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
@@ -1664,7 +1695,7 @@ mod tests {
             Ok::<_, io::Error>(Response::Ok().build())
         });
 
-        client.write("GET /test1 HTTP/1.1\r\ncontent-length: 5\r\n\r\n");
+        client.write("GET /test1 HTTP/1.1\r\nhost: localhost\r\ncontent-length: 5\r\n\r\n");
         sleep(Millis(50)).await;
         client.write("xxxxx");
 
@@ -1672,7 +1703,7 @@ mod tests {
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(!client.is_server_dropped());
 
-        client.write("GET /test2 HTTP/1.1\r\n\r\n");
+        client.write("GET /test2 HTTP/1.1\r\nhost: localhost\r\n\r\n");
 
         let mut buf = BytesMut::from(&client.read().await.unwrap()[..]);
         assert!(load(&mut decoder, &mut buf).status.is_success());
@@ -1693,16 +1724,16 @@ mod tests {
             Ok::<_, io::Error>(Response::Ok().build())
         });
 
-        client.write("GET /test HTTP/1.1\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
 
         let mut buf = BytesMut::from(&client.read().await.unwrap()[..]);
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(!client.is_server_dropped());
 
-        client.write("GET /test HTTP/1.1\r\n\r\n");
-        client.write("GET /test HTTP/1.1\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
         sleep(Millis(50)).await;
-        client.write("GET /test HTTP/1.1\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
 
         let mut buf = BytesMut::from(&client.read().await.unwrap()[..]);
         assert!(load(&mut decoder, &mut buf).status.is_success());
@@ -1735,9 +1766,9 @@ mod tests {
         });
 
         client.remote_buffer_cap(1024);
-        client.write("GET /test HTTP/1.1\r\n\r\n");
-        client.write("GET /test HTTP/1.1\r\n\r\n");
-        client.write("GET /test HTTP/1.1\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
         client.close().await;
         assert!(client.is_server_dropped());
 
@@ -1778,7 +1809,7 @@ mod tests {
             .take(70_000)
             .map(char::from)
             .collect::<String>();
-        client.write("GET /test HTTP/1.1\r\nContent-Length: ");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\nContent-Length: ");
         client.write(data);
         sleep(Millis(50)).await;
 
@@ -1813,7 +1844,7 @@ mod tests {
             Ok::<_, io::Error>(Response::Ok().build())
         });
 
-        client.write("GET /test HTTP/1.1\r\nContent-Length: 1048576\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\nContent-Length: 1048576\r\n\r\n");
         sleep(Millis(50)).await;
 
         // buf must be consumed
@@ -1861,7 +1892,7 @@ mod tests {
             Rc::default(),
         );
 
-        client.write("GET / HTTP/1.1\r\n\r\n");
+        client.write("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert!(h1.inner.io.is_wr_backpressure());
@@ -1885,7 +1916,7 @@ mod tests {
             payload.clone(),
         );
 
-        client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\n\r\nb");
+        client.write("POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 4\r\n\r\nb");
         let res = timeout(Millis(5000), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
         assert!(res.unwrap().is_ok());
 
@@ -1924,7 +1955,7 @@ mod tests {
         client.remote_buffer_cap(0);
         let mut h1 = write_timeout_h1(server, HttpServiceConfig::new(), Rc::default());
 
-        client.write("GET / HTTP/1.1\r\n\r\n");
+        client.write("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert_eq!(h1.inner.timers.active, Timer::Stopped);
@@ -1949,7 +1980,7 @@ mod tests {
             payload.clone(),
         );
 
-        client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\n\r\nb");
+        client.write("POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 4\r\n\r\nb");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
@@ -1992,7 +2023,7 @@ mod tests {
             DispatcherConfig::default(),
         );
 
-        client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\n\r\nb");
+        client.write("POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 4\r\n\r\nb");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert_eq!(h1.inner.timers.active, Timer::Payload);
@@ -2054,7 +2085,7 @@ mod tests {
 
         // do not allow to write to socket
         client.remote_buffer_cap(0);
-        client.write("GET /test HTTP/1.1\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
 
@@ -2107,7 +2138,7 @@ mod tests {
             Ok::<_, io::Error>(Response::Ok().message_body(Stream(false)))
         });
 
-        client.write("GET /test HTTP/1.1\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
 
@@ -2275,7 +2306,7 @@ mod tests {
             DispatcherConfig::default(),
         );
 
-        client.write("POST / HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\n");
+        client.write("POST / HTTP/1.1\r\nhost: localhost\r\ntransfer-encoding: chunked\r\n\r\n");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
 
@@ -2333,7 +2364,7 @@ mod tests {
         );
         crate::rt::spawn(h1);
 
-        client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\nexpect: 100-continue\r\n\r\n");
+        client.write("POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 4\r\nexpect: 100-continue\r\n\r\n");
         // an expired payload timer would respond with an error or close
         let buf = client.read().await.unwrap();
         assert_eq!(&buf[..], b"HTTP/1.1 100 Continue\r\n\r\n");
@@ -2380,7 +2411,7 @@ mod tests {
             DispatcherConfig::default(),
         );
 
-        client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\nexpect: 100-continue\r\n\r\n");
+        client.write("POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 4\r\nexpect: 100-continue\r\n\r\n");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         sleep(Millis(50)).await;
@@ -2429,7 +2460,7 @@ mod tests {
             DispatcherConfig::default(),
         );
 
-        client.write("POST / HTTP/1.1\r\ncontent-length: 10\r\n\r\nbody");
+        client.write("POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 10\r\n\r\nbody");
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
 
         client.close().await;
@@ -2475,7 +2506,9 @@ mod tests {
             DispatcherConfig::default(),
         );
 
-        client.write("POST / HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\ninvalid\r\n");
+        client.write(
+            "POST / HTTP/1.1\r\nhost: localhost\r\ntransfer-encoding: chunked\r\n\r\ninvalid\r\n",
+        );
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
         assert_eq!(requests.load(Ordering::Relaxed), 0);
@@ -2527,7 +2560,7 @@ mod tests {
             DispatcherConfig::default(),
         );
 
-        client.write("POST / HTTP/1.1\r\ncontent-length: 10\r\n\r\nbody");
+        client.write("POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 10\r\n\r\nbody");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
 
@@ -2556,7 +2589,7 @@ mod tests {
             }
         });
 
-        client.write("POST / HTTP/1.1\r\ncontent-length: 10\r\n\r\nbody");
+        client.write("POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 10\r\n\r\nbody");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
 
@@ -2593,7 +2626,7 @@ mod tests {
             }
         });
 
-        client.write("POST / HTTP/1.1\r\ncontent-length: 10\r\n\r\nbody");
+        client.write("POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 10\r\n\r\nbody");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
 
@@ -2625,7 +2658,9 @@ mod tests {
             }
         });
 
-        client.write("POST / HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\ninvalid\r\n");
+        client.write(
+            "POST / HTTP/1.1\r\nhost: localhost\r\ntransfer-encoding: chunked\r\n\r\ninvalid\r\n",
+        );
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
         sleep(Millis(50)).await;
         assert_eq!(mark.load(Ordering::Relaxed), 1);
@@ -2635,7 +2670,7 @@ mod tests {
     async fn test_service_error() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
-        client.write("GET /test HTTP/1.1\r\ncontent-length:512\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\ncontent-length:512\r\n\r\n");
 
         let mut h1 = h1(server, |_| {
             Box::pin(async { Err::<Response<()>, _>(io::Error::other("error")) })
@@ -2704,7 +2739,7 @@ mod tests {
         );
         crate::rt::spawn(disp);
 
-        client.write("GET /test HTTP/1.1\r\nContent-Length: 1048576\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\nContent-Length: 1048576\r\n\r\n");
         sleep(Millis(50)).await;
 
         // send partial data to server, 1200 bytes per second exceeds the
@@ -2729,7 +2764,7 @@ mod tests {
     async fn test_unconsumed_payload() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
-        client.write("GET /test HTTP/1.1\r\ncontent-length:512\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\ncontent-length:512\r\n\r\n");
 
         let mut h1 = h1(server, async move |_| {
             Ok::<_, io::Error>(Response::Ok().body("TEST"))

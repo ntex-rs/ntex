@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+* HTTP/1 rejects requests with `400 Bad Request` if they contain multiple or invalid `Host`
+  headers, and HTTP/1.1 requests without `Host`, use `HttpServiceConfig::set_host_validation()`
+  to disable
+
 * HTTP/1 ignores `Expect` and `Upgrade` in HTTP/1.0 requests, no `100 Continue` is
   sent to HTTP/1.0 clients
 

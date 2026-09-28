@@ -48,6 +48,7 @@ pub struct HttpServiceConfig {
     pub(super) keep_alive: Seconds,
     pub(super) ka_enabled: bool,
     pub(super) headers_vec: bool,
+    pub(super) validate_host: bool,
     pub(super) max_headers: u16,
     pub(super) max_buf_size: usize,
     pub(super) headers_read_rate: Option<FrameReadRate>,
@@ -101,6 +102,7 @@ impl HttpServiceConfig {
             max_headers: 96,
             max_buf_size: 64 * 1024,
             headers_vec: false,
+            validate_host: true,
             payload_read_rate: None,
             write_timeout: Seconds::ZERO,
             config: CfgContext::default(),
@@ -231,6 +233,21 @@ impl HttpServiceConfig {
     /// The normal header map remains populated. This is disabled by default.
     pub fn set_headers_vec(mut self, enabled: bool) -> Self {
         self.headers_vec = enabled;
+        self
+    }
+
+    #[must_use]
+    /// Enables validation of the HTTP/1 `Host` request header.
+    ///
+    /// When enabled, requests are rejected with `400 Bad Request` if they
+    /// contain more than one `Host` header or a `Host` value that is not a
+    /// valid host and optional port. HTTP/1.1 requests without a `Host`
+    /// header are rejected as well, see
+    /// [RFC 9112 section 3.2](https://www.rfc-editor.org/rfc/rfc9112#section-3.2).
+    /// An empty `Host` value is accepted. This setting does not affect HTTP/2.
+    /// It is enabled by default.
+    pub fn set_host_validation(mut self, enabled: bool) -> Self {
+        self.validate_host = enabled;
         self
     }
 

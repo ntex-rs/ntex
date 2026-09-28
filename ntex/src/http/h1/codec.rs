@@ -263,7 +263,7 @@ mod tests {
         ] {
             for size in [BodySize::Sized(3), BodySize::Stream] {
                 let codec = Codec::new(0, cfg.get());
-                let mut buf = BytesMut::from("GET / HTTP/1.1\r\n\r\n");
+                let mut buf = BytesMut::from("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
                 codec.decode(&mut buf).unwrap().unwrap();
 
                 let mut out = BytePages::default();
@@ -331,7 +331,7 @@ mod tests {
         assert!(!keepalive);
 
         let (data, keepalive) = encode_stream(
-            "GET / HTTP/1.1\r\n\r\n",
+            "GET / HTTP/1.1\r\nhost: localhost\r\n\r\n",
             Response::with_body(StatusCode::OK, ()),
         );
         assert!(data.contains("transfer-encoding: chunked\r\n"), "{data:?}");
@@ -340,7 +340,7 @@ mod tests {
 
         let mut res = Response::with_body(StatusCode::OK, ());
         res.head_mut().no_chunking(true);
-        let (data, keepalive) = encode_stream("GET / HTTP/1.1\r\n\r\n", res);
+        let (data, keepalive) = encode_stream("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n", res);
         assert!(data.contains("connection: close\r\n"), "{data:?}");
         assert!(data.ends_with("\r\n\r\nabc"), "{data:?}");
         assert!(!keepalive);
@@ -354,7 +354,7 @@ mod tests {
         assert!(format!("{codec:?}").contains("h1::Codec"));
 
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              transfer-encoding: chunked\r\n\r\n",
         );
         let (req, pl) = codec.decode(&mut buf).unwrap().unwrap();
@@ -365,7 +365,7 @@ mod tests {
 
         buf.extend(
             b"4\r\ndata\r\n4\r\nline\r\n0\r\n\r\n\
-               POST /test2 HTTP/1.1\r\n\
+               POST /test2 HTTP/1.1\r\nhost: localhost\r\n\
                transfer-encoding: chunked\r\n\r\n"
                 .iter(),
         );
@@ -386,7 +386,7 @@ mod tests {
 
         let codec = Codec::new(0, cfg.get());
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              connection: upgrade\r\n\r\n",
         );
         let _item = codec.decode(&mut buf).unwrap().unwrap();

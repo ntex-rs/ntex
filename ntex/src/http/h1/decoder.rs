@@ -1,7 +1,7 @@
 use std::{cell::Cell, fmt, task::Poll};
 
 use ntex_http::header::{HeaderName, HeaderValue};
-use ntex_http::{Method, StatusCode, Uri, Version, header};
+use ntex_http::{Method, StatusCode, Uri, Version, header, uri::Authority};
 use ntex_httparse::{self as httparse, HeaderParsed, Status};
 
 use super::encoder::is_bodyless;
@@ -191,6 +191,7 @@ impl<T: MessageType> MessageDecoder<T> {
             let result = match T::decode(src, &mut cache) {
                 Poll::Ready(Ok(val)) => {
                     inner.st.version = val.msg_version();
+                    inner.st.validate_host = T::REQUEST && inner.cfg.validate_host;
                     inner.val = Some(val);
                     Ok(())
                 }
@@ -266,7 +267,7 @@ impl PayloadLength {
 
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
-    struct Flags: u8 {
+    struct Flags: u16 {
         const HAS_UPGRADE  = 0b0001;
         const EXPECT       = 0b0010;
         const CHUNKED      = 0b0100;
@@ -275,6 +276,7 @@ bitflags::bitflags! {
         const CONN_KA      = 0b0010_0000;
         const CONN_UPGRADE = 0b0100_0000;
         const WS_UPGRADE   = 0b1000_0000;
+        const SEEN_HOST    = 0b0001_0000_0000;
     }
 }
 
@@ -283,6 +285,7 @@ pub(crate) struct State {
     flags: Flags,
     content_length: Option<u64>,
     version: Version,
+    validate_host: bool,
 }
 
 impl State {
@@ -406,6 +409,18 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
                 }
                 st.flags.insert(flags);
             }
+            // https://www.rfc-editor.org/rfc/rfc9112#section-3.2
+            header::HOST if st.validate_host => {
+                if st.flags.contains(Flags::SEEN_HOST) {
+                    log::trace!("multiple Host headers not allowed");
+                    return Err(DecodeError::Header);
+                }
+                if !is_valid_host(value.as_bytes()) {
+                    log::trace!("illegal Host: {value:?}");
+                    return Err(DecodeError::Header);
+                }
+                st.flags.insert(Flags::SEEN_HOST);
+            }
             header::UPGRADE | header::EXPECT if Self::ignore_http11_features(st) => (),
             header::UPGRADE => {
                 st.flags.insert(Flags::HAS_UPGRADE);
@@ -479,6 +494,13 @@ impl MessageType for Request {
         // see https://datatracker.ietf.org/doc/html/rfc1945#section-7.2.2
         if self.version() == Version::HTTP_10 && self.method() == Method::POST && length.is_none() {
             log::trace!("no Content-Length specified for HTTP/1.0 POST request");
+            return Err(DecodeError::Header);
+        }
+        if st.validate_host
+            && self.version() >= Version::HTTP_11
+            && !st.flags.contains(Flags::SEEN_HOST)
+        {
+            log::trace!("no Host header specified for HTTP/1.1 request");
             return Err(DecodeError::Header);
         }
 
@@ -591,6 +613,22 @@ impl MessageType for ResponseHead {
 ///
 /// The value is a comma-separated list of case-insensitive tokens, see
 /// [RFC 9110 section 7.6.1](https://www.rfc-editor.org/rfc/rfc9110#section-7.6.1).
+/// `Host = uri-host [ ":" port ]`, an empty value is allowed
+fn is_valid_host(val: &[u8]) -> bool {
+    if val.is_empty() {
+        return true;
+    }
+    if val.contains(&b'@') || Authority::try_from(val).is_err() {
+        return false;
+    }
+    // `Authority` does not validate the port
+    let host_end = val.iter().rposition(|&b| b == b']').unwrap_or(0);
+    val[host_end..]
+        .iter()
+        .position(|&b| b == b':')
+        .is_none_or(|pos| val[host_end + pos + 1..].iter().all(u8::is_ascii_digit))
+}
+
 fn connection_flags(val: &[u8]) -> Flags {
     let mut flags = Flags::empty();
     for token in val.split(|&b| b == b',') {
@@ -1018,7 +1056,7 @@ mod tests {
 
     #[test]
     fn test_parse() {
-        let mut buf = BytesMut::from("GET /test HTTP/1.1\r\n\r\n");
+        let mut buf = BytesMut::from("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
 
         let reader = MessageDecoder::<Request>::default();
         match reader.decode(&mut buf) {
@@ -1030,7 +1068,8 @@ mod tests {
             Ok(_) | Err(_) => unreachable!("Error during parsing http request"),
         }
 
-        let mut buf = BytesMut::from("GET /test HTTP/1.1\r\ncontent-length:512\r\n\r\n");
+        let mut buf =
+            BytesMut::from("GET /test HTTP/1.1\r\nhost: localhost\r\ncontent-length:512\r\n\r\n");
         let reader = MessageDecoder::<Request>::default();
         let req = reader.decode(&mut buf).unwrap().unwrap().0;
         assert_eq!(req.version(), Version::HTTP_11);
@@ -1073,14 +1112,14 @@ mod tests {
     #[test]
     fn test_conn_multiple_tokens() {
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              connection: te, trailers, close\r\n\r\n",
         );
         let req = parse_ready!(&mut buf);
         assert_eq!(req.head().connection_type(), ConnectionType::Close);
 
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              connection: closed\r\n\r\n",
         );
         let req = parse_ready!(&mut buf);
@@ -1088,7 +1127,7 @@ mod tests {
 
         // `close` in an earlier header is not overridden by a later one
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              connection: close\r\n\
              connection: keep-alive\r\n\r\n",
         );
@@ -1096,7 +1135,7 @@ mod tests {
         assert_eq!(req.head().connection_type(), ConnectionType::Close);
 
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              upgrade: websocket\r\n\
              connection: keep-alive, Upgrade\r\n\r\n",
         );
@@ -1111,7 +1150,7 @@ mod tests {
         let reader = MessageDecoder::<Request>::default();
         assert!(reader.decode(&mut buf).unwrap().is_none());
 
-        buf.extend(b".1\r\n\r\n");
+        buf.extend(b".1\r\nhost: localhost\r\n\r\n");
         let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
         assert_eq!(req.version(), Version::HTTP_11);
         assert_eq!(*req.method(), Method::PUT);
@@ -1260,7 +1299,9 @@ mod tests {
 
     #[test]
     fn test_parse_body() {
-        let mut buf = BytesMut::from("GET /test HTTP/1.1\r\nContent-Length: 4\r\n\r\nbody");
+        let mut buf = BytesMut::from(
+            "GET /test HTTP/1.1\r\nhost: localhost\r\nContent-Length: 4\r\n\r\nbody",
+        );
 
         let reader = MessageDecoder::<Request>::default();
         let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();
@@ -1276,7 +1317,9 @@ mod tests {
 
     #[test]
     fn test_parse_body_crlf() {
-        let mut buf = BytesMut::from("\r\nGET /test HTTP/1.1\r\nContent-Length: 4\r\n\r\nbody");
+        let mut buf = BytesMut::from(
+            "\r\nGET /test HTTP/1.1\r\nhost: localhost\r\nContent-Length: 4\r\n\r\nbody",
+        );
 
         let reader = MessageDecoder::<Request>::default();
         let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();
@@ -1292,7 +1335,7 @@ mod tests {
 
     #[test]
     fn test_parse_partial_eof() {
-        let mut buf = BytesMut::from("GET /test HTTP/1.1\r\n");
+        let mut buf = BytesMut::from("GET /test HTTP/1.1\r\nhost: localhost\r\n");
         let reader = MessageDecoder::<Request>::default();
         assert!(reader.decode(&mut buf).unwrap().is_none());
 
@@ -1305,7 +1348,7 @@ mod tests {
 
     #[test]
     fn test_headers_split_field() {
-        let mut buf = BytesMut::from("GET /test HTTP/1.1\r\n");
+        let mut buf = BytesMut::from("GET /test HTTP/1.1\r\nhost: localhost\r\n");
 
         let reader = MessageDecoder::<Request>::default();
         assert! { reader.decode(&mut buf).unwrap().is_none() }
@@ -1333,7 +1376,7 @@ mod tests {
     #[test]
     fn test_headers_multi_value() {
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              Set-Cookie: c1=cookie1\r\n\
              Set-Cookie: c2=cookie2\r\n\r\n",
         );
@@ -1359,7 +1402,7 @@ mod tests {
 
     #[test]
     fn test_conn_default_1_1() {
-        let mut buf = BytesMut::from("GET /test HTTP/1.1\r\n\r\n");
+        let mut buf = BytesMut::from("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
         let req = parse_ready!(&mut buf);
 
         assert_eq!(req.head().connection_type(), ConnectionType::KeepAlive);
@@ -1368,7 +1411,7 @@ mod tests {
     #[test]
     fn test_conn_close() {
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              connection: close\r\n\r\n",
         );
         let req = parse_ready!(&mut buf);
@@ -1376,7 +1419,7 @@ mod tests {
         assert_eq!(req.head().connection_type(), ConnectionType::Close);
 
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              connection: Close\r\n\r\n",
         );
         let req = parse_ready!(&mut buf);
@@ -1418,7 +1461,7 @@ mod tests {
     #[test]
     fn test_conn_keep_alive_1_1() {
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              connection: keep-alive\r\n\r\n",
         );
         let req = parse_ready!(&mut buf);
@@ -1440,7 +1483,7 @@ mod tests {
     #[test]
     fn test_conn_other_1_1() {
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              connection: other\r\n\r\n",
         );
         let req = parse_ready!(&mut buf);
@@ -1451,7 +1494,7 @@ mod tests {
     #[test]
     fn test_conn_upgrade() {
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              upgrade: websockets\r\n\
              connection: upgrade\r\n\r\n",
         );
@@ -1461,7 +1504,7 @@ mod tests {
         assert_eq!(req.head().connection_type(), ConnectionType::Upgrade);
 
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              upgrade: Websockets\r\n\
              connection: Upgrade\r\n\r\n",
         );
@@ -1495,7 +1538,7 @@ mod tests {
 
         // HTTP/1.1 is not affected
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              connection: upgrade\r\n\
              upgrade: websocket\r\n\
              expect: 100-continue\r\n\r\n",
@@ -1507,9 +1550,63 @@ mod tests {
     }
 
     #[test]
+    fn test_host_validation() {
+        let reader = MessageDecoder::<Request>::default();
+        for req in [
+            "GET / HTTP/1.1\r\n\r\n",
+            "GET / HTTP/1.1\r\nhost: a\r\nhost: a\r\n\r\n",
+            "GET / HTTP/1.0\r\nhost: a\r\nhost: b\r\n\r\n",
+            "GET / HTTP/1.1\r\nhost: user@example.com\r\n\r\n",
+            "GET / HTTP/1.1\r\nhost: exa mple.com\r\n\r\n",
+            "GET / HTTP/1.1\r\nhost: example.com/path\r\n\r\n",
+            "GET / HTTP/1.1\r\nhost: example.com:port\r\n\r\n",
+            "GET / HTTP/1.1\r\nhost: [::1]:x\r\n\r\n",
+            "GET / HTTP/1.1\r\nhost: a:1:2\r\n\r\n",
+        ] {
+            let mut buf = BytesMut::from(req);
+            assert_eq!(
+                reader.decode(&mut buf).err(),
+                Some(DecodeError::Header),
+                "{req:?}"
+            );
+        }
+
+        for req in [
+            "GET / HTTP/1.0\r\n\r\n",
+            "GET / HTTP/1.1\r\nhost:\r\n\r\n",
+            "GET / HTTP/1.1\r\nhost: example.com\r\n\r\n",
+            "GET / HTTP/1.1\r\nHost: example.com:8080\r\n\r\n",
+            "GET / HTTP/1.1\r\nhost: 127.0.0.1:80\r\n\r\n",
+            "GET / HTTP/1.1\r\nhost: [::1]:80\r\n\r\n",
+            "GET http://example.com/ HTTP/1.1\r\nhost: example.com\r\n\r\n",
+        ] {
+            let mut buf = BytesMut::from(req);
+            assert!(reader.decode(&mut buf).unwrap().is_some(), "{req:?}");
+        }
+
+        // validation can be disabled
+        let cfg: SharedCfg = SharedCfg::new("test")
+            .add(HttpServiceConfig::new().set_host_validation(false))
+            .into();
+        let reader = MessageDecoder::<Request>::new(cfg.get());
+        let mut buf = BytesMut::from(
+            "GET / HTTP/1.1\r\n\r\n\
+             GET / HTTP/1.1\r\nhost: a\r\nhost: user@b\r\n\r\n",
+        );
+        assert!(reader.decode(&mut buf).unwrap().is_some());
+        let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(req.headers().get_all(header::HOST).count(), 2);
+
+        // responses are not affected
+        let reader = MessageDecoder::<ResponseHead>::default();
+        let mut buf = BytesMut::from("HTTP/1.1 200 OK\r\nhost: a\r\nhost: b\r\n\r\n");
+        assert!(reader.decode(&mut buf).unwrap().is_some());
+    }
+
+    #[test]
     fn test_conn_upgrade_connect_method() {
         let mut buf = BytesMut::from(
-            "CONNECT /test HTTP/1.1\r\n\
+            "CONNECT /test HTTP/1.1\r\nhost: localhost\r\n\
              content-type: text/plain\r\n\r\n",
         );
         let req = parse_ready!(&mut buf);
@@ -1520,7 +1617,7 @@ mod tests {
     #[test]
     fn test_request_chunked() {
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              transfer-encoding: chunked\r\n\r\n",
         );
         let req = parse_ready!(&mut buf);
@@ -1533,7 +1630,7 @@ mod tests {
 
         // typo in chunked
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              transfer-encoding: chnked\r\n\r\n",
         );
         expect_parse_err!(&mut buf);
@@ -1542,7 +1639,7 @@ mod tests {
     #[test]
     fn test_headers_content_length_err_1() {
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              content-length: line\r\n\r\n",
         );
 
@@ -1552,7 +1649,7 @@ mod tests {
     #[test]
     fn test_headers_content_length_err_2() {
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              content-length: -1\r\n\r\n",
         );
 
@@ -1562,7 +1659,7 @@ mod tests {
     #[test]
     fn test_invalid_header() {
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              test line\r\n\r\n",
         );
 
@@ -1572,7 +1669,7 @@ mod tests {
     #[test]
     fn test_invalid_name() {
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              test[]: line\r\n\r\n",
         );
 
@@ -1588,7 +1685,7 @@ mod tests {
     #[test]
     fn test_http_request_upgrade() {
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              connection: upgrade\r\n\
              upgrade: websocket\r\n\r\n\
              some raw data",
@@ -1610,7 +1707,10 @@ mod tests {
             "upgrade: websocket\r\ncontent-length: 0\r\n",
         ] {
             let mut buf = BytesMut::from(
-                format!("GET /test HTTP/1.1\r\nconnection: upgrade\r\n{hdrs}\r\nraw").as_str(),
+                format!(
+                    "GET /test HTTP/1.1\r\nhost: localhost\r\nconnection: upgrade\r\n{hdrs}\r\nraw"
+                )
+                .as_str(),
             );
             let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();
             assert!(req.upgrade(), "{hdrs:?}");
@@ -1623,7 +1723,10 @@ mod tests {
             "upgrade: websocket\r\ncontent-length: 4\r\n",
         ] {
             let mut buf = BytesMut::from(
-                format!("GET /test HTTP/1.1\r\nconnection: upgrade\r\n{hdrs}\r\ndata").as_str(),
+                format!(
+                    "GET /test HTTP/1.1\r\nhost: localhost\r\nconnection: upgrade\r\n{hdrs}\r\ndata"
+                )
+                .as_str(),
             );
             let (_, pl) = reader.decode(&mut buf).unwrap().unwrap();
             let pl = pl.unwrap();
@@ -1636,7 +1739,7 @@ mod tests {
 
         // duplicate content-length is rejected even after websocket upgrade
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              content-length: 4\r\n\
              upgrade: websocket\r\n\
              content-length: 10\r\n\r\n",
@@ -1647,7 +1750,7 @@ mod tests {
     #[test]
     fn test_http_request_parser_utf8() {
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              x-test: тест\r\n\r\n",
         );
         let req = parse_ready!(&mut buf);
@@ -1660,7 +1763,7 @@ mod tests {
 
     #[test]
     fn test_http_request_parser_two_slashes() {
-        let mut buf = BytesMut::from("GET //path HTTP/1.1\r\n\r\n");
+        let mut buf = BytesMut::from("GET //path HTTP/1.1\r\nhost: localhost\r\n\r\n");
         let req = parse_ready!(&mut buf);
 
         assert_eq!(req.path(), "//path");
@@ -1668,7 +1771,7 @@ mod tests {
 
     #[test]
     fn test_http_request_parser_bad_method() {
-        let mut buf = BytesMut::from("!12%()+=~$ /get HTTP/1.1\r\n\r\n");
+        let mut buf = BytesMut::from("!12%()+=~$ /get HTTP/1.1\r\nhost: localhost\r\n\r\n");
 
         expect_parse_err!(&mut buf);
     }
@@ -1683,7 +1786,7 @@ mod tests {
     #[test]
     fn test_http_request_chunked_payload() {
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              transfer-encoding: chunked\r\n\r\n",
         );
         let reader = MessageDecoder::<Request>::default();
@@ -1706,7 +1809,7 @@ mod tests {
     #[test]
     fn test_http_request_chunked_payload_and_next_message() {
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              transfer-encoding: chunked\r\n\r\n",
         );
         let reader = MessageDecoder::<Request>::default();
@@ -1716,7 +1819,7 @@ mod tests {
 
         buf.extend(
             b"4\r\ndata\r\n4\r\nline\r\n0\r\n\r\n\
-              POST /test2 HTTP/1.1\r\n\
+              POST /test2 HTTP/1.1\r\nhost: localhost\r\n\
               transfer-encoding: chunked\r\n\r\n"
                 .iter(),
         );
@@ -1736,7 +1839,7 @@ mod tests {
     #[test]
     fn test_http_request_chunked_payload_chunks() {
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              transfer-encoding: chunked\r\n\r\n",
         );
 
@@ -1777,12 +1880,12 @@ mod tests {
     #[test]
     fn test_parse_chunked_payload_trailers() {
         let mut buf = BytesMut::from(
-            "POST /test HTTP/1.1\r\n\
+            "POST /test HTTP/1.1\r\nhost: localhost\r\n\
              transfer-encoding: chunked\r\n\r\n\
              4\r\ndata\r\n0\r\n\
              test: test\r\n\
              x-checksum: \tabc 123\r\n\r\n\
-             GET /next HTTP/1.1\r\n\r\n",
+             GET /next HTTP/1.1\r\nhost: localhost\r\n\r\n",
         );
         let reader = MessageDecoder::<Request>::default();
         let (_, pl) = reader.decode(&mut buf).unwrap().unwrap();
@@ -1798,7 +1901,7 @@ mod tests {
 
         // trailers split across reads
         let mut buf = BytesMut::from(
-            "POST /test HTTP/1.1\r\n\
+            "POST /test HTTP/1.1\r\nhost: localhost\r\n\
              transfer-encoding: chunked\r\n\r\n",
         );
         let (_, pl) = reader.decode(&mut buf).unwrap().unwrap();
@@ -1818,7 +1921,7 @@ mod tests {
             "test: v\rx",
         ] {
             let mut buf = BytesMut::from(
-                "POST /test HTTP/1.1\r\n\
+                "POST /test HTTP/1.1\r\nhost: localhost\r\n\
                  transfer-encoding: chunked\r\n\r\n0\r\n",
             );
             buf.extend(trailer.as_bytes());
@@ -1830,7 +1933,7 @@ mod tests {
     #[test]
     fn test_parse_chunked_payload_chunk_extension() {
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
               transfer-encoding: chunked\r\n\r\n",
         );
 
@@ -1849,7 +1952,9 @@ mod tests {
     }
 
     fn chunked_payload() -> (PayloadDecoder, BytesMut) {
-        let mut buf = BytesMut::from("POST /test HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\n");
+        let mut buf = BytesMut::from(
+            "POST /test HTTP/1.1\r\nhost: localhost\r\ntransfer-encoding: chunked\r\n\r\n",
+        );
         let reader = MessageDecoder::<Request>::default();
         let (_, pl) = reader.decode(&mut buf).unwrap().unwrap();
         (pl.unwrap(), buf)
@@ -2174,7 +2279,11 @@ mod tests {
     #[test]
     fn test_max_headers_repeated_names() {
         let cfg: SharedCfg = SharedCfg::new("test")
-            .add(HttpServiceConfig::new().set_max_headers(2))
+            .add(
+                HttpServiceConfig::new()
+                    .set_max_headers(2)
+                    .set_host_validation(false),
+            )
             .into();
 
         // repeated names count separately
