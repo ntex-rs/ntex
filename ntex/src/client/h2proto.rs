@@ -47,20 +47,7 @@ async fn send_request_inner(
         )
     };
 
-    // merging headers from head and extra headers.
-    let empty = HeaderMap::new();
-    let extra_headers = req.headers.as_ref().unwrap_or(&empty);
-    let mut hdrs: HeaderMap = req
-        .head
-        .headers
-        .iter()
-        .filter(|(name, _)| {
-            // h2 does not user connection headers
-            !(matches!(*name, &header::CONNECTION | &header::TRANSFER_ENCODING)
-                || extra_headers.contains_key(*name))
-        })
-        .chain(extra_headers.iter())
-        .collect();
+    let mut hdrs = h2_headers(&req);
 
     // Content length
     match length {
@@ -115,6 +102,38 @@ async fn send_request_inner(
         .await
         .map_err(|()| Error::from(ClientError::Timeout))
         .and_then(|res| res)
+}
+
+static TRAILERS: HeaderValue = HeaderValue::from_static("trailers");
+
+/// Merges request head and extra headers.
+fn h2_headers(req: &ClientRawRequest) -> HeaderMap {
+    let empty = HeaderMap::new();
+    let extra_headers = req.headers.as_ref().unwrap_or(&empty);
+    req.head
+        .headers
+        .iter()
+        .filter(|(name, _)| !extra_headers.contains_key(*name))
+        .chain(extra_headers.iter())
+        .filter(|(name, value)| is_h2_header(name, value))
+        .map(|(name, value)| {
+            if *name == header::TE {
+                (name, &TRAILERS)
+            } else {
+                (name, value)
+            }
+        })
+        .collect()
+}
+
+/// Returns `false` for connection-specific header fields, they are not used by
+/// HTTP/2 (RFC 9113 §8.2.2), `:authority` is used instead of `Host` (RFC 9113 §8.3.1)
+fn is_h2_header(name: &header::HeaderName, value: &HeaderValue) -> bool {
+    match *name {
+        header::CONNECTION | header::TRANSFER_ENCODING | header::UPGRADE | header::HOST => false,
+        header::TE => value.as_bytes().eq_ignore_ascii_case(b"trailers"),
+        _ => !(name == "keep-alive" || name == "proxy-connection"),
+    }
 }
 
 async fn get_response(
@@ -444,6 +463,44 @@ mod tests {
     use crate::http::{Message, StatusCode, uri::Scheme};
     use crate::io::{Io, IoBoxed, testing::IoTest};
     use crate::{SharedCfg, time::sleep};
+
+    #[test]
+    fn test_connection_headers_are_removed() {
+        let mut head = Message::<crate::http::RequestHead>::new();
+        for (name, value) in [
+            ("connection", "keep-alive"),
+            ("transfer-encoding", "chunked"),
+            ("upgrade", "websocket"),
+            ("keep-alive", "timeout=5"),
+            ("proxy-connection", "keep-alive"),
+            ("host", "example.com"),
+            ("te", "gzip"),
+            ("x-head", "1"),
+        ] {
+            head.headers.append(
+                header::HeaderName::from_static(name),
+                HeaderValue::from_static(value),
+            );
+        }
+        let mut extra = HeaderMap::new();
+        extra.insert(header::UPGRADE, HeaderValue::from_static("h2c"));
+        extra.insert(header::TE, HeaderValue::from_static("Trailers"));
+        extra.insert(
+            header::HeaderName::from_static("x-extra"),
+            HeaderValue::from_static("2"),
+        );
+        let req = ClientRawRequest {
+            head,
+            headers: Some(extra),
+            size: BodySize::None,
+        };
+
+        let hdrs = h2_headers(&req);
+        let mut names: Vec<_> = hdrs.keys().map(header::HeaderName::as_str).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["te", "x-extra", "x-head"]);
+        assert_eq!(hdrs.get(header::TE).unwrap().as_bytes(), b"trailers");
+    }
 
     #[crate::rt_test]
     async fn test_skip_interim_responses() {

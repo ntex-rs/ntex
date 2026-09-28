@@ -11,6 +11,10 @@
 
 * HTTP/1 does not restart the keep-alive timer for every request of a persistent connection
 
+* HTTP/2 client does not send connection-specific headers `Upgrade`, `Keep-Alive`, `Proxy-Connection`
+  and `TE` other than `trailers`, extra headers are filtered too, a `Host` header is not sent,
+  `:authority` of the connection is used
+
 * HTTP/2 client omits the userinfo from `:authority`, credentials of the request uri were sent
 
 * HTTP/2 client skips interim `1xx` responses, an interim response was returned as the
