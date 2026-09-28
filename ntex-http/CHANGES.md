@@ -1,6 +1,6 @@
 # Changes
 
-## [Unreleased]
+## [1.3.0] - Unreleased
 
 * HeaderValue hash ignores the sensitive flag, consistent with equality
 
@@ -9,6 +9,7 @@
 * Add TryFrom<Bytes> and TryFrom<BytesMut> for HeaderValue
 
 * InvalidHeaderValue derives Debug and ToStrError derives thiserror::Error, like the other error types
+
 
 ## [1.2.0] - 2026-05-02
 

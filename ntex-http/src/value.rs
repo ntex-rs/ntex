@@ -3,7 +3,7 @@
     clippy::no_effect,
     clippy::missing_safety_doc
 )]
-use std::{cmp, fmt, hash, str, str::FromStr};
+use std::{cmp, error::Error, fmt, hash, str, str::FromStr};
 
 use ntex_bytes::{ByteString, Bytes, BytesMut};
 
@@ -15,7 +15,7 @@ use ntex_bytes::{ByteString, Bytes, BytesMut};
 ///
 /// To handle this, the `HeaderValue` is useable as a type and can be compared
 /// with strings and implements `Debug`. [`to_str`](Self::to_str) returns an
-/// error if the value contains bytes other than HTAB and visible ASCII.
+/// error if the value contains bytes outside visible ASCII.
 #[derive(Clone, Eq)]
 pub struct HeaderValue {
     inner: Bytes,
@@ -498,6 +498,24 @@ const fn is_visible_ascii(b: u8) -> bool {
 #[inline]
 fn is_valid(b: u8) -> bool {
     b >= 32 && b != 127 || b == b'\t'
+}
+
+// ===== Hash / PartialEq / PartialOrd =====
+
+// Must agree with `PartialEq`, which ignores the sensitive flag
+impl hash::Hash for HeaderValue {
+    #[inline]
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        self.inner.hash(state);
+    }
+}
+
+impl Error for ToStrError {}
+
+impl fmt::Display for ToStrError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("failed to convert header to a str")
+    }
 }
 
 // ===== Hash / PartialEq / PartialOrd =====
