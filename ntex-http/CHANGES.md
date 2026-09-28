@@ -4,7 +4,7 @@
 
 * HeaderValue hash ignores the sensitive flag, consistent with equality
 
-* HeaderMap can be collected from String header values
+* Remove FromIterator for HeaderMap, it split string values on commas and dropped invalid values
 
 ## [1.2.0] - 2026-05-02
 
