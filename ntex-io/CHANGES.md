@@ -2,6 +2,9 @@
 
 ## [4.1.0] - Unreleased
 
+* Fix busy loop during graceful shutdown, a pending read woke the read task
+  while filters were shutting down, until the shutdown deadline
+
 * The I/O timer caches only timer sets for up to 512 streams, a set grown by a burst of timers
   is dropped instead of retaining its capacity
 

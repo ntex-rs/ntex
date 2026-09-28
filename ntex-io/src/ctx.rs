@@ -323,7 +323,10 @@ impl IoContext {
                     }
 
                     // The input may be what a filter waits for to complete its
-                    // shutdown, which is polled by the read task.
+                    // shutdown, e.g. the peer's TLS close_notify, which is
+                    // polled by the read task. Only actual input wakes it, a
+                    // pending read would make the read task spin until the
+                    // shutdown deadline.
                     if st.flags.is_shutting_down_filters() {
                         st.wake_read_task();
                     }
@@ -331,14 +334,6 @@ impl IoContext {
                 })
             }),
         };
-
-        // The filter shutdown step runs from `poll_read_ready()`, and new
-        // input may be what it waits for, e.g. the peer's TLS close_notify.
-        // Without a wakeup it would only be retried on the next unrelated
-        // wakeup, which may be the shutdown deadline.
-        if result.is_ok() && st.flags.is_shutting_down_filters() {
-            st.wake_read_task();
-        }
 
         if let Err(err) = result {
             // A read failure while the filters are shutting down does not
@@ -826,5 +821,59 @@ mod tests {
         );
         assert!(state.is_read_eof());
         assert!(state.flags().is_terminating());
+    }
+
+    #[ntex::test]
+    async fn filter_shutdown_does_not_spin_on_pending_read() {
+        use crate::{Handle, IoStream};
+        use std::{cell::Cell, future::poll_fn, rc::Rc};
+
+        // transport that never makes progress in either direction
+        struct Stalled(Rc<Cell<usize>>);
+
+        impl IoStream for Stalled {
+            fn start(self, ctx: IoContext) -> Box<dyn Handle> {
+                let polls = self.0.clone();
+                ntex_util::spawn(async move {
+                    poll_fn(|cx| {
+                        polls.set(polls.get() + 1);
+                        if let Poll::Ready(Readiness::Ready) = ctx.poll_read_ready(cx) {
+                            let _ = ctx.with_read_buf(|_| Poll::Pending);
+                        }
+                        match ctx.poll_write_ready(cx) {
+                            Poll::Ready(Readiness::Ready) => {
+                                let _ = ctx.update_write_status(Ok(0));
+                                Poll::Pending
+                            }
+                            Poll::Ready(_) => Poll::Ready(()),
+                            Poll::Pending => Poll::Pending,
+                        }
+                    })
+                    .await;
+                    ctx.stopped(None);
+                });
+                Box::new(Stalled(self.0))
+            }
+        }
+
+        impl Handle for Stalled {}
+
+        let polls = Rc::new(Cell::new(0));
+        let io = Io::new(
+            Stalled(polls.clone()),
+            ntex_service::cfg::SharedCfg::default(),
+        );
+        io.encode_slice(b"data").unwrap();
+        ntex_util::time::sleep(ntex_util::time::Millis(20)).await;
+
+        // graceful shutdown cannot flush the output, it waits for the deadline
+        io.close();
+        let start = polls.get();
+        ntex_util::time::sleep(ntex_util::time::Millis(100)).await;
+        assert!(
+            polls.get() - start < 10,
+            "io task polled {} times",
+            polls.get() - start
+        );
     }
 }

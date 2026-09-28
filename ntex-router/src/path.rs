@@ -135,11 +135,7 @@ impl<T: ResourcePath> Path<T> {
                 };
             }
         }
-        if key == "tail" {
-            Some(self.path())
-        } else {
-            None
-        }
+        if key == "tail" { Some(self.path()) } else { None }
     }
 
     /// Get unprocessed part of the path, same as [`path()`](Self::path)
