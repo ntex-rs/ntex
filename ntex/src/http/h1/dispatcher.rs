@@ -332,6 +332,10 @@ where
                         } else {
                             continue;
                         }
+                    } else if self.timers.active == Timer::Idle {
+                        // expiry of the keep-alive timer left armed for the
+                        // previous request
+                        continue;
                     } else if self.timers.active == Timer::Headers {
                         if let Err(err) = self.handle_timeout() {
                             log::trace!("{}: Slow request timeout", self.io.tag());
@@ -377,11 +381,12 @@ where
             body = ResponseBody::Other(Body::Empty);
         }
 
+        let size = body.size();
         log::trace!(
             "{}: Sending response: {:?} body: {:?}",
             self.io.tag(),
             msg,
-            body.size()
+            size
         );
         // close connection if payload stream is dropped and not consumed
         if let Some((_pl, snd)) = &self.payload
@@ -397,7 +402,7 @@ where
         if self.io.is_active() {
             let result = self
                 .io
-                .encode(Message::Item((msg, body.size())), &self.codec)
+                .encode(Message::Item((msg, size)), &self.codec)
                 .inspect_err(|_| {
                     if let Some(ref mut payload) = self.payload {
                         payload.1.set_error(PayloadError::Incomplete(None));
@@ -405,7 +410,7 @@ where
                 });
 
             match result {
-                Ok(()) => match body.size() {
+                Ok(()) => match size {
                     BodySize::None | BodySize::Empty => self.response_done(),
                     _ => State::SendPayload { body },
                 },
@@ -775,7 +780,12 @@ where
     /// Starts payload timing for the current request if it is not started
     /// yet, an expectation can be handled without `100 Continue`.
     fn start_payload_timer(&mut self) {
-        if self.payload.is_some() && matches!(self.timers.active, Timer::Stopped | Timer::Write) {
+        if self.payload.is_some()
+            && matches!(
+                self.timers.active,
+                Timer::Stopped | Timer::Idle | Timer::Write
+            )
+        {
             self.timers
                 .start_payload(&self.io, self.codec.cfg.payload_read_rate);
         }
@@ -1320,6 +1330,65 @@ mod tests {
             Pipeline::new((), DefaultControlService),
             DispatcherConfig::default(),
         )
+    }
+
+    /// Expiry of the keep-alive timer left armed while a request is processed
+    /// does not close the connection.
+    #[crate::rt_test]
+    async fn test_idle_keepalive_expiry_is_ignored() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(
+                HttpServiceConfig::new()
+                    .set_client_timeout(Seconds::ZERO)
+                    .set_keepalive(Seconds(1)),
+            )
+            .into();
+        let mut h1 = Dispatcher::<_, body::Body, io::Error>::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |req: Request| {
+                    if req.path() == "/slow" {
+                        sleep(Millis(1300)).await;
+                    }
+                    Ok::<_, io::Error>(Response::Ok().build())
+                }),
+            ),
+            Pipeline::new((), DefaultControlService),
+            DispatcherConfig::default(),
+        );
+
+        client.write("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        sleep(Millis(50)).await;
+        assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
+        assert_eq!(h1.inner.timers.active, Timer::KeepAlive);
+
+        client.write("GET /slow HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert_eq!(h1.inner.timers.active, Timer::Idle);
+
+        // the armed keep-alive timer expires while the service is busy
+        sleep(Millis(1500)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        sleep(Millis(50)).await;
+        assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
+        assert!(h1.inner.io.is_active());
+        assert_eq!(h1.inner.timers.active, Timer::KeepAlive);
+
+        client.write("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        sleep(Millis(50)).await;
+        assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
+
+        client.close().await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
     }
 
     /// Without request-head timing, waiting for the first request is not

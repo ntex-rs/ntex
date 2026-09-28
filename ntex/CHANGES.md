@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+* HTTP/1 does not restart the keep-alive timer for every request of a persistent connection
+
 * HTTP/1 parses an incomplete start line incrementally, an invalid start line is
   rejected as soon as the bad byte arrives instead of after the line end
 
