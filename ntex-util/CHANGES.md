@@ -5,6 +5,9 @@
 * Dropping the last `bstream::Sender` wakes a pending read, before the receiver
   could wait forever
 
+* Fix `bstream::Sender::poll_ready()`, it now reports `Status::Dropped` after an
+  error and `Status::Eof` after EOF instead of `Status::Ready`
+
 * `LocalWaker::register()` no longer clones the waker when the same waker is
   already registered
 
