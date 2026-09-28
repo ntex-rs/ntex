@@ -11,6 +11,8 @@
 
 * HTTP/1 does not restart the keep-alive timer for every request of a persistent connection
 
+* HTTP/1 client sends `content-length: 0` for `POST`, `PUT` and `PATCH` requests without a body
+
 * HTTP/1 client treats a `2xx` response to `CONNECT` as a tunnel, framing headers are ignored,
   the payload is read until connection close and the connection is not reused, the connection
   was returned to the pool

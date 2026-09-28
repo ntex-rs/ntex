@@ -9,7 +9,9 @@ use crate::http::error::{DecodeError, EncodeError, PayloadError};
 use crate::http::h1::{
     Message, MessageType, PayloadDecoder, PayloadItem, PayloadType, decoder, encoder,
 };
-use crate::http::{ConnectionType, Method, RequestHead, ResponseHead, StatusCode, Version};
+use crate::http::{
+    ConnectionType, Method, RequestHead, ResponseHead, StatusCode, Version, body::BodySize,
+};
 use crate::service::cfg::Cfg;
 use crate::util::{BytePages, Bytes, BytesMut};
 
@@ -229,6 +231,16 @@ impl Encoder for ClientCodec {
                     ConnectionType::Close => ConnectionType::Close,
                 });
 
+                // a request without content declares its length if the method
+                // defines meaning for content, see RFC 9110 section 8.6
+                let size = if req.size == BodySize::None
+                    && matches!(req.head.method, Method::POST | Method::PUT | Method::PATCH)
+                {
+                    BodySize::Empty
+                } else {
+                    req.size
+                };
+
                 let headers = req.headers.take();
                 inner.encoder.encode(
                     dst,
@@ -236,7 +248,7 @@ impl Encoder for ClientCodec {
                     false,
                     false,
                     inner.version.get(),
-                    req.size,
+                    size,
                     inner.ctype.get(),
                     headers,
                 )?;
@@ -358,5 +370,37 @@ mod tests {
         assert_eq!(head.status, StatusCode::PROXY_AUTHENTICATION_REQUIRED);
         assert_eq!(codec.message_type(), MessageType::Payload);
         assert!(codec.keepalive());
+    }
+
+    #[crate::rt_test]
+    async fn test_empty_request_content_length() {
+        let cfg: SharedCfg = SharedCfg::new("DBG").add(HttpServiceConfig::new()).into();
+        for (method, size, cl) in [
+            (Method::POST, BodySize::None, Some("0")),
+            (Method::PUT, BodySize::None, Some("0")),
+            (Method::PATCH, BodySize::None, Some("0")),
+            (Method::POST, BodySize::Sized(3), Some("3")),
+            (Method::GET, BodySize::None, None),
+            (Method::DELETE, BodySize::None, None),
+            (Method::GET, BodySize::Empty, Some("0")),
+        ] {
+            let codec = ClientCodec::new(true, cfg.get());
+            let mut head = crate::http::Message::<RequestHead>::new();
+            head.method = method.clone();
+            head.uri = crate::http::Uri::from_static("/");
+            let req = ClientRawRequest {
+                head,
+                headers: None,
+                size,
+            };
+            let mut buf = BytePages::default();
+            codec.encode(Message::Item(req), &mut buf).unwrap();
+            let data = String::from_utf8(buf.take().unwrap().to_vec()).unwrap();
+            let expected = cl.map(|cl| format!("content-length: {cl}\r\n"));
+            match expected {
+                Some(line) => assert!(data.contains(&line), "{method} {size:?}: {data:?}"),
+                None => assert!(!data.contains("content-length"), "{method}: {data:?}"),
+            }
+        }
     }
 }
