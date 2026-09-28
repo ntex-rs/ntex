@@ -81,7 +81,7 @@ impl ClientRequest {
     {
         match Uri::try_from(uri) {
             Ok(uri) => self.request.head.uri = uri,
-            Err(e) => self.err = Some(ClientError::Http(e.into())),
+            Err(e) => self.err = Some(InvalidUrl::Http(e.into()).into()),
         }
         self
     }
@@ -277,11 +277,13 @@ impl ClientRequest {
     #[inline]
     #[must_use]
     pub fn content_length(self, len: u64) -> Self {
-        self.header(header::CONTENT_LENGTH, len)
+        self.set_header(header::CONTENT_LENGTH, len)
     }
 
     #[must_use]
     /// Sets the HTTP basic authentication header.
+    ///
+    /// Replaces any existing `Authorization` header, including a client default.
     pub fn basic_auth<U>(self, username: U, password: Option<&str>) -> Self
     where
         U: fmt::Display,
@@ -290,7 +292,7 @@ impl ClientRequest {
             Some(password) => format!("{username}:{password}"),
             None => format!("{username}:"),
         };
-        self.header(
+        self.set_header(
             header::AUTHORIZATION,
             format!("Basic {}", base64.encode(auth)),
         )
@@ -298,11 +300,13 @@ impl ClientRequest {
 
     #[must_use]
     /// Sets the HTTP bearer authentication header.
+    ///
+    /// Replaces any existing `Authorization` header, including a client default.
     pub fn bearer_auth<T>(self, token: T) -> Self
     where
         T: fmt::Display,
     {
-        self.header(header::AUTHORIZATION, format!("Bearer {token}"))
+        self.set_header(header::AUTHORIZATION, format!("Bearer {token}"))
     }
 
     #[must_use]
@@ -354,12 +358,12 @@ impl ClientRequest {
     /// Sets the response-header timeout for this request.
     ///
     /// This overrides the client-wide timeout. The timeout covers receiving the
-    /// response head after the request has been sent. A zero duration uses the
-    /// client-wide timeout.
+    /// response head after the request has been sent. A zero duration disables
+    /// the timeout for this request.
     ///
     /// The client-wide default is 5 seconds.
     pub fn timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
-        self.request.timeout = timeout.into();
+        self.request.timeout = Some(timeout.into());
         self
     }
 
@@ -387,25 +391,27 @@ impl ClientRequest {
     /// Serialization errors are stored and returned by the next `send*` call.
     #[must_use]
     pub fn query<T: Serialize>(mut self, query: &T) -> Self {
-        let mut parts = self.request.head.uri.clone().into_parts();
-
-        if let Some(path_and_query) = parts.path_and_query {
-            let query = match serde_urlencoded::to_string(query) {
-                Ok(query) => query,
-                Err(err) => {
-                    self.err = Some(ClientError::Error(Rc::new(err)));
-                    return self;
-                }
-            };
-            let path = path_and_query.path();
-            parts.path_and_query = format!("{path}?{query}").parse().ok();
-
-            match Uri::from_parts(parts) {
-                Ok(uri) => self.request.head.uri = uri,
-                Err(e) => self.err = Some(ClientError::Http(e.into())),
+        let query = match serde_urlencoded::to_string(query) {
+            Ok(query) => query,
+            Err(err) => {
+                self.err = Some(ClientError::Error(Rc::new(err)));
+                return self;
             }
-        }
+        };
 
+        let mut parts = self.request.head.uri.clone().into_parts();
+        let path = parts.path_and_query.as_ref().map_or("/", |pq| pq.path());
+        let result = format!("{path}?{query}")
+            .parse()
+            .map_err(HttpError::from)
+            .and_then(|pq| {
+                parts.path_and_query = Some(pq);
+                Uri::from_parts(parts).map_err(HttpError::from)
+            });
+        match result {
+            Ok(uri) => self.request.head.uri = uri,
+            Err(e) => self.err = Some(InvalidUrl::Http(e).into()),
+        }
         self
     }
 }
@@ -461,13 +467,11 @@ impl ClientRequest {
         self.svc.call(self.request).await.map(Into::into)
     }
 
-    #[allow(unused_mut)]
     fn prep_for_sending(&mut self) -> Result<(), Error<ClientError>> {
         self.prep_for_sending_inner()
             .map_err(|e| e.set_service(self.cfg.service()))
     }
 
-    #[allow(unused_mut)]
     fn prep_for_sending_inner(&mut self) -> Result<(), Error<ClientError>> {
         if let Some(e) = self.err.take() {
             return Err(e.into());
@@ -730,6 +734,66 @@ mod tests {
     }
 
     #[crate::rt_test]
+    async fn client_auth_replaces_header() {
+        let client = Client::builder().build(
+            SharedCfg::new("TEST").add(ClientConfig::new().set_bearer_auth("token").unwrap()),
+        );
+        let req = client
+            .get("/")
+            .basic_auth("username", Some("password"))
+            .content_length(1)
+            .content_length(2);
+        let headers = &req.request.head.headers;
+        let auth: Vec<_> = headers
+            .get_all(header::AUTHORIZATION)
+            .map(|v| v.to_str().unwrap())
+            .collect();
+        assert_eq!(auth, ["Basic dXNlcm5hbWU6cGFzc3dvcmQ="]);
+        let len: Vec<_> = headers
+            .get_all(header::CONTENT_LENGTH)
+            .map(|v| v.to_str().unwrap())
+            .collect();
+        assert_eq!(len, ["2"]);
+
+        let req = Client::new()
+            .get("/")
+            .basic_auth("a", None)
+            .bearer_auth("b");
+        assert_eq!(
+            req.request
+                .head
+                .headers
+                .get_all(header::AUTHORIZATION)
+                .count(),
+            1
+        );
+
+        let cfg = ClientConfig::new()
+            .set_basic_auth("a", None)
+            .unwrap()
+            .set_bearer_auth("b")
+            .unwrap();
+        assert_eq!(cfg.headers().get_all(header::AUTHORIZATION).count(), 1);
+    }
+
+    #[crate::rt_test]
+    async fn client_invalid_url() {
+        let req = Client::new().get("http://local host/");
+        assert!(matches!(
+            req.err,
+            Some(ClientError::Url(InvalidUrl::Http(_)))
+        ));
+        let err = req.send().await.unwrap_err();
+        assert!(matches!(
+            err.into_error(),
+            ClientError::Url(InvalidUrl::Http(_))
+        ));
+
+        let req = Client::new().get("/").header("bad header", "1");
+        assert!(matches!(req.err, Some(ClientError::Http(_))));
+    }
+
+    #[crate::rt_test]
     async fn client_query() {
         let req = Client::new()
             .get("/")
@@ -738,5 +802,16 @@ mod tests {
 
         let req = Client::new().get("/").query(&InvalidQuery);
         assert!(matches!(req.err, Some(ClientError::Error(_))));
+
+        // uri without path
+        let req = Client::new().get("http://localhost").query(&[("k", "v")]);
+        assert!(req.err.is_none());
+        assert_eq!(req.get_uri(), "http://localhost/?k=v");
+
+        // existing query is replaced, path is preserved
+        let req = Client::new()
+            .get("http://localhost/p?a=1")
+            .query(&[("k", "v")]);
+        assert_eq!(req.get_uri(), "http://localhost/p?k=v");
     }
 }

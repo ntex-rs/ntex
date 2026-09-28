@@ -174,6 +174,8 @@ impl<E> Drop for Sender<E> {
             && let Some(shared) = self.inner.upgrade()
         {
             shared.insert_flag(Flags::EOF | Flags::SENDER_GONE);
+            // a pending read completes with EOF
+            shared.recv_task.wake();
         }
     }
 }
@@ -363,6 +365,17 @@ impl<E> fmt::Debug for Inner<E> {
 mod tests {
     use super::*;
     use crate::future::lazy;
+
+    #[ntex::test]
+    async fn test_sender_drop_wakes_receiver() {
+        let (tx, rx) = channel::<()>();
+        let handle = crate::spawn(async move { rx.read().await.is_none() });
+        crate::time::sleep(crate::time::Millis(10)).await;
+
+        drop(tx);
+        let res = crate::time::timeout(crate::time::Millis(1000), handle).await;
+        assert!(matches!(res, Ok(Ok(true))));
+    }
 
     #[ntex::test]
     async fn test_eof() {

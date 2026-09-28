@@ -2,6 +2,9 @@
 
 ## [4.2.0] - Unreleased
 
+* Dropping the last `bstream::Sender` wakes a pending read, before the receiver
+  could wait forever
+
 * Streamline the timer wheel, `now()` and `system_time()` no longer touch the wheel
   when the cached time is valid, and the per-thread wheel is ~4KiB smaller
 

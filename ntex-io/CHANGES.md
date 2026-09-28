@@ -2,6 +2,17 @@
 
 ## [4.1.0] - Unreleased
 
+* Fix busy loop during graceful shutdown, a pending read woke the read task
+  while filters were shutting down, until the shutdown deadline
+
+* The I/O timer caches only timer sets for up to 512 streams, a set grown by a burst of timers
+  is dropped instead of retaining its capacity
+
+* The I/O timer ticker resets one sleep timer for every tick instead of creating a new one
+
+* Growing a read buffer beyond the high watermark compacts a unique buffer in place or
+  reallocates it, before it always allocated a new buffer and copied the data
+
 * A filter added over a sealed `Io` is stored typed, so `Io::filter()` and `Io::map_filter()`
   on it no longer panic with "Filter is sealed", e.g. a TLS handshake over `IoBoxed`
 

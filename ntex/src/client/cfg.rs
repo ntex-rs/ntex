@@ -266,7 +266,15 @@ impl ClientConfig {
         Ok(self)
     }
 
+    fn insert_header(mut self, key: HeaderName, value: String) -> Result<Self, HttpError> {
+        let value = HeaderValue::try_from(value).map_err(HttpError::from)?;
+        self.headers.insert(key, value);
+        Ok(self)
+    }
+
     /// Sets a client-wide HTTP Basic authentication header.
+    ///
+    /// Replaces any previously configured `Authorization` header.
     pub fn set_basic_auth<U>(self, username: U, password: Option<&str>) -> Result<Self, HttpError>
     where
         U: fmt::Display,
@@ -275,18 +283,20 @@ impl ClientConfig {
             Some(password) => format!("{username}:{password}"),
             None => format!("{username}:"),
         };
-        self.set_header(
+        self.insert_header(
             header::AUTHORIZATION,
             format!("Basic {}", base64.encode(auth)),
         )
     }
 
     /// Sets a client-wide HTTP Bearer authentication header.
+    ///
+    /// Replaces any previously configured `Authorization` header.
     pub fn set_bearer_auth<T>(self, token: T) -> Result<Self, HttpError>
     where
         T: fmt::Display,
     {
-        self.set_header(header::AUTHORIZATION, format!("Bearer {token}"))
+        self.insert_header(header::AUTHORIZATION, format!("Bearer {token}"))
     }
 }
 

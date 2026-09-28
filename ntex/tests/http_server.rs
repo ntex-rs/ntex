@@ -86,14 +86,15 @@ async fn test_expect_continue() {
     );
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-    let _ = stream.write_all(b"GET /test HTTP/1.1\r\nexpect: 100-continue\r\n\r\n");
+    let _ =
+        stream.write_all(b"GET /test HTTP/1.1\r\nhost: localhost\r\nexpect: 100-continue\r\n\r\n");
     let mut data = String::new();
     let _ = stream.read_to_string(&mut data);
     assert!(data.starts_with("HTTP/1.1 412 Precondition Failed\r\ncontent-length"));
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream
-        .write_all(b"GET /test?yes= HTTP/1.1\r\ncontent-length:4\r\nexpect: 100-continue\r\n\r\n");
+        .write_all(b"GET /test?yes= HTTP/1.1\r\nhost: localhost\r\ncontent-length:4\r\nexpect: 100-continue\r\n\r\n");
     let mut data = [0; 25];
     let _ = stream.read_exact(&mut data[..]);
     assert_eq!(&data, b"HTTP/1.1 100 Continue\r\n\r\n");
@@ -125,7 +126,7 @@ async fn test_chunked_payload() {
     let returned_size = {
         let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
         let _ = stream.write_all(
-            b"POST /test HTTP/1.1\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n",
+            b"POST /test HTTP/1.1\r\nhost: localhost\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n",
         );
 
         for chunk_size in chunk_sizes.iter() {
@@ -155,7 +156,7 @@ async fn test_chunked_payload() {
 
 #[ntex::test]
 async fn test_slow_request() {
-    const DATA: &[u8] = b"GET /test/tests/test HTTP/1.1\r\n";
+    const DATA: &[u8] = b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\n";
 
     let srv = test::server_with_config(
         async |_| HttpService::new(async |_| Ok::<_, io::Error>(Response::Ok().build())),
@@ -184,7 +185,7 @@ async fn test_slow_request() {
 
 #[ntex::test]
 async fn test_slow_request2() {
-    const DATA: &[u8] = b"GET /test/tests/test HTTP/1.1\r\n";
+    const DATA: &[u8] = b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\n";
 
     let srv = test::server_with_config(
         async |_| HttpService::new(async |_| Ok::<_, io::Error>(Response::Ok().build())),
@@ -196,7 +197,7 @@ async fn test_slow_request2() {
     );
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\n\r\n");
+    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\n\r\n");
     let mut data = vec![0; 1024];
     let _ = stream.read(&mut data);
     assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
@@ -220,7 +221,7 @@ async fn test_headers_read_rate_extends_timeout() {
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream.write_all(b"GET /");
     sleep(Millis(1100)).await;
-    let _ = stream.write_all(b" HTTP/1.1\r\n\r\n");
+    let _ = stream.write_all(b" HTTP/1.1\r\nhost: localhost\r\n\r\n");
 
     let mut data = vec![0; 1024];
     let len = stream.read(&mut data).unwrap();
@@ -241,7 +242,7 @@ async fn test_headers_read_rate_counts_parsed_bytes() {
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     // The complete request line is consumed by the decoder, leaving no bytes
     // buffered while the remainder of the header block is still pending.
-    let _ = stream.write_all(b"GET / HTTP/1.1\r\n");
+    let _ = stream.write_all(b"GET / HTTP/1.1\r\nhost: localhost\r\n");
     sleep(Millis(3200)).await;
 
     stream.set_nonblocking(true).unwrap();
@@ -279,7 +280,8 @@ async fn test_payload_read_rate_extends_timeout() {
     );
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-    let _ = stream.write_all(b"POST / HTTP/1.1\r\ncontent-length: 10\r\n\r\n12345");
+    let _ =
+        stream.write_all(b"POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 10\r\n\r\n12345");
     sleep(Millis(1100)).await;
     let _ = stream.write_all(b"67890");
 
@@ -308,12 +310,12 @@ async fn test_http1_keepalive() {
     });
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\n\r\n");
+    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\n\r\n");
     let mut data = vec![0; 1024];
     let _ = stream.read(&mut data);
     assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
 
-    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\n\r\n");
+    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\n\r\n");
     let mut data = vec![0; 1024];
     let _ = stream.read(&mut data);
     assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
@@ -327,7 +329,7 @@ async fn test_http1_keepalive_timeout() {
     );
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\n\r\n");
+    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\n\r\n");
     let mut data = vec![0; 1024];
     let _ = stream.read(&mut data);
     assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
@@ -352,17 +354,17 @@ async fn test_http1_no_keepalive_during_response() {
     );
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\n\r\n");
+    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\n\r\n");
     let mut data = vec![0; 1024];
     let _ = stream.read(&mut data);
     assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
 
-    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\n\r\n");
+    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\n\r\n");
     let mut data = vec![0; 1024];
     let _ = stream.read(&mut data);
     assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
 
-    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\n\r\n");
+    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\n\r\n");
     let mut data = vec![0; 1024];
     let _ = stream.read(&mut data);
     assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
@@ -393,7 +395,7 @@ async fn test_http1_keepalive_after_response() {
     );
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\n\r\n");
+    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\n\r\n");
     let mut data = vec![0; 1024];
     let _ = stream.read(&mut data);
     assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
@@ -412,7 +414,9 @@ async fn test_http1_keepalive_close() {
     });
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\nconnection: close\r\n\r\n");
+    let _ = stream.write_all(
+        b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n",
+    );
     let mut data = vec![0; 1024];
     let _ = stream.read(&mut data);
     assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
@@ -431,8 +435,10 @@ async fn test_http10_keepalive_default_close() {
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream.write_all(b"GET /test/tests/test HTTP/1.0\r\n\r\n");
     let mut data = vec![0; 1024];
-    let _ = stream.read(&mut data);
-    assert_eq!(&data[..17], b"HTTP/1.0 200 OK\r\n");
+    let n = stream.read(&mut data).unwrap();
+    assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
+    // an HTTP/1.1 response is persistent by default
+    assert!(data[..n].windows(19).any(|w| w == b"connection: close\r\n"));
 
     let mut data = vec![0; 1024];
     let res = stream.read(&mut data).unwrap();
@@ -448,14 +454,21 @@ async fn test_http10_keepalive() {
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream.write_all(b"GET /test/tests/test HTTP/1.0\r\nconnection: keep-alive\r\n\r\n");
     let mut data = vec![0; 1024];
-    let _ = stream.read(&mut data);
-    assert_eq!(&data[..17], b"HTTP/1.0 200 OK\r\n");
+    let n = stream.read(&mut data).unwrap();
+    assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
+    assert!(
+        data[..n]
+            .windows(24)
+            .any(|w| w == b"connection: keep-alive\r\n")
+    );
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream.write_all(b"GET /test/tests/test HTTP/1.0\r\n\r\n");
     let mut data = vec![0; 1024];
-    let _ = stream.read(&mut data);
-    assert_eq!(&data[..17], b"HTTP/1.0 200 OK\r\n");
+    let n = stream.read(&mut data).unwrap();
+    assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
+    // an HTTP/1.1 response is persistent by default
+    assert!(data[..n].windows(19).any(|w| w == b"connection: close\r\n"));
 
     let mut data = vec![0; 1024];
     let res = stream.read(&mut data).unwrap();
@@ -470,7 +483,7 @@ async fn test_http1_keepalive_disabled() {
     );
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\n\r\n");
+    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\n\r\n");
     let mut data = vec![0; 1024];
     let _ = stream.read(&mut data);
     assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
@@ -501,7 +514,8 @@ async fn test_http1_disable_payload_timer_after_whole_pl_has_been_read() {
     );
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\ncontent-length: 4\r\n");
+    let _ = stream
+        .write_all(b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\ncontent-length: 4\r\n");
     sleep(Millis(250)).await;
     let _ = stream.write_all(b"\r\n");
     sleep(Millis(250)).await;
@@ -530,7 +544,9 @@ async fn test_http1_handle_not_consumed_payload() {
     });
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\ncontent-length: 4\r\n\r\n");
+    let _ = stream.write_all(
+        b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\ncontent-length: 4\r\n\r\n",
+    );
     sleep(Millis(250)).await;
     let _ = stream.write_all(b"1234");
     let mut data = vec![0; 1024];
@@ -560,7 +576,9 @@ async fn test_http1_handle_payload_errors() {
     });
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\ncontent-length: 99999\r\n\r\n");
+    let _ = stream.write_all(
+        b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\ncontent-length: 99999\r\n\r\n",
+    );
     sleep(Millis(250)).await;
     drop(stream);
     sleep(Millis(250)).await;
@@ -588,16 +606,18 @@ async fn test_content_length() {
     let value = HeaderValue::from_static("0");
 
     {
-        // the client skips interim responses, check raw `1xx` responses
+        // interim `1xx` responses cannot be final, they are replaced with 500
         for i in [1, 3] {
             for method in ["GET", "HEAD"] {
                 let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-                let _ = stream.write_all(format!("{method} /{i} HTTP/1.1\r\n\r\n").as_bytes());
+                let _ = stream.write_all(
+                    format!("{method} /{i} HTTP/1.1\r\nhost: localhost\r\n\r\n").as_bytes(),
+                );
                 let mut data = vec![0; 1024];
                 let n = stream.read(&mut data).unwrap();
                 let data = String::from_utf8_lossy(&data[..n]).to_lowercase();
-                assert!(data.starts_with("http/1.1 1"), "{data:?}");
-                assert!(!data.contains("content-length"), "{data:?}");
+                assert!(data.starts_with("http/1.1 500"), "{data:?}");
+                assert!(data.contains("content-length: 0\r\n"), "{data:?}");
             }
         }
 
@@ -927,10 +947,10 @@ async fn test_h1_gracefull_shutdown() {
     });
 
     let mut stream1 = net::TcpStream::connect(srv.addr()).unwrap();
-    let _ = stream1.write_all(b"GET /index.html HTTP/1.1\r\n\r\n");
+    let _ = stream1.write_all(b"GET /index.html HTTP/1.1\r\nhost: localhost\r\n\r\n");
 
     let mut stream2 = net::TcpStream::connect(srv.addr()).unwrap();
-    let _ = stream2.write_all(b"GET /index.html HTTP/1.1\r\n\r\n");
+    let _ = stream2.write_all(b"GET /index.html HTTP/1.1\r\nhost: localhost\r\n\r\n");
 
     let _ = rx.await;
     assert_eq!(count.load(Ordering::Relaxed), 2);
@@ -943,6 +963,60 @@ async fn test_h1_gracefull_shutdown() {
 
     let _ = rx.await;
     assert_eq!(count.load(Ordering::Relaxed), 0);
+}
+
+struct FailingControl;
+
+impl<St, F, E> ntex::ServiceFactory<St, Control<F, E>> for FailingControl
+where
+    F: ntex::io::Filter,
+    E: ntex::http::ResponseError,
+{
+    type Res = h1::ControlAck<F>;
+    type Error = io::Error;
+    type Service = FailingControl;
+    type InitError = io::Error;
+
+    async fn create(&self, _: &St) -> Result<Self::Service, Self::InitError> {
+        Err(io::Error::other("control init failed"))
+    }
+}
+
+impl<St, F, E> ntex::Service<St, Control<F, E>> for FailingControl
+where
+    F: ntex::io::Filter,
+    E: ntex::http::ResponseError,
+{
+    type Res = h1::ControlAck<F>;
+    type Error = io::Error;
+
+    async fn call(
+        &self,
+        req: Control<F, E>,
+        _: ntex::Ctx<'_, Self, St>,
+    ) -> Result<Self::Res, Self::Error> {
+        Ok(req.ack())
+    }
+}
+
+#[ntex::test]
+async fn test_h1_control_init_error_does_not_block_shutdown() {
+    let srv = test_server(async |_| {
+        HttpService::new(async |_: Request| Ok::<_, io::Error>(Response::Ok().build()))
+            .h1_control(FailingControl)
+    });
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let _ = stream.write_all(b"GET /index.html HTTP/1.1\r\n\r\n");
+    let mut data = Vec::new();
+    let _ = stream.read_to_end(&mut data);
+    assert!(data.is_empty());
+
+    let res = ntex::time::timeout(Seconds(5), srv.stop(true)).await;
+    assert!(
+        res.is_ok(),
+        "graceful shutdown waited for leaked connection"
+    );
 }
 
 #[ntex::test]
@@ -969,10 +1043,10 @@ async fn test_h1_gracefull_shutdown_2() {
     });
 
     let mut stream1 = net::TcpStream::connect(srv.addr()).unwrap();
-    let _ = stream1.write_all(b"GET /index.html HTTP/1.1\r\n\r\n");
+    let _ = stream1.write_all(b"GET /index.html HTTP/1.1\r\nhost: localhost\r\n\r\n");
 
     let mut stream2 = net::TcpStream::connect(srv.addr()).unwrap();
-    let _ = stream2.write_all(b"GET /index.html HTTP/1.1\r\n\r\n");
+    let _ = stream2.write_all(b"GET /index.html HTTP/1.1\r\nhost: localhost\r\n\r\n");
 
     let _ = rx.await;
     assert_eq!(count.load(Ordering::Acquire), 2);
@@ -984,4 +1058,101 @@ async fn test_h1_gracefull_shutdown_2() {
     });
     let _ = rx.await;
     assert_eq!(count.load(Ordering::Relaxed), 0);
+}
+
+#[ntex::test]
+async fn test_h2_request_body_dropped_after_response_resets_stream() {
+    use ntex::http::{HeaderMap, Payload, uri::Scheme};
+    use ntex::util::stream_recv;
+    use ntex_h2::{MessageKind, client::SimpleClient};
+
+    let srv = test_server(async |_| {
+        HttpService::h2(async |mut req: Request| {
+            // the request body is held after the response and dropped later
+            let mut pl: Payload = req.take_payload();
+            rt::spawn(async move {
+                let _ = stream_recv(&mut pl).await;
+                sleep(Millis(200)).await;
+                drop(pl);
+            });
+            Ok::<_, io::Error>(Response::Ok().body("ok"))
+        })
+    });
+
+    let io = ntex::connect::connect(srv.addr()).await.unwrap();
+    let client = SimpleClient::new(io, Scheme::HTTP, "localhost".into());
+    let (snd, rcv) = client
+        .send(Method::POST, "/".into(), HeaderMap::default(), false)
+        .await
+        .unwrap();
+    snd.send_payload(Bytes::from_static(b"chunk"), false)
+        .await
+        .unwrap();
+
+    // complete response, the request body is still open
+    let mut eof = false;
+    while let Some(msg) = rcv.recv().await {
+        match msg.kind {
+            MessageKind::Headers { eof: true, .. } | MessageKind::Eof(_) => {
+                eof = true;
+                break;
+            }
+            _ => (),
+        }
+    }
+    assert!(eof);
+
+    // no data frame follows, the stream is reset when the body is dropped
+    sleep(Millis(500)).await;
+    assert!(
+        snd.send_payload(Bytes::from_static(b"chunk"), false)
+            .await
+            .is_err(),
+        "request stream is not reset"
+    );
+}
+
+#[ntex::test]
+async fn test_h1_request_line_too_long() {
+    let srv = test_server(async |_| {
+        HttpService::h1(async |_: Request| Ok::<_, io::Error>(Response::Ok().build()))
+    });
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let req = format!("GET /{} HTTP/1.1\r\n\r\n", "a".repeat(16 * 1024));
+    let _ = stream.write_all(req.as_bytes());
+    let mut data = vec![0; 1024];
+    let n = stream.read(&mut data).unwrap();
+    assert!(data[..n].starts_with(b"HTTP/1.1 414"));
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let req = format!(
+        "GET /{} HTTP/1.1\r\nhost: a\r\n\r\n",
+        "a".repeat(16 * 1024 - 20)
+    );
+    let _ = stream.write_all(req.as_bytes());
+    let n = stream.read(&mut data).unwrap();
+    assert!(data[..n].starts_with(b"HTTP/1.1 200"));
+}
+
+#[ntex::test]
+async fn test_h1_unsupported_transfer_coding() {
+    let srv = test_server(async |_| {
+        HttpService::h1(async |_: Request| Ok::<_, io::Error>(Response::Ok().build()))
+    });
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let _ = stream.write_all(
+        b"POST / HTTP/1.1\r\nhost: a\r\ntransfer-encoding: gzip, chunked\r\n\r\n0\r\n\r\n",
+    );
+    let mut data = vec![0; 1024];
+    let n = stream.read(&mut data).unwrap();
+    assert!(data[..n].starts_with(b"HTTP/1.1 501"), "{:?}", &data[..n]);
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let _ = stream.write_all(
+        b"POST / HTTP/1.1\r\nhost: a\r\ntransfer-encoding: chunked, gzip\r\n\r\n0\r\n\r\n",
+    );
+    let n = stream.read(&mut data).unwrap();
+    assert!(data[..n].starts_with(b"HTTP/1.1 400"), "{:?}", &data[..n]);
 }

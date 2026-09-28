@@ -7,7 +7,7 @@ use crate::http::body::BodySize;
 use crate::http::config::{DateService, HttpServiceConfig};
 use crate::http::error::{DecodeError, EncodeError};
 use crate::http::message::ConnectionType;
-use crate::http::{Method, Version, request::Request, response::Response};
+use crate::http::{Method, StatusCode, Version, request::Request, response::Response};
 use crate::{Cfg, util::BytePages, util::BytesMut};
 
 use super::{Message, decoder, decoder::PayloadType, encoder};
@@ -209,8 +209,10 @@ impl Encoder for Codec {
                 // set response version
                 res.head_mut().version = self.version.get();
 
-                // connection status
-                if let Some(ct) = res.head().ctype()
+                // connection status, http/1 cannot continue after 101
+                if res.status() == StatusCode::SWITCHING_PROTOCOLS {
+                    self.ctype.set(ConnectionType::Upgrade);
+                } else if let Some(ct) = res.head().ctype()
                     && ct != ConnectionType::KeepAlive
                 {
                     self.ctype.set(ct);
@@ -230,7 +232,7 @@ impl Encoder for Codec {
                 self.ctype.set(ctype);
             }
             Message::Chunk(Some(bytes)) => {
-                self.encoder.encode_chunk(bytes, dst)?;
+                self.encoder.encode_chunk(bytes, dst);
             }
             Message::Chunk(None) => {
                 self.encoder.encode_eof(dst)?;
@@ -249,6 +251,36 @@ mod tests {
         util::Bytes,
     };
 
+    /// A status code without a canonical reason has an empty reason phrase.
+    #[crate::rt_test]
+    async fn test_unknown_status_reason() {
+        use crate::http::StatusCode;
+
+        let cfg: SharedCfg = SharedCfg::new("DBG").add(HttpServiceConfig::new()).into();
+        let codec = Codec::new(0, cfg.get());
+        let mut buf = BytesMut::from("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        codec.decode(&mut buf).unwrap().unwrap();
+
+        let status = StatusCode::from_u16(599).unwrap();
+        let res = Response::with_body(status, ());
+        assert_eq!(res.head().reason(), "");
+        let mut out = BytePages::default();
+        codec
+            .encode(Message::Item((res, BodySize::Empty)), &mut out)
+            .unwrap();
+        let data = out.take().unwrap();
+        assert!(data.starts_with(b"HTTP/1.1 599 \r\n"), "{data:?}");
+
+        let mut res = Response::with_body(status, ());
+        res.head_mut().reason = Some("Custom");
+        let mut out = BytePages::default();
+        codec
+            .encode(Message::Item((res, BodySize::Empty)), &mut out)
+            .unwrap();
+        let data = out.take().unwrap();
+        assert!(data.starts_with(b"HTTP/1.1 599 Custom\r\n"), "{data:?}");
+    }
+
     /// Bodyless statuses do not write body bytes or length headers.
     #[crate::rt_test]
     async fn test_bodyless_status_has_no_body() {
@@ -263,7 +295,7 @@ mod tests {
         ] {
             for size in [BodySize::Sized(3), BodySize::Stream] {
                 let codec = Codec::new(0, cfg.get());
-                let mut buf = BytesMut::from("GET / HTTP/1.1\r\n\r\n");
+                let mut buf = BytesMut::from("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
                 codec.decode(&mut buf).unwrap().unwrap();
 
                 let mut out = BytePages::default();
@@ -289,6 +321,95 @@ mod tests {
                     "{status} {size:?}: {data:?}"
                 );
             }
+        }
+    }
+
+    /// A response without body size information is framed with a zero length.
+    #[crate::rt_test]
+    async fn test_switching_protocols_ends_http1() {
+        let cfg: SharedCfg = SharedCfg::new("DBG").add(HttpServiceConfig::new()).into();
+        let codec = Codec::new(0, cfg.get());
+        let mut buf = BytesMut::from("GET / HTTP/1.1\r\nhost: a\r\n\r\n");
+        codec.decode(&mut buf).unwrap().unwrap();
+        assert!(codec.keepalive());
+
+        // no `.upgrade()` on the response
+        let mut out = BytePages::default();
+        codec
+            .encode(
+                Message::Item((
+                    Response::with_body(StatusCode::SWITCHING_PROTOCOLS, ()),
+                    BodySize::None,
+                )),
+                &mut out,
+            )
+            .unwrap();
+        let mut data = Vec::new();
+        while let Some(chunk) = out.take() {
+            data.extend_from_slice(&chunk);
+        }
+        let data = String::from_utf8(data).unwrap();
+        assert!(data.contains("connection: upgrade\r\n"), "{data:?}");
+        assert!(!codec.keepalive());
+    }
+
+    #[crate::rt_test]
+    async fn test_response_without_body_has_length() {
+        use crate::http::{StatusCode, header};
+
+        let encode = |req: &str, res: Response<()>| {
+            let cfg: SharedCfg = SharedCfg::new("DBG").add(HttpServiceConfig::new()).into();
+            let codec = Codec::new(0, cfg.get());
+            let mut buf = BytesMut::from(req);
+            codec.decode(&mut buf).unwrap().unwrap();
+
+            let mut out = BytePages::default();
+            codec
+                .encode(Message::Item((res, BodySize::None)), &mut out)
+                .unwrap();
+            let mut data = Vec::new();
+            while let Some(chunk) = out.take() {
+                data.extend_from_slice(&chunk);
+            }
+            (String::from_utf8(data).unwrap(), codec.keepalive())
+        };
+        let get = "GET / HTTP/1.1\r\nhost: a\r\n\r\n";
+
+        let (data, keepalive) = encode(get, Response::with_body(StatusCode::OK, ()));
+        assert!(data.contains("\r\ncontent-length: 0\r\n"), "{data:?}");
+        assert!(keepalive);
+
+        // a length set by the service is replaced
+        let mut res = Response::with_body(StatusCode::NOT_FOUND, ());
+        res.headers_mut().insert(
+            header::CONTENT_LENGTH,
+            header::HeaderValue::from_static("10"),
+        );
+        let (data, _) = encode(get, res);
+        assert_eq!(data.matches("content-length").count(), 1, "{data:?}");
+        assert!(data.contains("\r\ncontent-length: 0\r\n"), "{data:?}");
+
+        let (data, keepalive) = encode(
+            "GET / HTTP/1.0\r\nconnection: keep-alive\r\n\r\n",
+            Response::with_body(StatusCode::OK, ()),
+        );
+        assert!(data.contains("\r\ncontent-length: 0\r\n"), "{data:?}");
+        assert!(data.contains("connection: keep-alive\r\n"), "{data:?}");
+        assert!(keepalive);
+
+        // no body is expected
+        for (req, status) in [
+            ("HEAD / HTTP/1.1\r\nhost: a\r\n\r\n", StatusCode::OK),
+            (get, StatusCode::NO_CONTENT),
+            (get, StatusCode::NOT_MODIFIED),
+            (
+                "GET / HTTP/1.1\r\nhost: a\r\nconnection: upgrade\r\nupgrade: websocket\r\n\r\n",
+                StatusCode::SWITCHING_PROTOCOLS,
+            ),
+        ] {
+            let (data, _) = encode(req, Response::with_body(status, ()));
+            assert!(!data.contains("content-length"), "{status} {data:?}");
+            assert!(!data.contains("transfer-encoding"), "{status} {data:?}");
         }
     }
 
@@ -324,14 +445,15 @@ mod tests {
             "GET / HTTP/1.0\r\nconnection: keep-alive\r\n\r\n",
             Response::with_body(StatusCode::OK, ()),
         );
-        assert!(data.starts_with("HTTP/1.0 200 OK\r\n"), "{data:?}");
+        assert!(data.starts_with("HTTP/1.1 200 OK\r\n"), "{data:?}");
         assert!(!data.contains("transfer-encoding"), "{data:?}");
         assert!(!data.contains("keep-alive"), "{data:?}");
+        assert!(data.contains("connection: close\r\n"), "{data:?}");
         assert!(data.ends_with("\r\n\r\nabc"), "{data:?}");
         assert!(!keepalive);
 
         let (data, keepalive) = encode_stream(
-            "GET / HTTP/1.1\r\n\r\n",
+            "GET / HTTP/1.1\r\nhost: localhost\r\n\r\n",
             Response::with_body(StatusCode::OK, ()),
         );
         assert!(data.contains("transfer-encoding: chunked\r\n"), "{data:?}");
@@ -340,7 +462,7 @@ mod tests {
 
         let mut res = Response::with_body(StatusCode::OK, ());
         res.head_mut().no_chunking(true);
-        let (data, keepalive) = encode_stream("GET / HTTP/1.1\r\n\r\n", res);
+        let (data, keepalive) = encode_stream("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n", res);
         assert!(data.contains("connection: close\r\n"), "{data:?}");
         assert!(data.ends_with("\r\n\r\nabc"), "{data:?}");
         assert!(!keepalive);
@@ -354,7 +476,7 @@ mod tests {
         assert!(format!("{codec:?}").contains("h1::Codec"));
 
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              transfer-encoding: chunked\r\n\r\n",
         );
         let (req, pl) = codec.decode(&mut buf).unwrap().unwrap();
@@ -365,16 +487,14 @@ mod tests {
 
         buf.extend(
             b"4\r\ndata\r\n4\r\nline\r\n0\r\n\r\n\
-               POST /test2 HTTP/1.1\r\n\
+               POST /test2 HTTP/1.1\r\nhost: localhost\r\n\
                transfer-encoding: chunked\r\n\r\n"
                 .iter(),
         );
 
+        // small chunks are merged
         let msg = pl.decode(&mut buf).unwrap().unwrap();
-        assert_eq!(msg, PayloadItem::Chunk(Bytes::from_static(b"data")));
-
-        let msg = pl.decode(&mut buf).unwrap().unwrap();
-        assert_eq!(msg, PayloadItem::Chunk(Bytes::from_static(b"line")));
+        assert_eq!(msg, PayloadItem::Chunk(Bytes::from_static(b"dataline")));
 
         let msg = pl.decode(&mut buf).unwrap().unwrap();
         assert_eq!(msg, PayloadItem::Eof);
@@ -386,8 +506,8 @@ mod tests {
 
         let codec = Codec::new(0, cfg.get());
         let mut buf = BytesMut::from(
-            "GET /test HTTP/1.1\r\n\
-             connection: upgrade\r\n\r\n",
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
+             connection: upgrade\r\nupgrade: websocket\r\n\r\n",
         );
         let _item = codec.decode(&mut buf).unwrap().unwrap();
         assert!(codec.upgrade());

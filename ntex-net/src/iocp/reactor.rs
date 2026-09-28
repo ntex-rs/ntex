@@ -321,7 +321,9 @@ impl Notify for ReactorHandle {
                 self.inner.port.as_raw_handle().cast(),
                 0,
                 0,
-                self.inner.overlapped.as_overlapped().cast()
+                // the kernel does not write to the `OVERLAPPED` of a posted
+                // packet, and the completion only reads the handler index
+                (&raw const self.inner.overlapped.base).cast_mut().cast()
             )
         )?;
         Ok(())

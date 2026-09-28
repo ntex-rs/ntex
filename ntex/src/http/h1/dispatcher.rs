@@ -5,10 +5,12 @@ use crate::io::{Decoded, Filter, Io, IoStatusUpdate, RecvError};
 use crate::service::pipeline::{Pipeline, PipelineCall};
 use crate::{channel::bstream, util::clone_io_error};
 
-use crate::http::body::{BodySize, MessageBody, ResponseBody};
+use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::error::{DispatchError, PayloadError, ResponseError};
 use crate::http::message::CurrentIo;
-use crate::http::{self, config::DispatcherConfig, request::Request, response::Response};
+use crate::http::{
+    self, StatusCode, config::DispatcherConfig, request::Request, response::Response,
+};
 
 use super::control::{Control, ControlAck, ControlResult, ServiceDisconnectReason};
 use super::decoder::{PayloadDecoder, PayloadItem, PayloadType};
@@ -64,7 +66,7 @@ struct DispatcherInner<F, B, Err> {
     config: DispatcherConfig,
     disconnect: Disconnect,
     service: Pipeline<Request, Response<B>, Err>,
-    control: Pipeline<Control<F, Err>, ControlAck<F>, DispatchError>,
+    control: Option<Pipeline<Control<F, Err>, ControlAck<F>, DispatchError>>,
     payload: Option<(PayloadDecoder, bstream::Sender<PayloadError>)>,
     pending_payload_error: Option<PayloadFailure>,
 }
@@ -76,11 +78,14 @@ where
     Err: ResponseError + 'static,
 {
     /// Construct new `Dispatcher` instance with outgoing messages stream.
+    ///
+    /// Without a control service the default action is applied to every
+    /// control message.
     pub(in crate::http) fn new(
         id: usize,
         io: Io<F>,
         service: Pipeline<Request, Response<B>, Err>,
-        control: Pipeline<Control<F, Err>, ControlAck<F>, DispatchError>,
+        control: Option<Pipeline<Control<F, Err>, ControlAck<F>, DispatchError>>,
         config: DispatcherConfig,
     ) -> Self {
         let codec = Codec::new(id, io.shared().get());
@@ -158,47 +163,7 @@ where
                     };
 
                     match result {
-                        Ok(ControlAck { result }) => match result {
-                            ControlResult::Publish(req) => inner.publish(req),
-                            ControlResult::Response(res, body)
-                            | ControlResult::Error(res, body)
-                            | ControlResult::ProtocolError(res, body) => {
-                                inner.send_response(res, body.into())
-                            }
-                            ControlResult::Continue(req) => {
-                                let result =
-                                    inner.io.encode_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
-                                if let Err(err) = result {
-                                    *this.st = inner.ctl_peer_gone(Some(err));
-                                    continue;
-                                }
-                                inner.start_payload_timer();
-                                if req.upgrade() {
-                                    inner.ctl_upgrade(req)
-                                } else {
-                                    inner.publish(req)
-                                }
-                            }
-                            ControlResult::Expect(req) => inner.control(Control::expect(req)),
-                            ControlResult::ExpectFailed(res, body) => {
-                                inner.set_disconnect(ServiceDisconnectReason::ExpectFailed);
-                                inner.send_response(res, body.into())
-                            }
-                            ControlResult::Upgrade(req) => inner.ctl_upgrade(req),
-                            ControlResult::UpgradeAck(req) => {
-                                inner.set_disconnect(ServiceDisconnectReason::UpgradeHandled);
-                                inner.publish(req)
-                            }
-                            ControlResult::UpgradeHandled => {
-                                inner.ctl_svc_disconnect(ServiceDisconnectReason::UpgradeHandled)
-                            }
-                            ControlResult::UpgradeFailed(res, body) => {
-                                inner.set_disconnect(ServiceDisconnectReason::UpgradeFailed);
-                                inner.send_response(res, body.into())
-                            }
-                            ControlResult::Stop => inner.stop(),
-                            ControlResult::Connect(_) => unreachable!(),
-                        },
+                        Ok(ControlAck { result }) => inner.control_result(result),
                         Err(err) => {
                             log::error!("{}: Control plain error: {}", inner.io.tag(), err);
                             return Poll::Ready(Err(err));
@@ -219,7 +184,7 @@ where
                     if let Some(st) = inner.check_disconnect() {
                         st
                     } else {
-                        ready!(result).unwrap_or(State::ReadRequest)
+                        ready!(result).unwrap_or_else(|| inner.next_request())
                     }
                 }
                 // send response body
@@ -232,6 +197,15 @@ where
                     return Poll::Ready(Ok(()));
                 }
             }
+        }
+    }
+}
+
+impl<F, B, Err> Drop for DispatcherInner<F, B, Err> {
+    fn drop(&mut self) {
+        // a detached service call must not wait for the rest of the payload
+        if let Some((_, sender)) = self.payload.take() {
+            sender.set_error(PayloadError::Incomplete(None));
         }
     }
 }
@@ -321,6 +295,10 @@ where
                         } else {
                             continue;
                         }
+                    } else if self.timers.active == Timer::Idle {
+                        // expiry of the keep-alive timer left armed for the
+                        // previous request
+                        continue;
                     } else if self.timers.active == Timer::Headers {
                         if let Err(err) = self.handle_timeout() {
                             log::trace!("{}: Slow request timeout", self.io.tag());
@@ -349,12 +327,29 @@ where
         }
     }
 
-    fn send_response(&mut self, mut msg: Response<()>, body: ResponseBody<B>) -> State<F, B, Err> {
+    fn send_response(
+        &mut self,
+        mut msg: Response<()>,
+        mut body: ResponseBody<B>,
+    ) -> State<F, B, Err> {
+        // an interim response cannot complete the request, the next response would
+        // be taken as its final response, see RFC 9110 section 15.2
+        let status = msg.status();
+        if status.is_informational() && status != StatusCode::SWITCHING_PROTOCOLS {
+            log::error!(
+                "{}: Informational response {status} is not supported, sending 500",
+                self.io.tag()
+            );
+            msg = Response::new(StatusCode::INTERNAL_SERVER_ERROR).drop_body();
+            body = ResponseBody::Other(Body::Empty);
+        }
+
+        let size = body.size();
         log::trace!(
             "{}: Sending response: {:?} body: {:?}",
             self.io.tag(),
             msg,
-            body.size()
+            size
         );
         // close connection if payload stream is dropped and not consumed
         if let Some((_pl, snd)) = &self.payload
@@ -370,7 +365,7 @@ where
         if self.io.is_active() {
             let result = self
                 .io
-                .encode(Message::Item((msg, body.size())), &self.codec)
+                .encode(Message::Item((msg, size)), &self.codec)
                 .inspect_err(|_| {
                     if let Some(ref mut payload) = self.payload {
                         payload.1.set_error(PayloadError::Incomplete(None));
@@ -378,7 +373,7 @@ where
                 });
 
             match result {
-                Ok(()) => match body.size() {
+                Ok(()) => match size {
                     BodySize::None | BodySize::Empty => self.response_done(),
                     _ => State::SendPayload { body },
                 },
@@ -494,9 +489,10 @@ where
         }
     }
 
+    /// Fails the request payload, the payload stream ends with `err`.
     fn set_payload_error(&mut self, err: PayloadError) {
-        if let Some(ref mut payload) = self.payload {
-            payload.1.set_error(err);
+        if let Some((_, sender)) = self.payload.take() {
+            sender.set_error(err);
         }
     }
 
@@ -553,7 +549,12 @@ where
                         }
                         Err(RecvError::WriteBackpressure) => match self.poll_flush_timed(cx) {
                             Poll::Ready(Ok(())) => continue,
-                            Poll::Ready(Err(err)) => PayloadFailure::PeerGone(Some(err)),
+                            Poll::Ready(Err(err)) => {
+                                self.set_payload_error(PayloadError::Incomplete(Some(
+                                    clone_io_error(&err),
+                                )));
+                                PayloadFailure::PeerGone(Some(err))
+                            }
                             Poll::Pending => {
                                 self.timers.pause_payload(&self.io);
                                 break;
@@ -742,7 +743,12 @@ where
     /// Starts payload timing for the current request if it is not started
     /// yet, an expectation can be handled without `100 Continue`.
     fn start_payload_timer(&mut self) {
-        if self.payload.is_some() && matches!(self.timers.active, Timer::Stopped | Timer::Write) {
+        if self.payload.is_some()
+            && matches!(
+                self.timers.active,
+                Timer::Stopped | Timer::Idle | Timer::Write
+            )
+        {
             self.timers
                 .start_payload(&self.io, self.codec.cfg.payload_read_rate);
         }
@@ -757,7 +763,19 @@ where
             self.start_payload_timer();
             State::ReadPayload
         } else {
+            self.next_request()
+        }
+    }
+
+    /// Reads the next request, unless the last response closes the
+    /// connection, then pipelined requests are not processed.
+    fn next_request(&mut self) -> State<F, B, Err> {
+        if self.codec.keepalive() {
             State::ReadRequest
+        } else {
+            log::trace!("{}: Connection is not persistent, close", self.io.tag());
+            self.io.close();
+            self.ctl_keepalive(false)
         }
     }
 
@@ -785,9 +803,56 @@ where
         }
     }
 
-    fn control(&self, req: Control<F, Err>) -> State<F, B, Err> {
-        State::CallControl {
-            fut: self.control.call_nowait(req),
+    /// Applies the control service acknowledgement.
+    fn control_result(&mut self, result: ControlResult<F>) -> State<F, B, Err> {
+        match result {
+            ControlResult::Publish(req) => self.publish(req),
+            ControlResult::Response(res, body)
+            | ControlResult::Error(res, body)
+            | ControlResult::ProtocolError(res, body) => self.send_response(res, body.into()),
+            ControlResult::Continue(req) => {
+                let result = self.io.encode_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
+                if let Err(err) = result {
+                    return self.ctl_peer_gone(Some(err));
+                }
+                self.start_payload_timer();
+                if req.upgrade() {
+                    self.ctl_upgrade(req)
+                } else {
+                    self.publish(req)
+                }
+            }
+            ControlResult::Expect(req) => self.control(Control::expect(req)),
+            ControlResult::ExpectFailed(res, body) => {
+                self.set_disconnect(ServiceDisconnectReason::ExpectFailed);
+                self.send_response(res, body.into())
+            }
+            ControlResult::Upgrade(req) => self.ctl_upgrade(req),
+            ControlResult::UpgradeAck(req) => {
+                self.set_disconnect(ServiceDisconnectReason::UpgradeHandled);
+                self.publish(req)
+            }
+            ControlResult::UpgradeHandled => {
+                self.ctl_svc_disconnect(ServiceDisconnectReason::UpgradeHandled)
+            }
+            ControlResult::UpgradeFailed(res, body) => {
+                self.set_disconnect(ServiceDisconnectReason::UpgradeFailed);
+                self.send_response(res, body.into())
+            }
+            ControlResult::Stop => self.stop(),
+            ControlResult::Connect(_) => unreachable!(),
+        }
+    }
+
+    /// Sends a control message, without a control service the default action
+    /// is applied.
+    fn control(&mut self, req: Control<F, Err>) -> State<F, B, Err> {
+        if let Some(ctl) = &self.control {
+            State::CallControl {
+                fut: ctl.call_nowait(req),
+            }
+        } else {
+            self.control_result(req.ack().result)
         }
     }
 
@@ -867,7 +932,7 @@ mod tests {
 
     use super::*;
     use crate::http::config::HttpServiceConfig;
-    use crate::http::h1::{DefaultControlService, control::Reason};
+    use crate::http::h1::control::Reason;
     use crate::http::{KeepAlive, ResponseHead, StatusCode, body};
     use crate::io::{self as nio, Base, testing::IoTest};
     use crate::service::{IntoService, Service, cfg::SharedCfg, fn_service};
@@ -891,7 +956,7 @@ mod tests {
                 (),
                 fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         );
 
@@ -930,7 +995,7 @@ mod tests {
                 (),
                 fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         );
 
@@ -943,10 +1008,8 @@ mod tests {
             h1.inner.disconnect,
             Disconnect::Pending(ServiceDisconnectReason::ExpectFailed)
         ));
-        assert!(matches!(
-            h1.inner.ctl_peer_gone(None),
-            State::CallControl { .. }
-        ));
+        // without a control service the disconnect is acknowledged in place
+        assert!(matches!(h1.inner.ctl_peer_gone(None), State::Stop));
         assert!(matches!(h1.inner.disconnect, Disconnect::Sent));
 
         h1.inner
@@ -973,7 +1036,7 @@ mod tests {
                 (),
                 fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         );
         let (tx, rx) = bstream::channel::<PayloadError>();
@@ -982,6 +1045,54 @@ mod tests {
         h1.inner.timers.active = Timer::PayloadPaused;
         h1.inner.timers.progress.max_timeout = Seconds::ZERO;
         (h1, rx)
+    }
+
+    /// A detached payload reader is woken with an error when the dispatcher
+    /// is dropped before the payload is complete.
+    #[crate::rt_test]
+    async fn test_dropped_dispatcher_fails_detached_payload() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let result = Rc::new(RefCell::new(None));
+        let result2 = result.clone();
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, SharedCfg::new("SVC")),
+            Pipeline::new(
+                (),
+                fn_service(move |mut req: Request| {
+                    let result = result2.clone();
+                    async move {
+                        let mut pl = req.take_payload();
+                        crate::rt::spawn(async move {
+                            let mut last = None;
+                            while let Some(item) = pl.recv().await {
+                                last = Some(item);
+                            }
+                            *result.borrow_mut() = Some(last);
+                        });
+                        Ok::<_, io::Error>(Response::Ok().build())
+                    }
+                }),
+            ),
+            None,
+            DispatcherConfig::default(),
+        );
+
+        client.write("POST / HTTP/1.1\r\nhost: a\r\ncontent-length: 10\r\n\r\npart");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        sleep(Millis(50)).await;
+        assert!(result.borrow().is_none());
+
+        drop(h1);
+        sleep(Millis(50)).await;
+        let res = result.borrow_mut().take();
+        assert!(
+            matches!(res, Some(Some(Err(PayloadError::Incomplete(None))))),
+            "{res:?}"
+        );
     }
 
     /// Resuming without budget left decodes the buffered payload first.
@@ -1097,11 +1208,11 @@ mod tests {
                     Ok::<_, io::Error>(Response::Ok().build())
                 }),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         );
 
-        client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\n\r\n");
+        client.write("POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 4\r\n\r\n");
         sleep(Millis(50)).await;
         h1.inner.io.notify_timeout();
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
@@ -1134,11 +1245,11 @@ mod tests {
                     Ok::<_, io::Error>(Response::Ok().build())
                 }),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         );
 
-        client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\n\r\n");
+        client.write("POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 4\r\n\r\n");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
 
@@ -1176,11 +1287,11 @@ mod tests {
                 (),
                 fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         );
 
-        client.write("GET /first HTTP/1.1\r\n\r\n");
+        client.write("GET /first HTTP/1.1\r\nhost: localhost\r\n\r\n");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert_eq!(h1.inner.timers.active, Timer::KeepAlive);
@@ -1224,9 +1335,68 @@ mod tests {
                 (),
                 fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         )
+    }
+
+    /// Expiry of the keep-alive timer left armed while a request is processed
+    /// does not close the connection.
+    #[crate::rt_test]
+    async fn test_idle_keepalive_expiry_is_ignored() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(
+                HttpServiceConfig::new()
+                    .set_client_timeout(Seconds::ZERO)
+                    .set_keepalive(Seconds(1)),
+            )
+            .into();
+        let mut h1 = Dispatcher::<_, body::Body, io::Error>::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |req: Request| {
+                    if req.path() == "/slow" {
+                        sleep(Millis(1300)).await;
+                    }
+                    Ok::<_, io::Error>(Response::Ok().build())
+                }),
+            ),
+            None,
+            DispatcherConfig::default(),
+        );
+
+        client.write("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        sleep(Millis(50)).await;
+        assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
+        assert_eq!(h1.inner.timers.active, Timer::KeepAlive);
+
+        client.write("GET /slow HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert_eq!(h1.inner.timers.active, Timer::Idle);
+
+        // the armed keep-alive timer expires while the service is busy
+        sleep(Millis(1500)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        sleep(Millis(50)).await;
+        assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
+        assert!(h1.inner.io.is_active());
+        assert_eq!(h1.inner.timers.active, Timer::KeepAlive);
+
+        client.write("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        sleep(Millis(50)).await;
+        assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
+
+        client.close().await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
     }
 
     /// Without request-head timing, waiting for the first request is not
@@ -1243,7 +1413,7 @@ mod tests {
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert!(h1.inner.io.is_active());
 
-        client.write("GET / HTTP/1.1\r\n");
+        client.write("GET / HTTP/1.1\r\nhost: localhost\r\n");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert_eq!(h1.inner.timers.active, Timer::ClientTimeout);
@@ -1269,7 +1439,7 @@ mod tests {
         client.remote_buffer_cap(1024);
         let mut h1 = keepalive_h1(server);
 
-        client.write("GET /first HTTP/1.1\r\n\r\nGET /next HTTP/1.1\r\n");
+        client.write("GET /first HTTP/1.1\r\nhost: localhost\r\n\r\nGET /next HTTP/1.1\r\nhost: localhost\r\n");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         sleep(Millis(50)).await;
@@ -1302,7 +1472,7 @@ mod tests {
                 (),
                 fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         )
     }
@@ -1338,7 +1508,7 @@ mod tests {
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert_eq!(h1.inner.timers.active, Timer::ClientTimeout);
 
-        let partial = "GET / HTTP/1.1\r\n";
+        let partial = "GET / HTTP/1.1\r\nhost: localhost\r\n";
         client.write(partial);
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
@@ -1361,7 +1531,7 @@ mod tests {
         let mut h1 = client_timeout_h1(server);
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
-        client.write("GET / HTTP/1.1\r\n");
+        client.write("GET / HTTP/1.1\r\nhost: localhost\r\n");
         sleep(Millis(50)).await;
         h1.inner.io.notify_timeout();
 
@@ -1390,14 +1560,14 @@ mod tests {
                 (),
                 fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         );
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert!(h1.inner.io.is_active());
 
-        client.write("GET / HTTP/1.1\r\n\r\n");
+        client.write("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
         sleep(Millis(50)).await;
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
 
@@ -1426,7 +1596,7 @@ mod tests {
             0,
             nio::Io::new(stream, cfg.clone()),
             Pipeline::new((), s.into_service().map(Into::into)),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         )
     }
@@ -1451,7 +1621,7 @@ mod tests {
             0,
             nio::Io::new(stream, cfg),
             Pipeline::new((), s.into_service().map(Into::into)),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         ));
     }
@@ -1480,7 +1650,7 @@ mod tests {
             0,
             nio::Io::new(server, config),
             Pipeline::new((), async |_| Ok::<_, io::Error>(Response::Ok().build())),
-            Pipeline::new(
+            Some(Pipeline::new(
                 (),
                 fn_service(async move |req: Control<_, _>| {
                     if let Control::Request(_) = req {
@@ -1488,14 +1658,14 @@ mod tests {
                     }
                     Ok::<_, DispatchError>(req.ack())
                 }),
-            ),
+            )),
             DispatcherConfig::default(),
         );
         sleep(Millis(50)).await;
         let _ = lazy(|cx| Pin::new(&mut h1).poll(cx)).await;
         sleep(Millis(50)).await;
 
-        client.local_buffer(|buf| assert_eq!(&buf[..15], b"HTTP/1.0 200 OK"));
+        client.local_buffer(|buf| assert_eq!(&buf[..15], b"HTTP/1.1 200 OK"));
         client.close().await;
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
@@ -1532,14 +1702,14 @@ mod tests {
         let mut decoder = ClientCodec::new(true, SharedCfg::default().get());
         spawn_h1(server, async |_| Ok::<_, io::Error>(Response::Ok().build()));
 
-        client.write("GET /test1 HTTP/1.1\r\n\r\n");
+        client.write("GET /test1 HTTP/1.1\r\nhost: localhost\r\n\r\n");
 
         let mut buf = BytesMut::from(&client.read().await.unwrap()[..]);
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(!client.is_server_dropped());
 
-        client.write("GET /test2 HTTP/1.1\r\n\r\n");
-        client.write("GET /test3 HTTP/1.1\r\n\r\n");
+        client.write("GET /test2 HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        client.write("GET /test3 HTTP/1.1\r\nhost: localhost\r\n\r\n");
 
         let mut buf = BytesMut::from(&client.read().await.unwrap()[..]);
         assert!(load(&mut decoder, &mut buf).status.is_success());
@@ -1549,6 +1719,232 @@ mod tests {
 
         client.close().await;
         assert!(client.is_server_dropped());
+    }
+
+    #[crate::rt_test]
+    async fn test_pipeline_after_close() {
+        for (req, res) in [
+            (
+                "GET /test1 HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n",
+                "HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n",
+            ),
+            (
+                "GET /test1 HTTP/1.0\r\n\r\n",
+                "HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n",
+            ),
+            (
+                "POST /test1 HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\ncontent-length: 4\r\n\r\nbody",
+                "HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n",
+            ),
+        ] {
+            let (client, server) = IoTest::create();
+            client.remote_buffer_cap(4096);
+            let calls = Rc::new(Cell::new(0));
+            let calls2 = calls.clone();
+            spawn_h1(server, move |mut req: Request| {
+                calls2.set(calls2.get() + 1);
+                async move {
+                    let mut pl = req.take_payload();
+                    while let Some(item) = crate::util::stream_recv(&mut pl).await {
+                        item.unwrap();
+                    }
+                    Ok::<_, io::Error>(Response::Ok().build())
+                }
+            });
+
+            // the next request is pipelined behind a non-persistent request
+            client.write(format!(
+                "{req}GET /test2 HTTP/1.1\r\nhost: localhost\r\n\r\n"
+            ));
+            sleep(Millis(100)).await;
+
+            let buf = client.read_any();
+            assert!(buf.starts_with(res.as_bytes()), "{req:?} {buf:?}");
+            assert_eq!(
+                buf.windows(7).filter(|w| w == b"HTTP/1.").count(),
+                1,
+                "{req:?}"
+            );
+            assert_eq!(calls.get(), 1, "{req:?}");
+            assert!(client.is_server_dropped(), "{req:?}");
+        }
+    }
+
+    #[crate::rt_test]
+    async fn test_response_without_body_is_framed() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+        spawn_h1(server, move |req: Request| async move {
+            if req.path() == "/test1" {
+                Ok::<_, io::Error>(Response::Ok().body(body::Body::None))
+            } else {
+                Ok(Response::Ok().body("next"))
+            }
+        });
+
+        client.write(
+            "GET /test1 HTTP/1.1\r\nhost: a\r\n\r\n\
+             GET /test2 HTTP/1.1\r\nhost: a\r\n\r\n",
+        );
+        sleep(Millis(100)).await;
+
+        let buf = client.read_any();
+        let data = String::from_utf8(buf.to_vec()).unwrap();
+        let (first, second) = data.split_at(data.rfind("HTTP/1.1 200 OK").unwrap());
+        assert!(first.starts_with("HTTP/1.1 200 OK\r\n"), "{data:?}");
+        assert!(first.contains("\r\ncontent-length: 0\r\n"), "{data:?}");
+        assert!(first.ends_with("\r\n\r\n"), "{data:?}");
+        assert!(second.contains("\r\ncontent-length: 4\r\n"), "{data:?}");
+        assert!(second.ends_with("\r\n\r\nnext"), "{data:?}");
+        assert!(!client.is_server_dropped());
+    }
+
+    #[crate::rt_test]
+    async fn test_informational_response_is_replaced() {
+        for status in [
+            StatusCode::CONTINUE,
+            StatusCode::PROCESSING,
+            StatusCode::EARLY_HINTS,
+        ] {
+            let (client, server) = IoTest::create();
+            client.remote_buffer_cap(4096);
+            spawn_h1(server, move |req: Request| async move {
+                if req.path() == "/test1" {
+                    Ok::<_, io::Error>(Response::builder(status).body("interim"))
+                } else {
+                    Ok(Response::Ok().build())
+                }
+            });
+
+            client.write(
+                "GET /test1 HTTP/1.1\r\nhost: a\r\n\r\n\
+                 GET /test2 HTTP/1.1\r\nhost: a\r\n\r\n",
+            );
+            sleep(Millis(100)).await;
+
+            let buf = client.read_any();
+            assert!(
+                buf.starts_with(b"HTTP/1.1 500 Internal Server Error\r\ncontent-length: 0\r\n"),
+                "{status} {buf:?}"
+            );
+            assert_eq!(
+                buf.windows(9).filter(|w| w == b"HTTP/1.1 ").count(),
+                2,
+                "{status} {buf:?}"
+            );
+            assert!(!buf.windows(7).any(|w| w == b"interim"), "{status} {buf:?}");
+            assert!(
+                buf.windows(15).any(|w| w == b"HTTP/1.1 200 OK"),
+                "{status} {buf:?}"
+            );
+        }
+    }
+
+    #[crate::rt_test]
+    async fn test_upgrade_without_connection_option() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let seen2 = seen.clone();
+        spawn_h1(server, move |req: Request| {
+            seen2
+                .borrow_mut()
+                .push((req.path().to_string(), req.upgrade()));
+            async { Ok::<_, io::Error>(Response::Ok().build()) }
+        });
+
+        client.write(
+            "GET /test1 HTTP/1.1\r\nhost: a\r\nupgrade: websocket\r\n\r\n\
+             GET /test2 HTTP/1.1\r\nhost: a\r\nconnection: upgrade\r\n\r\n\
+             GET /test3 HTTP/1.1\r\nhost: a\r\n\r\n",
+        );
+        sleep(Millis(100)).await;
+
+        let buf = client.read_any();
+        assert_eq!(
+            buf.windows(15).filter(|w| w == b"HTTP/1.1 200 OK").count(),
+            3,
+            "{buf:?}"
+        );
+        assert_eq!(
+            *seen.borrow(),
+            [
+                ("/test1".to_string(), false),
+                ("/test2".to_string(), false),
+                ("/test3".to_string(), false)
+            ]
+        );
+    }
+
+    #[crate::rt_test]
+    async fn test_http10_expect_and_upgrade_ignored() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let seen2 = seen.clone();
+        spawn_h1(server, move |mut req: Request| {
+            seen2
+                .borrow_mut()
+                .push((req.path().to_string(), req.upgrade()));
+            async move {
+                let mut pl = req.take_payload();
+                while let Some(item) = crate::util::stream_recv(&mut pl).await {
+                    item.unwrap();
+                }
+                Ok::<_, io::Error>(Response::Ok().build())
+            }
+        });
+
+        client.write(
+            "POST /test1 HTTP/1.0\r\nconnection: keep-alive\r\n\
+             expect: 100-continue\r\ncontent-length: 4\r\n\r\nbody\
+             GET /test2 HTTP/1.0\r\nconnection: keep-alive, upgrade\r\n\
+             upgrade: websocket\r\n\r\n\
+             GET /test3 HTTP/1.0\r\n\r\n",
+        );
+        sleep(Millis(100)).await;
+
+        let buf = client.read_any();
+        // no interim response for an HTTP/1.0 client
+        assert!(buf.starts_with(b"HTTP/1.1 200 OK\r\n"), "{buf:?}");
+        assert!(!buf.windows(3).any(|w| w == b"100"), "{buf:?}");
+        assert_eq!(
+            *seen.borrow(),
+            [
+                ("/test1".to_string(), false),
+                ("/test2".to_string(), false),
+                ("/test3".to_string(), false)
+            ]
+        );
+    }
+
+    #[crate::rt_test]
+    async fn test_invalid_host_rejected() {
+        for req in [
+            "GET /test HTTP/1.1\r\n\r\n",
+            "GET /test HTTP/1.1\r\nhost: a\r\nhost: b\r\n\r\n",
+            "GET /test HTTP/1.1\r\nhost: user@a\r\n\r\n",
+        ] {
+            let (client, server) = IoTest::create();
+            client.remote_buffer_cap(4096);
+            let calls = Rc::new(Cell::new(0));
+            let calls2 = calls.clone();
+            spawn_h1(server, move |_| {
+                calls2.set(calls2.get() + 1);
+                async { Ok::<_, io::Error>(Response::Ok().build()) }
+            });
+
+            client.write(req);
+            sleep(Millis(100)).await;
+
+            let buf = client.read_any();
+            assert!(
+                buf.starts_with(b"HTTP/1.1 400 Bad Request\r\n"),
+                "{req:?} {buf:?}"
+            );
+            assert_eq!(calls.get(), 0, "{req:?}");
+            assert!(client.is_server_dropped(), "{req:?}");
+        }
     }
 
     #[crate::rt_test]
@@ -1563,7 +1959,7 @@ mod tests {
             Ok::<_, io::Error>(Response::Ok().build())
         });
 
-        client.write("GET /test1 HTTP/1.1\r\ncontent-length: 5\r\n\r\n");
+        client.write("GET /test1 HTTP/1.1\r\nhost: localhost\r\ncontent-length: 5\r\n\r\n");
         sleep(Millis(50)).await;
         client.write("xxxxx");
 
@@ -1571,7 +1967,7 @@ mod tests {
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(!client.is_server_dropped());
 
-        client.write("GET /test2 HTTP/1.1\r\n\r\n");
+        client.write("GET /test2 HTTP/1.1\r\nhost: localhost\r\n\r\n");
 
         let mut buf = BytesMut::from(&client.read().await.unwrap()[..]);
         assert!(load(&mut decoder, &mut buf).status.is_success());
@@ -1592,16 +1988,16 @@ mod tests {
             Ok::<_, io::Error>(Response::Ok().build())
         });
 
-        client.write("GET /test HTTP/1.1\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
 
         let mut buf = BytesMut::from(&client.read().await.unwrap()[..]);
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(!client.is_server_dropped());
 
-        client.write("GET /test HTTP/1.1\r\n\r\n");
-        client.write("GET /test HTTP/1.1\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
         sleep(Millis(50)).await;
-        client.write("GET /test HTTP/1.1\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
 
         let mut buf = BytesMut::from(&client.read().await.unwrap()[..]);
         assert!(load(&mut decoder, &mut buf).status.is_success());
@@ -1634,9 +2030,9 @@ mod tests {
         });
 
         client.remote_buffer_cap(1024);
-        client.write("GET /test HTTP/1.1\r\n\r\n");
-        client.write("GET /test HTTP/1.1\r\n\r\n");
-        client.write("GET /test HTTP/1.1\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
         client.close().await;
         assert!(client.is_server_dropped());
 
@@ -1677,7 +2073,7 @@ mod tests {
             .take(70_000)
             .map(char::from)
             .collect::<String>();
-        client.write("GET /test HTTP/1.1\r\nContent-Length: ");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\nContent-Length: ");
         client.write(data);
         sleep(Millis(50)).await;
 
@@ -1712,7 +2108,7 @@ mod tests {
             Ok::<_, io::Error>(Response::Ok().build())
         });
 
-        client.write("GET /test HTTP/1.1\r\nContent-Length: 1048576\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\nContent-Length: 1048576\r\n\r\n");
         sleep(Millis(50)).await;
 
         // buf must be consumed
@@ -1743,7 +2139,7 @@ mod tests {
                     async { Ok::<_, io::Error>(Response::Ok().body("x".repeat(128 * 1024))) }
                 }),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         )
     }
@@ -1760,7 +2156,7 @@ mod tests {
             Rc::default(),
         );
 
-        client.write("GET / HTTP/1.1\r\n\r\n");
+        client.write("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert!(h1.inner.io.is_wr_backpressure());
@@ -1784,7 +2180,7 @@ mod tests {
             payload.clone(),
         );
 
-        client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\n\r\nb");
+        client.write("POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 4\r\n\r\nb");
         let res = timeout(Millis(5000), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
         assert!(res.unwrap().is_ok());
 
@@ -1823,7 +2219,7 @@ mod tests {
         client.remote_buffer_cap(0);
         let mut h1 = write_timeout_h1(server, HttpServiceConfig::new(), Rc::default());
 
-        client.write("GET / HTTP/1.1\r\n\r\n");
+        client.write("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert_eq!(h1.inner.timers.active, Timer::Stopped);
@@ -1848,7 +2244,7 @@ mod tests {
             payload.clone(),
         );
 
-        client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\n\r\nb");
+        client.write("POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 4\r\n\r\nb");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
@@ -1887,11 +2283,11 @@ mod tests {
                     async { Ok::<_, io::Error>(Response::Ok().body("x".repeat(128 * 1024))) }
                 }),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         );
 
-        client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\n\r\nb");
+        client.write("POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 4\r\n\r\nb");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert_eq!(h1.inner.timers.active, Timer::Payload);
@@ -1953,7 +2349,7 @@ mod tests {
 
         // do not allow to write to socket
         client.remote_buffer_cap(0);
-        client.write("GET /test HTTP/1.1\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
 
@@ -2006,7 +2402,7 @@ mod tests {
             Ok::<_, io::Error>(Response::Ok().message_body(Stream(false)))
         });
 
-        client.write("GET /test HTTP/1.1\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
 
@@ -2045,7 +2441,7 @@ mod tests {
                     Ok::<_, io::Error>(Response::Ok().build())
                 }),
             ),
-            Pipeline::new(
+            Some(Pipeline::new(
                 (),
                 fn_service(async move |msg: Control<_, _>| {
                     if let Control::Disconnect(Reason::PeerGone(err)) = &msg {
@@ -2054,7 +2450,7 @@ mod tests {
                     }
                     Ok::<_, DispatchError>(msg.ack())
                 }),
-            ),
+            )),
             DispatcherConfig::default(),
         );
 
@@ -2091,7 +2487,7 @@ mod tests {
                     Ok::<_, io::Error>(Response::Ok().build())
                 }),
             ),
-            Pipeline::new(
+            Some(Pipeline::new(
                 (),
                 fn_service(async move |msg: Control<_, _>| {
                     if let Control::Disconnect(Reason::PeerGone(err)) = &msg {
@@ -2103,7 +2499,7 @@ mod tests {
                     }
                     Ok::<_, DispatchError>(msg.ack())
                 }),
-            ),
+            )),
             DispatcherConfig::default(),
         );
 
@@ -2135,7 +2531,7 @@ mod tests {
                 (),
                 fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         );
 
@@ -2170,11 +2566,11 @@ mod tests {
                     Ok::<_, io::Error>(Response::Ok().build())
                 }),
             ),
-            Pipeline::new((), DefaultControlService),
+            None,
             DispatcherConfig::default(),
         );
 
-        client.write("POST / HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\n");
+        client.write("POST / HTTP/1.1\r\nhost: localhost\r\ntransfer-encoding: chunked\r\n\r\n");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
 
@@ -2216,7 +2612,7 @@ mod tests {
                     Ok::<_, io::Error>(Response::Ok().build())
                 }),
             ),
-            Pipeline::new(
+            Some(Pipeline::new(
                 (),
                 fn_service(async |req: Control<Base, io::Error>| {
                     if let Control::Expect(exc) = req {
@@ -2227,12 +2623,12 @@ mod tests {
                         Ok(req.ack())
                     }
                 }),
-            ),
+            )),
             DispatcherConfig::default(),
         );
         crate::rt::spawn(h1);
 
-        client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\nexpect: 100-continue\r\n\r\n");
+        client.write("POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 4\r\nexpect: 100-continue\r\n\r\n");
         // an expired payload timer would respond with an error or close
         let buf = client.read().await.unwrap();
         assert_eq!(&buf[..], b"HTTP/1.1 100 Continue\r\n\r\n");
@@ -2261,7 +2657,7 @@ mod tests {
                 (),
                 fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
             ),
-            Pipeline::new(
+            Some(Pipeline::new(
                 (),
                 fn_service(move |req: Control<Base, io::Error>| {
                     let stash = stash2.clone();
@@ -2275,11 +2671,11 @@ mod tests {
                         }
                     }
                 }),
-            ),
+            )),
             DispatcherConfig::default(),
         );
 
-        client.write("POST / HTTP/1.1\r\ncontent-length: 4\r\nexpect: 100-continue\r\n\r\n");
+        client.write("POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 4\r\nexpect: 100-continue\r\n\r\n");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         sleep(Millis(50)).await;
@@ -2312,7 +2708,7 @@ mod tests {
                     Ok::<_, io::Error>(Response::Ok().build())
                 }),
             ),
-            Pipeline::new(
+            Some(Pipeline::new(
                 (),
                 fn_service(async move |msg: Control<_, _>| {
                     match &msg {
@@ -2324,11 +2720,11 @@ mod tests {
                     }
                     Ok::<_, DispatchError>(msg.ack())
                 }),
-            ),
+            )),
             DispatcherConfig::default(),
         );
 
-        client.write("POST / HTTP/1.1\r\ncontent-length: 10\r\n\r\nbody");
+        client.write("POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 10\r\n\r\nbody");
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
 
         client.close().await;
@@ -2356,7 +2752,7 @@ mod tests {
                     Ok::<_, io::Error>(Response::Ok().build())
                 }),
             ),
-            Pipeline::new(
+            Some(Pipeline::new(
                 (),
                 fn_service(async move |msg: Control<_, _>| {
                     match &msg {
@@ -2370,11 +2766,13 @@ mod tests {
                     }
                     Ok::<_, DispatchError>(msg.ack())
                 }),
-            ),
+            )),
             DispatcherConfig::default(),
         );
 
-        client.write("POST / HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\ninvalid\r\n");
+        client.write(
+            "POST / HTTP/1.1\r\nhost: localhost\r\ntransfer-encoding: chunked\r\n\r\ninvalid\r\n",
+        );
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
         assert_eq!(requests.load(Ordering::Relaxed), 0);
@@ -2402,7 +2800,7 @@ mod tests {
                     async { Err::<Response<()>, _>(io::Error::other("service error")) }
                 }),
             ),
-            Pipeline::new(
+            Some(Pipeline::new(
                 (),
                 fn_service(async move |msg: Control<_, io::Error>| {
                     let wait = match &msg {
@@ -2422,11 +2820,11 @@ mod tests {
                     }
                     Ok::<_, DispatchError>(msg.ack())
                 }),
-            ),
+            )),
             DispatcherConfig::default(),
         );
 
-        client.write("POST / HTTP/1.1\r\ncontent-length: 10\r\n\r\nbody");
+        client.write("POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 10\r\n\r\nbody");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
 
@@ -2455,7 +2853,7 @@ mod tests {
             }
         });
 
-        client.write("POST / HTTP/1.1\r\ncontent-length: 10\r\n\r\nbody");
+        client.write("POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 10\r\n\r\nbody");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
 
@@ -2492,7 +2890,7 @@ mod tests {
             }
         });
 
-        client.write("POST / HTTP/1.1\r\ncontent-length: 10\r\n\r\nbody");
+        client.write("POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 10\r\n\r\nbody");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
 
@@ -2524,7 +2922,9 @@ mod tests {
             }
         });
 
-        client.write("POST / HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\ninvalid\r\n");
+        client.write(
+            "POST / HTTP/1.1\r\nhost: localhost\r\ntransfer-encoding: chunked\r\n\r\ninvalid\r\n",
+        );
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
         sleep(Millis(50)).await;
         assert_eq!(mark.load(Ordering::Relaxed), 1);
@@ -2534,7 +2934,7 @@ mod tests {
     async fn test_service_error() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
-        client.write("GET /test HTTP/1.1\r\ncontent-length:512\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\ncontent-length:512\r\n\r\n");
 
         let mut h1 = h1(server, |_| {
             Box::pin(async { Err::<Response<()>, _>(io::Error::other("error")) })
@@ -2588,7 +2988,7 @@ mod tests {
             0,
             nio::Io::new(server, config),
             Pipeline::new((), fn_service(svc)),
-            Pipeline::new(
+            Some(Pipeline::new(
                 (),
                 fn_service(async move |msg: Control<_, _>| {
                     if let Control::Disconnect(Reason::ProtocolError(ref err)) = msg
@@ -2598,12 +2998,12 @@ mod tests {
                     }
                     Ok::<_, DispatchError>(msg.ack())
                 }),
-            ),
+            )),
             DispatcherConfig::default(),
         );
         crate::rt::spawn(disp);
 
-        client.write("GET /test HTTP/1.1\r\nContent-Length: 1048576\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\nContent-Length: 1048576\r\n\r\n");
         sleep(Millis(50)).await;
 
         // send partial data to server, 1200 bytes per second exceeds the
@@ -2628,7 +3028,7 @@ mod tests {
     async fn test_unconsumed_payload() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
-        client.write("GET /test HTTP/1.1\r\ncontent-length:512\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\ncontent-length:512\r\n\r\n");
 
         let mut h1 = h1(server, async move |_| {
             Ok::<_, io::Error>(Response::Ok().body("TEST"))

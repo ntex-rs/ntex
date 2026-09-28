@@ -42,14 +42,17 @@ impl From<Option<usize>> for KeepAlive {
 /// Configuration shared by HTTP/1 and HTTP/2 server services.
 ///
 /// The default configuration enables persistent HTTP/1 connections with a
-/// five-second idle timeout, allows 96 headers, limits the message-head buffer
-/// to 64 KiB, and applies a one-second initial request-header timeout.
+/// five-second idle timeout, allows 96 headers, limits the request or status
+/// line to 16 KiB and the message-head buffer to 64 KiB, and applies a
+/// one-second initial request-header timeout.
 pub struct HttpServiceConfig {
     pub(super) keep_alive: Seconds,
     pub(super) ka_enabled: bool,
     pub(super) headers_vec: bool,
+    pub(super) validate_host: bool,
     pub(super) max_headers: u16,
     pub(super) max_buf_size: usize,
+    pub(super) max_start_line_size: usize,
     pub(super) headers_read_rate: Option<FrameReadRate>,
     pub(super) payload_read_rate: Option<FrameReadRate>,
     pub(super) write_timeout: Seconds,
@@ -100,7 +103,9 @@ impl HttpServiceConfig {
             }),
             max_headers: 96,
             max_buf_size: 64 * 1024,
+            max_start_line_size: 16 * 1024,
             headers_vec: false,
+            validate_host: true,
             payload_read_rate: None,
             write_timeout: Seconds::ZERO,
             config: CfgContext::default(),
@@ -127,6 +132,18 @@ impl HttpServiceConfig {
     /// are rejected. The default is 64 KiB.
     pub fn set_max_buf_size(mut self, val: usize) -> Self {
         self.max_buf_size = val;
+        self
+    }
+
+    #[must_use]
+    /// Sets the maximum size of an HTTP/1 request or status line.
+    ///
+    /// The line, including its line end, may occupy up to and including this
+    /// number of bytes. Requests with a longer request line are rejected with
+    /// `414 URI Too Long`. The line is also limited by
+    /// [`set_max_buf_size`](Self::set_max_buf_size). The default is 16 KiB.
+    pub fn set_max_start_line_size(mut self, val: usize) -> Self {
+        self.max_start_line_size = val;
         self
     }
 
@@ -231,6 +248,21 @@ impl HttpServiceConfig {
     /// The normal header map remains populated. This is disabled by default.
     pub fn set_headers_vec(mut self, enabled: bool) -> Self {
         self.headers_vec = enabled;
+        self
+    }
+
+    #[must_use]
+    /// Enables validation of the HTTP/1 `Host` request header.
+    ///
+    /// When enabled, requests are rejected with `400 Bad Request` if they
+    /// contain more than one `Host` header or a `Host` value that is not a
+    /// valid host and optional port. HTTP/1.1 requests without a `Host`
+    /// header are rejected as well, see
+    /// [RFC 9112 section 3.2](https://www.rfc-editor.org/rfc/rfc9112#section-3.2).
+    /// An empty `Host` value is accepted. This setting does not affect HTTP/2.
+    /// It is enabled by default.
+    pub fn set_host_validation(mut self, enabled: bool) -> Self {
+        self.validate_host = enabled;
         self
     }
 
@@ -413,16 +445,18 @@ impl DispatcherConfig {
         id
     }
 
-    pub(super) fn remove_io(&self, io: &IoRef) -> usize {
-        let mut inflight = self.0.inflight.borrow_mut();
-        inflight.remove(io);
-        inflight.len()
-    }
-
-    pub(super) fn insert_io(&self, io: &IoRef) -> usize {
+    /// Registers an in-flight connection.
+    ///
+    /// Returns the guard that unregisters the connection when dropped, and
+    /// the number of in-flight connections.
+    pub(super) fn insert_io(&self, io: &IoRef) -> (InflightGuard, usize) {
         let mut inflight = self.0.inflight.borrow_mut();
         inflight.insert(io.clone());
-        inflight.len()
+        let guard = InflightGuard {
+            config: self.clone(),
+            io: io.clone(),
+        };
+        (guard, inflight.len())
     }
 
     /// Service is shutting down
@@ -453,6 +487,28 @@ impl DispatcherConfig {
     pub(super) fn notify_shutdown(&self) {
         if let Some(tx) = self.0.tx.take() {
             let _ = tx.send(());
+        }
+    }
+}
+
+/// Unregisters an in-flight connection when dropped.
+///
+/// The connection is unregistered even if its future is dropped before it
+/// completes, a pending shutdown is notified once no connections are left.
+pub(super) struct InflightGuard {
+    config: DispatcherConfig,
+    io: IoRef,
+}
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        let inflight = {
+            let mut inflight = self.config.0.inflight.borrow_mut();
+            inflight.remove(&self.io);
+            inflight.len()
+        };
+        if inflight == 0 && self.config.is_shutdown() {
+            self.config.notify_shutdown();
         }
     }
 }

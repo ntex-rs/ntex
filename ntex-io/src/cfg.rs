@@ -559,9 +559,11 @@ impl BufConfig {
     ///
     /// When the buffered data plus `size` fits into `high`, the data is moved
     /// into a cached buffer of capacity `high`, and the old buffer is returned
-    /// to the cache. Otherwise the buffer is reallocated with double its
-    /// capacity, growing by at most 1 MiB at once, or with enough capacity for
-    /// `size` more bytes if that is larger. Buffers grown beyond `high` are
+    /// to the cache. Otherwise the buffer grows to double its capacity,
+    /// growing by at most 1 MiB at once, or to enough capacity for `size` more
+    /// bytes if that is larger. A buffer that is not shared with split-off
+    /// data is compacted in place when its allocation is large enough, or is
+    /// reallocated, often without copying. Buffers grown beyond `high` are
     /// never cached.
     ///
     /// # Panics
@@ -587,7 +589,9 @@ impl BufConfig {
             let len = buf.len();
             let cap = buf.capacity();
             let new_cap = (len + size).max(cap + cap.min(MAX_GROW_STEP));
-            buf.reserve_capacity(new_cap);
+            // a unique buffer is compacted in place when its allocation holds
+            // `new_cap` bytes, or grown with a reallocation
+            buf.reserve_exact(new_cap - len);
         }
     }
 
@@ -830,6 +834,34 @@ mod tests {
         assert!(buf.is_unique());
         cfg.release(buf);
         assert_eq!(CACHE.with(|c| c.size.get()), 0);
+    }
+
+    #[test]
+    fn large_unique_buffer_is_compacted_in_place() {
+        let cfg = *IoConfig::new().read_buf();
+        let cap = 16 * cfg.high;
+
+        // most of a large buffer is consumed, the rest is not shared
+        let mut buf = BytesMut::with_capacity(cap);
+        let base = buf.as_ptr();
+        buf.extend_from_slice(&vec![1; cap]);
+        drop(buf.split_to(cap - 2 * cfg.high));
+        assert!(buf.is_unique());
+        assert_eq!(buf.remaining_mut(), 0);
+
+        cfg.resize_min(&mut buf, cfg.high);
+        assert_eq!(buf.as_ptr(), base);
+        assert_eq!(buf.capacity(), cap);
+        assert_eq!(&buf[..], &vec![1; 2 * cfg.high][..]);
+
+        // a shared buffer is copied into a new allocation
+        let mut buf = BytesMut::with_capacity(cap);
+        buf.extend_from_slice(&vec![2; cap]);
+        let front = buf.split_to(cap - 2 * cfg.high);
+        cfg.resize_min(&mut buf, cfg.high);
+        assert!(buf.remaining_mut() >= cfg.high);
+        assert_eq!(&buf[..], &vec![2; 2 * cfg.high][..]);
+        assert_eq!(&front[..], &vec![2; cap - 2 * cfg.high][..]);
     }
 
     #[test]

@@ -206,13 +206,8 @@ impl<St> WebResponseError<St, DefaultError> for http::error::ContentTypeError {
 impl<St> WebResponseError<St, DefaultError> for client::error::ClientError {
     fn error_response(&self, _: &St) -> HttpResponse {
         let status = match &self {
-            client::error::ClientError::Connect(err) => {
-                if matches!(err, client::error::ConnectError::Timeout) {
-                    StatusCode::GATEWAY_TIMEOUT
-                } else {
-                    StatusCode::BAD_REQUEST
-                }
-            }
+            client::error::ClientError::Connect(_) => StatusCode::BAD_REQUEST,
+            client::error::ClientError::Timeout => StatusCode::GATEWAY_TIMEOUT,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
@@ -243,9 +238,11 @@ impl<St> WebResponseError<St, DefaultError> for HandshakeError {
                 .build(),
             HandshakeError::NoVersionHeader => HttpResponse::BadRequest()
                 .reason("Websocket version header is required")
+                .header(header::SEC_WEBSOCKET_VERSION, "13")
                 .build(),
             HandshakeError::UnsupportedVersion => HttpResponse::BadRequest()
                 .reason("Unsupported version")
+                .header(header::SEC_WEBSOCKET_VERSION, "13")
                 .build(),
             HandshakeError::BadWebsocketKey => {
                 HttpResponse::BadRequest().reason("Handshake error").build()

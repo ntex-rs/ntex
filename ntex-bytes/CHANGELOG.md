@@ -2,6 +2,15 @@
 
 ## [1.10.0] (unreleased)
 
+* `BytePages::append()` copies only data of up to 4 KiB, larger data is added as a page without
+  copying, and the spare capacity of the current page stays available for later writes
+
+* `BytePages::take()` and `BytePages::num_pages()` skip an empty current page, it keeps its
+  spare capacity
+
+* Add `BytesMut::reserve_exact()`, it reclaims or reallocates like `reserve()` but grows
+  to exactly the requested capacity
+
 * Fix reversed result of `PartialOrd<Bytes>` for slices, arrays, `str`, `Vec<u8>`
   and `String`
 

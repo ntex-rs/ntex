@@ -131,6 +131,27 @@ async fn test_timeout_override() {
 }
 
 #[ntex::test]
+async fn test_timeout_disable_override() {
+    let srv = test::server(async |_| {
+        App::new().service(web::resource("/").route(web::to(async || {
+            sleep(Millis(500)).await;
+            HttpResponse::Ok().body(STR)
+        })))
+    });
+
+    let client = Client::with_config(ClientConfig::new().set_response_timeout(Millis(100)));
+
+    // zero disables the client-wide timeout for this request
+    let res = client
+        .get(srv.url("/"))
+        .timeout(Millis::ZERO)
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success());
+}
+
+#[ntex::test]
 async fn test_connection_reuse() {
     let num = Arc::new(AtomicUsize::new(0));
     let num2 = num.clone();
@@ -411,10 +432,28 @@ async fn test_client_gzip_encoding() {
     // client request
     let response = srv.post("/").send().await.unwrap();
     assert!(response.status().is_success());
+    // headers of the encoded payload are removed
+    assert!(!response.headers().contains_key("content-encoding"));
+    assert!(!response.headers().contains_key("content-length"));
 
     // read response
     let bytes = response.body().await.unwrap();
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
+
+    // encoded payload
+    let response = srv.post("/").no_decompress().send().await.unwrap();
+    assert_eq!(response.headers().get("content-encoding").unwrap(), "gzip");
+    let len: usize = response
+        .headers()
+        .get("content-length")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes.len(), len);
+    assert_ne!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
 #[ntex::test]

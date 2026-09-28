@@ -9,7 +9,8 @@ use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use windows_sys::{Win32::Networking::WinSock, core::GUID};
 
 use super::{
-    Handler, Overlapped, Reactor, ReactorApi, TcpStream, UnixStream, ops, stream::StreamOps,
+    Handler, OpBox, Overlapped, OverlappedOp, Reactor, ReactorApi, TcpStream, UnixStream, ops,
+    stream::StreamOps,
 };
 use crate::channel::{self, Receiver, Sender};
 
@@ -28,7 +29,14 @@ struct ConnectOp {
     cfg: SharedCfg,
 }
 
-type Operations = RefCell<Slab<Box<ConnectOp>>>;
+// SAFETY: the pointer is derived from `this` by a place projection
+unsafe impl OverlappedOp for ConnectOp {
+    unsafe fn overlapped(this: *mut Self) -> *mut Overlapped {
+        unsafe { &raw mut (*this).overlapped }
+    }
+}
+
+type Operations = RefCell<Slab<OpBox<ConnectOp>>>;
 
 struct ConnectOpsInner {
     api: ReactorApi,
@@ -91,7 +99,7 @@ impl ConnectOps {
             let entry = ops.vacant_entry();
 
             let (sender, rx) = channel::create();
-            let op = Box::new(ConnectOp {
+            let op = OpBox::new(ConnectOp {
                 overlapped: self.0.api.overlapped(entry.key() as u32),
                 sock,
                 addr,
@@ -115,8 +123,8 @@ impl ConnectOps {
                 Poll::Pending => {
                     entry.insert(op);
                 }
-                Poll::Ready(Ok(())) => (*op).complete(Ok(()), &self.0.streams),
-                Poll::Ready(Err(err)) => (*op).complete(Err(err), &self.0.streams),
+                Poll::Ready(Ok(())) => op.into_inner().complete(Ok(()), &self.0.streams),
+                Poll::Ready(Err(err)) => op.into_inner().complete(Err(err), &self.0.streams),
             }
             rx
         }
@@ -173,7 +181,8 @@ impl Handler for ConnectOpsHandler {
                 op.sock.as_raw_socket(),
             );
 
-            (*op).complete(res.map(|_| ()), &self.inner.streams);
+            op.into_inner()
+                .complete(res.map(|_| ()), &self.inner.streams);
         }
     }
 
@@ -185,7 +194,7 @@ impl Handler for ConnectOpsHandler {
         // other fields are dropped, which closes the socket and the channel.
         let ops = mem::take(&mut *self.inner.ops.borrow_mut());
         for (_, op) in ops {
-            let op = Box::into_raw(op);
+            let op = op.into_raw();
             // SAFETY: each field is read once and the allocation is never
             // freed or dropped, so nothing is dropped twice
             let (sock, addr, sender, cfg) = unsafe {

@@ -1,5 +1,5 @@
 #[cfg(feature = "compress")]
-use crate::http::{Payload, encoding::Decoder};
+use crate::http::{Payload, encoding::Decoder, header};
 use crate::{Ctx, Service, SharedCfg, error::Error, http::body::MessageBody};
 
 use super::{ClientConfig, ClientRawRequest, Connect, ServiceRequest, ServiceResponse};
@@ -34,7 +34,7 @@ impl Service<SharedCfg, ServiceRequest> for Sender {
             addr,
             body,
             headers,
-            mut timeout,
+            timeout,
             response_decompress,
         } = req;
 
@@ -42,9 +42,7 @@ impl Service<SharedCfg, ServiceRequest> for Sender {
         let con = ctx.call(&self.connector, Connect { uri, addr }).await?;
         let config = ctx.st().get::<ClientConfig>();
 
-        if timeout.is_zero() {
-            timeout = config.response_timeout();
-        }
+        let timeout = timeout.unwrap_or_else(|| config.response_timeout());
 
         let req = ClientRawRequest {
             head,
@@ -52,11 +50,18 @@ impl Service<SharedCfg, ServiceRequest> for Sender {
             size: body.size(),
         };
 
-        let (head, payload) = con.send_request(req, body, timeout).await?;
+        #[allow(unused_mut)]
+        let (mut head, payload) = con.send_request(req, body, timeout).await?;
 
         #[cfg(feature = "compress")]
         if response_decompress {
-            let payload = Payload::from_stream(Decoder::from_headers(payload, &head.headers));
+            let decoder = Decoder::from_headers(payload, &head.headers);
+            if decoder.is_decoding() {
+                // the headers describe the encoded payload
+                head.headers.remove(&header::CONTENT_ENCODING);
+                head.headers.remove(&header::CONTENT_LENGTH);
+            }
+            let payload = Payload::from_stream(decoder);
             return Ok(ServiceResponse {
                 head,
                 payload,

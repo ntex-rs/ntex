@@ -8,6 +8,9 @@ use ntex_bytes::{BytePages, Bytes, BytesMut};
 /// Size information used when encoding an HTTP message body.
 pub enum BodySize {
     /// No body is present and no `Content-Length` header should be emitted.
+    ///
+    /// An HTTP/1 response that may carry a body is still sent with
+    /// `Content-Length: 0`, otherwise its end could not be determined.
     None,
     /// An empty body with a `Content-Length: 0` header.
     Empty,
@@ -159,6 +162,8 @@ impl<B: MessageBody + Unpin> Stream for ResponseBody<B> {
 /// Type-erased HTTP message body.
 pub enum Body {
     /// Empty response. `Content-Length` header is not set.
+    ///
+    /// See [`BodySize::None`].
     None,
     /// Zero sized response body. `Content-Length` header is set to `0`.
     Empty,

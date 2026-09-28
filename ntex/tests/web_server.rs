@@ -755,7 +755,7 @@ async fn test_slow_request() {
     assert!(data.starts_with("HTTP/1.1 408 Request Timeout"));
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\n");
+    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\n");
     let mut data = String::new();
     let _ = stream.read_to_string(&mut data);
     assert!(data.starts_with("HTTP/1.1 408 Request Timeout"));

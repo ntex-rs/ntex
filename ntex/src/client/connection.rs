@@ -49,22 +49,11 @@ impl Connection {
     }
 
     pub(super) fn release(self, close: bool) {
-        if let Some(mut pool) = self.pool {
-            pool.release(
-                Self {
-                    io: self.io,
-                    created: self.created,
-                    pool: None,
-                },
-                close,
-            );
+        if let (Some(pool), Some(ConnectionType::H1(io))) = (self.pool, self.io) {
+            pool.release(io, self.created, close);
         } else {
-            log::debug!("{self:?}: http pool is not set, dropping");
+            log::debug!("http pool is not set, dropping connection");
         }
-    }
-
-    pub(super) fn into_inner(self) -> (ConnectionType, time::Instant, Option<Acquired>) {
-        (self.io.unwrap(), self.created, self.pool)
     }
 
     #[cfg(test)]

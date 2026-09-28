@@ -795,17 +795,16 @@ mod tests {
             StatusCode::BAD_REQUEST
         );
 
-        let resp =
-            WebResponseError::error_response(&ClientError::Connect(ConnectError::Timeout), &());
-        assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
-
         let resp = WebResponseError::error_response(
             &ClientError::Connect(ConnectError::SslIsNotSupported),
             &(),
         );
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
-        let resp = WebResponseError::error_response(&ClientError::TunnelNotSupported, &());
+        let resp = WebResponseError::error_response(&ClientError::Timeout, &());
+        assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
+
+        let resp = WebResponseError::error_response(&ClientError::Send(io::Error::other("x")), &());
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
         #[cfg(feature = "cookie")]
@@ -841,9 +840,9 @@ mod tests {
 
     #[test]
     fn test_either_error() {
-        let err: Either<ClientError, PayloadError> = Either::Left(ClientError::TunnelNotSupported);
+        let err: Either<ClientError, PayloadError> = Either::Left(ClientError::Timeout);
         let resp = WebResponseError::error_response(&err, &());
-        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
 
         let err: Either<ClientError, PayloadError> = Either::Right(PayloadError::Decoding);
         let resp = WebResponseError::error_response(&err, &());
@@ -939,6 +938,10 @@ mod tests {
             &(),
         );
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            resp.headers().get(header::SEC_WEBSOCKET_VERSION).unwrap(),
+            "13"
+        );
         let resp = WebResponseError::<_, DefaultError>::error_response(
             &HandshakeError::BadWebsocketKey,
             &(),

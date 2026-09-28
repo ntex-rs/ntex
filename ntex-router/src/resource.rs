@@ -1153,4 +1153,18 @@ mod tests {
         assert_eq!(p.get("s"), Some("srv"));
         assert_eq!(p.len(), 4);
     }
+
+    #[test]
+    fn test_array_patterns() {
+        let pats: Vec<String> = (0..20).map(|i| format!("/p{i}")).collect();
+        let arr: [&str; 20] = std::array::from_fn(|i| pats[i].as_str());
+        let re = ResourceDef::new(arr);
+        assert_eq!(re.patterns().len(), 20);
+        assert_eq!(re.patterns()[19], "/p19");
+
+        let a = String::from("/a");
+        let b = String::from("/b");
+        let re = ResourceDef::new([&a, &b]);
+        assert_eq!(re.patterns(), ["/a", "/b"]);
+    }
 }

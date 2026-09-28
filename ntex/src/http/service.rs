@@ -16,7 +16,8 @@ use super::{Request, Response, config::DispatcherConfig, h1, h2};
 #[debug("HttpService")]
 pub struct HttpService<F, Req: RequestState<Io<F>>, Err> {
     sf: super::HttpPipeline<Req::State, Err>,
-    h1_ctl: super::Ctl1Pipeline<Req::State, F, Err>,
+    /// Without a control service the default action is applied to every event.
+    h1_ctl: Option<super::Ctl1Pipeline<Req::State, F, Err>>,
     h2_ctl: super::Ctl2Pipeline<Req::State>,
     config: DispatcherConfig,
 }
@@ -42,7 +43,7 @@ where
                     .map(Into::into)
                     .map_init_err(|e| DispatchError::Control(e.fail())),
             ),
-            h1_ctl: PipelineFactory::new(h1::DefaultControlService),
+            h1_ctl: None,
             h2_ctl: PipelineFactory::new(h2::DefaultControlService),
             config: DispatcherConfig::default(),
         }
@@ -81,8 +82,8 @@ where
     /// Provides the HTTP/1 control service.
     ///
     /// The service receives the lifecycle events described by
-    /// [`h1::Control`]. A default service that acknowledges each event is used
-    /// unless this method is called.
+    /// [`h1::Control`]. Unless this method is called, the default action is
+    /// applied to each event without a service call.
     pub fn h1_control<Ctl>(
         self,
         ctl: impl IntoServiceFactory<Ctl, Req::State, h1::Control<F, Err>>,
@@ -94,11 +95,11 @@ where
     {
         HttpService {
             sf: self.sf,
-            h1_ctl: PipelineFactory::new(
+            h1_ctl: Some(PipelineFactory::new(
                 ctl.into_factory()
                     .map_err(|e| DispatchError::Service(e.fail()))
                     .map_init_err(|e| DispatchError::Control(e.fail())),
-            ),
+            )),
             h2_ctl: self.h2_ctl,
             config: self.config,
         }
@@ -149,10 +150,9 @@ where
 
         let id = self.config.next_id();
         let ioref = io.get_ref();
-        let inflight = self.config.insert_io(&ioref);
+        let (_guard, inflight) = self.config.insert_io(&ioref);
 
-        let result = if io.query::<types::HttpProtocol>().get() == Some(types::HttpProtocol::Http2)
-        {
+        if io.query::<types::HttpProtocol>().get() == Some(types::HttpProtocol::Http2) {
             log::trace!(
                 "{}: New http2 connection {id}, peer address {:?}, in-flight: {inflight}",
                 io.tag(),
@@ -167,16 +167,13 @@ where
                 io.tag(),
                 io.query::<types::PeerAddr>().get(),
             );
-            let ctl = self.h1_ctl.create(st).await?;
+            let ctl = match &self.h1_ctl {
+                Some(ctl) => Some(ctl.create(st).await?),
+                None => None,
+            };
 
             h1::handle_io(id, io, svc, ctl, self.config.clone()).await
-        };
-
-        let inflight = self.config.remove_io(&ioref);
-        if inflight == 0 && self.config.is_shutdown() {
-            self.config.notify_shutdown();
         }
-        result
     }
 
     async fn ready(&self, _: Ctx<'_, Self, St>) -> Result<(), Self::Error> {

@@ -3,7 +3,7 @@ use std::fmt;
 
 pub use crate::ws::{CloseCode, CloseReason, Frame, Message, WsSink};
 
-use crate::http::{body::BodySize, h1, header};
+use crate::http::{ConnectionType, body::BodySize, error::ResponseError, h1, header};
 use crate::io::{DispatchItem, IoConfig, Reason};
 use crate::service::{Ctx, IntoService, Pipeline, Service, apply_fn};
 use crate::web::HttpRequest;
@@ -58,6 +58,9 @@ pub fn subprotocols(req: &HttpRequest) -> impl Iterator<Item = &str> {
 /// in the response with the chosen protocol. The protocol must be a valid HTTP
 /// token offered by the client. If `None`, the header is omitted.
 ///
+/// If the handshake fails for an upgrade request, the handshake error response
+/// is sent and the connection is closed.
+///
 /// # Example
 ///
 /// ```rust
@@ -104,6 +107,9 @@ where
 /// If `subprotocol` is `Some`, the `Sec-Websocket-Protocol` header will be included
 /// in the response with the chosen protocol. The protocol must be a valid HTTP
 /// token offered by the client. If `None`, the header is omitted.
+///
+/// If the handshake fails for an upgrade request, the handshake error response
+/// is sent and the connection is closed.
 pub async fn start_with<S, Err>(
     req: &HttpRequest,
     subprotocol: Option<&str>,
@@ -117,14 +123,13 @@ where
     log::trace!("Start ws handshake verification for {:?}", req.path());
 
     // ws handshake
-    let mut res = handshake(req.head())?;
-    if let Some(protocol) = subprotocol {
-        if !ws::is_token(protocol) || !subprotocols(req).any(|offered| offered == protocol) {
-            return Err(HandshakeError::BadWebsocketProtocol.into());
+    let res = match handshake_response(req, subprotocol) {
+        Ok(res) => res,
+        Err(err) => {
+            reject(req, err).await;
+            return Err(err.into());
         }
-        res.set_header(header::SEC_WEBSOCKET_PROTOCOL, protocol);
-    }
-    let res = res.build().into_parts().0;
+    };
 
     // extract io
     let item = req
@@ -165,6 +170,37 @@ where
     log::trace!("Ws handler is terminated: {result:?}");
 
     result
+}
+
+fn handshake_response(
+    req: &HttpRequest,
+    subprotocol: Option<&str>,
+) -> Result<crate::http::Response<()>, HandshakeError> {
+    let mut res = handshake(req.head())?;
+    if let Some(protocol) = subprotocol {
+        if !ws::is_token(protocol) || !subprotocols(req).any(|offered| offered == protocol) {
+            return Err(HandshakeError::BadWebsocketProtocol);
+        }
+        res.set_header(header::SEC_WEBSOCKET_PROTOCOL, protocol);
+    }
+    Ok(res.build().into_parts().0)
+}
+
+/// Sends the handshake error response and closes the connection.
+///
+/// The I/O stream of an upgrade request belongs to the handler, a response
+/// returned by the handler is not sent.
+async fn reject(req: &HttpRequest, err: HandshakeError) {
+    if let Some((io, codec)) = req.head().take_io() {
+        let mut res = err.error_response().into_parts().0;
+        res.head_mut().set_connection_type(ConnectionType::Close);
+        if io
+            .encode(h1::Message::Item((res, BodySize::Empty)), &codec)
+            .is_ok()
+        {
+            let _ = io.shutdown().await;
+        }
+    }
 }
 
 /// Just a wrapper over a service handling WebSocket messages and propagating shutdown

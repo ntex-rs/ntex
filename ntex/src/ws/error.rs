@@ -3,7 +3,8 @@ use std::io;
 
 use crate::error::ErrorDiagnostic;
 use crate::http::error::{DecodeError, EncodeError, HttpError, ResponseError};
-use crate::http::{Response, StatusCode, header::ALLOW, header::HeaderValue};
+use crate::http::header::{ALLOW, HeaderValue, SEC_WEBSOCKET_VERSION};
+use crate::http::{Response, StatusCode};
 use crate::{connect::ConnectError, util::Either, util::clone_io_error};
 
 use super::OpCode;
@@ -270,10 +271,12 @@ impl ResponseError for HandshakeError {
                 .build(),
             HandshakeError::NoVersionHeader => Response::BadRequest()
                 .reason("Websocket version header is required")
+                .header(SEC_WEBSOCKET_VERSION, "13")
                 .build(),
-            HandshakeError::UnsupportedVersion => {
-                Response::BadRequest().reason("Unsupported version").build()
-            }
+            HandshakeError::UnsupportedVersion => Response::BadRequest()
+                .reason("Unsupported version")
+                .header(SEC_WEBSOCKET_VERSION, "13")
+                .build(),
             HandshakeError::BadWebsocketKey => {
                 Response::BadRequest().reason("Handshake error").build()
             }

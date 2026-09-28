@@ -15,7 +15,21 @@ use ntex_bytes::{BufMut, BytePage};
 use ntex_io::{IoContext, IoTaskStatus};
 use ntex_rt::syscall;
 
-use super::{Overlapped, ReactorApi};
+use super::{Overlapped, OverlappedOp, ReactorApi};
+
+// SAFETY: the pointer is derived from `this` by a place projection
+unsafe impl OverlappedOp for ReadOperation {
+    unsafe fn overlapped(this: *mut Self) -> *mut Overlapped {
+        unsafe { &raw mut (*this).overlapped }
+    }
+}
+
+// SAFETY: the pointer is derived from `this` by a place projection
+unsafe impl OverlappedOp for WriteOperation {
+    unsafe fn overlapped(this: *mut Self) -> *mut Overlapped {
+        unsafe { &raw mut (*this).overlapped }
+    }
+}
 
 pub(crate) const RD_OP: u32 = 1;
 pub(crate) const WR_OP: u32 = 2;

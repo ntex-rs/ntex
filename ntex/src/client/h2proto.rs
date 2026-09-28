@@ -47,20 +47,7 @@ async fn send_request_inner(
         )
     };
 
-    // merging headers from head and extra headers.
-    let empty = HeaderMap::new();
-    let extra_headers = req.headers.as_ref().unwrap_or(&empty);
-    let mut hdrs: HeaderMap = req
-        .head
-        .headers
-        .iter()
-        .filter(|(name, _)| {
-            // h2 does not user connection headers
-            !(matches!(*name, &header::CONNECTION | &header::TRANSFER_ENCODING)
-                || extra_headers.contains_key(*name))
-        })
-        .chain(extra_headers.iter())
-        .collect();
+    let mut hdrs = h2_headers(&req);
 
     // Content length
     match length {
@@ -105,7 +92,7 @@ async fn send_request_inner(
         crate::rt::spawn(async move {
             let _activity = activity;
             if let Err(e) = send_body(body, &snd_stream).await {
-                log::error!("{}: Cannot send body: {e:?}", snd_stream.tag());
+                log::debug!("{}: Cannot send body: {e:?}", snd_stream.tag());
                 snd_stream.reset(frame::Reason::INTERNAL_ERROR);
             }
         });
@@ -117,14 +104,57 @@ async fn send_request_inner(
         .and_then(|res| res)
 }
 
+static TRAILERS: HeaderValue = HeaderValue::from_static("trailers");
+
+/// Merges request head and extra headers.
+fn h2_headers(req: &ClientRawRequest) -> HeaderMap {
+    let empty = HeaderMap::new();
+    let extra_headers = req.headers.as_ref().unwrap_or(&empty);
+    req.head
+        .headers
+        .iter()
+        .filter(|(name, _)| !extra_headers.contains_key(*name))
+        .chain(extra_headers.iter())
+        .filter(|(name, value)| is_h2_header(name, value))
+        .map(|(name, value)| {
+            if *name == header::TE {
+                (name, &TRAILERS)
+            } else {
+                (name, value)
+            }
+        })
+        .collect()
+}
+
+/// Returns `false` for connection-specific header fields, they are not used by
+/// HTTP/2 (RFC 9113 §8.2.2), `:authority` is used instead of `Host` (RFC 9113 §8.3.1)
+fn is_h2_header(name: &header::HeaderName, value: &HeaderValue) -> bool {
+    match *name {
+        header::CONNECTION | header::TRANSFER_ENCODING | header::UPGRADE | header::HOST => false,
+        header::TE => value.as_bytes().eq_ignore_ascii_case(b"trailers"),
+        _ => !(name == "keep-alive" || name == "proxy-connection"),
+    }
+}
+
 async fn get_response(
     rcv_stream: RecvStream,
     activity: Option<H2Activity>,
 ) -> Result<(ResponseHead, Payload), Error<ClientError>> {
-    let h2::Message { stream, kind } = rcv_stream
-        .recv()
-        .await
-        .ok_or(ClientError::Connect(ConnectError::Disconnected(None)))?;
+    let h2::Message { stream, kind } = loop {
+        let msg = rcv_stream
+            .recv()
+            .await
+            .ok_or(ClientError::Connect(ConnectError::Disconnected(None)))?;
+
+        // skip interim responses
+        if let h2::MessageKind::Headers { ref pseudo, .. } = msg.kind
+            && pseudo.status.is_some_and(|s| s.is_informational())
+        {
+            log::trace!("Skipping interim response: {:?}", pseudo.status);
+            continue;
+        }
+        break msg;
+    };
 
     match kind {
         h2::MessageKind::Headers {
@@ -424,5 +454,81 @@ impl H2Client {
 
     pub(super) fn is_closed(&self) -> bool {
         self.client.is_closed()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::http::{Message, StatusCode, uri::Scheme};
+    use crate::io::{Io, IoBoxed, testing::IoTest};
+    use crate::{SharedCfg, time::sleep};
+
+    #[test]
+    fn test_connection_headers_are_removed() {
+        let mut head = Message::<crate::http::RequestHead>::new();
+        for (name, value) in [
+            ("connection", "keep-alive"),
+            ("transfer-encoding", "chunked"),
+            ("upgrade", "websocket"),
+            ("keep-alive", "timeout=5"),
+            ("proxy-connection", "keep-alive"),
+            ("host", "example.com"),
+            ("te", "gzip"),
+            ("x-head", "1"),
+        ] {
+            head.headers.append(
+                header::HeaderName::from_static(name),
+                HeaderValue::from_static(value),
+            );
+        }
+        let mut extra = HeaderMap::new();
+        extra.insert(header::UPGRADE, HeaderValue::from_static("h2c"));
+        extra.insert(header::TE, HeaderValue::from_static("Trailers"));
+        extra.insert(
+            header::HeaderName::from_static("x-extra"),
+            HeaderValue::from_static("2"),
+        );
+        let req = ClientRawRequest {
+            head,
+            headers: Some(extra),
+            size: BodySize::None,
+        };
+
+        let hdrs = h2_headers(&req);
+        let mut names: Vec<_> = hdrs.keys().map(header::HeaderName::as_str).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["te", "x-extra", "x-head"]);
+        assert_eq!(hdrs.get(header::TE).unwrap().as_bytes(), b"trailers");
+    }
+
+    #[crate::rt_test]
+    async fn test_skip_interim_responses() {
+        let (io, server) = IoTest::create();
+        io.remote_buffer_cap(64 * 1024);
+        let client = H2Client::new(SimpleClient::new(
+            IoBoxed::from(Io::new(io, SharedCfg::default())),
+            Scheme::HTTP,
+            ByteString::from_static("localhost"),
+        ));
+        server.write([0, 0, 0, 4, 0, 0, 0, 0, 0]);
+        sleep(Millis(50)).await;
+
+        let req = ClientRawRequest {
+            head: Message::new(),
+            headers: None,
+            size: BodySize::None,
+        };
+        let fut = crate::rt::spawn(send_request_inner(client, req, Body::None, Millis(5_000)));
+        sleep(Millis(50)).await;
+
+        // 103 and 100 interim responses, then 200 with END_STREAM
+        server.write([0, 0, 5, 1, 4, 0, 0, 0, 1, 0x08, 3, b'1', b'0', b'3']);
+        server.write([0, 0, 5, 1, 4, 0, 0, 0, 1, 0x08, 3, b'1', b'0', b'0']);
+        server.write([0, 0, 1, 1, 5, 0, 0, 0, 1, 0x88]);
+
+        let (head, payload) = fut.await.unwrap().unwrap();
+        assert_eq!(head.status, StatusCode::OK);
+        assert!(matches!(payload, Payload::None));
     }
 }

@@ -23,6 +23,10 @@ pub(super) enum Timer {
     ClientTimeout,
     /// Idle persistent connection, waiting for the next request.
     KeepAlive,
+    /// A request is processed after a keep-alive wait. The keep-alive timer is
+    /// left armed, so the next keep-alive wait can reuse it. Its expiry is
+    /// ignored, other timers stop it before they start.
+    Idle,
     /// Request-head read rate.
     Headers,
     /// Request-payload read rate.
@@ -99,6 +103,7 @@ impl Timers {
     /// Arms the transport timer for a rate period of `timer`.
     fn start(&mut self, io: &IoRef, timer: Timer, cfg: FrameReadRate, max_timeout: Seconds) {
         let (timeout, max_timeout) = read_timeout(cfg.timeout, max_timeout);
+        self.stop_idle(io);
         self.active = timer;
         self.progress.max_timeout = max_timeout;
         io.start_timer(timeout);
@@ -110,28 +115,44 @@ impl Timers {
         io.stop_timer();
     }
 
+    /// Stops a keep-alive timer left armed, this also clears its expiry.
+    fn stop_idle(&mut self, io: &IoRef) {
+        if self.active == Timer::Idle {
+            self.stop(io);
+        }
+    }
+
     /// Resets the state after a request head has been decoded.
     ///
     /// A running write timer keeps running, buffered requests can be decoded
-    /// during write backpressure.
+    /// during write backpressure. A running keep-alive timer is left armed,
+    /// restarting it for every request of a persistent connection is not
+    /// needed.
     pub(super) fn reset(&mut self, io: &IoRef) {
         self.progress = ReadProgress::EMPTY;
-        self.payload_done(io);
+        if self.active == Timer::KeepAlive {
+            self.active = Timer::Idle;
+        } else {
+            self.payload_done(io);
+        }
     }
 
     /// Stops payload timing after the payload has been decoded.
     ///
     /// A running write timer keeps running.
     pub(super) fn payload_done(&mut self, io: &IoRef) {
-        if self.active.is_write() {
-            self.active = Timer::Write;
-        } else {
-            self.stop(io);
+        match self.active {
+            Timer::Write | Timer::WriteWithPayload => self.active = Timer::Write,
+            Timer::Idle => (),
+            _ => self.stop(io),
         }
     }
 
     /// Starts the keep-alive timer for an idle connection, a running
     /// keep-alive timer keeps running.
+    ///
+    /// A keep-alive timer left armed is updated, it must not have a pending
+    /// expiry.
     pub(super) fn start_keepalive(&mut self, io: &IoRef, timeout: Seconds) {
         if self.active != Timer::KeepAlive {
             log::debug!("{}: Start keep-alive timer {:?}", io.tag(), timeout);
@@ -340,6 +361,46 @@ mod tests {
         timers.stop_write(&io);
         assert_eq!(timers.active, Timer::PayloadPaused);
         assert!(!io.timer_handle().is_set());
+    }
+
+    /// The keep-alive timer is not restarted for every request of a
+    /// persistent connection.
+    #[crate::rt_test]
+    async fn test_keepalive_timer_is_reused() {
+        let (_client, server) = IoTest::create();
+        let io = Io::from(server);
+        let ioref = io.get_ref();
+        let rate = Some(FrameReadRate {
+            rate: 1,
+            timeout: Seconds(2),
+            max_timeout: Seconds(10),
+        });
+        let mut timers = Timers::new(&ioref, None);
+        timers.reset(&ioref);
+
+        timers.start_keepalive(&ioref, Seconds(5));
+        let deadline = ioref.timer_handle();
+        assert!(deadline.is_set());
+
+        timers.reset(&ioref);
+        assert_eq!(timers.active, Timer::Idle);
+        assert_eq!(ioref.timer_handle(), deadline);
+        timers.payload_done(&ioref);
+        assert_eq!(timers.active, Timer::Idle);
+        timers.start_keepalive(&ioref, Seconds(5));
+        assert_eq!(timers.active, Timer::KeepAlive);
+        assert_eq!(ioref.timer_handle(), deadline);
+
+        // other timers do not see an expiry of the idle timer
+        timers.reset(&ioref);
+        ioref.notify_timeout();
+        timers.start_payload(&ioref, rate);
+        assert_eq!(timers.active, Timer::Payload);
+        assert!(
+            crate::util::lazy(|cx| io.poll_status_update(cx))
+                .await
+                .is_pending()
+        );
     }
 
     #[test]

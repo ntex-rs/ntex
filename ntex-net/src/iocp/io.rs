@@ -29,18 +29,21 @@ struct HandleWrapper(WeakStreamCtl);
 
 impl Handle for HandleWrapper {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
-        if id == any::TypeId::of::<types::PeerAddr>() {
-            let addr = self.0.peer_addr();
-            if let Some(addr) = addr.as_socket() {
-                return Some(Box::new(types::PeerAddr(addr)));
-            }
-        }
-        None
+        query(&self.0, id)
     }
 
     fn write(&self, _: &IoContext) {
         self.0.write();
     }
+}
+
+pub(super) fn query(ctl: &WeakStreamCtl, id: any::TypeId) -> Option<Box<dyn any::Any>> {
+    if id == any::TypeId::of::<types::PeerAddr>()
+        && let Some(addr) = ctl.peer_addr().and_then(|addr| addr.as_socket())
+    {
+        return Some(Box::new(types::PeerAddr(addr)));
+    }
+    None
 }
 
 async fn run(ctl: StreamCtl, ctx: IoContext) {

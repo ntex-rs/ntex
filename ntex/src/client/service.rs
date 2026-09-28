@@ -41,7 +41,7 @@ pub struct ServiceRequest {
     pub(super) headers: Option<HeaderMap>,
     pub(super) addr: Option<net::SocketAddr>,
     pub(super) body: Body,
-    pub(super) timeout: Millis,
+    pub(super) timeout: Option<Millis>,
     pub(super) response_decompress: bool,
 }
 
@@ -52,7 +52,7 @@ impl ServiceRequest {
             headers: None,
             addr: None,
             body: Body::None,
-            timeout: Millis::ZERO,
+            timeout: None,
             response_decompress: true,
         }
     }

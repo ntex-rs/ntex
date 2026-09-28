@@ -2,6 +2,166 @@
 
 ## [Unreleased]
 
+* HTTP/1 decoder splits header names and values off the read buffer directly, without splitting
+  each header line first
+
+* WebSocket client sends every value of a multi-valued handshake header, before only the first
+  one was sent
+
+* HTTP client `JsonBody` returns `PayloadError::UnknownLength` for an invalid `Content-Length`
+  header, as `MessageBody` does
+
+* HTTP client `ClientRequest::timeout(Millis::ZERO)` disables the response timeout for the request,
+  as `ClientConfig::set_response_timeout(Millis::ZERO)` does, it used the client-wide timeout
+
+* Web renders HTTP client `ClientError::Timeout` as `504 Gateway Timeout`
+
+* HTTP client reports an invalid request URI as `ClientError::Url(InvalidUrl::Http)`
+
+* Remove unused HTTP client error variants `ClientError::TunnelNotSupported`,
+  `ConnectError::Timeout`, `ConnectError::SslError` and `ConnectError::SslHandshakeError`
+
+* WebSocket handshake accepts only version 13, a rejected version is answered with
+  `Sec-WebSocket-Version: 13`
+
+* `web::ws::start()` sends the handshake error response and closes the connection when the
+  handshake of an upgrade request fails, before the handler's response was sent
+
+* HTTP client `TestResponse` adds a separate `Set-Cookie` header per cookie, including cookie
+  attributes
+
+* HTTP client `basic_auth()`, `bearer_auth()` and `content_length()` replace an existing header,
+  `ClientConfig::set_basic_auth()` and `set_bearer_auth()` replace a configured `Authorization` header
+
+* HTTP client removes `Content-Encoding` and `Content-Length` headers of a decompressed response
+
+* HTTP/1 validates a partially received chunk-size line incrementally, the line was parsed
+  from the start on every read
+
+* HTTP/1 writes the chunk size line without `fmt` formatting
+
+* Remove unused `EncodeError::Fmt`
+
+* HTTP/1 applies the default control actions without calling a control service, unless one
+  is provided with `H1Service::control()` or `HttpService::h1_control()`
+
+* HTTP/1 does not restart the keep-alive timer for every request of a persistent connection
+
+* HTTP/1 client does not add a `Date` header to requests
+
+* HTTP/1 client does not use chunked coding for HTTP/1.0 requests, a streaming request body
+  without chunked coding and `Content-Length` header fails with new `EncodeError::UnknownLength`,
+  the body was sent without framing
+
+* HTTP/1 client sends `content-length: 0` for `POST`, `PUT` and `PATCH` requests without a body
+
+* HTTP/1 client treats a `2xx` response to `CONNECT` as a tunnel, framing headers are ignored,
+  the payload is read until connection close and the connection is not reused, the connection
+  was returned to the pool
+
+* HTTP/2 client does not send connection-specific headers `Upgrade`, `Keep-Alive`, `Proxy-Connection`
+  and `TE` other than `trailers`, extra headers are filtered too, a `Host` header is not sent,
+  `:authority` of the connection is used
+
+* HTTP/2 client omits the userinfo from `:authority`, credentials of the request uri were sent
+
+* HTTP/2 client skips interim `1xx` responses, an interim response was returned as the
+  final response
+
+* HTTP/1 client sends `CONNECT` requests in authority-form (`host:port`), the path
+  was sent instead
+
+* HTTP/1 parses `Transfer-Encoding` as a list of codings. A request with codings other than
+  final `chunked` is rejected with `501 Not Implemented` (new `DecodeError::UnsupportedTransferCoding`),
+  a response with final `chunked` is framed by chunked coding and a response without final
+  `chunked` is delimited by connection close, such messages were rejected
+
+* HTTP/1 parses an incomplete start line incrementally, an invalid start line is
+  rejected as soon as the bad byte arrives instead of after the line end
+
+* HTTP/1 treats every '101 Switching Protocols' response as an upgrade, a response without
+  `.upgrade()` kept the connection reading HTTP/1 requests
+
+* `ResponseHead::reason()` returns an empty reason phrase for a status code without a
+  canonical reason, HTTP/1 sent `<unknown status code>` as the reason phrase
+
+* HTTP/1 matches `Expect: 100-continue` case-insensitively, any value starting with `100-`
+  was taken as `100-continue`
+
+* HTTP/1 merges small chunks of a chunked payload into payload chunks of up to 16KiB, a
+  payload of tiny chunks was buffered as a separate item per chunk
+
+* HTTP/1 sends `content-length: 0` for responses without a body size, such responses
+  were sent without framing headers
+
+* HTTP/1 does not send `transfer-encoding: chunked` in `101 Switching Protocols` responses
+
+* HTTP/1 sends responses to HTTP/1.0 requests with the `HTTP/1.1` status line, as
+  RFC 9110 section 2.5 recommends, and a non-persistent response includes `connection: close`.
+  Chunked coding is still not used for HTTP/1.0 clients
+
+* HTTP/1 replaces informational (1xx) service responses, except `101 Switching Protocols`,
+  with `500 Internal Server Error`, an interim response was sent as the final response
+
+* HTTP/1 limits the trailer section of chunked payloads to 4KiB, trailer fields were
+  skipped without limit
+
+* HTTP/1 rejects requests with `Transfer-Encoding: identity`, the obsolete coding was
+  accepted and a request with `Content-Length` was framed by its length
+
+* HTTP/1 upgrades the connection only if the request contains both `Upgrade` and
+  `Connection: upgrade`, otherwise the upgrade is ignored
+
+* HTTP/1 rejects chunk extensions that contain control characters other than HTAB, a bare
+  LF in a chunk extension was accepted
+
+* HTTP/1 rejects requests with `400 Bad Request` if they contain multiple or invalid `Host`
+  headers, and HTTP/1.1 requests without `Host`, use `HttpServiceConfig::set_host_validation()`
+  to disable
+
+* Payload decoder limits decompressed chunks to less than 96KiB, before a single compressed
+  chunk was decompressed at once and a small gzip or deflate body could allocate
+  gigabytes before payload size limits applied, the decoder ends the stream after
+  a decoding error
+
+* `Response::take()` copies the response head without extensions, before both responses
+  shared the head and modifying either of them panicked
+
+* HTTP/1 limits the request or status line to 16KiB, configurable with
+  `HttpServiceConfig::set_max_start_line_size()`, a longer request line is rejected with
+  `414 URI Too Long`, add `DecodeError::StartLineTooLong`
+
+* HTTP/1 parses an incomplete request or status line again only when new data contains
+  a line end, and drops leading empty lines, before a start line sent in small pieces was
+  re-parsed on every read
+
+* Response body encoder ends the stream after an encoding error, before polling it again
+  sent the remaining body uncompressed
+
+* HTTP/2 resets the request stream when a request body held by the application is
+  dropped after the response is complete, before the stream was kept until the next
+  data frame or the connection closed
+
+* Dropping a request or response that holds another request or response in its
+  extensions, or dropping one during thread-local teardown, no longer panics
+
+* HTTP services unregister an in-flight connection even if creating the control
+  service fails or the connection future is dropped, before graceful shutdown waited
+  for the leaked connection until the shutdown timeout
+
+* HTTP/1 fails an unfinished request payload with `PayloadError::Incomplete` when the
+  dispatcher stops, before a detached payload reader could wait forever or see a truncated
+  payload as complete
+
+* HTTP/1 ignores `Expect` and `Upgrade` in HTTP/1.0 requests, no `100 Continue` is
+  sent to HTTP/1.0 clients
+
+* HTTP/1 closes the connection after a non-persistent response, pipelined requests
+  that follow it are not processed
+
+* HTTP/1 limits chunk extensions to 16KiB per payload, an endless chunk-size line
+  was buffered without limit
+
 * HTTP/2 server resets the stream with `NO_ERROR` if the response is complete and the request
   payload is dropped unread, or is dropped later and more request data arrives, the stream
   does not keep the stream slot

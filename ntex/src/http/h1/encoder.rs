@@ -4,13 +4,13 @@
     clippy::cast_sign_loss,
     clippy::too_many_arguments
 )]
-use std::{cell::Cell, cmp, io::Write, marker::PhantomData, ptr, slice};
+use std::{cell::Cell, cmp, marker::PhantomData, ptr, slice};
 
 use crate::http::config::DateService;
 use crate::http::error::EncodeError;
 use crate::http::header::{CONNECTION, CONTENT_LENGTH, DATE, TRANSFER_ENCODING, Value};
 use crate::http::message::{ConnectionType, RequestHead};
-use crate::http::{HeaderMap, Response, StatusCode, Version, body::BodySize};
+use crate::http::{HeaderMap, Method, Response, StatusCode, Version, body::BodySize};
 use crate::{util::BufMut, util::BytePages, util::Bytes};
 
 #[derive(Debug)]
@@ -63,8 +63,9 @@ pub(crate) trait MessageType: Sized {
         // Content length
         if let Some(status) = self.status() {
             if status == StatusCode::SWITCHING_PROTOCOLS {
+                // no framing headers in 1xx responses, see RFC 9112 section 6.1
                 skip_len = true;
-                length = BodySize::Stream;
+                length = BodySize::None;
             } else if is_bodyless(status) {
                 length = BodySize::None;
             }
@@ -90,7 +91,8 @@ pub(crate) trait MessageType: Sized {
             ConnectionType::KeepAlive if version < Version::HTTP_11 => {
                 dst.extend_from_slice(b"connection: keep-alive\r\n");
             }
-            ConnectionType::Close if version >= Version::HTTP_11 => {
+            // a response is sent as HTTP/1.1, which is persistent by default
+            ConnectionType::Close if version >= Version::HTTP_11 || self.status().is_some() => {
                 dst.extend_from_slice(b"connection: close\r\n");
             }
             _ => (),
@@ -133,8 +135,9 @@ pub(crate) trait MessageType: Sized {
             }
         }
 
-        // optimized date header, set_date writes \r\n
-        if has_date {
+        // optimized date header, set_date writes \r\n, a request does not
+        // need a date, see RFC 9110 section 6.6.1
+        if has_date || self.status().is_none() {
             // msg eof
             dst.extend_from_slice(b"\r\n");
         } else {
@@ -163,8 +166,8 @@ impl MessageType for Response<()> {
         let head = self.head();
         let reason = head.reason().as_bytes();
 
-        // status line
-        write_status_line(head.version, head.status.as_u16(), dst);
+        // the highest supported version, see RFC 9110 section 2.5
+        write_status_line(head.status.as_u16(), dst);
         dst.extend_from_slice(reason);
     }
 }
@@ -174,8 +177,9 @@ impl MessageType for RequestHead {
         None
     }
 
+    /// HTTP/1.0 does not support chunked transfer coding.
     fn chunked(&self) -> bool {
-        self.chunked()
+        self.chunked() && self.version >= Version::HTTP_11
     }
 
     fn headers(&self) -> &HeaderMap {
@@ -185,12 +189,26 @@ impl MessageType for RequestHead {
     fn encode_status(&self, dst: &mut BytePages) {
         dst.put_slice(self.method.as_str().as_bytes());
         dst.put_u8(b' ');
-        dst.put_slice(
-            self.uri
-                .path_and_query()
-                .map_or("/", |u| u.as_str())
-                .as_bytes(),
-        );
+        if let (&Method::CONNECT, Some(host)) = (&self.method, self.uri.host()) {
+            // authority-form, see RFC 9112 section 3.2.3
+            let port = self
+                .uri
+                .port_u16()
+                .unwrap_or_else(|| match self.uri.scheme_str() {
+                    Some("https" | "wss") => 443,
+                    _ => 80,
+                });
+            dst.put_slice(host.as_bytes());
+            dst.put_u8(b':');
+            dst.put_slice(port.to_string().as_bytes());
+        } else {
+            dst.put_slice(
+                self.uri
+                    .path_and_query()
+                    .map_or("/", |u| u.as_str())
+                    .as_bytes(),
+            );
+        }
         dst.put_u8(b' ');
         dst.put_slice(
             // only HTTP-0.9/1.1
@@ -206,11 +224,7 @@ impl MessageType for RequestHead {
 
 impl<T: MessageType> MessageEncoder<T> {
     /// Encode message
-    pub(crate) fn encode_chunk(
-        &self,
-        msg: Bytes,
-        buf: &mut BytePages,
-    ) -> Result<bool, EncodeError> {
+    pub(crate) fn encode_chunk(&self, msg: Bytes, buf: &mut BytePages) -> bool {
         let mut te = self.te.get();
         let result = te.encode(msg, buf);
         self.te.set(te);
@@ -237,10 +251,18 @@ impl<T: MessageType> MessageEncoder<T> {
         extra_headers: Option<HeaderMap>,
     ) -> Result<ConnectionType, EncodeError> {
         // a response with a bodyless status never sends body bytes
-        let length = if message.status().is_some_and(is_bodyless) {
-            BodySize::None
-        } else {
-            length
+        let length = match message.status() {
+            Some(status) if is_bodyless(status) => BodySize::None,
+            // a response body without framing would be delimited by connection
+            // close, see RFC 9112 section 6.3
+            Some(status)
+                if length == BodySize::None
+                    && !head
+                    && status != StatusCode::SWITCHING_PROTOCOLS =>
+            {
+                BodySize::Empty
+            }
+            _ => length,
         };
 
         // transfer encoding
@@ -258,6 +280,18 @@ impl<T: MessageType> MessageEncoder<T> {
                     }
                 }
             });
+        }
+
+        // a request body cannot be delimited by connection close, it must have
+        // a declared length, see RFC 9112 section 6.3
+        if message.status().is_none()
+            && self.te.get().kind == TransferEncodingKind::Eof
+            && !message.headers().contains_key(CONTENT_LENGTH)
+            && !extra_headers
+                .as_ref()
+                .is_some_and(|h| h.contains_key(CONTENT_LENGTH))
+        {
+            return Err(EncodeError::UnknownLength);
         }
 
         // a response body delimited by connection close ends the connection
@@ -337,39 +371,35 @@ impl TransferEncoding {
 
     /// Encode message. Return `EOF` state of encoder
     #[inline]
-    pub(crate) fn encode(
-        &mut self,
-        mut msg: Bytes,
-        buf: &mut BytePages,
-    ) -> Result<bool, EncodeError> {
+    pub(crate) fn encode(&mut self, mut msg: Bytes, buf: &mut BytePages) -> bool {
         match self.kind {
             TransferEncodingKind::Eof => {
                 if msg.is_empty() {
-                    Ok(true)
+                    true
                 } else {
                     buf.append(msg);
-                    Ok(false)
+                    false
                 }
             }
             TransferEncodingKind::Chunked(eof) => {
                 if eof {
-                    return Ok(true);
+                    return true;
                 }
 
                 // an empty chunk would be the last-chunk, only `encode_eof`
                 // terminates the body
                 if !msg.is_empty() {
-                    writeln!(buf, "{:X}\r", msg.len()).map_err(EncodeError::Fmt)?;
+                    write_chunk_size(msg.len(), buf);
 
                     buf.append(msg);
                     buf.extend_from_slice(b"\r\n");
                 }
-                Ok(false)
+                false
             }
             TransferEncodingKind::Length(mut remaining) => {
                 if remaining > 0 {
                     if msg.is_empty() {
-                        return Ok(remaining == 0);
+                        return remaining == 0;
                     }
                     let len = cmp::min(remaining, msg.len() as u64);
 
@@ -377,9 +407,9 @@ impl TransferEncoding {
 
                     remaining -= len;
                     self.kind = TransferEncodingKind::Length(remaining);
-                    Ok(remaining == 0)
+                    remaining == 0
                 } else {
-                    Ok(true)
+                    true
                 }
             }
         }
@@ -417,13 +447,8 @@ const DEC_DIGITS_LUT: &[u8] = b"0001020304050607080910111213141516171819\
 const STATUS_LINE_BUF_SIZE: usize = 13;
 
 #[allow(clippy::cast_possible_wrap)]
-fn write_status_line(version: Version, mut n: u16, bytes: &mut BytePages) {
-    let mut buf: [u8; STATUS_LINE_BUF_SIZE] = match version {
-        Version::HTTP_2 => *b"HTTP/2       ",
-        Version::HTTP_10 => *b"HTTP/1.0     ",
-        Version::HTTP_09 => *b"HTTP/0.9     ",
-        _ => *b"HTTP/1.1     ",
-    };
+fn write_status_line(mut n: u16, bytes: &mut BytePages) {
+    let mut buf: [u8; STATUS_LINE_BUF_SIZE] = *b"HTTP/1.1     ";
 
     let mut curr: isize = 12;
     let buf_ptr = buf.as_mut_ptr();
@@ -453,6 +478,23 @@ fn write_status_line(version: Version, mut n: u16, bytes: &mut BytePages) {
     if four {
         bytes.put_u8(b' ');
     }
+}
+
+/// Writes the chunk size line, the size in uppercase hex and CRLF.
+fn write_chunk_size(n: usize, bytes: &mut BytePages) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+
+    // up to 16 digits for a 64-bit size and CRLF
+    let mut buf = [0u8; 18];
+    let digits = if n == 0 { 1 } else { n.ilog2() as usize / 4 + 1 };
+    let mut n = n;
+    for pos in (0..digits).rev() {
+        buf[pos] = HEX[n & 0xf];
+        n >>= 4;
+    }
+    buf[digits] = b'\r';
+    buf[digits + 1] = b'\n';
+    bytes.extend_from_slice(&buf[..digits + 2]);
 }
 
 /// NOTE: bytes object has to contain enough space
@@ -561,12 +603,12 @@ mod tests {
     fn test_chunked_te() {
         let mut bytes = BytePages::default();
         let mut enc = TransferEncoding::chunked();
-        assert!(!enc.encode(b"test".into(), &mut bytes).ok().unwrap());
+        assert!(!enc.encode(b"test".into(), &mut bytes));
         // an empty chunk does not terminate the body
-        assert!(!enc.encode(b"".into(), &mut bytes).ok().unwrap());
-        assert!(!enc.encode(b"line".into(), &mut bytes).ok().unwrap());
+        assert!(!enc.encode(b"".into(), &mut bytes));
+        assert!(!enc.encode(b"line".into(), &mut bytes));
         enc.encode_eof(&mut bytes).unwrap();
-        assert!(enc.encode(b"late".into(), &mut bytes).ok().unwrap());
+        assert!(enc.encode(b"late".into(), &mut bytes));
 
         let mut data = Vec::new();
         while let Some(chunk) = bytes.take() {
@@ -607,6 +649,109 @@ mod tests {
     }
 
     #[test]
+    fn test_connect_authority_form() {
+        let encode = |method: Method, uri: &str| {
+            let head = RequestHead {
+                method,
+                uri: uri.parse().unwrap(),
+                ..Default::default()
+            };
+            let mut bytes = BytePages::default();
+            head.encode_status(&mut bytes);
+            String::from_utf8(Vec::from(bytes.take().unwrap().as_ref())).unwrap()
+        };
+
+        assert_eq!(
+            encode(Method::CONNECT, "http://example.com:8080/path"),
+            "CONNECT example.com:8080 HTTP/1.1"
+        );
+        assert_eq!(
+            encode(Method::CONNECT, "https://example.com/"),
+            "CONNECT example.com:443 HTTP/1.1"
+        );
+        assert_eq!(
+            encode(Method::CONNECT, "http://example.com"),
+            "CONNECT example.com:80 HTTP/1.1"
+        );
+        assert_eq!(
+            encode(Method::CONNECT, "example.com:5000"),
+            "CONNECT example.com:5000 HTTP/1.1"
+        );
+        assert_eq!(
+            encode(Method::CONNECT, "http://[::1]:5000"),
+            "CONNECT [::1]:5000 HTTP/1.1"
+        );
+        assert_eq!(
+            encode(Method::GET, "http://example.com:8080/path?q=1"),
+            "GET /path?q=1 HTTP/1.1"
+        );
+    }
+
+    #[crate::rt_test]
+    async fn test_request_without_date() {
+        let mut bytes = BytePages::default();
+        let head = RequestHead::default();
+        let _ = head.encode_headers(
+            &mut bytes,
+            Version::HTTP_11,
+            BodySize::None,
+            ConnectionType::KeepAlive,
+            None,
+        );
+        let data = String::from_utf8(bytes.take().unwrap().to_vec()).unwrap();
+        assert!(!data.contains("date:"), "{data:?}");
+        assert!(data.ends_with("\r\n\r\n"), "{data:?}");
+    }
+
+    #[crate::rt_test]
+    async fn test_request_stream_framing() {
+        let encode = |version: Version, chunking: bool, cl: bool| {
+            let mut head = RequestHead {
+                version,
+                ..Default::default()
+            };
+            head.no_chunking(!chunking);
+            if cl {
+                head.headers
+                    .insert(CONTENT_LENGTH, HeaderValue::from_static("4"));
+            }
+            let mut bytes = BytePages::default();
+            let enc = MessageEncoder::<RequestHead>::default();
+            enc.encode(
+                &mut bytes,
+                &head,
+                false,
+                false,
+                version,
+                BodySize::Stream,
+                ConnectionType::KeepAlive,
+                None,
+            )
+            .map(|_| String::from_utf8(bytes.take().unwrap().to_vec()).unwrap())
+        };
+
+        let data = encode(Version::HTTP_11, true, false).unwrap();
+        assert!(data.contains("transfer-encoding: chunked\r\n"), "{data:?}");
+
+        // HTTP/1.0 does not support chunked coding
+        let data = encode(Version::HTTP_10, true, true).unwrap();
+        assert!(!data.contains("transfer-encoding"), "{data:?}");
+        assert!(data.contains("content-length: 4\r\n"), "{data:?}");
+        assert!(matches!(
+            encode(Version::HTTP_10, true, false),
+            Err(EncodeError::UnknownLength)
+        ));
+
+        // no chunking, the body length must be declared
+        let data = encode(Version::HTTP_11, false, true).unwrap();
+        assert!(data.contains("content-length: 4\r\n"), "{data:?}");
+        assert!(matches!(
+            encode(Version::HTTP_11, false, false),
+            Err(EncodeError::UnknownLength)
+        ));
+    }
+
+    #[test]
     fn test_convert_usize() {
         for n in [0, 7, 42, 999, 10_000, 123_456_789, u64::MAX] {
             let mut b = BytePages::default();
@@ -615,6 +760,32 @@ mod tests {
 
             convert_usize(n, &mut b, true);
             assert_eq!(b.take().unwrap().as_ref(), format!("{n}\r\n").as_bytes());
+        }
+    }
+
+    #[test]
+    fn test_write_chunk_size() {
+        for n in [
+            0,
+            1,
+            9,
+            10,
+            15,
+            16,
+            255,
+            256,
+            4095,
+            4096,
+            0x00AB_CDEF,
+            usize::MAX,
+        ] {
+            let mut b = BytePages::default();
+            write_chunk_size(n, &mut b);
+            let mut data = Vec::new();
+            while let Some(chunk) = b.take() {
+                data.extend_from_slice(&chunk);
+            }
+            assert_eq!(data, format!("{n:X}\r\n").into_bytes());
         }
     }
 

@@ -219,26 +219,10 @@ impl MessageBody {
     pub fn new(res: &ClientResponse) -> MessageBody {
         let config = res.config.clone();
 
-        let mut len = None;
-        if let Some(l) = res.headers().get(&CONTENT_LENGTH) {
-            if let Ok(s) = l.to_str() {
-                if let Ok(l) = s.parse::<usize>() {
-                    len = Some(l);
-                } else {
-                    return Self::err(
-                        Error::from(ClientPayloadError(PayloadError::UnknownLength))
-                            .set_service(config.service()),
-                        config,
-                    );
-                }
-            } else {
-                return Self::err(
-                    Error::from(ClientPayloadError(PayloadError::UnknownLength))
-                        .set_service(config.service()),
-                    config,
-                );
-            }
-        }
+        let len = match content_length(res) {
+            Ok(len) => len,
+            Err(e) => return Self::err(Error::from(e).set_service(config.service()), config),
+        };
 
         MessageBody {
             config,
@@ -355,13 +339,20 @@ where
             };
         }
 
-        let mut len = None;
-        if let Some(l) = res.headers().get(&CONTENT_LENGTH)
-            && let Ok(s) = l.to_str()
-            && let Ok(l) = s.parse::<usize>()
-        {
-            len = Some(l);
-        }
+        let len = match content_length(res) {
+            Ok(len) => len,
+            Err(e) => {
+                return JsonBody {
+                    err: Some(
+                        Error::from(JsonPayloadError::Payload(e)).set_service(config.service()),
+                    ),
+                    config,
+                    length: None,
+                    fut: None,
+                    _t: PhantomData,
+                };
+            }
+        };
 
         JsonBody {
             config,
@@ -434,6 +425,19 @@ where
             }),
         )
     }
+}
+
+/// Parses the response `Content-Length` header.
+fn content_length(res: &ClientResponse) -> Result<Option<usize>, ClientPayloadError> {
+    res.headers()
+        .get(&CONTENT_LENGTH)
+        .map(|l| {
+            l.to_str()
+                .ok()
+                .and_then(|s| s.parse::<usize>().ok())
+                .ok_or(ClientPayloadError(PayloadError::UnknownLength))
+        })
+        .transpose()
 }
 
 #[derive(Debug)]
@@ -546,6 +550,12 @@ mod tests {
                     JsonPayloadError::Payload(ClientPayloadError(PayloadError::Overflow))
                 )
             }
+            JsonPayloadError::Payload(ClientPayloadError(PayloadError::UnknownLength)) => {
+                matches!(
+                    other,
+                    JsonPayloadError::Payload(ClientPayloadError(PayloadError::UnknownLength))
+                )
+            }
             JsonPayloadError::ContentType => matches!(other, JsonPayloadError::ContentType),
             _ => false,
         }
@@ -587,6 +597,16 @@ mod tests {
         assert!(json_eq(
             &json.err().unwrap(),
             &JsonPayloadError::Payload(ClientPayloadError(PayloadError::Overflow))
+        ));
+
+        let req = TestResponse::with_header(header::CONTENT_TYPE, "application/json")
+            .header(header::CONTENT_LENGTH, "xxxx")
+            .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
+            .build();
+        let json = JsonBody::<MyObject>::new(&req).await;
+        assert!(json_eq(
+            &json.err().unwrap(),
+            &JsonPayloadError::Payload(ClientPayloadError(PayloadError::UnknownLength))
         ));
 
         let req = TestResponse::builder()

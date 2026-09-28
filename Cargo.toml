@@ -75,7 +75,7 @@ ntex-tls = "4.1.0"
 ntex-util = "4.2.0"
 
 ntex-io-uring = "0.7.120"
-ntex-httparse = "2.1.0"
+ntex-httparse = "2.2.0"
 
 async-channel = "2"
 async-task = "4.5.0"

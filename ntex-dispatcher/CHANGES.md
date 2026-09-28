@@ -2,6 +2,9 @@
 
 ## [4.1.0] - Unreleased
 
+* Dispatch frames already in the read buffer when the connection fails while the service
+  is not ready, they were dropped
+
 * Return the service error from the `DispatchItem::Stop` call, it was dropped and the dispatcher
   resolved to `Ok(())`
 

@@ -2,6 +2,13 @@
 
 ## [2.0.0] - Unreleased
 
+* `IntoPattern` is implemented for arrays of any size and of any `AsRef<str>` item,
+  it was limited to `&str` and `String` arrays of up to 16 items
+
+* Fix panic in `Path::unprocessed()` and `Path::get("tail")` after a prefix resource
+  matched the whole path, e.g. prefix `/app` for `/app`. `Path::skip()` is limited
+  to the path length
+
 * Fix wrong segment values for paths longer than 64KiB, offsets were stored
   as `u16` and wrapped. `Path::skip()` takes `u32`
 

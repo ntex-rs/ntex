@@ -88,25 +88,11 @@ impl TestResponse {
         #[allow(unused_mut)]
         let mut head = self.head;
 
+        // one `Set-Cookie` header per cookie
         #[cfg(feature = "cookie")]
-        {
-            use percent_encoding::percent_encode;
-            use std::fmt::Write as FmtWrite;
-
-            use crate::http::header;
-
-            let mut cookie = String::new();
-            for c in self.cookies.delta() {
-                let name = percent_encode(c.name().as_bytes(), crate::http::helpers::USERINFO);
-                let value = percent_encode(c.value().as_bytes(), crate::http::helpers::USERINFO);
-                let _ = write!(cookie, "; {name}={value}");
-            }
-            if !cookie.is_empty() {
-                head.headers.insert(
-                    header::SET_COOKIE,
-                    HeaderValue::from_str(&cookie.as_str()[2..]).unwrap(),
-                );
-            }
+        for c in self.cookies.delta() {
+            let value = HeaderValue::from_str(&c.encoded().to_string()).unwrap();
+            head.headers.append(crate::http::header::SET_COOKIE, value);
         }
 
         if let Some(pl) = self.payload {
@@ -145,5 +131,34 @@ mod tests {
         assert!(res.headers().contains_key(header::SET_COOKIE));
         assert!(res.headers().contains_key(header::DATE));
         assert_eq!(res.version(), Version::HTTP_2);
+    }
+
+    #[cfg(feature = "cookie")]
+    #[crate::rt_test]
+    async fn test_cookies() {
+        use crate::http::HttpMessage;
+        use coo_kie::Cookie;
+
+        let res = TestResponse::builder()
+            .cookie(Cookie::build(("c1", "v 1")).path("/p"))
+            .cookie(Cookie::build(("c2", "v2")))
+            .build();
+        assert_eq!(res.headers().get_all(header::SET_COOKIE).count(), 2);
+
+        let mut cookies: Vec<_> = res
+            .cookies()
+            .unwrap()
+            .iter()
+            .map(|c| (c.name().to_string(), c.value().to_string()))
+            .collect();
+        cookies.sort_unstable();
+        assert_eq!(
+            cookies,
+            [
+                ("c1".to_string(), "v 1".to_string()),
+                ("c2".to_string(), "v2".to_string())
+            ]
+        );
+        assert_eq!(res.cookie("c1").unwrap().path(), Some("/p"));
     }
 }

@@ -32,7 +32,8 @@ bitflags! {
 pub(crate) trait Head: Default + 'static + fmt::Debug {
     fn clear(&mut self);
 
-    fn with_pool<F, R>(f: F) -> R
+    /// Calls `f` with the thread's pool, returns `None` if the pool is already destroyed.
+    fn with_pool<F, R>(f: F) -> Option<R>
     where
         F: FnOnce(&MessagePool<Self>) -> R;
 }
@@ -122,11 +123,11 @@ impl Head for RequestHead {
         self.extensions.get_mut().clear();
     }
 
-    fn with_pool<F, R>(f: F) -> R
+    fn with_pool<F, R>(f: F) -> Option<R>
     where
         F: FnOnce(&MessagePool<Self>) -> R,
     {
-        REQUEST_POOL.with(|p| f(p))
+        REQUEST_POOL.try_with(|p| f(p)).ok()
     }
 }
 
@@ -208,6 +209,8 @@ impl RequestHead {
 
     #[inline]
     /// Enables or disables chunked transfer encoding.
+    ///
+    /// A streaming request body without chunked coding requires a `Content-Length` header.
     pub fn no_chunking(&mut self, val: bool) {
         if val {
             self.flags.insert(Flags::NO_CHUNKING);
@@ -364,14 +367,14 @@ impl ResponseHead {
     }
 
     /// Returns the custom or canonical reason phrase.
+    ///
+    /// The reason phrase is empty for a status code without a canonical reason.
     #[inline]
     pub fn reason(&self) -> &str {
         if let Some(reason) = self.reason {
             reason
         } else {
-            self.status
-                .canonical_reason()
-                .unwrap_or("<unknown status code>")
+            self.status.canonical_reason().unwrap_or("")
         }
     }
 
@@ -421,11 +424,11 @@ impl Head for ResponseHead {
         self.extensions.get_mut().clear();
     }
 
-    fn with_pool<F, R>(f: F) -> R
+    fn with_pool<F, R>(f: F) -> Option<R>
     where
         F: FnOnce(&MessagePool<Self>) -> R,
     {
-        RESPONSE_POOL.with(|p| f(p))
+        RESPONSE_POOL.try_with(|p| f(p)).ok()
     }
 }
 
@@ -437,15 +440,30 @@ pub(crate) struct Message<T: Head> {
 impl<T: Head> Message<T> {
     /// Get new message from the pool of objects
     pub(crate) fn new() -> Self {
-        T::with_pool(MessagePool::get_message)
+        let head = T::with_pool(MessagePool::get_head)
+            .flatten()
+            .unwrap_or_else(|| Rc::new(T::default()));
+        Message { head }
     }
 }
 
 impl Message<ResponseHead> {
     /// Get new message from the pool of objects
     pub(crate) fn with_status(status: StatusCode) -> Self {
-        let mut msg = RESPONSE_POOL.with(MessagePool::get_message);
+        let mut msg = Self::new();
         msg.status = status;
+        msg
+    }
+
+    /// Copies the response head into a new message, extensions are not copied.
+    pub(crate) fn copy(&self) -> Self {
+        let mut msg = Self::with_status(self.status);
+        msg.version = self.version;
+        msg.headers = self.headers.clone();
+        msg.headers_vec.clone_from(&self.headers_vec);
+        msg.reason = self.reason;
+        msg.io = self.io.clone();
+        msg.flags = self.flags;
         msg
     }
 }
@@ -474,13 +492,14 @@ impl<T: Head> std::ops::DerefMut for Message<T> {
 
 impl<T: Head> Drop for Message<T> {
     fn drop(&mut self) {
-        if Rc::strong_count(&self.head) == 1 {
+        if let Some(head) = Rc::get_mut(&mut self.head) {
+            // clearing may drop other messages (e.g. stored in extensions),
+            // so the pool must not be borrowed at this point
+            head.clear();
             T::with_pool(|pool| {
-                let v = &mut pool.0.borrow_mut();
-                if v.len() < 128 {
-                    Rc::get_mut(&mut self.head)
-                        .expect("Multiple copies exist")
-                        .clear();
+                if let Ok(mut v) = pool.0.try_borrow_mut()
+                    && v.len() < 128
+                {
                     v.push(self.head.clone());
                 }
             });
@@ -499,17 +518,55 @@ impl<T: Head> MessagePool<T> {
         MessagePool(RefCell::new(Vec::with_capacity(256)))
     }
 
-    /// Get message from the pool
+    /// Get cleared head from the pool
     #[inline]
-    fn get_message(&self) -> Message<T> {
-        let head = if let Some(mut msg) = self.0.borrow_mut().pop() {
-            if let Some(msg) = Rc::get_mut(&mut msg) {
-                msg.clear();
+    fn get_head(&self) -> Option<Rc<T>> {
+        self.0.try_borrow_mut().ok()?.pop()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nested_message_drop() {
+        let inner = Message::<RequestHead>::new();
+        let outer = Message::<RequestHead>::new();
+        outer.extensions_mut().insert(inner);
+        let mut res = Message::<ResponseHead>::with_status(StatusCode::OK);
+        res.extensions
+            .get_mut()
+            .insert(Message::<ResponseHead>::new());
+        outer.extensions_mut().insert(res);
+        drop(outer);
+
+        let _ = Message::<RequestHead>::new();
+        let _ = Message::<ResponseHead>::new();
+    }
+
+    #[test]
+    fn message_drop_after_pool_destroyed() {
+        struct Holder(Option<Message<RequestHead>>, Option<Message<ResponseHead>>);
+
+        impl Drop for Holder {
+            fn drop(&mut self) {
+                drop(self.0.take());
+                drop(self.1.take());
+                drop(Message::<RequestHead>::new());
             }
-            msg
-        } else {
-            Rc::new(T::default())
-        };
-        Message { head }
+        }
+
+        thread_local!(static HOLDER: RefCell<Option<Holder>> = const { RefCell::new(None) });
+
+        std::thread::spawn(|| {
+            // register holder before the pools, so it is destroyed after them
+            HOLDER.with(|_| ());
+            let req = Message::<RequestHead>::new();
+            let res = Message::<ResponseHead>::new();
+            HOLDER.with(|h| *h.borrow_mut() = Some(Holder(Some(req), Some(res))));
+        })
+        .join()
+        .unwrap();
     }
 }
