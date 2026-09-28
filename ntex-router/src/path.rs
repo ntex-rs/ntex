@@ -91,8 +91,11 @@ impl<T: ResourcePath> Path<T> {
 
     #[inline]
     /// Skip first `n` bytes in path, matching starts after them
+    ///
+    /// The skipped length is limited to the path length.
     pub fn skip(&mut self, n: u32) {
-        self.skip += n;
+        let len = u32::try_from(self.resource.path().len()).unwrap_or(u32::MAX);
+        self.skip = self.skip.saturating_add(n).min(len);
     }
 
     // pub(crate) fn add(&mut self, name: &'static str, value: String) {
@@ -133,15 +136,15 @@ impl<T: ResourcePath> Path<T> {
             }
         }
         if key == "tail" {
-            Some(&self.resource.path()[(self.skip as usize)..])
+            Some(self.path())
         } else {
             None
         }
     }
 
-    /// Get unprocessed part of the path
+    /// Get unprocessed part of the path, same as [`path()`](Self::path)
     pub fn unprocessed(&self) -> &str {
-        &self.resource.path()[(self.skip as usize)..]
+        self.path()
     }
 
     /// Get matched segment by name.

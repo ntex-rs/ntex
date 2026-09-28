@@ -220,7 +220,7 @@ impl Tree {
                             if let Some((val, skip)) = result {
                                 let path = resource.resource_path();
                                 path.segments = segments;
-                                path.skip += skip as u32;
+                                path.skip(skip as u32);
                                 return Some(val);
                             }
                         }
@@ -272,7 +272,7 @@ impl Tree {
                             if let Some((val, skip)) = result {
                                 let path = resource.resource_path();
                                 path.segments = segments;
-                                path.skip += skip as u32;
+                                path.skip(skip as u32);
                                 return Some(val);
                             }
                         }
@@ -299,7 +299,7 @@ impl Tree {
             if let Some((val, skip)) = res {
                 let path = resource.resource_path();
                 path.segments = segments;
-                path.skip += skip as u32;
+                path.skip(skip as u32);
                 return Some(val);
             }
         }

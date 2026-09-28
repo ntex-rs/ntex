@@ -508,4 +508,31 @@ mod tests {
             11
         );
     }
+
+    #[test]
+    fn test_prefix_exact_match_tail() {
+        for (prefix, p, tail) in [
+            ("/app", "/app", ""),
+            ("/app", "/app/", "/"),
+            ("/app", "/app/test", "/test"),
+            ("/{name}", "/x", ""),
+            ("/a/{name}", "/a/x", ""),
+        ] {
+            let mut router = Router::<usize>::builder();
+            router.prefix(prefix, 1);
+            let router = router.build();
+
+            let mut path = Path::new(p);
+            assert!(router.recognize(&mut path).is_some());
+            assert_eq!(path.path(), tail);
+            assert_eq!(path.unprocessed(), tail);
+            assert_eq!(path.get("tail"), Some(tail));
+            assert_eq!(&path["tail"], tail);
+        }
+
+        let mut path = Path::new("/app");
+        path.skip(10);
+        assert_eq!(path.unprocessed(), "");
+        assert_eq!(path.get("tail"), Some(""));
+    }
 }
