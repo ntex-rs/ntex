@@ -70,6 +70,10 @@ pub enum EncodeError {
     /// The encoded stream ended before the message was complete.
     #[error("Unexpected end of bytes stream")]
     UnexpectedEof,
+
+    /// A streaming request body has neither chunked coding nor `Content-Length`.
+    #[error("Request body length is unknown")]
+    UnknownLength,
 }
 
 /// Errors that can occur while parsing HTTP streams.

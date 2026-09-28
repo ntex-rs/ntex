@@ -11,6 +11,10 @@
 
 * HTTP/1 does not restart the keep-alive timer for every request of a persistent connection
 
+* HTTP/1 client does not use chunked coding for HTTP/1.0 requests, a streaming request body
+  without chunked coding and `Content-Length` header fails with new `EncodeError::UnknownLength`,
+  the body was sent without framing
+
 * HTTP/1 client sends `content-length: 0` for `POST`, `PUT` and `PATCH` requests without a body
 
 * HTTP/1 client treats a `2xx` response to `CONNECT` as a tunnel, framing headers are ignored,

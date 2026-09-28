@@ -209,6 +209,8 @@ impl RequestHead {
 
     #[inline]
     /// Enables or disables chunked transfer encoding.
+    ///
+    /// A streaming request body without chunked coding requires a `Content-Length` header.
     pub fn no_chunking(&mut self, val: bool) {
         if val {
             self.flags.insert(Flags::NO_CHUNKING);

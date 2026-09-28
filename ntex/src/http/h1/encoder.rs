@@ -176,8 +176,9 @@ impl MessageType for RequestHead {
         None
     }
 
+    /// HTTP/1.0 does not support chunked transfer coding.
     fn chunked(&self) -> bool {
-        self.chunked()
+        self.chunked() && self.version >= Version::HTTP_11
     }
 
     fn headers(&self) -> &HeaderMap {
@@ -278,6 +279,18 @@ impl<T: MessageType> MessageEncoder<T> {
                     }
                 }
             });
+        }
+
+        // a request body cannot be delimited by connection close, it must have
+        // a declared length, see RFC 9112 section 6.3
+        if message.status().is_none()
+            && self.te.get().kind == TransferEncodingKind::Eof
+            && !message.headers().contains_key(CONTENT_LENGTH)
+            && !extra_headers
+                .as_ref()
+                .is_some_and(|h| h.contains_key(CONTENT_LENGTH))
+        {
+            return Err(EncodeError::UnknownLength);
         }
 
         // a response body delimited by connection close ends the connection
@@ -671,6 +684,54 @@ mod tests {
             encode(Method::GET, "http://example.com:8080/path?q=1"),
             "GET /path?q=1 HTTP/1.1"
         );
+    }
+
+    #[crate::rt_test]
+    async fn test_request_stream_framing() {
+        let encode = |version: Version, chunking: bool, cl: bool| {
+            let mut head = RequestHead {
+                version,
+                ..Default::default()
+            };
+            head.no_chunking(!chunking);
+            if cl {
+                head.headers
+                    .insert(CONTENT_LENGTH, HeaderValue::from_static("4"));
+            }
+            let mut bytes = BytePages::default();
+            let enc = MessageEncoder::<RequestHead>::default();
+            enc.encode(
+                &mut bytes,
+                &head,
+                false,
+                false,
+                version,
+                BodySize::Stream,
+                ConnectionType::KeepAlive,
+                None,
+            )
+            .map(|_| String::from_utf8(bytes.take().unwrap().to_vec()).unwrap())
+        };
+
+        let data = encode(Version::HTTP_11, true, false).unwrap();
+        assert!(data.contains("transfer-encoding: chunked\r\n"), "{data:?}");
+
+        // HTTP/1.0 does not support chunked coding
+        let data = encode(Version::HTTP_10, true, true).unwrap();
+        assert!(!data.contains("transfer-encoding"), "{data:?}");
+        assert!(data.contains("content-length: 4\r\n"), "{data:?}");
+        assert!(matches!(
+            encode(Version::HTTP_10, true, false),
+            Err(EncodeError::UnknownLength)
+        ));
+
+        // no chunking, the body length must be declared
+        let data = encode(Version::HTTP_11, false, true).unwrap();
+        assert!(data.contains("content-length: 4\r\n"), "{data:?}");
+        assert!(matches!(
+            encode(Version::HTTP_11, false, false),
+            Err(EncodeError::UnknownLength)
+        ));
     }
 
     #[test]
