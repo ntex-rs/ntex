@@ -9,6 +9,10 @@
 * HTTP/1 response carries `connection: close` if the request payload was dropped unread while
   the service was running, the connection was closed without announcing it
 
+* HTTP/1 server rejects an asterisk-form request target for methods other than `OPTIONS`
+
+* `h1::Codec::upgrade()` is removed, use `Request::upgrade()` of the decoded request
+
 * HTTP/1 dispatcher observes a connection failure while the response body is pending, a streaming
   response kept the connection and its body until the body produced the next chunk
 

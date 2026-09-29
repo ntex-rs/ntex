@@ -18,7 +18,6 @@ bitflags! {
         const HEAD              = 0b0000_0001;
         const STREAM            = 0b0000_0010;
         const KEEPALIVE_ENABLED = 0b0000_0100;
-        const UPGRADE           = 0b0000_1000;
     }
 }
 
@@ -127,17 +126,6 @@ impl Codec {
     }
 
     #[inline]
-    /// Returns whether the most recently decoded request upgrades the
-    /// connection.
-    ///
-    /// The flag is updated each time a request is decoded. It is not cleared
-    /// when the dispatcher hands the connection to an upgrade handler, so the
-    /// handler's codec still reports the upgrade.
-    pub fn upgrade(&self) -> bool {
-        self.flags.get().contains(Flags::UPGRADE)
-    }
-
-    #[inline]
     /// Returns whether the current HTTP connection state is persistent.
     ///
     /// Before the first request is decoded, this reflects whether keep-alive
@@ -181,8 +169,6 @@ impl Decoder for Codec {
             self.version.set(head.version);
 
             let ctype = head.connection_type();
-            flags.set(Flags::UPGRADE, ctype == ConnectionType::Upgrade);
-            self.flags.set(flags);
             if ctype == ConnectionType::KeepAlive && !flags.contains(Flags::KEEPALIVE_ENABLED) {
                 self.ctype.set(ConnectionType::Close);
             } else {
@@ -543,18 +529,30 @@ mod tests {
             "GET /test HTTP/1.1\r\nhost: localhost\r\n\
              connection: upgrade\r\nupgrade: websocket\r\n\r\n",
         );
-        let _item = codec.decode(&mut buf).unwrap().unwrap();
-        assert!(codec.upgrade());
+        let (req, _) = codec.decode(&mut buf).unwrap().unwrap();
+        assert!(req.upgrade());
         assert!(!codec.keepalive());
         codec.reset_upgrade();
-        assert!(codec.upgrade());
         assert!(!codec.keepalive());
+
+        // `Connection: keep-alive, Upgrade` is sent by browsers
+        let codec = Codec::new(0, cfg.get());
+        let mut buf = BytesMut::from(
+            "GET /test HTTP/1.1\r\nhost: localhost\r\n\
+             connection: keep-alive, Upgrade\r\nupgrade: websocket\r\n\r\n",
+        );
+        let (req, _) = codec.decode(&mut buf).unwrap().unwrap();
+        assert!(req.upgrade());
+
+        let codec = Codec::new(0, cfg.get());
+        let mut buf = BytesMut::from("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        let (req, _) = codec.decode(&mut buf).unwrap().unwrap();
+        assert!(!req.upgrade());
 
         let cfg: SharedCfg = SharedCfg::new("DBG")
             .add(HttpServiceConfig::new().set_keepalive(KeepAlive::Disabled))
             .into();
         let codec = Codec::new(0, cfg.get());
-        assert!(!codec.upgrade());
         assert!(!codec.keepalive());
     }
 }

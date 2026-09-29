@@ -543,7 +543,13 @@ impl MessageType for Request {
             Status::Complete(pos) => {
                 let method = Method::from_bytes(&src[req.method.start..req.method.end])
                     .map_err(|_| DecodeError::Method)?;
-                let uri = Uri::try_from(&src[req.path.start..req.path.end])?;
+                let target = &src[req.path.start..req.path.end];
+                // asterisk-form is only used for a server-wide `OPTIONS` request,
+                // see RFC 9112 section 3.2.4
+                if target == b"*" && method != Method::OPTIONS {
+                    return Err(DecodeError::Uri);
+                }
+                let uri = Uri::try_from(target)?;
                 let version = if req.version == 1 {
                     Version::HTTP_11
                 } else {
@@ -1315,6 +1321,23 @@ mod tests {
                 _ => unreachable!("Error expected"),
             }
         }};
+    }
+
+    #[test]
+    /// Asterisk-form is only valid for `OPTIONS`, RFC 9112 section 3.2.4.
+    fn test_asterisk_form_only_for_options() {
+        let mut buf = BytesMut::from("OPTIONS * HTTP/1.1\r\nhost: a\r\n\r\n");
+        let req = parse_ready!(&mut buf);
+        assert_eq!(req.path(), "*");
+
+        for method in ["GET", "POST", "HEAD", "CONNECT"] {
+            let mut buf =
+                BytesMut::from(format!("{method} * HTTP/1.1\r\nhost: a\r\n\r\n").as_str());
+            match MessageDecoder::<Request>::default().decode(&mut buf) {
+                Err(DecodeError::Uri) => (),
+                res => panic!("{method}: {res:?}"),
+            }
+        }
     }
 
     #[test]
