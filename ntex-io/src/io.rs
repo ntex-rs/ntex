@@ -250,6 +250,15 @@ impl IoState {
         self.buffer.write_buf_size() + self.wr_inflight.get() as usize
     }
 
+    /// Output that has reached the transport-facing buffer but not the peer.
+    ///
+    /// Output a filter holds back, for example application data during a TLS
+    /// renegotiation, is excluded. It can not drain until more input is read,
+    /// so it must not keep reads paused.
+    pub(super) fn transport_outstanding(&self) -> usize {
+        self.buffer.write_dst_size() + self.wr_inflight.get() as usize
+    }
+
     /// Records bytes taken by, or returned from, the transport.
     pub(super) fn track_wr_inflight(&self, before: usize, after: usize) {
         let inflight = self.wr_inflight.get();
@@ -3009,6 +3018,88 @@ mod tests {
             Poll::Ready(Readiness::Ready)
         );
         assert!(!io.st().flags.is_read_wr_backpressure());
+    }
+
+    #[ntex::test]
+    async fn read_output_pause_ignores_held_back_output() {
+        // Holds application output until a handshake completes, like TLS
+        // during a renegotiation.
+        #[derive(Debug, Default)]
+        struct Reneg(Cell<bool>);
+
+        impl FilterLayer for Reneg {
+            fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                let data = buf.with_read_buffers(|src, _| src.as_mut().map(BytesMut::take));
+                match data.as_deref() {
+                    Some(b"hello") => {
+                        buf.with_write_buffers(|_, dst| dst.extend_from_slice(b"handshake"));
+                    }
+                    Some(b"done") => {
+                        self.0.set(true);
+                        buf.with_write_buffers(BytePages::move_to);
+                    }
+                    _ => (),
+                }
+                Ok(())
+            }
+
+            fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                if self.0.get() {
+                    buf.with_write_buffers(BytePages::move_to);
+                }
+                Ok(())
+            }
+
+            fn shutdown(&self, _: &FilterBuf<'_>) -> io::Result<Poll<()>> {
+                Ok(Poll::Ready(()))
+            }
+        }
+
+        #[derive(Debug)]
+        struct Manual;
+
+        impl IoStream for Manual {
+            fn start(self, _: IoContext) -> Box<dyn Handle> {
+                Box::new(self)
+            }
+        }
+
+        impl Handle for Manual {}
+
+        let io = Io::new(
+            Manual,
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8)),
+        )
+        .add_filter(Reneg::default());
+        let ctx = IoContext::new(io.get_ref());
+        let read = |data: &'static [u8]| {
+            ctx.with_read_buf(|buf| {
+                buf.extend_from_slice(data);
+                Poll::Ready(Ok(data.len()))
+            })
+        };
+
+        // application output is held back by the filter
+        io.encode_slice(b"12345678").unwrap();
+        assert_eq!(io.st().write_outstanding(), 8);
+
+        // the handshake reply reaches the high watermark, reads pause
+        assert_eq!(read(b"hello"), IoTaskStatus::Pause);
+        assert!(io.st().flags.is_read_wr_backpressure());
+
+        // the reply drains, the held back output does not keep reads paused
+        let _ = ctx.with_write_dst(|buf| buf.split_to(9));
+        let _ = ctx.update_write_status(Ok(9));
+        assert_eq!(io.st().write_outstanding(), 8);
+        assert!(!io.st().flags.is_read_wr_backpressure());
+        assert_eq!(
+            lazy(|cx| ctx.poll_read_ready(cx)).await,
+            Poll::Ready(Readiness::Ready)
+        );
+
+        // the handshake completes and the held back output moves
+        let _ = read(b"done");
+        assert_eq!(ctx.with_write_dst(|buf| buf.len()), 8);
     }
 
     #[ntex::test]

@@ -83,6 +83,11 @@ impl Stack {
         }
     }
 
+    /// Returns the size of the transport-facing write buffer.
+    pub(crate) fn write_dst_size(&self) -> usize {
+        self.with_last(Buffer::write_len)
+    }
+
     pub(crate) fn with_write_src<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytePages) -> R,
