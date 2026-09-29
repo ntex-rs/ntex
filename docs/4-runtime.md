@@ -66,11 +66,12 @@ selects an I/O reactor based on the current platform:
 
 You can select a specific native reactor through a Cargo feature:
 
-- `neon-polling` selects the polling reactor.
-- `neon-uring` selects the `io_uring` reactor on Linux.
-- `neon-iocp` selects the IOCP reactor on Windows.
+- `neon-polling` selects the polling reactor on Unix platforms.
+- `neon-uring` selects the `io_uring` reactor. It is available only on Linux.
 
-The reactor-selection features are intended to be mutually exclusive.
+The reactor-selection features are intended to be mutually exclusive. Windows
+always uses IOCP, the `neon-iocp` feature is accepted for compatibility but has
+no effect.
 
 For example, to use the polling reactor:
 
@@ -174,6 +175,9 @@ You can customize how the system's root future is driven by implementing the
 [`Runner`](https://docs.rs/ntex-rt/latest/ntex_rt/trait.Runner.html) trait:
 
 ```rust
+use std::any::Any;
+use ntex::rt::BlockFuture;
+
 trait Runner: Send + Sync + 'static {
     fn block_on(&self, fut: BlockFuture) -> Result<(), Box<dyn Any + Send>>;
 }
