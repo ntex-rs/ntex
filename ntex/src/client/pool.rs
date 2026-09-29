@@ -740,8 +740,12 @@ mod tests {
     }
 
     async fn wait_closed(h2: &H2Client) {
+        wait_closed_for(h2, 60).await;
+    }
+
+    async fn wait_closed_for(h2: &H2Client, ticks: usize) {
         // graceful disconnect, peer does not respond
-        for _ in 0..60 {
+        for _ in 0..ticks {
             if h2.is_closed() {
                 break;
             }
@@ -787,7 +791,8 @@ mod tests {
         assert!(acquire_h2(&pool).is_none());
         assert!(pool.0.inner.borrow().h2.is_empty());
         assert!(h2.is_disconnecting());
-        wait_closed(&h2).await;
+        // an immediate close ends within the shutdown timeout, less than 2s
+        wait_closed_for(&h2, 44).await;
         assert!(!h2.is_closed());
         assert!(!server.is_closed());
 

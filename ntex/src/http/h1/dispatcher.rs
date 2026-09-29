@@ -3066,6 +3066,9 @@ mod tests {
             let random_bytes: Vec<u8> = (0..300).map(|_| rand::random::<u8>()).collect();
             client.write(random_bytes);
             sleep(Millis(250)).await;
+            if err_mark.load(Ordering::Relaxed) != 0 {
+                break;
+            }
         }
         // The first period exceeds the configured rate and earns one
         // extension; the two-second maximum then terminates the payload.

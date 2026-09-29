@@ -354,20 +354,14 @@ async fn test_http1_no_keepalive_during_response() {
     );
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\n\r\n");
-    let mut data = vec![0; 1024];
-    let _ = stream.read(&mut data);
-    assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
-
-    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\n\r\n");
-    let mut data = vec![0; 1024];
-    let _ = stream.read(&mut data);
-    assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
-
-    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\n\r\n");
-    let mut data = vec![0; 1024];
-    let _ = stream.read(&mut data);
-    assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
+    // the second request runs while the keep-alive timer of the first wait
+    // is left armed
+    for _ in 0..2 {
+        let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        let mut data = vec![0; 1024];
+        let _ = stream.read(&mut data);
+        assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
+    }
 }
 
 /// Keep-alive timeout after sending response

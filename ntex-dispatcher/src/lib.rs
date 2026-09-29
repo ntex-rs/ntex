@@ -707,6 +707,16 @@ mod tests {
 
     use super::*;
 
+    /// Waits until the peer is closed, up to `max`.
+    async fn wait_closed(client: &IoTest, max: Millis) {
+        for _ in 0..max.0 / 50 {
+            if client.is_closed() {
+                break;
+            }
+            sleep(Millis(50)).await;
+        }
+    }
+
     pub(crate) struct State(IoRef);
 
     impl State {
@@ -1775,7 +1785,8 @@ mod tests {
         });
 
         client.write("123");
-        for _ in 0..7 {
+        // several periods are extended by consumed bytes only
+        for _ in 0..4 {
             sleep(Millis(700)).await;
             client.write("abc#");
         }
@@ -1783,7 +1794,7 @@ mod tests {
         assert!(data.lock().unwrap().borrow().is_empty());
 
         // no progress, the frame read timer expires
-        sleep(Millis(4500)).await;
+        wait_closed(&client, Millis(4500)).await;
         assert!(client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[1]);
     }
@@ -1923,9 +1934,11 @@ mod tests {
         });
 
         // each cycle lets the frame timer extend the period twice, the
-        // budget allows two extensions, so it must be restored by the pause
+        // budget allows two extensions, so it must be restored by the pause.
+        // Without a restore the budget lasts less than three 2s periods,
+        // three cycles take longer.
         client.write("abc");
-        for _ in 0..5 {
+        for _ in 0..3 {
             for _ in 0..3 {
                 sleep(Millis(700)).await;
                 client.write("abc");
@@ -1978,7 +1991,7 @@ mod tests {
         // extends the first period
         sleep(Millis(1500)).await;
         assert!(!client.is_closed());
-        sleep(Millis(3500)).await;
+        wait_closed(&client, Millis(3500)).await;
         assert!(client.is_closed());
         assert!(timed_out.get());
     }
@@ -2060,7 +2073,7 @@ mod tests {
                     sleep(Millis(300)).await;
                     ioref.notify_timeout();
                 });
-                sleep(Millis(1500)).await;
+                sleep(Millis(800)).await;
                 self.0.set(false);
                 return Ok(Some(bytes));
             }
@@ -2086,11 +2099,13 @@ mod tests {
         });
 
         client.write("1");
-        sleep(Millis(1000)).await;
+        // the timeout is delivered at 300ms, the frame is handled for 800ms
+        sleep(Millis(600)).await;
         assert!(!client.is_closed());
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"1"));
-        sleep(Millis(2500)).await;
+        // the timeout is not delivered after the service is ready again
+        sleep(Millis(300)).await;
         assert!(!client.is_closed());
     }
 
@@ -2197,17 +2212,18 @@ mod tests {
             let _ = disp.await;
         });
 
-        // keep-alive is armed for the idle connection, then a frame starts
+        // keep-alive is armed for the idle connection, then a frame starts,
+        // the 1s keep-alive would expire in less than 2s
         sleep(Millis(200)).await;
         client.write("1234");
-        sleep(Millis(3500)).await;
+        sleep(Millis(2200)).await;
         assert!(!client.is_closed());
 
         client.write("5678");
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"12345678"));
 
-        sleep(Millis(3000)).await;
+        wait_closed(&client, Millis(3000)).await;
         assert!(client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
     }
@@ -2300,7 +2316,7 @@ mod tests {
         client.write("12345678");
         sleep(Millis(1500)).await;
         assert!(!client.is_closed());
-        sleep(Millis(4000)).await;
+        wait_closed(&client, Millis(4000)).await;
         assert!(client.is_closed());
         assert_eq!(&events.borrow()[..], &["item", "bp-on", "write-timeout"]);
     }

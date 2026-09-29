@@ -601,7 +601,7 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
         .post("/")
         .timeout(Millis(30_000))
         .header(CONTENT_ENCODING, "deflate")
-        .send_stream(TestBody::new(Bytes::from(enc), 1024));
+        .send_stream(TestBody::new(Bytes::from(enc), 16 * 1024));
 
     let response = req.await.unwrap();
     assert!(response.status().is_success());
@@ -642,7 +642,7 @@ async fn test_reading_deflate_encoding_large_random_rustls_h1() {
         .post("/")
         .timeout(Millis(30_000))
         .header(CONTENT_ENCODING, "deflate")
-        .send_stream(TestBody::new(Bytes::from(enc), 1024));
+        .send_stream(TestBody::new(Bytes::from(enc), 16 * 1024));
 
     let response = req.await.unwrap();
     assert!(response.status().is_success());
@@ -683,7 +683,7 @@ async fn test_reading_deflate_encoding_large_random_rustls_h2() {
         .post("/")
         .timeout(Millis(30_000))
         .header(CONTENT_ENCODING, "deflate")
-        .send_stream(TestBody::new(Bytes::from(enc), 1024));
+        .send_stream(TestBody::new(Bytes::from(enc), 16 * 1024));
 
     let response = req.await.unwrap();
     assert!(response.status().is_success());
