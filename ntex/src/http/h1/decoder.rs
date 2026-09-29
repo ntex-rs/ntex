@@ -550,6 +550,12 @@ impl MessageType for Request {
                     return Err(DecodeError::Uri);
                 }
                 let uri = Uri::try_from(target)?;
+                // authority-form is only used for `CONNECT`, see RFC 9112
+                // section 3.2.3
+                if uri.scheme().is_none() && uri.authority().is_some() && method != Method::CONNECT
+                {
+                    return Err(DecodeError::Uri);
+                }
                 let version = if req.version == 1 {
                     Version::HTTP_11
                 } else {
@@ -1333,6 +1339,27 @@ mod tests {
         for method in ["GET", "POST", "HEAD", "CONNECT"] {
             let mut buf =
                 BytesMut::from(format!("{method} * HTTP/1.1\r\nhost: a\r\n\r\n").as_str());
+            match MessageDecoder::<Request>::default().decode(&mut buf) {
+                Err(DecodeError::Uri) => (),
+                res => panic!("{method}: {res:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_authority_form_only_for_connect() {
+        let mut buf = BytesMut::from("CONNECT example.com:443 HTTP/1.1\r\nhost: a\r\n\r\n");
+        let req = parse_ready!(&mut buf);
+        assert_eq!(req.uri().authority().unwrap(), "example.com:443");
+
+        let mut buf = BytesMut::from("GET http://example.com/ HTTP/1.1\r\nhost: a\r\n\r\n");
+        let req = parse_ready!(&mut buf);
+        assert_eq!(req.path(), "/");
+
+        for method in ["GET", "POST", "HEAD", "OPTIONS"] {
+            let mut buf = BytesMut::from(
+                format!("{method} example.com:443 HTTP/1.1\r\nhost: a\r\n\r\n").as_str(),
+            );
             match MessageDecoder::<Request>::default().decode(&mut buf) {
                 Err(DecodeError::Uri) => (),
                 res => panic!("{method}: {res:?}"),
