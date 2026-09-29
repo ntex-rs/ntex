@@ -197,7 +197,7 @@ async fn get_response(
                                 {
                                     Either::Left(Some(msg)) => msg,
                                     Either::Left(None) => {
-                                        pl.feed_eof(Bytes::new());
+                                        pl.feed_eof(Bytes::new(), None);
                                         break;
                                     }
                                     Either::Right(()) => break,
@@ -222,11 +222,11 @@ async fn get_response(
                                             stream.id(),
                                         );
                                         match item {
-                                            h2::StreamEof::Data(data) => {
-                                                pl.feed_eof(data);
+                                            h2::StreamEof::Data(data, cap) => {
+                                                pl.feed_eof(data, Some(cap));
                                             }
                                             h2::StreamEof::Trailers(_) => {
-                                                pl.feed_eof(Bytes::new());
+                                                pl.feed_eof(Bytes::new(), None);
                                             }
                                             h2::StreamEof::Error(err) => {
                                                 pl.set_error(err.into_error().into());

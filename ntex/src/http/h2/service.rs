@@ -251,11 +251,11 @@ where
                     self.streams.borrow_mut().remove(&stream.id())
                 {
                     match item {
-                        h2::StreamEof::Data(data) => {
-                            sender.feed_eof(data);
+                        h2::StreamEof::Data(data, cap) => {
+                            sender.feed_eof(data, Some(cap));
                         }
                         h2::StreamEof::Trailers(_) => {
-                            sender.feed_eof(Bytes::new());
+                            sender.feed_eof(Bytes::new(), None);
                         }
                         h2::StreamEof::Error(err) => {
                             sender.set_error(err.into_error().into());
