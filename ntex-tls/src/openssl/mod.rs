@@ -453,17 +453,23 @@ mod tests {
         ntex_util::time::sleep(Millis(50)).await;
         server.encode_slice(b"b").unwrap();
 
+        // `recv()` waits for the output to drain under write backpressure,
+        // and `read_more()` would lift a read pause, so the input is decoded
+        // as the read task delivers it
         for msg in [&b"hello"[..], b"world", b"again"] {
             client
                 .send(Bytes::copy_from_slice(msg), &BytesCodec)
                 .await
                 .unwrap();
-            let item = ntex_util::time::timeout(Millis(1000), server.recv(&BytesCodec))
-                .await
-                .expect("read is paused")
-                .unwrap()
-                .unwrap();
-            assert_eq!(&item[..], msg);
+            let mut item = None;
+            for _ in 0..100 {
+                item = server.decode(&BytesCodec).unwrap();
+                if item.is_some() {
+                    break;
+                }
+                ntex_util::time::sleep(Millis(10)).await;
+            }
+            assert_eq!(&item.expect("read is paused")[..], msg);
         }
     }
 }
