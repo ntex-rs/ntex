@@ -262,6 +262,12 @@ impl<T: MessageType> MessageEncoder<T> {
         // transfer encoding
         if head {
             self.te.set(TransferEncoding::empty());
+        } else if message.status() == Some(StatusCode::SWITCHING_PROTOCOLS)
+            && matches!(length, BodySize::Sized(_) | BodySize::Stream)
+        {
+            // a `101` response has no framing headers, its body belongs to
+            // the new protocol, see RFC 9110 section 15.2.2
+            self.te.set(TransferEncoding::eof());
         } else {
             self.te.set(match length {
                 BodySize::Empty | BodySize::None => TransferEncoding::empty(),
