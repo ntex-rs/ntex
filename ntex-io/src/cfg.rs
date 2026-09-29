@@ -367,6 +367,14 @@ impl IoConfig {
     /// dispatcher is idle, the keep-alive timeout bounds them. Application
     /// output written during such a pause enables write backpressure.
     ///
+    /// Outside the dispatcher, the timeout also bounds each wait for output in
+    /// [`Io::send`](crate::Io::send), [`Io::flush`](crate::Io::flush) and
+    /// [`IoRef::write_ready`](crate::IoRef::write_ready). A wait that does not
+    /// complete in time fails with [`io::ErrorKind::TimedOut`](std::io::ErrorKind::TimedOut),
+    /// and the connection is left open for the caller to close. The polling
+    /// methods, such as [`Io::poll_flush`](crate::Io::poll_flush), are not
+    /// bounded.
+    ///
     /// A zero duration disables the timeout. It is disabled by default, so
     /// a peer that does not read can pin the connection and its buffered
     /// output. Servers that accept untrusted peers should set it.

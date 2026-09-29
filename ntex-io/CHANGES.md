@@ -2,6 +2,9 @@
 
 ## [4.1.0] - Unreleased
 
+* `Io::send()`, `Io::flush()` and `IoRef::write_ready()` are bounded by
+  `IoConfig::write_timeout()` and fail with `TimedOut` when it expires
+
 * `Io::recv()` returns a dispatcher timeout that fires while it waits for write
   back-pressure to be released
 
