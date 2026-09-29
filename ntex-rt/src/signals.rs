@@ -147,11 +147,13 @@ pub(crate) fn start(sys: &System) {
                 signal::SigSet::empty(),
             );
             unsafe {
-                if signal::sigaction(signal::SIGSEGV, &sig_action).is_err() {
-                    log::error!("Cannot install signal handler for SIGSEGV");
+                match signal::sigaction(signal::SIGSEGV, &sig_action) {
+                    Ok(prev) => _ = PREV_SIGSEGV.set(prev),
+                    Err(_) => log::error!("Cannot install signal handler for SIGSEGV"),
                 }
-                if signal::sigaction(signal::SIGABRT, &sig_action).is_err() {
-                    log::error!("Cannot install signal handler for SIGABRT");
+                match signal::sigaction(signal::SIGABRT, &sig_action) {
+                    Ok(prev) => _ = PREV_SIGABRT.set(prev),
+                    Err(_) => log::error!("Cannot install signal handler for SIGABRT"),
                 }
             }
         });
@@ -269,13 +271,30 @@ async fn signals(rx: oneshot::AsyncReceiver<()>) {
 }
 
 #[cfg(target_family = "unix")]
+static PREV_SIGSEGV: std::sync::OnceLock<nix::sys::signal::SigAction> = std::sync::OnceLock::new();
+#[cfg(target_family = "unix")]
+static PREV_SIGABRT: std::sync::OnceLock<nix::sys::signal::SigAction> = std::sync::OnceLock::new();
+
+#[cfg(target_family = "unix")]
 extern "C" fn sig_segv(v: i32) {
-    if v == 6 {
-        eprintln!("SIGABRT Received:\n{:?}", backtrace::Backtrace::new());
-        handle_signal(Signal::Panic(PanicSource::Sig("SIGABRT")));
+    use nix::sys::signal::{self, SaFlags, SigAction, SigHandler, SigSet};
+
+    let (sig, prev, name) = if v == libc::SIGABRT {
+        (signal::SIGABRT, &PREV_SIGABRT, "SIGABRT")
     } else {
-        eprintln!("SIGSEGV Received:\n{:?}", backtrace::Backtrace::new());
-        handle_signal(Signal::Panic(PanicSource::Sig("SIGSEGV")));
+        (signal::SIGSEGV, &PREV_SIGSEGV, "SIGSEGV")
+    };
+    eprintln!("{name} Received:\n{:?}", backtrace::Backtrace::new());
+    handle_signal(Signal::Panic(PanicSource::Sig(name)));
+
+    // restore the previous handler, it handles the signal raised again by
+    // the faulting instruction or by `abort()`, otherwise the process never exits
+    let prev = prev
+        .get()
+        .copied()
+        .unwrap_or_else(|| SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty()));
+    unsafe {
+        let _ = signal::sigaction(sig, &prev);
     }
 }
 
@@ -300,7 +319,7 @@ pub(crate) fn enable_panic_handling() {
     }));
 }
 
-#[cfg(all(test, target_family = "windows"))]
+#[cfg(all(test, any(target_family = "windows", target_os = "linux")))]
 mod tests {
     use std::{any::Any, io};
 
@@ -339,6 +358,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_family = "windows")]
     #[test]
     fn reenable_signals() {
         System::new("test", TestRunner).block_on(async {
@@ -350,5 +370,52 @@ mod tests {
             sys.disable_signals();
             assert!(!sys.signals());
         });
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn segv_terminates_process() {
+        use std::os::unix::process::ExitStatusExt;
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        if std::env::var_os("NTEX_SEGV_CHILD").is_some() {
+            System::new("test", TestRunner).block_on(async {
+                System::current().enable_signals();
+                unsafe {
+                    let page = libc::mmap(
+                        std::ptr::null_mut(),
+                        4096,
+                        libc::PROT_NONE,
+                        libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                        -1,
+                        0,
+                    );
+                    assert_ne!(page, libc::MAP_FAILED);
+                    page.cast::<u8>().write_volatile(1);
+                }
+            });
+            return;
+        }
+
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "signals::tests::segv_terminates_process"])
+            .env("NTEX_SEGV_CHILD", "1")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let start = Instant::now();
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if start.elapsed() > Duration::from_secs(30) {
+                let _ = child.kill();
+                panic!("process did not terminate after SIGSEGV");
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        assert_eq!(status.signal(), Some(libc::SIGSEGV));
     }
 }

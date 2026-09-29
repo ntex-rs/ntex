@@ -2,6 +2,9 @@
 
 ## [4.0.0] - unreleased
 
+* Fix endless loop after `SIGSEGV` when signal handling is enabled, the previous
+  handler is restored after the signal is reported
+
 * Fix panic when signal handling is enabled again on Windows
 
 * Fix data race when task callbacks are set on another thread
