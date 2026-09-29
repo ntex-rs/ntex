@@ -9,6 +9,9 @@
 * HTTP/1 response carries `connection: close` if the request payload was dropped unread while
   the service was running, the connection was closed without announcing it
 
+* HTTP/1 dispatcher observes a connection failure while the response body is pending, a streaming
+  response kept the connection and its body until the body produced the next chunk
+
 * HTTP/1 `101 Switching Protocols` response body is sent without framing, a body of a response to
   a request without upgrade was chunk encoded or cut at its length
 
