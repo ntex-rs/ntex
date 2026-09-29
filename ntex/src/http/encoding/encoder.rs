@@ -186,13 +186,12 @@ impl<B: MessageBody> Encoder<B> {
                     }
                 }
                 Poll::Ready(None) => {
+                    self.eof = true;
                     if let Some(encoder) = self.inner.take() {
                         let chunk = encoder.finish().map_err(dyn_rc_err)?;
-                        if chunk.is_empty() {
-                            return Poll::Ready(None);
+                        if !chunk.is_empty() {
+                            return Poll::Ready(Some(Ok(chunk)));
                         }
-                        self.eof = true;
-                        return Poll::Ready(Some(Ok(chunk)));
                     }
                     return Poll::Ready(None);
                 }
@@ -293,6 +292,35 @@ mod tests {
         let res = poll_fn(|cx| enc.poll_next_chunk(cx)).await;
         assert!(matches!(res, Some(Err(_))));
         assert_eq!(enc.size(), BodySize::Stream);
+        assert!(poll_fn(|cx| enc.poll_next_chunk(cx)).await.is_none());
+    }
+
+    struct EndOnce(bool);
+
+    impl MessageBody for EndOnce {
+        fn size(&self) -> BodySize {
+            BodySize::Stream
+        }
+
+        fn poll_next_chunk(
+            &mut self,
+            _: &mut Context<'_>,
+        ) -> Poll<Option<Result<Bytes, Rc<dyn std::error::Error>>>> {
+            assert!(!self.0, "body polled after end of stream");
+            self.0 = true;
+            Poll::Ready(None)
+        }
+    }
+
+    #[crate::rt_test]
+    async fn encoder_is_fused_after_end_of_stream() {
+        let mut enc = Encoder::<EndOnce> {
+            eof: false,
+            body: EncoderBody::Stream(EndOnce(false)),
+            inner: None,
+            fut: None,
+        };
+        assert!(poll_fn(|cx| enc.poll_next_chunk(cx)).await.is_none());
         assert!(poll_fn(|cx| enc.poll_next_chunk(cx)).await.is_none());
     }
 }

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* Response body encoder stops after the end of the body stream, an empty final chunk left it
+  unfused and the next poll went back to the finished body
+
 * `Compress::default()` negotiates only encodings the encoder supports, a browser
   `Accept-Encoding` listing `br` selected brotli and the response was sent uncompressed
 
