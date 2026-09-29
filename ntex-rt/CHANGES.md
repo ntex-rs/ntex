@@ -2,6 +2,8 @@
 
 ## [4.0.0] - unreleased
 
+* Drop ping records of stopped arbiters, record late pongs in their own round
+
 * Fix blocking pool exceeding its thread limit, blocking the caller, panicking
   when a thread cannot be started and stranding tasks when idle workers exit
 

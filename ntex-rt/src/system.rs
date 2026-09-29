@@ -209,16 +209,6 @@ impl System {
         let _ = self.0.sender.try_send(SystemCommand::Exit(code));
     }
 
-    #[doc(hidden)]
-    #[deprecated(since = "3.17.0")]
-    /// Return status of `stop_on_panic` option
-    ///
-    /// It controls whether the System is stopped when an
-    /// uncaught panic is thrown from a worker thread.
-    pub fn stop_on_panic(&self) -> bool {
-        false
-    }
-
     /// Returns whether process signal handling is enabled.
     pub fn signals(&self) -> bool {
         self.0.signals.load(Ordering::Relaxed)
@@ -458,6 +448,13 @@ async fn ping_arbiters(sys: System) {
             let start = Instant::now();
             let arbiters = sys.0.arbiters.lock();
 
+            // drop records of stopped arbiters
+            PINGS.with(|pings| {
+                pings
+                    .borrow_mut()
+                    .retain(|id, _| arbiters.all.contains_key(id));
+            });
+
             for arb in &arbiters.list {
                 let id = arb.id();
                 let arbs = arbs.clone();
@@ -478,8 +475,9 @@ async fn ping_arbiters(sys: System) {
                         arbs.borrow_mut().insert(id);
 
                         PINGS.with(|pings| {
+                            // a late pong belongs to its own round
                             if let Some(recs) = pings.borrow_mut().get_mut(&id)
-                                && let Some(rec) = recs.front_mut()
+                                && let Some(rec) = recs.iter_mut().find(|r| r.start == start)
                             {
                                 rec.rtt = Some(start.elapsed());
                             }
@@ -597,6 +595,50 @@ pub(crate) fn sig_usr2() {
     {
         let tid = unsafe { libc::syscall(libc::SYS_gettid) } as i32;
         CAPTURE.capture(tid, panic::Location::caller().file());
+    }
+}
+
+#[cfg(test)]
+mod ping_tests {
+    use super::*;
+    use crate::testing::TestRunner;
+
+    #[test]
+    fn ping_records_pruned() {
+        System::build()
+            .name("test")
+            .ping_interval(5)
+            .build(TestRunner)
+            .block_on(async {
+                let mut arb = Arbiter::new();
+                let id = arb.id();
+                let answered = || {
+                    PINGS.with(|p| {
+                        p.borrow()
+                            .get(&id)
+                            .is_some_and(|recs| recs.iter().any(|r| r.rtt.is_some()))
+                    })
+                };
+                let has = || PINGS.with(|p| p.borrow().contains_key(&id));
+
+                for _ in 0..400 {
+                    if answered() {
+                        break;
+                    }
+                    Delay::new(Duration::from_millis(5)).await;
+                }
+                assert!(answered());
+
+                arb.stop();
+                arb.join().unwrap();
+                for _ in 0..400 {
+                    if !has() {
+                        break;
+                    }
+                    Delay::new(Duration::from_millis(5)).await;
+                }
+                assert!(!has());
+            });
     }
 }
 

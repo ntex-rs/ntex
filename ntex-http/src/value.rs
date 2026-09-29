@@ -510,24 +510,6 @@ impl hash::Hash for HeaderValue {
     }
 }
 
-impl Error for ToStrError {}
-
-impl fmt::Display for ToStrError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("failed to convert header to a str")
-    }
-}
-
-// ===== Hash / PartialEq / PartialOrd =====
-
-// Must agree with `PartialEq`, which ignores the sensitive flag
-impl hash::Hash for HeaderValue {
-    #[inline]
-    fn hash<H: hash::Hasher>(&self, state: &mut H) {
-        self.inner.hash(state);
-    }
-}
-
 impl PartialEq for HeaderValue {
     #[inline]
     fn eq(&self, other: &HeaderValue) -> bool {
