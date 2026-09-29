@@ -603,7 +603,8 @@ impl<F> Io<F> {
     /// dispatcher timeouts are returned in [`Either::Right`].
     ///
     /// If write backpressure prevents further reads, this method first waits
-    /// for the write buffer to fall below its configured threshold.
+    /// for the write buffer to fall below its configured threshold. A
+    /// dispatcher timeout that fires during this wait is returned as well.
     pub async fn recv<U>(&self, codec: &U) -> Result<Option<U::Item>, Either<U::Error, io::Error>>
     where
         U: Decoder,
@@ -616,10 +617,24 @@ impl<F> Io<F> {
                     "Timeout",
                 ))),
                 Err(RecvError::WriteBackpressure) => {
-                    poll_fn(|cx| self.poll_flush(cx, false))
-                        .await
-                        .map_err(Either::Right)?;
-                    continue;
+                    let timed_out = poll_fn(|cx| {
+                        if self.st().flags.check_dispatcher_timeout() {
+                            Poll::Ready(Ok(true))
+                        } else {
+                            self.poll_flush(cx, false).map_ok(|()| false)
+                        }
+                    })
+                    .await
+                    .map_err(Either::Right)?;
+
+                    if timed_out {
+                        Err(Either::Right(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "Timeout",
+                        )))
+                    } else {
+                        continue;
+                    }
                 }
                 Err(RecvError::Decoder(err)) => Err(Either::Left(err)),
                 Err(RecvError::PeerGone(Some(err))) => Err(Either::Right(err)),
@@ -3870,6 +3885,32 @@ mod tests {
                 Ok(Some(src.split_to(self.0)))
             }
         }
+    }
+
+    #[ntex::test]
+    async fn recv_reports_timeout_during_write_backpressure() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(16)),
+        );
+        io.encode_slice(BIN2).unwrap();
+        assert!(io.flags().is_wr_backpressure());
+
+        let ioref = io.get_ref();
+        let (res, ()) =
+            ntex_util::future::join(timeout(Millis(1000), io.recv(&BytesCodec)), async move {
+                sleep(Millis(25)).await;
+                ioref.0.notify_timeout();
+            })
+            .await;
+
+        let Err(Either::Right(err)) = res.expect("recv ignored the timeout") else {
+            panic!("expected a timeout error")
+        };
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert!(io.flags().is_wr_backpressure());
     }
 
     #[ntex::test]

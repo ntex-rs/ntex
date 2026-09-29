@@ -2,6 +2,9 @@
 
 ## [4.1.0] - Unreleased
 
+* `Io::recv()` returns a dispatcher timeout that fires while it waits for write
+  back-pressure to be released
+
 * Reading pauses while output a filter produced during read processing, for example
   WebSocket pong replies, keeps the write buffer at the high watermark, until it drains
   to half of it or the dispatcher asks for more input with `read_more()` or `read_notify()`,
