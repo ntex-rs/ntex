@@ -184,7 +184,14 @@ where
                     if let Some(st) = inner.check_disconnect() {
                         st
                     } else {
-                        ready!(result).unwrap_or_else(|| inner.next_request())
+                        // a partially decoded payload keeps reading the payload
+                        ready!(result).unwrap_or_else(|| {
+                            if inner.payload.is_some() {
+                                State::ReadPayload
+                            } else {
+                                inner.next_request()
+                            }
+                        })
                     }
                 }
                 // send response body
@@ -351,9 +358,13 @@ where
             msg,
             size
         );
-        // close connection if payload stream is dropped and not consumed
-        if let Some((_pl, snd)) = &self.payload
-            && snd.is_closed()
+        // close connection if payload stream is dropped and not consumed, or
+        // the connection is going to be closed after the response
+        if matches!(self.disconnect, Disconnect::Pending(_))
+            || self
+                .payload
+                .as_ref()
+                .is_some_and(|(_, snd)| snd.is_closed())
         {
             msg.head_mut()
                 .set_connection_type(http::ConnectionType::Close);
@@ -1979,6 +1990,45 @@ mod tests {
     }
 
     #[crate::rt_test]
+    /// The rest of a payload that is still held by the application after the
+    /// response is sent must not be decoded as the next request.
+    async fn test_payload_after_response_is_not_a_request() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+        let calls = Rc::new(Cell::new(0));
+        let held = Rc::new(RefCell::new(None));
+        let (calls2, held2) = (calls.clone(), held.clone());
+
+        spawn_h1(server, move |mut req: Request| {
+            calls2.set(calls2.get() + 1);
+            *held2.borrow_mut() = Some(req.take_payload());
+            async { Ok::<_, io::Error>(Response::Ok().build()) }
+        });
+
+        let smuggled = "GET /s HTTP/1.1\r\nhost: a\r\n\r\n";
+        client.write(format!(
+            "POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: {}\r\n\r\naaaaa",
+            5 + smuggled.len()
+        ));
+        let _ = client.read().await.unwrap();
+        sleep(Millis(50)).await;
+        client.write(smuggled);
+        sleep(Millis(100)).await;
+        assert_eq!(calls.get(), 1, "payload bytes dispatched as a request");
+
+        let mut pl = held.borrow_mut().take().unwrap();
+        let mut body = BytesMut::new();
+        while let Some(chunk) = stream_recv(&mut pl).await {
+            body.extend_from_slice(&chunk.unwrap());
+        }
+        assert_eq!(&body[..], format!("aaaaa{smuggled}").as_bytes());
+
+        client.write("GET /next HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        let _ = client.read().await.unwrap();
+        assert_eq!(calls.get(), 2);
+    }
+
+    #[crate::rt_test]
     async fn test_pipeline_with_delay() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
@@ -3022,6 +3072,32 @@ mod tests {
         let received = mark.load(Ordering::Relaxed);
         assert!((1800..=5400).contains(&received), "received: {received}");
         assert_eq!(err_mark.load(Ordering::Relaxed), 1);
+    }
+
+    #[crate::rt_test]
+    /// A payload dropped while the service is running closes the connection,
+    /// the response announces it.
+    async fn test_payload_dropped_before_response_closes() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+
+        spawn_h1(server, async |mut req: Request| {
+            drop(req.take_payload());
+            sleep(Millis(100)).await;
+            Ok::<_, io::Error>(Response::Ok().body("TEST"))
+        });
+
+        client.write("POST /test HTTP/1.1\r\nhost: localhost\r\ncontent-length: 512\r\n\r\n");
+        sleep(Millis(50)).await;
+        client.write("aaaaa");
+
+        let buf = client.read().await.unwrap();
+        assert!(
+            buf.starts_with(b"HTTP/1.1 200 OK\r\ncontent-length: 4\r\nconnection: close\r\n"),
+            "{buf:?}"
+        );
+        sleep(Millis(50)).await;
+        assert!(client.is_server_dropped());
     }
 
     #[crate::rt_test]
