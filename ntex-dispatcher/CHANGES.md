@@ -2,6 +2,8 @@
 
 ## [4.1.0] - Unreleased
 
+* Add `Dispatcher::max_inflight()`, limits concurrent service calls
+
 * Dispatch frames already in the read buffer when the connection fails while the service
   is not ready, they were dropped
 

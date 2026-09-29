@@ -6,6 +6,7 @@ use ntex_service::cfg::SharedCfg;
 use ntex_util::time::Seconds;
 
 use crate::ops::{Id, Iops, TimerHandle};
+use crate::waiters::{TAG_DISCONNECT, TAG_WRITE, Waiter};
 use crate::{Decoded, Filter, FilterBuf, Flags, Handle, IoConfig, IoContext, IoRef, types};
 
 impl IoRef {
@@ -655,8 +656,29 @@ impl IoRef {
     /// that teardown has finished, which happens after local shutdown or
     /// force termination. [`terminate`](Self::terminate) requests that
     /// teardown but does not itself resolve the future.
-    pub fn on_disconnect(&self) -> crate::OnDisconnect {
-        crate::OnDisconnect::new(self.0.clone())
+    pub fn on_disconnect(&self) -> Waiter<'static> {
+        Waiter::new_static(self.clone(), TAG_DISCONNECT)
+    }
+
+    /// Wakes all [`Waiter`](crate::Waiter) waiters of the tag.
+    ///
+    /// Tags reserved for internal use are ignored.
+    pub fn wake(&self, tag: usize) {
+        if tag < TAG_WRITE {
+            self.0.extensions.wake(tag);
+        }
+    }
+
+    /// Creates a [`Waiter`](crate::Waiter) for the tag.
+    ///
+    /// The waiter registers on its first poll.
+    ///
+    /// # Panics
+    ///
+    /// Panics in debug builds if the tag is reserved for internal use,
+    /// `usize::MAX - 1` and `usize::MAX - 2` are reserved.
+    pub fn waiter(&self, tag: usize) -> Waiter<'_> {
+        Waiter::new(self, tag)
     }
 
     #[doc(hidden)]

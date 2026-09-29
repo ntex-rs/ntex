@@ -1112,6 +1112,113 @@ async fn test_h2_request_body_dropped_after_response_resets_stream() {
     );
 }
 
+/// The control service handles `Expect: 100-continue`, the default ack sends `100 Continue`.
+#[ntex::test]
+async fn test_h2_expect_continue() {
+    use ntex::http::{HeaderMap, h2, uri::Scheme};
+    use ntex::util::{BytesMut, stream_recv};
+    use ntex_h2::{MessageKind, client::SimpleClient};
+
+    let srv = test_server(async |_| {
+        HttpService::h2(async |mut req: Request| {
+            assert_eq!(req.path(), "/");
+            let mut pl = req.take_payload();
+            let mut body = BytesMut::new();
+            while let Some(chunk) = stream_recv(&mut pl).await {
+                body.extend_from_slice(&chunk.unwrap());
+            }
+            Ok::<_, io::Error>(Response::Ok().body(body.freeze()))
+        })
+        .control(async |msg: h2::Control<_>| {
+            Ok::<_, io::Error>(match msg {
+                h2::Control::Expect(expect)
+                    if expect.pseudo().path.as_deref() == Some("/reject") =>
+                {
+                    expect.fail(StatusCode::EXPECTATION_FAILED, HeaderMap::new())
+                }
+                msg => msg.ack(),
+            })
+        })
+    });
+
+    let io = ntex::connect::connect(srv.addr()).await.unwrap();
+    let client = SimpleClient::new(io, Scheme::HTTP, "localhost".into());
+    let mut hdrs = HeaderMap::default();
+    hdrs.insert(header::EXPECT, HeaderValue::from_static("100-Continue"));
+
+    let (snd, rcv) = client
+        .send(Method::POST, "/".into(), hdrs.clone(), false)
+        .await
+        .unwrap();
+    let msg = rcv.recv().await.unwrap();
+    let MessageKind::Headers { pseudo, eof, .. } = msg.kind else {
+        panic!("unexpected message: {msg:?}")
+    };
+    assert_eq!(pseudo.status, Some(StatusCode::CONTINUE));
+    assert!(!eof);
+
+    snd.send_payload(Bytes::from_static(b"body"), true)
+        .await
+        .unwrap();
+    let msg = rcv.recv().await.unwrap();
+    let MessageKind::Headers { pseudo, .. } = msg.kind else {
+        panic!("unexpected message: {msg:?}")
+    };
+    assert_eq!(pseudo.status, Some(StatusCode::OK));
+    let msg = rcv.recv().await.unwrap();
+    assert!(
+        matches!(msg.kind, MessageKind::Data(ref d, _) if d == "body"),
+        "{msg:?}"
+    );
+    let msg = rcv.recv().await.unwrap();
+    assert!(matches!(msg.kind, MessageKind::Eof(_)), "{msg:?}");
+
+    // the expectation is rejected, the final response is sent without `100 Continue`
+    let (_snd, rcv) = client
+        .send(Method::POST, "/reject".into(), hdrs, false)
+        .await
+        .unwrap();
+    let msg = rcv.recv().await.unwrap();
+    let MessageKind::Headers { pseudo, eof, .. } = msg.kind else {
+        panic!("unexpected message: {msg:?}")
+    };
+    assert_eq!(pseudo.status, Some(StatusCode::EXPECTATION_FAILED));
+    assert!(eof);
+    assert!(!client.is_closed());
+}
+
+/// Informational response of the application cannot complete the request.
+#[ntex::test]
+async fn test_h2_informational_response_is_replaced() {
+    use ntex::http::{HeaderMap, uri::Scheme};
+    use ntex_h2::{MessageKind, client::SimpleClient};
+
+    let srv = test_server(async |_| {
+        HttpService::h2(async |req: Request| {
+            let status = if req.path() == "/101" {
+                StatusCode::SWITCHING_PROTOCOLS
+            } else {
+                StatusCode::CONTINUE
+            };
+            Ok::<_, io::Error>(Response::new(status))
+        })
+    });
+
+    let io = ntex::connect::connect(srv.addr()).await.unwrap();
+    let client = SimpleClient::new(io, Scheme::HTTP, "localhost".into());
+    for path in ["/100", "/101"] {
+        let (_snd, rcv) = client
+            .send(Method::GET, path.into(), HeaderMap::default(), true)
+            .await
+            .unwrap();
+        let msg = rcv.recv().await.unwrap();
+        let MessageKind::Headers { pseudo, .. } = msg.kind else {
+            panic!("unexpected message: {msg:?}")
+        };
+        assert_eq!(pseudo.status, Some(StatusCode::INTERNAL_SERVER_ERROR));
+    }
+}
+
 #[ntex::test]
 async fn test_h1_request_line_too_long() {
     let srv = test_server(async |_| {

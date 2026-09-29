@@ -1,4 +1,4 @@
-use std::{cell::Cell, fmt::Write, future::poll_fn, io, rc::Rc, time::Instant};
+use std::{cell::Cell, fmt::Write, future::poll_fn, io, rc::Rc, task::Poll, time::Instant};
 
 use ntex_h2::client::{RecvStream, SimpleClient, StreamReservation};
 use ntex_h2::{self as h2, frame};
@@ -197,7 +197,7 @@ async fn get_response(
                                 {
                                     Either::Left(Some(msg)) => msg,
                                     Either::Left(None) => {
-                                        pl.feed_eof(Bytes::new());
+                                        pl.feed_eof(Bytes::new(), None);
                                         break;
                                     }
                                     Either::Right(()) => break,
@@ -222,11 +222,11 @@ async fn get_response(
                                             stream.id(),
                                         );
                                         match item {
-                                            h2::StreamEof::Data(data) => {
-                                                pl.feed_eof(data);
+                                            h2::StreamEof::Data(data, cap) => {
+                                                pl.feed_eof(data, Some(cap));
                                             }
                                             h2::StreamEof::Trailers(_) => {
-                                                pl.feed_eof(Bytes::new());
+                                                pl.feed_eof(Bytes::new(), None);
                                             }
                                             h2::StreamEof::Error(err) => {
                                                 pl.set_error(err.into_error().into());
@@ -278,8 +278,32 @@ async fn send_body(
     mut body: Body,
     stream: &h2::client::SendStream,
 ) -> Result<(), Error<ClientError>> {
+    let reset = stream.on_reset();
     loop {
-        match poll_fn(|cx| body.poll_next_chunk(cx)).await {
+        let chunk = poll_fn(|cx| {
+            // the body can wait for data after the stream is reset
+            if stream.is_reset() {
+                return Poll::Ready(None);
+            }
+            while reset.poll_ready(cx).is_ready() {
+                if stream.is_reset() {
+                    return Poll::Ready(None);
+                }
+            }
+            body.poll_next_chunk(cx).map(Some)
+        })
+        .await;
+
+        let Some(chunk) = chunk else {
+            log::trace!(
+                "{}: {:?} stream is reset, stop sending body",
+                stream.tag(),
+                stream.id()
+            );
+            return Ok(());
+        };
+
+        match chunk {
             Some(Ok(b)) => {
                 #[cfg(feature = "trace")]
                 log::trace!(

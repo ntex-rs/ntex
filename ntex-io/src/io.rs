@@ -1,7 +1,6 @@
 use std::cell::{Cell, UnsafeCell};
-use std::future::{Future, poll_fn};
 use std::task::{Context, Poll};
-use std::{fmt, hash, io, marker, mem, ops, pin::Pin, ptr, rc::Rc};
+use std::{fmt, future::poll_fn, hash, io, marker, mem, ops, ptr, rc::Rc};
 
 use ntex_bytes::{BytePageSize, BytesMut};
 use ntex_codec::{Decoder, Encoder};
@@ -17,6 +16,7 @@ use crate::flags::Flags;
 use crate::ops::{Id, IoManager, TimerHandle};
 use crate::seal::{IoBoxed, Sealed};
 use crate::utils::Extensions;
+use crate::waiters::{TAG_WRITE, WriteGuard};
 use crate::{Decoded, FilterLayer, Handle, IoStatusUpdate, IoStream, RecvError};
 
 /// Buffered, filterable interface to an underlying I/O stream.
@@ -113,8 +113,9 @@ impl IoState {
         }
     }
 
+    /// Wakes the disconnect waiters and all public waker slots.
     pub(super) fn notify_disconnect(&self) {
-        self.extensions.notify_disconnect();
+        self.extensions.wake_all();
     }
 
     /// Get the current I/O error.
@@ -283,7 +284,7 @@ impl IoState {
     }
 
     pub(super) fn wake_write_waiters(&self) {
-        self.extensions.notify_write_waiters();
+        self.extensions.wake(TAG_WRITE);
     }
 
     /// Returns `Some` once more output can be written or the connection is gone.
@@ -304,13 +305,13 @@ impl IoState {
             return res;
         }
 
-        let waiter = self.extensions.write_waiter();
+        let waiter = WriteGuard::new(&self.extensions);
         poll_fn(|cx| {
             if let Some(res) = self.check_write_ready() {
                 Poll::Ready(res)
             } else {
-                // a notified waiter registers the waker again
-                let _ = waiter.poll_ready(cx);
+                // a woken waiter registers the waker again
+                waiter.register(cx);
                 Poll::Pending
             }
         })
@@ -1146,65 +1147,6 @@ impl<F> Drop for Io<F> {
     }
 }
 
-#[derive(Debug)]
-/// A future that resolves when the complete I/O stream disconnects.
-///
-/// A clean peer read EOF does not resolve this future while the write half
-/// remains usable. It resolves only once the transport backend reports that
-/// teardown has finished; requesting shutdown or termination is not by itself
-/// enough.
-#[must_use = "OnDisconnect do nothing unless polled"]
-pub struct OnDisconnect {
-    token: usize,
-    inner: Rc<IoState>,
-}
-
-impl OnDisconnect {
-    pub(super) fn new(inner: Rc<IoState>) -> Self {
-        Self::new_inner(inner.flags.is_closed(), inner)
-    }
-
-    fn new_inner(disconnected: bool, inner: Rc<IoState>) -> Self {
-        let token = if disconnected {
-            usize::MAX
-        } else {
-            inner.extensions.register_disconnect()
-        };
-        Self { token, inner }
-    }
-
-    #[inline]
-    /// Checks if the I/O stream is disconnected.
-    pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<()> {
-        if self.token == usize::MAX || self.inner.flags.is_closed() {
-            Poll::Ready(())
-        } else {
-            self.inner
-                .extensions
-                .poll_disconnect(self.token, cx.waker())
-        }
-    }
-}
-
-impl Clone for OnDisconnect {
-    fn clone(&self) -> Self {
-        if self.token == usize::MAX {
-            OnDisconnect::new_inner(true, self.inner.clone())
-        } else {
-            OnDisconnect::new_inner(false, self.inner.clone())
-        }
-    }
-}
-
-impl Future for OnDisconnect {
-    type Output = ();
-
-    #[inline]
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.poll_ready(cx)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::{cell::Cell, rc::Rc};
@@ -1214,7 +1156,11 @@ mod tests {
     use ntex_util::{future::lazy, time::Millis, time::sleep, time::timeout};
 
     use super::*;
-    use crate::{FilterBuf, IoContext, IoTaskStatus, Readiness, ops::Iops, testing::IoTest};
+    use crate::waiters::{TAG_DISCONNECT, WaiterEntry};
+    use crate::{
+        FilterBuf, IoContext, IoTaskStatus, Readiness, Waiter, ops::Iops, testing::IoTest,
+    };
+    use std::pin::Pin;
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";
@@ -2298,6 +2244,185 @@ mod tests {
         sleep(Millis(10)).await;
         assert_eq!(res.get(), Some(true));
         assert!(io.write_ready().await.is_err());
+    }
+
+    #[ntex::test]
+    async fn waiter() {
+        let (client, server) = IoTest::create();
+        let io = Io::from(server);
+        let (mut s1, mut s2, mut s3) = (Waiter::new(&io, 7), Waiter::new(&io, 7), io.waiter(8));
+        assert!(lazy(|cx| Pin::new(&mut s1).poll(cx)).await.is_pending());
+        assert!(lazy(|cx| Pin::new(&mut s2).poll(cx)).await.is_pending());
+        assert!(lazy(|cx| Pin::new(&mut s3).poll(cx)).await.is_pending());
+        assert!(lazy(|cx| Pin::new(&mut s1).poll(cx)).await.is_pending());
+        assert_eq!(io.get_ref().0.extensions.wakers_len(), 3);
+
+        io.wake(7);
+        assert!(lazy(|cx| Pin::new(&mut s1).poll(cx)).await.is_ready());
+        assert!(lazy(|cx| Pin::new(&mut s2).poll(cx)).await.is_ready());
+        assert!(lazy(|cx| Pin::new(&mut s3).poll(cx)).await.is_pending());
+        assert_eq!(io.get_ref().0.extensions.wakers_len(), 1);
+
+        drop(s3);
+        assert_eq!(io.get_ref().0.extensions.wakers_len(), 0);
+
+        // a static waiter keeps the registration
+        assert!(lazy(|cx| Pin::new(&mut s1).poll(cx)).await.is_pending());
+        let mut s1 = s1.into_static();
+        assert_eq!(io.get_ref().0.extensions.wakers_len(), 1);
+
+        // a cloned waiter is not registered
+        let s4 = s1.clone();
+        assert_eq!(io.get_ref().0.extensions.wakers_len(), 1);
+        drop(s4);
+        assert_eq!(io.get_ref().0.extensions.wakers_len(), 1);
+
+        // a waiter is woken on disconnect
+        let res = Rc::new(Cell::new(false));
+        let res2 = res.clone();
+        ntex_util::spawn(async move {
+            (&mut s1).await;
+            res2.set(true);
+        });
+        sleep(Millis(10)).await;
+        assert_eq!(io.get_ref().0.extensions.wakers_len(), 1);
+        client.close().await;
+        timeout(Millis(1000), io.shutdown())
+            .await
+            .expect("stream shutdown did not complete")
+            .unwrap();
+        sleep(Millis(10)).await;
+        assert!(res.get(), "waiter was not woken on disconnect");
+        (&mut s2).await;
+        drop(s2);
+        assert_eq!(io.get_ref().0.extensions.wakers_len(), 0);
+    }
+
+    #[ntex::test]
+    async fn waiter_poll_ready() {
+        let (_client, server) = IoTest::create();
+        let io = Io::from(server);
+        let waiter = io.waiter(3);
+        let ext = &io.get_ref().0.extensions;
+
+        // not registered, the wake is missed
+        io.wake(3);
+        assert!(lazy(|cx| waiter.poll_ready(cx)).await.is_pending());
+        assert!(lazy(|cx| waiter.poll_ready(cx)).await.is_pending());
+        assert_eq!(ext.wakers_len(), 1);
+
+        // a wake between polls is reported once, then the waiter registers again
+        io.wake(3);
+        assert!(lazy(|cx| waiter.poll_ready(cx)).await.is_ready());
+        assert_eq!(ext.wakers_len(), 0);
+        assert!(lazy(|cx| waiter.poll_ready(cx)).await.is_pending());
+        assert_eq!(ext.wakers_len(), 1);
+
+        io.wake(3);
+        waiter.await;
+        assert_eq!(ext.wakers_len(), 0);
+    }
+
+    #[ntex::test]
+    async fn wake_reserved_tag_is_ignored() {
+        let (_client, server) = IoTest::create();
+        let io = Io::from(server);
+        let mut waiter = io.on_disconnect();
+        assert!(lazy(|cx| Pin::new(&mut waiter).poll(cx)).await.is_pending());
+        io.wake(TAG_DISCONNECT);
+        io.wake(TAG_WRITE);
+        assert!(lazy(|cx| Pin::new(&mut waiter).poll(cx)).await.is_pending());
+        assert_eq!(io.get_ref().0.extensions.wakers_len(), 1);
+    }
+
+    #[cfg(debug_assertions)]
+    #[ntex::test]
+    #[should_panic(expected = "reserved")]
+    async fn waiter_reserved_tag() {
+        let (_client, server) = IoTest::create();
+        let io = Io::from(server);
+        let _waiter = Waiter::new(&io, TAG_DISCONNECT);
+    }
+
+    #[cfg(debug_assertions)]
+    #[ntex::test]
+    #[should_panic(expected = "reserved")]
+    async fn waiter_reserved_tag_ioref() {
+        let (_client, server) = IoTest::create();
+        let io = Io::from(server);
+        let _waiter = io.waiter(TAG_WRITE);
+    }
+
+    #[ntex::test]
+    async fn dropped_waiters_are_removed() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8)),
+        );
+        let ext = &io.get_ref().0.extensions;
+
+        for _ in 0..4 {
+            let waiter = io.on_disconnect();
+            assert!(lazy(|cx| waiter.poll_ready(cx)).await.is_pending());
+            assert!(lazy(|cx| waiter.poll_ready(cx)).await.is_pending());
+            assert_eq!(ext.wakers_len(), 1);
+        }
+        assert_eq!(ext.wakers_len(), 0);
+
+        io.encode_slice(b"12345678").unwrap();
+        assert!(io.flags().is_wr_backpressure());
+        for _ in 0..4 {
+            let mut fut = std::pin::pin!(io.write_ready());
+            assert!(lazy(|cx| fut.as_mut().poll(cx)).await.is_pending());
+            assert!(lazy(|cx| fut.as_mut().poll(cx)).await.is_pending());
+            assert_eq!(ext.wakers_len(), 1);
+        }
+        assert_eq!(ext.wakers_len(), 0);
+
+        // woken waiters are removed
+        let waiter = io.on_disconnect();
+        assert!(lazy(|cx| waiter.poll_ready(cx)).await.is_pending());
+        let mut fut = std::pin::pin!(io.write_ready());
+        assert!(lazy(|cx| fut.as_mut().poll(cx)).await.is_pending());
+        assert_eq!(ext.wakers_len(), 2);
+        io.terminate();
+        assert_eq!(ext.wakers_len(), 1);
+        assert!(lazy(|cx| fut.as_mut().poll(cx)).await.is_ready());
+
+        // the backend reports the teardown
+        sleep(Millis(50)).await;
+        assert_eq!(ext.wakers_len(), 0);
+        assert!(lazy(|cx| waiter.poll_ready(cx)).await.is_ready());
+    }
+
+    #[test]
+    fn woken_waiter_slot_is_reused() {
+        let ext = Extensions::default();
+        let waker = std::task::Waker::noop();
+        let (a, b) = (WaiterEntry::new(TAG_WRITE), WaiterEntry::new(TAG_WRITE));
+
+        ext.register_waker(&a, waker);
+        ext.wake(TAG_WRITE);
+
+        // `b` reuses the slot of the woken `a`
+        ext.register_waker(&b, waker);
+        ext.register_waker(&a, waker);
+        assert_eq!(ext.wakers_len(), 2);
+        ext.remove_waker(&a);
+        assert_eq!(ext.wakers_len(), 1);
+
+        // the removed stale id of `a` does not touch `b`
+        ext.wake(TAG_WRITE);
+        ext.register_waker(&b, waker);
+        ext.register_waker(&a, waker);
+        ext.wake(TAG_WRITE);
+        ext.register_waker(&b, waker);
+        ext.remove_waker(&a);
+        assert_eq!(ext.wakers_len(), 1);
+        ext.remove_waker(&b);
+        assert_eq!(ext.wakers_len(), 0);
     }
 
     #[ntex::test]

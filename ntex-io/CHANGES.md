@@ -2,6 +2,14 @@
 
 ## [4.1.0] - Unreleased
 
+* Add `Waiter`, `IoRef::waiter()` and `IoRef::wake()`, tasks wait on a tag of
+  the I/O stream until it is woken, waiters complete once the stream is closed
+
+* Disconnect and write back-pressure waiters are stored in a tagged slab based waker list,
+  a dropped disconnect waiter releases its registration
+
+* Remove `OnDisconnect`, `IoRef::on_disconnect()` returns `Waiter<'static>`
+
 * Add `IoRef::write_ready()`, waits until write back-pressure is released, any number of
   producers can wait, the write task wakes them without the dispatcher
 

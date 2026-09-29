@@ -116,9 +116,9 @@ impl PayloadSender {
     }
 
     /// Sends the final payload chunk and closes the stream.
-    pub fn feed_eof(&self, data: Bytes) {
+    pub fn feed_eof(&self, data: Bytes, cap: Option<h2::Capacity>) {
         if let Some(shared) = self.inner.upgrade() {
-            shared.feed_eof(data);
+            shared.feed_eof(data, cap);
         }
     }
 
@@ -184,7 +184,10 @@ impl Inner {
         self.task.wake();
     }
 
-    fn feed_eof(&self, data: Bytes) {
+    fn feed_eof(&self, data: Bytes, cap: Option<h2::Capacity>) {
+        if let Some(cap) = cap {
+            self.cap.set(Some(self.cap.take().unwrap() + cap));
+        }
         self.insert_flags(Flags::EOF);
         if !data.is_empty() {
             self.items.borrow_mut().push_back(data);
@@ -200,15 +203,13 @@ impl Inner {
 
     fn readany(&self, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, PayloadError>>> {
         if let Some(data) = self.items.borrow_mut().pop_front() {
-            if !self.flags.get().contains(Flags::EOF) {
-                let cap = self.cap.take().unwrap();
-                cap.consume(data.len() as u32);
-                let size = cap.size();
-                self.cap.set(Some(cap));
+            let cap = self.cap.take().unwrap();
+            cap.consume(data.len() as u32);
+            let size = cap.size();
+            self.cap.set(Some(cap));
 
-                if size == 0 {
-                    self.task.register(cx.waker());
-                }
+            if size == 0 && !self.flags.get().contains(Flags::EOF) {
+                self.task.register(cx.waker());
             }
             Poll::Ready(Some(Ok(data)))
         } else if let Some(err) = self.err.take() {
