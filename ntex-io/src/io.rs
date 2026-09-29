@@ -2918,6 +2918,61 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn read_pauses_while_read_output_is_not_drained() {
+        // A filter that answers every input chunk itself, like WebSocket pong
+        // replies, without passing anything to the application.
+        #[derive(Debug)]
+        struct Reply;
+
+        impl FilterLayer for Reply {
+            fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                let data = buf.with_read_buffers(|src, _| src.as_mut().map(BytesMut::take));
+                if let Some(data) = data {
+                    buf.with_write_buffers(|_, dst| dst.extend_from_slice(&data));
+                }
+                Ok(())
+            }
+
+            fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                buf.with_write_buffers(BytePages::move_to);
+                Ok(())
+            }
+
+            fn shutdown(&self, _: &FilterBuf<'_>) -> io::Result<Poll<()>> {
+                Ok(Poll::Ready(()))
+            }
+        }
+
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8)),
+        )
+        .add_filter(Reply);
+
+        // the peer does not read, the replies fill the write buffer
+        client.write("ping");
+        sleep(Millis(25)).await;
+        client.write("ping");
+        sleep(Millis(25)).await;
+        assert!(io.st().flags.is_read_wr_backpressure());
+
+        // further input is not read while the replies are not drained
+        client.write("ping");
+        sleep(Millis(50)).await;
+        assert_eq!(client.remote_buffer(|buf| buf.len()), 4);
+        assert_eq!(io.st().write_outstanding(), 8);
+
+        // the peer reads, the replies drain and reading resumes
+        client.remote_buffer_cap(1024);
+        sleep(Millis(50)).await;
+        assert!(!io.st().flags.is_read_wr_backpressure());
+        assert_eq!(client.remote_buffer(|buf| buf.len()), 0);
+        assert_eq!(client.read_any(), Bytes::from_static(b"pingpingping"));
+    }
+
+    #[ntex::test]
     async fn peer_eof_completes_filter_shutdown() {
         #[derive(Debug)]
         struct PendingShutdown;

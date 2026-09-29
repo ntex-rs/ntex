@@ -660,6 +660,7 @@ pub(crate) fn abort() -> ! {
 }
 
 #[cfg(test)]
+#[allow(clippy::assert_is_empty)]
 mod tests {
     use super::*;
     use crate::*;

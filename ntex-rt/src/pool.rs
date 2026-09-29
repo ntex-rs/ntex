@@ -78,7 +78,7 @@ struct CounterGuard(Arc<AtomicUsize>);
 impl CounterGuard {
     fn reserve(counter: &Arc<AtomicUsize>, limit: usize) -> Option<(Self, usize)> {
         counter
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |cnt| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |cnt| {
                 (cnt < limit).then_some(cnt + 1)
             })
             .ok()

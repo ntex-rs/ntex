@@ -320,6 +320,14 @@ impl IoContext {
                     if status.wants_write {
                         st.buffer.process_write_buf_force(&self.0)?;
                         self.0.consolidate_write_state(false)?;
+
+                        // Output produced by reading, for example replies to
+                        // peer pings, must not grow without bound while the
+                        // peer does not read. Reads pause until it drains.
+                        if st.is_wr_backpressure_needed(st.write_outstanding()) {
+                            log::trace!("{}: Write buf is full, pause reading", st.tag());
+                            st.flags.set_read_wr_backpressure();
+                        }
                     }
 
                     // The input may be what a filter waits for to complete its
@@ -353,7 +361,10 @@ impl IoContext {
             }
         } else if st.flags.is_aborted() {
             IoTaskStatus::Stop
-        } else if st.flags.is_read_eof() || st.flags.is_read_paused_or_backpressure() {
+        } else if st.flags.is_read_eof()
+            || st.flags.is_read_paused_or_backpressure()
+            || (st.flags.is_read_wr_backpressure() && !st.flags.is_stopping_filters())
+        {
             IoTaskStatus::Pause
         } else {
             IoTaskStatus::Io
@@ -434,6 +445,14 @@ impl IoContext {
                 // until then are cheap, a notified waiter's waker is consumed.
                 if st.flags.is_wr_backpressure() && st.should_disable_wr_backpressure(outstanding) {
                     st.wake_write_waiters();
+                }
+
+                // Reads paused by their own output resume once it drains
+                if st.flags.is_read_wr_backpressure()
+                    && st.should_disable_wr_backpressure(outstanding)
+                {
+                    st.flags.unset_read_wr_backpressure();
+                    st.wake_read_task();
                 }
 
                 if st.flags.is_aborted() {

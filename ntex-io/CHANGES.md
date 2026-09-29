@@ -2,6 +2,10 @@
 
 ## [4.1.0] - Unreleased
 
+* Reading pauses while output a filter produced during read processing, for example
+  WebSocket pong replies, keeps the write buffer at the high watermark, until it drains
+  to half of it
+
 * Add `Waiter`, `IoRef::waiter()` and `IoRef::wake()`, tasks wait on a tag of
   the I/O stream until it is woken, waiters complete once the stream is closed
 

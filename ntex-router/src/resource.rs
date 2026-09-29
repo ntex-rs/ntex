@@ -758,7 +758,7 @@ mod tests {
 
         let re = ResourceDef::new(Vec::<String>::new());
         assert_eq!(re.pattern(), "");
-        assert!(re.patterns().is_empty());
+        assert_eq!(re.patterns(), Vec::<String>::new());
     }
 
     #[test]

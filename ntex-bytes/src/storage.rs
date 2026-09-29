@@ -93,6 +93,7 @@
 //! Care is taken to minimize the need for synchronization. Most operations do
 //! not require any synchronization.
 //!
+#![allow(clippy::assert_is_empty)]
 use std::{cmp, mem, num::NonZeroUsize, ptr, slice, sync::atomic::Ordering::Relaxed};
 
 use crate::{BytePageSize, info::Info, info::Kind, stext::StorageVTable, stvec};

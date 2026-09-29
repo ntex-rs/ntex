@@ -11,6 +11,9 @@ rust-version = "1.95"
 [lib]
 proc-macro = true
 
+[lints]
+workspace = true
+
 [dependencies]
 quote = { workspace = true }
 proc-macro2 = { workspace = true }

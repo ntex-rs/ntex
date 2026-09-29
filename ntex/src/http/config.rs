@@ -82,10 +82,10 @@ impl HttpServiceConfig {
     #[must_use]
     /// Creates an HTTP service configuration with default settings.
     pub fn new() -> HttpServiceConfig {
-        Self::_new(KeepAlive::Timeout(Seconds(5)), Seconds::ONE)
+        Self::new_inner(KeepAlive::Timeout(Seconds(5)), Seconds::ONE)
     }
 
-    fn _new(keep_alive: KeepAlive, client_timeout: Seconds) -> HttpServiceConfig {
+    fn new_inner(keep_alive: KeepAlive, client_timeout: Seconds) -> HttpServiceConfig {
         let (keep_alive, ka_enabled) = match keep_alive {
             KeepAlive::Timeout(val) => (val, true),
             KeepAlive::Os => (Seconds::ZERO, true),

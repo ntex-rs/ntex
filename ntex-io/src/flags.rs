@@ -97,6 +97,8 @@ bitflags::bitflags! {
         const DSP_W_BACKPRESSURE  = 1 << 11;
         /// is direct-write enabled
         const DIRECT_WR_SUP       = 1 << 12;
+        /// read paused, output a filter produced while reading filled the write buffer
+        const RD_WR_BACKPRESSURE  = 1 << 13;
     }
 }
 
@@ -287,6 +289,18 @@ impl Flags {
 
     pub(crate) fn is_wr_send_scheduled(&self) -> bool {
         self.contains(FlagsKind::WR_SEND_OP)
+    }
+
+    pub(crate) fn is_read_wr_backpressure(&self) -> bool {
+        self.contains(FlagsKind::RD_WR_BACKPRESSURE)
+    }
+
+    pub(crate) fn set_read_wr_backpressure(&self) {
+        self.insert(FlagsKind::RD_WR_BACKPRESSURE);
+    }
+
+    pub(crate) fn unset_read_wr_backpressure(&self) {
+        self.remove(FlagsKind::RD_WR_BACKPRESSURE);
     }
 
     pub(crate) fn is_read_paused_or_backpressure(&self) -> bool {
