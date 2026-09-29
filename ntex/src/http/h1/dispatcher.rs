@@ -428,7 +428,11 @@ where
             {
                 return Poll::Ready(self.ctl_peer_gone(Some(err)));
             }
-            let item = ready!(body.poll_next_chunk(cx));
+            let Poll::Ready(item) = body.poll_next_chunk(cx) else {
+                // a peer disconnect must be observed while the body is pending
+                self.io.register_dispatch(cx);
+                return Poll::Pending;
+            };
 
             let st = match item {
                 Some(Ok(item)) => {
@@ -3098,6 +3102,56 @@ mod tests {
         );
         sleep(Millis(50)).await;
         assert!(client.is_server_dropped());
+    }
+
+    #[crate::rt_test]
+    /// A peer disconnect stops the dispatcher while the response body is
+    /// pending, the body is dropped.
+    async fn test_pending_body_dropped_on_peer_gone() {
+        struct Stream(Rc<Cell<bool>>, bool);
+        impl Drop for Stream {
+            fn drop(&mut self) {
+                self.0.set(true);
+            }
+        }
+        impl body::MessageBody for Stream {
+            fn size(&self) -> body::BodySize {
+                body::BodySize::Stream
+            }
+            fn poll_next_chunk(
+                &mut self,
+                _: &mut Context<'_>,
+            ) -> Poll<Option<Result<Bytes, Rc<dyn error::Error>>>> {
+                if self.1 {
+                    Poll::Pending
+                } else {
+                    self.1 = true;
+                    Poll::Ready(Some(Ok(Bytes::from_static(b"data"))))
+                }
+            }
+        }
+
+        for delay in [false, true] {
+            let (client, server) = IoTest::create();
+            client.remote_buffer_cap(4096);
+            let dropped = Rc::new(Cell::new(false));
+            let dropped2 = dropped.clone();
+            spawn_h1(server, move |_| {
+                let d = dropped2.clone();
+                async move {
+                    if delay {
+                        sleep(Millis(20)).await;
+                    }
+                    Ok::<_, io::Error>(Response::Ok().message_body(Stream(d, false)))
+                }
+            });
+            client.write("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
+            let _ = client.read().await.unwrap();
+            sleep(Millis(50)).await;
+            client.read_error(io::Error::from(io::ErrorKind::ConnectionReset));
+            sleep(Millis(100)).await;
+            assert!(dropped.get(), "delay={delay}");
+        }
     }
 
     #[crate::rt_test]
