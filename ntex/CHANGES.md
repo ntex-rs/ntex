@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+* HTTP/2 server passes `Expect: 100-continue` requests to the control service as
+  `h2::Control::Expect`, the default ack sends `100 Continue`, the client waited for the expect timeout
+
+* HTTP/2 server replaces an informational (`1xx`) application response with `500`, the response
+  ended the stream with an interim status
+
 * HTTP/2 payload releases the flow-control capacity of the final DATA frame when the data is read
 
 * `ws::WsSink::on_disconnect()` returns `io::Waiter<'static>`, `io::OnDisconnect` is removed

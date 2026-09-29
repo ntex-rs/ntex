@@ -1,16 +1,16 @@
 use std::{cell::RefCell, future::poll_fn, io, mem, rc::Rc};
 
-use ntex_h2::{self as h2, frame::StreamId, server};
+use ntex_h2::{self as h2, control::ExpectResult, frame::StreamId, server};
 
 use crate::error::{Error, IntoFailure};
-use crate::http::body::{BodySize, MessageBody};
+use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::config::DispatcherConfig;
 use crate::http::error::{DispatchError, H2Error, ResponseError};
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::message::{CurrentIo, ResponseHead};
 use crate::http::{DateService, Method, Request, Response, StatusCode, Uri, Version};
 use crate::io::{Filter, Io, IoBoxed, IoRef, types};
-use crate::service::pipeline::{Pipeline, PipelineFactory};
+use crate::service::pipeline::{Pipeline, PipelineBinding, PipelineFactory};
 use crate::service::{Ctx, IntoServiceFactory, RequestState, Service, ServiceFactory};
 use crate::util::{Bytes, BytesMut, HashMap};
 
@@ -138,7 +138,7 @@ where
 
     let _ = server::handle_one(
         io,
-        Pipeline::new((), PublishService::new(id, ioref, svc)),
+        Pipeline::new((), PublishService::new(id, ioref, svc, control.bind())),
         control.bind(),
     )
     .await;
@@ -150,6 +150,7 @@ struct PublishService<Err> {
     id: usize,
     io: IoRef,
     svc: Pipeline<Request, Response, Err>,
+    control: PipelineBinding<h2::Control<Error<H2Error>>, h2::ControlAck, DispatchError>,
     streams: Rc<RefCell<HashMap<StreamId, StreamPayload>>>,
 }
 
@@ -164,11 +165,17 @@ impl<Err> PublishService<Err>
 where
     Err: ResponseError,
 {
-    fn new(id: usize, io: IoRef, svc: Pipeline<Request, Response, Err>) -> Self {
+    fn new(
+        id: usize,
+        io: IoRef,
+        svc: Pipeline<Request, Response, Err>,
+        control: PipelineBinding<h2::Control<Error<H2Error>>, h2::ControlAck, DispatchError>,
+    ) -> Self {
         Self {
             id,
             io,
             svc,
+            control,
             streams: Rc::new(RefCell::new(HashMap::default())),
         }
     }
@@ -274,6 +281,58 @@ where
             }
         };
 
+        // the client waits for `100 Continue` before sending the request body,
+        // see RFC 9110 section 10.1.1
+        let (pseudo, headers) = if !eof && expect_continue(&headers) {
+            let msg = h2::Control::expect(stream.clone(), pseudo, headers);
+            match self
+                .control
+                .call(msg)
+                .await
+                .map(h2::ControlAck::into_expect)
+            {
+                Ok(Some(ExpectResult::Continue(expect))) => {
+                    if stream
+                        .send_informational(StatusCode::CONTINUE, HeaderMap::new())
+                        .is_err()
+                    {
+                        // the stream is closed
+                        self.streams.borrow_mut().remove(&stream.id());
+                        return Ok(());
+                    }
+                    let (_, pseudo, headers) = expect.into_parts();
+                    (pseudo, headers)
+                }
+                Ok(Some(ExpectResult::Failed(_, status, headers))) => {
+                    self.streams.borrow_mut().remove(&stream.id());
+
+                    let mut res = Response::new(status).drop_body();
+                    let head = res.head_mut();
+                    head.headers = headers;
+                    prepare_response(head, &mut BodySize::Empty);
+                    let hdrs = mem::replace(&mut head.headers, HeaderMap::new());
+                    let _ = stream.send_response(status, hdrs, true);
+
+                    // the request body is not needed
+                    stream.reset(h2::frame::Reason::NO_ERROR);
+                    return Ok(());
+                }
+                result => {
+                    log::error!(
+                        "{}: Control service failed to handle expect for {:?}: {:?}",
+                        self.io.tag(),
+                        stream.id(),
+                        result.map(|_| ())
+                    );
+                    self.streams.borrow_mut().remove(&stream.id());
+                    stream.reset(h2::frame::Reason::INTERNAL_ERROR);
+                    return Ok(());
+                }
+            }
+        } else {
+            (pseudo, headers)
+        };
+
         log::trace!(
             "{}: {:?} got request (eof: {eof}): {pseudo:#?}\nheaders: {headers:#?}",
             self.io.tag(),
@@ -311,6 +370,18 @@ where
 
         let result = self.svc.call(req).await;
         let (mut res, mut body) = Response::from(result).into_parts();
+
+        // an interim response cannot complete the request and `101` is not
+        // supported in HTTP/2, see RFC 9113 section 8.1 and 8.6
+        let status = res.status();
+        if status.is_informational() {
+            log::error!(
+                "{}: Informational response {status} is not supported, sending 500",
+                self.io.tag()
+            );
+            res = Response::new(StatusCode::INTERNAL_SERVER_ERROR).drop_body();
+            body = ResponseBody::Other(Body::Empty);
+        }
 
         let head = res.head_mut();
         let mut size = body.size();
@@ -404,16 +475,20 @@ const KEEP_ALIVE: HeaderName = HeaderName::from_static("keep-alive");
 #[allow(clippy::declare_interior_mutable_const)]
 const PROXY_CONNECTION: HeaderName = HeaderName::from_static("proxy-connection");
 
+/// Checks the case-insensitive `100-continue` expectation, see RFC 9110 section 10.1.1
+fn expect_continue(headers: &HeaderMap) -> bool {
+    headers.get_all(header::EXPECT).any(|value| {
+        value
+            .as_bytes()
+            .split(|&b| b == b',')
+            .any(|e| e.trim_ascii().eq_ignore_ascii_case(b"100-continue"))
+    })
+}
+
 fn prepare_response(head: &mut ResponseHead, size: &mut BodySize) {
     // Content length
-    match head.status {
-        StatusCode::NO_CONTENT | StatusCode::CONTINUE | StatusCode::PROCESSING => {
-            *size = BodySize::None;
-        }
-        StatusCode::SWITCHING_PROTOCOLS => {
-            *size = BodySize::Stream;
-        }
-        _ => (),
+    if head.status == StatusCode::NO_CONTENT {
+        *size = BodySize::None;
     }
     match size {
         BodySize::None | BodySize::Stream => head.headers.remove(header::CONTENT_LENGTH),
