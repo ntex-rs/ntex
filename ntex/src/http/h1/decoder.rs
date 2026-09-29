@@ -550,10 +550,10 @@ impl MessageType for Request {
                     return Err(DecodeError::Uri);
                 }
                 let uri = Uri::try_from(target)?;
-                // authority-form is only used for `CONNECT`, see RFC 9112
-                // section 3.2.3
-                if uri.scheme().is_none() && uri.authority().is_some() && method != Method::CONNECT
-                {
+                // authority-form is used only, and always, for `CONNECT`, see
+                // RFC 9112 section 3.2.3
+                let authority_form = uri.scheme().is_none() && uri.authority().is_some();
+                if authority_form != (method == Method::CONNECT) {
                     return Err(DecodeError::Uri);
                 }
                 let version = if req.version == 1 {
@@ -1363,6 +1363,15 @@ mod tests {
             match MessageDecoder::<Request>::default().decode(&mut buf) {
                 Err(DecodeError::Uri) => (),
                 res => panic!("{method}: {res:?}"),
+            }
+        }
+
+        for target in ["/", "/test", "http://example.com:443/"] {
+            let mut buf =
+                BytesMut::from(format!("CONNECT {target} HTTP/1.1\r\nhost: a\r\n\r\n").as_str());
+            match MessageDecoder::<Request>::default().decode(&mut buf) {
+                Err(DecodeError::Uri) => (),
+                res => panic!("{target}: {res:?}"),
             }
         }
     }
@@ -2196,7 +2205,7 @@ mod tests {
     #[test]
     fn test_conn_upgrade_connect_method() {
         let mut buf = BytesMut::from(
-            "CONNECT /test HTTP/1.1\r\nhost: localhost\r\n\
+            "CONNECT localhost:443 HTTP/1.1\r\nhost: localhost\r\n\
              content-type: text/plain\r\n\r\n",
         );
         let req = parse_ready!(&mut buf);

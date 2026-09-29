@@ -14,7 +14,11 @@
 
 * HTTP/1 server rejects an asterisk-form request target for methods other than `OPTIONS`
 
-* HTTP/1 server rejects an authority-form request target for methods other than `CONNECT`
+* HTTP/1 server accepts an authority-form request target only for `CONNECT`, and requires it for `CONNECT`
+
+* HTTP/1 dispatcher drops an idle streaming response body and closes the connection when the client
+  half-closes it and has no pipelined requests; `HttpServiceConfig::set_half_close(true)` keeps
+  the previous behavior
 
 * `h1::Codec::upgrade()` is removed, use `Request::upgrade()` of the decoded request
 
