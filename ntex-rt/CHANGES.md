@@ -2,6 +2,9 @@
 
 ## [4.0.0] - unreleased
 
+* Fix blocking pool exceeding its thread limit, blocking the caller, panicking
+  when a thread cannot be started and stranding tasks when idle workers exit
+
 * Panic handling calls the previous panic hook, the hook is installed once and
   delivers `Signal::Panic` only while signal handling is enabled
 
