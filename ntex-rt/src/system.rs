@@ -223,9 +223,11 @@ impl System {
     }
 
     /// Enables process signal handling.
+    ///
+    /// Signals are handled by one system at a time, this has no effect while
+    /// another system handles signals.
     pub fn enable_signals(&self) {
-        if !self.signals() {
-            crate::signals::start(self);
+        if !self.signals() && crate::signals::start(self) {
             self.0.signals.store(true, Ordering::Relaxed);
         }
     }

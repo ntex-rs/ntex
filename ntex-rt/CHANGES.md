@@ -2,6 +2,12 @@
 
 ## [4.0.0] - unreleased
 
+* Release signal handling when a system stops, so a later system can handle
+  signals, `System::enable_signals()` has no effect while another system
+  handles signals
+
+* Fix `Arbiter::new()` name not matching the arbiter id
+
 * Fix endless loop after `SIGSEGV` when signal handling is enabled, the previous
   handler is restored after the signal is reported
 

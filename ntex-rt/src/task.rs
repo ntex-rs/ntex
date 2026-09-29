@@ -99,9 +99,8 @@ impl Drop for Data {
 /// ownership will be returned to the user at the end of the task via `after`.
 /// The pointer remains opaque to the runtime.
 ///
-/// # Panics
-///
-/// Panics if task callbacks have already been set.
+/// Does nothing if task callbacks have already been set, use
+/// [`task_opt_callbacks`] to check whether they were set.
 pub unsafe fn task_callbacks<FBefore, FEnter, FExit, FAfter>(
     f_before: FBefore,
     f_enter: FEnter,

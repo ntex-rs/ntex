@@ -115,7 +115,9 @@ static mut SIG_HANDLERS: [Option<signal_hook::SigId>; 10] = [None; 10];
 
 #[cfg(target_family = "unix")]
 /// Register signal handler.
-pub(crate) fn start(sys: &System) {
+///
+/// Returns `false` if signals are handled by another system.
+pub(crate) fn start(sys: &System) -> bool {
     static ONCE: std::sync::Once = std::sync::Once::new();
 
     if register_system(sys) {
@@ -181,6 +183,9 @@ pub(crate) fn start(sys: &System) {
                 Err(_) => log::error!("Cannot install signal handler for SIGUSR2"),
             }
         }
+        true
+    } else {
+        false
     }
 }
 
@@ -207,8 +212,8 @@ static CTRLC_ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicB
 /// Register signal handler.
 ///
 /// Signals are handled by oneshots, you have to re-register
-/// after each signal.
-pub(crate) fn start(sys: &System) {
+/// after each signal. Returns `false` if signals are handled by another system.
+pub(crate) fn start(sys: &System) -> bool {
     use std::sync::atomic::Ordering;
     static ONCE: std::sync::Once = std::sync::Once::new();
 
@@ -225,6 +230,9 @@ pub(crate) fn start(sys: &System) {
             }
         });
         CTRLC_ENABLED.store(true, Ordering::Release);
+        true
+    } else {
+        false
     }
 }
 
@@ -321,46 +329,57 @@ pub(crate) fn enable_panic_handling() {
 
 #[cfg(all(test, any(target_family = "windows", target_os = "linux")))]
 mod tests {
-    use std::{any::Any, io};
-
-    use crate::{BlockFuture, Driver, Notify, PollResult, Runner, Runtime};
+    use crate::testing::TestRunner;
 
     use super::*;
 
-    #[derive(Debug)]
-    struct NoopNotify;
+    // signal handling is global
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    impl Notify for NoopNotify {
-        fn notify(&self) -> io::Result<()> {
-            Ok(())
-        }
-    }
+    #[test]
+    fn signals_released_when_system_stops() {
+        let _lock = LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
-    struct BusyDriver;
+        let first = System::new("first", TestRunner).block_on(async {
+            let sys = System::current();
+            sys.enable_signals();
+            assert!(sys.signals());
+            sys
+        });
+        assert!(!is_enabled());
+        assert!(!first.signals());
 
-    impl Driver for BusyDriver {
-        fn handle(&self) -> Box<dyn crate::Notify> {
-            Box::new(NoopNotify)
-        }
+        System::new("second", TestRunner).block_on(async {
+            let sys = System::current();
+            sys.enable_signals();
+            assert!(sys.signals());
+            assert!(is_enabled());
 
-        fn run(&self, rt: &Runtime) -> io::Result<()> {
-            while rt.poll() != PollResult::Ready {}
-            Ok(())
-        }
-    }
-
-    struct TestRunner;
-
-    impl Runner for TestRunner {
-        fn block_on(&self, fut: BlockFuture) -> Result<(), Box<dyn Any + Send>> {
-            Runtime::new(Box::new(NoopNotify)).block_on(fut, &BusyDriver);
-            Ok(())
-        }
+            // signals are handled by one system at a time
+            let other = std::thread::spawn(|| {
+                System::new("other", TestRunner).block_on(async {
+                    let sys = System::current();
+                    sys.enable_signals();
+                    sys.signals()
+                })
+            })
+            .join()
+            .unwrap();
+            assert!(!other);
+            assert!(is_enabled());
+        });
+        assert!(!is_enabled());
     }
 
     #[cfg(target_family = "windows")]
     #[test]
     fn reenable_signals() {
+        let _lock = LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
         System::new("test", TestRunner).block_on(async {
             let sys = System::current();
             sys.enable_signals();

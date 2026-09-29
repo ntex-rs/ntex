@@ -99,13 +99,16 @@ impl Arbiter {
 
     /// Starts an arbiter on a new thread with an automatically generated name.
     pub fn new() -> Arbiter {
-        let id = COUNT.load(Ordering::Relaxed) + 1;
-        Arbiter::with_name(format!("{}:arb:{}", System::current().name(), id))
+        let id = COUNT.fetch_add(1, Ordering::Relaxed);
+        Arbiter::start(id, format!("{}:arb:{}", System::current().name(), id))
     }
 
     /// Starts an arbiter on a new thread with the specified name.
     pub fn with_name(name: String) -> Arbiter {
-        let id = COUNT.fetch_add(1, Ordering::Relaxed);
+        Arbiter::start(COUNT.fetch_add(1, Ordering::Relaxed), name)
+    }
+
+    fn start(id: usize, name: String) -> Arbiter {
         let sys = System::current();
         let name2 = Arc::new(name.clone());
         let config = sys.config();
@@ -473,6 +476,16 @@ mod tests {
     }
 
     thread_local!(static HOLD: RefCell<Option<UseOnDrop>> = const { RefCell::new(None) });
+
+    #[test]
+    fn arbiter_name_matches_id() {
+        System::new("test", crate::testing::TestRunner).block_on(async {
+            let mut arb = Arbiter::new();
+            assert_eq!(arb.name(), format!("test:arb:{}", arb.id().0));
+            arb.stop();
+            arb.join().unwrap();
+        });
+    }
 
     #[test]
     fn storage_access_during_thread_exit() {

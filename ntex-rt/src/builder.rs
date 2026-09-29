@@ -243,9 +243,16 @@ impl SystemRunner {
                 system.enable_signals();
             }
 
-            f()?;
+            if let Err(e) = f() {
+                system.disable_signals();
+                return Err(e);
+            }
 
-            match stop.await {
+            let result = stop.await;
+            // release signals for other systems
+            system.disable_signals();
+
+            match result {
                 Ok(code) => {
                     if code != 0 {
                         Err(io::Error::other(format!("Non-zero exit code: {code}")))
@@ -285,7 +292,10 @@ impl SystemRunner {
 
             let loc = current_location();
             ntex_error::set_backtrace_start(loc.file(), loc.line() + 2);
-            fut.await
+            let result = fut.await;
+            // release signals for other systems
+            system.disable_signals();
+            result
         })
     }
 
@@ -301,11 +311,14 @@ impl SystemRunner {
         // run loop
         let result = tok_io::task::LocalSet::new()
             .run_until(async move {
-                _ = System::start(config);
+                let (system, _) = System::start(config);
 
                 let loc = current_location();
                 ntex_error::set_backtrace_start(loc.file(), loc.line() + 2);
-                fut.await
+                let result = fut.await;
+                // release signals for other systems
+                system.disable_signals();
+                result
             })
             .await;
 

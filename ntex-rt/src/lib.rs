@@ -27,6 +27,8 @@ mod pool;
 pub mod signals;
 mod system;
 mod task;
+#[cfg(test)]
+mod testing;
 
 mod rt;
 pub mod rt_default;
