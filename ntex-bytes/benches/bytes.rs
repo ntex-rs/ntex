@@ -127,7 +127,7 @@ fn clone_static(b: &mut Bencher<'_>) {
 }
 
 fn clone_arc(b: &mut Bencher<'_>) {
-    let bytes = Bytes::from("hello world 1234567890 and have a good byte 0987654321".as_bytes());
+    let bytes = Bytes::from(b"hello world 1234567890 and have a good byte 0987654321".to_vec());
 
     b.iter(|| {
         for _ in 0..1024 {

@@ -208,6 +208,7 @@ impl Storage {
         }
     }
 
+    #[inline]
     pub(crate) unsafe fn from_ptr_inline(src: *const u8, len: usize) -> Storage {
         let mut st = Storage {
             ptr: ptr::null_mut(),
@@ -237,6 +238,7 @@ impl Storage {
     }
 
     /// Return a raw pointer to data
+    #[inline]
     pub(crate) unsafe fn as_ptr(&self) -> *const u8 {
         match self.kind() {
             KIND_INLINE => self.inline_ptr_ro(),
@@ -302,6 +304,7 @@ impl Storage {
         }
     }
 
+    #[inline]
     pub(crate) fn split_off(&mut self, at: usize, create_inline: bool) -> Storage {
         let other = unsafe {
             if create_inline && self.len() - at <= INLINE_CAP {
@@ -323,6 +326,7 @@ impl Storage {
         other
     }
 
+    #[inline]
     pub(crate) fn split_to(&mut self, at: usize) -> Storage {
         let other = unsafe {
             if at <= INLINE_CAP {
@@ -618,12 +622,14 @@ unsafe impl Send for Storage {}
 unsafe impl Sync for Storage {}
 
 impl Clone for Storage {
+    #[inline]
     fn clone(&self) -> Storage {
         unsafe { self.shallow_clone() }
     }
 }
 
 impl Drop for Storage {
+    #[inline]
     fn drop(&mut self) {
         match self.kind() {
             KIND_VEC => {

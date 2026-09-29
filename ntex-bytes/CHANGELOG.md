@@ -2,9 +2,6 @@
 
 ## [1.10.0] (unreleased)
 
-* `Bytes` deref and `len()` are inlined into other crates, a shared `Bytes` deref was
-  about 5x slower than a `BytesMut` deref
-
 * `BytePages::append()` copies only data of up to 4 KiB, larger data is added as a page without
   copying, and the spare capacity of the current page stays available for later writes
 
