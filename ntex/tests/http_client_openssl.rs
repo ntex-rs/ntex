@@ -253,6 +253,62 @@ async fn test_h2_unread_request_body_is_reset() {
 }
 
 #[ntex::test]
+async fn test_h2_stalled_request_body_is_dropped_on_reset() {
+    use std::sync::atomic::AtomicBool;
+
+    use ntex::http::{Request, Response};
+    use ntex::time::{Millis, sleep, timeout};
+    use ntex::util::Bytes;
+
+    let srv = test_server(async |_| {
+        http::openssl(
+            ssl_acceptor(),
+            HttpService::h2(async |_: Request| Ok::<_, std::io::Error>(Response::Ok().body("ok"))),
+        )
+    });
+
+    let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+    builder.set_verify(SslVerifyMode::NONE);
+    let _ = builder.set_alpn_protos(b"\x02h2\x08http/1.1");
+    let client = Client::builder()
+        .openssl(builder.build())
+        .build(SharedCfg::default());
+
+    struct Guard(Arc<AtomicBool>);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Relaxed);
+        }
+    }
+
+    // the request body waits for data forever after the first chunk
+    let dropped = Arc::new(AtomicBool::new(false));
+    let guard = Guard(dropped.clone());
+    let body = Box::pin(futures_util::stream::unfold(0, move |i| {
+        let _g = &guard;
+        async move {
+            if i == 0 {
+                Some((Ok::<_, std::io::Error>(Bytes::from_static(b"chunk")), 1))
+            } else {
+                std::future::pending().await
+            }
+        }
+    }));
+    let response = client.post(srv.surl("/")).send_stream(body).await.unwrap();
+    assert_eq!(response.version(), Version::HTTP_2);
+    assert_eq!(response.body().await.unwrap(), Bytes::from_static(b"ok"));
+
+    // server resets the unread request body, the stalled upload is dropped
+    timeout(Millis(1_000), async {
+        while !dropped.load(Ordering::Relaxed) {
+            sleep(Millis(50)).await;
+        }
+    })
+    .await
+    .expect("stalled request body upload is not dropped");
+}
+
+#[ntex::test]
 async fn test_h2_request_body_dropped_after_response_is_reset() {
     use std::sync::atomic::AtomicBool;
 

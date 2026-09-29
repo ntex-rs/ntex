@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* HTTP/2 client stops sending the request body when the stream is reset or the connection closes,
+  a streaming body that waited for data kept the upload task and the connection busy
+
 * HTTP/2 server passes `Expect: 100-continue` requests to the control service as
   `h2::Control::Expect`, the default ack sends `100 Continue`, the client waited for the expect timeout
 
