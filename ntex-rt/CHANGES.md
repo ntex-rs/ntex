@@ -2,6 +2,9 @@
 
 ## [4.0.0] - unreleased
 
+* Make `System::set_latency_callback()` thread-safe, the callback must be
+  `Send + Sync`
+
 * Fix data race when signal handling is enabled or disabled by systems on
   different threads
 

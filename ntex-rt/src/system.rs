@@ -287,12 +287,11 @@ impl System {
     ///
     /// This callback is called when the arbiter response latency exceeds the
     /// configured threshold. The provided backtrace is not resolved.
-    ///
-    /// Note: This callback is not thread-safe.
-    pub fn set_latency_callback<F: Fn(ntex_error::Backtrace) + 'static>(f: F) {
-        unsafe {
-            ARB_CB = Some(Box::new(f));
-        }
+    pub fn set_latency_callback<F>(f: F)
+    where
+        F: Fn(ntex_error::Backtrace) + Send + Sync + 'static,
+    {
+        *ARB_CB.lock() = Some(Arc::new(f));
     }
 
     /// Returns a clone of the system configuration.
@@ -534,8 +533,7 @@ async fn ping_arbiters(sys: System) {
                         Delay::new(SPIN).await;
                         if let Some(bt) = CAPTURED.lock().take() {
                             let bt = ntex_error::Backtrace::from(bt);
-                            #[allow(static_mut_refs)]
-                            if let Some(f) = unsafe { ARB_CB.as_ref() } {
+                            if let Some(f) = latency_callback() {
                                 f(bt);
                             } else {
                                 bt.resolver().resolve();
@@ -576,7 +574,15 @@ async fn yield_to() {
 }
 
 #[cfg(target_os = "linux")]
-static mut ARB_CB: Option<Box<dyn Fn(ntex_error::Backtrace)>> = None;
+#[allow(clippy::type_complexity)]
+static ARB_CB: Mutex<Option<Arc<dyn Fn(ntex_error::Backtrace) + Send + Sync>>> = Mutex::new(None);
+
+#[cfg(target_os = "linux")]
+#[allow(clippy::type_complexity)]
+/// Clone the callback so it runs without the lock and survives replacement.
+fn latency_callback() -> Option<Arc<dyn Fn(ntex_error::Backtrace) + Send + Sync>> {
+    ARB_CB.lock().clone()
+}
 
 #[cfg(target_os = "linux")]
 static EXPECTED_TID: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
@@ -596,5 +602,31 @@ pub(crate) fn sig_usr2() {
             let bt = ntex_error::BacktraceRaw::new(panic::Location::caller());
             *CAPTURED.lock() = Some(bt);
         }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{panic::Location, sync::Arc};
+
+    use super::*;
+
+    #[test]
+    fn latency_callback_replaced_while_running() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let data = Arc::new(vec![1u8; 64]);
+        let calls2 = calls.clone();
+        System::set_latency_callback(move |_| {
+            // replace itself, then use captured state
+            System::set_latency_callback(|_| {});
+            assert_eq!(data.len(), 64);
+            calls2.fetch_add(1, Ordering::Relaxed);
+        });
+
+        latency_callback().unwrap()(ntex_error::Backtrace::new(Location::caller()));
+        latency_callback().unwrap()(ntex_error::Backtrace::new(Location::caller()));
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        *ARB_CB.lock() = None;
     }
 }
