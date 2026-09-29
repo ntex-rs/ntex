@@ -744,7 +744,9 @@ impl<F> Io<F> {
     /// [`IoRef::with_read_dst`], which waits for the read buffer to fall to at
     /// most half the high watermark, this releases read backpressure however
     /// much data is still buffered. Asking for more input
-    /// is taken as the dispatcher declaring itself able to accept it.
+    /// is taken as the dispatcher declaring itself able to accept it. This
+    /// also resumes reads paused because output produced by reading, for
+    /// example replies to peer pings, has not drained yet.
     ///
     /// # Returns
     ///
@@ -778,9 +780,10 @@ impl<F> Io<F> {
 
             // If the dispatcher requests more data but no read occurs,
             // restart the read task.
-            if st.flags.is_read_paused_or_backpressure() {
+            if st.flags.is_read_paused_or_backpressure() || st.flags.is_read_wr_backpressure() {
                 st.flags.unset_read_ready_and_backpressure();
                 st.flags.unset_read_paused();
+                st.flags.unset_read_wr_backpressure();
                 st.wake_read_task();
                 if ready {
                     Poll::Ready(Ok(Some(())))
@@ -3006,6 +3009,77 @@ mod tests {
             Poll::Ready(Readiness::Ready)
         );
         assert!(!io.st().flags.is_read_wr_backpressure());
+    }
+
+    #[ntex::test]
+    async fn read_more_lifts_read_output_pause() {
+        #[derive(Debug)]
+        struct Reply;
+
+        impl FilterLayer for Reply {
+            fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                let data = buf.with_read_buffers(|src, _| src.as_mut().map(BytesMut::take));
+                if let Some(data) = data {
+                    buf.with_write_buffers(|_, dst| dst.extend_from_slice(&data));
+                }
+                Ok(())
+            }
+
+            fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                buf.with_write_buffers(BytePages::move_to);
+                Ok(())
+            }
+
+            fn shutdown(&self, _: &FilterBuf<'_>) -> io::Result<Poll<()>> {
+                Ok(Poll::Ready(()))
+            }
+        }
+
+        #[derive(Debug)]
+        struct Manual;
+
+        impl IoStream for Manual {
+            fn start(self, _: IoContext) -> Box<dyn Handle> {
+                Box::new(self)
+            }
+        }
+
+        impl Handle for Manual {}
+
+        let io = Io::new(
+            Manual,
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8)),
+        )
+        .add_filter(Reply);
+        let ctx = IoContext::new(io.get_ref());
+        let read = |data: &'static [u8]| {
+            ctx.with_read_buf(|buf| {
+                buf.extend_from_slice(data);
+                Poll::Ready(Ok(data.len()))
+            })
+        };
+
+        // read_more
+        assert_eq!(read(b"pingping"), IoTaskStatus::Pause);
+        assert_eq!(lazy(|cx| ctx.poll_read_ready(cx)).await, Poll::Pending);
+        assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
+        assert!(!io.st().flags.is_read_wr_backpressure());
+        assert!(!io.st().read_task.is_set());
+        assert_eq!(
+            lazy(|cx| ctx.poll_read_ready(cx)).await,
+            Poll::Ready(Readiness::Ready)
+        );
+
+        // read_notify
+        assert_eq!(read(b"ping"), IoTaskStatus::Pause);
+        assert_eq!(lazy(|cx| ctx.poll_read_ready(cx)).await, Poll::Pending);
+        assert!(lazy(|cx| io.poll_read_notify(cx)).await.is_pending());
+        assert!(!io.st().flags.is_read_wr_backpressure());
+        assert!(!io.st().read_task.is_set());
+        assert_eq!(
+            lazy(|cx| ctx.poll_read_ready(cx)).await,
+            Poll::Ready(Readiness::Ready)
+        );
     }
 
     #[ntex::test]
