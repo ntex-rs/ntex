@@ -429,6 +429,15 @@ where
                 return Poll::Ready(self.ctl_peer_gone(Some(err)));
             }
             let Poll::Ready(item) = body.poll_next_chunk(cx) else {
+                // the client half-closed the connection and has no pipelined
+                // requests, an idle body would hold the connection until its
+                // next chunk
+                if !self.codec.cfg.half_close
+                    && self.io.is_read_eof()
+                    && self.io.with_read_dst(|buf| buf.is_empty())
+                {
+                    return Poll::Ready(self.ctl_peer_gone(None));
+                }
                 // a peer disconnect must be observed while the body is pending
                 self.io.register_dispatch(cx);
                 return Poll::Pending;
@@ -3154,6 +3163,83 @@ mod tests {
             client.read_error(io::Error::from(io::ErrorKind::ConnectionReset));
             sleep(Millis(100)).await;
             assert!(dropped.get(), "delay={delay}");
+        }
+    }
+
+    /// A client half-close drops an idle response body, unless half-close is
+    /// enabled or pipelined requests are still buffered.
+    #[crate::rt_test]
+    async fn test_pending_body_dropped_on_half_close() {
+        struct Stream(Rc<Cell<bool>>, bool);
+        impl Drop for Stream {
+            fn drop(&mut self) {
+                self.0.set(true);
+            }
+        }
+        impl body::MessageBody for Stream {
+            fn size(&self) -> body::BodySize {
+                body::BodySize::Stream
+            }
+            fn poll_next_chunk(
+                &mut self,
+                _: &mut Context<'_>,
+            ) -> Poll<Option<Result<Bytes, Rc<dyn error::Error>>>> {
+                if self.1 {
+                    Poll::Pending
+                } else {
+                    self.1 = true;
+                    Poll::Ready(Some(Ok(Bytes::from_static(b"data"))))
+                }
+            }
+        }
+
+        for (half_close, pipelined, delay) in [
+            (false, false, false),
+            (false, false, true),
+            (true, false, false),
+            (false, true, false),
+        ] {
+            let (client, server) = IoTest::create();
+            client.remote_buffer_cap(4096);
+            let cfg: SharedCfg = SharedCfg::new("DBG")
+                .add(HttpServiceConfig::new().set_half_close(half_close))
+                .into();
+            let dropped = Rc::new(Cell::new(false));
+            let dropped2 = dropped.clone();
+            let svc = move |_| {
+                let d = dropped2.clone();
+                async move {
+                    if delay {
+                        sleep(Millis(50)).await;
+                    }
+                    Ok::<_, io::Error>(Response::Ok().message_body(Stream(d, false)))
+                }
+            };
+            crate::rt::spawn(Dispatcher::new(
+                0,
+                nio::Io::new(server, cfg),
+                Pipeline::new((), fn_service(svc).map(Into::into)),
+                None,
+                DispatcherConfig::default(),
+            ));
+
+            client.write("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
+            if pipelined {
+                client.write("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
+            }
+            if !delay {
+                let _ = client.read().await.unwrap();
+            }
+            client.close().await;
+            sleep(Millis(150)).await;
+            let case = format!("half_close={half_close} pipelined={pipelined} delay={delay}");
+            if half_close || pipelined {
+                assert!(!dropped.get(), "{case}");
+                assert!(!client.is_server_dropped(), "{case}");
+            } else {
+                assert!(dropped.get(), "{case}");
+                assert!(client.is_server_dropped(), "{case}");
+            }
         }
     }
 

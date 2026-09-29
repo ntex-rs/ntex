@@ -39,6 +39,7 @@ impl From<Option<usize>> for KeepAlive {
 }
 
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools)]
 /// Configuration shared by HTTP/1 and HTTP/2 server services.
 ///
 /// The default configuration enables persistent HTTP/1 connections with a
@@ -56,6 +57,7 @@ pub struct HttpServiceConfig {
     pub(super) headers_read_rate: Option<FrameReadRate>,
     pub(super) payload_read_rate: Option<FrameReadRate>,
     pub(super) write_timeout: Seconds,
+    pub(super) half_close: bool,
 
     config: CfgContext,
 }
@@ -108,6 +110,7 @@ impl HttpServiceConfig {
             validate_host: true,
             payload_read_rate: None,
             write_timeout: Seconds::ZERO,
+            half_close: false,
             config: CfgContext::default(),
         }
     }
@@ -236,6 +239,27 @@ impl HttpServiceConfig {
     /// is disabled by default.
     pub fn set_write_timeout(mut self, timeout: Seconds) -> Self {
         self.write_timeout = timeout;
+        self
+    }
+
+    #[must_use]
+    /// Keeps streaming an HTTP/1 response after the client half-closes the
+    /// connection.
+    ///
+    /// A client that closes its side of the connection is treated as gone:
+    /// when the read side reaches EOF, all buffered requests are handled and
+    /// the response body has no data ready, the dispatcher drops the body and
+    /// closes the connection. Otherwise an idle streaming response, e.g.
+    /// server-sent events, would hold the connection until the body produces
+    /// its next chunk.
+    ///
+    /// Enable this for clients that shut down their write side after sending
+    /// the request and still expect the full response. Such a response then
+    /// ends only when the body completes or a write fails. Responses that are
+    /// ready are sent either way. This setting does not affect HTTP/2. It is
+    /// disabled by default.
+    pub fn set_half_close(mut self, enabled: bool) -> Self {
+        self.half_close = enabled;
         self
     }
 
