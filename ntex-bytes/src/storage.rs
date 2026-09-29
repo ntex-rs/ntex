@@ -513,9 +513,7 @@ impl Storage {
 
         if kind == KIND_INLINE || kind == KIND_STATIC {
             // In this case, a shallow_clone still involves copying the data.
-            let mut inner: mem::MaybeUninit<Storage> = mem::MaybeUninit::uninit();
-            ptr::copy_nonoverlapping(self, inner.as_mut_ptr(), 1);
-            inner.assume_init()
+            Storage { ..*self }
         } else if kind == KIND_VEC {
             // ptr points to SharedVec
             let shared = self.shared_vec();
