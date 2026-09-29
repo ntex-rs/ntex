@@ -124,6 +124,7 @@ where
     shared: Rc<DispatcherShared<U, Err>>,
     response: Option<Call<U, Err>>,
     timers: Timers,
+    max_inflight: u32,
 }
 
 pub(crate) struct DispatcherShared<U, Err>
@@ -189,8 +190,25 @@ where
                 response: None,
                 error: None,
                 st: DispatcherState::Processing,
+                max_inflight: u32::MAX,
             },
         }
+    }
+
+    #[must_use]
+    /// Sets the maximum number of concurrent service calls.
+    ///
+    /// The dispatcher stops reading frames while `max` calls are in flight
+    /// and resumes once a call completes. By default the number of calls
+    /// is not limited.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `max` is zero.
+    pub fn max_inflight(mut self, max: u32) -> Self {
+        assert!(max > 0, "max_inflight must be greater than zero");
+        self.inner.max_inflight = max;
+        self
     }
 }
 
@@ -428,8 +446,13 @@ where
     }
 
     fn poll_service(&mut self, cx: &mut Context<'_>) -> Poll<PollService<U>> {
-        // wait until service becomes ready
-        match self.shared.service.poll_ready(cx) {
+        // wait until an in-flight call completes and the service becomes ready
+        let ready = if self.shared.inflight.get() >= self.max_inflight {
+            Poll::Pending
+        } else {
+            self.shared.service.poll_ready(cx)
+        };
+        match ready {
             Poll::Ready(Ok(())) => Poll::Ready(self.check_error()),
             // pause io read task
             Poll::Pending => {
@@ -1075,6 +1098,42 @@ mod tests {
             .await
             .expect("dispatcher did not drain pending service call")
             .unwrap();
+    }
+
+    #[ntex::test]
+    async fn max_inflight_calls() {
+        let calls = Rc::new(Cell::new(0));
+        let calls2 = calls.clone();
+        let release = Condition::<()>::new();
+        let release2 = release.clone();
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let (disp, _) = Dispatcher::debug(
+            Io::from(server),
+            BytesCodec,
+            ntex_service::fn_service(move |msg: DispatchItem<BytesCodec>| {
+                let waiter = release2.wait();
+                if matches!(msg, DispatchItem::Item(_)) {
+                    calls2.set(calls2.get() + 1);
+                }
+                async move {
+                    let _ = waiter.ready().await;
+                    Ok::<_, ()>(None)
+                }
+            }),
+        );
+        ntex::rt::spawn(disp.max_inflight(2));
+
+        for msg in ["a", "b", "c"] {
+            client.write(msg);
+            sleep(Millis(25)).await;
+        }
+        assert_eq!(calls.get(), 2);
+
+        release.notify(());
+        sleep(Millis(25)).await;
+        assert_eq!(calls.get(), 3);
     }
 
     #[ntex::test]
