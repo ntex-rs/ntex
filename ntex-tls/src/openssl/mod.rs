@@ -251,6 +251,9 @@ impl FilterLayer for SslFilter {
                                 ssl::ErrorCode::WANT_READ | ssl::ErrorCode::WANT_WRITE
                             ) =>
                         {
+                            // nothing is consumed, e.g. a handshake is in
+                            // progress, the write is retried later
+                            w_src.prepend(page);
                             break;
                         }
                         Err(e) => return Err(io::Error::other(e)),
@@ -351,6 +354,55 @@ mod tests {
 
     const CERT: &[u8] = include_bytes!("../../examples/cert.pem");
     const KEY: &[u8] = include_bytes!("../../examples/key.pem");
+
+    /// Output written while a handshake is in progress must not be lost.
+    #[ntex::test]
+    async fn write_during_handshake_is_not_lost() {
+        let mut acceptor = ssl::SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
+        acceptor
+            .set_private_key(&PKey::private_key_from_pem(KEY).unwrap())
+            .unwrap();
+        acceptor
+            .set_certificate(&X509::from_pem(CERT).unwrap())
+            .unwrap();
+        let acceptor = acceptor.build();
+        let mut connector = ssl::SslConnector::builder(SslMethod::tls()).unwrap();
+        connector.set_verify(SslVerifyMode::NONE);
+        let connector = connector.build();
+
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1 << 20);
+        server.remote_buffer_cap(1 << 20);
+        let server = Io::new(server, SharedCfg::new("SRV"));
+        let client = Io::new(client, SharedCfg::new("CLI"));
+
+        // the handshake is not driven, `ssl_write` starts it and reports
+        // WANT_READ
+        let mut ssl = connector
+            .configure()
+            .unwrap()
+            .into_ssl("localhost")
+            .unwrap();
+        ssl.set_connect_state();
+        let stream = new_stream(&client, ssl).unwrap();
+        let client = client.add_filter(SslFilter::new(stream));
+        client.encode_slice(b"hello").unwrap();
+
+        // reading completes the client handshake
+        ntex::rt::spawn(async move {
+            let _ = client.recv(&BytesCodec).await;
+        });
+
+        let server = handshake(server, ssl::Ssl::new(acceptor.context()).unwrap(), true)
+            .await
+            .unwrap();
+        let item = ntex_util::time::timeout(Millis(1000), server.recv(&BytesCodec))
+            .await
+            .expect("write is lost")
+            .unwrap()
+            .unwrap();
+        assert_eq!(&item[..], b"hello");
+    }
 
     /// Buffered output must not look like output produced by reading, that
     /// would pause reads while the write buffer is full.

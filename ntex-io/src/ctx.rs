@@ -323,7 +323,8 @@ impl IoContext {
 
                         // Output produced by reading, for example replies to
                         // peer pings, must not grow without bound while the
-                        // peer does not read. Reads pause until it drains.
+                        // peer does not read. Reads pause until it drains or
+                        // the dispatcher asks for more input.
                         if st.is_wr_backpressure_needed(st.write_outstanding()) {
                             log::trace!("{}: Write buf is full, pause reading", st.tag());
                             st.flags.set_read_wr_backpressure();

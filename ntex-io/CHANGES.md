@@ -4,7 +4,7 @@
 
 * Reading pauses while output a filter produced during read processing, for example
   WebSocket pong replies, keeps the write buffer at the high watermark, until it drains
-  to half of it
+  to half of it or the dispatcher asks for more input with `read_more()` or `read_notify()`
 
 * Add `Waiter`, `IoRef::waiter()` and `IoRef::wake()`, tasks wait on a tag of
   the I/O stream until it is woken, waiters complete once the stream is closed

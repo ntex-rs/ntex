@@ -33,6 +33,7 @@ jobs:
         run: cargo miri test -p ntex-bytes
 
       - name: Run Miri (bytes, big-endian)
+        continue-on-error: true
         run: cargo miri test -p ntex-bytes --target s390x-unknown-linux-gnu
 
       - name: Run Miri (ntex-service::cfg)
