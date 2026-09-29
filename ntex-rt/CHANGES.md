@@ -2,6 +2,9 @@
 
 ## [4.0.0] - unreleased
 
+* Panic handling calls the previous panic hook, the hook is installed once and
+  delivers `Signal::Panic` only while signal handling is enabled
+
 * Dispatch unix signals from a dedicated thread instead of the signal handler,
   fix data race and lost signals in the signal queue
 

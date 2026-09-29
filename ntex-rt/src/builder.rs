@@ -75,7 +75,8 @@ impl Builder {
     /// Enables panic handling.
     ///
     /// When panic handling is enabled, the application can receive
-    /// `Signal::Panic(PanicReason::Panic(..))` signals.
+    /// `Signal::Panic(PanicSource::App(..))` signals while signal handling
+    /// is enabled. The previously installed panic hook is still called.
     /// By default, panic handling is disabled.
     pub fn panic_handling(mut self, eanbled: bool) -> Self {
         self.panics = eanbled;

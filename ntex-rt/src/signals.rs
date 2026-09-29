@@ -1,4 +1,5 @@
-use std::{cell::RefCell, future::poll_fn, panic, sync::Arc, task::Poll};
+use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};
+use std::{cell::RefCell, future::poll_fn, panic, task::Poll};
 
 use atomic_waker::AtomicWaker;
 use ntex_error::Backtrace;
@@ -12,6 +13,8 @@ thread_local! {
 }
 
 static CUR_SYS: Mutex<Option<System>> = Mutex::new(None);
+// Mirrors `CUR_SYS`, the panic hook must not lock it.
+static ENABLED: AtomicBool = AtomicBool::new(false);
 static SIGS: Mutex<Vec<Signal>> = Mutex::new(Vec::new());
 static HND_WAKER: AtomicWaker = AtomicWaker::new();
 
@@ -71,6 +74,7 @@ fn register_system(sys: &System) -> Option<Registration> {
         None
     } else {
         *cur = Some(sys.clone());
+        ENABLED.store(true, Ordering::Release);
 
         let (tx, rx) = oneshot::async_channel();
         sys.handle().spawn(signals(rx));
@@ -89,6 +93,7 @@ fn unregister_system(sys: &System) -> Option<Registration> {
     let mut cur = CUR_SYS.lock();
     if cur.as_ref().is_some_and(|cur| cur.id() == sys.id()) {
         cur.take();
+        ENABLED.store(false, Ordering::Release);
         sys.handle().spawn(async move {
             STOP.with(|stop| {
                 if let Some(tx) = stop.borrow_mut().take() {
@@ -319,25 +324,40 @@ extern "C" fn sig_segv(v: i32) {
     }
 }
 
+/// Installs the panic hook, once per process.
+///
+/// The previous hook is called first. Panics are delivered as
+/// `Signal::Panic` only while signal handling is enabled.
 pub(crate) fn enable_panic_handling() {
-    panic::set_hook(Box::new(|panic_info| {
-        let info: Arc<str> = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
-            Arc::from(s.to_string())
-        } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
-            Arc::from(s.clone())
-        } else {
-            Arc::from("panic")
-        };
-        let bt = if let Some(loc) = panic_info.location() {
-            let s = Box::new(loc.file().to_string());
-            let filename = Box::leak(s);
-            Backtrace::with_filename(filename)
-        } else {
-            Backtrace::new(panic::Location::caller())
-        };
+    static ONCE: std::sync::Once = std::sync::Once::new();
 
-        handle_signal(Signal::Panic(PanicSource::App(info, bt)));
-    }));
+    ONCE.call_once(|| {
+        let prev = panic::take_hook();
+        panic::set_hook(Box::new(move |panic_info| {
+            prev(panic_info);
+
+            if !ENABLED.load(Ordering::Acquire) {
+                return;
+            }
+
+            let info: Arc<str> = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+                Arc::from(s.to_string())
+            } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+                Arc::from(s.clone())
+            } else {
+                Arc::from("panic")
+            };
+            let bt = if let Some(loc) = panic_info.location() {
+                let s = Box::new(loc.file().to_string());
+                let filename = Box::leak(s);
+                Backtrace::with_filename(filename)
+            } else {
+                Backtrace::new(panic::Location::caller())
+            };
+
+            handle_signal(Signal::Panic(PanicSource::App(info, bt)));
+        }));
+    });
 }
 
 #[cfg(all(test, any(target_family = "windows", target_os = "linux")))]
@@ -348,6 +368,63 @@ mod tests {
 
     // signal handling is global
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    async fn recv(rx: oneshot::AsyncReceiver<Arc<[Signal]>>) -> Option<Arc<[Signal]>> {
+        let mut rx = std::pin::pin!(rx);
+        let mut timeout =
+            std::pin::pin!(futures_timer::Delay::new(std::time::Duration::from_secs(5)));
+        poll_fn(|cx| {
+            if let Poll::Ready(res) = rx.as_mut().poll(cx) {
+                Poll::Ready(res.ok())
+            } else if timeout.as_mut().poll(cx).is_ready() {
+                Poll::Ready(None)
+            } else {
+                Poll::Pending
+            }
+        })
+        .await
+    }
+
+    #[test]
+    fn panic_hook_chains_and_follows_signals() {
+        use std::sync::atomic::AtomicUsize;
+
+        static CALLS: AtomicUsize = AtomicUsize::new(0);
+
+        let _lock = LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let prev = panic::take_hook();
+        panic::set_hook(Box::new(move |info| {
+            CALLS.fetch_add(1, Ordering::Relaxed);
+            prev(info);
+        }));
+        enable_panic_handling();
+        // installed once
+        enable_panic_handling();
+
+        // previous hook is called, nothing is queued without signal handling
+        let _ = panic::catch_unwind(|| panic!("no signals"));
+        assert_eq!(CALLS.load(Ordering::Relaxed), 1);
+        assert!(SIGS.lock().is_empty());
+
+        System::new("test", TestRunner).block_on(async {
+            let sys = System::current();
+            sys.enable_signals();
+
+            let rx = signal();
+            // let the registration task run
+            futures_timer::Delay::new(std::time::Duration::from_millis(50)).await;
+            let _ = panic::catch_unwind(|| panic!("boom"));
+
+            let sigs = recv(rx).await.expect("panic delivered");
+            assert!(
+                matches!(&*sigs, [Signal::Panic(PanicSource::App(msg, _))] if &**msg == "boom")
+            );
+        });
+        assert_eq!(CALLS.load(Ordering::Relaxed), 2);
+    }
 
     #[test]
     fn signals_released_when_system_stops() {
@@ -463,19 +540,7 @@ mod tests {
             futures_timer::Delay::new(Duration::from_millis(50)).await;
             unsafe { libc::kill(libc::getpid(), libc::SIGHUP) };
 
-            let mut rx = std::pin::pin!(rx);
-            let mut timeout = std::pin::pin!(futures_timer::Delay::new(Duration::from_secs(5)));
-            let sigs = poll_fn(|cx| {
-                if let Poll::Ready(res) = rx.as_mut().poll(cx) {
-                    Poll::Ready(res.ok())
-                } else if timeout.as_mut().poll(cx).is_ready() {
-                    Poll::Ready(None)
-                } else {
-                    Poll::Pending
-                }
-            })
-            .await
-            .expect("signal delivered");
+            let sigs = recv(rx).await.expect("signal delivered");
             assert!(matches!(&*sigs, [Signal::Hup]));
         });
         assert!(!is_enabled());
