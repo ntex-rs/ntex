@@ -1,4 +1,3 @@
-#![allow(static_mut_refs)]
 use std::{cell::RefCell, future::poll_fn, panic, sync::Arc, task::Poll};
 
 use atomic_waker::AtomicWaker;
@@ -13,7 +12,7 @@ thread_local! {
 }
 
 static CUR_SYS: Mutex<Option<System>> = Mutex::new(None);
-static mut SIGS: [Option<Signal>; 10] = [const { None }; 10];
+static SIGS: Mutex<Vec<Signal>> = Mutex::new(Vec::new());
 static HND_WAKER: AtomicWaker = AtomicWaker::new();
 
 /// Process and application signals delivered to the runtime.
@@ -103,20 +102,20 @@ fn unregister_system(sys: &System) -> Option<Registration> {
     }
 }
 
+/// Queue signal and wake the system.
+///
+/// Must not be called from a signal handler.
 fn handle_signal(sig: Signal) {
-    unsafe {
-        for s in &mut SIGS {
-            if s.is_none() {
-                *s = Some(sig);
-                break;
-            }
-        }
-        HND_WAKER.wake();
-    }
+    SIGS.lock().push(sig);
+    HND_WAKER.wake();
 }
 
 #[cfg(target_family = "unix")]
-static mut SIG_HANDLERS: [Option<signal_hook::SigId>; 10] = [None; 10];
+/// Signal delivery thread handle and `SIGUSR2` handler id.
+static SIG_HANDLERS: Mutex<(
+    Option<signal_hook::iterator::Handle>,
+    Option<signal_hook::SigId>,
+)> = Mutex::new((None, None));
 
 #[cfg(target_family = "unix")]
 /// Register signal handler.
@@ -128,7 +127,7 @@ pub(crate) fn start(sys: &System) -> bool {
     if let Some(_registration) = register_system(sys) {
         use nix::sys::signal;
         use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGUSR2};
-        use signal_hook::low_level::register;
+        use signal_hook::{iterator::Signals, low_level::register};
 
         ONCE.call_once(|| {
             // Use u128 for alignment.
@@ -165,29 +164,43 @@ pub(crate) fn start(sys: &System) -> bool {
             }
         });
 
-        for (idx, s, sig) in [
-            (0, SIGHUP, Signal::Hup),
-            (1, SIGINT, Signal::Int),
-            (2, SIGTERM, Signal::Term),
-            (3, SIGQUIT, Signal::Quit),
-        ] {
-            unsafe {
-                let sig2 = sig.clone();
-                match register(s, move || handle_signal(sig.clone())) {
-                    Ok(s) => SIG_HANDLERS[idx] = Some(s),
+        // signal handlers only write to a self-pipe, signals are
+        // dispatched from a regular thread
+        let handle = match Signals::new([SIGHUP, SIGINT, SIGTERM, SIGQUIT]) {
+            Ok(mut signals) => {
+                let handle = signals.handle();
+                let result = std::thread::Builder::new()
+                    .name("ntex-rt:signals".to_string())
+                    .spawn(move || {
+                        for sig in signals.forever() {
+                            handle_signal(match sig {
+                                SIGHUP => Signal::Hup,
+                                SIGINT => Signal::Int,
+                                SIGTERM => Signal::Term,
+                                SIGQUIT => Signal::Quit,
+                                _ => continue,
+                            });
+                        }
+                    });
+                match result {
+                    Ok(_) => Some(handle),
                     Err(e) => {
-                        log::error!("Cannot install signal handler for {sig2:?} with {e:?}");
+                        log::error!("Cannot start signal handling thread: {e:?}");
+                        None
                     }
                 }
             }
-        }
-
-        unsafe {
-            match register(SIGUSR2, || crate::system::sig_usr2()) {
-                Ok(s) => SIG_HANDLERS[5] = Some(s),
-                Err(_) => log::error!("Cannot install signal handler for SIGUSR2"),
+            Err(e) => {
+                log::error!("Cannot install signal handlers: {e:?}");
+                None
             }
+        };
+
+        let usr2 = unsafe { register(SIGUSR2, || crate::system::sig_usr2()) };
+        if usr2.is_err() {
+            log::error!("Cannot install signal handler for SIGUSR2");
         }
+        *SIG_HANDLERS.lock() = (handle, usr2.ok());
         true
     } else {
         false
@@ -198,14 +211,13 @@ pub(crate) fn start(sys: &System) -> bool {
 /// Unregister signal handler.
 pub(crate) fn stop(sys: &System) {
     if let Some(_registration) = unregister_system(sys) {
-        use signal_hook::low_level::unregister;
-
-        unsafe {
-            for sig in &mut SIG_HANDLERS {
-                if let Some(s) = sig.take() {
-                    let _ = unregister(s);
-                }
-            }
+        let (handle, usr2) = std::mem::take(&mut *SIG_HANDLERS.lock());
+        if let Some(handle) = handle {
+            // the thread exits and unregisters handlers
+            handle.close();
+        }
+        if let Some(usr2) = usr2 {
+            signal_hook::low_level::unregister(usr2);
         }
     }
 }
@@ -259,14 +271,7 @@ async fn signals(rx: oneshot::AsyncReceiver<()>) {
         } else {
             HND_WAKER.register(cx.waker());
 
-            let mut sigs = Vec::new();
-            unsafe {
-                for sig in &mut SIGS {
-                    if let Some(sig) = sig.take() {
-                        sigs.push(sig);
-                    }
-                }
-            }
+            let sigs = std::mem::take(&mut *SIGS.lock());
             if !sigs.is_empty() {
                 let sigs: Arc<[Signal]> = Arc::from(sigs);
 
@@ -298,7 +303,10 @@ extern "C" fn sig_segv(v: i32) {
         (signal::SIGSEGV, &PREV_SIGSEGV, "SIGSEGV")
     };
     eprintln!("{name} Received:\n{:?}", backtrace::Backtrace::new());
-    handle_signal(Signal::Panic(PanicSource::Sig(name)));
+    // best effort, waking the system is not signal-safe
+    if let Some(mut sigs) = SIGS.try_lock() {
+        sigs.push(Signal::Panic(PanicSource::Sig(name)));
+    }
 
     // restore the previous handler, it handles the signal raised again by
     // the faulting instruction or by `abort()`, otherwise the process never exits
@@ -407,6 +415,69 @@ mod tests {
             .filter(|enabled| *enabled)
             .count();
         assert_eq!(enabled, 1);
+        assert!(!is_enabled());
+    }
+
+    #[test]
+    fn signals_queued_from_many_threads() {
+        let _lock = LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    for _ in 0..25 {
+                        handle_signal(Signal::Hup);
+                    }
+                })
+            })
+            .collect();
+        let mut received = 0;
+        while received < 100 && !handles.iter().all(std::thread::JoinHandle::is_finished) {
+            received += std::mem::take(&mut *SIGS.lock()).len();
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        received += std::mem::take(&mut *SIGS.lock()).len();
+        assert_eq!(received, 100);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn os_signal_delivered() {
+        use std::time::Duration;
+
+        let _lock = LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        System::new("test", TestRunner).block_on(async {
+            let sys = System::current();
+            sys.enable_signals();
+            assert!(sys.signals());
+
+            let rx = signal();
+            // let the registration task run
+            futures_timer::Delay::new(Duration::from_millis(50)).await;
+            unsafe { libc::kill(libc::getpid(), libc::SIGHUP) };
+
+            let mut rx = std::pin::pin!(rx);
+            let mut timeout = std::pin::pin!(futures_timer::Delay::new(Duration::from_secs(5)));
+            let sigs = poll_fn(|cx| {
+                if let Poll::Ready(res) = rx.as_mut().poll(cx) {
+                    Poll::Ready(res.ok())
+                } else if timeout.as_mut().poll(cx).is_ready() {
+                    Poll::Ready(None)
+                } else {
+                    Poll::Pending
+                }
+            })
+            .await
+            .expect("signal delivered");
+            assert!(matches!(&*sigs, [Signal::Hup]));
+        });
         assert!(!is_enabled());
     }
 

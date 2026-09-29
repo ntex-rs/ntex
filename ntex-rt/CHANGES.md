@@ -2,6 +2,9 @@
 
 ## [4.0.0] - unreleased
 
+* Dispatch unix signals from a dedicated thread instead of the signal handler,
+  fix data race and lost signals in the signal queue
+
 * Capture stalled arbiter backtraces without locking or allocating in the
   SIGUSR2 handler
 
