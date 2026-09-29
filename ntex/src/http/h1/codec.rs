@@ -353,6 +353,40 @@ mod tests {
         assert!(!codec.keepalive());
     }
 
+    /// A `101` response body belongs to the new protocol, it is sent as is.
+    #[crate::rt_test]
+    async fn test_switching_protocols_body_is_not_framed() {
+        let cfg: SharedCfg = SharedCfg::new("DBG").add(HttpServiceConfig::new()).into();
+        for size in [BodySize::Sized(3), BodySize::Stream] {
+            // not an upgrade request, the body is not a stream
+            let codec = Codec::new(0, cfg.get());
+            let mut buf = BytesMut::from("GET / HTTP/1.1\r\nhost: a\r\n\r\n");
+            codec.decode(&mut buf).unwrap().unwrap();
+
+            let mut out = BytePages::default();
+            let res = Response::with_body(StatusCode::SWITCHING_PROTOCOLS, ());
+            codec.encode(Message::Item((res, size)), &mut out).unwrap();
+            for chunk in [&b"abc"[..], b"defg"] {
+                codec
+                    .encode(
+                        Message::Chunk(Some(Bytes::copy_from_slice(chunk))),
+                        &mut out,
+                    )
+                    .unwrap();
+            }
+            codec.encode(Message::Chunk(None), &mut out).unwrap();
+
+            let mut data = Vec::new();
+            while let Some(chunk) = out.take() {
+                data.extend_from_slice(&chunk);
+            }
+            let data = String::from_utf8(data).unwrap();
+            assert!(data.ends_with("\r\n\r\nabcdefg"), "{size:?}: {data:?}");
+            assert!(!data.contains("content-length"), "{size:?}: {data:?}");
+            assert!(!data.contains("transfer-encoding"), "{size:?}: {data:?}");
+        }
+    }
+
     #[crate::rt_test]
     async fn test_response_without_body_has_length() {
         use crate::http::{StatusCode, header};

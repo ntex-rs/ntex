@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+* HTTP/1 server keeps reading the request payload after the response is sent until the payload
+  completes, a payload that was still held by the application was decoded as the next request
+  once its first part was received
+
+* HTTP/1 response carries `connection: close` if the request payload was dropped unread while
+  the service was running, the connection was closed without announcing it
+
+* HTTP/1 `101 Switching Protocols` response body is sent without framing, a body of a response to
+  a request without upgrade was chunk encoded or cut at its length
+
 * HTTP/2 client stops sending the request body when the stream is reset or the connection closes,
   a streaming body that waited for data kept the upload task and the connection busy
 
