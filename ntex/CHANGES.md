@@ -11,7 +11,7 @@
 
 * HTTP/1 server rejects an asterisk-form request target for methods other than `OPTIONS`
 
-* HTTP/1 server rejects an authority-form request target for methods other than `CONNECT`
+* HTTP/1 server accepts an authority-form request target only for `CONNECT`, and requires it for `CONNECT`
 
 * `h1::Codec::upgrade()` is removed, use `Request::upgrade()` of the decoded request
 
