@@ -8,7 +8,7 @@ use encoding_rs::UTF_8;
 use mime::Mime;
 
 use crate::http::{HttpMessage, error, header};
-use crate::util::{BoxFuture, Bytes, BytesMut, Stream, stream_recv};
+use crate::util::{BoxFuture, Bytes, Stream};
 use crate::web::{FromRequest, HttpRequest, State, error::PayloadError};
 
 /// Payload extractor returns request's payload stream.
@@ -410,26 +410,20 @@ impl Future for HttpMessageBody {
             return Poll::Ready(Err(err));
         }
 
-        if let Some(len) = self.length.take()
+        if let Some(len) = self.length
             && len > self.limit
         {
             return Poll::Ready(Err(PayloadError::from(error::PayloadError::Overflow)));
         }
 
         // future
-        let limit = self.limit;
+        let (limit, length) = (self.limit, self.length);
         let mut stream = self.stream.take().unwrap();
         self.fut = Some(Box::pin(async move {
-            let mut body = BytesMut::with_capacity(8192);
-
-            while let Some(item) = stream_recv(&mut stream).await {
-                let chunk = item?;
-                if body.len() + chunk.len() > limit {
-                    return Err(PayloadError::from(error::PayloadError::Overflow));
-                }
-                body.extend_from_slice(&chunk);
-            }
-            Ok(body.freeze())
+            super::read_body(&mut stream, limit, length, |_| {
+                PayloadError::from(error::PayloadError::Overflow)
+            })
+            .await
         }));
         self.poll(cx)
     }
@@ -478,7 +472,7 @@ mod tests {
         let mut s = from_request::<_, Payload>(&(), &req, &mut pl)
             .await
             .unwrap();
-        let b = stream_recv(&mut s).await.unwrap().unwrap();
+        let b = crate::util::stream_recv(&mut s).await.unwrap().unwrap();
         assert_eq!(b, Bytes::from_static(b"hello=world"));
     }
 

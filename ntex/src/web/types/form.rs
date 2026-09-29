@@ -8,7 +8,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use crate::http::encoding::Decoder;
 use crate::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use crate::http::{HttpMessage, Payload, Response, StatusCode};
-use crate::util::{BoxFuture, BytesMut, stream_recv};
+use crate::util::BoxFuture;
 use crate::web::error::{UrlencodedError, WebResponseError};
 use crate::web::{FromRequest, HttpRequest, Responder, State};
 
@@ -292,8 +292,8 @@ where
         }
 
         // payload size
-        let limit = self.limit;
-        if let Some(len) = self.length.take()
+        let (limit, length) = (self.limit, self.length);
+        if let Some(len) = length
             && len > limit
         {
             return Poll::Ready(Err(UrlencodedError::Overflow { size: len, limit }));
@@ -304,18 +304,10 @@ where
         let mut stream = self.stream.take().unwrap();
 
         self.fut = Some(Box::pin(async move {
-            let mut body = BytesMut::with_capacity(8192);
-
-            while let Some(item) = stream_recv(&mut stream).await {
-                let chunk = item?;
-                if (body.len() + chunk.len()) > limit {
-                    return Err(UrlencodedError::Overflow {
-                        size: body.len() + chunk.len(),
-                        limit,
-                    });
-                }
-                body.extend_from_slice(&chunk);
-            }
+            let body = super::read_body(&mut stream, limit, length, |size| {
+                UrlencodedError::Overflow { size, limit }
+            })
+            .await?;
 
             if encoding == UTF_8 {
                 serde_urlencoded::from_bytes::<U>(&body).map_err(|_| UrlencodedError::Parse)

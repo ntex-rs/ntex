@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* `Bytes`, `String`, `Json` and `Form` extractors return a single-chunk body without copying
+  and size the buffer from `Content-Length` instead of a fixed 8 KiB allocation
+
 * HTTP/1 server keeps reading the request payload after the response is sent until the payload
   completes, a payload that was still held by the application was decoded as the next request
   once its first part was received
