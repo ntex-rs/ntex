@@ -2,6 +2,8 @@
 
 ## [4.0.0] - unreleased
 
+* Fix panic when signal handling is enabled again on Windows
+
 * Fix data race when task callbacks are set on another thread
 
 * Fix `RuntimeBuilder::event_interval()` values 0 and 1, and run up to

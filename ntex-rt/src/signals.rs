@@ -199,14 +199,30 @@ pub(crate) fn stop(sys: &System) {
 }
 
 #[cfg(target_family = "windows")]
+static CTRLC_ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(target_family = "windows")]
 /// Register signal handler.
 ///
 /// Signals are handled by oneshots, you have to re-register
 /// after each signal.
 pub(crate) fn start(sys: &System) {
+    use std::sync::atomic::Ordering;
+    static ONCE: std::sync::Once = std::sync::Once::new();
+
     if register_system(sys) {
-        ctrlc::set_handler(move || handle_signal(Signal::Int))
-            .expect("Error setting Ctrl-C handler");
+        // the handler cannot be removed, it ignores signals while disabled
+        ONCE.call_once(|| {
+            let result = ctrlc::set_handler(|| {
+                if CTRLC_ENABLED.load(Ordering::Acquire) {
+                    handle_signal(Signal::Int);
+                }
+            });
+            if let Err(e) = result {
+                log::error!("Cannot install Ctrl-C handler: {e:?}");
+            }
+        });
+        CTRLC_ENABLED.store(true, Ordering::Release);
     }
 }
 
@@ -214,6 +230,7 @@ pub(crate) fn start(sys: &System) {
 /// Unregister signal handler.
 pub(crate) fn stop(sys: &System) {
     if unregister_system(sys) {
+        CTRLC_ENABLED.store(false, std::sync::atomic::Ordering::Release);
         log::info!("Signals handling is disabled");
     }
 }
@@ -281,4 +298,57 @@ pub(crate) fn enable_panic_handling() {
 
         handle_signal(Signal::Panic(PanicSource::App(info, bt)));
     }));
+}
+
+#[cfg(all(test, target_family = "windows"))]
+mod tests {
+    use std::{any::Any, io};
+
+    use crate::{BlockFuture, Driver, Notify, PollResult, Runner, Runtime};
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct NoopNotify;
+
+    impl Notify for NoopNotify {
+        fn notify(&self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct BusyDriver;
+
+    impl Driver for BusyDriver {
+        fn handle(&self) -> Box<dyn crate::Notify> {
+            Box::new(NoopNotify)
+        }
+
+        fn run(&self, rt: &Runtime) -> io::Result<()> {
+            while rt.poll() != PollResult::Ready {}
+            Ok(())
+        }
+    }
+
+    struct TestRunner;
+
+    impl Runner for TestRunner {
+        fn block_on(&self, fut: BlockFuture) -> Result<(), Box<dyn Any + Send>> {
+            Runtime::new(Box::new(NoopNotify)).block_on(fut, &BusyDriver);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn reenable_signals() {
+        System::new("test", TestRunner).block_on(async {
+            let sys = System::current();
+            sys.enable_signals();
+            sys.disable_signals();
+            sys.enable_signals();
+            assert!(sys.signals());
+            sys.disable_signals();
+            assert!(!sys.signals());
+        });
+    }
 }
