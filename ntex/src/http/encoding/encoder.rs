@@ -70,6 +70,13 @@ impl<B: MessageBody> Encoder<B> {
     }
 }
 
+impl Encoder<()> {
+    /// Returns true if the encoder can produce `encoding`.
+    pub(crate) fn can_encode(encoding: ContentEncoding) -> bool {
+        ContentEncoder::can_encode(encoding)
+    }
+}
+
 impl<B: fmt::Debug> fmt::Debug for Encoder<B> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Encoder")

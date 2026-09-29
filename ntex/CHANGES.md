@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* `Compress::default()` negotiates only encodings the encoder supports, a browser
+  `Accept-Encoding` listing `br` selected brotli and the response was sent uncompressed
+
 * `Bytes`, `String`, `Json` and `Form` extractors return a single-chunk body without copying
   and size the buffer from `Content-Length` instead of a fixed 8 KiB allocation
 

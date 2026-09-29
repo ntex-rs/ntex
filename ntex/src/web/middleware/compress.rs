@@ -158,7 +158,9 @@ impl AcceptEncoding {
 
         for enc in encodings.into_iter().flatten() {
             if encoding == ContentEncoding::Auto {
-                return enc.encoding;
+                if Encoder::can_encode(enc.encoding) {
+                    return enc.encoding;
+                }
             } else if encoding == enc.encoding {
                 return encoding;
             }
@@ -230,6 +232,24 @@ mod tests {
     fn test_accepting_encoding_from_tag_with_valid_quality() {
         let accepting_encoding = AcceptEncoding::new("gzip;0.8").unwrap();
         assert_eq!(accepting_encoding.quality, 0.8);
+    }
+
+    #[test]
+    fn test_auto_skips_unsupported_encodings() {
+        let auto = ContentEncoding::Auto;
+        assert_eq!(
+            AcceptEncoding::parse("gzip, deflate, br, zstd", auto),
+            ContentEncoding::Gzip
+        );
+        assert_eq!(
+            AcceptEncoding::parse("br, deflate", auto),
+            ContentEncoding::Deflate
+        );
+        assert_eq!(AcceptEncoding::parse("br", auto), ContentEncoding::Identity);
+        assert_eq!(
+            AcceptEncoding::parse("gzip, br", ContentEncoding::Br),
+            ContentEncoding::Br
+        );
     }
 
     #[test]

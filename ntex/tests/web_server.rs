@@ -147,6 +147,31 @@ async fn test_body_gzip2() {
 }
 
 #[ntex::test]
+async fn test_body_auto_skips_brotli() {
+    let srv = test::server_with(test::config().h1(), async |_| {
+        App::new()
+            .middleware(Compress::default())
+            .service(web::resource("/").route(web::to(async || HttpResponse::Ok().body(STR))))
+    });
+
+    let response = srv
+        .get("/")
+        .no_decompress()
+        .header(ACCEPT_ENCODING, "gzip, deflate, br, zstd")
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    assert_eq!(response.headers().get(CONTENT_ENCODING).unwrap(), "gzip");
+
+    let bytes = response.body().await.unwrap();
+    let mut e = GzDecoder::new(&bytes[..]);
+    let mut dec = Vec::new();
+    e.read_to_end(&mut dec).unwrap();
+    assert_eq!(Bytes::from(dec), Bytes::from_static(STR.as_ref()));
+}
+
+#[ntex::test]
 async fn test_body_encoding_override() {
     let srv = test::server_with(test::config().h1(), async |_| {
         App::new()
