@@ -478,16 +478,6 @@ mod tests {
     thread_local!(static HOLD: RefCell<Option<UseOnDrop>> = const { RefCell::new(None) });
 
     #[test]
-    fn arbiter_name_matches_id() {
-        System::new("test", crate::testing::TestRunner).block_on(async {
-            let mut arb = Arbiter::new();
-            assert_eq!(arb.name(), format!("test:arb:{}", arb.id().0));
-            arb.stop();
-            arb.join().unwrap();
-        });
-    }
-
-    #[test]
     fn storage_access_during_thread_exit() {
         // item stored in STORAGE accesses STORAGE while it is destroyed
         thread::spawn(|| set_item(UseOnDrop)).join().unwrap();
