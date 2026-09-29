@@ -2,6 +2,9 @@
 
 ## [4.0.0] - unreleased
 
+* Fix `RuntimeBuilder::event_interval()` values 0 and 1, and run up to
+  `event_interval` tasks from the overflow queue of remote tasks
+
 * Fix undefined behavior when a task schedules another task while the task
   queue is run or cleared, tasks woken during shutdown are dropped as well
 

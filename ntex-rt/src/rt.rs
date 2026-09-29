@@ -247,19 +247,15 @@ impl RunnableQueue {
             Err(_) => true,
         };
 
-        let mut idx = self.event_interval;
-        let sync_queue = loop {
-            idx -= 1;
-            if idx == 0 {
-                break true;
+        let sync_queue = {
+            for _ in 0..self.event_interval {
+                if let Some(task) = self.sync_queue.pop() {
+                    task.run();
+                } else {
+                    break;
+                }
             }
-            if !self.sync_queue.is_empty()
-                && let Some(task) = self.sync_queue.pop()
-            {
-                task.run();
-            } else {
-                break false;
-            }
+            !self.sync_queue.is_empty()
         };
 
         let more_tasks = local_queue || sync_queue_fixed || sync_queue;
@@ -305,8 +301,9 @@ impl RuntimeBuilder {
     /// for external events (timers, I/O, and so on).
     ///
     /// A scheduler “tick” roughly corresponds to one poll invocation on a task.
+    /// Values below 1 are treated as 1.
     pub fn event_interval(&mut self, val: usize) -> &mut Self {
-        self.event_interval = val;
+        self.event_interval = val.max(1);
         self
     }
 
@@ -355,6 +352,46 @@ mod tests {
         .detach();
         CURRENT_RUNTIME.set(&rt, || while rt.poll() == PollResult::PollAgain {});
         assert_eq!(*done.borrow(), 1);
+    }
+
+    #[test]
+    fn event_interval() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        for val in [0, 1] {
+            let rt = Runtime::builder()
+                .event_interval(val)
+                .build(Box::new(NoopNotify));
+            assert_eq!(rt.poll(), PollResult::Pending);
+
+            rt.spawn(async {}).detach();
+            rt.spawn(async {}).detach();
+            assert_eq!(rt.poll(), PollResult::PollAgain);
+            assert_eq!(rt.poll(), PollResult::Pending);
+        }
+
+        // tasks scheduled from other threads overflow the fixed queue
+        let rt = Runtime::builder()
+            .event_interval(1)
+            .build(Box::new(NoopNotify));
+        let cnt = Arc::new(AtomicUsize::new(0));
+        let hnd = rt.handle();
+        let cnt2 = cnt.clone();
+        std::thread::spawn(move || {
+            for _ in 0..130 {
+                let cnt = cnt2.clone();
+                hnd.spawn(async move {
+                    cnt.fetch_add(1, Ordering::Relaxed);
+                })
+                .detach();
+            }
+        })
+        .join()
+        .unwrap();
+        assert_eq!(rt.poll(), PollResult::PollAgain);
+        assert_eq!(cnt.load(Ordering::Relaxed), 129);
+        assert_eq!(rt.poll(), PollResult::Pending);
+        assert_eq!(cnt.load(Ordering::Relaxed), 130);
     }
 
     #[test]
