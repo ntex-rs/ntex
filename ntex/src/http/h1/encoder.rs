@@ -233,6 +233,12 @@ impl<T: MessageType> MessageEncoder<T> {
         result
     }
 
+    /// Returns `true` if the message body accepts no more data, a body
+    /// with a declared length is complete or the message has no body.
+    pub(crate) fn is_body_complete(&self) -> bool {
+        self.te.get().kind == TransferEncodingKind::Length(0)
+    }
+
     pub(crate) fn encode(
         &self,
         dst: &mut BytePages,

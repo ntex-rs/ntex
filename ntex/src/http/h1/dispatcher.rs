@@ -423,9 +423,12 @@ where
             None => (),
         }
         loop {
-            if let Err(err) = ready!(self.poll_flush_timed(cx))
-                && err.kind() == io::ErrorKind::TimedOut
-            {
+            // encoding is a no-op once the transport is closing, the body
+            // would be polled without write backpressure
+            if !self.io.is_active() {
+                return Poll::Ready(self.ctl_peer_gone(None));
+            }
+            if let Err(err) = ready!(self.poll_flush_timed(cx)) {
                 return Poll::Ready(self.ctl_peer_gone(Some(err)));
             }
             let Poll::Ready(item) = body.poll_next_chunk(cx) else {
@@ -444,6 +447,12 @@ where
             };
 
             let st = match item {
+                // the declared length is sent or the response has no body,
+                // the body is not polled further
+                Some(Ok(_)) if self.codec.is_body_complete() => {
+                    log::trace!("{}: Response body exceeds its length", self.io.tag());
+                    self.response_done()
+                }
                 Some(Ok(item)) => {
                     log::trace!("{}: Got response chunk: {:?}", self.io.tag(), item.len());
                     match self.io.encode(Message::Chunk(Some(item)), &self.codec) {
@@ -3240,6 +3249,62 @@ mod tests {
                 assert!(dropped.get(), "{case}");
                 assert!(client.is_server_dropped(), "{case}");
             }
+        }
+    }
+
+    /// A response body is not polled after its declared length is sent, or
+    /// for a response without a body.
+    #[crate::rt_test]
+    async fn test_body_not_polled_after_length() {
+        struct Stream(Rc<Cell<usize>>, body::BodySize);
+        impl body::MessageBody for Stream {
+            fn size(&self) -> body::BodySize {
+                self.1
+            }
+            fn poll_next_chunk(
+                &mut self,
+                _: &mut Context<'_>,
+            ) -> Poll<Option<Result<Bytes, Rc<dyn error::Error>>>> {
+                self.0.set(self.0.get() + 1);
+                if self.0.get() > 10_000 {
+                    Poll::Ready(None)
+                } else {
+                    Poll::Ready(Some(Ok(Bytes::from_static(b"data"))))
+                }
+            }
+        }
+
+        for (method, size, polls) in [
+            ("GET", body::BodySize::Sized(6), 3),
+            ("HEAD", body::BodySize::Sized(6), 1),
+            ("HEAD", body::BodySize::Stream, 1),
+        ] {
+            let (client, server) = IoTest::create();
+            client.remote_buffer_cap(1024 * 1024);
+            let count = Rc::new(Cell::new(0));
+            let count2 = count.clone();
+            spawn_h1(server, move |_| {
+                let c = count2.clone();
+                async move { Ok::<_, io::Error>(Response::Ok().message_body(Stream(c, size))) }
+            });
+
+            let req = format!("{method} /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
+            client.write(&req);
+            sleep(Millis(50)).await;
+            let case = format!("{method} {size:?}");
+            assert_eq!(count.get(), polls, "{case}");
+            let buf = client.read_any();
+            if method == "GET" {
+                assert!(buf.ends_with(b"\r\n\r\ndatada"), "{case} {buf:?}");
+            } else {
+                assert!(buf.ends_with(b"\r\n\r\n"), "{case} {buf:?}");
+            }
+
+            // the connection stays persistent
+            client.write(&req);
+            sleep(Millis(50)).await;
+            assert_eq!(count.get(), polls * 2, "{case}");
+            assert!(!client.is_server_dropped(), "{case}");
         }
     }
 
