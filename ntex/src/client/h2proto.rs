@@ -47,7 +47,6 @@ async fn send_request_inner(
         )
     };
 
-
     let mut hdrs = h2_headers(&req);
 
     // Content length
@@ -111,20 +110,19 @@ static TRAILERS: HeaderValue = HeaderValue::from_static("trailers");
 fn h2_headers(req: &ClientRawRequest) -> HeaderMap {
     let empty = HeaderMap::new();
     let extra_headers = req.headers.as_ref().unwrap_or(&empty);
-    req.head
+    let mut hdrs = HeaderMap::new();
+    for (name, value) in req
+        .head
         .headers
         .iter()
         .filter(|(name, _)| !extra_headers.contains_key(*name))
         .chain(extra_headers.iter())
         .filter(|(name, value)| is_h2_header(name, value))
-        .map(|(name, value)| {
-            if *name == header::TE {
-                (name, &TRAILERS)
-            } else {
-                (name, value)
-            }
-        })
-        .collect()
+    {
+        let value = if *name == header::TE { &TRAILERS } else { value };
+        hdrs.append(name.clone(), value.clone());
+    }
+    hdrs
 }
 
 /// Returns `false` for connection-specific header fields, they are not used by
