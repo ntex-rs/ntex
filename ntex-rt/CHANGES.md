@@ -2,6 +2,9 @@
 
 ## [4.0.0] - unreleased
 
+* Capture stalled arbiter backtraces without locking or allocating in the
+  SIGUSR2 handler
+
 * Make `System::set_latency_callback()` thread-safe, the callback must be
   `Send + Sync`
 

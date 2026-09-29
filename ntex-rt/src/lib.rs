@@ -21,6 +21,8 @@
 
 mod arbiter;
 mod builder;
+#[cfg(target_os = "linux")]
+mod capture;
 mod driver;
 mod handle;
 mod pool;

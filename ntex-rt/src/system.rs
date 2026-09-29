@@ -9,6 +9,8 @@ use futures_timer::Delay;
 use parking_lot::{Mutex, RwLock};
 
 use crate::arbiter::Arbiter;
+#[cfg(target_os = "linux")]
+use crate::capture::CAPTURE;
 use crate::pool::ThreadPool;
 use crate::{BlockingResult, Builder, Handle, HashMap, HashSet, Runner, SystemRunner};
 
@@ -514,8 +516,10 @@ async fn ping_arbiters(sys: System) {
                 log::error!("Arbiter {}({:?}) did not return pong", arb.name(), arb.id());
 
                 // send tgkill to thread id to capture backtrace
-                *CAPTURED.lock() = None;
-                EXPECTED_TID.store(arb.tid(), Ordering::Release);
+                let tid = arb.tid();
+                if !CAPTURE.arm(tid) {
+                    continue;
+                }
                 let result = unsafe {
                     libc::syscall(libc::SYS_tgkill, libc::getpid(), arb.tid(), libc::SIGUSR2)
                 };
@@ -531,7 +535,7 @@ async fn ping_arbiters(sys: System) {
                     // Spin
                     for _ in 0..1000 {
                         Delay::new(SPIN).await;
-                        if let Some(bt) = CAPTURED.lock().take() {
+                        if let Some(bt) = CAPTURE.take(tid) {
                             let bt = ntex_error::Backtrace::from(bt);
                             if let Some(f) = latency_callback() {
                                 f(bt);
@@ -545,6 +549,7 @@ async fn ping_arbiters(sys: System) {
                         }
                     }
                 }
+                CAPTURE.disarm(tid);
             }
         }
     }
@@ -584,11 +589,6 @@ fn latency_callback() -> Option<Arc<dyn Fn(ntex_error::Backtrace) + Send + Sync>
     ARB_CB.lock().clone()
 }
 
-#[cfg(target_os = "linux")]
-static EXPECTED_TID: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
-#[cfg(target_os = "linux")]
-static CAPTURED: Mutex<Option<ntex_error::BacktraceRaw>> = Mutex::new(None);
-
 #[track_caller]
 #[cfg(target_family = "unix")]
 pub(crate) fn sig_usr2() {
@@ -596,12 +596,7 @@ pub(crate) fn sig_usr2() {
     #[allow(clippy::cast_possible_truncation)]
     {
         let tid = unsafe { libc::syscall(libc::SYS_gettid) } as i32;
-        if EXPECTED_TID.load(Ordering::Acquire) == tid {
-            // backtrace::Backtrace::new_unresolved uses libunwind frame walking,
-            // which is signal-safe. Symbol resolution is NOT — do it later.
-            let bt = ntex_error::BacktraceRaw::new(panic::Location::caller());
-            *CAPTURED.lock() = Some(bt);
-        }
+        CAPTURE.capture(tid, panic::Location::caller().file());
     }
 }
 

@@ -1,5 +1,9 @@
 # Changes
 
+## [2.7.0] - unreleased
+
+* Add BacktraceRaw::with_filename_unsynchronized() for signal handlers
+
 ## [2.6.0] - 2026-09-07
 
 * Introduce IntoFailure trait
