@@ -2,6 +2,9 @@
 
 ## [4.0.0] - unreleased
 
+* Fix undefined behavior when a task schedules another task while the task
+  queue is run or cleared, tasks woken during shutdown are dropped as well
+
 * compio: `spawn()` drops the future while the runtime shuts down, a task that
   spawned from its destructor corrupted the task queue being cleared
 
