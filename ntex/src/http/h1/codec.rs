@@ -125,6 +125,11 @@ impl Codec {
         self.decoder.is_reading_hdrs()
     }
 
+    /// Returns `true` if the response body accepts no more data.
+    pub(super) fn is_body_complete(&self) -> bool {
+        self.encoder.is_body_complete()
+    }
+
     #[inline]
     /// Returns whether the current HTTP connection state is persistent.
     ///

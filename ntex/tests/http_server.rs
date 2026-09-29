@@ -1257,3 +1257,56 @@ async fn test_h1_unsupported_transfer_coding() {
     let n = stream.read(&mut data).unwrap();
     assert!(data[..n].starts_with(b"HTTP/1.1 400"), "{:?}", &data[..n]);
 }
+
+/// A failed transport write stops polling an always ready response body.
+#[ntex::test]
+async fn test_h1_body_not_polled_after_peer_reset() {
+    use std::task::{Context, Poll};
+
+    static DATA: [u8; 16 * 1024] = [b'a'; 16 * 1024];
+    const MAX_POLLS: usize = 5_000_000;
+
+    struct Stream(Arc<AtomicUsize>);
+    impl body::MessageBody for Stream {
+        fn size(&self) -> body::BodySize {
+            body::BodySize::Stream
+        }
+        fn poll_next_chunk(
+            &mut self,
+            _: &mut Context<'_>,
+        ) -> Poll<Option<Result<Bytes, std::rc::Rc<dyn std::error::Error>>>> {
+            if self.0.fetch_add(1, Ordering::Relaxed) >= MAX_POLLS {
+                Poll::Ready(None)
+            } else {
+                Poll::Ready(Some(Ok(Bytes::from_static(&DATA))))
+            }
+        }
+    }
+
+    let polls = Arc::new(AtomicUsize::new(0));
+    let polls2 = polls.clone();
+    let srv = test_server(async move |_| {
+        let polls = polls2.clone();
+        HttpService::h1(move |_: Request| {
+            let body = body::Body::from_message(Stream(polls.clone()));
+            async move { Ok::<_, io::Error>(Response::Ok().body(body)) }
+        })
+    });
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let _ = stream.write_all(b"GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
+    let mut data = vec![0; 64 * 1024];
+    let mut total = 0;
+    while total < 16 * 1024 * 1024 {
+        total += stream.read(&mut data).unwrap();
+    }
+    // closing with unread data resets the connection
+    drop(stream);
+
+    sleep(Millis(300)).await;
+    let polls1 = polls.load(Ordering::Relaxed);
+    sleep(Millis(300)).await;
+    let polls2 = polls.load(Ordering::Relaxed);
+    assert_eq!(polls1, polls2);
+    assert!(polls2 < MAX_POLLS, "{polls2}");
+}

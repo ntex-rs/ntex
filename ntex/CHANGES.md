@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+* HTTP/1 dispatcher stops polling a response body once the connection is closed or failed,
+  an always ready body was polled without bound and its chunks discarded
+
+* HTTP/1 dispatcher stops polling a response body once its declared length is sent or the
+  response has no body, such as a `HEAD` response, the rest of the body was polled and discarded
+
 * Response body encoder stops after the end of the body stream, an empty final chunk left it
   unfused and the next poll went back to the finished body
 
