@@ -325,7 +325,7 @@ impl IoContext {
                         // peer pings, must not grow without bound while the
                         // peer does not read. Reads pause until it drains or
                         // the dispatcher asks for more input.
-                        if st.is_wr_backpressure_needed(st.write_outstanding()) {
+                        if st.is_wr_backpressure_needed(st.transport_outstanding()) {
                             log::trace!("{}: Write buf is full, pause reading", st.tag());
                             st.flags.set_read_wr_backpressure();
                         }
@@ -450,7 +450,7 @@ impl IoContext {
 
                 // Reads paused by their own output resume once it drains
                 if st.flags.is_read_wr_backpressure()
-                    && st.should_disable_wr_backpressure(outstanding)
+                    && st.should_disable_wr_backpressure(st.transport_outstanding())
                 {
                     st.flags.unset_read_wr_backpressure();
                     st.wake_read_task();
