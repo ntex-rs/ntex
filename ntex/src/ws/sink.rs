@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use crate::codec::{Decoder, Encoder};
 use crate::util::{BytePages, BytesMut};
-use crate::{Cfg, io::IoRef, io::OnDisconnect, rt, time::sleep, util::select, ws};
+use crate::{Cfg, io::IoRef, io::Waiter, rt, time::sleep, util::select, ws};
 
 #[derive(Clone, Debug)]
 /// A clonable handle for sending messages over a WebSocket connection.
@@ -84,7 +84,7 @@ impl WsSink {
     }
 
     /// Returns a future that resolves when the connection is disconnected.
-    pub fn on_disconnect(&self) -> OnDisconnect {
+    pub fn on_disconnect(&self) -> Waiter<'static> {
         self.0.io.on_disconnect()
     }
 }

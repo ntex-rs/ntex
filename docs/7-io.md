@@ -479,7 +479,7 @@ requires attention. [`Io::poll_status_update`] reports the next status as an
 
 The same conditions reach a codec-driven service as [`RecvError`] from
 [`Io::poll_recv`], which additionally reports decoder failures. Code that only
-needs to be woken when the connection goes away can await the [`OnDisconnect`]
+needs to be woken when the connection goes away can await the [`Waiter`]
 future returned by [`IoRef::on_disconnect`], and [`IoRef::is_closed`] reports
 whether shutdown has already started.
 
@@ -521,9 +521,9 @@ Either way the transport observes the end of the connection as
 [`IoRef::on_disconnect`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.on_disconnect
 [`IoRef::terminate`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.terminate
 [`IoStatusUpdate`]: https://docs.rs/ntex/latest/ntex/io/enum.IoStatusUpdate.html
-[`OnDisconnect`]: https://docs.rs/ntex/latest/ntex/io/struct.OnDisconnect.html
 [`Readiness::Close`]: https://docs.rs/ntex/latest/ntex/io/enum.Readiness.html#variant.Close
 [`RecvError`]: https://docs.rs/ntex/latest/ntex/io/enum.RecvError.html
+[`Waiter`]: https://docs.rs/ntex/latest/ntex/io/struct.Waiter.html
 
 ## Testing
 

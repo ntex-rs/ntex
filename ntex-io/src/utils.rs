@@ -1,11 +1,9 @@
-use std::{cell::Cell, task::Poll, task::Waker};
+use std::cell::Cell;
+use std::task::{Poll, Waker};
 
 use ntex_service::state::{RequestState, State};
-use ntex_util::{
-    channel::condition::{Condition, Waiter},
-    task::LocalWaker,
-};
 
+use crate::waiters::{WaiterEntry, Waiters};
 use crate::{Filter, Io, IoBoxed, IoCallbacks};
 
 /// Result of a single decode attempt.
@@ -23,10 +21,8 @@ pub(crate) struct Extensions(Cell<Option<Box<ExtensionsInner>>>);
 
 #[derive(Default)]
 pub(crate) struct ExtensionsInner {
-    // tasks waiting for the connection disconnect, indexed by registration token
-    disconnect: Option<Vec<LocalWaker>>,
-    // tasks waiting for the write back-pressure release
-    wr_waiters: Option<Condition>,
+    // tasks waiting for io events, by tag
+    waiters: Waiters,
     // filter callbacks registered for io events
     pub(crate) callbacks: Option<Box<dyn IoCallbacks>>,
 }
@@ -62,50 +58,58 @@ impl Extensions {
         }
     }
 
-    pub(super) fn notify_disconnect(&self) {
-        self.with_opt(|inner| {
-            if let Some(disconnect) = inner.disconnect.take() {
-                for item in disconnect {
-                    item.wake();
+    /// Registers the waker of the waiter, a woken waiter gets a new entry.
+    pub(super) fn register_waker(&self, waiter: &WaiterEntry, waker: &Waker) {
+        self.with(|inner| {
+            let waiters = &mut inner.waiters;
+            if !waiter.id.get().is_some_and(|id| waiters.update(id, waker)) {
+                waiter.id.set(Some(waiters.register(waiter.tag, waker)));
+            }
+        });
+    }
+
+    /// Registers the waiter, or reports that its registration was woken.
+    ///
+    /// A reported wake clears the registration, the next poll registers again.
+    pub(super) fn poll_waker(&self, waiter: &WaiterEntry, waker: &Waker) -> Poll<()> {
+        self.with(|inner| {
+            let waiters = &mut inner.waiters;
+            match waiter.id.get() {
+                None => {
+                    waiter.id.set(Some(waiters.register(waiter.tag, waker)));
+                    Poll::Pending
+                }
+                Some(id) if waiters.update(id, waker) => Poll::Pending,
+                Some(_) => {
+                    waiter.id.set(None);
+                    Poll::Ready(())
                 }
             }
-        });
-    }
-
-    pub(super) fn register_disconnect(&self) -> usize {
-        self.with(|inner| {
-            if let Some(ref mut disconnect) = inner.disconnect {
-                let token = disconnect.len();
-                disconnect.push(LocalWaker::default());
-                token
-            } else {
-                inner.disconnect = Some(vec![LocalWaker::default()]);
-                0
-            }
         })
     }
 
-    pub(super) fn poll_disconnect(&self, token: usize, waker: &Waker) -> Poll<()> {
-        self.with(|inner| {
-            if let Some(ref mut disconnect) = inner.disconnect {
-                disconnect[token].register(waker);
-                Poll::Pending
-            } else {
-                Poll::Ready(())
-            }
-        })
+    /// Removes the waiter entry unless it is woken.
+    pub(super) fn remove_waker(&self, waiter: &WaiterEntry) {
+        if let Some(id) = waiter.id.take() {
+            self.with_opt(|inner| inner.waiters.remove(id, waiter.tag));
+        }
     }
 
-    pub(super) fn write_waiter(&self) -> Waiter {
-        self.with(|inner| inner.wr_waiters.get_or_insert_with(Condition::new).wait())
+    /// Wakes and removes all wakers of the tag.
+    pub(super) fn wake(&self, tag: usize) {
+        self.with_opt(|inner| inner.waiters.wake(tag));
     }
 
-    pub(super) fn notify_write_waiters(&self) {
-        self.with_opt(|inner| {
-            if let Some(ref waiters) = inner.wr_waiters {
-                waiters.notify(());
-            }
-        });
+    /// Wakes and removes all wakers.
+    pub(super) fn wake_all(&self) {
+        self.with_opt(|inner| inner.waiters.wake_all());
+    }
+
+    #[cfg(test)]
+    pub(super) fn wakers_len(&self) -> usize {
+        let mut len = 0;
+        self.with_opt(|inner| len = inner.waiters.len());
+        len
     }
 
     pub(super) fn register_filter_callbacks<T: IoCallbacks + 'static>(&self, cb: T) {

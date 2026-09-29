@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+* `ws::WsSink::on_disconnect()` returns `io::Waiter<'static>`, `io::OnDisconnect` is removed
+
 * WebSocket client handshake errors carry the client's service name, before it was only set on
   configuration errors
 

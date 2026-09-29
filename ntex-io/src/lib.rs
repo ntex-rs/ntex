@@ -32,6 +32,7 @@ mod macros;
 mod ops;
 mod seal;
 mod utils;
+mod waiters;
 
 use ntex_codec::Decoder;
 
@@ -40,10 +41,11 @@ pub use self::cfg::IoConfig;
 pub use self::ctx::IoContext;
 pub use self::filter::{Base, Filter, Layer};
 pub use self::framed::Framed;
-pub use self::io::{Io, IoRef, OnDisconnect};
+pub use self::io::{Io, IoRef};
 pub use self::ops::{Id, TimerHandle};
 pub use self::seal::{IoBoxed, Sealed};
 pub use self::utils::Decoded;
+pub use self::waiters::Waiter;
 
 #[doc(hidden)]
 pub use self::flags::Flags;
