@@ -2,6 +2,9 @@
 
 ## [4.1.0] - Unreleased
 
+* The read buffer cache checks only the most recently released buffer instead of
+  scanning the whole cache for one that fits
+
 * `Io::send()`, `Io::flush()` and `IoRef::write_ready()` are bounded by
   `IoConfig::write_timeout()` and fail with `TimedOut` when it expires
 

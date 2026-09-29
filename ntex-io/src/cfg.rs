@@ -532,9 +532,10 @@ impl BufConfig {
     #[inline]
     /// Acquires an empty buffer from the thread-local cache.
     ///
-    /// Returns the most recently released buffer that is eligible for this
-    /// configuration, see [`release`](Self::release). If there is none,
-    /// allocates a buffer with capacity `high`.
+    /// Returns the most recently released buffer if it is eligible for this
+    /// configuration, see [`release`](Self::release). Otherwise, including
+    /// when older cached buffers would be eligible, allocates a buffer with
+    /// capacity `high`.
     pub fn get(&self) -> BytesMut {
         if let Some(buf) = CACHE.with(|c| c.get(self)) {
             buf
@@ -648,8 +649,10 @@ impl LocalCache {
     fn get(&self, cfg: &BufConfig) -> Option<BytesMut> {
         // SAFETY: the cache is thread-local and never borrowed across calls
         let bufs = unsafe { &mut *self.bufs.get() };
-        let pos = bufs.iter().rposition(|b| cfg.is_cacheable(b.capacity()))?;
-        let buf = bufs.remove(pos)?;
+        if !cfg.is_cacheable(bufs.back()?.capacity()) {
+            return None;
+        }
+        let buf = bufs.pop_back()?;
         self.size.set(self.size.get() - buf.capacity());
         Some(buf)
     }
@@ -789,6 +792,30 @@ mod tests {
         assert_ne!(buf.as_ptr(), ptr);
         assert_eq!(b.get().as_ptr(), ptr);
         drop(buf);
+    }
+
+    #[test]
+    fn cache_checks_only_newest_buffer() {
+        CACHE.with(LocalCache::clear);
+        let cfg = *IoConfig::new().set_read_buf(DEFAULT_HIGH, 8192).read_buf();
+        let small = *IoConfig::new().set_read_buf(4096, 512).read_buf();
+
+        let old = cfg.get();
+        let old_ptr = old.as_ptr();
+        cfg.release(old);
+        let new = small.get();
+        let new_ptr = new.as_ptr();
+        small.release(new);
+
+        // the newest buffer does not fit, older ones are not searched
+        let buf = cfg.get();
+        assert_ne!(buf.as_ptr(), old_ptr);
+        assert_ne!(buf.as_ptr(), new_ptr);
+        drop(buf);
+
+        assert_eq!(small.get().as_ptr(), new_ptr);
+        assert_eq!(cfg.get().as_ptr(), old_ptr);
+        assert_eq!(CACHE.with(|c| c.size.get()), 0);
     }
 
     #[test]

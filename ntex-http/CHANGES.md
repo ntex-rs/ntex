@@ -10,8 +10,6 @@
 
 * InvalidHeaderValue derives Debug and ToStrError derives thiserror::Error, like the other error types
 
-* HeaderMap can be collected from String header values
-
 ## [1.2.0] - 2026-05-02
 
 * Add BytePages support to Body
