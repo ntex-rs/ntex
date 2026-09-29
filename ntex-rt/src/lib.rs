@@ -21,12 +21,16 @@
 
 mod arbiter;
 mod builder;
+#[cfg(target_os = "linux")]
+mod capture;
 mod driver;
 mod handle;
 mod pool;
 pub mod signals;
 mod system;
 mod task;
+#[cfg(test)]
+mod testing;
 
 mod rt;
 pub mod rt_default;

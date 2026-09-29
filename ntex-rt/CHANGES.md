@@ -2,6 +2,45 @@
 
 ## [4.0.0] - unreleased
 
+* Drop ping records of stopped arbiters, record late pongs in their own round
+
+* Fix blocking pool exceeding its thread limit, blocking the caller, panicking
+  when a thread cannot be started and stranding tasks when idle workers exit
+
+* Panic handling calls the previous panic hook, the hook is installed once and
+  delivers `Signal::Panic` only while signal handling is enabled
+
+* Dispatch unix signals from a dedicated thread instead of the signal handler,
+  fix data race and lost signals in the signal queue
+
+* Capture stalled arbiter backtraces without locking or allocating in the
+  SIGUSR2 handler
+
+* Make `System::set_latency_callback()` thread-safe, the callback must be
+  `Send + Sync`
+
+* Fix data race when signal handling is enabled or disabled by systems on
+  different threads
+
+* Release signal handling when a system stops, so a later system can handle
+  signals, `System::enable_signals()` has no effect while another system
+  handles signals
+
+* Fix `Arbiter::new()` name not matching the arbiter id
+
+* Fix endless loop after `SIGSEGV` when signal handling is enabled, the previous
+  handler is restored after the signal is reported
+
+* Fix panic when signal handling is enabled again on Windows
+
+* Fix data race when task callbacks are set on another thread
+
+* Fix `RuntimeBuilder::event_interval()` values 0 and 1, and run up to
+  `event_interval` tasks from the overflow queue of remote tasks
+
+* Fix undefined behavior when a task schedules another task while the task
+  queue is run or cleared, tasks woken during shutdown are dropped as well
+
 * compio: `spawn()` drops the future while the runtime shuts down, a task that
   spawned from its destructor corrupted the task queue being cleared
 

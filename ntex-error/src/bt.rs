@@ -75,11 +75,33 @@ impl BacktraceRaw {
 
     /// Create new backtrace with filename location
     pub fn with_filename(location: &'static str) -> Self {
+        Self::capture(location, |cb| backtrace::trace(cb))
+    }
+
+    #[doc(hidden)]
+    /// Create new backtrace without acquiring the global backtrace lock.
+    ///
+    /// Does not allocate or lock, so it can be used from a signal handler
+    /// (subject to the platform unwinder being signal-safe).
+    ///
+    /// # Safety
+    ///
+    /// Same requirements as [`backtrace::trace_unsynchronized`].
+    pub unsafe fn with_filename_unsynchronized(location: &'static str) -> Self {
+        Self::capture(location, |cb| unsafe {
+            backtrace::trace_unsynchronized(cb);
+        })
+    }
+
+    fn capture<F>(location: &'static str, trace: F) -> Self
+    where
+        F: FnOnce(&mut dyn FnMut(&Frame) -> bool),
+    {
         let mut st = foldhash::fast::FixedState::default().build_hasher();
         let mut idx = 0;
         let mut frames: [Option<Frame>; 80] = [const { None }; 80];
 
-        backtrace::trace(|frm| {
+        trace(&mut |frm| {
             let ip = frm.ip();
             st.write_usize(ip as usize);
             frames[idx] = Some(frm.clone());

@@ -224,9 +224,8 @@ impl HeaderMap {
     /// Returns a view of all values associated with a key.
     ///
     /// The returned view does not incur any allocations and allows iterating
-    /// the values associated with the key.  See [`GetAll`] for more details.
-    /// Returns `None` if there are no values associated with the key.
-    ///
+    /// the values associated with the key. The iterator is empty if there are
+    /// no values associated with the key.
     pub fn get_all<N: AsName>(&self, name: N) -> GetAll<'_> {
         GetAll {
             idx: 0,
@@ -237,7 +236,7 @@ impl HeaderMap {
     /// Returns a mutable reference to the value associated with the key.
     ///
     /// If there are multiple values associated with the key, then the first one
-    /// is returned. Use `entry` to get all values associated with a given
+    /// is returned. Use `get_all` to get all values associated with a given
     /// key. Returns `None` if there are no values associated with the key.
     pub fn get_mut<N: AsName>(&mut self, name: N) -> Option<&mut HeaderValue> {
         match name.as_name() {
@@ -357,73 +356,6 @@ impl AsName for String {
 impl AsName for &String {
     fn as_name(&self) -> Either<&HeaderName, &str> {
         Either::Right(self.as_str())
-    }
-}
-
-impl<N: std::fmt::Display, V> FromIterator<(N, V)> for HeaderMap
-where
-    HeaderName: TryFrom<N>,
-    Value: TryFrom<V>,
-    V: std::fmt::Debug,
-{
-    #[inline]
-    #[allow(clippy::mutable_key_type)]
-    fn from_iter<T: IntoIterator<Item = (N, V)>>(iter: T) -> Self {
-        let map = iter
-            .into_iter()
-            .filter_map(|(n, v)| {
-                let name = format!("{n}");
-                match (HeaderName::try_from(n), Value::try_from(v)) {
-                    (Ok(n), Ok(v)) => Some((n, v)),
-                    (Ok(n), Err(_)) => {
-                        log::warn!("failed to parse `{n}` header value");
-                        None
-                    }
-                    (Err(_), Ok(_)) => {
-                        log::warn!("invalid HTTP header name: {name}");
-                        None
-                    }
-                    (Err(_), Err(_)) => {
-                        log::warn!("invalid HTTP header name `{name}` and value");
-                        None
-                    }
-                }
-            })
-            .fold(HashMap::default(), |mut map: HashMap<_, Value>, (n, v)| {
-                match map.entry(n) {
-                    Entry::Occupied(mut oc) => oc.get_mut().extend(v),
-                    Entry::Vacant(va) => {
-                        let _ = va.insert(v);
-                    }
-                }
-                map
-            });
-        HeaderMap { inner: map }
-    }
-}
-
-impl FromIterator<HeaderValue> for Value {
-    fn from_iter<T: IntoIterator<Item = HeaderValue>>(iter: T) -> Self {
-        let mut iter = iter.into_iter();
-        let value = iter.next().map(Value::One);
-        let mut value = match value {
-            Some(v) => v,
-            _ => Value::One(HeaderValue::from_static("")),
-        };
-        value.extend(iter);
-        value
-    }
-}
-
-impl TryFrom<&str> for Value {
-    type Error = crate::header::InvalidHeaderValue;
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Ok(value
-            .split(',')
-            .filter(|v| !v.is_empty())
-            .map(str::trim)
-            .filter_map(|v| HeaderValue::from_str(v).ok())
-            .collect::<Value>())
     }
 }
 
@@ -551,33 +483,6 @@ impl fmt::Debug for HeaderMap {
 mod tests {
     use super::*;
     use crate::header::{ACCEPT_ENCODING, CONTENT_TYPE};
-
-    #[test]
-    fn test_from_iter() {
-        let vec = vec![
-            ("Connection", "keep-alive"),
-            ("Accept", "text/html"),
-            (
-                "Accept",
-                "*/*, application/xhtml+xml, application/xml;q=0.9, image/webp,",
-            ),
-        ];
-        let map = HeaderMap::from_iter(vec);
-        assert_eq!(
-            map.get("Connection"),
-            Some(&HeaderValue::from_static("keep-alive"))
-        );
-        assert_eq!(
-            map.get_all("Accept").collect::<Vec<&HeaderValue>>(),
-            vec![
-                &HeaderValue::from_static("text/html"),
-                &HeaderValue::from_static("*/*"),
-                &HeaderValue::from_static("application/xhtml+xml"),
-                &HeaderValue::from_static("application/xml;q=0.9"),
-                &HeaderValue::from_static("image/webp"),
-            ]
-        );
-    }
 
     #[test]
     #[allow(clippy::needless_borrow, clippy::needless_borrows_for_generic_args)]

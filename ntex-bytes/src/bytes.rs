@@ -342,6 +342,7 @@ impl Bytes {
     ///
     /// Panics if `at > self.len()`.
     #[must_use]
+    #[inline]
     pub fn split_off(&mut self, at: usize) -> Bytes {
         self.split_off_checked(at)
             .expect("at value must be <= self.len()`")
@@ -351,6 +352,7 @@ impl Bytes {
     ///
     /// Returns `None` if `at > self.len()`.
     #[must_use]
+    #[inline]
     pub fn split_off_checked(&mut self, at: usize) -> Option<Bytes> {
         if at <= self.len() {
             if at == self.len() {
@@ -391,6 +393,7 @@ impl Bytes {
     ///
     /// Panics if `at > len`.
     #[must_use]
+    #[inline]
     pub fn split_to(&mut self, at: usize) -> Bytes {
         self.split_to_checked(at)
             .expect("at value must be <= self.len()`")
@@ -400,6 +403,7 @@ impl Bytes {
     ///
     /// Returns `None` if `at > len`.
     #[must_use]
+    #[inline]
     pub fn split_to_checked(&mut self, at: usize) -> Option<Bytes> {
         if at <= self.len() {
             if at == self.len() {
@@ -540,6 +544,7 @@ impl_buf!(Bytes {
 impl_slice_traits!(Bytes);
 
 impl Clone for Bytes {
+    #[inline]
     fn clone(&self) -> Bytes {
         Bytes {
             storage: self.storage.clone(),

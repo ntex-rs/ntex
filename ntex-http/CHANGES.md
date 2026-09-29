@@ -1,5 +1,17 @@
 # Changes
 
+## [1.3.0] - Unreleased
+
+* HeaderValue hash ignores the sensitive flag, consistent with equality
+
+* Remove FromIterator for HeaderMap, it split string values on commas and dropped invalid values
+
+* Add TryFrom<Bytes> and TryFrom<BytesMut> for HeaderValue
+
+* InvalidHeaderValue derives Debug and ToStrError derives thiserror::Error, like the other error types
+
+* HeaderMap can be collected from String header values
+
 ## [1.2.0] - 2026-05-02
 
 * Add BytePages support to Body

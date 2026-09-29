@@ -223,16 +223,17 @@ impl RunnableQueue {
     }
 
     fn run(&self) -> bool {
+        // a running task may schedule into `local_queue`, so it must not be
+        // borrowed across `task.run()`
         let local_queue = {
-            let q = unsafe { &mut *self.local_queue.get() };
             for _ in 0..self.event_interval {
-                if let Some(task) = q.pop_front() {
+                if let Some(task) = self.pop_local() {
                     task.run();
                 } else {
                     break;
                 }
             }
-            !q.is_empty()
+            unsafe { !(*self.local_queue.get()).is_empty() }
         };
 
         let sync_queue_fixed = match self.sync_fixed_queue.try_dequeue() {
@@ -246,19 +247,15 @@ impl RunnableQueue {
             Err(_) => true,
         };
 
-        let mut idx = self.event_interval;
-        let sync_queue = loop {
-            idx -= 1;
-            if idx == 0 {
-                break true;
+        let sync_queue = {
+            for _ in 0..self.event_interval {
+                if let Some(task) = self.sync_queue.pop() {
+                    task.run();
+                } else {
+                    break;
+                }
             }
-            if !self.sync_queue.is_empty()
-                && let Some(task) = self.sync_queue.pop()
-            {
-                task.run();
-            } else {
-                break false;
-            }
+            !self.sync_queue.is_empty()
         };
 
         let more_tasks = local_queue || sync_queue_fixed || sync_queue;
@@ -271,7 +268,14 @@ impl RunnableQueue {
     fn clear(&self) {
         while self.sync_queue.pop().is_some() {}
         while self.sync_fixed_queue.try_dequeue().is_ok() {}
-        unsafe { (*self.local_queue.get()).clear() };
+        // dropped tasks may schedule other tasks, drop each outside of the borrow
+        while let Some(task) = self.pop_local() {
+            drop(task);
+        }
+    }
+
+    fn pop_local(&self) -> Option<Runnable> {
+        unsafe { (*self.local_queue.get()).pop_front() }
     }
 }
 
@@ -297,13 +301,122 @@ impl RuntimeBuilder {
     /// for external events (timers, I/O, and so on).
     ///
     /// A scheduler “tick” roughly corresponds to one poll invocation on a task.
+    /// Values below 1 are treated as 1.
     pub fn event_interval(&mut self, val: usize) -> &mut Self {
-        self.event_interval = val;
+        self.event_interval = val.max(1);
         self
     }
 
     /// Build [`Runtime`].
     pub fn build(&self, handle: Box<dyn Notify>) -> Runtime {
         Runtime::with_builder(self, handle)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::task::{Poll, Waker};
+    use std::{cell::RefCell, future::poll_fn, rc::Rc};
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct NoopNotify;
+
+    impl Notify for NoopNotify {
+        fn notify(&self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct WakeOnDrop(Rc<RefCell<Option<Waker>>>);
+
+    impl Drop for WakeOnDrop {
+        fn drop(&mut self) {
+            if let Some(w) = self.0.borrow_mut().take() {
+                w.wake();
+            }
+        }
+    }
+
+    #[test]
+    fn schedule_while_running() {
+        let rt = Runtime::new(Box::new(NoopNotify));
+        let done = Rc::new(RefCell::new(0));
+        let done2 = done.clone();
+        rt.spawn(async move {
+            // schedules into the local queue from a running task
+            let h = Runtime::with_current(|rt| rt.spawn(async { 1 }));
+            *done2.borrow_mut() = h.await.unwrap();
+        })
+        .detach();
+        CURRENT_RUNTIME.set(&rt, || while rt.poll() == PollResult::PollAgain {});
+        assert_eq!(*done.borrow(), 1);
+    }
+
+    #[test]
+    fn event_interval() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        for val in [0, 1] {
+            let rt = Runtime::builder()
+                .event_interval(val)
+                .build(Box::new(NoopNotify));
+            assert_eq!(rt.poll(), PollResult::Pending);
+
+            rt.spawn(async {}).detach();
+            rt.spawn(async {}).detach();
+            assert_eq!(rt.poll(), PollResult::PollAgain);
+            assert_eq!(rt.poll(), PollResult::Pending);
+        }
+
+        // tasks scheduled from other threads overflow the fixed queue
+        let rt = Runtime::builder()
+            .event_interval(1)
+            .build(Box::new(NoopNotify));
+        let cnt = Arc::new(AtomicUsize::new(0));
+        let hnd = rt.handle();
+        let cnt2 = cnt.clone();
+        std::thread::spawn(move || {
+            for _ in 0..130 {
+                let cnt = cnt2.clone();
+                hnd.spawn(async move {
+                    cnt.fetch_add(1, Ordering::Relaxed);
+                })
+                .detach();
+            }
+        })
+        .join()
+        .unwrap();
+        assert_eq!(rt.poll(), PollResult::PollAgain);
+        assert_eq!(cnt.load(Ordering::Relaxed), 129);
+        assert_eq!(rt.poll(), PollResult::Pending);
+        assert_eq!(cnt.load(Ordering::Relaxed), 130);
+    }
+
+    #[test]
+    fn schedule_while_clearing() {
+        let rt = Runtime::new(Box::new(NoopNotify));
+        let waker = Rc::new(RefCell::new(None));
+        let waker2 = waker.clone();
+        rt.spawn(poll_fn(move |cx| {
+            *waker2.borrow_mut() = Some(cx.waker().clone());
+            Poll::<()>::Pending
+        }))
+        .detach();
+        assert_eq!(rt.poll(), PollResult::Pending);
+        assert!(waker.borrow().is_some());
+
+        // queued task wakes the waiting task while the queue is cleared
+        let guard = WakeOnDrop(waker.clone());
+        rt.spawn(async move {
+            let _g = guard;
+        })
+        .detach();
+        rt.spawn(async {}).detach();
+        drop(rt);
+        assert!(waker.borrow().is_none());
+        // the woken task is dropped too, releasing its clone of `waker`
+        assert_eq!(Rc::strong_count(&waker), 1);
     }
 }

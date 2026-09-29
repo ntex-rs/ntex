@@ -658,12 +658,6 @@ impl BufMut for BytesMut {
     }
 
     #[inline]
-    fn put_slice_partial(&mut self, src: &[u8]) -> usize {
-        self.put_slice(src);
-        src.len()
-    }
-
-    #[inline]
     fn put_u8(&mut self, n: u8) {
         self.reserve(1);
         self.storage.put_u8(n);

@@ -2,6 +2,9 @@
 
 ## [1.10.0] (unreleased)
 
+* Remove deprecated `BufMut::writer()` and `buf::Writer`, `BytesMut` and `BytePages`
+  implement `io::Write`
+
 * `BytePages::append()` copies only data of up to 4 KiB, larger data is added as a page without
   copying, and the spare capacity of the current page stays available for later writes
 

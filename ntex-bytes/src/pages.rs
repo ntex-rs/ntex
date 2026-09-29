@@ -1286,14 +1286,11 @@ mod tests {
         assert_eq!(pages.len(), n + 1);
         assert_eq!(pages.remaining_mut(), usize::MAX - n - 1);
 
-        // `put` and the writer are not limited to the current page
+        // `put` and `io::Write` are not limited to the current page
         let mut pages = BytePages::new(BytePageSize::Size8);
         pages.put(&[3u8; 200][..]);
         pages.put(Bytes::from_static(b"abcd"));
-        #[allow(deprecated)]
-        let mut w = pages.writer();
-        io::Write::write_all(&mut w, &[4; 100]).unwrap();
-        let mut pages = w.into_inner();
+        io::Write::write_all(&mut pages, &[4; 100]).unwrap();
         let mut expected = vec![3; 200];
         expected.extend_from_slice(b"abcd");
         expected.extend_from_slice(&[4; 100]);

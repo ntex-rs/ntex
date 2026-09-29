@@ -1,10 +1,10 @@
-#![feature(test)]
 #![deny(warnings, rust_2018_idioms)]
+#![allow(clippy::all, clippy::pedantic)]
 
-extern crate test;
+use std::hint::black_box;
 
+use criterion::{Criterion, criterion_group, criterion_main};
 use ntex_bytes::Buf;
-use test::Bencher;
 
 /// Dummy Buf implementation
 struct TestBuf {
@@ -46,14 +46,14 @@ impl TestBuf {
 }
 impl Buf for TestBuf {
     fn remaining(&self) -> usize {
-        return self.buf.len() - self.pos;
+        self.buf.len() - self.pos
     }
     fn advance(&mut self, cnt: usize) {
         self.pos += cnt;
         assert!(self.pos <= self.buf.len());
         self.next_readlen();
     }
-    fn bytes(&self) -> &[u8] {
+    fn chunk(&self) -> &[u8] {
         if self.readlen == 0 {
             Default::default()
         } else {
@@ -87,101 +87,67 @@ impl Buf for TestBufC {
         self.inner.advance(cnt)
     }
     #[inline(never)]
-    fn bytes(&self) -> &[u8] {
-        self.inner.bytes()
+    fn chunk(&self) -> &[u8] {
+        self.inner.chunk()
     }
 }
 
 macro_rules! bench {
-    ($fname:ident, testbuf $testbuf:ident $readlens:expr, $method:ident $(,$arg:expr)*) => (
-        #[bench]
-        fn $fname(b: &mut Bencher) {
-            let mut bufs = [
-                $testbuf::new(&[1u8; 8+0], $readlens, 0),
-                $testbuf::new(&[1u8; 8+1], $readlens, 1),
-                $testbuf::new(&[1u8; 8+2], $readlens, 2),
-                $testbuf::new(&[1u8; 8+3], $readlens, 3),
-                $testbuf::new(&[1u8; 8+4], $readlens, 4),
-                $testbuf::new(&[1u8; 8+5], $readlens, 5),
-                $testbuf::new(&[1u8; 8+6], $readlens, 6),
-                $testbuf::new(&[1u8; 8+7], $readlens, 7),
-            ];
+    ($c:expr, $name:expr, testbuf $testbuf:ident $readlens:expr, $method:ident $(,$arg:expr)*) => {{
+        let mut bufs = [
+            $testbuf::new(&[1u8; 8 + 0], $readlens, 0),
+            $testbuf::new(&[1u8; 8 + 1], $readlens, 1),
+            $testbuf::new(&[1u8; 8 + 2], $readlens, 2),
+            $testbuf::new(&[1u8; 8 + 3], $readlens, 3),
+            $testbuf::new(&[1u8; 8 + 4], $readlens, 4),
+            $testbuf::new(&[1u8; 8 + 5], $readlens, 5),
+            $testbuf::new(&[1u8; 8 + 6], $readlens, 6),
+            $testbuf::new(&[1u8; 8 + 7], $readlens, 7),
+        ];
+        $c.bench_function($name, |b| {
             b.iter(|| {
-                for i in 0..8 {
-                    bufs[i].reset();
-                    let buf: &mut dyn Buf =  &mut bufs[i]; // type erasure
-                    test::black_box(buf.$method($($arg,)*));
+                for buf in bufs.iter_mut() {
+                    buf.reset();
+                    let buf: &mut dyn Buf = buf; // type erasure
+                    black_box(buf.$method($($arg,)*));
                 }
             })
-        }
-    );
-    ($fname:ident, slice, $method:ident $(,$arg:expr)*) => (
-        #[bench]
-        fn $fname(b: &mut Bencher) {
-            // buf must be long enough for one read of 8 bytes starting at pos 7
-            let arr = [1u8; 8+7];
+        });
+    }};
+    ($c:expr, $name:expr, slice, $method:ident $(,$arg:expr)*) => {{
+        // buf must be long enough for one read of 8 bytes starting at pos 7
+        let arr = [1u8; 8 + 7];
+        $c.bench_function($name, |b| {
             b.iter(|| {
                 for i in 0..8 {
                     let mut buf = &arr[i..];
                     let buf = &mut buf as &mut dyn Buf; // type erasure
-                    test::black_box(buf.$method($($arg,)*));
+                    black_box(buf.$method($($arg,)*));
                 }
             })
-        }
-    );
-    ($fname:ident, option) => (
-        #[bench]
-        fn $fname(b: &mut Bencher) {
-            let data = [1u8; 1];
-            b.iter(|| {
-                for _ in 0..8 {
-                    let mut buf = Some(data);
-                    let buf = &mut buf as &mut dyn Buf; // type erasure
-                    test::black_box(buf.get_u8());
-                }
-            })
-        }
-    );
+        });
+    }};
 }
 
 macro_rules! bench_group {
-    ($method:ident $(,$arg:expr)*) => (
-        bench!(slice, slice, $method $(,$arg)*);
-        bench!(tbuf_1,        testbuf TestBuf  &[],  $method $(,$arg)*);
-        bench!(tbuf_1_costly, testbuf TestBufC &[],  $method $(,$arg)*);
-        bench!(tbuf_2,        testbuf TestBuf  &[1], $method $(,$arg)*);
-        bench!(tbuf_2_costly, testbuf TestBufC &[1], $method $(,$arg)*);
-        // bench!(tbuf_onebyone,        testbuf TestBuf  &[1,1,1,1,1,1,1,1], $method $(,$arg)*);
-        // bench!(tbuf_onebyone_costly, testbuf TestBufC &[1,1,1,1,1,1,1,1], $method $(,$arg)*);
-    );
+    ($c:expr, $group:literal, $method:ident $(,$arg:expr)*) => {
+        bench!($c, concat!($group, "/slice"), slice, $method $(,$arg)*);
+        bench!($c, concat!($group, "/tbuf_1"), testbuf TestBuf &[], $method $(,$arg)*);
+        bench!($c, concat!($group, "/tbuf_1_costly"), testbuf TestBufC &[], $method $(,$arg)*);
+        bench!($c, concat!($group, "/tbuf_2"), testbuf TestBuf &[1], $method $(,$arg)*);
+        bench!($c, concat!($group, "/tbuf_2_costly"), testbuf TestBufC &[1], $method $(,$arg)*);
+    };
 }
 
-mod get_u8 {
-    use super::*;
-    bench_group!(get_u8);
-    bench!(option, option);
+fn benches(c: &mut Criterion) {
+    bench_group!(c, "get_u8", get_u8);
+    bench_group!(c, "get_u16", get_u16);
+    bench_group!(c, "get_u32", get_u32);
+    bench_group!(c, "get_u64", get_u64);
+    bench_group!(c, "get_f32", get_f32);
+    bench_group!(c, "get_f64", get_f64);
+    bench_group!(c, "get_uint24", get_uint, 3);
 }
-mod get_u16 {
-    use super::*;
-    bench_group!(get_u16);
-}
-mod get_u32 {
-    use super::*;
-    bench_group!(get_u32);
-}
-mod get_u64 {
-    use super::*;
-    bench_group!(get_u64);
-}
-mod get_f32 {
-    use super::*;
-    bench_group!(get_f32);
-}
-mod get_f64 {
-    use super::*;
-    bench_group!(get_f64);
-}
-mod get_uint24 {
-    use super::*;
-    bench_group!(get_uint, 3);
-}
+
+criterion_group!(bench, benches);
+criterion_main!(bench);
