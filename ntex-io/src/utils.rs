@@ -1,7 +1,9 @@
 use std::cell::Cell;
-use std::task::{Poll, Waker};
+use std::io;
+use std::task::{Context, Poll, Waker};
 
 use ntex_service::state::{RequestState, State};
+use ntex_util::time::{Seconds, Sleep};
 
 use crate::waiters::{WaiterEntry, Waiters};
 use crate::{Filter, Io, IoBoxed, IoCallbacks};
@@ -171,6 +173,38 @@ impl<F: Filter, St: 'static> RequestState<IoBoxed> for State<St, Io<F>> {
         let State { req, state } = self;
         (state, req.boxed())
     }
+}
+
+/// Deadline for a wait on output, started lazily on the first wait.
+pub(crate) struct WriteDeadline {
+    timeout: Seconds,
+    sleep: Option<Sleep>,
+}
+
+impl WriteDeadline {
+    /// Creates a deadline, a zero timeout never expires.
+    pub(crate) fn new(timeout: Seconds) -> Self {
+        Self {
+            timeout,
+            sleep: None,
+        }
+    }
+
+    pub(crate) fn poll_expired(&mut self, cx: &mut Context<'_>) -> bool {
+        if self.timeout.is_zero() {
+            false
+        } else {
+            let timeout = self.timeout;
+            self.sleep
+                .get_or_insert_with(|| Sleep::new(timeout.into()))
+                .poll_elapsed(cx)
+                .is_ready()
+        }
+    }
+}
+
+pub(crate) fn write_timed_out() -> io::Error {
+    io::Error::new(io::ErrorKind::TimedOut, "Write timeout")
 }
 
 #[cfg(test)]

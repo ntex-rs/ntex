@@ -41,7 +41,7 @@
 
 * Handle external timeouts (`IoRef::notify_timeout()`) the same way while the
   service is paused: an idle dispatcher, with no frames in flight, is stopped
-  with Reason::KeepAliveTimeout, otherwise the timeout is ignored. Pausing no
+  with Reason::KeepAlive, otherwise the timeout is ignored. Pausing no
   longer discards a pending external timeout
 
 * Transport failures and force-closes cancel the dispatcher-held pending response future

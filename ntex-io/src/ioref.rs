@@ -126,7 +126,10 @@ impl IoRef {
     /// Producers that are not driven by a dispatcher can await this before
     /// encoding more, so the write buffer does not grow without bound.
     ///
-    /// Fails once the connection is closing or closed.
+    /// Fails once the connection is closing or closed, and with
+    /// [`io::ErrorKind::TimedOut`] if the
+    /// [write timeout](crate::IoConfig::set_write_timeout) is set and expires
+    /// first.
     pub async fn write_ready(&self) -> io::Result<()> {
         self.0.write_ready().await
     }

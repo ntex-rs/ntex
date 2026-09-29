@@ -15,7 +15,7 @@ use crate::filterptr::FilterPtr;
 use crate::flags::Flags;
 use crate::ops::{Id, IoManager, TimerHandle};
 use crate::seal::{IoBoxed, Sealed};
-use crate::utils::Extensions;
+use crate::utils::{Extensions, WriteDeadline, write_timed_out};
 use crate::waiters::{TAG_WRITE, WriteGuard};
 use crate::{Decoded, FilterLayer, Handle, IoStatusUpdate, IoStream, RecvError};
 
@@ -315,14 +315,31 @@ impl IoState {
         }
 
         let waiter = WriteGuard::new(&self.extensions);
+        let mut deadline = WriteDeadline::new(self.cfg.write_timeout());
         poll_fn(|cx| {
             if let Some(res) = self.check_write_ready() {
                 Poll::Ready(res)
+            } else if deadline.poll_expired(cx) {
+                Poll::Ready(Err(write_timed_out()))
             } else {
                 // a woken waiter registers the waker again
                 waiter.register(cx);
                 Poll::Pending
             }
+        })
+        .await
+    }
+
+    /// Waits for `f`, bounded by the configured write timeout.
+    pub(super) async fn with_write_timeout<T, F>(&self, mut f: F) -> io::Result<T>
+    where
+        F: FnMut(&mut Context<'_>) -> Poll<io::Result<T>>,
+    {
+        let mut deadline = WriteDeadline::new(self.cfg.write_timeout());
+        poll_fn(|cx| match f(cx) {
+            Poll::Ready(res) => Poll::Ready(res),
+            Poll::Pending if deadline.poll_expired(cx) => Poll::Ready(Err(write_timed_out())),
+            Poll::Pending => Poll::Pending,
         })
         .await
     }
@@ -603,7 +620,8 @@ impl<F> Io<F> {
     /// dispatcher timeouts are returned in [`Either::Right`].
     ///
     /// If write backpressure prevents further reads, this method first waits
-    /// for the write buffer to fall below its configured threshold.
+    /// for the write buffer to fall below its configured threshold. A
+    /// dispatcher timeout that fires during this wait is returned as well.
     pub async fn recv<U>(&self, codec: &U) -> Result<Option<U::Item>, Either<U::Error, io::Error>>
     where
         U: Decoder,
@@ -616,10 +634,24 @@ impl<F> Io<F> {
                     "Timeout",
                 ))),
                 Err(RecvError::WriteBackpressure) => {
-                    poll_fn(|cx| self.poll_flush(cx, false))
-                        .await
-                        .map_err(Either::Right)?;
-                    continue;
+                    let timed_out = poll_fn(|cx| {
+                        if self.st().flags.check_dispatcher_timeout() {
+                            Poll::Ready(Ok(true))
+                        } else {
+                            self.poll_flush(cx, false).map_ok(|()| false)
+                        }
+                    })
+                    .await
+                    .map_err(Either::Right)?;
+
+                    if timed_out {
+                        Err(Either::Right(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "Timeout",
+                        )))
+                    } else {
+                        continue;
+                    }
                 }
                 Err(RecvError::Decoder(err)) => Err(Either::Left(err)),
                 Err(RecvError::PeerGone(Some(err))) => Err(Either::Right(err)),
@@ -701,13 +733,19 @@ impl<F> Io<F> {
 
     #[inline]
     /// Encodes an item and sends it to the peer, fully flushing the write buffer.
+    ///
+    /// The flush is bounded by the
+    /// [write timeout](crate::IoConfig::set_write_timeout), if one is set;
+    /// when it expires this returns [`io::ErrorKind::TimedOut`] in
+    /// [`Either::Right`].
     pub async fn send<U>(&self, item: U::Item, codec: &U) -> Result<(), Either<U::Error, io::Error>>
     where
         U: Encoder,
     {
         self.encode(item, codec).map_err(Either::Left)?;
 
-        poll_fn(|cx| self.poll_flush(cx, true))
+        self.st()
+            .with_write_timeout(|cx| self.poll_flush(cx, true))
             .await
             .map_err(Either::Right)?;
 
@@ -720,8 +758,14 @@ impl<F> Io<F> {
     /// This is the asynchronous counterpart to `poll_flush`. A full flush
     /// completes once all output has reached the peer, including output a
     /// transport has taken ownership of but not yet written.
+    ///
+    /// The wait is bounded by the
+    /// [write timeout](crate::IoConfig::set_write_timeout), if one is set;
+    /// when it expires this returns [`io::ErrorKind::TimedOut`].
     pub async fn flush(&self, full: bool) -> io::Result<()> {
-        poll_fn(|cx| self.poll_flush(cx, full)).await
+        self.st()
+            .with_write_timeout(|cx| self.poll_flush(cx, full))
+            .await
     }
 
     #[inline]
@@ -3870,6 +3914,74 @@ mod tests {
                 Ok(Some(src.split_to(self.0)))
             }
         }
+    }
+
+    #[ntex::test]
+    async fn recv_reports_timeout_during_write_backpressure() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(16)),
+        );
+        io.encode_slice(BIN2).unwrap();
+        assert!(io.flags().is_wr_backpressure());
+
+        let ioref = io.get_ref();
+        let (res, ()) =
+            ntex_util::future::join(timeout(Millis(1000), io.recv(&BytesCodec)), async move {
+                sleep(Millis(25)).await;
+                ioref.0.notify_timeout();
+            })
+            .await;
+
+        let Err(Either::Right(err)) = res.expect("recv ignored the timeout") else {
+            panic!("expected a timeout error")
+        };
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert!(io.flags().is_wr_backpressure());
+    }
+
+    #[ntex::test]
+    async fn write_timeout_bounds_output_waits() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV").add(
+                IoConfig::default()
+                    .set_write_buf(16)
+                    .set_write_timeout(ntex_util::time::Seconds(1)),
+            ),
+        );
+        io.encode_slice(BIN2).unwrap();
+        assert!(io.flags().is_wr_backpressure());
+
+        let ioref = io.get_ref();
+        let ((send, flush), ready) = timeout(
+            Millis(3000),
+            ntex_util::future::join(
+                ntex_util::future::join(
+                    io.send(Bytes::from_static(b"item"), &BytesCodec),
+                    io.flush(false),
+                ),
+                ioref.write_ready(),
+            ),
+        )
+        .await
+        .expect("output waits are not bounded by the write timeout");
+
+        let Err(Either::Right(err)) = send else {
+            panic!("expected a transport error")
+        };
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(flush.unwrap_err().kind(), io::ErrorKind::TimedOut);
+        assert_eq!(ready.unwrap_err().kind(), io::ErrorKind::TimedOut);
+
+        // the connection is left open, the caller decides
+        assert!(!io.is_closed());
+        client.remote_buffer_cap(1024);
+        io.flush(true).await.unwrap();
     }
 
     #[ntex::test]
