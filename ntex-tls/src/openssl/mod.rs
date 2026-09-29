@@ -84,6 +84,26 @@ impl SslFilter {
     where
         F: FnOnce(&mut SslStream<IoInner>, &FilterBuf<'_>) -> R,
     {
+        self.with_buffers_inner(buf, true, f)
+    }
+
+    /// Runs `f` for input processing.
+    ///
+    /// The current write page is not borrowed: putting it back would look
+    /// like output produced by reading, which pauses reads while the write
+    /// buffer is full. Output produced here, such as alerts or key updates,
+    /// is rare and small.
+    fn with_read_buffers<F, R>(&self, buf: &FilterBuf<'_>, f: F) -> R
+    where
+        F: FnOnce(&mut SslStream<IoInner>, &FilterBuf<'_>) -> R,
+    {
+        self.with_buffers_inner(buf, false, f)
+    }
+
+    fn with_buffers_inner<F, R>(&self, buf: &FilterBuf<'_>, reuse_page: bool, f: F) -> R
+    where
+        F: FnOnce(&mut SslStream<IoInner>, &FilterBuf<'_>) -> R,
+    {
         // SAFETY: see `ssl()`. Neither the BIO callbacks nor the buffer
         // operations below re-enter the filter.
         let stream = unsafe { &mut *self.inner.get() };
@@ -92,7 +112,9 @@ impl SslFilter {
         st.source = buf.with_read_src(Option::take);
 
         // get current page from destination buffer (optimization)
-        buf.with_write_buffers(|_, dst| st.destination.try_get_current_from(dst));
+        if reuse_page {
+            buf.with_write_buffers(|_, dst| st.destination.try_get_current_from(dst));
+        }
 
         let result = f(stream, buf);
 
@@ -185,7 +207,7 @@ impl FilterLayer for SslFilter {
     }
 
     fn process_read_buf(&self, rb: &FilterBuf<'_>) -> io::Result<()> {
-        self.with_buffers(rb, |stream, buf| {
+        self.with_read_buffers(rb, |stream, buf| {
             buf.with_read_buffers(|_, dst| {
                 loop {
                     if dst.remaining_mut() == 0 {
@@ -314,4 +336,82 @@ async fn with_timeout<R>(
             "SSL Handshake timeout",
         ))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use ntex::codec::BytesCodec;
+    use ntex_bytes::Bytes;
+    use ntex_io::{IoConfig, testing::IoTest};
+    use ntex_service::cfg::SharedCfg;
+    use ntex_util::future::join;
+    use tls_openssl::{pkey::PKey, ssl::SslMethod, ssl::SslVerifyMode};
+
+    use super::*;
+
+    const CERT: &[u8] = include_bytes!("../../examples/cert.pem");
+    const KEY: &[u8] = include_bytes!("../../examples/key.pem");
+
+    /// Buffered output must not look like output produced by reading, that
+    /// would pause reads while the write buffer is full.
+    #[ntex::test]
+    async fn read_is_not_paused_by_buffered_output() {
+        let mut acceptor = ssl::SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
+        acceptor
+            .set_private_key(&PKey::private_key_from_pem(KEY).unwrap())
+            .unwrap();
+        acceptor
+            .set_certificate(&X509::from_pem(CERT).unwrap())
+            .unwrap();
+        let acceptor = acceptor.build();
+        let mut connector = ssl::SslConnector::builder(SslMethod::tls()).unwrap();
+        connector.set_verify(SslVerifyMode::NONE);
+        let connector = connector.build();
+
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1 << 20);
+        server.remote_buffer_cap(1 << 20);
+        let peer = client.clone();
+
+        let server = Io::new(
+            server,
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(64)),
+        );
+        let client = Io::new(client, SharedCfg::new("CLI"));
+        let (server, client) = join(
+            handshake(server, ssl::Ssl::new(acceptor.context()).unwrap(), true),
+            connect(
+                client,
+                connector
+                    .configure()
+                    .unwrap()
+                    .into_ssl("localhost")
+                    .unwrap(),
+            ),
+        )
+        .await;
+        let (server, client) = (server.unwrap(), client.unwrap());
+
+        // the peer does not read, the output stays buffered above the high
+        // watermark
+        peer.remote_buffer_cap(0);
+        server.encode_slice(&[b'a'; 256]).unwrap();
+        // the failed write moves the output to the page list, more output
+        // leaves a partial current page
+        ntex_util::time::sleep(Millis(50)).await;
+        server.encode_slice(b"b").unwrap();
+
+        for msg in [&b"hello"[..], b"world", b"again"] {
+            client
+                .send(Bytes::copy_from_slice(msg), &BytesCodec)
+                .await
+                .unwrap();
+            let item = ntex_util::time::timeout(Millis(1000), server.recv(&BytesCodec))
+                .await
+                .expect("read is paused")
+                .unwrap()
+                .unwrap();
+            assert_eq!(&item[..], msg);
+        }
+    }
 }
