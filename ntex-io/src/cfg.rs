@@ -362,7 +362,14 @@ impl IoConfig {
     /// [keep-alive timeout](Self::set_keepalive_timeout), when enabled, bounds
     /// such a connection until it is shut down.
     ///
-    /// A zero duration disables the timeout. It is disabled by default.
+    /// Reads paused because output produced by reading, for example replies
+    /// to peer pings, has not drained are not covered either. While the
+    /// dispatcher is idle, the keep-alive timeout bounds them. Application
+    /// output written during such a pause enables write backpressure.
+    ///
+    /// A zero duration disables the timeout. It is disabled by default, so
+    /// a peer that does not read can pin the connection and its buffered
+    /// output. Servers that accept untrusted peers should set it.
     #[must_use]
     pub fn set_write_timeout(mut self, timeout: Seconds) -> Self {
         self.write_timeout = timeout;
