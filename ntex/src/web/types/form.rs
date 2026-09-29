@@ -223,7 +223,10 @@ impl<U> UrlEncoded<U> {
     /// Create a new future to URL encode a request
     fn new(req: &HttpRequest, payload: &mut Payload) -> UrlEncoded<U> {
         // check content type
-        if req.content_type().to_lowercase() != "application/x-www-form-urlencoded" {
+        if !req
+            .content_type()
+            .eq_ignore_ascii_case("application/x-www-form-urlencoded")
+        {
             return Self::err(UrlencodedError::ContentType);
         }
         let Ok(encoding) = req.encoding() else {
@@ -439,6 +442,13 @@ mod tests {
                 counter: 123
             }
         );
+
+        let (req, mut pl, ()) =
+            TestRequest::with_header(CONTENT_TYPE, "Application/X-WWW-Form-URLEncoded")
+                .header(CONTENT_LENGTH, "11")
+                .payload(Bytes::from_static(b"hello=world&counter=123"))
+                .to_http_parts();
+        assert!(UrlEncoded::<Info>::new(&req, &mut pl).await.is_ok());
 
         let (req, mut pl, ()) = TestRequest::with_header(
             CONTENT_TYPE,

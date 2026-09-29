@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* Reduce per-request allocations in `Logger`, `Compress`, `ConnectionInfo` and `Form`
+  content-type check, `Logger` no longer clones its format for every request
+
 * Response body encoder stops after the end of the body stream, an empty final chunk left it
   unfused and the next poll went back to the finished body
 
