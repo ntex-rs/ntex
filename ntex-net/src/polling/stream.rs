@@ -384,27 +384,20 @@ impl StreamOpsInner {
 }
 
 impl StreamCtl {
-    pub(crate) async fn shutdown(self) -> io::Result<()> {
-        self.inner
-            .with(|streams| {
-                let item = &mut streams[self.id as usize];
-                let fd = item.fd();
-                // The socket is still registered with the poller at this
-                // point, so it is drained here rather than on the blocking
-                // pool: reading it from another thread would race the reactor.
-                // The drain is non-blocking and bounded, so it is cheap enough
-                // to run inline.
-                crate::helpers::drain_raw_socket(fd);
-                ntex_rt::spawn(ntex_rt::spawn_blocking(move || {
-                    crate::helpers::shutdown_result(
-                        syscall!(libc::shutdown(fd, libc::SHUT_RDWR)).map(|_| ()),
-                    )
-                }))
-            })
-            .await
-            .map_err(io::Error::other)
-            .and_then(|res| res.map_err(io::Error::other))
-            .and_then(|res| res)
+    /// Drains the socket and shuts it down.
+    ///
+    /// Both steps run inline: they do not block, and the descriptor is only
+    /// valid while this handle is alive. A job deferred to the blocking pool
+    /// could outlive the handle, if the runtime stops first, and then act on
+    /// an unrelated socket that reused the descriptor.
+    pub(crate) fn shutdown(self) -> io::Result<()> {
+        self.inner.with(|streams| {
+            let fd = streams[self.id as usize].fd();
+            crate::helpers::drain_raw_socket(fd);
+            crate::helpers::shutdown_result(
+                syscall!(libc::shutdown(fd, libc::SHUT_RDWR)).map(|_| ()),
+            )
+        })
     }
 
     /// Arranges for the socket to be aborted instead of closed gracefully.

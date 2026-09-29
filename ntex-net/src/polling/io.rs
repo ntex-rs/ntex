@@ -113,7 +113,7 @@ async fn run(ctl: StreamCtl, context: ntex_io::IoContext) {
         drop(ctl);
         Ok(())
     } else {
-        ctl.shutdown().await
+        ctl.shutdown()
     };
     log::trace!("{}: Shutdown complete {result:?}", context.tag());
     context.stopped(result.err());
