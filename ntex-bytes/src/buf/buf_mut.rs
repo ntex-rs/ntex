@@ -1,6 +1,6 @@
 use std::{cmp, mem};
 
-use super::{UninitSlice, Writer};
+use super::UninitSlice;
 
 /// Generates the fixed-width integer `put_*` methods of `BufMut`, with docs.
 macro_rules! put_int_impl {
@@ -250,15 +250,6 @@ pub trait BufMut {
                 self.advance_mut(cnt);
             }
         }
-    }
-
-    #[doc(hidden)]
-    /// Writes as much of `src` as `self` can hold, returns the number of bytes
-    /// written. Buffers that grow on demand write all of `src`.
-    fn put_slice_partial(&mut self, src: &[u8]) -> usize {
-        let n = cmp::min(self.remaining_mut(), src.len());
-        self.put_slice(&src[..n]);
-        n
     }
 
     /// Writes an unsigned 8 bit integer to `self`.
@@ -513,37 +504,6 @@ pub trait BufMut {
     fn put_f64_le(&mut self, n: f64) {
         self.put_u64_le(n.to_bits());
     }
-
-    #[deprecated(since = "1.7.1", note = "Use BytesMut instead")]
-    /// Creates an adaptor which implements the `Write` trait for `self`.
-    ///
-    /// This function returns a new value which implements `Write` by adapting
-    /// the `Write` trait functions to the `BufMut` trait functions. `write`
-    /// and `flush` never return `Err`, but `write` stores only as many bytes
-    /// as fit into a fixed-size buffer, so `write_all` fails with
-    /// [`WriteZero`](std::io::ErrorKind::WriteZero) once such a buffer is full.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ntex_bytes::BufMut;
-    /// use std::io::Write;
-    ///
-    /// let mut buf = vec![].writer();
-    ///
-    /// let num = buf.write(&b"hello world"[..]).unwrap();
-    /// assert_eq!(11, num);
-    ///
-    /// let buf = buf.into_inner();
-    ///
-    /// assert_eq!(*buf, b"hello world"[..]);
-    /// ```
-    fn writer(self) -> Writer<Self>
-    where
-        Self: Sized,
-    {
-        Writer::new(self)
-    }
 }
 
 macro_rules! deref_forward_bufmut {
@@ -562,10 +522,6 @@ macro_rules! deref_forward_bufmut {
 
         fn put_slice(&mut self, src: &[u8]) {
             (**self).put_slice(src);
-        }
-
-        fn put_slice_partial(&mut self, src: &[u8]) -> usize {
-            (**self).put_slice_partial(src)
         }
 
         fn put_u8(&mut self, n: u8) {

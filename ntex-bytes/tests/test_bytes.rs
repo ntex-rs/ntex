@@ -980,19 +980,8 @@ fn buf_mut_put_grows() {
 }
 
 #[test]
-#[allow(deprecated)]
-fn buf_mut_writer_and_forwarding_grow() {
-    use std::io::Write;
-
+fn buf_mut_forwarding_grow() {
     let data = vec![5u8; 5000];
-
-    // Writer writes all of src into a full BytesMut
-    let mut buf = BytesMut::with_capacity(16);
-    buf.extend_from_slice(&[0; 16]);
-    let mut w = buf.writer();
-    w.write_all(&data).unwrap();
-    let buf = w.into_inner();
-    assert_eq!(&buf[16..], &data[..]);
 
     // &mut BytesMut and Box<BytesMut> forward to the growable impl
     fn fill<B: BufMut>(mut b: B, data: &[u8]) {
@@ -1007,11 +996,4 @@ fn buf_mut_writer_and_forwarding_grow() {
     let mut buf = Box::new(BytesMut::new());
     fill(&mut buf, &data);
     assert_eq!(buf.len(), 2 * data.len() + 2);
-
-    // fixed buffers still write partially
-    let mut dst = [0u8; 4];
-    let mut w = (&mut dst[..]).writer();
-    assert_eq!(w.write(b"abcdef").unwrap(), 4);
-    assert_eq!(w.write(b"x").unwrap(), 0);
-    assert_eq!(&dst, b"abcd");
 }
