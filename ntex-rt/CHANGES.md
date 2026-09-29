@@ -2,6 +2,9 @@
 
 ## [4.0.0] - unreleased
 
+* Fix data race when signal handling is enabled or disabled by systems on
+  different threads
+
 * Release signal handling when a system stops, so a later system can handle
   signals, `System::enable_signals()` has no effect while another system
   handles signals

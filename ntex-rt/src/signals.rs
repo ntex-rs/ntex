@@ -3,6 +3,7 @@ use std::{cell::RefCell, future::poll_fn, panic, sync::Arc, task::Poll};
 
 use atomic_waker::AtomicWaker;
 use ntex_error::Backtrace;
+use parking_lot::{Mutex, MutexGuard};
 
 use crate::System;
 
@@ -11,7 +12,7 @@ thread_local! {
     static HANDLERS: RefCell<Vec<oneshot::Sender<Arc<[Signal]>>>> = RefCell::default();
 }
 
-static mut CUR_SYS: Option<System> = None;
+static CUR_SYS: Mutex<Option<System>> = Mutex::new(None);
 static mut SIGS: [Option<Signal>; 10] = [const { None }; 10];
 static HND_WAKER: AtomicWaker = AtomicWaker::new();
 
@@ -56,45 +57,49 @@ pub fn signal() -> oneshot::AsyncReceiver<Arc<[Signal]>> {
 
 /// Returns whether signal handling is enabled.
 pub fn is_enabled() -> bool {
-    unsafe { CUR_SYS.is_some() }
+    CUR_SYS.lock().is_some()
 }
 
-fn register_system(sys: &System) -> bool {
-    unsafe {
-        if CUR_SYS.is_some() {
-            false
-        } else {
-            CUR_SYS = Some(sys.clone());
+type Registration = MutexGuard<'static, Option<System>>;
 
-            let (tx, rx) = oneshot::async_channel();
-            sys.handle().spawn(signals(rx));
-            STOP.with(|stop| {
-                *stop.borrow_mut() = Some(tx);
-            });
-            true
-        }
+/// Registers the system as the signal handler.
+///
+/// Returns the lock guard, so handlers are installed before other systems
+/// can register or unregister.
+fn register_system(sys: &System) -> Option<Registration> {
+    let mut cur = CUR_SYS.lock();
+    if cur.is_some() {
+        None
+    } else {
+        *cur = Some(sys.clone());
+
+        let (tx, rx) = oneshot::async_channel();
+        sys.handle().spawn(signals(rx));
+        STOP.with(|stop| {
+            *stop.borrow_mut() = Some(tx);
+        });
+        Some(cur)
     }
 }
 
-fn unregister_system(sys: &System) -> bool {
-    unsafe {
-        if let Some(cur) = CUR_SYS.take() {
-            if cur.id() == sys.id() {
-                sys.handle().spawn(async move {
-                    STOP.with(|stop| {
-                        if let Some(tx) = stop.borrow_mut().take() {
-                            let _ = tx.send(());
-                        }
-                    });
-                });
-                true
-            } else {
-                CUR_SYS = Some(cur);
-                false
-            }
-        } else {
-            false
-        }
+/// Unregisters the system if it handles signals.
+///
+/// Returns the lock guard, so handlers are removed before other systems
+/// can register.
+fn unregister_system(sys: &System) -> Option<Registration> {
+    let mut cur = CUR_SYS.lock();
+    if cur.as_ref().is_some_and(|cur| cur.id() == sys.id()) {
+        cur.take();
+        sys.handle().spawn(async move {
+            STOP.with(|stop| {
+                if let Some(tx) = stop.borrow_mut().take() {
+                    let _ = tx.send(());
+                }
+            });
+        });
+        Some(cur)
+    } else {
+        None
     }
 }
 
@@ -120,7 +125,7 @@ static mut SIG_HANDLERS: [Option<signal_hook::SigId>; 10] = [None; 10];
 pub(crate) fn start(sys: &System) -> bool {
     static ONCE: std::sync::Once = std::sync::Once::new();
 
-    if register_system(sys) {
+    if let Some(_registration) = register_system(sys) {
         use nix::sys::signal;
         use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGUSR2};
         use signal_hook::low_level::register;
@@ -192,7 +197,7 @@ pub(crate) fn start(sys: &System) -> bool {
 #[cfg(target_family = "unix")]
 /// Unregister signal handler.
 pub(crate) fn stop(sys: &System) {
-    if unregister_system(sys) {
+    if let Some(_registration) = unregister_system(sys) {
         use signal_hook::low_level::unregister;
 
         unsafe {
@@ -217,7 +222,7 @@ pub(crate) fn start(sys: &System) -> bool {
     use std::sync::atomic::Ordering;
     static ONCE: std::sync::Once = std::sync::Once::new();
 
-    if register_system(sys) {
+    if let Some(_registration) = register_system(sys) {
         // the handler cannot be removed, it ignores signals while disabled
         ONCE.call_once(|| {
             let result = ctrlc::set_handler(|| {
@@ -239,7 +244,7 @@ pub(crate) fn start(sys: &System) -> bool {
 #[cfg(target_family = "windows")]
 /// Unregister signal handler.
 pub(crate) fn stop(sys: &System) {
-    if unregister_system(sys) {
+    if let Some(_registration) = unregister_system(sys) {
         CTRLC_ENABLED.store(false, std::sync::atomic::Ordering::Release);
         log::info!("Signals handling is disabled");
     }
@@ -370,6 +375,38 @@ mod tests {
             assert!(!other);
             assert!(is_enabled());
         });
+        assert!(!is_enabled());
+    }
+
+    #[test]
+    fn signals_registered_by_one_system() {
+        let _lock = LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let barrier = Arc::new(std::sync::Barrier::new(4));
+        let handles: Vec<_> = (0..4)
+            .map(|i| {
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    System::new(&format!("sys{i}"), TestRunner).block_on(async move {
+                        let sys = System::current();
+                        barrier.wait();
+                        sys.enable_signals();
+                        let enabled = sys.signals();
+                        // keep signals registered until all systems tried
+                        barrier.wait();
+                        enabled
+                    })
+                })
+            })
+            .collect();
+        let enabled = handles
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .filter(|enabled| *enabled)
+            .count();
+        assert_eq!(enabled, 1);
         assert!(!is_enabled());
     }
 
