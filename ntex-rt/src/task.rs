@@ -57,8 +57,8 @@ pub(crate) struct Data {
 impl Data {
     #[allow(clippy::if_not_else)]
     pub(crate) fn load() -> Option<Data> {
-        // We only care about validity of state nothing else
-        let cb = if STATE.load(Ordering::Relaxed) != INITIALIZED {
+        // `Acquire` pairs with the `Release` store in `set_cbs`, so `CBS` is visible
+        let cb = if STATE.load(Ordering::Acquire) != INITIALIZED {
             None
         } else {
             #[allow(static_mut_refs)]
@@ -172,5 +172,22 @@ fn set_cbs(cbs: Arc<dyn CallbacksApi>) -> Result<(), ()> {
             Err(())
         }
         _ => Err(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn load_callbacks_set_by_other_thread() {
+        let hnd = std::thread::spawn(|| unsafe {
+            task_opt_callbacks(|| Some(std::ptr::null()), |p| p, |_| {}, |_| {})
+        });
+        // observes callbacks set by another thread without synchronization
+        while Data::load().is_none() {
+            std::hint::spin_loop();
+        }
+        assert!(hnd.join().unwrap());
     }
 }

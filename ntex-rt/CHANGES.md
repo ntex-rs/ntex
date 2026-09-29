@@ -2,6 +2,8 @@
 
 ## [4.0.0] - unreleased
 
+* Fix data race when task callbacks are set on another thread
+
 * Fix `RuntimeBuilder::event_interval()` values 0 and 1, and run up to
   `event_interval` tasks from the overflow queue of remote tasks
 
