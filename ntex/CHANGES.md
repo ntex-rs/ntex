@@ -6,6 +6,13 @@
 
 * Remove the `neon-iocp` feature, it had no effect, Windows always uses IOCP
 
+* `Json` extractor rejects a request with an invalid `Content-Length` header with
+  `JsonPayloadError::Payload(PayloadError::UnknownLength)`, the header was ignored and the body
+  was read up to the limit
+
+* Reduce per-request allocations in `Logger`, `Compress`, `ConnectionInfo` and `Form`
+  content-type check, `Logger` no longer clones its format for every request
+
 * HTTP/1 dispatcher stops polling a response body once the connection is closed or failed,
   an always ready body was polled without bound and its chunks discarded
 

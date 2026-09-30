@@ -135,25 +135,18 @@ impl PartialEq for AcceptEncoding {
 
 impl AcceptEncoding {
     fn new(tag: &str) -> Option<AcceptEncoding> {
-        let parts: Vec<&str> = tag.split(';').collect();
-        let encoding = match parts.len() {
-            0 => return None,
-            _ => ContentEncoding::from(parts[0]),
-        };
-        let quality = match parts.len() {
-            1 => encoding.quality(),
-            _ => f64::from_str(parts[1]).unwrap_or(0.0),
+        let mut parts = tag.split(';').map(str::trim);
+        let encoding = ContentEncoding::from(parts.next()?);
+        let quality = match parts.next() {
+            None => encoding.quality(),
+            Some(q) => f64::from_str(q).unwrap_or(0.0),
         };
         Some(AcceptEncoding { encoding, quality })
     }
 
     /// Parse a raw Accept-Encoding header value into an ordered list.
     fn parse(raw: &str, encoding: ContentEncoding) -> ContentEncoding {
-        let mut encodings: Vec<_> = raw
-            .replace(' ', "")
-            .split(',')
-            .map(AcceptEncoding::new)
-            .collect();
+        let mut encodings: Vec<_> = raw.split(',').map(AcceptEncoding::new).collect();
         encodings.sort();
 
         for enc in encodings.into_iter().flatten() {
@@ -249,6 +242,10 @@ mod tests {
         assert_eq!(
             AcceptEncoding::parse("gzip, br", ContentEncoding::Br),
             ContentEncoding::Br
+        );
+        assert_eq!(
+            AcceptEncoding::parse(" br ,  gzip ; q=1.0 ", auto),
+            ContentEncoding::Gzip
         );
     }
 
