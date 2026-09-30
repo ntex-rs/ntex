@@ -5,6 +5,7 @@ use std::{cell::Cell, cell::RefCell, fmt, future::poll_fn, pin::Pin, rc::Rc, rc:
 
 use ntex_h2::{self as h2};
 
+use crate::http::HeaderMap;
 use crate::util::{Bytes, Stream};
 use crate::{http::error::PayloadError, task::LocalWaker};
 
@@ -62,6 +63,18 @@ impl Payload {
     /// Polls for the next payload chunk.
     pub fn poll_read(&self, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, PayloadError>>> {
         self.inner.readany(cx)
+    }
+
+    /// Returns the trailer fields received at the end of the payload.
+    ///
+    /// Trailers are available after the payload is complete, None is
+    /// returned if the payload is not complete or has no trailers.
+    pub fn trailers(&self) -> Option<HeaderMap> {
+        if self.inner.items.borrow().is_empty() {
+            self.inner.trailers.borrow().clone()
+        } else {
+            None
+        }
     }
 }
 
@@ -121,6 +134,13 @@ impl PayloadSender {
         }
     }
 
+    /// Sends the trailer fields and closes the stream.
+    pub fn feed_trailers(&self, trailers: HeaderMap) {
+        if let Some(shared) = self.inner.upgrade() {
+            shared.feed_trailers(trailers);
+        }
+    }
+
     /// Sends a payload chunk and updates the HTTP/2 flow-control capacity.
     pub fn feed_data(&self, data: Bytes, cap: h2::Capacity) {
         if let Some(shared) = self.inner.upgrade() {
@@ -154,6 +174,7 @@ struct Inner {
     cap: Cell<Option<h2::Capacity>>,
     err: Cell<Option<PayloadError>>,
     items: RefCell<VecDeque<Bytes>>,
+    trailers: RefCell<Option<HeaderMap>>,
     task: LocalWaker,
     io_task: LocalWaker,
     on_drop: Cell<Option<Box<dyn FnOnce()>>>,
@@ -166,6 +187,7 @@ impl Inner {
             flags: Cell::new(Flags::empty()),
             err: Cell::new(None),
             items: RefCell::new(VecDeque::new()),
+            trailers: RefCell::new(None),
             task: LocalWaker::new(),
             io_task: LocalWaker::new(),
             on_drop: Cell::new(None),
@@ -196,6 +218,14 @@ impl Inner {
             self.items.borrow_mut().push_back(data);
         }
         self.task.wake();
+    }
+
+    fn feed_trailers(&self, trailers: HeaderMap) {
+        if !self.flags.get().intersects(Flags::EOF | Flags::ERROR) {
+            *self.trailers.borrow_mut() = Some(trailers);
+            self.insert_flags(Flags::EOF);
+            self.task.wake();
+        }
     }
 
     fn feed_data(&self, data: Bytes, cap: h2::Capacity) {
@@ -236,6 +266,7 @@ impl fmt::Debug for Inner {
             .field("capacity", &cap)
             .field("error", &err)
             .field("items", &self.items.borrow())
+            .field("trailers", &self.trailers.borrow())
             .finish();
 
         self.cap.set(Some(cap));
@@ -344,5 +375,49 @@ mod tests {
         sender.feed_data(data, cap);
         assert_eq!(reader.0.load(Ordering::SeqCst), 0);
         assert!(matches!(payload.poll_read(&mut cx), Poll::Ready(Some(Ok(ref d))) if d == "cd"));
+    }
+
+    /// Trailers are available after all queued data is read.
+    #[crate::rt_test]
+    async fn test_trailers_after_data() {
+        let (io, server) = IoTest::create();
+        io.remote_buffer_cap(64 * 1024);
+        let client = SimpleClient::new(
+            IoBoxed::from(Io::new(io, SharedCfg::default())),
+            Scheme::HTTP,
+            ByteString::from_static("localhost"),
+        );
+        server.write([0, 0, 0, 4, 0, 0, 0, 0, 0]);
+        sleep(Millis(50)).await;
+        let (snd, rcv) = client
+            .send(Method::GET, "/".into(), HeaderMap::default(), true)
+            .await
+            .unwrap();
+
+        // `200` response and a DATA frame
+        server.write([0, 0, 1, 1, 4, 0, 0, 0, 1, 0x88]);
+        server.write([0, 0, 2, 0, 0, 0, 0, 0, 1, b'a', b'b']);
+        let _ = rcv.recv().await.unwrap();
+        let msg = rcv.recv().await.unwrap();
+        let h2::MessageKind::Data(data, cap) = msg.kind else {
+            panic!("unexpected message: {msg:?}")
+        };
+
+        let (sender, payload) = Payload::create(snd.stream().empty_capacity());
+        sender.feed_data(data, cap);
+        let mut trailers = HeaderMap::default();
+        trailers.insert(
+            crate::http::header::HeaderName::from_static("x-trailer"),
+            crate::http::header::HeaderValue::from_static("1"),
+        );
+        sender.feed_trailers(trailers);
+        // ignored, the payload is complete
+        sender.set_error(PayloadError::Incomplete(None));
+        assert!(payload.trailers().is_none());
+
+        assert_eq!(payload.read().await.unwrap().unwrap(), "ab");
+        assert_eq!(payload.trailers().unwrap().get("x-trailer").unwrap(), "1");
+        assert!(payload.read().await.is_none());
+        assert!(payload.trailers().is_some());
     }
 }

@@ -14,6 +14,7 @@ use crate::http::{
 
 use super::control::{Control, ControlAck, ControlResult, ServiceDisconnectReason};
 use super::decoder::{PayloadDecoder, PayloadItem, PayloadType};
+use super::payload::{Payload, PayloadSender};
 use super::{Message, ProtocolError, codec::Codec, timer::Timer, timer::Timers};
 
 pin_project_lite::pin_project! {
@@ -67,7 +68,7 @@ struct DispatcherInner<F, B, Err> {
     disconnect: Disconnect,
     service: Pipeline<Request, Response<B>, Err>,
     control: Option<Pipeline<Control<F, Err>, ControlAck<F>, DispatchError>>,
-    payload: Option<(PayloadDecoder, bstream::Sender<PayloadError>)>,
+    payload: Option<(PayloadDecoder, PayloadSender)>,
     pending_payload_error: Option<PayloadFailure>,
     /// The response head is sent and its body is not complete
     response_started: bool,
@@ -269,7 +270,7 @@ where
                     match pl {
                         PayloadType::None => (),
                         PayloadType::Payload(decoder) | PayloadType::Stream(decoder) => {
-                            let (ps, pl) = bstream::channel();
+                            let (ps, pl) = Payload::create();
                             req.replace_payload(http::Payload::H1(pl));
                             self.payload = Some((decoder, ps));
 
@@ -574,6 +575,10 @@ where
                                 Some(PayloadItem::Chunk(chunk)) => {
                                     updated = true;
                                     sender.feed_data(chunk);
+                                    continue;
+                                }
+                                Some(PayloadItem::Trailers(trailers)) => {
+                                    sender.feed_trailers(trailers);
                                     continue;
                                 }
                                 Some(PayloadItem::Eof) => {
@@ -1009,10 +1014,7 @@ mod tests {
         );
 
         h1.inner.timers.stop(&h1.inner.io);
-        h1.inner.payload = Some((
-            PayloadDecoder::length(4),
-            bstream::channel::<PayloadError>().0,
-        ));
+        h1.inner.payload = Some((PayloadDecoder::length(4), Payload::create().0));
         h1.inner.start_payload_timer();
         h1.inner.timers.payload_decoded(&h1.inner.io, 2);
         assert_eq!(h1.inner.timers.progress.max_timeout, Seconds(5));
@@ -1070,10 +1072,7 @@ mod tests {
     fn exhausted_payload_h1(
         server: IoTest,
         rate: u32,
-    ) -> (
-        Dispatcher<Base, body::Body, io::Error>,
-        bstream::Receiver<PayloadError>,
-    ) {
+    ) -> (Dispatcher<Base, body::Body, io::Error>, Payload) {
         let config: SharedCfg = SharedCfg::new("SVC")
             .add(HttpServiceConfig::new().set_payload_read_rate(Seconds(1), Seconds(5), rate))
             .into();
@@ -1087,7 +1086,7 @@ mod tests {
             None,
             DispatcherConfig::default(),
         );
-        let (tx, rx) = bstream::channel::<PayloadError>();
+        let (tx, rx) = Payload::create();
         h1.inner.payload = Some((PayloadDecoder::length(4), tx));
         h1.inner.timers.stop(&h1.inner.io);
         h1.inner.timers.active = Timer::PayloadPaused;

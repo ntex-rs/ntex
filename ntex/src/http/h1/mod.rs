@@ -10,6 +10,7 @@ pub(crate) mod decoder;
 mod default;
 mod dispatcher;
 pub(crate) mod encoder;
+mod payload;
 mod service;
 mod timer;
 
@@ -20,22 +21,11 @@ pub use self::codec::Codec;
 pub use self::control::{Control, ControlAck};
 pub use self::decoder::{PayloadDecoder, PayloadItem, PayloadType};
 pub use self::default::DefaultControlService;
+pub use self::payload::Payload;
 pub use self::service::H1Service;
 
 pub(super) use self::service::handle_io;
-use crate::{channel::bstream::Receiver, util::Bytes};
-
-/// A buffered stream of an HTTP/1 request body's decoded bytes.
-///
-/// Each item is either a body chunk or a [`PayloadError`](super::error::PayloadError).
-/// Normal body completion closes the stream, after which receiving returns
-/// `None`. A payload error is yielded once before the stream terminates.
-///
-/// The HTTP/1 dispatcher stops reading body data while this stream's buffer is
-/// full. Consuming items therefore releases transport-level backpressure.
-/// Dropping the stream before the complete body has been decoded prevents the
-/// connection from being reused and causes the dispatcher to disconnect it.
-pub type Payload = Receiver<super::error::PayloadError>;
+use crate::util::Bytes;
 
 /// A message passed to an HTTP/1 request or response encoder.
 ///
