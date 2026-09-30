@@ -8,6 +8,8 @@
 
 * Fix IntoFailure::fail() for Error<E> double wrapping the error and losing extension items and backtrace
 
+* Capture caller location in ErrorMapping::into_error(), consistent with Error::new()
+
 ## [2.6.0] - 2026-09-07
 
 * Introduce IntoFailure trait

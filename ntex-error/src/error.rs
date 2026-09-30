@@ -255,6 +255,7 @@ impl<T, E, U> ErrorMapping<T, E, U> for Result<T, E>
 where
     U: From<E>,
 {
+    #[track_caller]
     fn into_error(self) -> Result<T, Error<U>> {
         match self {
             Ok(val) => Ok(val),
