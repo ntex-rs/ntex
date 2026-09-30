@@ -247,4 +247,11 @@ mod tests {
         let s = format!("{:?}", req.head());
         assert!(s.contains("RequestHead { id: 0, uri:"));
     }
+
+    #[test]
+    fn test_default() {
+        let req = Request::default();
+        assert_eq!(req.method(), Method::GET);
+        assert!(req.io().is_none());
+    }
 }

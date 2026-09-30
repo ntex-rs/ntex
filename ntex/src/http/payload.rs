@@ -144,4 +144,32 @@ mod tests {
             std::mem::size_of::<Option<Payload>>()
         );
     }
+
+    #[crate::rt_test]
+    async fn payload_conversions() {
+        use crate::http::h1;
+
+        let (tx, rx) = crate::channel::bstream::channel();
+        let mut pl = Payload::from(h1::Payload::from(rx));
+        assert!(matches!(pl, Payload::H1(_)));
+        tx.feed_data(Bytes::from_static(b"data"));
+        tx.feed_eof();
+        assert_eq!(pl.recv().await.unwrap().unwrap(), "data");
+        assert!(pl.recv().await.is_none());
+        assert!(pl.trailers().is_none());
+
+        let mut pl = Payload::None;
+        assert!(pl.recv().await.is_none());
+        assert!(pl.trailers().is_none());
+
+        let (tx, rx) = crate::channel::bstream::channel();
+        let pl: PayloadStream = Box::pin(rx);
+        let mut pl = Payload::from(pl);
+        assert!(matches!(pl, Payload::Stream(_)));
+        tx.feed_eof();
+        assert!(pl.recv().await.is_none());
+        assert!(pl.trailers().is_none());
+        assert!(matches!(pl.take(), Payload::Stream(_)));
+        assert!(matches!(pl, Payload::None));
+    }
 }

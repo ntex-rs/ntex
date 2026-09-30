@@ -308,4 +308,47 @@ mod tests {
         assert!(matches!(decoder.next().await, Some(Err(_))));
         assert!(decoder.next().await.is_none());
     }
+
+    #[crate::rt_test]
+    async fn decoder_from_headers() {
+        use crate::http::header::HeaderValue;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CONTENT_ENCODING,
+            HeaderValue::from_bytes(b"gzip\xff").unwrap(),
+        );
+        let chunks = vec![Ok::<_, PayloadError>(Bytes::from_static(b"raw"))];
+        let mut decoder = Decoder::from_headers(stream::iter(chunks), &headers);
+        assert!(!decoder.is_decoding());
+        assert_eq!(decoder.next().await.unwrap().unwrap(), "raw");
+        assert!(decoder.next().await.is_none());
+    }
+
+    #[crate::rt_test]
+    async fn decoder_error_on_blocking_pool() {
+        let chunks = vec![Ok::<_, PayloadError>(Bytes::from(vec![b'x'; INPLACE * 2]))];
+        let mut decoder = Decoder::new(stream::iter(chunks), ContentEncoding::Deflate);
+        assert!(matches!(decoder.next().await, Some(Err(_))));
+        assert!(decoder.next().await.is_none());
+    }
+
+    #[crate::rt_test]
+    async fn decoder_truncated_stream() {
+        let mut e = GzEncoder::new(Vec::new(), Compression::fast());
+        e.write_all(b"hello world").unwrap();
+        let data = e.finish().unwrap();
+
+        let chunks = vec![Ok::<_, PayloadError>(Bytes::copy_from_slice(
+            &data[..data.len() - 4],
+        ))];
+        let mut decoder = Decoder::new(stream::iter(chunks), ContentEncoding::Gzip);
+        let mut result = Ok(());
+        while let Some(chunk) = decoder.next().await {
+            if let Err(e) = chunk {
+                result = Err(e);
+            }
+        }
+        assert!(result.is_err());
+    }
 }

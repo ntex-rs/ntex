@@ -163,7 +163,7 @@ where
     F: AsyncFn(In, &ApplyCtx<'_, Sf::Service, St, Req>) -> Result<Out, Err> + Clone,
     Sf: ServiceFactory<St, Req>,
 {
-    /// Create new `ApplyFactory` new service instance
+    /// Creates a new `ApplyFactory`.
     pub(crate) fn new(sf: Sf, f: F) -> Self
     where
         Sf: ServiceFactory<St, Req>,

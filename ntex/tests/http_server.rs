@@ -1586,6 +1586,58 @@ async fn test_h2_expect_continue() {
     assert!(!client.is_closed());
 }
 
+/// Failure of the control service resets the stream, the connection stays open.
+#[ntex::test]
+async fn test_h2_expect_control_error() {
+    use ntex::http::{HeaderMap, h2, uri::Scheme};
+    use ntex_h2::{MessageKind, client::SimpleClient};
+
+    let srv = test_server(async |_| {
+        HttpService::h2(async |_: Request| Ok::<_, io::Error>(Response::Ok().build())).control(
+            async |msg: h2::Control<_>| match msg {
+                h2::Control::Expect(expect)
+                    if expect.pseudo().path.as_deref() == Some("/error") =>
+                {
+                    Err(io::Error::other("control error"))
+                }
+                msg => Ok(msg.ack()),
+            },
+        )
+    });
+
+    let io = ntex::connect::connect(srv.addr()).await.unwrap();
+    let client = SimpleClient::new(io, Scheme::HTTP, "localhost".into());
+    let mut hdrs = HeaderMap::default();
+    hdrs.insert(header::EXPECT, HeaderValue::from_static("100-Continue"));
+
+    let (_snd, rcv) = client
+        .send(Method::POST, "/error".into(), hdrs, false)
+        .await
+        .unwrap();
+    let msg = rcv.recv().await.unwrap();
+    let MessageKind::Eof(ntex_h2::StreamEof::Error(err)) = msg.kind else {
+        panic!("unexpected message: {msg:?}")
+    };
+    assert!(
+        matches!(
+            &*err,
+            ntex_h2::StreamError::Reset(ntex_h2::frame::Reason::INTERNAL_ERROR)
+        ),
+        "{err:?}"
+    );
+
+    // the connection is still usable
+    let (_snd, rcv) = client
+        .send(Method::GET, "/".into(), HeaderMap::default(), true)
+        .await
+        .unwrap();
+    let msg = rcv.recv().await.unwrap();
+    let MessageKind::Headers { pseudo, .. } = msg.kind else {
+        panic!("unexpected message: {msg:?}")
+    };
+    assert_eq!(pseudo.status, Some(StatusCode::OK));
+}
+
 /// Informational response of the application cannot complete the request.
 #[ntex::test]
 async fn test_h2_informational_response_is_replaced() {

@@ -12,7 +12,7 @@ pub struct MapErr<F, S, E> {
 }
 
 impl<F, S, E> MapErr<F, S, E> {
-    /// Create new `MapErr` combinator
+    /// Creates a new `MapErr` service.
     pub(crate) fn new<St, Req>(f: F, svc: S) -> Self
     where
         S: Service<St, Req>,
@@ -76,7 +76,7 @@ where
 
 /// Service factory produced by the `map_err` combinator.
 ///
-/// This is created by the `ServiceFactory::map_err` method.
+/// This is created by the `ServiceChainFactory::map_err()` method.
 pub struct MapErrFactory<F, Sf, E> {
     f: F,
     sf: Sf,
@@ -84,7 +84,7 @@ pub struct MapErrFactory<F, Sf, E> {
 }
 
 impl<F, Sf, E> MapErrFactory<F, Sf, E> {
-    /// Create new `MapErr` new service instance
+    /// Creates a new `MapErrFactory`.
     pub(crate) fn new<St, Req>(f: F, sf: Sf) -> Self
     where
         Sf: ServiceFactory<St, Req>,

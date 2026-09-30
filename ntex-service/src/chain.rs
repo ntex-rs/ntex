@@ -112,6 +112,9 @@ impl<S: Service<St, Req>, St, Req> ServiceChain<S, St, Req> {
     }
 
     /// Adds a custom readiness check to the service chain.
+    ///
+    /// The check runs after the wrapped service's own readiness check succeeds;
+    /// the chain is ready only when both are ready.
     pub fn readiness<F>(
         self,
         ready: F,
@@ -191,6 +194,9 @@ impl<S: Service<St, Req>, St, Req> Service<St, Req> for ServiceChain<S, St, Req>
 
 impl<Sf: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Sf, St, Req> {
     /// Chains another factory after this factory's services.
+    ///
+    /// Each created service passes its response to the next service as its request.
+    /// If the first service returns an error, the next service is not called.
     pub fn and_then<U>(
         self,
         factory: impl IntoServiceFactory<U, St, Sf::Res>,
@@ -286,6 +292,9 @@ impl<Sf: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Sf, St, Req> {
     }
 
     /// Adds a custom readiness check to each created service.
+    ///
+    /// The check runs after the wrapped service's own readiness check succeeds;
+    /// the service is ready only when both are ready.
     pub fn readiness<F>(
         self,
         ready: F,

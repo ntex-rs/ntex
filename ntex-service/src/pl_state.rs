@@ -70,8 +70,8 @@ where
     ///
     /// # Panics
     ///
-    /// Panics if the pipeline is shutting down (i.e., `.shutdown()` or
-    /// `.poll_shutdown()` has been called).
+    /// Panics if `.shutdown()` has been called. Unlike [`crate::Pipeline::poll_ready`],
+    /// it does not return `Ready(Ok(()))` after shutdown.
     pub fn poll_ready(&self, cx: &mut Context<'_>, st: &St) -> Poll<Result<(), Err>>
     where
         St: Clone,
@@ -233,6 +233,14 @@ struct PipelineInner<S, St, E> {
     st_runtime: cell::UnsafeCell<RuntimeState<St, E>>,
 }
 
+impl<S, St, E> Drop for PipelineInner<S, St, E> {
+    fn drop(&mut self) {
+        // The readiness future borrows `s` and `waiters`, so it must be dropped
+        // before the fields it references
+        *self.st_runtime.get_mut() = RuntimeState::New;
+    }
+}
+
 enum RuntimeState<St, E> {
     New,
     Readiness(Box<dyn CheckReadiness<St, E>>),
@@ -333,9 +341,9 @@ where
         let pl_state = unsafe { &mut *self.st_runtime.get() };
         match pl_state {
             RuntimeState::New => {
-                // SAFETY: `fut` has same lifetime same as lifetime of `self.pl`.
-                // Pipeline::svc is heap allocated(Rc<S>), and it is being kept alive until
-                // `self` is alive
+                // SAFETY: `self` is heap allocated (`Rc<PipelineInner>`) and never moves.
+                // `fut` is stored in `self.st_runtime`, which is reset before other
+                // fields are dropped (see `Drop for PipelineInner`), so `pl` outlives `fut`.
                 let pl = unsafe { &*(ptr::from_ref(self)) };
                 let fut = Box::new(CheckReadinessFut {
                     pl,
@@ -347,7 +355,7 @@ where
                 self.poll_ready(cx, st)
             }
             RuntimeState::Readiness(fut) => fut.poll(cx, st),
-            RuntimeState::Shutdown => panic!("Pipeline is shutding down"),
+            RuntimeState::Shutdown => panic!("Pipeline is shutting down"),
         }
     }
 
@@ -424,5 +432,143 @@ impl<St, Req, Res, Err> fmt::Debug for PipelineState<St, Req, Res, Err> {
 impl<St, Req, Res, Err> fmt::Debug for PipelineStateBinding<St, Req, Res, Err> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PipelineStateBinding").finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::Cell, future::pending, task::Waker};
+
+    use ntex::{channel::condition, util::lazy};
+
+    use super::*;
+
+    struct Srv(Rc<Cell<usize>>, condition::Waiter);
+
+    impl Service<usize, usize> for Srv {
+        type Res = usize;
+        type Error = ();
+
+        async fn ready(&self, _: Ctx<'_, Self, usize>) -> Result<(), ()> {
+            self.0.set(self.0.get() + 1);
+            self.1.ready().await;
+            Ok(())
+        }
+
+        async fn call(&self, req: usize, ctx: Ctx<'_, Self, usize>) -> Result<usize, ()> {
+            if req == 0 { Err(()) } else { Ok(req + *ctx.st()) }
+        }
+
+        async fn shutdown(&self, ctx: Ctx<'_, Self, usize>) {
+            self.0.set(self.0.get() + 100 * *ctx);
+        }
+    }
+
+    #[ntex::test]
+    async fn pipeline_state() {
+        let cnt = Rc::new(Cell::new(0));
+        let cond = condition::Condition::new();
+        let pl = PipelineState::new(Srv(cnt.clone(), cond.wait()));
+        assert!(format!("{pl:?}").contains("PipelineState"));
+
+        cond.notify_and_lock(());
+        assert_eq!(pl.ready(&1).await, Ok(()));
+        assert_eq!(pl.call(1, &2).await, Ok(3));
+        assert_eq!(pl.call(0, &2).await, Err(()));
+        assert_eq!(pl.call_nowait(2, &3).await, Ok(5));
+        assert_eq!(cnt.get(), 3);
+
+        let b = pl.bind();
+        assert!(format!("{b:?}").contains("PipelineStateBinding"));
+        let b2 = b.clone();
+        drop(b);
+        assert_eq!(b2.call(1, &10).await, Ok(11));
+        assert_eq!(b2.call_nowait(1, &20).await, Ok(21));
+        assert_eq!(cnt.get(), 4);
+
+        let b = pl.bind_state(7);
+        assert_eq!(b.ready().await, Ok(()));
+        assert_eq!(b.call(1).await, Ok(8));
+        assert_eq!(b.call_nowait(2).await, Ok(9));
+        assert_eq!(b.clone().call_static(3).await, Ok(10));
+        assert_eq!(cnt.get(), 7);
+        drop(b);
+
+        pl.shutdown(&2).await;
+        assert_eq!(cnt.get(), 207);
+    }
+
+    #[ntex::test]
+    async fn pipeline_state_poll_ready() {
+        let cnt = Rc::new(Cell::new(0));
+        let cond = condition::Condition::new();
+        let pl = PipelineState::new(Srv(cnt.clone(), cond.wait()));
+
+        assert!(lazy(|cx| pl.poll_ready(cx, &1)).await.is_pending());
+        assert!(lazy(|cx| pl.poll_ready(cx, &1)).await.is_pending());
+        assert_eq!(cnt.get(), 1);
+
+        // binding waits while main readiness check is in progress
+        let b = pl.bind_state(1);
+        let mut fut = Box::pin(b.ready());
+        assert!(lazy(|cx| fut.as_mut().poll(cx)).await.is_pending());
+        assert_eq!(cnt.get(), 1);
+
+        cond.notify(());
+        assert_eq!(lazy(|cx| pl.poll_ready(cx, &1)).await, Poll::Ready(Ok(())));
+        assert_eq!(cnt.get(), 1);
+
+        // binding owns the readiness check now
+        assert!(lazy(|cx| fut.as_mut().poll(cx)).await.is_pending());
+        assert_eq!(cnt.get(), 2);
+        assert!(lazy(|cx| pl.poll_ready(cx, &1)).await.is_pending());
+        assert_eq!(cnt.get(), 2);
+
+        // dropping the owner releases the readiness check
+        drop(fut);
+        assert!(lazy(|cx| pl.poll_ready(cx, &1)).await.is_pending());
+        assert_eq!(cnt.get(), 3);
+    }
+
+    #[ntex::test]
+    #[should_panic(expected = "Pipeline is shutting down")]
+    async fn pipeline_state_poll_ready_after_shutdown() {
+        let cond = condition::Condition::new();
+        let pl = PipelineState::new(Srv(Rc::default(), cond.wait()));
+        pl.shutdown(&1).await;
+        let _ = lazy(|cx| pl.poll_ready(cx, &1)).await;
+    }
+
+    struct Guard<'a>(&'a [usize]);
+
+    impl Drop for Guard<'_> {
+        fn drop(&mut self) {
+            assert_eq!(self.0.iter().sum::<usize>(), 3);
+        }
+    }
+
+    struct Pending(Vec<usize>);
+
+    impl Service<usize, ()> for Pending {
+        type Res = ();
+        type Error = ();
+
+        async fn ready(&self, _: Ctx<'_, Self, usize>) -> Result<(), ()> {
+            let _g = Guard(&self.0);
+            pending().await
+        }
+
+        async fn call(&self, (): (), _: Ctx<'_, Self, usize>) -> Result<(), ()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn miri_drop_with_pending_readiness() {
+        let mut cx = Context::from_waker(Waker::noop());
+
+        let pl = PipelineState::new(Pending(vec![1, 2]));
+        assert!(pl.poll_ready(&mut cx, &1).is_pending());
+        drop(pl);
     }
 }

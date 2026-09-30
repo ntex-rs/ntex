@@ -569,4 +569,23 @@ mod tests {
         .join()
         .unwrap();
     }
+
+    #[test]
+    fn response_connection_type() {
+        let mut res = Message::<ResponseHead>::with_status(StatusCode::OK);
+        assert_eq!(res.connection_type(), ConnectionType::KeepAlive);
+        res.version = Version::HTTP_10;
+        assert_eq!(res.connection_type(), ConnectionType::Close);
+        res.set_connection_type(ConnectionType::KeepAlive);
+        assert_eq!(res.connection_type(), ConnectionType::KeepAlive);
+    }
+
+    #[test]
+    fn message_clone() {
+        let mut msg = Message::<RequestHead>::new();
+        msg.method = Method::POST;
+        let msg2 = msg.clone();
+        assert_eq!(msg2.method, Method::POST);
+        assert!(CurrentIo::None.take().is_none());
+    }
 }

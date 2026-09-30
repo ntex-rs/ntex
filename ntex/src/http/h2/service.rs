@@ -633,3 +633,37 @@ fn prepare_response(head: &mut ResponseHead, size: &mut BodySize) {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_request_uri() {
+        let mut pseudo = h2::frame::PseudoHeaders::default();
+        assert!(request_uri(&pseudo).is_none());
+
+        // CONNECT uses the authority form
+        pseudo.method = Some(Method::CONNECT);
+        pseudo.authority = Some("example.com:443".into());
+        let (method, uri) = request_uri(&pseudo).unwrap();
+        assert_eq!(method, Method::CONNECT);
+        assert_eq!(uri.authority().unwrap(), "example.com:443");
+
+        pseudo.authority = Some("bad authority".into());
+        assert!(request_uri(&pseudo).is_none());
+
+        // absolute form requires the scheme
+        pseudo.method = Some(Method::GET);
+        pseudo.authority = Some("example.com".into());
+        pseudo.path = Some("/path".into());
+        assert!(request_uri(&pseudo).is_none());
+        pseudo.scheme = Some("https".into());
+        let (_, uri) = request_uri(&pseudo).unwrap();
+        assert_eq!(uri.to_string(), "https://example.com/path");
+
+        pseudo.authority = None;
+        let (_, uri) = request_uri(&pseudo).unwrap();
+        assert_eq!(uri.path(), "/path");
+    }
+}
