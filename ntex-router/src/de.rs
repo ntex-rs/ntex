@@ -166,9 +166,7 @@ impl<'de, T: ResourcePath + 'de> Deserializer<'de> for PathDeserializer<'de, T> 
         V: Visitor<'de>,
     {
         if self.path.is_empty() {
-            Err(de::value::Error::custom(
-                "expeceted at least one parameters",
-            ))
+            Err(de::value::Error::custom("expected at least one parameter"))
         } else {
             visitor.visit_enum(ValueEnum {
                 value: &self.path[0],
@@ -265,11 +263,11 @@ impl<'de> Deserializer<'de> for Key<'de> {
         visitor.visit_str(self.key)
     }
 
-    fn deserialize_any<V>(self, _visitor: V) -> Result<V::Value, Self::Error>
+    fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        Err(de::value::Error::custom("Unexpected"))
+        visitor.visit_borrowed_str(self.key)
     }
 
     forward_to_deserialize_any! {
@@ -303,7 +301,7 @@ impl<'de> Deserializer<'de> for Value<'de> {
     parse_value!(deserialize_bool, visit_bool, "bool");
     parse_value!(deserialize_i8, visit_i8, "i8");
     parse_value!(deserialize_i16, visit_i16, "i16");
-    parse_value!(deserialize_i32, visit_i32, "i16");
+    parse_value!(deserialize_i32, visit_i32, "i32");
     parse_value!(deserialize_i64, visit_i64, "i64");
     parse_value!(deserialize_u8, visit_u8, "u8");
     parse_value!(deserialize_u16, visit_u16, "u16");
@@ -703,6 +701,268 @@ mod tests {
         let s: Result<TestEnum, de::value::Error> =
             de::Deserialize::deserialize(PathDeserializer::new(&path));
         assert!(s.is_err());
-        assert!(format!("{s:?}").contains("expeceted at least one parameters"));
+        assert!(format!("{s:?}").contains("expected at least one parameter"));
+    }
+
+    #[test]
+    fn test_extract_value_types() {
+        use std::collections::HashMap;
+
+        #[derive(Debug, Deserialize, PartialEq)]
+        struct Unit;
+
+        #[derive(Debug, Deserialize, PartialEq)]
+        struct NewType(u16);
+
+        #[derive(Debug, Deserialize, PartialEq)]
+        struct Values {
+            b: bool,
+            i1: i16,
+            i2: i32,
+            i3: i64,
+            u1: u8,
+            u2: u16,
+            u3: u64,
+            f1: f32,
+            f2: f64,
+            c: char,
+            unit: Unit,
+            nt: NewType,
+            opt: Option<u32>,
+            #[serde(with = "serde_bytes_str")]
+            bytes: Vec<u8>,
+        }
+
+        mod serde_bytes_str {
+            pub(super) fn deserialize<'de, D: serde::Deserializer<'de>>(
+                d: D,
+            ) -> Result<Vec<u8>, D::Error> {
+                struct V;
+                impl serde::de::Visitor<'_> for V {
+                    type Value = Vec<u8>;
+                    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        f.write_str("bytes")
+                    }
+                    fn visit_bytes<E>(self, v: &[u8]) -> Result<Vec<u8>, E> {
+                        Ok(v.to_vec())
+                    }
+                }
+                d.deserialize_bytes(V)
+            }
+        }
+
+        let mut path = Path::new("/");
+        path.segments = vec![
+            ("b", PathItem::Static("true")),
+            ("i1", PathItem::Static("-1")),
+            ("i2", PathItem::Static("-2")),
+            ("i3", PathItem::Static("-3")),
+            ("u1", PathItem::Static("1")),
+            ("u2", PathItem::Static("2")),
+            ("u3", PathItem::Static("3")),
+            ("f1", PathItem::Static("1.5")),
+            ("f2", PathItem::Static("2.5")),
+            ("c", PathItem::Static("x")),
+            ("unit", PathItem::Static("")),
+            ("nt", PathItem::Static("7")),
+            ("opt", PathItem::Static("8")),
+            ("bytes", PathItem::Static("raw")),
+            ("ignored", PathItem::Static("i")),
+        ];
+        let v: Values = path.load().unwrap();
+        assert_eq!(
+            v,
+            Values {
+                b: true,
+                i1: -1,
+                i2: -2,
+                i3: -3,
+                u1: 1,
+                u2: 2,
+                u3: 3,
+                f1: 1.5,
+                f2: 2.5,
+                c: 'x',
+                unit: Unit,
+                nt: NewType(7),
+                opt: Some(8),
+                bytes: b"raw".to_vec(),
+            }
+        );
+
+        let m: HashMap<String, String> = path.load().unwrap();
+        assert_eq!(m.len(), 15);
+        assert_eq!(m["c"], "x");
+        let mut p = Path::new("/");
+        p.segments = vec![("a", PathItem::Static("1"))];
+        let m: HashMap<&str, u8> = p.load().unwrap();
+        assert_eq!(m["a"], 1);
+
+        let res: Result<HashMap<u32, String>, _> = path.load();
+        assert!(format!("{res:?}").contains("invalid type"), "{res:?}");
+
+        #[derive(Debug, Deserialize)]
+        struct I32 {
+            _v: i32,
+        }
+        let mut path = Path::new("/");
+        path.segments = vec![("_v", PathItem::Static("x"))];
+        let res: Result<I32, _> = path.load();
+        assert!(
+            format!("{res:?}").contains("can not parse \\\"x\\\" to a i32"),
+            "{res:?}"
+        );
+    }
+
+    #[test]
+    fn test_extract_single_value_types() {
+        #[derive(Debug, Deserialize, PartialEq)]
+        struct Unit;
+
+        let mut path = Path::new("/");
+        path.segments = vec![("v", PathItem::Static("1"))];
+
+        let mut bool_path = Path::new("/");
+        bool_path.segments = vec![("v", PathItem::Static("false"))];
+        assert!(!bool_path.load::<bool>().unwrap());
+        assert_eq!(path.load::<i16>().unwrap(), 1);
+        assert_eq!(path.load::<i32>().unwrap(), 1);
+        assert_eq!(path.load::<i64>().unwrap(), 1);
+        assert_eq!(path.load::<u8>().unwrap(), 1);
+        assert_eq!(path.load::<u16>().unwrap(), 1);
+        assert_eq!(path.load::<u64>().unwrap(), 1);
+        assert!((path.load::<f32>().unwrap() - 1.0).abs() < f32::EPSILON);
+        assert!((path.load::<f64>().unwrap() - 1.0).abs() < f64::EPSILON);
+        assert_eq!(path.load::<char>().unwrap(), '1');
+        assert_eq!(path.load::<String>().unwrap(), "1");
+        assert_eq!(path.load::<Unit>().unwrap(), Unit);
+
+        let err = |res: Result<(), de::value::Error>| res.unwrap_err().to_string();
+        assert_eq!(
+            err(path.load::<Option<u8>>().map(drop)),
+            "unsupported type: Option<T>"
+        );
+        assert_eq!(
+            err(path.load::<serde::de::IgnoredAny>().map(drop)),
+            "unsupported type: ignored_any"
+        );
+        assert_eq!(
+            err(path.load::<Vec<Vec<u8>>>().map(drop)),
+            "unsupported type: seq"
+        );
+        assert_eq!(
+            err(path
+                .load::<Vec<std::collections::HashMap<String, String>>>()
+                .map(drop)),
+            "unsupported type: map"
+        );
+        assert_eq!(
+            err(path.load::<Vec<(u8, u8)>>().map(drop)),
+            "unsupported type: tuple"
+        );
+
+        #[derive(Debug, Deserialize)]
+        struct S {
+            _a: u8,
+        }
+        #[derive(Debug, Deserialize)]
+        struct TS(#[allow(dead_code)] u8, #[allow(dead_code)] u8);
+        assert_eq!(
+            err(path.load::<Vec<S>>().map(drop)),
+            "unsupported type: struct"
+        );
+        assert_eq!(
+            err(path.load::<Vec<TS>>().map(drop)),
+            "unsupported type: tuple struct"
+        );
+        assert_eq!(
+            err(path.load::<Vec<serde_value::Any>>().map(drop)),
+            "unsupported type: any"
+        );
+        assert_eq!(
+            err(path.load::<Vec<serde_value::Ident>>().map(drop)),
+            "unsupported type: identifier"
+        );
+        assert_eq!(
+            err(path.load::<serde_value::Any>().map(drop)),
+            "unsupported type: 'any'"
+        );
+        assert_eq!(
+            err(path.load::<serde_value::Ident>().map(drop)),
+            "unsupported type: identifier"
+        );
+        assert_eq!(
+            err(path.load::<serde_value::Bytes>().map(drop)),
+            "unsupported type: bytes"
+        );
+    }
+
+    /// Types that request specific deserializer methods
+    mod serde_value {
+        use serde::de::{Deserialize, Deserializer, IgnoredAny, Visitor};
+        use std::fmt;
+
+        struct V;
+        impl Visitor<'_> for V {
+            type Value = ();
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("anything")
+            }
+        }
+
+        #[derive(Debug)]
+        pub(super) struct Any;
+        impl<'de> Deserialize<'de> for Any {
+            fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                d.deserialize_any(IgnoredAny).map(|_| Any)
+            }
+        }
+
+        #[derive(Debug)]
+        pub(super) struct Ident;
+        impl<'de> Deserialize<'de> for Ident {
+            fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                d.deserialize_identifier(V).map(|()| Ident)
+            }
+        }
+
+        #[derive(Debug)]
+        pub(super) struct Bytes;
+        impl<'de> Deserialize<'de> for Bytes {
+            fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                d.deserialize_bytes(V).map(|()| Bytes)
+            }
+        }
+    }
+
+    #[test]
+    fn test_extract_enum_variants() {
+        #[derive(Debug, Deserialize)]
+        #[serde(rename_all = "lowercase")]
+        #[allow(dead_code)]
+        enum E {
+            Unit,
+            New(u8),
+            Tuple(u8, u8),
+            Struct { a: u8 },
+        }
+
+        let mut path = Path::new("/");
+        for (name, ok) in [
+            ("unit", true),
+            ("new", false),
+            ("tuple", false),
+            ("struct", false),
+        ] {
+            path.segments = vec![("v", PathItem::Static(name))];
+            let res: Result<E, _> = path.load();
+            assert_eq!(res.is_ok(), ok, "{name}");
+            if !ok {
+                assert!(format!("{res:?}").contains("not supported"), "{name}");
+            }
+            // enum as a value of a sequence element
+            let res: Result<(E,), _> = path.load();
+            assert_eq!(res.is_ok(), ok, "{name}");
+        }
     }
 }
