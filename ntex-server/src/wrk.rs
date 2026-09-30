@@ -97,7 +97,9 @@ impl<T> Worker<T> {
                     log::info!("Set affinity to {cid:?} for worker {n:?}");
                 }
 
-                spawn(async move {
+                // the arbiter is stopped even if the service panics, runtimes
+                // that catch task panics keep the arbiter running otherwise
+                let _ = spawn(async move {
                     match ServiceRunner::create(&n, cfg, r_rx, s_rx, a_tx).await {
                         Ok(wrk) => {
                             log::debug!("Server instance has been created in {n:?}");
@@ -107,8 +109,9 @@ impl<T> Worker<T> {
                             log::error!("Cannot start worker {n:?}");
                         }
                     }
-                    Arbiter::current().stop();
-                });
+                })
+                .await;
+                Arbiter::current().stop();
             });
 
         worker
@@ -281,7 +284,11 @@ impl Drop for WorkerAvailabilityTx {
         self.inner.failed.store(true, Ordering::Release);
         self.inner.updated.store(true, Ordering::Release);
         self.inner.available.store(false, Ordering::Release);
-        self.inner.waker.wake();
+        // the arbiter `on_stop` callback wakes the waiter. compio aborts the
+        // process if a task on another thread is woken during unwinding
+        if !std::thread::panicking() {
+            self.inner.waker.wake();
+        }
     }
 }
 

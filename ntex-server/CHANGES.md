@@ -2,6 +2,9 @@
 
 ## [4.2.0] - Unreleased
 
+* Fix worker restart after a service panic on runtimes that catch task panics (compio, tokio);
+  avoid process abort on compio when a worker panics
+
 * Rename `ServerBuilder::maxconn()` to `max_connections()`; the old name is deprecated
 
 * Replace `ntex-polling` with the upstream `polling` crate
