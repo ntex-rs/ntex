@@ -235,28 +235,9 @@ pub enum DispatchError {
 #[derive(thiserror::Error, Clone, Debug)]
 /// Errors that can occur while dispatching HTTP/2 requests.
 pub enum H2Error {
-    /// Operation error
-    #[error("Operation error")]
-    Operation(
-        #[from]
-        #[source]
-        h2::OperationError,
-    ),
-    /// Pseudo headers error
-    #[error("Missing pseudo header: {0}")]
-    MissingPseudo(&'static str),
-    /// Uri parsing error
-    #[error("Uri")]
-    Uri,
     /// Too many consecutive empty non-final `DATA` frames
     #[error("Too many consecutive empty DATA frames")]
     EmptyDataFrames,
-}
-
-impl From<ntex_http::compat::InvalidUri> for H2Error {
-    fn from(_: ntex_http::compat::InvalidUri) -> H2Error {
-        H2Error::Uri
-    }
 }
 
 impl crate::error::ErrorDiagnostic for H2Error {
