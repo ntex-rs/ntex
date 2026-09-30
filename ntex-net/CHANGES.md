@@ -4,6 +4,9 @@
 
 * Remove the `neon-iocp` feature, it had no effect, Windows always uses IOCP
 
+* compio: map Win32 network errors of connect, read and write on Windows to
+  `WinSock` errors, a refused connect reported `ErrorKind::Uncategorized`
+
 * IOCP: failed socket completions report `WinSock` errors, a refused `ConnectEx`
   returned `ERROR_CONNECTION_REFUSED` with `ErrorKind::Uncategorized` instead of
   `ConnectionRefused`, resets, aborts and unreachable errors were also uncategorized
