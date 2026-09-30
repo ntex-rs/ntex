@@ -1106,7 +1106,8 @@ async fn test_h2_request_body_dropped_after_response_resets_stream() {
     );
 }
 
-/// The request payload ends after an error, the next read returns `None`.
+/// The request payload reports the stream reset error and ends after it,
+/// the next read returns `None`.
 #[ntex::test]
 async fn test_h2_request_payload_ends_after_error() {
     use ntex::http::{HeaderMap, uri::Scheme};
@@ -1127,7 +1128,7 @@ async fn test_h2_request_payload_ends_after_error() {
                     loop {
                         match ntex::time::timeout(Millis(500), stream_recv(&mut pl)).await {
                             Ok(Some(Ok(chunk))) => items.push(format!("{chunk:?}")),
-                            Ok(Some(Err(_))) => items.push("error".to_string()),
+                            Ok(Some(Err(e))) => items.push(format!("error: {e:?}")),
                             Ok(None) => break,
                             Err(()) => {
                                 items.push("timeout".to_string());
@@ -1162,9 +1163,13 @@ async fn test_h2_request_payload_ends_after_error() {
             break;
         }
     }
-    assert_eq!(
-        items.expect("request body is not completed"),
-        vec!["b\"chunk\"".to_string(), "error".to_string()]
+    // the stream reset error is reported, not a generic incomplete payload
+    let items = items.expect("request body is not completed");
+    assert_eq!(items.len(), 2, "{items:?}");
+    assert_eq!(items[0], "b\"chunk\"");
+    assert!(
+        items[1].starts_with("error:") && items[1].contains("CANCEL"),
+        "{items:?}"
     );
 }
 

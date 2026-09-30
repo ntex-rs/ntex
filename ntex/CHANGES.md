@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* HTTP/2 payload keeps the first error, a stream reset was reported as
+  `PayloadError::Incomplete` when the sender was dropped
+
 * HTTP/2 payload ends after an error, the next read returned `Pending` forever instead of `None`
 
 * HTTP/2 request payload ignores empty non-final `DATA` frames, they are not flow controlled

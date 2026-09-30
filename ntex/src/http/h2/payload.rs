@@ -13,6 +13,7 @@ bitflags::bitflags! {
     struct Flags: u8 {
         const EOF = 0b0000_0001;
         const DROPPED = 0b0000_0010;
+        const ERROR = 0b0000_0100;
     }
 }
 
@@ -95,9 +96,7 @@ impl Drop for PayloadSender {
     fn drop(&mut self) {
         if let Some(shared) = self.inner.upgrade() {
             drop(shared.on_drop.take());
-            if !shared.flags.get().contains(Flags::EOF) {
-                shared.set_error(PayloadError::Incomplete(None));
-            }
+            shared.set_error(PayloadError::Incomplete(None));
         }
     }
 }
@@ -180,8 +179,12 @@ impl Inner {
     }
 
     fn set_error(&self, err: PayloadError) {
-        self.err.set(Some(err));
-        self.task.wake();
+        // the first error is kept, a finished payload is not failed
+        if !self.flags.get().intersects(Flags::EOF | Flags::ERROR) {
+            self.insert_flags(Flags::ERROR);
+            self.err.set(Some(err));
+            self.task.wake();
+        }
     }
 
     fn feed_eof(&self, data: Bytes, cap: Option<h2::Capacity>) {
