@@ -67,7 +67,7 @@ impl<A: Address> Connector<A> {
             )))
         })
         .and_then(|item| item)
-        .map_err(|e| e.set_service(cfg.service()))
+        .map_err(|e| e.with_service(cfg.service()))
     }
 }
 

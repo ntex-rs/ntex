@@ -112,7 +112,7 @@ where
 {
     fut.await.map_err(|err: Error<E>| {
         if err.service().is_none() {
-            err.set_service(svc)
+            err.with_service(svc)
         } else {
             err
         }

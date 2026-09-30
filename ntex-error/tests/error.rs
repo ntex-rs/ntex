@@ -166,7 +166,7 @@ fn error_container() {
 
     let dbg = format!("{:?}", err.debug());
     assert!(
-        dbg.starts_with("Error { error: Wrapped(Connect(\"a\")), service: None, tag: None"),
+        dbg.starts_with("Error { error: Wrapped(Connect(\"a\")), tag: None, service: None"),
         "{dbg}"
     );
 
@@ -176,8 +176,8 @@ fn error_container() {
 
     // map_err preserves metadata
     let err = Error::<MyError>::new(MyError::Connect("b"), "svc")
-        .set_tag("t1")
-        .insert_item(10u32);
+        .with_tag("t1")
+        .with_item(10u32);
     let shared = err.clone();
     let mapped: Error<Wrapped> = err.map_err();
     assert_eq!(mapped.service(), Some("svc"));
@@ -196,7 +196,7 @@ fn shared_container_mutation() {
     let shared = err.clone();
 
     // mutating a shared container must not affect the other clone
-    let err = err.set_tag("tag").set_service("svc").insert_item("item");
+    let err = err.with_tag("tag").with_service("svc").with_item("item");
     assert_eq!(err.tag(), Some(&Bytes::from_static(b"tag")));
     assert_eq!(err.service(), Some("svc"));
     assert_eq!(err.get_item::<&str>(), Some(&"item"));
@@ -233,7 +233,7 @@ fn repr_falls_back_to_inner_error() {
     assert_eq!(err.tag(), Some(&Bytes::from_static(b"inner-tag")));
     assert_eq!(err.service(), Some("inner-svc"));
 
-    let err = err.set_tag("outer").set_service("outer-svc");
+    let err = err.with_tag("outer").with_service("outer-svc");
     assert_eq!(err.tag(), Some(&Bytes::from_static(b"outer")));
     assert_eq!(err.service(), Some("outer-svc"));
 
@@ -245,8 +245,8 @@ fn repr_falls_back_to_inner_error() {
 #[test]
 fn failure() {
     let err = Error::<MyError>::new(MyError::Inner(Inner), "svc")
-        .set_tag("tag")
-        .insert_item(5u8);
+        .with_tag("tag")
+        .with_item(5u8);
 
     let f = Failure::from(&err);
     assert_eq!(f.signature(), "my-inner");
@@ -277,7 +277,7 @@ fn failure() {
     assert_eq!(f.signature(), "my-inner");
 
     // Error<E>::fail() must share the container, not wrap it again
-    let err = Error::<MyError>::new(MyError::Inner(Inner), "svc").insert_item(7u16);
+    let err = Error::<MyError>::new(MyError::Inner(Inner), "svc").with_item(7u16);
     let f = err.clone().fail();
     assert_eq!(f.get_item::<u16>(), Some(&7));
     assert_eq!(f.service(), Some("svc"));
@@ -290,11 +290,25 @@ fn failure() {
     let f = MyError::Connect("c").fail();
     assert_eq!(f.signature(), "my-connect");
     assert!(StdError::source(&f).is_none());
+
+    // Failure implements ErrorDiagnostic, fail() on Failure is identity
+    let f = Error::<MyError>::new(MyError::Connect("d"), "svc").with_tag("t");
+    let f = Failure::from(f);
+    let bt: *const Backtrace = f.backtrace().unwrap();
+    fn diag_of<T: ErrorDiagnostic>(e: &T) -> (&'static str, Option<&'static str>, Option<&Bytes>) {
+        (e.signature(), e.service(), e.tag())
+    }
+    assert_eq!(
+        diag_of(&f),
+        ("my-connect", Some("svc"), Some(&Bytes::from_static(b"t")))
+    );
+    let f = f.fail();
+    assert!(std::ptr::eq(ErrorDiagnostic::backtrace(&f).unwrap(), bt));
 }
 
 #[test]
 fn fmt_helpers() {
-    let err = Error::<MyError>::new(MyError::Inner(Inner), "svc").set_tag("tag");
+    let err = Error::<MyError>::new(MyError::Inner(Inner), "svc").with_tag("tag");
     let s = fmt_err_string(&err);
     assert_eq!(s, "inner\ninner-cause\n");
 
@@ -307,7 +321,7 @@ fn fmt_helpers() {
     );
 
     // non-utf8 tag is printed with Debug
-    let err = err.set_tag(Bytes::from_static(&[0xff, 0xfe]));
+    let err = err.with_tag(Bytes::from_static(&[0xff, 0xfe]));
     let mut s = String::new();
     fmt_diag_typ(&mut s, None, &err).unwrap();
     assert!(s.contains("tag: b\"\\xff\\xfe\""), "{s}");

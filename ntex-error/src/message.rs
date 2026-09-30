@@ -415,7 +415,7 @@ mod tests {
             err.source().unwrap()
         );
 
-        let err = err.set_tag(Bytes::from("test-tag"));
+        let err = err.with_tag(Bytes::from("test-tag"));
         let msg = fmt_diag_string(&err);
         assert!(msg.contains("test-tag"), "{msg}");
     }

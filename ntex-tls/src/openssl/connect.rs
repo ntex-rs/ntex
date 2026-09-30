@@ -63,7 +63,7 @@ impl<S> SslConnector<S> {
             }
             Err(e) => {
                 log::trace!("{}: SSL Handshake error: {e:?}", cfg.tag());
-                Err(Error::from(ConnectError::from(e)).set_service(cfg.service()))
+                Err(Error::from(ConnectError::from(e)).with_service(cfg.service()))
             }
         }
     }

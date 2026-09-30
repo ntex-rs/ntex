@@ -156,7 +156,7 @@ where
     /// URI validation, timeout handling, or handshake validation fails.
     pub async fn connect(&self) -> Result<WsConnection<F>, Error<WsClientError>> {
         if let Some(err) = self.err.clone() {
-            return Err(Error::from(WsClientError::Config(err)).set_service(self.cfg.service()));
+            return Err(Error::from(WsClientError::Config(err)).with_service(self.cfg.service()));
         }
 
         let mut head = self.request_head();
@@ -185,7 +185,7 @@ where
         let io = self.connector.call(msg).await.into_error()?;
         self.handshake(io, head, &key)
             .await
-            .map_err(|e| e.set_service(self.cfg.service()))
+            .map_err(|e| e.with_service(self.cfg.service()))
     }
 
     /// Sends the handshake request and validates the response.
