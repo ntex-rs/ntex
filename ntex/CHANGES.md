@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* HTTP/2 `304 Not Modified` response has no body, it was sent with `content-length: 0` or
+  with the body `DATA` frames
+
 * HTTP/2 response body error resets only its stream with `INTERNAL_ERROR`, it closed the whole
   connection with `GOAWAY`, a failed send on a closed stream no longer fails the connection
 

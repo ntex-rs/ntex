@@ -1267,6 +1267,50 @@ async fn test_h2_response_body_error_resets_stream() {
     assert!(!client.is_closed());
 }
 
+/// `304 Not Modified` response has no body and no `content-length: 0`.
+#[ntex::test]
+async fn test_h2_not_modified_has_no_body() {
+    use ntex::http::{HeaderMap, uri::Scheme};
+    use ntex_h2::{MessageKind, client::SimpleClient};
+
+    let srv = test_server(async |_| {
+        HttpService::h2(async |req: Request| {
+            let mut res = Response::builder(StatusCode::NOT_MODIFIED);
+            Ok::<_, io::Error>(match req.path() {
+                "/sized" => res.body("body"),
+                "/stream" => res.streaming(Box::pin(once(async {
+                    Ok::<_, io::Error>(Bytes::from_static(b"body"))
+                }))),
+                _ => res.build(),
+            })
+        })
+    });
+
+    let io = ntex::connect::connect(srv.addr()).await.unwrap();
+    let client = SimpleClient::new(io, Scheme::HTTP, "localhost".into());
+    for path in ["/empty", "/sized", "/stream"] {
+        let (_snd, rcv) = client
+            .send(Method::GET, path.into(), HeaderMap::default(), true)
+            .await
+            .unwrap();
+        let msg = rcv.recv().await.unwrap();
+        let MessageKind::Headers {
+            pseudo,
+            headers,
+            eof,
+        } = msg.kind
+        else {
+            panic!("unexpected message: {msg:?}")
+        };
+        assert_eq!(pseudo.status, Some(StatusCode::NOT_MODIFIED), "{path}");
+        assert!(eof, "{path}: body is sent");
+        assert!(
+            !headers.contains_key(header::CONTENT_LENGTH),
+            "{path}: {headers:?}"
+        );
+    }
+}
+
 /// Raw HTTP/2 connection preface and a `POST /` request without END_STREAM.
 fn h2_raw_post() -> Vec<u8> {
     let mut buf = Vec::new();

@@ -558,7 +558,8 @@ fn expect_continue(headers: &HeaderMap) -> bool {
 
 fn prepare_response(head: &mut ResponseHead, size: &mut BodySize) {
     // Content length
-    if head.status == StatusCode::NO_CONTENT {
+    // `204` and `304` responses never have a body, see RFC 9110 section 15.3.5 and 15.4.5
+    if head.status == StatusCode::NO_CONTENT || head.status == StatusCode::NOT_MODIFIED {
         *size = BodySize::None;
     }
     match size {
