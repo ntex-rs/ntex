@@ -2,6 +2,14 @@
 
 ## [2.0.0] - Unreleased
 
+* Fix deserialization of maps with string keys from `Path`, e.g. `HashMap<String, String>`
+  failed with "Unexpected" error
+
+* Fix `recognize_checked()` calling the check twice for a rejected tail resource,
+  e.g. `/files/{tail}*` for `/files/a`
+
+* Fix wrong type name in `Path` deserialization error for `i32` values
+
 * `IntoPattern` is implemented for arrays of any size and of any `AsRef<str>` item,
   it was limited to `&str` and `String` arrays of up to 16 items
 

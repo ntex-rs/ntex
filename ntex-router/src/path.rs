@@ -253,4 +253,39 @@ mod tests {
         p.segments.push(("k1", PathItem::IdxSegment(0, 2)));
         assert_eq!(p.get("k1").unwrap(), "te");
     }
+
+    #[test]
+    fn test_path_set_and_items() {
+        let mut p = Path::new("/first/path");
+        p.skip(7);
+        p.add_static("st", "static");
+        p.segments
+            .push(("seg", PathItem::Segment("owned".to_string())));
+        assert_eq!(p.path(), "path");
+        assert_eq!(p.len(), 2);
+        assert_eq!(p.get("st"), Some("static"));
+        assert_eq!(p.get("seg"), Some("owned"));
+        assert_eq!(&p[0], "static");
+        assert_eq!(&p[1], "owned");
+        assert_eq!(
+            p.iter().collect::<Vec<_>>(),
+            vec![("st", "static"), ("seg", "owned")]
+        );
+
+        // skip is limited to the path length
+        p.skip(100);
+        assert_eq!(p.path(), "");
+
+        p.set("/second");
+        assert!(p.is_empty());
+        assert_eq!(p.path(), "/second");
+        assert_eq!(*p.get_ref(), "/second");
+    }
+
+    #[test]
+    #[should_panic(expected = "Value for parameter is not available")]
+    fn test_path_index_missing() {
+        let p = Path::new("/");
+        let _ = &p["missing"];
+    }
 }
