@@ -355,6 +355,247 @@ mod tests {
     const CERT: &[u8] = include_bytes!("../../examples/cert.pem");
     const KEY: &[u8] = include_bytes!("../../examples/key.pem");
 
+    fn acceptor(alpn: bool) -> ssl::SslAcceptor {
+        let mut acceptor = ssl::SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
+        acceptor
+            .set_private_key(&PKey::private_key_from_pem(KEY).unwrap())
+            .unwrap();
+        acceptor
+            .set_certificate(&X509::from_pem(CERT).unwrap())
+            .unwrap();
+        if alpn {
+            acceptor.set_alpn_select_callback(|_, protos| {
+                ssl::select_next_proto(b"\x02h2", protos).ok_or(ssl::AlpnError::NOACK)
+            });
+        }
+        acceptor.build()
+    }
+
+    fn connector(alpn: bool) -> ssl::SslConnector {
+        let mut connector = ssl::SslConnector::builder(SslMethod::tls()).unwrap();
+        connector.set_verify(SslVerifyMode::NONE);
+        if alpn {
+            connector.set_alpn_protos(b"\x02h2").unwrap();
+        }
+        connector.build()
+    }
+
+    fn pair() -> (IoTest, IoTest) {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1 << 20);
+        server.remote_buffer_cap(1 << 20);
+        (client, server)
+    }
+
+    fn tls_cfg(timeout: Millis) -> crate::TlsConfig {
+        crate::TlsConfig {
+            handshake_timeout: timeout,
+            ..crate::TlsConfig::default()
+        }
+    }
+
+    async fn handshake_pair() -> (Io<Layer<SslFilter>>, Io<Layer<SslFilter>>) {
+        let (client, server) = pair();
+        let (client, server) = join(
+            connect(
+                Io::new(client, SharedCfg::new("CLI")),
+                connector(false)
+                    .configure()
+                    .unwrap()
+                    .into_ssl("localhost")
+                    .unwrap(),
+            ),
+            handshake(
+                Io::new(server, SharedCfg::new("SRV")),
+                ssl::Ssl::new(acceptor(false).context()).unwrap(),
+                true,
+            ),
+        )
+        .await;
+        (client.unwrap(), server.unwrap())
+    }
+
+    #[ntex::test]
+    async fn acceptor_and_connector() {
+        use std::{cell::RefCell, rc::Rc};
+
+        use ntex_error::Error;
+        use ntex_net::connect::{Connect, ConnectError, Connector};
+        use ntex_service::{Pipeline, fn_service};
+
+        let (client, server) = pair();
+        let client = Rc::new(RefCell::new(Some(Io::new(client, SharedCfg::new("CLI")))));
+
+        let acceptor = SslAcceptor::from(acceptor(true)).clone();
+        assert!(format!("{acceptor:?}").contains("SslAcceptor"));
+        let acceptor = Pipeline::new((), acceptor);
+
+        let connector = SslConnector::<Connector<&str>>::new(connector(true)).connector(
+            fn_service(async move |_: Connect<&str>| {
+                Ok::<_, Error<ConnectError>>(client.borrow_mut().take().unwrap())
+            }),
+        );
+        let connector = Pipeline::new(SharedCfg::new("CLI").build(), connector);
+
+        let (server, client) = join(
+            acceptor.call(Io::new(server, SharedCfg::new("SRV"))),
+            connector.call(Connect::new("localhost:443")),
+        )
+        .await;
+        let (server, client) = (server.unwrap(), client.unwrap());
+
+        assert_eq!(
+            client.query::<types::HttpProtocol>().as_ref(),
+            Some(&types::HttpProtocol::Http2)
+        );
+        assert!(client.query::<PeerCert>().as_ref().is_some());
+        assert_eq!(
+            client.query::<PeerCertChain>().as_ref().map(|c| c.0.len()),
+            Some(1)
+        );
+        assert!(client.query::<PskIdentity>().as_ref().is_none());
+        assert_eq!(
+            server.query::<Servername>().as_ref().map(|s| s.0.as_str()),
+            Some("localhost")
+        );
+        // no client auth
+        assert!(server.query::<PeerCert>().as_ref().is_none());
+        assert!(server.query::<PeerCertChain>().as_ref().is_none());
+        assert!(server.query::<u32>().as_ref().is_none());
+
+        // larger than the read buffer
+        let data = Bytes::from(vec![b'a'; 256 * 1024]);
+        client.send(data.clone(), &BytesCodec).await.unwrap();
+        let mut received = 0;
+        while received < data.len() {
+            received += server.recv(&BytesCodec).await.unwrap().unwrap().len();
+        }
+
+        // close_notify is exchanged in both directions
+        let (res, ()) = join(client.shutdown(), async {
+            assert!(server.recv(&BytesCodec).await.unwrap().is_none());
+        })
+        .await;
+        res.unwrap();
+    }
+
+    #[ntex::test]
+    async fn without_alpn_and_sni() {
+        let (client, server) = pair();
+        let (client, server) = join(
+            connect(
+                Io::new(client, SharedCfg::new("CLI")),
+                ssl::Ssl::new(connector(false).context()).unwrap(),
+            ),
+            handshake(
+                Io::new(server, SharedCfg::new("SRV")),
+                ssl::Ssl::new(acceptor(false).context()).unwrap(),
+                true,
+            ),
+        )
+        .await;
+        let (client, server) = (client.unwrap(), server.unwrap());
+        assert_eq!(
+            client.query::<types::HttpProtocol>().as_ref(),
+            Some(&types::HttpProtocol::Http1)
+        );
+        assert!(server.query::<Servername>().as_ref().is_none());
+    }
+
+    #[ntex::test]
+    async fn shutdown_after_peer_disconnect() {
+        let (client, server) = handshake_pair().await;
+        // the peer goes away without close_notify
+        drop(server);
+        assert!(client.recv(&BytesCodec).await.unwrap().is_none());
+        client.shutdown().await.unwrap();
+    }
+
+    #[ntex::test]
+    async fn invalid_data_after_handshake() {
+        let (client, server) = pair();
+        let peer = server.clone();
+        let (client, server) = join(
+            connect(
+                Io::new(client, SharedCfg::new("CLI")),
+                ssl::Ssl::new(connector(false).context()).unwrap(),
+            ),
+            handshake(
+                Io::new(server, SharedCfg::new("SRV")),
+                ssl::Ssl::new(acceptor(false).context()).unwrap(),
+                true,
+            ),
+        )
+        .await;
+        let (client, _server) = (client.unwrap(), server.unwrap());
+        peer.write(b"garbage garbage garbage");
+        assert!(client.recv(&BytesCodec).await.is_err());
+    }
+
+    #[ntex::test]
+    async fn handshake_errors() {
+        use ntex_service::Pipeline;
+
+        // timeout
+        let (_client, server) = pair();
+        let io = Io::new(server, SharedCfg::new("SRV").add(tls_cfg(Millis(50))));
+        let err = Pipeline::new((), SslAcceptor::new(acceptor(false)))
+            .call(io)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+
+        // peer disconnects
+        let (client, server) = pair();
+        let io = Io::new(server, SharedCfg::new("SRV"));
+        let ssl = ssl::Ssl::new(acceptor(false).context()).unwrap();
+        let (res, ()) = join(handshake(io, ssl, true), client.close()).await;
+        assert_eq!(res.unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
+
+        // invalid data
+        let (client, server) = pair();
+        let io = Io::new(server, SharedCfg::new("SRV"));
+        client.write(b"GET / HTTP/1.1\r\n\r\n");
+        let ssl = ssl::Ssl::new(acceptor(false).context()).unwrap();
+        assert!(handshake(io, ssl, true).await.is_err());
+
+        // the error is reported by the connector
+        let (client, server) = pair();
+        let io = Io::new(client, SharedCfg::new("CLI"));
+        let cfg = SharedCfg::new("CLI").build();
+        let (res, ()) = join(
+            SslConnector::<ntex_net::connect::Connector<&str>>::new(connector(false)).connect(
+                io,
+                "localhost",
+                &cfg,
+            ),
+            server.close(),
+        )
+        .await;
+        assert!(res.is_err());
+    }
+
+    #[ntex::test]
+    async fn acceptor_waits_for_capacity() {
+        use ntex_service::Pipeline;
+        use ntex_util::future::lazy;
+
+        crate::MAX_SSL_ACCEPT_COUNTER.with(|c| c.set_capacity(1));
+        let acceptor = Pipeline::new((), SslAcceptor::new(acceptor(false)));
+
+        let (_client, server) = pair();
+        let io = Io::new(server, SharedCfg::new("SRV").add(tls_cfg(Millis(100))));
+        let acceptor2 = acceptor.bind();
+        let hnd = ntex::rt::spawn(async move { acceptor2.call(io).await });
+        ntex_util::time::sleep(Millis(10)).await;
+        assert!(lazy(|cx| acceptor.poll_ready(cx)).await.is_pending());
+
+        // capacity is released by the timed out handshake
+        assert!(hnd.await.unwrap().is_err());
+        assert!(lazy(|cx| acceptor.poll_ready(cx)).await.is_ready());
+        crate::MAX_SSL_ACCEPT_COUNTER.with(|c| c.set_capacity(256));
+    }
+
     /// Output written while a handshake is in progress must not be lost.
     #[ntex::test]
     async fn write_during_handshake_is_not_lost() {
