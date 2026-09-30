@@ -35,8 +35,6 @@ pub enum ServerStatus {
     Ready,
     /// At least one worker is temporarily unavailable.
     NotReady,
-    /// A worker failed.
-    WorkerFailed,
 }
 
 /// Identifier assigned to a registered listener.
@@ -83,4 +81,17 @@ pub(super) fn max_concurrent_connections(num: usize) {
 
 pub(super) fn num_connections() -> usize {
     MAX_CONNS_COUNTER.with(Counter::total)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_next() {
+        let mut token = Token(0);
+        assert_eq!(token.next(), Token(0));
+        assert_eq!(token.next(), Token(1));
+        assert_eq!(token, Token(2));
+    }
 }

@@ -75,3 +75,16 @@ pub trait ServerConfiguration: Send + Clone + 'static {
     /// Called once, before the workers are stopped.
     async fn stop(&self) {}
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn worker_id_next() {
+        let mut id = WorkerId::default();
+        assert_eq!(id.next(), WorkerId(0));
+        assert_eq!(id.next(), WorkerId(1));
+        assert_eq!(id, WorkerId(2));
+    }
+}
