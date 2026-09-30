@@ -261,3 +261,93 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use super::*;
+    use crate::io::{Control, Io, testing::IoTest};
+    use crate::service::fn_service;
+    use crate::ws::error::ProtocolError;
+
+    #[crate::rt_test]
+    async fn dispatch_service() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1 << 20);
+        let io = Io::from(server);
+        let sink = WsSink::new(io.get_ref(), ws::Codec::new(), crate::Cfg::default());
+        let svc = Pipeline::new(
+            sink.clone(),
+            DispatchService {
+                svc: fn_service(async |frame: Frame| match frame {
+                    Frame::Text(_) => Err(io::Error::other("text")),
+                    _ => Ok(Some(Message::Pong("pong".into()))),
+                }),
+            },
+        );
+
+        let res = svc.call(DispatchItem::Item(Frame::Ping("p".into()))).await;
+        assert!(matches!(res, Ok(Some(Message::Pong(_)))));
+        let res = svc.call(DispatchItem::Item(Frame::Text("t".into()))).await;
+        assert!(matches!(res, Err(WsError::Service(_))));
+        let res = svc
+            .call(DispatchItem::Control(Control::WBackPressureEnabled))
+            .await;
+        assert!(matches!(res, Ok(None)));
+        let res = svc.call(DispatchItem::Stop(Reason::Io(None))).await;
+        assert!(matches!(res, Ok(None)));
+        let res = svc.call(DispatchItem::Stop(Reason::Service)).await;
+        assert!(matches!(
+            res,
+            Ok(Some(Message::Close(Some(ws::CloseReason {
+                code: ws::CloseCode::Away,
+                ..
+            }))))
+        ));
+        let res = svc.call(DispatchItem::Stop(Reason::KeepAlive)).await;
+        assert!(matches!(res, Err(WsError::KeepAlive)));
+        let res = svc.call(DispatchItem::Stop(Reason::ReadTimeout)).await;
+        assert!(matches!(res, Err(WsError::ReadTimeout)));
+        let res = svc.call(DispatchItem::Stop(Reason::WriteTimeout)).await;
+        assert!(matches!(res, Err(WsError::WriteTimeout)));
+        let res = svc
+            .call(DispatchItem::Stop(Reason::Encoder(
+                ProtocolError::UnmaskedFrame,
+            )))
+            .await;
+        assert!(matches!(
+            res,
+            Err(WsError::Protocol(ProtocolError::UnmaskedFrame))
+        ));
+        let res = svc
+            .call(DispatchItem::Stop(Reason::Io(Some(io::Error::other("io")))))
+            .await;
+        assert!(matches!(res, Err(WsError::Disconnected(Some(_)))));
+
+        // decoder error sends close frame
+        assert!(!sink.is_closed());
+        let res = svc
+            .call(DispatchItem::Stop(Reason::Decoder(
+                ProtocolError::MaskedFrame,
+            )))
+            .await;
+        assert!(matches!(
+            res,
+            Err(WsError::Protocol(ProtocolError::MaskedFrame))
+        ));
+        assert!(sink.is_closed());
+        let res = svc
+            .call(DispatchItem::Stop(Reason::Decoder(
+                ProtocolError::MaskedFrame,
+            )))
+            .await;
+        assert!(matches!(res, Err(WsError::Protocol(_))));
+
+        // close frame closes io
+        let res = svc.call(DispatchItem::Item(Frame::Close(None))).await;
+        assert!(matches!(res, Ok(Some(Message::Pong(_)))));
+        io.on_disconnect().await;
+        assert!(io.is_closed());
+    }
+}

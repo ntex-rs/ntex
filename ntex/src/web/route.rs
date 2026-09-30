@@ -457,4 +457,42 @@ mod tests {
         assert!(repr.contains("methods: [GET]"));
         assert!(repr.contains("guards: AllGuard()"));
     }
+
+    #[crate::rt_test]
+    async fn test_route_array_and_extractor_error() {
+        let srv = init_service(App::new().service(web::resource("/test/{id}").route([
+            web::get().to(async |p: web::types::Path<u32>| {
+                HttpResponse::Ok().body(format!("{}", p.into_inner()))
+            }),
+            web::post().to(async || HttpResponse::Created()),
+        ])))
+        .await;
+
+        let req = TestRequest::with_uri("/test/10").to_request();
+        let resp = call_service(&srv, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(read_body(resp).await, Bytes::from_static(b"10"));
+
+        let req = TestRequest::with_uri("/test/abc").to_request();
+        let resp = call_service(&srv, req).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+        let req = TestRequest::with_uri("/test/abc")
+            .method(Method::POST)
+            .to_request();
+        let resp = call_service(&srv, req).await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+    }
+
+    #[test]
+    fn test_route_debug() {
+        let route: web::Route<(), ()> = web::get().to(async || HttpResponse::Ok());
+        let s = format!("{route:?}");
+        assert!(s.contains("HandlerNoState"), "{s}");
+
+        let route =
+            web::Route::<(), ()>::new().to_with_state(async |(): &(), (): ()| HttpResponse::Ok());
+        let s = format!("{route:?}");
+        assert!(s.contains("HandlerSt("), "{s}");
+    }
 }

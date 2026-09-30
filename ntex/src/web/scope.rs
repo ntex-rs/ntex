@@ -1217,4 +1217,16 @@ mod tests {
             Bytes::from_static(b"http://localhost:8080/a/b/c/12345")
         );
     }
+
+    #[crate::rt_test]
+    async fn test_scope_default_service_only() {
+        let srv = init_service(App::new().service(web::scope("/app").default_service(
+            async |r: WebRequest<()>| Ok::<_, Infallible>(r.into_response(HttpResponse::Created())),
+        )))
+        .await;
+        let resp = call_service(&srv, TestRequest::with_uri("/app/path").to_request()).await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let resp = call_service(&srv, TestRequest::with_uri("/other").to_request()).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
 }

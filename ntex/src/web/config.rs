@@ -288,6 +288,9 @@ mod tests {
         assert_eq!(cfg.host(), "www.example.org");
         assert_eq!(cfg.local_addr(), "127.0.0.1:8080".parse().unwrap());
         assert_eq!(cfg.pool_size, 256);
+        assert_eq!(cfg.name(), "ntex:web");
+        assert!(!cfg.secure());
+        assert!(cfg.set_secure().secure());
     }
 
     #[cfg(feature = "url")]

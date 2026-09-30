@@ -542,4 +542,35 @@ mod tests {
         let s = format!("{}", FormatDisplay(&render));
         assert!(s.contains(&httpdate::HttpDate::from(now).to_string()));
     }
+
+    #[crate::rt_test]
+    async fn test_missing_values() {
+        let format = Format::new("%{NTEX_LOGGER_MISSING_VAR}e %{X-Missing}o %{X-Missing}i %b");
+        let req = TestRequest::default().to_srv_request();
+
+        let now = time::SystemTime::now();
+        let mut values = format.render_request(now, &req);
+        let resp = HttpResponse::builder(StatusCode::OK).build();
+        format.render_response(&resp, &mut values);
+
+        let render = |fmt: &mut fmt::Formatter<'_>| format.render(fmt, &values, 12, now);
+        assert_eq!(format!("{}", FormatDisplay(&render)), "- - - 12");
+    }
+
+    #[crate::rt_test]
+    async fn test_body_size() {
+        let srv = fn_service(async move |req: WebRequest<()>| {
+            Ok::<_, Infallible>(req.into_response(HttpResponse::Ok().body("TEST")))
+        });
+        let logger = Logger::new("%s %b");
+        let srv = Pipeline::new((), Middleware::create(&logger, &(), srv));
+
+        let mut res = srv
+            .call(TestRequest::default().to_srv_request())
+            .await
+            .unwrap();
+        assert_eq!(res.response_mut().body().size(), BodySize::Sized(4));
+        let body = test::read_body(res).await;
+        assert_eq!(body, Bytes::from_static(b"TEST"));
+    }
 }

@@ -563,4 +563,37 @@ mod tests {
             _ => unreachable!("error"),
         }
     }
+
+    #[crate::rt_test]
+    async fn test_payload_errors() {
+        let cfg = PayloadConfig::new(5);
+        assert_eq!(cfg.limit, 5);
+
+        // invalid charset
+        let (req, mut pl, ()) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
+            .header(header::CONTENT_TYPE, "text/plain; charset=unknown")
+            .payload(Bytes::from_static(b"hello=world"))
+            .to_http_parts();
+        assert!(from_request::<_, String>(&(), &req, &mut pl).await.is_err());
+
+        // invalid mime type
+        let cfg = PayloadConfig::default().mimetype(mime::APPLICATION_JSON);
+        let req = TestRequest::with_header(header::CONTENT_TYPE, "invalid").to_http_request();
+        assert!(matches!(
+            cfg.check_mimetype(&req),
+            Err(PayloadError::ContentType(_))
+        ));
+
+        // non-ascii content-length
+        let (req, mut pl, ()) = TestRequest::with_header(
+            header::CONTENT_LENGTH,
+            header::HeaderValue::from_bytes(b"1\xff").unwrap(),
+        )
+        .to_http_parts();
+        let res = HttpMessageBody::new(&req, &mut pl).await;
+        assert!(matches!(
+            res,
+            Err(PayloadError::Payload(error::PayloadError::UnknownLength))
+        ));
+    }
 }

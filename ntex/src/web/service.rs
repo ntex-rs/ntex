@@ -387,4 +387,21 @@ mod tests {
         assert!(s.contains("WebResponse"));
         assert!(s.contains("x-test"));
     }
+
+    #[crate::rt_test]
+    async fn test_service_empty_path_in_scope() {
+        let srv = init_service(App::new().service(web::scope("/app").service(
+            web::service("").build(async move |req: WebRequest<()>| {
+                Ok::<_, Infallible>(req.into_response(HttpResponse::Ok().build()))
+            }),
+        )))
+        .await;
+        let req = TestRequest::with_uri("/app").to_request();
+        let resp = srv.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let req = TestRequest::with_uri("/app/").to_request();
+        let resp = srv.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
 }

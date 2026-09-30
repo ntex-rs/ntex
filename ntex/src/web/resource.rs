@@ -883,4 +883,63 @@ mod tests {
         let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     }
+
+    #[crate::rt_test]
+    async fn test_middleware() {
+        use crate::http::header::{CONTENT_TYPE, HeaderValue};
+        use crate::web::middleware::DefaultHeaders;
+
+        let srv = init_service(
+            App::new().service(
+                web::resource("/test")
+                    .middleware(DefaultHeaders::new().header(CONTENT_TYPE, "text/plain"))
+                    .route(web::get().to(async || HttpResponse::Ok())),
+            ),
+        )
+        .await;
+        for method in [Method::GET, Method::POST] {
+            let req = TestRequest::with_uri("/test").method(method).to_request();
+            let resp = call_service(&srv, req).await;
+            assert_eq!(
+                resp.headers().get(CONTENT_TYPE),
+                Some(&HeaderValue::from_static("text/plain"))
+            );
+        }
+    }
+
+    #[crate::rt_test]
+    async fn test_empty_path_in_scope() {
+        let srv = init_service(App::new().service(
+            web::scope("/app").service(web::resource("").to(async || HttpResponse::Ok())),
+        ))
+        .await;
+        let resp = call_service(&srv, TestRequest::with_uri("/app").to_request()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let resp = call_service(&srv, TestRequest::with_uri("/app/").to_request()).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[crate::rt_test]
+    async fn test_into_factory() {
+        use crate::service::{IntoServiceFactory, ServiceFactory};
+
+        let res = web::resource("/test")
+            .route(web::get().to(async || HttpResponse::Ok()))
+            .default_service(async |r: WebRequest<()>| {
+                Ok::<_, Infallible>(r.into_response(HttpResponse::MethodNotAllowed()))
+            });
+        let srv = IntoServiceFactory::<_, (), WebRequest<()>>::into_factory(res)
+            .pipeline(())
+            .await
+            .unwrap();
+
+        let resp = srv
+            .call(TestRequest::default().to_srv_request())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let req = TestRequest::default().method(Method::PUT).to_srv_request();
+        let resp = srv.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
 }
