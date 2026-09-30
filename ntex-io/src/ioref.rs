@@ -1120,4 +1120,91 @@ mod tests {
             "{write_order:?}"
         );
     }
+
+    #[ntex::test]
+    async fn timer_start_update_and_stop() {
+        let (_client, server) = IoTest::create();
+        let io = Io::new(server, SharedCfg::new("TIMER"));
+        assert_eq!(io.shared().tag(), "TIMER");
+        assert_eq!(io.timer_handle(), TimerHandle::ZERO);
+
+        let hnd = io.start_timer(Seconds(5));
+        assert!(hnd.is_set());
+        assert_eq!(io.timer_handle(), hnd);
+        assert!(hnd.remains() >= Seconds(4) && hnd.remains() <= Seconds(5));
+        assert!(hnd.instant() > TimerHandle::ZERO.instant());
+
+        // the same timeout keeps the registration
+        assert_eq!(io.start_timer(Seconds(5)), hnd);
+        assert_eq!(io.timer_handle(), hnd);
+
+        // a different timeout moves it
+        let hnd2 = io.start_timer(Seconds(30));
+        assert_ne!(hnd2, hnd);
+        assert_eq!(io.timer_handle(), hnd2);
+        assert!(hnd2.remains() >= Seconds(29));
+
+        // a second io can share the deadline slot
+        let (_client2, server2) = IoTest::create();
+        let io2 = Io::from(server2);
+        assert!(io2.start_timer(Seconds(30)).is_set());
+
+        // zero timeout cancels the timer
+        assert_eq!(io.start_timer(Seconds::ZERO), TimerHandle::ZERO);
+        assert_eq!(io.timer_handle(), TimerHandle::ZERO);
+        assert_eq!(io.start_timer(Seconds::ZERO), TimerHandle::ZERO);
+        io2.stop_timer();
+
+        let hnd = TimerHandle::ZERO + Seconds(3);
+        assert!(hnd.is_set());
+        assert_eq!(
+            hnd.instant() - TimerHandle::ZERO.instant(),
+            std::time::Duration::from_secs(3)
+        );
+    }
+
+    #[ntex::test]
+    async fn notify_dispatcher_wakes_status_poll() {
+        use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};
+
+        struct Flag(AtomicBool);
+
+        impl std::task::Wake for Flag {
+            fn wake(self: Arc<Self>) {
+                self.0.store(true, Ordering::Relaxed);
+            }
+        }
+
+        let (_client, server) = IoTest::create();
+        let io = Io::from(server);
+
+        let flag = Arc::new(Flag(AtomicBool::new(false)));
+        let waker = std::task::Waker::from(flag.clone());
+        let mut cx = std::task::Context::from_waker(&waker);
+        assert!(io.poll_status_update(&mut cx).is_pending());
+
+        io.notify_dispatcher();
+        assert!(flag.0.load(Ordering::Relaxed));
+        // a plain wakeup reports no status update
+        assert!(lazy(|cx| io.poll_status_update(cx)).await.is_pending());
+    }
+
+    #[ntex::test]
+    #[allow(clippy::mutable_key_type)]
+    async fn io_ref_hash() {
+        let (_client, server) = IoTest::create();
+        let io = Io::from(server);
+        let (_client2, server2) = IoTest::create();
+        let io2 = Io::from(server2);
+
+        let mut set = std::collections::HashSet::new();
+        assert!(set.insert(io.get_ref()));
+        assert!(!set.insert(io.get_ref()));
+        assert!(set.insert(io2.get_ref()));
+
+        let mut set = std::collections::HashSet::new();
+        assert!(set.insert(&io));
+        assert!(!set.insert(&io));
+        assert!(set.insert(&io2));
+    }
 }

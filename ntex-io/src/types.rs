@@ -83,3 +83,35 @@ impl<T: any::Any + fmt::Debug> fmt::Debug for QueryItem<T> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn peer_addr() {
+        let addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
+        let peer = PeerAddr::from(addr);
+        assert_eq!(peer, PeerAddr(addr));
+        assert_eq!(format!("{peer:?}"), "127.0.0.1:8080");
+        assert_eq!(peer.into_inner(), addr);
+    }
+
+    #[test]
+    fn query_item() {
+        let item = QueryItem::<u32>::new(Some(Box::new(10u32)));
+        assert_eq!(item.get(), Some(10));
+        assert_eq!(item.as_ref(), Some(&10));
+        assert_eq!(format!("{item:?}"), "QueryItem(10)");
+
+        // a value of another type is not returned
+        let item = QueryItem::<u32>::new(Some(Box::new("str")));
+        assert_eq!(item.get(), None);
+        assert_eq!(item.as_ref(), None);
+
+        let item = QueryItem::<u32>::new(None);
+        assert_eq!(item.get(), None);
+        assert_eq!(item.as_ref(), None);
+        assert_eq!(format!("{item:?}"), "QueryItem(None)");
+    }
+}

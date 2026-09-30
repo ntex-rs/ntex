@@ -134,5 +134,8 @@ mod tests {
 
         server.shutdown().await.unwrap();
         assert!(client.is_closed());
+
+        let (io, _codec) = server.into_inner();
+        assert!(io.is_closed());
     }
 }
