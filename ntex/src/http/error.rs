@@ -1,5 +1,5 @@
 //! HTTP-related errors.
-use std::{error, fmt, io, io::Write, rc::Rc, string::FromUtf8Error};
+use std::{error, fmt, io, io::Write, string::FromUtf8Error};
 
 use ntex_h2::{self as h2};
 use ntex_http::{StatusCode, header};
@@ -248,13 +248,9 @@ pub enum H2Error {
     /// Uri parsing error
     #[error("Uri")]
     Uri,
-    /// Body stream error
-    #[error("{0}")]
-    Stream(
-        #[from]
-        #[source]
-        Rc<dyn error::Error>,
-    ),
+    /// Too many consecutive empty non-final `DATA` frames
+    #[error("Too many consecutive empty DATA frames")]
+    EmptyDataFrames,
 }
 
 impl From<ntex_http::compat::InvalidUri> for H2Error {

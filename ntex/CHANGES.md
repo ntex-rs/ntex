@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+* HTTP/2 response body error resets only its stream with `INTERNAL_ERROR`, it closed the whole
+  connection with `GOAWAY`, a failed send on a closed stream no longer fails the connection
+
+* Remove `H2Error::Stream`, a response body error is not a connection error
+
+* HTTP/2 request with a malformed uri is answered with `400 Bad Request`, it closed the whole
+  connection with `GOAWAY`, see RFC 9113 section 8.1.1
+
+* HTTP/2 payload keeps the first error, a stream reset was reported as
+  `PayloadError::Incomplete` when the sender was dropped
+
+* HTTP/2 payload ends after an error, the next read returned `Pending` forever instead of `None`
+
+* HTTP/2 request payload ignores empty non-final `DATA` frames, they are not flow controlled
+  and each one was queued as an empty body chunk without bound
+
+* HTTP/2 connection is closed with `GOAWAY` after 10 consecutive empty non-final `DATA` frames,
+  new `H2Error::EmptyDataFrames` error
+
 * Remove the deprecated `neon` feature, it had no effect
 
 * Remove the `neon-iocp` feature, it had no effect, Windows always uses IOCP

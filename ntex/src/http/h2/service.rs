@@ -1,4 +1,4 @@
-use std::{cell::RefCell, future::poll_fn, io, mem, rc::Rc};
+use std::{cell::Cell, cell::RefCell, future::poll_fn, io, mem, rc::Rc};
 
 use ntex_h2::{self as h2, control::ExpectResult, frame::StreamId, server};
 
@@ -152,7 +152,13 @@ struct PublishService<Err> {
     svc: Pipeline<Request, Response, Err>,
     control: PipelineBinding<h2::Control<Error<H2Error>>, h2::ControlAck, DispatchError>,
     streams: Rc<RefCell<HashMap<StreamId, StreamPayload>>>,
+    /// Consecutive empty non-final `DATA` frames
+    empty_data: Cell<u8>,
 }
+
+/// Maximum number of consecutive empty non-final `DATA` frames,
+/// such frames are not flow controlled
+const MAX_EMPTY_DATA_FRAMES: u8 = 10;
 
 /// Request payload of a stream.
 struct StreamPayload {
@@ -177,6 +183,7 @@ where
             svc,
             control,
             streams: Rc::new(RefCell::new(HashMap::default())),
+            empty_data: Cell::new(0),
         }
     }
 }
@@ -229,6 +236,22 @@ where
                     stream.id(),
                     data.len()
                 );
+                // the limit is sticky, frames buffered after it are not delivered
+                let count = if data.is_empty() {
+                    self.empty_data.get().saturating_add(1)
+                } else if self.empty_data.get() >= MAX_EMPTY_DATA_FRAMES {
+                    MAX_EMPTY_DATA_FRAMES
+                } else {
+                    0
+                };
+                self.empty_data.set(count);
+                if count >= MAX_EMPTY_DATA_FRAMES {
+                    log::debug!(
+                        "{}: Too many consecutive empty DATA frames, closing connection",
+                        self.io.tag()
+                    );
+                    return Err(H2Error::EmptyDataFrames.into());
+                }
                 let mut streams = self.streams.borrow_mut();
                 if let Some(pl) = streams.get(&stream.id()) {
                     if pl.complete && pl.sender.is_dropped() {
@@ -254,6 +277,12 @@ where
                     self.io.tag(),
                     stream.id()
                 );
+                if self.empty_data.get() >= MAX_EMPTY_DATA_FRAMES {
+                    return Err(H2Error::EmptyDataFrames.into());
+                }
+                if matches!(item, h2::StreamEof::Data(ref data, _) if !data.is_empty()) {
+                    self.empty_data.set(0);
+                }
                 if let Some(StreamPayload { sender, .. }) =
                     self.streams.borrow_mut().remove(&stream.id())
                 {
@@ -279,6 +308,28 @@ where
                 }
                 return Ok(());
             }
+        };
+
+        // a malformed request is a stream error, the connection stays open,
+        // see RFC 9113 section 8.1.1
+        let Some((method, uri)) = request_uri(&pseudo) else {
+            log::debug!(
+                "{}: Malformed request on {:?}: {pseudo:?}",
+                self.io.tag(),
+                stream.id()
+            );
+            self.streams.borrow_mut().remove(&stream.id());
+
+            let mut res = Response::new(StatusCode::BAD_REQUEST).drop_body();
+            let head = res.head_mut();
+            prepare_response(head, &mut BodySize::Empty);
+            let hdrs = mem::replace(&mut head.headers, HeaderMap::new());
+            let _ = stream.send_response(StatusCode::BAD_REQUEST, hdrs, true);
+            if !eof {
+                // the request body is not needed
+                stream.reset(h2::frame::Reason::NO_ERROR);
+            }
+            return Ok(());
         };
 
         // the client waits for `100 Continue` before sending the request body,
@@ -344,24 +395,9 @@ where
             Request::new()
         };
 
-        let method = pseudo.method.ok_or(H2Error::MissingPseudo("Method"))?;
-
-        let head = req.head_mut();
-        head.uri = if method == Method::CONNECT
-            && pseudo.path.is_none()
-            && let Some(ref authority) = pseudo.authority
-        {
-            // CONNECT request uses the authority form
-            Uri::try_from(authority.as_str()).map_err(Error::from_err)?
-        } else if let Some(ref authority) = pseudo.authority {
-            let path = pseudo.path.ok_or(H2Error::MissingPseudo("Path"))?;
-            let scheme = pseudo.scheme.ok_or(H2Error::MissingPseudo("Scheme"))?;
-            Uri::try_from(format!("{scheme}://{authority}{path}")).map_err(Error::from_err)?
-        } else {
-            let path = pseudo.path.ok_or(H2Error::MissingPseudo("Path"))?;
-            Uri::try_from(path.as_str()).map_err(Error::from_err)?
-        };
         let is_head_req = method == Method::HEAD;
+        let head = req.head_mut();
+        head.uri = uri;
         head.version = Version::HTTP_2;
         head.method = method;
         head.headers = headers;
@@ -394,14 +430,17 @@ where
         );
 
         let hdrs = mem::replace(&mut head.headers, HeaderMap::new());
-        if size.is_eof() || is_head_req {
-            stream
-                .send_response(head.status, hdrs, true)
-                .map_err(Error::map_err)?;
-        } else {
+        // `Err(Some(_))` is a body error, `Err(None)` is a closed stream
+        let sent = async {
+            if size.is_eof() || is_head_req {
+                stream
+                    .send_response(head.status, hdrs, true)
+                    .map_err(|_| None)?;
+                return Ok(());
+            }
             stream
                 .send_response(head.status, hdrs, false)
-                .map_err(Error::map_err)?;
+                .map_err(|_| None)?;
 
             loop {
                 match poll_fn(|cx| body.poll_next_chunk(cx)).await {
@@ -412,11 +451,10 @@ where
                             self.io.tag(),
                             stream.id()
                         );
-                        stream
+                        return stream
                             .send_payload(Bytes::new(), true)
                             .await
-                            .map_err(Error::map_err)?;
-                        break;
+                            .map_err(|_| None);
                     }
                     Some(Ok(chunk)) => {
                         #[cfg(feature = "trace")]
@@ -427,18 +465,31 @@ where
                             chunk.len()
                         );
                         if !chunk.is_empty() {
-                            stream
-                                .send_payload(chunk, false)
-                                .await
-                                .map_err(Error::map_err)?;
+                            stream.send_payload(chunk, false).await.map_err(|_| None)?;
                         }
                     }
-                    Some(Err(e)) => {
-                        #[cfg(feature = "trace")]
-                        log::error!("{}: Response payload stream error: {e:?}", self.io.tag());
-                        return Err(H2Error::Stream(e).into());
-                    }
+                    Some(Err(e)) => return Err(Some(e)),
                 }
+            }
+        }
+        .await;
+
+        match sent {
+            Ok(()) => (),
+            Err(Some(e)) => {
+                // only the stream fails, the connection stays open
+                log::error!(
+                    "{}: Response payload stream error for {:?}: {e:?}",
+                    self.io.tag(),
+                    stream.id()
+                );
+                stream.reset(h2::frame::Reason::INTERNAL_ERROR);
+                return Ok(());
+            }
+            Err(None) => {
+                // the stream is reset or the connection is closed
+                self.streams.borrow_mut().remove(&stream.id());
+                return Ok(());
             }
         }
 
@@ -474,6 +525,26 @@ const ZERO_CONTENT_LENGTH: HeaderValue = HeaderValue::from_static("0");
 const KEEP_ALIVE: HeaderName = HeaderName::from_static("keep-alive");
 #[allow(clippy::declare_interior_mutable_const)]
 const PROXY_CONNECTION: HeaderName = HeaderName::from_static("proxy-connection");
+
+/// Builds the request method and uri from the pseudo headers,
+/// returns `None` for a malformed request.
+fn request_uri(pseudo: &h2::frame::PseudoHeaders) -> Option<(Method, Uri)> {
+    let method = pseudo.method.clone()?;
+    let uri = if method == Method::CONNECT
+        && pseudo.path.is_none()
+        && let Some(ref authority) = pseudo.authority
+    {
+        // CONNECT request uses the authority form
+        Uri::try_from(authority.as_str()).ok()?
+    } else if let Some(ref authority) = pseudo.authority {
+        let path = pseudo.path.as_ref()?;
+        let scheme = pseudo.scheme.as_ref()?;
+        Uri::try_from(format!("{scheme}://{authority}{path}")).ok()?
+    } else {
+        Uri::try_from(pseudo.path.as_ref()?.as_str()).ok()?
+    };
+    Some((method, uri))
+}
 
 /// Checks the case-insensitive `100-continue` expectation, see RFC 9110 section 10.1.1
 fn expect_continue(headers: &HeaderMap) -> bool {
