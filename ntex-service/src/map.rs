@@ -12,7 +12,7 @@ pub struct Map<F, S, Res> {
 }
 
 impl<F, S, Res> Map<F, S, Res> {
-    /// Create new `Map` combinator
+    /// Creates a new `Map` service.
     pub(crate) fn new<St, Req>(f: F, svc: S) -> Self
     where
         F: Fn(S::Res) -> Res,
@@ -71,6 +71,8 @@ where
 }
 
 /// Service factory produced by the `map` combinator.
+///
+/// This is created by the `ServiceChainFactory::map()` method.
 pub struct MapFactory<F, Sf, Res> {
     f: F,
     sf: Sf,
@@ -78,7 +80,7 @@ pub struct MapFactory<F, Sf, Res> {
 }
 
 impl<F, Sf, Res> MapFactory<F, Sf, Res> {
-    /// Create new `Map` new service instance
+    /// Creates a new `MapFactory`.
     pub(crate) fn new<St, Req>(f: F, sf: Sf) -> Self
     where
         F: Fn(Sf::Res) -> Res,

@@ -193,17 +193,22 @@ impl<Req, Res, Err> Clone for PipelineBinding<Req, Res, Err> {
 
 #[must_use = "futures do nothing unless polled"]
 /// An owned future for a pipeline service call.
+///
+/// Created by [`Pipeline::call_static`] and [`Pipeline::call_nowait`]. The future
+/// keeps the pipeline alive. It does not check whether the pipeline is shut down;
+/// the request is passed to the service as usual.
 pub struct PipelineCall<Req, Res, Err> {
+    // `fut` borrows from `pl`, so it must be declared (and dropped) first
+    fut: BoxFuture<'static, Result<Res, Err>>,
     #[allow(dead_code)]
     pl: PipelineBinding<Req, Res, Err>,
-    fut: BoxFuture<'static, Result<Res, Err>>,
 }
 
 impl<Req, Res, Err> PipelineCall<Req, Res, Err> {
     #[allow(clippy::missing_transmute_annotations)]
     fn new(pl: PipelineBinding<Req, Res, Err>, req: Req, ready: bool) -> Self {
-        // SAFETY: `fut` has same lifetime same as lifetime of `self.pl`.
-        // and it is being kept alive until `self` is alive
+        // SAFETY: `fut` borrows from `pl.api` (`Rc`-allocated, never moves).
+        // `fut` is declared before `pl` in `PipelineCall`, so it is dropped first.
         PipelineCall {
             fut: unsafe { std::mem::transmute(pl.api.call(pl.idx, req, ready)) },
             pl,

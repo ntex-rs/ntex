@@ -537,4 +537,45 @@ mod tests {
         let t1 = SharedCfg::from(t3);
         assert_eq!(t.id(), t1.id());
     }
+
+    #[test]
+    fn cfg_conversions() {
+        use std::hash::BuildHasher;
+
+        #[derive(Default, Debug)]
+        struct TestCfg {
+            config: CfgContext,
+            val: usize,
+        }
+        impl Configuration for TestCfg {
+            const NAME: &str = "TEST";
+            fn ctx(&self) -> &CfgContext {
+                &self.config
+            }
+            fn set_ctx(&mut self, ctx: CfgContext) {
+                self.config = ctx;
+            }
+        }
+        let new = |val| TestCfg {
+            val,
+            ..Default::default()
+        };
+
+        let t = Cfg::from(new(1));
+        assert_eq!(t.val, 1);
+        assert_eq!(t.tag(), "--");
+
+        let shared = SharedCfg::from(new(2));
+        assert_eq!(shared.get::<TestCfg>().val, 2);
+        assert_eq!(Cfg::<TestCfg>::from(&shared).val, 2);
+        assert_eq!(Cfg::<TestCfg>::from(shared.clone()).val, 2);
+
+        let t: Cfg<TestCfg> = SharedCfg::new("T").add(new(3)).into();
+        assert_eq!(t.val, 3);
+        assert_eq!(t.tag(), "T");
+
+        let hasher = foldhash::fast::FixedState::default();
+        assert_eq!(hasher.hash_one(&shared), hasher.hash_one(shared.clone()));
+        assert_eq!(hasher.hash_one(&shared), hasher.hash_one(shared.id()));
+    }
 }
