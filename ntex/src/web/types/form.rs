@@ -502,4 +502,40 @@ mod tests {
 
         assert_eq!(resp.get_body_ref(), b"hello=world&counter=123");
     }
+
+    #[crate::rt_test]
+    async fn test_urlencoded_errors2() {
+        let (req, mut pl, ()) = TestRequest::with_header(
+            CONTENT_TYPE,
+            "application/x-www-form-urlencoded; charset=unknown",
+        )
+        .to_http_parts();
+        let info = UrlEncoded::<Info>::new(&req, &mut pl).await;
+        assert!(eq(&info.err().unwrap(), &UrlencodedError::ContentType));
+
+        let (req, mut pl, ()) =
+            TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(CONTENT_LENGTH, HeaderValue::from_bytes(b"1\xff").unwrap())
+                .to_http_parts();
+        let info = UrlEncoded::<Info>::new(&req, &mut pl).await;
+        assert!(eq(&info.err().unwrap(), &UrlencodedError::UnknownLength));
+
+        // no content-length, payload is larger than limit
+        let (req, mut pl, ()) =
+            TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .payload(Bytes::from_static(b"hello=world&counter=123"))
+                .to_http_parts();
+        let info = UrlEncoded::<Info>::new(&req, &mut pl).limit(5).await;
+        assert!(eq(
+            &info.err().unwrap(),
+            &UrlencodedError::Overflow { size: 0, limit: 0 }
+        ));
+    }
+
+    #[crate::rt_test]
+    async fn test_responder_error() {
+        let req = TestRequest::default().to_http_request();
+        let resp = respond_to(Form(1), &req).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
 }

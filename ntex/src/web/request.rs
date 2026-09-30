@@ -362,4 +362,47 @@ mod tests {
         let t = format!("{req:?}");
         assert!(t.contains("\"authorization\": <REDACTED>"));
     }
+
+    #[test]
+    fn test_request_parts() {
+        use crate::web::{WebRequest, types::Payload};
+
+        let (req, _, ()) = TestRequest::with_uri("/path").to_http_parts();
+        let mut wreq = WebRequest::from_request(req.clone());
+        assert_eq!(wreq.path(), "/path");
+        assert!(wreq.io().is_none());
+        assert!(
+            wreq.resource_map()
+                .url_for(&req, "unknown", [""; 0])
+                .is_err()
+        );
+
+        assert!(matches!(wreq.take_payload(), crate::http::Payload::None));
+
+        let mut preq = TestRequest::default().payload("data").to_srv_request();
+        let payload = Payload(preq.take_payload()).into_inner();
+        assert!(!matches!(payload, crate::http::Payload::None));
+        assert!(matches!(preq.take_payload(), crate::http::Payload::None));
+        wreq.set_payload(payload);
+        assert!(!matches!(wreq.take_payload(), crate::http::Payload::None));
+
+        let wreq = WebRequest::from_parts(req, crate::http::Payload::None, 10usize);
+        assert_eq!(*wreq.st(), 10);
+    }
+
+    #[test]
+    fn test_request_debug_params() {
+        let req = TestRequest::with_uri("/test")
+            .param("id", "10")
+            .to_srv_request();
+        let s = format!("{req:?}");
+        assert!(s.contains("params:"), "{s}");
+        assert!(s.contains("id"), "{s}");
+
+        let req = TestRequest::with_uri("/test")
+            .param("id", "10")
+            .to_http_request();
+        let s = format!("{req:?}");
+        assert!(s.contains("params:"), "{s}");
+    }
 }

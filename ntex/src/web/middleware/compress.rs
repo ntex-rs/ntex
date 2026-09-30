@@ -254,4 +254,32 @@ mod tests {
         let accepting_encoding = AcceptEncoding::new("gzip;q=abc").unwrap();
         assert_eq!(accepting_encoding.quality, 0.0);
     }
+
+    #[crate::rt_test]
+    async fn test_compress_accept_encoding() {
+        use crate::http::header::{CONTENT_ENCODING, HeaderValue};
+        use crate::web::test::{TestRequest, call_service, init_service};
+        use crate::web::{self, App, HttpResponse};
+
+        let srv = init_service(App::new().middleware(Compress::default()).route(
+            "/",
+            web::get().to(async || HttpResponse::Ok().body("a".repeat(1024))),
+        ))
+        .await;
+
+        let req = TestRequest::default()
+            .header(ACCEPT_ENCODING, "gzip")
+            .to_request();
+        let resp = call_service(&srv, req).await;
+        assert_eq!(resp.headers().get(CONTENT_ENCODING).unwrap(), "gzip");
+
+        let req = TestRequest::default()
+            .header(
+                ACCEPT_ENCODING,
+                HeaderValue::from_bytes(b"gzip\xff").unwrap(),
+            )
+            .to_request();
+        let resp = call_service(&srv, req).await;
+        assert!(resp.headers().get(CONTENT_ENCODING).is_none());
+    }
 }

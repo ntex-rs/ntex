@@ -296,14 +296,20 @@ impl<T: Responder<St>, St: State> CustomResponder<T, St> {
 
 impl<T: Responder<St>, St: State> Responder<St> for CustomResponder<T, St> {
     async fn respond_to(self, st: &St, req: &HttpRequest) -> Response {
+        if let Some(err) = self.error {
+            return Response::from(err);
+        }
         let mut res = self.responder.respond_to(st, req).await;
 
         if let Some(status) = self.status {
             *res.status_mut() = status;
         }
-        if let Some(ref headers) = self.headers {
-            for (k, v) in headers {
-                res.headers_mut().insert(k.clone(), v.clone());
+        if let Some(headers) = self.headers {
+            for key in headers.keys() {
+                res.headers_mut().remove(key);
+            }
+            for (k, v) in &headers {
+                res.headers_mut().append(k.clone(), v.clone());
             }
         }
         res
@@ -521,6 +527,49 @@ pub(crate) mod tests {
             res.headers().get(CONTENT_TYPE).unwrap(),
             HeaderValue::from_static("json")
         );
+    }
+
+    #[crate::rt_test]
+    async fn test_custom_responder_headers() {
+        let req = TestRequest::default().to_http_request();
+        let res = responder("test".to_string())
+            .with_header("x-test", "1")
+            .with_header("x-test", "2")
+            .respond_to(&(), &req)
+            .await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let values: Vec<_> = res.headers().get_all("x-test").collect();
+        assert_eq!(
+            values,
+            [HeaderValue::from_static("1"), HeaderValue::from_static("2")]
+        );
+
+        // header set by the responder is replaced
+        let res = responder(
+            HttpResponse::Ok()
+                .header(CONTENT_TYPE, "text/plain")
+                .header(CONTENT_TYPE, "text/html")
+                .build(),
+        )
+        .with_header(CONTENT_TYPE, "json")
+        .respond_to(&(), &req)
+        .await;
+        let values: Vec<_> = res.headers().get_all(CONTENT_TYPE).collect();
+        assert_eq!(values, [HeaderValue::from_static("json")]);
+
+        let res = responder("test".to_string())
+            .with_header("bad header", "1")
+            .respond_to(&(), &req)
+            .await;
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let res = responder("test".to_string())
+            .with_header("x-test", "bad\nvalue")
+            .with_status(StatusCode::CREATED)
+            .respond_to(&(), &req)
+            .await;
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(res.headers().get("x-test").is_none());
     }
 
     #[crate::rt_test]

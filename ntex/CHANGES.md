@@ -11,6 +11,10 @@
 * HTTP/2 `304 Not Modified` response has no body, it was sent with `content-length: 0` or
   with the body `DATA` frames
 
+* `CustomResponder` returns `500` for an invalid `with_header()` name or value, it was
+  silently ignored; repeated `with_header()` calls for the same name keep all values, only
+  the last one was kept
+
 * HTTP/2 response body error resets only its stream with `INTERNAL_ERROR`, it closed the whole
   connection with `GOAWAY`, a failed send on a closed stream no longer fails the connection
 

@@ -1176,4 +1176,89 @@ mod tests {
         );
         assert_eq!(r.status(), StatusCode::NETWORK_AUTHENTICATION_REQUIRED);
     }
+
+    #[test]
+    fn test_default_error_renderers() {
+        use serde::de::Error as _;
+
+        fn status<E: WebResponseError<(), DefaultError>>(err: &E) -> StatusCode {
+            WebResponseError::<(), DefaultError>::error_response(err, &()).status()
+        }
+
+        let err = serde_json::from_str::<i32>("x").unwrap_err();
+        assert_eq!(status(&err), StatusCode::INTERNAL_SERVER_ERROR);
+        let err = serde_urlencoded::to_string(1).unwrap_err();
+        assert_eq!(status(&err), StatusCode::INTERNAL_SERVER_ERROR);
+        let err = serde::de::value::Error::custom("bad");
+        assert_eq!(status(&err), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            status(&crate::http::error::Canceled),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(
+            status(&BlockingError::<io::Error>::Canceled),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        let err: HttpError = http::header::HeaderName::try_from("bad header")
+            .unwrap_err()
+            .into();
+        assert_eq!(status(&err), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            status(&UrlGenerationError::ResourceNotFound),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(
+            status(&crate::client::error::ClientPayloadError(
+                http::error::PayloadError::Incomplete(None)
+            )),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            status(&http::error::PayloadError::Overflow),
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+
+        #[cfg(feature = "openssl")]
+        {
+            let err = tls_openssl::ssl::Error::from(tls_openssl::error::ErrorStack::get());
+            assert_eq!(status(&err), StatusCode::BAD_REQUEST);
+        }
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("custom error")]
+    struct CustomError(#[source] io::Error);
+
+    impl WebResponseError<(), DefaultError> for CustomError {}
+
+    #[test]
+    fn test_web_error() {
+        let err = CustomError(io::Error::other("inner"));
+        let res = WebResponseError::<(), DefaultError>::error_response(&err, &());
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let err = WebError::<(), DefaultError>::from_err(CustomError(io::Error::other("inner")));
+        assert_eq!(err.source().unwrap().to_string(), "inner");
+        let res = WebResponseError::error_response(&err, &());
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // WebError is not boxed twice
+        let err = WebError::<(), DefaultError>::from_err(err);
+        assert_eq!(err.to_string(), "custom error");
+        let res = WebResponseError::error_response(&err, &());
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let err = crate::error::Error::from(crate::http::error::Canceled);
+        let res = WebResponseError::<(), DefaultError>::error_response(&err, &());
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_internal_error_response_taken() {
+        let err = InternalError::from_response("err", HttpResponse::Ok().build());
+        let res = WebResponseError::<(), DefaultError>::error_response(&err, &());
+        assert_eq!(res.status(), StatusCode::OK);
+        let res = WebResponseError::<(), DefaultError>::error_response(&err, &());
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
 }

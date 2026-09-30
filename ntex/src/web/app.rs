@@ -932,4 +932,73 @@ mod tests {
             }
         }
     }
+
+    #[crate::rt_test]
+    async fn test_app_default_service() {
+        let srv =
+            init_service(App::default().default_service(web::to(async || HttpResponse::Created())))
+                .await;
+        let resp = call_service(&srv, TestRequest::with_uri("/any").to_request()).await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        srv.shutdown().await;
+    }
+
+    #[crate::rt_test]
+    async fn test_app_service_init_errors() {
+        use crate::service::{fn_factory, fn_service};
+
+        let attempts = Rc::new(Cell::new(0));
+        let attempts2 = attempts.clone();
+        let failing = move || {
+            let attempts = attempts2.clone();
+            fn_factory(async move |(): &()| {
+                attempts.set(attempts.get() + 1);
+                if attempts.get() % 2 == 1 {
+                    Err(std::io::Error::other("init error"))
+                } else {
+                    Ok(fn_service(async |req: WebRequest<()>| {
+                        Ok::<_, Infallible>(req.into_response(HttpResponse::Ok()))
+                    }))
+                }
+            })
+        };
+
+        let srv = init_service(
+            App::new()
+                .service(web::service("/test").build(failing()))
+                .default_service(failing()),
+        )
+        .await;
+
+        // failed services are not cached, next request creates them again
+        for path in ["/test", "/unknown"] {
+            let resp = call_service(&srv, TestRequest::with_uri(path).to_request()).await;
+            assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+            let resp = call_service(&srv, TestRequest::with_uri(path).to_request()).await;
+            assert_eq!(resp.status(), StatusCode::OK);
+            let resp = call_service(&srv, TestRequest::with_uri(path).to_request()).await;
+            assert_eq!(resp.status(), StatusCode::OK);
+        }
+        assert_eq!(attempts.get(), 4);
+    }
+
+    #[crate::rt_test]
+    async fn test_app_filter_error() {
+        let srv = init_service(
+            App::new()
+                .filter(async |req: WebRequest<()>| {
+                    if req.path() == "/denied" {
+                        Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+                    } else {
+                        Ok(req)
+                    }
+                })
+                .route("/{tail}*", web::to(async || HttpResponse::Ok())),
+        )
+        .await;
+        let resp = call_service(&srv, TestRequest::with_uri("/allowed").to_request()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let resp = call_service(&srv, TestRequest::with_uri("/denied").to_request()).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
 }
