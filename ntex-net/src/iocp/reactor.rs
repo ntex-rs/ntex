@@ -3,8 +3,10 @@ use std::{cell::Cell, fmt, io, mem, net, ptr, sync::Arc};
 
 use windows_sys::Win32::{
     Foundation::{
-        ERROR_BROKEN_PIPE, ERROR_HANDLE_EOF, ERROR_IO_INCOMPLETE, ERROR_MORE_DATA, ERROR_NO_DATA,
-        ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, INVALID_HANDLE_VALUE, NTSTATUS,
+        ERROR_BROKEN_PIPE, ERROR_CONNECTION_ABORTED, ERROR_CONNECTION_REFUSED, ERROR_HANDLE_EOF,
+        ERROR_HOST_UNREACHABLE, ERROR_IO_INCOMPLETE, ERROR_MORE_DATA, ERROR_NETNAME_DELETED,
+        ERROR_NETWORK_UNREACHABLE, ERROR_NO_DATA, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED,
+        ERROR_PORT_UNREACHABLE, ERROR_SEM_TIMEOUT, INVALID_HANDLE_VALUE, NTSTATUS,
         RtlNtStatusToDosError, WAIT_TIMEOUT,
     },
     Networking::WinSock,
@@ -189,6 +191,23 @@ impl ntex_rt::Driver for Reactor {
     }
 }
 
+/// Maps a Win32 error of a socket completion to its `WinSock` error.
+///
+/// `RtlNtStatusToDosError` maps socket NTSTATUS codes to Win32 network errors,
+/// such as `ERROR_CONNECTION_REFUSED`, which `io::Error::kind()` does not
+/// classify. `WSAGetOverlappedResult` reports `WinSock` errors instead.
+fn wsa_error(error: u32) -> i32 {
+    match error {
+        ERROR_CONNECTION_REFUSED => WinSock::WSAECONNREFUSED,
+        ERROR_NETNAME_DELETED | ERROR_PORT_UNREACHABLE => WinSock::WSAECONNRESET,
+        ERROR_CONNECTION_ABORTED => WinSock::WSAECONNABORTED,
+        ERROR_NETWORK_UNREACHABLE => WinSock::WSAENETUNREACH,
+        ERROR_HOST_UNREACHABLE => WinSock::WSAEHOSTUNREACH,
+        ERROR_SEM_TIMEOUT => WinSock::WSAETIMEDOUT,
+        _ => error.cast_signed(),
+    }
+}
+
 impl Reactor {
     /// Handle ring completions, forward changes to specific handler
     fn poll_completions(&self, events: &[OVERLAPPED_ENTRY]) {
@@ -216,7 +235,7 @@ impl Reactor {
                     // Partial transfer: data was delivered and more remains, so
                     // reporting 0 here would be read as a clean eof / write-zero.
                     ERROR_MORE_DATA => Ok(overlapped.base.InternalHigh),
-                    _ => Err(io::Error::from_raw_os_error(error.cast_signed())),
+                    _ => Err(io::Error::from_raw_os_error(wsa_error(error))),
                 }
             };
             handlers[overlapped.hnd as usize].completed(overlapped.udata, result, overlapped_ptr);
@@ -358,6 +377,34 @@ impl Handler for Dummy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Socket completion errors have the same kind as synchronous socket errors.
+    #[test]
+    fn socket_completion_error_kind() {
+        use windows_sys::Win32::Foundation as f;
+        for (status, kind) in [
+            (
+                f::STATUS_CONNECTION_REFUSED,
+                io::ErrorKind::ConnectionRefused,
+            ),
+            (f::STATUS_CONNECTION_RESET, io::ErrorKind::ConnectionReset),
+            (f::STATUS_REMOTE_DISCONNECT, io::ErrorKind::ConnectionReset),
+            (
+                f::STATUS_CONNECTION_ABORTED,
+                io::ErrorKind::ConnectionAborted,
+            ),
+            (
+                f::STATUS_NETWORK_UNREACHABLE,
+                io::ErrorKind::NetworkUnreachable,
+            ),
+            (f::STATUS_HOST_UNREACHABLE, io::ErrorKind::HostUnreachable),
+            (f::STATUS_IO_TIMEOUT, io::ErrorKind::TimedOut),
+        ] {
+            let error = unsafe { RtlNtStatusToDosError(status) };
+            let err = io::Error::from_raw_os_error(wsa_error(error));
+            assert_eq!(err.kind(), kind, "{status:#x}: {err:?}");
+        }
+    }
 
     /// Sockets of the base Winsock providers return IFS handles and can be
     /// attached with `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`.

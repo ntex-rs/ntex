@@ -4,6 +4,10 @@
 
 * Remove the `neon-iocp` feature, it had no effect, Windows always uses IOCP
 
+* IOCP: failed socket completions report `WinSock` errors, a refused `ConnectEx`
+  returned `ERROR_CONNECTION_REFUSED` with `ErrorKind::Uncategorized` instead of
+  `ConnectionRefused`, resets, aborts and unreachable errors were also uncategorized
+
 * polling: shut the socket down inline instead of on the blocking pool; a
   deferred shutdown could run after the runtime stopped and the descriptor was
   closed and reused, shutting down an unrelated socket
