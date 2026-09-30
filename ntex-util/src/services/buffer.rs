@@ -705,7 +705,7 @@ mod tests {
         drop(fut);
 
         inner.ready.set(true);
-        crate::time::timeout(Duration::from_millis(1000), srv.shutdown())
+        crate::time::timeout(Duration::from_secs(1), srv.shutdown())
             .await
             .unwrap();
         assert_eq!(inner.count.get(), 0);
@@ -724,7 +724,7 @@ mod tests {
         assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
 
         fail.set(true);
-        crate::time::timeout(Duration::from_millis(1000), srv.shutdown())
+        crate::time::timeout(Duration::from_secs(1), srv.shutdown())
             .await
             .unwrap();
 

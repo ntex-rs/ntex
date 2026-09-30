@@ -219,7 +219,7 @@ mod tests {
         // raising the capacity wakes waiters
         counter.set_capacity(2);
         assert!(counter.is_available());
-        crate::time::timeout(Duration::from_millis(1000), hnd)
+        crate::time::timeout(Duration::from_secs(1), hnd)
             .await
             .unwrap()
             .unwrap();

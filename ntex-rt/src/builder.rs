@@ -240,18 +240,14 @@ impl SystemRunner {
         // run loop
         crate::driver::block_on_panic(runner.as_ref(), async move {
             let (system, stop) = System::start(config);
+            let _signals = SignalsGuard(system.clone());
             if signals {
                 system.enable_signals();
             }
 
-            if let Err(e) = f() {
-                system.disable_signals();
-                return Err(e);
-            }
+            f()?;
 
             let result = stop.await;
-            // release signals for other systems
-            system.disable_signals();
 
             match result {
                 Ok(code) => {
@@ -287,16 +283,14 @@ impl SystemRunner {
 
         crate::driver::block_on_panic(runner.as_ref(), async move {
             let (system, _) = System::start(config);
+            let _signals = SignalsGuard(system.clone());
             if signals {
                 system.enable_signals();
             }
 
             let loc = current_location();
             ntex_error::set_backtrace_start(loc.file(), loc.line() + 2);
-            let result = fut.await;
-            // release signals for other systems
-            system.disable_signals();
-            result
+            fut.await
         })
     }
 
@@ -313,13 +307,11 @@ impl SystemRunner {
         let result = tok_io::task::LocalSet::new()
             .run_until(async move {
                 let (system, _) = System::start(config);
+                let _signals = SignalsGuard(system);
 
                 let loc = current_location();
                 ntex_error::set_backtrace_start(loc.file(), loc.line() + 2);
-                let result = fut.await;
-                // release signals for other systems
-                system.disable_signals();
-                result
+                fut.await
             })
             .await;
 
@@ -328,6 +320,16 @@ impl SystemRunner {
             crate::remove_all_items();
         }
         result
+    }
+}
+
+/// Releases the signals for other systems when the system's future completes,
+/// fails or panics.
+struct SignalsGuard(System);
+
+impl Drop for SignalsGuard {
+    fn drop(&mut self) {
+        self.0.disable_signals();
     }
 }
 

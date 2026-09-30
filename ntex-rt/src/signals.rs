@@ -1,4 +1,4 @@
-use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};
+use std::sync::{Arc, OnceLock, atomic::AtomicBool, atomic::Ordering, mpsc};
 use std::{cell::RefCell, future::poll_fn, panic, task::Poll};
 
 use atomic_waker::AtomicWaker;
@@ -17,6 +17,9 @@ static CUR_SYS: Mutex<Option<System>> = Mutex::new(None);
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static SIGS: Mutex<Vec<Signal>> = Mutex::new(Vec::new());
 static HND_WAKER: AtomicWaker = AtomicWaker::new();
+// The panic hook runs on the panicking thread, some runtimes (compio) abort
+// the process if a task is woken there. Panics are woken from a dedicated thread.
+static PANIC_WAKER: OnceLock<mpsc::SyncSender<()>> = OnceLock::new();
 
 /// Process and application signals delivered to the runtime.
 #[derive(Clone, Debug)]
@@ -332,6 +335,19 @@ pub(crate) fn enable_panic_handling() {
     static ONCE: std::sync::Once = std::sync::Once::new();
 
     ONCE.call_once(|| {
+        let (tx, rx) = mpsc::sync_channel::<()>(1);
+        let result = std::thread::Builder::new()
+            .name("ntex-rt:panics".to_string())
+            .spawn(move || {
+                for () in rx {
+                    HND_WAKER.wake();
+                }
+            });
+        match result {
+            Ok(_) => _ = PANIC_WAKER.set(tx),
+            Err(e) => log::error!("Cannot start panic handling thread: {e:?}"),
+        }
+
         let prev = panic::take_hook();
         panic::set_hook(Box::new(move |panic_info| {
             prev(panic_info);
@@ -355,7 +371,11 @@ pub(crate) fn enable_panic_handling() {
                 Backtrace::new(panic::Location::caller())
             };
 
-            handle_signal(Signal::Panic(PanicSource::App(info, bt)));
+            SIGS.lock().push(Signal::Panic(PanicSource::App(info, bt)));
+            if let Some(tx) = PANIC_WAKER.get() {
+                // a pending wake covers this panic too
+                let _ = tx.try_send(());
+            }
         }));
     });
 }
@@ -385,6 +405,33 @@ mod tests {
         .await
     }
 
+    /// Raises a signal with `raise` until a batch with a signal matching
+    /// `expected` is delivered, returns the number of attempts.
+    ///
+    /// The panic hook is process-wide, panics of tests running in parallel are
+    /// delivered too. A batch without the expected signal consumes the
+    /// handler, and the expected signal may be dropped before the handler is
+    /// registered again, so it is raised again.
+    async fn deliver(raise: impl Fn(), expected: impl Fn(&Signal) -> bool) -> usize {
+        for attempt in 1..=10 {
+            let rx = signal();
+            // let the registration task run
+            futures_timer::Delay::new(std::time::Duration::from_millis(50)).await;
+            raise();
+            if recv(rx)
+                .await
+                .is_some_and(|sigs| sigs.iter().any(&expected))
+            {
+                return attempt;
+            }
+        }
+        panic!("signal is not delivered");
+    }
+
+    fn is_app_panic(sig: &Signal, expected: &str) -> bool {
+        matches!(sig, Signal::Panic(PanicSource::App(msg, _)) if &**msg == expected)
+    }
+
     #[test]
     fn panic_hook_chains_and_follows_signals() {
         use std::sync::atomic::AtomicUsize;
@@ -397,7 +444,11 @@ mod tests {
 
         let prev = panic::take_hook();
         panic::set_hook(Box::new(move |info| {
-            CALLS.fetch_add(1, Ordering::Relaxed);
+            // panics of other tests reach the hook too
+            let msg = info.payload().downcast_ref::<&str>();
+            if matches!(msg, Some(&("no signals" | "boom"))) {
+                CALLS.fetch_add(1, Ordering::Relaxed);
+            }
             prev(info);
         }));
         enable_panic_handling();
@@ -405,25 +456,78 @@ mod tests {
         enable_panic_handling();
 
         // previous hook is called, nothing is queued without signal handling
+        SIGS.lock().clear();
         let _ = panic::catch_unwind(|| panic!("no signals"));
         assert_eq!(CALLS.load(Ordering::Relaxed), 1);
-        assert!(SIGS.lock().is_empty());
+        assert!(
+            !SIGS
+                .lock()
+                .iter()
+                .any(|sig| is_app_panic(sig, "no signals"))
+        );
 
-        System::new("test", TestRunner).block_on(async {
+        let attempts = System::new("test", TestRunner).block_on(async {
             let sys = System::current();
             sys.enable_signals();
 
-            let rx = signal();
-            // let the registration task run
-            futures_timer::Delay::new(std::time::Duration::from_millis(50)).await;
-            let _ = panic::catch_unwind(|| panic!("boom"));
-
-            let sigs = recv(rx).await.expect("panic delivered");
-            assert!(
-                matches!(&*sigs, [Signal::Panic(PanicSource::App(msg, _))] if &**msg == "boom")
-            );
+            deliver(
+                || {
+                    let _ = panic::catch_unwind(|| panic!("boom"));
+                },
+                |sig| is_app_panic(sig, "boom"),
+            )
+            .await
         });
-        assert_eq!(CALLS.load(Ordering::Relaxed), 2);
+        // the hook is installed once and chains the previous one
+        assert_eq!(CALLS.load(Ordering::Relaxed), 1 + attempts);
+    }
+
+    #[test]
+    fn panic_on_other_thread_delivered() {
+        let _lock = LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        enable_panic_handling();
+
+        System::new("test", TestRunner).block_on(async {
+            System::current().enable_signals();
+
+            // compio aborts the process if the task is woken on a panicking thread
+            deliver(
+                || {
+                    let res = std::thread::spawn(|| panic!("thread boom")).join();
+                    assert!(res.is_err());
+                },
+                |sig| is_app_panic(sig, "thread boom"),
+            )
+            .await;
+        });
+    }
+
+    #[test]
+    fn signals_released_when_future_panics() {
+        let _lock = LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let res = panic::catch_unwind(|| {
+            System::new("block_on", TestRunner).block_on(async {
+                System::current().enable_signals();
+                assert!(is_enabled());
+                panic!("block_on fails");
+            });
+        });
+        assert!(res.is_err());
+        assert!(!is_enabled());
+
+        let res = panic::catch_unwind(|| {
+            System::build().signals(true).build(TestRunner).run(|| {
+                assert!(is_enabled());
+                panic!("run fails");
+            })
+        });
+        assert!(res.is_err());
+        assert!(!is_enabled());
     }
 
     #[test]
@@ -472,7 +576,7 @@ mod tests {
         // stopped by another thread
         let stopper = std::thread::spawn(|| {
             loop {
-                let sys = CUR_SYS.lock().clone();
+                let sys = CUR_SYS.lock().clone().filter(|sys| sys.name() == "signals");
                 if let Some(sys) = sys {
                     sys.stop();
                     break;
@@ -540,6 +644,7 @@ mod tests {
         let _lock = LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        SIGS.lock().clear();
 
         let handles: Vec<_> = (0..4)
             .map(|_| {
@@ -550,22 +655,24 @@ mod tests {
                 })
             })
             .collect();
+        let hups = || {
+            let sigs = std::mem::take(&mut *SIGS.lock());
+            sigs.iter().filter(|sig| matches!(sig, Signal::Hup)).count()
+        };
         let mut received = 0;
         while received < 100 && !handles.iter().all(std::thread::JoinHandle::is_finished) {
-            received += std::mem::take(&mut *SIGS.lock()).len();
+            received += hups();
         }
         for h in handles {
             h.join().unwrap();
         }
-        received += std::mem::take(&mut *SIGS.lock()).len();
+        received += hups();
         assert_eq!(received, 100);
     }
 
     #[cfg(target_family = "unix")]
     #[test]
     fn os_signal_delivered() {
-        use std::time::Duration;
-
         let _lock = LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -575,13 +682,13 @@ mod tests {
             sys.enable_signals();
             assert!(sys.signals());
 
-            let rx = signal();
-            // let the registration task run
-            futures_timer::Delay::new(Duration::from_millis(50)).await;
-            unsafe { libc::kill(libc::getpid(), libc::SIGHUP) };
-
-            let sigs = recv(rx).await.expect("signal delivered");
-            assert!(matches!(&*sigs, [Signal::Hup]));
+            deliver(
+                || unsafe {
+                    libc::kill(libc::getpid(), libc::SIGHUP);
+                },
+                |sig| matches!(sig, Signal::Hup),
+            )
+            .await;
         });
         assert!(!is_enabled());
     }
