@@ -2,6 +2,8 @@
 
 ## [4.0.0] - unreleased
 
+* Remove the deprecated `neon` feature, it had no effect
+
 * Drop ping records of stopped arbiters, record late pongs in their own round
 
 * Fix blocking pool exceeding its thread limit, blocking the caller, panicking

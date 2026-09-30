@@ -14,16 +14,15 @@
 //! ## Runtime selection
 //!
 //! ntex uses its native Neon runtime by default. Enable `tokio` or `compio` to
-//! use the corresponding runtime backend. The `neon-polling`, `neon-uring`,
-//! and `neon-iocp` features select a specific native I/O reactor.
+//! use the corresponding runtime backend. The `neon-polling` and `neon-uring`
+//! features select a specific native I/O reactor, Windows always uses IOCP.
 //!
 //! ## Crate features
 //!
 //! - `tokio` selects the Tokio runtime backend.
 //! - `compio` selects the Compio runtime backend.
-//! - `neon-polling`, `neon-uring`, and `neon-iocp` select the Neon runtime
-//!   with the polling, io-uring, or IOCP reactor.
-//! - `neon` is deprecated and has no effect.
+//! - `neon-polling` and `neon-uring` select the Neon runtime with the polling
+//!   reactor on Unix or the io-uring reactor on Linux.
 //! - `ws` (default) enables WebSocket support.
 //! - `openssl` enables TLS support through OpenSSL.
 //! - `rustls` enables TLS support through rustls.

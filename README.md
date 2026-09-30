@@ -66,9 +66,8 @@ Alternative runtimes and native reactors can be selected with Cargo features:
 | --- | --- |
 | `tokio` | Tokio local runtime and I/O driver |
 | `compio` | Compio runtime and completion-based I/O |
-| `neon-polling` | Native runtime with the polling reactor |
+| `neon-polling` | Native runtime with the polling reactor on Unix |
 | `neon-uring` | Native runtime with `io_uring` on Linux |
-| `neon-iocp` | Native runtime with IOCP on Windows |
 
 Enable at most one runtime or native-reactor selection feature. For example:
 

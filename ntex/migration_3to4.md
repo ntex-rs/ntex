@@ -92,9 +92,12 @@ removed:
 
 ### Runtime features
 
-The deprecated `neon` feature has been removed from `ntex-net`. Remove it from
-direct `ntex-net` dependencies. Select the `tokio`, `compio`, or `neon-uring`
-feature when a specific runtime backend is required.
+The deprecated `neon` feature has been removed from `ntex`, `ntex-rt` and
+`ntex-net`, the native runtime is used without it. Remove it from `ntex` and
+direct `ntex-rt` or `ntex-net` dependencies. The `neon-iocp` feature has been
+removed as well, Windows always uses IOCP. Select the `tokio`, `compio`,
+`neon-polling` or `neon-uring` feature when a specific runtime backend is
+required.
 
 ## HTTP services
 

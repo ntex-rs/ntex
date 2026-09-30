@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+* Remove the deprecated `neon` feature, it had no effect
+
+* Remove the `neon-iocp` feature, it had no effect, Windows always uses IOCP
+
 * HTTP/1 dispatcher stops polling a response body once the connection is closed or failed,
   an always ready body was polled without bound and its chunks discarded
 
