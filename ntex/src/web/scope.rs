@@ -1218,6 +1218,54 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "url")]
+    #[crate::rt_test]
+    async fn test_url_for_parent() {
+        async fn urls(req: HttpRequest) -> HttpResponse {
+            let index = req.url_for("index", ["1"]).unwrap();
+            let youtube = req.url_for("youtube", ["2"]).unwrap();
+            let sibling = req.url_for("sibling", ["3"]).unwrap();
+            HttpResponse::Ok().body(format!("{index} {youtube} {sibling}"))
+        }
+
+        let srv = init_service(
+            App::new()
+                .external_resource("youtube", "https://youtube.com/watch/{video_id}")
+                .service(
+                    web::resource("/index/{id}")
+                        .name("index")
+                        .to(async || HttpResponse::Ok()),
+                )
+                .service(
+                    web::scope("/sibling").service(
+                        web::resource("/{id}")
+                            .name("sibling")
+                            .to(async || HttpResponse::Ok()),
+                    ),
+                )
+                .service(
+                    web::scope("/a")
+                        .service(web::resource("/").to(urls))
+                        .service(web::scope("/b").service(web::resource("/").to(urls))),
+                ),
+        )
+        .await;
+
+        for uri in ["/a/", "/a/b/"] {
+            let req = TestRequest::with_uri(uri).to_request();
+            let resp = call_service(&srv, req).await;
+            assert_eq!(resp.status(), StatusCode::OK);
+            let body = read_body(resp).await;
+            assert_eq!(
+                body,
+                Bytes::from_static(
+                    b"http://localhost:8080/index/1 https://youtube.com/watch/2 http://localhost:8080/sibling/3"
+                ),
+                "{uri}"
+            );
+        }
+    }
+
     #[crate::rt_test]
     async fn test_scope_default_service_only() {
         let srv = init_service(App::new().service(web::scope("/app").default_service(

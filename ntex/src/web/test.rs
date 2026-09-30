@@ -700,7 +700,7 @@ where
         let port = cfg.port;
         let tcp = cfg
             .listener
-            .unwrap_or(net::TcpListener::bind(format!("127.0.0.1:{port}")).unwrap());
+            .unwrap_or_else(|| net::TcpListener::bind(format!("127.0.0.1:{port}")).unwrap());
         let local_addr = tcp.local_addr().unwrap();
 
         sys.run(move || {
@@ -1351,6 +1351,126 @@ mod tests {
 
         let res = srv.put("").send().await.unwrap();
         assert_eq!(srv.load_body(res).await.unwrap(), Bytes::new());
+    }
+
+    #[crate::rt_test]
+    async fn test_request_state() {
+        let (_, _, st) = TestRequest::default().state(10usize).to_http_parts();
+        assert_eq!(st, 10);
+
+        let req = TestRequest::default()
+            .state(web::AppState::new(5usize))
+            .to_srv_request();
+        assert_eq!(**req.st(), 5);
+    }
+
+    #[crate::rt_test]
+    async fn test_server_config() {
+        let cfg = config()
+            .h1()
+            .port(0)
+            .client_cfg(SharedCfg::new("CUSTOM-CLIENT"));
+        let dbg = format!("{cfg:?}");
+        assert!(dbg.contains("StreamType::Tcp"), "{dbg}");
+
+        let srv = server_with(cfg, async |()| {
+            App::new().service(web::resource("/").to(async || HttpResponse::Ok()))
+        });
+        let res = srv.get("/").send().await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(res.version(), http::Version::HTTP_11);
+        srv.stop().await;
+    }
+
+    #[crate::rt_test]
+    async fn test_server_listener_ignores_port() {
+        // regression: the configured port was bound even if a listener is set
+        let lst = net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = lst.local_addr().unwrap();
+
+        let srv = server_with(config().port(addr.port()).listener(lst), async |()| {
+            App::new().service(web::resource("/").to(async || HttpResponse::Ok()))
+        });
+        assert_eq!(srv.addr(), addr);
+        let res = srv.get("/").send().await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[cfg(feature = "openssl")]
+    fn ssl_acceptor(h2: bool) -> tls_openssl::ssl::SslAcceptor {
+        use tls_openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
+
+        let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
+        builder
+            .set_private_key_file("./tests/key.pem", SslFiletype::PEM)
+            .unwrap();
+        builder
+            .set_certificate_chain_file("./tests/cert.pem")
+            .unwrap();
+        builder.set_alpn_select_callback(move |_, protos| {
+            if h2 && protos.windows(3).any(|w| w == b"\x02h2") {
+                Ok(b"h2")
+            } else {
+                Ok(b"http/1.1")
+            }
+        });
+        builder.build()
+    }
+
+    #[cfg(feature = "openssl")]
+    #[crate::rt_test]
+    async fn test_server_openssl() {
+        for (cfg, h2, version) in [
+            (config().h1(), false, http::Version::HTTP_11),
+            (config().h2(), true, http::Version::HTTP_2),
+            (config(), true, http::Version::HTTP_2),
+            (config(), false, http::Version::HTTP_11),
+        ] {
+            let cfg = cfg.openssl(ssl_acceptor(h2));
+            assert!(format!("{cfg:?}").contains("StreamType::Openssl"));
+
+            let srv = server_with(cfg, async |()| {
+                App::new().service(web::resource("/").to(async || HttpResponse::Ok()))
+            });
+            assert!(srv.url("/").starts_with("https://"));
+            let res = srv.get("/").send().await.unwrap();
+            assert_eq!(res.status(), StatusCode::OK);
+            assert_eq!(res.version(), version);
+        }
+    }
+
+    #[cfg(all(feature = "openssl", feature = "ws"))]
+    #[crate::rt_test]
+    async fn test_server_openssl_ws() {
+        let srv = server_with(config().h1().openssl(ssl_acceptor(false)), async |()| {
+            App::new().service(
+                web::resource("/").route(web::to(async |req: web::HttpRequest| {
+                    let _ = web::ws::start(&req, None, async |_: web::ws::Frame| {
+                        Ok::<_, io::Error>(None)
+                    })
+                    .await;
+                })),
+            )
+        });
+        assert!(srv.ws().await.is_ok());
+    }
+
+    #[cfg(feature = "rustls")]
+    #[test]
+    fn test_server_config_rustls_debug() {
+        use std::{fs::File, io::BufReader};
+
+        let cert_file = &mut BufReader::new(File::open("tests/cert.pem").unwrap());
+        let key_file = &mut BufReader::new(File::open("tests/key.pem").unwrap());
+        let cert_chain = rustls_pemfile::certs(cert_file)
+            .map(|r| r.unwrap())
+            .collect();
+        let key = rustls_pemfile::private_key(key_file).unwrap().unwrap();
+        let cfg = tls_rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(cert_chain, key)
+            .unwrap();
+        assert!(format!("{:?}", config().rustls(cfg)).contains("StreamType::Rustls"));
     }
 
     #[cfg(feature = "cookie")]

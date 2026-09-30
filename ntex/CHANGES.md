@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+* `web::ResourceMap::url_for()` on a nested scope map resolves names of parent and sibling
+  scopes, parent names were prefixed with the nested scope path and sibling names were not found
+
+* `web::test::TestServerConfig::listener()` does not bind the configured port, the web test
+  server bound it anyway and panicked if the port was in use
+
 * Add `Payload::trailers()`, HTTP/1 chunked and HTTP/2 request trailers and HTTP/2 client
   response trailers are available after the payload is complete, they were dropped;
   `h1::Payload` is a struct that dereferences to `bstream::Receiver`, new
