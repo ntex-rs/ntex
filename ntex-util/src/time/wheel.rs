@@ -49,6 +49,11 @@
 //! Dropping the timer driver, i.e. when the runtime stops, stops the wheel and
 //! marks all timers as elapsed. Dropping the lowres driver invalidates the
 //! cached time.
+//!
+//! A runtime does not always drop its pending tasks when it stops, the timer
+//! is also reset once the arbiter storage of the stopped system is cleared,
+//! so that the next runtime on the thread starts its own drivers. Drivers of
+//! an older generation exit without touching the state.
 use std::num::NonZeroUsize;
 use std::time::{Duration, Instant, SystemTime};
 use std::{cell::Cell, cmp, future::Future, pin::Pin, rc::Rc, task, task::Poll};
@@ -213,6 +218,8 @@ struct Timer {
     /// Expiry of the earliest occupied bucket, `u64::MAX` if the wheel is empty.
     next_expiry: Cell<u64>,
     flags: Cell<Flags>,
+    /// Incremented on reset, drivers of an older generation are stale.
+    generation: Cell<u64>,
     driver: LocalWaker,
     lowres_time: Cell<Option<Instant>>,
     lowres_stime: Cell<Option<SystemTime>>,
@@ -255,6 +262,7 @@ impl Timer {
             elapsed_time: Cell::new(None),
             next_expiry: Cell::new(u64::MAX),
             flags: Cell::new(Flags::empty()),
+            generation: Cell::new(0),
             driver: LocalWaker::new(),
             lowres_time: Cell::new(None),
             lowres_stime: Cell::new(None),
@@ -490,6 +498,16 @@ impl Timer {
         self.lowres_stime.set(None);
     }
 
+    /// Stops the drivers of the current generation, called when the system
+    /// that runs them has stopped.
+    fn reset(&self) {
+        self.generation.set(self.generation.get().wrapping_add(1));
+        self.stop_wheel();
+        self.stop_lowres();
+        self.driver.take();
+        self.lowres_driver.take();
+    }
+
     /// Marks all timers as elapsed and resets the wheel, called when the timer
     /// driver is dropped. Tasks are not woken, the runtime is stopping.
     fn stop_wheel(&self) {
@@ -585,9 +603,27 @@ impl Wheel {
     }
 }
 
+/// Resets the timer when dropped with the arbiter storage of a stopped system.
+#[derive(Default)]
+struct TimerReset;
+
+impl TimerReset {
+    fn register() {
+        ntex_rt::with_item::<TimerReset, _, _>(|_| ());
+    }
+}
+
+impl Drop for TimerReset {
+    fn drop(&mut self) {
+        // the timer is already destroyed if the thread is exiting
+        let _ = TIMER.try_with(|t| t.reset());
+    }
+}
+
 /// Task that sleeps until the next bucket expires and wakes its timers.
 struct TimerDriver {
     timer: Rc<Timer>,
+    generation: u64,
     sleep: Delay,
     /// Deadline the sleep is armed for.
     armed: Option<Instant>,
@@ -596,10 +632,12 @@ struct TimerDriver {
 impl TimerDriver {
     fn start(timer: &Rc<Timer>) {
         timer.insert_flags(Flags::DRIVER_STARTED);
+        TimerReset::register();
 
         let deadline = timer.expiry_time(timer.next_expiry.get());
         crate::spawn(TimerDriver {
             timer: timer.clone(),
+            generation: timer.generation.get(),
             sleep: Delay::new(deadline.saturating_duration_since(Instant::now())),
             armed: Some(deadline),
         });
@@ -611,7 +649,9 @@ impl TimerDriver {
 
 impl Drop for TimerDriver {
     fn drop(&mut self) {
-        self.timer.stop_wheel();
+        if self.timer.generation.get() == self.generation {
+            self.timer.stop_wheel();
+        }
     }
 }
 
@@ -621,6 +661,9 @@ impl Future for TimerDriver {
     fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
         let this = &mut *self;
         let timer = &this.timer;
+        if timer.generation.get() != this.generation {
+            return Poll::Ready(());
+        }
         timer.driver.register(cx.waker());
 
         let now = Instant::now();
@@ -672,15 +715,18 @@ impl Future for TimerDriver {
 /// Task that invalidates the cached time every `LOWRES_RESOLUTION`.
 struct LowresTimerDriver {
     timer: Rc<Timer>,
+    generation: u64,
     sleep: Delay,
 }
 
 impl LowresTimerDriver {
     fn start(timer: &Rc<Timer>) {
         timer.insert_flags(Flags::LOWRES_DRIVER);
+        TimerReset::register();
 
         crate::spawn(LowresTimerDriver {
             timer: timer.clone(),
+            generation: timer.generation.get(),
             sleep: Delay::new(LOWRES_RESOLUTION),
         });
     }
@@ -688,7 +734,9 @@ impl LowresTimerDriver {
 
 impl Drop for LowresTimerDriver {
     fn drop(&mut self) {
-        self.timer.stop_lowres();
+        if self.timer.generation.get() == self.generation {
+            self.timer.stop_lowres();
+        }
     }
 }
 
@@ -698,6 +746,9 @@ impl Future for LowresTimerDriver {
     fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
         let this = &mut *self;
         let timer = &this.timer;
+        if timer.generation.get() != this.generation {
+            return Poll::Ready(());
+        }
         timer.lowres_driver.register(cx.waker());
 
         // the cache was populated, invalidate it after `LOWRES_RESOLUTION`
@@ -746,6 +797,56 @@ mod tests {
         })
         .join();
         assert!(res.is_ok());
+    }
+
+    /// The drivers of a stopped system may never be dropped, the next system
+    /// on the same thread starts its own drivers.
+    #[test]
+    fn test_timer_in_next_system() {
+        let res = std::thread::spawn(|| {
+            for _ in 0..3 {
+                let start = Instant::now();
+                ntex::rt::System::build()
+                    .build(ntex::rt::DefaultRuntime)
+                    .block_on(async {
+                        sleep(Millis(10)).await;
+                        let _ = now();
+                        // pending timer of the stopped system
+                        let _hnd = sleep(Millis(10_000));
+                        crate::spawn(async { sleep(Millis(10_000)).await });
+                    });
+                assert!(start.elapsed() < Duration::from_secs(5));
+            }
+        });
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || tx.send(res.join().is_ok()));
+        assert_eq!(rx.recv_timeout(Duration::from_secs(10)), Ok(true));
+    }
+
+    /// A stale driver does not stop the drivers of a newer generation.
+    #[test]
+    fn test_stale_driver_drop() {
+        let timer = Rc::new(Timer::new());
+        timer.insert_flags(Flags::RUNNING | Flags::DRIVER_STARTED | Flags::LOWRES_DRIVER);
+        timer.reset();
+        assert_eq!(timer.flags.get(), Flags::empty());
+
+        timer.insert_flags(Flags::RUNNING | Flags::DRIVER_STARTED | Flags::LOWRES_DRIVER);
+        drop(TimerDriver {
+            timer: timer.clone(),
+            generation: 0,
+            sleep: Delay::new(Duration::ZERO),
+            armed: None,
+        });
+        drop(LowresTimerDriver {
+            timer: timer.clone(),
+            generation: 0,
+            sleep: Delay::new(Duration::ZERO),
+        });
+        assert_eq!(
+            timer.flags.get(),
+            Flags::RUNNING | Flags::DRIVER_STARTED | Flags::LOWRES_DRIVER
+        );
     }
 
     fn entry() -> TimerEntry {
@@ -876,6 +977,7 @@ mod tests {
 
         drop(LowresTimerDriver {
             timer: timer.clone(),
+            generation: 0,
             sleep: Delay::new(Duration::ZERO),
         });
         assert_eq!(timer.flags.get(), Flags::DRIVER_STARTED);
@@ -887,6 +989,7 @@ mod tests {
         timer.insert_flags(Flags::RUNNING | Flags::LOWRES_DRIVER);
         drop(TimerDriver {
             timer: timer.clone(),
+            generation: 0,
             sleep: Delay::new(Duration::ZERO),
             armed: None,
         });

@@ -8,6 +8,10 @@
 
 * Remove the `neon-iocp` feature, it had no effect, Windows always uses IOCP
 
+* IOCP: support unix domain socket connect, `ConnectEx` requires a bound socket
+  and only IP sockets were bound, so `unix_connect` failed with
+  "Unsupported address domain"
+
 * compio: map Win32 network errors of connect, read and write on Windows to
   `WinSock` errors, a refused connect reported `ErrorKind::Uncategorized`
 

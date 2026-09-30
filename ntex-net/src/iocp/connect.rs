@@ -83,6 +83,9 @@ impl ConnectOps {
                 0,
                 0,
             )))
+        } else if addr.domain() == Domain::UNIX {
+            // an unnamed address, `ConnectEx` requires a bound socket
+            SockAddr::unix("")
         } else {
             Err(io::Error::new(
                 io::ErrorKind::AddrNotAvailable,
@@ -278,18 +281,5 @@ mod tests {
         assert!(!is_ours(raw, &local), "cleanup leaked the socket");
         let err = rx.await.unwrap_err();
         assert_eq!(err.to_string(), "IO Driver is gone");
-    }
-
-    /// `ConnectEx` only supports IP sockets, a unix socket connect fails
-    /// without starting an operation.
-    #[ntex::test]
-    async fn unix_connect_is_unsupported() {
-        let reactor = Reactor::new().unwrap();
-        let path = std::env::temp_dir().join("ntex-net-iocp-unix-connect.sock");
-        let err = crate::Reactor::unix_connect(&reactor, path, SharedCfg::default())
-            .await
-            .unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::AddrNotAvailable, "{err:?}");
-        assert!(ConnectOps::get(&reactor).0.ops.borrow().is_empty());
     }
 }

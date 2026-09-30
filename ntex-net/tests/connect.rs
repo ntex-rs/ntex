@@ -121,19 +121,22 @@ async fn connect_resolver_error() {
     assert!(matches!(&*err, ConnectError::Resolver(_)), "{err:?}");
 }
 
-#[cfg(unix)]
+// tokio has no unix sockets on Windows
+#[cfg(any(unix, not(feature = "tokio")))]
 #[ntex::test]
 async fn unix_connect() {
-    use std::os::unix::net::UnixListener;
+    use socket2::{Domain, SockAddr, Socket, Type};
 
     let dir = std::env::temp_dir().join(format!("ntex-net-uds-{}", std::process::id()));
     let _ = std::fs::remove_file(&dir);
-    let lst = UnixListener::bind(&dir).unwrap();
+    let lst = Socket::new(Domain::UNIX, Type::STREAM, None).unwrap();
+    lst.bind(&SockAddr::unix(&dir).unwrap()).unwrap();
+    lst.listen(1).unwrap();
     thread::spawn(move || {
-        let (mut sock, _) = lst.accept().unwrap();
+        let (sock, _) = lst.accept().unwrap();
         let mut buf = [0u8; 64];
-        let n = sock.read(&mut buf).unwrap();
-        sock.write_all(&buf[..n]).unwrap();
+        let n = (&sock).read(&mut buf).unwrap();
+        (&sock).write_all(&buf[..n]).unwrap();
     });
 
     let io = ntex_net::unix_connect(&dir, SharedCfg::default())
@@ -147,7 +150,13 @@ async fn unix_connect() {
     let err = ntex_net::unix_connect(&dir, SharedCfg::default())
         .await
         .unwrap_err();
-    assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    let expected = if cfg!(windows) {
+        // WinSock reports WSAECONNREFUSED for a missing socket file
+        std::io::ErrorKind::ConnectionRefused
+    } else {
+        std::io::ErrorKind::NotFound
+    };
+    assert_eq!(err.kind(), expected, "{err:?}");
 }
 
 #[cfg(unix)]
