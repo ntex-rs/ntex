@@ -211,12 +211,7 @@ impl Inner {
         if let Some(data) = self.items.borrow_mut().pop_front() {
             let cap = self.cap.take().unwrap();
             cap.consume(data.len() as u32);
-            let size = cap.size();
             self.cap.set(Some(cap));
-
-            if size == 0 && !self.flags.get().contains(Flags::EOF) {
-                self.task.register(cx.waker());
-            }
             Poll::Ready(Some(Ok(data)))
         } else if let Some(err) = self.err.take() {
             // the payload ends after an error
@@ -302,5 +297,52 @@ mod tests {
         drop(payload);
         assert_eq!(io_task.0.load(Ordering::SeqCst), 1);
         assert!(sender.on_cancel(&io_waker).is_ready());
+    }
+
+    /// A ready read does not register the reader waker, new data does not wake
+    /// a reader that is not waiting.
+    #[crate::rt_test]
+    async fn test_ready_read_does_not_register_waker() {
+        let (io, server) = IoTest::create();
+        io.remote_buffer_cap(64 * 1024);
+        let client = SimpleClient::new(
+            IoBoxed::from(Io::new(io, SharedCfg::default())),
+            Scheme::HTTP,
+            ByteString::from_static("localhost"),
+        );
+        server.write([0, 0, 0, 4, 0, 0, 0, 0, 0]);
+        sleep(Millis(50)).await;
+        let (snd, rcv) = client
+            .send(Method::GET, "/".into(), HeaderMap::default(), true)
+            .await
+            .unwrap();
+
+        // `200` response and two DATA frames
+        server.write([0, 0, 1, 1, 4, 0, 0, 0, 1, 0x88]);
+        server.write([0, 0, 2, 0, 0, 0, 0, 0, 1, b'a', b'b']);
+        server.write([0, 0, 2, 0, 0, 0, 0, 0, 1, b'c', b'd']);
+        let _ = rcv.recv().await.unwrap();
+        let mut chunks = Vec::new();
+        for _ in 0..2 {
+            let msg = rcv.recv().await.unwrap();
+            let h2::MessageKind::Data(data, cap) = msg.kind else {
+                panic!("unexpected message: {msg:?}")
+            };
+            chunks.push((data, cap));
+        }
+
+        let (sender, payload) = Payload::create(snd.stream().empty_capacity());
+        let reader = Arc::new(Counter(AtomicUsize::new(0)));
+        let reader_waker = reader.clone().into();
+        let mut cx = Context::from_waker(&reader_waker);
+
+        let (data, cap) = chunks.remove(0);
+        sender.feed_data(data, cap);
+        assert!(matches!(payload.poll_read(&mut cx), Poll::Ready(Some(Ok(ref d))) if d == "ab"));
+
+        let (data, cap) = chunks.remove(0);
+        sender.feed_data(data, cap);
+        assert_eq!(reader.0.load(Ordering::SeqCst), 0);
+        assert!(matches!(payload.poll_read(&mut cx), Poll::Ready(Some(Ok(ref d))) if d == "cd"));
     }
 }

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* HTTP/2 payload read that returns a chunk does not register the reader waker, new data woke
+  a reader that was not waiting
+
 * HTTP/2 payload read does not wake the client payload task when no data is available,
   the task was polled for nothing on every pending read
 
