@@ -70,8 +70,7 @@ You can select a specific native reactor through a Cargo feature:
 - `neon-uring` selects the `io_uring` reactor. It is available only on Linux.
 
 The reactor-selection features are intended to be mutually exclusive. Windows
-always uses IOCP, the `neon-iocp` feature is accepted for compatibility but has
-no effect.
+always uses IOCP and has no reactor-selection feature.
 
 For example, to use the polling reactor:
 

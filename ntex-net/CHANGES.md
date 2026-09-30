@@ -2,6 +2,8 @@
 
 ## [4.1.0] - Unreleased
 
+* Remove the `neon-iocp` feature, it had no effect, Windows always uses IOCP
+
 * polling: shut the socket down inline instead of on the blocking pool; a
   deferred shutdown could run after the runtime stopped and the descriptor was
   closed and reused, shutting down an unrelated socket
