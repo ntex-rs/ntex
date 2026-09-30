@@ -28,7 +28,7 @@
 * HTTP/2 request payload ignores empty non-final `DATA` frames, they are not flow controlled
   and each one was queued as an empty body chunk without bound
 
-* HTTP/2 connection is closed with `GOAWAY` after 10 consecutive empty non-final `DATA` frames,
+* HTTP/2 connection is closed with `GOAWAY` `ENHANCE_YOUR_CALM` after 10 consecutive empty non-final `DATA` frames,
   new `H2Error::EmptyDataFrames` error
 
 * Remove the deprecated `neon` feature, it had no effect
