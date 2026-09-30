@@ -115,7 +115,7 @@ fn retryable_and_signature() {
     assert_eq!(Success.signature(), "Success");
     assert_eq!(Success.to_string(), "Success");
     assert_eq!(ResultType::ClientError.to_string(), "ClientError");
-    assert_eq!(ResultType::ServiceError.signature(), "ServiceError");
+    assert_eq!(ResultType::ServiceError.as_str(), "ServiceError");
 }
 
 #[test]

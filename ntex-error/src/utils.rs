@@ -262,8 +262,10 @@ fn module_path_from_file_with_root(
 ) -> ByteString {
     let normalized = file_path.replace('\\', "/");
     let module_root_norm = module_root.to_string_lossy().replace('\\', "/");
+    // filesystem roots (`/`, `C:/`) already end with a separator
+    let module_root_norm = module_root_norm.trim_end_matches('/');
 
-    let Some(relative) = normalized.strip_prefix(&(module_root_norm.clone() + "/")) else {
+    let Some(relative) = normalized.strip_prefix(&(module_root_norm.to_string() + "/")) else {
         return format!(
             "{prefix}{module_name}{sep}{}{suffix}",
             module_path_from_file(sep, file_path)
