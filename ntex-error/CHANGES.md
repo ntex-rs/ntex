@@ -6,6 +6,8 @@
 
 * Fix module_path_fs() returning cached module_path() result for the same file
 
+* Fix module_path() for files in a Windows drive root, e.g. `C:\c.rs`
+
 * Fix IntoFailure::fail() for Error<E> double wrapping the error and losing extension items and backtrace
 
 ## [2.6.0] - 2026-09-07
