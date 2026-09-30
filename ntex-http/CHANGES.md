@@ -2,6 +2,12 @@
 
 ## [1.3.0] - Unreleased
 
+* Fix HeaderMap deserialization of non-borrowed keys (serde_json::from_value, from_reader, escaped keys)
+
+* HeaderMap deserialization merges values of duplicate (case-insensitive) keys instead of dropping them
+
+* Map InvalidUriParts wrapped in http::Error to the invalid uri error kind
+
 * HeaderValue hash ignores the sensitive flag, consistent with equality
 
 * Remove FromIterator for HeaderMap, it split string values on commas and dropped invalid values

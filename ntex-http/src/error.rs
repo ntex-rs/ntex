@@ -159,6 +159,8 @@ impl From<http::Error> for Error {
             ErrorKind::Method(InvalidMethod { _priv: () })
         } else if err.is::<http::uri::InvalidUri>() {
             ErrorKind::Uri(InvalidUri { _priv: () })
+        } else if err.is::<http::uri::InvalidUriParts>() {
+            ErrorKind::UriParts(InvalidUri { _priv: () })
         } else if err.is::<http::header::InvalidHeaderName>() {
             ErrorKind::HeaderName(InvalidHeaderName { _priv: () })
         } else if err.is::<http::header::InvalidHeaderValue>() {

@@ -23,6 +23,7 @@ mod ext;
 mod info;
 mod message;
 mod repr;
+/// Helper traits, types, and functions.
 pub mod utils;
 
 pub use crate::bt::{Backtrace, BacktraceRaw, BacktraceResolver};
@@ -125,7 +126,7 @@ impl ErrorDiagnostic for ResultType {
     }
 }
 
-/// Helper trait for converting a value into a unified error-aware result type.
+/// Helper trait for converting a value into a type-erased [`Failure`].
 pub trait IntoFailure: Sized {
     /// Converts this value into a type-erased [`Failure`].
     fn fail(self) -> Failure;

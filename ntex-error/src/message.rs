@@ -67,8 +67,9 @@ where
 
 /// Formats a full diagnostic view of an error for logging and tracing.
 ///
-/// For `ServiceError` types, this includes debug representations of all nested errors,
-/// and a backtrace when available.
+/// Includes the result type, signature, tag, service, and the display
+/// representation of the error and its source chain. For `ServiceError`
+/// results, a resolved backtrace is appended when available.
 pub fn fmt_diag<'a, T>(f: &mut dyn fmt::Write, container: &'a T) -> fmt::Result
 where
     T: ErrorDiagnostic + AsError,
@@ -79,8 +80,9 @@ where
 
 /// Formats a full diagnostic view of an error for logging and tracing.
 ///
-/// For `ServiceError` types, this includes debug representations of all nested errors,
-/// and a backtrace when available.
+/// Includes the result type, signature, tag, service, and the display
+/// representation of the error and its source chain. For `ServiceError`
+/// results, a resolved backtrace is appended when available.
 pub fn fmt_diag_typ<T>(f: &mut dyn fmt::Write, typ: Option<ResultType>, e: &T) -> fmt::Result
 where
     T: ErrorDiagnostic,

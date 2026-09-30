@@ -53,6 +53,7 @@ pub struct Failure {
     inner: FailureDiagnostic,
 }
 
+/// Type-erased diagnostic view of a [`Failure`].
 pub struct FailureDiagnostic(Arc<dyn ErrorInfo>);
 
 impl Failure {

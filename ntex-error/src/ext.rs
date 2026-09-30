@@ -3,7 +3,7 @@ use std::{any::Any, any::TypeId, collections::HashMap, sync::Arc};
 use foldhash::fast::RandomState;
 
 #[derive(Clone)]
-/// A type map of request extensions.
+/// A type map of error extensions.
 pub(crate) struct Extensions {
     pub(crate) map: HashMap<TypeId, Arc<dyn Any + Sync + Send>, RandomState>,
 }
