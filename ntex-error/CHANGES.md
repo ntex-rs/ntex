@@ -10,6 +10,10 @@
 
 * Capture caller location in ErrorMapping::into_error(), consistent with Error::new()
 
+* Implement Retryable for Error<E>
+
+* ErrorMessageChained is Send + Sync, sources must be Send + Sync
+
 ## [2.6.0] - 2026-09-07
 
 * Introduce IntoFailure trait

@@ -2,9 +2,9 @@ use std::{error::Error as StdError, fmt, io};
 
 use ntex_bytes::Bytes;
 use ntex_error::{
-    AsError, Backtrace, BacktraceRaw, Error, ErrorDiagnostic, ErrorMapping, ErrorMessage, Failure,
-    IntoFailure, ResultSignature, ResultType, Retryable, Success, fmt_diag_string, fmt_diag_typ,
-    fmt_err_string, utils, with_service,
+    AsError, Backtrace, BacktraceRaw, Error, ErrorDiagnostic, ErrorMapping, ErrorMessage,
+    ErrorMessageChained, Failure, IntoFailure, ResultSignature, ResultType, Retryable, Success,
+    fmt_diag_string, fmt_diag_typ, fmt_err_string, utils, with_service,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -101,6 +101,11 @@ fn retryable_and_signature() {
     assert!(err.is_retryable());
     let err2: Result<(), MyError> = Err(MyError::Inner(Inner));
     assert!(!err2.is_retryable());
+
+    let e1: Result<(), Error<MyError>> = Err(Error::from(MyError::Connect("x")));
+    assert!(e1.is_retryable());
+    let e2: Result<(), Error<MyError>> = Err(Error::from(MyError::Inner(Inner)));
+    assert!(!e2.is_retryable());
 
     assert_eq!(ResultSignature::new("s").signature(), "s");
     assert_eq!(ResultSignature::from(&MyError::Inner(Inner)).0, "my-inner");
@@ -320,6 +325,10 @@ fn fmt_helpers() {
     assert_eq!(format!("{msg:?}"), "");
     assert_eq!(fmt_err_string(&msg), "io\n");
     assert_eq!(msg.msg(), "");
+
+    fn is_send_sync<T: Send + Sync>(_: &T) {}
+    is_send_sync(&msg);
+    is_send_sync(&Error::<ErrorMessageChained>::from(msg));
 }
 
 #[test]

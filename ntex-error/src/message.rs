@@ -1,4 +1,4 @@
-use std::{error::Error as StdError, fmt, fmt::Write, rc::Rc};
+use std::{error::Error as StdError, fmt, fmt::Write, sync::Arc};
 
 use ntex_bytes::ByteString;
 
@@ -141,7 +141,7 @@ pub struct ErrorMessage(ByteString);
 #[derive(Clone)]
 pub struct ErrorMessageChained {
     msg: ByteString,
-    source: Option<Rc<dyn StdError>>,
+    source: Option<Arc<dyn StdError + Send + Sync>>,
 }
 
 impl ErrorMessageChained {
@@ -149,11 +149,11 @@ impl ErrorMessageChained {
     pub fn new<M, E>(ctx: M, source: E) -> Self
     where
         M: Into<ErrorMessage>,
-        E: StdError + 'static,
+        E: StdError + Send + Sync + 'static,
     {
         ErrorMessageChained {
             msg: ctx.into().into_string(),
-            source: Some(Rc::new(source)),
+            source: Some(Arc::new(source)),
         }
     }
 
@@ -205,7 +205,10 @@ impl ErrorMessage {
     }
 
     /// Attaches a source error to this message.
-    pub fn with_source<E: StdError + 'static>(self, source: E) -> ErrorMessageChained {
+    pub fn with_source<E: StdError + Send + Sync + 'static>(
+        self,
+        source: E,
+    ) -> ErrorMessageChained {
         ErrorMessageChained::new(self, source)
     }
 }
@@ -263,7 +266,9 @@ impl<M: Into<ErrorMessage>> From<M> for ErrorMessageChained {
 
 impl StdError for ErrorMessageChained {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        self.source.as_ref().map(AsRef::as_ref)
+        self.source
+            .as_ref()
+            .map(|e| e.as_ref() as &(dyn StdError + 'static))
     }
 }
 

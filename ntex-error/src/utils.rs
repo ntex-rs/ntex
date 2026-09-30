@@ -10,6 +10,12 @@ pub trait Retryable {
     fn is_retryable(&self) -> bool;
 }
 
+impl<E: Retryable> Retryable for Error<E> {
+    fn is_retryable(&self) -> bool {
+        self.inner.error.is_retryable()
+    }
+}
+
 impl<T, E> Retryable for Result<T, E>
 where
     E: Retryable,
