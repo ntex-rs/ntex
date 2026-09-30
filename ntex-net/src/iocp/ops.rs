@@ -98,6 +98,12 @@ impl ReadOperation {
         self.flags.insert(Flags::WAITING);
     }
 
+    /// Reads as if the socket could not be switched to non-blocking mode.
+    #[cfg(test)]
+    pub(crate) fn fake_blocking(&mut self) {
+        self.flags.insert(Flags::BLOCKING);
+    }
+
     /// Whether a recv is in flight, so the kernel still owns this operation.
     pub(crate) fn is_pending(&self) -> bool {
         self.flags.contains(Flags::WAITING)

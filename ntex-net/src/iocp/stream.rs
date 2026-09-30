@@ -914,4 +914,239 @@ mod tests {
             "item not freed after the completion"
         );
     }
+
+    /// Waits until the socket is closed by the blocking pool.
+    async fn wait_closed(io: WinSock::SOCKET, addr: &socket2::SockAddr) -> bool {
+        for _ in 0..100 {
+            if !is_ours(io, addr) {
+                return true;
+            }
+            ntex::time::sleep(ntex::time::Millis(20)).await;
+        }
+        false
+    }
+
+    /// Handles dropped without a shutdown while a recv is in flight must
+    /// cancel it and keep the item, the kernel still completes into it. The
+    /// completion frees the item and closes the socket.
+    #[ntex::test]
+    async fn drop_without_shutdown_waits_for_pending_recv() {
+        let reactor = Reactor::new().unwrap();
+        let (io, ctl, ops, raw, peer) = registered(&reactor);
+        let id = ctl.id;
+        ops.0.with(|st| st.streams[id].rd_op.fake_pending());
+
+        drop(ctl);
+        drop(io);
+        assert!(
+            ops.0.with(|st| st.streams.contains(id)),
+            "item freed with a recv in flight"
+        );
+
+        complete_aborted_recv(&ops, id);
+        assert!(
+            !ops.0.with(|st| st.streams.contains(id)),
+            "item not freed after the completion"
+        );
+        let addr = peer.peer_addr().unwrap().into();
+        assert!(wait_closed(raw, &addr).await, "socket not closed");
+    }
+
+    /// A handle dropped while the storage is in use, e.g. from within a
+    /// completion, is released on the next reactor tick.
+    #[ntex::test]
+    async fn drop_during_completion_is_deferred_to_tick() {
+        let reactor = Reactor::new().unwrap();
+        let (io, ctl, ops, raw, peer) = registered(&reactor);
+        let id = ctl.id;
+
+        let storage = ops.0.storage.take().unwrap();
+        drop(ctl);
+        ops.0.storage.set(Some(storage));
+        assert!(!ops.0.delayed_feed.is_empty());
+        assert!(
+            !ops.0
+                .with(|st| st.streams[id].flags.contains(Flags::DROPPED_PRI))
+        );
+
+        StreamOpsHandler {
+            inner: ops.0.clone(),
+        }
+        .tick();
+        assert!(ops.0.delayed_feed.is_empty());
+        assert!(
+            ops.0
+                .with(|st| st.streams[id].flags.contains(Flags::DROPPED_PRI))
+        );
+
+        // the weak handle goes with the io, then the item is freed
+        drop(io);
+        assert!(!ops.0.with(|st| st.streams.contains(id)));
+        let addr = peer.peer_addr().unwrap().into();
+        assert!(wait_closed(raw, &addr).await, "socket not closed");
+    }
+
+    /// A second shutdown finds the close already done and succeeds, and no
+    /// operation is started on a closed stream.
+    #[ntex::test]
+    async fn repeated_shutdown_succeeds() {
+        let reactor = Reactor::new().unwrap();
+        let (io, ctl, ops, raw, mut peer) = registered(&reactor);
+        let id = ctl.id;
+
+        ctl.shutdown(false).await.unwrap();
+        ctl.shutdown(false).await.unwrap();
+
+        ctl.read();
+        ctl.write();
+        assert!(!ops.0.with(|st| st.streams[id].rd_op.is_pending()));
+        assert_closed(raw, &mut peer);
+
+        drop(ctl);
+        drop(io);
+    }
+
+    /// A send that fails right away returns its pages to the write buffer and
+    /// reports the error.
+    #[ntex::test]
+    async fn send_to_reset_peer_reports_error() {
+        let reactor = Reactor::new().unwrap();
+        let (io, ctl, ops, raw, peer) = registered(&reactor);
+        let addr = peer.peer_addr().unwrap().into();
+        Socket::from(peer)
+            .set_linger(Some(std::time::Duration::ZERO))
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        io.encode(
+            ntex::util::Bytes::from_static(b"data"),
+            &ntex::codec::BytesCodec,
+        )
+        .unwrap();
+        ctl.write();
+
+        let err = ntex::time::timeout(ntex::time::Seconds(5), io.flush(true))
+            .await
+            .expect("send error not reported")
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::ConnectionReset);
+        assert!(!ops.0.with(|st| st.streams[ctl.id].wr_op.is_pending()));
+
+        cleanup(&ops);
+        assert!(!is_ours(raw, &addr));
+        drop(ctl);
+        drop(io);
+    }
+
+    /// A recv cancelled by a pause that is already over resumes reading, so
+    /// input that arrived meanwhile is not left unread.
+    #[ntex::test]
+    async fn cancelled_recv_resumes_reading() {
+        let reactor = Reactor::new().unwrap();
+        let (io, ctl, ops, raw, mut peer) = registered(&reactor);
+        let id = ctl.id;
+        ops.0.with(|st| st.streams[id].rd_op.fake_pending());
+        std::io::Write::write_all(&mut peer, b"hello").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        complete_aborted_recv(&ops, id);
+        assert_eq!(
+            io.with_read_dst(|buf| buf.split_to(buf.len())),
+            b"hello".as_ref()
+        );
+        assert!(
+            ops.0.with(|st| st.streams[id].rd_op.is_pending()),
+            "no recv waits for more input"
+        );
+
+        cleanup(&ops);
+        assert_closed(raw, &mut peer);
+        drop(ctl);
+        drop(io);
+    }
+
+    /// A socket left in blocking mode is only read once the kernel reported
+    /// input, so a read never blocks the reactor.
+    #[ntex::test]
+    async fn blocking_socket_is_read_after_readiness() {
+        let reactor = Reactor::new().unwrap();
+        let (io, ctl, ops, raw, mut peer) = registered(&reactor);
+        let id = ctl.id;
+        ops.0.with(|st| st.streams[id].rd_op.fake_blocking());
+        {
+            let s = mem::ManuallyDrop::new(unsafe { Socket::from_raw_socket(raw as _) });
+            s.set_nonblocking(false).unwrap();
+            // a recv issued without input fails after this instead of hanging
+            s.set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                .unwrap();
+        }
+
+        let start = std::time::Instant::now();
+        ctl.read();
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(1),
+            "read blocked without input"
+        );
+        assert!(
+            ops.0.with(|st| st.streams[id].rd_op.is_pending()),
+            "no recv waits for input"
+        );
+
+        // the recv reports the input, the kernel is done with the operation
+        // once the input has arrived
+        std::io::Write::write_all(&mut peer, b"hello").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        StreamOpsHandler {
+            inner: ops.0.clone(),
+        }
+        .completed(
+            ops::RD_OP,
+            Ok(0),
+            ops.0
+                .with(|st| st.streams[id].rd_op.as_ptr().cast::<Overlapped>()),
+        );
+        assert_eq!(
+            io.with_read_dst(|buf| buf.split_to(buf.len())),
+            b"hello".as_ref()
+        );
+        assert!(
+            ops.0.with(|st| st.streams[id].rd_op.is_pending()),
+            "no recv waits for more input"
+        );
+
+        cleanup(&ops);
+        assert_closed(raw, &mut peer);
+        drop(ctl);
+        drop(io);
+    }
+
+    /// A send that completes without writing anything fails the connection,
+    /// retrying it would spin.
+    #[ntex::test]
+    async fn zero_byte_send_completion_is_write_zero() {
+        let reactor = Reactor::new().unwrap();
+        let (io, ctl, ops, raw, mut peer) = registered(&reactor);
+        let id = ctl.id;
+        ops.0.with(|st| st.streams[id].wr_op.fake_pending());
+
+        StreamOpsHandler {
+            inner: ops.0.clone(),
+        }
+        .completed(
+            ops::WR_OP,
+            Ok(0),
+            ops.0
+                .with(|st| st.streams[id].wr_op.as_ptr().cast::<Overlapped>()),
+        );
+        let err = ntex::time::timeout(ntex::time::Seconds(5), io.flush(true))
+            .await
+            .expect("send error not reported")
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::WriteZero);
+
+        cleanup(&ops);
+        assert_closed(raw, &mut peer);
+        drop(ctl);
+        drop(io);
+    }
 }

@@ -1,8 +1,9 @@
 //! io-uring backend tests.
 //!
-//! The tests run on a dedicated io-uring reactor regardless of the runtime
-//! selected by features, and are skipped if io-uring is not available.
-#![cfg(target_os = "linux")]
+//! The tests run on a dedicated io-uring reactor with either neon backend,
+//! and are skipped if io-uring is not available. The reactor is driven by the
+//! native `ntex-rt` runtime, which the tokio and compio runtimes replace.
+#![cfg(all(target_os = "linux", not(feature = "tokio"), not(feature = "compio")))]
 use std::io::{ErrorKind, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::{any::Any, future::Future, future::poll_fn, net, panic, sync::mpsc, task::Poll, thread};

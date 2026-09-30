@@ -593,8 +593,15 @@ mod tests {
     async fn cleanup_closes_socket_with_deferred_secondary_drop() {
         let reactor = Reactor::new().unwrap();
         let ops = StreamOps::get(&reactor);
-        let (socket, _peer) = UnixStream::pair().unwrap();
-        let fd = socket.as_raw_fd();
+        // The close is observed through the peer, the descriptor number can
+        // be reused by tests running in parallel.
+        let (socket, mut peer) = UnixStream::pair().unwrap();
+        peer.set_nonblocking(true).unwrap();
+        let peer_closed = |peer: &mut UnixStream| match io::Read::read(peer, &mut [0u8; 1]) {
+            Ok(0) => true,
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => false,
+            res => panic!("unexpected: {res:?}"),
+        };
         let ctl = Rc::new(Cell::new(None));
         let io = Io::new(
             TestStream {
@@ -612,21 +619,14 @@ mod tests {
                 .with(|streams| streams[id].flags.contains(Flags::DROPPED_PRI))
         );
         assert!(!ops.0.delayed_feed.is_empty());
-        assert_ne!(unsafe { libc::fcntl(fd, libc::F_GETFD) }, -1);
+        assert!(!peer_closed(&mut peer));
 
         let mut handler = StreamOpsHandler {
             inner: ops.0.clone(),
         };
         handler.cleanup();
 
-        let result = unsafe { libc::fcntl(fd, libc::F_GETFD) };
-        let err = io::Error::last_os_error();
-        if result != -1 {
-            // Release the leaked descriptor if this regression returns.
-            assert_eq!(unsafe { libc::close(fd) }, 0);
-        }
-        assert_eq!(result, -1, "cleanup leaked the socket");
-        assert_eq!(err.raw_os_error(), Some(libc::EBADF));
+        assert!(peer_closed(&mut peer), "cleanup leaked the socket");
         assert!(ops.0.delayed_feed.is_empty());
         handler.cleanup();
         drop(io);

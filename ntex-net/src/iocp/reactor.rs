@@ -426,6 +426,84 @@ mod tests {
         }
     }
 
+    type Completions = std::rc::Rc<std::cell::RefCell<Vec<(u32, Result<usize, io::ErrorKind>)>>>;
+
+    struct Recorder(Completions, std::rc::Rc<Cell<usize>>);
+
+    impl Handler for Recorder {
+        fn completed(&mut self, udata: u32, result: io::Result<usize>, _: *mut Overlapped) {
+            self.0
+                .borrow_mut()
+                .push((udata, result.map_err(|e| e.kind())));
+        }
+
+        fn tick(&mut self) {
+            self.1.set(self.1.get() + 1);
+        }
+    }
+
+    /// Completion statuses are translated into the operation result: pipe
+    /// and eof statuses end the operation without an error, a partial
+    /// transfer keeps its byte count, and notification packets are skipped.
+    #[test]
+    fn poll_completions_translates_status() {
+        use windows_sys::Win32::Foundation as f;
+
+        let reactor = Reactor::new().unwrap();
+        let done = Completions::default();
+        let ticks = std::rc::Rc::new(Cell::new(0));
+        reactor.register(|_| Box::new(Recorder(done.clone(), ticks.clone())));
+
+        let mut ops: Vec<Box<Overlapped>> = [
+            (f::STATUS_SUCCESS, 7),
+            (f::STATUS_PIPE_BROKEN, 7),
+            (f::STATUS_END_OF_FILE, 7),
+            (f::STATUS_BUFFER_OVERFLOW, 5),
+            (f::STATUS_CONNECTION_REFUSED, 0),
+            (f::STATUS_CANCELLED, 0),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (status, len))| {
+            let mut ov = Box::new(Overlapped::new(1, u32::try_from(i).unwrap()));
+            ov.base.Internal = status.cast_unsigned() as usize;
+            ov.base.InternalHigh = len;
+            ov
+        })
+        .collect();
+        // a notification packet, it has no handler
+        ops.push(Box::new(Overlapped::new(0, 99)));
+
+        let events: Vec<_> = ops
+            .iter_mut()
+            .map(|ov| OVERLAPPED_ENTRY {
+                lpOverlapped: (&raw mut ov.base),
+                ..OVERLAPPED_ENTRY::default()
+            })
+            .collect();
+        reactor.poll_completions(&events);
+
+        assert_eq!(
+            *done.borrow(),
+            [
+                (0, Ok(7)),
+                (1, Ok(0)),
+                (2, Ok(0)),
+                (3, Ok(5)),
+                (4, Err(io::ErrorKind::ConnectionRefused)),
+                (
+                    5,
+                    Err(
+                        io::Error::from_raw_os_error(f::ERROR_OPERATION_ABORTED.cast_signed())
+                            .kind()
+                    )
+                ),
+            ]
+        );
+        // one tick per batch of completions
+        assert_eq!(ticks.get(), 1);
+    }
+
     /// Sockets of the base Winsock providers return IFS handles and can be
     /// attached with `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`.
     #[test]

@@ -53,6 +53,27 @@ async fn connect_socket_addr() {
 }
 
 #[ntex::test]
+async fn connect_ipv6() {
+    let Ok(lst) = net::TcpListener::bind("[::1]:0") else {
+        // no IPv6 loopback
+        return;
+    };
+    let addr = lst.local_addr().unwrap();
+    thread::spawn(move || {
+        let (mut sock, _) = lst.accept().unwrap();
+        let mut buf = [0u8; 64];
+        let n = sock.read(&mut buf).unwrap();
+        sock.write_all(&buf[..n]).unwrap();
+    });
+
+    let io = ntex_net::tcp_connect(addr, SharedCfg::default())
+        .await
+        .unwrap();
+    assert_eq!(io.query::<PeerAddr>().get(), Some(PeerAddr(addr)));
+    echo(&io).await;
+}
+
+#[ntex::test]
 async fn connector_service() {
     let addr = echo_peer();
     let connector = Connector::<&str>::default();
