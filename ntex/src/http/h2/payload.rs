@@ -420,4 +420,36 @@ mod tests {
         assert!(payload.read().await.is_none());
         assert!(payload.trailers().is_some());
     }
+
+    #[crate::rt_test]
+    async fn test_debug_and_stream() {
+        use crate::util::stream_recv;
+
+        let (io, server) = IoTest::create();
+        io.remote_buffer_cap(64 * 1024);
+        let client = SimpleClient::new(
+            IoBoxed::from(Io::new(io, SharedCfg::default())),
+            Scheme::HTTP,
+            ByteString::from_static("localhost"),
+        );
+        server.write([0, 0, 0, 4, 0, 0, 0, 0, 0]);
+        sleep(Millis(50)).await;
+        let (snd, _rcv) = client
+            .send(Method::GET, "/".into(), HeaderMap::default(), true)
+            .await
+            .unwrap();
+
+        let (sender, mut payload) = Payload::create(snd.stream().empty_capacity());
+        let s = format!("{payload:?}");
+        assert!(s.contains("Inner") && s.contains("capacity"), "{s}");
+
+        let mut trailers = HeaderMap::default();
+        trailers.insert(
+            crate::http::header::HeaderName::from_static("x-trailer"),
+            crate::http::header::HeaderValue::from_static("1"),
+        );
+        sender.feed_trailers(trailers);
+        assert!(stream_recv(&mut payload).await.is_none());
+        assert_eq!(payload.trailers().unwrap().len(), 1);
+    }
 }

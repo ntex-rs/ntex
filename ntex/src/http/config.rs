@@ -657,4 +657,38 @@ mod tests {
             Option::<usize>::Some(10).into()
         );
     }
+
+    #[test]
+    fn keep_alive_settings() {
+        let cfg = HttpServiceConfig::new().set_keepalive(KeepAlive::Os);
+        assert_eq!(cfg.keep_alive, Seconds::ZERO);
+        assert!(cfg.ka_enabled);
+
+        let cfg = HttpServiceConfig::new().set_keepalive(KeepAlive::Disabled);
+        assert_eq!(cfg.keep_alive, Seconds::ZERO);
+        assert!(!cfg.ka_enabled);
+
+        let cfg = HttpServiceConfig::new().set_keepalive_timeout(Seconds(30));
+        assert_eq!(cfg.keep_alive, Seconds(30));
+        assert!(cfg.ka_enabled);
+
+        let cfg = HttpServiceConfig::new().set_keepalive_timeout(Seconds::ZERO);
+        assert_eq!(cfg.keep_alive, Seconds::ZERO);
+        assert!(!cfg.ka_enabled);
+    }
+
+    #[test]
+    fn read_rate_settings() {
+        let cfg = HttpServiceConfig::new()
+            .set_headers_read_rate(Seconds(1), Seconds(5), 128)
+            .set_payload_read_rate(Seconds(1), Seconds(5), 128);
+        assert!(cfg.headers_read_rate.is_some());
+        assert!(cfg.payload_read_rate.is_some());
+
+        let cfg = cfg
+            .set_headers_read_rate(Seconds::ZERO, Seconds(5), 128)
+            .set_payload_read_rate(Seconds::ZERO, Seconds(5), 128);
+        assert!(cfg.headers_read_rate.is_none());
+        assert!(cfg.payload_read_rate.is_none());
+    }
 }

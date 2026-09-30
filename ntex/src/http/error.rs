@@ -371,4 +371,59 @@ mod tests {
         from!(ntex_httparse::Error::TooManyHeaders => DecodeError::TooLarge(0));
         from!(ntex_httparse::Error::Version => DecodeError::Version);
     }
+
+    #[test]
+    fn test_decode_error_from() {
+        let err = "a b".parse::<crate::http::Uri>().unwrap_err();
+        assert!(matches!(DecodeError::from(err), DecodeError::Uri));
+        let err = String::from_utf8(vec![0xff]).unwrap_err();
+        assert!(matches!(DecodeError::from(err), DecodeError::Utf8));
+    }
+
+    #[test]
+    fn test_payload_error_clone() {
+        let errs = [
+            PayloadError::Incomplete(None),
+            PayloadError::Incomplete(Some(io::Error::other("inc"))),
+            PayloadError::EncodingCorrupted,
+            PayloadError::Overflow,
+            PayloadError::UnknownLength,
+            PayloadError::Http2Payload(ntex_h2::StreamError::Closed),
+            PayloadError::Decode(DecodeError::Method),
+            PayloadError::Io(io::Error::other("io")),
+        ];
+        for err in &errs {
+            assert_eq!(err.to_string(), err.clone().to_string());
+        }
+    }
+
+    #[test]
+    fn test_payload_error_conversions() {
+        let err = PayloadError::from(Either::<PayloadError, io::Error>::Left(
+            PayloadError::Overflow,
+        ));
+        assert!(matches!(err, PayloadError::Overflow));
+        let err = PayloadError::from(Either::<PayloadError, io::Error>::Right(io::Error::other(
+            "right",
+        )));
+        assert!(matches!(err, PayloadError::Io(ref e) if e.to_string() == "right"));
+
+        for err in [
+            PayloadError::from(crate::rt::JoinError),
+            PayloadError::from(crate::rt::BlockingError),
+        ] {
+            assert!(
+                matches!(err, PayloadError::Io(ref e) if e.kind() == io::ErrorKind::Interrupted)
+            );
+        }
+    }
+
+    #[test]
+    fn test_h2_error() {
+        use crate::error::ErrorDiagnostic;
+
+        let err = H2Error::EmptyDataFrames;
+        assert_eq!(err.signature(), "ntex-http-h2error");
+        assert_eq!(err.to_string(), "Too many consecutive empty DATA frames");
+    }
 }
