@@ -288,7 +288,7 @@ fn header_map_value() {
 
     let v = Value::from(&HeaderValue::from_static("one"));
     let mut it = v.into_iter();
-    assert_eq!(it.size_hint(), (1, None));
+    assert_eq!(it.size_hint(), (1, Some(1)));
     assert_eq!(it.next().unwrap(), "one");
     assert!(it.next().is_none());
 }

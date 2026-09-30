@@ -10,6 +10,10 @@
 
 * HeaderValue hash ignores the sensitive flag, consistent with equality
 
+* Fix header `Value` iterator size_hint upper bound for a single value
+
+* `HeaderValue::from_static` panics with "invalid header value" message
+
 * Remove FromIterator for HeaderMap, it split string values on commas and dropped invalid values
 
 * Add TryFrom<Bytes> and TryFrom<BytesMut> for HeaderValue

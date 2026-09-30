@@ -845,4 +845,22 @@ mod tests {
             Some(Bytes::from("2")),
         );
     }
+
+    #[ntex::test]
+    async fn boxed_body_skips_empty_chunks() {
+        let mut body = BoxedBodyStream::new(stream::iter(
+            ["1", "", "2"]
+                .iter()
+                .map(|&v| Ok(Bytes::from(v)) as Result<Bytes, Rc<dyn Error>>),
+        ));
+        assert_eq!(
+            poll_fn(|cx| body.poll_next_chunk(cx)).await.unwrap().ok(),
+            Some(Bytes::from("1")),
+        );
+        assert_eq!(
+            poll_fn(|cx| body.poll_next_chunk(cx)).await.unwrap().ok(),
+            Some(Bytes::from("2")),
+        );
+        assert!(poll_fn(|cx| body.poll_next_chunk(cx)).await.is_none());
+    }
 }

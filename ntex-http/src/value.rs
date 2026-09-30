@@ -60,15 +60,11 @@ impl HeaderValue {
     /// assert_eq!(val, "hello");
     /// ```
     #[inline]
-    #[allow(unconditional_panic)] // required for the panic circumvention
     pub const fn from_static(src: &'static str) -> HeaderValue {
         let bytes = src.as_bytes();
         let mut i = 0;
         while i < bytes.len() {
-            if !is_visible_ascii(bytes[i]) {
-                #[allow(clippy::out_of_bounds_indexing)]
-                ([] as [u8; 0])[0]; // Invalid header value
-            }
+            assert!(is_visible_ascii(bytes[i]), "invalid header value");
             i += 1;
         }
 
@@ -839,5 +835,12 @@ mod tests {
 
         let s = format!("{}", ToStrError { _priv: {} });
         assert_eq!(s, "failed to convert header to a str");
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid header value")]
+    fn from_static_invalid() {
+        let src: &'static str = std::hint::black_box("bad\nvalue");
+        let _ = HeaderValue::from_static(src);
     }
 }
