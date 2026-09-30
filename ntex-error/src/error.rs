@@ -1,6 +1,6 @@
 use std::{error, fmt, ops, panic::Location, sync::Arc};
 
-use crate::{AsError, Backtrace, Bytes, ErrorDiagnostic, ErrorMapping, repr::ErrorRepr};
+use crate::{AsError, Backtrace, Bytes, ErrorDiagnostic, ErrorMapping, Failure, repr::ErrorRepr};
 
 /// An error container.
 ///
@@ -244,6 +244,10 @@ impl<E: ErrorDiagnostic> ErrorDiagnostic for Error<E> {
 
     fn backtrace(&self) -> Option<&Backtrace> {
         self.inner.backtrace()
+    }
+
+    fn into_failure(self) -> Failure {
+        Failure::from(self)
     }
 }
 

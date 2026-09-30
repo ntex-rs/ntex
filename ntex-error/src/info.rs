@@ -118,10 +118,9 @@ impl<E> IntoFailure for E
 where
     E: ErrorDiagnostic + Into<Error<E>>,
 {
+    #[track_caller]
     fn fail(self) -> Failure {
-        Failure {
-            inner: FailureDiagnostic(self.into().inner),
-        }
+        self.into_failure()
     }
 }
 

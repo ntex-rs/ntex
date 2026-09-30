@@ -106,6 +106,18 @@ pub trait ErrorDiagnostic: StdError + 'static {
     fn backtrace(&self) -> Option<&Backtrace> {
         None
     }
+
+    #[doc(hidden)]
+    #[track_caller]
+    /// Converts this error into a type-erased [`Failure`].
+    ///
+    /// Used by [`IntoFailure`]; overridden by [`Error`] to avoid double wrapping.
+    fn into_failure(self) -> Failure
+    where
+        Self: Sized,
+    {
+        Failure::from(Error::from(self))
+    }
 }
 
 /// Helper trait for converting a value into a unified error-aware result type.

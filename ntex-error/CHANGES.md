@@ -6,6 +6,8 @@
 
 * Fix module_path_fs() returning cached module_path() result for the same file
 
+* Fix IntoFailure::fail() for Error<E> double wrapping the error and losing extension items and backtrace
+
 ## [2.6.0] - 2026-09-07
 
 * Introduce IntoFailure trait

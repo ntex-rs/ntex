@@ -271,6 +271,17 @@ fn failure() {
     let f = Failure::from(err);
     assert_eq!(f.signature(), "my-inner");
 
+    // Error<E>::fail() must share the container, not wrap it again
+    let err = Error::<MyError>::new(MyError::Inner(Inner), "svc").insert_item(7u16);
+    let f = err.clone().fail();
+    assert_eq!(f.get_item::<u16>(), Some(&7));
+    assert_eq!(f.service(), Some("svc"));
+    assert_eq!(format!("{f:?}"), "Inner(Inner)");
+    assert!(std::ptr::eq(
+        f.backtrace().unwrap(),
+        err.backtrace().unwrap()
+    ));
+
     let f = MyError::Connect("c").fail();
     assert_eq!(f.signature(), "my-connect");
     assert!(StdError::source(&f).is_none());
