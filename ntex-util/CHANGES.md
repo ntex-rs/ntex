@@ -2,6 +2,9 @@
 
 ## [4.2.0] - Unreleased
 
+* `clone_io_error()` uses the error's display output as the message, instead of
+  its debug output, so a cloned error displays the same as the original
+
 * Dropping the last `bstream::Sender` wakes a pending read, before the receiver
   could wait forever
 

@@ -895,4 +895,195 @@ mod tests {
         cookies.sort_unstable();
         assert_eq!(cookies, ["c0=v0", "c1=v1", "c2=v2"]);
     }
+
+    type Connected = (
+        Result<WsConnection<Base>, Error<WsClientError>>,
+        crate::testing::IoTest,
+    );
+
+    /// Runs `connect()` against an in-memory peer that answers the handshake
+    /// with the response produced by `response`.
+    async fn connect_with(
+        cfg: WsClientConfig,
+        io_cfg: SharedCfg,
+        response: impl FnOnce(String) -> String,
+    ) -> Connected {
+        use crate::{testing::IoTest, util::Bytes};
+        use std::cell::RefCell;
+
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+        let io = RefCell::new(Some(Io::new(server, io_cfg)));
+        let ws = WsClient::new("ws://localhost/", SharedCfg::new("WS").add(cfg)).connector(
+            fn_service(async move |_: Connect<Uri>| {
+                Ok::<_, Error<ConnectError>>(io.borrow_mut().take().unwrap())
+            }),
+        );
+        let fut = rt::spawn(async move { ws.connect().await });
+
+        let mut req = Vec::new();
+        while !req.ends_with(b"\r\n\r\n") {
+            let buf: Bytes = client.read().await.unwrap();
+            req.extend_from_slice(&buf);
+        }
+        let req = String::from_utf8(req).unwrap();
+        let key = req
+            .lines()
+            .find_map(|l| l.strip_prefix("sec-websocket-key: "))
+            .unwrap();
+        let accept = ws::hash_key(key.as_bytes()).unwrap();
+        client.write(response(accept));
+        (fut.await.unwrap(), client)
+    }
+
+    fn switching(headers: &str) -> String {
+        format!("HTTP/1.1 101 Switching Protocols\r\n{headers}\r\n")
+    }
+
+    fn valid(accept: &str) -> String {
+        switching(&format!(
+            "upgrade: websocket\r\nconnection: upgrade\r\nsec-websocket-accept: {accept}\r\n"
+        ))
+    }
+
+    async fn connected(cfg: WsClientConfig, io_cfg: SharedCfg) -> Connected {
+        connect_with(cfg, io_cfg, |accept| valid(&accept)).await
+    }
+
+    #[crate::rt_test]
+    async fn handshake_response_errors() {
+        async fn err(response: impl FnOnce(String) -> String) -> WsClientError {
+            let cfg = WsClientConfig::new().set_handshake_timeout(0);
+            let (res, _client) = connect_with(cfg, SharedCfg::default(), response).await;
+            res.unwrap_err().into_error()
+        }
+
+        assert!(matches!(
+            err(|_| switching("upgrade: h2c\r\nconnection: upgrade\r\n")).await,
+            WsClientError::InvalidUpgradeHeader
+        ));
+        assert!(matches!(
+            err(|_| switching("upgrade: websocket\r\nconnection: close\r\n")).await,
+            WsClientError::InvalidConnectionHeader(val) if val == "close"
+        ));
+        assert!(matches!(
+            err(|_| switching("upgrade: websocket\r\n")).await,
+            WsClientError::MissingConnectionHeader
+        ));
+        assert!(matches!(
+            err(|_| switching("upgrade: websocket\r\nconnection: upgrade\r\n")).await,
+            WsClientError::MissingWebSocketAcceptHeader
+        ));
+        assert!(matches!(
+            err(|_| valid("aW52YWxpZA==")).await,
+            WsClientError::InvalidChallengeResponse(_, val) if val == "aW52YWxpZA=="
+        ));
+    }
+
+    fn peer_frame(codec: &ws::Codec, msg: ws::Message) -> crate::util::Bytes {
+        let mut dst = crate::util::BytePages::default();
+        crate::codec::Encoder::encode(codec, msg, &mut dst).unwrap();
+        dst.into()
+    }
+
+    fn read_frame(client: &crate::testing::IoTest, codec: &ws::Codec) -> ws::Frame {
+        let mut data = crate::util::BytesMut::from(&client.read_any()[..]);
+        crate::codec::Decoder::decode(codec, &mut data)
+            .unwrap()
+            .unwrap()
+    }
+
+    #[crate::rt_test]
+    async fn server_mode_connection() {
+        let cfg = WsClientConfig::new().set_server_mode();
+        let (res, client) = connected(cfg, SharedCfg::default()).await;
+        let conn = res.unwrap();
+        assert!(format!("{conn:?}").contains("WsConnection"));
+        assert_eq!(conn.response().status(), StatusCode::SWITCHING_PROTOCOLS);
+        assert!(!conn.codec().is_closed());
+
+        // servers cannot send 1010, the peer's close is answered with 1000
+        let rx = conn.seal().receiver();
+        client.write(peer_frame(
+            &ws::Codec::new().set_client_mode(),
+            ws::Message::Close(Some(CloseCode::Extension.into())),
+        ));
+        let item = rx.recv().await.unwrap().unwrap();
+        assert_eq!(item, ws::Frame::Close(Some(CloseCode::Extension.into())));
+        crate::time::sleep(crate::time::Millis(50)).await;
+        assert_eq!(
+            read_frame(&client, &ws::Codec::new().set_client_mode()),
+            ws::Frame::Close(Some(CloseCode::Normal.into()))
+        );
+    }
+
+    #[crate::rt_test]
+    async fn start_service_error_sends_away_close() {
+        let (res, client) = connected(WsClientConfig::new(), SharedCfg::default()).await;
+        let conn = res.unwrap().seal();
+
+        client.write(peer_frame(
+            &ws::Codec::new(),
+            ws::Message::Text("text".into()),
+        ));
+        let err = conn
+            .start(fn_service(async |_: ws::Frame| {
+                Err::<Option<ws::Message>, _>("err")
+            }))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, WsError::Service("err")));
+        assert_eq!(
+            read_frame(&client, &ws::Codec::new()),
+            ws::Frame::Close(Some(CloseCode::Away.into()))
+        );
+    }
+
+    #[crate::rt_test]
+    async fn start_encoder_error() {
+        let (res, client) = connected(WsClientConfig::new(), SharedCfg::default()).await;
+        let conn = res.unwrap().seal();
+
+        client.write(peer_frame(
+            &ws::Codec::new(),
+            ws::Message::Text("text".into()),
+        ));
+        let err = conn
+            .start(fn_service(async |_: ws::Frame| {
+                Ok::<_, ()>(Some(ws::Message::Ping(vec![0; 126].into())))
+            }))
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            WsError::Protocol(ws::error::ProtocolError::InvalidLength(126))
+        ));
+    }
+
+    #[crate::rt_test]
+    async fn start_io_error() {
+        let (res, client) = connected(WsClientConfig::new(), SharedCfg::default()).await;
+        let conn = res.unwrap().seal();
+
+        client.read_error(std::io::Error::other("failed"));
+        let err = conn
+            .start(fn_service(async |_: ws::Frame| Ok::<_, ()>(None)))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, WsError::Disconnected(Some(_))));
+    }
+
+    #[crate::rt_test]
+    async fn start_keepalive() {
+        let io_cfg = SharedCfg::new("KA")
+            .add(crate::io::IoConfig::new().set_keepalive_timeout(crate::time::Seconds(1)));
+        let (res, _client) = connected(WsClientConfig::new(), io_cfg.into()).await;
+        let err = res
+            .unwrap()
+            .seal()
+            .start(fn_service(async |_: ws::Frame| Ok::<_, ()>(None)))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, WsError::KeepAlive));
+    }
 }

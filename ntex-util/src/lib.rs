@@ -60,11 +60,25 @@ pub fn str_rc_err(s: String) -> Rc<dyn Error> {
     Rc::new(StringError(s))
 }
 
-/// Clones an I/O error's kind and debug representation.
+/// Clones an I/O error's kind and message.
 ///
 /// `std::io::Error` is not generally cloneable. The returned error preserves
-/// the original [`io::ErrorKind`] and uses the original error's debug output as
-/// its message.
+/// the original [`io::ErrorKind`] and uses the original error's display output
+/// as its message.
 pub fn clone_io_error(err: &io::Error) -> io::Error {
-    io::Error::new(err.kind(), format!("{err:?}"))
+    io::Error::new(err.kind(), err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clone_io_error() {
+        let err = io::Error::new(io::ErrorKind::TimedOut, "timed out");
+        let cloned = clone_io_error(&err);
+        assert_eq!(cloned.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(cloned.to_string(), err.to_string());
+        assert_eq!(clone_io_error(&cloned).to_string(), "timed out");
+    }
 }

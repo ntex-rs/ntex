@@ -354,4 +354,65 @@ mod tests {
         // servers cannot send 1010
         peer_close_is_echoed(Some(CloseCode::Extension), Some(CloseCode::Normal)).await;
     }
+
+    fn peer_frames(msgs: Vec<Message>) -> Bytes {
+        let codec = Codec::new().set_client_mode();
+        let mut dst = BytePages::default();
+        for msg in msgs {
+            codec.encode(msg, &mut dst).unwrap();
+        }
+        Bytes::from(dst)
+    }
+
+    #[crate::rt_test]
+    async fn binary_frames_are_forwarded() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = crate::service::Pipeline::new((), WsTransportService::new(Codec::new()))
+            .call(Io::from(server))
+            .await
+            .unwrap();
+
+        client.write(peer_frames(vec![
+            Message::Binary(Bytes::from_static(b"one")),
+            Message::Pong(Bytes::from_static(b"ignored")),
+            Message::Continuation(Item::FirstBinary(Bytes::from_static(b"-two"))),
+            Message::Ping(Bytes::from_static(b"ping")),
+            Message::Continuation(Item::Continue(Bytes::from_static(b"-three"))),
+            Message::Continuation(Item::Last(Bytes::from_static(b"-four"))),
+        ]));
+        let mut data = BytesMut::new();
+        while data.len() < 18 {
+            data.extend_from_slice(&io.recv(&crate::codec::BytesCodec).await.unwrap().unwrap());
+        }
+        assert_eq!(&data[..], b"one-two-three-four");
+
+        // ping gets an automatic pong
+        sleep(Millis(50)).await;
+        let mut data = BytesMut::from(&client.read_any()[..]);
+        assert_eq!(
+            Codec::new().set_client_mode().decode(&mut data).unwrap(),
+            Some(Frame::Pong(Bytes::from_static(b"ping")))
+        );
+
+        // outgoing data is sent as binary frames
+        io.send(Bytes::from_static(b"out"), &crate::codec::BytesCodec)
+            .await
+            .unwrap();
+        sleep(Millis(50)).await;
+        let mut data = BytesMut::from(&client.read_any()[..]);
+        assert_eq!(
+            Codec::new().set_client_mode().decode(&mut data).unwrap(),
+            Some(Frame::Binary(Bytes::from_static(b"out")))
+        );
+    }
+
+    #[crate::rt_test]
+    async fn text_continuation_sends_unsupported_close() {
+        let (client, server) = IoTest::create();
+        let input = peer_frames(vec![Message::Continuation(Item::FirstText(
+            Bytes::from_static(b"text"),
+        ))]);
+        error_sends_close(client, Io::from(server), input, CloseCode::Unsupported).await;
+    }
 }
