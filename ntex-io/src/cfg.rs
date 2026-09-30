@@ -680,6 +680,8 @@ impl LocalCache {
 
 #[cfg(test)]
 mod tests {
+    use ntex_service::cfg::SharedCfg;
+
     use super::*;
 
     #[test]
@@ -703,6 +705,37 @@ mod tests {
 
         let cfg = cfg.set_frame_read_rate(Seconds::ZERO, Seconds(10), 1024);
         assert!(cfg.frame_read_rate().is_none());
+    }
+
+    #[test]
+    fn config_accessors() {
+        let cfg = IoConfig::new();
+        assert_eq!(cfg.connect_timeout(), Millis::ZERO);
+        assert_eq!(cfg.keepalive_timeout(), Seconds(0));
+        assert_eq!(cfg.write_page_size(), BytePageSize::Size16);
+
+        let cfg = cfg
+            .set_connect_timeout(Millis(500))
+            .set_keepalive_timeout(Seconds(7))
+            .set_write_page_size(BytePageSize::Size4);
+        assert_eq!(cfg.connect_timeout(), Millis(500));
+        assert_eq!(cfg.keepalive_timeout(), Seconds(7));
+        assert_eq!(cfg.write_page_size(), BytePageSize::Size4);
+
+        let shared = SharedCfg::new("CFG-TAG").add(cfg).build();
+        let cfg = shared.get::<IoConfig>();
+        assert_eq!(cfg.tag(), "CFG-TAG");
+        assert_eq!(cfg.keepalive_timeout(), Seconds(7));
+
+        // uncached buffers have exactly the requested capacity
+        let buf = cfg.read_buf().buf_with_capacity(10);
+        assert!(buf.is_empty());
+        assert!(buf.capacity() >= 10);
+
+        // the limit is process wide, store the current value back
+        let limit = read_buf_cache_limit();
+        set_read_buf_cache_limit(limit);
+        assert_eq!(read_buf_cache_limit(), limit);
     }
 
     #[test]

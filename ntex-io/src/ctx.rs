@@ -45,12 +45,6 @@ use crate::{Flags, Id, IoRef, IoTaskStatus, Readiness, io::IoState};
 #[repr(transparent)]
 pub struct IoContext(IoRef);
 
-impl fmt::Debug for IoContext {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("IoContext").field("io", &self.0).finish()
-    }
-}
-
 impl IoContext {
     pub(crate) fn new(io: IoRef) -> Self {
         Self(io)
@@ -669,6 +663,12 @@ impl Clone for IoContext {
     }
 }
 
+impl fmt::Debug for IoContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IoContext").field("io", &self.0).finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -901,6 +901,155 @@ mod tests {
             polls.get() - start < 10,
             "io task polled {} times",
             polls.get() - start
+        );
+    }
+
+    /// Transport driven by the test through an `IoContext`.
+    struct Manual;
+
+    impl crate::IoStream for Manual {
+        fn start(self, _: IoContext) -> Box<dyn crate::Handle> {
+            Box::new(Manual)
+        }
+    }
+
+    impl crate::Handle for Manual {}
+
+    #[ntex::test]
+    async fn take_read_buf_reuses_consumed_buffer() {
+        let io = Io::new(Manual, ntex_service::cfg::SharedCfg::default());
+        let ctx = IoContext::new(io.get_ref());
+        assert_eq!(ctx.shutdown_timeout(), io.cfg().shutdown_timeout());
+        assert!(io.query::<u32>().get().is_none());
+
+        let mut buf = ctx.take_read_buf();
+        buf.extend_from_slice(b"12345");
+        assert_eq!(
+            ctx.release_read_buf(buf, Poll::Ready(Ok(5))),
+            IoTaskStatus::Io
+        );
+        assert_eq!(io.with_read_dst(|b| b.split_to(3)), b"123");
+
+        // the dispatcher consumed the input, the partly filled buffer is
+        // handed to the transport
+        let mut buf = ctx.take_read_buf();
+        assert_eq!(buf, b"45");
+        ctx.resize_read_buf(&mut buf);
+        assert!(buf.capacity() - buf.len() >= io.cfg().read_buf().low);
+        buf.extend_from_slice(b"6");
+        assert_eq!(
+            ctx.release_read_buf(buf, Poll::Ready(Ok(1))),
+            IoTaskStatus::Io
+        );
+        assert_eq!(io.with_read_dst(BytesMut::take), b"456");
+    }
+
+    #[ntex::test]
+    async fn reads_are_discarded_in_transport_shutdown_phase() {
+        let io = Io::new(Manual, ntex_service::cfg::SharedCfg::default());
+        let ctx = IoContext::new(io.get_ref());
+
+        // no filter work and no output, the filter phase ends at once
+        io.close();
+        assert!(lazy(|cx| ctx.poll_read_ready(cx)).await.is_pending());
+        assert!(ctx.flags().is_stopping());
+
+        // input is discarded, reads keep going until eof
+        let mut buf = ctx.take_read_buf();
+        buf.extend_from_slice(b"12345");
+        assert_eq!(
+            ctx.release_read_buf(buf, Poll::Ready(Ok(5))),
+            IoTaskStatus::Io
+        );
+        assert_eq!(
+            ctx.with_read_buf(|buf| {
+                buf.extend_from_slice(b"678");
+                Poll::Ready(Ok(3))
+            }),
+            IoTaskStatus::Io
+        );
+        assert_eq!(io.with_read_dst(|b| b.len()), 0);
+
+        assert_eq!(
+            ctx.release_read_buf(ctx.take_read_buf(), Poll::Pending),
+            IoTaskStatus::Pause
+        );
+        assert_eq!(ctx.with_read_buf(|_| Poll::Pending), IoTaskStatus::Pause);
+        assert!(!io.is_read_eof());
+
+        // a read error does not terminate the connection
+        assert_eq!(
+            ctx.release_read_buf(
+                ctx.take_read_buf(),
+                Poll::Ready(Err(io::Error::other("err")))
+            ),
+            IoTaskStatus::Pause
+        );
+        assert!(io.is_read_eof());
+        assert!(!ctx.flags().is_terminating());
+
+        assert_eq!(
+            ctx.with_read_buf(|_| Poll::Ready(Ok(0))),
+            IoTaskStatus::Pause
+        );
+
+        // nothing left to drain, the transport closes the connection
+        assert_eq!(
+            lazy(|cx| ctx.poll_write_ready(cx)).await,
+            Poll::Ready(Readiness::Close)
+        );
+        ctx.stopped(None);
+        assert!(io.is_closed());
+    }
+
+    #[derive(Debug)]
+    struct FailShutdown;
+
+    impl FilterLayer for FailShutdown {
+        fn process_read_buf(&self, _: &FilterBuf<'_>) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn process_write_buf(&self, _: &FilterBuf<'_>) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn shutdown(&self, _: &FilterBuf<'_>) -> io::Result<Poll<()>> {
+            Err(io::Error::other("shutdown failed"))
+        }
+    }
+
+    #[ntex::test]
+    async fn filter_shutdown_error_terminates_connection() {
+        let io = Io::new(Manual, ntex_service::cfg::SharedCfg::default()).add_filter(FailShutdown);
+        let ctx = IoContext::new(io.get_ref());
+        // neither the layer nor the transport provide values
+        assert!(io.query::<u32>().get().is_none());
+
+        io.close();
+        assert_eq!(
+            lazy(|cx| ctx.poll_read_ready(cx)).await,
+            Poll::Ready(Readiness::Close)
+        );
+        assert!(ctx.flags().is_terminating());
+        ctx.stopped(None);
+        let err = io.shutdown().await.unwrap_err();
+        assert_eq!(err.to_string(), "shutdown failed");
+    }
+
+    #[ntex::test]
+    async fn read_after_termination_stops_read_task() {
+        let io = Io::new(Manual, ntex_service::cfg::SharedCfg::default());
+        let ctx = IoContext::new(io.get_ref());
+        let ctx2 = ctx.clone();
+        assert_eq!(ctx.id(), ctx2.id());
+
+        ctx.stop(Some(io::Error::other("failed")));
+        let mut buf = ctx2.take_read_buf();
+        buf.extend_from_slice(b"1");
+        assert_eq!(
+            ctx2.release_read_buf(buf, Poll::Ready(Ok(1))),
+            IoTaskStatus::Stop
         );
     }
 }

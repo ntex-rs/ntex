@@ -41,3 +41,32 @@ where
         Ok(DefaultControlService)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use super::*;
+    use crate::http::{Request, h1::control::ControlResult};
+    use crate::{Pipeline, io::Base};
+
+    #[crate::rt_test]
+    async fn default_acks() {
+        let svc: Pipeline<Control<Base, io::Error>, _, _> =
+            ServiceFactory::pipeline(&DefaultControlService, ())
+                .await
+                .unwrap();
+
+        let ack = svc
+            .call(Control::<Base, io::Error>::request(Request::new()))
+            .await
+            .unwrap();
+        assert!(matches!(ack.result, ControlResult::Publish(_)));
+
+        let ack = svc
+            .call(Control::<Base, io::Error>::keepalive(false))
+            .await
+            .unwrap();
+        assert!(matches!(ack.result, ControlResult::Stop));
+    }
+}

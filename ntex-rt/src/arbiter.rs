@@ -455,10 +455,91 @@ fn clear_storage() {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use super::*;
+    use crate::testing::TestRunner;
 
     #[derive(Clone, Default)]
     struct Value(usize);
+
+    #[test]
+    #[should_panic(expected = "Arbiter is not running")]
+    fn current_without_arbiter() {
+        let _ = Arbiter::current();
+    }
+
+    #[test]
+    fn arbiter_api() {
+        System::new("arb-test", TestRunner).block_on(async {
+            let sys = System::current();
+            let cur = Arbiter::current();
+            assert_eq!(cur.name(), "arb-test");
+            assert_eq!(cur, sys.arbiter());
+            assert!(cur.is_running());
+            assert_eq!(format!("{cur:?}"), "Arbiter(\"arb-test\")");
+            // the primary arbiter does not own a thread
+            assert!(cur.clone().join().is_ok());
+
+            let stopped = Arc::new(AtomicUsize::new(0));
+            let stopped2 = stopped.clone();
+            let mut arb = Arbiter::with_name("named".to_string()).on_stop(move || {
+                stopped2.fetch_add(1, Ordering::Relaxed);
+            });
+            assert_eq!(arb.name(), "named");
+            assert!(arb.is_running());
+            assert_ne!(arb, cur);
+            sys.list_arbiters(|arbs| assert!(arbs.contains(&arb)));
+
+            // shutdown callbacks run on the arbiter's thread
+            let (reg_tx, reg_rx) = oneshot::async_channel();
+            let (tx, rx) = oneshot::channel();
+            arb.handle()
+                .spawn(async move {
+                    let name = Arbiter::current().name().to_string();
+                    Arbiter::on_shutdown(move || {
+                        let _ = tx.send(name);
+                    });
+                    let _ = reg_tx.send(());
+                })
+                .detach();
+            reg_rx.await.unwrap();
+
+            arb.stop();
+            arb.join().unwrap();
+            assert!(!arb.is_running());
+            assert_eq!(stopped.load(Ordering::Relaxed), 1);
+            assert_eq!(rx.recv().unwrap(), "named");
+            sys.list_arbiters(|arbs| assert!(!arbs.contains(&arb)));
+
+            let mut arb = Arbiter::default();
+            assert!(arb.name().starts_with("arb-test:arb:"));
+            arb.stop();
+            arb.join().unwrap();
+        });
+    }
+
+    #[test]
+    fn arbiter_values() {
+        System::new("test", TestRunner).block_on(async {
+            assert_eq!(Arbiter::get_value(|| Value(1)).0, 1);
+            assert_eq!(Arbiter::get_value(|| Value(2)).0, 1);
+        });
+    }
+
+    #[test]
+    fn on_shutdown_runs_after_block_on() {
+        let called = Rc::new(Cell::new(0));
+        let called2 = called.clone();
+        System::new("test", TestRunner).block_on(async move {
+            Arbiter::on_shutdown(move || {
+                called2.set(called2.get() + 1);
+                // registered by a callback, runs in the same shutdown
+                Arbiter::on_shutdown(move || called2.set(called2.get() + 1));
+            });
+        });
+        assert_eq!(called.get(), 2);
+    }
 
     fn use_storage() {
         set_item(Value(1));

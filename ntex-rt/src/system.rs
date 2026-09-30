@@ -130,7 +130,8 @@ impl System {
     /// # Panics
     ///
     /// Panics if the runtime cannot be created.
-    pub fn with_config(name: &str, config: SystemConfig) -> SystemRunner {
+    pub fn with_config(name: &str, mut config: SystemConfig) -> SystemRunner {
+        name.clone_into(&mut config.name);
         Self::build().name(name).build_with(config)
     }
 
@@ -638,6 +639,89 @@ mod ping_tests {
                     Delay::new(Duration::from_millis(5)).await;
                 }
                 assert!(!has());
+            });
+    }
+}
+
+#[cfg(test)]
+mod api_tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+    use crate::testing::TestRunner;
+
+    #[test]
+    #[should_panic(expected = "System is not running")]
+    fn current_without_system() {
+        assert!(System::try_current().is_none());
+        let _ = System::current();
+    }
+
+    #[test]
+    fn system_api() {
+        let config = System::new("base", TestRunner).block_on(async {
+            let sys = System::current();
+            assert_eq!(sys.name(), "base");
+            assert!(!sys.testing());
+            assert!(!sys.signals());
+            assert_eq!(System::try_current().unwrap().id(), sys.id());
+            assert_eq!(sys.arbiter(), Arbiter::current());
+            assert!(format!("{sys:?}").contains("base"));
+            assert!(format!("{:?}", sys.config()).contains("base"));
+
+            // values are stored once per system
+            assert_eq!(sys.get_value(|| 1usize), 1);
+            assert_eq!(sys.get_value(|| 2usize), 1);
+
+            assert_eq!(sys.spawn_blocking(|| 10).await, Ok(10));
+
+            let cnt = Arc::new(AtomicUsize::new(0));
+            let cnt2 = cnt.clone();
+            sys.handle()
+                .spawn(async move {
+                    cnt2.fetch_add(1, Ordering::Relaxed);
+                })
+                .await
+                .unwrap();
+            assert_eq!(cnt.load(Ordering::Relaxed), 1);
+            sys.list_arbiters(|arbs| assert_eq!(arbs, [sys.arbiter()]));
+            sys.config()
+        });
+        assert!(System::try_current().is_none());
+
+        System::with_config("copy", config).block_on(async {
+            let sys = System::current();
+            assert_eq!(sys.name(), "copy");
+            assert_eq!(Arbiter::current().name(), "copy");
+        });
+    }
+
+    #[test]
+    fn list_arbiter_pings() {
+        System::build()
+            .name("test")
+            .ping_interval(5)
+            .build(TestRunner)
+            .block_on(async {
+                let mut arb = Arbiter::new();
+                let visited = || {
+                    let mut found = false;
+                    System::list_arbiter_pings(|a, recs| {
+                        if a == &arb && recs.iter().any(|r| r.rtt.is_some()) {
+                            found = true;
+                        }
+                    });
+                    found
+                };
+                for _ in 0..400 {
+                    if visited() {
+                        break;
+                    }
+                    Delay::new(Duration::from_millis(5)).await;
+                }
+                assert!(visited());
+                arb.stop();
+                arb.join().unwrap();
             });
     }
 }

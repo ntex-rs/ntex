@@ -814,4 +814,61 @@ mod tests {
             .query(&[("k", "v")]);
         assert_eq!(req.get_uri(), "http://localhost/p?k=v");
     }
+
+    #[crate::rt_test]
+    async fn client_invalid_headers() {
+        let bad_value = "a\nb";
+        for req in [
+            Client::new().get("/").header("x-test", bad_value),
+            Client::new().get("/").set_header("bad header", "1"),
+            Client::new().get("/").set_header("x-test", bad_value),
+            Client::new().get("/").set_header_if_none("bad header", "1"),
+            Client::new()
+                .get("/")
+                .set_header_if_none("x-test", bad_value),
+            Client::new().get("/").content_type(bad_value),
+        ] {
+            assert!(matches!(req.err, Some(ClientError::Http(_))), "{req:?}");
+            let err = req.send().await.unwrap_err();
+            assert!(matches!(err.into_error(), ClientError::Http(_)));
+        }
+
+        // an existing header is not replaced and its new value is not validated
+        let req = Client::new()
+            .get("/")
+            .header("x-test", "1")
+            .set_header_if_none("x-test", bad_value);
+        assert!(req.err.is_none());
+        assert_eq!(req.headers().get("x-test").unwrap(), "1");
+    }
+
+    #[crate::rt_test]
+    async fn client_url_validation() {
+        for (url, expected) in [
+            ("/path", "missing-host"),
+            ("localhost:8080", "missing-scheme"),
+            ("ftp://localhost/", "unknown-scheme"),
+        ] {
+            let err = Client::new().get(url).send().await.unwrap_err();
+            let kind = match err.into_error() {
+                ClientError::Url(InvalidUrl::MissingHost) => "missing-host",
+                ClientError::Url(InvalidUrl::MissingScheme) => "missing-scheme",
+                ClientError::Url(InvalidUrl::UnknownScheme) => "unknown-scheme",
+                err => panic!("{url}: {err:?}"),
+            };
+            assert_eq!(kind, expected, "{url}");
+        }
+    }
+
+    #[crate::rt_test]
+    async fn test_debug_redacts_authorization() {
+        let req = Client::new()
+            .get("http://localhost/")
+            .basic_auth("user", Some("secret"))
+            .address("127.0.0.1:1".parse().unwrap());
+        assert_eq!(req.request.addr, Some("127.0.0.1:1".parse().unwrap()));
+        let repr = format!("{req:?}");
+        assert!(repr.contains("\"authorization\": <REDACTED>"), "{repr}");
+        assert!(!repr.contains("Basic"), "{repr}");
+    }
 }

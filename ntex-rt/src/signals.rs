@@ -360,7 +360,7 @@ pub(crate) fn enable_panic_handling() {
     });
 }
 
-#[cfg(all(test, any(target_family = "windows", target_os = "linux")))]
+#[cfg(all(test, any(target_family = "windows", target_family = "unix")))]
 mod tests {
     use crate::testing::TestRunner;
 
@@ -464,6 +464,46 @@ mod tests {
     }
 
     #[test]
+    fn builder_signals() {
+        let _lock = LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        // stopped by another thread
+        let stopper = std::thread::spawn(|| {
+            loop {
+                let sys = CUR_SYS.lock().clone();
+                if let Some(sys) = sys {
+                    sys.stop();
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        });
+        System::build()
+            .name("signals")
+            .enable_signals()
+            .build(TestRunner)
+            .run_until_stop()
+            .unwrap();
+        stopper.join().unwrap();
+        assert!(!is_enabled());
+
+        // signals are released if `f` fails
+        let err = System::build()
+            .signals(true)
+            .build(TestRunner)
+            .run(|| {
+                assert!(System::current().signals());
+                assert!(is_enabled());
+                Err(std::io::Error::other("failed"))
+            })
+            .unwrap_err();
+        assert_eq!(err.to_string(), "failed");
+        assert!(!is_enabled());
+    }
+
+    #[test]
     fn signals_registered_by_one_system() {
         let _lock = LOCK
             .lock()
@@ -521,7 +561,7 @@ mod tests {
         assert_eq!(received, 100);
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(target_family = "unix")]
     #[test]
     fn os_signal_delivered() {
         use std::time::Duration;

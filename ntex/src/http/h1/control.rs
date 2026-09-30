@@ -641,4 +641,139 @@ mod tests {
         assert!(access.get().is_none());
         assert!(access.take().is_none());
     }
+
+    type Ctl = Control<crate::io::Base, io::Error>;
+
+    fn io() -> Io {
+        let (_, server) = IoTest::create();
+        let cfg: SharedCfg = SharedCfg::new("TEST").add(HttpServiceConfig::new()).into();
+        Io::new(server, cfg)
+    }
+
+    #[test]
+    fn debug_fmt() {
+        let s = format!("{:?}", Ctl::request(Request::new()));
+        assert!(s.starts_with("Control::Request(NewRequest("), "{s}");
+        let s = format!("{:?}", Ctl::expect(Request::new()));
+        assert!(s.starts_with("Control::Expect(Expect("), "{s}");
+        let s = format!("{:?}", Ctl::keepalive(true));
+        assert!(s.contains("Control::Disconnect(KeepAlive("), "{s}");
+        let s = format!("{:?}", Ctl::err(io::Error::other("err")));
+        assert!(s.contains("Control::Disconnect(Error("), "{s}");
+    }
+
+    #[crate::rt_test]
+    async fn debug_fmt_io() {
+        let s = format!("{:?}", Ctl::connect(1, io()));
+        assert_eq!(s, "Control::Connect");
+
+        let cfg: SharedCfg = SharedCfg::new("TEST").add(HttpServiceConfig::new()).into();
+        let msg = Ctl::upgrade(Request::new(), Rc::new(io()), Codec::new(1, cfg.get()));
+        let s = format!("{msg:?}");
+        assert!(s.starts_with("Control::Upgrade(Upgrade"), "{s}");
+    }
+
+    #[crate::rt_test]
+    async fn connection() {
+        let Control::Connect(mut msg) = Ctl::connect(7, io()) else {
+            panic!()
+        };
+        assert_eq!(msg.id(), 7);
+        assert_eq!(msg.get_ref().tag(), "TEST");
+        assert_eq!(msg.get_mut().tag(), "TEST");
+        assert!(matches!(msg.ack().result, ControlResult::Connect(_)));
+    }
+
+    #[test]
+    fn new_request() {
+        let Control::Request(mut msg) = Ctl::request(Request::new()) else {
+            panic!()
+        };
+        msg.get_mut().head_mut().method = crate::http::Method::POST;
+        assert_eq!(msg.get_ref().method(), &crate::http::Method::POST);
+        assert!(matches!(
+            msg.ack::<crate::io::Base>().result,
+            ControlResult::Publish(_)
+        ));
+
+        let Control::Request(msg) = Ctl::request(Request::new()) else {
+            panic!()
+        };
+        let ControlResult::Response(res, _) = msg
+            .fail::<_, crate::io::Base>(super::super::ProtocolError::SlowRequestTimeout)
+            .result
+        else {
+            panic!()
+        };
+        assert_eq!(res.status(), crate::http::StatusCode::REQUEST_TIMEOUT);
+    }
+
+    #[test]
+    fn expect() {
+        let Control::Expect(mut msg) = Ctl::expect(Request::new()) else {
+            panic!()
+        };
+        msg.get_mut().head_mut().method = crate::http::Method::PUT;
+        assert_eq!(msg.get_ref().method(), &crate::http::Method::PUT);
+        assert!(matches!(
+            msg.ack::<crate::io::Base>().result,
+            ControlResult::Continue(_)
+        ));
+    }
+
+    #[test]
+    fn disconnect_reasons() {
+        let Control::Disconnect(Reason::Service(msg)) =
+            Ctl::svc_disconnect(ServiceDisconnectReason::PayloadDropped)
+        else {
+            panic!()
+        };
+        assert_eq!(msg.reason(), ServiceDisconnectReason::PayloadDropped);
+        assert!(matches!(
+            msg.ack::<crate::io::Base>().result,
+            ControlResult::Stop
+        ));
+
+        for enabled in [true, false] {
+            let Control::Disconnect(Reason::KeepAlive(msg)) = Ctl::keepalive(enabled) else {
+                panic!()
+            };
+            assert_eq!(msg.is_enabled(), enabled);
+            assert!(matches!(
+                msg.ack::<crate::io::Base>().result,
+                ControlResult::Stop
+            ));
+        }
+
+        let Control::Disconnect(Reason::Error(mut msg)) = Ctl::err(io::Error::other("err")) else {
+            panic!()
+        };
+        *msg.get_mut() = io::Error::other("changed");
+        assert_eq!(msg.get_ref().to_string(), "changed");
+        let ControlResult::Error(res, _) = msg.ack::<crate::io::Base>().result else {
+            panic!()
+        };
+        assert_eq!(res.status(), crate::http::StatusCode::INTERNAL_SERVER_ERROR);
+
+        let Control::Disconnect(Reason::ProtocolError(msg)) =
+            Ctl::proto_err(super::super::ProtocolError::SlowPayloadTimeout)
+        else {
+            panic!()
+        };
+        assert!(matches!(
+            msg.get_ref(),
+            super::super::ProtocolError::SlowPayloadTimeout
+        ));
+
+        let Control::Disconnect(Reason::PeerGone(mut msg)) = Ctl::peer_gone(None) else {
+            panic!()
+        };
+        assert!(msg.get_ref().is_none());
+        assert!(msg.get_mut().is_none());
+        assert!(msg.take().is_none());
+        assert!(matches!(
+            msg.ack::<crate::io::Base>().result,
+            ControlResult::Stop
+        ));
+    }
 }

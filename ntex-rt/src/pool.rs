@@ -334,6 +334,36 @@ mod tests {
     }
 
     #[test]
+    fn spawn_blocking_without_system() {
+        thread::spawn(|| {
+            let tid = thread::current().id();
+            let res = spawn_blocking(move || thread::current().id() == tid);
+            assert_eq!(wait(res, Duration::from_secs(1)), Some(Ok(true)));
+
+            let res = spawn_blocking(|| panic!("blocking"));
+            assert_eq!(
+                wait(res, Duration::from_secs(1)),
+                Some(Err::<(), _>(BlockingError))
+            );
+        })
+        .join()
+        .unwrap();
+        assert_eq!(
+            BlockingError.to_string(),
+            "Blocking task failed or was canceled"
+        );
+    }
+
+    #[test]
+    fn detached_blocking_task_runs() {
+        crate::System::new("test", crate::testing::TestRunner).block_on(async {
+            let (tx, rx) = oneshot::async_channel();
+            spawn_blocking(move || tx.send(1).unwrap()).detach();
+            assert_eq!(rx.await, Ok(1));
+        });
+    }
+
+    #[test]
     fn zero_thread_limit() {
         let pool = ThreadPool::new("test", 0, Duration::from_secs(1));
         assert_eq!(

@@ -25,6 +25,12 @@
 
 * Remove the `neon-iocp` feature, it had no effect, Windows always uses IOCP
 
+* `Client::request_from` copies every value of multi-value headers, only the first value
+  was copied
+
+* HTTP/1 dispatcher closes the connection when a response body stream fails, an error
+  response was written into the incomplete response body
+
 * `Json` extractor rejects a request with an invalid `Content-Length` header with
   `JsonPayloadError::Payload(PayloadError::UnknownLength)`, the header was ignored and the body
   was read up to the limit

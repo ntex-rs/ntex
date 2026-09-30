@@ -629,4 +629,117 @@ mod tests {
             }
         );
     }
+
+    fn pending_payload() -> Payload {
+        Payload::Stream(Box::pin(futures_util::stream::pending()))
+    }
+
+    fn error_payload() -> Payload {
+        Payload::Stream(Box::pin(futures_util::stream::iter([
+            Ok(Bytes::from_static(b"{")),
+            Err(PayloadError::Incomplete(None)),
+        ])))
+    }
+
+    fn is_timeout(err: &PayloadError) -> bool {
+        matches!(err, PayloadError::Incomplete(Some(e)) if e.kind() == std::io::ErrorKind::TimedOut)
+    }
+
+    #[crate::rt_test]
+    async fn test_body_timeout_and_error() {
+        let res = TestResponse::builder().build();
+        res.set_payload(pending_payload());
+        let err = res.body().timeout(Millis(1)).await.unwrap_err();
+        assert!(is_timeout(&err.into_error().0));
+
+        let res = TestResponse::builder().build();
+        res.set_payload(error_payload());
+        let err = res.body().await.unwrap_err();
+        assert!(matches!(err.into_error().0, PayloadError::Incomplete(None)));
+
+        // the payload is taken by the first body future
+        let res = TestResponse::builder()
+            .set_payload(b"data".as_ref())
+            .build();
+        let body = res.body();
+        assert_eq!(res.body().await.unwrap(), Bytes::new());
+        assert_eq!(body.await.unwrap(), Bytes::from_static(b"data"));
+    }
+
+    #[crate::rt_test]
+    async fn test_json_timeout_and_errors() {
+        let res = TestResponse::with_header(header::CONTENT_TYPE, "application/json").build();
+        res.set_payload(pending_payload());
+        let err = res.json::<MyObject>().timeout(Millis(1)).await.unwrap_err();
+        let JsonPayloadError::Payload(ClientPayloadError(err)) = &*err else {
+            panic!("{err:?}")
+        };
+        assert!(is_timeout(err));
+
+        let res = TestResponse::with_header(header::CONTENT_TYPE, "application/json").build();
+        res.set_payload(error_payload());
+        let err = res.json::<MyObject>().await.unwrap_err();
+        assert!(matches!(
+            &*err,
+            JsonPayloadError::Payload(ClientPayloadError(PayloadError::Incomplete(None)))
+        ));
+
+        let res = TestResponse::with_header(header::CONTENT_TYPE, "application/json")
+            .set_payload(b"{\"name\": 1}".as_ref())
+            .build();
+        let err = res.json::<MyObject>().await.unwrap_err();
+        assert!(matches!(&*err, JsonPayloadError::Deserialize(Some(_))));
+
+        // a structured syntax suffix is json
+        let res = TestResponse::with_header(header::CONTENT_TYPE, "application/problem+json")
+            .set_payload(b"{\"name\": \"test\"}".as_ref())
+            .build();
+        assert_eq!(res.json::<MyObject>().await.unwrap().name, "test");
+    }
+
+    #[crate::rt_test]
+    async fn test_response_stream() {
+        use futures_util::StreamExt;
+
+        let mut res = TestResponse::builder()
+            .set_payload(b"data".as_ref())
+            .build();
+        assert_eq!(res.next().await.unwrap().unwrap(), "data");
+        assert!(res.next().await.is_none());
+
+        let mut res = TestResponse::builder().build();
+        res.set_payload(error_payload());
+        assert_eq!(res.next().await.unwrap().unwrap(), "{");
+        let err = res.next().await.unwrap().unwrap_err();
+        assert!(matches!(err.into_error().0, PayloadError::Incomplete(None)));
+
+        // the payload is taken
+        let mut res = TestResponse::builder()
+            .set_payload(b"data".as_ref())
+            .build();
+        assert!(matches!(
+            res.take_payload(),
+            Payload::Stream(_) | Payload::H1(_)
+        ));
+        assert!(matches!(res.take_payload(), Payload::None));
+        assert!(res.next().await.is_none());
+    }
+
+    #[test]
+    fn test_response_accessors() {
+        let mut res = TestResponse::with_header(header::CONTENT_TYPE, "text/plain")
+            .version(Version::HTTP_2)
+            .build();
+        res.headers_mut()
+            .insert(header::SERVER, HeaderValue::from_static("test"));
+        assert_eq!(res.header(header::SERVER).unwrap(), "test");
+        assert_eq!(res.version(), Version::HTTP_2);
+
+        res.extensions_mut().insert(10u32);
+        assert_eq!(res.extensions().get::<u32>(), Some(&10));
+
+        let s = format!("{res:?}");
+        assert!(s.contains("ClientResponse HTTP/2.0 200 OK"), "{s}");
+        assert!(s.contains("\"server\": \"test\""), "{s}");
+    }
 }

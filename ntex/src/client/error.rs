@@ -302,4 +302,139 @@ mod tests {
         assert_eq!(err.signature(), "ntex-client-connect-InvalidInput");
         assert!(matches!(err.clone(), ConnectError::InvalidInput));
     }
+
+    #[test]
+    fn connect_error_conversions() {
+        use crate::connect::ConnectError as Base;
+
+        let cases = [
+            (
+                Base::Resolver(io::Error::other("dns")),
+                "ntex-client-connect-Resolver",
+            ),
+            (Base::NoRecords, "ntex-client-connect-NoRecords"),
+            (Base::Unresolved, "ntex-client-connect-Unresolved"),
+            (
+                Base::Io(io::Error::other("io")),
+                "ntex-client-connect-Disconnected",
+            ),
+        ];
+        for (err, sig) in cases {
+            let err = ConnectError::from(err);
+            assert_eq!(err.signature(), sig);
+            assert_eq!(err.clone().signature(), sig);
+        }
+        for err in [
+            ConnectError::SslIsNotSupported,
+            ConnectError::Disconnected(None),
+        ] {
+            assert_eq!(err.clone().to_string(), err.to_string());
+            assert_eq!(err.clone().signature(), err.signature());
+        }
+
+        let err = ConnectError::Disconnected(Some(io::Error::other("gone")));
+        let ConnectError::Disconnected(Some(e)) = err.clone() else {
+            panic!()
+        };
+        assert_eq!(e.kind(), io::ErrorKind::Other);
+        assert!(e.to_string().contains("gone"), "{e}");
+    }
+
+    #[test]
+    fn client_error_clone_and_signature() {
+        let errs = [
+            (
+                ClientError::from(InvalidUrl::MissingHost),
+                "ntex-client-Url",
+            ),
+            (
+                ClientError::from(ConnectError::NoRecords),
+                "ntex-client-connect-NoRecords",
+            ),
+            (
+                ClientError::from(Either::<EncodeError, io::Error>::Left(
+                    EncodeError::UnexpectedEof,
+                )),
+                "ntex-client-Request",
+            ),
+            (
+                ClientError::from(Either::<DecodeError, io::Error>::Left(DecodeError::Header)),
+                "ntex-client-Response",
+            ),
+            (
+                ClientError::from(HttpError::from(
+                    crate::http::header::HeaderName::try_from("\n").unwrap_err(),
+                )),
+                "ntex-client-Http",
+            ),
+            (ClientError::Timeout, "ntex-client-Timeout"),
+            (
+                ClientError::from(Rc::new(io::Error::other("other")) as Rc<dyn StdError>),
+                "ntex-client-Error",
+            ),
+            (
+                ClientError::from(ntex_h2::OperationError::Disconnected),
+                ntex_h2::OperationError::Disconnected.signature(),
+            ),
+        ];
+        for (err, sig) in errs {
+            assert_eq!(err.signature(), sig, "{err:?}");
+            let cloned = err.clone();
+            assert_eq!(cloned.signature(), sig);
+            if !matches!(err, ClientError::Connect(_)) {
+                assert_eq!(cloned.to_string(), err.to_string());
+            }
+        }
+
+        let io_err = |msg| io::Error::new(io::ErrorKind::BrokenPipe, msg);
+        for (err, msg) in [
+            (
+                ClientError::from(Either::<EncodeError, _>::Right(io_err("write"))),
+                "write",
+            ),
+            (
+                ClientError::from(Either::<DecodeError, _>::Right(io_err("read"))),
+                "read",
+            ),
+        ] {
+            let ClientError::Send(e) = err.clone() else {
+                panic!("{err:?}")
+            };
+            // the cloned io error keeps its kind, the message is not preserved as is
+            assert_eq!(e.kind(), io::ErrorKind::BrokenPipe);
+            assert!(e.to_string().contains(msg), "{e}");
+            assert_eq!(err.signature(), e.signature());
+        }
+    }
+
+    #[test]
+    fn payload_errors() {
+        let err = ClientPayloadError::from(PayloadError::Overflow);
+        assert_eq!(err.signature(), "ntex-client-Payload");
+        assert!(matches!(*err, PayloadError::Overflow));
+
+        let json_err = serde_json::from_str::<u32>("x").unwrap_err();
+        let errs = [
+            (JsonPayloadError::ContentType, "ntex-client-JsonContentType"),
+            (
+                JsonPayloadError::from(json_err),
+                "ntex-client-JsonDeserialize",
+            ),
+            (
+                JsonPayloadError::from(PayloadError::Overflow),
+                "ntex-client-JsonPayload",
+            ),
+        ];
+        for (err, sig) in errs {
+            assert_eq!(err.signature(), sig);
+            assert_eq!(err.clone().signature(), sig);
+        }
+        // the deserialize error is not cloneable
+        let err = JsonPayloadError::from(serde_json::from_str::<u32>("x").unwrap_err());
+        assert!(matches!(err.clone(), JsonPayloadError::Deserialize(None)));
+        assert!(matches!(
+            JsonPayloadError::from(PayloadError::Overflow).clone(),
+            JsonPayloadError::Payload(ClientPayloadError(PayloadError::Overflow))
+        ));
+    }
 }

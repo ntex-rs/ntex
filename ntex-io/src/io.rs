@@ -61,11 +61,6 @@ pub struct Io<F = Base>(UnsafeCell<IoRef>, marker::PhantomData<F>);
 #[derive(Clone)]
 pub struct IoRef(pub(super) Rc<IoState>);
 
-/// Saturating conversion used for the in-flight write counter.
-fn as_u32(v: usize) -> u32 {
-    u32::try_from(v).unwrap_or(u32::MAX)
-}
-
 pub(crate) struct IoState {
     filter: FilterPtr,
     pub(super) id: Cell<Id>,
@@ -228,12 +223,12 @@ impl IoState {
         size >= self.cfg.read_buf().high
     }
 
-    pub(super) fn should_disable_rd_backpressure(&self, size: usize) -> bool {
-        size <= self.cfg.read_buf().half
-    }
-
     pub(super) fn is_wr_backpressure_needed(&self, size: usize) -> bool {
         size >= self.cfg.write_buf().high
+    }
+
+    pub(super) fn should_disable_rd_backpressure(&self, size: usize) -> bool {
+        size <= self.cfg.read_buf().half
     }
 
     pub(super) fn should_disable_wr_backpressure(&self, size: usize) -> bool {
@@ -1201,6 +1196,11 @@ impl<F> Drop for Io<F> {
 
         IoManager::unregister(self.io_ref());
     }
+}
+
+/// Saturating conversion used for the in-flight write counter.
+fn as_u32(v: usize) -> u32 {
+    u32::try_from(v).unwrap_or(u32::MAX)
 }
 
 #[cfg(test)]
@@ -4081,5 +4081,79 @@ mod tests {
 
         assert!(io.recv(&FixedSize(8)).await.unwrap().is_none());
         assert_eq!(io.with_read_dst(|b| b.len()), 3);
+    }
+
+    #[ntex::test]
+    async fn read_pause_stops_transport_reads() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = Io::new(server, SharedCfg::new("SRV"));
+
+        assert!(lazy(|cx| io.poll_read_pause(cx)).await.is_pending());
+        assert!(io.flags().is_read_paused());
+        assert!(lazy(|cx| io.poll_read_pause(cx)).await.is_pending());
+
+        // the transport does not read while paused
+        client.write("data");
+        sleep(Millis(25)).await;
+        assert_eq!(io.st().buffer.read_dst_size(), 0);
+
+        // status updates are still reported
+        io.st().notify_timeout();
+        assert!(matches!(
+            lazy(|cx| io.poll_read_pause(cx)).await,
+            Poll::Ready(IoStatusUpdate::Timeout)
+        ));
+
+        // waiting for input cancels the pause
+        assert_eq!(io.read_notify().await.unwrap(), Some(()));
+        assert!(!io.flags().is_read_paused());
+        assert_eq!(io.with_read_dst(BytesMut::take), b"data");
+    }
+
+    struct Failing;
+
+    impl Decoder for Failing {
+        type Item = Bytes;
+        type Error = &'static str;
+
+        fn decode(&self, _: &mut BytesMut) -> Result<Option<Bytes>, &'static str> {
+            Err("invalid frame")
+        }
+    }
+
+    #[ntex::test]
+    async fn recv_reports_decoder_error() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = Io::new(server, SharedCfg::new("SRV"));
+
+        client.write("data");
+        let Err(Either::Left(err)) = io.recv(&Failing).await else {
+            panic!("expected a decoder error")
+        };
+        assert_eq!(err, "invalid frame");
+    }
+
+    #[ntex::test]
+    async fn poll_flush_enables_write_backpressure() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(16)),
+        );
+
+        // output buffered without a state update
+        io.with_write_dst(|buf| buf.extend_from_slice(BIN2));
+        assert!(!io.flags().is_wr_backpressure());
+
+        assert!(lazy(|cx| io.poll_flush(cx, false)).await.is_pending());
+        assert!(io.flags().is_wr_backpressure());
+
+        client.remote_buffer_cap(1024);
+        assert_eq!(client.read().await.unwrap(), BIN2);
+        io.flush(false).await.unwrap();
+        assert!(!io.flags().is_wr_backpressure());
     }
 }

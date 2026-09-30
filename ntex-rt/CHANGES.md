@@ -30,6 +30,8 @@
 
 * Fix `Arbiter::new()` name not matching the arbiter id
 
+* Fix `System::with_config()` ignoring the `name` argument
+
 * Fix endless loop after `SIGSEGV` when signal handling is enabled, the previous
   handler is restored after the signal is reported
 

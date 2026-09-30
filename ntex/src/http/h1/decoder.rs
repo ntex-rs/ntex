@@ -2757,6 +2757,49 @@ mod tests {
     }
 
     #[test]
+    fn test_chunk_framing_errors() {
+        // a partial size line larger than the limit, received at once
+        let (pl, mut buf) = chunked_payload();
+        buf.extend(b"1;");
+        buf.extend("a".repeat(MAX_CHUNK_EXTENSIONS as usize + 64).as_bytes());
+        assert!(matches!(
+            pl.decode(&mut buf),
+            Err(DecodeError::InvalidInput("Chunk extensions are too large"))
+        ));
+
+        for (data, msg) in [
+            (&b"4\r\ndataX\r\n"[..], "Invalid chunk body CR"),
+            (b"4\r\ndata\rX", "Invalid chunk body LF"),
+            (b"0\r\n\rX", "Invalid chunk end LF"),
+        ] {
+            let (pl, mut buf) = chunked_payload();
+            buf.extend_from_slice(data);
+            let mut res = pl.decode(&mut buf);
+            while let Ok(Some(PayloadItem::Chunk(_))) = res {
+                res = pl.decode(&mut buf);
+            }
+            assert!(
+                matches!(res, Err(DecodeError::InvalidInput(m)) if m == msg),
+                "{data:?} {res:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_illegal_content_length() {
+        for value in [&b"12a"[..], b"\xff1"] {
+            let mut buf = BytesMut::from(&b"GET /test HTTP/1.1\r\ncontent-length: "[..]);
+            buf.extend_from_slice(value);
+            buf.extend_from_slice(b"\r\n\r\n");
+            let reader = MessageDecoder::<Request>::default();
+            assert!(
+                matches!(reader.decode(&mut buf), Err(DecodeError::Header)),
+                "{value:?}"
+            );
+        }
+    }
+
+    #[test]
     fn test_chunk_size_line_byte_by_byte() {
         let feed = |line: &[u8]| {
             let (pl, mut buf) = chunked_payload();

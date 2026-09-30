@@ -56,3 +56,75 @@ impl Service<SharedCfg, Connect> for Connector {
         .await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::Cell, rc::Rc};
+
+    use super::*;
+    use crate::client::{ClientConfig, ConnectorPipeline};
+    use crate::http::Uri;
+    use crate::service::{Pipeline, boxed, fn_service};
+
+    fn pool(calls: &Rc<Cell<usize>>, cfg: &SharedCfg) -> ConnectionPool {
+        let calls = calls.clone();
+        ConnectionPool::new(
+            ConnectorPipeline::new(boxed::service(fn_service(move |_| {
+                calls.set(calls.get() + 1);
+                Box::pin(async { Err(Error::from(ConnectError::NoRecords)) })
+            }))),
+            cfg.get(),
+        )
+    }
+
+    fn connect(uri: &'static str) -> Connect {
+        Connect {
+            uri: Uri::from_static(uri),
+            addr: None,
+        }
+    }
+
+    #[crate::rt_test]
+    async fn scheme_routing() {
+        let cfg = SharedCfg::new("C").add(ClientConfig::new()).build();
+        let (tcp, ssl) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+
+        // without a secure connector tls requests are rejected
+        let svc = Pipeline::new(
+            cfg.clone(),
+            Connector {
+                tcp_pool: pool(&tcp, &cfg),
+                ssl_pool: None,
+            },
+        );
+        svc.ready().await.unwrap();
+        for uri in ["https://localhost/", "wss://localhost/"] {
+            let err = svc.call(connect(uri)).await.unwrap_err();
+            assert!(matches!(
+                err.into_error(),
+                ClientError::Connect(ConnectError::SslIsNotSupported)
+            ));
+        }
+        assert_eq!(tcp.get(), 0);
+        let err = svc.call(connect("http://localhost/")).await.unwrap_err();
+        assert!(matches!(
+            err.into_error(),
+            ClientError::Connect(ConnectError::NoRecords)
+        ));
+        assert_eq!(tcp.get(), 1);
+        svc.shutdown().await;
+
+        let svc = Pipeline::new(
+            cfg.clone(),
+            Connector {
+                tcp_pool: pool(&tcp, &cfg),
+                ssl_pool: Some(pool(&ssl, &cfg)),
+            },
+        );
+        svc.ready().await.unwrap();
+        let _ = svc.call(connect("wss://localhost/")).await.unwrap_err();
+        let _ = svc.call(connect("ws://localhost/")).await.unwrap_err();
+        assert_eq!((tcp.get(), ssl.get()), (2, 1));
+        svc.shutdown().await;
+    }
+}

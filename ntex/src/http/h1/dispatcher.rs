@@ -69,6 +69,8 @@ struct DispatcherInner<F, B, Err> {
     control: Option<Pipeline<Control<F, Err>, ControlAck<F>, DispatchError>>,
     payload: Option<(PayloadDecoder, bstream::Sender<PayloadError>)>,
     pending_payload_error: Option<PayloadFailure>,
+    /// The response head is sent and its body is not complete
+    response_started: bool,
 }
 
 impl<F, B, Err> Dispatcher<F, B, Err>
@@ -104,6 +106,7 @@ where
                 io: Rc::new(io),
                 payload: None,
                 pending_payload_error: None,
+                response_started: false,
                 disconnect: Disconnect::None,
             },
         }
@@ -386,7 +389,10 @@ where
             match result {
                 Ok(()) => match size {
                     BodySize::None | BodySize::Empty => self.response_done(),
-                    _ => State::SendPayload { body },
+                    _ => {
+                        self.response_started = true;
+                        State::SendPayload { body }
+                    }
                 },
                 Err(err) => self.ctl_proto_err(err.into()),
             }
@@ -790,6 +796,7 @@ where
     /// Handles a sent response: reports a pending disconnect, or reads
     /// the rest of the request payload, or the next request.
     fn response_done(&mut self) -> State<F, B, Err> {
+        self.response_started = false;
         if let Some(st) = self.check_disconnect() {
             st
         } else if self.payload.is_some() {
@@ -840,6 +847,14 @@ where
     fn control_result(&mut self, result: ControlResult<F>) -> State<F, B, Err> {
         match result {
             ControlResult::Publish(req) => self.publish(req),
+            // the response head is sent, an error response would be written
+            // into the unfinished body
+            ControlResult::ProtocolError(..) if self.response_started => {
+                log::trace!("{}: Response is incomplete, close", self.io.tag());
+                self.response_started = false;
+                self.io.close();
+                self.stop()
+            }
             ControlResult::Response(res, body)
             | ControlResult::Error(res, body)
             | ControlResult::ProtocolError(res, body) => self.send_response(res, body.into()),
@@ -3326,5 +3341,354 @@ mod tests {
             &buf[..55],
             b"HTTP/1.1 200 OK\r\ncontent-length: 4\r\nconnection: close\r\n"
         );
+    }
+
+    type Events = Rc<RefCell<Vec<String>>>;
+
+    /// Creates a dispatcher with a control service that records every event
+    /// and answers it with `f`.
+    fn ctl_h1<S, C>(
+        server: IoTest,
+        events: &Events,
+        svc: S,
+        ctl: C,
+    ) -> Dispatcher<Base, body::Body, io::Error>
+    where
+        S: AsyncFn(Request) -> Result<Response, io::Error> + 'static,
+        C: Fn(Control<Base, io::Error>) -> Result<ControlAck<Base>, DispatchError> + 'static,
+    {
+        let events = events.clone();
+        let svc = Rc::new(svc);
+        let ctl = Rc::new(ctl);
+        Dispatcher::new(
+            0,
+            nio::Io::new(server, SharedCfg::default()),
+            Pipeline::new(
+                (),
+                fn_service(move |req: Request| {
+                    let svc = svc.clone();
+                    async move { svc(req).await }
+                }),
+            ),
+            Some(Pipeline::new(
+                (),
+                fn_service(move |msg: Control<Base, io::Error>| {
+                    let name = match &msg {
+                        Control::Connect(_) => "connect".to_string(),
+                        Control::Request(_) => "request".to_string(),
+                        Control::Upgrade(_) => "upgrade".to_string(),
+                        Control::Expect(_) => "expect".to_string(),
+                        Control::Disconnect(Reason::Service(r)) => {
+                            format!("service:{:?}", r.reason())
+                        }
+                        Control::Disconnect(Reason::Error(_)) => "error".to_string(),
+                        Control::Disconnect(Reason::ProtocolError(e)) => match e.get_ref() {
+                            ProtocolError::ResponsePayload(_) => "response-payload".to_string(),
+                            ProtocolError::Decode(_) => "decode".to_string(),
+                            e => format!("protocol:{e}"),
+                        },
+                        Control::Disconnect(Reason::PeerGone(p)) => {
+                            format!("peer-gone:{}", p.get_ref().is_some())
+                        }
+                        Control::Disconnect(Reason::KeepAlive(k)) => {
+                            format!("keepalive:{}", k.is_enabled())
+                        }
+                    };
+                    events.borrow_mut().push(name);
+                    let res = ctl(msg);
+                    async move { res }
+                }),
+            )),
+            DispatcherConfig::default(),
+        )
+    }
+
+    fn events(events: &Events) -> Vec<String> {
+        events.borrow().clone()
+    }
+
+    /// A control service error stops the dispatcher with that error.
+    #[crate::rt_test]
+    async fn test_control_error_stops_dispatcher() {
+        use crate::error::IntoFailure;
+
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+        let ev = Events::default();
+        let calls = Rc::new(Cell::new(0));
+        let calls2 = calls.clone();
+        let mut h1 = ctl_h1(
+            server,
+            &ev,
+            async move |_| {
+                calls2.set(calls2.get() + 1);
+                Ok(Response::Ok().build())
+            },
+            |msg| match msg {
+                Control::Request(_) => Err(DispatchError::Control(io::Error::other("ctl").fail())),
+                msg => Ok(msg.ack()),
+            },
+        );
+
+        client.write("GET / HTTP/1.1\r\nhost: a\r\n\r\n");
+        let res = timeout(Millis(1000), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
+        assert!(matches!(res, Ok(Err(DispatchError::Control(_)))));
+        assert_eq!(calls.get(), 0);
+        assert_eq!(events(&ev), ["request"]);
+    }
+
+    /// A rejected upgrade sends the response and closes the connection.
+    #[crate::rt_test]
+    async fn test_upgrade_failed() {
+        for with_err in [false, true] {
+            let (client, server) = IoTest::create();
+            client.remote_buffer_cap(4096);
+            let ev = Events::default();
+            let calls = Rc::new(Cell::new(0));
+            let calls2 = calls.clone();
+            let mut h1 = ctl_h1(
+                server,
+                &ev,
+                async move |_| {
+                    calls2.set(calls2.get() + 1);
+                    Ok(Response::Ok().build())
+                },
+                move |msg| match msg {
+                    Control::Upgrade(mut upg) => {
+                        assert_eq!(upg.get_ref().path(), "/ws");
+                        assert_eq!(upg.get_mut().path(), "/ws");
+                        assert!(!upg.io().is_closed());
+                        if with_err {
+                            Ok(upg.fail(io::Error::other("upgrade")))
+                        } else {
+                            Ok(upg.fail_with(Response::Forbidden().build()))
+                        }
+                    }
+                    msg => Ok(msg.ack()),
+                },
+            );
+
+            client.write(
+                "GET /ws HTTP/1.1\r\nhost: a\r\nconnection: upgrade\r\n\
+                 upgrade: websocket\r\n\r\nGET /next HTTP/1.1\r\nhost: a\r\n\r\n",
+            );
+            let res = timeout(Millis(1000), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
+            assert!(matches!(res, Ok(Ok(()))));
+
+            let buf = client.read_any();
+            let status: &[u8] = if with_err {
+                b"HTTP/1.1 500 Internal Server Error\r\n"
+            } else {
+                b"HTTP/1.1 403 Forbidden\r\n"
+            };
+            assert!(buf.starts_with(status), "{buf:?}");
+            // the pipelined request is not processed
+            assert_eq!(
+                buf.windows(9).filter(|w| w == b"HTTP/1.1 ").count(),
+                1,
+                "{buf:?}"
+            );
+            assert_eq!(calls.get(), 0);
+            assert_eq!(events(&ev), ["request", "upgrade", "service:UpgradeFailed"]);
+        }
+    }
+
+    /// The control service can replace the response for a service error.
+    #[crate::rt_test]
+    async fn test_service_error_response_replaced() {
+        for with_err in [false, true] {
+            let (client, server) = IoTest::create();
+            client.remote_buffer_cap(4096);
+            let ev = Events::default();
+            let mut h1 = ctl_h1(
+                server,
+                &ev,
+                async |_| Err(io::Error::other("service")),
+                move |msg| match msg {
+                    Control::Disconnect(Reason::Error(mut err)) => {
+                        assert_eq!(err.get_ref().to_string(), "service");
+                        assert_eq!(err.get_mut().kind(), io::ErrorKind::Other);
+                        if with_err {
+                            Ok(err.fail(ProtocolError::Decode(
+                                crate::http::error::DecodeError::Method,
+                            )))
+                        } else {
+                            Ok(err.fail_with(Response::new(StatusCode::IM_A_TEAPOT)))
+                        }
+                    }
+                    msg => Ok(msg.ack()),
+                },
+            );
+
+            client.write("GET / HTTP/1.1\r\nhost: a\r\n\r\n");
+            let res = timeout(Millis(1000), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
+            assert!(matches!(res, Ok(Ok(()))));
+
+            let buf = client.read_any();
+            let status: &[u8] = if with_err {
+                b"HTTP/1.1 400 Bad Request\r\n"
+            } else {
+                b"HTTP/1.1 418 I'm a teapot\r\n"
+            };
+            assert!(buf.starts_with(status), "{buf:?}");
+            assert_eq!(events(&ev), ["request", "error"]);
+        }
+    }
+
+    /// The control service can replace the response for a protocol error.
+    #[crate::rt_test]
+    async fn test_protocol_error_response_replaced() {
+        for with_err in [false, true] {
+            let (client, server) = IoTest::create();
+            client.remote_buffer_cap(4096);
+            let ev = Events::default();
+            let mut h1 = ctl_h1(
+                server,
+                &ev,
+                async |_| Ok(Response::Ok().build()),
+                move |msg| match msg {
+                    Control::Disconnect(Reason::ProtocolError(err)) => {
+                        if with_err {
+                            Ok(err.fail(io::Error::other("proto")))
+                        } else {
+                            Ok(err.fail_with(Response::new(StatusCode::IM_A_TEAPOT)))
+                        }
+                    }
+                    msg => Ok(msg.ack()),
+                },
+            );
+
+            client.write("GET / HTTP/1.1\r\nhost: a\r\ncontent-length: x\r\n\r\n");
+            let res = timeout(Millis(1000), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
+            assert!(matches!(res, Ok(Ok(()))));
+
+            let buf = client.read_any();
+            let status: &[u8] = if with_err {
+                b"HTTP/1.1 500 Internal Server Error\r\n"
+            } else {
+                b"HTTP/1.1 418 I'm a teapot\r\n"
+            };
+            assert!(buf.starts_with(status), "{buf:?}");
+            assert_eq!(events(&ev), ["decode"]);
+        }
+    }
+
+    /// A rejected expectation sends the response, skips the service and
+    /// closes the connection.
+    #[crate::rt_test]
+    async fn test_expect_failed() {
+        for with_err in [false, true] {
+            let (client, server) = IoTest::create();
+            client.remote_buffer_cap(4096);
+            let ev = Events::default();
+            let calls = Rc::new(Cell::new(0));
+            let calls2 = calls.clone();
+            let mut h1 = ctl_h1(
+                server,
+                &ev,
+                async move |_| {
+                    calls2.set(calls2.get() + 1);
+                    Ok(Response::Ok().build())
+                },
+                move |msg| match msg {
+                    Control::Expect(mut exp) => {
+                        assert_eq!(exp.get_mut().path(), "/upload");
+                        if with_err {
+                            Ok(exp.fail(io::Error::other("expect")))
+                        } else {
+                            Ok(exp.fail_with(Response::ExpectationFailed().build()))
+                        }
+                    }
+                    msg => Ok(msg.ack()),
+                },
+            );
+
+            client.write(
+                "POST /upload HTTP/1.1\r\nhost: a\r\ncontent-length: 4\r\n\
+                 expect: 100-continue\r\n\r\n",
+            );
+            let res = timeout(Millis(1000), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
+            assert!(matches!(res, Ok(Ok(()))));
+
+            let buf = client.read_any();
+            let status: &[u8] = if with_err {
+                b"HTTP/1.1 500 Internal Server Error\r\n"
+            } else {
+                b"HTTP/1.1 417 Expectation Failed\r\n"
+            };
+            assert!(buf.starts_with(status), "{buf:?}");
+            assert!(!buf.windows(3).any(|w| w == b"100"), "{buf:?}");
+            assert_eq!(calls.get(), 0);
+            assert_eq!(events(&ev), ["request", "expect", "service:ExpectFailed"]);
+        }
+    }
+
+    /// A response body error is reported as a protocol error and the
+    /// connection is closed without completing the response.
+    #[crate::rt_test]
+    async fn test_response_body_error() {
+        use futures_util::stream;
+
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+        let ev = Events::default();
+        let mut h1 = ctl_h1(
+            server,
+            &ev,
+            async |_| {
+                Ok(Response::Ok().streaming(stream::iter([
+                    Ok(Bytes::from_static(b"part")),
+                    Err(io::Error::other("body")),
+                ])))
+            },
+            |msg| Ok(msg.ack()),
+        );
+
+        client.write("GET / HTTP/1.1\r\nhost: a\r\n\r\nGET /next HTTP/1.1\r\nhost: a\r\n\r\n");
+        let res = timeout(Millis(1000), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
+        assert!(matches!(res, Ok(Ok(()))));
+
+        let buf = client.read_any();
+        assert!(buf.starts_with(b"HTTP/1.1 200 OK\r\n"), "{buf:?}");
+        assert!(buf.windows(4).any(|w| w == b"part"), "{buf:?}");
+        // the chunked body is not terminated and no second response follows
+        assert!(!buf.ends_with(b"0\r\n\r\n"), "{buf:?}");
+        assert_eq!(
+            buf.windows(9).filter(|w| w == b"HTTP/1.1 ").count(),
+            1,
+            "{buf:?}"
+        );
+        assert_eq!(events(&ev), ["request", "response-payload"]);
+    }
+
+    /// A transport read error is reported with the error.
+    #[crate::rt_test]
+    async fn test_peer_gone_with_error() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(4096);
+        let ev = Events::default();
+        let taken = Rc::new(Cell::new(false));
+        let taken2 = taken.clone();
+        let mut h1 = ctl_h1(
+            server,
+            &ev,
+            async |_| Ok(Response::Ok().build()),
+            move |msg| match msg {
+                Control::Disconnect(Reason::PeerGone(mut p)) => {
+                    assert_eq!(p.get_mut().unwrap().kind(), io::ErrorKind::ConnectionReset);
+                    taken2.set(p.take().is_some());
+                    assert!(p.get_ref().is_none());
+                    Ok(p.ack())
+                }
+                msg => Ok(msg.ack()),
+            },
+        );
+
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        client.read_error(io::Error::from(io::ErrorKind::ConnectionReset));
+        let res = timeout(Millis(1000), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
+        assert!(matches!(res, Ok(Ok(()))));
+        assert!(taken.get());
+        assert_eq!(events(&ev), ["peer-gone:true"]);
     }
 }

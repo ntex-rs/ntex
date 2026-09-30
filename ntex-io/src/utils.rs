@@ -213,7 +213,7 @@ mod tests {
     use ntex_service::cfg::SharedCfg;
 
     use super::*;
-    use crate::{buf::Stack, filter::NullFilter, testing::IoTest};
+    use crate::{Sealed, buf::Stack, filter::NullFilter, testing::IoTest};
 
     #[ntex::test]
     async fn test_null_filter() {
@@ -248,5 +248,29 @@ mod tests {
             stack.with_filter(&ioref, |ctx| NullFilter.process_read_buf(ctx).unwrap()),
             ()
         );
+    }
+
+    #[ntex::test]
+    async fn request_state_unpack() {
+        use ntex_service::state::{RequestState, State};
+
+        let (_, server) = IoTest::create();
+        let io = Io::from(server);
+        let id = io.id();
+
+        let ((), io) = <Io as RequestState<Io>>::unpack(io);
+        assert_eq!(io.id(), id);
+        let ((), io) = <Io as RequestState<IoBoxed>>::unpack(io);
+        assert_eq!(io.id(), id);
+        let ((), mut io) = <IoBoxed as RequestState<IoBoxed>>::unpack(io);
+        assert_eq!(io.id(), id);
+
+        let st = State {
+            req: Io::<Sealed>::from(io.take()),
+            state: 10u32,
+        };
+        let (state, io) = <_ as RequestState<IoBoxed>>::unpack(st);
+        assert_eq!(state, 10);
+        assert_eq!(io.id(), id);
     }
 }
