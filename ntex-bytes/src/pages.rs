@@ -1571,4 +1571,111 @@ mod tests {
         assert_eq!(page.len(), 0);
         assert_eq!(buf, [49, 50, 51, 0, 0, 0, 0, 0, 0, 0]);
     }
+
+    #[test]
+    fn pages_misc() {
+        let mut pages = BytePages::new(BytePageSize::Size4);
+        pages.set_page_size(BytePageSize::Size8);
+        assert_eq!(pages.page_size(), BytePageSize::Size8);
+        assert!(!pages.prepend(Bytes::new()));
+        assert!(pages.prepend(Bytes::from_static(b"a")));
+
+        io::Write::write_all(&mut pages, b"bc").unwrap();
+        io::Write::flush(&mut pages).unwrap();
+        assert_eq!(pages.freeze(), "abc");
+
+        let s = ByteString::from_static("str");
+        pages.append(&s);
+        assert_eq!(pages.freeze(), "str");
+    }
+
+    #[test]
+    fn pages_try_get_current_from() {
+        let mut src = BytePages::new(BytePageSize::Size4);
+        src.extend_from_slice(b"data");
+
+        // the target already holds data
+        let mut dst = BytePages::new(BytePageSize::Size4);
+        dst.append(Bytes::from_static(b"x"));
+        dst.try_get_current_from(&mut src);
+        assert_eq!(src.len(), 4);
+        assert_eq!(dst.len(), 1);
+
+        let mut dst = BytePages::new(BytePageSize::Size4);
+        dst.try_get_current_from(&mut src);
+        assert_eq!(src.len(), 0);
+        assert_eq!(dst.len(), 4);
+        dst.extend_from_slice(b"!");
+        assert_eq!(dst.freeze(), "data!");
+    }
+
+    #[test]
+    fn pages_drop_cache() {
+        CACHE.with(|c| c.set(Some(Box::default())));
+        let cached = || {
+            CACHE.with(|c| {
+                let cache = c.take().unwrap();
+                let len = cache.len();
+                c.set(Some(cache));
+                len
+            })
+        };
+
+        // the cache is full
+        let pages: Vec<_> = (0..=CACHE_SIZE)
+            .map(|_| BytePages::new(BytePageSize::Size4))
+            .collect();
+        drop(pages);
+        assert_eq!(cached(), CACHE_SIZE);
+
+        // the cache is in use
+        CACHE.with(|c| c.set(Some(Box::default())));
+        let pages = BytePages::new(BytePageSize::Size4);
+        let cache = CACHE.with(Cell::take);
+        drop(pages);
+        CACHE.with(|c| c.set(cache));
+        assert_eq!(cached(), 0);
+    }
+
+    #[test]
+    fn page_conversions() {
+        let page = BytePage::from(BytesMut::copy_from_slice([1; 64]));
+        assert_eq!(page.info(), crate::info::PageKind::Storage);
+        assert_eq!(Bytes::from(page), &[1; 64][..]);
+
+        let page = BytePage::from(vec![2; 64]);
+        assert_eq!(page.info(), crate::info::PageKind::Vec);
+        assert_eq!(Bytes::from(page), &[2; 64][..]);
+
+        let page = BytePage::from(vec![3; 64]);
+        assert_eq!(BytesMut::from(page), &[3; 64][..]);
+
+        let s = ByteString::from_static("string");
+        assert_eq!(BytePage::from(&s), "string");
+    }
+
+    #[test]
+    fn append_storage_page() {
+        // a page with spare capacity becomes the current page
+        let mut pages = BytePages::new(BytePageSize::Size4);
+        let mut buf = BytesMut::with_capacity(64);
+        buf.extend_from_slice(b"a");
+        pages.append(buf);
+        pages.extend_from_slice(b"b");
+        assert_eq!(pages.num_pages(), 1);
+        assert_eq!(pages.freeze(), "ab");
+
+        // full and shared pages are added to the page list
+        let mut buf = BytesMut::with_capacity(64);
+        let cap = buf.capacity();
+        buf.resize(cap, b'x');
+        pages.append(buf);
+        let page = BytePage::from(BytesMut::copy_from_slice([b'y'; 64]));
+        let shared = page.clone();
+        pages.append(page);
+        pages.extend_from_slice(b"z");
+        assert_eq!(pages.num_pages(), 3);
+        assert_eq!(pages.len(), cap + 65);
+        assert_eq!(shared, &[b'y'; 64][..]);
+    }
 }

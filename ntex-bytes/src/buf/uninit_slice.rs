@@ -229,3 +229,25 @@ impl_index!(
     RangeTo<usize>,
     RangeToInclusive<usize>
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn index_and_uninit_access() {
+        let mut data = [0u8; 8];
+        let slice = unsafe { UninitSlice::from_raw_parts_mut(data.as_mut_ptr(), data.len()) };
+
+        assert_eq!(slice[..].len(), 8);
+        assert_eq!(slice[2..].len(), 6);
+        assert_eq!(slice[..3].len(), 3);
+        assert_eq!(slice[..=3].len(), 4);
+        assert_eq!(slice[1..3].len(), 2);
+        assert_eq!(slice[1..=3].len(), 3);
+
+        unsafe { slice.as_uninit_slice_mut()[0].write(b'a') };
+        AsMut::<[MaybeUninit<u8>]>::as_mut(slice)[1].write(b'b');
+        assert_eq!(&data[..2], b"ab");
+    }
+}

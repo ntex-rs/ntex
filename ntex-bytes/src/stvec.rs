@@ -801,4 +801,121 @@ mod tests {
         let st2 = StorageVec::sized(BytePageSize::Size8);
         assert_eq!(st2.0, page);
     }
+
+    fn cached_pages(size: BytePageSize) -> usize {
+        super::CACHE.with(|c| {
+            let cst = c.take().unwrap();
+            let len = cst.cache[size as usize].len();
+            c.set(Some(cst));
+            len
+        })
+    }
+
+    #[test]
+    fn pages_cache_size() {
+        super::CACHE.with(|cache| cache.set(Some(Box::default())));
+
+        crate::set_pages_cache(1);
+        drop((
+            StorageVec::sized(BytePageSize::Size4),
+            StorageVec::sized(BytePageSize::Size4),
+        ));
+        assert_eq!(cached_pages(BytePageSize::Size4), 1);
+
+        crate::set_pages_cache(0);
+        drop(StorageVec::sized(BytePageSize::Size8));
+        assert_eq!(cached_pages(BytePageSize::Size8), 0);
+
+        // the cache is in use, the page is freed
+        crate::set_pages_cache(16);
+        let st = StorageVec::sized(BytePageSize::Size16);
+        let cache = super::CACHE.with(Cell::take);
+        drop(st);
+        super::CACHE.with(|c| c.set(cache));
+        assert_eq!(cached_pages(BytePageSize::Size16), 0);
+
+        // the setting is ignored while the cache is in use
+        let cache = super::CACHE.with(Cell::take);
+        crate::set_pages_cache(3);
+        super::CACHE.with(|c| c.set(cache));
+        assert_eq!(
+            super::CACHE.with(|c| {
+                let cst = c.take().unwrap();
+                let size = cst.size;
+                c.set(Some(cst));
+                size
+            }),
+            16
+        );
+    }
+
+    #[test]
+    fn truncate_reclaims_unique_buffer() {
+        let mut b = BytesMut::with_capacity(128);
+        let cap = b.capacity();
+        b.extend_from_slice(&[1; 64]);
+        b.advance(0);
+        b.advance(32);
+        assert_eq!(b.capacity(), cap - 32);
+        b.truncate(0);
+        assert_eq!(b.capacity(), cap);
+
+        // a shared buffer is not reclaimed
+        b.extend_from_slice(&[1; 64]);
+        b.advance(32);
+        let other = b.split_to(30);
+        b.truncate(0);
+        assert_eq!(b.capacity(), cap - 62);
+        drop(other);
+    }
+
+    #[test]
+    fn resize_shrinks() {
+        let mut b = BytesMut::copy_from_slice(b"hello world");
+        b.resize(5, 0);
+        assert_eq!(&b[..], b"hello");
+        b.resize(7, b'!');
+        assert_eq!(&b[..], b"hello!!");
+    }
+
+    #[test]
+    fn reserve_reclaims_front_space() {
+        let mut b = BytesMut::with_capacity(128);
+        let cap = b.capacity();
+        b.extend_from_slice(&[1; 40]);
+        b.extend_from_slice(&[2; 10]);
+        b.advance(40);
+        let spare = b.capacity() - b.len();
+
+        // the data is moved to the start of the allocation
+        b.reserve(spare + 1);
+        assert_eq!(&b[..], &[2; 10]);
+        assert_eq!(b.capacity(), cap);
+        assert!(b.is_unique());
+    }
+
+    #[test]
+    fn reserve_exact() {
+        let mut b = BytesMut::with_capacity(64);
+        b.extend_from_slice(&[1; 64]);
+        let cap = b.capacity();
+
+        b.reserve_exact(0);
+        assert_eq!(b.capacity(), cap);
+
+        // grows a unique buffer in place, to the exact size
+        b.reserve_exact(1000);
+        assert_eq!(&b[..], &[1; 64]);
+        assert!(b.capacity() >= 1064);
+        assert!(b.capacity() < 1064 + 2 * METADATA_SIZE);
+
+        // a shared buffer is copied
+        let other = b.split_to(32);
+        b.reserve_exact(2000);
+        assert_eq!(&b[..], &[1; 32]);
+        assert!(b.capacity() >= 2032);
+        assert!(b.capacity() < 2032 + 2 * METADATA_SIZE);
+        assert!(b.is_unique());
+        assert_eq!(&other[..], &[1; 32]);
+    }
 }
