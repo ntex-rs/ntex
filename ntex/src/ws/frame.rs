@@ -556,4 +556,39 @@ mod tests {
             Err(ProtocolError::InvalidLength(126))
         ));
     }
+
+    #[test]
+    fn test_parse_edge_cases() {
+        // 64-bit length over the max size
+        let mut buf = BytesMut::from(&[0x82u8, 127, 0, 0, 0, 0, 0, 1, 0, 0][..]);
+        assert!(matches!(
+            Parser::parse(&mut buf, false, 65_535),
+            Err(ProtocolError::Overflow)
+        ));
+
+        // masking key is not received yet
+        let mut buf = BytesMut::from(&[0x82u8, 0x81, 1, 2][..]);
+        assert!(is_none(&Parser::parse(&mut buf, true, 1024)));
+
+        assert!(Parser::parse_close_payload(&[]).unwrap().is_none());
+        let reason = Parser::parse_close_payload(&[0x03, 0xe8, b'o', b'k'])
+            .unwrap()
+            .unwrap();
+        assert_eq!(reason.code, CloseCode::Normal);
+        assert_eq!(reason.description.as_deref(), Some("ok"));
+    }
+
+    #[test]
+    fn test_large_frame_roundtrip() {
+        let payload = Bytes::from(vec![7u8; 70_000]);
+        let mut buf = BytePages::default();
+        Parser::write_message(&mut buf, payload.clone(), OpCode::Binary, true, false).unwrap();
+
+        let mut buf = BytesMut::from(&Bytes::from(buf)[..]);
+        assert_eq!(&buf[..2], &[0x82, 127]);
+        let frame = extract(Parser::parse(&mut buf, false, 100_000));
+        assert!(frame.finished);
+        assert_eq!(frame.opcode, OpCode::Binary);
+        assert_eq!(frame.payload, payload);
+    }
 }

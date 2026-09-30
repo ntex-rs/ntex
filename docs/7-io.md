@@ -74,10 +74,17 @@ peer still has in the receive queue should be discarded first, because closing
 a socket with unread input aborts the connection with an RST and loses the
 output that was just drained.
 
-`Readiness::Close` covers a graceful shutdown and an immediate termination
-alike, and a task does not need to tell them apart. On the graceful path the
-I/O subsystem reports it only once buffered output has been drained, so in
-either case nothing is left to flush.
+`Readiness::Close` covers a graceful shutdown as well as a connection that ends
+because of an I/O failure, a filter failure, or an expired shutdown deadline.
+On the graceful path the I/O subsystem reports it only once buffered output
+has been drained, so nothing is left to flush.
+
+`Readiness::Terminate` is reported only for an explicit force close through
+[`IoRef::terminate`]. Whatever is still buffered is discarded on purpose, and
+the task must not close gracefully: no receive queue drain and no
+`shutdown(SHUT_RDWR)`. It aborts the connection instead, for a socket by
+setting `SO_LINGER` to zero before `close()`, so that the peer sees an RST and
+cannot mistake a truncated stream for a complete one.
 
 Teardown is reported back through two methods. A transport that fails or
 decides to abort calls [`IoContext::stop`] with the error, which terminates the
@@ -109,7 +116,7 @@ async fn read_task(socket: Rc<TcpStream>, ctx: IoContext) {
         // resolves `IoContext::poll_read_ready`
         match wait_for_read_readiness(&ctx).await {
             Readiness::Ready => {}
-            Readiness::Close => break,
+            Readiness::Close | Readiness::Terminate => break,
         }
 
         let mut buf = ctx.take_read_buf();
@@ -124,11 +131,12 @@ async fn read_task(socket: Rc<TcpStream>, ctx: IoContext) {
 }
 
 async fn write_task(socket: Rc<TcpStream>, ctx: IoContext) {
-    loop {
+    let terminate = loop {
         // resolves `IoContext::poll_write_ready`
         match wait_for_write_readiness(&ctx).await {
             Readiness::Ready => {}
-            Readiness::Close => break,
+            Readiness::Close => break false,
+            Readiness::Terminate => break true,
         }
 
         let result = ctx.with_write_dst(|buf| {
@@ -139,12 +147,18 @@ async fn write_task(socket: Rc<TcpStream>, ctx: IoContext) {
         match ctx.update_write_status(result) {
             IoTaskStatus::Io => {}
             IoTaskStatus::Pause => wait_for_queued_output(&ctx).await,
-            IoTaskStatus::Stop => break,
+            IoTaskStatus::Stop => break false,
         }
-    }
+    };
 
-    // close both directions, then report teardown as complete
-    shutdown_socket(&socket).await;
+    if terminate {
+        // force close, abort so that the peer sees an RST
+        abort_socket(&socket);
+    } else {
+        // close both directions
+        shutdown_socket(&socket).await;
+    }
+    // report teardown as complete
     ctx.stopped(None);
 }
 ```
@@ -470,7 +484,8 @@ dependency or a slow response, still needs to notice that the connection
 requires attention. [`Io::poll_status_update`] reports the next status as an
 [`IoStatusUpdate`] value:
 
-- `KeepAlive` when the configured keep-alive timeout has expired.
+- `Timeout` when the dispatcher timer has expired, for example the configured
+  keep-alive timeout.
 - `WriteBackpressure` when outstanding output has reached the write
   high-water mark, so the producer should stop and flush.
 - `PeerGone` once the connection has closed, whether the peer disconnected,

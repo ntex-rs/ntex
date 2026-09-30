@@ -354,20 +354,14 @@ async fn test_http1_no_keepalive_during_response() {
     );
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\n\r\n");
-    let mut data = vec![0; 1024];
-    let _ = stream.read(&mut data);
-    assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
-
-    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\n\r\n");
-    let mut data = vec![0; 1024];
-    let _ = stream.read(&mut data);
-    assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
-
-    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\n\r\n");
-    let mut data = vec![0; 1024];
-    let _ = stream.read(&mut data);
-    assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
+    // the second request runs while the keep-alive timer of the first wait
+    // is left armed
+    for _ in 0..2 {
+        let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        let mut data = vec![0; 1024];
+        let _ = stream.read(&mut data);
+        assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
+    }
 }
 
 /// Keep-alive timeout after sending response
@@ -1112,6 +1106,411 @@ async fn test_h2_request_body_dropped_after_response_resets_stream() {
     );
 }
 
+/// The request payload reports the stream reset error and ends after it,
+/// the next read returns `None`.
+#[ntex::test]
+async fn test_h2_request_payload_ends_after_error() {
+    use ntex::http::{HeaderMap, uri::Scheme};
+    use ntex::util::stream_recv;
+    use ntex_h2::client::SimpleClient;
+
+    let result = Arc::new(Mutex::new(None));
+    let result2 = result.clone();
+    let srv = test_server(async move |_| {
+        let result = result2.clone();
+        HttpService::h2(move |mut req: Request| {
+            let result = result.clone();
+            async move {
+                // the request body outlives the handler
+                let mut pl = req.take_payload();
+                rt::spawn(async move {
+                    let mut items = Vec::new();
+                    loop {
+                        match ntex::time::timeout(Millis(500), stream_recv(&mut pl)).await {
+                            Ok(Some(Ok(chunk))) => items.push(format!("{chunk:?}")),
+                            Ok(Some(Err(e))) => items.push(format!("error: {e:?}")),
+                            Ok(None) => break,
+                            Err(()) => {
+                                items.push("timeout".to_string());
+                                break;
+                            }
+                        }
+                    }
+                    *result.lock().unwrap() = Some(items);
+                });
+                Ok::<_, io::Error>(Response::Ok().body("ok"))
+            }
+        })
+    });
+
+    let io = ntex::connect::connect(srv.addr()).await.unwrap();
+    let client = SimpleClient::new(io, Scheme::HTTP, "localhost".into());
+    let (snd, _rcv) = client
+        .send(Method::POST, "/".into(), HeaderMap::default(), false)
+        .await
+        .unwrap();
+    snd.send_payload(Bytes::from_static(b"chunk"), false)
+        .await
+        .unwrap();
+    sleep(Millis(50)).await;
+    snd.reset(ntex_h2::frame::Reason::CANCEL);
+
+    let mut items = None;
+    for _ in 0..100 {
+        sleep(Millis(20)).await;
+        items = result.lock().unwrap().take();
+        if items.is_some() {
+            break;
+        }
+    }
+    // the stream reset error is reported, not a generic incomplete payload
+    let items = items.expect("request body is not completed");
+    assert_eq!(items.len(), 2, "{items:?}");
+    assert_eq!(items[0], "b\"chunk\"");
+    assert!(
+        items[1].starts_with("error:") && items[1].contains("CANCEL"),
+        "{items:?}"
+    );
+}
+
+/// A malformed request is a stream error, the connection stays open.
+#[ntex::test]
+async fn test_h2_malformed_request_uri() {
+    use ntex::http::{HeaderMap, uri::Scheme};
+    use ntex_h2::{MessageKind, client::SimpleClient};
+
+    let srv = test_server(async |_| {
+        HttpService::h2(async |_: Request| Ok::<_, io::Error>(Response::Ok().body("ok")))
+    });
+
+    let io = ntex::connect::connect(srv.addr()).await.unwrap();
+    let client = SimpleClient::new(io, Scheme::HTTP, "localhost".into());
+    for (method, eof) in [(Method::GET, true), (Method::POST, false)] {
+        let (_snd, rcv) = client
+            .send(method, "/a b".into(), HeaderMap::default(), eof)
+            .await
+            .unwrap();
+        let msg = rcv.recv().await.unwrap();
+        let MessageKind::Headers { pseudo, eof, .. } = msg.kind else {
+            panic!("unexpected message: {msg:?}")
+        };
+        assert_eq!(pseudo.status, Some(StatusCode::BAD_REQUEST));
+        assert!(eof);
+    }
+    assert!(!client.is_closed());
+
+    let (_snd, rcv) = client
+        .send(Method::GET, "/".into(), HeaderMap::default(), true)
+        .await
+        .unwrap();
+    let msg = rcv.recv().await.unwrap();
+    let MessageKind::Headers { pseudo, .. } = msg.kind else {
+        panic!("unexpected message: {msg:?}")
+    };
+    assert_eq!(pseudo.status, Some(StatusCode::OK));
+}
+
+/// A response body error resets only its stream, the connection stays open.
+#[ntex::test]
+async fn test_h2_response_body_error_resets_stream() {
+    use ntex::http::{HeaderMap, uri::Scheme};
+    use ntex_h2::{MessageKind, StreamEof, client::SimpleClient};
+
+    let srv = test_server(async |_| {
+        HttpService::h2(async |req: Request| {
+            if req.path() == "/err" {
+                Ok::<_, io::Error>(Response::Ok().streaming(Box::pin(once(async {
+                    Err::<Bytes, _>(io::Error::other("body error"))
+                }))))
+            } else {
+                // the response is sent after the other stream fails
+                sleep(Millis(200)).await;
+                Ok(Response::Ok().body("ok"))
+            }
+        })
+    });
+
+    let io = ntex::connect::connect(srv.addr()).await.unwrap();
+    let client = SimpleClient::new(io, Scheme::HTTP, "localhost".into());
+    let (_snd1, rcv1) = client
+        .send(Method::GET, "/slow".into(), HeaderMap::default(), true)
+        .await
+        .unwrap();
+    let (_snd2, rcv2) = client
+        .send(Method::GET, "/err".into(), HeaderMap::default(), true)
+        .await
+        .unwrap();
+
+    let msg = rcv2.recv().await.unwrap();
+    let MessageKind::Headers { pseudo, eof, .. } = msg.kind else {
+        panic!("unexpected message: {msg:?}")
+    };
+    assert_eq!(pseudo.status, Some(StatusCode::OK));
+    assert!(!eof);
+    let msg = rcv2.recv().await.unwrap();
+    assert!(
+        matches!(msg.kind, MessageKind::Eof(StreamEof::Error(ref e)) if format!("{e:?}").contains("INTERNAL_ERROR")),
+        "{msg:?}"
+    );
+
+    // the other stream completes
+    let msg = rcv1.recv().await.unwrap();
+    let MessageKind::Headers { pseudo, .. } = msg.kind else {
+        panic!("unexpected message: {msg:?}")
+    };
+    assert_eq!(pseudo.status, Some(StatusCode::OK));
+    let msg = rcv1.recv().await.unwrap();
+    assert!(
+        matches!(msg.kind, MessageKind::Data(ref d, _) if d == "ok"),
+        "{msg:?}"
+    );
+    assert!(!client.is_closed());
+}
+
+/// `304 Not Modified` response has no body and no `content-length: 0`.
+#[ntex::test]
+async fn test_h2_not_modified_has_no_body() {
+    use ntex::http::{HeaderMap, uri::Scheme};
+    use ntex_h2::{MessageKind, client::SimpleClient};
+
+    let srv = test_server(async |_| {
+        HttpService::h2(async |req: Request| {
+            let mut res = Response::builder(StatusCode::NOT_MODIFIED);
+            Ok::<_, io::Error>(match req.path() {
+                "/sized" => res.body("body"),
+                "/stream" => res.streaming(Box::pin(once(async {
+                    Ok::<_, io::Error>(Bytes::from_static(b"body"))
+                }))),
+                _ => res.build(),
+            })
+        })
+    });
+
+    let io = ntex::connect::connect(srv.addr()).await.unwrap();
+    let client = SimpleClient::new(io, Scheme::HTTP, "localhost".into());
+    for path in ["/empty", "/sized", "/stream"] {
+        let (_snd, rcv) = client
+            .send(Method::GET, path.into(), HeaderMap::default(), true)
+            .await
+            .unwrap();
+        let msg = rcv.recv().await.unwrap();
+        let MessageKind::Headers {
+            pseudo,
+            headers,
+            eof,
+        } = msg.kind
+        else {
+            panic!("unexpected message: {msg:?}")
+        };
+        assert_eq!(pseudo.status, Some(StatusCode::NOT_MODIFIED), "{path}");
+        assert!(eof, "{path}: body is sent");
+        assert!(
+            !headers.contains_key(header::CONTENT_LENGTH),
+            "{path}: {headers:?}"
+        );
+    }
+}
+
+/// Raw HTTP/2 connection preface and a `POST /` request without END_STREAM.
+fn h2_raw_post() -> Vec<u8> {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n");
+    // SETTINGS
+    buf.extend_from_slice(&[0, 0, 0, 4, 0, 0, 0, 0, 0]);
+    // HEADERS, END_HEADERS: `:method POST`, `:scheme http`, `:path /`
+    buf.extend_from_slice(&[0, 0, 3, 1, 4, 0, 0, 0, 1, 0x83, 0x86, 0x84]);
+    buf
+}
+
+/// Raw HTTP/2 DATA frame for stream 1.
+fn h2_raw_data(buf: &mut Vec<u8>, data: &[u8], eof: bool) {
+    #[allow(clippy::cast_possible_truncation)]
+    buf.extend_from_slice(&[0, 0, data.len() as u8, 0, u8::from(eof), 0, 0, 0, 1]);
+    buf.extend_from_slice(data);
+}
+
+/// Empty non-final DATA frames are not flow controlled, they are not queued
+/// as request body chunks.
+#[ntex::test]
+async fn test_h2_empty_data_frames_are_not_queued() {
+    use ntex::util::stream_recv;
+
+    let chunks = Arc::new(Mutex::new(None));
+    let chunks2 = chunks.clone();
+    let srv = test_server(async move |_| {
+        let chunks = chunks2.clone();
+        HttpService::h2(move |mut req: Request| {
+            let chunks = chunks.clone();
+            async move {
+                let mut pl = req.take_payload();
+                let mut items = Vec::new();
+                while let Some(chunk) = stream_recv(&mut pl).await {
+                    items.push(chunk.unwrap());
+                }
+                *chunks.lock().unwrap() = Some(items);
+                Ok::<_, io::Error>(Response::Ok().body("ok"))
+            }
+        })
+    });
+
+    // a non-empty DATA frame resets the count of consecutive empty frames
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let mut buf = h2_raw_post();
+    for _ in 0..9 {
+        h2_raw_data(&mut buf, b"", false);
+    }
+    h2_raw_data(&mut buf, b"a", false);
+    for _ in 0..9 {
+        h2_raw_data(&mut buf, b"", false);
+    }
+    h2_raw_data(&mut buf, b"bc", true);
+    stream.write_all(&buf).unwrap();
+
+    let mut items = None;
+    for _ in 0..50 {
+        sleep(Millis(20)).await;
+        items = chunks.lock().unwrap().take();
+        if items.is_some() {
+            break;
+        }
+    }
+    assert_eq!(
+        items.expect("request is not completed"),
+        vec![Bytes::from("a"), Bytes::from("bc")]
+    );
+
+    // the connection stays open
+    let frames = h2_raw_read_frames(&mut stream);
+    assert!(
+        !frames.0.iter().any(|f| f.0 == 7),
+        "GOAWAY is sent: {frames:?}"
+    );
+    assert!(!frames.1, "connection is closed");
+}
+
+/// Request trailers are available after the request payload is complete.
+#[ntex::test]
+async fn test_h2_request_trailers() {
+    use ntex::util::stream_recv;
+
+    let result = Arc::new(Mutex::new(None));
+    let result2 = result.clone();
+    let srv = test_server(async move |_| {
+        let result = result2.clone();
+        HttpService::h2(move |mut req: Request| {
+            let result = result.clone();
+            async move {
+                let mut pl = req.take_payload();
+                let mut body = Vec::new();
+                while let Some(chunk) = stream_recv(&mut pl).await {
+                    body.extend_from_slice(&chunk.unwrap());
+                }
+                *result.lock().unwrap() = Some((body, pl.trailers()));
+                Ok::<_, io::Error>(Response::Ok().body("ok"))
+            }
+        })
+    });
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let mut buf = h2_raw_post();
+    h2_raw_data(&mut buf, b"abc", false);
+    // HEADERS, END_STREAM | END_HEADERS: `x-trailer: 1`
+    buf.extend_from_slice(&[0, 0, 13, 1, 5, 0, 0, 0, 1, 0, 9]);
+    buf.extend_from_slice(b"x-trailer");
+    buf.extend_from_slice(&[1, b'1']);
+    stream.write_all(&buf).unwrap();
+
+    let _ = h2_raw_read_frames(&mut stream);
+    let (body, trailers) = result
+        .lock()
+        .unwrap()
+        .take()
+        .expect("request is not completed");
+    assert_eq!(body, b"abc");
+    let trailers = trailers.expect("trailers are not received");
+    assert_eq!(trailers.len(), 1);
+    assert_eq!(trailers.get("x-trailer").unwrap(), "1");
+}
+
+/// Reads frames until the connection is closed or idle for 500ms,
+/// returns frame types with payloads and `true` if the connection is closed.
+fn h2_raw_read_frames(stream: &mut net::TcpStream) -> (Vec<(u8, Vec<u8>)>, bool) {
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+        .unwrap();
+    let mut data = Vec::new();
+    let mut buf = [0; 1024];
+    let closed = loop {
+        match stream.read(&mut buf) {
+            Ok(0) => break true,
+            Ok(n) => data.extend_from_slice(&buf[..n]),
+            Err(e) if e.kind() == io::ErrorKind::ConnectionReset => break true,
+            Err(_) => break false,
+        }
+    };
+    let mut frames = Vec::new();
+    let mut pos = 0;
+    while pos + 9 <= data.len() {
+        let len = (usize::from(data[pos]) << 16)
+            | (usize::from(data[pos + 1]) << 8)
+            | usize::from(data[pos + 2]);
+        let end = (pos + 9 + len).min(data.len());
+        frames.push((data[pos + 3], data[pos + 9..end].to_vec()));
+        pos += 9 + len;
+    }
+    (frames, closed)
+}
+
+/// The connection is closed with `ENHANCE_YOUR_CALM` after 10 consecutive
+/// empty non-final DATA frames.
+#[ntex::test]
+async fn test_h2_empty_data_frames_limit() {
+    use ntex::util::stream_recv;
+
+    let body = Arc::new(Mutex::new(None));
+    let body2 = body.clone();
+    let srv = test_server(async move |_| {
+        let body = body2.clone();
+        HttpService::h2(move |mut req: Request| {
+            let body = body.clone();
+            async move {
+                let mut pl = req.take_payload();
+                let mut items = Vec::new();
+                while let Some(chunk) = stream_recv(&mut pl).await {
+                    items.push(chunk.map_err(|_| ()));
+                }
+                *body.lock().unwrap() = Some(items);
+                Ok::<_, io::Error>(Response::Ok().body("ok"))
+            }
+        })
+    });
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let mut buf = h2_raw_post();
+    for _ in 0..10 {
+        h2_raw_data(&mut buf, b"", false);
+    }
+    // frames after the limit are not delivered
+    h2_raw_data(&mut buf, b"abc", true);
+    stream.write_all(&buf).unwrap();
+
+    // the server sends GOAWAY and closes the connection
+    let (frames, closed) = h2_raw_read_frames(&mut stream);
+    let goaway = frames
+        .iter()
+        .find(|f| f.0 == 7)
+        .unwrap_or_else(|| panic!("GOAWAY is not sent: {frames:?}"));
+    // error code is ENHANCE_YOUR_CALM
+    assert_eq!(goaway.1[4..8], [0, 0, 0, 0xb], "GOAWAY: {goaway:?}");
+    assert!(closed, "connection is not closed");
+    sleep(Millis(100)).await;
+    assert_ne!(
+        body.lock().unwrap().take(),
+        Some(vec![Ok(Bytes::from("abc"))]),
+        "request body is delivered"
+    );
+}
+
 /// The control service handles `Expect: 100-continue`, the default ack sends `100 Continue`.
 #[ntex::test]
 async fn test_h2_expect_continue() {
@@ -1185,6 +1584,58 @@ async fn test_h2_expect_continue() {
     assert_eq!(pseudo.status, Some(StatusCode::EXPECTATION_FAILED));
     assert!(eof);
     assert!(!client.is_closed());
+}
+
+/// Failure of the control service resets the stream, the connection stays open.
+#[ntex::test]
+async fn test_h2_expect_control_error() {
+    use ntex::http::{HeaderMap, h2, uri::Scheme};
+    use ntex_h2::{MessageKind, client::SimpleClient};
+
+    let srv = test_server(async |_| {
+        HttpService::h2(async |_: Request| Ok::<_, io::Error>(Response::Ok().build())).control(
+            async |msg: h2::Control<_>| match msg {
+                h2::Control::Expect(expect)
+                    if expect.pseudo().path.as_deref() == Some("/error") =>
+                {
+                    Err(io::Error::other("control error"))
+                }
+                msg => Ok(msg.ack()),
+            },
+        )
+    });
+
+    let io = ntex::connect::connect(srv.addr()).await.unwrap();
+    let client = SimpleClient::new(io, Scheme::HTTP, "localhost".into());
+    let mut hdrs = HeaderMap::default();
+    hdrs.insert(header::EXPECT, HeaderValue::from_static("100-Continue"));
+
+    let (_snd, rcv) = client
+        .send(Method::POST, "/error".into(), hdrs, false)
+        .await
+        .unwrap();
+    let msg = rcv.recv().await.unwrap();
+    let MessageKind::Eof(ntex_h2::StreamEof::Error(err)) = msg.kind else {
+        panic!("unexpected message: {msg:?}")
+    };
+    assert!(
+        matches!(
+            &*err,
+            ntex_h2::StreamError::Reset(ntex_h2::frame::Reason::INTERNAL_ERROR)
+        ),
+        "{err:?}"
+    );
+
+    // the connection is still usable
+    let (_snd, rcv) = client
+        .send(Method::GET, "/".into(), HeaderMap::default(), true)
+        .await
+        .unwrap();
+    let msg = rcv.recv().await.unwrap();
+    let MessageKind::Headers { pseudo, .. } = msg.kind else {
+        panic!("unexpected message: {msg:?}")
+    };
+    assert_eq!(pseudo.status, Some(StatusCode::OK));
 }
 
 /// Informational response of the application cannot complete the request.
@@ -1262,4 +1713,108 @@ async fn test_h1_unsupported_transfer_coding() {
     );
     let n = stream.read(&mut data).unwrap();
     assert!(data[..n].starts_with(b"HTTP/1.1 400"), "{:?}", &data[..n]);
+}
+
+/// Chunked request trailers are available after the request payload is complete.
+#[ntex::test]
+async fn test_h1_request_trailers() {
+    use ntex::util::stream_recv;
+
+    let srv = test_server(async |_| {
+        HttpService::h1(async |mut req: Request| {
+            let mut pl = req.take_payload();
+            let mut body = Vec::new();
+            while let Some(chunk) = stream_recv(&mut pl).await {
+                body.extend_from_slice(&chunk.unwrap());
+            }
+            let trailers = pl.trailers().map(|t| {
+                t.iter()
+                    .map(|(n, v)| format!("{n}={}", v.to_str().unwrap()))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            });
+            Ok::<_, io::Error>(Response::Ok().body(format!(
+                "{}|{}",
+                String::from_utf8(body).unwrap(),
+                trailers.unwrap_or_default()
+            )))
+        })
+    });
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    stream
+        .write_all(
+            b"POST / HTTP/1.1\r\nhost: a\r\ntransfer-encoding: chunked\r\n\r\n\
+              3\r\nabc\r\n0\r\nx-trailer: 1\r\n\r\n\
+              POST / HTTP/1.1\r\nhost: a\r\ntransfer-encoding: chunked\r\n\r\n\
+              2\r\nde\r\n0\r\n\r\n",
+        )
+        .unwrap();
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+        .unwrap();
+    let mut data = Vec::new();
+    let mut buf = [0; 1024];
+    while let Ok(n) = stream.read(&mut buf) {
+        if n == 0 {
+            break;
+        }
+        data.extend_from_slice(&buf[..n]);
+    }
+    let data = String::from_utf8(data).unwrap();
+    assert!(data.contains("\r\n\r\nabc|x-trailer=1"), "{data:?}");
+    assert!(data.ends_with("\r\n\r\nde|"), "{data:?}");
+}
+
+/// A failed transport write stops polling an always ready response body.
+#[ntex::test]
+async fn test_h1_body_not_polled_after_peer_reset() {
+    use std::task::{Context, Poll};
+
+    static DATA: [u8; 16 * 1024] = [b'a'; 16 * 1024];
+    const MAX_POLLS: usize = 5_000_000;
+
+    struct Stream(Arc<AtomicUsize>);
+    impl body::MessageBody for Stream {
+        fn size(&self) -> body::BodySize {
+            body::BodySize::Stream
+        }
+        fn poll_next_chunk(
+            &mut self,
+            _: &mut Context<'_>,
+        ) -> Poll<Option<Result<Bytes, std::rc::Rc<dyn std::error::Error>>>> {
+            if self.0.fetch_add(1, Ordering::Relaxed) >= MAX_POLLS {
+                Poll::Ready(None)
+            } else {
+                Poll::Ready(Some(Ok(Bytes::from_static(&DATA))))
+            }
+        }
+    }
+
+    let polls = Arc::new(AtomicUsize::new(0));
+    let polls2 = polls.clone();
+    let srv = test_server(async move |_| {
+        let polls = polls2.clone();
+        HttpService::h1(move |_: Request| {
+            let body = body::Body::from_message(Stream(polls.clone()));
+            async move { Ok::<_, io::Error>(Response::Ok().body(body)) }
+        })
+    });
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let _ = stream.write_all(b"GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
+    let mut data = vec![0; 64 * 1024];
+    let mut total = 0;
+    while total < 16 * 1024 * 1024 {
+        total += stream.read(&mut data).unwrap();
+    }
+    // closing with unread data resets the connection
+    drop(stream);
+
+    sleep(Millis(300)).await;
+    let polls1 = polls.load(Ordering::Relaxed);
+    sleep(Millis(300)).await;
+    let polls2 = polls.load(Ordering::Relaxed);
+    assert_eq!(polls1, polls2);
+    assert!(polls2 < MAX_POLLS, "{polls2}");
 }

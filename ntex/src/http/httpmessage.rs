@@ -222,4 +222,25 @@ mod tests {
             .build();
         assert!(req.chunked().is_err());
     }
+
+    #[test]
+    fn test_mime_type_not_utf8() {
+        let req = TestRequest::default()
+            .header(
+                header::CONTENT_TYPE,
+                header::HeaderValue::from_bytes(b"text/\xff").unwrap(),
+            )
+            .build();
+        assert_eq!(req.mime_type(), Err(ContentTypeError::ParseError));
+    }
+
+    #[cfg(feature = "cookie")]
+    #[test]
+    fn test_cookie_not_found() {
+        let req = TestRequest::default()
+            .header(header::COOKIE, "c1=v1; ")
+            .build();
+        assert_eq!(req.cookies().unwrap().len(), 1);
+        assert!(req.cookie("c2").is_none());
+    }
 }

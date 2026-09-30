@@ -53,6 +53,9 @@ pub struct Failure {
     inner: FailureDiagnostic,
 }
 
+/// Type-erased diagnostic view of a [`Failure`].
+///
+/// Returned by [`AsError::as_diag()`](crate::AsError::as_diag) for a [`Failure`].
 pub struct FailureDiagnostic(Arc<dyn ErrorInfo>);
 
 impl Failure {
@@ -107,20 +110,13 @@ where
     }
 }
 
-impl IntoFailure for Failure {
-    fn fail(self) -> Failure {
-        self
-    }
-}
-
 impl<E> IntoFailure for E
 where
     E: ErrorDiagnostic + Into<Error<E>>,
 {
+    #[track_caller]
     fn fail(self) -> Failure {
-        Failure {
-            inner: FailureDiagnostic(self.into().inner),
-        }
+        self.into_failure()
     }
 }
 
@@ -155,6 +151,28 @@ impl AsError for Failure {
 
     fn as_diag(&self) -> &FailureDiagnostic {
         &self.inner
+    }
+}
+
+impl ErrorDiagnostic for Failure {
+    fn signature(&self) -> &'static str {
+        self.inner.0.signature()
+    }
+
+    fn tag(&self) -> Option<&Bytes> {
+        self.inner.0.tag()
+    }
+
+    fn service(&self) -> Option<&'static str> {
+        self.inner.0.service()
+    }
+
+    fn backtrace(&self) -> Option<&Backtrace> {
+        self.inner.0.backtrace()
+    }
+
+    fn into_failure(self) -> Failure {
+        self
     }
 }
 

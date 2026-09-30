@@ -2,6 +2,13 @@
 
 ## [4.2.0] - Unreleased
 
+* Timers of a system started after another system stopped on the same thread
+  never fired, the timer drivers of the stopped runtime were not dropped and
+  the next runtime did not start its own
+
+* `clone_io_error()` uses the error's display output as the message, instead of
+  its debug output, so a cloned error displays the same as the original
+
 * Dropping the last `bstream::Sender` wakes a pending read, before the receiver
   could wait forever
 

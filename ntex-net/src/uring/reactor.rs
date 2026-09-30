@@ -240,24 +240,24 @@ impl Reactor {
                 let num = cmp::min(changes.len(), sq.capacity() - sq.len());
                 let (s1, s2) = changes.as_slices();
                 let s1_num = cmp::min(s1.len(), num);
+                let s2_num = cmp::min(s2.len(), num - s1_num);
+                // safety: "changes" contains only initialized entries
                 if s1_num > 0 {
-                    // safety: "changes" contains only initialized entries
                     sq.push_multiple(
                         ((&raw const s1[0..s1_num]) as *const [SEntry])
                             .as_ref()
                             .unwrap(),
                     )
                     .unwrap();
-                } else if !s2.is_empty() {
-                    let s2_num = cmp::min(s2.len(), num - s1_num);
-                    if s2_num > 0 {
-                        sq.push_multiple(
-                            ((&raw const s2[0..s2_num]) as *const [SEntry])
-                                .as_ref()
-                                .unwrap(),
-                        )
-                        .unwrap();
-                    }
+                }
+                // the deque wraps around, the rest of the entries is in `s2`
+                if s2_num > 0 {
+                    sq.push_multiple(
+                        ((&raw const s2[0..s2_num]) as *const [SEntry])
+                            .as_ref()
+                            .unwrap(),
+                    )
+                    .unwrap();
                 }
                 changes.drain(0..num);
 
@@ -564,5 +564,50 @@ impl fmt::Debug for ReactorApi {
         f.debug_struct("ReactorApi")
             .field("batch", &self.batch)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ntex_io_uring::opcode::Nop;
+
+    use super::*;
+
+    #[test]
+    fn apply_wrapped_changes() {
+        let Ok(reactor) = Reactor::new(4) else {
+            return;
+        };
+        let ring = &reactor.inner.ring;
+        let sq = ring.submission();
+        // submit the notifier
+        ring.submitter().submit().unwrap();
+        sq.sync();
+        assert_eq!(sq.len(), 0);
+
+        // queued entries wrap around the end of the deque storage
+        let changes = unsafe { &mut *reactor.inner.changes.get() };
+        let cap = changes.capacity();
+        for _ in 0..cap - 2 {
+            changes.push_back(mem::MaybeUninit::new(Nop::new().build()));
+        }
+        for _ in 0..cap - 2 {
+            changes.pop_front();
+        }
+        for i in 0..4 {
+            changes.push_back(mem::MaybeUninit::new(Nop::new().build().user_data(i)));
+        }
+        assert_eq!(changes.as_slices().0.len(), 2);
+
+        assert!(!reactor.apply_changes(sq));
+        sq.sync();
+        assert!(changes.is_empty());
+        assert_eq!(sq.len(), 4);
+
+        ring.submitter().submit_and_wait(4).unwrap();
+        let mut cq = unsafe { ring.completion_shared() };
+        cq.sync();
+        let ids: Vec<_> = cq.map(|e| e.user_data()).collect();
+        assert_eq!(ids, [0, 1, 2, 3]);
     }
 }

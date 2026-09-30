@@ -341,3 +341,59 @@ impl Notify for NotifyHandle {
         self.poll.notify()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use super::*;
+
+    struct Recorder(Rc<RefCell<Vec<(usize, io::ErrorKind)>>>);
+
+    impl Handler for Recorder {
+        fn event(&mut self, _: usize, _: Event) {}
+
+        fn error(&mut self, id: usize, err: io::Error) {
+            self.0.borrow_mut().push((id, err.kind()));
+        }
+
+        fn tick(&mut self) {}
+
+        fn cleanup(&mut self) {}
+    }
+
+    #[test]
+    fn reactor_info() {
+        let reactor = Reactor::with_capacity(0).unwrap();
+        assert_eq!(reactor.tp(), DriverType::Poll);
+        assert!(reactor.as_raw_fd() >= 0);
+        let s = format!("{reactor:?}");
+        assert!(s.contains("Reactor") && s.contains("capacity"), "{s}");
+    }
+
+    /// Failed poller operations are reported to the handler that submitted them.
+    #[test]
+    fn api_errors_are_reported() {
+        let reactor = Reactor::new().unwrap();
+        let errors = Rc::new(RefCell::new(Vec::new()));
+        let mut api = None;
+        reactor.register(|a| {
+            api = Some(a);
+            Box::new(Recorder(errors.clone()))
+        });
+        let api = api.unwrap();
+
+        // the socket is not attached
+        let (sock, _peer) = OsUnixStream::pair().unwrap();
+        api.modify(sock.as_raw_fd(), 1, Event::readable(0));
+        api.detach(sock.as_raw_fd(), 2);
+        assert!(errors.borrow().is_empty());
+
+        let mut handlers = reactor.handlers.take().unwrap();
+        reactor.apply_changes(&mut handlers);
+        reactor.handlers.set(Some(handlers));
+
+        let ids: Vec<_> = errors.borrow().iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids, vec![1, 2]);
+    }
+}

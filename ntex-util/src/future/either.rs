@@ -339,4 +339,12 @@ mod test {
         )
         .await;
     }
+
+    #[test]
+    fn either_left_right() {
+        assert_eq!(Either::<u8, u8>::Left(1).left(), Some(1));
+        assert_eq!(Either::<u8, u8>::Left(1).right(), None);
+        assert_eq!(Either::<u8, u8>::Right(2).left(), None);
+        assert_eq!(Either::<u8, u8>::Right(2).right(), Some(2));
+    }
 }

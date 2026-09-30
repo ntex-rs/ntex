@@ -543,7 +543,19 @@ impl MessageType for Request {
             Status::Complete(pos) => {
                 let method = Method::from_bytes(&src[req.method.start..req.method.end])
                     .map_err(|_| DecodeError::Method)?;
-                let uri = Uri::try_from(&src[req.path.start..req.path.end])?;
+                let target = &src[req.path.start..req.path.end];
+                // asterisk-form is only used for a server-wide `OPTIONS` request,
+                // see RFC 9112 section 3.2.4
+                if target == b"*" && method != Method::OPTIONS {
+                    return Err(DecodeError::Uri);
+                }
+                let uri = Uri::try_from(target)?;
+                // authority-form is used only, and always, for `CONNECT`, see
+                // RFC 9112 section 3.2.3
+                let authority_form = uri.scheme().is_none() && uri.authority().is_some();
+                if authority_form != (method == Method::CONNECT) {
+                    return Err(DecodeError::Uri);
+                }
                 let version = if req.version == 1 {
                     Version::HTTP_11
                 } else {
@@ -773,6 +785,8 @@ fn connection_flags(val: &[u8]) -> Flags {
 pub enum PayloadItem {
     /// A payload data chunk.
     Chunk(Bytes),
+    /// Trailer fields of a chunked payload, [`PayloadItem::Eof`] follows.
+    Trailers(HeaderMap),
     /// The end of the payload.
     Eof,
 }
@@ -793,8 +807,9 @@ pub enum PayloadItem {
 /// chunk-size or chunk terminator. Cloning preserves the current payload
 /// framing state.
 ///
-/// Chunk extensions and trailer fields are validated and skipped, they are
-/// not exposed. A chunked payload is rejected with
+/// Chunk extensions are validated and skipped. Trailer fields are buffered
+/// until the trailer section is complete and emitted as
+/// [`PayloadItem::Trailers`]. A chunked payload is rejected with
 /// [`DecodeError::InvalidInput`] if its chunk extensions exceed 16 KiB in
 /// total, or if its trailer section, including line terminators, exceeds
 /// 4 KiB.
@@ -879,7 +894,7 @@ const MAX_MERGED_CHUNKS: usize = 16 * 1024;
 struct ChunkedLimits {
     /// chunk-size line bytes beyond the size digits received so far
     ext: u32,
-    /// trailer section bytes received so far
+    /// trailer section bytes of complete field lines, they are validated
     trailers: u32,
     /// bytes of a partially received chunk-size line that are validated
     line: u32,
@@ -912,17 +927,6 @@ impl SizeLine {
     }
 }
 
-impl ChunkedLimits {
-    fn add_trailers(&mut self, len: usize) -> Result<(), DecodeError> {
-        self.trailers = self.trailers.saturating_add(len as u32);
-        if self.trailers > MAX_CHUNK_TRAILERS {
-            Err(DecodeError::InvalidInput("Chunked trailers are too large"))
-        } else {
-            Ok(())
-        }
-    }
-}
-
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 enum ChunkedState {
     Size,
@@ -931,8 +935,7 @@ enum ChunkedState {
     BodyLf,
     EndCr,
     EndLf,
-    Trailer,
-    TrailerLf,
+    Trailers,
     End,
 }
 
@@ -970,16 +973,21 @@ impl Decoder for PayloadDecoder {
                 // chunks would be buffered as many items
                 let mut data: Option<Bytes> = None;
                 let mut merged: Option<BytesMut> = None;
+                let mut trailers: Option<HeaderMap> = None;
                 let result = loop {
                     // a large chunk is not copied into merged chunks
                     if *state == ChunkedState::Body && *size >= SMALL_CHUNK as u64 && data.is_some()
                     {
                         break Ok(None);
                     }
+                    // data is returned before trailers
+                    if *state == ChunkedState::Trailers && data.is_some() {
+                        break Ok(None);
+                    }
 
                     let mut buf = None;
                     // advances the chunked state
-                    *state = match state.step(src, size, limits, &mut buf) {
+                    *state = match state.step(src, size, limits, &mut buf, &mut trailers) {
                         Poll::Pending => break Ok(None),
                         Poll::Ready(Ok(state)) => state,
                         Poll::Ready(Err(e)) => break Err(e),
@@ -987,7 +995,11 @@ impl Decoder for PayloadDecoder {
 
                     if *state == ChunkedState::End {
                         log::trace!("End of chunked stream");
-                        break Ok(Some(PayloadItem::Eof));
+                        break Ok(Some(
+                            trailers
+                                .take()
+                                .map_or(PayloadItem::Eof, PayloadItem::Trailers),
+                        ));
                     }
 
                     if let Some(buf) = buf {
@@ -1054,16 +1066,16 @@ impl ChunkedState {
         size: &mut u64,
         limits: &mut ChunkedLimits,
         buf: &mut Option<Bytes>,
+        trailers: &mut Option<HeaderMap>,
     ) -> Poll<Result<ChunkedState, DecodeError>> {
         match self {
             ChunkedState::Size => ChunkedState::read_size(body, size, limits),
             ChunkedState::Body => ChunkedState::read_body(body, size, buf),
             ChunkedState::BodyCr => ChunkedState::read_body_cr(body),
             ChunkedState::BodyLf => ChunkedState::read_body_lf(body),
-            ChunkedState::EndCr => ChunkedState::read_end_cr(body, limits),
+            ChunkedState::EndCr => ChunkedState::read_end_cr(body),
             ChunkedState::EndLf => ChunkedState::read_end_lf(body),
-            ChunkedState::Trailer => ChunkedState::read_trailer(body, limits),
-            ChunkedState::TrailerLf => ChunkedState::read_trailer_lf(body, limits),
+            ChunkedState::Trailers => ChunkedState::read_trailers(body, limits, trailers),
             ChunkedState::End => Poll::Ready(Ok(ChunkedState::End)),
         }
     }
@@ -1183,61 +1195,89 @@ impl ChunkedState {
         }
     }
 
-    fn read_end_cr(
-        rdr: &mut BytesMut,
-        limits: &mut ChunkedLimits,
-    ) -> Poll<Result<ChunkedState, DecodeError>> {
-        match byte!(rdr) {
-            b'\r' => Poll::Ready(Ok(ChunkedState::EndLf)),
+    fn read_end_cr(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, DecodeError>> {
+        match rdr.first() {
+            None => Poll::Pending,
+            Some(b'\r') => {
+                rdr.advance_to(1);
+                Poll::Ready(Ok(ChunkedState::EndLf))
+            }
             // trailer field, must start with a field name character
-            b if is_tchar(b) => Poll::Ready(limits.add_trailers(1).map(|()| ChunkedState::Trailer)),
-            _ => Poll::Ready(Err(DecodeError::InvalidInput("Invalid chunk end CR"))),
+            Some(&b) if is_tchar(b) => Poll::Ready(Ok(ChunkedState::Trailers)),
+            Some(_) => Poll::Ready(Err(DecodeError::InvalidInput("Invalid chunk end CR"))),
         }
     }
 
-    /// Skips a trailer field line, trailer fields are not exposed.
+    /// Reads the trailer section, it is buffered until the section is complete.
     ///
-    /// The trailer section counts against [`MAX_CHUNK_TRAILERS`].
-    fn read_trailer(
+    /// Field lines, including line terminators, count against
+    /// [`MAX_CHUNK_TRAILERS`]. Complete field lines are validated once.
+    fn read_trailers(
         rdr: &mut BytesMut,
         limits: &mut ChunkedLimits,
+        trailers: &mut Option<HeaderMap>,
     ) -> Poll<Result<ChunkedState, DecodeError>> {
-        for (idx, b) in rdr.iter().enumerate() {
-            match *b {
-                b'\r' => {
-                    rdr.advance_to(idx + 1);
-                    return Poll::Ready(
-                        limits
-                            .add_trailers(idx + 1)
-                            .map(|()| ChunkedState::TrailerLf),
-                    );
+        const TOO_LARGE: DecodeError = DecodeError::InvalidInput("Chunked trailers are too large");
+        const INVALID: DecodeError = DecodeError::InvalidInput("Invalid chunked trailer field");
+
+        let mut pos = limits.trailers as usize;
+        while pos < rdr.len() {
+            if rdr[pos] == b'\r' {
+                // the end of the trailer section
+                return match rdr.get(pos + 1) {
+                    None => break,
+                    Some(b'\n') => {
+                        let section = rdr.split_to(pos + 2);
+                        let mut hdrs = HeaderMap::new();
+                        for line in section[..pos].split(|&b| b == b'\n') {
+                            let Some(line) = line.strip_suffix(b"\r") else {
+                                continue;
+                            };
+                            let (name, value) = trailer_field(line).ok_or(INVALID)?;
+                            hdrs.append(
+                                HeaderName::from_bytes(name).map_err(|_| INVALID)?,
+                                HeaderValue::from_bytes(value).map_err(|_| INVALID)?,
+                            );
+                        }
+                        *trailers = Some(hdrs);
+                        Poll::Ready(Ok(ChunkedState::End))
+                    }
+                    Some(_) => Poll::Ready(Err(DecodeError::InvalidInput("Invalid chunk end LF"))),
+                };
+            }
+            if !is_tchar(rdr[pos]) {
+                return Poll::Ready(Err(INVALID));
+            }
+
+            // a field line
+            let Some(end) = rdr[pos..].iter().position(|&b| b == b'\r') else {
+                break;
+            };
+            if trailer_field(&rdr[pos..pos + end]).is_none() {
+                return Poll::Ready(Err(INVALID));
+            }
+            match rdr.get(pos + end + 1) {
+                None => break,
+                Some(b'\n') => {
+                    pos += end + 2;
+                    if pos > MAX_CHUNK_TRAILERS as usize {
+                        return Poll::Ready(Err(TOO_LARGE));
+                    }
                 }
-                b'\t' | b' '..=b'~' | 0x80..=0xff => (),
-                _ => {
+                Some(_) => {
                     return Poll::Ready(Err(DecodeError::InvalidInput(
-                        "Invalid chunked trailer field",
+                        "Invalid chunked trailer field LF",
                     )));
                 }
             }
         }
-        let len = rdr.len();
-        rdr.clear();
-        if let Err(err) = limits.add_trailers(len) {
-            Poll::Ready(Err(err))
+        limits.trailers = pos as u32;
+
+        // an incomplete field line
+        if rdr.len() > MAX_CHUNK_TRAILERS as usize && rdr.get(pos) != Some(&b'\r') {
+            Poll::Ready(Err(TOO_LARGE))
         } else {
             Poll::Pending
-        }
-    }
-
-    fn read_trailer_lf(
-        rdr: &mut BytesMut,
-        limits: &mut ChunkedLimits,
-    ) -> Poll<Result<ChunkedState, DecodeError>> {
-        match byte!(rdr) {
-            b'\n' => Poll::Ready(limits.add_trailers(1).map(|()| ChunkedState::EndCr)),
-            _ => Poll::Ready(Err(DecodeError::InvalidInput(
-                "Invalid chunked trailer field LF",
-            ))),
         }
     }
 
@@ -1259,6 +1299,18 @@ fn empty_lines(buf: &[u8]) -> usize {
             _ => return pos,
         }
     }
+}
+
+/// Splits a trailer field line into its name and value.
+fn trailer_field(line: &[u8]) -> Option<(&[u8], &[u8])> {
+    let colon = line.iter().position(|&b| b == b':')?;
+    let (name, value) = (&line[..colon], &line[colon + 1..]);
+    let valid = !name.is_empty()
+        && name.iter().all(|&b| is_tchar(b))
+        && value
+            .iter()
+            .all(|&b| b == b'\t' || (b' '..=b'~').contains(&b) || b >= 0x80);
+    valid.then(|| (name, value.trim_ascii()))
 }
 
 /// Checks for a `tchar`, see [RFC 9110 section 5.6.2](https://www.rfc-editor.org/rfc/rfc9110#section-5.6.2).
@@ -1290,7 +1342,7 @@ mod tests {
         fn chunk(self) -> Bytes {
             match self {
                 PayloadItem::Chunk(chunk) => chunk,
-                PayloadItem::Eof => panic!("error"),
+                PayloadItem::Trailers(_) | PayloadItem::Eof => panic!("error"),
             }
         }
         fn eof(&self) -> bool {
@@ -1315,6 +1367,53 @@ mod tests {
                 _ => unreachable!("Error expected"),
             }
         }};
+    }
+
+    #[test]
+    /// Asterisk-form is only valid for `OPTIONS`, RFC 9112 section 3.2.4.
+    fn test_asterisk_form_only_for_options() {
+        let mut buf = BytesMut::from("OPTIONS * HTTP/1.1\r\nhost: a\r\n\r\n");
+        let req = parse_ready!(&mut buf);
+        assert_eq!(req.path(), "*");
+
+        for method in ["GET", "POST", "HEAD", "CONNECT"] {
+            let mut buf =
+                BytesMut::from(format!("{method} * HTTP/1.1\r\nhost: a\r\n\r\n").as_str());
+            match MessageDecoder::<Request>::default().decode(&mut buf) {
+                Err(DecodeError::Uri) => (),
+                res => panic!("{method}: {res:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_authority_form_only_for_connect() {
+        let mut buf = BytesMut::from("CONNECT example.com:443 HTTP/1.1\r\nhost: a\r\n\r\n");
+        let req = parse_ready!(&mut buf);
+        assert_eq!(req.uri().authority().unwrap(), "example.com:443");
+
+        let mut buf = BytesMut::from("GET http://example.com/ HTTP/1.1\r\nhost: a\r\n\r\n");
+        let req = parse_ready!(&mut buf);
+        assert_eq!(req.path(), "/");
+
+        for method in ["GET", "POST", "HEAD", "OPTIONS"] {
+            let mut buf = BytesMut::from(
+                format!("{method} example.com:443 HTTP/1.1\r\nhost: a\r\n\r\n").as_str(),
+            );
+            match MessageDecoder::<Request>::default().decode(&mut buf) {
+                Err(DecodeError::Uri) => (),
+                res => panic!("{method}: {res:?}"),
+            }
+        }
+
+        for target in ["/", "/test", "http://example.com:443/"] {
+            let mut buf =
+                BytesMut::from(format!("CONNECT {target} HTTP/1.1\r\nhost: a\r\n\r\n").as_str());
+            match MessageDecoder::<Request>::default().decode(&mut buf) {
+                Err(DecodeError::Uri) => (),
+                res => panic!("{target}: {res:?}"),
+            }
+        }
     }
 
     #[test]
@@ -2146,7 +2245,7 @@ mod tests {
     #[test]
     fn test_conn_upgrade_connect_method() {
         let mut buf = BytesMut::from(
-            "CONNECT /test HTTP/1.1\r\nhost: localhost\r\n\
+            "CONNECT localhost:443 HTTP/1.1\r\nhost: localhost\r\n\
              content-type: text/plain\r\n\r\n",
         );
         let req = parse_ready!(&mut buf);
@@ -2425,7 +2524,7 @@ mod tests {
                 buf.extend_from_slice(part);
                 match pl.decode(&mut buf) {
                     Ok(None) => (),
-                    Ok(Some(item)) => return Ok(item.eof()),
+                    Ok(Some(item)) => return Ok(matches!(item, PayloadItem::Trailers(_))),
                     Err(err) => return Err(err),
                 }
             }
@@ -2479,6 +2578,12 @@ mod tests {
             pl.decode(&mut buf).unwrap().unwrap().chunk().as_ref(),
             b"data"
         );
+        let Some(PayloadItem::Trailers(trailers)) = pl.decode(&mut buf).unwrap() else {
+            panic!("trailers are expected")
+        };
+        assert_eq!(trailers.len(), 2);
+        assert_eq!(trailers.get("test").unwrap(), "test");
+        assert_eq!(trailers.get("x-checksum").unwrap(), "abc 123");
         assert!(pl.decode(&mut buf).unwrap().unwrap().eof());
         let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
         assert_eq!(req.path(), "/next");
@@ -2491,12 +2596,28 @@ mod tests {
         );
         let (_, pl) = reader.decode(&mut buf).unwrap().unwrap();
         let pl = pl.unwrap();
-        for part in ["0\r\n", "te", "st: te", "st\r", "\n", "\r"] {
+        for part in [
+            "0\r\n",
+            "te",
+            "st: te",
+            "st\r",
+            "\n",
+            "a: 1\r\na: ",
+            "2\r\n",
+            "\r",
+        ] {
             buf.extend(part.as_bytes());
             assert!(pl.decode(&mut buf).unwrap().is_none(), "{part:?}");
         }
         buf.extend(b"\n");
+        let Some(PayloadItem::Trailers(trailers)) = pl.decode(&mut buf).unwrap() else {
+            panic!("trailers are expected")
+        };
+        assert_eq!(trailers.get("test").unwrap(), "test");
+        let values: Vec<_> = trailers.get_all("a").collect();
+        assert_eq!(values, ["1", "2"]);
         assert!(pl.decode(&mut buf).unwrap().unwrap().eof());
+        assert!(buf.is_empty());
 
         // invalid trailers
         for trailer in [
@@ -2504,6 +2625,11 @@ mod tests {
             "test\x00\r\n\r\n",
             " test: v\r\n\r\n",
             "test: v\rx",
+            "test\r\n\r\n",
+            ": v\r\n\r\n",
+            "te st: v\r\n\r\n",
+            "test: v\r\n\rx",
+            "test: v\r\n t\r\n\r\n",
         ] {
             let mut buf = BytesMut::from(
                 "POST /test HTTP/1.1\r\nhost: localhost\r\n\
@@ -2513,6 +2639,22 @@ mod tests {
             let (_, pl) = reader.decode(&mut buf).unwrap().unwrap();
             assert!(pl.unwrap().decode(&mut buf).is_err(), "{trailer:?}");
         }
+    }
+
+    #[test]
+    fn test_chunked_trailers_after_data() {
+        let (pl, mut buf) = chunked_payload();
+        buf.extend_from_slice(b"2\r\nab\r\n0\r\nx: 1\r\n\r\nnext");
+        assert_eq!(
+            pl.decode(&mut buf).unwrap(),
+            Some(PayloadItem::Chunk("ab".into()))
+        );
+        let Some(PayloadItem::Trailers(trailers)) = pl.decode(&mut buf).unwrap() else {
+            panic!("trailers are expected")
+        };
+        assert_eq!(trailers.get("x").unwrap(), "1");
+        assert_eq!(pl.decode(&mut buf).unwrap(), Some(PayloadItem::Eof));
+        assert_eq!(&buf[..], b"next");
     }
 
     #[test]
@@ -2539,6 +2681,7 @@ mod tests {
         while let Some(item) = pl.decode(buf).unwrap() {
             match item {
                 PayloadItem::Chunk(chunk) => items.push(chunk),
+                PayloadItem::Trailers(_) => (),
                 PayloadItem::Eof => break,
             }
         }
@@ -2695,6 +2838,49 @@ mod tests {
             "0123456789abcdef"
         );
         assert!(pl.decode(&mut buf).unwrap().unwrap().eof());
+    }
+
+    #[test]
+    fn test_chunk_framing_errors() {
+        // a partial size line larger than the limit, received at once
+        let (pl, mut buf) = chunked_payload();
+        buf.extend(b"1;");
+        buf.extend("a".repeat(MAX_CHUNK_EXTENSIONS as usize + 64).as_bytes());
+        assert!(matches!(
+            pl.decode(&mut buf),
+            Err(DecodeError::InvalidInput("Chunk extensions are too large"))
+        ));
+
+        for (data, msg) in [
+            (&b"4\r\ndataX\r\n"[..], "Invalid chunk body CR"),
+            (b"4\r\ndata\rX", "Invalid chunk body LF"),
+            (b"0\r\n\rX", "Invalid chunk end LF"),
+        ] {
+            let (pl, mut buf) = chunked_payload();
+            buf.extend_from_slice(data);
+            let mut res = pl.decode(&mut buf);
+            while let Ok(Some(PayloadItem::Chunk(_))) = res {
+                res = pl.decode(&mut buf);
+            }
+            assert!(
+                matches!(res, Err(DecodeError::InvalidInput(m)) if m == msg),
+                "{data:?} {res:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_illegal_content_length() {
+        for value in [&b"12a"[..], b"\xff1"] {
+            let mut buf = BytesMut::from(&b"GET /test HTTP/1.1\r\ncontent-length: "[..]);
+            buf.extend_from_slice(value);
+            buf.extend_from_slice(b"\r\n\r\n");
+            let reader = MessageDecoder::<Request>::default();
+            assert!(
+                matches!(reader.decode(&mut buf), Err(DecodeError::Header)),
+                "{value:?}"
+            );
+        }
     }
 
     #[test]

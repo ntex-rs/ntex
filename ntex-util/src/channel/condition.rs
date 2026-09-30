@@ -416,4 +416,16 @@ mod tests {
             Poll::Ready(ConditionResult::Locked)
         );
     }
+
+    #[ntex::test]
+    async fn notify_default_locked() {
+        let cond = Condition::<()>::new();
+        cond.notify_and_lock(());
+        let mut waiter = cond.wait();
+        cond.notify_default();
+        assert_eq!(
+            lazy(|cx| Pin::new(&mut waiter).poll(cx)).await,
+            Poll::Ready(ConditionResult::Locked)
+        );
+    }
 }

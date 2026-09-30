@@ -9,6 +9,8 @@ mod ops;
 mod reactor;
 mod stream;
 
+#[cfg(feature = "compio")]
+pub(crate) use self::reactor::map_socket_error;
 pub use self::reactor::{Handler, Reactor, ReactorApi};
 
 /// Tcp stream wrapper for neon `TcpStream`

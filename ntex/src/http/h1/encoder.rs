@@ -233,6 +233,12 @@ impl<T: MessageType> MessageEncoder<T> {
         result
     }
 
+    /// Returns `true` if the message body accepts no more data, a body
+    /// with a declared length is complete or the message has no body.
+    pub(crate) fn is_body_complete(&self) -> bool {
+        self.te.get().kind == TransferEncodingKind::Length(0)
+    }
+
     pub(crate) fn encode(
         &self,
         dst: &mut BytePages,
@@ -262,6 +268,12 @@ impl<T: MessageType> MessageEncoder<T> {
         // transfer encoding
         if head {
             self.te.set(TransferEncoding::empty());
+        } else if message.status() == Some(StatusCode::SWITCHING_PROTOCOLS)
+            && matches!(length, BodySize::Sized(_) | BodySize::Stream)
+        {
+            // a `101` response has no framing headers, its body belongs to
+            // the new protocol, see RFC 9110 section 15.2.2
+            self.te.set(TransferEncoding::eof());
         } else {
             self.te.set(match length {
                 BodySize::Empty | BodySize::None => TransferEncoding::empty(),

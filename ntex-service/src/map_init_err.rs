@@ -3,6 +3,8 @@ use std::{fmt, marker::PhantomData};
 use super::ServiceFactory;
 
 /// Service factory produced by the `map_init_err` combinator.
+///
+/// This is created by the `ServiceChainFactory::map_init_err()` method.
 pub struct MapInitErr<F, Sf, Err> {
     f: F,
     sf: Sf,
@@ -10,7 +12,7 @@ pub struct MapInitErr<F, Sf, Err> {
 }
 
 impl<F, Sf, Err> MapInitErr<F, Sf, Err> {
-    /// Create new `MapInitErr` combinator
+    /// Creates a new `MapInitErr` factory.
     pub(crate) fn new<St, Req>(f: F, sf: Sf) -> Self
     where
         Sf: ServiceFactory<St, Req>,

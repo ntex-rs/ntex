@@ -2,6 +2,9 @@
 
 ## [4.2.0] - Unreleased
 
+* Fix worker restart after a service panic on runtimes that catch task panics (compio, tokio);
+  avoid process abort on compio when a worker panics
+
 * Rename `ServerBuilder::maxconn()` to `max_connections()`; the old name is deprecated
 
 * Replace `ntex-polling` with the upstream `polling` crate
@@ -9,6 +12,11 @@
 * Rename `WorkerPool::shutdown_timeout()` and `ServerBuilder::shutdown_timeout()`
   to `graceful_shutdown_timeout()`, to distinguish the worker level timeout from
   the per connection `IoConfig::set_shutdown_timeout()`
+
+* Remove `ServerStatus::WorkerFailed`, it was never reported
+
+* Fix awaiting a `Server` that hangs when it is awaited during or after the stop,
+  including a stop caused by a worker failure with `stop_on_panic`
 
 ## [4.1.1] - 2026-09-18
 

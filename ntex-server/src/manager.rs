@@ -42,6 +42,7 @@ struct Inner<F: ServerConfiguration> {
     cfg: WorkerPool,
     shared: Arc<ServerShared>,
     stopping: Cell<bool>,
+    stopped: Cell<bool>,
     stop_notify: RefCell<Vec<oneshot::Sender<()>>>,
     cmd: Sender<ServerCommand<F::Item>>,
 }
@@ -63,6 +64,7 @@ impl<F: ServerConfiguration> ServerManager<F> {
             id: Cell::new(WorkerId::default()),
             shared: shared.clone(),
             stopping: Cell::new(false),
+            stopped: Cell::new(false),
             stop_notify: RefCell::new(Vec::new()),
             cmd: tx.clone(),
         }));
@@ -139,7 +141,11 @@ impl<F: ServerConfiguration> ServerManager<F> {
     }
 
     fn add_stop_notify(&self, tx: oneshot::Sender<()>) {
-        self.0.stop_notify.borrow_mut().push(tx);
+        if self.0.stopped.get() {
+            let _ = tx.send(());
+        } else {
+            self.0.stop_notify.borrow_mut().push(tx);
+        }
     }
 
     fn stopping(&self) -> bool {
@@ -260,6 +266,14 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
     }
 
     async fn stop(&mut self, graceful: bool, completion: Option<oneshot::Sender<()>>) {
+        // another stop is in progress or has completed
+        if self.mgr.stopping() {
+            if let Some(tx) = completion {
+                self.mgr.add_stop_notify(tx);
+            }
+            return;
+        }
+
         log::info!(
             "Stopping {:?} server, graceful({graceful})",
             self.mgr.0.cfg.name
@@ -290,6 +304,7 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
         log::info!("All worker are stopped in {:?} server", self.mgr.0.cfg.name);
 
         // notify Server instance
+        self.mgr.0.stopped.set(true);
         let notify = std::mem::take(&mut *self.mgr.0.stop_notify.borrow_mut());
         for tx in notify {
             let _ = tx.send(());
@@ -304,6 +319,9 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
         if let Some(tx) = completion {
             let _ = tx.send(());
         }
+
+        // reject new commands, the command loop handles queued ones
+        self.mgr.0.cmd.close();
 
         // stop system
         if self.mgr.0.cfg.stop_runtime {
@@ -335,6 +353,23 @@ async fn handle_cmd<F: ServerConfiguration>(
         let Ok(item) = rx.recv().await else {
             return;
         };
+
+        // the server is stopping, reply to commands that wait for a response
+        if state.mgr.stopping() {
+            match item {
+                ServerCommand::Stop {
+                    completion: Some(tx),
+                    ..
+                }
+                | ServerCommand::NotifyStopped(tx) => state.mgr.add_stop_notify(tx),
+                ServerCommand::Pause(tx) | ServerCommand::Resume(tx) => {
+                    let _ = tx.send(());
+                }
+                _ => (),
+            }
+            continue;
+        }
+
         match item {
             ServerCommand::Item(item) => state.process(item),
             ServerCommand::Worker(upd) => state.update_workers(upd),
@@ -352,7 +387,6 @@ async fn handle_cmd<F: ServerConfiguration>(
                 completion,
             } => {
                 state.stop(graceful, completion).await;
-                return;
             }
             ServerCommand::Signal(sig) => {
                 // Signals support
@@ -361,27 +395,22 @@ async fn handle_cmd<F: ServerConfiguration>(
                     Signal::Int => {
                         log::info!("SIGINT received, exiting");
                         state.stop(false, None).await;
-                        return;
                     }
                     Signal::Term => {
                         log::info!("SIGTERM received, stopping");
                         state.stop(true, None).await;
-                        return;
                     }
                     Signal::Quit => {
                         log::info!("SIGQUIT received, exiting");
                         state.stop(state.mgr.0.cfg.graceful_shutdown, None).await;
-                        return;
                     }
                     Signal::Panic(PanicSource::Sig(s)) => {
                         log::info!("{s} received, exiting");
                         state.stop(state.mgr.0.cfg.graceful_shutdown, None).await;
-                        return;
                     }
                     Signal::Panic(PanicSource::App(s, _)) => {
                         log::info!("Application paniced exiting, {s}");
                         state.stop(state.mgr.0.cfg.graceful_shutdown, None).await;
-                        return;
                     }
                     Signal::Hup => (),
                 }

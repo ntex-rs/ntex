@@ -8,7 +8,7 @@ use encoding_rs::UTF_8;
 use mime::Mime;
 
 use crate::http::{HttpMessage, error, header};
-use crate::util::{BoxFuture, Bytes, BytesMut, Stream, stream_recv};
+use crate::util::{BoxFuture, Bytes, Stream};
 use crate::web::{FromRequest, HttpRequest, State, error::PayloadError};
 
 /// Payload extractor returns request's payload stream.
@@ -410,26 +410,20 @@ impl Future for HttpMessageBody {
             return Poll::Ready(Err(err));
         }
 
-        if let Some(len) = self.length.take()
+        if let Some(len) = self.length
             && len > self.limit
         {
             return Poll::Ready(Err(PayloadError::from(error::PayloadError::Overflow)));
         }
 
         // future
-        let limit = self.limit;
+        let (limit, length) = (self.limit, self.length);
         let mut stream = self.stream.take().unwrap();
         self.fut = Some(Box::pin(async move {
-            let mut body = BytesMut::with_capacity(8192);
-
-            while let Some(item) = stream_recv(&mut stream).await {
-                let chunk = item?;
-                if body.len() + chunk.len() > limit {
-                    return Err(PayloadError::from(error::PayloadError::Overflow));
-                }
-                body.extend_from_slice(&chunk);
-            }
-            Ok(body.freeze())
+            super::read_body(&mut stream, limit, length, |_| {
+                PayloadError::from(error::PayloadError::Overflow)
+            })
+            .await
         }));
         self.poll(cx)
     }
@@ -478,7 +472,7 @@ mod tests {
         let mut s = from_request::<_, Payload>(&(), &req, &mut pl)
             .await
             .unwrap();
-        let b = stream_recv(&mut s).await.unwrap().unwrap();
+        let b = crate::util::stream_recv(&mut s).await.unwrap().unwrap();
         assert_eq!(b, Bytes::from_static(b"hello=world"));
     }
 
@@ -568,5 +562,38 @@ mod tests {
             PayloadError::Payload(error::PayloadError::Overflow) => (),
             _ => unreachable!("error"),
         }
+    }
+
+    #[crate::rt_test]
+    async fn test_payload_errors() {
+        let cfg = PayloadConfig::new(5);
+        assert_eq!(cfg.limit, 5);
+
+        // invalid charset
+        let (req, mut pl, ()) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
+            .header(header::CONTENT_TYPE, "text/plain; charset=unknown")
+            .payload(Bytes::from_static(b"hello=world"))
+            .to_http_parts();
+        assert!(from_request::<_, String>(&(), &req, &mut pl).await.is_err());
+
+        // invalid mime type
+        let cfg = PayloadConfig::default().mimetype(mime::APPLICATION_JSON);
+        let req = TestRequest::with_header(header::CONTENT_TYPE, "invalid").to_http_request();
+        assert!(matches!(
+            cfg.check_mimetype(&req),
+            Err(PayloadError::ContentType(_))
+        ));
+
+        // non-ascii content-length
+        let (req, mut pl, ()) = TestRequest::with_header(
+            header::CONTENT_LENGTH,
+            header::HeaderValue::from_bytes(b"1\xff").unwrap(),
+        )
+        .to_http_parts();
+        let res = HttpMessageBody::new(&req, &mut pl).await;
+        assert!(matches!(
+            res,
+            Err(PayloadError::Payload(error::PayloadError::UnknownLength))
+        ));
     }
 }

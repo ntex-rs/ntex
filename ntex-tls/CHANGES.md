@@ -2,6 +2,12 @@
 
 ## [4.1.0] - Unreleased
 
+* openssl: do not drop application data when a write reports `WANT_READ`
+  during a handshake, the write is retried later
+
+* openssl: reading does not report already buffered output as output produced
+  by reading, which paused reads while the write buffer was full
+
 * schannel: add `ClientConfig::set_client_cert()` with `ClientCert::from_store()`
   and `ClientCert::from_store_by_subject()`
 

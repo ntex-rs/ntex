@@ -121,3 +121,40 @@ impl<St: State, In> Service<St, WebRequest<In>> for Filter<St, In> {
         Ok(req)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use super::*;
+    use crate::http::StatusCode;
+    use crate::service::{Identity, Pipeline, fn_service};
+    use crate::web::{HttpResponse, test::TestRequest};
+
+    #[crate::rt_test]
+    async fn test_web_middleware() {
+        let svc = fn_service(async |req: WebRequest<()>| {
+            if req.path() == "/err" {
+                Err(io::Error::new(io::ErrorKind::NotFound, "not found"))
+            } else {
+                Ok(req.into_response(HttpResponse::Ok().build()))
+            }
+        });
+        let mw = WebStack::<(), _, _>::new(Identity, Identity).create(&(), svc);
+        let srv = Pipeline::new((), mw.clone());
+
+        let res = srv
+            .call(TestRequest::default().to_srv_request())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let err = srv
+            .call(TestRequest::with_uri("/err").to_srv_request())
+            .await
+            .unwrap_err();
+        assert_eq!(err.to_string(), "not found");
+        let res = WebResponseError::error_response(&err, &());
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+}

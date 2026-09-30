@@ -2,7 +2,7 @@ use std::{cell, future::Future, pin::Pin, ptr, rc::Rc, task::Context, task::Poll
 
 use crate::{Ctx, Service, ctx::WaitersRef, util::BoxFuture};
 
-// ======================== PipelaneState ============================
+// ======================== PipelineApi ============================
 
 pub(crate) struct PipelineApi<Req, Res, Err>(Rc<dyn PipelineInternalApi<Req, Res, Err>>);
 
@@ -62,13 +62,21 @@ impl<Req, Res, Err> Clone for PipelineApi<Req, Res, Err> {
     }
 }
 
-// ======================== PipelaneInner ============================
+// ======================== PipelineInner ============================
 
 struct PipelineInner<S: Service<St, Req>, St, Req> {
     s: S,
     st: St,
     st_runtime: cell::UnsafeCell<RuntimeState<S::Error>>,
     waiters: WaitersRef,
+}
+
+impl<S: Service<St, Req>, St, Req> Drop for PipelineInner<S, St, Req> {
+    fn drop(&mut self) {
+        // Readiness and shutdown futures borrow `s`, `st` and `waiters`, so they
+        // must be dropped before the fields they reference
+        *self.st_runtime.get_mut() = RuntimeState::Done;
+    }
 }
 
 enum RuntimeState<E> {
@@ -78,7 +86,7 @@ enum RuntimeState<E> {
     Done,
 }
 
-// ======================== PipelaneApi ============================
+// ======================== PipelineInternalApi ============================
 
 pub(crate) trait PipelineInternalApi<Req, Res, Err> {
     fn reg(&self) -> u32;
@@ -136,9 +144,9 @@ where
         let st = unsafe { &mut *self.st_runtime.get() };
         match st {
             RuntimeState::New => {
-                // SAFETY: `fut` has same lifetime same as lifetime of `self.pl`.
-                // Pipeline::svc is heap allocated(Rc<S>), and it is being kept alive until
-                // `self` is alive
+                // SAFETY: `self` is heap allocated (`Rc<PipelineInner>`) and never moves.
+                // `fut` is stored in `self.st_runtime`, which is reset before other
+                // fields are dropped (see `Drop for PipelineInner`), so `pl` outlives `fut`.
                 let pl = unsafe { &*(ptr::from_ref(self)) };
                 let fut = Box::pin(CheckReadiness {
                     pl,
@@ -157,9 +165,9 @@ where
         let st = unsafe { &mut *self.st_runtime.get() };
         match st {
             RuntimeState::New | RuntimeState::Readiness(_) => {
-                // SAFETY: `fut` has same lifetime same as lifetime of `self.pl`.
-                // Pipeline::svc is heap allocated(Rc<S>), and it is being kept alive until
-                // `self` is alive
+                // SAFETY: `self` is heap allocated (`Rc<PipelineInner>`) and never moves.
+                // `fut` is stored in `self.st_runtime`, which is reset before other
+                // fields are dropped (see `Drop for PipelineInner`), so `pl` outlives `fut`.
                 let pl = unsafe { &*(ptr::from_ref(self)) };
 
                 let fut = Box::pin(async move {
@@ -242,5 +250,70 @@ where
             }
             result
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{future::pending, task::Waker};
+
+    use super::*;
+    use crate::Pipeline;
+
+    struct Guard<'a>(&'a [usize]);
+
+    impl Drop for Guard<'_> {
+        fn drop(&mut self) {
+            assert_eq!(self.0.iter().sum::<usize>(), 3);
+        }
+    }
+
+    struct Pending(Vec<usize>);
+
+    impl Service<usize, ()> for Pending {
+        type Res = ();
+        type Error = ();
+
+        async fn ready(&self, _: Ctx<'_, Self, usize>) -> Result<(), ()> {
+            let _g = Guard(&self.0);
+            pending().await
+        }
+
+        async fn call(&self, (): (), _: Ctx<'_, Self, usize>) -> Result<(), ()> {
+            let _g = Guard(&self.0);
+            pending().await
+        }
+
+        async fn shutdown(&self, _: Ctx<'_, Self, usize>) {
+            let _g = Guard(&self.0);
+            pending::<()>().await;
+        }
+    }
+
+    #[test]
+    fn miri_drop_with_pending_readiness() {
+        let mut cx = Context::from_waker(Waker::noop());
+        let pl = Pipeline::new(1, Pending(vec![1, 2]));
+        assert!(pl.poll_ready(&mut cx).is_pending());
+        drop(pl);
+    }
+
+    #[test]
+    fn miri_drop_with_pending_shutdown() {
+        let mut cx = Context::from_waker(Waker::noop());
+        let pl = Pipeline::new(1, Pending(vec![1, 2]));
+        assert!(pl.poll_shutdown(&mut cx).is_pending());
+        assert!(pl.is_shutdown());
+        drop(pl);
+    }
+
+    #[test]
+    fn miri_drop_pending_call_after_pipeline() {
+        let mut cx = Context::from_waker(Waker::noop());
+        let pl = Pipeline::new(1, Pending(vec![1, 2]));
+        let mut call = Box::pin(pl.call_nowait(()));
+        drop(pl);
+        assert!(call.as_mut().poll(&mut cx).is_pending());
+        drop(call);
     }
 }

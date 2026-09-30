@@ -190,3 +190,101 @@ impl Decoder for BytesCodec {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use super::*;
+
+    /// Decodes one-byte frames and counts `decode_eof` calls.
+    #[derive(Default)]
+    struct ByteCodec {
+        eof: Cell<usize>,
+    }
+
+    impl Decoder for ByteCodec {
+        type Item = u8;
+        type Error = io::Error;
+
+        fn decode(&self, src: &mut BytesMut) -> Result<Option<u8>, io::Error> {
+            if src.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(src.split_to(1)[0]))
+            }
+        }
+
+        fn decode_eof(&self, src: &mut BytesMut) -> Result<Option<u8>, io::Error> {
+            self.eof.set(self.eof.get() + 1);
+            self.decode(src)
+        }
+    }
+
+    /// Uses the default `decode_eof`.
+    struct DefaultEof;
+
+    impl Decoder for DefaultEof {
+        type Item = usize;
+        type Error = io::Error;
+
+        fn decode(&self, src: &mut BytesMut) -> Result<Option<usize>, io::Error> {
+            let len = src.len();
+            src.clear();
+            Ok(Some(len))
+        }
+    }
+
+    #[test]
+    fn bytes_codec() {
+        let codec = BytesCodec;
+        let codec2 = codec;
+        assert_eq!(format!("{:?}", codec2.clone()), "BytesCodec");
+
+        let mut src = BytesMut::new();
+        assert!(codec.decode(&mut src).unwrap().is_none());
+        assert!(codec.decode_eof(&mut src).unwrap().is_none());
+
+        src.extend_from_slice(b"hello");
+        assert_eq!(codec.decode(&mut src).unwrap().unwrap(), "hello");
+        assert!(src.is_empty());
+        src.extend_from_slice(b"eof");
+        assert_eq!(codec.decode_eof(&mut src).unwrap().unwrap(), "eof");
+        assert!(src.is_empty());
+
+        let mut dst = BytePages::default();
+        codec
+            .encode(Bytes::from_static(b"hello "), &mut dst)
+            .unwrap();
+        codec
+            .encode(Bytes::from_static(b"world"), &mut dst)
+            .unwrap();
+        codec.encode(Bytes::new(), &mut dst).unwrap();
+        assert_eq!(dst.len(), 11);
+        assert_eq!(dst.freeze(), "hello world");
+    }
+
+    #[test]
+    fn default_decode_eof() {
+        let mut src = BytesMut::from(&b"abc"[..]);
+        assert_eq!(DefaultEof.decode_eof(&mut src).unwrap(), Some(3));
+        assert_eq!(DefaultEof.decode_eof(&mut src).unwrap(), Some(0));
+    }
+
+    #[test]
+    fn rc_codec() {
+        let codec = Rc::new(ByteCodec::default());
+        let mut src = BytesMut::from(&b"ab"[..]);
+        assert_eq!(codec.decode(&mut src).unwrap(), Some(b'a'));
+        assert_eq!(codec.eof.get(), 0);
+        // forwards to the inner `decode_eof`, not the default one
+        assert_eq!(codec.decode_eof(&mut src).unwrap(), Some(b'b'));
+        assert_eq!(codec.decode_eof(&mut src).unwrap(), None);
+        assert_eq!(codec.eof.get(), 2);
+
+        let codec = Rc::new(BytesCodec);
+        let mut dst = BytePages::default();
+        codec.encode(Bytes::from_static(b"rc"), &mut dst).unwrap();
+        assert_eq!(dst.freeze(), "rc");
+    }
+}

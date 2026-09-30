@@ -83,4 +83,13 @@ mod tests {
         assert_eq!(requote(b"a%C3"), None);
         assert_eq!(requote(b"%C3%A9%FF"), None);
     }
+
+    #[test]
+    fn requote_partial_escapes() {
+        assert_eq!(requote(b"%41%4").as_deref(), Some("A%4"));
+        assert_eq!(requote(b"%41%").as_deref(), Some("A%"));
+        assert_eq!(requote(b"a%zz").as_deref(), Some("a%zz"));
+        assert_eq!(requote(b"%61b%62").as_deref(), Some("abb"));
+        assert_eq!(requote(b"a%"), None);
+    }
 }

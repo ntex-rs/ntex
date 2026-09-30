@@ -120,8 +120,11 @@ impl Filter for Base {
                 // A filter may still need input to complete its shutdown, so
                 // keep reading even though the application paused reads.
                 Poll::Ready(Readiness::Ready)
-            } else if st.flags.is_read_paused_or_backpressure() {
-                // read buffer is full or is not processed by dispatcher yet
+            } else if st.flags.is_read_paused_or_backpressure()
+                || st.flags.is_read_wr_backpressure()
+            {
+                // read buffer is full or is not processed by dispatcher yet,
+                // or output produced by reading has not drained
                 Poll::Pending
             } else {
                 Poll::Ready(Readiness::Ready)

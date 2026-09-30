@@ -4,7 +4,7 @@ use quote::{ToTokens, TokenStreamExt, quote};
 use syn::{Ident, TypePath};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum MethodType {
+pub(crate) enum MethodType {
     Get,
     Post,
     Put,
@@ -83,7 +83,7 @@ impl syn::parse::Parse for Args {
     }
 }
 
-pub struct Route {
+pub(crate) struct Route {
     name: syn::Ident,
     args: Args,
     ast: syn::ItemFn,
@@ -97,7 +97,11 @@ impl std::fmt::Debug for Route {
 }
 
 impl Route {
-    pub fn new(args: TokenStream, input: TokenStream, method: MethodType) -> syn::Result<Self> {
+    pub(crate) fn new(
+        args: TokenStream,
+        input: TokenStream,
+        method: MethodType,
+    ) -> syn::Result<Self> {
         if args.is_empty() {
             return Err(syn::Error::new(
                 Span::call_site(),
@@ -119,7 +123,7 @@ impl Route {
         })
     }
 
-    pub fn generate(&self) -> TokenStream {
+    pub(crate) fn generate(&self) -> TokenStream {
         let name = &self.name;
         let resource_name = name.to_string();
         let ast = &self.ast;

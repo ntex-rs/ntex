@@ -128,7 +128,32 @@ fn server_name(host: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::server_name;
+    use super::*;
+
+    #[test]
+    fn tls_config() {
+        let cfg = TlsConfig::default();
+        assert_eq!(cfg.handshake_timeout(), Millis(5_000));
+        let cfg = cfg.set_handshake_timeout(Seconds(1));
+        assert_eq!(cfg.handshake_timeout(), Millis(1_000));
+        assert_eq!(
+            cfg.set_handshake_timeout(Seconds::ZERO).handshake_timeout(),
+            Millis::ZERO
+        );
+    }
+
+    #[test]
+    fn max_concurrent_accept() {
+        // the default value, other tests use the limit
+        max_concurrent_ssl_accept(256);
+        assert_eq!(MAX_SSL_ACCEPT.load(Ordering::Relaxed), 256);
+        MAX_SSL_ACCEPT_COUNTER.with(|c| {
+            let _guards: Vec<_> = (0..255).map(|_| c.get()).collect();
+            assert!(c.is_available());
+            let _last = c.get();
+            assert!(!c.is_available());
+        });
+    }
 
     #[test]
     fn test_server_name() {

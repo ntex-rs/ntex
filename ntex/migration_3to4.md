@@ -74,11 +74,30 @@ the asynchronous `ready()` and `shutdown()` lifecycle methods, while service
 chains provide `readiness()` and `shutdown()` callbacks. `Pipeline` and
 middleware APIs have been updated to bind and propagate service state.
 
+### Server builder
+
+Several `ServerBuilder` and web `HttpServer` methods have been renamed or
+removed:
+
+| ntex 3 | ntex 4 |
+|--------|--------|
+| `maxconn()` | `max_connections()` |
+| `shutdown_timeout()` | `graceful_shutdown_timeout()` |
+| `HttpServer::maxconnrate()` | `HttpServer::max_tls_handshakes()` |
+| `ServerBuilder::config()`, `HttpServer::config()` | pass `SharedCfg` to `bind()` or `listen()` |
+| `on_worker_start()`, `on_accept()` | `build_with_config()` or `HttpServer::with_config()` |
+
+`WorkerPool::shutdown_timeout()` is also renamed to
+`graceful_shutdown_timeout()`.
+
 ### Runtime features
 
-The deprecated `neon` feature has been removed from `ntex-net`. Remove it from
-direct `ntex-net` dependencies. Select the `tokio`, `compio`, or `neon-uring`
-feature when a specific runtime backend is required.
+The deprecated `neon` feature has been removed from `ntex`, `ntex-rt` and
+`ntex-net`, the native runtime is used without it. Remove it from `ntex` and
+direct `ntex-rt` or `ntex-net` dependencies. The `neon-iocp` feature has been
+removed as well, Windows always uses IOCP. Select the `tokio`, `compio`,
+`neon-polling` or `neon-uring` feature when a specific runtime backend is
+required.
 
 ## HTTP services
 
@@ -103,6 +122,15 @@ let service = ntex::http::rustls(
     ntex::http::HttpService::new(handler),
 );
 ```
+
+### HTTP configuration
+
+* `HttpServiceConfig::set_enable_headers_vec()` is replaced by
+  `set_headers_vec(bool)`.
+* `h1::Codec::upgrade()` has been removed; use `Request::upgrade()` to detect
+  upgrade and `CONNECT` requests.
+* New settings: `set_half_close()`, `set_host_validation()`,
+  `set_max_start_line_size()`, and `set_write_timeout()`.
 
 ## HTTP client
 
@@ -134,6 +162,27 @@ fn create_client() -> Client {
 Use `ClientBuilder::connector()` or `ClientBuilder::secure_connector()` to
 install a custom connector service.
 
+Request defaults have moved from `ClientBuilder` to `ClientConfig`:
+
+| ntex 3 `ClientBuilder` | ntex 4 `ClientConfig` |
+|------------------------|-----------------------|
+| `header()` | `set_header()` |
+| `basic_auth()`, `bearer_auth()` | `set_basic_auth()`, `set_bearer_auth()` |
+| `response_timeout()`, `disable_timeout()` | `set_response_timeout()`, `disable_timeout()` |
+| `response_payload_limit()` | `set_response_payload_limit()` |
+| `response_payload_timeout()` | `set_response_payload_timeout()` |
+
+The `ClientConfig` getters `timeout()`, `payload_limit()`, and
+`payload_timeout()` are now `response_timeout()`, `response_payload_limit()`,
+and `response_payload_timeout()`.
+
+`ClientBuilder::disable_redirects()`, `max_redirects()`, and
+`no_default_headers()` have been removed.
+
+The error variants `ClientError::TunnelNotSupported`, `ConnectError::Timeout`,
+`ConnectError::SslError`, `ConnectError::SslHandshakeError`, and
+`EncodeError::Fmt` have been removed.
+
 ## WebSocket client
 
 WebSocket client settings have moved to `WsClientConfig`. Construct
@@ -156,6 +205,9 @@ URI validation errors are now reported by `connect()` rather than by
 
 Custom connectors and TLS are still selected with `connector()`, `openssl()`,
 or `rustls()` on `WsClient`.
+
+`WsSink::on_disconnect()` now returns `ntex::io::Waiter<'static>`; the
+`OnDisconnect` future type has been removed.
 
 ## Web applications
 
@@ -237,6 +289,83 @@ defines the application's error type, and errors are rendered through
 `WebResponseError<St, Err>`. Error rendering receives the application state
 instead of an `HttpRequest`. Service initialization errors now use
 `ntex::error::Failure` and `IntoFailure`.
+
+## Custom codecs and I/O
+
+This section applies to code that implements codecs, filters, or dispatchers
+directly on top of `ntex::io` and `ntex::codec`.
+
+### Codecs
+
+`ntex-codec` 2 writes encoded data into `BytePages`. The deprecated
+`encode(BytesMut)` method has been removed and `encodev()` has been renamed to
+`encode()`, which is now required:
+
+```rust,ignore
+impl Encoder for MyCodec {
+    type Item = Bytes;
+    type Error = io::Error;
+
+    fn encode(&self, item: Bytes, dst: &mut BytePages) -> Result<(), io::Error> {
+        dst.append(item);
+        Ok(())
+    }
+}
+```
+
+`Decoder::decode_eof()` is called when the peer closes the stream. Its default
+implementation calls `decode()`; override it to decode a final frame that has
+no terminator. If undecodable bytes remain after a clean EOF, `Io::recv()` and
+the dispatcher report an `io::ErrorKind::UnexpectedEof` error.
+
+### `IoConfig`
+
+* `set_disconnect_timeout()` / `disconnect_timeout()` are renamed to
+  `set_shutdown_timeout()` / `shutdown_timeout()`. A zero timeout panics.
+* `set_read_buf(high, low)` and `set_write_buf(high)` no longer take a
+  cache-size argument, and `set_write_buf()` no longer takes a low watermark.
+  The buffer cache is limited globally with
+  `ntex::io::cfg::set_read_buf_cache_limit()` (1 MiB by default).
+* `set_write_timeout()` closes connections whose peer stops reading.
+
+### `Io` and `IoRef`
+
+| ntex 3 | ntex 4 |
+|--------|--------|
+| `IoRef::force_close()` | `IoRef::terminate()` |
+| `IoRef::wants_shutdown()` | `IoRef::close()` |
+| `IoRef::with_read_buf()` | `IoRef::with_read_dst()` |
+| `IoRef::with_read_src_buf()` | `IoRef::with_read_src()` |
+| `IoRef::with_write_buf()` | `IoRef::with_write_src()` |
+| `IoRef::with_write_dst_buf()` | `IoRef::with_write_dst()` |
+| `IoRef::on_disconnect()` returning `OnDisconnect` | returns `Waiter<'static>` |
+| `Io::read_ready()`, `Io::poll_read_ready()` | `Io::read_more()`, `Io::poll_read_more()` |
+| `Io::poll_dispatch()` | `Io::register_dispatch()` |
+| `Io::pause()` | removed; reads resume via `poll_read_more()` |
+| `Io::set_config()` | pass the configuration to `Io::new()` |
+| `IoStatusUpdate::KeepAlive` | `IoStatusUpdate::Timeout` |
+
+`IoRef::is_closed()` now reports whether closing has finished. Use the new
+`IoRef::is_active()` to check whether the connection is still usable.
+
+### Dispatcher
+
+`Reason::KeepAliveTimeout` is renamed to `Reason::KeepAlive`, and the new
+`Reason::WriteTimeout` is reported when `IoConfig::set_write_timeout()`
+expires.
+
+## Other API changes
+
+* `ntex::rt`: `System::stop_on_panic()` has been removed and
+  `Builder::stop_on_panic()` no longer has an effect. Use
+  `Builder::panic_handling()` or `#[ntex::main(panic_handling = true)]`.
+  `System::set_latency_callback()` requires a `Send + Sync` callback.
+* `ntex::time`: `query_system_time()` has been removed; use `system_time()`.
+* `ntex_util::channel::bstream::Receiver::max_buffer_size()` is deprecated in
+  favor of `set_watermarks()`.
+* `ntex::router::Path::skip()` takes a `u32`.
+* `ntex::http::HeaderMap` no longer implements `FromIterator`; build maps with
+  `insert()` or `append()`.
 
 ## Connection and protocol configuration
 

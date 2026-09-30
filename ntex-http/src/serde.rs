@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{collections::hash_map::Entry, fmt};
 
 use serde::de::{self, Deserialize, Deserializer, MapAccess, Unexpected, Visitor};
 use serde::ser::{self, Serialize, SerializeMap, Serializer};
@@ -41,13 +41,57 @@ impl<'de> Visitor<'de> for HeaderMapVisitor {
         M: MapAccess<'de>,
     {
         let mut headers = HeaderMap::with_capacity(map.size_hint().unwrap_or(0));
-        while let Some((key, value)) = map.next_entry::<&str, Value>()? {
-            let name = HeaderName::from_bytes(key.as_bytes()).map_err(|_| {
-                de::Error::invalid_value(Unexpected::Str(key), &"a valid header name")
-            })?;
-            headers.inner.insert(name, value);
+        while let Some((NameKey(name), value)) = map.next_entry::<NameKey, Value>()? {
+            // names are case-insensitive, merge values of duplicate keys
+            match headers.inner.entry(name) {
+                Entry::Occupied(mut entry) => entry.get_mut().extend(value),
+                Entry::Vacant(entry) => {
+                    entry.insert(value);
+                }
+            }
         }
         Ok(headers)
+    }
+}
+
+/// Header name map key, supports both borrowed and owned strings.
+#[derive(Debug)]
+struct NameKey(HeaderName);
+
+impl<'de> Deserialize<'de> for NameKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_str(NameKeyVisitor)
+    }
+}
+
+struct NameKeyVisitor;
+
+impl Visitor<'_> for NameKeyVisitor {
+    type Value = NameKey;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a header name")
+    }
+
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        HeaderName::from_bytes(v.as_bytes())
+            .map(NameKey)
+            .map_err(|_| de::Error::invalid_value(Unexpected::Str(v), &"a valid header name"))
+    }
+
+    fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        HeaderName::from_bytes(v)
+            .map(NameKey)
+            .map_err(|_| de::Error::invalid_value(Unexpected::Bytes(v), &"a valid header name"))
     }
 }
 
@@ -244,6 +288,92 @@ mod tests {
         map.insert(HeaderName::from_static("x-foo"), "bar".parse().unwrap());
         let map_bin = bincode::serialize(&map).unwrap();
         let map2 = bincode::deserialize::<HeaderMap>(&map_bin).unwrap();
+        assert_eq!(map, map2);
+    }
+
+    #[test]
+    fn test_serde_owned_keys() {
+        // non-borrowed keys
+        let v = serde_json::json!({"x-foo": "bar"});
+        let map = serde_json::from_value::<HeaderMap>(v).unwrap();
+        assert_eq!(map.get("x-foo").unwrap(), "bar");
+
+        let map = serde_json::from_reader::<_, HeaderMap>(&br#"{"x-foo":"bar"}"#[..]).unwrap();
+        assert_eq!(map.get("x-foo").unwrap(), "bar");
+
+        let map = serde_json::from_str::<HeaderMap>(r#"{"x-f\u006fo":"bar"}"#).unwrap();
+        assert_eq!(map.get("x-foo").unwrap(), "bar");
+
+        // duplicate keys are merged
+        let map = serde_json::from_str::<HeaderMap>(r#"{"x-foo":"a","X-Foo":["b","c"]}"#).unwrap();
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get_all("x-foo").collect::<Vec<_>>(), ["a", "b", "c"]);
+
+        let err = serde_json::from_str::<HeaderMap>(r#"{"x foo":"a"}"#).unwrap_err();
+        assert!(
+            err.to_string().contains("expected a valid header name"),
+            "{err}"
+        );
+        let err = serde_json::from_value::<HeaderMap>(serde_json::json!([1])).unwrap_err();
+        assert!(err.to_string().contains("expected a header map"), "{err}");
+    }
+
+    #[test]
+    fn test_serde_visitors() {
+        use serde::de::{Visitor, value::Error as DeError};
+
+        use super::{HeaderValueVisitor, NameKey, NameKeyVisitor, Value, ValueVisitor};
+
+        let NameKey(name) = NameKeyVisitor.visit_bytes::<DeError>(b"x-foo").unwrap();
+        assert_eq!(name, "x-foo");
+        assert!(NameKeyVisitor.visit_bytes::<DeError>(b"x foo").is_err());
+
+        let v = ValueVisitor.visit_bytes::<DeError>(b"a").unwrap();
+        assert_eq!(v, Value::One(HeaderValue::from_static("a")));
+        let v = ValueVisitor
+            .visit_byte_buf::<DeError>(b"b".to_vec())
+            .unwrap();
+        assert_eq!(v, Value::One(HeaderValue::from_static("b")));
+        let v = ValueVisitor
+            .visit_string::<DeError>("c".to_string())
+            .unwrap();
+        assert_eq!(v, Value::One(HeaderValue::from_static("c")));
+        assert!(ValueVisitor.visit_bytes::<DeError>(b"\n").is_err());
+        assert!(
+            HeaderValueVisitor
+                .visit_byte_buf::<DeError>(b"\n".to_vec())
+                .is_err()
+        );
+        assert!(
+            HeaderValueVisitor
+                .visit_string::<DeError>("\n".to_string())
+                .is_err()
+        );
+
+        // `expecting` messages
+        let map = serde_json::from_str::<HeaderMap>(r#"{"1":"a"}"#).unwrap();
+        assert_eq!(map.get("1").unwrap(), "a");
+        let err = serde_json::from_str::<HeaderMap>(r#"{"x":1}"#).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("a single header value or sequence"),
+            "{err}"
+        );
+        let err = serde_json::from_str::<HeaderMap>(r#"{"x":[1]}"#).unwrap_err();
+        assert!(err.to_string().contains("a header value"), "{err}");
+        let err = serde_json::from_str::<HeaderMap>(r#"{"x":"\u0001"}"#).unwrap_err();
+        assert!(err.to_string().contains("a valid header value"), "{err}");
+        let err =
+            serde_json::from_value::<HeaderMap>(serde_json::json!({"x": ["\u{1}"]})).unwrap_err();
+        assert_ne!(err.to_string(), "");
+        let err = NameKeyVisitor.visit_u8::<DeError>(1).unwrap_err();
+        assert!(err.to_string().contains("a header name"), "{err}");
+
+        // non-visible values can not be serialized to human readable formats
+        let mut map = HeaderMap::new();
+        map.insert(USER_AGENT, HeaderValue::from_bytes(b"caf\xc3\xa9").unwrap());
+        assert!(serde_json::to_string(&map).is_err());
+        let map2 = bincode::deserialize::<HeaderMap>(&bincode::serialize(&map).unwrap()).unwrap();
         assert_eq!(map, map2);
     }
 }

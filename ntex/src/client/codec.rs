@@ -195,6 +195,8 @@ impl Decoder for ClientPayloadCodec {
 
         Ok(match item {
             Some(PayloadItem::Chunk(chunk)) => Some(Some(chunk)),
+            // response trailers are not exposed
+            Some(PayloadItem::Trailers(_)) => return self.decode(src),
             Some(PayloadItem::Eof) => {
                 self.inner.payload.borrow_mut().take();
                 Some(None)

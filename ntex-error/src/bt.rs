@@ -16,6 +16,11 @@ thread_local! {
 static mut START: Option<(&'static str, u32)> = None;
 static mut START_ALT: Option<(&'static str, u32)> = None;
 
+/// Sets the source location where rendered backtraces are cut off.
+///
+/// The frame matching `file` (a path suffix) and `line` (`0` matches any line),
+/// and all of its callers, are omitted from the rendered backtrace.
+/// Must be called once during initialization, before any backtrace is resolved.
 pub fn set_backtrace_start(file: &'static str, line: u32) {
     unsafe {
         START = Some((file, line));
@@ -141,21 +146,27 @@ impl Backtrace {
         Self(Arc::new(BacktraceRaw::with_filename(location)))
     }
 
-    /// Backtrace repr
+    /// Returns the rendered backtrace, if it has been resolved on the current thread.
     pub fn repr(&self) -> Option<Arc<str>> {
         REPRS.with(|r| r.borrow_mut().get(&self.0.id).cloned())
     }
 
+    /// Returns `true` if this backtrace has been resolved (or resolution
+    /// has started) on the current thread.
     pub fn is_resolved(&self) -> bool {
         REPRS.with(|r| r.borrow_mut().contains_key(&self.0.id))
     }
 
+    /// Resolves the backtrace symbols on the current thread and caches the result.
     #[must_use]
     pub fn resolve(self) -> Self {
         self.resolver().resolve();
         self
     }
 
+    /// Returns a resolver that can resolve symbols outside the current thread.
+    ///
+    /// See [`BacktraceResolver`] for details.
     pub fn resolver(&self) -> BacktraceResolver {
         REPRS.with(|r| {
             let mut reprs = r.borrow_mut();
@@ -198,6 +209,9 @@ impl Backtrace {
 }
 
 impl BacktraceResolver {
+    /// Resolves backtrace symbols and renders the representation.
+    ///
+    /// The result is cached when the resolver is dropped.
     #[allow(clippy::return_self_not_must_use)]
     pub fn resolve(mut self) -> Self {
         if self.resolved {

@@ -182,7 +182,8 @@ async fn main() {
 Use `Pipeline` when one state value should remain attached to the service. Use
 `PipelineState` when the same service and readiness machinery must operate with
 a state selected by each caller. `PipelineState::bind_state()` can attach an
-owned state value and produce a normal `PipelineBinding`.
+owned state value and produce a normal `PipelineBinding`, the state type must
+implement `Clone`.
 
 ## Carrying state with a request
 

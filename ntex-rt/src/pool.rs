@@ -78,7 +78,7 @@ struct CounterGuard(Arc<AtomicUsize>);
 impl CounterGuard {
     fn reserve(counter: &Arc<AtomicUsize>, limit: usize) -> Option<(Self, usize)> {
         counter
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |cnt| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |cnt| {
                 (cnt < limit).then_some(cnt + 1)
             })
             .ok()
@@ -331,6 +331,36 @@ mod tests {
             let res = wait(pool.execute(move || i), Duration::from_secs(5));
             assert_eq!(res, Some(Ok(i)), "task {i} was not executed");
         }
+    }
+
+    #[test]
+    fn spawn_blocking_without_system() {
+        thread::spawn(|| {
+            let tid = thread::current().id();
+            let res = spawn_blocking(move || thread::current().id() == tid);
+            assert_eq!(wait(res, Duration::from_secs(1)), Some(Ok(true)));
+
+            let res = spawn_blocking(|| panic!("blocking"));
+            assert_eq!(
+                wait(res, Duration::from_secs(1)),
+                Some(Err::<(), _>(BlockingError))
+            );
+        })
+        .join()
+        .unwrap();
+        assert_eq!(
+            BlockingError.to_string(),
+            "Blocking task failed or was canceled"
+        );
+    }
+
+    #[test]
+    fn detached_blocking_task_runs() {
+        crate::System::new("test", crate::testing::TestRunner).block_on(async {
+            let (tx, rx) = oneshot::async_channel();
+            spawn_blocking(move || tx.send(1).unwrap()).detach();
+            assert_eq!(rx.await, Ok(1));
+        });
     }
 
     #[test]

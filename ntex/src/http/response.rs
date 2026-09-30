@@ -1143,4 +1143,62 @@ mod tests {
             assert_eq!((cookie.name(), cookie.value()), ("cookie1", "val100"));
         }
     }
+
+    #[test]
+    fn test_display() {
+        let resp = Response::NotFound().reason(" Nope").build();
+        assert_eq!(resp.to_string(), "Response<HTTP/1.1 404 Not Found Nope>\n");
+    }
+
+    #[test]
+    fn test_builder_invalid_headers() {
+        let resp = Response::Ok().header("bad name", "value").build();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let resp = Response::Ok().header("x-name", "bad\nvalue").build();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let resp = Response::Ok().set_header("bad name", "value").build();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let resp = Response::Ok().set_header("x-name", "bad\nvalue").build();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let resp = Response::Ok().content_type("bad\nvalue").build();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // json does not replace the error
+        let resp = Response::Ok().header("bad name", "value").json(&vec![1, 2]);
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_json_error() {
+        let mut map = std::collections::HashMap::new();
+        map.insert(vec![1u8], 1);
+        let resp = Response::Ok().json(&map);
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[cfg(feature = "cookie")]
+    #[test]
+    fn test_cookies() {
+        let cookie = Cookie::new("name", "value");
+        let resp = Response::Ok().del_cookie(&cookie).build();
+        let c = resp.cookies().next().unwrap();
+        assert_eq!(c.name(), "name");
+        assert_eq!(c.value(), "");
+
+        let resp = Response::Ok()
+            .cookie(Cookie::new("name", "bad\nvalue"))
+            .build();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let resp = Response::Ok()
+            .cookie(Cookie::new("c1", "v1"))
+            .cookie(Cookie::new("c2", "v2"))
+            .build();
+        let mut builder = ResponseBuilder::from(resp.head());
+        let resp2 = builder.build();
+        assert_eq!(resp2.cookies().count(), 2);
+        let mut builder = ResponseBuilder::from(resp);
+        let resp3 = builder.build();
+        assert_eq!(resp3.cookies().count(), 2);
+    }
 }

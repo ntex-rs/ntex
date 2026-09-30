@@ -412,4 +412,42 @@ mod tests {
         assert_eq!(addrs.len(), 1);
         assert!(addrs.contains(&addr));
     }
+
+    #[test]
+    fn connect_with_addr() {
+        let addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
+        let connect = Connect::with("example.com", addr);
+        assert_eq!(connect.port(), 0);
+        assert_eq!(connect.addrs().len(), 1);
+        assert_eq!(connect.addrs().next(), Some(addr));
+
+        let connect: Connect<&str> = "example.com:80".into();
+        assert_eq!(connect.port(), 80);
+        assert_eq!(connect.addrs().len(), 0);
+
+        // `None` keeps the current addresses
+        let connect = connect.set_addr(None);
+        assert_eq!(connect.addrs().len(), 0);
+        let mut connect = connect.set_addr(Some(addr)).set_addr(None);
+        assert_eq!(connect.addrs().collect::<Vec<_>>(), vec![addr]);
+
+        let mut it = connect.take_addrs();
+        assert_eq!(it.len(), 1);
+        assert_eq!(it.next(), Some(addr));
+        assert_eq!(it.len(), 0);
+        assert_eq!(connect.take_addrs().len(), 0);
+
+        let mut connect = Connect::new(addr);
+        assert_eq!(connect.addrs().len(), 1);
+        assert_eq!(connect.take_addrs().len(), 1);
+
+        let addr2: SocketAddr = "127.0.0.1:8081".parse().unwrap();
+        let mut connect = Connect::new("example.com").set_addrs([addr, addr2]);
+        assert_eq!(connect.addrs().len(), 2);
+        let mut it = connect.take_addrs();
+        assert_eq!(it.len(), 2);
+        it.next();
+        assert_eq!(it.len(), 1);
+        assert!(format!("{it:?}").contains("8081"));
+    }
 }

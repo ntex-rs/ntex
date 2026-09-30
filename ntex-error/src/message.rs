@@ -1,4 +1,4 @@
-use std::{error::Error as StdError, fmt, fmt::Write, rc::Rc};
+use std::{error::Error as StdError, fmt, fmt::Write, sync::Arc};
 
 use ntex_bytes::ByteString;
 
@@ -67,8 +67,9 @@ where
 
 /// Formats a full diagnostic view of an error for logging and tracing.
 ///
-/// For `ServiceError` types, this includes debug representations of all nested errors,
-/// and a backtrace when available.
+/// Includes the result type, signature, tag, service, and the display
+/// representation of the error and its source chain. For `ServiceError`
+/// results, a resolved backtrace is appended when available.
 pub fn fmt_diag<'a, T>(f: &mut dyn fmt::Write, container: &'a T) -> fmt::Result
 where
     T: ErrorDiagnostic + AsError,
@@ -79,8 +80,9 @@ where
 
 /// Formats a full diagnostic view of an error for logging and tracing.
 ///
-/// For `ServiceError` types, this includes debug representations of all nested errors,
-/// and a backtrace when available.
+/// Includes the result type, signature, tag, service, and the display
+/// representation of the error and its source chain. For `ServiceError`
+/// results, a resolved backtrace is appended when available.
 pub fn fmt_diag_typ<T>(f: &mut dyn fmt::Write, typ: Option<ResultType>, e: &T) -> fmt::Result
 where
     T: ErrorDiagnostic,
@@ -139,7 +141,7 @@ pub struct ErrorMessage(ByteString);
 #[derive(Clone)]
 pub struct ErrorMessageChained {
     msg: ByteString,
-    source: Option<Rc<dyn StdError>>,
+    source: Option<Arc<dyn StdError + Send + Sync>>,
 }
 
 impl ErrorMessageChained {
@@ -147,22 +149,56 @@ impl ErrorMessageChained {
     pub fn new<M, E>(ctx: M, source: E) -> Self
     where
         M: Into<ErrorMessage>,
-        E: StdError + 'static,
+        E: StdError + Send + Sync + 'static,
     {
         ErrorMessageChained {
             msg: ctx.into().into_string(),
-            source: Some(Rc::new(source)),
+            source: Some(Arc::new(source)),
         }
     }
 
-    /// Creates a message error without a source.
+    /// Creates an empty message error without a source.
+    pub const fn empty() -> Self {
+        Self::from_static("")
+    }
+
+    /// Creates a message error without a source from a [`ByteString`].
     pub const fn from_bstr(msg: ByteString) -> Self {
         Self { msg, source: None }
     }
 
-    /// Returns the message.
-    pub fn msg(&self) -> &ByteString {
+    /// Creates a message error without a source from a static string.
+    pub const fn from_static(msg: &'static str) -> Self {
+        Self::from_bstr(ByteString::from_static(msg))
+    }
+
+    /// Returns `true` if the message is empty.
+    pub fn is_empty(&self) -> bool {
+        self.msg.is_empty()
+    }
+
+    /// Returns the message as a string slice.
+    pub fn as_str(&self) -> &str {
         &self.msg
+    }
+
+    /// Returns the message as a [`ByteString`].
+    pub fn as_bstr(&self) -> &ByteString {
+        &self.msg
+    }
+
+    /// Converts this error into its message, the source is dropped.
+    pub fn into_string(self) -> ByteString {
+        self.msg
+    }
+
+    /// Sets the source error, replacing the current one.
+    #[must_use]
+    pub fn with_source<E: StdError + Send + Sync + 'static>(self, source: E) -> Self {
+        Self {
+            msg: self.msg,
+            source: Some(Arc::new(source)),
+        }
     }
 }
 
@@ -173,7 +209,7 @@ impl ErrorMessage {
     }
 
     /// Creates an error message from a [`ByteString`].
-    pub const fn from_bstr(msg: ByteString) -> ErrorMessage {
+    pub const fn from_bstr(msg: ByteString) -> Self {
         ErrorMessage(msg)
     }
 
@@ -203,7 +239,10 @@ impl ErrorMessage {
     }
 
     /// Attaches a source error to this message.
-    pub fn with_source<E: StdError + 'static>(self, source: E) -> ErrorMessageChained {
+    pub fn with_source<E: StdError + Send + Sync + 'static>(
+        self,
+        source: E,
+    ) -> ErrorMessageChained {
         ErrorMessageChained::new(self, source)
     }
 }
@@ -261,7 +300,9 @@ impl<M: Into<ErrorMessage>> From<M> for ErrorMessageChained {
 
 impl StdError for ErrorMessageChained {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        self.source.as_ref().map(AsRef::as_ref)
+        self.source
+            .as_ref()
+            .map(|e| e.as_ref() as &(dyn StdError + 'static))
     }
 }
 
@@ -332,18 +373,18 @@ mod tests {
     #[test]
     fn error_message_chained() {
         let chained = ErrorMessageChained::from(ByteString::from("test"));
-        assert_eq!(chained.msg(), "test");
+        assert_eq!(chained.as_bstr(), "test");
         assert!(chained.source().is_none());
 
         let chained = ErrorMessageChained::from_bstr(ByteString::from("test"));
-        assert_eq!(chained.msg(), "test");
+        assert_eq!(chained.as_bstr(), "test");
         assert!(chained.source().is_none());
         assert_eq!(format!("{chained}"), "test");
         assert_eq!(format!("{chained:?}"), "test");
 
         let msg = ErrorMessage::from(ByteString::from("test"));
         let chained = msg.with_source(io::Error::other("io-test"));
-        assert_eq!(chained.msg(), "test");
+        assert_eq!(chained.as_bstr(), "test");
         assert!(chained.source().is_some());
 
         let err = ErrorMessageChained::new("test", io::Error::other("io-test"));
@@ -352,6 +393,22 @@ mod tests {
 
         let chained = ErrorMessageChained::from(ByteString::new());
         assert_eq!(format!("{chained}"), "");
+        assert!(chained.is_empty());
+
+        let chained = ErrorMessageChained::empty();
+        assert!(chained.is_empty());
+        assert_eq!(chained.as_str(), "");
+        assert!(chained.source().is_none());
+
+        let chained = ErrorMessageChained::from_static("test");
+        assert!(!chained.is_empty());
+        assert_eq!(chained.as_str(), "test");
+        assert!(chained.source().is_none());
+
+        let chained = chained.with_source(io::Error::other("first"));
+        let chained = chained.with_source(io::Error::other("second"));
+        assert_eq!(chained.source().unwrap().to_string(), "second");
+        assert_eq!(chained.into_string(), "test");
     }
 
     #[derive(thiserror::Error, derive_more::Debug)]
@@ -408,7 +465,7 @@ mod tests {
             err.source().unwrap()
         );
 
-        let err = err.set_tag(Bytes::from("test-tag"));
+        let err = err.with_tag(Bytes::from("test-tag"));
         let msg = fmt_diag_string(&err);
         assert!(msg.contains("test-tag"), "{msg}");
     }

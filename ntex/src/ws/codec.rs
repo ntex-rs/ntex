@@ -455,4 +455,84 @@ mod tests {
             Err(ProtocolError::Closed)
         ));
     }
+
+    #[test]
+    fn encode_errors() {
+        let codec = Codec::new();
+        let mut dst = BytePages::default();
+        let big = Bytes::from(vec![0; 126]);
+        assert!(matches!(
+            codec.encode(Message::Ping(big.clone()), &mut dst),
+            Err(ProtocolError::InvalidLength(126))
+        ));
+        assert!(matches!(
+            codec.encode(Message::Pong(big), &mut dst),
+            Err(ProtocolError::InvalidLength(126))
+        ));
+
+        codec
+            .encode(Message::Continuation(Item::FirstText("a".into())), &mut dst)
+            .unwrap();
+        assert!(matches!(
+            codec.encode(Message::Binary("b".into()), &mut dst),
+            Err(ProtocolError::ContinuationStarted)
+        ));
+        assert!(matches!(
+            codec.encode(
+                Message::Continuation(Item::FirstBinary("b".into())),
+                &mut dst
+            ),
+            Err(ProtocolError::ContinuationStarted)
+        ));
+        codec
+            .encode(Message::Continuation(Item::Last("c".into())), &mut dst)
+            .unwrap();
+        assert!(matches!(
+            codec.encode(Message::Continuation(Item::Continue("d".into())), &mut dst),
+            Err(ProtocolError::ContinuationNotStarted)
+        ));
+    }
+
+    fn decode(codec: &Codec, frame: &[u8]) -> Result<Option<Frame>, ProtocolError> {
+        codec.decode(&mut BytesMut::from(frame))
+    }
+
+    #[test]
+    fn decode_continuation_errors() {
+        let codec = Codec::new().set_client_mode();
+        // continuation without a first frame
+        assert!(matches!(
+            decode(&codec, &[0x80, 0x01, b'a']),
+            Err(ProtocolError::ContinuationNotStarted)
+        ));
+        assert!(matches!(
+            decode(&codec, &[0x00, 0x01, b'a']),
+            Err(ProtocolError::ContinuationNotStarted)
+        ));
+
+        // new data frames while a fragmented message is in progress
+        assert!(matches!(
+            decode(&codec, &[0x02, 0x01, b'a']),
+            Ok(Some(Frame::Continuation(Item::FirstBinary(_))))
+        ));
+        for frame in [
+            &[0x82, 0x01, b'a'],
+            &[0x81, 0x01, b'a'],
+            &[0x02, 0x01, b'a'],
+            &[0x01, 0x01, b'a'],
+        ] {
+            assert!(matches!(
+                decode(&codec, frame),
+                Err(ProtocolError::ContinuationStarted)
+            ));
+        }
+        assert!(matches!(
+            decode(&codec, &[0x00, 0x01, b'b']),
+            Ok(Some(Frame::Continuation(Item::Continue(_))))
+        ));
+        assert!(matches!(
+            decode(&codec, &[0x80, 0x00]),
+            Ok(Some(Frame::Continuation(Item::Last(data)))) if data.is_empty()
+        ));
+    }
 }

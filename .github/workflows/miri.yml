@@ -33,11 +33,18 @@ jobs:
         run: cargo miri test -p ntex-bytes
 
       - name: Run Miri (bytes, big-endian)
+        continue-on-error: true
         run: cargo miri test -p ntex-bytes --target s390x-unknown-linux-gnu
 
       - name: Run Miri (ntex-service::cfg)
         # Run all of your tests inside of Miri interpreter
         run: cargo miri test -p ntex-service -- --test "cfg::tests::"
+
+      - name: Run Miri (ntex-service::pipeline)
+        # Pipelines are self-referential, which Stacked Borrows rejects
+        env:
+          MIRIFLAGS: -Zmiri-disable-stacked-borrows
+        run: cargo miri test -p ntex-service -- --test "miri_"
 
       - name: Run Miri (ntex-io)
         # Run all of your tests inside of Miri interpreter

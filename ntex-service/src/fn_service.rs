@@ -322,7 +322,7 @@ where
 ///     });
 ///
 ///     // Construct a service with the supplied state.
-///     let srv = Pipeline::new(12, factory(fac).create(&10).await?);
+///     let srv = Pipeline::new((), factory(fac).create(&10).await?);
 ///
 ///     let result = srv.call(10).await?;
 ///     assert_eq!(result, 100);

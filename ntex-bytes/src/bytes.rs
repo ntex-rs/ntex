@@ -814,4 +814,11 @@ mod tests {
         assert_eq!(b.len(), 0);
         assert_eq!(buf, [49, 50, 51, 0, 0, 0, 0, 0, 0, 0]);
     }
+
+    #[test]
+    fn from_byte_string() {
+        let s = crate::ByteString::from_static("string");
+        assert_eq!(Bytes::from(&s), "string");
+        assert_eq!(Bytes::from(s), "string");
+    }
 }

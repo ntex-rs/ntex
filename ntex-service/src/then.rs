@@ -10,7 +10,7 @@ pub struct Then<A, B> {
 }
 
 impl<A, B> Then<A, B> {
-    /// Create new `.then()` combinator
+    /// Creates a new `Then` service.
     pub(crate) fn new(svc1: A, svc2: B) -> Then<A, B> {
         Self { svc1, svc2 }
     }
@@ -42,13 +42,15 @@ where
 
 #[derive(Debug, Clone)]
 /// Service factory produced by the `then` combinator.
+///
+/// This is created by the `ServiceChainFactory::then()` method.
 pub struct ThenFactory<A, B> {
     svc1: A,
     svc2: B,
 }
 
 impl<A, B> ThenFactory<A, B> {
-    /// Create new factory for `Then` combinator
+    /// Creates a new `ThenFactory`.
     pub(crate) fn new(svc1: A, svc2: B) -> Self {
         Self { svc1, svc2 }
     }

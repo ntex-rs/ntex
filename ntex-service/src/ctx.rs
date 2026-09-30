@@ -213,6 +213,11 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
 
     #[inline]
     /// Polls a closure until completion using the dispatcher's task [`Context`].
+    ///
+    /// The [`Context`] uses the waker of the task that currently owns the readiness
+    /// check. Outside of a readiness check a no-op waker is used, so a `Pending`
+    /// result is not woken. If the current owner is not the main runner, the main
+    /// runner is also scheduled for wake-up.
     pub async fn poll_fn<F, R>(&'a self, f: F) -> R
     where
         F: Fn(&mut Context<'a>) -> Poll<R>,
@@ -226,8 +231,8 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
                 Context::from_waker(Waker::noop())
             };
 
-            // is current runner is not main, we need to wake up main task
-            // to re-register all required wakers
+            // if the current runner is not the main one, wake up the main task
+            // so it re-registers all required wakers
             if idx != 0 {
                 self.waiters.get_wakers().push(0);
             }
@@ -239,6 +244,11 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
 
     #[inline]
     /// Calls a closure once with the dispatcher's task [`Context`].
+    ///
+    /// The [`Context`] uses the waker of the task that currently owns the readiness
+    /// check. Outside of a readiness check a no-op waker is used, so a `Pending`
+    /// result is not woken. If the current owner is not the main runner, the main
+    /// runner is also scheduled for wake-up.
     pub fn poll_once<F, R>(&'a self, f: F) -> R
     where
         F: FnOnce(&mut Context<'a>) -> R,
@@ -251,8 +261,8 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
             Context::from_waker(Waker::noop())
         };
 
-        // is current runner is not main, we need to wake up main task
-        // to re-register all required wakers
+        // if the current runner is not the main one, wake up the main task
+        // so it re-registers all required wakers
         if idx != 0 {
             self.waiters.get_wakers().push(0);
         }

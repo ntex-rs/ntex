@@ -203,4 +203,28 @@ mod tests {
         sleep(Duration::from_millis(10)).await;
         assert!(done.get());
     }
+
+    #[ntex::test]
+    async fn test_set_capacity() {
+        let counter = Counter::new(1);
+        let guard = counter.get();
+        assert_eq!(counter.total(), 1);
+        assert!(!counter.is_available());
+
+        let counter2 = counter.clone();
+        let hnd = crate::spawn(async move { counter2.available().await });
+        sleep(Duration::from_millis(10)).await;
+        assert!(!hnd.is_finished());
+
+        // raising the capacity wakes waiters
+        counter.set_capacity(2);
+        assert!(counter.is_available());
+        crate::time::timeout(Duration::from_secs(1), hnd)
+            .await
+            .unwrap()
+            .unwrap();
+
+        drop(guard);
+        assert_eq!(counter.total(), 0);
+    }
 }

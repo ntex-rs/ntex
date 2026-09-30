@@ -1,12 +1,13 @@
 use std::{error, fmt, ops, panic::Location, sync::Arc};
 
-use crate::{AsError, Backtrace, Bytes, ErrorDiagnostic, ErrorMapping, repr::ErrorRepr};
+use crate::{AsError, Backtrace, Bytes, ErrorDiagnostic, ErrorMapping, Failure, repr::ErrorRepr};
 
 /// An error container.
 ///
-/// `Error<E>` is a lightweight handle to an error that can be cheaply cloned
-/// and safely shared across threads. It preserves the original error along with
-/// associated context such as where it occurred.
+/// `Error<E>` is a lightweight handle to an error that can be cheaply cloned.
+/// It is `Send` and `Sync` when `E` is. It preserves the original error along
+/// with associated context such as the location where it occurred, the responsible
+/// service, a tag, a backtrace, and extension data.
 pub struct Error<E> {
     pub(crate) inner: Arc<ErrorRepr<E>>,
 }
@@ -32,7 +33,7 @@ impl<E> Error<E> {
 
     /// Creates an error container without service attribution.
     ///
-    /// Captures the caller location and associates the error with a service.
+    /// Captures the caller location.
     #[track_caller]
     pub fn from_err<T>(error: T) -> Self
     where
@@ -48,9 +49,10 @@ impl<E> Error<E> {
         }
     }
 
-    /// Transforms the inner error into another error type.
+    /// Transforms this error into another error type.
     ///
-    /// Preserves `service`, backtrace, and extension data.
+    /// The closure receives the whole `Error<E>` container.
+    /// Preserves tag, service, backtrace, and extension data.
     pub fn forward<U, F>(self, f: F) -> Error<U>
     where
         F: FnOnce(Error<E>) -> U,
@@ -66,8 +68,6 @@ impl<E> Error<E> {
     }
 
     /// Returns a debug view of the error.
-    ///
-    /// Intended for debugging purposes.
     pub fn debug(&self) -> impl fmt::Debug
     where
         E: fmt::Debug,
@@ -90,7 +90,7 @@ impl<E: Clone> Error<E> {
     ///
     /// Returns the updated error.
     #[must_use]
-    pub fn set_tag<T: Into<Bytes>>(self, tag: T) -> Self {
+    pub fn with_tag<T: Into<Bytes>>(self, tag: T) -> Self {
         Error {
             inner: ErrorRepr::with_mut(self.inner, move |inner| {
                 inner.tag = Some(tag.into());
@@ -102,7 +102,7 @@ impl<E: Clone> Error<E> {
     ///
     /// Returns the updated error.
     #[must_use]
-    pub fn set_service(self, name: &'static str) -> Self {
+    pub fn with_service(self, name: &'static str) -> Self {
         Error {
             inner: ErrorRepr::with_mut(self.inner, move |inner| {
                 inner.service = Some(name);
@@ -110,9 +110,9 @@ impl<E: Clone> Error<E> {
         }
     }
 
-    /// Maps the inner error into a new error type.
+    /// Maps the inner error into a new error type using the provided closure.
     ///
-    /// Preserves `service`, backtrace, and extension data.
+    /// Preserves tag, service, backtrace, and extension data.
     pub fn map<U, F>(self, f: F) -> Error<U>
     where
         F: FnOnce(E) -> U,
@@ -124,9 +124,9 @@ impl<E: Clone> Error<E> {
         }
     }
 
-    /// Maps the inner error into a new error type.
+    /// Converts the inner error into a new error type via `U: From<E>`.
     ///
-    /// Preserves `service`, backtrace, and extension data.
+    /// Preserves tag, service, backtrace, and extension data.
     pub fn map_err<U>(self) -> Error<U>
     where
         U: From<E>,
@@ -140,7 +140,7 @@ impl<E: Clone> Error<E> {
 
     /// Tries to map the inner error into a value or another error type.
     ///
-    /// Preserves `service`, backtrace, and extension data.
+    /// On error, preserves tag, service, backtrace, and extension data.
     pub fn try_map<T, U, F>(self, f: F) -> Result<T, Error<U>>
     where
         F: FnOnce(E) -> Result<T, U>,
@@ -161,7 +161,7 @@ impl<E: Clone> Error<E> {
     ///
     /// This value can be retrieved later using [`get_item`](Self::get_item).
     #[must_use]
-    pub fn insert_item<T: Sync + Send + 'static>(self, val: T) -> Self {
+    pub fn with_item<T: Sync + Send + 'static>(self, val: T) -> Self {
         Error {
             inner: ErrorRepr::with_mut(self.inner, move |inner| {
                 inner.ext.insert(val);
@@ -245,12 +245,17 @@ impl<E: ErrorDiagnostic> ErrorDiagnostic for Error<E> {
     fn backtrace(&self) -> Option<&Backtrace> {
         self.inner.backtrace()
     }
+
+    fn into_failure(self) -> Failure {
+        Failure::from(self)
+    }
 }
 
 impl<T, E, U> ErrorMapping<T, E, U> for Result<T, E>
 where
     U: From<E>,
 {
+    #[track_caller]
     fn into_error(self) -> Result<T, Error<U>> {
         match self {
             Ok(val) => Ok(val),
@@ -299,8 +304,8 @@ impl<E: fmt::Debug> fmt::Debug for ErrorDebug<'_, E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Error")
             .field("error", &self.inner.error)
-            .field("service", &self.inner.service)
             .field("tag", &self.inner.tag)
+            .field("service", &self.inner.service)
             .field("backtrace", &self.inner.backtrace)
             .finish()
     }

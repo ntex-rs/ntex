@@ -15,7 +15,7 @@ use crate::filterptr::FilterPtr;
 use crate::flags::Flags;
 use crate::ops::{Id, IoManager, TimerHandle};
 use crate::seal::{IoBoxed, Sealed};
-use crate::utils::Extensions;
+use crate::utils::{Extensions, WriteDeadline, write_timed_out};
 use crate::waiters::{TAG_WRITE, WriteGuard};
 use crate::{Decoded, FilterLayer, Handle, IoStatusUpdate, IoStream, RecvError};
 
@@ -60,11 +60,6 @@ pub struct Io<F = Base>(UnsafeCell<IoRef>, marker::PhantomData<F>);
 /// neither `Send` nor `Sync`.
 #[derive(Clone)]
 pub struct IoRef(pub(super) Rc<IoState>);
-
-/// Saturating conversion used for the in-flight write counter.
-fn as_u32(v: usize) -> u32 {
-    u32::try_from(v).unwrap_or(u32::MAX)
-}
 
 pub(crate) struct IoState {
     filter: FilterPtr,
@@ -228,12 +223,12 @@ impl IoState {
         size >= self.cfg.read_buf().high
     }
 
-    pub(super) fn should_disable_rd_backpressure(&self, size: usize) -> bool {
-        size <= self.cfg.read_buf().half
-    }
-
     pub(super) fn is_wr_backpressure_needed(&self, size: usize) -> bool {
         size >= self.cfg.write_buf().high
+    }
+
+    pub(super) fn should_disable_rd_backpressure(&self, size: usize) -> bool {
+        size <= self.cfg.read_buf().half
     }
 
     pub(super) fn should_disable_wr_backpressure(&self, size: usize) -> bool {
@@ -248,6 +243,15 @@ impl IoState {
     /// because until it reaches zero the peer has not seen everything.
     pub(super) fn write_outstanding(&self) -> usize {
         self.buffer.write_buf_size() + self.wr_inflight.get() as usize
+    }
+
+    /// Output that has reached the transport-facing buffer but not the peer.
+    ///
+    /// Output a filter holds back, for example application data during a TLS
+    /// renegotiation, is excluded. It can not drain until more input is read,
+    /// so it must not keep reads paused.
+    pub(super) fn transport_outstanding(&self) -> usize {
+        self.buffer.write_dst_size() + self.wr_inflight.get() as usize
     }
 
     /// Records bytes taken by, or returned from, the transport.
@@ -306,14 +310,31 @@ impl IoState {
         }
 
         let waiter = WriteGuard::new(&self.extensions);
+        let mut deadline = WriteDeadline::new(self.cfg.write_timeout());
         poll_fn(|cx| {
             if let Some(res) = self.check_write_ready() {
                 Poll::Ready(res)
+            } else if deadline.poll_expired(cx) {
+                Poll::Ready(Err(write_timed_out()))
             } else {
                 // a woken waiter registers the waker again
                 waiter.register(cx);
                 Poll::Pending
             }
+        })
+        .await
+    }
+
+    /// Waits for `f`, bounded by the configured write timeout.
+    pub(super) async fn with_write_timeout<T, F>(&self, mut f: F) -> io::Result<T>
+    where
+        F: FnMut(&mut Context<'_>) -> Poll<io::Result<T>>,
+    {
+        let mut deadline = WriteDeadline::new(self.cfg.write_timeout());
+        poll_fn(|cx| match f(cx) {
+            Poll::Ready(res) => Poll::Ready(res),
+            Poll::Pending if deadline.poll_expired(cx) => Poll::Ready(Err(write_timed_out())),
+            Poll::Pending => Poll::Pending,
         })
         .await
     }
@@ -594,7 +615,8 @@ impl<F> Io<F> {
     /// dispatcher timeouts are returned in [`Either::Right`].
     ///
     /// If write backpressure prevents further reads, this method first waits
-    /// for the write buffer to fall below its configured threshold.
+    /// for the write buffer to fall below its configured threshold. A
+    /// dispatcher timeout that fires during this wait is returned as well.
     pub async fn recv<U>(&self, codec: &U) -> Result<Option<U::Item>, Either<U::Error, io::Error>>
     where
         U: Decoder,
@@ -607,10 +629,24 @@ impl<F> Io<F> {
                     "Timeout",
                 ))),
                 Err(RecvError::WriteBackpressure) => {
-                    poll_fn(|cx| self.poll_flush(cx, false))
-                        .await
-                        .map_err(Either::Right)?;
-                    continue;
+                    let timed_out = poll_fn(|cx| {
+                        if self.st().flags.check_dispatcher_timeout() {
+                            Poll::Ready(Ok(true))
+                        } else {
+                            self.poll_flush(cx, false).map_ok(|()| false)
+                        }
+                    })
+                    .await
+                    .map_err(Either::Right)?;
+
+                    if timed_out {
+                        Err(Either::Right(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "Timeout",
+                        )))
+                    } else {
+                        continue;
+                    }
                 }
                 Err(RecvError::Decoder(err)) => Err(Either::Left(err)),
                 Err(RecvError::PeerGone(Some(err))) => Err(Either::Right(err)),
@@ -692,13 +728,19 @@ impl<F> Io<F> {
 
     #[inline]
     /// Encodes an item and sends it to the peer, fully flushing the write buffer.
+    ///
+    /// The flush is bounded by the
+    /// [write timeout](crate::IoConfig::set_write_timeout), if one is set;
+    /// when it expires this returns [`io::ErrorKind::TimedOut`] in
+    /// [`Either::Right`].
     pub async fn send<U>(&self, item: U::Item, codec: &U) -> Result<(), Either<U::Error, io::Error>>
     where
         U: Encoder,
     {
         self.encode(item, codec).map_err(Either::Left)?;
 
-        poll_fn(|cx| self.poll_flush(cx, true))
+        self.st()
+            .with_write_timeout(|cx| self.poll_flush(cx, true))
             .await
             .map_err(Either::Right)?;
 
@@ -711,8 +753,14 @@ impl<F> Io<F> {
     /// This is the asynchronous counterpart to `poll_flush`. A full flush
     /// completes once all output has reached the peer, including output a
     /// transport has taken ownership of but not yet written.
+    ///
+    /// The wait is bounded by the
+    /// [write timeout](crate::IoConfig::set_write_timeout), if one is set;
+    /// when it expires this returns [`io::ErrorKind::TimedOut`].
     pub async fn flush(&self, full: bool) -> io::Result<()> {
-        poll_fn(|cx| self.poll_flush(cx, full)).await
+        self.st()
+            .with_write_timeout(|cx| self.poll_flush(cx, full))
+            .await
     }
 
     #[inline]
@@ -744,7 +792,9 @@ impl<F> Io<F> {
     /// [`IoRef::with_read_dst`], which waits for the read buffer to fall to at
     /// most half the high watermark, this releases read backpressure however
     /// much data is still buffered. Asking for more input
-    /// is taken as the dispatcher declaring itself able to accept it.
+    /// is taken as the dispatcher declaring itself able to accept it. This
+    /// also resumes reads paused because output produced by reading, for
+    /// example replies to peer pings, has not drained yet.
     ///
     /// # Returns
     ///
@@ -778,9 +828,10 @@ impl<F> Io<F> {
 
             // If the dispatcher requests more data but no read occurs,
             // restart the read task.
-            if st.flags.is_read_paused_or_backpressure() {
+            if st.flags.is_read_paused_or_backpressure() || st.flags.is_read_wr_backpressure() {
                 st.flags.unset_read_ready_and_backpressure();
                 st.flags.unset_read_paused();
+                st.flags.unset_read_wr_backpressure();
                 st.wake_read_task();
                 if ready {
                     Poll::Ready(Ok(Some(())))
@@ -1145,6 +1196,11 @@ impl<F> Drop for Io<F> {
 
         IoManager::unregister(self.io_ref());
     }
+}
+
+/// Saturating conversion used for the in-flight write counter.
+fn as_u32(v: usize) -> u32 {
+    u32::try_from(v).unwrap_or(u32::MAX)
 }
 
 #[cfg(test)]
@@ -2918,6 +2974,312 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn read_pauses_while_read_output_is_not_drained() {
+        // A filter that answers every input chunk itself, like WebSocket pong
+        // replies, without passing anything to the application.
+        #[derive(Debug)]
+        struct Reply;
+
+        impl FilterLayer for Reply {
+            fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                let data = buf.with_read_buffers(|src, _| src.as_mut().map(BytesMut::take));
+                if let Some(data) = data {
+                    buf.with_write_buffers(|_, dst| dst.extend_from_slice(&data));
+                }
+                Ok(())
+            }
+
+            fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                buf.with_write_buffers(BytePages::move_to);
+                Ok(())
+            }
+
+            fn shutdown(&self, _: &FilterBuf<'_>) -> io::Result<Poll<()>> {
+                Ok(Poll::Ready(()))
+            }
+        }
+
+        // The transport is driven by the test through `IoContext`.
+        #[derive(Debug)]
+        struct Manual;
+
+        impl IoStream for Manual {
+            fn start(self, _: IoContext) -> Box<dyn Handle> {
+                Box::new(self)
+            }
+        }
+
+        impl Handle for Manual {}
+
+        let io = Io::new(
+            Manual,
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8)),
+        )
+        .add_filter(Reply);
+        let ctx = IoContext::new(io.get_ref());
+        let read = |data: &'static [u8]| {
+            ctx.with_read_buf(|buf| {
+                buf.extend_from_slice(data);
+                Poll::Ready(Ok(data.len()))
+            })
+        };
+
+        // the replies are below the high watermark
+        assert_eq!(read(b"ping"), IoTaskStatus::Io);
+        assert!(!io.st().flags.is_read_wr_backpressure());
+
+        // the replies reach the high watermark, reads pause
+        assert_eq!(read(b"ping"), IoTaskStatus::Pause);
+        assert!(io.st().flags.is_read_wr_backpressure());
+        assert_eq!(lazy(|cx| ctx.poll_read_ready(cx)).await, Poll::Pending);
+        assert!(io.st().read_task.is_set());
+
+        // the transport takes the replies, in-flight output is not drained
+        let _ = ctx.with_write_dst(|buf| buf.split_to(8));
+        assert_eq!(io.st().write_outstanding(), 8);
+        let _ = ctx.update_write_status(Ok(0));
+        assert!(io.st().flags.is_read_wr_backpressure());
+
+        // above half of the high watermark reads stay paused
+        let _ = ctx.update_write_status(Ok(3));
+        assert!(io.st().flags.is_read_wr_backpressure());
+        assert!(io.st().read_task.is_set());
+
+        // drained to half, reading resumes
+        let _ = ctx.update_write_status(Ok(1));
+        assert!(!io.st().flags.is_read_wr_backpressure());
+        assert!(!io.st().read_task.is_set());
+        assert_eq!(
+            lazy(|cx| ctx.poll_read_ready(cx)).await,
+            Poll::Ready(Readiness::Ready)
+        );
+
+        // output that was not produced by reading does not pause reads
+        io.encode_slice(b"12345678").unwrap();
+        assert!(io.st().write_outstanding() >= 8);
+        assert_eq!(
+            lazy(|cx| ctx.poll_read_ready(cx)).await,
+            Poll::Ready(Readiness::Ready)
+        );
+        assert!(!io.st().flags.is_read_wr_backpressure());
+    }
+
+    #[ntex::test]
+    async fn read_output_pause_ignores_held_back_output() {
+        // Holds application output until a handshake completes, like TLS
+        // during a renegotiation.
+        #[derive(Debug, Default)]
+        struct Reneg(Cell<bool>);
+
+        impl FilterLayer for Reneg {
+            fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                let data = buf.with_read_buffers(|src, _| src.as_mut().map(BytesMut::take));
+                match data.as_deref() {
+                    Some(b"hello") => {
+                        buf.with_write_buffers(|_, dst| dst.extend_from_slice(b"handshake"));
+                    }
+                    Some(b"done") => {
+                        self.0.set(true);
+                        buf.with_write_buffers(BytePages::move_to);
+                    }
+                    _ => (),
+                }
+                Ok(())
+            }
+
+            fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                if self.0.get() {
+                    buf.with_write_buffers(BytePages::move_to);
+                }
+                Ok(())
+            }
+
+            fn shutdown(&self, _: &FilterBuf<'_>) -> io::Result<Poll<()>> {
+                Ok(Poll::Ready(()))
+            }
+        }
+
+        #[derive(Debug)]
+        struct Manual;
+
+        impl IoStream for Manual {
+            fn start(self, _: IoContext) -> Box<dyn Handle> {
+                Box::new(self)
+            }
+        }
+
+        impl Handle for Manual {}
+
+        let io = Io::new(
+            Manual,
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8)),
+        )
+        .add_filter(Reneg::default());
+        let ctx = IoContext::new(io.get_ref());
+        let read = |data: &'static [u8]| {
+            ctx.with_read_buf(|buf| {
+                buf.extend_from_slice(data);
+                Poll::Ready(Ok(data.len()))
+            })
+        };
+
+        // application output is held back by the filter
+        io.encode_slice(b"12345678").unwrap();
+        assert_eq!(io.st().write_outstanding(), 8);
+
+        // the handshake reply reaches the high watermark, reads pause
+        assert_eq!(read(b"hello"), IoTaskStatus::Pause);
+        assert!(io.st().flags.is_read_wr_backpressure());
+
+        // the reply drains, the held back output does not keep reads paused
+        let _ = ctx.with_write_dst(|buf| buf.split_to(9));
+        let _ = ctx.update_write_status(Ok(9));
+        assert_eq!(io.st().write_outstanding(), 8);
+        assert!(!io.st().flags.is_read_wr_backpressure());
+        assert_eq!(
+            lazy(|cx| ctx.poll_read_ready(cx)).await,
+            Poll::Ready(Readiness::Ready)
+        );
+
+        // the handshake completes and the held back output moves
+        let _ = read(b"done");
+        assert_eq!(ctx.with_write_dst(|buf| buf.len()), 8);
+    }
+
+    #[ntex::test]
+    async fn read_more_lifts_read_output_pause() {
+        #[derive(Debug)]
+        struct Reply;
+
+        impl FilterLayer for Reply {
+            fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                let data = buf.with_read_buffers(|src, _| src.as_mut().map(BytesMut::take));
+                if let Some(data) = data {
+                    buf.with_write_buffers(|_, dst| dst.extend_from_slice(&data));
+                }
+                Ok(())
+            }
+
+            fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                buf.with_write_buffers(BytePages::move_to);
+                Ok(())
+            }
+
+            fn shutdown(&self, _: &FilterBuf<'_>) -> io::Result<Poll<()>> {
+                Ok(Poll::Ready(()))
+            }
+        }
+
+        #[derive(Debug)]
+        struct Manual;
+
+        impl IoStream for Manual {
+            fn start(self, _: IoContext) -> Box<dyn Handle> {
+                Box::new(self)
+            }
+        }
+
+        impl Handle for Manual {}
+
+        let io = Io::new(
+            Manual,
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8)),
+        )
+        .add_filter(Reply);
+        let ctx = IoContext::new(io.get_ref());
+        let read = |data: &'static [u8]| {
+            ctx.with_read_buf(|buf| {
+                buf.extend_from_slice(data);
+                Poll::Ready(Ok(data.len()))
+            })
+        };
+
+        // read_more
+        assert_eq!(read(b"pingping"), IoTaskStatus::Pause);
+        assert_eq!(lazy(|cx| ctx.poll_read_ready(cx)).await, Poll::Pending);
+        assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
+        assert!(!io.st().flags.is_read_wr_backpressure());
+        assert!(!io.st().read_task.is_set());
+        assert_eq!(
+            lazy(|cx| ctx.poll_read_ready(cx)).await,
+            Poll::Ready(Readiness::Ready)
+        );
+
+        // read_notify
+        assert_eq!(read(b"ping"), IoTaskStatus::Pause);
+        assert_eq!(lazy(|cx| ctx.poll_read_ready(cx)).await, Poll::Pending);
+        assert!(lazy(|cx| io.poll_read_notify(cx)).await.is_pending());
+        assert!(!io.st().flags.is_read_wr_backpressure());
+        assert!(!io.st().read_task.is_set());
+        assert_eq!(
+            lazy(|cx| ctx.poll_read_ready(cx)).await,
+            Poll::Ready(Readiness::Ready)
+        );
+    }
+
+    #[ntex::test]
+    async fn read_pause_on_read_output_does_not_block_filter_shutdown() {
+        #[derive(Debug)]
+        struct Reply;
+
+        impl FilterLayer for Reply {
+            fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                let data = buf.with_read_buffers(|src, _| src.as_mut().map(BytesMut::take));
+                if let Some(data) = data {
+                    buf.with_write_buffers(|_, dst| dst.extend_from_slice(&data));
+                }
+                Ok(())
+            }
+
+            fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+                buf.with_write_buffers(BytePages::move_to);
+                Ok(())
+            }
+
+            fn shutdown(&self, _: &FilterBuf<'_>) -> io::Result<Poll<()>> {
+                // waits for input, like a TLS close_notify
+                Ok(Poll::Pending)
+            }
+        }
+
+        #[derive(Debug)]
+        struct Manual;
+
+        impl IoStream for Manual {
+            fn start(self, _: IoContext) -> Box<dyn Handle> {
+                Box::new(self)
+            }
+        }
+
+        impl Handle for Manual {}
+
+        let io = Io::new(
+            Manual,
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8)),
+        )
+        .add_filter(Reply);
+        let ctx = IoContext::new(io.get_ref());
+        let read = |data: &'static [u8]| {
+            ctx.with_read_buf(|buf| {
+                buf.extend_from_slice(data);
+                Poll::Ready(Ok(data.len()))
+            })
+        };
+
+        assert_eq!(read(b"pingping"), IoTaskStatus::Pause);
+        assert!(io.st().flags.is_read_wr_backpressure());
+
+        // the filters are shutting down and may need input to complete
+        assert!(lazy(|cx| io.poll_shutdown(cx)).await.is_pending());
+        assert!(io.st().flags.is_stopping_filters());
+        assert_eq!(
+            lazy(|cx| ctx.poll_read_ready(cx)).await,
+            Poll::Ready(Readiness::Ready)
+        );
+        assert_eq!(read(b"ping"), IoTaskStatus::Io);
+    }
+
+    #[ntex::test]
     async fn peer_eof_completes_filter_shutdown() {
         #[derive(Debug)]
         struct PendingShutdown;
@@ -3555,6 +3917,74 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn recv_reports_timeout_during_write_backpressure() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(16)),
+        );
+        io.encode_slice(BIN2).unwrap();
+        assert!(io.flags().is_wr_backpressure());
+
+        let ioref = io.get_ref();
+        let (res, ()) =
+            ntex_util::future::join(timeout(Millis(1000), io.recv(&BytesCodec)), async move {
+                sleep(Millis(25)).await;
+                ioref.0.notify_timeout();
+            })
+            .await;
+
+        let Err(Either::Right(err)) = res.expect("recv ignored the timeout") else {
+            panic!("expected a timeout error")
+        };
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert!(io.flags().is_wr_backpressure());
+    }
+
+    #[ntex::test]
+    async fn write_timeout_bounds_output_waits() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV").add(
+                IoConfig::default()
+                    .set_write_buf(16)
+                    .set_write_timeout(ntex_util::time::Seconds(1)),
+            ),
+        );
+        io.encode_slice(BIN2).unwrap();
+        assert!(io.flags().is_wr_backpressure());
+
+        let ioref = io.get_ref();
+        let ((send, flush), ready) = timeout(
+            Millis(3000),
+            ntex_util::future::join(
+                ntex_util::future::join(
+                    io.send(Bytes::from_static(b"item"), &BytesCodec),
+                    io.flush(false),
+                ),
+                ioref.write_ready(),
+            ),
+        )
+        .await
+        .expect("output waits are not bounded by the write timeout");
+
+        let Err(Either::Right(err)) = send else {
+            panic!("expected a transport error")
+        };
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(flush.unwrap_err().kind(), io::ErrorKind::TimedOut);
+        assert_eq!(ready.unwrap_err().kind(), io::ErrorKind::TimedOut);
+
+        // the connection is left open, the caller decides
+        assert!(!io.is_closed());
+        client.remote_buffer_cap(1024);
+        io.flush(true).await.unwrap();
+    }
+
+    #[ntex::test]
     async fn recv_reports_truncated_stream() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
@@ -3651,5 +4081,79 @@ mod tests {
 
         assert!(io.recv(&FixedSize(8)).await.unwrap().is_none());
         assert_eq!(io.with_read_dst(|b| b.len()), 3);
+    }
+
+    #[ntex::test]
+    async fn read_pause_stops_transport_reads() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = Io::new(server, SharedCfg::new("SRV"));
+
+        assert!(lazy(|cx| io.poll_read_pause(cx)).await.is_pending());
+        assert!(io.flags().is_read_paused());
+        assert!(lazy(|cx| io.poll_read_pause(cx)).await.is_pending());
+
+        // the transport does not read while paused
+        client.write("data");
+        sleep(Millis(25)).await;
+        assert_eq!(io.st().buffer.read_dst_size(), 0);
+
+        // status updates are still reported
+        io.st().notify_timeout();
+        assert!(matches!(
+            lazy(|cx| io.poll_read_pause(cx)).await,
+            Poll::Ready(IoStatusUpdate::Timeout)
+        ));
+
+        // waiting for input cancels the pause
+        assert_eq!(io.read_notify().await.unwrap(), Some(()));
+        assert!(!io.flags().is_read_paused());
+        assert_eq!(io.with_read_dst(BytesMut::take), b"data");
+    }
+
+    struct Failing;
+
+    impl Decoder for Failing {
+        type Item = Bytes;
+        type Error = &'static str;
+
+        fn decode(&self, _: &mut BytesMut) -> Result<Option<Bytes>, &'static str> {
+            Err("invalid frame")
+        }
+    }
+
+    #[ntex::test]
+    async fn recv_reports_decoder_error() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = Io::new(server, SharedCfg::new("SRV"));
+
+        client.write("data");
+        let Err(Either::Left(err)) = io.recv(&Failing).await else {
+            panic!("expected a decoder error")
+        };
+        assert_eq!(err, "invalid frame");
+    }
+
+    #[ntex::test]
+    async fn poll_flush_enables_write_backpressure() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(16)),
+        );
+
+        // output buffered without a state update
+        io.with_write_dst(|buf| buf.extend_from_slice(BIN2));
+        assert!(!io.flags().is_wr_backpressure());
+
+        assert!(lazy(|cx| io.poll_flush(cx, false)).await.is_pending());
+        assert!(io.flags().is_wr_backpressure());
+
+        client.remote_buffer_cap(1024);
+        assert_eq!(client.read().await.unwrap(), BIN2);
+        io.flush(false).await.unwrap();
+        assert!(!io.flags().is_wr_backpressure());
     }
 }

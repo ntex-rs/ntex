@@ -2,6 +2,105 @@
 
 ## [Unreleased]
 
+* `web::ResourceMap::url_for()` on a nested scope map resolves names of parent and sibling
+  scopes, parent names were prefixed with the nested scope path and sibling names were not found
+
+* `web::test::TestServerConfig::listener()` does not bind the configured port, the web test
+  server bound it anyway and panicked if the port was in use
+
+* Add `Payload::trailers()`, HTTP/1 chunked and HTTP/2 request trailers and HTTP/2 client
+  response trailers are available after the payload is complete, they were dropped;
+  `h1::Payload` is a struct that dereferences to `bstream::Receiver`, new
+  `PayloadItem::Trailers` item, chunked trailer fields must be `name: value` lines
+
+* HTTP/2 payload read that returns a chunk does not register the reader waker, new data woke
+  a reader that was not waiting
+
+* HTTP/2 payload read does not wake the client payload task when no data is available,
+  the task was polled for nothing on every pending read
+
+* HTTP/2 `304 Not Modified` response has no body, it was sent with `content-length: 0` or
+  with the body `DATA` frames
+
+* `CustomResponder` returns `500` for an invalid `with_header()` name or value, it was
+  silently ignored; repeated `with_header()` calls for the same name keep all values, only
+  the last one was kept
+
+* HTTP/2 response body error resets only its stream with `INTERNAL_ERROR`, it closed the whole
+  connection with `GOAWAY`, a failed send on a closed stream no longer fails the connection
+
+* Remove unused `H2Error::Stream`, `H2Error::Operation`, `H2Error::MissingPseudo` and
+  `H2Error::Uri`, stream-level failures are not connection errors
+
+* HTTP/2 request with a malformed uri is answered with `400 Bad Request`, it closed the whole
+  connection with `GOAWAY`, see RFC 9113 section 8.1.1
+
+* HTTP/2 payload keeps the first error, a stream reset was reported as
+  `PayloadError::Incomplete` when the sender was dropped
+
+* HTTP/2 payload ends after an error, the next read returned `Pending` forever instead of `None`
+
+* HTTP/2 request payload ignores empty non-final `DATA` frames, they are not flow controlled
+  and each one was queued as an empty body chunk without bound
+
+* HTTP/2 connection is closed with `GOAWAY` `ENHANCE_YOUR_CALM` after 10 consecutive empty non-final `DATA` frames,
+  new `H2Error::EmptyDataFrames` error
+
+* Remove the deprecated `neon` feature, it had no effect
+
+* Remove the `neon-iocp` feature, it had no effect, Windows always uses IOCP
+
+* `Client::request_from` copies every value of multi-value headers, only the first value
+  was copied
+
+* HTTP/1 dispatcher closes the connection when a response body stream fails, an error
+  response was written into the incomplete response body
+
+* `Json` extractor rejects a request with an invalid `Content-Length` header with
+  `JsonPayloadError::Payload(PayloadError::UnknownLength)`, the header was ignored and the body
+  was read up to the limit
+
+* Reduce per-request allocations in `Logger`, `Compress`, `ConnectionInfo` and `Form`
+  content-type check, `Logger` no longer clones its format for every request
+
+* HTTP/1 dispatcher stops polling a response body once the connection is closed or failed,
+  an always ready body was polled without bound and its chunks discarded
+
+* HTTP/1 dispatcher stops polling a response body once its declared length is sent or the
+  response has no body, such as a `HEAD` response, the rest of the body was polled and discarded
+
+* Response body encoder stops after the end of the body stream, an empty final chunk left it
+  unfused and the next poll went back to the finished body
+
+* `Compress::default()` negotiates only encodings the encoder supports, a browser
+  `Accept-Encoding` listing `br` selected brotli and the response was sent uncompressed
+
+* `Bytes`, `String`, `Json` and `Form` extractors return a single-chunk body without copying
+  and size the buffer from `Content-Length` instead of a fixed 8 KiB allocation
+
+* HTTP/1 server keeps reading the request payload after the response is sent until the payload
+  completes, a payload that was still held by the application was decoded as the next request
+  once its first part was received
+
+* HTTP/1 response carries `connection: close` if the request payload was dropped unread while
+  the service was running, the connection was closed without announcing it
+
+* HTTP/1 server rejects an asterisk-form request target for methods other than `OPTIONS`
+
+* HTTP/1 server accepts an authority-form request target only for `CONNECT`, and requires it for `CONNECT`
+
+* HTTP/1 dispatcher drops an idle streaming response body and closes the connection when the client
+  half-closes it and has no pipelined requests; `HttpServiceConfig::set_half_close(true)` keeps
+  the previous behavior
+
+* `h1::Codec::upgrade()` is removed, use `Request::upgrade()` of the decoded request
+
+* HTTP/1 dispatcher observes a connection failure while the response body is pending, a streaming
+  response kept the connection and its body until the body produced the next chunk
+
+* HTTP/1 `101 Switching Protocols` response body is sent without framing, a body of a response to
+  a request without upgrade was chunk encoded or cut at its length
+
 * HTTP/2 client stops sending the request body when the stream is reset or the connection closes,
   a streaming body that waited for data kept the upload task and the connection busy
 

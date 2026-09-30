@@ -2,6 +2,27 @@
 
 ## [4.1.0] - Unreleased
 
+* io-uring: fix lost submissions when queued operations wrap around the end of
+  the pending queue storage, the wrapped part was dropped without being
+  submitted
+
+* Remove the `neon-iocp` feature, it had no effect, Windows always uses IOCP
+
+* IOCP: support unix domain socket connect, `ConnectEx` requires a bound socket
+  and only IP sockets were bound, so `unix_connect` failed with
+  "Unsupported address domain"
+
+* compio: map Win32 network errors of connect, read and write on Windows to
+  `WinSock` errors, a refused connect reported `ErrorKind::Uncategorized`
+
+* IOCP: failed socket completions report `WinSock` errors, a refused `ConnectEx`
+  returned `ERROR_CONNECTION_REFUSED` with `ErrorKind::Uncategorized` instead of
+  `ConnectionRefused`, resets, aborts and unreachable errors were also uncategorized
+
+* polling: shut the socket down inline instead of on the blocking pool; a
+  deferred shutdown could run after the runtime stopped and the descriptor was
+  closed and reused, shutting down an unrelated socket
+
 * IOCP: querying `PeerAddr` after the runtime stopped returns `None` instead of
   panicking
 

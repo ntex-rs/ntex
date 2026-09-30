@@ -83,6 +83,9 @@ impl ConnectOps {
                 0,
                 0,
             )))
+        } else if addr.domain() == Domain::UNIX {
+            // an unnamed address, `ConnectEx` requires a bound socket
+            SockAddr::unix("")
         } else {
             Err(io::Error::new(
                 io::ErrorKind::AddrNotAvailable,

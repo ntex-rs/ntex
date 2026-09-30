@@ -598,4 +598,18 @@ mod tests {
         let result = timeout_checked(Millis(0), sleep(Millis(100))).await;
         assert!(result.is_ok());
     }
+
+    #[ntex::test]
+    async fn sleep_and_deadline_wait() {
+        let start = now();
+        sleep(Millis(5)).wait().await;
+        deadline(Millis(5)).wait().await;
+        assert!(now() >= start);
+
+        let hnd = Deadline::new(Millis::ZERO);
+        assert!(
+            crate::time::timeout(Millis(20), hnd.wait()).await.is_err(),
+            "zero deadline never completes"
+        );
+    }
 }

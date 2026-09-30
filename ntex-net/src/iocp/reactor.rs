@@ -3,8 +3,10 @@ use std::{cell::Cell, fmt, io, mem, net, ptr, sync::Arc};
 
 use windows_sys::Win32::{
     Foundation::{
-        ERROR_BROKEN_PIPE, ERROR_HANDLE_EOF, ERROR_IO_INCOMPLETE, ERROR_MORE_DATA, ERROR_NO_DATA,
-        ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, INVALID_HANDLE_VALUE, NTSTATUS,
+        ERROR_BROKEN_PIPE, ERROR_CONNECTION_ABORTED, ERROR_CONNECTION_REFUSED, ERROR_HANDLE_EOF,
+        ERROR_HOST_UNREACHABLE, ERROR_IO_INCOMPLETE, ERROR_MORE_DATA, ERROR_NETNAME_DELETED,
+        ERROR_NETWORK_UNREACHABLE, ERROR_NO_DATA, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED,
+        ERROR_PORT_UNREACHABLE, ERROR_SEM_TIMEOUT, INVALID_HANDLE_VALUE, NTSTATUS,
         RtlNtStatusToDosError, WAIT_TIMEOUT,
     },
     Networking::WinSock,
@@ -189,6 +191,40 @@ impl ntex_rt::Driver for Reactor {
     }
 }
 
+/// Maps a Win32 error of a socket completion to its `WinSock` error.
+///
+/// `RtlNtStatusToDosError` maps socket NTSTATUS codes to Win32 network errors,
+/// such as `ERROR_CONNECTION_REFUSED`, which `io::Error::kind()` does not
+/// classify. `WSAGetOverlappedResult` reports `WinSock` errors instead.
+fn wsa_error(error: u32) -> i32 {
+    match error {
+        ERROR_CONNECTION_REFUSED => WinSock::WSAECONNREFUSED,
+        ERROR_NETNAME_DELETED | ERROR_PORT_UNREACHABLE => WinSock::WSAECONNRESET,
+        ERROR_CONNECTION_ABORTED => WinSock::WSAECONNABORTED,
+        ERROR_NETWORK_UNREACHABLE => WinSock::WSAENETUNREACH,
+        ERROR_HOST_UNREACHABLE => WinSock::WSAEHOSTUNREACH,
+        ERROR_SEM_TIMEOUT => WinSock::WSAETIMEDOUT,
+        _ => error.cast_signed(),
+    }
+}
+
+/// Maps a Win32 network error of a socket completion to its `WinSock` error,
+/// so that `io::Error::kind()` classifies it.
+#[cfg_attr(not(feature = "compio"), allow(dead_code))]
+pub(crate) fn map_socket_error(err: io::Error) -> io::Error {
+    match err.raw_os_error() {
+        Some(code) => {
+            let mapped = wsa_error(code.cast_unsigned());
+            if mapped == code {
+                err
+            } else {
+                io::Error::from_raw_os_error(mapped)
+            }
+        }
+        None => err,
+    }
+}
+
 impl Reactor {
     /// Handle ring completions, forward changes to specific handler
     fn poll_completions(&self, events: &[OVERLAPPED_ENTRY]) {
@@ -216,7 +252,7 @@ impl Reactor {
                     // Partial transfer: data was delivered and more remains, so
                     // reporting 0 here would be read as a clean eof / write-zero.
                     ERROR_MORE_DATA => Ok(overlapped.base.InternalHigh),
-                    _ => Err(io::Error::from_raw_os_error(error.cast_signed())),
+                    _ => Err(io::Error::from_raw_os_error(wsa_error(error))),
                 }
             };
             handlers[overlapped.hnd as usize].completed(overlapped.udata, result, overlapped_ptr);
@@ -358,6 +394,115 @@ impl Handler for Dummy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Socket completion errors have the same kind as synchronous socket errors.
+    #[test]
+    fn socket_completion_error_kind() {
+        use windows_sys::Win32::Foundation as f;
+        for (status, kind) in [
+            (
+                f::STATUS_CONNECTION_REFUSED,
+                io::ErrorKind::ConnectionRefused,
+            ),
+            (f::STATUS_CONNECTION_RESET, io::ErrorKind::ConnectionReset),
+            (f::STATUS_REMOTE_DISCONNECT, io::ErrorKind::ConnectionReset),
+            (
+                f::STATUS_CONNECTION_ABORTED,
+                io::ErrorKind::ConnectionAborted,
+            ),
+            (
+                f::STATUS_NETWORK_UNREACHABLE,
+                io::ErrorKind::NetworkUnreachable,
+            ),
+            (f::STATUS_HOST_UNREACHABLE, io::ErrorKind::HostUnreachable),
+            (f::STATUS_IO_TIMEOUT, io::ErrorKind::TimedOut),
+        ] {
+            let error = unsafe { RtlNtStatusToDosError(status) };
+            let err = io::Error::from_raw_os_error(wsa_error(error));
+            assert_eq!(err.kind(), kind, "{status:#x}: {err:?}");
+
+            let err = map_socket_error(io::Error::from_raw_os_error(error.cast_signed()));
+            assert_eq!(err.kind(), kind, "{status:#x}: {err:?}");
+        }
+    }
+
+    type Completions = std::rc::Rc<std::cell::RefCell<Vec<(u32, Result<usize, io::ErrorKind>)>>>;
+
+    struct Recorder(Completions, std::rc::Rc<Cell<usize>>);
+
+    impl Handler for Recorder {
+        fn completed(&mut self, udata: u32, result: io::Result<usize>, _: *mut Overlapped) {
+            self.0
+                .borrow_mut()
+                .push((udata, result.map_err(|e| e.kind())));
+        }
+
+        fn tick(&mut self) {
+            self.1.set(self.1.get() + 1);
+        }
+    }
+
+    /// Completion statuses are translated into the operation result: pipe
+    /// and eof statuses end the operation without an error, a partial
+    /// transfer keeps its byte count, and notification packets are skipped.
+    #[test]
+    fn poll_completions_translates_status() {
+        use windows_sys::Win32::Foundation as f;
+
+        let reactor = Reactor::new().unwrap();
+        let done = Completions::default();
+        let ticks = std::rc::Rc::new(Cell::new(0));
+        reactor.register(|_| Box::new(Recorder(done.clone(), ticks.clone())));
+
+        let mut ops: Vec<Box<Overlapped>> = [
+            (f::STATUS_SUCCESS, 7),
+            (f::STATUS_PIPE_BROKEN, 7),
+            (f::STATUS_END_OF_FILE, 7),
+            (f::STATUS_BUFFER_OVERFLOW, 5),
+            (f::STATUS_CONNECTION_REFUSED, 0),
+            (f::STATUS_CANCELLED, 0),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (status, len))| {
+            let mut ov = Box::new(Overlapped::new(1, u32::try_from(i).unwrap()));
+            ov.base.Internal = status.cast_unsigned() as usize;
+            ov.base.InternalHigh = len;
+            ov
+        })
+        .collect();
+        // a notification packet, it has no handler
+        ops.push(Box::new(Overlapped::new(0, 99)));
+
+        let events: Vec<_> = ops
+            .iter_mut()
+            .map(|ov| OVERLAPPED_ENTRY {
+                lpOverlapped: (&raw mut ov.base),
+                ..OVERLAPPED_ENTRY::default()
+            })
+            .collect();
+        reactor.poll_completions(&events);
+
+        assert_eq!(
+            *done.borrow(),
+            [
+                (0, Ok(7)),
+                (1, Ok(0)),
+                (2, Ok(0)),
+                (3, Ok(5)),
+                (4, Err(io::ErrorKind::ConnectionRefused)),
+                (
+                    5,
+                    Err(
+                        io::Error::from_raw_os_error(f::ERROR_OPERATION_ABORTED.cast_signed())
+                            .kind()
+                    )
+                ),
+            ]
+        );
+        // one tick per batch of completions
+        assert_eq!(ticks.get(), 1);
+    }
 
     /// Sockets of the base Winsock providers return IFS handles and can be
     /// attached with `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`.

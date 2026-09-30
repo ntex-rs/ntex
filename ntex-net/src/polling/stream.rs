@@ -384,27 +384,20 @@ impl StreamOpsInner {
 }
 
 impl StreamCtl {
-    pub(crate) async fn shutdown(self) -> io::Result<()> {
-        self.inner
-            .with(|streams| {
-                let item = &mut streams[self.id as usize];
-                let fd = item.fd();
-                // The socket is still registered with the poller at this
-                // point, so it is drained here rather than on the blocking
-                // pool: reading it from another thread would race the reactor.
-                // The drain is non-blocking and bounded, so it is cheap enough
-                // to run inline.
-                crate::helpers::drain_raw_socket(fd);
-                ntex_rt::spawn(ntex_rt::spawn_blocking(move || {
-                    crate::helpers::shutdown_result(
-                        syscall!(libc::shutdown(fd, libc::SHUT_RDWR)).map(|_| ()),
-                    )
-                }))
-            })
-            .await
-            .map_err(io::Error::other)
-            .and_then(|res| res.map_err(io::Error::other))
-            .and_then(|res| res)
+    /// Drains the socket and shuts it down.
+    ///
+    /// Both steps run inline: they do not block, and the descriptor is only
+    /// valid while this handle is alive. A job deferred to the blocking pool
+    /// could outlive the handle, if the runtime stops first, and then act on
+    /// an unrelated socket that reused the descriptor.
+    pub(crate) fn shutdown(self) -> io::Result<()> {
+        self.inner.with(|streams| {
+            let fd = streams[self.id as usize].fd();
+            crate::helpers::drain_raw_socket(fd);
+            crate::helpers::shutdown_result(
+                syscall!(libc::shutdown(fd, libc::SHUT_RDWR)).map(|_| ()),
+            )
+        })
     }
 
     /// Arranges for the socket to be aborted instead of closed gracefully.
@@ -600,8 +593,15 @@ mod tests {
     async fn cleanup_closes_socket_with_deferred_secondary_drop() {
         let reactor = Reactor::new().unwrap();
         let ops = StreamOps::get(&reactor);
-        let (socket, _peer) = UnixStream::pair().unwrap();
-        let fd = socket.as_raw_fd();
+        // The close is observed through the peer, the descriptor number can
+        // be reused by tests running in parallel.
+        let (socket, mut peer) = UnixStream::pair().unwrap();
+        peer.set_nonblocking(true).unwrap();
+        let peer_closed = |peer: &mut UnixStream| match io::Read::read(peer, &mut [0u8; 1]) {
+            Ok(0) => true,
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => false,
+            res => panic!("unexpected: {res:?}"),
+        };
         let ctl = Rc::new(Cell::new(None));
         let io = Io::new(
             TestStream {
@@ -619,21 +619,14 @@ mod tests {
                 .with(|streams| streams[id].flags.contains(Flags::DROPPED_PRI))
         );
         assert!(!ops.0.delayed_feed.is_empty());
-        assert_ne!(unsafe { libc::fcntl(fd, libc::F_GETFD) }, -1);
+        assert!(!peer_closed(&mut peer));
 
         let mut handler = StreamOpsHandler {
             inner: ops.0.clone(),
         };
         handler.cleanup();
 
-        let result = unsafe { libc::fcntl(fd, libc::F_GETFD) };
-        let err = io::Error::last_os_error();
-        if result != -1 {
-            // Release the leaked descriptor if this regression returns.
-            assert_eq!(unsafe { libc::close(fd) }, 0);
-        }
-        assert_eq!(result, -1, "cleanup leaked the socket");
-        assert_eq!(err.raw_os_error(), Some(libc::EBADF));
+        assert!(peer_closed(&mut peer), "cleanup leaked the socket");
         assert!(ops.0.delayed_feed.is_empty());
         handler.cleanup();
         drop(io);
@@ -807,6 +800,69 @@ mod tests {
                 st => panic!("unexpected status {st:?}"),
             }
         }
+    }
+
+    /// A failed reactor operation stops the stream with its error.
+    #[ntex::test]
+    async fn reactor_error_stops_the_stream() {
+        let mut fixture = Fixture::new();
+        let id = fixture.id;
+        fixture.handler.error(id, io::Error::other("reactor error"));
+        // an unknown stream is ignored
+        fixture.handler.error(id + 100, io::Error::other("unknown"));
+
+        let closed = !fixture.io.is_active();
+        fixture.teardown();
+        assert!(closed, "reactor error did not stop the stream");
+    }
+
+    /// A read that would block keeps read interest armed.
+    #[ntex::test]
+    async fn readable_without_data_renews_read_interest() {
+        let mut fixture = Fixture::new();
+        fixture.fire(Event::readable(0));
+
+        let flags = fixture.flags();
+        fixture.teardown();
+        assert!(flags.contains(Flags::RD), "read interest was not armed");
+    }
+
+    /// An event for the other direction keeps armed write interest.
+    #[ntex::test]
+    async fn readable_event_keeps_write_interest() {
+        let mut fixture = Fixture::new();
+        fixture
+            .ops
+            .0
+            .with(|streams| streams[fixture.id].flags.insert(Flags::WR));
+        fixture.fire(Event::readable(0));
+
+        let flags = fixture.flags();
+        fixture.teardown();
+        assert!(flags.contains(Flags::WR), "write interest was lost");
+    }
+
+    /// Asking for write interest with leftover output arms it.
+    #[ntex::test]
+    async fn write_interest_with_pending_output() {
+        let fixture = Fixture::new();
+        fixture
+            .io
+            .encode_slice(&vec![b'x'; MAX_WRITE_SIZE * 2])
+            .unwrap();
+
+        fixture.ops.0.interest(fixture.id as u32, false, true);
+        let armed = fixture.flags().contains(Flags::WR);
+        // interest is already armed
+        fixture.ops.0.interest(fixture.id as u32, false, true);
+        let armed2 = fixture.flags().contains(Flags::WR);
+        // write interest is dropped
+        fixture.ops.0.interest(fixture.id as u32, false, false);
+        let dropped = !fixture.flags().contains(Flags::WR);
+        fixture.teardown();
+
+        assert!(armed && armed2, "write interest was not armed");
+        assert!(dropped, "write interest was not dropped");
     }
 
     /// Out-of-band writes, performed on the stack of whoever filled the write

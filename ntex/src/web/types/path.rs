@@ -301,4 +301,11 @@ mod tests {
         assert_eq!(res[0], "name".to_owned());
         assert_eq!(res[1], "32".to_owned());
     }
+
+    #[test]
+    fn test_path_from() {
+        let path = Path::from(10u32);
+        assert_eq!(*path, 10);
+        assert_eq!(path.into_inner(), 10);
+    }
 }

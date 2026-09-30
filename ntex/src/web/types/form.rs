@@ -8,7 +8,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use crate::http::encoding::Decoder;
 use crate::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use crate::http::{HttpMessage, Payload, Response, StatusCode};
-use crate::util::{BoxFuture, BytesMut, stream_recv};
+use crate::util::BoxFuture;
 use crate::web::error::{UrlencodedError, WebResponseError};
 use crate::web::{FromRequest, HttpRequest, Responder, State};
 
@@ -223,7 +223,10 @@ impl<U> UrlEncoded<U> {
     /// Create a new future to URL encode a request
     fn new(req: &HttpRequest, payload: &mut Payload) -> UrlEncoded<U> {
         // check content type
-        if req.content_type().to_lowercase() != "application/x-www-form-urlencoded" {
+        if !req
+            .content_type()
+            .eq_ignore_ascii_case("application/x-www-form-urlencoded")
+        {
             return Self::err(UrlencodedError::ContentType);
         }
         let Ok(encoding) = req.encoding() else {
@@ -292,8 +295,8 @@ where
         }
 
         // payload size
-        let limit = self.limit;
-        if let Some(len) = self.length.take()
+        let (limit, length) = (self.limit, self.length);
+        if let Some(len) = length
             && len > limit
         {
             return Poll::Ready(Err(UrlencodedError::Overflow { size: len, limit }));
@@ -304,18 +307,10 @@ where
         let mut stream = self.stream.take().unwrap();
 
         self.fut = Some(Box::pin(async move {
-            let mut body = BytesMut::with_capacity(8192);
-
-            while let Some(item) = stream_recv(&mut stream).await {
-                let chunk = item?;
-                if (body.len() + chunk.len()) > limit {
-                    return Err(UrlencodedError::Overflow {
-                        size: body.len() + chunk.len(),
-                        limit,
-                    });
-                }
-                body.extend_from_slice(&chunk);
-            }
+            let body = super::read_body(&mut stream, limit, length, |size| {
+                UrlencodedError::Overflow { size, limit }
+            })
+            .await?;
 
             if encoding == UTF_8 {
                 serde_urlencoded::from_bytes::<U>(&body).map_err(|_| UrlencodedError::Parse)
@@ -448,6 +443,13 @@ mod tests {
             }
         );
 
+        let (req, mut pl, ()) =
+            TestRequest::with_header(CONTENT_TYPE, "Application/X-WWW-Form-URLEncoded")
+                .header(CONTENT_LENGTH, "11")
+                .payload(Bytes::from_static(b"hello=world&counter=123"))
+                .to_http_parts();
+        assert!(UrlEncoded::<Info>::new(&req, &mut pl).await.is_ok());
+
         let (req, mut pl, ()) = TestRequest::with_header(
             CONTENT_TYPE,
             "application/x-www-form-urlencoded; charset=utf-8",
@@ -499,5 +501,41 @@ mod tests {
         );
 
         assert_eq!(resp.get_body_ref(), b"hello=world&counter=123");
+    }
+
+    #[crate::rt_test]
+    async fn test_urlencoded_errors2() {
+        let (req, mut pl, ()) = TestRequest::with_header(
+            CONTENT_TYPE,
+            "application/x-www-form-urlencoded; charset=unknown",
+        )
+        .to_http_parts();
+        let info = UrlEncoded::<Info>::new(&req, &mut pl).await;
+        assert!(eq(&info.err().unwrap(), &UrlencodedError::ContentType));
+
+        let (req, mut pl, ()) =
+            TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(CONTENT_LENGTH, HeaderValue::from_bytes(b"1\xff").unwrap())
+                .to_http_parts();
+        let info = UrlEncoded::<Info>::new(&req, &mut pl).await;
+        assert!(eq(&info.err().unwrap(), &UrlencodedError::UnknownLength));
+
+        // no content-length, payload is larger than limit
+        let (req, mut pl, ()) =
+            TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .payload(Bytes::from_static(b"hello=world&counter=123"))
+                .to_http_parts();
+        let info = UrlEncoded::<Info>::new(&req, &mut pl).limit(5).await;
+        assert!(eq(
+            &info.err().unwrap(),
+            &UrlencodedError::Overflow { size: 0, limit: 0 }
+        ));
+    }
+
+    #[crate::rt_test]
+    async fn test_responder_error() {
+        let req = TestRequest::default().to_http_request();
+        let resp = respond_to(Form(1), &req).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

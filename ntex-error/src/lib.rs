@@ -23,11 +23,12 @@ mod ext;
 mod info;
 mod message;
 mod repr;
+/// Helper traits, types, and functions.
 pub mod utils;
 
 pub use crate::bt::{Backtrace, BacktraceRaw, BacktraceResolver};
 pub use crate::error::Error;
-pub use crate::info::Failure;
+pub use crate::info::{Failure, FailureDiagnostic};
 pub use crate::message::{ErrorMessage, ErrorMessageChained};
 pub use crate::message::{fmt_diag, fmt_diag_string, fmt_diag_typ, fmt_err, fmt_err_string};
 pub use crate::utils::{ResultSignature, Retryable, Success, with_service};
@@ -35,12 +36,8 @@ pub use crate::utils::{ResultSignature, Retryable, Success, with_service};
 #[doc(hidden)]
 pub use crate::bt::{set_backtrace_start, set_backtrace_start_alt};
 
-#[doc(hidden)]
-#[deprecated(since = "2.6.0")]
-pub type ErrorInfo = Failure;
-
 /// The type of the result.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResultType {
     /// The operation completed successfully.
     Success,
@@ -52,7 +49,7 @@ pub enum ResultType {
 
 impl ResultType {
     /// Returns a str representation of the result type.
-    pub const fn as_str(&self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             ResultType::Success => "Success",
             ResultType::ClientError => "ClientError",
@@ -74,13 +71,6 @@ pub trait AsError {
 ///
 /// It enables classification, service attribution, and debugging context.
 pub trait ErrorDiagnostic: StdError + 'static {
-    #[doc(hidden)]
-    #[deprecated(since = "2.1.0")]
-    /// Returns the classification of the result (e.g. success, client error, service error).
-    fn typ(&self) -> ResultType {
-        ResultType::ServiceError
-    }
-
     /// Returns a stable identifier for the specific error classification.
     ///
     /// It is used for logging, metrics, and diagnostics.
@@ -105,6 +95,18 @@ pub trait ErrorDiagnostic: StdError + 'static {
     fn backtrace(&self) -> Option<&Backtrace> {
         None
     }
+
+    #[doc(hidden)]
+    #[track_caller]
+    /// Converts this error into a type-erased [`Failure`].
+    ///
+    /// Used by [`IntoFailure`]; overridden by [`Error`] to avoid double wrapping.
+    fn into_failure(self) -> Failure
+    where
+        Self: Sized,
+    {
+        Failure::from(Error::from(self))
+    }
 }
 
 /// Helper trait for converting a value into a unified error-aware result type.
@@ -119,13 +121,7 @@ impl fmt::Display for ResultType {
     }
 }
 
-impl ErrorDiagnostic for ResultType {
-    fn signature(&self) -> &'static str {
-        self.as_str()
-    }
-}
-
-/// Helper trait for converting a value into a unified error-aware result type.
+/// Helper trait for converting a value into a type-erased [`Failure`].
 pub trait IntoFailure: Sized {
     /// Converts this value into a type-erased [`Failure`].
     fn fail(self) -> Failure;
@@ -174,10 +170,6 @@ mod tests {
     #[error("TestError2")]
     struct TestError2;
     impl ErrorDiagnostic for TestError2 {
-        fn typ(&self) -> ResultType {
-            ResultType::ClientError
-        }
-
         fn signature(&self) -> &'static str {
             "TestError2"
         }
@@ -202,18 +194,18 @@ mod tests {
         );
         assert!(err.backtrace().is_some());
 
-        let err = err.set_service("SVC");
+        let err = err.with_service("SVC");
         assert_eq!(err.service(), Some("SVC"));
-        let err = err.set_tag("TAG");
+        let err = err.with_tag("TAG");
         assert_eq!(err.tag().unwrap(), &b"TAG"[..]);
 
         let err2: Error<TestError> = Error::new(TestError::Service("409 Error"), "TEST");
         assert_ne!(err, err2);
         assert_eq!(err, TestError::Service("409 Error"));
 
-        let err2 = err2.set_tag("TAG");
+        let err2 = err2.with_tag("TAG");
         assert_eq!(err.tag().unwrap(), &b"TAG"[..]);
-        let err2 = err2.set_service("SVC");
+        let err2 = err2.with_service("SVC");
         assert_eq!(err, err2);
         let err2 = err2.map(|_| TestError::Disconnect);
         assert_ne!(err, err2);
@@ -269,7 +261,7 @@ mod tests {
         let msg = fmt_diag_string(&err);
         assert!(msg.contains("err: InternalServiceError"));
 
-        let err: Failure = err.set_service("SVC").into();
+        let err: Failure = err.with_service("SVC").into();
         assert_eq!(err.service(), Some("SVC"));
         assert_eq!(err.signature(), "Service-Internal");
         assert_eq!(err.as_diag().service(), Some("SVC"));
@@ -287,11 +279,11 @@ mod tests {
         // Error extensions
         let err: Error<TestError> = TestError::Service("409 Error").into();
         assert_eq!(err.get_item::<&str>(), None);
-        let err = err.insert_item("Test");
+        let err = err.with_item("Test");
         assert_eq!(err.get_item::<&str>(), Some(&"Test"));
         let err2 = err.clone();
         assert_eq!(err2.get_item::<&str>(), Some(&"Test"));
-        let err2 = err2.insert_item("Test2");
+        let err2 = err2.with_item("Test2");
         assert_eq!(err2.get_item::<&str>(), Some(&"Test2"));
         assert_eq!(err.get_item::<&str>(), Some(&"Test"));
         let err2 = err.clone().map(|_| TestError::Disconnect);

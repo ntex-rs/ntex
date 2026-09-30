@@ -48,19 +48,13 @@ impl Value {
     }
 
     pub(crate) fn append(&mut self, val: HeaderValue) {
-        match self {
-            Value::One(prev_val) => {
-                let prev_val = std::mem::replace(prev_val, val);
-                let mut val = VecDeque::new();
-                val.push_back(prev_val);
-                let data = std::mem::replace(self, Value::Multi(val));
-                match data {
-                    Value::One(val) => self.append(val),
-                    Value::Multi(_) => unreachable!(),
-                }
+        *self = match std::mem::replace(self, Value::Multi(VecDeque::new())) {
+            Value::One(prev_val) => Value::Multi(VecDeque::from([prev_val, val])),
+            Value::Multi(mut vec) => {
+                vec.push_back(val);
+                Value::Multi(vec)
             }
-            Value::Multi(vec) => vec.push_back(val),
-        }
+        };
     }
 }
 
@@ -73,21 +67,19 @@ impl Iterator for ValueIntoIter {
     type Item = HeaderValue;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match &mut self.value {
-            Value::One(_) => {
-                let val = std::mem::replace(&mut self.value, Value::Multi(VecDeque::new()));
-                match val {
-                    Value::One(val) => Some(val),
-                    Value::Multi(_) => unreachable!(),
-                }
+        match std::mem::replace(&mut self.value, Value::Multi(VecDeque::new())) {
+            Value::One(val) => Some(val),
+            Value::Multi(mut vec) => {
+                let val = vec.pop_front();
+                self.value = Value::Multi(vec);
+                val
             }
-            Value::Multi(vec) => vec.pop_front(),
         }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         match self.value {
-            Value::One(_) => (1, None),
+            Value::One(_) => (1, Some(1)),
             Value::Multi(ref v) => v.iter().size_hint(),
         }
     }
@@ -558,5 +550,26 @@ mod tests {
             map2.get(ACCEPT_ENCODING),
             Some(&HeaderValue::from_static("gzip"))
         );
+    }
+
+    #[test]
+    fn value_into_iter() {
+        let mut it = Value::One(HeaderValue::from_static("a")).into_iter();
+        assert_eq!(it.size_hint(), (1, Some(1)));
+        assert_eq!(it.next(), Some(HeaderValue::from_static("a")));
+        assert_eq!(it.size_hint(), (0, Some(0)));
+        assert_eq!(it.next(), None);
+
+        let mut val = Value::One(HeaderValue::from_static("a"));
+        val.append(HeaderValue::from_static("b"));
+        val.append(HeaderValue::from_static("c"));
+        let mut it = val.into_iter();
+        assert_eq!(it.size_hint(), (3, Some(3)));
+        assert_eq!(it.next(), Some(HeaderValue::from_static("a")));
+        assert_eq!(it.next(), Some(HeaderValue::from_static("b")));
+        assert_eq!(it.size_hint(), (1, Some(1)));
+        assert_eq!(it.next(), Some(HeaderValue::from_static("c")));
+        assert_eq!(it.next(), None);
+        assert_eq!(it.next(), None);
     }
 }

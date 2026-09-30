@@ -74,6 +74,56 @@ async fn test_h2() -> io::Result<()> {
 }
 
 #[ntex::test]
+async fn test_h2_control() -> io::Result<()> {
+    let num = Arc::new(AtomicUsize::new(0));
+    let num2 = num.clone();
+
+    let srv = test_server(async move |_| {
+        let num = num2.clone();
+        openssl(
+            ssl_acceptor(),
+            HttpService::new(async |mut req: Request| {
+                let body = load_body(req.take_payload()).await.unwrap();
+                Ok::<_, io::Error>(Response::Ok().body(body.freeze()))
+            })
+            .h2_control(move |msg: ntex::http::h2::Control<_>| {
+                num.fetch_add(1, Ordering::Relaxed);
+                async move {
+                    Ok::<_, io::Error>(match msg {
+                        ntex::http::h2::Control::Expect(expect)
+                            if expect.pseudo().path.as_deref() == Some("/reject") =>
+                        {
+                            expect.fail(StatusCode::EXPECTATION_FAILED, header::HeaderMap::new())
+                        }
+                        msg => msg.ack(),
+                    })
+                }
+            }),
+        )
+    });
+
+    let response = srv
+        .srequest(Method::POST, "/")
+        .header(header::EXPECT, "100-continue")
+        .send_body("data")
+        .await
+        .unwrap();
+    assert_eq!(response.version(), Version::HTTP_2);
+    assert!(response.status().is_success());
+    assert_eq!(response.body().await.unwrap(), "data");
+    assert!(num.load(Ordering::Relaxed) >= 1);
+
+    let response = srv
+        .srequest(Method::POST, "/reject")
+        .header(header::EXPECT, "100-continue")
+        .send_body("data")
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::EXPECTATION_FAILED);
+    Ok(())
+}
+
+#[ntex::test]
 async fn test_h1() -> io::Result<()> {
     let srv = test_server(async move |_| {
         let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();

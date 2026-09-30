@@ -39,6 +39,7 @@ impl From<Option<usize>> for KeepAlive {
 }
 
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools)]
 /// Configuration shared by HTTP/1 and HTTP/2 server services.
 ///
 /// The default configuration enables persistent HTTP/1 connections with a
@@ -56,6 +57,7 @@ pub struct HttpServiceConfig {
     pub(super) headers_read_rate: Option<FrameReadRate>,
     pub(super) payload_read_rate: Option<FrameReadRate>,
     pub(super) write_timeout: Seconds,
+    pub(super) half_close: bool,
 
     config: CfgContext,
 }
@@ -82,10 +84,10 @@ impl HttpServiceConfig {
     #[must_use]
     /// Creates an HTTP service configuration with default settings.
     pub fn new() -> HttpServiceConfig {
-        Self::_new(KeepAlive::Timeout(Seconds(5)), Seconds::ONE)
+        Self::new_inner(KeepAlive::Timeout(Seconds(5)), Seconds::ONE)
     }
 
-    fn _new(keep_alive: KeepAlive, client_timeout: Seconds) -> HttpServiceConfig {
+    fn new_inner(keep_alive: KeepAlive, client_timeout: Seconds) -> HttpServiceConfig {
         let (keep_alive, ka_enabled) = match keep_alive {
             KeepAlive::Timeout(val) => (val, true),
             KeepAlive::Os => (Seconds::ZERO, true),
@@ -108,6 +110,7 @@ impl HttpServiceConfig {
             validate_host: true,
             payload_read_rate: None,
             write_timeout: Seconds::ZERO,
+            half_close: false,
             config: CfgContext::default(),
         }
     }
@@ -236,6 +239,27 @@ impl HttpServiceConfig {
     /// is disabled by default.
     pub fn set_write_timeout(mut self, timeout: Seconds) -> Self {
         self.write_timeout = timeout;
+        self
+    }
+
+    #[must_use]
+    /// Keeps streaming an HTTP/1 response after the client half-closes the
+    /// connection.
+    ///
+    /// A client that closes its side of the connection is treated as gone:
+    /// when the read side reaches EOF, all buffered requests are handled and
+    /// the response body has no data ready, the dispatcher drops the body and
+    /// closes the connection. Otherwise an idle streaming response, e.g.
+    /// server-sent events, would hold the connection until the body produces
+    /// its next chunk.
+    ///
+    /// Enable this for clients that shut down their write side after sending
+    /// the request and still expect the full response. Such a response then
+    /// ends only when the body completes or a write fails. Responses that are
+    /// ready are sent either way. This setting does not affect HTTP/2. It is
+    /// disabled by default.
+    pub fn set_half_close(mut self, enabled: bool) -> Self {
+        self.half_close = enabled;
         self
     }
 
@@ -632,5 +656,39 @@ mod tests {
             KeepAlive::Timeout(Seconds(10)),
             Option::<usize>::Some(10).into()
         );
+    }
+
+    #[test]
+    fn keep_alive_settings() {
+        let cfg = HttpServiceConfig::new().set_keepalive(KeepAlive::Os);
+        assert_eq!(cfg.keep_alive, Seconds::ZERO);
+        assert!(cfg.ka_enabled);
+
+        let cfg = HttpServiceConfig::new().set_keepalive(KeepAlive::Disabled);
+        assert_eq!(cfg.keep_alive, Seconds::ZERO);
+        assert!(!cfg.ka_enabled);
+
+        let cfg = HttpServiceConfig::new().set_keepalive_timeout(Seconds(30));
+        assert_eq!(cfg.keep_alive, Seconds(30));
+        assert!(cfg.ka_enabled);
+
+        let cfg = HttpServiceConfig::new().set_keepalive_timeout(Seconds::ZERO);
+        assert_eq!(cfg.keep_alive, Seconds::ZERO);
+        assert!(!cfg.ka_enabled);
+    }
+
+    #[test]
+    fn read_rate_settings() {
+        let cfg = HttpServiceConfig::new()
+            .set_headers_read_rate(Seconds(1), Seconds(5), 128)
+            .set_payload_read_rate(Seconds(1), Seconds(5), 128);
+        assert!(cfg.headers_read_rate.is_some());
+        assert!(cfg.payload_read_rate.is_some());
+
+        let cfg = cfg
+            .set_headers_read_rate(Seconds::ZERO, Seconds(5), 128)
+            .set_payload_read_rate(Seconds::ZERO, Seconds(5), 128);
+        assert!(cfg.headers_read_rate.is_none());
+        assert!(cfg.payload_read_rate.is_none());
     }
 }

@@ -426,4 +426,10 @@ mod tests {
         assert_eq!(3000u16, Into::<u16>::into(CloseCode::Other(3000)));
         assert!(!CloseCode::Other(2000).is_valid());
     }
+
+    #[test]
+    fn test_hash_key_too_long() {
+        assert_eq!(hash_key(&[b'a'; 33]), Err(HandshakeError::BadWebsocketKey));
+        assert!(hash_key(&[b'a'; 32]).is_ok());
+    }
 }

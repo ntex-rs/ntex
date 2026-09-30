@@ -440,6 +440,11 @@ impl Tree {
                                     }
                                 }
                             }
+                            // tail consumed the rest of the path, values are
+                            // already checked
+                            if key.len() == 1 {
+                                return None;
+                            }
                         }
 
                         is_match

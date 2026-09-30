@@ -64,7 +64,12 @@ where
 ///
 /// A middleware factory for `Timeout` could look like this:
 ///
-/// ```rust,ignore
+/// ```rust
+/// # use ntex_service::Middleware;
+/// # pub struct Timeout<S> {
+/// #     service: S,
+/// #     timeout: std::time::Duration,
+/// # }
 /// pub struct TimeoutMiddleware {
 ///     timeout: std::time::Duration,
 /// }
@@ -120,7 +125,7 @@ where
 pub struct ApplyMiddleware<M, Sf>(Rc<(M, Sf)>);
 
 impl<M, Sf> ApplyMiddleware<M, Sf> {
-    /// Create new `ApplyMiddleware` service factory instance
+    /// Creates a new `ApplyMiddleware` factory.
     pub(crate) fn new(mw: M, sf: Sf) -> Self {
         Self(Rc::new((mw, sf)))
     }
@@ -206,7 +211,10 @@ where
 }
 
 #[doc(hidden)]
-/// Service factory that produces `middleware` from `Fn`.
+/// Creates middleware from an asynchronous function.
+///
+/// The function receives an input request and an [`ApplyCtx`] that can call the
+/// wrapped service.
 pub fn fn_layer<F, S, St, Req, In, Out, Err>(f: F) -> FnMiddleware<F, S, St, Req, In, Out, Err>
 where
     F: AsyncFn(In, &ApplyCtx<'_, S, St, Req>) -> Result<Out, Err> + Clone,

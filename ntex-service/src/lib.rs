@@ -224,7 +224,7 @@ pub trait ServiceFactory<St, Req> {
     type InitError;
 
     /// Asynchronously creates a service using the supplied state.
-    async fn create(&self, cfg: &St) -> Result<Self::Service, Self::InitError>;
+    async fn create(&self, st: &St) -> Result<Self::Service, Self::InitError>;
 
     #[inline]
     /// Creates a service and wraps it with its state in a [`Pipeline`].
@@ -375,8 +375,8 @@ where
     type Service = Sf::Service;
     type InitError = Sf::InitError;
 
-    async fn create(&self, cfg: &St) -> Result<Self::Service, Self::InitError> {
-        self.as_ref().create(cfg).await
+    async fn create(&self, st: &St) -> Result<Self::Service, Self::InitError> {
+        self.as_ref().create(st).await
     }
 }
 
@@ -424,6 +424,7 @@ where
     }
 }
 
+/// Combinator and helper types used by the public API.
 pub mod dev {
     pub use crate::and_then::{AndThen, AndThenFactory};
     pub use crate::apply::{Apply, ApplyCtx, ApplyFactory};
@@ -437,4 +438,246 @@ pub mod dev {
     pub use crate::map_state::{MapState, MapStateFactory};
     pub use crate::middleware::{ApplyMiddleware, FnMiddleware};
     pub use crate::then::{Then, ThenFactory};
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::Cell, task::Poll};
+
+    use super::*;
+    use crate::dev::FnServiceSt;
+    use crate::pipeline::PipelineFactory;
+
+    #[derive(Clone, Debug, Default)]
+    struct Srv(Rc<Cell<usize>>);
+
+    impl Service<usize, usize> for Srv {
+        type Res = usize;
+        type Error = &'static str;
+
+        async fn ready(&self, ctx: Ctx<'_, Self, usize>) -> Result<(), Self::Error> {
+            // waker of the current readiness owner is available
+            assert!(ctx.poll_once(|_| true));
+            self.0.set(self.0.get() + 1);
+            Ok(())
+        }
+
+        async fn call(&self, req: usize, ctx: Ctx<'_, Self, usize>) -> Result<usize, Self::Error> {
+            let one = ctx.poll_once(|_| 1);
+            let two = ctx.poll_fn(|_| Poll::Ready(2)).await;
+            assert_eq!(one + two, 3);
+
+            if req == 0 { Err("zero") } else { Ok(req + *ctx) }
+        }
+
+        async fn shutdown(&self, _: Ctx<'_, Self, usize>) {
+            self.0.set(self.0.get() + 100);
+        }
+    }
+
+    struct Fwd {
+        inner: Srv,
+        pl: Pipeline<usize, usize, &'static str>,
+    }
+
+    impl Service<usize, usize> for Fwd {
+        type Res = usize;
+        type Error = usize;
+
+        crate::forward_ready!(usize, inner, str::len);
+
+        async fn call(&self, req: usize, ctx: Ctx<'_, Self, usize>) -> Result<usize, usize> {
+            let res = ctx.call(&self.inner, req).await.map_err(str::len)?;
+            self.pl.call(res).await.map_err(str::len)
+        }
+
+        crate::forward_shutdown!(usize, inner);
+    }
+
+    struct FwdPl {
+        pl: Pipeline<usize, usize, &'static str>,
+    }
+
+    impl Service<usize, usize> for FwdPl {
+        type Res = usize;
+        type Error = &'static str;
+
+        crate::forward_pl_ready!(usize, pl);
+        crate::forward_pl_shutdown!(usize, pl);
+
+        async fn call(&self, req: usize, _: Ctx<'_, Self, usize>) -> Result<usize, &'static str> {
+            self.pl.call(req).await
+        }
+    }
+
+    struct FwdPlErr {
+        pl: Pipeline<usize, usize, &'static str>,
+    }
+
+    impl Service<usize, usize> for FwdPlErr {
+        type Res = usize;
+        type Error = usize;
+
+        crate::forward_pl_ready!(usize, pl, str::len);
+
+        async fn call(&self, req: usize, _: Ctx<'_, Self, usize>) -> Result<usize, usize> {
+            self.pl.call(req).await.map_err(str::len)
+        }
+    }
+
+    #[ntex::test]
+    async fn service_wrappers() {
+        let cnt = Rc::new(Cell::new(0));
+
+        let srv: &'static Srv = Box::leak(Box::new(Srv(cnt.clone())));
+        let pl = Pipeline::new(1, srv);
+        assert_eq!(pl.call(1).await, Ok(2));
+        assert_eq!(pl.call(0).await, Err("zero"));
+        pl.shutdown().await;
+        assert_eq!(cnt.get(), 102);
+
+        let pl = Pipeline::new(2, Box::new(Srv(cnt.clone())));
+        assert_eq!(pl.call(1).await, Ok(3));
+        pl.shutdown().await;
+        assert_eq!(cnt.get(), 203);
+
+        let pl = Pipeline::new(3, Rc::new(Srv(cnt.clone())));
+        assert_eq!(pl.call(1).await, Ok(4));
+        pl.shutdown().await;
+        assert_eq!(cnt.get(), 304);
+
+        let pl = Pipeline::new(
+            1,
+            Fwd {
+                inner: Srv(cnt.clone()),
+                pl: Pipeline::new(10, Srv(cnt.clone())),
+            },
+        );
+        assert_eq!(pl.call(1).await, Ok(12));
+        assert_eq!(pl.call(0).await, Err(4));
+        pl.shutdown().await;
+        assert_eq!(cnt.get(), 409);
+
+        let pl = Pipeline::new(
+            1,
+            FwdPl {
+                pl: Pipeline::new(10, Srv(cnt.clone())),
+            },
+        );
+        assert_eq!(pl.call(1).await, Ok(11));
+        pl.shutdown().await;
+        assert_eq!(cnt.get(), 511);
+
+        let pl = Pipeline::new(
+            1,
+            FwdPlErr {
+                pl: Pipeline::new(10, Srv(cnt.clone())),
+            },
+        );
+        assert_eq!(pl.call(0).await, Err(4));
+        pl.shutdown().await;
+        assert_eq!(cnt.get(), 513);
+    }
+
+    #[ntex::test]
+    async fn pipeline_calls() {
+        let cnt = Rc::new(Cell::new(0));
+        let pl = Srv(cnt.clone()).pipeline(1);
+
+        assert_eq!(pl.call_static(1).await, Ok(2));
+        assert_eq!(pl.call_nowait(2).await, Ok(3));
+        assert_eq!(ServiceCaller::call_service(&pl, 3).await, Ok(4));
+        assert_eq!(cnt.get(), 2);
+
+        let b = pl.bind();
+        assert!(format!("{b:?}").contains("PipelineBinding"));
+        assert_eq!(b.call_static(4).await, Ok(5));
+        assert_eq!(cnt.get(), 3);
+
+        let svc = apply_fn(
+            Srv(cnt.clone()),
+            async |req: usize, svc: &dev::ApplyCtx<'_, Srv, usize, usize>| {
+                svc.call_service(req * 2).await
+            },
+        );
+        let pl = Pipeline::new(1, svc);
+        assert_eq!(pl.call(2).await, Ok(5));
+        assert_eq!(cnt.get(), 6);
+    }
+
+    #[ntex::test]
+    async fn fn_conversions() {
+        let pl = Pipeline::new(5, async |st: &usize, req: usize| Ok::<_, ()>(st + req));
+        assert_eq!(pl.call(1).await, Ok(6));
+
+        let _: FnServiceSt<_, usize, usize, usize, ()> =
+            IntoService::into_service(async |st: &usize, req: usize| Ok::<_, ()>(st + req));
+
+        let f = factory(async |st: &usize| Ok::<_, ()>(Srv(Rc::new(Cell::new(*st)))));
+        let pl = f.pipeline(1).await.unwrap();
+        assert_eq!(pl.call(1).await, Ok(2));
+    }
+
+    #[ntex::test]
+    async fn factory_combinators() {
+        let cnt = Rc::new(Cell::new(0));
+        let c = cnt.clone();
+        let f = fn_factory(async move |st: &usize| {
+            if *st == 0 {
+                Err(())
+            } else {
+                Ok::<_, ()>(Srv(c.clone()))
+            }
+        });
+
+        let rc = Rc::new(f.clone());
+        let pl = rc.pipeline(1).await.unwrap();
+        assert_eq!(pl.call(1).await, Ok(2));
+        assert!(rc.pipeline(0).await.is_err());
+
+        let f2 = f.clone().map_init_err(|()| "init");
+        assert_eq!(f2.create(&0).await.err(), Some("init"));
+
+        let f2 = f.clone().and_then(f.clone());
+        let pl = f2.pipeline(1).await.unwrap();
+        assert_eq!(pl.call(1).await, Ok(3));
+
+        let f2 = factory(f.clone()).map(|r| r * 10).map_err(|_| ());
+        let pl = f2.pipeline(1).await.unwrap();
+        assert_eq!(pl.call(1).await, Ok(20));
+        assert_eq!(pl.call(0).await, Err(()));
+
+        let pf = PipelineFactory::new(f.clone());
+        let pf2 = pf.clone();
+        assert!(format!("{pf2:?}").contains("PipelineFactory"));
+        let pl = pf2.create(2).await.unwrap();
+        assert_eq!(pl.call(1).await, Ok(3));
+        assert!(pf.create(0).await.is_err());
+    }
+
+    #[ntex::test]
+    async fn boxed_and_debug() {
+        let cnt = Rc::new(Cell::new(0));
+
+        let svc = boxed::service(Srv(cnt.clone()));
+        let pl = Pipeline::new(1, svc.clone());
+        assert_eq!(pl.call(1).await, Ok(2));
+
+        let f = boxed::factory(fn_factory(async |_: &usize| Ok::<_, ()>(Srv::default())));
+        let pl = f.clone().pipeline(1).await.unwrap();
+        assert_eq!(pl.call(1).await, Ok(2));
+
+        let s = format!("{:?}", service(Srv::default()).map(|r| r).map_err(|e| e));
+        assert!(s.contains("Map") && s.contains("MapErr"));
+    }
+
+    #[test]
+    fn request_state() {
+        let st = State {
+            req: 1,
+            state: "st",
+        };
+        assert_eq!(st.unpack(), ("st", 1));
+        assert_eq!(("st", 2).unpack(), ("st", 2));
+    }
 }

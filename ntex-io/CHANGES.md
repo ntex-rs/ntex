@@ -2,6 +2,21 @@
 
 ## [4.1.0] - Unreleased
 
+* The read buffer cache checks only the most recently released buffer instead of
+  scanning the whole cache for one that fits
+
+* `Io::send()`, `Io::flush()` and `IoRef::write_ready()` are bounded by
+  `IoConfig::write_timeout()` and fail with `TimedOut` when it expires
+
+* `Io::recv()` returns a dispatcher timeout that fires while it waits for write
+  back-pressure to be released
+
+* Reading pauses while output a filter produced during read processing, for example
+  WebSocket pong replies, keeps the write buffer at the high watermark, until it drains
+  to half of it or the dispatcher asks for more input with `read_more()` or `read_notify()`,
+  output a filter holds back, for example application data during a TLS renegotiation,
+  does not count
+
 * Add `Waiter`, `IoRef::waiter()` and `IoRef::wake()`, tasks wait on a tag of
   the I/O stream until it is woken, waiters complete once the stream is closed
 

@@ -221,7 +221,7 @@ impl MessageBody {
 
         let len = match content_length(res) {
             Ok(len) => len,
-            Err(e) => return Self::err(Error::from(e).set_service(config.service()), config),
+            Err(e) => return Self::err(Error::from(e).with_service(config.service()), config),
         };
 
         MessageBody {
@@ -283,7 +283,7 @@ impl Future for MessageBody {
             let limit = this.fut.as_ref().unwrap().limit;
             if limit > 0 && len > limit {
                 return Poll::Ready(Err(Error::from(ClientPayloadError(PayloadError::Overflow))
-                    .set_service(this.config.service())));
+                    .with_service(this.config.service())));
             }
         }
 
@@ -329,7 +329,7 @@ where
         };
         if !json {
             let err =
-                Some(Error::from(JsonPayloadError::ContentType).set_service(config.service()));
+                Some(Error::from(JsonPayloadError::ContentType).with_service(config.service()));
             return JsonBody {
                 err,
                 config,
@@ -344,7 +344,7 @@ where
             Err(e) => {
                 return JsonBody {
                     err: Some(
-                        Error::from(JsonPayloadError::Payload(e)).set_service(config.service()),
+                        Error::from(JsonPayloadError::Payload(e)).with_service(config.service()),
                     ),
                     config,
                     length: None,
@@ -410,7 +410,7 @@ where
                 return Poll::Ready(Err(Error::from(JsonPayloadError::Payload(
                     ClientPayloadError(PayloadError::Overflow),
                 ))
-                .set_service(self.config.service())));
+                .with_service(self.config.service())));
             }
         }
 
@@ -419,11 +419,9 @@ where
             Poll::Ready(result) => result.map_err(|e| e.map(JsonPayloadError::from))?,
             Poll::Pending => return Poll::Pending,
         };
-        Poll::Ready(
-            serde_json::from_slice::<U>(&body).map_err(|e| {
-                Error::from(JsonPayloadError::from(e)).set_service(this.config.service())
-            }),
-        )
+        Poll::Ready(serde_json::from_slice::<U>(&body).map_err(|e| {
+            Error::from(JsonPayloadError::from(e)).with_service(this.config.service())
+        }))
     }
 }
 
@@ -472,7 +470,7 @@ impl Future for ReadBody {
                 Poll::Ready(Some(Ok(chunk))) => {
                     if this.limit > 0 && (this.buf.len() + chunk.len()) > this.limit {
                         Poll::Ready(Err(Error::from(ClientPayloadError(PayloadError::Overflow))
-                            .set_service(this.config.service())))
+                            .with_service(this.config.service())))
                     } else {
                         this.buf.extend_from_slice(&chunk);
                         continue;
@@ -482,7 +480,7 @@ impl Future for ReadBody {
                 Poll::Ready(Some(Err(err))) => Poll::Ready(Err(Error::from(ClientPayloadError(
                     err,
                 ))
-                .set_service(this.config.service()))),
+                .with_service(this.config.service()))),
                 Poll::Pending => {
                     if this.timeout.poll_elapsed(cx).is_ready() {
                         Poll::Ready(Err(Error::from(ClientPayloadError(
@@ -491,7 +489,7 @@ impl Future for ReadBody {
                                 "Operation timed out",
                             ))),
                         ))
-                        .set_service(this.config.service())))
+                        .with_service(this.config.service())))
                     } else {
                         Poll::Pending
                     }
@@ -628,5 +626,118 @@ mod tests {
                 name: "test".to_owned()
             }
         );
+    }
+
+    fn pending_payload() -> Payload {
+        Payload::Stream(Box::pin(futures_util::stream::pending()))
+    }
+
+    fn error_payload() -> Payload {
+        Payload::Stream(Box::pin(futures_util::stream::iter([
+            Ok(Bytes::from_static(b"{")),
+            Err(PayloadError::Incomplete(None)),
+        ])))
+    }
+
+    fn is_timeout(err: &PayloadError) -> bool {
+        matches!(err, PayloadError::Incomplete(Some(e)) if e.kind() == std::io::ErrorKind::TimedOut)
+    }
+
+    #[crate::rt_test]
+    async fn test_body_timeout_and_error() {
+        let res = TestResponse::builder().build();
+        res.set_payload(pending_payload());
+        let err = res.body().timeout(Millis(1)).await.unwrap_err();
+        assert!(is_timeout(&err.into_error().0));
+
+        let res = TestResponse::builder().build();
+        res.set_payload(error_payload());
+        let err = res.body().await.unwrap_err();
+        assert!(matches!(err.into_error().0, PayloadError::Incomplete(None)));
+
+        // the payload is taken by the first body future
+        let res = TestResponse::builder()
+            .set_payload(b"data".as_ref())
+            .build();
+        let body = res.body();
+        assert_eq!(res.body().await.unwrap(), Bytes::new());
+        assert_eq!(body.await.unwrap(), Bytes::from_static(b"data"));
+    }
+
+    #[crate::rt_test]
+    async fn test_json_timeout_and_errors() {
+        let res = TestResponse::with_header(header::CONTENT_TYPE, "application/json").build();
+        res.set_payload(pending_payload());
+        let err = res.json::<MyObject>().timeout(Millis(1)).await.unwrap_err();
+        let JsonPayloadError::Payload(ClientPayloadError(err)) = &*err else {
+            panic!("{err:?}")
+        };
+        assert!(is_timeout(err));
+
+        let res = TestResponse::with_header(header::CONTENT_TYPE, "application/json").build();
+        res.set_payload(error_payload());
+        let err = res.json::<MyObject>().await.unwrap_err();
+        assert!(matches!(
+            &*err,
+            JsonPayloadError::Payload(ClientPayloadError(PayloadError::Incomplete(None)))
+        ));
+
+        let res = TestResponse::with_header(header::CONTENT_TYPE, "application/json")
+            .set_payload(b"{\"name\": 1}".as_ref())
+            .build();
+        let err = res.json::<MyObject>().await.unwrap_err();
+        assert!(matches!(&*err, JsonPayloadError::Deserialize(Some(_))));
+
+        // a structured syntax suffix is json
+        let res = TestResponse::with_header(header::CONTENT_TYPE, "application/problem+json")
+            .set_payload(b"{\"name\": \"test\"}".as_ref())
+            .build();
+        assert_eq!(res.json::<MyObject>().await.unwrap().name, "test");
+    }
+
+    #[crate::rt_test]
+    async fn test_response_stream() {
+        use futures_util::StreamExt;
+
+        let mut res = TestResponse::builder()
+            .set_payload(b"data".as_ref())
+            .build();
+        assert_eq!(res.next().await.unwrap().unwrap(), "data");
+        assert!(res.next().await.is_none());
+
+        let mut res = TestResponse::builder().build();
+        res.set_payload(error_payload());
+        assert_eq!(res.next().await.unwrap().unwrap(), "{");
+        let err = res.next().await.unwrap().unwrap_err();
+        assert!(matches!(err.into_error().0, PayloadError::Incomplete(None)));
+
+        // the payload is taken
+        let mut res = TestResponse::builder()
+            .set_payload(b"data".as_ref())
+            .build();
+        assert!(matches!(
+            res.take_payload(),
+            Payload::Stream(_) | Payload::H1(_)
+        ));
+        assert!(matches!(res.take_payload(), Payload::None));
+        assert!(res.next().await.is_none());
+    }
+
+    #[test]
+    fn test_response_accessors() {
+        let mut res = TestResponse::with_header(header::CONTENT_TYPE, "text/plain")
+            .version(Version::HTTP_2)
+            .build();
+        res.headers_mut()
+            .insert(header::SERVER, HeaderValue::from_static("test"));
+        assert_eq!(res.header(header::SERVER).unwrap(), "test");
+        assert_eq!(res.version(), Version::HTTP_2);
+
+        res.extensions_mut().insert(10u32);
+        assert_eq!(res.extensions().get::<u32>(), Some(&10));
+
+        let s = format!("{res:?}");
+        assert!(s.contains("ClientResponse HTTP/2.0 200 OK"), "{s}");
+        assert!(s.contains("\"server\": \"test\""), "{s}");
     }
 }

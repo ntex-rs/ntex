@@ -28,6 +28,8 @@ macro_rules! forward_shutdown {
     };
 }
 
+/// An implementation of [`crate::Service::ready`] that forwards readiness checks to a
+/// [`crate::Pipeline`] field.
 #[macro_export]
 macro_rules! forward_pl_ready {
     ($st:ty, $field:ident) => {
@@ -47,6 +49,8 @@ macro_rules! forward_pl_ready {
     };
 }
 
+/// An implementation of [`crate::Service::shutdown`] that shuts down a
+/// [`crate::Pipeline`] field.
 #[macro_export]
 macro_rules! forward_pl_shutdown {
     ($st:ty, $field:ident) => {

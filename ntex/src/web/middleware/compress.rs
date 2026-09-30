@@ -135,30 +135,25 @@ impl PartialEq for AcceptEncoding {
 
 impl AcceptEncoding {
     fn new(tag: &str) -> Option<AcceptEncoding> {
-        let parts: Vec<&str> = tag.split(';').collect();
-        let encoding = match parts.len() {
-            0 => return None,
-            _ => ContentEncoding::from(parts[0]),
-        };
-        let quality = match parts.len() {
-            1 => encoding.quality(),
-            _ => f64::from_str(parts[1]).unwrap_or(0.0),
+        let mut parts = tag.split(';').map(str::trim);
+        let encoding = ContentEncoding::from(parts.next()?);
+        let quality = match parts.next() {
+            None => encoding.quality(),
+            Some(q) => f64::from_str(q).unwrap_or(0.0),
         };
         Some(AcceptEncoding { encoding, quality })
     }
 
     /// Parse a raw Accept-Encoding header value into an ordered list.
     fn parse(raw: &str, encoding: ContentEncoding) -> ContentEncoding {
-        let mut encodings: Vec<_> = raw
-            .replace(' ', "")
-            .split(',')
-            .map(AcceptEncoding::new)
-            .collect();
+        let mut encodings: Vec<_> = raw.split(',').map(AcceptEncoding::new).collect();
         encodings.sort();
 
         for enc in encodings.into_iter().flatten() {
             if encoding == ContentEncoding::Auto {
-                return enc.encoding;
+                if Encoder::can_encode(enc.encoding) {
+                    return enc.encoding;
+                }
             } else if encoding == enc.encoding {
                 return encoding;
             }
@@ -233,8 +228,58 @@ mod tests {
     }
 
     #[test]
+    fn test_auto_skips_unsupported_encodings() {
+        let auto = ContentEncoding::Auto;
+        assert_eq!(
+            AcceptEncoding::parse("gzip, deflate, br, zstd", auto),
+            ContentEncoding::Gzip
+        );
+        assert_eq!(
+            AcceptEncoding::parse("br, deflate", auto),
+            ContentEncoding::Deflate
+        );
+        assert_eq!(AcceptEncoding::parse("br", auto), ContentEncoding::Identity);
+        assert_eq!(
+            AcceptEncoding::parse("gzip, br", ContentEncoding::Br),
+            ContentEncoding::Br
+        );
+        assert_eq!(
+            AcceptEncoding::parse(" br ,  gzip ; q=1.0 ", auto),
+            ContentEncoding::Gzip
+        );
+    }
+
+    #[test]
     fn test_accepting_encoding_from_tag_with_invalid_quality() {
         let accepting_encoding = AcceptEncoding::new("gzip;q=abc").unwrap();
         assert_eq!(accepting_encoding.quality, 0.0);
+    }
+
+    #[crate::rt_test]
+    async fn test_compress_accept_encoding() {
+        use crate::http::header::{CONTENT_ENCODING, HeaderValue};
+        use crate::web::test::{TestRequest, call_service, init_service};
+        use crate::web::{self, App, HttpResponse};
+
+        let srv = init_service(App::new().middleware(Compress::default()).route(
+            "/",
+            web::get().to(async || HttpResponse::Ok().body("a".repeat(1024))),
+        ))
+        .await;
+
+        let req = TestRequest::default()
+            .header(ACCEPT_ENCODING, "gzip")
+            .to_request();
+        let resp = call_service(&srv, req).await;
+        assert_eq!(resp.headers().get(CONTENT_ENCODING).unwrap(), "gzip");
+
+        let req = TestRequest::default()
+            .header(
+                ACCEPT_ENCODING,
+                HeaderValue::from_bytes(b"gzip\xff").unwrap(),
+            )
+            .to_request();
+        let resp = call_service(&srv, req).await;
+        assert!(resp.headers().get(CONTENT_ENCODING).is_none());
     }
 }

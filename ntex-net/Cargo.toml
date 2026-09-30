@@ -35,9 +35,6 @@ neon-uring = []
 # polling only
 neon-polling = []
 
-# iocp only
-neon-iocp = []
-
 trace = []
 
 [dependencies]

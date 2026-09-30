@@ -1,5 +1,11 @@
 # Changes
 
+## [5.1.0] - Unreleased
+
+* Fix use-after-free when a pipeline is dropped with pending readiness or shutdown future
+
+* Fix use-after-free when a pending `PipelineCall` outlives its pipeline and is dropped
+
 ## [5.0.1] - 2026-09-18
 
 * Api docs improvements

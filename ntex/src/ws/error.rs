@@ -288,3 +288,57 @@ impl ResponseError for HandshakeError {
 }
 
 impl ResponseError for ProtocolError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_client_error_from_either() {
+        let err = WsClientError::from(Either::<DecodeError, io::Error>::Left(DecodeError::Method));
+        assert!(matches!(
+            err,
+            WsClientError::InvalidResponse(DecodeError::Method)
+        ));
+        let err = WsClientError::from(Either::<DecodeError, _>::Right(io::Error::other("x")));
+        assert!(matches!(err, WsClientError::Disconnected(Some(_))));
+
+        let err = WsClientError::from(Either::<EncodeError, io::Error>::Left(
+            EncodeError::UnexpectedEof,
+        ));
+        assert!(matches!(
+            err,
+            WsClientError::InvalidRequest(EncodeError::UnexpectedEof)
+        ));
+        let err = WsClientError::from(Either::<EncodeError, _>::Right(io::Error::other("x")));
+        assert!(matches!(err, WsClientError::Disconnected(Some(_))));
+    }
+
+    #[test]
+    fn test_client_error_clone() {
+        let hdr = HeaderValue::from_static("v");
+        let errs = [
+            WsClientError::Config(WsConfigError::MissingHost),
+            WsClientError::InvalidRequest(EncodeError::UnexpectedEof),
+            WsClientError::InvalidResponse(DecodeError::Method),
+            WsClientError::InvalidResponseStatus(StatusCode::OK),
+            WsClientError::InvalidUpgradeHeader,
+            WsClientError::InvalidConnectionHeader(hdr.clone()),
+            WsClientError::MissingConnectionHeader,
+            WsClientError::MissingWebSocketAcceptHeader,
+            WsClientError::InvalidChallengeResponse("key".into(), hdr.clone()),
+            WsClientError::InvalidWebSocketProtocol(hdr.clone()),
+            WsClientError::UnexpectedWebSocketExtensions(hdr),
+            WsClientError::Protocol(ProtocolError::Overflow),
+            WsClientError::Timeout,
+            WsClientError::Connect(ConnectError::Unresolved),
+            WsClientError::Disconnected(None),
+            WsClientError::Disconnected(Some(io::Error::other("disconnected"))),
+        ];
+        for err in errs {
+            assert_eq!(err.clone().to_string(), err.to_string());
+            assert_eq!(format!("{:?}", err.clone()), format!("{err:?}"));
+            assert_eq!(err.signature(), "ntex-ws-client");
+        }
+    }
+}

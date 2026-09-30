@@ -160,4 +160,32 @@ mod tests {
         let res = res.error_response::<()>(&(), &err);
         assert_eq!(res.response().status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
+
+    #[test]
+    fn test_response_accessors() {
+        use crate::http::body::{Body, ResponseBody};
+        use crate::util::Bytes;
+
+        let mut res =
+            TestRequest::with_uri("/path").to_srv_response(HttpResponse::Ok().body("body"));
+        assert_eq!(res.request().path(), "/path");
+        assert_eq!(res.status(), StatusCode::OK);
+        *res.response_mut().status_mut() = StatusCode::CREATED;
+        assert_eq!(res.status(), StatusCode::CREATED);
+        assert!(matches!(
+            res.take_body(),
+            ResponseBody::Body(Body::Bytes(b)) if b == Bytes::from_static(b"body")
+        ));
+
+        let (resp, req) = res.into_parts();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        assert_eq!(req.path(), "/path");
+    }
+
+    #[test]
+    fn test_from_err() {
+        let req = TestRequest::default().to_http_request();
+        let res = super::WebResponse::from_err(&(), &std::io::Error::other("err"), req);
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
 }

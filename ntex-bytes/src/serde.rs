@@ -99,4 +99,44 @@ mod tests {
         //let s = serde_json::to_string(&BytesMut::copy_from_slice(b"nice bytes")).unwrap();
         //assert_eq!(s, "[110,105,99,101,32,98,121,116,101,115]");
     }
+
+    #[test]
+    fn test_de_tokens() {
+        use serde_test::{Token, assert_de_tokens, assert_de_tokens_error};
+
+        let b = Bytes::from_static(b"ab");
+        assert_de_tokens(&b, &[Token::ByteBuf(b"ab")]);
+        assert_de_tokens(&b, &[Token::Str("ab")]);
+        assert_de_tokens(&b, &[Token::String("ab")]);
+        assert_de_tokens(
+            &b,
+            &[
+                Token::Seq { len: Some(2) },
+                Token::U8(b'a'),
+                Token::U8(b'b'),
+                Token::SeqEnd,
+            ],
+        );
+        assert_de_tokens(
+            &b,
+            &[
+                Token::Seq { len: None },
+                Token::U8(b'a'),
+                Token::U8(b'b'),
+                Token::SeqEnd,
+            ],
+        );
+        assert_de_tokens_error::<Bytes>(
+            &[Token::Bool(true)],
+            "invalid type: boolean `true`, expected byte array",
+        );
+    }
+
+    #[test]
+    fn test_json_roundtrip() {
+        let b = Bytes::from_static(b"nice bytes");
+        let s = serde_json::to_string(&b).unwrap();
+        let b2: Bytes = serde_json::from_str(&s).unwrap();
+        assert_eq!(b, b2);
+    }
 }

@@ -621,4 +621,36 @@ mod tests {
         let g = |req: &RequestHead| req.headers().contains_key("content-type");
         assert!(g.check(req.head()));
     }
+
+    #[test]
+    fn test_guard_debug() {
+        struct Custom;
+
+        impl Guard for Custom {
+            fn check(&self, _: &RequestHead) -> bool {
+                true
+            }
+        }
+
+        let guard = Any(Header("content-type", "text/plain"))
+            .or(Host("localhost"))
+            .or(Custom);
+        let s = format!("{guard:?}");
+        assert!(s.contains("HeaderGuard"), "{s}");
+        assert!(s.contains("HostGuard"), "{s}");
+        assert!(s.contains("Guard"), "{s}");
+    }
+
+    #[test]
+    fn test_host_without_host_name() {
+        let req = TestRequest::default()
+            .header(header::HOST, header::HeaderValue::from_static("bad host"))
+            .to_http_request();
+        assert!(!Host("localhost").check(req.head()));
+
+        let req = TestRequest::default()
+            .header(header::HOST, header::HeaderValue::from_static("/path"))
+            .to_http_request();
+        assert!(!Host("localhost").check(req.head()));
+    }
 }

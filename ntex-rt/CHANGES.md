@@ -2,6 +2,14 @@
 
 ## [4.0.0] - unreleased
 
+* Cache the thread id for task scheduling, `thread::current()` cloned the thread handle on every wake
+
+* Release signal handling if the system's future panics, other systems could not enable signals
+
+* Do not wake the signal handler task from the panic hook, compio aborted the process on panic
+
+* Remove the deprecated `neon` feature, it had no effect
+
 * Drop ping records of stopped arbiters, record late pongs in their own round
 
 * Fix blocking pool exceeding its thread limit, blocking the caller, panicking
@@ -27,6 +35,8 @@
   handles signals
 
 * Fix `Arbiter::new()` name not matching the arbiter id
+
+* Fix `System::with_config()` ignoring the `name` argument
 
 * Fix endless loop after `SIGSEGV` when signal handling is enabled, the previous
   handler is restored after the signal is reported

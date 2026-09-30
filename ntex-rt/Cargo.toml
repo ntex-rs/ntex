@@ -29,9 +29,6 @@ tokio = ["tok-io"]
 # compio support
 compio = ["compio-driver", "compio-runtime"]
 
-# neon runtime (deprecated)
-neon = []
-
 [dependencies]
 ntex-error = { workspace = true }
 

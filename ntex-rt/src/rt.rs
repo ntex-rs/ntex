@@ -11,6 +11,13 @@ use crate::{driver::Driver, driver::Notify, driver::PollResult, handle::JoinHand
 
 scoped_tls::scoped_thread_local!(static CURRENT_RUNTIME: Runtime);
 
+thread_local!(static THREAD_ID: thread::ThreadId = thread::current().id());
+
+/// Returns the id of the current thread without cloning its `Thread` handle.
+fn current_thread_id() -> thread::ThreadId {
+    THREAD_ID.with(|id| *id)
+}
+
 #[derive(Debug)]
 /// The async runtime for ntex.
 ///
@@ -198,7 +205,7 @@ impl RunnableQueue {
         Self {
             handle,
             event_interval,
-            id: thread::current().id(),
+            id: current_thread_id(),
             idle: Cell::new(true),
             local_queue: UnsafeCell::new(VecDeque::new()),
             sync_fixed_queue: Queue::default(),
@@ -207,7 +214,7 @@ impl RunnableQueue {
     }
 
     fn schedule(&self, runnable: Runnable) {
-        if self.id == thread::current().id() {
+        if self.id == current_thread_id() {
             unsafe { (*self.local_queue.get()).push_back(runnable) };
             if self.idle.get() {
                 self.idle.set(false);
