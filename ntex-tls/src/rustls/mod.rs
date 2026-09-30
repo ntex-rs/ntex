@@ -344,16 +344,23 @@ mod tests {
         let acceptor = Pipeline::new((), TlsAcceptor::new(server_config(false)));
 
         let (client, server) = pair();
-        let io = Io::new(server, SharedCfg::new("SRV").add(tls_cfg(Millis(100))));
+        let io = Io::new(server, SharedCfg::new("SRV").add(tls_cfg(Millis(30_000))));
         let acceptor2 = acceptor.bind();
         let hnd = ntex::rt::spawn(async move { acceptor2.call(io).await });
-        sleep(Millis(10)).await;
+
+        // wait until the handshake holds the only slot
+        let mut n = 0;
+        while lazy(|cx| acceptor.poll_ready(cx)).await.is_ready() {
+            n += 1;
+            assert!(n < 1000, "handshake did not start");
+            sleep(Millis(1)).await;
+        }
         assert!(lazy(|cx| acceptor.poll_ready(cx)).await.is_pending());
 
-        // capacity is released by the timed out handshake
+        // capacity is released by the failed handshake
+        client.close().await;
         assert!(hnd.await.unwrap().is_err());
         assert!(lazy(|cx| acceptor.poll_ready(cx)).await.is_ready());
-        drop(client);
         MAX_SSL_ACCEPT_COUNTER.with(|c| c.set_capacity(256));
     }
 }
