@@ -34,6 +34,8 @@ async fn reset_while_waiting_for_input() {
     peer.join().unwrap();
     match res {
         Err(Either::Right(err)) => assert_eq!(err.kind(), ErrorKind::ConnectionReset),
+        // compio-driver maps `ERROR_NETNAME_DELETED`, a reset, to a 0-byte read
+        Ok(None) if cfg!(all(windows, feature = "compio")) => (),
         res => panic!("expected a reset, got {res:?}"),
     }
 }
