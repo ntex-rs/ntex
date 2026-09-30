@@ -365,7 +365,7 @@ mod tests {
         assert!(err.to_string().contains("a valid header value"), "{err}");
         let err =
             serde_json::from_value::<HeaderMap>(serde_json::json!({"x": ["\u{1}"]})).unwrap_err();
-        assert!(!err.to_string().is_empty());
+        assert_ne!(err.to_string(), "");
         let err = NameKeyVisitor.visit_u8::<DeError>(1).unwrap_err();
         assert!(err.to_string().contains("a header name"), "{err}");
 
