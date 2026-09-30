@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* HTTP/2 payload read does not wake the client payload task when no data is available,
+  the task was polled for nothing on every pending read
+
 * HTTP/2 `304 Not Modified` response has no body, it was sent with `content-length: 0` or
   with the body `DATA` frames
 
