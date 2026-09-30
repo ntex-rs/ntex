@@ -524,4 +524,35 @@ mod tests {
         drop(rx);
         assert_eq!(tx.ready().await, Status::Dropped);
     }
+
+    #[ntex::test]
+    async fn test_empty() {
+        let rx = empty::<()>(None);
+        assert!(rx.is_eof());
+        assert!(rx.read().await.is_none());
+
+        let mut rx = empty::<()>(Some(Bytes::from_static(b"data")));
+        assert!(format!("{rx:?}").contains("high_watermark"));
+        assert_eq!(
+            crate::future::stream_recv(&mut rx).await.unwrap().unwrap(),
+            Bytes::from_static(b"data")
+        );
+        assert!(crate::future::stream_recv(&mut rx).await.is_none());
+    }
+
+    #[ntex::test]
+    async fn test_error() {
+        let (tx, rx) = channel::<&'static str>();
+        tx.feed_data(Bytes::from_static(b"data"));
+        tx.set_error("err");
+
+        // buffered data is returned before the error, then eof
+        assert_eq!(
+            rx.read().await.unwrap().unwrap(),
+            Bytes::from_static(b"data")
+        );
+        assert_eq!(rx.read().await.unwrap().unwrap_err(), "err");
+        assert!(rx.is_eof());
+        assert!(rx.read().await.is_none());
+    }
 }

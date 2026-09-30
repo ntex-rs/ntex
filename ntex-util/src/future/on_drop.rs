@@ -111,4 +111,12 @@ mod test {
         drop(f);
         assert!(dropped);
     }
+
+    #[ntex::test]
+    async fn on_drop_completed() {
+        let mut dropped = false;
+        let f = std::future::ready(1).on_drop(|| dropped = true);
+        assert_eq!(f.await, 1);
+        assert!(!dropped);
+    }
 }

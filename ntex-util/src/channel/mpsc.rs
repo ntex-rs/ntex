@@ -384,4 +384,13 @@ mod tests {
         assert_eq!(stream_recv(&mut rx).await, Some(1));
         assert!(rx.is_terminated());
     }
+
+    #[ntex::test]
+    async fn test_mpsc_recv() {
+        let (tx, rx) = channel();
+        tx.send(1).unwrap();
+        assert_eq!(rx.recv().await, Some(1));
+        drop(tx);
+        assert_eq!(rx.recv().await, None);
+    }
 }
