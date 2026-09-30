@@ -159,7 +159,10 @@ impl Client {
     {
         let mut req = self.request(head.method.clone(), url);
         for (key, value) in &head.headers {
-            req = req.set_header_if_none(key.clone(), value.clone());
+            // every value of a multi-value header is copied
+            if !self.cfg.headers().contains_key(key) {
+                req.headers_mut().append(key.clone(), value.clone());
+            }
         }
         req
     }
@@ -242,4 +245,40 @@ pub(crate) struct ClientRawRequest {
     pub(crate) head: crate::http::Message<RequestHead>,
     pub(crate) headers: Option<HeaderMap>,
     pub(crate) size: BodySize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::http::header::{self, HeaderValue};
+
+    #[crate::rt_test]
+    async fn request_from_head() {
+        let client = Client::builder().build(
+            SharedCfg::new("TEST").add(ClientConfig::new().set_header("x-default", "cfg").unwrap()),
+        );
+        let mut head = RequestHead {
+            method: Method::PATCH,
+            ..Default::default()
+        };
+        head.headers
+            .insert(header::ACCEPT, HeaderValue::from_static("text/html"));
+        head.headers
+            .append(header::ACCEPT, HeaderValue::from_static("text/plain"));
+        head.headers.insert(
+            "x-default".try_into().unwrap(),
+            HeaderValue::from_static("head"),
+        );
+
+        let req = client.request_from("http://localhost/", &head);
+        assert_eq!(req.get_method(), Method::PATCH);
+        let accept: Vec<_> = req.headers().get_all(header::ACCEPT).collect();
+        assert_eq!(accept, ["text/html", "text/plain"]);
+        // client default headers are not overwritten
+        let default: Vec<_> = req.headers().get_all("x-default").collect();
+        assert_eq!(default, ["cfg"]);
+
+        let req = Client::default().request_from("http://localhost/", &head);
+        assert_eq!(req.headers().get("x-default").unwrap(), "head");
+    }
 }

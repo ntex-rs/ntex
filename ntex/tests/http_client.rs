@@ -963,3 +963,48 @@ async fn test_query_method() {
 
     assert_eq!(test_body, body);
 }
+
+#[ntex::test]
+async fn client_invalid_chunked_body() {
+    let addr =
+        raw_server(b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n4\r\ndataX\r\n0\r\n\r\n");
+
+    let response = Client::new()
+        .get(format!("http://{addr}/").as_str())
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    let err = response.body().await.unwrap_err().into_error();
+    assert!(
+        matches!(*err, ntex::http::error::PayloadError::Decode(_)),
+        "{err:?}"
+    );
+}
+
+#[ntex::test]
+async fn client_no_response() {
+    let addr = raw_server(b"");
+
+    let err = Client::new()
+        .get(format!("http://{addr}/").as_str())
+        .send()
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err.into_error(),
+        ClientError::Connect(client::error::ConnectError::Disconnected(_))
+    ));
+}
+
+#[ntex::test]
+async fn client_invalid_response_head() {
+    let addr = raw_server(b"HTTP/1.1 2x0 OK\r\n\r\n");
+
+    let err = Client::new()
+        .get(format!("http://{addr}/").as_str())
+        .send()
+        .await
+        .unwrap_err();
+    assert!(matches!(err.into_error(), ClientError::Response(_)));
+}
