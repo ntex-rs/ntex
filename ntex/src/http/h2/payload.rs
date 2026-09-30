@@ -216,6 +216,8 @@ impl Inner {
             }
             Poll::Ready(Some(Ok(data)))
         } else if let Some(err) = self.err.take() {
+            // the payload ends after an error
+            self.insert_flags(Flags::EOF);
             Poll::Ready(Some(Err(err)))
         } else if self.flags.get().contains(Flags::EOF) {
             Poll::Ready(None)

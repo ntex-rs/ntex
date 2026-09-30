@@ -1106,6 +1106,68 @@ async fn test_h2_request_body_dropped_after_response_resets_stream() {
     );
 }
 
+/// The request payload ends after an error, the next read returns `None`.
+#[ntex::test]
+async fn test_h2_request_payload_ends_after_error() {
+    use ntex::http::{HeaderMap, uri::Scheme};
+    use ntex::util::stream_recv;
+    use ntex_h2::client::SimpleClient;
+
+    let result = Arc::new(Mutex::new(None));
+    let result2 = result.clone();
+    let srv = test_server(async move |_| {
+        let result = result2.clone();
+        HttpService::h2(move |mut req: Request| {
+            let result = result.clone();
+            async move {
+                // the request body outlives the handler
+                let mut pl = req.take_payload();
+                rt::spawn(async move {
+                    let mut items = Vec::new();
+                    loop {
+                        match ntex::time::timeout(Millis(500), stream_recv(&mut pl)).await {
+                            Ok(Some(Ok(chunk))) => items.push(format!("{chunk:?}")),
+                            Ok(Some(Err(_))) => items.push("error".to_string()),
+                            Ok(None) => break,
+                            Err(()) => {
+                                items.push("timeout".to_string());
+                                break;
+                            }
+                        }
+                    }
+                    *result.lock().unwrap() = Some(items);
+                });
+                Ok::<_, io::Error>(Response::Ok().body("ok"))
+            }
+        })
+    });
+
+    let io = ntex::connect::connect(srv.addr()).await.unwrap();
+    let client = SimpleClient::new(io, Scheme::HTTP, "localhost".into());
+    let (snd, _rcv) = client
+        .send(Method::POST, "/".into(), HeaderMap::default(), false)
+        .await
+        .unwrap();
+    snd.send_payload(Bytes::from_static(b"chunk"), false)
+        .await
+        .unwrap();
+    sleep(Millis(50)).await;
+    snd.reset(ntex_h2::frame::Reason::CANCEL);
+
+    let mut items = None;
+    for _ in 0..100 {
+        sleep(Millis(20)).await;
+        items = result.lock().unwrap().take();
+        if items.is_some() {
+            break;
+        }
+    }
+    assert_eq!(
+        items.expect("request body is not completed"),
+        vec!["b\"chunk\"".to_string(), "error".to_string()]
+    );
+}
+
 /// Raw HTTP/2 connection preface and a `POST /` request without END_STREAM.
 fn h2_raw_post() -> Vec<u8> {
     let mut buf = Vec::new();
