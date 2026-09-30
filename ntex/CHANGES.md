@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+* Add `Payload::trailers()`, HTTP/1 chunked and HTTP/2 request trailers and HTTP/2 client
+  response trailers are available after the payload is complete, they were dropped;
+  `h1::Payload` is a struct that dereferences to `bstream::Receiver`, new
+  `PayloadItem::Trailers` item, chunked trailer fields must be `name: value` lines
+
 * HTTP/2 payload read that returns a chunk does not register the reader waker, new data woke
   a reader that was not waiting
 

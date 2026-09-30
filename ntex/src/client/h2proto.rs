@@ -224,8 +224,8 @@ async fn get_response(
                                             h2::StreamEof::Data(data, cap) => {
                                                 pl.feed_eof(data, Some(cap));
                                             }
-                                            h2::StreamEof::Trailers(_) => {
-                                                pl.feed_eof(Bytes::new(), None);
+                                            h2::StreamEof::Trailers(hdrs) => {
+                                                pl.feed_trailers(hdrs);
                                             }
                                             h2::StreamEof::Error(err) => {
                                                 pl.set_error(err.into_error().into());

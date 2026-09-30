@@ -1388,6 +1388,50 @@ async fn test_h2_empty_data_frames_are_not_queued() {
     assert!(!frames.1, "connection is closed");
 }
 
+/// Request trailers are available after the request payload is complete.
+#[ntex::test]
+async fn test_h2_request_trailers() {
+    use ntex::util::stream_recv;
+
+    let result = Arc::new(Mutex::new(None));
+    let result2 = result.clone();
+    let srv = test_server(async move |_| {
+        let result = result2.clone();
+        HttpService::h2(move |mut req: Request| {
+            let result = result.clone();
+            async move {
+                let mut pl = req.take_payload();
+                let mut body = Vec::new();
+                while let Some(chunk) = stream_recv(&mut pl).await {
+                    body.extend_from_slice(&chunk.unwrap());
+                }
+                *result.lock().unwrap() = Some((body, pl.trailers()));
+                Ok::<_, io::Error>(Response::Ok().body("ok"))
+            }
+        })
+    });
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let mut buf = h2_raw_post();
+    h2_raw_data(&mut buf, b"abc", false);
+    // HEADERS, END_STREAM | END_HEADERS: `x-trailer: 1`
+    buf.extend_from_slice(&[0, 0, 13, 1, 5, 0, 0, 0, 1, 0, 9]);
+    buf.extend_from_slice(b"x-trailer");
+    buf.extend_from_slice(&[1, b'1']);
+    stream.write_all(&buf).unwrap();
+
+    let _ = h2_raw_read_frames(&mut stream);
+    let (body, trailers) = result
+        .lock()
+        .unwrap()
+        .take()
+        .expect("request is not completed");
+    assert_eq!(body, b"abc");
+    let trailers = trailers.expect("trailers are not received");
+    assert_eq!(trailers.len(), 1);
+    assert_eq!(trailers.get("x-trailer").unwrap(), "1");
+}
+
 /// Reads frames until the connection is closed or idle for 500ms,
 /// returns frame types with payloads and `true` if the connection is closed.
 fn h2_raw_read_frames(stream: &mut net::TcpStream) -> (Vec<(u8, Vec<u8>)>, bool) {
@@ -1617,6 +1661,57 @@ async fn test_h1_unsupported_transfer_coding() {
     );
     let n = stream.read(&mut data).unwrap();
     assert!(data[..n].starts_with(b"HTTP/1.1 400"), "{:?}", &data[..n]);
+}
+
+/// Chunked request trailers are available after the request payload is complete.
+#[ntex::test]
+async fn test_h1_request_trailers() {
+    use ntex::util::stream_recv;
+
+    let srv = test_server(async |_| {
+        HttpService::h1(async |mut req: Request| {
+            let mut pl = req.take_payload();
+            let mut body = Vec::new();
+            while let Some(chunk) = stream_recv(&mut pl).await {
+                body.extend_from_slice(&chunk.unwrap());
+            }
+            let trailers = pl.trailers().map(|t| {
+                t.iter()
+                    .map(|(n, v)| format!("{n}={}", v.to_str().unwrap()))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            });
+            Ok::<_, io::Error>(Response::Ok().body(format!(
+                "{}|{}",
+                String::from_utf8(body).unwrap(),
+                trailers.unwrap_or_default()
+            )))
+        })
+    });
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    stream
+        .write_all(
+            b"POST / HTTP/1.1\r\nhost: a\r\ntransfer-encoding: chunked\r\n\r\n\
+              3\r\nabc\r\n0\r\nx-trailer: 1\r\n\r\n\
+              POST / HTTP/1.1\r\nhost: a\r\ntransfer-encoding: chunked\r\n\r\n\
+              2\r\nde\r\n0\r\n\r\n",
+        )
+        .unwrap();
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+        .unwrap();
+    let mut data = Vec::new();
+    let mut buf = [0; 1024];
+    while let Ok(n) = stream.read(&mut buf) {
+        if n == 0 {
+            break;
+        }
+        data.extend_from_slice(&buf[..n]);
+    }
+    let data = String::from_utf8(data).unwrap();
+    assert!(data.contains("\r\n\r\nabc|x-trailer=1"), "{data:?}");
+    assert!(data.ends_with("\r\n\r\nde|"), "{data:?}");
 }
 
 /// A failed transport write stops polling an always ready response body.
