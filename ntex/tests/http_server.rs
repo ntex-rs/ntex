@@ -1173,6 +1173,43 @@ async fn test_h2_request_payload_ends_after_error() {
     );
 }
 
+/// A malformed request is a stream error, the connection stays open.
+#[ntex::test]
+async fn test_h2_malformed_request_uri() {
+    use ntex::http::{HeaderMap, uri::Scheme};
+    use ntex_h2::{MessageKind, client::SimpleClient};
+
+    let srv = test_server(async |_| {
+        HttpService::h2(async |_: Request| Ok::<_, io::Error>(Response::Ok().body("ok")))
+    });
+
+    let io = ntex::connect::connect(srv.addr()).await.unwrap();
+    let client = SimpleClient::new(io, Scheme::HTTP, "localhost".into());
+    for (method, eof) in [(Method::GET, true), (Method::POST, false)] {
+        let (_snd, rcv) = client
+            .send(method, "/a b".into(), HeaderMap::default(), eof)
+            .await
+            .unwrap();
+        let msg = rcv.recv().await.unwrap();
+        let MessageKind::Headers { pseudo, eof, .. } = msg.kind else {
+            panic!("unexpected message: {msg:?}")
+        };
+        assert_eq!(pseudo.status, Some(StatusCode::BAD_REQUEST));
+        assert!(eof);
+    }
+    assert!(!client.is_closed());
+
+    let (_snd, rcv) = client
+        .send(Method::GET, "/".into(), HeaderMap::default(), true)
+        .await
+        .unwrap();
+    let msg = rcv.recv().await.unwrap();
+    let MessageKind::Headers { pseudo, .. } = msg.kind else {
+        panic!("unexpected message: {msg:?}")
+    };
+    assert_eq!(pseudo.status, Some(StatusCode::OK));
+}
+
 /// Raw HTTP/2 connection preface and a `POST /` request without END_STREAM.
 fn h2_raw_post() -> Vec<u8> {
     let mut buf = Vec::new();

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* HTTP/2 request with a malformed uri is answered with `400 Bad Request`, it closed the whole
+  connection with `GOAWAY`, see RFC 9113 section 8.1.1
+
 * HTTP/2 payload keeps the first error, a stream reset was reported as
   `PayloadError::Incomplete` when the sender was dropped
 

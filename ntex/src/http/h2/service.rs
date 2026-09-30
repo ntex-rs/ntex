@@ -310,6 +310,28 @@ where
             }
         };
 
+        // a malformed request is a stream error, the connection stays open,
+        // see RFC 9113 section 8.1.1
+        let Some((method, uri)) = request_uri(&pseudo) else {
+            log::debug!(
+                "{}: Malformed request on {:?}: {pseudo:?}",
+                self.io.tag(),
+                stream.id()
+            );
+            self.streams.borrow_mut().remove(&stream.id());
+
+            let mut res = Response::new(StatusCode::BAD_REQUEST).drop_body();
+            let head = res.head_mut();
+            prepare_response(head, &mut BodySize::Empty);
+            let hdrs = mem::replace(&mut head.headers, HeaderMap::new());
+            let _ = stream.send_response(StatusCode::BAD_REQUEST, hdrs, true);
+            if !eof {
+                // the request body is not needed
+                stream.reset(h2::frame::Reason::NO_ERROR);
+            }
+            return Ok(());
+        };
+
         // the client waits for `100 Continue` before sending the request body,
         // see RFC 9110 section 10.1.1
         let (pseudo, headers) = if !eof && expect_continue(&headers) {
@@ -373,24 +395,9 @@ where
             Request::new()
         };
 
-        let method = pseudo.method.ok_or(H2Error::MissingPseudo("Method"))?;
-
-        let head = req.head_mut();
-        head.uri = if method == Method::CONNECT
-            && pseudo.path.is_none()
-            && let Some(ref authority) = pseudo.authority
-        {
-            // CONNECT request uses the authority form
-            Uri::try_from(authority.as_str()).map_err(Error::from_err)?
-        } else if let Some(ref authority) = pseudo.authority {
-            let path = pseudo.path.ok_or(H2Error::MissingPseudo("Path"))?;
-            let scheme = pseudo.scheme.ok_or(H2Error::MissingPseudo("Scheme"))?;
-            Uri::try_from(format!("{scheme}://{authority}{path}")).map_err(Error::from_err)?
-        } else {
-            let path = pseudo.path.ok_or(H2Error::MissingPseudo("Path"))?;
-            Uri::try_from(path.as_str()).map_err(Error::from_err)?
-        };
         let is_head_req = method == Method::HEAD;
+        let head = req.head_mut();
+        head.uri = uri;
         head.version = Version::HTTP_2;
         head.method = method;
         head.headers = headers;
@@ -503,6 +510,26 @@ const ZERO_CONTENT_LENGTH: HeaderValue = HeaderValue::from_static("0");
 const KEEP_ALIVE: HeaderName = HeaderName::from_static("keep-alive");
 #[allow(clippy::declare_interior_mutable_const)]
 const PROXY_CONNECTION: HeaderName = HeaderName::from_static("proxy-connection");
+
+/// Builds the request method and uri from the pseudo headers,
+/// returns `None` for a malformed request.
+fn request_uri(pseudo: &h2::frame::PseudoHeaders) -> Option<(Method, Uri)> {
+    let method = pseudo.method.clone()?;
+    let uri = if method == Method::CONNECT
+        && pseudo.path.is_none()
+        && let Some(ref authority) = pseudo.authority
+    {
+        // CONNECT request uses the authority form
+        Uri::try_from(authority.as_str()).ok()?
+    } else if let Some(ref authority) = pseudo.authority {
+        let path = pseudo.path.as_ref()?;
+        let scheme = pseudo.scheme.as_ref()?;
+        Uri::try_from(format!("{scheme}://{authority}{path}")).ok()?
+    } else {
+        Uri::try_from(pseudo.path.as_ref()?.as_str()).ok()?
+    };
+    Some((method, uri))
+}
 
 /// Checks the case-insensitive `100-continue` expectation, see RFC 9110 section 10.1.1
 fn expect_continue(headers: &HeaderMap) -> bool {
