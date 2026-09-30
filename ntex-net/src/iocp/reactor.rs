@@ -208,6 +208,23 @@ fn wsa_error(error: u32) -> i32 {
     }
 }
 
+/// Maps a Win32 network error of a socket completion to its `WinSock` error,
+/// so that `io::Error::kind()` classifies it.
+#[cfg_attr(not(feature = "compio"), allow(dead_code))]
+pub(crate) fn map_socket_error(err: io::Error) -> io::Error {
+    match err.raw_os_error() {
+        Some(code) => {
+            let mapped = wsa_error(code.cast_unsigned());
+            if mapped == code {
+                err
+            } else {
+                io::Error::from_raw_os_error(mapped)
+            }
+        }
+        None => err,
+    }
+}
+
 impl Reactor {
     /// Handle ring completions, forward changes to specific handler
     fn poll_completions(&self, events: &[OVERLAPPED_ENTRY]) {
@@ -402,6 +419,9 @@ mod tests {
         ] {
             let error = unsafe { RtlNtStatusToDosError(status) };
             let err = io::Error::from_raw_os_error(wsa_error(error));
+            assert_eq!(err.kind(), kind, "{status:#x}: {err:?}");
+
+            let err = map_socket_error(io::Error::from_raw_os_error(error.cast_signed()));
             assert_eq!(err.kind(), kind, "{status:#x}: {err:?}");
         }
     }

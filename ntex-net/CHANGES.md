@@ -2,7 +2,14 @@
 
 ## [4.1.0] - Unreleased
 
+* io-uring: fix lost submissions when queued operations wrap around the end of
+  the pending queue storage, the wrapped part was dropped without being
+  submitted
+
 * Remove the `neon-iocp` feature, it had no effect, Windows always uses IOCP
+
+* compio: map Win32 network errors of connect, read and write on Windows to
+  `WinSock` errors, a refused connect reported `ErrorKind::Uncategorized`
 
 * IOCP: failed socket completions report `WinSock` errors, a refused `ConnectEx`
   returned `ERROR_CONNECTION_REFUSED` with `ErrorKind::Uncategorized` instead of

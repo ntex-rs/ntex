@@ -12,6 +12,16 @@ mod io;
 
 use crate::channel::{self, Receiver};
 
+// compio's IOCP driver reports socket failures as Win32 network errors,
+// which `io::Error::kind()` does not classify.
+#[cfg(windows)]
+use crate::iocp::map_socket_error;
+
+#[cfg(not(windows))]
+fn map_socket_error(err: std::io::Error) -> std::io::Error {
+    err
+}
+
 /// Tcp stream wrapper for compio `TcpStream`
 pub(crate) struct TcpStream(pub(crate) compio_net::TcpStream);
 
@@ -124,7 +134,9 @@ impl crate::Reactor for Reactor {
         let (tx, rx) = channel::create();
         ntex_rt::spawn(async move {
             let result = async {
-                let sock = compio_net::TcpStream::connect(addr).await?;
+                let sock = compio_net::TcpStream::connect(addr)
+                    .await
+                    .map_err(map_socket_error)?;
                 Ok(Io::new(TcpStream(sock), cfg))
             }
             .await;
@@ -138,7 +150,9 @@ impl crate::Reactor for Reactor {
         let (tx, rx) = channel::create();
         ntex_rt::spawn(async move {
             let result = async {
-                let sock = compio_net::UnixStream::connect(addr).await?;
+                let sock = compio_net::UnixStream::connect(addr)
+                    .await
+                    .map_err(map_socket_error)?;
                 Ok(Io::new(UnixStream(sock), cfg))
             }
             .await;

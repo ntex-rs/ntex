@@ -6,7 +6,7 @@ use ntex_bytes::{BufMut, BytePage, BytePages, BytesMut};
 use ntex_io::{Handle, IoContext, IoStream, IoTaskStatus, Readiness, types};
 use ntex_util::future::{Either, select};
 
-use super::{TcpStream, UnixStream};
+use super::{TcpStream, UnixStream, map_socket_error};
 
 const MAX_WRITE_SIZE: usize = 64 * 1024;
 const MAX_WRITE_ITEMS: usize = 16;
@@ -157,6 +157,7 @@ where
 
         match select(read_fut.as_mut().unwrap(), not_read_ready(ctx)).await {
             Either::Left(BufResult(result, cbuf)) => {
+                let result = result.map_err(map_socket_error);
                 if ctx.release_read_buf(cbuf.0, Poll::Ready(result)) == IoTaskStatus::Stop {
                     break;
                 }
@@ -299,7 +300,7 @@ where
                 }
                 Ok(n)
             }
-            Err(e) => Err(e),
+            Err(e) => Err(map_socket_error(e)),
         };
         if ctx.update_write_status(result) == IoTaskStatus::Stop {
             // Pages still held here are counted as in-flight output, hand
