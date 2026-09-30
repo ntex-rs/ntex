@@ -1,4 +1,4 @@
-use std::{cell::RefCell, future::poll_fn, io, mem, rc::Rc};
+use std::{cell::Cell, cell::RefCell, future::poll_fn, io, mem, rc::Rc};
 
 use ntex_h2::{self as h2, control::ExpectResult, frame::StreamId, server};
 
@@ -152,7 +152,13 @@ struct PublishService<Err> {
     svc: Pipeline<Request, Response, Err>,
     control: PipelineBinding<h2::Control<Error<H2Error>>, h2::ControlAck, DispatchError>,
     streams: Rc<RefCell<HashMap<StreamId, StreamPayload>>>,
+    /// Consecutive empty non-final `DATA` frames
+    empty_data: Cell<u8>,
 }
+
+/// Maximum number of consecutive empty non-final `DATA` frames,
+/// such frames are not flow controlled
+const MAX_EMPTY_DATA_FRAMES: u8 = 10;
 
 /// Request payload of a stream.
 struct StreamPayload {
@@ -177,6 +183,7 @@ where
             svc,
             control,
             streams: Rc::new(RefCell::new(HashMap::default())),
+            empty_data: Cell::new(0),
         }
     }
 }
@@ -229,6 +236,22 @@ where
                     stream.id(),
                     data.len()
                 );
+                // the limit is sticky, frames buffered after it are not delivered
+                let count = if data.is_empty() {
+                    self.empty_data.get().saturating_add(1)
+                } else if self.empty_data.get() >= MAX_EMPTY_DATA_FRAMES {
+                    MAX_EMPTY_DATA_FRAMES
+                } else {
+                    0
+                };
+                self.empty_data.set(count);
+                if count >= MAX_EMPTY_DATA_FRAMES {
+                    log::debug!(
+                        "{}: Too many consecutive empty DATA frames, closing connection",
+                        self.io.tag()
+                    );
+                    return Err(H2Error::EmptyDataFrames.into());
+                }
                 let mut streams = self.streams.borrow_mut();
                 if let Some(pl) = streams.get(&stream.id()) {
                     if pl.complete && pl.sender.is_dropped() {
@@ -254,6 +277,12 @@ where
                     self.io.tag(),
                     stream.id()
                 );
+                if self.empty_data.get() >= MAX_EMPTY_DATA_FRAMES {
+                    return Err(H2Error::EmptyDataFrames.into());
+                }
+                if matches!(item, h2::StreamEof::Data(ref data, _) if !data.is_empty()) {
+                    self.empty_data.set(0);
+                }
                 if let Some(StreamPayload { sender, .. }) =
                     self.streams.borrow_mut().remove(&stream.id())
                 {

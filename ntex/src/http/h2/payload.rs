@@ -197,8 +197,11 @@ impl Inner {
 
     fn feed_data(&self, data: Bytes, cap: h2::Capacity) {
         self.cap.set(Some(self.cap.take().unwrap() + cap));
-        self.items.borrow_mut().push_back(data);
-        self.task.wake();
+        // empty DATA frames are not flow controlled, queueing them is unbounded
+        if !data.is_empty() {
+            self.items.borrow_mut().push_back(data);
+            self.task.wake();
+        }
     }
 
     fn readany(&self, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, PayloadError>>> {

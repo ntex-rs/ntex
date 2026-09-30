@@ -1106,6 +1106,152 @@ async fn test_h2_request_body_dropped_after_response_resets_stream() {
     );
 }
 
+/// Raw HTTP/2 connection preface and a `POST /` request without END_STREAM.
+fn h2_raw_post() -> Vec<u8> {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n");
+    // SETTINGS
+    buf.extend_from_slice(&[0, 0, 0, 4, 0, 0, 0, 0, 0]);
+    // HEADERS, END_HEADERS: `:method POST`, `:scheme http`, `:path /`
+    buf.extend_from_slice(&[0, 0, 3, 1, 4, 0, 0, 0, 1, 0x83, 0x86, 0x84]);
+    buf
+}
+
+/// Raw HTTP/2 DATA frame for stream 1.
+fn h2_raw_data(buf: &mut Vec<u8>, data: &[u8], eof: bool) {
+    #[allow(clippy::cast_possible_truncation)]
+    buf.extend_from_slice(&[0, 0, data.len() as u8, 0, u8::from(eof), 0, 0, 0, 1]);
+    buf.extend_from_slice(data);
+}
+
+/// Empty non-final DATA frames are not flow controlled, they are not queued
+/// as request body chunks.
+#[ntex::test]
+async fn test_h2_empty_data_frames_are_not_queued() {
+    use ntex::util::stream_recv;
+
+    let chunks = Arc::new(Mutex::new(None));
+    let chunks2 = chunks.clone();
+    let srv = test_server(async move |_| {
+        let chunks = chunks2.clone();
+        HttpService::h2(move |mut req: Request| {
+            let chunks = chunks.clone();
+            async move {
+                let mut pl = req.take_payload();
+                let mut items = Vec::new();
+                while let Some(chunk) = stream_recv(&mut pl).await {
+                    items.push(chunk.unwrap());
+                }
+                *chunks.lock().unwrap() = Some(items);
+                Ok::<_, io::Error>(Response::Ok().body("ok"))
+            }
+        })
+    });
+
+    // a non-empty DATA frame resets the count of consecutive empty frames
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let mut buf = h2_raw_post();
+    for _ in 0..9 {
+        h2_raw_data(&mut buf, b"", false);
+    }
+    h2_raw_data(&mut buf, b"a", false);
+    for _ in 0..9 {
+        h2_raw_data(&mut buf, b"", false);
+    }
+    h2_raw_data(&mut buf, b"bc", true);
+    stream.write_all(&buf).unwrap();
+
+    let mut items = None;
+    for _ in 0..50 {
+        sleep(Millis(20)).await;
+        items = chunks.lock().unwrap().take();
+        if items.is_some() {
+            break;
+        }
+    }
+    assert_eq!(
+        items.expect("request is not completed"),
+        vec![Bytes::from("a"), Bytes::from("bc")]
+    );
+
+    // the connection stays open
+    let frames = h2_raw_read_frames(&mut stream);
+    assert!(!frames.0.contains(&7), "GOAWAY is sent: {frames:?}");
+    assert!(!frames.1, "connection is closed");
+}
+
+/// Reads frame types until the connection is closed or idle for 500ms,
+/// returns `true` if the connection is closed.
+fn h2_raw_read_frames(stream: &mut net::TcpStream) -> (Vec<u8>, bool) {
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+        .unwrap();
+    let mut data = Vec::new();
+    let mut buf = [0; 1024];
+    let closed = loop {
+        match stream.read(&mut buf) {
+            Ok(0) => break true,
+            Ok(n) => data.extend_from_slice(&buf[..n]),
+            Err(e) if e.kind() == io::ErrorKind::ConnectionReset => break true,
+            Err(_) => break false,
+        }
+    };
+    let mut frames = Vec::new();
+    let mut pos = 0;
+    while pos + 9 <= data.len() {
+        let len = (usize::from(data[pos]) << 16)
+            | (usize::from(data[pos + 1]) << 8)
+            | usize::from(data[pos + 2]);
+        frames.push(data[pos + 3]);
+        pos += 9 + len;
+    }
+    (frames, closed)
+}
+
+/// The connection is closed after 10 consecutive empty non-final DATA frames.
+#[ntex::test]
+async fn test_h2_empty_data_frames_limit() {
+    use ntex::util::stream_recv;
+
+    let body = Arc::new(Mutex::new(None));
+    let body2 = body.clone();
+    let srv = test_server(async move |_| {
+        let body = body2.clone();
+        HttpService::h2(move |mut req: Request| {
+            let body = body.clone();
+            async move {
+                let mut pl = req.take_payload();
+                let mut items = Vec::new();
+                while let Some(chunk) = stream_recv(&mut pl).await {
+                    items.push(chunk.map_err(|_| ()));
+                }
+                *body.lock().unwrap() = Some(items);
+                Ok::<_, io::Error>(Response::Ok().body("ok"))
+            }
+        })
+    });
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let mut buf = h2_raw_post();
+    for _ in 0..10 {
+        h2_raw_data(&mut buf, b"", false);
+    }
+    // frames after the limit are not delivered
+    h2_raw_data(&mut buf, b"abc", true);
+    stream.write_all(&buf).unwrap();
+
+    // the server sends GOAWAY and closes the connection
+    let (frames, closed) = h2_raw_read_frames(&mut stream);
+    assert!(frames.contains(&7), "GOAWAY is not sent: {frames:?}");
+    assert!(closed, "connection is not closed");
+    sleep(Millis(100)).await;
+    assert_ne!(
+        body.lock().unwrap().take(),
+        Some(vec![Ok(Bytes::from("abc"))]),
+        "request body is delivered"
+    );
+}
+
 /// The control service handles `Expect: 100-continue`, the default ack sends `100 Continue`.
 #[ntex::test]
 async fn test_h2_expect_continue() {

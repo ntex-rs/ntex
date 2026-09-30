@@ -248,6 +248,9 @@ pub enum H2Error {
     /// Uri parsing error
     #[error("Uri")]
     Uri,
+    /// Too many consecutive empty non-final `DATA` frames
+    #[error("Too many consecutive empty DATA frames")]
+    EmptyDataFrames,
     /// Body stream error
     #[error("{0}")]
     Stream(
