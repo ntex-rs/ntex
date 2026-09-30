@@ -516,4 +516,18 @@ mod test {
         let s = serde_json::to_string(&ByteString::from_static("nice bytes")).unwrap();
         assert_eq!(s, r#""nice bytes""#);
     }
+
+    #[test]
+    fn test_ref_eq_and_arc() {
+        let s = ByteString::from_static("hello");
+        assert_eq!(&s, ByteString::from_static("hello"));
+        assert_ne!(&s, ByteString::from_static("world"));
+
+        let arc: std::sync::Arc<str> = "a long string that is not stored inline".into();
+        let s = ByteString::from(arc.clone());
+        assert_eq!(s, &*arc);
+        assert_eq!(std::sync::Arc::strong_count(&arc), 2);
+        drop(s);
+        assert_eq!(std::sync::Arc::strong_count(&arc), 1);
+    }
 }

@@ -99,3 +99,51 @@ impl ByteString {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::info::Kind;
+
+    fn as_ptr(addr: *const u8, _: usize) -> *const u8 {
+        addr
+    }
+
+    fn len(_: *const u8, len: usize) -> usize {
+        len
+    }
+
+    fn clone(_: *const u8, _: usize) -> Option<(*const u8, usize)> {
+        None
+    }
+
+    fn drop(addr: *const u8, len: usize) {
+        let ptr = std::ptr::slice_from_raw_parts_mut(addr.cast_mut(), len);
+        std::mem::drop(unsafe { Box::from_raw(ptr) });
+    }
+
+    struct Boxed(Box<[u8]>);
+
+    // SAFETY: the vtable releases the leaked box exactly once
+    unsafe impl StorageExt for Boxed {
+        fn create(self) -> (*const u8, usize, &'static StorageVTable) {
+            static VTABLE: StorageVTable = StorageVTable::new(as_ptr, len, clone, drop);
+            let len = self.0.len();
+            (Box::into_raw(self.0).cast::<u8>(), len, &VTABLE)
+        }
+    }
+
+    #[test]
+    fn clone_copies_data() {
+        let data = vec![7u8; 100].into_boxed_slice();
+        let b = Bytes::from_ext(Boxed(data));
+        assert_eq!(b.info().kind, Kind::StExt);
+
+        let b2 = b.clone();
+        assert_eq!(b2.info().kind, Kind::Vec);
+        assert_eq!(b, b2);
+
+        let vtable = StorageVTable::new(as_ptr, len, clone, drop);
+        assert!(format!("{vtable:?}").contains("StorageVTable"));
+    }
+}

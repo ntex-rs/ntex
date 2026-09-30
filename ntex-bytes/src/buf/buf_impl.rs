@@ -1044,4 +1044,36 @@ mod tests {
         assert_eq!(s.get_u8(), b'h');
         assert_eq!(Buf::chunk(&s), b"ello world");
     }
+
+    struct Chunks(Vec<&'static [u8]>);
+
+    impl Buf for Chunks {
+        fn remaining(&self) -> usize {
+            self.0.iter().map(|c| c.len()).sum()
+        }
+
+        fn chunk(&self) -> &[u8] {
+            self.0.first().copied().unwrap_or_default()
+        }
+
+        fn advance(&mut self, mut cnt: usize) {
+            while cnt > 0 {
+                let n = cnt.min(self.0[0].len());
+                self.0[0] = &self.0[0][n..];
+                if self.0[0].is_empty() {
+                    self.0.remove(0);
+                }
+                cnt -= n;
+            }
+        }
+    }
+
+    #[test]
+    fn default_methods() {
+        let mut buf = Chunks(vec![b"a", b"bc"]);
+        assert_eq!(buf.get_u8(), b'a');
+        assert_eq!(buf.get_u8(), b'b');
+        assert_eq!(buf.get_u8(), b'c');
+        assert!(!buf.has_remaining());
+    }
 }

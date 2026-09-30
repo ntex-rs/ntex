@@ -1053,4 +1053,13 @@ mod tests {
         assert_eq!(b.len(), 0);
         assert_eq!(buf, [49, 50, 51, 0, 0, 0, 0, 0, 0, 0]);
     }
+
+    #[test]
+    fn from_bytes_ref() {
+        let b = Bytes::from_static(b"hello");
+        let mut m = BytesMut::from(&b);
+        m.extend_from_slice(b"!");
+        assert_eq!(m, "hello!");
+        assert_eq!(b, "hello");
+    }
 }

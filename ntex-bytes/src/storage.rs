@@ -757,4 +757,48 @@ mod tests {
         let p2 = unsafe { bv.storage.as_ptr() as usize };
         assert_eq!(p1, p2);
     }
+
+    #[test]
+    fn ext_storage() {
+        let long: std::sync::Arc<str> = std::str::from_utf8(LONG).unwrap().into();
+        let mut b = Bytes::from_ext(long);
+        assert_eq!(b.info().kind, info::Kind::StExt);
+        assert_eq!(b.storage.capacity(), LONG.len());
+
+        // trimdown and truncating past the end keep the external storage
+        b.trimdown();
+        b.truncate(LONG.len() + 10);
+        b.advance(0);
+        assert_eq!(b.info().kind, info::Kind::StExt);
+        assert_eq!(&b[..], LONG);
+
+        // truncating copies the data
+        b.truncate(100);
+        assert_eq!(&b[..], &LONG[..100]);
+        assert_eq!(b.info().kind, info::Kind::Vec);
+    }
+
+    #[test]
+    fn static_storage() {
+        let mut b = Bytes::from_static(LONG);
+        assert_eq!(b.info().kind, info::Kind::Static);
+        assert_eq!(b.storage.capacity(), LONG.len());
+        b.truncate(100);
+        assert_eq!(&b[..], &LONG[..100]);
+        assert_eq!(b.info().kind, info::Kind::Static);
+    }
+
+    #[test]
+    fn inline_storage() {
+        let cap = super::INLINE_CAP;
+        let mut b = Bytes::copy_from_slice(&LONG[..cap]);
+        assert!(b.is_inline());
+        b.truncate(cap);
+        assert_eq!(&b[..], &LONG[..cap]);
+
+        unsafe { b.storage.set_end(5) };
+        assert_eq!(&b[..], &LONG[..5]);
+        unsafe { b.storage.set_end(cap) };
+        assert_eq!(&b[..], &LONG[..5]);
+    }
 }
