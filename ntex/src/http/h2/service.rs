@@ -430,14 +430,17 @@ where
         );
 
         let hdrs = mem::replace(&mut head.headers, HeaderMap::new());
-        if size.is_eof() || is_head_req {
-            stream
-                .send_response(head.status, hdrs, true)
-                .map_err(Error::map_err)?;
-        } else {
+        // `Err(Some(_))` is a body error, `Err(None)` is a closed stream
+        let sent = async {
+            if size.is_eof() || is_head_req {
+                stream
+                    .send_response(head.status, hdrs, true)
+                    .map_err(|_| None)?;
+                return Ok(());
+            }
             stream
                 .send_response(head.status, hdrs, false)
-                .map_err(Error::map_err)?;
+                .map_err(|_| None)?;
 
             loop {
                 match poll_fn(|cx| body.poll_next_chunk(cx)).await {
@@ -448,11 +451,10 @@ where
                             self.io.tag(),
                             stream.id()
                         );
-                        stream
+                        return stream
                             .send_payload(Bytes::new(), true)
                             .await
-                            .map_err(Error::map_err)?;
-                        break;
+                            .map_err(|_| None);
                     }
                     Some(Ok(chunk)) => {
                         #[cfg(feature = "trace")]
@@ -463,18 +465,31 @@ where
                             chunk.len()
                         );
                         if !chunk.is_empty() {
-                            stream
-                                .send_payload(chunk, false)
-                                .await
-                                .map_err(Error::map_err)?;
+                            stream.send_payload(chunk, false).await.map_err(|_| None)?;
                         }
                     }
-                    Some(Err(e)) => {
-                        #[cfg(feature = "trace")]
-                        log::error!("{}: Response payload stream error: {e:?}", self.io.tag());
-                        return Err(H2Error::Stream(e).into());
-                    }
+                    Some(Err(e)) => return Err(Some(e)),
                 }
+            }
+        }
+        .await;
+
+        match sent {
+            Ok(()) => (),
+            Err(Some(e)) => {
+                // only the stream fails, the connection stays open
+                log::error!(
+                    "{}: Response payload stream error for {:?}: {e:?}",
+                    self.io.tag(),
+                    stream.id()
+                );
+                stream.reset(h2::frame::Reason::INTERNAL_ERROR);
+                return Ok(());
+            }
+            Err(None) => {
+                // the stream is reset or the connection is closed
+                self.streams.borrow_mut().remove(&stream.id());
+                return Ok(());
             }
         }
 

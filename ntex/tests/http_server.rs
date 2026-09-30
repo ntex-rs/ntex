@@ -1210,6 +1210,63 @@ async fn test_h2_malformed_request_uri() {
     assert_eq!(pseudo.status, Some(StatusCode::OK));
 }
 
+/// A response body error resets only its stream, the connection stays open.
+#[ntex::test]
+async fn test_h2_response_body_error_resets_stream() {
+    use ntex::http::{HeaderMap, uri::Scheme};
+    use ntex_h2::{MessageKind, StreamEof, client::SimpleClient};
+
+    let srv = test_server(async |_| {
+        HttpService::h2(async |req: Request| {
+            if req.path() == "/err" {
+                Ok::<_, io::Error>(Response::Ok().streaming(Box::pin(once(async {
+                    Err::<Bytes, _>(io::Error::other("body error"))
+                }))))
+            } else {
+                // the response is sent after the other stream fails
+                sleep(Millis(200)).await;
+                Ok(Response::Ok().body("ok"))
+            }
+        })
+    });
+
+    let io = ntex::connect::connect(srv.addr()).await.unwrap();
+    let client = SimpleClient::new(io, Scheme::HTTP, "localhost".into());
+    let (_snd1, rcv1) = client
+        .send(Method::GET, "/slow".into(), HeaderMap::default(), true)
+        .await
+        .unwrap();
+    let (_snd2, rcv2) = client
+        .send(Method::GET, "/err".into(), HeaderMap::default(), true)
+        .await
+        .unwrap();
+
+    let msg = rcv2.recv().await.unwrap();
+    let MessageKind::Headers { pseudo, eof, .. } = msg.kind else {
+        panic!("unexpected message: {msg:?}")
+    };
+    assert_eq!(pseudo.status, Some(StatusCode::OK));
+    assert!(!eof);
+    let msg = rcv2.recv().await.unwrap();
+    assert!(
+        matches!(msg.kind, MessageKind::Eof(StreamEof::Error(ref e)) if format!("{e:?}").contains("INTERNAL_ERROR")),
+        "{msg:?}"
+    );
+
+    // the other stream completes
+    let msg = rcv1.recv().await.unwrap();
+    let MessageKind::Headers { pseudo, .. } = msg.kind else {
+        panic!("unexpected message: {msg:?}")
+    };
+    assert_eq!(pseudo.status, Some(StatusCode::OK));
+    let msg = rcv1.recv().await.unwrap();
+    assert!(
+        matches!(msg.kind, MessageKind::Data(ref d, _) if d == "ok"),
+        "{msg:?}"
+    );
+    assert!(!client.is_closed());
+}
+
 /// Raw HTTP/2 connection preface and a `POST /` request without END_STREAM.
 fn h2_raw_post() -> Vec<u8> {
     let mut buf = Vec::new();
