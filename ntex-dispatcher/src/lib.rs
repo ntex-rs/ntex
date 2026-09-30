@@ -154,8 +154,9 @@ enum DispatcherError<S, U> {
     Service(S),
 }
 
-enum PollService<U: Encoder + Decoder> {
-    Item(DispatchItem<U>),
+enum PollService {
+    /// Write backpressure is enabled while the service is not ready.
+    Backpressure,
     Continue,
     Ready,
 }
@@ -310,7 +311,9 @@ where
                                 }
                             }
                         }
-                        PollService::Item(item) => (item, false),
+                        PollService::Backpressure => {
+                            (DispatchItem::Control(Control::WBackPressureEnabled), false)
+                        }
                         PollService::Continue => continue,
                     };
 
@@ -319,10 +322,7 @@ where
                 // handle write back-pressure
                 DispatcherState::Backpressure => {
                     match ready!(inner.poll_service(cx)) {
-                        PollService::Ready
-                        | PollService::Item(DispatchItem::Control(Control::WBackPressureEnabled)) =>
-                            {}
-                        PollService::Item(item) => inner.call_service(cx, item, false),
+                        PollService::Ready | PollService::Backpressure => {}
                         PollService::Continue => continue,
                     }
 
@@ -423,7 +423,7 @@ where
         }
     }
 
-    fn check_error(&mut self) -> PollService<U> {
+    fn check_error(&mut self) -> PollService {
         // check for errors
         if let Some(err) = self.shared.error.take() {
             log::trace!(
@@ -445,7 +445,7 @@ where
         }
     }
 
-    fn poll_service(&mut self, cx: &mut Context<'_>) -> Poll<PollService<U>> {
+    fn poll_service(&mut self, cx: &mut Context<'_>) -> Poll<PollService> {
         // wait until an in-flight call completes and the service becomes ready
         let ready = if self.shared.inflight.get() >= self.max_inflight {
             Poll::Pending
@@ -504,9 +504,7 @@ where
                             self.start_write_timer();
                         }
                         self.st = DispatcherState::Backpressure;
-                        Poll::Ready(PollService::Item(DispatchItem::Control(
-                            Control::WBackPressureEnabled,
-                        )))
+                        Poll::Ready(PollService::Backpressure)
                     }
                 }
             }
@@ -2571,5 +2569,198 @@ mod tests {
             client.write("1");
         }
         assert_eq!(&events.borrow()[..], &["item", "bp-on"]);
+    }
+
+    /// Codec that fails to encode, and to decode input containing `!`.
+    struct ErrCodec;
+
+    impl Encoder for ErrCodec {
+        type Item = Bytes;
+        type Error = io::Error;
+
+        fn encode(&self, _: Bytes, _: &mut BytePages) -> Result<(), Self::Error> {
+            Err(io::Error::other("encode"))
+        }
+    }
+
+    impl Decoder for ErrCodec {
+        type Item = Bytes;
+        type Error = io::Error;
+
+        fn decode(&self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+            if src.contains(&b'!') {
+                Err(io::Error::other("decode"))
+            } else if src.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(src.split_to(src.len())))
+            }
+        }
+    }
+
+    /// Runs an `ErrCodec` dispatcher that echoes items, returns the stop
+    /// reason delivered to the service.
+    async fn err_codec_stop(input: &'static str) -> String {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        client.write(input);
+
+        let reason = Rc::new(RefCell::new(String::new()));
+        let reason2 = reason.clone();
+        let (disp, _) = Dispatcher::debug(
+            Io::from(server),
+            ErrCodec,
+            ntex_service::fn_service(move |msg: DispatchItem<ErrCodec>| {
+                let reason = reason2.clone();
+                async move {
+                    match msg {
+                        DispatchItem::Item(item) => return Ok::<_, ()>(Some(item)),
+                        DispatchItem::Stop(r) => *reason.borrow_mut() = format!("{r:?}"),
+                        DispatchItem::Control(_) => (),
+                    }
+                    Ok(None)
+                }
+            }),
+        );
+        assert!(format!("{disp:?}").contains("Dispatcher"));
+        assert_eq!(timeout(Millis(1000), disp).await, Ok(Ok(())));
+        reason.take()
+    }
+
+    #[ntex::test]
+    async fn encoder_error_stops_dispatcher() {
+        let reason = err_codec_stop("data").await;
+        assert!(reason.starts_with("Reason::Encoder("), "{reason}");
+        assert!(reason.contains("encode"), "{reason}");
+    }
+
+    #[ntex::test]
+    async fn decoder_error_stops_dispatcher() {
+        let reason = err_codec_stop("!").await;
+        assert!(reason.starts_with("Reason::Decoder("), "{reason}");
+        assert!(reason.contains("decode"), "{reason}");
+    }
+
+    #[test]
+    fn debug_formats() {
+        let item = DispatchItem::<BCodec>::Item(Bytes::from_static(b"x"));
+        assert_eq!(format!("{item:?}"), "DispatchItem::Item(b\"x\")");
+        let item = DispatchItem::<BCodec>::Control(Control::WBackPressureEnabled);
+        assert_eq!(
+            format!("{item:?}"),
+            "DispatchItem::Control(WBackPressureEnabled)"
+        );
+        let item = DispatchItem::<BCodec>::Stop(Reason::KeepAlive);
+        assert_eq!(format!("{item:?}"), "DispatchItem::Stop(Reason::KeepAlive)");
+
+        for (reason, expected) in [
+            (Reason::<BCodec>::Service, "Reason::Service"),
+            (Reason::Io(None), "Reason::Io(None)"),
+            (Reason::KeepAlive, "Reason::KeepAlive"),
+            (Reason::ReadTimeout, "Reason::ReadTimeout"),
+            (Reason::WriteTimeout, "Reason::WriteTimeout"),
+        ] {
+            assert_eq!(format!("{reason:?}"), expected);
+        }
+        let reason = Reason::<BCodec>::Encoder(io::Error::other("e"));
+        assert!(format!("{reason:?}").starts_with("Reason::Encoder("));
+        let reason = Reason::<BCodec>::Decoder(io::Error::other("d"));
+        assert!(format!("{reason:?}").starts_with("Reason::Decoder("));
+    }
+
+    /// A write failure while waiting for backpressure release stops the
+    /// dispatcher with an io error.
+    #[ntex::test]
+    async fn write_error_during_backpressure() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let events2 = events.clone();
+        let io = Io::new(
+            server,
+            SharedCfg::new("TEST").add(IoConfig::new().set_write_buf(1024)),
+        );
+        let (disp, _) = Dispatcher::debug(
+            io,
+            BCodec(1),
+            ntex_service::fn_service(move |msg: DispatchItem<BCodec>| {
+                let events = events2.clone();
+                async move {
+                    let ev = match msg {
+                        DispatchItem::Item(_) => {
+                            events.borrow_mut().push("item".to_string());
+                            return Ok::<_, ()>(Some(Bytes::from(vec![b'x'; 4096])));
+                        }
+                        DispatchItem::Control(c) => format!("{c:?}"),
+                        DispatchItem::Stop(Reason::Io(Some(err))) => format!("io: {err}"),
+                        DispatchItem::Stop(r) => format!("{r:?}"),
+                    };
+                    events.borrow_mut().push(ev);
+                    Ok(None)
+                }
+            }),
+        );
+        let hnd = spawn(disp);
+
+        client.write("1");
+        sleep(Millis(100)).await;
+        assert_eq!(&events.borrow()[..], &["item", "WBackPressureEnabled"]);
+
+        client.write_error(io::Error::other("write failed"));
+        client.remote_buffer_cap(1024);
+        assert!(matches!(timeout(Millis(1000), hnd).await, Ok(Ok(Ok(())))));
+        assert_eq!(
+            &events.borrow()[..],
+            &["item", "WBackPressureEnabled", "io: write failed"]
+        );
+    }
+
+    /// The frame read rate is satisfied, but the cumulative `max_timeout`
+    /// budget expires.
+    #[ntex::test]
+    async fn read_rate_max_timeout_reached() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let data = Arc::new(Mutex::new(RefCell::new(Vec::new())));
+        let data2 = data.clone();
+        let io = Io::new(
+            server,
+            SharedCfg::new("TEST").add(
+                IoConfig::new()
+                    .set_keepalive_timeout(Seconds::ZERO)
+                    .set_frame_read_rate(Seconds(1), Seconds(2), 2),
+            ),
+        );
+        let (disp, _) = Dispatcher::debug(
+            io,
+            BCodec(1024),
+            ntex_service::fn_service(move |msg: DispatchItem<BCodec>| {
+                let data = data2.clone();
+                async move {
+                    if let DispatchItem::Stop(Reason::ReadTimeout) = msg {
+                        data.lock().unwrap().borrow_mut().push(1);
+                    }
+                    Ok::<_, ()>(None)
+                }
+            }),
+        );
+        spawn(async move {
+            let _ = disp.await;
+        });
+
+        let start = std::time::Instant::now();
+        for _ in 0..12 {
+            client.write("abc");
+            sleep(Millis(300)).await;
+            if client.is_closed() {
+                break;
+            }
+        }
+        wait_closed(&client, Millis(1000)).await;
+        assert!(client.is_closed());
+        assert!(start.elapsed() < std::time::Duration::from_millis(3500));
+        assert_eq!(&data.lock().unwrap().borrow()[..], &[1]);
     }
 }

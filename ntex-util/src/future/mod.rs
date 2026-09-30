@@ -72,3 +72,31 @@ impl<F: Future> Future for MaybeDone<F> {
         Poll::Ready(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{future::pending, future::ready, pin::pin};
+
+    use super::*;
+
+    #[ntex::test]
+    async fn maybe_done_take_output() {
+        let mut fut = pin!(MaybeDone::Pending(pending::<()>()));
+        assert!(fut.as_mut().take_output().is_none());
+
+        let mut fut = pin!(MaybeDone::Pending(ready(1)));
+        fut.as_mut().await;
+        assert_eq!(fut.as_mut().take_output(), Some(1));
+        // the output is taken once
+        assert!(fut.as_mut().take_output().is_none());
+    }
+
+    #[ntex::test]
+    #[should_panic(expected = "MaybeDone polled after value taken")]
+    async fn maybe_done_poll_after_take() {
+        let mut fut = pin!(MaybeDone::Pending(ready(1)));
+        fut.as_mut().await;
+        assert_eq!(fut.as_mut().take_output(), Some(1));
+        fut.as_mut().await;
+    }
+}

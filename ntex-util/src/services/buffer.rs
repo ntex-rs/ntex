@@ -650,7 +650,7 @@ mod tests {
         }
 
         async fn call(&self, (): (), _: Ctx<'_, Self, ()>) -> Result<(), ()> {
-            Ok(())
+            unreachable!("FailService is never ready")
         }
     }
 

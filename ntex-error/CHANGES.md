@@ -2,6 +2,11 @@
 
 ## [3.0.0] - unreleased
 
+* Re-export FailureDiagnostic
+
+* ErrorMessageChained accessors match ErrorMessage: rename msg() to as_bstr(), add
+  empty(), from_static(), is_empty(), as_str(), into_string() and with_source()
+
 * Add BacktraceRaw::with_filename_unsynchronized() for signal handlers
 
 * Fix module_path_fs() returning cached module_path() result for the same file

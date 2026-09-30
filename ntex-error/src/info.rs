@@ -54,6 +54,8 @@ pub struct Failure {
 }
 
 /// Type-erased diagnostic view of a [`Failure`].
+///
+/// Returned by [`AsError::as_diag()`](crate::AsError::as_diag) for a [`Failure`].
 pub struct FailureDiagnostic(Arc<dyn ErrorInfo>);
 
 impl Failure {
