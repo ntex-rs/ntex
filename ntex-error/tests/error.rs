@@ -3,8 +3,8 @@ use std::{error::Error as StdError, fmt, io};
 use ntex_bytes::Bytes;
 use ntex_error::{
     AsError, Backtrace, BacktraceRaw, Error, ErrorDiagnostic, ErrorMapping, ErrorMessage,
-    ErrorMessageChained, Failure, IntoFailure, ResultSignature, ResultType, Retryable, Success,
-    fmt_diag_string, fmt_diag_typ, fmt_err_string, utils, with_service,
+    ErrorMessageChained, Failure, FailureDiagnostic, IntoFailure, ResultSignature, ResultType,
+    Retryable, Success, fmt_diag_string, fmt_diag_typ, fmt_err_string, utils, with_service,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -264,7 +264,7 @@ fn failure() {
     let f2 = f2.fail();
     assert_eq!(f2.signature(), "my-inner");
 
-    let diag = f.as_diag();
+    let diag: &FailureDiagnostic = f.as_diag();
     assert_eq!(diag.signature(), "my-inner");
     assert_eq!(diag.service(), Some("svc"));
     assert_eq!(diag.tag(), Some(&Bytes::from_static(b"tag")));
@@ -338,7 +338,7 @@ fn fmt_helpers() {
     assert_eq!(msg.to_string(), "");
     assert_eq!(format!("{msg:?}"), "");
     assert_eq!(fmt_err_string(&msg), "io\n");
-    assert_eq!(msg.msg(), "");
+    assert_eq!(msg.as_bstr(), "");
 
     fn is_send_sync<T: Send + Sync>(_: &T) {}
     is_send_sync(&msg);

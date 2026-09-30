@@ -157,14 +157,48 @@ impl ErrorMessageChained {
         }
     }
 
-    /// Creates a message error without a source.
+    /// Creates an empty message error without a source.
+    pub const fn empty() -> Self {
+        Self::from_static("")
+    }
+
+    /// Creates a message error without a source from a [`ByteString`].
     pub const fn from_bstr(msg: ByteString) -> Self {
         Self { msg, source: None }
     }
 
-    /// Returns the message.
-    pub fn msg(&self) -> &ByteString {
+    /// Creates a message error without a source from a static string.
+    pub const fn from_static(msg: &'static str) -> Self {
+        Self::from_bstr(ByteString::from_static(msg))
+    }
+
+    /// Returns `true` if the message is empty.
+    pub fn is_empty(&self) -> bool {
+        self.msg.is_empty()
+    }
+
+    /// Returns the message as a string slice.
+    pub fn as_str(&self) -> &str {
         &self.msg
+    }
+
+    /// Returns the message as a [`ByteString`].
+    pub fn as_bstr(&self) -> &ByteString {
+        &self.msg
+    }
+
+    /// Converts this error into its message, the source is dropped.
+    pub fn into_string(self) -> ByteString {
+        self.msg
+    }
+
+    /// Sets the source error, replacing the current one.
+    #[must_use]
+    pub fn with_source<E: StdError + Send + Sync + 'static>(self, source: E) -> Self {
+        Self {
+            msg: self.msg,
+            source: Some(Arc::new(source)),
+        }
     }
 }
 
@@ -175,7 +209,7 @@ impl ErrorMessage {
     }
 
     /// Creates an error message from a [`ByteString`].
-    pub const fn from_bstr(msg: ByteString) -> ErrorMessage {
+    pub const fn from_bstr(msg: ByteString) -> Self {
         ErrorMessage(msg)
     }
 
@@ -339,18 +373,18 @@ mod tests {
     #[test]
     fn error_message_chained() {
         let chained = ErrorMessageChained::from(ByteString::from("test"));
-        assert_eq!(chained.msg(), "test");
+        assert_eq!(chained.as_bstr(), "test");
         assert!(chained.source().is_none());
 
         let chained = ErrorMessageChained::from_bstr(ByteString::from("test"));
-        assert_eq!(chained.msg(), "test");
+        assert_eq!(chained.as_bstr(), "test");
         assert!(chained.source().is_none());
         assert_eq!(format!("{chained}"), "test");
         assert_eq!(format!("{chained:?}"), "test");
 
         let msg = ErrorMessage::from(ByteString::from("test"));
         let chained = msg.with_source(io::Error::other("io-test"));
-        assert_eq!(chained.msg(), "test");
+        assert_eq!(chained.as_bstr(), "test");
         assert!(chained.source().is_some());
 
         let err = ErrorMessageChained::new("test", io::Error::other("io-test"));
@@ -359,6 +393,22 @@ mod tests {
 
         let chained = ErrorMessageChained::from(ByteString::new());
         assert_eq!(format!("{chained}"), "");
+        assert!(chained.is_empty());
+
+        let chained = ErrorMessageChained::empty();
+        assert!(chained.is_empty());
+        assert_eq!(chained.as_str(), "");
+        assert!(chained.source().is_none());
+
+        let chained = ErrorMessageChained::from_static("test");
+        assert!(!chained.is_empty());
+        assert_eq!(chained.as_str(), "test");
+        assert!(chained.source().is_none());
+
+        let chained = chained.with_source(io::Error::other("first"));
+        let chained = chained.with_source(io::Error::other("second"));
+        assert_eq!(chained.source().unwrap().to_string(), "second");
+        assert_eq!(chained.into_string(), "test");
     }
 
     #[derive(thiserror::Error, derive_more::Debug)]
