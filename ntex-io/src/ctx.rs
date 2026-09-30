@@ -45,12 +45,6 @@ use crate::{Flags, Id, IoRef, IoTaskStatus, Readiness, io::IoState};
 #[repr(transparent)]
 pub struct IoContext(IoRef);
 
-impl fmt::Debug for IoContext {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("IoContext").field("io", &self.0).finish()
-    }
-}
-
 impl IoContext {
     pub(crate) fn new(io: IoRef) -> Self {
         Self(io)
@@ -666,6 +660,12 @@ fn stopping_read_status(st: &IoState, status: &Poll<io::Result<usize>>) -> IoTas
 impl Clone for IoContext {
     fn clone(&self) -> Self {
         Self(self.0.clone())
+    }
+}
+
+impl fmt::Debug for IoContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IoContext").field("io", &self.0).finish()
     }
 }
 

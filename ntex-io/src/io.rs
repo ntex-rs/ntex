@@ -61,11 +61,6 @@ pub struct Io<F = Base>(UnsafeCell<IoRef>, marker::PhantomData<F>);
 #[derive(Clone)]
 pub struct IoRef(pub(super) Rc<IoState>);
 
-/// Saturating conversion used for the in-flight write counter.
-fn as_u32(v: usize) -> u32 {
-    u32::try_from(v).unwrap_or(u32::MAX)
-}
-
 pub(crate) struct IoState {
     filter: FilterPtr,
     pub(super) id: Cell<Id>,
@@ -228,12 +223,12 @@ impl IoState {
         size >= self.cfg.read_buf().high
     }
 
-    pub(super) fn should_disable_rd_backpressure(&self, size: usize) -> bool {
-        size <= self.cfg.read_buf().half
-    }
-
     pub(super) fn is_wr_backpressure_needed(&self, size: usize) -> bool {
         size >= self.cfg.write_buf().high
+    }
+
+    pub(super) fn should_disable_rd_backpressure(&self, size: usize) -> bool {
+        size <= self.cfg.read_buf().half
     }
 
     pub(super) fn should_disable_wr_backpressure(&self, size: usize) -> bool {
@@ -1201,6 +1196,11 @@ impl<F> Drop for Io<F> {
 
         IoManager::unregister(self.io_ref());
     }
+}
+
+/// Saturating conversion used for the in-flight write counter.
+fn as_u32(v: usize) -> u32 {
+    u32::try_from(v).unwrap_or(u32::MAX)
 }
 
 #[cfg(test)]

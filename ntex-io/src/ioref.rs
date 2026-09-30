@@ -594,7 +594,7 @@ impl IoRef {
         self.0.wake_dispatch_task();
     }
 
-    /// Wakeup dispatcher and send keep-alive error
+    /// Wakeup dispatcher and send Timeout error
     pub fn notify_timeout(&self) {
         self.0.notify_timeout();
     }
@@ -697,8 +697,7 @@ impl IoRef {
         }
     }
 
-    /// Call handle write method, returns true if
-    /// `write-paused` is still set
+    /// Call handle write method, returns true if `write-paused` is still set
     fn call_write(&self) -> WakeWriteTask {
         if let Some(hnd) = self.0.handle.take() {
             self.0.flags.unset_write_paused();
