@@ -802,6 +802,69 @@ mod tests {
         }
     }
 
+    /// A failed reactor operation stops the stream with its error.
+    #[ntex::test]
+    async fn reactor_error_stops_the_stream() {
+        let mut fixture = Fixture::new();
+        let id = fixture.id;
+        fixture.handler.error(id, io::Error::other("reactor error"));
+        // an unknown stream is ignored
+        fixture.handler.error(id + 100, io::Error::other("unknown"));
+
+        let closed = !fixture.io.is_active();
+        fixture.teardown();
+        assert!(closed, "reactor error did not stop the stream");
+    }
+
+    /// A read that would block keeps read interest armed.
+    #[ntex::test]
+    async fn readable_without_data_renews_read_interest() {
+        let mut fixture = Fixture::new();
+        fixture.fire(Event::readable(0));
+
+        let flags = fixture.flags();
+        fixture.teardown();
+        assert!(flags.contains(Flags::RD), "read interest was not armed");
+    }
+
+    /// An event for the other direction keeps armed write interest.
+    #[ntex::test]
+    async fn readable_event_keeps_write_interest() {
+        let mut fixture = Fixture::new();
+        fixture
+            .ops
+            .0
+            .with(|streams| streams[fixture.id].flags.insert(Flags::WR));
+        fixture.fire(Event::readable(0));
+
+        let flags = fixture.flags();
+        fixture.teardown();
+        assert!(flags.contains(Flags::WR), "write interest was lost");
+    }
+
+    /// Asking for write interest with leftover output arms it.
+    #[ntex::test]
+    async fn write_interest_with_pending_output() {
+        let fixture = Fixture::new();
+        fixture
+            .io
+            .encode_slice(&vec![b'x'; MAX_WRITE_SIZE * 2])
+            .unwrap();
+
+        fixture.ops.0.interest(fixture.id as u32, false, true);
+        let armed = fixture.flags().contains(Flags::WR);
+        // interest is already armed
+        fixture.ops.0.interest(fixture.id as u32, false, true);
+        let armed2 = fixture.flags().contains(Flags::WR);
+        // write interest is dropped
+        fixture.ops.0.interest(fixture.id as u32, false, false);
+        let dropped = !fixture.flags().contains(Flags::WR);
+        fixture.teardown();
+
+        assert!(armed && armed2, "write interest was not armed");
+        assert!(dropped, "write interest was not dropped");
+    }
+
     /// Out-of-band writes, performed on the stack of whoever filled the write
     /// buffer rather than by the write task.
     mod write {
