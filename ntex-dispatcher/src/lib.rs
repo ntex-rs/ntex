@@ -154,8 +154,9 @@ enum DispatcherError<S, U> {
     Service(S),
 }
 
-enum PollService<U: Encoder + Decoder> {
-    Item(DispatchItem<U>),
+enum PollService {
+    /// Write backpressure is enabled while the service is not ready.
+    Backpressure,
     Continue,
     Ready,
 }
@@ -310,7 +311,9 @@ where
                                 }
                             }
                         }
-                        PollService::Item(item) => (item, false),
+                        PollService::Backpressure => {
+                            (DispatchItem::Control(Control::WBackPressureEnabled), false)
+                        }
                         PollService::Continue => continue,
                     };
 
@@ -319,10 +322,7 @@ where
                 // handle write back-pressure
                 DispatcherState::Backpressure => {
                     match ready!(inner.poll_service(cx)) {
-                        PollService::Ready
-                        | PollService::Item(DispatchItem::Control(Control::WBackPressureEnabled)) =>
-                            {}
-                        PollService::Item(item) => inner.call_service(cx, item, false),
+                        PollService::Ready | PollService::Backpressure => {}
                         PollService::Continue => continue,
                     }
 
@@ -423,7 +423,7 @@ where
         }
     }
 
-    fn check_error(&mut self) -> PollService<U> {
+    fn check_error(&mut self) -> PollService {
         // check for errors
         if let Some(err) = self.shared.error.take() {
             log::trace!(
@@ -445,7 +445,7 @@ where
         }
     }
 
-    fn poll_service(&mut self, cx: &mut Context<'_>) -> Poll<PollService<U>> {
+    fn poll_service(&mut self, cx: &mut Context<'_>) -> Poll<PollService> {
         // wait until an in-flight call completes and the service becomes ready
         let ready = if self.shared.inflight.get() >= self.max_inflight {
             Poll::Pending
@@ -504,9 +504,7 @@ where
                             self.start_write_timer();
                         }
                         self.st = DispatcherState::Backpressure;
-                        Poll::Ready(PollService::Item(DispatchItem::Control(
-                            Control::WBackPressureEnabled,
-                        )))
+                        Poll::Ready(PollService::Backpressure)
                     }
                 }
             }
