@@ -1267,6 +1267,50 @@ async fn test_h2_response_body_error_resets_stream() {
     assert!(!client.is_closed());
 }
 
+/// `304 Not Modified` response has no body and no `content-length: 0`.
+#[ntex::test]
+async fn test_h2_not_modified_has_no_body() {
+    use ntex::http::{HeaderMap, uri::Scheme};
+    use ntex_h2::{MessageKind, client::SimpleClient};
+
+    let srv = test_server(async |_| {
+        HttpService::h2(async |req: Request| {
+            let mut res = Response::builder(StatusCode::NOT_MODIFIED);
+            Ok::<_, io::Error>(match req.path() {
+                "/sized" => res.body("body"),
+                "/stream" => res.streaming(Box::pin(once(async {
+                    Ok::<_, io::Error>(Bytes::from_static(b"body"))
+                }))),
+                _ => res.build(),
+            })
+        })
+    });
+
+    let io = ntex::connect::connect(srv.addr()).await.unwrap();
+    let client = SimpleClient::new(io, Scheme::HTTP, "localhost".into());
+    for path in ["/empty", "/sized", "/stream"] {
+        let (_snd, rcv) = client
+            .send(Method::GET, path.into(), HeaderMap::default(), true)
+            .await
+            .unwrap();
+        let msg = rcv.recv().await.unwrap();
+        let MessageKind::Headers {
+            pseudo,
+            headers,
+            eof,
+        } = msg.kind
+        else {
+            panic!("unexpected message: {msg:?}")
+        };
+        assert_eq!(pseudo.status, Some(StatusCode::NOT_MODIFIED), "{path}");
+        assert!(eof, "{path}: body is sent");
+        assert!(
+            !headers.contains_key(header::CONTENT_LENGTH),
+            "{path}: {headers:?}"
+        );
+    }
+}
+
 /// Raw HTTP/2 connection preface and a `POST /` request without END_STREAM.
 fn h2_raw_post() -> Vec<u8> {
     let mut buf = Vec::new();
@@ -1337,13 +1381,16 @@ async fn test_h2_empty_data_frames_are_not_queued() {
 
     // the connection stays open
     let frames = h2_raw_read_frames(&mut stream);
-    assert!(!frames.0.contains(&7), "GOAWAY is sent: {frames:?}");
+    assert!(
+        !frames.0.iter().any(|f| f.0 == 7),
+        "GOAWAY is sent: {frames:?}"
+    );
     assert!(!frames.1, "connection is closed");
 }
 
-/// Reads frame types until the connection is closed or idle for 500ms,
-/// returns `true` if the connection is closed.
-fn h2_raw_read_frames(stream: &mut net::TcpStream) -> (Vec<u8>, bool) {
+/// Reads frames until the connection is closed or idle for 500ms,
+/// returns frame types with payloads and `true` if the connection is closed.
+fn h2_raw_read_frames(stream: &mut net::TcpStream) -> (Vec<(u8, Vec<u8>)>, bool) {
     stream
         .set_read_timeout(Some(std::time::Duration::from_millis(500)))
         .unwrap();
@@ -1363,13 +1410,15 @@ fn h2_raw_read_frames(stream: &mut net::TcpStream) -> (Vec<u8>, bool) {
         let len = (usize::from(data[pos]) << 16)
             | (usize::from(data[pos + 1]) << 8)
             | usize::from(data[pos + 2]);
-        frames.push(data[pos + 3]);
+        let end = (pos + 9 + len).min(data.len());
+        frames.push((data[pos + 3], data[pos + 9..end].to_vec()));
         pos += 9 + len;
     }
     (frames, closed)
 }
 
-/// The connection is closed after 10 consecutive empty non-final DATA frames.
+/// The connection is closed with `ENHANCE_YOUR_CALM` after 10 consecutive
+/// empty non-final DATA frames.
 #[ntex::test]
 async fn test_h2_empty_data_frames_limit() {
     use ntex::util::stream_recv;
@@ -1403,7 +1452,12 @@ async fn test_h2_empty_data_frames_limit() {
 
     // the server sends GOAWAY and closes the connection
     let (frames, closed) = h2_raw_read_frames(&mut stream);
-    assert!(frames.contains(&7), "GOAWAY is not sent: {frames:?}");
+    let goaway = frames
+        .iter()
+        .find(|f| f.0 == 7)
+        .unwrap_or_else(|| panic!("GOAWAY is not sent: {frames:?}"));
+    // error code is ENHANCE_YOUR_CALM
+    assert_eq!(goaway.1[4..8], [0, 0, 0, 0xb], "GOAWAY: {goaway:?}");
     assert!(closed, "connection is not closed");
     sleep(Millis(100)).await;
     assert_ne!(

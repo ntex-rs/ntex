@@ -211,12 +211,7 @@ impl Inner {
         if let Some(data) = self.items.borrow_mut().pop_front() {
             let cap = self.cap.take().unwrap();
             cap.consume(data.len() as u32);
-            let size = cap.size();
             self.cap.set(Some(cap));
-
-            if size == 0 && !self.flags.get().contains(Flags::EOF) {
-                self.task.register(cx.waker());
-            }
             Poll::Ready(Some(Ok(data)))
         } else if let Some(err) = self.err.take() {
             // the payload ends after an error
@@ -226,7 +221,6 @@ impl Inner {
             Poll::Ready(None)
         } else {
             self.task.register(cx.waker());
-            self.io_task.wake();
             Poll::Pending
         }
     }
@@ -247,5 +241,108 @@ impl fmt::Debug for Inner {
         self.cap.set(Some(cap));
         self.err.set(err);
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
+    use std::task::Wake;
+
+    use ntex_h2::client::SimpleClient;
+
+    use super::*;
+    use crate::http::{HeaderMap, Method, uri::Scheme};
+    use crate::io::{Io, IoBoxed, testing::IoTest};
+    use crate::{SharedCfg, time::Millis, time::sleep, util::ByteString};
+
+    struct Counter(AtomicUsize);
+
+    impl Wake for Counter {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// A pending read does not wake the payload io task, only dropping the payload does.
+    #[crate::rt_test]
+    async fn test_pending_read_does_not_wake_io_task() {
+        let (io, server) = IoTest::create();
+        io.remote_buffer_cap(64 * 1024);
+        let client = SimpleClient::new(
+            IoBoxed::from(Io::new(io, SharedCfg::default())),
+            Scheme::HTTP,
+            ByteString::from_static("localhost"),
+        );
+        server.write([0, 0, 0, 4, 0, 0, 0, 0, 0]);
+        sleep(Millis(50)).await;
+        let (snd, _rcv) = client
+            .send(Method::GET, "/".into(), HeaderMap::default(), true)
+            .await
+            .unwrap();
+
+        let (sender, payload) = Payload::create(snd.stream().empty_capacity());
+        let io_task = Arc::new(Counter(AtomicUsize::new(0)));
+        let io_waker = io_task.clone().into();
+        assert!(sender.on_cancel(&io_waker).is_pending());
+
+        let reader = Arc::new(Counter(AtomicUsize::new(0)));
+        let reader_waker = reader.clone().into();
+        let mut cx = Context::from_waker(&reader_waker);
+        for _ in 0..3 {
+            assert!(payload.poll_read(&mut cx).is_pending());
+        }
+        assert_eq!(io_task.0.load(Ordering::SeqCst), 0);
+
+        drop(payload);
+        assert_eq!(io_task.0.load(Ordering::SeqCst), 1);
+        assert!(sender.on_cancel(&io_waker).is_ready());
+    }
+
+    /// A ready read does not register the reader waker, new data does not wake
+    /// a reader that is not waiting.
+    #[crate::rt_test]
+    async fn test_ready_read_does_not_register_waker() {
+        let (io, server) = IoTest::create();
+        io.remote_buffer_cap(64 * 1024);
+        let client = SimpleClient::new(
+            IoBoxed::from(Io::new(io, SharedCfg::default())),
+            Scheme::HTTP,
+            ByteString::from_static("localhost"),
+        );
+        server.write([0, 0, 0, 4, 0, 0, 0, 0, 0]);
+        sleep(Millis(50)).await;
+        let (snd, rcv) = client
+            .send(Method::GET, "/".into(), HeaderMap::default(), true)
+            .await
+            .unwrap();
+
+        // `200` response and two DATA frames
+        server.write([0, 0, 1, 1, 4, 0, 0, 0, 1, 0x88]);
+        server.write([0, 0, 2, 0, 0, 0, 0, 0, 1, b'a', b'b']);
+        server.write([0, 0, 2, 0, 0, 0, 0, 0, 1, b'c', b'd']);
+        let _ = rcv.recv().await.unwrap();
+        let mut chunks = Vec::new();
+        for _ in 0..2 {
+            let msg = rcv.recv().await.unwrap();
+            let h2::MessageKind::Data(data, cap) = msg.kind else {
+                panic!("unexpected message: {msg:?}")
+            };
+            chunks.push((data, cap));
+        }
+
+        let (sender, payload) = Payload::create(snd.stream().empty_capacity());
+        let reader = Arc::new(Counter(AtomicUsize::new(0)));
+        let reader_waker = reader.clone().into();
+        let mut cx = Context::from_waker(&reader_waker);
+
+        let (data, cap) = chunks.remove(0);
+        sender.feed_data(data, cap);
+        assert!(matches!(payload.poll_read(&mut cx), Poll::Ready(Some(Ok(ref d))) if d == "ab"));
+
+        let (data, cap) = chunks.remove(0);
+        sender.feed_data(data, cap);
+        assert_eq!(reader.0.load(Ordering::SeqCst), 0);
+        assert!(matches!(payload.poll_read(&mut cx), Poll::Ready(Some(Ok(ref d))) if d == "cd"));
     }
 }

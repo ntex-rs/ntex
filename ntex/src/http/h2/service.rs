@@ -135,6 +135,7 @@ where
     Err: ResponseError + 'static,
 {
     let ioref = io.get_ref();
+    let control = Pipeline::new((), ControlService { inner: control });
 
     let _ = server::handle_one(
         io,
@@ -144,6 +145,42 @@ where
     .await;
 
     Ok(())
+}
+
+/// Sets `GOAWAY` reason codes for connection level request errors.
+struct ControlService {
+    inner: Pipeline<h2::Control<Error<H2Error>>, h2::ControlAck, DispatchError>,
+}
+
+impl Service<(), h2::Control<Error<H2Error>>> for ControlService {
+    type Res = h2::ControlAck;
+    type Error = DispatchError;
+
+    async fn ready(&self, _: Ctx<'_, Self, ()>) -> Result<(), Self::Error> {
+        self.inner.ready().await
+    }
+
+    async fn shutdown(&self, _: Ctx<'_, Self, ()>) {
+        self.inner.shutdown().await;
+    }
+
+    async fn call(
+        &self,
+        msg: h2::Control<Error<H2Error>>,
+        _: Ctx<'_, Self, ()>,
+    ) -> Result<Self::Res, Self::Error> {
+        let msg = match msg {
+            h2::Control::Disconnect(h2::control::Reason::Error(err))
+                if matches!(**err.get_ref(), H2Error::EmptyDataFrames) =>
+            {
+                h2::Control::Disconnect(h2::control::Reason::Error(
+                    err.reason(h2::frame::Reason::ENHANCE_YOUR_CALM),
+                ))
+            }
+            msg => msg,
+        };
+        self.inner.call(msg).await
+    }
 }
 
 struct PublishService<Err> {
@@ -558,7 +595,8 @@ fn expect_continue(headers: &HeaderMap) -> bool {
 
 fn prepare_response(head: &mut ResponseHead, size: &mut BodySize) {
     // Content length
-    if head.status == StatusCode::NO_CONTENT {
+    // `204` and `304` responses never have a body, see RFC 9110 section 15.3.5 and 15.4.5
+    if head.status == StatusCode::NO_CONTENT || head.status == StatusCode::NOT_MODIFIED {
         *size = BodySize::None;
     }
     match size {

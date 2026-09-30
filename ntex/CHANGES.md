@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+* HTTP/2 payload read that returns a chunk does not register the reader waker, new data woke
+  a reader that was not waiting
+
+* HTTP/2 payload read does not wake the client payload task when no data is available,
+  the task was polled for nothing on every pending read
+
+* HTTP/2 `304 Not Modified` response has no body, it was sent with `content-length: 0` or
+  with the body `DATA` frames
+
 * `CustomResponder` returns `500` for an invalid `with_header()` name or value, it was
   silently ignored; repeated `with_header()` calls for the same name keep all values, only
   the last one was kept
@@ -9,7 +18,8 @@
 * HTTP/2 response body error resets only its stream with `INTERNAL_ERROR`, it closed the whole
   connection with `GOAWAY`, a failed send on a closed stream no longer fails the connection
 
-* Remove `H2Error::Stream`, a response body error is not a connection error
+* Remove unused `H2Error::Stream`, `H2Error::Operation`, `H2Error::MissingPseudo` and
+  `H2Error::Uri`, stream-level failures are not connection errors
 
 * HTTP/2 request with a malformed uri is answered with `400 Bad Request`, it closed the whole
   connection with `GOAWAY`, see RFC 9113 section 8.1.1
@@ -22,7 +32,7 @@
 * HTTP/2 request payload ignores empty non-final `DATA` frames, they are not flow controlled
   and each one was queued as an empty body chunk without bound
 
-* HTTP/2 connection is closed with `GOAWAY` after 10 consecutive empty non-final `DATA` frames,
+* HTTP/2 connection is closed with `GOAWAY` `ENHANCE_YOUR_CALM` after 10 consecutive empty non-final `DATA` frames,
   new `H2Error::EmptyDataFrames` error
 
 * Remove the deprecated `neon` feature, it had no effect
