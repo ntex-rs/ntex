@@ -343,3 +343,81 @@ impl fmt::Debug for SystemRunner {
             .finish()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::Cell, cell::RefCell, time::Duration};
+
+    use super::*;
+    use crate::{Arbiter, testing::TestRunner};
+
+    #[test]
+    #[allow(deprecated)]
+    fn builder_options() {
+        let builder = System::build()
+            .name("opts")
+            .stop_on_panic(true)
+            .signals(false)
+            .panic_handling(false)
+            .enable_signals()
+            .disable_signals()
+            .stack_size(2 * 1024 * 1024)
+            .ping_interval(0)
+            .ping_threshold(10)
+            .thread_pool_limit(1)
+            .thread_pool_recv_timeout(Duration::from_millis(100))
+            .testing();
+        assert!(format!("{builder:?}").contains("opts"));
+
+        let runner = builder.build(TestRunner);
+        assert!(format!("{runner:?}").contains("opts"));
+        runner.block_on(async {
+            let sys = System::current();
+            assert_eq!(sys.name(), "opts");
+            assert!(sys.testing());
+            assert!(!sys.signals());
+
+            // arbiter thread with configured stack size
+            let mut arb = Arbiter::new();
+            arb.stop();
+            arb.join().unwrap();
+
+            assert_eq!(sys.spawn_blocking(|| 1).await, Ok(1));
+        });
+    }
+
+    #[test]
+    fn run_exit_codes() {
+        // `f` error is returned
+        let err = System::new("test", TestRunner)
+            .run(|| Err(io::Error::other("init failed")))
+            .unwrap_err();
+        assert_eq!(err.to_string(), "init failed");
+
+        System::new("test", TestRunner)
+            .run(|| {
+                System::current().stop();
+                Ok(())
+            })
+            .unwrap();
+
+        // stopping the system stops arbiters and runs shutdown callbacks
+        let called = Rc::new(Cell::new(false));
+        let arb = Rc::new(RefCell::new(None));
+        let (called2, arb2) = (called.clone(), arb.clone());
+        let err = System::new("test", TestRunner)
+            .run(move || {
+                Arbiter::on_shutdown(move || called2.set(true));
+                *arb2.borrow_mut() = Some(Arbiter::new());
+                System::current().stop_with_code(3);
+                Ok(())
+            })
+            .unwrap_err();
+        assert_eq!(err.to_string(), "Non-zero exit code: 3");
+        assert!(called.get());
+
+        let mut arb = arb.borrow_mut().take().unwrap();
+        arb.join().unwrap();
+        assert!(!arb.is_running());
+    }
+}
