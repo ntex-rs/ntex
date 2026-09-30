@@ -343,4 +343,20 @@ mod tests {
         let d = Duration::from(Seconds(100));
         assert_eq!(d.as_secs(), 100);
     }
+
+    #[test]
+    fn time_types_conversions() {
+        assert!(Millis(1).non_zero());
+        assert!(!Millis::ZERO.non_zero());
+        assert_eq!(Millis::from(-5i32), Millis::ZERO);
+        assert_eq!(Millis::from(5i32), Millis(5));
+        assert_eq!(Millis::from(7usize), Millis(7));
+        assert_eq!(Seconds::from(7usize), Seconds(7));
+
+        #[cfg(target_pointer_width = "64")]
+        {
+            assert_eq!(Millis::from(usize::MAX), Millis(u32::MAX));
+            assert_eq!(Seconds::from(usize::MAX), Seconds(u16::MAX));
+        }
+    }
 }

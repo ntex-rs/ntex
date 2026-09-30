@@ -90,7 +90,7 @@ impl<E: Clone> Error<E> {
     ///
     /// Returns the updated error.
     #[must_use]
-    pub fn set_tag<T: Into<Bytes>>(self, tag: T) -> Self {
+    pub fn with_tag<T: Into<Bytes>>(self, tag: T) -> Self {
         Error {
             inner: ErrorRepr::with_mut(self.inner, move |inner| {
                 inner.tag = Some(tag.into());
@@ -102,7 +102,7 @@ impl<E: Clone> Error<E> {
     ///
     /// Returns the updated error.
     #[must_use]
-    pub fn set_service(self, name: &'static str) -> Self {
+    pub fn with_service(self, name: &'static str) -> Self {
         Error {
             inner: ErrorRepr::with_mut(self.inner, move |inner| {
                 inner.service = Some(name);
@@ -161,7 +161,7 @@ impl<E: Clone> Error<E> {
     ///
     /// This value can be retrieved later using [`get_item`](Self::get_item).
     #[must_use]
-    pub fn insert_item<T: Sync + Send + 'static>(self, val: T) -> Self {
+    pub fn with_item<T: Sync + Send + 'static>(self, val: T) -> Self {
         Error {
             inner: ErrorRepr::with_mut(self.inner, move |inner| {
                 inner.ext.insert(val);
@@ -255,6 +255,7 @@ impl<T, E, U> ErrorMapping<T, E, U> for Result<T, E>
 where
     U: From<E>,
 {
+    #[track_caller]
     fn into_error(self) -> Result<T, Error<U>> {
         match self {
             Ok(val) => Ok(val),
@@ -303,8 +304,8 @@ impl<E: fmt::Debug> fmt::Debug for ErrorDebug<'_, E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Error")
             .field("error", &self.inner.error)
-            .field("service", &self.inner.service)
             .field("tag", &self.inner.tag)
+            .field("service", &self.inner.service)
             .field("backtrace", &self.inner.backtrace)
             .finish()
     }

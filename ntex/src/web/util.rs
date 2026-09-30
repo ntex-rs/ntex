@@ -461,3 +461,30 @@ impl<B> BodyEncoding for HttpResponse<B> {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn body_encoding() {
+        let mut builder = HttpResponse::Ok();
+        assert_eq!(builder.get_encoding(), None);
+        builder.encoding(ContentEncoding::Gzip);
+        assert_eq!(builder.get_encoding(), Some(ContentEncoding::Gzip));
+
+        let mut res = builder.build();
+        assert_eq!(res.get_encoding(), Some(ContentEncoding::Gzip));
+        res.encoding(ContentEncoding::Identity);
+        assert_eq!(res.get_encoding(), Some(ContentEncoding::Identity));
+    }
+
+    #[crate::rt_test]
+    async fn block_canceled() {
+        let res = block(|| -> Result<(), ()> { panic!("blocking panic") }).await;
+        assert!(matches!(res, Err(BlockingError::Canceled)));
+
+        let res = block(|| Err::<(), _>("err")).await;
+        assert!(matches!(res, Err(BlockingError::Error("err"))));
+    }
+}

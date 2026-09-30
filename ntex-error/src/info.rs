@@ -108,12 +108,6 @@ where
     }
 }
 
-impl IntoFailure for Failure {
-    fn fail(self) -> Failure {
-        self
-    }
-}
-
 impl<E> IntoFailure for E
 where
     E: ErrorDiagnostic + Into<Error<E>>,
@@ -155,6 +149,28 @@ impl AsError for Failure {
 
     fn as_diag(&self) -> &FailureDiagnostic {
         &self.inner
+    }
+}
+
+impl ErrorDiagnostic for Failure {
+    fn signature(&self) -> &'static str {
+        self.inner.0.signature()
+    }
+
+    fn tag(&self) -> Option<&Bytes> {
+        self.inner.0.tag()
+    }
+
+    fn service(&self) -> Option<&'static str> {
+        self.inner.0.service()
+    }
+
+    fn backtrace(&self) -> Option<&Backtrace> {
+        self.inner.0.backtrace()
+    }
+
+    fn into_failure(self) -> Failure {
+        self
     }
 }
 

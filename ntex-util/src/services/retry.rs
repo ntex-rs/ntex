@@ -178,4 +178,33 @@ mod tests {
         let srv = factory.pipeline(()).await.unwrap();
         assert_eq!(srv.call(()).await, Ok(()));
     }
+
+    #[derive(Clone)]
+    struct CloneOnce(Rc<Cell<usize>>);
+
+    impl Policy<TestService, (), ()> for CloneOnce {
+        async fn retry(&mut self, (): &(), res: &Result<(), ()>) -> bool {
+            res.is_err()
+        }
+
+        fn clone_request(&self, (): &()) -> Option<()> {
+            let n = self.0.get();
+            self.0.set(n + 1);
+            if n == 0 { Some(()) } else { None }
+        }
+    }
+
+    #[ntex::test]
+    async fn test_retry_without_clone() {
+        // the retried request cannot be cloned again, its result is returned
+        let cnt = Rc::new(Cell::new(5));
+        let clones = Rc::new(Cell::new(0));
+        let svc = Pipeline::new(
+            (),
+            RetryService::new(CloneOnce(clones.clone()), TestService(cnt.clone())),
+        );
+        assert_eq!(svc.call(()).await, Err(()));
+        assert_eq!(cnt.get(), 3);
+        assert_eq!(clones.get(), 2);
+    }
 }

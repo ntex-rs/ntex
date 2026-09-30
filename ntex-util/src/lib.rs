@@ -81,4 +81,15 @@ mod tests {
         assert_eq!(cloned.to_string(), err.to_string());
         assert_eq!(clone_io_error(&cloned).to_string(), "timed out");
     }
+
+    #[test]
+    fn test_dyn_errors() {
+        let err = io::Error::other("boxed");
+        assert_eq!(dyn_err(err).to_string(), "boxed");
+        assert_eq!(dyn_rc_err(io::Error::other("rc")).to_string(), "rc");
+
+        let err = str_rc_err("string error".to_string());
+        assert_eq!(err.to_string(), "string error");
+        assert!(format!("{err:?}").contains("StringError"));
+    }
 }

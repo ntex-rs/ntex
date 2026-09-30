@@ -181,4 +181,15 @@ mod tests {
         assert_eq!(CLONES.load(Ordering::Relaxed), 2);
         assert!(w.take().unwrap().will_wake(&b));
     }
+
+    #[test]
+    fn local_waker_clone_is_empty() {
+        let waker = LocalWaker::new();
+        waker.register(std::task::Waker::noop());
+        assert!(waker.is_set());
+        let cloned = waker.clone();
+        assert!(!cloned.is_set());
+        assert!(!cloned.wake_checked());
+        assert_eq!(format!("{waker:?}"), "LocalWaker");
+    }
 }

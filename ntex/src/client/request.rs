@@ -469,7 +469,7 @@ impl ClientRequest {
 
     fn prep_for_sending(&mut self) -> Result<(), Error<ClientError>> {
         self.prep_for_sending_inner()
-            .map_err(|e| e.set_service(self.cfg.service()))
+            .map_err(|e| e.with_service(self.cfg.service()))
     }
 
     fn prep_for_sending_inner(&mut self) -> Result<(), Error<ClientError>> {

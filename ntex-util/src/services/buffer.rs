@@ -264,7 +264,7 @@ where
 mod tests {
     #![allow(clippy::unused_async_trait_impl)]
     use ntex_service::{Pipeline, apply, fn_factory};
-    use std::{cell::RefCell, rc::Rc, time::Duration};
+    use std::{cell::RefCell, pin::Pin, rc::Rc, time::Duration};
 
     use super::*;
     use crate::{future::lazy, task::LocalWaker};
@@ -633,5 +633,102 @@ mod tests {
         assert_eq!(inner.count.get(), 2);
         assert_eq!(inner.max.get(), 1);
         assert_eq!(inner.active_on_shutdown.get(), Some(0));
+    }
+
+    struct FailService(Rc<Cell<bool>>);
+
+    impl Service<(), ()> for FailService {
+        type Res = ();
+        type Error = ();
+
+        async fn ready(&self, _: Ctx<'_, Self, ()>) -> Result<(), ()> {
+            if self.0.get() {
+                Err(())
+            } else {
+                std::future::pending().await
+            }
+        }
+
+        async fn call(&self, (): (), _: Ctx<'_, Self, ()>) -> Result<(), ()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn request_canceled_display() {
+        let err = BufferServiceError::<&str>::RequestCanceled;
+        assert_eq!(err.to_string(), "buffer service request canceled");
+    }
+
+    #[ntex::test]
+    async fn dropped_buffered_request_is_skipped() {
+        let inner = Rc::new(Inner {
+            ready: Cell::new(false),
+            waker: LocalWaker::default(),
+            count: Cell::new(0),
+        });
+        let srv = Pipeline::new(
+            (),
+            BufferService::new(2, PipelineState::new(TestService(inner.clone()))),
+        );
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+
+        // buffer a request, then drop it before release
+        let mut fut = srv.call_nowait(());
+        assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
+        drop(fut);
+
+        inner.ready.set(true);
+        inner.waker.wake();
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+
+        // readiness goes to the next direct call
+        srv.call_nowait(()).await.unwrap();
+        assert_eq!(inner.count.get(), 1);
+    }
+
+    #[ntex::test]
+    async fn shutdown_skips_dropped_buffered_request() {
+        let inner = Rc::new(Inner {
+            ready: Cell::new(false),
+            waker: LocalWaker::default(),
+            count: Cell::new(0),
+        });
+        let srv = Pipeline::new(
+            (),
+            BufferService::new(2, PipelineState::new(TestService(inner.clone()))),
+        );
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+
+        let mut fut = srv.call_nowait(());
+        assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
+        drop(fut);
+
+        inner.ready.set(true);
+        crate::time::timeout(Duration::from_millis(1000), srv.shutdown())
+            .await
+            .unwrap();
+        assert_eq!(inner.count.get(), 0);
+    }
+
+    #[ntex::test]
+    async fn shutdown_stops_on_inner_ready_error() {
+        let fail = Rc::new(Cell::new(false));
+        let srv = Pipeline::new(
+            (),
+            BufferService::new(2, PipelineState::new(FailService(fail.clone()))),
+        );
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+
+        let mut fut = srv.call_nowait(());
+        assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
+
+        fail.set(true);
+        crate::time::timeout(Duration::from_millis(1000), srv.shutdown())
+            .await
+            .unwrap();
+
+        // the buffered request is never released
+        assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
     }
 }

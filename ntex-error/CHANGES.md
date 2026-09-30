@@ -1,6 +1,6 @@
 # Changes
 
-## [2.7.0] - unreleased
+## [3.0.0] - unreleased
 
 * Add BacktraceRaw::with_filename_unsynchronized() for signal handlers
 
@@ -9,6 +9,24 @@
 * Fix module_path() for files in a Windows drive root, e.g. `C:\c.rs`
 
 * Fix IntoFailure::fail() for Error<E> double wrapping the error and losing extension items and backtrace
+
+* Capture caller location in ErrorMapping::into_error(), consistent with Error::new()
+
+* Implement Retryable for Error<E>
+
+* ErrorMessageChained is Send + Sync, sources must be Send + Sync
+
+* Rename Error::set_tag(), set_service(), insert_item() to with_tag(), with_service(), with_item()
+
+* Implement ErrorDiagnostic for Failure
+
+* ResultType no longer implements std::error::Error and ErrorDiagnostic, signature() is an inherent method
+
+* ResultType::as_str() takes self by value
+
+* Error::debug() prints tag before service
+
+* Remove deprecated ErrorInfo type alias and ErrorDiagnostic::typ()
 
 ## [2.6.0] - 2026-09-07
 

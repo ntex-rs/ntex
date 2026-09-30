@@ -234,4 +234,13 @@ mod tests {
         assert!(format!("{err2:?}").contains("TimeoutError::Service"));
         assert!(format!("{err2}").contains("SrvError"));
     }
+
+    #[test]
+    fn timeout_error_eq() {
+        assert_eq!(TimeoutError::Service(1), TimeoutError::Service(1));
+        assert_ne!(TimeoutError::Service(1), TimeoutError::Service(2));
+        assert_ne!(TimeoutError::Service(1), TimeoutError::Timeout);
+        assert_ne!(TimeoutError::Timeout, TimeoutError::Service(1));
+        assert_eq!(TimeoutError::<u8>::Timeout, TimeoutError::Timeout);
+    }
 }

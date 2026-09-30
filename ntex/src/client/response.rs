@@ -221,7 +221,7 @@ impl MessageBody {
 
         let len = match content_length(res) {
             Ok(len) => len,
-            Err(e) => return Self::err(Error::from(e).set_service(config.service()), config),
+            Err(e) => return Self::err(Error::from(e).with_service(config.service()), config),
         };
 
         MessageBody {
@@ -283,7 +283,7 @@ impl Future for MessageBody {
             let limit = this.fut.as_ref().unwrap().limit;
             if limit > 0 && len > limit {
                 return Poll::Ready(Err(Error::from(ClientPayloadError(PayloadError::Overflow))
-                    .set_service(this.config.service())));
+                    .with_service(this.config.service())));
             }
         }
 
@@ -329,7 +329,7 @@ where
         };
         if !json {
             let err =
-                Some(Error::from(JsonPayloadError::ContentType).set_service(config.service()));
+                Some(Error::from(JsonPayloadError::ContentType).with_service(config.service()));
             return JsonBody {
                 err,
                 config,
@@ -344,7 +344,7 @@ where
             Err(e) => {
                 return JsonBody {
                     err: Some(
-                        Error::from(JsonPayloadError::Payload(e)).set_service(config.service()),
+                        Error::from(JsonPayloadError::Payload(e)).with_service(config.service()),
                     ),
                     config,
                     length: None,
@@ -410,7 +410,7 @@ where
                 return Poll::Ready(Err(Error::from(JsonPayloadError::Payload(
                     ClientPayloadError(PayloadError::Overflow),
                 ))
-                .set_service(self.config.service())));
+                .with_service(self.config.service())));
             }
         }
 
@@ -419,11 +419,9 @@ where
             Poll::Ready(result) => result.map_err(|e| e.map(JsonPayloadError::from))?,
             Poll::Pending => return Poll::Pending,
         };
-        Poll::Ready(
-            serde_json::from_slice::<U>(&body).map_err(|e| {
-                Error::from(JsonPayloadError::from(e)).set_service(this.config.service())
-            }),
-        )
+        Poll::Ready(serde_json::from_slice::<U>(&body).map_err(|e| {
+            Error::from(JsonPayloadError::from(e)).with_service(this.config.service())
+        }))
     }
 }
 
@@ -472,7 +470,7 @@ impl Future for ReadBody {
                 Poll::Ready(Some(Ok(chunk))) => {
                     if this.limit > 0 && (this.buf.len() + chunk.len()) > this.limit {
                         Poll::Ready(Err(Error::from(ClientPayloadError(PayloadError::Overflow))
-                            .set_service(this.config.service())))
+                            .with_service(this.config.service())))
                     } else {
                         this.buf.extend_from_slice(&chunk);
                         continue;
@@ -482,7 +480,7 @@ impl Future for ReadBody {
                 Poll::Ready(Some(Err(err))) => Poll::Ready(Err(Error::from(ClientPayloadError(
                     err,
                 ))
-                .set_service(this.config.service()))),
+                .with_service(this.config.service()))),
                 Poll::Pending => {
                     if this.timeout.poll_elapsed(cx).is_ready() {
                         Poll::Ready(Err(Error::from(ClientPayloadError(
@@ -491,7 +489,7 @@ impl Future for ReadBody {
                                 "Operation timed out",
                             ))),
                         ))
-                        .set_service(this.config.service())))
+                        .with_service(this.config.service())))
                     } else {
                         Poll::Pending
                     }

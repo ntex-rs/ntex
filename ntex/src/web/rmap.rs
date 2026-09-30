@@ -185,18 +185,65 @@ impl ResourceMap {
         I: AsRef<str>,
     {
         if let Some(ref parent) = *self.parent.borrow() {
-            if let Some(pattern) = parent.named.get(name) {
-                self.fill_root(path, elements)?;
-                if pattern.resource_path(path, elements) {
-                    Ok(Some(()))
-                } else {
-                    Err(super::error::UrlGenerationError::NotEnoughElements)
-                }
-            } else {
-                parent.parent_pattern_for(name, path, elements)
-            }
+            parent.patterns_for(name, path, elements)
         } else {
             Ok(None)
+        }
+    }
+}
+
+#[cfg(all(test, feature = "url"))]
+mod tests {
+    use super::*;
+    use crate::web::test::TestRequest;
+
+    #[test]
+    fn url_for_parent() {
+        // regression: names of the parent map were prefixed with the nested root
+        let mut root = ResourceMap::new(ResourceDef::new(""));
+        let mut index = ResourceDef::new("/index/{id}");
+        *index.name_mut() = "index".to_string();
+        root.add(&mut index, None);
+        let mut ext = ResourceDef::new("https://youtube.com/watch/{id}");
+        *ext.name_mut() = "youtube".to_string();
+        root.add(&mut ext, None);
+
+        let mut nested = ResourceMap::new(ResourceDef::root_prefix("/a"));
+        let mut res = ResourceDef::new("/{id}");
+        *res.name_mut() = "nested".to_string();
+        nested.add(&mut res, None);
+        let nested = Rc::new(nested);
+        root.add(&mut ResourceDef::root_prefix("/a"), Some(nested.clone()));
+
+        let mut sibling = ResourceMap::new(ResourceDef::root_prefix("/b"));
+        let mut res = ResourceDef::new("/{id}");
+        *res.name_mut() = "sibling".to_string();
+        sibling.add(&mut res, None);
+        root.add(&mut ResourceDef::root_prefix("/b"), Some(Rc::new(sibling)));
+
+        let root = Rc::new(root);
+        root.build(&root);
+
+        let req = TestRequest::default().to_http_request();
+        for rmap in [&root, &nested] {
+            assert_eq!(
+                rmap.url_for(&req, "index", ["1"]).unwrap().as_str(),
+                "http://localhost:8080/index/1"
+            );
+            assert_eq!(
+                rmap.url_for(&req, "youtube", ["2"]).unwrap().as_str(),
+                "https://youtube.com/watch/2"
+            );
+            assert_eq!(
+                rmap.url_for(&req, "nested", ["3"]).unwrap().as_str(),
+                "http://localhost:8080/a/3"
+            );
+            assert_eq!(
+                rmap.url_for(&req, "sibling", ["4"]).unwrap().as_str(),
+                "http://localhost:8080/b/4"
+            );
+            assert!(rmap.url_for(&req, "index", [""; 0]).is_err());
+            assert!(rmap.url_for(&req, "unknown", [""; 0]).is_err());
         }
     }
 }
