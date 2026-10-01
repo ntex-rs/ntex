@@ -8,15 +8,29 @@
 * openssl: reading does not report already buffered output as output produced
   by reading, which paused reads while the write buffer was full
 
-* schannel: add `ClientConfig::set_client_cert()` with `ClientCert::from_store()`
-  and `ClientCert::from_store_by_subject()`
+* openssl: join small write buffer pages into one TLS record, e.g. response
+  headers and a body up to 16 KiB are sent as one record instead of two
+
+* rustls: write two consecutive write buffer pages into one TLS record when
+  they fit, and move pending records out before each write so they do not
+  shrink the next record
+
+* schannel: add `TlsAcceptor` and `accept()` for server connections, configured
+  by `ServerConfig` with ALPN, SNI (`Servername`) and optional client certificates
+
+* schannel: the server repacks a client handshake message fragmented over several
+  records into one record, Windows Server 2025 fails the handshake otherwise
+
+* schannel: add `ClientConfig::set_client_cert()` with `Certificate::from_store()`,
+  `Certificate::from_store_by_subject()` and `Certificate::from_pkcs12()`
 
 * schannel: do not send a client certificate picked from the user's store,
   complete the handshake without one when the server requests it
 
 * schannel: enable TLS 1.3 with `SCH_CREDENTIALS` (`SCHANNEL_CRED` before
   Windows 10 1809), process post-handshake messages (session tickets, key updates,
-  renegotiation) instead of failing the connection
+  renegotiation) instead of failing the connection, including application data
+  the peer sends during a TLS 1.2 renegotiation
 
 * schannel: share the credentials handle between connections made with the
   same `ClientConfig`, so Schannel can resume TLS sessions

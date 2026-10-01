@@ -163,11 +163,14 @@ impl Reactor {
         // Create ring
         let (new, ring) = if let Ok(ring) = IoUring::builder()
             .setup_coop_taskrun()
+            .setup_taskrun_flag()
             .setup_single_issuer()
             .setup_defer_taskrun()
             .build(capacity)
         {
-            log::info!("New io-uring driver with single-issuer, coop-taskrun, defer-taskrun");
+            log::info!(
+                "New io-uring driver with single-issuer, coop-taskrun, taskrun-flag, defer-taskrun"
+            );
             (true, ring)
         } else if let Ok(ring) = IoUring::builder().setup_single_issuer().build(capacity) {
             log::info!("New io-uring driver with single-issuer");
@@ -446,7 +449,13 @@ impl ntex_rt::Driver for Reactor {
             sq.sync();
 
             let result = if more_changes || more_tasks {
-                submitter.submit()
+                // skip the syscall if there is nothing to submit and
+                // no deferred completions to post
+                if more_changes || !sq.is_empty() || sq.taskrun() {
+                    submitter.submit()
+                } else {
+                    Ok(0)
+                }
             } else {
                 submitter.submit_and_wait(1)
             };

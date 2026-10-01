@@ -363,4 +363,88 @@ mod tests {
         assert!(lazy(|cx| acceptor.poll_ready(cx)).await.is_ready());
         MAX_SSL_ACCEPT_COUNTER.with(|c| c.set_capacity(256));
     }
+
+    /// Two consecutive pages are written into one record when they fit.
+    #[test]
+    #[allow(clippy::assert_is_empty)]
+    fn write_gathers_pages_into_records() {
+        use std::io::Read;
+
+        use ntex_bytes::{BytePageSize, BytePages};
+        use tls_rustls::{ClientConnection, ServerConnection};
+
+        // moves tls records between sessions, returns the records and the
+        // received plaintext
+        macro_rules! transfer {
+            ($from:expr, $to:expr) => {{
+                let mut data = Vec::new();
+                while $from.wants_write() {
+                    $from.write_tls(&mut data).unwrap();
+                }
+                let mut plain = Vec::new();
+                let mut src = &data[..];
+                while !src.is_empty() {
+                    $to.read_tls(&mut src).unwrap();
+                    $to.process_new_packets().unwrap();
+                    let _ = $to.reader().read_to_end(&mut plain);
+                }
+                (data, plain)
+            }};
+        }
+        let limit = BytePageSize::Size16.capacity();
+        let mut client = ClientConnection::new(
+            client_config(false),
+            ServerName::try_from("localhost").unwrap(),
+        )
+        .unwrap();
+        client.set_buffer_limit(Some(limit));
+        let mut server = ServerConnection::new(server_config(false)).unwrap();
+        while client.is_handshaking() || server.is_handshaking() {
+            transfer!(client, server);
+            transfer!(server, client);
+        }
+
+        for (sizes, expected) in [
+            (&[300, 8192][..], 1),
+            (&[300, limit - 300][..], 1),
+            (&[300, 16384][..], 2),
+            (&[100, 5000, 6000, 7000][..], 2),
+            (&[20000, 300][..], 2),
+            (&[20000][..], 2),
+        ] {
+            let parts: Vec<_> = (0u8..)
+                .zip(sizes)
+                .map(|(i, &n)| Bytes::from(vec![i; n]))
+                .collect();
+            let mut src = BytePages::new(BytePageSize::Size16);
+            for p in &parts {
+                src.append(p.clone());
+            }
+            assert_eq!(src.num_pages(), parts.len());
+
+            let mut dst = BytePages::new(BytePageSize::Size16);
+            stream::write_buf(&mut client, &mut src, &mut dst).unwrap();
+            assert!(src.is_empty() && !client.wants_write());
+
+            let wire = dst.freeze();
+            let mut records = 0;
+            let mut rest = &wire[..];
+            while rest.len() >= 5 {
+                rest = &rest[5 + usize::from(u16::from_be_bytes([rest[3], rest[4]]))..];
+                records += 1;
+            }
+            assert!(rest.is_empty());
+            assert_eq!(records, expected, "{sizes:?}");
+
+            let mut plain = Vec::new();
+            let mut rd = &wire[..];
+            while !rd.is_empty() {
+                server.read_tls(&mut rd).unwrap();
+                server.process_new_packets().unwrap();
+                let _ = server.reader().read_to_end(&mut plain);
+            }
+            let expected_plain: Vec<u8> = parts.iter().flat_map(|p| p.iter().copied()).collect();
+            assert_eq!(plain, expected_plain, "{sizes:?}");
+        }
+    }
 }

@@ -95,9 +95,30 @@ where
 
 #[cfg(test)]
 mod tests {
-    use ntex_service::Pipeline;
+    use std::{cell::RefCell, rc::Rc};
+
+    use ntex_io::{testing::IoTest, types::HttpProtocol};
+    use ntex_service::{Pipeline, fn_service};
+    use ntex_util::{future::join, time::Millis};
 
     use super::*;
+    use crate::schannel::{Certificate, ServerConfig, accept};
+
+    const PFX: &[u8] = include_bytes!("../../examples/identity.pfx");
+
+    /// Connector over an in-memory transport.
+    fn io_connector(
+        connector: TlsConnector<Connector<&'static str>>,
+        io: Io,
+    ) -> TlsConnector<
+        impl Service<SharedCfg, Connect<&'static str>, Res = Io, Error = Error<ConnectError>>,
+    > {
+        let io = Rc::new(RefCell::new(Some(io)));
+        connector.connector(fn_service(move |_: Connect<&'static str>| {
+            let io = io.borrow_mut().take().unwrap();
+            async move { Ok::<_, Error<ConnectError>>(io) }
+        }))
+    }
 
     #[ntex::test]
     async fn test_schannel_connect() {
@@ -113,5 +134,74 @@ mod tests {
             .call(Connect::new("").set_addr(Some(server.addr())))
             .await;
         assert!(result.is_err());
+    }
+
+    #[ntex::test]
+    async fn test_schannel_connector() {
+        let config = ServerConfig::new(Certificate::from_pkcs12(PFX, "ntex").unwrap())
+            .unwrap()
+            .set_alpn_protocols(&[b"h2"]);
+        let client = ClientConfig::new()
+            .danger_accept_invalid_certs(true)
+            .set_alpn_protocols(&[b"h2"]);
+
+        let (cli, srv) = IoTest::create();
+        cli.remote_buffer_cap(1 << 20);
+        srv.remote_buffer_cap(1 << 20);
+        let connector = io_connector(
+            TlsConnector::with_config(client),
+            Io::new(cli, SharedCfg::new("CLI")),
+        );
+        let connector = Pipeline::new(SharedCfg::new("CLI").build(), connector);
+        let (client, server) = join(
+            connector.call(Connect::new("localhost")),
+            accept(Io::new(srv, SharedCfg::new("SRV")), &config),
+        )
+        .await;
+        let client = client.unwrap();
+        server.unwrap();
+        assert_eq!(
+            client.query::<HttpProtocol>().as_ref(),
+            Some(&HttpProtocol::Http2)
+        );
+    }
+
+    /// The default configuration verifies the server certificate.
+    #[ntex::test]
+    async fn test_schannel_connector_untrusted() {
+        let config = ServerConfig::new(Certificate::from_pkcs12(PFX, "ntex").unwrap()).unwrap();
+
+        let (cli, srv) = IoTest::create();
+        cli.remote_buffer_cap(1 << 20);
+        srv.remote_buffer_cap(1 << 20);
+        let connector = io_connector(TlsConnector::default(), Io::new(cli, SharedCfg::new("CLI")));
+        let connector = Pipeline::new(SharedCfg::new("CLI").build(), connector);
+        let (client, server) = join(
+            connector.call(Connect::new("localhost")),
+            accept(Io::new(srv, SharedCfg::new("SRV")), &config),
+        )
+        .await;
+        let err = client.unwrap_err();
+        assert!(matches!(&*err, ConnectError::Io(_)), "{err:?}");
+        assert!(server.is_err());
+    }
+
+    #[ntex::test]
+    async fn test_schannel_connector_timeout() {
+        let tls_cfg = TlsConfig {
+            handshake_timeout: Millis(50),
+            ..TlsConfig::default()
+        };
+        let (cli, _srv) = IoTest::create();
+        let connector = io_connector(
+            TlsConnector::with_config(ClientConfig::new()),
+            Io::new(cli, SharedCfg::new("CLI")),
+        );
+        let connector = Pipeline::new(SharedCfg::new("CLI").add(tls_cfg).build(), connector);
+        let err = connector.call(Connect::new("localhost")).await.unwrap_err();
+        let ConnectError::Io(err) = &*err else {
+            panic!("{err:?}");
+        };
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
     }
 }

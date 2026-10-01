@@ -1,6 +1,6 @@
-use std::{any, io, io::Write, ops::Deref, ops::DerefMut, task::Poll};
+use std::{any, cmp, io, io::IoSlice, io::Write, ops::Deref, ops::DerefMut, task::Poll};
 
-use ntex_bytes::BufMut;
+use ntex_bytes::{BufMut, BytePage, BytePages};
 use ntex_io::{FilterBuf, types};
 use tls_rustls::{ConnectionCommon, SideData};
 
@@ -101,33 +101,7 @@ where
     }
 
     pub(crate) fn process_write_buf(&mut self, buf: &FilterBuf<'_>) -> io::Result<()> {
-        buf.with_write_buffers(|w_src, w_dst| {
-            'outer: loop {
-                // write to tls stream
-                while let Some(mut page) = w_src.take() {
-                    page.advance_to(self.session.writer().write(&page)?);
-                    if w_src.prepend(page) {
-                        // buffer partially consumed, need to write_tls
-                        break;
-                    }
-                }
-
-                // write tls records to output buffer
-                if self.session.wants_write() {
-                    loop {
-                        match self.session.write_tls(w_dst) {
-                            Ok(0) => continue 'outer,
-                            Ok(_) => {}
-                            Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => {
-                                continue 'outer;
-                            }
-                            Err(err) => return Err(err),
-                        }
-                    }
-                }
-                return Ok(());
-            }
-        })
+        buf.with_write_buffers(|w_src, w_dst| write_buf(&mut **self.session, w_src, w_dst))
     }
 
     /// Write pending tls records to the output buffer
@@ -166,4 +140,61 @@ where
             Ok(Poll::Pending)
         }
     }
+}
+
+/// Encrypts the write buffer into tls records in the output buffer.
+pub(super) fn write_buf<SD: SideData>(
+    session: &mut ConnectionCommon<SD>,
+    w_src: &mut BytePages,
+    w_dst: &mut BytePages,
+) -> io::Result<()> {
+    loop {
+        // the session's buffer limit includes pending tls records, they are
+        // moved to the output buffer first so a write can fill a record
+        while session.wants_write() {
+            match session.write_tls(w_dst) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                Err(err) => return Err(err),
+            }
+        }
+
+        let Some(page) = w_src.take() else {
+            return Ok(());
+        };
+        if write_page(session, page, w_src)? == 0 {
+            // nothing is consumed, the session buffer is full
+            return Ok(());
+        }
+    }
+}
+
+/// Writes `page` together with the following page, if any.
+///
+/// Every write produces its own records, so a small page, e.g. response
+/// headers in front of a body, would otherwise cost a record.
+///
+/// Returns the number of consumed bytes.
+fn write_page<SD: SideData>(
+    session: &mut ConnectionCommon<SD>,
+    mut page: BytePage,
+    src: &mut BytePages,
+) -> io::Result<usize> {
+    let Some(mut next) = src.take() else {
+        let n = session.writer().write(&page)?;
+        page.advance_to(n);
+        src.prepend(page);
+        return Ok(n);
+    };
+
+    let n = session
+        .writer()
+        .write_vectored(&[IoSlice::new(&page), IoSlice::new(&next)])?;
+    let used = cmp::min(n, page.len());
+    page.advance_to(used);
+    next.advance_to(n - used);
+    src.prepend(next);
+    src.prepend(page);
+    Ok(n)
 }
