@@ -29,6 +29,7 @@ missing_debug_implementations = "deny"
 unexpected_cfgs = { level = "warn", priority = -2, check-cfg = ['cfg(docsrs_dep)'] }
 
 [patch.crates-io]
+ntex-io-uring = { path = "../ntex-io-uring" }
 ntex = { path = "ntex" }
 ntex-bytes = { path = "ntex-bytes" }
 ntex-codec = { path = "ntex-codec" }
@@ -66,7 +67,7 @@ ntex-service = "5.1.0"
 ntex-tls = "4.1.0"
 ntex-util = "4.2.0"
 
-ntex-io-uring = "0.7.120"
+ntex-io-uring = "0.8.7150"
 ntex-httparse = "2.2.0"
 
 async-channel = "2"

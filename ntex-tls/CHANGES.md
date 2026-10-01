@@ -8,8 +8,11 @@
 * openssl: reading does not report already buffered output as output produced
   by reading, which paused reads while the write buffer was full
 
-* schannel: add `ClientConfig::set_client_cert()` with `ClientCert::from_store()`
-  and `ClientCert::from_store_by_subject()`
+* schannel: add `TlsAcceptor` and `accept()` for server connections, configured
+  by `ServerConfig` with ALPN, SNI (`Servername`) and optional client certificates
+
+* schannel: add `ClientConfig::set_client_cert()` with `Certificate::from_store()`,
+  `Certificate::from_store_by_subject()` and `Certificate::from_pkcs12()`
 
 * schannel: do not send a client certificate picked from the user's store,
   complete the handshake without one when the server requests it
