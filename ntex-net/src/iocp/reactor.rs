@@ -166,6 +166,8 @@ impl ntex_rt::Driver for Reactor {
                     0
                 )
             );
+            // tasks woken until the runtime is polled do not need to notify
+            rt.awake();
 
             match result {
                 Err(err) => {

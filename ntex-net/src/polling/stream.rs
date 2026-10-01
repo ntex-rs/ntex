@@ -7,7 +7,7 @@ use ntex_rt::{Arbiter, syscall};
 use slab::Slab;
 use socket2::Socket;
 
-use super::{Event, Handler, Reactor, ReactorApi};
+use super::{Event, Handler, PollMode, Reactor, ReactorApi};
 use crate::helpers::Queue;
 
 const MAX_WRITE_SIZE: usize = 64 * 1024;
@@ -24,10 +24,11 @@ pub(super) struct WeakStreamCtl {
 }
 
 bitflags::bitflags! {
-    #[derive(Copy, Clone, Debug)]
+    #[derive(Copy, Clone, Debug, PartialEq, Eq)]
     struct Flags: u8 {
         const RD          = 0b0000_0001;
         const WR          = 0b0000_0010;
+        const DETACHED    = 0b0000_0100;
         const DROPPED_PRI = 0b0001_0000;
         const DROPPED_SEC = 0b0010_0000;
     }
@@ -54,6 +55,7 @@ struct StreamOpsHandler {
 
 struct StreamOpsInner {
     api: ReactorApi,
+    mode: PollMode,
     delayed_feed: Queue<IdType>,
     streams: Cell<Option<Box<Slab<StreamItem>>>>,
 }
@@ -64,8 +66,16 @@ impl StreamOps {
         Arbiter::get_value(|| {
             let mut inner = None;
             driver.register(|api| {
+                // Level-triggered interest stays armed after an event, so it
+                // only has to be modified when it changes.
+                let mode = if api.supports_level() {
+                    PollMode::Level
+                } else {
+                    PollMode::Oneshot
+                };
                 let ops = Rc::new(StreamOpsInner {
                     api,
+                    mode,
                     delayed_feed: Queue::new(),
                     streams: Cell::new(Some(Box::new(Slab::new()))),
                 });
@@ -96,7 +106,7 @@ impl StreamOps {
         // whatever the interest, and kqueue ignores the bit.
         self.0
             .api
-            .attach(fd, stream.id, Event::new(0, false, false));
+            .attach_with_mode(fd, stream.id, Event::new(0, false, false), self.0.mode);
 
         let weak = WeakStreamCtl {
             id: stream.id,
@@ -126,6 +136,12 @@ impl Handler for StreamOpsHandler {
                 return;
             }
             let io = &mut streams[id];
+            // kqueue reports read and write separately, an earlier event of
+            // the same poll may have detached the stream.
+            if io.flags.contains(Flags::DETACHED) {
+                return;
+            }
+            let prev = io.flags & (Flags::RD | Flags::WR);
             let mut renew_rd = false;
             let mut renew_wr = false;
             #[cfg(feature = "trace")]
@@ -154,9 +170,10 @@ impl Handler for StreamOpsHandler {
             }
 
             // `EPOLLERR` and `EPOLLHUP` are terminal and are reported whether
-            // or not they were requested. Re-arming on them makes no progress.
-            // kqueue reports neither, failures surface through reads and
-            // writes instead.
+            // or not they were requested. Re-arming on them makes no progress,
+            // and level-triggered interest would keep reporting them, so the
+            // stream is detached. kqueue reports neither, failures surface
+            // through reads and writes instead.
             if ev.is_err() == Some(true) {
                 // The error is not surfaced by a read or write when their
                 // interest is not armed, so it is taken from the socket. It
@@ -165,18 +182,20 @@ impl Handler for StreamOpsHandler {
                     io::Error::new(io::ErrorKind::ConnectionReset, "transport error")
                 });
                 io.ctx.stop(Some(err));
+                self.inner.detach(id as u32, io);
             } else if ev.is_interrupt() {
                 io.ctx.stop(None);
-            } else {
+                self.inner.detach(id as u32, io);
+            } else if self.inner.mode != PollMode::Level
+                || prev != io.flags & (Flags::RD | Flags::WR)
+            {
                 #[cfg(feature = "trace")]
                 log::trace!(
                     "{}: {:?}-Renew rd({renew_rd:?}) wr({renew_wr:?})",
                     io.tag(),
                     io.fd()
                 );
-                self.inner
-                    .api
-                    .modify(io.fd(), id as u32, Event::new(0, renew_rd, renew_wr));
+                self.inner.modify(id as u32, io, renew_rd, renew_wr);
             }
         });
     }
@@ -253,8 +272,22 @@ impl StreamOpsInner {
     fn write_item(&self, id: u32, item: &mut StreamItem) {
         if item.write() == IoTaskStatus::Io && !item.flags.contains(Flags::WR) {
             item.flags.insert(Flags::WR);
-            let event = Event::new(0, item.flags.contains(Flags::RD), true);
-            self.api.modify(item.fd(), id, event);
+            self.modify(id, item, item.flags.contains(Flags::RD), true);
+        }
+    }
+
+    /// Sets poll interest, `Flags::RD` and `Flags::WR` must match it.
+    fn modify(&self, id: u32, item: &StreamItem, rd: bool, wr: bool) {
+        if !item.flags.contains(Flags::DETACHED) {
+            self.api
+                .modify_with_mode_deferred(item.fd(), id, Event::new(0, rd, wr), self.mode);
+        }
+    }
+
+    fn detach(&self, id: u32, item: &mut StreamItem) {
+        if !item.flags.contains(Flags::DETACHED) {
+            item.flags.insert(Flags::DETACHED);
+            self.api.detach(item.fd(), id);
         }
     }
 
@@ -266,7 +299,7 @@ impl StreamOpsInner {
         log::trace!("{}: {fd:?}-Close flags: {:?}", item.tag(), item.flags);
 
         item.ctx.stop(None);
-        self.api.detach(fd, id);
+        self.detach(id, item);
 
         if item.flags.contains(Flags::DROPPED_SEC) {
             let item = streams.remove(idx);
@@ -376,8 +409,7 @@ impl StreamOpsInner {
                     io.tag(),
                     io.fd()
                 );
-                self.api
-                    .modify(io.fd(), id, Event::new(0, event_rd, event_wr));
+                self.modify(id, io, event_rd, event_wr);
             }
         });
     }
@@ -735,13 +767,31 @@ mod tests {
             assert!(err.is_none(), "EPOLLHUP reported an error: {err:?}");
         }
 
+        /// A terminal event detaches the stream, later events and interest
+        /// changes are ignored instead of spinning or failing in the poller.
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[ntex::test]
+        async fn hup_detaches_the_stream() {
+            let mut fixture = Fixture::new();
+
+            fixture.fire(Event::none(0).with_interrupt());
+            let detached = fixture.flags().contains(Flags::DETACHED);
+            fixture.fire(Event::readable(0));
+            let flags = fixture.flags();
+            fixture.ops.0.interest(fixture.id as u32, true, true);
+            fixture.teardown();
+
+            assert!(detached, "EPOLLHUP did not detach the stream");
+            assert!(!flags.contains(Flags::RD), "event after detach was handled");
+        }
+
         /// `EPOLLERR` is terminal and is reported whether or not it was
         /// requested. A reset reported by it while read interest is not armed
         /// stops the stream with the socket error.
         #[cfg(any(target_os = "linux", target_os = "android"))]
         #[ntex::test]
         async fn err_without_read_armed_reports_socket_error() {
-            use ::polling::{Events, PollMode, Poller};
+            use ::ntex_polling::{Events, PollMode, Poller};
 
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             let peer = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
@@ -800,6 +850,20 @@ mod tests {
                 st => panic!("unexpected status {st:?}"),
             }
         }
+    }
+
+    /// Pollers that support it use level-triggered interest, so unchanged
+    /// interest needs no re-arm after every event.
+    #[ntex::test]
+    async fn level_mode_where_supported() {
+        let fixture = Fixture::new();
+        let mode = fixture.ops.0.mode;
+        fixture.teardown();
+
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        assert_eq!(mode, PollMode::Level);
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        let _ = mode;
     }
 
     /// A failed reactor operation stops the stream with its error.

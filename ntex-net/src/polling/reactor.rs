@@ -1,11 +1,11 @@
 use std::os::fd::{AsRawFd, BorrowedFd, RawFd};
-use std::{cell::Cell, cell::UnsafeCell, fmt, io, net, rc::Rc, sync::Arc};
+use std::{cell::Cell, cell::UnsafeCell, fmt, io, net, rc::Rc};
 use std::{collections::VecDeque, num::NonZeroUsize, time::Duration};
 
 #[cfg(unix)]
 use std::os::unix::net::UnixStream as OsUnixStream;
 
-use ::polling::{Event, Events, PollMode, Poller};
+use ::ntex_polling::{Event, Events, Notifier, PollMode, Poller};
 use ntex_io::Io;
 use ntex_rt::{DriverType, Notify, PollResult, Runtime};
 use ntex_service::cfg::SharedCfg;
@@ -41,7 +41,7 @@ enum Change {
 pub struct ReactorApi {
     id: usize,
     batch: u64,
-    poll: Arc<Poller>,
+    poll: Rc<Poller>,
     changes: Rc<UnsafeCell<VecDeque<Change>>>,
 }
 
@@ -92,6 +92,30 @@ impl ReactorApi {
         let result = self
             .poll
             .modify_with_mode(unsafe { BorrowedFd::borrow_raw(fd) }, event, mode);
+        self.check(id, result);
+    }
+
+    /// Register interest for specified file descriptor, the change may be
+    /// deferred to the next poll.
+    ///
+    /// On kqueue the change is submitted together with the next wait, saving
+    /// a syscall. A failure of a deferred change is reported as a readable
+    /// and writable event.
+    pub fn modify_with_mode_deferred(&self, fd: RawFd, id: u32, mut event: Event, mode: PollMode) {
+        event.key = (u64::from(id) | self.batch) as usize;
+
+        let result =
+            self.poll
+                .modify_with_mode_deferred(unsafe { BorrowedFd::borrow_raw(fd) }, event, mode);
+        self.check(id, result);
+    }
+
+    /// Whether the poller supports level-triggered events.
+    pub fn supports_level(&self) -> bool {
+        self.poll.supports_level()
+    }
+
+    fn check(&self, id: u32, result: io::Result<()>) {
         if let Err(err) = result {
             self.change(Change::Error {
                 batch: self.id,
@@ -110,7 +134,7 @@ impl ReactorApi {
 ///
 /// Uses `epoll` or `kqueue`, depending on the platform.
 pub struct Reactor {
-    poll: Arc<Poller>,
+    poll: Rc<Poller>,
     capacity: usize,
     changes: Rc<UnsafeCell<VecDeque<Change>>>,
     hid: Cell<u64>,
@@ -146,7 +170,7 @@ impl Reactor {
 
         Ok(Self {
             hid: Cell::new(0),
-            poll: Arc::new(Poller::new()?),
+            poll: Rc::new(Poller::new()?),
             capacity: io_queue_capacity as usize,
             changes: Rc::new(UnsafeCell::new(VecDeque::with_capacity(32))),
             handlers: Cell::new(Some(Box::new(Vec::default()))),
@@ -291,6 +315,8 @@ impl ntex_rt::Driver for Reactor {
             };
             events.clear();
             self.poll.wait(&mut events, timeout)?;
+            // tasks woken until the runtime is polled do not need to notify
+            rt.awake();
 
             let mut handlers = self.handlers.take().unwrap();
             for event in events.iter() {
@@ -316,7 +342,7 @@ impl ntex_rt::Driver for Reactor {
 
     /// Get notification handle
     fn handle(&self) -> Box<dyn Notify> {
-        Box::new(NotifyHandle::new(self.poll.clone()))
+        Box::new(NotifyHandle::new(self.poll.notifier()))
     }
 
     /// Clear handlers
@@ -326,19 +352,19 @@ impl ntex_rt::Driver for Reactor {
 #[derive(Clone, Debug)]
 /// A notify handle to the inner driver.
 pub(crate) struct NotifyHandle {
-    poll: Arc<Poller>,
+    notifier: Notifier,
 }
 
 impl NotifyHandle {
-    fn new(poll: Arc<Poller>) -> Self {
-        Self { poll }
+    fn new(notifier: Notifier) -> Self {
+        Self { notifier }
     }
 }
 
 impl Notify for NotifyHandle {
     /// Notify the driver
     fn notify(&self) -> io::Result<()> {
-        self.poll.notify()
+        self.notifier.notify()
     }
 }
 
