@@ -1,5 +1,5 @@
-//! Windows Schannel echo client, connects to the `server` or `rustls-server`
-//! example.
+//! Windows Schannel echo client, connects to the `server`, `rustls-server` or
+//! `schannel-server` example.
 //!
 //! Set `CLIENT_CERT_SUBJECT` to send a client certificate from the current
 //! user's personal store, for example `CLIENT_CERT_SUBJECT=client.example.com`.
@@ -10,7 +10,7 @@ use std::io;
 async fn main() -> io::Result<()> {
     use ntex::util::{Bytes, Either};
     use ntex::{Pipeline, SharedCfg, codec, connect::Connect, connect::Connector};
-    use ntex_tls::schannel::{CertStoreLocation, ClientCert, ClientConfig, TlsConnector};
+    use ntex_tls::schannel::{CertStoreLocation, Certificate, ClientConfig, TlsConnector};
 
     env_logger::init();
 
@@ -20,7 +20,7 @@ async fn main() -> io::Result<()> {
     let mut config = ClientConfig::new().danger_accept_invalid_certs(true);
     if let Ok(subject) = std::env::var("CLIENT_CERT_SUBJECT") {
         let cert =
-            ClientCert::from_store_by_subject(CertStoreLocation::CurrentUser, "MY", &subject)?;
+            Certificate::from_store_by_subject(CertStoreLocation::CurrentUser, "MY", &subject)?;
         config = config.set_client_cert(cert);
     }
 

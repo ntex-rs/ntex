@@ -221,6 +221,35 @@ fn busy_task() {
     });
 }
 
+/// I/O completes while another task keeps the runtime busy.
+#[test]
+fn busy_task_io_progress() {
+    run(64, move || async {
+        let (sock, mut peer) = UnixStream::pair().unwrap();
+        let io = ntex_net::from_unix_stream(sock, SharedCfg::default()).unwrap();
+        thread::spawn(move || {
+            let mut buf = [0u8; 4];
+            peer.read_exact(&mut buf).unwrap();
+            peer.write_all(&buf).unwrap();
+        });
+
+        let done = std::rc::Rc::new(std::cell::Cell::new(false));
+        let done2 = done.clone();
+        let busy = ntex::rt::spawn(poll_fn(move |cx| {
+            if done2.get() {
+                Poll::Ready(())
+            } else {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        }));
+        io.encode(Bytes::from_static(b"ping"), &BytesCodec).unwrap();
+        assert_eq!(recv_exact(&io, 4).await, b"ping");
+        done.set(true);
+        busy.await.unwrap();
+    });
+}
+
 /// A socket address that cannot be created fails the connect.
 #[test]
 fn unix_connect_invalid_path() {

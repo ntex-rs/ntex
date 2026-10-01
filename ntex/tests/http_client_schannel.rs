@@ -622,14 +622,14 @@ async fn test_client_cert() {
     let _installed = [cert.install(), earlier.install(), not_yet_valid.install()];
     let (cert, thumbprint) = (cert.cert, cert.thumbprint);
 
-    let client_cert = ntex_tls::schannel::ClientCert::from_store(
+    let client_cert = ntex_tls::schannel::Certificate::from_store(
         ntex_tls::schannel::CertStoreLocation::CurrentUser,
         "MY",
         &thumbprint,
     )
     .unwrap();
     assert!(client_cert.der() == cert.to_der().unwrap());
-    let by_subject = ntex_tls::schannel::ClientCert::from_store_by_subject(
+    let by_subject = ntex_tls::schannel::Certificate::from_store_by_subject(
         ntex_tls::schannel::CertStoreLocation::CurrentUser,
         "MY",
         &subject.to_uppercase(),

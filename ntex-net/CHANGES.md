@@ -24,6 +24,10 @@
 * io-uring: push operations without synchronizing the submission queue for
   every operation
 
+* io-uring: fix stalled I/O while tasks keep the runtime busy, deferred
+  completions were not posted until the runtime became idle; skip the submit
+  syscall when there is nothing to submit
+
 * io-uring: fix lost submissions when queued operations wrap around the end of
   the pending queue storage, the wrapped part was dropped without being
   submitted

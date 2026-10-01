@@ -66,8 +66,12 @@ ntex = { workspace = true, features = ["openssl", "rustls"] }
 env_logger = { workspace = true }
 rustls-pemfile = { workspace = true }
 webpki-roots = { workspace = true }
-tls_rustls = { workspace = true, features = ["ring", "std"] }
+tls_rustls = { workspace = true, features = ["ring", "std", "tls12"] }
 
 [[example]]
 name = "schannel-client"
+required-features = ["schannel"]
+
+[[example]]
+name = "schannel-server"
 required-features = ["schannel"]
