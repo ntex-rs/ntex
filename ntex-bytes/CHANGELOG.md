@@ -1,6 +1,6 @@
 # Changes
 
-## [1.10.0] (unreleased)
+## [1.10.0] (2026-10-01)
 
 * Remove deprecated `BufMut::writer()` and `buf::Writer`, `BytesMut` and `BytePages`
   implement `io::Write`

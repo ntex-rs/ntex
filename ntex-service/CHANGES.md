@@ -1,6 +1,6 @@
 # Changes
 
-## [5.1.0] - Unreleased
+## [5.1.0] - 2026-09-30
 
 * Fix use-after-free when a pipeline is dropped with pending readiness or shutdown future
 
