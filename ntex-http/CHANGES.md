@@ -1,6 +1,6 @@
 # Changes
 
-## [1.3.0] - Unreleased
+## [1.3.0] - 2026-10-01
 
 * Fix HeaderMap deserialization of non-borrowed keys (serde_json::from_value, from_reader, escaped keys)
 
