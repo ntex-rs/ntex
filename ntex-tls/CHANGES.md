@@ -11,6 +11,9 @@
 * schannel: add `TlsAcceptor` and `accept()` for server connections, configured
   by `ServerConfig` with ALPN, SNI (`Servername`) and optional client certificates
 
+* schannel: the server repacks a client handshake message fragmented over several
+  records into one record, Windows Server 2025 fails the handshake otherwise
+
 * schannel: add `ClientConfig::set_client_cert()` with `Certificate::from_store()`,
   `Certificate::from_store_by_subject()` and `Certificate::from_pkcs12()`
 
