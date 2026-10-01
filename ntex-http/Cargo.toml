@@ -26,7 +26,6 @@ foldhash = { workspace = true }
 futures-core = { workspace = true }
 http = { workspace = true }
 itoa = { workspace = true }
-log = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 
