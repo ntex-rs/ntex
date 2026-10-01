@@ -1,6 +1,6 @@
 # Changes
 
-## [2.0.0] - Unreleased
+## [2.0.0] - 2026-10-01
 
 * Fix deserialization of maps with string keys from `Path`, e.g. `HashMap<String, String>`
   failed with "Unexpected" error
@@ -31,6 +31,38 @@
   patterns. Add `ResourceDef::patterns()`
 
 * Update API docs, document pattern syntax and percent-decoding of path segments
+
+* Rename `Router::recognize_mut_checked()` to `recognize_checked_mut()`
+
+* Rename `ResourceDef::resource_path()` and `resource_path_named()` to `build_path()`
+  and `build_path_named()`
+
+* Rename `RouterBuilder::rdef()` to `RouterBuilder::resource()`
+
+* `RouterBuilder::prefix()` accepts several patterns, same as `RouterBuilder::path()`
+
+* Remove `Path::unprocessed()`, use `Path::path()`. Remove `Path::query()`, use
+  `Path::get()`
+
+* Add `ResourceDef::set_name()` and `ResourceDef::is_prefix()`
+
+* Remove `ResourceDef::name_mut()`, use `ResourceDef::set_name()`
+
+* Add `ResourceId::new()`, `ResourceId::get()` and conversions from and to `u16`
+
+* `Path` index by position panics with a descriptive message
+
+* Remove deprecated `Router::build()` and `RouterBuilder::finish()`, and unused `ResourceInfo`
+
+* `ResourceDef::build_path()` accepts `IntoIterator`, an iterator can be passed by `&mut`.
+  `build_path()` and `build_path_named()` leave the path unchanged on failure
+
+* `RouterBuilder` registration methods return `&mut RouterEntry` instead of a tuple,
+  use `set_id()`, `set_name()`, `set_check_value()` and `resource_mut()`
+
+* Add `Path::into_inner()` and `IntoIterator` for `&Path`
+
+* Add `From<&String>`, `From<Vec<T>>` and `From<[T; N]>` for `ResourceDef`
 
 ## [1.0.0] - 2025-11-24
 

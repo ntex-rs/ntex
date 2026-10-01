@@ -137,6 +137,11 @@ impl ResourceDef {
         self.id = id;
     }
 
+    /// Check if the resource is a prefix resource, see [`prefix()`](Self::prefix)
+    pub fn is_prefix(&self) -> bool {
+        self.prefix
+    }
+
     fn create<T: IntoPattern>(path: T, prefix: bool) -> Self {
         let patterns = path.patterns();
         let mut tp = Vec::with_capacity(patterns.len());
@@ -164,9 +169,9 @@ impl ResourceDef {
         &self.name
     }
 
-    /// Mutable reference to the resource name
-    pub fn name_mut(&mut self) -> &mut String {
-        &mut self.name
+    /// Set resource name
+    pub fn set_name<N: Into<String>>(&mut self, name: N) {
+        self.name = name.into();
     }
 
     /// Primary path pattern of the resource, the first one
@@ -181,50 +186,46 @@ impl ResourceDef {
 
     /// Build resource path from elements, using the primary pattern.
     ///
-    /// Elements are used for dynamic segments in pattern order. The path is
+    /// Elements are used for dynamic segments in pattern order, an iterator
+    /// can be passed by `&mut` to continue using it afterwards. The path is
     /// appended to `path`. Returns `false` if there are not enough elements,
-    /// `path` then contains a partially built path.
-    pub fn resource_path<U, I>(&self, path: &mut String, elements: &mut U) -> bool
+    /// `path` is left unchanged then.
+    pub fn build_path<U, I>(&self, path: &mut String, elements: U) -> bool
     where
-        U: Iterator<Item = I>,
+        U: IntoIterator<Item = I>,
         I: AsRef<str>,
     {
-        for el in &self.elements {
-            match *el {
-                PathElement::Str(ref s) => path.push_str(s),
-                PathElement::Var(_) => {
-                    if let Some(val) = elements.next() {
-                        path.push_str(val.as_ref());
-                    } else {
-                        return false;
-                    }
-                }
-            }
-        }
-        true
+        let mut elements = elements.into_iter();
+        self.build_path_with(path, |_| elements.next())
     }
 
     /// Build resource path from named elements, using the primary pattern.
     ///
     /// The path is appended to `path`. Returns `false` if an element is
-    /// missing, `path` then contains a partially built path.
-    pub fn resource_path_named<K, V, S>(
-        &self,
-        path: &mut String,
-        elements: &HashMap<K, V, S>,
-    ) -> bool
+    /// missing, `path` is left unchanged then.
+    pub fn build_path_named<K, V, S>(&self, path: &mut String, elements: &HashMap<K, V, S>) -> bool
     where
         K: std::borrow::Borrow<str> + Eq + Hash,
         V: AsRef<str>,
         S: std::hash::BuildHasher,
     {
+        self.build_path_with(path, |name| elements.get(name))
+    }
+
+    fn build_path_with<F, I>(&self, path: &mut String, mut element: F) -> bool
+    where
+        F: FnMut(&str) -> Option<I>,
+        I: AsRef<str>,
+    {
+        let len = path.len();
         for el in &self.elements {
             match *el {
                 PathElement::Str(ref s) => path.push_str(s),
                 PathElement::Var(ref name) => {
-                    if let Some(val) = elements.get(name) {
+                    if let Some(val) = element(name) {
                         path.push_str(val.as_ref());
                     } else {
+                        path.truncate(len);
                         return false;
                     }
                 }
@@ -445,6 +446,24 @@ impl<'a> From<&'a str> for ResourceDef {
 impl From<String> for ResourceDef {
     fn from(path: String) -> ResourceDef {
         ResourceDef::new(path)
+    }
+}
+
+impl From<&String> for ResourceDef {
+    fn from(path: &String) -> ResourceDef {
+        ResourceDef::new(path)
+    }
+}
+
+impl<T: AsRef<str>> From<Vec<T>> for ResourceDef {
+    fn from(paths: Vec<T>) -> ResourceDef {
+        ResourceDef::new(paths)
+    }
+}
+
+impl<T: AsRef<str>, const N: usize> From<[T; N]> for ResourceDef {
+    fn from(paths: [T; N]) -> ResourceDef {
+        ResourceDef::new(paths)
     }
 }
 
@@ -740,11 +759,11 @@ mod tests {
 
         // resource paths are built from the first pattern
         let mut s = String::new();
-        assert!(re.resource_path(&mut s, &mut ["1"].iter()));
+        assert!(re.build_path(&mut s, ["1"]));
         assert_eq!(s, "/a/1");
         let mut s = String::new();
         let names: HashMap<_, _> = [("x", "2")].into_iter().collect();
-        assert!(re.resource_path_named(&mut s, &names));
+        assert!(re.build_path_named(&mut s, &names));
         assert_eq!(s, "/a/2");
 
         // all patterns are compared
@@ -1016,45 +1035,60 @@ mod tests {
     fn test_resource_path() {
         let mut s = String::new();
         let resource = ResourceDef::new("/user/{item1}/test");
-        assert!(resource.resource_path(&mut s, &mut ["user1"].iter()));
+        assert!(resource.build_path(&mut s, ["user1"]));
         assert_eq!(s, "/user/user1/test");
 
         let mut s = String::new();
         let resource = ResourceDef::new("/user/{item1}/{item2}/test");
-        assert!(resource.resource_path(&mut s, &mut ["item", "item2"].iter()));
+        assert!(resource.build_path(&mut s, ["item", "item2"]));
         assert_eq!(s, "/user/item/item2/test");
 
         let mut s = String::new();
         let resource = ResourceDef::new("/user/{item1}/{item2}");
-        assert!(resource.resource_path(&mut s, &mut ["item", "item2"].iter()));
+        assert!(resource.build_path(&mut s, ["item", "item2"]));
         assert_eq!(s, "/user/item/item2");
 
         let mut s = String::new();
         let resource = ResourceDef::new("/user/{item1}/{item2}/");
-        assert!(resource.resource_path(&mut s, &mut ["item", "item2"].iter()));
+        assert!(resource.build_path(&mut s, ["item", "item2"]));
         assert_eq!(s, "/user/item/item2/");
 
         let mut s = String::new();
-        assert!(!resource.resource_path(&mut s, &mut ["item"].iter()));
+        assert!(!resource.build_path(&mut s, ["item"]));
+        assert_eq!(s, "");
 
         let mut s = String::new();
-        assert!(resource.resource_path(&mut s, &mut ["item", "item2"].iter()));
+        assert!(resource.build_path(&mut s, ["item", "item2"]));
         assert_eq!(s, "/user/item/item2/");
-        assert!(!resource.resource_path(&mut s, &mut ["item"].iter()));
+        assert!(!resource.build_path(&mut s, ["item"]));
+        assert_eq!(s, "/user/item/item2/");
 
         let mut s = String::new();
-        assert!(resource.resource_path(&mut s, &mut vec!["item", "item2"].into_iter()));
+        assert!(resource.build_path(&mut s, vec!["item", "item2"]));
         assert_eq!(s, "/user/item/item2/");
+
+        let mut s = String::new();
+        assert!(resource.build_path(&mut s, ["item".to_string(), "item2".to_string()]));
+        assert_eq!(s, "/user/item/item2/");
+
+        // the iterator can be shared between several builders
+        let mut s = String::new();
+        let mut elements = ["a", "b", "c"].into_iter();
+        assert!(ResourceDef::new("/{x}").build_path(&mut s, &mut elements));
+        assert!(resource.build_path(&mut s, &mut elements));
+        assert_eq!(s, "/a/user/b/c/");
+        assert_eq!(elements.next(), None);
 
         let mut map = HashMap::new();
         map.insert("item1", "item");
 
-        let mut s = String::new();
-        assert!(!resource.resource_path_named(&mut s, &map));
+        let mut s = "/prefix".to_string();
+        assert!(!resource.build_path_named(&mut s, &map));
+        assert_eq!(s, "/prefix");
 
         let mut s = String::new();
         map.insert("item2", "item2");
-        assert!(resource.resource_path_named(&mut s, &map));
+        assert!(resource.build_path_named(&mut s, &map));
         assert_eq!(s, "/user/item/item2/");
     }
 

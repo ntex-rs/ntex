@@ -108,7 +108,9 @@ where
             router.case_insensitive();
         }
         for (path, factory, guards) in services {
-            router.rdef(path.clone(), factory).2 = guards.borrow_mut().take();
+            router
+                .resource(path.clone(), factory)
+                .set_check_value(guards.borrow_mut().take());
         }
 
         Self {

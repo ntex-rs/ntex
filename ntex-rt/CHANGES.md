@@ -1,5 +1,13 @@
 # Changes
 
+## [4.1.0] - 2026-10-01
+
+* Add `Runtime::awake()`, tasks woken on the runtime thread while the driver
+  is awake do not notify the driver
+
+* Fix local tasks scheduled by tasks from other threads not being polled until
+  the next driver event
+
 ## [4.0.0] - 2026-10-01
 
 * Cache the thread id for task scheduling, `thread::current()` cloned the thread handle on every wake

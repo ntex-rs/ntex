@@ -600,7 +600,7 @@ where
             ResourceDef::new(self.rdef.clone())
         };
         if let Some(ref name) = self.name {
-            rdef.name_mut().clone_from(name);
+            rdef.set_name(name.clone());
         }
 
         config.register_service(

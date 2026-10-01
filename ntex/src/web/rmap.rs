@@ -138,7 +138,7 @@ impl ResourceMap {
             if pattern.pattern().starts_with('/') {
                 self.fill_root(path, elements)?;
             }
-            if pattern.resource_path(path, elements) {
+            if pattern.build_path(path, elements) {
                 Ok(Some(()))
             } else {
                 Err(super::error::UrlGenerationError::NotEnoughElements)
@@ -167,7 +167,7 @@ impl ResourceMap {
         if let Some(ref parent) = *self.parent.borrow() {
             parent.fill_root(path, elements)?;
         }
-        if self.root.resource_path(path, elements) {
+        if self.root.build_path(path, elements) {
             Ok(())
         } else {
             Err(super::error::UrlGenerationError::NotEnoughElements)
@@ -202,22 +202,22 @@ mod tests {
         // regression: names of the parent map were prefixed with the nested root
         let mut root = ResourceMap::new(ResourceDef::new(""));
         let mut index = ResourceDef::new("/index/{id}");
-        *index.name_mut() = "index".to_string();
+        index.set_name("index");
         root.add(&mut index, None);
         let mut ext = ResourceDef::new("https://youtube.com/watch/{id}");
-        *ext.name_mut() = "youtube".to_string();
+        ext.set_name("youtube");
         root.add(&mut ext, None);
 
         let mut nested = ResourceMap::new(ResourceDef::root_prefix("/a"));
         let mut res = ResourceDef::new("/{id}");
-        *res.name_mut() = "nested".to_string();
+        res.set_name("nested");
         nested.add(&mut res, None);
         let nested = Rc::new(nested);
         root.add(&mut ResourceDef::root_prefix("/a"), Some(nested.clone()));
 
         let mut sibling = ResourceMap::new(ResourceDef::root_prefix("/b"));
         let mut res = ResourceDef::new("/{id}");
-        *res.name_mut() = "sibling".to_string();
+        res.set_name("sibling");
         sibling.add(&mut res, None);
         root.add(&mut ResourceDef::root_prefix("/b"), Some(Rc::new(sibling)));
 

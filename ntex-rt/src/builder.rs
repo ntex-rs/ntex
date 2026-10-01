@@ -49,19 +49,6 @@ impl Builder {
         self
     }
 
-    #[doc(hidden)]
-    #[deprecated(since = "3.17.0")]
-    #[must_use]
-    /// Sets the option `stop_on_panic`
-    ///
-    /// It controls whether the System is stopped when an
-    /// uncaught panic is thrown from a worker thread.
-    ///
-    /// Defaults is set to false.
-    pub fn stop_on_panic(self, _: bool) -> Self {
-        self
-    }
-
     #[must_use]
     /// Enables or disables process signal handling.
     ///
@@ -354,11 +341,9 @@ mod tests {
     use crate::{Arbiter, testing::TestRunner};
 
     #[test]
-    #[allow(deprecated)]
     fn builder_options() {
         let builder = System::build()
             .name("opts")
-            .stop_on_panic(true)
             .signals(false)
             .panic_handling(false)
             .enable_signals()

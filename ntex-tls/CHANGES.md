@@ -1,6 +1,6 @@
 # Changes
 
-## [4.1.0] - Unreleased
+## [4.1.0] - 2026-10-01
 
 * openssl: do not drop application data when a write reports `WANT_READ`
   during a handshake, the write is retried later

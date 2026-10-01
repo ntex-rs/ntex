@@ -1,6 +1,6 @@
 # Changes
 
-## [4.2.0] - Unreleased
+## [4.2.0] - 2026-10-01
 
 * Fix worker restart after a service panic on runtimes that catch task panics (compio, tokio);
   avoid process abort on compio when a worker panics

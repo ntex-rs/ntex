@@ -1,6 +1,6 @@
 # Changes
 
-## [4.1.0] - Unreleased
+## [4.1.0] - 2026-10-01
 
 * Add `Dispatcher::max_inflight()`, limits concurrent service calls
 
