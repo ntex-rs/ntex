@@ -3,7 +3,7 @@ use std::future::Future;
 use std::{any, borrow::ToOwned, cell::UnsafeCell, cmp, io, ptr, task::Poll};
 
 use foreign_types_shared::ForeignType;
-use ntex_bytes::{BufMut, BytePages, BytesMut};
+use ntex_bytes::{BufMut, BytePage, BytePages, BytesMut};
 use ntex_io::{Filter, FilterBuf, FilterLayer, Io, Layer, types};
 use ntex_util::time::{Millis, timeout_checked};
 use openssl_sys as ffi;
@@ -238,31 +238,59 @@ impl FilterLayer for SslFilter {
 
     fn process_write_buf(&self, wb: &FilterBuf<'_>) -> io::Result<()> {
         self.with_buffers(wb, |stream, buf| {
-            buf.with_write_buffers(|w_src, _| {
-                while let Some(mut page) = w_src.take() {
-                    match stream.ssl_write(&page) {
-                        Ok(v) => {
-                            page.advance_to(v);
-                            w_src.prepend(page);
-                        }
-                        Err(e)
-                            if matches!(
-                                e.code(),
-                                ssl::ErrorCode::WANT_READ | ssl::ErrorCode::WANT_WRITE
-                            ) =>
-                        {
-                            // nothing is consumed, e.g. a handshake is in
-                            // progress, the write is retried later
-                            w_src.prepend(page);
-                            break;
-                        }
-                        Err(e) => return Err(io::Error::other(e)),
-                    }
-                }
-                Ok(())
-            })
+            buf.with_write_buffers(|w_src, _| write_pages(stream, w_src))
         })
     }
+}
+
+/// Maximum plaintext size of a TLS record.
+const MAX_RECORD: usize = 16 * 1024;
+
+fn write_pages(stream: &mut SslStream<IoInner>, src: &mut BytePages) -> io::Result<()> {
+    while let Some(page) = src.take() {
+        let mut page = gather(page, src);
+        match stream.ssl_write(&page) {
+            Ok(v) => {
+                page.advance_to(v);
+                src.prepend(page);
+            }
+            Err(e)
+                if matches!(
+                    e.code(),
+                    ssl::ErrorCode::WANT_READ | ssl::ErrorCode::WANT_WRITE
+                ) =>
+            {
+                // nothing is consumed, e.g. a handshake is in
+                // progress, the write is retried later
+                src.prepend(page);
+                break;
+            }
+            Err(e) => return Err(io::Error::other(e)),
+        }
+    }
+    Ok(())
+}
+
+/// Joins `page` with the following whole pages that fit into one record.
+///
+/// Every `ssl_write` call produces its own record, so a small page, e.g.
+/// response headers in front of a body, would otherwise cost a record.
+fn gather(page: BytePage, src: &mut BytePages) -> BytePage {
+    let mut buf: Option<BytesMut> = None;
+    while let Some(next) = src.take() {
+        let len = buf.as_ref().map_or(page.len(), BytesMut::len);
+        if len + next.len() > MAX_RECORD {
+            src.prepend(next);
+            break;
+        }
+        buf.get_or_insert_with(|| {
+            let mut buf = BytesMut::with_capacity(MAX_RECORD);
+            buf.extend_from_slice(&page);
+            buf
+        })
+        .extend_from_slice(&next);
+    }
+    buf.map_or(page, BytePage::from)
 }
 
 fn new_stream<F>(io: &Io<F>, ssl: ssl::Ssl) -> io::Result<SslStream<IoInner>> {
@@ -719,6 +747,90 @@ mod tests {
                 ntex_util::time::sleep(Millis(10)).await;
             }
             assert_eq!(&item.expect("read is paused")[..], msg);
+        }
+    }
+
+    fn stream_pair() -> (SslStream<IoInner>, SslStream<IoInner>) {
+        let stream = |ssl| {
+            let inner = IoInner {
+                source: None,
+                destination: BytePages::new(ntex_bytes::BytePageSize::Size16),
+            };
+            SslStream::new(ssl, inner).unwrap()
+        };
+        let mut ssl = connector(false)
+            .configure()
+            .unwrap()
+            .into_ssl("localhost")
+            .unwrap();
+        ssl.set_connect_state();
+        let mut client = stream(ssl);
+        let mut ssl = ssl::Ssl::new(acceptor(false).context()).unwrap();
+        ssl.set_accept_state();
+        let mut server = stream(ssl);
+
+        for _ in 0..10 {
+            let _ = client.do_handshake();
+            transfer(&mut client, &mut server);
+            let _ = server.do_handshake();
+            transfer(&mut server, &mut client);
+        }
+        assert!(client.ssl().is_init_finished() && server.ssl().is_init_finished());
+        (client, server)
+    }
+
+    fn transfer(from: &mut SslStream<IoInner>, to: &mut SslStream<IoInner>) -> Bytes {
+        let data = from.get_mut().destination.freeze();
+        let src = to.get_mut().source.get_or_insert_with(BytesMut::new);
+        src.extend_from_slice(&data);
+        data
+    }
+
+    fn records(mut data: &[u8]) -> Vec<usize> {
+        let mut records = Vec::new();
+        while data.len() >= 5 {
+            let len = usize::from(u16::from_be_bytes([data[3], data[4]]));
+            records.push(len);
+            data = &data[5 + len..];
+        }
+        assert_eq!(data, []);
+        records
+    }
+
+    /// Small pages are joined with following pages into one record.
+    #[test]
+    fn write_gathers_pages_into_records() {
+        let (mut client, mut server) = stream_pair();
+
+        for (sizes, expected) in [
+            (&[300, 8192][..], 1),
+            (&[300, 16384][..], 2),
+            (&[100, 5000, 6000, 7000][..], 2),
+            (&[16000, 300, 84][..], 1),
+            (&[20000][..], 2),
+        ] {
+            let parts: Vec<_> = (0u8..)
+                .zip(sizes)
+                .map(|(i, &n)| Bytes::from(vec![i; n]))
+                .collect();
+            let mut src = BytePages::new(ntex_bytes::BytePageSize::Size16);
+            for p in &parts {
+                src.append(p.clone());
+            }
+            assert_eq!(src.num_pages(), parts.len());
+
+            write_pages(&mut client, &mut src).unwrap();
+            assert!(src.is_empty());
+            let wire = transfer(&mut client, &mut server);
+            assert_eq!(records(&wire).len(), expected, "{sizes:?}");
+
+            let mut plain = Vec::new();
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = server.ssl_read(&mut buf) {
+                plain.extend_from_slice(&buf[..n]);
+            }
+            let expected_plain: Vec<u8> = parts.iter().flat_map(|p| p.iter().copied()).collect();
+            assert_eq!(plain, expected_plain, "{sizes:?}");
         }
     }
 }

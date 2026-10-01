@@ -8,6 +8,9 @@
 * openssl: reading does not report already buffered output as output produced
   by reading, which paused reads while the write buffer was full
 
+* openssl: join small write buffer pages into one TLS record, e.g. response
+  headers and a body up to 16 KiB are sent as one record instead of two
+
 * schannel: add `TlsAcceptor` and `accept()` for server connections, configured
   by `ServerConfig` with ALPN, SNI (`Servername`) and optional client certificates
 
