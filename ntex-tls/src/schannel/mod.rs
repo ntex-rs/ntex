@@ -332,7 +332,7 @@ impl FilterLayer for SchannelFilter {
         }
 
         if id == any::TypeId::of::<types::HttpProtocol>() {
-            let proto = if inner.ctx.alpn_protocol().as_deref() == Some(H2) {
+            let proto = if inner.ctx.alpn_protocol() == Some(H2) {
                 types::HttpProtocol::Http2
             } else {
                 types::HttpProtocol::Http1

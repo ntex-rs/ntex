@@ -195,6 +195,28 @@ mod tests {
         assert!(server.query::<Servername>().as_ref().is_none());
     }
 
+    /// The negotiated protocol is kept after post-handshake messages.
+    #[ntex::test]
+    async fn test_accept_alpn_after_session_ticket() {
+        let config = ServerConfig::new(identity()).unwrap();
+        let (client, server) = connected(&config, client_config(), "localhost").await;
+
+        // TLS 1.3 session tickets precede the data
+        server
+            .send(Bytes::from_static(b"hello"), &BytesCodec)
+            .await
+            .unwrap();
+        assert_eq!(client.recv(&BytesCodec).await.unwrap().unwrap(), "hello");
+        client
+            .send(Bytes::from_static(b"reply"), &BytesCodec)
+            .await
+            .unwrap();
+        assert_eq!(server.recv(&BytesCodec).await.unwrap().unwrap(), "reply");
+
+        assert_eq!(protocol(&client), Some(HttpProtocol::Http2));
+        assert_eq!(protocol(&server), Some(HttpProtocol::Http2));
+    }
+
     #[ntex::test]
     async fn test_accept_client_cert() {
         let cert = identity();

@@ -57,6 +57,8 @@ pub(super) struct Context {
     /// The client's handshake records are plaintext and are repacked before
     /// they are passed to the server
     coalesce: bool,
+    /// Protocol negotiated by ALPN
+    negotiated_alpn: Option<Vec<u8>>,
 }
 
 #[derive(Debug)]
@@ -121,6 +123,7 @@ impl Context {
             servername: None,
             hello: None,
             coalesce: false,
+            negotiated_alpn: None,
         }
     }
 
@@ -210,6 +213,11 @@ impl Context {
         }
 
         if status == SEC_E_OK {
+            if self.sizes.is_none() {
+                // Schannel does not report the protocol after a post-handshake
+                // message, e.g. a TLS 1.3 session ticket
+                self.negotiated_alpn = self.query_alpn_protocol();
+            }
             self.query_stream_sizes()?;
             Ok(HandshakeState::Done)
         } else if consumed != 0 && (extra != 0 || held != 0) {
@@ -560,7 +568,11 @@ impl Context {
         }
     }
 
-    pub(super) fn alpn_protocol(&self) -> Option<Vec<u8>> {
+    pub(super) fn alpn_protocol(&self) -> Option<&[u8]> {
+        self.negotiated_alpn.as_deref()
+    }
+
+    fn query_alpn_protocol(&self) -> Option<Vec<u8>> {
         let mut proto = unsafe { mem::zeroed::<SecPkgContext_ApplicationProtocol>() };
         let status = unsafe {
             QueryContextAttributesW(
