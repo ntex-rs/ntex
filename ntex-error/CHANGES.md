@@ -1,6 +1,6 @@
 # Changes
 
-## [3.0.0] - unreleased
+## [3.0.0] - 2026-10-01
 
 * Re-export FailureDiagnostic
 

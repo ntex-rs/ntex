@@ -1,6 +1,6 @@
 # Changes
 
-## [4.2.0] - Unreleased
+## [4.2.0] - 2026-10-01
 
 * Timers of a system started after another system stopped on the same thread
   never fired, the timer drivers of the stopped runtime were not dropped and
