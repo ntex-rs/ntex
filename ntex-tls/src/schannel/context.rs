@@ -52,9 +52,6 @@ pub(super) struct Context {
     cert_requested: bool,
     /// Server name requested by the client
     pub(super) servername: Option<String>,
-    /// Handshake payload of the consumed `ClientHello` records, until the
-    /// `ClientHello` is complete
-    hello: Option<Vec<u8>>,
     /// The client's handshake records are plaintext and are repacked before
     /// they are passed to the server
     coalesce: bool,
@@ -106,14 +103,11 @@ impl Context {
         if config.request_client_cert {
             flags |= ASC_REQ_MUTUAL_AUTH;
         }
-        let mut ctx = Self::new(
+        Self::new(
             config.cred.clone(),
             Role::Server(flags),
             config.alpn.clone(),
-        );
-        ctx.hello = Some(Vec::new());
-        ctx.coalesce = true;
-        ctx
+        )
     }
 
     fn new(cred: Arc<Credentials>, role: Role, alpn: Option<Arc<[u8]>>) -> Self {
@@ -121,13 +115,12 @@ impl Context {
             cred,
             ctxt: unsafe { mem::zeroed::<SecHandle>() },
             have_ctxt: false,
+            coalesce: matches!(role, Role::Server(_)),
             role,
             alpn,
             sizes: None,
             cert_requested: false,
             servername: None,
-            hello: None,
-            coalesce: false,
             negotiated_alpn: None,
             awaiting_peer: false,
         }
@@ -152,6 +145,10 @@ impl Context {
                 let Some(len) = coalesce_handshake_records(src) else {
                     return Ok(HandshakeState::NeedRead);
                 };
+                if !self.have_ctxt {
+                    // the context is created once the ClientHello is complete
+                    self.servername = client_hello_servername(&src[..len]);
+                }
                 held = src.len() - len;
                 len
             }
@@ -212,9 +209,9 @@ impl Context {
             extra = extra_len(&in_bufs);
             consumed = len.saturating_sub(extra);
             if consumed != 0 {
-                self.client_hello(&src[..consumed]);
                 // the following handshake records of TLS 1.2 are encrypted
-                self.coalesce &= !has_change_cipher_spec(&src[..consumed]);
+                self.coalesce &= !records(&src[..consumed])
+                    .any(|(content_type, _)| content_type == CONTENT_CHANGE_CIPHER_SPEC);
                 src.advance_to(consumed);
             }
         }
@@ -231,42 +228,6 @@ impl Context {
             Ok(HandshakeState::Continue)
         } else {
             Ok(HandshakeState::NeedRead)
-        }
-    }
-
-    /// Collects the `ClientHello` from the records consumed by the server and
-    /// reads the requested server name once it is complete.
-    fn client_hello(&mut self, mut records: &[u8]) {
-        let Some(hello) = &mut self.hello else {
-            return;
-        };
-        while let [content_type, _, _, len_hi, len_lo, rest @ ..] = records {
-            let len = usize::from(u16::from_be_bytes([*len_hi, *len_lo]));
-            if *content_type != CONTENT_HANDSHAKE || rest.len() < len {
-                break;
-            }
-            hello.extend_from_slice(&rest[..len]);
-            records = &rest[len..];
-        }
-
-        // handshake message header, type and 24-bit length
-        let Some(&[msg_type, a, b, c]) = hello.get(..4) else {
-            return;
-        };
-        let size = 4 + (usize::from(a) << 16 | usize::from(b) << 8 | usize::from(c));
-        if hello.len() >= size {
-            if msg_type == HANDSHAKE_CLIENT_HELLO
-                && let Ok(len) = u16::try_from(size)
-            {
-                let mut record = Vec::with_capacity(5 + size);
-                record.extend_from_slice(&[CONTENT_HANDSHAKE, 3, 1]);
-                record.extend_from_slice(&len.to_be_bytes());
-                record.extend_from_slice(&hello[..size]);
-                self.servername = client_hello_servername(&record);
-            }
-            self.hello = None;
-        } else if hello.len() > MAX_CLIENT_HELLO {
-            self.hello = None;
         }
     }
 
@@ -629,9 +590,6 @@ const ASC_FLAGS: u32 = ASC_REQ_SEQUENCE_DETECT
 
 const CONTENT_CHANGE_CIPHER_SPEC: u8 = 20;
 const CONTENT_HANDSHAKE: u8 = 22;
-const HANDSHAKE_CLIENT_HELLO: u8 = 1;
-/// The largest `ClientHello` searched for the server name
-const MAX_CLIENT_HELLO: usize = 64 * 1024;
 /// The largest plaintext record payload
 const MAX_RECORD: usize = 16 * 1024;
 /// The largest handshake data held back until a message is complete
@@ -648,14 +606,23 @@ fn alert_number(status: windows_sys::core::HRESULT) -> u32 {
     }
 }
 
-/// Server name indication of a `ClientHello` record.
+/// Server name indication of the `ClientHello` in the leading handshake
+/// records of `src`.
 fn client_hello_servername(src: &[u8]) -> Option<String> {
+    // the message is passed in a single record
+    let mut record = vec![CONTENT_HANDSHAKE, 3, 1, 0, 0];
+    for (_, payload) in records(src).take_while(|(ty, _)| *ty == CONTENT_HANDSHAKE) {
+        record.extend_from_slice(payload);
+    }
+    let len = u16::try_from(record.len() - 5).ok()?;
+    record[3..5].copy_from_slice(&len.to_be_bytes());
+
     let mut name = ptr::null_mut();
     let mut len = 0u32;
     let status = unsafe {
         SslGetServerIdentity(
-            src.as_ptr(),
-            u32::try_from(src.len()).ok()?,
+            record.as_ptr(),
+            u32::try_from(record.len()).ok()?,
             &raw mut name,
             &raw mut len,
             0,
@@ -664,29 +631,37 @@ fn client_hello_servername(src: &[u8]) -> Option<String> {
     if status != SEC_E_OK || name.is_null() || len == 0 {
         return None;
     }
-    // points into `src`
+    // points into `record`
     let name = unsafe { slice::from_raw_parts(name, len as usize) };
     std::str::from_utf8(name).ok().map(str::to_owned)
+}
+
+/// Content type and payload of the complete records at the start of `src`.
+fn records(mut src: &[u8]) -> impl Iterator<Item = (u8, &[u8])> {
+    std::iter::from_fn(move || {
+        let [content_type, _, _, hi, lo, rest @ ..] = src else {
+            return None;
+        };
+        let len = usize::from(u16::from_be_bytes([*hi, *lo]));
+        let payload = rest.get(..len)?;
+        src = &rest[len..];
+        Some((*content_type, payload))
+    })
 }
 
 /// Length of the leading handshake and change cipher spec records of `src`,
 /// including an incomplete one.
 pub(super) fn handshake_records_len(src: &[u8]) -> usize {
-    let mut rest = src;
-    while let Some(&content_type) = rest.first() {
-        if content_type != CONTENT_HANDSHAKE && content_type != CONTENT_CHANGE_CIPHER_SPEC {
-            break;
-        }
-        let Some(&[_, _, _, hi, lo]) = rest.get(..5) else {
-            return src.len();
-        };
-        let len = 5 + usize::from(u16::from_be_bytes([hi, lo]));
-        if rest.len() <= len {
-            return src.len();
-        }
-        rest = &rest[len..];
+    let is_handshake = |ty: u8| ty == CONTENT_HANDSHAKE || ty == CONTENT_CHANGE_CIPHER_SPEC;
+    let len = records(src)
+        .take_while(|(ty, _)| is_handshake(*ty))
+        .map(|(_, payload)| 5 + payload.len())
+        .sum();
+    if src.get(len).is_some_and(|ty| is_handshake(*ty)) {
+        src.len()
+    } else {
+        len
     }
-    src.len() - rest.len()
 }
 
 /// Repacks the complete handshake messages in the leading plaintext
@@ -753,18 +728,6 @@ fn coalesce_handshake_records(src: &mut BytesMut) -> Option<usize> {
     Some(len)
 }
 
-/// Checks if the complete `records` contain a `ChangeCipherSpec`.
-fn has_change_cipher_spec(mut records: &[u8]) -> bool {
-    while let [content_type, _, _, hi, lo, rest @ ..] = records {
-        if *content_type == CONTENT_CHANGE_CIPHER_SPEC {
-            return true;
-        }
-        let len = usize::from(u16::from_be_bytes([*hi, *lo]));
-        records = rest.get(len..).unwrap_or_default();
-    }
-    false
-}
-
 /// Moves a token allocated by `InitializeSecurityContextW` or
 /// `AcceptSecurityContext` to `output`.
 fn take_token(buf: &SecBuffer, output: &mut ntex_bytes::BytePages) {
@@ -829,6 +792,7 @@ mod tests {
     use super::*;
 
     const CONTENT_APPLICATION_DATA: u8 = 23;
+    const HANDSHAKE_CLIENT_HELLO: u8 = 1;
 
     #[test]
     fn test_decrypted_parts_by_type() {
@@ -919,72 +883,33 @@ mod tests {
     fn test_client_hello_servername() {
         let msg = client_hello_message("example.com");
         for cuts in [&[][..], &[1], &[2], &[3], &[1, 2, 3, 4, 50]] {
-            // one record per call
-            let mut ctx = server_context();
-            let mut start = 0;
-            for &end in cuts.iter().chain(Some(&msg.len())) {
-                assert!(ctx.hello.is_some());
-                assert!(ctx.servername.is_none());
-                ctx.client_hello(&record(CONTENT_HANDSHAKE, &msg[start..end]));
-                start = end;
-            }
-            assert!(ctx.hello.is_none());
-            assert_eq!(ctx.servername.as_deref(), Some("example.com"), "{cuts:?}");
+            let src = fragments(&msg, cuts);
+            let name = client_hello_servername(&src);
+            assert_eq!(name.as_deref(), Some("example.com"), "{cuts:?}");
 
-            // all records at once
+            // the server reads it before passing the coalesced records to Schannel
             let mut ctx = server_context();
-            ctx.client_hello(&fragments(&msg, cuts));
-            assert!(ctx.hello.is_none());
+            let mut src = BytesMut::copy_from_slice(&src);
+            let mut out = ntex_bytes::BytePages::default();
+            let _ = ctx.handshake_step(Some(&mut src), &mut out);
             assert_eq!(ctx.servername.as_deref(), Some("example.com"), "{cuts:?}");
         }
 
-        // the client does not collect a hello
-        let mut ctx = Context::client("localhost", &ClientConfig::new()).unwrap();
-        ctx.client_hello(&record(CONTENT_HANDSHAKE, &msg));
-        assert!(ctx.hello.is_none());
-        assert!(ctx.servername.is_none());
-    }
-
-    #[test]
-    fn test_client_hello_other_message() {
-        let mut msg = client_hello_message("example.com");
-        msg[0] = 2;
-        let mut ctx = server_context();
-        ctx.client_hello(&record(CONTENT_HANDSHAKE, &msg));
-        assert!(ctx.hello.is_none());
-        assert!(ctx.servername.is_none());
-    }
-
-    #[test]
-    fn test_client_hello_skips_other_records() {
-        let msg = client_hello_message("example.com");
-        let mut ctx = server_context();
-
-        let mut records = record(CONTENT_CHANGE_CIPHER_SPEC, &[1]);
-        records.extend(record(CONTENT_HANDSHAKE, &msg));
-        ctx.client_hello(&records);
-        assert_eq!(ctx.hello.as_deref(), Some(&[][..]));
-
-        ctx.client_hello(&record(CONTENT_HANDSHAKE, &msg)[..10]);
-        assert_eq!(ctx.hello.as_deref(), Some(&[][..]));
-
-        ctx.client_hello(&record(CONTENT_HANDSHAKE, &msg));
-        assert!(ctx.hello.is_none());
-        assert_eq!(ctx.servername.as_deref(), Some("example.com"));
-    }
-
-    #[test]
-    fn test_client_hello_too_large() {
-        let msg = message(HANDSHAKE_CLIENT_HELLO, 2 * MAX_CLIENT_HELLO);
-        let mut ctx = server_context();
-        let mut collected = 0;
-        for chunk in msg.chunks(MAX_RECORD) {
-            ctx.client_hello(&record(CONTENT_HANDSHAKE, chunk));
-            collected += chunk.len();
-            assert_eq!(ctx.hello.is_none(), collected > MAX_CLIENT_HELLO);
+        let hello = record(CONTENT_HANDSHAKE, &msg);
+        let mut other = msg.clone();
+        other[0] = 2;
+        for src in [
+            // incomplete
+            &hello[..10],
+            // not the first record
+            &[&record(CONTENT_CHANGE_CIPHER_SPEC, &[1])[..], &hello].concat(),
+            // another message
+            &record(CONTENT_HANDSHAKE, &other),
+            // too large for a record
+            &fragments(&message(HANDSHAKE_CLIENT_HELLO, 70_000), &[30_000, 60_000]),
+        ] {
+            assert!(client_hello_servername(src).is_none());
         }
-        assert!(ctx.hello.is_none());
-        assert!(ctx.servername.is_none());
     }
 
     #[test]
@@ -1117,12 +1042,20 @@ mod tests {
     }
 
     #[test]
-    fn test_has_change_cipher_spec() {
+    fn test_records() {
         let hello = record(CONTENT_HANDSHAKE, &message(HANDSHAKE_CLIENT_HELLO, 50));
         let ccs = record(CONTENT_CHANGE_CIPHER_SPEC, &[1]);
-        assert!(!has_change_cipher_spec(&hello));
-        assert!(has_change_cipher_spec(&[&hello[..], &ccs].concat()));
-        assert!(has_change_cipher_spec(&[&ccs[..], &hello].concat()));
-        assert!(!has_change_cipher_spec(&[22, 3, 3, 0, 1, 20, 3, 3]));
+        let parse = |src: &[u8]| {
+            records(src)
+                .map(|(ty, p)| (ty, p.len()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            parse(&[&hello[..], &ccs, &[22, 3, 3, 0]].concat()),
+            [(CONTENT_HANDSHAKE, 54), (CONTENT_CHANGE_CIPHER_SPEC, 1)]
+        );
+        // a payload byte is not a record, an incomplete record is skipped
+        assert_eq!(parse(&[22, 3, 3, 0, 1, 20, 3, 3]), [(CONTENT_HANDSHAKE, 1)]);
+        assert_eq!(parse(&[22, 3, 3, 0, 2, 20]), []);
     }
 }

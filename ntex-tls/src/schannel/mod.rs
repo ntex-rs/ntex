@@ -62,7 +62,7 @@ impl ClientConfig {
     pub fn new() -> Self {
         Self {
             verify: true,
-            alpn: alpn_buffer(&[b"h2".as_slice(), b"http/1.1".as_slice()]),
+            alpn: alpn_buffer(DEFAULT_ALPN),
             cert: None,
             cred: Arc::default(),
         }
@@ -107,7 +107,7 @@ impl ClientConfig {
         if let Some(cred) = &*cred {
             return Ok(cred.clone());
         }
-        let new = Arc::new(Credentials::acquire(self.verify, self.cert.as_ref())?);
+        let new = Arc::new(Credentials::outbound(self.verify, self.cert.clone())?);
         *cred = Some(new.clone());
         Ok(new)
     }
@@ -136,7 +136,7 @@ impl ServerConfig {
     /// key is not accessible.
     pub fn new(cert: Certificate) -> io::Result<Self> {
         Ok(Self {
-            alpn: alpn_buffer(&[b"h2".as_slice(), b"http/1.1".as_slice()]),
+            alpn: alpn_buffer(DEFAULT_ALPN),
             request_client_cert: false,
             cred: Arc::new(Credentials::inbound(cert)?),
         })
@@ -183,7 +183,7 @@ unsafe impl Sync for Credentials {}
 
 impl Credentials {
     /// Acquires client credentials.
-    fn acquire(verify: bool, cert: Option<&Certificate>) -> io::Result<Self> {
+    fn outbound(verify: bool, cert: Option<Certificate>) -> io::Result<Self> {
         // never pick a client certificate from the user's store on its own
         let mut flags = SCH_USE_STRONG_CRYPTO | SCH_CRED_NO_DEFAULT_CREDS;
         if verify {
@@ -191,53 +191,48 @@ impl Credentials {
         } else {
             flags |= SCH_CRED_MANUAL_CRED_VALIDATION | SCH_CRED_NO_SERVERNAME_CHECK;
         }
-        let handle = Self::with_flags(SECPKG_CRED_OUTBOUND, flags, cert)?;
-        Ok(Self {
-            handle,
-            _cert: cert.cloned(),
-        })
+        Self::acquire(SECPKG_CRED_OUTBOUND, flags, cert)
     }
 
     /// Acquires server credentials.
     fn inbound(cert: Certificate) -> io::Result<Self> {
         // do not map client certificates to Windows accounts
         let flags = SCH_USE_STRONG_CRYPTO | SCH_CRED_NO_SYSTEM_MAPPER;
-        let handle = Self::with_flags(SECPKG_CRED_INBOUND, flags, Some(&cert))?;
-        Ok(Self {
-            handle,
-            _cert: Some(cert),
-        })
+        Self::acquire(SECPKG_CRED_INBOUND, flags, Some(cert))
     }
 
-    fn with_flags(direction: u32, flags: u32, cert: Option<&Certificate>) -> io::Result<SecHandle> {
+    fn acquire(direction: u32, flags: u32, cert: Option<Certificate>) -> io::Result<Self> {
         // Schannel keeps its own reference to the certificate
-        let mut certs = [cert.map_or(ptr::null_mut(), |cert| cert.as_ptr().cast_mut())];
-        let (num_certs, certs) = if cert.is_some() {
-            (1, certs.as_mut_ptr())
-        } else {
-            (0, ptr::null_mut())
+        let mut certs = cert.as_ref().map(|cert| cert.as_ptr().cast_mut());
+        let (num_certs, certs_ptr) = match &mut certs {
+            Some(cert) => (1, ptr::from_mut(cert)),
+            None => (0, ptr::null_mut()),
         };
 
-        if supports_sch_credentials() {
+        let mut sch_cred;
+        let mut schannel_cred;
+        let auth_data = if supports_sch_credentials() {
             // SCH_CREDENTIALS enables the system default protocols, including TLS 1.3
-            let mut sch_cred = unsafe { mem::zeroed::<SCH_CREDENTIALS>() };
-            sch_cred.dwVersion = SCH_CREDENTIALS_VERSION;
-            sch_cred.dwFlags = flags;
-            sch_cred.cCreds = num_certs;
-            sch_cred.paCred = certs;
-            Self::acquire_with(direction, (&raw mut sch_cred).cast())
+            sch_cred = SCH_CREDENTIALS {
+                dwVersion: SCH_CREDENTIALS_VERSION,
+                dwFlags: flags,
+                cCreds: num_certs,
+                paCred: certs_ptr,
+                ..unsafe { mem::zeroed() }
+            };
+            (&raw mut sch_cred).cast()
         } else {
-            let mut schannel_cred = unsafe { mem::zeroed::<SCHANNEL_CRED>() };
-            schannel_cred.dwVersion = SCHANNEL_CRED_VERSION;
-            schannel_cred.dwFlags = flags;
-            schannel_cred.cCreds = num_certs;
-            schannel_cred.paCred = certs;
-            Self::acquire_with(direction, (&raw mut schannel_cred).cast())
-        }
-    }
+            schannel_cred = SCHANNEL_CRED {
+                dwVersion: SCHANNEL_CRED_VERSION,
+                dwFlags: flags,
+                cCreds: num_certs,
+                paCred: certs_ptr,
+                ..unsafe { mem::zeroed() }
+            };
+            (&raw mut schannel_cred).cast()
+        };
 
-    fn acquire_with(direction: u32, auth_data: *mut std::ffi::c_void) -> io::Result<SecHandle> {
-        let mut cred = unsafe { mem::zeroed::<SecHandle>() };
+        let mut handle = unsafe { mem::zeroed::<SecHandle>() };
         let mut expiry = 0i64;
         let status = unsafe {
             AcquireCredentialsHandleW(
@@ -248,15 +243,17 @@ impl Credentials {
                 auth_data,
                 None,
                 ptr::null(),
-                &raw mut cred,
+                &raw mut handle,
                 &raw mut expiry,
             )
         };
-        if status == SEC_E_OK {
-            Ok(cred)
-        } else {
-            Err(sspi_error("AcquireCredentialsHandleW", status))
+        if status != SEC_E_OK {
+            return Err(sspi_error("AcquireCredentialsHandleW", status));
         }
+        Ok(Self {
+            handle,
+            _cert: cert,
+        })
     }
 }
 
@@ -377,6 +374,11 @@ impl FilterLayer for SchannelFilter {
 
     fn process_read_buf(&self, rb: &FilterBuf<'_>) -> io::Result<()> {
         let inner = self.inner_mut();
+        if inner.peer_closed {
+            // input after the peer's close_notify is ignored
+            rb.with_read_src(|src| src.as_mut().map(ntex_bytes::BytesMut::clear));
+            return Ok(());
+        }
         loop {
             match inner.state {
                 State::Failed => return Ok(()),
@@ -388,29 +390,7 @@ impl FilterLayer for SchannelFilter {
                 State::Streaming | State::Closed => {}
             }
 
-            let res = rb.with_read_buffers(|r_src, r_dst| -> io::Result<Decrypted> {
-                if let Some(src) = r_src {
-                    if inner.peer_closed {
-                        src.clear();
-                        return Ok(Decrypted::Pending);
-                    }
-                    while !src.is_empty() {
-                        match inner.ctx.decrypt(src, r_dst)? {
-                            Decrypted::Progress => {}
-                            Decrypted::Pending => break,
-                            res @ (Decrypted::Closed | Decrypted::Renegotiate) => return Ok(res),
-                        }
-                    }
-                }
-                Ok(Decrypted::Pending)
-            })?;
-            match res {
-                Decrypted::Closed => {
-                    inner.peer_closed = true;
-                    // peer sent close_notify, start graceful shutdown
-                    rb.io().close();
-                    return Ok(());
-                }
+            match inner.decrypt(rb)? {
                 // the context is shut down, but a post-handshake message still
                 // has to be processed before the next record can be decrypted
                 Decrypted::Renegotiate if inner.state == State::Closed => {
@@ -419,7 +399,7 @@ impl FilterLayer for SchannelFilter {
                     })?;
                 }
                 Decrypted::Renegotiate => inner.state = State::Renegotiating,
-                Decrypted::Progress | Decrypted::Pending => return Ok(()),
+                Decrypted::Closed | Decrypted::Progress | Decrypted::Pending => return Ok(()),
             }
         }
     }
@@ -437,11 +417,6 @@ impl Schannel {
     /// Drives the handshake with buffered input, returns `true` once it is done.
     fn handshake(&mut self, rb: &FilterBuf<'_>) -> io::Result<bool> {
         let renegotiating = self.state == State::Renegotiating;
-        if self.peer_closed {
-            // the peer closed the connection during a post-handshake exchange
-            rb.with_read_src(|src| src.as_mut().map(ntex_bytes::BytesMut::clear));
-            return Ok(false);
-        }
         loop {
             let input = Self::input_len(rb);
             let state = rb.with_write_buffers(|_, dst| {
@@ -462,9 +437,7 @@ impl Schannel {
                 HandshakeState::Done => break,
                 HandshakeState::NeedRead if renegotiating => {
                     // application data and alerts may precede the peer's next message
-                    if self.decrypt_during_handshake(rb)? {
-                        self.peer_closed = true;
-                        rb.io().close();
+                    if self.decrypt(rb)? == Decrypted::Closed {
                         return Ok(false);
                     }
                     let rest = Self::input_len(rb);
@@ -484,29 +457,32 @@ impl Schannel {
         Ok(true)
     }
 
-    /// Decrypts the records the peer sent during a post-handshake exchange
-    /// up to its next handshake message, returns `true` on `close_notify`.
+    /// Decrypts buffered records, during a post-handshake exchange up to the
+    /// peer's next handshake message.
     ///
     /// During a TLS 1.2 renegotiation Schannel decrypts records only after
     /// the `ClientHello` has been generated.
-    fn decrypt_during_handshake(&mut self, rb: &FilterBuf<'_>) -> io::Result<bool> {
-        rb.with_read_buffers(|src, dst| {
+    fn decrypt(&mut self, rb: &FilterBuf<'_>) -> io::Result<Decrypted> {
+        let renegotiating = self.state == State::Renegotiating;
+        let res = rb.with_read_buffers(|src, dst| -> io::Result<Decrypted> {
             let Some(src) = src else {
-                return Ok(false);
+                return Ok(Decrypted::Pending);
             };
-            while !src.is_empty() && context::handshake_records_len(src) == 0 {
-                let res = self.ctx.decrypt(src, dst).map_err(|err| {
-                    io::Error::new(err.kind(), format!("during renegotiation: {err}"))
-                })?;
-                match res {
+            // the peer's next handshake message goes to ISC or ASC
+            while !src.is_empty() && (!renegotiating || context::handshake_records_len(src) == 0) {
+                match self.ctx.decrypt(src, dst)? {
                     Decrypted::Progress => {}
-                    // the record is a handshake message now
-                    Decrypted::Pending | Decrypted::Renegotiate => break,
-                    Decrypted::Closed => return Ok(true),
+                    res => return Ok(res),
                 }
             }
-            Ok(false)
-        })
+            Ok(Decrypted::Pending)
+        })?;
+        if res == Decrypted::Closed {
+            // peer sent close_notify, start graceful shutdown
+            self.peer_closed = true;
+            rb.io().close();
+        }
+        Ok(res)
     }
 
     fn input_len(rb: &FilterBuf<'_>) -> usize {
@@ -529,19 +505,6 @@ impl SchannelFilter {
     fn inner_mut(&self) -> &mut Schannel {
         // SAFETY: see inner().
         unsafe { &mut *self.inner.get() }
-    }
-
-    fn start_handshake(&self, buf: &FilterBuf<'_>) -> io::Result<HandshakeState> {
-        let inner = self.inner_mut();
-        // a server waits for the ClientHello, buffered input has been passed
-        // to the filter when it was added
-        buf.with_write_buffers(|_, dst| {
-            let state = inner.ctx.handshake_step(None, dst)?;
-            if state == HandshakeState::Done {
-                inner.state = State::Streaming;
-            }
-            Ok(state)
-        })
     }
 
     fn is_handshaking(&self) -> bool {
@@ -579,18 +542,14 @@ async fn handshake<F: Filter>(io: Io<F>, ctx: Context) -> io::Result<Io<Layer<Sc
             peer_closed: false,
         }),
     };
+    // the filter starts the handshake with the buffered input when it is
+    // added, a client queues its ClientHello
     let io = io.add_filter(filter);
-
-    let state = io.with_buf(|buf| io.filter().start_handshake(buf))??;
-    io.flush(false).await?;
-
-    if state == HandshakeState::Done {
-        return Ok(io);
-    }
 
     // the read that reports eof may also carry the peer's last handshake flight
     let mut eof = false;
     loop {
+        io.flush(false).await?;
         if let Some(err) = io.filter().take_error() {
             // make sure the alert reaches the peer before the io is dropped
             let _ = io.flush(true).await;
@@ -602,13 +561,14 @@ async fn handshake<F: Filter>(io: Io<F>, ctx: Context) -> io::Result<Io<Layer<Sc
         if eof {
             return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "disconnected"));
         }
-
         if io.read_notify().await?.is_none() {
             eof = true;
         }
-        io.flush(false).await?;
     }
 }
+
+/// ALPN protocols offered or accepted by default.
+const DEFAULT_ALPN: &[&[u8]] = &[b"h2", b"http/1.1"];
 
 fn alpn_buffer<T: AsRef<[u8]>>(protocols: &[T]) -> Option<Arc<[u8]>> {
     // Layout for SECBUFFER_APPLICATION_PROTOCOLS:
@@ -719,7 +679,7 @@ mod tests {
             Certificate::from_context(cert)
         };
 
-        let err = Credentials::acquire(false, Some(&cert)).unwrap_err();
+        let err = Credentials::outbound(false, Some(cert)).unwrap_err();
         let err = err.get_ref().unwrap().downcast_ref::<SspiError>().unwrap();
         assert_eq!(
             err.status,
