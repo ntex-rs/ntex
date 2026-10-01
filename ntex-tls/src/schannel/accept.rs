@@ -1266,6 +1266,15 @@ mod tests {
             self.flush();
         }
 
+        fn renegotiate_pending(&self) -> bool {
+            use foreign_types_shared::ForeignTypeRef;
+
+            unsafe extern "C" {
+                fn SSL_renegotiate_pending(ssl: *const openssl_sys::SSL) -> std::ffi::c_int;
+            }
+            unsafe { SSL_renegotiate_pending(self.ssl.ssl().as_ptr()) != 0 }
+        }
+
         fn close_notify(&mut self) {
             let _ = self.ssl.shutdown();
             self.flush();
@@ -1327,5 +1336,244 @@ mod tests {
         .await
         .expect("shutdown does not complete");
         assert_eq!(done.take(), Some(Ok(())));
+    }
+
+    /// Deterministic pseudo-random sizes.
+    struct Lcg(u32);
+
+    impl Lcg {
+        fn next(&mut self, max: usize) -> usize {
+            self.0 = self.0.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            1 + (self.0 >> 8) as usize % max
+        }
+    }
+
+    /// Chunk content depends on its tag, index and offset.
+    #[allow(clippy::cast_possible_truncation)]
+    fn chunk(tag: u8, i: usize, len: usize) -> Vec<u8> {
+        (0..len)
+            .map(|j| tag ^ (i as u8).wrapping_mul(31) ^ (j as u8) ^ ((j >> 8) as u8))
+            .collect()
+    }
+
+    fn chunks(tag: u8, rnd: &mut Lcg) -> (Vec<Bytes>, Vec<u8>) {
+        let chunks: Vec<_> = (0..64)
+            .map(|i| Bytes::from(chunk(tag, i, rnd.next(12 * 1024))))
+            .collect();
+        let all = chunks.iter().flat_map(|c| c.iter().copied()).collect();
+        (chunks, all)
+    }
+
+    fn assert_same(case: &str, what: &str, got: &[u8], expected: &[u8]) {
+        let pos = got.iter().zip(expected).position(|(a, b)| a != b);
+        assert!(
+            got.len() == expected.len() && pos.is_none(),
+            "{case}: {what} differs at {pos:?}, {} of {} bytes",
+            got.len(),
+            expected.len()
+        );
+    }
+
+    /// Writes `chunks` one by one, reads into the returned buffer.
+    fn stream(io: SchannelIo, chunks: Vec<Bytes>) -> std::rc::Rc<std::cell::RefCell<Vec<u8>>> {
+        let ioref = io.get_ref();
+        ntex::rt::spawn(async move {
+            for data in chunks {
+                ioref.encode(data, &BytesCodec).unwrap();
+                ntex_util::task::yield_to().await;
+            }
+        });
+        let received = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let received2 = received.clone();
+        ntex::rt::spawn(async move {
+            while let Ok(Some(data)) = io.recv(&BytesCodec).await {
+                received2.borrow_mut().extend_from_slice(&data);
+            }
+        });
+        received
+    }
+
+    fn drain_tls(conn: &mut tls_rustls::Connection, wire: &mut std::collections::VecDeque<u8>) {
+        let mut out = Vec::new();
+        while conn.wants_write() {
+            conn.write_tls(&mut out).unwrap();
+        }
+        wire.extend(out);
+    }
+
+    /// Data is delivered in order in both directions while the peer's data,
+    /// interleaved with key updates, arrives in arbitrary pieces.
+    #[ntex::test]
+    async fn test_order_key_updates() {
+        for server in [true, false] {
+            let case = format!("server {server}");
+            let (io, mut peer) = rustls_pair(server, &tls_rustls::version::TLS13).await;
+            let mut rnd = Lcg(u32::from(server) + 7);
+
+            let mut wire = std::collections::VecDeque::new();
+            let (peer_chunks, sent) = chunks(b'p', &mut rnd);
+            for (i, data) in peer_chunks.iter().enumerate() {
+                peer.conn.writer().write_all(data).unwrap();
+                if i % 8 == 7 {
+                    match &mut peer.conn {
+                        tls_rustls::Connection::Client(c) => c.refresh_traffic_keys().unwrap(),
+                        tls_rustls::Connection::Server(c) => c.refresh_traffic_keys().unwrap(),
+                    }
+                }
+                drain_tls(&mut peer.conn, &mut wire);
+            }
+
+            let (our_chunks, written) = chunks(b's', &mut rnd);
+            let received = stream(io, our_chunks);
+
+            timeout(Millis(10_000), async {
+                while received.borrow().len() < sent.len() || peer.data.len() < written.len() {
+                    let mut idle = true;
+                    if !wire.is_empty() {
+                        let n = rnd.next(2048).min(wire.len());
+                        peer.io.write(wire.drain(..n).collect::<Vec<_>>());
+                        idle = false;
+                    }
+                    ntex_util::task::yield_to().await;
+
+                    let data = peer.io.read_any();
+                    let mut rd = &data[..];
+                    while !rd.is_empty() {
+                        idle = false;
+                        peer.conn.read_tls(&mut rd).unwrap();
+                        peer.conn.process_new_packets().unwrap();
+                        let _ = peer.conn.reader().read_to_end(&mut peer.data);
+                    }
+                    // responses go after the queued records
+                    drain_tls(&mut peer.conn, &mut wire);
+                    if idle {
+                        sleep(Millis(1)).await;
+                    }
+                }
+            })
+            .await
+            .unwrap_or_else(|()| {
+                panic!(
+                    "{case}: stalled, received {} of {}, peer {} of {}",
+                    received.borrow().len(),
+                    sent.len(),
+                    peer.data.len(),
+                    written.len()
+                )
+            });
+            assert_same(&case, "received", &received.borrow(), &sent);
+            assert_same(&case, "peer received", &peer.data, &written);
+        }
+    }
+
+    /// Data is delivered in order in both directions across TLS 1.2
+    /// renegotiations started by the server, the server does not send
+    /// application data during a renegotiation.
+    #[cfg(feature = "openssl")]
+    #[ntex::test]
+    async fn test_order_renegotiation() {
+        let (cli, srv) = IoTest::create();
+        cli.remote_buffer_cap(1 << 22);
+        srv.remote_buffer_cap(1 << 22);
+        let mut peer = SslPeer::new(srv);
+        let io = Io::new(cli, SharedCfg::new("SCHANNEL"));
+        let (io, ()) = timeout(
+            Millis(5_000),
+            join(connect(io, "localhost", client_config()), peer.handshake()),
+        )
+        .await
+        .unwrap();
+
+        let mut rnd = Lcg(3);
+        let (peer_chunks, sent) = chunks(b'p', &mut rnd);
+        let (our_chunks, written) = chunks(b's', &mut rnd);
+        let received = stream(io.unwrap(), our_chunks);
+
+        let mut next = 0;
+        let mut pending: &[u8] = &[];
+        let mut renegotiations = 0;
+        timeout(Millis(10_000), async {
+            while received.borrow().len() < sent.len() || peer.data.len() < written.len() {
+                let renegotiating = peer.renegotiate_pending();
+                if pending.is_empty() && next < peer_chunks.len() && !renegotiating {
+                    if next % 16 == 8 {
+                        peer.renegotiate();
+                        renegotiations += 1;
+                    }
+                    pending = &peer_chunks[next];
+                    next += 1;
+                }
+                if !pending.is_empty() && !peer.renegotiate_pending() {
+                    match peer.ssl.ssl_write(pending) {
+                        Ok(n) => pending = &pending[n..],
+                        Err(err) if SslPeer::want_read(&err) => {}
+                        Err(err) => panic!("{err}"),
+                    }
+                }
+                peer.flush();
+                ntex_util::task::yield_to().await;
+
+                let data = peer.io.read_any();
+                let idle = data.is_empty();
+                peer.ssl.get_mut().rd.extend_from_slice(&data);
+                peer.process();
+                if idle {
+                    sleep(Millis(1)).await;
+                }
+            }
+        })
+        .await
+        .unwrap_or_else(|()| {
+            panic!(
+                "stalled, received {} of {}, peer {} of {}",
+                received.borrow().len(),
+                sent.len(),
+                peer.data.len(),
+                written.len()
+            )
+        });
+        assert_eq!(renegotiations, 4);
+        assert_same("", "received", &received.borrow(), &sent);
+        assert_same("", "peer received", &peer.data, &written);
+    }
+
+    /// Schannel cannot process application data received during a TLS 1.2
+    /// renegotiation, data before it is delivered and the connection fails.
+    #[cfg(feature = "openssl")]
+    #[ntex::test]
+    async fn test_renegotiation_app_data() {
+        let (cli, srv) = IoTest::create();
+        cli.remote_buffer_cap(1 << 20);
+        srv.remote_buffer_cap(1 << 20);
+        let mut peer = SslPeer::new(srv);
+        let io = Io::new(cli, SharedCfg::new("SCHANNEL"));
+        let (io, ()) = timeout(
+            Millis(5_000),
+            join(connect(io, "localhost", client_config()), peer.handshake()),
+        )
+        .await
+        .unwrap();
+        let io = io.unwrap();
+
+        peer.ssl.ssl_write(b"before").unwrap();
+        peer.renegotiate();
+        peer.ssl.ssl_write(b"during").unwrap();
+        peer.flush();
+
+        let res = timeout(Millis(5_000), async {
+            let mut data = Vec::new();
+            loop {
+                match io.recv(&BytesCodec).await {
+                    Ok(Some(chunk)) => data.extend_from_slice(&chunk),
+                    Ok(None) => break Ok(data),
+                    Err(err) => break Err((data, err.into_inner().to_string())),
+                }
+            }
+        })
+        .await
+        .unwrap();
+        let (data, err) = res.unwrap_err();
+        assert_eq!(data, b"before");
+        assert!(err.contains("during renegotiation"), "{err}");
     }
 }

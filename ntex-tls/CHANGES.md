@@ -19,7 +19,8 @@
 
 * schannel: enable TLS 1.3 with `SCH_CREDENTIALS` (`SCHANNEL_CRED` before
   Windows 10 1809), process post-handshake messages (session tickets, key updates,
-  renegotiation) instead of failing the connection
+  renegotiation) instead of failing the connection, application data received
+  during a TLS 1.2 renegotiation fails the connection (not supported by Schannel)
 
 * schannel: share the credentials handle between connections made with the
   same `ClientConfig`, so Schannel can resume TLS sessions

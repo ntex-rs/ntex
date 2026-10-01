@@ -128,18 +128,23 @@ impl Context {
         input: Option<&mut BytesMut>,
         output: &mut ntex_bytes::BytePages,
     ) -> io::Result<HandshakeState> {
-        if self.is_server() {
-            // the server waits for the client's messages
-            if input.as_ref().is_none_or(|src| src.is_empty()) {
-                return Ok(HandshakeState::NeedRead);
-            }
+        let len = match input.as_deref() {
+            // a post-handshake exchange must not consume application data
+            // that follows its messages
+            Some(src) if self.sizes.is_some() => handshake_records_len(src),
+            Some(src) => src.len(),
+            None => 0,
+        };
+        // the server waits for the client's messages
+        if self.is_server() && len == 0 {
+            return Ok(HandshakeState::NeedRead);
         }
 
         let mut in_bufs = [EMPTY_BUFFER; 3];
-        if let Some(src) = input.as_ref().filter(|src| !src.is_empty()) {
+        if let Some(src) = input.as_ref().filter(|_| len != 0) {
             in_bufs[0] = sec_buffer(
                 SECBUFFER_TOKEN,
-                buffer_len(src.len())?,
+                buffer_len(len)?,
                 src.as_ptr().cast_mut().cast(),
             );
         }
@@ -181,7 +186,7 @@ impl Context {
         let mut extra = 0;
         if let Some(src) = input {
             extra = extra_len(&in_bufs);
-            consumed = src.len().saturating_sub(extra);
+            consumed = len.saturating_sub(extra);
             if consumed != 0 {
                 self.client_hello(&src[..consumed]);
                 src.advance_to(consumed);
@@ -584,6 +589,7 @@ const ASC_FLAGS: u32 = ASC_REQ_SEQUENCE_DETECT
     | ASC_REQ_STREAM;
 
 const CONTENT_HANDSHAKE: u8 = 22;
+pub(super) const CONTENT_APPLICATION_DATA: u8 = 23;
 const HANDSHAKE_CLIENT_HELLO: u8 = 1;
 /// The largest `ClientHello` searched for the server name
 const MAX_CLIENT_HELLO: usize = 64 * 1024;
@@ -607,6 +613,26 @@ fn client_hello_servername(src: &[u8]) -> Option<String> {
     // points into `src`
     let name = unsafe { slice::from_raw_parts(name, len as usize) };
     std::str::from_utf8(name).ok().map(str::to_owned)
+}
+
+/// Length of the leading records of `src` that are not application data,
+/// including an incomplete one.
+fn handshake_records_len(src: &[u8]) -> usize {
+    let mut rest = src;
+    while let Some(&content_type) = rest.first() {
+        if content_type == CONTENT_APPLICATION_DATA {
+            break;
+        }
+        let Some(&[_, _, _, hi, lo]) = rest.get(..5) else {
+            return src.len();
+        };
+        let len = 5 + usize::from(u16::from_be_bytes([hi, lo]));
+        if rest.len() <= len {
+            return src.len();
+        }
+        rest = &rest[len..];
+    }
+    src.len() - rest.len()
 }
 
 /// Moves a token allocated by `InitializeSecurityContextW` or
