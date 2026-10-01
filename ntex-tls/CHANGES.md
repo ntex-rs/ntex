@@ -11,6 +11,10 @@
 * openssl: join small write buffer pages into one TLS record, e.g. response
   headers and a body up to 16 KiB are sent as one record instead of two
 
+* rustls: write two consecutive write buffer pages into one TLS record when
+  they fit, and move pending records out before each write so they do not
+  shrink the next record
+
 * schannel: add `TlsAcceptor` and `accept()` for server connections, configured
   by `ServerConfig` with ALPN, SNI (`Servername`) and optional client certificates
 

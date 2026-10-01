@@ -786,6 +786,7 @@ mod tests {
         data
     }
 
+    #[allow(clippy::assert_is_empty)]
     fn records(mut data: &[u8]) -> Vec<usize> {
         let mut records = Vec::new();
         while data.len() >= 5 {
@@ -793,7 +794,7 @@ mod tests {
             records.push(len);
             data = &data[5 + len..];
         }
-        assert_eq!(data, []);
+        assert!(data.is_empty());
         records
     }
 
