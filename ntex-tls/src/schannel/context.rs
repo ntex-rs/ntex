@@ -368,30 +368,28 @@ impl Context {
         src: &mut ntex_bytes::BytePages,
         dst: &mut ntex_bytes::BytePages,
     ) -> io::Result<()> {
-        while let Some(mut page) = src.take() {
-            let written = self.encrypt(&page, dst)?;
-            page.advance_to(written);
-            src.prepend(page);
-            if written == 0 {
-                break;
-            }
-        }
+        while self.encrypt(src, dst)? {}
         Ok(())
     }
 
-    /// Encrypts one TLS record from `src` into `dst`.
+    /// Encrypts one TLS record from the leading pages of `src` into `dst`,
+    /// returns `false` if `src` is empty.
     ///
     /// The record is encrypted in place in the free space of the current
     /// destination page, shrinking it to fit. When the page has almost no room
     /// left, the record goes to a separate frame of at most one page.
-    fn encrypt(&mut self, src: &[u8], dst: &mut ntex_bytes::BytePages) -> io::Result<usize> {
+    fn encrypt(
+        &mut self,
+        src: &mut ntex_bytes::BytePages,
+        dst: &mut ntex_bytes::BytePages,
+    ) -> io::Result<bool> {
         // smallest record worth encrypting into the rest of the current page
         const MIN_RECORD: usize = 1024;
 
         let sizes = self.query_stream_sizes()?;
         let len = cmp::min(src.len(), sizes.cbMaximumMessage as usize);
         if len == 0 {
-            return Ok(0);
+            return Ok(false);
         }
         let overhead = (sizes.cbHeader + sizes.cbTrailer) as usize;
 
@@ -401,9 +399,9 @@ impl Context {
         let avail = chunk.len();
         if avail >= overhead + cmp::min(len, MIN_RECORD) {
             let len = cmp::min(len, avail - overhead);
-            let tls_len = self.encrypt_into(&src[..len], chunk.as_mut_ptr(), sizes)?;
+            let tls_len = self.encrypt_into(src, len, chunk.as_mut_ptr(), sizes)?;
             unsafe { dst.advance_mut(tls_len) };
-            return Ok(len);
+            return Ok(true);
         }
 
         let len = cmp::min(
@@ -411,24 +409,37 @@ impl Context {
             dst.page_size().capacity().saturating_sub(overhead).max(1),
         );
         let mut frame = BytesMut::with_capacity(overhead + len);
-        let tls_len = self.encrypt_into(&src[..len], frame.chunk_mut().as_mut_ptr(), sizes)?;
+        let tls_len = self.encrypt_into(src, len, frame.chunk_mut().as_mut_ptr(), sizes)?;
         unsafe { frame.advance_mut(tls_len) };
         dst.append(frame);
-        Ok(len)
+        Ok(true)
     }
 
-    /// Encrypts `src` into a record at `frame`, returns the record length.
+    /// Encrypts the first `len` bytes of `src` into a record at `frame`,
+    /// returns the record length.
     ///
-    /// `frame` must be valid for writes of header, `src.len()` and trailer bytes.
+    /// `frame` must be valid for writes of header, `len` and trailer bytes.
     fn encrypt_into(
         &mut self,
-        src: &[u8],
+        src: &mut ntex_bytes::BytePages,
+        len: usize,
         frame: *mut u8,
         sizes: SecPkgContext_StreamSizes,
     ) -> io::Result<usize> {
         let header_len = sizes.cbHeader as usize;
-        let len = src.len();
-        unsafe { ptr::copy_nonoverlapping(src.as_ptr(), frame.add(header_len), len) };
+        // a record spans pages, a record per page would add a small one for
+        // each page that does not fill a record
+        let mut copied = 0;
+        while copied < len {
+            let mut page = src.take().expect("src holds len bytes");
+            let n = cmp::min(page.len(), len - copied);
+            unsafe {
+                ptr::copy_nonoverlapping(page.as_ptr(), frame.add(header_len + copied), n);
+            }
+            copied += n;
+            page.advance_to(n);
+            src.prepend(page);
+        }
 
         let mut bufs = [
             sec_buffer(SECBUFFER_STREAM_HEADER, sizes.cbHeader, frame.cast()),
@@ -460,16 +471,17 @@ impl Context {
             return Ok(Decrypted::Pending);
         }
 
-        let input_len = src.len();
         // one record at a time, a TLS 1.2 `HelloRequest` followed by more
         // records is not consumed and application data after it cannot be
         // decrypted during the renegotiation
         let record_len = match src.get(..5) {
-            Some(&[_, _, _, hi, lo]) => {
-                cmp::min(5 + usize::from(u16::from_be_bytes([hi, lo])), input_len)
-            }
-            _ => input_len,
+            Some(&[_, _, _, hi, lo]) => 5 + usize::from(u16::from_be_bytes([hi, lo])),
+            _ => return Ok(Decrypted::Pending),
         };
+        if record_len > src.len() {
+            // Schannel would report SEC_E_INCOMPLETE_MESSAGE
+            return Ok(Decrypted::Pending);
+        }
         let mut bufs = [
             sec_buffer(
                 SECBUFFER_DATA,
@@ -1039,6 +1051,54 @@ mod tests {
             &[MAX_RECORD, 2 * MAX_RECORD, 3 * MAX_RECORD],
         );
         assert_eq!(coalesce(&src), (Some(src.len()), src.clone()));
+    }
+
+    /// Client and server contexts after an in-memory handshake.
+    fn established() -> (Context, Context) {
+        let mut server = server_context();
+        let config = ClientConfig::new().danger_accept_invalid_certs(true);
+        let mut client = Context::client("localhost", &config).unwrap();
+        let (mut c2s, mut s2c) = (BytesMut::new(), BytesMut::new());
+        let (mut client_done, mut server_done) = (false, false);
+        while !(client_done && server_done) {
+            let mut out = ntex_bytes::BytePages::default();
+            let state = client.handshake_step(Some(&mut s2c), &mut out).unwrap();
+            client_done |= state == HandshakeState::Done;
+            c2s.extend_from_slice(&out.freeze());
+
+            let mut out = ntex_bytes::BytePages::default();
+            let state = server.handshake_step(Some(&mut c2s), &mut out).unwrap();
+            server_done |= state == HandshakeState::Done;
+            s2c.extend_from_slice(&out.freeze());
+        }
+        (client, server)
+    }
+
+    #[test]
+    fn test_encrypt_records_span_pages() {
+        let (mut client, mut server) = established();
+        let data: Vec<u8> = (0..20_000u32).map(|i| i.to_le_bytes()[0]).collect();
+        let mut src = ntex_bytes::BytePages::default();
+        for chunk in data.chunks(5000) {
+            src.append(ntex_bytes::Bytes::copy_from_slice(chunk));
+        }
+        assert_eq!(src.num_pages(), 4);
+
+        let mut out = ntex_bytes::BytePages::default();
+        client.encrypt_pages(&mut src, &mut out).unwrap();
+        assert!(src.is_empty());
+        let wire = out.freeze();
+        // a full page and the rest
+        assert_eq!(records(&wire).count(), 2);
+
+        // records arrive in pieces
+        let (mut input, mut plain) = (BytesMut::new(), BytesMut::new());
+        for chunk in wire.chunks(1000) {
+            input.extend_from_slice(chunk);
+            while server.decrypt(&mut input, &mut plain).unwrap() == Decrypted::Progress {}
+        }
+        assert!(input.is_empty());
+        assert_eq!(plain, &data[..]);
     }
 
     #[test]
