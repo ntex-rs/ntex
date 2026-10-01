@@ -138,8 +138,10 @@ impl Certificate {
     /// Loads a certificate by its subject name from a system store, for
     /// example `"MY"` (Personal).
     ///
-    /// `subject` matches any part of the subject name, case-insensitively,
-    /// for example `"client.example.com"` or `"CN=client.example.com"`.
+    /// `subject` matches any part of the subject's attribute values joined by
+    /// `", "`, case-insensitively, for example `"client.example.com"`.
+    /// Attribute names are not part of the matched string, `"CN=client.example.com"`
+    /// does not match.
     /// Only currently valid certificates with a private key are considered,
     /// the one that expires last is used.
     ///
