@@ -1,6 +1,6 @@
 # Changes
 
-## [4.1.0] - Unreleased
+## [4.1.0] - 2026-10-01
 
 * io-uring: fix lost submissions when queued operations wrap around the end of
   the pending queue storage, the wrapped part was dropped without being

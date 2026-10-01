@@ -237,8 +237,8 @@ where
         } else {
             ResourceDef::new(self.rdef)
         };
-        if let Some(ref name) = self.name {
-            rdef.name_mut().clone_from(name);
+        if let Some(name) = self.name {
+            rdef.set_name(name);
         }
         config.register_service(rdef, guards, None, self.srv);
     }

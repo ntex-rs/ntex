@@ -66,8 +66,17 @@ impl<T: ResourcePath> Path<T> {
     }
 
     #[inline]
+    /// Consume the path state and return the inner path instance
+    pub fn into_inner(self) -> T {
+        self.resource
+    }
+
+    #[inline]
     /// Path that is not matched yet, e.g. the rest of the path after a prefix
     /// resource matched.
+    ///
+    /// Unlike [`get_ref().path()`](ResourcePath::path), which is the full path,
+    /// it excludes the skipped part of the path.
     pub fn path(&self) -> &str {
         let skip = self.skip as usize;
         let path = self.resource.path();
@@ -122,7 +131,7 @@ impl<T: ResourcePath> Path<T> {
     /// Get matched segment by name without type conversion
     ///
     /// If no segment is named `tail`, the `tail` key returns the unprocessed
-    /// part of the path, see [`unprocessed()`](Self::unprocessed).
+    /// part of the path, see [`path()`](Self::path).
     pub fn get(&self, key: &str) -> Option<&str> {
         for item in &self.segments {
             if key == item.0 {
@@ -136,19 +145,6 @@ impl<T: ResourcePath> Path<T> {
             }
         }
         if key == "tail" { Some(self.path()) } else { None }
-    }
-
-    /// Get unprocessed part of the path, same as [`path()`](Self::path)
-    pub fn unprocessed(&self) -> &str {
-        self.path()
-    }
-
-    /// Get matched segment by name.
-    ///
-    /// Returns an empty string if the segment is not available. This is a
-    /// path segment, not a query string parameter.
-    pub fn query(&self, key: &str) -> &str {
-        self.get(key).unwrap_or_default()
     }
 
     /// Iterator over matched segments as `(name, value)` pairs, in pattern
@@ -196,6 +192,15 @@ impl<'a, T: ResourcePath> Iterator for PathIter<'a, T> {
     }
 }
 
+impl<'a, T: ResourcePath> IntoIterator for &'a Path<T> {
+    type Item = (&'a str, &'a str);
+    type IntoIter = PathIter<'a, T>;
+
+    fn into_iter(self) -> PathIter<'a, T> {
+        self.iter()
+    }
+}
+
 impl<'a, T: ResourcePath> Index<&'a str> for Path<T> {
     type Output = str;
 
@@ -209,7 +214,13 @@ impl<T: ResourcePath> Index<usize> for Path<T> {
     type Output = str;
 
     fn index(&self, idx: usize) -> &str {
-        match self.segments[idx].1 {
+        let Some((_, item)) = self.segments.get(idx) else {
+            panic!(
+                "Segment index {idx} is out of range, path has {} segments",
+                self.segments.len()
+            )
+        };
+        match *item {
             PathItem::Static(s) => s,
             PathItem::Segment(ref s) => s,
             PathItem::IdxSegment(s, e) => &self.resource.path()[(s as usize)..(e as usize)],
@@ -243,12 +254,11 @@ mod tests {
         p.skip(2);
         assert_eq!(p.get("tail").unwrap(), "st");
         assert_eq!(p.get("unknown"), None);
-        assert_eq!(p.query("tail"), "st");
-        assert_eq!(p.query("unknown"), "");
-        assert_eq!(p.unprocessed(), "st");
+        assert_eq!(p.path(), "st");
+        assert_eq!(p.get_ref().path(), "test");
 
         p.reset();
-        assert_eq!(p.unprocessed(), "test");
+        assert_eq!(p.path(), "test");
 
         p.segments.push(("k1", PathItem::IdxSegment(0, 2)));
         assert_eq!(p.get("k1").unwrap(), "te");
@@ -287,5 +297,14 @@ mod tests {
     fn test_path_index_missing() {
         let p = Path::new("/");
         let _ = &p["missing"];
+    }
+
+    #[test]
+    #[should_panic(expected = "Segment index 1 is out of range, path has 1 segments")]
+    fn index_out_of_range() {
+        let mut p = Path::new("/test");
+        p.add_static("st", "static");
+        assert_eq!(&p[0], "static");
+        let _ = &p[1];
     }
 }

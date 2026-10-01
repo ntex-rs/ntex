@@ -1,6 +1,6 @@
 # Changes
 
-## [4.1.0] - Unreleased
+## [4.1.0] - 2026-10-01
 
 * The read buffer cache checks only the most recently released buffer instead of
   scanning the whole cache for one that fits
