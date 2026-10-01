@@ -46,9 +46,7 @@ ntex-macros = { path = "ntex-macros" }
 ntex-util = { path = "ntex-util" }
 
 #ntex-h2 = { path = "../dev/ntex-h2" }
-ntex-io-uring = { git = "https://github.com/fafhrd91/io-uring.git", branch = "ntex-changes" }
 ntex-h2 = { git = "https://github.com/ntex-rs/ntex-h2.git" }
-ntex-polling = { git = "https://github.com/fafhrd91/polling.git", branch = "ntex" }
 
 [workspace.dependencies]
 ntex = "4.0.0-beta.14"
