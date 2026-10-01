@@ -40,6 +40,7 @@ pub(super) enum Decrypted {
     Renegotiate,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 pub(super) struct Context {
     cred: Arc<Credentials>,
     ctxt: SecHandle,
@@ -59,6 +60,10 @@ pub(super) struct Context {
     coalesce: bool,
     /// Protocol negotiated by ALPN
     negotiated_alpn: Option<Vec<u8>>,
+    /// The handshake waits for the peer's messages, Schannel must not be
+    /// called without input, e.g. `DecryptMessage` fails after that during
+    /// a TLS 1.2 renegotiation
+    awaiting_peer: bool,
 }
 
 #[derive(Debug)]
@@ -124,6 +129,7 @@ impl Context {
             hello: None,
             coalesce: false,
             negotiated_alpn: None,
+            awaiting_peer: false,
         }
     }
 
@@ -153,7 +159,7 @@ impl Context {
             None => 0,
         };
         // the server waits for the client's messages
-        if self.is_server() && len == 0 {
+        if len == 0 && (self.is_server() || self.awaiting_peer) {
             return Ok(HandshakeState::NeedRead);
         }
 
@@ -182,6 +188,7 @@ impl Context {
         }
         let in_desc = buffer_desc(&mut in_bufs);
         let (status, has_token) = self.step(&raw const in_desc, output);
+        self.awaiting_peer = status == SEC_I_CONTINUE_NEEDED || status == SEC_E_INCOMPLETE_MESSAGE;
 
         if status == SEC_I_INCOMPLETE_CREDENTIALS && !mem::replace(&mut self.cert_requested, true) {
             // the server asks for a client certificate, the same input
@@ -340,13 +347,7 @@ impl Context {
         let mut token = SCHANNEL_ALERT_TOKEN {
             dwTokenType: SCHANNEL_ALERT,
             dwAlertType: TLS1_ALERT_FATAL,
-            dwAlertNumber: match status {
-                SEC_E_UNTRUSTED_ROOT => TLS1_ALERT_UNKNOWN_CA,
-                SEC_E_CERT_EXPIRED => TLS1_ALERT_CERTIFICATE_EXPIRED,
-                CRYPT_E_REVOKED => TLS1_ALERT_CERTIFICATE_REVOKED,
-                SEC_E_WRONG_PRINCIPAL | SEC_E_CERT_UNKNOWN => TLS1_ALERT_BAD_CERTIFICATE,
-                _ => TLS1_ALERT_HANDSHAKE_FAILURE,
-            },
+            dwAlertNumber: alert_number(status),
         };
         self.control_token(&mut token, "SCHANNEL_ALERT", output)
     }
@@ -499,10 +500,19 @@ impl Context {
         }
 
         let input_len = src.len();
+        // one record at a time, a TLS 1.2 `HelloRequest` followed by more
+        // records is not consumed and application data after it cannot be
+        // decrypted during the renegotiation
+        let record_len = match src.get(..5) {
+            Some(&[_, _, _, hi, lo]) => {
+                cmp::min(5 + usize::from(u16::from_be_bytes([hi, lo])), input_len)
+            }
+            _ => input_len,
+        };
         let mut bufs = [
             sec_buffer(
                 SECBUFFER_DATA,
-                buffer_len(input_len)?,
+                buffer_len(record_len)?,
                 src.as_mut_ptr().cast(),
             ),
             EMPTY_BUFFER,
@@ -515,7 +525,8 @@ impl Context {
             unsafe { DecryptMessage(&raw const self.ctxt, &raw const desc, 0, &raw mut qop) };
 
         match status {
-            SEC_E_OK | SEC_I_RENEGOTIATE => {}
+            SEC_E_OK => {}
+            SEC_I_RENEGOTIATE => self.awaiting_peer = false,
             SEC_E_INCOMPLETE_MESSAGE => return Ok(Decrypted::Pending),
             SEC_I_CONTEXT_EXPIRED => {
                 // peer sent close_notify, data after it is ignored
@@ -530,7 +541,7 @@ impl Context {
             dst.put_slice(data);
         }
         let produced = data.is_some();
-        let consumed = input_len.saturating_sub(extra);
+        let consumed = record_len.saturating_sub(extra);
         if consumed != 0 {
             src.advance_to(consumed);
         }
@@ -618,7 +629,6 @@ const ASC_FLAGS: u32 = ASC_REQ_SEQUENCE_DETECT
 
 const CONTENT_CHANGE_CIPHER_SPEC: u8 = 20;
 const CONTENT_HANDSHAKE: u8 = 22;
-pub(super) const CONTENT_APPLICATION_DATA: u8 = 23;
 const HANDSHAKE_CLIENT_HELLO: u8 = 1;
 /// The largest `ClientHello` searched for the server name
 const MAX_CLIENT_HELLO: usize = 64 * 1024;
@@ -626,6 +636,17 @@ const MAX_CLIENT_HELLO: usize = 64 * 1024;
 const MAX_RECORD: usize = 16 * 1024;
 /// The largest handshake data held back until a message is complete
 const MAX_HELD_HANDSHAKE: usize = 64 * 1024;
+
+/// Alert sent for a failed handshake.
+fn alert_number(status: windows_sys::core::HRESULT) -> u32 {
+    match status {
+        SEC_E_UNTRUSTED_ROOT => TLS1_ALERT_UNKNOWN_CA,
+        SEC_E_CERT_EXPIRED => TLS1_ALERT_CERTIFICATE_EXPIRED,
+        CRYPT_E_REVOKED => TLS1_ALERT_CERTIFICATE_REVOKED,
+        SEC_E_WRONG_PRINCIPAL | SEC_E_CERT_UNKNOWN => TLS1_ALERT_BAD_CERTIFICATE,
+        _ => TLS1_ALERT_HANDSHAKE_FAILURE,
+    }
+}
 
 /// Server name indication of a `ClientHello` record.
 fn client_hello_servername(src: &[u8]) -> Option<String> {
@@ -648,12 +669,12 @@ fn client_hello_servername(src: &[u8]) -> Option<String> {
     std::str::from_utf8(name).ok().map(str::to_owned)
 }
 
-/// Length of the leading records of `src` that are not application data,
+/// Length of the leading handshake and change cipher spec records of `src`,
 /// including an incomplete one.
-fn handshake_records_len(src: &[u8]) -> usize {
+pub(super) fn handshake_records_len(src: &[u8]) -> usize {
     let mut rest = src;
     while let Some(&content_type) = rest.first() {
-        if content_type == CONTENT_APPLICATION_DATA {
+        if content_type != CONTENT_HANDSHAKE && content_type != CONTENT_CHANGE_CIPHER_SPEC {
             break;
         }
         let Some(&[_, _, _, hi, lo]) = rest.get(..5) else {
@@ -807,6 +828,8 @@ fn buffer_len(len: usize) -> io::Result<u32> {
 mod tests {
     use super::*;
 
+    const CONTENT_APPLICATION_DATA: u8 = 23;
+
     #[test]
     fn test_decrypted_parts_by_type() {
         let mut payload = *b"hello";
@@ -860,6 +883,154 @@ mod tests {
         let mut buf = BytesMut::copy_from_slice(src);
         let len = coalesce_handshake_records(&mut buf);
         (len, buf.to_vec())
+    }
+
+    fn server_context() -> Context {
+        let pfx = include_bytes!("../../examples/identity.pfx");
+        let cert = super::super::Certificate::from_pkcs12(pfx, "ntex").unwrap();
+        Context::server(&ServerConfig::new(cert).unwrap())
+    }
+
+    /// `ClientHello` handshake message with a server name extension.
+    fn client_hello_message(name: &str) -> Vec<u8> {
+        let name = name.as_bytes();
+        let len = u16::try_from(name.len()).unwrap();
+        let mut sni = vec![0, 0];
+        sni.extend_from_slice(&(len + 5).to_be_bytes());
+        sni.extend_from_slice(&(len + 3).to_be_bytes());
+        sni.push(0);
+        sni.extend_from_slice(&len.to_be_bytes());
+        sni.extend_from_slice(name);
+
+        let mut body = vec![3, 3];
+        body.extend([7; 32]);
+        // no session id, one cipher suite, null compression
+        body.extend([0, 0, 2, 0xc0, 0x2f, 1, 0]);
+        body.extend_from_slice(&u16::try_from(sni.len()).unwrap().to_be_bytes());
+        body.extend(sni);
+
+        let mut msg = vec![HANDSHAKE_CLIENT_HELLO];
+        msg.extend_from_slice(&u32::try_from(body.len()).unwrap().to_be_bytes()[1..]);
+        msg.extend(body);
+        msg
+    }
+
+    #[test]
+    fn test_client_hello_servername() {
+        let msg = client_hello_message("example.com");
+        for cuts in [&[][..], &[1], &[2], &[3], &[1, 2, 3, 4, 50]] {
+            // one record per call
+            let mut ctx = server_context();
+            let mut start = 0;
+            for &end in cuts.iter().chain(Some(&msg.len())) {
+                assert!(ctx.hello.is_some());
+                assert!(ctx.servername.is_none());
+                ctx.client_hello(&record(CONTENT_HANDSHAKE, &msg[start..end]));
+                start = end;
+            }
+            assert!(ctx.hello.is_none());
+            assert_eq!(ctx.servername.as_deref(), Some("example.com"), "{cuts:?}");
+
+            // all records at once
+            let mut ctx = server_context();
+            ctx.client_hello(&fragments(&msg, cuts));
+            assert!(ctx.hello.is_none());
+            assert_eq!(ctx.servername.as_deref(), Some("example.com"), "{cuts:?}");
+        }
+
+        // the client does not collect a hello
+        let mut ctx = Context::client("localhost", &ClientConfig::new()).unwrap();
+        ctx.client_hello(&record(CONTENT_HANDSHAKE, &msg));
+        assert!(ctx.hello.is_none());
+        assert!(ctx.servername.is_none());
+    }
+
+    #[test]
+    fn test_client_hello_other_message() {
+        let mut msg = client_hello_message("example.com");
+        msg[0] = 2;
+        let mut ctx = server_context();
+        ctx.client_hello(&record(CONTENT_HANDSHAKE, &msg));
+        assert!(ctx.hello.is_none());
+        assert!(ctx.servername.is_none());
+    }
+
+    #[test]
+    fn test_client_hello_skips_other_records() {
+        let msg = client_hello_message("example.com");
+        let mut ctx = server_context();
+
+        let mut records = record(CONTENT_CHANGE_CIPHER_SPEC, &[1]);
+        records.extend(record(CONTENT_HANDSHAKE, &msg));
+        ctx.client_hello(&records);
+        assert_eq!(ctx.hello.as_deref(), Some(&[][..]));
+
+        ctx.client_hello(&record(CONTENT_HANDSHAKE, &msg)[..10]);
+        assert_eq!(ctx.hello.as_deref(), Some(&[][..]));
+
+        ctx.client_hello(&record(CONTENT_HANDSHAKE, &msg));
+        assert!(ctx.hello.is_none());
+        assert_eq!(ctx.servername.as_deref(), Some("example.com"));
+    }
+
+    #[test]
+    fn test_client_hello_too_large() {
+        let msg = message(HANDSHAKE_CLIENT_HELLO, 2 * MAX_CLIENT_HELLO);
+        let mut ctx = server_context();
+        let mut collected = 0;
+        for chunk in msg.chunks(MAX_RECORD) {
+            ctx.client_hello(&record(CONTENT_HANDSHAKE, chunk));
+            collected += chunk.len();
+            assert_eq!(ctx.hello.is_none(), collected > MAX_CLIENT_HELLO);
+        }
+        assert!(ctx.hello.is_none());
+        assert!(ctx.servername.is_none());
+    }
+
+    #[test]
+    fn test_alert_number() {
+        for (status, alert) in [
+            (SEC_E_UNTRUSTED_ROOT, TLS1_ALERT_UNKNOWN_CA),
+            (SEC_E_CERT_EXPIRED, TLS1_ALERT_CERTIFICATE_EXPIRED),
+            (CRYPT_E_REVOKED, TLS1_ALERT_CERTIFICATE_REVOKED),
+            (SEC_E_WRONG_PRINCIPAL, TLS1_ALERT_BAD_CERTIFICATE),
+            (SEC_E_CERT_UNKNOWN, TLS1_ALERT_BAD_CERTIFICATE),
+            (
+                windows_sys::Win32::Foundation::SEC_E_INTERNAL_ERROR,
+                TLS1_ALERT_HANDSHAKE_FAILURE,
+            ),
+        ] {
+            assert_eq!(alert_number(status), alert, "{status:#x}");
+        }
+    }
+
+    #[test]
+    fn test_handshake_records_len() {
+        let hs = record(CONTENT_HANDSHAKE, b"hello");
+        let ccs = record(CONTENT_CHANGE_CIPHER_SPEC, &[1]);
+        let alert = record(21, &[2, 40]);
+        let app = record(CONTENT_APPLICATION_DATA, b"data");
+
+        assert_eq!(handshake_records_len(&[]), 0);
+        assert_eq!(handshake_records_len(&app), 0);
+        assert_eq!(handshake_records_len(&alert), 0);
+        assert_eq!(handshake_records_len(&[&hs[..], &app].concat()), hs.len());
+        assert_eq!(handshake_records_len(&[&hs[..], &alert].concat()), hs.len());
+        assert_eq!(
+            handshake_records_len(&[&ccs[..], &hs, &app].concat()),
+            ccs.len() + hs.len()
+        );
+        assert_eq!(
+            handshake_records_len(&[&hs[..], &app[..3]].concat()),
+            hs.len()
+        );
+
+        // trailing complete, incomplete records and headers
+        assert_eq!(handshake_records_len(&hs), hs.len());
+        assert_eq!(handshake_records_len(&hs[..7]), 7);
+        assert_eq!(handshake_records_len(&hs[..3]), 3);
+        let src = [&hs[..], &ccs[..3]].concat();
+        assert_eq!(handshake_records_len(&src), src.len());
     }
 
     #[test]

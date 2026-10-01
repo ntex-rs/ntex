@@ -584,6 +584,66 @@ mod tests {
         assert!(Certificate::from_pkcs12(b"not a pfx", "ntex").is_err());
     }
 
+    #[cfg(feature = "openssl")]
+    #[test]
+    fn test_from_pkcs12_no_private_key() {
+        let cert =
+            tls_openssl::x509::X509::from_pem(include_bytes!("../../examples/cert.pem")).unwrap();
+        let pfx = tls_openssl::pkcs12::Pkcs12::builder()
+            .cert(&cert)
+            .build2("ntex")
+            .unwrap()
+            .to_der()
+            .unwrap();
+        let err = Certificate::from_pkcs12(&pfx, "ntex").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("private key"), "{err}");
+    }
+
+    #[test]
+    fn test_from_store_missing_store() {
+        let name = "ntex-no-such-store-3f0c";
+        assert!(Certificate::from_store(CertStoreLocation::CurrentUser, name, &[0; 20]).is_err());
+        assert!(
+            Certificate::from_store_by_subject(CertStoreLocation::CurrentUser, name, "CN=ntex")
+                .is_err()
+        );
+        // the store is not created
+        assert!(Store::open(CertStoreLocation::CurrentUser, name).is_err());
+    }
+
+    #[test]
+    fn test_from_store_no_private_key() {
+        use windows_sys::Win32::Security::Cryptography::CERT_SHA1_HASH_PROP_ID;
+
+        // trusted root certificates have no private keys, usually
+        let store = Store::open(CertStoreLocation::CurrentUser, "Root").unwrap();
+        let mut cert = ptr::null();
+        loop {
+            cert = unsafe { CertEnumCertificatesInStore(store.0, cert) };
+            assert!(!cert.is_null(), "no root certificate without a private key");
+            if !has_private_key(cert) {
+                break;
+            }
+        }
+        let mut thumbprint = [0u8; 20];
+        let mut len = 20u32;
+        let ok = unsafe {
+            CertGetCertificateContextProperty(
+                cert,
+                CERT_SHA1_HASH_PROP_ID,
+                thumbprint.as_mut_ptr().cast(),
+                &raw mut len,
+            )
+        };
+        unsafe { CertFreeCertificateContext(cert) };
+        assert!(ok != 0 && len == 20);
+
+        let err = Certificate::from_store(CertStoreLocation::CurrentUser, "Root", &thumbprint)
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
     #[test]
     fn test_from_store_not_found() {
         let err =

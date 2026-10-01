@@ -73,7 +73,7 @@ mod tests {
     use ntex_bytes::Bytes;
     use ntex_io::{testing::IoTest, types::HttpProtocol};
     use ntex_service::{Pipeline, cfg::SharedCfg};
-    use ntex_util::{future::join, time::Millis, time::sleep, time::timeout};
+    use ntex_util::{future::join, future::lazy, time::Millis, time::sleep, time::timeout};
     use tls_rustls::client::danger::{
         HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
     };
@@ -430,6 +430,32 @@ mod tests {
         assert!(format!("{acceptor:?}").contains("TlsAcceptor"));
         let err = Pipeline::new((), acceptor).call(io).await.unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[ntex::test]
+    async fn test_acceptor_waits_for_capacity() {
+        MAX_SSL_ACCEPT_COUNTER.with(|conns| conns.set_capacity(1));
+        let acceptor = Pipeline::new((), TlsAcceptor::new(ServerConfig::new(identity()).unwrap()));
+
+        let (cli, srv) = IoTest::create();
+        let io = Io::new(srv, SharedCfg::new("SRV"));
+        let acceptor2 = acceptor.bind();
+        let hnd = ntex::rt::spawn(async move { acceptor2.call(io).await });
+
+        // wait until the handshake holds the only slot
+        let mut n = 0;
+        while lazy(|cx| acceptor.poll_ready(cx)).await.is_ready() {
+            n += 1;
+            assert!(n < 1000, "handshake did not start");
+            sleep(Millis(1)).await;
+        }
+        assert!(lazy(|cx| acceptor.poll_ready(cx)).await.is_pending());
+
+        // capacity is released by the failed handshake
+        cli.close().await;
+        assert!(hnd.await.unwrap().is_err());
+        assert!(lazy(|cx| acceptor.poll_ready(cx)).await.is_ready());
+        MAX_SSL_ACCEPT_COUNTER.with(|conns| conns.set_capacity(256));
     }
 
     #[derive(Debug)]
@@ -1201,6 +1227,8 @@ mod tests {
         ssl: tls_openssl::ssl::SslStream<Mem>,
         data: Vec<u8>,
         closed_at: Option<usize>,
+        /// Output is kept in the buffer by `flush`
+        hold: bool,
     }
 
     #[cfg(feature = "openssl")]
@@ -1224,10 +1252,14 @@ mod tests {
                 ssl: tls_openssl::ssl::SslStream::new(ssl, Mem::default()).unwrap(),
                 data: Vec::new(),
                 closed_at: None,
+                hold: false,
             }
         }
 
         fn flush(&mut self) {
+            if self.hold {
+                return;
+            }
             let out = std::mem::take(&mut self.ssl.get_mut().wr);
             if !out.is_empty() {
                 self.io.write(out);
@@ -1489,11 +1521,19 @@ mod tests {
     }
 
     /// Data is delivered in order in both directions across TLS 1.2
-    /// renegotiations started by the server, the server does not send
-    /// application data during a renegotiation.
+    /// renegotiations started by the server, with and without the server
+    /// sending application data during a renegotiation.
     #[cfg(feature = "openssl")]
     #[ntex::test]
     async fn test_order_renegotiation() {
+        for during in [false, true] {
+            order_renegotiation(during).await;
+        }
+    }
+
+    #[cfg(feature = "openssl")]
+    async fn order_renegotiation(during: bool) {
+        let case = format!("during {during}");
         let (cli, srv) = IoTest::create();
         cli.remote_buffer_cap(1 << 22);
         srv.remote_buffer_cap(1 << 22);
@@ -1525,11 +1565,11 @@ mod tests {
                     pending = &peer_chunks[next];
                     next += 1;
                 }
-                if !pending.is_empty() && !peer.renegotiate_pending() {
+                if !pending.is_empty() && (during || !peer.renegotiate_pending()) {
                     match peer.ssl.ssl_write(pending) {
                         Ok(n) => pending = &pending[n..],
                         Err(err) if SslPeer::want_read(&err) => {}
-                        Err(err) => panic!("{err}"),
+                        Err(err) => panic!("{case}: {err}"),
                     }
                 }
                 peer.flush();
@@ -1547,23 +1587,21 @@ mod tests {
         .await
         .unwrap_or_else(|()| {
             panic!(
-                "stalled, received {} of {}, peer {} of {}",
+                "{case}: stalled, received {} of {}, peer {} of {}",
                 received.borrow().len(),
                 sent.len(),
                 peer.data.len(),
                 written.len()
             )
         });
-        assert_eq!(renegotiations, 4);
-        assert_same("", "received", &received.borrow(), &sent);
-        assert_same("", "peer received", &peer.data, &written);
+        assert_eq!(renegotiations, 4, "{case}");
+        assert_same(&case, "received", &received.borrow(), &sent);
+        assert_same(&case, "peer received", &peer.data, &written);
     }
 
-    /// Schannel cannot process application data received during a TLS 1.2
-    /// renegotiation, data before it is delivered and the connection fails.
+    /// Connects a schannel client to an OpenSSL TLS 1.2 server.
     #[cfg(feature = "openssl")]
-    #[ntex::test]
-    async fn test_renegotiation_app_data() {
+    async fn openssl_pair() -> (SchannelIo, SslPeer) {
         let (cli, srv) = IoTest::create();
         cli.remote_buffer_cap(1 << 20);
         srv.remote_buffer_cap(1 << 20);
@@ -1575,27 +1613,131 @@ mod tests {
         )
         .await
         .unwrap();
-        let io = io.unwrap();
+        (io.unwrap(), peer)
+    }
 
-        peer.ssl.ssl_write(b"before").unwrap();
-        peer.renegotiate();
-        peer.ssl.ssl_write(b"during").unwrap();
-        peer.flush();
-
-        let res = timeout(Millis(5_000), async {
-            let mut data = Vec::new();
-            loop {
-                match io.recv(&BytesCodec).await {
-                    Ok(Some(chunk)) => data.extend_from_slice(&chunk),
-                    Ok(None) => break Ok(data),
-                    Err(err) => break Err((data, err.into_inner().to_string())),
-                }
+    /// Receives `expected`, then completes the renegotiation and exchanges
+    /// data in both directions.
+    #[cfg(feature = "openssl")]
+    async fn renegotiation_completes(
+        io: &SchannelIo,
+        peer: &mut SslPeer,
+        expected: &[u8],
+        case: &str,
+    ) {
+        let mut data = Vec::new();
+        timeout(Millis(5_000), async {
+            while data.len() < expected.len() {
+                data.extend_from_slice(&io.recv(&BytesCodec).await.unwrap().unwrap());
             }
         })
         .await
-        .unwrap();
-        let (data, err) = res.unwrap_err();
-        assert_eq!(data, b"before");
-        assert!(err.contains("during renegotiation"), "{err}");
+        .unwrap_or_else(|()| panic!("{case}: stalled, received {data:?}"));
+        assert_eq!(data, expected, "{case}");
+
+        // writes are held until the renegotiation completes
+        io.encode(Bytes::from_static(b"ping"), &BytesCodec).unwrap();
+        peer.hold = false;
+        peer.flush();
+        timeout(Millis(5_000), async {
+            while peer.renegotiate_pending() || peer.data.len() < 4 {
+                assert!(peer.recv().await, "{case}: closed");
+                peer.process();
+            }
+        })
+        .await
+        .unwrap_or_else(|()| panic!("{case}: renegotiation stalled"));
+        assert_eq!(peer.data, b"ping", "{case}");
+
+        peer.ssl.ssl_write(b"after").unwrap();
+        peer.flush();
+        let after = timeout(Millis(5_000), io.recv(&BytesCodec)).await;
+        assert_eq!(after.unwrap().unwrap().unwrap(), "after", "{case}");
+    }
+
+    /// Application data the peer sends after a TLS 1.2 `HelloRequest` is
+    /// delivered in order and the renegotiation completes.
+    #[cfg(feature = "openssl")]
+    #[ntex::test]
+    async fn test_renegotiation_app_data() {
+        // the peer's output as written, all at once and byte by byte
+        for chunk in [None, Some(usize::MAX), Some(1)] {
+            let (io, mut peer) = openssl_pair().await;
+            peer.hold = chunk.is_some();
+            peer.ssl.ssl_write(b"before").unwrap();
+            peer.renegotiate();
+            peer.ssl.ssl_write(b"during").unwrap();
+            peer.flush();
+            if let Some(chunk) = chunk {
+                let out = std::mem::take(&mut peer.ssl.get_mut().wr);
+                for piece in out.chunks(chunk) {
+                    peer.io.write(piece);
+                    ntex_util::task::yield_to().await;
+                }
+            }
+            renegotiation_completes(&io, &mut peer, b"beforeduring", &format!("{chunk:?}")).await;
+        }
+    }
+
+    /// Application data read together with the server's handshake flight
+    /// of a TLS 1.2 renegotiation.
+    #[cfg(feature = "openssl")]
+    #[ntex::test]
+    async fn test_renegotiation_app_data_with_flight() {
+        let (io, mut peer) = openssl_pair().await;
+        peer.ssl.ssl_write(b"before").unwrap();
+        peer.renegotiate();
+
+        // the ClientHello
+        assert!(timeout(Millis(5_000), peer.recv()).await.unwrap());
+        peer.hold = true;
+        peer.ssl.ssl_write(b"during").unwrap();
+        peer.process();
+        assert!(peer.renegotiate_pending());
+        peer.hold = false;
+        peer.flush();
+        renegotiation_completes(&io, &mut peer, b"beforeduring", "flight").await;
+    }
+
+    /// The peer closes the connection during a TLS 1.2 renegotiation.
+    #[cfg(feature = "openssl")]
+    #[ntex::test]
+    async fn test_renegotiation_peer_close_notify() {
+        for (data, split) in [(false, false), (true, false), (false, true), (true, true)] {
+            let case = format!("data {data} split {split}");
+            let (io, mut peer) = openssl_pair().await;
+            peer.hold = true;
+            peer.ssl.ssl_write(b"before").unwrap();
+            peer.renegotiate();
+            if data {
+                peer.ssl.ssl_write(b"during").unwrap();
+            }
+            peer.hold = false;
+            if split {
+                // the ClientHello is sent before close_notify arrives
+                peer.flush();
+                assert!(timeout(Millis(5_000), peer.recv()).await.unwrap());
+            }
+            peer.close_notify();
+
+            let res = timeout(Millis(5_000), async {
+                let mut received = Vec::new();
+                loop {
+                    match io.recv(&BytesCodec).await {
+                        Ok(Some(chunk)) => received.extend_from_slice(&chunk),
+                        Ok(None) => break Ok(received),
+                        Err(err) => break Err((received, err.into_inner().to_string())),
+                    }
+                }
+            })
+            .await
+            .unwrap_or_else(|()| panic!("{case}: stalled"));
+            let expected: &[u8] = if data { b"beforeduring" } else { b"before" };
+            assert_eq!(res.unwrap(), expected, "{case}");
+            timeout(Millis(5_000), io.shutdown())
+                .await
+                .unwrap_or_else(|()| panic!("{case}: shutdown does not complete"))
+                .unwrap();
+        }
     }
 }

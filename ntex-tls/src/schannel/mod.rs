@@ -437,11 +437,13 @@ impl Schannel {
     /// Drives the handshake with buffered input, returns `true` once it is done.
     fn handshake(&mut self, rb: &FilterBuf<'_>) -> io::Result<bool> {
         let renegotiating = self.state == State::Renegotiating;
+        if self.peer_closed {
+            // the peer closed the connection during a post-handshake exchange
+            rb.with_read_src(|src| src.as_mut().map(ntex_bytes::BytesMut::clear));
+            return Ok(false);
+        }
         loop {
-            if renegotiating && !self.decrypt_before_handshake(rb)? {
-                return Ok(false);
-            }
-            let input = rb.with_read_src(|src| src.as_ref().map_or(0, ntex_bytes::BytesMut::len));
+            let input = Self::input_len(rb);
             let state = rb.with_write_buffers(|_, dst| {
                 let len = dst.len();
                 rb.with_read_src(|src| self.ctx.handshake_step(src.as_mut(), dst))
@@ -458,8 +460,18 @@ impl Schannel {
             })?;
             match state {
                 HandshakeState::Done => break,
-                // application data follows the consumed messages
-                HandshakeState::NeedRead if renegotiating && Self::app_data_next(rb, input) => {}
+                HandshakeState::NeedRead if renegotiating => {
+                    // application data and alerts may precede the peer's next message
+                    if self.decrypt_during_handshake(rb)? {
+                        self.peer_closed = true;
+                        rb.io().close();
+                        return Ok(false);
+                    }
+                    let rest = Self::input_len(rb);
+                    if rest == 0 || rest == input {
+                        return Ok(false);
+                    }
+                }
                 HandshakeState::NeedRead => return Ok(false),
                 HandshakeState::Continue => {}
             }
@@ -472,49 +484,33 @@ impl Schannel {
         Ok(true)
     }
 
-    /// Decrypts application data the peer sent before its messages of a
-    /// post-handshake exchange.
+    /// Decrypts the records the peer sent during a post-handshake exchange
+    /// up to its next handshake message, returns `true` on `close_notify`.
     ///
-    /// Schannel cannot process application data received during a TLS 1.2
-    /// renegotiation, the connection fails instead.
-    ///
-    /// Returns `false` if an incomplete application data record is next.
-    fn decrypt_before_handshake(&mut self, rb: &FilterBuf<'_>) -> io::Result<bool> {
+    /// During a TLS 1.2 renegotiation Schannel decrypts records only after
+    /// the `ClientHello` has been generated.
+    fn decrypt_during_handshake(&mut self, rb: &FilterBuf<'_>) -> io::Result<bool> {
         rb.with_read_buffers(|src, dst| {
             let Some(src) = src else {
-                return Ok(true);
+                return Ok(false);
             };
-            while src.first() == Some(&context::CONTENT_APPLICATION_DATA) {
+            while !src.is_empty() && context::handshake_records_len(src) == 0 {
                 let res = self.ctx.decrypt(src, dst).map_err(|err| {
-                    io::Error::new(
-                        err.kind(),
-                        format!("application data received during renegotiation: {err}"),
-                    )
+                    io::Error::new(err.kind(), format!("during renegotiation: {err}"))
                 })?;
                 match res {
                     Decrypted::Progress => {}
-                    Decrypted::Pending => return Ok(false),
                     // the record is a handshake message now
-                    Decrypted::Renegotiate => break,
-                    Decrypted::Closed => {
-                        return Err(io::Error::new(
-                            io::ErrorKind::UnexpectedEof,
-                            "peer closed the connection during renegotiation",
-                        ));
-                    }
+                    Decrypted::Pending | Decrypted::Renegotiate => break,
+                    Decrypted::Closed => return Ok(true),
                 }
             }
-            Ok(true)
+            Ok(false)
         })
     }
 
-    /// Checks if input was consumed and an application data record is next.
-    fn app_data_next(rb: &FilterBuf<'_>, input: usize) -> bool {
-        rb.with_read_src(|src| {
-            src.as_ref().is_some_and(|src| {
-                src.len() < input && src.first() == Some(&context::CONTENT_APPLICATION_DATA)
-            })
-        })
+    fn input_len(rb: &FilterBuf<'_>) -> usize {
+        rb.with_read_src(|src| src.as_ref().map_or(0, ntex_bytes::BytesMut::len))
     }
 
     fn encrypt_writes(&mut self, buf: &FilterBuf<'_>) -> io::Result<()> {
