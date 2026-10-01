@@ -2,6 +2,19 @@
 
 ## [4.1.0] - 2026-10-01
 
+* polling: use level-triggered interest where supported and change it only
+  when it differs, instead of re-arming oneshot interest after every event
+
+* polling: queue interest changes and apply them with the next wait, avoids a
+  syscall per change on kqueue
+
+* polling: detach the stream on `EPOLLHUP`/`EPOLLERR`
+
+* polling: use the `ntex-polling` fork of `polling`
+
+* polling: wake the reactor with a `Notifier`, the poller is no longer shared
+  between threads
+
 * io-uring: publish consumed completions before waiting, the kernel counted
   them as pending and the wait returned immediately, doubling loop iterations
 
