@@ -50,15 +50,19 @@ impl ReactorApi {
     {
         unsafe {
             let changes = &mut *self.inner.changes.get();
-            let sq = self.inner.ring.submission();
-            if !changes.is_empty() || sq.is_full() {
-                changes.push_back(mem::MaybeUninit::uninit());
-                let entry = changes.back_mut().unwrap();
-                ptr::write_bytes(entry.as_mut_ptr(), 0, 1);
-                f(entry.assume_init_mut());
+            // the run loop syncs the queue before submitting
+            let f = if changes.is_empty() {
+                match self.inner.ring.submission_unsynced().try_push_inline(f) {
+                    Ok(()) => return,
+                    Err(f) => f,
+                }
             } else {
-                sq.push_inline(f).expect("Queue size is checked");
-            }
+                f
+            };
+            changes.push_back(mem::MaybeUninit::uninit());
+            let entry = changes.back_mut().unwrap();
+            ptr::write_bytes(entry.as_mut_ptr(), 0, 1);
+            f(entry.assume_init_mut());
         }
     }
 
@@ -303,7 +307,7 @@ impl Reactor {
 
         if !cqueue::CompletionQueue::<'_, _>::is_empty(cq) {
             let mut handlers = self.handlers.take().unwrap();
-            for entry in cq {
+            for entry in &mut *cq {
                 let user_data = entry.user_data();
                 match user_data {
                     Self::CANCEL => {}
@@ -350,6 +354,10 @@ impl Reactor {
                     }
                 }
             }
+            // publish the consumed entries, the kernel would count them as
+            // pending completions and return from the next wait immediately
+            cq.sync();
+
             for h in handlers.iter_mut() {
                 h.tick();
             }
@@ -422,6 +430,8 @@ impl ntex_rt::Driver for Reactor {
         let mut cq = unsafe { ring.completion_shared() };
         let submitter = ring.submitter();
         let result = loop {
+            // tasks woken until the runtime is polled do not need to notify
+            rt.awake();
             self.poll_completions(&mut cq, sq);
 
             let more_tasks = match rt.poll() {

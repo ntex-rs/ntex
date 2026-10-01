@@ -96,6 +96,17 @@ impl Runtime {
         JoinHandle::new(task)
     }
 
+    /// Marks the runtime as awake.
+    ///
+    /// Drivers call this after returning from a blocking wait, before handling
+    /// events that wake tasks. Tasks scheduled from the runtime thread do not
+    /// notify the driver until [`poll`](Self::poll) finds no more tasks to run,
+    /// the driver must call `poll` before blocking again.
+    #[inline]
+    pub fn awake(&self) {
+        self.queue.idle.set(false);
+    }
+
     /// Polls the runtime and runs scheduled tasks.
     pub fn poll(&self) -> PollResult {
         if self.stop.get() {
@@ -232,16 +243,13 @@ impl RunnableQueue {
     fn run(&self) -> bool {
         // a running task may schedule into `local_queue`, so it must not be
         // borrowed across `task.run()`
-        let local_queue = {
-            for _ in 0..self.event_interval {
-                if let Some(task) = self.pop_local() {
-                    task.run();
-                } else {
-                    break;
-                }
+        for _ in 0..self.event_interval {
+            if let Some(task) = self.pop_local() {
+                task.run();
+            } else {
+                break;
             }
-            unsafe { !(*self.local_queue.get()).is_empty() }
-        };
+        }
 
         let sync_queue_fixed = match self.sync_fixed_queue.try_dequeue() {
             Ok(buf) => {
@@ -265,6 +273,8 @@ impl RunnableQueue {
             !self.sync_queue.is_empty()
         };
 
+        // tasks from other threads may schedule local tasks
+        let local_queue = unsafe { !(*self.local_queue.get()).is_empty() };
         let more_tasks = local_queue || sync_queue_fixed || sync_queue;
         if !more_tasks {
             self.idle.set(true);
@@ -344,6 +354,71 @@ mod tests {
                 w.wake();
             }
         }
+    }
+
+    #[derive(Debug, Default)]
+    struct CountNotify(Arc<std::sync::atomic::AtomicUsize>);
+
+    impl Notify for CountNotify {
+        fn notify(&self) -> io::Result<()> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn awake_skips_local_notify() {
+        use std::sync::atomic::Ordering;
+
+        let cnt = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let rt = Runtime::new(Box::new(CountNotify(cnt.clone())));
+
+        // the driver is awake and polls the runtime before blocking
+        rt.awake();
+        rt.spawn(async {}).detach();
+        assert_eq!(cnt.load(Ordering::Relaxed), 0);
+        assert_eq!(rt.poll(), PollResult::Pending);
+
+        // the runtime is idle, the driver may block
+        rt.spawn(async {}).detach();
+        rt.spawn(async {}).detach();
+        assert_eq!(cnt.load(Ordering::Relaxed), 1);
+        assert_eq!(rt.poll(), PollResult::Pending);
+    }
+
+    #[test]
+    fn local_task_woken_by_remote_task() {
+        use std::sync::{Mutex, atomic::AtomicBool, atomic::Ordering};
+
+        let rt = Runtime::new(Box::new(NoopNotify));
+        let waker = Arc::new(Mutex::new(None::<Waker>));
+        let done = Rc::new(AtomicBool::new(false));
+        let (waker2, done2) = (waker.clone(), done.clone());
+        rt.spawn(poll_fn(move |cx| {
+            if waker2.lock().unwrap().replace(cx.waker().clone()).is_some() {
+                done2.store(true, Ordering::Relaxed);
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        }))
+        .detach();
+        assert_eq!(rt.poll(), PollResult::Pending);
+
+        let hnd = rt.handle();
+        std::thread::spawn(move || {
+            hnd.spawn(async move {
+                waker.lock().unwrap().clone().unwrap().wake();
+            })
+            .detach();
+        })
+        .join()
+        .unwrap();
+
+        // the remote task schedules the local task, it must be polled again
+        assert_eq!(rt.poll(), PollResult::PollAgain);
+        assert_eq!(rt.poll(), PollResult::Pending);
+        assert!(done.load(Ordering::Relaxed));
     }
 
     #[test]

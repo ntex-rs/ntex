@@ -291,6 +291,8 @@ impl ntex_rt::Driver for Reactor {
             };
             events.clear();
             self.poll.wait(&mut events, timeout)?;
+            // tasks woken until the runtime is polled do not need to notify
+            rt.awake();
 
             let mut handlers = self.handlers.take().unwrap();
             for event in events.iter() {

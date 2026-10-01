@@ -2,6 +2,15 @@
 
 ## [4.1.0] - 2026-10-01
 
+* io-uring: publish consumed completions before waiting, the kernel counted
+  them as pending and the wait returned immediately, doubling loop iterations
+
+* Do not notify the driver for tasks woken while handling driver events,
+  avoids a wakeup syscall and an extra loop iteration per woken task
+
+* io-uring: push operations without synchronizing the submission queue for
+  every operation
+
 * io-uring: fix lost submissions when queued operations wrap around the end of
   the pending queue storage, the wrapped part was dropped without being
   submitted

@@ -44,6 +44,7 @@ ntex-service = { path = "ntex-service" }
 ntex-tls = { path = "ntex-tls" }
 ntex-macros = { path = "ntex-macros" }
 ntex-util = { path = "ntex-util" }
+ntex-io-uring = { path = "../ntex-io-uring" }
 
 #ntex-h2 = { path = "../dev/ntex-h2" }
 ntex-h2 = { git = "https://github.com/ntex-rs/ntex-h2.git" }
@@ -60,13 +61,13 @@ ntex-io = "4.1.0"
 ntex-macros = "4.0.0"
 ntex-net = "4.1.0"
 ntex-router = "2.0.0"
-ntex-rt = "4.0.0"
+ntex-rt = "4.1.0"
 ntex-server = "4.2.0"
 ntex-service = "5.1.0"
 ntex-tls = "4.1.0"
 ntex-util = "4.2.0"
 
-ntex-io-uring = "0.7.120"
+ntex-io-uring = "0.8.7150"
 ntex-httparse = "2.2.0"
 
 async-channel = "2"
