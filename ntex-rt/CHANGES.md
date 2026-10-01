@@ -1,6 +1,6 @@
 # Changes
 
-## [4.0.0] - unreleased
+## [4.0.0] - 2026-10-01
 
 * Cache the thread id for task scheduling, `thread::current()` cloned the thread handle on every wake
 
