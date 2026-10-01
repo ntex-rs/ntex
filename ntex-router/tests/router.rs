@@ -1,4 +1,3 @@
-#![allow(deprecated)]
 use std::cell::Cell;
 
 use ntex_router::{Path, ResourceDef, Router};
@@ -19,15 +18,6 @@ fn rejected(router: &Router<usize>, p: &str) -> usize {
 }
 
 #[test]
-fn deprecated_builders() {
-    let mut builder = Router::<usize>::build();
-    builder.path("/a", 1);
-    let router = builder.finish();
-    assert_eq!(find(&router, "/a"), Some(1));
-    assert_eq!(find(&router, "/b"), None);
-}
-
-#[test]
 fn empty_router() {
     let router = Router::<usize>::builder().build();
     assert_eq!(find(&router, "/"), None);
@@ -38,20 +28,96 @@ fn empty_router() {
 #[test]
 fn rdef_and_names() {
     let mut rdef = ResourceDef::new("/user/{id}");
-    rdef.name_mut().push_str("user");
+    rdef.set_name("user");
     assert_eq!(rdef.name(), "user");
 
     let mut builder = Router::<usize>::builder();
-    let entry = builder.rdef(rdef, 1);
-    entry.0.set_id(7);
-    assert_eq!(entry.0.name(), "user");
+    let entry = builder.resource(rdef, 1);
+    entry.set_id(7);
+    assert_eq!(entry.resource().name(), "user");
+    assert_eq!(entry.resource().id(), 7);
     let router = builder.build();
 
     let mut path = Path::new("/user/10");
     let (v, id) = router.recognize(&mut path).unwrap();
     assert_eq!(*v, 1);
     assert_eq!(format!("{id:?}"), "ResourceId(7)");
+    assert_eq!(id.get(), 7);
     assert_eq!(&path["id"], "10");
+}
+
+#[test]
+fn resource_def_accessors() {
+    let mut rdef = ResourceDef::new("/user/{id}");
+    rdef.set_name("user");
+    assert_eq!(rdef.name(), "user");
+    assert!(!rdef.is_prefix());
+    assert!(ResourceDef::prefix("/user").is_prefix());
+    assert!(ResourceDef::root_prefix("user").is_prefix());
+}
+
+#[test]
+fn router_entry() {
+    let mut builder = Router::<usize, &str>::builder();
+    let entry = builder.path("/a", 1);
+    assert_eq!(*entry.value(), 1);
+    assert_eq!(entry.check_value(), None);
+    *entry.value_mut() = 2;
+    entry
+        .set_name("a")
+        .set_id(3)
+        .set_check_value("check")
+        .resource_mut()
+        .set_name("b");
+    assert_eq!(entry.resource().name(), "b");
+    assert_eq!(entry.check_value(), Some(&"check"));
+    entry.set_check_value(None);
+    assert_eq!(entry.check_value(), None);
+    let router = builder.build();
+
+    let (v, id) = router.recognize(&mut Path::new("/a")).unwrap();
+    assert_eq!((*v, id.get()), (2, 3));
+}
+
+#[test]
+fn path_into_inner_and_iter() {
+    let mut builder = Router::<usize>::builder();
+    builder.path("/{a}/{b}", 1);
+    let router = builder.build();
+
+    let mut path = Path::new("/x/y".to_string());
+    router.recognize(&mut path).unwrap();
+    let mut items = Vec::new();
+    for (k, v) in &path {
+        items.push((k, v));
+    }
+    assert_eq!(items, [("a", "x"), ("b", "y")]);
+    assert_eq!(path.into_inner(), "/x/y");
+}
+
+#[test]
+fn resource_def_from() {
+    let path = "/a".to_string();
+    assert_eq!(ResourceDef::from(&path).patterns(), ["/a"]);
+    assert_eq!(ResourceDef::from(vec!["/a", "/b"]).patterns(), ["/a", "/b"]);
+    assert_eq!(ResourceDef::from(["/a", "/b"]).patterns(), ["/a", "/b"]);
+    assert_eq!(
+        ResourceDef::from(["/a".to_string()]),
+        ResourceDef::new("/a")
+    );
+}
+
+#[test]
+fn builder_prefix_patterns() {
+    let mut builder = Router::<usize>::builder();
+    let entry = builder.prefix(["/a", "/b"], 1);
+    assert!(entry.resource().is_prefix());
+    assert_eq!(entry.resource().patterns(), ["/a", "/b"]);
+    let router = builder.build();
+
+    let mut path = Path::new("/b/rest");
+    assert_eq!(*router.recognize(&mut path).unwrap().0, 1);
+    assert_eq!(path.path(), "/rest");
 }
 
 #[test]
@@ -67,7 +133,7 @@ fn checked_rejects_all() {
     builder.prefix("/pre", 7);
     builder.prefix("/pre2/", 8);
     builder.path(["/multi/a", "/multi/b/"], 10);
-    builder.rdef(ResourceDef::prefix(["/mpre/a", "/mpre/b/"]), 11);
+    builder.resource(ResourceDef::prefix(["/mpre/a", "/mpre/b/"]), 11);
     builder.path("/re/{id:[0-9]+}", 12);
     builder.path("/{a}/{b}", 13);
     builder.prefix("", 9);
@@ -101,8 +167,8 @@ fn checked_rejects_all() {
 #[test]
 fn checked_selects_resource() {
     let mut builder = Router::<usize, &str>::builder();
-    builder.path("/user/{id}", 1).2 = Some("admin");
-    builder.path("/user/{id}", 2).2 = Some("user");
+    builder.path("/user/{id}", 1).set_check_value("admin");
+    builder.path("/user/{id}", 2).set_check_value(Some("user"));
     builder.path("/user/{id}", 3);
     let mut router = builder.build();
 
@@ -115,7 +181,7 @@ fn checked_selects_resource() {
 
     let mut path = Path::new("/user/1");
     let (v, _) = router
-        .recognize_mut_checked(&mut path, |_, u| u.is_none())
+        .recognize_checked_mut(&mut path, |_, u| u.is_none())
         .unwrap();
     *v = 30;
     // matched segments are stored after a successful check
@@ -129,7 +195,7 @@ fn checked_selects_resource() {
     let mut path = Path::new("/user/1");
     assert!(
         router
-            .recognize_mut_checked(&mut path, |_, _| false)
+            .recognize_checked_mut(&mut path, |_, _| false)
             .is_none()
     );
 }
@@ -151,7 +217,7 @@ fn checked_insensitive() {
     let calls = Cell::new(0);
     let mut path = Path::new("/NAME/x");
     let (v, _) = router
-        .recognize_mut_checked(&mut path, |_, _| {
+        .recognize_checked_mut(&mut path, |_, _| {
             calls.set(calls.get() + 1);
             calls.get() == 2
         })
@@ -194,7 +260,7 @@ fn checked_tail() {
 #[test]
 fn multi_pattern_prefix() {
     let mut builder = Router::<usize>::builder();
-    builder.rdef(ResourceDef::prefix(["/a", "/b/", "/c/{id}"]), 1);
+    builder.resource(ResourceDef::prefix(["/a", "/b/", "/c/{id}"]), 1);
     let router = builder.build();
 
     for (p, rest) in [

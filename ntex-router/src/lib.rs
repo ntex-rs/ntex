@@ -3,7 +3,6 @@
     clippy::must_use_candidate,
     clippy::missing_panics_doc,
     clippy::missing_errors_doc,
-    clippy::iter_without_into_iter,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
     clippy::cast_possible_truncation,
@@ -70,11 +69,7 @@ mod tree;
 pub use self::de::PathDeserializer;
 pub use self::path::{Path, PathIter};
 pub use self::resource::ResourceDef;
-pub use self::router::{ResourceId, Router, RouterBuilder};
-
-#[doc(hidden)]
-#[derive(Debug)]
-pub struct ResourceInfo;
+pub use self::router::{ResourceId, Router, RouterBuilder, RouterEntry};
 
 /// A value that can be matched by a [`Router`].
 ///

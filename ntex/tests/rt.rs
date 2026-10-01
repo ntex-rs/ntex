@@ -1,4 +1,3 @@
-#![allow(deprecated)]
 use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 use std::{sync::mpsc, thread};
 
@@ -20,15 +19,11 @@ async fn test_join_handle() {
     let (tx, rx) = oneshot::channel();
 
     thread::spawn(move || {
-        let runner = crate::System::build()
-            .stop_on_panic(true)
-            .build(ntex::rt::DefaultRuntime);
+        let runner = crate::System::build().build(ntex::rt::DefaultRuntime);
         let result = runner.block_on(f).unwrap();
         assert_eq!(result, "test");
 
-        let runner = crate::System::build()
-            .stop_on_panic(true)
-            .build(ntex::rt::DefaultRuntime);
+        let runner = crate::System::build().build(ntex::rt::DefaultRuntime);
         let result = runner.block_on(hnd.spawn(async { "test2" })).unwrap();
         let _ = tx.send(result);
     });
@@ -44,9 +39,7 @@ fn test_async() {
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
-        let runner = crate::System::build()
-            .stop_on_panic(true)
-            .build(ntex::rt::DefaultRuntime);
+        let runner = crate::System::build().build(ntex::rt::DefaultRuntime);
 
         let _ = runner.run(move || {
             tx.send(System::current()).unwrap();
