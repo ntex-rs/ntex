@@ -1,6 +1,28 @@
 # Changes
 
-## [Unreleased]
+## [4.0.0-beta.14] - 2026-10-01
+
+* Migrate to `ntex-service` 5 and its typed service state model. Service
+  factories and middleware now receive state instead of a configuration
+  parameter, `Service::poll()` is removed, and services use asynchronous
+  `ready()` and `shutdown()` lifecycle methods
+
+* Refactor `Pipeline` and middleware APIs around state binding and lifecycle
+  management
+
+* Redesign web application state. Add the `State` trait, `AppState<T>`,
+  `WebAppConfig`, request-local state, and support for constructing web
+  applications with server-created state
+
+* Refactor web error handling around state-aware `WebResponseError` and
+  `WebError` types. Error rendering no longer receives an `HttpRequest`, and
+  service initialization errors use `Failure` and `IntoFailure`
+
+* Redesign the HTTP client, including its builder, configuration, connectors,
+  connection pool, request sender, and HTTP/2 integration
+
+* Refactor HTTP server service construction, control handling, shutdown, and
+  application-state creation
 
 * `web::ResourceMap::url_for()` on a nested scope map resolves names of parent and sibling
   scopes, parent names were prefixed with the nested scope path and sibling names were not found
@@ -476,30 +498,6 @@
 * Keep the HTTP/1 keep-alive timer running for a partially received request
   head when request-head timing is disabled, previously the first byte of the
   next request stopped it and the connection could stay open forever
-
-## [4.0.0] - 2026-09-18
-
-* Migrate to `ntex-service` 5 and its typed service state model. Service
-  factories and middleware now receive state instead of a configuration
-  parameter, `Service::poll()` is removed, and services use asynchronous
-  `ready()` and `shutdown()` lifecycle methods
-
-* Refactor `Pipeline` and middleware APIs around state binding and lifecycle
-  management
-
-* Redesign web application state. Add the `State` trait, `AppState<T>`,
-  `WebAppConfig`, request-local state, and support for constructing web
-  applications with server-created state
-
-* Refactor web error handling around state-aware `WebResponseError` and
-  `WebError` types. Error rendering no longer receives an `HttpRequest`, and
-  service initialization errors use `Failure` and `IntoFailure`
-
-* Redesign the HTTP client, including its builder, configuration, connectors,
-  connection pool, request sender, and HTTP/2 integration
-
-* Refactor HTTP server service construction, control handling, shutdown, and
-  application-state creation
 
 * Stop test servers when all server handles are dropped
 

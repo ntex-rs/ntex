@@ -106,10 +106,7 @@ fn test_block_on() {
     }
 
     thread::spawn(move || {
-        let runner = crate::System::build()
-            .stop_on_panic(true)
-            .ping_interval(25)
-            .build(Custom);
+        let runner = crate::System::build().ping_interval(25).build(Custom);
 
         let _ = runner.run(move || {
             tx.send(System::current()).unwrap();
@@ -371,7 +368,6 @@ fn test_log_backtrace() {
     fn run(tx: oneshot::Sender<()>) {
         thread::spawn(move || {
             crate::System::build()
-                .stop_on_panic(true)
                 .signals(true)
                 .ping_interval(1000)
                 .ping_threshold(500)
