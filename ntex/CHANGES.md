@@ -20,6 +20,12 @@
 * Check for buffered input with `IoRef::read_dst_size()` in the http/1 server and client,
   the check no longer changes the read state
 
+* http/1: A response with a declared length is complete once its last byte is encoded, the
+  body is not polled for its end. A response without body bytes, for example to a `HEAD`
+  request, does not poll its body
+
+* http/1: Response output is flushed only during write back-pressure
+
 ## [4.0.0-beta.14] - 2026-10-01
 
 * Migrate to `ntex-service` 5 and its typed service state model. Service
