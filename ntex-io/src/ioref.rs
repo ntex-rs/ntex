@@ -372,6 +372,17 @@ impl IoRef {
         })
     }
 
+    #[inline]
+    /// Returns the size of the application-facing read destination.
+    ///
+    /// Unlike [`with_read_dst`](Self::with_read_dst) this does not change the
+    /// read state, read readiness, read back-pressure and an installed read
+    /// pause are left in place, and no buffer is allocated. Returns `0` when
+    /// called from inside [`with_read_dst`](Self::with_read_dst).
+    pub fn read_dst_size(&self) -> usize {
+        self.0.buffer.read_dst_size()
+    }
+
     /// Provides mutable access to the application-facing write source.
     ///
     /// This holds the bytes the application produces; see
