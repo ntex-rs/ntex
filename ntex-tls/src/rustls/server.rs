@@ -1,16 +1,16 @@
 //! TLS server filter backed by rustls
-use std::{any, cell::UnsafeCell, io, sync::Arc, task::Poll};
+use std::{any, cell::UnsafeCell, fmt, io, sync::Arc, task::Poll};
 
 use ntex_io::{Filter, FilterBuf, FilterLayer, Io, Layer};
 use ntex_util::time::Millis;
-use tls_rustls::{ServerConfig, ServerConnection};
+use tls_rustls::{ServerConfig, server::UnbufferedServerConnection};
 
-use crate::{Servername, rustls::Stream};
+use super::stream::{ServerSession, Stream};
+use crate::Servername;
 
-#[derive(Debug)]
 /// An implementation of SSL streams
 pub struct TlsServerFilter {
-    session: UnsafeCell<ServerConnection>,
+    inner: UnsafeCell<Stream<ServerSession>>,
 }
 
 impl FilterLayer for TlsServerFilter {
@@ -29,11 +29,11 @@ impl FilterLayer for TlsServerFilter {
     }
 
     fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
-        self.stream(|s| s.process_read_buf(buf))
+        self.stream(|s| s.process(buf))
     }
 
     fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
-        self.stream(|s| s.process_write_buf(buf))
+        self.stream(|s| s.process(buf))
     }
 
     fn shutdown(&self, buf: &FilterBuf<'_>) -> io::Result<Poll<()>> {
@@ -50,29 +50,28 @@ impl TlsServerFilter {
         log::trace!("{}: Initiate server connection", io.tag());
 
         super::with_timeout(timeout, async {
-            let mut session = ServerConnection::new(cfg).map_err(io::Error::other)?;
-            session.set_buffer_limit(Some(io.cfg().write_page_size().capacity()));
+            let session = UnbufferedServerConnection::new(cfg).map_err(io::Error::other)?;
             let io = io.add_filter(TlsServerFilter {
-                session: UnsafeCell::new(session),
+                inner: UnsafeCell::new(Stream::new(ServerSession::new(session))),
             });
 
-            super::handshake(&io, || io.filter().state()).await?;
+            super::handshake(&io, || io.filter().stream(|s| s.is_handshaking())).await?;
             log::trace!("{}: TLS Handshake successed", io.tag());
             Ok(io)
         })
         .await
     }
 
-    fn state(&self) -> (bool, bool) {
-        let s = unsafe { &*self.session.get() };
-        (s.wants_write(), s.is_handshaking())
-    }
-
     fn stream<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&mut Stream<'_, ServerConnection>) -> R,
+        F: FnOnce(&mut Stream<ServerSession>) -> R,
     {
-        let mut s = Stream::new(unsafe { &mut *self.session.get() });
-        f(&mut s)
+        f(unsafe { &mut *self.inner.get() })
+    }
+}
+
+impl fmt::Debug for TlsServerFilter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TlsServerFilter").finish_non_exhaustive()
     }
 }

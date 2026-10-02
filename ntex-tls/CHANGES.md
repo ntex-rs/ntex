@@ -1,5 +1,10 @@
 # Changes
 
+## [4.1.1] - 2026-10-02
+
+* rustls: use the unbuffered rustls api, records are decrypted in place in the
+  read buffer and encrypted directly into the write buffer pages
+
 ## [4.1.0] - 2026-10-01
 
 * openssl: do not drop application data when a write reports `WANT_READ`
