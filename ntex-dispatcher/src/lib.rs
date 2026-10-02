@@ -278,6 +278,37 @@ where
                                         return Poll::Pending;
                                     }
                                 }
+                                Err(RecvError::Timeout) if inner.timers.active != Timer::Write => {
+                                    // input received together with a read timer wins over
+                                    // its expiry, the buffered input is decoded first
+                                    match inner.shared.io.decode_item(&inner.shared.codec) {
+                                        Ok(decoded) => {
+                                            let timer = inner.timers.active;
+                                            inner.update_timer(&decoded);
+                                            if let Some(el) = decoded.item {
+                                                (DispatchItem::Item(el), true)
+                                            } else {
+                                                // a timer armed for the received input has
+                                                // not expired
+                                                if inner.timers.active == timer
+                                                    && let Err(ctl) = inner.handle_timeout()
+                                                {
+                                                    inner.st = inner.stop(ctl);
+                                                }
+                                                continue;
+                                            }
+                                        }
+                                        Err(err) => {
+                                            log::trace!(
+                                                "{}: Decoder error, stopping dispatcher: {:?}",
+                                                inner.shared.io.tag(),
+                                                err
+                                            );
+                                            inner.st = inner.stop(Reason::Decoder(err));
+                                            continue;
+                                        }
+                                    }
+                                }
                                 Err(RecvError::Timeout) => {
                                     if let Err(ctl) = inner.handle_timeout() {
                                         inner.st = inner.stop(ctl);
@@ -2149,10 +2180,21 @@ mod tests {
         delay: Millis,
         data: Arc<Mutex<RefCell<Vec<usize>>>>,
     ) -> Dispatcher<BCodec, ()> {
-        let io = Io::new(
+        keepalive_io_dispatcher(keepalive_io(server), delay, data)
+    }
+
+    fn keepalive_io(server: IoTest) -> Io {
+        Io::new(
             server,
             SharedCfg::new("TEST").add(IoConfig::new().set_keepalive_timeout(Seconds(1))),
-        );
+        )
+    }
+
+    fn keepalive_io_dispatcher(
+        io: Io,
+        delay: Millis,
+        data: Arc<Mutex<RefCell<Vec<usize>>>>,
+    ) -> Dispatcher<BCodec, ()> {
         Dispatcher::new(
             io,
             BCodec(8),
@@ -2229,6 +2271,59 @@ mod tests {
         wait_closed(&client, Millis(3000)).await;
         assert!(client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
+    }
+
+    /// A frame received together with the keep-alive expiry is dispatched.
+    #[ntex::test]
+    async fn frame_received_with_keepalive_expiry_is_dispatched() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let data = Arc::new(Mutex::new(RefCell::new(Vec::new())));
+        let io = keepalive_io(server);
+        let ioref = io.get_ref();
+        let disp = keepalive_io_dispatcher(io, Millis(0), data.clone());
+        spawn(async move {
+            let _ = disp.await;
+        });
+
+        // keep-alive is armed for the idle connection
+        sleep(Millis(100)).await;
+        ioref.with_read_dst(|buf| buf.extend_from_slice(b"12345678"));
+        ioref.notify_timeout();
+        sleep(Millis(100)).await;
+        assert!(!client.is_closed());
+        assert_eq!(&data.lock().unwrap().borrow()[..], &[0]);
+
+        let buf = client.read().await.unwrap();
+        assert_eq!(buf, Bytes::from_static(b"12345678"));
+    }
+
+    /// A partial frame received together with the keep-alive expiry replaces
+    /// the expired keep-alive timer.
+    #[ntex::test]
+    async fn partial_frame_received_with_keepalive_expiry() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let data = Arc::new(Mutex::new(RefCell::new(Vec::new())));
+        let io = keepalive_io(server);
+        let ioref = io.get_ref();
+        let disp = keepalive_io_dispatcher(io, Millis(0), data.clone());
+        spawn(async move {
+            let _ = disp.await;
+        });
+
+        sleep(Millis(100)).await;
+        ioref.with_read_dst(|buf| buf.extend_from_slice(b"1234"));
+        ioref.notify_timeout();
+        sleep(Millis(100)).await;
+        assert!(!client.is_closed());
+        assert!(data.lock().unwrap().borrow().is_empty());
+
+        client.write("5678");
+        let buf = client.read().await.unwrap();
+        assert_eq!(buf, Bytes::from_static(b"12345678"));
     }
 
     /// Service that answers every frame with `size` bytes and records events.

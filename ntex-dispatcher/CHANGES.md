@@ -1,5 +1,10 @@
 # Changes
 
+## [Unreleased]
+
+* Decode input received together with a read timer expiry before handling the timeout, the
+  frame is dispatched and frame read progress is counted
+
 ## [4.1.0] - 2026-10-01
 
 * Add `Dispatcher::max_inflight()`, limits concurrent service calls
