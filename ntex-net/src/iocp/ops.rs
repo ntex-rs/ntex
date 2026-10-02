@@ -33,7 +33,7 @@ unsafe impl OverlappedOp for WriteOperation {
 
 pub(crate) const RD_OP: u32 = 1;
 pub(crate) const WR_OP: u32 = 2;
-const MAX_WRITE_BUFS: usize = 16;
+const MAX_WRITE_BUFS: usize = 32;
 
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug)]
@@ -339,7 +339,7 @@ impl WriteOperation {
                 #[cfg(feature = "trace")]
                 log::trace!("{}: Wrt({}) size:{:?}", self.ctx.tag(), self.io, wrt.len());
 
-                let mut lpbufs = [mem::MaybeUninit::<WSABUF>::uninit(); 16];
+                let mut lpbufs = [mem::MaybeUninit::<WSABUF>::uninit(); MAX_WRITE_BUFS];
                 let mut num = 0;
                 while let Some(page) = wrt.take() {
                     self.pages[num] = Some(page);
