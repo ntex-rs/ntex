@@ -443,7 +443,7 @@ where
                 // next chunk
                 if !self.codec.cfg.half_close
                     && self.io.is_read_eof()
-                    && self.io.with_read_dst(|buf| buf.is_empty())
+                    && self.io.read_dst_size() == 0
                 {
                     return Poll::Ready(self.ctl_peer_gone(None));
                 }

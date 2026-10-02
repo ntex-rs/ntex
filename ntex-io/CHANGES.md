@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* Add `IoRef::read_dst_size()`, returns the read destination size without changing the read
+  state
+
 * `Io::poll_recv_decode()` reports a dispatcher timeout and write back-pressure before
   decoding, the decode result was dropped with the error. Neither is reported once the
   connection is closing, buffered input is decoded before `PeerGone`
