@@ -1,16 +1,14 @@
 //! An implementation of SSL streams for ntex backed by OpenSSL
-use std::future::Future;
 use std::{any, borrow::ToOwned, cell::UnsafeCell, cmp, io, ptr, task::Poll};
 
 use foreign_types_shared::ForeignType;
 use ntex_bytes::{BufMut, BytePage, BytePages, BytesMut};
 use ntex_io::{Filter, FilterBuf, FilterLayer, Io, Layer, types};
-use ntex_util::time::{Millis, timeout_checked};
 use openssl_sys as ffi;
 use tls_openssl::ssl::{self, NameType, SslStream};
 use tls_openssl::x509::X509;
 
-use crate::{PskIdentity, Servername};
+use crate::{PeerCertChainDer, PeerCertDer, PskIdentity, Servername};
 
 mod connect;
 pub use self::connect::SslConnector;
@@ -137,45 +135,44 @@ impl SslFilter {
 
 impl FilterLayer for SslFilter {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
-        const H2: &[u8] = b"h2";
-
         if id == any::TypeId::of::<types::HttpProtocol>() {
-            let h2 = self
-                .ssl()
-                .selected_alpn_protocol()
-                .is_some_and(|protos| protos.windows(2).any(|w| w == H2));
-            let proto = if h2 {
-                types::HttpProtocol::Http2
-            } else {
-                types::HttpProtocol::Http1
-            };
-            Some(Box::new(proto))
+            let alpn = self.ssl().selected_alpn_protocol();
+            Some(Box::new(crate::utils::http_protocol(alpn)))
         } else if id == any::TypeId::of::<PeerCert>() {
-            if let Some(cert) = self.ssl().peer_certificate() {
-                Some(Box::new(PeerCert(cert)))
-            } else {
-                None
-            }
+            Some(Box::new(PeerCert(self.ssl().peer_certificate()?)))
         } else if id == any::TypeId::of::<PeerCertChain>() {
-            if let Some(cert_chain) = self.ssl().peer_cert_chain() {
-                Some(Box::new(PeerCertChain(
-                    cert_chain.iter().map(ToOwned::to_owned).collect(),
-                )))
-            } else {
+            let chain = self.ssl().peer_cert_chain()?;
+            Some(Box::new(PeerCertChain(
+                chain.iter().map(ToOwned::to_owned).collect(),
+            )))
+        } else if id == any::TypeId::of::<PeerCertDer>() {
+            let cert = self.ssl().peer_certificate()?;
+            Some(Box::new(PeerCertDer(cert.to_der().ok()?)))
+        } else if id == any::TypeId::of::<PeerCertChainDer>() {
+            let ssl = self.ssl();
+            let mut chain = Vec::new();
+            for cert in ssl.peer_cert_chain().into_iter().flatten() {
+                chain.push(cert.to_der().ok()?);
+            }
+            // the chain does not include the client's certificate on the
+            // server side
+            if let Some(cert) = ssl.peer_certificate() {
+                let cert = cert.to_der().ok()?;
+                if chain.first() != Some(&cert) {
+                    chain.insert(0, cert);
+                }
+            }
+            if chain.is_empty() {
                 None
+            } else {
+                Some(Box::new(PeerCertChainDer(chain)))
             }
         } else if id == any::TypeId::of::<Servername>() {
-            if let Some(name) = self.ssl().servername(NameType::HOST_NAME) {
-                Some(Box::new(Servername(name.to_string())))
-            } else {
-                None
-            }
+            let name = self.ssl().servername(NameType::HOST_NAME)?;
+            Some(Box::new(Servername(name.to_string())))
         } else if id == any::TypeId::of::<PskIdentity>() {
-            if let Some(psk_id) = self.ssl().psk_identity() {
-                Some(Box::new(PskIdentity(psk_id.to_vec())))
-            } else {
-                None
-            }
+            let psk_id = self.ssl().psk_identity()?;
+            Some(Box::new(PskIdentity(psk_id.to_vec())))
         } else {
             None
         }
@@ -356,27 +353,15 @@ async fn handshake<F: Filter>(
     }
 }
 
-/// Run handshake with timeout, zero timeout disables it
-async fn with_timeout<R>(
-    timeout: Millis,
-    fut: impl Future<Output = io::Result<R>>,
-) -> io::Result<R> {
-    timeout_checked(timeout, fut).await.unwrap_or_else(|()| {
-        Err(io::Error::new(
-            io::ErrorKind::TimedOut,
-            "SSL Handshake timeout",
-        ))
-    })
-}
-
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use ntex::codec::BytesCodec;
     use ntex_bytes::Bytes;
     use ntex_io::{IoConfig, testing::IoTest};
     use ntex_service::cfg::SharedCfg;
-    use ntex_util::future::join;
-    use tls_openssl::{pkey::PKey, ssl::SslMethod, ssl::SslVerifyMode};
+    use ntex_util::{future::join, time::Millis};
+    use tls_openssl::pkey::{PKey, Private};
+    use tls_openssl::ssl::{SslMethod, SslVerifyMode};
 
     use super::*;
 
@@ -406,6 +391,44 @@ mod tests {
             connector.set_alpn_protos(b"\x02h2").unwrap();
         }
         connector.build()
+    }
+
+    /// Leaf, intermediate and root certificates with their keys.
+    pub(crate) fn cert_chain() -> [(X509, PKey<Private>); 3] {
+        use tls_openssl::x509::{X509Builder, X509NameBuilder, extension::BasicConstraints};
+        use tls_openssl::{asn1::Asn1Time, bn::BigNum, ec, hash::MessageDigest, nid::Nid};
+
+        let issue = |cn: &str, serial: u32, ca: bool, issuer: Option<&(X509, PKey<Private>)>| {
+            let group = ec::EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
+            let key = PKey::from_ec_key(ec::EcKey::generate(&group).unwrap()).unwrap();
+            let mut name = X509NameBuilder::new().unwrap();
+            name.append_entry_by_text("CN", cn).unwrap();
+            let name = name.build();
+            let mut builder = X509Builder::new().unwrap();
+            builder.set_version(2).unwrap();
+            let serial = BigNum::from_u32(serial).unwrap().to_asn1_integer().unwrap();
+            builder.set_serial_number(&serial).unwrap();
+            builder.set_subject_name(&name).unwrap();
+            builder.set_pubkey(&key).unwrap();
+            builder
+                .set_not_before(&Asn1Time::days_from_now(0).unwrap())
+                .unwrap();
+            builder
+                .set_not_after(&Asn1Time::days_from_now(1).unwrap())
+                .unwrap();
+            if ca {
+                let ca = BasicConstraints::new().critical().ca().build().unwrap();
+                builder.append_extension(ca).unwrap();
+            }
+            let (issuer, signer) = issuer.map_or((&*name, &key), |(c, k)| (c.subject_name(), k));
+            builder.set_issuer_name(issuer).unwrap();
+            builder.sign(signer, MessageDigest::sha256()).unwrap();
+            (builder.build(), key)
+        };
+        let root = issue("ntex root", 1, true, None);
+        let intermediate = issue("ntex intermediate", 2, true, Some(&root));
+        let leaf = issue("ntex leaf", 3, false, Some(&intermediate));
+        [leaf, intermediate, root]
     }
 
     fn pair() -> (IoTest, IoTest) {
@@ -441,6 +464,51 @@ mod tests {
         )
         .await;
         (client.unwrap(), server.unwrap())
+    }
+
+    /// The chain starts with the peer's certificate on both sides.
+    #[ntex::test]
+    async fn peer_cert_der() {
+        let [leaf, intermediate, _] = cert_chain();
+        let der = [&leaf.0, &intermediate.0].map(|c| c.to_der().unwrap());
+
+        let mut acceptor = ssl::SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
+        acceptor.set_private_key(&leaf.1).unwrap();
+        acceptor.set_certificate(&leaf.0).unwrap();
+        acceptor
+            .add_extra_chain_cert(intermediate.0.clone())
+            .unwrap();
+        acceptor.set_verify_callback(SslVerifyMode::PEER, |_, _| true);
+        let acceptor = acceptor.build();
+
+        let mut connector = ssl::SslConnector::builder(SslMethod::tls()).unwrap();
+        connector.set_verify(SslVerifyMode::NONE);
+        connector.set_private_key(&leaf.1).unwrap();
+        connector.set_certificate(&leaf.0).unwrap();
+        connector.add_extra_chain_cert(intermediate.0).unwrap();
+        let ssl = connector
+            .build()
+            .configure()
+            .unwrap()
+            .into_ssl("localhost")
+            .unwrap();
+
+        let (client, server) = pair();
+        let (client, server) = join(
+            connect(Io::new(client, SharedCfg::new("CLI")), ssl),
+            handshake(
+                Io::new(server, SharedCfg::new("SRV")),
+                ssl::Ssl::new(acceptor.context()).unwrap(),
+                true,
+            ),
+        )
+        .await;
+        for io in [client.unwrap(), server.unwrap()] {
+            let cert = io.query::<PeerCertDer>();
+            assert_eq!(cert.as_ref().map(|c| &c.0), Some(&der[0]));
+            let chain = io.query::<PeerCertChainDer>();
+            assert_eq!(chain.as_ref().map(|c| &c.0[..]), Some(&der[..]));
+        }
     }
 
     #[ntex::test]
@@ -489,6 +557,8 @@ mod tests {
         // no client auth
         assert!(server.query::<PeerCert>().as_ref().is_none());
         assert!(server.query::<PeerCertChain>().as_ref().is_none());
+        assert!(server.query::<PeerCertDer>().as_ref().is_none());
+        assert!(server.query::<PeerCertChainDer>().as_ref().is_none());
         assert!(server.query::<u32>().as_ref().is_none());
 
         // larger than the read buffer

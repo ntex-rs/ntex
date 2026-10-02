@@ -44,28 +44,15 @@ impl<S> SslConnector<S> {
         cfg: &SharedCfg,
     ) -> Result<Io<Layer<SslFilter, F>>, Error<ConnectError>> {
         let cfg = cfg.get::<TlsConfig>();
-        log::trace!("{}: SSL Handshake start for: {host:?} {io:?}", cfg.tag());
-
-        let result = async {
+        crate::utils::connect(&cfg, host, async {
             let ssl = self
                 .openssl
                 .configure()
                 .and_then(|config| config.into_ssl(host))
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-            super::with_timeout(cfg.handshake_timeout(), super::handshake(io, ssl, false)).await
-        }
-        .await;
-
-        match result {
-            Ok(io) => {
-                log::trace!("{}: SSL Handshake success: {host:?}", cfg.tag());
-                Ok(io)
-            }
-            Err(e) => {
-                log::trace!("{}: SSL Handshake error: {e:?}", cfg.tag());
-                Err(Error::from(ConnectError::from(e)).with_service(cfg.service()))
-            }
-        }
+            super::handshake(io, ssl, false).await
+        })
+        .await
     }
 }
 
@@ -81,7 +68,7 @@ where
         req: Connect<A>,
         ctx: Ctx<'_, Self, SharedCfg>,
     ) -> Result<Self::Res, Self::Error> {
-        let host = crate::server_name(req.host()).to_string();
+        let host = crate::utils::server_name(req.host()).to_string();
         let io = ctx.call(&self.svc, req).await?;
         self.connect(io, &host, ctx.st()).await
     }

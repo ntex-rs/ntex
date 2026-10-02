@@ -1,10 +1,7 @@
-use std::io;
-
 use ntex_error::Error;
 use ntex_io::{Io, Layer};
 use ntex_net::connect::{Address, Connect, ConnectError, Connector};
 use ntex_service::{Ctx, IntoService, Service, cfg::SharedCfg};
-use ntex_util::time::timeout_checked;
 
 use super::{ClientConfig, SchannelFilter, connect as connect_io};
 use crate::TlsConfig;
@@ -63,39 +60,17 @@ where
         ctx: Ctx<'_, Self, SharedCfg>,
     ) -> Result<Self::Res, Self::Error> {
         let cfg = ctx.st().get::<TlsConfig>();
-        let host = crate::server_name(message.host()).to_string();
+        let host = crate::utils::server_name(message.host()).to_string();
 
         let io = ctx.call(&self.svc, message).await?;
-        let tag = io.tag();
-        log::trace!("{tag}: TLS Handshake start for: {host:?}");
-
-        let res = timeout_checked(
-            cfg.handshake_timeout(),
-            connect_io(io, &host, self.config.clone()),
-        )
-        .await
-        .unwrap_or_else(|()| {
-            Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "TLS Handshake timeout",
-            ))
-        });
-        match res {
-            Ok(io) => {
-                log::trace!("{tag}: TLS Handshake success: {host:?}");
-                Ok(io)
-            }
-            Err(e) => {
-                log::trace!("{tag}: TLS Handshake error: {e:?}");
-                Err(ConnectError::from(e).into())
-            }
-        }
+        let fut = connect_io(io, &host, self.config.clone());
+        crate::utils::connect(&cfg, &host, fut).await
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, rc::Rc};
+    use std::{cell::RefCell, io, rc::Rc};
 
     use ntex_io::{testing::IoTest, types::HttpProtocol};
     use ntex_service::{Pipeline, fn_service};

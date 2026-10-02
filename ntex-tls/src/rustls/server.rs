@@ -16,15 +16,12 @@ pub struct TlsServerFilter {
 impl FilterLayer for TlsServerFilter {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         self.stream(|s| {
-            s.query(id).or_else(|| {
-                if id == any::TypeId::of::<Servername>() {
-                    s.session
-                        .server_name()
-                        .map(|name| Box::new(Servername(name.to_string())) as Box<dyn any::Any>)
-                } else {
-                    None
-                }
-            })
+            if id == any::TypeId::of::<Servername>() {
+                let name = s.session.server_name()?;
+                Some(Box::new(Servername(name.to_string())) as Box<dyn any::Any>)
+            } else {
+                s.query(id)
+            }
         })
     }
 
@@ -49,23 +46,22 @@ impl TlsServerFilter {
     ) -> Result<Io<Layer<TlsServerFilter, F>>, io::Error> {
         log::trace!("{}: Initiate server connection", io.tag());
 
-        super::with_timeout(timeout, async {
+        crate::utils::with_timeout(timeout, async {
             let mut session = ServerConnection::new(cfg).map_err(io::Error::other)?;
             session.set_buffer_limit(Some(io.cfg().write_page_size().capacity()));
             let io = io.add_filter(TlsServerFilter {
                 session: UnsafeCell::new(session),
             });
 
-            super::handshake(&io, || io.filter().state()).await?;
+            crate::utils::handshake(&io, || Ok(io.filter().is_handshaking())).await?;
             log::trace!("{}: TLS Handshake successed", io.tag());
             Ok(io)
         })
         .await
     }
 
-    fn state(&self) -> (bool, bool) {
-        let s = unsafe { &*self.session.get() };
-        (s.wants_write(), s.is_handshaking())
+    fn is_handshaking(&self) -> bool {
+        unsafe { &*self.session.get() }.is_handshaking()
     }
 
     fn stream<F, R>(&self, f: F) -> R

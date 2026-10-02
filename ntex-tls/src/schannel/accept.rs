@@ -2,7 +2,7 @@ use std::{fmt, io};
 
 use ntex_io::{Filter, Io, Layer};
 use ntex_service::{Ctx, Service, cfg::Cfg, cfg::Configuration};
-use ntex_util::{services::Counter, time::timeout_checked};
+use ntex_util::services::Counter;
 
 use super::{SchannelFilter, ServerConfig, accept as accept_io};
 use crate::{MAX_SSL_ACCEPT_COUNTER, TlsConfig};
@@ -48,14 +48,7 @@ impl<F: Filter, St> Service<St, Io<F>> for TlsAcceptor {
         let cfg: Cfg<TlsConfig> = io.cfg().ctx().get();
 
         log::trace!("{}: Accepting tls connection", io.tag());
-        timeout_checked(cfg.handshake_timeout(), accept_io(io, &self.config))
-            .await
-            .unwrap_or_else(|()| {
-                Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "TLS Handshake timeout",
-                ))
-            })
+        crate::utils::with_timeout(cfg.handshake_timeout(), accept_io(io, &self.config)).await
     }
 }
 
@@ -81,8 +74,8 @@ mod tests {
     use tls_rustls::{DigitallySignedStruct, SignatureScheme};
 
     use super::*;
-    use crate::Servername;
     use crate::schannel::{Certificate, ClientConfig, PeerCert, connect};
+    use crate::{PeerCertChainDer, PeerCertDer, Servername};
 
     const PFX: &[u8] = include_bytes!("../../examples/identity.pfx");
 
@@ -140,6 +133,15 @@ mod tests {
         assert!(server.query::<PeerCert>().as_ref().is_none());
         let server_cert = client.query::<PeerCert>().as_ref().map(|c| c.0.clone());
         assert_eq!(server_cert.as_deref(), Some(identity().der()));
+        let der = client.query::<PeerCertDer>().as_ref().map(|c| c.0.clone());
+        assert_eq!(der.as_deref(), Some(identity().der()));
+        let chain = client
+            .query::<PeerCertChainDer>()
+            .as_ref()
+            .map(|c| c.0.clone());
+        assert_eq!(chain, Some(vec![identity().der().to_vec()]));
+        assert!(server.query::<PeerCertDer>().as_ref().is_none());
+        assert!(server.query::<PeerCertChainDer>().as_ref().is_none());
 
         // larger than a TLS record
         let data = Bytes::from(vec![b'a'; 256 * 1024]);
@@ -228,6 +230,11 @@ mod tests {
         let (client, server) = connected(&config, client_cfg, "localhost").await;
         let peer = server.query::<PeerCert>().as_ref().map(|c| c.0.clone());
         assert_eq!(peer.as_deref(), Some(cert.der()));
+        let chain = server
+            .query::<PeerCertChainDer>()
+            .as_ref()
+            .map(|c| c.0.clone());
+        assert_eq!(chain, Some(vec![cert.der().to_vec()]));
         client
             .send(Bytes::from_static(b"hello"), &BytesCodec)
             .await
@@ -237,6 +244,7 @@ mod tests {
         // the certificate is optional
         let (client, server) = connected(&config, client_config(), "localhost").await;
         assert!(server.query::<PeerCert>().as_ref().is_none());
+        assert!(server.query::<PeerCertChainDer>().as_ref().is_none());
         client
             .send(Bytes::from_static(b"hello"), &BytesCodec)
             .await
@@ -248,6 +256,80 @@ mod tests {
         let client_cfg = client_config().set_client_cert(cert);
         let (_client, server) = connected(&config, client_cfg, "localhost").await;
         assert!(server.query::<PeerCert>().as_ref().is_none());
+    }
+
+    /// The peer's chain starts with its certificate followed by the issuers.
+    #[cfg(feature = "openssl")]
+    #[ntex::test]
+    async fn test_peer_cert_chain() {
+        use ntex_service::Pipeline;
+        use tls_openssl::ssl::{SslAcceptor, SslConnector, SslMethod, SslVerifyMode};
+
+        let [leaf, intermediate, root] = crate::openssl::tests::cert_chain();
+        let der = [&leaf, &intermediate, &root].map(|c| c.0.to_der().unwrap());
+
+        // the server sends its issuers out of order
+        let mut acceptor = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
+        acceptor.set_private_key(&leaf.1).unwrap();
+        acceptor.set_certificate(&leaf.0).unwrap();
+        acceptor.add_extra_chain_cert(root.0.clone()).unwrap();
+        acceptor
+            .add_extra_chain_cert(intermediate.0.clone())
+            .unwrap();
+        let acceptor = Pipeline::new((), crate::openssl::SslAcceptor::from(acceptor.build()));
+        let (cli, srv) = IoTest::create();
+        cli.remote_buffer_cap(1 << 20);
+        srv.remote_buffer_cap(1 << 20);
+        let (client, server) = join(
+            connect(
+                Io::new(cli, SharedCfg::new("CLI")),
+                "localhost",
+                client_config(),
+            ),
+            acceptor.call(Io::new(srv, SharedCfg::new("SRV"))),
+        )
+        .await;
+        let (client, _server) = (client.unwrap(), server.unwrap());
+
+        let cert = client.query::<PeerCertDer>().as_ref().map(|c| c.0.clone());
+        assert_eq!(cert.as_ref(), Some(&der[0]));
+        let chain = client
+            .query::<PeerCertChainDer>()
+            .as_ref()
+            .map(|c| c.0.clone());
+        assert_eq!(chain.as_deref(), Some(&der[..]));
+
+        // the client sends its issuer
+        let config = ServerConfig::new(identity())
+            .unwrap()
+            .request_client_cert(true);
+        let mut connector = SslConnector::builder(SslMethod::tls()).unwrap();
+        connector.set_verify(SslVerifyMode::NONE);
+        connector.set_private_key(&leaf.1).unwrap();
+        connector.set_certificate(&leaf.0).unwrap();
+        connector.add_extra_chain_cert(intermediate.0).unwrap();
+        let ssl = connector
+            .build()
+            .configure()
+            .unwrap()
+            .into_ssl("localhost")
+            .unwrap();
+        let (cli, srv) = IoTest::create();
+        cli.remote_buffer_cap(1 << 20);
+        srv.remote_buffer_cap(1 << 20);
+        let (client, server) = join(
+            crate::openssl::connect(Io::new(cli, SharedCfg::new("CLI")), ssl),
+            accept_io(Io::new(srv, SharedCfg::new("SRV")), &config),
+        )
+        .await;
+        let (_client, server) = (client.unwrap(), server.unwrap());
+        let cert = server.query::<PeerCertDer>().as_ref().map(|c| c.0.clone());
+        assert_eq!(cert.as_ref(), Some(&der[0]));
+        let chain = server
+            .query::<PeerCertChainDer>()
+            .as_ref()
+            .map(|c| c.0.clone());
+        assert_eq!(chain.as_deref(), Some(&der[..2]));
     }
 
     #[ntex::test]
