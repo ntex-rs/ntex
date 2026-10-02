@@ -1,5 +1,13 @@
 # Changes
 
+## [Unreleased]
+
+* http/1: Request heads are not decoded during write back-pressure, request payload is
+  still read
+
+* http/1: Fix headers read rate undercounting bytes consumed by a partial request head
+  decode
+
 ## [4.0.0-beta.14] - 2026-10-01
 
 * Migrate to `ntex-service` 5 and its typed service state model. Service

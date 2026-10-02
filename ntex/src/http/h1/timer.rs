@@ -182,15 +182,18 @@ impl Timers {
         }
     }
 
-    /// Records the application read buffer length before a request-head
-    /// decode attempt, counting bytes received since the previous attempt.
-    pub(super) fn headers_buffered(&mut self, buffered: u32) {
+    /// Records a request-head decode attempt, counting bytes received since
+    /// the previous attempt.
+    ///
+    /// `buffered` is the application read buffer length before the attempt
+    /// and `remains` the length after it.
+    pub(super) fn headers_decoded(&mut self, buffered: u32, remains: u32) {
         if self.active == Timer::Headers {
             let p = &mut self.progress;
             p.consumed = p
                 .consumed
                 .saturating_add(buffered.saturating_sub(p.remains));
-            p.remains = buffered;
+            p.remains = remains;
         }
     }
 
@@ -361,6 +364,33 @@ mod tests {
         timers.stop_write(&io);
         assert_eq!(timers.active, Timer::PayloadPaused);
         assert!(!io.timer_handle().is_set());
+    }
+
+    /// Bytes consumed by a request-head decode attempt are not counted
+    /// again, and do not hide input received before the next attempt.
+    #[crate::rt_test]
+    async fn test_headers_progress_follows_decoded_input() {
+        let (_client, server) = IoTest::create();
+        let io = Io::from(server);
+        let io = io.get_ref();
+        let rate = Some(FrameReadRate {
+            rate: 1,
+            timeout: Seconds(2),
+            max_timeout: Seconds(10),
+        });
+        let mut timers = Timers::new(&io, None);
+
+        // 5 bytes of a partial head are buffered
+        timers.start_headers(&io, rate, 5, 5);
+        assert_eq!(timers.active, Timer::Headers);
+
+        // 7 bytes received, the decoder consumes 10 of 12 buffered bytes
+        timers.headers_decoded(12, 2);
+        assert_eq!(timers.progress.consumed, 12);
+
+        // 3 bytes received
+        timers.headers_decoded(5, 5);
+        assert_eq!(timers.progress.consumed, 15);
     }
 
     /// The keep-alive timer is not restarted for every request of a
