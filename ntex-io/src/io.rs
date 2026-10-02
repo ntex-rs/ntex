@@ -925,9 +925,14 @@ impl<F> Io<F> {
     /// returns `Ok` with `item` set to `None` after arranging for `cx` to be
     /// woken when progress is possible.
     ///
-    /// An error return does not register the waker. A successfully decoded item
-    /// takes precedence over timeout, backpressure, and peer-disconnect status
-    /// observed during the same poll.
+    /// An error return does not register the waker. While the connection is
+    /// open, an expired dispatcher timer and then active write backpressure are
+    /// reported before the read buffer is decoded, so an error never follows a
+    /// decode attempt and `Decoded` is never lost. The caller decides whether
+    /// input received together with a timeout is decoded first, see
+    /// [`IoRef::decode_item`](crate::IoRef::decode_item). Once the connection
+    /// is closing neither is reported, the buffered input is decoded and
+    /// `RecvError::PeerGone` is returned when no item is left.
     ///
     /// When the codec needs more input this goes through
     /// [`poll_read_more`](Self::poll_read_more), which releases read
@@ -943,6 +948,15 @@ impl<F> Io<F> {
         let st = self.st();
         st.flags.unset_read_ready();
 
+        let closed = st.flags.is_stopping() || st.flags.is_terminating();
+        if !closed {
+            if st.flags.check_dispatcher_timeout() {
+                return Err(RecvError::Timeout);
+            } else if st.flags.is_wr_backpressure() {
+                return Err(RecvError::WriteBackpressure);
+            }
+        }
+
         let decoded = self
             .decode_item(codec)
             .map_err(|err| RecvError::Decoder(err))?;
@@ -951,10 +965,6 @@ impl<F> Io<F> {
             Ok(decoded)
         } else if st.flags.is_stopping() || st.flags.is_terminating() {
             Err(RecvError::PeerGone(st.error()))
-        } else if st.flags.check_dispatcher_timeout() {
-            Err(RecvError::Timeout)
-        } else if st.flags.is_wr_backpressure() {
-            Err(RecvError::WriteBackpressure)
         } else {
             match self.poll_read_more(cx) {
                 Poll::Pending | Poll::Ready(Ok(Some(()))) => {
@@ -4133,6 +4143,76 @@ mod tests {
             panic!("expected a decoder error")
         };
         assert_eq!(err, "invalid frame");
+    }
+
+    /// An expired timer is reported before decoding, the buffered input is
+    /// left for the next attempt.
+    #[ntex::test]
+    async fn poll_recv_decode_reports_timeout_before_decoding() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = Io::new(server, SharedCfg::new("SRV"));
+
+        client.write("data");
+        sleep(Millis(25)).await;
+        io.st().notify_timeout();
+
+        let res = lazy(|cx| io.poll_recv_decode(&BytesCodec, cx)).await;
+        assert!(matches!(res, Err(RecvError::Timeout)));
+        assert_eq!(io.st().buffer.read_dst_size(), 4);
+
+        let decoded = lazy(|cx| io.poll_recv_decode(&BytesCodec, cx))
+            .await
+            .unwrap();
+        assert_eq!(decoded.item.unwrap(), "data");
+        assert_eq!((decoded.consumed, decoded.remains), (4, 0));
+    }
+
+    /// Write backpressure is reported before decoding, the buffered input is
+    /// left for the next attempt.
+    #[ntex::test]
+    async fn poll_recv_decode_reports_write_backpressure_before_decoding() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = Io::new(server, SharedCfg::new("SRV"));
+
+        client.write("data");
+        sleep(Millis(25)).await;
+        io.st().flags.set_wr_backpressure();
+
+        let res = lazy(|cx| io.poll_recv_decode(&BytesCodec, cx)).await;
+        assert!(matches!(res, Err(RecvError::WriteBackpressure)));
+        assert_eq!(io.st().buffer.read_dst_size(), 4);
+
+        io.flush(false).await.unwrap();
+        let decoded = lazy(|cx| io.poll_recv_decode(&BytesCodec, cx))
+            .await
+            .unwrap();
+        assert_eq!(decoded.item.unwrap(), "data");
+    }
+
+    /// A closing connection reports neither an expired timer nor write
+    /// backpressure, the buffered input is decoded before the disconnect.
+    #[ntex::test]
+    async fn poll_recv_decode_closing_decodes_buffered_input() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = Io::new(server, SharedCfg::new("SRV"));
+
+        client.write("data");
+        sleep(Millis(25)).await;
+        io.close();
+        sleep(Millis(25)).await;
+        io.st().notify_timeout();
+        io.st().flags.set_wr_backpressure();
+
+        let decoded = lazy(|cx| io.poll_recv_decode(&BytesCodec, cx))
+            .await
+            .unwrap();
+        assert_eq!(decoded.item.unwrap(), "data");
+
+        let res = lazy(|cx| io.poll_recv_decode(&BytesCodec, cx)).await;
+        assert!(matches!(res, Err(RecvError::PeerGone(None))));
     }
 
     #[ntex::test]
