@@ -8,6 +8,9 @@
 * http/1: Fix headers read rate undercounting bytes consumed by a partial request head
   decode
 
+* Check for buffered input with `IoRef::read_dst_size()` in the http/1 server and client,
+  the check no longer changes the read state
+
 ## [4.0.0-beta.14] - 2026-10-01
 
 * Migrate to `ntex-service` 5 and its typed service state model. Service
