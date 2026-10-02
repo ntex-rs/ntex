@@ -79,28 +79,14 @@ where
         ctx: Ctx<'_, Self, SharedCfg>,
     ) -> Result<Self::Res, Self::Error> {
         let cfg = ctx.st().get::<TlsConfig>();
-        let host = crate::server_name(req.host()).to_owned();
+        let host = crate::utils::server_name(req.host()).to_owned();
 
         let io = ctx.call(&self.svc, req).await?;
-        log::trace!("{}: TLS Handshake start for: {host:?}", cfg.tag());
-
-        let result = async {
+        crate::utils::connect(&cfg, &host, async {
             let name = ServerName::try_from(host.as_str()).map_err(io::Error::other)?;
-            let fut = TlsClientFilter::create(io, self.config.clone(), name.to_owned());
-            super::with_timeout(cfg.handshake_timeout(), fut).await
-        }
-        .await;
-
-        match result {
-            Ok(io) => {
-                log::trace!("{}: TLS Handshake success: {host:?}", cfg.tag());
-                Ok(io)
-            }
-            Err(e) => {
-                log::trace!("{}: TLS Handshake error: {e:?}", cfg.tag());
-                Err(Error::from(ConnectError::from(e)).with_service(cfg.service()))
-            }
-        }
+            TlsClientFilter::create(io, self.config.clone(), name.to_owned()).await
+        })
+        .await
     }
 
     ntex_service::forward_ready!(SharedCfg, svc);

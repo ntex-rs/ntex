@@ -44,7 +44,7 @@ impl<F: Filter, St> Service<St, Io<F>> for SslAcceptor {
         let cfg: Cfg<TlsConfig> = io.cfg().ctx().get();
 
         log::trace!("{}: Accepting tls connection", io.tag());
-        super::with_timeout(cfg.handshake_timeout(), super::handshake(io, ssl, true)).await
+        crate::utils::with_timeout(cfg.handshake_timeout(), super::handshake(io, ssl, true)).await
     }
 }
 

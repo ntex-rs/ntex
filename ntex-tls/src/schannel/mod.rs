@@ -16,16 +16,17 @@ use windows_sys::Win32::Security::Authentication::Identity::{
 use windows_sys::Win32::Security::Credentials::SecHandle;
 use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
 
-use crate::Servername;
-
 mod accept;
 mod cert;
 mod connect;
 mod context;
+
+use self::context::{Context, Decrypted, HandshakeState};
+use crate::{PeerCertChainDer, PeerCertDer, Servername};
+
 pub use self::accept::TlsAcceptor;
 pub use self::cert::{CertStoreLocation, Certificate};
 pub use self::connect::TlsConnector;
-use self::context::{Context, Decrypted, HandshakeState};
 
 /// Windows Schannel client configuration.
 ///
@@ -321,31 +322,22 @@ enum State {
 
 impl FilterLayer for SchannelFilter {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
-        const H2: &[u8] = b"h2";
-
         let inner = self.inner();
         if matches!(inner.state, State::Handshaking | State::Failed) {
             return None;
         }
 
         if id == any::TypeId::of::<types::HttpProtocol>() {
-            let proto = if inner.ctx.alpn_protocol() == Some(H2) {
-                types::HttpProtocol::Http2
-            } else {
-                types::HttpProtocol::Http1
-            };
-            Some(Box::new(proto))
+            let alpn = inner.ctx.alpn_protocol();
+            Some(Box::new(crate::utils::http_protocol(alpn)))
         } else if id == any::TypeId::of::<PeerCert>() {
-            inner
-                .ctx
-                .peer_cert()
-                .map(|cert| Box::new(PeerCert(cert)) as Box<dyn any::Any>)
+            Some(Box::new(PeerCert(inner.ctx.peer_cert()?)))
+        } else if id == any::TypeId::of::<PeerCertDer>() {
+            Some(Box::new(PeerCertDer(inner.ctx.peer_cert()?)))
+        } else if id == any::TypeId::of::<PeerCertChainDer>() {
+            Some(Box::new(PeerCertChainDer(inner.ctx.peer_cert_chain()?)))
         } else if id == any::TypeId::of::<Servername>() {
-            inner
-                .ctx
-                .servername
-                .clone()
-                .map(|name| Box::new(Servername(name)) as Box<dyn any::Any>)
+            Some(Box::new(Servername(inner.ctx.servername.clone()?)))
         } else {
             None
         }
@@ -545,26 +537,12 @@ async fn handshake<F: Filter>(io: Io<F>, ctx: Context) -> io::Result<Io<Layer<Sc
     // the filter starts the handshake with the buffered input when it is
     // added, a client queues its ClientHello
     let io = io.add_filter(filter);
-
-    // the read that reports eof may also carry the peer's last handshake flight
-    let mut eof = false;
-    loop {
-        io.flush(false).await?;
-        if let Some(err) = io.filter().take_error() {
-            // make sure the alert reaches the peer before the io is dropped
-            let _ = io.flush(true).await;
-            return Err(err);
-        }
-        if !io.filter().is_handshaking() {
-            return Ok(io);
-        }
-        if eof {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "disconnected"));
-        }
-        if io.read_notify().await?.is_none() {
-            eof = true;
-        }
-    }
+    crate::utils::handshake(&io, || match io.filter().take_error() {
+        Some(err) => Err(err),
+        None => Ok(io.filter().is_handshaking()),
+    })
+    .await?;
+    Ok(io)
 }
 
 /// ALPN protocols offered or accepted by default.

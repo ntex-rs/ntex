@@ -5,6 +5,7 @@ use ntex_io::{FilterBuf, types};
 use tls_rustls::{ConnectionCommon, SideData};
 
 use super::{PeerCert, PeerCertChain};
+use crate::{PeerCertChainDer, PeerCertDer};
 
 pub(crate) struct Stream<'a, S> {
     pub(crate) session: &'a mut S,
@@ -22,26 +23,23 @@ where
     SD: SideData,
 {
     pub(crate) fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
-        const H2: &[u8] = b"h2";
-
         if id == any::TypeId::of::<types::HttpProtocol>() {
-            let h2 = self
-                .session
-                .alpn_protocol()
-                .is_some_and(|protos| protos.windows(2).any(|w| w == H2));
-
-            let proto = if h2 {
-                types::HttpProtocol::Http2
-            } else {
-                types::HttpProtocol::Http1
-            };
-            Some(Box::new(proto))
+            let alpn = self.session.alpn_protocol();
+            Some(Box::new(crate::utils::http_protocol(alpn)))
         } else if id == any::TypeId::of::<PeerCert<'_>>() {
             let cert = self.session.peer_certificates()?.first()?;
             Some(Box::new(PeerCert(cert.to_owned())))
         } else if id == any::TypeId::of::<PeerCertChain<'_>>() {
             let chain = self.session.peer_certificates()?;
             Some(Box::new(PeerCertChain(chain.to_vec())))
+        } else if id == any::TypeId::of::<PeerCertDer>() {
+            let cert = self.session.peer_certificates()?.first()?;
+            Some(Box::new(PeerCertDer(cert.to_vec())))
+        } else if id == any::TypeId::of::<PeerCertChainDer>() {
+            let chain = self.session.peer_certificates().filter(|c| !c.is_empty())?;
+            Some(Box::new(PeerCertChainDer(
+                chain.iter().map(|cert| cert.to_vec()).collect(),
+            )))
         } else {
             None
         }

@@ -1,5 +1,11 @@
 # Changes
 
+## [4.2.0] - 2026-10-02
+
+* Add `PeerCertDer` and `PeerCertChainDer` queries supported by all tls filters
+
+* Share handshake, timeout and alpn handling between the tls filters: a rustls handshake interrupted by eof fails with `UnexpectedEof` instead of `NotConnected`, only the exact `h2` alpn protocol selects http/2, schannel connect errors carry the service name
+
 ## [4.1.0] - 2026-10-01
 
 * openssl: do not drop application data when a write reports `WANT_READ`
