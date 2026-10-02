@@ -5,7 +5,7 @@ use crate::io::{Decoded, Filter, Io, IoStatusUpdate, RecvError};
 use crate::service::pipeline::{Pipeline, PipelineCall};
 use crate::{channel::bstream, util::clone_io_error};
 
-use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
+use crate::http::body::{Body, MessageBody, ResponseBody};
 use crate::http::error::{DispatchError, PayloadError, ResponseError};
 use crate::http::message::CurrentIo;
 use crate::http::{
@@ -387,13 +387,13 @@ where
                 });
 
             match result {
-                Ok(()) => match size {
-                    BodySize::None | BodySize::Empty => self.response_done(),
-                    _ => {
-                        self.response_started = true;
-                        State::SendPayload { body }
-                    }
-                },
+                // a response without body bytes, for example to a HEAD request,
+                // is complete, the body is not polled
+                Ok(()) if self.codec.is_body_complete() => self.response_done(),
+                Ok(()) => {
+                    self.response_started = true;
+                    State::SendPayload { body }
+                }
                 Err(err) => self.ctl_proto_err(err.into()),
             }
         } else {
@@ -434,8 +434,14 @@ where
             if !self.io.is_active() {
                 return Poll::Ready(self.ctl_peer_gone(None));
             }
-            if let Err(err) = ready!(self.poll_flush_timed(cx)) {
-                return Poll::Ready(self.ctl_peer_gone(Some(err)));
+            if self.io.is_wr_backpressure() {
+                if let Err(err) = ready!(self.poll_flush_timed(cx)) {
+                    return Poll::Ready(self.ctl_peer_gone(Some(err)));
+                }
+            } else {
+                // encoding enables write backpressure once the output exceeds
+                // the high watermark, otherwise flushing would not wait
+                self.release_write_timer();
             }
             let Poll::Ready(item) = body.poll_next_chunk(cx) else {
                 // the client half-closed the connection and has no pipelined
@@ -462,6 +468,14 @@ where
                 Some(Ok(item)) => {
                     log::trace!("{}: Got response chunk: {:?}", self.io.tag(), item.len());
                     match self.io.encode(Message::Chunk(Some(item)), &self.codec) {
+                        // the declared length is sent, the body is not polled
+                        // for its end, under write backpressure the output is
+                        // flushed first
+                        Ok(())
+                            if self.codec.is_body_complete() && !self.io.is_wr_backpressure() =>
+                        {
+                            self.response_done()
+                        }
                         Ok(()) => continue,
                         Err(err) => self.ctl_proto_err(err.into()),
                     }
@@ -472,7 +486,10 @@ where
                         self.io.tag(),
                         self.disconnect
                     );
-                    if let Err(err) = self.io.encode(Message::Chunk(None), &self.codec) {
+                    // the end of a body with a declared length encodes nothing
+                    if self.codec.is_body_complete() {
+                        self.response_done()
+                    } else if let Err(err) = self.io.encode(Message::Chunk(None), &self.codec) {
                         self.ctl_proto_err(err.into())
                     } else {
                         self.response_done()
@@ -3438,9 +3455,9 @@ mod tests {
         }
 
         for (method, size, polls) in [
-            ("GET", body::BodySize::Sized(6), 3),
-            ("HEAD", body::BodySize::Sized(6), 1),
-            ("HEAD", body::BodySize::Stream, 1),
+            ("GET", body::BodySize::Sized(6), 2),
+            ("HEAD", body::BodySize::Sized(6), 0),
+            ("HEAD", body::BodySize::Stream, 0),
         ] {
             let (client, server) = IoTest::create();
             client.remote_buffer_cap(1024 * 1024);
@@ -3467,8 +3484,111 @@ mod tests {
             client.write(&req);
             sleep(Millis(50)).await;
             assert_eq!(count.get(), polls * 2, "{case}");
+            assert!(
+                client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"),
+                "{case}"
+            );
             assert!(!client.is_server_dropped(), "{case}");
         }
+    }
+
+    /// A response with a declared length is complete once its last byte is
+    /// sent, the body is not polled for its end.
+    #[crate::rt_test]
+    async fn test_sized_body_complete_without_end() {
+        struct Stream(bool);
+        impl body::MessageBody for Stream {
+            fn size(&self) -> body::BodySize {
+                body::BodySize::Sized(4)
+            }
+            fn poll_next_chunk(
+                &mut self,
+                _: &mut Context<'_>,
+            ) -> Poll<Option<Result<Bytes, Rc<dyn error::Error>>>> {
+                // the stream never ends after its last chunk
+                if self.0 {
+                    Poll::Pending
+                } else {
+                    self.0 = true;
+                    Poll::Ready(Some(Ok(Bytes::from_static(b"data"))))
+                }
+            }
+        }
+
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024 * 1024);
+        spawn_h1(server, async |_| {
+            Ok::<_, io::Error>(Response::Ok().message_body(Stream(false)))
+        });
+
+        let req = "GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n";
+        client.write(format!("{req}{req}"));
+        sleep(Millis(100)).await;
+        let buf = client.read_any();
+        assert_eq!(
+            buf.windows(4).filter(|w| w == b"data").count(),
+            2,
+            "{buf:?}"
+        );
+        assert!(!client.is_server_dropped());
+    }
+
+    /// The end of a chunked response body is encoded.
+    #[crate::rt_test]
+    async fn test_chunked_body_terminated() {
+        use futures_util::stream;
+
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024 * 1024);
+        spawn_h1(server, async |_| {
+            Ok::<_, io::Error>(Response::Ok().streaming(stream::iter([Ok::<_, io::Error>(
+                Bytes::from_static(b"data"),
+            )])))
+        });
+
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        sleep(Millis(50)).await;
+        let buf = client.read_any();
+        assert!(buf.ends_with(b"\r\n\r\n4\r\ndata\r\n0\r\n\r\n"), "{buf:?}");
+    }
+
+    /// The last chunk of a response with a declared length is flushed before
+    /// the connection is closed, it is not left to the shutdown timeout.
+    #[crate::rt_test]
+    async fn test_sized_body_flushed_before_close() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(nio::IoConfig::new().set_shutdown_timeout(Seconds(1)))
+            .into();
+        crate::rt::spawn(Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |_| {
+                    Ok::<_, io::Error>(Response::Ok().body(Bytes::from(vec![b'x'; 128 * 1024])))
+                }),
+            ),
+            None,
+            DispatcherConfig::default(),
+        ));
+
+        client.write("GET /test HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n");
+        sleep(Millis(1500)).await;
+        assert!(!client.is_server_dropped());
+
+        client.remote_buffer_cap(1024 * 1024);
+        let mut buf = BytesMut::new();
+        loop {
+            let data = client.read().await.unwrap();
+            if data.is_empty() {
+                break;
+            }
+            buf.extend_from_slice(&data);
+        }
+        assert!(buf.ends_with(&[b'x'; 1024]), "{}", buf.len());
+        assert!(buf.len() > 128 * 1024);
     }
 
     #[crate::rt_test]
