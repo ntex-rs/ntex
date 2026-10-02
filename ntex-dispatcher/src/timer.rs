@@ -1,5 +1,7 @@
 //! Timer and rate-tracking state for keep-alive, frame read-rate, and write
 //! timeout handling.
+use std::time::Instant;
+
 use ntex_io::{IoBoxed, cfg::IoConfig};
 use ntex_util::time::Seconds;
 
@@ -11,6 +13,8 @@ use ntex_util::time::Seconds;
 pub(crate) struct Timers {
     pub(crate) active: Timer,
     pub(crate) read: ReadPhase,
+    /// Expiry of the armed keep-alive timer.
+    pub(crate) keepalive: Option<Instant>,
 }
 
 /// Progress of frame decoding on the connection.
@@ -29,6 +33,10 @@ pub(crate) enum ReadPhase {
 pub(crate) enum Timer {
     Stopped,
     KeepAlive,
+    /// The keep-alive timer stays armed while a frame is read or handled, so
+    /// the next idle period does not register it again. Its expiry does not
+    /// apply.
+    Suspended,
     FrameRead,
     /// Write timeout, from enabling write backpressure until it is disabled.
     Write,
@@ -61,11 +69,13 @@ impl Timers {
                     max_timeout: params.max_timeout,
                     ..ReadProgress::EMPTY
                 }),
+                keepalive: None,
             }
         } else {
             Timers {
                 active: Timer::Stopped,
                 read: ReadPhase::Idle,
+                keepalive: None,
             }
         }
     }
