@@ -278,6 +278,37 @@ where
                                         return Poll::Pending;
                                     }
                                 }
+                                Err(RecvError::Timeout) if inner.timers.active != Timer::Write => {
+                                    // input received together with a read timer wins over
+                                    // its expiry, the buffered input is decoded first
+                                    match inner.shared.io.decode_item(&inner.shared.codec) {
+                                        Ok(decoded) => {
+                                            let timer = inner.timers.active;
+                                            inner.update_timer(&decoded);
+                                            if let Some(el) = decoded.item {
+                                                (DispatchItem::Item(el), true)
+                                            } else {
+                                                // a timer armed for the received input has
+                                                // not expired
+                                                if inner.timers.active == timer
+                                                    && let Err(ctl) = inner.handle_timeout()
+                                                {
+                                                    inner.st = inner.stop(ctl);
+                                                }
+                                                continue;
+                                            }
+                                        }
+                                        Err(err) => {
+                                            log::trace!(
+                                                "{}: Decoder error, stopping dispatcher: {:?}",
+                                                inner.shared.io.tag(),
+                                                err
+                                            );
+                                            inner.st = inner.stop(Reason::Decoder(err));
+                                            continue;
+                                        }
+                                    }
+                                }
                                 Err(RecvError::Timeout) => {
                                     if let Err(ctl) = inner.handle_timeout() {
                                         inner.st = inner.stop(ctl);
@@ -2165,10 +2196,21 @@ mod tests {
         delay: Millis,
         data: Arc<Mutex<RefCell<Vec<usize>>>>,
     ) -> Dispatcher<BCodec, ()> {
-        let io = Io::new(
+        keepalive_io_dispatcher(keepalive_io(server), delay, data)
+    }
+
+    fn keepalive_io(server: IoTest) -> Io {
+        Io::new(
             server,
             SharedCfg::new("TEST").add(IoConfig::new().set_keepalive_timeout(Seconds(1))),
-        );
+        )
+    }
+
+    fn keepalive_io_dispatcher(
+        io: Io,
+        delay: Millis,
+        data: Arc<Mutex<RefCell<Vec<usize>>>>,
+    ) -> Dispatcher<BCodec, ()> {
         Dispatcher::new(
             io,
             BCodec(8),

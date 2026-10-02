@@ -1,5 +1,11 @@
 # Changes
 
+## [Unreleased]
+
+* `Io::poll_recv_decode()` reports a dispatcher timeout and write back-pressure before
+  decoding, the decode result was dropped with the error. Neither is reported once the
+  connection is closing, buffered input is decoded before `PeerGone`
+
 ## [4.1.0] - 2026-10-01
 
 * The read buffer cache checks only the most recently released buffer instead of

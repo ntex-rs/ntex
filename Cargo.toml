@@ -51,7 +51,7 @@ urly = { path = "urly" }
 ntex = "4.0.0-beta.15"
 ntex-bytes = "1.10.0"
 ntex-codec = "2.0.0"
-ntex-dispatcher = "4.1.0"
+ntex-dispatcher = "4.2.0"
 ntex-error = "3.0.0"
 ntex-h2 = "4.1.0"
 ntex-http = "1.3.0"

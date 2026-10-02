@@ -238,11 +238,30 @@ where
             log::trace!("{}: Trying to read http message", self.io.tag());
             self.release_write_timer();
 
-            let buffered = self.io.with_read_dst(|buf| buf.len()) as u32;
-            self.timers.headers_buffered(buffered);
+            let (result, timeout) = match self.io.poll_recv_decode(&self.codec, cx) {
+                // a request head received together with a read timer wins over
+                // its expiry, the buffered input is decoded first
+                Err(RecvError::Timeout)
+                    if !self.timers.active.is_write() && self.timers.active != Timer::Idle =>
+                {
+                    let result = self.io.decode_item(&self.codec);
+                    (result.map_err(RecvError::Decoder), true)
+                }
+                result => (result, false),
+            };
 
-            let result = match self.io.poll_recv_decode(&self.codec, cx) {
+            let result = match result {
                 Ok(decoded) => {
+                    self.timers.headers_decoded(
+                        (decoded.consumed + decoded.remains) as u32,
+                        decoded.remains as u32,
+                    );
+                    if timeout && decoded.item.is_none() {
+                        match self.headers_timeout(&decoded) {
+                            Ok(()) => continue,
+                            Err(st) => return Poll::Ready(st),
+                        }
+                    }
                     if let Some(st) = self.update_hdrs_timer(&decoded) {
                         return Poll::Ready(st);
                     }
@@ -306,30 +325,10 @@ where
                         } else {
                             continue;
                         }
-                    } else if self.timers.active == Timer::Idle {
+                    } else {
                         // expiry of the keep-alive timer left armed for the
                         // previous request
                         continue;
-                    } else if self.timers.active == Timer::Headers {
-                        if let Err(err) = self.handle_timeout() {
-                            log::trace!("{}: Slow request timeout", self.io.tag());
-                            self.ctl_proto_err(err)
-                        } else {
-                            continue;
-                        }
-                    } else if self.start_headers_timer(
-                        self.codec.is_reading_hdrs(),
-                        buffered,
-                        self.io.with_read_dst(|buf| buf.len()) as u32,
-                    ) {
-                        // a partial request head wins over keep-alive or client timeout
-                        continue;
-                    } else if self.timers.active == Timer::ClientTimeout {
-                        log::trace!("{}: Client timeout, no request", self.io.tag());
-                        self.ctl_proto_err(ProtocolError::SlowRequestTimeout)
-                    } else {
-                        log::trace!("{}: Keep-alive timeout, close connection", self.io.tag());
-                        self.ctl_keepalive(true)
                     }
                 }
             };
@@ -560,14 +559,38 @@ where
             Poll::Ready(bstream::Status::Ready) => {
                 // read request payload
                 let mut updated = false;
+                let mut pending = None;
                 self.release_write_timer();
-                loop {
-                    let buffered = self.io.with_read_dst(|buf| buf.len());
-                    let Some((payload_codec, sender)) = self.payload.as_mut() else {
-                        break;
+                while let Some((payload_codec, sender)) = self.payload.as_mut() {
+                    let result = if pending.is_some() {
+                        self.io
+                            .decode_item(payload_codec)
+                            .map_err(RecvError::Decoder)
+                    } else {
+                        self.io.poll_recv_decode(payload_codec, cx)
+                    };
+                    let result = match result {
+                        // the request payload is read regardless of write
+                        // backpressure, and payload received together with a
+                        // read timer wins over its expiry, the buffered input
+                        // is decoded first
+                        Err(err @ RecvError::WriteBackpressure) => {
+                            pending = Some(err);
+                            continue;
+                        }
+                        Err(err @ RecvError::Timeout) if !self.timers.active.is_write() => {
+                            pending = Some(err);
+                            continue;
+                        }
+                        Ok(decoded) if decoded.item.is_none() && pending.is_some() => {
+                            // the decode attempt can consume bytes without an item
+                            self.timers.payload_consumed(decoded.consumed as u32);
+                            Err(pending.take().unwrap())
+                        }
+                        result => result,
                     };
 
-                    let err = match self.io.poll_recv_decode(payload_codec, cx) {
+                    let err = match result {
                         Ok(decoded) => {
                             self.timers
                                 .payload_decoded(&self.io, decoded.consumed as u32);
@@ -612,10 +635,6 @@ where
                             }
                         }
                         Err(RecvError::Timeout) => {
-                            // the decode attempt can consume bytes without an item
-                            let remains = self.io.with_read_dst(|buf| buf.len());
-                            self.timers
-                                .payload_consumed(buffered.saturating_sub(remains) as u32);
                             if let Err(err) = self.handle_timeout() {
                                 PayloadFailure::Protocol(err)
                             } else {
@@ -731,6 +750,35 @@ where
             Err(ProtocolError::SlowPayloadTimeout)
         } else {
             Err(ProtocolError::SlowRequestTimeout)
+        }
+    }
+
+    /// Handles expiry of a read timer while a request head is awaited.
+    ///
+    /// `decoded` is the decode attempt of the input received together with
+    /// the expiry, it did not produce a request head.
+    fn headers_timeout(
+        &mut self,
+        decoded: &Decoded<(Request, PayloadType)>,
+    ) -> Result<(), State<F, B, Err>> {
+        if self.timers.active == Timer::Headers {
+            self.handle_timeout().map_err(|err| {
+                log::trace!("{}: Slow request timeout", self.io.tag());
+                self.ctl_proto_err(err)
+            })
+        } else if self.start_headers_timer(
+            self.codec.is_reading_hdrs(),
+            (decoded.consumed + decoded.remains) as u32,
+            decoded.remains as u32,
+        ) {
+            // a partial request head wins over keep-alive or client timeout
+            Ok(())
+        } else if self.timers.active == Timer::ClientTimeout {
+            log::trace!("{}: Client timeout, no request", self.io.tag());
+            Err(self.ctl_proto_err(ProtocolError::SlowRequestTimeout))
+        } else {
+            log::trace!("{}: Keep-alive timeout, close connection", self.io.tag());
+            Err(self.ctl_keepalive(true))
         }
     }
 
@@ -1355,6 +1403,62 @@ mod tests {
         assert_ne!(h1.inner.timers.active, Timer::KeepAlive);
         assert_eq!(h1.inner.timers.progress.consumed, partial.len() as u32);
         assert!(h1.inner.io.is_active());
+
+        client.write("\r\n\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        sleep(Millis(50)).await;
+        assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
+
+        client.close().await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+    }
+
+    /// Bytes of a partial request head consumed by a decode attempt that ends
+    /// with write backpressure count towards the headers read rate.
+    #[crate::rt_test]
+    async fn test_headers_rate_counts_bytes_decoded_during_write_backpressure() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(nio::IoConfig::new().set_write_buf(16))
+            .add(
+                HttpServiceConfig::new()
+                    .set_headers_read_rate(Seconds(10), Seconds(20), 1)
+                    .set_keepalive(Seconds(10)),
+            )
+            .into();
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, config),
+            Pipeline::new(
+                (),
+                fn_service(async |_| Ok::<_, io::Error>(Response::Ok().build())),
+            ),
+            None,
+            DispatcherConfig::default(),
+        );
+
+        // the response head of the first request exceeds the write watermark,
+        // the decoder consumes the start line of the next request before
+        // write backpressure is reported
+        let partial = "GET /next HTTP/1.1\r\nhost: example.com";
+        client.write(format!(
+            "GET /first HTTP/1.1\r\nhost: localhost\r\n\r\n{partial}"
+        ));
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(h1.inner.io.is_wr_backpressure());
+        assert_ne!(h1.inner.timers.active, Timer::Headers);
+
+        client.remote_buffer_cap(1024);
+        sleep(Millis(50)).await;
+        assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(!h1.inner.io.is_wr_backpressure());
+        assert_eq!(h1.inner.timers.active, Timer::Headers);
+        assert_eq!(h1.inner.timers.progress.consumed, partial.len() as u32);
 
         client.write("\r\n\r\n");
         sleep(Millis(50)).await;
@@ -2395,6 +2499,51 @@ mod tests {
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
 
         payload.borrow_mut().take();
+        client.close().await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+    }
+
+    /// The request payload is read while write backpressure is active.
+    #[crate::rt_test]
+    async fn test_payload_read_during_write_backpressure() {
+        let body = Rc::new(RefCell::new(BytesMut::new()));
+        let body2 = body.clone();
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+
+        let mut h1 = Dispatcher::new(
+            0,
+            nio::Io::new(server, SharedCfg::new("SVC")),
+            Pipeline::new(
+                (),
+                fn_service(move |mut req: Request| {
+                    let body = body2.clone();
+                    let mut pl = req.take_payload();
+                    crate::rt::spawn(async move {
+                        while let Some(Ok(chunk)) = stream_recv(&mut pl).await {
+                            body.borrow_mut().extend_from_slice(&chunk);
+                        }
+                    });
+                    async { Ok::<_, io::Error>(Response::Ok().body("x".repeat(128 * 1024))) }
+                }),
+            ),
+            None,
+            DispatcherConfig::default(),
+        );
+
+        client.write("POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 4\r\n\r\nb");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(h1.inner.io.is_wr_backpressure());
+
+        client.write("ody");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        sleep(Millis(50)).await;
+        assert!(h1.inner.io.is_wr_backpressure());
+        assert_eq!(&body.borrow()[..], b"body");
+
+        client.remote_buffer_cap(256 * 1024);
         client.close().await;
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
     }
