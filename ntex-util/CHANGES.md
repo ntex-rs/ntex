@@ -1,5 +1,11 @@
 # Changes
 
+## [4.2.1] - 2026-10-03
+
+* The time cached by the timer driver did not expire, `now()` returned a stale
+  time until the next timer wakeup, so io timers started meanwhile, e.g. a
+  restarted keep-alive timer, expired up to a second early
+
 ## [4.2.0] - 2026-10-01
 
 * Timers of a system started after another system stopped on the same thread
