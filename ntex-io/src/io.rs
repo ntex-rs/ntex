@@ -4121,6 +4121,28 @@ mod tests {
         assert_eq!(io.with_read_dst(BytesMut::take), b"data");
     }
 
+    /// Querying the read destination size leaves the read state in place.
+    #[ntex::test]
+    async fn read_dst_size_keeps_read_state() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = Io::new(server, SharedCfg::new("SRV"));
+
+        // an installed read pause is not cancelled
+        assert!(lazy(|cx| io.poll_read_pause(cx)).await.is_pending());
+        assert_eq!(io.read_dst_size(), 0);
+        assert!(io.flags().is_read_paused());
+
+        // read readiness is not cleared
+        client.write("data");
+        assert_eq!(io.read_notify().await.unwrap(), Some(()));
+        io.st().flags.set_read_ready();
+        assert_eq!(io.read_dst_size(), 4);
+        assert!(io.flags().is_read_ready());
+        assert_eq!(io.with_read_dst(BytesMut::take), b"data");
+        assert!(!io.flags().is_read_ready());
+    }
+
     struct Failing;
 
     impl Decoder for Failing {
