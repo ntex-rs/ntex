@@ -1,5 +1,10 @@
 # Changes
 
+## [4.1.1] - 2026-10-02
+
+* Keep the keep-alive timer armed while a frame is read or handled instead of
+  registering it again for every frame
+
 ## [4.1.0] - 2026-10-01
 
 * Add `Dispatcher::max_inflight()`, limits concurrent service calls
