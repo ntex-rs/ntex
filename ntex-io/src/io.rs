@@ -459,6 +459,18 @@ impl<F> Io<F> {
         unsafe { mem::replace(&mut *self.0.get(), IoRef::create_empty()) }
     }
 
+    /// Panics if the filter chain is in use, it cannot be changed then.
+    #[track_caller]
+    fn check_not_borrowed(&self) {
+        if self.st().buffer.is_borrowed() {
+            let tag = self.tag();
+            // the state is leaked, dropping `self` while unwinding would
+            // drop the filter that is in use
+            mem::forget(self.take_io_ref());
+            panic!("{tag}: filter chain is changed while it is in use");
+        }
+    }
+
     fn st(&self) -> &IoState {
         unsafe { &(*self.0.get()).0 }
     }
@@ -505,7 +517,13 @@ impl<F: FilterLayer, T: Filter> Io<Layer<F, T>> {
 impl<F: Filter> Io<F> {
     #[inline]
     /// Converts the current I/O stream into a sealed version.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called while the connection's filters or buffers are in use,
+    /// for example from a closure, codec or filter invoked by this connection.
     pub fn seal(self) -> Io<Sealed> {
+        self.check_not_borrowed();
         let state = self.take_io_ref();
         state.0.filter.seal::<F>();
 
@@ -520,10 +538,16 @@ impl<F: Filter> Io<F> {
 
     #[inline]
     /// Adds a new processing layer to the current filter chain.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called while the connection's filters or buffers are in use,
+    /// for example from a closure, codec or filter invoked by this connection.
     pub fn add_filter<U>(self, nf: U) -> Io<Layer<U, F>>
     where
         U: FilterLayer,
     {
+        self.check_not_borrowed();
         self.with_callbacks(|cb| cb.before_processing(&self));
 
         // Write buffer processing may be delayed,
@@ -534,17 +558,8 @@ impl<F: Filter> Io<F> {
 
         let state = self.take_io_ref();
 
-        // Add the buffers layer.
-        //
-        // Safety: no references into the buffer storage are retained.
-        // Buffers are only borrowed for the duration of closures, none of
-        // which is running here. The page size is read first and the exclusive
-        // borrow covers only the `buffer` field, so no other access overlaps it.
-        let page_size = state.0.cfg.write_page_size();
-        unsafe {
-            let buffer = &raw mut (*Rc::as_ptr(&state.0).cast_mut()).buffer;
-            (*buffer).add_layer(page_size);
-        }
+        // Add the buffers layer
+        state.0.buffer.add_layer(state.0.cfg.write_page_size());
 
         // Replace current filter
         state.0.filter.add_filter::<F, U>(nf);
@@ -562,11 +577,17 @@ impl<F: Filter> Io<F> {
 
     #[allow(clippy::items_after_statements)]
     /// Wraps the current layer with a wrapper.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called while the connection's filters or buffers are in use,
+    /// for example from a closure, codec or filter invoked by this connection.
     pub fn map_filter<U, R>(self, f: U) -> Io<R>
     where
         U: FnOnce(F) -> R,
         R: Filter,
     {
+        self.check_not_borrowed();
         self.with_callbacks(|cb| cb.before_processing(&self));
 
         // Write buffer processing may be delayed,

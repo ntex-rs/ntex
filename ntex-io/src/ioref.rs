@@ -160,6 +160,7 @@ impl IoRef {
 
     /// Queries filter-specific data.
     pub fn query<T: 'static>(&self) -> types::QueryItem<T> {
+        let _borrow = self.0.buffer.borrow();
         types::QueryItem::new(self.filter().query(any::TypeId::of::<T>()))
     }
 

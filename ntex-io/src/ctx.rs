@@ -98,6 +98,7 @@ impl IoContext {
             return Poll::Ready(Readiness::Terminate);
         }
         self.poll_filters_shutdown(cx);
+        let _borrow = self.st().buffer.borrow();
         self.0.filter().poll_read_ready(cx)
     }
 
@@ -114,6 +115,7 @@ impl IoContext {
             return Poll::Ready(Readiness::Terminate);
         }
         self.poll_shutdown_deadline(cx);
+        let _borrow = self.st().buffer.borrow();
         self.0.filter().poll_write_ready(cx)
     }
 
