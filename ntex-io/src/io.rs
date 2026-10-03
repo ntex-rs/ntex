@@ -534,9 +534,9 @@ impl<F: Filter> Io<F> {
         // Add the buffers layer.
         //
         // Safety: no references into the buffer storage are retained.
-        // All APIs first remove the buffer from storage before processing it.
-        // The page size is read first and the exclusive borrow covers only
-        // the `buffer` field, so no other access overlaps it.
+        // Buffers are only borrowed for the duration of closures, none of
+        // which is running here. The page size is read first and the exclusive
+        // borrow covers only the `buffer` field, so no other access overlaps it.
         let page_size = state.0.cfg.write_page_size();
         unsafe {
             let buffer = &raw mut (*Rc::as_ptr(&state.0).cast_mut()).buffer;
