@@ -18,8 +18,14 @@ pub mod rustls;
 #[cfg(all(windows, feature = "schannel"))]
 pub mod schannel;
 
-use ntex_service::cfg::{CfgContext, Configuration};
-use ntex_util::{services::Counter, time::Millis, time::Seconds};
+use ntex_util::services::Counter;
+
+mod config;
+mod types;
+mod utils;
+
+pub use self::config::TlsConfig;
+pub use self::types::{PeerCertChainDer, PeerCertDer, PskIdentity, Servername};
 
 /// Sets the maximum per-worker concurrent ssl connection establish process.
 ///
@@ -38,72 +44,6 @@ thread_local! {
     static MAX_SSL_ACCEPT_COUNTER: Counter = Counter::new(MAX_SSL_ACCEPT.load(Ordering::Relaxed));
 }
 
-/// A TLS PSK identity.
-///
-/// Used in conjunction with [`ntex_io::Filter::query`]:
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct PskIdentity(pub Vec<u8>);
-
-/// The TLS SNI server name (DNS).
-///
-/// Used in conjunction with [`ntex_io::Filter::query`]:
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Servername(pub String);
-
-#[derive(Debug)]
-/// Tls service configuration
-pub struct TlsConfig {
-    handshake_timeout: Millis,
-    config: CfgContext,
-}
-
-impl Default for TlsConfig {
-    fn default() -> Self {
-        TlsConfig::new()
-    }
-}
-
-impl Configuration for TlsConfig {
-    const NAME: &str = "TLS Configuration";
-
-    fn ctx(&self) -> &CfgContext {
-        &self.config
-    }
-
-    fn set_ctx(&mut self, ctx: CfgContext) {
-        self.config = ctx;
-    }
-}
-
-impl TlsConfig {
-    #[must_use]
-    /// Create instance of `TlsConfig`
-    pub fn new() -> Self {
-        TlsConfig {
-            handshake_timeout: Millis(5_000),
-            config: CfgContext::default(),
-        }
-    }
-
-    #[inline]
-    /// Get tls handshake timeout.
-    pub fn handshake_timeout(&self) -> Millis {
-        self.handshake_timeout
-    }
-
-    #[must_use]
-    /// Set tls handshake timeout.
-    ///
-    /// Defines a timeout for connection tls handshake negotiation.
-    /// To disable timeout set value to 0.
-    ///
-    /// By default handshake timeout is set to 5 seconds.
-    pub fn set_handshake_timeout<T: Into<Seconds>>(mut self, timeout: T) -> Self {
-        self.handshake_timeout = timeout.into().into();
-        self
-    }
-}
-
 /// Ssl error combinded with service error.
 #[derive(Debug)]
 pub enum TlsError<E> {
@@ -111,36 +51,9 @@ pub enum TlsError<E> {
     Service(E),
 }
 
-/// Strips the port and IPv6 brackets from a connect host.
-///
-/// Accepts `host`, `host:port`, `[v6]`, `[v6]:port` and a bare `v6` address.
-#[allow(dead_code)]
-fn server_name(host: &str) -> &str {
-    if let Some(rest) = host.strip_prefix('[') {
-        rest.split_once(']').map_or(host, |(ip, _)| ip)
-    } else {
-        match host.split_once(':') {
-            Some((name, port)) if !port.contains(':') => name,
-            _ => host,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn tls_config() {
-        let cfg = TlsConfig::default();
-        assert_eq!(cfg.handshake_timeout(), Millis(5_000));
-        let cfg = cfg.set_handshake_timeout(Seconds(1));
-        assert_eq!(cfg.handshake_timeout(), Millis(1_000));
-        assert_eq!(
-            cfg.set_handshake_timeout(Seconds::ZERO).handshake_timeout(),
-            Millis::ZERO
-        );
-    }
 
     #[test]
     fn max_concurrent_accept() {
@@ -153,18 +66,5 @@ mod tests {
             let _last = c.get();
             assert!(!c.is_available());
         });
-    }
-
-    #[test]
-    fn test_server_name() {
-        assert_eq!(server_name("example.com"), "example.com");
-        assert_eq!(server_name("example.com:443"), "example.com");
-        assert_eq!(server_name("127.0.0.1:8080"), "127.0.0.1");
-        assert_eq!(server_name("[::1]"), "::1");
-        assert_eq!(server_name("[::1]:443"), "::1");
-        assert_eq!(server_name("[fe80::1%25eth0]:443"), "fe80::1%25eth0");
-        assert_eq!(server_name("::1"), "::1");
-        assert_eq!(server_name("2001:db8::1"), "2001:db8::1");
-        assert_eq!(server_name(""), "");
     }
 }

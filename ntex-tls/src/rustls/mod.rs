@@ -1,8 +1,4 @@
 //! An implementation of TLS streams for ntex backed by rustls
-use std::{future::Future, io};
-
-use ntex_io::Io;
-use ntex_util::time::{Millis, timeout_checked};
 use tls_rustls::pki_types::CertificateDer;
 
 mod accept;
@@ -26,53 +22,17 @@ pub struct PeerCert<'a>(pub CertificateDer<'a>);
 #[derive(Debug)]
 pub struct PeerCertChain<'a>(pub Vec<CertificateDer<'a>>);
 
-/// Drive the handshake until the session stops handshaking.
-///
-/// `state` reports the session's `(wants_write, is_handshaking)` flags.
-async fn handshake<F>(io: &Io<F>, state: impl Fn() -> (bool, bool)) -> io::Result<()> {
-    let mut eof = false;
-    loop {
-        let (wants_write, handshaking) = state();
-        if wants_write {
-            io.flush(false).await?;
-        }
-        if !handshaking {
-            return Ok(());
-        }
-        if eof {
-            return Err(io::Error::new(io::ErrorKind::NotConnected, "disconnected"));
-        }
-        // The read that reports eof may also carry the peer's last handshake
-        // flight, so the handshake state is checked once more before the eof
-        // is treated as a failure.
-        eof = io.read_notify().await?.is_none();
-    }
-}
-
-/// Run handshake with timeout, zero timeout disables it
-async fn with_timeout<R>(
-    timeout: Millis,
-    fut: impl Future<Output = io::Result<R>>,
-) -> io::Result<R> {
-    timeout_checked(timeout, fut).await.unwrap_or_else(|()| {
-        Err(io::Error::new(
-            io::ErrorKind::TimedOut,
-            "TLS Handshake timeout",
-        ))
-    })
-}
-
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, rc::Rc, sync::Arc};
+    use std::{cell::RefCell, io, rc::Rc, sync::Arc};
 
     use ntex::codec::BytesCodec;
     use ntex_bytes::Bytes;
     use ntex_error::Error;
-    use ntex_io::{Layer, testing::IoTest, types::HttpProtocol};
+    use ntex_io::{Io, Layer, testing::IoTest, types::HttpProtocol};
     use ntex_net::connect::{Connect, ConnectError, Connector};
     use ntex_service::{Pipeline, cfg::SharedCfg, fn_service};
-    use ntex_util::{future::join, future::lazy, time::sleep};
+    use ntex_util::{future::join, future::lazy, time::Millis, time::sleep};
     use tls_rustls::client::danger::{
         HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
     };
@@ -235,6 +195,18 @@ mod tests {
                 .map(|c| c.0.len()),
             Some(1)
         );
+        let cert = client.query::<PeerCert<'_>>().as_ref().unwrap().0.to_vec();
+        assert_eq!(
+            client.query::<crate::PeerCertDer>().as_ref().map(|c| &c.0),
+            Some(&cert)
+        );
+        assert_eq!(
+            client
+                .query::<crate::PeerCertChainDer>()
+                .as_ref()
+                .map(|c| &c.0),
+            Some(&vec![cert])
+        );
         assert!(client.query::<Servername>().as_ref().is_none());
         assert_eq!(
             server.query::<Servername>().as_ref().map(|s| s.0.as_str()),
@@ -243,6 +215,8 @@ mod tests {
         // no client auth
         assert!(server.query::<PeerCert<'_>>().as_ref().is_none());
         assert!(server.query::<PeerCertChain<'_>>().as_ref().is_none());
+        assert!(server.query::<crate::PeerCertDer>().as_ref().is_none());
+        assert!(server.query::<crate::PeerCertChainDer>().as_ref().is_none());
         assert!(server.query::<u32>().as_ref().is_none());
 
         // larger than the session buffer limit
@@ -309,7 +283,7 @@ mod tests {
             client.close(),
         )
         .await;
-        assert_eq!(res.unwrap_err().kind(), io::ErrorKind::NotConnected);
+        assert_eq!(res.unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
 
         // client side, the error is reported by the connector
         let (client, server) = pair();

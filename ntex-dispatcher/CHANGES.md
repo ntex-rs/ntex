@@ -1,6 +1,9 @@
 # Changes
 
-## [Unreleased]
+## [4.2.0] - Unreleased
+
+* Keep the keep-alive timer armed while a frame is read or handled instead of
+  registering it again for every frame
 
 * Decode input received together with a read timer expiry before handling the timeout, the
   frame is dispatched and frame read progress is counted

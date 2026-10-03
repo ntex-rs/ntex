@@ -42,13 +42,12 @@ impl TlsClientFilter {
             session: UnsafeCell::new(session),
         });
 
-        super::handshake(&io, || io.filter().state()).await?;
+        crate::utils::handshake(&io, || Ok(io.filter().is_handshaking())).await?;
         Ok(io)
     }
 
-    fn state(&self) -> (bool, bool) {
-        let s = unsafe { &*self.session.get() };
-        (s.wants_write(), s.is_handshaking())
+    fn is_handshaking(&self) -> bool {
+        unsafe { &*self.session.get() }.is_handshaking()
     }
 
     fn stream<F, R>(&self, f: F) -> R

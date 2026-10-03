@@ -668,6 +668,11 @@ impl Future for TimerDriver {
 
         let now = Instant::now();
         timer.lowres_time.set(Some(now));
+        if !timer.flags.get().contains(Flags::LOWRES_TIMER) {
+            // arm the invalidation, otherwise the cached time stays stale
+            // until the next wakeup of the driver
+            timer.refresh_lowres();
+        }
 
         loop {
             let expiry = timer.next_expiry.get();
@@ -1015,6 +1020,25 @@ mod tests {
         sleep(Millis(50)).await;
         let elapsed = start.elapsed();
         assert!(elapsed >= Duration::from_millis(50), "elapsed: {elapsed:?}");
+    }
+
+    /// The time cached by the wheel driver is invalidated after
+    /// `LOWRES_RESOLUTION`, like the time cached by `now()`.
+    #[ntex::test]
+    async fn test_driver_cached_time_expires() {
+        // the lowres timer of the cache populated at start fires first
+        sleep(Millis(400)).await;
+
+        // the wheel is idle, the thread waits for a non-timer event
+        let (tx, rx) = async_channel::bounded(1);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(600));
+            let _ = tx.send_blocking(());
+        });
+        rx.recv().await.unwrap();
+
+        let stale = Instant::now().saturating_duration_since(now());
+        assert!(stale < Duration::from_millis(300), "stale: {stale:?}");
     }
 
     /// A late wakeup must not delay the timers that expire later.

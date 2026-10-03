@@ -25,7 +25,9 @@ use windows_sys::Win32::Security::Authentication::Identity::{
     TLS1_ALERT_UNKNOWN_CA,
 };
 use windows_sys::Win32::Security::Credentials::SecHandle;
-use windows_sys::Win32::Security::Cryptography::{CERT_CONTEXT, CertFreeCertificateContext};
+use windows_sys::Win32::Security::Cryptography::{
+    CERT_CONTEXT, CertEnumCertificatesInStore, CertFreeCertificateContext,
+};
 
 use super::{ClientConfig, Credentials, ServerConfig, sspi_error};
 
@@ -529,7 +531,8 @@ impl Context {
         })
     }
 
-    pub(super) fn peer_cert(&self) -> Option<Vec<u8>> {
+    /// Certificate context of the peer.
+    fn remote_cert(&self) -> Option<RemoteCert> {
         let mut cert: *mut CERT_CONTEXT = ptr::null_mut();
         let status = unsafe {
             QueryContextAttributesW(
@@ -539,19 +542,66 @@ impl Context {
             )
         };
         if status != SEC_E_OK || cert.is_null() {
-            return None;
-        }
-
-        // the context is owned by the caller
-        unsafe {
-            let bytes =
-                slice::from_raw_parts((*cert).pbCertEncoded, (*cert).cbCertEncoded as usize)
-                    .to_vec();
-            CertFreeCertificateContext(cert);
-            Some(bytes)
+            None
+        } else {
+            Some(RemoteCert(cert))
         }
     }
 
+    /// The peer's end-entity certificate in DER encoding.
+    pub(super) fn peer_cert(&self) -> Option<Vec<u8>> {
+        self.remote_cert()
+            .map(|cert| unsafe { cert_der(cert.0) }.to_vec())
+    }
+
+    /// The certificates sent by the peer in DER encoding, the end-entity
+    /// certificate first, followed by its issuers.
+    pub(super) fn peer_cert_chain(&self) -> Option<Vec<Vec<u8>>> {
+        struct Entry {
+            der: Vec<u8>,
+            subject: Vec<u8>,
+            issuer: Vec<u8>,
+        }
+        let entry = |cert: *const CERT_CONTEXT| unsafe {
+            let info = &*(*cert).pCertInfo;
+            Entry {
+                der: cert_der(cert).to_vec(),
+                subject: blob(info.Subject.pbData, info.Subject.cbData).to_vec(),
+                issuer: blob(info.Issuer.pbData, info.Issuer.cbData).to_vec(),
+            }
+        };
+
+        let leaf = self.remote_cert()?;
+        let mut chain = vec![entry(leaf.0)];
+
+        // the store of the remote certificate holds the certificates sent by the peer
+        let mut certs = Vec::new();
+        let store = unsafe { (*leaf.0).hCertStore };
+        if !store.is_null() {
+            let mut cert = ptr::null();
+            loop {
+                // frees the previous context
+                cert = unsafe { CertEnumCertificatesInStore(store, cert) };
+                if cert.is_null() {
+                    break;
+                }
+                let cert = entry(cert);
+                if cert.der != chain[0].der {
+                    certs.push(cert);
+                }
+            }
+        }
+
+        // order by issuer, unrelated certificates go last
+        while let Some(idx) = certs
+            .iter()
+            .position(|cert| cert.subject == chain[chain.len() - 1].issuer)
+        {
+            chain.push(certs.remove(idx));
+        }
+        chain.extend(certs);
+        Some(chain.into_iter().map(|cert| cert.der).collect())
+    }
     pub(super) fn alpn_protocol(&self) -> Option<&[u8]> {
         self.negotiated_alpn.as_deref()
     }
@@ -583,6 +633,28 @@ impl Drop for Context {
                 DeleteSecurityContext(&raw const self.ctxt);
             }
         }
+    }
+}
+
+/// Certificate context owned by the caller.
+struct RemoteCert(*const CERT_CONTEXT);
+
+impl Drop for RemoteCert {
+    fn drop(&mut self) {
+        unsafe { CertFreeCertificateContext(self.0) };
+    }
+}
+
+/// Encoded certificate of a valid certificate context.
+unsafe fn cert_der<'a>(cert: *const CERT_CONTEXT) -> &'a [u8] {
+    unsafe { blob((*cert).pbCertEncoded, (*cert).cbCertEncoded) }
+}
+
+unsafe fn blob<'a>(data: *const u8, len: u32) -> &'a [u8] {
+    if data.is_null() || len == 0 {
+        &[]
+    } else {
+        unsafe { slice::from_raw_parts(data, len as usize) }
     }
 }
 

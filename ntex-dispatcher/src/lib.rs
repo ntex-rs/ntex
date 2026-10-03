@@ -11,7 +11,7 @@
 #![deny(clippy::pedantic)]
 #![allow(clippy::cast_possible_truncation)]
 use std::task::{Context, Poll, ready};
-use std::{cell::Cell, fmt, future::Future, io, pin::Pin, rc::Rc};
+use std::{cell::Cell, fmt, future::Future, io, pin::Pin, rc::Rc, time::Instant};
 
 use ntex_codec::{Decoder, Encoder};
 use ntex_io::{Decoded, IoBoxed, IoStatusUpdate, RecvError};
@@ -591,22 +591,27 @@ where
 
     /// Arms the dispatcher timer for a read-side purpose, an armed timer
     /// with the same purpose keeps running.
+    ///
+    /// The keep-alive timer is suspended instead of stopped, re-arming it is
+    /// cheaper than registering it again.
     fn set_timer(&mut self, timer: Timer) {
         if self.timers.active == timer {
             return;
         }
         let io = &self.shared.io;
-        self.timers.active = match timer {
-            Timer::KeepAlive => {
+        self.timers.active = match (self.timers.active, timer) {
+            (Timer::KeepAlive | Timer::Suspended, Timer::Stopped) => Timer::Suspended,
+            (_, Timer::KeepAlive) => {
                 log::trace!(
                     "{}: Start keep-alive timer {:?}",
                     io.tag(),
                     io.cfg().keepalive_timeout()
                 );
-                io.start_timer(io.cfg().keepalive_timeout());
+                let hnd = io.start_timer(io.cfg().keepalive_timeout());
+                self.timers.keepalive = Some(hnd.instant());
                 Timer::KeepAlive
             }
-            Timer::FrameRead if let Some(params) = io.cfg().frame_read_rate() => {
+            (_, Timer::FrameRead) if let Some(params) = io.cfg().frame_read_rate() => {
                 io.start_timer(params.timeout);
                 Timer::FrameRead
             }
@@ -672,15 +677,26 @@ where
                 );
                 Err(Reason::KeepAlive)
             }
+            // the suspended keep-alive timer has expired, a timeout before its
+            // expiry is external
+            Timer::Suspended
+                if self
+                    .timers
+                    .keepalive
+                    .is_none_or(|expiry| Instant::now() >= expiry) =>
+            {
+                self.timers.active = Timer::Stopped;
+                Ok(())
+            }
             // external timeout, applies to idle connection
-            Timer::Stopped if self.shared.inflight.get() == 0 => {
+            Timer::Stopped | Timer::Suspended if self.shared.inflight.get() == 0 => {
                 log::trace!(
                     "{}: Idle timeout, stopping dispatcher",
                     self.shared.io.tag()
                 );
                 Err(Reason::KeepAlive)
             }
-            Timer::Stopped => Ok(()),
+            Timer::Stopped | Timer::Suspended => Ok(()),
         }
     }
 }
