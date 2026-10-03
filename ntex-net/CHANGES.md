@@ -1,5 +1,9 @@
 # Changes
 
+## [Unreleased]
+
+* iocp: send up to 32 buffers per `WSASend`, was 16
+
 ## [4.1.0] - 2026-10-01
 
 * polling: use level-triggered interest where supported and change it only

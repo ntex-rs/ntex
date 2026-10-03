@@ -451,12 +451,31 @@ impl<F> Io<F> {
     ///
     /// This does not clone the connection. `self` is replaced with a stopped
     /// placeholder and should no longer be used for I/O.
-    pub fn take(&self) -> Self {
+    ///
+    /// # Safety
+    ///
+    /// No reference derived from `self` may be alive across this call, the
+    /// filter returned by [`Io::filter`], the `IoRef` it dereferences to and
+    /// the config returned by [`IoRef::cfg`] all borrow the transferred state,
+    /// which is dropped together with the returned `Io`.
+    pub unsafe fn take(&self) -> Self {
         Self(UnsafeCell::new(self.take_io_ref()), marker::PhantomData)
     }
 
     fn take_io_ref(&self) -> IoRef {
         unsafe { mem::replace(&mut *self.0.get(), IoRef::create_empty()) }
+    }
+
+    /// Panics if the filter chain is in use, it cannot be changed then.
+    #[track_caller]
+    fn check_not_borrowed(&self) {
+        if self.st().buffer.is_borrowed() {
+            let tag = self.tag();
+            // the state is leaked, dropping `self` while unwinding would
+            // drop the filter that is in use
+            mem::forget(self.take_io_ref());
+            panic!("{tag}: filter chain is changed while it is in use");
+        }
     }
 
     fn st(&self) -> &IoState {
@@ -480,12 +499,15 @@ impl<F> Io<F> {
     /// live when this method is called or used afterward. Replacing the
     /// configuration may release the allocation backing those references.
     pub unsafe fn set_config<T: Into<SharedCfg>>(&self, cfg: T) {
+        let cfg = cfg.into().get::<IoConfig>();
+        let page_size = cfg.write_page_size();
+        if self.cfg().write_page_size() != page_size {
+            self.st().buffer.set_page_size(page_size);
+        }
+        self.st()
+            .flags
+            .set_direct_wr_enabled(cfg.write_buf_threshold() > 0);
         unsafe {
-            let cfg = cfg.into().get::<IoConfig>();
-            self.st().buffer.set_page_size(cfg.write_page_size());
-            self.st()
-                .flags
-                .set_direct_wr_enabled(cfg.write_buf_threshold() > 0);
             self.st().cfg.replace(cfg);
         }
     }
@@ -502,7 +524,13 @@ impl<F: FilterLayer, T: Filter> Io<Layer<F, T>> {
 impl<F: Filter> Io<F> {
     #[inline]
     /// Converts the current I/O stream into a sealed version.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called while the connection's filters or buffers are in use,
+    /// for example from a closure, codec or filter invoked by this connection.
     pub fn seal(self) -> Io<Sealed> {
+        self.check_not_borrowed();
         let state = self.take_io_ref();
         state.0.filter.seal::<F>();
 
@@ -517,10 +545,16 @@ impl<F: Filter> Io<F> {
 
     #[inline]
     /// Adds a new processing layer to the current filter chain.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called while the connection's filters or buffers are in use,
+    /// for example from a closure, codec or filter invoked by this connection.
     pub fn add_filter<U>(self, nf: U) -> Io<Layer<U, F>>
     where
         U: FilterLayer,
     {
+        self.check_not_borrowed();
         self.with_callbacks(|cb| cb.before_processing(&self));
 
         // Write buffer processing may be delayed,
@@ -531,17 +565,8 @@ impl<F: Filter> Io<F> {
 
         let state = self.take_io_ref();
 
-        // Add the buffers layer.
-        //
-        // Safety: no references into the buffer storage are retained.
-        // All APIs first remove the buffer from storage before processing it.
-        // The page size is read first and the exclusive borrow covers only
-        // the `buffer` field, so no other access overlaps it.
-        let page_size = state.0.cfg.write_page_size();
-        unsafe {
-            let buffer = &raw mut (*Rc::as_ptr(&state.0).cast_mut()).buffer;
-            (*buffer).add_layer(page_size);
-        }
+        // Add the buffers layer
+        state.0.buffer.add_layer(state.0.cfg.write_page_size());
 
         // Replace current filter
         state.0.filter.add_filter::<F, U>(nf);
@@ -559,11 +584,17 @@ impl<F: Filter> Io<F> {
 
     #[allow(clippy::items_after_statements)]
     /// Wraps the current layer with a wrapper.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called while the connection's filters or buffers are in use,
+    /// for example from a closure, codec or filter invoked by this connection.
     pub fn map_filter<U, R>(self, f: U) -> Io<R>
     where
         U: FnOnce(F) -> R,
         R: Filter,
     {
+        self.check_not_borrowed();
         self.with_callbacks(|cb| cb.before_processing(&self));
 
         // Write buffer processing may be delayed,
@@ -925,9 +956,14 @@ impl<F> Io<F> {
     /// returns `Ok` with `item` set to `None` after arranging for `cx` to be
     /// woken when progress is possible.
     ///
-    /// An error return does not register the waker. A successfully decoded item
-    /// takes precedence over timeout, backpressure, and peer-disconnect status
-    /// observed during the same poll.
+    /// An error return does not register the waker. While the connection is
+    /// open, an expired dispatcher timer and then active write backpressure are
+    /// reported before the read buffer is decoded, so an error never follows a
+    /// decode attempt and `Decoded` is never lost. The caller decides whether
+    /// input received together with a timeout is decoded first, see
+    /// [`IoRef::decode_item`](crate::IoRef::decode_item). Once the connection
+    /// is closing neither is reported, the buffered input is decoded and
+    /// `RecvError::PeerGone` is returned when no item is left.
     ///
     /// When the codec needs more input this goes through
     /// [`poll_read_more`](Self::poll_read_more), which releases read
@@ -943,6 +979,15 @@ impl<F> Io<F> {
         let st = self.st();
         st.flags.unset_read_ready();
 
+        let closed = st.flags.is_stopping() || st.flags.is_terminating();
+        if !closed {
+            if st.flags.check_dispatcher_timeout() {
+                return Err(RecvError::Timeout);
+            } else if st.flags.is_wr_backpressure() {
+                return Err(RecvError::WriteBackpressure);
+            }
+        }
+
         let decoded = self
             .decode_item(codec)
             .map_err(|err| RecvError::Decoder(err))?;
@@ -951,10 +996,6 @@ impl<F> Io<F> {
             Ok(decoded)
         } else if st.flags.is_stopping() || st.flags.is_terminating() {
             Err(RecvError::PeerGone(st.error()))
-        } else if st.flags.check_dispatcher_timeout() {
-            Err(RecvError::Timeout)
-        } else if st.flags.is_wr_backpressure() {
-            Err(RecvError::WriteBackpressure)
         } else {
             match self.poll_read_more(cx) {
                 Poll::Pending | Poll::Ready(Ok(Some(()))) => {
@@ -1162,26 +1203,35 @@ impl<F> Drop for Io<F> {
         let st = self.st();
         self.stop_timer();
 
-        if st.filter.is_set() {
-            // filter is unsafe and must be dropped explicitly,
-            // and won't be dropped without special attention
-            if !st.flags.is_closed() {
-                log::trace!("{}: Io is dropped, terminate connection", st.tag());
-            }
+        // code run by the filter chain dropped the `Io`, the filter is in use
+        let in_use = st.filter.is_set() && st.buffer.is_borrowed();
 
-            if st.write_outstanding() == 0 {
-                // Everything the application wrote has reached the transport,
-                // so the connection can end with a normal FIN and the peer
-                // sees a clean end of stream.
-                st.terminate_connection(None);
-            } else {
-                // Output is still buffered and the filter chain is about to go
-                // away, so it can never be delivered. Abort instead, so that
-                // the peer cannot mistake a truncated stream for a complete
-                // one.
+        if st.filter.is_set() {
+            if in_use {
+                // the filter cannot be dropped, it is leaked
                 st.force_close_connection();
+                st.filter.leak();
+            } else {
+                // filter is unsafe and must be dropped explicitly,
+                // and won't be dropped without special attention
+                if !st.flags.is_closed() {
+                    log::trace!("{}: Io is dropped, terminate connection", st.tag());
+                }
+
+                if st.write_outstanding() == 0 {
+                    // Everything the application wrote has reached the transport,
+                    // so the connection can end with a normal FIN and the peer
+                    // sees a clean end of stream.
+                    st.terminate_connection(None);
+                } else {
+                    // Output is still buffered and the filter chain is about to go
+                    // away, so it can never be delivered. Abort instead, so that
+                    // the peer cannot mistake a truncated stream for a complete
+                    // one.
+                    st.force_close_connection();
+                }
+                st.filter.drop_filter::<F>();
             }
-            st.filter.drop_filter::<F>();
 
             // Nothing can consume buffered input or deliver buffered output
             // anymore, but the state may outlive the `Io` for a while, held by
@@ -1195,6 +1245,13 @@ impl<F> Drop for Io<F> {
         }
 
         IoManager::unregister(self.io_ref());
+
+        // a panic while unwinding would abort
+        assert!(
+            !in_use || std::thread::panicking(),
+            "{}: Io is dropped while its filter is in use",
+            st.tag()
+        );
     }
 }
 
@@ -4111,6 +4168,28 @@ mod tests {
         assert_eq!(io.with_read_dst(BytesMut::take), b"data");
     }
 
+    /// Querying the read destination size leaves the read state in place.
+    #[ntex::test]
+    async fn read_dst_size_keeps_read_state() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = Io::new(server, SharedCfg::new("SRV"));
+
+        // an installed read pause is not cancelled
+        assert!(lazy(|cx| io.poll_read_pause(cx)).await.is_pending());
+        assert_eq!(io.read_dst_size(), 0);
+        assert!(io.flags().is_read_paused());
+
+        // read readiness is not cleared
+        client.write("data");
+        assert_eq!(io.read_notify().await.unwrap(), Some(()));
+        io.st().flags.set_read_ready();
+        assert_eq!(io.read_dst_size(), 4);
+        assert!(io.flags().is_read_ready());
+        assert_eq!(io.with_read_dst(BytesMut::take), b"data");
+        assert!(!io.flags().is_read_ready());
+    }
+
     struct Failing;
 
     impl Decoder for Failing {
@@ -4133,6 +4212,76 @@ mod tests {
             panic!("expected a decoder error")
         };
         assert_eq!(err, "invalid frame");
+    }
+
+    /// An expired timer is reported before decoding, the buffered input is
+    /// left for the next attempt.
+    #[ntex::test]
+    async fn poll_recv_decode_reports_timeout_before_decoding() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = Io::new(server, SharedCfg::new("SRV"));
+
+        client.write("data");
+        sleep(Millis(25)).await;
+        io.st().notify_timeout();
+
+        let res = lazy(|cx| io.poll_recv_decode(&BytesCodec, cx)).await;
+        assert!(matches!(res, Err(RecvError::Timeout)));
+        assert_eq!(io.st().buffer.read_dst_size(), 4);
+
+        let decoded = lazy(|cx| io.poll_recv_decode(&BytesCodec, cx))
+            .await
+            .unwrap();
+        assert_eq!(decoded.item.unwrap(), "data");
+        assert_eq!((decoded.consumed, decoded.remains), (4, 0));
+    }
+
+    /// Write backpressure is reported before decoding, the buffered input is
+    /// left for the next attempt.
+    #[ntex::test]
+    async fn poll_recv_decode_reports_write_backpressure_before_decoding() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = Io::new(server, SharedCfg::new("SRV"));
+
+        client.write("data");
+        sleep(Millis(25)).await;
+        io.st().flags.set_wr_backpressure();
+
+        let res = lazy(|cx| io.poll_recv_decode(&BytesCodec, cx)).await;
+        assert!(matches!(res, Err(RecvError::WriteBackpressure)));
+        assert_eq!(io.st().buffer.read_dst_size(), 4);
+
+        io.flush(false).await.unwrap();
+        let decoded = lazy(|cx| io.poll_recv_decode(&BytesCodec, cx))
+            .await
+            .unwrap();
+        assert_eq!(decoded.item.unwrap(), "data");
+    }
+
+    /// A closing connection reports neither an expired timer nor write
+    /// backpressure, the buffered input is decoded before the disconnect.
+    #[ntex::test]
+    async fn poll_recv_decode_closing_decodes_buffered_input() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let io = Io::new(server, SharedCfg::new("SRV"));
+
+        client.write("data");
+        sleep(Millis(25)).await;
+        io.close();
+        sleep(Millis(25)).await;
+        io.st().notify_timeout();
+        io.st().flags.set_wr_backpressure();
+
+        let decoded = lazy(|cx| io.poll_recv_decode(&BytesCodec, cx))
+            .await
+            .unwrap();
+        assert_eq!(decoded.item.unwrap(), "data");
+
+        let res = lazy(|cx| io.poll_recv_decode(&BytesCodec, cx)).await;
+        assert!(matches!(res, Err(RecvError::PeerGone(None))));
     }
 
     #[ntex::test]

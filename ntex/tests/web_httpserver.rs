@@ -474,11 +474,7 @@ async fn test_listen_rustls() {
     let (srv, sys) = rx.recv().unwrap();
 
     let client = client().await;
-    let response = client
-        .get(format!("https://localhost:{}", addr.port()))
-        .send()
-        .await
-        .unwrap();
+    let response = client.get(format!("https://{addr}")).send().await.unwrap();
     assert!(response.status().is_success());
 
     srv.stop(false).await;

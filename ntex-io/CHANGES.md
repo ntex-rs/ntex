@@ -1,5 +1,23 @@
 # Changes
 
+## [Unreleased]
+
+* `Io::take()` is unsafe, the filter and `IoRef` borrowed from the `Io` were freed with
+  the returned `Io`
+
+* Dropping an `Io` while its filter chain is in use panics, the connection is closed and
+  the filter is leaked; previously the filter was freed while in use
+
+* Filter chain buffers are stored inline, a connection without a filter layer no longer
+  allocates a buffer list, write buffers are accessed without moving them out
+
+* Add `IoRef::read_dst_size()`, returns the read destination size without changing the read
+  state
+
+* `Io::poll_recv_decode()` reports a dispatcher timeout and write back-pressure before
+  decoding, the decode result was dropped with the error. Neither is reported once the
+  connection is closing, buffered input is decoded before `PeerGone`
+
 ## [4.1.0] - 2026-10-01
 
 * The read buffer cache checks only the most recently released buffer instead of

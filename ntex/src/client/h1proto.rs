@@ -247,7 +247,7 @@ impl Stream for PlStream {
 
 fn release_connection(io: IoBoxed, force_close: bool, created: Instant, pool: Option<Acquired>) {
     if let Some(pool) = pool {
-        let close = force_close || io.with_read_dst(|buf| !buf.is_empty());
+        let close = force_close || io.read_dst_size() != 0;
         pool.release(io, created, close);
     }
 }

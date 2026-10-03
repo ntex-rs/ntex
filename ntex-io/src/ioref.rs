@@ -160,6 +160,7 @@ impl IoRef {
 
     /// Queries filter-specific data.
     pub fn query<T: 'static>(&self) -> types::QueryItem<T> {
+        let _borrow = self.0.buffer.borrow();
         types::QueryItem::new(self.filter().query(any::TypeId::of::<T>()))
     }
 
@@ -370,6 +371,17 @@ impl IoRef {
             self.update_read_destination(buf);
             res
         })
+    }
+
+    #[inline]
+    /// Returns the size of the application-facing read destination.
+    ///
+    /// Unlike [`with_read_dst`](Self::with_read_dst) this does not change the
+    /// read state, read readiness, read back-pressure and an installed read
+    /// pause are left in place, and no buffer is allocated. Returns `0` when
+    /// called from inside [`with_read_dst`](Self::with_read_dst).
+    pub fn read_dst_size(&self) -> usize {
+        self.0.buffer.read_dst_size()
     }
 
     /// Provides mutable access to the application-facing write source.

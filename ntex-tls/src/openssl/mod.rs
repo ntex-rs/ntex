@@ -117,9 +117,8 @@ impl SslFilter {
         let result = f(stream, buf);
 
         let st = stream.get_mut();
-        if let Some(src) = st.source.take()
-            && !src.is_empty()
-        {
+        // an empty source goes back to the read buffer cache
+        if let Some(src) = st.source.take() {
             buf.with_read_src(|buf| *buf = Some(src));
         }
 
@@ -749,6 +748,36 @@ pub(crate) mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(&item[..], b"hello");
+    }
+
+    /// A drained ciphertext buffer goes back to the read buffer cache, a
+    /// dropped one would cost an allocation for every read.
+    #[ntex::test]
+    async fn drained_source_is_cached() {
+        let (client, server) = handshake_pair().await;
+
+        // the transport reads into the top of the cache, decrypted data
+        // goes to the next buffer
+        let cfg = server.cfg().read_buf();
+        let (x, y, p) = (cfg.get(), cfg.get(), cfg.get());
+        let src = p.as_ptr();
+        cfg.release(x);
+        cfg.release(y);
+        cfg.release(p);
+
+        client
+            .send(Bytes::from_static(b"hello"), &BytesCodec)
+            .await
+            .unwrap();
+        let item = server.recv(&BytesCodec).await.unwrap().unwrap();
+        assert_eq!(&item[..], b"hello");
+
+        // the decrypted data buffer is released once decoded, after the source
+        let top = [cfg.get(), cfg.get()];
+        assert!(
+            top.iter().any(|b| b.as_ptr() == src),
+            "drained source is not cached"
+        );
     }
 
     /// Buffered output must not look like output produced by reading, that

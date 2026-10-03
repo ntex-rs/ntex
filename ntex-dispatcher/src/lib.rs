@@ -69,7 +69,7 @@ pub enum Reason<U: Encoder + Decoder> {
 
 /// Reports a truncated stream, the peer closed cleanly in the middle of a frame.
 fn truncated(io: &IoBoxed) -> Option<io::Error> {
-    if io.is_read_eof() && io.with_read_dst(|buf| !buf.is_empty()) {
+    if io.is_read_eof() && io.read_dst_size() != 0 {
         Some(io::Error::new(
             io::ErrorKind::UnexpectedEof,
             "bytes remaining on stream",
@@ -278,6 +278,37 @@ where
                                         return Poll::Pending;
                                     }
                                 }
+                                Err(RecvError::Timeout) if inner.timers.active != Timer::Write => {
+                                    // input received together with a read timer wins over
+                                    // its expiry, the buffered input is decoded first
+                                    match inner.shared.io.decode_item(&inner.shared.codec) {
+                                        Ok(decoded) => {
+                                            let timer = inner.timers.active;
+                                            inner.update_timer(&decoded);
+                                            if let Some(el) = decoded.item {
+                                                (DispatchItem::Item(el), true)
+                                            } else {
+                                                // a timer armed for the received input has
+                                                // not expired
+                                                if inner.timers.active == timer
+                                                    && let Err(ctl) = inner.handle_timeout()
+                                                {
+                                                    inner.st = inner.stop(ctl);
+                                                }
+                                                continue;
+                                            }
+                                        }
+                                        Err(err) => {
+                                            log::trace!(
+                                                "{}: Decoder error, stopping dispatcher: {:?}",
+                                                inner.shared.io.tag(),
+                                                err
+                                            );
+                                            inner.st = inner.stop(Reason::Decoder(err));
+                                            continue;
+                                        }
+                                    }
+                                }
                                 Err(RecvError::Timeout) => {
                                     if let Err(ctl) = inner.handle_timeout() {
                                         inner.st = inner.stop(ctl);
@@ -481,9 +512,7 @@ where
                     }
                     // frames that were already received are dispatched once
                     // the service is ready, as in the processing state
-                    IoStatusUpdate::PeerGone(_)
-                        if self.shared.io.with_read_dst(|buf| !buf.is_empty()) =>
-                    {
+                    IoStatusUpdate::PeerGone(_) if self.shared.io.read_dst_size() != 0 => {
                         log::trace!(
                             "{}: Peer is gone during pause, wait for service",
                             self.shared.io.tag()
@@ -2165,10 +2194,21 @@ mod tests {
         delay: Millis,
         data: Arc<Mutex<RefCell<Vec<usize>>>>,
     ) -> Dispatcher<BCodec, ()> {
-        let io = Io::new(
+        keepalive_io_dispatcher(keepalive_io(server), delay, data)
+    }
+
+    fn keepalive_io(server: IoTest) -> Io {
+        Io::new(
             server,
             SharedCfg::new("TEST").add(IoConfig::new().set_keepalive_timeout(Seconds(1))),
-        );
+        )
+    }
+
+    fn keepalive_io_dispatcher(
+        io: Io,
+        delay: Millis,
+        data: Arc<Mutex<RefCell<Vec<usize>>>>,
+    ) -> Dispatcher<BCodec, ()> {
         Dispatcher::new(
             io,
             BCodec(8),
@@ -2247,93 +2287,57 @@ mod tests {
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
     }
 
-    /// The keep-alive timer stays armed while a frame is handled, it is not
-    /// registered again for every frame.
+    /// A frame received together with the keep-alive expiry is dispatched.
     #[ntex::test]
-    async fn keepalive_timer_kept_during_frame_handling() {
+    async fn frame_received_with_keepalive_expiry_is_dispatched() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
 
-        let io = Io::new(
-            server,
-            SharedCfg::new("TEST").add(IoConfig::new().set_keepalive_timeout(Seconds(5))),
-        );
+        let data = Arc::new(Mutex::new(RefCell::new(Vec::new())));
+        let io = keepalive_io(server);
         let ioref = io.get_ref();
-        let handles = Rc::new(RefCell::new(Vec::new()));
-        let handles2 = handles.clone();
-        let disp = Dispatcher::new(
-            io,
-            BCodec(1),
-            Pipeline::new(
-                (),
-                ntex_service::fn_service(move |msg: DispatchItem<BCodec>| {
-                    let handles = handles2.clone();
-                    let ioref = ioref.clone();
-                    async move {
-                        if let DispatchItem::Item(bytes) = msg {
-                            handles.borrow_mut().push(ioref.timer_handle());
-                            return Ok::<_, ()>(Some(bytes));
-                        }
-                        Ok(None)
-                    }
-                }),
-            ),
-        );
+        let disp = keepalive_io_dispatcher(io, Millis(0), data.clone());
         spawn(async move {
             let _ = disp.await;
         });
 
-        for frame in ["1", "2"] {
-            sleep(Millis(50)).await;
-            client.write(frame);
-            let buf = client.read().await.unwrap();
-            assert_eq!(buf, Bytes::from(frame));
-        }
-        assert_eq!(handles.borrow().len(), 2);
-        assert!(handles.borrow().iter().all(ntex_io::TimerHandle::is_set));
+        // keep-alive is armed for the idle connection
+        sleep(Millis(100)).await;
+        ioref.with_read_dst(|buf| buf.extend_from_slice(b"12345678"));
+        ioref.notify_timeout();
+        sleep(Millis(100)).await;
         assert!(!client.is_closed());
+        assert_eq!(&data.lock().unwrap().borrow()[..], &[0]);
+
+        let buf = client.read().await.unwrap();
+        assert_eq!(buf, Bytes::from_static(b"12345678"));
     }
 
-    /// An external timeout stops the dispatcher while a frame is read and
-    /// the keep-alive timer is suspended, the same as when it is stopped.
+    /// A partial frame received together with the keep-alive expiry replaces
+    /// the expired keep-alive timer.
     #[ntex::test]
-    async fn notify_timeout_during_frame_read() {
+    async fn partial_frame_received_with_keepalive_expiry() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
 
-        let io = Io::new(
-            server,
-            SharedCfg::new("TEST").add(IoConfig::new().set_keepalive_timeout(Seconds(5))),
-        );
+        let data = Arc::new(Mutex::new(RefCell::new(Vec::new())));
+        let io = keepalive_io(server);
         let ioref = io.get_ref();
-        let data = Rc::new(RefCell::new(Vec::new()));
-        let data2 = data.clone();
-        let disp = Dispatcher::new(
-            io,
-            BCodec(8),
-            Pipeline::new(
-                (),
-                ntex_service::fn_service(move |msg: DispatchItem<BCodec>| {
-                    if let DispatchItem::Stop(Reason::KeepAlive) = msg {
-                        data2.borrow_mut().push(1);
-                    }
-                    async move { Ok::<_, ()>(None) }
-                }),
-            ),
-        );
+        let disp = keepalive_io_dispatcher(io, Millis(0), data.clone());
         spawn(async move {
             let _ = disp.await;
         });
 
         sleep(Millis(100)).await;
-        client.write("1234");
+        ioref.with_read_dst(|buf| buf.extend_from_slice(b"1234"));
+        ioref.notify_timeout();
         sleep(Millis(100)).await;
         assert!(!client.is_closed());
+        assert!(data.lock().unwrap().borrow().is_empty());
 
-        ioref.notify_timeout();
-        wait_closed(&client, Millis(1000)).await;
-        assert!(client.is_closed());
-        assert_eq!(&data.borrow()[..], &[1]);
+        client.write("5678");
+        let buf = client.read().await.unwrap();
+        assert_eq!(buf, Bytes::from_static(b"12345678"));
     }
 
     /// Service that answers every frame with `size` bytes and records events.
