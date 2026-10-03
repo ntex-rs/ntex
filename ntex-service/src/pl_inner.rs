@@ -1,4 +1,5 @@
-use std::{cell, future::Future, pin::Pin, ptr, rc::Rc, task::Context, task::Poll};
+use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
+use std::{cell, future::Future, pin::Pin, ptr, ptr::NonNull, rc::Rc, task::Context, task::Poll};
 
 use crate::{Ctx, Service, ctx::WaitersRef, util::BoxFuture};
 
@@ -18,6 +19,7 @@ impl<Req, Res, Err> PipelineApi<Req, Res, Err> {
             st,
             waiters: WaitersRef::new(),
             st_runtime: cell::UnsafeCell::new(RuntimeState::New),
+            calls: CallCache::default(),
         }))
     }
 
@@ -39,7 +41,7 @@ impl<Req, Res, Err> PipelineApi<Req, Res, Err> {
         self.0.ready(idx)
     }
 
-    pub(crate) fn call(&self, idx: u32, req: Req, ready: bool) -> BoxFuture<'_, Result<Res, Err>> {
+    pub(crate) fn call(&self, idx: u32, req: Req, ready: bool) -> CallFuture<'_, Result<Res, Err>> {
         self.0.call(idx, req, ready)
     }
 
@@ -69,6 +71,7 @@ struct PipelineInner<S: Service<St, Req>, St, Req> {
     st: St,
     st_runtime: cell::UnsafeCell<RuntimeState<S::Error>>,
     waiters: WaitersRef,
+    calls: CallCache,
 }
 
 impl<S: Service<St, Req>, St, Req> Drop for PipelineInner<S, St, Req> {
@@ -95,7 +98,7 @@ pub(crate) trait PipelineInternalApi<Req, Res, Err> {
 
     fn ready(&self, idx: u32) -> BoxFuture<'_, Result<(), Err>>;
 
-    fn call(&self, idx: u32, req: Req, ready: bool) -> BoxFuture<'_, Result<Res, Err>>;
+    fn call(&self, idx: u32, req: Req, ready: bool) -> CallFuture<'_, Result<Res, Err>>;
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Err>>;
 
@@ -126,8 +129,8 @@ where
         })
     }
 
-    fn call(&self, idx: u32, req: Req, ready: bool) -> BoxFuture<'_, Result<S::Res, S::Error>> {
-        Box::pin(async move {
+    fn call(&self, idx: u32, req: Req, ready: bool) -> CallFuture<'_, Result<S::Res, S::Error>> {
+        CallFuture::new_in(&self.calls, async move {
             if ready {
                 Ctx::<'_, S, St>::new(idx, &self.waiters, &self.st)
                     .call(&self.s, req)
@@ -253,6 +256,117 @@ where
     }
 }
 
+// ======================== CallFuture ============================
+
+/// Heap allocated service call future.
+///
+/// Futures created with [`CallFuture::new_in`] return their memory to a
+/// [`CallCache`] on drop, so subsequent calls can reuse it.
+pub(crate) struct CallFuture<'a, R> {
+    fut: NonNull<dyn Future<Output = R> + 'a>,
+    cache: Option<&'a CallCache>,
+}
+
+impl<'a, R> CallFuture<'a, R> {
+    fn new_in<F>(cache: &'a CallCache, fut: F) -> Self
+    where
+        F: Future<Output = R> + 'a,
+    {
+        if size_of::<F>() == 0 {
+            return Self::boxed(Box::pin(fut));
+        }
+        let ptr = cache.alloc(Layout::new::<F>()).cast::<F>();
+        // SAFETY: `ptr` is valid for writes of `F`
+        unsafe { ptr.as_ptr().write(fut) };
+        Self {
+            fut: ptr,
+            cache: Some(cache),
+        }
+    }
+
+    pub(crate) fn boxed(fut: BoxFuture<'a, R>) -> Self {
+        // SAFETY: the future is not moved out of its allocation, it is
+        // polled pinned and dropped in place
+        let fut = Box::into_raw(unsafe { Pin::into_inner_unchecked(fut) });
+        Self {
+            // SAFETY: `Box::into_raw` never returns null
+            fut: unsafe { NonNull::new_unchecked(fut) },
+            cache: None,
+        }
+    }
+}
+
+impl<R> Drop for CallFuture<'_, R> {
+    fn drop(&mut self) {
+        // SAFETY: `fut` points to a valid future that is owned by `self`
+        unsafe {
+            if let Some(cache) = self.cache {
+                let layout = Layout::for_value(self.fut.as_ref());
+                ptr::drop_in_place(self.fut.as_ptr());
+                cache.release(self.fut.cast(), layout);
+            } else {
+                drop(Box::from_raw(self.fut.as_ptr()));
+            }
+        }
+    }
+}
+
+impl<R> Future for CallFuture<'_, R> {
+    type Output = R;
+
+    #[inline]
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<R> {
+        // SAFETY: the future is heap allocated and never moves until it is dropped
+        unsafe { Pin::new_unchecked(&mut *self.fut.as_ptr()) }.poll(cx)
+    }
+}
+
+/// Keeps memory of the last completed call future.
+#[derive(Default)]
+pub(crate) struct CallCache(cell::Cell<Option<(NonNull<u8>, Layout)>>);
+
+impl CallCache {
+    fn alloc(&self, layout: Layout) -> NonNull<u8> {
+        match self.0.take() {
+            Some((ptr, l)) if l == layout => ptr,
+            cached => {
+                if let Some((ptr, l)) = cached {
+                    // SAFETY: `ptr` was allocated with layout `l`
+                    unsafe { dealloc(ptr.as_ptr(), l) };
+                }
+                // SAFETY: `layout` has non-zero size
+                NonNull::new(unsafe { alloc(layout) }).unwrap_or_else(|| handle_alloc_error(layout))
+            }
+        }
+    }
+
+    /// # Safety
+    ///
+    /// `ptr` must be allocated with `layout` by the global allocator and must not be used afterwards
+    unsafe fn release(&self, ptr: NonNull<u8>, layout: Layout) {
+        if let Some((ptr, l)) = self.0.replace(Some((ptr, layout))) {
+            // SAFETY: `ptr` was allocated with layout `l`
+            unsafe { dealloc(ptr.as_ptr(), l) };
+        }
+    }
+
+    #[cfg(test)]
+    fn cached(&self) -> Option<NonNull<u8>> {
+        let item = self.0.take();
+        self.0.set(item);
+        item.map(|(ptr, _)| ptr)
+    }
+}
+
+impl Drop for CallCache {
+    fn drop(&mut self) {
+        if let Some((ptr, l)) = self.0.take() {
+            // SAFETY: `ptr` was allocated with layout `l`
+            unsafe { dealloc(ptr.as_ptr(), l) };
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{future::pending, task::Waker};
@@ -315,5 +429,96 @@ mod tests {
         drop(pl);
         assert!(call.as_mut().poll(&mut cx).is_pending());
         drop(call);
+    }
+
+    struct Echo;
+
+    impl Service<(), Rc<usize>> for Echo {
+        type Res = usize;
+        type Error = ();
+
+        async fn call(&self, req: Rc<usize>, _: Ctx<'_, Self, ()>) -> Result<usize, ()> {
+            Ok(*req)
+        }
+    }
+
+    fn echo() -> PipelineInner<Echo, (), Rc<usize>> {
+        PipelineInner {
+            s: Echo,
+            st: (),
+            st_runtime: cell::UnsafeCell::new(RuntimeState::New),
+            waiters: WaitersRef::new(),
+            calls: CallCache::default(),
+        }
+    }
+
+    fn block<R>(fut: &CallFuture<'_, R>) -> NonNull<u8> {
+        fut.fut.cast()
+    }
+
+    #[test]
+    fn miri_call_future_reuses_memory() {
+        let mut cx = Context::from_waker(Waker::noop());
+        let pl = echo();
+
+        let mut fut = pl.call(0, Rc::new(1), false);
+        let b1 = block(&fut);
+        assert_eq!(Pin::new(&mut fut).poll(&mut cx), Poll::Ready(Ok(1)));
+        assert_eq!(pl.calls.cached(), None);
+        drop(fut);
+        assert_eq!(pl.calls.cached(), Some(b1));
+
+        let mut fut = pl.call(0, Rc::new(2), true);
+        assert_eq!(block(&fut), b1);
+        assert_eq!(pl.calls.cached(), None);
+
+        // concurrent call allocates
+        let fut2 = pl.call(0, Rc::new(3), false);
+        let b2 = block(&fut2);
+        assert_ne!(b2, b1);
+        assert_eq!(Pin::new(&mut fut).poll(&mut cx), Poll::Ready(Ok(2)));
+        drop(fut);
+        assert_eq!(pl.calls.cached(), Some(b1));
+        drop(fut2);
+        assert_eq!(pl.calls.cached(), Some(b2));
+
+        let fut = pl.call(0, Rc::new(4), false);
+        assert_eq!(block(&fut), b2);
+    }
+
+    #[test]
+    fn miri_call_future_drops_request() {
+        let mut cx = Context::from_waker(Waker::noop());
+        let pl = echo();
+        let req = Rc::new(1);
+
+        let fut = pl.call(0, req.clone(), false);
+        assert_eq!(Rc::strong_count(&req), 2);
+        drop(fut);
+        assert_eq!(Rc::strong_count(&req), 1);
+
+        let mut fut = pl.call(0, req.clone(), false);
+        assert_eq!(Rc::strong_count(&req), 2);
+        assert_eq!(Pin::new(&mut fut).poll(&mut cx), Poll::Ready(Ok(1)));
+        assert_eq!(Rc::strong_count(&req), 1);
+        drop(fut);
+        assert_eq!(Rc::strong_count(&req), 1);
+    }
+
+    #[test]
+    fn miri_boxed_call_future() {
+        let mut cx = Context::from_waker(Waker::noop());
+        let req = Rc::new(5);
+
+        let fut = CallFuture::boxed(Box::pin(std::future::ready(req.clone())));
+        assert_eq!(Rc::strong_count(&req), 2);
+        drop(fut);
+        assert_eq!(Rc::strong_count(&req), 1);
+
+        let mut fut = CallFuture::boxed(Box::pin(std::future::ready(req.clone())));
+        let Poll::Ready(res) = Pin::new(&mut fut).poll(&mut cx) else {
+            panic!()
+        };
+        assert!(Rc::ptr_eq(&res, &req));
     }
 }

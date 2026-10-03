@@ -1,7 +1,7 @@
 use std::{fmt, future, pin::Pin, task::Context, task::Poll};
 
-use crate::pl_inner::PipelineApi;
-use crate::{IntoService, Service, ServiceCaller, util::BoxFuture};
+use crate::pl_inner::{CallFuture, PipelineApi};
+use crate::{IntoService, Service, ServiceCaller};
 
 pub use crate::pl_factory::PipelineFactory;
 pub use crate::pl_state::{PipelineState, PipelineStateBinding};
@@ -199,7 +199,7 @@ impl<Req, Res, Err> Clone for PipelineBinding<Req, Res, Err> {
 /// the request is passed to the service as usual.
 pub struct PipelineCall<Req, Res, Err> {
     // `fut` borrows from `pl`, so it must be declared (and dropped) first
-    fut: BoxFuture<'static, Result<Res, Err>>,
+    fut: CallFuture<'static, Result<Res, Err>>,
     #[allow(dead_code)]
     pl: PipelineBinding<Req, Res, Err>,
 }
