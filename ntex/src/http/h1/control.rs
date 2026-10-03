@@ -271,6 +271,8 @@ pub struct Upgrade<F> {
 
 struct RequestIoAccess<F> {
     io: Rc<Io<F>>,
+    // `get()` must not borrow `io`, it is taken through a shared reference
+    ioref: IoRef,
     codec: Codec,
     taken: Cell<bool>,
 }
@@ -278,7 +280,7 @@ struct RequestIoAccess<F> {
 impl<F> fmt::Debug for RequestIoAccess<F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RequestIoAccess")
-            .field("io", self.io.as_ref())
+            .field("io", &self.ioref)
             .field("codec", &self.codec)
             .finish()
     }
@@ -286,18 +288,17 @@ impl<F> fmt::Debug for RequestIoAccess<F> {
 
 impl<F: Filter> crate::http::message::IoAccess for RequestIoAccess<F> {
     fn get(&self) -> Option<&IoRef> {
-        if self.taken.get() {
-            None
-        } else {
-            Some(self.io.as_ref())
-        }
+        if self.taken.get() { None } else { Some(&self.ioref) }
     }
 
     fn take(&self) -> Option<(IoBoxed, Codec)> {
         if self.taken.replace(true) {
             None
         } else {
-            Some((self.io.take().into(), self.codec.clone()))
+            // SAFETY: `io` is shared with the dispatcher only, which does not
+            // keep borrows of it, `get()` borrows the separate `ioref`
+            let io = unsafe { self.io.take() };
+            Some((io.into(), self.codec.clone()))
         }
     }
 }
@@ -329,6 +330,7 @@ impl<F: Filter> Upgrade<F> {
     pub fn ack(mut self) -> ControlAck<F> {
         // Move io into request
         let io = Rc::new(RequestIoAccess {
+            ioref: self.io.get_ref(),
             io: self.io,
             codec: self.codec,
             taken: Cell::new(false),
@@ -346,11 +348,14 @@ impl<F: Filter> Upgrade<F> {
     /// Returning this acknowledgement tells the dispatcher that the control
     /// service is responsible for the upgraded connection.
     pub fn handle(self) -> (ControlAck<F>, Io<F>, Request, Codec) {
+        // SAFETY: `handle` consumes `self`, borrows from `io()` are gone and
+        // the dispatcher does not keep borrows of its `io`
+        let io = unsafe { self.io.take() };
         (
             ControlAck {
                 result: ControlResult::UpgradeHandled,
             },
-            self.io.take(),
+            io,
             self.req,
             self.codec,
         )
@@ -630,14 +635,19 @@ mod tests {
     async fn request_io_access_is_one_shot() {
         let (_, server) = IoTest::create();
         let cfg: SharedCfg = SharedCfg::new("TEST").add(HttpServiceConfig::new()).into();
+        let io = Rc::new(Io::new(server, cfg.clone()));
         let access = RequestIoAccess {
-            io: Rc::new(Io::new(server, cfg.clone())),
+            ioref: io.get_ref(),
+            io,
             codec: Codec::new(1, cfg.get()),
             taken: Cell::new(false),
         };
 
-        assert!(access.get().is_some());
-        assert!(access.take().is_some());
+        let ioref = access.get().unwrap();
+        let (io, _) = access.take().unwrap();
+        drop(io);
+        // `get()` result does not borrow the taken io
+        assert_eq!(ioref.tag(), "TEST");
         assert!(access.get().is_none());
         assert!(access.take().is_none());
     }
