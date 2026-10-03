@@ -134,6 +134,15 @@ impl FilterPtr {
         }
     }
 
+    /// Replaces the filter with `NullFilter` without dropping it.
+    ///
+    /// The filter is neither read nor moved, so it may be in use.
+    pub(crate) fn leak(&self) {
+        // SAFETY: the old value is overwritten without being read, a `Box`
+        // holding the filter is not touched while the filter is borrowed
+        unsafe { ptr::write(self.0.get(), Repr::default()) }
+    }
+
     pub(crate) fn drop_filter<F>(&self) {
         if let Repr::Filter(ptr, _) = self.as_ref() {
             if !ptr.is_null() {
@@ -399,10 +408,16 @@ mod tests {
         AddFilter,
         MapFilter,
         Seal,
+        Drop,
     }
 
     impl Change {
-        const ALL: [Change; 3] = [Change::AddFilter, Change::MapFilter, Change::Seal];
+        const ALL: [Change; 4] = [
+            Change::AddFilter,
+            Change::MapFilter,
+            Change::Seal,
+            Change::Drop,
+        ];
 
         /// The result is leaked: without the check it would be dropped while
         /// the filter is in use.
@@ -414,6 +429,15 @@ mod tests {
                 })),
                 Change::MapFilter => mem::forget(io.map_filter(|f| f)),
                 Change::Seal => mem::forget(io.seal()),
+                Change::Drop => drop(io),
+            }
+        }
+
+        fn message(self) -> &'static str {
+            if let Change::Drop = self {
+                "Io is dropped while its filter is in use"
+            } else {
+                "filter chain is changed while it is in use"
             }
         }
     }
@@ -429,18 +453,15 @@ mod tests {
             }));
             if let Err(e) = &res {
                 let msg = e.downcast_ref::<String>().unwrap();
-                assert!(
-                    msg.contains("filter chain is changed while it is in use"),
-                    "{msg}"
-                );
+                assert!(msg.contains(change.message()), "{msg}");
             }
             result.set(Some(res.is_err()));
         }));
         panicked
     }
 
-    /// The filter chain cannot be changed from code run by the connection
-    /// while it holds references into the chain.
+    /// The filter chain cannot be changed, nor its `Io` dropped, from code run
+    /// by the connection while it holds references into the chain.
     #[test]
     fn change_while_lent_panics() {
         type Enter = fn(&crate::IoRef, &Hook);
@@ -472,12 +493,15 @@ mod tests {
                 let panicked = arm(io, change, &slot);
                 enter(&ioref, &slot);
                 assert_eq!(panicked.get(), Some(true), "{change:?} from {name}");
+                if let Change::Drop = change {
+                    assert!(!ioref.is_active(), "{name}");
+                }
             }
         }
     }
 
-    /// The filter chain cannot be changed from the filters while they
-    /// process input or output, or report readiness.
+    /// The filter chain cannot be changed, nor its `Io` dropped, from the
+    /// filters while they process input or output, or report readiness.
     #[ntex::test]
     async fn change_from_filter_panics() {
         for change in Change::ALL {
@@ -519,8 +543,63 @@ mod tests {
                     ntex_util::time::sleep(ntex_util::time::Millis(10)).await;
                 }
                 assert_eq!(panicked.get(), Some(true), "{change:?} from {trigger}");
+                if let Change::Drop = change {
+                    assert!(!ioref.is_active(), "{trigger}");
+                }
             }
         }
+    }
+
+    /// An `Io` dropped while its filter is in use leaks the filter, the
+    /// connection is closed and the filter chain no longer runs.
+    #[test]
+    fn drop_while_lent_leaks_filter() {
+        let p = Rc::new(Cell::new(0));
+        let slot = Hook::default();
+        let io = Io::from(IoTestWrapper)
+            .add_filter(HookFilter {
+                hook: slot.clone(),
+                at: At::Any,
+            })
+            .add_filter(DropFilter { p: p.clone() });
+        let ioref = io.get_ref();
+        let panicked = arm(io, Change::Drop, &slot);
+        assert!(ioref.query::<u8>().get().is_none());
+        assert_eq!(panicked.get(), Some(true));
+        assert!(!ioref.is_active());
+        assert_eq!(p.get(), 0);
+
+        let ran = Rc::new(Cell::new(false));
+        let r = ran.clone();
+        *slot.borrow_mut() = Some(Box::new(move || r.set(true)));
+        assert!(ioref.query::<u8>().get().is_none());
+        assert!(!ran.get());
+
+        drop(ioref);
+        assert_eq!(p.get(), 0);
+    }
+
+    /// An `Io` dropped while unwinding from its filter does not panic again,
+    /// that would abort.
+    #[test]
+    fn drop_while_lent_unwinding() {
+        let slot = Hook::default();
+        let io = Io::from(IoTestWrapper).add_filter(HookFilter {
+            hook: slot.clone(),
+            at: At::Any,
+        });
+        let ioref = io.get_ref();
+        *slot.borrow_mut() = Some(Box::new(move || {
+            let _io = io;
+            panic!("hook failed");
+        }));
+
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ioref.query::<u8>().get().is_none()
+        }));
+        let err = res.unwrap_err();
+        assert_eq!(err.downcast_ref::<&str>(), Some(&"hook failed"));
+        assert!(!ioref.is_active());
     }
 
     #[test]
