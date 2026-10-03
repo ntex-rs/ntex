@@ -1,5 +1,9 @@
 # Changes
 
+## [Unreleased]
+
+* Reuse pipeline call future memory instead of allocating it for every call
+
 ## [5.1.0] - 2026-09-30
 
 * Fix use-after-free when a pipeline is dropped with pending readiness or shutdown future
