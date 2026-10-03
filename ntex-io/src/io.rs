@@ -480,12 +480,15 @@ impl<F> Io<F> {
     /// live when this method is called or used afterward. Replacing the
     /// configuration may release the allocation backing those references.
     pub unsafe fn set_config<T: Into<SharedCfg>>(&self, cfg: T) {
+        let cfg = cfg.into().get::<IoConfig>();
+        let page_size = cfg.write_page_size();
+        if self.cfg().write_page_size() != page_size {
+            self.st().buffer.set_page_size(page_size);
+        }
+        self.st()
+            .flags
+            .set_direct_wr_enabled(cfg.write_buf_threshold() > 0);
         unsafe {
-            let cfg = cfg.into().get::<IoConfig>();
-            self.st().buffer.set_page_size(cfg.write_page_size());
-            self.st()
-                .flags
-                .set_direct_wr_enabled(cfg.write_buf_threshold() > 0);
             self.st().cfg.replace(cfg);
         }
     }

@@ -65,7 +65,6 @@ impl Stack {
         }
     }
 
-    #[inline]
     /// Returns the transport-facing buffer.
     fn transport(&self) -> &Buffer {
         self.wire.as_ref().unwrap_or(&self.app)
@@ -301,6 +300,7 @@ impl Buffer {
             .unwrap_or_else(|| io.cfg().read_buf().get());
         let result = f(&mut rb);
 
+        #[cfg(debug_assertions)]
         // check nested updates
         if self.read.take().is_some() {
             log::error!("Nested read io operation is detected");
