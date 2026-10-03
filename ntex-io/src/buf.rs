@@ -1,4 +1,4 @@
-use std::{cell::Cell, cell::RefCell, fmt, io, iter, mem, task::Poll};
+use std::{cell::Cell, cell::Ref, cell::RefCell, fmt, io, iter, mem, task::Poll};
 
 use ntex_bytes::{BytePageSize, BytePages, BytesMut};
 
@@ -13,7 +13,14 @@ use crate::{IoConfig, IoRef};
 /// toward the transport. The first one becomes `wire`, further ones go to
 /// `mid`. The layer at position `i` uses the buffers at positions `i` and
 /// `i + 1`, the innermost layer writes to and reads from `wire`.
-pub(crate) struct Stack {
+///
+/// Adding a layer moves buffers, so it needs exclusive access to the layers.
+/// Everything that holds references into them, including while it runs code
+/// it does not control such as closures, codecs or filters, holds a shared
+/// borrow.
+pub(crate) struct Stack(RefCell<Layers>);
+
+pub(crate) struct Layers {
     app: Buffer,
     mid: Vec<Buffer>,
     wire: Option<Buffer>,
@@ -27,22 +34,22 @@ struct Buffer {
 impl fmt::Debug for Stack {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Stack")
-            .field("layers", &self.layers())
+            .field("layers", &self.borrow().count())
             .finish()
     }
 }
 
-impl Stack {
-    pub(crate) fn new(size: BytePageSize) -> Self {
-        Self {
-            app: Buffer::new(size),
-            mid: Vec::new(),
-            wire: None,
-        }
+impl fmt::Debug for Layers {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Layers")
+            .field("layers", &self.count())
+            .finish()
     }
+}
 
+impl Layers {
     /// Returns the number of installed filter layers.
-    fn layers(&self) -> usize {
+    fn count(&self) -> usize {
         self.wire.as_ref().map_or(0, |_| self.mid.len() + 1)
     }
 
@@ -70,18 +77,53 @@ impl Stack {
         self.wire.as_ref().unwrap_or(&self.app)
     }
 
+    /// Returns the size of the transport-facing write buffer.
+    fn write_dst_size(&self) -> usize {
+        self.transport().write_len()
+    }
+}
+
+impl Stack {
+    pub(crate) fn new(size: BytePageSize) -> Self {
+        Self(RefCell::new(Layers {
+            app: Buffer::new(size),
+            mid: Vec::new(),
+            wire: None,
+        }))
+    }
+
+    /// Borrows the layers, the stack cannot change until the borrow is
+    /// dropped.
+    #[inline]
+    pub(crate) fn borrow(&self) -> Ref<'_, Layers> {
+        self.0.borrow()
+    }
+
+    /// Whether references into the stack may be held by running code.
+    pub(crate) fn is_borrowed(&self) -> bool {
+        self.0.try_borrow_mut().is_err()
+    }
+
     pub(crate) fn set_page_size(&self, size: BytePageSize) {
-        for b in self.buffers() {
+        for b in self.borrow().buffers() {
             b.with_write_if_free(|b| b.set_page_size(size));
         }
     }
 
-    pub(crate) fn add_layer(&mut self, page_size: BytePageSize) {
-        let outer = mem::replace(&mut self.app, Buffer::new(page_size));
-        if self.wire.is_none() {
-            self.wire = Some(outer);
+    /// Adds a buffer for a new outermost layer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the stack is borrowed.
+    pub(crate) fn add_layer(&self, page_size: BytePageSize) {
+        let Ok(mut layers) = self.0.try_borrow_mut() else {
+            panic!("filter buffers are in use");
+        };
+        let outer = mem::replace(&mut layers.app, Buffer::new(page_size));
+        if layers.wire.is_none() {
+            layers.wire = Some(outer);
         } else {
-            self.mid.insert(0, outer);
+            layers.mid.insert(0, outer);
         }
     }
 
@@ -89,67 +131,70 @@ impl Stack {
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
-        self.transport().with_read(io, f)
+        self.borrow().transport().with_read(io, f)
     }
 
     pub(crate) fn with_read_dst<F, R>(&self, io: &IoRef, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
-        self.app.with_read(io, f)
+        self.borrow().app.with_read(io, f)
     }
 
     pub(crate) fn write_buf_size(&self) -> usize {
         // check size for first level because delayed filter processing
-        if let Some(wire) = &self.wire {
-            self.app.write_len() + wire.write_len()
+        let layers = self.borrow();
+        if let Some(wire) = &layers.wire {
+            layers.app.write_len() + wire.write_len()
         } else {
-            self.app.write_len()
+            layers.app.write_len()
         }
     }
 
     /// Returns the size of the transport-facing write buffer.
     pub(crate) fn write_dst_size(&self) -> usize {
-        self.transport().write_len()
+        self.borrow().write_dst_size()
     }
 
     pub(crate) fn with_write_src<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytePages) -> R,
     {
-        self.app.with_write(f)
+        self.borrow().app.with_write(f)
     }
 
     pub(crate) fn with_write_dst<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytePages) -> R,
     {
-        self.transport().with_write(f)
+        self.borrow().transport().with_write(f)
     }
 
     pub(crate) fn read_dst_size(&self) -> usize {
-        self.app.read_len()
+        self.borrow().app.read_len()
     }
 
     pub(crate) fn with_filter<F, R>(&self, io: &IoRef, f: F) -> R
     where
         F: FnOnce(&mut FilterCtx<'_>) -> R,
     {
+        let layers = self.borrow();
         let mut ctx = FilterCtx {
             io,
             idx: 0,
-            stack: self,
+            layers: &layers,
             st: FilterUpdates { wants_write: false },
         };
         f(&mut ctx)
     }
 
     pub(crate) fn get_read_buf(&self) -> Option<BytesMut> {
-        self.transport().read.take()
+        self.borrow().transport().read.take()
     }
 
     pub(crate) fn set_read_buf(&self, buf: BytesMut, cfg: &IoConfig) {
-        let buffer = self.transport();
+        let layers = self.borrow();
+        let buffer = layers.transport();
         if let Some(mut first_buf) = buffer.read.take() {
             // grow through the configured policy, so the merged buffer
             // stays cacheable when the data fits
@@ -165,10 +210,11 @@ impl Stack {
     }
 
     pub(crate) fn process_read_buf(&self, io: &IoRef) -> io::Result<FilterUpdates> {
+        let layers = self.borrow();
         let mut ctx = FilterCtx {
             io,
             idx: 0,
-            stack: self,
+            layers: &layers,
             st: FilterUpdates { wants_write: false },
         };
         io.with_callbacks(|cb| cb.before_processing(io));
@@ -179,23 +225,25 @@ impl Stack {
     }
 
     pub(crate) fn process_read_buf_no_cb(&self, io: &IoRef) -> io::Result<FilterUpdates> {
+        let layers = self.borrow();
         let mut ctx = FilterCtx {
             io,
             idx: 0,
-            stack: self,
+            layers: &layers,
             st: FilterUpdates { wants_write: false },
         };
         io.filter().process_read_buf(&mut ctx).map(|()| ctx.st)
     }
 
     pub(crate) fn process_write_buf(&self, io: &IoRef) -> io::Result<()> {
-        if self.app.is_write_empty() {
+        let layers = self.borrow();
+        if layers.app.is_write_empty() {
             Ok(())
         } else {
             let mut ctx = FilterCtx {
                 io,
                 idx: 0,
-                stack: self,
+                layers: &layers,
                 st: FilterUpdates { wants_write: true },
             };
             io.with_callbacks(|cb| cb.before_processing(io));
@@ -207,13 +255,14 @@ impl Stack {
     }
 
     pub(crate) fn process_write_buf_no_cb(&self, io: &IoRef) -> io::Result<()> {
-        if self.app.is_write_empty() {
+        let layers = self.borrow();
+        if layers.app.is_write_empty() {
             Ok(())
         } else {
             let mut ctx = FilterCtx {
                 io,
                 idx: 0,
-                stack: self,
+                layers: &layers,
                 st: FilterUpdates { wants_write: true },
             };
             io.filter().process_write_buf(&mut ctx)
@@ -221,10 +270,11 @@ impl Stack {
     }
 
     pub(crate) fn process_write_buf_force(&self, io: &IoRef) -> io::Result<()> {
+        let layers = self.borrow();
         let mut ctx = FilterCtx {
             io,
             idx: 0,
-            stack: self,
+            layers: &layers,
             st: FilterUpdates { wants_write: true },
         };
         io.with_callbacks(|cb| cb.before_processing(io));
@@ -248,7 +298,7 @@ impl Stack {
     /// Read buffers go back to the cache and write pages are freed, the
     /// buffers themselves stay usable.
     pub(crate) fn release(&self, cfg: &IoConfig) {
-        for b in self.buffers() {
+        for b in self.borrow().buffers() {
             if let Some(buf) = b.read.take() {
                 cfg.read_buf().release(buf);
             }
@@ -338,7 +388,7 @@ pub(crate) struct FilterUpdates {
 pub struct FilterCtx<'a> {
     io: &'a IoRef,
     idx: usize,
-    stack: &'a Stack,
+    layers: &'a Layers,
     st: FilterUpdates,
 }
 
@@ -378,7 +428,7 @@ impl FilterCtx<'_> {
         let mut buf = FilterBuf {
             io: self.io,
             curr: self.buffer(),
-            next: self.stack.get(self.idx + 1),
+            next: self.layers.get(self.idx + 1),
             wants_write: Cell::new(self.st.wants_write),
         };
         let result = f(&mut buf);
@@ -391,13 +441,13 @@ impl FilterCtx<'_> {
     #[inline]
     /// Returns the size of the application-facing read buffer.
     pub fn read_dst_size(&self) -> usize {
-        self.stack.app.read_len()
+        self.layers.app.read_len()
     }
 
     #[inline]
     /// Returns the size of the transport-facing write buffer.
     pub fn write_dst_size(&mut self) -> usize {
-        self.stack.write_dst_size()
+        self.layers.write_dst_size()
     }
 
     pub(crate) fn clear_write_buf(&mut self) {
@@ -405,7 +455,7 @@ impl FilterCtx<'_> {
     }
 
     fn buffer(&self) -> &Buffer {
-        self.stack
+        self.layers
             .get(self.idx)
             .expect("Filter context is outside of the filter chain")
     }
@@ -571,6 +621,47 @@ mod tests {
     use super::*;
     use crate::{Io, testing::IoTest};
 
+    #[test]
+    fn miri_add_layer_keeps_buffers() {
+        let stack = Stack::new(BytePageSize::Size8);
+        for i in 0..4u8 {
+            let layers = stack.borrow();
+            let nested = stack.borrow();
+            let mut buf = BytesMut::new();
+            buf.extend_from_slice(&[i]);
+            layers.app.read.set(Some(buf));
+            drop(nested);
+            assert!(stack.is_borrowed());
+            drop(layers);
+            stack.add_layer(BytePageSize::Size8);
+        }
+
+        let layers = stack.borrow();
+        assert_eq!(layers.count(), 4);
+        let reads: Vec<_> = layers
+            .buffers()
+            .map(|b| b.read.take().map(|b| b.to_vec()))
+            .collect();
+        assert_eq!(
+            reads,
+            [
+                None,
+                Some(vec![3]),
+                Some(vec![2]),
+                Some(vec![1]),
+                Some(vec![0])
+            ]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "filter buffers are in use")]
+    fn miri_add_layer_while_borrowed() {
+        let stack = Stack::new(BytePageSize::Size8);
+        let _layers = stack.borrow();
+        stack.add_layer(BytePageSize::Size8);
+    }
+
     #[ntex::test]
     async fn stack_without_layers() {
         let (_, server) = IoTest::create();
@@ -578,11 +669,12 @@ mod tests {
         let ioref = io.get_ref();
 
         let stack = Stack::new(BytePageSize::Size8);
-        assert_eq!(stack.layers(), 0);
+        let layers = stack.borrow();
+        assert_eq!(layers.count(), 0);
         assert!(format!("{stack:?}").contains("layers: 0"));
-        assert!(stack.mid.is_empty() && stack.wire.is_none());
-        assert!(ptr::eq(stack.transport(), &raw const stack.app));
-        assert!(stack.get(1).is_none());
+        assert!(layers.mid.is_empty() && layers.wire.is_none());
+        assert!(ptr::eq(layers.transport(), &raw const layers.app));
+        assert!(layers.get(1).is_none());
         assert_eq!(stack.read_dst_size(), 0);
         assert_eq!(stack.write_buf_size(), 0);
 
@@ -600,7 +692,7 @@ mod tests {
             assert_eq!(ctx.read_dst_size(), 7);
             assert_eq!(ctx.write_dst_size(), 3);
             ctx.with_buffer(|buf| {
-                assert!(ptr::eq(buf.curr, &raw const stack.app));
+                assert!(ptr::eq(buf.curr, &raw const layers.app));
                 assert!(buf.next.is_none());
                 buf.with_read_buffers(|src, dst| {
                     assert!(src.is_none());
@@ -613,7 +705,7 @@ mod tests {
                 });
             });
         });
-        assert!(stack.wire.is_none());
+        assert!(layers.wire.is_none());
 
         assert_eq!(
             stack.with_write_dst(|buf| buf.split_to(3).freeze()),
@@ -625,7 +717,7 @@ mod tests {
         assert!(stack.get_read_buf().is_none());
 
         stack.set_page_size(BytePageSize::Size32);
-        stack
+        layers
             .app
             .with_write(|buf| assert_eq!(buf.page_size(), BytePageSize::Size32));
     }
@@ -637,21 +729,22 @@ mod tests {
         let ioref = io.get_ref();
 
         // data buffered before the layer is added belongs to the transport
-        let mut stack = Stack::new(BytePageSize::Size8);
+        let stack = Stack::new(BytePageSize::Size8);
         stack.with_write_src(|buf| buf.put_slice(b"plain"));
         stack.set_read_buf(BytesMut::from(&b"hello"[..]), ioref.cfg());
         stack.add_layer(BytePageSize::Size16);
 
-        assert_eq!(stack.layers(), 1);
+        let layers = stack.borrow();
+        assert_eq!(layers.count(), 1);
         assert!(format!("{stack:?}").contains("layers: 1"));
-        assert!(stack.mid.is_empty());
-        let wire = stack.wire.as_ref().unwrap();
-        assert!(ptr::eq(stack.transport(), wire));
-        assert!(ptr::eq(stack.get(1).unwrap(), wire));
-        assert!(stack.get(2).is_none());
+        assert!(layers.mid.is_empty());
+        let wire = layers.wire.as_ref().unwrap();
+        assert!(ptr::eq(layers.transport(), wire));
+        assert!(ptr::eq(layers.get(1).unwrap(), wire));
+        assert!(layers.get(2).is_none());
         assert_eq!(stack.read_dst_size(), 0);
         assert_eq!(stack.write_dst_size(), 5);
-        stack.app.with_write(|buf| {
+        layers.app.with_write(|buf| {
             assert!(buf.is_empty());
             assert_eq!(buf.page_size(), BytePageSize::Size16);
         });
@@ -662,7 +755,7 @@ mod tests {
 
         stack.with_filter(&ioref, |ctx| {
             ctx.with_buffer(|buf| {
-                assert!(ptr::eq(buf.curr, &raw const stack.app));
+                assert!(ptr::eq(buf.curr, &raw const layers.app));
                 buf.with_read_buffers(|src, dst| {
                     dst.extend_from_slice(&src.take().unwrap());
                 });
@@ -713,17 +806,22 @@ mod tests {
 
         // each layer is added outermost, buffered data moves toward the
         // transport, the data of the first layer ends up in `wire`
-        let mut stack = Stack::new(BytePageSize::Size8);
+        let stack = Stack::new(BytePageSize::Size8);
         for data in ["a", "bb", "cccc"] {
             stack.with_write_src(|buf| buf.put_slice(data.as_bytes()));
-            stack.app.read.set(Some(BytesMut::from(data.as_bytes())));
+            stack
+                .borrow()
+                .app
+                .read
+                .set(Some(BytesMut::from(data.as_bytes())));
             stack.add_layer(BytePageSize::Size16);
         }
-        assert_eq!(stack.layers(), 3);
+        let layers = stack.borrow();
+        assert_eq!(layers.count(), 3);
         assert!(format!("{stack:?}").contains("layers: 3"));
-        assert_eq!(stack.mid.len(), 2);
-        assert!(ptr::eq(stack.transport(), stack.wire.as_ref().unwrap()));
-        assert!(stack.get(4).is_none());
+        assert_eq!(layers.mid.len(), 2);
+        assert!(ptr::eq(layers.transport(), layers.wire.as_ref().unwrap()));
+        assert!(layers.get(4).is_none());
 
         // only the outermost and the transport-facing buffers are pending
         stack.with_write_src(|buf| buf.put_slice(b"app"));
@@ -745,13 +843,13 @@ mod tests {
         assert_eq!(stack.get_read_buf().as_deref(), Some(b"a".as_ref()));
 
         stack.set_page_size(BytePageSize::Size32);
-        for buf in stack.buffers() {
+        for buf in layers.buffers() {
             buf.with_write(|buf| assert_eq!(buf.page_size(), BytePageSize::Size32));
         }
 
         stack.release(ioref.cfg());
-        assert_eq!(stack.buffers().count(), 4);
-        for buf in stack.buffers() {
+        assert_eq!(layers.buffers().count(), 4);
+        for buf in layers.buffers() {
             assert_eq!(buf.read_len(), 0);
             assert_eq!(buf.write_len(), 0);
         }
@@ -763,7 +861,7 @@ mod tests {
         let (_, server) = IoTest::create();
         let io = Io::from(server);
         let ioref = io.get_ref();
-        let mut stack = Stack::new(BytePageSize::Size8);
+        let stack = Stack::new(BytePageSize::Size8);
         stack.add_layer(BytePageSize::Size8);
 
         stack.with_filter(&ioref, |ctx| {
@@ -804,7 +902,7 @@ mod tests {
         let (_, server) = IoTest::create();
         let io = Io::from(server);
         let ioref = io.get_ref();
-        let mut stack = Stack::new(BytePageSize::Size8);
+        let stack = Stack::new(BytePageSize::Size8);
         stack.add_layer(BytePageSize::Size8);
         stack.set_read_buf(BytesMut::from(&b"input"[..]), ioref.cfg());
 
@@ -873,7 +971,7 @@ mod tests {
         let (_, server) = IoTest::create();
         let io = Io::from(server);
         let ioref = io.get_ref();
-        let mut stack = Stack::new(BytePageSize::Size8);
+        let stack = Stack::new(BytePageSize::Size8);
         stack.add_layer(BytePageSize::Size8);
         stack.with_write_src(|buf| buf.put_slice(b"output"));
 

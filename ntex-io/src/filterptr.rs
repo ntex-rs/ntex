@@ -147,13 +147,20 @@ impl FilterPtr {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, io, rc::Rc};
+    use std::{
+        cell::Cell,
+        io,
+        rc::Rc,
+        task::{Context, Poll},
+    };
 
     use ntex_bytes::Bytes;
     use ntex_codec::BytesCodec;
 
     use super::*;
-    use crate::{Base, FilterBuf, Handle, Io, IoContext, IoStream, testing::IoTest};
+    use crate::{
+        Base, FilterBuf, FilterCtx, Handle, Io, IoContext, IoStream, Readiness, testing::IoTest,
+    };
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";
@@ -284,6 +291,236 @@ mod tests {
         assert!(res.is_err());
         assert!(!ioref.is_active());
         drop(client);
+    }
+
+    type Hook = Rc<std::cell::RefCell<Option<Box<dyn FnOnce()>>>>;
+
+    fn run(hook: &Hook) {
+        let hook = hook.borrow_mut().take();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
+    /// Where `HookFilter` runs its hook.
+    #[derive(Clone, Copy, PartialEq)]
+    enum At {
+        /// From every callback.
+        Any,
+        /// From write processing only, read processing produces output.
+        Write,
+    }
+
+    /// Runs a hook from its callbacks, to change the filter chain while it
+    /// is in use.
+    struct HookFilter {
+        hook: Hook,
+        at: At,
+    }
+
+    impl std::fmt::Debug for HookFilter {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("HookFilter")
+        }
+    }
+
+    impl FilterLayer for HookFilter {
+        fn query(&self, _: any::TypeId) -> Option<Box<dyn any::Any>> {
+            if self.at == At::Any {
+                run(&self.hook);
+            }
+            None
+        }
+
+        fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+            if self.at == At::Any {
+                run(&self.hook);
+            } else {
+                buf.with_write_buffers(|_, dst| dst.extend_from_slice(b"reply"));
+            }
+            buf.with_read_buffers(|src, dst| {
+                if let Some(src) = src.take() {
+                    dst.extend_from_slice(&src);
+                }
+                Ok(())
+            })
+        }
+
+        fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+            run(&self.hook);
+            buf.with_write_buffers(|src, dst| {
+                src.move_to(dst);
+                Ok(())
+            })
+        }
+    }
+
+    /// Runs a hook when the transport polls readiness.
+    struct PollHook<F> {
+        inner: F,
+        hook: Hook,
+        read: bool,
+    }
+
+    impl<F: Filter> Filter for PollHook<F> {
+        fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
+            self.inner.query(id)
+        }
+
+        fn shutdown(&self, ctx: &mut FilterCtx<'_>) -> io::Result<Poll<()>> {
+            self.inner.shutdown(ctx)
+        }
+
+        fn process_read_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()> {
+            self.inner.process_read_buf(ctx)
+        }
+
+        fn process_write_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()> {
+            self.inner.process_write_buf(ctx)
+        }
+
+        fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
+            if self.read {
+                run(&self.hook);
+            }
+            self.inner.poll_read_ready(cx)
+        }
+
+        fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
+            if !self.read {
+                run(&self.hook);
+            }
+            self.inner.poll_write_ready(cx)
+        }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum Change {
+        AddFilter,
+        MapFilter,
+        Seal,
+    }
+
+    impl Change {
+        const ALL: [Change; 3] = [Change::AddFilter, Change::MapFilter, Change::Seal];
+
+        /// The result is leaked: without the check it would be dropped while
+        /// the filter is in use.
+        fn apply<F: Filter>(self, io: Io<F>) {
+            match self {
+                Change::AddFilter => mem::forget(io.add_filter(HookFilter {
+                    hook: Hook::default(),
+                    at: At::Any,
+                })),
+                Change::MapFilter => mem::forget(io.map_filter(|f| f)),
+                Change::Seal => mem::forget(io.seal()),
+            }
+        }
+    }
+
+    /// Installs a hook in `slot` applying `change` to `io`, returns whether
+    /// the change panicked once the hook ran.
+    fn arm<F: Filter>(io: Io<F>, change: Change, slot: &Hook) -> Rc<Cell<Option<bool>>> {
+        let panicked = Rc::new(Cell::new(None));
+        let result = panicked.clone();
+        *slot.borrow_mut() = Some(Box::new(move || {
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                change.apply(io);
+            }));
+            if let Err(e) = &res {
+                let msg = e.downcast_ref::<String>().unwrap();
+                assert!(
+                    msg.contains("filter chain is changed while it is in use"),
+                    "{msg}"
+                );
+            }
+            result.set(Some(res.is_err()));
+        }));
+        panicked
+    }
+
+    /// The filter chain cannot be changed from code run by the connection
+    /// while it holds references into the chain.
+    #[test]
+    fn change_while_lent_panics() {
+        type Enter = fn(&crate::IoRef, &Hook);
+        let entries: [(&str, Enter); 6] = [
+            ("with_read_src", |io, f| io.with_read_src(|_| run(f))),
+            ("with_read_dst", |io, f| io.with_read_dst(|_| run(f))),
+            ("with_write_src", |io, f| {
+                io.with_write_src(|_| run(f)).unwrap();
+            }),
+            ("with_write_dst", |io, f| io.with_write_dst(|_| run(f))),
+            ("with_buf", |io, f| io.with_buf(|_| run(f)).unwrap()),
+            ("query", |io, _| assert!(io.query::<u8>().get().is_none())),
+        ];
+
+        for change in Change::ALL {
+            for (name, enter) in entries {
+                let slot = Hook::default();
+                // only `query` runs the filter's hook
+                let filter_hook = if name == "query" {
+                    slot.clone()
+                } else {
+                    Hook::default()
+                };
+                let io = Io::from(IoTestWrapper).add_filter(HookFilter {
+                    hook: filter_hook,
+                    at: At::Any,
+                });
+                let ioref = io.get_ref();
+                let panicked = arm(io, change, &slot);
+                enter(&ioref, &slot);
+                assert_eq!(panicked.get(), Some(true), "{change:?} from {name}");
+            }
+        }
+    }
+
+    /// The filter chain cannot be changed from the filters while they
+    /// process input or output, or report readiness.
+    #[ntex::test]
+    async fn change_from_filter_panics() {
+        for change in Change::ALL {
+            for trigger in ["read", "write", "read-reply", "read-ready", "write-ready"] {
+                let (client, server) = IoTest::create();
+                client.remote_buffer_cap(1024);
+                let slot = Hook::default();
+                let poll = trigger.ends_with("-ready");
+                let io = Io::from(server).add_filter(HookFilter {
+                    hook: if poll { Hook::default() } else { slot.clone() },
+                    at: if trigger == "read-reply" {
+                        At::Write
+                    } else {
+                        At::Any
+                    },
+                });
+                let ioref = io.get_ref();
+                let panicked = if poll {
+                    let hook = slot.clone();
+                    let read = trigger == "read-ready";
+                    arm(
+                        io.map_filter(|inner| PollHook { inner, hook, read }),
+                        change,
+                        &slot,
+                    )
+                } else {
+                    arm(io, change, &slot)
+                };
+
+                if trigger.starts_with("read") {
+                    client.write(TEXT);
+                } else {
+                    let _ = ioref.encode_slice(b"out");
+                }
+                for _ in 0..100 {
+                    if panicked.get().is_some() {
+                        break;
+                    }
+                    ntex_util::time::sleep(ntex_util::time::Millis(10)).await;
+                }
+                assert_eq!(panicked.get(), Some(true), "{change:?} from {trigger}");
+            }
+        }
     }
 
     #[test]
