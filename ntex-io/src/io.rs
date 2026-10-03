@@ -1203,26 +1203,35 @@ impl<F> Drop for Io<F> {
         let st = self.st();
         self.stop_timer();
 
-        if st.filter.is_set() {
-            // filter is unsafe and must be dropped explicitly,
-            // and won't be dropped without special attention
-            if !st.flags.is_closed() {
-                log::trace!("{}: Io is dropped, terminate connection", st.tag());
-            }
+        // code run by the filter chain dropped the `Io`, the filter is in use
+        let in_use = st.filter.is_set() && st.buffer.is_borrowed();
 
-            if st.write_outstanding() == 0 {
-                // Everything the application wrote has reached the transport,
-                // so the connection can end with a normal FIN and the peer
-                // sees a clean end of stream.
-                st.terminate_connection(None);
-            } else {
-                // Output is still buffered and the filter chain is about to go
-                // away, so it can never be delivered. Abort instead, so that
-                // the peer cannot mistake a truncated stream for a complete
-                // one.
+        if st.filter.is_set() {
+            if in_use {
+                // the filter cannot be dropped, it is leaked
                 st.force_close_connection();
+                st.filter.leak();
+            } else {
+                // filter is unsafe and must be dropped explicitly,
+                // and won't be dropped without special attention
+                if !st.flags.is_closed() {
+                    log::trace!("{}: Io is dropped, terminate connection", st.tag());
+                }
+
+                if st.write_outstanding() == 0 {
+                    // Everything the application wrote has reached the transport,
+                    // so the connection can end with a normal FIN and the peer
+                    // sees a clean end of stream.
+                    st.terminate_connection(None);
+                } else {
+                    // Output is still buffered and the filter chain is about to go
+                    // away, so it can never be delivered. Abort instead, so that
+                    // the peer cannot mistake a truncated stream for a complete
+                    // one.
+                    st.force_close_connection();
+                }
+                st.filter.drop_filter::<F>();
             }
-            st.filter.drop_filter::<F>();
 
             // Nothing can consume buffered input or deliver buffered output
             // anymore, but the state may outlive the `Io` for a while, held by
@@ -1236,6 +1245,13 @@ impl<F> Drop for Io<F> {
         }
 
         IoManager::unregister(self.io_ref());
+
+        // a panic while unwinding would abort
+        assert!(
+            !in_use || std::thread::panicking(),
+            "{}: Io is dropped while its filter is in use",
+            st.tag()
+        );
     }
 }
 
