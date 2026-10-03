@@ -132,6 +132,7 @@ impl crate::Reactor for Reactor {
     }
 
     fn from_tcp_stream(&self, stream: net::TcpStream, cfg: SharedCfg) -> io::Result<Io> {
+        stream.set_nodelay(true)?;
         let addr = stream.peer_addr()?;
         self.reactor.attach(stream.as_raw_socket() as _, true)?;
 
@@ -516,6 +517,24 @@ mod tests {
             check_ifs_socket(sock.as_raw_socket() as _).unwrap();
             reactor.attach(sock.as_raw_socket() as _, true).unwrap();
         }
+    }
+
+    /// Accepted streams disable Nagle, as on the other backends.
+    #[ntex::test]
+    async fn from_tcp_stream_sets_nodelay() {
+        use std::os::windows::io::FromRawSocket;
+
+        let reactor = Reactor::new().unwrap();
+        let listener = net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let _client = net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        assert!(!stream.nodelay().unwrap());
+
+        let raw = stream.as_raw_socket();
+        let io = crate::Reactor::from_tcp_stream(&reactor, stream, SharedCfg::default()).unwrap();
+        let sock = mem::ManuallyDrop::new(unsafe { net::TcpStream::from_raw_socket(raw) });
+        assert!(sock.nodelay().unwrap());
+        drop(io);
     }
 
     /// Handles that are not sockets are rejected rather than attached
