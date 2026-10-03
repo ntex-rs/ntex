@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* Filter chain buffers are stored inline, a connection without a filter layer no longer
+  allocates a buffer list, write buffers are accessed without moving them out
+
 * Add `IoRef::read_dst_size()`, returns the read destination size without changing the read
   state
 
