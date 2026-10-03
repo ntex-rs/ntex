@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* `Io::take()` is unsafe, the filter and `IoRef` borrowed from the `Io` were freed with
+  the returned `Io`
+
 * Filter chain buffers are stored inline, a connection without a filter layer no longer
   allocates a buffer list, write buffers are accessed without moving them out
 

@@ -451,7 +451,14 @@ impl<F> Io<F> {
     ///
     /// This does not clone the connection. `self` is replaced with a stopped
     /// placeholder and should no longer be used for I/O.
-    pub fn take(&self) -> Self {
+    ///
+    /// # Safety
+    ///
+    /// No reference derived from `self` may be alive across this call, the
+    /// filter returned by [`Io::filter`], the `IoRef` it dereferences to and
+    /// the config returned by [`IoRef::cfg`] all borrow the transferred state,
+    /// which is dropped together with the returned `Io`.
+    pub unsafe fn take(&self) -> Self {
         Self(UnsafeCell::new(self.take_io_ref()), marker::PhantomData)
     }
 
