@@ -55,7 +55,8 @@ impl IoBoxed {
     /// This does not clone the connection. The current object is replaced with
     /// a stopped placeholder and should no longer be used for I/O.
     pub fn take(&mut self) -> Self {
-        IoBoxed(self.0.take())
+        // SAFETY: `&mut self` rules out borrows of the inner `Io`
+        IoBoxed(unsafe { self.0.take() })
     }
 }
 

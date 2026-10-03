@@ -226,7 +226,7 @@ mod tests {
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"test"));
 
-        let io2 = io.take();
+        let io2 = unsafe { io.take() };
         let mut io3: crate::IoBoxed = io2.into();
         let io4 = io3.take();
 
