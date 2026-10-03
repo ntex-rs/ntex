@@ -1,6 +1,11 @@
 //! Temporary h1/io benchmark.
 //!
-//! cargo +1.97.1 test -q --release -p ntex --test bench_h1_tmp bench_h1 -- --exact --ignored --nocapture
+//! cargo +1.97.1 test -q --release -p ntex --test bench_h1 bench_h1 -- --exact --ignored --nocapture
+//!
+//! TLS=rustls|openssl|schannel runs every mode over TLS. rustls needs
+//! `--features ntex/rustls`, openssl needs `--features ntex/openssl`, schannel
+//! is windows only. The client always uses rustls. The std server uses openssl
+//! for TLS=openssl and rustls otherwise (there is no blocking schannel server).
 //!
 //! Modes:
 //! * default: runs an ntex server and a blocking std server in-process and
@@ -29,11 +34,13 @@
 use std::alloc::{GlobalAlloc, Layout, System as SysAlloc};
 use std::cell::Cell;
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, atomic::AtomicU64, atomic::AtomicUsize, atomic::Ordering};
 use std::{net, thread, time::Duration, time::Instant};
 
 use ntex::http::{HttpService, Request, Response, test};
 use ntex::{SharedCfg, util::Bytes};
+
+mod rustls_utils;
 
 // ---- counting allocator, server thread only ----
 
@@ -223,6 +230,134 @@ fn server_cfg() -> SharedCfg {
     SharedCfg::new("BENCH").add(io).into()
 }
 
+// ---- tls ----
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Tls {
+    None,
+    Rustls,
+    Openssl,
+    Schannel,
+}
+
+fn tls_mode() -> Tls {
+    let tls = match std::env::var("TLS").as_deref() {
+        Err(_) | Ok("" | "none") => Tls::None,
+        Ok("rustls") => Tls::Rustls,
+        Ok("openssl") => Tls::Openssl,
+        Ok("schannel") => Tls::Schannel,
+        Ok(v) => panic!("TLS={v}: expected rustls, openssl or schannel"),
+    };
+    let supported = match tls {
+        Tls::None => true,
+        Tls::Rustls => cfg!(feature = "rustls"),
+        Tls::Openssl => cfg!(feature = "openssl"),
+        Tls::Schannel => cfg!(windows),
+    };
+    assert!(
+        supported,
+        "TLS={tls:?} is not supported, rustls and openssl need --features ntex/<name>, schannel needs windows"
+    );
+    tls
+}
+
+#[cfg(feature = "openssl")]
+fn ssl_acceptor() -> tls_openssl::ssl::SslAcceptor {
+    use tls_openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
+
+    // v5 supports TLS 1.3, the only version of the rustls client
+    let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls()).unwrap();
+    builder
+        .set_private_key_file("./tests/key.pem", SslFiletype::PEM)
+        .unwrap();
+    builder
+        .set_certificate_chain_file("./tests/cert.pem")
+        .unwrap();
+    builder.build()
+}
+
+#[cfg(windows)]
+fn schannel<F, S, St>(
+    service: impl ntex::service::IntoService<
+        S,
+        St,
+        ntex::io::Io<ntex::io::Layer<ntex_tls::schannel::SchannelFilter, F>>,
+    >,
+) -> impl ntex::service::Service<
+    St,
+    ntex::io::Io<F>,
+    Res = S::Res,
+    Error = ntex::server::TlsError<S::Error>,
+>
+where
+    F: ntex::io::Filter,
+    S: ntex::service::Service<
+            St,
+            ntex::io::Io<ntex::io::Layer<ntex_tls::schannel::SchannelFilter, F>>,
+        >,
+{
+    use ntex::{server::TlsError, service::IntoService, service::Service};
+    use ntex_tls::schannel::{Certificate, ServerConfig, TlsAcceptor};
+
+    // `cert.pem` and `key.pem`
+    let cert = Certificate::from_pkcs12(include_bytes!("identity.pfx"), "ntex").unwrap();
+    let config = ServerConfig::new(cert)
+        .unwrap()
+        .set_alpn_protocols(ntex::http::ALPN_PROTO_H1);
+    TlsAcceptor::new(config)
+        .map_err(TlsError::Tls)
+        .and_then(service.into_service().map_err(TlsError::Service))
+}
+
+/// Binds `$mk`, a closure creating the h1 service for `$tls`, and evaluates `$body`.
+macro_rules! with_service {
+    ($tls:expr, $mk:ident => $body:expr) => {
+        match $tls {
+            Tls::None => {
+                let $mk = || HttpService::h1(handle);
+                $body
+            }
+            #[cfg(feature = "rustls")]
+            Tls::Rustls => {
+                let $mk = || {
+                    ntex::http::rustls(
+                        rustls_utils::tls_acceptor(),
+                        ntex::http::ALPN_PROTO_H1,
+                        HttpService::h1(handle),
+                    )
+                };
+                $body
+            }
+            #[cfg(feature = "openssl")]
+            Tls::Openssl => {
+                let $mk = || ntex::http::openssl(ssl_acceptor(), HttpService::h1(handle));
+                $body
+            }
+            #[cfg(windows)]
+            Tls::Schannel => {
+                let $mk = || schannel(HttpService::h1(handle));
+                $body
+            }
+            #[allow(unreachable_patterns)]
+            tls => unreachable!("{tls:?}"),
+        }
+    };
+}
+
+fn ntex_server(tls: Tls) -> test::TestServer {
+    with_service!(tls, mk => test::server_with_config(async move |_| mk(), server_cfg()))
+}
+
+async fn ntex_listen(tls: Tls, addr: net::SocketAddr) {
+    with_service!(tls, mk => ntex::server::build()
+        .bind("bench", addr, server_cfg(), async move |_| mk())
+        .unwrap()
+        .workers(1)
+        .run()
+        .await
+        .unwrap())
+}
+
 // ---- std server ----
 
 fn std_response(body: &[u8]) -> Vec<u8> {
@@ -236,18 +371,35 @@ fn std_response(body: &[u8]) -> Vec<u8> {
 }
 
 /// Blocking std server, the floor for the same request stream.
-fn std_server(listener: net::TcpListener) {
+fn std_server(listener: net::TcpListener, tls: Tls) {
     let per_resp = env("STD_PER_RESP", 0) != 0;
+    #[cfg(feature = "openssl")]
+    let openssl = (tls == Tls::Openssl).then(ssl_acceptor);
+    let rustls = Arc::new(rustls_utils::tls_acceptor());
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
-        thread::spawn(move || std_conn(stream, per_resp));
+        stream.set_nodelay(true).unwrap();
+        #[cfg(feature = "openssl")]
+        if let Some(acceptor) = openssl.clone() {
+            thread::spawn(move || {
+                if let Ok(stream) = acceptor.accept(stream) {
+                    std_conn(stream, per_resp);
+                }
+            });
+            continue;
+        }
+        if tls == Tls::None {
+            thread::spawn(move || std_conn(stream, per_resp));
+        } else {
+            let conn = tls_rustls::ServerConnection::new(rustls.clone()).unwrap();
+            thread::spawn(move || std_conn(tls_rustls::StreamOwned::new(conn, stream), per_resp));
+        }
     }
 }
 
-fn std_conn(mut stream: net::TcpStream, per_resp: bool) {
+fn std_conn(mut stream: impl Read + Write, per_resp: bool) {
     let small = std_response(SMALL);
     let large = std_response(&LARGE);
-    stream.set_nodelay(true).unwrap();
     let mut buf = vec![0u8; 64 * 1024];
     let mut out = Vec::with_capacity(2 * 1024 * 1024);
     let mut pending = 0usize;
@@ -290,12 +442,30 @@ fn std_conn(mut stream: net::TcpStream, per_resp: bool) {
 
 // ---- blocking client ----
 
+trait Conn: Read + Write {}
+
+impl<T: Read + Write> Conn for T {}
+
+/// Connects to `addr`, over rustls unless `tls` is `Tls::None`.
+fn connect(addr: net::SocketAddr, tls: Tls) -> Box<dyn Conn> {
+    let stream = net::TcpStream::connect(addr).unwrap();
+    stream.set_nodelay(true).unwrap();
+    if tls == Tls::None {
+        return Box::new(stream);
+    }
+    let mut cfg = rustls_utils::tls_connector();
+    cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
+    let conn =
+        tls_rustls::ClientConnection::new(Arc::new(cfg), "localhost".try_into().unwrap()).unwrap();
+    Box::new(tls_rustls::StreamOwned::new(conn, stream))
+}
+
 fn request(path: &str) -> String {
     format!("GET {path} HTTP/1.1\r\nhost: localhost\r\nuser-agent: bench\r\n\r\n")
 }
 
 /// Reads one response, returns its size and body.
-fn read_response(stream: &mut net::TcpStream) -> (usize, Vec<u8>) {
+fn read_response(stream: &mut dyn Conn) -> (usize, Vec<u8>) {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 65536];
     loop {
@@ -324,7 +494,7 @@ fn read_response(stream: &mut net::TcpStream) -> (usize, Vec<u8>) {
 }
 
 /// Sends `n` requests in batches of `depth`, returns the wall time.
-fn run(stream: &mut net::TcpStream, path: &str, depth: usize, n: usize, size: usize) -> Duration {
+fn run(stream: &mut dyn Conn, path: &str, depth: usize, n: usize, size: usize) -> Duration {
     let batch = request(path).repeat(depth);
     let mut chunk = vec![0u8; 1024 * 1024];
     let sleep = env("SLEEP_US", 0);
@@ -346,7 +516,7 @@ fn run(stream: &mut net::TcpStream, path: &str, depth: usize, n: usize, size: us
     start.elapsed()
 }
 
-fn server_stats(stream: &mut net::TcpStream) -> Stats {
+fn server_stats(stream: &mut dyn Conn) -> Stats {
     stream.write_all(request("/stats").as_bytes()).unwrap();
     Stats::decode(std::str::from_utf8(&read_response(stream).1).unwrap())
 }
@@ -423,26 +593,26 @@ fn cases() -> Vec<(String, &'static str, usize)> {
 }
 
 /// Runs every case against `addr`, a new connection per case.
-fn run_client(prefix: &str, addr: net::SocketAddr, trace: usize) {
+fn run_client(prefix: &str, addr: net::SocketAddr, tls: Tls, trace: usize) {
     let n = env("N", 100_000);
     let show_ctr = std::env::var("CTR").is_ok();
     for (name, path, depth) in cases() {
         let n = if depth == 1 { n / 4 } else { n } / depth * depth;
-        let mut stream = net::TcpStream::connect(addr).unwrap();
-        stream.set_nodelay(true).unwrap();
+        let mut conn = connect(addr, tls);
+        let stream = &mut *conn;
 
         stream.write_all(request(path).as_bytes()).unwrap();
-        let (size, _) = read_response(&mut stream);
+        let (size, _) = read_response(stream);
         // warm up
-        run(&mut stream, path, depth, (n / 10).max(depth), size);
+        run(stream, path, depth, (n / 10).max(depth), size);
 
-        let s0 = server_stats(&mut stream);
+        let s0 = server_stats(stream);
         TRACE_LEFT.store(trace, Ordering::Relaxed);
         let c0 = ctr();
-        let wall = run(&mut stream, path, depth, n, size);
+        let wall = run(stream, path, depth, n, size);
         let c1 = ctr();
         TRACE_LEFT.store(0, Ordering::Relaxed);
-        let s1 = server_stats(&mut stream);
+        let s1 = server_stats(stream);
         report(&format!("{prefix}{name}"), n, wall, delta(s0, s1));
         if show_ctr {
             print_ctr(n, c0, c1);
@@ -464,11 +634,15 @@ fn addr_env(name: &str) -> Option<net::SocketAddr> {
 #[ignore]
 async fn bench_h1() {
     log::set_max_level(log::LevelFilter::Info);
+    let tls = tls_mode();
 
     // remote client
     if let Some(addr) = addr_env("SERVER_ADDR") {
-        println!("client: server {addr}, N={}", env("N", 100_000));
-        thread::spawn(move || run_client("", addr, 0))
+        println!(
+            "client: server {addr}, tls {tls:?}, N={}",
+            env("N", 100_000)
+        );
+        thread::spawn(move || run_client("", addr, tls, 0))
             .join()
             .unwrap();
         return;
@@ -478,41 +652,38 @@ async fn bench_h1() {
     if let Some(addr) = addr_env("LISTEN_STD") {
         calibrate();
         let listener = net::TcpListener::bind(addr).unwrap();
-        println!("std server listening on {}", listener.local_addr().unwrap());
-        thread::spawn(move || std_server(listener)).join().unwrap();
+        println!(
+            "std server listening on {}, tls {tls:?}",
+            listener.local_addr().unwrap()
+        );
+        thread::spawn(move || std_server(listener, tls))
+            .join()
+            .unwrap();
         return;
     }
 
     // remote ntex server
     if let Some(addr) = addr_env("LISTEN") {
         calibrate();
-        println!("ntex server listening on {addr}");
-        ntex::server::build()
-            .bind("bench", addr, server_cfg(), async |_| {
-                HttpService::h1(handle)
-            })
-            .unwrap()
-            .workers(1)
-            .run()
-            .await
-            .unwrap();
+        println!("ntex server listening on {addr}, tls {tls:?}");
+        ntex_listen(tls, addr).await;
         return;
     }
 
     // local loopback
     calibrate();
-    println!("N={}", env("N", 100_000));
+    println!("N={}, tls {tls:?}", env("N", 100_000));
     let trace = env("TRACE", 0);
-    let srv = test::server_with_config(async |_| HttpService::h1(handle), server_cfg());
+    let srv = ntex_server(tls);
     let addr = srv.addr();
 
     let listener = net::TcpListener::bind("127.0.0.1:0").unwrap();
     let std_addr = listener.local_addr().unwrap();
-    thread::spawn(move || std_server(listener));
+    thread::spawn(move || std_server(listener, tls));
 
     thread::spawn(move || {
-        run_client("", addr, trace);
-        run_client("std ", std_addr, 0);
+        run_client("", addr, tls, trace);
+        run_client("std ", std_addr, tls, 0);
     })
     .join()
     .unwrap();
