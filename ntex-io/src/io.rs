@@ -480,12 +480,15 @@ impl<F> Io<F> {
     /// live when this method is called or used afterward. Replacing the
     /// configuration may release the allocation backing those references.
     pub unsafe fn set_config<T: Into<SharedCfg>>(&self, cfg: T) {
+        let cfg = cfg.into().get::<IoConfig>();
+        let page_size = cfg.write_page_size();
+        if self.cfg().write_page_size() != page_size {
+            self.st().buffer.set_page_size(page_size);
+        }
+        self.st()
+            .flags
+            .set_direct_wr_enabled(cfg.write_buf_threshold() > 0);
         unsafe {
-            let cfg = cfg.into().get::<IoConfig>();
-            self.st().buffer.set_page_size(cfg.write_page_size());
-            self.st()
-                .flags
-                .set_direct_wr_enabled(cfg.write_buf_threshold() > 0);
             self.st().cfg.replace(cfg);
         }
     }
@@ -534,9 +537,9 @@ impl<F: Filter> Io<F> {
         // Add the buffers layer.
         //
         // Safety: no references into the buffer storage are retained.
-        // All APIs first remove the buffer from storage before processing it.
-        // The page size is read first and the exclusive borrow covers only
-        // the `buffer` field, so no other access overlaps it.
+        // Buffers are only borrowed for the duration of closures, none of
+        // which is running here. The page size is read first and the exclusive
+        // borrow covers only the `buffer` field, so no other access overlaps it.
         let page_size = state.0.cfg.write_page_size();
         unsafe {
             let buffer = &raw mut (*Rc::as_ptr(&state.0).cast_mut()).buffer;

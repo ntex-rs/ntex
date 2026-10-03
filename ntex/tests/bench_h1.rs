@@ -1,4 +1,4 @@
-//! Temporary h1/io benchmark, not for commit.
+//! Temporary h1/io benchmark.
 //!
 //! cargo +1.97.1 test -q --release -p ntex --test bench_h1_tmp bench_h1 -- --exact --ignored --nocapture
 //!
@@ -19,8 +19,13 @@
 //! thread during measured runs (local mode only).
 //! CTR=1 prints io counters, needs files/bench-ctr.patch and `ctr()` returning
 //! `ntex::io::bench_ctr::get()`.
-#![allow(clippy::pedantic, clippy::nursery, clippy::all, unreachable_pub)]
-
+#![allow(
+    clippy::pedantic,
+    clippy::nursery,
+    clippy::all,
+    unreachable_pub,
+    warnings
+)]
 use std::alloc::{GlobalAlloc, Layout, System as SysAlloc};
 use std::cell::Cell;
 use std::io::{Read, Write};
@@ -129,11 +134,15 @@ mod cpu {
 /// `cpu::now()` units per nanosecond, as f64 bits.
 static CPN: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(any(windows, target_os = "linux"))]
 fn calibrate() {
     let cpn = cpu::calibrate();
     CPN.store(cpn.to_bits(), Ordering::Relaxed);
     println!("cpu: {cpn:.3} cycles/ns");
 }
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn calibrate() {}
 
 #[derive(Clone, Copy, Debug, Default)]
 struct Stats {
@@ -147,9 +156,13 @@ impl Stats {
     /// its counters.
     fn current() -> Stats {
         TRACK.with(|t| t.set(true));
+        #[cfg(any(windows, target_os = "linux"))]
         let cpn = f64::from_bits(CPN.load(Ordering::Relaxed));
         Stats {
+            #[cfg(any(windows, target_os = "linux"))]
             cpu_ns: (cpu::now() as f64 / cpn) as u64,
+            #[cfg(not(any(windows, target_os = "linux")))]
+            cpu_ns: 1,
             allocs: ALLOCS.with(Cell::get),
             bytes: BYTES.with(Cell::get),
         }
@@ -246,7 +259,10 @@ fn std_conn(mut stream: net::TcpStream, per_resp: bool) {
         let end = pending + r;
         let mut pos = 0;
         while let Some(i) = buf[pos..end].windows(4).position(|w| w == b"\r\n\r\n") {
-            let path = buf[pos..pos + i].split(|b| *b == b' ').nth(1).unwrap_or_default();
+            let path = buf[pos..pos + i]
+                .split(|b| *b == b' ')
+                .nth(1)
+                .unwrap_or_default();
             if path == b"/stats" {
                 let body = Stats::current().encode();
                 out.extend_from_slice(&untracked(|| std_response(body.as_bytes())));
@@ -287,7 +303,9 @@ fn read_response(stream: &mut net::TcpStream) -> (usize, Vec<u8>) {
         assert!(n > 0, "connection closed");
         buf.extend_from_slice(&chunk[..n]);
         if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-            let head = std::str::from_utf8(&buf[..pos]).unwrap().to_ascii_lowercase();
+            let head = std::str::from_utf8(&buf[..pos])
+                .unwrap()
+                .to_ascii_lowercase();
             let len: usize = head
                 .lines()
                 .find_map(|l| l.strip_prefix("content-length:"))
@@ -450,7 +468,9 @@ async fn bench_h1() {
     // remote client
     if let Some(addr) = addr_env("SERVER_ADDR") {
         println!("client: server {addr}, N={}", env("N", 100_000));
-        thread::spawn(move || run_client("", addr, 0)).join().unwrap();
+        thread::spawn(move || run_client("", addr, 0))
+            .join()
+            .unwrap();
         return;
     }
 
@@ -468,7 +488,9 @@ async fn bench_h1() {
         calibrate();
         println!("ntex server listening on {addr}");
         ntex::server::build()
-            .bind("bench", addr, server_cfg(), async |_| HttpService::h1(handle))
+            .bind("bench", addr, server_cfg(), async |_| {
+                HttpService::h1(handle)
+            })
             .unwrap()
             .workers(1)
             .run()
