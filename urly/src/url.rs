@@ -884,6 +884,20 @@ fn dir(path: &str) -> &str {
 str_fmt!(Url);
 str_eq!(Url);
 
+/// Returns the relative URL `/`, like `http::Uri::default()`.
+impl Default for Url {
+    fn default() -> Url {
+        Url {
+            data: ByteString::from_static("/"),
+            scheme_end: 0,
+            auth_start: 0,
+            path_start: 0,
+            path_end: 1,
+            query_end: 1,
+        }
+    }
+}
+
 impl FromStr for Url {
     type Err = InvalidUrl;
 
@@ -1030,5 +1044,24 @@ mod serde_impls {
         fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Url, D::Error> {
             deserializer.deserialize_str(UrlVisitor)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default() {
+        let (url, p) = (Url::default(), Url::from_static("/"));
+        assert_eq!(url.scheme_end, p.scheme_end);
+        assert_eq!(url.auth_start, p.auth_start);
+        assert_eq!(url.path_start, p.path_start);
+        assert_eq!(url.path_end, p.path_end);
+        assert_eq!(url.query_end, p.query_end);
+        assert_eq!(url, "/");
+        assert_eq!(url.path(), "/");
+        assert!(url.query().is_none());
+        assert!(!url.is_absolute());
     }
 }
