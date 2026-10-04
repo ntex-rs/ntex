@@ -283,7 +283,7 @@ mod tests {
     use ntex_h2::client::SimpleClient;
 
     use super::*;
-    use crate::http::{HeaderMap, Method, uri::Scheme};
+    use crate::http::{HeaderMap, Method};
     use crate::io::{Io, IoBoxed, testing::IoTest};
     use crate::{SharedCfg, time::Millis, time::sleep, util::ByteString};
 
@@ -302,7 +302,7 @@ mod tests {
         io.remote_buffer_cap(64 * 1024);
         let client = SimpleClient::new(
             IoBoxed::from(Io::new(io, SharedCfg::default())),
-            Scheme::HTTP,
+            false,
             ByteString::from_static("localhost"),
         );
         server.write([0, 0, 0, 4, 0, 0, 0, 0, 0]);
@@ -338,7 +338,7 @@ mod tests {
         io.remote_buffer_cap(64 * 1024);
         let client = SimpleClient::new(
             IoBoxed::from(Io::new(io, SharedCfg::default())),
-            Scheme::HTTP,
+            false,
             ByteString::from_static("localhost"),
         );
         server.write([0, 0, 0, 4, 0, 0, 0, 0, 0]);
@@ -384,7 +384,7 @@ mod tests {
         io.remote_buffer_cap(64 * 1024);
         let client = SimpleClient::new(
             IoBoxed::from(Io::new(io, SharedCfg::default())),
-            Scheme::HTTP,
+            false,
             ByteString::from_static("localhost"),
         );
         server.write([0, 0, 0, 4, 0, 0, 0, 0, 0]);
@@ -429,7 +429,7 @@ mod tests {
         io.remote_buffer_cap(64 * 1024);
         let client = SimpleClient::new(
             IoBoxed::from(Io::new(io, SharedCfg::default())),
-            Scheme::HTTP,
+            false,
             ByteString::from_static("localhost"),
         );
         server.write([0, 0, 0, 4, 0, 0, 0, 0, 0]);

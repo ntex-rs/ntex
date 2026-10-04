@@ -832,7 +832,7 @@ async fn test_uri() {
 
     let conn = Pipeline::new(SharedCfg::default(), ntex::connect::Connector::new());
     let addr =
-        ntex::http::Uri::try_from(format!("https://localhost:{}", srv.addr().port())).unwrap();
+        ntex::url::Url::try_from(format!("https://localhost:{}", srv.addr().port())).unwrap();
     let io = conn.call(addr.into()).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }
@@ -859,7 +859,7 @@ async fn test_rustls_uri() {
 
     let conn = Pipeline::new(SharedCfg::default(), ntex::connect::Connector::default());
     let addr =
-        ntex::http::Uri::try_from(format!("https://localhost:{}", srv.addr().port())).unwrap();
+        ntex::url::Url::try_from(format!("https://localhost:{}", srv.addr().port())).unwrap();
     let io = conn.call(addr.into()).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }
