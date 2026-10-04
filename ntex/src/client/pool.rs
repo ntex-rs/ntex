@@ -2,9 +2,10 @@ use std::time::Instant;
 use std::{cell::Cell, cell::RefCell, collections::VecDeque, fmt, future, rc::Rc};
 
 use ntex_h2::{self as h2};
+use urly::{Authority, Url};
 
 use crate::error::Error;
-use crate::http::uri::{Authority, Scheme, Uri};
+use crate::http::uri::Scheme;
 use crate::io::{IoBoxed, types::HttpProtocol};
 use crate::service::pipeline::PipelineBinding;
 use crate::service::{Ctx, Service, cfg::Cfg, cfg::SharedCfg};
@@ -16,12 +17,14 @@ use super::{ClientConfig, Connect, ConnectorPipeline, error::ConnectError, h2pro
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub(super) struct Key {
-    authority: Authority,
+    authority: ByteString,
 }
 
-impl From<Authority> for Key {
-    fn from(authority: Authority) -> Key {
-        Key { authority }
+impl From<&Authority> for Key {
+    fn from(authority: &Authority) -> Key {
+        Key {
+            authority: ByteString::from(authority.as_str()),
+        }
     }
 }
 
@@ -149,7 +152,7 @@ impl Service<SharedCfg, Connect> for ConnectionPool {
         let waiters = self.0.waiters.clone();
 
         let key = if let Some(authority) = req.uri.authority() {
-            authority.clone().into()
+            authority.into()
         } else {
             return Err(ConnectError::Unresolved.into());
         };
@@ -477,7 +480,9 @@ fn open_connection(
                     );
                     let client = h2::client::SimpleClient::new(
                         io,
-                        uri.scheme().cloned().unwrap_or(Scheme::HTTPS),
+                        uri.scheme_str()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(Scheme::HTTPS),
                         h2_authority(&uri),
                     );
                     let conn = add_h2_client(&inner, &key, client).begin();
@@ -514,8 +519,8 @@ fn open_connection(
 }
 
 /// Builds the `:authority` value, the deprecated userinfo is omitted (RFC 9113 §8.3.1)
-fn h2_authority(uri: &Uri) -> ByteString {
-    match (uri.host(), uri.port()) {
+fn h2_authority(uri: &Url) -> ByteString {
+    match (uri.host(), uri.port_u16()) {
         (Some(host), Some(port)) => format!("{host}:{port}").into(),
         (Some(host), None) => ByteString::from(host),
         (None, _) => ByteString::new(),
@@ -645,9 +650,9 @@ mod tests {
             ("http://user@example.com:8080/", "example.com:8080"),
             ("http://user:pass@[::1]:8080/", "[::1]:8080"),
         ] {
-            assert_eq!(h2_authority(&Uri::try_from(uri).unwrap()), auth, "{uri}");
+            assert_eq!(h2_authority(&Url::try_from(uri).unwrap()), auth, "{uri}");
         }
-        assert_eq!(h2_authority(&Uri::from_static("/path")), "");
+        assert_eq!(h2_authority(&Url::from_static("/path")), "");
     }
 
     #[crate::rt_test]
@@ -671,7 +676,7 @@ mod tests {
         );
         let pipe = Pipeline::new(cfg, pool.clone());
         let req = Connect {
-            uri: Uri::try_from("http://localhost/test").unwrap(),
+            uri: Url::try_from("http://localhost/test").unwrap(),
             addr: None,
         };
 
@@ -841,7 +846,7 @@ mod tests {
         let (h2, _server) = h2_conn(&pool);
 
         let req = Connect {
-            uri: Uri::try_from("http://localhost/test").unwrap(),
+            uri: Url::try_from("http://localhost/test").unwrap(),
             addr: None,
         };
 
@@ -897,7 +902,7 @@ mod tests {
         assert!(!h2.has_capacity(0));
 
         let req = Connect {
-            uri: Uri::try_from("http://localhost/test").unwrap(),
+            uri: Url::try_from("http://localhost/test").unwrap(),
             addr: None,
         };
         let mut fut = std::pin::pin!(pipe.call(req));
@@ -994,7 +999,7 @@ mod tests {
         );
         let pipe = Pipeline::new(cfg, pool.clone());
         let req = |host: &str| Connect {
-            uri: Uri::try_from(format!("http://{host}/test")).unwrap(),
+            uri: Url::try_from(format!("http://{host}/test")).unwrap(),
             addr: None,
         };
 
@@ -1052,7 +1057,7 @@ mod tests {
             );
             let pipe = Pipeline::new(cfg, pool.clone());
             let req = Connect {
-                uri: Uri::try_from("http://localhost/test").unwrap(),
+                uri: Url::try_from("http://localhost/test").unwrap(),
                 addr: None,
             };
             pipe.call(req).await.unwrap().release(false);
@@ -1096,7 +1101,7 @@ mod tests {
         );
         let pipe = Pipeline::new(cfg, pool.clone());
         let req = Connect {
-            uri: Uri::try_from("http://localhost/test").unwrap(),
+            uri: Url::try_from("http://localhost/test").unwrap(),
             addr: None,
         };
 
@@ -1137,7 +1142,7 @@ mod tests {
 
         // uri must contain authority
         let req = Connect {
-            uri: Uri::try_from("/test").unwrap(),
+            uri: Url::try_from("/test").unwrap(),
             addr: None,
         };
         let _err = Error::from(ConnectError::Unresolved);
@@ -1145,7 +1150,7 @@ mod tests {
 
         // connect one
         let req = Connect {
-            uri: Uri::try_from("http://localhost/test").unwrap(),
+            uri: Url::try_from("http://localhost/test").unwrap(),
             addr: None,
         };
         let conn = pipe.call(req.clone()).await.unwrap();
@@ -1198,7 +1203,7 @@ mod tests {
 
         // different uri
         let req = Connect {
-            uri: Uri::try_from("http://localhost2/test").unwrap(),
+            uri: Url::try_from("http://localhost2/test").unwrap(),
             addr: None,
         };
         let mut fut = std::pin::pin!(pipe.call(req.clone()));
@@ -1247,7 +1252,7 @@ mod tests {
         );
         let pipe = Pipeline::new(cfg, pool.clone());
         let req = Connect {
-            uri: Uri::try_from("http://localhost/test").unwrap(),
+            uri: Url::try_from("http://localhost/test").unwrap(),
             addr: None,
         };
 

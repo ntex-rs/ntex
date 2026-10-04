@@ -13,13 +13,14 @@ use tls_rustls::ClientConfig as RustlsClientConfig;
 
 use base64::{Engine, engine::general_purpose::STANDARD as base64};
 use nanorand::Rng;
+use urly::Url;
 
 use crate::client::{ClientCodec, ClientConfig, ClientRawRequest, ClientResponse, host_header};
 use crate::connect::{Connect, ConnectError, Connector};
 use crate::error::{Error, ErrorMapping};
+use crate::http::body::BodySize;
 use crate::http::header::{self, HeaderMap, HeaderValue};
-use crate::http::{ConnectionType, Message, Method, RequestHead, StatusCode, Uri};
-use crate::http::{body::BodySize, error::HttpError};
+use crate::http::{ConnectionType, Message, Method, RequestHead, StatusCode};
 use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, Layer, Reason, Sealed};
 use crate::service::{IntoService, Pipeline, apply_fn, fn_service};
 use crate::util::{Either, select};
@@ -39,11 +40,11 @@ thread_local! {
 /// The builder contains the target URI and a typed [`WsClientConfig`]. Use
 /// [`connect`](Self::connect) to perform the opening handshake.
 pub struct WsClient<F> {
-    uri: Uri,
+    uri: Url,
     err: Option<WsConfigError>,
     cfg: Cfg<WsClientConfig>,
     http_cfg: Cfg<ClientConfig>,
-    connector: Pipeline<Connect<Uri>, Io<F>, Error<ConnectError>>,
+    connector: Pipeline<Connect<Url>, Io<F>, Error<ConnectError>>,
     filter: marker::PhantomData<F>,
 }
 
@@ -70,17 +71,17 @@ impl WsClient<Base> {
     /// [`connect`](Self::connect).
     pub fn new<U>(uri: U, cfg: impl Into<Cfg<WsClientConfig>>) -> Self
     where
-        Uri: TryFrom<U>,
-        HttpError: From<<Uri as TryFrom<U>>::Error>,
+        Url: TryFrom<U>,
+        WsConfigError: From<<Url as TryFrom<U>>::Error>,
     {
-        let (uri, err) = match Uri::try_from(uri) {
+        let (uri, err) = match Url::try_from(uri) {
             Ok(uri) => {
                 let err = if uri.host().is_none() {
                     Some(WsConfigError::MissingHost)
                 } else if uri.scheme().is_none() {
                     Some(WsConfigError::MissingScheme)
-                } else if let Some(scheme) = uri.scheme() {
-                    if matches!(scheme.as_str(), "http" | "ws" | "https" | "wss") {
+                } else if let Some(scheme) = uri.scheme_str() {
+                    if matches!(scheme, "http" | "ws" | "https" | "wss") {
                         None
                     } else {
                         Some(WsConfigError::UnknownScheme)
@@ -90,10 +91,7 @@ impl WsClient<Base> {
                 };
                 (uri, err)
             }
-            Err(err) => (
-                Uri::default(),
-                Some(WsConfigError::Http(HttpError::from(err))),
-            ),
+            Err(err) => (Url::default(), Some(WsConfigError::from(err))),
         };
 
         let cfg = cfg.into();
@@ -104,7 +102,7 @@ impl WsClient<Base> {
             err,
             cfg,
             http_cfg: shared.get(),
-            connector: Pipeline::new(shared, Connector::<Uri>::new()),
+            connector: Pipeline::new(shared, Connector::<Url>::new()),
             filter: marker::PhantomData,
         }
     }
@@ -112,10 +110,10 @@ impl WsClient<Base> {
 
 impl<F> WsClient<F> {
     /// Replaces the network connector used to establish the connection.
-    pub fn connector<U, S>(self, f: impl IntoService<S, SharedCfg, Connect<Uri>>) -> WsClient<U>
+    pub fn connector<U, S>(self, f: impl IntoService<S, SharedCfg, Connect<Url>>) -> WsClient<U>
     where
         U: Filter + 'static,
-        S: Service<SharedCfg, Connect<Uri>, Res = Io<U>, Error = Error<ConnectError>> + 'static,
+        S: Service<SharedCfg, Connect<Url>, Res = Io<U>, Error = Error<ConnectError>> + 'static,
     {
         let shared = self.cfg.shared();
         WsClient {
@@ -703,7 +701,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn basic_errs() {
-        let err = WsClient::new("localhost", SharedCfg::default())
+        let err = WsClient::new("//localhost", SharedCfg::default())
             .connect()
             .await
             .err()
@@ -828,7 +826,7 @@ mod tests {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
         let io = RefCell::new(Some(Io::new(server, SharedCfg::default())));
-        let ws = WsClient::new(uri, cfg).connector(fn_service(async move |_: Connect<Uri>| {
+        let ws = WsClient::new(uri, cfg).connector(fn_service(async move |_: Connect<Url>| {
             Ok::<_, Error<ConnectError>>(io.borrow_mut().take().unwrap())
         }));
         let fut = rt::spawn(async move { ws.connect().await.map(drop) });
@@ -906,7 +904,7 @@ mod tests {
         client.remote_buffer_cap(4096);
         let io = RefCell::new(Some(Io::new(server, io_cfg)));
         let ws = WsClient::new("ws://localhost/", SharedCfg::new("WS").add(cfg)).connector(
-            fn_service(async move |_: Connect<Uri>| {
+            fn_service(async move |_: Connect<Url>| {
                 Ok::<_, Error<ConnectError>>(io.borrow_mut().take().unwrap())
             }),
         );

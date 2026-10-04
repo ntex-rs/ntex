@@ -1,9 +1,10 @@
 use std::{cell::Ref, cell::RefCell, cell::RefMut, fmt, net, rc::Rc};
 
 use bitflags::bitflags;
+use urly::Url;
 
 use crate::http::header::HeaderMap;
-use crate::http::{HeaderItem, Method, StatusCode, Uri, Version, h1::Codec};
+use crate::http::{HeaderItem, Method, StatusCode, Version, h1::Codec};
 use crate::io::{IoBoxed, IoRef, types};
 use crate::util::Extensions;
 
@@ -78,7 +79,7 @@ pub struct RequestHead {
     /// Identifier of the connection that received the request.
     pub id: usize,
     /// Request URI.
-    pub uri: Uri,
+    pub uri: Url,
     /// Request method.
     pub method: Method,
     /// HTTP protocol version.
@@ -102,7 +103,7 @@ impl Default for RequestHead {
         RequestHead {
             id: 0,
             io: CurrentIo::None,
-            uri: Uri::default(),
+            uri: Url::default(),
             method: Method::default(),
             version: Version::HTTP_11,
             headers: HeaderMap::with_capacity(16),

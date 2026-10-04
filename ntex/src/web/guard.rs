@@ -30,7 +30,9 @@
 
 use std::fmt;
 
-use crate::http::{Method, RequestHead, Uri, header};
+use urly::{Authority, Url};
+
+use crate::http::{Method, RequestHead, header};
 
 /// Trait defines resource guards. Guards are used for route selection.
 ///
@@ -366,14 +368,19 @@ pub fn Host<H: AsRef<str>>(host: H) -> HostGuard {
     HostGuard(host.as_ref().to_string(), None)
 }
 
-fn get_host_uri(req: &RequestHead) -> Option<Uri> {
-    use core::str::FromStr;
-    req.headers
+fn get_host_uri(req: &RequestHead) -> Option<Url> {
+    let host = req
+        .headers
         .get(header::HOST)
         .and_then(|host_value| host_value.to_str().ok())
-        .or_else(|| req.uri.host())
-        .map(|host: &str| Uri::from_str(host).ok())
-        .and_then(|host_success| host_success)
+        .or_else(|| req.uri.host())?;
+
+    if host.contains("://") {
+        Url::try_from(host).ok()
+    } else {
+        Authority::new(host).ok()?;
+        Url::try_from(format!("//{host}")).ok()
+    }
 }
 
 #[doc(hidden)]
@@ -401,7 +408,7 @@ impl Guard for HostGuard {
         };
 
         if let Some(uri_host) = req_host_uri.host() {
-            if self.0 != uri_host {
+            if !self.0.eq_ignore_ascii_case(uri_host) {
                 return false;
             }
         } else {
@@ -411,7 +418,7 @@ impl Guard for HostGuard {
         if let Some(ref scheme) = self.1
             && let Some(req_host_uri_scheme) = req_host_uri.scheme_str()
         {
-            return scheme == req_host_uri_scheme;
+            return scheme.eq_ignore_ascii_case(req_host_uri_scheme);
         }
 
         true
@@ -508,7 +515,7 @@ mod tests {
     #[test]
     fn test_host_without_header() {
         let req = TestRequest::default()
-            .uri("www.rust-lang.org")
+            .uri("//www.rust-lang.org")
             .to_http_request();
 
         let pred = Host("www.rust-lang.org");

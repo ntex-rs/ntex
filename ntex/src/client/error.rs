@@ -168,13 +168,19 @@ pub enum InvalidUrl {
     /// The URI does not contain a host.
     #[error("Missing host name")]
     MissingHost,
-    /// The URI could not be parsed or constructed.
+    /// The URI could not be parsed.
     #[error("Url parse error: {0}")]
-    Http(
+    Parse(
         #[from]
         #[source]
-        HttpError,
+        urly::InvalidUrl,
     ),
+}
+
+impl From<std::convert::Infallible> for InvalidUrl {
+    fn from(err: std::convert::Infallible) -> InvalidUrl {
+        match err {}
+    }
 }
 
 /// Errors that can occur while sending a request or reading its response.

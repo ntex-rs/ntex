@@ -856,7 +856,7 @@ async fn middleware() {
             async move |mut req: client::ServiceRequest, svc| {
                 assert!(req.headers().is_empty());
                 assert!(req.address().is_none());
-                let s = format!("{:?}", req.head().uri);
+                let s = req.head().uri.to_string();
                 data2.borrow_mut().push(format!("1 -- {}", s));
                 let result = svc.call(req).await;
                 data2.borrow_mut().push(format!("2 -- {}", s));

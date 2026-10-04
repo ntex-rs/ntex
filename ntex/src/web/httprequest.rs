@@ -1,6 +1,8 @@
 use std::{cell::Ref, cell::RefMut, convert::Infallible, fmt, net, rc::Rc};
 
-use crate::http::{HeaderMap, HttpMessage, Message, Method, Payload, RequestHead, Uri, Version};
+use urly::Url;
+
+use crate::http::{HeaderMap, HttpMessage, Message, Method, Payload, RequestHead, Version};
 use crate::{Cfg, io::IoRef, io::types, router::Path, util::Extensions};
 
 use super::config::WebAppConfig;
@@ -14,7 +16,7 @@ pub struct HttpRequest(pub(crate) Rc<HttpRequestInner>);
 
 pub(crate) struct HttpRequestInner {
     pub(crate) head: Message<RequestHead>,
-    pub(crate) path: Path<Uri>,
+    pub(crate) path: Path<Url>,
     pub(crate) config: Cfg<WebAppConfig>,
     pub(crate) rmap: Rc<ResourceMap>,
 }
@@ -22,7 +24,7 @@ pub(crate) struct HttpRequestInner {
 impl HttpRequest {
     #[inline]
     pub(crate) fn new(
-        path: Path<Uri>,
+        path: Path<Url>,
         head: Message<RequestHead>,
         rmap: Rc<ResourceMap>,
         config: Cfg<WebAppConfig>,
@@ -52,7 +54,7 @@ impl HttpRequest {
 
     /// Request's uri.
     #[inline]
-    pub fn uri(&self) -> &Uri {
+    pub fn uri(&self) -> &Url {
         &self.head().uri
     }
 
@@ -77,7 +79,7 @@ impl HttpRequest {
     /// The target path of this Request.
     #[inline]
     pub fn path(&self) -> &str {
-        self.head().uri.path()
+        self.head().uri.path().as_str()
     }
 
     /// The query string in the URL.
@@ -85,7 +87,7 @@ impl HttpRequest {
     /// E.g., id=10
     #[inline]
     pub fn query_string(&self) -> &str {
-        self.uri().query().unwrap_or_default()
+        self.uri().query().map_or("", urly::Query::as_str)
     }
 
     /// Io reference for current connection
@@ -111,12 +113,12 @@ impl HttpRequest {
     /// where the identifier can be used later in a request handler to
     /// access the matched value for that segment.
     #[inline]
-    pub fn match_info(&self) -> &Path<Uri> {
+    pub fn match_info(&self) -> &Path<Url> {
         &self.0.path
     }
 
     #[inline]
-    pub(crate) fn match_info_mut(&mut self) -> &mut Path<Uri> {
+    pub(crate) fn match_info_mut(&mut self) -> &mut Path<Url> {
         &mut Rc::get_mut(&mut self.0).unwrap().path
     }
 

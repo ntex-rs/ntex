@@ -1,9 +1,11 @@
 use std::{cell::Ref, cell::RefMut, fmt, mem, net};
 
+use urly::Url;
+
 use crate::http::header::{self, HeaderMap};
 use crate::http::httpmessage::HttpMessage;
 use crate::http::message::{Message, RequestHead};
-use crate::http::{Method, Uri, Version, payload::Payload};
+use crate::http::{Method, Version, payload::Payload};
 use crate::{io::IoRef, io::types, util::Extensions};
 
 /// An HTTP request.
@@ -74,13 +76,13 @@ impl Request {
 
     /// Returns the request URI.
     #[inline]
-    pub fn uri(&self) -> &Uri {
+    pub fn uri(&self) -> &Url {
         &self.head().uri
     }
 
     /// Returns mutable access to the request URI.
     #[inline]
-    pub fn uri_mut(&mut self) -> &mut Uri {
+    pub fn uri_mut(&mut self) -> &mut Url {
         &mut self.head_mut().uri
     }
 
@@ -99,7 +101,7 @@ impl Request {
     /// Returns the path component of the request URI.
     #[inline]
     pub fn path(&self) -> &str {
-        self.head().uri.path()
+        self.head().uri.path().as_str()
     }
 
     #[inline]
@@ -186,7 +188,7 @@ impl fmt::Debug for Request {
             self.method(),
             self.path()
         )?;
-        if let Some(q) = self.uri().query().as_ref() {
+        if let Some(q) = self.uri().query() {
             writeln!(f, "  query: ?{q:?}")?;
         }
         writeln!(f, "  headers:")?;
@@ -237,9 +239,9 @@ mod tests {
         req.head_mut().no_chunking(false);
         assert!(req.head().chunked());
 
-        *req.uri_mut() = Uri::try_from("/index.html?q=1").unwrap();
+        *req.uri_mut() = Url::try_from("/index.html?q=1").unwrap();
         assert_eq!(req.uri().path(), "/index.html");
-        assert_eq!(req.uri().query(), Some("q=1"));
+        assert_eq!(req.uri().query().unwrap(), "q=1");
 
         let s = format!("{req:?}");
         assert!(s.contains("Request HTTP/1.1 GET:/index.html"));

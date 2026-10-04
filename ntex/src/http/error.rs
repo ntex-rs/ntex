@@ -123,6 +123,12 @@ impl From<ntex_http::compat::InvalidUri> for DecodeError {
     }
 }
 
+impl From<urly::InvalidUrl> for DecodeError {
+    fn from(_: urly::InvalidUrl) -> DecodeError {
+        DecodeError::Uri
+    }
+}
+
 impl From<FromUtf8Error> for DecodeError {
     fn from(_: FromUtf8Error) -> DecodeError {
         DecodeError::Utf8
@@ -375,6 +381,8 @@ mod tests {
     #[test]
     fn test_decode_error_from() {
         let err = "a b".parse::<crate::http::Uri>().unwrap_err();
+        assert!(matches!(DecodeError::from(err), DecodeError::Uri));
+        let err = "".parse::<urly::Url>().unwrap_err();
         assert!(matches!(DecodeError::from(err), DecodeError::Uri));
         let err = String::from_utf8(vec![0xff]).unwrap_err();
         assert!(matches!(DecodeError::from(err), DecodeError::Utf8));

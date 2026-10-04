@@ -4,11 +4,12 @@ use base64::{Engine, engine::general_purpose::STANDARD as base64};
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 use serde::Serialize;
+use urly::Url;
 
 use crate::error::Error;
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
-use crate::http::{ConnectionType, Method, Uri, Version, body::Body};
+use crate::http::{ConnectionType, Method, Version, body::Body};
 use crate::{Cfg, PipelineBinding, time::Millis, util::Bytes, util::Stream};
 
 use super::error::{ClientError, InvalidUrl};
@@ -54,8 +55,8 @@ impl ClientRequest {
         svc: PipelineBinding<ServiceRequest, ServiceResponse, Error<ClientError>>,
     ) -> Self
     where
-        Uri: TryFrom<U>,
-        <Uri as TryFrom<U>>::Error: Into<HttpError>,
+        Url: TryFrom<U>,
+        <Url as TryFrom<U>>::Error: Into<InvalidUrl>,
     {
         ClientRequest {
             svc,
@@ -76,18 +77,18 @@ impl ClientRequest {
     #[must_use]
     pub fn uri<U>(mut self, uri: U) -> Self
     where
-        Uri: TryFrom<U>,
-        <Uri as TryFrom<U>>::Error: Into<HttpError>,
+        Url: TryFrom<U>,
+        <Url as TryFrom<U>>::Error: Into<InvalidUrl>,
     {
-        match Uri::try_from(uri) {
+        match Url::try_from(uri) {
             Ok(uri) => self.request.head.uri = uri,
-            Err(e) => self.err = Some(InvalidUrl::Http(e.into()).into()),
+            Err(e) => self.err = Some(e.into().into()),
         }
         self
     }
 
     /// Returns the request URI.
-    pub fn get_uri(&self) -> &Uri {
+    pub fn get_uri(&self) -> &Url {
         &self.request.head.uri
     }
 
@@ -399,19 +400,7 @@ impl ClientRequest {
             }
         };
 
-        let mut parts = self.request.head.uri.clone().into_parts();
-        let path = parts.path_and_query.as_ref().map_or("/", |pq| pq.path());
-        let result = format!("{path}?{query}")
-            .parse()
-            .map_err(HttpError::from)
-            .and_then(|pq| {
-                parts.path_and_query = Some(pq);
-                Uri::from_parts(parts).map_err(HttpError::from)
-            });
-        match result {
-            Ok(uri) => self.request.head.uri = uri,
-            Err(e) => self.err = Some(InvalidUrl::Http(e).into()),
-        }
+        self.request.head.uri.set_query(Some(&query));
         self
     }
 }
@@ -772,12 +761,12 @@ mod tests {
         let req = Client::new().get("http://local host/");
         assert!(matches!(
             req.err,
-            Some(ClientError::Url(InvalidUrl::Http(_)))
+            Some(ClientError::Url(InvalidUrl::Parse(_)))
         ));
         let err = req.send().await.unwrap_err();
         assert!(matches!(
             err.into_error(),
-            ClientError::Url(InvalidUrl::Http(_))
+            ClientError::Url(InvalidUrl::Parse(_))
         ));
 
         let req = Client::new().get("/").header("bad header", "1");
@@ -837,7 +826,8 @@ mod tests {
     async fn client_url_validation() {
         for (url, expected) in [
             ("/path", "missing-host"),
-            ("localhost:8080", "missing-scheme"),
+            ("//localhost:8080/", "missing-scheme"),
+            ("localhost:8080", "missing-host"),
             ("ftp://localhost/", "unknown-scheme"),
         ] {
             let err = Client::new().get(url).send().await.unwrap_err();

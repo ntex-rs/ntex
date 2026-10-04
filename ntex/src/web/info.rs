@@ -1,7 +1,7 @@
 use std::{borrow::ToOwned, cell::Ref};
 
 use super::config::WebAppConfig;
-use crate::http::{RequestHead, header, header::HeaderName, uri};
+use crate::http::{RequestHead, header, header::HeaderName};
 
 const X_FORWARDED_FOR: HeaderName = HeaderName::from_static("x-forwarded-for");
 const X_FORWARDED_HOST: HeaderName = HeaderName::from_static("x-forwarded-host");
@@ -66,7 +66,7 @@ impl ConnectionInfo {
                 scheme = h.split(',').next().map(str::trim);
             }
             if scheme.is_none() {
-                scheme = req.uri.scheme().map(uri::Scheme::as_str);
+                scheme = req.uri.scheme_str();
                 if scheme.is_none() && cfg.secure() {
                     scheme = Some("https");
                 }
@@ -85,7 +85,7 @@ impl ConnectionInfo {
                     host = h.to_str().ok();
                 }
                 if host.is_none() {
-                    host = req.uri.authority().map(uri::Authority::as_str);
+                    host = req.uri.authority().map(urly::Authority::as_str);
                     if host.is_none() {
                         host = Some(cfg.host());
                     }

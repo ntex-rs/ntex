@@ -43,8 +43,10 @@ pub use self::test::TestResponse;
 pub(crate) use self::codec::{ClientCodec, ClientPayloadCodec};
 #[cfg(feature = "ws")]
 pub(crate) use self::h1proto::host_header;
-use crate::client::error::ConnectError;
-use crate::http::{HeaderMap, Method, RequestHead, Uri, body::BodySize, error::HttpError};
+use urly::Url;
+
+use crate::client::error::{ConnectError, InvalidUrl};
+use crate::http::{HeaderMap, Method, RequestHead, body::BodySize};
 use crate::service::{cfg::SharedCfg, pipeline::PipelineState};
 use crate::{Cfg, Pipeline, error::Error, io::IoBoxed};
 
@@ -52,7 +54,7 @@ type ConnectorPipeline = PipelineState<SharedCfg, Connect, IoBoxed, Error<Connec
 
 #[derive(Debug, Clone)]
 pub(crate) struct Connect {
-    pub(crate) uri: Uri,
+    pub(crate) uri: Url,
     pub(crate) addr: Option<std::net::SocketAddr>,
 }
 
@@ -138,8 +140,8 @@ impl Client {
     /// Creates an HTTP request with the specified method and URL.
     pub fn request<U>(&self, method: Method, url: U) -> ClientRequest
     where
-        Uri: TryFrom<U>,
-        <Uri as TryFrom<U>>::Error: Into<HttpError>,
+        Url: TryFrom<U>,
+        <Url as TryFrom<U>>::Error: Into<InvalidUrl>,
     {
         let mut req = ClientRequest::new(method, url, self.cfg.clone(), self.svc.bind());
         for (key, value) in self.cfg.headers() {
@@ -154,8 +156,8 @@ impl Client {
     /// from `head`; existing client default headers are not overwritten.
     pub fn request_from<U>(&self, url: U, head: &RequestHead) -> ClientRequest
     where
-        Uri: TryFrom<U>,
-        <Uri as TryFrom<U>>::Error: Into<HttpError>,
+        Url: TryFrom<U>,
+        <Url as TryFrom<U>>::Error: Into<InvalidUrl>,
     {
         let mut req = self.request(head.method.clone(), url);
         for (key, value) in &head.headers {
@@ -170,8 +172,8 @@ impl Client {
     /// Construct HTTP *GET* request.
     pub fn get<U>(&self, url: U) -> ClientRequest
     where
-        Uri: TryFrom<U>,
-        <Uri as TryFrom<U>>::Error: Into<HttpError>,
+        Url: TryFrom<U>,
+        <Url as TryFrom<U>>::Error: Into<InvalidUrl>,
     {
         self.request(Method::GET, url)
     }
@@ -179,8 +181,8 @@ impl Client {
     /// Construct HTTP *HEAD* request.
     pub fn head<U>(&self, url: U) -> ClientRequest
     where
-        Uri: TryFrom<U>,
-        <Uri as TryFrom<U>>::Error: Into<HttpError>,
+        Url: TryFrom<U>,
+        <Url as TryFrom<U>>::Error: Into<InvalidUrl>,
     {
         self.request(Method::HEAD, url)
     }
@@ -188,8 +190,8 @@ impl Client {
     /// Construct HTTP *PUT* request.
     pub fn put<U>(&self, url: U) -> ClientRequest
     where
-        Uri: TryFrom<U>,
-        <Uri as TryFrom<U>>::Error: Into<HttpError>,
+        Url: TryFrom<U>,
+        <Url as TryFrom<U>>::Error: Into<InvalidUrl>,
     {
         self.request(Method::PUT, url)
     }
@@ -197,8 +199,8 @@ impl Client {
     /// Construct HTTP *POST* request.
     pub fn post<U>(&self, url: U) -> ClientRequest
     where
-        Uri: TryFrom<U>,
-        <Uri as TryFrom<U>>::Error: Into<HttpError>,
+        Url: TryFrom<U>,
+        <Url as TryFrom<U>>::Error: Into<InvalidUrl>,
     {
         self.request(Method::POST, url)
     }
@@ -206,8 +208,8 @@ impl Client {
     /// Construct HTTP *PATCH* request.
     pub fn patch<U>(&self, url: U) -> ClientRequest
     where
-        Uri: TryFrom<U>,
-        <Uri as TryFrom<U>>::Error: Into<HttpError>,
+        Url: TryFrom<U>,
+        <Url as TryFrom<U>>::Error: Into<InvalidUrl>,
     {
         self.request(Method::PATCH, url)
     }
@@ -215,8 +217,8 @@ impl Client {
     /// Construct HTTP *DELETE* request.
     pub fn delete<U>(&self, url: U) -> ClientRequest
     where
-        Uri: TryFrom<U>,
-        <Uri as TryFrom<U>>::Error: Into<HttpError>,
+        Url: TryFrom<U>,
+        <Url as TryFrom<U>>::Error: Into<InvalidUrl>,
     {
         self.request(Method::DELETE, url)
     }
@@ -224,8 +226,8 @@ impl Client {
     /// Construct HTTP *QUERY* request.
     pub fn query<U>(&self, url: U) -> ClientRequest
     where
-        Uri: TryFrom<U>,
-        <Uri as TryFrom<U>>::Error: Into<HttpError>,
+        Url: TryFrom<U>,
+        <Url as TryFrom<U>>::Error: Into<InvalidUrl>,
     {
         self.request(Method::QUERY, url)
     }
@@ -233,8 +235,8 @@ impl Client {
     /// Construct HTTP *OPTIONS* request.
     pub fn options<U>(&self, url: U) -> ClientRequest
     where
-        Uri: TryFrom<U>,
-        <Uri as TryFrom<U>>::Error: Into<HttpError>,
+        Url: TryFrom<U>,
+        <Url as TryFrom<U>>::Error: Into<InvalidUrl>,
     {
         self.request(Method::OPTIONS, url)
     }

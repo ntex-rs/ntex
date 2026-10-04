@@ -4,6 +4,7 @@ use std::{convert::Infallible, fmt, io, net, net::SocketAddr, rc::Rc, sync::mpsc
 #[cfg(feature = "cookie")]
 use coo_kie::Cookie;
 use serde::{Serialize, de::DeserializeOwned};
+use urly::Url;
 use uuid::Uuid;
 
 use crate::client::error::ClientPayloadError;
@@ -12,9 +13,7 @@ use crate::error::Error;
 use crate::http::error::{HttpError, ResponseError};
 use crate::http::header::{CONTENT_TYPE, HeaderName, HeaderValue};
 use crate::http::test::TestRequest as HttpTestRequest;
-use crate::http::{
-    self, HttpService, Method, Payload, Request, Response, StatusCode, Uri, Version,
-};
+use crate::http::{self, HttpService, Method, Payload, Request, Response, StatusCode, Version};
 #[cfg(feature = "ws")]
 use crate::io::Sealed;
 use crate::router::{Path, ResourceDef};
@@ -355,7 +354,7 @@ pub async fn respond_to<T: Responder>(slf: T, req: &HttpRequest) -> HttpResponse
 pub struct TestRequest<St = ()> {
     req: HttpTestRequest,
     rmap: ResourceMap,
-    path: Path<Uri>,
+    path: Path<Url>,
     peer_addr: Option<SocketAddr>,
     state: St,
     config: WebAppConfig,
@@ -366,7 +365,7 @@ impl Default for TestRequest {
         TestRequest {
             req: HttpTestRequest::default(),
             rmap: ResourceMap::new(ResourceDef::new("")),
-            path: Path::new(Uri::default()),
+            path: Path::new(Url::default()),
             peer_addr: None,
             state: (),
             config: WebAppConfig::new(),

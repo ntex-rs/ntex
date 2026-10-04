@@ -1,8 +1,9 @@
 use std::{cell::Cell, fmt, task::Poll};
 
 use ntex_http::header::{HeaderName, HeaderValue};
-use ntex_http::{Method, StatusCode, Uri, Version, header};
+use ntex_http::{Method, StatusCode, Version, header};
 use ntex_httparse::{self as httparse, HeaderParsed, Status};
+use urly::Url;
 
 use super::encoder::is_bodyless;
 use crate::http::config::HttpServiceConfig;
@@ -546,18 +547,45 @@ impl MessageType for Request {
                 let method = Method::from_bytes(&src[req.method.start..req.method.end])
                     .map_err(|_| DecodeError::Method)?;
                 let target = &src[req.path.start..req.path.end];
+                // a fragment is not a part of the request-target
+                let target = target.split(|b| *b == b'#').next().unwrap_or_default();
                 // asterisk-form is only used for a server-wide `OPTIONS` request,
                 // see RFC 9112 section 3.2.4
                 if target == b"*" && method != Method::OPTIONS {
                     return Err(DecodeError::Uri);
                 }
-                let uri = Uri::try_from(target)?;
-                // authority-form is used only, and always, for `CONNECT`, see
-                // RFC 9112 section 3.2.3
-                let authority_form = uri.scheme().is_none() && uri.authority().is_some();
-                if authority_form != (method == Method::CONNECT) {
-                    return Err(DecodeError::Uri);
-                }
+                let uri = if method == Method::CONNECT {
+                    // authority-form is used only, and always, for `CONNECT`, see
+                    // RFC 9112 section 3.2.3
+                    let target = str::from_utf8(target).map_err(|_| DecodeError::Uri)?;
+                    let uri = Url::try_from(format!("//{target}"))?;
+                    let valid = uri.authority().is_some_and(|a| a.userinfo().is_none())
+                        && uri.host().is_some()
+                        && uri.path_and_query().as_str().is_empty();
+                    if !valid {
+                        return Err(DecodeError::Uri);
+                    }
+                    uri
+                } else {
+                    // origin-form, absolute-form or asterisk-form
+                    let uri = if target.starts_with(b"//") {
+                        // origin-form path, not a network-path reference
+                        let target = str::from_utf8(target).map_err(|_| DecodeError::Uri)?;
+                        Url::try_from(format!("/.{target}"))?
+                    } else {
+                        Url::try_from(target)?
+                    };
+                    let valid = if uri.is_absolute() {
+                        uri.host().is_some()
+                    } else {
+                        uri.authority().is_none()
+                            && (uri.path().as_str().starts_with('/') || target == b"*")
+                    };
+                    if !valid {
+                        return Err(DecodeError::Uri);
+                    }
+                    uri
+                };
                 let version = if req.version == 1 {
                     Version::HTTP_11
                 } else {
@@ -1388,9 +1416,38 @@ mod tests {
             }
         }
 
-        for target in ["/", "/test", "http://example.com:443/"] {
+        let mut buf = BytesMut::from("CONNECT [::1]:443 HTTP/1.1\r\nhost: a\r\n\r\n");
+        let req = parse_ready!(&mut buf);
+        assert_eq!(req.uri().authority().unwrap(), "[::1]:443");
+
+        for target in ["/", "/test", "http://example.com:443/", "u@h:1"] {
             let mut buf =
                 BytesMut::from(format!("CONNECT {target} HTTP/1.1\r\nhost: a\r\n\r\n").as_str());
+            match MessageDecoder::<Request>::default().decode(&mut buf) {
+                Err(DecodeError::Uri) => (),
+                res => panic!("{target}: {res:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_request_target() {
+        for (target, path_and_query) in [
+            ("/a#frag", "/a"),
+            ("/a?b=c#frag", "/a?b=c"),
+            ("/a/../b", "/b"),
+            ("//a//b?c", "//a//b?c"),
+            ("http://example.com//a", "//a"),
+        ] {
+            let mut buf =
+                BytesMut::from(format!("GET {target} HTTP/1.1\r\nhost: a\r\n\r\n").as_str());
+            let req = parse_ready!(&mut buf);
+            assert_eq!(req.uri().path_and_query(), path_and_query, "{target}");
+        }
+
+        for target in ["http:///x", "a/b", "http://[::1/"] {
+            let mut buf =
+                BytesMut::from(format!("GET {target} HTTP/1.1\r\nhost: a\r\n\r\n").as_str());
             match MessageDecoder::<Request>::default().decode(&mut buf) {
                 Err(DecodeError::Uri) => (),
                 res => panic!("{target}: {res:?}"),
@@ -1810,7 +1867,7 @@ mod tests {
         assert_eq!(req.version(), Version::HTTP_10);
         assert_eq!(*req.method(), Method::GET);
         assert_eq!(req.path(), "/test3");
-        assert_eq!(req.uri().query(), Some("test=1"));
+        assert_eq!(req.uri().query().unwrap(), "test=1");
 
         // transfer-encoding is not supported for http1.0
         let mut buf =
@@ -2400,6 +2457,7 @@ mod tests {
         let req = parse_ready!(&mut buf);
 
         assert_eq!(req.path(), "//path");
+        assert!(req.uri().authority().is_none());
     }
 
     #[test]

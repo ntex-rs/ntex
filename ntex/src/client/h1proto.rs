@@ -2,11 +2,13 @@
 use std::task::{Poll, ready};
 use std::{future::poll_fn, io, io::Write, pin::Pin, task, time::Instant};
 
+use urly::Url;
+
 use crate::error::{Error, ErrorMapping, with_service};
 use crate::http::body::{Body, BodySize, MessageBody};
 use crate::http::error::PayloadError;
 use crate::http::header::{HOST, HeaderValue};
-use crate::http::{Payload, PayloadStream, ResponseHead, Uri, h1};
+use crate::http::{Payload, PayloadStream, ResponseHead, h1};
 use crate::io::{IoBoxed, RecvError};
 use crate::service::cfg::Configuration;
 use crate::time::{Millis, timeout_checked};
@@ -122,7 +124,7 @@ fn response(
 }
 
 /// Builds the `Host` header value, the port is omitted if it is the scheme's default.
-pub(crate) fn host_header(uri: &Uri) -> Option<HeaderValue> {
+pub(crate) fn host_header(uri: &Url) -> Option<HeaderValue> {
     let host = uri.host()?;
     let default_port = match uri.scheme_str() {
         Some("https" | "wss") => 443,
@@ -270,9 +272,9 @@ mod tests {
             ("wss://example.com:80/", "example.com:80"),
             ("http://[::1]:8080/", "[::1]:8080"),
         ] {
-            let uri = Uri::try_from(uri).unwrap();
+            let uri = Url::try_from(uri).unwrap();
             assert_eq!(host_header(&uri).unwrap(), host, "{uri}");
         }
-        assert!(host_header(&Uri::from_static("/path")).is_none());
+        assert!(host_header(&Url::from_static("/path")).is_none());
     }
 }
