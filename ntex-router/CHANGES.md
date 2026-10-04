@@ -1,6 +1,6 @@
 # Changes
 
-## [2.1.0] - Unreleased
+## [2.1.0] - 2026-10-04
 
 * Implement `ResourcePath` for `urly::Url` instead of `http::Uri`, remove `http` feature
 
