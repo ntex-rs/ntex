@@ -2,10 +2,7 @@ use ntex_bytes::ByteString;
 
 use crate::authority::Authority;
 use crate::error::{ErrorKind, InvalidUrl, InvalidUrlParts};
-use crate::path::PathAndQuery;
-use crate::query::Fragment;
-use crate::scheme::Scheme;
-use crate::{parse, url::Url};
+use crate::{parse, path::PathAndQuery, query::Fragment, scheme::Scheme, url::Url};
 
 /// URL builder.
 ///

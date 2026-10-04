@@ -1,11 +1,8 @@
-use std::borrow::Cow;
-use std::fmt;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::{borrow::Cow, fmt, net::Ipv4Addr, net::Ipv6Addr};
 
 use crate::chars::{self, NONE, REG_NAME, char_at, lowercase};
 use crate::error::{ErrorKind, InvalidUrl};
-use crate::idna;
-use crate::quoting::unquote_with;
+use crate::{idna, quoting::unquote_with};
 
 /// Parsed URL host.
 ///
