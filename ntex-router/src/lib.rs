@@ -83,7 +83,7 @@ pub trait Resource<T: ResourcePath> {
     fn resource_path(&mut self) -> &mut Path<T>;
 }
 
-/// A path source, e.g. a string or an `http::Uri`.
+/// A path source, e.g. a string or an `urly::Url`.
 pub trait ResourcePath {
     /// Full path.
     fn path(&self) -> &str;
@@ -161,10 +161,9 @@ impl<T: AsRef<str>, const N: usize> IntoPattern for [T; N] {
     }
 }
 
-#[cfg(feature = "http")]
-mod http_support {
+mod url_support {
     use super::ResourcePath;
-    use http::Uri;
+    use urly::Url;
 
     /// Path segments are percent-decoded, escapes that would not decode to
     /// valid utf-8 are kept percent-encoded.
@@ -174,9 +173,9 @@ mod http_support {
     /// `/files/..%2F..%2Fetc` matches `/files/{name}` with `name` set to
     /// `../../etc`. Such values must be validated before they are used, e.g.
     /// as a file system path.
-    impl ResourcePath for Uri {
+    impl ResourcePath for Url {
         fn path(&self) -> &str {
-            self.path()
+            self.path().as_str()
         }
 
         fn unquote(s: &str) -> std::borrow::Cow<'_, str> {

@@ -645,34 +645,33 @@ mod tests {
         assert_eq!(tree.find(&mut Path::new("/user/2345/sdg")), None);
     }
 
-    #[cfg(feature = "http")]
     #[test]
     fn test_parse_urlencoded() {
-        use http::Uri;
+        use urly::Url;
 
         let tree = Tree::new(&ResourceDef::new("/user/{id}/test"), 1);
-        let uri = Uri::try_from("/user/2345/test").unwrap();
+        let uri = Url::try_from("/user/2345/test").unwrap();
         let mut resource = Path::new(uri);
         assert_eq!(tree.find(&mut resource), Some(1));
         assert_eq!(resource.get("id").unwrap(), "2345");
 
-        let uri = Uri::try_from("/user/qwe%25/test").unwrap();
+        let uri = Url::try_from("/user/qwe%25/test").unwrap();
         let mut resource = Path::new(uri);
         assert_eq!(tree.find(&mut resource), Some(1));
         assert_eq!(resource.get("id").unwrap(), "qwe%");
 
-        let uri = Uri::try_from("/user/qwe%25rty/test").unwrap();
+        let uri = Url::try_from("/user/qwe%25rty/test").unwrap();
         let mut resource = Path::new(uri);
         assert_eq!(tree.find(&mut resource), Some(1));
         assert_eq!(resource.get("id").unwrap(), "qwe%rty");
 
-        let uri = Uri::try_from("/user/foo-%2f-%252f-bar/test").unwrap();
+        let uri = Url::try_from("/user/foo-%2f-%252f-bar/test").unwrap();
         let mut resource = Path::new(uri);
         assert_eq!(tree.find(&mut resource), Some(1));
         assert_eq!(resource.get("id").unwrap(), "foo-/-%2f-bar");
 
         let uri =
-            Uri::try_from("/user/http%3A%2F%2Flocalhost%3A80%2Ffile%2F%2Fvar%2Flog%2Fsyslog/test")
+            Url::try_from("/user/http%3A%2F%2Flocalhost%3A80%2Ffile%2F%2Fvar%2Flog%2Fsyslog/test")
                 .unwrap();
         let mut resource = Path::new(uri);
         assert_eq!(tree.find(&mut resource), Some(1));
@@ -682,16 +681,15 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "http")]
     #[test]
     fn test_extract_path_decode() {
-        use http::Uri;
+        use urly::Url;
 
         let tree = Tree::new(&ResourceDef::new("/{id}/"), 1);
 
         macro_rules! test_single_value {
             ($value:expr, $expected:expr) => {{
-                let uri = Uri::try_from($value).unwrap();
+                let uri = Url::try_from($value).unwrap();
                 let mut resource = Path::new(uri);
                 assert_eq!(tree.find(&mut resource), Some(1));
                 assert_eq!(resource.get("id").unwrap(), $expected);
