@@ -16,6 +16,16 @@ impl Address for Uri {
     }
 }
 
+impl Address for urly::Url {
+    fn host(&self) -> &str {
+        self.host().unwrap_or("")
+    }
+
+    fn port(&self) -> Option<u16> {
+        self.port_u16().or_else(|| port(self.scheme_str()))
+    }
+}
+
 // TODO: load data from file
 fn port(scheme: Option<&str>) -> Option<u16> {
     if let Some(scheme) = scheme {
@@ -54,5 +64,18 @@ mod tests {
         }
         assert_eq!(port(Some("unknowns")), None);
         assert_eq!(port(None), None);
+    }
+
+    #[test]
+    fn url_address() {
+        let url = urly::Url::from_static("mqtts://[::1]/a");
+        assert_eq!(Address::host(&url), "[::1]");
+        assert_eq!(Address::port(&url), Some(8883));
+        let url = urly::Url::from_static("http://example.com:8080/");
+        assert_eq!(Address::host(&url), "example.com");
+        assert_eq!(Address::port(&url), Some(8080));
+        let url = urly::Url::from_static("/a");
+        assert_eq!(Address::host(&url), "");
+        assert_eq!(Address::port(&url), None);
     }
 }

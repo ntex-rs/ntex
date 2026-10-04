@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+* Implement `Address` for `urly::Url`
+
 * iocp: send up to 32 buffers per `WSASend`, was 16
 
 ## [4.1.0] - 2026-10-01
