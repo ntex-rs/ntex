@@ -1,6 +1,6 @@
 [package]
 name = "ntex-router"
-version = "2.0.1"
+version = "2.1.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Path router"
 keywords = ["ntex"]
@@ -17,17 +17,12 @@ path = "src/lib.rs"
 [lints]
 workspace = true
 
-[features]
-default = ["http"]
-
 [dependencies]
 ntex-bytes = { workspace = true }
 serde = { workspace = true }
 log = { workspace = true }
-http = { workspace = true, optional = true }
 regex = { workspace = true }
 urly = { workspace = true }
 
 [dev-dependencies]
-http = { workspace = true }
 serde_derive = { workspace = true }

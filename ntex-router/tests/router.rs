@@ -302,19 +302,19 @@ fn string_sources() {
 }
 
 #[test]
-fn uri_source() {
+fn url_source() {
     let mut builder = Router::<usize>::builder();
     builder.path("/files/{name}", 1);
     let router = builder.build();
 
-    let uri: http::Uri = "/files/a%20b".parse().unwrap();
+    let uri: urly::Url = "/files/a%20b".parse().unwrap();
     let mut path = Path::new(uri);
     assert_eq!(router.recognize(&mut path).map(|v| *v.0), Some(1));
     assert_eq!(&path["name"], "a b");
     assert_eq!(&path[0], "a b");
     assert_eq!(path.iter().next(), Some(("name", "a b")));
 
-    let uri: http::Uri = "/files/plain".parse().unwrap();
+    let uri: urly::Url = "/files/plain".parse().unwrap();
     let mut path = Path::new(uri);
     assert_eq!(router.recognize(&mut path).map(|v| *v.0), Some(1));
     assert_eq!(&path["name"], "plain");

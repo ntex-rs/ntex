@@ -1,9 +1,11 @@
 # Changes
 
-## [2.0.1] - 2026-10-04
+## [2.1.0] - Unreleased
 
-* Use `urly` to decode path segments of `http::Uri`. Escapes that do not decode
-  to valid utf-8 are kept percent-encoded, the rest of the segment is decoded
+* Implement `ResourcePath` for `urly::Url` instead of `http::Uri`, remove `http` feature
+
+* Decode path segments with `urly`. Escapes that do not decode to valid utf-8 are
+  kept percent-encoded, the rest of the segment is decoded
 
 ## [2.0.0] - 2026-10-01
 
