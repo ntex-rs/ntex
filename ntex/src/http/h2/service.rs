@@ -1,4 +1,4 @@
-use std::{cell::Cell, cell::RefCell, future::poll_fn, io, mem, rc::Rc};
+use std::{cell::Cell, cell::RefCell, future::poll_fn, io, rc::Rc};
 
 use ntex_h2::{self as h2, control::ExpectResult, frame::StreamId, server};
 use urly::{Authority, Scheme, Url};
@@ -362,8 +362,7 @@ where
             let mut res = Response::new(StatusCode::BAD_REQUEST).drop_body();
             let head = res.head_mut();
             prepare_response(head, &mut BodySize::Empty);
-            let hdrs = mem::replace(&mut head.headers, HeaderMap::new());
-            let _ = stream.send_response(StatusCode::BAD_REQUEST, hdrs, true);
+            let _ = stream.send_response(StatusCode::BAD_REQUEST, &head.headers, true);
             if !eof {
                 // the request body is not needed
                 stream.reset(h2::frame::Reason::NO_ERROR);
@@ -400,8 +399,7 @@ where
                     let head = res.head_mut();
                     head.headers = headers;
                     prepare_response(head, &mut BodySize::Empty);
-                    let hdrs = mem::replace(&mut head.headers, HeaderMap::new());
-                    let _ = stream.send_response(status, hdrs, true);
+                    let _ = stream.send_response(status, &head.headers, true);
 
                     // the request body is not needed
                     stream.reset(h2::frame::Reason::NO_ERROR);
@@ -468,7 +466,8 @@ where
             self.io.tag()
         );
 
-        let hdrs = mem::replace(&mut head.headers, HeaderMap::new());
+        // borrowed, the pooled response head keeps its header map capacity
+        let hdrs = &head.headers;
         // `Err(Some(_))` is a body error, `Err(None)` is a closed stream
         let sent = async {
             if size.is_eof() || is_head_req {
