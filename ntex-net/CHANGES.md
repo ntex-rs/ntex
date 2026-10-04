@@ -1,6 +1,6 @@
 # Changes
 
-## [Unreleased]
+## [4.2.0] - 2026-10-04
 
 * Implement `Address` for `urly::Url`, remove `Address` impl for `http::Uri` and
   `ntex-http` dependency
