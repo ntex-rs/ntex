@@ -7,6 +7,7 @@ use urly::Url;
 
 use super::encoder::is_bodyless;
 use crate::http::config::HttpServiceConfig;
+use crate::http::helpers::is_valid_target;
 use crate::http::message::{ConnectionType, ResponseHead};
 use crate::http::{HeaderItem, error::DecodeError, header::HeaderMap, request::Request};
 use crate::util::{ByteString, Bytes, BytesMut};
@@ -547,8 +548,9 @@ impl MessageType for Request {
                 let method = Method::from_bytes(&src[req.method.start..req.method.end])
                     .map_err(|_| DecodeError::Method)?;
                 let target = &src[req.path.start..req.path.end];
-                // a fragment is not a part of the request-target
-                let target = target.split(|b| *b == b'#').next().unwrap_or_default();
+                if !is_valid_target(target) {
+                    return Err(DecodeError::Uri);
+                }
                 // asterisk-form is only used for a server-wide `OPTIONS` request,
                 // see RFC 9112 section 3.2.4
                 if target == b"*" && method != Method::OPTIONS {
@@ -1433,9 +1435,13 @@ mod tests {
     #[test]
     fn test_request_target() {
         for (target, path_and_query) in [
-            ("/a#frag", "/a"),
-            ("/a?b=c#frag", "/a?b=c"),
             ("/a/../b", "/b"),
+            ("/a/%2e%2E/b", "/b"),
+            ("/%7e%3b%2f?%7E%3d", "/~;%2F?~%3D"),
+            (
+                "/a[0]|^`{}?a[]=1&b=%00",
+                "/a%5B0%5D%7C%5E%60%7B%7D?a%5B%5D=1&b=%00",
+            ),
             ("//a//b?c", "//a//b?c"),
             ("http://example.com//a", "//a"),
         ] {
@@ -1445,7 +1451,21 @@ mod tests {
             assert_eq!(req.uri().path_and_query(), path_and_query, "{target}");
         }
 
-        for target in ["http:///x", "a/b", "http://[::1/"] {
+        for target in [
+            "http:///x",
+            "a/b",
+            "http://[::1/",
+            "/a#frag",
+            "/a?b=c#frag",
+            "/a%zz",
+            "/a%",
+            "/a\"",
+            "/a<b>",
+            "/a\\b",
+            "/\u{fc}",
+            "/a%00b",
+            "http://example.com/%00",
+        ] {
             let mut buf =
                 BytesMut::from(format!("GET {target} HTTP/1.1\r\nhost: a\r\n\r\n").as_str());
             match MessageDecoder::<Request>::default().decode(&mut buf) {

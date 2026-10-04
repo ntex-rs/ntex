@@ -12,6 +12,40 @@ pub(crate) fn json_body<T: ?Sized + Serialize>(value: &T) -> serde_json::Result<
     Ok(buf.freeze())
 }
 
+/// Checks a request-target before it is parsed and normalized.
+///
+/// Rejects invalid percent-encoding, a fragment, non-ASCII bytes, characters
+/// that are never sent unencoded (`"`, `<`, `>`, `\`, whitespace and controls)
+/// and an encoded NUL (`%00`) before the query, see RFC 9112 section 3.2.
+/// Brackets, braces, `|`, `^` and a backtick, which browsers send unencoded,
+/// are accepted and get percent-encoded by `Url` parsing.
+pub(crate) fn is_valid_target(target: &[u8]) -> bool {
+    let mut path = true;
+    let mut i = 0;
+    while let Some(&b) = target.get(i) {
+        match b {
+            b'%' => {
+                let (Some(&hi), Some(&lo)) = (target.get(i + 1), target.get(i + 2)) else {
+                    return false;
+                };
+                if !hi.is_ascii_hexdigit()
+                    || !lo.is_ascii_hexdigit()
+                    || (path && hi == b'0' && lo == b'0')
+                {
+                    return false;
+                }
+                i += 3;
+                continue;
+            }
+            b'?' => path = false,
+            b'#' | b'"' | b'<' | b'>' | b'\\' | 0..=b' ' | 0x7f.. => return false,
+            _ => (),
+        }
+        i += 1;
+    }
+    true
+}
+
 /// Appends `name=value` of a cookie to a `Cookie` header value.
 ///
 /// Name and value are percent-encoded, only unreserved characters are kept.
@@ -30,6 +64,41 @@ pub(crate) fn push_cookie(buf: &mut Vec<u8>, name: &str, value: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn valid_target() {
+        for target in [
+            "/",
+            "*",
+            "example.com:443",
+            "http://example.com/a%2Fb?c",
+            "/a[0]|^`{}?a[]=1&q=a|b%00",
+            "/a%2e%2E/%41",
+        ] {
+            assert!(is_valid_target(target.as_bytes()), "{target}");
+        }
+        for target in [
+            "/a#f",
+            "/a?b#f",
+            "/a%zz",
+            "/a%",
+            "/a%4",
+            "/a?%g0",
+            "/a\"",
+            "/a<",
+            "/a>",
+            "/a\\b",
+            "/a b",
+            "/a\x7f",
+            "/ü",
+            "/a%00",
+            "http://h/%00",
+            "%00",
+        ] {
+            assert!(!is_valid_target(target.as_bytes()), "{target}");
+        }
+        assert!(!is_valid_target(b"/a\xff"));
+    }
 
     #[test]
     fn json_body_matches_to_string() {

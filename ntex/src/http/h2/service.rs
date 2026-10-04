@@ -8,6 +8,7 @@ use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::config::DispatcherConfig;
 use crate::http::error::{DispatchError, H2Error, ResponseError};
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
+use crate::http::helpers::is_valid_target;
 use crate::http::message::{CurrentIo, ResponseHead};
 use crate::http::{DateService, Method, Request, Response, StatusCode, Version};
 use crate::io::{Filter, Io, IoBoxed, IoRef, types};
@@ -586,8 +587,8 @@ fn request_uri(pseudo: &h2::frame::PseudoHeaders) -> Option<(Method, Url)> {
         None => None,
     };
     let path = pseudo.path.as_ref().map(crate::util::ByteString::as_str);
-    // the same request-target bytes as http/1, `Url` parsing is lenient
-    if path.is_some_and(|p| p.bytes().any(|b| b <= b' ' || b == 0x7f)) {
+    // the same request-target checks as http/1, `Url` parsing is lenient
+    if path.is_some_and(|p| !is_valid_target(p.as_bytes())) {
         return None;
     }
 
@@ -721,6 +722,13 @@ mod tests {
         assert!(request_uri(&pseudo).is_none());
         pseudo.path = Some("/a\x7f".into());
         assert!(request_uri(&pseudo).is_none());
+        for path in ["/a#f", "/a%zz", "/a\"", "/a%00"] {
+            pseudo.path = Some(path.into());
+            assert!(request_uri(&pseudo).is_none(), "{path}");
+        }
+        pseudo.path = Some("/a%3b/%2e%2e/b?%00".into());
+        let (_, uri) = request_uri(&pseudo).unwrap();
+        assert_eq!(uri.path_and_query(), "/b?%00");
 
         pseudo.path = Some("*".into());
         assert!(request_uri(&pseudo).is_none());
