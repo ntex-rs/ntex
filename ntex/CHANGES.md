@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* http/1: Validate `Host` header with `urly`, out of range ports, invalid IPv4/IPv6
+  addresses and IPv6 zone ids are rejected
+
 * http/2: The last chunk of a sized response body ends the stream, no empty `DATA` frame
   is sent
 
