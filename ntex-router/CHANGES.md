@@ -1,5 +1,10 @@
 # Changes
 
+## [2.0.1] - 2026-10-04
+
+* Use `urly` to decode path segments of `http::Uri`. Escapes that do not decode
+  to valid utf-8 are kept percent-encoded, the rest of the segment is decoded
+
 ## [2.0.0] - 2026-10-01
 
 * Fix deserialization of maps with string keys from `Path`, e.g. `HashMap<String, String>`

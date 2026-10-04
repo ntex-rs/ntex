@@ -711,6 +711,10 @@ mod tests {
         test_single_value!("/%C3%A9/", "\u{e9}");
         test_single_value!("/%FF%FE/", "%FF%FE");
         test_single_value!("/test%C3/", "test%C3");
+        test_single_value!("/%C3%A9%FF/", "\u{e9}%FF");
+        test_single_value!("/%41%4/", "A%4");
+        test_single_value!("/%61b%62%/", "abb%");
+        test_single_value!("/a+b/", "a+b");
         test_single_value!("/test%mm/", "test%mm");
         test_single_value!(
             "/http%3A%2F%2Flocalhost%3A80%2Ffoo/",

@@ -161,14 +161,12 @@ impl<T: AsRef<str>, const N: usize> IntoPattern for [T; N] {
     }
 }
 
-mod quoter;
-
 #[cfg(feature = "http")]
 mod http_support {
     use super::ResourcePath;
     use http::Uri;
 
-    /// Path segments are percent-decoded, segments that would not decode to
+    /// Path segments are percent-decoded, escapes that would not decode to
     /// valid utf-8 are kept percent-encoded.
     ///
     /// Segments are decoded after the path is split on `/`, so parameter
@@ -182,11 +180,7 @@ mod http_support {
         }
 
         fn unquote(s: &str) -> std::borrow::Cow<'_, str> {
-            if let Some(q) = super::quoter::requote(s.as_bytes()) {
-                std::borrow::Cow::Owned(q)
-            } else {
-                std::borrow::Cow::Borrowed(s)
-            }
+            urly::quoting::unquote(s, urly::quoting::Component::Path)
         }
     }
 }
