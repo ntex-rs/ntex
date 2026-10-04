@@ -64,6 +64,7 @@ ntex-server = "4.2.0"
 ntex-service = "5.1.0"
 ntex-tls = "4.1.0"
 ntex-util = "4.2.1"
+urly = "1.0.0"
 
 ntex-io-uring = "0.8.7150"
 ntex-httparse = "2.2.0"
@@ -107,7 +108,6 @@ tls_openssl = { version = "0.10", package = "openssl" }
 openssl-sys = "0.9"
 foreign-types-shared = "0.1"
 parking_lot = "0.12.5"
-percent-encoding = "2.3"
 polling = "3.11.0"
 pin-project-lite = "0.2"
 proc-macro2 = "1.0.105"
@@ -140,7 +140,6 @@ time = "0.3.54"
 thiserror = "2"
 tok-io = { version = "1", package = "tokio", default-features = false }
 webpki-roots = "1.0"
-url-pkg = { version = "2.5.2", package = "url" }
 uuid = { version = "1.19", features = ["v7"] }
 
 compio-buf = "0.8.3"

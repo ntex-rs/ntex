@@ -293,7 +293,6 @@ mod tests {
         assert!(cfg.set_secure().secure());
     }
 
-    #[cfg(feature = "url")]
     #[crate::rt_test]
     async fn test_configure_external_resource() {
         let srv = init_service(

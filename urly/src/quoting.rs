@@ -7,6 +7,8 @@
 //!   disallowed character is percent-encoded.
 //! * [`unquote`] decodes a value. Escapes that don't form valid UTF-8 are kept as is.
 //!
+//! All functions borrow the input if it doesn't need to change.
+//!
 //! ```
 //! use urly::quoting::{Component, quote, requote, unquote};
 //!
@@ -14,12 +16,11 @@
 //! assert_eq!(requote("a b/100%25%7e", Component::Path), "a%20b/100%25~");
 //! assert_eq!(quote("a b&c=d", Component::QueryPart), "a+b%26c%3Dd");
 //! assert_eq!(unquote("a+b%26c", Component::QueryPart), "a b&c");
+//! assert_eq!(quote("a=b; c", Component::Opaque), "a%3Db%3B%20c");
 //! ```
 use std::borrow::Cow;
 
-use ntex_bytes::ByteString;
-
-use crate::chars::{self, ALLOWED, NONE, QS, Set, pct_at, push_pct};
+use crate::chars::{self, ALLOWED, NONE, QS, Set, UNRESERVED, pct_at, push_pct};
 
 /// The URL component a value belongs to; it selects the characters that are
 /// left unencoded.
@@ -35,6 +36,9 @@ pub enum Component {
     QueryPart,
     /// Fragment.
     Fragment,
+    /// A standalone value outside of a URL, such as a cookie name or value.
+    /// Only unreserved characters (`A-Z a-z 0-9 - . _ ~`) are kept.
+    Opaque,
 }
 
 #[derive(Copy, Clone)]
@@ -72,18 +76,23 @@ impl Component {
                 protected: NONE,
                 qs: false,
             },
+            Component::Opaque => Quoter {
+                safe: UNRESERVED,
+                protected: NONE,
+                qs: false,
+            },
         }
     }
 }
 
 /// Percent-encodes a literal value.
-pub fn quote(src: &str, component: Component) -> ByteString {
-    quote_cow(src, component, false).into()
+pub fn quote(src: &str, component: Component) -> Cow<'_, str> {
+    quote_with(src, component, false)
 }
 
 /// Normalizes the percent-encoding of an already-encoded value.
-pub fn requote(src: &str, component: Component) -> ByteString {
-    quote_cow(src, component, true).into()
+pub fn requote(src: &str, component: Component) -> Cow<'_, str> {
+    quote_with(src, component, true)
 }
 
 /// Decodes a percent-encoded value.
@@ -91,11 +100,15 @@ pub fn requote(src: &str, component: Component) -> ByteString {
 /// For [`Component::QueryPart`] `+` is decoded as space. For [`Component::Query`]
 /// `+` is decoded as space too, but escapes of `&`, `=`, `+` and `;` are kept, so
 /// the result can still be split into pairs.
-pub fn unquote(src: &str, component: Component) -> ByteString {
-    unquote_cow(src, component).into()
+pub fn unquote(src: &str, component: Component) -> Cow<'_, str> {
+    match component {
+        Component::Query => unquote_with(src, true, QS),
+        Component::QueryPart => unquote_with(src, true, NONE),
+        _ => unquote_with(src, false, NONE),
+    }
 }
 
-pub(crate) fn quote_cow(src: &str, component: Component, requote: bool) -> Cow<'_, str> {
+fn quote_with(src: &str, component: Component, requote: bool) -> Cow<'_, str> {
     let q = component.quoter();
     let bytes = src.as_bytes();
     // a literal `+` in a query would be decoded as space
@@ -148,14 +161,6 @@ pub(crate) fn quote_cow(src: &str, component: Component, requote: bool) -> Cow<'
         }
     }
     Cow::Owned(out)
-}
-
-pub(crate) fn unquote_cow(src: &str, component: Component) -> Cow<'_, str> {
-    match component {
-        Component::Query => unquote_with(src, true, QS),
-        Component::QueryPart => unquote_with(src, true, NONE),
-        _ => unquote_with(src, false, NONE),
-    }
 }
 
 /// Decodes `src`, keeping escapes of `ignore` characters encoded.
@@ -253,12 +258,20 @@ mod tests {
         );
         assert_eq!(quote("a=b&c d", Component::Query), "a=b&c+d");
         assert_eq!(quote("x#y", Component::Fragment), "x%23y");
+        assert_eq!(
+            quote("a=b; c,\"%~", Component::Opaque),
+            "a%3Db%3B%20c%2C%22%25~"
+        );
+        assert!(matches!(
+            quote("a-b_c.1~", Component::Opaque),
+            Cow::Borrowed(_)
+        ));
     }
 
     #[test]
     fn requote_rules() {
         assert!(matches!(
-            quote_cow("/a%2Fb%20c", Component::Path, true),
+            requote("/a%2Fb%20c", Component::Path),
             Cow::Borrowed(_)
         ));
         assert_eq!(requote("%7e%41%2f%2b", Component::Path), "~A%2F%2B");
@@ -271,10 +284,7 @@ mod tests {
 
     #[test]
     fn unquote_rules() {
-        assert!(matches!(
-            unquote_cow("abc", Component::Path),
-            Cow::Borrowed(_)
-        ));
+        assert!(matches!(unquote("abc", Component::Path), Cow::Borrowed(_)));
         assert_eq!(unquote("%C3%BC%20x", Component::Path), "ü x");
         assert_eq!(unquote("a+b", Component::Path), "a+b");
         assert_eq!(unquote("a+b%2B", Component::QueryPart), "a b+");

@@ -319,9 +319,6 @@ impl<F> WsClient<F> {
 
         #[cfg(feature = "cookie")]
         {
-            use percent_encoding::percent_encode;
-            use std::io::Write;
-
             // set cookies, appended to a configured `Cookie` header
             if let Some(ref jar) = self.cfg.cookies {
                 let mut cookie = Vec::new();
@@ -332,13 +329,7 @@ impl<F> WsClient<F> {
                     cookie.extend_from_slice(value.as_bytes());
                 }
                 for c in jar.iter() {
-                    let name = percent_encode(c.name().as_bytes(), crate::http::helpers::USERINFO);
-                    let value =
-                        percent_encode(c.value().as_bytes(), crate::http::helpers::USERINFO);
-                    if !cookie.is_empty() {
-                        cookie.extend_from_slice(b"; ");
-                    }
-                    let _ = write!(cookie, "{name}={value}");
+                    crate::http::helpers::push_cookie(&mut cookie, c.name(), c.value());
                 }
                 if let Ok(val) = HeaderValue::from_bytes(&cookie) {
                     head.headers.insert(header::COOKIE, val);

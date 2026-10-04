@@ -28,7 +28,6 @@
 //! - `rustls` enables TLS support through rustls.
 //! - `compress` enables HTTP content compression and decompression.
 //! - `cookie` enables HTTP cookie support.
-//! - `url` enables URL generation and URL-aware request helpers.
 //! - `no-test-logging` disables automatic logging configuration in
 //!   [`test`](macro@test).
 //! - `trace` enables additional trace-level logging.
@@ -62,6 +61,8 @@ pub mod web;
 
 #[cfg(feature = "ws")]
 pub mod ws;
+
+pub use urly as url;
 
 pub use self::service::{
     Ctx, IntoService, IntoServiceFactory, Middleware, Service, ServiceFactory, cfg::Cfg,

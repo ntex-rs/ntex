@@ -35,39 +35,39 @@ jobs:
       - name: Run tests (neon-polling)
         timeout-minutes: 10
         run: |
-          cargo nextest run --retries=3 --all --no-default-features --features="ntex/neon-polling,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+          cargo nextest run --retries=3 --all --no-default-features --features="ntex/neon-polling,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Run doc tests (neon-polling)
         timeout-minutes: 10
         run: |
-          cargo test --doc --all --no-default-features --features="ntex/neon-polling,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+          cargo test --doc --all --no-default-features --features="ntex/neon-polling,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Run tests (neon-uring)
         timeout-minutes: 10
         run: |
-          cargo nextest run --retries=3 --all --no-default-features --features="ntex/neon-uring,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+          cargo nextest run --retries=3 --all --no-default-features --features="ntex/neon-uring,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Run doc tests (neon-uring)
         timeout-minutes: 10
         run: |
-          cargo test --doc --all --no-default-features --features="ntex/neon-uring,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+          cargo test --doc --all --no-default-features --features="ntex/neon-uring,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Run tests (tokio)
         timeout-minutes: 10
         run: |
-          cargo nextest run --retries=3 --all --no-default-features --features="ntex/tokio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+          cargo nextest run --retries=3 --all --no-default-features --features="ntex/tokio,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Run doc tests (tokio)
         timeout-minutes: 10
         run: |
-          cargo test --doc --all --no-default-features --features="ntex/tokio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+          cargo test --doc --all --no-default-features --features="ntex/tokio,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Run tests (compio)
         timeout-minutes: 10
         run: |
-          cargo nextest run --retries=3 --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+          cargo nextest run --retries=3 --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Run doc tests (compio)
         timeout-minutes: 10
         run: |
-          cargo test --doc --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+          cargo test --doc --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"

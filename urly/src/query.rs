@@ -2,7 +2,7 @@ use ntex_bytes::ByteString;
 
 use crate::chars::{self, QUERY};
 use crate::error::InvalidUrl;
-use crate::quoting::{Component, unquote_cow};
+use crate::quoting::{Component, unquote};
 
 /// Percent-encoded URL query, without the leading `?`.
 #[repr(transparent)]
@@ -26,7 +26,7 @@ impl Query {
     /// Returns the decoded query. `+` is decoded as space; escapes of `&`, `=`,
     /// `+` and `;` are kept.
     pub fn decode(&self) -> ByteString {
-        unquote_cow(&self.0, Component::Query).into()
+        unquote(&self.0, Component::Query).into()
     }
 
     /// Returns an iterator over decoded `key=value` pairs.
@@ -62,7 +62,7 @@ impl Query {
     /// Returns all decoded values for `key`.
     pub fn get_all<'a>(&'a self, key: &'a str) -> impl Iterator<Item = ByteString> + 'a {
         self.raw_values(key)
-            .map(|v| unquote_cow(v, Component::QueryPart).into())
+            .map(|v| unquote(v, Component::QueryPart).into())
     }
 
     /// Returns `true` if the query contains `key`.
@@ -73,7 +73,7 @@ impl Query {
     fn raw_values<'a>(&'a self, key: &'a str) -> impl Iterator<Item = &'a str> + 'a {
         pieces(&self.0)
             .map(split_pair)
-            .filter_map(move |(k, v)| (unquote_cow(k, Component::QueryPart) == key).then_some(v))
+            .filter_map(move |(k, v)| (unquote(k, Component::QueryPart) == key).then_some(v))
     }
 }
 
@@ -97,8 +97,8 @@ impl Iterator for QueryPairs<'_> {
     fn next(&mut self) -> Option<Self::Item> {
         let (k, v) = split_pair(self.0.by_ref().find(|piece| !piece.is_empty())?);
         Some((
-            unquote_cow(k, Component::QueryPart).into(),
-            unquote_cow(v, Component::QueryPart).into(),
+            unquote(k, Component::QueryPart).into(),
+            unquote(v, Component::QueryPart).into(),
         ))
     }
 }
@@ -119,6 +119,6 @@ impl Fragment {
 
     /// Returns the decoded fragment.
     pub fn decode(&self) -> ByteString {
-        unquote_cow(&self.0, Component::Fragment).into()
+        unquote(&self.0, Component::Fragment).into()
     }
 }

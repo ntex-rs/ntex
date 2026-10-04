@@ -12,7 +12,7 @@ jobs:
         with:
           toolchain: stable
       - run:
-          cargo check --tests --all --no-default-features --features="ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+          cargo check --tests --all --no-default-features --features="ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
   clippy-polling:
     name: Clippy (neon)
@@ -24,7 +24,7 @@ jobs:
           toolchain: stable
           components: clippy
       - run:
-          cargo clippy --tests --all --no-default-features --features="ntex/neon-polling,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+          cargo clippy --tests --all --no-default-features --features="ntex/neon-polling,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
   clippy-uring:
     name: Clippy (neon-uring)
@@ -36,7 +36,7 @@ jobs:
           toolchain: stable
           components: clippy
       - run:
-          cargo clippy --tests --all --no-default-features --features="ntex/neon-uring,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+          cargo clippy --tests --all --no-default-features --features="ntex/neon-uring,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
   clippy-tokio:
     name: Clippy (tokio)
@@ -48,7 +48,7 @@ jobs:
           toolchain: stable
           components: clippy
       - run:
-          cargo clippy --tests --all --no-default-features --features="ntex/tokio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+          cargo clippy --tests --all --no-default-features --features="ntex/tokio,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
   clippy-compio:
     name: Clippy (compio)
@@ -60,7 +60,7 @@ jobs:
           toolchain: stable
           components: clippy
       - run:
-          cargo clippy --tests --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+          cargo clippy --tests --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
   fmt:
     name: Rustfmt

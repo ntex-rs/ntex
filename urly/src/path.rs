@@ -3,7 +3,7 @@ use ntex_bytes::ByteString;
 use crate::chars::{self, PATH, split_at_char};
 use crate::error::InvalidUrl;
 use crate::query::Query;
-use crate::quoting::{Component, unquote_cow, unquote_path_safe};
+use crate::quoting::{Component, unquote, unquote_path_safe};
 
 /// Percent-encoded URL path.
 #[repr(transparent)]
@@ -49,7 +49,7 @@ impl Path {
     /// assert_eq!(Path::from_static("/a%20b/c%2Fd").decode(), "/a b/c/d");
     /// ```
     pub fn decode(&self) -> ByteString {
-        unquote_cow(&self.0, Component::Path).into()
+        unquote(&self.0, Component::Path).into()
     }
 
     /// Returns the decoded path, keeping `%2F` and `%25` encoded, so the result

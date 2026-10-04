@@ -498,9 +498,6 @@ impl ClientRequest {
         // set cookies, appended to an existing `Cookie` header
         #[cfg(feature = "cookie")]
         {
-            use percent_encoding::percent_encode;
-            use std::io::Write;
-
             if let Some(ref jar) = self.cookies {
                 let headers = &mut self.request.head.headers;
                 let mut cookie = headers
@@ -508,13 +505,7 @@ impl ClientRequest {
                     .map(|v| v.as_bytes().to_vec())
                     .unwrap_or_default();
                 for c in jar.iter() {
-                    let name = percent_encode(c.name().as_bytes(), crate::http::helpers::USERINFO);
-                    let value =
-                        percent_encode(c.value().as_bytes(), crate::http::helpers::USERINFO);
-                    if !cookie.is_empty() {
-                        cookie.extend_from_slice(b"; ");
-                    }
-                    let _ = write!(cookie, "{name}={value}");
+                    crate::http::helpers::push_cookie(&mut cookie, c.name(), c.value());
                 }
                 if let Ok(val) = HeaderValue::from_bytes(&cookie) {
                     headers.insert(header::COOKIE, val);

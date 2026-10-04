@@ -184,19 +184,14 @@ impl TestRequest {
 
         #[cfg(feature = "cookie")]
         {
-            use percent_encoding::percent_encode;
-            use std::fmt::Write as FmtWrite;
-
-            let mut cookie = String::new();
+            let mut cookie = Vec::new();
             for c in inner.cookies.delta() {
-                let name = percent_encode(c.name().as_bytes(), super::helpers::USERINFO);
-                let value = percent_encode(c.value().as_bytes(), super::helpers::USERINFO);
-                let _ = write!(cookie, "; {name}={value}");
+                super::helpers::push_cookie(&mut cookie, c.name(), c.value());
             }
             if !cookie.is_empty() {
                 head.headers.insert(
                     super::header::COOKIE,
-                    HeaderValue::from_str(&cookie.as_str()[2..]).unwrap(),
+                    HeaderValue::from_bytes(&cookie).unwrap(),
                 );
             }
         }
