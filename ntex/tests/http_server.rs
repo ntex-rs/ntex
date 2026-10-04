@@ -1062,7 +1062,7 @@ async fn test_h1_gracefull_shutdown_2() {
 
 #[ntex::test]
 async fn test_h2_request_body_dropped_after_response_resets_stream() {
-    use ntex::http::{HeaderMap, Payload, uri::Scheme};
+    use ntex::http::{HeaderMap, Payload};
     use ntex::util::stream_recv;
     use ntex_h2::{MessageKind, client::SimpleClient};
 
@@ -1080,7 +1080,7 @@ async fn test_h2_request_body_dropped_after_response_resets_stream() {
     });
 
     let io = ntex::connect::connect(srv.addr()).await.unwrap();
-    let client = SimpleClient::new(io, Scheme::HTTP, "localhost".into());
+    let client = SimpleClient::new(io, false, "localhost".into());
     let (snd, rcv) = client
         .send(Method::POST, "/".into(), HeaderMap::default(), false)
         .await
@@ -1116,7 +1116,7 @@ async fn test_h2_request_body_dropped_after_response_resets_stream() {
 /// the next read returns `None`.
 #[ntex::test]
 async fn test_h2_request_payload_ends_after_error() {
-    use ntex::http::{HeaderMap, uri::Scheme};
+    use ntex::http::HeaderMap;
     use ntex::util::stream_recv;
     use ntex_h2::client::SimpleClient;
 
@@ -1150,7 +1150,7 @@ async fn test_h2_request_payload_ends_after_error() {
     });
 
     let io = ntex::connect::connect(srv.addr()).await.unwrap();
-    let client = SimpleClient::new(io, Scheme::HTTP, "localhost".into());
+    let client = SimpleClient::new(io, false, "localhost".into());
     let (snd, _rcv) = client
         .send(Method::POST, "/".into(), HeaderMap::default(), false)
         .await
@@ -1182,7 +1182,7 @@ async fn test_h2_request_payload_ends_after_error() {
 /// A malformed request is a stream error, the connection stays open.
 #[ntex::test]
 async fn test_h2_malformed_request_uri() {
-    use ntex::http::{HeaderMap, uri::Scheme};
+    use ntex::http::HeaderMap;
     use ntex_h2::{MessageKind, client::SimpleClient};
 
     let srv = test_server(async |_| {
@@ -1190,7 +1190,7 @@ async fn test_h2_malformed_request_uri() {
     });
 
     let io = ntex::connect::connect(srv.addr()).await.unwrap();
-    let client = SimpleClient::new(io, Scheme::HTTP, "localhost".into());
+    let client = SimpleClient::new(io, false, "localhost".into());
     for (method, eof) in [(Method::GET, true), (Method::POST, false)] {
         let (_snd, rcv) = client
             .send(method, "/a b".into(), HeaderMap::default(), eof)
@@ -1219,7 +1219,7 @@ async fn test_h2_malformed_request_uri() {
 /// A response body error resets only its stream, the connection stays open.
 #[ntex::test]
 async fn test_h2_response_body_error_resets_stream() {
-    use ntex::http::{HeaderMap, uri::Scheme};
+    use ntex::http::HeaderMap;
     use ntex_h2::{MessageKind, StreamEof, client::SimpleClient};
 
     let srv = test_server(async |_| {
@@ -1237,7 +1237,7 @@ async fn test_h2_response_body_error_resets_stream() {
     });
 
     let io = ntex::connect::connect(srv.addr()).await.unwrap();
-    let client = SimpleClient::new(io, Scheme::HTTP, "localhost".into());
+    let client = SimpleClient::new(io, false, "localhost".into());
     let (_snd1, rcv1) = client
         .send(Method::GET, "/slow".into(), HeaderMap::default(), true)
         .await
@@ -1276,7 +1276,7 @@ async fn test_h2_response_body_error_resets_stream() {
 /// `304 Not Modified` response has no body and no `content-length: 0`.
 #[ntex::test]
 async fn test_h2_not_modified_has_no_body() {
-    use ntex::http::{HeaderMap, uri::Scheme};
+    use ntex::http::HeaderMap;
     use ntex_h2::{MessageKind, client::SimpleClient};
 
     let srv = test_server(async |_| {
@@ -1293,7 +1293,7 @@ async fn test_h2_not_modified_has_no_body() {
     });
 
     let io = ntex::connect::connect(srv.addr()).await.unwrap();
-    let client = SimpleClient::new(io, Scheme::HTTP, "localhost".into());
+    let client = SimpleClient::new(io, false, "localhost".into());
     for path in ["/empty", "/sized", "/stream"] {
         let (_snd, rcv) = client
             .send(Method::GET, path.into(), HeaderMap::default(), true)
@@ -1320,7 +1320,7 @@ async fn test_h2_not_modified_has_no_body() {
 /// A sized body ends the stream with its last data frame, a streaming body with an empty one.
 #[ntex::test]
 async fn test_h2_response_body_end_stream() {
-    use ntex::http::{HeaderMap, uri::Scheme};
+    use ntex::http::HeaderMap;
     use ntex_h2::{MessageKind, StreamEof, client::SimpleClient};
 
     fn chunks<E>() -> futures_util::stream::Iter<std::array::IntoIter<Result<Bytes, E>, 2>> {
@@ -1341,7 +1341,7 @@ async fn test_h2_response_body_end_stream() {
     });
 
     let io = ntex::connect::connect(srv.addr()).await.unwrap();
-    let client = SimpleClient::new(io, Scheme::HTTP, "localhost".into());
+    let client = SimpleClient::new(io, false, "localhost".into());
     for (path, last) in [("/sized", "def"), ("/stream", "")] {
         let (_snd, rcv) = client
             .send(Method::GET, path.into(), HeaderMap::default(), true)
@@ -1583,7 +1583,7 @@ async fn test_h2_empty_data_frames_limit() {
 /// The control service handles `Expect: 100-continue`, the default ack sends `100 Continue`.
 #[ntex::test]
 async fn test_h2_expect_continue() {
-    use ntex::http::{HeaderMap, h2, uri::Scheme};
+    use ntex::http::{HeaderMap, h2};
     use ntex::util::{BytesMut, stream_recv};
     use ntex_h2::{MessageKind, StreamEof, client::SimpleClient};
 
@@ -1610,7 +1610,7 @@ async fn test_h2_expect_continue() {
     });
 
     let io = ntex::connect::connect(srv.addr()).await.unwrap();
-    let client = SimpleClient::new(io, Scheme::HTTP, "localhost".into());
+    let client = SimpleClient::new(io, false, "localhost".into());
     let mut hdrs = HeaderMap::default();
     hdrs.insert(header::EXPECT, HeaderValue::from_static("100-Continue"));
 
@@ -1657,7 +1657,7 @@ async fn test_h2_expect_continue() {
 /// Failure of the control service resets the stream, the connection stays open.
 #[ntex::test]
 async fn test_h2_expect_control_error() {
-    use ntex::http::{HeaderMap, h2, uri::Scheme};
+    use ntex::http::{HeaderMap, h2};
     use ntex_h2::{MessageKind, client::SimpleClient};
 
     let srv = test_server(async |_| {
@@ -1674,7 +1674,7 @@ async fn test_h2_expect_control_error() {
     });
 
     let io = ntex::connect::connect(srv.addr()).await.unwrap();
-    let client = SimpleClient::new(io, Scheme::HTTP, "localhost".into());
+    let client = SimpleClient::new(io, false, "localhost".into());
     let mut hdrs = HeaderMap::default();
     hdrs.insert(header::EXPECT, HeaderValue::from_static("100-Continue"));
 
@@ -1709,7 +1709,7 @@ async fn test_h2_expect_control_error() {
 /// Informational response of the application cannot complete the request.
 #[ntex::test]
 async fn test_h2_informational_response_is_replaced() {
-    use ntex::http::{HeaderMap, uri::Scheme};
+    use ntex::http::HeaderMap;
     use ntex_h2::{MessageKind, client::SimpleClient};
 
     let srv = test_server(async |_| {
@@ -1724,7 +1724,7 @@ async fn test_h2_informational_response_is_replaced() {
     });
 
     let io = ntex::connect::connect(srv.addr()).await.unwrap();
-    let client = SimpleClient::new(io, Scheme::HTTP, "localhost".into());
+    let client = SimpleClient::new(io, false, "localhost".into());
     for path in ["/100", "/101"] {
         let (_snd, rcv) = client
             .send(Method::GET, path.into(), HeaderMap::default(), true)

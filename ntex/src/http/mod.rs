@@ -33,7 +33,6 @@ pub use self::service::HttpService;
 pub use crate::io::types::HttpProtocol;
 
 // re-exports
-pub use ntex_http::uri::{self, Uri};
 pub use ntex_http::{HeaderMap, Method, StatusCode, Version, body, header};
 
 /// ALPN protocol identifiers for HTTP/1.1.

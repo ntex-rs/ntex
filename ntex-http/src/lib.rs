@@ -27,7 +27,6 @@ pub use self::map::Value;
 
 // re-exports
 pub use http::header::HeaderName;
-pub use http::uri::{self, Uri};
 pub use http::{Method, StatusCode, Version};
 
 /// Converts an `http::HeaderMap` into an ntex [`HeaderMap`].
@@ -47,5 +46,4 @@ pub mod compat {
     pub use http::header::InvalidHeaderValue;
     pub use http::method::InvalidMethod;
     pub use http::status::InvalidStatusCode;
-    pub use http::uri::InvalidUri;
 }

@@ -5,7 +5,6 @@ use ntex_h2::{self as h2};
 use urly::{Authority, Url};
 
 use crate::error::Error;
-use crate::http::uri::Scheme;
 use crate::io::{IoBoxed, types::HttpProtocol};
 use crate::service::pipeline::PipelineBinding;
 use crate::service::{Ctx, Service, cfg::Cfg, cfg::SharedCfg};
@@ -480,9 +479,7 @@ fn open_connection(
                     );
                     let client = h2::client::SimpleClient::new(
                         io,
-                        uri.scheme_str()
-                            .and_then(|s| s.parse().ok())
-                            .unwrap_or(Scheme::HTTPS),
+                        uri.scheme().is_none_or(|s| s == crate::url::Scheme::HTTPS),
                         h2_authority(&uri),
                     );
                     let conn = add_h2_client(&inner, &key, client).begin();
@@ -720,7 +717,7 @@ mod tests {
         let io = nio::Io::new(client, cfg);
         let client = h2::client::SimpleClient::new(
             IoBoxed::from(io),
-            Scheme::HTTP,
+            false,
             ByteString::from_static("localhost"),
         );
         let key = Key::from(Authority::from_static("localhost"));

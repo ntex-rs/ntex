@@ -479,7 +479,7 @@ impl H2Client {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::{Message, StatusCode, uri::Scheme};
+    use crate::http::{Message, StatusCode};
     use crate::io::{Io, IoBoxed, testing::IoTest};
     use crate::{SharedCfg, time::sleep};
 
@@ -527,7 +527,7 @@ mod tests {
         io.remote_buffer_cap(64 * 1024);
         let client = H2Client::new(SimpleClient::new(
             IoBoxed::from(Io::new(io, SharedCfg::default())),
-            Scheme::HTTP,
+            false,
             ByteString::from_static("localhost"),
         ));
         server.write([0, 0, 0, 4, 0, 0, 0, 0, 0]);
