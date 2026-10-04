@@ -204,6 +204,9 @@ mod tests {
             assert_eq!(decode(encoded).unwrap(), unicode, "{encoded}");
         }
         assert_eq!(decode("a!"), None);
+        // digits are case-insensitive, basic code points must be ASCII
+        assert_eq!(decode("mnchen-3YA").unwrap(), "münchen");
+        assert_eq!(decode("ü-tda"), None);
         assert_eq!(decode("99999999999"), None);
     }
 

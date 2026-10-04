@@ -142,3 +142,51 @@ pub(crate) fn split_at_char(s: &str, c: char) -> (&str, Option<&str>) {
         None => (s, None),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn members(set: &Set) -> Vec<u8> {
+        (0..=255).filter(|b| set.contains(*b)).collect()
+    }
+
+    #[test]
+    fn sets() {
+        // build at runtime to check the const constructors
+        let set = Set::new(b"abc").union(Set::new(b"xy")).without(b'b');
+        assert_eq!(members(&set), b"acxy");
+        assert_eq!(members(&alnum()).len(), 62);
+        assert_eq!(members(&NONE), b"");
+
+        let mut expected: Vec<u8> = (0..=255u8)
+            .filter(|b| b.is_ascii_alphanumeric() || b"-._~".contains(b))
+            .collect();
+        assert_eq!(members(&UNRESERVED), expected);
+        expected.extend_from_slice(b"!$&'()*+,;=:@/?");
+        expected.sort_unstable();
+        assert_eq!(members(&QUERY), expected);
+        assert!((0x80..=0xff).all(|b| !QUERY.contains(b)));
+    }
+
+    #[test]
+    fn checks() {
+        assert!(check("a%2Fb", &PATH).is_ok());
+        let err = check("ab%2", &PATH).unwrap_err();
+        assert_eq!(
+            (err.kind(), err.position()),
+            (ErrorKind::InvalidPercentEncoding, Some(2))
+        );
+        let err = check("a%zz", &PATH).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidPercentEncoding);
+        let err = check("aé", &PATH).unwrap_err();
+        assert_eq!(
+            (err.kind(), err.position()),
+            (ErrorKind::InvalidChar('é'), Some(1))
+        );
+        assert_eq!(pct_at(b"%4a", 0), Some(0x4a));
+        assert_eq!(pct_at(b"a%4", 1), None);
+        assert_eq!(char_at("aé", 1), 'é');
+        assert_eq!(char_at("a", 1), '\0');
+    }
+}

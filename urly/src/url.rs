@@ -254,7 +254,7 @@ impl Url {
         }
     }
 
-    /// Converts a `Bytes`, `ByteString`, `String`, `Vec<u8>` or any other
+    /// Converts a `Bytes`, `String`, `Vec<u8>` or any other
     /// byte buffer to a URL, reusing the buffer if possible.
     pub fn from_maybe_shared<T>(src: T) -> Result<Url, InvalidUrl>
     where
@@ -262,9 +262,6 @@ impl Url {
     {
         let mut src = Some(src);
         let any = &mut src as &mut dyn Any;
-        if let Some(src) = any.downcast_mut::<Option<ByteString>>() {
-            return Url::try_from(src.take().unwrap());
-        }
         if let Some(src) = any.downcast_mut::<Option<Bytes>>() {
             return Url::try_from(src.take().unwrap());
         }

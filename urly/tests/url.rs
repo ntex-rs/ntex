@@ -1,8 +1,13 @@
+use std::borrow::Cow;
+use std::hash::{BuildHasher, RandomState};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
-use ntex_bytes::ByteString;
+use ntex_bytes::{ByteString, Bytes};
 use urly::quoting::{Component, quote, unquote};
-use urly::{ErrorKind, Host, Parts, Url};
+use urly::{
+    Authority, Builder, ErrorKind, Fragment, Host, Parts, Path, PathAndQuery, Query, Scheme, Url,
+    UserInfo,
+};
 
 fn url(s: &str) -> Url {
     Url::parse(s).unwrap_or_else(|e| panic!("{s:?}: {e}"))
@@ -497,6 +502,10 @@ fn serde() {
     let u3: Url = serde_json::from_str("\"HTTP://H/x\"").unwrap();
     assert_eq!(u3, "http://h/x");
     assert!(serde_json::from_str::<Url>("\"\"").is_err());
+    let u4: Url = serde_json::from_value(serde_json::Value::String("/a b".into())).unwrap();
+    assert_eq!(u4, "/a%20b");
+    let err = serde_json::from_str::<Url>("1").unwrap_err().to_string();
+    assert!(err.contains("a url"), "{err}");
 }
 
 #[cfg(feature = "http")]
@@ -590,4 +599,273 @@ fn parse_invariants() {
         let joined = url("http://a/b/c?q").join_url(&u);
         Url::validate(joined.as_str()).unwrap_or_else(|e| panic!("{src:?} -> {joined:?}: {e}"));
     }
+}
+
+#[test]
+fn components() {
+    let path = Path::from_static("/a%20b/c%2Fd");
+    assert!(!path.is_empty() && path.is_absolute());
+    assert!(Path::new("").unwrap().is_empty());
+    assert!(!Path::new("a/b").unwrap().is_absolute());
+    assert_eq!(
+        Path::new("/a b").unwrap_err().kind(),
+        ErrorKind::InvalidChar(' ')
+    );
+    assert_eq!(path.decode(), "/a b/c/d");
+    assert_eq!(path.decode_safe(), "/a b/c%2Fd");
+    let path: &Path = "/x".try_into().unwrap();
+    assert_eq!(path.as_ref(), "/x");
+    assert_eq!(format!("{path} {path:?}"), "/x \"/x\"");
+
+    let pq = PathAndQuery::from_static("/a?b=1");
+    assert_eq!(pq.path(), "/a");
+    assert_eq!(pq.query().unwrap(), "b=1");
+    assert!(PathAndQuery::from_static("/a").query().is_none());
+    assert!(PathAndQuery::new("/a?b c").is_err());
+
+    let query = Query::new("a=%26+b&c").unwrap();
+    assert!(!query.is_empty());
+    assert!(Query::new("").unwrap().is_empty());
+    assert_eq!(query.decode(), "a=%26 b&c");
+    assert!(Query::new("a#").is_err());
+
+    let fragment = Fragment::new("a%20b?").unwrap();
+    assert_eq!(fragment.decode(), "a b?");
+    assert!(Fragment::new("a#").is_err());
+
+    let auth = Authority::from_static("u:p@h:80");
+    assert_eq!(auth.host(), "h");
+    assert_eq!(auth.port().unwrap(), 80);
+    assert_eq!(auth.port().unwrap(), auth.port().unwrap());
+    assert_eq!(auth.port().unwrap().to_string(), "80");
+    assert_eq!(auth.userinfo().unwrap(), "u:p");
+    assert!(Authority::new("h h").is_err());
+
+    let info = UserInfo::new("us%40r:p%3Aw").unwrap();
+    assert_eq!(
+        (info.username(), info.password()),
+        ("us%40r", Some("p%3Aw"))
+    );
+    assert_eq!(info.decoded_username(), "us@r");
+    assert_eq!(info.decoded_password().unwrap(), "p:w");
+    assert!(UserInfo::new("a").unwrap().decoded_password().is_none());
+    assert!(UserInfo::new("a@b").is_err());
+
+    // comparisons and ordering via the string representation
+    let (a, b) = (Path::from_static("/a"), Path::from_static("/b"));
+    assert!(a < b && a == a && a != b);
+    assert!(*a == *"/a" && *"/a" == *a && "/a" == *a);
+    let h = RandomState::new();
+    assert_eq!(h.hash_one(a), h.hash_one(Path::from_static("/a")));
+    assert!(std::panic::catch_unwind(|| Path::from_static("a b")).is_err());
+    assert!(std::panic::catch_unwind(|| PathAndQuery::from_static("a b")).is_err());
+    assert!(std::panic::catch_unwind(|| Authority::from_static("h h")).is_err());
+    assert!(std::panic::catch_unwind(|| Url::from_static("http://h:x/")).is_err());
+}
+
+#[test]
+fn cow_decoding() {
+    let u = url("http://user:pw@h/a/b?k=v&k=w%20x&e=");
+    assert!(matches!(u.path().decode(), Cow::Borrowed("/a/b")));
+    assert!(matches!(u.path().decode_safe(), Cow::Borrowed(_)));
+    assert!(matches!(u.username().unwrap(), Cow::Borrowed("user")));
+    assert!(matches!(u.password().unwrap(), Cow::Borrowed("pw")));
+    let q = u.query().unwrap();
+    assert!(matches!(q.get("k").unwrap(), Cow::Borrowed("v")));
+    assert!(matches!(q.get("e").unwrap(), Cow::Borrowed("")));
+    assert!(q.get("missing").is_none());
+    let values: Vec<_> = q.get_all(&String::from("k")).collect();
+    assert!(matches!(values[1], Cow::Owned(ref s) if s == "w x"));
+    assert!(q.pairs().all(|(k, _)| matches!(k, Cow::Borrowed(_))));
+    assert!(url("http://h/").username().is_none());
+    assert!(url("http://u@h/").password().is_none());
+
+    // escaped keys match their decoded form
+    let q = url("/?a%20b=1&%FF=2");
+    let q = q.query().unwrap();
+    assert_eq!(q.get("a b").unwrap(), "1");
+    assert_eq!(q.get("%FF").unwrap(), "2");
+    assert!(q.contains_key("a b") && !q.contains_key("a%20b"));
+}
+
+#[test]
+fn invalid_utf8_decoding() {
+    // escapes that don't form valid UTF-8 are kept encoded, the rest is decoded
+    assert_eq!(unquote("%FF%41", Component::Path), "%FFA");
+    assert_eq!(unquote("%FFé€😀%20", Component::Path), "%FFé€😀 ");
+    assert_eq!(unquote("%E2%82%AC%E2%82", Component::Path), "€%E2%82");
+    assert_eq!(Path::from_static("/%FF%2F%25").decode_safe(), "/%FF%2F%25");
+    assert_eq!(Query::new("%FF+%26").unwrap().decode(), "%FF %26");
+    assert_eq!(url("/?%FF=a+b").query().unwrap().get("%FF").unwrap(), "a b");
+}
+
+#[test]
+fn errors() {
+    let err = Url::parse("http://exa mple.com/").unwrap_err();
+    assert_eq!(err.position(), Some(10));
+    assert_eq!(err.to_string(), "invalid character ' ' at position 10");
+    let err = url("/a").origin().map_or(Url::parse(""), Ok).unwrap_err();
+    assert_eq!(
+        (err.to_string(), err.position()),
+        ("empty string".into(), None)
+    );
+
+    let err = Url::from_parts(Parts {
+        scheme: None,
+        authority: Some(ByteString::from_static("h h")),
+        path_and_query: ByteString::from_static("/"),
+        fragment: None,
+    })
+    .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::InvalidChar(' '));
+    assert_eq!(
+        err.to_string(),
+        "invalid url parts: invalid character ' ' at position 1"
+    );
+    let source = std::error::Error::source(&err).unwrap();
+    assert_eq!(source.to_string(), err.into_inner().to_string());
+}
+
+#[test]
+fn scheme() {
+    let s = Scheme::new("HTTP").unwrap();
+    assert_eq!(s, Scheme::new("http").unwrap());
+    assert!(*s == *"Http" && *"hTTp" == *s);
+    assert_ne!(s, Scheme::new("https").unwrap());
+    let h = RandomState::new();
+    assert_eq!(h.hash_one(s), h.hash_one(Scheme::new("http").unwrap()));
+    assert_ne!(h.hash_one(s), h.hash_one(Scheme::new("https").unwrap()));
+    assert_eq!(s.default_port(), Some(80));
+    assert!(Scheme::new("1a").is_err());
+    assert!(Scheme::new("").is_err());
+}
+
+#[test]
+fn host_kinds() {
+    let v4 = Host::parse("127.0.0.1").unwrap();
+    assert_eq!(v4, Host::Ipv4(Ipv4Addr::LOCALHOST));
+    assert_eq!(
+        (v4.to_string(), v4.to_unicode()),
+        ("127.0.0.1".into(), "127.0.0.1".into())
+    );
+    let v6 = Host::parse("[::1]").unwrap();
+    assert_eq!(
+        (v6.to_string(), v6.to_unicode()),
+        ("[::1]".into(), "[::1]".into())
+    );
+    let domain = Host::parse("xn--mnchen-3ya.de").unwrap();
+    assert_eq!(domain.to_string(), "xn--mnchen-3ya.de");
+    assert_eq!(domain.to_unicode(), "münchen.de");
+    assert!(Host::parse("a b").is_err());
+    assert!(Host::parse("[::1").is_err());
+}
+
+#[test]
+fn builder_setters() {
+    let u = Builder::new()
+        .scheme("https")
+        .authority("old@h:1")
+        .userinfo("u s", None)
+        .port(8443)
+        .path("/p")
+        .query_pair("a", "&")
+        .fragment("f g")
+        .build()
+        .unwrap();
+    assert_eq!(u, "https://u%20s@h:8443/p?a=%26#f%20g");
+
+    let u = Builder::from(u)
+        .userinfo("", Some("pw"))
+        .fragment("")
+        .build()
+        .unwrap();
+    assert_eq!(u, "https://:pw@h:8443/p?a=%26#");
+    let u = Builder::from(u).authority("x").build().unwrap();
+    assert_eq!(u, "https://x/p?a=%26#");
+
+    assert!(Builder::new().authority("h h").build().is_err());
+    assert!(Builder::new().scheme("1").build().is_err());
+    assert!(Builder::new().host("a b").build().is_err());
+    assert!(Builder::new().userinfo("u", None).build().is_err());
+    assert!(
+        Builder::new()
+            .path("/a")
+            .userinfo("u", None)
+            .build()
+            .is_err()
+    );
+}
+
+#[test]
+fn edge_cases() {
+    // authority without host has no origin
+    assert!(url("file:///a").origin().is_none());
+    assert_eq!(url("http://h:8/a?b").origin().unwrap(), "http://h:8/");
+
+    assert_eq!(url("a/b").parent(), "a");
+    assert_eq!(url("a").parent(), "");
+    assert_eq!(url("/a").parent(), "/");
+    assert_eq!(url("foo://h").join("a").unwrap(), "foo://h/a");
+    assert_eq!(url("foo://h").join("?q").unwrap(), "foo://h?q");
+
+    // a relative path gets a leading `/` once an authority is added
+    let mut u = url("a/b");
+    u.set_authority(Some("h")).unwrap();
+    assert_eq!(u, "//h/a/b");
+    u.set_authority(None).unwrap();
+    assert_eq!(u, "/a/b");
+
+    let mut u = url("file:///a.txt");
+    assert_eq!(
+        u.set_port(Some(1)).unwrap_err().kind(),
+        ErrorKind::InvalidHost
+    );
+    assert_eq!(
+        u.set_userinfo(Some("u"), None).unwrap_err().kind(),
+        ErrorKind::InvalidHost
+    );
+    assert_eq!(u.set_host("").unwrap_err().kind(), ErrorKind::InvalidHost);
+    assert_eq!(
+        u.set_extension("a/b").unwrap_err().kind(),
+        ErrorKind::InvalidPath
+    );
+    assert_eq!(
+        url("/a/").set_extension("b").unwrap_err().kind(),
+        ErrorKind::InvalidPath
+    );
+    assert_eq!(
+        url("/a").set_port(None).unwrap_err().kind(),
+        ErrorKind::AuthorityMissing
+    );
+    u.set_host("h").unwrap();
+    assert_eq!(u, "file://h/a.txt");
+    u.set_userinfo(None, Some("p")).unwrap();
+    assert_eq!(u, "file://:p@h/a.txt");
+    u.set_userinfo(None, None).unwrap();
+    assert_eq!(u, "file://h/a.txt");
+
+    let mut u = url("/a");
+    u.set_host("h").unwrap();
+    assert_eq!(u, "//h/a");
+}
+
+#[test]
+fn shared_input() {
+    let src = "http://h/a";
+    let bytes = Bytes::copy_from_slice(&[b'x'; 64]);
+    let bytes = bytes.slice(..0);
+    assert!(Url::from_maybe_shared(bytes).is_err());
+    let bytes = Bytes::from(format!("{src}/{}", "b".repeat(32)));
+    let u = Url::from_maybe_shared(bytes.clone()).unwrap();
+    assert_eq!(u.as_bytes().as_ptr(), bytes.as_ptr());
+    assert_eq!(Url::from_maybe_shared(String::from(src)).unwrap(), src);
+    assert_eq!(Url::from_maybe_shared(Vec::<u8>::from(src)).unwrap(), src);
+    assert_eq!(Url::from_maybe_shared(src).unwrap(), src);
+    assert_eq!(Url::from_maybe_shared(src.as_bytes()).unwrap(), src);
+    assert!(Url::from_maybe_shared(vec![0xffu8]).is_err());
+
+    let u = url(src);
+    assert_eq!(u.as_bytes(), src.as_bytes());
+    assert_eq!(u.clone().into_byte_string(), src);
+    assert_eq!(u.as_byte_string(), src);
 }

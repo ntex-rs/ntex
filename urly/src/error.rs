@@ -141,3 +141,41 @@ impl Error for InvalidUrlParts {
         Some(&self.0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display() {
+        let cases = [
+            (ErrorKind::Empty, "empty string"),
+            (ErrorKind::TooLong, "url is too long"),
+            (ErrorKind::InvalidScheme, "invalid scheme"),
+            (ErrorKind::SchemeMissing, "scheme missing"),
+            (ErrorKind::InvalidChar('x'), "invalid character 'x'"),
+            (
+                ErrorKind::InvalidPercentEncoding,
+                "invalid percent-encoding",
+            ),
+            (ErrorKind::InvalidAuthority, "invalid authority"),
+            (ErrorKind::AuthorityMissing, "authority missing"),
+            (ErrorKind::InvalidHost, "invalid host"),
+            (ErrorKind::InvalidIpv4, "invalid IPv4 address"),
+            (ErrorKind::InvalidIpv6, "invalid IPv6 address"),
+            (ErrorKind::InvalidPort, "invalid port"),
+            (ErrorKind::PortOutOfRange, "port out of range"),
+            (ErrorKind::InvalidPath, "invalid path"),
+        ];
+        for (kind, msg) in cases {
+            assert_eq!(kind.to_string(), msg);
+            assert_eq!(InvalidUrl::new(kind).to_string(), msg);
+        }
+        let err = InvalidUrl::at(ErrorKind::InvalidPort, 3).offset(2);
+        assert_eq!(err.to_string(), "invalid port at position 5");
+        assert_eq!(InvalidUrl::new(ErrorKind::Empty).offset(2).position(), None);
+        let parts = InvalidUrlParts::from(err);
+        assert_eq!(parts.kind(), ErrorKind::InvalidPort);
+        assert_eq!(parts.into_inner(), err);
+    }
+}
