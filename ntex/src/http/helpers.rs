@@ -1,4 +1,3 @@
-use percent_encoding::{AsciiSet, CONTROLS};
 use serde::Serialize;
 
 use crate::util::{Bytes, BytesMut};
@@ -13,25 +12,20 @@ pub(crate) fn json_body<T: ?Sized + Serialize>(value: &T) -> serde_json::Result<
     Ok(buf.freeze())
 }
 
-/// `<https://url.spec.whatwg.org/#fragment-percent-encode-set>`
-const FRAGMENT: &AsciiSet = &CONTROLS.add(b' ').add(b'"').add(b'<').add(b'>').add(b'`');
+/// Appends `name=value` of a cookie to a `Cookie` header value.
+///
+/// Name and value are percent-encoded, only unreserved characters are kept.
+#[cfg(feature = "cookie")]
+pub(crate) fn push_cookie(buf: &mut Vec<u8>, name: &str, value: &str) {
+    use urly::quoting::{Component, quote};
 
-/// `<https://url.spec.whatwg.org/#path-percent-encode-set>`
-const PATH: &AsciiSet = &FRAGMENT.add(b'#').add(b'?').add(b'{').add(b'}');
-
-#[allow(dead_code)]
-/// `<https://url.spec.whatwg.org/#userinfo-percent-encode-set>`
-pub(crate) const USERINFO: &AsciiSet = &PATH
-    .add(b'/')
-    .add(b':')
-    .add(b';')
-    .add(b'=')
-    .add(b'@')
-    .add(b'[')
-    .add(b'\\')
-    .add(b']')
-    .add(b'^')
-    .add(b'|');
+    if !buf.is_empty() {
+        buf.extend_from_slice(b"; ");
+    }
+    buf.extend_from_slice(quote(name, Component::Opaque).as_bytes());
+    buf.push(b'=');
+    buf.extend_from_slice(quote(value, Component::Opaque).as_bytes());
+}
 
 #[cfg(test)]
 mod tests {

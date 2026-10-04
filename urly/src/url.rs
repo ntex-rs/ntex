@@ -15,7 +15,7 @@ use crate::parse::{
 };
 use crate::path::{Path, PathAndQuery};
 use crate::query::{self, Fragment, Query, split_pair};
-use crate::quoting::{Component, quote_cow, unquote_cow};
+use crate::quoting::{Component, quote, requote, unquote};
 use crate::scheme::Scheme;
 
 /// Normalized URL reference.
@@ -478,7 +478,7 @@ impl Url {
             if !path.is_empty() && !path.ends_with('/') {
                 path.push('/');
             }
-            path.push_str(&quote_cow(segment, Component::Path, false));
+            path.push_str(&quote(segment, Component::Path));
         }
         if path.starts_with('/') && has_dot_segments(&path) {
             path = remove_dot_segments(&path);
@@ -613,11 +613,11 @@ impl Url {
         let (_, host, port) = self.host_parts()?;
         let userinfo = match (username, password) {
             (None, None) => None,
-            (user, None) => Some(quote_cow(user.unwrap_or(""), Component::UserInfo, false)),
+            (user, None) => Some(quote(user.unwrap_or(""), Component::UserInfo)),
             (user, Some(password)) => Some(Cow::Owned(format!(
                 "{}:{}",
-                quote_cow(user.unwrap_or(""), Component::UserInfo, false),
-                quote_cow(password, Component::UserInfo, false)
+                quote(user.unwrap_or(""), Component::UserInfo),
+                quote(password, Component::UserInfo)
             ))),
         };
         self.with_authority(userinfo.as_deref(), host, port)
@@ -701,7 +701,7 @@ impl Url {
         if name.contains('/') || name == "." || name == ".." {
             return Err(InvalidUrl::new(ErrorKind::InvalidPath));
         }
-        self.with_file_name(&quote_cow(name, Component::Path, false))
+        self.with_file_name(&quote(name, Component::Path))
             .map(|url| *self = url)
     }
 
@@ -733,7 +733,7 @@ impl Url {
         let name = if extension.is_empty() {
             Cow::Borrowed(stem)
         } else {
-            let extension = quote_cow(extension, Component::Path, false);
+            let extension = quote(extension, Component::Path);
             Cow::Owned(format!("{stem}.{extension}"))
         };
         self.with_file_name(&name).map(|url| *self = url)
@@ -749,7 +749,7 @@ impl Url {
     /// assert_eq!(url, "http://h/?a=b+c&d#f");
     /// ```
     pub fn set_query(&mut self, query: Option<&str>) {
-        let query = query.map(|q| quote_cow(q, Component::Query, true));
+        let query = query.map(|q| requote(q, Component::Query));
         *self = self.derive(|c| c.query = query.as_deref());
     }
 
@@ -763,11 +763,15 @@ impl Url {
     {
         let existing = self.query().map_or("", Query::as_str);
         let pieces: Vec<Cow<'_, str>> = query::pieces(existing)
-            .filter(|piece| keep(&unquote_cow(split_pair(piece).0, Component::QueryPart)))
+            .filter(|piece| keep(&unquote(split_pair(piece).0, Component::QueryPart)))
             .map(Cow::Borrowed)
             .chain(pairs.into_iter().map(|(k, v)| {
-                let quote = |s: &str| quote_cow(s, Component::QueryPart, false).into_owned();
-                Cow::Owned(format!("{}={}", quote(k.as_ref()), quote(v.as_ref())))
+                let (k, v) = (k.as_ref(), v.as_ref());
+                let (k, v) = (
+                    quote(k, Component::QueryPart),
+                    quote(v, Component::QueryPart),
+                );
+                Cow::Owned(format!("{k}={v}"))
             }))
             .collect();
         let query = pieces.join("&");
@@ -845,7 +849,7 @@ impl Url {
 
     /// Sets or removes the percent-encoded fragment.
     pub fn set_fragment(&mut self, fragment: Option<&str>) {
-        let fragment = fragment.map(|f| quote_cow(f, Component::Fragment, true));
+        let fragment = fragment.map(|f| requote(f, Component::Fragment));
         *self = self.derive(|c| c.fragment = fragment.as_deref());
     }
 

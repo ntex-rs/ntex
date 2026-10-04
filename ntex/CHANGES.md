@@ -34,6 +34,10 @@
 
 ## [4.0.0-beta.14] - 2026-10-01
 
+* Use `urly` for URL generation and cookie encoding, `HttpRequest::url_for()`
+  returns `urly::Url`. Remove the `url` feature, `urly` is re-exported as
+  `ntex::url`
+
 * Migrate to `ntex-service` 5 and its typed service state model. Service
   factories and middleware now receive state instead of a configuration
   parameter, `Service::poll()` is removed, and services use asynchronous

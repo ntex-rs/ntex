@@ -1,11 +1,9 @@
 use std::{cell::RefCell, rc::Rc};
 
-#[cfg(feature = "url")]
-use url_pkg::Url;
+use urly::Url;
 
 use crate::router::ResourceDef;
 use crate::util::HashMap;
-#[cfg(feature = "url")]
 use crate::web::httprequest::HttpRequest;
 
 /// Map of registered resources, used for URL generation.
@@ -57,7 +55,6 @@ impl ResourceMap {
     }
 }
 
-#[cfg(feature = "url")]
 impl ResourceMap {
     /// Generate url for named resource
     ///
@@ -78,15 +75,15 @@ impl ResourceMap {
         if self.patterns_for(name, &mut path, &mut elements)?.is_some() {
             if path.starts_with('/') {
                 let conn = req.connection_info();
-                Ok(Url::parse(&format!(
-                    "{}://{}{}",
-                    conn.scheme(),
-                    conn.host(),
-                    path
-                ))?)
-            } else {
-                Ok(Url::parse(&path)?)
+                let (scheme, host) = (conn.scheme(), conn.host());
+                let mut url = String::with_capacity(scheme.len() + host.len() + path.len() + 3);
+                url.push_str(scheme);
+                url.push_str("://");
+                url.push_str(host);
+                url.push_str(&path);
+                path = url;
             }
+            Ok(Url::try_from(path)?)
         } else {
             Err(super::error::UrlGenerationError::ResourceNotFound)
         }
@@ -192,7 +189,7 @@ impl ResourceMap {
     }
 }
 
-#[cfg(all(test, feature = "url"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::web::test::TestRequest;

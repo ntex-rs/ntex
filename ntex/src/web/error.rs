@@ -3,8 +3,7 @@ use std::{cell::RefCell, error::Error, fmt, io::Write};
 
 pub use ntex_http::error::Error as HttpError;
 pub use serde_json::error::Error as JsonError;
-#[cfg(feature = "url")]
-pub use url_pkg::ParseError as UrlParseError;
+pub use urly::InvalidUrl as UrlParseError;
 
 use crate::http::body::Body;
 use crate::http::{StatusCode, error, header};
@@ -125,7 +124,6 @@ pub enum UrlGenerationError {
     #[error("Not all path pattern covered")]
     NotEnoughElements,
     /// URL parse error
-    #[cfg(feature = "url")]
     #[error("{0}")]
     ParseError(
         #[from]

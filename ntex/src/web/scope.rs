@@ -1170,7 +1170,6 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    #[cfg(feature = "url")]
     #[crate::rt_test]
     async fn test_url_for_external() {
         let srv = init_service(App::new().service(web::scope("/app").configure(|s| {
@@ -1198,7 +1197,6 @@ mod tests {
         assert_eq!(body, &b"https://youtube.com/watch/xxxxxx"[..]);
     }
 
-    #[cfg(feature = "url")]
     #[crate::rt_test]
     async fn test_url_for_nested() {
         let srv = init_service(App::new().service(web::scope("/a").service(
@@ -1220,7 +1218,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "url")]
     #[crate::rt_test]
     async fn test_url_for_parent() {
         async fn urls(req: HttpRequest) -> HttpResponse {

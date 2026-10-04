@@ -5,7 +5,7 @@ use ntex_bytes::ByteString;
 use crate::chars::{self, USERINFO};
 use crate::error::{ErrorKind, InvalidUrl};
 use crate::host::validate_host;
-use crate::quoting::{Component, unquote_cow};
+use crate::quoting::{Component, unquote};
 
 /// URL authority: `[userinfo "@"] host [":" port]`.
 #[repr(transparent)]
@@ -150,13 +150,13 @@ impl UserInfo {
 
     /// Returns the decoded user name.
     pub fn decoded_username(&self) -> ByteString {
-        unquote_cow(self.username(), Component::UserInfo).into()
+        unquote(self.username(), Component::UserInfo).into()
     }
 
     /// Returns the decoded password, if present.
     pub fn decoded_password(&self) -> Option<ByteString> {
         self.password()
-            .map(|p| unquote_cow(p, Component::UserInfo).into())
+            .map(|p| unquote(p, Component::UserInfo).into())
     }
 }
 

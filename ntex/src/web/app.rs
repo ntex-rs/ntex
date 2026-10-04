@@ -875,7 +875,6 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    #[cfg(feature = "url")]
     #[crate::rt_test]
     async fn test_external_resource() {
         use crate::util::Bytes;
@@ -899,7 +898,6 @@ mod tests {
         assert_eq!(body, Bytes::from_static(b"https://youtube.com/watch/12345"));
     }
 
-    #[cfg(feature = "url")]
     #[crate::rt_test]
     async fn test_pooled_request_resource_map() {
         use crate::util::Bytes;

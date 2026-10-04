@@ -8,7 +8,7 @@ use crate::authority::{self, offset, parse_port, validate_authority};
 use crate::chars::{self, PATH, QUERY, lowercase, scheme_len, split_at_char};
 use crate::error::{ErrorKind, InvalidUrl};
 use crate::host::normalize_host;
-use crate::quoting::{Component, quote_cow};
+use crate::quoting::{Component, requote};
 use crate::scheme::Scheme;
 use crate::url::{Components, Url, assemble};
 
@@ -68,8 +68,8 @@ fn parse_clean(s: &str, orig: Option<&ByteString>) -> Result<Url, InvalidUrl> {
         .map(|a| normalize_authority(a).map_err(|e| e.offset(offset(s, a))))
         .transpose()?;
     let path = normalize_path(c.path);
-    let query = c.query.map(|q| quote_cow(q, Component::Query, true));
-    let fragment = c.fragment.map(|f| quote_cow(f, Component::Fragment, true));
+    let query = c.query.map(|q| requote(q, Component::Query));
+    let fragment = c.fragment.map(|f| requote(f, Component::Fragment));
 
     assemble(
         &Components {
@@ -85,7 +85,7 @@ fn parse_clean(s: &str, orig: Option<&ByteString>) -> Result<Url, InvalidUrl> {
 
 /// Requotes a path and removes dot segments from absolute paths.
 pub(crate) fn normalize_path(path: &str) -> Cow<'_, str> {
-    let path = quote_cow(path, Component::Path, true);
+    let path = requote(path, Component::Path);
     if path.starts_with('/') && has_dot_segments(&path) {
         Cow::Owned(remove_dot_segments(&path))
     } else {
@@ -117,15 +117,15 @@ pub(crate) fn normalize_authority(a: &str) -> Result<Cow<'_, str>, InvalidUrl> {
     }
     let new_userinfo = userinfo.map(|u| match u.split_once(':') {
         Some((user, password)) => {
-            let user = quote_cow(user, Component::UserInfo, true);
-            let password = quote_cow(password, Component::UserInfo, true);
+            let user = requote(user, Component::UserInfo);
+            let password = requote(password, Component::UserInfo);
             if matches!((&user, &password), (Cow::Borrowed(_), Cow::Borrowed(_))) {
                 Cow::Borrowed(u)
             } else {
                 Cow::Owned(format!("{user}:{password}"))
             }
         }
-        None => quote_cow(u, Component::UserInfo, true),
+        None => requote(u, Component::UserInfo),
     });
     changed |= matches!(new_userinfo, Some(Cow::Owned(_)));
 

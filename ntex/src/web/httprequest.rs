@@ -132,7 +132,6 @@ impl HttpRequest {
         self.head().extensions_mut()
     }
 
-    #[cfg(feature = "url")]
     /// Generate url for named resource
     ///
     /// ```rust
@@ -155,7 +154,7 @@ impl HttpRequest {
         &self,
         name: &str,
         elements: U,
-    ) -> Result<url_pkg::Url, super::error::UrlGenerationError>
+    ) -> Result<urly::Url, super::error::UrlGenerationError>
     where
         U: IntoIterator<Item = I>,
         I: AsRef<str>,
@@ -163,7 +162,6 @@ impl HttpRequest {
         self.0.rmap.url_for(self, name, elements)
     }
 
-    #[cfg(feature = "url")]
     /// Generate url for named resource
     ///
     /// This method is similar to `HttpRequest::url_for()` but it can be used
@@ -171,7 +169,7 @@ impl HttpRequest {
     pub fn url_for_static(
         &self,
         name: &str,
-    ) -> Result<url_pkg::Url, super::error::UrlGenerationError> {
+    ) -> Result<urly::Url, super::error::UrlGenerationError> {
         const NO_PARAMS: [&str; 0] = [];
         self.url_for(name, NO_PARAMS)
     }
@@ -342,7 +340,6 @@ mod tests {
         assert_eq!(req.query_string(), "id=test");
     }
 
-    #[cfg(feature = "url")]
     #[test]
     fn test_url_for() {
         let mut res = ResourceDef::new("/user/{name}.{ext}");
@@ -372,7 +369,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "url")]
     #[test]
     fn test_url_for_static() {
         let mut rdef = ResourceDef::new("/index.html");
@@ -394,7 +390,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "url")]
     #[test]
     fn test_url_for_external() {
         let mut rdef = ResourceDef::new("https://youtube.com/watch/{video_id}");
