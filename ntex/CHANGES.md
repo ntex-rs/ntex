@@ -20,6 +20,9 @@
 * http/2: Build request uri, `content-length` and `date` response headers without
   per-request formatting allocations
 
+* http/2: Response headers are sent from the pooled response head, the header map is
+  not reallocated per response
+
 * http/1: Request heads are not decoded during write back-pressure, request payload is
   still read
 

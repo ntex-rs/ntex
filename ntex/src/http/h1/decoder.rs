@@ -556,12 +556,15 @@ impl MessageType for Request {
                 if target == b"*" && method != Method::OPTIONS {
                     return Err(DecodeError::Uri);
                 }
-                let line = src.split_to(pos);
-                let target = &line[req.path.start..req.path.end];
+                // the target is split off `src` directly, the rest of the
+                // request line is skipped
+                src.advance_to(req.path.start);
+                let target = src.split_to(req.path.end - req.path.start);
+                src.advance_to(pos - req.path.end);
                 let uri = if method == Method::CONNECT {
                     // authority-form is used only, and always, for `CONNECT`, see
                     // RFC 9112 section 3.2.3
-                    let target = str::from_utf8(target).map_err(|_| DecodeError::Uri)?;
+                    let target = str::from_utf8(&target).map_err(|_| DecodeError::Uri)?;
                     let uri = Url::try_from(format!("//{target}"))?;
                     let valid = uri.authority().is_some_and(|a| a.userinfo().is_none())
                         && uri.host().is_some()
@@ -572,17 +575,14 @@ impl MessageType for Request {
                     uri
                 } else {
                     // origin-form, absolute-form or asterisk-form
+                    let asterisk = &target[..] == b"*";
                     let uri = if target.starts_with(b"//") {
                         // origin-form path, not a network-path reference
-                        let target = str::from_utf8(target).map_err(|_| DecodeError::Uri)?;
+                        let target = str::from_utf8(&target).map_err(|_| DecodeError::Uri)?;
                         Url::try_from(format!("/.{target}"))?
                     } else {
                         // SAFETY: a valid target is ASCII
-                        let target = unsafe {
-                            ByteString::from_bytes_unchecked(
-                                line.slice(req.path.start..req.path.end),
-                            )
-                        };
+                        let target = unsafe { ByteString::from_bytes_unchecked(target) };
                         // reuses the buffer if the target is normalized
                         Url::try_from(target)?
                     };
@@ -590,7 +590,7 @@ impl MessageType for Request {
                         uri.host().is_some()
                     } else {
                         uri.authority().is_none()
-                            && (uri.path().as_str().starts_with('/') || target == b"*")
+                            && (uri.path().as_str().starts_with('/') || asterisk)
                     };
                     if !valid {
                         return Err(DecodeError::Uri);

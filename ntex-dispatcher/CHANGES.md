@@ -1,6 +1,6 @@
 # Changes
 
-## [4.2.0] - Unreleased
+## [4.2.0] - 2026-10-04
 
 * Keep the keep-alive timer armed while a frame is read or handled instead of
   registering it again for every frame
