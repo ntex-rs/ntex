@@ -2,7 +2,8 @@
 
 ## [Unreleased]
 
-* Implement `Address` for `urly::Url`
+* Implement `Address` for `urly::Url`, remove `Address` impl for `http::Uri` and
+  `ntex-http` dependency
 
 * iocp: send up to 32 buffers per `WSASend`, was 16
 
