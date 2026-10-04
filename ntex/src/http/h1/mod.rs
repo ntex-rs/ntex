@@ -10,6 +10,7 @@ pub(crate) mod decoder;
 mod default;
 mod dispatcher;
 pub(crate) mod encoder;
+mod host;
 mod payload;
 mod service;
 mod timer;

@@ -1,10 +1,11 @@
 use std::{cell::Cell, fmt, task::Poll};
 
 use ntex_http::header::{HeaderName, HeaderValue};
-use ntex_http::{Method, StatusCode, Uri, Version, header, uri::Authority};
+use ntex_http::{Method, StatusCode, Uri, Version, header};
 use ntex_httparse::{self as httparse, HeaderParsed, Status};
 
 use super::encoder::is_bodyless;
+use super::host::is_valid_host;
 use crate::http::config::HttpServiceConfig;
 use crate::http::message::{ConnectionType, ResponseHead};
 use crate::http::{HeaderItem, error::DecodeError, header::HeaderMap, request::Request};
@@ -705,26 +706,6 @@ impl MessageType for ResponseHead {
 
         Ok(decoder)
     }
-}
-
-/// Collects the connection options listed in a `Connection` header value.
-///
-/// The value is a comma-separated list of case-insensitive tokens, see
-/// [RFC 9110 section 7.6.1](https://www.rfc-editor.org/rfc/rfc9110#section-7.6.1).
-/// `Host = uri-host [ ":" port ]`, an empty value is allowed
-fn is_valid_host(val: &[u8]) -> bool {
-    if val.is_empty() {
-        return true;
-    }
-    if val.contains(&b'@') || Authority::try_from(val).is_err() {
-        return false;
-    }
-    // `Authority` does not validate the port
-    let host_end = val.iter().rposition(|&b| b == b']').unwrap_or(0);
-    val[host_end..]
-        .iter()
-        .position(|&b| b == b':')
-        .is_none_or(|pos| val[host_end + pos + 1..].iter().all(u8::is_ascii_digit))
 }
 
 /// Parses a `Transfer-Encoding` value.
