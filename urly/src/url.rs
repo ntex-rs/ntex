@@ -137,8 +137,10 @@ pub(crate) fn assemble(c: &Components<'_>, orig: Option<&ByteString>) -> Result<
     } else {
         0
     };
-    let path_start = lens[..4].iter().sum::<u16>();
-    let path_end = path_start + lens[4] + lens[5];
+    // the `/.` prefix of an authority-less `//` path is not part of the path
+    let hidden = if prefix == "/." { lens[4] } else { 0 };
+    let path_start = lens[..4].iter().sum::<u16>() + hidden;
+    let path_end = lens[..6].iter().sum::<u16>();
     let query_end = path_end + lens[6] + lens[7];
     Ok(Url {
         data,
@@ -356,6 +358,17 @@ impl Url {
     }
 
     /// Returns the percent-encoded path.
+    ///
+    /// A path starting with `//` in a URL without authority is serialized with a
+    /// `/.` prefix, which is not part of the path.
+    ///
+    /// ```
+    /// use urly::Url;
+    ///
+    /// let url = Url::from_static("/.//a?q");
+    /// assert_eq!(url.path(), "//a");
+    /// assert_eq!(url.path_and_query(), "//a?q");
+    /// ```
     pub fn path(&self) -> &Path {
         Path::from_str_unchecked(self.range(self.path_start, self.path_end))
     }
@@ -976,7 +989,13 @@ mod http_impls {
         type Error = InvalidUrl;
 
         fn try_from(uri: &Uri) -> Result<Url, InvalidUrl> {
-            Url::try_from(uri.to_string())
+            let uri = uri.to_string();
+            // an origin-form path starting with `//` is not an authority
+            if uri.starts_with("//") {
+                Url::try_from(format!("/.{uri}"))
+            } else {
+                Url::try_from(uri)
+            }
         }
     }
 
@@ -993,7 +1012,13 @@ mod http_impls {
         type Error = InvalidUri;
 
         fn try_from(url: &Url) -> Result<Uri, InvalidUri> {
-            Uri::try_from(&url.as_str()[..url.query_end as usize])
+            // `Uri` parses a relative reference as origin-form, without the `/.` prefix
+            let start = if url.scheme_end == 0 && url.auth_start == 0 {
+                url.path_start
+            } else {
+                0
+            };
+            Uri::try_from(url.range(start, url.query_end))
         }
     }
 
@@ -1063,5 +1088,35 @@ mod tests {
         assert_eq!(url.path(), "/");
         assert!(url.query().is_none());
         assert!(!url.is_absolute());
+    }
+
+    #[test]
+    fn double_slash_path() {
+        let url = Url::from_static("/.//a/../b?q#f");
+        assert_eq!(url, "/.//b?q#f");
+        assert_eq!(url.path(), "//b");
+        assert_eq!(url.path_and_query(), "//b?q");
+        assert!(url.authority().is_none());
+        assert_eq!(Url::from_parts(url.clone().into_parts()).unwrap(), url);
+        assert_eq!(url.join("c").unwrap().path(), "//c");
+
+        let mut url = Url::default();
+        url.set_path("//p");
+        assert_eq!(url, "/.//p");
+        assert_eq!(url.path(), "//p");
+
+        let mut url = Url::from_static("http://h//p?q");
+        assert_eq!(url.path(), "//p");
+        url.set_authority(None).unwrap();
+        assert_eq!(url, "http:/.//p?q");
+        assert_eq!(url.path(), "//p");
+        url.set_authority(Some("h")).unwrap();
+        assert_eq!(url, "http://h//p?q");
+
+        let parts = crate::Parts {
+            path_and_query: "//p?q".into(),
+            ..crate::Parts::default()
+        };
+        assert_eq!(Url::from_parts(parts).unwrap().path(), "//p");
     }
 }
