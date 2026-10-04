@@ -304,9 +304,14 @@ fn header_value() {
     assert!(HeaderValue::from_shared(Bytes::from_static(b"\0")).is_err());
 
     let v = HeaderValue::from_bytes(b"caf\xc3\xa9").unwrap();
+    assert_eq!(v.to_str().unwrap(), "caf\u{e9}");
+    assert_eq!(format!("{v:?}"), "\"caf\\xc3\\xa9\"");
+
+    let v = HeaderValue::from_bytes(b"caf\xe9").unwrap();
     let err: ToStrError = v.to_str().unwrap_err();
     assert!(!err.to_string().is_empty());
-    assert_eq!(format!("{v:?}"), "\"caf\\xc3\\xa9\"");
+    let v = unsafe { HeaderValue::from_shared_unchecked(Bytes::from_static(b"a\x00\x7fb")) };
+    assert_eq!(v.to_str().unwrap(), "a\x00\x7fb");
 
     assert_eq!(HeaderValue::try_from("s").unwrap(), "s");
     assert_eq!(HeaderValue::try_from(&String::from("s")).unwrap(), "s");

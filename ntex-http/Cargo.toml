@@ -27,6 +27,7 @@ futures-core = { workspace = true }
 http = { workspace = true }
 itoa = { workspace = true }
 serde = { workspace = true }
+simdutf8 = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
