@@ -334,7 +334,7 @@ fn setters() {
     let mut u = url("a:b");
     u.set_path("//x");
     assert_eq!(u, "a:/.//x");
-    assert_eq!(u.path(), "/.//x");
+    assert_eq!(u.path(), "//x");
     let mut u = url("/a");
     u.set_path("c:d");
     assert_eq!(u, "./c:d");
@@ -432,7 +432,7 @@ fn builder_and_parts() {
         };
     assert!(parts(Some("http"), Some("h"), "/a").is_ok());
     assert!(parts(Some("http"), Some("h"), "a").is_err());
-    assert!(parts(Some("http"), None, "//a").is_err());
+    assert_eq!(parts(Some("http"), None, "//a").unwrap(), "http:/.//a");
     assert!(parts(None, None, "a:b").is_err());
     assert!(parts(Some("1"), None, "/").is_err());
     assert!(parts(None, Some("h h"), "/").is_err());
@@ -513,6 +513,11 @@ fn http() {
     let uri = Uri::try_from(url("/a?b")).unwrap();
     assert_eq!(uri, "/a?b");
     assert_eq!(Url::try_from(Uri::from_static("*")).unwrap(), "*");
+
+    let u = Url::try_from(Uri::from_static("//a?b")).unwrap();
+    assert_eq!(u.path_and_query(), "//a?b");
+    assert!(u.authority().is_none());
+    assert_eq!(Uri::try_from(&u).unwrap().path(), "//a");
 }
 
 #[test]

@@ -223,13 +223,8 @@ impl Url {
             if !path.is_empty() && !path.starts_with('/') {
                 return Err(invalid_path());
             }
-        } else {
-            if path.starts_with("//") {
-                return Err(invalid_path());
-            }
-            if parts.scheme.is_none() && path.split('/').next().unwrap_or("").contains(':') {
-                return Err(invalid_path());
-            }
+        } else if parts.scheme.is_none() && path.split('/').next().unwrap_or("").contains(':') {
+            return Err(invalid_path());
         }
         if let Some(fragment) = &parts.fragment {
             Fragment::new(fragment)?;
@@ -243,6 +238,8 @@ impl Url {
         if let Some(authority) = &parts.authority {
             s.push_str("//");
             s.push_str(authority);
+        } else if path.starts_with("//") {
+            s.push_str("/.");
         }
         s.push_str(&parts.path_and_query);
         if let Some(fragment) = &parts.fragment {
