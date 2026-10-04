@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+* http/2: The last chunk of a sized response body ends the stream, no empty `DATA` frame
+  is sent
+
+* http/2: Build request uri, `content-length` and `date` response headers without
+  per-request formatting allocations
+
 * http/1: Request heads are not decoded during write back-pressure, request payload is
   still read
 
