@@ -75,7 +75,7 @@ impl TestRequest {
     pub fn builder() -> TestRequest {
         TestRequest(Some(Inner {
             method: Method::GET,
-            uri: Url::default(),
+            uri: Url::new(),
             version: Version::HTTP_11,
             headers: HeaderMap::new(),
             #[cfg(feature = "cookie")]

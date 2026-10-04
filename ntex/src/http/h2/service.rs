@@ -14,7 +14,7 @@ use crate::http::{DateService, Method, Request, Response, StatusCode, Version};
 use crate::io::{Filter, Io, IoBoxed, IoRef, types};
 use crate::service::pipeline::{Pipeline, PipelineBinding, PipelineFactory};
 use crate::service::{Ctx, IntoServiceFactory, RequestState, Service, ServiceFactory};
-use crate::util::{Bytes, HashMap};
+use crate::util::{Bytes, BytesMut, HashMap};
 
 use super::{DefaultControlService, payload::Payload, payload::PayloadSender};
 
@@ -597,19 +597,12 @@ fn request_uri(pseudo: &h2::frame::PseudoHeaders) -> Option<(Method, Url)> {
             if authority.host().is_empty() || authority.userinfo().is_some() {
                 return None;
             }
-            Url::try_from(format!("//{authority}")).ok()?
+            Url::try_from(concat(&["//", authority.as_str()])).ok()?
         }
         (_, Some("*")) if method == Method::OPTIONS => Url::from_static("*"),
         (Some(authority), Some(path)) if path.starts_with('/') => {
             let scheme = Scheme::new(pseudo.scheme.as_ref()?.as_str()).ok()?;
-            let mut uri = String::with_capacity(
-                scheme.as_str().len() + 3 + authority.as_str().len() + path.len(),
-            );
-            uri.push_str(scheme.as_str());
-            uri.push_str("://");
-            uri.push_str(authority.as_str());
-            uri.push_str(path);
-            Url::try_from(uri).ok()?
+            Url::try_from(concat(&[scheme.as_str(), "://", authority.as_str(), path])).ok()?
         }
         (None, Some(path)) if path.starts_with('/') => {
             let uri = if path.starts_with("//") {
@@ -627,6 +620,29 @@ fn request_uri(pseudo: &h2::frame::PseudoHeaders) -> Option<(Method, Url)> {
         _ => return None,
     };
     Some((method, uri))
+}
+
+/// Concatenates `pieces` into a buffer that `Url` reuses if the result is
+/// normalized, short strings are stored inline without allocation.
+fn concat(pieces: &[&str]) -> Bytes {
+    const INLINE: usize = 23;
+
+    let len = pieces.iter().map(|p| p.len()).sum::<usize>();
+    if len <= INLINE {
+        let mut buf = [0u8; INLINE];
+        let mut pos = 0;
+        for p in pieces {
+            buf[pos..pos + p.len()].copy_from_slice(p.as_bytes());
+            pos += p.len();
+        }
+        Bytes::copy_from_slice(&buf[..len])
+    } else {
+        let mut buf = BytesMut::with_capacity(len);
+        for p in pieces {
+            buf.extend_from_slice(p.as_bytes());
+        }
+        buf.freeze()
+    }
 }
 
 /// Checks the case-insensitive `100-continue` expectation, see RFC 9110 section 10.1.1
@@ -692,6 +708,14 @@ mod tests {
         pseudo.authority = Some("bad authority".into());
         assert!(request_uri(&pseudo).is_none());
 
+        // inline and heap buffers
+        for authority in ["a.io:1", "very-long-host-name.example.com:8443"] {
+            pseudo.authority = Some(authority.into());
+            let (_, uri) = request_uri(&pseudo).unwrap();
+            assert_eq!(uri.authority().unwrap(), authority);
+            assert_eq!(uri.to_string(), format!("//{authority}"));
+        }
+
         // absolute form requires the scheme
         pseudo.method = Some(Method::GET);
         pseudo.authority = Some("example.com".into());
@@ -700,6 +724,27 @@ mod tests {
         pseudo.scheme = Some("https".into());
         let (_, uri) = request_uri(&pseudo).unwrap();
         assert_eq!(uri.to_string(), "https://example.com/path");
+
+        // 23 bytes are stored inline, 24 bytes on the heap
+        for path in ["/123", "/1234", "/api/v1/users/1?fields=name,email"] {
+            pseudo.path = Some(path.into());
+            let (_, uri) = request_uri(&pseudo).unwrap();
+            assert_eq!(uri.to_string(), format!("https://example.com{path}"));
+        }
+        // the buffer is normalized if needed
+        pseudo.scheme = Some("HTTPS".into());
+        pseudo.authority = Some("Example.COM".into());
+        pseudo.path = Some("/a/./b/../c".into());
+        let (_, uri) = request_uri(&pseudo).unwrap();
+        assert_eq!(uri.to_string(), "https://example.com/a/c");
+        pseudo.path = Some("/a/./b/../c/long-enough-for-the-heap".into());
+        let (_, uri) = request_uri(&pseudo).unwrap();
+        assert_eq!(
+            uri.to_string(),
+            "https://example.com/a/c/long-enough-for-the-heap"
+        );
+        pseudo.authority = Some("example.com".into());
+        pseudo.path = Some("/path".into());
 
         pseudo.scheme = Some("ht/tp".into());
         assert!(request_uri(&pseudo).is_none());
@@ -735,5 +780,15 @@ mod tests {
         pseudo.method = Some(Method::OPTIONS);
         let (_, uri) = request_uri(&pseudo).unwrap();
         assert_eq!(uri.path(), "*");
+    }
+
+    #[test]
+    fn test_concat() {
+        assert_eq!(concat(&[]), "");
+        assert_eq!(concat(&["//", "a.io"]), "//a.io");
+        let inline = "x".repeat(23);
+        assert_eq!(concat(&[&inline[..20], &inline[20..]]), inline.as_str());
+        let heap = "y".repeat(24);
+        assert_eq!(concat(&[&heap[..1], "", &heap[1..]]), heap.as_str());
     }
 }

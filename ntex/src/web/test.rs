@@ -365,7 +365,7 @@ impl Default for TestRequest {
         TestRequest {
             req: HttpTestRequest::default(),
             rmap: ResourceMap::new(ResourceDef::new("")),
-            path: Path::new(Url::default()),
+            path: Path::new(Url::new()),
             peer_addr: None,
             state: (),
             config: WebAppConfig::new(),

@@ -103,7 +103,7 @@ impl Default for RequestHead {
         RequestHead {
             id: 0,
             io: CurrentIo::None,
-            uri: Url::default(),
+            uri: Url::new(),
             method: Method::default(),
             version: Version::HTTP_11,
             headers: HeaderMap::with_capacity(16),
@@ -117,6 +117,9 @@ impl Default for RequestHead {
 impl Head for RequestHead {
     fn clear(&mut self) {
         self.io = CurrentIo::None;
+        // the uri and headers may share the connection read buffer, a pooled
+        // head must not keep it alive
+        self.uri = Url::new();
         self.flags = Flags::empty();
         self.version = Version::HTTP_11;
         self.headers.clear();
@@ -445,6 +448,13 @@ impl<T: Head> Message<T> {
             .flatten()
             .unwrap_or_else(|| Rc::new(T::default()));
         Message { head }
+    }
+
+    /// Clears the head, so a cached message does not hold request data.
+    pub(crate) fn clear(&mut self) {
+        if let Some(head) = Rc::get_mut(&mut self.head) {
+            head.clear();
+        }
     }
 }
 

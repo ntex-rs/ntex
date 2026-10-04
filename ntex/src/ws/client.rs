@@ -91,7 +91,7 @@ impl WsClient<Base> {
                 };
                 (uri, err)
             }
-            Err(err) => (Url::default(), Some(WsConfigError::from(err))),
+            Err(err) => (Url::new(), Some(WsConfigError::from(err))),
         };
 
         let cfg = cfg.into();

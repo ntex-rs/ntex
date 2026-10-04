@@ -23,6 +23,11 @@
 * http/2: Response headers are sent from the pooled response head, the header map is
   not reallocated per response
 
+* http/2: Build absolute-form and CONNECT request urls without an intermediate `String`
+
+* Pooled request heads and web requests release the request uri and headers, so they
+  do not keep the connection read buffer alive
+
 * http/1: Request heads are not decoded during write back-pressure, request payload is
   still read
 
