@@ -1,4 +1,4 @@
-use ntex_bytes::ByteString;
+use std::borrow::Cow;
 
 use crate::chars::{self, PATH, split_at_char};
 use crate::error::InvalidUrl;
@@ -15,7 +15,7 @@ str_eq!(Path);
 impl Path {
     /// Strictly validates a path: `*( pchar / "/" )`.
     pub fn new(src: &str) -> Result<&Path, InvalidUrl> {
-        chars::check(src, PATH)?;
+        chars::check(src, &PATH)?;
         Ok(Path::from_str_unchecked(src))
     }
 
@@ -48,8 +48,8 @@ impl Path {
     ///
     /// assert_eq!(Path::from_static("/a%20b/c%2Fd").decode(), "/a b/c/d");
     /// ```
-    pub fn decode(&self) -> ByteString {
-        unquote(&self.0, Component::Path).into()
+    pub fn decode(&self) -> Cow<'_, str> {
+        unquote(&self.0, Component::Path)
     }
 
     /// Returns the decoded path, keeping `%2F` and `%25` encoded, so the result
@@ -60,8 +60,8 @@ impl Path {
     ///
     /// assert_eq!(Path::from_static("/a%20b/c%2Fd").decode_safe(), "/a b/c%2Fd");
     /// ```
-    pub fn decode_safe(&self) -> ByteString {
-        unquote_path_safe(&self.0).into()
+    pub fn decode_safe(&self) -> Cow<'_, str> {
+        unquote_path_safe(&self.0)
     }
 
     /// Returns an iterator over the percent-encoded segments.

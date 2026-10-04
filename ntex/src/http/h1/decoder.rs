@@ -556,6 +556,8 @@ impl MessageType for Request {
                 if target == b"*" && method != Method::OPTIONS {
                     return Err(DecodeError::Uri);
                 }
+                let line = src.split_to(pos);
+                let target = &line[req.path.start..req.path.end];
                 let uri = if method == Method::CONNECT {
                     // authority-form is used only, and always, for `CONNECT`, see
                     // RFC 9112 section 3.2.3
@@ -575,6 +577,13 @@ impl MessageType for Request {
                         let target = str::from_utf8(target).map_err(|_| DecodeError::Uri)?;
                         Url::try_from(format!("/.{target}"))?
                     } else {
+                        // SAFETY: a valid target is ASCII
+                        let target = unsafe {
+                            ByteString::from_bytes_unchecked(
+                                line.slice(req.path.start..req.path.end),
+                            )
+                        };
+                        // reuses the buffer if the target is normalized
                         Url::try_from(target)?
                     };
                     let valid = if uri.is_absolute() {
@@ -593,7 +602,6 @@ impl MessageType for Request {
                 } else {
                     Version::HTTP_10
                 };
-                src.advance_to(pos);
 
                 let mut msg = Request::new();
                 let head = msg.head_mut();

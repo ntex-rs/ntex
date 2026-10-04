@@ -617,7 +617,8 @@ fn request_uri(pseudo: &h2::frame::PseudoHeaders) -> Option<(Method, Url)> {
                 // origin-form path, not a network-path reference
                 Url::try_from(format!("/.{path}")).ok()?
             } else {
-                Url::try_from(path).ok()?
+                // reuses the buffer if the path is normalized
+                Url::try_from(pseudo.path.as_ref()?).ok()?
             };
             if uri.authority().is_some() {
                 return None;
