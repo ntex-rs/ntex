@@ -369,11 +369,17 @@ mod tests {
         let err = NameKeyVisitor.visit_u8::<DeError>(1).unwrap_err();
         assert!(err.to_string().contains("a header name"), "{err}");
 
-        // non-visible values can not be serialized to human readable formats
+        // non-utf8 values can not be serialized to human readable formats
         let mut map = HeaderMap::new();
-        map.insert(USER_AGENT, HeaderValue::from_bytes(b"caf\xc3\xa9").unwrap());
+        map.insert(USER_AGENT, HeaderValue::from_bytes(b"caf\xe9").unwrap());
         assert!(serde_json::to_string(&map).is_err());
         let map2 = bincode::deserialize::<HeaderMap>(&bincode::serialize(&map).unwrap()).unwrap();
         assert_eq!(map, map2);
+
+        let mut map = HeaderMap::new();
+        map.insert(USER_AGENT, HeaderValue::from_bytes(b"caf\xc3\xa9").unwrap());
+        let json = serde_json::to_string(&map).unwrap();
+        assert_eq!(json, "{\"user-agent\":\"caf\u{e9}\"}");
+        assert_eq!(serde_json::from_str::<HeaderMap>(&json).unwrap(), map);
     }
 }

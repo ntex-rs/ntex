@@ -15,7 +15,7 @@ use ntex_bytes::{ByteString, Bytes, BytesMut};
 ///
 /// To handle this, the `HeaderValue` is useable as a type and can be compared
 /// with strings and implements `Debug`. [`to_str`](Self::to_str) returns an
-/// error if the value contains bytes other than HTAB and visible ASCII.
+/// error if the value is not valid UTF-8.
 #[derive(Clone, Eq)]
 pub struct HeaderValue {
     inner: Bytes,
@@ -33,7 +33,8 @@ pub struct InvalidHeaderValue {
 /// A possible error when converting a `HeaderValue` to a string representation.
 ///
 /// Header field values may contain opaque bytes, in which case it is not
-/// possible to represent the value as a string.
+/// possible to represent the value as a string. Returned if the value is not
+/// valid UTF-8.
 #[derive(thiserror::Error, Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[error("failed to convert header to a str")]
 pub struct ToStrError {
@@ -78,8 +79,7 @@ impl HeaderValue {
     ///
     /// If the argument contains invalid header value characters, an error is
     /// returned. The same bytes as in [`from_bytes`](Self::from_bytes) are
-    /// permitted, so non-ASCII characters are accepted, but such a value is not
-    /// returned by [`to_str`](Self::to_str).
+    /// permitted, so non-ASCII characters are accepted.
     ///
     /// # Examples
     ///
@@ -89,7 +89,7 @@ impl HeaderValue {
     /// assert_eq!(val, "hello");
     ///
     /// let val = HeaderValue::from_str("caf\u{e9}").unwrap();
-    /// assert!(val.to_str().is_err());
+    /// assert_eq!(val.to_str().unwrap(), "caf\u{e9}");
     /// ```
     ///
     /// An invalid value
@@ -180,11 +180,9 @@ impl HeaderValue {
         })
     }
 
-    /// Yields a `&str` slice if the `HeaderValue` only contains HTAB and visible
-    /// ASCII chars (32-126).
+    /// Yields a `&str` slice if the `HeaderValue` is valid UTF-8.
     ///
-    /// This function will perform a scan of the header value, checking all the
-    /// characters.
+    /// This function validates the whole header value as UTF-8.
     ///
     /// # Examples
     ///
@@ -192,17 +190,12 @@ impl HeaderValue {
     /// # use ntex_http::header::HeaderValue;
     /// let val = HeaderValue::from_static("hello");
     /// assert_eq!(val.to_str().unwrap(), "hello");
+    ///
+    /// let val = HeaderValue::from_bytes(b"caf\xe9").unwrap();
+    /// assert!(val.to_str().is_err());
     /// ```
     pub fn to_str(&self) -> Result<&str, ToStrError> {
-        let bytes = self.as_ref();
-
-        for &b in bytes {
-            if !is_visible_ascii(b) {
-                return Err(ToStrError { _priv: () });
-            }
-        }
-
-        unsafe { Ok(str::from_utf8_unchecked(bytes)) }
+        simdutf8::basic::from_utf8(self.as_ref()).map_err(|_| ToStrError { _priv: () })
     }
 
     /// Returns the length of `self`.
