@@ -5,7 +5,6 @@ use ntex_http::{Method, StatusCode, Uri, Version, header};
 use ntex_httparse::{self as httparse, HeaderParsed, Status};
 
 use super::encoder::is_bodyless;
-use super::host::is_valid_host;
 use crate::http::config::HttpServiceConfig;
 use crate::http::message::{ConnectionType, ResponseHead};
 use crate::http::{HeaderItem, error::DecodeError, header::HeaderMap, request::Request};
@@ -487,7 +486,9 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
                     log::trace!("multiple Host headers not allowed");
                     return Err(DecodeError::Header);
                 }
-                if !is_valid_host(value.as_bytes()) {
+                // `Host = uri-host [ ":" port ]`, an empty value is allowed
+                let host = value.to_str().map(urly::Authority::new);
+                if !matches!(host, Ok(Ok(host)) if host.userinfo().is_none()) {
                     log::trace!("illegal Host: {value:?}");
                     return Err(DecodeError::Header);
                 }
@@ -2182,6 +2183,15 @@ mod tests {
             "GET / HTTP/1.1\r\nhost: example.com:port\r\n\r\n",
             "GET / HTTP/1.1\r\nhost: [::1]:x\r\n\r\n",
             "GET / HTTP/1.1\r\nhost: a:1:2\r\n\r\n",
+            "GET / HTTP/1.1\r\nhost: @\r\n\r\n",
+            "GET / HTTP/1.1\r\nhost: example.com:99999\r\n\r\n",
+            "GET / HTTP/1.1\r\nhost: 256.0.0.1\r\n\r\n",
+            "GET / HTTP/1.1\r\nhost: [::1\r\n\r\n",
+            "GET / HTTP/1.1\r\nhost: [::1]]\r\n\r\n",
+            "GET / HTTP/1.1\r\nhost: [1:2:3:4:5:6:7:8:9]\r\n\r\n",
+            "GET / HTTP/1.1\r\nhost: a%\r\n\r\n",
+            "GET / HTTP/1.1\r\nhost: a{b}\r\n\r\n",
+            "GET / HTTP/1.1\r\nhost: \u{e9}\r\n\r\n",
         ] {
             let mut buf = BytesMut::from(req);
             assert_eq!(
@@ -2198,6 +2208,9 @@ mod tests {
             "GET / HTTP/1.1\r\nHost: example.com:8080\r\n\r\n",
             "GET / HTTP/1.1\r\nhost: 127.0.0.1:80\r\n\r\n",
             "GET / HTTP/1.1\r\nhost: [::1]:80\r\n\r\n",
+            "GET / HTTP/1.1\r\nhost: [::1]\r\n\r\n",
+            "GET / HTTP/1.1\r\nhost: example.com:\r\n\r\n",
+            "GET / HTTP/1.1\r\nhost: a-b_c~d!$&'()*+,;=\r\n\r\n",
             "GET http://example.com/ HTTP/1.1\r\nhost: example.com\r\n\r\n",
         ] {
             let mut buf = BytesMut::from(req);
