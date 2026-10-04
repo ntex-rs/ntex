@@ -192,6 +192,20 @@ fn too_long<T>(res: Result<T, InvalidUrl>) -> T {
 }
 
 impl Url {
+    /// Returns the relative URL `/`.
+    pub const fn new() -> Url {
+        Url {
+            data: ByteString::from_static("/"),
+            scheme_end: 0,
+            auth_start: 0,
+            path_start: 0,
+            path_end: 1,
+            query_end: 1,
+            host_start: 0,
+            host_end: 0,
+        }
+    }
+
     /// Parses and normalizes a URL reference.
     ///
     /// The input buffer is reused if it is already normalized.
@@ -934,16 +948,7 @@ str_eq!(Url);
 /// Returns the relative URL `/`, like `http::Uri::default()`.
 impl Default for Url {
     fn default() -> Url {
-        Url {
-            data: ByteString::from_static("/"),
-            scheme_end: 0,
-            auth_start: 0,
-            path_start: 0,
-            path_end: 1,
-            query_end: 1,
-            host_start: 0,
-            host_end: 0,
-        }
+        Url::new()
     }
 }
 
@@ -1115,6 +1120,8 @@ mod tests {
 
     #[test]
     fn default() {
+        const URL: Url = Url::new();
+        assert_eq!(URL, Url::default());
         let (url, p) = (Url::default(), Url::from_static("/"));
         assert_eq!(url.scheme_end, p.scheme_end);
         assert_eq!(url.auth_start, p.auth_start);
