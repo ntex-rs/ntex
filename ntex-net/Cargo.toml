@@ -45,6 +45,7 @@ ntex-http = { workspace = true }
 ntex-io = { workspace = true }
 ntex-rt = { workspace = true }
 ntex-util = { workspace = true }
+urly = { workspace = true }
 
 bitflags = { workspace = true }
 cfg-if = { workspace = true }
