@@ -346,7 +346,7 @@ fn query_pairs() {
     u.set_query_pairs([("a", "1 2"), ("b&", "="), ("c", "ü")]);
     assert_eq!(u, "http://h/p?a=1+2&b%26=%3D&c=%C3%BC");
     let q = u.query().unwrap();
-    let pairs: Vec<(ByteString, ByteString)> = q.pairs().collect();
+    let pairs: Vec<_> = q.pairs().collect();
     assert_eq!(pairs[0].1, "1 2");
     assert_eq!(pairs[1].0, "b&");
     assert_eq!(pairs[1].1, "=");

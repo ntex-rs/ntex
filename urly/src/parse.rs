@@ -52,7 +52,10 @@ pub(crate) fn parse(src: &str, orig: Option<&ByteString>) -> Result<Url, Invalid
     if trimmed.len() > MAX_LEN {
         return Err(InvalidUrl::new(ErrorKind::TooLong));
     }
-    let cleaned = if trimmed.contains(['\t', '\n', '\r']) {
+    // branchless prefilter vectorizes, `\t`, `\n` and `\r` are below 0x0e
+    let cleaned = if trimmed.bytes().fold(false, |a, b| a | (b < 0x0e))
+        && trimmed.contains(['\t', '\n', '\r'])
+    {
         Cow::Owned(trimmed.replace(['\t', '\n', '\r'], ""))
     } else {
         Cow::Borrowed(trimmed)
@@ -154,33 +157,51 @@ pub(crate) fn join_authority(userinfo: Option<&str>, host: &str, port: Option<u1
 }
 
 pub(crate) fn has_dot_segments(path: &str) -> bool {
-    path.split('/').any(|s| s == "." || s == "..")
+    let b = path.as_bytes();
+    b.iter().enumerate().any(|(i, &c)| {
+        c == b'.' && (i == 0 || b[i - 1] == b'/') && {
+            let end = if b.get(i + 1) == Some(&b'.') { i + 2 } else { i + 1 };
+            end == b.len() || b[end] == b'/'
+        }
+    })
 }
 
 /// RFC 3986 section 5.2.4.
 pub(crate) fn remove_dot_segments(path: &str) -> String {
-    let absolute = path.starts_with('/');
-    let mut out: Vec<&str> = Vec::new();
+    let mut result = String::with_capacity(path.len());
+    let rest = match path.strip_prefix('/') {
+        Some(rest) => {
+            result.push('/');
+            rest
+        }
+        None => path,
+    };
+    // output segments are joined with `/` after `base`
+    let base = result.len();
+    let mut count = 0usize;
     let mut trailing_slash = false;
-    for segment in path.strip_prefix('/').unwrap_or(path).split('/') {
+    for segment in rest.split('/') {
         match segment {
             "." => trailing_slash = true,
             ".." => {
-                out.pop();
+                if count > 0 {
+                    let pos = result[base..].rfind('/').map_or(base, |i| base + i);
+                    result.truncate(pos);
+                    count -= 1;
+                }
                 trailing_slash = true;
             }
             s => {
-                out.push(s);
+                if count > 0 {
+                    result.push('/');
+                }
+                result.push_str(s);
+                count += 1;
                 trailing_slash = false;
             }
         }
     }
-    let mut result = String::with_capacity(path.len());
-    if absolute {
-        result.push('/');
-    }
-    result.push_str(&out.join("/"));
-    if trailing_slash && !out.is_empty() {
+    if trailing_slash && count > 0 {
         result.push('/');
     }
     result
@@ -208,7 +229,11 @@ pub(crate) fn validate(src: &str) -> Result<(), InvalidUrl> {
     if let Some(a) = c.authority {
         validate_authority(a).map_err(|e| e.offset(offset(src, a)))?;
     }
-    for (part, allowed) in [(Some(c.path), PATH), (c.query, QUERY), (c.fragment, QUERY)] {
+    for (part, allowed) in [
+        (Some(c.path), &PATH),
+        (c.query, &QUERY),
+        (c.fragment, &QUERY),
+    ] {
         if let Some(part) = part {
             chars::check(part, allowed).map_err(|e| e.offset(offset(src, part)))?;
         }
@@ -232,11 +257,21 @@ mod tests {
             ("../a", "a"),
             (".", ""),
             ("/a//../b", "/a/b"),
+            ("//.", "//"),
+            ("//..", "/"),
+            ("a/b/../../c", "c"),
+            ("/a/b/../..", "/"),
+            ("/a/.b/../c", "/a/c"),
         ];
         for (input, expected) in cases {
             assert_eq!(remove_dot_segments(input), expected, "{input}");
         }
-        assert!(!has_dot_segments("/a/.b/c."));
+        assert!(!has_dot_segments("/a/.b/c./..b/"));
+        for path in [
+            ".", "..", "/.", "/..", "./a", "../a", "/a/./b", "/a/../b", "a/.",
+        ] {
+            assert!(has_dot_segments(path), "{path}");
+        }
     }
 
     #[test]

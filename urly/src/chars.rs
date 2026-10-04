@@ -4,42 +4,54 @@ use std::borrow::Cow;
 
 use crate::error::{ErrorKind, InvalidUrl};
 
+/// A byte lookup table, faster than a bit set in scanning loops.
 #[derive(Copy, Clone)]
-pub(crate) struct Set(u128);
+pub(crate) struct Set([bool; 256]);
 
 impl Set {
     pub(crate) const fn new(chars: &[u8]) -> Set {
-        let mut bits = 0u128;
+        let mut table = [false; 256];
         let mut i = 0;
         while i < chars.len() {
-            bits |= 1 << chars[i];
+            table[chars[i] as usize] = true;
             i += 1;
         }
-        Set(bits)
+        Set(table)
     }
 
     pub(crate) const fn union(self, other: Set) -> Set {
-        Set(self.0 | other.0)
+        let mut table = self.0;
+        let mut i = 0;
+        while i < 256 {
+            table[i] |= other.0[i];
+            i += 1;
+        }
+        Set(table)
     }
 
-    pub(crate) const fn contains(self, b: u8) -> bool {
-        b < 128 && self.0 & (1 << b) != 0
+    pub(crate) const fn without(self, b: u8) -> Set {
+        let mut table = self.0;
+        table[b as usize] = false;
+        Set(table)
+    }
+
+    #[inline]
+    pub(crate) const fn contains(&self, b: u8) -> bool {
+        self.0[b as usize]
     }
 }
 
 const fn alnum() -> Set {
-    let mut bits = 0u128;
+    let mut table = [false; 256];
     let mut b = 0u8;
     while b < 128 {
-        if b.is_ascii_alphanumeric() {
-            bits |= 1 << b;
-        }
+        table[b as usize] = b.is_ascii_alphanumeric();
         b += 1;
     }
-    Set(bits)
+    Set(table)
 }
 
-pub(crate) const NONE: Set = Set(0);
+pub(crate) const NONE: Set = Set([false; 256]);
 pub(crate) const UNRESERVED: Set = alnum().union(Set::new(b"-._~"));
 pub(crate) const SUB_DELIMS: Set = Set::new(b"!$&'()*+,;=");
 pub(crate) const SUB_DELIMS_WITHOUT_QS: Set = Set::new(b"!$'()*,");
@@ -85,7 +97,7 @@ pub(crate) fn char_at(s: &str, i: usize) -> char {
 }
 
 /// Strictly checks that `s` consists of `set` characters and valid `%XX` escapes.
-pub(crate) fn check(s: &str, set: Set) -> Result<(), InvalidUrl> {
+pub(crate) fn check(s: &str, set: &Set) -> Result<(), InvalidUrl> {
     let bytes = s.as_bytes();
     let mut i = 0;
     while i < bytes.len() {

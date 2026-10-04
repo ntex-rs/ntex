@@ -20,7 +20,7 @@
 //! ```
 use std::borrow::Cow;
 
-use crate::chars::{self, ALLOWED, NONE, QS, Set, UNRESERVED, pct_at, push_pct};
+use crate::chars::{ALLOWED, HEX_UPPER, NONE, QS, Set, UNRESERVED, pct_at, push_pct};
 
 /// The URL component a value belongs to; it selects the characters that are
 /// left unencoded.
@@ -41,46 +41,61 @@ pub enum Component {
     Opaque,
 }
 
-#[derive(Copy, Clone)]
 struct Quoter {
     safe: Set,
     protected: Set,
     qs: bool,
 }
 
+static USERINFO: Quoter = Quoter {
+    safe: ALLOWED.union(QS),
+    protected: NONE,
+    qs: false,
+};
+static PATH: Quoter = Quoter {
+    safe: ALLOWED.union(QS).union(Set::new(b"@:/+")),
+    protected: Set::new(b"/+"),
+    qs: false,
+};
+static QUERY: Quoter = Quoter {
+    safe: ALLOWED.union(Set::new(b"?/:@=+&;")),
+    protected: QS,
+    qs: true,
+};
+// a literal `+` in a query would be decoded as space
+static QUERY_LITERAL: Quoter = Quoter {
+    safe: QUERY.safe.without(b'+'),
+    protected: QS,
+    qs: true,
+};
+static QUERY_PART: Quoter = Quoter {
+    safe: ALLOWED.union(Set::new(b"?/:@")),
+    protected: NONE,
+    qs: true,
+};
+static FRAGMENT: Quoter = Quoter {
+    safe: ALLOWED.union(QS).union(Set::new(b"?/:@")),
+    protected: NONE,
+    qs: false,
+};
+static OPAQUE: Quoter = Quoter {
+    safe: UNRESERVED,
+    protected: NONE,
+    qs: false,
+};
+
+const PATH_SAFE: Set = Set::new(b"/%");
+
 impl Component {
-    const fn quoter(self) -> Quoter {
+    fn quoter(self, requote: bool) -> &'static Quoter {
         match self {
-            Component::UserInfo => Quoter {
-                safe: ALLOWED.union(QS),
-                protected: NONE,
-                qs: false,
-            },
-            Component::Path => Quoter {
-                safe: ALLOWED.union(QS).union(Set::new(b"@:/+")),
-                protected: Set::new(b"/+"),
-                qs: false,
-            },
-            Component::Query => Quoter {
-                safe: ALLOWED.union(Set::new(b"?/:@=+&;")),
-                protected: QS,
-                qs: true,
-            },
-            Component::QueryPart => Quoter {
-                safe: ALLOWED.union(Set::new(b"?/:@")),
-                protected: NONE,
-                qs: true,
-            },
-            Component::Fragment => Quoter {
-                safe: ALLOWED.union(QS).union(Set::new(b"?/:@")),
-                protected: NONE,
-                qs: false,
-            },
-            Component::Opaque => Quoter {
-                safe: UNRESERVED,
-                protected: NONE,
-                qs: false,
-            },
+            Component::UserInfo => &USERINFO,
+            Component::Path => &PATH,
+            Component::Query if requote => &QUERY,
+            Component::Query => &QUERY_LITERAL,
+            Component::QueryPart => &QUERY_PART,
+            Component::Fragment => &FRAGMENT,
+            Component::Opaque => &OPAQUE,
         }
     }
 }
@@ -102,18 +117,16 @@ pub fn requote(src: &str, component: Component) -> Cow<'_, str> {
 /// the result can still be split into pairs.
 pub fn unquote(src: &str, component: Component) -> Cow<'_, str> {
     match component {
-        Component::Query => unquote_with(src, true, QS),
-        Component::QueryPart => unquote_with(src, true, NONE),
-        _ => unquote_with(src, false, NONE),
+        Component::Query => unquote_with(src, true, &QS),
+        Component::QueryPart => unquote_with(src, true, &NONE),
+        _ => unquote_with(src, false, &NONE),
     }
 }
 
 fn quote_with(src: &str, component: Component, requote: bool) -> Cow<'_, str> {
-    let q = component.quoter();
+    let q = component.quoter(requote);
     let bytes = src.as_bytes();
-    // a literal `+` in a query would be decoded as space
-    let literal_plus = q.qs && !requote;
-    let is_safe = |b: u8| q.safe.contains(b) && !(literal_plus && b == b'+');
+    let is_safe = |b: u8| q.safe.contains(b);
 
     // fast path, find the first byte that has to change
     let mut i = 0;
@@ -164,7 +177,7 @@ fn quote_with(src: &str, component: Component, requote: bool) -> Cow<'_, str> {
 }
 
 /// Decodes `src`, keeping escapes of `ignore` characters encoded.
-pub(crate) fn unquote_with(src: &str, plus: bool, ignore: Set) -> Cow<'_, str> {
+pub(crate) fn unquote_with<'a>(src: &'a str, plus: bool, ignore: &Set) -> Cow<'a, str> {
     let bytes = src.as_bytes();
     let Some(start) = bytes
         .iter()
@@ -173,6 +186,38 @@ pub(crate) fn unquote_with(src: &str, plus: bool, ignore: Set) -> Cow<'_, str> {
         return Cow::Borrowed(src);
     };
 
+    // fast path, decode everything and validate once
+    let mut buf = Vec::with_capacity(bytes.len());
+    buf.extend_from_slice(&bytes[..start]);
+    let mut i = start;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(v) = pct_at(bytes, i) {
+            if ignore.contains(v) {
+                buf.extend_from_slice(&[
+                    b'%',
+                    HEX_UPPER[usize::from(v >> 4)],
+                    HEX_UPPER[usize::from(v & 15)],
+                ]);
+            } else {
+                buf.push(v);
+            }
+            i += 3;
+        } else {
+            buf.push(if plus && b == b'+' { b' ' } else { b });
+            i += 1;
+        }
+    }
+    if simdutf8::basic::from_utf8(&buf).is_ok() {
+        // SAFETY: validated above
+        return Cow::Owned(unsafe { String::from_utf8_unchecked(buf) });
+    }
+    unquote_invalid(src, plus, ignore, start)
+}
+
+/// Decodes `src`, re-encoding escapes that don't form valid UTF-8.
+fn unquote_invalid<'a>(src: &'a str, plus: bool, ignore: &Set, start: usize) -> Cow<'a, str> {
+    let bytes = src.as_bytes();
     let mut out = String::with_capacity(bytes.len());
     out.push_str(&src[..start]);
     let mut pending = Vec::new();
@@ -239,7 +284,7 @@ fn flush(out: &mut String, pending: &mut Vec<u8>) {
 
 /// Decodes a path, keeping `%2F` and `%25` encoded.
 pub(crate) fn unquote_path_safe(src: &str) -> Cow<'_, str> {
-    unquote_with(src, false, chars::Set::new(b"/%"))
+    unquote_with(src, false, &PATH_SAFE)
 }
 
 #[cfg(test)]

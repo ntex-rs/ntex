@@ -2,7 +2,7 @@ use std::any::Any;
 use std::borrow::Cow;
 use std::{ops::Div, str::FromStr};
 
-use ntex_bytes::{ByteString, Bytes};
+use ntex_bytes::{ByteString, Bytes, BytesMut};
 use simdutf8::compat::{Utf8Error, from_utf8};
 
 use crate::authority::{self, Authority, Port, UserInfo};
@@ -59,6 +59,9 @@ pub struct Url {
     path_start: u16,
     path_end: u16,
     query_end: u16,
+    // host range within the authority, both 0 if there is no authority
+    host_start: u16,
+    host_end: u16,
 }
 
 /// Borrowed URL components, used to assemble a new URL.
@@ -114,19 +117,20 @@ pub(crate) fn assemble(c: &Components<'_>, orig: Option<&ByteString>) -> Result<
 
     let reuse = orig.filter(|orig| {
         orig.len() == len && {
-            let mut rest = orig.as_str();
-            pieces.iter().all(|p| match rest.strip_prefix(p) {
-                Some(r) => {
-                    rest = r;
-                    true
-                }
-                None => false,
+            // the lengths add up to `len`, indexing can't panic. most pieces are
+            // empty, and comparing empty slices is surprisingly slow
+            let orig = orig.as_str().as_bytes();
+            let mut pos = 0;
+            pieces.iter().all(|p| {
+                let start = pos;
+                pos += p.len();
+                p.is_empty() || orig[start..pos] == *p.as_bytes()
             })
         }
     });
     let data = match reuse {
         Some(orig) => orig.clone(),
-        None => ByteString::from(pieces.concat()),
+        None => concat(&pieces, len),
     };
 
     // all lengths fit, the total is at most `MAX_LEN`
@@ -142,6 +146,14 @@ pub(crate) fn assemble(c: &Components<'_>, orig: Option<&ByteString>) -> Result<
     let path_start = lens[..4].iter().sum::<u16>() + hidden;
     let path_end = lens[..6].iter().sum::<u16>();
     let query_end = path_end + lens[6] + lens[7];
+    let (host_start, host_end) = match c.authority {
+        Some(a) => {
+            let host = authority::split(a).1;
+            let start = auth_start + authority::offset(a, host) as u16;
+            (start, start + host.len() as u16)
+        }
+        None => (0, 0),
+    };
     Ok(Url {
         data,
         scheme_end,
@@ -149,7 +161,33 @@ pub(crate) fn assemble(c: &Components<'_>, orig: Option<&ByteString>) -> Result<
         path_start,
         path_end,
         query_end,
+        host_start,
+        host_end,
     })
+}
+
+/// Concatenates `pieces` of total length `len` with a single copy.
+fn concat(pieces: &[&str], len: usize) -> ByteString {
+    // short urls are stored inline in `Bytes`, without allocation
+    const INLINE: usize = 23;
+
+    let bytes = if len <= INLINE {
+        let mut buf = [0u8; INLINE];
+        let mut pos = 0;
+        for p in pieces {
+            buf[pos..pos + p.len()].copy_from_slice(p.as_bytes());
+            pos += p.len();
+        }
+        Bytes::copy_from_slice(&buf[..len])
+    } else {
+        let mut buf = BytesMut::with_capacity(len);
+        for p in pieces {
+            buf.extend_from_slice(p.as_bytes());
+        }
+        buf.freeze()
+    };
+    // SAFETY: a concatenation of strings is valid UTF-8
+    unsafe { ByteString::from_bytes_unchecked(bytes) }
 }
 
 fn too_long<T>(res: Result<T, InvalidUrl>) -> T {
@@ -252,6 +290,8 @@ impl Url {
             path_start: 0,
             path_end: 0,
             query_end: 0,
+            host_start: 0,
+            host_end: 0,
         }
     }
 
@@ -304,25 +344,24 @@ impl Url {
 
     /// Returns the userinfo, if present.
     pub fn userinfo(&self) -> Option<&UserInfo> {
-        self.authority()?.userinfo()
+        (self.host_start > self.auth_start)
+            .then(|| UserInfo::from_str_unchecked(self.range(self.auth_start, self.host_start - 1)))
     }
 
     /// Returns the decoded user name, if present.
-    pub fn username(&self) -> Option<ByteString> {
+    pub fn username(&self) -> Option<Cow<'_, str>> {
         self.userinfo().map(UserInfo::decoded_username)
     }
 
     /// Returns the decoded password, if present.
-    pub fn password(&self) -> Option<ByteString> {
+    pub fn password(&self) -> Option<Cow<'_, str>> {
         self.userinfo()?.decoded_password()
     }
 
     /// Returns the host, if present and not empty. IPv6 addresses include the
     /// brackets, non-ASCII domains are punycode-encoded.
     pub fn host(&self) -> Option<&str> {
-        self.authority()
-            .map(Authority::host)
-            .filter(|h| !h.is_empty())
+        (self.host_end > self.host_start).then(|| self.range(self.host_start, self.host_end))
     }
 
     /// Returns the parsed host, if present and not empty.
@@ -344,7 +383,11 @@ impl Url {
 
     /// Returns the explicit port, if present.
     pub fn port(&self) -> Option<Port<&str>> {
-        self.authority()?.port()
+        if self.auth_start > 0 && self.host_end < self.path_start {
+            Port::parse(self.range(self.host_end + 1, self.path_start))
+        } else {
+            None
+        }
     }
 
     /// Returns the explicit port as a number, if present.
@@ -907,6 +950,8 @@ impl Default for Url {
             path_start: 0,
             path_end: 1,
             query_end: 1,
+            host_start: 0,
+            host_end: 0,
         }
     }
 }
@@ -934,7 +979,8 @@ macro_rules! try_from {
 try_from! {
     &str => |s| parse::parse(s, None);
     &String => |s| parse::parse(s, None);
-    String => |s| Url::try_from(ByteString::from(s));
+    // `ByteString::from(String)` copies, assembling copies only once
+    String => |s| parse::parse(&s, None);
     ByteString => |s| parse::parse(&s, Some(&s));
     &ByteString => |s| parse::parse(s, Some(s));
     &[u8] => |s| parse::parse(from_utf8(s).map_err(utf8_error)?, None);
@@ -1084,10 +1130,44 @@ mod tests {
         assert_eq!(url.path_start, p.path_start);
         assert_eq!(url.path_end, p.path_end);
         assert_eq!(url.query_end, p.query_end);
+        assert_eq!((url.host_start, url.host_end), (p.host_start, p.host_end));
         assert_eq!(url, "/");
         assert_eq!(url.path(), "/");
         assert!(url.query().is_none());
         assert!(!url.is_absolute());
+    }
+
+    #[test]
+    fn cached_host() {
+        let cases = [
+            (
+                "http://u:p@[::1]:8080/a",
+                Some("u:p"),
+                Some("[::1]"),
+                Some(8080),
+            ),
+            ("http://@h/", Some(""), Some("h"), None),
+            ("http://h:0/", None, Some("h"), Some(0)),
+            ("file:///etc", None, None, None),
+            ("//h", None, Some("h"), None),
+            ("/a", None, None, None),
+        ];
+        for (src, userinfo, host, port) in cases {
+            let url = Url::from_static(src);
+            let auth = url.authority();
+            assert_eq!(url.userinfo().map(UserInfo::as_str), userinfo, "{src}");
+            assert_eq!(url.host(), host, "{src}");
+            assert_eq!(url.port_u16(), port, "{src}");
+            assert_eq!(
+                auth.and_then(|a| a.userinfo()).map(UserInfo::as_str),
+                userinfo
+            );
+            assert_eq!(auth.map(Authority::host).filter(|h| !h.is_empty()), host);
+            assert_eq!(auth.and_then(Authority::port_u16), port);
+            let mut copy = url.clone();
+            copy.set_path("/x");
+            assert_eq!((copy.host(), copy.port_u16()), (host, port), "{src}");
+        }
     }
 
     #[test]

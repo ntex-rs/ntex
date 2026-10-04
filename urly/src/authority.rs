@@ -1,6 +1,4 @@
-use std::fmt;
-
-use ntex_bytes::ByteString;
+use std::{borrow::Cow, fmt};
 
 use crate::chars::{self, USERINFO};
 use crate::error::{ErrorKind, InvalidUrl};
@@ -103,7 +101,7 @@ pub(crate) fn offset(outer: &str, inner: &str) -> usize {
 pub(crate) fn validate_authority(s: &str) -> Result<(), InvalidUrl> {
     let (userinfo, host, port) = split(s);
     if let Some(userinfo) = userinfo {
-        chars::check(userinfo, USERINFO)?;
+        chars::check(userinfo, &USERINFO)?;
     }
     validate_host(host).map_err(|e| e.offset(offset(s, host)))?;
     if let Some(port) = port {
@@ -134,7 +132,7 @@ str_eq!(UserInfo);
 impl UserInfo {
     /// Strictly validates a userinfo.
     pub fn new(src: &str) -> Result<&UserInfo, InvalidUrl> {
-        chars::check(src, USERINFO)?;
+        chars::check(src, &USERINFO)?;
         Ok(UserInfo::from_str_unchecked(src))
     }
 
@@ -149,14 +147,13 @@ impl UserInfo {
     }
 
     /// Returns the decoded user name.
-    pub fn decoded_username(&self) -> ByteString {
-        unquote(self.username(), Component::UserInfo).into()
+    pub fn decoded_username(&self) -> Cow<'_, str> {
+        unquote(self.username(), Component::UserInfo)
     }
 
     /// Returns the decoded password, if present.
-    pub fn decoded_password(&self) -> Option<ByteString> {
-        self.password()
-            .map(|p| unquote(p, Component::UserInfo).into())
+    pub fn decoded_password(&self) -> Option<Cow<'_, str>> {
+        self.password().map(|p| unquote(p, Component::UserInfo))
     }
 }
 

@@ -101,7 +101,7 @@ pub(crate) fn validate_host(s: &str) -> Result<(), InvalidUrl> {
     if let Some(inner) = s.strip_prefix('[') {
         return ipv6(inner).map(|_| ());
     }
-    chars::check(s, REG_NAME)?;
+    chars::check(s, &REG_NAME)?;
     check_ipv4(s)
 }
 
@@ -117,7 +117,7 @@ pub(crate) fn normalize_host(s: &str) -> Result<Cow<'_, str>, InvalidUrl> {
         });
     }
 
-    let decoded = unquote_with(s, false, NONE);
+    let decoded = unquote_with(s, false, &NONE);
     let host = if !decoded.is_ascii() {
         Cow::Owned(
             idna::domain_to_ascii(&decoded).ok_or(InvalidUrl::at(ErrorKind::InvalidHost, 0))?,
