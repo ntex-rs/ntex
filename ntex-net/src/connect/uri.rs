@@ -1,20 +1,4 @@
-use ntex_http::Uri;
-
 use super::Address;
-
-impl Address for Uri {
-    fn host(&self) -> &str {
-        self.host().unwrap_or("")
-    }
-
-    fn port(&self) -> Option<u16> {
-        if let Some(port) = self.port_u16() {
-            Some(port)
-        } else {
-            port(self.scheme_str())
-        }
-    }
-}
 
 impl Address for urly::Url {
     fn host(&self) -> &str {

@@ -131,7 +131,7 @@ mod tests {
             assert_eq!(addrs, vec![expected.parse().unwrap()], "{host}");
         }
 
-        let uri = ntex_http::Uri::from_static("http://[::1]:8080/");
+        let uri = urly::Url::from_static("http://[::1]:8080/");
         let res = lookup(Connect::new(uri), "").await.unwrap();
         let addrs: Vec<_> = res.addrs().collect();
         assert_eq!(addrs, vec!["[::1]:8080".parse().unwrap()]);
