@@ -6,17 +6,11 @@ use ntex_bytes::{ByteString, Bytes, BytesMut};
 use simdutf8::compat::{Utf8Error, from_utf8};
 
 use crate::authority::{self, Authority, Port, UserInfo};
-use crate::chars::lowercase;
 use crate::error::{ErrorKind, InvalidUrl};
-use crate::host::normalize_host;
-use crate::parse::{
-    self, MAX_LEN, has_dot_segments, join_authority, normalize_authority, normalize_path,
-    remove_dot_segments,
-};
 use crate::path::{Path, PathAndQuery};
 use crate::query::{self, Fragment, Query, split_pair};
 use crate::quoting::{Component, quote, requote, unquote};
-use crate::scheme::Scheme;
+use crate::{chars::lowercase, host::normalize_host, parse, scheme::Scheme};
 
 /// Normalized URL reference.
 ///
@@ -111,7 +105,7 @@ pub(crate) fn assemble(c: &Components<'_>, orig: Option<&ByteString>) -> Result<
         c.fragment.unwrap_or(""),
     ];
     let len: usize = pieces.iter().map(|p| p.len()).sum();
-    if len > MAX_LEN {
+    if len > parse::MAX_LEN {
         return Err(InvalidUrl::new(ErrorKind::TooLong));
     }
 
@@ -533,8 +527,8 @@ impl Url {
             }
             path.push_str(&quote(segment, Component::Path));
         }
-        if path.starts_with('/') && has_dot_segments(&path) {
-            path = remove_dot_segments(&path);
+        if path.starts_with('/') && parse::has_dot_segments(&path) {
+            path = parse::remove_dot_segments(&path);
         }
         self.with_path(&path)
     }
@@ -560,7 +554,7 @@ impl Url {
     pub fn join_url(&self, r: &Url) -> Url {
         let base = self.components();
         let r = r.components();
-        let resolved = |path| Cow::Owned(remove_dot_segments(path));
+        let resolved = |path| Cow::Owned(parse::remove_dot_segments(path));
         let (scheme, authority, path, query) = if r.scheme.is_some() {
             (r.scheme, r.authority, resolved(r.path), r.query)
         } else if r.authority.is_some() {
@@ -622,7 +616,7 @@ impl Url {
 
     /// Sets or removes the raw authority: `[userinfo "@"] host [":" port]`.
     pub fn set_authority(&mut self, authority: Option<&str>) -> Result<(), InvalidUrl> {
-        let authority = authority.map(normalize_authority).transpose()?;
+        let authority = authority.map(parse::normalize_authority).transpose()?;
         self.rebuild(|c| c.authority = authority.as_deref())
             .map(|url| *self = url)
     }
@@ -633,7 +627,7 @@ impl Url {
         host: &str,
         port: Option<u16>,
     ) -> Result<Url, InvalidUrl> {
-        let authority = join_authority(userinfo, host, port);
+        let authority = parse::join_authority(userinfo, host, port);
         self.rebuild(|c| c.authority = Some(&authority))
     }
 
@@ -737,7 +731,7 @@ impl Url {
         } else {
             path
         };
-        let path = normalize_path(path);
+        let path = parse::normalize_path(path);
         *self = self.derive(|c| c.path = &path);
     }
 

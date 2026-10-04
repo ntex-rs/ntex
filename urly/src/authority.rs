@@ -1,9 +1,8 @@
 use std::{borrow::Cow, fmt};
 
-use crate::chars::{self, USERINFO};
 use crate::error::{ErrorKind, InvalidUrl};
-use crate::host::validate_host;
 use crate::quoting::{Component, unquote};
+use crate::{chars, host::validate_host};
 
 /// URL authority: `[userinfo "@"] host [":" port]`.
 #[repr(transparent)]
@@ -101,7 +100,7 @@ pub(crate) fn offset(outer: &str, inner: &str) -> usize {
 pub(crate) fn validate_authority(s: &str) -> Result<(), InvalidUrl> {
     let (userinfo, host, port) = split(s);
     if let Some(userinfo) = userinfo {
-        chars::check(userinfo, &USERINFO)?;
+        chars::check(userinfo, &chars::USERINFO)?;
     }
     validate_host(host).map_err(|e| e.offset(offset(s, host)))?;
     if let Some(port) = port {
@@ -132,7 +131,7 @@ str_eq!(UserInfo);
 impl UserInfo {
     /// Strictly validates a userinfo.
     pub fn new(src: &str) -> Result<&UserInfo, InvalidUrl> {
-        chars::check(src, &USERINFO)?;
+        chars::check(src, &chars::USERINFO)?;
         Ok(UserInfo::from_str_unchecked(src))
     }
 

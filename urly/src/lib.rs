@@ -1,5 +1,5 @@
 //! URL manipulation library with an API inspired by Python's
-//! [yarl](https://yarl.aio-libs.org/) and [`http::Uri`](https://docs.rs/http/latest/http/uri/struct.Uri.html).
+//! [yarl](https://yarl.aio-libs.org/).
 //!
 //! [`Url`] is an immutable, cheaply cloneable, normalized URL reference stored
 //! in a single [`ByteString`](ntex_bytes::ByteString). Accessors return
