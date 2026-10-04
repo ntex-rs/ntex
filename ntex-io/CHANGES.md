@@ -1,6 +1,6 @@
 # Changes
 
-## [Unreleased]
+## [4.2.0] - 2026-10-04
 
 * `Io::take()` is unsafe, the filter and `IoRef` borrowed from the `Io` were freed with
   the returned `Io`

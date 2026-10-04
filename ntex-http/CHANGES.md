@@ -1,10 +1,10 @@
 # Changes
 
-## [2.0.0] - Unreleased
-
-* Remove `uri` module and `Uri` re-export
+## [2.0.0] - 2026-10-04
 
 * `HeaderValue::to_str()` accepts any valid UTF-8 value, validated with simdutf8
+
+* Remove `uri` module and `Uri` re-export
 
 ## [1.3.0] - 2026-10-01
 
