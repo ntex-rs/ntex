@@ -63,8 +63,8 @@ mod tests {
 
     use super::*;
     use crate::client::{ClientConfig, ConnectorPipeline};
-    use crate::http::Uri;
     use crate::service::{Pipeline, boxed, fn_service};
+    use urly::Url;
 
     fn pool(calls: &Rc<Cell<usize>>, cfg: &SharedCfg) -> ConnectionPool {
         let calls = calls.clone();
@@ -79,7 +79,7 @@ mod tests {
 
     fn connect(uri: &'static str) -> Connect {
         Connect {
-            uri: Uri::from_static(uri),
+            uri: Url::from_static(uri),
             addr: None,
         }
     }

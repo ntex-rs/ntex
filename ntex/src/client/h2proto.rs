@@ -1,4 +1,4 @@
-use std::{cell::Cell, fmt::Write, future::poll_fn, io, rc::Rc, task::Poll, time::Instant};
+use std::{cell::Cell, future::poll_fn, io, rc::Rc, task::Poll, time::Instant};
 
 use ntex_h2::client::{RecvStream, SimpleClient, StreamReservation};
 use ntex_h2::{self as h2, frame};
@@ -68,14 +68,10 @@ async fn send_request_inner(
 
     // send request
     let uri = &req.head.uri;
-    let path = uri.path_and_query().map_or_else(
-        || ByteString::from(uri.path()),
-        |p| {
-            let mut buf = BytesMut::new();
-            write!(&mut buf, "{p}").unwrap();
-            ByteString::try_from(buf).unwrap()
-        },
-    );
+    let path = match uri.path_and_query().as_str() {
+        "" => ByteString::from_static("/"),
+        path => ByteString::from(path),
+    };
     let method = req.head.method.clone();
     let res = if let Some(reservation) = client.reservation.take() {
         reservation.send(method, path, hdrs, eof)

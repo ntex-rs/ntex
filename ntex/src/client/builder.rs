@@ -1,6 +1,8 @@
+use urly::Url;
+
 use crate::connect::{self, Connect as TcpConnect, Connector as TcpConnector};
 use crate::service::{Identity, IntoService, Middleware, Pipeline, Service, Stack, apply_fn};
-use crate::{SharedCfg, error::Error, http::Uri, io::IoBoxed};
+use crate::{SharedCfg, error::Error, io::IoBoxed};
 
 use super::connector::Connector;
 use super::error::{ClientError, ConnectError};
@@ -102,9 +104,9 @@ impl<M> ClientBuilder<M> {
 
     #[must_use]
     /// Uses a custom connector for unsecured connections.
-    pub fn connector<T>(mut self, f: impl IntoService<T, SharedCfg, TcpConnect<Uri>>) -> Self
+    pub fn connector<T>(mut self, f: impl IntoService<T, SharedCfg, TcpConnect<Url>>) -> Self
     where
-        T: Service<SharedCfg, TcpConnect<Uri>, Error = Error<connect::ConnectError>> + 'static,
+        T: Service<SharedCfg, TcpConnect<Url>, Error = Error<connect::ConnectError>> + 'static,
         IoBoxed: From<T::Res>,
     {
         self.svc = ConnectorPipeline::new(
@@ -119,9 +121,9 @@ impl<M> ClientBuilder<M> {
 
     #[must_use]
     /// Uses a custom connector for secure connections.
-    pub fn secure_connector<T>(mut self, f: impl IntoService<T, SharedCfg, TcpConnect<Uri>>) -> Self
+    pub fn secure_connector<T>(mut self, f: impl IntoService<T, SharedCfg, TcpConnect<Url>>) -> Self
     where
-        T: Service<SharedCfg, TcpConnect<Uri>, Error = Error<connect::ConnectError>> + 'static,
+        T: Service<SharedCfg, TcpConnect<Url>, Error = Error<connect::ConnectError>> + 'static,
         IoBoxed: From<T::Res>,
     {
         self.secure_svc = Some(ConnectorPipeline::new(

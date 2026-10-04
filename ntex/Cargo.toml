@@ -104,7 +104,7 @@ encoding_rs = { workspace = true }
 mime = { workspace = true }
 serde_json = { workspace = true }
 serde_urlencoded = { workspace = true }
-urly = { workspace = true }
+urly = { workspace = true, features = ["http"] }
 coo-kie = { workspace = true, optional = true }
 
 # openssl

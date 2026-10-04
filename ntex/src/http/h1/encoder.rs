@@ -196,12 +196,8 @@ impl MessageType for RequestHead {
             dst.put_u8(b':');
             dst.put_slice(port.to_string().as_bytes());
         } else {
-            dst.put_slice(
-                self.uri
-                    .path_and_query()
-                    .map_or("/", |u| u.as_str())
-                    .as_bytes(),
-            );
+            let target = self.uri.path_and_query().as_str();
+            dst.put_slice(if target.is_empty() { "/" } else { target }.as_bytes());
         }
         dst.put_u8(b' ');
         dst.put_slice(
@@ -693,7 +689,7 @@ mod tests {
             "CONNECT example.com:80 HTTP/1.1"
         );
         assert_eq!(
-            encode(Method::CONNECT, "example.com:5000"),
+            encode(Method::CONNECT, "//example.com:5000"),
             "CONNECT example.com:5000 HTTP/1.1"
         );
         assert_eq!(
@@ -701,9 +697,10 @@ mod tests {
             "CONNECT [::1]:5000 HTTP/1.1"
         );
         assert_eq!(
-            encode(Method::GET, "http://example.com:8080/path?q=1"),
+            encode(Method::GET, "http://example.com:8080/path?q=1#f"),
             "GET /path?q=1 HTTP/1.1"
         );
+        assert_eq!(encode(Method::GET, "//example.com"), "GET / HTTP/1.1");
     }
 
     #[crate::rt_test]

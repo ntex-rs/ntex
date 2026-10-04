@@ -5,6 +5,7 @@ use std::{net, str::FromStr, sync::mpsc, thread, time};
 use coo_kie::{Cookie, CookieJar};
 
 use ntex_tls::TlsConfig;
+use urly::Url;
 use uuid::Uuid;
 
 use crate::channel::bstream;
@@ -22,7 +23,8 @@ use crate::ws::{WsClient, WsClientConfig, WsConnection, error::WsClientError};
 use crate::{rt::System, time::Millis, time::Seconds, util::Bytes};
 
 use super::header::{self, HeaderMap, HeaderName, HeaderValue};
-use super::{Method, Request, Uri, Version, error::HttpError, payload::Payload};
+
+use super::{Method, Request, Version, error::HttpError, payload::Payload};
 
 #[derive(Debug)]
 /// Test `Request` builder
@@ -55,7 +57,7 @@ pub struct TestRequest(Option<Inner>);
 struct Inner {
     version: Version,
     method: Method,
-    uri: Uri,
+    uri: Url,
     headers: HeaderMap,
     #[cfg(feature = "cookie")]
     cookies: CookieJar,
@@ -73,7 +75,7 @@ impl TestRequest {
     pub fn builder() -> TestRequest {
         TestRequest(Some(Inner {
             method: Method::GET,
-            uri: Uri::from_str("/").unwrap(),
+            uri: Url::default(),
             version: Version::HTTP_11,
             headers: HeaderMap::new(),
             #[cfg(feature = "cookie")]
@@ -113,7 +115,7 @@ impl TestRequest {
 
     /// Set HTTP Uri of this request.
     pub fn uri(&mut self, path: &str) -> &mut Self {
-        parts(&mut self.0).uri = Uri::from_str(path).unwrap();
+        parts(&mut self.0).uri = Url::from_str(path).unwrap();
         self
     }
 

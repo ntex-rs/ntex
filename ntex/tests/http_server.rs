@@ -68,7 +68,13 @@ async fn test_expect_continue() {
             .control(async move |req: Control<_, _>| {
                 sleep(Millis(20)).await;
                 let ack = if let Control::Expect(exc) = req {
-                    if exc.get_ref().head().uri.query() == Some("yes=") {
+                    if exc
+                        .get_ref()
+                        .head()
+                        .uri
+                        .query()
+                        .is_some_and(|q| q == "yes=")
+                    {
                         exc.ack()
                     } else {
                         exc.fail(error::InternalError::default(
@@ -583,7 +589,7 @@ async fn test_http1_handle_payload_errors() {
 async fn test_content_length() {
     let srv = test_server(async |_| {
         HttpService::h1(async |req: Request| {
-            let indx: usize = req.uri().path()[1..].parse().unwrap();
+            let indx: usize = req.uri().path().as_str()[1..].parse().unwrap();
             let statuses = [
                 StatusCode::NO_CONTENT,
                 StatusCode::CONTINUE,

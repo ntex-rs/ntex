@@ -1,6 +1,7 @@
 use std::{cell::Cell, cell::RefCell, future::poll_fn, io, mem, rc::Rc};
 
 use ntex_h2::{self as h2, control::ExpectResult, frame::StreamId, server};
+use urly::{Authority, Scheme, Url};
 
 use crate::error::{Error, IntoFailure};
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
@@ -8,7 +9,7 @@ use crate::http::config::DispatcherConfig;
 use crate::http::error::{DispatchError, H2Error, ResponseError};
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::message::{CurrentIo, ResponseHead};
-use crate::http::{DateService, Method, Request, Response, StatusCode, Uri, Version};
+use crate::http::{DateService, Method, Request, Response, StatusCode, Version};
 use crate::io::{Filter, Io, IoBoxed, IoRef, types};
 use crate::service::pipeline::{Pipeline, PipelineBinding, PipelineFactory};
 use crate::service::{Ctx, IntoServiceFactory, RequestState, Service, ServiceFactory};
@@ -578,25 +579,51 @@ const PROXY_CONNECTION: HeaderName = HeaderName::from_static("proxy-connection")
 
 /// Builds the request method and uri from the pseudo headers,
 /// returns `None` for a malformed request.
-fn request_uri(pseudo: &h2::frame::PseudoHeaders) -> Option<(Method, Uri)> {
+fn request_uri(pseudo: &h2::frame::PseudoHeaders) -> Option<(Method, Url)> {
     let method = pseudo.method.clone()?;
-    let uri = if method == Method::CONNECT
-        && pseudo.path.is_none()
-        && let Some(ref authority) = pseudo.authority
-    {
+    let authority = match pseudo.authority {
+        Some(ref authority) => Some(Authority::new(authority.as_str()).ok()?),
+        None => None,
+    };
+    let path = pseudo.path.as_ref().map(crate::util::ByteString::as_str);
+    // the same request-target bytes as http/1, `Url` parsing is lenient
+    if path.is_some_and(|p| p.bytes().any(|b| b <= b' ' || b == 0x7f)) {
+        return None;
+    }
+
+    let uri = match (authority, path) {
         // CONNECT request uses the authority form
-        Uri::try_from(authority.as_str()).ok()?
-    } else if let Some(ref authority) = pseudo.authority {
-        let path = pseudo.path.as_ref()?;
-        let scheme = pseudo.scheme.as_ref()?;
-        let mut uri = String::with_capacity(scheme.len() + 3 + authority.len() + path.len());
-        uri.push_str(scheme);
-        uri.push_str("://");
-        uri.push_str(authority);
-        uri.push_str(path);
-        Uri::try_from(uri).ok()?
-    } else {
-        Uri::try_from(pseudo.path.as_ref()?.as_str()).ok()?
+        (Some(authority), None) if method == Method::CONNECT => {
+            if authority.host().is_empty() || authority.userinfo().is_some() {
+                return None;
+            }
+            Url::try_from(format!("//{authority}")).ok()?
+        }
+        (_, Some("*")) if method == Method::OPTIONS => Url::from_static("*"),
+        (Some(authority), Some(path)) if path.starts_with('/') => {
+            let scheme = Scheme::new(pseudo.scheme.as_ref()?.as_str()).ok()?;
+            let mut uri = String::with_capacity(
+                scheme.as_str().len() + 3 + authority.as_str().len() + path.len(),
+            );
+            uri.push_str(scheme.as_str());
+            uri.push_str("://");
+            uri.push_str(authority.as_str());
+            uri.push_str(path);
+            Url::try_from(uri).ok()?
+        }
+        (None, Some(path)) if path.starts_with('/') => {
+            let uri = if path.starts_with("//") {
+                // origin-form path, not a network-path reference
+                Url::try_from(format!("/.{path}")).ok()?
+            } else {
+                Url::try_from(path).ok()?
+            };
+            if uri.authority().is_some() {
+                return None;
+            }
+            uri
+        }
+        _ => return None,
     };
     Some((method, uri))
 }
@@ -673,8 +700,32 @@ mod tests {
         let (_, uri) = request_uri(&pseudo).unwrap();
         assert_eq!(uri.to_string(), "https://example.com/path");
 
+        pseudo.scheme = Some("ht/tp".into());
+        assert!(request_uri(&pseudo).is_none());
+        pseudo.scheme = Some("https".into());
+        pseudo.authority = Some("example.com/x?".into());
+        assert!(request_uri(&pseudo).is_none());
+        pseudo.authority = Some("example.com".into());
+        pseudo.path = Some("x".into());
+        assert!(request_uri(&pseudo).is_none());
+
         pseudo.authority = None;
+        pseudo.path = Some("/path".into());
         let (_, uri) = request_uri(&pseudo).unwrap();
         assert_eq!(uri.path(), "/path");
+        pseudo.path = Some("//example.com/path".into());
+        let (_, uri) = request_uri(&pseudo).unwrap();
+        assert_eq!(uri.path(), "//example.com/path");
+        assert!(uri.authority().is_none());
+        pseudo.path = Some("/a b".into());
+        assert!(request_uri(&pseudo).is_none());
+        pseudo.path = Some("/a\x7f".into());
+        assert!(request_uri(&pseudo).is_none());
+
+        pseudo.path = Some("*".into());
+        assert!(request_uri(&pseudo).is_none());
+        pseudo.method = Some(Method::OPTIONS);
+        let (_, uri) = request_uri(&pseudo).unwrap();
+        assert_eq!(uri.path(), "*");
     }
 }

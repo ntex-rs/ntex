@@ -2,7 +2,7 @@
 use std::io;
 
 use crate::error::ErrorDiagnostic;
-use crate::http::error::{DecodeError, EncodeError, HttpError, ResponseError};
+use crate::http::error::{DecodeError, EncodeError, ResponseError};
 use crate::http::header::{ALLOW, HeaderValue, SEC_WEBSOCKET_VERSION};
 use crate::http::{Response, StatusCode};
 use crate::{connect::ConnectError, util::Either, util::clone_io_error};
@@ -96,11 +96,17 @@ pub enum WsConfigError {
     MissingHost,
     /// The URI could not be parsed.
     #[error("Url parse error: {0}")]
-    Http(
+    Parse(
         #[from]
         #[source]
-        HttpError,
+        urly::InvalidUrl,
     ),
+}
+
+impl From<std::convert::Infallible> for WsConfigError {
+    fn from(err: std::convert::Infallible) -> WsConfigError {
+        match err {}
+    }
 }
 
 /// Errors produced while establishing or using a WebSocket client connection.

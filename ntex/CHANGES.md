@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+* Use `urly::Url` instead of `http::Uri` for `RequestHead::uri`, `HttpRequest::uri()`,
+  the HTTP client and the WebSocket client. Client connectors use `Connect<Url>`
+
+* HTTP client and WebSocket client report an invalid url as `InvalidUrl::Parse` and
+  `WsConfigError::Parse`, replaces `InvalidUrl::Http` and `WsConfigError::Http`
+
+* http/1, http/2: Request-target is normalized, dot segments are removed and a fragment
+  is dropped. An origin-form path starting with `//` is a path, not an authority
+
 * http/1: Validate `Host` header with `urly`, out of range ports, invalid IPv4/IPv6
   addresses and IPv6 zone ids are rejected
 

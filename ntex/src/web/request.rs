@@ -1,7 +1,9 @@
 use std::{cell::Ref, cell::RefMut, fmt, net};
 
+use urly::Url;
+
 use crate::http::header;
-use crate::http::{HeaderMap, HttpMessage, Method, Payload, RequestHead, Response, Uri, Version};
+use crate::http::{HeaderMap, HttpMessage, Method, Payload, RequestHead, Response, Version};
 use crate::io::{IoRef, types};
 use crate::router::{Path, Resource};
 use crate::util::Extensions;
@@ -93,7 +95,7 @@ impl<St> WebRequest<St> {
 
     /// Request's uri.
     #[inline]
-    pub fn uri(&self) -> &Uri {
+    pub fn uri(&self) -> &Url {
         &self.head().uri
     }
 
@@ -123,7 +125,7 @@ impl<St> WebRequest<St> {
     /// The target path of this Request.
     #[inline]
     pub fn path(&self) -> &str {
-        self.head().uri.path()
+        self.head().uri.path().as_str()
     }
 
     /// The query string in the URL.
@@ -131,7 +133,7 @@ impl<St> WebRequest<St> {
     /// E.g., id=10
     #[inline]
     pub fn query_string(&self) -> &str {
-        self.uri().query().unwrap_or_default()
+        self.uri().query().map_or("", urly::Query::as_str)
     }
 
     /// Peer socket address
@@ -174,13 +176,13 @@ impl<St> WebRequest<St> {
     /// where the identifier can be used later in a request handler to
     /// access the matched value for that segment.
     #[inline]
-    pub fn match_info(&self) -> &Path<Uri> {
+    pub fn match_info(&self) -> &Path<Url> {
         self.req.match_info()
     }
 
     /// Get a mutable reference to the Path parameters.
     #[inline]
-    pub fn match_info_mut(&mut self) -> &mut Path<Uri> {
+    pub fn match_info_mut(&mut self) -> &mut Path<Url> {
         self.req.match_info_mut()
     }
 
@@ -269,12 +271,12 @@ impl<St> WebRequest<St> {
     }
 }
 
-impl<St> Resource<Uri> for WebRequest<St> {
+impl<St> Resource<Url> for WebRequest<St> {
     fn path(&self) -> &str {
         self.match_info().path()
     }
 
-    fn resource_path(&mut self) -> &mut Path<Uri> {
+    fn resource_path(&mut self) -> &mut Path<Url> {
         self.match_info_mut()
     }
 }

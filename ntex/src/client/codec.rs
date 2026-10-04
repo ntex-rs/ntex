@@ -332,7 +332,7 @@ mod tests {
         let connect = |codec: &ClientCodec| {
             let mut head = crate::http::Message::<RequestHead>::new();
             head.method = Method::CONNECT;
-            head.uri = crate::http::Uri::from_static("http://example.com:443");
+            head.uri = urly::Url::from_static("http://example.com:443");
             let req = ClientRawRequest {
                 head,
                 headers: None,
@@ -389,7 +389,7 @@ mod tests {
             let codec = ClientCodec::new(true, cfg.get());
             let mut head = crate::http::Message::<RequestHead>::new();
             head.method = method.clone();
-            head.uri = crate::http::Uri::from_static("/");
+            head.uri = urly::Url::from_static("/");
             let req = ClientRawRequest {
                 head,
                 headers: None,

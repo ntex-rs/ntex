@@ -196,7 +196,7 @@ async fn test_h2_content_length() {
         openssl(
             ssl_acceptor(),
             HttpService::h2(async move |req: Request| {
-                let indx: usize = req.uri().path()[1..].parse().unwrap();
+                let indx: usize = req.uri().path().as_str()[1..].parse().unwrap();
                 let statuses = [
                     StatusCode::NO_CONTENT,
                     // h2 lib does not accept hangs on this statuses
