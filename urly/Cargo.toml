@@ -1,0 +1,40 @@
+[package]
+name = "urly"
+version = "0.1.0"
+authors = ["ntex contributors <team@ntex.rs>"]
+description = "Yet another URL library"
+keywords = ["ntex", "url", "uri"]
+repository = "https://github.com/ntex-rs/ntex.git"
+documentation = "https://docs.rs/urly/"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+edition = "2024"
+rust-version = "1.88"
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lib]
+name = "urly"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+
+# conversions to and from `http::Uri`
+http = ["dep:http"]
+
+# serde support
+serde = ["dep:serde"]
+
+[dependencies]
+http = { workspace = true, optional = true }
+ntex-bytes = { workspace = true, features = ["simd"] }
+serde = { workspace = true, optional = true }
+simdutf8 = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

@@ -16,6 +16,7 @@ members = [
   "ntex-service",
   "ntex-tls",
   "ntex-util",
+  "urly",
 ]
 
 [workspace.lints.rust]
@@ -44,6 +45,7 @@ ntex-service = { path = "ntex-service" }
 ntex-tls = { path = "ntex-tls" }
 ntex-macros = { path = "ntex-macros" }
 ntex-util = { path = "ntex-util" }
+urly = { path = "urly" }
 
 [workspace.dependencies]
 ntex = "4.0.0-beta.15"
