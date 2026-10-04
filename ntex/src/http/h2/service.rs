@@ -12,7 +12,7 @@ use crate::http::{DateService, Method, Request, Response, StatusCode, Uri, Versi
 use crate::io::{Filter, Io, IoBoxed, IoRef, types};
 use crate::service::pipeline::{Pipeline, PipelineBinding, PipelineFactory};
 use crate::service::{Ctx, IntoServiceFactory, RequestState, Service, ServiceFactory};
-use crate::util::{Bytes, BytesMut, HashMap};
+use crate::util::{Bytes, HashMap};
 
 use super::{DefaultControlService, payload::Payload, payload::PayloadSender};
 
@@ -479,6 +479,12 @@ where
                 .send_response(head.status, hdrs, false)
                 .map_err(|_| None)?;
 
+            // the last chunk of a sized body ends the stream, no empty eof frame
+            let mut remaining = if let BodySize::Sized(len) = size {
+                Some(len)
+            } else {
+                None
+            };
             loop {
                 match poll_fn(|cx| body.poll_next_chunk(cx)).await {
                     None => {
@@ -502,7 +508,14 @@ where
                             chunk.len()
                         );
                         if !chunk.is_empty() {
-                            stream.send_payload(chunk, false).await.map_err(|_| None)?;
+                            let eof = remaining.as_mut().is_some_and(|rem| {
+                                *rem = rem.saturating_sub(chunk.len() as u64);
+                                *rem == 0
+                            });
+                            stream.send_payload(chunk, eof).await.map_err(|_| None)?;
+                            if eof {
+                                return Ok(());
+                            }
                         }
                     }
                     Some(Err(e)) => return Err(Some(e)),
@@ -576,7 +589,12 @@ fn request_uri(pseudo: &h2::frame::PseudoHeaders) -> Option<(Method, Uri)> {
     } else if let Some(ref authority) = pseudo.authority {
         let path = pseudo.path.as_ref()?;
         let scheme = pseudo.scheme.as_ref()?;
-        Uri::try_from(format!("{scheme}://{authority}{path}")).ok()?
+        let mut uri = String::with_capacity(scheme.len() + 3 + authority.len() + path.len());
+        uri.push_str(scheme);
+        uri.push_str("://");
+        uri.push_str(authority);
+        uri.push_str(path);
+        Uri::try_from(uri).ok()?
     } else {
         Uri::try_from(pseudo.path.as_ref()?.as_str()).ok()?
     };
@@ -605,12 +623,8 @@ fn prepare_response(head: &mut ResponseHead, size: &mut BodySize) {
             .headers
             .insert(header::CONTENT_LENGTH, ZERO_CONTENT_LENGTH),
         BodySize::Sized(len) => {
-            let mut buf = BytesMut::new();
-            crate::http::h1::encoder::convert_usize(*len, &mut buf, false);
-            head.headers.insert(
-                header::CONTENT_LENGTH,
-                HeaderValue::from_shared(buf.freeze()).unwrap(),
-            );
+            head.headers
+                .insert(header::CONTENT_LENGTH, HeaderValue::from(*len));
         }
     }
 
@@ -626,11 +640,8 @@ fn prepare_response(head: &mut ResponseHead, size: &mut BodySize) {
 
     // set date header
     if !head.headers.contains_key(header::DATE) {
-        let mut bytes = BytesMut::with_capacity(29);
-        DateService::set_date(|date| bytes.extend_from_slice(date));
-        head.headers.insert(header::DATE, unsafe {
-            HeaderValue::from_shared_unchecked(bytes.freeze())
-        });
+        head.headers
+            .insert(header::DATE, DateService::header_value());
     }
 }
 

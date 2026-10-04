@@ -1,9 +1,10 @@
 use std::{cell::Cell, cell::RefCell, rc::Rc, time};
 
+use crate::http::header::HeaderValue;
 use crate::io::{IoRef, cfg::FrameReadRate};
 use crate::service::cfg::{CfgContext, Configuration};
 use crate::time::{Millis, Seconds, sleep};
-use crate::{channel::oneshot, util::BytePages, util::BytesMut, util::HashSet};
+use crate::{channel::oneshot, util::BytePages, util::Bytes, util::BytesMut, util::HashSet};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 /// Server keep-alive behavior.
@@ -558,6 +559,7 @@ struct DateServiceInner {
     current: Cell<bool>,
     current_time: Cell<time::Instant>,
     current_date: Cell<[u8; DATE_VALUE_LENGTH_HDR]>,
+    current_value: RefCell<Option<HeaderValue>>,
 }
 
 impl DateServiceInner {
@@ -566,6 +568,7 @@ impl DateServiceInner {
             current: Cell::new(false),
             current_time: Cell::new(time::Instant::now()),
             current_date: Cell::new(DATE_VALUE_DEFAULT),
+            current_value: RefCell::new(None),
         }
     }
 
@@ -577,6 +580,7 @@ impl DateServiceInner {
         let dt = httpdate::HttpDate::from(time::SystemTime::now()).to_string();
         bytes[6..35].copy_from_slice(dt.as_ref());
         self.current_date.set(bytes);
+        *self.current_value.borrow_mut() = None;
     }
 }
 
@@ -597,12 +601,21 @@ impl DateService {
         });
     }
 
-    pub(super) fn set_date<F: FnMut(&[u8])>(mut f: F) {
+    /// Returns the current date as a `Date` header value.
+    ///
+    /// The value is shared until the next date update.
+    pub(super) fn header_value() -> HeaderValue {
         DateService::check_date();
         DATE.with(|date| {
-            let date = date.current_date.get();
-            f(&date[6..35]);
-        });
+            date.current_value
+                .borrow_mut()
+                .get_or_insert_with(|| {
+                    let bytes = Bytes::copy_from_slice(&date.current_date.get()[6..35]);
+                    // SAFETY: the formatted date is visible ASCII
+                    unsafe { HeaderValue::from_shared_unchecked(bytes) }
+                })
+                .clone()
+        })
     }
 
     #[doc(hidden)]
@@ -647,6 +660,14 @@ mod tests {
         let mut buf2 = BytesMut::with_capacity(DATE_VALUE_LENGTH_HDR);
         DateService.bset_date_header(&mut buf2);
         assert_eq!(buf1, buf2);
+
+        // the header value is the cached date
+        let value = DateService::header_value();
+        assert_eq!(value.as_bytes(), &buf1[6..35]);
+        assert_eq!(DateService::header_value(), value);
+        DATE.with(DateServiceInner::update);
+        assert!(DATE.with(|date| date.current_value.borrow().is_none()));
+        assert_eq!(DateService::header_value().len(), 29);
     }
 
     #[test]

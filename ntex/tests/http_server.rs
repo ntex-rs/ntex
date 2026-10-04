@@ -1261,7 +1261,7 @@ async fn test_h2_response_body_error_resets_stream() {
     assert_eq!(pseudo.status, Some(StatusCode::OK));
     let msg = rcv1.recv().await.unwrap();
     assert!(
-        matches!(msg.kind, MessageKind::Data(ref d, _) if d == "ok"),
+        matches!(msg.kind, MessageKind::Eof(StreamEof::Data(ref d, _)) if d == "ok"),
         "{msg:?}"
     );
     assert!(!client.is_closed());
@@ -1307,6 +1307,69 @@ async fn test_h2_not_modified_has_no_body() {
         assert!(
             !headers.contains_key(header::CONTENT_LENGTH),
             "{path}: {headers:?}"
+        );
+    }
+}
+
+/// A sized body ends the stream with its last data frame, a streaming body with an empty one.
+#[ntex::test]
+async fn test_h2_response_body_end_stream() {
+    use ntex::http::{HeaderMap, uri::Scheme};
+    use ntex_h2::{MessageKind, StreamEof, client::SimpleClient};
+
+    fn chunks<E>() -> futures_util::stream::Iter<std::array::IntoIter<Result<Bytes, E>, 2>> {
+        futures_util::stream::iter([
+            Ok(Bytes::from_static(b"abc")),
+            Ok(Bytes::from_static(b"def")),
+        ])
+    }
+
+    let srv = test_server(async |_| {
+        HttpService::h2(async |req: Request| {
+            Ok::<_, io::Error>(if req.path() == "/sized" {
+                Response::Ok().body(body::SizedStream::new(6, chunks()))
+            } else {
+                Response::Ok().streaming(chunks::<io::Error>())
+            })
+        })
+    });
+
+    let io = ntex::connect::connect(srv.addr()).await.unwrap();
+    let client = SimpleClient::new(io, Scheme::HTTP, "localhost".into());
+    for (path, last) in [("/sized", "def"), ("/stream", "")] {
+        let (_snd, rcv) = client
+            .send(Method::GET, path.into(), HeaderMap::default(), true)
+            .await
+            .unwrap();
+        let msg = rcv.recv().await.unwrap();
+        let MessageKind::Headers {
+            pseudo, headers, ..
+        } = msg.kind
+        else {
+            panic!("unexpected message: {msg:?}")
+        };
+        assert_eq!(pseudo.status, Some(StatusCode::OK), "{path}");
+        assert!(headers.contains_key(header::DATE), "{path}: {headers:?}");
+        if path == "/sized" {
+            assert_eq!(headers.get(header::CONTENT_LENGTH).unwrap(), "6");
+        }
+
+        let msg = rcv.recv().await.unwrap();
+        assert!(
+            matches!(msg.kind, MessageKind::Data(ref d, _) if d == "abc"),
+            "{path}: {msg:?}"
+        );
+        if path == "/stream" {
+            let msg = rcv.recv().await.unwrap();
+            assert!(
+                matches!(msg.kind, MessageKind::Data(ref d, _) if d == "def"),
+                "{path}: {msg:?}"
+            );
+        }
+        let msg = rcv.recv().await.unwrap();
+        assert!(
+            matches!(msg.kind, MessageKind::Eof(StreamEof::Data(ref d, _)) if d == last),
+            "{path}: {msg:?}"
         );
     }
 }
@@ -1516,7 +1579,7 @@ async fn test_h2_empty_data_frames_limit() {
 async fn test_h2_expect_continue() {
     use ntex::http::{HeaderMap, h2, uri::Scheme};
     use ntex::util::{BytesMut, stream_recv};
-    use ntex_h2::{MessageKind, client::SimpleClient};
+    use ntex_h2::{MessageKind, StreamEof, client::SimpleClient};
 
     let srv = test_server(async |_| {
         HttpService::h2(async |mut req: Request| {
@@ -1564,13 +1627,12 @@ async fn test_h2_expect_continue() {
         panic!("unexpected message: {msg:?}")
     };
     assert_eq!(pseudo.status, Some(StatusCode::OK));
+    // the sized body ends the stream with its last data frame
     let msg = rcv.recv().await.unwrap();
     assert!(
-        matches!(msg.kind, MessageKind::Data(ref d, _) if d == "body"),
+        matches!(msg.kind, MessageKind::Eof(StreamEof::Data(ref d, _)) if d == "body"),
         "{msg:?}"
     );
-    let msg = rcv.recv().await.unwrap();
-    assert!(matches!(msg.kind, MessageKind::Eof(_)), "{msg:?}");
 
     // the expectation is rejected, the final response is sent without `100 Continue`
     let (_snd, rcv) = client
