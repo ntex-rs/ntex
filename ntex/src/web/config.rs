@@ -1,5 +1,7 @@
 use std::{any::Any, any::TypeId, cell::UnsafeCell, net::SocketAddr, rc::Rc};
 
+use urly::Url;
+
 use crate::service::cfg::{CfgContext, Configuration};
 use crate::{router::ResourceDef, util::ByteString, util::HashMap};
 
@@ -153,8 +155,10 @@ pub(crate) fn put_request(id: usize, pool_size: usize, req: &mut Rc<HttpRequestI
             if cache.len() < pool_size
                 && let Some(inner) = Rc::get_mut(req)
             {
-                inner.head.remove_io();
-                inner.head.extensions.borrow_mut().clear();
+                // the head and the path may share the connection read buffer,
+                // a pooled request must not keep it alive
+                inner.head.clear();
+                inner.path.set(Url::new());
                 cache.push(req.clone());
             }
         });
