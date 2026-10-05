@@ -3,7 +3,7 @@ use std::{fmt, io, task::Context, task::Poll};
 use ntex_bytes::{BytePages, BytesMut};
 use ntex_util::time::{Seconds, sleep};
 
-use crate::{Flags, Id, IoRef, IoTaskStatus, Readiness, io::IoState};
+use crate::{Flags, Id, IoRef, IoTaskStatus, Readiness, filter::read_readiness, io::IoState};
 
 /// Connection context shared with transport read and write tasks.
 ///
@@ -90,16 +90,40 @@ impl IoContext {
     /// filter shutdown phase so that filters can complete theirs, and are
     /// paused for the transport shutdown phase, so `Close` is resolved here
     /// only once the connection is terminated.
+    ///
+    /// A filter that is not ready while the io state allows reads pauses
+    /// them, see [`IoRef::is_read_filter_paused`]. The dispatcher is notified
+    /// when the pause starts and when it ends.
     pub fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
-        if self.st().flags.is_force_closing() {
+        let st = self.st();
+        if st.flags.is_force_closing() {
             // The filter chain is replaced by `NullFilter` when `Io` is
             // dropped, so the force-close decision is made here rather than in
             // the chain: it has to survive that replacement.
             return Poll::Ready(Readiness::Terminate);
         }
         self.poll_filters_shutdown(cx);
-        let _borrow = self.st().buffer.borrow();
-        self.0.filter().poll_read_ready(cx)
+        let res = {
+            let _borrow = st.buffer.borrow();
+            self.0.filter().poll_read_ready(cx)
+        };
+
+        if res.is_pending() {
+            // A pause the io state accounts for is known to the dispatcher. A
+            // filter pause is kept until the chain is ready again.
+            if !st.flags.is_read_filter_paused()
+                && read_readiness(st) == Poll::Ready(Readiness::Ready)
+            {
+                log::trace!("{}: Filter is not ready, pause reading", st.tag());
+                st.flags.set_read_filter_paused();
+                st.wake_dispatch_task();
+            }
+        } else if st.flags.is_read_filter_paused() {
+            log::trace!("{}: Filter is ready, resume reading", st.tag());
+            st.flags.unset_read_filter_paused();
+            st.wake_dispatch_task();
+        }
+        res
     }
 
     #[inline]
@@ -360,6 +384,7 @@ impl IoContext {
             IoTaskStatus::Stop
         } else if st.flags.is_read_eof()
             || st.flags.is_read_paused_or_backpressure()
+            || st.flags.is_read_filter_paused()
             || (st.flags.is_read_wr_backpressure() && !st.flags.is_stopping_filters())
         {
             IoTaskStatus::Pause

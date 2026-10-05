@@ -1,5 +1,11 @@
 # Changes
 
+## [4.2.1] - 2026-10-05
+
+* Add `IoRef::is_read_filter_paused()`, transport reads stay paused while the filter chain is
+  not ready for them although the io state allows reads, the dispatcher is notified when the
+  pause starts and ends
+
 ## [4.2.0] - 2026-10-04
 
 * `Io::take()` is unsafe, the filter and `IoRef` borrowed from the `Io` were freed with

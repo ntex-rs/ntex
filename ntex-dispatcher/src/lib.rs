@@ -573,6 +573,15 @@ where
             decoded.consumed as u32,
         );
 
+        // the filter chain pauses reading, the peer is not charged for it
+        if !item && self.shared.io.is_read_filter_paused() {
+            if self.timers.active != Timer::Write {
+                self.stop_timer();
+            }
+            self.timers.reset_read(self.shared.io.cfg());
+            return;
+        }
+
         // keep-alive and frame read timers do not apply while a frame is handled
         let handling = item || self.shared.inflight.get() != 0;
         let timer = self
@@ -2907,5 +2916,169 @@ mod tests {
         assert!(client.is_closed());
         assert!(start.elapsed() < std::time::Duration::from_millis(3500));
         assert_eq!(&data.lock().unwrap().borrow()[..], &[1]);
+    }
+
+    /// Gate control, a blocked filter chain is not ready for reads.
+    #[derive(Clone, Default)]
+    struct GateCtl(Rc<(Cell<bool>, RefCell<Option<std::task::Waker>>)>);
+
+    impl GateCtl {
+        fn block(&self) {
+            self.0.0.set(true);
+        }
+
+        fn unblock(&self) {
+            self.0.0.set(false);
+            if let Some(waker) = self.0.1.borrow_mut().take() {
+                waker.wake();
+            }
+        }
+    }
+
+    struct GateFilter<F>(F, GateCtl);
+
+    impl<F: ntex_io::Filter> ntex_io::Filter for GateFilter<F> {
+        fn query(&self, id: std::any::TypeId) -> Option<Box<dyn std::any::Any>> {
+            self.0.query(id)
+        }
+
+        fn process_read_buf(&self, ctx: &mut ntex_io::FilterCtx<'_>) -> io::Result<()> {
+            self.0.process_read_buf(ctx)
+        }
+
+        fn process_write_buf(&self, ctx: &mut ntex_io::FilterCtx<'_>) -> io::Result<()> {
+            self.0.process_write_buf(ctx)
+        }
+
+        fn shutdown(&self, ctx: &mut ntex_io::FilterCtx<'_>) -> io::Result<Poll<()>> {
+            self.0.shutdown(ctx)
+        }
+
+        fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ntex_io::Readiness> {
+            match self.0.poll_read_ready(cx) {
+                Poll::Ready(ntex_io::Readiness::Ready) if self.1.0.0.get() => {
+                    *self.1.0.1.borrow_mut() = Some(cx.waker().clone());
+                    Poll::Pending
+                }
+                res => res,
+            }
+        }
+
+        fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<ntex_io::Readiness> {
+            self.0.poll_write_ready(cx)
+        }
+    }
+
+    /// Echo dispatcher over a gated filter chain, records items as `0` and
+    /// stop reasons as `1`.
+    fn gated_dispatcher(
+        server: IoTest,
+        cfg: IoConfig,
+        data: Rc<RefCell<Vec<u8>>>,
+    ) -> (GateCtl, IoRef) {
+        let gate = GateCtl::default();
+        let g = gate.clone();
+        let io =
+            Io::new(server, SharedCfg::new("TEST").add(cfg)).map_filter(move |f| GateFilter(f, g));
+        let ioref = io.get_ref();
+
+        let disp = Dispatcher::new(
+            io,
+            BCodec(8),
+            Pipeline::new(
+                (),
+                ntex_service::fn_service(move |msg: DispatchItem<BCodec>| {
+                    let data = data.clone();
+                    async move {
+                        match msg {
+                            DispatchItem::Item(bytes) => {
+                                data.borrow_mut().push(0);
+                                return Ok::<_, ()>(Some(bytes));
+                            }
+                            DispatchItem::Stop(Reason::ReadTimeout | Reason::KeepAlive) => {
+                                data.borrow_mut().push(1);
+                            }
+                            _ => (),
+                        }
+                        Ok(None)
+                    }
+                }),
+            ),
+        );
+        spawn(async move {
+            let _ = disp.await;
+        });
+        (gate, ioref)
+    }
+
+    #[ntex::test]
+    async fn filter_pause_suspends_read_timeout() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let data = Rc::new(RefCell::new(Vec::new()));
+        let (gate, io) = gated_dispatcher(
+            server,
+            IoConfig::new()
+                .set_keepalive_timeout(Seconds::ZERO)
+                .set_frame_read_rate(Seconds(1), Seconds(2), 2),
+            data.clone(),
+        );
+
+        // a partial frame arms the frame read timer
+        client.write("1234");
+        sleep(Millis(100)).await;
+
+        // the peer sends the rest of the frame while the filter is not ready
+        gate.block();
+        client.write("5678");
+        sleep(Millis(100)).await;
+        assert!(io.is_read_filter_paused());
+
+        // the frame read timer does not run during the pause
+        sleep(Millis(3000)).await;
+        assert!(io.is_active());
+        assert!(data.borrow().is_empty());
+
+        gate.unblock();
+        let buf = client.read().await.unwrap();
+        assert_eq!(buf, Bytes::from_static(b"12345678"));
+        assert!(!io.is_read_filter_paused());
+        assert_eq!(&data.borrow()[..], &[0]);
+    }
+
+    #[ntex::test]
+    async fn filter_pause_suspends_keepalive() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let data = Rc::new(RefCell::new(Vec::new()));
+        let (gate, io) = gated_dispatcher(
+            server,
+            IoConfig::new()
+                .set_shutdown_timeout(Seconds(1))
+                .set_keepalive_timeout(Seconds(1)),
+            data.clone(),
+        );
+
+        // the peer sends a frame while the filter is not ready
+        sleep(Millis(100)).await;
+        gate.block();
+        client.write("12345678");
+        sleep(Millis(100)).await;
+        assert!(io.is_read_filter_paused());
+
+        // keep-alive does not run during the pause
+        sleep(Millis(2000)).await;
+        assert!(io.is_active());
+        assert!(data.borrow().is_empty());
+
+        gate.unblock();
+        let buf = client.read().await.unwrap();
+        assert_eq!(buf, Bytes::from_static(b"12345678"));
+
+        // keep-alive is armed again once reads resume
+        sleep(Millis(2000)).await;
+        assert!(!io.is_active());
+        assert!(client.is_closed());
+        assert_eq!(&data.borrow()[..], &[0, 1]);
     }
 }
