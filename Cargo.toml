@@ -47,10 +47,8 @@ ntex-macros = { path = "ntex-macros" }
 ntex-util = { path = "ntex-util" }
 urly = { path = "urly" }
 
-ntex-h2 = { git = "https://github.com/ntex-rs/ntex-h2.git", branch = "client-api" }
-
 [workspace.dependencies]
-ntex = "4.0.0-beta.15"
+ntex = "4.0.0-beta.16"
 ntex-bytes = "1.10.0"
 ntex-codec = "2.0.0"
 ntex-dispatcher = "4.2.0"
