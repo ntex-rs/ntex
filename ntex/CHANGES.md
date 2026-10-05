@@ -1,6 +1,6 @@
 # Changes
 
-## [Unreleased]
+## [4.0.0-beta.16] - 2026-10-05
 
 * http/2: Pooled request header maps are handed back to the h2 decoder, one allocation less
   per request
