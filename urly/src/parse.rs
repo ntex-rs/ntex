@@ -43,6 +43,40 @@ fn split(s: &str) -> Components<'_> {
 ///
 /// `orig` is the buffer `src` came from; it is reused if no normalization is needed.
 pub(crate) fn parse(src: &str, orig: Option<&ByteString>) -> Result<Url, InvalidUrl> {
+    let (cleaned, lead) = clean(src)?;
+    parse_clean(&cleaned, orig).map_err(|e| e.offset(lead))
+}
+
+/// Parses and normalizes an authority-form `[userinfo@]host[:port]`.
+pub(crate) fn parse_authority(src: &str) -> Result<Url, InvalidUrl> {
+    let (cleaned, lead) = clean(src)?;
+    parse_authority_clean(&cleaned).map_err(|e| e.offset(lead))
+}
+
+fn parse_authority_clean(s: &str) -> Result<Url, InvalidUrl> {
+    if let Some(i) = s.find(['/', '?', '#']) {
+        return Err(InvalidUrl::at(
+            ErrorKind::InvalidChar(char::from(s.as_bytes()[i])),
+            i,
+        ));
+    }
+    let host = authority::split(s).1;
+    if host.is_empty() {
+        return Err(InvalidUrl::at(ErrorKind::InvalidHost, offset(s, host)));
+    }
+    let authority = normalize_authority(s)?;
+    assemble(
+        &Components {
+            authority: Some(&authority),
+            ..Components::default()
+        },
+        None,
+    )
+}
+
+/// Trims whitespace and removes tabs and newlines, returns the cleaned input
+/// and the number of leading bytes removed.
+fn clean(src: &str) -> Result<(Cow<'_, str>, usize), InvalidUrl> {
     let trimmed = src.trim_start_matches(|c: char| c <= ' ');
     let lead = src.len() - trimmed.len();
     let trimmed = trimmed.trim_end_matches(|c: char| c <= ' ');
@@ -60,7 +94,7 @@ pub(crate) fn parse(src: &str, orig: Option<&ByteString>) -> Result<Url, Invalid
     } else {
         Cow::Borrowed(trimmed)
     };
-    parse_clean(&cleaned, orig).map_err(|e| e.offset(lead))
+    Ok((cleaned, lead))
 }
 
 fn parse_clean(s: &str, orig: Option<&ByteString>) -> Result<Url, InvalidUrl> {
@@ -292,6 +326,32 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::PortOutOfRange);
         let err = normalize_authority("u@:80").unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidHost);
+    }
+
+    #[test]
+    fn authority_form() {
+        for (src, expected) in [
+            ("custom.domain", "//custom.domain"),
+            (" Custom.Domain:080 ", "//custom.domain:80"),
+            ("u:p@h:1", "//u:p@h:1"),
+            ("[::1]:8080", "//[::1]:8080"),
+            ("h:", "//h"),
+        ] {
+            assert_eq!(parse_authority(src).unwrap(), expected, "{src}");
+        }
+        let cases = [
+            ("", ErrorKind::Empty, None),
+            ("h/p", ErrorKind::InvalidChar('/'), Some(1)),
+            (" h?q", ErrorKind::InvalidChar('?'), Some(2)),
+            ("h#f", ErrorKind::InvalidChar('#'), Some(1)),
+            (":", ErrorKind::InvalidHost, Some(0)),
+            ("u@:80", ErrorKind::InvalidHost, Some(2)),
+            ("h:8a", ErrorKind::InvalidPort, Some(3)),
+        ];
+        for (input, kind, pos) in cases {
+            let err = parse_authority(input).unwrap_err();
+            assert_eq!((err.kind(), err.position()), (kind, pos), "{input}");
+        }
     }
 
     #[test]

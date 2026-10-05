@@ -74,7 +74,7 @@ value.
 ```rust
 use urly::Url;
 
-let url = Url::parse("http://h/a b/%7euser/100%/x%2fy/€?q=a b&r=%41%3d").unwrap();
+let url = Url::parse_ref("http://h/a b/%7euser/100%/x%2fy/€?q=a b&r=%41%3d").unwrap();
 assert_eq!(url, "http://h/a%20b/~user/100%25/x%2Fy/%E2%82%AC?q=a+b&r=A%3D");
 assert_eq!(url.path().decode(), "/a b/~user/100%/x/y/€");
 assert_eq!(url.query().unwrap().get("q").unwrap(), "a b");

@@ -207,10 +207,33 @@ impl Url {
         }
     }
 
+    /// Parses and normalizes an authority-form `[userinfo@]host[:port]`, like
+    /// `http::Uri` does for a string without a scheme or a leading `/`.
+    ///
+    /// The result is a network-path reference without a path. Use
+    /// [`Url::parse_ref`] to parse any URL reference, it treats such a string
+    /// as a relative path.
+    ///
+    /// ```
+    /// use urly::Url;
+    ///
+    /// let url = Url::parse("Custom.Domain:8080").unwrap();
+    /// assert_eq!(url, "//custom.domain:8080");
+    /// assert_eq!(url.host(), Some("custom.domain"));
+    /// assert_eq!(url.port_u16(), Some(8080));
+    /// assert_eq!(url.path(), "");
+    ///
+    /// assert!(Url::parse("custom.domain/path").is_err());
+    /// assert_eq!(Url::parse_ref("custom.domain").unwrap().host(), None);
+    /// ```
+    pub fn parse<T: AsRef<str>>(src: T) -> Result<Url, InvalidUrl> {
+        parse::parse_authority(src.as_ref())
+    }
+
     /// Parses and normalizes a URL reference.
     ///
-    /// The input buffer is reused if it is already normalized.
-    pub fn parse<T: AsRef<str>>(src: T) -> Result<Url, InvalidUrl> {
+    /// Same as `Url::try_from()` and `str::parse()`.
+    pub fn parse_ref<T: AsRef<str>>(src: T) -> Result<Url, InvalidUrl> {
         parse::parse(src.as_ref(), None)
     }
 
@@ -562,7 +585,7 @@ impl Url {
         if reference.trim_matches(|c: char| c <= ' ').is_empty() {
             return self.rebuild(|c| c.fragment = None);
         }
-        Ok(self.join_url(&Url::parse(reference)?))
+        Ok(self.join_url(&Url::parse_ref(reference)?))
     }
 
     /// Resolves a parsed reference against this URL, RFC 3986 section 5.2.2.
@@ -1069,6 +1092,11 @@ mod http_impls {
         type Error = InvalidUrl;
 
         fn try_from(uri: &Uri) -> Result<Url, InvalidUrl> {
+            if uri.scheme().is_none()
+                && let Some(authority) = uri.authority()
+            {
+                return Url::parse(authority.as_str());
+            }
             let uri = uri.to_string();
             // an origin-form path starting with `//` is not an authority
             if uri.starts_with("//") {
@@ -1087,16 +1115,19 @@ mod http_impls {
         }
     }
 
-    /// The fragment is removed, `Uri` doesn't support it.
+    /// The fragment is removed, `Uri` doesn't support it. A network-path
+    /// reference converts to authority-form, it fails if it has a path or
+    /// query.
     impl TryFrom<&Url> for Uri {
         type Error = InvalidUri;
 
         fn try_from(url: &Url) -> Result<Uri, InvalidUri> {
-            // `Uri` parses a relative reference as origin-form, without the `/.` prefix
-            let start = if url.scheme_end == 0 && url.auth_start == 0 {
-                url.path_start
-            } else {
-                0
+            // `Uri` parses a relative reference as origin-form, without the `/.`
+            // prefix, and a reference without scheme and `//` as authority-form
+            let start = match (url.scheme_end, url.auth_start) {
+                (0, 0) => url.path_start,
+                (0, auth_start) => auth_start,
+                _ => 0,
             };
             Uri::try_from(url.range(start, url.query_end))
         }
