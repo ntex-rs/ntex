@@ -142,7 +142,7 @@ where
     let _ = server::handle_one(
         io,
         Pipeline::new((), PublishService::new(id, ioref, svc, control.bind())),
-        control.bind(),
+        control,
     )
     .await;
 

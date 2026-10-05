@@ -3,7 +3,7 @@
 Learn how ntex services fit together, run servers, manage state and I/O, and
 build web applications.
 
-- [Component and Service Model](./1-service.md)
+- [Service Model](./1-service.md)
 - [Service Pipelines](./2-pipeline.md)
 - [Service State](./3-state.md)
 - [Runtime](./4-runtime.md)
