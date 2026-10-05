@@ -1,6 +1,6 @@
 # Changes
 
-## [1.0.1] - Unreleased
+## [1.0.1] - 2026-10-05
 
 * Add `const fn Url::new()`, same as `Url::default()`
 

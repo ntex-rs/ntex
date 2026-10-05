@@ -321,22 +321,45 @@ impl<R> Future for CallFuture<'_, R> {
     }
 }
 
-/// Keeps memory of the last completed call future.
-#[derive(Default)]
-pub(crate) struct CallCache(cell::Cell<Option<(NonNull<u8>, Layout)>>);
+/// Max number of call future blocks kept by a [`CallCache`].
+const CALL_CACHE_MAX_BLOCKS: usize = 64;
+
+/// Max total size of call future blocks kept by a [`CallCache`].
+const CALL_CACHE_MAX_BYTES: usize = 256 * 1024;
+
+/// Keeps memory of completed call futures.
+///
+/// Free blocks form a LIFO list, each block stores a pointer to the next one.
+/// All blocks share the same layout.
+pub(crate) struct CallCache {
+    head: cell::Cell<Option<NonNull<u8>>>,
+    layout: cell::Cell<Layout>,
+    len: cell::Cell<usize>,
+}
+
+impl Default for CallCache {
+    fn default() -> Self {
+        Self {
+            head: cell::Cell::new(None),
+            layout: cell::Cell::new(Layout::new::<()>()),
+            len: cell::Cell::new(0),
+        }
+    }
+}
 
 impl CallCache {
     fn alloc(&self, layout: Layout) -> NonNull<u8> {
-        match self.0.take() {
-            Some((ptr, l)) if l == layout => ptr,
-            cached => {
-                if let Some((ptr, l)) = cached {
-                    // SAFETY: `ptr` was allocated with layout `l`
-                    unsafe { dealloc(ptr.as_ptr(), l) };
-                }
-                // SAFETY: `layout` has non-zero size
-                NonNull::new(unsafe { alloc(layout) }).unwrap_or_else(|| handle_alloc_error(layout))
-            }
+        if layout == self.layout.get()
+            && let Some(ptr) = self.head.get()
+        {
+            // SAFETY: cached blocks start with a pointer to the next free block
+            let next = unsafe { ptr.cast::<Option<NonNull<u8>>>().as_ptr().read_unaligned() };
+            self.head.set(next);
+            self.len.set(self.len.get() - 1);
+            ptr
+        } else {
+            // SAFETY: `layout` has non-zero size
+            NonNull::new(unsafe { alloc(layout) }).unwrap_or_else(|| handle_alloc_error(layout))
         }
     }
 
@@ -344,26 +367,58 @@ impl CallCache {
     ///
     /// `ptr` must be allocated with `layout` by the global allocator and must not be used afterwards
     unsafe fn release(&self, ptr: NonNull<u8>, layout: Layout) {
-        if let Some((ptr, l)) = self.0.replace(Some((ptr, layout))) {
-            // SAFETY: `ptr` was allocated with layout `l`
-            unsafe { dealloc(ptr.as_ptr(), l) };
+        if layout != self.layout.get() {
+            self.clear();
+            self.layout.set(layout);
         }
+
+        let len = self.len.get();
+        if layout.size() >= size_of::<Option<NonNull<u8>>>()
+            && len < CALL_CACHE_MAX_BLOCKS
+            && (len + 1) * layout.size() <= CALL_CACHE_MAX_BYTES
+        {
+            // SAFETY: the block is not used anymore and is large enough for a pointer
+            unsafe {
+                ptr.cast::<Option<NonNull<u8>>>()
+                    .as_ptr()
+                    .write_unaligned(self.head.get());
+            }
+            self.head.set(Some(ptr));
+            self.len.set(len + 1);
+        } else {
+            // SAFETY: `ptr` was allocated with `layout`
+            unsafe { dealloc(ptr.as_ptr(), layout) };
+        }
+    }
+
+    fn clear(&self) {
+        let layout = self.layout.get();
+        while let Some(ptr) = self.head.get() {
+            // SAFETY: cached blocks start with a pointer to the next free block
+            // and were allocated with `layout`
+            unsafe {
+                self.head
+                    .set(ptr.cast::<Option<NonNull<u8>>>().as_ptr().read_unaligned());
+                dealloc(ptr.as_ptr(), layout);
+            }
+        }
+        self.len.set(0);
     }
 
     #[cfg(test)]
     fn cached(&self) -> Option<NonNull<u8>> {
-        let item = self.0.take();
-        self.0.set(item);
-        item.map(|(ptr, _)| ptr)
+        self.head.get()
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.len.get()
     }
 }
 
 impl Drop for CallCache {
     fn drop(&mut self) {
-        if let Some((ptr, l)) = self.0.take() {
-            // SAFETY: `ptr` was allocated with layout `l`
-            unsafe { dealloc(ptr.as_ptr(), l) };
-        }
+        self.clear();
     }
 }
 
@@ -481,9 +536,63 @@ mod tests {
         assert_eq!(pl.calls.cached(), Some(b1));
         drop(fut2);
         assert_eq!(pl.calls.cached(), Some(b2));
+        assert_eq!(pl.calls.len(), 2);
 
         let fut = pl.call(0, Rc::new(4), false);
         assert_eq!(block(&fut), b2);
+        let fut2 = pl.call(0, Rc::new(5), false);
+        assert_eq!(block(&fut2), b1);
+        assert_eq!(pl.calls.len(), 0);
+    }
+
+    #[test]
+    fn miri_call_future_reuses_concurrent_memory() {
+        let mut cx = Context::from_waker(Waker::noop());
+        let pl = echo();
+
+        let futs: Vec<_> = (0..4).map(|i| pl.call(0, Rc::new(i), false)).collect();
+        let mut blocks: Vec<_> = futs.iter().map(block).collect();
+        drop(futs);
+        assert_eq!(pl.calls.len(), 4);
+
+        let mut futs: Vec<_> = (0..4).map(|i| pl.call(0, Rc::new(i), false)).collect();
+        let mut reused: Vec<_> = futs.iter().map(block).collect();
+        blocks.sort();
+        reused.sort();
+        assert_eq!(blocks, reused);
+        assert_eq!(pl.calls.len(), 0);
+
+        for (i, fut) in futs.iter_mut().enumerate() {
+            assert_eq!(Pin::new(fut).poll(&mut cx), Poll::Ready(Ok(i)));
+        }
+    }
+
+    #[test]
+    fn miri_call_cache_limits() {
+        let cache = CallCache::default();
+        let layout = Layout::new::<[usize; 4]>();
+        let blocks: Vec<_> = (0..CALL_CACHE_MAX_BLOCKS + 2)
+            .map(|_| cache.alloc(layout))
+            .collect();
+        for ptr in blocks {
+            unsafe { cache.release(ptr, layout) };
+        }
+        assert_eq!(cache.len(), CALL_CACHE_MAX_BLOCKS);
+
+        // blocks of a different layout replace cached blocks
+        let layout = Layout::from_size_align(CALL_CACHE_MAX_BYTES / 3, 8).unwrap();
+        let blocks: Vec<_> = (0..4).map(|_| cache.alloc(layout)).collect();
+        for ptr in blocks {
+            unsafe { cache.release(ptr, layout) };
+        }
+        assert_eq!(cache.len(), 3);
+
+        // blocks smaller than a pointer are not cached
+        let layout = Layout::new::<u8>();
+        let ptr = cache.alloc(layout);
+        unsafe { cache.release(ptr, layout) };
+        assert_eq!(cache.len(), 0);
+        assert_eq!(cache.cached(), None);
     }
 
     #[test]
