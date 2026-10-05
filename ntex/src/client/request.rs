@@ -468,21 +468,14 @@ impl ClientRequest {
 
         // validate uri
         let uri = &self.request.head.uri;
-        {
-            if uri.host().is_none() {
-                Err(ClientError::from(InvalidUrl::MissingHost))
-            } else if uri.scheme().is_none() {
-                Err(ClientError::from(InvalidUrl::MissingScheme))
-            } else if let Some(scheme) = uri.scheme() {
-                if matches!(scheme.as_str(), "http" | "ws" | "https" | "wss") {
-                    Ok(())
-                } else {
-                    Err(ClientError::from(InvalidUrl::UnknownScheme))
-                }
-            } else {
-                Err(ClientError::from(InvalidUrl::UnknownScheme))
-            }
-        }?;
+        if uri.host().is_none() {
+            return Err(ClientError::from(InvalidUrl::MissingHost).into());
+        }
+        match uri.scheme_str() {
+            Some("http" | "ws" | "https" | "wss") => (),
+            Some(_) => return Err(ClientError::from(InvalidUrl::UnknownScheme).into()),
+            None => return Err(ClientError::from(InvalidUrl::MissingScheme).into()),
+        }
 
         // set cookies, appended to an existing `Cookie` header
         #[cfg(feature = "cookie")]

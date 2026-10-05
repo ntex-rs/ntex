@@ -6,24 +6,9 @@ impl Address for urly::Url {
     }
 
     fn port(&self) -> Option<u16> {
-        self.port_u16().or_else(|| port(self.scheme_str()))
-    }
-}
-
-// TODO: load data from file
-fn port(scheme: Option<&str>) -> Option<u16> {
-    if let Some(scheme) = scheme {
-        match scheme {
-            "http" | "ws" => Some(80),
-            "https" | "wss" => Some(443),
-            "amqp" => Some(5672),
-            "amqps" | "sb" => Some(5671),
-            "mqtt" => Some(1883),
-            "mqtts" => Some(8883),
-            _ => None,
-        }
-    } else {
-        None
+        // Azure Service Bus uses amqps
+        self.port_or_known_default()
+            .or_else(|| (self.scheme_str() == Some("sb")).then_some(5671))
     }
 }
 
@@ -43,11 +28,13 @@ mod tests {
             ("sb", 5671),
             ("mqtt", 1883),
             ("mqtts", 8883),
+            ("ftp", 21),
         ] {
-            assert_eq!(port(Some(s)), Some(p));
+            let url = urly::Url::try_from(format!("{s}://h/")).unwrap();
+            assert_eq!(Address::port(&url), Some(p), "{s}");
         }
-        assert_eq!(port(Some("unknowns")), None);
-        assert_eq!(port(None), None);
+        let url = urly::Url::from_static("unknowns://h/");
+        assert_eq!(Address::port(&url), None);
     }
 
     #[test]

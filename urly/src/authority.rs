@@ -63,7 +63,14 @@ impl Authority {
     }
 
     /// Returns the authority without the userinfo.
-    pub(crate) fn host_port(&self) -> &str {
+    ///
+    /// ```
+    /// use urly::Authority;
+    ///
+    /// let auth = Authority::new("user:pw@example.com:8080").unwrap();
+    /// assert_eq!(auth.host_port(), "example.com:8080");
+    /// ```
+    pub fn host_port(&self) -> &str {
         self.0.rsplit_once('@').map_or(&self.0, |(_, hp)| hp)
     }
 }

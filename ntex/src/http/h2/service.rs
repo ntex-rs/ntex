@@ -582,8 +582,15 @@ const PROXY_CONNECTION: HeaderName = HeaderName::from_static("proxy-connection")
 /// returns `None` for a malformed request.
 fn request_uri(pseudo: &h2::frame::PseudoHeaders) -> Option<(Method, Url)> {
     let method = pseudo.method.clone()?;
+    // userinfo is deprecated, see RFC 9113 section 8.3.1
     let authority = match pseudo.authority {
-        Some(ref authority) => Some(Authority::new(authority.as_str()).ok()?),
+        Some(ref authority) => {
+            let authority = Authority::new(authority.as_str()).ok()?;
+            if authority.host().is_empty() || authority.userinfo().is_some() {
+                return None;
+            }
+            Some(authority)
+        }
         None => None,
     };
     let path = pseudo.path.as_ref().map(crate::util::ByteString::as_str);
@@ -595,10 +602,7 @@ fn request_uri(pseudo: &h2::frame::PseudoHeaders) -> Option<(Method, Url)> {
     let uri = match (authority, path) {
         // CONNECT request uses the authority form
         (Some(authority), None) if method == Method::CONNECT => {
-            if authority.host().is_empty() || authority.userinfo().is_some() {
-                return None;
-            }
-            Url::try_from(concat(&["//", authority.as_str()])).ok()?
+            Url::parse(authority.as_str()).ok()?
         }
         (_, Some("*")) if method == Method::OPTIONS => Url::from_static("*"),
         (Some(authority), Some(path)) if path.starts_with('/') => {
@@ -706,8 +710,10 @@ mod tests {
         assert_eq!(method, Method::CONNECT);
         assert_eq!(uri.authority().unwrap(), "example.com:443");
 
-        pseudo.authority = Some("bad authority".into());
-        assert!(request_uri(&pseudo).is_none());
+        for authority in ["bad authority", "u@example.com:443", ":443"] {
+            pseudo.authority = Some(authority.into());
+            assert!(request_uri(&pseudo).is_none(), "{authority}");
+        }
 
         // inline and heap buffers
         for authority in ["a.io:1", "very-long-host-name.example.com:8443"] {
@@ -725,6 +731,12 @@ mod tests {
         pseudo.scheme = Some("https".into());
         let (_, uri) = request_uri(&pseudo).unwrap();
         assert_eq!(uri.to_string(), "https://example.com/path");
+        // userinfo and an empty host are rejected
+        for authority in ["u:p@example.com", ""] {
+            pseudo.authority = Some(authority.into());
+            assert!(request_uri(&pseudo).is_none(), "{authority}");
+        }
+        pseudo.authority = Some("example.com".into());
 
         // 23 bytes are stored inline, 24 bytes on the heap
         for path in ["/123", "/1234", "/api/v1/users/1?fields=name,email"] {

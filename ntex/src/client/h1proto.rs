@@ -123,18 +123,20 @@ fn response(
     }
 }
 
+/// Returns the host and the port, the port is `None` if it is the scheme's default.
+pub(crate) fn host_port(uri: &Url) -> Option<(&str, Option<u16>)> {
+    let host = uri.host()?;
+    let default_port = uri.scheme().and_then(urly::Scheme::default_port);
+    Some((host, uri.port_u16().filter(|p| Some(*p) != default_port)))
+}
+
 /// Builds the `Host` header value, the port is omitted if it is the scheme's default.
 pub(crate) fn host_header(uri: &Url) -> Option<HeaderValue> {
-    let host = uri.host()?;
-    let default_port = match uri.scheme_str() {
-        Some("https" | "wss") => 443,
-        _ => 80,
-    };
-
+    let (host, port) = host_port(uri)?;
     let mut wrt = BytesMut::with_capacity(host.len() + 6);
-    let _ = match uri.port_u16() {
-        Some(port) if port != default_port => write!(wrt, "{host}:{port}"),
-        _ => write!(wrt, "{host}"),
+    let _ = match port {
+        Some(port) => write!(wrt, "{host}:{port}"),
+        None => write!(wrt, "{host}"),
     };
 
     match HeaderValue::from_shared(wrt.take()) {
