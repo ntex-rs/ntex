@@ -1,4 +1,4 @@
-use std::{cell::Cell, cell::RefCell, future::poll_fn, io, rc::Rc};
+use std::{cell::Cell, cell::RefCell, future::poll_fn, io, mem, rc::Rc};
 
 use ntex_h2::{self as h2, control::ExpectResult, frame::StreamId, server};
 use urly::{Authority, Scheme, Url};
@@ -397,7 +397,7 @@ where
 
                     let mut res = Response::new(status).drop_body();
                     let head = res.head_mut();
-                    head.headers = headers;
+                    h2::recycle_header_map(mem::replace(&mut head.headers, headers));
                     prepare_response(head, &mut BodySize::Empty);
                     let _ = stream.send_response(status, &head.headers, true);
 
@@ -437,7 +437,8 @@ where
         head.uri = uri;
         head.version = Version::HTTP_2;
         head.method = method;
-        head.headers = headers;
+        // the pooled head map is empty, the h2 decoder reuses its allocation
+        h2::recycle_header_map(mem::replace(&mut head.headers, headers));
         head.io = CurrentIo::Ref(io);
         head.id = self.id;
 

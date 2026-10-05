@@ -146,6 +146,47 @@ async fn test_h1() -> io::Result<()> {
 }
 
 #[ntex::test]
+async fn test_h2_request_headers_not_shared() -> io::Result<()> {
+    let srv = test_server(async move |_| {
+        openssl(
+            ssl_acceptor(),
+            HttpService::h2(async |req: Request| {
+                let mut hdrs: Vec<_> = req
+                    .headers()
+                    .iter()
+                    .filter(|(name, _)| name.as_str().starts_with("x-"))
+                    .map(|(name, value)| format!("{name}={}", value.to_str().unwrap()))
+                    .collect();
+                hdrs.sort();
+                Ok::<_, io::Error>(Response::Ok().body(hdrs.join(",")))
+            }),
+        )
+    });
+
+    // request header maps are reused, a request must not see headers of a previous one
+    for _ in 0..3 {
+        let response = srv
+            .srequest(Method::GET, "/")
+            .header("x-a", "1")
+            .header("x-b", "2")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.version(), Version::HTTP_2);
+        assert_eq!(response.body().await.unwrap(), "x-a=1,x-b=2");
+
+        let response = srv
+            .srequest(Method::GET, "/")
+            .header("x-c", "3")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.body().await.unwrap(), "x-c=3");
+    }
+    Ok(())
+}
+
+#[ntex::test]
 async fn test_h2_1() -> io::Result<()> {
     let srv = test_server(async move |_| {
         openssl(
