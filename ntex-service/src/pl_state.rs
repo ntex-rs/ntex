@@ -3,7 +3,7 @@ use std::{cell, fmt, future, pin::Pin, ptr, rc::Rc, task::Context, task::Poll};
 use crate::{Ctx, IntoService, Service, ctx::WaitersRef, util::BoxFuture};
 
 use crate::pipeline::PipelineBinding;
-use crate::pl_inner::{CallFuture, PipelineApi, PipelineInternalApi};
+use crate::pl_inner::{PipelineApi, PipelineInternalApi};
 
 /// Execution container for a service whose state is supplied per operation.
 ///
@@ -208,8 +208,8 @@ impl<St, Req, Res, Err> PipelineInternalApi<Req, Res, Err> for PipelineInternal<
         self.api.ready(idx, &self.st)
     }
 
-    fn call(&self, idx: u32, req: Req, ready: bool) -> CallFuture<'_, Result<Res, Err>> {
-        CallFuture::boxed(self.api.call(idx, req, &self.st, ready))
+    fn call(&self, idx: u32, req: Req, ready: bool) -> BoxFuture<'_, Result<Res, Err>> {
+        self.api.call(idx, req, &self.st, ready)
     }
 
     fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Err>> {
