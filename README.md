@@ -86,7 +86,7 @@ ntex = { version = "4", features = ["tokio"] }
 
 ## Documentation and community
 
-- [Framework guide](https://github.com/ntex-rs/ntex/tree/main/docs)
+- [Framework guide](https://github.com/ntex-rs/ntex/tree/main/docs/index.md)
 - [Web framework documentation](https://ntex.rs)
 - [API documentation](https://docs.rs/ntex)
 - [Examples](https://github.com/ntex-rs/examples)
