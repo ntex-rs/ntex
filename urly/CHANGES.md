@@ -4,6 +4,8 @@
 
 * Add `const fn Url::new()`, same as `Url::default()`
 
+* Add `+` and `+=` operators for `Url`, same as `Url::join_url()`
+
 ## [1.0.0] - 2026-10-04
 
 * Refine api and tests

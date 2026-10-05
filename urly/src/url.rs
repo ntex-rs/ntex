@@ -1,6 +1,7 @@
 use std::any::Any;
-use std::borrow::Cow;
-use std::{ops::Div, str::FromStr};
+use std::borrow::{Borrow, Cow};
+use std::ops::{Add, AddAssign, Div};
+use std::str::FromStr;
 
 use ntex_bytes::{ByteString, Bytes, BytesMut};
 use simdutf8::compat::{Utf8Error, from_utf8};
@@ -565,6 +566,21 @@ impl Url {
     }
 
     /// Resolves a parsed reference against this URL, RFC 3986 section 5.2.2.
+    ///
+    /// The `+` and `+=` operators are equivalent.
+    ///
+    /// ```
+    /// use urly::Url;
+    ///
+    /// let base = Url::from_static("http://a/b/c/d;p?q");
+    /// let r = Url::from_static("../g");
+    /// assert_eq!(base.join_url(&r), "http://a/b/g");
+    /// assert_eq!(&base + &r, "http://a/b/g");
+    ///
+    /// let mut url = base.clone();
+    /// url += r;
+    /// assert_eq!(url, "http://a/b/g");
+    /// ```
     pub fn join_url(&self, r: &Url) -> Url {
         let base = self.components();
         let r = r.components();
@@ -1017,6 +1033,28 @@ impl<S: AsRef<str>> Div<S> for Url {
 
     fn div(self, segment: S) -> Url {
         self.push_segments([segment])
+    }
+}
+
+impl<U: Borrow<Url>> Add<U> for &Url {
+    type Output = Url;
+
+    fn add(self, reference: U) -> Url {
+        self.join_url(reference.borrow())
+    }
+}
+
+impl<U: Borrow<Url>> Add<U> for Url {
+    type Output = Url;
+
+    fn add(self, reference: U) -> Url {
+        self.join_url(reference.borrow())
+    }
+}
+
+impl<U: Borrow<Url>> AddAssign<U> for Url {
+    fn add_assign(&mut self, reference: U) {
+        *self = self.join_url(reference.borrow());
     }
 }
 

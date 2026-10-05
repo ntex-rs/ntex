@@ -281,7 +281,16 @@ fn join_rfc3986() {
         let joined = base.join(r).unwrap_or_else(|e| panic!("{r:?}: {e}"));
         assert_eq!(joined, expected, "{r:?}");
         if !r.is_empty() {
-            assert_eq!(base.join_url(&url(r)), expected, "{r:?}");
+            let r = url(r);
+            assert_eq!(base.join_url(&r), expected, "{r:?}");
+            assert_eq!(&base + &r, expected, "{r:?}");
+            assert_eq!(base.clone() + r.clone(), expected, "{r:?}");
+            let mut u = base.clone();
+            u += &r;
+            assert_eq!(u, expected, "{r:?}");
+            let mut u = base.clone();
+            u += r;
+            assert_eq!(u, expected);
         }
     }
     assert_eq!(url("http://a/b#f").join("").unwrap(), "http://a/b");
