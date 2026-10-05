@@ -4306,8 +4306,9 @@ mod tests {
         assert!(!io.flags().is_wr_backpressure());
     }
 
-    /// Filter chain wrapper that is not ready for reads while blocked.
-    struct Gate<F>(F, Rc<Cell<bool>>);
+    /// Filter chain wrapper that is not ready for reads or writes while
+    /// blocked.
+    struct Gate<F>(F, Rc<Cell<bool>>, Rc<Cell<bool>>);
 
     impl<F: Filter> Filter for Gate<F> {
         fn query(&self, id: std::any::TypeId) -> Option<Box<dyn std::any::Any>> {
@@ -4334,7 +4335,10 @@ mod tests {
         }
 
         fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
-            self.0.poll_write_ready(cx)
+            match self.0.poll_write_ready(cx) {
+                Poll::Ready(Readiness::Ready) if self.2.get() => Poll::Pending,
+                res => res,
+            }
         }
     }
 
@@ -4353,7 +4357,8 @@ mod tests {
     async fn filter_pause_pauses_reading() {
         let blocked = Rc::new(Cell::new(false));
         let b = blocked.clone();
-        let io = Io::new(GateTransport, SharedCfg::default()).map_filter(move |f| Gate(f, b));
+        let io = Io::new(GateTransport, SharedCfg::default())
+            .map_filter(move |f| Gate(f, b, Rc::default()));
         let ctx = IoContext::new(io.get_ref());
 
         assert_eq!(
@@ -4406,7 +4411,8 @@ mod tests {
     async fn io_state_pause_is_not_filter_pause() {
         let blocked = Rc::new(Cell::new(true));
         let b = blocked.clone();
-        let io = Io::new(GateTransport, SharedCfg::default()).map_filter(move |f| Gate(f, b));
+        let io = Io::new(GateTransport, SharedCfg::default())
+            .map_filter(move |f| Gate(f, b, Rc::default()));
         let ctx = IoContext::new(io.get_ref());
 
         // the dispatcher paused reads, the filter pause is not reported
@@ -4432,5 +4438,48 @@ mod tests {
             Poll::Ready(Readiness::Ready)
         );
         assert!(!io.is_read_filter_paused());
+    }
+
+    #[ntex::test]
+    async fn filter_pause_pauses_writing() {
+        let blocked = Rc::new(Cell::new(true));
+        let b = blocked.clone();
+        let io = Io::new(GateTransport, SharedCfg::default())
+            .map_filter(move |f| Gate(f, Rc::default(), b));
+        let ctx = IoContext::new(io.get_ref());
+
+        // no output is waiting, the filter pause is not reported
+        assert!(lazy(|cx| ctx.poll_write_ready(cx)).await.is_pending());
+        assert!(!io.is_write_filter_paused());
+
+        // output waits for the filter
+        io.encode_slice(b"1234").unwrap();
+        sleep(Millis(10)).await;
+        assert!(!io.st().flags.is_write_paused());
+        assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
+        assert!(lazy(|cx| ctx.poll_write_ready(cx)).await.is_pending());
+        assert!(io.is_write_filter_paused());
+        assert!(!io.st().dispatch_task.is_set(), "dispatcher is notified");
+
+        // a write already in flight completes, writing stays paused
+        ctx.with_write_dst(|dst| {
+            let mut page = dst.take().unwrap();
+            page.advance_to(2);
+            dst.prepend(page);
+        });
+        assert_eq!(ctx.update_write_status(Ok(2)), IoTaskStatus::Pause);
+        assert!(!io.st().flags.is_write_paused());
+        assert_eq!(io.st().buffer.write_buf_size(), 2);
+
+        // the filter is ready again
+        assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
+        blocked.set(false);
+        assert_eq!(
+            lazy(|cx| ctx.poll_write_ready(cx)).await,
+            Poll::Ready(Readiness::Ready)
+        );
+        assert!(!io.is_write_filter_paused());
+        assert!(!io.st().dispatch_task.is_set(), "dispatcher is notified");
+        assert_eq!(ctx.update_write_status(Ok(0)), IoTaskStatus::Io);
     }
 }

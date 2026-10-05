@@ -2,6 +2,9 @@
 
 ## [4.2.1] - 2026-10-05
 
+* Suspend the write timeout while the filter chain pauses writes, it starts over once writes
+  resume
+
 * Suspend keep-alive and frame read timers while the filter chain pauses reads, the peer is
   not charged for the pause
 

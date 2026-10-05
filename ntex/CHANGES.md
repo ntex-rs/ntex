@@ -1,5 +1,11 @@
 # Changes
 
+## [4.0.0-beta.17] - 2026-10-05
+
+* http/1: Suspend keep-alive, request-head and payload read timers while the filter chain
+  pauses reads, and the write timeout while it pauses writes, the peer is not charged for
+  the pause
+
 ## [4.0.0-beta.16] - 2026-10-05
 
 * http/2: Pooled request header maps are handed back to the h2 decoder, one allocation less

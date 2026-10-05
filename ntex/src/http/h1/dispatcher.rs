@@ -237,6 +237,9 @@ where
 
             log::trace!("{}: Trying to read http message", self.io.tag());
             self.release_write_timer();
+            if !self.io.is_read_filter_paused() {
+                self.timers.resume_read(&self.io);
+            }
 
             let (result, timeout) = match self.io.poll_recv_decode(&self.codec, cx) {
                 // a request head received together with a read timer wins over
@@ -268,6 +271,11 @@ where
                     if let Some(item) = decoded.item {
                         Ok(item)
                     } else {
+                        // the filter chain pauses reading, the peer is not
+                        // charged for it
+                        if self.io.is_read_filter_paused() {
+                            self.timers.suspend_read(&self.io);
+                        }
                         return Poll::Pending;
                     }
                 }
@@ -524,6 +532,11 @@ where
             let Poll::Ready(status) = self.io.poll_status_update(cx) else {
                 // write backpressure can be disabled by the status update
                 self.release_write_timer();
+                // suspends or resumes the write timer on a filter pause
+                if self.timers.active.is_write() {
+                    self.timers
+                        .start_write(&self.io, self.codec.cfg.write_timeout);
+                }
                 return Poll::Pending;
             };
             match status {
@@ -628,7 +641,14 @@ where
                                     self.payload = None;
                                     break;
                                 }
-                                None => break,
+                                None => {
+                                    // the filter chain pauses reading, the
+                                    // peer is not charged for it
+                                    if self.io.is_read_filter_paused() {
+                                        self.timers.suspend_read(&self.io);
+                                    }
+                                    break;
+                                }
                             }
                         }
                         Err(RecvError::WriteBackpressure) => match self.poll_flush_timed(cx) {
@@ -722,8 +742,14 @@ where
     ///
     /// Fails the request payload and returns the write timeout error if
     /// write backpressure is still enabled, otherwise stops the timer.
+    /// An expiry during a filter write pause suspends the timer.
     fn write_timer_expired(&mut self) -> io::Result<()> {
-        if self.io.is_wr_backpressure() {
+        if self.io.is_wr_backpressure() && self.io.is_write_filter_paused() {
+            // the filter chain paused writing before the dispatcher noticed
+            self.timers
+                .start_write(&self.io, self.codec.cfg.write_timeout);
+            Ok(())
+        } else if self.io.is_wr_backpressure() {
             log::trace!("{}: Write backpressure timeout", self.io.tag());
             self.set_payload_error(PayloadError::Io(write_timeout_error()));
             Err(write_timeout_error())
@@ -3958,5 +3984,330 @@ mod tests {
         assert!(matches!(res, Ok(Ok(()))));
         assert!(taken.get());
         assert_eq!(events(&ev), ["peer-gone:true"]);
+    }
+
+    #[derive(Default)]
+    struct GateDir {
+        blocked: Cell<bool>,
+        waker: RefCell<Option<std::task::Waker>>,
+    }
+
+    impl GateDir {
+        fn poll(&self, res: Poll<nio::Readiness>, cx: &Context<'_>) -> Poll<nio::Readiness> {
+            match res {
+                Poll::Ready(nio::Readiness::Ready) if self.blocked.get() => {
+                    *self.waker.borrow_mut() = Some(cx.waker().clone());
+                    Poll::Pending
+                }
+                res => res,
+            }
+        }
+
+        fn set(&self, blocked: bool) {
+            self.blocked.set(blocked);
+            if !blocked && let Some(waker) = self.waker.borrow_mut().take() {
+                waker.wake();
+            }
+        }
+    }
+
+    /// Gate control, a blocked filter chain is not ready for reads or writes.
+    #[derive(Clone, Default)]
+    struct GateCtl(Rc<(GateDir, GateDir)>);
+
+    impl GateCtl {
+        fn block_read(&self, blocked: bool) {
+            self.0.0.set(blocked);
+        }
+
+        fn block_write(&self, blocked: bool) {
+            self.0.1.set(blocked);
+        }
+    }
+
+    struct GateFilter<F>(F, GateCtl);
+
+    impl<F: Filter> Filter for GateFilter<F> {
+        fn query(&self, id: std::any::TypeId) -> Option<Box<dyn std::any::Any>> {
+            self.0.query(id)
+        }
+
+        fn process_read_buf(&self, ctx: &mut nio::FilterCtx<'_>) -> io::Result<()> {
+            self.0.process_read_buf(ctx)
+        }
+
+        fn process_write_buf(&self, ctx: &mut nio::FilterCtx<'_>) -> io::Result<()> {
+            self.0.process_write_buf(ctx)
+        }
+
+        fn shutdown(&self, ctx: &mut nio::FilterCtx<'_>) -> io::Result<Poll<()>> {
+            self.0.shutdown(ctx)
+        }
+
+        fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<nio::Readiness> {
+            self.1.0.0.poll(self.0.poll_read_ready(cx), cx)
+        }
+
+        fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<nio::Readiness> {
+            self.1.0.1.poll(self.0.poll_write_ready(cx), cx)
+        }
+    }
+
+    type GatedH1 = Dispatcher<GateFilter<Base>, body::Body, io::Error>;
+
+    /// Dispatcher over a gated filter chain, the service reads the request
+    /// payload and responds with a body of `size` bytes.
+    fn gated_h1(server: IoTest, cfg: HttpServiceConfig, size: usize) -> (GateCtl, GatedH1) {
+        let gate = GateCtl::default();
+        let g = gate.clone();
+        let config: SharedCfg = SharedCfg::new("SVC").add(cfg).into();
+        let io = nio::Io::new(server, config).map_filter(move |f| GateFilter(f, g));
+        let h1 = Dispatcher::new(
+            0,
+            io,
+            Pipeline::new(
+                (),
+                fn_service(move |mut req: Request| async move {
+                    let mut pl = req.take_payload();
+                    while let Some(item) = pl.recv().await {
+                        item.map_err(io::Error::other)?;
+                    }
+                    Ok::<_, io::Error>(Response::Ok().body("x".repeat(size)))
+                }),
+            ),
+            None,
+            DispatcherConfig::default(),
+        );
+        (gate, h1)
+    }
+
+    fn spawn_gated_h1(
+        server: IoTest,
+        cfg: HttpServiceConfig,
+        size: usize,
+    ) -> (GateCtl, nio::IoRef) {
+        let (gate, h1) = gated_h1(server, cfg, size);
+        let io = h1.inner.io.get_ref();
+        crate::rt::spawn(async move {
+            let _ = h1.await;
+        });
+        (gate, io)
+    }
+
+    /// Reads a response with a body of `size` bytes.
+    async fn read_response(client: &IoTest, size: usize) -> Bytes {
+        let mut buf = BytesMut::new();
+        loop {
+            if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n")
+                && buf.len() - pos - 4 >= size
+            {
+                return buf.freeze();
+            }
+            buf.extend_from_slice(&client.read().await.unwrap());
+        }
+    }
+
+    /// The keep-alive timer does not run while the filter chain pauses
+    /// reading.
+    #[crate::rt_test]
+    async fn test_filter_pause_suspends_keepalive() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let (gate, io) = spawn_gated_h1(
+            server,
+            HttpServiceConfig::new()
+                .set_client_timeout(Seconds::ZERO)
+                .set_keepalive(Seconds(1)),
+            1,
+        );
+
+        client.write("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        assert!(
+            read_response(&client, 1)
+                .await
+                .starts_with(b"HTTP/1.1 200 OK\r\n")
+        );
+
+        // the peer sends a request while the filter is not ready
+        gate.block_read(true);
+        client.write("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        sleep(Millis(100)).await;
+        assert!(io.is_read_filter_paused());
+
+        sleep(Millis(2000)).await;
+        assert!(io.is_active());
+
+        gate.block_read(false);
+        assert!(
+            read_response(&client, 1)
+                .await
+                .starts_with(b"HTTP/1.1 200 OK\r\n")
+        );
+
+        // keep-alive is armed again once reading resumes
+        sleep(Millis(2500)).await;
+        assert!(client.is_closed());
+    }
+
+    /// The request-head read timer does not run while the filter chain
+    /// pauses reading.
+    #[crate::rt_test]
+    async fn test_filter_pause_suspends_headers_timer() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let (gate, io) = spawn_gated_h1(
+            server,
+            HttpServiceConfig::new()
+                .set_headers_read_rate(Seconds(1), Seconds(2), 1024)
+                .set_keepalive(KeepAlive::Disabled),
+            1,
+        );
+
+        client.write("GET / HTTP/1.1\r\n");
+        sleep(Millis(100)).await;
+
+        gate.block_read(true);
+        client.write("host: localhost\r\n");
+        sleep(Millis(100)).await;
+        assert!(io.is_read_filter_paused());
+
+        sleep(Millis(3000)).await;
+        assert!(io.is_active());
+
+        // the timer resumes once reading resumes
+        gate.block_read(false);
+        sleep(Millis(100)).await;
+        assert!(!io.is_read_filter_paused());
+        assert!(io.is_active());
+        sleep(Millis(2000)).await;
+        assert!(!io.is_active());
+        assert!(client.read_any().starts_with(b"HTTP/1.1 408"));
+    }
+
+    /// The payload read timer does not run while the filter chain pauses
+    /// reading.
+    #[crate::rt_test]
+    async fn test_filter_pause_suspends_payload_timer() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        let (gate, io) = spawn_gated_h1(
+            server,
+            HttpServiceConfig::new()
+                .set_payload_read_rate(Seconds(1), Seconds(2), 1024)
+                .set_keepalive(KeepAlive::Disabled),
+            1,
+        );
+
+        client.write("POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 4\r\n\r\nab");
+        sleep(Millis(100)).await;
+
+        gate.block_read(true);
+        client.write("cd");
+        sleep(Millis(100)).await;
+        assert!(io.is_read_filter_paused());
+
+        sleep(Millis(3000)).await;
+        assert!(io.is_active());
+
+        gate.block_read(false);
+        assert!(
+            read_response(&client, 1)
+                .await
+                .starts_with(b"HTTP/1.1 200 OK\r\n")
+        );
+    }
+
+    /// The write timer does not run while the filter chain pauses writing.
+    #[crate::rt_test]
+    async fn test_filter_pause_suspends_write_timeout() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1_048_576);
+        let size = 128 * 1024;
+        let (gate, io) = spawn_gated_h1(
+            server,
+            HttpServiceConfig::new().set_write_timeout(Seconds(1)),
+            size,
+        );
+
+        // the response waits for the filter, write backpressure is enabled
+        gate.block_write(true);
+        client.write("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        sleep(Millis(100)).await;
+        assert!(io.is_write_filter_paused());
+        assert!(io.is_wr_backpressure());
+
+        sleep(Millis(2500)).await;
+        assert!(io.is_active());
+
+        gate.block_write(false);
+        let buf = read_response(&client, size).await;
+        assert!(buf.starts_with(b"HTTP/1.1 200 OK\r\n"));
+        assert!(!io.is_write_filter_paused());
+    }
+
+    /// The write timer starts over once the filter chain resumes writing.
+    #[crate::rt_test]
+    async fn test_write_timeout_restarts_after_filter_pause() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let (gate, io) = spawn_gated_h1(
+            server,
+            HttpServiceConfig::new().set_write_timeout(Seconds(1)),
+            128 * 1024,
+        );
+
+        gate.block_write(true);
+        client.write("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        sleep(Millis(1500)).await;
+        assert!(io.is_write_filter_paused());
+        assert!(io.is_active());
+
+        // the peer does not read, the timeout starts over once writes resume
+        gate.block_write(false);
+        sleep(Millis(500)).await;
+        assert!(!io.is_write_filter_paused());
+        assert!(io.is_active());
+        sleep(Millis(2000)).await;
+        assert!(client.is_closed());
+    }
+
+    /// A write timer expiry before the dispatcher notices a filter write
+    /// pause suspends the timer.
+    #[crate::rt_test]
+    async fn test_write_timer_expiry_during_filter_pause() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let (gate, mut h1) = gated_h1(
+            server,
+            HttpServiceConfig::new().set_write_timeout(Seconds(1)),
+            128 * 1024,
+        );
+
+        client.write("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(h1.inner.io.is_wr_backpressure());
+        assert_eq!(h1.inner.timers.active, Timer::Write);
+
+        // a read event turns the io task, it notices the pause
+        gate.block_write(true);
+        client.write("G");
+        sleep(Millis(50)).await;
+        assert!(h1.inner.io.is_write_filter_paused());
+
+        assert!(h1.inner.write_timer_expired().is_ok());
+        assert_eq!(h1.inner.timers.active, Timer::Write);
+        assert!(h1.inner.timers.write_suspended);
+        assert!(!h1.inner.io.timer_handle().is_set());
+
+        gate.block_write(false);
+        client.remote_buffer_cap(1_048_576);
+        let res = timeout(Millis(1000), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
+        assert!(res.is_err());
+        assert!(
+            read_response(&client, 128 * 1024)
+                .await
+                .starts_with(b"HTTP/1.1 200 OK\r\n")
+        );
     }
 }

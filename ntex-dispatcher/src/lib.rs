@@ -365,6 +365,8 @@ where
                         inner.st = inner.stop(reason);
                         continue;
                     }
+                    // suspends or resumes the write timeout on a filter pause
+                    inner.start_write_timer();
 
                     let item = if let Err(err) = ready!(inner.shared.io.poll_flush(cx, false)) {
                         inner.st = inner.stop(Reason::Io(Some(err)));
@@ -553,10 +555,12 @@ where
     /// Starts the write timeout when write backpressure is enabled.
     ///
     /// Frames are not decoded during backpressure, so read-side timers are
-    /// stopped when no write timeout is configured.
+    /// stopped when no write timeout is configured. The timeout does not run
+    /// while the filter chain pauses writes, the peer is not charged for it,
+    /// and starts over once writes resume.
     fn start_write_timer(&mut self) {
         let timeout = self.shared.io.cfg().write_timeout();
-        if timeout.is_zero() {
+        if timeout.is_zero() || self.shared.io.is_write_filter_paused() {
             self.stop_timer();
         } else if self.timers.active != Timer::Write {
             self.timers.active = Timer::Write;
@@ -670,6 +674,11 @@ where
             // backpressure can be released unnoticed while the service is paused
             Timer::Write if !self.shared.io.is_wr_backpressure() => {
                 self.timers.active = Timer::Stopped;
+                Ok(())
+            }
+            // the filter chain paused writes before the dispatcher noticed
+            Timer::Write if self.shared.io.is_write_filter_paused() => {
+                self.stop_timer();
                 Ok(())
             }
             Timer::Write => {
@@ -2918,9 +2927,38 @@ mod tests {
         assert_eq!(&data.lock().unwrap().borrow()[..], &[1]);
     }
 
-    /// Gate control, a blocked filter chain is not ready for reads.
+    #[derive(Default)]
+    struct GateDir {
+        blocked: Cell<bool>,
+        waker: RefCell<Option<std::task::Waker>>,
+    }
+
+    impl GateDir {
+        fn poll(
+            &self,
+            res: Poll<ntex_io::Readiness>,
+            cx: &Context<'_>,
+        ) -> Poll<ntex_io::Readiness> {
+            match res {
+                Poll::Ready(ntex_io::Readiness::Ready) if self.blocked.get() => {
+                    *self.waker.borrow_mut() = Some(cx.waker().clone());
+                    Poll::Pending
+                }
+                res => res,
+            }
+        }
+
+        fn set(&self, blocked: bool) {
+            self.blocked.set(blocked);
+            if !blocked && let Some(waker) = self.waker.borrow_mut().take() {
+                waker.wake();
+            }
+        }
+    }
+
+    /// Gate control, a blocked filter chain is not ready for reads or writes.
     #[derive(Clone, Default)]
-    struct GateCtl(Rc<(Cell<bool>, RefCell<Option<std::task::Waker>>)>);
+    struct GateCtl(Rc<(GateDir, GateDir)>);
 
     impl GateCtl {
         fn block(&self) {
@@ -2929,9 +2967,14 @@ mod tests {
 
         fn unblock(&self) {
             self.0.0.set(false);
-            if let Some(waker) = self.0.1.borrow_mut().take() {
-                waker.wake();
-            }
+        }
+
+        fn block_write(&self) {
+            self.0.1.set(true);
+        }
+
+        fn unblock_write(&self) {
+            self.0.1.set(false);
         }
     }
 
@@ -2955,17 +2998,11 @@ mod tests {
         }
 
         fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ntex_io::Readiness> {
-            match self.0.poll_read_ready(cx) {
-                Poll::Ready(ntex_io::Readiness::Ready) if self.1.0.0.get() => {
-                    *self.1.0.1.borrow_mut() = Some(cx.waker().clone());
-                    Poll::Pending
-                }
-                res => res,
-            }
+            self.1.0.0.poll(self.0.poll_read_ready(cx), cx)
         }
 
         fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<ntex_io::Readiness> {
-            self.0.poll_write_ready(cx)
+            self.1.0.1.poll(self.0.poll_write_ready(cx), cx)
         }
     }
 
@@ -3080,5 +3117,87 @@ mod tests {
         assert!(!io.is_active());
         assert!(client.is_closed());
         assert_eq!(&data.borrow()[..], &[0, 1]);
+    }
+
+    /// `write_dispatcher` over a gated filter chain.
+    fn gated_write_dispatcher(
+        server: IoTest,
+        cfg: IoConfig,
+        size: usize,
+    ) -> (GateCtl, IoRef, Events) {
+        let gate = GateCtl::default();
+        let g = gate.clone();
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let io = Io::new(server, SharedCfg::new("TEST").add(cfg.set_write_buf(1024)))
+            .map_filter(move |f| GateFilter(f, g));
+        let ioref = io.get_ref();
+        let disp = Dispatcher::new(
+            io,
+            BCodec(8),
+            Pipeline::new(
+                (),
+                WriteSrv {
+                    size,
+                    gate: Rc::new(RefCell::new(None)),
+                    events: events.clone(),
+                },
+            ),
+        );
+        spawn(async move {
+            let _ = disp.await;
+        });
+        (gate, ioref, events)
+    }
+
+    #[ntex::test]
+    async fn filter_pause_suspends_write_timeout() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(65536);
+        let (gate, io, events) =
+            gated_write_dispatcher(server, IoConfig::new().set_write_timeout(Seconds(1)), 8192);
+
+        // the response waits for the filter, write backpressure is enabled
+        gate.block_write();
+        client.write("12345678");
+        sleep(Millis(100)).await;
+        assert!(io.is_write_filter_paused());
+        assert_eq!(&events.borrow()[..], &["item", "bp-on"]);
+
+        // the write timeout does not run during the pause
+        sleep(Millis(2500)).await;
+        assert!(io.is_active());
+        assert_eq!(&events.borrow()[..], &["item", "bp-on"]);
+
+        gate.unblock_write();
+        let mut received = 0;
+        while received < 8192 {
+            received += client.read().await.unwrap().len();
+        }
+        assert!(!io.is_write_filter_paused());
+        wait_until(Millis(1000), || events.borrow().len() == 3).await;
+        assert_eq!(&events.borrow()[..], &["item", "bp-on", "bp-off"]);
+    }
+
+    #[ntex::test]
+    async fn write_timeout_restarts_after_filter_pause() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+        let (gate, io, events) =
+            gated_write_dispatcher(server, IoConfig::new().set_write_timeout(Seconds(1)), 8192);
+
+        gate.block_write();
+        client.write("12345678");
+        sleep(Millis(1500)).await;
+        assert!(io.is_write_filter_paused());
+        assert!(io.is_active());
+
+        // the peer does not read, the timeout starts over once writes resume
+        gate.unblock_write();
+        sleep(Millis(500)).await;
+        assert!(!io.is_write_filter_paused());
+        assert!(io.is_active());
+        wait_closed(&client, Millis(2000)).await;
+        assert!(client.is_closed());
+        assert_eq!(&events.borrow()[..], &["item", "bp-on", "write-timeout"]);
     }
 }

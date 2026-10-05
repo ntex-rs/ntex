@@ -3,7 +3,8 @@ use std::{fmt, io, task::Context, task::Poll};
 use ntex_bytes::{BytePages, BytesMut};
 use ntex_util::time::{Seconds, sleep};
 
-use crate::{Flags, Id, IoRef, IoTaskStatus, Readiness, filter::read_readiness, io::IoState};
+use crate::filter::{read_readiness, write_readiness};
+use crate::{Flags, Id, IoRef, IoTaskStatus, Readiness, io::IoState};
 
 /// Connection context shared with transport read and write tasks.
 ///
@@ -133,14 +134,37 @@ impl IoContext {
     /// [`Readiness::Terminate`], or stays `Pending`. Unlike the read path this
     /// reports `Close` at the end of a graceful shutdown as well, once buffered
     /// output has been drained, so the task must not flush again.
+    ///
+    /// A filter that is not ready while output is waiting pauses writes, see
+    /// [`IoRef::is_write_filter_paused`]. The dispatcher is notified when the
+    /// pause starts and when it ends.
     pub fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
-        if self.st().flags.is_force_closing() {
+        let st = self.st();
+        if st.flags.is_force_closing() {
             // see `poll_read_ready`
             return Poll::Ready(Readiness::Terminate);
         }
         self.poll_shutdown_deadline(cx);
-        let _borrow = self.st().buffer.borrow();
-        self.0.filter().poll_write_ready(cx)
+        let res = {
+            let _borrow = st.buffer.borrow();
+            self.0.filter().poll_write_ready(cx)
+        };
+
+        if res.is_pending() {
+            // see `poll_read_ready`
+            if !st.flags.is_write_filter_paused()
+                && write_readiness(st) == Poll::Ready(Readiness::Ready)
+            {
+                log::trace!("{}: Filter is not ready, pause writing", st.tag());
+                st.flags.set_write_filter_paused();
+                st.wake_dispatch_task();
+            }
+        } else if st.flags.is_write_filter_paused() {
+            log::trace!("{}: Filter is ready, resume writing", st.tag());
+            st.flags.unset_write_filter_paused();
+            st.wake_dispatch_task();
+        }
+        res
     }
 
     /// Force-terminates the I/O stream.
@@ -499,7 +523,13 @@ impl IoContext {
                     IoTaskStatus::Pause
                 } else {
                     st.flags.unset_write_paused();
-                    IoTaskStatus::Io
+                    if st.flags.is_write_filter_paused() {
+                        // the write task waits for the filter chain, it is
+                        // not paused for lack of output
+                        IoTaskStatus::Pause
+                    } else {
+                        IoTaskStatus::Io
+                    }
                 }
             }
             Err(err) => {
