@@ -116,6 +116,36 @@ pub(crate) fn read_readiness(st: &IoState) -> Poll<Readiness> {
     }
 }
 
+/// Transport write readiness as decided by the io state, without the filter
+/// chain.
+pub(crate) fn write_readiness(st: &IoState) -> Poll<Readiness> {
+    if st.flags.is_force_closing() {
+        // see `read_readiness`
+        Poll::Ready(Readiness::Terminate)
+    } else if st.flags.is_aborted() {
+        // The connection ended because of a failure, so there is nothing
+        // left to drain; the transport closes it gracefully.
+        Poll::Ready(Readiness::Close)
+    } else if st.flags.is_stopping() {
+        // Transport shutdown phase. Buffered output is drained into the
+        // transport first; `Readiness::Close` is reported only once
+        // nothing is left to write.
+        if st.buffer.write_buf_size() != 0 {
+            Poll::Ready(Readiness::Ready)
+        } else if st.wr_inflight.get() != 0 {
+            // the transport still holds output that has not reached
+            // the peer, its completion wakes the write task
+            Poll::Pending
+        } else {
+            Poll::Ready(Readiness::Close)
+        }
+    } else if st.flags.is_write_paused() {
+        Poll::Pending
+    } else {
+        Poll::Ready(Readiness::Ready)
+    }
+}
+
 impl Filter for Base {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         if let Some(hnd) = self.0.0.handle.take() {
@@ -138,35 +168,11 @@ impl Filter for Base {
 
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         let st = &self.0.0;
-        if st.flags.is_force_closing() {
-            // see `poll_read_ready`
-            Poll::Ready(Readiness::Terminate)
-        } else if st.flags.is_aborted() {
-            // The connection ended because of a failure, so there is nothing
-            // left to drain; the transport closes it gracefully.
-            Poll::Ready(Readiness::Close)
-        } else {
+        let res = write_readiness(st);
+        if !matches!(res, Poll::Ready(Readiness::Close | Readiness::Terminate)) {
             st.write_task.register(cx.waker());
-
-            if st.flags.is_stopping() {
-                // Transport shutdown phase. Buffered output is drained into the
-                // transport first; `Readiness::Close` is reported only once
-                // nothing is left to write.
-                if st.buffer.write_buf_size() != 0 {
-                    Poll::Ready(Readiness::Ready)
-                } else if st.wr_inflight.get() != 0 {
-                    // the transport still holds output that has not reached
-                    // the peer, its completion wakes the write task
-                    Poll::Pending
-                } else {
-                    Poll::Ready(Readiness::Close)
-                }
-            } else if st.flags.is_write_paused() {
-                Poll::Pending
-            } else {
-                Poll::Ready(Readiness::Ready)
-            }
         }
+        res
     }
 
     #[inline]

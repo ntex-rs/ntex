@@ -127,6 +127,17 @@ impl IoRef {
         self.0.flags.is_read_filter_paused()
     }
 
+    #[inline]
+    /// Checks whether transport writes are paused by the filter chain.
+    ///
+    /// This is `true` while buffered output is waiting for a filter that is
+    /// not ready for transport writes. Output does not drain during the pause,
+    /// it is not caused by the peer, so write timeouts should not run. The
+    /// dispatcher is notified when the pause starts and when it ends.
+    pub fn is_write_filter_paused(&self) -> bool {
+        self.0.flags.is_write_filter_paused()
+    }
+
     /// Waits until the write buffer can accept more output.
     ///
     /// Completes immediately unless write back-pressure is enabled. While it

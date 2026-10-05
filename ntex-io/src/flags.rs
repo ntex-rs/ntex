@@ -101,6 +101,8 @@ bitflags::bitflags! {
         const RD_WR_BACKPRESSURE  = 1 << 13;
         /// read paused, the filter chain is not ready for transport reads
         const RD_FILTER_PAUSED    = 1 << 14;
+        /// write paused, the filter chain is not ready for transport writes
+        const WR_FILTER_PAUSED    = 1 << 15;
     }
 }
 
@@ -315,6 +317,18 @@ impl Flags {
 
     pub(crate) fn unset_read_filter_paused(&self) {
         self.remove(FlagsKind::RD_FILTER_PAUSED);
+    }
+
+    pub(crate) fn is_write_filter_paused(&self) -> bool {
+        self.contains(FlagsKind::WR_FILTER_PAUSED)
+    }
+
+    pub(crate) fn set_write_filter_paused(&self) {
+        self.insert(FlagsKind::WR_FILTER_PAUSED);
+    }
+
+    pub(crate) fn unset_write_filter_paused(&self) {
+        self.remove(FlagsKind::WR_FILTER_PAUSED);
     }
 
     pub(crate) fn is_read_paused_or_backpressure(&self) -> bool {

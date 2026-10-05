@@ -11,6 +11,11 @@ use crate::time::Seconds;
 pub(super) struct Timers {
     pub(super) active: Timer,
     pub(super) progress: ReadProgress,
+    /// Unused part of the period of a read timer suspended by a filter
+    /// pause, see [`Timers::suspend_read`].
+    pub(super) suspended: Option<Seconds>,
+    /// The write timer is not armed while the filter chain pauses writing.
+    pub(super) write_suspended: bool,
 }
 
 /// The purpose of the armed dispatcher timer.
@@ -97,6 +102,8 @@ impl Timers {
         Timers {
             active: Timer::ClientTimeout,
             progress: ReadProgress::EMPTY,
+            suspended: None,
+            write_suspended: false,
         }
     }
 
@@ -105,6 +112,7 @@ impl Timers {
         let (timeout, max_timeout) = read_timeout(cfg.timeout, max_timeout);
         self.stop_idle(io);
         self.active = timer;
+        self.suspended = None;
         self.progress.max_timeout = max_timeout;
         io.start_timer(timeout);
     }
@@ -112,6 +120,7 @@ impl Timers {
     /// Stops the transport timer and clears any pending timeout.
     pub(super) fn stop(&mut self, io: &IoRef) {
         self.active = Timer::Stopped;
+        self.suspended = None;
         io.stop_timer();
     }
 
@@ -130,6 +139,7 @@ impl Timers {
     /// needed.
     pub(super) fn reset(&mut self, io: &IoRef) {
         self.progress = ReadProgress::EMPTY;
+        self.suspended = None;
         if self.active == Timer::KeepAlive {
             self.active = Timer::Idle;
         } else {
@@ -157,6 +167,7 @@ impl Timers {
         if self.active != Timer::KeepAlive {
             log::debug!("{}: Start keep-alive timer {:?}", io.tag(), timeout);
             self.active = Timer::KeepAlive;
+            self.suspended = None;
             io.start_timer(timeout);
         }
     }
@@ -227,11 +238,12 @@ impl Timers {
     ///
     /// Resumes paused payload timing, keeping the received bytes, the
     /// unused part of the interrupted period, and the cumulative budget.
-    /// Stopped timing is not started.
+    /// Stopped timing is not started, paused timing is not resumed while
+    /// the filter chain pauses reading.
     pub(super) fn payload_decoded(&mut self, io: &IoRef, consumed: u32) {
         match self.active {
             Timer::Payload => self.payload_consumed(consumed),
-            Timer::PayloadPaused => {
+            Timer::PayloadPaused if !io.is_read_filter_paused() => {
                 let period = self.progress.period;
                 log::trace!("{}: Resume payload timer {:?}", io.tag(), period);
                 self.active = Timer::Payload;
@@ -260,12 +272,52 @@ impl Timers {
         }
     }
 
+    /// Suspends a running client, keep-alive or request-head timer while
+    /// the filter chain pauses reading, the peer is not charged for the
+    /// pause. Payload timing is paused.
+    ///
+    /// The unused part of the current period is kept.
+    pub(super) fn suspend_read(&mut self, io: &IoRef) {
+        match self.active {
+            Timer::Payload => self.pause_payload(io),
+            Timer::ClientTimeout | Timer::KeepAlive | Timer::Headers
+                if self.suspended.is_none() && io.timer_handle().is_set() =>
+            {
+                log::trace!("{}: Suspend read timer {:?}", io.tag(), self.active);
+                self.suspended = Some(io.timer_handle().remains());
+                io.stop_timer();
+            }
+            _ => (),
+        }
+    }
+
+    /// Resumes a read timer suspended by a filter pause, a period that
+    /// expired before suspending is checked on resume.
+    ///
+    /// Paused payload timing resumes with the next decoded payload.
+    pub(super) fn resume_read(&mut self, io: &IoRef) {
+        if let Some(period) = self.suspended.take() {
+            log::trace!("{}: Resume read timer {:?}", io.tag(), period);
+            if period.is_zero() {
+                io.notify_timeout();
+            } else {
+                io.start_timer(period);
+            }
+        }
+    }
+
     /// Starts the write backpressure timer, a running write timer keeps
     /// running.
     ///
     /// Running payload timing is paused, other read timers are stopped.
+    /// The timer does not run while the filter chain pauses writing, the
+    /// peer is not charged for the pause, and starts over once writing
+    /// resumes.
     pub(super) fn start_write(&mut self, io: &IoRef, timeout: Seconds) {
-        if timeout.non_zero() && !self.active.is_write() {
+        if timeout.is_zero() {
+            return;
+        }
+        if !self.active.is_write() {
             log::debug!("{}: Start write timer {:?}", io.tag(), timeout);
             self.pause_payload(io);
             self.active = if self.active == Timer::PayloadPaused {
@@ -273,7 +325,18 @@ impl Timers {
             } else {
                 Timer::Write
             };
+            self.suspended = None;
+            self.write_suspended = true;
             io.stop_timer();
+        }
+        if io.is_write_filter_paused() {
+            if !self.write_suspended {
+                log::trace!("{}: Suspend write timer", io.tag());
+                self.write_suspended = true;
+                io.stop_timer();
+            }
+        } else if self.write_suspended {
+            self.write_suspended = false;
             io.start_timer(timeout);
         }
     }
@@ -289,8 +352,9 @@ impl Timers {
                 io.stop_timer();
                 self.active = Timer::PayloadPaused;
             }
-            _ => (),
+            _ => return,
         }
+        self.write_suspended = false;
     }
 
     /// Handles expiry of a read-rate period.

@@ -2,6 +2,10 @@
 
 ## [4.2.1] - 2026-10-05
 
+* Add `IoRef::is_write_filter_paused()`, transport writes stay paused while the filter chain is
+  not ready for them although the io state allows writes, the dispatcher is notified when the
+  pause starts and ends
+
 * Add `IoRef::is_read_filter_paused()`, transport reads stay paused while the filter chain is
   not ready for them although the io state allows reads, the dispatcher is notified when the
   pause starts and ends
