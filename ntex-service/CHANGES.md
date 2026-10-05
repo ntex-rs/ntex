@@ -1,8 +1,10 @@
 # Changes
 
-## [Unreleased]
+## [5.2.0] - 2026-10-05
 
 * Reuse pipeline call future memory instead of allocating it for every call
+
+* Keep memory of up to 64 completed call futures, concurrent pipeline calls reuse it as well
 
 ## [5.1.0] - 2026-09-30
 
