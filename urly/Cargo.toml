@@ -1,6 +1,6 @@
 [package]
 name = "urly"
-version = "1.0.1"
+version = "1.1.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Yet another URL library"
 keywords = ["ntex", "url", "uri"]

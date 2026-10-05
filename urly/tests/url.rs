@@ -10,7 +10,7 @@ use urly::{
 };
 
 fn url(s: &str) -> Url {
-    Url::parse(s).unwrap_or_else(|e| panic!("{s:?}: {e}"))
+    Url::parse_ref(s).unwrap_or_else(|e| panic!("{s:?}: {e}"))
 }
 
 #[test]
@@ -67,7 +67,7 @@ fn invalid() {
         ("http://h:99999/", ErrorKind::PortOutOfRange),
         ("http://h:8a/", ErrorKind::InvalidPort),
     ] {
-        assert_eq!(Url::parse(src).unwrap_err().kind(), kind, "{src:?}");
+        assert_eq!(Url::parse_ref(src).unwrap_err().kind(), kind, "{src:?}");
     }
 }
 
@@ -536,6 +536,20 @@ fn http() {
     assert_eq!(u.path_and_query(), "//a?b");
     assert!(u.authority().is_none());
     assert_eq!(Uri::try_from(&u).unwrap().path(), "//a");
+
+    // authority-form
+    for src in ["custom.domain", "custom.domain:8080", "u@h:1"] {
+        let uri = Uri::try_from(src).unwrap();
+        let u = Url::try_from(&uri).unwrap();
+        assert_eq!(u.as_str(), format!("//{src}"));
+        assert_eq!(u.host(), uri.host());
+        assert_eq!(u.port_u16(), uri.port_u16());
+        assert_eq!(Uri::try_from(&u).unwrap(), uri);
+    }
+    let u = Url::try_from(Uri::from_static("Custom.Domain:080")).unwrap();
+    assert_eq!(u, "//custom.domain:80");
+    assert!(Uri::try_from(url("//h/p")).is_err());
+    assert!(Uri::try_from(url("//h?q")).is_err());
 }
 
 #[test]
@@ -599,9 +613,9 @@ fn parse_invariants() {
         let src: String = (0..n)
             .map(|_| PIECES[(next() % PIECES.len() as u64) as usize])
             .collect();
-        let Ok(u) = Url::parse(&src) else { continue };
+        let Ok(u) = Url::parse_ref(&src) else { continue };
         Url::validate(u.as_str()).unwrap_or_else(|e| panic!("{src:?} -> {u:?}: {e}"));
-        let again = Url::parse(u.as_str()).unwrap_or_else(|e| panic!("{src:?} -> {u:?}: {e}"));
+        let again = Url::parse_ref(u.as_str()).unwrap_or_else(|e| panic!("{src:?} -> {u:?}: {e}"));
         assert_eq!(again, u, "{src:?}");
         let parts = u.clone().into_parts();
         assert_eq!(Url::from_parts(parts).unwrap(), u, "{src:?}");
@@ -710,10 +724,13 @@ fn invalid_utf8_decoding() {
 
 #[test]
 fn errors() {
-    let err = Url::parse("http://exa mple.com/").unwrap_err();
+    let err = Url::parse_ref("http://exa mple.com/").unwrap_err();
     assert_eq!(err.position(), Some(10));
     assert_eq!(err.to_string(), "invalid character ' ' at position 10");
-    let err = url("/a").origin().map_or(Url::parse(""), Ok).unwrap_err();
+    let err = url("/a")
+        .origin()
+        .map_or(Url::parse_ref(""), Ok)
+        .unwrap_err();
     assert_eq!(
         (err.to_string(), err.position()),
         ("empty string".into(), None)
