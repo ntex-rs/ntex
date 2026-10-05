@@ -2,6 +2,17 @@
 
 ## [4.0.0-beta.17] - 2026-10-05
 
+* web: The authority of an absolute-form request target takes precedence over the `Host`
+  header in `ConnectionInfo::host()` and the `Host` guard, RFC 9112 section 3.2.2
+
+* web: `ConnectionInfo::host()` skips `Forwarded`, `X-Forwarded-Host` and `Host` values that
+  are not a valid `host[:port]`, and omits userinfo of the request target
+
+* http: Reject userinfo in an absolute-form request target and in the http/2 `:authority`,
+  and an empty http/2 `:authority` host
+
+* client: The http/2 `:authority` omits the scheme's default port, like the `Host` header
+
 * http/1: Suspend keep-alive, request-head and payload read timers while the filter chain
   pauses reads, and the write timeout while it pauses writes, the peer is not charged for
   the pause

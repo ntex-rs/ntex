@@ -76,18 +76,11 @@ impl WsClient<Base> {
     {
         let (uri, err) = match Url::try_from(uri) {
             Ok(uri) => {
-                let err = if uri.host().is_none() {
-                    Some(WsConfigError::MissingHost)
-                } else if uri.scheme().is_none() {
-                    Some(WsConfigError::MissingScheme)
-                } else if let Some(scheme) = uri.scheme_str() {
-                    if matches!(scheme, "http" | "ws" | "https" | "wss") {
-                        None
-                    } else {
-                        Some(WsConfigError::UnknownScheme)
-                    }
-                } else {
-                    Some(WsConfigError::UnknownScheme)
+                let err = match uri.scheme_str() {
+                    _ if uri.host().is_none() => Some(WsConfigError::MissingHost),
+                    Some("http" | "ws" | "https" | "wss") => None,
+                    Some(_) => Some(WsConfigError::UnknownScheme),
+                    None => Some(WsConfigError::MissingScheme),
                 };
                 (uri, err)
             }

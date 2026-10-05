@@ -1,5 +1,9 @@
 # Changes
 
+## [4.2.1] - 2026-10-05
+
+* `Address::port()` for `urly::Url` uses the urly default ports, `ftp` gets port 21
+
 ## [4.2.0] - 2026-10-04
 
 * Implement `Address` for `urly::Url`, remove `Address` impl for `http::Uri` and

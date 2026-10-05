@@ -12,6 +12,7 @@ use crate::util::{ByteString, Either, HashMap, HashSet, select};
 use crate::{channel::inplace, channel::oneshot, channel::pool, rt::spawn, time::now};
 
 use super::connection::{Connection, ConnectionType};
+use super::h1proto::host_port;
 use super::{ClientConfig, Connect, ConnectorPipeline, error::ConnectError, h2proto::H2Client};
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
@@ -516,11 +517,12 @@ fn open_connection(
 }
 
 /// Builds the `:authority` value, the deprecated userinfo is omitted (RFC 9113 §8.3.1)
+/// and the port is omitted if it is the scheme's default, as in the `Host` header
 fn h2_authority(uri: &Url) -> ByteString {
-    match (uri.host(), uri.port_u16()) {
-        (Some(host), Some(port)) => format!("{host}:{port}").into(),
-        (Some(host), None) => ByteString::from(host),
-        (None, _) => ByteString::new(),
+    match host_port(uri) {
+        Some((host, Some(port))) => format!("{host}:{port}").into(),
+        Some((host, None)) => ByteString::from(host),
+        None => ByteString::new(),
     }
 }
 
@@ -642,7 +644,8 @@ mod tests {
     fn test_h2_authority() {
         for (uri, auth) in [
             ("https://example.com/path", "example.com"),
-            ("https://example.com:443/", "example.com:443"),
+            ("https://example.com:443/", "example.com"),
+            ("https://example.com:80/", "example.com:80"),
             ("https://user:pass@example.com/", "example.com"),
             ("http://user@example.com:8080/", "example.com:8080"),
             ("http://user:pass@[::1]:8080/", "[::1]:8080"),

@@ -565,11 +565,8 @@ impl MessageType for Request {
                     // authority-form is used only, and always, for `CONNECT`, see
                     // RFC 9112 section 3.2.3
                     let target = str::from_utf8(&target).map_err(|_| DecodeError::Uri)?;
-                    let uri = Url::try_from(format!("//{target}"))?;
-                    let valid = uri.authority().is_some_and(|a| a.userinfo().is_none())
-                        && uri.host().is_some()
-                        && uri.path_and_query().as_str().is_empty();
-                    if !valid {
+                    let uri = Url::parse(target)?;
+                    if uri.authority().is_some_and(|a| a.userinfo().is_some()) {
                         return Err(DecodeError::Uri);
                     }
                     uri
@@ -587,7 +584,9 @@ impl MessageType for Request {
                         Url::try_from(target)?
                     };
                     let valid = if uri.is_absolute() {
+                        // userinfo is deprecated, see RFC 9110 section 4.2.4
                         uri.host().is_some()
+                            && uri.authority().is_some_and(|a| a.userinfo().is_none())
                     } else {
                         uri.authority().is_none()
                             && (uri.path().as_str().starts_with('/') || asterisk)
@@ -1416,6 +1415,13 @@ mod tests {
         let req = parse_ready!(&mut buf);
         assert_eq!(req.path(), "/");
 
+        // userinfo is rejected in absolute-form
+        let mut buf = BytesMut::from("GET http://u@example.com/ HTTP/1.1\r\nhost: a\r\n\r\n");
+        match MessageDecoder::<Request>::default().decode(&mut buf) {
+            Err(DecodeError::Uri) => (),
+            res => panic!("{res:?}"),
+        }
+
         for method in ["GET", "POST", "HEAD", "OPTIONS"] {
             let mut buf = BytesMut::from(
                 format!("{method} example.com:443 HTTP/1.1\r\nhost: a\r\n\r\n").as_str(),
@@ -1430,7 +1436,14 @@ mod tests {
         let req = parse_ready!(&mut buf);
         assert_eq!(req.uri().authority().unwrap(), "[::1]:443");
 
-        for target in ["/", "/test", "http://example.com:443/", "u@h:1"] {
+        for target in [
+            "/",
+            "/test",
+            "http://example.com:443/",
+            "u@h:1",
+            ":443",
+            "h:1?q",
+        ] {
             let mut buf =
                 BytesMut::from(format!("CONNECT {target} HTTP/1.1\r\nhost: a\r\n\r\n").as_str());
             match MessageDecoder::<Request>::default().decode(&mut buf) {

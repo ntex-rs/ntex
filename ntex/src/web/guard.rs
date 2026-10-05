@@ -28,9 +28,9 @@
 //! ```
 #![allow(non_snake_case)]
 
-use std::fmt;
+use std::{borrow::Cow, fmt};
 
-use urly::{Authority, Url};
+use urly::Url;
 
 use crate::http::{Method, RequestHead, header};
 
@@ -368,18 +368,17 @@ pub fn Host<H: AsRef<str>>(host: H) -> HostGuard {
     HostGuard(host.as_ref().to_string(), None)
 }
 
-fn get_host_uri(req: &RequestHead) -> Option<Url> {
-    let host = req
-        .headers
-        .get(header::HOST)
-        .and_then(|host_value| host_value.to_str().ok())
-        .or_else(|| req.uri.host())?;
-
+fn get_host_uri(req: &RequestHead) -> Option<Cow<'_, Url>> {
+    // the authority of an absolute-form target takes precedence over `Host`,
+    // see RFC 9112 section 3.2.2
+    if req.uri.authority().is_some() {
+        return Some(Cow::Borrowed(&req.uri));
+    }
+    let host = req.headers.get(header::HOST)?.to_str().ok()?;
     if host.contains("://") {
-        Url::try_from(host).ok()
+        Url::try_from(host).ok().map(Cow::Owned)
     } else {
-        Authority::new(host).ok()?;
-        Url::try_from(format!("//{host}")).ok()
+        Url::parse(host).ok().map(Cow::Owned)
     }
 }
 
@@ -391,8 +390,8 @@ impl HostGuard {
     #[must_use]
     /// Set request scheme to match.
     ///
-    /// The scheme is taken from the `Host` header value, or from the request
-    /// uri if the header is missing. A `Host` header normally contains no
+    /// The scheme is taken from the request uri if it is in absolute-form, or
+    /// from the `Host` header value otherwise. A `Host` header normally contains no
     /// scheme; in that case the scheme is not checked and the guard matches on
     /// the host name alone. Do not rely on this check for security decisions.
     pub fn scheme<H: AsRef<str>>(mut self, scheme: H) -> HostGuard {
@@ -535,6 +534,27 @@ mod tests {
 
         let pred = Host("localhost");
         assert!(!pred.check(req.head()));
+    }
+
+    #[test]
+    fn test_host_absolute_form() {
+        // the target authority takes precedence over `Host`
+        let req = TestRequest::with_uri("http://www.rust-lang.org/p")
+            .header(header::HOST, "crates.io")
+            .to_http_request();
+        assert!(Host("www.rust-lang.org").scheme("http").check(req.head()));
+        assert!(!Host("www.rust-lang.org").scheme("https").check(req.head()));
+        assert!(!Host("crates.io").check(req.head()));
+
+        let req = TestRequest::default()
+            .header(header::HOST, "www.rust-lang.org:8080")
+            .to_http_request();
+        assert!(Host("www.rust-lang.org").check(req.head()));
+
+        let req = TestRequest::default()
+            .header(header::HOST, "www.rust-lang.org/p")
+            .to_http_request();
+        assert!(!Host("www.rust-lang.org").check(req.head()));
     }
 
     #[test]
