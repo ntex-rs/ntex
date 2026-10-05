@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+* http/2: Pooled request header maps are handed back to the h2 decoder, one allocation less
+  per request
+
 * Use `urly::Url` instead of `http::Uri` for `RequestHead::uri`, `HttpRequest::uri()`,
   the HTTP client and the WebSocket client. Client connectors use `Connect<Url>`
 
