@@ -4279,7 +4279,9 @@ mod tests {
         client.remote_buffer_cap(0);
         let (gate, mut h1) = gated_h1(
             server,
-            HttpServiceConfig::new().set_write_timeout(Seconds(1)),
+            HttpServiceConfig::new()
+                .set_write_timeout(Seconds(1))
+                .set_client_timeout(Seconds(5)),
             128 * 1024,
         );
 
@@ -4289,7 +4291,8 @@ mod tests {
         assert!(h1.inner.io.is_wr_backpressure());
         assert_eq!(h1.inner.timers.active, Timer::Write);
 
-        // a read event turns the io task, it notices the pause
+        // a read event turns the io task, it notices the pause. The "G" stays
+        // as a partial next request, the client timeout must outlast the checks
         gate.block_write(true);
         client.write("G");
         sleep(Millis(50)).await;
