@@ -1,6 +1,6 @@
 use std::{any, cell::Cell, io, task::Context, task::Poll};
 
-use crate::{FilterCtx, FilterLayer, IoRef, Readiness};
+use crate::{FilterCtx, FilterLayer, IoRef, Readiness, io::IoState};
 
 #[derive(Debug)]
 /// Base filter that connects a filter chain to the underlying transport.
@@ -78,6 +78,44 @@ pub trait Filter: 'static {
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness>;
 }
 
+/// Transport read readiness as decided by the io state, without the filter
+/// chain.
+pub(crate) fn read_readiness(st: &IoState) -> Poll<Readiness> {
+    if st.flags.is_force_closing() {
+        // Only an explicit `IoRef::terminate()` aborts the connection. A
+        // transport failure, a filter failure or an expired shutdown
+        // deadline end the connection too, but the transport still closes
+        // it gracefully.
+        Poll::Ready(Readiness::Terminate)
+    } else if st.flags.is_aborted() {
+        // The connection ended because of a failure, so no further input
+        // can be used; the transport closes it gracefully.
+        Poll::Ready(Readiness::Close)
+    } else if st.flags.is_read_eof() {
+        // The transport read side is closed, no further input can
+        // arrive. This outranks filter shutdown below: a filter that
+        // waits for input would otherwise keep the transport polling a
+        // closed read side.
+        Poll::Pending
+    } else if st.flags.is_stopping() {
+        // Transport shutdown phase. The filters are done, so no further
+        // input can be used and the read task pauses. The receive queue
+        // is drained by the transport itself, just before it closes the
+        // connection.
+        Poll::Pending
+    } else if st.flags.is_stopping_filters() {
+        // A filter may still need input to complete its shutdown, so
+        // keep reading even though the application paused reads.
+        Poll::Ready(Readiness::Ready)
+    } else if st.flags.is_read_paused_or_backpressure() || st.flags.is_read_wr_backpressure() {
+        // read buffer is full or is not processed by dispatcher yet,
+        // or output produced by reading has not drained
+        Poll::Pending
+    } else {
+        Poll::Ready(Readiness::Ready)
+    }
+}
+
 impl Filter for Base {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         if let Some(hnd) = self.0.0.handle.take() {
@@ -91,45 +129,11 @@ impl Filter for Base {
 
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         let st = &self.0.0;
-        if st.flags.is_force_closing() {
-            // Only an explicit `IoRef::terminate()` aborts the connection. A
-            // transport failure, a filter failure or an expired shutdown
-            // deadline end the connection too, but the transport still closes
-            // it gracefully.
-            Poll::Ready(Readiness::Terminate)
-        } else if st.flags.is_aborted() {
-            // The connection ended because of a failure, so no further input
-            // can be used; the transport closes it gracefully.
-            Poll::Ready(Readiness::Close)
-        } else {
+        let res = read_readiness(st);
+        if !matches!(res, Poll::Ready(Readiness::Close | Readiness::Terminate)) {
             st.read_task.register(cx.waker());
-
-            if st.flags.is_read_eof() {
-                // The transport read side is closed, no further input can
-                // arrive. This outranks filter shutdown below: a filter that
-                // waits for input would otherwise keep the transport polling a
-                // closed read side.
-                Poll::Pending
-            } else if st.flags.is_stopping() {
-                // Transport shutdown phase. The filters are done, so no further
-                // input can be used and the read task pauses. The receive queue
-                // is drained by the transport itself, just before it closes the
-                // connection.
-                Poll::Pending
-            } else if st.flags.is_stopping_filters() {
-                // A filter may still need input to complete its shutdown, so
-                // keep reading even though the application paused reads.
-                Poll::Ready(Readiness::Ready)
-            } else if st.flags.is_read_paused_or_backpressure()
-                || st.flags.is_read_wr_backpressure()
-            {
-                // read buffer is full or is not processed by dispatcher yet,
-                // or output produced by reading has not drained
-                Poll::Pending
-            } else {
-                Poll::Ready(Readiness::Ready)
-            }
         }
+        res
     }
 
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {

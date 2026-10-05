@@ -1,5 +1,10 @@
 # Changes
 
+## [4.2.1] - 2026-10-05
+
+* Suspend keep-alive and frame read timers while the filter chain pauses reads, the peer is
+  not charged for the pause
+
 ## [4.2.0] - 2026-10-04
 
 * Keep the keep-alive timer armed while a frame is read or handled instead of
