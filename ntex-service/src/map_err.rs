@@ -63,7 +63,9 @@ where
 
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, E> {
-        ctx.call(&self.svc, req).await.map_err(|e| (self.f)(e))
+        ctx.call_nowait(&self.svc, req)
+            .await
+            .map_err(|e| (self.f)(e))
     }
 
     #[inline]

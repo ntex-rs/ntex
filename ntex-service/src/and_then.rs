@@ -26,7 +26,7 @@ where
 
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<B::Res, A::Error> {
-        let result = ctx.call(&self.svc1, req).await?;
+        let result = ctx.call_nowait(&self.svc1, req).await?;
         ctx.call(&self.svc2, result).await
     }
 

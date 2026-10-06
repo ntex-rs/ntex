@@ -63,7 +63,7 @@ where
 
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Res, S::Error> {
-        ctx.call(&self.svc, req).await.map(|r| (self.f)(r))
+        ctx.call_nowait(&self.svc, req).await.map(|r| (self.f)(r))
     }
 
     crate::forward_ready!(St, svc);

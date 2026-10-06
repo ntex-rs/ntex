@@ -46,7 +46,7 @@ where
 
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, OtSt>) -> Result<S::Res, S::Error> {
-        ctx.map_state(&self.st).call(&self.s, req).await
+        ctx.map_state(&self.st).call_nowait(&self.s, req).await
     }
 
     #[inline]

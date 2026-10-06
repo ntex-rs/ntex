@@ -1,5 +1,10 @@
 # Changes
 
+## [5.2.0] - Unreleased
+
+* Do not check readiness for inner services calls, readiness
+  is checked before call and cover inner service.
+
 ## [5.1.1] - 2026-10-06
 
 * Do not re-clone the readiness waker on every poll
