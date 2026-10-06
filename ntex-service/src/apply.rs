@@ -41,6 +41,7 @@ pub struct ApplyCtx<'a, S, St, Req> {
     service: &'a S,
     st: &'a St,
     ready: &'a Cell<bool>,
+    entered: &'a Cell<u32>,
     r: marker::PhantomData<Req>,
 }
 
@@ -54,13 +55,18 @@ impl<S: Service<St, Req>, St, Req> ApplyCtx<'_, S, St, Req> {
     /// Waits for the wrapped service to become ready, then calls it.
     #[inline]
     pub async fn call(&self, req: Req) -> Result<S::Res, S::Error> {
+        self.enter(req, self.ready.get()).await
+    }
+
+    async fn enter(&self, req: Req, skip_ready: bool) -> Result<S::Res, S::Error> {
         let ctx = Ctx::<S, St>::new(self.idx, self.waiters, self.st);
-        if self.ready.get() {
-            self.ready.set(false);
-            ctx.call_nowait(&self.service, req).await
-        } else {
-            ctx.call(&self.service, req).await
+        if !skip_ready {
+            ctx.ready(self.service).await?;
         }
+        // entering the service invalidates all readiness observed so far
+        self.ready.set(false);
+        self.entered.set(self.entered.get().wrapping_add(1));
+        ctx.call_nowait(self.service, req).await
     }
 }
 
@@ -69,9 +75,7 @@ impl<S: Service<St, Req>, St, Req> ServiceCaller<Req, S::Res, S::Error>
 {
     #[inline]
     async fn call_service(&self, req: Req) -> Result<S::Res, S::Error> {
-        Ctx::<S, St>::new(self.idx, self.waiters, self.st)
-            .call(&self.service, req)
-            .await
+        self.enter(req, false).await
     }
 }
 
@@ -80,6 +84,7 @@ pub struct Apply<S, St, Req, F, In, Out, Err> {
     svc: S,
     f: F,
     ready: Cell<bool>,
+    entered: Cell<u32>,
     r: marker::PhantomData<fn(St, Req) -> (In, Out, Err)>,
 }
 
@@ -92,6 +97,7 @@ where
             f,
             svc,
             ready: Cell::new(false),
+            entered: Cell::new(0),
             r: marker::PhantomData,
         }
     }
@@ -107,6 +113,7 @@ where
             svc: self.svc.clone(),
             f: self.f.clone(),
             ready: Cell::new(false),
+            entered: Cell::new(0),
             r: marker::PhantomData,
         }
     }
@@ -135,8 +142,14 @@ where
 
     #[inline]
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Err> {
+        let entered = self.entered.get();
         let result = ctx.ready(&self.svc).await.map_err(From::from);
-        self.ready.set(result.is_ok());
+        if result.is_err() {
+            self.ready.set(false);
+        } else if self.entered.get() == entered {
+            // readiness is valid only if no call entered the service during the check
+            self.ready.set(true);
+        }
         result
     }
 
@@ -149,6 +162,7 @@ where
             waiters,
             st,
             ready: &self.ready,
+            entered: &self.entered,
             service: &self.svc,
             r: marker::PhantomData,
         };
@@ -235,6 +249,7 @@ where
             f: self.f.clone(),
             r: marker::PhantomData,
             ready: Cell::new(false),
+            entered: Cell::new(0),
         })
     }
 }
@@ -360,5 +375,25 @@ mod tests {
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv", ()));
         let _ = format!("{new_srv:?}");
+    }
+
+    mod ready_flag {
+        use std::rc::Rc;
+
+        use crate::util::tests::{Req, Single, State, concurrent_entry};
+        use crate::{Pipeline, apply::Apply};
+
+        #[ntex::test]
+        async fn concurrent_entry_after_await() {
+            let st = Rc::new(State::default());
+            let pl = Pipeline::new(
+                (),
+                Apply::new(Single(st.clone()), async |(rx1, rx2): Req, svc| {
+                    let _ = rx1.await;
+                    svc.call(rx2).await
+                }),
+            );
+            concurrent_entry(&pl, &st).await;
+        }
     }
 }

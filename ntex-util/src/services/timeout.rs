@@ -130,11 +130,11 @@ where
 
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, Self::Error> {
         if self.timeout.is_zero() {
-            ctx.call(&self.service, req)
+            ctx.call_nowait(&self.service, req)
                 .await
                 .map_err(TimeoutError::Service)
         } else {
-            match timeout(self.timeout, ctx.call(&self.service, req)).await {
+            match timeout(self.timeout, ctx.call_nowait(&self.service, req)).await {
                 Ok(res) => res.map_err(TimeoutError::Service),
                 Err(()) => Err(TimeoutError::Timeout),
             }

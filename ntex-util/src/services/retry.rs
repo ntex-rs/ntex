@@ -59,24 +59,20 @@ where
     type Res = S::Res;
     type Error = S::Error;
 
-    async fn call(&self, mut req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
+    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
         let mut policy = self.policy.clone();
         let mut cloned = policy.clone_request(&req);
+        // the first call is covered by the outer readiness check
+        let mut result = ctx.call_nowait(&self.service, req).await;
 
-        loop {
-            let result = ctx.call(&self.service, req).await;
-
-            cloned = if let Some(r) = cloned.take() {
-                if policy.retry(&r, &result).await {
-                    req = r;
-                    policy.clone_request(&req)
-                } else {
-                    return result;
-                }
-            } else {
-                return result;
+        while let Some(r) = cloned.take() {
+            if !policy.retry(&r, &result).await {
+                break;
             }
+            cloned = policy.clone_request(&r);
+            result = ctx.call(&self.service, r).await;
         }
+        result
     }
 
     ntex_service::forward_ready!(St, service);
