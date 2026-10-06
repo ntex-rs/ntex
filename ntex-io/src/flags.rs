@@ -81,28 +81,29 @@ bitflags::bitflags! {
         /// a transport read completed while `RD_NOTIFY` was set
         const RD_NOTIFIED         = 1 << 5;
 
+        /// read paused, output a filter produced while reading filled the write buffer
+        const RD_WR_BACKPRESSURE  = 1 << 6;
+        /// read paused, the filter chain is not ready for transport reads
+        const RD_FILTER_PAUSED    = 1 << 7;
+
         /// new data is available in read buffer
-        const BUF_R_READY         = 1 << 6;
+        const BUF_R_READY         = 1 << 8;
 
         /// flush write buf
-        const WR_FLUSH            = 1 << 7;
+        const WR_FLUSH            = 1 << 9;
         /// write task paused
-        const WR_PAUSED           = 1 << 8;
+        const WR_PAUSED           = 1 << 10;
         /// write op is scheduled
-        const WR_SEND_OP          = 1 << 9;
+        const WR_SEND_OP          = 1 << 11;
+        /// write paused, the filter chain is not ready for transport writes
+        const WR_FILTER_PAUSED    = 1 << 12;
 
         /// timeout occurred
-        const DSP_TIMEOUT         = 1 << 10;
+        const DSP_TIMEOUT         = 1 << 13;
         /// write buffer is full
-        const DSP_W_BACKPRESSURE  = 1 << 11;
+        const DSP_W_BACKPRESSURE  = 1 << 14;
         /// is direct-write enabled
-        const DIRECT_WR_SUP       = 1 << 12;
-        /// read paused, output a filter produced while reading filled the write buffer
-        const RD_WR_BACKPRESSURE  = 1 << 13;
-        /// read paused, the filter chain is not ready for transport reads
-        const RD_FILTER_PAUSED    = 1 << 14;
-        /// write paused, the filter chain is not ready for transport writes
-        const WR_FILTER_PAUSED    = 1 << 15;
+        const DIRECT_WR_SUP       = 1 << 15;
     }
 }
 
