@@ -1,5 +1,12 @@
 # Changes
 
+## [4.3.0] - 2026-10-06
+
+* Service calls, including stop and control items, wait for service readiness
+
+* A stop item that waits for service readiness longer than the shutdown timeout is
+  delivered in the background and io is closed
+
 ## [4.2.1] - 2026-10-05
 
 * Suspend the write timeout while the filter chain pauses writes, it starts over once writes

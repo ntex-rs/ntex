@@ -295,6 +295,11 @@ This coordination prevents multiple callers from independently driving the same
 readiness check. It also avoids hiding excess work in unbounded internal queues:
 when the pipeline is not ready, callers wait.
 
+A successful pipeline readiness check, such as `Pipeline::poll_ready()`, is
+remembered. The next call skips its own readiness check, later calls check
+readiness again. A dispatcher that waits for readiness before each call
+therefore checks the service only once per request.
+
 ### Readiness Between Services
 
 Readiness must also be respected while a request moves through the service

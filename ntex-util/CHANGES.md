@@ -1,5 +1,9 @@
 # Changes
 
+## [4.2.2] - 2026-10-06
+
+* `BufferService` uses pipeline readiness of the inner service instead of `call_nowait()`
+
 ## [4.2.1] - 2026-10-03
 
 * The time cached by the timer driver did not expire, `now()` returned a stale

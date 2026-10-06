@@ -922,7 +922,7 @@ where
         }
         self.start_payload_timer();
         State::CallPublish {
-            fut: self.service.call_nowait(req),
+            fut: self.service.call_static(req),
         }
     }
 
@@ -993,7 +993,7 @@ where
     fn control(&mut self, req: Control<F, Err>) -> State<F, B, Err> {
         if let Some(ctl) = &self.control {
             State::CallControl {
-                fut: ctl.call_nowait(req),
+                fut: ctl.call_static(req),
             }
         } else {
             self.control_result(req.ack().result)

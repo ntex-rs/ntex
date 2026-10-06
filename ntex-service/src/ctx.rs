@@ -18,6 +18,7 @@ pub(crate) struct WaitersRef {
     cur: cell::Cell<u32>,
     running: cell::Cell<bool>,
     shutdown: cell::Cell<bool>,
+    ready: cell::Cell<bool>,
     wakers: cell::UnsafeCell<Vec<u32>>,
     indexes: cell::UnsafeCell<slab::Slab<Option<Waker>>>,
 }
@@ -30,6 +31,7 @@ impl WaitersRef {
             cur: cell::Cell::new(u32::MAX),
             running: cell::Cell::new(false),
             shutdown: cell::Cell::new(false),
+            ready: cell::Cell::new(false),
             indexes: cell::UnsafeCell::new(waiters),
             wakers: cell::UnsafeCell::new(Vec::default()),
         }
@@ -122,6 +124,17 @@ impl WaitersRef {
 
     pub(crate) fn shutdown(&self) {
         self.shutdown.set(true);
+        self.ready.set(false);
+    }
+
+    /// Records the result of a pipeline readiness check
+    pub(crate) fn set_ready(&self, ready: bool) {
+        self.ready.set(ready);
+    }
+
+    /// Consumes the result of the last successful pipeline readiness check
+    pub(crate) fn take_ready(&self) -> bool {
+        self.ready.replace(false)
     }
 
     pub(crate) fn is_shutdown(&self) -> bool {
@@ -594,7 +607,7 @@ mod tests {
         let data1 = data.clone();
         ntex::rt::spawn(async move {
             let _ = srv1.ready().await;
-            let fut = srv1.call_nowait("srv1");
+            let fut = srv1.call_static("srv1");
             assert!(format!("{fut:?}").contains("PipelineCall"));
             let i = fut.await.unwrap();
             data1.borrow_mut().push(i);

@@ -243,7 +243,8 @@ where
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Res, Self::Error> {
         if self.ready.get() {
             self.ready.set(false);
-            Ok(self.service.call_nowait(req, ctx.st()).await?)
+            // the inner pipeline skips readiness check after successful `poll_ready()`
+            Ok(self.service.call(req, ctx.st()).await?)
         } else {
             let (tx, rx) = oneshot::channel();
             self.buf.borrow_mut().push_back(tx);
@@ -674,7 +675,7 @@ mod tests {
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         // buffer a request, then drop it before release
-        let mut fut = srv.call_nowait(());
+        let mut fut = srv.call_static(());
         assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
         drop(fut);
 
@@ -683,7 +684,7 @@ mod tests {
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         // readiness goes to the next direct call
-        srv.call_nowait(()).await.unwrap();
+        srv.call_static(()).await.unwrap();
         assert_eq!(inner.count.get(), 1);
     }
 
@@ -700,7 +701,7 @@ mod tests {
         );
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
-        let mut fut = srv.call_nowait(());
+        let mut fut = srv.call_static(());
         assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
         drop(fut);
 
@@ -720,7 +721,7 @@ mod tests {
         );
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
-        let mut fut = srv.call_nowait(());
+        let mut fut = srv.call_static(());
         assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
 
         fail.set(true);

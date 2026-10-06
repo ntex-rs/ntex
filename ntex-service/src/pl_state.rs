@@ -39,24 +39,21 @@ where
 
     #[inline]
     /// Returns when the pipeline is ready to process requests.
+    ///
+    /// A successful check is consumed by the next call, which then skips
+    /// its own readiness check.
     pub async fn ready(&self, st: &St) -> Result<(), Err> {
         self.api.ready(0, st).await
     }
 
     #[inline]
     /// Waits for readiness, then calls the service with `st`.
+    ///
+    /// The readiness check is skipped if the last pipeline readiness check
+    /// succeeded and no call has started since.
     pub async fn call(&self, req: Req, st: &St) -> Result<Res, Err> {
         let pl = self.binding();
-        self.api.call(pl.idx, req, st, true).await
-    }
-
-    #[inline]
-    /// Calls the service with `st` without checking readiness.
-    ///
-    /// The caller must ensure the pipeline is ready before calling this method.
-    pub async fn call_nowait(&self, req: Req, st: &St) -> Result<Res, Err> {
-        let pl = self.binding();
-        pl.api.call(pl.idx, req, st, false).await
+        self.api.call(pl.idx, req, st).await
     }
 
     #[inline]
@@ -67,6 +64,9 @@ where
 
     #[inline]
     /// Returns `Ready` when the pipeline is ready to process requests.
+    ///
+    /// A successful check is consumed by the next call, which then skips
+    /// its own readiness check.
     ///
     /// # Panics
     ///
@@ -167,24 +167,15 @@ where
 {
     #[inline]
     /// Waits for readiness, then calls the service with `st`.
+    ///
+    /// The readiness check is skipped if the last pipeline readiness check
+    /// succeeded and no call has started since.
     pub async fn call(&self, req: Req, st: &St) -> Result<Res, Err> {
         let pl = Binding {
             idx: self.api.reg(),
             api: self.api.as_ref(),
         };
-        pl.api.call(pl.idx, req, st, true).await
-    }
-
-    #[inline]
-    /// Calls the service with `st` without checking readiness.
-    ///
-    /// The caller must ensure the pipeline is ready before calling this method.
-    pub async fn call_nowait(&self, req: Req, st: &St) -> Result<Res, Err> {
-        let pl = Binding {
-            idx: self.api.reg(),
-            api: self.api.as_ref(),
-        };
-        pl.api.call(pl.idx, req, st, false).await
+        pl.api.call(pl.idx, req, st).await
     }
 }
 
@@ -208,8 +199,8 @@ impl<St, Req, Res, Err> PipelineInternalApi<Req, Res, Err> for PipelineInternal<
         self.api.ready(idx, &self.st)
     }
 
-    fn call(&self, idx: u32, req: Req, ready: bool) -> BoxFuture<'_, Result<Res, Err>> {
-        self.api.call(idx, req, &self.st, ready)
+    fn call(&self, idx: u32, req: Req) -> BoxFuture<'_, Result<Res, Err>> {
+        self.api.call(idx, req, &self.st)
     }
 
     fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Err>> {
@@ -251,13 +242,7 @@ trait PipelineStateApi<St, Req, Res, Err> {
     fn reg(&self) -> u32;
     fn unreg(&self, idx: u32);
 
-    fn call<'a>(
-        &'a self,
-        idx: u32,
-        req: Req,
-        st: &'a St,
-        ready: bool,
-    ) -> BoxFuture<'a, Result<Res, Err>>
+    fn call<'a>(&'a self, idx: u32, req: Req, st: &'a St) -> BoxFuture<'a, Result<Res, Err>>
     where
         Req: 'a;
 
@@ -294,9 +279,12 @@ where
         Req: 'a,
     {
         Box::pin(async move {
-            Ctx::<'_, S, St>::new(idx, &self.waiters, st)
+            self.waiters.set_ready(false);
+            let result = Ctx::<'_, S, St>::new(idx, &self.waiters, st)
                 .ready(&self.s)
-                .await
+                .await;
+            self.waiters.set_ready(result.is_ok());
+            result
         })
     }
 
@@ -304,6 +292,7 @@ where
         Box::pin(async move {
             let pl_state = unsafe { &mut *self.st_runtime.get() };
             *pl_state = RuntimeState::Shutdown;
+            self.waiters.set_ready(false);
 
             Ctx::<'_, S, St>::new(idx, &self.waiters, st)
                 .shutdown(&self.s)
@@ -311,26 +300,19 @@ where
         })
     }
 
-    fn call<'a>(
-        &'a self,
-        idx: u32,
-        req: Req,
-        st: &'a St,
-        ready: bool,
-    ) -> BoxFuture<'a, Result<S::Res, S::Error>>
+    fn call<'a>(&'a self, idx: u32, req: Req, st: &'a St) -> BoxFuture<'a, Result<S::Res, S::Error>>
     where
         Req: 'a,
     {
         Box::pin(async move {
-            if ready {
-                Ctx::<'_, S, St>::new(idx, &self.waiters, st)
-                    .call(&self.s, req)
-                    .await
-            } else {
-                Ctx::<'_, S, St>::new(idx, &self.waiters, st)
-                    .call_nowait(&self.s, req)
-                    .await
+            let ctx = Ctx::<'_, S, St>::new(idx, &self.waiters, st);
+            if !self.waiters.take_ready() {
+                let result = ctx.ready(&self.s).await;
+                // the call consumes any readiness reported while it was waiting
+                self.waiters.set_ready(false);
+                result?;
             }
+            ctx.call_nowait(&self.s, req).await
         })
     }
 
@@ -407,7 +389,7 @@ where
     Fut: Future<Output = Result<(), S::Error>>,
 {
     fn poll(&mut self, cx: &mut Context<'_>, st: &St) -> Poll<Result<(), S::Error>> {
-        self.pl.waiters.run(0, cx, |cx| {
+        let result = self.pl.waiters.run(0, cx, |cx| {
             if self.fut.is_none() {
                 self.st = st.clone();
                 let st: &'static St = unsafe { std::mem::transmute(&self.st) };
@@ -419,7 +401,11 @@ where
                 let _ = self.fut.take();
             }
             result
-        })
+        });
+        self.pl
+            .waiters
+            .set_ready(matches!(result, Poll::Ready(Ok(()))));
+        result
     }
 }
 
@@ -473,9 +459,12 @@ mod tests {
 
         cond.notify_and_lock(());
         assert_eq!(pl.ready(&1).await, Ok(()));
+        assert_eq!(cnt.get(), 1);
+        // the successful readiness check is consumed by the next call
         assert_eq!(pl.call(1, &2).await, Ok(3));
+        assert_eq!(cnt.get(), 1);
         assert_eq!(pl.call(0, &2).await, Err(()));
-        assert_eq!(pl.call_nowait(2, &3).await, Ok(5));
+        assert_eq!(pl.call(2, &3).await, Ok(5));
         assert_eq!(cnt.get(), 3);
 
         let b = pl.bind();
@@ -483,19 +472,31 @@ mod tests {
         let b2 = b.clone();
         drop(b);
         assert_eq!(b2.call(1, &10).await, Ok(11));
-        assert_eq!(b2.call_nowait(1, &20).await, Ok(21));
         assert_eq!(cnt.get(), 4);
+        assert_eq!(pl.ready(&1).await, Ok(()));
+        assert_eq!(b2.call(1, &20).await, Ok(21));
+        assert_eq!(cnt.get(), 5);
 
         let b = pl.bind_state(7);
         assert_eq!(b.ready().await, Ok(()));
         assert_eq!(b.call(1).await, Ok(8));
-        assert_eq!(b.call_nowait(2).await, Ok(9));
+        assert_eq!(cnt.get(), 6);
+        assert_eq!(b.call(2).await, Ok(9));
         assert_eq!(b.clone().call_static(3).await, Ok(10));
-        assert_eq!(cnt.get(), 7);
+        assert_eq!(cnt.get(), 8);
         drop(b);
 
+        assert_eq!(lazy(|cx| pl.poll_ready(cx, &1)).await, Poll::Ready(Ok(())));
+        assert_eq!(cnt.get(), 9);
+        assert_eq!(pl.call(1, &2).await, Ok(3));
+        assert_eq!(cnt.get(), 9);
+
+        // shutdown resets the flag
+        assert_eq!(pl.ready(&1).await, Ok(()));
         pl.shutdown(&2).await;
-        assert_eq!(cnt.get(), 207);
+        assert_eq!(cnt.get(), 210);
+        assert_eq!(pl.call(1, &2).await, Ok(3));
+        assert_eq!(cnt.get(), 211);
     }
 
     #[ntex::test]
@@ -528,6 +529,41 @@ mod tests {
         drop(fut);
         assert!(lazy(|cx| pl.poll_ready(cx, &1)).await.is_pending());
         assert_eq!(cnt.get(), 3);
+    }
+
+    #[ntex::test]
+    async fn pipeline_state_ready_flag() {
+        let cnt = Rc::new(Cell::new(0));
+        let cond = condition::Condition::new();
+        let pl = PipelineState::new(Srv(cnt.clone(), cond.wait()));
+
+        let mut fut = Box::pin(pl.ready(&1));
+        assert!(lazy(|cx| fut.as_mut().poll(cx)).await.is_pending());
+        cond.notify(());
+        assert_eq!(fut.await, Ok(()));
+        assert_eq!(cnt.get(), 1);
+
+        // a pending readiness check clears the flag
+        assert!(lazy(|cx| pl.poll_ready(cx, &1)).await.is_pending());
+        assert_eq!(cnt.get(), 2);
+        let mut call = Box::pin(pl.call(1, &2));
+        assert!(lazy(|cx| call.as_mut().poll(cx)).await.is_pending());
+        assert_eq!(cnt.get(), 2);
+
+        cond.notify(());
+        assert_eq!(lazy(|cx| pl.poll_ready(cx, &1)).await, Poll::Ready(Ok(())));
+
+        // the waiting call checks readiness itself
+        assert!(lazy(|cx| call.as_mut().poll(cx)).await.is_pending());
+        assert_eq!(cnt.get(), 3);
+        cond.notify(());
+        assert_eq!(lazy(|cx| call.as_mut().poll(cx)).await, Poll::Ready(Ok(3)));
+        assert_eq!(cnt.get(), 3);
+
+        // readiness reported while the call was waiting is consumed by it
+        let mut call = Box::pin(pl.call(1, &2));
+        assert!(lazy(|cx| call.as_mut().poll(cx)).await.is_pending());
+        assert_eq!(cnt.get(), 4);
     }
 
     #[ntex::test]

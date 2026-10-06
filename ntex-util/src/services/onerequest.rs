@@ -269,7 +269,7 @@ mod tests {
 
         srv.ready().await.unwrap();
         srv.ready().await.unwrap();
-        let (r1, r2) = crate::future::join(srv.call_nowait(()), srv.call_nowait(())).await;
+        let (r1, r2) = crate::future::join(srv.call_static(()), srv.call_static(())).await;
         assert!(r1.is_ok() && r2.is_ok());
         assert_eq!(max.get(), 1);
     }

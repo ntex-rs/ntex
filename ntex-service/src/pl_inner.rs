@@ -39,8 +39,8 @@ impl<Req, Res, Err> PipelineApi<Req, Res, Err> {
         self.0.ready(idx)
     }
 
-    pub(crate) fn call(&self, idx: u32, req: Req, ready: bool) -> BoxFuture<'_, Result<Res, Err>> {
-        self.0.call(idx, req, ready)
+    pub(crate) fn call(&self, idx: u32, req: Req) -> BoxFuture<'_, Result<Res, Err>> {
+        self.0.call(idx, req)
     }
 
     pub(crate) fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Err>> {
@@ -95,7 +95,7 @@ pub(crate) trait PipelineInternalApi<Req, Res, Err> {
 
     fn ready(&self, idx: u32) -> BoxFuture<'_, Result<(), Err>>;
 
-    fn call(&self, idx: u32, req: Req, ready: bool) -> BoxFuture<'_, Result<Res, Err>>;
+    fn call(&self, idx: u32, req: Req) -> BoxFuture<'_, Result<Res, Err>>;
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Err>>;
 
@@ -120,23 +120,25 @@ where
 
     fn ready(&self, idx: u32) -> BoxFuture<'_, Result<(), S::Error>> {
         Box::pin(async move {
-            Ctx::<'_, S, St>::new(idx, &self.waiters, &self.st)
+            self.waiters.set_ready(false);
+            let result = Ctx::<'_, S, St>::new(idx, &self.waiters, &self.st)
                 .ready(&self.s)
-                .await
+                .await;
+            self.waiters.set_ready(result.is_ok());
+            result
         })
     }
 
-    fn call(&self, idx: u32, req: Req, ready: bool) -> BoxFuture<'_, Result<S::Res, S::Error>> {
+    fn call(&self, idx: u32, req: Req) -> BoxFuture<'_, Result<S::Res, S::Error>> {
         Box::pin(async move {
-            if ready {
-                Ctx::<'_, S, St>::new(idx, &self.waiters, &self.st)
-                    .call(&self.s, req)
-                    .await
-            } else {
-                Ctx::<'_, S, St>::new(idx, &self.waiters, &self.st)
-                    .call_nowait(&self.s, req)
-                    .await
+            let ctx = Ctx::<'_, S, St>::new(idx, &self.waiters, &self.st);
+            if !self.waiters.take_ready() {
+                let result = ctx.ready(&self.s).await;
+                // the call consumes any readiness reported while it was waiting
+                self.waiters.set_ready(false);
+                result?;
             }
+            ctx.call_nowait(&self.s, req).await
         })
     }
 
@@ -239,7 +241,7 @@ where
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.as_mut();
 
-        this.pl.waiters.run(0, cx, |cx| {
+        let result = this.pl.waiters.run(0, cx, |cx| {
             if this.fut.is_none() {
                 this.fut = Some((this.f)(this.pl));
             }
@@ -249,7 +251,11 @@ where
                 let _ = this.fut.take();
             }
             result
-        })
+        });
+        this.pl
+            .waiters
+            .set_ready(matches!(result, Poll::Ready(Ok(()))));
+        result
     }
 }
 
@@ -311,7 +317,7 @@ mod tests {
     fn miri_drop_pending_call_after_pipeline() {
         let mut cx = Context::from_waker(Waker::noop());
         let pl = Pipeline::new(1, Pending(vec![1, 2]));
-        let mut call = Box::pin(pl.call_nowait(()));
+        let mut call = Box::pin(pl.call_static(()));
         drop(pl);
         assert!(call.as_mut().poll(&mut cx).is_pending());
         drop(call);
