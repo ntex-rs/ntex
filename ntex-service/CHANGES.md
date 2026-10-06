@@ -1,6 +1,6 @@
 # Changes
 
-## [5.2.0] - Unreleased
+## [5.2.0] - 2026-10-06
 
 * Do not check readiness for inner services calls, readiness
   is checked before call and cover inner service.

@@ -1,6 +1,6 @@
 # Changes
 
-## [4.2.2] - 2026-10-06
+## [4.3.0] - 2026-10-06
 
 * `BufferService` uses pipeline readiness of the inner service instead of `call_nowait()`
 
