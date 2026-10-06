@@ -1,5 +1,21 @@
 # Changes
 
+## [1.11.0] (2026-10-06)
+
+* Add `BytePageSize::Size128` and `BytePageSize::Size256` page sizes, `BytePageSize` is
+  `#[non_exhaustive]`
+
+* Add `BytePageSize::for_capacity()`, `BytePageSize::next()` and `BytePageSize::prev()`
+
+* Add `BytesMut::with_page_size()` and `BytesMut::page_size()`, a buffer with a page size returns
+  to the page cache when the last reference is dropped
+
+* A buffer with a page size grows into a page of the size that fits the new capacity, above the
+  largest page size it becomes a regular buffer. Buffers without a page size grow as before
+
+* The page cache limit depends on the page size, fewer pages are cached for larger sizes, add
+  `set_page_cache_size()` to set the limit of a single page size, deprecate `set_pages_cache()`
+
 ## [1.10.0] (2026-10-01)
 
 * Remove deprecated `BufMut::writer()` and `buf::Writer`, `BytesMut` and `BytePages`

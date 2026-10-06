@@ -359,20 +359,46 @@ impl StorageVec {
                 }
 
                 // Grow the allocation instead of copying into a new one, the
-                // allocator can often extend it in place. A pooled page keeps
-                // its size class, it goes back to the page cache on release.
+                // allocator can often extend it in place.
                 if (*inner).size == BytePageSize::Unset {
                     self.realloc(len, capacity, grow_cap);
                     return;
                 }
             }
-            // Create a new storage
+
+            // A pooled page grows into a page of the category that fits the
+            // new capacity, at least its own category. The old page goes back
+            // to the page cache on release. Above the largest category, and
+            // for buffers without a page size, a new buffer is allocated.
+            let size = (*inner).size;
+            if size != BytePageSize::Unset {
+                let new_size = BytePageSize::for_capacity(grow_cap);
+                if new_size != BytePageSize::Unset {
+                    let new_size = if (new_size as usize) < (size as usize) {
+                        size
+                    } else {
+                        new_size
+                    };
+                    let mut st = StorageVec::sized(new_size);
+                    let dst = st.as_ptr();
+                    ptr::copy_nonoverlapping(self.as_ptr(), dst, len);
+                    st.set_len(len);
+                    *self = st;
+                    return;
+                }
+            }
+
             *self = StorageVec(SharedVec::create(
                 BytePageSize::Unset,
                 grow_cap,
                 self.as_ref(),
             ));
         }
+    }
+
+    /// Returns the page category of the buffer.
+    pub(crate) fn page_size(&self) -> BytePageSize {
+        unsafe { (*self.0.as_ptr()).size }
     }
 
     /// Grows the unique, unpooled allocation to hold `new_cap` bytes.
@@ -476,24 +502,41 @@ thread_local! {
 pub(crate) fn set_pages_cache(size: usize) {
     let _ = CACHE.try_with(|c| {
         if let Some(mut cst) = c.take() {
-            cst.size = size;
+            cst.limits = [size; PAGE_CLASSES];
             c.set(Some(cst));
         }
     });
 }
 
-/// Default number of cached pages per page size.
-const DEFAULT_PAGES_CACHE: usize = 16;
+pub(crate) fn set_page_cache_size(size: BytePageSize, count: usize) {
+    if size == BytePageSize::Unset {
+        return;
+    }
+    let _ = CACHE.try_with(|c| {
+        if let Some(mut cst) = c.take() {
+            cst.limits[size as usize] = count;
+            c.set(Some(cst));
+        }
+    });
+}
+
+/// Number of page categories, `BytePageSize::Unset` excluded.
+const PAGE_CLASSES: usize = BytePageSize::Unset as usize;
+
+/// Default number of cached pages per page size, fewer pages are cached
+/// for larger sizes. 16 KiB is the default page size for both reads and
+/// writes.
+const DEFAULT_PAGES_CACHE: [usize; PAGE_CLASSES] = [64, 32, 64, 16, 16, 8, 8, 2, 1];
 
 struct Cache {
-    size: usize,
-    cache: [Vec<StorageVec>; 7],
+    limits: [usize; PAGE_CLASSES],
+    cache: [Vec<StorageVec>; PAGE_CLASSES],
 }
 
 impl Default for Cache {
     fn default() -> Self {
         Self {
-            size: DEFAULT_PAGES_CACHE,
+            limits: DEFAULT_PAGES_CACHE,
             cache: Default::default(),
         }
     }
@@ -607,7 +650,7 @@ pub(crate) fn release_shared_vec(ptr: *mut SharedVec) {
                 let Some(mut cst) = c.take() else {
                     return false;
                 };
-                let res = if cst.cache[size as usize].len() < cst.size {
+                let res = if cst.cache[size as usize].len() < cst.limits[size as usize] {
                     (*ptr).len = 0;
                     (*ptr).offset = METADATA_SIZE_U32;
                     (*ptr).remaining = capacity;
@@ -682,21 +725,16 @@ mod tests {
 
     #[test]
     fn default_cache_limit_per_page_size() {
+        assert_eq!(super::DEFAULT_PAGES_CACHE, [64, 32, 64, 16, 16, 8, 8, 2, 1]);
+        for size in crate::PAGE_SIZES {
+            super::CACHE.with(|cache| cache.set(Some(Box::default())));
+
+            let limit = super::DEFAULT_PAGES_CACHE[size as usize];
+            let pages: Vec<_> = (0..limit + 4).map(|_| StorageVec::sized(size)).collect();
+            drop(pages);
+            assert_eq!(cached_pages(size), limit, "{size:?}");
+        }
         super::CACHE.with(|cache| cache.set(Some(Box::default())));
-
-        let pages: Vec<_> = (0..20)
-            .map(|_| StorageVec::sized(BytePageSize::Size4))
-            .collect();
-        drop(pages);
-
-        let cached = super::CACHE.with(|c| {
-            let cst = c.take().unwrap();
-            let len = cst.cache[BytePageSize::Size4 as usize].len();
-            c.set(Some(cst));
-            len
-        });
-        assert_eq!(cached, super::DEFAULT_PAGES_CACHE);
-        assert_eq!(super::DEFAULT_PAGES_CACHE, 16);
     }
 
     #[test]
@@ -705,6 +743,8 @@ mod tests {
             (BytePageSize::Size4, 4 * 1024),
             (BytePageSize::Size16, 16 * 1024),
             (BytePageSize::Size64, 64 * 1024),
+            (BytePageSize::Size128, 128 * 1024),
+            (BytePageSize::Size256, 256 * 1024),
         ] {
             let st = StorageVec::sized(size);
             assert_eq!(st.capacity(), size.capacity());
@@ -783,7 +823,7 @@ mod tests {
     }
 
     #[test]
-    fn reserve_pooled_page_leaves_page_to_cache() {
+    fn reserve_pooled_page_grows_to_next_page_size() {
         super::CACHE.with(|cache| cache.set(Some(Box::default())));
 
         let mut st = StorageVec::sized(BytePageSize::Size8);
@@ -793,13 +833,108 @@ mod tests {
             st.put_u8(*b);
         }
         st.reserve(1);
-        assert_eq!(unsafe { (*st.0.as_ptr()).size }, BytePageSize::Unset);
+        assert_eq!(st.page_size(), BytePageSize::Size16);
+        assert_eq!(st.capacity(), BytePageSize::Size16.capacity());
         assert_ne!(st.0, page);
         assert_eq!(st.as_ref(), &data[..]);
 
         // the page went back to the cache with its size class
+        assert_eq!(cached_pages(BytePageSize::Size8), 1);
         let st2 = StorageVec::sized(BytePageSize::Size8);
         assert_eq!(st2.0, page);
+        drop(st);
+        assert_eq!(cached_pages(BytePageSize::Size16), 1);
+    }
+
+    #[test]
+    fn reserve_pooled_page_skips_page_sizes() {
+        super::CACHE.with(|cache| cache.set(Some(Box::default())));
+
+        let data = pattern(100);
+        let mut st = StorageVec::sized(BytePageSize::Size4);
+        assert_eq!(st.put_slice_partial(&data), data.len());
+        st.reserve_exact(40 * 1024);
+        assert_eq!(st.page_size(), BytePageSize::Size48);
+        assert_eq!(st.as_ref(), &data[..]);
+
+        // a small reservation keeps at least the current page size
+        let mut st = StorageVec::sized(BytePageSize::Size32);
+        let full = pattern(st.capacity());
+        assert_eq!(st.put_slice_partial(&full), full.len());
+        unsafe { st.set_start(full.len() - 100) };
+        let view = st.shallow_freeze();
+        assert_eq!(st.remaining(), 0);
+        st.reserve(10);
+        assert_eq!(st.page_size(), BytePageSize::Size32);
+        assert_eq!(st.as_ref(), &full[full.len() - 100..]);
+        assert_eq!(view.as_ref(), &full[full.len() - 100..]);
+    }
+
+    #[test]
+    fn reserve_shared_pooled_page() {
+        super::CACHE.with(|cache| cache.set(Some(Box::default())));
+
+        let mut st = StorageVec::sized(BytePageSize::Size4);
+        let data = pattern(st.capacity());
+        assert_eq!(st.put_slice_partial(&data), data.len());
+        let view = st.shallow_freeze();
+        st.reserve(1);
+        assert_eq!(st.page_size(), BytePageSize::Size8);
+        st.as_mut()[0] = 0xff;
+        assert_eq!(view.as_ref(), &data[..]);
+        assert_eq!(&st.as_ref()[1..], &data[1..]);
+
+        // the old page is cached when the last view is dropped
+        assert_eq!(cached_pages(BytePageSize::Size4), 0);
+        drop(view);
+        assert_eq!(cached_pages(BytePageSize::Size4), 1);
+    }
+
+    #[test]
+    fn reserve_pooled_page_above_largest_page_size() {
+        super::CACHE.with(|cache| cache.set(Some(Box::default())));
+
+        let data = pattern(1000);
+        let mut st = StorageVec::sized(BytePageSize::Size256);
+        assert_eq!(st.put_slice_partial(&data), data.len());
+        st.reserve_exact(BytePageSize::Size256.capacity());
+        assert_eq!(st.page_size(), BytePageSize::Unset);
+        assert_eq!(st.capacity(), 1000 + BytePageSize::Size256.capacity());
+        assert_eq!(st.as_ref(), &data[..]);
+        assert_eq!(cached_pages(BytePageSize::Size256), 1);
+
+        // without a page size it is freed, not cached
+        drop(st);
+        for size in crate::PAGE_SIZES {
+            assert_eq!(
+                cached_pages(size),
+                usize::from(size == BytePageSize::Size256)
+            );
+        }
+    }
+
+    #[test]
+    fn reserve_unsized_buffer_keeps_page_size() {
+        super::CACHE.with(|cache| cache.set(Some(Box::default())));
+
+        // the capacity is not rounded up to a page size
+        let mut st = StorageVec::with_capacity(100);
+        assert_eq!(st.put_slice_partial(&pattern(100)), 100);
+        st.reserve_exact(4000);
+        assert_eq!(st.page_size(), BytePageSize::Unset);
+        assert_eq!(st.capacity(), 4100);
+
+        // shared buffer gets a new buffer without a page size
+        let view = st.shallow_freeze();
+        st.reserve(st.remaining() + 1);
+        assert_eq!(st.page_size(), BytePageSize::Unset);
+        drop(view);
+
+        // a buffer with a page capacity is not cached
+        let st = StorageVec::with_capacity(BytePageSize::Size4.capacity());
+        assert_eq!(st.capacity(), BytePageSize::Size4.capacity());
+        drop(st);
+        assert_eq!(cached_pages(BytePageSize::Size4), 0);
     }
 
     fn cached_pages(size: BytePageSize) -> usize {
@@ -812,6 +947,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn pages_cache_size() {
         super::CACHE.with(|cache| cache.set(Some(Box::default())));
 
@@ -838,15 +974,85 @@ mod tests {
         let cache = super::CACHE.with(Cell::take);
         crate::set_pages_cache(3);
         super::CACHE.with(|c| c.set(cache));
+        assert_eq!(cache_limits(), [16; super::PAGE_CLASSES]);
+    }
+
+    fn cache_limits() -> [usize; super::PAGE_CLASSES] {
+        super::CACHE.with(|c| {
+            let cst = c.take().unwrap();
+            let limits = cst.limits;
+            c.set(Some(cst));
+            limits
+        })
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn page_cache_size() {
+        super::CACHE.with(|cache| cache.set(Some(Box::default())));
+
+        crate::set_page_cache_size(BytePageSize::Size64, 1);
+        crate::set_page_cache_size(BytePageSize::Unset, 5);
+        let mut expected = super::DEFAULT_PAGES_CACHE;
+        expected[BytePageSize::Size64 as usize] = 1;
+        assert_eq!(cache_limits(), expected);
+
+        drop((
+            StorageVec::sized(BytePageSize::Size64),
+            StorageVec::sized(BytePageSize::Size64),
+            StorageVec::sized(BytePageSize::Size48),
+            StorageVec::sized(BytePageSize::Size48),
+        ));
+        assert_eq!(cached_pages(BytePageSize::Size64), 1);
+        assert_eq!(cached_pages(BytePageSize::Size48), 2);
+
+        // the setting is ignored while the cache is in use
+        let cache = super::CACHE.with(Cell::take);
+        crate::set_page_cache_size(BytePageSize::Size48, 3);
+        super::CACHE.with(|c| c.set(cache));
+        assert_eq!(cache_limits(), expected);
+
+        crate::set_pages_cache(2);
+        assert_eq!(cache_limits(), [2; super::PAGE_CLASSES]);
+        super::CACHE.with(|cache| cache.set(Some(Box::default())));
+    }
+
+    #[test]
+    fn bytes_mut_with_page_size() {
+        super::CACHE.with(|cache| cache.set(Some(Box::default())));
+
+        let mut buf = BytesMut::with_page_size(BytePageSize::Size8);
+        assert_eq!(buf.page_size(), BytePageSize::Size8);
+        assert_eq!(buf.capacity(), BytePageSize::Size8.capacity());
+        let ptr = buf.as_ptr();
+
+        // split off data keeps the page until the last reference is dropped
+        buf.extend_from_slice(&[1; 1000]);
+        let head = buf.split_to(500);
+        drop(buf);
+        assert_eq!(cached_pages(BytePageSize::Size8), 0);
+        drop(head);
+        assert_eq!(cached_pages(BytePageSize::Size8), 1);
+
+        let buf = BytesMut::with_page_size(BytePageSize::Size8);
+        assert_eq!(buf.as_ptr(), ptr);
+        assert_eq!(buf.capacity(), BytePageSize::Size8.capacity());
+        assert_eq!(cached_pages(BytePageSize::Size8), 0);
+
+        // buffers without a page size are not cached
+        let buf = BytesMut::with_page_size(BytePageSize::Unset);
+        assert_eq!(buf.page_size(), BytePageSize::Unset);
+        assert_eq!(buf.capacity(), BytePageSize::Unset.capacity());
+        assert_eq!(BytesMut::new().page_size(), BytePageSize::Unset);
+        assert_eq!(BytesMut::with_capacity(64).page_size(), BytePageSize::Unset);
         assert_eq!(
-            super::CACHE.with(|c| {
-                let cst = c.take().unwrap();
-                let size = cst.size;
-                c.set(Some(cst));
-                size
-            }),
-            16
+            BytesMut::copy_from_slice(b"hello").page_size(),
+            BytePageSize::Unset
         );
+        drop(buf);
+        for size in crate::PAGE_SIZES {
+            assert_eq!(cached_pages(size), 0);
+        }
     }
 
     #[test]
