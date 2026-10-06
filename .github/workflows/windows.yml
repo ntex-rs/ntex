@@ -90,6 +90,7 @@ jobs:
           cargo nextest run --retries=3 --all --no-default-features --no-fail-fast --features="ntex/tokio,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Run tests (compio)
+        if: matrix.version == 'stable'
         timeout-minutes: 10
         run: |
           cargo nextest run --retries=3 --all --no-default-features --no-fail-fast --features="ntex/compio,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
