@@ -1,5 +1,9 @@
 # Changes
 
+## [4.3.0] - Unreleased
+
+* openssl: `use_global_allocator()` routes OpenSSL allocations to the Rust global allocator
+
 ## [4.2.0] - 2026-10-04
 
 * Add `PeerCertDer` and `PeerCertChainDer` queries supported by all tls filters

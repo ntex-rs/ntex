@@ -16,6 +16,9 @@ pub use self::connect::SslConnector;
 mod accept;
 pub use self::accept::SslAcceptor;
 
+mod alloc;
+pub use self::alloc::use_global_allocator;
+
 /// Connection's peer cert
 #[derive(Debug)]
 pub struct PeerCert(pub X509);
