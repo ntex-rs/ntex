@@ -130,7 +130,11 @@ pub mod info {
 }
 
 /// Capacity category used when allocating [`BytePage`] storage.
+///
+/// Buffers with a page size are returned to a per-thread cache of their
+/// category when the last reference is dropped, see [`set_page_cache_size`].
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BytePageSize {
     /// A 4 KiB page.
     Size4 = 0,
@@ -147,15 +151,96 @@ pub enum BytePageSize {
     Size48 = 5,
     /// A 64 KiB page.
     Size64 = 6,
+    /// A 128 KiB page.
+    Size128 = 7,
+    /// A 256 KiB page.
+    Size256 = 8,
     /// No fixed page category.
     ///
     /// Buffers of this category are sized on demand and never returned to
     /// the page cache. It cannot be used as the page size of
     /// [`BytePages`].
-    Unset = 7,
+    Unset = 9,
 }
 
+/// Page categories in increasing order of size, `Unset` excluded.
+const PAGE_SIZES: [BytePageSize; 9] = [
+    BytePageSize::Size4,
+    BytePageSize::Size8,
+    BytePageSize::Size16,
+    BytePageSize::Size24,
+    BytePageSize::Size32,
+    BytePageSize::Size48,
+    BytePageSize::Size64,
+    BytePageSize::Size128,
+    BytePageSize::Size256,
+];
+
 impl BytePageSize {
+    /// Returns the smallest page category with a [`capacity`](Self::capacity)
+    /// of at least `capacity` bytes.
+    ///
+    /// Returns [`BytePageSize::Unset`] if `capacity` is larger than the
+    /// capacity of the largest category.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ntex_bytes::BytePageSize;
+    ///
+    /// assert_eq!(BytePageSize::for_capacity(100), BytePageSize::Size4);
+    /// assert_eq!(BytePageSize::for_capacity(5000), BytePageSize::Size8);
+    /// assert_eq!(BytePageSize::for_capacity(1024 * 1024), BytePageSize::Unset);
+    /// ```
+    pub const fn for_capacity(capacity: usize) -> BytePageSize {
+        let mut i = 0;
+        while i < PAGE_SIZES.len() {
+            if capacity <= PAGE_SIZES[i].capacity() {
+                return PAGE_SIZES[i];
+            }
+            i += 1;
+        }
+        BytePageSize::Unset
+    }
+
+    /// Returns the next larger page category.
+    ///
+    /// The largest category returns [`BytePageSize::Unset`], `Unset` returns
+    /// itself.
+    #[must_use]
+    pub const fn next(self) -> BytePageSize {
+        match self {
+            BytePageSize::Size4 => BytePageSize::Size8,
+            BytePageSize::Size8 => BytePageSize::Size16,
+            BytePageSize::Size16 => BytePageSize::Size24,
+            BytePageSize::Size24 => BytePageSize::Size32,
+            BytePageSize::Size32 => BytePageSize::Size48,
+            BytePageSize::Size48 => BytePageSize::Size64,
+            BytePageSize::Size64 => BytePageSize::Size128,
+            BytePageSize::Size128 => BytePageSize::Size256,
+            BytePageSize::Size256 | BytePageSize::Unset => BytePageSize::Unset,
+        }
+    }
+
+    /// Returns the next smaller page category.
+    ///
+    /// The smallest category returns itself, [`BytePageSize::Unset`] returns
+    /// the largest category.
+    #[must_use]
+    pub const fn prev(self) -> BytePageSize {
+        match self {
+            BytePageSize::Size4 | BytePageSize::Size8 => BytePageSize::Size4,
+            BytePageSize::Size16 => BytePageSize::Size8,
+            BytePageSize::Size24 => BytePageSize::Size16,
+            BytePageSize::Size32 => BytePageSize::Size24,
+            BytePageSize::Size48 => BytePageSize::Size32,
+            BytePageSize::Size64 => BytePageSize::Size48,
+            BytePageSize::Size128 => BytePageSize::Size64,
+            BytePageSize::Size256 => BytePageSize::Size128,
+            BytePageSize::Unset => BytePageSize::Size256,
+        }
+    }
+
     /// Returns the page capacity in bytes.
     ///
     /// A page is allocated together with its header, the capacity is the
@@ -174,6 +259,8 @@ impl BytePageSize {
             BytePageSize::Size32 => 32 * 1024,
             BytePageSize::Size48 => 48 * 1024,
             BytePageSize::Size64 | BytePageSize::Unset => 64 * 1024,
+            BytePageSize::Size128 => 128 * 1024,
+            BytePageSize::Size256 => 256 * 1024,
         }
     }
 
@@ -189,17 +276,40 @@ impl BytePageSize {
             BytePageSize::Size32
             | BytePageSize::Size48
             | BytePageSize::Size64
+            | BytePageSize::Size128
+            | BytePageSize::Size256
             | BytePageSize::Unset => 16 * 1024,
         }
     }
 }
 
-/// Sets the maximum number of cached page allocations per page size for the
-/// current thread, the default is 16.
+/// Sets the maximum number of cached page allocations for every page size
+/// on the current thread.
 ///
 /// This setting affects only the thread on which it is called.
+#[deprecated(
+    since = "1.11.0",
+    note = "the cache limit depends on the page size, use `set_page_cache_size()`"
+)]
 pub fn set_pages_cache(size: usize) {
     self::stvec::set_pages_cache(size);
+}
+
+/// Sets the maximum number of cached page allocations of page size `size` on
+/// the current thread.
+///
+/// By default fewer pages are cached for larger page sizes:
+///
+/// | Page size | 4K | 8K | 16K | 24K | 32K | 48K | 64K | 128K | 256K |
+/// |-----------|----|----|-----|-----|-----|-----|-----|------|------|
+/// | Pages     | 64 | 32 | 64  | 16  | 16  | 8   | 8   | 2    | 1    |
+///
+/// Buffers of [`BytePageSize::Unset`] are never cached, the call does nothing
+/// for it.
+///
+/// This setting affects only the thread on which it is called.
+pub fn set_page_cache_size(size: BytePageSize, count: usize) {
+    self::stvec::set_page_cache_size(size, count);
 }
 
 #[cfg(test)]
@@ -216,6 +326,8 @@ mod tests {
         assert_eq!(BytePageSize::Size32.capacity(), 32 * 1024 - META);
         assert_eq!(BytePageSize::Size48.capacity(), 48 * 1024 - META);
         assert_eq!(BytePageSize::Size64.capacity(), 64 * 1024 - META);
+        assert_eq!(BytePageSize::Size128.capacity(), 128 * 1024 - META);
+        assert_eq!(BytePageSize::Size256.capacity(), 256 * 1024 - META);
         assert_eq!(BytePageSize::Unset.capacity(), 64 * 1024 - META);
         assert_eq!(BytePageSize::Size4.half_capacity(), 2 * 1024);
         assert_eq!(BytePageSize::Size8.half_capacity(), 4 * 1024);
@@ -224,6 +336,47 @@ mod tests {
         assert_eq!(BytePageSize::Size32.half_capacity(), 16 * 1024);
         assert_eq!(BytePageSize::Size48.half_capacity(), 16 * 1024);
         assert_eq!(BytePageSize::Size64.half_capacity(), 16 * 1024);
+        assert_eq!(BytePageSize::Size128.half_capacity(), 16 * 1024);
+        assert_eq!(BytePageSize::Size256.half_capacity(), 16 * 1024);
         assert_eq!(BytePageSize::Unset.half_capacity(), 16 * 1024);
+    }
+
+    #[test]
+    fn page_size_for_capacity() {
+        assert_eq!(BytePageSize::for_capacity(0), BytePageSize::Size4);
+        for size in PAGE_SIZES {
+            let cap = size.capacity();
+            assert_eq!(BytePageSize::for_capacity(cap), size);
+            if size != BytePageSize::Size4 {
+                assert_eq!(BytePageSize::for_capacity(size.prev().capacity() + 1), size);
+            }
+        }
+        assert_eq!(
+            BytePageSize::for_capacity(BytePageSize::Size256.capacity() + 1),
+            BytePageSize::Unset
+        );
+        assert_eq!(BytePageSize::for_capacity(usize::MAX), BytePageSize::Unset);
+    }
+
+    #[test]
+    fn page_size_next_prev() {
+        let mut size = BytePageSize::Size4;
+        for expected in &PAGE_SIZES[1..] {
+            size = size.next();
+            assert_eq!(size, *expected);
+        }
+        assert_eq!(size.next(), BytePageSize::Unset);
+        assert_eq!(BytePageSize::Unset.next(), BytePageSize::Unset);
+
+        let mut size = BytePageSize::Unset;
+        for expected in PAGE_SIZES.iter().rev() {
+            size = size.prev();
+            assert_eq!(size, *expected);
+        }
+        assert_eq!(size.prev(), BytePageSize::Size4);
+
+        for pair in PAGE_SIZES.windows(2) {
+            assert!(pair[0].capacity() < pair[1].capacity());
+        }
     }
 }

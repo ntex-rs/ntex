@@ -1,6 +1,6 @@
 use std::{borrow, fmt, io, ops::DerefMut, ptr};
 
-use crate::{Buf, BufMut, Bytes, buf::UninitSlice, stvec::StorageVec};
+use crate::{Buf, BufMut, BytePageSize, Bytes, buf::UninitSlice, stvec::StorageVec};
 
 /// A unique reference to a contiguous slice of memory.
 ///
@@ -78,6 +78,57 @@ impl BytesMut {
         BytesMut {
             storage: StorageVec::with_capacity(capacity),
         }
+    }
+
+    /// Creates a new empty `BytesMut` backed by a page of the specified size.
+    ///
+    /// The buffer has the [`capacity`](BytePageSize::capacity) of the page
+    /// size. Pages are taken from the current thread's page cache, and the
+    /// page returns to the cache of the thread that drops the last reference
+    /// to it, including [`Bytes`] split off the buffer.
+    ///
+    /// When the buffer grows, it moves to a page of the size that fits the
+    /// new capacity, see [`reserve`](Self::reserve). Above the largest page
+    /// size the buffer is a regular allocation without a page size, it is
+    /// freed when dropped.
+    ///
+    /// [`BytePageSize::Unset`] creates a regular buffer of
+    /// [`BytePageSize::Unset.capacity()`](BytePageSize::capacity), it is not
+    /// cached.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ntex_bytes::{BytePageSize, BytesMut};
+    ///
+    /// let mut buf = BytesMut::with_page_size(BytePageSize::Size4);
+    /// assert_eq!(buf.capacity(), BytePageSize::Size4.capacity());
+    /// assert_eq!(buf.page_size(), BytePageSize::Size4);
+    ///
+    /// buf.extend_from_slice(&[0; 5000]);
+    /// assert_eq!(buf.page_size(), BytePageSize::Size8);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn with_page_size(size: BytePageSize) -> BytesMut {
+        let storage = if size == BytePageSize::Unset {
+            StorageVec::with_capacity(size.capacity())
+        } else {
+            StorageVec::sized(size)
+        };
+        BytesMut { storage }
+    }
+
+    /// Returns the page size of the buffer.
+    ///
+    /// Buffers created by [`with_page_size`](Self::with_page_size) or
+    /// converted from a pooled [`BytePage`](crate::BytePage) have a page
+    /// size, they return to the page cache when the last reference is
+    /// dropped. Other buffers return [`BytePageSize::Unset`], they are
+    /// freed when dropped.
+    #[inline]
+    pub fn page_size(&self) -> BytePageSize {
+        self.storage.page_size()
     }
 
     /// Creates a `BytesMut` by copying a byte slice.
@@ -458,6 +509,11 @@ impl BytesMut {
     /// small steps reallocates a logarithmic number of times. Use [`reserve_capacity`](Self::reserve_capacity) to
     /// allocate an exact capacity.
     ///
+    /// A buffer with a [`page_size`](Self::page_size) moves to a page of the
+    /// smallest size that fits the new capacity, but not smaller than its
+    /// current page size, the old page returns to the page cache. Above the
+    /// largest page size, a regular buffer without a page size is allocated.
+    ///
     /// # Panics
     ///
     /// Panics if the new capacity exceeds `u32::MAX` minus the buffer
@@ -509,6 +565,10 @@ impl BytesMut {
     /// instead of growing to at least twice the current length. Unlike
     /// [`reserve_capacity`](Self::reserve_capacity), the contents are not moved
     /// when the buffer already has enough remaining capacity.
+    ///
+    /// A buffer with a [`page_size`](Self::page_size) moves to a page of the
+    /// smallest size that fits the new capacity, so its capacity is rounded up
+    /// to the page capacity.
     ///
     /// # Panics
     ///
