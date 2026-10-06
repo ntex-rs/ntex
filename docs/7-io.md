@@ -414,14 +414,19 @@ read buffer, where a codec or protocol service can inspect and consume them.
 useful when a decoded message must retain part of the input after the decoder
 continues processing later data.
 
-ntex reuses eligible read buffers through a per-thread cache and retains spare
-capacity where possible. The cache is shared by all configurations and holds at
-most 1 MiB of buffer capacity per thread by default, the least recently
-released buffers are freed first; `ntex::io::cfg::set_read_buf_cache_limit()`
-changes the limit. Before another socket read, the adapter obtains a
-buffer from `IoContext`. ntex ensures that a reused buffer has at least the
-configured low-water mark available. If the retained capacity is
-insufficient, the buffer grows and may allocate additional storage.
+Read buffers are `ntex-bytes` pages. Each buffer uses the smallest page size
+whose capacity holds the configured high-water mark, see
+[`BufConfig::page_size`]; the default 16,360 bytes is a `Size16` page and a
+high-water mark below 4 KiB still uses a `Size4` page. An empty buffer goes
+back to the per-thread page cache of its size, shared with write pages and any
+other pooled `BytesMut`; [`set_page_cache_size`] tunes it. A frame split from
+the read buffer keeps the page alive, the page returns to the cache once the
+last frame is dropped. Before another socket read, the adapter obtains a
+buffer from `IoContext`. ntex ensures that the buffer has at least the
+configured low-water mark available, compacting it within its page when the
+data still fits there. If larger input must be buffered, the buffer moves to
+bigger page sizes and, past the largest one, to a plain allocation that is
+freed instead of cached.
 
 Read backpressure is based on the size of the application-facing read buffer.
 When it reaches the configured high-water mark, ntex pauses the transport read
@@ -459,6 +464,7 @@ without depending on socket readiness, while the I/O subsystem consistently
 enforces buffer limits and backpressure.
 
 [`BytePages`]: https://docs.rs/ntex/latest/ntex/util/struct.BytePages.html
+[`BufConfig::page_size`]: https://docs.rs/ntex/latest/ntex/io/cfg/struct.BufConfig.html#method.page_size
 [`Bytes`]: https://docs.rs/ntex/latest/ntex/util/struct.Bytes.html
 [`BytesMut`]: https://docs.rs/ntex/latest/ntex/util/struct.BytesMut.html
 [`Io::flush`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.flush
@@ -473,6 +479,7 @@ enforces buffer limits and backpressure.
 [`IoRef::with_read_dst`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.with_read_dst
 [`IoRef::with_read_src`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.with_read_src
 [`IoRef::with_buf`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.with_buf
+[`set_page_cache_size`]: https://docs.rs/ntex-bytes/latest/ntex_bytes/fn.set_page_cache_size.html
 
 ## Connection lifecycle and shutdown
 

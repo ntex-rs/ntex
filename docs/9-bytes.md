@@ -689,26 +689,28 @@ an empty queue does not immediately allocate a payload page.
 
 ## Buffers in the I/O layer
 
-The [I/O Abstraction Layer](./7-io.md) builds on these types, but its
-read-buffer cache and the byte-page cache are separate mechanisms:
+The [I/O Abstraction Layer](./7-io.md) builds on these types, reads and writes
+share the same per-thread page cache:
 
-- **Reads.** The transport reads into a `BytesMut` read buffer. Codecs split
-  frames off it with `split_to`, so large decoded messages share the read
-  buffer while tiny ones are copied inline. Read buffers are sized by the
-  `read_buf` watermarks of [`IoConfig`]: 16,368 bytes high (the `Size16`
-  capacity) and 528 bytes low by default. Empty read buffers are reused
-  through a separate per-thread cache, limited to 1 MiB by default.
+- **Reads.** The transport reads into a pooled `BytesMut` read buffer. Codecs
+  split frames off it with `split_to`, so large decoded messages share the
+  read buffer while tiny ones are copied inline. Read buffers are sized by the
+  `read_buf` watermarks of [`IoConfig`]: 16,360 bytes high (the `Size16`
+  capacity) and 536 bytes low by default. The page size is the smallest one
+  that holds the high-water mark, `Size4` at least. Larger input moves the
+  buffer to bigger page sizes, beyond `Size256` it becomes an unpooled
+  buffer that is freed when empty.
 - **Writes.** Encoders write into `BytePages` with the page size of
   [`IoConfig::write_page_size`], `Size16` by default. `IoRef::encode_bytes`
   appends owned buffers, so large payloads are not copied. The write
   threshold, `half_capacity()` of the page size by default, controls when a
   transport may start writing while output is still being produced.
 
-An empty read buffer can return to the I/O cache only if it is unique and
-fits the configured capacity range. A decoded frame that still shares it
-prevents that reuse, even if the decoder has consumed every byte. Avoid
-holding whole requests or frames when only a small field needs to survive.
-Changing `set_page_cache_size` does not tune this read-buffer cache.
+An empty read buffer is released immediately, but its page returns to the
+cache only when the last frame split from it is dropped. Holding a whole
+request or frame therefore keeps the full page alive; copy the field instead
+when only a small part needs to survive. [`set_page_cache_size`] tunes the
+cache for read and write pages alike.
 
 ### What memory usage means in practice
 
