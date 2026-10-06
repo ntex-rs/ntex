@@ -77,8 +77,12 @@ impl WaitersRef {
     where
         F: FnOnce(&mut Context<'_>) -> Poll<R>,
     {
-        // Ctx::poll_xxx() methods requires current waker always available
-        self.get()[idx as usize] = Some(cx.waker().clone());
+        // Ctx::poll_xxx() methods requires current waker always available,
+        // nested readiness checks poll with the same waker
+        let slot = &mut self.get()[idx as usize];
+        if !slot.as_ref().is_some_and(|w| w.will_wake(cx.waker())) {
+            *slot = Some(cx.waker().clone());
+        }
 
         // calculate owner for readiness check
         let cur = self.cur.get();
@@ -423,6 +427,92 @@ mod tests {
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
         assert_eq!(cnt.get(), 3);
+    }
+
+    struct WakeCounter {
+        clones: Cell<usize>,
+        wakes: Cell<usize>,
+    }
+
+    fn counting_waker() -> (&'static WakeCounter, Waker) {
+        use std::task::{RawWaker, RawWakerVTable};
+
+        static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake, drop);
+
+        unsafe fn clone(data: *const ()) -> RawWaker {
+            let cnt = unsafe { &*data.cast::<WakeCounter>() };
+            cnt.clones.set(cnt.clones.get() + 1);
+            RawWaker::new(data, &VTABLE)
+        }
+        unsafe fn wake(data: *const ()) {
+            let cnt = unsafe { &*data.cast::<WakeCounter>() };
+            cnt.wakes.set(cnt.wakes.get() + 1);
+        }
+        unsafe fn drop(_: *const ()) {}
+
+        let cnt: &'static WakeCounter = Box::leak(Box::new(WakeCounter {
+            clones: Cell::new(0),
+            wakes: Cell::new(0),
+        }));
+        let raw = RawWaker::new(std::ptr::from_ref(cnt).cast(), &VTABLE);
+        (cnt, unsafe { Waker::from_raw(raw) })
+    }
+
+    /// Wakes the dispatcher's task context during the readiness check
+    struct WakeSrv;
+
+    impl Service<(), &'static str> for WakeSrv {
+        type Res = &'static str;
+        type Error = ();
+
+        async fn ready(&self, ctx: Ctx<'_, Self>) -> Result<(), Self::Error> {
+            ctx.poll_once(|cx| cx.waker().wake_by_ref());
+            Ok(())
+        }
+
+        async fn call(&self, req: &'static str, _: Ctx<'_, Self>) -> Result<&'static str, ()> {
+            Ok(req)
+        }
+    }
+
+    struct Nested<S>(S);
+
+    impl<S: Service<(), &'static str>> Service<(), &'static str> for Nested<S> {
+        type Res = S::Res;
+        type Error = S::Error;
+
+        async fn ready(&self, ctx: Ctx<'_, Self>) -> Result<(), Self::Error> {
+            ctx.ready(&self.0).await
+        }
+
+        async fn call(
+            &self,
+            req: &'static str,
+            ctx: Ctx<'_, Self>,
+        ) -> Result<Self::Res, Self::Error> {
+            ctx.call(&self.0, req).await
+        }
+    }
+
+    #[ntex::test]
+    async fn test_ready_waker_not_recloned() {
+        let srv = Pipeline::new((), Nested(Nested(WakeSrv)));
+
+        let (cnt1, waker1) = counting_waker();
+        let mut cx = Context::from_waker(&waker1);
+        for _ in 0..4 {
+            assert_eq!(srv.poll_ready(&mut cx), Poll::Ready(Ok(())));
+        }
+        assert_eq!(cnt1.clones.get(), 1);
+        assert_eq!(cnt1.wakes.get(), 4);
+
+        // a different waker replaces the stored one
+        let (cnt2, waker2) = counting_waker();
+        let mut cx = Context::from_waker(&waker2);
+        assert_eq!(srv.poll_ready(&mut cx), Poll::Ready(Ok(())));
+        assert_eq!(cnt2.clones.get(), 1);
+        assert_eq!(cnt2.wakes.get(), 1);
+        assert_eq!(cnt1.wakes.get(), 4);
     }
 
     #[ntex::test]
