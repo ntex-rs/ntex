@@ -10,6 +10,9 @@
 * A pipeline call skips the readiness check if the last pipeline readiness check succeeded
   and no other call consumed it
 
+* `AndThen` and `Apply` skip the inner service readiness check only if no call entered
+  the inner service since its readiness was checked
+
 ## [5.1.1] - 2026-10-06
 
 * Do not re-clone the readiness waker on every poll
