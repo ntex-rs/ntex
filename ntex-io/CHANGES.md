@@ -1,5 +1,17 @@
 # Changes
 
+## [4.3.0] - Unreleased
+
+* Read buffers are ntex-bytes pages of the smallest page size that holds `high`, at least
+  `Size4`, empty buffers return to the ntex-bytes page cache shared with write pages
+
+* Add `BufConfig::page_size()`
+
+* Deprecate `cfg::set_read_buf_cache_limit()` and `cfg::read_buf_cache_limit()`, they have
+  no effect, use `ntex_bytes::set_page_cache_size()`
+
+* Frames split from a read buffer return its page to the cache once the last one is dropped
+
 ## [4.2.1] - 2026-10-05
 
 * Add `IoRef::is_write_filter_paused()`, transport writes stay paused while the filter chain is
