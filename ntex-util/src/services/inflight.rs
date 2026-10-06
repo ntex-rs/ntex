@@ -116,7 +116,7 @@ mod tests {
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let counter2 = counter.clone();
-        let fut = srv.call_nowait(());
+        let fut = srv.call_static(());
         ntex::rt::spawn(async move {
             let _ = fut.await;
             counter2.set(counter2.get() + 1);
@@ -125,7 +125,7 @@ mod tests {
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
 
         let counter2 = counter.clone();
-        let fut = srv.call_nowait(());
+        let fut = srv.call_static(());
         ntex::rt::spawn(async move {
             let _ = fut.await;
             counter2.set(counter2.get() + 1);

@@ -11,12 +11,13 @@
 #![deny(clippy::pedantic)]
 #![allow(clippy::cast_possible_truncation)]
 use std::task::{Context, Poll, ready};
-use std::{cell::Cell, fmt, future::Future, io, pin::Pin, rc::Rc, time::Instant};
+use std::time::Instant;
+use std::{cell::Cell, fmt, future::Future, future::poll_fn, io, mem, pin::Pin, rc::Rc};
 
 use ntex_codec::{Decoder, Encoder};
 use ntex_io::{Decoded, IoBoxed, IoStatusUpdate, RecvError};
 use ntex_service::pipeline::{Pipeline, PipelineCall};
-use ntex_util::{spawn, time::Seconds};
+use ntex_util::{spawn, time::Seconds, time::Sleep, time::sleep};
 
 mod timer;
 
@@ -143,9 +144,16 @@ where
 enum DispatcherState<U: Encoder + Decoder, Err> {
     Processing,
     Backpressure,
-    Stop(Call<U, Err>),
+    Stop(StopCall<U, Err>),
     Shutdown,
     ShutdownIo,
+}
+
+#[derive(Debug)]
+struct StopCall<U: Encoder + Decoder, Err> {
+    fut: Call<U, Err>,
+    // started while the stop call waits for service readiness
+    timeout: Option<Sleep>,
 }
 
 #[derive(Debug)]
@@ -218,13 +226,9 @@ where
     U: Encoder + Decoder + 'static,
     Err: 'static,
 {
-    fn call(&self, item: DispatchItem<U>, nowait: bool) -> Call<U, Err> {
+    fn call(&self, item: DispatchItem<U>) -> Call<U, Err> {
         self.inflight.set(self.inflight.get() + 1);
-        if nowait {
-            self.service.call_nowait(item)
-        } else {
-            self.service.call_static(item)
-        }
+        self.service.call_static(item)
     }
 
     fn handle_result(&self, item: Result<Option<Response<U>>, Err>, wake: bool) {
@@ -266,14 +270,14 @@ where
         loop {
             match inner.st {
                 DispatcherState::Processing => {
-                    let (item, nowait) = match ready!(inner.poll_service(cx)) {
+                    let item = match ready!(inner.poll_service(cx)) {
                         PollService::Ready => {
                             // decode incoming bytes if buffer is ready
                             match inner.shared.io.poll_recv_decode(&inner.shared.codec, cx) {
                                 Ok(decoded) => {
                                     inner.update_timer(&decoded);
                                     if let Some(el) = decoded.item {
-                                        (DispatchItem::Item(el), true)
+                                        DispatchItem::Item(el)
                                     } else {
                                         return Poll::Pending;
                                     }
@@ -286,7 +290,7 @@ where
                                             let timer = inner.timers.active;
                                             inner.update_timer(&decoded);
                                             if let Some(el) = decoded.item {
-                                                (DispatchItem::Item(el), true)
+                                                DispatchItem::Item(el)
                                             } else {
                                                 // a timer armed for the received input has
                                                 // not expired
@@ -319,7 +323,7 @@ where
                                     // instruct write task to notify dispatcher when data is flushed
                                     inner.start_write_timer();
                                     inner.st = DispatcherState::Backpressure;
-                                    (DispatchItem::Control(Control::WBackPressureEnabled), true)
+                                    DispatchItem::Control(Control::WBackPressureEnabled)
                                 }
                                 Err(RecvError::Decoder(err)) => {
                                     log::trace!(
@@ -343,12 +347,12 @@ where
                             }
                         }
                         PollService::Backpressure => {
-                            (DispatchItem::Control(Control::WBackPressureEnabled), false)
+                            DispatchItem::Control(Control::WBackPressureEnabled)
                         }
                         PollService::Continue => continue,
                     };
 
-                    inner.call_service(cx, item, nowait);
+                    inner.call_service(cx, item);
                 }
                 // handle write back-pressure
                 DispatcherState::Backpressure => {
@@ -377,24 +381,64 @@ where
                         inner.st = DispatcherState::Processing;
                         DispatchItem::Control(Control::WBackPressureDisabled)
                     };
-                    inner.call_service(cx, item, false);
+                    inner.call_service(cx, item);
                 }
                 // deliver stop to service
                 DispatcherState::Stop(ref mut stop) => {
                     // service may relay on poll_ready for response results
-                    let _ = inner.shared.service.poll_ready(cx);
+                    let ready = inner.shared.service.poll_ready(cx);
 
-                    let result = ready!(Pin::new(stop).poll(cx));
-                    inner.shared.handle_result(result, false);
-                    // the dispatcher returns a service error from the stop call,
-                    // unless it is stopping because of an earlier one
-                    if let Some(DispatcherError::Service(err)) = inner.shared.error.take()
-                        && inner.error.is_none()
-                    {
-                        inner.error = Some(err);
+                    if let Poll::Ready(result) = Pin::new(&mut stop.fut).poll(cx) {
+                        inner.shared.handle_result(result, false);
+                        // the dispatcher returns a service error from the stop call,
+                        // unless it is stopping because of an earlier one
+                        if let Some(DispatcherError::Service(err)) = inner.shared.error.take()
+                            && inner.error.is_none()
+                        {
+                            inner.error = Some(err);
+                        }
+                        inner.shared.io.stop_timer();
+                        inner.st = DispatcherState::Shutdown;
+                        continue;
                     }
+                    if ready.is_ready() {
+                        return Poll::Pending;
+                    }
+
+                    // the stop item waits for service readiness, it is delivered
+                    // in the background and io is closed without waiting for it
+                    let timeout = stop
+                        .timeout
+                        .get_or_insert_with(|| sleep(inner.shared.io.cfg().shutdown_timeout()));
+                    ready!(timeout.poll_elapsed(cx));
+                    log::trace!(
+                        "{}: Service is not ready for stop, shutdown io",
+                        inner.shared.io.tag()
+                    );
+
+                    let DispatcherState::Stop(stop) =
+                        mem::replace(&mut inner.st, DispatcherState::ShutdownIo)
+                    else {
+                        unreachable!()
+                    };
                     inner.shared.io.stop_timer();
-                    inner.st = DispatcherState::Shutdown;
+
+                    // the task owns the readiness check from now on
+                    let shared = inner.shared.clone();
+                    let mut fut = Some(stop.fut);
+                    spawn(poll_fn(move |cx| {
+                        let _ = shared.service.poll_ready(cx);
+                        if let Some(f) = fut.as_mut() {
+                            let result = ready!(Pin::new(f).poll(cx));
+                            fut = None;
+                            shared.handle_result(result, false);
+                        }
+                        if shared.inflight.get() != 0 {
+                            shared.io.register_dispatch(cx);
+                            return Poll::Pending;
+                        }
+                        shared.service.poll_shutdown(cx)
+                    }));
                 }
                 // drain service responses and shutdown service
                 DispatcherState::Shutdown => {
@@ -434,19 +478,20 @@ where
     Err: 'static,
 {
     fn stop(&self, reason: Reason<U>) -> DispatcherState<U, Err> {
-        DispatcherState::Stop(self.shared.call(DispatchItem::Stop(reason), true))
+        DispatcherState::Stop(StopCall {
+            fut: self.shared.call(DispatchItem::Stop(reason)),
+            timeout: None,
+        })
     }
 
-    fn call_service(&mut self, cx: &mut Context<'_>, item: DispatchItem<U>, nowait: bool) {
-        let mut fut = self.shared.call(item, nowait);
+    fn call_service(&mut self, cx: &mut Context<'_>, item: DispatchItem<U>) {
+        let mut fut = self.shared.call(item);
 
-        // optimize first call
-        if self.response.is_none() {
-            if let Poll::Ready(result) = Pin::new(&mut fut).poll(cx) {
-                self.shared.handle_result(result, false);
-            } else {
-                self.response = Some(fut);
-            }
+        // the first poll consumes the pipeline readiness checked by `poll_service()`
+        if let Poll::Ready(result) = Pin::new(&mut fut).poll(cx) {
+            self.shared.handle_result(result, false);
+        } else if self.response.is_none() {
+            self.response = Some(fut);
         } else {
             let shared = self.shared.clone();
             spawn(async move {
@@ -756,7 +801,7 @@ where
 #[allow(clippy::unused_async_trait_impl)]
 mod tests {
     use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::Ordering::Relaxed};
-    use std::{cell::RefCell, future::poll_fn, io};
+    use std::{cell::RefCell, io};
 
     use ntex_bytes::{BytePages, Bytes, BytesMut};
     use ntex_codec::BytesCodec;
@@ -999,8 +1044,9 @@ mod tests {
         client.close().await;
         assert!(client.is_server_dropped());
 
-        // service must be checked for readiness all the time
-        assert_eq!(counter.get(), 3);
+        // service must be checked for readiness all the time,
+        // the stop call checks readiness as well
+        assert_eq!(counter.get(), 4);
     }
 
     #[ntex::test]
@@ -2511,8 +2557,8 @@ mod tests {
     }
 
     /// The write timeout keeps running while the service is not ready during
-    /// write backpressure, and the stop item is delivered without waiting for
-    /// readiness.
+    /// write backpressure. The stop item waits for readiness, after the
+    /// shutdown timeout it is delivered in the background and io is closed.
     #[ntex::test]
     async fn write_timeout_during_service_pause() {
         let (client, server) = IoTest::create();
@@ -2531,15 +2577,16 @@ mod tests {
         // the service is not ready for a while
         let (tx, rx) = oneshot::channel::<()>();
         *gate.borrow_mut() = Some(rx);
-        wait_until(Millis(2500), || events.borrow().len() == 3).await;
-        assert_eq!(&events.borrow()[..], &["item", "bp-on", "write-timeout"]);
 
-        // shutdown does not wait for readiness and drains output within
-        // the shutdown timeout
-        wait_closed(&client, Millis(2500)).await;
+        // io is closed without waiting for service readiness
+        wait_closed(&client, Millis(5000)).await;
         assert!(client.is_closed());
-        assert_eq!(&events.borrow()[..], &["item", "bp-on", "write-timeout"]);
+        assert_eq!(&events.borrow()[..], &["item", "bp-on"]);
+
+        // the stop item is delivered once the service is ready
         drop(tx);
+        wait_until(Millis(1000), || events.borrow().len() == 3).await;
+        assert_eq!(&events.borrow()[..], &["item", "bp-on", "write-timeout"]);
     }
 
     /// Backpressure released while the service is not ready ends the write

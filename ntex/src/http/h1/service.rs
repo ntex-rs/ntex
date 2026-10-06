@@ -144,7 +144,7 @@ where
 {
     // Notify control service
     let io = if let Some(ctl) = &ctl {
-        let ack = ctl.call_nowait(Control::connect(id, io)).await?;
+        let ack = ctl.call(Control::connect(id, io)).await?;
         let ControlResult::Connect(io) = ack.result else {
             unreachable!();
         };

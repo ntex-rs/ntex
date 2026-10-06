@@ -1,5 +1,9 @@
 # Changes
 
+## [4.0.0-beta.18] - 2026-10-06
+
+* http: h1 dispatcher calls services with readiness check, `call_nowait()` is removed
+
 ## [4.0.0-beta.17] - 2026-10-05
 
 * web: The authority of an absolute-form request target takes precedence over the `Host`
