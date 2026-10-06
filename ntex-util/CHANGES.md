@@ -9,6 +9,9 @@
 
 * `RetryService` does not check readiness of the inner service on the first call
 
+* `InFlightService` checks readiness of the inner service once per call, the call
+  skips the check if no call entered the service since its last readiness check
+
 ## [4.2.1] - 2026-10-03
 
 * The time cached by the timer driver did not expire, `now()` returned a stale
