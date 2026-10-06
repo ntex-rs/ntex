@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use super::{Ctx, Service, ServiceFactory, util};
 
 #[derive(Clone, Debug)]
@@ -7,12 +9,17 @@ use super::{Ctx, Service, ServiceFactory, util};
 pub struct AndThen<A, B> {
     svc1: A,
     svc2: B,
+    ready: Cell<bool>,
 }
 
 impl<A, B> AndThen<A, B> {
     /// Creates a new `AndThen` service.
     pub(crate) fn new(svc1: A, svc2: B) -> Self {
-        Self { svc1, svc2 }
+        Self {
+            svc1,
+            svc2,
+            ready: Cell::new(false),
+        }
     }
 }
 
@@ -27,12 +34,19 @@ where
     #[inline]
     async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<B::Res, A::Error> {
         let result = ctx.call_nowait(&self.svc1, req).await?;
-        ctx.call(&self.svc2, result).await
+
+        if self.ready.take() {
+            ctx.call_nowait(&self.svc2, result).await
+        } else {
+            ctx.call(&self.svc2, result).await
+        }
     }
 
     #[inline]
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
-        util::ready(&self.svc1, &self.svc2, ctx).await
+        let res = util::ready(&self.svc1, &self.svc2, ctx).await;
+        self.ready.set(res.is_ok());
+        res
     }
 
     #[inline]
@@ -73,6 +87,7 @@ where
         Ok(AndThen {
             svc1: self.svc1.create(st).await?,
             svc2: self.svc2.create(st).await?,
+            ready: Cell::new(false),
         })
     }
 }
