@@ -1,4 +1,4 @@
-use std::{fmt, marker};
+use std::{cell::Cell, fmt, marker};
 
 use crate::ctx::{Ctx, WaitersRef};
 use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
@@ -40,6 +40,7 @@ pub struct ApplyCtx<'a, S, St, Req> {
     waiters: &'a WaitersRef,
     service: &'a S,
     st: &'a St,
+    ready: &'a Cell<bool>,
     r: marker::PhantomData<Req>,
 }
 
@@ -53,9 +54,13 @@ impl<S: Service<St, Req>, St, Req> ApplyCtx<'_, S, St, Req> {
     /// Waits for the wrapped service to become ready, then calls it.
     #[inline]
     pub async fn call(&self, req: Req) -> Result<S::Res, S::Error> {
-        Ctx::<S, St>::new(self.idx, self.waiters, self.st)
-            .call(&self.service, req)
-            .await
+        let ctx = Ctx::<S, St>::new(self.idx, self.waiters, self.st);
+        if self.ready.get() {
+            self.ready.set(false);
+            ctx.call_nowait(&self.service, req).await
+        } else {
+            ctx.call(&self.service, req).await
+        }
     }
 }
 
@@ -74,6 +79,7 @@ impl<S: Service<St, Req>, St, Req> ServiceCaller<Req, S::Res, S::Error>
 pub struct Apply<S, St, Req, F, In, Out, Err> {
     svc: S,
     f: F,
+    ready: Cell<bool>,
     r: marker::PhantomData<fn(St, Req) -> (In, Out, Err)>,
 }
 
@@ -85,6 +91,7 @@ where
         Apply {
             f,
             svc,
+            ready: Cell::new(false),
             r: marker::PhantomData,
         }
     }
@@ -99,6 +106,7 @@ where
         Apply {
             svc: self.svc.clone(),
             f: self.f.clone(),
+            ready: Cell::new(false),
             r: marker::PhantomData,
         }
     }
@@ -127,7 +135,9 @@ where
 
     #[inline]
     async fn ready(&self, ctx: Ctx<'_, Self, St>) -> Result<(), Err> {
-        ctx.ready(&self.svc).await.map_err(From::from)
+        let result = ctx.ready(&self.svc).await.map_err(From::from);
+        self.ready.set(result.is_ok());
+        result
     }
 
     #[inline]
@@ -138,6 +148,7 @@ where
             idx,
             waiters,
             st,
+            ready: &self.ready,
             service: &self.svc,
             r: marker::PhantomData,
         };
@@ -223,6 +234,7 @@ where
             svc,
             f: self.f.clone(),
             r: marker::PhantomData,
+            ready: Cell::new(false),
         })
     }
 }
