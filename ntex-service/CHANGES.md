@@ -1,5 +1,9 @@
 # Changes
 
+## [5.1.1] - 2026-10-06
+
+* Do not re-clone the readiness waker on every poll
+
 ## [5.1.0] - 2026-09-30
 
 * Fix use-after-free when a pipeline is dropped with pending readiness or shutdown future
