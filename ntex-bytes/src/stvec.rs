@@ -75,10 +75,6 @@ impl StorageVec {
         StorageVec(SharedVec::create(BytePageSize::Unset, capacity, src))
     }
 
-    pub(crate) fn unsize(&mut self) {
-        unsafe { (*self.0.as_ptr()).size = BytePageSize::Unset }
-    }
-
     /// Return a slice for the handle's view into the shared buffer
     pub(crate) fn as_ref(&self) -> &[u8] {
         unsafe { slice::from_raw_parts(self.as_ptr(), self.len()) }

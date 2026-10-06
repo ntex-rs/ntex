@@ -375,33 +375,9 @@ impl BytePages {
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
-        let mut st = self
-            .current
-            .take()
-            .unwrap_or_else(|| StorageVec::sized(self.page_size()));
-
-        let cap = st.capacity();
-        let mut buf = BytesMut {
-            storage: StorageVec(st.0),
-        };
-
+        let mut buf = BytesMut::new();
         let res = f(&mut buf);
-
-        // `f` can re-allocate `buf.storage`, which invalidates `st`
-        st.0 = buf.storage.0;
-        if buf.capacity() != cap {
-            buf.storage.unsize();
-        }
-        // buf.storage.0 uses same pointer as self.current.0
-        mem::forget(buf);
-
-        // a full page moves to the page list
-        if st.len() >= self.page_size().capacity() {
-            self.push_back(BytePage::from(st));
-        } else {
-            self.current = Some(st);
-        }
-
+        self.append(buf);
         res
     }
 
