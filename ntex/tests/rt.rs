@@ -341,7 +341,11 @@ async fn idle_disconnect_uring() {
     });
 
     let cfg = SharedCfg::new("NEON-URING")
-        .add(IoConfig::new().set_read_size(BytePageSize::Size4))
+        .add(
+            IoConfig::new()
+                .set_read_size(BytePageSize::Size4, BytePageSize::Size4)
+                .set_read_backpressure(BytePageSize::Size4.capacity()),
+        )
         .build();
 
     let msg = Connect::new(server.addr());

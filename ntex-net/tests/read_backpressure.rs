@@ -20,7 +20,11 @@ const HIGH: usize = PAGE.capacity();
 
 fn cfg(page: BytePageSize) -> SharedCfg {
     SharedCfg::new("TEST")
-        .add(IoConfig::new().set_read_size(page))
+        .add(
+            IoConfig::new()
+                .set_read_size(page, page)
+                .set_read_backpressure(page.capacity()),
+        )
         .build()
 }
 

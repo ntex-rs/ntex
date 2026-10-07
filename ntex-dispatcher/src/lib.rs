@@ -1063,7 +1063,8 @@ mod tests {
             server,
             SharedCfg::new("TEST").add(
                 IoConfig::new()
-                    .set_read_size(BytePageSize::Size8)
+                    .set_read_size(BytePageSize::Size8, BytePageSize::Size8)
+                    .set_read_backpressure(BytePageSize::Size8.capacity())
                     .set_write_backpressure(16 * 1024),
             ),
         );
@@ -1135,7 +1136,8 @@ mod tests {
                 SharedCfg::new("TEST").add(
                     IoConfig::new()
                         .set_keepalive_timeout(Seconds::ZERO)
-                        .set_read_size(BytePageSize::Size4),
+                        .set_read_size(BytePageSize::Size4, BytePageSize::Size4)
+                        .set_read_backpressure(BytePageSize::Size4.capacity()),
                 ),
             ),
             BytesCodec,

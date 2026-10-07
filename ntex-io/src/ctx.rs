@@ -246,6 +246,7 @@ impl IoContext {
             stopping_read_status(st, &status)
         } else {
             let mut buf = buf;
+            track_read(st, &buf, &status);
             if st.is_io_dropped() {
                 // the `Io` is gone, nothing can consume this input anymore
                 buf.clear();
@@ -286,6 +287,9 @@ impl IoContext {
         let status = st.buffer.with_read_src(&self.0, |buf| {
             buf.reserve_more();
             let status = f(buf);
+            if !stopping {
+                track_read(st, buf, &status);
+            }
             if discard {
                 // the filters are done or the `Io` is gone, nothing can
                 // consume this input anymore
@@ -694,6 +698,15 @@ fn stop_filters(st: &IoState, err: Option<io::Error>) {
     st.filters_stopped();
 }
 
+/// Adapts the connection's read page size to a transport read.
+fn track_read(st: &IoState, buf: &BytesMut, status: &Poll<io::Result<usize>>) {
+    match status {
+        Poll::Ready(Ok(n)) => st.track_read(*n, *n != 0 && buf.len() == buf.capacity()),
+        Poll::Pending => st.track_read(0, false),
+        Poll::Ready(Err(_)) => {}
+    }
+}
+
 /// Reports a read that completed during the transport shutdown phase.
 ///
 /// Neither a clean eof nor an error terminates the connection: the write
@@ -987,7 +1000,7 @@ mod tests {
         let mut buf = ctx.take_read_buf();
         assert_eq!(buf, b"45");
         buf.reserve_more();
-        assert!(buf.capacity() - buf.len() >= io.cfg().read_size().low());
+        assert!(buf.capacity() - buf.len() >= io.get_ref().0.read_size().low());
         buf.extend_from_slice(b"6");
         assert_eq!(
             ctx.release_read_buf(buf, Poll::Ready(Ok(1))),

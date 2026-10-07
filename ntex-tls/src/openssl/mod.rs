@@ -761,7 +761,7 @@ pub(crate) mod tests {
 
         // the transport reads into the top of the cache, decrypted data
         // goes to the next buffer
-        let page = server.cfg().read_size();
+        let page = server.cfg().read_size_min();
         let get = || BytesMut::with_page_size(page);
         let (x, y, p) = (get(), get(), get());
         let src = p.as_ptr();

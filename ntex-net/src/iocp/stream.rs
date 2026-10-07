@@ -766,7 +766,7 @@ mod tests {
     async fn idle_recv_holds_no_read_buffer() {
         let reactor = Reactor::new().unwrap();
         let (io, ctl, ops, raw, mut peer) = registered(&reactor);
-        let page = io.cfg().read_size();
+        let page = io.cfg().read_size_min();
         let buf = BytesMut::with_page_size(page);
         let ptr = buf.as_ptr();
         drop(buf);

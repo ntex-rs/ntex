@@ -1,6 +1,6 @@
 //! I/O buffer, timeout, and frame-rate configuration.
 
-use ntex_bytes::{BytePageSize, BytesMut};
+use ntex_bytes::BytePageSize;
 use ntex_service::cfg::{CfgContext, Configuration};
 use ntex_util::{time::Millis, time::Seconds};
 
@@ -14,7 +14,8 @@ pub struct IoConfig {
     write_timeout: Seconds,
 
     // read side configuration
-    read_size: BytePageSize,
+    read_size_min: BytePageSize,
+    read_size_max: BytePageSize,
     read_backpressure: usize,
 
     // write side configuration
@@ -70,8 +71,9 @@ impl IoConfig {
             shutdown_timeout: Seconds(1),
             frame_read_rate: None,
 
-            read_size: BytePageSize::Size16,
-            read_backpressure: BytePageSize::Size16.capacity(),
+            read_size_min: BytePageSize::Size4,
+            read_size_max: BytePageSize::Size64,
+            read_backpressure: BytePageSize::Size32.capacity(),
 
             write_timeout: Seconds(0),
             write_size: BytePageSize::Size16,
@@ -111,12 +113,21 @@ impl IoConfig {
     }
 
     #[inline]
-    /// Returns the page size of read buffers.
+    /// Returns the smallest page size of read buffers.
     ///
-    /// Read buffers are acquired from the `ntex-bytes` page cache with this
-    /// page size, see [`set_read_size`](Self::set_read_size).
-    pub fn read_size(&self) -> BytePageSize {
-        self.read_size
+    /// Connections start reading into pages of this size, see
+    /// [`set_read_size`](Self::set_read_size).
+    pub fn read_size_min(&self) -> BytePageSize {
+        self.read_size_min
+    }
+
+    #[inline]
+    /// Returns the largest page size of read buffers.
+    ///
+    /// The read page size of a connection adapts to its input up to this
+    /// size, see [`set_read_size`](Self::set_read_size).
+    pub fn read_size_max(&self) -> BytePageSize {
+        self.read_size_max
     }
 
     #[inline]
@@ -156,12 +167,6 @@ impl IoConfig {
     /// Outstanding output size that releases write backpressure.
     pub(crate) fn write_half(&self) -> usize {
         self.write_backpressure >> 1
-    }
-
-    #[inline]
-    /// Acquires an empty read buffer from the thread-local page cache.
-    pub(crate) fn new_read_buf(&self) -> BytesMut {
-        BytesMut::with_page_size(self.read_size())
     }
 
     #[inline]
@@ -340,15 +345,27 @@ impl IoConfig {
         self
     }
 
-    /// Sets the read-buffer page size.
+    /// Sets the range of read-buffer page sizes.
     ///
-    /// Read buffers are acquired with this page size. It also resets the read
-    /// backpressure watermark to the page [`capacity`](BytePageSize::capacity),
-    /// call [`set_read_backpressure`](Self::set_read_backpressure) afterwards
-    /// to use another watermark. A buffer grows with [`BytesMut::reserve_more`] once less than
-    /// [`BytePageSize::low`] of its page size remains: the data is compacted
-    /// within its page when that leaves room for half a page, otherwise the
-    /// buffer moves to the next page size.
+    /// Each connection reads into pages of its own page size, which starts at
+    /// `min` and adapts to the connection's input between `min` and `max`.
+    /// Input that arrives in batches larger than the page capacity, such as
+    /// streamed bodies or large frames, grows the page size of the next read
+    /// buffers to fit a batch, so it is read with fewer and larger transport
+    /// reads. After several batches in a row that would fit in half of the
+    /// next smaller page size, the page size shrinks by one step. Connections
+    /// with small messages keep small pages, which also bounds the memory a
+    /// partial frame or a split-off frame holds.
+    ///
+    /// Within a batch a buffer grows with [`BytesMut::reserve_more`](ntex_bytes::BytesMut::reserve_more) once less
+    /// than [`BytePageSize::low`] of its page size remains: the data is
+    /// compacted within its page when that leaves room for half a page,
+    /// otherwise the buffer moves to the next page size.
+    ///
+    /// The page size does not depend on the read backpressure watermark, see
+    /// [`set_read_backpressure`](Self::set_read_backpressure). A single read
+    /// can fill a page larger than the watermark, reads are paused only after
+    /// the buffered input reaches it.
     ///
     /// Read buffers come from the per-thread page cache of `ntex-bytes`,
     /// shared with write buffers and all configurations, see
@@ -369,29 +386,35 @@ impl IoConfig {
     /// Copy long-lived frames or call [`Bytes::trimdown`](ntex_bytes::Bytes::trimdown)
     /// on them to release the rest of the buffer.
     ///
-    /// The default page size is 16 KiB.
+    /// Set `min` and `max` to the same size to read into pages of a fixed
+    /// size. The default range is 4 KiB to 64 KiB.
     ///
     /// # Panics
     ///
-    /// Panics if `size` is [`BytePageSize::Unset`].
+    /// Panics if `min` or `max` is [`BytePageSize::Unset`], or `min` is
+    /// larger than `max`.
     #[must_use]
-    pub fn set_read_size(mut self, size: BytePageSize) -> Self {
+    pub fn set_read_size(mut self, min: BytePageSize, max: BytePageSize) -> Self {
         assert!(
-            size != BytePageSize::Unset,
+            min != BytePageSize::Unset && max != BytePageSize::Unset,
             "read buffer page size must be set"
         );
-        self.read_size = size;
-        self.read_backpressure = size.capacity();
+        assert!(
+            min.capacity() <= max.capacity(),
+            "read buffer min page size must not be larger than max"
+        );
+        self.read_size_min = min;
+        self.read_size_max = max;
         self
     }
 
     /// Sets the read backpressure watermark.
     ///
     /// Read backpressure is enabled when the application-facing read buffer
-    /// reaches `size` bytes and released once it falls to half of it.
+    /// reaches `size` bytes and released once it falls to half of it. It does
+    /// not affect the read page size, see [`set_read_size`](Self::set_read_size).
     ///
-    /// [`set_read_size`](Self::set_read_size) resets the watermark to the
-    /// read page capacity, approximately 16 KiB by default.
+    /// The default watermark is the capacity of a 32 KiB page.
     ///
     /// # Panics
     ///
@@ -513,65 +536,62 @@ mod tests {
     #[test]
     fn buffer_configuration() {
         let cfg = IoConfig::new()
-            .set_read_size(BytePageSize::Size4)
+            .set_read_backpressure(4096)
             .set_write_backpressure(2048);
 
-        let size = BytePageSize::Size4;
-        assert_eq!(cfg.read_backpressure(), size.capacity());
-        assert_eq!(cfg.read_half(), size.capacity() / 2);
+        assert_eq!(cfg.read_backpressure(), 4096);
+        assert_eq!(cfg.read_half(), 2048);
         assert_eq!(cfg.write_backpressure(), 2048);
         assert_eq!(cfg.write_half(), 1024);
     }
 
     #[test]
     fn read_size_configuration() {
-        let default = BytePageSize::Size16.capacity();
+        let default = BytePageSize::Size32.capacity();
         let cfg = IoConfig::new();
-        assert_eq!(cfg.read_size(), BytePageSize::Size16);
+        assert_eq!(cfg.read_size_min(), BytePageSize::Size4);
+        assert_eq!(cfg.read_size_max(), BytePageSize::Size64);
         assert_eq!(cfg.read_backpressure(), default);
         assert_eq!(cfg.read_half(), default / 2);
-        assert_eq!(cfg.write_backpressure(), default);
-        let buf = cfg.new_read_buf();
-        assert_eq!(buf.page_size(), BytePageSize::Size16);
-        assert_eq!(buf.capacity(), default);
+        assert_eq!(cfg.write_backpressure(), BytePageSize::Size16.capacity());
 
+        // the read size does not change the backpressure watermark
         let cfg = cfg
-            .set_read_size(BytePageSize::Size4)
+            .set_read_size(BytePageSize::Size8, BytePageSize::Size8)
             .set_write_backpressure(2048);
-        assert_eq!(cfg.read_size(), BytePageSize::Size4);
-        assert_eq!(cfg.read_backpressure(), BytePageSize::Size4.capacity());
-        assert_eq!(cfg.read_half(), BytePageSize::Size4.capacity() / 2);
-        assert_eq!(cfg.new_read_buf().page_size(), BytePageSize::Size4);
+        assert_eq!(cfg.read_size_min(), BytePageSize::Size8);
+        assert_eq!(cfg.read_size_max(), BytePageSize::Size8);
+        assert_eq!(cfg.read_backpressure(), default);
         assert_eq!(cfg.write_backpressure(), 2048);
         assert_eq!(cfg.write_half(), 1024);
 
-        let cfg = cfg.set_read_size(BytePageSize::Size256);
-        assert_eq!(cfg.read_size(), BytePageSize::Size256);
-        assert_eq!(cfg.read_backpressure(), BytePageSize::Size256.capacity());
-        assert_eq!(cfg.new_read_buf().page_size(), BytePageSize::Size256);
+        let cfg = cfg.set_read_size(BytePageSize::Size16, BytePageSize::Size256);
+        assert_eq!(cfg.read_size_min(), BytePageSize::Size16);
+        assert_eq!(cfg.read_size_max(), BytePageSize::Size256);
+        assert_eq!(cfg.read_backpressure(), default);
     }
 
     #[test]
     fn read_backpressure_configuration() {
         let cfg = IoConfig::new()
-            .set_read_size(BytePageSize::Size4)
-            .set_read_backpressure(64 * 1024);
-        assert_eq!(cfg.read_size(), BytePageSize::Size4);
+            .set_read_backpressure(64 * 1024)
+            .set_read_size(BytePageSize::Size4, BytePageSize::Size4);
+        assert_eq!(cfg.read_size_min(), BytePageSize::Size4);
         assert_eq!(cfg.read_backpressure(), 64 * 1024);
         assert_eq!(cfg.read_half(), 32 * 1024);
-        assert_eq!(cfg.new_read_buf().page_size(), BytePageSize::Size4);
-
-        // read size resets backpressure to the page capacity
-        let cfg = cfg.set_read_size(BytePageSize::Size8);
-        assert_eq!(cfg.read_backpressure(), BytePageSize::Size8.capacity());
     }
 
     #[test]
     #[should_panic(expected = "read buffer page size must be set")]
     fn unset_read_size() {
-        let _ = IoConfig::new().set_read_size(BytePageSize::Unset);
+        let _ = IoConfig::new().set_read_size(BytePageSize::Size4, BytePageSize::Unset);
     }
 
+    #[test]
+    #[should_panic(expected = "read buffer min page size must not be larger than max")]
+    fn inverted_read_size() {
+        let _ = IoConfig::new().set_read_size(BytePageSize::Size16, BytePageSize::Size8);
+    }
     #[test]
     #[should_panic(expected = "write buffer page size must be set")]
     fn unset_write_size() {

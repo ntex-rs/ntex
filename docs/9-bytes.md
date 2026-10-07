@@ -696,12 +696,12 @@ share the same per-thread page cache:
 
 - **Reads.** The transport reads into a pooled `BytesMut` read buffer. Codecs
   split frames off it with `split_to`, so large decoded messages share the
-  read buffer while tiny ones are copied inline. Read buffers are sized by the
-  `read_buf` watermarks of [`IoConfig`]: 16,360 bytes high (the `Size16`
-  capacity) and 536 bytes low by default. The page size is the smallest one
-  that holds the high-water mark, `Size4` at least. Larger input moves the
-  buffer to bigger page sizes, beyond `Size256` it becomes an unpooled
-  buffer that is freed when empty.
+  read buffer while tiny ones are copied inline. New read buffers use a
+  per-connection page size that adapts to the read load between the min and
+  max read sizes of [`IoConfig`], `Size4` and `Size64` by default. A buffer
+  grows once less than `BytePageSize::low()` of its page remains free, larger
+  input moves it to bigger page sizes, beyond `Size256` it becomes an
+  unpooled buffer that is freed when empty.
 - **Writes.** Encoders write into `BytePages` with the page size of
   [`IoConfig::write_size`], `Size16` by default. `IoRef::encode_bytes`
   appends owned buffers, so large payloads are not copied. The write

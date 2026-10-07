@@ -2,15 +2,21 @@
 
 ## [4.3.0] - 2026-10-07
 
-* Read buffers are ntex-bytes pages of `IoConfig::read_size()`, empty buffers return to
-  the ntex-bytes page cache shared with write pages
+* Read buffers are ntex-bytes pages, empty buffers return to the ntex-bytes page cache shared
+  with write pages
 
-* Add `IoConfig::set_read_size()`, `IoConfig::read_size()`, `IoConfig::set_read_backpressure()`,
+* Adaptive read page size: each connection starts at the min read page size, grows to fit read
+  batches and shrinks after several small ones, up to the max, `Size4..Size64` by default.
+  Read backpressure does not depend on it.
+
+* The default read backpressure watermark is the `Size32` capacity, was `Size16`
+
+* Add `IoConfig::set_read_size(min, max)`, `IoConfig::read_size_min()`,
+  `IoConfig::read_size_max()`, `IoConfig::set_read_backpressure()`,
   `IoConfig::read_backpressure()` and `IoConfig::write_backpressure()`
 
 * Breaking: Remove `IoConfig::set_read_buf()`, use `IoConfig::set_read_size()` and
-  `IoConfig::set_read_backpressure()`, `set_read_size()` resets the read backpressure watermark
-  to the page capacity
+  `IoConfig::set_read_backpressure()`
 
 * Breaking: Rename `IoConfig::set_write_buf()` to `IoConfig::set_write_backpressure()`
 

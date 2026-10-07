@@ -1084,8 +1084,6 @@ mod tests {
     use crate::util::{Bytes, BytesMut, lazy, stream_recv};
     use crate::{client::ClientCodec, codec::Decoder};
 
-    const BUFFER_SIZE: usize = 32_768;
-
     #[crate::rt_test]
     async fn test_payload_timer_resume_preserves_maximum() {
         let (_client, server) = IoTest::create();
@@ -2291,7 +2289,11 @@ mod tests {
                 SharedCfg::new("TEST")
                     .add(
                         nio::IoConfig::new()
-                            .set_read_size(crate::util::BytePageSize::Size16)
+                            .set_read_size(
+                                crate::util::BytePageSize::Size16,
+                                crate::util::BytePageSize::Size16,
+                            )
+                            .set_read_backpressure(crate::util::BytePageSize::Size16.capacity())
                             .set_write_backpressure(15 * 1024),
                     )
                     .add(HttpServiceConfig::new().set_max_buf_size(32 * 1024)),
@@ -2347,12 +2349,15 @@ mod tests {
         // buf must be consumed
         assert_eq!(client.remote_buffer(|buf| buf.len()), 0);
 
-        // io should be drained only by no more than MAX_BUFFER_SIZE
+        // io is drained by no more than the chunk received by the handler, the
+        // chunk buffered in the payload and the read buffer, each at most one
+        // read page
         let random_bytes: Vec<u8> = (0..1_048_576).map(|_| rand::random::<u8>()).collect();
         client.write(random_bytes);
 
         sleep(Millis(50)).await;
-        assert!(client.remote_buffer(|buf| buf.len()) > 1_048_576 - BUFFER_SIZE * 3);
+        let page = crate::util::BytePageSize::Size64.capacity();
+        assert!(client.remote_buffer(|buf| buf.len()) > 1_048_576 - page * 4);
         assert!(mark.load(Ordering::Relaxed));
     }
 

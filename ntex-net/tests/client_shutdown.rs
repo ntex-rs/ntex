@@ -29,7 +29,8 @@ fn cfg() -> SharedCfg {
     SharedCfg::new("CLIENT")
         .add(
             IoConfig::new()
-                .set_read_size(BytePageSize::Size8)
+                .set_read_size(BytePageSize::Size8, BytePageSize::Size8)
+                .set_read_backpressure(BytePageSize::Size8.capacity())
                 .set_shutdown_timeout(ntex::time::Seconds(5)),
         )
         .build()

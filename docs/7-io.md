@@ -248,7 +248,8 @@ let cfg = SharedCfg::new("my-protocol")
             .set_keepalive_timeout(Seconds(30))
             .set_shutdown_timeout(Seconds(2))
             .set_frame_read_rate(Seconds(2), Seconds(10), 1_024)
-            .set_read_size(BytePageSize::Size32)
+            .set_read_size(BytePageSize::Size4, BytePageSize::Size32)
+            .set_read_backpressure(32 * 1024)
             .set_write_backpressure(32 * 1024)
             .set_write_buf_threshold(8 * 1024),
     )
@@ -278,9 +279,10 @@ These settings are used by different parts of the stack:
   is released after outstanding output falls to half its high-water mark,
   counting both buffered output and output a transport has taken ownership of
   but not yet written to the peer.
-- The read page size controls how much free capacity is reserved before
-  another socket read: a buffer grows once less than [`BytePageSize::low`] of
-  its page remains free. Output is held in [`BytePages`] of the write page
+- The min and max read page sizes bound the adaptive page size of new read
+  buffers. Before another socket read, a buffer grows once less than
+  [`BytePageSize::low`] of its page remains free. Output is held in
+  [`BytePages`] of the write page
   size, so the write backpressure setting takes only a high-water mark.
 - The write page size controls newly allocated [`BytePages`], while the write
   threshold controls when supported transports attempt an early direct write.
@@ -288,7 +290,7 @@ These settings are used by different parts of the stack:
 Connection and keep-alive timeouts are disabled by default. Frame read-rate
 limits and the write timeout are also disabled. The default graceful-shutdown
 timeout is one second, and the default read and write high-water marks are
-approximately 16 KiB.
+approximately 32 KiB and 16 KiB.
 
 An established connection can switch to another shared configuration with
 [`Io::set_config`]. This is useful when a protocol upgrade changes timeout or
@@ -415,9 +417,18 @@ read buffer, where a codec or protocol service can inspect and consume them.
 useful when a decoded message must retain part of the input after the decoder
 continues processing later data.
 
-Read buffers are `ntex-bytes` pages of the size set with
-[`IoConfig::set_read_size`], `Size16` by default. A page's capacity is
-the default read high-water mark, 16,368 bytes for `Size16`;
+Read buffers are `ntex-bytes` pages. Each connection picks the page size of
+new read buffers between the min and max set with
+[`IoConfig::set_read_size`], `Size4` and `Size64` by default. It starts at the
+min, so idle and light connections pin small pages. Consecutive reads that
+fill their buffer form one batch with the read that ends it; a batch larger
+than the page grows the page size to fit it, up to the max. After four
+batches in a row that fit in half of the next smaller page, the page size
+shrinks by one step, down to the min. [`Io::set_config`] restarts it at the
+min. Equal min and max sizes fix the page size.
+
+The page size does not affect read backpressure: the read high-water mark is
+the `Size32` capacity, 32,736 bytes, by default;
 [`IoConfig::set_read_backpressure`] sets another one. An empty buffer goes
 back to the per-thread page cache of its size, shared with write pages and any
 other pooled `BytesMut`; [`set_page_cache_size`] tunes it. A frame split from
