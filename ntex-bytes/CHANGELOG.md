@@ -14,7 +14,9 @@
   largest page size it becomes a regular buffer. Buffers without a page size grow as before
 
 * The page cache limit depends on the page size, fewer pages are cached for larger sizes, add
-  `set_page_cache_size()` to set the limit of a single page size, deprecate `set_pages_cache()`
+  `set_page_cache_size()` to set the limit of a single page size, deprecate `set_pages_cache()`.
+  More pages are cached for the 4 KiB to 16 KiB and 64 KiB page sizes, the read start, write and
+  read max page sizes of ntex-io
 
 * Remove `BytesMut::reserve_capacity()`, use `BytesMut::reserve_exact()`
 
