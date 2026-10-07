@@ -248,6 +248,7 @@ let cfg = SharedCfg::new("my-protocol")
             .set_keepalive_timeout(Seconds(30))
             .set_shutdown_timeout(Seconds(2))
             .set_frame_read_rate(Seconds(2), Seconds(10), 1_024)
+            .set_write_timeout(Seconds(10))
             .set_read_size(BytePageSize::Size4, BytePageSize::Size32)
             .set_read_backpressure(32 * 1024)
             .set_write_backpressure(32 * 1024)
@@ -269,8 +270,8 @@ These settings are used by different parts of the stack:
   from the moment it is enabled until it is disabled, before the dispatcher
   stops with a write timeout. Keep-alive and read-rate timers do not run
   during that time. Output left after backpressure is disabled is bounded
-  only by keep-alive. The HTTP/1 dispatcher does not use these settings; it
-  is configured by `HttpServiceConfig`, including its own
+  only by keep-alive. The HTTP/1 dispatcher uses its own protocol timer
+  configuration instead, including
   `set_write_timeout()`.
 - The graceful-shutdown timeout bounds both phases of shutdown together: the
   filter shutdown and the transport drain of pending output. It cannot be
@@ -292,6 +293,22 @@ Connection and keep-alive timeouts are disabled by default. Frame read-rate
 limits and the write timeout are also disabled. The default graceful-shutdown
 timeout is one second, and the default read and write high-water marks are
 approximately 32 KiB and 16 KiB.
+
+Start with those defaults. Change one setting because of an observed workload,
+not because larger values sound faster:
+
+- Read page sizes control allocation and read-call frequency, not the amount of
+  unread data a connection may queue. Increase the maximum for sustained large
+  frames or bodies; keep the minimum small when many mostly idle connections
+  are expected.
+- Backpressure watermarks control when producers or transports should pause.
+  They are not hard memory limits: one socket read or one encoded item can
+  cross a watermark.
+- The write threshold is a latency hint for starting transport work earlier.
+  It does not flush data and does not replace write backpressure.
+- A write timeout is especially important for untrusted peers. Without one, a
+  peer that stops reading can keep a backpressured connection and its output
+  alive indefinitely.
 
 An established connection can switch to another shared configuration with
 [`Io::set_config`]. This is useful when a protocol upgrade changes timeout or
@@ -414,9 +431,10 @@ The bytes pass through the filter chain and arrive in the application-facing
 read buffer, where a codec or protocol service can inspect and consume them.
 
 `BytesMut` is a contiguous, growable buffer. A decoder can split immutable
-[`Bytes`] values from it in constant time without copying the payload. This is
-useful when a decoded message must retain part of the input after the decoder
-continues processing later data.
+[`Bytes`] values from it without copying larger payloads; short values are
+copied into the `Bytes` handle itself. This is useful when a decoded message
+must retain part of the input after the decoder continues processing later
+data.
 
 Read buffers are `ntex-bytes` pages. Each connection picks the page size of
 new read buffers between the min and max set with
@@ -429,7 +447,7 @@ shrinks by one step, down to the min. [`Io::set_config`] restarts it at the
 min. Equal min and max sizes fix the page size.
 
 The page size does not affect read backpressure: the read high-water mark is
-the `Size32` capacity, 32,736 bytes, by default;
+the `Size32` capacity, 32,752 bytes, by default;
 [`IoConfig::set_read_backpressure`] sets another one. An empty buffer goes
 back to the per-thread page cache of its size, shared with write pages and any
 other pooled `BytesMut`; [`set_page_cache_size`] tunes it. A frame split from
@@ -449,6 +467,17 @@ the buffered input falls to half that mark.
 [`Io::recv`] and [`Io::read_exact`] wait for more input, so they release
 backpressure regardless of how much is still buffered.
 
+Choose the highest-level read API that matches the protocol:
+
+- Use `recv(codec)` for framed messages. It decodes buffered input and waits
+  when the codec says the frame is incomplete.
+- Use `read_exact()` for a fixed-size header or field.
+- For a custom parser, inspect or consume the read buffer through `IoRef`, and
+  call [`Io::read_more`] only after deciding that more bytes are required.
+  `read_more()` is an active request: it resumes transport reads and releases
+  read backpressure even if the buffer is still large. [`IoRef::read_dst_size`]
+  is the passive size check.
+
 ### Writing
 
 Application output is queued in [`BytePages`], a growable collection of
@@ -465,16 +494,39 @@ needs to be resumed. On transports that support direct writes, the configured
 write threshold can trigger an earlier write while the application is still
 producing output, reducing latency for large responses.
 
-Use [`Io::flush`] to wait for write progress. `flush(false)` returns
-immediately while the outstanding output is below the high-water mark. If the
-high-water mark has been reached, it waits until the outstanding output falls
-to half that mark. `flush(true)` waits until all queued data has reached the
-peer, including data a transport has taken ownership of but not yet written.
-[`Io::send`] combines codec encoding with a full flush.
+Use [`Io::flush`] to apply the configured write wait policy. `flush(false)` is
+a backpressure wait, not a request to drain everything: it returns immediately
+while the outstanding output is below the high-water mark. If the high-water
+mark has been reached, it waits until the outstanding output falls to half that
+mark. `flush(true)` waits until all queued data has reached the peer, including
+data a transport has taken ownership of but not yet written. [`Io::send`]
+combines codec encoding with a full flush.
+
+Write backpressure is advisory. The `encode` methods still accept more output
+after the high-water mark is reached, because refusing half of a protocol
+message would be difficult to recover from. A producer that is not managed by
+a dispatcher should await [`IoRef::write_ready`] before queueing each next
+chunk, or use `flush(false)` between batches:
+
+```rust
+use ntex::{
+    io::Io,
+    util::Bytes,
+};
+
+async fn queue_chunk(io: &Io, chunk: Bytes) -> std::io::Result<()> {
+    io.write_ready().await?;
+    io.encode_bytes(chunk)
+}
+```
+
+This bounds normal streaming output around the configured watermark. It does
+not split a single large chunk or turn the watermark into a strict
+per-connection memory cap.
 
 This separation allows codecs and application services to work with bytes
-without depending on socket readiness, while the I/O subsystem consistently
-enforces buffer limits and backpressure.
+without depending on socket readiness, while the I/O subsystem coordinates
+buffering and backpressure.
 
 [`BytePages`]: https://docs.rs/ntex/latest/ntex/util/struct.BytePages.html
 [`BytePageSize::low`]: https://docs.rs/ntex/latest/ntex/util/enum.BytePageSize.html#method.low
@@ -483,6 +535,7 @@ enforces buffer limits and backpressure.
 [`BytesMut::reserve_more`]: https://docs.rs/ntex/latest/ntex/util/struct.BytesMut.html#method.reserve_more
 [`Io::flush`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.flush
 [`Io::read_exact`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.read_exact
+[`Io::read_more`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.read_more
 [`Io::recv`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.recv
 [`Io::send`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.send
 [`IoConfig`]: https://docs.rs/ntex/latest/ntex/io/struct.IoConfig.html
@@ -492,6 +545,8 @@ enforces buffer limits and backpressure.
 [`IoRef::encode`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.encode
 [`IoRef::encode_bytes`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.encode_bytes
 [`IoRef::encode_slice`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.encode_slice
+[`IoRef::read_dst_size`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.read_dst_size
+[`IoRef::write_ready`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.write_ready
 [`IoRef::with_read_dst`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.with_read_dst
 [`IoRef::with_read_src`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.with_read_src
 [`IoRef::with_buf`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.with_buf
@@ -515,11 +570,18 @@ requires attention. [`Io::poll_status_update`] reports the next status as an
   the transport failed, or the shutdown was started locally. It carries the
   transport error if one occurred, and `None` after a clean close.
 
+Use [`Io::poll_read_pause`] instead when the service should also stop accepting
+more transport input while it waits. The pause is cooperative: decoding,
+touching the application read buffer, or explicitly asking for more input
+resumes reads. This makes it suitable for a dispatcher waiting on readiness,
+not for permanently disabling the read half.
+
 The same conditions reach a codec-driven service as [`RecvError`] from
 [`Io::poll_recv`], which additionally reports decoder failures. Code that only
 needs to be woken when the connection goes away can await the [`Waiter`]
-future returned by [`IoRef::on_disconnect`], and [`IoRef::is_closed`] reports
-whether shutdown has already started.
+future returned by [`IoRef::on_disconnect`]. [`IoRef::is_active`] becomes
+false as soon as closing starts; [`IoRef::is_closed`] becomes true only after
+the backend has released the transport and teardown has finished.
 
 A clean EOF from the peer ends the read direction but leaves the write half
 open, so a service can still finish encoding and flushing its response before
@@ -541,20 +603,34 @@ filters are done, so no further input can be used, and the transport discards
 whatever is left in the receive queue just before it closes.
 Input is no longer delivered to the application in this phase.
 
-A single graceful-shutdown timeout bounds both phases; if it elapses the
-connection is terminated and any undrained output is discarded.
+A single deadline bounds both phases. If the filters finish early, the
+transport drain gets the remaining time. If the deadline expires while filters
+are still pending, ntex ends that phase and still runs transport shutdown with
+the already-expired deadline; when the transport phase observes it, undrained
+output is discarded. [`Io::shutdown`] reports the timed-out error after
+transport teardown.
 [`IoRef::terminate`] skips the process entirely and drops the connection
 without flushing pending output.
 
-Either way the transport observes the end of the connection as
-[`Readiness::Close`] and reports its own teardown through
+A graceful close, including one forced forward by a timeout or failure, reaches
+the transport as [`Readiness::Close`]. An explicit [`IoRef::terminate`] reaches
+it as `Readiness::Terminate`, so a socket backend can abort rather than send a
+clean end-of-stream. The transport reports either teardown through
 [`IoContext::stopped`], which is what allows `Io::shutdown` to resolve.
+
+Dropping the owning `Io` value is not a substitute for awaiting shutdown. If
+no output would be lost, dropping it starts a normal close. If buffered output
+can no longer be delivered because the filter stack is being dropped, ntex
+aborts the transport so the peer does not mistake a truncated stream for a
+complete one. Call `shutdown().await` when delivery and a clean close matter.
 
 [`FilterLayer::shutdown`]: https://docs.rs/ntex/latest/ntex/io/trait.FilterLayer.html#method.shutdown
 [`Io::poll_recv`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.poll_recv
+[`Io::poll_read_pause`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.poll_read_pause
 [`Io::poll_status_update`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.poll_status_update
 [`Io::shutdown`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.shutdown
 [`IoRef::close`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.close
+[`IoRef::is_active`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.is_active
 [`IoRef::is_closed`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.is_closed
 [`IoRef::on_disconnect`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.on_disconnect
 [`IoRef::terminate`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.terminate
