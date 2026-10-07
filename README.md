@@ -13,7 +13,8 @@
 
 ntex provides a strongly typed component for building
 asynchronous network applications. It includes HTTP/1, HTTP/2, WebSocket,
-Mqtt3/5, Amqp1.0, TLS, and runtime-independent I/O support.
+TLS, and runtime-independent I/O support. MQTT, AMQP, and gRPC are provided
+by [related projects](#related-projects).
 
 ## Build status
 
@@ -81,8 +82,15 @@ ntex = { version = "4", features = ["tokio"] }
 - `openssl` and `rustls` enable the corresponding TLS integrations.
 - `compress` enables HTTP content compression.
 - `cookie` enables cookie support.
-- `url` enables URL parsing support.
 - `ws` enables WebSocket APIs and is enabled by default.
+
+## Related projects
+
+| Project | Description |
+| --- | --- |
+| [ntex-mqtt](https://github.com/ntex-rs/ntex-mqtt) | Client and server framework for MQTT v5 and v3.1.1 |
+| [ntex-amqp](https://github.com/ntex-rs/ntex-amqp) | Client and server framework for AMQP 1.0 |
+| [ntex-grpc](https://github.com/ntex-rs/ntex-grpc) | Client and server framework for gRPC |
 
 ## Documentation and community
 

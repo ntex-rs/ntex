@@ -73,6 +73,9 @@ async fn main() -> io::Result<()> {
 the asynchronous `ready()` and `shutdown()` lifecycle methods, while service
 chains provide `readiness()` and `shutdown()` callbacks. `Pipeline` and
 middleware APIs have been updated to bind and propagate service state.
+`Pipeline::call_nowait()` and `PipelineBinding::call_nowait()` have been
+removed; use `call()`, which skips the readiness check when the last pipeline
+readiness check has succeeded and no other call has consumed it.
 
 ### Server builder
 
@@ -132,6 +135,25 @@ let service = ntex::http::rustls(
 * New settings: `set_half_close()`, `set_host_validation()`,
   `set_max_start_line_size()`, and `set_write_timeout()`.
 
+## URLs
+
+ntex 4 uses `urly::Url`, re-exported as `ntex::url`, instead of `http::Uri`:
+
+* `ntex::http::Uri` and the `ntex::http::uri` module have been removed.
+* `RequestHead::uri`, `Request::uri()`, `HttpRequest::uri()`, and
+  `WebRequest::uri()` are `Url` values. `Url::path()` and `Url::query()`
+  return `ntex::url::Path` and `ntex::url::Query`; use `as_str()` to get
+  string slices.
+  `HttpRequest::path()` and `HttpRequest::query_string()` still return `&str`.
+* `HttpRequest::url_for()` returns `ntex::url::Url` instead of `url::Url`.
+* The `url` feature has been removed; URL support is always available.
+* The HTTP and WebSocket clients accept any type that converts to `Url`,
+  including `&str`, `String`, and `http::Uri`. Client connectors use
+  `Connect<Url>` instead of `Connect<Uri>`.
+* Server request targets are normalized: dot segments are removed, a fragment
+  is dropped, and an origin-form path starting with `//` is a path, not an
+  authority.
+
 ## HTTP client
 
 The HTTP client builder, connector, and connection pool have been redesigned:
@@ -181,7 +203,8 @@ and `response_payload_timeout()`.
 
 The error variants `ClientError::TunnelNotSupported`, `ConnectError::Timeout`,
 `ConnectError::SslError`, `ConnectError::SslHandshakeError`, and
-`EncodeError::Fmt` have been removed.
+`EncodeError::Fmt` have been removed. `InvalidUrl::Http` is replaced by
+`InvalidUrl::Parse`.
 
 ## WebSocket client
 
@@ -200,8 +223,8 @@ let client = WsClient::new(
 let connection = client.connect().await?;
 ```
 
-URI validation errors are now reported by `connect()` rather than by
-`WsClient::new()`.
+URL validation errors are now reported by `connect()` rather than by
+`WsClient::new()`, as `WsConfigError::Parse` instead of `WsConfigError::Http`.
 
 Custom connectors and TLS are still selected with `connector()`, `openssl()`,
 or `rustls()` on `WsClient`.
@@ -322,10 +345,20 @@ the dispatcher report an `io::ErrorKind::UnexpectedEof` error.
 
 * `set_disconnect_timeout()` / `disconnect_timeout()` are renamed to
   `set_shutdown_timeout()` / `shutdown_timeout()`. A zero timeout panics.
-* `set_read_buf(high, low)` and `set_write_buf(high)` no longer take a
-  cache-size argument, and `set_write_buf()` no longer takes a low watermark.
-  The buffer cache is limited globally with
-  `ntex::io::cfg::set_read_buf_cache_limit()` (1 MiB by default).
+* Read and write buffers are `ntex-bytes` pages and share one page cache,
+  configured per thread with `ntex_bytes::set_page_cache_size()`. `BufConfig`
+  and `IoConfig::read_buf()` / `write_buf()` have been removed.
+* Each connection adapts its read page size to its reads, between the sizes set
+  with `set_read_size(min, max)` (4 KiB to 64 KiB by default).
+* Backpressure is configured with a single high watermark and is released at
+  half of it:
+
+| ntex 3 | ntex 4 |
+|--------|--------|
+| `set_read_buf(high, low, cache_size)` | `set_read_backpressure(high)` and `set_read_size(min, max)` |
+| `set_write_buf(high, low, cache_size)` | `set_write_backpressure(high)` |
+| `set_write_page_size()`, `write_page_size()` | `set_write_size()`, `write_size()` |
+
 * `set_write_timeout()` closes connections whose peer stops reading.
 
 ### `Io` and `IoRef`
@@ -343,6 +376,8 @@ the dispatcher report an `io::ErrorKind::UnexpectedEof` error.
 | `Io::poll_dispatch()` | `Io::register_dispatch()` |
 | `Io::pause()` | removed; reads resume via `poll_read_more()` |
 | `Io::set_config()` | pass the configuration to `Io::new()` |
+| `Io::take()` | `unsafe Io::take()` |
+| `IoRef::resize_read_buf()`, `IoContext::resize_read_buf()` | `BytesMut::reserve_more()` |
 | `IoStatusUpdate::KeepAlive` | `IoStatusUpdate::Timeout` |
 
 `IoRef::is_closed()` now reports whether closing has finished. Use the new
@@ -363,9 +398,29 @@ expires.
 * `ntex::time`: `query_system_time()` has been removed; use `system_time()`.
 * `ntex_util::channel::bstream::Receiver::max_buffer_size()` is deprecated in
   favor of `set_watermarks()`.
-* `ntex::router::Path::skip()` takes a `u32`.
 * `ntex::http::HeaderMap` no longer implements `FromIterator`; build maps with
   `insert()` or `append()`.
+* `HeaderValue::to_str()` accepts any valid UTF-8 value, not only visible
+  ASCII.
+
+### Router
+
+`ntex::router` (`ntex-router` 2) renames several APIs:
+
+| ntex 3 | ntex 4 |
+|--------|--------|
+| `Router::recognize_mut_checked()` | `Router::recognize_checked_mut()` |
+| `ResourceDef::resource_path()`, `resource_path_named()` | `ResourceDef::build_path()`, `build_path_named()` |
+| `ResourceDef::name_mut()` | `ResourceDef::set_name()` |
+| `RouterBuilder::rdef()` | `RouterBuilder::resource()` |
+| `Path::unprocessed()` | `Path::path()` |
+| `Path::query()` | `Path::get()` |
+| `Router::build()`, `RouterBuilder::finish()` | removed |
+
+`RouterBuilder` registration methods return `&mut RouterEntry` instead of a
+tuple; use `set_id()`, `set_name()`, `set_check_value()`, and
+`resource_mut()`. `Path::skip()` takes a `u32`. Path segments that do not
+decode to valid UTF-8 are kept percent-encoded.
 
 ## Connection and protocol configuration
 
