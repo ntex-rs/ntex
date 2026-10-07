@@ -743,7 +743,7 @@ mod tests {
     #[test]
     fn default_cache_limit_per_page_size() {
         assert_eq!(super::DEFAULT_PAGES_CACHE, [64, 32, 64, 16, 16, 8, 8, 2, 1]);
-        for size in crate::PAGE_SIZES {
+        for size in crate::size::PAGE_SIZES {
             super::CACHE.with(|cache| cache.set(Some(Box::default())));
 
             let limit = super::DEFAULT_PAGES_CACHE[size as usize];
@@ -922,7 +922,7 @@ mod tests {
 
         // without a page size it is freed, not cached
         drop(st);
-        for size in crate::PAGE_SIZES {
+        for size in crate::size::PAGE_SIZES {
             assert_eq!(
                 cached_pages(size),
                 usize::from(size == BytePageSize::Size256)
@@ -1162,7 +1162,7 @@ mod tests {
             BytePageSize::Unset
         );
         drop(buf);
-        for size in crate::PAGE_SIZES {
+        for size in crate::size::PAGE_SIZES {
             let expected = usize::from(size == BytePageSize::Size64);
             assert_eq!(cached_pages(size), expected);
         }
