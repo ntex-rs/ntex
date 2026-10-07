@@ -358,6 +358,10 @@ impl IoRef {
     /// [`FilterBuf::with_read_buffers`](crate::FilterBuf::with_read_buffers) is
     /// the application-facing read destination, so consuming enough of it
     /// releases read backpressure and cancels an installed read pause.
+    ///
+    /// Buffer access is not reentrant. The closure must not use this
+    /// connection to access an overlapping read or write buffer, or change the
+    /// filter chain.
     pub fn with_buf<F, R>(&self, f: F) -> io::Result<R>
     where
         F: FnOnce(&mut FilterBuf<'_>) -> R,
@@ -386,6 +390,10 @@ impl IoRef {
     ///
     /// Use [`crate::Io::poll_read_more`] rather than this method to check
     /// whether data is available.
+    ///
+    /// The closure must not access this connection's application-facing read
+    /// destination again. Nested access is unsupported and may terminate the
+    /// connection or lose nested buffer changes.
     pub fn with_read_dst<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
@@ -417,6 +425,11 @@ impl IoRef {
     /// Returns an error without invoking `f` if the connection is closing or
     /// closed. Data appended by `f` is scheduled for delivery. If that starts
     /// an eager backend write, its transport or filter error is returned.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the closure accesses the same application-facing write
+    /// buffer again.
     pub fn with_write_src<F, R>(&self, f: F) -> io::Result<R>
     where
         F: FnOnce(&mut BytePages) -> R,
@@ -446,6 +459,10 @@ impl IoRef {
     /// application-facing destination, so consuming enough of it releases read
     /// backpressure and cancels an installed read pause. Unlike
     /// [`with_read_dst`](Self::with_read_dst) it never clears read readiness.
+    ///
+    /// The closure must not access this connection's transport-facing read
+    /// source again. Nested access is unsupported and may terminate the
+    /// connection or lose nested buffer changes.
     pub fn with_read_src<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
@@ -462,6 +479,11 @@ impl IoRef {
     /// application-facing source exposed by
     /// [`with_write_src`](Self::with_write_src). Primarily intended for
     /// transport and filter implementations.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the closure accesses the same transport-facing write buffer
+    /// again.
     pub fn with_write_dst<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytePages) -> R,

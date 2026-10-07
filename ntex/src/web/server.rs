@@ -436,7 +436,7 @@ where
     #[cfg(unix)]
     /// Start listening for unix domain connections on existing listener.
     ///
-    /// This method is available with `uds` feature.
+    /// This method is available only on Unix.
     pub fn listen_uds(
         mut self,
         lst: std::os::unix::net::UnixListener,
@@ -463,7 +463,7 @@ where
     #[cfg(unix)]
     /// Start listening for incoming unix domain connections.
     ///
-    /// This method is available with `uds` feature.
+    /// This method is available only on Unix.
     pub fn bind_uds<A>(mut self, addr: A, cfg: impl Into<SharedCfg>) -> io::Result<Self>
     where
         A: AsRef<std::path::Path>,
@@ -506,8 +506,9 @@ where
     /// For each address this method starts separate thread which does
     /// `accept()` in a loop.
     ///
-    /// This methods panics if no socket address can be bound or an ntex system
-    /// is not yet configured.
+    /// # Panics
+    ///
+    /// Panics if no listener was registered before calling this method.
     ///
     /// ```rust,no_run
     /// use ntex::web::{self, App, HttpResponse, HttpServer};

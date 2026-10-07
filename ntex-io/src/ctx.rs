@@ -26,8 +26,10 @@ use crate::{Flags, Id, IoRef, IoTaskStatus, Readiness, io::IoState};
 /// while both directions stay open. In the second, buffered output is drained
 /// into the transport while the read side is paused;
 /// [`Readiness::Close`] is reported only once nothing is left to write. A
-/// single shutdown timeout bounds both phases, and terminates the connection
-/// if it elapses.
+/// single shutdown timeout bounds both phases. If it elapses during filter
+/// shutdown, that phase is skipped and transport shutdown begins. If it
+/// elapses during transport shutdown, the connection closes and any remaining
+/// output is discarded.
 ///
 /// So by the time the loop exits there is nothing left to drain, whether the
 /// connection was shut down gracefully or terminated. A task must never attempt
@@ -167,10 +169,12 @@ impl IoContext {
         res
     }
 
-    /// Force-terminates the I/O stream.
+    /// Stops I/O processing without graceful filter shutdown.
     ///
-    /// This is the immediate path, not a graceful shutdown: pending
-    /// application work is not drained. Call
+    /// Pending application work is not drained. Unlike
+    /// [`IoRef::terminate`](crate::IoRef::terminate), this does not request an
+    /// aborted transport release: the transport observes
+    /// [`Readiness::Close`] and closes both directions gracefully. Call
     /// [`stopped`](Self::stopped) afterwards, once transport teardown has
     /// actually finished.
     pub fn stop(&self, e: Option<io::Error>) {
@@ -273,8 +277,8 @@ impl IoContext {
     /// the dispatcher looks for input, so it must take one of its own through
     /// `take_read_buf` instead.
     ///
-    /// `f` must not read from this io again, a nested read terminates the
-    /// connection.
+    /// `f` must not read from this io again. Nested read access is unsupported
+    /// and may terminate the connection or lose nested buffer changes.
     pub fn with_read_buf<F>(&self, f: F) -> IoTaskStatus
     where
         F: FnOnce(&mut BytesMut) -> Poll<io::Result<usize>>,
@@ -425,6 +429,10 @@ impl IoContext {
     /// later; any page it removes is counted as in-flight output until it is
     /// either returned to this buffer or reported as written through
     /// [`update_write_status`](Self::update_write_status).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the closure accesses the transport-facing write buffer again.
     pub fn with_write_dst<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytePages) -> R,

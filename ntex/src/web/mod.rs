@@ -51,7 +51,6 @@
 //! - `compress` enables content compression and decompression.
 //! - `openssl` enables TLS support through OpenSSL.
 //! - `rustls` enables TLS support through rustls.
-//! - `url` enables URL generation and URL-aware request helpers.
 //! - `ws` enables the [`ws`] module.
 #![allow(clippy::unused_async_trait_impl, clippy::mismatching_type_param_order)]
 mod app;

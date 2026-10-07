@@ -61,8 +61,10 @@ pub enum Readiness {
     /// release it. For a socket this is `shutdown(SHUT_RDWR)` followed by
     /// `close()`. Any operation still in flight should be canceled.
     ///
-    /// Buffered output has already been drained before this is reported, so
-    /// there is nothing left to flush.
+    /// During a graceful shutdown buffered output is drained before this is
+    /// reported. If the connection ended because of a failure or an expired
+    /// shutdown deadline, output may instead be undeliverable and discarded.
+    /// In every case the I/O task must not attempt another flush.
     Close,
     /// The transport must be released immediately.
     ///
@@ -210,12 +212,15 @@ pub enum IoStatusUpdate {
     WriteBackpressure,
     /// The connection is no longer usable.
     ///
-    /// Reported once the connection has closed, whether because the peer
-    /// disconnected, the transport failed, or the shutdown was started
-    /// locally with [`IoRef::close`](crate::IoRef::close) or
-    /// [`IoRef::terminate`](crate::IoRef::terminate). Carries the transport
-    /// error when the connection ended because of one, and `None` when it
-    /// closed cleanly.
+    /// Reported once the connection can no longer dispatch frames, whether
+    /// because transport shutdown has begun, the peer disconnected, an error
+    /// occurred, or shutdown was started locally with
+    /// [`IoRef::close`](crate::IoRef::close) or
+    /// [`IoRef::terminate`](crate::IoRef::terminate). The transport backend
+    /// may still be finishing teardown.
+    ///
+    /// Carries the connection error, which may originate from the transport,
+    /// a filter, or shutdown. `None` means no error was recorded.
     PeerGone(Option<IoError>),
 }
 
@@ -229,12 +234,15 @@ pub enum RecvError<U: Decoder> {
     Decoder(U::Error),
     /// The connection is no longer usable.
     ///
-    /// Reported once the connection has closed, whether because the peer
-    /// disconnected, the transport failed, or the shutdown was started
-    /// locally with [`IoRef::close`](crate::IoRef::close) or
-    /// [`IoRef::terminate`](crate::IoRef::terminate). Carries the transport
-    /// error when the connection ended because of one, and `None` when it
-    /// closed cleanly.
+    /// Reported once the connection can no longer dispatch frames, whether
+    /// because transport shutdown has begun, the peer disconnected, an error
+    /// occurred, or shutdown was started locally with
+    /// [`IoRef::close`](crate::IoRef::close) or
+    /// [`IoRef::terminate`](crate::IoRef::terminate). The transport backend
+    /// may still be finishing teardown.
+    ///
+    /// Carries the connection error, which may originate from the transport,
+    /// a filter, or shutdown. `None` means no error was recorded.
     PeerGone(Option<IoError>),
 }
 

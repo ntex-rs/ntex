@@ -270,8 +270,8 @@ These settings are used by different parts of the stack:
   from the moment it is enabled until it is disabled, before the dispatcher
   stops with a write timeout. Keep-alive and read-rate timers do not run
   during that time. Output left after backpressure is disabled is bounded
-  only by keep-alive. The HTTP/1 dispatcher uses its own protocol timer
-  configuration instead, including
+  only by keep-alive. The HTTP/1 dispatcher does not use these settings; it is
+  configured by [`HttpServiceConfig`], including its own
   `set_write_timeout()`.
 - The graceful-shutdown timeout bounds both phases of shutdown together: the
   filter shutdown and the transport drain of pending output. It cannot be
@@ -541,6 +541,7 @@ buffering and backpressure.
 [`IoConfig`]: https://docs.rs/ntex/latest/ntex/io/struct.IoConfig.html
 [`IoConfig::set_read_backpressure`]: https://docs.rs/ntex/latest/ntex/io/struct.IoConfig.html#method.set_read_backpressure
 [`IoConfig::set_read_size`]: https://docs.rs/ntex/latest/ntex/io/struct.IoConfig.html#method.set_read_size
+[`HttpServiceConfig`]: https://docs.rs/ntex/latest/ntex/http/struct.HttpServiceConfig.html
 [`IoRef::decode`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.decode
 [`IoRef::encode`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.encode
 [`IoRef::encode_bytes`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.encode_bytes

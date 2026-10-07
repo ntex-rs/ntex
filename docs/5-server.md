@@ -100,7 +100,7 @@ so call it before `run()`.
 
 ## Server Configuration
 
-[`ServerBuilder`](https://docs.rs/ntex-server/ntex_server/net/struct.ServerBuilder.html)
+[`ServerBuilder`](https://docs.rs/ntex-server/latest/ntex_server/net/struct.ServerBuilder.html)
 provides several ways to configure the accept loop and worker pool:
 
 - `name()` sets the server name, which is also used for the accept and worker
@@ -136,7 +136,7 @@ let builder = ntex::server::build()
 ## Controlling a Running Server
 
 `run()` starts the accept loop and workers. It returns a cloneable
-[`Server`](https://docs.rs/ntex-server/ntex_server/net/type.Server.html)
+[`Server`](https://docs.rs/ntex-server/latest/ntex_server/net/type.Server.html)
 controller. Awaiting this controller waits for the server to stop:
 
 ```rust
@@ -248,7 +248,7 @@ connection-level settings.
 
 Protocol services and acceptors read their own configuration types from the
 same `SharedCfg` value. In this example, the HTTP service uses
-[`HttpServiceConfig`](https://docs.rs/ntex/ntex/http/struct.HttpServiceConfig.html)
+[`HttpServiceConfig`](https://docs.rs/ntex/latest/ntex/http/struct.HttpServiceConfig.html)
 to set the maximum number of headers and the keep-alive timeout.
 
 `HttpServiceConfig` also configures the HTTP/1 timers that protect against slow
@@ -277,28 +277,28 @@ limits.
 
 Other configuration types include:
 
-- [`TlsConfig`](https://docs.rs/ntex-tls/ntex_tls/struct.TlsConfig.html)
+- [`TlsConfig`](https://docs.rs/ntex-tls/latest/ntex_tls/struct.TlsConfig.html)
   controls the TLS handshake timeout.
-- [`ClientConfig`](https://docs.rs/ntex/ntex/client/struct.ClientConfig.html)
+- [`ClientConfig`](https://docs.rs/ntex/latest/ntex/client/struct.ClientConfig.html)
   controls HTTP client timeouts, connection pooling, redirects, headers, and
   response limits.
-- [`WsClientConfig`](https://docs.rs/ntex/ntex/ws/struct.WsClientConfig.html)
+- [`WsClientConfig`](https://docs.rs/ntex/latest/ntex/ws/struct.WsClientConfig.html)
   controls WebSocket client connections, protocols, headers, timeouts, and
   frame-size limits.
-- [`WebAppConfig`](https://docs.rs/ntex/ntex/web/struct.WebAppConfig.html)
+- [`WebAppConfig`](https://docs.rs/ntex/latest/ntex/web/struct.WebAppConfig.html)
   contains web application settings such as the host name, local address,
   security state, and application state.
-- [`ntex_h2::ServiceConfig`](https://docs.rs/ntex-h2/ntex_h2/struct.ServiceConfig.html)
+- [`ntex_h2::ServiceConfig`](https://docs.rs/ntex-h2/latest/ntex_h2/struct.ServiceConfig.html)
   controls HTTP/2 flow control, frame and header limits, concurrent streams,
   and protocol timeouts.
-- [`ntex_mqtt::MqttServiceConfig`](https://docs.rs/ntex-mqtt/ntex_mqtt/struct.MqttServiceConfig.html)
+- [`ntex_mqtt::MqttServiceConfig`](https://docs.rs/ntex-mqtt/latest/ntex_mqtt/struct.MqttServiceConfig.html)
   controls MQTT limits, QoS behavior, packet sizes, and protocol timeouts.
 
 ## Test Server
 
 ntex includes a small server helper for integration tests. `test_server()`
 starts the provided service on an available local port and returns a
-[`TestServer`](https://docs.rs/ntex-server/ntex_server/net/struct.TestServer.html)
+[`TestServer`](https://docs.rs/ntex-server/latest/ntex_server/net/struct.TestServer.html)
 controller.
 
 The test server runs one worker on a separate operating-system thread and does

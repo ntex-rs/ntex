@@ -737,8 +737,9 @@ impl<F> Io<F> {
     /// stream. Undecodable bytes left after a locally started shutdown are not
     /// treated as truncation.
     ///
-    /// Codec errors are returned in [`Either::Left`]; transport errors and
-    /// dispatcher timeouts are returned in [`Either::Right`].
+    /// Codec errors are returned in [`Either::Left`]. Dispatcher timeouts and
+    /// connection errors are returned in [`Either::Right`]; a connection error
+    /// may originate from the transport, a filter, or shutdown.
     ///
     /// If write backpressure prevents further reads, this method first waits
     /// for the write buffer to fall below its configured threshold. A
@@ -900,6 +901,9 @@ impl<F> Io<F> {
     ///
     /// This completes once the transport backend has finished its shutdown
     /// operation, not merely once the output has been drained.
+    ///
+    /// If the shutdown deadline expires in either phase, this returns an
+    /// [`io::ErrorKind::TimedOut`] error once the transport has stopped.
     ///
     /// [`IoConfig::set_shutdown_timeout`]: crate::IoConfig::set_shutdown_timeout
     pub async fn shutdown(&self) -> io::Result<()> {
