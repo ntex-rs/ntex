@@ -2,7 +2,8 @@
 
 ## [4.0.0] - 2026-10-08
 
-* No changes
+* web: Percent-encode values substituted by `HttpRequest::url_for()` so they
+  cannot change the generated URL structure
 
 ## [4.0.0-beta.18] - 2026-10-06
 

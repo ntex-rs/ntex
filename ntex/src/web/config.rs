@@ -236,7 +236,7 @@ impl<St: State, In: 'static> ServiceConfig<St, In> {
     /// and are never considered for matching at request time. Calls to
     /// `HttpRequest::url_for()` will work as expected.
     ///
-    /// This is same as `App::external_service()` method.
+    /// This is same as `App::external_resource()` method.
     pub fn external_resource(&mut self, name: impl AsRef<str>, url: impl AsRef<str>) -> &mut Self {
         let mut rdef = ResourceDef::new(url.as_ref());
         rdef.set_name(name.as_ref());

@@ -134,7 +134,10 @@ impl HttpRequest {
         self.head().extensions_mut()
     }
 
-    /// Generate url for named resource
+    /// Generate url for named resource.
+    ///
+    /// Each element is percent-encoded as one literal URL component before it
+    /// replaces a dynamic segment.
     ///
     /// ```rust
     /// # use ntex::web::{self, App, HttpRequest, HttpResponse};
