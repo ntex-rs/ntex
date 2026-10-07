@@ -210,7 +210,7 @@ impl FilterLayer for SslFilter {
             buf.with_read_buffers(|_, dst| {
                 loop {
                     if dst.remaining_mut() == 0 {
-                        rb.io().resize_read_buf(dst);
+                        dst.reserve_more();
                     }
 
                     let chunk = dst.chunk_mut();
@@ -306,7 +306,7 @@ fn new_stream<F>(io: &Io<F>, ssl: ssl::Ssl) -> io::Result<SslStream<IoInner>> {
 
     let inner = IoInner {
         source: None,
-        destination: BytePages::new(io.cfg().write_page_size()),
+        destination: BytePages::new(io.cfg().write_size()),
     };
     Ok(SslStream::new(ssl, inner)?)
 }
@@ -761,12 +761,11 @@ pub(crate) mod tests {
 
         // the transport reads into the top of the cache, decrypted data
         // goes to the next buffer
-        let cfg = server.cfg().read_buf();
-        let (x, y, p) = (cfg.get(), cfg.get(), cfg.get());
+        let page = server.cfg().read_size();
+        let get = || BytesMut::with_page_size(page);
+        let (x, y, p) = (get(), get(), get());
         let src = p.as_ptr();
-        cfg.release(x);
-        cfg.release(y);
-        cfg.release(p);
+        drop((x, y, p));
 
         client
             .send(Bytes::from_static(b"hello"), &BytesCodec)
@@ -776,7 +775,7 @@ pub(crate) mod tests {
         assert_eq!(&item[..], b"hello");
 
         // the decrypted data buffer is released once decoded, after the source
-        let top = [cfg.get(), cfg.get()];
+        let top = [get(), get()];
         assert!(
             top.iter().any(|b| b.as_ptr() == src),
             "drained source is not cached"
@@ -806,7 +805,7 @@ pub(crate) mod tests {
 
         let server = Io::new(
             server,
-            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(64)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(64)),
         );
         let client = Io::new(client, SharedCfg::new("CLI"));
         let (server, client) = join(

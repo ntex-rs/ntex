@@ -222,7 +222,7 @@ async fn handle(req: Request) -> Result<Response, std::io::Error> {
 fn server_cfg() -> SharedCfg {
     let mut io = ntex::io::IoConfig::new();
     if let Some(w) = std::env::var("WBUF").ok().and_then(|v| v.parse().ok()) {
-        io = io.set_write_buf(w);
+        io = io.set_write_backpressure(w);
     }
     if let Some(w) = std::env::var("WTHR").ok().and_then(|v| v.parse().ok()) {
         io = io.set_write_buf_threshold(w);

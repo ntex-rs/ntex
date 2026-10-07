@@ -138,7 +138,8 @@ mod tests {
     async fn send_waits_for_write_backpressure() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(0);
-        let cfg = SharedCfg::new("WS-TEST").add(crate::io::IoConfig::new().set_write_buf(64));
+        let cfg =
+            SharedCfg::new("WS-TEST").add(crate::io::IoConfig::new().set_write_backpressure(64));
         let io = Io::new(server, cfg);
         let sink = WsSink::new(io.get_ref(), ws::Codec::new(), io.shared().get());
 
@@ -173,7 +174,8 @@ mod tests {
     async fn send_on_disconnect_does_not_wait() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(0);
-        let cfg = SharedCfg::new("WS-TEST").add(crate::io::IoConfig::new().set_write_buf(64));
+        let cfg =
+            SharedCfg::new("WS-TEST").add(crate::io::IoConfig::new().set_write_backpressure(64));
         let io = Io::new(server, cfg);
         let sink = WsSink::new(io.get_ref(), ws::Codec::new(), io.shared().get());
 

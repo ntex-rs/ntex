@@ -600,21 +600,24 @@ impl BytesMut {
     }
 
     /// Grows the buffer by one step if its remaining capacity is less than
-    /// half of its page size.
+    /// the low threshold of its page size.
     ///
     /// Nothing happens when the remaining capacity is at least
-    /// [`BytePageSize::half_capacity`](crate::BytePageSize::half_capacity) of
-    /// the buffer's [`page_size`](Self::page_size), 16 KiB for a buffer
-    /// without a page size. Otherwise a buffer with a page size moves to a
-    /// page of the next larger page size, the old page returns to the page
-    /// cache. A buffer without a page size, or with the largest page size,
-    /// grows its capacity by its current capacity, by at least 112 bytes and
-    /// by at most 64 KiB.
+    /// [`BytePageSize::low`](crate::BytePageSize::low) of the buffer's
+    /// [`page_size`](Self::page_size), 1 KiB for a 16 KiB page and 4 KiB
+    /// for a buffer without a page size.
     ///
-    /// The new capacity is reserved like [`reserve_exact`](Self::reserve_exact)
-    /// does, except that a page is taken from the page cache: a unique buffer
-    /// is reclaimed when its allocation is large enough or reallocated, often
-    /// in place, otherwise the data is copied into a new buffer.
+    /// If the allocation holds the data and
+    /// [`BytePageSize::half_capacity`](crate::BytePageSize::half_capacity)
+    /// more bytes, it is reused: a unique buffer moves its data to the start
+    /// of the allocation, a shared buffer with a page size moves to a page of
+    /// the same size. Otherwise a buffer with a page size moves to a page of
+    /// the next larger page size, the old page returns to the page cache. A
+    /// buffer without a page size, or with the largest page size, grows its
+    /// capacity by its current capacity, by at least 112 bytes and by at most
+    /// 64 KiB, like [`reserve_exact`](Self::reserve_exact) does: a unique
+    /// buffer is reallocated, often in place, otherwise the data is copied
+    /// into a new buffer.
     ///
     /// # Panics
     ///
@@ -629,15 +632,23 @@ impl BytesMut {
     /// let mut buf = BytesMut::with_page_size(BytePageSize::Size4);
     /// buf.extend_from_slice(b"hello");
     ///
-    /// // at least half of the page is remaining, the buffer is kept
+    /// // the remaining capacity is above the low threshold, the buffer is kept
     /// buf.reserve_more();
     /// assert_eq!(buf.page_size(), BytePageSize::Size4);
     ///
-    /// buf.extend_from_slice(&[0; 3000]);
+    /// buf.extend_from_slice(&[0; 4000]);
     /// buf.reserve_more();
     /// assert_eq!(buf.page_size(), BytePageSize::Size8);
     /// assert_eq!(buf.capacity(), BytePageSize::Size8.capacity());
     /// assert_eq!(&buf[..5], b"hello");
+    ///
+    /// // consumed data makes room, the page is compacted in place
+    /// let mut buf = BytesMut::with_page_size(BytePageSize::Size4);
+    /// buf.extend_from_slice(&[0; 4000]);
+    /// buf.advance_to(3990);
+    /// buf.reserve_more();
+    /// assert_eq!(buf.page_size(), BytePageSize::Size4);
+    /// assert_eq!(buf.capacity(), BytePageSize::Size4.capacity());
     ///
     /// let mut buf = BytesMut::with_capacity(1000);
     /// buf.reserve_more();

@@ -48,7 +48,7 @@ impl TlsServerFilter {
 
         crate::utils::with_timeout(timeout, async {
             let mut session = ServerConnection::new(cfg).map_err(io::Error::other)?;
-            session.set_buffer_limit(Some(io.cfg().write_page_size().capacity()));
+            session.set_buffer_limit(Some(io.cfg().write_size().capacity()));
             let io = io.add_filter(TlsServerFilter {
                 session: UnsafeCell::new(session),
             });

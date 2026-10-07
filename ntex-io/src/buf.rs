@@ -2,7 +2,7 @@ use std::{cell::Cell, cell::Ref, cell::RefCell, fmt, io, iter, mem, task::Poll};
 
 use ntex_bytes::{BytePageSize, BytePages, BytesMut};
 
-use crate::{IoConfig, IoRef};
+use crate::IoRef;
 
 /// Buffers of the filter chain, ordered from the application toward the
 /// transport.
@@ -192,20 +192,14 @@ impl Stack {
         self.borrow().transport().read.take()
     }
 
-    pub(crate) fn set_read_buf(&self, buf: BytesMut, cfg: &IoConfig) {
+    pub(crate) fn set_read_buf(&self, buf: BytesMut) {
         let layers = self.borrow();
         let buffer = layers.transport();
         if let Some(mut first_buf) = buffer.read.take() {
-            // grow through the configured policy, so the merged buffer
-            // stays cacheable when the data fits
-            cfg.read_buf().resize_min(&mut first_buf, buf.len());
             first_buf.extend_from_slice(&buf);
-            cfg.read_buf().release(buf);
             buffer.read.set(Some(first_buf));
         } else if !buf.is_empty() {
             buffer.read.set(Some(buf));
-        } else {
-            cfg.read_buf().release(buf);
         }
     }
 
@@ -297,11 +291,9 @@ impl Stack {
     ///
     /// Read buffers go back to the cache and write pages are freed, the
     /// buffers themselves stay usable.
-    pub(crate) fn release(&self, cfg: &IoConfig) {
+    pub(crate) fn release(&self) {
         for b in self.borrow().buffers() {
-            if let Some(buf) = b.read.take() {
-                cfg.read_buf().release(buf);
-            }
+            drop(b.read.take());
             b.with_write_if_free(BytePages::clear);
         }
     }
@@ -344,10 +336,7 @@ impl Buffer {
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
-        let mut rb = self
-            .read
-            .take()
-            .unwrap_or_else(|| io.cfg().read_buf().get());
+        let mut rb = self.read.take().unwrap_or_else(|| io.cfg().new_read_buf());
         let result = f(&mut rb);
 
         #[cfg(debug_assertions)]
@@ -357,9 +346,7 @@ impl Buffer {
             io.terminate();
         }
 
-        if rb.is_empty() {
-            io.cfg().read_buf().release(rb);
-        } else {
+        if !rb.is_empty() {
             self.read.set(Some(rb));
         }
         result
@@ -520,14 +507,12 @@ impl FilterBuf<'_> {
             .curr
             .read
             .take()
-            .unwrap_or_else(|| self.io.cfg().read_buf().get());
+            .unwrap_or_else(|| self.io.cfg().new_read_buf());
 
         let result = f(&mut read_src, &mut read_dst);
 
         self.put_read_src(read_src);
-        if read_dst.is_empty() {
-            self.io.cfg().read_buf().release(read_dst);
-        } else {
+        if !read_dst.is_empty() {
             self.curr.read.set(Some(read_dst));
         }
 
@@ -535,21 +520,19 @@ impl FilterBuf<'_> {
     }
 
     fn put_read_src(&self, src: Option<BytesMut>) {
-        if let Some(b) = src {
-            if b.is_empty() {
-                self.io.cfg().read_buf().release(b);
-            } else {
-                // Without a filter layer there is no transport-facing read
-                // source, the transport reads into the application-facing
-                // buffer. Input stored here is never read.
-                debug_assert!(
-                    self.next.is_some(),
-                    "{}: input stored in the read source of the innermost filter buffer is never read",
-                    self.io.tag()
-                );
-                if let Some(next) = self.next {
-                    next.read.set(Some(b));
-                }
+        if let Some(b) = src
+            && !b.is_empty()
+        {
+            // Without a filter layer there is no transport-facing read
+            // source, the transport reads into the application-facing
+            // buffer. Input stored here is never read.
+            debug_assert!(
+                self.next.is_some(),
+                "{}: input stored in the read source of the innermost filter buffer is never read",
+                self.io.tag()
+            );
+            if let Some(next) = self.next {
+                next.read.set(Some(b));
             }
         }
     }
@@ -682,8 +665,8 @@ mod tests {
         stack.with_write_src(|buf| buf.put_slice(b"out"));
         assert_eq!(stack.write_buf_size(), 3);
         assert_eq!(stack.write_dst_size(), 3);
-        stack.set_read_buf(BytesMut::from(&b"one"[..]), ioref.cfg());
-        stack.set_read_buf(BytesMut::from(&b"-two"[..]), ioref.cfg());
+        stack.set_read_buf(BytesMut::from(&b"one"[..]));
+        stack.set_read_buf(BytesMut::from(&b"-two"[..]));
         assert_eq!(stack.read_dst_size(), 7);
         stack.with_read_dst(&ioref, |buf| assert_eq!(&buf[..], b"one-two"));
 
@@ -713,7 +696,7 @@ mod tests {
         );
         assert_eq!(stack.get_read_buf().as_deref(), Some(b"one-two".as_ref()));
         assert!(stack.get_read_buf().is_none());
-        stack.set_read_buf(BytesMut::new(), ioref.cfg());
+        stack.set_read_buf(BytesMut::new());
         assert!(stack.get_read_buf().is_none());
 
         stack.set_page_size(BytePageSize::Size32);
@@ -731,7 +714,7 @@ mod tests {
         // data buffered before the layer is added belongs to the transport
         let stack = Stack::new(BytePageSize::Size8);
         stack.with_write_src(|buf| buf.put_slice(b"plain"));
-        stack.set_read_buf(BytesMut::from(&b"hello"[..]), ioref.cfg());
+        stack.set_read_buf(BytesMut::from(&b"hello"[..]));
         stack.add_layer(BytePageSize::Size16);
 
         let layers = stack.borrow();
@@ -847,7 +830,7 @@ mod tests {
             buf.with_write(|buf| assert_eq!(buf.page_size(), BytePageSize::Size32));
         }
 
-        stack.release(ioref.cfg());
+        stack.release();
         assert_eq!(layers.buffers().count(), 4);
         for buf in layers.buffers() {
             assert_eq!(buf.read_len(), 0);
@@ -874,27 +857,28 @@ mod tests {
         let (_, server) = IoTest::create();
         let io = Io::from(server);
         let ioref = io.get_ref();
-        let cfg = ioref.cfg().read_buf();
+        let cfg = ioref.cfg();
+        let high = cfg.read_size().capacity();
         let stack = Stack::new(BytePageSize::Size8);
 
         // unconsumed input, most of the buffer is taken by a decoded frame
         // that is still alive
-        let mut first = cfg.get();
-        first.extend_from_slice(&vec![1; cfg.high - 100]);
-        let frame = first.split_to(cfg.high - 1100);
-        stack.set_read_buf(first, ioref.cfg());
+        let mut first = cfg.new_read_buf();
+        first.extend_from_slice(&vec![1; high - 100]);
+        let frame = first.split_to(high - 1100);
+        stack.set_read_buf(first);
 
         // a read into a buffer of its own completes
-        let mut second = cfg.get();
+        let mut second = cfg.new_read_buf();
         second.extend_from_slice(&[2; 4000]);
-        stack.set_read_buf(second, ioref.cfg());
+        stack.set_read_buf(second);
 
         let merged = stack.get_read_buf().unwrap();
         assert_eq!(merged.len(), 5000);
         assert_eq!(&merged[..1000], &[1; 1000][..]);
         assert_eq!(&merged[1000..], &[2; 4000][..]);
-        assert_eq!(merged.capacity(), cfg.high);
-        assert_eq!(frame.len(), cfg.high - 1100);
+        assert_eq!(merged.capacity(), high);
+        assert_eq!(frame.len(), high - 1100);
     }
 
     #[ntex::test]
@@ -904,7 +888,7 @@ mod tests {
         let ioref = io.get_ref();
         let stack = Stack::new(BytePageSize::Size8);
         stack.add_layer(BytePageSize::Size8);
-        stack.set_read_buf(BytesMut::from(&b"input"[..]), ioref.cfg());
+        stack.set_read_buf(BytesMut::from(&b"input"[..]));
 
         stack.with_filter(&ioref, |ctx| {
             assert_eq!(ctx.io(), &ioref);

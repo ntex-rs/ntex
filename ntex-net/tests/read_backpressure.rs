@@ -11,15 +11,16 @@
 
 use std::{io::Write, net, thread, time::Duration};
 
+use ntex_bytes::BytePageSize;
 use ntex_io::IoConfig;
 use ntex_service::cfg::SharedCfg;
 
-const HIGH: usize = 8 * 1024;
-const LOW: usize = 512;
+const PAGE: BytePageSize = BytePageSize::Size8;
+const HIGH: usize = PAGE.capacity();
 
-fn cfg(high: usize, low: usize) -> SharedCfg {
+fn cfg(page: BytePageSize) -> SharedCfg {
     SharedCfg::new("TEST")
-        .add(IoConfig::new().set_read_buf(high, low))
+        .add(IoConfig::new().set_read_size(page))
         .build()
 }
 
@@ -84,7 +85,7 @@ async fn paused_reader_stays_bounded_and_loses_nothing() {
     const TOTAL: usize = 8 * 1024 * 1024;
 
     let addr = serve(pattern(TOTAL));
-    let io = ntex_net::tcp_connect(addr, cfg(HIGH, LOW)).await.unwrap();
+    let io = ntex_net::tcp_connect(addr, cfg(PAGE)).await.unwrap();
 
     // Let the peer push as much as it can while nothing is consuming.
     io.read_more().await.unwrap();
@@ -115,7 +116,7 @@ async fn backpressure_release_is_lossless() {
     const TOTAL: usize = 4 * 1024 * 1024;
 
     let addr = serve(pattern(TOTAL));
-    let io = ntex_net::tcp_connect(addr, cfg(HIGH, LOW)).await.unwrap();
+    let io = ntex_net::tcp_connect(addr, cfg(PAGE)).await.unwrap();
 
     // Consume in units far smaller than the watermark so backpressure engages
     // and releases many times over the transfer.
@@ -129,7 +130,7 @@ async fn read_pause_churn_is_lossless() {
     const TOTAL: usize = 4 * 1024 * 1024;
 
     let addr = serve(pattern(TOTAL));
-    let io = ntex_net::tcp_connect(addr, cfg(HIGH, LOW)).await.unwrap();
+    let io = ntex_net::tcp_connect(addr, cfg(PAGE)).await.unwrap();
 
     let mut seen = 0usize;
     let mut rounds = 0usize;
@@ -166,7 +167,7 @@ async fn unconsumed_buffer_merge_preserves_order() {
     let addr = serve(pattern(TOTAL));
     // A generous watermark keeps backpressure out of the picture so this
     // isolates the merge of a partially consumed buffer with fresh data.
-    let io = ntex_net::tcp_connect(addr, cfg(256 * 1024, 1024))
+    let io = ntex_net::tcp_connect(addr, cfg(BytePageSize::Size256))
         .await
         .unwrap();
 

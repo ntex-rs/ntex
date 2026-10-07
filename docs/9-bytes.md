@@ -466,7 +466,7 @@ The three reservation methods serve different purposes:
 |--------|-------------|
 | [`BytesMut::reserve`] | You want room for more bytes and expect the buffer to keep growing. |
 | [`BytesMut::reserve_exact`] | You know how many more bytes you need and want to avoid the doubling policy. The allocation is exactly the new capacity plus the 16-byte header; pooled buffers are not rounded up to a page class and keep one only if the new capacity is a page capacity. |
-| [`BytesMut::reserve_more`] | You don't know how much more is coming, for example the next read. If less than half of the page size remains (`BytePageSize::half_capacity`, 16 KiB without a page size), a pooled buffer moves to the next page class and any other buffer grows by its capacity, by at least 112 bytes and at most 64 KiB. |
+| [`BytesMut::reserve_more`] | You don't know how much more is coming, for example the next read. If less than `BytePageSize::low` remains (1 KiB for `Size16`, 4 KiB without a page size), the allocation is reused when it holds the data plus `half_capacity()`: a unique buffer is compacted in place, a shared page moves to a page of the same class. Otherwise a pooled buffer moves to the next page class and any other buffer grows by its capacity, by at least 112 bytes and at most 64 KiB. |
 
 Neither `reserve` nor `reserve_exact` is a general-purpose shrinking
 operation: if there is already enough spare capacity, it leaves the buffer
@@ -482,24 +482,26 @@ are its own implementation detail. Data capacity is the class size minus
 the 16-byte header. These are allocation categories, not operating-system
 virtual-memory pages.
 
-| Class     | Allocation | Capacity      | `half_capacity()` | Cached pages by default |
-|-----------|------------|---------------|-------------------|-------------------------|
-| `Size4`   | 4 KiB      | 4,080 bytes   | 2 KiB             | 64                      |
-| `Size8`   | 8 KiB      | 8,176 bytes   | 4 KiB             | 32                      |
-| `Size16`  | 16 KiB     | 16,368 bytes  | 8 KiB             | 64                      |
-| `Size24`  | 24 KiB     | 24,560 bytes  | 12 KiB            | 16                      |
-| `Size32`  | 32 KiB     | 32,752 bytes  | 16 KiB            | 16                      |
-| `Size48`  | 48 KiB     | 49,136 bytes  | 16 KiB            | 8                       |
-| `Size64`  | 64 KiB     | 65,520 bytes  | 16 KiB            | 8                       |
-| `Size128` | 128 KiB    | 131,056 bytes | 16 KiB            | 2                       |
-| `Size256` | 256 KiB    | 262,128 bytes | 16 KiB            | 1                       |
-| `Unset`   | -          | 65,520 bytes  | 16 KiB            | never cached            |
+| Class     | Allocation | Capacity      | `half_capacity()` | `low()`   | Cached pages by default |
+|-----------|------------|---------------|-------------------|-----------|-------------------------|
+| `Size4`   | 4 KiB      | 4,080 bytes   | 2 KiB             | 256 bytes | 64                      |
+| `Size8`   | 8 KiB      | 8,176 bytes   | 4 KiB             | 512 bytes | 32                      |
+| `Size16`  | 16 KiB     | 16,368 bytes  | 8 KiB             | 1 KiB     | 64                      |
+| `Size24`  | 24 KiB     | 24,560 bytes  | 12 KiB            | 1.5 KiB   | 16                      |
+| `Size32`  | 32 KiB     | 32,752 bytes  | 16 KiB            | 2 KiB     | 16                      |
+| `Size48`  | 48 KiB     | 49,136 bytes  | 16 KiB            | 3 KiB     | 8                       |
+| `Size64`  | 64 KiB     | 65,520 bytes  | 16 KiB            | 4 KiB     | 8                       |
+| `Size128` | 128 KiB    | 131,056 bytes | 16 KiB            | 8 KiB     | 2                       |
+| `Size256` | 256 KiB    | 262,128 bytes | 16 KiB            | 16 KiB    | 1                       |
+| `Unset`   | -          | 65,520 bytes  | 16 KiB            | 4 KiB     | never cached            |
 
 `Size16` is the default class. [`BytePageSize::for_capacity`] returns the
 smallest class that holds a given capacity, or `Unset` above the largest
 data capacity (262,128 bytes).
 [`BytePageSize::next`] and [`BytePageSize::prev`] step between classes.
-`half_capacity()` is the recommended write-buffer threshold for a page size.
+`half_capacity()` is the recommended write-buffer threshold for a page size,
+`low()`, 2/32 of the class size, is the free-capacity threshold of
+[`BytesMut::reserve_more`].
 The enum is `#[non_exhaustive]`, so more classes may be added.
 
 ```rust
@@ -701,7 +703,7 @@ share the same per-thread page cache:
   buffer to bigger page sizes, beyond `Size256` it becomes an unpooled
   buffer that is freed when empty.
 - **Writes.** Encoders write into `BytePages` with the page size of
-  [`IoConfig::write_page_size`], `Size16` by default. `IoRef::encode_bytes`
+  [`IoConfig::write_size`], `Size16` by default. `IoRef::encode_bytes`
   appends owned buffers, so large payloads are not copied. The write
   threshold, `half_capacity()` of the page size by default, controls when a
   transport may start writing while output is still being produced.
@@ -796,6 +798,6 @@ when deciding whether to share, copy or cache.
 [`BytesMut::with_capacity`]: https://docs.rs/ntex-bytes/latest/ntex_bytes/struct.BytesMut.html#method.with_capacity
 [`BytesMut::with_page_size`]: https://docs.rs/ntex-bytes/latest/ntex_bytes/struct.BytesMut.html#method.with_page_size
 [`IoConfig`]: https://docs.rs/ntex/latest/ntex/io/struct.IoConfig.html
-[`IoConfig::write_page_size`]: https://docs.rs/ntex/latest/ntex/io/struct.IoConfig.html#method.write_page_size
+[`IoConfig::write_size`]: https://docs.rs/ntex/latest/ntex/io/struct.IoConfig.html#method.write_size
 [`set_page_cache_size`]: https://docs.rs/ntex-bytes/latest/ntex_bytes/fn.set_page_cache_size.html
 [`StorageExt`]: https://docs.rs/ntex-bytes/latest/ntex_bytes/trait.StorageExt.html

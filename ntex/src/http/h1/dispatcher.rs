@@ -1464,7 +1464,7 @@ mod tests {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(0);
         let config: SharedCfg = SharedCfg::new("SVC")
-            .add(nio::IoConfig::new().set_write_buf(16))
+            .add(nio::IoConfig::new().set_write_backpressure(16))
             .add(
                 HttpServiceConfig::new()
                     .set_headers_read_rate(Seconds(10), Seconds(20), 1)
@@ -2291,8 +2291,8 @@ mod tests {
                 SharedCfg::new("TEST")
                     .add(
                         nio::IoConfig::new()
-                            .set_read_buf(15 * 1024, 1024)
-                            .set_write_buf(15 * 1024),
+                            .set_read_size(crate::util::BytePageSize::Size16)
+                            .set_write_backpressure(15 * 1024),
                     )
                     .add(HttpServiceConfig::new().set_max_buf_size(32 * 1024)),
             );

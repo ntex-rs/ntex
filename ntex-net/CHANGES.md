@@ -1,5 +1,9 @@
 # Changes
 
+## [4.3.0] - 2026-10-07
+
+* Update to ntex-io 4.3 config api, iocp read buffers use `IoConfig::read_size()`
+
 ## [4.2.1] - 2026-10-05
 
 * `Address::port()` for `urly::Url` uses the urly default ports, `ftp` gets port 21

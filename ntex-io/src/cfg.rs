@@ -1,15 +1,8 @@
 //! I/O buffer, timeout, and frame-rate configuration.
 
-use ntex_bytes::{BytePageSize, BytesMut, METADATA_SIZE, buf::BufMut};
+use ntex_bytes::{BytePageSize, BytesMut};
 use ntex_service::cfg::{CfgContext, Configuration};
 use ntex_util::{time::Millis, time::Seconds};
-
-const DEFAULT_HIGH: usize = 16 * 1024 - METADATA_SIZE;
-const DEFAULT_LOW: usize = 512 + 24;
-const DEFAULT_HALF: usize = (16 * 1024 - METADATA_SIZE) / 2;
-// buffers beyond the largest page size double in capacity, by at most this
-// much at once
-const MAX_GROW_STEP: usize = 1024 * 1024;
 
 #[derive(Debug)]
 /// Shared configuration for an [`crate::Io`] stream.
@@ -20,10 +13,13 @@ pub struct IoConfig {
     frame_read_rate: Option<FrameReadRate>,
     write_timeout: Seconds,
 
-    // io read/write cache and params
-    read_buf: BufConfig,
-    write_buf: BufConfig,
-    write_page_size: BytePageSize,
+    // read side configuration
+    read_size: BytePageSize,
+    read_backpressure: usize,
+
+    // write side configuration
+    write_size: BytePageSize,
+    write_backpressure: usize,
     write_buf_threshold: usize,
 
     // shared config
@@ -62,42 +58,6 @@ pub struct FrameReadRate {
     pub rate: u32,
 }
 
-/// Buffer allocation and backpressure thresholds.
-#[derive(Copy, Clone, Debug)]
-#[non_exhaustive]
-pub struct BufConfig {
-    /// Buffered byte count at which backpressure is enabled.
-    ///
-    /// For [`IoConfig::read_buf`] this also selects the page size read
-    /// buffers are allocated with: the smallest [`BytePageSize`] that holds
-    /// `high` bytes. A buffer is at least 4 KiB, and its capacity can be larger
-    /// than `high`. Above the largest page size, read buffers have
-    /// exactly `high` bytes of capacity and are not cached. For
-    /// [`IoConfig::write_buf`] it is only a
-    /// watermark; page sizing is controlled by
-    /// [`IoConfig::set_write_page_size`].
-    pub high: usize,
-    /// Free-capacity threshold below which [`resize`](Self::resize) grows a
-    /// buffer.
-    ///
-    /// This is the trigger for a resize, and the least free capacity a resize
-    /// that compacts the buffer produces; see [`resize`](Self::resize).
-    ///
-    /// This applies to [`IoConfig::read_buf`] only. Output is held in
-    /// [`BytePages`](ntex_bytes::BytePages), which are not resized this way,
-    /// so the value is unused for [`IoConfig::write_buf`].
-    pub low: usize,
-    /// Outstanding byte count at which active backpressure is released.
-    ///
-    /// For [`IoConfig::write_buf`] this releases write backpressure, counting
-    /// buffered output together with output a transport has taken ownership of
-    /// but not yet written to the peer; for [`IoConfig::read_buf`] it releases
-    /// read backpressure.
-    ///
-    /// This is set to half of `high` by the configuration builders.
-    pub half: usize,
-}
-
 impl IoConfig {
     #[inline]
     #[must_use]
@@ -109,19 +69,13 @@ impl IoConfig {
             keepalive_timeout: Seconds(0),
             shutdown_timeout: Seconds(1),
             frame_read_rate: None,
-            write_timeout: Seconds(0),
 
-            read_buf: BufConfig {
-                high: DEFAULT_HIGH,
-                low: DEFAULT_LOW,
-                half: DEFAULT_HALF,
-            },
-            write_buf: BufConfig {
-                high: DEFAULT_HIGH,
-                low: DEFAULT_LOW,
-                half: DEFAULT_HALF,
-            },
-            write_page_size: BytePageSize::Size16,
+            read_size: BytePageSize::Size16,
+            read_backpressure: BytePageSize::Size16.capacity(),
+
+            write_timeout: Seconds(0),
+            write_size: BytePageSize::Size16,
+            write_backpressure: BytePageSize::Size16.capacity(),
             write_buf_threshold: BytePageSize::Size16.half_capacity(),
         }
     }
@@ -157,6 +111,25 @@ impl IoConfig {
     }
 
     #[inline]
+    /// Returns the page size of read buffers.
+    ///
+    /// Read buffers are acquired from the `ntex-bytes` page cache with this
+    /// page size, see [`set_read_size`](Self::set_read_size).
+    pub fn read_size(&self) -> BytePageSize {
+        self.read_size
+    }
+
+    #[inline]
+    /// Returns the read backpressure high watermark.
+    ///
+    /// Read backpressure is enabled once buffered input reaches it and
+    /// released once it falls to half of it, see
+    /// [`set_read_backpressure`](Self::set_read_backpressure).
+    pub fn read_backpressure(&self) -> usize {
+        self.read_backpressure
+    }
+
+    #[inline]
     /// Returns the write backpressure timeout.
     ///
     /// A zero value means the timeout is disabled.
@@ -165,24 +138,36 @@ impl IoConfig {
     }
 
     #[inline]
-    /// Returns the read-buffer configuration.
-    pub fn read_buf(&self) -> &BufConfig {
-        &self.read_buf
+    /// Returns the write backpressure high watermark.
+    ///
+    /// Write backpressure is released once outstanding output falls to half of
+    /// it, see [`set_write_backpressure`](Self::set_write_backpressure).
+    pub fn write_backpressure(&self) -> usize {
+        self.write_backpressure
     }
 
     #[inline]
-    /// Returns the write-buffer configuration.
-    ///
-    /// Only the backpressure watermarks apply to output; see
-    /// [`set_write_buf`](Self::set_write_buf).
-    pub fn write_buf(&self) -> &BufConfig {
-        &self.write_buf
+    /// Buffered input size that releases read backpressure.
+    pub(crate) fn read_half(&self) -> usize {
+        self.read_backpressure >> 1
+    }
+
+    #[inline]
+    /// Outstanding output size that releases write backpressure.
+    pub(crate) fn write_half(&self) -> usize {
+        self.write_backpressure >> 1
+    }
+
+    #[inline]
+    /// Acquires an empty read buffer from the thread-local page cache.
+    pub(crate) fn new_read_buf(&self) -> BytesMut {
+        BytesMut::with_page_size(self.read_size())
     }
 
     #[inline]
     /// Returns the write-buffer page size.
-    pub fn write_page_size(&self) -> BytePageSize {
-        self.write_page_size
+    pub fn write_size(&self) -> BytePageSize {
+        self.write_size
     }
 
     #[inline]
@@ -319,7 +304,7 @@ impl IoConfig {
     /// Sets the write backpressure timeout.
     ///
     /// Write backpressure is enabled when outstanding output reaches the
-    /// [write buffer](Self::set_write_buf) high watermark and disabled once the
+    /// [write buffer](Self::set_write_backpressure) high watermark and disabled once the
     /// peer has accepted enough of it. The timeout covers that whole period:
     /// if backpressure is still enabled when it expires, the dispatcher stops
     /// with a write timeout. Each backpressure period starts a fresh timeout,
@@ -355,17 +340,15 @@ impl IoConfig {
         self
     }
 
-    /// Sets read-buffer watermarks.
+    /// Sets the read-buffer page size.
     ///
-    /// `high_watermark` enables read backpressure when the application-facing
-    /// buffer reaches this size. It also selects the page size of read
-    /// buffers, the smallest [`BytePageSize`] that holds `high_watermark`
-    /// bytes, so a buffer is at least 4 KiB. Buffered data is compacted into a
-    /// buffer of that page size when free capacity runs low; larger data grows
-    /// the buffer by doubling its capacity, through larger page sizes. It must
-    /// be greater than zero.
-    /// `low_watermark` is the free-capacity threshold below which a read
-    /// buffer is compacted or grown.
+    /// Read buffers are acquired with this page size. It also resets the read
+    /// backpressure watermark to the page [`capacity`](BytePageSize::capacity),
+    /// call [`set_read_backpressure`](Self::set_read_backpressure) afterwards
+    /// to use another watermark. A buffer grows with [`BytesMut::reserve_more`] once less than
+    /// [`BytePageSize::low`] of its page size remains: the data is compacted
+    /// within its page when that leaves room for half a page, otherwise the
+    /// buffer moves to the next page size.
     ///
     /// Read buffers come from the per-thread page cache of `ntex-bytes`,
     /// shared with write buffers and all configurations, see
@@ -386,24 +369,37 @@ impl IoConfig {
     /// Copy long-lived frames or call [`Bytes::trimdown`](ntex_bytes::Bytes::trimdown)
     /// on them to release the rest of the buffer.
     ///
-    /// Read backpressure is released once the application-facing buffer falls
-    /// to half of `high_watermark`.
-    ///
-    /// By default, the high watermark is approximately 16 KiB and the low
-    /// watermark is approximately 512 bytes.
+    /// The default page size is 16 KiB.
     ///
     /// # Panics
     ///
-    /// Panics if `high_watermark` is zero.
+    /// Panics if `size` is [`BytePageSize::Unset`].
     #[must_use]
-    pub fn set_read_buf(mut self, high_watermark: usize, low_watermark: usize) -> Self {
+    pub fn set_read_size(mut self, size: BytePageSize) -> Self {
         assert!(
-            high_watermark > 0,
-            "read buffer high watermark must be greater than zero"
+            size != BytePageSize::Unset,
+            "read buffer page size must be set"
         );
-        self.read_buf.high = high_watermark;
-        self.read_buf.low = low_watermark;
-        self.read_buf.half = high_watermark >> 1;
+        self.read_size = size;
+        self.read_backpressure = size.capacity();
+        self
+    }
+
+    /// Sets the read backpressure watermark.
+    ///
+    /// Read backpressure is enabled when the application-facing read buffer
+    /// reaches `size` bytes and released once it falls to half of it.
+    ///
+    /// [`set_read_size`](Self::set_read_size) resets the watermark to the
+    /// read page capacity, approximately 16 KiB by default.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `size` is zero.
+    #[must_use]
+    pub fn set_read_backpressure(mut self, size: usize) -> Self {
+        assert!(size > 0, "read backpressure must be greater than zero");
+        self.read_backpressure = size;
         self
     }
 
@@ -432,12 +428,12 @@ impl IoConfig {
     /// The page size is independent of the eager-write threshold and write
     /// backpressure watermarks. Changing it does not update values configured
     /// by [`set_write_buf_threshold`](Self::set_write_buf_threshold) or
-    /// [`set_write_buf`](Self::set_write_buf).
+    /// [`set_write_backpressure`](Self::set_write_backpressure).
     ///
     /// The default page size is 16 KiB.
     #[must_use]
-    pub fn set_write_page_size(mut self, size: BytePageSize) -> Self {
-        self.write_page_size = size;
+    pub fn set_write_size(mut self, size: BytePageSize) -> Self {
+        self.write_size = size;
         self
     }
 
@@ -458,7 +454,7 @@ impl IoConfig {
     ///
     /// The threshold is a latency and write-burst tuning parameter. It does not
     /// limit write-buffer growth, provide a flush guarantee, or control write
-    /// backpressure; use [`set_write_buf`](Self::set_write_buf) for
+    /// backpressure; use [`set_write_backpressure`](Self::set_write_backpressure) for
     /// backpressure watermarks and [`Io::flush`](crate::Io::flush) when a
     /// caller must wait for buffered data to be written.
     ///
@@ -478,144 +474,25 @@ impl IoConfig {
 
     /// Sets the write-buffer backpressure watermark.
     ///
-    /// `high_watermark` enables write backpressure at this outstanding size and
+    /// Write backpressure is enabled at `size` bytes of outstanding output and
     /// must be greater than zero. Backpressure is released after the
     /// outstanding size falls to half of this value. Outstanding output is the
     /// buffered output plus any output a transport has taken ownership of but
     /// not yet written to the peer.
     ///
-    /// Unlike [`set_read_buf`](Self::set_read_buf) this takes no low watermark. Output is held in [`BytePages`](ntex_bytes::BytePages),
-    /// which are sized by [`set_write_page_size`](Self::set_write_page_size).
+    /// Output is held in [`BytePages`](ntex_bytes::BytePages), which are sized
+    /// by [`set_write_size`](Self::set_write_size).
     ///
     /// By default, the high watermark is approximately 16 KiB.
     ///
     /// # Panics
     ///
-    /// Panics if `high_watermark` is zero.
+    /// Panics if `size` is zero.
     #[must_use]
-    pub fn set_write_buf(mut self, high_watermark: usize) -> Self {
-        assert!(
-            high_watermark > 0,
-            "write buffer high watermark must be greater than zero"
-        );
-        self.write_buf.high = high_watermark;
-        self.write_buf.half = high_watermark >> 1;
+    pub fn set_write_backpressure(mut self, size: usize) -> Self {
+        assert!(size > 0, "write backpressure must be greater than zero");
+        self.write_backpressure = size;
         self
-    }
-}
-
-impl BufConfig {
-    #[inline]
-    /// Returns the page size of buffers acquired with [`get`](Self::get).
-    ///
-    /// This is the smallest [`BytePageSize`] that holds `high` bytes, or
-    /// [`BytePageSize::Unset`] if `high` is larger than the largest page size.
-    pub fn page_size(&self) -> BytePageSize {
-        BytePageSize::for_capacity(self.high)
-    }
-
-    #[inline]
-    /// Capacity of a buffer acquired with [`get`](Self::get).
-    fn page_capacity(&self) -> usize {
-        match self.page_size() {
-            BytePageSize::Unset => self.high,
-            size => size.capacity(),
-        }
-    }
-
-    #[inline]
-    /// Acquires an empty buffer from the thread-local page cache.
-    ///
-    /// The buffer has the page size returned by [`page_size`](Self::page_size),
-    /// it returns to the page cache once dropped. If `high` is larger than the
-    /// largest page size, a buffer with capacity `high` is allocated instead,
-    /// it is freed once dropped.
-    pub fn get(&self) -> BytesMut {
-        match self.page_size() {
-            BytePageSize::Unset => BytesMut::with_capacity(self.high),
-            size => BytesMut::with_page_size(size),
-        }
-    }
-
-    /// Creates a new uncached buffer with the specified capacity.
-    pub fn buf_with_capacity(&self, cap: usize) -> BytesMut {
-        BytesMut::with_capacity(cap)
-    }
-
-    #[inline]
-    /// Makes room for another read once free capacity falls below `low`.
-    ///
-    /// When the buffered data plus `low` fits into a buffer acquired with
-    /// [`get`](Self::get), the data is compacted into such a buffer, so the
-    /// free capacity afterwards is its capacity minus the buffered length.
-    /// Only larger data grows the buffer, in which case at least `high` bytes
-    /// are free afterwards.
-    pub fn resize(&self, buf: &mut BytesMut) {
-        if buf.remaining_mut() < self.low {
-            if buf.len() + self.low <= self.page_capacity() {
-                self.resize_min(buf, self.low);
-            } else {
-                self.resize_min(buf, self.high);
-            }
-        }
-    }
-
-    #[inline]
-    /// Ensures that the buffer has at least `size` bytes of remaining capacity.
-    ///
-    /// When the buffered data plus `size` fits into a buffer acquired with
-    /// [`get`](Self::get), a buffer of that page size that is not shared with
-    /// split-off data is compacted in place. Any other buffer is copied into a
-    /// new buffer from [`get`](Self::get), and the old one returns to the page
-    /// cache once its split-off data is dropped.
-    ///
-    /// Otherwise the buffer grows to double its capacity, or to enough
-    /// capacity for `size` more bytes if that is larger. A pooled buffer moves
-    /// to the page size that holds the new capacity. Beyond the largest page
-    /// size, the buffer grows by at most 1 MiB at once and is not cached; a
-    /// buffer that is not shared with split-off data is compacted in place
-    /// when its allocation is large enough, or is reallocated, often without
-    /// copying.
-    ///
-    /// # Panics
-    ///
-    /// Panics if growth is required and `high` is zero.
-    pub fn resize_min(&self, buf: &mut BytesMut, size: usize) {
-        let avail = buf.remaining_mut();
-        if avail < size {
-            assert!(
-                self.high > 0,
-                "buffer high watermark must be greater than zero"
-            );
-            let len = buf.len();
-            if len + size <= self.page_capacity() {
-                let page = self.page_size();
-                if page != BytePageSize::Unset && buf.page_size() == page {
-                    // compacts a unique page in place, copies a shared one
-                    // into a new page
-                    buf.reserve_exact(size);
-                } else {
-                    let mut new_buf = self.get();
-                    new_buf.extend_from_slice(buf);
-                    *buf = new_buf;
-                }
-                return;
-            }
-
-            let cap = buf.capacity();
-            let new_cap = (len + size).max(cap + cap.min(MAX_GROW_STEP));
-            buf.reserve_exact(new_cap - len);
-        }
-    }
-
-    #[inline]
-    /// Releases a buffer that is no longer used.
-    ///
-    /// The buffer is dropped. A pooled buffer returns to the page cache once
-    /// split-off data that shares its allocation is dropped as well, other
-    /// buffers are freed.
-    pub fn release(&self, buf: BytesMut) {
-        drop(buf);
     }
 }
 
@@ -627,13 +504,70 @@ mod tests {
 
     #[test]
     fn buffer_configuration() {
-        let cfg = IoConfig::new().set_read_buf(1024, 128).set_write_buf(2048);
+        let cfg = IoConfig::new()
+            .set_read_size(BytePageSize::Size4)
+            .set_write_backpressure(2048);
 
-        assert_eq!(cfg.read_buf().high, 1024);
-        assert_eq!(cfg.read_buf().low, 128);
-        assert_eq!(cfg.read_buf().half, 512);
-        assert_eq!(cfg.write_buf().high, 2048);
-        assert_eq!(cfg.write_buf().half, 1024);
+        let size = BytePageSize::Size4;
+        assert_eq!(cfg.read_backpressure(), size.capacity());
+        assert_eq!(cfg.read_half(), size.capacity() / 2);
+        assert_eq!(cfg.write_backpressure(), 2048);
+        assert_eq!(cfg.write_half(), 1024);
+    }
+
+    #[test]
+    fn read_size_configuration() {
+        let default = BytePageSize::Size16.capacity();
+        let cfg = IoConfig::new();
+        assert_eq!(cfg.read_size(), BytePageSize::Size16);
+        assert_eq!(cfg.read_backpressure(), default);
+        assert_eq!(cfg.read_half(), default / 2);
+        assert_eq!(cfg.write_backpressure(), default);
+        let buf = cfg.new_read_buf();
+        assert_eq!(buf.page_size(), BytePageSize::Size16);
+        assert_eq!(buf.capacity(), default);
+
+        let cfg = cfg
+            .set_read_size(BytePageSize::Size4)
+            .set_write_backpressure(2048);
+        assert_eq!(cfg.read_size(), BytePageSize::Size4);
+        assert_eq!(cfg.read_backpressure(), BytePageSize::Size4.capacity());
+        assert_eq!(cfg.read_half(), BytePageSize::Size4.capacity() / 2);
+        assert_eq!(cfg.new_read_buf().page_size(), BytePageSize::Size4);
+        assert_eq!(cfg.write_backpressure(), 2048);
+        assert_eq!(cfg.write_half(), 1024);
+
+        let cfg = cfg.set_read_size(BytePageSize::Size256);
+        assert_eq!(cfg.read_size(), BytePageSize::Size256);
+        assert_eq!(cfg.read_backpressure(), BytePageSize::Size256.capacity());
+        assert_eq!(cfg.new_read_buf().page_size(), BytePageSize::Size256);
+    }
+
+    #[test]
+    fn read_backpressure_configuration() {
+        let cfg = IoConfig::new()
+            .set_read_size(BytePageSize::Size4)
+            .set_read_backpressure(64 * 1024);
+        assert_eq!(cfg.read_size(), BytePageSize::Size4);
+        assert_eq!(cfg.read_backpressure(), 64 * 1024);
+        assert_eq!(cfg.read_half(), 32 * 1024);
+        assert_eq!(cfg.new_read_buf().page_size(), BytePageSize::Size4);
+
+        // read size resets backpressure to the page capacity
+        let cfg = cfg.set_read_size(BytePageSize::Size8);
+        assert_eq!(cfg.read_backpressure(), BytePageSize::Size8.capacity());
+    }
+
+    #[test]
+    #[should_panic(expected = "read buffer page size must be set")]
+    fn unset_read_size() {
+        let _ = IoConfig::new().set_read_size(BytePageSize::Unset);
+    }
+
+    #[test]
+    #[should_panic(expected = "read backpressure must be greater than zero")]
+    fn zero_read_backpressure() {
+        let _ = IoConfig::new().set_read_backpressure(0);
     }
 
     #[test]
@@ -653,25 +587,20 @@ mod tests {
         let cfg = IoConfig::new();
         assert_eq!(cfg.connect_timeout(), Millis::ZERO);
         assert_eq!(cfg.keepalive_timeout(), Seconds(0));
-        assert_eq!(cfg.write_page_size(), BytePageSize::Size16);
+        assert_eq!(cfg.write_size(), BytePageSize::Size16);
 
         let cfg = cfg
             .set_connect_timeout(Millis(500))
             .set_keepalive_timeout(Seconds(7))
-            .set_write_page_size(BytePageSize::Size4);
+            .set_write_size(BytePageSize::Size4);
         assert_eq!(cfg.connect_timeout(), Millis(500));
         assert_eq!(cfg.keepalive_timeout(), Seconds(7));
-        assert_eq!(cfg.write_page_size(), BytePageSize::Size4);
+        assert_eq!(cfg.write_size(), BytePageSize::Size4);
 
         let shared = SharedCfg::new("CFG-TAG").add(cfg).build();
         let cfg = shared.get::<IoConfig>();
         assert_eq!(cfg.tag(), "CFG-TAG");
         assert_eq!(cfg.keepalive_timeout(), Seconds(7));
-
-        // uncached buffers have exactly the requested capacity
-        let buf = cfg.read_buf().buf_with_capacity(10);
-        assert!(buf.is_empty());
-        assert!(buf.capacity() >= 10);
     }
 
     #[test]
@@ -687,236 +616,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "read buffer high watermark must be greater than zero")]
-    fn zero_read_high_watermark() {
-        let _ = IoConfig::new().set_read_buf(0, 128);
-    }
-
-    #[test]
-    #[should_panic(expected = "write buffer high watermark must be greater than zero")]
-    fn zero_write_high_watermark() {
-        let _ = IoConfig::new().set_write_buf(0);
-    }
-
-    #[test]
-    #[should_panic(expected = "buffer high watermark must be greater than zero")]
-    fn zero_resize_increment() {
-        let mut cfg = *IoConfig::new().read_buf();
-        cfg.high = 0;
-        cfg.resize_min(&mut BytesMut::new(), 1024);
-    }
-
-    #[test]
-    fn read_buffers_use_page_sizes() {
-        // the default high watermark is a whole 16 KiB page
-        let cfg = *IoConfig::new().read_buf();
-        assert_eq!(cfg.page_size(), BytePageSize::Size16);
-        let buf = cfg.get();
-        assert_eq!(buf.page_size(), BytePageSize::Size16);
-        assert_eq!(buf.capacity(), DEFAULT_HIGH);
-
-        // the high watermark is rounded up to a page size, at least 4 KiB
-        let cfg = *IoConfig::new().set_read_buf(8, 4).read_buf();
-        assert_eq!(cfg.page_size(), BytePageSize::Size4);
-        assert_eq!(cfg.get().capacity(), BytePageSize::Size4.capacity());
-        assert_eq!((cfg.high, cfg.half), (8, 4));
-
-        let cfg = *IoConfig::new().set_read_buf(5000, 512).read_buf();
-        assert_eq!(cfg.page_size(), BytePageSize::Size8);
-        assert_eq!(cfg.get().capacity(), BytePageSize::Size8.capacity());
-
-        // above the largest page size buffers are not pooled
-        let cfg = *IoConfig::new().set_read_buf(1024 * 1024, 1024).read_buf();
-        assert_eq!(cfg.page_size(), BytePageSize::Unset);
-        let buf = cfg.get();
-        assert_eq!(buf.page_size(), BytePageSize::Unset);
-        assert_eq!(buf.capacity(), 1024 * 1024);
-    }
-
-    #[test]
-    fn released_pages_are_reused_by_configs() {
-        let a = *IoConfig::new().read_buf();
-        let b = *IoConfig::new().set_read_buf(DEFAULT_HIGH, 1024).read_buf();
-
-        let buf = a.get();
-        let ptr = buf.as_ptr();
-        a.release(buf);
-        let buf = b.get();
-        assert_eq!(buf.as_ptr(), ptr, "page released by another config");
-
-        // a config with another page size uses its own pages
-        let small = *IoConfig::new().set_read_buf(1024, 256).read_buf();
-        b.release(buf);
-        let buf = small.get();
-        assert_ne!(buf.as_ptr(), ptr);
-        assert_eq!(buf.page_size(), BytePageSize::Size4);
-        assert_eq!(b.get().as_ptr(), ptr);
-        drop(buf);
-    }
-
-    #[test]
-    fn resize_compacts_into_page() {
-        let cfg = *IoConfig::new().set_read_buf(4096, 512).read_buf();
-        let cap = cfg.get().capacity();
-        assert_eq!(cap, BytePageSize::Size8.capacity());
-
-        // leftover input at the end of a consumed buffer
-        let mut buf = cfg.get();
-        let ptr = buf.as_ptr();
-        buf.extend_from_slice(&vec![1; cap - 100]);
-        drop(buf.split_to(cap - 200));
-        assert!(buf.remaining_mut() < cfg.low);
-
-        // the page is not shared, the data moves to its start
-        cfg.resize(&mut buf);
-        assert_eq!(&buf[..], &[1; 100][..]);
-        assert_eq!(buf.as_ptr(), ptr);
-        assert_eq!(buf.capacity(), cap);
-        assert_eq!(buf.remaining_mut(), cap - 100);
-
-        // an explicit minimum that fits is compacted too
-        let mut buf = cfg.get();
-        buf.extend_from_slice(&vec![2; 6000]);
-        drop(buf.split_to(3000));
-        cfg.resize_min(&mut buf, 5000);
-        assert_eq!(buf.capacity(), cap);
-        assert_eq!(&buf[..], &[2; 3000][..]);
-
-        // data that does not fit grows the buffer
-        let mut buf = cfg.get();
-        buf.extend_from_slice(&vec![3; cap - 100]);
-        cfg.resize(&mut buf);
-        assert_eq!(buf.len(), cap - 100);
-        assert!(buf.remaining_mut() >= cfg.high);
-        assert_eq!(buf.page_size(), BytePageSize::Size16);
-    }
-
-    #[test]
-    fn resize_moves_shared_data_to_new_page() {
-        let cfg = *IoConfig::new().read_buf();
-
-        // a decoded frame still refers to the start of the buffer
-        let mut buf = cfg.get();
-        let ptr = buf.as_ptr();
-        buf.extend_from_slice(&vec![1; cfg.high - 100]);
-        let frame = buf.split_to(cfg.high - 1100);
-        cfg.resize(&mut buf);
-        assert_ne!(buf.as_ptr(), ptr);
-        assert_eq!(buf.page_size(), BytePageSize::Size16);
-        assert_eq!(&buf[..], &[1; 1000][..]);
-        assert_eq!(buf.remaining_mut(), cfg.high - 1000);
-
-        // the old page returns to the cache with the frame
-        drop(frame);
-        assert_eq!(cfg.get().as_ptr(), ptr);
-    }
-
-    #[test]
-    fn resize_moves_other_buffers_to_page() {
-        let cfg = *IoConfig::new().read_buf();
-
-        // a buffer without a page size
-        let mut buf = BytesMut::from(&b"input"[..]);
-        cfg.resize(&mut buf);
-        assert_eq!(&buf[..], b"input");
-        assert_eq!(buf.page_size(), BytePageSize::Size16);
-        assert_eq!(buf.capacity(), cfg.high);
-
-        // a grown buffer shrinks once most of its data is consumed
-        let mut buf = BytesMut::with_page_size(BytePageSize::Size64);
-        let cap = buf.capacity();
-        buf.extend_from_slice(&vec![2; cap]);
-        drop(buf.split_to(cap - 100));
-        cfg.resize(&mut buf);
-        assert_eq!(&buf[..], &[2; 100][..]);
-        assert_eq!(buf.page_size(), BytePageSize::Size16);
-    }
-
-    #[test]
-    fn large_buffers_grow_through_page_sizes() {
-        let cfg = *IoConfig::new().read_buf();
-
-        // reads that fill the buffer until a 1 MiB frame is buffered
-        let mut buf = cfg.get();
-        let mut sizes = vec![buf.page_size()];
-        let mut grows = 0;
-        while buf.len() < 1024 * 1024 {
-            let (ptr, cap) = (buf.as_ptr(), buf.capacity());
-            cfg.resize(&mut buf);
-            if buf.as_ptr() != ptr {
-                grows += 1;
-                assert!(buf.capacity() >= 2 * cap, "{cap} -> {}", buf.capacity());
-                sizes.push(buf.page_size());
-            }
-            let n = buf.remaining_mut();
-            buf.extend_from_slice(&vec![1; n]);
-        }
-        assert!(grows <= 8, "{grows} reallocations");
-        assert!(buf.capacity() <= 2 * 1024 * 1024 + cfg.high);
-        assert_eq!(
-            &sizes[..6],
-            &[
-                BytePageSize::Size16,
-                BytePageSize::Size32,
-                BytePageSize::Size64,
-                BytePageSize::Size128,
-                BytePageSize::Size256,
-                BytePageSize::Unset
-            ]
-        );
-
-        // the step is limited for very large buffers
-        let mut big = BytesMut::with_capacity(4 * MAX_GROW_STEP);
-        big.extend_from_slice(&vec![2; 4 * MAX_GROW_STEP]);
-        cfg.resize_min(&mut big, 1);
-        assert_eq!(big.capacity(), 5 * MAX_GROW_STEP);
-    }
-
-    #[test]
-    fn large_unique_buffer_is_compacted_in_place() {
-        let cfg = *IoConfig::new().read_buf();
-        let cap = 16 * cfg.high;
-
-        // most of a large buffer is consumed, the rest is not shared
-        let mut buf = BytesMut::with_capacity(cap);
-        let base = buf.as_ptr();
-        buf.extend_from_slice(&vec![1; cap]);
-        drop(buf.split_to(cap - 2 * cfg.high));
-        assert!(buf.is_unique());
-        assert_eq!(buf.remaining_mut(), 0);
-
-        cfg.resize_min(&mut buf, cfg.high);
-        assert_eq!(buf.as_ptr(), base);
-        assert_eq!(buf.capacity(), cap);
-        assert_eq!(&buf[..], &vec![1; 2 * cfg.high][..]);
-
-        // a shared buffer is copied into a new allocation
-        let mut buf = BytesMut::with_capacity(cap);
-        buf.extend_from_slice(&vec![2; cap]);
-        let front = buf.split_to(cap - 2 * cfg.high);
-        cfg.resize_min(&mut buf, cfg.high);
-        assert!(buf.remaining_mut() >= cfg.high);
-        assert_eq!(&buf[..], &vec![2; 2 * cfg.high][..]);
-        assert_eq!(&front[..], &vec![2; cap - 2 * cfg.high][..]);
-    }
-
-    #[test]
-    fn shared_page_returns_after_frames_are_dropped() {
-        let cfg = *IoConfig::new().read_buf();
-
-        // a decoded frame still refers to the start of the buffer
-        let mut buf = cfg.get();
-        let ptr = buf.as_ptr();
-        buf.extend_from_slice(&vec![1; cfg.high - 1000]);
-        let frame = buf.split_to(buf.len());
-        cfg.release(buf);
-        let other = cfg.get();
-        assert_ne!(other.as_ptr(), ptr);
-
-        // once the frame is gone the page is reused
-        drop(frame);
-        assert_eq!(cfg.get().as_ptr(), ptr);
-        drop(other);
+    #[should_panic(expected = "write backpressure must be greater than zero")]
+    fn zero_write_backpressure() {
+        let _ = IoConfig::new().set_write_backpressure(0);
     }
 
     #[test]

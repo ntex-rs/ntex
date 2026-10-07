@@ -21,8 +21,11 @@
 * `BytesMut::reserve_exact()` allocates exactly the new capacity plus the buffer header, a buffer
   with a page size is not rounded up to a page
 
-* Add `BytesMut::reserve_more()`, if less than half of the page size remains, it grows a buffer to
-  the next page size, or by its capacity but at most 64 KiB
+* Add `BytePageSize::low()`, 2/32 of the page size
+
+* Add `BytesMut::reserve_more()`, if less than `BytePageSize::low()` remains, it compacts a buffer
+  that has room for half a page after its data, otherwise it grows the buffer to the next page size,
+  or by its capacity but at most 64 KiB
 
 ## [1.10.0] (2026-10-01)
 
