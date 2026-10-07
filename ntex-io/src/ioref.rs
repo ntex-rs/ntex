@@ -103,9 +103,10 @@ impl IoRef {
     #[inline]
     /// Checks whether write back-pressure is enabled.
     ///
-    /// This becomes `true` once unwritten data in the transport-facing write
-    /// buffer reaches the configured high watermark. Draining enough of the
-    /// buffer releases it.
+    /// This becomes `true` once outstanding output reaches the configured high
+    /// watermark. Outstanding output includes buffered data and data that the
+    /// transport owns but has not yet written to the peer. It is released once
+    /// the outstanding size falls to half the high watermark.
     ///
     /// Nothing enforces the signal: encoding continues to succeed while it is
     /// set. Producers that are not driven by a dispatcher should check this
