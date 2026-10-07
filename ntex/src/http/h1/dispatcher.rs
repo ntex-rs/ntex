@@ -1084,6 +1084,16 @@ mod tests {
     use crate::util::{Bytes, BytesMut, lazy, stream_recv};
     use crate::{client::ClientCodec, codec::Decoder};
 
+    /// Polls `f` until it returns `true` or `max` elapses.
+    async fn wait_until(max: Millis, f: impl Fn() -> bool) {
+        let mut left = max.0;
+        while !f() && left != 0 {
+            let step = left.min(20);
+            sleep(Millis(step)).await;
+            left -= step;
+        }
+    }
+
     #[crate::rt_test]
     async fn test_payload_timer_resume_preserves_maximum() {
         let (_client, server) = IoTest::create();
@@ -1574,10 +1584,16 @@ mod tests {
         assert_eq!(h1.inner.timers.active, Timer::Idle);
 
         // the armed keep-alive timer expires while the service is busy
-        sleep(Millis(1500)).await;
-        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
-        sleep(Millis(50)).await;
-        assert!(client.read_any().starts_with(b"HTTP/1.1 200 OK\r\n"));
+        let mut buf = BytesMut::new();
+        for _ in 0..150 {
+            assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+            buf.extend_from_slice(&client.read_any());
+            if !buf.is_empty() {
+                break;
+            }
+            sleep(Millis(20)).await;
+        }
+        assert!(buf.starts_with(b"HTTP/1.1 200 OK\r\n"));
         assert!(h1.inner.io.is_active());
         assert_eq!(h1.inner.timers.active, Timer::KeepAlive);
 
@@ -1601,16 +1617,21 @@ mod tests {
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert_eq!(h1.inner.timers.active, Timer::ClientTimeout);
-        sleep(Millis(2200)).await;
+        // nothing is armed, the wait for the first request is not bounded
+        assert!(!h1.inner.io.timer_handle().is_set());
+        sleep(Millis(500)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(!h1.inner.io.timer_handle().is_set());
         assert!(h1.inner.io.is_active());
 
         client.write("GET / HTTP/1.1\r\nhost: localhost\r\n");
         sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert_eq!(h1.inner.timers.active, Timer::ClientTimeout);
-        sleep(Millis(2200)).await;
+        assert!(!h1.inner.io.timer_handle().is_set());
+        sleep(Millis(500)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(!h1.inner.io.timer_handle().is_set());
         assert!(h1.inner.io.is_active());
 
         client.write("\r\n");
@@ -2215,7 +2236,7 @@ mod tests {
         client.remote_buffer_cap(4096);
         let mut decoder = ClientCodec::new(true, SharedCfg::default().get());
         spawn_h1(server, async |_| {
-            sleep(Millis(100)).await;
+            sleep(Millis(50)).await;
             Ok::<_, io::Error>(Response::Ok().build())
         });
 
@@ -2227,7 +2248,7 @@ mod tests {
 
         client.write("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
         client.write("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
-        sleep(Millis(50)).await;
+        sleep(Millis(25)).await;
         client.write("GET /test HTTP/1.1\r\nhost: localhost\r\n\r\n");
 
         let mut buf = BytesMut::from(&client.read().await.unwrap()[..]);
@@ -2352,7 +2373,7 @@ mod tests {
         // io is drained by no more than the chunk received by the handler, the
         // chunk buffered in the payload and the read buffer, each at most one
         // read page
-        let random_bytes: Vec<u8> = (0..1_048_576).map(|_| rand::random::<u8>()).collect();
+        let random_bytes: Vec<u8> = vec![b'x'; 1_048_576];
         client.write(random_bytes);
 
         sleep(Millis(50)).await;
@@ -2462,8 +2483,11 @@ mod tests {
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert_eq!(h1.inner.timers.active, Timer::Stopped);
 
-        let res = timeout(Millis(2500), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
+        let res = timeout(Millis(500), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
         assert!(res.is_err());
+        // nothing is armed, backpressure is never interrupted by a timeout
+        assert!(!h1.inner.io.timer_handle().is_set());
+        assert_eq!(h1.inner.timers.active, Timer::Stopped);
         assert!(!client.is_closed());
     }
 
@@ -2820,9 +2844,13 @@ mod tests {
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         client.write("GET /");
-        sleep(Millis(1100)).await;
+        sleep(Millis(50)).await;
 
+        // the read-rate timer expires together with the received bytes
+        h1.inner.io.notify_timeout();
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        // the partial head is accepted as progress, head timing continues
+        assert_eq!(h1.inner.timers.active, Timer::Headers);
         sleep(Millis(50)).await;
         assert!(client.read_any().is_empty());
 
@@ -2859,7 +2887,11 @@ mod tests {
 
         // Chunk framing is consumed without producing a payload item.
         client.write("4\r\n");
-        sleep(Millis(1100)).await;
+        sleep(Millis(50)).await;
+        assert_eq!(h1.inner.timers.active, Timer::Payload);
+
+        // the read-rate timer expires together with the received bytes
+        h1.inner.io.notify_timeout();
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         sleep(Millis(50)).await;
         assert!(client.read_any().is_empty());
@@ -2876,7 +2908,7 @@ mod tests {
         let config: SharedCfg = SharedCfg::new("SVC")
             .add(
                 HttpServiceConfig::new()
-                    .set_payload_read_rate(Seconds(1), Seconds(2), 1)
+                    .set_payload_read_rate(Seconds(1), Seconds(1), 1)
                     .set_keepalive(KeepAlive::Disabled),
             )
             .into();
@@ -2899,8 +2931,9 @@ mod tests {
                 (),
                 fn_service(async |req: Control<Base, io::Error>| {
                     if let Control::Expect(exc) = req {
-                        // slower than the payload read-rate limits
-                        sleep(Millis(3100)).await;
+                        // slower than the payload read-rate limits, an armed
+                        // payload timer expires after less than two seconds
+                        sleep(Millis(2300)).await;
                         Ok::<_, DispatchError>(exc.ack())
                     } else {
                         Ok(req.ack())
@@ -3451,12 +3484,13 @@ mod tests {
                 let _ = client.read().await.unwrap();
             }
             client.close().await;
-            sleep(Millis(150)).await;
             let case = format!("half_close={half_close} pipelined={pipelined} delay={delay}");
             if half_close || pipelined {
+                sleep(Millis(150)).await;
                 assert!(!dropped.get(), "{case}");
                 assert!(!client.is_server_dropped(), "{case}");
             } else {
+                wait_until(Millis(2000), || dropped.get() && client.is_server_dropped()).await;
                 assert!(dropped.get(), "{case}");
                 assert!(client.is_server_dropped(), "{case}");
             }
@@ -4136,10 +4170,16 @@ mod tests {
         // the peer sends a request while the filter is not ready
         gate.block_read(true);
         client.write("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
-        sleep(Millis(100)).await;
+        wait_until(Millis(1000), || {
+            io.is_read_filter_paused() && !io.timer_handle().is_set()
+        })
+        .await;
         assert!(io.is_read_filter_paused());
+        // the keep-alive timer is not armed while reading is paused
+        assert!(!io.timer_handle().is_set());
 
-        sleep(Millis(2000)).await;
+        sleep(Millis(500)).await;
+        assert!(!io.timer_handle().is_set());
         assert!(io.is_active());
 
         gate.block_read(false);
@@ -4150,7 +4190,7 @@ mod tests {
         );
 
         // keep-alive is armed again once reading resumes
-        sleep(Millis(2500)).await;
+        wait_until(Millis(4000), || client.is_closed()).await;
         assert!(client.is_closed());
     }
 
@@ -4169,22 +4209,30 @@ mod tests {
         );
 
         client.write("GET / HTTP/1.1\r\n");
+        // the request-head timer runs, the head is incomplete
         sleep(Millis(100)).await;
+        assert!(io.timer_handle().is_set());
 
         gate.block_read(true);
         client.write("host: localhost\r\n");
-        sleep(Millis(100)).await;
+        wait_until(Millis(1000), || {
+            io.is_read_filter_paused() && !io.timer_handle().is_set()
+        })
+        .await;
         assert!(io.is_read_filter_paused());
+        // the request-head timer is not armed while reading is paused
+        assert!(!io.timer_handle().is_set());
 
-        sleep(Millis(3000)).await;
+        sleep(Millis(500)).await;
+        assert!(!io.timer_handle().is_set());
         assert!(io.is_active());
 
         // the timer resumes once reading resumes
         gate.block_read(false);
-        sleep(Millis(100)).await;
+        wait_until(Millis(1000), || !io.is_read_filter_paused()).await;
         assert!(!io.is_read_filter_paused());
         assert!(io.is_active());
-        sleep(Millis(2000)).await;
+        wait_until(Millis(4000), || !io.is_active()).await;
         assert!(!io.is_active());
         assert!(client.read_any().starts_with(b"HTTP/1.1 408"));
     }
@@ -4204,14 +4252,22 @@ mod tests {
         );
 
         client.write("POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 4\r\n\r\nab");
+        // the payload timer runs, the payload is incomplete
         sleep(Millis(100)).await;
+        assert!(io.timer_handle().is_set());
 
         gate.block_read(true);
         client.write("cd");
-        sleep(Millis(100)).await;
+        wait_until(Millis(1000), || {
+            io.is_read_filter_paused() && !io.timer_handle().is_set()
+        })
+        .await;
         assert!(io.is_read_filter_paused());
+        // the payload timer is not armed while reading is paused
+        assert!(!io.timer_handle().is_set());
 
-        sleep(Millis(3000)).await;
+        sleep(Millis(500)).await;
+        assert!(!io.timer_handle().is_set());
         assert!(io.is_active());
 
         gate.block_read(false);
@@ -4237,11 +4293,17 @@ mod tests {
         // the response waits for the filter, write backpressure is enabled
         gate.block_write(true);
         client.write("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
-        sleep(Millis(100)).await;
+        wait_until(Millis(2000), || {
+            io.is_write_filter_paused() && io.is_wr_backpressure() && !io.timer_handle().is_set()
+        })
+        .await;
         assert!(io.is_write_filter_paused());
         assert!(io.is_wr_backpressure());
+        // the write timer is not armed while writing is paused
+        assert!(!io.timer_handle().is_set());
 
-        sleep(Millis(2500)).await;
+        sleep(Millis(500)).await;
+        assert!(!io.timer_handle().is_set());
         assert!(io.is_active());
 
         gate.block_write(false);
@@ -4263,16 +4325,25 @@ mod tests {
 
         gate.block_write(true);
         client.write("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
-        sleep(Millis(1500)).await;
+        wait_until(Millis(2000), || {
+            io.is_write_filter_paused() && !io.timer_handle().is_set()
+        })
+        .await;
         assert!(io.is_write_filter_paused());
+        // the write timer is stopped, nothing is left armed from before
+        assert!(!io.timer_handle().is_set());
         assert!(io.is_active());
 
         // the peer does not read, the timeout starts over once writes resume
         gate.block_write(false);
-        sleep(Millis(500)).await;
+        wait_until(Millis(1000), || {
+            !io.is_write_filter_paused() && io.timer_handle().is_set()
+        })
+        .await;
         assert!(!io.is_write_filter_paused());
         assert!(io.is_active());
-        sleep(Millis(2000)).await;
+        assert_eq!(io.timer_handle().remains(), Seconds(1));
+        wait_until(Millis(4000), || client.is_closed()).await;
         assert!(client.is_closed());
     }
 
@@ -4310,7 +4381,7 @@ mod tests {
 
         gate.block_write(false);
         client.remote_buffer_cap(1_048_576);
-        let res = timeout(Millis(1000), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
+        let res = timeout(Millis(500), poll_fn(|cx| Pin::new(&mut h1).poll(cx))).await;
         assert!(res.is_err());
         assert!(
             read_response(&client, 128 * 1024)

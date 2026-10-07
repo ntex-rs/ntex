@@ -100,7 +100,7 @@ mod tests {
         let res = lookup(Connect::new("www.rust-lang.org"), "").await;
         assert!(res.is_ok());
 
-        let res = lookup(Connect::new("---11213"), "").await;
+        let res = lookup(Connect::new("nonexistent.invalid"), "").await;
         assert!(res.is_err());
 
         let addr: net::SocketAddr = "127.0.0.1:8080".parse().unwrap();

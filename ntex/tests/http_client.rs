@@ -103,7 +103,7 @@ async fn test_timeout() {
     let client = Client::with_config(
         SharedCfg::new("SVC")
             .add(IoConfig::new().set_connect_timeout(2500))
-            .add(ClientConfig::new().set_response_timeout(Seconds(3))),
+            .add(ClientConfig::new().set_response_timeout(Millis(300))),
     );
 
     let err = client.get(srv.url("/")).send().await.err().unwrap();
@@ -123,7 +123,7 @@ async fn test_timeout_override() {
 
     let err = client
         .get(srv.url("/"))
-        .timeout(Seconds(1))
+        .timeout(Millis(200))
         .send()
         .await
         .err();
