@@ -1,6 +1,16 @@
 use std::{cell::UnsafeCell, collections::VecDeque, marker::PhantomData, rc::Rc};
 
-use socket2::Socket;
+use ntex_io::IoConfig;
+use ntex_service::cfg::SharedCfg;
+use socket2::{Protocol, SockAddr, Socket, Type};
+
+pub(crate) fn tcp_socket(addr: &SockAddr, cfg: &SharedCfg) -> std::io::Result<Socket> {
+    let sock = Socket::new(addr.domain(), Type::STREAM, Some(Protocol::TCP))?;
+    sock.set_tcp_nodelay(cfg.get::<IoConfig>().tcp_nodelay())?;
+    #[cfg(unix)]
+    let sock = prep_socket(sock)?;
+    Ok(sock)
+}
 
 #[cfg(unix)]
 pub(crate) fn prep_socket(sock: Socket) -> std::io::Result<Socket> {
@@ -173,5 +183,25 @@ impl<T> Queue<T> {
     pub(crate) fn push(&self, item: T) {
         // SAFETY: Queue is !Sync and it does not allow to hold refs into inner
         unsafe { &mut *self.inner.get() }.push_back(item);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tcp_socket_applies_nodelay() {
+        let addr = SockAddr::from(std::net::SocketAddr::from(([127, 0, 0, 1], 0)));
+        let sock = tcp_socket(&addr, &SharedCfg::default()).unwrap();
+        assert!(sock.tcp_nodelay().unwrap());
+
+        for enabled in [false, true] {
+            let cfg = SharedCfg::new("TCP")
+                .add(IoConfig::new().set_tcp_nodelay(enabled))
+                .build();
+            let sock = tcp_socket(&addr, &cfg).unwrap();
+            assert_eq!(sock.tcp_nodelay().unwrap(), enabled);
+        }
     }
 }

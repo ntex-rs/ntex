@@ -6,10 +6,10 @@ use std::{collections::VecDeque, num::NonZeroUsize, time::Duration};
 use std::os::unix::net::UnixStream as OsUnixStream;
 
 use ::ntex_polling::{Event, Events, Notifier, PollMode, Poller};
-use ntex_io::Io;
+use ntex_io::{Io, IoConfig};
 use ntex_rt::{DriverType, Notify, PollResult, Runtime};
 use ntex_service::cfg::SharedCfg;
-use socket2::{Protocol, SockAddr, Socket, Type};
+use socket2::{SockAddr, Socket, Type};
 
 use super::{TcpStream, UnixStream, stream::StreamOps};
 use crate::channel::Receiver;
@@ -239,9 +239,7 @@ impl fmt::Debug for Reactor {
 impl crate::Reactor for Reactor {
     fn tcp_connect(&self, addr: net::SocketAddr, cfg: SharedCfg) -> Receiver<Io> {
         let addr = SockAddr::from(addr);
-        let result = Socket::new(addr.domain(), Type::STREAM, Some(Protocol::TCP))
-            .and_then(crate::helpers::prep_socket)
-            .map(move |sock| (addr, sock));
+        let result = crate::helpers::tcp_socket(&addr, &cfg).map(move |sock| (addr, sock));
 
         match result {
             Err(err) => Receiver::new(Err(err)),
@@ -267,7 +265,7 @@ impl crate::Reactor for Reactor {
     }
 
     fn from_tcp_stream(&self, stream: net::TcpStream, cfg: SharedCfg) -> io::Result<Io> {
-        stream.set_nodelay(true)?;
+        stream.set_nodelay(cfg.get::<IoConfig>().tcp_nodelay())?;
 
         Ok(Io::new(
             TcpStream(

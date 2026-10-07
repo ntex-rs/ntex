@@ -21,10 +21,10 @@ use windows_sys::Win32::{
     },
 };
 
-use ntex_io::Io;
+use ntex_io::{Io, IoConfig};
 use ntex_rt::{DriverType, Notify, PollResult, Runtime, syscall};
 use ntex_service::cfg::SharedCfg;
-use socket2::{Protocol, SockAddr, Socket, Type};
+use socket2::{SockAddr, Socket, Type};
 
 use super::{Overlapped, TcpStream, connect, stream::StreamOps};
 use crate::channel::Receiver;
@@ -111,8 +111,7 @@ impl AsRawHandle for Reactor {
 impl crate::Reactor for Reactor {
     fn tcp_connect(&self, addr: net::SocketAddr, cfg: SharedCfg) -> Receiver<Io> {
         let addr = SockAddr::from(addr);
-        let result = Socket::new(addr.domain(), Type::STREAM, Some(Protocol::TCP))
-            .map(move |sock| (addr, sock));
+        let result = crate::helpers::tcp_socket(&addr, &cfg).map(move |sock| (addr, sock));
 
         match result {
             Err(err) => Receiver::new(Err(err)),
@@ -132,7 +131,7 @@ impl crate::Reactor for Reactor {
     }
 
     fn from_tcp_stream(&self, stream: net::TcpStream, cfg: SharedCfg) -> io::Result<Io> {
-        stream.set_nodelay(true)?;
+        stream.set_nodelay(cfg.get::<IoConfig>().tcp_nodelay())?;
         let addr = stream.peer_addr()?;
         self.reactor.attach(stream.as_raw_socket() as _, true)?;
 

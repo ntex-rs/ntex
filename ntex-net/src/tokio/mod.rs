@@ -3,7 +3,7 @@
 use std::os::unix::net::UnixStream as OsUnixStream;
 use std::{io::Result as IoResult, net, net::SocketAddr, path::PathBuf};
 
-use ntex_io::Io;
+use ntex_io::{Io, IoConfig};
 use ntex_service::cfg::SharedCfg;
 
 #[doc(hidden)]
@@ -62,7 +62,7 @@ impl crate::Reactor for Reactor {
         ntex_rt::spawn(async move {
             let result = async {
                 let sock = tok_io::net::TcpStream::connect(addr).await?;
-                sock.set_nodelay(true)?;
+                sock.set_nodelay(cfg.get::<IoConfig>().tcp_nodelay())?;
                 Ok(Io::new(TcpStream(sock), cfg))
             }
             .await;
@@ -98,7 +98,7 @@ impl crate::Reactor for Reactor {
 
     fn from_tcp_stream(&self, stream: net::TcpStream, cfg: SharedCfg) -> IoResult<Io> {
         stream.set_nonblocking(true)?;
-        stream.set_nodelay(true)?;
+        stream.set_nodelay(cfg.get::<IoConfig>().tcp_nodelay())?;
         Ok(Io::new(
             TcpStream(tok_io::net::TcpStream::from_std(stream)?),
             cfg,

@@ -1,5 +1,9 @@
 # Changes
 
+## Unreleased
+
+* Add `IoConfig::set_tcp_nodelay()` to configure `TCP_NODELAY`, enabled by default
+
 ## [4.2.1] - 2026-10-05
 
 * Add `IoRef::is_write_filter_paused()`, transport writes stay paused while the filter chain is

@@ -1,5 +1,10 @@
 # Changes
 
+## Unreleased
+
+* Apply `IoConfig::tcp_nodelay()` to outgoing and converted TCP streams on all backends.
+  Outgoing connections on native and compio backends now enable `TCP_NODELAY` by default
+
 ## [4.2.1] - 2026-10-05
 
 * `Address::port()` for `urly::Url` uses the urly default ports, `ftp` gets port 21

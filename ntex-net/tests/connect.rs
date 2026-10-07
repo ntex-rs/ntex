@@ -2,7 +2,7 @@
 use std::{io::Read, io::Write, net, thread};
 
 use ntex::{codec::BytesCodec, util::Bytes};
-use ntex_io::types::PeerAddr;
+use ntex_io::{IoConfig, types::PeerAddr};
 use ntex_net::connect::{self, Connect, ConnectError, Connector};
 use ntex_service::{Pipeline, cfg::SharedCfg};
 
@@ -157,6 +157,25 @@ async fn unix_connect() {
         std::io::ErrorKind::NotFound
     };
     assert_eq!(err.kind(), expected, "{err:?}");
+}
+
+#[ntex::test]
+async fn from_tcp_stream_applies_nodelay() {
+    for enabled in [true, false] {
+        let listener = net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (peer, _) = listener.accept().unwrap();
+        stream.set_nodelay(!enabled).unwrap();
+        let probe = stream.try_clone().unwrap();
+        let cfg = SharedCfg::new("TCP")
+            .add(IoConfig::new().set_tcp_nodelay(enabled))
+            .build();
+
+        let io = ntex_net::from_tcp_stream(stream, cfg).unwrap();
+        assert_eq!(probe.nodelay().unwrap(), enabled);
+        drop(io);
+        drop(peer);
+    }
 }
 
 #[cfg(unix)]

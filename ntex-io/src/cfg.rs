@@ -44,6 +44,7 @@ pub fn read_buf_cache_limit() -> usize {
 /// Shared configuration for an [`crate::Io`] stream.
 pub struct IoConfig {
     connect_timeout: Millis,
+    tcp_nodelay: bool,
     keepalive_timeout: Seconds,
     shutdown_timeout: Seconds,
     frame_read_rate: Option<FrameReadRate>,
@@ -135,6 +136,7 @@ impl IoConfig {
         IoConfig {
             config: CfgContext::default(),
             connect_timeout: Millis::ZERO,
+            tcp_nodelay: true,
             keepalive_timeout: Seconds(0),
             shutdown_timeout: Seconds(1),
             frame_read_rate: None,
@@ -165,6 +167,12 @@ impl IoConfig {
     /// Returns the connection timeout.
     pub fn connect_timeout(&self) -> Millis {
         self.connect_timeout
+    }
+
+    #[inline]
+    /// Returns whether TCP connections disable the Nagle algorithm.
+    pub fn tcp_nodelay(&self) -> bool {
+        self.tcp_nodelay
     }
 
     #[inline]
@@ -226,6 +234,19 @@ impl IoConfig {
     #[must_use]
     pub fn set_connect_timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
         self.connect_timeout = timeout.into();
+        self
+    }
+
+    /// Sets the `TCP_NODELAY` option for TCP connections.
+    ///
+    /// When enabled, disables the Nagle algorithm so small packets can be sent
+    /// without waiting for more data. Enabled by default.
+    ///
+    /// Applied when connecting or converting an existing TCP stream to I/O.
+    /// Does not affect Unix domain sockets or change existing I/O streams.
+    #[must_use]
+    pub fn set_tcp_nodelay(mut self, enabled: bool) -> Self {
+        self.tcp_nodelay = enabled;
         self
     }
 
@@ -711,14 +732,17 @@ mod tests {
     fn config_accessors() {
         let cfg = IoConfig::new();
         assert_eq!(cfg.connect_timeout(), Millis::ZERO);
+        assert!(cfg.tcp_nodelay());
         assert_eq!(cfg.keepalive_timeout(), Seconds(0));
         assert_eq!(cfg.write_page_size(), BytePageSize::Size16);
 
         let cfg = cfg
             .set_connect_timeout(Millis(500))
+            .set_tcp_nodelay(false)
             .set_keepalive_timeout(Seconds(7))
             .set_write_page_size(BytePageSize::Size4);
         assert_eq!(cfg.connect_timeout(), Millis(500));
+        assert!(!cfg.tcp_nodelay());
         assert_eq!(cfg.keepalive_timeout(), Seconds(7));
         assert_eq!(cfg.write_page_size(), BytePageSize::Size4);
 

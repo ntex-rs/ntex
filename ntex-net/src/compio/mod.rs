@@ -5,7 +5,7 @@ use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};
 use std::task::{Context, Poll, Wake, Waker};
 
 use compio_runtime::Runtime;
-use ntex_io::Io;
+use ntex_io::{Io, IoConfig};
 use ntex_service::cfg::SharedCfg;
 
 mod io;
@@ -137,6 +137,7 @@ impl crate::Reactor for Reactor {
                 let sock = compio_net::TcpStream::connect(addr)
                     .await
                     .map_err(map_socket_error)?;
+                sock.set_nodelay(cfg.get::<IoConfig>().tcp_nodelay())?;
                 Ok(Io::new(TcpStream(sock), cfg))
             }
             .await;
@@ -163,7 +164,7 @@ impl crate::Reactor for Reactor {
     }
 
     fn from_tcp_stream(&self, stream: std::net::TcpStream, cfg: SharedCfg) -> std::io::Result<Io> {
-        stream.set_nodelay(true)?;
+        stream.set_nodelay(cfg.get::<IoConfig>().tcp_nodelay())?;
         Ok(Io::new(
             TcpStream(compio_net::TcpStream::from_std(stream)?),
             cfg,
