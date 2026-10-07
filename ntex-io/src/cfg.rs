@@ -431,8 +431,16 @@ impl IoConfig {
     /// [`set_write_backpressure`](Self::set_write_backpressure).
     ///
     /// The default page size is 16 KiB.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `size` is [`BytePageSize::Unset`].
     #[must_use]
     pub fn set_write_size(mut self, size: BytePageSize) -> Self {
+        assert!(
+            size != BytePageSize::Unset,
+            "write buffer page size must be set"
+        );
         self.write_size = size;
         self
     }
@@ -562,6 +570,12 @@ mod tests {
     #[should_panic(expected = "read buffer page size must be set")]
     fn unset_read_size() {
         let _ = IoConfig::new().set_read_size(BytePageSize::Unset);
+    }
+
+    #[test]
+    #[should_panic(expected = "write buffer page size must be set")]
+    fn unset_write_size() {
+        let _ = IoConfig::new().set_write_size(BytePageSize::Unset);
     }
 
     #[test]
