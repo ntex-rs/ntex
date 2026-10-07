@@ -158,8 +158,9 @@ pub enum BytePageSize {
     /// No fixed page category.
     ///
     /// Buffers of this category are sized on demand and never returned to
-    /// the page cache. It cannot be used as the page size of
-    /// [`BytePages`].
+    /// the page cache. A buffer whose allocation is exactly a page size
+    /// belongs to that page category, whichever way it was created. It
+    /// cannot be used as the page size of [`BytePages`].
     Unset = 9,
 }
 
@@ -175,6 +176,21 @@ const PAGE_SIZES: [BytePageSize; 9] = [
     BytePageSize::Size128,
     BytePageSize::Size256,
 ];
+
+/// Size of the units of [`CLASS_BY_UNITS`], every page size is a multiple of it.
+const PAGE_UNIT_SHIFT: u32 = 12;
+
+/// Page category by allocation size in 4 KiB units, `Unset` for sizes that
+/// are not a page size.
+const CLASS_BY_UNITS: [BytePageSize; 65] = {
+    let mut table = [BytePageSize::Unset; 65];
+    let mut i = 0;
+    while i < PAGE_SIZES.len() {
+        table[PAGE_SIZES[i].alloc_size() >> PAGE_UNIT_SHIFT] = PAGE_SIZES[i];
+        i += 1;
+    }
+    table
+};
 
 impl BytePageSize {
     /// Returns the smallest page category with a [`capacity`](Self::capacity)
@@ -264,6 +280,18 @@ impl BytePageSize {
         }
     }
 
+    /// Returns the page category of an allocation of `size` bytes, header
+    /// included, `Unset` if `size` is not a page size.
+    #[inline]
+    pub(crate) const fn from_alloc_size(size: usize) -> BytePageSize {
+        let units = size >> PAGE_UNIT_SHIFT;
+        if size & ((1 << PAGE_UNIT_SHIFT) - 1) != 0 || units >= CLASS_BY_UNITS.len() {
+            BytePageSize::Unset
+        } else {
+            CLASS_BY_UNITS[units]
+        }
+    }
+
     /// Returns the recommended write-buffer threshold for this page size.
     ///
     /// This is half of the category size, but at most 16 KiB.
@@ -339,6 +367,33 @@ mod tests {
         assert_eq!(BytePageSize::Size128.half_capacity(), 16 * 1024);
         assert_eq!(BytePageSize::Size256.half_capacity(), 16 * 1024);
         assert_eq!(BytePageSize::Unset.half_capacity(), 16 * 1024);
+    }
+
+    #[test]
+    fn page_size_from_alloc_size() {
+        const META: usize = stvec::METADATA_SIZE;
+        assert_eq!(META, 16);
+        for size in PAGE_SIZES {
+            assert_eq!(BytePageSize::from_alloc_size(size.alloc_size()), size);
+            assert_eq!(BytePageSize::from_alloc_size(size.capacity() + META), size);
+            assert_eq!(
+                BytePageSize::from_alloc_size(size.alloc_size() - 1),
+                BytePageSize::Unset
+            );
+            assert_eq!(
+                BytePageSize::from_alloc_size(size.alloc_size() + 1),
+                BytePageSize::Unset
+            );
+        }
+        for units in [0, 3, 5, 10, 40, 63, 64 + 1, 128 + 1] {
+            assert_eq!(
+                BytePageSize::from_alloc_size(units * 4096),
+                BytePageSize::Unset
+            );
+        }
+        for size in [0, 1, 4095, 512 * 1024, usize::MAX, usize::MAX & !0xFFF] {
+            assert_eq!(BytePageSize::from_alloc_size(size), BytePageSize::Unset);
+        }
     }
 
     #[test]
