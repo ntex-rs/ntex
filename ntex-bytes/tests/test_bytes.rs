@@ -2,7 +2,7 @@
 use std::{borrow::Borrow, borrow::BorrowMut};
 
 use ntex_bytes::info::Kind;
-use ntex_bytes::{Buf, BufMut, BytePage, BytePages, Bytes, BytesMut};
+use ntex_bytes::{Buf, BufMut, BytePage, BytePageSize, BytePages, Bytes, BytesMut};
 
 const LONG: &[u8] = b"mary had a little lamb, little lamb, little lamb";
 const SHORT: &[u8] = b"hello world";
@@ -20,7 +20,7 @@ fn is_send<T: Send>() {}
 fn test_size() {
     assert_eq!(24, std::mem::size_of::<Bytes>());
     assert_eq!(24, std::mem::size_of::<Option<Bytes>>());
-    assert_eq!(24, ntex_bytes::METADATA_SIZE);
+    assert_eq!(16, ntex_bytes::METADATA_SIZE);
     assert_eq!(8, std::mem::size_of::<BytesMut>());
     assert_eq!(16, std::mem::size_of::<BytePages>());
     assert_eq!(32, std::mem::size_of::<BytePage>());
@@ -424,15 +424,15 @@ fn fns_defined_for_bytes() {
     let bytes = Bytes::copy_from_slice(&B[..]);
     assert_eq!(bytes.info().kind, Kind::Vec);
     assert_eq!(bytes.info().refs, 1);
-    assert_eq!(bytes.info().capacity, 76);
+    assert_eq!(bytes.info().capacity, 68);
     let b2 = bytes.clone();
     assert_eq!(b2.info().kind, Kind::Vec);
     assert_eq!(b2.info().refs, 2);
-    assert_eq!(b2.info().capacity, 76);
+    assert_eq!(b2.info().capacity, 68);
     drop(b2);
     assert_eq!(bytes.info().kind, Kind::Vec);
     assert_eq!(bytes.info().refs, 1);
-    assert_eq!(bytes.info().capacity, 76);
+    assert_eq!(bytes.info().capacity, 68);
 
     let mut bytes = Bytes::from(&b"hello world"[..]);
 
@@ -737,29 +737,6 @@ fn bytes_vec() {
     assert_eq!(bytes, b"\x01\x02\x03");
 }
 
-#[test]
-fn reserve_capacity_not_greater_than_len() {
-    let data = [7u8; 1000];
-    for cap in [0, 10, 999, 1000] {
-        let mut buf = BytesMut::copy_from_slice(&data[..]);
-        let ptr = buf.as_ptr();
-        buf.reserve_capacity(cap);
-        assert_eq!(buf.as_ptr(), ptr);
-        assert_eq!(&buf[..], &data[..]);
-        assert!(buf.capacity() >= buf.len());
-        assert_eq!(buf.capacity() - buf.len(), buf.remaining_mut());
-
-        buf.put_slice(&[1; 100]);
-        assert_eq!(buf.len(), 1100);
-        assert_eq!(&buf[1000..], &[1; 100][..]);
-    }
-
-    let mut buf = BytesMut::copy_from_slice(&data[..]);
-    buf.reserve_capacity(1001);
-    assert!(buf.capacity() >= 1001);
-    assert_eq!(&buf[..], &data[..]);
-}
-
 #[cfg(target_pointer_width = "64")]
 #[test]
 #[should_panic(expected = "exceeds maximum")]
@@ -780,6 +757,108 @@ fn reserve_over_u32() {
 fn reserve_overflows_usize() {
     let mut buf = BytesMut::copy_from_slice(b"hello");
     buf.reserve(usize::MAX);
+}
+
+/// Fills the buffer until less than half of its page size remains.
+fn fill_half(buf: &mut BytesMut) {
+    let half = buf.page_size().half_capacity();
+    let remaining = buf.capacity() - buf.len();
+    if remaining >= half {
+        buf.extend_from_slice(&vec![1; remaining - half + 1]);
+    }
+}
+
+#[test]
+fn reserve_more_pages() {
+    // at least half of the page is remaining
+    let mut buf = BytesMut::with_page_size(BytePageSize::Size4);
+    buf.extend_from_slice(LONG);
+    buf.reserve_more();
+    assert_eq!(buf.page_size(), BytePageSize::Size4);
+    assert_eq!(&buf[..], LONG);
+
+    // every page size moves to the next one
+    let mut size = BytePageSize::Size4;
+    while size != BytePageSize::Size256 {
+        fill_half(&mut buf);
+        let len = buf.len();
+        size = size.next();
+        buf.reserve_more();
+        assert_eq!(buf.page_size(), size);
+        assert_eq!(buf.capacity(), size.capacity());
+        assert_eq!(buf.len(), len);
+        assert_eq!(&buf[..LONG.len()], LONG);
+    }
+
+    // above the largest page size, a regular buffer grows by 64 KiB
+    fill_half(&mut buf);
+    buf.reserve_more();
+    assert_eq!(buf.page_size(), BytePageSize::Unset);
+    assert_eq!(buf.capacity(), BytePageSize::Size256.capacity() + 64 * 1024);
+    assert_eq!(&buf[..LONG.len()], LONG);
+
+    // a shared page moves too, split off data stays valid
+    let mut buf = BytesMut::with_page_size(BytePageSize::Size8);
+    buf.extend_from_slice(LONG);
+    buf.extend_from_slice(SHORT);
+    let head = buf.split_to(LONG.len());
+    fill_half(&mut buf);
+    buf.reserve_more();
+    assert_eq!(buf.page_size(), BytePageSize::Size16);
+    assert_eq!(buf.capacity(), BytePageSize::Size16.capacity());
+    assert_eq!(&buf[..SHORT.len()], SHORT);
+    assert_eq!(&head[..], LONG);
+}
+
+#[test]
+fn reserve_more_unset() {
+    let mut buf = BytesMut::copy_from_slice(b"");
+    assert_eq!(buf.capacity(), 0);
+    buf.reserve_more();
+    assert_eq!(buf.capacity(), 112);
+
+    let mut buf = BytesMut::copy_from_slice(LONG);
+    buf.reserve_more();
+    assert_eq!(buf.capacity(), LONG.len() + 112);
+    assert_eq!(&buf[..], LONG);
+
+    let mut buf = BytesMut::with_capacity(1000);
+    buf.extend_from_slice(LONG);
+    buf.reserve_more();
+    assert_eq!(buf.capacity(), 2000);
+    assert_eq!(buf.page_size(), BytePageSize::Unset);
+    assert_eq!(&buf[..], LONG);
+
+    // the step is limited to 64 KiB
+    let mut buf = BytesMut::with_capacity(100_000);
+    buf.extend_from_slice(LONG);
+    buf.reserve_more();
+    assert_eq!(buf.capacity(), 100_000);
+    buf.extend_from_slice(&vec![1; 90_000]);
+    buf.reserve_more();
+    assert_eq!(buf.capacity(), 100_000 + 64 * 1024);
+    assert_eq!(&buf[..LONG.len()], LONG);
+
+    // a unique buffer is reclaimed when its allocation is large enough
+    let mut buf = BytesMut::with_capacity(1000);
+    buf.extend_from_slice(&[1; 1000]);
+    buf.advance(900);
+    let ptr = buf.as_ptr();
+    buf.reserve_more();
+    assert_eq!(buf.capacity(), 1000);
+    assert_eq!(&buf[..], &[1; 100][..]);
+    assert_ne!(buf.as_ptr(), ptr);
+
+    // a shared buffer is copied, split off data stays valid
+    let mut buf = BytesMut::with_capacity(1000);
+    buf.extend_from_slice(LONG);
+    buf.extend_from_slice(SHORT);
+    let head = buf.split_to(LONG.len());
+    let cap = buf.capacity();
+    buf.reserve_more();
+    assert_eq!(buf.capacity(), cap + 112.max(cap));
+    assert_eq!(&buf[..], SHORT);
+    assert_eq!(&head[..], LONG);
 }
 
 #[cfg(target_pointer_width = "64")]

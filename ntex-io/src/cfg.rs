@@ -4,14 +4,14 @@ use std::cell::{Cell, UnsafeCell};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use ntex_bytes::{BytePageSize, BytesMut, buf::BufMut};
+use ntex_bytes::{BytePageSize, BytesMut, METADATA_SIZE, buf::BufMut};
 use ntex_service::cfg::{CfgContext, Configuration};
 use ntex_util::{time::Millis, time::Seconds};
 
 const DEFAULT_CACHE_LIMIT: usize = 1024 * 1024;
-const DEFAULT_HIGH: usize = 16 * 1024 - 24;
-const DEFAULT_LOW: usize = 512 + 24;
-const DEFAULT_HALF: usize = (16 * 1024 - 24) / 2;
+const DEFAULT_HIGH: usize = 16 * 1024 - METADATA_SIZE;
+const DEFAULT_LOW: usize = 512 + METADATA_SIZE;
+const DEFAULT_HALF: usize = (16 * 1024 - METADATA_SIZE) / 2;
 // read buffers above `high` double in capacity, by at most this much at once
 const MAX_GROW_STEP: usize = 1024 * 1024;
 

@@ -96,7 +96,7 @@
 #![allow(clippy::assert_is_empty)]
 use std::{cmp, mem, num::NonZeroUsize, ptr, slice, sync::atomic::Ordering::Relaxed};
 
-use crate::{BytePageSize, info::Info, info::Kind, stext::StorageVTable, stvec};
+use crate::{info::Info, info::Kind, stext::StorageVTable, stvec};
 
 #[cfg(target_endian = "little")]
 #[repr(C)]
@@ -200,7 +200,7 @@ impl Storage {
 
     #[inline]
     fn from_slice_with_capacity(cap: usize, src: &[u8]) -> Storage {
-        let shared = stvec::SharedVec::create(BytePageSize::Unset, cap, src);
+        let shared = stvec::SharedVec::create(cap, src);
         Storage {
             len: src.len(),
             // SAFETY: the data follows the `SharedVec` header in the allocation
@@ -709,7 +709,7 @@ mod tests {
 
         let mut bv = BytesMut::copy_from_slice(&b"hello"[..]);
         assert_eq!(bv.capacity(), 5);
-        bv.reserve_capacity(128);
+        bv.reserve_exact(123);
         assert_eq!(bv.capacity(), 128);
         assert_eq!(bv.len(), 5);
         assert_eq!(bv.as_ref(), &b"hello"[..]);

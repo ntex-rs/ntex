@@ -16,6 +16,14 @@
 * The page cache limit depends on the page size, fewer pages are cached for larger sizes, add
   `set_page_cache_size()` to set the limit of a single page size, deprecate `set_pages_cache()`
 
+* Remove `BytesMut::reserve_capacity()`, use `BytesMut::reserve_exact()`
+
+* `BytesMut::reserve_exact()` allocates exactly the new capacity plus the buffer header, a buffer
+  with a page size is not rounded up to a page
+
+* Add `BytesMut::reserve_more()`, if less than half of the page size remains, it grows a buffer to
+  the next page size, or by its capacity but at most 64 KiB
+
 ## [1.10.0] (2026-10-01)
 
 * Remove deprecated `BufMut::writer()` and `buf::Writer`, `BytesMut` and `BytePages`

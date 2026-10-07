@@ -4,7 +4,8 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::atomic::{self, AtomicU32};
 use std::{cell::Cell, cmp, mem, num::NonZeroUsize, ptr, ptr::NonNull, slice};
 
-use crate::{BytePageSize, buf::UninitSlice, storage::INLINE_CAP, storage::Storage};
+use crate::storage::{INLINE_CAP, MIN_CAPACITY, Storage};
+use crate::{BytePageSize, buf::UninitSlice};
 
 #[derive(Debug)]
 /// Thread-safe reference-counted container for the shared storage.
@@ -18,11 +19,11 @@ pub(crate) struct SharedVec {
     /// It is not modified while the buffer is shared, so `Bytes` handles
     /// can read it concurrently with the `BytesMut` handle modifying
     /// the other fields.
+    ///
+    /// The spare capacity of the view (`capacity + METADATA_SIZE - offset - len`)
+    /// and the page size class (by allocation size) are derived from it.
     pub(crate) capacity: u32,
-    /// Spare capacity of the `BytesMut` view.
-    pub(crate) remaining: u32,
     pub(crate) ref_count: AtomicU32,
-    pub(crate) size: BytePageSize,
 }
 
 #[derive(Debug)]
@@ -39,10 +40,13 @@ const METADATA_SIZE_U32: u32 = METADATA_SIZE as u32;
 /// Maximum buffer capacity, offsets and sizes are stored as `u32`.
 pub(crate) const MAX_CAPACITY: usize = u32::MAX as usize - METADATA_SIZE;
 
+/// Largest capacity step of `reserve_more` for buffers without a page size.
+const MAX_MORE_STEP: usize = 64 * 1024;
+
 impl StorageVec {
     /// Create new empty storage with specified capacity
     pub(crate) fn with_capacity(capacity: usize) -> StorageVec {
-        StorageVec(SharedVec::create(BytePageSize::Unset, capacity, &[]))
+        StorageVec(SharedVec::create(capacity, &[]))
     }
 
     /// Create new empty storage with specified size category
@@ -58,13 +62,10 @@ impl StorageVec {
             .ok()
             .flatten();
 
-        if let Some(mut item) = cached {
-            unsafe {
-                (*item.as_inner()).size = size;
-            }
+        if let Some(item) = cached {
             item
         } else {
-            StorageVec(SharedVec::create(size, size.capacity(), &[]))
+            StorageVec(SharedVec::create(size.capacity(), &[]))
         }
     }
 
@@ -72,7 +73,7 @@ impl StorageVec {
     ///
     /// Panics if `capacity` is smaller than `src` length
     pub(crate) fn from_slice(capacity: usize, src: &[u8]) -> StorageVec {
-        StorageVec(SharedVec::create(BytePageSize::Unset, capacity, src))
+        StorageVec(SharedVec::create(capacity, src))
     }
 
     /// Return a slice for the handle's view into the shared buffer
@@ -110,7 +111,6 @@ impl StorageVec {
         unsafe {
             let inner = self.as_inner();
             (*inner).len += 1;
-            (*inner).remaining -= 1;
             *self.as_ptr().add(len) = n;
         }
     }
@@ -142,12 +142,16 @@ impl StorageVec {
         }
     }
 
+    #[inline]
     pub(crate) fn remaining(&self) -> usize {
-        unsafe { (*self.0.as_ptr()).remaining as usize }
+        unsafe {
+            let inner = self.0.as_ref();
+            (inner.capacity + METADATA_SIZE_U32 - inner.offset - inner.len) as usize
+        }
     }
 
     pub(crate) fn is_full(&self) -> bool {
-        unsafe { (*self.0.as_ptr()).remaining == 0 }
+        self.remaining() == 0
     }
 
     pub(crate) fn is_unique(&self) -> bool {
@@ -176,10 +180,8 @@ impl StorageVec {
         if !(*ptr).is_unique() {
             return None;
         }
-        let end = (*ptr).capacity + METADATA_SIZE_U32;
         (*ptr).offset = offset as u32;
         (*ptr).len = len as u32;
-        (*ptr).remaining = end - (offset + len) as u32;
         Some(StorageVec(NonNull::new_unchecked(ptr)))
     }
 
@@ -262,7 +264,6 @@ impl StorageVec {
                 if (*inner).is_unique() && (*inner).offset != METADATA_SIZE_U32 {
                     (*inner).len = 0;
                     (*inner).offset = METADATA_SIZE_U32;
-                    (*inner).remaining = (*inner).capacity;
                     return;
                 }
             }
@@ -288,18 +289,6 @@ impl StorageVec {
         }
     }
 
-    /// Copy data for new storage
-    #[inline]
-    pub(crate) fn reserve_capacity(&mut self, capacity: usize) {
-        if capacity > self.len() {
-            *self = StorageVec(SharedVec::create(
-                BytePageSize::Unset,
-                capacity,
-                self.as_ref(),
-            ));
-        }
-    }
-
     #[inline]
     pub(crate) fn reserve(&mut self, additional: usize) {
         if additional <= self.remaining() {
@@ -320,6 +309,36 @@ impl StorageVec {
         self.reserve_inner(additional, true);
     }
 
+    /// Grows the buffer by one step, see `BytesMut::reserve_more`.
+    pub(crate) fn reserve_more(&mut self) {
+        let size = self.page_size();
+        if self.remaining() >= size.half_capacity() {
+            return;
+        }
+
+        let next = size.next();
+        if next == BytePageSize::Unset {
+            let len = self.len();
+            let cap = self.capacity();
+            let new_cap = cap.saturating_add(cap.clamp(MIN_CAPACITY, MAX_MORE_STEP));
+            self.reserve_inner(new_cap - len, true);
+        } else {
+            // the next page comes from the page cache
+            self.move_to_page(next);
+        }
+    }
+
+    /// Copies the data into a page of `size`, the old buffer is released.
+    fn move_to_page(&mut self, size: BytePageSize) {
+        let len = self.len();
+        let mut st = StorageVec::sized(size);
+        unsafe {
+            ptr::copy_nonoverlapping(self.as_ptr(), st.as_ptr(), len);
+            st.set_len(len);
+        }
+        *self = st;
+    }
+
     fn reserve_inner(&mut self, additional: usize, exact: bool) {
         unsafe {
             let inner = self.as_inner();
@@ -335,6 +354,7 @@ impl StorageVec {
             } else {
                 grown_capacity(len, new_cap)
             };
+            let size = self.page_size();
 
             if (*inner).is_unique() {
                 let capacity = (*inner).capacity as usize;
@@ -344,7 +364,6 @@ impl StorageVec {
                 if capacity >= new_cap {
                     let offset = (*inner).offset;
                     (*inner).offset = METADATA_SIZE_U32;
-                    (*inner).remaining = (capacity - len) as u32;
 
                     // The capacity is sufficient, reclaim the buffer
                     if len != 0 {
@@ -355,8 +374,9 @@ impl StorageVec {
                 }
 
                 // Grow the allocation instead of copying into a new one, the
-                // allocator can often extend it in place.
-                if (*inner).size == BytePageSize::Unset {
+                // allocator can often extend it in place. An exact reservation
+                // grows a pooled page too, it is not rounded up to a page.
+                if exact || size == BytePageSize::Unset {
                     self.realloc(len, capacity, grow_cap);
                     return;
                 }
@@ -364,10 +384,10 @@ impl StorageVec {
 
             // A pooled page grows into a page of the category that fits the
             // new capacity, at least its own category. The old page goes back
-            // to the page cache on release. Above the largest category, and
-            // for buffers without a page size, a new buffer is allocated.
-            let size = (*inner).size;
-            if size != BytePageSize::Unset {
+            // to the page cache on release. Above the largest category, for
+            // buffers without a page size and for exact reservations, a new
+            // buffer of the exact capacity is allocated.
+            if !exact && size != BytePageSize::Unset {
                 let new_size = BytePageSize::for_capacity(grow_cap);
                 if new_size != BytePageSize::Unset {
                     let new_size = if (new_size as usize) < (size as usize) {
@@ -375,29 +395,26 @@ impl StorageVec {
                     } else {
                         new_size
                     };
-                    let mut st = StorageVec::sized(new_size);
-                    let dst = st.as_ptr();
-                    ptr::copy_nonoverlapping(self.as_ptr(), dst, len);
-                    st.set_len(len);
-                    *self = st;
+                    self.move_to_page(new_size);
                     return;
                 }
             }
 
-            *self = StorageVec(SharedVec::create(
-                BytePageSize::Unset,
-                grow_cap,
-                self.as_ref(),
-            ));
+            *self = StorageVec(SharedVec::create(grow_cap, self.as_ref()));
         }
     }
 
     /// Returns the page category of the buffer.
+    ///
+    /// It is derived from the allocation size, any allocation of a page
+    /// size belongs to the page category.
     pub(crate) fn page_size(&self) -> BytePageSize {
-        unsafe { (*self.0.as_ptr()).size }
+        unsafe {
+            BytePageSize::from_alloc_size(SharedVec::capacity(self.0.as_ptr()) + METADATA_SIZE)
+        }
     }
 
-    /// Grows the unique, unpooled allocation to hold `new_cap` bytes.
+    /// Grows the unique allocation to hold `new_cap` bytes.
     ///
     /// # Safety
     ///
@@ -424,7 +441,6 @@ impl StorageVec {
                     ptr::copy(data.add(offset), data.add(METADATA_SIZE), len);
                 }
                 (*ptr).offset = METADATA_SIZE_U32;
-                (*ptr).remaining = (capacity - len) as u32;
             }
 
             let new_ptr = alloc::realloc(ptr.cast(), old_layout, new_layout.size());
@@ -434,9 +450,7 @@ impl StorageVec {
 
             #[allow(clippy::cast_ptr_alignment)]
             let inner = new_ptr.cast::<SharedVec>();
-            let capacity = (new_layout.size() - METADATA_SIZE) as u32;
-            (*inner).capacity = capacity;
-            (*inner).remaining = capacity - len as u32;
+            (*inner).capacity = (new_layout.size() - METADATA_SIZE) as u32;
             self.0 = NonNull::new_unchecked(inner);
         }
     }
@@ -444,11 +458,8 @@ impl StorageVec {
     #[inline]
     pub(crate) unsafe fn set_len(&mut self, len: usize) {
         let capacity = self.capacity();
-        let inner = self.as_inner();
         assert!(len <= capacity);
-
-        (*inner).len = len as u32;
-        (*inner).remaining = (capacity - len) as u32;
+        (*self.as_inner()).len = len as u32;
     }
 
     /// Moves the start of the view forward by `start` bytes.
@@ -539,13 +550,13 @@ impl Default for Cache {
 }
 
 impl SharedVec {
-    pub(crate) fn create(size: BytePageSize, cap: usize, src: &[u8]) -> NonNull<SharedVec> {
+    pub(crate) fn create(cap: usize, src: &[u8]) -> NonNull<SharedVec> {
         assert!(
             cap >= src.len(),
             "SharedVec capacity {cap} is smaller than data length {}",
             src.len()
         );
-        let ptr = Self::alloc_with_capacity(size, cap, src.len() as u32);
+        let ptr = Self::alloc_with_capacity(cap, src.len() as u32);
 
         // copy slice
         unsafe {
@@ -557,7 +568,7 @@ impl SharedVec {
         }
     }
 
-    fn alloc_with_capacity(size: BytePageSize, cap: usize, len: u32) -> *mut u8 {
+    fn alloc_with_capacity(cap: usize, len: u32) -> *mut u8 {
         assert!(
             cap <= MAX_CAPACITY,
             "buffer capacity {cap} exceeds maximum {MAX_CAPACITY}"
@@ -583,8 +594,6 @@ impl SharedVec {
                 SharedVec {
                     len,
                     capacity,
-                    size,
-                    remaining: capacity - len,
                     offset: METADATA_SIZE_U32,
                     ref_count: AtomicU32::new(1),
                 },
@@ -637,8 +646,8 @@ pub(crate) fn release_shared_vec(ptr: *mut SharedVec) {
 
         let capacity = (*ptr).capacity;
 
-        // Try to put to cache
-        let size = (*ptr).size;
+        // Try to put to cache, any allocation of a page size is a page
+        let size = BytePageSize::from_alloc_size(capacity as usize + METADATA_SIZE);
         if size != BytePageSize::Unset {
             // the cache is unavailable while the thread-local is being destroyed,
             // the page is freed instead
@@ -649,9 +658,7 @@ pub(crate) fn release_shared_vec(ptr: *mut SharedVec) {
                 let res = if cst.cache[size as usize].len() < cst.limits[size as usize] {
                     (*ptr).len = 0;
                     (*ptr).offset = METADATA_SIZE_U32;
-                    (*ptr).remaining = capacity;
                     (*ptr).ref_count = AtomicU32::new(1);
-                    (*ptr).size = BytePageSize::Unset;
                     cst.cache[size as usize].push(StorageVec(NonNull::new_unchecked(ptr)));
                     true
                 } else {
@@ -709,7 +716,7 @@ mod tests {
         super::CACHE.with(|cache| cache.set(Some(Box::default())));
 
         let mut st = StorageVec::sized(BytePageSize::Size8);
-        assert_eq!(unsafe { (*st.0.as_ptr()).size }, BytePageSize::Size8);
+        assert_eq!(st.page_size(), BytePageSize::Size8);
 
         st.put_u8(b'h');
         let addr = st.0;
@@ -849,7 +856,7 @@ mod tests {
         let data = pattern(100);
         let mut st = StorageVec::sized(BytePageSize::Size4);
         assert_eq!(st.put_slice_partial(&data), data.len());
-        st.reserve_exact(40 * 1024);
+        st.reserve(40 * 1024);
         assert_eq!(st.page_size(), BytePageSize::Size48);
         assert_eq!(st.as_ref(), &data[..]);
 
@@ -893,7 +900,7 @@ mod tests {
         let data = pattern(1000);
         let mut st = StorageVec::sized(BytePageSize::Size256);
         assert_eq!(st.put_slice_partial(&data), data.len());
-        st.reserve_exact(BytePageSize::Size256.capacity());
+        st.reserve(BytePageSize::Size256.capacity());
         assert_eq!(st.page_size(), BytePageSize::Unset);
         assert_eq!(st.capacity(), 1000 + BytePageSize::Size256.capacity());
         assert_eq!(st.as_ref(), &data[..]);
@@ -907,6 +914,40 @@ mod tests {
                 usize::from(size == BytePageSize::Size256)
             );
         }
+    }
+
+    #[test]
+    fn reserve_exact_pooled_page() {
+        super::CACHE.with(|cache| cache.set(Some(Box::default())));
+
+        // a unique page is reallocated to the exact capacity
+        let data = pattern(100);
+        let mut st = StorageVec::sized(BytePageSize::Size4);
+        assert_eq!(st.put_slice_partial(&data), data.len());
+        st.reserve_exact(5000);
+        assert_eq!(st.capacity(), 5100);
+        assert_eq!(st.page_size(), BytePageSize::Unset);
+        assert_eq!(st.as_ref(), &data[..]);
+        assert_eq!(cached_pages(BytePageSize::Size4), 0);
+
+        // a shared page is copied into an exact allocation
+        let mut st = StorageVec::sized(BytePageSize::Size4);
+        assert_eq!(st.put_slice_partial(&data), data.len());
+        let view = st.shallow_freeze();
+        st.reserve_exact(5000);
+        assert_eq!(st.capacity(), 5100);
+        assert_eq!(st.page_size(), BytePageSize::Unset);
+        assert_eq!(st.as_ref(), &data[..]);
+        assert_eq!(view.as_ref(), &data[..]);
+        drop(view);
+        assert_eq!(cached_pages(BytePageSize::Size4), 1);
+
+        // an exact page capacity is a page
+        let mut st = StorageVec::sized(BytePageSize::Size4);
+        assert_eq!(st.put_slice_partial(&data), data.len());
+        st.reserve_exact(BytePageSize::Size8.capacity() - 100);
+        assert_eq!(st.page_size(), BytePageSize::Size8);
+        assert_eq!(st.as_ref(), &data[..]);
     }
 
     #[test]
@@ -926,11 +967,66 @@ mod tests {
         assert_eq!(st.page_size(), BytePageSize::Unset);
         drop(view);
 
-        // a buffer with a page capacity is not cached
+        // an allocation of a page size is a page, whichever way it was created
         let st = StorageVec::with_capacity(BytePageSize::Size4.capacity());
         assert_eq!(st.capacity(), BytePageSize::Size4.capacity());
+        assert_eq!(st.page_size(), BytePageSize::Size4);
         drop(st);
-        assert_eq!(cached_pages(BytePageSize::Size4), 0);
+        assert_eq!(cached_pages(BytePageSize::Size4), 1);
+        let st = StorageVec::from_slice(BytePageSize::Size8.capacity(), b"hello");
+        assert_eq!(st.page_size(), BytePageSize::Size8);
+        drop(st);
+        assert_eq!(cached_pages(BytePageSize::Size8), 1);
+
+        // the cached page is reset
+        let mut st = StorageVec::sized(BytePageSize::Size8);
+        assert_eq!(st.len(), 0);
+        assert_eq!(st.remaining(), BytePageSize::Size8.capacity());
+        assert_eq!(st.put_slice_partial(b"world"), 5);
+        assert_eq!(st.as_ref(), b"world");
+    }
+
+    #[test]
+    fn remaining_is_derived() {
+        let mut st = StorageVec::with_capacity(100);
+        let cap = st.capacity();
+        assert_eq!(st.remaining(), cap);
+        assert!(!st.is_full());
+
+        st.put_u8(1);
+        assert_eq!(st.put_slice_partial(&pattern(50)), 50);
+        assert_eq!(st.remaining(), cap - 51);
+
+        // advancing the start keeps the spare capacity
+        unsafe { st.set_start(10) };
+        assert_eq!(st.len(), 41);
+        assert_eq!(st.capacity(), cap - 10);
+        assert_eq!(st.remaining(), cap - 51);
+
+        st.truncate(20);
+        assert_eq!(st.remaining(), cap - 30);
+
+        // reclaiming a unique buffer resets the view
+        st.truncate(0);
+        assert_eq!(st.capacity(), cap);
+        assert_eq!(st.remaining(), cap);
+
+        assert_eq!(st.put_slice_partial(&pattern(cap + 10)), cap);
+        assert_eq!(st.remaining(), 0);
+        assert!(st.is_full());
+
+        // a unique frozen view becomes the `BytesMut` view
+        let mut b = BytesMut::with_capacity(300);
+        b.extend_from_slice(&pattern(200));
+        let cap = b.capacity();
+        b.advance(50);
+        let ptr = b.as_ptr();
+        let mut b = BytesMut::from(b.freeze());
+        assert_eq!(b.as_ptr(), ptr);
+        assert_eq!(b.len(), 150);
+        assert_eq!(BufMut::remaining_mut(&b), cap - 200);
+        b.extend_from_slice(&pattern(cap - 200));
+        assert_eq!(BufMut::remaining_mut(&b), 0);
     }
 
     fn cached_pages(size: BytePageSize) -> usize {
@@ -1035,10 +1131,16 @@ mod tests {
         assert_eq!(buf.capacity(), BytePageSize::Size8.capacity());
         assert_eq!(cached_pages(BytePageSize::Size8), 0);
 
-        // buffers without a page size are not cached
+        // `Unset` creates a `Size64` page
         let buf = BytesMut::with_page_size(BytePageSize::Unset);
+        assert_eq!(buf.page_size(), BytePageSize::Size64);
+        assert_eq!(buf.capacity(), BytePageSize::Size64.capacity());
+        drop(buf);
+        assert_eq!(cached_pages(BytePageSize::Size64), 1);
+
+        // buffers without a page size are not cached
+        let buf = BytesMut::with_capacity(BytePageSize::Size64.capacity() + 1);
         assert_eq!(buf.page_size(), BytePageSize::Unset);
-        assert_eq!(buf.capacity(), BytePageSize::Unset.capacity());
         assert_eq!(BytesMut::new().page_size(), BytePageSize::Unset);
         assert_eq!(BytesMut::with_capacity(64).page_size(), BytePageSize::Unset);
         assert_eq!(
@@ -1047,7 +1149,8 @@ mod tests {
         );
         drop(buf);
         for size in crate::PAGE_SIZES {
-            assert_eq!(cached_pages(size), 0);
+            let expected = usize::from(size == BytePageSize::Size64);
+            assert_eq!(cached_pages(size), expected);
         }
     }
 

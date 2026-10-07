@@ -188,7 +188,7 @@ The main operations:
 | [`BytesMut::is_unique`]        | `true` if no `Bytes` shares the allocation                  |
 | `BytesMut::from(Bytes)`        | Reuses a unique shared heap allocation; copies inline, static, external or still-shared data |
 
-[`BytesMut::new`] currently starts with 104 bytes of data capacity (a
+[`BytesMut::new`] currently starts with 112 bytes of data capacity (a
 128-byte allocation including its header),
 [`BytesMut::with_capacity`] allocates exactly the requested capacity, and
 [`BytesMut::with_page_size`] takes a pooled page, see
@@ -371,21 +371,21 @@ and length in one byte, which is where the 23-byte inline capacity comes
 from.
 
 `BytesMut` is a single pointer to its heap buffer. Its view, the start and
-length of its data and its spare capacity, is stored in the buffer header,
-so `BytesMut` is one word in size.
+length of its data, is stored in the buffer header, so `BytesMut` is one
+word in size.
 
 ### Heap buffers
 
-Each native shared heap buffer is one allocation: a 24-byte header followed
+Each native shared heap buffer is one allocation: a 16-byte header followed
 by the data. External storage and `Vec`-backed pages have their own layouts.
 
 ```text
-                    header (24 bytes)                                      data
-+--------+-----+----------+-----------+-----------+------+---------+---------+------------+-------+
-| offset | len | capacity | remaining | ref_count | size | Bytes 1 | Bytes 2 |  BytesMut  | spare |
-+--------+-----+----------+-----------+-----------+------+---------+---------+------------+-------+
-^                                                        ^                   ^            ^
-allocation                                               data start          offset       offset + len
+          header (16 bytes)                       data
++--------+-----+----------+-----------+---------+---------+------------+-------+
+| offset | len | capacity | ref_count | Bytes 1 | Bytes 2 |  BytesMut  | spare |
++--------+-----+----------+-----------+---------+---------+------------+-------+
+^                                     ^                   ^            ^
+allocation                            data start          offset       offset + len
 ```
 
 | Field       | Meaning                                                                 |
@@ -393,12 +393,15 @@ allocation                                               data start          off
 | `offset`    | Start of the `BytesMut` view, from the beginning of the allocation      |
 | `len`       | Length of the `BytesMut` view                                           |
 | `capacity`  | Data capacity of the whole allocation, never changes while it is shared |
-| `remaining` | Spare capacity after the `BytesMut` view                                |
 | `ref_count` | Number of handles: the `BytesMut` plus every `Bytes` view               |
-| `size`      | The [`BytePageSize`] class of the allocation, or `Unset`                |
+
+Everything else is derived from these fields. The spare capacity after the
+`BytesMut` view is `16 + capacity - offset - len`, and the
+[`BytePageSize`] class follows from the allocation size `16 + capacity`,
+see [Pooled buffers](#pooled-buffers).
 
 Lengths, capacities and offsets use `u32`; the reference count is an
-`AtomicU32`. A native heap buffer holds at most `u32::MAX - 24` bytes of data,
+`AtomicU32`. A native heap buffer holds at most `u32::MAX - 16` bytes of data,
 just under 4 GiB. Requests for larger capacities panic.
 
 Each `Bytes` view stores its own pointer and length, and computes the header
@@ -422,11 +425,12 @@ synchronization.
 
 ### Regular buffers
 
-[`BytesMut::with_capacity`] makes one allocation of `24 + capacity` bytes,
+[`BytesMut::with_capacity`] makes one allocation of `16 + capacity` bytes,
 and [`BytesMut::capacity`] is exactly the requested capacity. Buffers
-created this way, by `copy_from_slice`, by conversions such as
-`Bytes::from(Vec<u8>)`, and by [`BytesMut::reserve_capacity`] have no page
-size. They are freed when their last handle is dropped.
+created this way, by `copy_from_slice`, and by conversions such as
+`Bytes::from(Vec<u8>)` have no page
+size, unless the requested capacity is exactly a page capacity. They are
+freed when their last handle is dropped.
 
 In particular, `Bytes::from(Vec<u8>)` copies the data into the crate's storage
 (or inline for small values); it does not adopt the vector allocation.
@@ -461,8 +465,8 @@ The three reservation methods serve different purposes:
 | Method | Use it when |
 |--------|-------------|
 | [`BytesMut::reserve`] | You want room for more bytes and expect the buffer to keep growing. |
-| [`BytesMut::reserve_exact`] | You know how many more bytes you need and want to avoid the doubling policy. Pooled buffers still round up to a page class. |
-| [`BytesMut::reserve_capacity`] | You explicitly want a fresh, unpooled allocation of a given total capacity. It copies when `cap > len`, even if space is already available, and does nothing otherwise. |
+| [`BytesMut::reserve_exact`] | You know how many more bytes you need and want to avoid the doubling policy. The allocation is exactly the new capacity plus the 16-byte header; pooled buffers are not rounded up to a page class and keep one only if the new capacity is a page capacity. |
+| [`BytesMut::reserve_more`] | You don't know how much more is coming, for example the next read. If less than half of the page size remains (`BytePageSize::half_capacity`, 16 KiB without a page size), a pooled buffer moves to the next page class and any other buffer grows by its capacity, by at least 112 bytes and at most 64 KiB. |
 
 Neither `reserve` nor `reserve_exact` is a general-purpose shrinking
 operation: if there is already enough spare capacity, it leaves the buffer
@@ -475,25 +479,25 @@ allocation requests exactly the class size, including the header, rather
 than a class-sized payload plus extra metadata. This avoids overshooting
 those useful size boundaries, though an allocator's actual size classes
 are its own implementation detail. Data capacity is the class size minus
-the 24-byte header. These are allocation categories, not operating-system
+the 16-byte header. These are allocation categories, not operating-system
 virtual-memory pages.
 
 | Class     | Allocation | Capacity      | `half_capacity()` | Cached pages by default |
 |-----------|------------|---------------|-------------------|-------------------------|
-| `Size4`   | 4 KiB      | 4,072 bytes   | 2 KiB             | 64                      |
-| `Size8`   | 8 KiB      | 8,168 bytes   | 4 KiB             | 32                      |
-| `Size16`  | 16 KiB     | 16,360 bytes  | 8 KiB             | 64                      |
-| `Size24`  | 24 KiB     | 24,552 bytes  | 12 KiB            | 16                      |
-| `Size32`  | 32 KiB     | 32,744 bytes  | 16 KiB            | 16                      |
-| `Size48`  | 48 KiB     | 49,128 bytes  | 16 KiB            | 8                       |
-| `Size64`  | 64 KiB     | 65,512 bytes  | 16 KiB            | 8                       |
-| `Size128` | 128 KiB    | 131,048 bytes | 16 KiB            | 2                       |
-| `Size256` | 256 KiB    | 262,120 bytes | 16 KiB            | 1                       |
-| `Unset`   | -          | 65,512 bytes  | 16 KiB            | never cached            |
+| `Size4`   | 4 KiB      | 4,080 bytes   | 2 KiB             | 64                      |
+| `Size8`   | 8 KiB      | 8,176 bytes   | 4 KiB             | 32                      |
+| `Size16`  | 16 KiB     | 16,368 bytes  | 8 KiB             | 64                      |
+| `Size24`  | 24 KiB     | 24,560 bytes  | 12 KiB            | 16                      |
+| `Size32`  | 32 KiB     | 32,752 bytes  | 16 KiB            | 16                      |
+| `Size48`  | 48 KiB     | 49,136 bytes  | 16 KiB            | 8                       |
+| `Size64`  | 64 KiB     | 65,520 bytes  | 16 KiB            | 8                       |
+| `Size128` | 128 KiB    | 131,056 bytes | 16 KiB            | 2                       |
+| `Size256` | 256 KiB    | 262,128 bytes | 16 KiB            | 1                       |
+| `Unset`   | -          | 65,520 bytes  | 16 KiB            | never cached            |
 
 `Size16` is the default class. [`BytePageSize::for_capacity`] returns the
 smallest class that holds a given capacity, or `Unset` above the largest
-data capacity (262,120 bytes).
+data capacity (262,128 bytes).
 [`BytePageSize::next`] and [`BytePageSize::prev`] step between classes.
 `half_capacity()` is the recommended write-buffer threshold for a page size.
 The enum is `#[non_exhaustive]`, so more classes may be added.
@@ -511,7 +515,15 @@ assert_eq!(BytePageSize::Size256.next(), BytePageSize::Unset);
 
 [`BytesMut::with_page_size`] takes a page of the given class from the
 current thread's page cache, or allocates a new one if the cache is empty.
-[`BytesMut::page_size`] reports the class of a buffer.
+`with_page_size(BytePageSize::Unset)` takes a `Size64` page, the two have
+the same allocation size. [`BytesMut::page_size`] reports the class of a
+buffer.
+
+The header does not store the class. A buffer belongs to a class when its
+allocation, header included, is exactly the class size, so the class is
+looked up from the `capacity` field. Any buffer of a page size is pooled,
+including one created by `with_capacity` or `copy_from_slice` with exactly
+a page capacity, or grown into one by `realloc`.
 
 When the last handle to a page is dropped, whether it is the `BytesMut` or
 a `Bytes` view split off it, the page returns to the cache of its class on
@@ -529,7 +541,7 @@ on it grows like any regular buffer and is freed when its last handle drops.
 use ntex_bytes::{BytePageSize, BytesMut};
 
 let mut buf = BytesMut::with_page_size(BytePageSize::Size4);
-assert_eq!(buf.capacity(), 4096 - 24);
+assert_eq!(buf.capacity(), 4096 - 16);
 
 buf.extend_from_slice(&[0; 5000]);
 assert_eq!(buf.page_size(), BytePageSize::Size8);
@@ -683,8 +695,8 @@ read-buffer cache and the byte-page cache are separate mechanisms:
 - **Reads.** The transport reads into a `BytesMut` read buffer. Codecs split
   frames off it with `split_to`, so large decoded messages share the read
   buffer while tiny ones are copied inline. Read buffers are sized by the
-  `read_buf` watermarks of [`IoConfig`]: 16,360 bytes high (the `Size16`
-  capacity) and 536 bytes low by default. Empty read buffers are reused
+  `read_buf` watermarks of [`IoConfig`]: 16,368 bytes high (the `Size16`
+  capacity) and 528 bytes low by default. Empty read buffers are reused
   through a separate per-thread cache, limited to 1 MiB by default.
 - **Writes.** Encoders write into `BytePages` with the page size of
   [`IoConfig::write_page_size`], `Size16` by default. `IoRef::encode_bytes`
@@ -774,8 +786,8 @@ when deciding whether to share, copy or cache.
 [`BytesMut::new`]: https://docs.rs/ntex-bytes/latest/ntex_bytes/struct.BytesMut.html#method.new
 [`BytesMut::page_size`]: https://docs.rs/ntex-bytes/latest/ntex_bytes/struct.BytesMut.html#method.page_size
 [`BytesMut::reserve`]: https://docs.rs/ntex-bytes/latest/ntex_bytes/struct.BytesMut.html#method.reserve
-[`BytesMut::reserve_capacity`]: https://docs.rs/ntex-bytes/latest/ntex_bytes/struct.BytesMut.html#method.reserve_capacity
 [`BytesMut::reserve_exact`]: https://docs.rs/ntex-bytes/latest/ntex_bytes/struct.BytesMut.html#method.reserve_exact
+[`BytesMut::reserve_more`]: https://docs.rs/ntex-bytes/latest/ntex_bytes/struct.BytesMut.html#method.reserve_more
 [`BytesMut::split_to`]: https://docs.rs/ntex-bytes/latest/ntex_bytes/struct.BytesMut.html#method.split_to
 [`BytesMut::split_to_checked`]: https://docs.rs/ntex-bytes/latest/ntex_bytes/struct.BytesMut.html#method.split_to_checked
 [`BytesMut::take`]: https://docs.rs/ntex-bytes/latest/ntex_bytes/struct.BytesMut.html#method.take

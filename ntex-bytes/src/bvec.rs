@@ -92,9 +92,8 @@ impl BytesMut {
     /// size the buffer is a regular allocation without a page size, it is
     /// freed when dropped.
     ///
-    /// [`BytePageSize::Unset`] creates a regular buffer of
-    /// [`BytePageSize::Unset.capacity()`](BytePageSize::capacity), it is not
-    /// cached.
+    /// [`BytePageSize::Unset`] has the allocation size of
+    /// [`BytePageSize::Size64`], it creates a `Size64` page.
     ///
     /// # Examples
     ///
@@ -111,21 +110,26 @@ impl BytesMut {
     #[inline]
     #[must_use]
     pub fn with_page_size(size: BytePageSize) -> BytesMut {
-        let storage = if size == BytePageSize::Unset {
-            StorageVec::with_capacity(size.capacity())
+        let size = if size == BytePageSize::Unset {
+            BytePageSize::Size64
         } else {
-            StorageVec::sized(size)
+            size
         };
-        BytesMut { storage }
+        BytesMut {
+            storage: StorageVec::sized(size),
+        }
     }
 
     /// Returns the page size of the buffer.
     ///
-    /// Buffers created by [`with_page_size`](Self::with_page_size) or
-    /// converted from a pooled [`BytePage`](crate::BytePage) have a page
-    /// size, they return to the page cache when the last reference is
-    /// dropped. Other buffers return [`BytePageSize::Unset`], they are
-    /// freed when dropped.
+    /// The page size is derived from the allocation size, a buffer whose
+    /// allocation, header included, is exactly a page size belongs to that
+    /// page size. This covers buffers created by
+    /// [`with_page_size`](Self::with_page_size), converted from a pooled
+    /// [`BytePage`](crate::BytePage), or created with a page
+    /// [`capacity`](BytePageSize::capacity). They return to the page cache
+    /// when the last reference is dropped. Other buffers return
+    /// [`BytePageSize::Unset`], they are freed when dropped.
     #[inline]
     pub fn page_size(&self) -> BytePageSize {
         self.storage.page_size()
@@ -506,8 +510,8 @@ impl BytesMut {
     /// Otherwise a unique buffer that is not a pooled page is reallocated,
     /// often in place, and a new buffer is allocated in all other cases. The
     /// new capacity is at least twice the current length, so appending in
-    /// small steps reallocates a logarithmic number of times. Use [`reserve_capacity`](Self::reserve_capacity) to
-    /// allocate an exact capacity.
+    /// small steps reallocates a logarithmic number of times. Use
+    /// [`reserve_exact`](Self::reserve_exact) to avoid the doubling.
     ///
     /// A buffer with a [`page_size`](Self::page_size) moves to a page of the
     /// smallest size that fits the new capacity, but not smaller than its
@@ -560,15 +564,16 @@ impl BytesMut {
     /// into the given `BytesMut`.
     ///
     /// Behaves like [`reserve`](Self::reserve), it reclaims the existing buffer
-    /// when possible and reallocates a unique buffer that is not a pooled page,
-    /// but a new allocation is sized to hold exactly `additional` more bytes
-    /// instead of growing to at least twice the current length. Unlike
-    /// [`reserve_capacity`](Self::reserve_capacity), the contents are not moved
-    /// when the buffer already has enough remaining capacity.
+    /// when possible and reallocates a unique buffer, but a new allocation is
+    /// sized to hold exactly `additional` more bytes instead of growing to at
+    /// least twice the current length. The allocation size is the new capacity
+    /// plus the buffer header, [`METADATA_SIZE`](crate::METADATA_SIZE) bytes.
+    /// The contents are not moved when the buffer already has enough remaining
+    /// capacity.
     ///
-    /// A buffer with a [`page_size`](Self::page_size) moves to a page of the
-    /// smallest size that fits the new capacity, so its capacity is rounded up
-    /// to the page capacity.
+    /// The capacity is not rounded up to a page size, a buffer with a
+    /// [`page_size`](Self::page_size) loses it unless the new capacity is a page
+    /// capacity.
     ///
     /// # Panics
     ///
@@ -594,43 +599,58 @@ impl BytesMut {
         self.storage.reserve_exact(additional);
     }
 
-    /// Moves the contents into a newly allocated buffer with capacity `cap`.
+    /// Grows the buffer by one step if its remaining capacity is less than
+    /// half of its page size.
     ///
-    /// If `cap` is greater than [`len`](Self::len), a new buffer is allocated,
-    /// the current contents are copied into it, and afterwards
-    /// [`capacity`](Self::capacity) is at least `cap`. The new buffer is not
-    /// shared with any [`Bytes`] previously split off this `BytesMut`.
+    /// Nothing happens when the remaining capacity is at least
+    /// [`BytePageSize::half_capacity`](crate::BytePageSize::half_capacity) of
+    /// the buffer's [`page_size`](Self::page_size), 16 KiB for a buffer
+    /// without a page size. Otherwise a buffer with a page size moves to a
+    /// page of the next larger page size, the old page returns to the page
+    /// cache. A buffer without a page size, or with the largest page size,
+    /// grows its capacity by its current capacity, by at least 112 bytes and
+    /// by at most 64 KiB.
     ///
-    /// If `cap` is less than or equal to `len`, this method does nothing: the
-    /// contents are neither reallocated nor truncated.
-    ///
-    /// Unlike [`reserve`](Self::reserve), this always allocates when
-    /// `cap > len`, even if the current buffer is already large enough.
+    /// The new capacity is reserved like [`reserve_exact`](Self::reserve_exact)
+    /// does, except that a page is taken from the page cache: a unique buffer
+    /// is reclaimed when its allocation is large enough or reallocated, often
+    /// in place, otherwise the data is copied into a new buffer.
     ///
     /// # Panics
     ///
-    /// Panics if `cap` exceeds `u32::MAX` minus the buffer
+    /// Panics if the new capacity exceeds `u32::MAX` minus the buffer
     /// header size, just under 4 GiB.
     ///
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BytesMut;
+    /// use ntex_bytes::{BytePageSize, BytesMut};
     ///
-    /// let mut buf = BytesMut::copy_from_slice(&b"hello"[..]);
-    /// buf.reserve_capacity(128);
-    /// assert!(buf.capacity() >= 128);
-    /// assert_eq!(&buf[..], b"hello");
+    /// let mut buf = BytesMut::with_page_size(BytePageSize::Size4);
+    /// buf.extend_from_slice(b"hello");
     ///
-    /// // `cap <= len` keeps the current buffer
-    /// let ptr = buf.as_ptr();
-    /// buf.reserve_capacity(2);
-    /// assert_eq!(buf.as_ptr(), ptr);
-    /// assert_eq!(&buf[..], b"hello");
+    /// // at least half of the page is remaining, the buffer is kept
+    /// buf.reserve_more();
+    /// assert_eq!(buf.page_size(), BytePageSize::Size4);
+    ///
+    /// buf.extend_from_slice(&[0; 3000]);
+    /// buf.reserve_more();
+    /// assert_eq!(buf.page_size(), BytePageSize::Size8);
+    /// assert_eq!(buf.capacity(), BytePageSize::Size8.capacity());
+    /// assert_eq!(&buf[..5], b"hello");
+    ///
+    /// let mut buf = BytesMut::with_capacity(1000);
+    /// buf.reserve_more();
+    /// assert_eq!(buf.capacity(), 2000);
+    ///
+    /// let mut buf = BytesMut::with_capacity(1024 * 1024);
+    /// buf.extend_from_slice(&vec![0; 1024 * 1024]);
+    /// buf.reserve_more();
+    /// assert_eq!(buf.capacity(), 1024 * 1024 + 64 * 1024);
     /// ```
     #[inline]
-    pub fn reserve_capacity(&mut self, cap: usize) {
-        self.storage.reserve_capacity(cap);
+    pub fn reserve_more(&mut self) {
+        self.storage.reserve_more();
     }
 
     /// Appends a byte slice to the buffer.
