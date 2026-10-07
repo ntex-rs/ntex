@@ -12,6 +12,22 @@ use ntex::http::{body, h1, h1::Control, test, test::server as test_server};
 use ntex::time::{Millis, Seconds, sleep};
 use ntex::{SharedCfg, channel::oneshot, fn_service, rt, util::Bytes, web::error};
 
+/// Upper limit for blocking socket reads, a correct server answers much sooner.
+const TEN_SECONDS: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Waits until `check` returns `true`, checking it every 10 milliseconds.
+///
+/// Returns an error if it does not happen within five seconds.
+async fn wait_for(check: impl Fn() -> bool) -> Result<(), &'static str> {
+    for _ in 0..500 {
+        if check() {
+            return Ok(());
+        }
+        sleep(Millis(10)).await;
+    }
+    Err("the expected condition is not met in time")
+}
+
 #[ntex::test]
 async fn test_h1() {
     let srv = test::server_with_config(
@@ -173,20 +189,41 @@ async fn test_slow_request() {
         )),
     );
 
+    // reading the head above the rate extends the timeout, the cumulative
+    // budget caps it, the head is never completed
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-    let _ = stream.write_all(DATA);
-    let mut data = String::new();
-    let _ = stream.read_to_string(&mut data);
-    assert!(data.starts_with("HTTP/1.1 408 Request Timeout"));
-
-    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    stream.set_read_timeout(Some(TEN_SECONDS)).unwrap();
     let _ = stream.write_all(&DATA[..5]);
-    sleep(Millis(1100)).await;
-    let _ = stream.write_all(&DATA[5..20]);
+
+    let done = Arc::new(AtomicBool::new(false));
+    let writer = {
+        let mut stream = stream.try_clone().unwrap();
+        let done = done.clone();
+        // five bytes every 300 milliseconds is above the four bytes per
+        // second rate, it keeps extending the timeout
+        std::thread::spawn(move || {
+            while !done.load(Ordering::Acquire) {
+                if stream.write_all(b"aaaaa").is_err() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(300));
+            }
+        })
+    };
 
     let mut data = String::new();
     let _ = stream.read_to_string(&mut data);
-    assert!(data.starts_with("HTTP/1.1 408 Request Timeout"));
+    done.store(true, Ordering::Release);
+    writer.join().unwrap();
+    assert!(data.starts_with("HTTP/1.1 408 Request Timeout"), "{data:?}");
+
+    // a stalled head is not extended, the read rate is not reached
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    stream.set_read_timeout(Some(TEN_SECONDS)).unwrap();
+    let _ = stream.write_all(&DATA[..4]);
+    let mut data = String::new();
+    let _ = stream.read_to_string(&mut data);
+    assert!(data.starts_with("HTTP/1.1 408 Request Timeout"), "{data:?}");
 }
 
 #[ntex::test]
@@ -195,14 +232,16 @@ async fn test_slow_request2() {
 
     let srv = test::server_with_config(
         async |_| HttpService::new(async |_| Ok::<_, io::Error>(Response::Ok().build())),
+        // a single read rate period, extending it is covered by `test_slow_request`
         SharedCfg::new("SRV").add(HttpServiceConfig::new().set_headers_read_rate(
             Seconds(1),
-            Seconds(2),
+            Seconds(1),
             4,
         )),
     );
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    stream.set_read_timeout(Some(TEN_SECONDS)).unwrap();
     let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\n\r\n");
     let mut data = vec![0; 1024];
     let _ = stream.read(&mut data);
@@ -210,7 +249,7 @@ async fn test_slow_request2() {
     let _ = stream.write_all(DATA);
     let mut data = String::new();
     let _ = stream.read_to_string(&mut data);
-    assert!(data.starts_with("HTTP/1.1 408 Request Timeout"));
+    assert!(data.starts_with("HTTP/1.1 408 Request Timeout"), "{data:?}");
 }
 
 #[ntex::test]
@@ -339,8 +378,9 @@ async fn test_http1_keepalive_timeout() {
     let mut data = vec![0; 1024];
     let _ = stream.read(&mut data);
     assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
-    sleep(Millis(1100)).await;
 
+    // the connection is closed once the keep-alive timeout expires
+    stream.set_read_timeout(Some(TEN_SECONDS)).unwrap();
     let mut data = vec![0; 1024];
     let res = stream.read(&mut data).unwrap();
     assert_eq!(res, 0);
@@ -351,8 +391,12 @@ async fn test_http1_keepalive_timeout() {
 async fn test_http1_no_keepalive_during_response() {
     let srv = test::server_with_config(
         async |_| {
-            HttpService::h1(async |_| {
-                sleep(Millis(1200)).await;
+            HttpService::h1(async |req: Request| {
+                // the second request is processed while the keep-alive timer
+                // of the previous wait is left armed
+                if req.uri().path() == "/slow" {
+                    sleep(Millis(1200)).await;
+                }
                 Ok::<_, io::Error>(Response::Ok().build())
             })
         },
@@ -360,10 +404,9 @@ async fn test_http1_no_keepalive_during_response() {
     );
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-    // the second request runs while the keep-alive timer of the first wait
-    // is left armed
-    for _ in 0..2 {
-        let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\n\r\n");
+    for path in ["/fast", "/slow"] {
+        let _ =
+            stream.write_all(format!("GET {path} HTTP/1.1\r\nhost: localhost\r\n\r\n").as_bytes());
         let mut data = vec![0; 1024];
         let _ = stream.read(&mut data);
         assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
@@ -399,8 +442,9 @@ async fn test_http1_keepalive_after_response() {
     let mut data = vec![0; 1024];
     let _ = stream.read(&mut data);
     assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
-    sleep(Millis(1100)).await;
 
+    // the connection is closed once the keep-alive timeout expires
+    stream.set_read_timeout(Some(TEN_SECONDS)).unwrap();
     let mut data = vec![0; 1024];
     let len = stream.read(&mut data).unwrap();
     assert_eq!(len, 0);
@@ -516,9 +560,11 @@ async fn test_http1_disable_payload_timer_after_whole_pl_has_been_read() {
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream
         .write_all(b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\ncontent-length: 4\r\n");
-    sleep(Millis(250)).await;
+    // the head and the payload arrive as separate reads, so payload timing
+    // starts for an incomplete payload
+    sleep(Millis(100)).await;
     let _ = stream.write_all(b"\r\n");
-    sleep(Millis(250)).await;
+    sleep(Millis(100)).await;
     let _ = stream.write_all(b"1234");
     let mut data = vec![0; 1024];
     let _ = stream.read(&mut data);
@@ -557,15 +603,20 @@ async fn test_http1_handle_not_consumed_payload() {
 /// Handle payload errors (keep-alive, disconnects)
 #[ntex::test]
 async fn test_http1_handle_payload_errors() {
+    let started = Arc::new(AtomicUsize::new(0));
+    let started2 = started.clone();
     let count = Arc::new(AtomicUsize::new(0));
     let count2 = count.clone();
 
     let srv = test_server(async move |_| {
+        let started = started2.clone();
         let count = count2.clone();
         HttpService::h1(move |mut req: Request| {
+            let started = started.clone();
             let count = count.clone();
             async move {
                 let mut pl = req.take_payload();
+                started.fetch_add(1, Ordering::Release);
                 let result = pl.recv().await;
                 if result.unwrap().is_err() {
                     count.fetch_add(1, Ordering::Relaxed);
@@ -579,10 +630,14 @@ async fn test_http1_handle_payload_errors() {
     let _ = stream.write_all(
         b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\ncontent-length: 99999\r\n\r\n",
     );
-    sleep(Millis(250)).await;
+    // the request is dropped while the handler waits for the payload
+    wait_for(|| started.load(Ordering::Acquire) == 1)
+        .await
+        .expect("request is not received");
     drop(stream);
-    sleep(Millis(250)).await;
-    assert_eq!(count.load(Ordering::Acquire), 1);
+    wait_for(|| count.load(Ordering::Acquire) == 1)
+        .await
+        .expect("payload error is not reported");
 }
 
 #[ntex::test]
@@ -927,20 +982,27 @@ async fn test_h1_service_error() {
 async fn test_h1_gracefull_shutdown() {
     let count = Arc::new(AtomicUsize::new(0));
     let count2 = count.clone();
+    let release = Arc::new(AtomicBool::new(false));
+    let release2 = release.clone();
     let (tx, rx) = ::oneshot::channel();
     let tx = Arc::new(Mutex::new(Some(tx)));
 
     let srv = test_server(async move |_| {
         let tx = tx.clone();
         let count = count2.clone();
+        let release = release2.clone();
         HttpService::h1(async move |_: Request| {
             let count = count.clone();
+            let release = release.clone();
             count.fetch_add(1, Ordering::Relaxed);
             if count.load(Ordering::Relaxed) == 2 {
                 let _ = tx.lock().unwrap().take().unwrap().send(());
             }
 
-            sleep(Millis(1000)).await;
+            // the request stays in flight until the test releases it
+            while !release.load(Ordering::Acquire) {
+                sleep(Millis(10)).await;
+            }
             count.fetch_sub(1, Ordering::Relaxed);
             Ok::<_, io::Error>(Response::Ok().build())
         })
@@ -955,12 +1017,24 @@ async fn test_h1_gracefull_shutdown() {
     let _ = rx.await;
     assert_eq!(count.load(Ordering::Relaxed), 2);
 
+    let stopped = Arc::new(AtomicBool::new(false));
+    let stopped2 = stopped.clone();
     let (tx, rx) = oneshot::channel();
     rt::spawn(async move {
         srv.stop(true).await;
+        stopped2.store(true, Ordering::Release);
         let _ = tx.send(());
     });
 
+    // shutdown does not complete while the requests are in flight
+    sleep(Millis(300)).await;
+    assert!(
+        !stopped.load(Ordering::Acquire),
+        "shutdown did not wait for in-flight requests"
+    );
+    assert_eq!(count.load(Ordering::Relaxed), 2);
+
+    release.store(true, Ordering::Release);
     let _ = rx.await;
     assert_eq!(count.load(Ordering::Relaxed), 0);
 }
@@ -1023,20 +1097,27 @@ async fn test_h1_control_init_error_does_not_block_shutdown() {
 async fn test_h1_gracefull_shutdown_2() {
     let count = Arc::new(AtomicUsize::new(0));
     let count2 = count.clone();
+    let release = Arc::new(AtomicBool::new(false));
+    let release2 = release.clone();
     let (tx, rx) = ::oneshot::channel();
     let tx = Arc::new(Mutex::new(Some(tx)));
 
     let srv = test_server(async move |_| {
         let tx = tx.clone();
         let count = count2.clone();
+        let release = release2.clone();
         HttpService::new(async move |_: Request| {
             let count = count.clone();
+            let release = release.clone();
             count.fetch_add(1, Ordering::Relaxed);
             if count.load(Ordering::Relaxed) == 2 {
                 let _ = tx.lock().unwrap().take().unwrap().send(());
             }
 
-            sleep(Millis(1000)).await;
+            // the request stays in flight until the test releases it
+            while !release.load(Ordering::Acquire) {
+                sleep(Millis(10)).await;
+            }
             count.fetch_sub(1, Ordering::Relaxed);
             Ok::<_, io::Error>(Response::Ok().build())
         })
@@ -1051,11 +1132,24 @@ async fn test_h1_gracefull_shutdown_2() {
     let _ = rx.await;
     assert_eq!(count.load(Ordering::Acquire), 2);
 
+    let stopped = Arc::new(AtomicBool::new(false));
+    let stopped2 = stopped.clone();
     let (tx, rx) = oneshot::channel();
     rt::spawn(async move {
         srv.stop(true).await;
+        stopped2.store(true, Ordering::Release);
         let _ = tx.send(());
     });
+
+    // shutdown does not complete while the requests are in flight
+    sleep(Millis(300)).await;
+    assert!(
+        !stopped.load(Ordering::Acquire),
+        "shutdown did not wait for in-flight requests"
+    );
+    assert_eq!(count.load(Ordering::Relaxed), 2);
+
+    release.store(true, Ordering::Release);
     let _ = rx.await;
     assert_eq!(count.load(Ordering::Relaxed), 0);
 }
@@ -1103,13 +1197,19 @@ async fn test_h2_request_body_dropped_after_response_resets_stream() {
     assert!(eof);
 
     // no data frame follows, the stream is reset when the body is dropped
-    sleep(Millis(500)).await;
-    assert!(
-        snd.send_payload(Bytes::from_static(b"chunk"), false)
+    let mut reset = false;
+    for _ in 0..100 {
+        if snd
+            .send_payload(Bytes::from_static(b"chunk"), false)
             .await
-            .is_err(),
-        "request stream is not reset"
-    );
+            .is_err()
+        {
+            reset = true;
+            break;
+        }
+        sleep(Millis(50)).await;
+    }
+    assert!(reset, "request stream is not reset");
 }
 
 /// The request payload reports the stream reset error and ends after it,
@@ -1435,16 +1535,11 @@ async fn test_h2_empty_data_frames_are_not_queued() {
     h2_raw_data(&mut buf, b"bc", true);
     stream.write_all(&buf).unwrap();
 
-    let mut items = None;
-    for _ in 0..50 {
-        sleep(Millis(20)).await;
-        items = chunks.lock().unwrap().take();
-        if items.is_some() {
-            break;
-        }
-    }
+    wait_for(|| chunks.lock().unwrap().is_some())
+        .await
+        .expect("request is not completed");
     assert_eq!(
-        items.expect("request is not completed"),
+        chunks.lock().unwrap().take().unwrap(),
         vec![Bytes::from("a"), Bytes::from("bc")]
     );
 
@@ -1489,12 +1584,10 @@ async fn test_h2_request_trailers() {
     buf.extend_from_slice(&[1, b'1']);
     stream.write_all(&buf).unwrap();
 
-    let _ = h2_raw_read_frames(&mut stream);
-    let (body, trailers) = result
-        .lock()
-        .unwrap()
-        .take()
+    wait_for(|| result.lock().unwrap().is_some())
+        .await
         .expect("request is not completed");
+    let (body, trailers) = result.lock().unwrap().take().unwrap();
     assert_eq!(body, b"abc");
     let trailers = trailers.expect("trailers are not received");
     assert_eq!(trailers.len(), 1);
@@ -1819,15 +1912,16 @@ async fn test_h1_request_trailers() {
         )
         .unwrap();
     stream
-        .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
         .unwrap();
     let mut data = Vec::new();
     let mut buf = [0; 1024];
-    while let Ok(n) = stream.read(&mut buf) {
-        if n == 0 {
-            break;
+    // read until both pipelined responses are received
+    while !data.ends_with(b"\r\n\r\nde|") {
+        match stream.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => data.extend_from_slice(&buf[..n]),
         }
-        data.extend_from_slice(&buf[..n]);
     }
     let data = String::from_utf8(data).unwrap();
     assert!(data.contains("\r\n\r\nabc|x-trailer=1"), "{data:?}");
@@ -1879,8 +1973,16 @@ async fn test_h1_body_not_polled_after_peer_reset() {
     // closing with unread data resets the connection
     drop(stream);
 
-    sleep(Millis(300)).await;
-    let polls1 = polls.load(Ordering::Relaxed);
+    // the poll count stabilizes once the body is not polled anymore
+    let mut polls1 = polls.load(Ordering::Relaxed);
+    for _ in 0..80 {
+        sleep(Millis(25)).await;
+        let current = polls.load(Ordering::Relaxed);
+        if current == polls1 {
+            break;
+        }
+        polls1 = current;
+    }
     sleep(Millis(300)).await;
     let polls2 = polls.load(Ordering::Relaxed);
     assert_eq!(polls1, polls2);

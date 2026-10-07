@@ -1,5 +1,5 @@
-use std::task::{Context, Poll, ready};
-use std::{future::Future, io, io::Read, io::Write, pin::Pin};
+use std::task::{Context, Poll};
+use std::{io, io::Read, io::Write, pin::Pin};
 
 use flate2::Compression;
 use flate2::read::GzDecoder;
@@ -11,7 +11,7 @@ use ntex::http::header::{
     TRANSFER_ENCODING,
 };
 use ntex::http::{self, ConnectionType, HttpServiceConfig, Method, StatusCode, body::Body};
-use ntex::time::{Millis, Seconds, Sleep, sleep};
+use ntex::time::{Millis, Seconds};
 use ntex::util::{Bytes, Stream};
 use ntex::{Service, SharedCfg, client, io::IoConfig, service::State};
 
@@ -46,7 +46,9 @@ const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
 struct TestBody {
     data: Bytes,
     chunk_size: usize,
-    delay: Sleep,
+    /// Every chunk is produced by a separate poll, woken from the previous
+    /// one, so the body is written in chunks as it becomes ready.
+    ready: bool,
 }
 
 impl TestBody {
@@ -54,7 +56,7 @@ impl TestBody {
         TestBody {
             data,
             chunk_size,
-            delay: sleep(Millis(10)),
+            ready: false,
         }
     }
 }
@@ -63,9 +65,13 @@ impl Stream for TestBody {
     type Item = Result<Bytes, io::Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        ready!(Pin::new(&mut self.delay).poll(cx));
+        if !self.ready {
+            self.ready = true;
+            cx.waker().wake_by_ref();
+            return Poll::Pending;
+        }
 
-        self.delay = sleep(Millis(10));
+        self.ready = false;
         let chunk_size = std::cmp::min(self.chunk_size, self.data.len());
         let chunk = self.data.split_to(chunk_size);
         if chunk.is_empty() {
@@ -774,16 +780,26 @@ async fn test_slow_request() {
         App::new().service(web::resource("/").route(web::to(async || HttpResponse::Ok())))
     });
 
-    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-    let mut data = String::new();
-    let _ = stream.read_to_string(&mut data);
-    assert!(data.starts_with("HTTP/1.1 408 Request Timeout"));
+    // both connections wait for the request head timeout concurrently
+    let addr = srv.addr();
+    let no_request = std::thread::spawn(move || {
+        let mut stream = net::TcpStream::connect(addr).unwrap();
+        let mut data = String::new();
+        let _ = stream.read_to_string(&mut data);
+        data
+    });
+    let partial_head = std::thread::spawn(move || {
+        let mut stream = net::TcpStream::connect(addr).unwrap();
+        let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\n");
+        let mut data = String::new();
+        let _ = stream.read_to_string(&mut data);
+        data
+    });
 
-    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\nhost: localhost\r\n");
-    let mut data = String::new();
-    let _ = stream.read_to_string(&mut data);
-    assert!(data.starts_with("HTTP/1.1 408 Request Timeout"));
+    let data = no_request.join().unwrap();
+    assert!(data.starts_with("HTTP/1.1 408 Request Timeout"), "{data:?}");
+    let data = partial_head.join().unwrap();
+    assert!(data.starts_with("HTTP/1.1 408 Request Timeout"), "{data:?}");
 }
 
 #[ntex::test]

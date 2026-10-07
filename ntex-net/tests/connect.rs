@@ -117,7 +117,7 @@ async fn connect_refused() {
 
 #[ntex::test]
 async fn connect_resolver_error() {
-    let err = connect::connect("---11213").await.unwrap_err();
+    let err = connect::connect("nonexistent.invalid").await.unwrap_err();
     assert!(matches!(&*err, ConnectError::Resolver(_)), "{err:?}");
 }
 

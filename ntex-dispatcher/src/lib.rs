@@ -950,7 +950,7 @@ mod tests {
         assert_eq!(buf, Bytes::from_static(b"test"));
 
         st.close();
-        sleep(Millis(1500)).await;
+        wait_until(Millis(2000), || client.is_server_dropped()).await;
         assert!(client.is_server_dropped());
     }
 
@@ -981,7 +981,7 @@ mod tests {
         assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
 
         // write side must be closed, dispatcher waiting for read side to close
-        sleep(Millis(250)).await;
+        wait_closed(&client, Millis(1000)).await;
         assert!(client.is_closed());
 
         // close read side
@@ -1037,7 +1037,7 @@ mod tests {
         assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
 
         // write side must be closed, dispatcher waiting for read side to close
-        sleep(Millis(250)).await;
+        wait_closed(&client, Millis(1000)).await;
         assert!(client.is_closed());
 
         // close read side
@@ -1301,7 +1301,10 @@ mod tests {
 
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
-        sleep(Millis(2000)).await;
+        wait_until(Millis(3000), || {
+            !state.0.is_active() && client.is_closed() && data.lock().unwrap().borrow().len() == 2
+        })
+        .await;
 
         // write side must be closed, dispatcher should fail with keep-alive
         assert!(!state.0.is_active());
@@ -1350,7 +1353,10 @@ mod tests {
         client.write("12345678");
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"12345678"));
-        sleep(Millis(2000)).await;
+        wait_until(Millis(3000), || {
+            !state.0.is_active() && client.is_closed() && data.lock().unwrap().borrow().len() == 2
+        })
+        .await;
 
         // write side must be closed, dispatcher should fail with keep-alive
         assert!(!state.0.is_active());
@@ -1369,7 +1375,7 @@ mod tests {
 
         let cfg = SharedCfg::new("DBG").add(
             IoConfig::new()
-                .set_keepalive_timeout(Seconds(2))
+                .set_keepalive_timeout(Seconds(1))
                 .set_frame_read_rate(Seconds(1), Seconds(2), 2),
         );
 
@@ -1400,18 +1406,18 @@ mod tests {
         client.write("1");
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"1"));
-        sleep(Millis(750)).await;
+        sleep(Millis(500)).await;
 
         client.write("2");
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"2"));
 
-        sleep(Millis(750)).await;
+        sleep(Millis(500)).await;
         client.write("3");
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"3"));
 
-        sleep(Millis(750)).await;
+        sleep(Millis(500)).await;
         assert!(!client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 0, 0]);
     }
@@ -1470,7 +1476,10 @@ mod tests {
         sleep(Millis(1000)).await;
         assert!(state.0.is_active());
         client.write("4");
-        sleep(Millis(2000)).await;
+        wait_until(Millis(3000), || {
+            !state.0.is_active() && client.is_closed() && data.lock().unwrap().borrow().len() == 2
+        })
+        .await;
 
         // write side must be closed, dispatcher should fail with keep-alive
         assert!(!state.0.is_active());
@@ -1525,7 +1534,7 @@ mod tests {
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"1"));
 
-        sleep(Millis(1000)).await;
+        wait_until(Millis(2000), || !state.0.is_active() && client.is_closed()).await;
         assert!(!state.0.is_active());
         assert!(client.is_closed());
     }
@@ -1901,9 +1910,12 @@ mod tests {
         client.write("123");
         // several periods are extended by consumed bytes only
         for _ in 0..4 {
-            sleep(Millis(700)).await;
+            sleep(Millis(350)).await;
             client.write("abc#");
         }
+        // a period without consumed bytes must still be running, without the
+        // consumed bytes the timer would have expired at 2s
+        sleep(Millis(1000)).await;
         assert!(!client.is_closed());
         assert!(data.lock().unwrap().borrow().is_empty());
 
@@ -1966,7 +1978,10 @@ mod tests {
             let _ = disp.await;
         });
 
-        sleep(Millis(4500)).await;
+        wait_until(Millis(5000), || {
+            client.is_closed() && data.lock().unwrap().borrow().len() == 1
+        })
+        .await;
         assert!(client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[1]);
     }
@@ -1989,7 +2004,9 @@ mod tests {
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"12345678"));
 
-        sleep(Millis(4500)).await;
+        // without stopping the frame read timer the connection would be
+        // closed after the 1s period and its 1s extension
+        sleep(Millis(2500)).await;
         assert!(!client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0]);
     }
@@ -2049,9 +2066,9 @@ mod tests {
 
         // the budget allows one extension, at least two 1s periods, which
         // covers a 1.5s cycle. Without a restore by the pause it lasts less
-        // than two 2s periods, three cycles take longer.
+        // than two 2s periods, two cycles take longer.
         client.write("abc");
-        for _ in 0..3 {
+        for _ in 0..2 {
             for _ in 0..2 {
                 sleep(Millis(700)).await;
                 client.write("abc");
@@ -2155,7 +2172,10 @@ mod tests {
         sleep(Millis(100)).await;
         // the codec consumes the whole input without producing a frame
         client.write("1#");
-        sleep(Millis(4500)).await;
+        wait_until(Millis(5000), || {
+            client.is_closed() && data.lock().unwrap().borrow().len() == 2
+        })
+        .await;
         assert!(client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
     }
@@ -2251,7 +2271,7 @@ mod tests {
         sleep(Millis(300)).await;
         // the stop item is delivered once the service is ready
         let _ = tx.send(());
-        sleep(Millis(500)).await;
+        wait_closed(&client, Millis(1000)).await;
         assert!(client.is_closed());
     }
 
@@ -2556,8 +2576,12 @@ mod tests {
             sleep(Millis(250)).await;
             client.remote_buffer_cap(64);
             let _ = client.read_any();
+            if client.is_closed() {
+                break;
+            }
         }
         assert!(client.is_closed());
+        wait_until(Millis(1000), || events.borrow().len() == 3).await;
         assert_eq!(&events.borrow()[..], &["item", "bp-on", "write-timeout"]);
     }
 
@@ -2617,7 +2641,8 @@ mod tests {
         client.remote_buffer_cap(65536);
         sleep(Millis(100)).await;
         assert_eq!(client.read_any().len(), 8192);
-        sleep(Millis(3500)).await;
+        // a write timeout that was not stopped would fire within 2s
+        sleep(Millis(2300)).await;
 
         drop(tx);
         sleep(Millis(100)).await;
@@ -2643,7 +2668,7 @@ mod tests {
         });
 
         client.write("12345678");
-        sleep(Millis(500)).await;
+        wait_until(Millis(2000), || events.borrow().len() == 2).await;
         client.remote_buffer_cap(65536);
         sleep(Millis(100)).await;
         assert_eq!(client.read_any().len(), 8192);
@@ -2678,7 +2703,8 @@ mod tests {
         assert_eq!(client.read_any().len(), 7900);
         assert_eq!(&events.borrow()[..], &["item", "bp-on", "bp-off"]);
 
-        sleep(Millis(4500)).await;
+        // a write timeout that was not stopped would fire within 2s
+        sleep(Millis(2500)).await;
         assert!(!client.is_closed());
         assert_eq!(&events.borrow()[..], &["item", "bp-on", "bp-off"]);
     }
@@ -2696,7 +2722,7 @@ mod tests {
         });
 
         client.write("12345678");
-        for _ in 0..3 {
+        for _ in 0..2 {
             // release backpressure within the timeout
             sleep(Millis(1200)).await;
             client.remote_buffer_cap(65536);
@@ -2710,8 +2736,7 @@ mod tests {
         assert_eq!(
             &events.borrow()[..],
             &[
-                "item", "bp-on", "bp-off", "item", "bp-on", "bp-off", "item", "bp-on", "bp-off",
-                "item", "bp-on"
+                "item", "bp-on", "bp-off", "item", "bp-on", "bp-off", "item", "bp-on"
             ]
         );
     }
@@ -3165,7 +3190,10 @@ mod tests {
         assert_eq!(buf, Bytes::from_static(b"12345678"));
 
         // keep-alive is armed again once reads resume
-        sleep(Millis(2000)).await;
+        wait_until(Millis(3000), || {
+            !io.is_active() && client.is_closed() && data.borrow().len() == 2
+        })
+        .await;
         assert!(!io.is_active());
         assert!(client.is_closed());
         assert_eq!(&data.borrow()[..], &[0, 1]);

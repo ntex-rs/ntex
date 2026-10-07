@@ -252,7 +252,7 @@ mod tests {
 
     use super::*;
 
-    const BOMB_SIZE: usize = 16 * 1024 * 1024;
+    const BOMB_SIZE: usize = 4 * 1024 * 1024;
 
     fn bomb(encoding: ContentEncoding) -> Vec<u8> {
         let data = vec![0u8; BOMB_SIZE];

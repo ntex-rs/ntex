@@ -1,5 +1,5 @@
 #![cfg(feature = "openssl")]
-use std::sync::{Arc, Mutex, atomic::AtomicUsize, atomic::Ordering};
+use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering};
 use std::{future::ready, io};
 
 use futures_util::stream::{Stream, StreamExt, once};
@@ -12,7 +12,7 @@ use ntex::http::test::{self, server as test_server};
 use ntex::http::{HttpService, Method, Request, Response, StatusCode, Version, body, h1, openssl};
 use ntex::service::cfg::SharedCfg;
 use ntex::time::{Millis, Seconds, sleep, timeout};
-use ntex::util::{Bytes, BytesMut};
+use ntex::util::{Bytes, BytesMut, Either, select};
 use ntex::ws::{self, handshake_response};
 use ntex::{channel::oneshot, client, rt, web::error::InternalError};
 use ntex_tls::TlsConfig;
@@ -526,16 +526,20 @@ impl Drop for SetOnDrop {
 async fn test_h2_client_drop() -> io::Result<()> {
     let count = Arc::new(AtomicUsize::new(0));
     let count2 = count.clone();
+    let started = Arc::new(AtomicBool::new(false));
+    let started2 = started.clone();
     let (tx, rx) = ::oneshot::async_channel();
     let tx = Arc::new(Mutex::new(Some(tx)));
 
     let srv = test_server(async move |_| {
         let tx = tx.clone();
         let count = count2.clone();
+        let started = started2.clone();
         openssl(
             ssl_acceptor(),
             HttpService::h2(async move |req: Request| {
                 let st = SetOnDrop(count.clone(), tx.clone());
+                started.store(true, Ordering::Relaxed);
 
                 assert!(req.peer_addr().is_some());
                 assert_eq!(req.version(), Version::HTTP_2);
@@ -546,8 +550,18 @@ async fn test_h2_client_drop() -> io::Result<()> {
         )
     });
 
-    let result = timeout(Millis(2500), srv.srequest(Method::GET, "/").send()).await;
-    assert!(result.is_err());
+    // drop the request once the handler is running
+    let wait_started = async {
+        while !started.load(Ordering::Relaxed) {
+            sleep(Millis(10)).await;
+        }
+    };
+    let result = timeout(
+        Millis(2500),
+        select(srv.srequest(Method::GET, "/").send(), wait_started),
+    )
+    .await;
+    assert!(matches!(result, Ok(Either::Right(()))));
     let _ = timeout(Millis(1500), rx).await;
     assert_eq!(count.load(Ordering::Relaxed), 1);
     Ok(())

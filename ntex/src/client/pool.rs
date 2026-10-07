@@ -745,16 +745,16 @@ mod tests {
     }
 
     async fn wait_closed(h2: &H2Client) {
-        wait_closed_for(h2, 60).await;
+        wait_closed_for(h2, Millis(3000)).await;
     }
 
-    async fn wait_closed_for(h2: &H2Client, ticks: usize) {
+    async fn wait_closed_for(h2: &H2Client, max: Millis) {
         // graceful disconnect, peer does not respond
-        for _ in 0..ticks {
-            if h2.is_closed() {
-                break;
-            }
-            sleep(Millis(50)).await;
+        let mut left = max.0;
+        while !h2.is_closed() && left != 0 {
+            let step = left.min(20);
+            sleep(Millis(step)).await;
+            left -= step;
         }
     }
 
@@ -797,7 +797,7 @@ mod tests {
         assert!(pool.0.inner.borrow().h2.is_empty());
         assert!(h2.is_disconnecting());
         // an immediate close ends within the shutdown timeout, less than 2s
-        wait_closed_for(&h2, 44).await;
+        wait_closed_for(&h2, Millis(2200)).await;
         assert!(!h2.is_closed());
         assert!(!server.is_closed());
 
@@ -927,11 +927,11 @@ mod tests {
 
         // GOAWAY, last stream id 0, NO_ERROR
         server.write([0, 0, 8, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-        for _ in 0..20 {
+        for _ in 0..50 {
             if h2.begin().is_none() {
                 break;
             }
-            sleep(Millis(25)).await;
+            sleep(Millis(10)).await;
         }
         assert!(h2.begin().is_none());
         assert!(!h2.is_closed());
@@ -1024,11 +1024,11 @@ mod tests {
         assert!(pool.0.inner.borrow().available.is_empty());
         assert!(pool.0.inner.borrow().h2.is_empty());
         let h1srv = store.borrow()[0].clone();
-        for _ in 0..60 {
+        for _ in 0..150 {
             if h1srv.is_closed() && h2srv.is_closed() {
                 break;
             }
-            sleep(Millis(50)).await;
+            sleep(Millis(20)).await;
         }
         assert!(h1srv.is_closed());
         assert!(h2srv.is_closed());
