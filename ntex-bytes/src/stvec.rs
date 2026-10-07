@@ -312,13 +312,27 @@ impl StorageVec {
     /// Grows the buffer by one step, see `BytesMut::reserve_more`.
     pub(crate) fn reserve_more(&mut self) {
         let size = self.page_size();
-        if self.remaining() >= size.half_capacity() {
+        if self.remaining() >= size.low() {
             return;
+        }
+
+        // the allocation holds the data and half a page, the unique buffer is
+        // reclaimed, a shared page moves to a page of the same size
+        let len = self.len();
+        let half = size.half_capacity();
+        if len + half <= unsafe { SharedVec::capacity(self.0.as_ptr()) } {
+            if self.is_unique() {
+                self.reserve_inner(half, true);
+                return;
+            }
+            if size != BytePageSize::Unset {
+                self.move_to_page(size);
+                return;
+            }
         }
 
         let next = size.next();
         if next == BytePageSize::Unset {
-            let len = self.len();
             let cap = self.capacity();
             let new_cap = cap.saturating_add(cap.clamp(MIN_CAPACITY, MAX_MORE_STEP));
             self.reserve_inner(new_cap - len, true);

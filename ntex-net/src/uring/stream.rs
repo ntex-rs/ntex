@@ -743,7 +743,7 @@ impl StreamOpsStorage {
             && !item.flags.contains(Flags::CLOSING)
         {
             if resize {
-                item.ctx.resize_read_buf(&mut buf);
+                buf.reserve_more();
             }
 
             let slice = buf.chunk_mut();

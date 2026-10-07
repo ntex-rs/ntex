@@ -216,23 +216,23 @@ impl IoState {
     }
 
     pub(super) fn get_read_buf(&self) -> BytesMut {
-        self.cfg.read_buf().get()
+        self.cfg.new_read_buf()
     }
 
     pub(super) fn is_rd_backpressure_needed(&self, size: usize) -> bool {
-        size >= self.cfg.read_buf().high
+        size >= self.cfg.read_backpressure()
     }
 
     pub(super) fn is_wr_backpressure_needed(&self, size: usize) -> bool {
-        size >= self.cfg.write_buf().high
+        size >= self.cfg.write_backpressure()
     }
 
     pub(super) fn should_disable_rd_backpressure(&self, size: usize) -> bool {
-        size <= self.cfg.read_buf().half
+        size <= self.cfg.read_half()
     }
 
     pub(super) fn should_disable_wr_backpressure(&self, size: usize) -> bool {
-        size <= self.cfg.write_buf().half
+        size <= self.cfg.write_half()
     }
 
     /// Total output that has not reached the peer yet.
@@ -378,7 +378,7 @@ impl Io {
     /// Creates a new `Io` instance.
     pub fn new<I: IoStream, T: Into<SharedCfg>>(io: I, cfg: T) -> Self {
         let cfg = cfg.into().get::<IoConfig>();
-        let size = cfg.write_page_size();
+        let size = cfg.write_size();
         let flags = Flags::new(cfg.write_buf_threshold() > 0);
 
         let inner = Rc::new(IoState {
@@ -500,8 +500,8 @@ impl<F> Io<F> {
     /// configuration may release the allocation backing those references.
     pub unsafe fn set_config<T: Into<SharedCfg>>(&self, cfg: T) {
         let cfg = cfg.into().get::<IoConfig>();
-        let page_size = cfg.write_page_size();
-        if self.cfg().write_page_size() != page_size {
+        let page_size = cfg.write_size();
+        if self.cfg().write_size() != page_size {
             self.st().buffer.set_page_size(page_size);
         }
         self.st()
@@ -566,7 +566,7 @@ impl<F: Filter> Io<F> {
         let state = self.take_io_ref();
 
         // Add the buffers layer
-        state.0.buffer.add_layer(state.0.cfg.write_page_size());
+        state.0.buffer.add_layer(state.0.cfg.write_size());
 
         // Replace current filter
         state.0.filter.add_filter::<F, U>(nf);
@@ -612,7 +612,7 @@ impl<F: Filter> Io<F> {
             fn drop(&mut self) {
                 let st = &self.0.0;
                 st.force_close_connection();
-                st.buffer.release(self.0.cfg());
+                st.buffer.release();
                 drop(st.extensions.take_callbacks());
             }
         }
@@ -1236,7 +1236,7 @@ impl<F> Drop for Io<F> {
             // Nothing can consume buffered input or deliver buffered output
             // anymore, but the state may outlive the `Io` for a while, held by
             // the transport while it closes or by other `IoRef` handles.
-            st.buffer.release(self.io_ref().cfg());
+            st.buffer.release();
 
             // Callbacks may hold an `IoRef` to this connection, which would keep
             // the state alive through a reference cycle. They are dropped outside
@@ -1444,11 +1444,14 @@ mod tests {
     async fn read() {
         let io = Io::new(
             IoTest::create().0,
-            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(8, 4)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_read_size(BytePageSize::Size4)),
         );
         assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
         assert!(io.st().dispatch_task.is_set());
 
+        let high = BytePageSize::Size4.capacity();
+        let half = high / 2;
+        let data: Vec<u8> = (0..=u8::MAX).cycle().take(high + 2).collect();
         let ctx = IoContext::new(io.get_ref());
 
         // Ready
@@ -1464,8 +1467,8 @@ mod tests {
 
         // == Enable backpressure
         ctx.release_read_buf(
-            BytesMut::copy_from_slice(b"1234567890"),
-            Poll::Ready(Ok(10)),
+            BytesMut::copy_from_slice(&data),
+            Poll::Ready(Ok(data.len())),
         );
 
         // dispatcher is woken
@@ -1482,7 +1485,7 @@ mod tests {
         assert_eq!(lazy(|cx| ctx.poll_read_ready(cx)).await, Poll::Pending);
 
         // read one byte
-        assert_eq!(io.with_read_dst(|buf| buf.split_to(1)), b"1");
+        assert_eq!(io.with_read_dst(|buf| buf.split_to(1)), &data[..1]);
         // read buffer is ready
         assert!(io.st().flags.is_read_ready());
         // read backpressure is enabled
@@ -1492,17 +1495,18 @@ mod tests {
         assert!(io.st().read_task.is_set());
 
         // read one more byte
-        assert_eq!(io.with_read_dst(|buf| buf.split_to(1)), b"2");
+        assert_eq!(io.with_read_dst(|buf| buf.split_to(1)), &data[1..2]);
         // read backpressure is enabled
         assert!(io.st().flags.is_rd_backpressure());
 
         // dropping below the high watermark does not release backpressure
-        assert_eq!(io.with_read_dst(|buf| buf.split_to(1)), b"3");
+        assert_eq!(io.with_read_dst(|buf| buf.split_to(1)), &data[2..3]);
         assert!(io.st().flags.is_rd_backpressure());
         assert!(io.st().flags.is_read_paused());
 
         // reaching half of the high watermark releases backpressure
-        assert_eq!(io.with_read_dst(|buf| buf.split_to(3)), b"456");
+        let n = high - 1 - half;
+        assert_eq!(io.with_read_dst(|buf| buf.split_to(n)), &data[3..3 + n]);
         // read task is not paused anymore
         assert!(!io.st().flags.is_read_paused());
         // read buffer is not ready
@@ -1519,8 +1523,11 @@ mod tests {
         // register dispatcher task
         lazy(|cx| io.register_dispatch(cx)).await;
 
-        // == Enable backpressure, 4 bytes in buffer + 4 more
-        ctx.release_read_buf(BytesMut::copy_from_slice(b"1234"), Poll::Ready(Ok(4)));
+        // == Enable backpressure, half in buffer + half more
+        ctx.release_read_buf(
+            BytesMut::copy_from_slice(vec![b'a'; half]),
+            Poll::Ready(Ok(half)),
+        );
 
         // dispatcher is woken
         assert!(!io.st().dispatch_task.is_set());
@@ -1533,16 +1540,19 @@ mod tests {
         // read task paused
         assert_eq!(lazy(|cx| ctx.poll_read_ready(cx)).await, Poll::Pending);
 
-        // read 4 bytes. buf size is 4, less that half of high watermark
-        assert_eq!(io.with_read_dst(|buf| buf.split_to(4)), b"7890");
+        // read half, buf size is half of high watermark
+        assert_eq!(io.with_read_dst(|buf| buf.split_to(half)), &data[3 + n..]);
         // read backpressure is disabled
         assert!(!io.st().flags.is_rd_backpressure());
 
         // register dispatcher task
         lazy(|cx| io.register_dispatch(cx)).await;
 
-        // == No backpressure, 4 bytes in buffer + 3 more
-        ctx.release_read_buf(BytesMut::copy_from_slice(b"567"), Poll::Ready(Ok(3)));
+        // == No backpressure, half in buffer + half - 1 more
+        ctx.release_read_buf(
+            BytesMut::copy_from_slice(vec![b'b'; half - 1]),
+            Poll::Ready(Ok(half - 1)),
+        );
 
         // read task is paused
         assert!(!io.st().flags.is_read_paused());
@@ -1556,8 +1566,11 @@ mod tests {
             Poll::Ready(Readiness::Ready)
         );
 
-        // read 4 bytes. buf size is 4, less that half of high watermark
-        assert_eq!(io.with_read_dst(BytesMut::take), b"1234567");
+        // read everything
+        let item = io.with_read_dst(BytesMut::take);
+        assert_eq!(item.len(), high - 1);
+        assert_eq!(&item[..half], &vec![b'a'; half][..]);
+        assert_eq!(&item[half..], &vec![b'b'; half - 1][..]);
         // read task is paused
         assert!(!io.st().flags.is_read_paused());
         // read buffer is ready
@@ -1712,7 +1725,7 @@ mod tests {
     async fn read_notify() {
         let io = Io::new(
             IoTest::create().0,
-            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(8, 4)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_read_size(BytePageSize::Size4)),
         );
         assert!(!io.st().flags.is_read_notify());
         assert!(lazy(|cx| io.poll_read_notify(cx)).await.is_pending());
@@ -1750,7 +1763,11 @@ mod tests {
         );
 
         // == enable packpressure
-        ctx.release_read_buf(BytesMut::copy_from_slice(b"2345678"), Poll::Ready(Ok(7)));
+        let len = BytePageSize::Size4.capacity() - 1;
+        ctx.release_read_buf(
+            BytesMut::copy_from_slice(vec![b'2'; len]),
+            Poll::Ready(Ok(len)),
+        );
         // read backpressure is enabled
         assert!(io.st().flags.is_rd_backpressure());
 
@@ -1831,12 +1848,11 @@ mod tests {
 
         let io = Io::new(
             server,
-            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(64, 32)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_read_size(BytePageSize::Size4)),
         );
         assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
 
-        client.write(BIN2);
-        client.write(BIN2);
+        client.write(vec![b'x'; BytePageSize::Size4.capacity()]);
         sleep(Millis(50)).await;
         assert!(io.flags().is_read_ready());
         assert!(io.flags().is_rd_backpressure());
@@ -1844,8 +1860,7 @@ mod tests {
         assert!(!io.flags().is_read_ready());
         assert!(!io.flags().is_rd_backpressure());
 
-        client.write(BIN2);
-        client.write(BIN2);
+        client.write(vec![b'x'; BytePageSize::Size4.capacity()]);
         sleep(Millis(50)).await;
         assert!(io.flags().is_read_ready());
         assert!(io.flags().is_rd_backpressure());
@@ -1858,12 +1873,11 @@ mod tests {
 
         let io = Io::new(
             server,
-            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(64, 32)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_read_size(BytePageSize::Size4)),
         );
         assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
 
-        client.write(BIN2);
-        client.write(BIN2);
+        client.write(vec![b'x'; BytePageSize::Size4.capacity()]);
         sleep(Millis(50)).await;
         assert!(io.flags().is_rd_backpressure());
 
@@ -1890,12 +1904,11 @@ mod tests {
 
         let io = Io::new(
             server,
-            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(64, 32)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_read_size(BytePageSize::Size4)),
         );
         assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
 
-        client.write(BIN2);
-        client.write(BIN2);
+        client.write(vec![b'x'; BytePageSize::Size4.capacity()]);
         sleep(Millis(50)).await;
         assert!(io.flags().is_rd_backpressure());
 
@@ -1923,7 +1936,7 @@ mod tests {
     async fn write() {
         let io = Io::new(
             IoTest::create().0,
-            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(8)),
         );
         assert!(lazy(|cx| io.poll_status_update(cx)).await.is_pending());
         assert!(io.st().dispatch_task.is_set());
@@ -2125,7 +2138,11 @@ mod tests {
 
         let io = Io::new(
             DirectWrite,
-            SharedCfg::new("SRV").add(IoConfig::new().set_write_buf_threshold(1).set_write_buf(8)),
+            SharedCfg::new("SRV").add(
+                IoConfig::new()
+                    .set_write_buf_threshold(1)
+                    .set_write_backpressure(8),
+            ),
         );
 
         io.encode_slice(BIN2).unwrap();
@@ -2215,7 +2232,7 @@ mod tests {
 
         let io = Io::new(
             server,
-            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(16)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(16)),
         );
         assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
         assert!(io.flags().is_write_paused());
@@ -2245,7 +2262,7 @@ mod tests {
     async fn partial_flush_keeps_write_backpressure_until_half_watermark() {
         let io = Io::new(
             IoTest::create().0,
-            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(8)),
         );
         let ctx = IoContext::new(io.get_ref());
 
@@ -2270,7 +2287,7 @@ mod tests {
     async fn write_ready_waits_for_release_threshold() {
         let io = Io::new(
             IoTest::create().0,
-            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(8)),
         );
         let ctx = IoContext::new(io.get_ref());
 
@@ -2311,7 +2328,7 @@ mod tests {
     async fn write_ready_released_during_full_flush() {
         let io = Io::new(
             IoTest::create().0,
-            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(8)),
         );
         let ctx = IoContext::new(io.get_ref());
 
@@ -2340,7 +2357,7 @@ mod tests {
         client.remote_buffer_cap(0);
         let io = Io::new(
             server,
-            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(8)),
         );
         io.encode_slice(b"12345678").unwrap();
         assert!(io.flags().is_wr_backpressure());
@@ -2472,7 +2489,7 @@ mod tests {
         client.remote_buffer_cap(0);
         let io = Io::new(
             server,
-            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(8)),
         );
         let ext = &io.get_ref().0.extensions;
 
@@ -2574,7 +2591,7 @@ mod tests {
         // back-pressure in place.
         let io = Io::new(
             IoTest::create().0,
-            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(8)),
         );
         let ctx = IoContext::new(io.get_ref());
 
@@ -2637,7 +2654,7 @@ mod tests {
             server,
             SharedCfg::new("SRV").add(
                 IoConfig::default()
-                    .set_read_buf(8, 4)
+                    .set_read_size(BytePageSize::Size4)
                     .set_shutdown_timeout(ntex_util::time::Seconds(2)),
             ),
         );
@@ -2649,7 +2666,7 @@ mod tests {
 
         // peer keeps sending, crossing the read high watermark,
         // read task gets paused with back-pressure enabled
-        client.write("0123456789");
+        client.write(vec![b'x'; BytePageSize::Size4.capacity()]);
         sleep(Millis(50)).await;
         assert!(io.flags().is_read_paused());
         assert!(io.flags().is_rd_backpressure());
@@ -3070,7 +3087,7 @@ mod tests {
 
         let io = Io::new(
             Manual,
-            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(8)),
         )
         .add_filter(Reply);
         let ctx = IoContext::new(io.get_ref());
@@ -3169,7 +3186,7 @@ mod tests {
 
         let io = Io::new(
             Manual,
-            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(8)),
         )
         .add_filter(Reneg::default());
         let ctx = IoContext::new(io.get_ref());
@@ -3240,7 +3257,7 @@ mod tests {
 
         let io = Io::new(
             Manual,
-            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(8)),
         )
         .add_filter(Reply);
         let ctx = IoContext::new(io.get_ref());
@@ -3312,7 +3329,7 @@ mod tests {
 
         let io = Io::new(
             Manual,
-            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(8)),
         )
         .add_filter(Reply);
         let ctx = IoContext::new(io.get_ref());
@@ -3502,14 +3519,14 @@ mod tests {
             server,
             SharedCfg::new("SRV").add(
                 IoConfig::default()
-                    .set_read_buf(1024, 256)
+                    .set_read_size(BytePageSize::Size4)
                     .set_shutdown_timeout(ntex_util::time::Seconds(30)),
             ),
         )
         .add_filter(StuckShutdown(Cell::new(false)));
 
         let ioref = io.get_ref();
-        let high = 1024;
+        let high = BytePageSize::Size4.capacity();
         ntex::rt::spawn(async move {
             let _ = io.shutdown().await;
         });
@@ -3547,7 +3564,7 @@ mod tests {
             server,
             SharedCfg::new("SRV").add(
                 IoConfig::default()
-                    .set_read_buf(1024, 256)
+                    .set_read_size(BytePageSize::Size4)
                     .set_shutdown_timeout(ntex_util::time::Seconds(30)),
             ),
         )
@@ -3769,7 +3786,7 @@ mod tests {
             server,
             SharedCfg::new("SRV").add(
                 IoConfig::default()
-                    .set_read_buf(8, 4)
+                    .set_read_size(BytePageSize::Size4)
                     .set_shutdown_timeout(ntex_util::time::Seconds(10)),
             ),
         )
@@ -3832,7 +3849,7 @@ mod tests {
             server,
             SharedCfg::new("SRV").add(
                 IoConfig::default()
-                    .set_read_buf(8, 4)
+                    .set_read_size(BytePageSize::Size4)
                     .set_shutdown_timeout(ntex_util::time::Seconds(1)),
             ),
         )
@@ -3880,7 +3897,7 @@ mod tests {
             server,
             SharedCfg::new("SRV").add(
                 IoConfig::default()
-                    .set_read_buf(8, 4)
+                    .set_read_size(BytePageSize::Size4)
                     .set_shutdown_timeout(ntex_util::time::Seconds(10)),
             ),
         )
@@ -3916,7 +3933,7 @@ mod tests {
 
         let io = Io::new(
             IoTest::create().0,
-            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(8)),
         );
         let st = io.st();
         assert!(lazy(|cx| io.poll_status_update(cx)).await.is_pending());
@@ -3979,7 +3996,7 @@ mod tests {
         client.remote_buffer_cap(0);
         let io = Io::new(
             server,
-            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(16)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(16)),
         );
         io.encode_slice(BIN2).unwrap();
         assert!(io.flags().is_wr_backpressure());
@@ -4007,7 +4024,7 @@ mod tests {
             server,
             SharedCfg::new("SRV").add(
                 IoConfig::default()
-                    .set_write_buf(16)
+                    .set_write_backpressure(16)
                     .set_write_timeout(ntex_util::time::Seconds(1)),
             ),
         );
@@ -4290,7 +4307,7 @@ mod tests {
         client.remote_buffer_cap(0);
         let io = Io::new(
             server,
-            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(16)),
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_backpressure(16)),
         );
 
         // output buffered without a state update

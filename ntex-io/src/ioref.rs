@@ -254,7 +254,7 @@ impl IoRef {
     /// read task.
     ///
     /// Decoded frames that share the read buffer's allocation keep the whole
-    /// buffer alive, see [`IoConfig::set_read_buf`](crate::IoConfig::set_read_buf).
+    /// buffer alive, see [`IoConfig::set_read_size`](crate::IoConfig::set_read_size).
     pub fn decode<U>(
         &self,
         codec: &U,
@@ -616,11 +616,6 @@ impl IoRef {
             st.wake_read_task();
             st.flags.unset_read_paused();
         }
-    }
-
-    /// Make sure buffer has enough free space
-    pub fn resize_read_buf(&self, buf: &mut BytesMut) {
-        self.0.cfg.read_buf().resize(buf);
     }
 
     /// Wakeup dispatcher

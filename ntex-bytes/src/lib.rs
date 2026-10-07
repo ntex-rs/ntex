@@ -309,6 +309,27 @@ impl BytePageSize {
             | BytePageSize::Unset => 16 * 1024,
         }
     }
+
+    /// Returns the low free-capacity threshold for this page size.
+    ///
+    /// This is 2/32 of the category size: 256 bytes for `Size4`, 1 KiB for
+    /// `Size16`, 16 KiB for `Size256` and 4 KiB for [`BytePageSize::Unset`].
+    /// [`BytesMut::reserve_more`] grows a buffer once its remaining capacity
+    /// falls below it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ntex_bytes::BytePageSize;
+    ///
+    /// assert_eq!(BytePageSize::Size4.low(), 256);
+    /// assert_eq!(BytePageSize::Size8.low(), 512);
+    /// assert_eq!(BytePageSize::Size16.low(), 1024);
+    /// assert_eq!(BytePageSize::Unset.low(), 4096);
+    /// ```
+    pub const fn low(self) -> usize {
+        self.alloc_size() >> 4
+    }
 }
 
 /// Sets the maximum number of cached page allocations for every page size

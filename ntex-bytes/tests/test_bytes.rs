@@ -759,18 +759,18 @@ fn reserve_overflows_usize() {
     buf.reserve(usize::MAX);
 }
 
-/// Fills the buffer until less than half of its page size remains.
-fn fill_half(buf: &mut BytesMut) {
-    let half = buf.page_size().half_capacity();
+/// Fills the buffer until less than the low threshold of its page size remains.
+fn fill_low(buf: &mut BytesMut) {
+    let low = buf.page_size().low();
     let remaining = buf.capacity() - buf.len();
-    if remaining >= half {
-        buf.extend_from_slice(&vec![1; remaining - half + 1]);
+    if remaining >= low {
+        buf.extend_from_slice(&vec![1; remaining - low + 1]);
     }
 }
 
 #[test]
 fn reserve_more_pages() {
-    // at least half of the page is remaining
+    // the remaining capacity is above the low threshold
     let mut buf = BytesMut::with_page_size(BytePageSize::Size4);
     buf.extend_from_slice(LONG);
     buf.reserve_more();
@@ -780,7 +780,7 @@ fn reserve_more_pages() {
     // every page size moves to the next one
     let mut size = BytePageSize::Size4;
     while size != BytePageSize::Size256 {
-        fill_half(&mut buf);
+        fill_low(&mut buf);
         let len = buf.len();
         size = size.next();
         buf.reserve_more();
@@ -791,7 +791,7 @@ fn reserve_more_pages() {
     }
 
     // above the largest page size, a regular buffer grows by 64 KiB
-    fill_half(&mut buf);
+    fill_low(&mut buf);
     buf.reserve_more();
     assert_eq!(buf.page_size(), BytePageSize::Unset);
     assert_eq!(buf.capacity(), BytePageSize::Size256.capacity() + 64 * 1024);
@@ -802,12 +802,45 @@ fn reserve_more_pages() {
     buf.extend_from_slice(LONG);
     buf.extend_from_slice(SHORT);
     let head = buf.split_to(LONG.len());
-    fill_half(&mut buf);
+    fill_low(&mut buf);
     buf.reserve_more();
     assert_eq!(buf.page_size(), BytePageSize::Size16);
     assert_eq!(buf.capacity(), BytePageSize::Size16.capacity());
     assert_eq!(&buf[..SHORT.len()], SHORT);
     assert_eq!(&head[..], LONG);
+}
+
+#[test]
+fn reserve_more_reuses_page() {
+    // a unique page with consumed data is compacted in place
+    let mut buf = BytesMut::with_page_size(BytePageSize::Size8);
+    fill_low(&mut buf);
+    buf.advance(buf.len() - 100);
+    let ptr = buf.as_ptr();
+    buf.reserve_more();
+    assert_eq!(buf.page_size(), BytePageSize::Size8);
+    assert_eq!(buf.capacity(), BytePageSize::Size8.capacity());
+    assert_eq!(&buf[..], &[1; 100][..]);
+    assert_ne!(buf.as_ptr(), ptr);
+
+    // a shared page with little data moves to a page of the same size
+    let mut buf = BytesMut::with_page_size(BytePageSize::Size8);
+    fill_low(&mut buf);
+    let head = buf.split_to(buf.len() - 100);
+    buf.reserve_more();
+    assert_eq!(buf.page_size(), BytePageSize::Size8);
+    assert_eq!(buf.capacity(), BytePageSize::Size8.capacity());
+    assert_eq!(&buf[..], &[1; 100][..]);
+    assert!(head.iter().all(|b| *b == 1));
+
+    // more than half a page of data grows the page
+    let mut buf = BytesMut::with_page_size(BytePageSize::Size8);
+    fill_low(&mut buf);
+    let len = BytePageSize::Size8.capacity() - BytePageSize::Size8.half_capacity() + 1;
+    buf.advance(buf.len() - len);
+    buf.reserve_more();
+    assert_eq!(buf.page_size(), BytePageSize::Size16);
+    assert_eq!(buf.len(), len);
 }
 
 #[test]
@@ -834,10 +867,18 @@ fn reserve_more_unset() {
     buf.extend_from_slice(LONG);
     buf.reserve_more();
     assert_eq!(buf.capacity(), 100_000);
-    buf.extend_from_slice(&vec![1; 90_000]);
+    fill_low(&mut buf);
     buf.reserve_more();
     assert_eq!(buf.capacity(), 100_000 + 64 * 1024);
     assert_eq!(&buf[..LONG.len()], LONG);
+
+    // a unique buffer with consumed data is compacted in place
+    let mut buf = BytesMut::with_capacity(100_000);
+    buf.extend_from_slice(&vec![1; 100_000]);
+    buf.advance(99_000);
+    buf.reserve_more();
+    assert_eq!(buf.capacity(), 100_000);
+    assert_eq!(&buf[..], &[1; 1000][..]);
 
     // a unique buffer is reclaimed when its allocation is large enough
     let mut buf = BytesMut::with_capacity(1000);

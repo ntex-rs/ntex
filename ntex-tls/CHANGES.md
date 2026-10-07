@@ -1,5 +1,9 @@
 # Changes
 
+## [4.3.1] - 2026-10-07
+
+* Use new BytesMut allocation api
+
 ## [4.3.0] - 2026-10-06
 
 * openssl: `use_global_allocator()` routes OpenSSL allocations to the Rust global allocator

@@ -295,7 +295,8 @@ async fn idle_disconnect_uring() {
     use std::sync::Mutex;
 
     use ntex::io::{Io, IoConfig};
-    use ntex::{SharedCfg, codec::BytesCodec, connect::Connect, util::Bytes};
+    use ntex::util::{BytePageSize, Bytes};
+    use ntex::{SharedCfg, codec::BytesCodec, connect::Connect};
     use ntex::{time::Millis, time::sleep, time::timeout};
 
     const DATA: &[u8] = b"Hello World Hello World Hello World Hello World Hello World \
@@ -340,7 +341,7 @@ async fn idle_disconnect_uring() {
     });
 
     let cfg = SharedCfg::new("NEON-URING")
-        .add(IoConfig::new().set_read_buf(24, 12))
+        .add(IoConfig::new().set_read_size(BytePageSize::Size4))
         .build();
 
     let msg = Connect::new(server.addr());

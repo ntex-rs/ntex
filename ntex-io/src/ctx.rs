@@ -201,16 +201,11 @@ impl IoContext {
             // stay in place and the read goes to a buffer of its own.
             st.get_read_buf()
         } else if let Some(mut buf) = st.buffer.get_read_buf() {
-            self.0.resize_read_buf(&mut buf);
+            buf.reserve_more();
             buf
         } else {
             st.get_read_buf()
         }
-    }
-
-    /// Resizes the read buffer.
-    pub fn resize_read_buf(&self, buf: &mut BytesMut) {
-        self.0.resize_read_buf(buf);
     }
 
     /// Releases a transport read buffer and reports the read result.
@@ -247,7 +242,7 @@ impl IoContext {
         if st.flags.is_stopping() {
             let mut buf = buf;
             buf.clear();
-            st.buffer.set_read_buf(buf, self.0.cfg());
+            st.buffer.set_read_buf(buf);
             stopping_read_status(st, &status)
         } else {
             let mut buf = buf;
@@ -256,7 +251,7 @@ impl IoContext {
                 buf.clear();
             }
             // release read buffer
-            st.buffer.set_read_buf(buf, self.0.cfg());
+            st.buffer.set_read_buf(buf);
 
             self.process_read_status(orig, status)
         }
@@ -289,7 +284,7 @@ impl IoContext {
         let discard = stopping || st.is_io_dropped();
 
         let status = st.buffer.with_read_src(&self.0, |buf| {
-            self.0.resize_read_buf(buf);
+            buf.reserve_more();
             let status = f(buf);
             if discard {
                 // the filters are done or the `Io` is gone, nothing can
@@ -991,8 +986,8 @@ mod tests {
         // handed to the transport
         let mut buf = ctx.take_read_buf();
         assert_eq!(buf, b"45");
-        ctx.resize_read_buf(&mut buf);
-        assert!(buf.capacity() - buf.len() >= io.cfg().read_buf().low);
+        buf.reserve_more();
+        assert!(buf.capacity() - buf.len() >= io.cfg().read_size().low());
         buf.extend_from_slice(b"6");
         assert_eq!(
             ctx.release_read_buf(buf, Poll::Ready(Ok(1))),

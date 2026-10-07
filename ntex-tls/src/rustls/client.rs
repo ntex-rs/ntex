@@ -37,7 +37,7 @@ impl TlsClientFilter {
         domain: ServerName<'static>,
     ) -> Result<Io<Layer<TlsClientFilter, F>>, io::Error> {
         let mut session = ClientConnection::new(cfg, domain).map_err(io::Error::other)?;
-        session.set_buffer_limit(Some(io.cfg().write_page_size().capacity()));
+        session.set_buffer_limit(Some(io.cfg().write_size().capacity()));
         let io = io.add_filter(TlsClientFilter {
             session: UnsafeCell::new(session),
         });

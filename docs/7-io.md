@@ -238,6 +238,7 @@ use ntex::{
     SharedCfg,
     io::IoConfig,
     time::{Millis, Seconds},
+    util::BytePageSize,
 };
 
 let cfg = SharedCfg::new("my-protocol")
@@ -247,8 +248,8 @@ let cfg = SharedCfg::new("my-protocol")
             .set_keepalive_timeout(Seconds(30))
             .set_shutdown_timeout(Seconds(2))
             .set_frame_read_rate(Seconds(2), Seconds(10), 1_024)
-            .set_read_buf(32 * 1024, 1024)
-            .set_write_buf(32 * 1024)
+            .set_read_size(BytePageSize::Size32)
+            .set_write_backpressure(32 * 1024)
             .set_write_buf_threshold(8 * 1024),
     )
     .build();
@@ -277,10 +278,10 @@ These settings are used by different parts of the stack:
   is released after outstanding output falls to half its high-water mark,
   counting both buffered output and output a transport has taken ownership of
   but not yet written to the peer.
-- The read low-water mark controls how much free capacity is reserved before
-  another socket read. It does not apply to output, which is held in
-  [`BytePages`] rather than cached read buffers, so the write setting takes
-  only a high-water mark.
+- The read page size controls how much free capacity is reserved before
+  another socket read: a buffer grows once less than [`BytePageSize::low`] of
+  its page remains free. Output is held in [`BytePages`] of the write page
+  size, so the write backpressure setting takes only a high-water mark.
 - The write page size controls newly allocated [`BytePages`], while the write
   threshold controls when supported transports attempt an early direct write.
 
@@ -414,17 +415,17 @@ read buffer, where a codec or protocol service can inspect and consume them.
 useful when a decoded message must retain part of the input after the decoder
 continues processing later data.
 
-Read buffers are `ntex-bytes` pages. Each buffer uses the smallest page size
-whose capacity holds the configured high-water mark, see
-[`BufConfig::page_size`]; the default 16,360 bytes is a `Size16` page and a
-high-water mark below 4 KiB still uses a `Size4` page. An empty buffer goes
+Read buffers are `ntex-bytes` pages of the size set with
+[`IoConfig::set_read_size`], `Size16` by default. A page's capacity is
+the default read high-water mark, 16,368 bytes for `Size16`;
+[`IoConfig::set_read_backpressure`] sets another one. An empty buffer goes
 back to the per-thread page cache of its size, shared with write pages and any
 other pooled `BytesMut`; [`set_page_cache_size`] tunes it. A frame split from
 the read buffer keeps the page alive, the page returns to the cache once the
 last frame is dropped. Before another socket read, the adapter obtains a
-buffer from `IoContext`. ntex ensures that the buffer has at least the
-configured low-water mark available, compacting it within its page when the
-data still fits there. If larger input must be buffered, the buffer moves to
+buffer from `IoContext`. ntex calls [`BytesMut::reserve_more`] once less than
+[`BytePageSize::low`] of the page remains free, compacting the data within its
+page when it still fits there. If larger input must be buffered, the buffer moves to
 bigger page sizes and, past the largest one, to a plain allocation that is
 freed instead of cached.
 
@@ -464,14 +465,17 @@ without depending on socket readiness, while the I/O subsystem consistently
 enforces buffer limits and backpressure.
 
 [`BytePages`]: https://docs.rs/ntex/latest/ntex/util/struct.BytePages.html
-[`BufConfig::page_size`]: https://docs.rs/ntex/latest/ntex/io/cfg/struct.BufConfig.html#method.page_size
+[`BytePageSize::low`]: https://docs.rs/ntex/latest/ntex/util/enum.BytePageSize.html#method.low
 [`Bytes`]: https://docs.rs/ntex/latest/ntex/util/struct.Bytes.html
 [`BytesMut`]: https://docs.rs/ntex/latest/ntex/util/struct.BytesMut.html
+[`BytesMut::reserve_more`]: https://docs.rs/ntex/latest/ntex/util/struct.BytesMut.html#method.reserve_more
 [`Io::flush`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.flush
 [`Io::read_exact`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.read_exact
 [`Io::recv`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.recv
 [`Io::send`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.send
 [`IoConfig`]: https://docs.rs/ntex/latest/ntex/io/struct.IoConfig.html
+[`IoConfig::set_read_backpressure`]: https://docs.rs/ntex/latest/ntex/io/struct.IoConfig.html#method.set_read_backpressure
+[`IoConfig::set_read_size`]: https://docs.rs/ntex/latest/ntex/io/struct.IoConfig.html#method.set_read_size
 [`IoRef::decode`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.decode
 [`IoRef::encode`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.encode
 [`IoRef::encode_bytes`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.encode_bytes

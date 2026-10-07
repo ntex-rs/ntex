@@ -221,7 +221,7 @@ async fn main() -> std::io::Result<()> {
         .add(
             IoConfig::new()
                 .set_shutdown_timeout(Seconds(1))
-                .set_write_page_size(BytePageSize::Size16),
+                .set_write_size(BytePageSize::Size16),
         )
         .add(
             HttpServiceConfig::new()

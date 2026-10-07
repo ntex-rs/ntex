@@ -803,7 +803,7 @@ mod tests {
     use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::Ordering::Relaxed};
     use std::{cell::RefCell, io};
 
-    use ntex_bytes::{BytePages, Bytes, BytesMut};
+    use ntex_bytes::{BytePageSize, BytePages, Bytes, BytesMut};
     use ntex_codec::BytesCodec;
     use ntex_io::{Io, IoConfig, IoRef, testing::IoTest};
     use ntex_service::{Ctx, Pipeline, Service, cfg::SharedCfg};
@@ -1063,8 +1063,8 @@ mod tests {
             server,
             SharedCfg::new("TEST").add(
                 IoConfig::new()
-                    .set_read_buf(8 * 1024, 1024)
-                    .set_write_buf(16 * 1024),
+                    .set_read_size(BytePageSize::Size8)
+                    .set_write_backpressure(16 * 1024),
             ),
         );
 
@@ -1135,7 +1135,7 @@ mod tests {
                 SharedCfg::new("TEST").add(
                     IoConfig::new()
                         .set_keepalive_timeout(Seconds::ZERO)
-                        .set_read_buf(1024, 512),
+                        .set_read_size(BytePageSize::Size4),
                 ),
             ),
             BytesCodec,
@@ -1160,7 +1160,7 @@ mod tests {
 
         let bytes = rand::rng()
             .sample_iter(&rand::distr::Alphanumeric)
-            .take(1024)
+            .take(BytePageSize::Size4.capacity())
             .map(char::from)
             .collect::<String>();
         client.write(bytes.clone());
@@ -1750,7 +1750,7 @@ mod tests {
         let (disp, _) = Dispatcher::debug(
             Io::new(
                 server,
-                SharedCfg::new("DBG").add(IoConfig::new().set_write_buf(2)),
+                SharedCfg::new("DBG").add(IoConfig::new().set_write_backpressure(2)),
             ),
             BytesCodec,
             Srv(Cell::new(Some(rx)), cnt.clone(), Cell::new(false)),
@@ -2491,7 +2491,10 @@ mod tests {
     ) -> (Dispatcher<BCodec, ()>, Gate, Events) {
         let gate = Rc::new(RefCell::new(None));
         let events = Rc::new(RefCell::new(Vec::new()));
-        let io = Io::new(server, SharedCfg::new("TEST").add(cfg.set_write_buf(1024)));
+        let io = Io::new(
+            server,
+            SharedCfg::new("TEST").add(cfg.set_write_backpressure(1024)),
+        );
         let disp = Dispatcher::new(
             io,
             BCodec(8),
@@ -2749,11 +2752,11 @@ mod tests {
         let events: Events = Rc::new(RefCell::new(Vec::new()));
         let io = Io::new(
             server,
-            SharedCfg::new("TEST").add(IoConfig::new().set_write_buf(1024).set_frame_read_rate(
-                Seconds(1),
-                Seconds::ZERO,
-                0,
-            )),
+            SharedCfg::new("TEST").add(
+                IoConfig::new()
+                    .set_write_backpressure(1024)
+                    .set_frame_read_rate(Seconds(1), Seconds::ZERO, 0),
+            ),
         );
         let disp = Dispatcher::new(
             io,
@@ -2889,7 +2892,7 @@ mod tests {
         let events2 = events.clone();
         let io = Io::new(
             server,
-            SharedCfg::new("TEST").add(IoConfig::new().set_write_buf(1024)),
+            SharedCfg::new("TEST").add(IoConfig::new().set_write_backpressure(1024)),
         );
         let (disp, _) = Dispatcher::debug(
             io,
@@ -3175,8 +3178,11 @@ mod tests {
         let gate = GateCtl::default();
         let g = gate.clone();
         let events = Rc::new(RefCell::new(Vec::new()));
-        let io = Io::new(server, SharedCfg::new("TEST").add(cfg.set_write_buf(1024)))
-            .map_filter(move |f| GateFilter(f, g));
+        let io = Io::new(
+            server,
+            SharedCfg::new("TEST").add(cfg.set_write_backpressure(1024)),
+        )
+        .map_filter(move |f| GateFilter(f, g));
         let ioref = io.get_ref();
         let disp = Dispatcher::new(
             io,

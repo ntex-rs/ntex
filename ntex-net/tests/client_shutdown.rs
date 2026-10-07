@@ -6,6 +6,7 @@
 //! them as well.
 use std::{io::ErrorKind, io::Read, net, thread, time::Duration};
 
+use ntex_bytes::BytePageSize;
 use ntex_io::IoConfig;
 use ntex_service::cfg::SharedCfg;
 
@@ -28,7 +29,7 @@ fn cfg() -> SharedCfg {
     SharedCfg::new("CLIENT")
         .add(
             IoConfig::new()
-                .set_read_buf(8192, 512)
+                .set_read_size(BytePageSize::Size8)
                 .set_shutdown_timeout(ntex::time::Seconds(5)),
         )
         .build()

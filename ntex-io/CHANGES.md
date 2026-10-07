@@ -1,16 +1,34 @@
 # Changes
 
-## [4.3.0] - Unreleased
+## [4.3.0] - 2026-10-07
 
-* Read buffers are ntex-bytes pages of the smallest page size that holds `high`, at least
-  `Size4`, empty buffers return to the ntex-bytes page cache shared with write pages
+* Read buffers are ntex-bytes pages of `IoConfig::read_size()`, empty buffers return to
+  the ntex-bytes page cache shared with write pages
 
-* Add `BufConfig::page_size()`
+* Add `IoConfig::set_read_size()`, `IoConfig::read_size()`, `IoConfig::set_read_backpressure()`,
+  `IoConfig::read_backpressure()` and `IoConfig::write_backpressure()`
 
-* Deprecate `cfg::set_read_buf_cache_limit()` and `cfg::read_buf_cache_limit()`, they have
-  no effect, use `ntex_bytes::set_page_cache_size()`
+* Breaking: Remove `IoConfig::set_read_buf()`, use `IoConfig::set_read_size()` and
+  `IoConfig::set_read_backpressure()`, `set_read_size()` resets the read backpressure watermark
+  to the page capacity
+
+* Breaking: Rename `IoConfig::set_write_buf()` to `IoConfig::set_write_backpressure()`
+
+* Breaking: Remove `IoConfig::write_buf()`, use `IoConfig::write_backpressure()`
+
+* Breaking: Rename `IoConfig::write_page_size()` to `IoConfig::write_size()` and
+  `IoConfig::set_write_page_size()` to `IoConfig::set_write_size()`
+
+* Breaking: Remove `BufConfig` and `IoConfig::read_buf()`
+
+* Breaking: Remove `cfg::set_read_buf_cache_limit()` and `cfg::read_buf_cache_limit()`, use
+  `ntex_bytes::set_page_cache_size()`
 
 * Frames split from a read buffer return its page to the cache once the last one is dropped
+
+* Breaking: Remove `IoRef::resize_read_buf()` and `IoContext::resize_read_buf()`, use
+  `BytesMut::reserve_more()`, read buffers grow once less than `BytePageSize::low()` of their
+  page size remains
 
 ## [4.2.1] - 2026-10-05
 

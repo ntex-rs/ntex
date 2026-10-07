@@ -2,6 +2,7 @@
 use std::{io::ErrorKind, io::Write, net, thread, time::Duration};
 
 use ntex::{codec::BytesCodec, util::Either};
+use ntex_bytes::BytePageSize;
 use ntex_io::IoConfig;
 use ntex_service::cfg::SharedCfg;
 
@@ -57,7 +58,7 @@ async fn reset_while_read_paused() {
     });
 
     let cfg = SharedCfg::new("RESET")
-        .add(IoConfig::new().set_read_buf(1024, 256))
+        .add(IoConfig::new().set_read_size(BytePageSize::Size4))
         .build();
     let io = ntex_net::tcp_connect(addr, cfg).await.unwrap();
     // let the read buffer fill up and the reset arrive

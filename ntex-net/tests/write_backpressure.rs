@@ -21,7 +21,7 @@ const CHUNK: usize = 16 * 1024;
 
 fn cfg() -> SharedCfg {
     SharedCfg::new("TEST")
-        .add(IoConfig::new().set_write_buf(HIGH))
+        .add(IoConfig::new().set_write_backpressure(HIGH))
         .build()
 }
 

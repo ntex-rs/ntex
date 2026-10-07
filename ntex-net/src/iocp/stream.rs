@@ -585,6 +585,7 @@ impl Drop for WeakStreamCtl {
 mod tests {
     use std::os::windows::io::{FromRawSocket, IntoRawSocket};
 
+    use ntex_bytes::BytesMut;
     use socket2::{Domain, Protocol, Type};
 
     use super::*;
@@ -765,19 +766,19 @@ mod tests {
     async fn idle_recv_holds_no_read_buffer() {
         let reactor = Reactor::new().unwrap();
         let (io, ctl, ops, raw, mut peer) = registered(&reactor);
-        let cfg = io.cfg().read_buf();
-        let buf = cfg.get();
+        let page = io.cfg().read_size();
+        let buf = BytesMut::with_page_size(page);
         let ptr = buf.as_ptr();
-        cfg.release(buf);
+        drop(buf);
 
         ctl.read();
         assert!(
             ops.0.with(|st| st.streams[ctl.id].rd_op.is_pending()),
             "recv completed without data"
         );
-        let buf = cfg.get();
+        let buf = BytesMut::with_page_size(page);
         assert_eq!(buf.as_ptr(), ptr, "idle recv took a read buffer");
-        cfg.release(buf);
+        drop(buf);
 
         cleanup(&ops);
         assert_closed(raw, &mut peer);
