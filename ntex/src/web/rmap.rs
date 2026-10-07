@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
-use urly::Url;
+use urly::{Url, quoting::Component, quoting::quote};
 
 use crate::router::ResourceDef;
 use crate::util::HashMap;
@@ -70,7 +70,9 @@ impl ResourceMap {
         I: AsRef<str>,
     {
         let mut path = String::new();
-        let mut elements = elements.into_iter();
+        let mut elements = elements
+            .into_iter()
+            .map(|element| quote(element.as_ref(), Component::Opaque).into_owned());
 
         if self.patterns_for(name, &mut path, &mut elements)?.is_some() {
             if path.starts_with('/') {
@@ -238,6 +240,16 @@ mod tests {
             assert_eq!(
                 rmap.url_for(&req, "sibling", ["4"]).unwrap().as_str(),
                 "http://localhost:8080/b/4"
+            );
+            assert_eq!(
+                rmap.url_for(&req, "index", ["a/b?c#d%"]).unwrap().as_str(),
+                "http://localhost:8080/index/a%2Fb%3Fc%23d%25"
+            );
+            assert_eq!(
+                rmap.url_for(&req, "youtube", ["a/b?c#d%"])
+                    .unwrap()
+                    .as_str(),
+                "https://youtube.com/watch/a%2Fb%3Fc%23d%25"
             );
             assert!(rmap.url_for(&req, "index", [""; 0]).is_err());
             assert!(rmap.url_for(&req, "unknown", [""; 0]).is_err());

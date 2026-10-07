@@ -14,7 +14,7 @@ predictable interface.
 
 In Rust, the most natural way to express this is with a function:
 
-```rust
+```rust,ignore
 async fn execute(op: Operation) -> Result<OperationResult, Error> {
     // Execute the operation.
     // ...
@@ -44,7 +44,7 @@ result into an HTTP response.
 Once again, the shape can stay simple. The endpoint can be just another
 function:
 
-```rust
+```rust,ignore
 async fn endpoint(req: HttpRequest) -> Result<HttpResponse, Error> {
     // Extract an operation from the request.
     let operation = load_operation(req).await?;
@@ -91,7 +91,7 @@ Everything that happens in between is an implementation detail.
 We can add more steps, such as authentication and authorization, without
 changing the overall shape of the system:
 
-```rust
+```rust,ignore
 async fn endpoint(req: HttpRequest) -> Result<HttpResponse, Error> {
     // Authenticate the request.
     let req = authenticate(req).await?;
@@ -143,7 +143,7 @@ the same shape as the functions in the previous examples.
 We can describe this idea with a small `Service` trait that resembles Rust's
 `Fn` traits:
 
-```rust
+```rust,ignore
 trait Service<Req> {
     /// Response produced by the service.
     type Res;
@@ -181,7 +181,7 @@ almost everywhere.
 
 Consider a TCP connection handler:
 
-```rust
+```rust,ignore
 impl Service<TcpStream, Res = (), Error = io::Error>
 ```
 
@@ -192,7 +192,7 @@ idea behind [ntex-server](https://crates.io/crates/ntex-server).
 
 A TCP connector fits the same model:
 
-```rust
+```rust,ignore
 impl Service<net::SocketAddr, Res = TcpStream, Error = io::Error>
 ```
 
@@ -205,7 +205,7 @@ SocketAddr -> TcpStream
 
 A TLS handshake is another example:
 
-```rust
+```rust,ignore
 impl<T: Stream> Service<T, Res = TlsStream<T>, Error = io::Error>
 ```
 

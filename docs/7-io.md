@@ -284,8 +284,9 @@ These settings are used by different parts of the stack:
   [`BytePageSize::low`] of its page remains free. Output is held in
   [`BytePages`] of the write page
   size, so the write backpressure setting takes only a high-water mark.
-- The write page size controls newly allocated [`BytePages`], while the write
-  threshold controls when supported transports attempt an early direct write.
+- The write buffer page size controls newly allocated [`BytePages`], while the
+  write threshold controls when supported transports attempt an early direct
+  write.
 
 Connection and keep-alive timeouts are disabled by default. Frame read-rate
 limits and the write timeout are also disabled. The default graceful-shutdown

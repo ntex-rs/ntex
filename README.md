@@ -45,7 +45,7 @@ async fn index() -> &'static str {
 
 #[ntex::main]
 async fn main() -> std::io::Result<()> {
-    web::HttpServer::new(async |_| wev::App::new().service(index))
+    web::HttpServer::new(async |_| web::App::new().service(index))
         .bind("127.0.0.1:8080", SharedCfg::new("hello-world"))?
         .run()
         .await
