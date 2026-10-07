@@ -58,7 +58,11 @@ async fn reset_while_read_paused() {
     });
 
     let cfg = SharedCfg::new("RESET")
-        .add(IoConfig::new().set_read_size(BytePageSize::Size4))
+        .add(
+            IoConfig::new()
+                .set_read_size(BytePageSize::Size4, BytePageSize::Size4)
+                .set_read_backpressure(BytePageSize::Size4.capacity()),
+        )
         .build();
     let io = ntex_net::tcp_connect(addr, cfg).await.unwrap();
     // let the read buffer fill up and the reset arrive

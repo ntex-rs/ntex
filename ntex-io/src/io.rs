@@ -19,6 +19,10 @@ use crate::utils::{Extensions, WriteDeadline, write_timed_out};
 use crate::waiters::{TAG_WRITE, WriteGuard};
 use crate::{Decoded, FilterLayer, Handle, IoStatusUpdate, IoStream, RecvError};
 
+/// Read batches in a row small enough for a smaller page before the read page
+/// size shrinks.
+const RD_SHRINK_BATCHES: u8 = 4;
+
 /// Buffered, filterable interface to an underlying I/O stream.
 ///
 /// `Io` is the main handle for a connection. The runtime fills its read buffer
@@ -80,6 +84,15 @@ pub(crate) struct IoState {
     /// until the operation completes, so those bytes are no longer in
     /// `buffer`. They are still outstanding output and must be accounted for.
     pub(super) wr_inflight: Cell<u32>,
+    /// Page size of new read buffers.
+    ///
+    /// It adapts to the input between the configured min and max read sizes,
+    /// see [`IoState::track_read`].
+    rd_size: Cell<BytePageSize>,
+    /// Input read since the last read that did not fill its buffer.
+    rd_batch: Cell<u32>,
+    /// Consecutive read batches small enough for a smaller page.
+    rd_small: Cell<u8>,
     pub(super) extensions: Extensions,
 }
 
@@ -215,8 +228,81 @@ impl IoState {
         }
     }
 
+    /// Acquires an empty read buffer of the connection's read page size from
+    /// the thread-local page cache.
     pub(super) fn get_read_buf(&self) -> BytesMut {
-        self.cfg.new_read_buf()
+        BytesMut::with_page_size(self.rd_size.get())
+    }
+
+    /// Returns the page size of new read buffers.
+    #[cfg(test)]
+    pub(super) fn read_size(&self) -> BytePageSize {
+        self.rd_size.get()
+    }
+
+    /// Resets the read page size to the configured min.
+    fn reset_read_size(&self) {
+        self.rd_size.set(self.cfg.read_size_min());
+        self.rd_batch.set(0);
+        self.rd_small.set(0);
+    }
+
+    /// Adapts the read page size to a transport read of `nbytes`.
+    ///
+    /// Reads that fill their buffer most likely leave more input behind, so
+    /// they and the read that follows them form one batch. A batch larger
+    /// than the page capacity grows the page size to fit it, up to the
+    /// configured max. After [`RD_SHRINK_BATCHES`] batches in a row that fit
+    /// in half of the next smaller page, the page size shrinks by one step,
+    /// down to the configured min.
+    pub(super) fn track_read(&self, nbytes: usize, full: bool) {
+        let batch = self.rd_batch.get().saturating_add(as_u32(nbytes));
+        let size = self.rd_size.get();
+        if full {
+            self.rd_batch.set(batch);
+            if batch as usize > size.capacity() {
+                self.grow_read_size(batch as usize);
+            }
+            return;
+        }
+
+        self.rd_batch.set(0);
+        let batch = batch as usize;
+        if batch == 0 {
+            // nothing was read since the previous batch ended
+        } else if batch > size.capacity() {
+            self.grow_read_size(batch);
+        } else if size != self.cfg.read_size_min() && batch < size.prev().capacity() / 2 {
+            let small = self.rd_small.get() + 1;
+            if small < RD_SHRINK_BATCHES {
+                self.rd_small.set(small);
+            } else {
+                let min = self.cfg.read_size_min();
+                let prev = size.prev();
+                self.rd_size.set(if prev.capacity() < min.capacity() {
+                    min
+                } else {
+                    prev
+                });
+                self.rd_small.set(0);
+            }
+        } else {
+            self.rd_small.set(0);
+        }
+    }
+
+    fn grow_read_size(&self, batch: usize) {
+        let max = self.cfg.read_size_max();
+        let size = BytePageSize::for_capacity(batch);
+        let size = if size == BytePageSize::Unset || size.capacity() > max.capacity() {
+            max
+        } else {
+            size
+        };
+        if size.capacity() > self.rd_size.get().capacity() {
+            self.rd_size.set(size);
+        }
+        self.rd_small.set(0);
     }
 
     pub(super) fn is_rd_backpressure_needed(&self, size: usize) -> bool {
@@ -395,8 +481,12 @@ impl Io {
             timeout: Cell::new(TimerHandle::default()),
             shutdown_timeout: Cell::new(None),
             wr_inflight: Cell::new(0),
+            rd_size: Cell::new(BytePageSize::Size4),
+            rd_batch: Cell::new(0),
+            rd_small: Cell::new(0),
             extensions: Extensions::default(),
         });
+        inner.reset_read_size();
         inner.filter.set(Base::new(IoRef(inner.clone())));
 
         let ioref = IoRef(inner);
@@ -433,6 +523,9 @@ impl IoRef {
             timeout: Cell::new(TimerHandle::default()),
             shutdown_timeout: Cell::new(None),
             wr_inflight: Cell::new(0),
+            rd_size: Cell::new(BytePageSize::Size4),
+            rd_batch: Cell::new(0),
+            rd_small: Cell::new(0),
             extensions: Extensions::default(),
         }))
     }
@@ -490,8 +583,9 @@ impl<F> Io<F> {
     /// Replaces this connection's shared I/O configuration.
     ///
     /// The write-buffer page size and eager-write enablement are updated
-    /// immediately. Existing allocated buffers and an already registered timer
-    /// are not recreated.
+    /// immediately, the read page size restarts at the new min read size.
+    /// Existing allocated buffers and an already registered timer are not
+    /// recreated.
     ///
     /// # Safety
     ///
@@ -510,6 +604,7 @@ impl<F> Io<F> {
         unsafe {
             self.st().cfg.replace(cfg);
         }
+        self.st().reset_read_size();
     }
 }
 
@@ -1306,6 +1401,148 @@ mod tests {
         assert_eq!(item, TEXT);
     }
 
+    fn read_size_io(min: BytePageSize, max: BytePageSize) -> Io {
+        Io::new(
+            IoTest::create().1,
+            SharedCfg::new("SRV").add(IoConfig::default().set_read_size(min, max)),
+        )
+    }
+
+    /// The read page size starts at the min and grows to fit read batches,
+    /// up to the max.
+    #[ntex::test]
+    async fn read_size_grows_with_batch() {
+        let io = Io::new(IoTest::create().1, SharedCfg::new("SRV"));
+        let st = io.st();
+        assert_eq!(st.read_size(), BytePageSize::Size4);
+        assert_eq!(st.get_read_buf().capacity(), BytePageSize::Size4.capacity());
+
+        // a read that does not fill its buffer ends the batch
+        st.track_read(BytePageSize::Size4.capacity() - 1, false);
+        assert_eq!(st.read_size(), BytePageSize::Size4);
+
+        // full reads continue the batch, it grows the page once it no longer
+        // fits
+        st.track_read(3000, true);
+        assert_eq!(st.read_size(), BytePageSize::Size4);
+        st.track_read(3000, true);
+        assert_eq!(st.read_size(), BytePageSize::Size8);
+        st.track_read(10_000, false);
+        assert_eq!(st.read_size(), BytePageSize::Size16);
+        assert_eq!(
+            st.get_read_buf().capacity(),
+            BytePageSize::Size16.capacity()
+        );
+
+        // zero-byte reads and errors do not change anything
+        st.track_read(0, false);
+        assert_eq!(st.read_size(), BytePageSize::Size16);
+
+        // capped at the max
+        for _ in 0..10 {
+            st.track_read(60_000, true);
+        }
+        assert_eq!(st.read_size(), BytePageSize::Size64);
+        st.track_read(1, false);
+        assert_eq!(st.read_size(), BytePageSize::Size64);
+    }
+
+    /// The read page size shrinks one step after several small batches in a
+    /// row, down to the min.
+    #[ntex::test]
+    async fn read_size_shrinks_after_small_batches() {
+        let io = read_size_io(BytePageSize::Size8, BytePageSize::Size64);
+        let st = io.st();
+        assert_eq!(st.read_size(), BytePageSize::Size8);
+        st.track_read(40_000, false);
+        assert_eq!(st.read_size(), BytePageSize::Size48);
+
+        // fits in half of the smaller page, but not enough in a row
+        for _ in 0..RD_SHRINK_BATCHES - 1 {
+            st.track_read(100, false);
+        }
+        assert_eq!(st.read_size(), BytePageSize::Size48);
+        // a batch that needs the larger page restarts the count
+        st.track_read(20_000, false);
+        for _ in 0..RD_SHRINK_BATCHES - 1 {
+            st.track_read(100, false);
+        }
+        assert_eq!(st.read_size(), BytePageSize::Size48);
+        st.track_read(100, false);
+        assert_eq!(st.read_size(), BytePageSize::Size32);
+
+        // down to the min, not below
+        for _ in 0..RD_SHRINK_BATCHES * 10 {
+            st.track_read(100, false);
+        }
+        assert_eq!(st.read_size(), BytePageSize::Size8);
+    }
+
+    /// Equal min and max read page sizes disable the adaptation.
+    #[ntex::test]
+    async fn read_size_fixed() {
+        let io = read_size_io(BytePageSize::Size16, BytePageSize::Size16);
+        let st = io.st();
+        assert_eq!(st.read_size(), BytePageSize::Size16);
+        for _ in 0..10 {
+            st.track_read(60_000, true);
+        }
+        assert_eq!(st.read_size(), BytePageSize::Size16);
+        for _ in 0..RD_SHRINK_BATCHES * 10 {
+            st.track_read(1, false);
+        }
+        assert_eq!(st.read_size(), BytePageSize::Size16);
+    }
+
+    /// Replacing the configuration restarts the read page size at the new
+    /// min.
+    #[ntex::test]
+    async fn read_size_reset_by_set_config() {
+        let io = Io::new(IoTest::create().1, SharedCfg::new("SRV"));
+        io.st().track_read(60_000, false);
+        assert_eq!(io.st().read_size(), BytePageSize::Size64);
+
+        unsafe {
+            io.set_config(
+                SharedCfg::new("SRV2").add(
+                    IoConfig::default().set_read_size(BytePageSize::Size8, BytePageSize::Size16),
+                ),
+            );
+        }
+        assert_eq!(io.st().read_size(), BytePageSize::Size8);
+        io.st().track_read(60_000, false);
+        assert_eq!(io.st().read_size(), BytePageSize::Size16);
+    }
+
+    /// Transport reads drive the read page size, read backpressure does not
+    /// depend on it.
+    #[ntex::test]
+    async fn read_size_follows_transport_reads() {
+        let (client, server) = IoTest::create();
+        let io = Io::new(server, SharedCfg::new("SRV"));
+        assert_eq!(io.st().read_size(), BytePageSize::Size4);
+
+        let data = vec![7u8; 100 * 1024];
+        client.write(&data);
+        let mut received = 0;
+        while received < data.len() {
+            let item = io.recv(&BytesCodec).await.unwrap().unwrap();
+            received += item.len();
+        }
+        assert_eq!(received, data.len());
+        assert!(io.st().read_size().capacity() > BytePageSize::Size4.capacity());
+        assert_eq!(
+            io.cfg().read_backpressure(),
+            BytePageSize::Size32.capacity()
+        );
+
+        // small messages shrink it back
+        for _ in 0..RD_SHRINK_BATCHES * 10 {
+            client.write(b"x");
+            assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), &b"x"[..]);
+        }
+        assert_eq!(io.st().read_size(), BytePageSize::Size4);
+    }
     /// Callbacks that hold an `IoRef` must not keep the connection state alive
     /// after the `Io` is dropped.
     #[ntex::test]
@@ -1444,7 +1681,11 @@ mod tests {
     async fn read() {
         let io = Io::new(
             IoTest::create().0,
-            SharedCfg::new("SRV").add(IoConfig::default().set_read_size(BytePageSize::Size4)),
+            SharedCfg::new("SRV").add(
+                IoConfig::default()
+                    .set_read_size(BytePageSize::Size4, BytePageSize::Size4)
+                    .set_read_backpressure(BytePageSize::Size4.capacity()),
+            ),
         );
         assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
         assert!(io.st().dispatch_task.is_set());
@@ -1725,7 +1966,11 @@ mod tests {
     async fn read_notify() {
         let io = Io::new(
             IoTest::create().0,
-            SharedCfg::new("SRV").add(IoConfig::default().set_read_size(BytePageSize::Size4)),
+            SharedCfg::new("SRV").add(
+                IoConfig::default()
+                    .set_read_size(BytePageSize::Size4, BytePageSize::Size4)
+                    .set_read_backpressure(BytePageSize::Size4.capacity()),
+            ),
         );
         assert!(!io.st().flags.is_read_notify());
         assert!(lazy(|cx| io.poll_read_notify(cx)).await.is_pending());
@@ -1848,7 +2093,11 @@ mod tests {
 
         let io = Io::new(
             server,
-            SharedCfg::new("SRV").add(IoConfig::default().set_read_size(BytePageSize::Size4)),
+            SharedCfg::new("SRV").add(
+                IoConfig::default()
+                    .set_read_size(BytePageSize::Size4, BytePageSize::Size4)
+                    .set_read_backpressure(BytePageSize::Size4.capacity()),
+            ),
         );
         assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
 
@@ -1873,7 +2122,11 @@ mod tests {
 
         let io = Io::new(
             server,
-            SharedCfg::new("SRV").add(IoConfig::default().set_read_size(BytePageSize::Size4)),
+            SharedCfg::new("SRV").add(
+                IoConfig::default()
+                    .set_read_size(BytePageSize::Size4, BytePageSize::Size4)
+                    .set_read_backpressure(BytePageSize::Size4.capacity()),
+            ),
         );
         assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
 
@@ -1904,7 +2157,11 @@ mod tests {
 
         let io = Io::new(
             server,
-            SharedCfg::new("SRV").add(IoConfig::default().set_read_size(BytePageSize::Size4)),
+            SharedCfg::new("SRV").add(
+                IoConfig::default()
+                    .set_read_size(BytePageSize::Size4, BytePageSize::Size4)
+                    .set_read_backpressure(BytePageSize::Size4.capacity()),
+            ),
         );
         assert!(lazy(|cx| io.poll_read_more(cx)).await.is_pending());
 
@@ -2654,7 +2911,8 @@ mod tests {
             server,
             SharedCfg::new("SRV").add(
                 IoConfig::default()
-                    .set_read_size(BytePageSize::Size4)
+                    .set_read_size(BytePageSize::Size4, BytePageSize::Size4)
+                    .set_read_backpressure(BytePageSize::Size4.capacity())
                     .set_shutdown_timeout(ntex_util::time::Seconds(2)),
             ),
         );
@@ -3519,7 +3777,8 @@ mod tests {
             server,
             SharedCfg::new("SRV").add(
                 IoConfig::default()
-                    .set_read_size(BytePageSize::Size4)
+                    .set_read_size(BytePageSize::Size4, BytePageSize::Size4)
+                    .set_read_backpressure(BytePageSize::Size4.capacity())
                     .set_shutdown_timeout(ntex_util::time::Seconds(30)),
             ),
         )
@@ -3564,7 +3823,8 @@ mod tests {
             server,
             SharedCfg::new("SRV").add(
                 IoConfig::default()
-                    .set_read_size(BytePageSize::Size4)
+                    .set_read_size(BytePageSize::Size4, BytePageSize::Size4)
+                    .set_read_backpressure(BytePageSize::Size4.capacity())
                     .set_shutdown_timeout(ntex_util::time::Seconds(30)),
             ),
         )
@@ -3786,7 +4046,8 @@ mod tests {
             server,
             SharedCfg::new("SRV").add(
                 IoConfig::default()
-                    .set_read_size(BytePageSize::Size4)
+                    .set_read_size(BytePageSize::Size4, BytePageSize::Size4)
+                    .set_read_backpressure(BytePageSize::Size4.capacity())
                     .set_shutdown_timeout(ntex_util::time::Seconds(10)),
             ),
         )
@@ -3849,7 +4110,8 @@ mod tests {
             server,
             SharedCfg::new("SRV").add(
                 IoConfig::default()
-                    .set_read_size(BytePageSize::Size4)
+                    .set_read_size(BytePageSize::Size4, BytePageSize::Size4)
+                    .set_read_backpressure(BytePageSize::Size4.capacity())
                     .set_shutdown_timeout(ntex_util::time::Seconds(1)),
             ),
         )
@@ -3897,7 +4159,8 @@ mod tests {
             server,
             SharedCfg::new("SRV").add(
                 IoConfig::default()
-                    .set_read_size(BytePageSize::Size4)
+                    .set_read_size(BytePageSize::Size4, BytePageSize::Size4)
+                    .set_read_backpressure(BytePageSize::Size4.capacity())
                     .set_shutdown_timeout(ntex_util::time::Seconds(10)),
             ),
         )

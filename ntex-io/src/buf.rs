@@ -336,7 +336,7 @@ impl Buffer {
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
-        let mut rb = self.read.take().unwrap_or_else(|| io.cfg().new_read_buf());
+        let mut rb = self.read.take().unwrap_or_else(|| io.0.get_read_buf());
         let result = f(&mut rb);
 
         #[cfg(debug_assertions)]
@@ -507,7 +507,7 @@ impl FilterBuf<'_> {
             .curr
             .read
             .take()
-            .unwrap_or_else(|| self.io.cfg().new_read_buf());
+            .unwrap_or_else(|| self.io.0.get_read_buf());
 
         let result = f(&mut read_src, &mut read_dst);
 
@@ -854,22 +854,18 @@ mod tests {
 
     #[ntex::test]
     async fn set_read_buf_merges_into_cacheable_buffer() {
-        let (_, server) = IoTest::create();
-        let io = Io::from(server);
-        let ioref = io.get_ref();
-        let cfg = ioref.cfg();
-        let high = cfg.read_size().capacity();
+        let high = BytePageSize::Size16.capacity();
         let stack = Stack::new(BytePageSize::Size8);
 
         // unconsumed input, most of the buffer is taken by a decoded frame
         // that is still alive
-        let mut first = cfg.new_read_buf();
+        let mut first = BytesMut::with_page_size(BytePageSize::Size16);
         first.extend_from_slice(&vec![1; high - 100]);
         let frame = first.split_to(high - 1100);
         stack.set_read_buf(first);
 
         // a read into a buffer of its own completes
-        let mut second = cfg.new_read_buf();
+        let mut second = BytesMut::with_page_size(BytePageSize::Size16);
         second.extend_from_slice(&[2; 4000]);
         stack.set_read_buf(second);
 
