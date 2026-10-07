@@ -68,10 +68,10 @@ where
     #[inline]
     /// Reads and decodes the next item.
     ///
-    /// Returns `Ok(None)` when the peer disconnects cleanly before another
-    /// complete item is decoded. Codec errors are returned in `Either::Left`;
-    /// transport errors and dispatcher timeouts are returned in
-    /// `Either::Right`.
+    /// Returns `Ok(None)` when the connection can no longer produce another
+    /// complete item and no error was recorded. Codec errors are returned in
+    /// `Either::Left`; dispatcher timeouts and connection errors from the
+    /// transport, a filter, or shutdown are returned in `Either::Right`.
     pub async fn recv(&self) -> Result<Option<U::Item>, Either<U::Error, io::Error>> {
         self.io.recv(&self.codec).await
     }
@@ -84,8 +84,9 @@ where
     #[inline]
     /// Encodes an item and fully flushes it to the transport.
     ///
-    /// Codec errors are returned in `Either::Left`; transport errors are
-    /// returned in `Either::Right`.
+    /// Codec errors are returned in `Either::Left`; connection errors from the
+    /// transport, a filter, or shutdown, including an expired write timeout,
+    /// are returned in `Either::Right`.
     pub async fn send(
         &self,
         item: <U as Encoder>::Item,

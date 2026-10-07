@@ -456,6 +456,11 @@ impl FilterCtx<'_> {
 /// destination is transport-facing. Buffers are returned to the chain after
 /// each closure completes; empty read buffers may be returned to the
 /// configured cache.
+///
+/// Buffer access is not reentrant. A closure must not access an overlapping
+/// buffer again through this object or its [`IoRef`]. Nested write access
+/// panics; nested read access is unsupported and may terminate the connection
+/// or lose nested buffer changes.
 pub struct FilterBuf<'a> {
     io: &'a IoRef,
     curr: &'a Buffer,
@@ -482,6 +487,8 @@ impl FilterBuf<'_> {
     /// The source is optional because no bytes may currently be allocated for
     /// this edge of the filter chain. Leaving an empty buffer in the option
     /// returns it to the configured cache.
+    ///
+    /// The closure must not access this read source again.
     pub fn with_read_src<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut Option<BytesMut>) -> R,
@@ -498,6 +505,8 @@ impl FilterBuf<'_> {
     /// Implementations normally consume bytes from `src` and append decoded or
     /// transformed bytes to `dst`. Unconsumed source bytes are retained for the
     /// next invocation.
+    ///
+    /// The closure must not access either read buffer again.
     pub fn with_read_buffers<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut Option<BytesMut>, &mut BytesMut) -> R,
@@ -544,6 +553,10 @@ impl FilterBuf<'_> {
     /// Implementations normally consume bytes from `src` and append encoded or
     /// transformed bytes to `dst`. Appending destination bytes marks the write
     /// chain as needing transport progress.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the closure accesses either write buffer again.
     pub fn with_write_buffers<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytePages, &mut BytePages) -> R,

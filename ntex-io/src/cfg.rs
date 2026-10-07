@@ -194,7 +194,8 @@ impl IoConfig {
     ///
     /// The dispatcher runs the timer only while the connection is idle: no
     /// input is buffered, no partial frame is being read, and no decoded
-    /// frames are being handled. It starts once the last response is done.
+    /// frames are being handled. It starts when the dispatcher enters this
+    /// idle state, including after all decoded frames have been handled.
     /// Partial frames are bounded by
     /// [frame read-rate](Self::set_frame_read_rate) limits instead, and write
     /// backpressure by the [write timeout](Self::set_write_timeout).
@@ -226,8 +227,10 @@ impl IoConfig {
     /// [`crate::Io::shutdown`] reports a timed-out error once the transport
     /// has stopped.
     ///
-    /// The timeout does not apply when there is nothing to drain, so a
-    /// connection with no pending output never fails on it.
+    /// The timeout also applies when no application output is pending: a
+    /// filter may still be waiting for the peer to complete its shutdown
+    /// exchange. If both phases can finish immediately, the deadline has no
+    /// observable effect.
     ///
     /// The default is one second.
     ///

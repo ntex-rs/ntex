@@ -157,13 +157,13 @@ impl IoTest {
         channel.borrow().waker.wake();
     }
 
-    /// Makes this endpoint's next transport write fail with `err`.
+    /// Makes the peer endpoint's next transport write fail with `err`.
     pub fn write_error(&self, err: io::Error) {
         self.local.lock().unwrap().borrow_mut().write = IoTestState::Err(err);
         self.remote.lock().unwrap().borrow().waker.wake();
     }
 
-    /// Makes this endpoint's next transport write return zero bytes.
+    /// Makes the peer endpoint's next transport write return zero bytes.
     pub fn write_zero(&self) {
         self.local.lock().unwrap().borrow_mut().write = IoTestState::Close;
         self.remote.lock().unwrap().borrow().waker.wake();
@@ -189,10 +189,10 @@ impl IoTest {
         f(&mut ch.buf)
     }
 
-    /// Simulates the peer closing its write side.
+    /// Simulates this endpoint closing its write side.
     ///
-    /// This wakes a pending reader and yields once so the close can be
-    /// observed by asynchronous test code.
+    /// This wakes the peer endpoint's pending reader and waits briefly so the
+    /// close can be observed by asynchronous test code.
     pub async fn close(&self) {
         {
             let guard = self.remote.lock().unwrap();
@@ -261,6 +261,10 @@ impl IoTest {
     ///
     /// Returns the number of bytes copied, zero on simulated peer closure, or
     /// `Pending` when no input is available.
+    ///
+    /// # Panics
+    ///
+    /// Panics if data is available but `buf` has no remaining capacity.
     pub fn poll_read_buf(
         &self,
         cx: &mut Context<'_>,
