@@ -148,9 +148,9 @@ pub fn set_pages_cache(size: usize) {
 ///
 /// By default fewer pages are cached for larger page sizes:
 ///
-/// | Page size | 4K | 8K | 16K | 24K | 32K | 48K | 64K | 128K | 256K |
-/// |-----------|----|----|-----|-----|-----|-----|-----|------|------|
-/// | Pages     | 64 | 32 | 64  | 16  | 16  | 8   | 8   | 2    | 1    |
+/// | Page size | 4K  | 8K | 16K | 24K | 32K | 48K | 64K | 128K | 256K |
+/// |-----------|-----|----|-----|-----|-----|-----|-----|------|------|
+/// | Pages     | 128 | 64 | 64  | 32  | 16  | 8   | 16  | 2    | 1    |
 ///
 /// Buffers of [`BytePageSize::Unset`] are never cached, the call does nothing
 /// for it.

@@ -484,13 +484,13 @@ virtual-memory pages.
 
 | Class     | Allocation | Capacity      | `half_capacity()` | `low()`   | Cached pages by default |
 |-----------|------------|---------------|-------------------|-----------|-------------------------|
-| `Size4`   | 4 KiB      | 4,080 bytes   | 2 KiB             | 256 bytes | 64                      |
-| `Size8`   | 8 KiB      | 8,176 bytes   | 4 KiB             | 512 bytes | 32                      |
+| `Size4`   | 4 KiB      | 4,080 bytes   | 2 KiB             | 256 bytes | 128                     |
+| `Size8`   | 8 KiB      | 8,176 bytes   | 4 KiB             | 512 bytes | 64                      |
 | `Size16`  | 16 KiB     | 16,368 bytes  | 8 KiB             | 1 KiB     | 64                      |
-| `Size24`  | 24 KiB     | 24,560 bytes  | 12 KiB            | 1.5 KiB   | 16                      |
+| `Size24`  | 24 KiB     | 24,560 bytes  | 12 KiB            | 1.5 KiB   | 32                      |
 | `Size32`  | 32 KiB     | 32,752 bytes  | 16 KiB            | 2 KiB     | 16                      |
 | `Size48`  | 48 KiB     | 49,136 bytes  | 16 KiB            | 3 KiB     | 8                       |
-| `Size64`  | 64 KiB     | 65,520 bytes  | 16 KiB            | 4 KiB     | 8                       |
+| `Size64`  | 64 KiB     | 65,520 bytes  | 16 KiB            | 4 KiB     | 16                      |
 | `Size128` | 128 KiB    | 131,056 bytes | 16 KiB            | 8 KiB     | 2                       |
 | `Size256` | 256 KiB    | 262,128 bytes | 16 KiB            | 16 KiB    | 1                       |
 | `Unset`   | -          | 65,520 bytes  | 16 KiB            | 4 KiB     | never cached            |
@@ -587,8 +587,10 @@ live messages.
 
 [`set_page_cache_size`] sets the number of cached pages of one class for the
 current thread. The defaults, listed in the table above, cache more pages of
-small classes and fewer of large ones. With all caches full, a thread retains
-about 3.75 MiB.
+small classes and fewer of large ones. The largest shares go to the classes
+that I/O uses most: 4 to 16 KiB pages, where connection reads start and the
+default write page; and 64 KiB pages, where reads of busy connections grow
+to. With all caches full, a thread retains about 5 MiB.
 
 ```rust
 use ntex_bytes::{BytePageSize, set_page_cache_size};
@@ -611,9 +613,9 @@ memory held by live requests or slow consumers. Start with the defaults, then
 adjust them using the sizes and concurrency of your actual workload. More
 workers also means more independent caches.
 
-For example, the default cache can retain roughly 3.75 MiB per worker when
+For example, the default cache can retain roughly 5 MiB per worker when
 every size class is full. Eight otherwise idle workers could therefore retain
-about 30 MiB in page caches. That may be a good trade when traffic returns
+about 41 MiB in page caches. That may be a good trade when traffic returns
 quickly; for sparse workloads or many workers, smaller limits may be better.
 
 ## `BytePages`

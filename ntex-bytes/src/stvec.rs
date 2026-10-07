@@ -545,9 +545,9 @@ pub(crate) fn set_page_cache_size(size: BytePageSize, count: usize) {
 const PAGE_CLASSES: usize = BytePageSize::Unset as usize;
 
 /// Default number of cached pages per page size, fewer pages are cached
-/// for larger sizes. 16 KiB is the default page size for both reads and
-/// writes.
-const DEFAULT_PAGES_CACHE: [usize; PAGE_CLASSES] = [64, 32, 64, 16, 16, 8, 8, 2, 1];
+/// for larger sizes. Reads start at 4 KiB pages and adapt up to 64 KiB
+/// pages under load, 16 KiB is the default page size of writes.
+const DEFAULT_PAGES_CACHE: [usize; PAGE_CLASSES] = [128, 64, 64, 32, 16, 8, 16, 2, 1];
 
 struct Cache {
     limits: [usize; PAGE_CLASSES],
@@ -742,7 +742,10 @@ mod tests {
 
     #[test]
     fn default_cache_limit_per_page_size() {
-        assert_eq!(super::DEFAULT_PAGES_CACHE, [64, 32, 64, 16, 16, 8, 8, 2, 1]);
+        assert_eq!(
+            super::DEFAULT_PAGES_CACHE,
+            [128, 64, 64, 32, 16, 8, 16, 2, 1]
+        );
         for size in crate::size::PAGE_SIZES {
             super::CACHE.with(|cache| cache.set(Some(Box::default())));
 
