@@ -40,6 +40,11 @@ If you remember only one rule from this chapter, make it this:
 > Share data while it is moving through the pipeline; copy or trim the small
 > part that needs to live much longer than the buffer it came from.
 
+If you are unsure where to start, use a `BytesMut` for input and message
+construction, hand completed data out as `Bytes`, and reach for `BytePages`
+only when the consumer can accept several chunks. The rest of this chapter
+explains when those defaults are worth changing.
+
 ## Types at a glance
 
 | Type             | Mutability | Clone cost             | Typical use                                   |
@@ -188,6 +193,19 @@ The main operations:
 | [`BytesMut::is_unique`]        | `true` if no `Bytes` shares the allocation                  |
 | `BytesMut::from(Bytes)`        | Reuses a unique shared heap allocation; copies inline, static, external or still-shared data |
 
+Three similar-looking operations cover most handoff points:
+
+- Use `split_to(n)` after decoding a complete prefix and keep reading from the
+  remainder.
+- Use `take()` when all current bytes form one message but the mutable handle
+  should stay with the connection and reuse its remaining capacity.
+- Use `freeze()` when the mutable buffer itself is finished. It consumes the
+  handle and turns its current data into `Bytes`.
+
+None is universally faster. Small results are copied inline; larger results
+usually share the allocation. Choose the operation that matches ownership
+first, then measure if that path matters.
+
 [`BytesMut::new`] currently starts with 112 bytes of data capacity (a
 128-byte allocation including its header),
 [`BytesMut::with_capacity`] allocates exactly the requested capacity, and
@@ -280,6 +298,11 @@ assert_eq!(take_prefix(&mut src, 2).unwrap(), b"he"[..]);
 assert_eq!(src, b"llo"[..]);
 ```
 
+Bounds checks are not a size limit. A real decoder should reject a declared
+length above its protocol or application limit before calling `reserve`;
+otherwise a peer can make the connection retain a very large buffer without
+ever sending the promised frame.
+
 While a frame is alive, the read buffer is not unique, and the frame keeps
 the whole allocation alive, unless the frame was small enough to inline.
 Once all shared frames are dropped, the read buffer is unique again, and a
@@ -310,6 +333,27 @@ care when working with non-ASCII text. [`ByteString::from_bytes_unchecked`]
 is unsafe: it skips validation, and the caller must guarantee valid UTF-8.
 Use the checked conversion unless that guarantee is already established.
 With the `simd` feature, UTF-8 validation uses SIMD instructions.
+
+Converting an owned `Bytes` or `BytesMut` into `ByteString` validates UTF-8
+and then reuses the bytes, apart from the usual small-value inlining.
+Converting back with [`ByteString::into_bytes`] is free. Converting a
+`String` or `Vec<u8>` copies into native byte storage;
+`ByteString::from(Arc<str>)` is the exception and shares the `Arc`.
+
+```rust
+use ntex_bytes::{ByteString, BytesMut};
+
+let bytes = BytesMut::copy_from_slice("hello".as_bytes()).freeze();
+let text = ByteString::try_from(bytes).unwrap();
+assert_eq!(text, "hello");
+
+let bytes = text.into_bytes();
+assert_eq!(bytes, b"hello"[..]);
+```
+
+`ByteString` can retain a larger allocation for the same reason as `Bytes`.
+Call [`ByteString::trimdown`] when a short string is being promoted from a
+request buffer into long-lived state.
 
 ## `Buf` and `BufMut`
 
@@ -682,6 +726,12 @@ Keep data paged for as long as the consumer accepts chunks. Calling
 `freeze()` just before passing it to a chunk-aware transport would undo the
 main benefit by combining all pages into one allocation.
 
+Paging avoids copies; it does not bound queued output. A producer can still
+outpace the transport and retain many pages, including large buffers appended
+without copying. Protocol code should stop producing when its I/O layer
+reports write backpressure instead of treating `BytePages` as an unlimited
+queue.
+
 The page size of a `BytePages` cannot be `Unset`, [`BytePages::new`] and
 [`BytePages::set_page_size`] panic on it. `BytePages::default()` uses
 `Size16`. The page list itself is also reused: each thread keeps up to 128
@@ -693,7 +743,7 @@ an empty queue does not immediately allocate a payload page.
 
 ## Buffers in the I/O layer
 
-The [I/O Abstraction Layer](./7-io.md) builds on these types, reads and writes
+The [I/O Abstraction Layer](./7-io.md) builds on these types. Reads and writes
 share the same per-thread page cache:
 
 - **Reads.** The transport reads into a pooled `BytesMut` read buffer. Codecs
@@ -743,6 +793,7 @@ it is. A useful starting point is:
 | Build a contiguous message of a known size | `BytesMut::with_capacity`, or one `reserve` for the bytes still to be written. |
 | Repeatedly build short-lived I/O buffers | `with_page_size` with a class that fits the usual size; cache hits avoid a fresh payload allocation. |
 | Send an existing large body | `BytePages::append`, rather than copying it with `put_slice`. |
+| Queue an owned `Vec<u8>` for output | Append the `Vec` directly to `BytePages`; converting it to `Bytes` first copies it. |
 | Use constant protocol bytes | `from_static`, which neither allocates nor copies the bytes. |
 
 Drop shared frames when they are no longer needed, and do not equate
@@ -773,6 +824,8 @@ when deciding whether to share, copy or cache.
 [`BytePages::take`]: https://docs.rs/ntex-bytes/latest/ntex_bytes/struct.BytePages.html#method.take
 [`ByteString`]: https://docs.rs/ntex-bytes/latest/ntex_bytes/struct.ByteString.html
 [`ByteString::from_bytes_unchecked`]: https://docs.rs/ntex-bytes/latest/ntex_bytes/struct.ByteString.html#method.from_bytes_unchecked
+[`ByteString::into_bytes`]: https://docs.rs/ntex-bytes/latest/ntex_bytes/struct.ByteString.html#method.into_bytes
+[`ByteString::trimdown`]: https://docs.rs/ntex-bytes/latest/ntex_bytes/struct.ByteString.html#method.trimdown
 [`Bytes`]: https://docs.rs/ntex-bytes/latest/ntex_bytes/struct.Bytes.html
 [`Bytes::from_ext`]: https://docs.rs/ntex-bytes/latest/ntex_bytes/struct.Bytes.html#method.from_ext
 [`Bytes::from_static`]: https://docs.rs/ntex-bytes/latest/ntex_bytes/struct.Bytes.html#method.from_static
