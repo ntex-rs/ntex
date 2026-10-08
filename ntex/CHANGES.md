@@ -43,6 +43,13 @@
 
 * Require `flate2` 1.1.3 or newer
 
+* http: Flush the compressed output when a streamed response body has no
+  data ready, so the client gets what was sent so far, for example server-sent
+  events. Bodies that are always ready are not flushed
+
+* http: Refactor the content encoder and decoder to share one compression
+  loop for all encodings, no behavior change
+
 ## [4.0.0] - 2026-10-08
 
 * web: Percent-encode values substituted by `HttpRequest::url_for()` so they

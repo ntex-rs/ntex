@@ -34,6 +34,10 @@ fn offloaded() -> usize {
     OFFLOADED.with(std::cell::Cell::get)
 }
 
+fn zstd_error(code: usize) -> std::io::Error {
+    std::io::Error::other(zstd::zstd_safe::get_error_name(code))
+}
+
 /// The spare capacity of a buffer, `zstd` writes its output directly into it.
 struct Spare<'a> {
     buf: &'a mut BytesMut,

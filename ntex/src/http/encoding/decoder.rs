@@ -4,7 +4,7 @@ use std::{collections::VecDeque, future::Future, io, pin::Pin, task::Context, ta
 use flate2::{Crc, Decompress, FlushDecompress, Status};
 use zstd::zstd_safe::{DCtx, DParameter, InBuffer, OutBuffer};
 
-use super::{Spare, offload};
+use super::{Spare, offload, zstd_error};
 use crate::http::error::PayloadError;
 use crate::http::header::{CONTENT_ENCODING, ContentEncoding, HeaderMap};
 use crate::rt::BlockingResult;
@@ -88,7 +88,7 @@ where
 
     /// Returns `true` if the stream is decoded.
     pub(crate) fn is_decoding(&self) -> bool {
-        self.inner.is_some()
+        self.decode
     }
 
     /// Construct decoder based on the `Content-Encoding` header.
@@ -96,17 +96,10 @@ where
     /// A missing or invalid header selects the `Identity` encoding.
     #[inline]
     pub fn from_headers(stream: S, headers: &HeaderMap) -> Decoder<S> {
-        // check content-encoding
-        let encoding = if let Some(enc) = headers.get(&CONTENT_ENCODING) {
-            if let Ok(enc) = enc.to_str() {
-                ContentEncoding::from(enc)
-            } else {
-                ContentEncoding::Identity
-            }
-        } else {
-            ContentEncoding::Identity
-        };
-
+        let encoding = headers
+            .get(&CONTENT_ENCODING)
+            .and_then(|enc| enc.to_str().ok())
+            .map_or(ContentEncoding::Identity, ContentEncoding::from);
         Self::new(stream, encoding)
     }
 }
@@ -197,15 +190,10 @@ where
                 }
                 Poll::Ready(None) => {
                     self.eof = true;
-                    return if let Some(mut decoder) = self.inner.take() {
-                        match decoder.feed_eof() {
-                            Ok(Some(res)) => Poll::Ready(Some(Ok(res))),
-                            Ok(None) => Poll::Ready(None),
-                            Err(err) => Poll::Ready(Some(Err(err.into()))),
-                        }
-                    } else {
-                        Poll::Ready(None)
-                    };
+                    if let Some(decoder) = self.inner.take() {
+                        decoder.finish()?;
+                    }
+                    return Poll::Ready(None);
                 }
                 Poll::Pending => return Poll::Pending,
             }
@@ -238,10 +226,11 @@ impl ContentDecoder {
         }
     }
 
-    fn feed_eof(&mut self) -> io::Result<Option<Bytes>> {
+    /// Checks that the compressed stream is complete.
+    fn finish(&self) -> io::Result<()> {
         match self {
-            ContentDecoder::Flate(decoder) => decoder.finish().map(|()| None),
-            ContentDecoder::Zstd(decoder) => decoder.finish().map(|()| None),
+            ContentDecoder::Flate(decoder) => decoder.finish(),
+            ContentDecoder::Zstd(decoder) => decoder.finish(),
         }
     }
 
@@ -335,11 +324,7 @@ impl FlateDecoder {
             return Err(invalid_data("data after the end of the stream"));
         }
 
-        if self.buf.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(self.buf.take()))
-        }
+        Ok((!self.buf.is_empty()).then(|| self.buf.take()))
     }
 
     fn finish(&self) -> io::Result<()> {
@@ -535,7 +520,7 @@ impl ZstdMemory {
 
     fn acquire(&self, size: usize) -> io::Result<()> {
         self.used
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
                 used.checked_add(size).filter(|total| *total <= self.limit)
             })
             .map(|_| ())
@@ -604,11 +589,7 @@ impl ZstdDecoder {
             self.done = hint == 0;
             data.advance_to(read);
         }
-        if self.buf.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(self.buf.take()))
-        }
+        Ok((!self.buf.is_empty()).then(|| self.buf.take()))
     }
 
     /// Counts the memory of the context, it grows with the window of a frame.
@@ -639,10 +620,6 @@ impl Drop for ZstdDecoder {
     fn drop(&mut self) {
         self.memory.release(self.charged);
     }
-}
-
-fn zstd_error(code: usize) -> io::Error {
-    io::Error::other(zstd::zstd_safe::get_error_name(code))
 }
 
 #[cfg(test)]
