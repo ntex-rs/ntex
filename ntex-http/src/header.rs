@@ -78,7 +78,7 @@ impl<'a> From<&'a str> for ContentEncoding {
 
         if s.eq_ignore_ascii_case("br") {
             ContentEncoding::Br
-        } else if s.eq_ignore_ascii_case("gzip") {
+        } else if s.eq_ignore_ascii_case("gzip") || s.eq_ignore_ascii_case("x-gzip") {
             ContentEncoding::Gzip
         } else if s.eq_ignore_ascii_case("deflate") {
             ContentEncoding::Deflate
@@ -104,6 +104,8 @@ mod tests {
         assert!(ContentEncoding::Zstd.is_compressed());
         assert_eq!(ContentEncoding::Zstd.as_str(), "zstd");
         assert_eq!(ContentEncoding::from(" ZStd "), ContentEncoding::Zstd);
+        assert_eq!(ContentEncoding::from("X-Gzip"), ContentEncoding::Gzip);
+        assert_eq!(ContentEncoding::from("x-zstd"), ContentEncoding::Identity);
         assert!(ContentEncoding::Br.quality() > ContentEncoding::Zstd.quality());
         assert!(ContentEncoding::Zstd.quality() > ContentEncoding::Gzip.quality());
     }
