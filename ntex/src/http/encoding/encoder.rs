@@ -23,6 +23,8 @@ const MIN_SIZE: u64 = 1024;
 pub struct Encoder<B> {
     eof: bool,
     body: EncoderBody<B>,
+    /// The part of a large chunk that is not encoded yet
+    pending: Bytes,
     inner: Option<ContentEncoder>,
     fut: Option<BlockingResult<Result<ContentEncoder, io::Error>>>,
 }
@@ -72,6 +74,7 @@ impl<B: MessageBody> Encoder<B> {
             ResponseBody::Other(Body::from_message(Encoder {
                 body,
                 eof: false,
+                pending: Bytes::new(),
                 fut: None,
                 inner: Some(encoder),
             }))
@@ -93,6 +96,7 @@ impl<B: fmt::Debug> fmt::Debug for Encoder<B> {
         f.debug_struct("Encoder")
             .field("eof", &self.eof)
             .field("body", &self.body)
+            .field("pending", &self.pending.len())
             .field("encoder", &self.inner)
             .field("fut", &self.fut.as_ref().map(|_| "JoinHandle(_)"))
             .finish()
@@ -130,6 +134,7 @@ impl<B: MessageBody> MessageBody for Encoder<B> {
             self.eof = true;
             self.inner = None;
             self.fut = None;
+            self.pending = Bytes::new();
         }
         result
     }
@@ -165,6 +170,14 @@ impl<B: MessageBody> Encoder<B> {
                 }
             }
 
+            if !self.pending.is_empty() {
+                let chunk = std::mem::take(&mut self.pending);
+                if let Some(chunk) = self.encode(chunk)? {
+                    return Poll::Ready(Some(Ok(chunk)));
+                }
+                continue;
+            }
+
             let result = match self.body {
                 EncoderBody::Bytes(ref mut b) => {
                     if b.is_empty() {
@@ -178,22 +191,11 @@ impl<B: MessageBody> Encoder<B> {
             };
             match result {
                 Poll::Ready(Some(Ok(chunk))) => {
-                    if let Some(mut encoder) = self.inner.take() {
-                        if chunk.len() < encoder.limit() {
-                            encoder.write(&chunk).map_err(dyn_rc_err)?;
-                            let chunk = encoder.take();
-                            self.inner = Some(encoder);
-                            if !chunk.is_empty() {
-                                return Poll::Ready(Some(Ok(chunk)));
-                            }
-                        } else {
-                            self.fut = Some(offload(move || {
-                                encoder.write(&chunk)?;
-                                Ok(encoder)
-                            }));
-                        }
-                    } else {
+                    if self.inner.is_none() {
                         return Poll::Ready(None);
+                    }
+                    if let Some(chunk) = self.encode(chunk)? {
+                        return Poll::Ready(Some(Ok(chunk)));
                     }
                 }
                 Poll::Ready(None) => {
@@ -208,6 +210,32 @@ impl<B: MessageBody> Encoder<B> {
                 }
                 val => return val,
             }
+        }
+    }
+}
+
+impl<B> Encoder<B> {
+    /// Encodes a small chunk in place and returns its output.
+    ///
+    /// A large chunk is encoded on the blocking thread pool, one part at a
+    /// time, so the output of each part is sent before the next is encoded.
+    fn encode(&mut self, mut chunk: Bytes) -> Result<Option<Bytes>, Rc<dyn std::error::Error>> {
+        let Some(mut encoder) = self.inner.take() else {
+            return Ok(None);
+        };
+        if chunk.len() < encoder.limit() {
+            encoder.write(&chunk).map_err(dyn_rc_err)?;
+            let chunk = encoder.take();
+            self.inner = Some(encoder);
+            Ok(if chunk.is_empty() { None } else { Some(chunk) })
+        } else {
+            let part = chunk.split_to(chunk.len().min(encoder.task_size()));
+            self.pending = chunk;
+            self.fut = Some(offload(move || {
+                encoder.write(&part)?;
+                Ok(encoder)
+            }));
+            Ok(None)
         }
     }
 }
@@ -241,6 +269,14 @@ impl ContentEncoder {
         match self {
             ContentEncoder::Deflate(_) | ContentEncoder::Gzip(_) => 16 * 1024,
             ContentEncoder::Zstd(_) => 512 * 1024,
+        }
+    }
+
+    /// The most input a single blocking task encodes.
+    const fn task_size(&self) -> usize {
+        match self {
+            ContentEncoder::Deflate(_) | ContentEncoder::Gzip(_) => 256 * 1024,
+            ContentEncoder::Zstd(_) => 1024 * 1024,
         }
     }
 
@@ -328,6 +364,7 @@ mod tests {
     async fn encoder_is_fused_after_error() {
         let mut enc = Encoder::<Body> {
             eof: false,
+            pending: Bytes::new(),
             body: EncoderBody::Bytes(Bytes::from_static(b"raw data")),
             inner: None,
             fut: Some(spawn_blocking(|| Err(io::Error::other("encode failed")))),
@@ -361,6 +398,7 @@ mod tests {
     async fn encoder_is_fused_after_end_of_stream() {
         let mut enc = Encoder::<EndOnce> {
             eof: false,
+            pending: Bytes::new(),
             body: EncoderBody::Stream(EndOnce(false)),
             inner: None,
             fut: None,
@@ -578,10 +616,73 @@ mod tests {
         }
     }
 
+    /// Incompressible data, so the encoded size is close to `len`.
+    fn random(len: usize) -> Vec<u8> {
+        let mut x = 0x2545_f491_4f6c_dd1d_u64;
+        (0..len)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                x as u8
+            })
+            .collect()
+    }
+
+    #[crate::rt_test]
+    async fn encoder_splits_large_chunks() {
+        for (encoding, task, limit) in [
+            (ContentEncoding::Gzip, 256 * 1024, 16 * 1024),
+            (ContentEncoding::Deflate, 256 * 1024, 16 * 1024),
+            (ContentEncoding::Zstd, 1024 * 1024, 512 * 1024),
+        ] {
+            // two parts on the pool, the rest is below the limit and encoded in place
+            let data = random(2 * task + limit / 2);
+            let before = super::super::offloaded();
+            let mut head = ResponseHead::new(StatusCode::OK, crate::http::Version::HTTP_11);
+            let mut body =
+                Encoder::<Body>::response(encoding, &mut head, Body::from(data.clone()).into());
+
+            let mut encoded = Vec::new();
+            let mut chunks = 0;
+            while let Some(chunk) = poll_fn(|cx| body.poll_next_chunk(cx)).await {
+                let chunk = chunk.unwrap();
+                assert!(
+                    chunk.len() <= task + 64 * 1024,
+                    "{encoding:?} {}",
+                    chunk.len()
+                );
+                encoded.extend_from_slice(&chunk);
+                chunks += 1;
+            }
+            assert!(chunks >= 3, "{encoding:?} {chunks}");
+            assert_eq!(decompress(encoding, &encoded), data);
+            assert_eq!(super::super::offloaded() - before, 2, "{encoding:?}");
+        }
+    }
+
+    #[crate::rt_test]
+    async fn encoder_drops_pending_on_error() {
+        let mut enc = Encoder::<Body> {
+            eof: false,
+            pending: Bytes::from_static(b"rest"),
+            body: EncoderBody::Bytes(Bytes::new()),
+            inner: None,
+            fut: Some(spawn_blocking(|| Err(io::Error::other("encode failed")))),
+        };
+        assert!(matches!(
+            poll_fn(|cx| enc.poll_next_chunk(cx)).await,
+            Some(Err(_))
+        ));
+        assert!(enc.pending.is_empty());
+        assert!(poll_fn(|cx| enc.poll_next_chunk(cx)).await.is_none());
+    }
+
     #[crate::rt_test]
     async fn encoder_blocking_task_canceled() {
         let mut enc = Encoder::<Body> {
             eof: false,
+            pending: Bytes::new(),
             body: EncoderBody::Bytes(Bytes::new()),
             inner: None,
             fut: Some(spawn_blocking(|| panic!("encoder panic"))),
@@ -595,6 +696,7 @@ mod tests {
     async fn encoder_without_content_encoder() {
         let mut enc = Encoder::<Body> {
             eof: false,
+            pending: Bytes::new(),
             body: EncoderBody::Bytes(Bytes::from_static(b"data")),
             inner: None,
             fut: None,
@@ -612,6 +714,7 @@ mod tests {
         ] {
             let enc = Encoder::<Body> {
                 eof: false,
+                pending: Bytes::new(),
                 body: EncoderBody::Bytes(Bytes::from_static(b"data")),
                 inner: ContentEncoder::encoder(encoding, None),
                 fut: None,
