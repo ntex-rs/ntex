@@ -30,6 +30,13 @@ pub(crate) fn prep_socket(sock: Socket) -> std::io::Result<Socket> {
     Ok(sock)
 }
 
+/// Disables Nagle on an outgoing TCP socket, as on accepted streams.
+#[allow(dead_code)]
+pub(crate) fn prep_tcp_socket(sock: Socket) -> std::io::Result<Socket> {
+    sock.set_tcp_nodelay(true)?;
+    Ok(sock)
+}
+
 pub(crate) fn close_socket(sock: Socket) {
     ntex_rt::spawn_blocking(move || {
         let _ = sock.shutdown(std::net::Shutdown::Both);

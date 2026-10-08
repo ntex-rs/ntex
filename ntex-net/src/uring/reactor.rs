@@ -379,6 +379,7 @@ impl crate::Reactor for Reactor {
     fn tcp_connect(&self, addr: net::SocketAddr, cfg: SharedCfg) -> Receiver<Io> {
         let addr = SockAddr::from(addr);
         let result = Socket::new(addr.domain(), Type::STREAM, Some(Protocol::TCP))
+            .and_then(crate::helpers::prep_tcp_socket)
             .and_then(crate::helpers::prep_socket)
             .map(move |sock| (addr, sock));
 

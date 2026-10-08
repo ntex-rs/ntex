@@ -1,9 +1,12 @@
 # Changes
 
-## Unreleased
+## [4.4.0] - 2026-10-08
 
 * polling: drain deferred socket cleanup before waiting, even when no new
   stream events arrive
+
+* Disable Nagle (`TCP_NODELAY`) on connected tcp streams for the polling, io-uring,
+  iocp and compio backends, as on accepted streams
 
 ## [4.3.0] - 2026-10-07
 
