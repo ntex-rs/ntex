@@ -27,6 +27,10 @@
 
 * http: Send response bodies with a known size below 1KiB uncompressed
 
+* http: Encode large response chunks on the blocking thread pool in parts of
+  256KiB for gzip and deflate and 1MiB for zstd, and send the output of each
+  part before encoding the next, instead of buffering the whole output
+
 ## [4.0.0] - 2026-10-08
 
 * web: Percent-encode values substituted by `HttpRequest::url_for()` so they
