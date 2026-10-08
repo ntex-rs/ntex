@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+* http/2: Avoid two redundant authority splits when building request URLs
+
 * web: Type-erase the app factory in `test::server_with()` to reduce test
   compile time
 
