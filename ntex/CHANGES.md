@@ -19,6 +19,14 @@
   Encodings with `q=0` are no longer used, `*` covers unlisted encodings,
   repeated headers are combined, and `x-gzip` is treated as `gzip`
 
+* http: Limit the memory of all `zstd` decoders to 512MiB. Windows up to 512KiB
+  are not counted, a frame that needs more memory than is left fails to decode
+
+* http: Pass a known body size to the `zstd` encoder, which then uses a smaller
+  window and stores the size in the frame
+
+* http: Send response bodies with a known size below 1KiB uncompressed
+
 ## [4.0.0] - 2026-10-08
 
 * web: Percent-encode values substituted by `HttpRequest::url_for()` so they

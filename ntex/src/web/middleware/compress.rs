@@ -7,6 +7,7 @@ use crate::web::{BodyEncoding, State, WebRequest, WebResponse};
 #[derive(Debug, Clone)]
 /// `Middleware` for compressing response body.
 ///
+/// Bodies with a known size below 1KiB are sent uncompressed.
 /// Use `BodyEncoding` trait for overriding response compression.
 /// To disable compression set encoding to `ContentEncoding::Identity` value.
 ///
