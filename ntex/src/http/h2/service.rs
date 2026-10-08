@@ -585,11 +585,11 @@ fn request_uri(pseudo: &h2::frame::PseudoHeaders) -> Option<(Method, Url)> {
     // userinfo is deprecated, see RFC 9113 section 8.3.1
     let authority = match pseudo.authority {
         Some(ref authority) => {
-            let authority = Authority::new(authority.as_str()).ok()?;
-            if authority.host().is_empty() || authority.userinfo().is_some() {
+            // An empty host is "" or ":port"; IPv6 hosts are bracketed.
+            if authority.is_empty() || authority.starts_with(':') || authority.contains('@') {
                 return None;
             }
-            Some(authority)
+            Some(Authority::new(authority.as_str()).ok()?)
         }
         None => None,
     };
@@ -793,6 +793,69 @@ mod tests {
         pseudo.method = Some(Method::OPTIONS);
         let (_, uri) = request_uri(&pseudo).unwrap();
         assert_eq!(uri.path(), "*");
+    }
+
+    #[test]
+    fn test_request_uri_authority() {
+        for (method, path) in [
+            (Method::GET, Some("/path")),
+            (Method::CONNECT, None),
+            (Method::OPTIONS, Some("*")),
+        ] {
+            let mut pseudo = h2::frame::PseudoHeaders {
+                method: Some(method),
+                scheme: path.map(|_| "https".into()),
+                path: path.map(Into::into),
+                ..Default::default()
+            };
+            for authority in [
+                "",
+                ":",
+                ":443",
+                "@example.com",
+                "u:p@example.com:443",
+                "example.com@",
+                "example.com@other.com",
+                "bad authority",
+                "exa\tmple.com",
+                "m\u{fc}nchen.de",
+                "example.com/path",
+                "example.com?query",
+                "example.com#fragment",
+                "example.com%zz",
+                "example.com:abc",
+                "example.com:+443",
+                "example.com:65536",
+                "127.0.0.256",
+                "::1",
+                "[::1",
+                "[::g]",
+                "[::1]:65536",
+            ] {
+                pseudo.authority = Some(authority.into());
+                assert!(request_uri(&pseudo).is_none(), "{pseudo:?}");
+            }
+            for (authority, normalized) in [
+                ("example.com", "example.com"),
+                ("Example.COM:00080", "example.com:80"),
+                ("example.com:", "example.com"),
+                ("example.com:0", "example.com:0"),
+                ("example.com:65535", "example.com:65535"),
+                ("%45xample.com:443", "example.com:443"),
+                ("127.0.0.1:8443", "127.0.0.1:8443"),
+                ("[::1]", "[::1]"),
+                ("[0:0:0:0:0:0:0:1]:00443", "[::1]:443"),
+            ] {
+                pseudo.authority = Some(authority.into());
+                let (_, uri) = request_uri(&pseudo).unwrap();
+                let expected = match path {
+                    None => format!("//{normalized}"),
+                    Some("*") => "*".to_owned(),
+                    _ => format!("https://{normalized}/path"),
+                };
+                assert_eq!(uri.as_str(), expected, "{pseudo:?}");
+            }
+        }
     }
 
     #[test]
