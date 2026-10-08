@@ -1,5 +1,10 @@
 # Changes
 
+## Unreleased
+
+* polling: drain deferred socket cleanup before waiting, even when no new
+  stream events arrive
+
 ## [4.3.0] - 2026-10-07
 
 * Update to ntex-io 4.3 config api, iocp read buffers use the adaptive read page size

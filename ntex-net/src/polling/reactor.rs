@@ -21,12 +21,16 @@ pub trait Handler {
     /// Operation submission has failed
     fn error(&mut self, id: usize, err: io::Error);
 
-    /// Driver turn is completed
+    /// Process deferred work after events and before the driver waits.
+    ///
+    /// Called even when no events were received.
     fn tick(&mut self);
 
     /// Cleanup before drop
     fn cleanup(&mut self);
 }
+
+type HandlerItem = Box<dyn Handler>;
 
 enum Change {
     Error {
@@ -142,20 +146,6 @@ pub struct Reactor {
     handlers: Cell<Option<Box<Vec<HandlerItem>>>>,
 }
 
-struct HandlerItem {
-    hnd: Box<dyn Handler>,
-    modified: bool,
-}
-
-impl HandlerItem {
-    fn tick(&mut self) {
-        if self.modified {
-            self.modified = false;
-            self.hnd.tick();
-        }
-    }
-}
-
 impl Reactor {
     const BATCH: u64 = 48;
     const BATCH_MASK: u64 = 0xFFFF_0000_0000_0000;
@@ -199,10 +189,7 @@ impl Reactor {
             poll: self.poll.clone(),
             changes: self.changes.clone(),
         };
-        handlers.push(HandlerItem {
-            hnd: f(api),
-            modified: false,
-        });
+        handlers.push(f(api));
         self.hid.set(id + 1);
         self.handlers.set(Some(handlers));
     }
@@ -214,7 +201,21 @@ impl Reactor {
                     batch,
                     user_data,
                     error,
-                } => handlers[batch].hnd.error(user_data as usize, error),
+                } => handlers[batch].error(user_data as usize, error),
+            }
+        }
+    }
+
+    fn tick(&self, handlers: &mut [HandlerItem]) {
+        loop {
+            self.apply_changes(handlers);
+            for h in handlers.iter_mut() {
+                h.tick();
+            }
+            // Ticks can fail poller operations, and handling those errors can
+            // enqueue more deferred work. Finish both before waiting.
+            if unsafe { (*self.changes.get()).is_empty() } {
+                break;
             }
         }
     }
@@ -300,19 +301,16 @@ impl ntex_rt::Driver for Reactor {
         };
 
         let result = loop {
-            let result = rt.poll();
-            let has_changes = !unsafe { (*self.changes.get()).is_empty() };
-            if has_changes {
-                let mut handlers = self.handlers.take().unwrap();
-                self.apply_changes(&mut handlers);
-                self.handlers.set(Some(handlers));
-            }
-
-            let timeout = match result {
+            let timeout = match rt.poll() {
                 PollResult::Pending => None,
                 PollResult::PollAgain => Some(Duration::ZERO),
                 PollResult::Ready => break Ok(()),
             };
+            // Runtime tasks can queue cleanup without receiving a stream event.
+            let mut handlers = self.handlers.take().unwrap();
+            self.tick(&mut handlers);
+            self.handlers.set(Some(handlers));
+
             events.clear();
             self.poll.wait(&mut events, timeout)?;
             // tasks woken until the runtime is polled do not need to notify
@@ -322,20 +320,14 @@ impl ntex_rt::Driver for Reactor {
             for event in events.iter() {
                 let key = event.key as u64;
                 let batch = ((key & Self::BATCH_MASK) >> Self::BATCH) as usize;
-                handlers[batch].modified = true;
-                handlers[batch]
-                    .hnd
-                    .event((key & Self::DATA_MASK) as usize, event);
+                handlers[batch].event((key & Self::DATA_MASK) as usize, event);
             }
-            self.apply_changes(&mut handlers);
-            for h in handlers.iter_mut() {
-                h.tick();
-            }
+            self.tick(&mut handlers);
             self.handlers.set(Some(handlers));
         };
 
         for mut h in self.handlers.take().unwrap().into_iter() {
-            h.hnd.cleanup();
+            h.cleanup();
         }
         result
     }
@@ -421,5 +413,57 @@ mod tests {
 
         let ids: Vec<_> = errors.borrow().iter().map(|(id, _)| *id).collect();
         assert_eq!(ids, vec![1, 2]);
+    }
+
+    #[test]
+    fn tick_drains_errors_and_their_deferred_work() {
+        struct TickErrors {
+            api: ReactorApi,
+            socket: OsUnixStream,
+            next: Option<u32>,
+            errors: Rc<RefCell<Vec<usize>>>,
+        }
+
+        impl Handler for TickErrors {
+            fn event(&mut self, _: usize, _: Event) {
+                panic!("unexpected socket event");
+            }
+
+            fn error(&mut self, id: usize, _: io::Error) {
+                self.errors.borrow_mut().push(id);
+                if id == 1 {
+                    self.next = Some(2);
+                }
+            }
+
+            fn tick(&mut self) {
+                if let Some(id) = self.next.take() {
+                    // The socket is not attached, so the operation fails.
+                    self.api
+                        .modify(self.socket.as_raw_fd(), id, Event::readable(0));
+                }
+            }
+
+            fn cleanup(&mut self) {}
+        }
+
+        let reactor = Reactor::new().unwrap();
+        let (socket, _peer) = OsUnixStream::pair().unwrap();
+        let errors = Rc::new(RefCell::new(Vec::new()));
+        reactor.register(|api| {
+            Box::new(TickErrors {
+                api,
+                socket,
+                next: Some(1),
+                errors: errors.clone(),
+            })
+        });
+
+        let mut handlers = reactor.handlers.take().unwrap();
+        reactor.tick(&mut handlers);
+        reactor.handlers.set(Some(handlers));
+
+        assert_eq!(*errors.borrow(), vec![1, 2]);
+        assert!(unsafe { (*reactor.changes.get()).is_empty() });
     }
 }
