@@ -339,7 +339,7 @@ pub fn rt_main(args: TokenStream, item: TokenStream) -> TokenStream {
             ntex::rt::System::build()
                 #config
                 .build( #runner )
-                .block_on(async move { #body })
+                .block_on(async move #body)
         }
     })
     .into()
@@ -550,7 +550,7 @@ fn boxed_future(ret: &syn::ReturnType, body: &syn::Block) -> proc_macro2::TokenS
         syn::ReturnType::Type(_, ty) => quote! { #ty },
     };
     quote! {
-        ::std::boxed::Box::pin(async { #body })
+        ::std::boxed::Box::pin(async #body)
             as ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = #output>>>
     }
 }
