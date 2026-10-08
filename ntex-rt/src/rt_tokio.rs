@@ -1,5 +1,5 @@
 use std::task::{Context, Poll, ready};
-use std::{fmt, future::Future, future::poll_fn, pin::Pin};
+use std::{fmt, future::Future, pin::Pin};
 
 use async_channel::Sender;
 
@@ -18,14 +18,7 @@ pub fn spawn<F>(f: F) -> JoinHandle<F::Output>
 where
     F: Future + 'static,
 {
-    let task = if let Some(mut data) = crate::task::Data::load() {
-        tok_io::task::spawn_local(async move {
-            tok_io::pin!(f);
-            poll_fn(|cx| data.run(|| f.as_mut().poll(cx))).await
-        })
-    } else {
-        tok_io::task::spawn_local(f)
-    };
+    let task = tok_io::task::spawn_local(crate::task::wrap(f));
 
     JoinHandle {
         task: Some(Either::Task(task)),

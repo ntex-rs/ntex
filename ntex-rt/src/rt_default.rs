@@ -1,4 +1,4 @@
-use std::{fmt, future::Future, future::poll_fn};
+use std::{fmt, future::Future};
 
 pub use crate::{handle::JoinHandle, rt::Handle, rt::Runtime};
 
@@ -17,14 +17,6 @@ pub fn spawn<F>(fut: F) -> JoinHandle<F::Output>
 where
     F: Future + 'static,
 {
-    if let Some(mut data) = crate::task::Data::load() {
-        crate::rt::Runtime::with_current(|rt| {
-            rt.spawn(async move {
-                let mut f = std::pin::pin!(fut);
-                poll_fn(|cx| data.run(|| f.as_mut().poll(cx))).await
-            })
-        })
-    } else {
-        crate::rt::Runtime::with_current(|rt| rt.spawn(fut))
-    }
+    let fut = crate::task::wrap(fut);
+    crate::rt::Runtime::with_current(|rt| rt.spawn(fut))
 }

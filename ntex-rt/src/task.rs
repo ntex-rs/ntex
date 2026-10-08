@@ -1,4 +1,4 @@
-use std::{sync::Arc, sync::atomic::AtomicUsize, sync::atomic::Ordering};
+use std::{future::Future, sync::Arc, sync::atomic::AtomicUsize, sync::atomic::Ordering};
 
 // The Callbacks static holds a pointer to the global callbacks. It is protected by
 // the STATE static which determines whether `CBS` has been initialized yet.
@@ -83,6 +83,22 @@ impl Data {
         let result = f();
         self.cb.exit(ptr);
         result
+    }
+}
+
+/// Wraps a future so that task callbacks, if registered, run around each poll.
+///
+/// Always returns the same future type, so spawning code is generated once
+/// per future rather than once per callback mode.
+pub(crate) fn wrap<F: Future>(fut: F) -> impl Future<Output = F::Output> {
+    let mut data = Data::load();
+    async move {
+        let mut f = std::pin::pin!(fut);
+        std::future::poll_fn(|cx| match data.as_mut() {
+            Some(data) => data.run(|| f.as_mut().poll(cx)),
+            None => f.as_mut().poll(cx),
+        })
+        .await
     }
 }
 

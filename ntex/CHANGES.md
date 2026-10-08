@@ -1,5 +1,10 @@
 # Changes
 
+## [Unreleased]
+
+* web: Type-erase the app factory in `test::server_with()` to reduce test
+  compile time
+
 ## [4.0.0] - 2026-10-08
 
 * web: Percent-encode values substituted by `HttpRequest::url_for()` so they
