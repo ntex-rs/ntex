@@ -31,6 +31,9 @@
   256KiB for gzip and deflate and 1MiB for zstd, and send the output of each
   part before encoding the next, instead of buffering the whole output
 
+* http: Decode up to 256KiB of output per blocking task instead of a single
+  32KiB chunk, so a large payload needs about 8 times fewer pool tasks
+
 ## [4.0.0] - 2026-10-08
 
 * web: Percent-encode values substituted by `HttpRequest::url_for()` so they
