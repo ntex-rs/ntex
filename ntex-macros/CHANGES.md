@@ -2,6 +2,10 @@
 
 ## [4.1.0] - 2026-10-08
 
+* Fix `unused_braces` warning for one-line `main` and `test` bodies
+
+* Fix route and `main` macro error messages listing wrong arguments
+
 * Fix and extend macro docs, update README
 
 * Box the `test` macro future to reduce generated code

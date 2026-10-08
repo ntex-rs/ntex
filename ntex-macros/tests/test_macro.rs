@@ -167,18 +167,16 @@ async fn test_auto_async() {
     assert!(response.status().is_success());
 }
 
-// A single expression body must not trigger `unused_braces`
+// A one-line body must not trigger `unused_braces`, rustfmt would split it
+#[rustfmt::skip]
 #[ntex::main]
-async fn main_single_expr() -> Result<u32, ()> {
-    Ok(1)
-}
+async fn main_single_expr() -> Result<u32, ()> { Ok(1) }
 
 #[test]
 fn test_main_single_expr() {
     assert_eq!(main_single_expr(), Ok(1));
 }
 
+#[rustfmt::skip]
 #[ntex::test]
-async fn test_single_expr() -> Result<(), ()> {
-    Ok(())
-}
+async fn test_single_expr() -> Result<(), ()> { Ok(()) }
