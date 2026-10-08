@@ -15,6 +15,10 @@
   and 512KiB for zstd, and decode below 128KiB and 512KiB respectively. Larger
   chunks go to the blocking thread pool
 
+* web: Honour `q` values in `Accept-Encoding` in the `Compress` middleware.
+  Encodings with `q=0` are no longer used, `*` covers unlisted encodings,
+  repeated headers are combined, and `x-gzip` is treated as `gzip`
+
 ## [4.0.0] - 2026-10-08
 
 * web: Percent-encode values substituted by `HttpRequest::url_for()` so they

@@ -4,6 +4,8 @@
 
 * Add `ContentEncoding::Zstd`
 
+* Map `x-gzip` to `ContentEncoding::Gzip`
+
 ## [2.0.0] - 2026-10-04
 
 * `HeaderValue::to_str()` accepts any valid UTF-8 value, validated with simdutf8
