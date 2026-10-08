@@ -34,6 +34,8 @@ pub enum ContentEncoding {
     Deflate,
     /// Gzip algorithm
     Gzip,
+    /// A format using the Zstandard algorithm
+    Zstd,
     /// Indicates the identity function (i.e. no compression, nor modification)
     Identity,
 }
@@ -52,6 +54,7 @@ impl ContentEncoding {
             ContentEncoding::Br => "br",
             ContentEncoding::Gzip => "gzip",
             ContentEncoding::Deflate => "deflate",
+            ContentEncoding::Zstd => "zstd",
             ContentEncoding::Identity | ContentEncoding::Auto => "identity",
         }
     }
@@ -61,6 +64,7 @@ impl ContentEncoding {
     pub fn quality(self) -> f64 {
         match self {
             ContentEncoding::Br => 1.1,
+            ContentEncoding::Zstd => 1.05,
             ContentEncoding::Gzip => 1.0,
             ContentEncoding::Deflate => 0.9,
             ContentEncoding::Identity | ContentEncoding::Auto => 0.1,
@@ -78,6 +82,8 @@ impl<'a> From<&'a str> for ContentEncoding {
             ContentEncoding::Gzip
         } else if s.eq_ignore_ascii_case("deflate") {
             ContentEncoding::Deflate
+        } else if s.eq_ignore_ascii_case("zstd") {
+            ContentEncoding::Zstd
         } else {
             ContentEncoding::Identity
         }
@@ -94,5 +100,11 @@ mod tests {
         assert!(!ContentEncoding::Identity.is_compressed());
         assert!(!ContentEncoding::Auto.is_compressed());
         assert_eq!(format!("{:?}", ContentEncoding::Identity), "Identity");
+
+        assert!(ContentEncoding::Zstd.is_compressed());
+        assert_eq!(ContentEncoding::Zstd.as_str(), "zstd");
+        assert_eq!(ContentEncoding::from(" ZStd "), ContentEncoding::Zstd);
+        assert!(ContentEncoding::Br.quality() > ContentEncoding::Zstd.quality());
+        assert!(ContentEncoding::Zstd.quality() > ContentEncoding::Gzip.quality());
     }
 }

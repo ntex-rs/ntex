@@ -416,6 +416,27 @@ async fn test_no_decompress() {
 }
 
 #[ntex::test]
+async fn test_client_zstd_encoding() {
+    let srv = test::server(async |_| {
+        App::new().service(web::resource("/").route(web::to(async |req: HttpRequest| {
+            assert_eq!(
+                req.headers().get(header::ACCEPT_ENCODING).unwrap(),
+                "gzip, deflate, zstd"
+            );
+            HttpResponse::Ok()
+                .header("content-encoding", "zstd")
+                .body(zstd::encode_all(STR.as_bytes(), 0).unwrap())
+        })))
+    });
+
+    let response = srv.post("/").send().await.unwrap();
+    assert!(response.status().is_success());
+    assert!(!response.headers().contains_key("content-encoding"));
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
+}
+
+#[ntex::test]
 async fn test_client_gzip_encoding() {
     let srv = test::server(async |_| {
         App::new().service(web::resource("/").route(web::to(async || {

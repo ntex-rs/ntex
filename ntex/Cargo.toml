@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "4.0.0"
+version = "4.1.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -18,10 +18,10 @@ edition = "2024"
 rust-version = "1.97"
 
 [package.metadata.docs.rs]
-toolchain = "nightly"
+#toolchain = "nightly"
+#rustc-args = ["--cfg", "docsrs_dep"]
+#rustdoc-args = ["--cfg", "docsrs_dep"]
 features = ["tokio", "openssl", "rustls", "compress", "cookie", "ws", "ntex-tls/rustls-ring"]
-rustc-args = ["--cfg", "docsrs_dep"]
-rustdoc-args = ["--cfg", "docsrs_dep"]
 
 [lib]
 name = "ntex"
@@ -39,8 +39,8 @@ openssl = ["tls_openssl", "ntex-tls/openssl"]
 # rustls support
 rustls = ["tls_rustls", "ntex-tls/rustls"]
 
-# enable compressison support
-compress = ["flate2"]
+# enable compression support
+compress = ["flate2", "zstd"]
 
 # enable cookie support
 cookie = ["coo-kie", "coo-kie/percent-encode"]
@@ -115,6 +115,7 @@ tls_rustls = { workspace = true, optional = true }
 
 # compression
 flate2 = { workspace = true, optional = true }
+zstd = { workspace = true, optional = true }
 
 [dev-dependencies]
 rand = { workspace = true }

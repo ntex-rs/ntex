@@ -503,7 +503,7 @@ impl ClientRequest {
                 .headers
                 .contains_key(&header::ACCEPT_ENCODING)
         {
-            const COMPRESSION: HeaderValue = HeaderValue::from_static("gzip, deflate");
+            const COMPRESSION: HeaderValue = HeaderValue::from_static("gzip, deflate, zstd");
             self.request
                 .head
                 .headers
