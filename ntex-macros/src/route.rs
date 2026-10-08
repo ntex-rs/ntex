@@ -70,7 +70,7 @@ impl syn::parse::Parse for Args {
             } else {
                 return Err(syn::Error::new_spanned(
                     ident,
-                    "Unknown attribute key is specified. Allowed: guard or error",
+                    "unknown argument, expected `guard` or `state`",
                 ));
             }
         }
@@ -81,6 +81,16 @@ impl syn::parse::Parse for Args {
             state: state.unwrap_or_else(|| syn::parse_str("ntex::web::dev::DefaultState").unwrap()),
         })
     }
+}
+
+fn missing_path(method: MethodType) -> syn::Error {
+    syn::Error::new(
+        Span::call_site(),
+        format!(
+            r#"missing path, expected #[{}("<path>")]"#,
+            method.as_str().to_ascii_lowercase()
+        ),
+    )
 }
 
 pub(crate) struct Route {
@@ -103,13 +113,7 @@ impl Route {
         method: MethodType,
     ) -> syn::Result<Self> {
         if args.is_empty() {
-            return Err(syn::Error::new(
-                Span::call_site(),
-                format!(
-                    r#"invalid server definition, expected #[{}("<some path>")]"#,
-                    method.as_str().to_ascii_lowercase()
-                ),
-            ));
+            return Err(missing_path(method));
         }
         let ast: syn::ItemFn = syn::parse(input)?;
         let name = ast.sig.ident.clone();
@@ -151,5 +155,32 @@ impl Route {
             }
         };
         stream.into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn err(args: &str) -> String {
+        syn::parse_str::<Args>(args).err().unwrap().to_string()
+    }
+
+    #[test]
+    fn args() {
+        let args =
+            syn::parse_str::<Args>(r#""/a", guard = "g1", guard = "g2", state = St"#).unwrap();
+        assert_eq!(args.path.value(), "/a");
+        assert_eq!(args.guards.len(), 2);
+        assert!(args.state.path.is_ident("St"));
+
+        assert_eq!(
+            err(r#""/a", error = "Foo""#),
+            "unknown argument, expected `guard` or `state`"
+        );
+        assert_eq!(
+            missing_path(MethodType::Get).to_string(),
+            r#"missing path, expected #[get("<path>")]"#
+        );
     }
 }

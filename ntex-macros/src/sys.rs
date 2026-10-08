@@ -167,11 +167,26 @@ impl Parse for MainArgs {
             } else {
                 return Err(syn::Error::new_spanned(
                     param.path,
-                    "unknown argument, expected `name, ping_interval, signals or rt`",
+                    "unknown argument, expected `name`, `signals`, `panic_handling`, `ping_interval` or `rt`",
                 ));
             }
         }
 
         Ok(args)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_arg() {
+        let err = syn::parse_str::<MainArgs>("foo = 1").err().unwrap();
+        assert_eq!(
+            err.to_string(),
+            "unknown argument, expected `name`, `signals`, `panic_handling`, `ping_interval` or `rt`"
+        );
+        assert!(syn::parse_str::<MainArgs>("panic_handling = true, signals = true").is_ok());
     }
 }

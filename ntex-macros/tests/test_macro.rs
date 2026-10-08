@@ -166,3 +166,19 @@ async fn test_auto_async() {
     let response = request.send().await.unwrap();
     assert!(response.status().is_success());
 }
+
+// A single expression body must not trigger `unused_braces`
+#[ntex::main]
+async fn main_single_expr() -> Result<u32, ()> {
+    Ok(1)
+}
+
+#[test]
+fn test_main_single_expr() {
+    assert_eq!(main_single_expr(), Ok(1));
+}
+
+#[ntex::test]
+async fn test_single_expr() -> Result<(), ()> {
+    Ok(())
+}
