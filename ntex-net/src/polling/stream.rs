@@ -664,6 +664,65 @@ mod tests {
         drop(io);
     }
 
+    #[ntex::test]
+    async fn runtime_tick_closes_socket_without_new_events() {
+        let reactor = Reactor::new().unwrap();
+        let rt = ntex_rt::Runtime::builder()
+            .event_interval(1)
+            .build(ntex_rt::Driver::handle(&reactor));
+        let ops = StreamOps::get(&reactor);
+        let (socket, mut peer) = UnixStream::pair().unwrap();
+        peer.set_read_timeout(Some(std::time::Duration::from_secs(3)))
+            .unwrap();
+        let ctl = Rc::new(Cell::new(None));
+        let io = Io::new(
+            TestStream {
+                socket: Socket::from(socket),
+                ops: ops.clone(),
+                ctl: ctl.clone(),
+            },
+            SharedCfg::default(),
+        );
+        let primary = ctl.take().unwrap();
+        let (tx, rx) = oneshot::async_channel();
+        let reader = std::thread::spawn(move || {
+            let result = io::Read::read(&mut peer, &mut [0u8; 1]);
+            tx.send(result).unwrap();
+        });
+
+        let (result, pending) = rt.block_on(
+            async {
+                // Consume the initial runtime notification before queuing the
+                // drop, so an after-wait tick cannot mask the missing pre-wait tick.
+                let mut yielded = false;
+                std::future::poll_fn(|cx| {
+                    if yielded {
+                        Poll::Ready(())
+                    } else {
+                        yielded = true;
+                        cx.waker().wake_by_ref();
+                        Poll::Pending
+                    }
+                })
+                .await;
+                drop(primary);
+                assert!(!ops.0.delayed_feed.is_empty());
+
+                let result = rx.await.unwrap();
+                let pending =
+                    !ops.0.delayed_feed.is_empty() || ops.0.with(|streams| !streams.is_empty());
+                drop(io);
+                (result, pending)
+            },
+            &reactor,
+        );
+        reader.join().unwrap();
+
+        // No shutdown() was issued: EOF proves close() ran before reactor cleanup.
+        assert_eq!(result.unwrap(), 0);
+        assert!(!pending, "deferred socket cleanup was not drained");
+    }
+
     struct Fixture {
         io: Io,
         ops: StreamOps,
