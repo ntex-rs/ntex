@@ -34,6 +34,15 @@
 * http: Decode up to 256KiB of output per blocking task instead of a single
   32KiB chunk, so a large payload needs about 8 times fewer pool tasks
 
+* http: Compress and decompress directly into the output buffer. The `flate2`
+  and `zstd` writers kept a 32KiB buffer per stream and copied it again into
+  the output. Encoded and decoded chunks are now at most 32KiB each
+
+* http: A truncated or empty `deflate` body now fails to decode, as `gzip` and
+  `zstd` bodies already did
+
+* Require `flate2` 1.1.3 or newer
+
 ## [4.0.0] - 2026-10-08
 
 * web: Percent-encode values substituted by `HttpRequest::url_for()` so they

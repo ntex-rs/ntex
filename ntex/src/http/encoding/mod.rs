@@ -2,10 +2,10 @@
 //!
 //! Supports `gzip`, `deflate` and `zstd`. Large chunks are encoded and
 //! decoded on the blocking thread pool, smaller ones on the current thread.
-use std::io;
+use zstd::zstd_safe::WriteBuf;
 
 use crate::rt::{BlockingResult, spawn_blocking};
-use crate::util::{Bytes, BytesMut};
+use crate::util::{BufMut, BytesMut};
 
 mod decoder;
 mod encoder;
@@ -34,33 +34,44 @@ fn offloaded() -> usize {
     OFFLOADED.with(std::cell::Cell::get)
 }
 
-struct Writer {
-    buf: BytesMut,
+/// The spare capacity of a buffer, `zstd` writes its output directly into it.
+struct Spare<'a> {
+    buf: &'a mut BytesMut,
+    start: usize,
+    ptr: *mut u8,
+    capacity: usize,
 }
 
-impl Writer {
-    fn new() -> Writer {
-        Writer {
-            buf: BytesMut::with_capacity(8192),
+impl<'a> Spare<'a> {
+    fn new(buf: &'a mut BytesMut) -> Self {
+        let start = buf.len();
+        let spare = buf.chunk_mut();
+        let (ptr, capacity) = (spare.as_mut_ptr(), spare.len());
+        Spare {
+            buf,
+            start,
+            ptr,
+            capacity,
         }
     }
-
-    fn take(&mut self) -> Bytes {
-        self.buf.take()
-    }
-
-    fn len(&self) -> usize {
-        self.buf.len()
-    }
 }
 
-impl io::Write for Writer {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.buf.extend_from_slice(buf);
-        Ok(buf.len())
+// SAFETY: `ptr` points to `capacity` bytes of the buffer's spare capacity, and
+// `filled_until` only extends the buffer over bytes zstd has written.
+unsafe impl WriteBuf for Spare<'_> {
+    fn as_slice(&self) -> &[u8] {
+        &self.buf[self.start..]
     }
 
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
+    fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.ptr
+    }
+
+    unsafe fn filled_until(&mut self, n: usize) {
+        unsafe { self.buf.set_len(self.start + n) }
     }
 }

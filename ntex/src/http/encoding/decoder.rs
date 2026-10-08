@@ -1,26 +1,22 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::{
-    collections::VecDeque, future::Future, io, io::Write, pin::Pin, task::Context, task::Poll,
-};
+use std::{collections::VecDeque, future::Future, io, pin::Pin, task::Context, task::Poll};
 
-use flate2::write::{GzDecoder, ZlibDecoder};
-use zstd::zstd_safe::{DCtx, DParameter, InBuffer, OutBuffer, WriteBuf};
+use flate2::{Crc, Decompress, FlushDecompress, Status};
+use zstd::zstd_safe::{DCtx, DParameter, InBuffer, OutBuffer};
 
-use super::{Writer, offload};
+use super::{Spare, offload};
 use crate::http::error::PayloadError;
 use crate::http::header::{CONTENT_ENCODING, ContentEncoding, HeaderMap};
 use crate::rt::BlockingResult;
 use crate::util::{BufMut, BytePageSize, Bytes, BytesMut, Stream};
 
-/// Decoding stops at this output size, the rest of the input is decoded by the next poll.
-///
-/// A single write or flush of a `gzip` or `deflate` decoder adds at most 32KiB,
-/// so their chunks stay below 96KiB. `zstd` chunks never exceed this size.
+/// Decoders write into pages of this size, so decoded chunks are never larger.
+#[cfg(test)]
 const MAX_CHUNK_SIZE: usize = 32 * 1024;
 
 /// A blocking task stops decoding once its output reaches this size.
 ///
-/// The output is kept in chunks of at most `MAX_CHUNK_SIZE`.
+/// The output is kept in chunks of at most 32KiB, a single page.
 const MAX_TASK_OUTPUT: usize = 256 * 1024;
 
 /// The largest `zstd` window a decoder accepts, 8MiB as required by RFC 9659.
@@ -69,12 +65,10 @@ where
     #[inline]
     pub fn new(stream: S, encoding: ContentEncoding) -> Decoder<S> {
         let inner = match encoding {
-            ContentEncoding::Deflate => Some(ContentDecoder::Deflate(Box::new(ZlibDecoder::new(
-                Writer::new(),
-            )))),
-            ContentEncoding::Gzip => Some(ContentDecoder::Gzip(Box::new(GzDecoder::new(
-                Writer::new(),
-            )))),
+            ContentEncoding::Deflate => {
+                Some(ContentDecoder::Flate(Box::new(FlateDecoder::new(false))))
+            }
+            ContentEncoding::Gzip => Some(ContentDecoder::Flate(Box::new(FlateDecoder::new(true)))),
             ContentEncoding::Zstd => ZstdDecoder::new()
                 .inspect_err(|err| log::error!("Cannot create zstd decoder: {err}"))
                 .ok()
@@ -220,19 +214,18 @@ where
 }
 
 enum ContentDecoder {
-    Deflate(Box<ZlibDecoder<Writer>>),
-    Gzip(Box<GzDecoder<Writer>>),
+    Flate(Box<FlateDecoder>),
     Zstd(Box<ZstdDecoder>),
 }
 
 impl ContentDecoder {
     /// Input of this size and larger is decoded on the blocking thread pool.
     ///
-    /// A feed on the current thread decodes at most `MAX_CHUNK_SIZE`, a task
-    /// on the pool decodes several chunks, up to `MAX_TASK_OUTPUT`.
+    /// A feed on the current thread decodes a single page of output, a task
+    /// on the pool decodes several pages, up to `MAX_TASK_OUTPUT`.
     const fn limit(&self) -> usize {
         match self {
-            ContentDecoder::Deflate(_) | ContentDecoder::Gzip(_) => 128 * 1024,
+            ContentDecoder::Flate(_) => 128 * 1024,
             ContentDecoder::Zstd(_) => 512 * 1024,
         }
     }
@@ -240,28 +233,15 @@ impl ContentDecoder {
     /// Returns `true` if decoded output is left without new input.
     fn has_more(&self) -> bool {
         match self {
-            ContentDecoder::Deflate(_) | ContentDecoder::Gzip(_) => false,
+            ContentDecoder::Flate(decoder) => decoder.more,
             ContentDecoder::Zstd(decoder) => decoder.more,
         }
     }
 
     fn feed_eof(&mut self) -> io::Result<Option<Bytes>> {
         match self {
+            ContentDecoder::Flate(decoder) => decoder.finish().map(|()| None),
             ContentDecoder::Zstd(decoder) => decoder.finish().map(|()| None),
-            ContentDecoder::Gzip(decoder) => match decoder.try_finish() {
-                Ok(()) => {
-                    let b = decoder.get_mut().take();
-                    if b.is_empty() { Ok(None) } else { Ok(Some(b)) }
-                }
-                Err(e) => Err(e),
-            },
-            ContentDecoder::Deflate(decoder) => match decoder.try_finish() {
-                Ok(()) => {
-                    let b = decoder.get_mut().take();
-                    if b.is_empty() { Ok(None) } else { Ok(Some(b)) }
-                }
-                Err(e) => Err(e),
-            },
         }
     }
 
@@ -279,48 +259,264 @@ impl ContentDecoder {
         Ok(chunks)
     }
 
-    /// Decodes `data` until the output reaches `MAX_CHUNK_SIZE`.
+    /// Decodes `data` until a page of output is full.
     ///
     /// Decoded input is removed from `data`.
     fn feed_data(&mut self, data: &mut Bytes) -> io::Result<Option<Bytes>> {
-        if let ContentDecoder::Zstd(decoder) = self {
-            return decoder.feed(data);
-        }
-
-        while !data.is_empty() && self.output_len() < MAX_CHUNK_SIZE {
-            let n = match self {
-                ContentDecoder::Gzip(decoder) => decoder.write(data)?,
-                ContentDecoder::Deflate(decoder) => decoder.write(data)?,
-                ContentDecoder::Zstd(_) => unreachable!(),
-            };
-            if n == 0 {
-                return Err(io::ErrorKind::WriteZero.into());
-            }
-            data.advance_to(n);
-        }
-        if data.is_empty() {
-            match self {
-                ContentDecoder::Gzip(decoder) => decoder.flush()?,
-                ContentDecoder::Deflate(decoder) => decoder.flush()?,
-                ContentDecoder::Zstd(_) => unreachable!(),
-            }
-        }
-
-        let b = match self {
-            ContentDecoder::Gzip(decoder) => decoder.get_mut().take(),
-            ContentDecoder::Deflate(decoder) => decoder.get_mut().take(),
-            ContentDecoder::Zstd(_) => unreachable!(),
-        };
-        if b.is_empty() { Ok(None) } else { Ok(Some(b)) }
-    }
-
-    fn output_len(&self) -> usize {
         match self {
-            ContentDecoder::Gzip(decoder) => decoder.get_ref().len(),
-            ContentDecoder::Deflate(decoder) => decoder.get_ref().len(),
-            ContentDecoder::Zstd(_) => 0,
+            ContentDecoder::Flate(decoder) => decoder.feed(data),
+            ContentDecoder::Zstd(decoder) => decoder.feed(data),
         }
     }
+}
+
+/// `deflate` (zlib) or `gzip` decoder.
+struct FlateDecoder {
+    inner: Decompress,
+    buf: BytesMut,
+    /// The `gzip` header and trailer, `None` for `deflate`
+    gzip: Option<Gzip>,
+    /// The compressed data is complete
+    done: bool,
+    /// The output buffer was filled, the decoder may hold more output
+    more: bool,
+}
+
+impl FlateDecoder {
+    fn new(gzip: bool) -> Self {
+        FlateDecoder {
+            inner: Decompress::new(!gzip),
+            buf: BytesMut::with_page_size(BytePageSize::Size32),
+            gzip: gzip.then(Gzip::new),
+            done: false,
+            more: false,
+        }
+    }
+
+    /// Decodes `data` until the output buffer is full.
+    fn feed(&mut self, data: &mut Bytes) -> io::Result<Option<Bytes>> {
+        if let Some(gzip) = &mut self.gzip
+            && !gzip.header(data)?
+        {
+            return Ok(None);
+        }
+
+        self.buf.reserve_more();
+        let start = self.buf.len();
+        while !self.done && self.buf.remaining_mut() > 0 && (!data.is_empty() || self.more) {
+            let (total_in, total_out) = (self.inner.total_in(), self.inner.total_out());
+            // SAFETY: the decoder only writes to the slice, and `advance_mut`
+            // covers just the bytes it has written
+            let status = unsafe {
+                let spare = self.buf.chunk_mut().as_uninit_slice_mut();
+                self.inner
+                    .decompress_uninit(data, spare, FlushDecompress::None)
+                    .map_err(invalid_data)?
+            };
+            let read = usize::try_from(self.inner.total_in() - total_in).unwrap();
+            let written = usize::try_from(self.inner.total_out() - total_out).unwrap();
+            unsafe { self.buf.advance_mut(written) };
+            data.advance_to(read);
+
+            self.done = status == Status::StreamEnd;
+            self.more = !self.done && self.buf.remaining_mut() == 0;
+            if read == 0 && written == 0 {
+                break;
+            }
+        }
+
+        if let Some(gzip) = &mut self.gzip {
+            gzip.crc.update(&self.buf[start..]);
+            if self.done {
+                gzip.trailer(data)?;
+            }
+        }
+        if self.done && !data.is_empty() {
+            return Err(invalid_data("data after the end of the stream"));
+        }
+
+        if self.buf.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(self.buf.take()))
+        }
+    }
+
+    fn finish(&self) -> io::Result<()> {
+        if self.done
+            && self
+                .gzip
+                .as_ref()
+                .is_none_or(|gzip| gzip.state == GzState::Done)
+        {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "compressed stream is incomplete",
+            ))
+        }
+    }
+}
+
+const FHCRC: u8 = 0x02;
+const FEXTRA: u8 = 0x04;
+const FNAME: u8 = 0x08;
+const FCOMMENT: u8 = 0x10;
+const FRESERVED: u8 = 0xe0;
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum GzState {
+    Header,
+    ExtraLen,
+    Extra(usize),
+    Name,
+    Comment,
+    HeaderCrc,
+    Body,
+    Trailer,
+    Done,
+}
+
+/// Parser of the `gzip` member header and trailer, RFC 1952.
+///
+/// The optional header fields are skipped. Like most decoders, only a single
+/// member is accepted.
+struct Gzip {
+    state: GzState,
+    flags: u8,
+    /// Checksum of the header
+    header_crc: Crc,
+    /// Checksum and size of the decoded data
+    crc: Crc,
+    buf: [u8; 10],
+    len: usize,
+}
+
+impl Gzip {
+    fn new() -> Self {
+        Gzip {
+            state: GzState::Header,
+            flags: 0,
+            header_crc: Crc::new(),
+            crc: Crc::new(),
+            buf: [0; 10],
+            len: 0,
+        }
+    }
+
+    /// Moves up to `n` bytes of `data` to `buf`, returns `true` once it holds `n` bytes.
+    fn fill(&mut self, data: &mut Bytes, n: usize) -> bool {
+        let size = (n - self.len).min(data.len());
+        self.buf[self.len..self.len + size].copy_from_slice(&data[..size]);
+        self.len += size;
+        data.advance_to(size);
+        self.len == n
+    }
+
+    /// Moves to `state`, the bytes of the previous field are dropped.
+    fn next(&mut self, state: GzState) {
+        self.state = state;
+        self.len = 0;
+    }
+
+    /// Parses the header, returns `true` once it is complete.
+    fn header(&mut self, data: &mut Bytes) -> io::Result<bool> {
+        loop {
+            match self.state {
+                GzState::Header => {
+                    if !self.fill(data, 10) {
+                        return Ok(false);
+                    }
+                    let [id1, id2, method, flags, ..] = self.buf;
+                    if id1 != 0x1f || id2 != 0x8b {
+                        return Err(invalid_data("invalid gzip header"));
+                    }
+                    if method != 8 || flags & FRESERVED != 0 {
+                        return Err(invalid_data("unsupported gzip header"));
+                    }
+                    self.flags = flags;
+                    self.header_crc.update(&self.buf);
+                    self.next(GzState::ExtraLen);
+                }
+                GzState::ExtraLen if self.flags & FEXTRA == 0 => self.next(GzState::Name),
+                GzState::ExtraLen => {
+                    if !self.fill(data, 2) {
+                        return Ok(false);
+                    }
+                    let len = [self.buf[0], self.buf[1]];
+                    self.header_crc.update(&len);
+                    self.next(GzState::Extra(u16::from_le_bytes(len).into()));
+                }
+                GzState::Extra(len) => {
+                    let size = len.min(data.len());
+                    self.header_crc.update(&data[..size]);
+                    data.advance_to(size);
+                    if size < len {
+                        self.state = GzState::Extra(len - size);
+                        return Ok(false);
+                    }
+                    self.next(GzState::Name);
+                }
+                GzState::Name if self.flags & FNAME == 0 => self.next(GzState::Comment),
+                GzState::Comment if self.flags & FCOMMENT == 0 => self.next(GzState::HeaderCrc),
+                GzState::Name | GzState::Comment => {
+                    // a zero-terminated string
+                    let Some(end) = data.iter().position(|b| *b == 0) else {
+                        self.header_crc.update(data);
+                        data.advance_to(data.len());
+                        return Ok(false);
+                    };
+                    self.header_crc.update(&data[..=end]);
+                    data.advance_to(end + 1);
+                    self.next(if self.state == GzState::Name {
+                        GzState::Comment
+                    } else {
+                        GzState::HeaderCrc
+                    });
+                }
+                GzState::HeaderCrc if self.flags & FHCRC == 0 => self.next(GzState::Body),
+                GzState::HeaderCrc => {
+                    if !self.fill(data, 2) {
+                        return Ok(false);
+                    }
+                    // the low 16 bits of the crc32
+                    let crc = u16::from_le_bytes([self.buf[0], self.buf[1]]);
+                    if u32::from(crc) != self.header_crc.sum() & 0xffff {
+                        return Err(invalid_data("gzip header checksum mismatch"));
+                    }
+                    self.next(GzState::Body);
+                }
+                GzState::Body | GzState::Trailer | GzState::Done => return Ok(true),
+            }
+        }
+    }
+
+    /// Checks the trailer after the compressed data, the crc32 and size of the output.
+    fn trailer(&mut self, data: &mut Bytes) -> io::Result<()> {
+        if self.state == GzState::Body {
+            self.next(GzState::Trailer);
+        }
+        if self.state == GzState::Trailer && self.fill(data, 8) {
+            let [c0, c1, c2, c3, s0, s1, s2, s3, ..] = self.buf;
+            if u32::from_le_bytes([c0, c1, c2, c3]) != self.crc.sum() {
+                return Err(invalid_data("gzip checksum mismatch"));
+            }
+            // the size modulo 2^32
+            if u32::from_le_bytes([s0, s1, s2, s3]) != self.crc.amount() {
+                return Err(invalid_data("gzip size mismatch"));
+            }
+            self.next(GzState::Done);
+        }
+        Ok(())
+    }
+}
+
+fn invalid_data<E>(err: E) -> io::Error
+where
+    E: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    io::Error::new(io::ErrorKind::InvalidData, err)
 }
 
 /// Memory used by `zstd` decoders.
@@ -449,50 +645,10 @@ fn zstd_error(code: usize) -> io::Error {
     io::Error::other(zstd::zstd_safe::get_error_name(code))
 }
 
-/// The spare capacity of a buffer, `zstd` writes decoded data directly into it.
-struct Spare<'a> {
-    buf: &'a mut BytesMut,
-    start: usize,
-    ptr: *mut u8,
-    capacity: usize,
-}
-
-impl<'a> Spare<'a> {
-    fn new(buf: &'a mut BytesMut) -> Self {
-        let start = buf.len();
-        let spare = buf.chunk_mut();
-        let (ptr, capacity) = (spare.as_mut_ptr(), spare.len());
-        Spare {
-            buf,
-            start,
-            ptr,
-            capacity,
-        }
-    }
-}
-
-// SAFETY: `ptr` points to `capacity` bytes of the buffer's spare capacity, and
-// `filled_until` only extends the buffer over bytes zstd has written.
-unsafe impl WriteBuf for Spare<'_> {
-    fn as_slice(&self) -> &[u8] {
-        &self.buf[self.start..]
-    }
-
-    fn capacity(&self) -> usize {
-        self.capacity
-    }
-
-    fn as_mut_ptr(&mut self) -> *mut u8 {
-        self.ptr
-    }
-
-    unsafe fn filled_until(&mut self, n: usize) {
-        unsafe { self.buf.set_len(self.start + n) }
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
     use flate2::{Compression, write::GzEncoder, write::ZlibEncoder};
     use futures_util::stream::{self, StreamExt};
 
@@ -535,10 +691,7 @@ mod tests {
                     total += chunk.len();
                 }
                 assert_eq!(total, BOMB_SIZE);
-                assert!(
-                    max <= 3 * MAX_CHUNK_SIZE,
-                    "{encoding:?} chunk of {max} bytes"
-                );
+                assert!(max <= MAX_CHUNK_SIZE, "{encoding:?} chunk of {max} bytes");
             }
         }
     }
@@ -607,7 +760,7 @@ mod tests {
         while let Some(chunk) = decoder.next().await {
             let chunk = chunk?;
             assert!(!chunk.is_empty());
-            assert!(chunk.len() <= 3 * MAX_CHUNK_SIZE);
+            assert!(chunk.len() <= MAX_CHUNK_SIZE);
             out.extend_from_slice(&chunk);
         }
         Ok(out)
@@ -913,5 +1066,98 @@ mod tests {
             }
         }
         assert!(result.is_err());
+    }
+
+    fn bytewise(data: &[u8]) -> Vec<Bytes> {
+        data.chunks(1).map(Bytes::copy_from_slice).collect()
+    }
+
+    /// A gzip member with all optional header fields, the header crc is at `len - 2`.
+    fn gzip_header(flags: u8) -> Vec<u8> {
+        let mut header = vec![0x1f, 0x8b, 8, flags, 1, 2, 3, 4, 0, 255];
+        header.extend([3, 0, b'a', b'b', b'c']);
+        header.extend(b"name\0comment\0");
+        let mut crc = flate2::Crc::new();
+        crc.update(&header);
+        header.extend((crc.sum() as u16).to_le_bytes());
+        header
+    }
+
+    #[crate::rt_test]
+    async fn gzip_decoder_header() {
+        let data = random(4096);
+        let body = &compress(ContentEncoding::Gzip, &data)[10..];
+        let mut full = gzip_header(0x1e);
+        full.extend(body);
+        for chunks in [vec![Bytes::from(full.clone())], bytewise(&full)] {
+            assert_eq!(decode(ContentEncoding::Gzip, chunks).await.unwrap(), data);
+        }
+
+        // header crc, magic, method and reserved flags
+        let crc = gzip_header(0x1e).len() - 2;
+        for (pos, flip) in [(crc, 1), (0, 1), (1, 1), (2, 1), (3, 0x20), (3, 0x80)] {
+            let mut bad = full.clone();
+            bad[pos] ^= flip;
+            let out = decode(ContentEncoding::Gzip, vec![Bytes::from(bad)]).await;
+            assert!(out.is_err(), "{pos} {flip}");
+        }
+    }
+
+    #[crate::rt_test]
+    async fn flate_decoder_errors() {
+        let data = random(4096);
+        for encoding in [ContentEncoding::Gzip, ContentEncoding::Deflate] {
+            let compressed = compress(encoding, &data);
+            let len = compressed.len();
+            assert_eq!(decode(encoding, bytewise(&compressed)).await.unwrap(), data);
+
+            let mut trailing = compressed.clone();
+            trailing.push(0);
+            let out = decode(encoding, vec![Bytes::from(trailing)]).await;
+            assert!(out.is_err(), "{encoding:?} trailing data");
+
+            // checksums
+            for pos in [len - 1, len - 5] {
+                let mut bad = compressed.clone();
+                bad[pos] ^= 1;
+                let out = decode(encoding, vec![Bytes::from(bad)]).await;
+                assert!(out.is_err(), "{encoding:?} {pos}");
+            }
+
+            for n in [0, 1, 11, len - 1] {
+                let chunks = vec![Bytes::copy_from_slice(&compressed[..n])];
+                let out = decode(encoding, chunks).await;
+                assert!(out.is_err(), "{encoding:?} truncated to {n}");
+            }
+        }
+    }
+
+    #[test]
+    fn flate_decoder_output_fills_pages() {
+        // some sizes end the stream exactly at the end of a page, which holds
+        // a little less than `MAX_CHUNK_SIZE`
+        let mut full = 0;
+        for gzip in [false, true] {
+            let encoding = if gzip {
+                ContentEncoding::Gzip
+            } else {
+                ContentEncoding::Deflate
+            };
+            for len in MAX_CHUNK_SIZE - 64..=MAX_CHUNK_SIZE {
+                let data = b"abc".repeat(len)[..len].to_vec();
+                let mut input = Bytes::from(compress(encoding, &data));
+                let mut decoder = FlateDecoder::new(gzip);
+                let mut out = Vec::new();
+                while !input.is_empty() || decoder.more {
+                    if let Some(chunk) = decoder.feed(&mut input).unwrap() {
+                        out.extend_from_slice(&chunk);
+                    }
+                    full += usize::from(decoder.done && decoder.buf.remaining_mut() == 0);
+                }
+                decoder.finish().unwrap();
+                assert_eq!(out, data);
+            }
+        }
+        assert!(full > 0);
     }
 }
