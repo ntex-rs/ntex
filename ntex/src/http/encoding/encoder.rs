@@ -1,16 +1,18 @@
 //! Stream encoder
-use std::{fmt, future::Future, io, io::Write, pin::Pin, rc::Rc, task::Context, task::Poll};
+use std::{
+    collections::VecDeque, fmt, future::Future, io, pin::Pin, rc::Rc, task::Context, task::Poll,
+};
 
-use flate2::write::{GzEncoder, ZlibEncoder};
-use zstd::stream::write::Encoder as ZstdEncoder;
+use flate2::{Compress, Compression, Crc, FlushCompress, Status};
+use zstd::zstd_safe::{CCtx, CParameter, InBuffer, OutBuffer, zstd_sys::ZSTD_EndDirective};
 
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::header::{CONTENT_ENCODING, ContentEncoding, HeaderValue};
 use crate::http::{ResponseHead, StatusCode};
 use crate::rt::BlockingResult;
-use crate::util::{Bytes, dyn_rc_err};
+use crate::util::{BufMut, BytePageSize, Bytes, BytesMut, dyn_rc_err};
 
-use super::{Writer, offload};
+use super::{Spare, offload};
 
 /// Bodies of a known size below this are sent without compression.
 ///
@@ -146,12 +148,17 @@ impl<B: MessageBody> Encoder<B> {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Bytes, Rc<dyn std::error::Error>>>> {
         loop {
+            if let Some(chunk) = self.inner.as_mut().and_then(ContentEncoder::take) {
+                return Poll::Ready(Some(Ok(chunk)));
+            }
+
             if self.eof {
+                self.inner = None;
                 return Poll::Ready(None);
             }
 
             if let Some(ref mut fut) = self.fut {
-                let mut encoder = match Pin::new(fut).poll(cx) {
+                let encoder = match Pin::new(fut).poll(cx) {
                     Poll::Ready(Ok(Ok(item))) => item,
                     Poll::Ready(Ok(Err(e))) => return Poll::Ready(Some(Err(Rc::new(e)))),
                     Poll::Ready(Err(_)) => {
@@ -162,19 +169,14 @@ impl<B: MessageBody> Encoder<B> {
                     }
                     Poll::Pending => return Poll::Pending,
                 };
-                let chunk = encoder.take();
                 self.inner = Some(encoder);
-                self.fut.take();
-                if !chunk.is_empty() {
-                    return Poll::Ready(Some(Ok(chunk)));
-                }
+                self.fut = None;
+                continue;
             }
 
             if !self.pending.is_empty() {
                 let chunk = std::mem::take(&mut self.pending);
-                if let Some(chunk) = self.encode(chunk)? {
-                    return Poll::Ready(Some(Ok(chunk)));
-                }
+                self.encode(chunk)?;
                 continue;
             }
 
@@ -194,19 +196,13 @@ impl<B: MessageBody> Encoder<B> {
                     if self.inner.is_none() {
                         return Poll::Ready(None);
                     }
-                    if let Some(chunk) = self.encode(chunk)? {
-                        return Poll::Ready(Some(Ok(chunk)));
-                    }
+                    self.encode(chunk)?;
                 }
                 Poll::Ready(None) => {
                     self.eof = true;
-                    if let Some(encoder) = self.inner.take() {
-                        let chunk = encoder.finish().map_err(dyn_rc_err)?;
-                        if !chunk.is_empty() {
-                            return Poll::Ready(Some(Ok(chunk)));
-                        }
+                    if let Some(encoder) = self.inner.as_mut() {
+                        encoder.finish().map_err(dyn_rc_err)?;
                     }
-                    return Poll::Ready(None);
                 }
                 val => return val,
             }
@@ -215,19 +211,17 @@ impl<B: MessageBody> Encoder<B> {
 }
 
 impl<B> Encoder<B> {
-    /// Encodes a small chunk in place and returns its output.
+    /// Encodes a small chunk in place.
     ///
     /// A large chunk is encoded on the blocking thread pool, one part at a
     /// time, so the output of each part is sent before the next is encoded.
-    fn encode(&mut self, mut chunk: Bytes) -> Result<Option<Bytes>, Rc<dyn std::error::Error>> {
+    fn encode(&mut self, mut chunk: Bytes) -> Result<(), Rc<dyn std::error::Error>> {
         let Some(mut encoder) = self.inner.take() else {
-            return Ok(None);
+            return Ok(());
         };
         if chunk.len() < encoder.limit() {
             encoder.write(&chunk).map_err(dyn_rc_err)?;
-            let chunk = encoder.take();
             self.inner = Some(encoder);
-            Ok(if chunk.is_empty() { None } else { Some(chunk) })
         } else {
             let part = chunk.split_to(chunk.len().min(encoder.task_size()));
             self.pending = chunk;
@@ -235,8 +229,8 @@ impl<B> Encoder<B> {
                 encoder.write(&part)?;
                 Ok(encoder)
             }));
-            Ok(None)
         }
+        Ok(())
     }
 }
 
@@ -247,10 +241,22 @@ fn update_head(encoding: ContentEncoding, head: &mut ResponseHead) {
     );
 }
 
-enum ContentEncoder {
-    Deflate(ZlibEncoder<Writer>),
-    Gzip(GzEncoder<Writer>),
-    Zstd(ZstdEncoder<'static, Writer>),
+/// The `gzip` header written by the encoder, without a name or modification
+/// time. The extra flags byte marks the fastest compression level.
+const GZIP_HEADER: [u8; 10] = [0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 4, 255];
+
+/// Compresses into pages of a buffer, full pages are queued for sending.
+struct ContentEncoder {
+    codec: Codec,
+    buf: BytesMut,
+    chunks: VecDeque<Bytes>,
+}
+
+enum Codec {
+    Deflate(Compress),
+    /// The checksum and size of the input for the trailer
+    Gzip(Compress, Crc),
+    Zstd(CCtx<'static>),
 }
 
 impl ContentEncoder {
@@ -266,89 +272,161 @@ impl ContentEncoder {
     /// `gzip` and `deflate` are several times slower than `zstd`, so they are
     /// offloaded much earlier.
     const fn limit(&self) -> usize {
-        match self {
-            ContentEncoder::Deflate(_) | ContentEncoder::Gzip(_) => 16 * 1024,
-            ContentEncoder::Zstd(_) => 512 * 1024,
+        match self.codec {
+            Codec::Deflate(_) | Codec::Gzip(..) => 16 * 1024,
+            Codec::Zstd(_) => 512 * 1024,
         }
     }
 
     /// The most input a single blocking task encodes.
     const fn task_size(&self) -> usize {
-        match self {
-            ContentEncoder::Deflate(_) | ContentEncoder::Gzip(_) => 256 * 1024,
-            ContentEncoder::Zstd(_) => 1024 * 1024,
+        match self.codec {
+            Codec::Deflate(_) | Codec::Gzip(..) => 256 * 1024,
+            Codec::Zstd(_) => 1024 * 1024,
         }
     }
 
     /// Creates an encoder, `size` is the length of the body if it is known.
     fn encoder(encoding: ContentEncoding, size: Option<u64>) -> Option<Self> {
-        match encoding {
-            ContentEncoding::Deflate => Some(ContentEncoder::Deflate(ZlibEncoder::new(
-                Writer::new(),
-                flate2::Compression::fast(),
-            ))),
-            ContentEncoding::Gzip => Some(ContentEncoder::Gzip(GzEncoder::new(
-                Writer::new(),
-                flate2::Compression::fast(),
-            ))),
+        let mut buf = BytesMut::with_page_size(BytePageSize::Size32);
+        let codec = match encoding {
+            ContentEncoding::Deflate => Codec::Deflate(Compress::new(Compression::fast(), true)),
+            ContentEncoding::Gzip => {
+                buf.extend_from_slice(&GZIP_HEADER);
+                Codec::Gzip(Compress::new(Compression::fast(), false), Crc::new())
+            }
             // with a known size zstd picks a smaller window and stores the size in the frame
-            ContentEncoding::Zstd => ZstdEncoder::new(Writer::new(), 0)
-                .and_then(|mut encoder| {
-                    encoder.set_pledged_src_size(size)?;
-                    Ok(encoder)
-                })
-                .ok()
-                .map(ContentEncoder::Zstd),
-            _ => None,
+            ContentEncoding::Zstd => {
+                let mut ctx = CCtx::try_create()?;
+                ctx.set_parameter(CParameter::CompressionLevel(0)).ok()?;
+                ctx.set_pledged_src_size(size).ok()?;
+                Codec::Zstd(ctx)
+            }
+            _ => return None,
+        };
+        Some(ContentEncoder {
+            codec,
+            buf,
+            chunks: VecDeque::new(),
+        })
+    }
+
+    /// Returns the encoded output, a full page first.
+    fn take(&mut self) -> Option<Bytes> {
+        self.chunks
+            .pop_front()
+            .or_else(|| (!self.buf.is_empty()).then(|| self.buf.take()))
+    }
+
+    /// Queues a full page and starts a new one.
+    ///
+    /// A page is never grown, so its output is not copied.
+    fn reserve(&mut self) {
+        if self.buf.remaining_mut() == 0 {
+            if !self.buf.is_empty() {
+                self.chunks.push_back(self.buf.take());
+            }
+            self.buf.reserve_more();
         }
     }
 
-    fn take(&mut self) -> Bytes {
-        match *self {
-            ContentEncoder::Deflate(ref mut encoder) => encoder.get_mut().take(),
-            ContentEncoder::Gzip(ref mut encoder) => encoder.get_mut().take(),
-            ContentEncoder::Zstd(ref mut encoder) => encoder.get_mut().take(),
+    /// Compresses `data` with `flush` into the buffer, returns `true` at the end of the stream.
+    fn compress(&mut self, data: &mut &[u8], flush: FlushCompress) -> io::Result<bool> {
+        self.reserve();
+        let (Codec::Deflate(inner) | Codec::Gzip(inner, _)) = &mut self.codec else {
+            unreachable!()
+        };
+        let (total_in, total_out) = (inner.total_in(), inner.total_out());
+        // SAFETY: the encoder only writes to the slice, and `advance_mut`
+        // covers just the bytes it has written
+        let status = unsafe {
+            let spare = self.buf.chunk_mut().as_uninit_slice_mut();
+            inner
+                .compress_uninit(data, spare, flush)
+                .map_err(io::Error::other)?
+        };
+        let read = usize::try_from(inner.total_in() - total_in).unwrap();
+        let written = usize::try_from(inner.total_out() - total_out).unwrap();
+        unsafe { self.buf.advance_mut(written) };
+        *data = &data[read..];
+
+        if status == Status::StreamEnd {
+            Ok(true)
+        } else if read == 0 && written == 0 {
+            Err(io::ErrorKind::WriteZero.into())
+        } else {
+            Ok(false)
         }
     }
 
-    fn finish(self) -> Result<Bytes, io::Error> {
-        match self {
-            ContentEncoder::Gzip(encoder) => match encoder.finish() {
-                Ok(writer) => Ok(writer.buf.freeze()),
-                Err(err) => Err(err),
-            },
-            ContentEncoder::Deflate(encoder) => match encoder.finish() {
-                Ok(writer) => Ok(writer.buf.freeze()),
-                Err(err) => Err(err),
-            },
-            ContentEncoder::Zstd(encoder) => match encoder.finish() {
-                Ok(writer) => Ok(writer.buf.freeze()),
-                Err(err) => Err(err),
-            },
-        }
+    /// Compresses `data` with `end` into the buffer, returns the size of the
+    /// output the `zstd` context still holds at the end of the frame.
+    fn compress_zstd(&mut self, data: &mut &[u8], end: ZSTD_EndDirective) -> io::Result<usize> {
+        self.reserve();
+        let Codec::Zstd(ctx) = &mut self.codec else {
+            unreachable!()
+        };
+        let mut src = InBuffer::around(data);
+        let mut spare = Spare::new(&mut self.buf);
+        let mut dst = OutBuffer::around(&mut spare);
+        let left = ctx
+            .compress_stream2(&mut dst, &mut src, end)
+            .map_err(zstd_error)?;
+        let read = src.pos();
+        *data = &data[read..];
+        Ok(left)
     }
 
-    fn write(&mut self, data: &[u8]) -> Result<(), io::Error> {
-        match *self {
-            ContentEncoder::Gzip(ref mut encoder) => encoder
-                .write_all(data)
-                .inspect_err(|err| log::trace!("Failed to encode to gzip: {err}")),
-            ContentEncoder::Deflate(ref mut encoder) => encoder
-                .write_all(data)
-                .inspect_err(|err| log::trace!("Failed to encode to deflate: {err}")),
-            ContentEncoder::Zstd(ref mut encoder) => encoder
-                .write_all(data)
-                .inspect_err(|err| log::trace!("Failed to encode to zstd: {err}")),
+    /// Writes the end of the stream.
+    fn finish(&mut self) -> io::Result<()> {
+        if let Codec::Zstd(_) = self.codec {
+            while self.compress_zstd(&mut &[][..], ZSTD_EndDirective::ZSTD_e_end)? != 0 {}
+            return Ok(());
         }
+
+        while !self.compress(&mut &[][..], FlushCompress::Finish)? {}
+        if let Codec::Gzip(_, crc) = &self.codec {
+            let mut trailer = [0; 8];
+            trailer[..4].copy_from_slice(&crc.sum().to_le_bytes());
+            trailer[4..].copy_from_slice(&crc.amount().to_le_bytes());
+            let mut trailer = &trailer[..];
+            while !trailer.is_empty() {
+                self.reserve();
+                let size = trailer.len().min(self.buf.remaining_mut());
+                self.buf.extend_from_slice(&trailer[..size]);
+                trailer = &trailer[size..];
+            }
+        }
+        Ok(())
     }
+
+    fn write(&mut self, mut data: &[u8]) -> Result<(), io::Error> {
+        if let Codec::Gzip(_, crc) = &mut self.codec {
+            crc.update(data);
+        }
+        while !data.is_empty() {
+            if let Codec::Zstd(_) = self.codec {
+                self.compress_zstd(&mut data, ZSTD_EndDirective::ZSTD_e_continue)
+                    .inspect_err(|err| log::trace!("Failed to encode to zstd: {err}"))?;
+            } else {
+                self.compress(&mut data, FlushCompress::None)
+                    .inspect_err(|err| log::trace!("Failed to encode to {self:?}: {err}"))?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn zstd_error(code: usize) -> io::Error {
+    io::Error::other(zstd::zstd_safe::get_error_name(code))
 }
 
 impl fmt::Debug for ContentEncoder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ContentEncoder::Deflate(_) => write!(f, "ContentEncoder::Deflate"),
-            ContentEncoder::Gzip(_) => write!(f, "ContentEncoder::Gzip"),
-            ContentEncoder::Zstd(_) => write!(f, "ContentEncoder::Zstd"),
+        match self.codec {
+            Codec::Deflate(_) => write!(f, "ContentEncoder::Deflate"),
+            Codec::Gzip(..) => write!(f, "ContentEncoder::Gzip"),
+            Codec::Zstd(_) => write!(f, "ContentEncoder::Zstd"),
         }
     }
 }
@@ -647,15 +725,14 @@ mod tests {
             let mut chunks = 0;
             while let Some(chunk) = poll_fn(|cx| body.poll_next_chunk(cx)).await {
                 let chunk = chunk.unwrap();
-                assert!(
-                    chunk.len() <= task + 64 * 1024,
-                    "{encoding:?} {}",
-                    chunk.len()
-                );
+                assert!(chunk.len() <= 32 * 1024, "{encoding:?} {}", chunk.len());
                 encoded.extend_from_slice(&chunk);
                 chunks += 1;
             }
-            assert!(chunks >= 3, "{encoding:?} {chunks}");
+            assert!(
+                chunks > encoded.len() / (32 * 1024),
+                "{encoding:?} {chunks}"
+            );
             assert_eq!(decompress(encoding, &encoded), data);
             assert_eq!(super::super::offloaded() - before, 2, "{encoding:?}");
         }
@@ -730,5 +807,88 @@ mod tests {
             EncoderBody::<Body>::BoxedStream(Box::new(Body::Empty))
         );
         assert_eq!(s, "EncoderBody::BoxedStream(_)");
+    }
+
+    fn encode_all(encoding: ContentEncoding, data: &[u8]) -> Vec<Bytes> {
+        let mut enc = ContentEncoder::encoder(encoding, None).unwrap();
+        enc.write(data).unwrap();
+        enc.finish().unwrap();
+        std::iter::from_fn(|| enc.take()).collect()
+    }
+
+    #[test]
+    fn encoder_writes_pages() {
+        // the output of a large write is queued page by page
+        for encoding in [
+            ContentEncoding::Gzip,
+            ContentEncoding::Deflate,
+            ContentEncoding::Zstd,
+        ] {
+            let data = random(200 * 1024);
+            let chunks = encode_all(encoding, &data);
+            assert!(chunks.len() > 6, "{encoding:?} {}", chunks.len());
+            assert!(chunks.iter().all(|c| c.len() <= 32 * 1024 && !c.is_empty()));
+            assert_eq!(decompress(encoding, &chunks.concat()), data);
+        }
+
+        // gzip has the same header as flate2
+        let chunks = encode_all(ContentEncoding::Gzip, b"data");
+        let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        std::io::Write::write_all(&mut e, b"data").unwrap();
+        assert_eq!(chunks[0][..10], e.finish().unwrap()[..10]);
+    }
+
+    #[test]
+    fn encoder_finish_across_pages() {
+        // some sizes end the compressed data a few bytes before the end of a
+        // page, the end of the stream continues on the next one
+        let data = random(33 * 1024);
+        for encoding in [
+            ContentEncoding::Gzip,
+            ContentEncoding::Deflate,
+            ContentEncoding::Zstd,
+        ] {
+            let mut split = 0;
+            for len in 32 * 1024 - 64..32 * 1024 {
+                let chunks = encode_all(encoding, &data[..len]);
+                assert!(chunks.iter().all(|c| c.len() <= 32 * 1024));
+                if chunks.len() > 1 && chunks.last().unwrap().len() < 8 {
+                    split += 1;
+                }
+                assert_eq!(decompress(encoding, &chunks.concat()), &data[..len]);
+            }
+            assert!(split > 0, "{encoding:?}");
+        }
+    }
+
+    #[test]
+    fn encoder_write_after_full_page() {
+        // a write can leave a full page, `zstd` does with these sizes, the
+        // next write starts a new page and does not queue an empty chunk
+        let mut full = 0;
+        for encoding in [
+            ContentEncoding::Gzip,
+            ContentEncoding::Deflate,
+            ContentEncoding::Zstd,
+        ] {
+            let data = random(256 * 1024);
+            let mut enc = ContentEncoder::encoder(encoding, None).unwrap();
+            let mut out = Vec::new();
+            for part in data.chunks(16 * 1024) {
+                enc.write(part).unwrap();
+                full += usize::from(enc.buf.remaining_mut() == 0);
+                while let Some(chunk) = enc.take() {
+                    assert!(!chunk.is_empty(), "{encoding:?}");
+                    out.extend_from_slice(&chunk);
+                }
+            }
+            enc.finish().unwrap();
+            while let Some(chunk) = enc.take() {
+                assert!(!chunk.is_empty(), "{encoding:?}");
+                out.extend_from_slice(&chunk);
+            }
+            assert_eq!(decompress(encoding, &out), data);
+        }
+        assert!(full > 0);
     }
 }
