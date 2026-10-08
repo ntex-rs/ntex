@@ -1,5 +1,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::{future::Future, io, io::Write, pin::Pin, task::Context, task::Poll};
+use std::{
+    collections::VecDeque, future::Future, io, io::Write, pin::Pin, task::Context, task::Poll,
+};
 
 use flate2::write::{GzDecoder, ZlibDecoder};
 use zstd::zstd_safe::{DCtx, DParameter, InBuffer, OutBuffer, WriteBuf};
@@ -15,6 +17,11 @@ use crate::util::{BufMut, BytePageSize, Bytes, BytesMut, Stream};
 /// A single write or flush of a `gzip` or `deflate` decoder adds at most 32KiB,
 /// so their chunks stay below 96KiB. `zstd` chunks never exceed this size.
 const MAX_CHUNK_SIZE: usize = 32 * 1024;
+
+/// A blocking task stops decoding once its output reaches this size.
+///
+/// The output is kept in chunks of at most `MAX_CHUNK_SIZE`.
+const MAX_TASK_OUTPUT: usize = 256 * 1024;
 
 /// The largest `zstd` window a decoder accepts, 8MiB as required by RFC 9659.
 const ZSTD_WINDOW_LOG_MAX: u32 = 23;
@@ -45,11 +52,14 @@ pub struct Decoder<S> {
     /// Input that is not decoded yet
     #[debug(skip)]
     pending: Option<Bytes>,
+    /// Output of a blocking task that is not returned yet
+    #[debug(skip)]
+    ready: VecDeque<Bytes>,
     #[debug(skip)]
     fut: Option<BlockingResult<DecodeResult>>,
 }
 
-type DecodeResult = Result<(Option<Bytes>, ContentDecoder, Bytes), io::Error>;
+type DecodeResult = Result<(VecDeque<Bytes>, ContentDecoder, Bytes), io::Error>;
 
 impl<S> Decoder<S>
 where
@@ -78,6 +88,7 @@ where
             fut: None,
             eof: false,
             pending: None,
+            ready: VecDeque::new(),
         }
     }
 
@@ -141,8 +152,12 @@ where
 
     fn poll_decoded(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, PayloadError>>> {
         loop {
+            if let Some(chunk) = self.ready.pop_front() {
+                return Poll::Ready(Some(Ok(chunk)));
+            }
+
             if let Some(ref mut fut) = self.fut {
-                let (chunk, decoder, rest) = match Pin::new(fut).poll(cx) {
+                let (chunks, decoder, rest) = match Pin::new(fut).poll(cx) {
                     Poll::Ready(Ok(Ok(item))) => item,
                     Poll::Ready(Ok(Err(e))) => return Poll::Ready(Some(Err(e.into()))),
                     Poll::Ready(Err(e)) => return Poll::Ready(Some(Err(e.into()))),
@@ -150,9 +165,8 @@ where
                 };
                 self.fut = None;
                 self.restore(decoder, rest);
-                if let Some(chunk) = chunk {
-                    return Poll::Ready(Some(Ok(chunk)));
-                }
+                self.ready = chunks;
+                continue;
             }
 
             if let Some(mut data) = self.pending.take() {
@@ -165,8 +179,8 @@ where
                     }
                 } else {
                     self.fut = Some(offload(move || {
-                        let chunk = decoder.feed_data(&mut data)?;
-                        Ok((chunk, decoder, data))
+                        let chunks = decoder.feed_task(&mut data)?;
+                        Ok((chunks, decoder, data))
                     }));
                 }
                 continue;
@@ -214,8 +228,8 @@ enum ContentDecoder {
 impl ContentDecoder {
     /// Input of this size and larger is decoded on the blocking thread pool.
     ///
-    /// The work of a single feed is bounded by `MAX_CHUNK_SIZE` anyway, the
-    /// pool only takes it off the current thread.
+    /// A feed on the current thread decodes at most `MAX_CHUNK_SIZE`, a task
+    /// on the pool decodes several chunks, up to `MAX_TASK_OUTPUT`.
     const fn limit(&self) -> usize {
         match self {
             ContentDecoder::Deflate(_) | ContentDecoder::Gzip(_) => 128 * 1024,
@@ -249,6 +263,20 @@ impl ContentDecoder {
                 Err(e) => Err(e),
             },
         }
+    }
+
+    /// Decodes `data` on a blocking task until the output reaches `MAX_TASK_OUTPUT`.
+    fn feed_task(&mut self, data: &mut Bytes) -> io::Result<VecDeque<Bytes>> {
+        let mut chunks = VecDeque::new();
+        let mut size = 0;
+        while size < MAX_TASK_OUTPUT && !data.is_empty() {
+            let Some(chunk) = self.feed_data(data)? else {
+                break;
+            };
+            size += chunk.len();
+            chunks.push_back(chunk);
+        }
+        Ok(chunks)
     }
 
     /// Decodes `data` until the output reaches `MAX_CHUNK_SIZE`.
@@ -838,11 +866,34 @@ mod tests {
             eof: false,
             decode: true,
             pending: None,
+            ready: VecDeque::new(),
             fut: None,
         };
         assert!(matches!(decoder.next().await, Some(Err(_))));
         assert!(decoder.next().await.is_none());
         assert_eq!(MEMORY.used.load(Ordering::Acquire), 0);
+    }
+
+    #[crate::rt_test]
+    async fn decoder_task_output() {
+        for (encoding, limit) in [
+            (ContentEncoding::Gzip, 128 * 1024),
+            (ContentEncoding::Zstd, 512 * 1024),
+        ] {
+            let data = random(2 * 1024 * 1024);
+            let compressed = compress(encoding, &data);
+            let before = super::super::offloaded();
+            let chunks = vec![Bytes::from(compressed)];
+            assert_eq!(decode(encoding, chunks).await.unwrap(), data);
+
+            // each task decodes MAX_TASK_OUTPUT, the rest below the limit in place
+            let tasks = super::super::offloaded() - before;
+            let expected = (data.len() - limit).div_ceil(MAX_TASK_OUTPUT);
+            assert!(
+                (expected - 1..=expected).contains(&tasks),
+                "{encoding:?} {tasks}"
+            );
+        }
     }
 
     #[crate::rt_test]
