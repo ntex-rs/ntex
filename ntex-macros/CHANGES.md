@@ -2,6 +2,8 @@
 
 ## [4.1.0] - 2026-10-08
 
+* Fix and extend macro docs, update README
+
 * Box the `test` macro future to reduce generated code
 
 ## [4.0.0] - 2026-10-02

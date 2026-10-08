@@ -1,43 +1,42 @@
-//! ntex macros module
+//! Procedural macros for ntex.
 //!
-//! Generators for routes
+//! You don't need to depend on this crate directly, `ntex` re-exports every
+//! macro:
 //!
-//! ## Route
+//! - `#[ntex::main]` runs an async function on the ntex runtime, see
+//!   [`rt_main`].
+//! - `#[ntex::test]` does the same for a test, see [`rt_test`].
+//! - `#[ntex::web::get]`, `#[ntex::web::post]` and friends turn an async
+//!   function into a web handler with a path and a method guard, see
+//!   [`web_get`].
 //!
-//! Macros:
+//! ## Route macros
 //!
-//! - [get](attr.web_get.html)
-//! - [post](attr.web_post.html)
-//! - [put](attr.web_put.html)
-//! - [delete](attr.web_delete.html)
-//! - [head](attr.web_head.html)
-//! - [connect](attr.web_connect.html)
-//! - [options](attr.web_options.html)
-//! - [trace](attr.web_trace.html)
-//! - [patch](attr.web_patch.html)
-//! - [query](attr.web_query.html)
+//! | `ntex::web` | Method    | This crate        |
+//! |-------------|-----------|-------------------|
+//! | `get`       | `GET`     | [`web_get`]       |
+//! | `post`      | `POST`    | [`web_post`]      |
+//! | `put`       | `PUT`     | [`web_put`]       |
+//! | `delete`    | `DELETE`  | [`web_delete`]    |
+//! | `head`      | `HEAD`    | [`web_head`]      |
+//! | `connect`   | `CONNECT` | [`web_connect`]   |
+//! | `options`   | `OPTIONS` | [`web_options`]   |
+//! | `trace`     | `TRACE`   | [`web_trace`]     |
+//! | `patch`     | `PATCH`   | [`web_patch`]     |
+//! | `query`     | `QUERY`   | [`web_query`]     |
 //!
-//! ### Attributes:
-//!
-//! - `"path"` - Raw literal string with path for which to register handle. Mandatory.
-//! - `guard = "function_name"` - Registers function as guard using `ntex::web::guard::fn_guard`
-//! - `state = "AppState"` - Register handler for specified application state
-//!
-//! ## Notes
-//!
-//! Function name can be specified as any expression that is going to be accessible to the generate
-//! code (e.g `my_guard` or `my_module::my_guard`)
-//!
-//! ## Example:
+//! All of them take the same arguments, they are described on [`web_get`].
 //!
 //! ```rust
-//! use std::convert::Infallible;
-//! use ntex::web::{get, HttpResponse, WebError};
+//! use ntex::web::{App, HttpResponse, get, types::Path};
 //!
-//! #[get("/test")]
-//! async fn async_test() -> Result<HttpResponse, Infallible> {
-//!     Ok(HttpResponse::Ok().build())
+//! #[get("/users/{id}")]
+//! async fn user(id: Path<u32>) -> HttpResponse {
+//!     HttpResponse::Ok().body(format!("user {}", id.into_inner()))
 //! }
+//!
+//! // `user` is now a service, register it on an application
+//! let app = App::<()>::new().service(user);
 //! ```
 
 use proc_macro::TokenStream;
@@ -46,15 +45,84 @@ use quote::quote;
 mod route;
 mod sys;
 
-/// Creates route handler with `GET` method guard.
+/// Creates a route handler with a `GET` method guard.
 ///
-/// Syntax: `#[get("path"[, attributes])]`
+/// Re-exported as `ntex::web::get`.
 ///
-/// ## Attributes:
+/// Syntax: `#[get("path"[, guard = "fn_name"]*[, state = Type])]`
 ///
-/// - `"path"` - Raw literal string with path for which to register handler. Mandatory.
-/// - `guard = "function_name"` - Registers function as guard using `ntex::web::guard::fn_guard`
-/// - `error = "ErrorRenderer"` - Register handler for different error renderer
+/// The macro takes a handler function and replaces it with a unit struct of
+/// the same name. The struct is a web service, you register it with
+/// `.service()` on an `App` or a `scope`. The function itself ends up inside
+/// the generated code, so you can't call it directly anymore. The struct is
+/// always `pub`, whatever the visibility of the function.
+///
+/// The function is any handler `Route::to()` accepts: an `async fn` with up
+/// to 16 extractors, or a plain `fn` that returns a future. The function name
+/// is also used as the resource name, so it works with `url_for()`.
+///
+/// ## Arguments
+///
+/// - `"path"` - path of the resource, the same syntax as for
+///   `Resource::new()`, for example `"/users/{id}"`. Required, must come
+///   first.
+/// - `guard = "fn_name"` - adds a guard built with
+///   `ntex::web::guard::fn_guard()`. The value is the name of a function
+///   `fn(&RequestHead) -> bool` that is in scope where the macro is used. It
+///   must be a plain name, paths like `"guards::is_json"` are not supported,
+///   import the function instead. Can be given more than once, all guards must
+///   pass.
+/// - `state = Type` - type of the application state, written as a type path
+///   without quotes. The handler can then only be registered on an
+///   `App<Type>`, and its errors use the error type of `Type`. It does not
+///   give the handler access to the state. Defaults to `()`, the state of
+///   `App::new()`.
+///
+/// ## Examples
+///
+/// ```rust
+/// use ntex::http::RequestHead;
+/// use ntex::web::{App, HttpResponse, get, post};
+///
+/// #[get("/")]
+/// async fn index() -> HttpResponse {
+///     HttpResponse::Ok().body("hello")
+/// }
+///
+/// fn is_json(req: &RequestHead) -> bool {
+///     req.headers()
+///         .get("content-type")
+///         .is_some_and(|v| v == "application/json")
+/// }
+///
+/// // only matches POST requests with a json content type
+/// #[post("/items", guard = "is_json")]
+/// async fn create_item(body: String) -> HttpResponse {
+///     HttpResponse::Created().body(body)
+/// }
+///
+/// let app = App::<()>::new().service((index, create_item));
+/// ```
+///
+/// With a custom application state:
+///
+/// ```rust
+/// use ntex::web::{self, App, HttpResponse, get};
+///
+/// #[derive(Clone)]
+/// struct MyState;
+///
+/// impl web::State for MyState {
+///     type Error = web::DefaultError;
+/// }
+///
+/// #[get("/", state = MyState)]
+/// async fn index() -> HttpResponse {
+///     HttpResponse::Ok().build()
+/// }
+///
+/// let app = App::<MyState>::new().service(index);
+/// ```
 #[proc_macro_attribute]
 pub fn web_get(args: TokenStream, input: TokenStream) -> TokenStream {
     let gen_code = match route::Route::new(args, input, route::MethodType::Get) {
@@ -64,11 +132,13 @@ pub fn web_get(args: TokenStream, input: TokenStream) -> TokenStream {
     gen_code.generate()
 }
 
-/// Creates route handler with `POST` method guard.
+/// Creates a route handler with a `POST` method guard.
 ///
-/// Syntax: `#[post("path"[, attributes])]`
+/// Re-exported as `ntex::web::post`.
 ///
-/// Attributes are the same as in [get](attr.get.html)
+/// Syntax: `#[post("path"[, guard = "fn_name"]*[, state = Type])]`
+///
+/// Works the same way and takes the same arguments as [`web_get`].
 #[proc_macro_attribute]
 pub fn web_post(args: TokenStream, input: TokenStream) -> TokenStream {
     let gen_code = match route::Route::new(args, input, route::MethodType::Post) {
@@ -78,11 +148,13 @@ pub fn web_post(args: TokenStream, input: TokenStream) -> TokenStream {
     gen_code.generate()
 }
 
-/// Creates route handler with `PUT` method guard.
+/// Creates a route handler with a `PUT` method guard.
 ///
-/// Syntax: `#[put("path"[, attributes])]`
+/// Re-exported as `ntex::web::put`.
 ///
-/// Attributes are the same as in [get](attr.get.html)
+/// Syntax: `#[put("path"[, guard = "fn_name"]*[, state = Type])]`
+///
+/// Works the same way and takes the same arguments as [`web_get`].
 #[proc_macro_attribute]
 pub fn web_put(args: TokenStream, input: TokenStream) -> TokenStream {
     let gen_code = match route::Route::new(args, input, route::MethodType::Put) {
@@ -92,11 +164,13 @@ pub fn web_put(args: TokenStream, input: TokenStream) -> TokenStream {
     gen_code.generate()
 }
 
-/// Creates route handler with `DELETE` method guard.
+/// Creates a route handler with a `DELETE` method guard.
 ///
-/// Syntax: `#[delete("path"[, attributes])]`
+/// Re-exported as `ntex::web::delete`.
 ///
-/// Attributes are the same as in [get](attr.get.html)
+/// Syntax: `#[delete("path"[, guard = "fn_name"]*[, state = Type])]`
+///
+/// Works the same way and takes the same arguments as [`web_get`].
 #[proc_macro_attribute]
 pub fn web_delete(args: TokenStream, input: TokenStream) -> TokenStream {
     let gen_code = match route::Route::new(args, input, route::MethodType::Delete) {
@@ -106,11 +180,13 @@ pub fn web_delete(args: TokenStream, input: TokenStream) -> TokenStream {
     gen_code.generate()
 }
 
-/// Creates route handler with `HEAD` method guard.
+/// Creates a route handler with a `HEAD` method guard.
 ///
-/// Syntax: `#[head("path"[, attributes])]`
+/// Re-exported as `ntex::web::head`.
 ///
-/// Attributes are the same as in [head](attr.head.html)
+/// Syntax: `#[head("path"[, guard = "fn_name"]*[, state = Type])]`
+///
+/// Works the same way and takes the same arguments as [`web_get`].
 #[proc_macro_attribute]
 pub fn web_head(args: TokenStream, input: TokenStream) -> TokenStream {
     let gen_code = match route::Route::new(args, input, route::MethodType::Head) {
@@ -120,11 +196,13 @@ pub fn web_head(args: TokenStream, input: TokenStream) -> TokenStream {
     gen_code.generate()
 }
 
-/// Creates route handler with `CONNECT` method guard.
+/// Creates a route handler with a `CONNECT` method guard.
 ///
-/// Syntax: `#[connect("path"[, attributes])]`
+/// Re-exported as `ntex::web::connect`.
 ///
-/// Attributes are the same as in [connect](attr.connect.html)
+/// Syntax: `#[connect("path"[, guard = "fn_name"]*[, state = Type])]`
+///
+/// Works the same way and takes the same arguments as [`web_get`].
 #[proc_macro_attribute]
 pub fn web_connect(args: TokenStream, input: TokenStream) -> TokenStream {
     let gen_code = match route::Route::new(args, input, route::MethodType::Connect) {
@@ -134,11 +212,13 @@ pub fn web_connect(args: TokenStream, input: TokenStream) -> TokenStream {
     gen_code.generate()
 }
 
-/// Creates route handler with `OPTIONS` method guard.
+/// Creates a route handler with a `OPTIONS` method guard.
 ///
-/// Syntax: `#[options("path"[, attributes])]`
+/// Re-exported as `ntex::web::options`.
 ///
-/// Attributes are the same as in [options](attr.options.html)
+/// Syntax: `#[options("path"[, guard = "fn_name"]*[, state = Type])]`
+///
+/// Works the same way and takes the same arguments as [`web_get`].
 #[proc_macro_attribute]
 pub fn web_options(args: TokenStream, input: TokenStream) -> TokenStream {
     let gen_code = match route::Route::new(args, input, route::MethodType::Options) {
@@ -148,11 +228,13 @@ pub fn web_options(args: TokenStream, input: TokenStream) -> TokenStream {
     gen_code.generate()
 }
 
-/// Creates route handler with `TRACE` method guard.
+/// Creates a route handler with a `TRACE` method guard.
 ///
-/// Syntax: `#[trace("path"[, attributes])]`
+/// Re-exported as `ntex::web::trace`.
 ///
-/// Attributes are the same as in [trace](attr.trace.html)
+/// Syntax: `#[trace("path"[, guard = "fn_name"]*[, state = Type])]`
+///
+/// Works the same way and takes the same arguments as [`web_get`].
 #[proc_macro_attribute]
 pub fn web_trace(args: TokenStream, input: TokenStream) -> TokenStream {
     let gen_code = match route::Route::new(args, input, route::MethodType::Trace) {
@@ -162,11 +244,13 @@ pub fn web_trace(args: TokenStream, input: TokenStream) -> TokenStream {
     gen_code.generate()
 }
 
-/// Creates route handler with `PATCH` method guard.
+/// Creates a route handler with a `PATCH` method guard.
 ///
-/// Syntax: `#[patch("path"[, attributes])]`
+/// Re-exported as `ntex::web::patch`.
 ///
-/// Attributes are the same as in [patch](attr.patch.html)
+/// Syntax: `#[patch("path"[, guard = "fn_name"]*[, state = Type])]`
+///
+/// Works the same way and takes the same arguments as [`web_get`].
 #[proc_macro_attribute]
 pub fn web_patch(args: TokenStream, input: TokenStream) -> TokenStream {
     let gen_code = match route::Route::new(args, input, route::MethodType::Patch) {
@@ -176,11 +260,13 @@ pub fn web_patch(args: TokenStream, input: TokenStream) -> TokenStream {
     gen_code.generate()
 }
 
-/// Create a route handler with `QUERY` method guard.
+/// Creates a route handler with a `QUERY` method guard.
 ///
-/// Syntax: `#[query("path"[, attributes])]`
+/// Re-exported as `ntex::web::query`.
 ///
-/// Attributes are the same as in [query](attr.query.html)
+/// Syntax: `#[query("path"[, guard = "fn_name"]*[, state = Type])]`
+///
+/// Works the same way and takes the same arguments as [`web_get`].
 #[proc_macro_attribute]
 pub fn web_query(args: TokenStream, input: TokenStream) -> TokenStream {
     let gen_code = match route::Route::new(args, input, route::MethodType::Query) {
@@ -190,28 +276,38 @@ pub fn web_query(args: TokenStream, input: TokenStream) -> TokenStream {
     gen_code.generate()
 }
 
-/// Marks async function to be executed by ntex system.
+/// Runs an async function on the ntex runtime.
 ///
-/// ## Usage
+/// Re-exported as `ntex::main`.
+///
+/// The function becomes a normal blocking function. When called, it builds a
+/// `System`, runs the body to completion and returns its result, so the
+/// function can return a value, for example `std::io::Result<()>`. It does
+/// not have to be `main`.
 ///
 /// ```rust
 /// #[ntex::main]
-/// async fn main() {
+/// async fn main() -> std::io::Result<()> {
 ///     println!("Hello world");
+///     Ok(())
 /// }
 /// ```
 ///
-/// ## Attributes
+/// ## Arguments
 ///
-/// - `name = "..."` - Sets system name.
-/// - `signals = true/false` - Enable/disable signals handling.
-/// - `panic_handling = true/false` - Enable/disable panic handling.
-/// - `ping_interval = N` - Sets arbiter ping interval in milliseconds for the created system.
-///   To disable pings set value to zero.
-/// - `rt = ..` - Sets system runtime type, it must implements Runner trait
+/// - `name = "..."` - name of the system. Defaults to the function name.
+/// - `signals = true/false` - handle process signals. Off by default.
+/// - `panic_handling = true/false` - report application panics as
+///   `Signal::Panic`. Only useful together with `signals = true`. Off by
+///   default.
+/// - `ping_interval = N` - how often, in milliseconds, the system pings its
+///   arbiters to spot busy ones. Defaults to 2000, zero turns pings off.
+/// - `rt = path` - the runtime to run on, a value that implements
+///   `ntex::rt::Runner`. Defaults to `ntex::rt::DefaultRuntime`, the runtime
+///   picked by ntex features.
 ///
 /// ```rust
-/// #[ntex::main(ping_interval = 250)]
+/// #[ntex::main(name = "server", signals = true, ping_interval = 250)]
 /// async fn main() {
 ///     println!("Hello world");
 /// }
@@ -249,14 +345,29 @@ pub fn rt_main(args: TokenStream, item: TokenStream) -> TokenStream {
     .into()
 }
 
-/// Marks async test function to be executed by ntex runtime.
+/// Runs an async test on the ntex runtime.
 ///
-/// ## Usage
+/// Re-exported as `ntex::test`.
+///
+/// The macro adds `#[test]`, unless the function already has it, and runs the
+/// body on a new `System` named after the test. The system is built in
+/// testing mode, without signal and panic handling, and always uses
+/// `ntex::rt::DefaultRuntime`. The test can return a `Result`, like a normal
+/// test. The macro takes no arguments.
+///
+/// It also turns on `env_logger` at `trace` level, unless `RUST_LOG` is set.
+/// Set `NTEX_NO_TEST_LOG` or enable the `no-test-logging` feature of ntex to
+/// turn logging off.
 ///
 /// ```no_run
 /// #[ntex::test]
 /// async fn my_test() {
 ///     assert!(true);
+/// }
+///
+/// #[ntex::test]
+/// async fn my_fallible_test() -> std::io::Result<()> {
+///     Ok(())
 /// }
 /// ```
 #[proc_macro_attribute]
@@ -315,16 +426,8 @@ pub fn rt_test(_: TokenStream, item: TokenStream) -> TokenStream {
     result.into()
 }
 
-/// Marks async test function to be executed by ntex runtime.
-///
-/// ## Usage
-///
-/// ```no_run
-/// #[ntex::test]
-/// async fn my_test() {
-///     assert!(true);
-/// }
-/// ```
+/// Same as [`rt_test`] for crates that depend on `ntex-rt` directly. Doesn't
+/// enable test logging.
 #[doc(hidden)]
 #[proc_macro_attribute]
 pub fn rt_test2(_: TokenStream, item: TokenStream) -> TokenStream {
@@ -380,16 +483,8 @@ pub fn rt_test2(_: TokenStream, item: TokenStream) -> TokenStream {
     result.into()
 }
 
-/// Marks async test function to be executed by ntex runtime.
-///
-/// ## Usage
-///
-/// ```no_run
-/// #[ntex::test]
-/// async fn my_test() {
-///     assert!(true);
-/// }
-/// ```
+/// Same as [`rt_test`] for tests inside the `ntex` crate itself, it refers to
+/// `crate::` paths.
 #[doc(hidden)]
 #[proc_macro_attribute]
 pub fn rt_test_internal(_: TokenStream, item: TokenStream) -> TokenStream {
