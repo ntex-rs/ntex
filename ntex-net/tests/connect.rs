@@ -187,3 +187,41 @@ async fn nested_reactor() {
     let reactor: Box<dyn ntex_net::Reactor> = Box::new(ntex_net::polling::Reactor::new().unwrap());
     ntex_net::with_reactor(&reactor, || ());
 }
+
+/// Returns `TCP_NODELAY` of the open socket connecting `local` to `peer`.
+#[cfg(unix)]
+fn nodelay_of(local: net::SocketAddr, peer: net::SocketAddr) -> bool {
+    use std::os::fd::BorrowedFd;
+
+    for fd in 3..4096 {
+        // SAFETY: the borrow only queries the socket, fds that are not open
+        // or not sockets fail the lookups
+        let fd = unsafe { BorrowedFd::borrow_raw(fd) };
+        let sock = socket2::SockRef::from(&fd);
+        if sock.local_addr().ok().and_then(|a| a.as_socket()) == Some(local)
+            && sock.peer_addr().ok().and_then(|a| a.as_socket()) == Some(peer)
+        {
+            return sock.tcp_nodelay().unwrap();
+        }
+    }
+    panic!("no socket for {local} -> {peer}");
+}
+
+/// Both connected and accepted streams disable Nagle.
+#[cfg(unix)]
+#[ntex::test]
+async fn tcp_nodelay() {
+    let lst = net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = lst.local_addr().unwrap();
+
+    let client = ntex_net::tcp_connect(addr, SharedCfg::default())
+        .await
+        .unwrap();
+    let (sock, peer) = lst.accept().unwrap();
+    assert!(!sock.nodelay().unwrap());
+    let server = ntex_net::from_tcp_stream(sock, SharedCfg::default()).unwrap();
+
+    assert!(nodelay_of(peer, addr), "connected stream");
+    assert!(nodelay_of(addr, peer), "accepted stream");
+    drop((client, server));
+}

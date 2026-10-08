@@ -137,6 +137,7 @@ impl crate::Reactor for Reactor {
                 let sock = compio_net::TcpStream::connect(addr)
                     .await
                     .map_err(map_socket_error)?;
+                sock.set_nodelay(true)?;
                 Ok(Io::new(TcpStream(sock), cfg))
             }
             .await;
