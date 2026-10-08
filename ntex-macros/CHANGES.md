@@ -1,5 +1,13 @@
 # Changes
 
+## [4.1.0] - 2026-10-08
+
+* Box the `test` macro future to reduce generated code
+
+## [4.0.0] - 2026-10-02
+
+* Update proc marcos for ntex v4
+
 ## [3.5.0] - 2026-08-10
 
 * Add "panic_handling" parameters to `main` macro

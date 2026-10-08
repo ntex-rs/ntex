@@ -266,6 +266,7 @@ pub fn rt_test(_: TokenStream, item: TokenStream) -> TokenStream {
     let ret = &input.sig.output;
     let name = &input.sig.ident;
     let body = &input.block;
+    let fut = boxed_future(ret, body);
     let attrs = &input.attrs;
     let mut has_test_attr = false;
 
@@ -293,7 +294,7 @@ pub fn rt_test(_: TokenStream, item: TokenStream) -> TokenStream {
                     .name(stringify!(#name))
                     .testing()
                     .build(ntex::rt::DefaultRuntime)
-                    .block_on(async { #body })
+                    .block_on(#fut)
             }
         }
     } else {
@@ -306,7 +307,7 @@ pub fn rt_test(_: TokenStream, item: TokenStream) -> TokenStream {
                     .name(stringify!(#name))
                     .testing()
                     .build(ntex::rt::DefaultRuntime)
-                    .block_on(async { #body })
+                    .block_on(#fut)
             }
         }
     };
@@ -332,6 +333,7 @@ pub fn rt_test2(_: TokenStream, item: TokenStream) -> TokenStream {
     let ret = &input.sig.output;
     let name = &input.sig.ident;
     let body = &input.block;
+    let fut = boxed_future(ret, body);
     let attrs = &input.attrs;
     let mut has_test_attr = false;
 
@@ -358,7 +360,7 @@ pub fn rt_test2(_: TokenStream, item: TokenStream) -> TokenStream {
                     .name(stringify!(#name))
                     .testing()
                     .build(ntex::rt::DefaultRuntime)
-                    .block_on(async { #body })
+                    .block_on(#fut)
             }
         }
     } else {
@@ -370,7 +372,7 @@ pub fn rt_test2(_: TokenStream, item: TokenStream) -> TokenStream {
                     .name(stringify!(#name))
                     .testing()
                     .build(ntex::rt::DefaultRuntime)
-                    .block_on(async { #body })
+                    .block_on(#fut)
             }
         }
     };
@@ -396,6 +398,7 @@ pub fn rt_test_internal(_: TokenStream, item: TokenStream) -> TokenStream {
     let ret = &input.sig.output;
     let name = &input.sig.ident;
     let body = &input.block;
+    let fut = boxed_future(ret, body);
     let attrs = &input.attrs;
     let mut has_test_attr = false;
 
@@ -423,7 +426,7 @@ pub fn rt_test_internal(_: TokenStream, item: TokenStream) -> TokenStream {
                     .name(stringify!(#name))
                     .testing()
                     .build(crate::rt::DefaultRuntime)
-                    .block_on(async { #body })
+                    .block_on(#fut)
             }
         }
     } else {
@@ -436,10 +439,23 @@ pub fn rt_test_internal(_: TokenStream, item: TokenStream) -> TokenStream {
                     .name(stringify!(#name))
                     .testing()
                     .build(crate::rt::DefaultRuntime)
-                    .block_on(async { #body })
+                    .block_on(#fut)
             }
         }
     };
 
     result.into()
+}
+
+/// Box the test body so the runtime's `block_on` is generated once per
+/// return type instead of once per test function
+fn boxed_future(ret: &syn::ReturnType, body: &syn::Block) -> proc_macro2::TokenStream {
+    let output = match ret {
+        syn::ReturnType::Default => quote! { () },
+        syn::ReturnType::Type(_, ty) => quote! { #ty },
+    };
+    quote! {
+        ::std::boxed::Box::pin(async { #body })
+            as ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = #output>>>
+    }
 }
