@@ -1,5 +1,5 @@
 use std::task::{Context, Poll, ready};
-use std::{cell::Cell, fmt, future::Future, future::poll_fn, pin::Pin};
+use std::{cell::Cell, fmt, future::Future, pin::Pin};
 
 use async_channel::Sender;
 
@@ -41,14 +41,7 @@ where
         return JoinHandle { task: None };
     }
 
-    let task = if let Some(mut data) = crate::task::Data::load() {
-        compio_runtime::spawn(async move {
-            let mut f = std::pin::pin!(f);
-            poll_fn(|cx| data.run(|| f.as_mut().poll(cx))).await
-        })
-    } else {
-        compio_runtime::spawn(f)
-    };
+    let task = compio_runtime::spawn(crate::task::wrap(f));
 
     JoinHandle {
         task: Some(Either::Compio(task)),

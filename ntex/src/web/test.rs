@@ -1,5 +1,7 @@
 //! Various helpers for ntex applications to use during testing.
-use std::{convert::Infallible, fmt, io, net, net::SocketAddr, rc::Rc, sync::mpsc, thread, time};
+use std::sync::{Arc, Mutex, mpsc};
+use std::{convert::Infallible, fmt, future::Future, io, net, net::SocketAddr};
+use std::{pin::Pin, rc::Rc, thread, time};
 
 #[cfg(feature = "cookie")]
 use coo_kie::Cookie;
@@ -17,6 +19,7 @@ use crate::http::{self, HttpService, Method, Payload, Request, Response, StatusC
 #[cfg(feature = "ws")]
 use crate::io::Sealed;
 use crate::router::{Path, ResourceDef};
+use crate::service::boxed::{self, BoxServiceFactory};
 use crate::service::{IntoServiceFactory, Pipeline, fn_service};
 use crate::time::{Millis, Seconds};
 use crate::util::{Bytes, BytesMut, Stream, stream_recv};
@@ -667,9 +670,69 @@ where
     I: IntoServiceFactory<Sf, (), Request>,
     Sf: ServiceFactory<(), Request> + 'static,
     Sf::Res: Into<Response>,
-    Sf::Error: ResponseError,
+    Sf::Error: ResponseError + 'static,
     Sf::InitError: fmt::Debug,
 {
+    // Type-erase the application factory, so the HTTP server stacks below
+    // are compiled once instead of once per test application.
+    let factory = Mutex::new(factory);
+    let factory: AppFactory = Arc::new(move || {
+        let factory = factory.lock().unwrap().clone();
+        Box::pin(async move {
+            boxed::factory(
+                factory(&())
+                    .await
+                    .into_factory()
+                    .map(Into::into)
+                    .map_err(AppError::new)
+                    .map_init_err(|e| io::Error::other(format!("{e:?}"))),
+            )
+        })
+    });
+    start_server(cfg, factory)
+}
+
+type AppFactory = Arc<
+    dyn Fn() -> Pin<
+            Box<dyn Future<Output = BoxServiceFactory<(), Request, Response, AppError, io::Error>>>,
+        > + Send
+        + Sync,
+>;
+
+/// Type-erased application error
+struct AppError(Box<dyn ResponseError>);
+
+impl AppError {
+    fn new<E: ResponseError + 'static>(err: E) -> Self {
+        AppError(Box::new(err))
+    }
+}
+
+impl fmt::Debug for AppError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+impl fmt::Display for AppError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl std::error::Error for AppError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.0.source()
+    }
+}
+
+impl ResponseError for AppError {
+    fn error_response(&self) -> Response {
+        self.0.error_response()
+    }
+}
+
+fn start_server(cfg: TestServerConfig, factory: AppFactory) -> TestServer {
     let sys = System::current().config();
     let name = System::current().name().to_string();
 
@@ -688,12 +751,7 @@ where
     // run server in separate thread
     thread::spawn(move || {
         let sys = System::with_config(&name, sys);
-        let factory = async move |s: &()| {
-            factory(s)
-                .await
-                .into_factory()
-                .map_init_err(|e| io::Error::other(format!("{e:?}")))
-        };
+        let factory = async move |&(): &()| factory().await;
 
         let ctimeout = cfg.client_timeout;
         let port = cfg.port;

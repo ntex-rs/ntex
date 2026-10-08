@@ -1,5 +1,10 @@
 # Changes
 
+## [4.2.0] - 2026-10-08
+
+* Spawn a single future type with or without task callbacks to reduce
+  generated code
+
 ## [4.1.0] - 2026-10-01
 
 * Add `Runtime::awake()`, tasks woken on the runtime thread while the driver
