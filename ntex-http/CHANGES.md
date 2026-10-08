@@ -1,5 +1,9 @@
 # Changes
 
+## [2.1.0] - 2026-10-09
+
+* Add `ContentEncoding::Zstd`
+
 ## [2.0.0] - 2026-10-04
 
 * `HeaderValue::to_str()` accepts any valid UTF-8 value, validated with simdutf8

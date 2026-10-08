@@ -168,6 +168,18 @@ async fn test_body_auto_skips_brotli() {
         .await
         .unwrap();
     assert!(response.status().is_success());
+    assert_eq!(response.headers().get(CONTENT_ENCODING).unwrap(), "zstd");
+    let bytes = response.body().await.unwrap();
+    assert_eq!(zstd::decode_all(&bytes[..]).unwrap(), STR.as_bytes());
+
+    let response = srv
+        .get("/")
+        .no_decompress()
+        .header(ACCEPT_ENCODING, "gzip, deflate, br")
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
     assert_eq!(response.headers().get(CONTENT_ENCODING).unwrap(), "gzip");
 
     let bytes = response.body().await.unwrap();
@@ -175,6 +187,66 @@ async fn test_body_auto_skips_brotli() {
     let mut dec = Vec::new();
     e.read_to_end(&mut dec).unwrap();
     assert_eq!(Bytes::from(dec), Bytes::from_static(STR.as_ref()));
+}
+
+#[ntex::test]
+async fn test_body_zstd_large() {
+    let data: String = rand::rng()
+        .sample_iter(&Alphanumeric)
+        .take(1024 * 1024)
+        .map(char::from)
+        .collect();
+    let srv_data = data.clone();
+    let srv = test::server_with(test::config().h1(), async move |_| {
+        let data = srv_data.clone();
+        App::new()
+            .middleware(Compress::new(ContentEncoding::Zstd))
+            .service(
+                web::resource("/")
+                    .route(web::to(async move || HttpResponse::Ok().body(data.clone()))),
+            )
+    });
+
+    let response = srv
+        .get("/")
+        .no_decompress()
+        .header(ACCEPT_ENCODING, "zstd")
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    assert_eq!(response.headers().get(CONTENT_ENCODING).unwrap(), "zstd");
+    let bytes = response.body().limit(2 * 1024 * 1024).await.unwrap();
+    assert_eq!(zstd::decode_all(&bytes[..]).unwrap(), data.as_bytes());
+}
+
+#[ntex::test]
+async fn test_zstd_encoding() {
+    let srv = test::server_with(test::config().h1(), async |_| {
+        App::new().service(web::resource("/").route(web::to(async move |body: Bytes| {
+            HttpResponse::Ok().body(body)
+        })))
+    });
+
+    for data in [
+        STR.to_string(),
+        rand::rng()
+            .sample_iter(&Alphanumeric)
+            .take(200_000)
+            .map(char::from)
+            .collect(),
+    ] {
+        let enc = zstd::encode_all(data.as_bytes(), 0).unwrap();
+        let response = srv
+            .post("/")
+            .header(CONTENT_ENCODING, "zstd")
+            .send_body(enc)
+            .await
+            .unwrap();
+        assert!(response.status().is_success());
+        let bytes = response.body().await.unwrap();
+        assert_eq!(bytes, Bytes::from(data));
+    }
 }
 
 #[ntex::test]

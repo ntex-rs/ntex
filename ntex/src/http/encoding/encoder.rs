@@ -2,16 +2,15 @@
 use std::{fmt, future::Future, io, io::Write, pin::Pin, rc::Rc, task::Context, task::Poll};
 
 use flate2::write::{GzEncoder, ZlibEncoder};
+use zstd::stream::write::Encoder as ZstdEncoder;
 
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::header::{CONTENT_ENCODING, ContentEncoding, HeaderValue};
 use crate::http::{ResponseHead, StatusCode};
-use crate::rt::{BlockingResult, spawn_blocking};
+use crate::rt::BlockingResult;
 use crate::util::{Bytes, dyn_rc_err};
 
-use super::Writer;
-
-const INPLACE: usize = 1024;
+use super::{Writer, offload};
 
 /// Response body encoder.
 ///
@@ -168,7 +167,7 @@ impl<B: MessageBody> Encoder<B> {
             match result {
                 Poll::Ready(Some(Ok(chunk))) => {
                     if let Some(mut encoder) = self.inner.take() {
-                        if chunk.len() < INPLACE {
+                        if chunk.len() < encoder.limit() {
                             encoder.write(&chunk).map_err(dyn_rc_err)?;
                             let chunk = encoder.take();
                             self.inner = Some(encoder);
@@ -176,7 +175,7 @@ impl<B: MessageBody> Encoder<B> {
                                 return Poll::Ready(Some(Ok(chunk)));
                             }
                         } else {
-                            self.fut = Some(spawn_blocking(move || {
+                            self.fut = Some(offload(move || {
                                 encoder.write(&chunk)?;
                                 Ok(encoder)
                             }));
@@ -211,11 +210,26 @@ fn update_head(encoding: ContentEncoding, head: &mut ResponseHead) {
 enum ContentEncoder {
     Deflate(ZlibEncoder<Writer>),
     Gzip(GzEncoder<Writer>),
+    Zstd(ZstdEncoder<'static, Writer>),
 }
 
 impl ContentEncoder {
     fn can_encode(encoding: ContentEncoding) -> bool {
-        matches!(encoding, ContentEncoding::Deflate | ContentEncoding::Gzip)
+        matches!(
+            encoding,
+            ContentEncoding::Deflate | ContentEncoding::Gzip | ContentEncoding::Zstd
+        )
+    }
+
+    /// Chunks of this size and larger are encoded on the blocking thread pool.
+    ///
+    /// `gzip` and `deflate` are several times slower than `zstd`, so they are
+    /// offloaded much earlier.
+    const fn limit(&self) -> usize {
+        match self {
+            ContentEncoder::Deflate(_) | ContentEncoder::Gzip(_) => 16 * 1024,
+            ContentEncoder::Zstd(_) => 512 * 1024,
+        }
     }
 
     fn encoder(encoding: ContentEncoding) -> Option<Self> {
@@ -228,6 +242,9 @@ impl ContentEncoder {
                 Writer::new(),
                 flate2::Compression::fast(),
             ))),
+            ContentEncoding::Zstd => ZstdEncoder::new(Writer::new(), 0)
+                .ok()
+                .map(ContentEncoder::Zstd),
             _ => None,
         }
     }
@@ -236,6 +253,7 @@ impl ContentEncoder {
         match *self {
             ContentEncoder::Deflate(ref mut encoder) => encoder.get_mut().take(),
             ContentEncoder::Gzip(ref mut encoder) => encoder.get_mut().take(),
+            ContentEncoder::Zstd(ref mut encoder) => encoder.get_mut().take(),
         }
     }
 
@@ -246,6 +264,10 @@ impl ContentEncoder {
                 Err(err) => Err(err),
             },
             ContentEncoder::Deflate(encoder) => match encoder.finish() {
+                Ok(writer) => Ok(writer.buf.freeze()),
+                Err(err) => Err(err),
+            },
+            ContentEncoder::Zstd(encoder) => match encoder.finish() {
                 Ok(writer) => Ok(writer.buf.freeze()),
                 Err(err) => Err(err),
             },
@@ -260,6 +282,9 @@ impl ContentEncoder {
             ContentEncoder::Deflate(ref mut encoder) => encoder
                 .write_all(data)
                 .inspect_err(|err| log::trace!("Failed to encode to deflate: {err}")),
+            ContentEncoder::Zstd(ref mut encoder) => encoder
+                .write_all(data)
+                .inspect_err(|err| log::trace!("Failed to encode to zstd: {err}")),
         }
     }
 }
@@ -269,6 +294,7 @@ impl fmt::Debug for ContentEncoder {
         match self {
             ContentEncoder::Deflate(_) => write!(f, "ContentEncoder::Deflate"),
             ContentEncoder::Gzip(_) => write!(f, "ContentEncoder::Gzip"),
+            ContentEncoder::Zstd(_) => write!(f, "ContentEncoder::Zstd"),
         }
     }
 }
@@ -278,6 +304,7 @@ mod tests {
     use std::future::poll_fn;
 
     use super::*;
+    use crate::rt::spawn_blocking;
 
     #[crate::rt_test]
     async fn encoder_is_fused_after_error() {
@@ -383,6 +410,50 @@ mod tests {
         assert_eq!(gunzip(&buf), b"typed");
     }
 
+    fn decompress(encoding: ContentEncoding, data: &[u8]) -> Vec<u8> {
+        use std::io::Read;
+
+        let mut buf = Vec::new();
+        match encoding {
+            ContentEncoding::Gzip => return gunzip(data),
+            ContentEncoding::Deflate => {
+                flate2::read::ZlibDecoder::new(data)
+                    .read_to_end(&mut buf)
+                    .unwrap();
+            }
+            ContentEncoding::Zstd => buf = zstd::decode_all(data).unwrap(),
+            _ => unreachable!(),
+        }
+        buf
+    }
+
+    #[crate::rt_test]
+    async fn encoder_offloads_large_chunks() {
+        for (encoding, limit) in [
+            (ContentEncoding::Gzip, 16 * 1024),
+            (ContentEncoding::Deflate, 16 * 1024),
+            (ContentEncoding::Zstd, 512 * 1024),
+        ] {
+            for (len, offloaded) in [(limit - 1, 0), (limit, 1)] {
+                let data: Vec<u8> = (0..len).map(|i: usize| (i % 251) as u8).collect();
+                let before = super::super::offloaded();
+                let mut head = ResponseHead::new(StatusCode::OK, crate::http::Version::HTTP_11);
+                let mut body =
+                    Encoder::<Body>::response(encoding, &mut head, Body::from(data.clone()).into());
+                assert_eq!(
+                    head.headers().get(CONTENT_ENCODING).unwrap(),
+                    encoding.as_str()
+                );
+                assert_eq!(decompress(encoding, &collect(&mut body).await), data);
+                assert_eq!(
+                    super::super::offloaded() - before,
+                    offloaded,
+                    "{encoding:?} {len}"
+                );
+            }
+        }
+    }
+
     #[crate::rt_test]
     async fn encoder_blocking_task_canceled() {
         let mut enc = Encoder::<Body> {
@@ -413,6 +484,7 @@ mod tests {
         for (encoding, name) in [
             (ContentEncoding::Gzip, "ContentEncoder::Gzip"),
             (ContentEncoding::Deflate, "ContentEncoder::Deflate"),
+            (ContentEncoding::Zstd, "ContentEncoder::Zstd"),
         ] {
             let enc = Encoder::<Body> {
                 eof: false,

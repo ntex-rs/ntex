@@ -40,7 +40,7 @@
 //! - Streaming and pipelining
 //! - Keep-alive connections and slow-request handling
 //! - WebSocket clients and servers
-//! - Transparent Brotli, gzip, and deflate content encoding
+//! - Transparent zstd, gzip, and deflate content encoding
 //! - Configurable request routing
 //! - TLS through OpenSSL or rustls
 //! - Composable middleware
@@ -48,7 +48,8 @@
 //! ## Crate features
 //!
 //! - `cookie` enables HTTP cookie support.
-//! - `compress` enables content compression and decompression.
+//! - `compress` enables gzip, deflate and zstd content compression and
+//!   decompression.
 //! - `openssl` enables TLS support through OpenSSL.
 //! - `rustls` enables TLS support through rustls.
 //! - `ws` enables the [`ws`] module.

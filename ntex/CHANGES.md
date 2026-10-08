@@ -1,11 +1,19 @@
 # Changes
 
-## [Unreleased]
+## [4.1.0] - 2026-10-09
 
 * http/2: Avoid two redundant authority splits when building request URLs
 
 * web: Type-erase the app factory in `test::server_with()` to reduce test
   compile time
+
+* http: Add `zstd` content encoding and decoding to the `compress` feature
+
+* client: Send `zstd` in the default `Accept-Encoding` header
+
+* http: Encode chunks on the current thread below 16KiB for gzip and deflate
+  and 512KiB for zstd, and decode below 128KiB and 512KiB respectively. Larger
+  chunks go to the blocking thread pool
 
 ## [4.0.0] - 2026-10-08
 

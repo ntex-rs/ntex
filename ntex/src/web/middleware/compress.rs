@@ -232,6 +232,10 @@ mod tests {
         let auto = ContentEncoding::Auto;
         assert_eq!(
             AcceptEncoding::parse("gzip, deflate, br, zstd", auto),
+            ContentEncoding::Zstd
+        );
+        assert_eq!(
+            AcceptEncoding::parse("gzip, deflate, br", auto),
             ContentEncoding::Gzip
         );
         assert_eq!(

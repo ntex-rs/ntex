@@ -48,13 +48,13 @@ ntex-util = { path = "ntex-util" }
 urly = { path = "urly" }
 
 [workspace.dependencies]
-ntex = "4.0.0"
+ntex = "4.1.0"
 ntex-bytes = "1.11.0"
 ntex-codec = "2.0.0"
 ntex-dispatcher = "4.3.0"
 ntex-error = "3.0.0"
 ntex-h2 = "4.2.0"
-ntex-http = "2.0.0"
+ntex-http = "2.1.0"
 ntex-io = "4.3.0"
 ntex-macros = "4.1.0"
 ntex-net = "4.3.0"
@@ -141,6 +141,7 @@ thiserror = "2"
 tok-io = { version = "1", package = "tokio", default-features = false }
 webpki-roots = "1.0"
 uuid = { version = "1.19", features = ["v7"] }
+zstd = "0.13"
 
 compio-buf = "0.8.3"
 compio-io = "0.10.1"

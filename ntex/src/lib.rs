@@ -26,7 +26,8 @@
 //! - `ws` (default) enables WebSocket support.
 //! - `openssl` enables TLS support through OpenSSL.
 //! - `rustls` enables TLS support through rustls.
-//! - `compress` enables HTTP content compression and decompression.
+//! - `compress` enables HTTP content compression and decompression (gzip,
+//!   deflate and zstd).
 //! - `cookie` enables HTTP cookie support.
 //! - `no-test-logging` disables automatic logging configuration in
 //!   [`test`](macro@test).
