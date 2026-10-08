@@ -12,6 +12,11 @@ use crate::util::{Bytes, dyn_rc_err};
 
 use super::{Writer, offload};
 
+/// Bodies of a known size below this are sent without compression.
+///
+/// Small bodies barely shrink, while every encoder allocates its state.
+const MIN_SIZE: u64 = 1024;
+
 /// Response body encoder.
 ///
 /// Compresses a response body with the selected content encoding.
@@ -29,7 +34,8 @@ impl<B: MessageBody> Encoder<B> {
     /// transfer-encoding is enabled. The body is returned unchanged if the
     /// encoding is not supported, is `Identity` or `Auto`, if the response
     /// already has a `Content-Encoding` header, if the status is
-    /// `101 Switching Protocols` or `204 No Content`, or if the body is empty.
+    /// `101 Switching Protocols` or `204 No Content`, or if the body is empty
+    /// or its size is known to be below 1KiB.
     pub fn response(
         encoding: ContentEncoding,
         head: &mut ResponseHead,
@@ -43,18 +49,24 @@ impl<B: MessageBody> Encoder<B> {
                 || encoding == ContentEncoding::Auto);
 
         if can_encode {
+            let size = match body.size() {
+                BodySize::None | BodySize::Empty => return body,
+                BodySize::Sized(size) if size < MIN_SIZE => return body,
+                BodySize::Sized(size) => Some(size),
+                BodySize::Stream => None,
+            };
+            let Some(encoder) = ContentEncoder::encoder(encoding, size) else {
+                return body;
+            };
             let body = match body {
                 ResponseBody::Other(b) => match b {
-                    Body::None => return ResponseBody::Other(Body::None),
-                    Body::Empty => return ResponseBody::Other(Body::Empty),
+                    Body::None | Body::Empty => unreachable!(),
                     Body::Bytes(buf) => EncoderBody::Bytes(buf),
                     Body::Message(stream) => EncoderBody::BoxedStream(stream),
                 },
                 ResponseBody::Body(stream) => EncoderBody::Stream(stream),
             };
 
-            // Modify response body only if encoder is not None
-            let encoder = ContentEncoder::encoder(encoding).unwrap();
             update_head(encoding, head);
             head.no_chunking(false);
             ResponseBody::Other(Body::from_message(Encoder {
@@ -232,7 +244,8 @@ impl ContentEncoder {
         }
     }
 
-    fn encoder(encoding: ContentEncoding) -> Option<Self> {
+    /// Creates an encoder, `size` is the length of the body if it is known.
+    fn encoder(encoding: ContentEncoding, size: Option<u64>) -> Option<Self> {
         match encoding {
             ContentEncoding::Deflate => Some(ContentEncoder::Deflate(ZlibEncoder::new(
                 Writer::new(),
@@ -242,7 +255,12 @@ impl ContentEncoder {
                 Writer::new(),
                 flate2::Compression::fast(),
             ))),
+            // with a known size zstd picks a smaller window and stores the size in the frame
             ContentEncoding::Zstd => ZstdEncoder::new(Writer::new(), 0)
+                .and_then(|mut encoder| {
+                    encoder.set_pledged_src_size(size)?;
+                    Ok(encoder)
+                })
                 .ok()
                 .map(ContentEncoder::Zstd),
             _ => None,
@@ -387,18 +405,20 @@ mod tests {
         assert!(!head.headers().contains_key(CONTENT_ENCODING));
 
         // boxed message stream
+        let data = "data".repeat(256);
         let mut head = ResponseHead::new(StatusCode::OK, crate::http::Version::HTTP_11);
-        let inner = Body::from_message(Body::from("data"));
+        let inner = Body::from_message(Body::from(data.clone()));
         let mut body = Encoder::<Body>::response(ContentEncoding::Gzip, &mut head, inner.into());
         assert_eq!(head.headers().get(CONTENT_ENCODING).unwrap(), "gzip");
-        assert_eq!(gunzip(&collect(&mut body).await), b"data");
+        assert_eq!(gunzip(&collect(&mut body).await), data.as_bytes());
 
         // typed body stream
+        let typed = "typed".repeat(205);
         let mut head = ResponseHead::new(StatusCode::OK, crate::http::Version::HTTP_11);
         let body = Encoder::<Body>::response(
             ContentEncoding::Gzip,
             &mut head,
-            ResponseBody::Body(Body::from("typed")),
+            ResponseBody::Body(Body::from(typed.clone())),
         );
         let ResponseBody::Other(Body::Message(mut msg)) = body else {
             panic!("expected encoded body")
@@ -407,7 +427,111 @@ mod tests {
         while let Some(chunk) = poll_fn(|cx| msg.poll_next_chunk(cx)).await {
             buf.extend_from_slice(&chunk.unwrap());
         }
-        assert_eq!(gunzip(&buf), b"typed");
+        assert_eq!(gunzip(&buf), typed.as_bytes());
+    }
+
+    struct Chunks(Vec<Bytes>, BodySize);
+
+    impl MessageBody for Chunks {
+        fn size(&self) -> BodySize {
+            self.1
+        }
+
+        fn poll_next_chunk(
+            &mut self,
+            _: &mut Context<'_>,
+        ) -> Poll<Option<Result<Bytes, Rc<dyn std::error::Error>>>> {
+            Poll::Ready(self.0.pop().map(Ok))
+        }
+    }
+
+    #[crate::rt_test]
+    async fn encoder_skips_small_bodies() {
+        for encoding in [
+            ContentEncoding::Gzip,
+            ContentEncoding::Deflate,
+            ContentEncoding::Zstd,
+        ] {
+            let small = Bytes::from(vec![b'x'; 1023]);
+            let large = Bytes::from(vec![b'x'; 1024]);
+
+            let mut head = ResponseHead::new(StatusCode::OK, crate::http::Version::HTTP_11);
+            let body =
+                Encoder::<Body>::response(encoding, &mut head, Body::from(small.clone()).into());
+            assert!(matches!(body, ResponseBody::Other(Body::Bytes(ref b)) if *b == small));
+            assert!(!head.headers().contains_key(CONTENT_ENCODING));
+
+            let mut head = ResponseHead::new(StatusCode::OK, crate::http::Version::HTTP_11);
+            let stream = Chunks(vec![small.clone()], BodySize::Sized(1023));
+            let body = Encoder::response(encoding, &mut head, ResponseBody::Body(stream));
+            assert!(matches!(body, ResponseBody::Body(_)));
+            assert!(!head.headers().contains_key(CONTENT_ENCODING));
+
+            let mut head = ResponseHead::new(StatusCode::OK, crate::http::Version::HTTP_11);
+            let mut body =
+                Encoder::<Body>::response(encoding, &mut head, Body::from(large.clone()).into());
+            assert_eq!(
+                head.headers().get(CONTENT_ENCODING).unwrap(),
+                encoding.as_str()
+            );
+            assert_eq!(decompress(encoding, &collect(&mut body).await), large);
+
+            // a stream of unknown size is encoded
+            let mut head = ResponseHead::new(StatusCode::OK, crate::http::Version::HTTP_11);
+            let stream = Chunks(vec![Bytes::from_static(b"x")], BodySize::Stream);
+            let mut body =
+                Encoder::<Body>::response(encoding, &mut head, Body::from_message(stream).into());
+            assert_eq!(
+                head.headers().get(CONTENT_ENCODING).unwrap(),
+                encoding.as_str()
+            );
+            assert_eq!(decompress(encoding, &collect(&mut body).await), b"x");
+        }
+    }
+
+    fn zstd_content_size(data: &[u8]) -> Option<u64> {
+        zstd::zstd_safe::get_frame_content_size(data).unwrap()
+    }
+
+    #[crate::rt_test]
+    async fn encoder_zstd_known_size() {
+        let data = Bytes::from(vec![b'x'; 4096]);
+
+        // the frame stores the size of a sized body
+        let mut head = ResponseHead::new(StatusCode::OK, crate::http::Version::HTTP_11);
+        let mut body = Encoder::<Body>::response(
+            ContentEncoding::Zstd,
+            &mut head,
+            Body::from(data.clone()).into(),
+        );
+        let frame = collect(&mut body).await;
+        assert_eq!(zstd_content_size(&frame), Some(4096));
+        assert_eq!(decompress(ContentEncoding::Zstd, &frame), data);
+
+        let mut head = ResponseHead::new(StatusCode::OK, crate::http::Version::HTTP_11);
+        let chunks = vec![data.slice(2048..), data.slice(..2048)];
+        let stream = Body::from_message(Chunks(chunks, BodySize::Sized(4096)));
+        let mut body = Encoder::<Body>::response(ContentEncoding::Zstd, &mut head, stream.into());
+        let frame = collect(&mut body).await;
+        assert_eq!(zstd_content_size(&frame), Some(4096));
+        assert_eq!(decompress(ContentEncoding::Zstd, &frame), data);
+
+        // the size of a stream is unknown
+        let mut head = ResponseHead::new(StatusCode::OK, crate::http::Version::HTTP_11);
+        let stream = Body::from_message(Chunks(vec![data.clone()], BodySize::Stream));
+        let mut body = Encoder::<Body>::response(ContentEncoding::Zstd, &mut head, stream.into());
+        let frame = collect(&mut body).await;
+        assert_eq!(zstd_content_size(&frame), None);
+        assert_eq!(decompress(ContentEncoding::Zstd, &frame), data);
+
+        // a body larger than its size fails
+        let mut head = ResponseHead::new(StatusCode::OK, crate::http::Version::HTTP_11);
+        let stream = Body::from_message(Chunks(vec![data.clone()], BodySize::Sized(2048)));
+        let mut body = Encoder::<Body>::response(ContentEncoding::Zstd, &mut head, stream.into());
+        assert!(matches!(
+            poll_fn(|cx| body.poll_next_chunk(cx)).await,
+            Some(Err(_))
+        ));
     }
 
     fn decompress(encoding: ContentEncoding, data: &[u8]) -> Vec<u8> {
@@ -480,7 +604,7 @@ mod tests {
 
     #[test]
     fn encoder_debug() {
-        assert!(ContentEncoder::encoder(ContentEncoding::Identity).is_none());
+        assert!(ContentEncoder::encoder(ContentEncoding::Identity, None).is_none());
         for (encoding, name) in [
             (ContentEncoding::Gzip, "ContentEncoder::Gzip"),
             (ContentEncoding::Deflate, "ContentEncoder::Deflate"),
@@ -489,7 +613,7 @@ mod tests {
             let enc = Encoder::<Body> {
                 eof: false,
                 body: EncoderBody::Bytes(Bytes::from_static(b"data")),
-                inner: ContentEncoder::encoder(encoding),
+                inner: ContentEncoder::encoder(encoding, None),
                 fut: None,
             };
             let s = format!("{enc:?}");

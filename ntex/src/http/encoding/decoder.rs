@@ -1,8 +1,8 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{future::Future, io, io::Write, pin::Pin, task::Context, task::Poll};
 
 use flate2::write::{GzDecoder, ZlibDecoder};
-use zstd::stream::raw::{self, DParameter, InBuffer, Operation, OutBuffer};
-use zstd::zstd_safe::WriteBuf;
+use zstd::zstd_safe::{DCtx, DParameter, InBuffer, OutBuffer, WriteBuf};
 
 use super::{Writer, offload};
 use crate::http::error::PayloadError;
@@ -18,6 +18,17 @@ const MAX_CHUNK_SIZE: usize = 32 * 1024;
 
 /// The largest `zstd` window a decoder accepts, 8MiB as required by RFC 9659.
 const ZSTD_WINDOW_LOG_MAX: u32 = 23;
+
+/// Memory all `zstd` decoders of the process may use beyond `ZSTD_FREE_MEMORY` each.
+///
+/// RFC 9659 requires 8MiB windows, so a request can make its decoder allocate
+/// about 9MiB. A frame that would take the total over this limit is rejected.
+const ZSTD_MEMORY_LIMIT: usize = 512 * 1024 * 1024;
+
+/// Memory a `zstd` decoder uses without being counted, enough for a 512KiB window.
+const ZSTD_FREE_MEMORY: usize = 1024 * 1024;
+
+static ZSTD_MEMORY: ZstdMemory = ZstdMemory::new(ZSTD_MEMORY_LIMIT);
 
 /// Payload stream decoder.
 ///
@@ -284,9 +295,45 @@ impl ContentDecoder {
     }
 }
 
+/// Memory used by `zstd` decoders.
+struct ZstdMemory {
+    used: AtomicUsize,
+    limit: usize,
+}
+
+impl ZstdMemory {
+    const fn new(limit: usize) -> Self {
+        ZstdMemory {
+            used: AtomicUsize::new(0),
+            limit,
+        }
+    }
+
+    fn acquire(&self, size: usize) -> io::Result<()> {
+        self.used
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                used.checked_add(size).filter(|total| *total <= self.limit)
+            })
+            .map(|_| ())
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::OutOfMemory,
+                    "zstd decoders memory limit is reached",
+                )
+            })
+    }
+
+    fn release(&self, size: usize) {
+        self.used.fetch_sub(size, Ordering::AcqRel);
+    }
+}
+
 struct ZstdDecoder {
-    decoder: raw::Decoder<'static>,
+    ctx: DCtx<'static>,
     buf: BytesMut,
+    memory: &'static ZstdMemory,
+    /// Memory counted in `memory`
+    charged: usize,
     /// The last frame is complete
     done: bool,
     /// The output buffer was filled, the decoder may hold more output
@@ -295,10 +342,17 @@ struct ZstdDecoder {
 
 impl ZstdDecoder {
     fn new() -> io::Result<Self> {
-        let mut decoder = raw::Decoder::new()?;
-        decoder.set_parameter(DParameter::WindowLogMax(ZSTD_WINDOW_LOG_MAX))?;
+        Self::with_memory(&ZSTD_MEMORY)
+    }
+
+    fn with_memory(memory: &'static ZstdMemory) -> io::Result<Self> {
+        let mut ctx = DCtx::try_create().ok_or(io::ErrorKind::OutOfMemory)?;
+        ctx.set_parameter(DParameter::WindowLogMax(ZSTD_WINDOW_LOG_MAX))
+            .map_err(zstd_error)?;
         Ok(ZstdDecoder {
-            decoder,
+            ctx,
+            memory,
+            charged: 0,
             buf: BytesMut::with_page_size(BytePageSize::Size32),
             done: false,
             more: false,
@@ -313,8 +367,12 @@ impl ZstdDecoder {
             let mut spare = Spare::new(&mut self.buf);
             let mut dst = OutBuffer::around(&mut spare);
             // a new frame starts automatically after the previous one is complete
-            let hint = self.decoder.run(&mut src, &mut dst)?;
+            let hint = self
+                .ctx
+                .decompress_stream(&mut dst, &mut src)
+                .map_err(zstd_error)?;
             let (read, written) = (src.pos(), dst.pos());
+            self.charge()?;
             self.more = self.buf.remaining_mut() == 0;
             if read == 0 && written == 0 {
                 break;
@@ -329,6 +387,18 @@ impl ZstdDecoder {
         }
     }
 
+    /// Counts the memory of the context, it grows with the window of a frame.
+    fn charge(&mut self) -> io::Result<()> {
+        let size = self.ctx.sizeof().saturating_sub(ZSTD_FREE_MEMORY);
+        if size > self.charged {
+            self.memory.acquire(size - self.charged)?;
+        } else {
+            self.memory.release(self.charged - size);
+        }
+        self.charged = size;
+        Ok(())
+    }
+
     fn finish(&self) -> io::Result<()> {
         if self.done {
             Ok(())
@@ -339,6 +409,16 @@ impl ZstdDecoder {
             ))
         }
     }
+}
+
+impl Drop for ZstdDecoder {
+    fn drop(&mut self) {
+        self.memory.release(self.charged);
+    }
+}
+
+fn zstd_error(code: usize) -> io::Error {
+    io::Error::other(zstd::zstd_safe::get_error_name(code))
 }
 
 /// The spare capacity of a buffer, `zstd` writes decoded data directly into it.
@@ -570,11 +650,13 @@ mod tests {
 
     #[crate::rt_test]
     async fn zstd_decoder_drains_output_without_input() {
+        use zstd::stream::raw::Operation;
+
         let data = b"hello world ".repeat(50_000);
         let compressed = zstd::encode_all(&data[..], 0).unwrap();
 
         // find the input byte that completes the first block
-        let mut raw = raw::Decoder::new().unwrap();
+        let mut raw = zstd::stream::raw::Decoder::new().unwrap();
         let mut out = vec![0; data.len()];
         let mut pos = 0;
         let mut split = 0;
@@ -666,6 +748,101 @@ mod tests {
         let ok = e.finish().unwrap();
         let out = decode(ContentEncoding::Zstd, vec![Bytes::from(ok)]).await;
         assert_eq!(out.unwrap(), b"hello");
+    }
+
+    /// A frame with an unknown content size, its decoder allocates the whole window.
+    fn zstd_frame(window_log: u32, data: &[u8]) -> Vec<u8> {
+        let mut e = zstd::stream::write::Encoder::new(Vec::new(), 0).unwrap();
+        e.set_parameter(zstd::stream::raw::CParameter::WindowLog(window_log))
+            .unwrap();
+        e.write_all(data).unwrap();
+        e.finish().unwrap()
+    }
+
+    fn zstd_feed(decoder: &mut ZstdDecoder, frame: &[u8]) -> io::Result<Vec<u8>> {
+        let mut data = Bytes::copy_from_slice(frame);
+        let mut out = Vec::new();
+        while !data.is_empty() || decoder.more {
+            if let Some(chunk) = decoder.feed(&mut data)? {
+                out.extend_from_slice(&chunk);
+            }
+        }
+        Ok(out)
+    }
+
+    #[test]
+    fn zstd_decoder_memory_is_limited() {
+        static MEMORY: ZstdMemory = ZstdMemory::new(20 * 1024 * 1024);
+
+        let large = zstd_frame(23, b"hello");
+        let mut first = ZstdDecoder::with_memory(&MEMORY).unwrap();
+        assert_eq!(zstd_feed(&mut first, &large).unwrap(), b"hello");
+        let charged = first.charged;
+        assert!(charged > 7 * 1024 * 1024, "{charged}");
+        assert_eq!(MEMORY.used.load(Ordering::Acquire), charged);
+
+        let mut second = ZstdDecoder::with_memory(&MEMORY).unwrap();
+        assert_eq!(zstd_feed(&mut second, &large).unwrap(), b"hello");
+        assert_eq!(MEMORY.used.load(Ordering::Acquire), 2 * charged);
+
+        // the third decoder is over the limit
+        let mut third = ZstdDecoder::with_memory(&MEMORY).unwrap();
+        let err = zstd_feed(&mut third, &large).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::OutOfMemory);
+        drop(third);
+        assert_eq!(MEMORY.used.load(Ordering::Acquire), 2 * charged);
+
+        // small windows are not counted
+        let mut small = ZstdDecoder::with_memory(&MEMORY).unwrap();
+        assert_eq!(
+            zstd_feed(&mut small, &zstd_frame(19, b"hi")).unwrap(),
+            b"hi"
+        );
+        assert_eq!(small.charged, 0);
+
+        // memory of a dropped decoder is available again
+        drop(first);
+        assert_eq!(MEMORY.used.load(Ordering::Acquire), charged);
+        let mut third = ZstdDecoder::with_memory(&MEMORY).unwrap();
+        assert_eq!(zstd_feed(&mut third, &large).unwrap(), b"hello");
+        drop((second, third));
+        assert_eq!(MEMORY.used.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn zstd_decoder_memory_shrinks() {
+        static MEMORY: ZstdMemory = ZstdMemory::new(20 * 1024 * 1024);
+
+        // zstd frees an oversized window after it was unused for a number of frames
+        let mut decoder = ZstdDecoder::with_memory(&MEMORY).unwrap();
+        zstd_feed(&mut decoder, &zstd_frame(23, b"hello")).unwrap();
+        assert!(decoder.charged > 0);
+        let small = zstd_frame(10, b"hi");
+        for _ in 0..256 {
+            zstd_feed(&mut decoder, &small).unwrap();
+        }
+        assert_eq!(decoder.charged, 0);
+        assert_eq!(MEMORY.used.load(Ordering::Acquire), 0);
+    }
+
+    #[crate::rt_test]
+    async fn zstd_decoder_memory_error() {
+        static MEMORY: ZstdMemory = ZstdMemory::new(1024 * 1024);
+
+        let chunks = vec![Ok::<_, PayloadError>(Bytes::from(zstd_frame(23, b"hello")))];
+        let mut decoder = Decoder {
+            inner: Some(ContentDecoder::Zstd(Box::new(
+                ZstdDecoder::with_memory(&MEMORY).unwrap(),
+            ))),
+            stream: stream::iter(chunks),
+            eof: false,
+            decode: true,
+            pending: None,
+            fut: None,
+        };
+        assert!(matches!(decoder.next().await, Some(Err(_))));
+        assert!(decoder.next().await.is_none());
+        assert_eq!(MEMORY.used.load(Ordering::Acquire), 0);
     }
 
     #[crate::rt_test]
