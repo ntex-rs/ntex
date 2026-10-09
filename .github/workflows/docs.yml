@@ -54,7 +54,14 @@ jobs:
         run: |
           rm -f target/doc/.lock
           cp -r target/doc _site/api
-          echo '<meta http-equiv="refresh" content="0; url=index.html">' > _site/index.html
+          cat > _site/api/index.html <<'EOF'
+          <!DOCTYPE html>
+          <meta charset="utf-8">
+          <title>ntex API documentation</title>
+          <meta http-equiv="refresh" content="0; url=ntex/index.html">
+          <link rel="canonical" href="ntex/index.html">
+          <p>Redirecting to <a href="ntex/index.html">ntex api documentation</a>.</p>
+          EOF
 
       - name: Upload pages artifact
         uses: actions/upload-pages-artifact@v4

@@ -99,6 +99,7 @@ ntex = { version = "4", features = ["tokio"] }
 - [API documentation](https://docs.ntex.rs/api/ntex/index.html)
 - [Examples](https://github.com/ntex-rs/examples)
 - [Release changes](https://github.com/ntex-rs/ntex/blob/main/ntex/CHANGES.md)
+- [Migrating from ntex 3 to ntex 4](https://docs.ntex.rs/migration_3to4.html)
 - Minimum supported Rust version: 1.97
 
 ## License
