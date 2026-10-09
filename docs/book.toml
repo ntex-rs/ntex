@@ -1,0 +1,17 @@
+[book]
+title = "ntex framework guide"
+authors = ["ntex contributors"]
+language = "en"
+src = "."
+
+[build]
+# The publishing workflow (.github/workflows/docs.yml) stages these files
+# together with ntex/migration_3to4.md before running `mdbook build`.
+create-missing = false
+
+[output.html]
+git-repository-url = "https://github.com/ntex-rs/ntex"
+site-url = "/"
+
+[output.html.playground]
+runnable = false
