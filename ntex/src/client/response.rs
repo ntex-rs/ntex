@@ -9,9 +9,9 @@ use coo_kie::{Cookie, ParseError as CookieParseError};
 
 use crate::Cfg;
 use crate::error::Error;
-use crate::http::error::PayloadError;
 use crate::http::header::{AsName, CONTENT_LENGTH, HeaderValue};
 use crate::http::{HeaderMap, HttpMessage, Payload, ResponseHead, StatusCode, Version};
+use crate::http::{error::PayloadError, helpers::take_trimmed};
 use crate::time::{Deadline, Millis};
 use crate::util::{Bytes, BytesMut, Extensions, Stream};
 
@@ -476,7 +476,7 @@ impl Future for ReadBody {
                         continue;
                     }
                 }
-                Poll::Ready(None) => Poll::Ready(Ok(this.buf.take())),
+                Poll::Ready(None) => Poll::Ready(Ok(take_trimmed(&mut this.buf))),
                 Poll::Ready(Some(Err(err))) => Poll::Ready(Err(Error::from(ClientPayloadError(
                     err,
                 ))
@@ -533,6 +533,16 @@ mod tests {
             PayloadError::Overflow => (),
             _ => unreachable!("error"),
         }
+
+        // the body does not keep the unused part of the buffer
+        let req = TestResponse::builder()
+            .set_payload(Bytes::from(vec![b'x'; 1000]))
+            .build();
+        let mut body = req.body().await.ok().unwrap();
+        let ptr = body.as_ptr();
+        body.trimdown();
+        assert_eq!(body, [b'x'; 1000][..]);
+        assert_eq!(body.as_ptr(), ptr, "the body has no unused space");
     }
 
     #[derive(Serialize, Deserialize, PartialEq, Debug)]

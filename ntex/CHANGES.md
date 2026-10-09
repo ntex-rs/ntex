@@ -1,5 +1,16 @@
 # Changes
 
+## [4.2.0] - Unreleased
+
+* http: Limit the `zstd` encoder window to 512KiB. A response body of unknown
+  size no longer allocates 3.6MiB of encoder state
+
+* http: Release the encoder state once a compressed body ends, not after all
+  of its output is sent
+
+* web: Bodies read by the `Json`, `Form` and `Bytes` extractors, and client
+  response bodies, no longer keep unused buffer space alive
+
 ## [4.1.0] - 2026-10-09
 
 * Fix build of `rustls` feature without `openssl`, restore `webpki-roots` dependency
