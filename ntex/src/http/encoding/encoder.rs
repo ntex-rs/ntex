@@ -19,6 +19,12 @@ use super::{Spare, offload, zstd_error};
 /// Small bodies barely shrink, while every encoder allocates its state.
 const MIN_SIZE: u64 = 1024;
 
+/// The largest `zstd` window of the encoder, 512KiB.
+///
+/// Without it a body of unknown size gets a 2MiB window and its encoder
+/// allocates about 3.6MiB, for barely better compression.
+const ZSTD_WINDOW_LOG: u32 = 19;
+
 /// Response body encoder.
 ///
 /// Compresses a response body with the selected content encoding.
@@ -268,6 +274,8 @@ enum Codec {
     /// The checksum and size of the input for the trailer
     Gzip(Compress, Crc),
     Zstd(CCtx<'static>),
+    /// The stream is finished, the encoder state is released
+    Done,
 }
 
 impl ContentEncoder {
@@ -278,7 +286,7 @@ impl ContentEncoder {
     const fn limit(&self) -> usize {
         match self.codec {
             Codec::Deflate(_) | Codec::Gzip(..) => 16 * 1024,
-            Codec::Zstd(_) => 512 * 1024,
+            Codec::Zstd(_) | Codec::Done => 512 * 1024,
         }
     }
 
@@ -286,7 +294,7 @@ impl ContentEncoder {
     const fn task_size(&self) -> usize {
         match self.codec {
             Codec::Deflate(_) | Codec::Gzip(..) => 256 * 1024,
-            Codec::Zstd(_) => 1024 * 1024,
+            Codec::Zstd(_) | Codec::Done => 1024 * 1024,
         }
     }
 
@@ -303,6 +311,8 @@ impl ContentEncoder {
             ContentEncoding::Zstd => {
                 let mut ctx = CCtx::try_create()?;
                 ctx.set_parameter(CParameter::CompressionLevel(0)).ok()?;
+                ctx.set_parameter(CParameter::WindowLog(ZSTD_WINDOW_LOG))
+                    .ok()?;
                 ctx.set_pledged_src_size(size).ok()?;
                 Codec::Zstd(ctx)
             }
@@ -386,6 +396,7 @@ impl ContentEncoder {
                 *data = &data[read..];
                 Ok(op != Op::Write && left == 0)
             }
+            Codec::Done => Err(io::Error::other("the stream is finished")),
         }
     }
 
@@ -407,6 +418,8 @@ impl ContentEncoder {
             self.put(&sum.to_le_bytes());
             self.put(&amount.to_le_bytes());
         }
+        // only the output is left, which may take a while to send
+        self.codec = Codec::Done;
         Ok(())
     }
 
@@ -440,6 +453,7 @@ impl fmt::Debug for ContentEncoder {
             Codec::Deflate(_) => write!(f, "ContentEncoder::Deflate"),
             Codec::Gzip(..) => write!(f, "ContentEncoder::Gzip"),
             Codec::Zstd(_) => write!(f, "ContentEncoder::Zstd"),
+            Codec::Done => write!(f, "ContentEncoder::Done"),
         }
     }
 }
@@ -898,6 +912,51 @@ mod tests {
                 assert_eq!(decompress(encoding, &chunks.concat()), &data[..len]);
             }
             assert!(split > 0, "{encoding:?}");
+        }
+    }
+
+    #[test]
+    fn encoder_zstd_window() {
+        let data = random(4096);
+        let mut window = Vec::new();
+        for size in [None, Some(4096)] {
+            let mut enc = ContentEncoder::new(ContentEncoding::Zstd, size).unwrap();
+            enc.write(&data).unwrap();
+            let Codec::Zstd(ctx) = &enc.codec else {
+                unreachable!()
+            };
+            window.push(ctx.sizeof());
+            enc.finish().unwrap();
+            let frame = std::iter::from_fn(|| enc.take())
+                .collect::<Vec<_>>()
+                .concat();
+            assert_eq!(decompress(ContentEncoding::Zstd, &frame), data);
+        }
+        // 3.6MiB with the default 2MiB window of a stream
+        assert!(window[0] < 2560 * 1024, "{}", window[0]);
+        // a known size keeps the window small
+        assert!(window[1] < 256 * 1024, "{}", window[1]);
+    }
+
+    #[test]
+    fn encoder_releases_state_on_finish() {
+        for encoding in [
+            ContentEncoding::Gzip,
+            ContentEncoding::Deflate,
+            ContentEncoding::Zstd,
+        ] {
+            let data = random(64 * 1024);
+            let mut enc = ContentEncoder::new(encoding, None).unwrap();
+            enc.write(&data).unwrap();
+            enc.finish().unwrap();
+            assert!(matches!(enc.codec, Codec::Done), "{encoding:?}");
+            assert_eq!(format!("{enc:?}"), "ContentEncoder::Done");
+            assert!(enc.write(b"more").is_err());
+            assert!(enc.finish().is_err());
+
+            let chunks: Vec<_> = std::iter::from_fn(|| enc.take()).collect();
+            assert!(chunks.len() > 1);
+            assert_eq!(decompress(encoding, &chunks.concat()), data);
         }
     }
 

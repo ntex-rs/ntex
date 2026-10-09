@@ -12,6 +12,22 @@ pub(crate) fn json_body<T: ?Sized + Serialize>(value: &T) -> serde_json::Result<
     Ok(buf.freeze())
 }
 
+/// Takes the data of `buf`, copied if more than a fifth of the buffer would
+/// be unused.
+///
+/// A body read into a growing buffer can leave almost half of it unused, and
+/// the frozen body keeps all of it alive.
+pub(crate) fn take_trimmed(buf: &mut BytesMut) -> Bytes {
+    let len = buf.len();
+    if buf.capacity() > len + len / 4 {
+        let body = Bytes::copy_from_slice(buf);
+        buf.clear();
+        body
+    } else {
+        buf.take()
+    }
+}
+
 /// Checks a request-target before it is parsed and normalized.
 ///
 /// Rejects invalid percent-encoding, a fragment, non-ASCII bytes, characters
@@ -64,6 +80,25 @@ pub(crate) fn push_cookie(buf: &mut Vec<u8>, name: &str, value: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trimmed() {
+        let mut buf = BytesMut::with_capacity(1024);
+        buf.extend_from_slice(&[1; 1000]);
+        let ptr = buf.as_ptr();
+        let body = take_trimmed(&mut buf);
+        assert_eq!(body, [1; 1000][..]);
+        assert_eq!(body.as_ptr(), ptr);
+        assert!(buf.is_empty());
+
+        buf.reserve(1024);
+        buf.extend_from_slice(&[2; 512]);
+        let ptr = buf.as_ptr();
+        let body = take_trimmed(&mut buf);
+        assert_eq!(body, [2; 512][..]);
+        assert_ne!(body.as_ptr(), ptr);
+        assert!(buf.is_empty());
+    }
 
     #[test]
     fn valid_target() {
