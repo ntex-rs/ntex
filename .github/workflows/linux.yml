@@ -52,6 +52,12 @@ jobs:
         run: |
           cargo test --doc --all --no-default-features --features="ntex/neon-uring,ntex/cookie,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
+      - name: Run tests (neon rustls only)
+        if: matrix.version == '1.97.0'
+        timeout-minutes: 10
+        run: |
+          cargo nextest run --retries=3 --workspace --exclude ntex-tls --no-default-features --features="ntex/neon-polling,ntex/cookie,ntex/compress,ntex/rustls,ntex/ws"
+
       - name: Run tests (tokio)
         timeout-minutes: 10
         run: |

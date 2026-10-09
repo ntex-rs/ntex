@@ -11,7 +11,9 @@ use ntex::http::header::{
     TRANSFER_ENCODING,
 };
 use ntex::http::{self, ConnectionType, HttpServiceConfig, Method, StatusCode, body::Body};
-use ntex::time::{Millis, Seconds};
+#[cfg(all(feature = "rustls", feature = "openssl"))]
+use ntex::time::Millis;
+use ntex::time::Seconds;
 use ntex::util::{Bytes, Stream};
 use ntex::{Service, SharedCfg, client, io::IoConfig, service::State};
 
