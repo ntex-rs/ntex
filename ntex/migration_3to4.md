@@ -313,6 +313,28 @@ defines the application's error type, and errors are rendered through
 instead of an `HttpRequest`. Service initialization errors now use
 `ntex::error::Failure` and `IntoFailure`.
 
+### Middleware order
+
+Middleware registered with `App::middleware()`, `Scope::middleware()`, and
+`Resource::middleware()` now runs in registration order. The first registered
+middleware is the outermost one: it receives the request first and the
+response last. In ntex 3 the order was reversed, and the last registered
+middleware was the outermost one.
+
+```rust
+use ntex::web::{self, App, middleware};
+
+App::default()
+    .middleware(middleware::DefaultHeaders::new().header("x-app", "example"))
+    .middleware(middleware::Logger::default())
+    .route("/", web::get().to(async || "Hello"));
+```
+
+In ntex 4, `DefaultHeaders` receives the request before `Logger`, and `Logger`
+processes the response before `DefaultHeaders`. In ntex 3 the same code ran
+`Logger` first. To keep the ntex 3 behavior, reverse the order of
+`middleware()` calls.
+
 ## Custom codecs and I/O
 
 This section applies to code that implements codecs, filters, or dispatchers
