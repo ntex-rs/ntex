@@ -1,7 +1,11 @@
-use std::{io, rc::Rc};
+use std::io;
+#[cfg(feature = "openssl")]
+use std::rc::Rc;
 
 use ntex::io::{Io, types::PeerAddr};
-use ntex::server::{NoConfig, build_test_server, test_server};
+use ntex::server::test_server;
+#[cfg(feature = "openssl")]
+use ntex::server::{NoConfig, build_test_server};
 use ntex::service::{Pipeline, cfg::SharedCfg, service};
 use ntex::{codec::BytesCodec, connect::Connect, time, util::Bytes};
 

@@ -1,6 +1,7 @@
-#![cfg(all(feature = "rustls", feature = "openssl"))]
+#![cfg(feature = "rustls")]
+//! Same as `http_rustls`, but the client also uses rustls
 use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering};
-use std::{future::ready, io};
+use std::{future::ready, io, net::SocketAddr};
 
 use futures_util::stream::{Stream, StreamExt, once};
 
@@ -8,16 +9,78 @@ use ntex::codec::BytesCodec;
 use ntex::http::error::PayloadError;
 use ntex::http::header::{self, HeaderName, HeaderValue};
 use ntex::http::test::{self, server as test_server};
-use ntex::http::{self, HttpService, Method, Request, Response, StatusCode, Version, body, h1};
+use ntex::http::{
+    self, HttpService, Method, Request, Response, StatusCode, Version, body, h1,
+    h2::Http2ServiceConfig,
+};
+use ntex::io::{Filter, IoConfig};
 use ntex::service::cfg::SharedCfg;
 use ntex::time::{Millis, Seconds, sleep, timeout};
 use ntex::util::{Bytes, BytesMut, Either, select};
-use ntex::ws::{self, handshake_response};
+use ntex::ws::{self, WsClient, WsClientConfig, WsConnection, handshake_response};
 use ntex::{channel::oneshot, client, rt, web::error::InternalError};
 use ntex_tls::TlsConfig;
 
 mod rustls_utils;
-use rustls_utils::tls_acceptor;
+use rustls_utils::{tls_acceptor, tls_connector};
+
+/// rustls client with the same settings as the test server's client
+struct RustlsClient {
+    addr: SocketAddr,
+    cfg: SharedCfg,
+    client: client::Client,
+}
+
+impl RustlsClient {
+    fn new(srv: &test::TestServer) -> Self {
+        let addr = srv.addr();
+        let cfg = SharedCfg::new("TEST-CLIENT")
+            .add(IoConfig::new().set_connect_timeout(Millis(90_000)))
+            .add(TlsConfig::new().set_handshake_timeout(Seconds(90)))
+            .add(
+                client::ClientConfig::new()
+                    .set_response_timeout(Seconds(30))
+                    .set_response_payload_timeout(Seconds(30)),
+            )
+            .add(
+                Http2ServiceConfig::new()
+                    .set_max_header_list_size(256 * 1024)
+                    .set_max_header_continuation_frames(96),
+            )
+            .add(
+                WsClientConfig::new()
+                    .set_address(addr)
+                    .set_handshake_timeout(Seconds(30)),
+            )
+            .build();
+
+        let mut config = tls_connector();
+        config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+        let client = client::Client::builder().rustls(config).build(cfg.clone());
+
+        RustlsClient { addr, cfg, client }
+    }
+
+    fn surl(&self, path: &str) -> String {
+        format!("https://localhost:{}{}", self.addr.port(), path)
+    }
+
+    fn srequest<S: AsRef<str>>(&self, method: Method, path: S) -> client::ClientRequest {
+        self.client
+            .request(method, self.surl(path.as_ref()).as_str())
+    }
+
+    async fn wss(&self) -> WsConnection<impl Filter> {
+        let mut config = tls_connector();
+        config.alpn_protocols = vec![b"http/1.1".to_vec()];
+
+        WsClient::new(self.surl("/"), &self.cfg)
+            .rustls(Arc::new(config))
+            .connect()
+            .await
+            .unwrap()
+    }
+}
 
 async fn load_body<S>(stream: S) -> Result<BytesMut, PayloadError>
 where
@@ -43,8 +106,9 @@ async fn test_h2() -> io::Result<()> {
             HttpService::h2(async |_| Ok::<_, io::Error>(Response::Ok().build())),
         )
     });
+    let cl = RustlsClient::new(&srv);
 
-    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
+    let response = cl.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
     Ok(())
 }
@@ -58,8 +122,9 @@ async fn test_h1() -> io::Result<()> {
             HttpService::h1(async |_| Ok::<_, io::Error>(Response::Ok().build())),
         )
     });
+    let cl = RustlsClient::new(&srv);
 
-    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
+    let response = cl.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
     Ok(())
 }
@@ -77,8 +142,9 @@ async fn test_h2_1() -> io::Result<()> {
             }),
         )
     });
+    let cl = RustlsClient::new(&srv);
 
-    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
+    let response = cl.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
     Ok(())
 }
@@ -98,8 +164,9 @@ async fn test_h2_body() -> io::Result<()> {
             }),
         )
     });
+    let cl = RustlsClient::new(&srv);
 
-    let response = srv
+    let response = cl
         .srequest(Method::GET, "/")
         .send_body(data.clone())
         .await
@@ -132,23 +199,24 @@ async fn test_h2_content_length() {
             }),
         )
     });
+    let cl = RustlsClient::new(&srv);
 
     let header = HeaderName::from_static("content-length");
     let value = HeaderValue::from_static("0");
 
     {
         for i in 0..1 {
-            let req = srv.srequest(Method::GET, format!("/{i}")).send();
+            let req = cl.srequest(Method::GET, format!("/{i}")).send();
             let response = req.await.unwrap();
             assert_eq!(response.headers().get(&header), None);
 
-            let req = srv.srequest(Method::HEAD, format!("/{i}")).send();
+            let req = cl.srequest(Method::HEAD, format!("/{i}")).send();
             let response = req.await.unwrap();
             assert_eq!(response.headers().get(&header), None);
         }
 
         for i in 1..3 {
-            let req = srv.srequest(Method::GET, format!("/{i}")).send();
+            let req = cl.srequest(Method::GET, format!("/{i}")).send();
             let response = req.await.unwrap();
             assert_eq!(response.headers().get(&header), Some(&value));
         }
@@ -189,8 +257,9 @@ async fn test_h2_headers() {
             }),
         )
     });
+    let cl = RustlsClient::new(&srv);
 
-    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
+    let response = cl.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -229,8 +298,9 @@ async fn test_h2_body2() {
             HttpService::h2(async |_| Ok::<_, io::Error>(Response::Ok().body(STR))),
         )
     });
+    let cl = RustlsClient::new(&srv);
 
-    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
+    let response = cl.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -247,8 +317,9 @@ async fn test_h2_head_empty() {
             HttpService::h2(async |_| Ok::<_, io::Error>(Response::Ok().body(STR))),
         )
     });
+    let cl = RustlsClient::new(&srv);
 
-    let response = srv.srequest(Method::HEAD, "/").send().await.unwrap();
+    let response = cl.srequest(Method::HEAD, "/").send().await.unwrap();
     assert!(response.status().is_success());
     assert_eq!(response.version(), Version::HTTP_2);
 
@@ -273,8 +344,9 @@ async fn test_h2_head_binary() {
             }),
         )
     });
+    let cl = RustlsClient::new(&srv);
 
-    let response = srv.srequest(Method::HEAD, "/").send().await.unwrap();
+    let response = cl.srequest(Method::HEAD, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     {
@@ -297,8 +369,9 @@ async fn test_h2_head_binary2() {
             HttpService::h2(async |_| Ok::<_, io::Error>(Response::Ok().body(STR))),
         )
     });
+    let cl = RustlsClient::new(&srv);
 
-    let response = srv.srequest(Method::HEAD, "/").send().await.unwrap();
+    let response = cl.srequest(Method::HEAD, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     {
@@ -321,8 +394,9 @@ async fn test_h2_body_length() {
             }),
         )
     });
+    let cl = RustlsClient::new(&srv);
 
-    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
+    let response = cl.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -346,8 +420,9 @@ async fn test_h2_body_chunked_explicit() {
             }),
         )
     });
+    let cl = RustlsClient::new(&srv);
 
-    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
+    let response = cl.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
     assert!(!response.headers().contains_key(header::TRANSFER_ENCODING));
 
@@ -374,8 +449,9 @@ async fn test_h2_response_http_error_handling() {
             }),
         )
     });
+    let cl = RustlsClient::new(&srv);
 
-    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
+    let response = cl.srequest(Method::GET, "/").send().await.unwrap();
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
     // read response
@@ -394,8 +470,9 @@ async fn test_h2_service_error() {
             }),
         )
     });
+    let cl = RustlsClient::new(&srv);
 
-    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
+    let response = cl.srequest(Method::GET, "/").send().await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
     // read response
@@ -440,6 +517,7 @@ async fn test_h2_client_drop() -> io::Result<()> {
             }),
         )
     });
+    let cl = RustlsClient::new(&srv);
 
     // drop the request once the handler is running
     let wait_started = async {
@@ -449,7 +527,7 @@ async fn test_h2_client_drop() -> io::Result<()> {
     };
     let result = timeout(
         Millis(2500),
-        select(srv.srequest(Method::GET, "/").send(), wait_started),
+        select(cl.srequest(Method::GET, "/").send(), wait_started),
     )
     .await;
     assert!(matches!(result, Ok(Either::Right(()))));
@@ -515,8 +593,9 @@ async fn test_ws_transport() {
             ),
         )
     });
+    let cl = RustlsClient::new(&srv);
 
-    let io = srv.wss().await.unwrap().into_inner().0;
+    let io = cl.wss().await.into_inner().0;
     let codec = ws::Codec::default().set_client_mode();
 
     io.send(ws::Message::Binary(Bytes::from_static(b"text")), &codec)
@@ -559,8 +638,9 @@ async fn test_h2_not_graceful_shutdown() -> io::Result<()> {
             }),
         )
     });
+    let cl = RustlsClient::new(&srv);
 
-    let req = srv.srequest(Method::GET, "/");
+    let req = cl.srequest(Method::GET, "/");
     rt::spawn(async move {
         assert!(matches!(
             req.send().await.err().unwrap().into_error(),
@@ -568,7 +648,7 @@ async fn test_h2_not_graceful_shutdown() -> io::Result<()> {
         ));
         sleep(Millis(100000)).await;
     });
-    let req = srv.srequest(Method::GET, "/");
+    let req = cl.srequest(Method::GET, "/");
     rt::spawn(async move {
         assert!(matches!(
             req.send().await.err().unwrap().into_error(),

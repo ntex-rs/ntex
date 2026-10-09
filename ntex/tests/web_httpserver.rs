@@ -8,7 +8,9 @@ use tls_openssl::ssl::SslAcceptorBuilder;
 mod rustls_utils;
 
 use ntex::http::HttpServiceConfig;
-use ntex::web::{self, App, HttpResponse, HttpServer, WebAppConfig};
+#[cfg(feature = "openssl")]
+use ntex::web::WebAppConfig;
+use ntex::web::{self, App, HttpResponse, HttpServer};
 use ntex::{SharedCfg, io::IoConfig, server::TestServer, time::Seconds};
 #[cfg(unix)]
 use ntex::{rt, time::sleep};
