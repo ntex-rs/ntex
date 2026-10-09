@@ -94,9 +94,9 @@ ntex = { version = "4", features = ["tokio"] }
 
 ## Documentation and community
 
-- [Framework guide](https://github.com/ntex-rs/ntex/tree/main/docs/index.md)
+- [Framework guide](https://docs.ntex.rs/index.html)
 - [Web framework documentation](https://ntex.rs)
-- [API documentation](https://docs.rs/ntex)
+- [API documentation](https://docs.ntex.rs/api/ntex/index.html)
 - [Examples](https://github.com/ntex-rs/examples)
 - [Release changes](https://github.com/ntex-rs/ntex/blob/main/ntex/CHANGES.md)
 - Minimum supported Rust version: 1.97

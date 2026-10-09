@@ -54,7 +54,7 @@ jobs:
         run: |
           rm -f target/doc/.lock
           cp -r target/doc _site/api
-          echo '<meta http-equiv="refresh" content="0; url=ntex/index.html">' > _site/api/index.html
+          echo '<meta http-equiv="refresh" content="0; url=index.html">' > _site/index.html
 
       - name: Upload pages artifact
         uses: actions/upload-pages-artifact@v4
