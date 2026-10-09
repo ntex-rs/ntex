@@ -1,4 +1,4 @@
-name: API docs
+name: Docs
 
 on:
   push:
@@ -36,15 +36,30 @@ jobs:
         run:
           cargo doc --no-deps --workspace --no-default-features --features="ntex/tokio,ntex/openssl,ntex/rustls,ntex/compress,ntex/cookie,ntex/ws,ntex-tls/rustls-ring"
 
-      - name: Add index redirect
+      - name: Install mdBook
+        uses: taiki-e/install-action@v2
+        with:
+          tool: mdbook
+
+      - name: Build guide
         run: |
-          echo '<meta http-equiv="refresh" content="0; url=ntex/index.html">' > target/doc/index.html
+          mkdir -p target/guide-src
+          cp docs/*.md docs/book.toml target/guide-src/
+          sed 's|](docs/|](./|g' ntex/migration_3to4.md > target/guide-src/migration_3to4.md
+          sed -i 's|](../ntex/migration_3to4.md)|](./migration_3to4.md)|' target/guide-src/index.md
+          mdbook build target/guide-src -d "$PWD/_site"
+          rm -f _site/book.toml
+
+      - name: Add API docs
+        run: |
           rm -f target/doc/.lock
+          cp -r target/doc _site/api
+          echo '<meta http-equiv="refresh" content="0; url=ntex/index.html">' > _site/api/index.html
 
       - name: Upload pages artifact
         uses: actions/upload-pages-artifact@v4
         with:
-          path: target/doc
+          path: _site
 
   deploy:
     name: Deploy to GitHub Pages

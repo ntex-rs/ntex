@@ -18,6 +18,11 @@ build web applications.
   - [Error Handling](./8.5-web-app.md)
 - [Byte Buffers](./9-bytes.md)
 
+## API reference
+
+- [API documentation for the `main` branch](https://docs.ntex.rs/api/)
+- [API documentation for released versions on docs.rs](https://docs.rs/ntex/)
+
 ## Migration
 
 - [Migrating from ntex 3 to ntex 4](../ntex/migration_3to4.md)
