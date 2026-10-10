@@ -2,6 +2,16 @@
 
 ## [4.2.0] - Unreleased
 
+* http: Use the `zlib-rs` backend for `gzip` and `deflate`. Decoding is
+  1.4-2.8 times faster and encoding 20-35% faster than with `miniz_oxide`.
+  Text compresses about 7% larger, incompressible data grows by up to 5.5%
+
+* web: Document that `web::types::Payload` yields the request body without
+  decompressing it
+
+* http: Encode `zstd` chunks of 128KiB and larger on the blocking thread pool,
+  up to 384KiB per task. A 512KiB chunk took about 1.5ms on the I/O thread
+
 * http: Limit the `zstd` encoder window to 512KiB. A response body of unknown
   size no longer allocates 3.6MiB of encoder state
 

@@ -13,6 +13,12 @@ use crate::web::{FromRequest, HttpRequest, State, error::PayloadError};
 
 /// Payload extractor returns request's payload stream.
 ///
+/// The stream is not decompressed: with `Content-Encoding: gzip`, `deflate` or
+/// `zstd`, it yields the encoded bytes. The `Bytes`, `String`, `Json` and `Form`
+/// extractors decode the body. To decode this stream, wrap it with
+/// `ntex::http::encoding::Decoder::from_headers()` (requires the `compress`
+/// feature).
+///
 /// ## Example
 ///
 /// ```rust
