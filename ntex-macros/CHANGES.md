@@ -1,5 +1,9 @@
 # Changes
 
+## [4.2.0] - 2026-10-10
+
+* Replace `syn` with `unsynn`
+
 ## [4.1.0] - 2026-10-08
 
 * Fix `unused_braces` warning for one-line `main` and `test` bodies

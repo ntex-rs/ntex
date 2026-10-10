@@ -1,7 +1,8 @@
 use proc_macro::TokenStream;
-use proc_macro2::{Span, TokenStream as TokenStream2};
+use proc_macro2::{Ident, Literal, Span, TokenStream as TokenStream2, TokenTree};
 use quote::{ToTokens, TokenStreamExt, quote};
-use syn::{Ident, TypePath};
+
+use crate::parse::{Error, ItemFn, parse_args, str_value};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(crate) enum MethodType {
@@ -43,33 +44,42 @@ impl ToTokens for MethodType {
 }
 
 struct Args {
-    path: syn::LitStr,
+    path: Literal,
     guards: Vec<Ident>,
-    state: TypePath,
+    state: TokenStream2,
 }
 
-impl syn::parse::Parse for Args {
-    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
-        let path: syn::LitStr = input.parse()?;
-        let mut guards = Vec::new();
-        let mut state: Option<TypePath> = None;
+impl Args {
+    fn parse(input: TokenStream2) -> Result<Self, Error> {
+        let mut iter = input.into_iter();
+        let path = match iter.next() {
+            Some(TokenTree::Literal(lit)) if str_value(&lit).is_some() => lit,
+            Some(tt) => return Err(Error::new_spanned(&tt, "expected string literal")),
+            None => return Err(Error::new(Span::call_site(), "expected string literal")),
+        };
+        match iter.next() {
+            Some(TokenTree::Punct(p)) if p.as_char() == ',' => {}
+            Some(tt) => return Err(Error::new_spanned(&tt, "expected `,`")),
+            None => {}
+        }
 
-        while !input.is_empty() {
-            input.parse::<syn::token::Comma>()?;
-            if input.is_empty() {
-                break;
-            }
-            let ident: syn::Ident = input.parse()?;
-            input.parse::<syn::token::Eq>()?;
-            if ident == "guard" {
-                let lit: syn::LitStr = input.parse()?;
-                guards.push(Ident::new(&lit.value(), Span::call_site()));
-            } else if ident == "state" {
-                let lit: syn::TypePath = input.parse()?;
-                state = Some(lit); //syn::parse_str(&lit.value())?);
+        let mut guards = Vec::new();
+        let mut state = None;
+        for arg in parse_args(iter.collect())? {
+            if arg.name == "guard" {
+                let lit = arg
+                    .lit_str()
+                    .and_then(|lit| str_value(&lit))
+                    .ok_or_else(|| arg.value_error("expected string literal"))?;
+                guards.push(Ident::new(&lit, Span::call_site()));
+            } else if arg.name == "state" {
+                state = Some(
+                    arg.path()
+                        .ok_or_else(|| arg.value_error("expected identifier"))?,
+                );
             } else {
-                return Err(syn::Error::new_spanned(
-                    ident,
+                return Err(Error::new_spanned(
+                    &arg.name,
                     "unknown argument, expected `guard` or `state`",
                 ));
             }
@@ -78,13 +88,13 @@ impl syn::parse::Parse for Args {
         Ok(Args {
             path,
             guards,
-            state: state.unwrap_or_else(|| syn::parse_str("ntex::web::dev::DefaultState").unwrap()),
+            state: state.unwrap_or_else(|| quote!(ntex::web::dev::DefaultState)),
         })
     }
 }
 
-fn missing_path(method: MethodType) -> syn::Error {
-    syn::Error::new(
+fn missing_path(method: MethodType) -> Error {
+    Error::new(
         Span::call_site(),
         format!(
             r#"missing path, expected #[{}("<path>")]"#,
@@ -94,9 +104,9 @@ fn missing_path(method: MethodType) -> syn::Error {
 }
 
 pub(crate) struct Route {
-    name: syn::Ident,
+    name: Ident,
     args: Args,
-    ast: syn::ItemFn,
+    ast: TokenStream2,
     method: MethodType,
 }
 
@@ -111,13 +121,13 @@ impl Route {
         args: TokenStream,
         input: TokenStream,
         method: MethodType,
-    ) -> syn::Result<Self> {
+    ) -> Result<Self, Error> {
         if args.is_empty() {
             return Err(missing_path(method));
         }
-        let ast: syn::ItemFn = syn::parse(input)?;
-        let name = ast.sig.ident.clone();
-        let args = syn::parse::<Args>(args)?;
+        let ast = TokenStream2::from(input);
+        let name = ItemFn::parse(ast.clone())?.ident().clone();
+        let args = Args::parse(args.into())?;
 
         Ok(Self {
             name,
@@ -162,17 +172,31 @@ impl Route {
 mod tests {
     use super::*;
 
+    fn parse(args: &str) -> Result<Args, Error> {
+        Args::parse(args.parse().unwrap())
+    }
+
     fn err(args: &str) -> String {
-        syn::parse_str::<Args>(args).err().unwrap().to_string()
+        parse(args).err().unwrap().to_string()
     }
 
     #[test]
     fn args() {
-        let args =
-            syn::parse_str::<Args>(r#""/a", guard = "g1", guard = "g2", state = St"#).unwrap();
-        assert_eq!(args.path.value(), "/a");
+        let args = parse(r#""/a", guard = "g1", guard = "g2", state = St"#)
+            .ok()
+            .unwrap();
+        assert_eq!(str_value(&args.path).unwrap(), "/a");
         assert_eq!(args.guards.len(), 2);
-        assert!(args.state.path.is_ident("St"));
+        assert_eq!(args.state.to_string(), "St");
+
+        let args = parse(r#""/a","#).ok().unwrap();
+        assert!(args.guards.is_empty());
+        assert_eq!(args.state.to_string(), "ntex :: web :: dev :: DefaultState");
+
+        assert_eq!(err("a"), "expected string literal");
+        assert_eq!(err(r#""/a" b"#), "expected `,`");
+        assert_eq!(err(r#""/a", guard = g"#), "expected string literal");
+        assert_eq!(err(r#""/a", state = "St""#), "expected identifier");
 
         assert_eq!(
             err(r#""/a", error = "Foo""#),

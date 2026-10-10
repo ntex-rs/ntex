@@ -18,9 +18,7 @@ edition = "2024"
 rust-version = "1.97"
 
 [package.metadata.docs.rs]
-#toolchain = "nightly"
-#rustc-args = ["--cfg", "docsrs_dep"]
-#rustdoc-args = ["--cfg", "docsrs_dep"]
+rustdoc-args = ["--cfg", "docsrs_dep"]
 features = ["tokio", "openssl", "rustls", "compress", "cookie", "ws", "ntex-tls/rustls-ring"]
 
 [lib]
