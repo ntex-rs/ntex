@@ -40,8 +40,10 @@
 //! ```
 
 use proc_macro::TokenStream;
+use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 
+mod parse;
 mod route;
 mod sys;
 
@@ -314,24 +316,25 @@ pub fn web_query(args: TokenStream, input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro_attribute]
 pub fn rt_main(args: TokenStream, item: TokenStream) -> TokenStream {
-    let mut args = syn::parse_macro_input!(args as sys::MainArgs);
-    let mut input = syn::parse_macro_input!(item as syn::ItemFn);
-    let attrs = &input.attrs;
-    let vis = &input.vis;
-    let sig = &mut input.sig;
-    let body = &input.block;
-    let name = &sig.ident;
+    let mut args = match sys::MainArgs::parse(args.into()) {
+        Ok(args) => args,
+        Err(err) => return err.into(),
+    };
+    let input = match parse::ItemFn::parse(item.into()) {
+        Ok(input) => input,
+        Err(err) => return err.into(),
+    };
 
-    if sig.asyncness.is_none() {
-        return syn::Error::new_spanned(sig.fn_token, "only async fn is supported")
-            .to_compile_error()
-            .into();
+    if !input.is_async() {
+        return input.fn_error("only async fn is supported").into();
     }
 
-    sig.asyncness = None;
-
+    let attrs = input.attrs();
+    let vis = input.vis();
+    let sig = input.sig_without_async();
+    let body = input.body();
     let runner = args.gen_sys_rt();
-    let config = args.gen_sys_config(name);
+    let config = args.gen_sys_config(input.ident());
 
     (quote! {
         #(#attrs)*
@@ -372,58 +375,12 @@ pub fn rt_main(args: TokenStream, item: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro_attribute]
 pub fn rt_test(_: TokenStream, item: TokenStream) -> TokenStream {
-    let input = syn::parse_macro_input!(item as syn::ItemFn);
-
-    let ret = &input.sig.output;
-    let name = &input.sig.ident;
-    let body = &input.block;
-    let fut = boxed_future(ret, body);
-    let attrs = &input.attrs;
-    let mut has_test_attr = false;
-
-    for attr in attrs {
-        if attr.path().is_ident("test") {
-            has_test_attr = true;
-        }
-    }
-
-    if input.sig.asyncness.is_none() {
-        return syn::Error::new_spanned(
-            input.sig.fn_token,
-            format!("only async fn is supported, {}", input.sig.ident),
-        )
-        .to_compile_error()
-        .into();
-    }
-
-    let result = if has_test_attr {
-        quote! {
-            #(#attrs)*
-            fn #name() #ret {
-                ntex::util::enable_test_logging();
-                ntex::rt::System::build()
-                    .name(stringify!(#name))
-                    .testing()
-                    .build(ntex::rt::DefaultRuntime)
-                    .block_on(#fut)
-            }
-        }
-    } else {
-        quote! {
-            #[test]
-            #(#attrs)*
-            fn #name() #ret {
-                ntex::util::enable_test_logging();
-                ntex::rt::System::build()
-                    .name(stringify!(#name))
-                    .testing()
-                    .build(ntex::rt::DefaultRuntime)
-                    .block_on(#fut)
-            }
-        }
-    };
-
-    result.into()
+    gen_test(
+        item,
+        quote!(ntex::util::enable_test_logging();),
+        quote!(ntex::rt::System),
+        quote!(ntex::rt::DefaultRuntime),
+    )
 }
 
 /// Same as [`rt_test`] for crates that depend on `ntex-rt` directly. Doesn't
@@ -431,56 +388,12 @@ pub fn rt_test(_: TokenStream, item: TokenStream) -> TokenStream {
 #[doc(hidden)]
 #[proc_macro_attribute]
 pub fn rt_test2(_: TokenStream, item: TokenStream) -> TokenStream {
-    let input = syn::parse_macro_input!(item as syn::ItemFn);
-
-    let ret = &input.sig.output;
-    let name = &input.sig.ident;
-    let body = &input.block;
-    let fut = boxed_future(ret, body);
-    let attrs = &input.attrs;
-    let mut has_test_attr = false;
-
-    for attr in attrs {
-        if attr.path().is_ident("test") {
-            has_test_attr = true;
-        }
-    }
-
-    if input.sig.asyncness.is_none() {
-        return syn::Error::new_spanned(
-            input.sig.fn_token,
-            format!("only async fn is supported, {}", input.sig.ident),
-        )
-        .to_compile_error()
-        .into();
-    }
-
-    let result = if has_test_attr {
-        quote! {
-            #(#attrs)*
-            fn #name() #ret {
-                ntex_rt::System::build()
-                    .name(stringify!(#name))
-                    .testing()
-                    .build(ntex::rt::DefaultRuntime)
-                    .block_on(#fut)
-            }
-        }
-    } else {
-        quote! {
-            #[test]
-            #(#attrs)*
-            fn #name() #ret {
-                ntex_rt::System::build()
-                    .name(stringify!(#name))
-                    .testing()
-                    .build(ntex::rt::DefaultRuntime)
-                    .block_on(#fut)
-            }
-        }
-    };
-
-    result.into()
+    gen_test(
+        item,
+        TokenStream2::new(),
+        quote!(ntex_rt::System),
+        quote!(ntex::rt::DefaultRuntime),
+    )
 }
 
 /// Same as [`rt_test`] for tests inside the `ntex` crate itself, it refers to
@@ -488,67 +401,60 @@ pub fn rt_test2(_: TokenStream, item: TokenStream) -> TokenStream {
 #[doc(hidden)]
 #[proc_macro_attribute]
 pub fn rt_test_internal(_: TokenStream, item: TokenStream) -> TokenStream {
-    let input = syn::parse_macro_input!(item as syn::ItemFn);
+    gen_test(
+        item,
+        quote!(crate::util::enable_test_logging();),
+        quote!(ntex_rt::System),
+        quote!(crate::rt::DefaultRuntime),
+    )
+}
 
-    let ret = &input.sig.output;
-    let name = &input.sig.ident;
-    let body = &input.block;
-    let fut = boxed_future(ret, body);
-    let attrs = &input.attrs;
-    let mut has_test_attr = false;
-
-    for attr in attrs {
-        if attr.path().is_ident("test") {
-            has_test_attr = true;
-        }
-    }
-
-    if input.sig.asyncness.is_none() {
-        return syn::Error::new_spanned(
-            input.sig.fn_token,
-            format!("only async fn is supported, {}", input.sig.ident),
-        )
-        .to_compile_error()
-        .into();
-    }
-
-    let result = if has_test_attr {
-        quote! {
-            #(#attrs)*
-            fn #name() #ret {
-                crate::util::enable_test_logging();
-                ntex_rt::System::build()
-                    .name(stringify!(#name))
-                    .testing()
-                    .build(crate::rt::DefaultRuntime)
-                    .block_on(#fut)
-            }
-        }
-    } else {
-        quote! {
-            #[test]
-            #(#attrs)*
-            fn #name() #ret {
-                crate::util::enable_test_logging();
-                ntex_rt::System::build()
-                    .name(stringify!(#name))
-                    .testing()
-                    .build(crate::rt::DefaultRuntime)
-                    .block_on(#fut)
-            }
-        }
+/// Expands a test function, `setup` runs before the system is built
+fn gen_test(
+    item: TokenStream,
+    setup: TokenStream2,
+    system: TokenStream2,
+    runtime: TokenStream2,
+) -> TokenStream {
+    let input = match parse::ItemFn::parse(item.into()) {
+        Ok(input) => input,
+        Err(err) => return err.into(),
     };
 
-    result.into()
+    if !input.is_async() {
+        return input
+            .fn_error(format!("only async fn is supported, {}", input.ident()))
+            .into();
+    }
+
+    let name = input.ident();
+    let ret = input.output();
+    let fut = boxed_future(input.output_type(), input.body());
+    let attrs = input.attrs();
+    let test_attr = if input.has_attr("test") {
+        TokenStream2::new()
+    } else {
+        quote!(#[test])
+    };
+
+    (quote! {
+        #test_attr
+        #(#attrs)*
+        fn #name() #ret {
+            #setup
+            #system::build()
+                .name(stringify!(#name))
+                .testing()
+                .build(#runtime)
+                .block_on(#fut)
+        }
+    })
+    .into()
 }
 
 /// Box the test body so the runtime's `block_on` is generated once per
 /// return type instead of once per test function
-fn boxed_future(ret: &syn::ReturnType, body: &syn::Block) -> proc_macro2::TokenStream {
-    let output = match ret {
-        syn::ReturnType::Default => quote! { () },
-        syn::ReturnType::Type(_, ty) => quote! { #ty },
-    };
+fn boxed_future(output: TokenStream2, body: TokenStream2) -> TokenStream2 {
     quote! {
         ::std::boxed::Box::pin(async #body)
             as ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = #output>>>
