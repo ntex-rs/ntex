@@ -216,16 +216,16 @@ wrapping them. See
 [Passing Connection State to the HTTP Service](6-server-app.md#passing-connection-state-to-the-http-service)
 for an example that wraps an accepted `Io` in `State`.
 
-[`Ctx`]: https://docs.rs/ntex/latest/ntex/struct.Ctx.html
-[`Ctx::call`]: https://docs.rs/ntex/latest/ntex/struct.Ctx.html#method.call
-[`Ctx::call_nowait`]: https://docs.rs/ntex/latest/ntex/struct.Ctx.html#method.call_nowait
-[`fn_service_st`]: https://docs.rs/ntex/latest/ntex/service/fn.fn_service_st.html
-[`IntoService`]: https://docs.rs/ntex/latest/ntex/trait.IntoService.html
-[`map_state`]: https://docs.rs/ntex/latest/ntex/service/fn.map_state.html
-[`Pipeline::new`]: https://docs.rs/ntex/latest/ntex/struct.Pipeline.html#method.new
-[`PipelineBinding`]: https://docs.rs/ntex/latest/ntex/struct.PipelineBinding.html
-[`PipelineState`]: https://docs.rs/ntex/latest/ntex/service/pipeline/struct.PipelineState.html
-[`RequestState`]: https://docs.rs/ntex/latest/ntex/service/trait.RequestState.html
-[`State<St, Req>`]: https://docs.rs/ntex/latest/ntex/service/struct.State.html
+[`Ctx`]: https://docs.ntex.rs/api/ntex/struct.Ctx.html
+[`Ctx::call`]: https://docs.ntex.rs/api/ntex/struct.Ctx.html#method.call
+[`Ctx::call_nowait`]: https://docs.ntex.rs/api/ntex/struct.Ctx.html#method.call_nowait
+[`fn_service_st`]: https://docs.ntex.rs/api/ntex/service/fn.fn_service_st.html
+[`IntoService`]: https://docs.ntex.rs/api/ntex/trait.IntoService.html
+[`map_state`]: https://docs.ntex.rs/api/ntex/service/fn.map_state.html
+[`Pipeline::new`]: https://docs.ntex.rs/api/ntex/struct.Pipeline.html#method.new
+[`PipelineBinding`]: https://docs.ntex.rs/api/ntex/struct.PipelineBinding.html
+[`PipelineState`]: https://docs.ntex.rs/api/ntex/service/pipeline/struct.PipelineState.html
+[`RequestState`]: https://docs.ntex.rs/api/ntex/service/trait.RequestState.html
+[`State<St, Req>`]: https://docs.ntex.rs/api/ntex/service/struct.State.html
 [`test-mockall`]: https://github.com/ntex-rs/examples/tree/main/test-mockall
 [`test-shimforge`]: https://github.com/ntex-rs/examples/tree/main/test-shimforge

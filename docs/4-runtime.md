@@ -46,7 +46,7 @@ general-purpose runtime and lets ntex choose its platform reactor directly.
 an async Tokio task to try to nest one runtime inside another. Usually the
 cleanest boundary is to let `#[ntex::main]` own the process entry point.
 
-[`DefaultRuntime`]: https://docs.rs/ntex/latest/ntex/rt/struct.DefaultRuntime.html
+[`DefaultRuntime`]: https://docs.ntex.rs/api/ntex/rt/struct.DefaultRuntime.html
 
 ## Spawning tasks
 
@@ -86,8 +86,8 @@ and Compio backends, canceling work sent through another arbiter abandons the
 result but does not stop the remote task. Use an explicit cancellation signal
 when cross-thread work must be stoppable.
 
-[`JoinHandle`]: https://docs.rs/ntex/latest/ntex/rt/struct.JoinHandle.html
-[`ntex::rt::spawn`]: https://docs.rs/ntex/latest/ntex/rt/fn.spawn.html
+[`JoinHandle`]: https://docs.ntex.rs/api/ntex/rt/struct.JoinHandle.html
+[`ntex::rt::spawn`]: https://docs.ntex.rs/api/ntex/rt/fn.spawn.html
 
 ## Timers and timeouts
 
@@ -169,8 +169,8 @@ makes process signals available through `ntex::rt::signals`; it does not by
 itself define the application's shutdown policy. ntex servers listen for
 process signals while they are running and coordinate their own shutdown.
 
-[`System`]: https://docs.rs/ntex-rt/latest/ntex_rt/struct.System.html
-[`SystemRunner`]: https://docs.rs/ntex-rt/latest/ntex_rt/struct.SystemRunner.html
+[`System`]: https://docs.ntex.rs/api/ntex_rt/struct.System.html
+[`SystemRunner`]: https://docs.ntex.rs/api/ntex_rt/struct.SystemRunner.html
 
 ## Arbiters and runtime threads
 
@@ -198,7 +198,7 @@ a thread-safe value shared by the complete system, while
 The latter is useful for per-worker clients or caches that should not be
 shared.
 
-[`Arbiter`]: https://docs.rs/ntex-rt/latest/ntex_rt/struct.Arbiter.html
+[`Arbiter`]: https://docs.ntex.rs/api/ntex_rt/struct.Arbiter.html
 
 ## Blocking work
 
@@ -244,7 +244,7 @@ interrupt a closure that is already running. Use `detach()` when queued work
 should continue even if nobody needs its result. Cancellation and closure
 panics are reported as `BlockingError`.
 
-[`spawn_blocking()`]: https://docs.rs/ntex-rt/latest/ntex_rt/fn.spawn_blocking.html
+[`spawn_blocking()`]: https://docs.ntex.rs/api/ntex_rt/fn.spawn_blocking.html
 
 ## Runtime diagnostics
 
