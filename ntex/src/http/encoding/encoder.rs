@@ -281,20 +281,20 @@ enum Codec {
 impl ContentEncoder {
     /// Chunks of this size and larger are encoded on the blocking thread pool.
     ///
-    /// `gzip` and `deflate` are several times slower than `zstd`, so they are
-    /// offloaded much earlier.
+    /// Encoding a chunk in place takes up to about 70us for `gzip` and
+    /// `deflate`, and up to about 370us for `zstd`.
     const fn limit(&self) -> usize {
         match self.codec {
             Codec::Deflate(_) | Codec::Gzip(..) => 16 * 1024,
-            Codec::Zstd(_) | Codec::Done => 512 * 1024,
+            Codec::Zstd(_) | Codec::Done => 128 * 1024,
         }
     }
 
-    /// The most input a single blocking task encodes.
+    /// The most input a single blocking task encodes, about 1ms of work.
     const fn task_size(&self) -> usize {
         match self.codec {
             Codec::Deflate(_) | Codec::Gzip(..) => 256 * 1024,
-            Codec::Zstd(_) | Codec::Done => 1024 * 1024,
+            Codec::Zstd(_) | Codec::Done => 384 * 1024,
         }
     }
 
@@ -726,7 +726,7 @@ mod tests {
         for (encoding, limit) in [
             (ContentEncoding::Gzip, 16 * 1024),
             (ContentEncoding::Deflate, 16 * 1024),
-            (ContentEncoding::Zstd, 512 * 1024),
+            (ContentEncoding::Zstd, 128 * 1024),
         ] {
             for (len, offloaded) in [(limit - 1, 0), (limit, 1)] {
                 let data: Vec<u8> = (0..len).map(|i: usize| (i % 251) as u8).collect();
@@ -766,7 +766,7 @@ mod tests {
         for (encoding, task, limit) in [
             (ContentEncoding::Gzip, 256 * 1024, 16 * 1024),
             (ContentEncoding::Deflate, 256 * 1024, 16 * 1024),
-            (ContentEncoding::Zstd, 1024 * 1024, 512 * 1024),
+            (ContentEncoding::Zstd, 384 * 1024, 128 * 1024),
         ] {
             // two parts on the pool, the rest is below the limit and encoded in place
             let data = random(2 * task + limit / 2);
@@ -902,8 +902,12 @@ mod tests {
             ContentEncoding::Deflate,
             ContentEncoding::Zstd,
         ] {
+            // the smallest size that needs a second page
+            let sizes: Vec<usize> = (16 * 1024..33 * 1024).collect();
+            let first =
+                sizes[sizes.partition_point(|&len| encode_all(encoding, &data[..len]).len() < 2)];
             let mut split = 0;
-            for len in 32 * 1024 - 64..32 * 1024 {
+            for len in first - 64..first + 64 {
                 let chunks = encode_all(encoding, &data[..len]);
                 assert!(chunks.iter().all(|c| c.len() <= 32 * 1024));
                 if chunks.len() > 1 && chunks.last().unwrap().len() < 8 {
