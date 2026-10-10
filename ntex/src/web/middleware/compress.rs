@@ -11,6 +11,9 @@ use crate::web::{BodyEncoding, State, WebRequest, WebResponse};
 /// Use `BodyEncoding` trait for overriding response compression.
 /// To disable compression set encoding to `ContentEncoding::Identity` value.
 ///
+/// Each compressed response keeps its encoder until the body ends, up to
+/// 1.5MiB for `zstd`, see [`crate::http::encoding`].
+///
 /// ```rust
 /// use ntex::web::{self, middleware, App, HttpResponse};
 ///

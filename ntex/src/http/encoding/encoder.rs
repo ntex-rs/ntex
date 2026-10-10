@@ -25,6 +25,13 @@ const MIN_SIZE: u64 = 1024;
 /// allocates about 3.6MiB, for barely better compression.
 const ZSTD_WINDOW_LOG: u32 = 19;
 
+/// Hash and chain table sizes of the `zstd` encoder, 128KiB each.
+///
+/// The level 3 defaults take 768KiB together. Smaller tables save 512KiB
+/// per encoder and compress text about 1% larger.
+const ZSTD_HASH_LOG: u32 = 15;
+const ZSTD_CHAIN_LOG: u32 = 15;
+
 /// Response body encoder.
 ///
 /// Compresses a response body with the selected content encoding.
@@ -312,6 +319,9 @@ impl ContentEncoder {
                 let mut ctx = CCtx::try_create()?;
                 ctx.set_parameter(CParameter::CompressionLevel(0)).ok()?;
                 ctx.set_parameter(CParameter::WindowLog(ZSTD_WINDOW_LOG))
+                    .ok()?;
+                ctx.set_parameter(CParameter::HashLog(ZSTD_HASH_LOG)).ok()?;
+                ctx.set_parameter(CParameter::ChainLog(ZSTD_CHAIN_LOG))
                     .ok()?;
                 ctx.set_pledged_src_size(size).ok()?;
                 Codec::Zstd(ctx)
@@ -936,8 +946,8 @@ mod tests {
                 .concat();
             assert_eq!(decompress(ContentEncoding::Zstd, &frame), data);
         }
-        // 3.6MiB with the default 2MiB window of a stream
-        assert!(window[0] < 2560 * 1024, "{}", window[0]);
+        // 3.6MiB with the default 2MiB window and tables of a stream
+        assert!(window[0] < 1600 * 1024, "{}", window[0]);
         // a known size keeps the window small
         assert!(window[1] < 256 * 1024, "{}", window[1]);
     }
