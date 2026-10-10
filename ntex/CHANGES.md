@@ -1,13 +1,13 @@
 # Changes
 
-## [4.2.0] - Unreleased
+## [4.2.0] - 2026-10-10
+
+* http: Reduce the `zstd` encoder of a streaming response from 2MiB to 1.5MiB,
+  text compresses about 1% larger. Document encoder memory usage
 
 * http: Use the `zlib-rs` backend for `gzip` and `deflate`. Decoding is
   1.4-2.8 times faster and encoding 20-35% faster than with `miniz_oxide`.
   Text compresses about 7% larger, incompressible data grows by up to 5.5%
-
-* web: Document that `web::types::Payload` yields the request body without
-  decompressing it
 
 * http: Encode `zstd` chunks of 128KiB and larger on the blocking thread pool,
   up to 384KiB per task. A 512KiB chunk took about 1.5ms on the I/O thread
@@ -17,6 +17,9 @@
 
 * http: Release the encoder state once a compressed body ends, not after all
   of its output is sent
+
+* web: Document that `web::types::Payload` yields the request body without
+  decompressing it
 
 * web: Bodies read by the `Json`, `Form` and `Bytes` extractors, and client
   response bodies, no longer keep unused buffer space alive

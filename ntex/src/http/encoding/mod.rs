@@ -2,6 +2,15 @@
 //!
 //! Supports `gzip`, `deflate` and `zstd`. Large chunks are encoded and
 //! decoded on the blocking thread pool, smaller ones on the current thread.
+//!
+//! ## Memory
+//!
+//! Each compressed response keeps its encoder until the body ends: about
+//! 1.5MiB for a `zstd` body of unknown or large size, less for small bodies
+//! of known size, and about 370KiB for `gzip` and `deflate`. There is no
+//! global limit, many concurrent streaming responses can use a lot of
+//! memory. Responses that gain little from compression can be sent with
+//! `ContentEncoding::Identity` through the `web::BodyEncoding` trait.
 use zstd::zstd_safe::WriteBuf;
 
 use crate::rt::{BlockingResult, spawn_blocking};
