@@ -174,28 +174,28 @@ An `Io` object is normally passed to a protocol service such as
 decodes incoming bytes into protocol messages and encodes its responses back
 into the I/O write buffer without depending on the concrete socket type.
 
-[`Handle`]: https://docs.rs/ntex/latest/ntex/io/trait.Handle.html
-[`Io`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html
-[`IoContext`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html
-[`IoContext::poll_read_ready`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.poll_read_ready
-[`IoContext::poll_write_ready`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.poll_write_ready
-[`IoContext::stop`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.stop
-[`IoContext::stopped`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.stopped
-[`IoContext::with_read_buf`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.with_read_buf
-[`IoContext::take_read_buf`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.take_read_buf
-[`IoContext::release_read_buf`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.release_read_buf
-[`IoContext::update_write_status`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.update_write_status
-[`IoContext::with_write_dst`]: https://docs.rs/ntex/latest/ntex/io/struct.IoContext.html#method.with_write_dst
-[`IoRef`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html
-[`IoStream`]: https://docs.rs/ntex/latest/ntex/io/trait.IoStream.html
-[`IoTaskStatus`]: https://docs.rs/ntex/latest/ntex/io/enum.IoTaskStatus.html
-[`Readiness`]: https://docs.rs/ntex/latest/ntex/io/enum.Readiness.html
-[`ntex::http::HttpService`]: https://docs.rs/ntex/latest/ntex/http/struct.HttpService.html
+[`Handle`]: https://docs.ntex.rs/api/ntex/io/trait.Handle.html
+[`Io`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html
+[`IoContext`]: https://docs.ntex.rs/api/ntex/io/struct.IoContext.html
+[`IoContext::poll_read_ready`]: https://docs.ntex.rs/api/ntex/io/struct.IoContext.html#method.poll_read_ready
+[`IoContext::poll_write_ready`]: https://docs.ntex.rs/api/ntex/io/struct.IoContext.html#method.poll_write_ready
+[`IoContext::stop`]: https://docs.ntex.rs/api/ntex/io/struct.IoContext.html#method.stop
+[`IoContext::stopped`]: https://docs.ntex.rs/api/ntex/io/struct.IoContext.html#method.stopped
+[`IoContext::with_read_buf`]: https://docs.ntex.rs/api/ntex/io/struct.IoContext.html#method.with_read_buf
+[`IoContext::take_read_buf`]: https://docs.ntex.rs/api/ntex/io/struct.IoContext.html#method.take_read_buf
+[`IoContext::release_read_buf`]: https://docs.ntex.rs/api/ntex/io/struct.IoContext.html#method.release_read_buf
+[`IoContext::update_write_status`]: https://docs.ntex.rs/api/ntex/io/struct.IoContext.html#method.update_write_status
+[`IoContext::with_write_dst`]: https://docs.ntex.rs/api/ntex/io/struct.IoContext.html#method.with_write_dst
+[`IoRef`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html
+[`IoStream`]: https://docs.ntex.rs/api/ntex/io/trait.IoStream.html
+[`IoTaskStatus`]: https://docs.ntex.rs/api/ntex/io/enum.IoTaskStatus.html
+[`Readiness`]: https://docs.ntex.rs/api/ntex/io/enum.Readiness.html
+[`ntex::http::HttpService`]: https://docs.ntex.rs/api/ntex/http/struct.HttpService.html
 
 The runtime-specific implementations are provided by the [`ntex-net`] crate,
 which supports Tokio, Compio, and Neon backends.
 
-[`ntex-net`]: https://docs.rs/ntex-net/
+[`ntex-net`]: https://docs.ntex.rs/api/ntex_net/index.html
 
 ### Transport handles and metadata
 
@@ -223,9 +223,9 @@ fn log_peer_addr(io: &Io) {
 Queries travel through the filter stack before reaching the transport handle,
 so filters may also expose their own typed metadata.
 
-[`IoRef::query`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.query
-[`PeerAddr`]: https://docs.rs/ntex/latest/ntex/io/types/struct.PeerAddr.html
-[`QueryItem`]: https://docs.rs/ntex/latest/ntex/io/types/struct.QueryItem.html
+[`IoRef::query`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html#method.query
+[`PeerAddr`]: https://docs.ntex.rs/api/ntex/io/types/struct.PeerAddr.html
+[`QueryItem`]: https://docs.ntex.rs/api/ntex/io/types/struct.QueryItem.html
 
 ## Configuration and timeouts
 
@@ -316,9 +316,9 @@ buffer requirements. The method is `unsafe`: replacing the configuration may
 release the allocation that [`IoRef::cfg`] hands out, so no reference obtained
 from it may be live across the call or used afterwards.
 
-[`Io::set_config`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.set_config
-[`IoRef::cfg`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.cfg
-[`SharedCfg`]: https://docs.rs/ntex/latest/ntex/struct.SharedCfg.html
+[`Io::set_config`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html#method.set_config
+[`IoRef::cfg`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html#method.cfg
+[`SharedCfg`]: https://docs.ntex.rs/api/ntex/struct.SharedCfg.html
 
 ## Filter subsystem
 
@@ -359,10 +359,10 @@ and a WebSocket filter can generate a close frame during shutdown. Output a
 filter writes while processing a read is pushed toward the transport as soon as
 that processing finishes, without waiting for the application to write.
 
-[`FilterLayer`]: https://docs.rs/ntex/latest/ntex/io/trait.FilterLayer.html
-[`FilterLayer::process_read_buf`]: https://docs.rs/ntex/latest/ntex/io/trait.FilterLayer.html#tymethod.process_read_buf
-[`FilterLayer::process_write_buf`]: https://docs.rs/ntex/latest/ntex/io/trait.FilterLayer.html#tymethod.process_write_buf
-[`Io::add_filter`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.add_filter
+[`FilterLayer`]: https://docs.ntex.rs/api/ntex/io/trait.FilterLayer.html
+[`FilterLayer::process_read_buf`]: https://docs.ntex.rs/api/ntex/io/trait.FilterLayer.html#tymethod.process_read_buf
+[`FilterLayer::process_write_buf`]: https://docs.ntex.rs/api/ntex/io/trait.FilterLayer.html#tymethod.process_write_buf
+[`Io::add_filter`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html#method.add_filter
 
 Most byte transformations only need [`FilterLayer`]. Lower-level concerns that
 must observe or control the entire filter chain can instead wrap the current
@@ -378,8 +378,8 @@ A custom `Filter` normally stores the filter it wraps and delegates every
 operation it does not intentionally override. ntex provides forwarding macros
 for readiness, queries, and shutdown to make this pattern less error-prone.
 
-[`Filter`]: https://docs.rs/ntex/latest/ntex/io/trait.Filter.html
-[`Io::map_filter`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.map_filter
+[`Filter`]: https://docs.ntex.rs/api/ntex/io/trait.Filter.html
+[`Io::map_filter`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html#method.map_filter
 
 ### Typed versus erased filter stacks
 
@@ -412,13 +412,13 @@ can be erased again when necessary. Type erasure is therefore normally
 performed at the boundary where a protocol or service needs one uniform I/O
 type, rather than while constructing the filter stack.
 
-[`Base`]: https://docs.rs/ntex/latest/ntex/io/struct.Base.html
-[`Io::boxed`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.boxed
-[`Io::filter`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.filter
-[`Io::seal`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.seal
-[`IoBoxed`]: https://docs.rs/ntex/latest/ntex/io/struct.IoBoxed.html
-[`Layer`]: https://docs.rs/ntex/latest/ntex/io/struct.Layer.html
-[`Sealed`]: https://docs.rs/ntex/latest/ntex/io/struct.Sealed.html
+[`Base`]: https://docs.ntex.rs/api/ntex/io/struct.Base.html
+[`Io::boxed`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html#method.boxed
+[`Io::filter`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html#method.filter
+[`Io::seal`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html#method.seal
+[`IoBoxed`]: https://docs.ntex.rs/api/ntex/io/struct.IoBoxed.html
+[`Layer`]: https://docs.ntex.rs/api/ntex/io/struct.Layer.html
+[`Sealed`]: https://docs.ntex.rs/api/ntex/io/struct.Sealed.html
 
 ## Read/write streams
 
@@ -528,30 +528,30 @@ This separation allows codecs and application services to work with bytes
 without depending on socket readiness, while the I/O subsystem coordinates
 buffering and backpressure.
 
-[`BytePages`]: https://docs.rs/ntex/latest/ntex/util/struct.BytePages.html
-[`BytePageSize::low`]: https://docs.rs/ntex/latest/ntex/util/enum.BytePageSize.html#method.low
-[`Bytes`]: https://docs.rs/ntex/latest/ntex/util/struct.Bytes.html
-[`BytesMut`]: https://docs.rs/ntex/latest/ntex/util/struct.BytesMut.html
-[`BytesMut::reserve_more`]: https://docs.rs/ntex/latest/ntex/util/struct.BytesMut.html#method.reserve_more
-[`Io::flush`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.flush
-[`Io::read_exact`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.read_exact
-[`Io::read_more`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.read_more
-[`Io::recv`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.recv
-[`Io::send`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.send
-[`IoConfig`]: https://docs.rs/ntex/latest/ntex/io/struct.IoConfig.html
-[`IoConfig::set_read_backpressure`]: https://docs.rs/ntex/latest/ntex/io/struct.IoConfig.html#method.set_read_backpressure
-[`IoConfig::set_read_size`]: https://docs.rs/ntex/latest/ntex/io/struct.IoConfig.html#method.set_read_size
-[`HttpServiceConfig`]: https://docs.rs/ntex/latest/ntex/http/struct.HttpServiceConfig.html
-[`IoRef::decode`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.decode
-[`IoRef::encode`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.encode
-[`IoRef::encode_bytes`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.encode_bytes
-[`IoRef::encode_slice`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.encode_slice
-[`IoRef::read_dst_size`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.read_dst_size
-[`IoRef::write_ready`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.write_ready
-[`IoRef::with_read_dst`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.with_read_dst
-[`IoRef::with_read_src`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.with_read_src
-[`IoRef::with_buf`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.with_buf
-[`set_page_cache_size`]: https://docs.rs/ntex-bytes/latest/ntex_bytes/fn.set_page_cache_size.html
+[`BytePages`]: https://docs.ntex.rs/api/ntex/util/struct.BytePages.html
+[`BytePageSize::low`]: https://docs.ntex.rs/api/ntex/util/enum.BytePageSize.html#method.low
+[`Bytes`]: https://docs.ntex.rs/api/ntex/util/struct.Bytes.html
+[`BytesMut`]: https://docs.ntex.rs/api/ntex/util/struct.BytesMut.html
+[`BytesMut::reserve_more`]: https://docs.ntex.rs/api/ntex/util/struct.BytesMut.html#method.reserve_more
+[`Io::flush`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html#method.flush
+[`Io::read_exact`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html#method.read_exact
+[`Io::read_more`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html#method.read_more
+[`Io::recv`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html#method.recv
+[`Io::send`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html#method.send
+[`IoConfig`]: https://docs.ntex.rs/api/ntex/io/struct.IoConfig.html
+[`IoConfig::set_read_backpressure`]: https://docs.ntex.rs/api/ntex/io/struct.IoConfig.html#method.set_read_backpressure
+[`IoConfig::set_read_size`]: https://docs.ntex.rs/api/ntex/io/struct.IoConfig.html#method.set_read_size
+[`HttpServiceConfig`]: https://docs.ntex.rs/api/ntex/http/struct.HttpServiceConfig.html
+[`IoRef::decode`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html#method.decode
+[`IoRef::encode`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html#method.encode
+[`IoRef::encode_bytes`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html#method.encode_bytes
+[`IoRef::encode_slice`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html#method.encode_slice
+[`IoRef::read_dst_size`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html#method.read_dst_size
+[`IoRef::write_ready`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html#method.write_ready
+[`IoRef::with_read_dst`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html#method.with_read_dst
+[`IoRef::with_read_src`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html#method.with_read_src
+[`IoRef::with_buf`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html#method.with_buf
+[`set_page_cache_size`]: https://docs.ntex.rs/api/ntex_bytes/fn.set_page_cache_size.html
 
 ## Connection lifecycle and shutdown
 
@@ -625,20 +625,20 @@ can no longer be delivered because the filter stack is being dropped, ntex
 aborts the transport so the peer does not mistake a truncated stream for a
 complete one. Call `shutdown().await` when delivery and a clean close matter.
 
-[`FilterLayer::shutdown`]: https://docs.rs/ntex/latest/ntex/io/trait.FilterLayer.html#method.shutdown
-[`Io::poll_recv`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.poll_recv
-[`Io::poll_read_pause`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.poll_read_pause
-[`Io::poll_status_update`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.poll_status_update
-[`Io::shutdown`]: https://docs.rs/ntex/latest/ntex/io/struct.Io.html#method.shutdown
-[`IoRef::close`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.close
-[`IoRef::is_active`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.is_active
-[`IoRef::is_closed`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.is_closed
-[`IoRef::on_disconnect`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.on_disconnect
-[`IoRef::terminate`]: https://docs.rs/ntex/latest/ntex/io/struct.IoRef.html#method.terminate
-[`IoStatusUpdate`]: https://docs.rs/ntex/latest/ntex/io/enum.IoStatusUpdate.html
-[`Readiness::Close`]: https://docs.rs/ntex/latest/ntex/io/enum.Readiness.html#variant.Close
-[`RecvError`]: https://docs.rs/ntex/latest/ntex/io/enum.RecvError.html
-[`Waiter`]: https://docs.rs/ntex/latest/ntex/io/struct.Waiter.html
+[`FilterLayer::shutdown`]: https://docs.ntex.rs/api/ntex/io/trait.FilterLayer.html#method.shutdown
+[`Io::poll_recv`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html#method.poll_recv
+[`Io::poll_read_pause`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html#method.poll_read_pause
+[`Io::poll_status_update`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html#method.poll_status_update
+[`Io::shutdown`]: https://docs.ntex.rs/api/ntex/io/struct.Io.html#method.shutdown
+[`IoRef::close`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html#method.close
+[`IoRef::is_active`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html#method.is_active
+[`IoRef::is_closed`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html#method.is_closed
+[`IoRef::on_disconnect`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html#method.on_disconnect
+[`IoRef::terminate`]: https://docs.ntex.rs/api/ntex/io/struct.IoRef.html#method.terminate
+[`IoStatusUpdate`]: https://docs.ntex.rs/api/ntex/io/enum.IoStatusUpdate.html
+[`Readiness::Close`]: https://docs.ntex.rs/api/ntex/io/enum.Readiness.html#variant.Close
+[`RecvError`]: https://docs.ntex.rs/api/ntex/io/enum.RecvError.html
+[`Waiter`]: https://docs.ntex.rs/api/ntex/io/struct.Waiter.html
 
 ## Testing
 
@@ -677,4 +677,4 @@ Tests can also force pending reads, inject read or write errors, close either
 side, constrain write capacity to exercise backpressure, and attach a
 `PeerAddr` value for transport-query tests.
 
-[`IoTest`]: https://docs.rs/ntex/latest/ntex/io/testing/struct.IoTest.html
+[`IoTest`]: https://docs.ntex.rs/api/ntex/io/testing/struct.IoTest.html

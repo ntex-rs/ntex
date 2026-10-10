@@ -149,7 +149,7 @@ general pattern.
 In practice, this machinery is already available in the
 [ntex-service](https://github.com/ntex-rs/ntex/tree/main/ntex-service) crate.
 Its
-[`ServiceChain`](https://docs.rs/ntex-service/latest/ntex_service/dev/struct.ServiceChain.html)
+[`ServiceChain`](https://docs.ntex.rs/api/ntex_service/dev/struct.ServiceChain.html)
 type provides a fluent, strongly typed API for composing services:
 
 ```rust
@@ -322,12 +322,12 @@ instances.
 
 A useful mental model is:
 
-- [`Service`](https://docs.rs/ntex-service/latest/ntex_service/trait.Service.html)
+- [`Service`](https://docs.ntex.rs/api/ntex_service/trait.Service.html)
   defines what happens at each step.
 - `ServiceChain` describes how the steps are connected.
-- [`Pipeline`](https://docs.rs/ntex-service/latest/ntex_service/struct.Pipeline.html)
+- [`Pipeline`](https://docs.ntex.rs/api/ntex_service/pipeline/struct.Pipeline.html)
   owns the runnable graph and coordinates shared readiness.
-- [`Ctx`](https://docs.rs/ntex-service/latest/ntex_service/struct.Ctx.html)
+- [`Ctx`](https://docs.ntex.rs/api/ntex_service/struct.Ctx.html)
   controls how execution moves safely between services.
 
 ## The Complete `Service` Trait
