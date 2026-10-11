@@ -5,6 +5,9 @@
 * polling, tokio: keep writing within one write cycle until the socket stops
   accepting data or 256 KB is written, instead of a single 64 KB `writev`
 
+* polling: keep reading while reads fill the read buffer, up to 256 KB or
+  read backpressure, instead of waiting for the next poll cycle
+
 ## [4.4.0] - 2026-10-08
 
 * polling: drain deferred socket cleanup before waiting, even when no new
