@@ -234,6 +234,53 @@ impl BytePages {
         }
     }
 
+    /// Returns an iterator over the buffered data, one slice per page.
+    ///
+    /// The current writable page is yielded last, if it holds data. The
+    /// pages are stored on the heap, so their data stays at the same address
+    /// when `self` is moved, until `self` is modified or dropped.
+    pub fn iter(&self) -> impl Iterator<Item = &[u8]> {
+        self.pages().iter().map(BytePage::as_ref).chain(
+            self.current
+                .as_ref()
+                .map(StorageVec::as_ref)
+                .filter(|s| !s.is_empty()),
+        )
+    }
+
+    /// Advance the internal cursor.
+    ///
+    /// Afterwards `self` contains elements `[cnt, len)`. Fully consumed pages
+    /// are dropped, the current writable page keeps its spare capacity.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `cnt > len`.
+    pub fn advance_to(&mut self, mut cnt: usize) {
+        assert!(
+            cnt <= self.len(),
+            "cannot advance past the end of the buffer, cnt:{cnt} len:{}",
+            self.len()
+        );
+
+        while cnt > 0
+            && let Some(mut page) = self.pop_front()
+        {
+            if cnt < page.len() {
+                page.advance_to(cnt);
+                self.push_front(page);
+                return;
+            }
+            cnt -= page.len();
+        }
+        if cnt > 0
+            && let Some(st) = self.current.as_mut()
+        {
+            // SAFETY: `cnt <= st.len()`, checked by the assert above
+            unsafe { st.set_start(cnt) };
+        }
+    }
+
     #[inline]
     /// Appends all buffered data to another [`BytePages`] value, `self` is
     /// left unchanged.
@@ -255,14 +302,40 @@ impl BytePages {
         }
     }
 
-    #[inline]
     /// Moves all buffered data to the back of another [`BytePages`] value,
     /// leaving `self` empty.
     ///
-    /// Pages are moved according to the rules of [`append`](Self::append).
+    /// Pages are moved as is, without copying or merging. The filled part of
+    /// the current page of `pages` is split off in front of the moved data,
+    /// its spare capacity stays available for later writes. The current page
+    /// of `self` is moved as a regular page.
     pub fn move_to(&mut self, pages: &mut BytePages) {
-        while let Some(page) = self.take() {
-            pages.append(page);
+        if self.is_empty() {
+            return;
+        }
+
+        if let Some(st) = pages.current.as_mut()
+            && st.len() != 0
+        {
+            let head = st.split_to(st.len());
+            pages.push_back(<BytePage as From<Bytes>>::from(Bytes { storage: head }));
+        }
+
+        let src = self.st.as_mut().unwrap();
+        let dst = pages.st.as_mut().unwrap();
+        if dst.pages.is_empty() {
+            mem::swap(&mut src.pages, &mut dst.pages);
+            dst.len = mem::take(&mut src.len);
+        } else {
+            while let Some(page) = self.pop_front() {
+                pages.push_back(page);
+            }
+        }
+
+        if self.current_len() != 0
+            && let Some(st) = self.current.take()
+        {
+            pages.push_back(BytePage::from(st));
         }
     }
 
@@ -1646,5 +1719,144 @@ mod tests {
         assert_eq!(pages.num_pages(), 3);
         assert_eq!(pages.len(), cap + 65);
         assert_eq!(shared, &[b'y'; 64][..]);
+    }
+
+    // inline page, shared page, then the current page
+    fn mixed_pages() -> BytePages {
+        let mut pages = BytePages::new(BytePageSize::Size4);
+        pages.extend_from_slice(b"current");
+        pages.prepend(Bytes::copy_from_slice(&[b'b'; 64]));
+        pages.prepend(Bytes::copy_from_slice(b"ab"));
+        assert!(pages.pages()[0].is_inline());
+        pages
+    }
+
+    #[test]
+    fn iter_pages() {
+        let pages = BytePages::default();
+        assert_eq!(pages.iter().count(), 0);
+
+        let pages = mixed_pages();
+        let chunks: Vec<&[u8]> = pages.iter().collect();
+        assert_eq!(chunks, [&b"ab"[..], &[b'b'; 64][..], &b"current"[..]]);
+        assert_eq!(chunks.len(), pages.num_pages());
+
+        // data, including inline pages, does not move with `self`
+        let ptrs: Vec<*const u8> = pages.iter().map(<[u8]>::as_ptr).collect();
+        let moved = Box::new(pages);
+        let moved_ptrs: Vec<*const u8> = moved.iter().map(<[u8]>::as_ptr).collect();
+        assert_eq!(ptrs, moved_ptrs);
+
+        // an empty current page is skipped
+        let mut pages = BytePages::new(BytePageSize::Size4);
+        pages.extend_from_slice(b"data");
+        pages.prepend(Bytes::copy_from_slice(b"ab"));
+        pages.advance_to(6);
+        assert_eq!(pages.iter().count(), 0);
+        assert_eq!(pages.num_pages(), 0);
+    }
+
+    #[test]
+    fn advance_to_pages() {
+        let mut pages = mixed_pages();
+        let len = pages.len();
+        pages.advance_to(0);
+        assert_eq!(pages.len(), len);
+
+        // whole page
+        pages.advance_to(2);
+        assert_eq!(pages.len(), len - 2);
+        assert_eq!(pages.num_pages(), 2);
+        assert_eq!(pages.iter().next().unwrap(), &[b'b'; 64][..]);
+
+        // part of a page
+        pages.advance_to(60);
+        assert_eq!(pages.len(), 11);
+        assert_eq!(pages.num_pages(), 2);
+        let chunks: Vec<&[u8]> = pages.iter().collect();
+        assert_eq!(chunks, [&b"bbbb"[..], &b"current"[..]]);
+
+        // rest of the page and part of the current page
+        pages.advance_to(6);
+        assert_eq!(pages.len(), 5);
+        assert_eq!(pages.num_pages(), 1);
+        assert_eq!(pages.iter().next().unwrap(), b"rrent");
+
+        // the current page keeps its spare capacity
+        let ptr = pages.iter().next().unwrap().as_ptr();
+        pages.advance_to(5);
+        assert!(pages.is_empty());
+        assert_eq!(pages.num_pages(), 0);
+        pages.extend_from_slice(b"next");
+        assert_eq!(pages.num_pages(), 1);
+        assert_eq!(pages.iter().next().unwrap().as_ptr(), ptr.wrapping_add(5));
+        assert_eq!(pages.freeze(), "next");
+    }
+
+    #[test]
+    fn move_to_keeps_pages() {
+        // into empty pages, the page list is swapped
+        let mut src = mixed_pages();
+        let ptrs: Vec<*const u8> = src
+            .iter()
+            .filter(|s| s.len() > 2)
+            .map(<[u8]>::as_ptr)
+            .collect();
+        let mut dst = BytePages::new(BytePageSize::Size16);
+        src.move_to(&mut dst);
+        assert!(src.is_empty());
+        assert_eq!(src.num_pages(), 0);
+        assert_eq!(dst.page_size(), BytePageSize::Size16);
+        assert_eq!(dst.num_pages(), 3);
+        assert_eq!(dst.len(), 73);
+        let moved: Vec<*const u8> = dst
+            .iter()
+            .filter(|s| s.len() > 2)
+            .map(<[u8]>::as_ptr)
+            .collect();
+        assert_eq!(ptrs, moved);
+
+        // small pages are not merged, the filled part of the current page
+        // of `dst` goes first and its spare capacity is kept
+        let mut dst = BytePages::new(BytePageSize::Size4);
+        dst.extend_from_slice(b"first");
+        dst.prepend(Bytes::copy_from_slice(b"0"));
+        let mut src = mixed_pages();
+        src.move_to(&mut dst);
+        let chunks: Vec<&[u8]> = dst.iter().collect();
+        assert_eq!(
+            chunks,
+            [
+                &b"0"[..],
+                &b"first"[..],
+                &b"ab"[..],
+                &[b'b'; 64][..],
+                &b"current"[..]
+            ]
+        );
+        assert_eq!(dst.len(), 79);
+        dst.extend_from_slice(b"last");
+        assert_eq!(dst.num_pages(), 6);
+
+        // empty source
+        let mut src = BytePages::default();
+        src.move_to(&mut dst);
+        assert_eq!(dst.num_pages(), 6);
+    }
+
+    #[test]
+    fn advance_to_vec_page() {
+        let mut pages = BytePages::default();
+        pages.prepend(b"hello world".to_vec());
+        pages.advance_to(6);
+        assert_eq!(pages.len(), 5);
+        assert_eq!(pages.freeze(), "world");
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot advance past the end of the buffer")]
+    fn advance_to_past_end() {
+        let mut pages = mixed_pages();
+        pages.advance_to(pages.len() + 1);
     }
 }

@@ -1,5 +1,11 @@
 # Changes
 
+## [1.12.0] (2026-10-11)
+
+* Add `BytePages::iter()` and `BytePages::advance_to()`
+
+* `BytePages::move_to()` moves pages as is, small pages are no longer merged into the current page
+
 ## [1.11.0] (2026-10-06)
 
 * Add `BytePageSize::Size128` and `BytePageSize::Size256` page sizes, `BytePageSize` is
