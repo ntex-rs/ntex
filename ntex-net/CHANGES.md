@@ -47,6 +47,9 @@
   only a close that waits for an application-set linger timeout is moved
   there
 
+* iocp: check that the socket provider returns IFS handles once per address
+  family instead of for every accepted or connected stream
+
 ## [4.4.0] - 2026-10-08
 
 * polling: drain deferred socket cleanup before waiting, even when no new
