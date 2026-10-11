@@ -268,6 +268,29 @@ impl Reactor {
     }
 }
 
+#[cfg(test)]
+impl Reactor {
+    /// Handles the queued completions, waiting up to `timeout` milliseconds.
+    pub(crate) fn dispatch(&self, timeout: u32) {
+        let mut events = [OVERLAPPED_ENTRY::default(); 64];
+        let mut count = 0;
+        let result = syscall!(
+            BOOL,
+            GetQueuedCompletionStatusEx(
+                self.reactor.port.as_raw_handle().cast(),
+                events.as_mut_ptr().cast(),
+                64,
+                &raw mut count,
+                timeout,
+                0
+            )
+        );
+        if result.is_ok() {
+            self.poll_completions(&events[..count as usize]);
+        }
+    }
+}
+
 #[derive(Debug)]
 struct ReactorInner {
     port: OwnedHandle,

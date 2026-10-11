@@ -11,7 +11,7 @@ use windows_sys::Win32::{
     System::IO::CancelIoEx,
 };
 
-use ntex_bytes::{BufMut, BytePage};
+use ntex_bytes::{BufMut, BytePages};
 use ntex_io::{IoContext, IoTaskStatus};
 use ntex_rt::syscall;
 
@@ -34,6 +34,8 @@ unsafe impl OverlappedOp for WriteOperation {
 pub(crate) const RD_OP: u32 = 1;
 pub(crate) const WR_OP: u32 = 2;
 const MAX_WRITE_BUFS: usize = 32;
+/// Bytes sent at once, the kernel locks the pages of a send in memory.
+const MAX_WRITE_SIZE: usize = 256 * 1024;
 
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug)]
@@ -292,8 +294,10 @@ pub(crate) struct WriteOperation {
     io: RawSocket,
     ctx: IoContext,
     flags: Flags,
-    pages: [Option<BytePage>; MAX_WRITE_BUFS],
-    pages_num: u8,
+    /// Output taken from the write buffer and not sent yet. The kernel reads
+    /// from these pages while a send is in flight, so they are not modified
+    /// until it completes.
+    pages: BytePages,
 }
 
 impl WriteOperation {
@@ -304,15 +308,28 @@ impl WriteOperation {
             io,
             ctx,
             flags: Flags::empty(),
-            pages: [const { None }; MAX_WRITE_BUFS],
-            pages_num: 0,
+            pages: BytePages::default(),
         }
     }
 
     #[cfg(test)]
     pub(crate) fn fake_pending(&mut self) {
-        self.pages_num = 0;
         self.flags.insert(Flags::WAITING);
+    }
+
+    /// Marks a send of `pages` as in flight, without sending it.
+    #[cfg(test)]
+    pub(crate) fn fake_pending_with(&mut self, pages: &[&'static [u8]]) {
+        for page in pages.iter().rev() {
+            self.pages.prepend(ntex_bytes::Bytes::from_static(page));
+        }
+        self.flags.insert(Flags::WAITING);
+    }
+
+    /// Number of bytes taken from the write buffer and not sent yet.
+    #[cfg(test)]
+    pub(crate) fn unsent(&self) -> usize {
+        self.pages.len()
     }
 
     /// Whether the send was cancelled for a close.
@@ -356,101 +373,42 @@ impl WriteOperation {
             if self.flags.contains(Flags::WAITING) {
                 return;
             }
-            let st = self.ctx.with_write_dst(|wrt| {
+            let Self {
+                overlapped,
+                io,
+                ctx,
+                flags,
+                pages,
+                ..
+            } = self;
+            let st = ctx.with_write_dst(|wrt| {
                 #[cfg(feature = "trace")]
-                log::trace!("{}: Wrt({}) size:{:?}", self.ctx.tag(), self.io, wrt.len());
+                log::trace!(
+                    "{}: Wrt({io}) size:{:?} unsent:{:?}",
+                    ctx.tag(),
+                    wrt.len(),
+                    pages.len()
+                );
 
-                let mut lpbufs = [mem::MaybeUninit::<WSABUF>::uninit(); MAX_WRITE_BUFS];
-                let mut num = 0;
-                while let Some(page) = wrt.take() {
-                    self.pages[num] = Some(page);
-                    let p = self.pages[num].as_ref().unwrap();
-
-                    // SAFETY: Page is stored in `pages` for lifetime of `bufs`
-                    lpbufs[num].write(WSABUF {
-                        len: p.len() as u32,
-                        buf: unsafe { p.as_ptr().cast_mut() },
-                    });
-
-                    num += 1;
-                    if num == MAX_WRITE_BUFS {
-                        break;
-                    }
-                }
-
-                if num > 0 {
-                    let mut sent = 0;
-                    let result = unsafe {
-                        WSASend(
-                            self.io as _,
-                            ptr::from_ref(&lpbufs[0]).cast(),
-                            num as u32,
-                            &raw mut sent,
-                            0,
-                            self.overlapped.as_overlapped(),
-                            None,
-                        )
-                    };
-
-                    match winsock_result(result) {
-                        Poll::Ready(Ok(())) => {
-                            let written = sent as usize;
-                            let mut sent = written;
-                            // remove written bytes
-                            for page in &mut self.pages[..num] {
-                                if let Some(p) = page {
-                                    let len = cmp::min(p.len(), sent);
-                                    p.advance_to(len);
-                                    if p.is_empty() {
-                                        page.take();
-                                    }
-                                    sent -= len;
-                                    if sent != 0 {
-                                        continue;
-                                    }
-                                }
-                                break;
-                            }
-                            // return unwritten data back to buffer
-                            for p in self.pages[..num].iter_mut().rev() {
-                                if let Some(page) = p.take() {
-                                    wrt.prepend(page);
-                                } else {
-                                    break;
-                                }
-                            }
-                            if written == 0 {
-                                Err(io::Error::new(
-                                    io::ErrorKind::WriteZero,
-                                    "failed to write frame to transport",
-                                ))
-                            } else {
-                                Ok(written)
-                            }
-                        }
-                        Poll::Ready(Err(err)) => {
-                            // return unwritten data back to buffer
-                            for p in self.pages[..num].iter_mut().rev() {
-                                if let Some(page) = p.take() {
-                                    wrt.prepend(page);
-                                }
-                            }
-                            Err(err)
-                        }
-                        Poll::Pending => {
-                            self.pages_num = num as u8;
-                            self.flags.insert(Flags::WAITING);
-                            Ok(0)
-                        }
-                    }
-                } else {
-                    Ok(0)
-                }
+                // newer output is sent after the unsent pages
+                wrt.move_to(pages);
+                send(*io, overlapped, flags, pages)
             });
 
-            if self.ctx.update_write_status(st) != IoTaskStatus::Io {
+            let status = self.ctx.update_write_status(st);
+            if !self.resume(status) {
                 break;
             }
+        }
+    }
+
+    /// Whether to send again. Unsent pages are sent even if the write buffer
+    /// is empty, since they were already taken from it.
+    fn resume(&self, status: IoTaskStatus) -> bool {
+        match status {
+            IoTaskStatus::Io => true,
+            IoTaskStatus::Pause => !self.pages.is_empty(),
+            IoTaskStatus::Stop => false,
         }
     }
 
@@ -461,54 +419,90 @@ impl WriteOperation {
         #[cfg(feature = "trace")]
         log::trace!("{}: WrtDone({}) {res:?}", wr.ctx.tag(), wr.io);
 
-        let num = wr.pages_num as usize;
         wr.flags.remove(Flags::WAITING);
+        if wr.flags.contains(Flags::CLOSING) {
+            wr.pages.clear();
+            return Some(wr.id);
+        }
 
-        let st = match res {
-            Ok(0) => Err(io::Error::new(
+        let st = sent(&mut wr.pages, res);
+        let status = wr.ctx.update_write_status(st);
+        if wr.resume(status) {
+            wr.write();
+        }
+        None
+    }
+}
+
+/// Sends up to `MAX_WRITE_BUFS` pages and `MAX_WRITE_SIZE` bytes.
+fn send(
+    io: RawSocket,
+    overlapped: &mut Overlapped,
+    flags: &mut Flags,
+    pages: &mut BytePages,
+) -> io::Result<usize> {
+    let mut bufs = [mem::MaybeUninit::<WSABUF>::uninit(); MAX_WRITE_BUFS];
+    let mut num = 0;
+    let mut size = 0;
+    for chunk in pages.iter() {
+        let len = cmp::min(chunk.len(), MAX_WRITE_SIZE - size);
+        bufs[num].write(WSABUF {
+            len: len as u32,
+            buf: chunk.as_ptr().cast_mut(),
+        });
+        num += 1;
+        size += len;
+        if num == MAX_WRITE_BUFS || size == MAX_WRITE_SIZE {
+            break;
+        }
+    }
+    if num == 0 {
+        return Ok(0);
+    }
+
+    let mut written = 0;
+    // SAFETY: page data is stored on the heap, and the pages are not
+    // modified until the send completes. WSASend copies the descriptors.
+    let result = unsafe {
+        WSASend(
+            io as _,
+            bufs.as_ptr().cast(),
+            num as u32,
+            &raw mut written,
+            0,
+            overlapped.as_overlapped(),
+            None,
+        )
+    };
+
+    match winsock_result(result) {
+        Poll::Ready(Ok(())) => sent(pages, Ok(written as usize)),
+        Poll::Ready(Err(err)) => sent(pages, Err(err)),
+        Poll::Pending => {
+            flags.insert(Flags::WAITING);
+            Ok(0)
+        }
+    }
+}
+
+/// Removes sent bytes from the unsent pages. After an error nothing is
+/// sent anymore, so the pages are dropped.
+fn sent(pages: &mut BytePages, res: io::Result<usize>) -> io::Result<usize> {
+    match res {
+        Ok(0) => {
+            pages.clear();
+            Err(io::Error::new(
                 io::ErrorKind::WriteZero,
                 "failed to write frame to transport",
-            )),
-            Ok(written) => {
-                // remove written bytes
-                let mut sent = written;
-                for page in &mut wr.pages[..num] {
-                    if let Some(p) = page {
-                        let len = cmp::min(p.len(), sent);
-                        p.advance_to(len);
-                        if p.is_empty() {
-                            page.take();
-                        }
-                        sent -= len;
-                        if sent != 0 {
-                            continue;
-                        }
-                    }
-                    break;
-                }
-                Ok(written)
-            }
-            Err(err) => Err(err),
-        };
-
-        // return unwritten data back to buffer
-        wr.ctx.with_write_dst(|wrt| {
-            for p in wr.pages[..num].iter_mut().rev() {
-                if let Some(page) = p.take() {
-                    wrt.prepend(page);
-                } else {
-                    break;
-                }
-            }
-        });
-
-        if wr.flags.contains(Flags::CLOSING) {
-            Some(wr.id)
-        } else {
-            if wr.ctx.update_write_status(st) == IoTaskStatus::Io {
-                wr.write();
-            }
-            None
+            ))
+        }
+        Ok(written) => {
+            pages.advance_to(cmp::min(written, pages.len()));
+            Ok(written)
+        }
+        Err(err) => {
+            pages.clear();
+            Err(err)
         }
     }
 }

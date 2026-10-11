@@ -1,12 +1,23 @@
 # Changes
 
-## [4.5.0] - 2026-10-11
+## [4.5.0] - 2026-10-12
 
 * polling, tokio: keep writing within one write cycle until the socket stops
   accepting data or 256 KB is written, instead of a single 64 KB `writev`
 
 * polling: keep reading while reads fill the read buffer, up to 256 KB or
   read backpressure, instead of waiting for the next poll cycle
+
+* polling: connection teardown does not reset poll interest before detaching the socket,
+  saves an `epoll_ctl` per connection
+
+* polling: new connections are registered with read interest armed, saves an `epoll_ctl`
+  and a speculative read per connection
+
+* polling, tokio: write directly from the write buffer pages instead of
+  taking them out and returning the unwritten ones
+
+* polling, tokio: raise `writev` limits to 32 buffers and 256 KB
 
 * io-uring: register the ring fd to skip the fd lookup on every `io_uring_enter`
 
@@ -21,16 +32,13 @@
 
 * io-uring: `ReactorApi::submit()` takes a closure that initializes the submission entry
   in place, `submit_inline()` is removed. Requires ntex-io-uring 1.0
->>>>>>> 3351210da (Improve io-uring integration)
-
-* polling: connection teardown does not reset poll interest before detaching the socket,
-  saves an `epoll_ctl` per connection
 
 * iocp: pausing reads leaves the zero-byte recv in flight instead of cancelling it, saves a
   `CancelIoEx` and a completion per pause
 
-* polling: new connections are registered with read interest armed, saves an `epoll_ctl`
-  and a speculative read per connection
+* iocp: keep unsent output in a `BytePages` instead of a fixed array of 32
+  pages, send up to 256 KB at once, and send the rest of a partial send
+  before newer output
 
 ## [4.4.0] - 2026-10-08
 
