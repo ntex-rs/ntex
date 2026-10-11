@@ -1098,8 +1098,6 @@ mod tests {
                 ),
             );
             let sent = fill(&mut fixture);
-            fixture.arm_read();
-
             fixture.fire(Event::readable(0));
 
             let read = received(&fixture);
@@ -1129,8 +1127,6 @@ mod tests {
                 ),
             );
             fill(&mut fixture);
-            fixture.arm_read();
-
             fixture.fire(Event::readable(0));
 
             let read = received(&fixture);

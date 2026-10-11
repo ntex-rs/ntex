@@ -43,6 +43,9 @@ bitflags::bitflags! {
         /// The socket could not be switched to non-blocking mode, so it is
         /// only read once the kernel reported it readable.
         const BLOCKING    = 0b0000_0100;
+        /// Reading is paused, a recv that completes meanwhile is not followed
+        /// by a read.
+        const PAUSED      = 0b0000_1000;
     }
 }
 
@@ -109,11 +112,30 @@ impl ReadOperation {
         self.flags.contains(Flags::WAITING)
     }
 
-    pub(crate) fn pause(&mut self, closing: bool) -> bool {
+    /// Pauses reading until the next `read()`.
+    ///
+    /// A recv in flight is left running: it is zero-byte, so it holds no
+    /// buffer, and cancelling it would cost a syscall and a completion on every
+    /// pause. If it completes during the pause, the input stays in the socket
+    /// until reading resumes.
+    pub(crate) fn pause(&mut self) {
+        #[cfg(feature = "trace")]
+        log::trace!(
+            "{}: RcvPause({}) flags:{:?}",
+            self.ctx.tag(),
+            self.io,
+            self.flags
+        );
+        self.flags.insert(Flags::PAUSED);
+    }
+
+    /// Cancels the recv in flight for a close, its completion starts the close.
+    /// Returns `true` if none is in flight.
+    pub(crate) fn cancel(&mut self) -> bool {
         if self.flags.contains(Flags::WAITING) {
             #[cfg(feature = "trace")]
             log::trace!(
-                "{}: RcvPause({}) closing:{closing} flags:{:?}",
+                "{}: RcvCancel({}) flags:{:?}",
                 self.ctx.tag(),
                 self.io,
                 self.flags
@@ -135,9 +157,7 @@ impl ReadOperation {
                     );
                 }
             }
-            if closing {
-                self.flags.insert(Flags::CLOSING);
-            }
+            self.flags.insert(Flags::CLOSING);
             false
         } else {
             true
@@ -152,6 +172,7 @@ impl ReadOperation {
     /// input that arrives while earlier input is still unconsumed is appended
     /// to it instead of going into a buffer of its own.
     pub(crate) fn read(&mut self) {
+        self.flags.remove(Flags::PAUSED);
         if self.flags.contains(Flags::WAITING) {
             return;
         }
@@ -248,15 +269,15 @@ impl ReadOperation {
             return Some(rd.id);
         }
         match res {
-            Ok(_) => rd.read(),
-            // canceled by a pause, reading resumes if the pause is already over
-            Err(err) if err.raw_os_error() == Some(ERROR_OPERATION_ABORTED as _) => {
-                if rd.ctx.with_read_buf(|_| Poll::Pending) == IoTaskStatus::Io {
+            Err(err) if err.raw_os_error() != Some(ERROR_OPERATION_ABORTED as _) => {
+                rd.ctx.with_read_buf(|_| Poll::Ready(Err(err)));
+            }
+            // input is available, or the recv was cancelled. A paused read
+            // resumes through `read()`, which then finds no recv in flight.
+            _ => {
+                if !rd.flags.contains(Flags::PAUSED) {
                     rd.read();
                 }
-            }
-            Err(err) => {
-                rd.ctx.with_read_buf(|_| Poll::Ready(Err(err)));
             }
         }
         None
