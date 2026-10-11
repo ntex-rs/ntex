@@ -98,10 +98,9 @@ async fn run(ctl: StreamCtl, context: ntex_io::IoContext) {
     .await;
 
     log::trace!("{}: Shuting down io", context.tag());
-    // Both directions can report `Close` in the same poll, which leaves the
-    // last armed interest in place. Drop it before teardown, so the reactor
-    // cannot deliver an event for a socket that is being closed.
-    ctl.interest(false, false);
+    // The last armed interest stays in place, it is not dropped separately.
+    // Teardown runs inline and dropping the control handle detaches the socket
+    // before the reactor polls again, so no event is delivered for it.
 
     let result = if terminate {
         // The connection was force-closed, so buffered output is discarded on
