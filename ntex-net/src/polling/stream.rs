@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_wrap)]
 use std::{cell::Cell, cmp, io, mem, os, os::fd::AsRawFd, rc::Rc, task::Poll};
 
-use ntex_bytes::{BufMut, BytePage};
+use ntex_bytes::{BufMut, BytePage, BytePages};
 use ntex_io::{IoContext, IoTaskStatus};
 use ntex_rt::{Arbiter, syscall};
 use slab::Slab;
@@ -12,6 +12,8 @@ use crate::helpers::Queue;
 
 const MAX_WRITE_SIZE: usize = 64 * 1024;
 const MAX_WRITE_ITEMS: usize = 16;
+/// Output written per write attempt at most, see `StreamItem::write()`.
+const WRITE_BUDGET: usize = 256 * 1024;
 
 pub(super) struct StreamCtl {
     id: u32,
@@ -492,77 +494,25 @@ impl StreamItem {
         self.ctx.tag()
     }
 
+    /// Writes buffered output until the socket is full or the write budget is
+    /// spent.
+    ///
+    /// A single `writev` is limited to `MAX_WRITE_SIZE`, so writes continue
+    /// while the socket accepts everything, a large buffer does not wait for
+    /// a poll cycle per chunk. A short write means the socket is full and the
+    /// next one would only return `EAGAIN`. `WRITE_BUDGET` keeps one
+    /// connection from delaying the others.
     fn write(&mut self) -> IoTaskStatus {
+        let fd = self.fd();
+        let tag = self.ctx.tag();
         let res = self.ctx.with_write_dst(|wrt| {
-            let mut pages: [Option<BytePage>; MAX_WRITE_ITEMS] = [
-                None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-                None, None,
-            ];
-            let mut bufs: [mem::MaybeUninit<io::IoSlice<'_>>; MAX_WRITE_ITEMS] =
-                [mem::MaybeUninit::uninit(); MAX_WRITE_ITEMS];
-
-            let mut num = 0;
-            let mut size = 0;
-            while let Some(page) = wrt.take() {
-                size += page.len();
-
-                // An inline page keeps its data inside itself, so the slice
-                // must be taken from where the page stays until the write.
-                pages[num] = Some(page);
-                let page = pages[num].as_ref().unwrap();
-
-                // SAFETY: Page is stored in `pages` for lifetime of `bufs`
-                bufs[num] = mem::MaybeUninit::new(io::IoSlice::new(unsafe {
-                    mem::transmute::<&[u8], &[u8]>(page.as_ref())
-                }));
-
-                num += 1;
-                if num == MAX_WRITE_ITEMS || size >= MAX_WRITE_SIZE {
-                    break;
+            let mut total = 0;
+            loop {
+                let (written, size) = write_pages(fd, tag, wrt)?;
+                total += written;
+                if written == 0 || written < size || total >= WRITE_BUDGET {
+                    return Ok(total);
                 }
-            }
-
-            if num > 0 {
-                let fd = self.fd();
-                // An error must not return early: the pages taken above still
-                // have to go back to the write buffer.
-                let res = if num == 1 {
-                    let io = unsafe { bufs[0].assume_init_ref().as_ptr() };
-                    syscall!(break libc::write(fd, io.cast(), size))
-                } else {
-                    syscall!(break libc::writev(fd, bufs.as_ptr().cast(), num as i32))
-                };
-                #[cfg(feature = "trace")]
-                log::trace!("{}: {fd:?}-Wrt buf({num}:{size}) ({res:?})", self.ctx.tag());
-
-                // remove written bytes
-                if let Poll::Ready(Ok(mut written)) = res {
-                    for page in pages[..num].iter_mut().flatten() {
-                        let len = cmp::min(page.len(), written);
-                        page.advance_to(len);
-                        written -= len;
-                        if written == 0 {
-                            break;
-                        }
-                    }
-                }
-                // return unwritten data back to buffer
-                for p in pages[..num].iter_mut().rev() {
-                    if let Some(page) = p.take() {
-                        wrt.prepend(page);
-                    }
-                }
-
-                match res? {
-                    Poll::Ready(0) => Err(io::Error::new(
-                        io::ErrorKind::WriteZero,
-                        "failed to write frame to transport",
-                    )),
-                    Poll::Ready(n) => Ok(n),
-                    Poll::Pending => Ok(0),
-                }
-            } else {
-                Ok(0)
             }
         });
         self.ctx.update_write_status(res)
@@ -589,6 +539,83 @@ impl StreamItem {
             }
             result
         })
+    }
+}
+
+/// Writes up to `MAX_WRITE_ITEMS` pages or `MAX_WRITE_SIZE` bytes of `wrt`.
+///
+/// Returns the written bytes and the size of the attempted write, both are
+/// zero if `wrt` is empty. A write that would block writes zero bytes.
+#[cfg_attr(not(feature = "trace"), allow(unused_variables))]
+fn write_pages(fd: os::fd::RawFd, tag: &str, wrt: &mut BytePages) -> io::Result<(usize, usize)> {
+    let mut pages: [Option<BytePage>; MAX_WRITE_ITEMS] = [
+        None, None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+        None,
+    ];
+    let mut bufs: [mem::MaybeUninit<io::IoSlice<'_>>; MAX_WRITE_ITEMS] =
+        [mem::MaybeUninit::uninit(); MAX_WRITE_ITEMS];
+
+    let mut num = 0;
+    let mut size = 0;
+    while let Some(page) = wrt.take() {
+        size += page.len();
+
+        // An inline page keeps its data inside itself, so the slice
+        // must be taken from where the page stays until the write.
+        pages[num] = Some(page);
+        let page = pages[num].as_ref().unwrap();
+
+        // SAFETY: Page is stored in `pages` for lifetime of `bufs`
+        bufs[num] = mem::MaybeUninit::new(io::IoSlice::new(unsafe {
+            mem::transmute::<&[u8], &[u8]>(page.as_ref())
+        }));
+
+        num += 1;
+        if num == MAX_WRITE_ITEMS || size >= MAX_WRITE_SIZE {
+            break;
+        }
+    }
+
+    if num == 0 {
+        return Ok((0, 0));
+    }
+
+    // An error must not return early: the pages taken above still
+    // have to go back to the write buffer.
+    let res = if num == 1 {
+        let io = unsafe { bufs[0].assume_init_ref().as_ptr() };
+        syscall!(break libc::write(fd, io.cast(), size))
+    } else {
+        syscall!(break libc::writev(fd, bufs.as_ptr().cast(), num as i32))
+    };
+    #[cfg(feature = "trace")]
+    log::trace!("{tag}: {fd:?}-Wrt buf({num}:{size}) ({res:?})");
+
+    // remove written bytes
+    if let Poll::Ready(Ok(mut written)) = res {
+        for page in pages[..num].iter_mut().flatten() {
+            let len = cmp::min(page.len(), written);
+            page.advance_to(len);
+            written -= len;
+            if written == 0 {
+                break;
+            }
+        }
+    }
+    // return unwritten data back to buffer
+    for p in pages[..num].iter_mut().rev() {
+        if let Some(page) = p.take() {
+            wrt.prepend(page);
+        }
+    }
+
+    match res? {
+        Poll::Ready(0) => Err(io::Error::new(
+            io::ErrorKind::WriteZero,
+            "failed to write frame to transport",
+        )),
+        Poll::Ready(n) => Ok((n, size)),
+        Poll::Pending => Ok((0, size)),
     }
 }
 
@@ -993,9 +1020,9 @@ mod tests {
     mod write {
         use super::*;
 
-        /// More than one `MAX_WRITE_SIZE` chunk, so output is guaranteed to be
+        /// More than any socket buffer holds, so output is guaranteed to be
         /// left over whatever the socket accepts.
-        const LARGE: usize = MAX_WRITE_SIZE * 2;
+        const LARGE: usize = 8 * 1024 * 1024;
 
         /// Output left over after a direct write must arm write interest here.
         /// Leaving it to the write task costs an extra write syscall, and
@@ -1041,6 +1068,40 @@ mod tests {
             fixture.teardown();
 
             assert!(armed, "write interest was lost on a repeat write");
+        }
+
+        /// A write continues past one `MAX_WRITE_SIZE` chunk while the socket
+        /// accepts everything, but stops at `WRITE_BUDGET`.
+        #[ntex::test]
+        async fn write_continues_until_budget() {
+            let fixture = Fixture::new();
+            let size = 2 * WRITE_BUDGET;
+            fixture.ops.0.with(|streams| {
+                streams[fixture.id].io.set_send_buffer_size(size).unwrap();
+            });
+            socket2::SockRef::from(&fixture.peer)
+                .set_recv_buffer_size(size)
+                .unwrap();
+            // Small slices keep pages small, so a single `writev` is capped
+            let chunk = [b'x'; 1024];
+            for _ in 0..LARGE / chunk.len() {
+                fixture.io.encode_slice(&chunk).unwrap();
+            }
+
+            fixture.ops.0.write_stream(fixture.id as u32);
+
+            let written = LARGE - fixture.io.with_write_dst(|b| b.len());
+            fixture.teardown();
+
+            assert!(
+                written > 2 * MAX_WRITE_SIZE,
+                "stopped after one chunk: {written}"
+            );
+            // The last `writev` may start just below the budget
+            assert!(
+                written < WRITE_BUDGET + 2 * MAX_WRITE_SIZE,
+                "budget exceeded: {written}"
+            );
         }
 
         /// A failed write must hand the pages it took back to the write

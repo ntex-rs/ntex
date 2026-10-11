@@ -1,7 +1,7 @@
 use std::task::{Context, Poll, ready};
 use std::{any, cmp, future::poll_fn, io, mem, pin::Pin, ptr, rc::Rc};
 
-use ntex_bytes::{BufMut, BytePage};
+use ntex_bytes::{BufMut, BytePage, BytePages};
 use ntex_io::{Filter, Handle, Io, IoBoxed, IoContext, IoStream, IoTaskStatus, Readiness, types};
 use tok_io::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tok_io::net::TcpStream;
@@ -244,87 +244,28 @@ where
 const MAX_WRITE_SIZE: usize = 64 * 1024;
 const MAX_WRITE_ITEMS: usize = 16;
 
+/// Output written per write attempt at most, see [`write`].
+const WRITE_BUDGET: usize = 256 * 1024;
+
+/// Writes buffered output until the socket is full or the write budget is
+/// spent.
+///
+/// A single write is limited to `MAX_WRITE_SIZE`, so writes continue while
+/// the socket accepts everything, a large buffer does not wait for a task
+/// wakeup per chunk. A short write means the socket is full. `WRITE_BUDGET`
+/// keeps one connection from delaying the others.
 fn write<T>(io: &T, ctx: &IoContext, direct: bool) -> WrtStatus
 where
     T: Stream,
 {
     let result = ctx.with_write_dst(|dst| {
-        let mut pages: [Option<BytePage>; MAX_WRITE_ITEMS] = [
-            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-            None, None,
-        ];
-        let mut bufs: [mem::MaybeUninit<io::IoSlice<'_>>; MAX_WRITE_ITEMS] =
-            [mem::MaybeUninit::uninit(); MAX_WRITE_ITEMS];
-
-        let mut num = 0;
-        let mut size = 0;
-
-        #[cfg(feature = "trace")]
-        log::trace!("{}: Try write buf({})", ctx.tag(), dst.len());
-
-        while let Some(page) = dst.take() {
-            size += page.len();
-
-            // The slice is taken from the stored page, an inline page keeps
-            // its data in the `BytePage` itself and moving it moves the data.
-            // SAFETY: Page is stored in `pages` for lifetime of `bufs` and is
-            // not moved until `bufs` is dropped
-            let page = pages[num].insert(page);
-            bufs[num] = mem::MaybeUninit::new(io::IoSlice::new(unsafe {
-                mem::transmute::<&[u8], &[u8]>(page.as_ref())
-            }));
-
-            num += 1;
-            if num == MAX_WRITE_ITEMS || size >= MAX_WRITE_SIZE {
-                break;
+        let mut total = 0;
+        loop {
+            let (written, size) = write_pages(io, ctx, dst, direct)?;
+            total += written;
+            if written == 0 || written < size || total >= WRITE_BUDGET {
+                return Ok(total);
             }
-        }
-
-        if num > 0 {
-            // SAFETY: initialize in previous block
-            let bufs = unsafe { &*(&raw const bufs[..num] as *const [std::io::IoSlice<'_>]) };
-
-            // An error must not return early: the pages taken above still
-            // have to go back to the write buffer.
-            let result = write_io(ctx, io, bufs);
-
-            // remove written bytes
-            if let Poll::Ready(Ok(mut written)) = result {
-                for page in pages[..num].iter_mut().flatten() {
-                    let len = cmp::min(page.len(), written);
-                    page.advance_to(len);
-                    written -= len;
-                    if written == 0 {
-                        break;
-                    }
-                }
-            }
-            // return unwritten data back to the buffer
-            for p in pages[..num].iter_mut().rev() {
-                if let Some(page) = p.take() {
-                    dst.prepend(page);
-                }
-            }
-
-            #[cfg(feature = "trace")]
-            log::trace!(
-                "{}: Io write (direct:{direct}) result:{result:?} buf:{} flags:{:?}",
-                ctx.tag(),
-                dst.len(),
-                ctx.flags()
-            );
-
-            match result? {
-                Poll::Ready(val) => {
-                    if val == 0 {
-                        ctx.stop(None);
-                    }
-                    Ok(val)
-                }
-                Poll::Pending => Ok(0),
-            }
-        } else {
-            Ok(0)
         }
     });
 
@@ -342,6 +283,99 @@ where
         ctx.flags()
     );
     result
+}
+
+/// Writes up to `MAX_WRITE_ITEMS` pages or `MAX_WRITE_SIZE` bytes of `dst`.
+///
+/// Returns the written bytes and the size of the attempted write, both are
+/// zero if `dst` is empty. A write that would block writes zero bytes.
+#[cfg_attr(not(feature = "trace"), allow(unused_variables))]
+fn write_pages<T>(
+    io: &T,
+    ctx: &IoContext,
+    dst: &mut BytePages,
+    direct: bool,
+) -> io::Result<(usize, usize)>
+where
+    T: Stream,
+{
+    let mut pages: [Option<BytePage>; MAX_WRITE_ITEMS] = [
+        None, None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+        None,
+    ];
+    let mut bufs: [mem::MaybeUninit<io::IoSlice<'_>>; MAX_WRITE_ITEMS] =
+        [mem::MaybeUninit::uninit(); MAX_WRITE_ITEMS];
+
+    let mut num = 0;
+    let mut size = 0;
+
+    #[cfg(feature = "trace")]
+    log::trace!("{}: Try write buf({})", ctx.tag(), dst.len());
+
+    while let Some(page) = dst.take() {
+        size += page.len();
+
+        // The slice is taken from the stored page, an inline page keeps
+        // its data in the `BytePage` itself and moving it moves the data.
+        // SAFETY: Page is stored in `pages` for lifetime of `bufs` and is
+        // not moved until `bufs` is dropped
+        let page = pages[num].insert(page);
+        bufs[num] = mem::MaybeUninit::new(io::IoSlice::new(unsafe {
+            mem::transmute::<&[u8], &[u8]>(page.as_ref())
+        }));
+
+        num += 1;
+        if num == MAX_WRITE_ITEMS || size >= MAX_WRITE_SIZE {
+            break;
+        }
+    }
+
+    if num > 0 {
+        // SAFETY: initialize in previous block
+        let bufs = unsafe { &*(&raw const bufs[..num] as *const [std::io::IoSlice<'_>]) };
+
+        // An error must not return early: the pages taken above still
+        // have to go back to the write buffer.
+        let result = write_io(ctx, io, bufs);
+
+        // remove written bytes
+        if let Poll::Ready(Ok(mut written)) = result {
+            for page in pages[..num].iter_mut().flatten() {
+                let len = cmp::min(page.len(), written);
+                page.advance_to(len);
+                written -= len;
+                if written == 0 {
+                    break;
+                }
+            }
+        }
+        // return unwritten data back to the buffer
+        for p in pages[..num].iter_mut().rev() {
+            if let Some(page) = p.take() {
+                dst.prepend(page);
+            }
+        }
+
+        #[cfg(feature = "trace")]
+        log::trace!(
+            "{}: Io write (direct:{direct}) result:{result:?} buf:{} flags:{:?}",
+            ctx.tag(),
+            dst.len(),
+            ctx.flags()
+        );
+
+        match result? {
+            Poll::Ready(val) => {
+                if val == 0 {
+                    ctx.stop(None);
+                }
+                Ok((val, size))
+            }
+            Poll::Pending => Ok((0, size)),
+        }
+    } else {
+        Ok((0, 0))
+    }
 }
 
 /// Flush write buffer to underlying I/O stream.
@@ -537,6 +571,51 @@ mod tests {
             self.0.set(Some(ctx));
             Box::new(NoHandle)
         }
+    }
+
+    /// A write continues past one `MAX_WRITE_SIZE` chunk while the socket
+    /// accepts everything, but stops at `WRITE_BUDGET`.
+    #[ntex::test]
+    async fn write_continues_until_budget() {
+        const LARGE: usize = 8 * 1024 * 1024;
+        let size = 2 * WRITE_BUDGET;
+
+        let listener = net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (peer, _) = listener.accept().unwrap();
+        socket2::SockRef::from(&stream)
+            .set_send_buffer_size(size)
+            .unwrap();
+        socket2::SockRef::from(&peer)
+            .set_recv_buffer_size(size)
+            .unwrap();
+        stream.set_nonblocking(true).unwrap();
+        let stream = tok_io::net::TcpStream::from_std(stream).unwrap();
+        // `try_write` reports `WouldBlock` until readiness has been observed.
+        stream.writable().await.unwrap();
+
+        let slot = std::rc::Rc::new(std::cell::Cell::new(None));
+        let io = Io::new(CaptureCtx(slot.clone()), SharedCfg::default());
+        let ctx = slot.take().unwrap();
+        // Small slices keep pages small, so a single `writev` is capped
+        let chunk = [b'x'; 1024];
+        for _ in 0..LARGE / chunk.len() {
+            io.encode_slice(&chunk).unwrap();
+        }
+
+        let _ = write(&stream, &ctx, true);
+
+        let written = LARGE - io.with_write_dst(|b| b.len());
+        assert!(
+            written > 2 * MAX_WRITE_SIZE,
+            "stopped after one chunk: {written}"
+        );
+        // The last `writev` may start just below the budget
+        assert!(
+            written < WRITE_BUDGET + 2 * MAX_WRITE_SIZE,
+            "budget exceeded: {written}"
+        );
+        drop(peer);
     }
 
     /// A failed write must hand the pages it took back to the write buffer.
