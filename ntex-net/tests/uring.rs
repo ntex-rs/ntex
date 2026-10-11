@@ -417,3 +417,156 @@ fn io_outlives_close() {
         drop(peer);
     });
 }
+
+/// Decodes frames of a fixed size, a partial frame stays buffered.
+struct Fixed(usize);
+
+impl ntex::codec::Decoder for Fixed {
+    type Item = Bytes;
+    type Error = std::io::Error;
+
+    fn decode(&self, src: &mut ntex::util::BytesMut) -> std::io::Result<Option<Bytes>> {
+        Ok((src.len() >= self.0).then(|| src.split_to(self.0)))
+    }
+}
+
+/// Receives that wait for input select buffers from the provided buffer
+/// ring. Input for more connections than the ring holds arrives at once,
+/// receives that find no buffer fall back to a buffer of their own.
+#[test]
+fn ring_recv_many_connections() {
+    const CONNS: usize = 1100;
+    const SIZE: usize = 3000;
+
+    run(256, move || async {
+        // receives of dropped connections are canceled
+        let idle: Vec<_> = (0..600)
+            .map(|_| {
+                let (sock, peer) = UnixStream::pair().unwrap();
+                (
+                    ntex_net::from_unix_stream(sock, SharedCfg::default()).unwrap(),
+                    peer,
+                )
+            })
+            .collect();
+        sleep(Duration::from_millis(20)).await;
+        drop(idle);
+        sleep(Duration::from_millis(20)).await;
+
+        let mut peers = Vec::new();
+        let mut ios = Vec::new();
+        for _ in 0..CONNS {
+            let (sock, peer) = UnixStream::pair().unwrap();
+            ios.push(ntex_net::from_unix_stream(sock, SharedCfg::default()).unwrap());
+            peers.push(peer);
+        }
+        sleep(Duration::from_millis(20)).await;
+
+        for round in 0..3u8 {
+            let data: Vec<u8> = pattern(SIZE).into_iter().map(|b| b ^ round).collect();
+            // the reactor is blocked, all input completes in the same turn
+            for peer in &mut peers {
+                peer.write_all(&data).unwrap();
+            }
+            for io in &ios {
+                assert_eq!(recv_exact(io, SIZE).await, data);
+            }
+        }
+        // the reactor must keep running to close the connections
+        let readers = thread::spawn(move || {
+            for mut peer in peers {
+                assert_eq!(read_all(&mut peer, Duration::ZERO), (Vec::new(), None));
+            }
+        });
+        drop(ios);
+        while !readers.is_finished() {
+            sleep(Duration::from_millis(10)).await;
+        }
+        readers.join().unwrap();
+    });
+}
+
+/// Streaming input switches from ring buffers to the connection's buffer
+/// and back, nothing is lost or reordered.
+#[test]
+fn ring_recv_stream() {
+    const SIZE: usize = 8 * 1024 * 1024;
+
+    run(64, move || async {
+        let (sock, mut peer) = tcp_pair(None);
+        let data = pattern(SIZE);
+        let expected = data.clone();
+        let writer = thread::spawn(move || {
+            let mut pos = 0;
+            for (i, size) in [100, 4096, 70_000, 1, 4097, 256 * 1024]
+                .iter()
+                .cycle()
+                .enumerate()
+            {
+                let end = (pos + size).min(SIZE);
+                peer.write_all(&data[pos..end]).unwrap();
+                pos = end;
+                if pos == SIZE {
+                    break;
+                }
+                if i % 7 == 0 {
+                    thread::sleep(Duration::from_millis(1));
+                }
+            }
+            peer
+        });
+
+        let io = ntex_net::from_tcp_stream(sock, SharedCfg::default()).unwrap();
+        let received = recv_exact(&io, SIZE).await;
+        assert!(received == expected, "{} bytes", received.len());
+        drop(writer.join().unwrap());
+    });
+}
+
+/// Input that follows a partial frame is received into the read buffer
+/// that holds it.
+#[test]
+fn ring_recv_partial_frames() {
+    const FRAME: usize = 10_000;
+    const FRAMES: usize = 50;
+
+    run(64, move || async {
+        let (sock, mut peer) = UnixStream::pair().unwrap();
+        let data = pattern(FRAME * FRAMES);
+        let expected = data.clone();
+        let writer = thread::spawn(move || {
+            for chunk in data.chunks(3001) {
+                peer.write_all(chunk).unwrap();
+                thread::sleep(Duration::from_micros(200));
+            }
+            peer
+        });
+
+        let io = ntex_net::from_unix_stream(sock, SharedCfg::default()).unwrap();
+        let mut received = Vec::new();
+        for _ in 0..FRAMES {
+            let frame = io.recv(&Fixed(FRAME)).await.unwrap().unwrap();
+            assert_eq!(frame.len(), FRAME);
+            received.extend_from_slice(&frame);
+        }
+        assert!(received == expected);
+        drop(writer.join().unwrap());
+    });
+}
+
+/// Eof of a connection that waits for input.
+#[test]
+fn ring_recv_eof() {
+    run(64, move || async {
+        let (sock, mut peer) = UnixStream::pair().unwrap();
+        let io = ntex_net::from_unix_stream(sock, SharedCfg::default()).unwrap();
+        sleep(Duration::from_millis(10)).await;
+
+        peer.write_all(b"data").unwrap();
+        assert_eq!(recv_exact(&io, 4).await, b"data");
+        sleep(Duration::from_millis(10)).await;
+
+        drop(peer);
+        assert!(matches!(io.recv(&BytesCodec).await, Ok(None)));
+    });
+}

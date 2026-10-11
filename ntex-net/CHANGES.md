@@ -1,12 +1,27 @@
 # Changes
 
-## [4.4.1] - 2026-10-11
+## [4.5.0] - 2026-10-11
 
 * polling, tokio: keep writing within one write cycle until the socket stops
   accepting data or 256 KB is written, instead of a single 64 KB `writev`
 
 * polling: keep reading while reads fill the read buffer, up to 256 KB or
   read backpressure, instead of waiting for the next poll cycle
+
+* io-uring: register the ring fd to skip the fd lookup on every `io_uring_enter`
+
+* io-uring: rings are created with `IORING_SETUP_NO_SQARRAY` on Linux 6.6+
+
+* io-uring: the remote notifier is a re-armed eventfd read instead of a multishot poll,
+  a notification does not need a `read()` syscall
+
+* io-uring: receives that wait for input select 4 KB read pages from a per-reactor provided
+  buffer ring, idle connections do not hold read buffers. Received pages are passed to the
+  connection without a copy
+
+* io-uring: `ReactorApi::submit()` takes a closure that initializes the submission entry
+  in place, `submit_inline()` is removed. Requires ntex-io-uring 1.0
+>>>>>>> 3351210da (Improve io-uring integration)
 
 ## [4.4.0] - 2026-10-08
 

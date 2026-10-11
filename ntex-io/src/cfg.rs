@@ -500,6 +500,11 @@ impl IoConfig {
     /// Replacing an active connection's configuration with
     /// [`Io::set_config`](crate::Io::set_config) enables or disables eager
     /// writes according to the replacement threshold.
+    ///
+    /// Eager writes depend on the transport. The io-uring transport ignores
+    /// the threshold: it delivers buffered output through the scheduled write
+    /// operation, and the sends of all connections are submitted together
+    /// once per runtime turn.
     #[must_use]
     pub fn set_write_buf_threshold(mut self, size: usize) -> Self {
         self.write_buf_threshold = size;

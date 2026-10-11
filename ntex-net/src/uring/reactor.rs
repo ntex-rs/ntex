@@ -1,14 +1,14 @@
 use std::cell::{Cell, UnsafeCell};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::{cmp, collections::VecDeque, fmt, io, mem, net, ptr, rc::Rc, sync::Arc};
+use std::{collections::VecDeque, fmt, io, mem, net, ptr, rc::Rc, sync::Arc};
 
 #[cfg(unix)]
 use std::os::unix::net::UnixStream as OsUnixStream;
 
 use ntex_io::Io;
 use ntex_io_uring::cqueue::{self, Entry as CEntry, more};
-use ntex_io_uring::opcode::{AsyncCancel, PollAdd};
-use ntex_io_uring::squeue::{Entry as SEntry, SubmissionQueue};
+use ntex_io_uring::opcode::{AsyncCancel, Read};
+use ntex_io_uring::squeue::{Entry as SEntry, PushError, SubmissionQueue};
 use ntex_io_uring::{IoUring, Probe, Submitter, types::CancelBuilder, types::Fd};
 use ntex_rt::{DriverType, Notify, PollResult, Runtime, syscall};
 use ntex_service::cfg::SharedCfg;
@@ -48,36 +48,14 @@ impl ReactorApi {
     where
         F: FnOnce(&mut SEntry),
     {
-        unsafe {
-            let changes = &mut *self.inner.changes.get();
-            // the run loop syncs the queue before submitting
-            let f = if changes.is_empty() {
-                match self.inner.ring.submission_unsynced().try_push_inline(f) {
-                    Ok(()) => return,
-                    Err(f) => f,
-                }
-            } else {
-                f
-            };
-            changes.push_back(mem::MaybeUninit::uninit());
-            let entry = changes.back_mut().unwrap();
-            ptr::write_bytes(entry.as_mut_ptr(), 0, 1);
-            f(entry.assume_init_mut());
-        }
+        self.inner.push(f);
     }
 
     #[inline]
     /// Submit request to the driver.
-    pub fn submit(&self, id: u32, entry: SEntry) {
-        self.submit_inner(|en| {
-            *en = entry;
-            en.set_user_data(u64::from(id) | self.batch);
-        });
-    }
-
-    #[inline]
-    /// Submit request to the driver.
-    pub fn submit_inline<F>(&self, id: u32, f: F)
+    ///
+    /// `f` initializes the submission entry in place with an opcode.
+    pub fn submit<F>(&self, id: u32, f: F)
     where
         F: FnOnce(&mut SEntry),
     {
@@ -91,9 +69,7 @@ impl ReactorApi {
     /// Attempt to cancel an already issued request.
     pub fn cancel(&self, id: u32) {
         self.submit_inner(|en| {
-            *en = AsyncCancel::new(u64::from(id) | self.batch)
-                .build()
-                .user_data(Reactor::CANCEL);
+            AsyncCancel::new(en, u64::from(id) | self.batch).user_data(Reactor::CANCEL);
         });
     }
 
@@ -109,6 +85,37 @@ impl ReactorApi {
     /// Get whether a specific io-uring opcode is supported.
     pub fn is_supported(&self, opcode: u8) -> bool {
         self.inner.probe.is_supported(opcode)
+    }
+
+    /// Id of the handler, unique within the reactor.
+    pub fn id(&self) -> u16 {
+        (self.batch >> Reactor::BATCH) as u16
+    }
+
+    /// Registers a provided buffer ring.
+    ///
+    /// # Safety
+    ///
+    /// The ring at `ring_addr` with `entries` entries must stay valid until
+    /// it is unregistered with
+    /// [`unregister_buf_ring`](Self::unregister_buf_ring).
+    pub unsafe fn register_buf_ring(
+        &self,
+        ring_addr: u64,
+        entries: u16,
+        bgid: u16,
+    ) -> io::Result<()> {
+        unsafe {
+            self.inner
+                .ring
+                .submitter()
+                .register_buf_ring_with_flags(ring_addr, entries, bgid, 0)
+        }
+    }
+
+    /// Unregisters a provided buffer ring.
+    pub fn unregister_buf_ring(&self, bgid: u16) -> io::Result<()> {
+        self.inner.ring.submitter().unregister_buf_ring(bgid)
     }
 }
 
@@ -149,6 +156,39 @@ struct ReactorInner {
     flags: Cell<Flags>,
     ring: IoUring<SEntry, CEntry>,
     changes: UnsafeCell<VecDeque<mem::MaybeUninit<SEntry>>>,
+    // eventfd counter, written by the in-flight notifier read
+    notify_buf: UnsafeCell<u64>,
+}
+
+impl ReactorInner {
+    fn push<F>(&self, f: F)
+    where
+        F: FnOnce(&mut SEntry),
+    {
+        unsafe {
+            let changes = &mut *self.changes.get();
+            // the queue tail is published by the run loop submit
+            let f = if changes.is_empty() {
+                match self.ring.submission_unsynced().push(f) {
+                    Ok(()) => return,
+                    Err(PushError(f)) => f,
+                }
+            } else {
+                f
+            };
+            changes.push_back(mem::MaybeUninit::uninit());
+            let entry = changes.back_mut().unwrap();
+            ptr::write_bytes(entry.as_mut_ptr(), 0, 1);
+            f(entry.assume_init_mut());
+        }
+    }
+
+    /// Read the notifier eventfd, the completion wakes the driver
+    fn arm_notifier(&self, fd: RawFd) {
+        self.push(|en| {
+            Read::new(en, Fd(fd), self.notify_buf.get().cast(), 8).user_data(Reactor::NOTIFY);
+        });
+    }
 }
 
 impl Reactor {
@@ -160,14 +200,27 @@ impl Reactor {
 
     /// Create io-uring driver
     pub fn new(capacity: u32) -> io::Result<Self> {
+        let build = |no_sqarray: bool| {
+            let mut builder = IoUring::builder();
+            builder
+                .setup_coop_taskrun()
+                .setup_taskrun_flag()
+                .setup_single_issuer()
+                .setup_defer_taskrun();
+            if no_sqarray {
+                // available since 6.6
+                builder.setup_no_sqarray();
+            }
+            builder.build(capacity)
+        };
+
         // Create ring
-        let (new, ring) = if let Ok(ring) = IoUring::builder()
-            .setup_coop_taskrun()
-            .setup_taskrun_flag()
-            .setup_single_issuer()
-            .setup_defer_taskrun()
-            .build(capacity)
-        {
+        let (new, ring) = if let Ok(ring) = build(true) {
+            log::info!(
+                "New io-uring driver with single-issuer, coop-taskrun, taskrun-flag, defer-taskrun, no-sqarray"
+            );
+            (true, ring)
+        } else if let Ok(ring) = build(false) {
             log::info!(
                 "New io-uring driver with single-issuer, coop-taskrun, taskrun-flag, defer-taskrun"
             );
@@ -184,18 +237,10 @@ impl Reactor {
         let mut probe = Probe::new();
         ring.submitter().register_probe(&mut probe)?;
 
-        // Remote notifier
-        let notifier = Notifier::new()?;
-        unsafe {
-            let sq = ring.submission();
-            sq.push(
-                &PollAdd::new(Fd(notifier.as_raw_fd()), libc::POLLIN as _)
-                    .multi(true)
-                    .build()
-                    .user_data(Self::NOTIFY),
-            )
-            .expect("the squeue sould not be full");
-            sq.sync();
+        // Avoid the per-call ring fd lookup in io_uring_enter, available since 5.18.
+        // The registration is per-thread, the reactor is created and driven on the same thread.
+        if let Err(e) = ring.submitter().register_ring_fd() {
+            log::debug!("Cannot register io-uring ring fd: {e}");
         }
 
         let fd = ring.as_raw_fd();
@@ -204,7 +249,12 @@ impl Reactor {
             probe,
             flags: Cell::new(if new { Flags::NEW } else { Flags::empty() }),
             changes: UnsafeCell::new(VecDeque::with_capacity(32)),
+            notify_buf: UnsafeCell::new(0),
         });
+
+        // Remote notifier
+        let notifier = Notifier::new()?;
+        inner.arm_notifier(notifier.as_raw_fd());
 
         Ok(Self {
             fd,
@@ -244,29 +294,14 @@ impl Reactor {
             if changes.is_empty() {
                 false
             } else {
-                let num = cmp::min(changes.len(), sq.capacity() - sq.len());
-                let (s1, s2) = changes.as_slices();
-                let s1_num = cmp::min(s1.len(), num);
-                let s2_num = cmp::min(s2.len(), num - s1_num);
                 // safety: "changes" contains only initialized entries
-                if s1_num > 0 {
-                    sq.push_multiple(
-                        ((&raw const s1[0..s1_num]) as *const [SEntry])
-                            .as_ref()
-                            .unwrap(),
-                    )
-                    .unwrap();
+                while let Some(entry) = changes.front() {
+                    let res = sq.push(|en| ptr::copy_nonoverlapping(entry.as_ptr(), en, 1));
+                    if res.is_err() {
+                        break;
+                    }
+                    changes.pop_front();
                 }
-                // the deque wraps around, the rest of the entries is in `s2`
-                if s2_num > 0 {
-                    sq.push_multiple(
-                        ((&raw const s2[0..s2_num]) as *const [SEntry])
-                            .as_ref()
-                            .unwrap(),
-                    )
-                    .unwrap();
-                }
-                changes.drain(0..num);
 
                 !changes.is_empty()
             }
@@ -278,7 +313,6 @@ impl Reactor {
         let mut retries = 0;
         loop {
             let more_changes = self.apply_changes(sq);
-            sq.sync();
 
             if let Err(e) = submitter.submit() {
                 match e.raw_os_error() {
@@ -301,11 +335,7 @@ impl Reactor {
     }
 
     /// Handle ring completions, forward changes to specific handler
-    fn poll_completions(
-        &self,
-        cq: &mut cqueue::CompletionQueue<'_, CEntry>,
-        sq: SubmissionQueue<'_, SEntry>,
-    ) {
+    fn poll_completions(&self, cq: &mut cqueue::CompletionQueue<'_, CEntry>) {
         cq.sync();
 
         if !cqueue::CompletionQueue::<'_, _>::is_empty(cq) {
@@ -315,21 +345,14 @@ impl Reactor {
                 match user_data {
                     Self::CANCEL => {}
                     Self::NOTIFY => {
-                        let flags = entry.flags();
-                        self.notifier.clear().expect("cannot clear notifier");
-
-                        // re-submit notifier fd
-                        if !more(flags) {
-                            unsafe {
-                                sq.push(
-                                    &PollAdd::new(Fd(self.notifier.as_raw_fd()), libc::POLLIN as _)
-                                        .multi(true)
-                                        .build()
-                                        .user_data(Self::NOTIFY),
-                                )
-                            }
-                            .expect("the squeue sould not be full");
-                        }
+                        // the read resets the eventfd counter
+                        let res = entry.result();
+                        assert!(
+                            res >= 0 || res == -libc::EINTR || res == -libc::ECANCELED,
+                            "cannot read notifier: {}",
+                            io::Error::from_raw_os_error(-res)
+                        );
+                        self.inner.arm_notifier(self.notifier.as_raw_fd());
                     }
                     _ => {
                         let batch = ((user_data & Self::BATCH_MASK) >> Self::BATCH) as usize;
@@ -337,8 +360,13 @@ impl Reactor {
 
                         let result = entry.result();
                         // A canceled zero-copy send still posts a notification,
-                        // the operation must stay alive until it arrives.
-                        if result == -libc::ECANCELED && !more(entry.flags()) {
+                        // the operation must stay alive until it arrives. A
+                        // canceled operation that selected a provided buffer
+                        // completes, the handler must return the buffer.
+                        if result == -libc::ECANCELED
+                            && !more(entry.flags())
+                            && cqueue::buffer_select(entry.flags()).is_none()
+                        {
                             handlers[batch].modified = true;
                             handlers[batch].hnd.canceled(user_data);
                         } else {
@@ -436,7 +464,7 @@ impl ntex_rt::Driver for Reactor {
         let result = loop {
             // tasks woken until the runtime is polled do not need to notify
             rt.awake();
-            self.poll_completions(&mut cq, sq);
+            self.poll_completions(&mut cq);
 
             let more_tasks = match rt.poll() {
                 PollResult::Pending => false,
@@ -445,18 +473,10 @@ impl ntex_rt::Driver for Reactor {
             };
             let more_changes = self.apply_changes(sq);
 
-            // squeue has to sync after we apply all changes
-            // otherwise ring won't see any change in submit call
-            sq.sync();
-
+            // submit publishes the queue tail, and skips the syscall if
+            // there is nothing to submit and no deferred completions to post
             let result = if more_changes || more_tasks {
-                // skip the syscall if there is nothing to submit and
-                // no deferred completions to post
-                if more_changes || !sq.is_empty() || sq.taskrun() {
-                    submitter.submit()
-                } else {
-                    Ok(0)
-                }
+                submitter.submit()
             } else {
                 submitter.submit_and_wait(1)
             };
@@ -505,32 +525,11 @@ pub(crate) struct Notifier {
 impl Notifier {
     /// Create a new notifier.
     pub(crate) fn new() -> io::Result<Self> {
-        let fd = syscall!(libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK))?;
+        // io-uring fails reads of non-blocking files with EAGAIN instead of
+        // waiting for data, a write blocks only on the counter overflow
+        let fd = syscall!(libc::eventfd(0, libc::EFD_CLOEXEC))?;
         let fd = unsafe { OwnedFd::from_raw_fd(fd) };
         Ok(Self { fd: Arc::new(fd) })
-    }
-
-    pub(crate) fn clear(&self) -> io::Result<()> {
-        loop {
-            let mut buffer = [0u64];
-            let res = syscall!(libc::read(
-                self.fd.as_raw_fd(),
-                buffer.as_mut_ptr().cast(),
-                mem::size_of::<u64>()
-            ));
-            #[allow(clippy::cast_possible_wrap)]
-            match res {
-                Ok(len) => {
-                    debug_assert_eq!(len, mem::size_of::<u64>() as isize);
-                    break Ok(());
-                }
-                // Clear the next time
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break Ok(()),
-                // Just like read_exact
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-                Err(e) => break Err(e),
-            }
-        }
     }
 
     pub(crate) fn handle(&self) -> NotifyHandle {
@@ -608,14 +607,19 @@ mod tests {
         // queued entries wrap around the end of the deque storage
         let changes = unsafe { &mut *reactor.inner.changes.get() };
         let cap = changes.capacity();
+        let nop = |user_data| {
+            let mut entry = SEntry::default();
+            Nop::new(&mut entry).user_data(user_data);
+            mem::MaybeUninit::new(entry)
+        };
         for _ in 0..cap - 2 {
-            changes.push_back(mem::MaybeUninit::new(Nop::new().build()));
+            changes.push_back(nop(0));
         }
         for _ in 0..cap - 2 {
             changes.pop_front();
         }
         for i in 0..4 {
-            changes.push_back(mem::MaybeUninit::new(Nop::new().build().user_data(i)));
+            changes.push_back(nop(i));
         }
         assert_eq!(changes.as_slices().0.len(), 2);
 
@@ -629,5 +633,44 @@ mod tests {
         cq.sync();
         let ids: Vec<_> = cq.map(|e| e.user_data()).collect();
         assert_eq!(ids, [0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn notifier_rearms() {
+        use std::sync::{Mutex, atomic::AtomicUsize, atomic::Ordering};
+        use std::{future::poll_fn, task::Poll, task::Waker, time::Duration};
+
+        let Ok(reactor) = Reactor::new(8) else {
+            return;
+        };
+        let rt = Runtime::new(ntex_rt::Driver::handle(&reactor));
+        let cnt = Arc::new(AtomicUsize::new(0));
+        let waker = Arc::new(Mutex::new(None::<Waker>));
+
+        let (cnt2, waker2) = (cnt.clone(), waker.clone());
+        let th = std::thread::spawn(move || {
+            for i in 1..=3 {
+                // the driver blocks on the ring before each wake
+                std::thread::sleep(Duration::from_millis(50));
+                cnt2.store(i, Ordering::Release);
+                if let Some(w) = waker2.lock().unwrap().take() {
+                    w.wake();
+                }
+            }
+        });
+
+        let mut seen = 0;
+        rt.block_on(
+            poll_fn(|cx| {
+                *waker.lock().unwrap() = Some(cx.waker().clone());
+                let n = cnt.load(Ordering::Acquire);
+                if n > seen {
+                    seen = n;
+                }
+                if seen == 3 { Poll::Ready(()) } else { Poll::Pending }
+            }),
+            &reactor,
+        );
+        th.join().unwrap();
     }
 }
