@@ -93,7 +93,11 @@ impl ConnectOps {
             ))
         }
         .and_then(|baddr| sock.bind(&baddr))
-        .and_then(|()| self.0.api.attach(sock.as_raw_socket() as _, true));
+        .and_then(|()| {
+            self.0
+                .api
+                .attach_stream(sock.as_raw_socket() as _, addr.domain())
+        });
 
         if let Err(err) = result {
             Receiver::new(Err(err))

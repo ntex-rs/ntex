@@ -1,5 +1,6 @@
 use std::os::windows::io::{AsRawHandle, AsRawSocket, FromRawHandle, OwnedHandle, RawHandle};
-use std::{cell::Cell, fmt, io, mem, net, ptr, sync::Arc};
+use std::sync::{Arc, atomic::AtomicU8, atomic::Ordering};
+use std::{cell::Cell, fmt, io, mem, net, ptr};
 
 use windows_sys::Win32::{
     Foundation::{
@@ -24,7 +25,7 @@ use windows_sys::Win32::{
 use ntex_io::Io;
 use ntex_rt::{DriverType, Notify, PollResult, Runtime, syscall};
 use ntex_service::cfg::SharedCfg;
-use socket2::{Protocol, SockAddr, Socket, Type};
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 
 use super::{Overlapped, TcpStream, connect, stream::StreamOps};
 use crate::channel::Receiver;
@@ -50,6 +51,11 @@ impl ReactorApi {
     /// Attach handle
     pub fn attach(&self, hnd: RawHandle, skip_iocp_on_success: bool) -> io::Result<()> {
         self.reactor.attach(hnd, skip_iocp_on_success)
+    }
+
+    /// Attach stream socket of the `domain` with `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`
+    pub(crate) fn attach_stream(&self, hnd: RawHandle, domain: Domain) -> io::Result<()> {
+        self.reactor.attach_stream(hnd, domain)
     }
 
     /// Get overlapped.
@@ -135,7 +141,9 @@ impl crate::Reactor for Reactor {
     fn from_tcp_stream(&self, stream: net::TcpStream, cfg: SharedCfg) -> io::Result<Io> {
         stream.set_nodelay(true)?;
         let addr = stream.peer_addr()?;
-        self.reactor.attach(stream.as_raw_socket() as _, true)?;
+        let domain = if addr.is_ipv4() { Domain::IPV4 } else { Domain::IPV6 };
+        self.reactor
+            .attach_stream(stream.as_raw_socket() as _, domain)?;
 
         Ok(Io::new(
             TcpStream(Socket::from(stream), Some(addr), StreamOps::get(self)),
@@ -295,6 +303,8 @@ impl Reactor {
 struct ReactorInner {
     port: OwnedHandle,
     overlapped: Overlapped,
+    /// Domains whose stream sockets passed the IFS check
+    ifs: AtomicU8,
 }
 
 impl ReactorInner {
@@ -311,6 +321,7 @@ impl ReactorInner {
         Ok(ReactorInner {
             port,
             overlapped: Overlapped::new(0, 0),
+            ifs: AtomicU8::new(0),
         })
     }
 
@@ -318,6 +329,24 @@ impl ReactorInner {
         if skip_iocp_on_success {
             check_ifs_socket(h)?;
         }
+        self.register(h, skip_iocp_on_success)
+    }
+
+    /// Attaches a stream socket, the IFS check runs once per domain.
+    ///
+    /// The provider of a socket is selected by its domain, type and protocol
+    /// from the Winsock catalog, which does not change in practice while
+    /// the process runs.
+    fn attach_stream(&self, h: RawHandle, domain: Domain) -> io::Result<()> {
+        let flag = ifs_flag(domain);
+        if flag == 0 || self.ifs.load(Ordering::Relaxed) & flag == 0 {
+            check_ifs_socket(h)?;
+            self.ifs.fetch_or(flag, Ordering::Relaxed);
+        }
+        self.register(h, true)
+    }
+
+    fn register(&self, h: RawHandle, skip_iocp_on_success: bool) -> io::Result<()> {
         syscall!(
             BOOL,
             CreateIoCompletionPort(h, self.port.as_raw_handle(), 0, 0) as isize
@@ -332,6 +361,18 @@ impl ReactorInner {
             )?;
         }
         Ok(())
+    }
+}
+
+fn ifs_flag(domain: Domain) -> u8 {
+    if domain == Domain::IPV4 {
+        1
+    } else if domain == Domain::IPV6 {
+        2
+    } else if domain == Domain::UNIX {
+        4
+    } else {
+        0
     }
 }
 
@@ -537,10 +578,34 @@ mod tests {
     fn attach_accepts_ifs_socket() {
         let reactor = ReactorInner::new().unwrap();
         for ty in [Type::STREAM, Type::DGRAM] {
-            let sock = Socket::new(socket2::Domain::IPV4, ty, None).unwrap();
+            let sock = Socket::new(Domain::IPV4, ty, None).unwrap();
             check_ifs_socket(sock.as_raw_socket() as _).unwrap();
             reactor.attach(sock.as_raw_socket() as _, true).unwrap();
         }
+    }
+
+    /// The IFS check of stream sockets runs once per domain, failed checks
+    /// are not cached.
+    #[test]
+    fn attach_stream_caches_ifs_check() {
+        let reactor = ReactorInner::new().unwrap();
+        let file = std::fs::File::open(std::env::current_exe().unwrap()).unwrap();
+        assert!(
+            reactor
+                .attach_stream(file.as_raw_handle(), Domain::IPV4)
+                .is_err()
+        );
+        assert_eq!(reactor.ifs.load(Ordering::Relaxed), 0);
+
+        for domain in [Domain::IPV4, Domain::IPV6] {
+            for _ in 0..2 {
+                let sock = Socket::new(domain, Type::STREAM, None).unwrap();
+                reactor
+                    .attach_stream(sock.as_raw_socket() as _, domain)
+                    .unwrap();
+            }
+        }
+        assert_eq!(reactor.ifs.load(Ordering::Relaxed), 3);
     }
 
     /// Accepted streams disable Nagle, as on the other backends.
