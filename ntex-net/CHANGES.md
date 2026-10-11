@@ -26,6 +26,9 @@
 * polling: connection teardown does not reset poll interest before detaching the socket,
   saves an `epoll_ctl` per connection
 
+* iocp: pausing reads leaves the zero-byte recv in flight instead of cancelling it, saves a
+  `CancelIoEx` and a completion per pause
+
 * polling: new connections are registered with read interest armed, saves an `epoll_ctl`
   and a speculative read per connection
 

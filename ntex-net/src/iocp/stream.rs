@@ -425,7 +425,7 @@ impl StreamCtl {
             if let Some(item) = st.streams.get_mut(self.id)
                 && !item.is_closing()
             {
-                item.rd_op.pause(false);
+                item.rd_op.pause();
             }
         });
     }
@@ -438,7 +438,7 @@ impl StreamItem {
     /// Both are always paused: a send left running would issue the next one
     /// once it completes.
     fn pause_ops(&mut self) -> bool {
-        let rd = self.rd_op.pause(true);
+        let rd = self.rd_op.cancel();
         let wr = self.wr_op.pause();
         rd && wr
     }
@@ -501,7 +501,7 @@ impl StreamOpsStorage {
             if !item.flags.contains(Flags::CLOSED) {
                 // dropped without a shutdown, cancel so that the completions
                 // arrive; once closed, the handle value may be reused
-                item.rd_op.pause(true);
+                item.rd_op.cancel();
                 item.wr_op.pause();
             }
             return;
@@ -583,10 +583,11 @@ impl Drop for WeakStreamCtl {
 
 #[cfg(test)]
 mod tests {
-    use std::os::windows::io::{FromRawSocket, IntoRawSocket};
+    use std::os::windows::io::{AsRawHandle, FromRawSocket, IntoRawSocket};
 
     use ntex_bytes::BytesMut;
     use socket2::{Domain, Protocol, Type};
+    use windows_sys::Win32::System::IO::{GetQueuedCompletionStatusEx, OVERLAPPED_ENTRY};
 
     use super::*;
 
@@ -1039,7 +1040,95 @@ mod tests {
         drop(io);
     }
 
-    /// A recv cancelled by a pause that is already over resumes reading, so
+    /// Dequeues a completion from the reactor's port, waiting up to `timeout`
+    /// milliseconds. The kernel writes the result into the `OVERLAPPED` only
+    /// once its completion is dequeued, so its status cannot be polled.
+    fn dequeue(reactor: &Reactor, timeout: u32) -> Option<*mut Overlapped> {
+        let mut entry = OVERLAPPED_ENTRY::default();
+        let mut count = 0;
+        let res = unsafe {
+            GetQueuedCompletionStatusEx(
+                reactor.as_raw_handle().cast(),
+                &raw mut entry,
+                1,
+                &raw mut count,
+                timeout,
+                0,
+            )
+        };
+        (res != 0 && count == 1).then_some(entry.lpOverlapped.cast())
+    }
+
+    fn rd_optr(ops: &StreamOps, id: usize) -> *mut Overlapped {
+        ops.0
+            .with(|st| st.streams[id].rd_op.as_ptr().cast::<Overlapped>())
+    }
+
+    /// A pause leaves the zero-byte recv in flight, cancelling it would cost a
+    /// syscall and a completion on every pause.
+    #[ntex::test]
+    async fn pause_keeps_recv_in_flight() {
+        let reactor = Reactor::new().unwrap();
+        let (io, ctl, ops, raw, mut peer) = registered(&reactor);
+        let id = ctl.id;
+        ctl.read();
+        assert!(ops.0.with(|st| st.streams[id].rd_op.is_pending()));
+
+        ctl.pause();
+        assert!(ops.0.with(|st| st.streams[id].rd_op.is_pending()));
+        assert_eq!(dequeue(&reactor, 50), None, "pause cancelled recv");
+
+        // resuming finds the recv still in flight and issues no other
+        ctl.read();
+        assert!(ops.0.with(|st| st.streams[id].rd_op.is_pending()));
+        assert_eq!(dequeue(&reactor, 50), None, "resume completed recv");
+
+        cleanup(&ops);
+        assert_closed(raw, &mut peer);
+        drop(ctl);
+        drop(io);
+    }
+
+    /// A recv that completes during a pause does not read, the input stays in
+    /// the socket until reading resumes.
+    #[ntex::test]
+    async fn recv_completed_while_paused_reads_on_resume() {
+        let reactor = Reactor::new().unwrap();
+        let (io, ctl, ops, raw, mut peer) = registered(&reactor);
+        let id = ctl.id;
+        ctl.read();
+        ctl.pause();
+
+        std::io::Write::write_all(&mut peer, b"hello").unwrap();
+        let optr = rd_optr(&ops, id);
+        assert_eq!(dequeue(&reactor, 5000), Some(optr), "recv not completed");
+        StreamOpsHandler {
+            inner: ops.0.clone(),
+        }
+        .completed(ops::RD_OP, Ok(0), optr);
+        assert!(
+            !ops.0.with(|st| st.streams[id].rd_op.is_pending()),
+            "recv re-armed while paused"
+        );
+        assert!(io.with_read_dst(|buf| buf.is_empty()), "read while paused");
+
+        ctl.read();
+        assert_eq!(
+            io.with_read_dst(|buf| buf.split_to(buf.len())),
+            b"hello".as_ref()
+        );
+        assert!(
+            ops.0.with(|st| st.streams[id].rd_op.is_pending()),
+            "no recv waits for more input"
+        );
+
+        cleanup(&ops);
+        assert_closed(raw, &mut peer);
+        drop(ctl);
+        drop(io);
+    }
+
+    /// A cancelled recv of a stream that is not paused resumes reading, so
     /// input that arrived meanwhile is not left unread.
     #[ntex::test]
     async fn cancelled_recv_resumes_reading() {
