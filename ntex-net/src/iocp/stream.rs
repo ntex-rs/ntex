@@ -849,7 +849,7 @@ mod tests {
         let id = ctl.id;
         ops.0.with(|st| {
             st.streams[id].rd_op.fake_pending();
-            st.streams[id].wr_op.fake_pending();
+            st.streams[id].wr_op.fake_pending_with(&[b"data"]);
         });
 
         {
@@ -868,6 +868,11 @@ mod tests {
             );
 
             complete_aborted_send(&ops, id);
+            assert_eq!(
+                ops.0.with(|st| st.streams[id].wr_op.unsent()),
+                0,
+                "cancelled send kept its pages"
+            );
             complete_aborted_recv(&ops, id);
             fut.await
                 .expect("close did not start after both completions")
@@ -1008,8 +1013,7 @@ mod tests {
         drop(io);
     }
 
-    /// A send that fails right away returns its pages to the write buffer and
-    /// reports the error.
+    /// A send that fails right away drops its pages and reports the error.
     #[ntex::test]
     async fn send_to_reset_peer_reports_error() {
         let reactor = Reactor::new().unwrap();
@@ -1033,6 +1037,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::ConnectionReset);
         assert!(!ops.0.with(|st| st.streams[ctl.id].wr_op.is_pending()));
+        assert_eq!(ops.0.with(|st| st.streams[ctl.id].wr_op.unsent()), 0);
 
         cleanup(&ops);
         assert!(!is_ours(raw, &addr));
@@ -1233,6 +1238,88 @@ mod tests {
             .expect("send error not reported")
             .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::WriteZero);
+
+        cleanup(&ops);
+        assert_closed(raw, &mut peer);
+        drop(ctl);
+        drop(io);
+    }
+
+    /// Handles completions until `done` returns `true` and no send is in
+    /// flight.
+    async fn drive_sends(reactor: &Reactor, ops: &StreamOps, id: usize, done: impl Fn() -> bool) {
+        for _ in 0..500 {
+            reactor.dispatch(0);
+            if done() && !ops.0.with(|st| st.streams[id].wr_op.is_pending()) {
+                return;
+            }
+            ntex::time::sleep(ntex::time::Millis(10)).await;
+        }
+        panic!("output not sent");
+    }
+
+    /// The rest of a partly completed send goes out before newer output.
+    #[ntex::test]
+    async fn partial_send_is_resent_before_newer_output() {
+        let reactor = Reactor::new().unwrap();
+        let (io, ctl, ops, raw, mut peer) = registered(&reactor);
+        let id = ctl.id;
+        ops.0.with(|st| {
+            st.streams[id]
+                .wr_op
+                .fake_pending_with(&[b"hello ", b"world"]);
+        });
+        io.encode_slice(b"!!").unwrap();
+
+        StreamOpsHandler {
+            inner: ops.0.clone(),
+        }
+        .completed(
+            ops::WR_OP,
+            Ok(3),
+            ops.0
+                .with(|st| st.streams[id].wr_op.as_ptr().cast::<Overlapped>()),
+        );
+        let mut buf = [0u8; 10];
+        std::io::Read::read_exact(&mut peer, &mut buf).unwrap();
+        assert_eq!(&buf, b"lo world!!");
+        drive_sends(&reactor, &ops, id, || true).await;
+        assert_eq!(ops.0.with(|st| st.streams[id].wr_op.unsent()), 0);
+
+        cleanup(&ops);
+        assert_closed(raw, &mut peer);
+        drop(ctl);
+        drop(io);
+    }
+
+    /// Output in more pages and bytes than one send takes is sent in order.
+    #[ntex::test]
+    async fn large_output_is_sent_in_order() {
+        const PAGE: usize = 5000;
+        const PAGES: usize = 100;
+
+        let reactor = Reactor::new().unwrap();
+        let (io, ctl, ops, raw, mut peer) = registered(&reactor);
+        let id = ctl.id;
+        let data: Vec<u8> = (0..PAGE * PAGES)
+            .map(|i| u8::try_from((i / PAGE + i % 251) % 256).unwrap())
+            .collect();
+        // output over 4 KiB is added as a separate page
+        for chunk in data.chunks(PAGE) {
+            io.encode_bytes(ntex::util::Bytes::copy_from_slice(chunk))
+                .unwrap();
+        }
+
+        let reader = std::thread::spawn(move || {
+            let mut buf = vec![0; PAGE * PAGES];
+            std::io::Read::read_exact(&mut peer, &mut buf).unwrap();
+            (peer, buf)
+        });
+        ctl.write();
+        drive_sends(&reactor, &ops, id, || reader.is_finished()).await;
+        let (mut peer, received) = reader.join().unwrap();
+        assert!(received == data, "output reordered");
+        assert_eq!(ops.0.with(|st| st.streams[id].wr_op.unsent()), 0);
 
         cleanup(&ops);
         assert_closed(raw, &mut peer);

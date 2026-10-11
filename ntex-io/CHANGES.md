@@ -1,6 +1,6 @@
 # Changes
 
-## [4.4.0] - 2026-10-11
+## [4.4.0] - 2026-10-12
 
 * Add `IoContext::read_buf_size()`, the size of the input the buffer from `take_read_buf()`
   already holds

@@ -1,6 +1,6 @@
 # Changes
 
-## [1.12.0] (2026-10-11)
+## [1.12.0] (2026-10-12)
 
 * Add `BytePages::iter()` and `BytePages::advance_to()`
 

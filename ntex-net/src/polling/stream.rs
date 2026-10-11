@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_wrap)]
 use std::{cell::Cell, cmp, io, mem, os, os::fd::AsRawFd, rc::Rc, task::Poll};
 
-use ntex_bytes::{BufMut, BytePage, BytePages};
+use ntex_bytes::{BufMut, BytePages};
 use ntex_io::{IoContext, IoTaskStatus};
 use ntex_rt::{Arbiter, syscall};
 use slab::Slab;
@@ -10,8 +10,8 @@ use socket2::Socket;
 use super::{Event, Handler, PollMode, Reactor, ReactorApi};
 use crate::helpers::Queue;
 
-const MAX_WRITE_SIZE: usize = 64 * 1024;
-const MAX_WRITE_ITEMS: usize = 16;
+const MAX_WRITE_SIZE: usize = 256 * 1024;
+const MAX_WRITE_ITEMS: usize = 32;
 /// Output written per write attempt at most, see `StreamItem::write()`.
 const WRITE_BUDGET: usize = 256 * 1024;
 const READ_BUDGET: usize = 256 * 1024;
@@ -565,29 +565,13 @@ impl StreamItem {
 /// zero if `wrt` is empty. A write that would block writes zero bytes.
 #[cfg_attr(not(feature = "trace"), allow(unused_variables))]
 fn write_pages(fd: os::fd::RawFd, tag: &str, wrt: &mut BytePages) -> io::Result<(usize, usize)> {
-    let mut pages: [Option<BytePage>; MAX_WRITE_ITEMS] = [
-        None, None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-        None,
-    ];
-    let mut bufs: [mem::MaybeUninit<io::IoSlice<'_>>; MAX_WRITE_ITEMS] =
-        [mem::MaybeUninit::uninit(); MAX_WRITE_ITEMS];
-
+    let mut bufs = [io::IoSlice::new(&[]); MAX_WRITE_ITEMS];
     let mut num = 0;
     let mut size = 0;
-    while let Some(page) = wrt.take() {
-        size += page.len();
-
-        // An inline page keeps its data inside itself, so the slice
-        // must be taken from where the page stays until the write.
-        pages[num] = Some(page);
-        let page = pages[num].as_ref().unwrap();
-
-        // SAFETY: Page is stored in `pages` for lifetime of `bufs`
-        bufs[num] = mem::MaybeUninit::new(io::IoSlice::new(unsafe {
-            mem::transmute::<&[u8], &[u8]>(page.as_ref())
-        }));
-
+    for chunk in wrt.iter() {
+        bufs[num] = io::IoSlice::new(chunk);
         num += 1;
+        size += chunk.len();
         if num == MAX_WRITE_ITEMS || size >= MAX_WRITE_SIZE {
             break;
         }
@@ -597,11 +581,8 @@ fn write_pages(fd: os::fd::RawFd, tag: &str, wrt: &mut BytePages) -> io::Result<
         return Ok((0, 0));
     }
 
-    // An error must not return early: the pages taken above still
-    // have to go back to the write buffer.
     let res = if num == 1 {
-        let io = unsafe { bufs[0].assume_init_ref().as_ptr() };
-        syscall!(break libc::write(fd, io.cast(), size))
+        syscall!(break libc::write(fd, bufs[0].as_ptr().cast(), size))
     } else {
         syscall!(break libc::writev(fd, bufs.as_ptr().cast(), num as i32))
     };
@@ -609,21 +590,8 @@ fn write_pages(fd: os::fd::RawFd, tag: &str, wrt: &mut BytePages) -> io::Result<
     log::trace!("{tag}: {fd:?}-Wrt buf({num}:{size}) ({res:?})");
 
     // remove written bytes
-    if let Poll::Ready(Ok(mut written)) = res {
-        for page in pages[..num].iter_mut().flatten() {
-            let len = cmp::min(page.len(), written);
-            page.advance_to(len);
-            written -= len;
-            if written == 0 {
-                break;
-            }
-        }
-    }
-    // return unwritten data back to buffer
-    for p in pages[..num].iter_mut().rev() {
-        if let Some(page) = p.take() {
-            wrt.prepend(page);
-        }
+    if let Poll::Ready(Ok(written)) = res {
+        wrt.advance_to(cmp::min(written, size));
     }
 
     match res? {
@@ -1197,11 +1165,17 @@ mod tests {
             assert!(armed, "write interest was lost on a repeat write");
         }
 
-        /// A write continues past one `MAX_WRITE_SIZE` chunk while the socket
-        /// accepts everything, but stops at `WRITE_BUDGET`.
+        /// A write continues past one `writev` while the socket accepts
+        /// everything, but stops at `WRITE_BUDGET`.
         #[ntex::test]
         async fn write_continues_until_budget() {
-            let fixture = Fixture::new();
+            use ntex_bytes::BytePageSize;
+            use ntex_io::IoConfig;
+
+            let page = BytePageSize::Size4;
+            let fixture = Fixture::with_cfg(
+                SharedCfg::new("WRITE").add(IoConfig::default().set_write_size(page)),
+            );
             let size = 2 * WRITE_BUDGET;
             fixture.ops.0.with(|streams| {
                 streams[fixture.id].io.set_send_buffer_size(size).unwrap();
@@ -1209,7 +1183,7 @@ mod tests {
             socket2::SockRef::from(&fixture.peer)
                 .set_recv_buffer_size(size)
                 .unwrap();
-            // Small slices keep pages small, so a single `writev` is capped
+            // Small pages cap a single `writev` at `MAX_WRITE_ITEMS` pages
             let chunk = [b'x'; 1024];
             for _ in 0..LARGE / chunk.len() {
                 fixture.io.encode_slice(&chunk).unwrap();
@@ -1221,12 +1195,12 @@ mod tests {
             fixture.teardown();
 
             assert!(
-                written > 2 * MAX_WRITE_SIZE,
-                "stopped after one chunk: {written}"
+                written > MAX_WRITE_ITEMS * page.capacity(),
+                "stopped after one writev: {written}"
             );
             // The last `writev` may start just below the budget
             assert!(
-                written < WRITE_BUDGET + 2 * MAX_WRITE_SIZE,
+                written < WRITE_BUDGET + MAX_WRITE_SIZE,
                 "budget exceeded: {written}"
             );
         }
