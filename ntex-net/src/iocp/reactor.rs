@@ -138,7 +138,7 @@ impl crate::Reactor for Reactor {
         self.reactor.attach(stream.as_raw_socket() as _, true)?;
 
         Ok(Io::new(
-            TcpStream(Socket::from(stream), addr.into(), StreamOps::get(self)),
+            TcpStream(Socket::from(stream), Some(addr), StreamOps::get(self)),
             cfg,
         ))
     }

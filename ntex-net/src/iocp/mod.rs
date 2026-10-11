@@ -1,6 +1,6 @@
-use std::{fmt, mem, ops::Deref, ops::DerefMut, ptr};
+use std::{fmt, mem, net, ops::Deref, ops::DerefMut, ptr};
 
-use socket2::{SockAddr, Socket};
+use socket2::Socket;
 use windows_sys::Win32::System::IO::OVERLAPPED;
 
 mod connect;
@@ -14,10 +14,10 @@ pub(crate) use self::reactor::map_socket_error;
 pub use self::reactor::{Handler, Reactor, ReactorApi};
 
 /// Tcp stream wrapper for neon `TcpStream`
-struct TcpStream(Socket, SockAddr, stream::StreamOps);
+struct TcpStream(Socket, Option<net::SocketAddr>, stream::StreamOps);
 
 /// Tcp stream wrapper for neon `UnixStream`
-struct UnixStream(Socket, SockAddr, stream::StreamOps);
+struct UnixStream(Socket, stream::StreamOps);
 
 /// The overlapped struct for IOCP ops.
 #[repr(C)]

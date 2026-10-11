@@ -1,11 +1,11 @@
-use std::{cell::Cell, io, mem, os::windows::io::AsRawSocket, pin::pin, rc::Rc};
+use std::{cell::Cell, io, mem, net, os::windows::io::AsRawSocket, pin::pin, rc::Rc};
 
 use ntex_io::IoContext;
 use ntex_rt::{Arbiter, syscall};
 use ntex_util::future::{Either, select};
 use ntex_util::{channel::pool, time::sleep};
 use slab::Slab;
-use socket2::{SockAddr, Socket};
+use socket2::Socket;
 use windows_sys::Win32::Networking::WinSock;
 
 use super::{Handler, OpBox, Overlapped, Reactor, ReactorApi, ops};
@@ -78,10 +78,12 @@ bitflags::bitflags! {
 struct StreamItem {
     io: Socket,
     flags: Flags,
-    addr: SockAddr,
+    // Peer address, `None` for unix sockets
+    addr: Option<net::SocketAddr>,
     // Boxed so that a reference to the item does not cover them: a recv that
     // completes immediately runs the read filters inside `ReadOperation::read()`,
-    // and a write they issue borrows the item while that `&mut` is live.
+    // and a write they issue borrows the item while that `&mut` is live. This
+    // also keeps their addresses stable while the slab grows and moves items.
     rd_op: OpBox<ops::ReadOperation>,
     wr_op: OpBox<ops::WriteOperation>,
     close: Option<pool::Sender<io::Result<()>>>,
@@ -105,7 +107,7 @@ struct StreamOpsInner {
 }
 
 struct StreamOpsStorage {
-    streams: Slab<Box<StreamItem>>,
+    streams: Slab<StreamItem>,
 }
 
 impl StreamOps {
@@ -133,17 +135,12 @@ impl StreamOps {
     pub(crate) fn register(
         self,
         io: Socket,
-        addr: SockAddr,
+        addr: Option<net::SocketAddr>,
         ctx: IoContext,
     ) -> (StreamCtl, WeakStreamCtl) {
         let sock = io.as_raw_socket();
         #[cfg(feature = "trace")]
-        log::trace!(
-            "{}: Registered({:?}) {:?}",
-            ctx.tag(),
-            sock,
-            addr.as_socket()
-        );
+        log::trace!("{}: Registered({:?}) {:?}", ctx.tag(), sock, addr);
 
         let mut storage = self.0.storage.take().unwrap();
         let entry = storage.streams.vacant_entry();
@@ -174,14 +171,14 @@ impl StreamOps {
         // write op
         let wr_op = OpBox::new(ops::WriteOperation::new(id, sock, ctx, &self.0.api));
 
-        entry.insert(Box::new(StreamItem {
+        entry.insert(StreamItem {
             io,
             rd_op,
             wr_op,
             addr,
             close: None,
             flags: Flags::empty(),
-        }));
+        });
         self.0.storage.set(Some(storage));
 
         (
@@ -264,10 +261,7 @@ impl Handler for StreamOpsHandler {
                 }
                 let io = item.io.as_raw_socket() as _;
                 let tag = item.rd_op.tag();
-                log::trace!(
-                    "{tag}: Unclosed socket ({io:?}) {:?}",
-                    item.addr.as_socket()
-                );
+                log::trace!("{tag}: Unclosed socket ({io:?}) {:?}", item.addr);
                 if let Err(err) = close_socket(io, item.flags.contains(Flags::TERMINATE)) {
                     log::error!("{tag}: Cannot close socket ({io:?}), {err:?}");
                 }
@@ -506,7 +500,7 @@ impl StreamOpsStorage {
             }
             return;
         }
-        Self::release(*self.streams.remove(id));
+        Self::release(self.streams.remove(id));
     }
 
     /// Stops waiting for cancelled operations and takes over the close.
@@ -554,9 +548,9 @@ impl Drop for StreamCtl {
 
 impl WeakStreamCtl {
     /// Returns the peer address, or `None` once `cleanup()` released the stream.
-    pub(crate) fn peer_addr(&self) -> Option<SockAddr> {
+    pub(crate) fn peer_addr(&self) -> Option<net::SocketAddr> {
         self.inner
-            .with(|st| st.streams.get(self.id).map(|item| item.addr.clone()))
+            .with(|st| st.streams.get(self.id).and_then(|item| item.addr))
     }
 
     pub(crate) fn write(&self) {
@@ -615,6 +609,17 @@ mod tests {
         }
     }
 
+    /// Items are stored inline in the slab, so their size is paid for every
+    /// slot, vacant ones included.
+    #[test]
+    fn stream_item_is_compact() {
+        assert!(
+            mem::size_of::<StreamItem>() <= 80,
+            "StreamItem is {} bytes",
+            mem::size_of::<StreamItem>()
+        );
+    }
+
     /// A failed graceful shutdown must not leave the socket open: the caller
     /// has already given up ownership of it, so nothing else would close it.
     #[test]
@@ -663,7 +668,7 @@ mod tests {
 
     impl ntex_io::IoStream for TestStream {
         fn start(self, ctx: IoContext) -> Box<dyn ntex_io::Handle> {
-            let addr = self.socket.peer_addr().unwrap();
+            let addr = self.socket.peer_addr().unwrap().as_socket();
             let (ctl, weak) = self.ops.register(self.socket, addr, ctx);
             self.ctl.set(Some(ctl));
             Box::new(TestHandle { _ctl: weak })

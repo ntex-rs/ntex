@@ -40,6 +40,9 @@
   pages, send up to 256 KB at once, and send the rest of a partial send
   before newer output
 
+* iocp: store stream items inline in the slab and keep the peer address as
+  a `SocketAddr`, saving an allocation and ~100 bytes per connection
+
 ## [4.4.0] - 2026-10-08
 
 * polling: drain deferred socket cleanup before waiting, even when no new
