@@ -1,5 +1,10 @@
 # Changes
 
+## [4.4.0] - 2026-10-11
+
+* Add `IoContext::read_buf_size()`, the size of the input the buffer from `take_read_buf()`
+  already holds
+
 ## [4.3.0] - 2026-10-07
 
 * Read buffers are ntex-bytes pages, empty buffers return to the ntex-bytes page cache shared

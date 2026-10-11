@@ -174,6 +174,10 @@ impl Stack {
         self.borrow().app.read_len()
     }
 
+    pub(crate) fn read_src_size(&self) -> usize {
+        self.borrow().transport().read_len()
+    }
+
     pub(crate) fn with_filter<F, R>(&self, io: &IoRef, f: F) -> R
     where
         F: FnOnce(&mut FilterCtx<'_>) -> R,

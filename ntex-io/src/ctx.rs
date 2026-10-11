@@ -186,6 +186,24 @@ impl IoContext {
         self.st().stop_connection(e);
     }
 
+    /// Returns the size of the input that the buffer from
+    /// [`take_read_buf`](Self::take_read_buf) already holds.
+    ///
+    /// This is unconsumed transport input that waits for more data, such as
+    /// a partial frame. A read into that buffer extends it in place. Any other
+    /// buffer released through [`release_read_buf`](Self::release_read_buf)
+    /// is appended to this input. Zero if there is no such input or the
+    /// dispatcher has not consumed the input yet, `take_read_buf` hands out
+    /// a buffer of its own then.
+    pub fn read_buf_size(&self) -> usize {
+        let st = self.st();
+        if st.flags.is_read_ready() {
+            0
+        } else {
+            st.buffer.read_src_size()
+        }
+    }
+
     /// Takes a buffer for the next transport read.
     ///
     /// The returned buffer must be released exactly once through
