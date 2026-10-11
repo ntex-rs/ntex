@@ -43,6 +43,10 @@
 * iocp: store stream items inline in the slab and keep the peer address as
   a `SocketAddr`, saving an allocation and ~100 bytes per connection
 
+* iocp: close sockets on the reactor thread instead of the blocking pool,
+  only a close that waits for an application-set linger timeout is moved
+  there
+
 ## [4.4.0] - 2026-10-08
 
 * polling: drain deferred socket cleanup before waiting, even when no new

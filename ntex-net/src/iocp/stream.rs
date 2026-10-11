@@ -1,4 +1,5 @@
-use std::{cell::Cell, io, mem, net, os::windows::io::AsRawSocket, pin::pin, rc::Rc};
+use std::os::windows::io::{AsRawSocket, BorrowedSocket};
+use std::{cell::Cell, io, mem, net, pin::pin, rc::Rc};
 
 use ntex_io::IoContext;
 use ntex_rt::{Arbiter, syscall};
@@ -22,11 +23,16 @@ use crate::helpers::Queue;
 /// The socket is closed even if the graceful shutdown fails. The
 /// shutdown error, if any, is reported in preference to a close error.
 ///
-/// Callers other than `cleanup()`, which runs on the reactor thread, run this
-/// on the blocking pool. That is safe for the drain: they only get here once
-/// neither the recv nor the send is in flight, and no new recv can be started,
-/// since only the connection task issues one and it is done by then.
-fn close_socket(io: WinSock::SOCKET, terminate: bool) -> io::Result<()> {
+/// This runs on the reactor thread and does not block it: the drain and the
+/// shutdown never wait, and neither does `closesocket` on a non-blocking
+/// socket. The drain is safe here too, callers only get here once neither the
+/// recv nor the send is in flight, or after the socket is reset anyway.
+///
+/// `nonblocking` tells whether the socket is in non-blocking mode. A blocking
+/// socket can wait in `closesocket` for the linger timeout set by the
+/// application, so it is closed on the blocking pool instead, see
+/// [`Close::Blocking`].
+fn close_socket(io: WinSock::SOCKET, terminate: bool, nonblocking: bool) -> Close {
     let shutdown = if terminate {
         crate::helpers::abort_raw_socket(io as _);
         Ok(())
@@ -34,20 +40,74 @@ fn close_socket(io: WinSock::SOCKET, terminate: bool) -> io::Result<()> {
         crate::helpers::drain_raw_socket(io as _);
         syscall!(SOCKET, WinSock::shutdown(io, 2)).map(|_| ())
     };
-    let close = syscall!(SOCKET, WinSock::closesocket(io)).map(|_| ());
-    shutdown.and(close)
+    if nonblocking {
+        match syscall!(SOCKET, WinSock::closesocket(io)) {
+            Ok(_) => return Close::Done(shutdown),
+            // A linger timeout set by the application cannot be waited for
+            // on a non-blocking socket; the socket stays open and the close
+            // has to be repeated in blocking mode.
+            Err(err) if err.raw_os_error() == Some(WinSock::WSAEWOULDBLOCK) => (),
+            Err(err) => return Close::Done(shutdown.and(Err(err))),
+        }
+    }
+    Close::Blocking(BlockingClose { io, shutdown })
 }
 
-/// Releases a socket whose owner is gone, logging failures.
-///
-/// Used where there is nobody left to report the outcome to.
-fn close_socket_detached(io: WinSock::SOCKET, terminate: bool, tag: &'static str) {
-    ntex_rt::spawn_blocking(move || {
-        if let Err(err) = close_socket(io, terminate) {
-            log::error!("{tag}: Cannot close socket ({io:?}), {err:?}");
+/// Outcome of [`close_socket()`].
+enum Close {
+    /// The socket is closed.
+    Done(io::Result<()>),
+    /// The socket is still open, closing it may block until the linger timeout
+    /// expires, so it has to be finished on the blocking pool.
+    Blocking(BlockingClose),
+}
+
+/// A close that has to wait for the linger timeout of the socket.
+struct BlockingClose {
+    io: WinSock::SOCKET,
+    shutdown: io::Result<()>,
+}
+
+impl Close {
+    /// Waits until the socket is closed.
+    async fn wait(self) -> io::Result<()> {
+        match self {
+            Close::Done(res) => res,
+            Close::Blocking(close) => ntex_rt::spawn_blocking(move || close.run())
+                .await
+                .map_err(io::Error::other)
+                .and_then(|res| res),
         }
-    })
-    .detach();
+    }
+
+    /// Lets the close finish on its own, logging failures.
+    ///
+    /// Used where there is nobody left to report the outcome to.
+    fn detach(self, io: WinSock::SOCKET, tag: &'static str) {
+        match self {
+            Close::Done(Ok(())) => (),
+            Close::Done(Err(err)) => {
+                log::error!("{tag}: Cannot close socket ({io:?}), {err:?}");
+            }
+            Close::Blocking(close) => ntex_rt::spawn_blocking(move || {
+                if let Err(err) = close.run() {
+                    log::error!("{tag}: Cannot close socket ({io:?}), {err:?}");
+                }
+            })
+            .detach(),
+        }
+    }
+}
+
+impl BlockingClose {
+    /// Closes the socket in blocking mode, waiting for the linger timeout.
+    fn run(self) -> io::Result<()> {
+        // a non-blocking socket would fail the close with `WSAEWOULDBLOCK` again
+        let sock = unsafe { BorrowedSocket::borrow_raw(self.io as _) };
+        let _ = socket2::SockRef::from(&sock).set_nonblocking(false);
+        let close = syscall!(SOCKET, WinSock::closesocket(self.io)).map(|_| ());
+        self.shutdown.and(close)
+    }
 }
 
 #[derive(Clone)]
@@ -216,20 +276,28 @@ impl Handler for StreamOpsHandler {
                     #[cfg(feature = "trace")]
                     log::trace!("{_tag}: CloseWait({:?})", io);
                     let terminate = item.flags.contains(Flags::TERMINATE);
-                    // Started right away rather than inside the task below: if
-                    // the runtime stops before that task runs, the socket must
-                    // still be closed, and `cleanup()` skips `CLOSED` items.
-                    let close = ntex_rt::spawn_blocking(move || close_socket(io, terminate));
                     // `shutdown()` is waiting on `tx`, and reports the result
                     // through `IoContext::stopped`, so it must not resolve
                     // before the socket is actually closed
-                    ntex_rt::spawn(async move {
-                        let res = close.await.map_err(io::Error::other).and_then(|res| res);
-                        #[cfg(feature = "trace")]
-                        log::trace!("{_tag}: WaitClosed({:?})", io);
-                        let _ = tx.send(res);
-                    })
-                    .detach();
+                    match close_socket(io, terminate, !item.rd_op.is_blocking()) {
+                        Close::Done(res) => {
+                            let _ = tx.send(res);
+                        }
+                        Close::Blocking(close) => {
+                            // Started right away rather than inside the task
+                            // below: if the runtime stops before that task
+                            // runs, the socket must still be closed, and
+                            // `cleanup()` skips `CLOSED` items.
+                            let close = ntex_rt::spawn_blocking(move || close.run());
+                            ntex_rt::spawn(async move {
+                                let res = close.await.map_err(io::Error::other).and_then(|res| res);
+                                #[cfg(feature = "trace")]
+                                log::trace!("{_tag}: WaitClosed({:?})", io);
+                                let _ = tx.send(res);
+                            })
+                            .detach();
+                        }
+                    }
                 } else {
                     // a forced close does not wait for the completions, the
                     // item is freed once the last one arrives
@@ -262,9 +330,12 @@ impl Handler for StreamOpsHandler {
                 let io = item.io.as_raw_socket() as _;
                 let tag = item.rd_op.tag();
                 log::trace!("{tag}: Unclosed socket ({io:?}) {:?}", item.addr);
-                if let Err(err) = close_socket(io, item.flags.contains(Flags::TERMINATE)) {
-                    log::error!("{tag}: Cannot close socket ({io:?}), {err:?}");
-                }
+                close_socket(
+                    io,
+                    item.flags.contains(Flags::TERMINATE),
+                    !item.rd_op.is_blocking(),
+                )
+                .detach(io, tag);
                 if item.rd_op.is_pending() || item.wr_op.is_pending() {
                     // Closing the socket cancels the pending operations, but
                     // the kernel still writes their completion into the
@@ -325,6 +396,7 @@ impl StreamCtl {
                     Some(Either::Left((
                         item.rd_op.tag(),
                         item.io.as_raw_socket() as _,
+                        !item.rd_op.is_blocking(),
                     )))
                 } else {
                     let (tx, rx) = self.inner.pool.channel();
@@ -337,14 +409,10 @@ impl StreamCtl {
         });
 
         match result {
-            Some(Either::Left((_tag, io))) => {
+            Some(Either::Left((_tag, io, nonblocking))) => {
                 #[cfg(feature = "trace")]
                 log::trace!("{_tag}: Close({io:?})");
-                ntex_rt::spawn(ntex_rt::spawn_blocking(move || close_socket(io, terminate)))
-                    .await
-                    .map_err(io::Error::other)
-                    .and_then(|res| res.map_err(io::Error::other))
-                    .and_then(|res| res)
+                close_socket(io, terminate, nonblocking).wait().await
             }
             Some(Either::Right((rx, timeout))) => {
                 let mut rx = pin!(rx);
@@ -356,7 +424,8 @@ impl StreamCtl {
                 // A cancelled operation has not completed in time, it may never
                 // do. Closing the socket completes it, unless the close has
                 // started meanwhile.
-                let Some((tag, io)) = self.inner.with(|st| st.force_close(self.id)) else {
+                let Some((tag, io, nonblocking)) = self.inner.with(|st| st.force_close(self.id))
+                else {
                     return rx
                         .await
                         .map_err(|_| io::Error::other("Unexpected"))
@@ -365,12 +434,7 @@ impl StreamCtl {
                 log::warn!(
                     "{tag}: Cancelled operations did not complete in {timeout:?}, closing socket ({io:?})"
                 );
-                let res = ntex_rt::spawn(ntex_rt::spawn_blocking(move || close_socket(io, true)))
-                    .await
-                    .map_err(io::Error::other)
-                    .and_then(|res| res.map_err(io::Error::other))
-                    .and_then(|res| res);
-                if let Err(err) = res {
+                if let Err(err) = close_socket(io, true, nonblocking).wait().await {
                     log::error!("{tag}: Cannot close socket ({io:?}), {err:?}");
                 }
                 Err(io::Error::new(
@@ -507,11 +571,15 @@ impl StreamOpsStorage {
     ///
     /// Returns the socket to close, or `None` if the close has already started
     /// because the operations completed meanwhile.
-    fn force_close(&mut self, id: usize) -> Option<(&'static str, WinSock::SOCKET)> {
+    fn force_close(&mut self, id: usize) -> Option<(&'static str, WinSock::SOCKET, bool)> {
         let item = self.streams.get_mut(id)?;
         item.close.take()?;
         item.flags.insert(Flags::CLOSED | Flags::TERMINATE);
-        Some((item.rd_op.tag(), item.io.as_raw_socket() as _))
+        Some((
+            item.rd_op.tag(),
+            item.io.as_raw_socket() as _,
+            !item.rd_op.is_blocking(),
+        ))
     }
 
     /// Frees an item once both handles are gone, closing its socket unless a
@@ -529,7 +597,7 @@ impl StreamOpsStorage {
         if !item.flags.contains(Flags::CLOSED) {
             let io = item.io.as_raw_socket() as _;
             let terminate = item.flags.contains(Flags::TERMINATE);
-            close_socket_detached(io, terminate, item.rd_op.tag());
+            close_socket(io, terminate, !item.rd_op.is_blocking()).detach(io, item.rd_op.tag());
         }
         mem::forget(item.io);
     }
@@ -633,10 +701,13 @@ mod tests {
                 .into(),
         )
         .unwrap();
+        sock.set_nonblocking(true).unwrap();
         let addr = sock.local_addr().unwrap();
         let io = sock.into_raw_socket() as WinSock::SOCKET;
 
-        let res = close_socket(io, false);
+        let Close::Done(res) = close_socket(io, false, true) else {
+            panic!("close of a non-blocking socket did not complete in place");
+        };
         let open = is_ours(io, &addr);
         if open {
             unsafe { WinSock::closesocket(io) };
@@ -648,6 +719,53 @@ mod tests {
             "the shutdown error must still be reported"
         );
         assert!(!open, "socket leaked after a failed shutdown");
+    }
+
+    /// A close that has to wait for the linger timeout set by the application
+    /// cannot complete on a non-blocking socket. The socket must stay open, and
+    /// closing it in blocking mode must deliver the unsent output.
+    #[test]
+    fn lingering_close_finishes_in_blocking_mode() {
+        let lst = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = Socket::from(std::net::TcpStream::connect(lst.local_addr().unwrap()).unwrap());
+        let (mut peer, _) = lst.accept().unwrap();
+        peer.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        client
+            .set_linger(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        client.set_nonblocking(true).unwrap();
+
+        // fill the send buffer, the peer does not read yet
+        let data = vec![1u8; 64 * 1024];
+        let mut sent = 0;
+        loop {
+            match std::io::Write::write(&mut &client, &data) {
+                Ok(n) => sent += n,
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                Err(err) => panic!("{err:?}"),
+            }
+        }
+        let addr = client.local_addr().unwrap();
+        let io = client.into_raw_socket() as WinSock::SOCKET;
+
+        let Close::Blocking(close) = close_socket(io, false, true) else {
+            panic!("lingering close completed on a non-blocking socket");
+        };
+        assert!(is_ours(io, &addr), "lingering close released the socket");
+
+        let job = std::thread::spawn(move || close.run());
+        let mut buf = vec![0u8; 64 * 1024];
+        let mut received = 0;
+        loop {
+            match std::io::Read::read(&mut peer, &mut buf).unwrap() {
+                0 => break,
+                n => received += n,
+            }
+        }
+        job.join().unwrap().unwrap();
+        assert_eq!(received, sent, "unsent output lost");
+        assert!(!is_ours(io, &addr), "socket not closed");
     }
 
     struct TestStream {
@@ -927,17 +1045,6 @@ mod tests {
         );
     }
 
-    /// Waits until the socket is closed by the blocking pool.
-    async fn wait_closed(io: WinSock::SOCKET, addr: &socket2::SockAddr) -> bool {
-        for _ in 0..100 {
-            if !is_ours(io, addr) {
-                return true;
-            }
-            ntex::time::sleep(ntex::time::Millis(20)).await;
-        }
-        false
-    }
-
     /// Handles dropped without a shutdown while a recv is in flight must
     /// cancel it and keep the item, the kernel still completes into it. The
     /// completion frees the item and closes the socket.
@@ -961,7 +1068,7 @@ mod tests {
             "item not freed after the completion"
         );
         let addr = peer.peer_addr().unwrap().into();
-        assert!(wait_closed(raw, &addr).await, "socket not closed");
+        assert!(!is_ours(raw, &addr), "socket not closed");
     }
 
     /// A handle dropped while the storage is in use, e.g. from within a
@@ -995,7 +1102,7 @@ mod tests {
         drop(io);
         assert!(!ops.0.with(|st| st.streams.contains(id)));
         let addr = peer.peer_addr().unwrap().into();
-        assert!(wait_closed(raw, &addr).await, "socket not closed");
+        assert!(!is_ours(raw, &addr), "socket not closed");
     }
 
     /// A second shutdown finds the close already done and succeeds, and no
@@ -1006,7 +1113,16 @@ mod tests {
         let (io, ctl, ops, raw, mut peer) = registered(&reactor);
         let id = ctl.id;
 
-        ctl.shutdown(false).await.unwrap();
+        // nothing is in flight, the socket is closed without suspending
+        std::future::poll_fn(|cx| {
+            let mut fut = pin!(ctl.shutdown(false));
+            assert!(matches!(
+                fut.as_mut().poll(cx),
+                std::task::Poll::Ready(Ok(()))
+            ));
+            std::task::Poll::Ready(())
+        })
+        .await;
         ctl.shutdown(false).await.unwrap();
 
         ctl.read();
