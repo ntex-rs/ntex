@@ -47,8 +47,6 @@ ntex-macros = { path = "ntex-macros" }
 ntex-util = { path = "ntex-util" }
 urly = { path = "urly" }
 
-ntex-io-uring = { git = "https://github.com/fafhrd91/io-uring.git" }
-
 [workspace.dependencies]
 ntex = "4.1.0"
 ntex-bytes = "1.11.0"

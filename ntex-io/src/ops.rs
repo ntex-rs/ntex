@@ -1,6 +1,8 @@
 #![allow(clippy::cast_possible_truncation)]
 use std::collections::{BTreeMap, VecDeque};
-use std::{cell::RefCell, mem, num::NonZeroUsize, ops, rc::Rc, time::Duration, time::Instant};
+use std::task::{Poll, Waker};
+use std::time::{Duration, Instant};
+use std::{cell::Cell, cell::RefCell, mem, num::NonZeroUsize, ops, rc::Rc};
 
 use ntex_rt::Arbiter;
 use ntex_util::time::{Millis, Seconds, now, sleep};
@@ -15,6 +17,8 @@ const MAX_CACHED_SET_CAP: usize = 512;
 
 thread_local! {
     static MANAGER: RefCell<Option<IoManager>> = const { RefCell::new(None) };
+    /// Id of the last spawned write task, unique across managers of the thread.
+    static IOPS_TASK: Cell<u64> = const { Cell::new(0) };
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
@@ -265,6 +269,8 @@ impl Default for IoManager {
             },
             iops: Iops {
                 running: false,
+                waker: None,
+                task: 0,
                 ops: Vec::with_capacity(32),
             },
         }
@@ -340,6 +346,14 @@ impl IoManager {
 
 pub(crate) struct Iops {
     running: bool,
+    /// Waker of the task that runs scheduled writes.
+    ///
+    /// The task lives as long as the manager, waking it is cheaper than
+    /// spawning a task for every batch.
+    waker: Option<Waker>,
+    /// Id of the last spawned task, a dropped task that has been replaced
+    /// must not clear the waker of its successor.
+    task: u64,
     pub(crate) ops: Vec<Id>,
 }
 
@@ -350,9 +364,58 @@ impl Iops {
 
             if !mgr.iops.running {
                 mgr.iops.running = true;
-                spawn(async move { Iops::run() });
+                if let Some(waker) = &mgr.iops.waker {
+                    waker.wake_by_ref();
+                } else {
+                    let task = IOPS_TASK
+                        .try_with(|id| {
+                            id.set(id.get().wrapping_add(1));
+                            id.get()
+                        })
+                        .unwrap_or_default();
+                    mgr.iops.task = task;
+                    spawn(Iops::task(task));
+                }
             }
         });
+    }
+
+    async fn task(id: u64) {
+        /// Clears the stored waker if the runtime drops the task, the next
+        /// batch then spawns a new one.
+        struct Guard(u64);
+
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                let _ = MANAGER.try_with(|cell| {
+                    if let Ok(mut mgr) = cell.try_borrow_mut()
+                        && let Some(mgr) = mgr.as_mut()
+                        && mgr.iops.task == self.0
+                    {
+                        mgr.iops.waker = None;
+                        mgr.iops.running = false;
+                    }
+                });
+            }
+        }
+
+        let _guard = Guard(id);
+        std::future::poll_fn(|cx| {
+            Iops::run();
+            IoManager::with(|mgr| {
+                if mgr.iops.task == id
+                    && !mgr
+                        .iops
+                        .waker
+                        .as_ref()
+                        .is_some_and(|w| w.will_wake(cx.waker()))
+                {
+                    mgr.iops.waker = Some(cx.waker().clone());
+                }
+            });
+            Poll::<()>::Pending
+        })
+        .await;
     }
 
     pub(crate) fn run() {
@@ -470,6 +533,43 @@ mod tests {
 
     fn has_manager() -> bool {
         MANAGER.with(|mgr| mgr.borrow().is_some())
+    }
+
+    fn iops_state() -> (bool, u64, bool) {
+        IoManager::with(|mgr| (mgr.iops.running, mgr.iops.task, mgr.iops.waker.is_some()))
+    }
+
+    /// Write batches of later turns are run by the same task, a runtime that
+    /// replaces the manager starts a new one.
+    #[test]
+    fn write_task_is_reused() {
+        std::thread::spawn(|| {
+            let first = System::new("test", DefaultRuntime).block_on(async {
+                Iops::schedule_write(Id(None));
+                sleep(Millis(5)).await;
+                let (running, task, waker) = iops_state();
+                assert!(!running && waker, "batch was not run");
+
+                for _ in 0..3 {
+                    Iops::schedule_write(Id(None));
+                    Iops::schedule_write(Id(None));
+                    assert!(iops_state().0);
+                    sleep(Millis(5)).await;
+                    assert_eq!(iops_state(), (false, task, true));
+                }
+                task
+            });
+
+            System::new("test", DefaultRuntime).block_on(async move {
+                Iops::schedule_write(Id(None));
+                sleep(Millis(5)).await;
+                let (running, task, waker) = iops_state();
+                assert!(!running && waker, "batch of the next runtime was not run");
+                assert_ne!(task, first);
+            });
+        })
+        .join()
+        .unwrap();
     }
 
     /// The manager must not carry over to the next runtime on the thread, a

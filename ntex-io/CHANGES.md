@@ -5,6 +5,8 @@
 * Add `IoContext::read_buf_size()`, the size of the input the buffer from `take_read_buf()`
   already holds
 
+* Scheduled writes run on a persistent per-thread task, was a task spawned per batch
+
 ## [4.3.0] - 2026-10-07
 
 * Read buffers are ntex-bytes pages, empty buffers return to the ntex-bytes page cache shared
