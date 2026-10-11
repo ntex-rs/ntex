@@ -97,7 +97,7 @@ impl StreamOps {
             let item = StreamItem {
                 io,
                 ctx,
-                flags: Flags::empty(),
+                flags: Flags::RD,
             };
             StreamCtl {
                 id: streams.insert(item) as u32,
@@ -105,11 +105,15 @@ impl StreamOps {
             }
         });
 
+        // Read interest is armed from the start, a new connection almost
+        // always reads first. The io task then finds `Flags::RD` set and needs
+        // neither a speculative read nor an interest update.
+        //
         // Hangup is never subscribed: epoll and `poll` report `HUP` and `ERR`
         // whatever the interest, and kqueue ignores the bit.
         self.0
             .api
-            .attach_with_mode(fd, stream.id, Event::new(0, false, false), self.0.mode);
+            .attach_with_mode(fd, stream.id, Event::new(0, true, false), self.0.mode);
 
         let weak = WeakStreamCtl {
             id: stream.id,
@@ -806,14 +810,6 @@ mod tests {
             }
         }
 
-        /// Arm read interest, mirroring what `interest(id, true, _)` leaves
-        /// behind once the io layer has asked for reads.
-        fn arm_read(&self) {
-            self.ops
-                .0
-                .with(|streams| streams[self.id].flags.insert(Flags::RD));
-        }
-
         fn fire(&mut self, ev: Event) {
             let id = self.id;
             self.handler.event(id, ev);
@@ -841,7 +837,6 @@ mod tests {
         #[ntex::test]
         async fn half_close_with_read_armed_delivers_eof() {
             let mut fixture = Fixture::new();
-            fixture.arm_read();
             fixture.peer.shutdown(Shutdown::Write).unwrap();
 
             fixture.fire(Event::readable(0));
@@ -879,6 +874,12 @@ mod tests {
 
             fixture.fire(Event::none(0).with_interrupt());
             let detached = fixture.flags().contains(Flags::DETACHED);
+            // read interest is armed at registration, clear it so a handled
+            // readable event would show up
+            fixture
+                .ops
+                .0
+                .with(|streams| streams[fixture.id].flags.remove(Flags::RD));
             fixture.fire(Event::readable(0));
             let flags = fixture.flags();
             fixture.ops.0.interest(fixture.id as u32, true, true);
@@ -921,6 +922,9 @@ mod tests {
                 SharedCfg::default(),
             );
             let ctl = ctl.take().unwrap();
+            // read interest is armed at registration
+            ops.0
+                .with(|streams| streams[ctl.id as usize].flags.remove(Flags::RD));
             let mut handler = StreamOpsHandler {
                 inner: ops.0.clone(),
             };
@@ -981,6 +985,17 @@ mod tests {
         let closed = !fixture.io.is_active();
         fixture.teardown();
         assert!(closed, "reactor error did not stop the stream");
+    }
+
+    /// A new stream is registered with read interest armed, the first read
+    /// request of the io task needs no interest update.
+    #[ntex::test]
+    async fn registration_arms_read_interest() {
+        let fixture = Fixture::new();
+        let flags = fixture.flags();
+        fixture.teardown();
+        assert!(flags.contains(Flags::RD), "read interest was not armed");
+        assert!(!flags.contains(Flags::WR), "write interest was armed");
     }
 
     /// A read that would block keeps read interest armed.

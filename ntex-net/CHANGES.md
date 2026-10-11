@@ -26,6 +26,9 @@
 * polling: connection teardown does not reset poll interest before detaching the socket,
   saves an `epoll_ctl` per connection
 
+* polling: new connections are registered with read interest armed, saves an `epoll_ctl`
+  and a speculative read per connection
+
 ## [4.4.0] - 2026-10-08
 
 * polling: drain deferred socket cleanup before waiting, even when no new
