@@ -23,6 +23,9 @@
   in place, `submit_inline()` is removed. Requires ntex-io-uring 1.0
 >>>>>>> 3351210da (Improve io-uring integration)
 
+* polling: connection teardown does not reset poll interest before detaching the socket,
+  saves an `epoll_ctl` per connection
+
 ## [4.4.0] - 2026-10-08
 
 * polling: drain deferred socket cleanup before waiting, even when no new
