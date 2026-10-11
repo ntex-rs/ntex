@@ -14,6 +14,7 @@ const MAX_WRITE_SIZE: usize = 64 * 1024;
 const MAX_WRITE_ITEMS: usize = 16;
 /// Output written per write attempt at most, see `StreamItem::write()`.
 const WRITE_BUDGET: usize = 256 * 1024;
+const READ_BUDGET: usize = 256 * 1024;
 
 pub(super) struct StreamCtl {
     id: u32,
@@ -518,27 +519,39 @@ impl StreamItem {
         self.ctx.update_write_status(res)
     }
 
+    /// A read that fills the buffer chunk likely left more input in the
+    /// socket, so reads continue until a short read or `READ_BUDGET` instead
+    /// of waiting for the next poll cycle.
     fn read(&mut self) -> IoTaskStatus {
         let fd = self.fd();
         #[cfg(feature = "trace")]
         let tag = self.tag();
 
-        self.ctx.with_read_buf(|buf| {
-            let chunk = buf.chunk_mut();
-            let chunk_len = chunk.len();
-            let chunk_ptr = chunk.as_mut_ptr();
+        let mut total = 0;
+        loop {
+            let mut full = false;
+            let status = self.ctx.with_read_buf(|buf| {
+                let chunk = buf.chunk_mut();
+                let chunk_len = chunk.len();
+                let chunk_ptr = chunk.as_mut_ptr();
 
-            let result = syscall!(break libc::read(fd, chunk_ptr.cast(), chunk_len));
-            #[cfg(feature = "trace")]
-            log::trace!("{tag}: {fd:?}-Rdt sz() = {result:?}");
+                let result = syscall!(break libc::read(fd, chunk_ptr.cast(), chunk_len));
+                #[cfg(feature = "trace")]
+                log::trace!("{tag}: {fd:?}-Rdt sz() = {result:?}");
 
-            if let Poll::Ready(Ok(n)) = result
-                && n != 0
-            {
-                unsafe { buf.advance_mut(n) };
+                if let Poll::Ready(Ok(n)) = result
+                    && n != 0
+                {
+                    full = n == chunk_len;
+                    total += n;
+                    unsafe { buf.advance_mut(n) };
+                }
+                result
+            });
+            if status != IoTaskStatus::Io || !full || total >= READ_BUDGET {
+                return status;
             }
-            result
-        })
+        }
     }
 }
 
@@ -762,6 +775,10 @@ mod tests {
 
     impl Fixture {
         fn new() -> Self {
+            Self::with_cfg(SharedCfg::default())
+        }
+
+        fn with_cfg(cfg: impl Into<SharedCfg>) -> Self {
             let reactor = Reactor::new().unwrap();
             let ops = StreamOps::get(&reactor);
             let (socket, peer) = UnixStream::pair().unwrap();
@@ -773,7 +790,7 @@ mod tests {
                     ops: ops.clone(),
                     ctl: ctl.clone(),
                 },
-                SharedCfg::default(),
+                cfg.into(),
             );
             let ctl = ctl.take().unwrap();
             Fixture {
@@ -996,9 +1013,11 @@ mod tests {
     #[ntex::test]
     async fn write_interest_with_pending_output() {
         let fixture = Fixture::new();
+        // a write stops at the budget, so output is left over whatever the
+        // socket accepts
         fixture
             .io
-            .encode_slice(&vec![b'x'; MAX_WRITE_SIZE * 2])
+            .encode_slice(&vec![b'x'; WRITE_BUDGET * 2])
             .unwrap();
 
         fixture.ops.0.interest(fixture.id as u32, false, true);
@@ -1013,6 +1032,103 @@ mod tests {
 
         assert!(armed && armed2, "write interest was not armed");
         assert!(dropped, "write interest was not dropped");
+    }
+
+    /// Reads performed for a single readable event.
+    mod read {
+        use std::io::Write;
+
+        use ntex_bytes::BytePageSize;
+        use ntex_io::IoConfig;
+
+        use super::*;
+
+        /// Fills the stream's receive queue as far as the socket allows.
+        fn fill(fixture: &mut Fixture) -> usize {
+            let size = 2 * READ_BUDGET;
+            fixture.ops.0.with(|streams| {
+                streams[fixture.id].io.set_recv_buffer_size(size).unwrap();
+            });
+            let peer = socket2::SockRef::from(&fixture.peer);
+            peer.set_send_buffer_size(size).unwrap();
+            fixture.peer.set_nonblocking(true).unwrap();
+
+            // Large writes: each one costs kernel overhead against the send
+            // buffer, which Linux caps at `wmem_max`, 208 KB by default
+            let chunk = vec![b'x'; 64 * 1024];
+            let mut sent = 0;
+            while sent < 4 * READ_BUDGET {
+                match fixture.peer.write(&chunk) {
+                    Ok(n) => sent += n,
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(e) => panic!("{e}"),
+                }
+            }
+            sent
+        }
+
+        fn received(fixture: &Fixture) -> usize {
+            fixture.io.with_read_dst(|b| b.len())
+        }
+
+        /// Reads continue past one filled chunk, but stop at `READ_BUDGET`.
+        #[ntex::test]
+        async fn read_continues_until_budget() {
+            let max = BytePageSize::Size64;
+            let mut fixture = Fixture::with_cfg(
+                SharedCfg::new("READ").add(
+                    IoConfig::default()
+                        .set_read_size(BytePageSize::Size4, max)
+                        .set_read_backpressure(8 * READ_BUDGET),
+                ),
+            );
+            let sent = fill(&mut fixture);
+            fixture.arm_read();
+
+            fixture.fire(Event::readable(0));
+
+            let read = received(&fixture);
+            fixture.teardown();
+
+            assert!(
+                sent > READ_BUDGET + max.capacity(),
+                "socket too small: {sent}"
+            );
+            assert!(read > max.capacity(), "stopped after one chunk: {read}");
+            // The last read may start just below the budget
+            assert!(
+                read < READ_BUDGET + 2 * max.capacity(),
+                "budget exceeded: {read}"
+            );
+        }
+
+        /// Read backpressure ends the reads of an event.
+        #[ntex::test]
+        async fn read_stops_on_backpressure() {
+            let backpressure = BytePageSize::Size16.capacity();
+            let mut fixture = Fixture::with_cfg(
+                SharedCfg::new("READ").add(
+                    IoConfig::default()
+                        .set_read_size(BytePageSize::Size4, BytePageSize::Size4)
+                        .set_read_backpressure(backpressure),
+                ),
+            );
+            fill(&mut fixture);
+            fixture.arm_read();
+
+            fixture.fire(Event::readable(0));
+
+            let read = received(&fixture);
+            let armed = fixture.flags().contains(Flags::RD);
+            fixture.teardown();
+
+            assert!(read >= backpressure, "stopped before backpressure: {read}");
+            assert!(
+                read < backpressure + BytePageSize::Size4.capacity(),
+                "read past backpressure: {read}"
+            );
+            assert!(!armed, "read interest kept under backpressure");
+        }
     }
 
     /// Out-of-band writes, performed on the stack of whoever filled the write
