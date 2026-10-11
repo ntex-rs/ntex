@@ -1,5 +1,9 @@
 # Changes
 
+## [4.2.1] - 2026-10-11
+
+* Notify the driver once per poll for tasks scheduled from other threads
+
 ## [4.2.0] - 2026-10-08
 
 * Spawn a single future type with or without task callbacks to reduce

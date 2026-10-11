@@ -1,6 +1,7 @@
 use std::cell::{Cell, UnsafeCell};
 use std::collections::VecDeque;
-use std::{future::Future, io, sync::Arc, thread};
+use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};
+use std::{future::Future, io, thread};
 
 use async_task::Runnable;
 use crossbeam_queue::SegQueue;
@@ -201,6 +202,8 @@ impl Clone for Handle {
 struct RunnableQueue {
     id: thread::ThreadId,
     idle: Cell<bool>,
+    // set by the first remote `schedule` after `run` cleared it
+    notified: AtomicBool,
     handle: Box<dyn Notify>,
     event_interval: usize,
     local_queue: UnsafeCell<VecDeque<Runnable>>,
@@ -218,6 +221,7 @@ impl RunnableQueue {
             event_interval,
             id: current_thread_id(),
             idle: Cell::new(true),
+            notified: AtomicBool::new(false),
             local_queue: UnsafeCell::new(VecDeque::new()),
             sync_fixed_queue: Queue::default(),
             sync_queue: SegQueue::new(),
@@ -236,11 +240,21 @@ impl RunnableQueue {
             if let Err(TryEnqueueError::InsufficientCapacity([runnable])) = result {
                 self.sync_queue.push(runnable);
             }
-            self.handle.notify().ok();
+            // the driver is already notified, `run` drains this task after
+            // clearing the flag
+            if !self.notified.swap(true, Ordering::Release) {
+                self.handle.notify().ok();
+            }
         }
     }
 
     fn run(&self) -> bool {
+        // cleared before draining the sync queues, a task enqueued after the
+        // drain notifies the driver again
+        if self.notified.load(Ordering::Relaxed) {
+            self.notified.swap(false, Ordering::Acquire);
+        }
+
         // a running task may schedule into `local_queue`, so it must not be
         // borrowed across `task.run()`
         for _ in 0..self.event_interval {
@@ -384,6 +398,87 @@ mod tests {
         rt.spawn(async {}).detach();
         assert_eq!(cnt.load(Ordering::Relaxed), 1);
         assert_eq!(rt.poll(), PollResult::Pending);
+    }
+
+    #[test]
+    fn remote_schedule_notifies_once() {
+        let cnt = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let rt = Runtime::new(Box::new(CountNotify(cnt.clone())));
+        let spawn = |n| {
+            let hnd = rt.handle();
+            std::thread::spawn(move || {
+                for _ in 0..n {
+                    hnd.spawn(async {}).detach();
+                }
+            })
+            .join()
+            .unwrap();
+        };
+
+        spawn(100);
+        assert_eq!(cnt.load(Ordering::Relaxed), 1);
+        assert_eq!(rt.poll(), PollResult::Pending);
+
+        // `poll` clears the flag
+        spawn(100);
+        assert_eq!(cnt.load(Ordering::Relaxed), 2);
+        assert_eq!(rt.poll(), PollResult::Pending);
+    }
+
+    #[test]
+    fn remote_schedule_no_lost_wakeup() {
+        use std::sync::{Condvar, Mutex, atomic::AtomicUsize};
+        use std::time::Duration;
+
+        #[derive(Debug, Default)]
+        struct Event(Mutex<bool>, Condvar);
+
+        #[derive(Debug)]
+        struct EventNotify(Arc<Event>);
+
+        impl Notify for EventNotify {
+            fn notify(&self) -> io::Result<()> {
+                *self.0.0.lock().unwrap() = true;
+                self.0.1.notify_one();
+                Ok(())
+            }
+        }
+
+        const THREADS: usize = 4;
+        const TASKS: usize = 10_000;
+
+        let ev = Arc::new(Event::default());
+        let rt = Runtime::new(Box::new(EventNotify(ev.clone())));
+        let cnt = Arc::new(AtomicUsize::new(0));
+        let threads: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let (hnd, cnt) = (rt.handle(), cnt.clone());
+                std::thread::spawn(move || {
+                    for _ in 0..TASKS {
+                        let cnt = cnt.clone();
+                        hnd.spawn(async move {
+                            cnt.fetch_add(1, Ordering::Relaxed);
+                        })
+                        .detach();
+                    }
+                })
+            })
+            .collect();
+
+        // blocks like a driver, a lost wakeup times out
+        while cnt.load(Ordering::Relaxed) < THREADS * TASKS {
+            if rt.poll() == PollResult::Pending {
+                let guard = ev.0.lock().unwrap();
+                let (mut guard, res) =
+                    ev.1.wait_timeout_while(guard, Duration::from_secs(5), |n| !*n)
+                        .unwrap();
+                assert!(!res.timed_out(), "lost wakeup");
+                *guard = false;
+            }
+        }
+        for t in threads {
+            t.join().unwrap();
+        }
     }
 
     #[test]
