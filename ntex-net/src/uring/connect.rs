@@ -60,10 +60,9 @@ impl ConnectOps {
 
         let fd = sock.as_raw_fd();
         let id = ops.insert((addr, sock, sender, cfg));
-        self.0.api.submit(
-            id as u32,
-            opcode::Connect::new(Fd(fd), addr_ptr, addr_len).build(),
-        );
+        self.0.api.submit(id as u32, move |entry| {
+            opcode::Connect::new(entry, Fd(fd), addr_ptr, addr_len);
+        });
         rx
     }
 }
