@@ -139,9 +139,10 @@ impl ConnectOp {
         match res.and_then(|()| update_connect_context(&self.sock)) {
             Ok(()) => {
                 let io = if self.addr.domain() == Domain::UNIX {
-                    Io::new(UnixStream(self.sock, self.addr, streams.clone()), self.cfg)
+                    Io::new(UnixStream(self.sock, streams.clone()), self.cfg)
                 } else {
-                    Io::new(TcpStream(self.sock, self.addr, streams.clone()), self.cfg)
+                    let addr = self.addr.as_socket();
+                    Io::new(TcpStream(self.sock, addr, streams.clone()), self.cfg)
                 };
                 let _ = self.sender.send(Ok(io));
             }

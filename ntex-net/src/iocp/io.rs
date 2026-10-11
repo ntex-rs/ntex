@@ -17,8 +17,8 @@ impl ntex_io::IoStream for super::TcpStream {
 
 impl ntex_io::IoStream for super::UnixStream {
     fn start(self, ctx: IoContext) -> Box<dyn Handle> {
-        let Self(io, addr, ops) = self;
-        let (ctl, ctl2) = ops.register(io, addr, ctx.clone());
+        let Self(io, ops) = self;
+        let (ctl, ctl2) = ops.register(io, None, ctx.clone());
         spawn(async move { run(ctl, ctx).await });
 
         Box::new(HandleWrapper(ctl2))
@@ -39,7 +39,7 @@ impl Handle for HandleWrapper {
 
 pub(super) fn query(ctl: &WeakStreamCtl, id: any::TypeId) -> Option<Box<dyn any::Any>> {
     if id == any::TypeId::of::<types::PeerAddr>()
-        && let Some(addr) = ctl.peer_addr().and_then(|addr| addr.as_socket())
+        && let Some(addr) = ctl.peer_addr()
     {
         return Some(Box::new(types::PeerAddr(addr)));
     }
