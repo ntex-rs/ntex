@@ -114,6 +114,11 @@ impl ReadOperation {
         self.flags.contains(Flags::WAITING)
     }
 
+    /// Whether the socket could not be switched to non-blocking mode.
+    pub(crate) fn is_blocking(&self) -> bool {
+        self.flags.contains(Flags::BLOCKING)
+    }
+
     /// Pauses reading until the next `read()`.
     ///
     /// A recv in flight is left running: it is zero-byte, so it holds no

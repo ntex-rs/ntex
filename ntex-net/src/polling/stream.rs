@@ -310,12 +310,7 @@ impl StreamOpsInner {
 
         if item.flags.contains(Flags::DROPPED_SEC) {
             let item = streams.remove(idx);
-            ntex_rt::spawn_blocking(move || {
-                if let Err(err) = syscall!(libc::close(fd)) {
-                    log::error!("Cannot close file descriptor ({fd:?}), {err:?}");
-                }
-            })
-            .detach();
+            close_fd(fd);
             mem::forget(item.io);
         } else {
             item.flags.insert(Flags::DROPPED_PRI);
@@ -329,13 +324,7 @@ impl StreamOpsInner {
 
         if item.flags.contains(Flags::DROPPED_PRI) {
             let item = streams.remove(idx);
-            let fd = item.fd();
-            ntex_rt::spawn_blocking(move || {
-                if let Err(err) = syscall!(libc::close(fd)) {
-                    log::error!("Cannot close file descriptor ({fd:?}), {err:?}");
-                }
-            })
-            .detach();
+            close_fd(item.fd());
             mem::forget(item.io);
         } else {
             item.flags.insert(Flags::DROPPED_SEC);
@@ -564,7 +553,55 @@ impl StreamItem {
 /// Returns the written bytes and the size of the attempted write, both are
 /// zero if `wrt` is empty. A write that would block writes zero bytes.
 #[cfg_attr(not(feature = "trace"), allow(unused_variables))]
-fn write_pages(fd: os::fd::RawFd, tag: &str, wrt: &mut BytePages) -> io::Result<(usize, usize)> {
+/// Closes the descriptor of a dropped stream.
+///
+/// Closing a non-blocking socket does not wait, except on platforms where a
+/// non-zero `SO_LINGER` timeout makes `close()` wait for unsent output even
+/// then. Only the application can set it, before handing the stream over, and
+/// such a close runs in the blocking pool.
+fn close_fd(fd: os::fd::RawFd) {
+    fn close(fd: os::fd::RawFd) {
+        if let Err(err) = syscall!(libc::close(fd)) {
+            log::error!("Cannot close file descriptor ({fd:?}), {err:?}");
+        }
+    }
+
+    if lingers(fd) {
+        ntex_rt::spawn_blocking(move || close(fd)).detach();
+    } else {
+        close(fd);
+    }
+}
+
+/// Whether closing the socket waits for a linger timeout.
+///
+/// The BSDs and macOS do not wait on a non-blocking socket.
+#[cfg(not(any(
+    target_vendor = "apple",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "dragonfly",
+)))]
+fn lingers(fd: os::fd::RawFd) -> bool {
+    // SAFETY: the fd is owned by the dropped stream and is not closed yet
+    let fd = unsafe { os::fd::BorrowedFd::borrow_raw(fd) };
+    matches!(socket2::SockRef::from(&fd).linger(), Ok(Some(t)) if !t.is_zero())
+}
+
+#[cfg(any(
+    target_vendor = "apple",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "dragonfly",
+))]
+fn lingers(_: os::fd::RawFd) -> bool {
+    false
+}
+
+#[allow(clippy::used_underscore_binding)]
+fn write_pages(fd: os::fd::RawFd, _tag: &str, wrt: &mut BytePages) -> io::Result<(usize, usize)> {
     let mut bufs = [io::IoSlice::new(&[]); MAX_WRITE_ITEMS];
     let mut num = 0;
     let mut size = 0;
@@ -587,7 +624,7 @@ fn write_pages(fd: os::fd::RawFd, tag: &str, wrt: &mut BytePages) -> io::Result<
         syscall!(break libc::writev(fd, bufs.as_ptr().cast(), num as i32))
     };
     #[cfg(feature = "trace")]
-    log::trace!("{tag}: {fd:?}-Wrt buf({num}:{size}) ({res:?})");
+    log::trace!("{_tag}: {fd:?}-Wrt buf({num}:{size}) ({res:?})");
 
     // remove written bytes
     if let Poll::Ready(Ok(written)) = res {
@@ -674,6 +711,84 @@ mod tests {
         assert!(ops.0.delayed_feed.is_empty());
         handler.cleanup();
         drop(io);
+    }
+
+    /// Registers `socket` and drops both stream handles.
+    fn drop_registered(socket: Socket) {
+        let reactor = Reactor::new().unwrap();
+        let ops = StreamOps::get(&reactor);
+        let ctl = Rc::new(Cell::new(None));
+        let io = Io::new(
+            TestStream {
+                socket,
+                ops: ops.clone(),
+                ctl: ctl.clone(),
+            },
+            SharedCfg::default(),
+        );
+        drop(ctl.take().unwrap());
+        drop(io);
+        StreamOpsHandler {
+            inner: ops.0.clone(),
+        }
+        .tick();
+        assert!(ops.0.with(|streams| streams.is_empty()));
+    }
+
+    /// A dropped stream is closed inline, not in the blocking pool.
+    #[ntex::test]
+    async fn dropped_stream_closes_inline() {
+        let (socket, mut peer) = UnixStream::pair().unwrap();
+        socket.set_nonblocking(true).unwrap();
+        peer.set_nonblocking(true).unwrap();
+        drop_registered(Socket::from(socket));
+        assert_eq!(io::Read::read(&mut peer, &mut [0u8; 1]).unwrap(), 0);
+    }
+
+    /// An aborted stream has a zero linger timeout, its close does not wait.
+    #[test]
+    fn zero_linger_does_not_wait() {
+        let lst = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let sock = std::net::TcpStream::connect(lst.local_addr().unwrap()).unwrap();
+        assert!(!lingers(sock.as_raw_fd()));
+        crate::helpers::abort_raw_socket(sock.as_raw_fd());
+        assert!(!lingers(sock.as_raw_fd()));
+    }
+
+    /// A close that waits for an application-set linger timeout runs in the
+    /// blocking pool, and still delivers the unsent output.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[allow(clippy::large_stack_arrays)]
+    #[ntex::test]
+    async fn lingering_close_runs_in_blocking_pool() {
+        use std::time::{Duration, Instant};
+
+        let lst = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let sock = std::net::TcpStream::connect(lst.local_addr().unwrap()).unwrap();
+        let (mut peer, _) = lst.accept().unwrap();
+        let sock = Socket::from(sock);
+        sock.set_nonblocking(true).unwrap();
+        sock.set_linger(Some(Duration::from_secs(5))).unwrap();
+        assert!(lingers(sock.as_raw_fd()));
+
+        let mut sent = 0;
+        loop {
+            match sock.send(&[0u8; 65536]) {
+                Ok(n) => sent += n,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(e) => panic!("{e:?}"),
+            }
+        }
+
+        let start = Instant::now();
+        drop_registered(sock);
+        assert!(start.elapsed() < Duration::from_secs(1), "close waited");
+
+        peer.set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut received = Vec::new();
+        io::Read::read_to_end(&mut peer, &mut received).unwrap();
+        assert_eq!(received.len(), sent);
     }
 
     #[ntex::test]

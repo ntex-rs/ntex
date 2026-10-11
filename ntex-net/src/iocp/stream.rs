@@ -80,6 +80,15 @@ impl Close {
         }
     }
 
+    /// Closes the socket on the current thread, waiting for the linger
+    /// timeout if needed.
+    fn finish(self) -> io::Result<()> {
+        match self {
+            Close::Done(res) => res,
+            Close::Blocking(close) => close.run(),
+        }
+    }
+
     /// Lets the close finish on its own, logging failures.
     ///
     /// Used where there is nobody left to report the outcome to.
@@ -330,12 +339,17 @@ impl Handler for StreamOpsHandler {
                 let io = item.io.as_raw_socket() as _;
                 let tag = item.rd_op.tag();
                 log::trace!("{tag}: Unclosed socket ({io:?}) {:?}", item.addr);
-                close_socket(
+                // the reactor has stopped, waiting here blocks nothing, while
+                // the blocking pool may never run a close handed to it
+                let res = close_socket(
                     io,
                     item.flags.contains(Flags::TERMINATE),
                     !item.rd_op.is_blocking(),
                 )
-                .detach(io, tag);
+                .finish();
+                if let Err(err) = res {
+                    log::error!("{tag}: Cannot close socket ({io:?}), {err:?}");
+                }
                 if item.rd_op.is_pending() || item.wr_op.is_pending() {
                     // Closing the socket cancels the pending operations, but
                     // the kernel still writes their completion into the
@@ -721,19 +735,23 @@ mod tests {
         assert!(!open, "socket leaked after a failed shutdown");
     }
 
-    /// A close that has to wait for the linger timeout set by the application
-    /// cannot complete on a non-blocking socket. The socket must stay open, and
-    /// closing it in blocking mode must deliver the unsent output.
+    /// A linger timeout set by the application must not make the close wait
+    /// on the reactor thread, and must not lose the unsent output.
+    ///
+    /// Winsock documents that `closesocket` of a non-blocking socket with a
+    /// linger timeout fails with `WSAEWOULDBLOCK` and leaves the socket open,
+    /// such a close is finished in blocking mode. Current Windows versions
+    /// can close it right away instead, both outcomes are accepted.
     #[test]
-    fn lingering_close_finishes_in_blocking_mode() {
+    fn lingering_close_does_not_wait() {
+        use std::time::{Duration, Instant};
+
         let lst = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let client = Socket::from(std::net::TcpStream::connect(lst.local_addr().unwrap()).unwrap());
         let (mut peer, _) = lst.accept().unwrap();
-        peer.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        peer.set_read_timeout(Some(Duration::from_secs(10)))
             .unwrap();
-        client
-            .set_linger(Some(std::time::Duration::from_secs(5)))
-            .unwrap();
+        client.set_linger(Some(Duration::from_secs(5))).unwrap();
         client.set_nonblocking(true).unwrap();
 
         // fill the send buffer, the peer does not read yet
@@ -749,12 +767,22 @@ mod tests {
         let addr = client.local_addr().unwrap();
         let io = client.into_raw_socket() as WinSock::SOCKET;
 
-        let Close::Blocking(close) = close_socket(io, false, true) else {
-            panic!("lingering close completed on a non-blocking socket");
+        let start = Instant::now();
+        let close = close_socket(io, false, true);
+        assert!(start.elapsed() < Duration::from_secs(1), "close waited");
+        let job = match close {
+            Close::Done(res) => {
+                eprintln!("lingering close: done inline, {res:?}");
+                res.unwrap();
+                None
+            }
+            Close::Blocking(close) => {
+                eprintln!("lingering close: finished in blocking mode");
+                assert!(is_ours(io, &addr), "lingering close released the socket");
+                Some(std::thread::spawn(move || close.run()))
+            }
         };
-        assert!(is_ours(io, &addr), "lingering close released the socket");
 
-        let job = std::thread::spawn(move || close.run());
         let mut buf = vec![0u8; 64 * 1024];
         let mut received = 0;
         loop {
@@ -763,7 +791,9 @@ mod tests {
                 n => received += n,
             }
         }
-        job.join().unwrap().unwrap();
+        if let Some(job) = job {
+            job.join().unwrap().unwrap();
+        }
         assert_eq!(received, sent, "unsent output lost");
         assert!(!is_ours(io, &addr), "socket not closed");
     }

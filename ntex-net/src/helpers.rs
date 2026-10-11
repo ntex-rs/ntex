@@ -37,12 +37,12 @@ pub(crate) fn prep_tcp_socket(sock: Socket) -> std::io::Result<Socket> {
     Ok(sock)
 }
 
+/// Closes a socket of a failed connect.
+///
+/// The socket has no linger timeout, so closing it does not wait.
 pub(crate) fn close_socket(sock: Socket) {
-    ntex_rt::spawn_blocking(move || {
-        let _ = sock.shutdown(std::net::Shutdown::Both);
-        drop(sock);
-    })
-    .detach();
+    let _ = sock.shutdown(std::net::Shutdown::Both);
+    drop(sock);
 }
 
 /// Maps the result of a graceful `shutdown(SHUT_RDWR)`.
