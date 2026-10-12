@@ -134,7 +134,7 @@ The best choice depends on how the data is used. Prefer worker-local state when
 workers do not need to coordinate. Use process-wide shared state only when
 changes must be visible across workers.
 
-[Complete process/worker configuration example](https://github.com/ntex-rs/examples/tree/main/state1)
+[Complete process/worker configuration example](https://github.com/ntex-rs/examples/tree/main/state/process)
 
 ## Service and Pipeline State
 
@@ -445,7 +445,7 @@ The worker's `AppState` is still available to `connect` and `tls`. It contains
 worker-level resources that can be reused across many connections. At the same
 time, each connection carries its own state.
 
-[Complete state accumulation example](https://github.com/ntex-rs/examples/tree/main/state5)
+[Complete state accumulation example](https://github.com/ntex-rs/examples/tree/main/state/state-accumulation)
 
 ## Implementation Details
 

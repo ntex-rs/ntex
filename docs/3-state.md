@@ -75,9 +75,9 @@ state access and readiness handling used in production.
 When the state contains external dependencies, a mocking library can verify how
 the service uses them:
 
-- [`test-mockall`] defines the state behavior as a trait. Mockall creates a mock
+- [`tests/mockall`] defines the state behavior as a trait. Mockall creates a mock
   state and checks calls to its accessor and operation methods.
-- [`test-shimforge`] keeps the concrete state type. Shimforge replaces its
+- [`tests/shimforge`] keeps the concrete state type. Shimforge replaces its
   methods during the test, including a method on an object nested in the state,
   and checks the receiver's attributes and call arguments.
 
@@ -227,5 +227,5 @@ for an example that wraps an accepted `Io` in `State`.
 [`PipelineState`]: https://docs.ntex.rs/api/ntex/service/pipeline/struct.PipelineState.html
 [`RequestState`]: https://docs.ntex.rs/api/ntex/service/trait.RequestState.html
 [`State<St, Req>`]: https://docs.ntex.rs/api/ntex/service/struct.State.html
-[`test-mockall`]: https://github.com/ntex-rs/examples/tree/main/test-mockall
-[`test-shimforge`]: https://github.com/ntex-rs/examples/tree/main/test-shimforge
+[`tests/mockall`]: https://github.com/ntex-rs/examples/tree/main/tests/mockall
+[`tests/shimforge`]: https://github.com/ntex-rs/examples/tree/main/tests/shimforge
