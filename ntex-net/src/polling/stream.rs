@@ -548,11 +548,6 @@ impl StreamItem {
     }
 }
 
-/// Writes up to `MAX_WRITE_ITEMS` pages or `MAX_WRITE_SIZE` bytes of `wrt`.
-///
-/// Returns the written bytes and the size of the attempted write, both are
-/// zero if `wrt` is empty. A write that would block writes zero bytes.
-#[cfg_attr(not(feature = "trace"), allow(unused_variables))]
 /// Closes the descriptor of a dropped stream.
 ///
 /// Closing a non-blocking socket does not wait, except on platforms where a
@@ -600,6 +595,10 @@ fn lingers(_: os::fd::RawFd) -> bool {
     false
 }
 
+/// Writes up to `MAX_WRITE_ITEMS` pages or `MAX_WRITE_SIZE` bytes of `wrt`.
+///
+/// Returns the written bytes and the size of the attempted write, both are
+/// zero if `wrt` is empty. A write that would block writes zero bytes.
 #[allow(clippy::used_underscore_binding)]
 fn write_pages(fd: os::fd::RawFd, _tag: &str, wrt: &mut BytePages) -> io::Result<(usize, usize)> {
     let mut bufs = [io::IoSlice::new(&[]); MAX_WRITE_ITEMS];

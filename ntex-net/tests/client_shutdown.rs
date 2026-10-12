@@ -40,18 +40,22 @@ fn cfg() -> SharedCfg {
 /// byte count and how it ended. The read timeout keeps a connection that is
 /// never closed from hanging the test; it shows up as `TimedOut`.
 ///
-/// The timeout is set on the listener and inherited by the accepted socket.
-/// Setting it on the accepted socket instead races the client: once the
-/// connection has been reset, Linux rejects `setsockopt` with `EINVAL`.
+/// Linux copies the timeout from the listener to the accepted socket, macOS
+/// does not, so it is set on both. Setting it on the accepted socket races the
+/// client: once the connection has been reset, Linux rejects `setsockopt` with
+/// `EINVAL`, so that error is ignored.
 fn peer() -> (net::SocketAddr, oneshot::Receiver<(usize, Outcome)>) {
+    const TIMEOUT: Duration = Duration::from_secs(5);
+
     let lst = net::TcpListener::bind("127.0.0.1:0").unwrap();
     socket2::SockRef::from(&lst)
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(TIMEOUT))
         .unwrap();
     let addr = lst.local_addr().unwrap();
     let (tx, rx) = oneshot::channel();
     thread::spawn(move || {
         let (mut sock, _) = lst.accept().unwrap();
+        let _ = sock.set_read_timeout(Some(TIMEOUT));
         thread::sleep(STALL);
         let mut buf = vec![0u8; 64 * 1024];
         let mut total = 0;
